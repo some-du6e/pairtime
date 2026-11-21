@@ -3,7 +3,6 @@
 package account
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -28,9 +27,9 @@ const (
 	codePath  = "/oauth/device/code"
 	tokenPath = "/oauth/token"
 	mePath    = "/api/v1/devices/me"
-	keyPath   = "/api/v1/devices/me/key"
 	grantType = "urn:ietf:params:oauth:grant-type:device_code"
-	// keyLabel starts the message the device key signs to register.
+	// keyLabel starts the message the device key signs when the app asks
+	// for a code.
 	keyLabel = "pairtime-device-key-v1\n"
 )
 
@@ -41,7 +40,8 @@ const (
 	defaultInterval = 5 * time.Second
 	// slowDownStep is what each slow_down adds to the wait.
 	slowDownStep = 5 * time.Second
-	// maxBackoff bounds the wait after network errors, which double it.
+	// maxBackoff bounds the wait after network errors, and after answers
+	// that aren't the server's, which double it.
 	maxBackoff = time.Minute
 )
 
@@ -54,6 +54,13 @@ var (
 	ErrExpired = errors.New("account: the code expired before anyone approved it")
 	// ErrClosed means the server isn't taking sign-ins yet.
 	ErrClosed = errors.New("account: this pairtime server isn't taking sign-ins yet")
+	// ErrTaken means the account that approved the code isn't the one this
+	// computer's device id belongs to on the server, which keeps the id
+	// with that account while it holds what the computer uploaded. Only
+	// that account can link it, and any other only as a new device, with
+	// a new device id and key (D-device-account-binding; WP-AG5's
+	// new-device rule).
+	ErrTaken = errors.New("account: the code was approved by an account other than the one this computer's device ID belongs to")
 )
 
 // ServerError is an error the server answered with (RFC 6749 5.2).
@@ -95,6 +102,10 @@ type Code struct {
 	VerificationURIComplete string `json:"verification_uri_complete"`
 	ExpiresIn               int    `json:"expires_in"`
 	Interval                int    `json:"interval"`
+	// SignupsOpen is false while the server's sign-ups are closed, so
+	// only an account that exists there already can approve the code. Nil
+	// means the server didn't say.
+	SignupsOpen *bool `json:"signups_open"`
 }
 
 // Device is what the server asks about this computer when it requests a
@@ -179,14 +190,20 @@ func (c *Client) postForm(ctx context.Context, path string, form url.Values, out
 }
 
 // RequestCode asks the server for a device code and a user code for d
-// (RFC 8628 3.1). With sign-in off on the server it returns ErrClosed.
-func (c *Client) RequestCode(ctx context.Context, d Device) (Code, error) {
+// (RFC 8628 3.1), naming key's public half as the device key, with the
+// signature that shows this computer holds it: the token the code yields
+// works only with that key (D-key-at-grant). With sign-in off on the
+// server it returns ErrClosed.
+func (c *Client) RequestCode(ctx context.Context, d Device, key ed25519.PrivateKey) (Code, error) {
+	pub := encodeKey(key.Public().(ed25519.PublicKey))
 	var code Code
 	_, err := c.postForm(ctx, codePath, url.Values{
-		"client_id":    {ClientID},
-		"device_id":    {d.ID},
-		"os":           {d.OS},
-		"client_build": {d.Build},
+		"client_id":     {ClientID},
+		"device_id":     {d.ID},
+		"os":            {d.OS},
+		"client_build":  {d.Build},
+		"public_key":    {pub},
+		"key_signature": {base64.StdEncoding.EncodeToString(ed25519.Sign(key, KeyMessage(d.ID, pub)))},
 	}, &code)
 	var se *ServerError
 	if errors.As(err, &se) && se.Code == "temporarily_unavailable" {
@@ -228,6 +245,9 @@ type Token struct {
 	AccessToken string `json:"access_token"`
 	TokenType   string `json:"token_type"`
 	DeviceID    string `json:"device_id"`
+	// PublicKey is the device key the token works with, in standard
+	// base64: the one the code request named.
+	PublicKey string `json:"public_key"`
 	// Account names the account that approved the code, as the server's
 	// pages show it.
 	Account string `json:"account"`
@@ -236,10 +256,13 @@ type Token struct {
 // Poll asks for the token of code until the teen answers or the code
 // expires (RFC 8628 3.4, 3.5). It waits the server's interval before each
 // request, 5 s more after each slow_down, and twice as long after a
-// network error, up to a minute, as RFC 8628 3.5 asks. It returns
-// ErrDenied, ErrExpired, or a *ServerError for any other refusal. Once it
-// has waited longer than the code lives, as when the network never came
-// back, it stops with ErrExpired.
+// network error, up to a minute, as RFC 8628 3.5 asks. An answer without
+// an error code, such as a proxy's 502 page or a 429, isn't the server's
+// answer to the code, so it waits as after a network error and asks
+// again. Any error code but authorization_pending and slow_down ends the
+// polling, as RFC 8628 3.5 says: ErrDenied, ErrTaken, ErrExpired, or a
+// *ServerError for the rest. Once it has waited longer than the code
+// lives, as when the network never came back, it stops with ErrExpired.
 func (c *Client) Poll(ctx context.Context, code Code) (Token, error) {
 	interval := time.Duration(code.Interval) * time.Second
 	if interval <= 0 {
@@ -285,23 +308,40 @@ func (c *Client) Poll(ctx context.Context, code Code) (Token, error) {
 				wait = interval
 			case "access_denied":
 				return Token{}, ErrDenied
+			case "device_taken":
+				return Token{}, ErrTaken
 			case "expired_token":
 				return Token{}, ErrExpired
+			case "":
+				if se.Status < 500 && se.Status != http.StatusTooManyRequests {
+					return Token{}, se
+				}
+				// No RFC 6749 error body, so a proxy or a rate limit
+				// answered, not the server's grant: wait as after a network
+				// error.
+				wait = backoff(wait, interval)
 			default:
 				return Token{}, se
 			}
 		case ctx.Err() != nil:
 			return Token{}, ctx.Err()
 		default:
-			// The network, not the server: slow down before trying again,
-			// never below the server's interval.
-			wait = max(min(2*max(wait, interval), maxBackoff), interval)
+			// The network, not the server.
+			wait = backoff(wait, interval)
 		}
 	}
 }
 
-// KeyMessage is the message the device key signs to register, for device
-// id and the public key as sent (docs/spec/device-auth-v1.md section 6).
+// backoff is the wait before the next poll after one that got no answer
+// from the server: twice the last, up to maxBackoff, and never below the
+// server's interval.
+func backoff(wait, interval time.Duration) time.Duration {
+	return max(min(2*max(wait, interval), maxBackoff), interval)
+}
+
+// KeyMessage is the message the device key signs in a code request, for
+// device id and the public key as sent (docs/spec/device-auth-v1.md
+// section 2).
 func KeyMessage(id, publicKey string) []byte {
 	return []byte(keyLabel + id + "\n" + publicKey)
 }
@@ -309,27 +349,6 @@ func KeyMessage(id, publicKey string) []byte {
 // encodeKey writes a public key as the API sends it: standard base64.
 func encodeKey(pub ed25519.PublicKey) string {
 	return base64.StdEncoding.EncodeToString(pub)
-}
-
-// RegisterKey registers key's public half as the device's key, with the
-// signature that shows this computer holds it.
-func (c *Client) RegisterKey(ctx context.Context, token, deviceID string, key ed25519.PrivateKey) error {
-	pub := encodeKey(key.Public().(ed25519.PublicKey))
-	body, err := json.Marshal(map[string]string{
-		"public_key": pub,
-		"signature":  base64.StdEncoding.EncodeToString(ed25519.Sign(key, KeyMessage(deviceID, pub))),
-	})
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Server+keyPath, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	_, err = c.send(req, nil)
-	return err
 }
 
 // RemoveDevice asks the server to remove this device, which stops its

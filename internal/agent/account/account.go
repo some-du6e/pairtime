@@ -4,12 +4,13 @@
 // login` and `pairtime logout` (WP-SV3; DESIGN 3.2, 3.10;
 // docs/spec/device-auth-v1.md).
 //
-// Login runs the OAuth 2.0 device grant of RFC 8628 against the server:
-// it asks for a code, shows it, and polls at the interval the server
-// gives, slower after each slow_down, until the teen approves on the
-// server's /device page in a browser. The ptd_ device token it gets and the
-// seed of a new Ed25519 device key go in the device keystore (package
-// keys), the public key is registered with the server, account.json in
+// Login runs the OAuth 2.0 device grant of RFC 8628 against the server.
+// It makes a new Ed25519 device key and keeps its seed in the device
+// keystore (package keys), asks for a code that names the key's public
+// half, shows the code, and polls at the interval the server gives, slower
+// after each slow_down, until the teen approves on the server's /device
+// page in a browser. The ptd_ device token it gets works only with that
+// key (D-key-at-grant) and joins the seed in the keystore, account.json in
 // the data directory records which server and device id they belong to,
 // and config.toml switches to mode "online". The computer never holds a
 // Hack Club Auth token: the teen signs in to HCA on the server's pages.
@@ -107,8 +108,11 @@ func remove(dataDir string) error {
 }
 
 // Secrets is where the device's sign-in is kept: the part of
-// *keys.Keystore this package uses.
+// *keys.Keystore this package uses. Login keeps the key's seed with
+// SetSignKey before it asks for a code, and the token beside it with
+// SetAccount once it has one.
 type Secrets interface {
+	SetSignKey(seed []byte) error
 	SetAccount(token, seed []byte) error
 	Account() (token, seed []byte, err error)
 	ForgetAccount() error

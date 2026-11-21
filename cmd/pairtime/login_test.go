@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -139,8 +138,8 @@ func testLoginEndToEnd(t *testing.T, p oidcProvider) {
 	if code := run([]string{"logout"}, &lout, &lerr); code != 0 {
 		t.Fatalf("pairtime logout exited %d\nstdout:\n%s\nstderr:\n%s", code, lout.String(), lerr.String())
 	}
-	if _, err := devices.Authenticate(context.Background(), creds.Token); !errors.Is(err, device.ErrRevoked) {
-		t.Errorf("after logout the server answers the token with %v, want ErrRevoked", err)
+	if _, err := devices.Authenticate(context.Background(), creds.Token); !errors.Is(err, device.ErrUnknownToken) {
+		t.Errorf("after logout the server answers the token with %v, want ErrUnknownToken: a device that never uploaded is deleted", err)
 	}
 	if _, err := account.Load(dir); !errors.Is(err, account.ErrNotLinked) {
 		t.Errorf("account.json after logout: %v", err)
@@ -153,22 +152,53 @@ func testLoginEndToEnd(t *testing.T, p oidcProvider) {
 	}
 }
 
-// syncBuffer collects what a command writes from another goroutine.
-type syncBuffer struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (s *syncBuffer) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.Write(p)
-}
-
-func (s *syncBuffer) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.String()
+// TestLogoutWithoutKeystore is pairtime logout when the device keystore
+// can't be read, so switching config.toml to local is all that stops
+// uploads: it says nothing uploads only when that switch worked.
+func TestLogoutWithoutKeystore(t *testing.T) {
+	tests := []struct {
+		name       string
+		config     string
+		wantMode   config.Mode
+		wantStderr string
+	}{
+		{name: "with config.toml back in local mode it says nothing uploads", config: "mode = \"online\"\n",
+			wantMode: config.Local, wantStderr: "pairtime is back in local mode, so nothing uploads"},
+		{name: "with a config.toml it couldn't switch it says the mode is still online", config: "mode = \"online\"\nnote = \"\"\"\nkept\n\"\"\"\n",
+			wantMode: config.Online, wantStderr: "The mode is still online, so uploads start again once the keystore opens"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv(home.EnvHome, dir)
+			files := map[string]string{
+				account.FileName: `{"v":1,"server":"https://pairtime.example.org","device_id":"d_e2elogin4nhv5xgjw6ycpbz2r","public_key":"","linked_at":"2026-11-20T00:00:00Z"}`,
+				// A keystore.json that doesn't parse, so the keystore won't open.
+				filepath.Join("keys", "keystore.json"): "{not json",
+				"config.toml":                          tt.config,
+			}
+			for name, data := range files {
+				path := filepath.Join(dir, name)
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var out, errOut bytes.Buffer
+			code := run([]string{"logout"}, &out, &errOut)
+			if code != 1 || !strings.Contains(errOut.String(), tt.wantStderr) {
+				t.Errorf("pairtime logout exited %d\nstdout:\n%s\nstderr:\n%s\nwant %q", code, out.String(), errOut.String(), tt.wantStderr)
+			}
+			if cfg, _, _ := config.Load(filepath.Join(dir, "config.toml")); cfg.Mode != tt.wantMode {
+				t.Errorf("config.toml's mode is %q, want %q", cfg.Mode, tt.wantMode)
+			}
+			if _, err := account.Load(dir); err != nil {
+				t.Errorf("account.json after the logout: %v; want it kept, so a later logout can tell the server", err)
+			}
+		})
+	}
 }
 
 // runLoginApproving runs `pairtime login --server <srv> --no-browser`,

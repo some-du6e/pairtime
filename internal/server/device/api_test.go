@@ -103,7 +103,9 @@ func TestDeviceAPI(t *testing.T) {
 					if r := b.get(device.DevicesPath); !strings.Contains(r.body, "Removed ") || strings.Contains(r.body, ">Remove</button>") || !strings.Contains(r.body, testDeviceID) {
 						t.Errorf("the page after Remove:\n%s", r.body)
 					}
-					if r := b.post(device.RemovePath, url.Values{"csrf": {b.csrf(device.DevicesPath)}, "device_id": {testDeviceID}}); r.status != http.StatusSeeOther {
+					// The page has no Remove form for it now; /device carries the
+					// same session's token.
+					if r := b.post(device.RemovePath, url.Values{"csrf": {b.csrf(device.PagePath)}, "device_id": {testDeviceID}}); r.status != http.StatusSeeOther {
 						t.Errorf("removing it again answered %d, want the same redirect", r.status)
 					}
 				}},

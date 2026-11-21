@@ -7,13 +7,14 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -39,6 +40,8 @@ type fakeServer struct {
 	replies map[string][]reply // by "METHOD path"
 	seen    []*http.Request
 	bodies  []string
+	// before, when set, sees each request first, with its body.
+	before func(r *http.Request, body string)
 }
 
 func (f *fakeServer) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -48,6 +51,9 @@ func (f *fakeServer) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.Body != nil {
 		b, _ := io.ReadAll(r.Body)
 		body = string(b)
+	}
+	if f.before != nil {
+		f.before(r, body)
 	}
 	f.seen = append(f.seen, r)
 	f.bodies = append(f.bodies, body)
@@ -69,6 +75,18 @@ func (f *fakeServer) RoundTrip(r *http.Request) (*http.Response, error) {
 		Body:       io.NopCloser(strings.NewReader(rep.body)),
 		Request:    r,
 	}, nil
+}
+
+// body returns the body of the first request to "METHOD path", or "".
+func (f *fakeServer) body(k string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, r := range f.seen {
+		if r.Method+" "+r.URL.Path == k {
+			return f.bodies[i]
+		}
+	}
+	return ""
 }
 
 // count returns how many requests went to "METHOD path".
@@ -131,6 +149,17 @@ func TestPoll(t *testing.T) {
 			wantWaits: slices.Repeat([]time.Duration{5 * s}, 14)},
 		{name: "a token that isn't a ptd_ token is refused", code: Code{Interval: 5, ExpiresIn: 900},
 			replies: []reply{tokenReply("ghp_notours")}, wantWaits: []time.Duration{5 * s}},
+		{name: "device_taken stops with ErrTaken", code: Code{Interval: 5, ExpiresIn: 900},
+			replies: []reply{oauthErr("device_taken")}, wantErr: ErrTaken, wantWaits: []time.Duration{5 * s}},
+		{name: "a proxy's 502 page without an error code is waited out like a network error, since the code still works", code: Code{Interval: 5, ExpiresIn: 900},
+			replies:   []reply{{status: http.StatusBadGateway, body: "<html>Bad gateway</html>"}, {status: http.StatusServiceUnavailable, body: ""}, oauthErr("authorization_pending"), tokenReply(testToken)},
+			wantWaits: []time.Duration{5 * s, 10 * s, 20 * s, 5 * s}},
+		{name: "a 429 without an error code is waited out too", code: Code{Interval: 5, ExpiresIn: 900},
+			replies: []reply{{status: http.StatusTooManyRequests, body: "slow down"}, tokenReply(testToken)}, wantWaits: []time.Duration{5 * s, 10 * s}},
+		{name: "an error code other than pending and slow_down stops the polling, even on a 5xx (RFC 8628 3.5)", code: Code{Interval: 5, ExpiresIn: 900},
+			replies: []reply{{status: http.StatusInternalServerError, body: `{"error":"server_error"}`}}, wantErr: errServerError, wantWaits: []time.Duration{5 * s}},
+		{name: "a 404 without an error code stops the polling, since waiting won't change it", code: Code{Interval: 5, ExpiresIn: 900},
+			replies: []reply{{status: http.StatusNotFound, body: "not found"}}, wantErr: errServerError, wantWaits: []time.Duration{5 * s}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -138,7 +167,12 @@ func TestPoll(t *testing.T) {
 			var waits []time.Duration
 			c := &Client{Server: testServer, HTTP: &http.Client{Transport: fake}, UserAgent: "pairtime-cli/test", Wait: recordWaits(&waits)}
 			tok, err := c.Poll(context.Background(), tt.code)
+			var se *ServerError
 			switch {
+			case tt.wantErr == errServerError:
+				if !errors.As(err, &se) {
+					t.Errorf("Poll = %v, want a *ServerError", err)
+				}
 			case tt.wantErr != nil && !errors.Is(err, tt.wantErr):
 				t.Errorf("Poll = %v, want %v", err, tt.wantErr)
 			case tt.wantErr == nil && strings.HasPrefix(tt.name, "a token that isn't"):
@@ -161,12 +195,16 @@ func TestPoll(t *testing.T) {
 }
 
 func TestRequestCode(t *testing.T) {
+	key := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, ed25519.SeedSize))
 	tests := []struct {
 		name    string
 		reply   reply
 		wantErr error
+		// wantClosed says the code reports sign-ups closed.
+		wantClosed bool
 	}{
 		{name: "a code comes back", reply: reply{status: http.StatusOK, body: `{"device_code":"dc","user_code":"WDJB-MJHT","verification_uri":"https://pairtime.example.org/device","expires_in":900,"interval":5}`}},
+		{name: "a code says when sign-ups are closed", reply: reply{status: http.StatusOK, body: `{"device_code":"dc","user_code":"WDJB-MJHT","verification_uri":"https://pairtime.example.org/device","expires_in":900,"interval":5,"signups_open":false}`}, wantClosed: true},
 		{name: "temporarily_unavailable means the server isn't taking sign-ins", reply: reply{status: http.StatusServiceUnavailable, body: `{"error":"temporarily_unavailable"}`}, wantErr: ErrClosed},
 		{name: "a code with a terminal escape in it is refused, since the terminal shows it", reply: reply{status: http.StatusOK, body: `{"device_code":"dc","user_code":"WDJB-MJHT\u001b]0;pwned\u0007","verification_uri":"https://pairtime.example.org/device","expires_in":900,"interval":5}`}, wantErr: errShown},
 	}
@@ -174,7 +212,7 @@ func TestRequestCode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fake := &fakeServer{replies: map[string][]reply{"POST " + codePath: {tt.reply}}}
 			c := &Client{Server: testServer, HTTP: &http.Client{Transport: fake}, UserAgent: "pairtime-cli/test"}
-			_, err := c.RequestCode(context.Background(), Device{ID: "d_testdevice00000000000000a", OS: "linux", Build: "v0.1.0"})
+			code, err := c.RequestCode(context.Background(), Device{ID: "d_testdevice00000000000000a", OS: "linux", Build: "v0.1.0"}, key)
 			switch {
 			case tt.wantErr == errShown:
 				if err == nil || !strings.Contains(err.Error(), "can't be shown") {
@@ -183,11 +221,21 @@ func TestRequestCode(t *testing.T) {
 			case !errors.Is(err, tt.wantErr):
 				t.Fatalf("RequestCode = %v, want %v", err, tt.wantErr)
 			}
-			body := fake.bodies[0]
-			for _, want := range []string{"client_id=pairtime", "device_id=d_testdevice00000000000000a", "os=linux", "client_build=v0.1.0"} {
-				if !strings.Contains(body, want) {
-					t.Errorf("the request %q lacks %q", body, want)
+			if closed := code.SignupsOpen != nil && !*code.SignupsOpen; closed != tt.wantClosed {
+				t.Errorf("the code says sign-ups are closed: %v, want %v", closed, tt.wantClosed)
+			}
+			form, err := url.ParseQuery(fake.bodies[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			for k, want := range map[string]string{"client_id": "pairtime", "device_id": "d_testdevice00000000000000a", "os": "linux", "client_build": "v0.1.0", "public_key": encodeKey(key.Public().(ed25519.PublicKey))} {
+				if form.Get(k) != want {
+					t.Errorf("the request's %s is %q, want %q", k, form.Get(k), want)
 				}
+			}
+			sig, _ := base64.StdEncoding.DecodeString(form.Get("key_signature"))
+			if !ed25519.Verify(key.Public().(ed25519.PublicKey), KeyMessage("d_testdevice00000000000000a", form.Get("public_key")), sig) {
+				t.Errorf("key_signature %q isn't the key's signature of the key message for this device", form.Get("key_signature"))
 			}
 		})
 	}
@@ -198,6 +246,14 @@ type memSecrets struct {
 	token, seed []byte
 	setErr      error
 	forgot      int
+}
+
+func (m *memSecrets) SetSignKey(seed []byte) error {
+	if m.setErr != nil {
+		return m.setErr
+	}
+	m.token, m.seed = nil, bytes.Clone(seed)
+	return nil
 }
 
 func (m *memSecrets) SetAccount(token, seed []byte) error {
@@ -222,12 +278,11 @@ func (m *memSecrets) ForgetAccount() error {
 }
 
 // loginServer scripts a server that gives a code, then the token after one
-// pending poll, and answers the key registration with keyStatus.
-func loginServer(keyStatus int) *fakeServer {
+// pending poll, and removes the device when asked.
+func loginServer() *fakeServer {
 	return &fakeServer{replies: map[string][]reply{
 		"POST " + codePath:  {{status: http.StatusOK, body: `{"device_code":"dc","user_code":"WDJB-MJHT","verification_uri":"https://pairtime.example.org/device","verification_uri_complete":"https://pairtime.example.org/device?user_code=WDJB-MJHT","expires_in":900,"interval":5}`}},
 		"POST " + tokenPath: {oauthErr("authorization_pending"), tokenReply(testToken)},
-		"POST " + keyPath:   {{status: keyStatus, body: `{"error":"key_already_registered"}`}},
 		"DELETE " + mePath:  {{status: http.StatusNoContent}},
 	}}
 }
@@ -254,9 +309,15 @@ func TestLogin(t *testing.T) {
 		name string
 		run  func(t *testing.T)
 	}{
-		{name: "a login keeps the token and key, registers the key, writes account.json and switches config.toml online", run: func(t *testing.T) {
-			fake := loginServer(http.StatusCreated)
+		{name: "a login keeps its key before it asks for a code that names it, then keeps the token, writes account.json and switches config.toml online", run: func(t *testing.T) {
+			fake := loginServer()
 			sec := &memSecrets{}
+			var keptFirst bool
+			fake.before = func(r *http.Request, _ string) {
+				if r.URL.Path == codePath {
+					keptFirst = sec.seed != nil && sec.token == nil
+				}
+			}
 			o := testOptions(t, fake, sec)
 			var shown Code
 			r, err := Login(context.Background(), o, testDevice, func(c Code) { shown = c })
@@ -266,23 +327,23 @@ func TestLogin(t *testing.T) {
 			if shown.UserCode != "WDJB-MJHT" {
 				t.Errorf("show got %+v", shown)
 			}
+			if !keptFirst {
+				t.Error("the keystore didn't hold the key alone when the code was asked for")
+			}
 			if string(sec.token) != testToken || len(sec.seed) != ed25519.SeedSize {
 				t.Errorf("the keystore got token %q and a %d-byte seed", sec.token, len(sec.seed))
 			}
 			pub := ed25519.NewKeyFromSeed(sec.seed).Public().(ed25519.PublicKey)
-			var body struct {
-				PublicKey string `json:"public_key"`
-				Signature string `json:"signature"`
-			}
-			if err := json.Unmarshal([]byte(fake.bodies[len(fake.bodies)-1]), &body); err != nil {
+			form, err := url.ParseQuery(fake.body("POST " + codePath))
+			if err != nil {
 				t.Fatal(err)
 			}
-			sig, _ := base64.StdEncoding.DecodeString(body.Signature)
-			if body.PublicKey != encodeKey(pub) || !ed25519.Verify(pub, KeyMessage(testDevice.ID, body.PublicKey), sig) {
-				t.Errorf("the key registration %+v isn't the keystore's key, signed for this device", body)
+			sig, _ := base64.StdEncoding.DecodeString(form.Get("key_signature"))
+			if form.Get("public_key") != encodeKey(pub) || !ed25519.Verify(pub, KeyMessage(testDevice.ID, form.Get("public_key")), sig) {
+				t.Errorf("the code request %v doesn't name the keystore's key, signed for this device", form)
 			}
-			if auth := fake.seen[len(fake.seen)-1].Header.Get("Authorization"); auth != "Bearer "+testToken {
-				t.Errorf("the key registration's Authorization is %q", auth)
+			if n := len(fake.seen); n != 3 {
+				t.Errorf("the login sent %d requests, want 3: the code and two polls", n)
 			}
 			l, err := Load(o.DataDir)
 			if err != nil || l.Server != testServer || l.DeviceID != testDevice.ID || l.PublicKey != encodeKey(pub) ||
@@ -301,21 +362,20 @@ func TestLogin(t *testing.T) {
 				t.Errorf("printing Credentials shows the token: %s", s)
 			}
 		}},
-		{name: "a key the server refuses undoes the login: the keystore forgets it and the server removes the device", run: func(t *testing.T) {
-			fake := loginServer(http.StatusConflict)
+		{name: "a token for another key than the one sent undoes the login: the keystore forgets it and the server removes the device", run: func(t *testing.T) {
+			fake := loginServer()
+			other := encodeKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{4}, ed25519.SeedSize)).Public().(ed25519.PublicKey))
+			fake.replies["POST "+tokenPath] = []reply{{status: http.StatusOK, body: `{"access_token":"` + testToken + `","token_type":"Bearer","device_id":"` + testDevice.ID + `","public_key":"` + other + `"}`}}
 			sec := &memSecrets{}
 			o := testOptions(t, fake, sec)
-			if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err == nil {
-				t.Fatal("Login succeeded with the key refused")
+			if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err == nil || !strings.Contains(err.Error(), "another device key") {
+				t.Fatalf("Login = %v, want a refusal of the other key", err)
 			}
-			if sec.token != nil || sec.forgot != 1 {
-				t.Errorf("the keystore still has %q (forgot %d times)", sec.token, sec.forgot)
+			if sec.token != nil || sec.seed != nil || sec.forgot != 1 {
+				t.Errorf("the keystore still has %q and a seed %v (forgot %d times)", sec.token, sec.seed != nil, sec.forgot)
 			}
 			if fake.count("DELETE "+mePath) != 1 {
 				t.Error("the server wasn't asked to remove the device")
-			}
-			if fake.count("POST "+keyPath) != 1 {
-				t.Errorf("a refused key was sent %d times", fake.count("POST "+keyPath))
 			}
 			if _, err := Load(o.DataDir); !errors.Is(err, ErrNotLinked) {
 				t.Errorf("account.json after a failed login: %v", err)
@@ -324,8 +384,41 @@ func TestLogin(t *testing.T) {
 				t.Error("a failed login wrote config.toml")
 			}
 		}},
+		{name: "a code nobody approves leaves no key behind, and nothing to remove on the server", run: func(t *testing.T) {
+			for _, code := range []string{"access_denied", "expired_token", "device_taken"} {
+				fake := loginServer()
+				fake.replies["POST "+tokenPath] = []reply{oauthErr(code)}
+				sec := &memSecrets{}
+				o := testOptions(t, fake, sec)
+				_, err := Login(context.Background(), o, testDevice, func(Code) {})
+				if !errors.Is(err, ErrDenied) && !errors.Is(err, ErrExpired) && !errors.Is(err, ErrTaken) {
+					t.Errorf("%s: Login = %v", code, err)
+				}
+				if sec.seed != nil || sec.forgot != 1 || fake.count("DELETE "+mePath) != 0 {
+					t.Errorf("%s: the keystore still has a seed %v (forgot %d times), and %d removals were sent", code, sec.seed != nil, sec.forgot, fake.count("DELETE "+mePath))
+				}
+			}
+		}},
+		{name: "device_taken comes back as ErrTaken, for the new-device rule", run: func(t *testing.T) {
+			fake := loginServer()
+			fake.replies["POST "+tokenPath] = []reply{oauthErr("device_taken")}
+			o := testOptions(t, fake, &memSecrets{})
+			if _, err := Login(context.Background(), o, testDevice, func(Code) {}); !errors.Is(err, ErrTaken) {
+				t.Errorf("Login = %v, want ErrTaken", err)
+			}
+		}},
+		{name: "a keystore that can't keep the key stops the login before anything is sent", run: func(t *testing.T) {
+			fake := loginServer()
+			o := testOptions(t, fake, &memSecrets{setErr: errors.New("the keyring is locked")})
+			if _, err := Login(context.Background(), o, testDevice, func(Code) { t.Error("a code was shown") }); err == nil {
+				t.Fatal("Login succeeded without a key in the keystore")
+			}
+			if len(fake.seen) != 0 {
+				t.Errorf("the login sent %d requests", len(fake.seen))
+			}
+		}},
 		{name: "an install that is linked already isn't linked again", run: func(t *testing.T) {
-			fake := loginServer(http.StatusCreated)
+			fake := loginServer()
 			o := testOptions(t, fake, &memSecrets{})
 			if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err != nil {
 				t.Fatal(err)
@@ -339,9 +432,13 @@ func TestLogin(t *testing.T) {
 		}},
 		{name: "a server that isn't taking sign-ins ends the login at once", run: func(t *testing.T) {
 			fake := &fakeServer{replies: map[string][]reply{"POST " + codePath: {{status: http.StatusServiceUnavailable, body: `{"error":"temporarily_unavailable"}`}}}}
-			o := testOptions(t, fake, &memSecrets{})
+			sec := &memSecrets{}
+			o := testOptions(t, fake, sec)
 			if _, err := Login(context.Background(), o, testDevice, func(Code) { t.Error("a code was shown") }); !errors.Is(err, ErrClosed) {
 				t.Errorf("Login = %v, want ErrClosed", err)
+			}
+			if sec.seed != nil {
+				t.Error("the keystore kept the key of a login that didn't happen")
 			}
 		}},
 	}
@@ -362,7 +459,7 @@ func TestLogout(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fake := loginServer(http.StatusCreated)
+			fake := loginServer()
 			sec := &memSecrets{}
 			o := testOptions(t, fake, sec)
 			if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err != nil {
@@ -399,6 +496,9 @@ func TestLogout(t *testing.T) {
 
 // errShown stands for RequestCode's refusal of codes it can't show.
 var errShown = errors.New("can't be shown")
+
+// errServerError stands for any *ServerError.
+var errServerError = errors.New("a *ServerError")
 
 func TestPrintable(t *testing.T) {
 	tests := []struct{ name, in, want string }{
@@ -455,7 +555,7 @@ func TestLogoutDamagedFile(t *testing.T) {
 }
 
 func TestLogoutWithoutKeystore(t *testing.T) {
-	fake := loginServer(http.StatusCreated)
+	fake := loginServer()
 	sec := &memSecrets{}
 	o := testOptions(t, fake, sec)
 	if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err != nil {
@@ -502,7 +602,7 @@ func TestLogoutChecks(t *testing.T) {
 			}
 		}},
 		{name: "a keystore whose key isn't the registered one keeps its token from the server", run: func(t *testing.T) {
-			fake := loginServer(http.StatusCreated)
+			fake := loginServer()
 			sec := &memSecrets{}
 			o := testOptions(t, fake, sec)
 			if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err != nil {
@@ -515,7 +615,7 @@ func TestLogoutChecks(t *testing.T) {
 			}
 		}},
 		{name: "a logout whose context has ended changes nothing", run: func(t *testing.T) {
-			fake := loginServer(http.StatusCreated)
+			fake := loginServer()
 			sec := &memSecrets{}
 			o := testOptions(t, fake, sec)
 			if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err != nil {
@@ -531,7 +631,7 @@ func TestLogoutChecks(t *testing.T) {
 			}
 		}},
 		{name: "a login while another holds the lock is refused at once", run: func(t *testing.T) {
-			o := testOptions(t, loginServer(http.StatusCreated), &memSecrets{})
+			o := testOptions(t, loginServer(), &memSecrets{})
 			unlock, err := lock(o.DataDir)
 			if err != nil {
 				t.Fatal(err)
@@ -544,20 +644,8 @@ func TestLogoutChecks(t *testing.T) {
 				t.Errorf("Logout = %v, want ErrBusy", err)
 			}
 		}},
-		{name: "a 503 from the server while the key registers is tried again", run: func(t *testing.T) {
-			fake := loginServer(http.StatusCreated)
-			fake.replies["POST "+keyPath] = []reply{{status: http.StatusServiceUnavailable, body: `{}`}, {status: http.StatusCreated, body: `{}`}}
-			sec := &memSecrets{}
-			o := testOptions(t, fake, sec)
-			if _, err := Login(context.Background(), o, testDevice, func(Code) {}); err != nil {
-				t.Fatalf("Login = %v", err)
-			}
-			if n := fake.count("POST " + keyPath); n != 2 {
-				t.Errorf("the key was sent %d times, want 2", n)
-			}
-		}},
 		{name: "the account that approved comes back with the login", run: func(t *testing.T) {
-			fake := loginServer(http.StatusCreated)
+			fake := loginServer()
 			fake.replies["POST "+tokenPath] = []reply{{status: http.StatusOK, body: `{"access_token":"` + testToken + `","token_type":"Bearer","device_id":"d_testdevice00000000000000a","account":"U0TEEN1\u001b[2J"}`}}
 			o := testOptions(t, fake, &memSecrets{})
 			r, err := Login(context.Background(), o, testDevice, func(Code) {})
@@ -593,26 +681,37 @@ func (r redirecting) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestBrowserURL(t *testing.T) {
+	complete := Code{VerificationURI: testServer + "/device", VerificationURIComplete: testServer + "/device?user_code=WDJB-MJHT"}
 	tests := []struct {
-		name string
-		code Code
-		want string // "" means none
+		name     string
+		code     Code
+		withCode bool
+		want     string // "" means none
 	}{
-		{name: "the complete URI on the server is opened", code: Code{VerificationURI: testServer + "/device", VerificationURIComplete: testServer + "/device?user_code=WDJB-MJHT"}, want: testServer + "/device?user_code=WDJB-MJHT"},
-		{name: "without a complete URI the plain one is opened", code: Code{VerificationURI: testServer + "/device"}, want: testServer + "/device"},
-		{name: "a page on another host isn't opened", code: Code{VerificationURI: "https://evil.example/device", VerificationURIComplete: "https://evil.example/device?user_code=X"}},
-		{name: "a file URL isn't opened", code: Code{VerificationURIComplete: "file:///C:/Windows/System32/calc.exe"}},
-		{name: "a bare path isn't opened, since Windows would run it", code: Code{VerificationURIComplete: `C:\Windows\System32\calc.exe`}},
-		{name: "the same host over http isn't opened", code: Code{VerificationURIComplete: "http://pairtime.example.org/device"}},
+		{name: "the complete URI on the server is opened where other accounts can't read the browser's command line", code: complete, withCode: true, want: testServer + "/device?user_code=WDJB-MJHT"},
+		{name: "elsewhere the plain URI is opened, so the code stays out of the command line", code: complete, want: testServer + "/device"},
+		{name: "without a complete URI the plain one is opened", code: Code{VerificationURI: testServer + "/device"}, withCode: true, want: testServer + "/device"},
+		{name: "a page on another host isn't opened", code: Code{VerificationURI: "https://evil.example/device", VerificationURIComplete: "https://evil.example/device?user_code=X"}, withCode: true},
+		{name: "a file URL isn't opened", code: Code{VerificationURIComplete: "file:///C:/Windows/System32/calc.exe"}, withCode: true},
+		{name: "a bare path isn't opened, since Windows would run it", code: Code{VerificationURIComplete: `C:\Windows\System32\calc.exe`}, withCode: true},
+		{name: "the same host over http isn't opened", code: Code{VerificationURIComplete: "http://pairtime.example.org/device"}, withCode: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := BrowserURL(tt.code, testServer)
+			got, ok := browserURL(tt.code, testServer, tt.withCode)
 			if ok != (tt.want != "") || got != tt.want {
-				t.Errorf("BrowserURL = %q, %v; want %q", got, ok, tt.want)
+				t.Errorf("browserURL = %q, %v; want %q", got, ok, tt.want)
 			}
 		})
 	}
+	t.Run("on Linux and the BSDs, where /proc or ps shows every account's command lines, the code isn't opened", func(t *testing.T) {
+		if want := runtime.GOOS == "windows" || runtime.GOOS == "darwin"; openWithCode != want {
+			t.Errorf("openWithCode is %v on %s, want %v", openWithCode, runtime.GOOS, want)
+		}
+		if got, _ := BrowserURL(complete, testServer); strings.Contains(got, "user_code") != openWithCode {
+			t.Errorf("BrowserURL = %q with openWithCode %v", got, openWithCode)
+		}
+	})
 }
 
 func TestBuild(t *testing.T) {

@@ -16,13 +16,26 @@ var ErrNoBrowser = errors.New("account: no browser to open here")
 // verification_uri_complete, or its verification_uri, when it is on the
 // server being linked, and false otherwise. The server sends it, and on
 // Windows the command that opens a URL would also start a program, so
-// nothing else is ever opened.
+// nothing else is ever opened. Where another account on the computer can
+// read the command line of the browser it starts, as on Linux, it opens
+// verification_uri, which asks for the code the terminal shows, so the
+// code stays out of the command line (openWithCode).
 func BrowserURL(code Code, server string) (string, bool) {
+	return browserURL(code, server, openWithCode)
+}
+
+// browserURL is BrowserURL, which opens verification_uri_complete only
+// with withCode.
+func browserURL(code Code, server string, withCode bool) (string, bool) {
 	want, err := url.Parse(server)
 	if err != nil {
 		return "", false
 	}
-	for _, raw := range []string{code.VerificationURIComplete, code.VerificationURI} {
+	pages := []string{code.VerificationURI}
+	if withCode {
+		pages = []string{code.VerificationURIComplete, code.VerificationURI}
+	}
+	for _, raw := range pages {
 		u, err := url.Parse(raw)
 		if err != nil || raw == "" || u.User != nil || u.Fragment != "" {
 			continue
