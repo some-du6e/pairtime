@@ -7,8 +7,9 @@
 // config directories, config.toml, state.json, the scheduler that every
 // timer goes through, and the HTTP server on 127.0.0.1. WP-AG2 added the
 // socket that hooks hand their messages to and the inbox they spool to
-// when the agent is down (packages ipc and inbox), and WP-OS8 the notifier
-// that shows the coach's notification. The other components of
+// when the agent is down (packages ipc and inbox), WP-AG3 what the agent
+// makes of each hook call (hooks.go, package hookpath), and WP-OS8 the
+// notifier that shows the coach's notification. The other components of
 // DESIGN 3.3 arrive in later work packages, each as a package under
 // internal/agent that Run starts.
 package agent
@@ -75,6 +76,13 @@ type Options struct {
 	// that can pass, such as a locked keyring; 15 s otherwise. Tests set
 	// it so they needn't wait.
 	LedgerRetry time.Duration
+	// Mac is the macOS notification loop, which cmd/pairtime runs on the
+	// main thread while Run runs on another goroutine. It gives presence
+	// its suspends, resumes, locks and unlocks, and focus its app
+	// activations (WP-OS9). Nil means none runs: presence still samples
+	// idle time, and GET /v1/status says that power, locks and focus go
+	// unseen. Other OSes ignore it.
+	Mac *MacLoop
 }
 
 // linked keeps heavyModules' entry points reachable (see heavy_linux.go).
@@ -97,7 +105,9 @@ type agent struct {
 	port    int
 	procs   *procs.Scanner // the harness process scan (DESIGN 3.3)
 	journal *inbox.Journal // nil when it couldn't be opened
-	ipcSrv  *ipc.Server    // nil when hooks can't reach the agent
+	// ipcSrv is the socket's or the pipe's server, nil while hooks can't
+	// reach the agent.
+	ipcSrv atomic.Pointer[ipc.Server]
 	// notifier shows the coach's notification when a work session ends
 	// (WP-OS8). The coach calls its Notify, and its UserPresent on unlock
 	// and resume (WP-CO1).
@@ -108,9 +118,17 @@ type agent struct {
 	// kApp is K_app, which keys os.focus's app_hash, once keyFocus has
 	// derived it from the device key.
 	kApp atomic.Pointer[[]byte]
+	// hooked are the processes hooks came from, with their sessions, for
+	// focus (hooks.go), and kSession is K_session, which keys those
+	// sessions, once keySessions has derived it from the device key.
+	hooked   *hookTies
+	kSession atomic.Pointer[[]byte]
 	// ledgerIn takes presence's and focus's records, and presence's
 	// seals, to the ledger writer once it opens (WP-LG5).
-	ledgerIn    *ledger.Presence
+	ledgerIn *ledger.Presence
+	// signals says where each OS signal comes from, for GET /v1/status
+	// (openOS).
+	signals     func() signalsReply
 	keyStores   []keys.Store  // Options.KeyStores
 	ledgerRetry time.Duration // the first wait before the ledger opens again
 
@@ -150,6 +168,7 @@ func Run(ctx context.Context, opts Options) error {
 		problems:    make(map[string]string),
 		keyStores:   opts.KeyStores,
 		ledgerRetry: defaultLedgerRetry,
+		hooked:      newHookTies(),
 	}
 	if opts.LedgerRetry > 0 {
 		a.ledgerRetry = opts.LedgerRetry
@@ -161,8 +180,8 @@ func Run(ctx context.Context, opts Options) error {
 
 	// Each part that starts adds the step that stops it, and they stop in
 	// reverse order: the HTTP server, port.json, the socket and the inbox,
-	// focus, the process scan, the config watch, presence, the ledger, the
-	// scheduler, the notifier, state.json.
+	// focus, the process scan, the config watch, presence, the OS's
+	// sources, the ledger, the scheduler, the notifier, state.json.
 	var closers []func()
 	defer func() {
 		for i := len(closers) - 1; i >= 0; i-- {
@@ -198,10 +217,15 @@ func Run(ctx context.Context, opts Options) error {
 		<-schedDone
 	})
 	closers = append(closers, a.startLedger())
-	closers = append(closers, a.startPresence())
+	src := a.openOS(opts)
+	a.signals = src.signals
+	if src.close != nil {
+		closers = append(closers, src.close)
+	}
+	closers = append(closers, a.startPresence(src.presence))
 
 	closers = append(closers, a.watchConfig())
-	a.newFocus(focus.ThisOS())
+	a.newFocus(src.focus)
 	closers = append(closers, a.startProcs())
 	closers = append(closers, a.startFocus())
 	closers = append(closers, a.startIPC(opts))

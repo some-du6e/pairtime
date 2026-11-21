@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/some-du6e/pairtime/internal/timelines"
@@ -23,13 +24,13 @@ import (
 // by reason where SM decides them, agent_running_s, and which minutes have a
 // bucket (SM 5.1).
 
-// creditFixtures are the SM fixtures WP-SC2 reproduces. 6.3 and its two-tab
-// variant need one timeline across projects (WP-SC3), and 6.5 and 4.2's
-// alternation need dark flow (WP-SC6).
-var creditFixtures = []string{"6.1", "6.2", "6.4", "6.6"}
+// creditFixtures are the SM fixtures WP-SC2 and WP-SC3 reproduce. WP-SC3's
+// are 6.3 and its two-tab variant, which need one timeline across projects
+// (SM 3). 6.5 and 4.2's alternation need dark flow (WP-SC6).
+var creditFixtures = []string{"6.1", "6.2", "6.3", "6.3-tabs", "6.4", "6.6"}
 
-// creditCases returns the fixtures WP-SC2 reproduces: creditFixtures and
-// every side-door case.
+// creditCases returns the fixtures WP-SC2 and WP-SC3 reproduce:
+// creditFixtures and every side-door case.
 func creditCases(t *testing.T) []*timelines.Fixture {
 	t.Helper()
 	var out []*timelines.Fixture
@@ -178,6 +179,10 @@ type totals struct {
 	byReason, uncredited                  map[event.Reason]float64
 	byLevel                               map[event.Evidence]float64
 	labels                                map[event.Label]float64
+	// byProject is the credit by project; agentBy is each project's agent
+	// time, and agentOnlyBy the part of it the project doesn't credit, the
+	// chess clock of SM 2.6.
+	byProject, agentBy, agentOnlyBy map[string]float64
 }
 
 // aiReasons are SM 5.4's AI-assisted reasons. Any other credited second
@@ -187,7 +192,8 @@ var aiReasons = []event.Reason{event.ReasonPrompt, event.ReasonAnswer, event.Rea
 
 func totalsOf(d Derived, from, to int64) totals {
 	tot := totals{byReason: map[event.Reason]float64{}, uncredited: map[event.Reason]float64{},
-		byLevel: map[event.Evidence]float64{}, labels: map[event.Label]float64{}}
+		byLevel: map[event.Evidence]float64{}, labels: map[event.Label]float64{}, byProject: map[string]float64{},
+		agentBy: map[string]float64{}, agentOnlyBy: map[string]float64{}}
 	for _, c := range d.Credits {
 		if c.Slot < from || c.Slot >= to {
 			continue
@@ -197,19 +203,25 @@ func totalsOf(d Derived, from, to int64) totals {
 			tot.credited += s
 			tot.byReason[e.Reason] += s
 			tot.byLevel[e.Level] += s
+			tot.byProject[e.ProjectKey] += s
 			for _, l := range e.Labels {
 				tot.labels[l] += s
 			}
 			if e.InTurn || slices.Contains(aiReasons, e.Reason.Base()) {
 				tot.ai += s
 			}
+			if e.InTurn {
+				tot.agentBy[e.ProjectKey] += float64(e.Seconds)
+			}
 		}
 		for r, n := range c.Uncredited {
 			tot.uncredited[r] += float64(n)
 		}
 		tot.agentRunning += float64(c.AgentS)
-		for _, n := range c.AgentOnly {
+		for p, n := range c.AgentOnly {
 			tot.agentOnly += float64(n)
+			tot.agentOnlyBy[p] += float64(n)
+			tot.agentBy[p] += float64(n)
 		}
 	}
 	return tot
@@ -232,34 +244,63 @@ func TestFixtureTotals(t *testing.T) {
 				t.Errorf("agent_running_s %v, want %v", tot.agentRunning, want.AgentRunningS)
 			}
 		})
+		// Summing tot.byProject would check nothing, since every entry adds
+		// the same seconds to it and to tot.credited. internal/timelines
+		// checks that an expected.json's rows add up to its totals and each
+		// row's reasons to its credited_s, so its projects add up to
+		// credited_s, which the test above compares with the scorer's: this
+		// test then says the scorer's projects add up to its total too.
+		t.Run(f.Name+" credits each project what SM says, so its projects add up to its total (SM 3.1)", func(t *testing.T) {
+			if want.CreditedByProject == nil {
+				t.Fatal("expected.json has no credited_by_project")
+			}
+			if !sameSeconds(tot.byProject, want.CreditedByProject) {
+				t.Errorf("credited by project %v, want %v", tot.byProject, want.CreditedByProject)
+			}
+		})
+		if f.Name == "6.3" || f.Name == "6.3-tabs" {
+			// Every anchor that resolves a slot of 6.3-tabs's iTerm is a
+			// level-A hook prompt, so DESIGN 6.4's cap moves nothing there.
+			t.Run(f.Name+": every credited second is level "+string(f.Expected.Evidence)+", as its expected.json says", func(t *testing.T) {
+				if !sameSeconds(tot.byLevel, map[event.Evidence]float64{f.Expected.Evidence: tot.credited}) {
+					t.Errorf("credited by level %v, want all %v s at %s", tot.byLevel, tot.credited, f.Expected.Evidence)
+				}
+			})
+		}
 		for _, k := range slices.Sorted(maps.Keys(want.Other)) {
 			var got float64
-			switch k {
-			case "wall_s":
-				got = float64(to-from) / 1000
-			case "agent_only_s":
-				got = tot.agentOnly
-			case "absent_s":
-				got = tot.uncredited[event.ReasonAbsent]
-			case "ai_credited_s":
-				got = tot.ai
-			case "hand_credited_s":
-				got = tot.credited - tot.ai
-			case "first_cycle_credited_s":
-				got = totalsOf(d, from, from+12*60_000).credited
-			case "level_a_s":
-				got = tot.byLevel[event.EvidenceA]
-			case "level_b_s":
-				got = tot.byLevel[event.EvidenceB]
-			case "level_c_s":
-				got = tot.byLevel[event.EvidenceC]
-			case "via_track_s":
-				got = tot.labels[event.LabelViaTrack]
-			default:
-				// logged_s, ai_logged_s and level_c_cap_s are submission
-				// totals (SM 5.3, 5.4; WP-SC4); lid_open_s and bucket_left_s
-				// describe the timeline rather than any output.
-				continue
+			if p, ok := strings.CutPrefix(k, "agent_running_s."); ok {
+				got = tot.agentBy[p]
+			} else if p, ok := strings.CutPrefix(k, "agent_only_s."); ok {
+				got = tot.agentOnlyBy[p]
+			} else {
+				switch k {
+				case "wall_s":
+					got = float64(to-from) / 1000
+				case "agent_only_s":
+					got = tot.agentOnly
+				case "absent_s":
+					got = tot.uncredited[event.ReasonAbsent]
+				case "ai_credited_s":
+					got = tot.ai
+				case "hand_credited_s":
+					got = tot.credited - tot.ai
+				case "first_cycle_credited_s":
+					got = totalsOf(d, from, from+12*60_000).credited
+				case "level_a_s":
+					got = tot.byLevel[event.EvidenceA]
+				case "level_b_s":
+					got = tot.byLevel[event.EvidenceB]
+				case "level_c_s":
+					got = tot.byLevel[event.EvidenceC]
+				case "via_track_s":
+					got = tot.labels[event.LabelViaTrack]
+				default:
+					// logged_s, ai_logged_s and level_c_cap_s are submission
+					// totals (SM 5.3, 5.4; WP-SC4); lid_open_s and bucket_left_s
+					// describe the timeline rather than any output.
+					continue
+				}
 			}
 			t.Run(fmt.Sprintf("%s's %s is %v, as its expected.json says", f.Name, k, want.Other[k]), func(t *testing.T) {
 				if got != want.Other[k] {
@@ -316,6 +357,25 @@ func TestCreditSlots(t *testing.T) {
 					if !r.Uncredited() {
 						t.Fatalf("slot %d has uncredited seconds under %q", c.Slot, r)
 					}
+				}
+			}
+		})
+		// A slot's ProjectKey is the project SM 3.2 resolves it to, and only
+		// a slot that resolves to none takes its first credited second's, so
+		// this compares what each slot credits with its resolution.
+		t.Run(f.Name+": a slot's credited seconds all go to the project it resolves to, and what resolved it is an anchor (SM 3.1, 3.2)", func(t *testing.T) {
+			ids := map[string]bool{}
+			for _, a := range d.Anchors {
+				ids[a.ID] = true
+			}
+			for _, c := range d.Credits {
+				for _, e := range c.Credited {
+					if e.ProjectKey == "" || e.ProjectKey != c.ProjectKey {
+						t.Fatalf("slot %d of project %q credits %q", c.Slot, c.ProjectKey, e.ProjectKey)
+					}
+				}
+				if c.ResolvedBy != "" && !ids[c.ResolvedBy] {
+					t.Fatalf("slot %d is resolved by %s, which is no anchor", c.Slot, c.ResolvedBy)
 				}
 			}
 		})
@@ -399,5 +459,50 @@ func TestSideDoorFills(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestSixSixCodes checks SM 6.6's uncredited seconds as E-6.6-codes gives
+// them: SM 5.2's order, with SM 2.5's slot focus deciding whether a slot is
+// the project's or hosts no harness (SM 3.2). 6.6's expected.json lists
+// only the codes until the orchestrator's oracle PR writes these seconds
+// into it; TestFixtureMinutes checks them from then on, and this test can
+// go.
+func TestSixSixCodes(t *testing.T) {
+	f := fixture(t, "6.6")
+	got := byMinute(scoreAll(t, fixtureDevice(f), f.Events))
+	start := f.Expected.Window.Start.UnixMilli()
+	const (
+		noAnchor  = event.ReasonNoAnchor
+		automated = event.ReasonAutomated
+		ambiguous = event.ReasonAmbiguous
+	)
+	for _, c := range []struct {
+		name     string
+		from, to int64 // minutes after 22:00
+		want     map[event.Reason]float64
+	}{
+		{"22:00: the terminal hosts the session for 10 s of its first slot, so the slot is the project's", 0, 1,
+			map[event.Reason]float64{noAnchor: 5, automated: 55}},
+		{"22:01: the headless turn runs the whole minute", 1, 2, map[event.Reason]float64{automated: 60}},
+		{"22:02: the agent stops at 22:02:10 and from 22:02:15 the terminal hosts no harness", 2, 3,
+			map[event.Reason]float64{automated: 10, noAnchor: 5, ambiguous: 45}},
+		{"22:05: claude starts at 22:05:02", 5, 6, map[event.Reason]float64{noAnchor: 2, automated: 58}},
+		{"22:06 to 01:59: the same pattern in every minute with a bucket", 6, 240,
+			map[event.Reason]float64{ambiguous: 2550, noAnchor: 158, automated: 5392}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			sum := map[event.Reason]float64{}
+			for m := start + c.from*60_000; m < start+c.to*60_000; m += 60_000 {
+				if g := got[m]; g != nil && g.bucket() {
+					for r, n := range g.uncredited {
+						sum[r] += n
+					}
+				}
+			}
+			if !sameSeconds(sum, c.want) {
+				t.Errorf("uncredited %v, want %v (E-6.6-codes)", sum, c.want)
+			}
+		})
 	}
 }

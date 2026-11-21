@@ -22,6 +22,9 @@ const goos = platform.Linux
 
 func readOS() ([]platform.Proc, error) { return linux.Processes() }
 
+// readSelf reads this process alone, as a hook reads its own chain entry.
+func readSelf() (platform.Proc, error) { return linux.Self() }
+
 func ownPGID() int { return syscall.Getpgrp() }
 
 func bashPath() (string, error)   { return exec.LookPath("bash") }
