@@ -255,6 +255,11 @@ func readRaw(r *http.Request) ([]byte, *refusal) {
 // past the limit, so a gzip bomb costs at most that much output.
 func inflate(raw []byte) ([]byte, *refusal) {
 	invalid := refuse(CodeGzipInvalid, "The body must be one gzip member with nothing after it.")
+	// RFC 1952 2.3.1: the reserved FLG bits must be zero, and a reader must
+	// refuse a member that sets one. compress/gzip doesn't check them.
+	if len(raw) >= 4 && raw[3]&0xe0 != 0 {
+		return nil, invalid
+	}
 	src := bytes.NewReader(raw)
 	zr, err := gzip.NewReader(src)
 	if err != nil {

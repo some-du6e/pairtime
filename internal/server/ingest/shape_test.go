@@ -279,6 +279,8 @@ func TestBucketShape(t *testing.T) {
 			slot(m, 0)["lbl"] = []any{"typing_module"}
 		}, shapeResult{CodeBadString, "slots[0].lbl[0]"}},
 		{"a scoring version that isn't N.N.N is bad_string", func(m map[string]any) { m["v"] = "1.0" }, shapeResult{CodeBadString, "v"}},
+		{"a scoring version of three nine-digit parts passes", func(m map[string]any) { m["v"] = "123456789.123456789.123456789" }, shapeResult{}},
+		{"a scoring version longer than three nine-digit parts is bad_string", func(m map[string]any) { m["v"] = strings.Repeat(".", 100_000) }, shapeResult{CodeBadString, "v"}},
 		{"params without sha256: is bad_string", func(m map[string]any) { m["params"] = strings.Repeat("ab", 32) }, shapeResult{CodeBadString, "params"}},
 		{"agent_only by project passes", func(m map[string]any) {
 			m["agent_only"] = map[string]any{"p_one": 12.5, "p_two": 0.5}

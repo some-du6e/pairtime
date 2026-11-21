@@ -336,6 +336,11 @@ func isGitID(s string) bool { return isHex(s, 40) || isHex(s, 64) }
 // isSemver reports whether s is MAJOR.MINOR.PATCH with 1 to 9 digits in
 // each part, as pkg/event's scoring versions are.
 func isSemver(s string) bool {
+	// Three parts of nine digits and two dots: refused before Split, so a
+	// long string of dots costs no slice of parts.
+	if len(s) > 3*9+2 {
+		return false
+	}
 	parts := strings.Split(s, ".")
 	if len(parts) != 3 {
 		return false

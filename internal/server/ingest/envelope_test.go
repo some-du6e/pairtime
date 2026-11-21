@@ -258,6 +258,11 @@ func TestInflate(t *testing.T) {
 			b[len(b)-8] ^= 1
 			return b
 		}(), CodeGzipInvalid, 0},
+		{"a member with a reserved flag bit set is refused, as RFC 1952 has it", func() []byte {
+			b := bytes.Clone(one)
+			b[3] |= 0x20
+			return b
+		}(), CodeGzipInvalid, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -37,7 +37,7 @@ User-Agent: pairtime-agent/<version>
 | `Authorization` | `Bearer ` and the device token `pairtime login` got (WP-SV3; DESIGN 3.10). |
 | `Idempotency-Key` | A UUIDv7 (RFC 9562 section 5.7) in lowercase canonical form, `xxxxxxxx-xxxx-7xxx-Nxxx-xxxxxxxxxxxx` with `N` one of `8 9 a b`, 36 characters. A new one for each new body; a retry of the same body keeps it (2.10). |
 | `Content-Type` | `application/json`, optionally with `; charset=utf-8`. |
-| `Content-Encoding` | `gzip`: the body is one gzip member (RFC 1952) holding the JSON of 2.3, with nothing after it. |
+| `Content-Encoding` | `gzip`: the body is one gzip member (RFC 1952), with its reserved flag bits zero, holding the JSON of 2.3, with nothing after it. |
 | `X-Pairtime-Device` | The device's `device_id`: the per-install id the client's ledger made at install and writes into every event, which `pairtime login` registers with the token (WP-SV3). Receipts sign it (2.8), and every bucket names it (2.3.2). |
 | `X-Pairtime-Req` | The request counter, a decimal integer from 1 to 9223372036854775807 with no sign and no leading zeros. Each request the server processes must carry a counter greater than every counter it processed for the device before (2.5 step 13). |
 | `X-Pairtime-Time` | The client's clock, corrected by the offset it learned from `X-Pairtime-Time` on earlier responses, as a decimal integer of Unix milliseconds with no sign and no leading zeros. |
@@ -198,7 +198,7 @@ The server reads a body's members in order and refuses an array at its first ite
 
 ### 2.5 Checks, in order
 
-The server checks a request in this order and answers the first failure with the refusal of 2.6. Steps 1 to 12 read but write nothing, and so do the item forms of 2.3 and `MinuteBucket.Validate`, which the server checks after step 12 and before the writer; step 13 and after run as one transaction in the server's writer.
+The server checks a request in this order and answers the first failure with the refusal of 2.6. Steps 1 to 12 read but write nothing, but for the device store noting when the device last connected once its token checks out (step 2; WP-SV3), and so do the item forms of 2.3 and `MinuteBucket.Validate`, which the server checks after step 12 and before the writer; step 13 and after run as one transaction in the server's writer.
 
 1. Ingest is set up on this server: a device store and the server's signing key. Otherwise 503 `ingest_off`.
 2. `Authorization` holds a `Bearer` token: otherwise `token_missing`. The token passes its CRC32 checksum before any lookup and names a device: otherwise `token_invalid`. The device isn't revoked: otherwise `device_revoked`.
