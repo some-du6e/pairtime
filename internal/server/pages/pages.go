@@ -107,6 +107,55 @@ type Options struct {
 	Commit string
 	// Retention is the retention schedule the notice publishes.
 	Retention *retention.Policy
+	// Running says which of the services the notice describes this server
+	// runs.
+	Running Running
+}
+
+// Running says which of the services the privacy notice describes this
+// server runs. The notice describes each as it works once it runs, so its
+// first lines name the ones that don't yet, and the work package that
+// builds each one sets it in pairtimed (#119).
+type Running struct {
+	// SignIn is Hack Club Auth sign-in, which runs once hca.client_id is
+	// set (WP-SV2).
+	SignIn bool
+	// Uploads are the pairtime program's uploads: minute buckets, batch
+	// roots and commit records (WP-SV4).
+	Uploads bool
+	// Submissions are hours submitted to programs, and the evidence store
+	// that keeps what they reveal (WP-SB1, WP-SB4).
+	Submissions bool
+	// DayRoots are the day roots published to the public witness
+	// repository (WP-SV17).
+	DayRoots bool
+}
+
+// notRunning names, as one clause the notice completes, the services this
+// server doesn't run yet, or "" when it runs them all.
+func (r Running) notRunning() string {
+	var parts []string
+	if !r.SignIn {
+		parts = append(parts, "let anyone sign in")
+	}
+	if !r.Uploads {
+		parts = append(parts, "receive uploads from the pairtime program")
+	}
+	if !r.Submissions {
+		parts = append(parts, "take hours you submit to programs", "keep an evidence store")
+	}
+	if !r.DayRoots {
+		parts = append(parts, "publish day roots")
+	}
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		return parts[0]
+	case 2:
+		return parts[0] + " or " + parts[1]
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + ", or " + parts[len(parts)-1]
 }
 
 // commitHash is a full git commit hash, SHA-1 or SHA-256.
@@ -477,7 +526,10 @@ func (v version) String() string {
 // values from the configuration escaped.
 type privacyData struct {
 	// Named says whether the controller's name and contact are both set.
-	Named      bool
+	Named bool
+	// NotRunning names the services this server doesn't run yet, "" when
+	// it runs every one the notice describes.
+	NotRunning string
 	Controller string
 	Contact    string
 	DPO        string
@@ -524,6 +576,7 @@ func newPrivacyData(o Options, src sources) (*privacyData, error) {
 	c := o.Controller
 	d := &privacyData{
 		Named:             c.Name != "" && c.Contact != "",
+		NotRunning:        o.Running.notRunning(),
 		Controller:        notNamed,
 		Contact:           notNamed,
 		BaseURL:           escape(o.BaseURL),

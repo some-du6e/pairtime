@@ -15,6 +15,7 @@
 #   dist/linux_amd64/pairtimed   dist/linux_arm64/pairtimed
 #   dist/THIRD_PARTY_NOTICES.txt  (tools/release notices for pairtimed)
 #   LICENSE
+#   deploy/litestream.yml
 #
 #   docker buildx build -f Dockerfile.pairtimed --platform linux/amd64 .
 #
@@ -67,6 +68,13 @@ COPY --from=unpack --chmod=0644 /tmp/litestream/LICENSE /usr/share/doc/litestrea
 COPY --chmod=0755 dist/linux_${TARGETARCH}/pairtimed /usr/local/bin/pairtimed
 COPY --chmod=0644 LICENSE /usr/share/doc/pairtimed/LICENSE
 COPY --chmod=0644 dist/THIRD_PARTY_NOTICES.txt /usr/share/doc/pairtimed/THIRD_PARTY_NOTICES.txt
+# Litestream's configuration, which compose.yml's command names. Its exec
+# line runs this image's pairtimed with flags this pairtimed takes, so it
+# belongs to the image: each image runs the litestream.yml it was built and
+# drilled with, and a rollback to an older image needs nothing from git
+# (#119). Every value in it comes from the PAIRTIME_* variables, so it holds
+# nothing of one deployment.
+COPY --chmod=0644 deploy/litestream.yml /etc/litestream.yml
 
 # Both programs by name: compose's command and healthcheck, and
 # litestream.yml's exec, find them on this PATH.
@@ -76,5 +84,6 @@ ENV PATH=/usr/local/bin:/usr/bin:/bin \
 USER 65532:65532
 EXPOSE 8080
 
-# compose.yml sets the same command; this is what a bare docker run does.
+# compose.yml sets the same command; this is what a bare docker run does,
+# with the PAIRTIME_* variables litestream.yml reads.
 CMD ["litestream", "replicate", "-config", "/etc/litestream.yml"]

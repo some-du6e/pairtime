@@ -31,9 +31,9 @@ name: pairtime
 services:
   pairtimed:
     # A server-image.yml push, by tag and digest (deploy/runbook.md, The
-    # image pin). This one is main at 7bbde53: #152's server plus your first
-    # name in the header from Hack Club Auth (#153).
-    image: ghcr.io/some-du6e/pairtimed:sha-7bbde53ebec7@sha256:8e593078924c95de1240b60275dc51b7617873ecae5a80b4d36a39ee1fbae175
+    # image pin). This one is main at 4c66364: #154's server plus the deploy
+    # bundle fixes (#123), scoring 0.2.0 (#151) and the held-calls notice (#156).
+    image: ghcr.io/some-du6e/pairtimed:sha-4c66364cb246@sha256:9e6f7e4f606ae8df7fe6aa6682506232f57e5c3f0bc38f19dfafb43c700ceb67
     restart: unless-stopped
     # Litestream restores /data/pairtime.db from the replica when the file
     # is missing, then runs "pairtimed serve" as its subprocess and copies
@@ -44,16 +44,27 @@ services:
       # Local disk only, never NFS or SMB: SQLite's locks don't hold there.
       - ./data:/data
       - ./config:/etc/pairtime:ro
-      # From git, next to this file, so it changes with the release.
-      - ./litestream.yml:/etc/litestream.yml:ro
       # Where pairtimed writes each day's signed witness root (WP-SV17).
       - ./witness-roots:/witness
+      # /tmp in memory, since the root filesystem is read-only, and bounded,
+      # so nothing written there can take the host's memory. SQLite's own
+      # temporary files, its sort spills and temporary indexes, go to
+      # /data/tmp on the disk instead (SQLITE_TMPDIR below; #133).
+      - type: tmpfs
+        target: /tmp
+        tmpfs:
+          size: 268435456
     # compose reads this file on the host and passes each line to the
     # container as an environment variable; pairtimed and litestream.yml
     # read their PAIRTIME_* variables from there.
     env_file: ./config/secrets.env
     environment:
       PAIRTIME_WITNESS_REPO: ${PAIRTIME_WITNESS_REPO:-some-du6e/pairtime-witness}
+      # Runbook step 2 makes it, and so does pairtimed serve, mode 0700, in
+      # the images built from #123 on. An older image doesn't, and SQLite
+      # then uses /tmp, so a host set up before #123 makes it as the
+      # runbook's Upgrades say.
+      SQLITE_TMPDIR: /data/tmp
     healthcheck:
       # /healthz on the private ops port: the process answers. Not /readyz,
       # whose database check commits a row each call and so makes
@@ -67,11 +78,10 @@ services:
       # A restore from the replica on a new host can take minutes.
       start_period: 10m
     # Time for pairtimed to finish its requests and for Litestream's last
-    # sync before Docker kills them.
+    # sync before Docker kills them. litestream.yml's shutdown-timeout, the
+    # time Litestream gives both, ends first.
     stop_grace_period: 90s
     read_only: true
-    tmpfs:
-      - /tmp
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 

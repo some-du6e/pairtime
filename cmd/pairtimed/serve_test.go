@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"io"
 	"io/fs"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/backup"
 	"github.com/some-du6e/pairtime/internal/server/ops"
 	"github.com/some-du6e/pairtime/internal/server/pages"
 	"github.com/some-du6e/pairtime/internal/server/retention"
@@ -555,6 +557,119 @@ func TestServeHSTS(t *testing.T) {
 						t.Errorf("%s %s has Strict-Transport-Security %q, want %q", method, tt.url, got, tt.want)
 					}
 				})
+			}
+		})
+	}
+}
+
+// TestServeRunning checks that the privacy notice's first lines follow
+// what serve runs (#119): ingest takes uploads once the server key is
+// there, so from then on the notice no longer says this server doesn't
+// receive them (WP-SV4).
+func TestServeRunning(t *testing.T) {
+	tests := []struct {
+		name    string
+		keys    bool
+		want    string
+		notWant string
+	}{
+		{name: "without the server key ingest is off, so the notice says this server doesn't receive uploads yet",
+			want: "This server doesn&#39;t yet let anyone sign in, receive uploads from the pairtime program, take hours you submit to programs, keep an evidence store, or publish day roots."},
+		{name: "with the server key ingest takes uploads, so the notice no longer lists them",
+			keys:    true,
+			want:    "This server doesn&#39;t yet let anyone sign in, take hours you submit to programs, keep an evidence store, or publish day roots.",
+			notWant: "receive uploads from"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath, dbPath := writeConfig(t)
+			if tt.keys {
+				if _, err := backup.Generate(backup.KeysDir(filepath.Dir(dbPath)), rand.Reader); err != nil {
+					t.Fatal(err)
+				}
+			}
+			public, _ := startServe(t, configPath)
+			client := &http.Client{Timeout: 10 * time.Second}
+			resp, err := client.Get(public + "/privacy")
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil || resp.StatusCode != http.StatusOK {
+				t.Fatalf("GET /privacy = %d, %v", resp.StatusCode, err)
+			}
+			if !strings.Contains(string(body), tt.want) {
+				t.Errorf("the notice doesn't say %q", tt.want)
+			}
+			if tt.notWant != "" && strings.Contains(string(body), tt.notWant) {
+				t.Errorf("the notice still says %q", tt.notWant)
+			}
+		})
+	}
+}
+
+// TestServeHeaders checks the headers a browser and Cloudflare read on
+// every kind of answer from the public listener: each says how to cache
+// it, the error answers of ServeMux and sign-in included, and none can be
+// sniffed into another type (#119).
+func TestServeHeaders(t *testing.T) {
+	configPath, _ := writeConfig(t)
+	public, private := startServe(t, configPath)
+	client := &http.Client{
+		Timeout:       10 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	nosniff := "nosniff"
+	tests := []struct {
+		name     string
+		method   string
+		url      string
+		wantCode int
+		want     map[string]string
+	}{
+		{name: "the public health check is never stored or sniffed", url: public + "/healthz", wantCode: 200,
+			want: map[string]string{"Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
+		{name: "a 404 for a path nothing serves, such as /favicon.ico, is never stored, so the edge can't keep it",
+			url: public + "/favicon.ico", wantCode: 404,
+			want: map[string]string{"Cache-Control": "no-store", "X-Content-Type-Options": nosniff, "Content-Security-Policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"}},
+		{name: "a 405 for a method a page doesn't take is never stored either", method: http.MethodPost, url: public + "/privacy", wantCode: 405,
+			want: map[string]string{"Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
+		{name: "the privacy notice keeps its own caching", url: public + "/privacy", wantCode: 200,
+			want: map[string]string{"Cache-Control": "no-cache", "X-Content-Type-Options": nosniff, "Referrer-Policy": "no-referrer"}},
+		{name: "the home page keeps its own referrer policy", url: public + "/", wantCode: 200,
+			want: map[string]string{"Cache-Control": "no-store", "X-Content-Type-Options": nosniff, "Referrer-Policy": "same-origin"}},
+		{name: "a 401 names how a request authenticates (RFC 9110 15.5.2)", url: public + "/api/v1/users/me", wantCode: 401,
+			want: map[string]string{"WWW-Authenticate": `Session realm="pairtime"`, "Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
+		{name: "the dashboard API's 401 names the same scheme, as GET /api/v1/users/me answers", url: public + "/api/v1/users/me/dashboard", wantCode: 401,
+			want: map[string]string{"WWW-Authenticate": `Session realm="pairtime"`, "Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
+		{name: "sign-in's error page is never stored", url: public + "/auth/hca/login", wantCode: 503,
+			want: map[string]string{"Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
+		{name: "the ops listener's health check isn't sniffed either", url: private + "/healthz", wantCode: 200,
+			want: map[string]string{"X-Content-Type-Options": nosniff}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			method := tt.method
+			if method == "" {
+				method = http.MethodGet
+			}
+			req, err := http.NewRequest(method, tt.url, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != tt.wantCode {
+				t.Errorf("%s %s = %d, want %d", method, tt.url, resp.StatusCode, tt.wantCode)
+			}
+			for k, v := range tt.want {
+				if got := resp.Header.Values(k); len(got) != 1 || got[0] != v {
+					t.Errorf("%s %s has %s %q, want %q", method, tt.url, k, got, v)
+				}
 			}
 		})
 	}

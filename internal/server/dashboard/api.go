@@ -19,6 +19,11 @@ const APIPath = "/api/v1/users/me/dashboard"
 // dashboard answers with a 500, never with sign-in.
 var ErrNotSignedIn = errors.New("dashboard: not signed in")
 
+// sessionChallenge is the WWW-Authenticate challenge of the 401 (RFC 9110
+// 15.5.2), the one GET /api/v1/users/me sends: a request authenticates
+// with the session cookie Hack Club Auth sign-in sets.
+const sessionChallenge = `Session realm="pairtime"`
+
 // API serves GET /api/v1/users/me/dashboard: the View of the account a
 // request is signed in to, as JSON. account returns that account's users
 // id. A request that isn't signed in, ErrNotSignedIn, gets a 401 with the
@@ -32,6 +37,7 @@ func API(src Source, account func(*http.Request) (string, error), now func() tim
 		id, err := account(r)
 		switch {
 		case errors.Is(err, ErrNotSignedIn):
+			w.Header().Set("WWW-Authenticate", sessionChallenge)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "not_signed_in"})
 			return
 		case err != nil:

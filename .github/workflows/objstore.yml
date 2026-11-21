@@ -130,7 +130,9 @@ jobs:
           # unless TestMinIO ran, and the acceptance check with it.
           for t in TestMinIO TestMinIO/a_second_put_to_the_same_evidence_key_is_refused \
             TestMinIO/a_snapshot_of_several_parts_reads_back_byte_for_byte \
-            TestMinIO/a_failed_part_aborts_the_upload,_so_MinIO_keeps_no_parts; do
+            TestMinIO/a_failed_part_aborts_the_upload,_so_MinIO_keeps_no_parts \
+            TestMinIO/a_scratch_bucket_the_test_turns_versioning_on_for_reports_Enabled,_and_Suspended_once_the_test_suspends_it \
+            TestMinIO/the_lifecycle_rules_MinIO_keeps_for_a_bucket_read_back_as_they_were_put; do
             if ! grep -q -- "--- PASS: $t " <<<"$out"; then
               echo "::error::$t didn't run and pass"
               exit 1

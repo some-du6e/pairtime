@@ -40,6 +40,13 @@ type deployed struct {
 	// has none.
 	commitAt time.Time
 	github   string
+	// keys are the keys in dataDir.
+	keys *backup.Keys
+	// diskSpace, when set, stands in for the data disk's free space.
+	diskSpace func(string) (free, total uint64, ok bool, err error)
+	// hcaToken, when set, is HCA's token endpoint's answer to the right
+	// client id and secret; unset, it gives a token.
+	hcaToken func(w http.ResponseWriter)
 }
 
 func newDeployed(t *testing.T) *deployed {
@@ -54,9 +61,14 @@ func newDeployed(t *testing.T) *deployed {
 		tunnel:   func(w http.ResponseWriter) { w.Write([]byte("ok\n")) },
 		commitAt: time.Now().Add(-time.Minute),
 	}
-	if _, err := backup.Generate(backup.KeysDir(d.dataDir), rand.Reader); err != nil {
+	var err error
+	if d.keys, err = backup.Generate(backup.KeysDir(d.dataDir), rand.Reader); err != nil {
 		t.Fatal(err)
 	}
+	// The pilot's rules: R2's default one on the main bucket, which only
+	// aborts unfinished uploads, and the 30-day expiry of snapshots.
+	d.s3.SetLifecycle("pairtime-data", r2AbortRule)
+	d.s3.SetLifecycle("pairtime-snapshots", snapshotRule(30))
 
 	readyz := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -81,6 +93,10 @@ func newDeployed(t *testing.T) *deployed {
 			if r.FormValue("grant_type") != "client_credentials" || r.FormValue("client_id") != "app-123" || r.FormValue("client_secret") != "hca-secret" || !strings.HasPrefix(r.UserAgent(), "pairtimed-doctor/") {
 				w.WriteHeader(http.StatusUnauthorized)
 				fmt.Fprint(w, `{"error":"invalid_client"}`)
+				return
+			}
+			if d.hcaToken != nil {
+				d.hcaToken(w)
 				return
 			}
 			fmt.Fprint(w, `{"access_token":"never-shown","token_type":"Bearer","expires_in":3600}`)
@@ -129,7 +145,7 @@ snapshot_bucket = "pairtime-snapshots"
 		"PAIRTIME_S3_REGION=auto",
 		"PAIRTIME_S3_BUCKET=pairtime-data",
 		"PAIRTIME_HCA_CLIENT_SECRET=hca-secret",
-		"PAIRTIME_EMAIL_KEY=" + strings.Repeat("ab", 32),
+		"PAIRTIME_EMAIL_KEY=" + doctorEmailKey,
 		"PAIRTIME_HEARTBEAT_URL=" + d.monitors.URL + "/pairtimed",
 		"PAIRTIME_SNAPSHOT_HEARTBEAT_URL=" + d.monitors.URL + "/snapshot",
 		"PAIRTIME_LITESTREAM_HEARTBEAT_URL=" + d.monitors.URL + "/litestream",
@@ -147,7 +163,7 @@ snapshot_bucket = "pairtime-snapshots"
 	if _, err := snaps.Put(context.Background(), time.Now(), bytes.NewReader([]byte("age-encryption.org/v1\n"))); err != nil {
 		t.Fatal(err)
 	}
-	d.s3.SetObject("pairtime-data", backup.KeyBackupPrefix+backup.KeyBackupName(time.Now()), []byte("armored"))
+	d.s3.SetObject("pairtime-data", backup.KeyBackupPrefix+backup.KeyBackupName(time.Now(), d.keys.Public(), doctorEmailKey), []byte("armored"))
 	root := filepath.Join(d.witness, "2026", "2026-11-19.json")
 	writeFile(t, root, "{}\n", 0o644)
 	old := time.Now().Add(-time.Hour)
@@ -155,6 +171,45 @@ snapshot_bucket = "pairtime-snapshots"
 		t.Fatal(err)
 	}
 	return d
+}
+
+// doctorEmailKey is the fake deploy's PAIRTIME_EMAIL_KEY.
+var doctorEmailKey = strings.Repeat("ab", 32)
+
+// setKeyBackups replaces the fake deploy's key backups with ones made at
+// each time ago of each named key set, and returns their names.
+func (d *deployed) setKeyBackups(t *testing.T, names ...string) {
+	t.Helper()
+	b := mustBucket(t, d.s3, "pairtime-data")
+	for _, k := range d.s3.Keys("pairtime-data") {
+		if strings.HasPrefix(k, backup.KeyBackupPrefix) {
+			if err := b.Delete(context.Background(), k); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, n := range names {
+		d.s3.SetObject("pairtime-data", backup.KeyBackupPrefix+n, []byte("armored"))
+	}
+}
+
+// otherKeys are a key set other than the fake deploy's.
+func otherKeys(t *testing.T) backup.Public {
+	t.Helper()
+	keys, err := backup.Generate(filepath.Join(privateDir(t), "keys"), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keys.Public()
+}
+
+// r2AbortRule is the lifecycle rule R2 gives every new bucket: it aborts
+// multipart uploads that never finished, and deletes no object.
+const r2AbortRule = `<Rule><ID>Default Multipart Abort Rule</ID><Filter><Prefix></Prefix></Filter><Status>Enabled</Status><AbortIncompleteMultipartUpload><DaysAfterInitiation>7</DaysAfterInitiation></AbortIncompleteMultipartUpload></Rule>`
+
+// snapshotRule is a lifecycle rule that deletes the snapshots after days.
+func snapshotRule(days int) string {
+	return fmt.Sprintf(`<Rule><ID>expire snapshots</ID><Filter><Prefix>snapshots/</Prefix></Filter><Status>Enabled</Status><Expiration><Days>%d</Days></Expiration></Rule>`, days)
 }
 
 func readinessJSON(r ops.Readiness) string {
@@ -203,6 +258,7 @@ func (d *deployed) run(t *testing.T, extra ...string) (map[string][2]string, int
 	e, stdout, _ := testEnv(d.environ...)
 	e.githubURL = d.github
 	e.doctorWriteGap = time.Millisecond
+	e.diskSpace = d.diskSpace
 	args := append([]string{"doctor", "-config", d.config, "-witness-dir", d.witness,
 		"-litestream-config", filepath.Join(filepath.Dir(d.config), "litestream.yml"), "-timeout", "10s"}, extra...)
 	code := run(context.Background(), args, e)
@@ -228,7 +284,8 @@ func TestDoctor(t *testing.T) {
 		setup func(t *testing.T, d *deployed)
 		args  []string
 		// want maps a check to the status it must have and a part of its
-		// detail; every check not named must be ok.
+		// detail. Every check not named must be ok, or, in a case that
+		// passes -only or -skip, must not fail.
 		want      map[string][2]string
 		wantCode  int
 		wantPings map[string]int
@@ -247,9 +304,76 @@ func TestDoctor(t *testing.T) {
 		{name: "a key that may not ask about versioning is a warning naming -skip versioning, not a failure",
 			setup: func(_ *testing.T, d *deployed) { d.s3.SetVersioning("pairtime-data", objstoretest.AccessDenied) },
 			want:  map[string][2]string{"bucket.pairtime-data.versioning": {statusWarn, "-skip versioning"}}},
+		{name: "any other versioning answer doctor can't decide, such as a store error, is a warning too (D-evidence-versioning)",
+			setup: func(_ *testing.T, d *deployed) { d.s3.SetVersioning("pairtime-snapshots", objstoretest.InternalError) },
+			want:  map[string][2]string{"bucket.pairtime-snapshots.versioning": {statusWarn, "InternalError"}}},
+		{name: "a lifecycle rule that deletes objects in the main bucket fails, since it would delete the replica, the evidence and the key backups",
+			setup: func(_ *testing.T, d *deployed) { d.s3.SetLifecycle("pairtime-data", r2AbortRule+snapshotRule(30)) },
+			want:  map[string][2]string{"bucket.pairtime-data.lifecycle": {statusFail, `rule "expire snapshots" deletes objects`}}, wantCode: 1},
+		{name: "a main bucket without a lifecycle configuration passes",
+			setup: func(_ *testing.T, d *deployed) { d.s3.SetLifecycle("pairtime-data", "") },
+			want:  map[string][2]string{"bucket.pairtime-data.lifecycle": {statusOK, "no lifecycle rules"}}},
+		{name: "a snapshot bucket without a rule that deletes snapshots fails, since they would outlive the privacy notice's 30 days",
+			setup: func(_ *testing.T, d *deployed) { d.s3.SetLifecycle("pairtime-snapshots", r2AbortRule) },
+			want:  map[string][2]string{"bucket.pairtime-snapshots.lifecycle": {statusFail, "within 30 days"}}, wantCode: 1},
+		{name: "a snapshot rule that keeps them 60 days fails",
+			setup: func(_ *testing.T, d *deployed) { d.s3.SetLifecycle("pairtime-snapshots", snapshotRule(60)) },
+			want:  map[string][2]string{"bucket.pairtime-snapshots.lifecycle": {statusFail, "within 30 days"}}, wantCode: 1},
+		{name: "a disabled snapshot rule fails, since it deletes nothing",
+			setup: func(_ *testing.T, d *deployed) {
+				d.s3.SetLifecycle("pairtime-snapshots", strings.Replace(snapshotRule(30), "Enabled", "Disabled", 1))
+			},
+			want: map[string][2]string{"bucket.pairtime-snapshots.lifecycle": {statusFail, "no enabled rule"}}, wantCode: 1},
+		{name: "a snapshot rule narrowed to tagged objects fails, since snapshots carry no tags",
+			setup: func(_ *testing.T, d *deployed) {
+				d.s3.SetLifecycle("pairtime-snapshots", `<Rule><ID>tagged</ID><Filter><And><Prefix>snapshots/</Prefix><Tag><Key>k</Key><Value>v</Value></Tag></And></Filter><Status>Enabled</Status><Expiration><Days>30</Days></Expiration></Rule>`)
+			},
+			want: map[string][2]string{"bucket.pairtime-snapshots.lifecycle": {statusFail, "no enabled rule"}}, wantCode: 1},
+		{name: "a 30-day rule over the whole snapshot bucket passes",
+			setup: func(_ *testing.T, d *deployed) {
+				d.s3.SetLifecycle("pairtime-snapshots", strings.Replace(snapshotRule(30), "<Prefix>snapshots/</Prefix>", "<Prefix></Prefix>", 1))
+			},
+			want: map[string][2]string{"bucket.pairtime-snapshots.lifecycle": {statusOK, "after 30 days"}}},
+		{name: "a store without lifecycle rules fails the snapshot bucket, which then keeps every snapshot, and passes the main bucket",
+			setup: func(_ *testing.T, d *deployed) {
+				d.s3.SetLifecycle("pairtime-data", objstoretest.NotImplemented)
+				d.s3.SetLifecycle("pairtime-snapshots", objstoretest.NotImplemented)
+			},
+			want: map[string][2]string{"bucket.pairtime-data.lifecycle": {statusOK, "doesn't implement lifecycle rules"},
+				"bucket.pairtime-snapshots.lifecycle": {statusFail, "doesn't implement lifecycle rules"}}, wantCode: 1},
+		{name: "a key that may not read lifecycle rules is a warning naming -skip lifecycle, not a failure",
+			setup: func(_ *testing.T, d *deployed) { d.s3.SetLifecycle("pairtime-snapshots", objstoretest.AccessDenied) },
+			want:  map[string][2]string{"bucket.pairtime-snapshots.lifecycle": {statusWarn, "-skip lifecycle"}}},
+		{name: "a lifecycle answer doctor can't decide, such as a store error, is a warning",
+			setup: func(_ *testing.T, d *deployed) { d.s3.SetLifecycle("pairtime-data", objstoretest.InternalError) },
+			want:  map[string][2]string{"bucket.pairtime-data.lifecycle": {statusWarn, "InternalError"}}},
 		{name: "a client secret HCA refuses fails the hca check, and the token never shows",
 			setup: func(_ *testing.T, d *deployed) { d.environ = append(d.environ, "PAIRTIME_HCA_CLIENT_SECRET=wrong") },
 			want:  map[string][2]string{"hca": {statusFail, "refused the client id or secret"}}, wantCode: 1},
+		{name: "HCA's 400 invalid_scope to a grant that names no scope passes the hca check, since HCA checks the client id and secret first",
+			setup: func(_ *testing.T, d *deployed) {
+				d.hcaToken = func(w http.ResponseWriter) {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, `{"error":"invalid_scope","error_description":"The requested scope is invalid, unknown, or malformed."}`)
+				}
+			},
+			want: map[string][2]string{"hca": {statusOK, "took the client id and secret, and refused the grant's scope (invalid_scope)"}}},
+		{name: "a 400 unauthorized_client passes the hca check too, since the client authenticated before the grant was refused",
+			setup: func(_ *testing.T, d *deployed) {
+				d.hcaToken = func(w http.ResponseWriter) {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, `{"error":"unauthorized_client"}`)
+				}
+			},
+			want: map[string][2]string{"hca": {statusOK, "may not use client_credentials"}}},
+		{name: "any other answer from the token endpoint fails the hca check, naming it",
+			setup: func(_ *testing.T, d *deployed) {
+				d.hcaToken = func(w http.ResponseWriter) {
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, `{"error":"invalid_request"}`)
+				}
+			},
+			want: map[string][2]string{"hca": {statusFail, "answered 400 invalid_request"}}, wantCode: 1},
 		{name: "a store that takes a second write-once put fails",
 			setup: func(_ *testing.T, d *deployed) { d.s3.WriteOnceIgnored("pairtime-snapshots") },
 			want:  map[string][2]string{"bucket.pairtime-snapshots.write_once": {statusFail, "took a second If-None-Match"}}, wantCode: 1},
@@ -331,6 +455,58 @@ func TestDoctor(t *testing.T) {
 				}
 			},
 			want: map[string][2]string{"witness": {statusSkip, "WP-SV17"}}},
+		{name: "a root pairtimed is still writing, under a dot name, isn't a root the sidecar failed to push, since the sidecar never publishes one",
+			setup: func(t *testing.T, d *deployed) {
+				d.commitAt = time.Now().Add(-30 * time.Minute)
+				tmp := filepath.Join(d.witness, "2026", ".2026-11-20.json.tmp")
+				writeFile(t, tmp, "{\"da", 0o644)
+				written := time.Now().Add(-20 * time.Minute)
+				if err := os.Chtimes(tmp, written, written); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: map[string][2]string{"witness": {statusOK, "2026-11-19.json, the newest root"}}},
+		{name: "a key backup from before backups named their keys is stale, so it fails, though the object reads",
+			setup: func(t *testing.T, d *deployed) {
+				d.setKeyBackups(t, "pairtime-keys-"+time.Now().UTC().Format("20060102T150405Z")+".tar.age")
+			},
+			want: map[string][2]string{"keys_backup": {statusFail, "is stale"}}, wantCode: 1},
+		{name: "a newest key backup of other keys fails, though an older one holds these",
+			setup: func(t *testing.T, d *deployed) {
+				d.setKeyBackups(t,
+					backup.KeyBackupName(time.Now().Add(-time.Hour), d.keys.Public(), doctorEmailKey),
+					backup.KeyBackupName(time.Now(), otherKeys(t), doctorEmailKey))
+			},
+			want: map[string][2]string{"keys_backup": {statusFail, "holds server key"}}, wantCode: 1},
+		{name: "a key backup without the email key fails while PAIRTIME_EMAIL_KEY is set",
+			setup: func(t *testing.T, d *deployed) {
+				d.setKeyBackups(t, backup.KeyBackupName(time.Now(), d.keys.Public(), ""))
+			},
+			want: map[string][2]string{"keys_backup": {statusFail, "no email key, and PAIRTIME_EMAIL_KEY is set"}}, wantCode: 1},
+		{name: "the newest key backup decides, so an older stale one beside a current one passes",
+			setup: func(t *testing.T, d *deployed) {
+				d.setKeyBackups(t, "pairtime-keys-20261101T000000Z.tar.age", backup.KeyBackupName(time.Now(), d.keys.Public(), doctorEmailKey))
+			},
+			want: map[string][2]string{"keys_backup": {statusOK, "holds these keys and the email key"}}},
+		{name: "no key backup at all fails",
+			setup: func(t *testing.T, d *deployed) { d.setKeyBackups(t) },
+			want:  map[string][2]string{"keys_backup": {statusFail, "no key backup"}}, wantCode: 1},
+		{name: "a snapshot bucket that refuses a multipart upload fails, since a nightly snapshot past 64 MiB takes one",
+			setup: func(t *testing.T, d *deployed) {
+				d.s3.FailMatching(5, func(r *http.Request) bool { return r.Method == http.MethodPost && r.URL.Query().Has("uploads") }, http.StatusForbidden, "AccessDenied", false)
+			},
+			want: map[string][2]string{"bucket.pairtime-snapshots.multipart": {statusFail, "multipart upload"}}, wantCode: 1},
+		{name: "a disk with less room than the database is a warning, since the next snapshot won't fit",
+			setup: func(t *testing.T, d *deployed) {
+				d.diskSpace = func(string) (uint64, uint64, bool, error) { return 1 << 20, 20 << 30, true, nil }
+			},
+			want: map[string][2]string{"disk": {statusWarn, "too little for the next nightly snapshot"}}},
+		{name: "a database past a third of its disk is a warning to grow it",
+			setup: func(t *testing.T, d *deployed) {
+				// A disk of 1 KiB, a third of which any SQLite file passes.
+				d.diskSpace = func(string) (uint64, uint64, bool, error) { return 1 << 30, 1 << 10, true, nil }
+			},
+			want: map[string][2]string{"disk": {statusWarn, "past a third of the disk"}}},
 		{name: "a missing deploy key fails the witness check",
 			setup: func(t *testing.T, d *deployed) {
 				if err := os.Remove(filepath.Join(filepath.Dir(d.config), witnessKey)); err != nil {
@@ -362,6 +538,10 @@ func TestDoctor(t *testing.T) {
 				switch {
 				case named && (got[0] != want[0] || !strings.Contains(got[1], want[1])):
 					t.Errorf("%s: %s %q, want %s and %q", name, got[0], got[1], want[0], want[1])
+				case !named && len(tt.args) == 0 && got[0] != statusOK:
+					// A check that stopped checking says skip or warn,
+					// and exits 0 like ok.
+					t.Errorf("%s: %s %q, want ok", name, got[0], got[1])
 				case !named && got[0] == statusFail:
 					t.Errorf("%s failed: %s", name, got[1])
 				}

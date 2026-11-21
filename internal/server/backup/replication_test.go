@@ -23,6 +23,14 @@ func ltx(lo, hi uint64) string { return fmt.Sprintf("%016x-%016x.ltx", lo, hi) }
 func TestReplicationLag(t *testing.T) {
 	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 	ago := func(s int) time.Time { return now.Add(-time.Duration(s) * time.Second) }
+	// everySecond is n commits a second apart, the first s seconds ago.
+	everySecond := func(s, n int) []time.Time {
+		var ts []time.Time
+		for i := range n {
+			ts = append(ts, ago(s-i))
+		}
+		return ts
+	}
 	type local struct {
 		name     string
 		modified time.Time
@@ -35,11 +43,14 @@ func TestReplicationLag(t *testing.T) {
 		replica []string
 		want    time.Duration
 		wantErr string
-		// wrote is when serve last told Replication of a commit; zero for
-		// none.
-		wrote time.Time
+		// wrote is when serve told Replication of each commit, oldest
+		// first.
+		wrote []time.Time
 		// wantCheck is what Check says, "" for a pass.
 		wantCheck string
+		// wantPending, when set, is how many entries Replication holds
+		// after Lag.
+		wantPending int
 	}{
 		{name: "a replica that holds every local file is caught up",
 			local:   []local{{ltx(1, 1), ago(100)}, {ltx(2, 2), ago(50)}},
@@ -64,15 +75,27 @@ func TestReplicationLag(t *testing.T) {
 			replica: nil, want: 61 * time.Second, wantCheck: "behind the database"},
 		{name: "a commit no local file has followed for over a minute fails, though the files match, since Litestream stopped reading",
 			local:   []local{{ltx(1, 1), ago(100)}},
-			replica: []string{ltx(1, 1)}, wrote: ago(90), want: 90 * time.Second, wantCheck: "isn't reading"},
+			replica: []string{ltx(1, 1)}, wrote: []time.Time{ago(90)}, want: 90 * time.Second, wantCheck: "isn't reading"},
 		{name: "a commit that a newer local file followed was read",
 			local:   []local{{ltx(1, 1), ago(100)}, {ltx(2, 2), ago(10)}},
-			replica: []string{ltx(1, 1), ltx(2, 2)}, wrote: ago(30), want: 0},
+			replica: []string{ltx(1, 1), ltx(2, 2)}, wrote: []time.Time{ago(30)}, want: 0},
 		{name: "a commit a few seconds old that no file has followed yet is a short wait, not a failure",
 			local:   []local{{ltx(1, 1), ago(100)}},
-			replica: []string{ltx(1, 1)}, wrote: ago(3), want: 3 * time.Second},
+			replica: []string{ltx(1, 1)}, wrote: []time.Time{ago(3)}, want: 3 * time.Second},
 		{name: "a commit with no local files at all waits too",
-			local: nil, replica: []string{ltx(1, 1)}, wrote: ago(70), want: 70 * time.Second, wantCheck: "behind the database"},
+			local: nil, replica: []string{ltx(1, 1)}, wrote: []time.Time{ago(70)}, want: 70 * time.Second, wantCheck: "behind the database"},
+		{name: "commits after the file that followed an earlier commit still wait, so a Litestream that stopped after reading the last probe fails within a minute",
+			local:   []local{{ltx(1, 1), ago(290)}},
+			replica: []string{ltx(1, 1)}, wrote: []time.Time{ago(300), ago(240), ago(120)}, want: 240 * time.Second, wantCheck: "isn't reading"},
+		{name: "every commit counts, not only the first no file has followed",
+			local:   []local{{ltx(1, 1), ago(80)}},
+			replica: []string{ltx(1, 1)}, wrote: []time.Time{ago(100), ago(50)}, want: 50 * time.Second},
+		{name: "commits within a second share an entry, which a file follows only once it is newer than the last of them",
+			local:   []local{{ltx(1, 1), ago(70).Add(300 * time.Millisecond)}},
+			replica: []string{ltx(1, 1)}, wrote: []time.Time{ago(70), ago(70).Add(600 * time.Millisecond)}, want: 70 * time.Second, wantCheck: "isn't reading"},
+		{name: "past 1,024 seconds of waiting commits, later ones join the newest entry, so the oldest still sets the lag and memory stays bounded",
+			local: nil, replica: []string{ltx(1, 1)}, wrote: everySecond(2000, 2000), want: 2000 * time.Second, wantCheck: "isn't reading",
+			wantPending: maxWaiting},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -108,9 +131,8 @@ func TestReplicationLag(t *testing.T) {
 			if got := r.LastLag(); got != -1 {
 				t.Errorf("LastLag before any measure = %v, want -1", got)
 			}
-			if !tt.wrote.IsZero() {
-				r.Wrote(tt.wrote)
-				r.Wrote(now) // only the oldest waiting commit counts
+			for _, at := range tt.wrote {
+				r.Wrote(at)
 			}
 			got, err := r.Lag(context.Background())
 			if tt.wantErr != "" {
@@ -127,6 +149,9 @@ func TestReplicationLag(t *testing.T) {
 			}
 			if r.LastLag() != tt.want.Seconds() {
 				t.Errorf("LastLag = %v, want %v", r.LastLag(), tt.want.Seconds())
+			}
+			if tt.wantPending > 0 && len(r.pending) != tt.wantPending {
+				t.Errorf("%d entries waiting, want %d", len(r.pending), tt.wantPending)
 			}
 			err = r.Check(context.Background())
 			switch {

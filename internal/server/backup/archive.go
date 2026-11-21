@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -48,10 +49,56 @@ const KeyBackupPrefix = "backups/keys/"
 // keyBackupTime is the time format in a key backup's name.
 const keyBackupTime = "20060102T150405Z"
 
-// KeyBackupName is the file name of a key backup made at t, such as
-// pairtime-keys-20261120T101500Z.tar.age.
-func KeyBackupName(t time.Time) string {
-	return "pairtime-keys-" + t.UTC().Format(keyBackupTime) + ".tar.age"
+// KeyBackupName is the file name of a key backup made at t of the keys pub
+// names and of emailKey: pairtime-keys-<time>-<server key id>-<evidence key
+// id>-<email key>.tar.age, such as
+// pairtime-keys-20261120T101500Z-da5f1bbfd8fe1568-f731645a47fe2853-none.tar.age,
+// where <email key> is EmailKeyFingerprint's. pairtimed doctor reads the
+// name to tell whether the newest backup holds the keys the server has now
+// (#133).
+func KeyBackupName(t time.Time, pub Public, emailKey string) string {
+	return "pairtime-keys-" + t.UTC().Format(keyBackupTime) + "-" + pub.ServerKeyID() + "-" + pub.EvidenceKeyID() + "-" + EmailKeyFingerprint(emailKey) + ".tar.age"
+}
+
+// EmailKeyFingerprint names PAIRTIME_EMAIL_KEY in a key backup's name:
+// Fingerprint's 16 hex digits, or "none" for no email key.
+func EmailKeyFingerprint(emailKey string) string {
+	if emailKey = strings.TrimSpace(emailKey); emailKey == "" {
+		return "none"
+	}
+	return Fingerprint("pairtime email key", []byte(emailKey))
+}
+
+// KeyBackup is what a key backup's name says.
+type KeyBackup struct {
+	// Made is when the backup was made.
+	Made time.Time
+	// Named says the name also says which keys the backup holds. Backups
+	// from before #133 were named by their time alone, and doctor calls
+	// them stale.
+	Named bool
+	// ServerKeyID and EvidenceKeyID are the KeyIDs of the keys the backup
+	// holds, and EmailKey is its email key's EmailKeyFingerprint, or
+	// "none". All three are "" unless Named.
+	ServerKeyID, EvidenceKeyID, EmailKey string
+}
+
+// keyBackupName matches KeyBackupName's names, and the names of backups
+// from before they named their keys, which end after the time.
+var keyBackupName = regexp.MustCompile(`^pairtime-keys-([0-9]{8}T[0-9]{6}Z)(?:-([0-9a-f]{16})-([0-9a-f]{16})-([0-9a-f]{16}|none))?\.tar\.age$`)
+
+// ParseKeyBackupName reads a key backup's file name, as KeyBackupName
+// makes it or as backups made before it named their keys were.
+func ParseKeyBackupName(name string) (KeyBackup, error) {
+	m := keyBackupName.FindStringSubmatch(name)
+	if m == nil {
+		return KeyBackup{}, fmt.Errorf("backup: %q isn't a key backup's name", name)
+	}
+	made, err := time.Parse(keyBackupTime, m[1])
+	if err != nil {
+		return KeyBackup{}, fmt.Errorf("backup: %q isn't a key backup's name: %w", name, err)
+	}
+	return KeyBackup{Made: made, Named: m[2] != "", ServerKeyID: m[2], EvidenceKeyID: m[3], EmailKey: m[4]}, nil
 }
 
 // EmailKeyFile is the name the email key has in a key backup. It lives in
@@ -71,10 +118,10 @@ server:
   age -d -i <identity file> pairtime-keys-<time>.tar.age | tar -x
 
 Then send only the pairtime-keys/ directory to the server's host, and
-there:
+there, from the bundle's directory, deploy/:
 
-  install -d -m 0700 -o 65532 -g 65532 data/keys
-  install -m 0600 -o 65532 -g 65532 pairtime-keys/server.ed25519 \
+  sudo install -d -m 0700 -o 65532 -g 65532 data data/keys
+  sudo install -m 0600 -o 65532 -g 65532 pairtime-keys/server.ed25519 \
     pairtime-keys/evidence.p256 pairtime-keys/pepper data/keys/
 
 If PAIRTIME_EMAIL_KEY is here, put its one line back into

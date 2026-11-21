@@ -5,14 +5,17 @@ package objstore
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/xml"
 	"errors"
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -237,6 +240,47 @@ func TestMinIO(t *testing.T) {
 				}
 			}
 		}},
+		{name: "a scratch bucket the test turns versioning on for reports Enabled, and Suspended once the test suspends it", run: func(t *testing.T) {
+			// MinIO's answers, not ones pairtime wrote, are what doctor's
+			// versioning check reads (D-evidence-versioning).
+			b := scratchBucket(t, ctx, c, "pairtime-versioning-")
+			for _, state := range []string{VersioningEnabled, VersioningSuspended} {
+				putBucketConfig(t, ctx, b, "PutBucketVersioning", "versioning",
+					`<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>`+state+`</Status></VersioningConfiguration>`)
+				if got, err := b.Versioning(ctx); err != nil || got != state {
+					t.Errorf("after PutBucketVersioning %s: versioning %q, %v", state, got, err)
+				}
+			}
+		}},
+		{name: "a bucket nobody gave a lifecycle configuration reports no rules", run: func(t *testing.T) {
+			for _, b := range []*Bucket{main, snaps} {
+				if rules, err := b.Lifecycle(ctx); err != nil || len(rules) != 0 {
+					t.Errorf("%s: rules %+v, %v; want none", b.Name(), rules, err)
+				}
+			}
+		}},
+		{name: "the lifecycle rules MinIO keeps for a bucket read back as they were put", run: func(t *testing.T) {
+			b := scratchBucket(t, ctx, c, "pairtime-lifecycle-")
+			putBucketConfig(t, ctx, b, "PutBucketLifecycleConfiguration", "lifecycle",
+				`<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">`+
+					`<Rule><ID>expire snapshots</ID><Filter><Prefix>snapshots/</Prefix></Filter><Status>Enabled</Status><Expiration><Days>30</Days></Expiration></Rule>`+
+					`<Rule><ID>tagged scratch</ID><Filter><And><Prefix>tmp/</Prefix><Tag><Key>kind</Key><Value>scratch</Value></Tag></And></Filter><Status>Disabled</Status><Expiration><Days>1</Days></Expiration></Rule>`+
+					`</LifecycleConfiguration>`)
+			rules, err := b.Lifecycle(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []LifecycleRule{
+				{ID: "expire snapshots", Enabled: true, Prefix: "snapshots/", ExpireDays: 30},
+				{ID: "tagged scratch", Prefix: "tmp/", Narrowed: true, ExpireDays: 1},
+			}
+			if !reflect.DeepEqual(rules, want) {
+				t.Fatalf("rules = %+v, want %+v", rules, want)
+			}
+			if !rules[0].Expires() || !rules[0].Covers(SnapshotPrefix) || rules[1].Expires() {
+				t.Errorf("rules = %+v: the first should delete every snapshot, and the second nothing", rules)
+			}
+		}},
 		{name: "delete removes a key", run: func(t *testing.T) {
 			if err := main.Delete(ctx, run+"hello"); err != nil {
 				t.Fatal(err)
@@ -308,6 +352,42 @@ func ensureBucket(t *testing.T, ctx context.Context, b *Bucket) {
 		time.Sleep(time.Second)
 	}
 	t.Fatalf("bucket %s isn't ready after 90 s: %v", b.name, err)
+}
+
+// scratchBucket makes a bucket of its own for a step that changes a
+// bucket's configuration, which the steps that share main and snaps
+// mustn't see, and deletes it when the test ends.
+func scratchBucket(t *testing.T, ctx context.Context, c *Client, prefix string) *Bucket {
+	t.Helper()
+	b := bucket(t, c, prefix+randomHex(t, 4))
+	ensureBucket(t, ctx, b)
+	t.Cleanup(func() {
+		resp, err := b.c.do(context.Background(), request{op: "DeleteBucket", method: http.MethodDelete, bucket: b.name})
+		if err != nil {
+			t.Logf("deleting the scratch bucket %s: %v", b.name, err)
+			return
+		}
+		drain(resp)
+	})
+	return b
+}
+
+// putBucketConfig sends one of the calls that set a bucket's
+// configuration, which pairtimed itself never makes, with body as its
+// XML. Content-MD5 goes with it, since MinIO wants one on
+// PutBucketLifecycleConfiguration.
+func putBucketConfig(t *testing.T, ctx context.Context, b *Bucket, op, query, body string) {
+	t.Helper()
+	sum := md5.Sum([]byte(body))
+	resp, err := b.c.do(ctx, request{
+		op: op, method: http.MethodPut, bucket: b.name, rawQuery: query,
+		header: http.Header{"Content-Md5": {base64.StdEncoding.EncodeToString(sum[:])}, "Content-Type": {"application/xml"}},
+		body:   strings.NewReader(body), size: int64(len(body)), payloadHash: sigv4.PayloadHash([]byte(body)),
+	})
+	if err != nil {
+		t.Fatalf("%s: %v", op, err)
+	}
+	drain(resp)
 }
 
 // openUploads lists the multipart uploads of key that are still open,
