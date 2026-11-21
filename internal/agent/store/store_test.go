@@ -1,0 +1,918 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package store
+
+import (
+	"errors"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/some-du6e/pairtime/pkg/event"
+)
+
+const testParams = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+func minute(t *testing.T, s string) time.Time {
+	t.Helper()
+	m, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m.UTC()
+}
+
+// bucket returns a bucket for the minute at s whose projects earned the
+// given credit, every slot summed into the first, and agent seconds by
+// project.
+func bucket(t *testing.T, s string, state event.BucketState, credit map[string][]Credited, agent map[string]int64) Bucket {
+	t.Helper()
+	b := Bucket{V: "0.1.0", Params: testParams, Minute: minute(t, s), Device: "d_test", Slots: make([]event.BucketSlot, 4),
+		State: state, Projects: map[string]ProjectMinute{}}
+	var halves int64
+	for _, key := range slices.Sorted(maps.Keys(credit)) {
+		pm := b.Projects[key]
+		pm.Credited = credit[key]
+		for _, c := range credit[key] {
+			halves += c.Halves
+		}
+		b.Projects[key] = pm
+	}
+	for _, key := range slices.Sorted(maps.Keys(agent)) {
+		pm := b.Projects[key]
+		pm.AgentS += agent[key]
+		b.Projects[key] = pm
+		b.AgentRunningS += float64(agent[key])
+	}
+	b.CreditedS = float64(halves) / 2
+	if halves > 0 {
+		keys := slices.Sorted(maps.Keys(credit))
+		c := credit[keys[0]][0]
+		b.Slots[0] = event.BucketSlot{Project: keys[0], Credited: min(b.CreditedS, 15), Why: c.Why, Kind: c.Why.Activity(), Ev: c.Ev}
+	}
+	return b
+}
+
+func open(t *testing.T, dir string) *Buckets {
+	t.Helper()
+	s, err := OpenBuckets(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	return s
+}
+
+func TestPut(t *testing.T) {
+	const m = "2026-11-20T16:42:00Z"
+	a := map[string][]Credited{"p_a": {{Why: event.ReasonPrompt, Ev: event.EvidenceA, Halves: 30}}}
+	more := map[string][]Credited{"p_a": {{Why: event.ReasonPrompt, Ev: event.EvidenceA, Halves: 40}}}
+	type put struct {
+		b       func(t *testing.T) Bucket
+		rev     uint32
+		wrote   bool
+		isFinal bool // want ErrFinal
+	}
+	pending := func(c map[string][]Credited) func(t *testing.T) Bucket {
+		return func(t *testing.T) Bucket { return bucket(t, m, event.StatePending, c, nil) }
+	}
+	final := func(c map[string][]Credited) func(t *testing.T) Bucket {
+		return func(t *testing.T) Bucket { return bucket(t, m, event.StateFinal, c, nil) }
+	}
+	tests := []struct {
+		name string
+		puts []put
+	}{
+		{"a minute's first revision has rev 0", []put{{b: pending(a), rev: 0, wrote: true}}},
+		{"a revision that says something new gets the latest rev plus one", []put{
+			{b: pending(a), rev: 0, wrote: true},
+			{b: pending(more), rev: 1, wrote: true},
+		}},
+		{"a revision that says what the latest says writes nothing", []put{
+			{b: pending(a), rev: 0, wrote: true},
+			{b: pending(a), rev: 0, wrote: false},
+		}},
+		{"a revision that differs only in the batch that wrote it writes nothing", []put{
+			{b: pending(a), rev: 0, wrote: true},
+			{b: func(t *testing.T) Bucket { b := pending(a)(t); b.Batch = 9; return b }, rev: 0, wrote: false},
+		}},
+		{"the change from pending to final is a revision of its own", []put{
+			{b: pending(a), rev: 0, wrote: true},
+			{b: final(a), rev: 1, wrote: true},
+		}},
+		{"a final minute takes no revision that says something else", []put{
+			{b: pending(a), rev: 0, wrote: true},
+			{b: final(a), rev: 1, wrote: true},
+			{b: pending(more), rev: 1, isFinal: true},
+			{b: final(more), rev: 1, isFinal: true},
+		}},
+		{"a final minute takes the same revision again without an error", []put{
+			{b: final(a), rev: 0, wrote: true},
+			{b: final(a), rev: 0, wrote: false},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := open(t, t.TempDir())
+			for i, p := range tt.puts {
+				got, wrote, err := s.Put(p.b(t))
+				if p.isFinal {
+					if !errors.Is(err, ErrFinal) {
+						t.Fatalf("put %d: err = %v, want ErrFinal", i, err)
+					}
+				} else if err != nil {
+					t.Fatalf("put %d: %v", i, err)
+				}
+				if got.Rev != p.rev || wrote != p.wrote {
+					t.Errorf("put %d: rev %d, wrote %v; want rev %d, wrote %v", i, got.Rev, wrote, p.rev, p.wrote)
+				}
+			}
+		})
+	}
+}
+
+func TestPutRefusesAMinuteThatIsNotOne(t *testing.T) {
+	tests := []struct {
+		name string
+		at   time.Time
+	}{
+		{"a time inside a minute isn't a bucket's minute", time.Date(2026, 11, 20, 16, 42, 15, 0, time.UTC)},
+		{"the zero time isn't a bucket's minute", time.Time{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := open(t, t.TempDir())
+			b := Bucket{Minute: tt.at, Slots: make([]event.BucketSlot, 4), State: event.StatePending}
+			if _, _, err := s.Put(b); err == nil {
+				t.Fatal("Put took it")
+			}
+		})
+	}
+}
+
+func TestReopen(t *testing.T) {
+	a := map[string][]Credited{"p_a": {{Why: event.ReasonRead, Ev: event.EvidenceB, Halves: 20}}}
+	b := map[string][]Credited{"p_a": {{Why: event.ReasonRead, Ev: event.EvidenceB, Halves: 24}}}
+	tests := []struct {
+		name string
+		// tear appends bytes after the two revisions, as a crash in the
+		// middle of an append leaves them.
+		tear string
+	}{
+		{"a store opened again finds each minute's latest revision", ""},
+		{"a torn last line is cut off before the next append", `{"v":"0.1.0","params":"sha`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s := open(t, dir)
+			for _, c := range []map[string][]Credited{a, b} {
+				if _, _, err := s.Put(bucket(t, "2026-11-20T10:00:00Z", event.StatePending, c, nil)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			name := filepath.Join(dir, "2026-11-20.jsonl")
+			if tt.tear != "" {
+				f, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.WriteString(tt.tear)
+				f.Close()
+			}
+			s2 := open(t, dir)
+			got, ok, err := s2.Latest(minute(t, "2026-11-20T10:00:00Z").UnixMilli())
+			if err != nil || !ok {
+				t.Fatalf("Latest: %v, %v", ok, err)
+			}
+			if got.Rev != 1 || got.CreditedS != 12 {
+				t.Errorf("latest is rev %d with %v s, want rev 1 with 12 s", got.Rev, got.CreditedS)
+			}
+			// One more revision, on another minute, then every line must be
+			// whole JSON.
+			if _, _, err := s2.Put(bucket(t, "2026-11-20T10:01:00Z", event.StatePending, a, nil)); err != nil {
+				t.Fatal(err)
+			}
+			if err := s2.Sync(); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+			if len(lines) != 3 || !strings.HasSuffix(string(data), "\n") {
+				t.Fatalf("the file holds %d lines, want 3 whole ones:\n%s", len(lines), data)
+			}
+			for i, l := range lines {
+				if !strings.HasPrefix(l, `{"v":`) || !strings.HasSuffix(l, "}") {
+					t.Errorf("line %d isn't a whole revision: %q", i, l)
+				}
+			}
+		})
+	}
+}
+
+func TestFlushes(t *testing.T) {
+	const day = "2026-11-20"
+	a := map[string][]Credited{"p_a": {{Why: event.ReasonPrompt, Ev: event.EvidenceA, Halves: 30}}}
+	more := map[string][]Credited{"p_a": {{Why: event.ReasonPrompt, Ev: event.EvidenceA, Halves: 40}}}
+	put := func(t *testing.T, s *Buckets, at string, c map[string][]Credited) {
+		t.Helper()
+		if _, _, err := s.Put(bucket(t, at, event.StatePending, c, nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// lines returns the file's lines, each of which must be a whole revision.
+	lines := func(t *testing.T, name string) []string {
+		t.Helper()
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ls := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+		for i, l := range ls {
+			if !strings.HasPrefix(l, `{"v":`) || !strings.HasSuffix(l, "}") {
+				t.Errorf("line %d isn't a whole revision: %q", i, l)
+			}
+		}
+		return ls
+	}
+	tests := []struct {
+		name string
+		// after runs once a flush has failed, with fail still set.
+		after func(t *testing.T, s *Buckets, fail *atomic.Bool, name string)
+	}{
+		{
+			name: "after a flush that failed, the next one writes the file again whole",
+			after: func(t *testing.T, s *Buckets, fail *atomic.Bool, name string) {
+				fail.Store(false)
+				if err := s.Sync(); err != nil {
+					t.Fatal(err)
+				}
+				if got := lines(t, name); len(got) != 4 {
+					t.Errorf("the file holds %d lines, want the 4 revisions", len(got))
+				}
+			},
+		},
+		{
+			name: "a revision whose line the failed flush lost is written again",
+			after: func(t *testing.T, s *Buckets, fail *atomic.Bool, name string) {
+				// The pages the failed flush held never reached the disk.
+				ls := lines(t, name)
+				if err := os.Truncate(name, int64(len(ls[0])+len(ls[1])+2)); err != nil {
+					t.Fatal(err)
+				}
+				fail.Store(false)
+				if err := s.Sync(); err != nil {
+					t.Fatal(err)
+				}
+				if got := lines(t, name); len(got) != 4 {
+					t.Errorf("the file holds %d lines, want the 2 that were flushed and the 2 latest revisions again", len(got))
+				}
+				s2 := open(t, filepath.Dir(name))
+				if b, ok, err := s2.Latest(minute(t, day+"T10:00:00Z").UnixMilli()); err != nil || !ok || b.Rev != 1 || b.CreditedS != 20 {
+					t.Errorf("10:00 reads back as rev %d with %v s (%v, %v), want rev 1 with 20 s", b.Rev, b.CreditedS, ok, err)
+				}
+				if _, ok, err := s2.Latest(minute(t, day+"T10:02:00Z").UnixMilli()); err != nil || !ok {
+					t.Errorf("10:02 doesn't read back: %v, %v", ok, err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			s := open(t, dir)
+			var fail atomic.Bool
+			s.syncFile = func(f *os.File) error {
+				if fail.Load() {
+					return errors.New("injected: input/output error")
+				}
+				return f.Sync()
+			}
+			put(t, s, day+"T10:00:00Z", a)
+			put(t, s, day+"T10:01:00Z", a)
+			if err := s.Sync(); err != nil {
+				t.Fatal(err)
+			}
+			put(t, s, day+"T10:00:00Z", more)
+			put(t, s, day+"T10:02:00Z", a)
+			fail.Store(true)
+			if err := s.Sync(); err == nil {
+				t.Fatal("the injected flush failure didn't fail Sync")
+			}
+			tt.after(t, s, &fail, filepath.Join(dir, day+".jsonl"))
+		})
+	}
+	t.Run("Forget keeps a day whose flush fails, and the next Sync flushes it", func(t *testing.T) {
+		dir := t.TempDir()
+		s := open(t, dir)
+		var fail atomic.Bool
+		s.syncFile = func(f *os.File) error {
+			if fail.Load() {
+				return errors.New("injected: input/output error")
+			}
+			return f.Sync()
+		}
+		put(t, s, day+"T10:00:00Z", a)
+		future := minute(t, "2027-01-01T00:00:00Z").UnixMilli()
+		fail.Store(true)
+		if err := s.Forget(future); err == nil {
+			t.Error("Forget reported no error for a flush that failed")
+		}
+		if _, ok := s.days[day]; !ok {
+			t.Fatal("Forget dropped a day whose flush failed")
+		}
+		fail.Store(false)
+		if err := s.Sync(); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Forget(future); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := s.days[day]; ok {
+			t.Error("Forget kept a day that flushed")
+		}
+		if got := lines(t, filepath.Join(dir, day+".jsonl")); len(got) != 1 {
+			t.Errorf("the file holds %d lines, want 1", len(got))
+		}
+	})
+	t.Run("Unflushed has the next Sync flush a file another run appended to", func(t *testing.T) {
+		dir := t.TempDir()
+		first := open(t, dir)
+		put(t, first, day+"T10:00:00Z", a)
+		if err := first.Close(); err != nil {
+			t.Fatal(err)
+		}
+		s := open(t, dir)
+		var flushed int
+		s.syncFile = func(f *os.File) error {
+			flushed++
+			return f.Sync()
+		}
+		if err := s.Sync(); err != nil || flushed != 0 {
+			t.Fatalf("Sync flushed %d files (%v) before Unflushed, want none", flushed, err)
+		}
+		if err := s.Unflushed(minute(t, day+"T10:00:00Z").UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Sync(); err != nil || flushed != 1 {
+			t.Errorf("Sync flushed %d files (%v) after Unflushed, want 1", flushed, err)
+		}
+	})
+}
+
+func TestRangeAndPending(t *testing.T) {
+	a := map[string][]Credited{"p_a": {{Why: event.ReasonPrompt, Ev: event.EvidenceA, Halves: 2}}}
+	dir := t.TempDir()
+	s := open(t, dir)
+	for _, x := range []struct {
+		at    string
+		state event.BucketState
+	}{
+		{"2026-11-19T23:58:00Z", event.StateFinal},
+		{"2026-11-19T23:59:00Z", event.StatePending},
+		{"2026-11-20T00:00:00Z", event.StatePending},
+		{"2026-11-20T00:01:00Z", event.StateFinal},
+	} {
+		if _, _, err := s.Put(bucket(t, x.at, x.state, a, nil)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	at := func(s string) int64 {
+		m, _ := time.Parse(time.RFC3339, s)
+		return m.UnixMilli()
+	}
+	tests := []struct {
+		name string
+		get  func(t *testing.T, s *Buckets) ([]Bucket, error)
+		want []string
+	}{
+		{"Range returns the minutes from from up to to across UTC days, in order",
+			func(_ *testing.T, s *Buckets) ([]Bucket, error) {
+				return s.Range(at("2026-11-19T23:59:00Z"), at("2026-11-20T00:01:00Z"))
+			},
+			[]string{"2026-11-19T23:59:00Z", "2026-11-20T00:00:00Z"}},
+		{"Pending returns the pending minutes from from on, whatever day they are in",
+			func(_ *testing.T, s *Buckets) ([]Bucket, error) { return s.Pending(at("2026-11-19T00:00:00Z")) },
+			[]string{"2026-11-19T23:59:00Z", "2026-11-20T00:00:00Z"}},
+		{"Pending leaves out the minutes before from",
+			func(_ *testing.T, s *Buckets) ([]Bucket, error) { return s.Pending(at("2026-11-20T00:00:00Z")) },
+			[]string{"2026-11-20T00:00:00Z"}},
+		{"Pending reads day files the store hasn't read",
+			func(t *testing.T, s *Buckets) ([]Bucket, error) {
+				s.Close()
+				return open(t, dir).Pending(at("2026-11-01T00:00:00Z"))
+			},
+			[]string{"2026-11-19T23:59:00Z", "2026-11-20T00:00:00Z"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bs, err := tt.get(t, s)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, b := range bs {
+				got = append(got, b.Minute.Format(time.RFC3339))
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDayBounds(t *testing.T) {
+	tests := []struct {
+		name, zone, date string
+		start, end       string // RFC 3339, in UTC; "" when the date is refused
+	}{
+		{"an ordinary day runs from midnight to midnight", "America/New_York", "2026-11-20", "2026-11-20T05:00:00Z", "2026-11-21T05:00:00Z"},
+		{"the day the clocks go forward is 23 hours long", "America/New_York", "2027-03-14", "2027-03-14T05:00:00Z", "2027-03-15T04:00:00Z"},
+		{"the day before a skipped midnight keeps its last hour", "America/Santiago", "2027-09-04", "2027-09-04T04:00:00Z", "2027-09-05T04:00:00Z"},
+		{"a day whose midnight the clocks skip starts when they jump, at 01:00", "America/Santiago", "2027-09-05", "2027-09-05T04:00:00Z", "2027-09-06T03:00:00Z"},
+		{"the day the clocks go back at midnight is 25 hours long", "America/Santiago", "2027-04-03", "2027-04-03T03:00:00Z", "2027-04-04T04:00:00Z"},
+		{"in Havana the day before its skipped midnight keeps its last hour", "America/Havana", "2027-03-13", "2027-03-13T05:00:00Z", "2027-03-14T05:00:00Z"},
+		{"in Havana the day whose midnight is skipped starts at 01:00", "America/Havana", "2027-03-14", "2027-03-14T05:00:00Z", "2027-03-15T04:00:00Z"},
+		{"in the Azores the day before its skipped midnight keeps its last hour", "Atlantic/Azores", "2027-03-27", "2027-03-27T01:00:00Z", "2027-03-28T01:00:00Z"},
+		{"in the Azores the day whose midnight is skipped starts at 01:00", "Atlantic/Azores", "2027-03-28", "2027-03-28T01:00:00Z", "2027-03-29T00:00:00Z"},
+		{"the 30th of February isn't a date", "UTC", "2026-02-30", "", ""},
+		{"a date with anything after it isn't a date", "UTC", "2026-11-20x", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			loc, err := time.LoadLocation(tt.zone)
+			if err != nil {
+				t.Skip("no time zone data:", err)
+			}
+			start, end, err := DayBounds(tt.date, loc)
+			if tt.start == "" {
+				if err == nil {
+					t.Fatalf("DayBounds(%q) = %v, %v; want it refused", tt.date, start, end)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !start.Equal(minute(t, tt.start)) || !end.Equal(minute(t, tt.end)) {
+				t.Errorf("%s in %s runs from %s to %s, want %s to %s", tt.date, tt.zone,
+					start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339), tt.start, tt.end)
+			}
+			if got := DateOf(start.UnixMilli(), loc); got != tt.date {
+				t.Errorf("the day's first instant is on %s", got)
+			}
+			if got := DateOf(start.UnixMilli()-1, loc); got >= tt.date {
+				t.Errorf("the instant before the day's first is on %s", got)
+			}
+			if got := DateOf(end.UnixMilli()-1, loc); got != tt.date {
+				t.Errorf("the day's last instant is on %s", got)
+			}
+		})
+	}
+}
+
+// with returns b with fn applied to project key's part of it.
+func with(b Bucket, key string, fn func(*ProjectMinute)) Bucket {
+	pm := b.Projects[key]
+	fn(&pm)
+	b.Projects[key] = pm
+	return b
+}
+
+func TestRollup(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("no time zone data:", err)
+	}
+	const date = "2026-11-20" // 05:00Z to 05:00Z the next day in New York
+	cr := func(why event.Reason, ev event.Evidence, halves int64) Credited {
+		return Credited{Why: why, Ev: ev, Halves: halves}
+	}
+	tests := []struct {
+		name    string
+		buckets func(t *testing.T) []Bucket
+		cap     int64
+		check   func(t *testing.T, d Day)
+	}{
+		{
+			name: "credit sums by project, by kind, by level and by reason, and only the kinds, levels and reasons with credit are named",
+			buckets: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, map[string][]Credited{
+						"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 30), cr(event.ReasonRead, event.EvidenceB, 20)},
+						"p_b": {cr(event.ReasonEdit, event.EvidenceC, 10)},
+					}, nil),
+					bucket(t, "2026-11-20T15:01:00Z", event.StateFinal, map[string][]Credited{
+						"p_a": {cr(event.ReasonRead, event.EvidenceA, 120)},
+					}, nil),
+				}
+			},
+			cap: 43200,
+			check: func(t *testing.T, d Day) {
+				if len(d.Projects) != 2 || d.Projects[0].Project != "p_a" || d.Projects[1].Project != "p_b" {
+					t.Fatalf("projects %+v, want p_a and p_b", d.Projects)
+				}
+				a, b := d.Projects[0], d.Projects[1]
+				if a.CreditedS != 85 || b.CreditedS != 5 {
+					t.Errorf("p_a %v s, p_b %v s; want 85 and 5", a.CreditedS, b.CreditedS)
+				}
+				if want := map[event.Evidence]float64{event.EvidenceA: 75, event.EvidenceB: 10}; !maps.Equal(a.CreditedByEvidence, want) {
+					t.Errorf("p_a by level %v, want %v", a.CreditedByEvidence, want)
+				}
+				if want := map[event.Activity]float64{event.ActivityPrompting: 15, event.ActivityReadingOutput: 70}; !maps.Equal(a.CreditedByKind, want) {
+					t.Errorf("p_a by kind %v, want %v", a.CreditedByKind, want)
+				}
+				if want := map[event.Reason]float64{event.ReasonPrompt: 15, event.ReasonRead: 70}; !maps.Equal(a.CreditedByReason, want) {
+					t.Errorf("p_a by reason %v, want %v", a.CreditedByReason, want)
+				}
+				if want := map[event.Evidence]float64{event.EvidenceC: 5}; !maps.Equal(b.CreditedByEvidence, want) {
+					t.Errorf("p_b by level %v, want %v", b.CreditedByEvidence, want)
+				}
+			},
+		},
+		{
+			name: "credit in pending minutes is counted apart as well",
+			buckets: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, map[string][]Credited{"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 30)}}, nil),
+					bucket(t, "2026-11-20T15:01:00Z", event.StatePending, map[string][]Credited{"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 10)}}, nil),
+				}
+			},
+			cap: 43200,
+			check: func(t *testing.T, d Day) {
+				if p := d.Projects[0]; p.CreditedS != 20 || p.PendingS != 5 {
+					t.Errorf("credited %v s with %v s pending, want 20 and 5", p.CreditedS, p.PendingS)
+				}
+			},
+		},
+		{
+			name: "past DAY_CAP_S the credit of later minutes is X.day_cap of their project",
+			buckets: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, map[string][]Credited{"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 100)}}, nil),
+					bucket(t, "2026-11-20T15:01:00Z", event.StateFinal, map[string][]Credited{"p_b": {cr(event.ReasonPrompt, event.EvidenceA, 100)}}, nil),
+				}
+			},
+			cap: 60,
+			check: func(t *testing.T, d Day) {
+				a, b := d.Projects[0], d.Projects[1]
+				if a.CreditedS != 50 || b.CreditedS != 10 || b.Uncredited[event.ReasonDayCap] != 40 || len(a.Uncredited) != 0 {
+					t.Errorf("p_a %v s %v, p_b %v s %v; want 50 s, and 10 s with 40 s of X.day_cap", a.CreditedS, a.Uncredited, b.CreditedS, b.Uncredited)
+				}
+			},
+		},
+		{
+			name: "minutes outside the local day are left out",
+			buckets: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-20T04:59:00Z", event.StateFinal, map[string][]Credited{"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 30)}}, nil),
+					bucket(t, "2026-11-20T05:00:00Z", event.StateFinal, map[string][]Credited{"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 10)}}, nil),
+					bucket(t, "2026-11-21T05:00:00Z", event.StateFinal, map[string][]Credited{"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 30)}}, nil),
+				}
+			},
+			cap: 43200,
+			check: func(t *testing.T, d Day) {
+				if len(d.Projects) != 1 || d.Projects[0].CreditedS != 5 {
+					t.Errorf("projects %+v, want p_a with 5 s", d.Projects)
+				}
+				if !d.Start.Equal(minute(t, "2026-11-20T05:00:00Z")) || !d.End.Equal(minute(t, "2026-11-21T05:00:00Z")) {
+					t.Errorf("the day runs %v to %v", d.Start, d.End)
+				}
+			},
+		},
+		{
+			name: "agent-only time sums by project and by harness, and a harness with none of it is listed with 0",
+			buckets: func(t *testing.T) []Bucket {
+				b1 := with(bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, nil, map[string]int64{"p_a": 60}), "p_a", func(pm *ProjectMinute) {
+					pm.AgentOnlyS = 60
+					pm.Harnesses = map[event.Harness]int64{event.HarnessClaudeCode: 60, event.HarnessCodex: 0}
+				})
+				b2 := with(bucket(t, "2026-11-20T15:01:00Z", event.StateFinal, nil, map[string]int64{"p_a": 30}), "p_a", func(pm *ProjectMinute) {
+					pm.AgentOnlyS = 30
+					pm.Harnesses = map[event.Harness]int64{event.HarnessClaudeCode: 30}
+				})
+				return []Bucket{b1, b2}
+			},
+			cap: 43200,
+			check: func(t *testing.T, d Day) {
+				if len(d.Projects) != 1 {
+					t.Fatalf("projects %+v, want p_a", d.Projects)
+				}
+				p := d.Projects[0]
+				want := map[event.Harness]float64{event.HarnessClaudeCode: 90, event.HarnessCodex: 0}
+				if p.AgentOnlyS != 90 || !maps.Equal(p.AgentOnlyByHarness, want) || p.CreditedS != 0 {
+					t.Errorf("p_a %+v, want 90 s of agent-only time, %v, and no credit", p, want)
+				}
+			},
+		},
+		{
+			name: "credit keeps its reason's suffix, and SM 5.4's AI-assisted reasons stay apart from the hand-work ones of the same kind",
+			buckets: func(t *testing.T) []Bucket {
+				return []Bucket{bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, map[string][]Credited{
+					"p_a": {cr(event.ReasonRead+event.ReturnedSuffix, event.EvidenceA, 20), cr(event.ReasonPermission, event.EvidenceA, 10), cr(event.ReasonNavigate, event.EvidenceA, 6)},
+				}, nil)}
+			},
+			cap: 43200,
+			check: func(t *testing.T, d Day) {
+				p := d.Projects[0]
+				want := map[event.Reason]float64{"READ~r": 10, event.ReasonPermission: 5, event.ReasonNavigate: 3}
+				if !maps.Equal(p.CreditedByReason, want) {
+					t.Errorf("by reason %v, want %v", p.CreditedByReason, want)
+				}
+				if p.CreditedByKind[event.ActivityReviewing] != 8 {
+					t.Errorf("by kind %v, want 8 s of reviewing", p.CreditedByKind)
+				}
+			},
+		},
+		{
+			name: "X.noprog in pending and provisional minutes is on hold, and in final ones it isn't",
+			buckets: func(t *testing.T) []Bucket {
+				noprog := func(at string, state event.BucketState) Bucket {
+					b := bucket(t, at, state, map[string][]Credited{"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 30)}}, nil)
+					return with(b, "p_a", func(pm *ProjectMinute) {
+						pm.Uncredited = map[event.Reason]int64{event.ReasonNoProgress: 7, event.ReasonAbsent: 4}
+					})
+				}
+				return []Bucket{
+					noprog("2026-11-20T15:00:00Z", event.StateFinal),
+					noprog("2026-11-20T15:01:00Z", event.StateProvisional),
+					noprog("2026-11-20T15:02:00Z", event.StatePending),
+				}
+			},
+			cap: 43200,
+			check: func(t *testing.T, d Day) {
+				p := d.Projects[0]
+				if p.OnHoldS != 14 || p.Uncredited[event.ReasonNoProgress] != 21 {
+					t.Errorf("on hold %v s of %v s of X.noprog, want 14 of 21", p.OnHoldS, p.Uncredited[event.ReasonNoProgress])
+				}
+			},
+		},
+		{
+			name: "uncredited seconds sum by project and reason",
+			buckets: func(t *testing.T) []Bucket {
+				b := bucket(t, "2026-11-20T15:00:00Z", event.StateFinal, map[string][]Credited{
+					"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 30)},
+					"p_b": {cr(event.ReasonEdit, event.EvidenceA, 10)},
+				}, nil)
+				b = with(b, "p_a", func(pm *ProjectMinute) {
+					pm.Uncredited = map[event.Reason]int64{event.ReasonAbsent: 15, event.ReasonNoAnchor: 5}
+				})
+				b = with(b, "p_b", func(pm *ProjectMinute) { pm.Uncredited = map[event.Reason]int64{event.ReasonOtherFocus: 15} })
+				return []Bucket{b}
+			},
+			cap: 43200,
+			check: func(t *testing.T, d Day) {
+				a, b := d.Projects[0], d.Projects[1]
+				if a.Uncredited[event.ReasonAbsent] != 15 || a.Uncredited[event.ReasonNoAnchor] != 5 || b.Uncredited[event.ReasonOtherFocus] != 15 {
+					t.Errorf("p_a %v, p_b %v", a.Uncredited, b.Uncredited)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, err := Rollup(date, ny, tt.buckets(t), tt.cap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.check(t, d)
+		})
+	}
+	t.Run("a minute belongs to the local day it starts in, where the clocks skip midnight", func(t *testing.T) {
+		santiago, err := time.LoadLocation("America/Santiago")
+		if err != nil {
+			t.Skip("no time zone data:", err)
+		}
+		// 03:59Z is 23:59 on 2027-09-04; at 04:00Z the clocks jump from
+		// midnight to 01:00 on 2027-09-05.
+		bs := []Bucket{
+			bucket(t, "2027-09-05T03:59:00Z", event.StateFinal, map[string][]Credited{"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 30)}}, nil),
+			bucket(t, "2027-09-05T04:00:00Z", event.StateFinal, map[string][]Credited{"p_a": {cr(event.ReasonPrompt, event.EvidenceA, 10)}}, nil),
+		}
+		for _, x := range []struct {
+			date string
+			want float64
+		}{{"2027-09-04", 15}, {"2027-09-05", 5}} {
+			d, err := Rollup(x.date, santiago, bs, 43200)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(d.Projects) != 1 || d.Projects[0].CreditedS != x.want {
+				t.Errorf("%s: %+v, want %v s", x.date, d.Projects, x.want)
+			}
+		}
+	})
+}
+
+func TestLastSession(t *testing.T) {
+	const gap = 20 * 60 * 1000 // SESSION_GAP_S
+	a := map[string][]Credited{"p_a": {{Why: event.ReasonPrompt, Ev: event.EvidenceA, Halves: 20}}}
+	b := map[string][]Credited{"p_b": {{Why: event.ReasonEdit, Ev: event.EvidenceB, Halves: 30}}}
+	agentOnly := func(t *testing.T, at string) Bucket {
+		return with(bucket(t, at, event.StateFinal, nil, map[string]int64{"p_a": 60}), "p_a", func(pm *ProjectMinute) { pm.AgentOnlyS = 60 })
+	}
+	tests := []struct {
+		name               string
+		minutes            func(t *testing.T) []Bucket
+		to                 string
+		project, from, end string // "" project: no session
+		// until is when the session's credit stopped, when the case checks
+		// it.
+		until           string
+		credited, agent float64
+	}{
+		{
+			name: "a session runs back over credited minutes no more than SESSION_GAP_S apart",
+			minutes: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-20T10:00:00Z", event.StateFinal, a, nil),
+					bucket(t, "2026-11-20T10:10:00Z", event.StateFinal, a, nil),
+					bucket(t, "2026-11-20T10:31:00Z", event.StateFinal, a, nil),
+				}
+			},
+			to:      "2026-11-21T00:00:00Z",
+			project: "p_a", from: "2026-11-20T10:00:00Z", end: "2026-11-20T10:32:00Z", credited: 30,
+		},
+		{
+			name: "a gap longer than SESSION_GAP_S between credited minutes starts a new session",
+			minutes: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-20T10:00:00Z", event.StateFinal, a, nil),
+					bucket(t, "2026-11-20T10:22:00Z", event.StateFinal, a, nil),
+				}
+			},
+			to:      "2026-11-21T00:00:00Z",
+			project: "p_a", from: "2026-11-20T10:22:00Z", end: "2026-11-20T10:23:00Z", credited: 10,
+		},
+		{
+			name: "another project's minutes don't split a session, and the session sums its own project's part of every minute in it",
+			minutes: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-20T10:00:00Z", event.StateFinal, a, nil),
+					agentOnly(t, "2026-11-20T10:05:00Z"),
+					bucket(t, "2026-11-20T10:06:00Z", event.StateFinal, b, nil),
+					bucket(t, "2026-11-20T10:15:00Z", event.StateFinal, a, nil),
+				}
+			},
+			to:      "2026-11-21T00:00:00Z",
+			project: "p_a", from: "2026-11-20T10:00:00Z", end: "2026-11-20T10:16:00Z", credited: 20, agent: 60,
+		},
+		{
+			name: "the latest credited minute decides the session's project",
+			minutes: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-20T10:00:00Z", event.StateFinal, a, nil),
+					bucket(t, "2026-11-20T10:05:00Z", event.StateFinal, b, nil),
+				}
+			},
+			to:      "2026-11-21T00:00:00Z",
+			project: "p_b", from: "2026-11-20T10:05:00Z", end: "2026-11-20T10:06:00Z", credited: 15,
+		},
+		{
+			name: "minutes at or after to are left out",
+			minutes: func(t *testing.T) []Bucket {
+				return []Bucket{
+					bucket(t, "2026-11-19T23:59:00Z", event.StateFinal, a, nil),
+					bucket(t, "2026-11-20T10:05:00Z", event.StateFinal, b, nil),
+				}
+			},
+			to:      "2026-11-20T10:05:00Z",
+			project: "p_a", from: "2026-11-19T23:59:00Z", end: "2026-11-20T00:00:00Z", credited: 10,
+		},
+		{
+			name: "a session's credit stops at the end of the last slot of its last minute in which anything was credited",
+			minutes: func(t *testing.T) []Bucket {
+				b := bucket(t, "2026-11-20T10:00:00Z", event.StateFinal, a, nil)
+				for i := range 2 {
+					b.Slots[i] = event.BucketSlot{Project: "p_a", Credited: 5, Why: event.ReasonPrompt, Kind: event.ActivityPrompting, Ev: event.EvidenceA}
+				}
+				return []Bucket{b}
+			},
+			to:      "2026-11-21T00:00:00Z",
+			project: "p_a", from: "2026-11-20T10:00:00Z", end: "2026-11-20T10:01:00Z", until: "2026-11-20T10:00:30Z", credited: 10,
+		},
+		{
+			name: "a credited minute more than 30 days back isn't looked for",
+			minutes: func(t *testing.T) []Bucket {
+				return []Bucket{bucket(t, "2026-10-20T10:00:00Z", event.StateFinal, a, nil)}
+			},
+			to: "2026-11-20T10:01:00Z",
+		},
+		{
+			name:    "with no credited minute there is no session",
+			minutes: func(t *testing.T) []Bucket { return []Bucket{agentOnly(t, "2026-11-20T10:05:00Z")} },
+			to:      "2026-11-21T00:00:00Z",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := open(t, t.TempDir())
+			for _, bk := range tt.minutes(t) {
+				if _, _, err := s.Put(bk); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := LastSession(s, minute(t, tt.to).UnixMilli(), gap)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch {
+			case tt.project == "":
+				if got != nil {
+					t.Errorf("session %+v, want none", got)
+				}
+			case got == nil:
+				t.Fatal("no session")
+			case got.Project != tt.project || !got.Start.Equal(minute(t, tt.from)) || !got.End.Equal(minute(t, tt.end)):
+				t.Errorf("session %s from %s to %s, want %s from %s to %s", got.Project, got.Start, got.End, tt.project, tt.from, tt.end)
+			case got.CreditedS != tt.credited || got.AgentOnlyS != tt.agent:
+				t.Errorf("session credits %v s with %v s agent-only, want %v and %v", got.CreditedS, got.AgentOnlyS, tt.credited, tt.agent)
+			case tt.until != "" && !got.CreditUntil.Equal(minute(t, tt.until)):
+				t.Errorf("the session's credit stops at %s, want %s", got.CreditUntil, tt.until)
+			}
+		})
+	}
+}
+
+func TestWriteDay(t *testing.T) {
+	tests := []struct {
+		name string
+		day  Day
+		ok   bool
+	}{
+		{"a day's rollup reads back as written", Day{Date: "2026-11-20", Zone: "UTC", Projects: []DayProject{{Project: "p_a",
+			Tally: Tally{CreditedS: 12.5, AgentOnlyS: 3, AgentOnlyByHarness: map[event.Harness]float64{event.HarnessCursor: 3}}}}}, true},
+		{"a rollup whose date isn't a date isn't written", Day{Date: "../x"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "days")
+			err := WriteDay(dir, tt.day)
+			if !tt.ok {
+				if err == nil {
+					t.Fatal("WriteDay wrote it")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := ReadDay(dir, tt.day.Date)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Date != tt.day.Date || len(got.Projects) != 1 || got.Projects[0].CreditedS != 12.5 || got.Projects[0].AgentOnlyByHarness[event.HarnessCursor] != 3 {
+				t.Errorf("read back %+v", got)
+			}
+		})
+	}
+}
+
+func TestMinuteBucket(t *testing.T) {
+	b := bucket(t, "2026-11-20T16:42:00Z", event.StateFinal, map[string][]Credited{
+		"p_9f2c": {{Why: event.ReasonPrompt, Ev: event.EvidenceA, Halves: 30}},
+	}, map[string]int64{"p_9f2c": 20, "p_77ab": 40})
+	b = with(b, "p_9f2c", func(pm *ProjectMinute) { pm.AgentOnlyS = 5 })
+	b = with(b, "p_77ab", func(pm *ProjectMinute) { pm.AgentOnlyS = 40 })
+	b.Anchors = []string{"01a20d91-f900-7adf-af18-9024d7dbaf8d"}
+	b.Uncredited = map[event.Reason]float64{event.ReasonOtherFocus: 10}
+	tests := []struct {
+		name    string
+		witness event.Witness
+		ev      event.Evidence
+	}{
+		{"a witnessed minute keeps the level the scorer computed and validates", event.Witnessed, event.EvidenceA},
+		{"a backfilled minute's credit is level C and validates", event.Backfilled, event.EvidenceC},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := b.MinuteBucket(tt.witness)
+			if err := m.Validate(); err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			if m.Slots[0].Ev != tt.ev || m.Witness != tt.witness {
+				t.Errorf("slot level %q, witness %q; want %q, %q", m.Slots[0].Ev, m.Witness, tt.ev, tt.witness)
+			}
+			if b.Slots[0].Ev != event.EvidenceA {
+				t.Error("MinuteBucket changed the bucket it was called on")
+			}
+			if s := m.Shareable(); len(s.Anchors) != 0 {
+				t.Errorf("the shareable form keeps the anchors %q", s.Anchors)
+			}
+			if want := map[string]float64{"p_9f2c": 5, "p_77ab": 40}; !maps.Equal(m.Shareable().AgentOnly, want) {
+				t.Errorf("agent_only %v, want each project's agent-only seconds, %v (D-bucket-agent-only)", m.Shareable().AgentOnly, want)
+			}
+		})
+	}
+}

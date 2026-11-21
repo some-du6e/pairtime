@@ -82,12 +82,16 @@ type HTTP struct {
 
 // Display is [display], how the agent's views show time.
 type Display struct {
-	// Shadow is display.shadow (DESIGN 6.7 step 2): while it is on, every
-	// view shows credited time as "calibrating" and leaves its numbers
-	// out, and keeps moments, loops and the agent's time, so nobody learns
-	// to steer the rules before they are fitted (SM 7.5). Calibration
-	// volunteers have it on from 12-01 until the scoring freeze; it is off
-	// for everyone else.
+	// Shadow is display.shadow (DESIGN 6.7 step 2): while it is on, the
+	// local API and every view show your time as "calibrating" and keep
+	// only the agent's time, moments and SM 4.2's loops. They leave out
+	// your time and everything it could be worked back out from: the
+	// other uncredited time, X.day_cap included, and a session's start,
+	// end and whether it goes on (decision D-shadow-scope). So nobody
+	// learns to steer the rules before they are fitted (SM 7.5). The files
+	// in days/ and buckets/ keep every number. Calibration volunteers have
+	// it on from 12-01 until the scoring freeze; it is off for everyone
+	// else.
 	Shadow bool `toml:"shadow"`
 }
 
@@ -187,9 +191,10 @@ port = 0
 url = ""
 
 [display]
-# true shows your credited time as "calibrating" while pairtime's rules are
-# being fitted, and keeps the agent's time and your moments. Calibration
-# volunteers have it on until the scoring freeze.
+# true shows your time as "calibrating" while pairtime's rules are being
+# fitted. Views then keep the agent's time, your moments and the loops
+# pairtime caught, and leave out everything your time could be worked out
+# from. Calibration volunteers have it on until the scoring freeze.
 shadow = false
 
 [notifications]
