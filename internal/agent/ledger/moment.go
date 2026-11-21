@@ -16,9 +16,11 @@ import (
 // event's time can be held to: the wall clock, and the monotonic clocks of
 // this run, which presence's, focus's and the git watcher's events carry
 // (RunClock), and of the OS's boot, which `pairtime hook` stamps each hook
-// call with (internal/platform/clock). A step of the wall clock while an
-// event waits moves neither monotonic clock, so an event made before the
-// moment by any of the three counts as made before it.
+// call with (internal/platform/clock). A step of the wall clock moves
+// neither monotonic clock, so an event that carries a reading of one the
+// moment holds too is held to it by that reading alone (before): a step
+// while it waited can neither hide it, nor make an event made after the
+// moment count as made before.
 //
 // Each bound is exclusive: an event made at the moment itself was made
 // once config.toml said online. Zero means no bound by that clock.
@@ -58,18 +60,17 @@ func (m *moment) raise(n moment) {
 	}
 }
 
-// before reports whether the event e was made before m by any clock e
-// carries that m holds too: its t by the wall clock; its mono when e was
-// made in this run, as the agent's own events are; or its mono in m's
-// boot, as a hook call's is.
+// before reports whether the event e was made before m: by e's mono when
+// m holds the clock it counts, this run's for the agent's own events and
+// the OS's of m's boot for a hook call, since a monotonic clock is the one
+// no step of the wall clock moves either way; and by its t otherwise, as
+// for an event of an earlier run or boot.
 func (m moment) before(e event.Envelope) bool {
 	switch {
-	case e.T < m.wall:
-		return true
 	case m.run > 0 && e.BootID == runBoot:
 		return e.Mono < m.run
 	case m.os > 0 && e.Mono > 0 && e.BootID == m.boot:
 		return e.Mono < m.os
 	}
-	return false
+	return e.T < m.wall
 }

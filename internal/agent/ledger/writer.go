@@ -54,6 +54,10 @@ type ChainRecord interface {
 	RecordChain(deviceID string) error
 }
 
+// sealReads bounds how often a seal reads config.toml for the records
+// written while it read it (Writer.seal). Notes always make it read again.
+const sealReads = 3
+
 // pendingMax is how many records the writer holds unsealed before it seals
 // at once rather than wait for BATCH_S: a long backfill or an inbox drain
 // gives batches of at most about this many records.
@@ -169,8 +173,13 @@ type Batch struct {
 	// mark waits for the next batch whose records all came after the note,
 	// sealed while no event made before it is still on its way
 	// (Options.Waiting).
-	Back    bool
-	Records []ledger.Record
+	Back bool
+	// LocalUntil is when config.toml was last known, or taken, to say
+	// local-only as the batch was sealed (sealPayload.LocalUntil), the
+	// zero time for never: an event made before it is in a local-only
+	// batch, and so is the part of a minute before it.
+	LocalUntil time.Time
+	Records    []ledger.Record
 }
 
 // Input is an event as the agent received it, and what its record commits
@@ -244,21 +253,23 @@ type Writer struct {
 	snap    position // where the newest seal frame that holds q starts
 	failed  error
 	closed  bool
-	// local is set while the mode NoteMode last noted is local-only, and
-	// taint once a record in pending came then. stretchSealed is set once
-	// a batch holding a record of the current local-only stretch is sealed.
-	// lastLocal is set while the newest batch, sealed by this writer or
-	// found by Open, counts as sealed in local-only mode. seen is set while
-	// the newest of the notes and the seals' reads of config.toml says
-	// local-only. back is the s of the first record written after NoteMode
-	// noted a switch back online, until the batch it marks is sealed
-	// (Batch.Back) or a seal reads config.toml as local-only, and 0 while
-	// there is none. until is the moment config.toml was last known, or
-	// taken, to say local-only: when a stretch ended, or a seal read it so,
-	// or, for a ledger whose newest batch is local-only, when Open opened
-	// it. late is set once a record in pending is an event made before
-	// until, by its own time (Write). notes counts NoteMode's calls.
-	local, taint, stretchSealed, lastLocal, seen, late bool
+	// local is set while a local-only stretch goes on, as the mode
+	// NoteMode noted last says, or since a seal read config.toml as
+	// local-only with nothing pending, and taint once a record in pending
+	// came then. seen is set while the newest of the notes and the seals'
+	// reads says local-only. stretchSealed is set once a batch holding a
+	// record of the current local-only stretch is sealed. lastLocal is set
+	// while the newest batch, sealed by this writer or found by Open,
+	// counts as sealed in local-only mode. back is the s of the first
+	// record written after NoteMode noted a switch back online, until the
+	// batch it marks is sealed (Batch.Back) or a seal reads config.toml as
+	// local-only, and 0 while there is none. until is the moment
+	// config.toml was last known, or taken, to say local-only: when a
+	// stretch ended, by a note or a seal's read, or when the agent saw one
+	// end (NoteSeen), as the newest seal frame recorded it across a restart.
+	// late is set once a record in pending is an event made before until,
+	// by its own time (Write). notes counts NoteMode's calls.
+	local, taint, seen, stretchSealed, lastLocal, late bool
 	back, notes                                        uint64
 	until                                              moment
 
@@ -349,22 +360,12 @@ func Open(opts Options) (*Writer, error) {
 	// would have been without the crash.
 	w.late = w.late || w.madeBefore(w.pending)
 	w.mu.Unlock()
-	// While the agent was stopped, config.toml may have said local-only
-	// when the newest batch did, and an event made then that reaches this
-	// writer, as a hook call the spool or held.jsonl kept, counts as made
-	// in local-only mode. The records a crash left are judged by the
-	// moment above, and by the uploader, which keeps an unmarked online
-	// batch after a local-only one in its run.
-	wasLocal := w.lastLocal
 	// Records a crash left without a batch go in one now, so that once
-	// Open returns everything on disk is sealed.
+	// Open returns everything on disk is sealed. The uploader keeps an
+	// unmarked online batch after a local-only one in its run, so those of
+	// a stretch a crash cut short stay on the device too.
 	w.sealMu.Lock()
 	_, _, err := w.seal()
-	if err == nil && wasLocal {
-		w.mu.Lock()
-		w.until.raise(w.momentNow())
-		w.mu.Unlock()
-	}
 	w.sealMu.Unlock()
 	if err != nil {
 		w.closeFiles()
@@ -771,6 +772,14 @@ type sealPayload struct {
 // records: one that records no mode counts as sealed in local-only mode.
 func (sp sealPayload) online() bool { return sp.Online != nil && *sp.Online }
 
+// msTime is the time of ms, in Unix ms, and the zero time for 0.
+func msTime(ms int64) time.Time {
+	if ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms)
+}
+
 // rowPayload is a batch frame's payload in batches.seg: DESIGN 3.5's row,
 // {b, first_seq, last_seq, n, R_b, H_b, sealed_at}, with prev, online,
 // back, local_until and where the batch's frames are. The receipt goes in a receipt
@@ -829,8 +838,8 @@ func (w *Writer) RequestSeal() {
 func (w *Writer) seal() (Batch, bool, error) {
 	w.mu.Lock()
 	var online, waiting bool
-	for {
-		notes := w.notes
+	for reads := 1; ; reads++ {
+		notes, next := w.notes, w.next
 		// The first batch after a switch back online is due its mark.
 		due := w.waiting != nil && w.back > 0 && len(w.pending) > 0
 		before := w.until.wall
@@ -843,12 +852,15 @@ func (w *Writer) seal() (Batch, bool, error) {
 		// the mark waits (Options.Waiting).
 		waiting = due && online && w.waiting(before)
 		w.mu.Lock()
-		if w.notes == notes {
+		if w.notes == notes && (w.next == next || reads >= sealReads) {
 			break
 		}
 		// A note came while config.toml was read, as the config watch's of
 		// a switch back online, after which records are online: it is read
 		// again, so the batch isn't sealed in the mode from before the note.
+		// So are records, which may have come once the file changed, as to
+		// local-only, while the read still saw it as it was: a read after
+		// them seals them in the mode they came in.
 	}
 	if w.online != nil {
 		switch {
@@ -861,9 +873,18 @@ func (w *Writer) seal() (Batch, bool, error) {
 			w.until.raise(w.momentNow())
 			w.local, w.seen = false, false
 		case !online:
-			// config.toml says local-only, as the watch may not have noted:
-			// the stretch ends at the next note or read that says online.
+			// config.toml says local-only, which the watch may not have
+			// noted, as in its debounce or for a symlinked config.toml's
+			// target. A batch sealed now is local-only, and the uploader keeps
+			// the online batch after it in its run, records written after
+			// this read with it. With nothing pending there is no such batch,
+			// so the stretch begins here, as at a noted switch: the records
+			// after this read count as made in it, its first sealed at once,
+			// until a note or a read says online.
 			w.seen = true
+			if len(w.pending) == 0 && !w.local {
+				w.local, w.stretchSealed = true, false
+			}
 		}
 	}
 	if !online {
@@ -962,7 +983,8 @@ func (w *Writer) seal() (Batch, bool, error) {
 		w.fail(err)
 		return Batch{}, false, err
 	}
-	batch := Batch{Row: row, SealedAt: time.UnixMilli(sp.SealedAt), Online: on, Back: sp.Back, Records: recs}
+	batch := Batch{Row: row, SealedAt: time.UnixMilli(sp.SealedAt), Online: on, Back: sp.Back,
+		LocalUntil: msTime(sp.LocalUntil), Records: recs}
 	if w.sealedFn != nil {
 		w.sealedFn(batch)
 	}

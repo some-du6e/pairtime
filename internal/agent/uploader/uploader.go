@@ -262,6 +262,7 @@ type sealedRow struct {
 	row          pkgledger.BatchRow
 	sealedAt     time.Time
 	online, back bool
+	localUntil   time.Time
 	harnesses    map[event.Harness]string
 }
 
@@ -399,7 +400,8 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 	}
 	u.mu.Lock()
 	if len(u.sealed) < sealedQueueMax {
-		u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt, online: b.Online, back: b.Back, harnesses: learned})
+		u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt, online: b.Online, back: b.Back,
+			localUntil: b.LocalUntil, harnesses: learned})
 	} else {
 		u.sealed, u.lost = nil, true
 	}
@@ -880,7 +882,8 @@ func (u *Uploader) takeSealed() {
 		case sb.row.B <= u.rows.last():
 			// Read from batches.seg already.
 		case sb.row.B == u.rows.last()+1:
-			r := ledger.Row{BatchRow: sb.row, Prev: u.rows.lastHead, SealedAt: sb.sealedAt, Online: sb.online, Back: sb.back}
+			r := ledger.Row{BatchRow: sb.row, Prev: u.rows.lastHead, SealedAt: sb.sealedAt, Online: sb.online, Back: sb.back,
+				LocalUntil: sb.localUntil}
 			if err := u.rows.add(r); err != nil {
 				u.log.Warn("a sealed batch doesn't follow the rows", "err", err)
 			}

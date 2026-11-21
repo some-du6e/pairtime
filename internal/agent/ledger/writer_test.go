@@ -699,16 +699,14 @@ func TestNoteMode(t *testing.T) {
 	// Options.Online.
 	//
 	// It also sets the writer's clock to N ms after the start ("at:N"),
-	// writes an event made then ("write-at:N"), or a second after the
-	// clock ("write-now"), or one made before the last note by the OS's
-	// monotonic clock that a step of the wall clock put a minute after the
-	// start ("write-stepped"), has Options.Waiting say an event made before
-	// the moment it is asked about is still on its way until it has come
-	// ("waiting", "arrived"), opens the writer again N ms after the start
-	// once it closed ("reopen-at:N"), after a kill that left the ledger's
-	// files as they were ("kill"), or after a crash that lost every row of
-	// batches.seg but the first while config.toml says online
-	// ("crash-online").
+	// writes an event made then ("write-at:N"), or one made before the last
+	// note by the OS's monotonic clock that a step of the wall clock put a
+	// minute after the start ("write-stepped"), has Options.Waiting say an
+	// event made before the moment it is asked about is still on its way
+	// until it has come ("waiting", "arrived"), or opens the writer again
+	// after a kill that left the ledger's files as they were ("kill"), or
+	// after a crash that lost every row of batches.seg but the first while
+	// config.toml says online ("crash-online").
 	cases := []struct {
 		name  string
 		steps []string
@@ -750,8 +748,8 @@ func TestNoteMode(t *testing.T) {
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "pause", "write-old", "seal", "write-old", "seal", "write", "seal"}, []bool{false, false, false, true}, []bool{false, false, false, true}, []int{1, 1, 1, 1}},
 		{"a switch-back seal that also takes a record written after the note leaves its batch unmarked, since not all its records came after it",
 			[]string{"file-local", "write", "seal", "write", "hold", "file-online", "online", "write", "release", "sealed", "write", "seal"}, []bool{false, true, true}, []bool{false, false, true}, []int{1, 2, 1}},
-		{"a writer that opens on a ledger whose newest batch is local-only seals at the switch back online too",
-			[]string{"file-local", "write", "seal", "reopen", "write", "file-online", "online", "sealed", "write", "seal"}, []bool{false, true, true}, []bool{false, false, true}, []int{1, 1, 1}},
+		{"a writer that opens on a ledger whose newest batch is local-only, while config.toml says local-only, takes the stretch as going on: its first record seals at once, local-only, and the batch after the switch back online is marked",
+			[]string{"file-local", "write", "seal", "reopen", "write", "file-online", "online", "sealed", "write", "seal"}, []bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"rows a crash lost keep their batches' modes and marks when Open rebuilds them from the seal frames",
 			[]string{"file-local", "local", "write", "sealed", "write", "file-online", "online", "sealed", "write", "seal", "crash"}, []bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"an event made before a noted switch back that the writer gets after the mark is sealed local-only too, and the batch after it online",
@@ -772,9 +770,6 @@ func TestNoteMode(t *testing.T) {
 		{"an event a kill left without a batch, made before the newest seal frame's moment, is sealed local-only by the next Open",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "write-old", "kill", "sealed"},
 			[]bool{false, true, false}, []bool{false, true, false}, []int{1, 1, 1}},
-		{"an event made while the agent was stopped, after a newest batch sealed local-only, which the writer gets once it opens online, is sealed local-only",
-			[]string{"file-local", "write", "seal", "file-online", "reopen-at:120000", "write-at:60000", "seal", "write-now", "seal"},
-			[]bool{false, false, true}, []bool{false, false, false}, []int{1, 1, 1}},
 		{"while an event made before the switch back is still on its way, a batch is sealed local-only, and the mark waits for the batch after it",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "waiting", "write", "seal", "arrived", "write-old", "seal", "write", "seal"},
 			[]bool{false, false, false, true}, []bool{false, false, false, true}, []int{1, 1, 1, 1}},
@@ -842,17 +837,7 @@ func TestNoteMode(t *testing.T) {
 					writeAt(i, testT+atoi(t, ms), nil)
 					continue
 				}
-				if ms, ok := strings.CutPrefix(step, "reopen-at:"); ok {
-					if err := w.Close(); err != nil {
-						t.Fatalf("step %d: %v", i, err)
-					}
-					clk.set(testT + atoi(t, ms))
-					w = openWriter(file.Load)
-					continue
-				}
 				switch step {
-				case "write-now":
-					writeAt(i, clk.now().UnixMilli()+1000, nil)
 				case "write-stepped":
 					writeAt(i, testT+60_000, func(in *Input) { in.Event.BootID, in.Event.Mono = osBoot, osMono-1000 })
 				case "waiting", "arrived":
@@ -935,11 +920,16 @@ func TestNoteMode(t *testing.T) {
 				t.Fatalf("%d rows and %d batches read back, for %d sealed", len(rows), len(read), len(got))
 			}
 			for i, b := range got {
-				if r := rows[i]; r.Online != b.Online || r.Back != b.Back || r.NoMode {
-					t.Errorf("batch %d's row says online %v, marked %v, with no mode %v", b.Row.B, r.Online, r.Back, r.NoMode)
+				if r := rows[i]; r.Online != b.Online || r.Back != b.Back || r.NoMode || !r.LocalUntil.Equal(b.LocalUntil) {
+					t.Errorf("batch %d's row says online %v, marked %v, with no mode %v, local-only until %v", b.Row.B, r.Online, r.Back, r.NoMode, r.LocalUntil)
 				}
-				if rb := read[i]; rb.Online != b.Online || rb.Back != b.Back {
-					t.Errorf("batch %d's seal frame says online %v, marked %v", b.Row.B, rb.Online, rb.Back)
+				if rb := read[i]; rb.Online != b.Online || rb.Back != b.Back || !rb.LocalUntil.Equal(b.LocalUntil) {
+					t.Errorf("batch %d's seal frame says online %v, marked %v, local-only until %v", b.Row.B, rb.Online, rb.Back, rb.LocalUntil)
+				}
+			}
+			if slices.Contains(c.steps, "waiting") {
+				if last := got[len(got)-1]; !last.LocalUntil.Equal(time.UnixMilli(testT)) {
+					t.Errorf("the marked batch records config.toml as local-only until %v, want the switch back's note at %v", last.LocalUntil, time.UnixMilli(testT))
 				}
 			}
 		})

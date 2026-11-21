@@ -141,18 +141,35 @@ func TestLocalRuns(t *testing.T) {
 		gaps   []gap
 		minute int
 		want   bool
+		// until is when each batch, by number, says config.toml was last
+		// local-only, in minutes (ledger.Row.LocalUntil), none when unset.
+		until map[uint64]float64
 	}{
-		{"the minute a run's last batch is sealed in holds the run's end", []float64{1, 2, 3.5, 5}, []gap{{3, 3}}, 3, true},
-		{"the minute before it doesn't", []float64{1, 2, 3.5, 5}, []gap{{3, 3}}, 2, false},
-		{"nor does the minute after it", []float64{1, 2, 3.5, 5}, []gap{{3, 3}}, 4, false},
-		{"a minute an earlier batch of the run is sealed in is left to its first batch sealed after it, the run's", []float64{1, 2.5, 3.5, 5}, []gap{{2, 3}}, 2, false},
-		{"a minute that ends as the run's last batch is sealed is left to that batch", []float64{1, 2, 3, 5}, []gap{{3, 3}}, 2, false},
-		{"the minute that starts then holds nothing of the run", []float64{1, 2, 3, 5}, []gap{{3, 3}}, 3, false},
+		{"the minute a run's last batch is sealed in holds the run's end", []float64{1, 2, 3.5, 5}, []gap{{3, 3}}, 3, true, nil},
+		{"the minute before it doesn't", []float64{1, 2, 3.5, 5}, []gap{{3, 3}}, 2, false, nil},
+		{"nor does the minute after it", []float64{1, 2, 3.5, 5}, []gap{{3, 3}}, 4, false, nil},
+		{"a minute an earlier batch of the run is sealed in is left to its first batch sealed after it, the run's", []float64{1, 2.5, 3.5, 5}, []gap{{2, 3}}, 2, false, nil},
+		{"a minute that ends as the run's last batch is sealed is left to that batch", []float64{1, 2, 3, 5}, []gap{{3, 3}}, 2, false, nil},
+		{"the minute that starts then holds nothing of the run", []float64{1, 2, 3, 5}, []gap{{3, 3}}, 3, false, nil},
+		{"the minute the stretch ended in, after the run's last seal, as the batch that closes the run records, holds the run's end",
+			[]float64{1, 2, 3.5, 7.5}, []gap{{3, 3}}, 5, true, map[uint64]float64{4: 5.2}},
+		{"so does every minute between the run's last seal and that end",
+			[]float64{1, 2, 3.5, 7.5}, []gap{{3, 3}}, 4, true, map[uint64]float64{4: 5.2}},
+		{"the minute after the stretch ended doesn't",
+			[]float64{1, 2, 3.5, 7.5}, []gap{{3, 3}}, 6, false, map[uint64]float64{4: 5.2}},
+		{"a moment the run's last batch records counts as the stretch's end too",
+			[]float64{1, 2, 3.5, 7.5}, []gap{{3, 3}}, 5, true, map[uint64]float64{3: 5.2}},
+		{"a moment from before the run's last seal leaves the run's end at that seal",
+			[]float64{1, 2, 3.5, 7.5}, []gap{{3, 3}}, 4, false, map[uint64]float64{4: 2}},
 	}
 	for _, tc := range straddle {
 		t.Run(tc.name, func(t *testing.T) {
 			st := saved{Gaps: tc.gaps}
-			if got := st.straddles(indexOf(t, tc.sealed, make([]float64, len(tc.sealed))), at(tc.minute)); got != tc.want {
+			ix := indexOf(t, tc.sealed, make([]float64, len(tc.sealed)))
+			for b, m := range tc.until {
+				ix.times[b-1].localUntil = day0.Add(time.Duration(m * float64(time.Minute))).UnixMilli()
+			}
+			if got := st.straddles(ix, at(tc.minute)); got != tc.want {
 				t.Errorf("straddles(minute %d) = %v", tc.minute, got)
 			}
 		})
@@ -936,23 +953,34 @@ func TestFirstBatchAfterLogin(t *testing.T) {
 // minute's revisions rest on the batches the scorer stamps them with, the
 // marked batch's alone, its credit reaching back into the stretch as a
 // first prompt's lead does, or the switch-back batch's and then the marked
-// batch's. The minute stays on the device (saved.straddles), and the
+// batch's. With nothing pending at the login, the stretch's last batch is
+// sealed five minutes before it, and only the marked batch, which records
+// when the stretch ended (ledger.Row.LocalUntil), says the minute holds
+// the switch. The minute stays on the device (saved.straddles), and the
 // marked batch's root and the minutes after the login's, with their
 // credit, reach the server.
 func TestLoginMinute(t *testing.T) {
 	cases := []struct {
 		name string
 		// revs are the batches the login minute's revisions rest on, in the
-		// order the scorer writes them.
-		revs []uint64
+		// order the scorer writes them, and pending whether a record of the
+		// stretch is pending at the login, which the switch back seals as
+		// batch 4. The marked batch is 5 then, and 4 with nothing pending.
+		revs    []uint64
+		pending bool
 	}{
-		{"a first revision on the marked batch, its credit reaching back into the stretch", []uint64{5}},
-		{"a revision on the switch-back batch, then one on the marked batch", []uint64{4, 5}},
+		{"a first revision on the marked batch, its credit reaching back into the stretch", []uint64{5}, true},
+		{"a revision on the switch-back batch, then one on the marked batch", []uint64{4, 5}, true},
+		{"with nothing pending at the login, a first revision on the marked batch, its credit reaching back into the stretch", []uint64{4}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := newLiveRig(t, 30) // minutes 0 to 29, batches 1 and 2
 			login := r.start.Add(50 * time.Minute)
+			marked := uint64(5)
+			if !c.pending {
+				marked = 4
+			}
 			var revs []store.Bucket
 			for i, b := range c.revs {
 				st := event.StatePending
@@ -963,12 +991,12 @@ func TestLoginMinute(t *testing.T) {
 				rev.Batch = b
 				revs = append(revs, rev)
 			}
-			// The two minutes after the login's, which batch 6's scoring
-			// credits.
+			// The two minutes after the login's, which the scoring of the
+			// batch after the marked one credits.
 			credits := map[int64]float64{login.Add(time.Minute).UnixMilli(): 45, login.Add(2 * time.Minute).UnixMilli(): 30}
 			for ms, cr := range credits {
 				rev := testBucket(newestTable(), r.w.DeviceID(), time.UnixMilli(ms), cr, event.StateFinal)
-				rev.Batch = 6
+				rev.Batch = marked + 1
 				revs = append(revs, rev)
 			}
 			r.put(t, revs...)
@@ -983,33 +1011,39 @@ func TestLoginMinute(t *testing.T) {
 			r.w.NoteMode(false)
 			r.record(t, 3)
 			waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 3 })
-			r.recordAt(t, login.Add(10*time.Second)) // pending as the login finishes
+			if c.pending {
+				r.recordAt(t, login.Add(10*time.Second)) // pending as the login finishes
+			}
 			// pairtime login finishes 20 s into the minute, and the watch
-			// notes it 300 ms later: batch 4, sealed local-only mid-minute.
+			// notes it 300 ms later: batch 4, sealed local-only mid-minute,
+			// when a record was pending.
 			r.link(login.Add(20 * time.Second))
 			r.local.Store(false)
 			r.setClock(login.Add(20300 * time.Millisecond))
 			r.w.NoteMode(true)
-			waitFor(t, "the switch back online to seal the stretch's last record", func() bool { return r.w.Status().Batches == 4 })
-			// The first prompt, 40 s into the minute: batch 5, marked.
+			if c.pending {
+				waitFor(t, "the switch back online to seal the stretch's last record", func() bool { return r.w.Status().Batches == 4 })
+			}
+			// The first prompt, 40 s into the minute: the marked batch.
 			r.recordAt(t, login.Add(40*time.Second))
 			if _, _, err := r.w.Seal(); err != nil {
 				t.Fatal(err)
 			}
-			// Batch 6, sealed after the two minutes after the login's end.
+			// The batch after it, sealed after the two minutes after the
+			// login's end.
 			r.recordAt(t, login.Add(3*time.Minute+5*time.Second))
 			if _, _, err := r.w.Seal(); err != nil {
 				t.Fatal(err)
 			}
 			r.u.Wake()
-			r.wait(t, "batch 6 and the minutes after the login's", func(f *fakeIngest) bool {
+			r.wait(t, "the batch after the marked one, and the minutes after the login's", func(f *fakeIngest) bool {
 				n := 0
 				for ms := range credits {
 					if _, ok := f.buckets[ms]; ok {
 						n++
 					}
 				}
-				return f.head.b == 6 && n == len(credits)
+				return f.head.b == marked+1 && n == len(credits)
 			})
 			r.drain()
 			r.f.mu.Lock()
@@ -1023,7 +1057,8 @@ func TestLoginMinute(t *testing.T) {
 				name string
 				ok   bool
 			}{
-				{"the batch marked as the first after the switch went, over the stretch's gap", r.f.rows[5].b == 5 && r.f.rows[3].b == 0 && r.f.rows[4].b == 0 && slices.Contains(r.f.gaps, [2]uint64{3, 4})},
+				{"the batch marked as the first after the switch went, over the stretch's gap",
+					r.f.rows[marked].b == marked && r.f.rows[3].b == 0 && r.f.rows[marked-1].b == 0 && slices.Contains(r.f.gaps, [2]uint64{3, marked - 1})},
 				{"the minute the switch lands in stays on the device", !sent},
 				{"the minutes after it reached the server with their credit", credited},
 			}

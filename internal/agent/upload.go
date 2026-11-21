@@ -84,7 +84,9 @@ func (a *agent) online() bool {
 // keyring keeps it shut, so until publishWriter gives the writer to the
 // watch, modes keeps what it saw (ledger.Seen), and gives it to the writer
 // as it opens and as it is published. From then on each note goes to the
-// writer under mu, so none is lost or reordered with that hand-off.
+// writer under mu, so none is lost or reordered with that hand-off. What
+// it saw also goes to state.json as it changes (modesKey), so a run whose
+// ledger never opened, or a kill, doesn't lose it for the next start.
 type modes struct {
 	mu sync.Mutex
 	w  *ledger.Writer
@@ -97,22 +99,59 @@ type modes struct {
 	os    clock.Stamp
 }
 
-// seeLocked takes config.toml's mode, seen now. m.mu is held.
-func (m *modes) seeLocked(online bool) {
-	if online && m.local {
+// modesKey is what modes saw last, in state.json (modesState).
+const modesKey = "modes"
+
+// modesState is what state.json keeps of modes: whether config.toml said
+// local-only when the agent last looked, and when the newest stretch it
+// saw ended, by the wall clock.
+type modesState struct {
+	Local bool      `json:"local,omitempty"`
+	Ended time.Time `json:"ended,omitzero"`
+}
+
+// seeLocked takes config.toml's mode, seen now, and keeps a change of what
+// modes saw in state.json. a.modes.mu is held.
+func (a *agent) seeLocked(online bool) {
+	m := &a.modes
+	if online == !m.local {
+		return
+	}
+	if online {
 		m.ended, m.os = time.Now(), clock.Now()
 	}
 	m.local = !online
+	if a.state == nil {
+		return
+	}
+	err := a.state.Put(modesKey, modesState{Local: m.local, Ended: m.ended})
+	if err == nil {
+		err = a.state.Save()
+	}
+	if err != nil {
+		a.log.Warn("couldn't keep config.toml's mode in state.json", "err", err)
+	}
 }
 
 // startModes is what the ledger's start sees of config.toml's mode: every
 // install starts in local mode, and that stretch counts from here
 // (ledger.Writer.Write), so the records made before the teen's first
-// pairtime login, and those waiting meanwhile, stay on the device.
+// pairtime login, and those waiting meanwhile, stay on the device. It goes
+// on from what the last run saw (modesState): a stretch it saw end still
+// counts, and one it saw going on lasted, as far as the agent knows, until
+// now, so the hook calls held.jsonl or the spool kept from it are
+// local-only too.
 func (a *agent) startModes() {
 	a.modes.mu.Lock()
-	a.modes.seeLocked(a.online())
-	a.modes.mu.Unlock()
+	defer a.modes.mu.Unlock()
+	var last modesState
+	if a.state != nil {
+		if _, err := a.state.Get(modesKey, &last); err != nil {
+			last = modesState{} // rebuilt, like any damaged state
+		}
+	}
+	a.modes.local, a.modes.ended = last.Local, last.Ended
+	a.seeLocked(a.online())
 }
 
 // noteMode is the config watch's note of config.toml's mode, at its reload
@@ -122,7 +161,7 @@ func (a *agent) noteMode() {
 	online := a.online()
 	a.modes.mu.Lock()
 	defer a.modes.mu.Unlock()
-	a.modes.seeLocked(online)
+	a.seeLocked(online)
 	if w := a.modes.w; w != nil {
 		w.NoteMode(online)
 	}
@@ -146,7 +185,7 @@ func (a *agent) noteBack() {
 	if !a.modes.local {
 		return
 	}
-	a.modes.seeLocked(true)
+	a.seeLocked(true)
 	if w := a.modes.w; w != nil {
 		w.NoteMode(true)
 	}
