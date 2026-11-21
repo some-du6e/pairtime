@@ -393,7 +393,7 @@ User-Agent: pairtime-agent/<version>
 M_state = "pairtime-ingest-state-v1\n" || device_id || "\n" || time
 ```
 
-The device signs the request, as it signs an upload, because the counter and the head's time change with every upload, and anyone holding a leaked token could otherwise read when the device's owner works (DESIGN 4.5: the device key stops a stolen bearer token). `M_state` has no counter and no body, so it still works after `counter_stale`, and its context string differs from `M`'s, so neither kind of signature passes for the other. Steps 1 to 4 of 2.5 apply, then the forms of `X-Pairtime-Time` and `X-Pairtime-Signature` (step 5), the clock (step 7) and the signature over `M_state` (step 10), with the same refusals. The response is 200:
+The device signs the request, as it signs an upload, because the counter and the head's time change with every upload, and anyone holding a leaked token could otherwise read when the device's owner works (DESIGN 4.5: the device key stops a stolen bearer token). `M_state` has no counter and no body, so it still works after `counter_stale`, and its context string differs from `M`'s, so neither kind of signature passes for the other. Steps 1 to 4 of 2.5 apply, then the forms of `X-Pairtime-Time` and `X-Pairtime-Signature` (step 5), the clock (step 7), and the signature over `M_state` and the device's rate (step 10), with the same refusals. A state request counts against the same rate as an upload, because the server reads the state in its writer transaction. Step 13's account check applies too: rows of the `device_id` under another account refuse it with `device_mismatch`. The response is 200:
 
 ```json
 {

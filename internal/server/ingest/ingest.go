@@ -933,6 +933,14 @@ func (s *Service) state(w http.ResponseWriter, r *http.Request) {
 	if ref == nil && !ed25519.Verify(dev.PublicKey, StateMessage(dev.ID, timeText), sig) {
 		ref = badSignature(dev)
 	}
+	if ref == nil {
+		// A state request takes the writer too, so it counts against the
+		// device's rate as an upload does (ingest-v1 2.5 step 10).
+		var done func()
+		if done, ref = s.rate.take(dev.ID, s.o.Now()); ref == nil {
+			defer done()
+		}
+	}
 	if ref != nil {
 		s.refuse(w, ref)
 		return

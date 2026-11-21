@@ -1469,6 +1469,13 @@ func TestRate(t *testing.T) {
 			h.clock = h.clock.Add(10 * time.Second)
 			h.ok(t, upload{dev: dev})
 		}},
+		{"a state request counts against the same rate, and fits once it refills", func(t *testing.T) {
+			if s, c := refusalOf(t, h.serve(t, h.stateRequest(dev, dev.key))); s != 429 || c != CodeRateLimited {
+				t.Errorf("got %d %s", s, c)
+			}
+			h.clock = h.clock.Add(10 * time.Second)
+			h.state(t, dev)
+		}},
 		{"a second request while one is in flight is refused, and fits once the first ends", func(t *testing.T) {
 			l := newLimiter(5, time.Second)
 			done, r1 := l.take("d_x", exampleClock)
