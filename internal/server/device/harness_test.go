@@ -5,6 +5,9 @@ package device_test
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -29,6 +32,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/store/storetest"
 	"github.com/some-du6e/pairtime/internal/server/writer"
+	"github.com/some-du6e/pairtime/pkg/ledger"
 )
 
 // syncBuffer collects log lines from the server's goroutines.
@@ -76,6 +80,9 @@ type harnessConfig struct {
 	// signInOff builds the server without HCA sign-in, as the live server
 	// runs until its HCA app exists.
 	signInOff bool
+	// signupsClosed builds it with sign-ups closed, as the live server
+	// runs until its controller is named.
+	signupsClosed bool
 }
 
 var emailKey = bytes.Repeat([]byte{7}, accounts.EmailKeySize)
@@ -92,6 +99,11 @@ func newHarness(t *testing.T, c harnessConfig) *harness {
 	base := "https://" + srv.Listener.Addr().String()
 	h := &harness{t: t, srv: srv, db: db, w: w, clock: &clock{}, logs: logs}
 
+	var err error
+	h.store, err = device.New(device.Options{DB: db, Writer: w, Now: h.clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
 	signIn := newSignIn(t, h, base, db, w, logger, c.signInOff)
 	policy, err := retention.Default()
 	if err != nil {
@@ -101,11 +113,8 @@ func newHarness(t *testing.T, c harnessConfig) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.store, err = device.New(device.Options{DB: db, Writer: w, Now: h.clock.Now})
-	if err != nil {
-		t.Fatal(err)
-	}
-	svc, err := device.NewService(device.Config{Store: h.store, BaseURL: base, SignIn: signIn, Site: site, Logger: logger})
+	svc, err := device.NewService(device.Config{Store: h.store, BaseURL: base, SignIn: signIn, Site: site, Logger: logger,
+		SignupsOpen: func() bool { return !c.signupsClosed }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +155,8 @@ func (h *harness) anonymous() *http.Client {
 }
 
 // newSignIn returns HCA sign-in through a fresh fake HCA, which it puts in
-// h.hca, or with off, sign-in that isn't set up.
+// h.hca, or with off, sign-in that isn't set up. An account that turns
+// ineligible loses its devices through h.store, as pairtimed wires it.
 func newSignIn(t *testing.T, h *harness, base string, db *store.DB, w *writer.Writer, logger *slog.Logger, off bool) *auth.Service {
 	t.Helper()
 	if off {
@@ -161,7 +171,8 @@ func newSignIn(t *testing.T, h *harness, base string, db *store.DB, w *writer.Wr
 	if err != nil {
 		t.Fatal(err)
 	}
-	acc, err := accounts.New(accounts.Options{DB: db, Writer: w, Emails: emails, MayCreate: func(string) bool { return true }})
+	acc, err := accounts.New(accounts.Options{DB: db, Writer: w, Emails: emails, MayCreate: func(string) bool { return true },
+		Ineligible: h.store.RemoveAccount})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +266,8 @@ func (h *harness) call(method, path, tok string, body any) response {
 	return do(h.t, h.app, req)
 }
 
-// codeReply is the device authorization response.
+// codeReply is the device authorization response, and the key the
+// request sent.
 type codeReply struct {
 	DeviceCode              string `json:"device_code"`
 	UserCode                string `json:"user_code"`
@@ -263,6 +275,9 @@ type codeReply struct {
 	VerificationURIComplete string `json:"verification_uri_complete"`
 	ExpiresIn               int    `json:"expires_in"`
 	Interval                int    `json:"interval"`
+	SignupsOpen             *bool  `json:"signups_open"`
+
+	key ed25519.PrivateKey
 }
 
 // tokenReply is a token response, success or error.
@@ -271,6 +286,7 @@ type tokenReply struct {
 	TokenType   string `json:"token_type"`
 	Scope       string `json:"scope"`
 	DeviceID    string `json:"device_id"`
+	PublicKey   string `json:"public_key"`
 	Account     string `json:"account"`
 	Error       string `json:"error"`
 }
@@ -279,15 +295,41 @@ type tokenReply struct {
 // writer's.
 const testDeviceID = "d_7lq3k2m4nhv5xgjw6ycpbz2rsa"
 
-// codeForm is a device authorization request for id.
-func codeForm(id string) url.Values {
-	return url.Values{"client_id": {device.ClientID}, "device_id": {id}, "os": {device.OSLinux}, "client_build": {"v0.1.0"}}
+func newKey(t *testing.T) ed25519.PrivateKey {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return priv
 }
 
-// requestCode asks for a code for the device id, as the app does.
+// publicKey is priv's public half as the API writes it.
+func publicKey(priv ed25519.PrivateKey) string {
+	return base64.StdEncoding.EncodeToString(priv.Public().(ed25519.PublicKey))
+}
+
+// codeForm is a device authorization request for id with the key priv,
+// signed as the app signs it (docs/spec/device-auth-v1.md section 2).
+func codeForm(id string, priv ed25519.PrivateKey) url.Values {
+	pub := publicKey(priv)
+	return url.Values{
+		"client_id": {device.ClientID}, "device_id": {id}, "os": {device.OSLinux}, "client_build": {"v0.1.0"},
+		"public_key": {pub}, "key_signature": {base64.StdEncoding.EncodeToString(ed25519.Sign(priv, device.KeyMessage(id, pub)))},
+	}
+}
+
+// requestCode asks for a code for the device id with a new key, as the
+// app does.
 func (h *harness) requestCode(id string) codeReply {
 	h.t.Helper()
-	r := h.postForm(h.app, device.CodePath, codeForm(id), nil)
+	return h.requestCodeWith(id, newKey(h.t))
+}
+
+// requestCodeWith asks for a code for the device id with the key priv.
+func (h *harness) requestCodeWith(id string, priv ed25519.PrivateKey) codeReply {
+	h.t.Helper()
+	r := h.postForm(h.app, device.CodePath, codeForm(id, priv), nil)
 	if r.status != http.StatusOK {
 		h.t.Fatalf("POST %s answered %d: %s", device.CodePath, r.status, r.body)
 	}
@@ -295,6 +337,7 @@ func (h *harness) requestCode(id string) codeReply {
 	if err := json.Unmarshal([]byte(r.body), &c); err != nil {
 		h.t.Fatal(err)
 	}
+	c.key = priv
 	return c
 }
 
@@ -322,6 +365,18 @@ type browser struct {
 // signIn signs a new browser in through the fake HCA as id.
 func (h *harness) signIn(id hcafake.Identity) *browser {
 	h.t.Helper()
+	b, r := h.trySignIn(id)
+	if !b.signedIn() {
+		h.t.Fatalf("the browser didn't sign in; last answer %d: %s\nlog:\n%s", r.status, r.body, h.logs.String())
+	}
+	return b
+}
+
+// trySignIn goes through the fake HCA's sign-in as id with a new browser,
+// and returns the browser and the last answer, whether or not it ended
+// signed in.
+func (h *harness) trySignIn(id hcafake.Identity) (*browser, response) {
+	h.t.Helper()
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		h.t.Fatal(err)
@@ -343,10 +398,7 @@ func (h *harness) signIn(id hcafake.Identity) *browser {
 		}
 		r = do(h.t, c, req)
 	}
-	if !b.signedIn() {
-		h.t.Fatalf("the browser didn't sign in; last answer %d: %s\nlog:\n%s", r.status, r.body, h.logs.String())
-	}
-	return b
+	return b, r
 }
 
 // signedIn reports whether the browser has a session.
@@ -399,10 +451,16 @@ func (b *browser) decide(code string, approve bool) response {
 }
 
 // link runs the whole grant for the device id with the signed-in browser
-// b, and returns the token.
+// b and a new key, and returns the token.
 func (h *harness) link(b *browser, id string) tokenReply {
 	h.t.Helper()
-	c := h.requestCode(id)
+	return h.linkWith(b, id, newKey(h.t))
+}
+
+// linkWith runs the whole grant for the device id with the key priv.
+func (h *harness) linkWith(b *browser, id string, priv ed25519.PrivateKey) tokenReply {
+	h.t.Helper()
+	c := h.requestCodeWith(id, priv)
 	if r := b.decide(c.UserCode, true); r.status != http.StatusOK || !strings.Contains(r.body, "<h1>Linked</h1>") {
 		h.t.Fatalf("approving answered %d:\n%s", r.status, r.body)
 	}
@@ -411,6 +469,26 @@ func (h *harness) link(b *browser, id string) tokenReply {
 		h.t.Fatalf("the poll after approval answered %d: %+v", status, tr)
 	}
 	return tr
+}
+
+// ingest stores the state ingest keeps once it has accepted a first
+// request from the device of tok, so the server holds something from it.
+func (h *harness) ingest(tok string) device.State {
+	h.t.Helper()
+	ctx := context.Background()
+	d, err := h.store.Authenticate(ctx, tok)
+	if err != nil {
+		h.t.Fatalf("Authenticate = %v", err)
+	}
+	st := device.State{Req: 1, HeadB: 1, HeadHash: ledger.Hash{1, 2, 3}, HeadGeneration: d.Generation,
+		HeadReceivedAt: h.clock.Now().Truncate(time.Millisecond), ChainStart: 1}
+	if err := h.w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+		return h.store.SaveState(ctx, tx, d, st)
+	}); err != nil {
+		h.t.Fatalf("SaveState = %v", err)
+	}
+	st.Generation = d.Generation
+	return st
 }
 
 // verified is an identity HCA verified.

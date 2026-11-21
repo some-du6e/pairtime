@@ -3,6 +3,8 @@
 package device
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"net/url"
@@ -11,6 +13,16 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/server/accounts"
 )
+
+// KeyLabel starts the message the device key signs when the app asks for
+// a code (docs/spec/device-auth-v1.md section 2).
+const KeyLabel = "pairtime-device-key-v1\n"
+
+// KeyMessage is the message whose signature proves the app holds the
+// private half of publicKey, the base64 string it sends, for device id.
+func KeyMessage(id, publicKey string) []byte {
+	return []byte(KeyLabel + id + "\n" + publicKey)
+}
 
 // codeReply is the body of a device authorization response (RFC 8628
 // 3.2).
@@ -21,6 +33,10 @@ type codeReply struct {
 	VerificationURIComplete string `json:"verification_uri_complete"`
 	ExpiresIn               int    `json:"expires_in"`
 	Interval                int    `json:"interval"`
+	// SignupsOpen is false while sign-ups are closed, so only an account
+	// that exists already can approve the code, and pairtime login says so
+	// before it waits (D-device-row-chain-state).
+	SignupsOpen bool `json:"signups_open"`
 }
 
 // tokenReply is the body of a successful token response (RFC 6749 5.1).
@@ -29,6 +45,9 @@ type tokenReply struct {
 	TokenType   string `json:"token_type"`
 	Scope       string `json:"scope"`
 	DeviceID    string `json:"device_id"`
+	// PublicKey is the device key the code named, in base64: the token
+	// works only with it (D-key-at-grant).
+	PublicKey string `json:"public_key"`
 	// Account names the account that approved the code, as the pages
 	// show it, so pairtime login can say whose account it is linked to.
 	Account string `json:"account"`
@@ -62,6 +81,11 @@ func (s *Service) deviceCode(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request", problem)
 		return
 	}
+	req.PublicKey, problem = deviceKey(req.DeviceID, f.Get("public_key"), f.Get("key_signature"))
+	if problem != "" {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request", problem)
+		return
+	}
 	c, err := s.store.NewCode(r.Context(), req)
 	if err != nil {
 		s.log.Error("making a device code", "err", err)
@@ -76,7 +100,24 @@ func (s *Service) deviceCode(w http.ResponseWriter, r *http.Request) {
 		VerificationURIComplete: verify + "?user_code=" + url.QueryEscape(c.UserCode),
 		ExpiresIn:               int(CodeLifetime / time.Second),
 		Interval:                int(c.Interval / time.Second),
+		SignupsOpen:             s.signupsOpen(),
 	})
+}
+
+// deviceKey checks the device key a code request names: publicKey must be
+// a 32-byte Ed25519 public key in base64, and signature its signature of
+// KeyMessage for the device id, which shows the app holds the private
+// half. It returns the key, or what is wrong with it.
+func deviceKey(id, publicKey, signature string) (ed25519.PublicKey, string) {
+	pub, err := base64.StdEncoding.Strict().DecodeString(publicKey)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return nil, "public_key must be the device's 32-byte Ed25519 public key, in base64."
+	}
+	sig, err := base64.StdEncoding.Strict().DecodeString(signature)
+	if err != nil || len(sig) != ed25519.SignatureSize || !ed25519.Verify(pub, KeyMessage(id, publicKey), sig) {
+		return nil, "key_signature must be the key's Ed25519 signature of the key message for this device_id, in base64."
+	}
+	return ed25519.PublicKey(pub), ""
 }
 
 // validScope reports whether every scope in sc is one a device token has.
@@ -164,13 +205,17 @@ func (s *Service) token(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		s.log.Info("linked a device", "device", tok.DeviceID)
 		writeJSON(w, http.StatusOK, tokenReply{AccessToken: tok.AccessToken, TokenType: "Bearer", Scope: Scope, DeviceID: tok.DeviceID,
-			Account: s.handle(&accounts.User{SlackID: tok.SlackID, HCASub: tok.HCASub})})
+			PublicKey: base64.StdEncoding.EncodeToString(tok.PublicKey),
+			Account:   s.handle(&accounts.User{SlackID: tok.SlackID, HCASub: tok.HCASub})})
 	case errors.Is(err, ErrPending):
 		writeOAuthError(w, http.StatusBadRequest, "authorization_pending", "Nobody has approved this code yet.")
 	case errors.Is(err, ErrSlowDown):
 		writeOAuthError(w, http.StatusBadRequest, "slow_down", "Asking this often is too fast: wait 5 seconds longer between requests.")
 	case errors.Is(err, ErrDenied):
 		writeOAuthError(w, http.StatusBadRequest, "access_denied", "The code was turned down, so this app isn't linked.")
+	case errors.Is(err, ErrTaken):
+		writeOAuthError(w, http.StatusBadRequest, "device_taken",
+			"The account that approved this code isn't the one this device ID belongs to on this server, so it wasn't linked. To link it to that account, sign in as a new device.")
 	case errors.Is(err, ErrExpired):
 		writeOAuthError(w, http.StatusBadRequest, "expired_token", "The code expired before anyone approved it. Start again.")
 	case errors.Is(err, ErrInvalidGrant):

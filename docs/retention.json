@@ -72,8 +72,8 @@
     {
       "id": "server.devices",
       "where": "server",
-      "data": "Your devices: for each computer you link with pairtime login, a random device ID, a hash of its sign-in token (never the token itself), the public key that signs its uploads, the OS family, the pairtime build, when you linked it and when it last connected, and the names and versions of your AI tools",
-      "kept": "Until you remove the device, then {days} more",
+      "data": "Your devices: for each computer you link with pairtime login, a random device ID, a hash of its sign-in token (never the token itself), the public key that signs its uploads, the OS family, the pairtime build, when you linked it and when it last connected, how many times it has been linked, how far its uploads have got (the number of its last upload, the number, hash and arrival time of the last batch root it sent, the batch its record starts at, and which batches it kept to itself in local-only mode), and the names and versions of your AI tools",
+      "kept": "Until you remove the device, then {days} more. A device removed before it uploaded anything is deleted at once",
       "days": 90,
       "jobs": [{
         "table": "devices",
@@ -84,7 +84,7 @@
     {
       "id": "server.device_codes",
       "where": "server",
-      "data": "Codes for linking a computer: a hash of the code you type and of the app's own code, the device ID, OS family and pairtime build the app sent, and which account approved or turned it down, and when",
+      "data": "Codes for linking a computer: a hash of the code you type and of the app's own code, the device ID, OS family, pairtime build and public key the app sent, when the app asked for the code and when it last checked on it, and which account approved or turned it down, and when",
       "kept": "The code works for 15 minutes after the app asks for it. The record is deleted 1 day after that",
       "tables": ["device_codes"]
     },

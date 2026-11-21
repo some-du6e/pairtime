@@ -4,6 +4,7 @@ package device
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
@@ -27,6 +28,11 @@ const (
 	// PollSlack is how much earlier than its interval a poll may come
 	// without a slow_down, for network jitter between two requests.
 	PollSlack = 500 * time.Millisecond
+	// RedeemGrace is how long after it expires a code approved in time
+	// can still be redeemed, so an approval in the code's last seconds
+	// isn't lost to the wait before the app's next poll, which a network
+	// error can stretch to a minute.
+	RedeemGrace = time.Minute
 	// CodeGrace is how long a code's row stays after the code expires,
 	// before DeleteExpiredCodes deletes it (docs/retention.json
 	// server.device_codes).
@@ -38,15 +44,24 @@ const (
 	statusPending  = "pending"
 	statusApproved = "approved"
 	statusDenied   = "denied"
+	// statusTaken is a code that an account other than the one its device
+	// id belongs to tried to approve.
+	statusTaken    = "taken"
 	statusRedeemed = "redeemed"
 )
 
-// The outcomes of a poll other than a token, RFC 8628 3.5's error codes.
+// The outcomes of a poll other than a token, RFC 8628 3.5's error codes and
+// one of this server's.
 var (
 	ErrPending  = errors.New("device: authorization_pending")
 	ErrSlowDown = errors.New("device: slow_down")
 	ErrDenied   = errors.New("device: access_denied")
 	ErrExpired  = errors.New("device: expired_token")
+	// ErrTaken means an account other than the one the code's device id
+	// belongs to tried to approve the code. The id stays with its account,
+	// so the app has to sign in as a new device, with a new device id and
+	// key (D-device-account-binding).
+	ErrTaken = errors.New("device: device_taken")
 	// ErrInvalidGrant means no such device code, or its token was handed
 	// out already.
 	ErrInvalidGrant = errors.New("device: invalid_grant")
@@ -57,8 +72,9 @@ var (
 	// ErrNoCode means no live code has the user code: never issued,
 	// expired, already decided, or from before a restart.
 	ErrNoCode = errors.New("device: no code is waiting under that user code")
-	// ErrOtherAccount means the code's device is linked to another
-	// account, which keeps it (docs/spec/device-auth-v1.md section 1).
+	// ErrOtherAccount means the code's device id belongs to another
+	// account, which keeps it (docs/spec/device-auth-v1.md section 1). An
+	// approval then ends the code, and the app gets ErrTaken.
 	ErrOtherAccount = errors.New("device: the device is linked to another account")
 )
 
@@ -70,6 +86,9 @@ type Request struct {
 	OS string
 	// ClientBuild is the app's version.
 	ClientBuild string
+	// PublicKey is the device key, which the app has shown it holds. The
+	// token the code yields works only with it (D-key-at-grant).
+	PublicKey ed25519.PublicKey
 }
 
 // Code is a device authorization: the codes POST /oauth/device/code
@@ -91,9 +110,14 @@ type Pending struct {
 	OS          string
 	ClientBuild string
 	ExpiresAt   time.Time
-	// Owner is the account the device is already linked to, or "" when
-	// it is new.
+	// Owner is the account the device id belongs to, or "" when it is new.
 	Owner string
+	// Linked is set when the device is linked now, not removed, so
+	// approving the code links it again and signs out the copy of pairtime
+	// that has its token. LinkedAt and LastSeenAt are when that token was
+	// handed out and last used.
+	Linked               bool
+	LinkedAt, LastSeenAt time.Time
 }
 
 // Token is what a redeemed device code gets.
@@ -101,6 +125,9 @@ type Token struct {
 	// AccessToken is the device's ptd_ token.
 	AccessToken string
 	DeviceID    string
+	// PublicKey is the device key the code named, the only key the token
+	// works with.
+	PublicKey ed25519.PublicKey
 	// SlackID and HCASub name the account that approved the code, so the
 	// app can say whose account it is linked to: someone who got hold of
 	// a teen's code and approved it would otherwise get the teen's
@@ -113,8 +140,12 @@ type Token struct {
 const maxCodeTries = 8
 
 // NewCode records a new device authorization for r and returns its codes.
-// It checks nothing about r; the HTTP handler does.
+// It checks nothing about r but its key's length; the HTTP handler does
+// the rest, the key's signature included.
 func (s *Store) NewCode(ctx context.Context, r Request) (Code, error) {
+	if len(r.PublicKey) != ed25519.PublicKeySize {
+		return Code{}, fmt.Errorf("device: a public key is %d bytes, not %d", ed25519.PublicKeySize, len(r.PublicKey))
+	}
 	now := s.now()
 	c := Code{DeviceCode: newDeviceCode(), ExpiresAt: now.Add(CodeLifetime), Interval: Interval}
 	codeHash := tokenHash(c.DeviceCode)
@@ -136,9 +167,9 @@ func (s *Store) NewCode(ctx context.Context, r Request) (Code, error) {
 			return errors.New("device: every user code drawn was taken")
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO device_codes
-(device_code_hash, user_code_hash, device_id, os_family, client_build, status, user_id, created_at_ms, expires_at_ms, interval_s, last_poll_at_ms, decided_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, NULL, NULL)`,
-			codeHash, s.userCodeHash(user), r.DeviceID, r.OS, r.ClientBuild, statusPending,
+(device_code_hash, user_code_hash, run_id, device_id, os_family, client_build, public_key, status, user_id, created_at_ms, expires_at_ms, interval_s, last_poll_at_ms, decided_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9, $10, $11, NULL, NULL)`,
+			codeHash, s.userCodeHash(user), s.run, r.DeviceID, r.OS, r.ClientBuild, []byte(r.PublicKey), statusPending,
 			now.UnixMilli(), c.ExpiresAt.UnixMilli(), int64(Interval/time.Second)); err != nil {
 			return fmt.Errorf("device: recording the code: %w", err)
 		}
@@ -152,67 +183,84 @@ VALUES ($1, $2, $3, $4, $5, $6, NULL, $7, $8, $9, NULL, NULL)`,
 }
 
 // Lookup finds the live code the teen typed, normalized by
-// NormalizeUserCode, for the /device page to show. It returns ErrNoCode
-// when no code is waiting under it.
+// NormalizeUserCode, for the /device page to show, with whom its device
+// id belongs to and whether that device is linked now. It returns
+// ErrNoCode when no code is waiting under it.
 func (s *Store) Lookup(ctx context.Context, userCode string) (Pending, error) {
 	var (
-		p                  Pending
-		status             string
-		created, expiresMs int64
+		p           Pending
+		status, run string
+		expiresMs   int64
 	)
-	err := s.db.Read.QueryRowContext(ctx, `SELECT device_id, os_family, client_build, status, created_at_ms, expires_at_ms
-FROM device_codes WHERE user_code_hash = $1`, s.userCodeHash(userCode)).Scan(&p.DeviceID, &p.OS, &p.ClientBuild, &status, &created, &expiresMs)
+	err := s.db.Read.QueryRowContext(ctx, `SELECT device_id, os_family, client_build, status, run_id, expires_at_ms
+FROM device_codes WHERE user_code_hash = $1`, s.userCodeHash(userCode)).Scan(&p.DeviceID, &p.OS, &p.ClientBuild, &status, &run, &expiresMs)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Pending{}, ErrNoCode
 	}
 	if err != nil {
 		return Pending{}, fmt.Errorf("device: looking up a code: %w", err)
 	}
-	if status != statusPending || !s.live(created, expiresMs) {
+	if status != statusPending || !s.live(run, expiresMs) {
 		return Pending{}, ErrNoCode
 	}
 	p.UserCode = FormatUserCode(userCode)
 	p.ExpiresAt = time.UnixMilli(expiresMs)
-	err = s.db.Read.QueryRowContext(ctx, `SELECT user_id FROM devices WHERE device_id = $1`, p.DeviceID).Scan(&p.Owner)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	var (
+		removed      sql.NullInt64
+		linked, seen int64
+	)
+	err = s.db.Read.QueryRowContext(ctx, `SELECT user_id, removed_at_ms, linked_at_ms, last_seen_at_ms FROM devices WHERE device_id = $1`,
+		p.DeviceID).Scan(&p.Owner, &removed, &linked, &seen)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
 		return Pending{}, fmt.Errorf("device: looking up the code's device: %w", err)
+	case !removed.Valid:
+		p.Linked, p.LinkedAt, p.LastSeenAt = true, time.UnixMilli(linked), time.UnixMilli(seen)
 	}
 	return p, nil
 }
 
-// live reports whether a code made at created and expiring at expires
-// still works: it hasn't expired, and this process made it, since an
-// earlier one's user-code key is gone.
-func (s *Store) live(createdMs, expiresMs int64) bool {
-	return s.now().UnixMilli() < expiresMs && createdMs >= s.started.UnixMilli()
+// live reports whether a code that run made and that expires at expiresMs
+// still works: this Store made it, since another one's user-code key is
+// gone, and it hasn't expired.
+func (s *Store) live(run string, expiresMs int64) bool {
+	return run == s.run && s.now().UnixMilli() < expiresMs
 }
 
 // Decide records account's answer to the code the teen typed: approve or
-// deny. It returns ErrNoCode when no code is waiting under it any more,
-// and ErrOtherAccount, approving nothing, when the code's device is linked
-// to another account.
+// deny. It returns ErrNoCode when no code is waiting under it any more.
+// An approval of a code whose device id belongs to another account links
+// nothing: it ends the code, so the app hears at once that it has to sign
+// in as a new device, and returns ErrOtherAccount. The same answer again
+// from the same account, as from a double click, gets the first one's
+// outcome.
 func (s *Store) Decide(ctx context.Context, userCode, account string, approve bool) error {
 	nowMs := s.now().UnixMilli()
-	status := statusDenied
-	if approve {
-		status = statusApproved
-	}
 	var outcome error
 	err := s.w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
 		outcome = nil
+		status := statusDenied
+		if approve {
+			status = statusApproved
+		}
 		var (
-			codeHash, deviceID, current string
-			created, expiresMs          int64
+			codeHash, deviceID, current, run string
+			decidedBy                        sql.NullString
+			expiresMs                        int64
 		)
-		err := tx.QueryRowContext(ctx, `SELECT device_code_hash, device_id, status, created_at_ms, expires_at_ms
-FROM device_codes WHERE user_code_hash = $1`, s.userCodeHash(userCode)).Scan(&codeHash, &deviceID, &current, &created, &expiresMs)
+		err := tx.QueryRowContext(ctx, `SELECT device_code_hash, device_id, status, user_id, run_id, expires_at_ms
+FROM device_codes WHERE user_code_hash = $1`, s.userCodeHash(userCode)).Scan(&codeHash, &deviceID, &current, &decidedBy, &run, &expiresMs)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			outcome = ErrNoCode
 			return nil
 		case err != nil:
 			return fmt.Errorf("device: looking up a code: %w", err)
-		case current != statusPending || !s.live(created, expiresMs):
+		case run == s.run && current != statusPending && decidedBy.Valid && decidedBy.String == account:
+			outcome = repeated(current, approve)
+			return nil
+		case current != statusPending || !s.live(run, expiresMs):
 			outcome = ErrNoCode
 			return nil
 		}
@@ -222,8 +270,7 @@ FROM device_codes WHERE user_code_hash = $1`, s.userCodeHash(userCode)).Scan(&co
 				return err
 			}
 			if owner != "" && owner != account {
-				outcome = ErrOtherAccount
-				return nil
+				status, outcome = statusTaken, ErrOtherAccount
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE device_codes SET status = $2, user_id = $3, decided_at_ms = $4
@@ -238,7 +285,25 @@ WHERE device_code_hash = $1 AND status = $5`, codeHash, status, account, nowMs, 
 	return outcome
 }
 
-// ownerOf returns the account the device id is linked to, or "".
+// repeated is Decide's outcome when an account answers a code it answered
+// already, which is now in the state current: the first answer's outcome
+// when approve is the same answer, and ErrNoCode when the account changed
+// its mind, since a code takes one answer.
+func repeated(current string, approve bool) error {
+	switch {
+	case approve && (current == statusApproved || current == statusRedeemed):
+		return nil
+	case approve && current == statusTaken:
+		return ErrOtherAccount
+	case !approve && current == statusDenied:
+		return nil
+	}
+	return ErrNoCode
+}
+
+// ownerOf returns the account the device id belongs to, or "". A removed
+// device's row, which stays only while ingest holds something from it,
+// keeps the id with its account.
 func ownerOf(ctx context.Context, tx writer.Tx, deviceID string) (string, error) {
 	var owner string
 	err := tx.QueryRowContext(ctx, `SELECT user_id FROM devices WHERE device_id = $1`, deviceID).Scan(&owner)
@@ -253,15 +318,17 @@ func ownerOf(ctx context.Context, tx writer.Tx, deviceID string) (string, error)
 
 // Poll answers the app's token request for deviceCode (RFC 8628 3.4, 3.5):
 // the device's new token once the teen approved, or ErrPending, ErrSlowDown,
-// ErrDenied, ErrExpired or ErrInvalidGrant. A poll sooner than the code's
-// interval after the last one, less PollSlack, gets ErrSlowDown and raises
-// the code's interval by SlowDownStep for every poll after it; interval
-// returns the interval in force after this poll.
+// ErrDenied, ErrTaken, ErrExpired or ErrInvalidGrant. A poll sooner than
+// the code's interval after the last one, less PollSlack, gets ErrSlowDown
+// and raises the code's interval by SlowDownStep for every poll after it;
+// interval returns the interval in force after this poll. A code approved
+// in time can be redeemed for RedeemGrace after it expires.
 //
-// Redeeming an approved code links its device: a new device gets a row,
-// and a device its account linked before, removed or not, is linked again
-// with the new token and no key, so the app registers the key it made for
-// this login. Any token the device had stops working.
+// Redeeming an approved code links its device with the key the code named.
+// A new device id gets a row at link generation 1. A device its account
+// linked before, removed or not, is linked again: a new token, the code's
+// key, and the next link generation, while ingest's state for it stays
+// (D-local-gap). Any token it had stops working.
 func (s *Store) Poll(ctx context.Context, deviceCode string) (tok Token, interval time.Duration, err error) {
 	now := s.now()
 	nowMs := now.UnixMilli()
@@ -270,20 +337,21 @@ func (s *Store) Poll(ctx context.Context, deviceCode string) (tok Token, interva
 	var (
 		outcome         error
 		linked          string
+		key             []byte
 		slackID, hcaSub sql.NullString
 	)
 	err = s.w.Do(ctx, 2, func(ctx context.Context, tx writer.Tx) error {
-		outcome, interval, linked = nil, 0, ""
+		outcome, interval, linked, key = nil, 0, "", nil
 		slackID, hcaSub = sql.NullString{}, sql.NullString{}
 		var (
-			deviceID, osFamily, build, status string
-			account                           sql.NullString
-			created, expiresMs                int64
-			intervalS                         int64
-			lastPoll                          sql.NullInt64
+			deviceID, osFamily, build, status, run string
+			pub                                    []byte
+			account                                sql.NullString
+			expiresMs, intervalS                   int64
+			lastPoll                               sql.NullInt64
 		)
-		err := tx.QueryRowContext(ctx, `SELECT device_id, os_family, client_build, status, user_id, created_at_ms, expires_at_ms, interval_s, last_poll_at_ms
-FROM device_codes WHERE device_code_hash = $1`, codeHash).Scan(&deviceID, &osFamily, &build, &status, &account, &created, &expiresMs, &intervalS, &lastPoll)
+		err := tx.QueryRowContext(ctx, `SELECT device_id, os_family, client_build, public_key, status, user_id, run_id, expires_at_ms, interval_s, last_poll_at_ms
+FROM device_codes WHERE device_code_hash = $1`, codeHash).Scan(&deviceID, &osFamily, &build, &pub, &status, &account, &run, &expiresMs, &intervalS, &lastPoll)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			outcome = ErrInvalidGrant
@@ -296,11 +364,20 @@ FROM device_codes WHERE device_code_hash = $1`, codeHash).Scan(&deviceID, &osFam
 		case status == statusRedeemed:
 			outcome = ErrInvalidGrant
 			return nil
-		case !s.live(created, expiresMs):
+		case run != s.run:
+			// Made before a restart, whose user-code key is gone.
+			outcome = ErrExpired
+			return nil
+		case status == statusApproved && nowMs < expiresMs+RedeemGrace.Milliseconds():
+			// Redeemed below.
+		case nowMs >= expiresMs:
 			outcome = ErrExpired
 			return nil
 		case status == statusDenied:
 			outcome = ErrDenied
+			return nil
+		case status == statusTaken:
+			outcome = ErrTaken
 			return nil
 		case status == statusPending:
 			if lastPoll.Valid && nowMs-lastPoll.Int64 < (interval-PollSlack).Milliseconds() {
@@ -314,8 +391,11 @@ FROM device_codes WHERE device_code_hash = $1`, codeHash).Scan(&deviceID, &osFam
 				return fmt.Errorf("device: recording a poll: %w", err)
 			}
 			return nil
-		case status != statusApproved || !account.Valid:
+		default:
 			return fmt.Errorf("device: a device code is in the state %q", status)
+		}
+		if !account.Valid || len(pub) != ed25519.PublicKeySize {
+			return errors.New("device: an approved device code names no account or no key")
 		}
 		owner, err := ownerOf(ctx, tx, deviceID)
 		if err != nil {
@@ -324,24 +404,27 @@ FROM device_codes WHERE device_code_hash = $1`, codeHash).Scan(&deviceID, &osFam
 		switch owner {
 		case "":
 			if _, err := tx.ExecContext(ctx, `INSERT INTO devices
-(device_id, user_id, token_hash, public_key, os_family, client_build, created_at_ms, last_seen_at_ms, key_registered_at_ms, removed_at_ms)
-VALUES ($1, $2, $3, NULL, $4, $5, $6, $6, NULL, NULL)`,
-				deviceID, account.String, tokenHash(token), osFamily, build, nowMs); err != nil {
+(device_id, user_id, token_hash, public_key, os_family, client_build, linked_at_ms, last_seen_at_ms, removed_at_ms, link_generation,
+ingest_req, ingest_head_b, ingest_head_hash, ingest_head_generation, ingest_head_received_at_ms, ingest_chain_start, ingest_gaps)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $7, NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
+				deviceID, account.String, tokenHash(token), pub, osFamily, build, nowMs); err != nil {
 				return fmt.Errorf("device: linking the device: %w", err)
 			}
 		case account.String:
 			if _, err := tx.ExecContext(ctx, `UPDATE devices
-SET token_hash = $2, public_key = NULL, key_registered_at_ms = NULL, removed_at_ms = NULL, os_family = $3, client_build = $4, last_seen_at_ms = $5
+SET token_hash = $2, public_key = $3, os_family = $4, client_build = $5, linked_at_ms = $6, last_seen_at_ms = $6,
+removed_at_ms = NULL, link_generation = link_generation + 1
 WHERE device_id = $1`,
-				deviceID, tokenHash(token), osFamily, build, nowMs); err != nil {
+				deviceID, tokenHash(token), pub, osFamily, build, nowMs); err != nil {
 				return fmt.Errorf("device: linking the device again: %w", err)
 			}
 		default:
-			// Linked to another account since the teen approved.
-			if _, err := tx.ExecContext(ctx, `UPDATE device_codes SET status = $2 WHERE device_code_hash = $1`, codeHash, statusDenied); err != nil {
+			// The device id came to belong to another account between the
+			// approval and this poll.
+			if _, err := tx.ExecContext(ctx, `UPDATE device_codes SET status = $2 WHERE device_code_hash = $1`, codeHash, statusTaken); err != nil {
 				return fmt.Errorf("device: refusing the code: %w", err)
 			}
-			outcome = ErrDenied
+			outcome = ErrTaken
 			return nil
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE device_codes SET status = $2, last_poll_at_ms = $3 WHERE device_code_hash = $1`,
@@ -351,7 +434,7 @@ WHERE device_id = $1`,
 		if err := tx.QueryRowContext(ctx, `SELECT slack_id, hca_sub FROM users WHERE id = $1`, account.String).Scan(&slackID, &hcaSub); err != nil {
 			return fmt.Errorf("device: reading the approving account: %w", err)
 		}
-		linked = deviceID
+		linked, key = deviceID, pub
 		return nil
 	})
 	if err != nil {
@@ -360,7 +443,7 @@ WHERE device_id = $1`,
 	if outcome != nil {
 		return Token{}, interval, outcome
 	}
-	return Token{AccessToken: token, DeviceID: linked, SlackID: slackID.String, HCASub: hcaSub.String}, interval, nil
+	return Token{AccessToken: token, DeviceID: linked, PublicKey: ed25519.PublicKey(key), SlackID: slackID.String, HCASub: hcaSub.String}, interval, nil
 }
 
 // DeleteExpiredCodes deletes the rows of codes that expired more than

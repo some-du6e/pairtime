@@ -5,19 +5,28 @@
 // the wire format.
 //
 // An app signs in with the OAuth 2.0 Device Authorization Grant (RFC
-// 8628): it asks POST /oauth/device/code for a code, the teen types the
-// code on /device in a browser signed in with Hack Club Auth and approves,
-// and the app, polling POST /oauth/token meanwhile, gets a ptd_ device
-// token (package devtoken). It then registers the Ed25519 key that signs
-// its uploads with POST /api/v1/devices/me/key. The app never sees an HCA
-// token. /account/devices lists a person's devices and removes them, and a
-// removed device's token stops working at once.
+// 8628). It makes the Ed25519 key that will sign its uploads, asks POST
+// /oauth/device/code for a code with the key's public half, and the teen
+// types the code on /device in a browser signed in with Hack Club Auth and
+// approves. The app, polling POST /oauth/token meanwhile, gets a ptd_
+// device token (package devtoken) that works only with the key the code
+// named, so a token alone can never add or swap a key (D-key-at-grant).
+// The app never sees an HCA token. /account/devices lists a person's
+// devices and removes them, and a removed device's token stops working at
+// once.
 //
 // A device's id is the app's own ledger chain id, which the app sends with
 // its code request: receipts and day leaves name it (ledger-v1 5, 7), so
 // the server has to use the id the records carry. The ledger writer makes
 // it at random on the device, so it is an opaque key that nobody can
-// recompute (AGENTS.md).
+// recompute (AGENTS.md). The id stays with the account that linked it for
+// as long as ingest holds anything from the device; a device removed
+// before it uploaded anything frees its id at once
+// (D-device-account-binding).
+//
+// The device's row also holds ingest's state for it, the request counter
+// and the chain's head (State), so that state lives exactly as long as the
+// device does (AGENTS.md, Retention; D-device-row-chain-state).
 //
 // Tokens and device codes are stored as SHA-256 hashes, user codes as an
 // HMAC under a key that lives only in this process, and every write goes
@@ -59,7 +68,8 @@ type Device struct {
 	// Account is the users row id (users.id) of the account the device is
 	// linked to, a UUIDv7.
 	Account string
-	// PublicKey is the registered device key; nil until registered.
+	// PublicKey is the device key, which the app sent with the code that
+	// linked it. The token works only with it (D-key-at-grant).
 	PublicKey ed25519.PublicKey
 	// Revoked is set when the device was removed, or Hack Club Auth has
 	// since marked its account ineligible. Its token no longer works.
@@ -68,11 +78,14 @@ type Device struct {
 	OS string
 	// ClientBuild is the pairtime version the app reported.
 	ClientBuild string
-	// CreatedAt is when the device was linked, LastSeenAt when its token
-	// was last used (to within TouchEvery), KeyRegisteredAt when its key
-	// was registered and RemovedAt when it was removed. The last two are
-	// zero until then.
-	CreatedAt, LastSeenAt, KeyRegisteredAt, RemovedAt time.Time
+	// Generation is the device's link generation: 1 for the link that made
+	// its row, and one more each time a login linked it again with a new
+	// token (D-local-gap).
+	Generation int64
+	// LinkedAt is when its token was handed out, LastSeenAt when the token
+	// was last used (to within TouchEvery), and RemovedAt when the device
+	// was removed, zero until then.
+	LinkedAt, LastSeenAt, RemovedAt time.Time
 
 	// tokenHash is the hash of the token Authenticate found the device
 	// by, so a write made for that token can check it still holds.
@@ -84,14 +97,14 @@ var (
 	// ErrBadToken means the token isn't a well-formed ptd_ token, or its
 	// checksum doesn't match. Nothing was looked up.
 	ErrBadToken = errors.New("device: not a valid device token")
-	// ErrUnknownToken means no device has the token.
+	// ErrUnknownToken means no device has the token, as when its device
+	// was removed or linked again with a new token.
 	ErrUnknownToken = errors.New("device: no device has this token")
-	// ErrRevoked means the token's device was removed, or its account is
-	// closed to sign-in. Authenticate returns the device with Revoked set
-	// along with it.
+	// ErrRevoked means the token's account is closed to sign-in, so
+	// Authenticate returns the device with Revoked set along with it. From
+	// LoadState and SaveState, it means the device was removed or linked
+	// again with a new token since Authenticate found it.
 	ErrRevoked = errors.New("device: the device was removed")
-	// ErrKeyRegistered means the device already has another key.
-	ErrKeyRegistered = errors.New("device: the device already has a different key")
 	// ErrNoDevice means the account has no such device.
 	ErrNoDevice = errors.New("device: no such device")
 )
@@ -118,9 +131,11 @@ type Store struct {
 	// stolen copy of the database can't be searched for a live user code,
 	// and a restart ends every code in progress.
 	userKey []byte
-	// started is when this Store was made. A code from before it was made
-	// by an earlier process, whose user-code key is gone.
-	started time.Time
+	// run names this Store among every one that has used the database. A
+	// code another one made can't be used, since that Store's user-code
+	// key is gone. Comparing names rather than times keeps a clock that
+	// steps back from ending new codes.
+	run string
 }
 
 // New returns a Store.
@@ -133,7 +148,9 @@ func New(o Options) (*Store, error) {
 		s.now = time.Now
 	}
 	rand.Read(s.userKey)
-	s.started = s.now()
+	run := make([]byte, 16)
+	rand.Read(run)
+	s.run = hex.EncodeToString(run)
 	return s, nil
 }
 
@@ -157,7 +174,7 @@ func (s *Store) userCodeHash(code string) string {
 // deviceColumns are the columns scanDevice reads, from devices d joined to
 // users u.
 const deviceColumns = `d.device_id, d.user_id, d.token_hash, d.public_key, d.os_family, d.client_build,
-d.created_at_ms, d.last_seen_at_ms, d.key_registered_at_ms, d.removed_at_ms, u.verification_status`
+d.link_generation, d.linked_at_ms, d.last_seen_at_ms, d.removed_at_ms, u.verification_status`
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -166,24 +183,23 @@ type scanner interface {
 // scanDevice reads one row of deviceColumns.
 func scanDevice(row scanner) (Device, error) {
 	var (
-		d                   Device
-		key                 []byte
-		created, seen       int64
-		registered, removed sql.NullInt64
-		status              string
+		d            Device
+		token        sql.NullString
+		key          []byte
+		linked, seen int64
+		removed      sql.NullInt64
+		status       string
 	)
-	if err := row.Scan(&d.ID, &d.Account, &d.tokenHash, &key, &d.OS, &d.ClientBuild,
-		&created, &seen, &registered, &removed, &status); err != nil {
+	if err := row.Scan(&d.ID, &d.Account, &token, &key, &d.OS, &d.ClientBuild,
+		&d.Generation, &linked, &seen, &removed, &status); err != nil {
 		return Device{}, err
 	}
+	d.tokenHash = token.String
 	if len(key) == ed25519.PublicKeySize {
 		d.PublicKey = ed25519.PublicKey(key)
 	}
-	d.CreatedAt = time.UnixMilli(created)
+	d.LinkedAt = time.UnixMilli(linked)
 	d.LastSeenAt = time.UnixMilli(seen)
-	if registered.Valid {
-		d.KeyRegisteredAt = time.UnixMilli(registered.Int64)
-	}
 	if removed.Valid {
 		d.RemovedAt = time.UnixMilli(removed.Int64)
 	}
@@ -193,9 +209,10 @@ func scanDevice(row scanner) (Device, error) {
 
 // Authenticate checks a "ptd_..." token's checksum before any lookup, then
 // finds its device. A token that fails the check gets ErrBadToken, and one
-// no device has gets ErrUnknownToken. A removed device, or one whose
-// account Hack Club Auth has marked ineligible, comes back with Revoked
-// set and ErrRevoked, so a caller that checks either refuses it.
+// no device has gets ErrUnknownToken, which is what a removed device's
+// token gets too, since its row keeps no token. A device whose account
+// Hack Club Auth has marked ineligible comes back with Revoked set and
+// ErrRevoked, so a caller that checks either refuses it.
 //
 // When the device's last-seen time is older than TouchEvery, Authenticate
 // records the time, through the writer. A failure to record it doesn't
@@ -218,8 +235,8 @@ WHERE d.token_hash = $1`, tokenHash(token)))
 	if now := s.now(); now.Sub(d.LastSeenAt) >= TouchEvery {
 		nowMs := now.UnixMilli()
 		err := s.w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
-			_, err := tx.ExecContext(ctx, `UPDATE devices SET last_seen_at_ms = $2
-WHERE device_id = $1 AND last_seen_at_ms < $2`, d.ID, nowMs)
+			_, err := tx.ExecContext(ctx, `UPDATE devices SET last_seen_at_ms = $3
+WHERE device_id = $1 AND token_hash = $2 AND last_seen_at_ms < $3`, d.ID, d.tokenHash, nowMs)
 			return err
 		})
 		if err == nil {
@@ -229,62 +246,14 @@ WHERE device_id = $1 AND last_seen_at_ms < $2`, d.ID, nowMs)
 	return d, nil
 }
 
-// RegisterKey registers key as the device's Ed25519 key, once. created
-// reports whether this call registered it; registering the key the device
-// already has does nothing and returns false, so a retry after a lost
-// answer works. A different key gets ErrKeyRegistered. The device must
-// come from Authenticate and still hold the token it was found by, or the
-// call gets ErrRevoked.
-func (s *Store) RegisterKey(ctx context.Context, d Device, key ed25519.PublicKey) (created bool, err error) {
-	if len(key) != ed25519.PublicKeySize {
-		return false, fmt.Errorf("device: a public key is %d bytes, not %d", ed25519.PublicKeySize, len(key))
-	}
-	nowMs := s.now().UnixMilli()
-	var (
-		outcome error
-		did     bool
-	)
-	err = s.w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
-		outcome, did = nil, false
-		var (
-			have    []byte
-			removed sql.NullInt64
-		)
-		err := tx.QueryRowContext(ctx, `SELECT public_key, removed_at_ms FROM devices WHERE device_id = $1 AND token_hash = $2`,
-			d.ID, d.tokenHash).Scan(&have, &removed)
-		switch {
-		case errors.Is(err, sql.ErrNoRows), err == nil && removed.Valid:
-			// Linked again since, with another token, or removed.
-			outcome = ErrRevoked
-			return nil
-		case err != nil:
-			return fmt.Errorf("device: reading the device's key: %w", err)
-		case len(have) > 0 && !hmac.Equal(have, key):
-			outcome = ErrKeyRegistered
-			return nil
-		case len(have) > 0:
-			return nil
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE devices SET public_key = $3, key_registered_at_ms = $4
-WHERE device_id = $1 AND token_hash = $2 AND public_key IS NULL`, d.ID, d.tokenHash, []byte(key), nowMs); err != nil {
-			return fmt.Errorf("device: registering the key: %w", err)
-		}
-		did = true
-		return nil
-	})
-	if err != nil {
-		return false, err
-	}
-	return did, outcome
-}
-
 // List returns the devices of account, the linked ones first, newest
-// first within each group.
+// first within each group. A removed device is listed while its row
+// stays, which is only when ingest holds something from it.
 func (s *Store) List(ctx context.Context, account string) ([]Device, error) {
 	rows, err := s.db.Read.QueryContext(ctx, `SELECT `+deviceColumns+`
 FROM devices d JOIN users u ON u.id = d.user_id
 WHERE d.user_id = $1
-ORDER BY CASE WHEN d.removed_at_ms IS NULL THEN 0 ELSE 1 END, d.created_at_ms DESC, d.device_id`, account)
+ORDER BY CASE WHEN d.removed_at_ms IS NULL THEN 0 ELSE 1 END, d.linked_at_ms DESC, d.device_id`, account)
 	if err != nil {
 		return nil, fmt.Errorf("device: listing devices: %w", err)
 	}
@@ -303,10 +272,9 @@ ORDER BY CASE WHEN d.removed_at_ms IS NULL THEN 0 ELSE 1 END, d.created_at_ms DE
 	return out, nil
 }
 
-// Remove removes account's device id, so its token stops working at once.
-// The row stays until the retention job deletes it 90 days later (DESIGN
-// 4.4). Removing a device that was already removed does nothing; one the
-// account doesn't have gets ErrNoDevice.
+// Remove removes account's device id, which stops its token at once;
+// unlink says what stays of it. Removing a device that was already removed
+// does nothing; one the account doesn't have gets ErrNoDevice.
 func (s *Store) Remove(ctx context.Context, account, id string) error {
 	nowMs := s.now().UnixMilli()
 	var found bool
@@ -320,11 +288,7 @@ func (s *Store) Remove(ctx context.Context, account, id string) error {
 			return nil
 		}
 		found = true
-		if _, err := tx.ExecContext(ctx, `UPDATE devices SET removed_at_ms = $3
-WHERE device_id = $1 AND user_id = $2 AND removed_at_ms IS NULL`, id, account, nowMs); err != nil {
-			return fmt.Errorf("device: removing the device: %w", err)
-		}
-		return nil
+		return unlink(ctx, tx, nowMs, `device_id = $1 AND user_id = $2`, id, account)
 	})
 	if err != nil {
 		return err
@@ -336,14 +300,39 @@ WHERE device_id = $1 AND user_id = $2 AND removed_at_ms IS NULL`, id, account, n
 }
 
 // RemoveSelf removes the device d, which Authenticate found, for the app
-// that signs out with its own token (pairtime logout).
+// that signs out with its own token (pairtime logout). A device whose
+// account turned ineligible can remove itself too.
 func (s *Store) RemoveSelf(ctx context.Context, d Device) error {
 	nowMs := s.now().UnixMilli()
 	return s.w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
-		if _, err := tx.ExecContext(ctx, `UPDATE devices SET removed_at_ms = $3
-WHERE device_id = $1 AND token_hash = $2 AND removed_at_ms IS NULL`, d.ID, d.tokenHash, nowMs); err != nil {
-			return fmt.Errorf("device: removing the device: %w", err)
-		}
-		return nil
+		return unlink(ctx, tx, nowMs, `device_id = $1 AND token_hash = $2`, d.ID, d.tokenHash)
 	})
+}
+
+// RemoveAccount removes every device of account inside tx: package
+// accounts calls it, through accounts.Options.Ineligible, in the
+// transaction that marks an account ineligible and revokes its sessions,
+// since such an account can't sign in to remove them
+// (D-device-account-binding).
+func (s *Store) RemoveAccount(ctx context.Context, tx writer.Tx, account string, now time.Time) error {
+	return unlink(ctx, tx, now.UnixMilli(), `user_id = $1`, account)
+}
+
+// unlink removes the linked devices that where matches, with args for its
+// placeholders, at nowMs. A device ingest holds nothing from loses its
+// row, which frees its id for whichever account links it next. Any other
+// becomes a tombstone: it keeps its account and gets its removal time, but
+// no token, and its device id stays with the account until the retention
+// job deletes the row (D-device-account-binding; docs/retention.json
+// server.devices).
+func unlink(ctx context.Context, tx writer.Tx, nowMs int64, where string, args ...any) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM devices WHERE `+where+` AND removed_at_ms IS NULL AND ingest_req IS NULL`, args...); err != nil {
+		return fmt.Errorf("device: removing a device: %w", err)
+	}
+	at := fmt.Sprintf("$%d", len(args)+1)
+	if _, err := tx.ExecContext(ctx, `UPDATE devices SET removed_at_ms = `+at+`, token_hash = NULL WHERE `+where+` AND removed_at_ms IS NULL`,
+		append(args, nowMs)...); err != nil {
+		return fmt.Errorf("device: removing a device: %w", err)
+	}
+	return nil
 }

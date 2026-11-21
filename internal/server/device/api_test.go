@@ -5,8 +5,6 @@ package device_test
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -23,69 +21,37 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/writer"
 )
 
-func newKey(t *testing.T) ed25519.PrivateKey {
-	t.Helper()
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return priv
-}
-
-// registration is the body of a key registration for the device id, as
-// the app sends it.
-func registration(t *testing.T, id string, priv ed25519.PrivateKey) map[string]string {
-	t.Helper()
-	pub := base64.StdEncoding.EncodeToString(priv.Public().(ed25519.PublicKey))
-	sig := ed25519.Sign(priv, device.KeyMessage(id, pub))
-	return map[string]string{"public_key": pub, "signature": base64.StdEncoding.EncodeToString(sig)}
-}
-
-// TestDeviceAPI is the device's own API, POST /api/v1/devices/me/key and
-// /api/v1/devices/me, and /account/devices.
+// TestDeviceAPI is the device's own API, /api/v1/devices/me, and
+// /account/devices.
 func TestDeviceAPI(t *testing.T) {
 	for _, engine := range storetest.Engines() {
 		t.Run(string(engine), func(t *testing.T) {
 			tests := []struct {
 				name string
-				run  func(t *testing.T, h *harness, b *browser, tok string)
+				run  func(t *testing.T, h *harness, b *browser, linked tokenReply, key ed25519.PrivateKey)
 			}{
-				{name: "a key registers once: 201, the same key again 200, a different key 409", run: func(t *testing.T, h *harness, _ *browser, tok string) {
-					key := newKey(t)
-					for _, want := range []int{http.StatusCreated, http.StatusOK} {
-						if r := h.call(http.MethodPost, device.KeyPath, tok, registration(t, testDeviceID, key)); r.status != want {
-							t.Fatalf("registering the key answered %d: %s; want %d", r.status, r.body, want)
+				{name: "GET /api/v1/devices/me describes the device, with the key its code named", run: func(t *testing.T, h *harness, _ *browser, linked tokenReply, key ed25519.PrivateKey) {
+					r := h.call(http.MethodGet, device.MePath, linked.AccessToken, nil)
+					for _, want := range []string{`"device_id":"` + testDeviceID + `"`, `"os":"linux"`, `"client_build":"v0.1.0"`, `"public_key":"` + publicKey(key) + `"`, `"linked_at":"`, `"last_seen_at":"`} {
+						if r.status != http.StatusOK || !strings.Contains(r.body, want) {
+							t.Errorf("GET %s answered %d: %s; want %s", device.MePath, r.status, r.body, want)
 						}
 					}
-					r := h.call(http.MethodPost, device.KeyPath, tok, registration(t, testDeviceID, newKey(t)))
-					if r.status != http.StatusConflict || !strings.Contains(r.body, `"error":"key_already_registered"`) {
-						t.Errorf("a different key answered %d: %s; want 409 key_already_registered", r.status, r.body)
+				}},
+				{name: "a token alone can't set or swap the device's key: the registration endpoint is gone", run: func(t *testing.T, h *harness, _ *browser, linked tokenReply, key ed25519.PrivateKey) {
+					other := newKey(t)
+					r := h.call(http.MethodPost, device.MePath+"/key", linked.AccessToken, map[string]string{"public_key": publicKey(other), "signature": "AAAA"})
+					if r.status != http.StatusNotFound && r.status != http.StatusMethodNotAllowed {
+						t.Errorf("POST %s/key answered %d: %s; want 404 or 405", device.MePath, r.status, r.body)
 					}
-					d, err := h.store.Authenticate(context.Background(), tok)
-					if err != nil || !key.Public().(ed25519.PublicKey).Equal(d.PublicKey) || d.KeyRegisteredAt.IsZero() {
-						t.Errorf("Authenticate = %+v, %v; want the first key", d, err)
+					if d, err := h.store.Authenticate(context.Background(), linked.AccessToken); err != nil || !d.PublicKey.Equal(key.Public().(ed25519.PublicKey)) {
+						t.Errorf("Authenticate = %+v, %v; want the key the code named", d, err)
 					}
 				}},
-				{name: "a key whose signature doesn't verify is refused", run: func(t *testing.T, h *harness, _ *browser, tok string) {
-					key := newKey(t)
-					forged := registration(t, testDeviceID, key)
-					forged["public_key"] = base64.StdEncoding.EncodeToString(newKey(t).Public().(ed25519.PublicKey))
-					otherDevice := registration(t, "d_someotherdevice00000000aa", key)
-					short := registration(t, testDeviceID, key)
-					short["public_key"] = base64.StdEncoding.EncodeToString(make([]byte, 31))
-					for name, body := range map[string]map[string]string{"signed by another key": forged, "signed for another device": otherDevice, "a 31-byte key": short} {
-						if r := h.call(http.MethodPost, device.KeyPath, tok, body); r.status != http.StatusBadRequest {
-							t.Errorf("a key %s answered %d: %s; want 400", name, r.status, r.body)
-						}
-					}
-					if r := h.call(http.MethodPost, device.KeyPath, tok, registration(t, testDeviceID, key)); r.status != http.StatusCreated {
-						t.Errorf("the refusals registered something: a good key then answered %d", r.status)
-					}
-				}},
-				{name: "a request with a token that isn't valid gets 401 invalid_token, and one with none a challenge without an error (RFC 6750 3.1)", run: func(t *testing.T, h *harness, _ *browser, tok string) {
+				{name: "a request with a token that isn't valid gets 401 invalid_token, and one with none a challenge without an error (RFC 6750 3.1)", run: func(t *testing.T, h *harness, _ *browser, linked tokenReply, _ ed25519.PrivateKey) {
 					for name, c := range map[string]struct{ token, challenge string }{
 						"no token":          {"", `Bearer realm="pairtime"`},
-						"a corrupted token": {corrupt(tok), `Bearer realm="pairtime", error="invalid_token"`},
+						"a corrupted token": {corrupt(linked.AccessToken), `Bearer realm="pairtime", error="invalid_token"`},
 						"an unknown token":  {devtoken.New(), `Bearer realm="pairtime", error="invalid_token"`},
 					} {
 						r := h.call(http.MethodGet, device.MePath, c.token, nil)
@@ -94,7 +60,8 @@ func TestDeviceAPI(t *testing.T) {
 						}
 					}
 				}},
-				{name: "the account page lists the device, and Remove stops its token at once", run: func(t *testing.T, h *harness, b *browser, tok string) {
+				{name: "the account page lists the device, and Remove stops its token at once and deletes a device that never uploaded", run: func(t *testing.T, h *harness, b *browser, linked tokenReply, _ ed25519.PrivateKey) {
+					tok := linked.AccessToken
 					r := b.get(device.DevicesPath)
 					if r.status != http.StatusOK || !strings.Contains(r.body, testDeviceID) || !strings.Contains(r.body, "Linux, pairtime v0.1.0") || !strings.Contains(r.body, ">Remove</button>") {
 						t.Fatalf("GET %s answered %d:\n%s", device.DevicesPath, r.status, r.body)
@@ -112,52 +79,98 @@ func TestDeviceAPI(t *testing.T) {
 					if r := h.call(http.MethodGet, device.MePath, tok, nil); r.status != http.StatusUnauthorized {
 						t.Errorf("a removed device's token answered %d, want 401", r.status)
 					}
-					d, err := h.store.Authenticate(context.Background(), tok)
-					if !errors.Is(err, device.ErrRevoked) || !d.Revoked || d.ID != testDeviceID {
-						t.Errorf("Authenticate after Remove = %+v, %v; want the device with Revoked and ErrRevoked", d, err)
+					if _, err := h.store.Authenticate(context.Background(), tok); !errors.Is(err, device.ErrUnknownToken) {
+						t.Errorf("Authenticate after Remove = %v, want ErrUnknownToken", err)
 					}
-					if r := b.get(device.DevicesPath); !strings.Contains(r.body, "Removed ") || strings.Contains(r.body, ">Remove</button>") {
+					if n := h.count(`SELECT count(*) FROM devices`); n != 0 {
+						t.Errorf("Remove left %d device rows of a device that never uploaded", n)
+					}
+					if r := b.get(device.DevicesPath); strings.Contains(r.body, testDeviceID) || !strings.Contains(r.body, "No computer is linked yet.") {
 						t.Errorf("the page after Remove:\n%s", r.body)
 					}
 				}},
-				{name: "an account can't remove another account's device", run: func(t *testing.T, h *harness, _ *browser, tok string) {
+				{name: "Remove keeps a device that uploaded as a tombstone, which the page lists as removed", run: func(t *testing.T, h *harness, b *browser, linked tokenReply, _ ed25519.PrivateKey) {
+					h.ingest(linked.AccessToken)
+					if r := b.post(device.RemovePath, url.Values{"csrf": {b.csrf(device.DevicesPath)}, "device_id": {testDeviceID}}); r.status != http.StatusSeeOther {
+						t.Fatalf("Remove answered %d", r.status)
+					}
+					if r := h.call(http.MethodGet, device.MePath, linked.AccessToken, nil); r.status != http.StatusUnauthorized {
+						t.Errorf("a removed device's token answered %d, want 401", r.status)
+					}
+					if n := h.count(`SELECT count(*) FROM devices WHERE removed_at_ms IS NOT NULL AND token_hash IS NULL AND ingest_req IS NOT NULL`); n != 1 {
+						t.Errorf("%d tombstones keeping ingest's state and no token, want 1", n)
+					}
+					if r := b.get(device.DevicesPath); !strings.Contains(r.body, "Removed ") || strings.Contains(r.body, ">Remove</button>") || !strings.Contains(r.body, testDeviceID) {
+						t.Errorf("the page after Remove:\n%s", r.body)
+					}
+					if r := b.post(device.RemovePath, url.Values{"csrf": {b.csrf(device.DevicesPath)}, "device_id": {testDeviceID}}); r.status != http.StatusSeeOther {
+						t.Errorf("removing it again answered %d, want the same redirect", r.status)
+					}
+				}},
+				{name: "an account can't remove another account's device", run: func(t *testing.T, h *harness, _ *browser, linked tokenReply, _ ed25519.PrivateKey) {
 					other := h.signIn(verified("ident!teen2", "U0TEEN2"))
 					// other has no device, so its devices page has no form; /device
 					// carries the same session's token.
 					if r := other.post(device.RemovePath, url.Values{"csrf": {other.csrf(device.PagePath)}, "device_id": {testDeviceID}}); r.status != http.StatusNotFound {
 						t.Errorf("removing another account's device answered %d, want 404", r.status)
 					}
-					if r := h.call(http.MethodGet, device.MePath, tok, nil); r.status != http.StatusOK {
+					if r := h.call(http.MethodGet, device.MePath, linked.AccessToken, nil); r.status != http.StatusOK {
 						t.Errorf("the device's token answered %d after another account tried to remove it", r.status)
 					}
 				}},
-				{name: "DELETE /api/v1/devices/me removes the device, and its token stops working", run: func(t *testing.T, h *harness, _ *browser, tok string) {
-					if r := h.call(http.MethodDelete, device.MePath, tok, nil); r.status != http.StatusNoContent {
+				{name: "DELETE /api/v1/devices/me removes the device, and its token stops working", run: func(t *testing.T, h *harness, _ *browser, linked tokenReply, _ ed25519.PrivateKey) {
+					if r := h.call(http.MethodDelete, device.MePath, linked.AccessToken, nil); r.status != http.StatusNoContent {
 						t.Fatalf("DELETE answered %d: %s", r.status, r.body)
 					}
-					for _, path := range []string{device.MePath, device.KeyPath} {
-						method := http.MethodGet
-						if path == device.KeyPath {
-							method = http.MethodPost
-						}
-						if r := h.call(method, path, tok, registration(t, testDeviceID, newKey(t))); r.status != http.StatusUnauthorized {
-							t.Errorf("%s %s with a removed device's token answered %d, want 401", method, path, r.status)
+					for _, method := range []string{http.MethodGet, http.MethodDelete} {
+						if r := h.call(method, device.MePath, linked.AccessToken, nil); r.status != http.StatusUnauthorized {
+							t.Errorf("%s %s with a removed device's token answered %d, want 401", method, device.MePath, r.status)
 						}
 					}
 				}},
-				{name: "an account Hack Club Auth marks ineligible loses its devices", run: func(t *testing.T, h *harness, _ *browser, tok string) {
+				{name: "an account Hack Club Auth turns ineligible loses its devices in the sign-in that finds out", run: func(t *testing.T, h *harness, _ *browser, linked tokenReply, _ ed25519.PrivateKey) {
+					uploaded := h.link(h.signIn(verified("ident!teen1", "U0TEEN1")), "d_uploadeddevice000000000a")
+					h.ingest(uploaded.AccessToken)
+					gone := verified("ident!teen1", "U0TEEN1")
+					gone.VerificationStatus = "ineligible"
+					if b, _ := h.trySignIn(gone); b.signedIn() {
+						t.Fatal("an ineligible identity signed in")
+					}
+					for _, tok := range []string{linked.AccessToken, uploaded.AccessToken} {
+						if _, err := h.store.Authenticate(context.Background(), tok); !errors.Is(err, device.ErrUnknownToken) {
+							t.Errorf("Authenticate = %v, want ErrUnknownToken: the device was removed", err)
+						}
+					}
+					if n := h.count(`SELECT count(*) FROM devices`); n != 1 {
+						t.Errorf("%d device rows left; want 1, the tombstone of the device that uploaded", n)
+					}
+					if n := h.count(`SELECT count(*) FROM devices WHERE device_id = $1 AND removed_at_ms IS NOT NULL`, "d_uploadeddevice000000000a"); n != 1 {
+						t.Errorf("the device that uploaded has %d tombstones, want 1", n)
+					}
+				}},
+				{name: "a device whose account turned ineligible behind the server's back can still remove itself", run: func(t *testing.T, h *harness, _ *browser, linked tokenReply, _ ed25519.PrivateKey) {
 					if err := h.w.Do(context.Background(), 1, func(ctx context.Context, tx writer.Tx) error {
 						_, err := tx.ExecContext(ctx, `UPDATE users SET verification_status = 'ineligible'`)
 						return err
 					}); err != nil {
 						t.Fatal(err)
 					}
-					if _, err := h.store.Authenticate(context.Background(), tok); !errors.Is(err, device.ErrRevoked) {
+					if _, err := h.store.Authenticate(context.Background(), linked.AccessToken); !errors.Is(err, device.ErrRevoked) {
 						t.Errorf("Authenticate = %v, want ErrRevoked", err)
 					}
+					if r := h.call(http.MethodGet, device.MePath, linked.AccessToken, nil); r.status != http.StatusUnauthorized {
+						t.Errorf("GET %s answered %d, want 401", device.MePath, r.status)
+					}
+					if r := h.call(http.MethodDelete, device.MePath, linked.AccessToken, nil); r.status != http.StatusNoContent {
+						t.Errorf("DELETE %s answered %d, want 204", device.MePath, r.status)
+					}
+					if n := h.count(`SELECT count(*) FROM devices`); n != 0 {
+						t.Errorf("%d device rows left after the device removed itself", n)
+					}
 				}},
-				{name: "a token's use moves its device's last-seen time, at most every 5 minutes", run: func(t *testing.T, h *harness, _ *browser, tok string) {
+				{name: "a token's use moves its device's last-seen time, at most every 5 minutes", run: func(t *testing.T, h *harness, _ *browser, linked tokenReply, _ ed25519.PrivateKey) {
 					ctx := context.Background()
+					tok := linked.AccessToken
 					d0, err := h.store.Authenticate(ctx, tok)
 					if err != nil {
 						t.Fatal(err)
@@ -177,7 +190,8 @@ func TestDeviceAPI(t *testing.T) {
 				t.Run(tt.name, func(t *testing.T) {
 					h := newHarness(t, harnessConfig{engine: engine})
 					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
-					tt.run(t, h, b, h.link(b, testDeviceID).AccessToken)
+					key := newKey(t)
+					tt.run(t, h, b, h.linkWith(b, testDeviceID, key), key)
 				})
 			}
 		})

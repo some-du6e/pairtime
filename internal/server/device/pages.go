@@ -60,6 +60,19 @@ var tmpl = template.Must(template.New("device").Funcs(template.FuncMap{
 <p>Check that your terminal shows this code: <code>{{.UserCode}}</code></p>
 <p>Once it's linked, that computer uploads the minutes pairtime counts, as numbers, to this server. What you type stays on your computer.</p>
 <p>If you didn't just run <code>pairtime login</code> yourself, or the code doesn't match, choose <strong>Don't link</strong>: someone may be trying to get you to link their computer.</p>
+{{- template "decision" .}}
+{{- end}}
+
+{{- define "relink" -}}
+<h1>This computer is linked already</h1>
+<p>pairtime on <strong>{{os .OS}}</strong> (pairtime {{.ClientBuild}}) asks to be linked to your account, <strong>{{.Handle}}</strong>, as the computer <code>{{.DeviceID}}</code>. That computer has been linked to your account since {{when .LinkedAt}}, and last connected {{when .LastSeenAt}}.</p>
+<p>Check that your terminal shows this code: <code>{{.UserCode}}</code></p>
+<p>Linking it again signs that copy of pairtime out: its sign-in stops working, and only the copy that asked now uploads as that computer.</p>
+<p>If you didn't just run <code>pairtime login</code> on that computer yourself, or the code doesn't match, choose <strong>Don't link</strong>: someone may be trying to take that computer's place.</p>
+{{- template "decision" .}}
+{{- end}}
+
+{{- define "decision" -}}
 <form method="post" action="/device/decision">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input type="hidden" name="user_code" value="{{.UserCode}}">
@@ -70,8 +83,13 @@ var tmpl = template.Must(template.New("device").Funcs(template.FuncMap{
 
 {{- define "taken" -}}
 <h1>This computer is linked to another account</h1>
-<p>The pairtime app that asked is already linked to a different account on this server, so it can't be linked to yours. Nothing changed.</p>
-<p>If it's your computer and you share it, sign in as the account it's linked to, or ask whoever owns that account.</p>
+<p>The pairtime app that asked is linked to a different account on this server, which keeps its device ID while it holds what that computer uploaded. So it can't be linked to your account, <strong>{{.Handle}}</strong>, and nothing changed.</p>
+<p>If you share that computer, sign in here as the account it's linked to, and type the code again. Otherwise choose <strong>Stop pairtime login</strong>: it stops waiting and says that computer can only be linked to your account as a new device.</p>
+<form method="post" action="/device/decision">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<input type="hidden" name="user_code" value="{{.UserCode}}">
+<p><button class="button" type="submit" name="decision" value="approve">Stop pairtime login</button></p>
+</form>
 {{- end}}
 
 {{- define "done" -}}
@@ -79,6 +97,9 @@ var tmpl = template.Must(template.New("device").Funcs(template.FuncMap{
 <h1>Linked</h1>
 <p>Go back to your terminal: <code>pairtime login</code> finishes on its own within a few seconds.</p>
 <p>See and remove your linked computers on <a href="/account/devices">Your devices</a>.</p>
+{{- else if .Taken}}
+<h1>Not linked</h1>
+<p>That computer is linked to another account, so it wasn't linked to yours. <code>pairtime login</code> on it stops waiting and says what it takes to link it as a new device.</p>
 {{- else}}
 <h1>Not linked</h1>
 <p>That computer isn't linked to your account. <code>pairtime login</code> stops waiting, and pairtime keeps counting on that computer alone.</p>
@@ -95,14 +116,14 @@ var tmpl = template.Must(template.New("device").Funcs(template.FuncMap{
 {{- range .Devices}}
 <tr>
 <td>{{os .OS}}, pairtime {{.ClientBuild}}<br><code>{{.ID}}</code></td>
-<td>{{when .CreatedAt}}</td>
+<td>{{when .LinkedAt}}</td>
 <td>{{when .LastSeenAt}}</td>
 <td>{{if .Revoked}}Removed {{when .RemovedAt}}{{else}}<form method="post" action="/account/devices/remove"><input type="hidden" name="csrf" value="{{$.CSRF}}"><input type="hidden" name="device_id" value="{{.ID}}"><button type="submit">Remove</button></form>{{end}}</td>
 </tr>
 {{- end}}
 </tbody>
 </table></div>
-<p>Removing a computer stops its uploads at once. Its record stays for 90 days, as the <a href="/privacy">privacy notice</a> says, and then it's deleted.</p>
+<p>Removing a computer stops its uploads at once. A computer that never uploaded anything is deleted at once. Any other stays listed for 90 days, as the <a href="/privacy">privacy notice</a> says, and keeps its device ID with your account until then.</p>
 {{- else}}
 <p>No computer is linked yet.</p>
 {{- end}}
@@ -142,7 +163,10 @@ type pageData struct {
 	Locked bool
 	Pending
 	Approved bool
-	Devices  []Device
+	// Taken says the code's device is another account's, so nothing was
+	// linked.
+	Taken   bool
+	Devices []Device
 }
 
 // render writes the page template name with d through the layout.
@@ -257,6 +281,11 @@ func (s *Service) lookup(w http.ResponseWriter, r *http.Request, sess *accounts.
 	case p.Owner != "" && p.Owner != sess.User.ID:
 		d.Pending = p
 		s.render(w, http.StatusOK, "Linked to another account", "taken", d, sess)
+	case p.Linked:
+		// A code in the name of a computer the account has linked now,
+		// which approving would sign out (RFC 8628 5.4).
+		d.Pending = p
+		s.render(w, http.StatusOK, "Link this computer again?", "relink", d, sess)
 	default:
 		d.Pending = p
 		s.render(w, http.StatusOK, "Link this computer?", "confirm", d, sess)
@@ -307,7 +336,9 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request) {
 		d.Problem = "That code has expired, or was answered already. Run pairtime login again for a new one."
 		s.render(w, http.StatusOK, "Link the pairtime app", "enter", d, sess)
 	case errors.Is(err, ErrOtherAccount):
-		s.render(w, http.StatusOK, "Linked to another account", "taken", d, sess)
+		s.log.Info("a device code for another account's device was turned away", "user", sess.User.ID)
+		d.Taken = true
+		s.render(w, http.StatusOK, "Not linked", "done", d, sess)
 	case err != nil:
 		s.log.Error("recording a device decision", "err", err)
 		d.Problem = "Something went wrong on this pairtime server, and nothing was linked. Try again in a minute."

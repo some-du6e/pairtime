@@ -31,7 +31,6 @@ const (
 	DevicesPath  = "/account/devices"
 	RemovePath   = "/account/devices/remove"
 	MePath       = "/api/v1/devices/me"
-	KeyPath      = "/api/v1/devices/me/key"
 )
 
 // ClientID is the OAuth client id of the pairtime app, the only client of
@@ -67,6 +66,10 @@ type Config struct {
 	// Handle is the name the pages show for an account. Nil shows the
 	// Slack ID, or the HCA subject without one.
 	Handle func(*accounts.User) string
+	// SignupsOpen reports whether sign-ups are open to everyone, so that
+	// the code response can say when only an account that exists already
+	// can approve a code (pages.Signups.Open). Nil means they are open.
+	SignupsOpen func() bool
 	// Logger gets a line per link, refusal and removal. Nil discards them.
 	Logger *slog.Logger
 }
@@ -80,7 +83,9 @@ type Service struct {
 	signIn SignIn
 	site   *pages.Site
 	handle func(*accounts.User) string
-	log    *slog.Logger
+	// signups is Config.SignupsOpen, or nil.
+	signups func() bool
+	log     *slog.Logger
 	// csrfKey keys the pages' CSRF tokens. It lives only in memory, so a
 	// form from before a restart is refused and shown again.
 	csrfKey []byte
@@ -111,6 +116,7 @@ func NewService(c Config) (*Service, error) {
 		signIn:  c.SignIn,
 		site:    c.Site,
 		handle:  c.Handle,
+		signups: c.SignupsOpen,
 		log:     c.Logger,
 		csrfKey: make([]byte, 32),
 		tries:   newLimiter(maxWrongCodes, wrongCodeWindow, c.Store.now),
@@ -130,7 +136,11 @@ func (s *Service) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+RemovePath, s.remove)
 	mux.HandleFunc("GET "+MePath, s.me)
 	mux.HandleFunc("DELETE "+MePath, s.removeMe)
-	mux.HandleFunc("POST "+KeyPath, s.registerKey)
+}
+
+// signupsOpen reports whether sign-ups are open to everyone.
+func (s *Service) signupsOpen() bool {
+	return s.signups == nil || s.signups()
 }
 
 // Maintain deletes the rows of old device codes once an hour until ctx
@@ -263,8 +273,10 @@ const (
 )
 
 // authenticate finds the device of the request's bearer token, or answers
-// 401 itself and reports false (RFC 6750 3.1).
-func (s *Service) authenticate(w http.ResponseWriter, r *http.Request) (Device, bool) {
+// 401 itself and reports false (RFC 6750 3.1). With ineligible, it also
+// returns a device that Authenticate refused only because Hack Club Auth
+// has marked its account ineligible, for a request that removes it.
+func (s *Service) authenticate(w http.ResponseWriter, r *http.Request, ineligible bool) (Device, bool) {
 	tok := bearer(r)
 	if tok == "" {
 		w.Header().Set("WWW-Authenticate", challengeNoToken)
@@ -274,6 +286,8 @@ func (s *Service) authenticate(w http.ResponseWriter, r *http.Request) (Device, 
 	d, err := s.store.Authenticate(r.Context(), tok)
 	switch {
 	case err == nil:
+		return d, true
+	case ineligible && errors.Is(err, ErrRevoked) && d.ID != "" && d.RemovedAt.IsZero():
 		return d, true
 	case errors.Is(err, ErrBadToken), errors.Is(err, ErrUnknownToken), errors.Is(err, ErrRevoked):
 		w.Header().Set("WWW-Authenticate", challengeBadToken)
