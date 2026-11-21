@@ -195,6 +195,13 @@ type adapterHost struct {
 	// (parked), and parkedLive those of them that came through
 	// held.jsonl.pending, which keeps their lines meanwhile.
 	parkedN, parkedLive int
+	// For waiting: stepFrom is the earliest event time, in Unix ms, of the
+	// calls the worker's step took from queue, until it is done with them;
+	// parkedAt counts the parked calls by theirs, until each is parsed; and
+	// heldFrom is the earliest of the calls held counts that the agent
+	// could read. 0 or empty for none.
+	stepFrom, heldFrom int64
+	parkedAt           map[int64]int
 	// expireDue says the minute job has run since the worker last looked
 	// for held calls to drop (expireRun). heldDue is when the oldest call in
 	// held.jsonl or an unread .replay file will have waited heldKeep, zero
@@ -337,6 +344,7 @@ func newAdapterHost(a *agent) *adapterHost {
 		stats:     make(map[event.Harness]*harnessStats),
 		built:     make(map[event.Harness]adapters.Adapter),
 		parkedBy:  make(map[string]int),
+		parkedAt:  make(map[int64]int),
 		pendingAt: make(map[string][]inbox.Span),
 		kick:      make(chan struct{}, 1),
 		stop:      make(chan struct{}),
@@ -983,12 +991,16 @@ func (h *adapterHost) step(last bool) {
 	h.mu.Lock()
 	batch := h.queue
 	h.queue = nil
+	h.stepFrom = earliest(batch)
 	saveDue := h.saveDue
 	h.saveDue = false
 	expireDue := h.expireDue
 	h.expireDue = false
 	held := h.held
 	h.mu.Unlock()
+	// The batch's calls are parsed, parked or held by the step's end, and
+	// waiting finds those last two where they went.
+	defer h.count(func() { h.stepFrom = 0 })
 	if expireDue && !last {
 		// In every state, since calls are held longest while the agent has
 		// no keys or its writer is down.
@@ -1357,6 +1369,7 @@ func (h *adapterHost) park(c hostCall) {
 		if c.live {
 			h.parkedLive++
 		}
+		h.parkedAt[callTime(c.d)]++
 	})
 }
 
@@ -1392,6 +1405,11 @@ func (h *adapterHost) unparked(c hostCall) {
 		h.parkedN--
 		if c.live {
 			h.parkedLive--
+		}
+		if t := callTime(c.d); h.parkedAt[t] <= 1 {
+			delete(h.parkedAt, t)
+		} else {
+			h.parkedAt[t]--
 		}
 	})
 }
@@ -1765,6 +1783,7 @@ func (h *adapterHost) hold(calls []inbox.Delivery) []inbox.Delivery {
 		h.count(func() {
 			h.held++
 			h.dueByLocked(d.Received.Wall.Add(heldKeep))
+			h.heldFrom = earlier(h.heldFrom, callTime(d))
 		})
 	}
 	return nil
@@ -1913,7 +1932,7 @@ func (h *adapterHost) readReplay(name string, last bool) bool {
 	n, bad, again := 0, 0, 0
 	defer func() {
 		h.replayTaken += n
-		h.count(func() { h.held = max(h.held-n-bad-again, 0) })
+		h.count(func() { h.lessHeldLocked(n + bad + again) })
 		if n > 0 || bad > 0 || again > 0 {
 			h.a.log.Info("read the hook calls held while the ledger wasn't open", "calls", n, "bad_lines", bad, "repeated", again)
 		}
@@ -2068,7 +2087,7 @@ func (h *adapterHost) expireRun(now time.Time) {
 		h.replayAt = at // where the replay stopped, in the file as cut
 	}
 	if n > 0 {
-		h.count(func() { h.held = max(h.held-n, 0) })
+		h.count(func() { h.lessHeldLocked(n) })
 	}
 }
 
@@ -2182,7 +2201,7 @@ func heldAt(line []byte) (time.Time, bool) {
 
 // countHeld counts the calls an earlier run left held, for the status.
 func (h *adapterHost) countHeld() {
-	n := 0
+	n, from := 0, int64(0)
 	for _, name := range []string{h.a.dirs.Held() + ".replay", h.a.dirs.Held()} {
 		f, err := inbox.OpenPrivate(name, os.O_RDONLY, 0)
 		if err != nil {
@@ -2193,6 +2212,9 @@ func (h *adapterHost) countHeld() {
 			line, err := r.ReadBytes('\n')
 			if len(bytes.TrimSpace(line)) > 0 {
 				n++
+				if d, ok := h.readHeld(line); ok {
+					from = earlier(from, callTime(d))
+				}
 			}
 			if err != nil {
 				break
@@ -2200,7 +2222,71 @@ func (h *adapterHost) countHeld() {
 		}
 		f.Close()
 	}
-	h.count(func() { h.held += n })
+	h.count(func() {
+		h.held += n
+		h.heldFrom = earlier(h.heldFrom, from)
+	})
+}
+
+// lessHeldLocked counts n calls as gone from held: parsed, or dropped.
+// With none left, nothing held waits (waiting). h.mu is held.
+func (h *adapterHost) lessHeldLocked(n int) {
+	h.held = max(h.held-n, 0)
+	if h.held == 0 {
+		h.heldFrom = 0
+	}
+}
+
+// waiting reports whether a hook call made before before, in Unix ms, is
+// still to be parsed, and its records to reach the ledger writer: taken in
+// and waiting for the worker, in the step the worker is on, parked behind
+// its folder's first Track, or held in held.jsonl or a .replay file while
+// the keys or the writer weren't there. It is the adapters' part of the
+// writer's Waiting (agent.waiting), which a seal asks while the first
+// batch after a switch back online is due its mark, so it takes only mu.
+// A call counts by the time its records carry (hookpath.Times), and stays
+// counted until its records are written, so no seal falls between the two.
+func (h *adapterHost) waiting(before int64) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.stepFrom != 0 && h.stepFrom < before || h.held > 0 && h.heldFrom != 0 && h.heldFrom < before {
+		return true
+	}
+	for _, d := range h.queue {
+		if callTime(d) < before {
+			return true
+		}
+	}
+	for t := range h.parkedAt {
+		if t < before {
+			return true
+		}
+	}
+	return false
+}
+
+// callTime is the time of the records hook call d gives, in Unix ms
+// (adapters.HookRecord).
+func callTime(d inbox.Delivery) int64 { return hookpath.Times(d).Wall.UnixMilli() }
+
+// earliest is the earliest callTime of calls, 0 for none.
+func earliest(calls []inbox.Delivery) int64 {
+	from := int64(0)
+	for _, d := range calls {
+		from = earlier(from, callTime(d))
+	}
+	return from
+}
+
+// earlier is the earlier of the times a and b, where 0 is none.
+func earlier(a, b int64) int64 {
+	switch {
+	case a == 0:
+		return b
+	case b == 0:
+		return a
+	}
+	return min(a, b)
 }
 
 // readHeld reads a line of held.jsonl. Only a line this run wrote, whose

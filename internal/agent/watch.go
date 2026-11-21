@@ -48,6 +48,10 @@ func (a *agent) watchConfig() func() {
 				if filepath.Base(ev.Name) != name {
 					continue
 				}
+				// A switch back online is noted at the first look, so the
+				// records just after pairtime login count as online, and the
+				// rest waits for the reload (noteBack).
+				a.noteBack()
 				if reload == nil {
 					reload = a.sched.After("config.reload", configDebounce, func(time.Time) { a.reloadConfig() })
 				} else {

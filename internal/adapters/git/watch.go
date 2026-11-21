@@ -173,6 +173,9 @@ type Watcher struct {
 	timer    *time.Timer
 	problems map[string]string
 	closed   bool
+	// delivering is the event time of the change release took from held
+	// and is giving to Sink, in Unix ms, 0 for none (Waiting).
+	delivering int64
 }
 
 type savedState struct {
@@ -199,8 +202,11 @@ type tree struct {
 	// that was already queued or running yields nothing.
 	dropped bool
 	// scanning is set while the worker scans the worktree, so a scan of a
-	// sibling it starts (see scanSiblings) doesn't start this one again.
+	// sibling it starts (see scanSiblings) doesn't start this one again,
+	// and scanFrom is when that scan began, which the changes it finds are
+	// timed after (Waiting).
 	scanning bool
+	scanFrom time.Time
 }
 
 type pendingState struct {
@@ -320,6 +326,33 @@ func (w *Watcher) Close() error {
 	<-w.done
 	w.release(true)
 	return nil
+}
+
+// Waiting reports whether a change made before before, in Unix ms, may
+// still be on its way to Sink: held for an agent's tool event, being given
+// to Sink, or in a scan that began before then, whose changes are timed at
+// its start or later. The agent's ledger writer asks, as its seals do while
+// the first batch after a switch back online is due its mark, so that a
+// change made while config.toml said local-only reaches the ledger before
+// that batch (ledger.Options.Waiting). It takes only the watcher's lock,
+// which release never holds while it calls Sink.
+func (w *Watcher) Waiting(before int64) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.delivering != 0 && w.delivering < before {
+		return true
+	}
+	for _, h := range w.held {
+		if h.c.Event.T < before {
+			return true
+		}
+	}
+	for _, t := range w.trees {
+		if t.scanning && t.scanFrom.UnixMilli() < before {
+			return true
+		}
+	}
+	return false
 }
 
 // Problems returns what doctor should hear about.
@@ -814,7 +847,7 @@ func (w *Watcher) scan(t *tree) {
 		w.mu.Unlock()
 		return
 	}
-	t.scanning = true
+	t.scanning, t.scanFrom = true, w.now()
 	defer func() {
 		w.mu.Lock()
 		t.scanning = false
@@ -1023,9 +1056,11 @@ func (w *Watcher) release(final bool) {
 			continue
 		}
 		w.held = slices.Delete(w.held, idx, idx+1)
+		w.delivering = h.c.Event.T
 		w.mu.Unlock()
 		w.opts.Sink(h.c)
 		w.mu.Lock()
+		w.delivering = 0
 		w.deliveredLocked(h)
 		w.mu.Unlock()
 	}

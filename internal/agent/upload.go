@@ -18,6 +18,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/score"
 )
@@ -74,40 +75,118 @@ func (a *agent) online() bool {
 	return string(cfg.Mode) == modeOnline
 }
 
-// noteMode tells the ledger writer, once it is open, config.toml's mode as
-// uploads obey it (ledger.Writer.NoteMode): a record written while it is
-// local-only makes its batch local-only, even if no seal reads the file
-// before the teen switches back online. A note that comes before the
-// writer is published is kept, and publishWriter gives it to the writer,
-// so a switch to local-only while the ledger waited to open still counts
-// for the records written once it is open.
-func (a *agent) noteMode() {
-	if w := a.writer.Load(); w != nil {
-		w.NoteMode(a.online())
-		return
+// modes is config.toml's mode as uploads obey it, as the agent has seen it
+// since the ledger's start (startLedger), for the ledger writer: the
+// start's read, the config watch's notes and its first look at each change
+// (noteBack). A record made, or waiting to reach the writer, while it said
+// local-only counts as made in local-only mode (ledger.Writer.Write), and
+// the ledger may open long after the agent starts, as while a locked
+// keyring keeps it shut, so until publishWriter gives the writer to the
+// watch, modes keeps what it saw (ledger.Seen), and gives it to the writer
+// as it opens and as it is published. From then on each note goes to the
+// writer under mu, so none is lost or reordered with that hand-off.
+type modes struct {
+	mu sync.Mutex
+	w  *ledger.Writer
+	// local is set while the newest thing seen said local-only, and ended
+	// is when the newest stretch seen ended, the moment the agent saw the
+	// file back online, by Go's clock with its monotonic reading and by the
+	// OS's (os), zero before any.
+	local bool
+	ended time.Time
+	os    clock.Stamp
+}
+
+// seeLocked takes config.toml's mode, seen now. m.mu is held.
+func (m *modes) seeLocked(online bool) {
+	if online && m.local {
+		m.ended, m.os = time.Now(), clock.Now()
 	}
-	a.noteKept.Store(true)
-	// publishWriter may have stored the writer since the load, and looked
-	// for a kept note before this one was kept.
-	if w := a.writer.Load(); w != nil && a.noteKept.Swap(false) {
-		w.NoteMode(a.online())
+	m.local = !online
+}
+
+// startModes is what the ledger's start sees of config.toml's mode: every
+// install starts in local mode, and that stretch counts from here
+// (ledger.Writer.Write), so the records made before the teen's first
+// pairtime login, and those waiting meanwhile, stay on the device.
+func (a *agent) startModes() {
+	a.modes.mu.Lock()
+	a.modes.seeLocked(a.online())
+	a.modes.mu.Unlock()
+}
+
+// noteMode is the config watch's note of config.toml's mode, at its reload
+// after the editors' steps: it tells the ledger writer, once published
+// (ledger.Writer.NoteMode), and modes keeps it until then.
+func (a *agent) noteMode() {
+	online := a.online()
+	a.modes.mu.Lock()
+	defer a.modes.mu.Unlock()
+	a.modes.seeLocked(online)
+	if w := a.modes.w; w != nil {
+		w.NoteMode(online)
 	}
 }
 
-// publishWriter makes w the writer noteMode tells, and first gives it the
-// note the config watch kept while there was none, as config.toml reads
-// now, so the records written once w is published already take it. With no
-// note kept, it notes nothing: the mode the agent started in isn't noted
-// (startLedger).
+// noteBack notes config.toml back online the moment the config watch hears
+// of a change to it, before the reload's debounce: pairtime login writes
+// the whole file and renames it into place (home.WriteFile), so the first
+// look already reads it, and the records made just after the login don't
+// count as made while it said local-only. Only a switch back is noted
+// here, and only after one to local-only: a look in the middle of an
+// editor's save can read local-only, as an empty file does, but never
+// online when the saved file won't say so. A switch to local-only waits
+// for the reload, and the seals read the file meanwhile.
+func (a *agent) noteBack() {
+	if !a.online() {
+		return
+	}
+	a.modes.mu.Lock()
+	defer a.modes.mu.Unlock()
+	if !a.modes.local {
+		return
+	}
+	a.modes.seeLocked(true)
+	if w := a.modes.w; w != nil {
+		w.NoteMode(true)
+	}
+}
+
+// seen is the ledger writer's Seen: what modes saw of config.toml's mode
+// before the writer could hear the watch's notes.
+func (a *agent) seen() ledger.Seen {
+	a.modes.mu.Lock()
+	defer a.modes.mu.Unlock()
+	return a.seenLocked()
+}
+
+// seenLocked is seen, as a link the agent didn't see counts it: a record
+// made before pairtime login linked the computer was made while
+// config.toml said local, which every install starts in and pairtime
+// logout goes back to. So when the newest stretch modes saw ended before
+// the link, as when the agent started after the login, the stretch counts
+// to the end of the second the link was made in, whose time account.json
+// keeps cut to the second (D-relink-boundary). A switch back the agent saw
+// comes after the link's time, which login takes before it writes
+// config.toml, and counts as seen. a.modes.mu is held.
+func (a *agent) seenLocked() ledger.Seen {
+	s := ledger.Seen{Local: a.modes.local, Ended: a.modes.ended, OS: a.modes.os}
+	if l, err := account.Load(a.dirs.Data); err == nil && !l.LinkedAt.IsZero() && s.Ended.Before(l.LinkedAt) {
+		// The OS's clock wasn't read then.
+		s.Ended, s.OS = l.LinkedAt.Add(time.Second), clock.Stamp{}
+	}
+	return s
+}
+
+// publishWriter makes w the writer the config watch's notes go to, and
+// first gives it what modes saw since the ledger's start, so the records
+// written once it is published already count by it.
 func (a *agent) publishWriter(w *ledger.Writer) {
-	if a.noteKept.Swap(false) {
-		w.NoteMode(a.online())
-	}
+	a.modes.mu.Lock()
+	defer a.modes.mu.Unlock()
+	w.NoteSeen(a.seenLocked())
+	a.modes.w = w
 	a.writer.Store(w)
-	// A note kept between that look and the store.
-	if a.noteKept.Swap(false) {
-		w.NoteMode(a.online())
-	}
 }
 
 // reloadConfig is the config watch's reload: config.toml as the agent's
