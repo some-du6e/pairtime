@@ -9,12 +9,19 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
 	"github.com/some-du6e/pairtime/internal/agent/doctor"
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/hookpath"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
+	"github.com/some-du6e/pairtime/internal/agent/keys"
+	"github.com/some-du6e/pairtime/internal/install"
+	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/version"
 )
 
@@ -59,6 +66,19 @@ type doctorJSON struct {
 // agent answers from what it holds, so a slower answer means it's stuck.
 // Tests shorten it.
 var doctorWait = 3 * time.Second
+
+// doctorHookCalls is how many warm test calls the hook line times, after
+// one that warms the OS's caches.
+const doctorHookCalls = 3
+
+// What doctor reads of the computer, which tests replace: the hooks a
+// harness's settings hold, the round trips of test calls of the hook a
+// harness runs, and the signature of this binary.
+var (
+	doctorHooks      = readDoctorHooks
+	doctorRoundTrips = hookRoundTrips
+	doctorSignature  = doctor.OSSignature
+)
 
 func runDoctor(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
@@ -109,7 +129,21 @@ func gatherFacts(dirs home.Dirs) doctor.Facts {
 	for _, h := range adapters.Default.Harnesses() {
 		f.Adapters = append(f.Adapters, string(h))
 	}
+	f.Hooks = doctorHooks()
+	for i, h := range f.Hooks {
+		if len(h.Events) > 0 && !h.Disabled && h.ReadError == "" {
+			trips, err := doctorRoundTrips(h.Exes[0], h.Harness, doctorHookCalls)
+			if err != nil {
+				f.Hooks[i].TripError = err.Error()
+			}
+			f.Hooks[i].Trips = trips
+		}
+	}
+	f.Keystore = inspectKeystore(dirs)
+	f.Signing = binarySigning()
+	start := time.Now()
 	st, err := askStatus(dirs)
+	f.AskTook = time.Since(start)
 	switch {
 	case err == nil:
 		f.Reach, f.Agent = doctor.Reached, &st
@@ -144,4 +178,92 @@ func askStatus(dirs home.Dirs) (doctor.Status, error) {
 		return doctor.Status{}, fmt.Errorf("the agent's status didn't parse: %w", err)
 	}
 	return st, nil
+}
+
+// readDoctorHooks reads which of pairtime's hooks each harness's settings
+// hold: Claude Code's, the one harness install adds hooks to so far
+// (DESIGN 5.1). Cursor runs those too, without their arguments, and
+// pairtime ignores those calls (install.ClaudeCode).
+func readDoctorHooks() []doctor.Hooks {
+	env, err := install.DefaultEnv("")
+	if err != nil {
+		return []doctor.Hooks{{Harness: "claude_code", Title: "Claude Code", ReadError: err.Error()}}
+	}
+	var out []doctor.Hooks
+	for _, h := range install.Detect(env) {
+		if h.Item != install.ItemClaudeCode {
+			continue
+		}
+		d := doctor.Hooks{Harness: h.Name, Title: h.Title, Found: h.Found()}
+		ch, err := install.ReadClaudeHooks(env)
+		d.Settings = ch.Path
+		if err != nil {
+			d.ReadError = err.Error()
+		}
+		d.Events, d.Missing, d.Exes, d.Disabled = ch.Events, ch.Missing, ch.Exes, ch.Disabled
+		out = append(out, d)
+	}
+	return out
+}
+
+// hookRoundTrips times n warm test calls of exe's hook command for
+// harness, after one that warms the OS's caches, the way a harness runs
+// its hooks: exec form, an event on stdin, from start to exit. Each goes
+// to a hookRig, which walks the caller's parent chain as the agent does,
+// so nothing of it reaches the agent, the journal or the ledger.
+func hookRoundTrips(exe, harness string, n int) ([]time.Duration, error) {
+	r, err := newHookRig(func(pid int) []platform.Proc {
+		chain, _ := hookpath.ReadChain(pid)
+		return chain
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer r.close()
+	var trips []time.Duration
+	for i := 0; i <= n; i++ {
+		payload := fmt.Sprintf(`{"session_id":"pairtime-doctor-self-test","hook_event_name":"SessionStart","source":"startup","call":%d}`, i)
+		took, err := r.call(exe, harness, "SessionStart", payload)
+		if err != nil {
+			return nil, err
+		}
+		if i > 0 {
+			trips = append(trips, took)
+		}
+	}
+	return trips, nil
+}
+
+// inspectKeystore reads where the device key is from keystore.json alone,
+// asking no store for the key, so it brings up no keyring prompt.
+func inspectKeystore(dirs home.Dirs) doctor.Keystore {
+	st, err := keys.Inspect(dirs.Data)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return doctor.Keystore{Missing: true}
+	case err != nil:
+		return doctor.Keystore{Error: err.Error()}
+	}
+	return doctor.Keystore{Store: st.Store.Description(), Warning: st.Warning()}
+}
+
+// binarySigning is what this binary is and how the OS sees its signature.
+func binarySigning() doctor.Signing {
+	v := version.Get()
+	s := doctor.Signing{Release: releaseBuild(), Version: v.Version, Commit: v.Commit}
+	exe, err := os.Executable()
+	if err != nil {
+		s.State = "its signature couldn't be checked: " + err.Error()
+		return s
+	}
+	s.Verdict, s.State = doctorSignature(exe)
+	return s
+}
+
+// releaseBuild reports whether a release build stamped this binary:
+// release.yml sets its version to the tag and its commit with the linker
+// (internal/version). ci.yml's v0.0.0-ci and a build from a checkout don't
+// count.
+func releaseBuild() bool {
+	return strings.HasPrefix(version.Version, "v") && version.Version != "v0.0.0-ci" && version.Commit != ""
 }

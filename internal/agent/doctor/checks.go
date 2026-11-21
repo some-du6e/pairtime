@@ -42,8 +42,18 @@ type Facts struct {
 	// Version is this pairtime's own version, which the agent's may differ
 	// from until it restarts.
 	Version string
+	// AskTook is how long the agent took to answer, when it did.
+	AskTook time.Duration
 	// Adapters are the harnesses this pairtime has an adapter for, sorted.
 	Adapters []string
+	// Hooks are the harnesses pairtime can hook into, found or not, with
+	// what their settings hold of pairtime's hooks and the round trips of a
+	// test call of the hook they run.
+	Hooks []Hooks
+	// Keystore is where the device key is, from keystore.json.
+	Keystore Keystore
+	// Signing is what this binary is and how it is signed.
+	Signing Signing
 	// Now is when doctor ran.
 	Now time.Time
 }
@@ -65,8 +75,11 @@ func Checks(f Facts) []Check {
 			out = append(out, loopCheck(*s.Loop))
 		}
 	}
+	for _, h := range f.Hooks {
+		out = append(out, hookChecks(h)...)
+	}
 	out = append(out, adapterChecks(f)...)
-	out = append(out, spoolCheck(f))
+	out = append(out, signingCheck(f.Signing), keystoreCheck(f.Keystore), spoolCheck(f))
 	out = append(out, problemChecks(f)...)
 	return out
 }
@@ -85,7 +98,7 @@ func agentCheck(f Facts) Check {
 	case Down:
 		c.Result, c.Text = Fail, "isn't running, so pairtime tracks nothing. Logging in starts it, or run: pairtime agent --detach"
 	case Old:
-		c.Result, c.Text = Warn, "runs an older pairtime that can't answer doctor, so the lines that need it are skipped. It can once it restarts on this version, as it does when you next log in"
+		c.Result, c.Text = Warn, "runs an older pairtime that can't answer doctor, so the lines that need it are skipped. Run pairtime install with this one to move the agent to it"
 	case Slow:
 		c.Result, c.Text = Fail, fmt.Sprintf("didn't answer within %s, so it may be stuck. Try again in a moment", seconds(f.AskWait))
 	case Unreached:
@@ -97,10 +110,18 @@ func agentCheck(f Facts) Check {
 			return c
 		}
 		c.Result = OK
-		c.Text = fmt.Sprintf("running pairtime %s for %s, %s", text.Printable(a.Version.Version), text.Duration(float64(a.UptimeS)), modeWords(a.Mode))
+		c.Text = fmt.Sprintf("running pairtime %s for %s, %s; it answered in %s", text.Printable(a.Version.Version),
+			text.Duration(float64(a.UptimeS)), modeWords(a.Mode), Millis(f.AskTook))
+		// The agent answered over the socket or pipe that hooks use, so
+		// they reach it too.
+		if a.IPC.Via == "pipe" {
+			c.Text += ", and hooks reach it over the named pipe Windows falls back to"
+		}
 		if f.Version != "" && a.Version.Version != f.Version {
-			c.Result = Warn
-			c.Text += fmt.Sprintf(". This pairtime is %s, which the agent moves to when it restarts, as it does when you next log in", text.Printable(f.Version))
+			if c.Result == OK {
+				c.Result = Warn
+			}
+			c.Text += fmt.Sprintf(". This pairtime is %s, so the agent's lines here are of another version; run pairtime install with this one to move the agent to it", text.Printable(f.Version))
 		}
 	}
 	return c
@@ -255,6 +276,7 @@ func problemChecks(f Facts) []Check {
 		}
 	}
 	slices.Sort(keys)
+	keys = slices.DeleteFunc(keys, func(k string) bool { return k == "keystore" })
 	out := make([]Check, 0, len(keys))
 	for _, k := range keys {
 		out = append(out, Check{Name: "problem." + text.Printable(k), Result: Warn, Text: text.Printable(f.Agent.Problems[k])})
@@ -280,6 +302,15 @@ func count(n uint64, one, many string) string {
 		return "1 " + one
 	}
 	return strconv.FormatUint(n, 10) + " " + many
+}
+
+// Millis says d in milliseconds, as install's consent screen does: "under
+// 1 ms", or "23 ms".
+func Millis(d time.Duration) string {
+	if d < time.Millisecond {
+		return "under 1 ms"
+	}
+	return strconv.FormatInt(d.Round(time.Millisecond).Milliseconds(), 10) + " ms"
 }
 
 // seconds says d in seconds, such as "3 s".
