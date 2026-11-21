@@ -295,6 +295,14 @@ describe('the checks can fail', () => {
 			want: 'has the uncredited code X.absent',
 		},
 		{
+			name: "a shadow day that keeps X.agent_only is caught, since with agent_only_s it says how much another project credited",
+			problems: () => {
+				const p = dayReply('today', true).projects[0];
+				return p ? hidden('portfolio', { ...p, uncredited: { ...p.uncredited, 'X.agent_only': 120 } }, shadowHides) : [];
+			},
+			want: 'has the uncredited code X.agent_only',
+		},
+		{
 			name: 'a shadow session with its start is caught',
 			problems: () => {
 				const s = lastSession({ shadow: true }).session;

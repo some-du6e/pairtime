@@ -7,8 +7,8 @@
 // so vitest checks the arithmetic the pages show.
 //
 // While display.shadow is on, the agent leaves out every credited number,
-// every uncredited code but its own and SM 4.2's loops, and a session's
-// start and end (D-shadow-scope; the spec's Shadow). A number it leaves out
+// every uncredited code but SM 4.2's loops, and a session's start, end and
+// open (D-shadow-scope; the spec's Shadow). A number it leaves out
 // reads as 0 here and a map as {}, as the CLI reads them, and the views say
 // "calibrating".
 
