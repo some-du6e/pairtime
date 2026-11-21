@@ -204,7 +204,9 @@ type Writer struct {
 	// local is set while the mode NoteMode last noted is local-only, and
 	// taint once a record in pending came then. stretchSealed is set once
 	// a batch holding a record of the current local-only stretch is sealed.
+	// notes counts NoteMode's calls.
 	local, taint, stretchSealed bool
+	notes                       uint64
 
 	kick     chan struct{}
 	stop     chan struct{}
@@ -485,20 +487,29 @@ func (w *Writer) append(rec ledger.Record) error {
 // each time the file changes, online or local-only (Options.Online). A
 // record written while the mode noted last is local-only makes its batch
 // local-only, whatever Online says at the seal, as when the teen switches
-// back online before the next seal. The stretch's first record seals at
-// once, so its batch reaches the disk before a crash can cut the records
-// after it, and the batch sealed online after it counts as local-only too
-// (the uploader's saved.mode). The switch back online seals the stretch's
-// last records, so the records after it go in a batch of their own.
+// back online before the next seal. The switch to local-only seals what it
+// finds pending as local-only, since the watch notes it a moment after the
+// file changed, and with nothing pending the stretch's first record seals
+// at once: either way the stretch reaches the disk before a crash can cut
+// the records after it, and the batch sealed online after it counts as
+// local-only too (the uploader's saved.mode). The switch back online seals
+// the stretch's last records, so the records after it go in a batch of
+// their own. A switch back the watch misses, as to a symlinked
+// config.toml's target, ends the stretch at the next seal that reads the
+// file online.
 func (w *Writer) NoteMode(online bool) {
 	w.mu.Lock()
+	w.notes++
 	back := w.local && online
-	if !online && !w.local {
-		w.stretchSealed = false // a stretch begins
+	begins := !online && !w.local
+	if begins {
+		w.stretchSealed = false
+		w.taint = w.taint || len(w.pending) > 0
 	}
 	w.local = !online
+	seal := back || (begins && w.taint)
 	w.mu.Unlock()
-	if back {
+	if seal {
 		w.RequestSeal()
 	}
 }
@@ -617,10 +628,19 @@ func (w *Writer) RequestSeal() {
 
 // seal is Seal. w.sealMu is held.
 func (w *Writer) seal() (Batch, bool, error) {
+	w.mu.Lock()
+	notes := w.notes
+	w.mu.Unlock()
 	// A switch to local-only mode that came before the seal makes the
 	// batch local-only, whenever its records came.
 	online := w.online == nil || w.online()
 	w.mu.Lock()
+	if online && w.notes == notes {
+		// config.toml says online, and no note came since it was read: a
+		// stretch the noted mode still says is local-only ended unnoted.
+		// The batch's own records keep their taint.
+		w.local = false
+	}
 	if err := w.usable(); err != nil {
 		w.mu.Unlock()
 		return Batch{}, false, err

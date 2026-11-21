@@ -4,6 +4,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -22,6 +23,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/internal/devtoken"
@@ -359,10 +361,42 @@ func TestLedgerMode(t *testing.T) {
 			}
 		})
 	}
-	t.Run("after the config watch's reload of a switch to local-only mode, the next record seals at once, local-only", func(t *testing.T) {
+	// sealsAtOnce writes a record every 50 ms, up to 10 s, until a batch
+	// is sealed: only NoteMode's seal of a local-only stretch's first
+	// record seals one so soon, since these writers have no BATCH_S job.
+	sealsAtOnce := func(t *testing.T, w func() *ledger.Writer, dirs home.Dirs) []ledger.Row {
+		t.Helper()
+		for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			if lw := w(); lw != nil {
+				record(t, lw)
+			}
+			if got := rows(t, dirs); len(got) > 0 {
+				return got
+			}
+		}
+		return nil
+	}
+	t.Run("the ledger's start notes config.toml's mode, so in local-only mode the first record seals at once, local-only", func(t *testing.T) {
+		dir := t.TempDir()
+		dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+		if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \"local\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}, table: newestTable(), keyStores: []keys.Store{}}
+		t.Cleanup(a.startLedger())
+		if got := sealsAtOnce(t, a.writer.Load, dirs); len(got) != 1 || got[0].Online {
+			t.Errorf("rows %+v, want one local-only batch sealed at once", got)
+		}
+	})
+	t.Run("the config watch tells the writer of a switch to local-only mode, after which the next record seals at once, local-only", func(t *testing.T) {
 		a, w, dirs := open(t, str("mode = \"online\"\n"))
+		ctx, cancel := context.WithCancel(context.Background())
+		a.sched = sched.New()
+		go a.sched.Run(ctx)
+		t.Cleanup(cancel)
 		a.writer.Store(w)
 		a.noteMode() // as the ledger's start does
+		t.Cleanup(a.watchConfig())
 		record(t, w)
 		time.Sleep(200 * time.Millisecond)
 		if got := rows(t, dirs); len(got) != 0 {
@@ -371,14 +405,8 @@ func TestLedgerMode(t *testing.T) {
 		if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \"local\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		a.reloadConfig()
-		record(t, w)
-		deadline := time.Now().Add(10 * time.Second)
-		for len(rows(t, dirs)) == 0 && time.Now().Before(deadline) {
-			time.Sleep(25 * time.Millisecond)
-		}
-		if got := rows(t, dirs); len(got) != 1 || got[0].Online || got[0].N != 2 {
-			t.Errorf("rows %+v, want one local-only batch of both records", got)
+		if got := sealsAtOnce(t, func() *ledger.Writer { return w }, dirs); len(got) != 1 || got[0].Online {
+			t.Errorf("rows %+v, want one local-only batch sealed at once", got)
 		}
 	})
 }

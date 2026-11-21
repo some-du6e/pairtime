@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -164,6 +165,9 @@ func TestKillKeepsModes(t *testing.T) {
 				return strings.Contains(r.doctor(), "stopped uploading")
 			})
 			r.drain()
+			// Stopped, the uploader's place is the test's to read.
+			r.u.Close()
+			place := r.u.st
 			r.f.mu.Lock()
 			defer r.f.mu.Unlock()
 			checks := []struct {
@@ -172,12 +176,13 @@ func TestKillKeepsModes(t *testing.T) {
 			}{
 				{"no root of the batch sealed in local-only mode went, nor of a batch after it", r.f.head.b == 3 && r.f.rows[4].b == 0 && r.f.rows[5].b == 0},
 				{"no minute of that batch went, nor of the online batch that closed its run", r.minutesIn(r.f, 45, 74) == 0},
-				{"the uploader says the roots stop at the batch, with the online batch after it in its run", r.u.Status().Stopped == 4},
+				{"the online batch sealed after the local-only one closed its run, itself in it", slices.Contains(place.Gaps, gap{4, 5}) && place.LocalFrom == 0},
+				{"the uploader says the roots stop at the batch", r.u.Status().Stopped == 4},
 			}
 			for _, ch := range checks {
 				t.Run(ch.name, func(t *testing.T) {
 					if !ch.ok {
-						t.Errorf("no: the server holds head %d and %d minutes; the uploader says %+v", r.f.head.b, len(r.f.buckets), r.u.Status())
+						t.Errorf("no: the server holds head %d and %d minutes; the uploader says %+v, with gaps %v and local from %d", r.f.head.b, len(r.f.buckets), r.u.Status(), place.Gaps, place.LocalFrom)
 					}
 				})
 			}

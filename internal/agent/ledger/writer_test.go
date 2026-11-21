@@ -560,14 +560,18 @@ func TestSealMode(t *testing.T) {
 
 // TestNoteMode checks the mode the agent's config watch notes
 // (Writer.NoteMode): a record written while it says local-only makes its
-// batch local-only, though Online says online at the seal, as when the teen
-// switches back online before the next seal; the stretch's first record
-// seals at once, so a crash after it can't take the switch with it; and the
-// switch back online seals what the stretch left.
+// batch local-only, though config.toml says online by the seal; the switch
+// seals what it finds pending at once, and with nothing pending the
+// stretch's first record does, so a crash after it can't take the switch
+// with it; the switch back online seals what the stretch left; and a
+// switch back the watch misses ends the stretch at the next seal that reads
+// the file online.
 func TestNoteMode(t *testing.T) {
-	// A step notes a mode ("local", "online"), writes a record ("write"),
-	// seals ("seal"), or waits for the batch a seal of the writer's own
-	// sealed ("sealed").
+	// A step changes config.toml ("file-local", "file-online"), notes the
+	// mode as the config watch does ("local", "online"), writes a record
+	// ("write"), seals ("seal"), waits for the batch a seal of the writer's
+	// own sealed ("sealed"), or gives one that shouldn't come time to
+	// ("pause").
 	cases := []struct {
 		name  string
 		steps []string
@@ -576,22 +580,28 @@ func TestNoteMode(t *testing.T) {
 		online  []bool
 		records []int
 	}{
-		{"a record written while the noted mode is local-only seals at once, with the records before it, and its batch is local-only",
-			[]string{"write", "local", "write", "sealed"}, []bool{false}, []int{2}},
-		{"the switch back online seals the stretch's last records, and the records after it go online",
-			[]string{"local", "write", "sealed", "write", "online", "sealed", "write", "seal"}, []bool{false, false, true}, []int{1, 1, 1}},
-		{"only the stretch's first record seals at once",
-			[]string{"local", "write", "sealed", "write", "write", "seal"}, []bool{false, false}, []int{1, 2}},
+		{"records pending at a switch to local-only mode seal at once, local-only",
+			[]string{"write", "file-local", "local", "sealed"}, []bool{false}, []int{1}},
+		{"with nothing pending, the stretch's first record seals at once, local-only",
+			[]string{"file-local", "local", "write", "sealed"}, []bool{false}, []int{1}},
+		{"only the stretch's first seal comes at once",
+			[]string{"file-local", "local", "write", "sealed", "write", "write", "pause", "seal"}, []bool{false, false}, []int{1, 2}},
+		{"a record written in the stretch makes its batch local-only though config.toml says online by the seal the switch back makes",
+			[]string{"file-local", "local", "write", "sealed", "write", "file-online", "online", "sealed", "write", "seal"}, []bool{false, false, true}, []int{1, 1, 1}},
+		{"a switch back the config watch misses ends the stretch at the next seal that reads config.toml online",
+			[]string{"file-local", "local", "write", "sealed", "write", "file-online", "seal", "write", "seal"}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"a switch with no record written in it leaves the next batch online",
 			[]string{"local", "online", "write", "seal"}, []bool{true}, []int{1}},
 		{"a second stretch's first record seals at once too",
-			[]string{"local", "write", "sealed", "online", "write", "seal", "local", "write", "sealed"}, []bool{false, true, false}, []int{1, 1, 1}},
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "file-local", "local", "write", "sealed"}, []bool{false, true, false}, []int{1, 1, 1}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			var file atomic.Bool // config.toml says online
+			file.Store(true)
 			sealed := make(chan Batch, 8)
 			w := open(t, t.TempDir(), newClock(testT), func(o *Options) {
-				o.Online = func() bool { return true } // config.toml reads online at every seal
+				o.Online = file.Load
 				o.Sealed = func(b Batch) { sealed <- b }
 			})
 			rng := rand.New(rand.NewPCG(9, 10))
@@ -607,6 +617,8 @@ func TestNoteMode(t *testing.T) {
 			}
 			for i, step := range c.steps {
 				switch step {
+				case "file-local", "file-online":
+					file.Store(step == "file-online")
 				case "local", "online":
 					w.NoteMode(step == "online")
 				case "write":
@@ -622,6 +634,13 @@ func TestNoteMode(t *testing.T) {
 					take()
 				case "sealed":
 					take()
+				case "pause":
+					time.Sleep(200 * time.Millisecond)
+					select {
+					case b := <-sealed:
+						t.Fatalf("step %d: batch %d was sealed meanwhile", i, b.Row.B)
+					default:
+					}
 				}
 			}
 			select {
