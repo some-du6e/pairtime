@@ -253,21 +253,24 @@ func (c *carry) fold(ev event.Event, g runGaps) {
 // a record within the gap of the one before carries the run on, and the
 // first one past it ends the run for good. A tool call belongs to the turn
 // running at its time, Prompt's until its stop; an output or a stop to its
-// own turn key. Records after the turn's stop don't count, and a record
-// folded out of turn, earlier than the run's latest, changes nothing.
+// own turn key. The turn's stop ends the turn, after a cut too. Records
+// after the stop don't count, and a record folded out of turn, earlier
+// than the run's latest, changes nothing.
 func (s *sessionCarry) ran(ev event.Event, key string, tool bool, g runGaps) {
-	if s.Prompt == nil || s.Cut || s.Stopped || recordCmp(&ev, s.Prompt) < 0 || (!tool && key != turnKey(s.Prompt)) {
+	if s.Prompt == nil || s.Stopped || recordCmp(&ev, s.Prompt) < 0 || (!tool && key != turnKey(s.Prompt)) {
 		return
 	}
-	last := s.Prompt.T
-	if s.Agent != nil {
-		last = s.Agent.T
+	if !s.Cut {
+		last := s.Prompt.T
+		if s.Agent != nil {
+			last = s.Agent.T
+		}
+		if ev.T-last > g.of(s.Native) {
+			s.Cut = true
+		} else {
+			s.Agent = latest(s.Agent, ev)
+		}
 	}
-	if ev.T-last > g.of(s.Native) {
-		s.Cut = true
-		return
-	}
-	s.Agent = latest(s.Agent, ev)
 	if _, stop := ev.Data.(*event.AgentStop); stop {
 		s.Stopped = true
 	}

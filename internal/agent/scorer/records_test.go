@@ -372,6 +372,25 @@ func TestCarryRuns(t *testing.T) {
 			},
 		},
 		{
+			name: "the turn's stop ends it after a silence cut its run, so the session's records, a continuation's among them, go back to the usual dating",
+			fold: []event.Event{
+				prompt(0, 1, "t_1"), tool(h, 2), tool(3*h+10*m, 3),
+				via(event.ViaHook, ev(4*h, 4, "s_1", &event.AgentStop{TurnKey: "t_1"})),
+				via(event.ViaHook, ev(5*h, 5, "s_1", &event.AgentOutput{TurnKey: "t_1b"})),
+			},
+			from: 10 * h,
+			check: func(t *testing.T, c *carry, s *sessionCarry) {
+				if !s.Cut || !s.Stopped || s.running() {
+					t.Fatalf("session carry %+v, want the cut turn stopped", s)
+				}
+				for seq, at := range dated(c, 10*h) {
+					if at != 9*h {
+						t.Errorf("record %d is dated %d, want carryGraceMS before the window", seq, at)
+					}
+				}
+			},
+		},
+		{
 			name: "a later prompt of another turn starts a run of its own",
 			fold: []event.Event{prompt(0, 1, "t_1"), tool(h, 2), tool(4*h, 3), prompt(5*h, 4, "t_2")},
 			from: 5*h + 30*m,
