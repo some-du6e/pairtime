@@ -12,7 +12,8 @@
 #
 #   image: ghcr.io/some-du6e/pairtimed:sha-<commit>@sha256:<digest>
 #
-# It runs on pushes to main that change the server, and by hand:
+# It runs on pushes to main that change a file the image is built from, and
+# by hand:
 #
 #   gh workflow run server-image.yml --ref main
 name: server-image
@@ -20,10 +21,31 @@ name: server-image
 on:
   push:
     branches: [main]
+    # Every file the image is built from. tools/ci's TestServerImagePaths
+    # walks pairtimed's imports for both Linux targets, and the notices
+    # tool's, and fails when a Go file they compile, or a file they embed,
+    # is under none of these.
     paths:
       - cmd/pairtimed/**
       - internal/server/**
       - deploy/**
+      # The packages outside internal/server that pairtimed imports.
+      # docs/embed.go embeds docs/retention.json, which /privacy and the
+      # retention jobs read, and pkg/params embeds the parameter tables.
+      - docs/embed.go
+      - docs/retention.json
+      - internal/devtoken/**
+      - internal/version/**
+      - pkg/event/**
+      - pkg/ledger/**
+      - pkg/params/**
+      # The patched BurntSushi/toml that go.mod's replace builds in.
+      - third_party/burntsushi-toml/**
+      # tools/release notices writes the image's THIRD_PARTY_NOTICES.txt,
+      # and the image carries LICENSE.
+      - tools/release/**
+      - internal/release/**
+      - LICENSE
       - Dockerfile.pairtimed
       - go.mod
       - go.sum

@@ -10,7 +10,7 @@ This notice covers the pairtime server at {{.BaseURL}} and the pairtime program 
 ## The short version
 
 - Your prompts, your code, your file names and your window titles stay on your computer, unless you submit hours: then a few prompts, and the agent replies they answered, go to the program's reviewers.
-- This server gets your Hack Club identity and email address, the IP address each upload comes from, and numbers: for every 15 seconds you work, how many were credited, to which project (as a key, not its name), what kind of work it was, and why the rest weren't.
+- This server gets your Hack Club identity, first name and email address, the IP address each upload comes from, and numbers: for every 15 seconds you work, how many were credited, to which project (as a key, not its name), what kind of work it was, and why the rest weren't.
 - Nothing about you is public until you choose what to show.
 - Hours are checked for fraud only when you submit them to a program.
 - Every kind of data has a time limit, listed under [How long we keep things](#how-long-we-keep-things). Deleted data is gone from the server's backups too within {{days "server.db_snapshots"}}.
@@ -56,7 +56,7 @@ Each upload also shows this server the IP address it came from. Cloudflare, whic
 
 Some things reach the server only at particular moments:
 
-- **Sign-in.** When you sign in with Hack Club Auth, the server gets your Hack Club Auth ID, your Slack ID, your email address, and whether Hack Club has verified you. It stores your email encrypted.
+- **Sign-in.** When you sign in with Hack Club Auth, the server gets your Hack Club Auth ID, your Slack ID, your email address, your name, and whether Hack Club has verified you. It stores your email encrypted. Of your name it keeps only your first name, and only with that sign-in, so its pages can show who you're signed in as. It never stores your full name or your last name, and your first name goes when that sign-in's record does, as [How long we keep things](#how-long-we-keep-things) says.
 - **A new computer.** When you link a computer with `pairtime login`, it sends this server the random device ID pairtime made for it when it was installed, its OS family and pairtime version, and the public half of the key that signs its uploads. The server keeps them with a hash of the computer's sign-in token, when you linked it, when it last connected and how many times it has been linked, and how far its uploads have got: the number of its last upload, the number, hash and arrival time of the last batch root it sent, the batch its record starts at, and the numbers of any batches it kept to itself in local-only mode between two sign-ins. Those batches themselves never reach the server.
 - **A new project.** When pairtime first sees a git repository, it sends the ID of the repository's first commit. The server turns that into a keyed hash and throws the ID away. It gets the repository's address only if the repository is public, you publish the project, or you install pairtime's GitHub App on it.
 - **Programs.** When you connect a project to a program, the server stores keyed hashes of the Hackatime project names you choose to link. From then until you unlink the program, it can read, for the projects you linked: your credited time, with the start and end time of each stretch, which includes the time of day your public profile never shows; your totals and how much of them is at each evidence level, for any dates; your username and IDs; and your email address, if you allow it.

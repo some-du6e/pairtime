@@ -37,9 +37,13 @@ var tmpl = template.Must(template.New("device").Funcs(template.FuncMap{
 <p><a href="/">About pairtime</a></p>
 {{- end}}
 
+{{- define "account" -}}
+<strong>{{if .ID}}<bdi>{{.Name}}</bdi> ({{.ID}}){{else}}{{.Name}}{{end}}</strong>
+{{- end}}
+
 {{- define "enter" -}}
 <h1>Link the pairtime app</h1>
-<p>Type the code that <code>pairtime login</code> shows in your terminal, to link that computer to your account, <strong>{{.Handle}}</strong>.</p>
+<p>Type the code that <code>pairtime login</code> shows in your terminal, to link that computer to your account, {{template "account" .Account}}.</p>
 {{- with .Problem}}
 <blockquote><p>{{.}}</p></blockquote>
 {{- end}}
@@ -56,7 +60,7 @@ var tmpl = template.Must(template.New("device").Funcs(template.FuncMap{
 
 {{- define "confirm" -}}
 <h1>Link this computer?</h1>
-<p>pairtime on <strong>{{os .OS}}</strong> (pairtime {{.ClientBuild}}) asks to be linked to your account, <strong>{{.Handle}}</strong>.</p>
+<p>pairtime on <strong>{{os .OS}}</strong> (pairtime {{.ClientBuild}}) asks to be linked to your account, {{template "account" .Account}}.</p>
 <p>Check that your terminal shows this code: <code>{{.UserCode}}</code></p>
 <p>Once it's linked, that computer uploads the minutes pairtime counts, as numbers, to this server. What you type stays on your computer.</p>
 <p>If you didn't just run <code>pairtime login</code> yourself, or the code doesn't match, choose <strong>Don't link</strong>: someone may be trying to get you to link their computer.</p>
@@ -65,7 +69,7 @@ var tmpl = template.Must(template.New("device").Funcs(template.FuncMap{
 
 {{- define "relink" -}}
 <h1>This computer is linked already</h1>
-<p>pairtime on <strong>{{os .OS}}</strong> (pairtime {{.ClientBuild}}) asks to be linked to your account, <strong>{{.Handle}}</strong>, as the computer <code>{{.DeviceID}}</code>. That computer has been linked to your account since {{when .LinkedAt}}, and last connected {{when .LastSeenAt}}.</p>
+<p>pairtime on <strong>{{os .OS}}</strong> (pairtime {{.ClientBuild}}) asks to be linked to your account, {{template "account" .Account}}, as the computer <code>{{.DeviceID}}</code>. That computer has been linked to your account since {{when .LinkedAt}}, and last connected {{when .LastSeenAt}}.</p>
 <p>Check that your terminal shows this code: <code>{{.UserCode}}</code></p>
 <p>Linking it again signs that copy of pairtime out: its sign-in stops working, and only the copy that asked now uploads as that computer.</p>
 <p>If you didn't just run <code>pairtime login</code> on that computer yourself, or the code doesn't match, choose <strong>Don't link</strong>: someone may be trying to take that computer's place.</p>
@@ -83,7 +87,7 @@ var tmpl = template.Must(template.New("device").Funcs(template.FuncMap{
 
 {{- define "taken" -}}
 <h1>This computer is linked to another account</h1>
-<p>The pairtime app that asked is linked to a different account on this server, which keeps its device ID while it holds what that computer uploaded. So it can't be linked to your account, <strong>{{.Handle}}</strong>, and nothing changed.</p>
+<p>The pairtime app that asked is linked to a different account on this server, which keeps its device ID while it holds what that computer uploaded. So it can't be linked to your account, {{template "account" .Account}}, and nothing changed.</p>
 <p>If you share that computer, sign in here as the account it's linked to, and type the code again. Otherwise choose <strong>Stop pairtime login</strong>: it stops waiting and says that computer can only be linked to your account as a new device.</p>
 <form method="post" action="/device/decision">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
@@ -108,7 +112,7 @@ var tmpl = template.Must(template.New("device").Funcs(template.FuncMap{
 
 {{- define "devices" -}}
 <h1>Your devices</h1>
-<p>The computers linked to your account, <strong>{{.Handle}}</strong>. To link another one, run <code>pairtime login</code> on it.</p>
+<p>The computers linked to your account, {{template "account" .Account}}. To link another one, run <code>pairtime login</code> on it.</p>
 {{- if .Devices}}
 <div class="table"><table>
 <thead><tr><th>Computer</th><th>Linked</th><th>Last connected</th><th></th></tr></thead>
@@ -152,10 +156,37 @@ func when(t time.Time) string {
 	return t.UTC().Format("2006-01-02 15:04") + " UTC"
 }
 
+// accountName is how the pages name the account a session is signed in
+// to.
+type accountName struct {
+	// Name is the display name of the session's sign-in, or the account's
+	// handle without one.
+	Name string
+	// ID is "Slack ID <id>", or "Hack Club Auth ID <sub>" for an account
+	// without a Slack ID, shown beside a display name, so the reader can
+	// check that the account is theirs: anyone can pick a name, but not a
+	// Slack ID. It is "" when Name is the handle already.
+	ID string
+}
+
+// nameOf names the account sess is signed in to (D-display-name).
+func (s *Service) nameOf(sess *accounts.Session) accountName {
+	if sess.DisplayName == "" {
+		return accountName{Name: s.handle(&sess.User)}
+	}
+	n := accountName{Name: sess.DisplayName, ID: "Slack ID " + sess.User.SlackID}
+	if sess.User.SlackID == "" {
+		n.ID = "Hack Club Auth ID " + sess.User.HCASub
+	}
+	return n
+}
+
 // pageData is what the page templates read.
 type pageData struct {
-	Handle string
-	CSRF   string
+	// Account names the signed-in account, where a page checks whose it
+	// is.
+	Account accountName
+	CSRF    string
 	// Typed is the code as typed, refilled after a mistake.
 	Typed   string
 	Problem string
@@ -179,7 +210,7 @@ func (s *Service) render(w http.ResponseWriter, status int, title, name string, 
 	}
 	p := pages.Page{Title: title, Body: template.HTML(body.String()), Form: true}
 	if sess != nil {
-		p.Account = &pages.Header{SignedIn: true, Handle: s.handle(&sess.User), Login: auth.LoginPath, Logout: auth.LogoutPath}
+		p.Account = &pages.Header{SignedIn: true, Handle: s.nameOf(sess).Name, Login: auth.LoginPath, Logout: auth.LogoutPath}
 	}
 	s.site.WritePage(w, status, p)
 }
@@ -198,7 +229,7 @@ func (s *Service) session(w http.ResponseWriter, r *http.Request, returnTo strin
 		if !errors.Is(err, accounts.ErrNoSession) {
 			s.log.Error("reading a session for a device page", "err", err)
 		}
-		http.Redirect(w, r, auth.LoginPath+"?return_to="+url.QueryEscape(returnTo), http.StatusSeeOther)
+		http.Redirect(w, r, pages.LoginURL(auth.LoginPath, returnTo), http.StatusSeeOther)
 		return nil
 	}
 	return sess
@@ -413,7 +444,7 @@ func (s *Service) remove(w http.ResponseWriter, r *http.Request) {
 
 // data is what every signed-in page reads.
 func (s *Service) data(r *http.Request, sess *accounts.Session) *pageData {
-	return &pageData{Handle: s.handle(&sess.User), CSRF: s.csrfToken(r)}
+	return &pageData{Account: s.nameOf(sess), CSRF: s.csrfToken(r)}
 }
 
 // limiter counts wrong codes per account over fixed windows.

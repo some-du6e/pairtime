@@ -48,8 +48,10 @@ type tokenReply struct {
 	// PublicKey is the device key the code named, in base64: the token
 	// works only with it (D-key-at-grant).
 	PublicKey string `json:"public_key"`
-	// Account names the account that approved the code, as the pages
-	// show it, so pairtime login can say whose account it is linked to.
+	// Account names the account that approved the code by its handle, the
+	// Slack ID the pages show beside a display name, so pairtime login can
+	// say whose account it is linked to. A display name stays with the
+	// browser's session (D-display-name).
 	Account string `json:"account"`
 }
 
