@@ -11,6 +11,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/device"
 	"github.com/some-du6e/pairtime/internal/server/ingest"
 	"github.com/some-du6e/pairtime/internal/server/ops"
+	"github.com/some-du6e/pairtime/internal/server/rollup"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 )
@@ -34,9 +35,9 @@ func newIngest(cfg *config.Config, db *store.DB, w *writer.Writer, devices *devi
 	} else {
 		o.Key = keys.Server
 	}
-	// TODO(WP-SV7): o.Rollup is rollup.Apply, converting each
-	// event.MinuteBucket b with rollup.FromEvent(account, b, b.AgentOnly),
-	// once package rollup merges.
+	// Every bucket revision ingest stores moves the owner's rollups in the
+	// same writer transaction (WP-SV7).
+	o.Rollup = rollup.ApplyEvent
 	s := ingest.New(o)
 	if !s.On() {
 		logger.Info("ingest is off until the server key is there; GET /api/v1/time still answers")

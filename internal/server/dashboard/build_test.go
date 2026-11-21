@@ -3,6 +3,7 @@
 package dashboard
 
 import (
+	"encoding/json"
 	"math"
 	"reflect"
 	"strings"
@@ -102,7 +103,7 @@ func TestBuild(t *testing.T) {
 			},
 		},
 		{
-			name: "projects go by the owner's time over the month, then the agent's, then their keys",
+			name: "projects go by the owner's time over the month, then the agent's, then their ids",
 			rows: []Row{
 				you("2026-11-01", "p-small", "prompting", "A", 60),
 				you("2026-11-20", "p-big", "prompting", "A", 600),
@@ -114,7 +115,7 @@ func TestBuild(t *testing.T) {
 			check: func(t *testing.T, v View) {
 				var got []string
 				for _, p := range v.Projects {
-					got = append(got, p.Key)
+					got = append(got, p.ID)
 				}
 				want := []string{"p-big", "p-small", "p-agent-more", "p-agent-less", "p-tie-a", "p-tie-b"}
 				if !reflect.DeepEqual(got, want) {
@@ -126,7 +127,7 @@ func TestBuild(t *testing.T) {
 			},
 		},
 		{
-			name: "a project is called by its name, or by its key without one, and agent time without a project is No project",
+			name: "a project is called by its name, or by its id without one, and agent time without a project is No project",
 			meta: func(m *Meta) { m.Names = map[string]string{"p1": "chip8-emulator", "p2": ""} },
 			rows: []Row{
 				you("2026-11-20", "p1", "prompting", "A", 600),
@@ -135,9 +136,22 @@ func TestBuild(t *testing.T) {
 				agent("2026-11-20", "", 300),
 			},
 			check: func(t *testing.T, v View) {
-				want := []Project{{Key: "p1", Name: "chip8-emulator"}, {Key: "p2", Name: "p2"}, {Key: "p3", Name: "p3"}, {Key: "", Name: "No project"}}
+				want := []Project{{ID: "p1", Keys: []string{}, Name: "chip8-emulator"}, {ID: "p2", Keys: []string{}, Name: "p2"}, {ID: "p3", Keys: []string{}, Name: "p3"}, {ID: "", Keys: []string{}, Name: "No project"}}
 				if !reflect.DeepEqual(v.Projects, want) {
 					t.Errorf("projects %+v, want %+v", v.Projects, want)
+				}
+			},
+		},
+		{
+			name: "a project lists its device keys, and the view says whether each device's keys are projects of their own",
+			meta: func(m *Meta) {
+				m.Keys = map[string][]string{"p1": {"g_laptop", "g_desktop"}}
+				m.SplitByDevice = true
+			},
+			rows: []Row{you("2026-11-20", "p1", "prompting", "A", 600)},
+			check: func(t *testing.T, v View) {
+				if len(v.Projects) != 1 || !reflect.DeepEqual(v.Projects[0].Keys, []string{"g_laptop", "g_desktop"}) || !v.SplitByDevice {
+					t.Errorf("projects %+v, split by device %v; want p1 with both keys, split", v.Projects, v.SplitByDevice)
 				}
 			},
 		},
@@ -197,6 +211,18 @@ func TestBuild(t *testing.T) {
 				}
 				if levels != 120 || kinds != 120 || v.Week.You.Total() != 120 || v.Week.Agent.Total() != 3000 {
 					t.Errorf("levels %v, kinds %v, you %v, agent %v; want 120, 120, 120 and 3000", levels, kinds, v.Week.You.Total(), v.Week.Agent.Total())
+				}
+			},
+		},
+		{
+			name: "an empty view's lists are empty, not null, in its JSON",
+			check: func(t *testing.T, v View) {
+				b, err := json.Marshal(v)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(b), "null") {
+					t.Errorf("the JSON has a null: %s", b)
 				}
 			},
 		},
