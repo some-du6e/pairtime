@@ -151,6 +151,9 @@ const (
 
 var evidences = enum[Evidence]{values: []Evidence{EvidenceA, EvidenceB, EvidenceC}}
 
+// Evidences returns the evidence levels, A first.
+func Evidences() []Evidence { return slices.Clone(evidences.values) }
+
 // Label is a provenance label carried beside an evidence level. Labels
 // never change a level (DESIGN 6.4). DESIGN 6.4's sixth label,
 // editor_typing, isn't in v1 (DESIGN 5.11, 12 JB 3).
@@ -182,6 +185,10 @@ var (
 	// carries to tier 1 (DESIGN 4.1 E-6).
 	slotLabels = enum[Label]{values: []Label{LabelViaTrack, LabelViaPlugin, LabelViaBridge}}
 )
+
+// SlotLabels returns the side-door labels a minute bucket's slot may
+// carry, in the order a slot lists them.
+func SlotLabels() []Label { return slices.Clone(slotLabels.values) }
 
 // corroboratingVias are the vias an anchor can arrive by and still be
 // corroborated under DESIGN 6.4's pairs: a hook and a transcript line
@@ -245,6 +252,9 @@ const (
 
 var bucketStates = enum[BucketState]{values: []BucketState{StatePending, StateFinal, StateProvisional, StateRestored}}
 
+// BucketStates returns every minute bucket state, pending first.
+func BucketStates() []BucketState { return slices.Clone(bucketStates.values) }
+
 // Witness is the label a minute gets from when the server received the
 // ledger batch holding its records (DESIGN 7.4).
 type Witness string
@@ -266,6 +276,9 @@ const (
 )
 
 var witnesses = enum[Witness]{values: []Witness{Witnessed, Offline, Backfilled}}
+
+// Witnesses returns every witness label, witnessed first.
+func Witnesses() []Witness { return slices.Clone(witnesses.values) }
 
 // RollupLevel is the span a Rollup sums over (SM 5.3).
 type RollupLevel string
