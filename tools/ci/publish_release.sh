@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# publish_release.sh VERSION NOTES FILE...
+#
+# Publishes the GitHub release of VERSION, a tag that origin must hold at
+# GITHUB_SHA, with the file NOTES as its notes and FILE... as its files.
+# release.yml's publish job runs it.
+#
+# It finds and changes releases by id, never by tag name. GitHub's lookup
+# by tag (GET /repos/{owner}/{repo}/releases/tags/{tag}) answers for a
+# published release only. gh's fallback for drafts asks GraphQL for one
+# release of the tag, so with two drafts it sees only one, and when that
+# lookup fails it says "release not found", which a script can't tell from
+# no draft at all. Then a retry makes a second draft, and publishing by tag
+# name can publish a failed run's partial one, which immutable releases
+# then keep. So:
+#
+# 1. It lists the repository's releases, drafts included. A published
+#    release of VERSION stops it: what's out is never changed. Every draft
+#    of VERSION, which a failed run left, is deleted.
+# 2. It checks that refs/tags/VERSION on origin still names GITHUB_SHA, so
+#    a tag moved after checkout can't carry this build.
+# 3. It makes a draft and keeps its id, uploads each file into that draft
+#    and checks that the upload is whole, then publishes that id. A version
+#    with a prerelease part, such as v0.1.0-alpha.1, is a prerelease, and
+#    any other becomes the latest release.
+#
+# GH_REPO names the repository (owner/name), and gh reads its token from
+# GH_TOKEN. It needs gh, git, jq and coreutils, prints the release's URL
+# and adds that to GITHUB_STEP_SUMMARY when it's set. tools/ci's
+# TestPublishRelease runs it against a fake gh.
+set -euo pipefail
+
+if [ $# -lt 3 ]; then
+	echo "usage: publish_release.sh VERSION NOTES FILE..." >&2
+	exit 2
+fi
+version=$1
+notes=$2
+shift 2
+: "${GH_REPO:?names the repository, owner/name}"
+: "${GITHUB_SHA:?names the commit this run built}"
+api=repos/$GH_REPO
+
+# tools/release check refused build metadata, so a hyphen means a
+# prerelease part.
+prerelease=false
+case "$version" in
+*-*) prerelease=true ;;
+esac
+
+# 1. A token that can push lists drafts too. A failed list stops the script
+# here, so it never reads as a tag without releases. --paginate prints the
+# pages as one array, or as one array a page in older gh; .[] reads both.
+releases=$(gh api --paginate "$api/releases" | jq -r --arg v "$version" '.[] | select(.tag_name == $v) | "\(.id) \(.draft)"')
+drafts=()
+while read -r id draft; do
+	[ -n "$id" ] || continue
+	if [ "$draft" != true ]; then
+		echo "::error::release $version is already published (release $id), and this run won't replace its files"
+		exit 1
+	fi
+	drafts+=("$id")
+done <<<"$releases"
+for id in "${drafts[@]}"; do
+	echo "Deleting draft release $id of $version, which a failed run left"
+	gh api --method DELETE "$api/releases/$id" --silent
+done
+
+# 2. An annotated tag's own line names the tag object, and its ^{} line the
+# commit the tag points at.
+refs=$(git ls-remote origin "refs/tags/$version" "refs/tags/$version^{}")
+tagged=$(awk -v ref="refs/tags/$version" '$2 == ref { plain = $1 } $2 == ref "^{}" { peeled = $1 } END { print (peeled != "" ? peeled : plain) }' <<<"$refs")
+if [ "$tagged" != "$GITHUB_SHA" ]; then
+	echo "::error::refs/tags/$version on origin names ${tagged:-no commit}, not $GITHUB_SHA, which this run built, so it won't be published"
+	exit 1
+fi
+
+# 3. If anything below fails, the draft stays unpublished, and the next
+# run's step 1 deletes it. Its upload_url is a URI template, {?name,label}
+# at the end, and gh sends the -f fields of a request with --input as its
+# query.
+created=$(gh api --method POST "$api/releases" -f tag_name="$version" -f name="$version" -F body=@"$notes" -F draft=true -F prerelease="$prerelease")
+id=$(jq -r .id <<<"$created")
+upload=$(jq -r .upload_url <<<"$created")
+upload=${upload%%\{*}
+case "$id" in
+"" | *[!0-9]*)
+	echo "::error::creating the draft of $version answered without a release id: $created"
+	exit 1
+	;;
+esac
+echo "Made draft release $id of $version"
+for file in "$@"; do
+	name=$(basename "$file")
+	got=$(gh api --method POST "$upload" -H "Content-Type: application/octet-stream" -f name="$name" --input "$file" | jq -r '"\(.state) \(.size)"')
+	want="uploaded $(stat -c %s "$file")"
+	if [ "$got" != "$want" ]; then
+		echo "::error::uploading $name into draft release $id answered \"$got\", not \"$want\", so the draft stays unpublished"
+		exit 1
+	fi
+	echo "Uploaded $name"
+done
+
+publish=(-F draft=false)
+if [ "$prerelease" = false ]; then
+	publish+=(-f make_latest=true)
+fi
+url=$(gh api --method PATCH "$api/releases/$id" "${publish[@]}" | jq -r 'if .draft == false then .html_url else error("release \(.id) is still a draft") end')
+echo "Published $version: $url"
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+	echo "Published $version: $url" >>"$GITHUB_STEP_SUMMARY"
+fi
