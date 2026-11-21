@@ -92,8 +92,8 @@ installed='./.local ./.local/bin ./.local/bin/pairtime'
 one_liner='curl -fsSL "$0/real/install.sh" | PAIRTIME_BASE_URL="$0/$2" PAIRTIME_RELEASE_KEYS="$1" PAIRTIME_NO_INSTALL="$3" sh'
 
 # The real binary's cases stop before pairtime install with --no-install,
-# so they don't change when it gains that command (WP-IN2). The cases just
-# below run it, for real once it has the command.
+# except the one just below, which runs the real pairtime install and
+# uninstall (WP-IN2).
 #
 # The cases that need a script trusting no release key run the repository's
 # copy, which pins none: the stamped copies pin whatever release-keys.txt
@@ -183,24 +183,15 @@ check "curl | sh installs a release signed by a key it was given" \
   run bash -c "$one_liner" "$server" "$keys/real.pub" real 1
 check_binary real
 
-mkdir "$scratch/real-binary"
-tar -xzf "$fixture/real/pairtime_${version#v}_${os}_${arch}.tar.gz" -C "$scratch/real-binary" pairtime
-if "$scratch/real-binary/pairtime" help | grep -q '^  install '; then
-  # The real pairtime install and uninstall, through the script
-  # (docs/PLAN.md, WP-RL2): set up with --yes in an empty home, then taken
-  # out with --delete-data, they must leave the home as empty as they found
-  # it, the folders the script made included, and no agent running.
-  fresh
-  check "with --yes in an empty home, the script and pairtime install set pairtime up, and pairtime uninstall --yes --delete-data leaves the home empty again" \
-    ok 'Running pairtime install' '' \
-    install_then_uninstall
-  check_no_agent
-else
-  fresh
-  check "without --no-install, setup stops before pairtime install while the binary has none" \
-    ok 'has no install command yet' "$installed" \
-    run sh "$stamped" --base-url "$server/real" --release-keys "$keys/real.pub"
-fi
+# The real pairtime install and uninstall, through the script
+# (docs/PLAN.md, WP-RL2): set up with --yes in an empty home, then taken out
+# with --delete-data, they must leave the home as empty as they found it,
+# the folders the script made included, and no agent running.
+fresh
+check "with --yes in an empty home, the script hands the binary to pairtime install, which sets pairtime up, and pairtime uninstall --yes --delete-data leaves the home empty again" \
+  ok 'Running pairtime install' '' \
+  install_then_uninstall
+check_no_agent
 
 fresh
 mkdir -p "$home/.local/bin"

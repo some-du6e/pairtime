@@ -10,11 +10,11 @@
 # internal/release/release-keys.txt, so the tests hand them each throwaway
 # key explicitly, and the cases that need a script trusting no key run the
 # repository's copy, which pins none. A fake build with an install command
-# (install/e2e/fakepairtime) checks the handover to pairtime install. Once
-# the real binary has that command (WP-IN2), one case runs it through the
-# script with --yes in an empty home, then pairtime uninstall --yes
-# --delete-data, and checks the home is empty again and no agent is left;
-# until then the real binary's runs stop where the scripts would hand over.
+# (install/e2e/fakepairtime) checks the handover to pairtime install in
+# each way it can end. One case runs the real pairtime install (WP-IN2)
+# through the script with --yes in an empty home, then pairtime uninstall
+# --yes --delete-data, and checks the home is empty again and no agent is
+# left.
 #
 # Windows and macOS runners are scarce, so this runs only for the paths
 # below, on release tags and by hand. Neither of those jobs needs Go.

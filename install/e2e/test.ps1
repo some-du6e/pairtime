@@ -110,9 +110,9 @@ function Invoke-OneLiner([hashtable]$Environment, [string]$Shell = 'powershell.e
 
 $installed = 'pairtime pairtime\bin pairtime\bin\pairtime.exe'
 
-# The real binary's cases stop before pairtime install with -NoInstall, so
-# they don't change when it gains that command (WP-IN2). The cases just
-# below run it, for real once it has the command.
+# The real binary's cases stop before pairtime install with -NoInstall,
+# except the one just below, which runs the real pairtime install and
+# uninstall (WP-IN2).
 #
 # The cases that need a script trusting no release key run the repository's
 # copy, which pins none: the stamped copies pin whatever release-keys.txt
@@ -246,49 +246,37 @@ if (Get-Command pwsh -ErrorAction SilentlyContinue) {
 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$realExe = Join-Path $scratch 'pairtime.exe'
-$realZip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $Fixture "real\pairtime_$($version.Substring(1))_windows_amd64.zip"))
-try {
-  [System.IO.Compression.ZipFileExtensions]::ExtractToFile($realZip.GetEntry('pairtime.exe'), $realExe)
-} finally {
-  $realZip.Dispose()
-}
-if (@(& $realExe help) -cmatch '^  install ') {
-  # The real pairtime install and uninstall, through the script
-  # (docs/PLAN.md, WP-RL2): set up with -Yes in a new LOCALAPPDATA,
-  # APPDATA and USERPROFILE, then taken out with --delete-data, they must
-  # leave all three as they found them, the folders the script made
-  # included, with no Run value and no agent left. Windows PowerShell makes
-  # AppData\Roaming in whatever USERPROFILE it starts with, even to run
-  # nothing, and a real profile always has it, so the new one starts with
-  # it (measured on windows-latest, 2026-11-20).
-  New-Case
-  $roaming = New-Dir 'roaming'
-  $profileDir = New-Dir 'profile'
-  New-Item -ItemType Directory -Path (Join-Path $profileDir 'AppData\Roaming') | Out-Null
-  $profileBefore = Get-Tree $profileDir
-  $caseEnvironment = @{ APPDATA = $roaming; USERPROFILE = $profileDir }
-  $runBefore = Get-RunValue
-  $setUp = Invoke-File $stamped (Real real real.pub @('-Yes')) $caseEnvironment
-  $exe = Join-Path $script:appData 'pairtime\bin\pairtime.exe'
-  $takenOut = @{ Code = 1; Output = "there's no $exe to run pairtime uninstall with" }
-  if (Test-Path -LiteralPath $exe) { $takenOut = Invoke-Child @('uninstall', '--yes', '--delete-data') $caseEnvironment $exe }
-  Wait-Empty $script:appData 30
-  $code = $setUp.Code
-  if ($code -eq 0) { $code = $takenOut.Code }
-  Test-Case 'with -Yes in an empty profile, the script and pairtime install set pairtime up, and pairtime uninstall --yes --delete-data leaves it empty again' `
-    ok 'Running pairtime install' '' @{ Code = $code; Output = $setUp.Output + $takenOut.Output }
-  $left = Get-Tree $roaming
-  if ($left) { Add-Failure "pairtime uninstall left [$left] in APPDATA" }
-  $left = Get-Tree $profileDir
-  if ($left -ne $profileBefore) { Add-Failure "USERPROFILE holds [$left] after pairtime uninstall, not the [$profileBefore] it started with" }
-  Test-NoAgent $script:appData
-  if ($null -eq $runBefore -and $null -ne (Get-RunValue)) { Add-Failure "pairtime uninstall left the Run value pairtime" }
-} else {
-  New-Case
-  Test-Case 'without -NoInstall, setup stops before pairtime install while the binary has none' ok 'has no install command yet' $installed `
-    (Invoke-File $stamped (Real real real.pub))
-}
+
+# The real pairtime install and uninstall, through the script
+# (docs/PLAN.md, WP-RL2): set up with -Yes in a new LOCALAPPDATA,
+# APPDATA and USERPROFILE, then taken out with --delete-data, they must
+# leave all three as they found them, the folders the script made
+# included, with no Run value and no agent left. Windows PowerShell makes
+# AppData\Roaming in whatever USERPROFILE it starts with, even to run
+# nothing, and a real profile always has it, so the new one starts with
+# it (measured on windows-latest, 2026-11-20).
+New-Case
+$roaming = New-Dir 'roaming'
+$profileDir = New-Dir 'profile'
+New-Item -ItemType Directory -Path (Join-Path $profileDir 'AppData\Roaming') | Out-Null
+$profileBefore = Get-Tree $profileDir
+$caseEnvironment = @{ APPDATA = $roaming; USERPROFILE = $profileDir }
+$runBefore = Get-RunValue
+$setUp = Invoke-File $stamped (Real real real.pub @('-Yes')) $caseEnvironment
+$exe = Join-Path $script:appData 'pairtime\bin\pairtime.exe'
+$takenOut = @{ Code = 1; Output = "there's no $exe to run pairtime uninstall with" }
+if (Test-Path -LiteralPath $exe) { $takenOut = Invoke-Child @('uninstall', '--yes', '--delete-data') $caseEnvironment $exe }
+Wait-Empty $script:appData 30
+$code = $setUp.Code
+if ($code -eq 0) { $code = $takenOut.Code }
+Test-Case 'with -Yes in an empty profile, the script hands the binary to pairtime install, which sets pairtime up, and pairtime uninstall --yes --delete-data leaves it empty again' `
+  ok 'Running pairtime install' '' @{ Code = $code; Output = $setUp.Output + $takenOut.Output }
+$left = Get-Tree $roaming
+if ($left) { Add-Failure "pairtime uninstall left [$left] in APPDATA" }
+$left = Get-Tree $profileDir
+if ($left -ne $profileBefore) { Add-Failure "USERPROFILE holds [$left] after pairtime uninstall, not the [$profileBefore] it started with" }
+Test-NoAgent $script:appData
+if ($null -eq $runBefore -and $null -ne (Get-RunValue)) { Add-Failure "pairtime uninstall left the Run value pairtime" }
 
 New-Case
 New-Item -ItemType Directory -Force -Path (Join-Path $script:appData 'pairtime\bin') | Out-Null
