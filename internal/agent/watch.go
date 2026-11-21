@@ -49,7 +49,7 @@ func (a *agent) watchConfig() func() {
 					continue
 				}
 				if reload == nil {
-					reload = a.sched.After("config.reload", configDebounce, func(time.Time) { a.loadConfig(false) })
+					reload = a.sched.After("config.reload", configDebounce, func(time.Time) { a.reloadConfig() })
 				} else {
 					reload.Reset(configDebounce)
 				}

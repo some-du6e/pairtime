@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -471,6 +472,173 @@ func TestSeals(t *testing.T) {
 			t.Errorf("jobs %+v, want ledger.seal every 60 s", jobs)
 		}
 	})
+}
+
+// TestSealMode checks that the mode a batch was sealed in is on disk with
+// its seal (DESIGN 4.2): the seal frame says whether config.toml let the
+// computer upload as the batch sealed (Options.Online), asked at the seal
+// rather than at the batch's first record, and the batch Sealed gets, its
+// row and ReadBatches say the same, as a row Open rebuilds from the seal
+// frame after a crash does.
+func TestSealMode(t *testing.T) {
+	type mode struct {
+		sealed, row, read []bool
+	}
+	cases := []struct {
+		name string
+		// online is what Options.Online says at each of three seals, nil
+		// for a writer without it. Each batch's first record comes while it
+		// still says what it said at the seal before.
+		online []bool
+		// crash, when set, leaves the ledger as a crash after the third
+		// seal's flush does, with batches.seg's rows of batches 2 and 3
+		// lost, which the next Open rebuilds from their seal frames. Online
+		// says local-only by then, so a rebuild that asked it would lose
+		// batch 3's mark.
+		crash bool
+		want  []bool
+	}{
+		{"a batch sealed online says so, and one sealed in local-only mode doesn't", []bool{true, false, true}, false, []bool{true, false, true}},
+		{"a writer without Online seals every batch online", nil, false, []bool{true, true, true}},
+		{"rows a crash lost from batches.seg keep their batches' modes when Open rebuilds them from the seal frames", []bool{true, false, true}, true, []bool{true, false, true}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			var (
+				online    atomic.Bool
+				delivered []Batch
+			)
+			w := open(t, dir, newClock(testT), func(o *Options) {
+				o.Sealed = func(b Batch) { delivered = append(delivered, b) }
+				if c.online != nil {
+					o.Online = online.Load
+				}
+			})
+			rng := rand.New(rand.NewPCG(5, 6))
+			for i := range 3 {
+				if _, _, err := write(w, rng, "os.presence", testT+int64(i)*1000); err != nil {
+					t.Fatal(err)
+				}
+				if c.online != nil {
+					online.Store(c.online[i])
+				}
+				if _, _, err := write(w, rng, "os.presence", testT+int64(i)*1000+500); err != nil {
+					t.Fatal(err)
+				}
+				if _, ok, err := w.Seal(); !ok || err != nil {
+					t.Fatalf("seal %d: %v, %v", i+1, ok, err)
+				}
+			}
+			if c.crash {
+				abandon(w)
+				batches := filepath.Join(dir, batchesName)
+				// Frame 0 is the chain frame, and frames 1 to 3 the rows.
+				truncate(t, batches, framesOf(t, batches)[1].end)
+				open(t, dir, newClock(testT+60_000), func(o *Options) { o.Online = func() bool { return false } })
+			}
+			_, rows, err := ReadRows(dir, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got mode
+			for _, b := range delivered {
+				got.sealed = append(got.sealed, b.Online)
+			}
+			for _, r := range rows {
+				got.row = append(got.row, r.Online)
+			}
+			for _, b := range readAll(t, dir) {
+				got.read = append(got.read, b.Online)
+			}
+			if !slices.Equal(got.sealed, c.want) || !slices.Equal(got.row, c.want) || !slices.Equal(got.read, c.want) {
+				t.Errorf("online: Sealed %v, rows %v, ReadBatches %v; want %v for each", got.sealed, got.row, got.read, c.want)
+			}
+		})
+	}
+}
+
+// TestNoteMode checks the mode the agent's config watch notes
+// (Writer.NoteMode): a record written while it says local-only makes its
+// batch local-only, though Online says online at the seal, as when the teen
+// switches back online before the next seal; the stretch's first record
+// seals at once, so a crash after it can't take the switch with it; and the
+// switch back online seals what the stretch left.
+func TestNoteMode(t *testing.T) {
+	// A step notes a mode ("local", "online"), writes a record ("write"),
+	// seals ("seal"), or waits for the batch a seal of the writer's own
+	// sealed ("sealed").
+	cases := []struct {
+		name  string
+		steps []string
+		// online is the mode of each batch sealed, and records how many
+		// records each holds.
+		online  []bool
+		records []int
+	}{
+		{"a record written while the noted mode is local-only seals at once, with the records before it, and its batch is local-only",
+			[]string{"write", "local", "write", "sealed"}, []bool{false}, []int{2}},
+		{"the switch back online seals the stretch's last records, and the records after it go online",
+			[]string{"local", "write", "sealed", "write", "online", "sealed", "write", "seal"}, []bool{false, false, true}, []int{1, 1, 1}},
+		{"only the stretch's first record seals at once",
+			[]string{"local", "write", "sealed", "write", "write", "seal"}, []bool{false, false}, []int{1, 2}},
+		{"a switch with no record written in it leaves the next batch online",
+			[]string{"local", "online", "write", "seal"}, []bool{true}, []int{1}},
+		{"a second stretch's first record seals at once too",
+			[]string{"local", "write", "sealed", "online", "write", "seal", "local", "write", "sealed"}, []bool{false, true, false}, []int{1, 1, 1}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			sealed := make(chan Batch, 8)
+			w := open(t, t.TempDir(), newClock(testT), func(o *Options) {
+				o.Online = func() bool { return true } // config.toml reads online at every seal
+				o.Sealed = func(b Batch) { sealed <- b }
+			})
+			rng := rand.New(rand.NewPCG(9, 10))
+			var got []Batch
+			take := func() {
+				t.Helper()
+				select {
+				case b := <-sealed:
+					got = append(got, b)
+				case <-time.After(10 * time.Second):
+					t.Fatalf("no batch %d was sealed", len(got)+1)
+				}
+			}
+			for i, step := range c.steps {
+				switch step {
+				case "local", "online":
+					w.NoteMode(step == "online")
+				case "write":
+					if _, _, err := write(w, rng, "os.presence", testT+int64(i)*1000); err != nil {
+						t.Fatal(err)
+					}
+				case "seal":
+					// A seal the writer still owed may take the records first,
+					// and then this one has none.
+					if _, _, err := w.Seal(); err != nil {
+						t.Fatalf("step %d: %v", i, err)
+					}
+					take()
+				case "sealed":
+					take()
+				}
+			}
+			select {
+			case b := <-sealed:
+				t.Fatalf("batch %d was sealed after the last step", b.Row.B)
+			case <-time.After(200 * time.Millisecond):
+			}
+			var online []bool
+			var records []int
+			for _, b := range got {
+				online, records = append(online, b.Online), append(records, len(b.Records))
+			}
+			if !slices.Equal(online, c.online) || !slices.Equal(records, c.records) {
+				t.Errorf("batches sealed online %v holding %v records, want %v holding %v", online, records, c.online, c.records)
+			}
+		})
+	}
 }
 
 // TestSegments checks that records go to the segment of the UTC day they

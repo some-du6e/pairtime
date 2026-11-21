@@ -78,7 +78,7 @@ func TestReadRows(t *testing.T) {
 		{"RowOf gives a sealed batch's row as ReadRows reads it", 2, func(t *testing.T, _ ChainInfo, rows []Row) {
 			got := RowOf(delivered[1], delivered[0].Row.Head)
 			want := rows[0]
-			if got.B != want.B || got.Head != want.Head || got.Prev != want.Prev || !got.SealedAt.Equal(want.SealedAt) {
+			if got.B != want.B || got.Head != want.Head || got.Prev != want.Prev || !got.SealedAt.Equal(want.SealedAt) || got.Online != want.Online || !got.Online {
 				t.Errorf("RowOf = %+v, ReadRows = %+v", got, want)
 			}
 		}},

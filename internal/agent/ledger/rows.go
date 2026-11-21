@@ -21,6 +21,9 @@ type Row struct {
 	Prev ledger.Hash
 	// SealedAt is when the batch was sealed.
 	SealedAt time.Time
+	// Online is set when the batch was sealed online, as its seal frame
+	// records (Batch.Online).
+	Online bool
 }
 
 // ReadRows reads which chain the ledger in dir holds and the rows of its
@@ -49,6 +52,7 @@ func ReadRows(dir string, from uint64) (ChainInfo, []Row, error) {
 			BatchRow: ledger.BatchRow{B: rp.B, FirstSeq: rp.FirstSeq, N: rp.N, Root: rp.Root, Head: rp.Head},
 			Prev:     rp.Prev,
 			SealedAt: time.UnixMilli(rp.SealedAt),
+			Online:   rp.Online,
 		}
 		if rc, ok := bf.receipts[rp.B]; ok {
 			r.Receipt = &rc
@@ -62,5 +66,5 @@ func ReadRows(dir string, from uint64) (ChainInfo, []Row, error) {
 // read it, given prev, the head of the batch before it: Batch doesn't
 // carry it, and its holder knows it from that batch.
 func RowOf(b Batch, prev ledger.Hash) Row {
-	return Row{BatchRow: b.Row, Prev: prev, SealedAt: b.SealedAt}
+	return Row{BatchRow: b.Row, Prev: prev, SealedAt: b.SealedAt, Online: b.Online}
 }

@@ -72,6 +72,10 @@ func (a *agent) startLedger() func() {
 		// the writer (adapters.go).
 		a.adaptersHost().attach(lw)
 		w = lw
+		// Before the records that waited for the writer go in, so those
+		// written in local-only mode make their batch local-only.
+		a.writer.Store(lw)
+		a.noteMode()
 		a.ledgerIn.Attach(lw)
 		if a.scorer != nil {
 			a.scorer.Start()
@@ -175,6 +179,7 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 		Params:  a.table,
 		Sched:   a.sched,
 		Sealed:  a.sealed,
+		Online:  a.online,
 		Problem: func(msg string) { a.setProblem("ledger", msg) },
 	})
 }

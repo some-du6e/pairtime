@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -30,8 +31,8 @@ import (
 
 func TestLocalRuns(t *testing.T) {
 	type check struct {
-		gaps            []gap
-		localFrom, from uint64
+		gaps                   []gap
+		localFrom, from, modes uint64
 	}
 	tests := []struct {
 		name string
@@ -56,6 +57,10 @@ func TestLocalRuns(t *testing.T) {
 		{"a run that opens after From leaves it, since From's root goes before it", saved{Linking: true, From: 6, LocalFrom: 8}, func(s *saved) bool { s.settle(9); return false }, check{localFrom: 8, from: 6}, false},
 		{"a run before From leaves it", saved{Linking: true, From: 6, Gaps: []gap{{2, 3}}}, func(s *saved) bool { s.settle(9); return false }, check{gaps: []gap{{2, 3}}, from: 6}, false},
 		{"once the link's first batch is stored, From stays where it is", saved{From: 6, Gaps: []gap{{6, 7}}}, func(s *saved) bool { s.settle(9); return false }, check{gaps: []gap{{6, 7}}, from: 6}, false},
+		{"the modes of the batches after Modes go in from their rows, in order", saved{}, func(s *saved) bool { return s.foldModes(modeRows(true, false, false, true)) }, check{gaps: []gap{{2, 4}}, modes: 4}, true},
+		{"a row that doesn't say its batch was sealed online, as an older writer's, opens a run", saved{}, func(s *saved) bool { return s.foldModes(modeRows(true, false)) }, check{localFrom: 2, modes: 2}, true},
+		{"the rows up to Modes are in the runs already", saved{Modes: 2, LocalFrom: 2}, func(s *saved) bool { return s.foldModes(modeRows(true, false, false)) }, check{localFrom: 2, modes: 3}, false},
+		{"the rows before the next root went already", saved{Next: 3}, func(s *saved) bool { return s.foldModes(modeRows(false, false, true)) }, check{modes: 3}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -63,8 +68,8 @@ func TestLocalRuns(t *testing.T) {
 			if changed := tc.do(&st); changed != tc.changed {
 				t.Errorf("reported a change: %v, want %v", changed, tc.changed)
 			}
-			if !slices.Equal(st.Gaps, tc.want.gaps) || st.LocalFrom != tc.want.localFrom || st.From != tc.want.from {
-				t.Errorf("gaps %v, local from %d, from %d; want %v, %d, %d", st.Gaps, st.LocalFrom, st.From, tc.want.gaps, tc.want.localFrom, tc.want.from)
+			if !slices.Equal(st.Gaps, tc.want.gaps) || st.LocalFrom != tc.want.localFrom || st.From != tc.want.from || st.Modes != tc.want.modes {
+				t.Errorf("gaps %v, local from %d, from %d, modes %d; want %v, %d, %d, %d", st.Gaps, st.LocalFrom, st.From, st.Modes, tc.want.gaps, tc.want.localFrom, tc.want.from, tc.want.modes)
 			}
 		})
 	}
@@ -121,6 +126,18 @@ func TestLocalRuns(t *testing.T) {
 			}
 		})
 	}
+}
+
+// modeRows is the rows of batches 1 on, each sealed online or not as
+// online says.
+func modeRows(online ...bool) *rowIndex {
+	ix := &rowIndex{}
+	for i, on := range online {
+		if err := ix.add(ledger.Row{BatchRow: pkgledger.BatchRow{B: uint64(i + 1)}, Online: on}); err != nil {
+			panic(err)
+		}
+	}
+	return ix
 }
 
 // TestLocalCredit holds a day's revisions against batches 1 to 4, of which
@@ -207,6 +224,78 @@ func TestLocalCredit(t *testing.T) {
 	}
 }
 
+// TestUnseenBatch is a revision whose credit rests on a batch sealed after
+// the uploader took its rows, as when the scorer scores a batch between a
+// cycle's takeSealed and its plan: the revision waits until the batch's
+// row, with the mode its seal frame records, is in, and then goes only if
+// the batch was sealed online.
+func TestUnseenBatch(t *testing.T) {
+	dir := t.TempDir()
+	bs, err := store.OpenBuckets(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := newestTable()
+	rev := func(credited float64, batch uint64) store.Bucket {
+		b := testBucket(table, "d_test", day0, credited, event.StatePending)
+		b.Batch = batch
+		return b
+	}
+	for _, b := range []store.Bucket{rev(15, 1), rev(30, 3)} {
+		if _, _, err := bs.Put(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := bs.Close(); err != nil {
+		t.Fatal(err)
+	}
+	day := day0.Format(time.DateOnly)
+	file, err := os.Stat(filepath.Join(dir, day+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	credits := func(p plan) []float64 {
+		var out []float64
+		for _, b := range p.body.Buckets {
+			out = append(out, b.CreditedS)
+		}
+		return out
+	}
+	// Batches 1 and 2 are in the rows, each received at once, and batch 3,
+	// whose scoring gave the second revision, isn't yet.
+	first, err := makePlan(planInput{rows: indexOf(t, []float64{1, 2}, []float64{1.1, 2.1}), st: saved{Next: 3}, bucketDir: dir, lag: 900_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The next plan, with batch 3's row in, sealed in local-only mode or
+	// online.
+	again := func(gaps []gap) plan {
+		t.Helper()
+		st := saved{Next: 4, Gaps: gaps, Marks: first.marks, Sent: first.sent}
+		p, err := makePlan(planInput{rows: indexOf(t, []float64{1, 2, 3}, []float64{1.1, 2.1, 3.1}), st: st, bucketDir: dir, lag: 900_000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	local, online := again([]gap{{3, 3}}), again(nil)
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"the revision on a batch the rows don't hold waits, and the one before it goes", slices.Equal(credits(first), []float64{15}) && first.marks[day].Off < file.Size()},
+		{"once the batch's row is in, sealed in local-only mode, the revision is withheld", len(credits(local)) == 0 && local.sent[at(0)].B == 3 && local.marks[day].Off == file.Size()},
+		{"once the batch's row is in, sealed online, the revision goes", slices.Equal(credits(online), []float64{30})},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: first %v (mark %d of %d), local %v, online %v", credits(first), first.marks[day].Off, file.Size(), credits(local), credits(online))
+			}
+		})
+	}
+}
+
 // liveRig is an uploader over a ledger writer that hands it each batch as
 // it seals, against a fake server, with config.toml's mode and the
 // sign-in as the test sets them: the tests of local-only mode. It is
@@ -214,13 +303,25 @@ func TestLocalCredit(t *testing.T) {
 // otherwise, and its uploader waits for the test to start it.
 type liveRig struct {
 	start time.Time
+	dirs  home.Dirs
+	keys  *pkgledger.Keys
 	w     *ledger.Writer
 	f     *fakeIngest
 	u     *Uploader
-	// local is config.toml's mode = "local", and linked whether the
-	// computer is linked to the server. As agent.SignedIn has it, nothing
-	// goes while either keeps it local-only.
+	up    atomic.Pointer[Uploader] // u, for the writer's Sealed
+	// client is the way to f. gate, while set, holds the next POST that
+	// reaches f, as a slow answer does, until it is opened, and then drops
+	// it unanswered.
+	client *http.Client
+	gate   atomic.Pointer[gate]
+	// local is config.toml's mode = "local", which the writer records in
+	// each seal frame, and linked whether the computer is linked to the
+	// server. As agent.SignedIn has it, nothing goes while either keeps it
+	// local-only.
 	local, linked atomic.Bool
+	// sealing, when set, gets each batch the writer seals before the
+	// uploader does, on the goroutine that sealed it.
+	sealing func(ledger.Batch)
 
 	clockMu sync.Mutex
 	now     time.Time
@@ -230,36 +331,39 @@ type liveRig struct {
 	problem string
 }
 
+// gate holds a POST: arrived closes once it holds one, and opening it lets
+// the POST go, dropped.
+type gate struct {
+	arrived, release chan struct{}
+	once             sync.Once
+}
+
+func (g *gate) open() { g.once.Do(func() { close(g.release) }) }
+
+// hold sets a gate for the next POST, which the test opens.
+func (r *liveRig) hold(t *testing.T) *gate {
+	g := &gate{arrived: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(g.open) // before the server closes, which waits for the POST
+	r.gate.Store(g)
+	return g
+}
+
 // newLiveRig makes a liveRig whose bucket store holds minutes 0 to
 // minutes-1 after its start, credited 30 s each. Batch k, which seal
 // seals at sealedAt(k), holds minutes 15(k-1) to 15k-1.
 func newLiveRig(t *testing.T, minutes int) *liveRig {
 	t.Helper()
 	dir := t.TempDir()
-	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
 	kDev := sha256.Sum256([]byte("uploader local mode test K_dev"))
 	keys, err := pkgledger.DeriveKeys(kDev[:])
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := &liveRig{start: time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour)}
+	r := &liveRig{start: time.Now().UTC().Truncate(time.Hour).Add(-3 * time.Hour), dirs: home.Dirs{Data: dir, Config: dir, Runtime: dir}, keys: keys}
 	r.now = r.start
 	r.linked.Store(true)
-	var up atomic.Pointer[Uploader]
-	r.w, err = ledger.Open(ledger.Options{
-		Dir: dirs.Ledger(), Keys: keys, KeyID: "0123456789abcdef", Params: newestTable(),
-		Now: func() time.Time { r.clockMu.Lock(); defer r.clockMu.Unlock(); return r.now },
-		Sealed: func(b ledger.Batch) {
-			if u := up.Load(); u != nil {
-				u.Sealed(b)
-			}
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { r.w.Close() })
-	bs, err := store.OpenBuckets(dirs.Buckets())
+	r.openWriter(t, r.dirs)
+	bs, err := store.OpenBuckets(r.dirs.Buckets())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,22 +377,62 @@ func newLiveRig(t *testing.T, minutes int) *liveRig {
 	}
 	devKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{11}, 32))
 	r.f = newFakeIngest(r.w.DeviceID(), testToken, devKey.Public().(ed25519.PublicKey))
-	srv := httptest.NewServer(r.f)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if g := r.gate.Load(); g != nil && req.Method == http.MethodPost && r.gate.CompareAndSwap(g, nil) {
+			close(g.arrived)
+			<-g.release
+			drop(w)
+			return
+		}
+		r.f.ServeHTTP(w, req)
+	}))
 	t.Cleanup(srv.Close)
+	r.client = srv.Client()
+	r.creds = Credentials{Server: srv.URL, Token: testToken, DeviceID: r.w.DeviceID(), Sign: KeySigner(devKey), LinkedAt: r.start.Add(-time.Minute)}
+	r.openUploader(t, r.dirs)
+	return r
+}
+
+// openWriter opens the ledger writer in dirs, which records the mode local
+// says in each seal frame and hands each batch to the uploader.
+func (r *liveRig) openWriter(t *testing.T, dirs home.Dirs) {
+	t.Helper()
+	w, err := ledger.Open(ledger.Options{
+		Dir: dirs.Ledger(), Keys: r.keys, KeyID: "0123456789abcdef", Params: newestTable(),
+		Now:    func() time.Time { r.clockMu.Lock(); defer r.clockMu.Unlock(); return r.now },
+		Online: func() bool { return !r.local.Load() },
+		Sealed: func(b ledger.Batch) {
+			if r.sealing != nil {
+				r.sealing(b)
+			}
+			if u := r.up.Load(); u != nil {
+				u.Sealed(b)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { w.Close() })
+	r.w = w
+}
+
+// openUploader makes the uploader over dirs and the writer, which waits
+// for the test to start it.
+func (r *liveRig) openUploader(t *testing.T, dirs home.Dirs) {
+	t.Helper()
 	st, _, err := state.Open(dirs.StateFile())
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.creds = Credentials{Server: srv.URL, Token: testToken, DeviceID: r.w.DeviceID(), Sign: KeySigner(devKey), LinkedAt: r.start.Add(-time.Minute)}
-	r.u, err = New(Options{
+	u, err := New(Options{
 		Ledger: r.w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
 		Login: LoginFunc(func() (Credentials, bool) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
 			return r.creds, r.linked.Load() && !r.local.Load()
 		}),
-		LocalOnly: func() (bool, bool) { return r.local.Load(), true },
-		Params:    newestTable(), Client: srv.Client(), Draw: func(int64) int64 { return 0 },
+		Params: newestTable(), Client: r.client, Draw: func(int64) int64 { return 0 },
 		Problem: func(msg string) {
 			r.mu.Lock()
 			r.problem = msg
@@ -298,9 +442,27 @@ func newLiveRig(t *testing.T, minutes int) *liveRig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	up.Store(r.u)
-	t.Cleanup(r.u.Close)
-	return r
+	t.Cleanup(u.Close)
+	r.u = u
+	r.up.Store(u)
+}
+
+// restart is the agent's next start after a kill -9 that left dir, a copy
+// of the data directory: the killed uploader and writer stop, as the kill
+// stopped them, and a new writer and uploader, which the test starts, go
+// on from dir against the same server with the same sign-in.
+func (r *liveRig) restart(t *testing.T, dir string) {
+	t.Helper()
+	r.up.Store(nil)
+	r.u.Close()
+	r.w.Close()
+	r.sealing = nil
+	r.mu.Lock()
+	r.problem = ""
+	r.mu.Unlock()
+	r.dirs = home.Dirs{Data: dir, Config: dir, Runtime: dir}
+	r.openWriter(t, r.dirs)
+	r.openUploader(t, r.dirs)
 }
 
 // sealedAt is when seal seals batch k.
@@ -309,14 +471,20 @@ func (r *liveRig) sealedAt(k int) time.Time { return r.start.Add(time.Duration(k
 // seal seals batch k, with one checkpoint in it.
 func (r *liveRig) seal(t *testing.T, k int) {
 	t.Helper()
+	r.record(t, k)
+	if _, _, err := r.w.Seal(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// record writes batch k's checkpoint at sealedAt(k), and seals nothing.
+func (r *liveRig) record(t *testing.T, k int) {
+	t.Helper()
 	q := r.sealedAt(k)
 	r.clockMu.Lock()
 	r.now = q
 	r.clockMu.Unlock()
 	if _, err := r.w.Checkpoint("p_test", uint64(q.UnixMilli()), json.RawMessage(`{}`)); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := r.w.Seal(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -621,15 +789,17 @@ func TestServerGaps(t *testing.T) {
 }
 
 // TestTakeSealed is what the loop takes of the batches Sealed queued while
-// a cycle ran: their modes with their rows, before anything is planned,
-// and the harnesses of the batches not sealed in local-only mode.
+// a cycle ran: their rows with the modes their seal frames record, before
+// anything is planned, and the harnesses of the batches not sealed in
+// local-only mode.
 func TestTakeSealed(t *testing.T) {
 	rtype, ok := pkgledger.RTypeOf(event.KindAgentTool)
 	if !ok {
 		t.Fatal("agent.tool has no record type")
 	}
-	// batch is batch b, with one record that names harness h at version v.
-	batch := func(t *testing.T, b uint64, h event.Harness, v string) ledger.Batch {
+	// batch is batch b, sealed online or not, with one record that names
+	// harness h at version v.
+	batch := func(t *testing.T, b uint64, online bool, h event.Harness, v string) ledger.Batch {
 		t.Helper()
 		hdr, err := pkgledger.NewHeader(b, rtype, "p_test", "s_test")
 		if err != nil {
@@ -639,46 +809,33 @@ func TestTakeSealed(t *testing.T) {
 		return ledger.Batch{
 			Row:      pkgledger.BatchRow{B: b, FirstSeq: b, N: 1},
 			SealedAt: day0.Add(time.Duration(b) * time.Minute),
+			Online:   online,
 			Records:  []pkgledger.Record{{Header: hdr, Body: []byte(body)}},
 		}
 	}
 	// newUploader is an uploader whose place is as a cycle's load leaves
-	// it, linked before batch 1, with config.toml's mode as local says.
-	newUploader := func(t *testing.T, local *bool) *Uploader {
+	// it, linked before batch 1.
+	newUploader := func(t *testing.T) *Uploader {
 		t.Helper()
-		u := bareUploader(t, func(o *Options) { o.LocalOnly = func() (bool, bool) { return *local, true } })
+		u := bareUploader(t, nil)
 		u.st, u.rows, u.loaded = saved{Chain: u.opts.Ledger.DeviceID(), From: 1}, &rowIndex{device: u.opts.Ledger.DeviceID()}, true
 		return u
 	}
 	t.Run("a batch sealed in local mode during a cycle has its mode in the place before it is planned", func(t *testing.T) {
-		local := true
-		u := newUploader(t, &local)
-		u.Sealed(batch(t, 1, event.HarnessCodex, "0.9.1"))
+		u := newUploader(t)
+		u.Sealed(batch(t, 1, false, event.HarnessCodex, "0.9.1"))
 		u.takeSealed()
 		if roots, _ := rootsOf(planInput{rows: u.rows, st: u.st}, 10); u.st.LocalFrom != 1 || len(roots) != 0 {
 			t.Errorf("local from %d, and the roots %v go", u.st.LocalFrom, roots)
 		}
 	})
-	t.Run("a batch's mode still queued when the place loads goes in before the link's start is worked out", func(t *testing.T) {
-		local := true
-		u := bareUploader(t, func(o *Options) { o.LocalOnly = func() (bool, bool) { return local, true } })
-		u.Sealed(batch(t, 2, event.HarnessCodex, "0.9.1")) // queued, as while a cycle's applyModes has run
-		if err := u.load(Credentials{Server: "https://pairtime.example", DeviceID: u.opts.Ledger.DeviceID()}); err != nil {
-			t.Fatal(err)
-		}
-		if u.st.LocalFrom != 2 {
-			t.Errorf("local from %d, want 2", u.st.LocalFrom)
-		}
-	})
 	t.Run("a harness named only in batches sealed in local-only mode stays out of the labels, and one named online goes", func(t *testing.T) {
-		local := true
-		u := newUploader(t, &local)
-		u.Sealed(batch(t, 1, event.HarnessDevin, "1.0.0"))
-		local = false
+		u := newUploader(t)
+		u.Sealed(batch(t, 1, false, event.HarnessDevin, "1.0.0"))
 		// Sealed online, but its records began in local mode: it ends the
 		// run, and is in it.
-		u.Sealed(batch(t, 2, event.HarnessCodex, "0.9.1"))
-		u.Sealed(batch(t, 3, event.HarnessClaudeCode, "2.1.327"))
+		u.Sealed(batch(t, 2, true, event.HarnessCodex, "0.9.1"))
+		u.Sealed(batch(t, 3, true, event.HarnessClaudeCode, "2.1.327"))
 		u.takeSealed()
 		if want := map[event.Harness]string{event.HarnessClaudeCode: "2.1.327"}; !maps.Equal(u.st.Harnesses, want) {
 			t.Errorf("the labels' harnesses are %v, want %v", u.st.Harnesses, want)

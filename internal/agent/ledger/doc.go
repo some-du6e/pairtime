@@ -14,11 +14,14 @@
 //   - YYYY-MM-DD.seg, one per UTC day the writer wrote in: the records of
 //     that day, each a record frame holding its 33-byte header and its
 //     body as stored, and after each batch's last record a seal frame
-//     with the batch's b, first_seq, n, prev, R_b, H_b and sealed_at.
+//     with the batch's b, first_seq, n, prev, R_b, H_b and sealed_at, and
+//     online when it was sealed while config.toml let the computer upload
+//     and none of its records came while the agent's config watch said
+//     local-only (Options.Online, Writer.NoteMode).
 //   - batches.seg: a chain frame naming the device id and the device
 //     key's id, then a row per batch, {b, first_seq, last_seq, n, prev,
-//     R_b, H_b, sealed_at} and where its frames are, and the server's
-//     receipts with their received_at (DESIGN 3.5; ledger-v1 7).
+//     R_b, H_b, sealed_at, online} and where its frames are, and the
+//     server's receipts with their received_at (DESIGN 3.5; ledger-v1 7).
 //   - old/<key id>/: the chain of a device key this installation no
 //     longer writes with, kept for reading.
 //
@@ -56,5 +59,6 @@
 // off the newest segment and off batches.seg, rebuilds a row a crash or a
 // power cut lost from its seal frame, flushing the segment before the row,
 // and seals the records that survived without a batch. Batches leave the
-// device, through Options.Sealed, only once they are on disk.
+// device, through Options.Sealed, only once they are on disk, and the mode
+// each was sealed in is on disk with it, in its seal frame.
 package ledger
