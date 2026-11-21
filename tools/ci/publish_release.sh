@@ -28,18 +28,22 @@
 #    so a tag moved after checkout, or while the files upload, can't carry
 #    this build.
 # 4. A draft stays editable by anyone who can write to the repository, so
-#    before it publishes, it lists the draft's assets and refuses unless
-#    they are exactly the files, each at its SHA-256. It checks the
-#    publish answer the same way, with its tag, so a file swapped in the
-#    last moment, which immutable releases then keep, fails the job.
+#    before it publishes, it checks that the release is still a draft and
+#    that its assets are exactly the files, each at its SHA-256. It
+#    publishes under VERSION's tag alone, and checks the publish answer
+#    the same way, with its tag, so a file swapped in the last moment,
+#    which immutable releases then keep, fails the job.
 #
-# If it stops after making the draft, the draft stays unpublished, and the
-# next run's step 1 deletes it.
+# If it stops after making the draft and before publishing it, the draft
+# stays unpublished, and the next run's step 1 deletes it. The exceptions
+# are a draft someone published outside this run, and a publish answer
+# that isn't the release this run uploaded: that release is out and
+# frozen, so the job fails and says to check it.
 #
 # GH_REPO names the repository (owner/name), and gh reads its token from
 # GH_TOKEN. PUBLISH_RETRY_SECONDS, 5 unless set, is the pause before an
-# upload is tried again. It needs gh, git, jq and coreutils, prints the
-# release's URL and adds that to GITHUB_STEP_SUMMARY when it's set.
+# upload is tried again. It needs gh, git, jq, coreutils and diff, prints
+# the release's URL and adds that to GITHUB_STEP_SUMMARY when it's set.
 # tools/ci's TestPublishRelease runs it against a fake gh.
 set -euo pipefail
 
@@ -164,22 +168,38 @@ for file in "$@"; do
 	upload "$file"
 done
 
-# 4. The draft's assets, every one of them, against the files.
+# 4. Still a draft, then the draft's assets, every one of them, against
+# the files. A writer could have published the draft after its last upload,
+# swapped or not, and then nothing this run does can change it.
+still=$(gh api "$api/releases/$id" | jq -r .draft)
+if [ "$still" != true ]; then
+	echo "::error::release $id of $version was published outside this run, and immutable releases keep its files as they are. Check the release now."
+	exit 1
+fi
 got=$(gh api --paginate "$api/releases/$id/assets" | jq -r '.[] | "\(.name)\t\(.digest)"' | sort)
 check_assets "draft release $id doesn't hold exactly the files this run uploaded, each at its SHA-256, so it won't be published:" "$got"
 
 check_tag
-publish=(-F draft=false)
+publish=(-f tag_name="$version" -F draft=false)
 if [ "$prerelease" = false ]; then
 	publish+=(-f make_latest=true)
 fi
 published=$(gh api --method PATCH "$api/releases/$id" "${publish[@]}")
-if ! jq -e --arg v "$version" '.draft == false and .tag_name == $v' <<<"$published" >/dev/null; then
-	echo "::error::publishing draft release $id answered $(jq -c '{id, draft, tag_name}' <<<"$published"), not the published release of $version"
+draft=$(jq -r .draft <<<"$published")
+tag=$(jq -r .tag_name <<<"$published")
+if [ "$draft" != false ]; then
+	echo "::error::publishing draft release $id answered draft $draft, so $version isn't out"
 	exit 1
+fi
+# Out and frozen from here, so report a wrong tag and wrong files both.
+if [ "$tag" != "$version" ]; then
+	echo "::error::release $id is published under tag $tag, not $version, and immutable releases keep it as it is. Check the release now."
 fi
 got=$(jq -r '.assets[] | "\(.name)\t\(.digest)"' <<<"$published" | sort)
 check_assets "release $id of $version is published, but its files aren't exactly the ones this run uploaded, and immutable releases keep them as they are. Check the release now:" "$got"
+if [ "$tag" != "$version" ]; then
+	exit 1
+fi
 url=$(jq -r .html_url <<<"$published")
 echo "Published $version: $url"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
