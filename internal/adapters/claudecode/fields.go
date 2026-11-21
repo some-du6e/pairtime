@@ -22,18 +22,20 @@ var common = []string{
 
 // own are the fields each event adds to common, from HS 3.1's table and
 // the capture. StopFailure's come from the hooks reference alone, since the
-// capture skipped step 15, which needs the network off.
+// capture skipped step 15, which needs the network off, and so do
+// PostToolUseFailure's, since every tool call the capture made succeeded.
 var own = map[string][]string{
-	EventSessionStart:      {"source", "model", "session_title", "seconds_since_last_response", "context_tokens"},
-	EventUserPromptSubmit:  {"prompt", "session_title"},
-	EventStop:              {"stop_hook_active", "last_assistant_message", "background_tasks", "session_crons"},
-	EventStopFailure:       {"error", "error_details", "last_assistant_message"},
-	EventNotification:      {"message", "title", "notification_type"},
-	EventPermissionRequest: {"tool_name", "tool_input", "permission_suggestions"},
-	EventPostToolUse:       {"tool_name", "tool_input", "tool_response", "tool_use_id", "duration_ms"},
-	EventSubagentStart:     nil,
-	EventSubagentStop:      {"stop_hook_active", "last_assistant_message", "background_tasks", "session_crons", "agent_transcript_path"},
-	EventSessionEnd:        {"reason"},
+	EventSessionStart:       {"source", "model", "session_title", "seconds_since_last_response", "context_tokens"},
+	EventUserPromptSubmit:   {"prompt", "session_title"},
+	EventStop:               {"stop_hook_active", "last_assistant_message", "background_tasks", "session_crons"},
+	EventStopFailure:        {"error", "error_details", "last_assistant_message"},
+	EventNotification:       {"message", "title", "notification_type"},
+	EventPermissionRequest:  {"tool_name", "tool_input", "permission_suggestions"},
+	EventPostToolUse:        {"tool_name", "tool_input", "tool_response", "tool_use_id", "duration_ms"},
+	EventPostToolUseFailure: {"tool_name", "tool_input", "tool_use_id", "error", "is_interrupt", "duration_ms"},
+	EventSubagentStart:      nil,
+	EventSubagentStop:       {"stop_hook_active", "last_assistant_message", "background_tasks", "session_crons", "agent_transcript_path"},
+	EventSessionEnd:         {"reason"},
 }
 
 // fields is a hook payload, field by field, so that a field of an

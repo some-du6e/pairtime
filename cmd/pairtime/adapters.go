@@ -20,7 +20,7 @@ import (
 
 const adaptersUsage = `Usage:
   pairtime adapters list
-  pairtime adapters test [--expected <file>] <dir>
+  pairtime adapters test [--expected <file>] [--show-content] <dir>
 
 list prints each harness pairtime has an adapter for, with the hook events
 it reads.
@@ -36,6 +36,12 @@ the --expected file's for a single run. It prints one line per run and
 exits 1 when a run doesn't replay to its expected records, when a call
 doesn't parse, or when no capture it replayed is real (synthetic: false),
 since an adapter can't ship with synthetic fixtures alone (DESIGN 5.1).
+
+A record that differs is shown without its content: its event, whose keys
+are symbols, and of its text, command line and edits only whether they
+differ, by length. --show-content shows the records whole, prompts,
+replies, command lines and file paths included, which a capture that
+isn't scrubbed yet holds as the person typed and Claude wrote them.
 `
 
 func init() {
@@ -117,6 +123,7 @@ func adaptersTest(args []string, stdout, stderr io.Writer) int {
 	fl := flag.NewFlagSet("pairtime adapters test", flag.ContinueOnError)
 	fl.SetOutput(stderr)
 	expectedFile := fl.String("expected", "", "the expected records of a single run, as JSON Lines")
+	showContent := fl.Bool("show-content", false, "show differing records whole, with the prompts, replies, command lines and paths they hold")
 	if err := fl.Parse(args); err != nil {
 		return 2
 	}
@@ -124,7 +131,13 @@ func adaptersTest(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, adaptersUsage)
 		return 2
 	}
-	dir := filepath.Clean(fl.Arg(0))
+	// The OS folder and the run are named by the path's last elements, so
+	// "." or "cli" must become the folders they are first.
+	dir, err := filepath.Abs(fl.Arg(0))
+	if err != nil {
+		fmt.Fprintf(stderr, "pairtime adapters test: %v\n", err)
+		return 1
+	}
 	osDir, runs := dir, []string(nil)
 	if isDir(filepath.Join(dir, "hooks")) {
 		osDir, runs = filepath.Dir(dir), []string{filepath.Base(dir)}
@@ -199,7 +212,11 @@ func adaptersTest(args []string, stdout, stderr io.Writer) int {
 		for _, c := range calls {
 			fmt.Fprintf(stdout, "  hooks/%s: %v\n", c, r.Failures[c])
 		}
-		for _, d := range r.Diffs {
+		diffs := r.Diffs
+		if *showContent {
+			diffs = adapters.DiffContent(r.Lines, lines, 20)
+		}
+		for _, d := range diffs {
 			fmt.Fprintf(stdout, "  %s\n", d)
 		}
 	}

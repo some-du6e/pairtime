@@ -7,6 +7,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/hookpath"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
+	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -24,7 +25,10 @@ import (
 // parent_class, has_tty and an IDE or desktop entrypoint from.
 // Arrival.Harness names the harness that ran the hook, by the walk or,
 // with none, by the chain the call recorded, for DESIGN 5.1's
-// deduplication alone.
+// deduplication alone. That is also the harness an IDE or agent desktop app
+// hosts when it ran the hook itself, as Cursor's desktop app runs Claude
+// Code's hooks (HS 4.1), though such a call is never via hook for an
+// adapter whose Hosts it isn't in.
 //
 // The call's times are the hook path's (hookpath.Times): the sender's own
 // stamp, since a drain can come long after the call, but never later than
@@ -42,6 +46,13 @@ func HookRecord(a Adapter, goos string, d inbox.Delivery) (RawRecord, error) {
 	}
 	p := hookpath.Of(goos, d, a.Name())
 	arr := Arrival{Via: event.ViaPlugin, Harness: p.Harness}
+	if arr.Harness == "" {
+		if host, ok := hookHost(goos, d, p.Walked); ok {
+			if h := hookpath.HostedBy(goos, host); h != a.Name() {
+				arr.Harness = h
+			}
+		}
+	}
 	if p.Via == event.ViaHook && p.Host != nil && MatchesAny(a.Hosts(), goos, *p.Host) {
 		l := p.Lineage
 		arr.Via, arr.Walk = event.ViaHook, &l
@@ -55,4 +66,22 @@ func HookRecord(a Adapter, goos string, d inbox.Delivery) (RawRecord, error) {
 		Incomplete: b.Cut || b.Dropped || len(b.Payload) == 0 && b.Bytes > 0,
 		Arrival:    arr,
 	}, nil
+}
+
+// hookHost returns the process hook call d ran under (platform.HookHost):
+// from the agent's own walk when it counts, else from the chain the call
+// recorded, which goes by names alone.
+func hookHost(goos string, d inbox.Delivery, walked bool) (platform.Proc, bool) {
+	chain := d.Walk
+	if !walked {
+		chain = make([]platform.Proc, len(d.Chain))
+		for i, c := range d.Chain {
+			chain[i] = platform.Proc{PID: c.PID, Name: c.Name, Start: c.Start, Ticks: c.Ticks}
+		}
+	}
+	i := platform.HookHost(goos, chain)
+	if i < 0 {
+		return platform.Proc{}, false
+	}
+	return chain[i], true
 }

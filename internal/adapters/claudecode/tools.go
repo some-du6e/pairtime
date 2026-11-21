@@ -4,6 +4,7 @@ package claudecode
 
 import (
 	"path"
+	"strconv"
 	"strings"
 
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -39,14 +40,23 @@ type patch struct {
 	Lines    []string `json:"lines"`
 }
 
-// tool maps PostToolUse: one agent.tool, which ends as the hook fires and
-// started duration_ms before.
-func (c *call) tool() {
+// tool maps PostToolUse, or PostToolUseFailure when failed: one agent.tool,
+// which ends as the hook fires and started duration_ms before. A failed
+// call is one that started and then failed, such as a command that exited
+// non-zero. It has no tool_response, only its error's text, which is what
+// Claude Code shows for it (the hooks reference;
+// docs/errata/2026-11-20-claude-code-tool-failure.md). A failed edit
+// changed nothing, so it counts no lines.
+func (c *call) tool(failed bool) {
 	name, _ := c.f.str("tool_name")
 	var in toolInput
 	var resp toolResponse
 	c.f.object("tool_input", &in)
-	c.f.object("tool_response", &resp)
+	if failed {
+		resp.Stdout, _ = c.f.str("error")
+	} else {
+		c.f.object("tool_response", &resp)
+	}
 	t := &event.AgentTool{ToolClass: event.ToolOther, TStart: c.env.T, TEnd: c.env.T}
 	if d, ok := c.f.integer("duration_ms"); ok {
 		if d >= 0 && d <= c.env.T-minUnixMS {
@@ -64,6 +74,11 @@ func (c *call) tool() {
 		t.ToolClass = event.ToolWrite
 		r = c.edit(t, in, resp)
 	case "Bash":
+		if failed {
+			if code, out, ok := exitLine(resp.Stdout); ok {
+				t.ExitCode, resp.Stdout = &code, out
+			}
+		}
 		r = c.bash(t, in, resp)
 	}
 	if agent, _ := c.f.str("agent_id"); agent != "" {
@@ -200,7 +215,9 @@ func under(root, p string) (string, bool) {
 // bash fills a Bash call's class, output lines and error signature. The
 // command line goes in the record's content, and in cmd_hash keyed as the
 // ledger keys it. Claude Code 2.1.327's PostToolUse gives no exit status,
-// so exit_code is left out.
+// and fires for a background command as it starts, so exit_code is left
+// out; a command that exited non-zero gives PostToolUseFailure instead,
+// whose error states its exit code (exitLine).
 func (c *call) bash(t *event.AgentTool, in toolInput, resp toolResponse) *recordContent {
 	t.ToolClass = commandClass(in.Command)
 	t.VisibleOutputLines = countLines(resp.Stdout) + countLines(resp.Stderr)
@@ -217,6 +234,23 @@ func (c *call) bash(t *event.AgentTool, in toolInput, resp toolResponse) *record
 		}
 	}
 	return &recordContent{command: in.Command}
+}
+
+// exitLine reads the line Claude Code puts first in the error of a command
+// that ran and failed, "Exit code N", and returns N and the rest: what the
+// command printed, stdout and stderr together. An error without that line,
+// as when the shell itself didn't start, gives false.
+func exitLine(msg string) (code int64, out string, ok bool) {
+	first, rest, _ := strings.Cut(msg, "\n")
+	v, ok := strings.CutPrefix(first, "Exit code ")
+	if !ok {
+		return 0, "", false
+	}
+	code, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return 0, "", false
+	}
+	return code, rest, true
 }
 
 // countLines counts text's lines: its pieces up to each LF, and a last

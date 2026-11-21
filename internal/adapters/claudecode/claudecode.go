@@ -25,15 +25,21 @@
 //     <task-notification> prompt, is declared subagent (SM 2.2 rule 3).
 //     A message typed while a turn runs is queued: Claude Code runs the
 //     hook as it queues it, with the running turn's prompt_id (WP-AD1's
-//     step 21), so a second prompt with a prompt_id that already started a
-//     turn is agent.queue in that turn, SM 2.3's Q anchor.
+//     step 21), so a prompt whose prompt_id an earlier call of the session
+//     carried is agent.queue in that turn, SM 2.3's Q anchor. A scheduled
+//     prompt or a task notification never is: Claude Code runs its hook
+//     when it takes it up, with a prompt_id of its own (E-cc-queued-turn).
 //   - Stop is agent.output for last_assistant_message, with is_final, and
 //     agent.stop with stop_hook_active (SM 2.2 rule 2) and the session's
-//     scheduled prompts as pending_crons. StopFailure is agent.stop with
-//     stop_reason error, or limit for a rate limit or the output cap.
+//     scheduled prompts as pending_crons. StopFailure is agent.stop alone,
+//     with stop_reason error, or limit for a rate limit or the output cap:
+//     its last_assistant_message is the API error's text, not Claude's.
 //   - PostToolUse for Edit, Write and Bash is agent.tool, with the lines
 //     structuredPatch adds and removes, the edited file's key, and for a
 //     command its class, its output's visible lines and error signature.
+//     PostToolUseFailure, for the same tools, is agent.tool too: a call
+//     that started and failed, such as a test run that exited non-zero,
+//     with the exit code and the output its error text gives.
 //   - SubagentStart and SubagentStop are agent.subagent.
 //   - SessionEnd is session.end with its reason.
 //   - PermissionRequest and Notification make no event. A hook alone can't
@@ -48,12 +54,13 @@
 // out (adapters.HookRecord): via hook only for a call over the socket or
 // the pipe whose walked chain reaches claude, and plugin for every other,
 // spooled calls included (D-spool-via). A call that another harness's
-// process ran, as when Devin runs these hooks, is that harness's to record
-// (DESIGN 5.1), so Parse returns adapters.ErrOtherHarness for it.
+// process ran, as when Devin or Cursor's desktop app runs these hooks, is
+// that harness's to record (DESIGN 5.1), so Parse returns
+// adapters.ErrOtherHarness for it.
 //
-// Fields Claude Code 2.1.327 doesn't send, and events pairtime doesn't
-// install, are parse failures, which never stop the call's other events
-// from being made (DESIGN 5.3).
+// Fields Claude Code 2.1.327 doesn't send, and events the adapter doesn't
+// read, are parse failures, which never stop the call's other events from
+// being made (DESIGN 5.3).
 package claudecode
 
 import (
@@ -70,21 +77,25 @@ import (
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
-// The hook events pairtime installs in Claude Code (DESIGN 5.1).
+// The hook events pairtime installs in Claude Code (DESIGN 5.1), and
+// PostToolUseFailure, which the adapter reads too
+// (docs/errata/2026-11-20-claude-code-tool-failure.md).
 const (
-	EventSessionStart      = "SessionStart"
-	EventUserPromptSubmit  = "UserPromptSubmit"
-	EventStop              = "Stop"
-	EventStopFailure       = "StopFailure"
-	EventNotification      = "Notification"
-	EventPermissionRequest = "PermissionRequest"
-	EventPostToolUse       = "PostToolUse"
-	EventSubagentStart     = "SubagentStart"
-	EventSubagentStop      = "SubagentStop"
-	EventSessionEnd        = "SessionEnd"
+	EventSessionStart       = "SessionStart"
+	EventUserPromptSubmit   = "UserPromptSubmit"
+	EventStop               = "Stop"
+	EventStopFailure        = "StopFailure"
+	EventNotification       = "Notification"
+	EventPermissionRequest  = "PermissionRequest"
+	EventPostToolUse        = "PostToolUse"
+	EventPostToolUseFailure = "PostToolUseFailure"
+	EventSubagentStart      = "SubagentStart"
+	EventSubagentStop       = "SubagentStop"
+	EventSessionEnd         = "SessionEnd"
 )
 
-// toolMatcher is the matcher PostToolUse is installed under.
+// toolMatcher is the matcher PostToolUse and PostToolUseFailure are
+// installed under.
 const toolMatcher = "Edit|Write|Bash"
 
 // harness is the harness this adapter is for.
@@ -108,13 +119,14 @@ type Adapter struct {
 	clock    uint64
 }
 
-// New returns an adapter that keys ids and resolves projects with opts.
+// New returns an adapter that keys ids and resolves projects with opts. It
+// panics when opts.Keys is nil, since every id the adapter records is keyed
+// under the device's K_session and no other key may stand in for it.
 func New(opts adapters.Options) *Adapter {
-	k := opts.Keys
-	if k == nil {
-		k = adapters.FixtureKeys()
+	if opts.Keys == nil {
+		panic("claudecode: New needs Options.Keys, the device's K_session")
 	}
-	return &Adapter{opts: opts, keys: k, sessions: map[string]*session{}}
+	return &Adapter{opts: opts, keys: opts.Keys, sessions: map[string]*session{}}
 }
 
 // Name is claude_code.
@@ -142,18 +154,20 @@ func (*Adapter) Plan(env adapters.Env) ([]adapters.ConfigEdit, error) {
 	return []adapters.ConfigEdit{item}, nil
 }
 
-// Events lists the hook events Parse reads, in DESIGN 5.1's order.
+// Events lists the hook events Parse reads, in DESIGN 5.1's order, with
+// PostToolUseFailure after PostToolUse.
 var Events = []string{
 	EventSessionStart, EventUserPromptSubmit, EventStop, EventStopFailure, EventNotification,
-	EventPermissionRequest, EventPostToolUse, EventSubagentStart, EventSubagentStop, EventSessionEnd,
+	EventPermissionRequest, EventPostToolUse, EventPostToolUseFailure, EventSubagentStart, EventSubagentStop,
+	EventSessionEnd,
 }
 
-// Sources lists DESIGN 5.1's hook events. The transcripts are WP-AD3's.
+// Sources lists the hook events Parse reads. The transcripts are WP-AD3's.
 func (*Adapter) Sources() []adapters.Source {
 	out := make([]adapters.Source, len(Events))
 	for i, e := range Events {
 		out[i] = adapters.Source{Kind: adapters.SourceHook, Event: e}
-		if e == EventPostToolUse {
+		if e == EventPostToolUse || e == EventPostToolUseFailure {
 			out[i].Matcher = toolMatcher
 		}
 	}
@@ -199,7 +213,9 @@ type session struct {
 	// hookStart says a session.start with via hook was made for the
 	// session (D-spool-via).
 	hookStart bool
-	// started are the prompt_ids that started a turn, oldest first.
+	// started are the prompt_ids the session's calls named, oldest first:
+	// each prompt's that started a turn, and the turn of any other call,
+	// such as one that took up a queued message.
 	started []string
 	// turn is the turn the session's latest call named: its prompt_id, or
 	// one the adapter made up when Claude Code sent none.
@@ -253,7 +269,8 @@ func (a *Adapter) HookReported(sessionID string) bool {
 	return a.sessions[sessionID] != nil
 }
 
-// startedTurn reports whether prompt_id id already started a turn.
+// startedTurn reports whether a call of the session already named
+// prompt_id id.
 func (s *session) startedTurn(id string) bool {
 	for _, t := range s.started {
 		if t == id {
@@ -264,10 +281,19 @@ func (s *session) startedTurn(id string) bool {
 }
 
 // start records that prompt_id id started a turn.
-func (s *session) start(id string) {
-	s.started = append(s.started, id)
-	if len(s.started) > maxTurns {
-		s.started = s.started[1:]
+func (s *session) start(id string) { s.note(id) }
+
+// note records that a call of the session named turn id, which is then the
+// session's latest. A turn that took up a queued message has no prompt of
+// its own, so its first other call, a PostToolUse, PermissionRequest,
+// Notification, SubagentStart, SubagentStop, Stop or StopFailure, is where
+// the adapter learns its id (E-cc-queued-turn).
+func (s *session) note(id string) {
+	if !s.startedTurn(id) {
+		s.started = append(s.started, id)
+		if len(s.started) > maxTurns {
+			s.started = s.started[1:]
+		}
 	}
 	s.turn = id
 }

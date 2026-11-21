@@ -241,8 +241,8 @@ type Record struct {
 
 // Options are what an adapter needs from the agent to make records.
 type Options struct {
-	// Keys keys the harness's own ids: sessions, turns and subagents. Nil
-	// means a key that only tests should use (FixtureKeys).
+	// Keys keys the harness's own ids: sessions, turns and subagents. An
+	// adapter refuses to be made without it.
 	Keys *Keys
 	// Features is K_feat, which keys file paths, error signatures and
 	// commands as the ledger does. Nil leaves out what needs it: files,
@@ -308,8 +308,17 @@ type Keys struct {
 	secret []byte
 }
 
-// NewKeys returns the Keys for K_session, from hookpath.SessionSecret.
-func NewKeys(kSession []byte) *Keys { return &Keys{secret: bytes.Clone(kSession)} }
+// NewKeys returns the Keys for K_session, from hookpath.SessionSecret. It
+// panics on a secret that isn't hookpath.SessionSecretLen bytes, such as
+// the nil one the agent holds before its keystore opens: ids keyed under
+// it would be keyed under no secret at all, which anyone could recompute
+// from a guess (AGENTS.md).
+func NewKeys(kSession []byte) *Keys {
+	if len(kSession) != hookpath.SessionSecretLen {
+		panic(fmt.Sprintf("adapters: K_session must be %d bytes, not %d", hookpath.SessionSecretLen, len(kSession)))
+	}
+	return &Keys{secret: bytes.Clone(kSession)}
+}
 
 // FixtureKeys returns Keys under a fixed, public secret, for tests and for
 // `pairtime adapters test`, whose output must be the same everywhere. The

@@ -33,8 +33,7 @@ type post struct {
 func (c *call) permissionRequest() {
 	tool, _ := c.f.str("tool_name")
 	agent, _ := c.f.str("agent_id")
-	pid, _ := c.f.str("prompt_id")
-	c.s.requests = append(c.s.requests, &request{env: c.env, tool: tool, agent: agent, prompt: pid})
+	c.s.requests = append(c.s.requests, &request{env: c.env, tool: tool, agent: agent, prompt: c.pid})
 	if len(c.s.requests) > maxHeld {
 		c.s.requests = c.s.requests[1:]
 	}
