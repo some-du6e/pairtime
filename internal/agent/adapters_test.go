@@ -694,6 +694,20 @@ func TestPendingLog(t *testing.T) {
 				t.Errorf("the pending file is still there (%v)", err)
 			}
 		}},
+		{"what an earlier run left stays even when the start couldn't look at the file, and only this run's calls are emptied", func(t *testing.T, dirs home.Dirs, pending string) {
+			left := lineOf(t, newHost(dirs), call(t, "left"))
+			if err := os.WriteFile(pending, left, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			h := newHost(dirs) // no recoverPending, as when its stat of the file failed
+			h.pend(call(t, "new"))(true)
+			takeQueue(h)
+			h.donePending(false)
+			h.donePending(true)
+			if got := read(t, pending); !bytes.Equal(got, left) {
+				t.Errorf("the pending file holds %q, want the earlier run's %q", got, left)
+			}
+		}},
 		{"when the move fails, this run empties the file only back to what the killed run left, and keeps it", func(t *testing.T, dirs home.Dirs, pending string) {
 			left := lineOf(t, newHost(dirs), call(t, "left"))
 			if err := os.WriteFile(pending, left, 0o600); err != nil {

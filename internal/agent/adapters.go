@@ -146,8 +146,9 @@ type adapterHost struct {
 	pendingSize int64
 	pendingBad  bool // the last write to it failed, and doctor heard so
 	// pendingBase is how much of held.jsonl.pending an earlier run left
-	// that this run couldn't move to held.jsonl (recoverPending): the file
-	// is emptied only back to it, and kept for the next start.
+	// that this run couldn't move to held.jsonl (recoverPending), or found
+	// there when it first opened the file: the file is emptied only back
+	// to it, and kept for the next start.
 	pendingBase int64
 	// unsettled counts the calls pend wrote down that the hook sink hasn't
 	// settled yet: the file isn't emptied under them.
@@ -405,7 +406,11 @@ func (h *adapterHost) writePendingLocked(line []byte) error {
 			f.Close()
 			return err
 		}
-		h.pending, h.pendingSize = f, end
+		// What the file holds before this run's first write, an earlier
+		// run left. recoverPending moved it and emptied the file, or it
+		// couldn't move it, or even look at it, and then it stays for the
+		// next start.
+		h.pending, h.pendingSize, h.pendingBase = f, end, max(h.pendingBase, end)
 	}
 	if h.pendingSize+int64(len(line)) > inbox.MaxSpool {
 		return errors.New("held.jsonl.pending is full")
