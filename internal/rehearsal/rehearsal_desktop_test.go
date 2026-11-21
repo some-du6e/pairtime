@@ -80,6 +80,9 @@ const (
 	// prompt, in milliseconds: about 11 characters a second, under SM
 	// 2.2's TYPING_MAX_CPS of 15.
 	typingDelay = "90"
+	// returnHold is how long the person holds Return: a typist's key
+	// stays down for about 100 ms.
+	returnHold = 120 * time.Millisecond
 )
 
 // The test binary is also the stand-in claude, started under the name
@@ -402,8 +405,9 @@ func (r *rehearsal) stepServer(t *testing.T) {
 }
 
 // startServer makes pairtimed's keys and config with pairtimed init, then
-// points sign-in at the mock, opens sign-ups and starts pairtimed serve
-// on SQLite.
+// points sign-in at the mock, names the controller the privacy notice
+// needs before sign-ups open (DESIGN 8.6), opens them, and starts
+// pairtimed serve on SQLite.
 func (r *rehearsal) startServer(t *testing.T) {
 	port, opsPort := freePort(t), freePort(t)
 	r.server = fmt.Sprintf("http://127.0.0.1:%d", port)
@@ -427,6 +431,8 @@ func (r *rehearsal) startServer(t *testing.T) {
 	conf := string(b)
 	for _, e := range []struct{ old, new string }{
 		{`signups_open = false`, `signups_open = true`},
+		{"\nname = \"\"\n", "\nname = \"pairtime rehearsal\"\n"},
+		{"\ncontact = \"\"\n", "\ncontact = \"rehearsal@example.org\"\n"},
 		{`listen = ":8080"`, fmt.Sprintf(`listen = "127.0.0.1:%d"`, port)},
 		{`ops_listen = "127.0.0.1:9091"`, fmt.Sprintf(`ops_listen = "127.0.0.1:%d"`, opsPort)},
 		{`client_id = "` + clientID + `"`, `client_id = "` + clientID + `"` + "\n" + `issuer = "` + r.oidc + `/hca"`},
@@ -799,13 +805,19 @@ func (p *person) leave() {
 }
 
 // typePrompt types text into the Claude Code window, Return after each
-// line, through XTEST as a keyboard would.
+// line, through XTEST as a keyboard would. Return is held down for
+// returnHold, as a person's finger holds it: the hook fires on the key
+// press, and the presence sample the hook takes must find that press, not
+// a release that came before it (SM 2.2 rule 6 looks for input before
+// the submit). xdotool's own key releases at once.
 func (r *rehearsal) typePrompt(t *testing.T, text string) {
 	t.Helper()
 	r.activate(t, r.claudeWin)
 	for _, line := range strings.Split(text, "\n") {
 		r.xdotool(t, "type", "--delay", typingDelay, "--", line)
-		r.xdotool(t, "key", "Return")
+		r.xdotool(t, "keydown", "Return")
+		time.Sleep(returnHold)
+		r.xdotool(t, "keyup", "Return")
 	}
 }
 
