@@ -135,9 +135,9 @@ func TestLocalCredit(t *testing.T) {
 	for _, b := range []store.Bucket{
 		rev(0, 15, event.StatePending, 1),
 		rev(0, 30, event.StatePending, 3), // credit from batch 3's records
-		rev(0, 30, event.StateFinal, 4),   // the flip, after them
 		rev(1, 15, event.StatePending, 2), // another minute, after it in the file
-		rev(0, 45, event.StateFinal, 4),   // new credit, still on top of batch 3's
+		rev(0, 45, event.StatePending, 4), // new credit, still on top of batch 3's
+		rev(0, 45, event.StateFinal, 4),   // the flip, after them
 	} {
 		if _, _, err := bs.Put(b); err != nil {
 			t.Fatal(err)
@@ -167,9 +167,20 @@ func TestLocalCredit(t *testing.T) {
 		{"no revision that rests on batch 3 went, nor any later one of its minute", len(got) == 2},
 		{"the minute remembers that its credit rests on batch 3", p.sent[at(0)].B == 3},
 		{"the day's mark moved past every line", len(p.marks) == 1},
-		{"the next plan withholds the minute too", func() bool {
-			next, err := makePlan(planInput{rows: ix, st: saved{Next: 5, Gaps: st.Gaps, Sent: p.sent}, bucketDir: dir, lag: 900_000})
-			return err == nil && len(next.body.Buckets) == 2 && next.sent[at(0)].B == 3
+		{"across plans of one bucket each, the minute stays withheld", func() bool {
+			var all []sentBucket
+			in := planInput{rows: ix, st: saved{Next: 5, Gaps: st.Gaps}, bucketDir: dir, lag: 900_000, maxBuckets: 1}
+			for range 4 {
+				p, err := makePlan(in)
+				if err != nil {
+					return false
+				}
+				for _, b := range p.body.Buckets {
+					all = append(all, sentBucket{b.Minute.UnixMilli(), b.CreditedS})
+				}
+				in.st.Marks, in.st.Sent = p.marks, p.sent
+			}
+			return slices.Equal(all, []sentBucket{{at(0), 15}, {at(1), 15}}) && in.st.Sent[at(0)].B == 3
 		}()},
 		{"the batch roots stop before batch 3", func() bool {
 			roots := rootsOf(planInput{rows: ix, st: saved{Next: 2, Gaps: st.Gaps}}, 10)
