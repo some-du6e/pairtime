@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -989,6 +990,76 @@ func TestOneRequestAWake(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
 				t.Errorf("no: %d requests and %d minutes after the first wake, %d requests after the next", firstPosts, firstBuckets, lastPosts)
+			}
+		})
+	}
+}
+
+// TestStateBlockPage is a state read a TLS-intercepting proxy answers with
+// a 200 block page: with no X-Pairtime-Time it isn't pairtimed's answer,
+// whatever its body, so it counts as a network error and leaves an
+// upload-failure note, as an upload answered that way does (ingest-v1 5.5).
+func TestStateBlockPage(t *testing.T) {
+	dir := t.TempDir()
+	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+	w, rows := smallChain(t, dirs, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html><body>This site is blocked on this network.</body></html>"))
+	}))
+	t.Cleanup(srv.Close)
+	st, _, err := state.Open(dirs.StateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	devKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, 32))
+	creds := Credentials{Server: srv.URL, Token: testToken, DeviceID: w.DeviceID(), Sign: KeySigner(devKey), LinkedAt: rows[0].SealedAt.Add(-time.Minute)}
+	u, err := New(Options{
+		Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
+		Login:  LoginFunc(func() (Credentials, bool) { return creds, true }),
+		Params: newestTable(), Client: srv.Client(), Draw: func(int64) int64 { return 0 },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Start()
+	t.Cleanup(u.Close)
+	waitFor(t, "the failed state read", func() bool { return u.Status().LastFailure != "" })
+	u.Close()
+	if _, _, err := w.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	var reasons []string
+	if err := ledger.ReadBatches(dirs.Ledger(), 2, func(b ledger.Batch) error {
+		for _, rec := range b.Records {
+			if rec.Header.RType() != pkgledger.RTypeUploadFailure {
+				continue
+			}
+			var body struct {
+				E struct {
+					Reason string `json:"reason"`
+				} `json:"e"`
+			}
+			if err := json.Unmarshal(rec.Body, &body); err != nil {
+				return err
+			}
+			reasons = append(reasons, body.E.Reason)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"the block page left a connect note, as a network error does", slices.Contains(reasons, string(ReasonConnect))},
+		{"the uploader says why it failed", strings.HasPrefix(u.Status().LastFailure, string(ReasonConnect))},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: the notes say %q, and the status %q", reasons, u.Status().LastFailure)
 			}
 		})
 	}

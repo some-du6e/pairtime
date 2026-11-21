@@ -1026,7 +1026,10 @@ func (u *Uploader) sync(c Credentials) bool {
 		// sign again with it.
 		st, a, err = u.getState(u.ctx, c)
 	}
-	if err == nil && a.status != http.StatusTooManyRequests && a.status < 500 && !fromPairtimed(a) {
+	if a.status != 0 && a.status != http.StatusTooManyRequests && a.status < 500 && !fromPairtimed(a) {
+		// Whatever its body, as a proxy's 200 block page whose HTML doesn't
+		// read as the state: a network error, as on an upload (ingest-v1
+		// 5.5), which leaves an upload-failure note.
 		err = errNotPairtimed
 	}
 	switch {
