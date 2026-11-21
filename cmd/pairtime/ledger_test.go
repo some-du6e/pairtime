@@ -5,7 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"encoding/binary"
+	binenc "encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -92,7 +92,7 @@ func (r *ledgerRig) write(t *testing.T, when time.Time, e event.Envelope, data e
 	r.mu.Unlock()
 	r.n++
 	var id [16]byte
-	binary.BigEndian.PutUint64(id[:8], uint64(when.UnixMilli())<<16)
+	binenc.BigEndian.PutUint64(id[:8], uint64(when.UnixMilli())<<16)
 	id[6] = id[6]&0x0f | 0x70
 	id[8] = 0x80
 	id[15] = byte(r.n)
@@ -158,7 +158,7 @@ func parseShown(t *testing.T, out string) ([]ledger.Record, []uint64) {
 			t.Fatalf("a line of ledger show isn't a record: %v\n%s", err, sc.Text())
 		}
 		var h ledger.Header
-		binary.BigEndian.PutUint64(h[:8], s.Seq)
+		binenc.BigEndian.PutUint64(h[:8], s.Seq)
 		h[8] = s.RType
 		for _, f := range []struct {
 			hex  string

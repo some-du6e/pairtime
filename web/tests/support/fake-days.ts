@@ -353,7 +353,13 @@ export function status(overrides: Partial<Schemas['Status']> = {}): Schemas['Sta
 		port: 7247,
 		wakeups: 522,
 		jobs: [{ name: 'inbox-drain', every_s: 60, runs: 522 }],
-		ipc: { via: 'socket', stored: 118, duplicates: 0, refused: 0 },
+		ipc: {
+			via: 'socket',
+			stored: 118,
+			duplicates: 0,
+			refused: 0,
+			spooled: { since: '2026-11-13T16:42:00Z', calls: 0, prompts: 0 },
+		},
 		signals: signalsFor(),
 		adapters: {
 			harnesses: { claude_code: { calls: 118, records: 131, parse_failures: 0, last_record: 1795248000000 } },
@@ -361,6 +367,7 @@ export function status(overrides: Partial<Schemas['Status']> = {}): Schemas['Sta
 			waiting: 0,
 			git: { watched: 1, changes: 3 },
 		},
+		footprint: { rss_bytes: 18200000, peak_rss_bytes: 21400000, cpu_s: 12.5 },
 		...overrides,
 	};
 }

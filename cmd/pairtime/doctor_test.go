@@ -51,8 +51,8 @@ func newDoctorHome(t *testing.T) fakeHome {
 	return newHome(t)
 }
 
-// agentStatus is a running agent's status for the tests to change.
-func agentStatus() doctor.Status {
+// runningStatus is a running agent's status for the tests to change.
+func runningStatus() doctor.Status {
 	return doctor.Status{
 		Version: doctor.Version{Version: version.Get().Version, GoVersion: "go1.26.0", Platform: "linux/amd64"},
 		PID:     4242, Started: time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC), UptimeS: 3*3600 + 12*60,
@@ -153,7 +153,7 @@ func TestDoctorSignals(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newDoctorHome(t)
-			st := agentStatus()
+			st := runningStatus()
 			st.Signals.Idle, st.Signals.Focus = tt.idle, tt.focus
 			h.statusAgent(st)
 			checks, _ := doctorChecks(t)
@@ -192,7 +192,7 @@ func TestDoctorReadsTheAgentNotTheTerminal(t *testing.T) {
 				t.Setenv(k, v)
 			}
 			h := newDoctorHome(t)
-			st := agentStatus()
+			st := runningStatus()
 			st.Signals.Idle = doctor.Signal{Via: "org.gnome.Mutter.IdleMonitor"}
 			st.Signals.Focus = doctor.Signal{Unknown: "Wayland gives other programs no focus signal"}
 			asked := h.statusAgent(st)
@@ -218,14 +218,14 @@ func TestDoctorAgentLine(t *testing.T) {
 	}{
 		{
 			name:     "a running agent is ok, with its version, how long it has run and what its mode uploads",
-			agent:    func(h fakeHome) { h.statusAgent(agentStatus()) },
+			agent:    func(h fakeHome) { h.statusAgent(runningStatus()) },
 			want:     doctor.OK,
 			wantText: "running pairtime " + version.Get().Version + " for 3h 12m, in local mode, which uploads nothing",
 		},
 		{
 			name: "an agent of another version is a warning that says how to move it to this one",
 			agent: func(h fakeHome) {
-				st := agentStatus()
+				st := runningStatus()
 				st.Version.Version = "v0.0.9"
 				h.statusAgent(st)
 			},
@@ -355,7 +355,7 @@ func TestDoctorAdaptersAndProblems(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newDoctorHome(t)
-			st := agentStatus()
+			st := runningStatus()
 			tt.edit(&st)
 			h.statusAgent(st)
 			checks, _ := doctorChecks(t)
@@ -398,11 +398,11 @@ func TestDoctorJSONFitsItsSchema(t *testing.T) {
 		name  string
 		agent func(h fakeHome)
 	}{
-		{"with a running agent", func(h fakeHome) { h.statusAgent(agentStatus()) }},
+		{"with a running agent", func(h fakeHome) { h.statusAgent(runningStatus()) }},
 		{"with no agent", func(fakeHome) {}},
 		{"with an agent from before doctor", func(h fakeHome) { h.agent(nil) }},
 		{"with problems, parse failures, unknown signals and the macOS loop off the main thread", func(h fakeHome) {
-			st := agentStatus()
+			st := runningStatus()
 			st.Signals.Idle = doctor.Signal{Unknown: "no idle source"}
 			st.Signals.Focus = doctor.Signal{Unknown: "no focus source"}
 			st.Signals.Loop = &doctor.Loop{MainThread: false, Dropped: 3}
@@ -599,7 +599,7 @@ func TestDoctorReportNamesNothing(t *testing.T) {
 	h := fakeHome{t: t, dir: data}
 	h.writeFile("config.toml", []byte("# "+homeDir+" on "+host+"\n"))
 	h.writeFile("state.json", []byte(`{"home":"`+filepath.ToSlash(homeDir)+`","host":"`+host+`"}`))
-	st := agentStatus()
+	st := runningStatus()
 	// Even a version that names the teen, which a build from a checkout
 	// can have, doesn't reach the report.
 	st.Version.Version = "v0.1.0-" + user
@@ -633,7 +633,7 @@ func TestDoctorReportNamesNothing(t *testing.T) {
 }
 
 func TestDoctorReportSpan(t *testing.T) {
-	first := agentStatus()
+	first := runningStatus()
 	first.UptimeS, first.Wakeups, first.IPC.Stored = 3600, 120, 5
 	first.Footprint = doctor.Footprint{RSSBytes: 18_000_000, PeakRSSBytes: 20_000_000, CPUS: 1.8}
 	then := func(edit func(*doctor.Status)) doctor.Status {
@@ -775,7 +775,7 @@ func TestDoctorHookRoundTrip(t *testing.T) {
 	}
 	// The hook processes run pairtime from the test binary.
 	t.Setenv(runEnv, ownArgs)
-	h.statusAgent(agentStatus())
+	h.statusAgent(runningStatus())
 
 	checks, _ := doctorChecks(t)
 	tests := []struct {
@@ -829,7 +829,7 @@ func TestDoctorKeystoreLine(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newDoctorHome(t)
 			tt.setup(t, h.dir)
-			h.statusAgent(agentStatus())
+			h.statusAgent(runningStatus())
 			checks, _ := doctorChecks(t)
 			if c := checks["keystore"]; c.Result != tt.want || !strings.Contains(c.Text, tt.wantText) {
 				t.Errorf("keystore is %+v, want %s with %q", c, tt.want, tt.wantText)
