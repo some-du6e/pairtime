@@ -1646,10 +1646,11 @@ func TestReplayProblems(t *testing.T) {
 }
 
 // TestHeldRetention checks D-held-calls-inbox-class's limits on the hook
-// calls held.jsonl and its .replay keep in plaintext: a start drops the
-// ones held longer than heldKeep, a ledger that can't open without a
-// restore holds no more, and the file takes no call where others could
-// read it.
+// calls held.jsonl, its .replay and its pending log keep in plaintext: a
+// start drops the ones held longer than heldKeep, and so does the running
+// agent within a minute of their coming due, a ledger that can't open
+// without a restore holds no more, and the file takes no call where others
+// could read it.
 func TestHeldRetention(t *testing.T) {
 	now := time.Now().UTC()
 	self := inbox.Proc{PID: 4242, Name: "pairtime", Start: now}
@@ -1749,6 +1750,76 @@ func TestHeldRetention(t *testing.T) {
 				t.Errorf("held.jsonl holds %q (%v), want it untouched", got, err)
 			}
 			if p := h.a.currentProblems()["adapters.dropped"]; p != "" {
+				t.Errorf("adapters.dropped is %q", p)
+			}
+		}},
+		{"as the agent runs, a held call goes at the minute job's first look after its seventh day, and the status counts it no more", func(t *testing.T, h *adapterHost) {
+			write(t, h.a.dirs.Held(), line(t, h, call(t, "new-1", time.Hour, false)), line(t, h, call(t, "new-2", time.Minute, false)))
+			h.expireHeld(now)
+			h.countHeld()
+			h.expireRun(now.Add(week - 2*time.Hour))
+			if got := prompts(t, h.a.dirs.Held()); !slices.Equal(got, []string{"new-1", "new-2"}) {
+				t.Errorf("before either came due, held.jsonl holds %q, want both", got)
+			}
+			h.expireRun(now.Add(week - time.Hour + time.Minute))
+			if got := prompts(t, h.a.dirs.Held()); !slices.Equal(got, []string{"new-2"}) {
+				t.Errorf("held.jsonl holds %q, want new-2 alone", got)
+			}
+			if p := h.a.currentProblems()["adapters.dropped"]; !strings.Contains(p, "1 hook calls") {
+				t.Errorf("adapters.dropped is %q", p)
+			}
+			if w := h.status().Waiting; w != 1 {
+				t.Errorf("the status counts %d calls waiting, want 1", w)
+			}
+		}},
+		{"a call held as the agent runs comes due by its own stamp", func(t *testing.T, h *adapterHost) {
+			if rest := h.hold([]inbox.Delivery{call(t, "new-1", time.Hour, false)}); len(rest) != 0 {
+				t.Fatalf("hold kept %d calls back", len(rest))
+			}
+			h.expireRun(now.Add(week - time.Hour + time.Minute))
+			if _, err := os.Stat(h.a.dirs.Held()); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("held.jsonl is still there (%v)", err)
+			}
+		}},
+		{"as the agent runs, a .replay file whose replay has begun waits, and one whose replay hasn't is cut", func(t *testing.T, h *adapterHost) {
+			replay := h.a.dirs.Held() + ".replay"
+			write(t, replay, line(t, h, call(t, "new-1", time.Hour, false)))
+			h.expireHeld(now)
+			due := now.Add(week - time.Hour + time.Minute)
+			h.replayAt = 1 // read in part, as after a read that failed
+			h.expireRun(due)
+			if got := prompts(t, replay); !slices.Equal(got, []string{"new-1"}) {
+				t.Errorf("with its replay begun, .replay holds %q, want it as it was", got)
+			}
+			h.replayAt = 0
+			h.expireRun(due.Add(heldRetry))
+			if _, err := os.Stat(replay); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("with no replay begun, .replay is still there (%v)", err)
+			}
+		}},
+		{"as the agent runs, what an earlier run left in the pending log goes at the log's next rewrite once due, and this run's lines stay", func(t *testing.T, h *adapterHost) {
+			pending := h.a.dirs.Held() + pendingSuffix
+			earlier := newAdapterHost(&agent{dirs: h.a.dirs, log: slog.New(slog.DiscardHandler), problems: make(map[string]string)})
+			write(t, pending, line(t, earlier, call(t, "old-1", week-time.Hour, false)), line(t, earlier, call(t, "new-1", time.Hour, false)))
+			if err := os.Mkdir(h.a.dirs.Held(), 0o700); err != nil { // so the start can't move them to held.jsonl
+				t.Fatal(err)
+			}
+			h.recoverPending()
+			mine := call(t, "new-2", 0, false)
+			h.pend(mine)(true)
+			h.mu.Lock()
+			h.queue = nil
+			h.mu.Unlock()
+			// It waits for its folder's project, so its line stays too.
+			h.parked = append(h.parked, hostCall{d: mine, live: true})
+			h.count(func() { h.parkedN++; h.parkedLive++ })
+			h.donePending(false)
+			h.expireRun(now.Add(2 * time.Hour))
+			h.donePending(false)
+			if got := prompts(t, pending); !slices.Equal(got, []string{"new-1", "new-2"}) {
+				t.Errorf("the pending log holds %q, want new-1, which the earlier run left, and new-2, this run's", got)
+			}
+			if p := h.a.currentProblems()["adapters.dropped"]; !strings.Contains(p, "1 hook calls") {
 				t.Errorf("adapters.dropped is %q", p)
 			}
 		}},
