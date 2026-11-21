@@ -53,7 +53,7 @@
       "id": "device.held_calls",
       "where": "device",
       "data": "Hook calls the agent hasn't read yet: what your AI tool sent pairtime as you worked, which can be your prompts, its replies, the commands it ran with their output, and the files it edited. They're plain text, not encrypted, in a folder other people's accounts on this computer can't open, though an administrator can",
-      "kept": "Until the agent has read them. One still waiting {days} after it came is deleted the next time the agent starts, since that's when pairtime checks. Once the ledger can't open until you run pairtime restore, no new call is kept",
+      "kept": "Until the agent has read them, and {days} at most. Once the ledger can't open until you run pairtime restore, no new call is kept",
       "days": 7
     },
     {
