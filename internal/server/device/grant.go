@@ -29,10 +29,11 @@ const (
 	// PollSlack is how much earlier than its interval a poll may come
 	// without a slow_down, for network jitter between two requests.
 	PollSlack = 500 * time.Millisecond
-	// RedeemGrace is how long after it expires a code approved in time
-	// can still be redeemed, so an approval in the code's last seconds
-	// isn't lost to the wait before the app's next poll, which a network
-	// error can stretch to a minute.
+	// RedeemGrace is how long after it expires a code answered in time
+	// still gets its answer: an approved code can still be redeemed, and a
+	// denied or stopped one still gets ErrDenied or ErrTaken. So an answer
+	// in the code's last seconds isn't lost to the wait before the app's
+	// next poll, which a network error can stretch to a minute.
 	RedeemGrace = time.Minute
 	// CodeGrace is how long a code's row stays after the code expires,
 	// before DeleteExpiredCodes deletes it (docs/retention.json
@@ -345,8 +346,10 @@ func ownerOf(ctx context.Context, tx writer.Tx, deviceID string) (string, error)
 // ErrDenied, ErrTaken, ErrExpired or ErrInvalidGrant. A poll sooner than
 // the code's interval after the last one, less PollSlack, gets ErrSlowDown
 // and raises the code's interval by SlowDownStep for every poll after it;
-// interval returns the interval in force after this poll. A code approved
-// in time can be redeemed for RedeemGrace after it expires.
+// interval returns the interval in force after this poll. A code answered
+// in time keeps its answer for RedeemGrace after it expires: an approved
+// one can still be redeemed, and a denied or stopped one still gets
+// ErrDenied or ErrTaken rather than ErrExpired.
 //
 // Redeeming an approved code links its device with the key the code named.
 // A new device id gets a row at link generation 1. A device its account
@@ -386,6 +389,12 @@ FROM device_codes WHERE device_code_hash = $1`, codeHash).Scan(&deviceID, &osFam
 			return fmt.Errorf("device: looking up a device code: %w", err)
 		}
 		interval = time.Duration(intervalS) * time.Second
+		// A code that was answered keeps its answer for RedeemGrace past
+		// its expiry; a pending one ends on time.
+		endsMs := expiresMs
+		if status != statusPending {
+			endsMs += RedeemGrace.Milliseconds()
+		}
 		switch {
 		case status == statusRedeemed:
 			outcome = ErrInvalidGrant
@@ -394,11 +403,11 @@ FROM device_codes WHERE device_code_hash = $1`, codeHash).Scan(&deviceID, &osFam
 			// Made before a restart, whose user-code key is gone.
 			outcome = ErrExpired
 			return nil
-		case status == statusApproved && nowMs < expiresMs+RedeemGrace.Milliseconds():
-			// Redeemed below.
-		case nowMs >= expiresMs:
+		case nowMs >= endsMs:
 			outcome = ErrExpired
 			return nil
+		case status == statusApproved:
+			// Redeemed below.
 		case status == statusDenied:
 			outcome = ErrDenied
 			return nil

@@ -82,11 +82,11 @@ RFC 8628 3.4. A form: `grant_type=urn:ietf:params:oauth:grant-type:device_code`,
 | `slow_down` | It asked again less than `interval` seconds after its last request (with 0.5 s of slack); the server raises this code's interval by 5 s | adds 5 s to its interval, waits, asks again |
 | `access_denied` | The teen chose Don't link, or chose Stop after the device id stopped belonging to another account (section 3), or Hack Club Auth has marked the approving account ineligible since | stops |
 | `device_taken` | An account other than the one the device id belongs to approved the code, or chose Stop (section 1) | stops; it can link to that account only as a new device |
-| `expired_token` | 15 minutes passed, or the server restarted, before the app got its token | stops; `pairtime login` starts over |
+| `expired_token` | 15 minutes passed without an answer, or a minute more after one, or the server restarted, before the app got its token | stops; `pairtime login` starts over |
 | `invalid_grant` | No such device code, or its token was already handed out | stops |
 | `unsupported_grant_type`, `invalid_request`, `invalid_client`, `server_error` | RFC 6749 5.2 | stops |
 
-A code approved before it expired can still be redeemed for a minute after, so an approval in its last seconds isn't lost to the wait before the app's next poll.
+A code answered before it expired keeps its answer for a minute after. An approved one can still be redeemed, and a denied or stopped one still gets `access_denied` or `device_taken`, so an answer in its last seconds isn't lost to the wait before the app's next poll.
 
 The app stops on any error code but `authorization_pending` and `slow_down`, as RFC 8628 3.5 says. A 5xx or 429 answer without an RFC 6749 error body, such as a proxy's 502 page, isn't the server's answer to the code. The app waits twice as long as before, up to a minute and never less than the interval, as after a network error, and asks again until the code's lifetime has passed. Any other answer without an error body ends the polling.
 

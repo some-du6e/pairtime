@@ -131,6 +131,42 @@ func TestGrant(t *testing.T) {
 						t.Errorf("poll = %q, want expired_token", tr.Error)
 					}
 				}},
+				{name: "a code turned down in its last seconds still gets access_denied at the app's next poll after it expires", run: func(t *testing.T, h *harness) {
+					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
+					c := h.requestCode(testDeviceID)
+					h.clock.Advance(device.CodeLifetime - 2*time.Second)
+					if r := b.decide(c.UserCode, "deny"); !strings.Contains(r.body, "<h1>Not linked</h1>") {
+						t.Fatalf("denying 2 s before the code expires answered %d:\n%s", r.status, r.body)
+					}
+					h.clock.Advance(device.Interval)
+					if status, tr := h.poll(c.DeviceCode); status != http.StatusBadRequest || tr.Error != "access_denied" {
+						t.Errorf("the poll 3 s after the code expired answered %d %q, want access_denied", status, tr.Error)
+					}
+				}},
+				{name: "a Stop in the code's last seconds still reaches the app as device_taken at its next poll after the code expires", run: func(t *testing.T, h *harness) {
+					h.link(h.signIn(verified("ident!teen1", "U0TEEN1")), testDeviceID)
+					b := h.signIn(verified("ident!teen2", "U0TEEN2"))
+					c := h.requestCode(testDeviceID)
+					h.clock.Advance(device.CodeLifetime - 2*time.Second)
+					if r := b.decide(c.UserCode, "stop"); !strings.Contains(r.body, "linked to another account") {
+						t.Fatalf("Stop 2 s before the code expires answered %d:\n%s", r.status, r.body)
+					}
+					h.clock.Advance(device.Interval)
+					if status, tr := h.poll(c.DeviceCode); status != http.StatusBadRequest || tr.Error != "device_taken" {
+						t.Errorf("the poll 3 s after the code expired answered %d %q, want device_taken", status, tr.Error)
+					}
+				}},
+				{name: "a code turned down in time gets expired_token once a minute has passed since it expired", run: func(t *testing.T, h *harness) {
+					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
+					c := h.requestCode(testDeviceID)
+					if r := b.decide(c.UserCode, "deny"); !strings.Contains(r.body, "<h1>Not linked</h1>") {
+						t.Fatalf("denying answered %d:\n%s", r.status, r.body)
+					}
+					h.clock.Advance(device.CodeLifetime + device.RedeemGrace)
+					if _, tr := h.poll(c.DeviceCode); tr.Error != "expired_token" {
+						t.Errorf("poll = %q, want expired_token", tr.Error)
+					}
+				}},
 				{name: "an account Hack Club Auth turns ineligible between approving and the app's poll gets no device", run: func(t *testing.T, h *harness) {
 					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
 					c := h.requestCode(testDeviceID)
