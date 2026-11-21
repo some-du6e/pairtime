@@ -1062,7 +1062,7 @@ func TestOutboxAfterUpgrade(t *testing.T) {
 		name string
 		ok   bool
 	}{
-		{"privacy show shows the plan made again, which sends nothing, not the waiting request", !pv.Retry && pv.JSON == nil && pv.Stopped == 4},
+		{"privacy show shows the plan made again, with no root and no minute, not the waiting request", !pv.Retry && pv.Batches == 0 && pv.Buckets == 0 && !bytes.Equal(pv.JSON, js) && pv.Stopped == 4},
 		{"the uploader never sent the waiting request, nor any root from batch 4 on", !sent && r.f.head.b == 3 && r.f.rows[4].b == 0},
 		{"the waiting request is gone", errors.Is(kept, fs.ErrNotExist)},
 	}
