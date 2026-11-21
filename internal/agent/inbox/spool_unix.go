@@ -19,6 +19,9 @@ const spoolFlags = os.O_WRONLY | os.O_APPEND | os.O_CREATE | syscall.O_NOFOLLOW 
 // readFlags open a taken spool file for a drain, with the same guards.
 const readFlags = os.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 
+// guardFlags are those guards alone, which OpenPrivate adds to its flags.
+const guardFlags = syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+
 // privateDir checks that dir, the inbox directory, is a directory of this
 // user's in which nobody else may make, rename or delete a file. Anyone
 // who could would be able to put a file of their own in the spool's place

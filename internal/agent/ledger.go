@@ -39,7 +39,8 @@ const (
 // on lock and suspend, and the writer's own on a prompt or a stop. Each
 // sealed batch goes to the scorer loop, which startLedger starts once the
 // writer is open (WP-AG4), so the scorer reads only sealed records
-// (decision E-sm-1.1-seq-gaps).
+// (decision E-sm-1.1-seq-gaps), and to the uploader, which startLedger
+// starts then too (WP-AG5).
 //
 // The ledger's problems go under three sources, so none overwrites
 // another: "ledger" says why it isn't open, and later why a seal failed;
@@ -48,9 +49,10 @@ const (
 func (a *agent) startLedger() func() {
 	a.ledgerIn = ledger.NewPresence(func(msg string) { a.setProblem("ledger.presence", msg) })
 	var (
-		mu      sync.Mutex
-		w       *ledger.Writer
-		stopped bool
+		mu         sync.Mutex
+		w          *ledger.Writer
+		stopped    bool
+		stopUpload = func() {}
 	)
 	quit := make(chan struct{})
 	opened := make(chan struct{})
@@ -66,11 +68,15 @@ func (a *agent) startLedger() func() {
 			lw.Close()
 			return
 		}
+		// The adapters parse the hook calls that waited for the keys and
+		// the writer (adapters.go).
+		a.adaptersHost().attach(lw)
 		w = lw
 		a.ledgerIn.Attach(lw)
 		if a.scorer != nil {
 			a.scorer.Start()
 		}
+		stopUpload = a.startUploader(lw)
 	}()
 	return func() {
 		close(quit)
@@ -82,7 +88,11 @@ func (a *agent) startLedger() func() {
 		mu.Lock()
 		stopped = true
 		lw := w
+		stop := stopUpload
 		mu.Unlock()
+		// The uploader stops first: it writes receipts and failure notes
+		// to the writer.
+		stop()
 		// Presence and focus have stopped, so this writes the last of
 		// their records, and Close seals them.
 		a.ledgerIn.Close()
@@ -109,6 +119,8 @@ func (a *agent) openLedgerRetrying(quit <-chan struct{}) *ledger.Writer {
 		if ledgerGivesUp(err) {
 			a.setProblem("ledger", fmt.Sprintf("the agent records nothing in the ledger: %v", err))
 			a.log.Warn("the ledger can't open", "err", err)
+			// Its hook calls would wait for it forever (adapters.go).
+			a.adaptersHost().giveUp()
 			return nil
 		}
 		a.setProblem("ledger", fmt.Sprintf("the agent records nothing in the ledger until it opens, and tries again in %v: %v", wait, err))
@@ -139,8 +151,9 @@ func ledgerGivesUp(err error) bool {
 
 // openLedger opens the keystore, making K_dev at an installation's first
 // run, and the ledger writer with the keys derived from it. It also gives
-// the focus component K_app (keyFocus), and the hook sink K_session, which
-// keys the hooked sessions focus lists (keySessions).
+// the adapters K_feat and K_project (keyAdapters), the focus component
+// K_app (keyFocus), and the hook sink K_session, which keys the hooked
+// sessions focus lists and the adapters' records (keySessions).
 func (a *agent) openLedger() (*ledger.Writer, error) {
 	ks, err := keys.Open(keys.Options{Dir: a.dirs.Data, Stores: a.keyStores})
 	if err != nil {
@@ -149,12 +162,9 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 	st := ks.Status()
 	// doctor and the dashboard repeat it (DESIGN 3.6; CP 5.2).
 	a.setProblem("keystore", st.Warning())
+	a.keyAdapters(ks)
 	a.keyFocus(ks)
 	a.keySessions(ks)
-	var sealed func(ledger.Batch)
-	if a.scorer != nil {
-		sealed = a.scorer.Sealed
-	}
 	return ledger.Open(ledger.Options{
 		Dir:   a.dirs.Ledger(),
 		Keys:  ks.Keys(),
@@ -164,7 +174,7 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 		Chains:  ks,
 		Params:  a.table,
 		Sched:   a.sched,
-		Sealed:  sealed,
+		Sealed:  a.sealed,
 		Problem: func(msg string) { a.setProblem("ledger", msg) },
 	})
 }

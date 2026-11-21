@@ -5,9 +5,11 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -28,6 +30,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/platform"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 )
@@ -115,7 +118,8 @@ func TestHookSink(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		noSecret bool // K_session isn't known yet
+		noSecret bool     // K_session isn't known yet
+		ignored  []string // the sessions kept out before the calls, by id (hookTies.ignore)
 		calls    func() []inbox.Delivery
 		check    func(t *testing.T, r *recorder, ties *hookTies)
 	}{
@@ -260,6 +264,36 @@ func TestHookSink(t *testing.T) {
 			},
 		},
 		{
+			name:    "a call of a session whose folder is out of pairtime still claims the harness and is stored, but ties nothing and reaches no presence",
+			ignored: []string{"s1"},
+			calls: func() []inbox.Delivery {
+				return []inbox.Delivery{socket("UserPromptSubmit", s1), socket("SessionStart", s2)}
+			},
+			check: func(t *testing.T, r *recorder, ties *hookTies) {
+				if !slices.Equal(r.claims, []int{300, 300}) {
+					t.Errorf("the scan was told of %v, want the harness for both calls", r.claims)
+				}
+				if got := ties.merged(nil); len(got) != 1 || got[claude.ID()] != key("s2") {
+					t.Errorf("the ties are %v, want only s2's", got)
+				}
+				if len(r.presence) != 1 || r.presence[0].kind != event.KindSessionStart {
+					t.Errorf("presence heard %+v, want only s2's start", r.presence)
+				}
+			},
+		},
+		{
+			name:    "the end of a session kept out lets its marker go, so a session that comes back is looked at afresh",
+			ignored: []string{"s1"},
+			calls: func() []inbox.Delivery {
+				return []inbox.Delivery{socket("SessionEnd", `{"session_id":"s1","hook_event_name":"SessionEnd"}`)}
+			},
+			check: func(t *testing.T, r *recorder, ties *hookTies) {
+				if ties.ignoring(key("s1")) || len(r.presence) != 0 {
+					t.Errorf("after its end the session is kept out %v, and presence heard %v", ties.ignoring(key("s1")), r.presence)
+				}
+			},
+		},
+		{
 			name: "a message that isn't a hook call goes straight to the journal",
 			calls: func() []inbox.Delivery {
 				d := socket("UserPromptSubmit", s1)
@@ -280,6 +314,9 @@ func TestHookSink(t *testing.T) {
 				r.secret = nil
 			}
 			ties := newHookTies()
+			for _, id := range tt.ignored {
+				ties.ignore(key(id))
+			}
 			sink := newHookSink(r, platform.Linux, ties, r.steps())
 			calls := tt.calls()
 			for _, d := range calls {
@@ -314,6 +351,49 @@ func TestHookTies(t *testing.T) {
 		{"a tie is news once", func(t *testing.T, ties *hookTies) {
 			if !ties.tie(a, "s1") || ties.tie(a, "s1") || !ties.tie(a, "s2") {
 				t.Error("tie reported news wrongly")
+			}
+		}},
+		{"a session gets a project only while a process runs it, and a project is news once", func(t *testing.T, ties *hookTies) {
+			if ties.setProject("s1", "g1") || ties.projectOf("s1") != "" {
+				t.Error("a session no process runs got a project")
+			}
+			ties.tie(a, "s1")
+			if !ties.setProject("s1", "g1") || ties.setProject("s1", "g1") || !ties.setProject("s1", "g2") {
+				t.Error("setProject reported news wrongly")
+			}
+			if got := ties.projectOf("s1"); got != "g2" {
+				t.Errorf("project %q, want the newest, g2", got)
+			}
+		}},
+		{"an ignored session is untied from every process and loses its project, once, and the others stay", func(t *testing.T, ties *hookTies) {
+			ties.tie(a, "s1")
+			ties.tie(b, "s1")
+			ties.tie(scanned, "s2")
+			ties.setProject("s1", "g1")
+			if !ties.ignore("s1") || ties.ignore("s1") {
+				t.Error("ignore reported news wrongly")
+			}
+			if got, want := ties.merged(nil), map[platform.ID]string{scanned: "s2"}; !maps.Equal(got, want) || ties.projectOf("s1") != "" {
+				t.Errorf("after ignore the ties are %v and the project %q, want %v and none", got, ties.projectOf("s1"), want)
+			}
+			if !ties.ignoring("s1") || ties.ignoring("s2") || ties.ignoring("") {
+				t.Error("ignoring names the wrong sessions")
+			}
+			if ties.tie(a, "s1") || ties.merged(nil)[a] == "s1" {
+				t.Error("an ignored session was tied again")
+			}
+		}},
+		{"unignore lets an ignored session be kept out no longer, and the set stays bounded", func(t *testing.T, ties *hookTies) {
+			ties.ignore("s1")
+			ties.unignore("s1")
+			if ties.ignoring("s1") {
+				t.Error("unignore left the session out")
+			}
+			for i := range maxIgnored + 1 {
+				ties.ignore(fmt.Sprintf("s%d", i))
+			}
+			if n := len(ties.ignored); n != maxIgnored || !ties.ignoring(fmt.Sprintf("s%d", maxIgnored)) {
+				t.Errorf("%d sessions kept out, want %d with the newest among them: one made room, not all", n, maxIgnored)
 			}
 		}},
 		{"a session's end unties only that session from the process", func(t *testing.T, ties *hookTies) {
@@ -355,6 +435,10 @@ func TestHookTies(t *testing.T) {
 			none.tie(a, "s1")
 			none.end(a, "s1")
 			none.prune(func(platform.ID) bool { return false })
+			none.unignore("s1")
+			if none.ignore("s1") || none.ignoring("s1") {
+				t.Error("a nil table ignores a session")
+			}
 			if got := none.merged(scan); !maps.Equal(got, scan) || none.projectOf("s1") != "" {
 				t.Errorf("merged = %v, projectOf = %q", got, none.projectOf("s1"))
 			}
@@ -543,6 +627,217 @@ func TestHookedFocus(t *testing.T) {
 			t.Errorf("hosted_sessions across the records %v, want %s twice", hosted, want)
 		}
 	})
+}
+
+// TestIgnoredSessionLeavesFocus checks the focus side of a folder that a
+// .pairtime-ignore keeps out (DESIGN 8.8), with the real adapters, focus,
+// presence, process scan and ledger over a process table the test
+// supplies. Once a call of a hosted session parses in such a folder, the
+// terminal hosts the session no more and shows no project for it, a later
+// call of it ties nothing, and a call of it that counts again lets it back
+// in. The ignored folder, a git repo, is never watched, and no record of
+// its calls reaches the ledger.
+func TestIgnoredSessionLeavesFocus(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git isn't installed")
+	}
+	store, problem, err := state.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil || problem != "" {
+		t.Fatalf("state.Open: %v %q", err, problem)
+	}
+	dirs := home.Dirs{Data: t.TempDir(), Config: t.TempDir()}
+	dirs.Runtime = dirs.Data
+	a := &agent{
+		dirs:      dirs,
+		log:       slog.New(slog.DiscardHandler),
+		sched:     sched.New(),
+		state:     store,
+		problems:  make(map[string]string),
+		keyStores: []keys.Store{}, // K_dev goes in a key file, off the OS's store
+		hooked:    newHookTies(),
+	}
+	var stops []func()
+	var stopOnce sync.Once
+	stopAll := func() {
+		stopOnce.Do(func() {
+			for i := len(stops) - 1; i >= 0; i-- {
+				stops[i]()
+			}
+		})
+	}
+	t.Cleanup(stopAll)
+	stops = append(stops, a.startLedger(), a.startPresence(presence.OS{}))
+	deadline := time.Now().Add(20 * time.Second)
+	for a.sessionSecret() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the agent had no K_session 20 s after its keystore started opening")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	now := time.Now().UTC()
+	const me = "session:1"
+	desk := []platform.Proc{
+		{PID: 4, Name: "System", Start: now.Add(-time.Hour)},
+		{PID: 4520, PPID: 4480, Name: "explorer", Start: now.Add(-50 * time.Minute), Owner: me},
+		{PID: 6100, PPID: 4520, Name: "WindowsTerminal", Start: now.Add(-10 * time.Minute), Owner: me},
+		{PID: 6200, PPID: 6100, Name: "pwsh", Start: now.Add(-9 * time.Minute), Owner: me},
+	}
+	claude := platform.Proc{PID: 6210, PPID: 6200, Name: "claude", Start: now.Add(-time.Minute), Owner: me}
+	hook := platform.Proc{PID: 6300, PPID: 6210, Name: "pairtime", Start: now, Owner: me}
+	table := append(slices.Clone(desk), claude)
+	read := func() ([]platform.Proc, error) { return slices.Clone(table), nil }
+	a.procs = procs.New(a.procsOptions(procs.Options{Read: read, OS: platform.Windows, Self: me, Boot: "test-boot", Now: func() time.Time { return now }}))
+	var front func(focus.Change)
+	a.newFocus(focus.OS{
+		Via:  "fake",
+		GOOS: platform.Windows,
+		Read: read,
+		Watch: func(fn func(focus.Change)) (func(), error) {
+			front = fn
+			return func() {}, nil
+		},
+	})
+	stops = append(stops, a.startFocus(), a.startAdapters())
+	sink := newHookSink(&recorder{}, platform.Windows, a.hooked, a.hookSteps())
+
+	// kept is a folder that counts, out a repo a .pairtime-ignore keeps out.
+	kept, out := t.TempDir(), t.TempDir()
+	runGit(t, out, "init", "-q")
+	if err := os.WriteFile(filepath.Join(out, "a.txt"), []byte("a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, out, "add", "a.txt")
+	runGit(t, out, "commit", "-q", "-m", "first")
+	if err := os.WriteFile(filepath.Join(out, ".pairtime-ignore"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	self := inbox.Proc{PID: hook.PID, Name: hook.Name, Start: hook.Start}
+	sent := uint64(0)
+	// deliver sends a call of the session in dir as the socket would hand
+	// it over: from under the claude, stamped by the agent as it came, with
+	// the fields Claude Code sends for its event.
+	deliver := func(t *testing.T, name, dir string) {
+		t.Helper()
+		p := map[string]any{"session_id": "stub-session", "cwd": dir, "hook_event_name": name}
+		switch name {
+		case "SessionStart":
+			p["source"] = "startup"
+		case "UserPromptSubmit":
+			p["prompt"] = "hi"
+		case "Stop":
+			p["stop_hook_active"] = false
+		}
+		payload, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := inbox.Delivery{Message: hookMessage(t, name, string(payload), self, now), Via: inbox.ViaSocket, PeerPID: hook.PID,
+			Walk: []platform.Proc{hook, claude, desk[3], desk[2], desk[1]}, Received: clock.Now()}
+		if err := sink.Deliver(d); err != nil {
+			t.Fatal(err)
+		}
+		sent++
+	}
+	// parsed waits until the adapters have parsed every call sent.
+	parsed := func(t *testing.T) adaptersReply {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			st := a.adaptersHost().status()
+			if st.Harnesses[event.HarnessClaudeCode].Calls >= sent && st.Waiting == 0 {
+				return st
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the adapters parsed %+v of %d calls", st, sent)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	session := func() string { return hookpath.SessionKey(a.sessionSecret(), "stub-session") }
+
+	steps := []struct {
+		name    string
+		do      func(t *testing.T)
+		hosted  int
+		project bool // focus has a project for the session
+	}{
+		{"focus on the terminal hosts nothing yet", func(*testing.T) {
+			front(focus.Change{At: now, PID: 6100})
+		}, 0, false},
+		{"a call in a folder that counts makes the terminal host the session, with the folder's project", func(t *testing.T) {
+			deliver(t, "SessionStart", kept)
+			parsed(t)
+		}, 1, true},
+		{"a call of it in the ignored repo leaves the terminal hosting none, and no project", func(t *testing.T) {
+			deliver(t, "UserPromptSubmit", out)
+			parsed(t)
+		}, 0, false},
+		{"a later call of it ties nothing", func(t *testing.T) {
+			deliver(t, "Stop", out)
+			parsed(t)
+		}, 0, false},
+		{"a call of it that counts again lets it back in, and the next ties it", func(t *testing.T) {
+			deliver(t, "UserPromptSubmit", kept)
+			parsed(t)
+			deliver(t, "Stop", kept)
+			parsed(t)
+		}, 1, true},
+	}
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			step.do(t)
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				st := a.focus.Status()
+				if st.Class == event.AppTerminal && st.Hosted == step.hosted && (a.hooked.projectOf(session()) != "") == step.project {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("focus status %+v, project %q; want a terminal hosting %d, with a project %v",
+						st, a.hooked.projectOf(session()), step.hosted, step.project)
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		})
+	}
+	st := parsed(t)
+	stopAll()
+	var kinds []event.Kind
+	if err := ledger.ReadBatches(dirs.Ledger(), 1, func(b ledger.Batch) error {
+		for _, r := range b.Records {
+			body, err := pkgledger.ParseBody(r.Body)
+			if err != nil {
+				return err
+			}
+			ev, err := body.Event()
+			if err != nil {
+				return err
+			}
+			if ev.Source == event.SourceHook || ev.Source == event.SourceGit {
+				kinds = append(kinds, ev.Kind())
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("reading the ledger back: %v", err)
+	}
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"the two calls in the ignored repo count as ignored", st.Harnesses[event.HarnessClaudeCode].Ignored == 2},
+		{"the ignored repo is never watched", st.Git.Watched == 0},
+		{"the ledger holds the three calls that counted, and nothing of the ignored repo",
+			slices.Equal(kinds, []event.Kind{event.KindSessionStart, event.KindPromptSubmit, event.KindAgentStop})},
+	}
+	for _, c := range checks {
+		t.Run(c.name, func(t *testing.T) {
+			if !c.ok {
+				t.Errorf("no: adapters %+v, ledger %v", st, kinds)
+			}
+		})
+	}
 }
 
 // TestListenAgain checks that an agent whose socket can't listen tries

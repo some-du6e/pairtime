@@ -355,6 +355,12 @@ export function status(overrides: Partial<Schemas['Status']> = {}): Schemas['Sta
 		jobs: [{ name: 'inbox-drain', every_s: 60, runs: 522 }],
 		ipc: { via: 'socket', stored: 118, duplicates: 0, refused: 0 },
 		signals: signalsFor(),
+		adapters: {
+			harnesses: { claude_code: { calls: 118, records: 131, parse_failures: 0, last_record: 1795248000000 } },
+			other: { calls: 0, records: 0, parse_failures: 0 },
+			waiting: 0,
+			git: { watched: 1, changes: 3 },
+		},
 		...overrides,
 	};
 }

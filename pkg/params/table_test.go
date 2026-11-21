@@ -22,6 +22,7 @@ import (
 // version, a new file and a new line here.
 var golden = map[string]string{
 	"0.1.0": "sha256:ccb35125e1fe7a2f9f136d1fd4e25da5efadac2b12872d34a753f11aef9621b0",
+	"0.2.0": "sha256:2e531d6e1901be6fc0cd602817e7e8a28cdd8608e4c3da9330566ac68baae1b0",
 }
 
 func TestEmbeddedTables(t *testing.T) {
@@ -69,6 +70,7 @@ func TestByVersion(t *testing.T) {
 		found   bool
 	}{
 		{"an embedded version is found", "0.1.0", true},
+		{"the version that added INPUT_RELEASE_GRACE_MS is found", "0.2.0", true},
 		{"two parts aren't a version", "0.1", false},
 		{"a v prefix isn't part of a version", "v0.1.0", false},
 		{"a version nobody published isn't found", "9.9.9", false},
@@ -130,6 +132,11 @@ func rawParams(t *testing.T) map[string]string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return rawOf(tab)
+}
+
+// rawOf returns a table's parameters as raw JSON values.
+func rawOf(tab *Table) map[string]string {
 	raw := make(map[string]string)
 	for _, name := range tab.Names() {
 		raw[name], _ = tab.Text(name)
@@ -201,6 +208,9 @@ func TestParseRejects(t *testing.T) {
 		{"a table has no other fields", doc("version", v, "params", ps, "notes", `"hi"`), "notes: a table has only version and params"},
 		{"every parameter is there", doc("version", v, "params", with("THINK_LEAD_S", "")), "params.THINK_LEAD_S: missing"},
 		{"a misspelled parameter is refused", doc("version", v, "params", with("THINK_LAED_S", "120")), "params.THINK_LAED_S: not a parameter"},
+		{"a parameter a later version added is refused in an older table", doc("version", v, "params", with("INPUT_RELEASE_GRACE_MS", "250")), "params.INPUT_RELEASE_GRACE_MS: not a parameter before version 0.2.0, which added it"},
+		{"the version that added a parameter has it", doc("version", `"0.2.0"`, "params", ps), "params.INPUT_RELEASE_GRACE_MS: missing"},
+		{"a version after the one that added a parameter has it too", doc("version", `"0.10.0"`, "params", ps), "params.INPUT_RELEASE_GRACE_MS: missing"},
 		{"the replaced STREAK_DAY_S is refused", doc("version", v, "params", with("STREAK_DAY_S", "900")), "params.STREAK_DAY_S: not a parameter"},
 		{"SM 8.7's tier-2 flags aren't parameters", doc("version", v, "params", with("regular_timing", "0.1")), "params.regular_timing: not a parameter"},
 		{"an integer parameter has no fraction", doc("version", v, "params", with("THINK_LEAD_S", "120.5")), "params.THINK_LEAD_S: must be an integer, got 120.5"},
@@ -251,6 +261,11 @@ func TestParseReportsEveryProblem(t *testing.T) {
 			}
 		})
 	}
+	t.Run("without a valid version, a parameter some versions lack isn't reported missing", func(t *testing.T) {
+		if err == nil || strings.Contains(err.Error(), "INPUT_RELEASE_GRACE_MS") {
+			t.Errorf("Parse error = %v, want one that doesn't name INPUT_RELEASE_GRACE_MS", err)
+		}
+	})
 }
 
 // bump returns a different value of the same type as text: the flag
@@ -275,30 +290,34 @@ func bump(text string) string {
 }
 
 // TestHashChangesWithEveryValue is the plan's check that changing any one
-// value changes the hash, run for every parameter, plus the version.
+// value changes the hash, run for every parameter of every table, plus the
+// version.
 func TestHashChangesWithEveryValue(t *testing.T) {
+	for _, tab := range Tables() {
+		base := rawOf(tab)
+		for _, name := range tab.Names() {
+			changed := bump(base[name])
+			t.Run(fmt.Sprintf("table %s: %s from %s to %s changes the hash", tab.Version(), name, base[name], changed), func(t *testing.T) {
+				m := maps.Clone(base)
+				m[name] = changed
+				got, err := Parse(doc("version", strconv.Quote(tab.Version()), "params", paramsJSON(m)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got.Hash() == tab.Hash() {
+					t.Errorf("%s = %s hashes the same as %s", name, changed, base[name])
+				}
+				if v, _ := got.Text(name); v != changed {
+					t.Errorf("%s = %s after the change, want %s", name, v, changed)
+				}
+			})
+		}
+	}
 	tab, err := ByVersion("0.1.0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	base := rawParams(t)
-	for _, name := range tab.Names() {
-		changed := bump(base[name])
-		t.Run(fmt.Sprintf("%s from %s to %s changes the hash", name, base[name], changed), func(t *testing.T) {
-			m := maps.Clone(base)
-			m[name] = changed
-			got, err := Parse(doc("version", `"0.1.0"`, "params", paramsJSON(m)))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got.Hash() == tab.Hash() {
-				t.Errorf("%s = %s hashes the same as %s", name, changed, base[name])
-			}
-			if v, _ := got.Text(name); v != changed {
-				t.Errorf("%s = %s after the change, want %s", name, v, changed)
-			}
-		})
-	}
 	t.Run("the version is in the hash too", func(t *testing.T) {
 		got, err := Parse(doc("version", `"0.1.1"`, "params", paramsJSON(base)))
 		if err != nil {
@@ -359,6 +378,7 @@ func TestMadeUpNamesPanic(t *testing.T) {
 		read func()
 	}{
 		{"Int of a name no table has panics", func() { tab.Int(IntParam{"NOT_A_PARAM_S"}) }},
+		{"Int of a parameter a later table added panics", func() { tab.Int(INPUT_RELEASE_GRACE_MS) }},
 		{"Int of a rational parameter panics", func() { tab.Int(IntParam{COMPOSE_CPS.ratName}) }},
 		{"Rat of an integer parameter panics", func() { tab.Rat(RatParam{THINK_LEAD_S.intName}) }},
 		{"Bool of an integer parameter panics", func() { tab.Bool(BoolParam{THINK_LEAD_S.intName}) }},

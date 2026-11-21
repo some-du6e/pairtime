@@ -9,8 +9,9 @@
 // socket that hooks hand their messages to and the inbox they spool to
 // when the agent is down (packages ipc and inbox), WP-AG3 what the agent
 // makes of each hook call (hooks.go, package hookpath), WP-OS8 the
-// notifier that shows the coach's notification, and WP-AG4 the scorer loop
-// and the stores it writes (packages scorer and store). The other
+// notifier that shows the coach's notification, WP-AG4 the scorer loop
+// and the stores it writes (packages scorer and store), and WP-AG5 the
+// uploader (package uploader). The other
 // components of DESIGN 3.3 arrive in later work packages, each as a
 // package under internal/agent that Run starts.
 package agent
@@ -44,6 +45,8 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/scorer"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/store"
+	"github.com/some-du6e/pairtime/internal/agent/uploader"
+	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/version"
 	"github.com/some-du6e/pairtime/pkg/params"
 )
@@ -90,6 +93,11 @@ type Options struct {
 	// idle time, and GET /v1/status says that power, locks and focus go
 	// unseen. Other OSes ignore it.
 	Mac *MacLoop
+	// Walk, when set, replaces how the agent reads the parent chain of a
+	// hook connection's peer, which is hookpath.ReadChain otherwise
+	// (ipc.Options.Walk). Tests use it to hand captured calls in from
+	// under the processes the capture recorded.
+	Walk func(pid int) []platform.Proc
 }
 
 // linked keeps heavyModules' entry points reachable (see heavy_linux.go).
@@ -134,6 +142,12 @@ type agent struct {
 	// sessions, once keySessions has derived it from the device key.
 	hooked   *hookTies
 	kSession atomic.Pointer[[]byte]
+	// adapt runs the harness adapters and the git adapter, which turn the
+	// hook calls the journal stores, and the commits in the sessions'
+	// repos, into ledger records (adapters.go, git.go; WP-AG7).
+	// adaptersHost makes it on first use.
+	adapt     *adapterHost
+	adaptOnce sync.Once
 	// ledgerIn takes presence's and focus's records, and presence's
 	// seals, to the ledger writer once it opens (WP-LG5).
 	ledgerIn *ledger.Presence
@@ -150,6 +164,15 @@ type agent struct {
 	// store didn't open.
 	scorer  *scorer.Loop
 	buckets *store.Buckets
+	// upload sends the device's tier-1 data once the ledger is open and
+	// the device is signed in (WP-AG5). It is nil before the ledger opens.
+	upload atomic.Pointer[uploader.Uploader]
+	// early are the batches the ledger writer sealed before upload was
+	// set, with their modes, for handEarly; earlyMu orders them with it.
+	earlyMu sync.Mutex
+	early   []earlyBatch
+	// signIn keeps the sign-in between uploads (credentials).
+	signIn signInCache
 	// loc is Options.Zone (zone).
 	loc *time.Location
 
@@ -259,6 +282,7 @@ func Run(ctx context.Context, opts Options) error {
 	a.newFocus(src.focus)
 	closers = append(closers, a.startProcs())
 	closers = append(closers, a.startFocus())
+	closers = append(closers, a.startAdapters())
 	closers = append(closers, a.startIPC(opts))
 
 	ln, pf, err := a.listen(opts.Ports)

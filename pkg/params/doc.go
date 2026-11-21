@@ -15,8 +15,13 @@
 //	{"version": "0.1.0", "params": {"SAMPLE_S": 15, "COMPOSE_CPS": 1.5, ...}}
 //
 // A published table never changes. Changing a value is a MINOR scoring
-// version with a new file and no code; adding or dropping a parameter is a
-// MAJOR one (SM 7.6, DESIGN 6.6). [ByVersion] and [ByHash] look tables up.
+// version with a new file and no code; adding or dropping a parameter
+// changes a rule, which is a MAJOR one (SM 7.6, DESIGN 6.6). Scoring
+// versions stay 0.x until the freeze (DESIGN 10.2), so until then a rule
+// change raises MINOR: table 0.2.0 added [INPUT_RELEASE_GRACE_MS]. Tables
+// of different versions can therefore hold different parameters: a table
+// holds every parameter this package declares except those a later
+// version added. [ByVersion] and [ByHash] look tables up.
 //
 // # Canonical form and hash
 //
@@ -52,7 +57,9 @@
 //
 // So every parameter pkg/score reads through Int, Rat or Bool is a
 // params.NAME selector there. A test in this package lists those selectors
-// with go/ast and fails if a table lacks one of the names (TE WP0.6).
+// with go/ast and fails if the newest table, the one the agent scores with,
+// lacks one of the names (TE WP0.6). An older table can lack a parameter a
+// later version added, and pkg/score refuses to score with one.
 // Table.Text still takes a string, for code that shows a whole table, and
 // the test doesn't see reads through it, so rules don't use it.
 //

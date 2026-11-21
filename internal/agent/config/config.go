@@ -103,11 +103,19 @@ func Default() Config {
 // Parse reads the contents of a config.toml. The Config it returns is
 // always usable; problems says what was ignored and why.
 func Parse(data []byte) (cfg Config, problems []string) {
+	cfg, problems, _ = parse(data)
+	return cfg, problems
+}
+
+// parse is Parse, and also reports whether it used the file: false when
+// the file isn't TOML or has a value of the wrong type, and Parse ignores
+// it as a whole.
+func parse(data []byte) (cfg Config, problems []string, used bool) {
 	cfg = Default()
 	var file fileConfig
 	md, err := toml.Decode(string(data), &file)
 	if err != nil {
-		return ignored(), []string{fmt.Sprintf("config.toml was ignored, so every setting has its default and notifications are off: %v", err)}
+		return ignored(), []string{fmt.Sprintf("config.toml was ignored, so every setting has its default and notifications are off: %v", err)}, false
 	}
 	// Probably a typo, or a setting from a newer release.
 	for _, key := range md.Undecoded() {
@@ -145,7 +153,7 @@ func Parse(data []byte) (cfg Config, problems []string) {
 		cfg.Display.Shadow = file.Display.Shadow
 	}
 	problems = append(problems, parseNotifications(&cfg, file.Notifications, md.Keys())...)
-	return cfg, problems
+	return cfg, problems, true
 }
 
 // Load reads and parses the file name. When the file is missing it returns

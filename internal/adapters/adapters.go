@@ -46,6 +46,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -237,6 +238,41 @@ type Record struct {
 	Edits []features.Edit
 	// Command is the command line an agent.tool ran.
 	Command string
+	// Dir and Call go with Command: the folder the command ran in, the
+	// session's working directory, and what tells the tool call from
+	// another, such as Claude Code's tool_use_id. The agent hands them to
+	// the git watcher, which matches a git command to the commit it made
+	// (git.Watcher.NoteAgentCommand). Both stay on the device, like the
+	// command: Dir is a path, and neither goes in the event.
+	Dir, Call string
+}
+
+// Stateful is an adapter whose memory of the sessions it parses can
+// outlive one run of the agent (DESIGN 3.5, state.json). Without it, a
+// restarted agent would take a queued message for a new prompt, miss a
+// scheduled prompt that an earlier stop listed (SM 2.2 rule 1) and record
+// a second session.start from the walk. The agent keeps what SaveState
+// returns on the device, readable by its user alone, and hands it to
+// LoadState before the adapter's first Parse.
+type Stateful interface {
+	// SaveState returns the adapter's memory as JSON. It holds no content:
+	// no prompt text, nor anything a reader could turn back into some.
+	SaveState() (json.RawMessage, error)
+	// LoadState replaces the adapter's memory with what SaveState
+	// returned, from this build or an older one. Memory it can't read is
+	// an error, and the adapter then starts empty, as on a first run.
+	LoadState(json.RawMessage) error
+}
+
+// Placer is an adapter that can say, before Parse, which folder a raw
+// record's call ran in: the working directory Parse would resolve to a
+// project (Options.Project), or "" when it would resolve none. The agent
+// holds a call back until its folder's project is known, rather than have
+// Parse wait for the resolver or go without the project, and the calls of
+// other folders go on meanwhile (D-park-unresolved). Folder reads the raw
+// record as Parse does and changes nothing.
+type Placer interface {
+	Folder(raw RawRecord) string
 }
 
 // Options are what an adapter needs from the agent to make records.
@@ -378,3 +414,10 @@ func (k *Keys) Agent(session, id string) string { return k.key("a", "agent", ses
 // characters in the harness session session (agent.stop's pending_crons,
 // which stay on the device).
 func (k *Keys) Cron(session, prefix string) string { return k.key("c", "cron", session, prefix) }
+
+// Memory returns the key the agent names this K_session by beside the
+// adapters' saved memory in state.json, so memory saved under another one,
+// as after a restore, is left behind. It is over a domain of its own, so no
+// session, turn, subagent or scheduled prompt key equals it, and it never
+// leaves the device.
+func (k *Keys) Memory() string { return k.key("m", "memory") }

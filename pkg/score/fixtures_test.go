@@ -21,9 +21,13 @@ import (
 // and compare what comes out with anchors.json, and with the presence the
 // fixture READMEs state.
 
+// testTable returns parameter table 0.2.0, the newest. The tests pin it,
+// so a later table with other values doesn't change what they expect.
+// Table 0.1.0 predates INPUT_RELEASE_GRACE_MS, which the scorer reads, so
+// the scorer can't run with it.
 func testTable(t *testing.T) *params.Table {
 	t.Helper()
-	tab, err := params.ByVersion("0.1.0")
+	tab, err := params.ByVersion("0.2.0")
 	if err != nil {
 		t.Fatal(err)
 	}

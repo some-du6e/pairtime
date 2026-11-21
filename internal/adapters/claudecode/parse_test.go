@@ -780,3 +780,75 @@ func TestTurnMemory(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { tc.check(t, filled(t)) })
 	}
 }
+
+// TestFolder checks that Folder names, before Parse, the folder Parse
+// resolves to a project, which the agent waits for (adapters.Placer;
+// D-park-unresolved), and that it asks for no project itself.
+func TestFolder(t *testing.T) {
+	t.Run("every captured call's folder is the one Parse asks the project of, and Folder asks none", func(t *testing.T) {
+		var asked []string
+		opts := adapters.FixtureOptions()
+		project := opts.Project
+		opts.Project = func(dir string) (adapters.Project, bool) {
+			asked = append(asked, dir)
+			return project(dir)
+		}
+		a := New(opts)
+		placed := 0
+		for _, c := range readCalls(t) {
+			raw, err := adapters.HookRecord(a, "linux", adapters.DeliveryOf(event.HarnessClaudeCode, c, adapters.Walked, c.Arrived))
+			if err != nil {
+				t.Fatal(err)
+			}
+			asked = nil
+			folder := a.Folder(raw)
+			if len(asked) != 0 {
+				t.Errorf("hooks/%s: Folder asked for a project", c.Dir)
+			}
+			a.Parse(raw)
+			want := ""
+			if len(asked) > 0 {
+				want = asked[0]
+			}
+			if len(asked) > 1 || folder != want {
+				t.Errorf("hooks/%s: Folder gives %q, and Parse asked the project of %q", c.Dir, folder, asked)
+			}
+			if folder != "" {
+				placed++
+			}
+		}
+		if placed == 0 {
+			t.Error("no captured call has a folder, so nothing was compared")
+		}
+	})
+	cut := hookRaw(EventUserPromptSubmit, map[string]any{"prompt": "hi", "cwd": "/home/teen/p"}, nil)
+	cut.Incomplete = true
+	other := hookRaw(EventUserPromptSubmit, map[string]any{"prompt": "hi", "cwd": "/home/teen/p"}, nil)
+	other.Arrival.Harness = event.HarnessCursor
+	logged := hookRaw(EventUserPromptSubmit, map[string]any{"prompt": "hi", "cwd": "/home/teen/p"}, nil)
+	logged.Source = adapters.SourceLog
+	notJSON := hookRaw(EventUserPromptSubmit, map[string]any{}, nil)
+	notJSON.Payload = []byte("cwd=/home/teen/p")
+	cases := []struct {
+		name string
+		raw  adapters.RawRecord
+		want string
+	}{
+		{"a call names its cwd", hookRaw(EventUserPromptSubmit, map[string]any{"prompt": "hi", "cwd": "/home/teen/p"}, nil), "/home/teen/p"},
+		{"a call with no cwd has no folder", hookRaw(EventUserPromptSubmit, map[string]any{"prompt": "hi"}, nil), ""},
+		{"a cwd that isn't a string is no folder", hookRaw(EventUserPromptSubmit, map[string]any{"prompt": "hi", "cwd": 7}, nil), ""},
+		{"a call cut short has none, since Parse reads none of it", cut, ""},
+		{"another harness's call has none, since that harness's adapter parses it", other, ""},
+		{"a record that isn't a hook call's has none", logged, ""},
+		{"a payload that isn't JSON has none", notJSON, ""},
+		{"an event pairtime doesn't install has none", hookRaw("Mystery", map[string]any{"cwd": "/home/teen/p"}, nil), ""},
+		{"a call with no session id has none", hookRaw(EventUserPromptSubmit, map[string]any{"session_id": "", "cwd": "/home/teen/p"}, nil), ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := newTest().Folder(c.raw); got != c.want {
+				t.Errorf("Folder = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
