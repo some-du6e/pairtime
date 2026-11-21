@@ -106,7 +106,8 @@ Submitting hours to a program is always your choice. This is what happens when y
 - This server holds the key that opens it. It decrypts each item in memory to check it, and again each time a reviewer opens it, when it encrypts the item once more for that reviewer's browser alone. So whoever runs this server could read what you reveal. The operator also keeps an encrypted copy of the key offline.
 - The encryption doesn't protect against someone at Cloudflare who actively replaces the keys, because the key your computer encrypts to, and the review page reviewers open it with, both come through Cloudflare.
 - The people who may open what you reveal are the reviewers assigned to your submission, Hack Club's Fraud Squad, its Quality and Integrity team and HQ spot-checkers. Every view is logged, and you can read the log.
-- If a revealed item shows something it shouldn't, the "This revealed something it shouldn't have" button deletes it from the evidence store at once, every stored version of it included. The minutes it supported stop counting.
+- If a revealed item shows something it shouldn't, the "This revealed something it shouldn't have" button deletes it from the evidence store at once. If the server can't reach the evidence store just then, reviewers can't open the item any more, and the server deletes it as soon as it can. The minutes it supported stop counting.
+- Withdrawing a submission doesn't delete what you revealed. It stays for the spot-check window, counted from when you withdraw, so a withdrawal can't cut short a check that's under way. The button above deletes an item at once.
 - A person may audit your submission in a 15-minute walk-through on a Slack huddle. It's never recorded, your camera is never needed, and you can bring a parent or club leader, or choose a written audit instead. Hack Club's safeguarding rules come first where they differ.
 
 ## Who else is involved
@@ -124,7 +125,7 @@ Hack Club Auth, Cloudflare and GitHub are based in the United States, and Cloudf
 
 ## How long we keep things
 
-Every kind of data has a time limit. These tables come from the same file this server's cleanup jobs read, {{.RetentionFile}}, as it was when this server was built. A spot-check window is the time after a decision during which Hack Club can check a submission again. {{if .WindowProvisional}}Until Hack Club sets its length, pairtime keeps it open for {{.WindowMonths}} months after the decision.{{else}}It stays open for {{.WindowMonths}} months after the decision.{{end}}
+Every kind of data has a time limit. These tables come from the same file this server's cleanup jobs read, {{.RetentionFile}}, as it was when this server was built. A spot-check window is the time after a decision during which Hack Club can check a submission again. {{if .WindowProvisional}}Until Hack Club sets its length, pairtime keeps it open for {{.WindowMonths}} months after the decision.{{else}}It stays open for {{.WindowMonths}} months after the decision.{{end}} If you withdraw a submission before it's decided, its window starts when you withdraw it, and if it's never decided or withdrawn, when you submitted it.
 {{range .Sections}}
 ### {{.Title}}
 
@@ -151,7 +152,7 @@ Through the controller, you can:
 - object to its use for fraud protection, as [Your right to object](#your-right-to-object) explains
 - withdraw any consent you gave, which stops that use from then on
 
-Deleting your account deletes everything this server holds about you, except the minimal fraud record in the table above, which the deletion report lists as kept. Copies in the server's backups go as the backups expire, within {{days "server.db_snapshots"}}. Copies that programs already received, such as the outcome of a submission, are held by those programs, not by this server.{{if .PrivacyHub}} Hack Club's privacy team can also export or delete your pairtime data for you, through the same privacy hub it uses for Hackatime.{{end}}
+Deleting your account deletes everything this server holds about you, except the minimal fraud record in the table above, which the deletion report lists as kept. If the server can't reach the evidence store just then, the report also lists what you revealed as not deleted yet, and the server deletes it as soon as it can. Copies in the server's backups go as the backups expire, within {{days "server.db_snapshots"}}. Copies that programs already received, such as the outcome of a submission, are held by those programs, not by this server.{{if .PrivacyHub}} Hack Club's privacy team can also export or delete your pairtime data for you, through the same privacy hub it uses for Hackatime.{{end}}
 
 Parents and guardians can contact the controller with questions or requests too.
 

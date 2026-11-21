@@ -25,8 +25,10 @@ type Job struct {
 	// MaxAge is the entry's period, for a job by days: rows whose time is
 	// at least this old are deleted.
 	MaxAge time.Duration
-	// WindowMonths is the spot-check window, for a job by the window: rows
-	// whose time is a decision whose window has closed are deleted.
+	// WindowMonths is the spot-check window, for a job by the window: a row
+	// is deleted once the window that opened at its time has closed. Its
+	// time is when its submission's spot-check window opened (DESIGN 4.4),
+	// and NULL until WP-SV18 writes it.
 	WindowMonths int
 	// Hold, when set, keeps the rows a submission uses.
 	Hold *Hold
@@ -42,16 +44,30 @@ type Hold struct {
 	WindowMonths int
 }
 
+// evidenceJobsAwait is the work package that runs the evidence entries'
+// jobs (D-evidence-retention-wp).
+const evidenceJobsAwait = "WP-SV18"
+
 // Jobs returns the jobs whose tables exist: those without awaits, each
 // with its hold and its kept_by tables, less the ones that await their
 // tables. off lists what is left out, as "server.devices/devices awaits
 // WP-SV3", for the log.
+//
+// A job of an evidence entry stays off even once its table exists, as
+// "evidence.revealed/<table> awaits WP-SV18". Sweep deletes rows only, and
+// an evidence row can name a blob in the evidence store that has to be
+// deleted first, or the blob would outlive the only row that names it.
+// WP-SV18 runs those jobs, deleting each blob before its row.
 func (p *Policy) Jobs() (jobs []Job, off []string) {
 	for _, e := range p.Entries {
 		for _, spec := range e.Jobs {
 			job := p.job(e, spec)
 			if spec.Awaits != "" {
 				off = append(off, job.ID+" awaits "+spec.Awaits)
+				continue
+			}
+			if e.Where == Evidence {
+				off = append(off, job.ID+" awaits "+evidenceJobsAwait)
 				continue
 			}
 			if h := spec.Hold; h != nil && h.Awaits != "" {
@@ -166,10 +182,11 @@ func Sweep(ctx context.Context, d Doer, jobs []Job, now time.Time, batch int) []
 // deleteSQL is one batch's DELETE and its arguments, in the portable SQL of
 // package store. A row whose time is at or before now minus MaxAge, or for
 // a job by the window at or before lastClosed, is past its period. A hold
-// keeps its row while the hold's decision time is NULL, because the
-// submission is open, or later than lastClosed, because the decision's
-// spot-check window is still open (Window.Closes). A kept_by table keeps
-// every row one of its rows names.
+// keeps its row while the hold's time, when its submission's spot-check
+// window opened (DESIGN 4.4), is NULL, because the window hasn't opened or
+// WP-SV18 hasn't written it yet, or later than lastClosed, because the
+// window is still open (Window.Closes). A kept_by table keeps every row one
+// of its rows names.
 func (j Job) deleteSQL(now time.Time, batch int) (string, []any) {
 	col := func(alias string, cols []string) []string {
 		out := make([]string, len(cols))

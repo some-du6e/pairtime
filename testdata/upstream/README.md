@@ -2,7 +2,7 @@
 
 pairtime talks to six things it doesn't control: Hackatime's program API, the client code programs already run against it (Stardance's `HackatimeService`), Robert's review desk, Ari's ship ingest, the YSWS handbook's justification fields, and the Airtable base programs submit from. Each directory here pins one of them at a fixed commit or retrieval date, so the code that imitates or feeds them is tested against what they actually do, not against what we remember.
 
-These files are oracles (PLAN ground rule 5). Once merged, a PR that changes them together with code fails `oracle-guard` unless Karim adds the `oracle-change` label. When a capture and the code disagree, the code is wrong or the capture has an erratum (ground rule 6). Don't edit a capture to make a test pass.
+These files are oracles (PLAN ground rule 5). Once merged, a PR that changes them together with code fails `oracle-guard` unless it has the `oracle-change` label, which only Karim or the orchestrator adds, to apply a decision made outside the PR. When a capture and the code disagree, the code is wrong or the capture has an erratum (ground rule 6). Don't edit a capture to make a test pass.
 
 | Directory | What it pins | How | Read by |
 |---|---|---|---|

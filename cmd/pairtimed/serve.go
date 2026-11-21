@@ -148,11 +148,13 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	// before the database closes.
 	defer w.Close()
 
-	// The retention jobs whose tables exist sweep through the writer, so
-	// their deletes queue with every other write (DESIGN 4.4).
+	// The retention jobs that are on sweep through the writer, so their
+	// deletes queue with every other write (DESIGN 4.4). A job, hold or
+	// kept_by guard is off while its table doesn't exist yet, and an
+	// evidence entry's job stays off until WP-SV18.
 	jobs, off := policy.Jobs()
 	if len(off) > 0 {
-		logger.Info("retention jobs that wait for their tables", "off", off)
+		logger.Info("retention jobs, holds and kept_by guards that are off", "off", off)
 	}
 	report := retentionReport(logger,
 		reg.Counter("pairtime_retention_deleted_rows_total", "Rows the retention jobs deleted (DESIGN 4.4)."),

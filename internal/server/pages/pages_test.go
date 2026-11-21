@@ -324,6 +324,22 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"The continuous backup isn&#39;t encrypted with a key of the operator&#39;s own, so the storage provider could read it."},
 		},
 		{
+			name: "the notice says withdrawing deletes nothing, and when a withdrawn or undecided submission's window opens (DESIGN 4.4)",
+			want: []string{
+				"Withdrawing a submission doesn&#39;t delete what you revealed. It stays for the spot-check window, counted from when you withdraw, so a withdrawal can&#39;t cut short a check that&#39;s under way.",
+				"months after the decision. If you withdraw a submission before it&#39;s decided, its window starts when you withdraw it, and if it&#39;s never decided or withdrawn, when you submitted it.",
+			},
+		},
+		{
+			name:    "the purge promises one deletion, at once or as soon as the server reaches the store (DESIGN 7.11, 10.3)",
+			want:    []string{"button deletes it from the evidence store at once. If the server can&#39;t reach the evidence store just then, reviewers can&#39;t open the item any more, and the server deletes it as soon as it can. The minutes it supported stop counting."},
+			notWant: []string{"every stored version"},
+		},
+		{
+			name: "the deletion report lists revealed items the server couldn't delete yet as not deleted (DESIGN 8.9)",
+			want: []string{"If the server can&#39;t reach the evidence store just then, the report also lists what you revealed as not deleted yet, and the server deletes it as soon as it can."},
+		},
+		{
 			name: "a removed device keeps its link count with its ID and upload progress, and its build and the other labels its uploads carry go 90 days after it last sent them (D-device-account-binding)",
 			want: []string{
 				"Then its device ID, when you removed it, how many times it has been linked and how far its uploads have got stay 90 days more",
