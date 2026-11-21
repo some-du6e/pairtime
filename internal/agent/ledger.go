@@ -66,6 +66,9 @@ func (a *agent) startLedger() func() {
 			lw.Close()
 			return
 		}
+		// The adapters parse the hook calls that waited for the keys and
+		// the writer (adapters.go).
+		a.adaptersHost().attach(lw)
 		w = lw
 		a.ledgerIn.Attach(lw)
 		if a.scorer != nil {
@@ -109,6 +112,8 @@ func (a *agent) openLedgerRetrying(quit <-chan struct{}) *ledger.Writer {
 		if ledgerGivesUp(err) {
 			a.setProblem("ledger", fmt.Sprintf("the agent records nothing in the ledger: %v", err))
 			a.log.Warn("the ledger can't open", "err", err)
+			// Its hook calls would wait for it forever (adapters.go).
+			a.adaptersHost().giveUp()
 			return nil
 		}
 		a.setProblem("ledger", fmt.Sprintf("the agent records nothing in the ledger until it opens, and tries again in %v: %v", wait, err))
@@ -139,8 +144,9 @@ func ledgerGivesUp(err error) bool {
 
 // openLedger opens the keystore, making K_dev at an installation's first
 // run, and the ledger writer with the keys derived from it. It also gives
-// the focus component K_app (keyFocus), and the hook sink K_session, which
-// keys the hooked sessions focus lists (keySessions).
+// the adapters K_feat and K_project (keyAdapters), the focus component
+// K_app (keyFocus), and the hook sink K_session, which keys the hooked
+// sessions focus lists and the adapters' records (keySessions).
 func (a *agent) openLedger() (*ledger.Writer, error) {
 	ks, err := keys.Open(keys.Options{Dir: a.dirs.Data, Stores: a.keyStores})
 	if err != nil {
@@ -149,6 +155,7 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 	st := ks.Status()
 	// doctor and the dashboard repeat it (DESIGN 3.6; CP 5.2).
 	a.setProblem("keystore", st.Warning())
+	a.keyAdapters(ks)
 	a.keyFocus(ks)
 	a.keySessions(ks)
 	var sealed func(ledger.Batch)

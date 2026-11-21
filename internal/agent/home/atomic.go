@@ -25,6 +25,11 @@ func WritePrivate(name string, data []byte) error {
 	return writeFile(name, data, true)
 }
 
+// SyncDir flushes dir, so a file just made in it, or renamed into it, keeps
+// its name through a power cut. It is best effort, and does nothing on
+// Windows, which journals the names in a folder (syncDir).
+func SyncDir(dir string) { syncDir(dir) }
+
 func writeFile(name string, data []byte, private bool) (err error) {
 	dir := filepath.Dir(name)
 	f, err := createTemp(dir, "."+filepath.Base(name)+".tmp-", private)

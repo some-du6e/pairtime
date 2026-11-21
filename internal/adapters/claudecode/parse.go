@@ -22,9 +22,38 @@ type call struct {
 	pid  string
 	s    *session
 	env  event.Envelope
+	cwd  string // the payload's cwd, which stays on the device
 	proj adapters.Project
 	perr *adapters.ParseError
 	recs []adapters.Record
+}
+
+// Folder returns the folder a hook call ran in, the cwd its payload names,
+// which Parse resolves to a project, or "" for a call Parse resolves no
+// folder for (adapters.Placer). It reads the payload as Parse does and
+// keeps nothing.
+func (a *Adapter) Folder(raw adapters.RawRecord) string {
+	switch {
+	case raw.Source != adapters.SourceHook, raw.Incomplete,
+		raw.Arrival.Harness != "" && raw.Arrival.Harness != harness:
+		return ""
+	}
+	f, ok := decode(raw.Payload, &adapters.ParseError{})
+	if !ok {
+		return ""
+	}
+	name := raw.Event
+	if hen, ok := f.str("hook_event_name"); ok {
+		name = hen
+	}
+	if _, ok := own[name]; !ok {
+		return ""
+	}
+	if sid, _ := f.str("session_id"); sid == "" {
+		return ""
+	}
+	cwd, _ := f.str("cwd")
+	return cwd
 }
 
 // Parse turns one Claude Code hook call into records (the package doc
@@ -69,8 +98,9 @@ func (a *Adapter) Parse(raw adapters.RawRecord) ([]adapters.Record, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	c := &call{a: a, raw: raw, f: f, s: a.sessionFor(sid), perr: perr}
-	if cwd, ok := f.str("cwd"); ok && cwd != "" && a.opts.Project != nil {
-		if p, ok := a.opts.Project(cwd); ok {
+	c.cwd, _ = f.str("cwd")
+	if c.cwd != "" && a.opts.Project != nil {
+		if p, ok := a.opts.Project(c.cwd); ok {
 			c.proj = p
 		}
 	}
@@ -205,7 +235,7 @@ func (c *call) prompt() {
 	n := utf8.RuneCountInString(text)
 	// SM 2.2 rules 1 and 3 read a queued message's text as they read a
 	// prompt's (E-cc-queued-turn).
-	cron := c.s.matchesCron(text)
+	cron := c.s.matchesCron(c.a.keys, text)
 	// Machine text from a background subagent, which no person typed.
 	notification := strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), taskNotification)
 	if c.pid != "" && c.s.namedBefore(c.pid, c.env.T) {
@@ -327,15 +357,14 @@ func (c *call) stop(failed bool) {
 		c.f.list("session_crons", &crons)
 		c.s.crons = c.s.crons[:0]
 		for _, cr := range crons {
-			sc := scheduledOf(cr.Prompt)
-			c.s.crons = append(c.s.crons, sc)
-			prefix := sc.prefix
+			prefix, cut := scheduledOf(cr.Prompt)
+			key := c.a.keys.Cron(c.s.id, prefix)
+			c.s.crons = append(c.s.crons, scheduled{key: key, n: len(prefix), cut: cut})
 			if cr.Schedule == "" || utf8.RuneCountInString(cr.Schedule) > 64 || strings.ContainsFunc(cr.Schedule, isControl) {
 				c.perr.Problem("a scheduled prompt's schedule isn't one")
 				continue
 			}
-			st.PendingCrons = append(st.PendingCrons, event.PendingCron{
-				PrefixHash: c.a.keys.Cron(c.s.id, prefix), Schedule: cr.Schedule})
+			st.PendingCrons = append(st.PendingCrons, event.PendingCron{PrefixHash: key, Schedule: cr.Schedule})
 		}
 	}
 	c.add(st, nil)
@@ -347,11 +376,16 @@ func isControl(r rune) bool { return r < 0x20 || r == 0x7f || 0x80 <= r && r < 0
 // (HS 3.1), and SM 2.2 rule 1 compares.
 const cronMax = 1000
 
-// scheduled is a scheduled prompt as rule 1 compares it.
+// scheduled is a scheduled prompt as rule 1 compares it. The prompt itself
+// isn't kept, in memory or in the memory the agent saves (SaveState): only
+// its key, which is the prefix_hash its stop's pending_crons carry, and its
+// length, which is all a prefix match needs.
 type scheduled struct {
-	// prefix is the prompt as Stop listed it, without the marker of a cut,
-	// and at most cronMax code points.
-	prefix string
+	// key is Keys.Cron of the prompt's prefix: the prompt as Stop listed
+	// it, without the marker of a cut, and at most cronMax code points.
+	key string
+	// n is the prefix's length in bytes.
+	n int
 	// cut says Stop cut the prompt.
 	cut bool
 }
@@ -360,19 +394,18 @@ type scheduled struct {
 // cut at 1,000 characters: "… [+N chars]" (HS 3.1).
 const cutMarker = "\u2026 [+"
 
-// scheduledOf reads a scheduled prompt as Stop's session_crons lists it.
-func scheduledOf(p string) scheduled {
-	var sc scheduled
+// scheduledOf reads a scheduled prompt as Stop's session_crons lists it,
+// and returns its prefix and whether Stop cut it.
+func scheduledOf(p string) (prefix string, cut bool) {
 	if i := strings.LastIndex(p, cutMarker); i >= 0 && strings.HasSuffix(p, " chars]") {
 		digits := p[i+len(cutMarker) : len(p)-len(" chars]")]
 		if digits != "" && strings.Trim(digits, "0123456789") == "" {
 			// A cut can split a UTF-16 surrogate pair, which decodes to
 			// U+FFFD, and no prompt has that half at that place.
-			p, sc.cut = strings.TrimRight(p[:i], "\uFFFD"), true
+			p, cut = strings.TrimRight(p[:i], "\uFFFD"), true
 		}
 	}
-	sc.prefix = firstRunes(p, cronMax)
-	return sc
+	return firstRunes(p, cronMax), cut
 }
 
 // firstRunes returns s's first n code points.
@@ -391,17 +424,24 @@ func firstRunes(s string, n int) string {
 // are a scheduled prompt's, as the session's last Stop listed it. A
 // scheduled prompt Stop cut matches every prompt that starts with what it
 // kept, since Claude Code counts the 1,000 characters in UTF-16 units and
-// may keep fewer code points; one it didn't cut matches only itself.
-func (s *session) matchesCron(text string) bool {
+// may keep fewer code points; one it didn't cut matches only itself. The
+// adapter keeps a scheduled prompt's key and length, not its text, so it
+// compares the key of the prompt's part of that length, under k.
+func (s *session) matchesCron(k *adapters.Keys, text string) bool {
 	head := firstRunes(text, cronMax)
 	return slices.ContainsFunc(s.crons, func(sc scheduled) bool {
-		if sc.prefix == "" {
+		var part string
+		switch {
+		case sc.n <= 0 || sc.key == "":
+			return false
+		case sc.cut && len(text) >= sc.n:
+			part = text[:sc.n]
+		case !sc.cut && len(head) == sc.n:
+			part = head
+		default:
 			return false
 		}
-		if sc.cut {
-			return strings.HasPrefix(text, sc.prefix)
-		}
-		return head == sc.prefix
+		return k.Cron(s.id, part) == sc.key
 	})
 }
 

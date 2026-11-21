@@ -67,6 +67,7 @@ type statusReply struct {
 	// Signals says where idle time, focus, power and the lock state come
 	// from, for doctor's idle and focus lines (DESIGN 5.9, D-design-5.9).
 	Signals  signalsReply      `json:"signals"`
+	Adapters adaptersReply     `json:"adapters"`
 	Problems map[string]string `json:"problems,omitempty"`
 }
 
@@ -92,6 +93,7 @@ func (a *agent) serveStatus(w http.ResponseWriter, r *http.Request) {
 		Jobs:     jobs,
 		IPC:      a.ipcStatus(),
 		Signals:  a.signalsNow(),
+		Adapters: a.adaptersHost().status(),
 		Problems: a.currentProblems(),
 	})
 }

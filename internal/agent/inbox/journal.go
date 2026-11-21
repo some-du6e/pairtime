@@ -173,22 +173,31 @@ func idKey(id string) ([16]byte, bool) {
 // returns nil and stores nothing. It is safe to call from many goroutines.
 // A message whose id it can't keep is ErrRejected.
 func (j *Journal) Deliver(d Delivery) error {
+	_, err := j.Store(d)
+	return err
+}
+
+// Store is Deliver, and also reports whether it stored d: false with a nil
+// error means the journal had d's id already. The agent hands only the
+// calls it stored to the adapters, so a call that came twice, over the
+// socket and through the spool, makes its records once.
+func (j *Journal) Store(d Delivery) (bool, error) {
 	k, ok := idKey(d.ID)
 	if !ok {
-		return fmt.Errorf("%w: its id isn't 32 lowercase hex digits", ErrRejected)
+		return false, fmt.Errorf("%w: its id isn't 32 lowercase hex digits", ErrRejected)
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.closed {
-		return errClosed
+		return false, errClosed
 	}
 	if j.has(k) {
 		j.dups++
-		return nil
+		return false, nil
 	}
 	day := d.Received.Wall.UTC().Format(time.DateOnly)
 	if err := j.openDay(day); err != nil {
-		return err
+		return false, err
 	}
 	b, err := json.Marshal(journalLine{
 		ID:       d.ID,
@@ -203,7 +212,7 @@ func (j *Journal) Deliver(d Delivery) error {
 		Harness:  d.Harness,
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 	line := make([]byte, 0, len(b)+2)
 	if j.torn {
@@ -213,12 +222,12 @@ func (j *Journal) Deliver(d Delivery) error {
 	line = append(line, '\n')
 	if _, err := j.f.Write(line); err != nil {
 		j.torn = true // part of the line may be in the file
-		return err
+		return false, err
 	}
 	j.torn = false
 	j.add(day, k)
 	j.stored++
-	return nil
+	return true, nil
 }
 
 func (j *Journal) has(k [16]byte) bool {

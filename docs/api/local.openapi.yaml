@@ -245,7 +245,7 @@ components:
     Status:
       type: object
       additionalProperties: false
-      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs, ipc, signals]
+      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs, ipc, signals, adapters]
       properties:
         version:
           $ref: "#/components/schemas/Version"
@@ -279,6 +279,8 @@ components:
           $ref: "#/components/schemas/IPC"
         signals:
           $ref: "#/components/schemas/Signals"
+        adapters:
+          $ref: "#/components/schemas/Adapters"
         problems:
           type: object
           description: >
@@ -364,6 +366,83 @@ components:
           type: integer
           minimum: 0
           description: Connections turned away because they didn't come from this user.
+    Adapters:
+      type: object
+      additionalProperties: false
+      required: [harnesses, other, waiting, git]
+      description: >
+        What the harness adapters made of the hook calls the agent stored
+        since it started, and what the git adapter watches (DESIGN 3.4, 5.3,
+        5.8). The dashboard's list of adapters shows each one's last record
+        and parse failures, so a broken parser shows instead of crediting
+        less without a word.
+      properties:
+        harnesses:
+          type: object
+          description: The counts of each harness pairtime has an adapter for, by its name.
+          additionalProperties:
+            $ref: "#/components/schemas/HarnessCounts"
+        other:
+          $ref: "#/components/schemas/HarnessCounts"
+        waiting:
+          type: integer
+          minimum: 0
+          description: >
+            Calls that wait to be parsed: for the device key and the ledger to
+            open, in memory and in held.jsonl, or for the git adapter to work
+            out their folder's project.
+        dropped:
+          type: integer
+          minimum: 0
+          description: Calls lost because held.jsonl was full. Absent when none.
+        git:
+          $ref: "#/components/schemas/Git"
+    HarnessCounts:
+      type: object
+      additionalProperties: false
+      required: [calls, records, parse_failures]
+      properties:
+        calls:
+          type: integer
+          minimum: 0
+        records:
+          type: integer
+          minimum: 0
+          description: The ledger records the calls made.
+        parse_failures:
+          type: integer
+          minimum: 0
+          description: >
+            Calls the adapter couldn't fully read: unknown events or fields, a
+            payload that isn't JSON, a call cut short. Their other records are
+            still written.
+        write_failures:
+          type: integer
+          minimum: 0
+          description: Records the ledger refused. Absent when none.
+        ignored:
+          type: integer
+          minimum: 0
+          description: Calls from a folder a .pairtime-ignore keeps out, which make no record. Absent when none.
+        last_record:
+          type: integer
+          description: The time of the newest record, in Unix milliseconds. Absent before the first.
+        last_failure:
+          type: string
+          description: What the last failure was, naming events and fields but never their values.
+    Git:
+      type: object
+      additionalProperties: false
+      required: [watched, changes]
+      properties:
+        watched:
+          type: integer
+          minimum: 0
+          description: The worktrees sessions worked in since the agent started whose reflog the git adapter has read.
+        changes:
+          type: integer
+          minimum: 0
+          description: The git.change records written since the agent started.
     Signals:
       type: object
       additionalProperties: false

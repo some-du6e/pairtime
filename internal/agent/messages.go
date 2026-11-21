@@ -38,11 +38,15 @@ func (a *agent) startIPC(opts Options) func() {
 	a.journal = j
 	// Hook calls go through the hook sink, whichever way they come.
 	sink := newHookSink(j, runtime.GOOS, a.hooked, a.hookSteps())
+	walk := a.walkPeer
+	if opts.Walk != nil {
+		walk = opts.Walk
+	}
 	// The CLI's questions are answered by a.answer (dashboard.go): the
 	// dashboard's sign-in link, and the last work session `pairtime recap`
 	// asks for, which answerQuestion gives from the bucket store that
 	// startScorer opened before this.
-	l := &ipcListener{a: a, sink: sink, opts: ipc.Options{ForcePipe: opts.ForcePipe, Log: a.log, Walk: a.walkPeer,
+	l := &ipcListener{a: a, sink: sink, opts: ipc.Options{ForcePipe: opts.ForcePipe, Log: a.log, Walk: walk,
 		Answer: a.answer}}
 	l.listen()
 
