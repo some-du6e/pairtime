@@ -43,7 +43,7 @@ func TestBundleFilesAgree(t *testing.T) {
 		t.Fatal(err)
 	}
 	dockerfile := string(data)
-	litestreamConfig := line(`^\s*command: \["litestream", "replicate", "-config", "([^"]+)"\]`, ComposeYAML)
+	litestreamConfig := line(`^\s*command: \["litestream", "replicate", "-config", "([^"]+)"\]`, composeYAML)
 	tests := []struct {
 		name string
 		got  string
@@ -66,14 +66,14 @@ func TestBundleFilesAgree(t *testing.T) {
 			got:  litestreamConfig,
 			want: line(`^COPY --chmod=0644 deploy/litestream\.yml (\S+)\s*$`, dockerfile)},
 		{name: "a litestream.yml compose mounts, for an image from before it carried one, goes where the image keeps its own",
-			got:  cmp.Or(line(`^\s*- \./litestream\.yml:([^:]+):ro\s*$`, ComposeYAML), litestreamConfig),
+			got:  cmp.Or(line(`^\s*- \./litestream\.yml:([^:]+):ro\s*$`, composeYAML), litestreamConfig),
 			want: litestreamConfig},
 		{name: "compose mounts the data directory at pairtime.toml's default data_dir",
-			got: line(`^\s*- \./data:(\S+)\s*$`, ComposeYAML), want: config.DefaultDataDir},
+			got: line(`^\s*- \./data:(\S+)\s*$`, composeYAML), want: config.DefaultDataDir},
 		{name: "compose mounts config/, read-only, where pairtimed looks for pairtime.toml",
-			got: line(`^\s*- \./config:(\S+):ro\s*$`, ComposeYAML) + "/pairtime.toml", want: config.DefaultPath},
+			got: line(`^\s*- \./config:(\S+):ro\s*$`, composeYAML) + "/pairtime.toml", want: config.DefaultPath},
 		{name: "compose's health check is pairtimed healthcheck on /healthz, which writes nothing, so Docker's checks cost no uploads",
-			got: line(`^\s*test: (\[.*\])\s*$`, ComposeYAML), want: `["CMD", "pairtimed", "healthcheck", "-live"]`},
+			got: line(`^\s*test: (\[.*\])\s*$`, composeYAML), want: `["CMD", "pairtimed", "healthcheck", "-live"]`},
 		{name: "Litestream reads new WAL every 10 s, so a busy minute is 6 uploads and not 60",
 			got: line(`^\s*monitor-interval:\s*(\S+)\s*$`, LitestreamYAML), want: "10s"},
 		{name: "Litestream lists level 0 and level 1 for removal every 5 minutes, not every 15 s",
@@ -81,18 +81,18 @@ func TestBundleFilesAgree(t *testing.T) {
 		{name: "Litestream compacts L1, L2 and L3 every 5 minutes, hour and 6 hours, which keeps L1 small",
 			got: all(`^[ \t]*-[ \t]*interval:[ \t]*(\S+)[ \t]*$`, LitestreamYAML), want: "5m,1h,6h"},
 		{name: "compose gives the server secrets.env, where pairtimed and Litestream read their variables",
-			got: line(`^\s*env_file: (\./config/secrets\.env)\s*$`, ComposeYAML), want: "./config/secrets.env"},
+			got: line(`^\s*env_file: (\./config/secrets\.env)\s*$`, composeYAML), want: "./config/secrets.env"},
 		{name: "compose gives cloudflared only tunnel.env",
-			got: line(`^\s*env_file: (\./config/tunnel\.env)\s*$`, ComposeYAML), want: "./config/tunnel.env"},
+			got: line(`^\s*env_file: (\./config/tunnel\.env)\s*$`, composeYAML), want: "./config/tunnel.env"},
 		{name: "pairtimed writes the day roots where the witness sidecar reads them",
-			got:  line(`^\s*- \./witness-roots:(/\S+)\s*$`, ComposeYAML),
-			want: line(`^\s*- \./witness-roots:(/\S+):ro\s*$`, ComposeYAML)},
+			got:  line(`^\s*- \./witness-roots:(/\S+)\s*$`, composeYAML),
+			want: line(`^\s*- \./witness-roots:(/\S+):ro\s*$`, composeYAML)},
 		{name: "SQLite's temporary files go to the data directory's disk, off the container's small /tmp",
-			got: line(`^\s*SQLITE_TMPDIR: (\S+)\s*$`, ComposeYAML), want: path.Join(config.DefaultDataDir, "tmp")},
+			got: line(`^\s*SQLITE_TMPDIR: (\S+)\s*$`, composeYAML), want: path.Join(config.DefaultDataDir, "tmp")},
 		{name: "the container's /tmp is a tmpfs of 256 MiB, so nothing written there takes the host's memory",
-			got: line(`(?s)- type: tmpfs\n\s+target: /tmp\n\s+tmpfs:\n\s+size: (\d+)\n`, ComposeYAML), want: "268435456"},
+			got: line(`(?s)- type: tmpfs\n\s+target: /tmp\n\s+tmpfs:\n\s+size: (\d+)\n`, composeYAML), want: "268435456"},
 		{name: "the witness sidecar runs the loop the bundle ships",
-			got: line(`^\s*entrypoint: \["/bin/sh", "([^"]+)"\]`, ComposeYAML), want: line(`^\s*- \./witness/push\.sh:([^:]+):ro\s*$`, ComposeYAML)},
+			got: line(`^\s*entrypoint: \["/bin/sh", "([^"]+)"\]`, composeYAML), want: line(`^\s*- \./witness/push\.sh:([^:]+):ro\s*$`, composeYAML)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -104,7 +104,7 @@ func TestBundleFilesAgree(t *testing.T) {
 }
 
 func TestShutdownFitsTheGracePeriod(t *testing.T) {
-	grace, err1 := time.ParseDuration(line(`^\s*stop_grace_period: (\S+)\s*$`, ComposeYAML))
+	grace, err1 := time.ParseDuration(line(`^\s*stop_grace_period: (\S+)\s*$`, composeYAML))
 	litestream, err2 := time.ParseDuration(line(`^shutdown-timeout: (\S+)\s*$`, LitestreamYAML))
 	if err := errors.Join(err1, err2); err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestShutdownFitsTheGracePeriod(t *testing.T) {
 }
 
 func TestImagesArePinned(t *testing.T) {
-	images := regexp.MustCompile(`(?m)^\s*image:\s*(\S+)\s*$`).FindAllStringSubmatch(ComposeYAML, -1)
+	images := regexp.MustCompile(`(?m)^\s*image:\s*(\S+)\s*$`).FindAllStringSubmatch(composeYAML, -1)
 	pinned := regexp.MustCompile(`^[a-z0-9./-]+:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}$`)
 	tests := []struct {
 		name  string
@@ -175,7 +175,7 @@ func TestWitnessFiles(t *testing.T) {
 			if fi.Mode().Perm()&tt.mode != tt.mode {
 				t.Errorf("%s has mode %v", tt.path, fi.Mode())
 			}
-			if !regexp.MustCompile(`(?m)^\s*- \./` + regexp.QuoteMeta(tt.path) + `:`).MatchString(ComposeYAML) {
+			if !regexp.MustCompile(`(?m)^\s*- \./` + regexp.QuoteMeta(tt.path) + `:`).MatchString(composeYAML) {
 				t.Errorf("compose.yml doesn't mount %s", tt.path)
 			}
 		})

@@ -29,7 +29,7 @@ type Turn struct {
 	// other turn to its last agent record, so a track turn, which has none,
 	// never runs (docs/errata/2026-11-19-turns-without-a-stop.md). A silence
 	// of the turn's agent records longer than BUCKET_TTL_S, or longer than
-	// RETURN_GAP_MAX_S + READ_HORIZON_S outside hooked sessions, ends it
+	// READ_HORIZON_S outside hooked sessions, ends it
 	// (turnBuild.runUntil, docs/errata/2026-11-20-hooked-turn-runs.md). It
 	// decides SUP against READ (SM 2.4) and agent_running_s (SM 5.1).
 	RunUntil int64        `json:"run_until"`
@@ -89,6 +89,10 @@ type session struct {
 	// native is set when any of its records came through a hook or a log
 	// reader, the code paths the harness itself feeds (DESIGN 5.2).
 	native bool
+	// firstNative is the t of its first record through a hook or a log
+	// reader, set with native. Records come in record order, so it is the
+	// earliest.
+	firstNative int64
 	// bridged is set when any of its records came through the WakaTime
 	// bridge, which reads them from an editor's wakatime-cli (DESIGN 5.7).
 	bridged bool
@@ -261,8 +265,8 @@ func (d *deriver) buildSessions() {
 			s = &session{key: key}
 			d.sessions[key] = s
 		}
-		if nativeVia(e.Via) {
-			s.native = true
+		if nativeVia(e.Via) && !s.native {
+			s.native, s.firstNative = true, e.T
 		}
 	}
 	seen := map[*session]bool{}
@@ -559,10 +563,13 @@ func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.Prom
 	case st != nil && st.Entrypoint == event.EntrypointCloud:
 		return event.OriginCloud, "", 0
 	}
-	// Rules 6 to 8: input in the KEYS_PRE_S before the submit, focus on a
-	// window hosting the session, and a typed length the input could
-	// have produced.
-	if !d.pres.inputBefore(e.T, d.r.keysPre) || !d.hostedBy(d.focus.before(tb.primary), tb.sess, tb.primary) {
+	// Rules 6 to 8: input in the KEYS_PRE_S before the submit or the
+	// INPUT_RELEASE_GRACE_MS after it, focus at the submit on a window
+	// hosting the session, and a typed length the input could have
+	// produced. Only the input test takes the grace: focus is the record
+	// before the prompt's, and the plausibility test counts input slots
+	// in the lead, which ends at the submit.
+	if !d.pres.inputAround(e.T, d.r.keysPre, d.r.releaseGrace) || !d.hostedBy(d.focus.before(tb.primary), tb.sess, tb.primary) {
 		return event.OriginNoInput, "", 0
 	}
 	class := d.classify(tb.sess, tb.primary, p)

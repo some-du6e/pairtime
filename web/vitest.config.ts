@@ -17,5 +17,8 @@ export default defineConfig({
 	test: {
 		include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
 		environment: 'node',
+		// Times of day are written in the local zone, as the CLI writes
+		// them; the tests read them in UTC wherever they run.
+		env: { TZ: 'UTC' },
 	},
 });

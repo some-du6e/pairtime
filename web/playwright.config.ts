@@ -4,13 +4,15 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { defineConfig, type PlaywrightTestConfig } from '@playwright/test';
-import { agentPort, galleryPort } from './tests/support/env.ts';
+import { agentPort, dashboardPort, galleryPort } from './tests/support/env.ts';
 
-// Chromium only (DESIGN 3.13). Run `npm run build` first. Two servers:
-// `vite preview` for the component gallery, and, when PAIRTIME_BIN names a
-// pairtime binary built after `npm run build`, that agent with the real
-// dashboard embedded. web.yml sets PAIRTIME_BIN; in CI the run fails
-// without it rather than skip the smoke test.
+// Chromium only (DESIGN 3.13). Run `npm run build` first. Three servers:
+// `vite preview` for the component gallery; `vite preview` for the built
+// dashboard, whose API the specs answer with a fake agent
+// (tests/support/fake-agent.ts); and, when PAIRTIME_BIN names a pairtime
+// binary built after `npm run build`, that agent with the real dashboard
+// embedded. web.yml sets PAIRTIME_BIN; in CI the run fails without it
+// rather than skip the smoke test.
 const bin = process.env.PAIRTIME_BIN;
 if (process.env.CI && !bin) {
 	throw new Error('set PAIRTIME_BIN to the pairtime binary built after `npm run build`');
@@ -30,6 +32,11 @@ const servers: WebServer[] = [
 	{
 		command: `node_modules/.bin/vite preview --mode gallery --port ${galleryPort} --strictPort`,
 		url: `http://127.0.0.1:${galleryPort}/`,
+		reuseExistingServer: !process.env.CI,
+	},
+	{
+		command: `node_modules/.bin/vite preview --mode agent --port ${dashboardPort} --strictPort`,
+		url: `http://127.0.0.1:${dashboardPort}/`,
 		reuseExistingServer: !process.env.CI,
 	},
 ];

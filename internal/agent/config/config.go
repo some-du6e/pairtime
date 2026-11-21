@@ -29,13 +29,27 @@ type Mode string
 // Local uploads nothing: no buckets, no roots, no profile. Recaps and the
 // coach still work, and hours logged in this mode are never witnessed, so
 // they can't be submitted (DESIGN 4.2). The alpha runs in it (DESIGN 8.6),
-// and it is the only mode until signing in exists (WP-SV3).
+// and every install starts in it.
 const Local Mode = "local"
+
+// Online also uploads the tier-1 numbers of DESIGN 4.3 to the server that
+// `pairtime login` linked: minute buckets, batch roots and labels, never
+// content. pairtime login sets it and pairtime logout sets Local again
+// (WP-SV3). Uploads also need the sign-in login keeps in the keystore, so
+// a file that says online on an install that never signed in sends
+// nothing.
+const Online Mode = "online"
+
+// DefaultServer is the server `pairtime login` links to when neither its
+// --server flag nor [server] url names one.
+const DefaultServer = "https://pairtime.karimeltaib.com"
 
 // Config is config.toml.
 type Config struct {
-	Mode Mode `toml:"mode"`
-	HTTP HTTP `toml:"http"`
+	Mode    Mode    `toml:"mode"`
+	HTTP    HTTP    `toml:"http"`
+	Server  Server  `toml:"server"`
+	Display Display `toml:"display"`
 	// Notifications is [notifications], which Parse reads through
 	// notificationsFile.
 	Notifications Notifications `toml:"-"`
@@ -46,13 +60,39 @@ type Config struct {
 type fileConfig struct {
 	Mode          Mode              `toml:"mode"`
 	HTTP          HTTP              `toml:"http"`
+	Server        Server            `toml:"server"`
+	Display       Display           `toml:"display"`
 	Notifications notificationsFile `toml:"notifications"`
+}
+
+// Server is config.toml's [server] table.
+type Server struct {
+	// URL is the base URL of the pairtime server `pairtime login` links
+	// this computer to, as CheckServerURL returns it, or "" for
+	// DefaultServer. Uploads go to the server the sign-in came from, which
+	// the account file records, whatever this says later.
+	URL string `toml:"url"`
 }
 
 // HTTP configures the agent's HTTP server on 127.0.0.1.
 type HTTP struct {
 	// Port is the port to try first. 0 means the default.
 	Port int `toml:"port"`
+}
+
+// Display is [display], how the agent's views show time.
+type Display struct {
+	// Shadow is display.shadow (DESIGN 6.7 step 2): while it is on, the
+	// local API and every view show your time as "calibrating" and keep
+	// only the agent's time, moments and SM 4.2's loops. They leave out
+	// your time and everything it could be worked back out from: the
+	// other uncredited time, X.day_cap included, and a session's start,
+	// end and whether it goes on (decision D-shadow-scope). So nobody
+	// learns to steer the rules before they are fitted (SM 7.5). The files
+	// in days/ and buckets/ keep every number. Calibration volunteers have
+	// it on from 12-01 until the scoring freeze; it is off for everyone
+	// else.
+	Shadow bool `toml:"shadow"`
 }
 
 // Default is the configuration of a config.toml with nothing in it.
@@ -63,11 +103,19 @@ func Default() Config {
 // Parse reads the contents of a config.toml. The Config it returns is
 // always usable; problems says what was ignored and why.
 func Parse(data []byte) (cfg Config, problems []string) {
+	cfg, problems, _ = parse(data)
+	return cfg, problems
+}
+
+// parse is Parse, and also reports whether it used the file: false when
+// the file isn't TOML or has a value of the wrong type, and Parse ignores
+// it as a whole.
+func parse(data []byte) (cfg Config, problems []string, used bool) {
 	cfg = Default()
 	var file fileConfig
 	md, err := toml.Decode(string(data), &file)
 	if err != nil {
-		return ignored(), []string{fmt.Sprintf("config.toml was ignored, so every setting has its default and notifications are off: %v", err)}
+		return ignored(), []string{fmt.Sprintf("config.toml was ignored, so every setting has its default and notifications are off: %v", err)}, false
 	}
 	// Probably a typo, or a setting from a newer release.
 	for _, key := range md.Undecoded() {
@@ -81,10 +129,17 @@ func Parse(data []byte) (cfg Config, problems []string) {
 		problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored", key.String()))
 	}
 	if md.IsDefined("mode") {
-		if file.Mode == Local {
+		if file.Mode == Local || file.Mode == Online {
 			cfg.Mode = file.Mode
 		} else {
 			problems = append(problems, fmt.Sprintf("config.toml: this release has no mode %q, so pairtime runs in mode %q", file.Mode, Local))
+		}
+	}
+	if md.IsDefined("server", "url") && file.Server.URL != "" {
+		if u, err := CheckServerURL(file.Server.URL); err == nil {
+			cfg.Server.URL = u
+		} else {
+			problems = append(problems, fmt.Sprintf("config.toml: server.url %q %v, so pairtime login won't run until it's fixed or --server names a server", file.Server.URL, err))
 		}
 	}
 	if md.IsDefined("http", "port") {
@@ -94,8 +149,11 @@ func Parse(data []byte) (cfg Config, problems []string) {
 			problems = append(problems, fmt.Sprintf("config.toml: http.port %d isn't 0 or from 1024 to 65535, so the default port is used", p))
 		}
 	}
+	if md.IsDefined("display", "shadow") {
+		cfg.Display.Shadow = file.Display.Shadow
+	}
 	problems = append(problems, parseNotifications(&cfg, file.Notifications, md.Keys())...)
-	return cfg, problems
+	return cfg, problems, true
 }
 
 // Load reads and parses the file name. When the file is missing it returns
@@ -125,13 +183,27 @@ const defaultFile = `# pairtime settings. The agent reads this file when it star
 # whenever you save it.
 
 # Where your time goes. "local" keeps everything on this computer: nothing
-# is uploaded, and recaps still work. It's the only mode in this release.
+# is uploaded, and recaps still work. "online" also uploads the minutes
+# pairtime counts, as numbers, to the server you linked with pairtime
+# login. pairtime login and pairtime logout change this line.
 mode = "local"
 
 [http]
 # The port of pairtime's web server, which listens on 127.0.0.1 only.
 # 0 means the default, 7247, or a free port near it when that one is taken.
 port = 0
+
+[server]
+# The pairtime server that pairtime login links this computer to. ""
+# means https://pairtime.karimeltaib.com.
+url = ""
+
+[display]
+# true shows your time as "calibrating" while pairtime's rules are being
+# fitted. Views then keep the agent's time, your moments and the loops
+# pairtime caught, and leave out everything your time could be worked out
+# from. Calibration volunteers have it on until the scoring freeze.
+shadow = false
 
 [notifications]
 # One quiet notification when a work session ends, to say its recap is

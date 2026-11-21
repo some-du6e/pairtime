@@ -12,8 +12,8 @@
 #
 #   image: ghcr.io/some-du6e/pairtimed:sha-<commit>@sha256:<digest>
 #
-# It runs on pushes to main that change what goes into the image, and by
-# hand:
+# It runs on pushes to main that change a file the image is built from, and
+# by hand:
 #
 #   gh workflow run server-image.yml --ref main
 #
@@ -25,22 +25,38 @@ name: server-image
 on:
   push:
     branches: [main]
+    # Every file the image is built from. tools/ci's TestServerImagePaths
+    # walks pairtimed's imports for both Linux targets, and the notices
+    # tool's, and fails when a Go file they compile, or a file they embed,
+    # is under none of these. tools/ci/restore_drill.sh lists the same
+    # paths as its image_paths, and tools/ci's TestDrillImagePaths keeps
+    # the two lists the same.
     paths:
-      # What goes into the image: pairtimed's code and the files it embeds,
-      # the modules and the patched module copies it builds with, the
-      # notices tool, and the Dockerfile's other inputs.
-      # tools/ci/restore_drill.sh lists the same paths, and tools/ci's
-      # TestDrillImagePaths keeps the two lists the same.
       - cmd/pairtimed/**
       - internal/server/**
-      - internal/version/**
-      - docs/embed.go
-      - docs/retention.json
+      # Of deploy/, only the package init imports, the template it embeds,
+      # and litestream.yml, which the Dockerfile copies in. A pin in
+      # compose.yml or a runbook edit builds no image.
       - deploy/*.go
       - deploy/pairtime.toml.tmpl
       - deploy/litestream.yml
-      - third_party/**
+      # The packages outside internal/server that pairtimed imports.
+      # docs/embed.go embeds docs/retention.json, which /privacy and the
+      # retention jobs read, and pkg/params embeds the parameter tables.
+      - docs/embed.go
+      - docs/retention.json
+      - internal/devtoken/**
+      - internal/version/**
+      - pkg/event/**
+      - pkg/ledger/**
+      - pkg/params/**
+      # The patched BurntSushi/toml that go.mod's replace builds in.
+      - third_party/burntsushi-toml/**
+      # tools/release notices writes the image's THIRD_PARTY_NOTICES.txt,
+      # and the image carries LICENSE.
       - tools/release/**
+      - internal/release/**
+      - LICENSE
       - Dockerfile.pairtimed
       - go.mod
       - go.sum

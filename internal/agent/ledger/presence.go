@@ -60,15 +60,21 @@ type presenceItem struct {
 // had to drop and writes that failed. Its messages are about presence's
 // queue only, so the agent files them apart from why the ledger isn't open.
 func NewPresence(problem func(msg string)) *Presence {
-	p := &Presence{
+	p := newPresence(problem)
+	go p.run()
+	return p
+}
+
+// newPresence is NewPresence without the goroutine, so a test can start
+// run as late as a busy machine might.
+func newPresence(problem func(msg string)) *Presence {
+	return &Presence{
 		items:   make(chan presenceItem, presenceQueue),
 		attach:  make(chan *Writer, 1),
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 		problem: problem,
 	}
-	go p.run()
-	return p
 }
 
 // Attach gives p the writer to write to, once it is open. Only the first
@@ -149,8 +155,8 @@ func (p *Presence) Seal(event.PowerOp) {
 // Dropped returns how many records Record had to drop.
 func (p *Presence) Dropped() uint64 { return p.dropped.Load() }
 
-// Close stops p once it has written what it holds, if a writer is
-// attached. It doesn't close the writer.
+// Close stops p once it has written what it holds, if Attach came before
+// it. It doesn't close the writer.
 func (p *Presence) Close() {
 	p.once.Do(func() { close(p.stop) })
 	<-p.done
@@ -162,7 +168,15 @@ func (p *Presence) run() {
 	select {
 	case w = <-p.attach:
 	case <-p.stop:
-		return
+		// When Attach and Close both come before this goroutine first
+		// runs, as on a busy machine, the select above finds the writer
+		// and the stop both ready and takes either at random. A writer
+		// attached before Close still gets what p holds.
+		select {
+		case w = <-p.attach:
+		default:
+			return
+		}
 	}
 	p.markAttached()
 	for {
@@ -228,3 +242,9 @@ var (
 
 // runMono is at's reading of this run's monotonic clock, in ms.
 func runMono(at time.Time) int64 { return max(at.Sub(runStart).Milliseconds(), 0) }
+
+// RunClock returns the mono and boot_id of an event the agent makes itself
+// at at, such as the git watcher's git.change: this run's, as presence's
+// records carry them, so all of the agent's own events re-anchor together
+// (SM 1.1).
+func RunClock(at time.Time) (mono int64, bootID string) { return runMono(at), runBoot }

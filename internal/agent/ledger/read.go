@@ -19,6 +19,10 @@ type ChainInfo struct {
 	DeviceID string
 	// KeyID is the id of the device key that writes it.
 	KeyID string
+	// Created is when the chain began, at the writer's first start under
+	// the key. No record of a time before it was written live: those are
+	// lookback's, read from logs (DESIGN 6.2 D11).
+	Created time.Time
 }
 
 // ReadChain reads which chain the ledger in dir holds, from batches.seg.
@@ -27,7 +31,7 @@ func ReadChain(dir string) (ChainInfo, error) {
 	if err != nil {
 		return ChainInfo{}, err
 	}
-	return ChainInfo{DeviceID: bf.chain.DeviceID, KeyID: bf.chain.KeyID}, nil
+	return ChainInfo{DeviceID: bf.chain.DeviceID, KeyID: bf.chain.KeyID, Created: time.UnixMilli(bf.chain.Created)}, nil
 }
 
 // ReadBatches calls fn with each sealed batch of the ledger in dir whose
@@ -116,6 +120,34 @@ func ReadBatches(dir string, from uint64, fn func(Batch) error) error {
 		}
 	}
 	return nil
+}
+
+// FirstHeld returns the number of the first sealed batch from from on whose
+// records the ledger in dir still holds, by whether the segment its first
+// record is in is there, or 0 when there is none. Retention deletes whole
+// segments, the oldest first (DESIGN 4.4), and damage can take one out, so
+// a reader that starts with no place, or meets a batch that doesn't read,
+// goes on from here (decision E-sm-1.1-seq-gaps). A from of 0 counts from
+// batch 1.
+func FirstHeld(dir string, from uint64) (uint64, error) {
+	bf, err := readBatchesFile(filepath.Join(dir, batchesName))
+	if err != nil {
+		return 0, err
+	}
+	days, err := segments(dir)
+	if err != nil {
+		return 0, err
+	}
+	held := make(map[string]bool, len(days))
+	for _, d := range days {
+		held[d] = true
+	}
+	for b := max(from, 1); b <= uint64(len(bf.rows)); b++ {
+		if held[bf.rows[b-1].Start.Seg] {
+			return b, nil
+		}
+	}
+	return 0, nil
 }
 
 // readSegment calls fn with each frame of the segment name from offset off

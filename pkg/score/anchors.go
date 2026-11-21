@@ -112,19 +112,13 @@ func promptKind(c event.PromptClass) (event.AnchorKind, event.Reason) {
 }
 
 // promptAnchors makes an anchor of every prompt a person submitted: SM 2.2
-// origins human_typed and human_pasted.
+// origins human_typed and human_pasted. A prompt with no input before it
+// opens nothing (SM 2.2 rule 8); while its turn runs and no other turn of
+// its project does, the project's uncredited seconds are X.no_input (SM
+// 5.2, credit.go).
 func (d *deriver) promptAnchors() {
 	for _, tb := range d.turns {
 		t := tb.turn
-		if tb.primary >= 0 && t.Origin == event.OriginNoInput {
-			// Not an anchor (SM 2.2 rule 8). The seconds its lead would
-			// have covered are where X.no_input goes (SM 5.2).
-			e := d.recs[tb.primary]
-			p := e.Data.(*event.PromptSubmit)
-			think, typing := d.leadParts(d.classify(tb.sess, tb.primary, p), e.Via, count(p.TypedLenEst))
-			d.noInputLeads = append(d.noInputLeads, projLead{t.ProjectKey, span{e.T - think - typing, e.T}})
-			continue
-		}
 		if tb.primary < 0 || !t.Origin.Human() {
 			continue
 		}
@@ -354,14 +348,19 @@ func (d *deriver) otherAnchor(i int, e event.Event) {
 		case event.ActEdit, event.ActSave:
 			// Typed by the person (human, tab or unknown, never the agent
 			// or a paste), input in its slot, key presses where the OS
-			// reports them, and the editor in focus on the same project.
+			// reports them, and the editor in focus on the same project:
+			// the project of SM 3.2 rule 2's heartbeat when there is one,
+			// else the one the focus record names (D-editor-heartbeat-first,
+			// D-rule2-sidedoor).
 			switch p.EditSource {
 			case event.EditSourceHuman, event.EditSourceTab, event.EditSourceUnknown:
 			default:
 				return
 			}
-			if !d.pres.slotInput(e.T, d.pres.keysAt(e.T)) || f.class != event.AppEditor ||
-				(f.project != "" && f.project != e.ProjectKey) {
+			if !d.pres.slotInput(e.T, d.pres.keysAt(e.T)) || f.class != event.AppEditor {
+				return
+			}
+			if on := d.editorProject(f, i); on != "" && on != e.ProjectKey {
 				return
 			}
 			a.Kind, a.Reason = event.AnchorTypedEdit, event.ReasonEdit
@@ -429,8 +428,9 @@ func sideDoorLabel(v event.Via) event.Label {
 }
 
 // level sets an anchor's evidence level and labels (DESIGN 6.4). from and
-// to bound its evidence window, the span its evidence test reads: the
-// KEYS_PRE_S before a prompt or command, else its slot. host says whether
+// to bound its evidence window: the KEYS_PRE_S before a prompt or command,
+// else its slot. A prompt's window leaves out the INPUT_RELEASE_GRACE_MS
+// after it, which only rules 6 and 7's input test reads. host says whether
 // the window in focus at a time is the one the act happened in.
 //
 //   - A: a hook, log, shell, git or editor anchor with key presses in its

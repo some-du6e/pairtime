@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/some-du6e/pairtime/internal/server/accounts"
 	"github.com/some-du6e/pairtime/internal/server/config"
@@ -208,7 +209,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	// A fresh login's auth_time passed verifyIDToken's freshSince check,
 	// so HCA authenticated the person after this sign-in started.
-	sess, created, err := s.accounts.SignIn(ctx, id, accounts.Login{AuthTime: authTime, Fresh: st.Fresh})
+	sess, created, err := s.accounts.SignIn(ctx, id, accounts.Login{AuthTime: authTime, Fresh: st.Fresh, DisplayName: displayName(c)})
 	switch {
 	case errors.Is(err, accounts.ErrIneligible):
 		s.fail(w, r, &Error{Status: http.StatusForbidden, Code: CodeIneligible,
@@ -333,6 +334,49 @@ func identity(c *claims) (accounts.Identity, time.Time, *Error) {
 	return id, authTime, nil
 }
 
+// displayName is the one name a sign-in keeps of those HCA sent
+// (D-display-name): given_name, or nickname when given_name leaves nothing
+// to show once cleanName is done with it, or "" when neither does. Only the
+// session keeps it, and the pages show it as who is signed in.
+func displayName(c *claims) string {
+	for _, n := range []profileName{c.GivenName, c.Nickname} {
+		if s := cleanName(string(n)); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// cleanName makes a name fit to show beside an account's Slack ID. Each run
+// of spaces, line breaks and control characters becomes one space, the ends
+// are trimmed, and formatting characters are dropped: the bidirectional
+// controls, which could reorder or hide the text after the name, and the
+// invisible ones. The zero-width joiner and non-joiner stay, because
+// scripts that join letters and emoji sequences need them. At most
+// accounts.MaxDisplayName characters are kept.
+func cleanName(s string) string {
+	var out []rune
+	gap := false
+	for _, r := range s {
+		switch {
+		case unicode.IsSpace(r) || unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp):
+			gap = len(out) > 0
+			continue
+		case unicode.Is(unicode.Cf, r) && r != '\u200c' && r != '\u200d':
+			continue
+		}
+		if gap {
+			out = append(out, ' ')
+			gap = false
+		}
+		out = append(out, r)
+		if len(out) >= accounts.MaxDisplayName {
+			break
+		}
+	}
+	return strings.TrimRight(string(out[:min(len(out), accounts.MaxDisplayName)]), " ")
+}
+
 // plausibleEmail accepts a short address with something on both sides of
 // an @ and no spaces or control characters.
 func plausibleEmail(e string) bool {
@@ -363,6 +407,11 @@ func (s *Service) logout(w http.ResponseWriter, r *http.Request) {
 	}
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
+
+// SameOrigin reports whether a state-changing request comes from
+// pairtimed's own pages, by the rule sign-out uses: other pages' forms,
+// such as the dashboard's time zone, check it too.
+func (s *Service) SameOrigin(r *http.Request) bool { return s.sameOrigin(r) }
 
 // sameOrigin reports whether a state-changing request comes from
 // pairtimed's own pages. Browsers send Origin with every POST, and
@@ -413,8 +462,9 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 		EligibilityToConfirm: sess.User.EligibilityToConfirm(),
 		Roles:                roles,
 		Session: MeSession{
-			CreatedAt: sess.CreatedAt.UTC(),
-			ExpiresAt: sess.ExpiresAt.UTC(),
+			CreatedAt:   sess.CreatedAt.UTC(),
+			ExpiresAt:   sess.ExpiresAt.UTC(),
+			DisplayName: sess.DisplayName,
 		},
 	}
 	if !sess.AuthTime.IsZero() {
@@ -449,6 +499,10 @@ type Me struct {
 type MeSession struct {
 	CreatedAt time.Time `json:"created_at"`
 	ExpiresAt time.Time `json:"expires_at"`
+	// DisplayName is the name HCA sent at the sign-in that opened the
+	// session, given_name or else nickname, when it sent one. The session
+	// keeps it, the account doesn't (D-display-name).
+	DisplayName string `json:"display_name,omitempty"`
 	// AuthTime is when HCA last authenticated the person, if it said.
 	AuthTime *time.Time `json:"auth_time,omitempty"`
 	// FreshLoginAt is set only for a session from a fresh login

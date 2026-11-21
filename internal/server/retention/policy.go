@@ -12,9 +12,10 @@
 // evidence store's, whose index rows are there too (DESIGN 10.1), may bind
 // jobs to tables. A job deletes its table's rows whose time column is at
 // least the entry's days old, or, for a job by the window, whose time
-// column is a decision whose spot-check window has closed, except rows a
-// hold keeps. That one shape covers DESIGN 4.4's four server jobs, and
-// the two that delete the holds:
+// column says when a submission's spot-check window opened (DESIGN 4.4),
+// once that window has closed, except rows a hold keeps. That column is
+// NULL until WP-SV18 writes it, which keeps the row. That one shape covers
+// DESIGN 4.4's four server jobs, and the two that delete the holds:
 //
 //   - IP addresses and JA4 fingerprints, 30 days after they were seen.
 //   - Per-minute buckets, 180 days after their minute, unless a
@@ -25,18 +26,24 @@
 //     rows leaves exactly those totals.
 //   - Witness rows, 180 days after they were received, unless a
 //     submission still inside its spot-check window uses them.
-//   - Device rows, 90 days after the device was removed. A device that
-//     hasn't been removed has no removal time, so its row stays.
+//   - Device rows, 90 days after the device was removed, but only once
+//     ingest holds nothing from the device: the job's kept_by tables
+//     keep a removed device's row while any of their rows names it, so
+//     its device id stays with its account (D-device-account-binding). A
+//     device that hasn't been removed has no removal time, so its row
+//     stays.
 //   - The holds that say which minute buckets and witness rows a
 //     submission uses, once its spot-check window has closed. Load
 //     refuses a hold whose table no job of its entry deletes from this
 //     way, so no hold outlives the window it stands for.
 //
 // The tables belong to the work packages that create them. Until a table
-// exists, its job or hold names that package in awaits and doesn't run.
+// exists, its job, hold or kept_by guard names that package in awaits and
+// isn't used.
 // TestTables fails when a table the migrations create has no entry, when a
 // job's table lacks the columns its entry names, and when an awaited table
-// appears, so the package that creates a table also turns its job on.
+// appears, so the package that creates a table also turns its job on,
+// unless the job is an evidence entry's, which stays off until WP-SV18.
 //
 // An entry with a period, days or the spot-check window, can't simply list
 // a table: each of its tables is a job's, so something deletes its rows,
@@ -47,8 +54,9 @@
 // The other entries are enforced elsewhere: on the device by the client's
 // retention sweeps (WP-LG6), sign-in sessions by package accounts, whose
 // TestSessionRetention checks its periods against the schedule's, on
-// account deletion by the eraser (WP-SV13), and in the evidence store by
-// the submission work packages.
+// account deletion by the eraser (WP-SV13, with WP-SB4's evidence step),
+// and in the evidence store by WP-SV18, which runs the evidence entries'
+// jobs and deletes each blob before the row that names it.
 package retention
 
 import (
@@ -96,7 +104,7 @@ type Policy struct {
 
 // Window is the spot-check window.
 type Window struct {
-	// Months is how long the window stays open after the decision.
+	// Months is how long the window stays open after it opens (DESIGN 4.4).
 	Months int `json:"months"`
 	// Provisional, when set, says why Months is a stand-in: it is the
 	// design's default until Hack Club HQ sets the window (DESIGN 13.2).
@@ -141,8 +149,9 @@ func (e Entry) HasPeriod() bool {
 const (
 	// PeriodDays deletes a row once its time is the entry's days old.
 	PeriodDays = "days"
-	// PeriodWindow deletes a row once its time, a decision, is past the
-	// spot-check window (Window.Closes).
+	// PeriodWindow deletes a row once the spot-check window that opened at
+	// its time has closed (Window.Closes). Its time is when the submission's
+	// window opened (DESIGN 4.4), which WP-SV18 writes.
 	PeriodWindow = "window"
 )
 
@@ -159,23 +168,41 @@ type JobSpec struct {
 	Period string `json:"period,omitempty"`
 	// Hold, when set, keeps the rows a submission uses.
 	Hold *HoldSpec `json:"hold,omitempty"`
+	// KeptBy lists tables that keep a row of Table while any of their
+	// rows names it by the job's key columns, which each of them has.
+	// Ingest's tables keep a removed device's row this way, so its device
+	// id stays with its account while ingest holds anything from it
+	// (D-device-account-binding).
+	KeptBy []KeepSpec `json:"kept_by,omitempty"`
 	// Awaits names the work package that creates Table. The job is off
 	// while it is set.
 	Awaits string `json:"awaits,omitempty"`
 }
 
+// KeepSpec is one table of a job's kept_by.
+type KeepSpec struct {
+	// Table is the table, which has the job's key columns.
+	Table string `json:"table"`
+	// Awaits names the work package that creates Table. The job runs
+	// without this table's guard while it is set, which is right only
+	// while the table doesn't exist.
+	Awaits string `json:"awaits,omitempty"`
+}
+
 // HoldSpec names a table of holds. A hold row has the job's key columns,
 // naming the row it holds, and DecidedColumn: NULL while its submission is
-// open, then the time the submission was decided, in epoch milliseconds.
-// A held row stays while its submission is open, and until the spot-check
-// window after the decision has passed. The submission code deletes the
-// holds of a submission that is withdrawn. The hold table is also the
-// table of one of the entry's jobs by the window, with DecidedColumn as
-// its time column, which deletes each hold once its window has closed.
+// open, then when its spot-check window opened, in epoch milliseconds: its
+// latest decision, or a withdrawal that came before any decision, or its
+// freeze once it has stayed open a window (DESIGN 4.4). WP-SV18 writes it
+// from the submission. A held row stays until that window has closed, and
+// a withdrawal deletes no hold. The hold table is also the table of one of
+// the entry's jobs by the window, with DecidedColumn as its time column,
+// which deletes each hold once its window has closed.
 type HoldSpec struct {
 	// Table is the hold table.
 	Table string `json:"table"`
-	// DecidedColumn is the hold table's decision time.
+	// DecidedColumn is the hold table's column for when its submission's
+	// spot-check window opened (DESIGN 4.4), as above.
 	DecidedColumn string `json:"decided_column"`
 	// Awaits names the work package that creates Table. The job runs
 	// without the hold while it is set, which is right only while no
@@ -235,6 +262,10 @@ func (p *Policy) check() error {
 	// One entry may name a table more than once, as a job's table and as
 	// a hold.
 	owner := make(map[string]string)
+	// keepers are the kept_by tables in use, each with where it's named,
+	// checked against owner once every table is claimed.
+	type keeper struct{ at, table string }
+	var keepers []keeper
 	claim := func(table, by string) {
 		if !identifier.MatchString(table) {
 			fail("%s: table %q isn't a lowercase SQL name", by, table)
@@ -361,6 +392,25 @@ func (p *Policy) check() error {
 					fail("%s: nothing deletes the holds in %s; give the entry a job on %s with \"period\": \"window\" and time_column %s, so each hold goes once its window has closed", jat, h.Table, h.Table, h.DecidedColumn)
 				}
 			}
+			for n, k := range j.KeptBy {
+				switch {
+				case !identifier.MatchString(k.Table):
+					fail("%s: kept_by table %q isn't a lowercase SQL name", jat, k.Table)
+				case k.Table == j.Table:
+					fail("%s: kept_by names the job's own table", jat)
+				case slices.ContainsFunc(j.KeptBy[:n], func(o KeepSpec) bool { return o.Table == k.Table }):
+					fail("%s: kept_by names %s twice", jat, k.Table)
+				case k.Awaits == "":
+					keepers = append(keepers, keeper{jat, k.Table})
+				}
+			}
+		}
+	}
+	// A guard in use reads a table the schedule places, so a misspelt
+	// name can't keep rows, or fail the job, unnoticed.
+	for _, k := range keepers {
+		if _, ok := owner[k.table]; !ok {
+			fail("%s: kept_by table %s isn't in the schedule; give it an entry, or set awaits to the work package that creates it", k.at, k.table)
 		}
 	}
 	return errors.Join(errs...)
@@ -401,13 +451,13 @@ func Days(n int) string {
 	return fmt.Sprintf("%d days", n)
 }
 
-// Closes returns when the spot-check window of a decision made at decided
-// closes: Months calendar months later, in UTC. When that month lacks the
+// Closes returns when a spot-check window that opened at opened closes:
+// Months calendar months later, in UTC. When that month lacks the
 // day, as one month after 31 March does, the window stays open to the end
 // of the month and closes as the next month starts. The evidence store
 // uses the same rule.
-func (w Window) Closes(decided time.Time) time.Time {
-	d := decided.UTC()
+func (w Window) Closes(opened time.Time) time.Time {
+	d := opened.UTC()
 	c := d.AddDate(0, w.Months, 0)
 	if c.Day() != d.Day() {
 		// AddDate rolled an impossible date, such as 31 April, into the
@@ -417,18 +467,19 @@ func (w Window) Closes(decided time.Time) time.Time {
 	return c
 }
 
-// lastClosed returns the latest decision time, to the millisecond, whose
-// window of months has closed by now, as Window.Closes counts it. A hold
-// keeps its row while its decision is later. Subtracting months from now
-// isn't the inverse of Closes, because AddDate rolls an impossible date
-// into the next month: 29 February 2028 less 12 months is 1 March 2027,
-// which would release decisions of 1 March 2027 a day early.
+// lastClosed returns the latest time, to the millisecond, at which a
+// window of months that opened then has closed by now, as Window.Closes
+// counts it. A hold keeps its row while its time is later, or NULL.
+// Subtracting months from now isn't the inverse of Closes, because AddDate
+// rolls an impossible date into the next month: 29 February 2028 less 12
+// months is 1 March 2027, which would release windows that opened on
+// 1 March 2027 a day early.
 func lastClosed(now time.Time, months int) time.Time {
 	n := now.UTC()
 	c := n.AddDate(0, -months, 0)
 	if c.Day() != n.Day() {
-		// No date months back has n's day, so every decision of the
-		// shorter month has closed, and none of the next.
+		// No date months back has n's day, so every window that opened in
+		// the shorter month has closed, and none of the next.
 		c = time.Date(c.Year(), c.Month(), 1, 0, 0, 0, 0, time.UTC).Add(-time.Millisecond)
 	}
 	return c

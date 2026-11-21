@@ -118,7 +118,7 @@ func TestServeSignIn(t *testing.T) {
 		{name: "it redirects to the authorization endpoint of hca.issuer's discovery document", ok: strings.HasPrefix(loc.String(), hca.URL+"/oauth/authorize?")},
 		{name: "the client id is hca.client_id", ok: q.Get("client_id") == hcafake.ClientID},
 		{name: "the redirect URI is base_url's callback", ok: q.Get("redirect_uri") == "http://localhost:8080/auth/hca/callback"},
-		{name: "the scopes are the four pairtime asks for", ok: q.Get("scope") == "openid email slack_id verification_status"},
+		{name: "the scopes are the five pairtime asks for, profile for the signed-in name (D-display-name)", ok: q.Get("scope") == "openid email profile slack_id verification_status"},
 		{name: "the login cookie is set", ok: strings.Contains(resp.Header.Get("Set-Cookie"), "__Host-pairtime_hca_login=")},
 		{name: "the log names the redirect URI to register with HCA", ok: strings.Contains(stderr.String(), "redirect_uri=http://localhost:8080/auth/hca/callback")},
 	}
@@ -241,16 +241,22 @@ func TestServeSignups(t *testing.T) {
 		}
 	})
 
+	named := operator
+	named.FirstName, named.LastName = "Robin", "Fakename"
 	tests := []struct {
 		name     string
 		identity hcafake.Identity
 		// wantCode is the error page's code, or "" for a sign-in that
 		// succeeds.
 		wantCode string
+		// shown is who the home page says is signed in, and "" means the
+		// identity's Slack ID.
+		shown string
 	}{
 		{name: "while signups_open is false an identity on the operators list signs in and gets an account", identity: operator},
 		{name: "while signups_open is false a new identity not on the operators list gets the signups_closed page", identity: stranger, wantCode: auth.CodeSignupsClosed},
 		{name: "the operator's account signs in again", identity: operator},
+		{name: "a sign-in with HCA's profile names puts the given name in the header instead of the Slack ID (D-display-name)", identity: named, shown: "Robin"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -274,7 +280,11 @@ func TestServeSignups(t *testing.T) {
 				t.Errorf("the callback sent the browser to %q, want /", landing)
 			}
 			resp, body = get(t, "http://"+public+"/", session)
-			signedIn := "<p>Signed in as <strong>" + tt.identity.SlackID + "</strong></p>"
+			shown := tt.shown
+			if shown == "" {
+				shown = tt.identity.SlackID
+			}
+			signedIn := "<p>Signed in as <strong>" + shown + "</strong></p>"
 			signOut := `<form method="post" action="` + auth.LogoutPath + `"><button type="submit">Sign out</button></form>`
 			if resp.StatusCode != http.StatusOK || !strings.Contains(body, signedIn) || !strings.Contains(body, signOut) {
 				t.Errorf("/ with the session answered %d, want 200 with %q and the sign-out form; body:\n%s", resp.StatusCode, signedIn, body)

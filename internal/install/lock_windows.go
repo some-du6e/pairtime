@@ -40,3 +40,15 @@ func lockFile(name string) (func() error, error) {
 		return errors.Join(err, f.Close())
 	}, nil
 }
+
+// removeLocked drops the lock unlock holds, then deletes its file, name.
+// Windows doesn't delete a file that a process has open, the lock's holder
+// included, so the delete has to wait for the unlock, and it fails, which
+// leaves the file, when another install or uninstall has taken the lock
+// in between.
+func removeLocked(name string, unlock func() error) error {
+	if err := unlock(); err != nil {
+		return err
+	}
+	return os.Remove(name)
+}

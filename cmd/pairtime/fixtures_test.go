@@ -17,6 +17,10 @@ import (
 func TestFixturesScrub(t *testing.T) {
 	// Built at run time, so no file in the repo looks like a leaked key.
 	stripe := "sk_" + "live_" + strings.Repeat("Qw81Zx4LmN", 3)
+	anthropic := "sk-ant-" + "api03-" + strings.Repeat("aB3_x9Kq-Z", 10)[:93] + "AA"
+	// encoding/json's escape for &, built here so no tool that edits this
+	// file turns it into the character.
+	amp := `\` + "u0026"
 	maya := []string{"--account", "maya", "--home", "/home/maya"}
 	tests := []struct {
 		name      string
@@ -86,6 +90,304 @@ func TestFixturesScrub(t *testing.T) {
 				"removed 3 spans from 3 of 3 files",
 			},
 			notOut: []string{"maya", "Maya", "jonah"},
+		},
+		{
+			// Merged with the address around it, the account or the
+			// password would take the address's type and stay with it
+			// (D-email-redaction).
+			name: "a known value or a URL password inside a kept address is still replaced",
+			files: map[string]string{
+				"log.txt": "rowanq@example.com\npostgres://app:Tr0ub4dor3x@db.example.com/app\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+			},
+			args:     []string{"--account", "rowanq"},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"log.txt": "capture@example.com\npostgres://app:REDACTED_URL_PASSWORD@db.example.com/app\nCo-Authored-By: Claude <noreply@anthropic.com>\n",
+			},
+			wantOut: []string{
+				"log.txt:1:1: account, 6 bytes\n",
+				"log.txt:2:16: secret url-password, 11 bytes\n",
+				"removed 2 spans from 1 of 1 files",
+			},
+			notOut: []string{"rowanq", "Tr0ub4dor3x"},
+		},
+		{
+			// Most of gitleaks' rules end a key at a quote, a space, a
+			// semicolon or the end of the text, so in place these keys,
+			// followed by an @, match none of them, and the kept address
+			// was their only span. TestScrub in tools/capture checks that
+			// scrub.py replaces them too.
+			name: "a key that is a kept address's local part, as a URL's user, is still replaced",
+			files: map[string]string{
+				"keys.txt": "https://" + stripe + "@api.example.com/v1/charges\n" +
+					"https://" + anthropic + "@api.example.com/v1/messages\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"keys.txt": "https://REDACTED_STRIPE_ACCESS_TOKEN@api.example.com/v1/charges\n" +
+					"https://REDACTED_ANTHROPIC_API_KEY@api.example.com/v1/messages\n",
+			},
+			wantOut: []string{
+				"keys.txt:1:9: secret stripe-access-token, 38 bytes\n",
+				"keys.txt:2:9: secret anthropic-api-key, 108 bytes\n",
+				"removed 2 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, anthropic},
+		},
+		{
+			// The kept address is x-oauth-basic@api.example.com here, and
+			// the key, followed by a colon, is before it.
+			name: "a key that is the user of a URL before its password, at a kept address, is still replaced",
+			files: map[string]string{
+				"remote.txt": "https://" + stripe + ":x-oauth-basic@api.example.com/v1/charges\n" +
+					"https://" + anthropic + ":x-oauth-basic@api.example.com/v1/messages\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"remote.txt": "https://REDACTED_STRIPE_ACCESS_TOKEN:REDACTED_URL_PASSWORD@api.example.com/v1/charges\n" +
+					"https://REDACTED_ANTHROPIC_API_KEY:REDACTED_URL_PASSWORD@api.example.com/v1/messages\n",
+			},
+			wantOut: []string{
+				"remote.txt:1:9: secret stripe-access-token, 38 bytes\n",
+				"remote.txt:1:48: secret url-password, 13 bytes\n",
+				"remote.txt:2:9: secret anthropic-api-key, 108 bytes\n",
+				"remote.txt:2:118: secret url-password, 13 bytes\n",
+				"removed 4 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, anthropic, "oauth"},
+		},
+		{
+			// The address after the key, if there is one, isn't kept here:
+			// it covered only the password. The second URL has no password
+			// and so no address, and the third's host isn't an address.
+			name: "a key that is a URL's user is replaced whatever the host",
+			files: map[string]string{
+				"real.txt": "https://" + stripe + ":x-oauth-basic@api.stripe.com/v1/charges\n" +
+					"https://" + anthropic + ":@api.anthropic.com/v1/messages\n" +
+					"postgres://" + stripe + ":pw@db:5432/app\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"real.txt": "https://REDACTED_STRIPE_ACCESS_TOKEN:capture@example.invalid/v1/charges\n" +
+					"https://REDACTED_ANTHROPIC_API_KEY:@api.anthropic.com/v1/messages\n" +
+					"postgres://REDACTED_STRIPE_ACCESS_TOKEN:REDACTED_URL_PASSWORD@db:5432/app\n",
+			},
+			wantOut: []string{
+				"real.txt:1:9: secret stripe-access-token, 38 bytes\n",
+				"real.txt:1:48: email, 28 bytes\n",
+				"real.txt:2:9: secret anthropic-api-key, 108 bytes\n",
+				"real.txt:3:12: secret stripe-access-token, 38 bytes\n",
+				"real.txt:3:51: secret url-password, 2 bytes\n",
+				"removed 5 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, anthropic, "oauth"},
+		},
+		{
+			// pkg/redact's url-password rule needs scheme://, which JSON's
+			// \/\/, JSON inside JSON's \\/\\/ and a URL with no scheme
+			// don't have, and the address after the password is kept. The
+			// rule already takes a password with no user before it.
+			name: "a URL's user and password at a kept address are replaced however the URL is written",
+			files: map[string]string{
+				"urls.txt": `{"url":"postgres:\/\/app:Tr0ub4dor3x@db.example.com\/app"}` + "\n" +
+					"//app:Tr0ub4dor3x@db.example.com/app\n" +
+					"redis://:hunter2hunter2@cache.example.com:6379\n" +
+					`{"stdout":"{\"url\":\"https:\\/\\/` + stripe + `:x@api.example.com\"}"}` + "\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"urls.txt": `{"url":"postgres:\/\/app:REDACTED_URL_PASSWORD@db.example.com\/app"}` + "\n" +
+					"//app:REDACTED_URL_PASSWORD@db.example.com/app\n" +
+					"redis://:REDACTED_URL_PASSWORD@cache.example.com:6379\n" +
+					`{"stdout":"{\"url\":\"https:\\/\\/REDACTED_STRIPE_ACCESS_TOKEN:REDACTED_URL_PASSWORD@api.example.com\"}"}` + "\n",
+			},
+			wantOut: []string{
+				"urls.txt:1:26: secret url-password, 11 bytes\n",
+				"urls.txt:2:7: secret url-password, 11 bytes\n",
+				"urls.txt:3:10: secret url-password, 14 bytes\n",
+				"urls.txt:4:35: secret stripe-access-token, 38 bytes\n",
+				"urls.txt:4:74: secret url-password, 1 bytes\n",
+				"removed 5 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, "Tr0ub4dor3x", "hunter2"},
+		},
+		{
+			// What a first run writes for postgres://app:KEY@db.example.com,
+			// postgres://app:pw@db.westfield.edu and the first line of the
+			// case for a URL's user at any host. url-password finds a
+			// password in each, so it would put its own placeholder in
+			// place of the one there.
+			name:     "a placeholder an earlier run wrote is left alone, even where another rule finds it",
+			files:    map[string]string{"again.txt": "postgres://app:REDACTED_STRIPE_ACCESS_TOKEN@db.example.com/app\npostgres://app:capture@example.invalid/app\nhttps://REDACTED_STRIPE_ACCESS_TOKEN:capture@example.invalid/v1/charges\n"},
+			wantCode: 0,
+			wantOut:  []string{"removed 0 spans from 0 of 1 files"},
+		},
+		{
+			// scrub.py ended this password at its first @, which left
+			// ssw0rd glued to a placeholder.
+			name:     "a span that runs on past a placeholder isn't one, so all of it is replaced",
+			files:    map[string]string{"glued.txt": "postgres://app:REDACTED_URL_PASSWORD@ssw0rd@db.example.com/app\n"},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"glued.txt": "postgres://app:REDACTED_URL_PASSWORD@db.example.com/app\n",
+			},
+			wantOut: []string{"glued.txt:1:16: secret url-password, 28 bytes\n", "removed 1 spans from 1 of 1 files"},
+			notOut:  []string{"ssw0rd"},
+		},
+		{
+			// RFC 3986 keeps ? and # out of an authority, but people put
+			// them in passwords, and a password may hold an @ as well.
+			name: "a URL's password with ?, # or @ in it runs to its last @, and the user before it is still scanned",
+			files: map[string]string{
+				"special.txt": "https://" + stripe + ":pa?ss1@api.example.com/v1/charges\n" +
+					`{"url":"postgres:\/\/app:Tr0ub#4dor@db.example.com\/app"}` + "\n" +
+					"//app:Tr0ub?4dor@db:5432/app\n" +
+					"postgres://app:p@ssw0rd@db.example.com/app\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"special.txt": "https://REDACTED_STRIPE_ACCESS_TOKEN:REDACTED_URL_PASSWORD@api.example.com/v1/charges\n" +
+					`{"url":"postgres:\/\/app:REDACTED_URL_PASSWORD@db.example.com\/app"}` + "\n" +
+					"//app:REDACTED_URL_PASSWORD@db:5432/app\n" +
+					"postgres://app:REDACTED_URL_PASSWORD@db.example.com/app\n",
+			},
+			wantOut: []string{
+				"special.txt:1:9: secret stripe-access-token, 38 bytes\n",
+				"special.txt:1:48: secret url-password, 6 bytes\n",
+				"special.txt:2:26: secret url-password, 10 bytes\n",
+				"special.txt:3:7: secret url-password, 10 bytes\n",
+				"special.txt:4:16: secret url-password, 8 bytes\n",
+				"removed 5 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, "pa?ss1", "Tr0ub", "ssw0rd"},
+		},
+		{
+			// The address there is the password and the host, which
+			// pkg/redact merges into one span, so the host goes too.
+			name: "a key before a password with # or JSON's escaped & in it is replaced at a host that isn't kept",
+			files: map[string]string{
+				"realhost.txt": "https://" + stripe + ":pa#ss1@api.stripe.com/v1/charges\n" +
+					`{"url":"https://` + stripe + `:pa` + amp + `ss@api.stripe.com/x"}` + "\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"realhost.txt": "https://REDACTED_STRIPE_ACCESS_TOKEN:capture@example.invalid/v1/charges\n" +
+					`{"url":"https://REDACTED_STRIPE_ACCESS_TOKEN:capture@example.invalid/x"}` + "\n",
+			},
+			wantOut: []string{
+				"realhost.txt:1:9: secret stripe-access-token, 38 bytes\n",
+				"realhost.txt:1:48: email, 21 bytes\n",
+				"realhost.txt:2:17: secret stripe-access-token, 38 bytes\n",
+				"realhost.txt:2:56: email, 25 bytes\n",
+				"removed 4 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe},
+		},
+		{
+			name: "an address that is a URL's user is replaced or kept like any other address",
+			files: map[string]string{
+				"users.txt": "ftp://jane@westfield.edu:s3cretpw@ftp.example.com/\nftp://noreply@anthropic.com:s3cretpw@ftp.example.com/\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"users.txt": "ftp://capture@example.invalid:REDACTED_URL_PASSWORD@ftp.example.com/\nftp://noreply@anthropic.com:REDACTED_URL_PASSWORD@ftp.example.com/\n",
+			},
+			wantOut: []string{
+				"users.txt:1:7: email, 18 bytes\n",
+				"users.txt:1:26: secret url-password, 8 bytes\n",
+				"users.txt:2:29: secret url-password, 8 bytes\n",
+				"removed 3 spans from 1 of 1 files",
+			},
+			notOut: []string{"jane", "s3cretpw"},
+		},
+		{
+			// RFC 3986 keeps [ and ] out of a user and a password.
+			name:     "with no scheme, a password ends at the last @ before a bracket, so namespaced XPath, with no @ before its bracket, is left alone",
+			files:    map[string]string{"xpath.py": "tree.xpath('//xs:element[@name]', namespaces=ns)\npom.findall(\".//pom:dependency[@scope]\")\n"},
+			wantCode: 0,
+			wantOut:  []string{"removed 0 spans from 0 of 1 files"},
+		},
+		{
+			// The scan runs on past the host into the query or fragment,
+			// so the last @ there ends the user, and the key in it is
+			// followed by the host's @, a ? or a #. On the second line the
+			// port's colon starts a password that runs to the query's @, as
+			// scrub.py's URL_PASSWORD has it, so the port and the kept
+			// address's local part are replaced too. pkg/redact's
+			// url-password rule finds nothing on that line, since its user
+			// stops at the host's @.
+			name: "a key as a URL's user is still found when the URL runs on into a query or fragment holding an @",
+			files: map[string]string{
+				"query.txt": "http://" + stripe + "@localhost?next=a@b\n" +
+					"http://" + stripe + "@localhost:3000?email=test@example.com\n" +
+					"http://" + anthropic + "@localhost?next=a@b\n" +
+					"https://" + stripe + "#frag@x\n" +
+					"https://" + stripe + "?x=1@y\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"query.txt": "http://REDACTED_STRIPE_ACCESS_TOKEN@localhost?next=a@b\n" +
+					"http://REDACTED_STRIPE_ACCESS_TOKEN@localhost:REDACTED_URL_PASSWORD@example.com\n" +
+					"http://REDACTED_ANTHROPIC_API_KEY@localhost?next=a@b\n" +
+					"https://REDACTED_STRIPE_ACCESS_TOKEN#frag@x\n" +
+					"https://REDACTED_STRIPE_ACCESS_TOKEN?x=1@y\n",
+			},
+			wantOut: []string{
+				"query.txt:1:8: secret stripe-access-token, 38 bytes\n",
+				"query.txt:2:8: secret stripe-access-token, 38 bytes\n",
+				"query.txt:2:57: secret url-password, 15 bytes\n",
+				"query.txt:3:8: secret anthropic-api-key, 108 bytes\n",
+				"query.txt:4:9: secret stripe-access-token, 38 bytes\n",
+				"query.txt:5:9: secret stripe-access-token, 38 bytes\n",
+				"removed 6 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, anthropic},
+		},
+		{
+			// The bracket rule for a URL with no scheme takes only the
+			// password: its user is still scanned. An IPv6 host's brackets
+			// come after the @, so they don't count.
+			name: "a URL with no scheme has its user scanned, and its password ends at the last @ before a bracket",
+			files: map[string]string{
+				"bare.txt": "//" + stripe + ":pa[ss]@db:5432/app\n" +
+					"//app:hunter2pw@localhost?ids[]=1@x\n" +
+					"//user:pw@[::1]:8080/x\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"bare.txt": "//REDACTED_STRIPE_ACCESS_TOKEN:pa[ss]@db:5432/app\n" +
+					"//app:REDACTED_URL_PASSWORD@localhost?ids[]=1@x\n" +
+					"//user:REDACTED_URL_PASSWORD@[::1]:8080/x\n",
+			},
+			wantOut: []string{
+				"bare.txt:1:3: secret stripe-access-token, 38 bytes\n",
+				"bare.txt:2:7: secret url-password, 9 bytes\n",
+				"bare.txt:3:8: secret url-password, 2 bytes\n",
+				"removed 3 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, "hunter2pw"},
+		},
+		{
+			// A sandbox anonymizer disables a real address by appending a
+			// reserved label, and it still names someone
+			// (D-email-redaction-tld).
+			name: "under a reserved top-level domain only a one-label name is kept, so a real address with .invalid appended is replaced",
+			files: map[string]string{
+				"owners.txt": "Owner: jane.doe@westfield.edu.invalid\nci@runner.ci.test ci@build.example.invalid\n" +
+					"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"owners.txt": "Owner: capture@example.invalid\ncapture@example.invalid capture@example.invalid\n" +
+					"user@myapp.test dev@build.localhost a@b.example capture@example.invalid\n",
+			},
+			wantOut: []string{
+				"owners.txt:1:8: email, 30 bytes\n",
+				"owners.txt:2:1: email, 17 bytes\n",
+				"owners.txt:2:19: email, 24 bytes\n",
+				"removed 3 spans from 1 of 1 files",
+			},
+			notOut: []string{"jane", "westfield", "runner"},
 		},
 		{
 			name: "telemetry account and organization ids become README's id, or 0 for a number, and each is listed",
@@ -279,7 +581,7 @@ func TestFixturesScrubPlantedCapture(t *testing.T) {
 			`{"toolUseResult":{"stdout":"rowanq\nrowanq@rowans-laptop:~$ git log\nAuthor: Rowan Quinn <rowan.quinn@westfield.edu>\n` + anthropic +
 			`"},"uri":"file:///c%3A/Users/RowanQ/pairtime-capture/project"}` + "\n" +
 			`{"nested":"{\"stdout\":\"C:\\\\Users\\\\RowanQ\\\\x\"}","school":"Westfield High"}` + "\n" +
-			`{"keys":"` + ghp + " " + aws + " " + jwt + `","trailer":"Co-Authored-By: Claude <noreply@anthropic.com>"}` + "\n",
+			`{"keys":"` + ghp + " " + aws + " " + jwt + `","trailer":"Co-Authored-By: Claude <noreply@anthropic.com>\nCo-authored-by: aider (gpt-5) <aider@aider.chat>"}` + "\n",
 		"otlp/000001.json": `{"resourceLogs":[{"resource":{"attributes":[` +
 			`{"key":"user.account_uuid","value":{"stringValue":"9b1e7f9e-1111-4222-8333-444455556666"}},` +
 			`{"key":"organization.id","value":{"stringValue":"77aa88bb-1111-4222-8333-444455556666"}},` +
@@ -350,7 +652,7 @@ func TestFixturesScrubPlantedCapture(t *testing.T) {
 			}
 		}},
 		{"ids that aren't secrets and public tool addresses are kept", func(t *testing.T) {
-			for _, want := range []string{session, tool, "noreply@anthropic.com"} {
+			for _, want := range []string{session, tool, "noreply@anthropic.com", "aider@aider.chat"} {
 				if !strings.Contains(all.String(), want) {
 					t.Errorf("%s was removed", want)
 				}

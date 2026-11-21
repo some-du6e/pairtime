@@ -16,14 +16,25 @@ import (
 
 // handler is the agent's HTTP server: the UI at /, which needs no token
 // because it is the same static files for everyone, and the API under
-// /v1/, which does. Guard checks the Host and Origin of both (CP 6.3).
+// /v1/. The routes the dashboard reads take the bearer token from
+// port.json or the dashboard's session cookie, and POST /v1/agent/stop
+// takes the token alone, so the cookie can't stop the agent. `pairtime
+// dashboard` gets a one-time sign-in link over the socket (dashboard.go),
+// and GET /signin trades it for the cookie (DESIGN 3.9). Guard checks the
+// Host and Origin of everything (CP 6.3).
 func (a *agent) handler(token string) http.Handler {
-	api := http.NewServeMux()
-	api.HandleFunc("GET /v1/status", a.serveStatus)
-	api.HandleFunc("POST /v1/agent/stop", a.serveStop)
+	reads := http.NewServeMux()
+	reads.HandleFunc("GET /v1/status", a.serveStatus)
+	reads.HandleFunc("GET /v1/days/{date}", a.serveDay)
+	reads.HandleFunc("GET /v1/sessions/last", a.serveLastSession)
+
+	stop := http.NewServeMux()
+	stop.HandleFunc("POST /v1/agent/stop", a.serveStop)
 
 	mux := http.NewServeMux()
-	mux.Handle("/v1/", localhttp.RequireToken(token, api))
+	mux.Handle("/v1/agent/stop", localhttp.RequireToken(token, stop))
+	mux.Handle("/v1/", localhttp.RequireAuth(token, a.sessions, reads))
+	mux.Handle("GET /signin", localhttp.SignIn(a.sessions))
 	mux.Handle("/", readOnly(http.FileServerFS(webui.FS())))
 	return localhttp.Guard(a.port, mux)
 }
@@ -50,9 +61,13 @@ type statusReply struct {
 	Mode    config.Mode  `json:"mode"`
 	Port    int          `json:"port"`
 	// Wakeups counts the scheduler's timer firings since the start.
-	Wakeups  uint64            `json:"wakeups"`
-	Jobs     []jobReply        `json:"jobs"`
-	IPC      ipcReply          `json:"ipc"`
+	Wakeups uint64     `json:"wakeups"`
+	Jobs    []jobReply `json:"jobs"`
+	IPC     ipcReply   `json:"ipc"`
+	// Signals says where idle time, focus, power and the lock state come
+	// from, for doctor's idle and focus lines (DESIGN 5.9, D-design-5.9).
+	Signals  signalsReply      `json:"signals"`
+	Adapters adaptersReply     `json:"adapters"`
 	Problems map[string]string `json:"problems,omitempty"`
 }
 
@@ -72,11 +87,13 @@ func (a *agent) serveStatus(w http.ResponseWriter, r *http.Request) {
 		PID:      os.Getpid(),
 		Started:  a.started.UTC(),
 		UptimeS:  int64(time.Since(a.started) / time.Second),
-		Mode:     a.config().Mode,
+		Mode:     a.uploadMode(),
 		Port:     a.port,
 		Wakeups:  a.sched.Wakeups(),
 		Jobs:     jobs,
 		IPC:      a.ipcStatus(),
+		Signals:  a.signalsNow(),
+		Adapters: a.adaptersHost().status(),
 		Problems: a.currentProblems(),
 	})
 }

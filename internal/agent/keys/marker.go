@@ -85,6 +85,11 @@ type marker struct {
 	// ledger directory, so a ledger directory that is deleted or emptied
 	// can't make the key number records from s = 1 again.
 	Chain string `json:"chain,omitempty"`
+	// Account is the store that holds the device's sign-in, the token and
+	// key seed of `pairtime login` (SetAccount), or "" while there is none.
+	// It is the store that holds K_dev, and it is written here before the
+	// store gets them.
+	Account Kind `json:"account,omitempty"`
 }
 
 type archivedKey struct {
@@ -124,6 +129,8 @@ func (m marker) validate() error {
 		return fmt.Errorf("%w: keystore.json has no valid key id", ErrDamaged)
 	case m.Chain != "" && (m.Store == "" || !isDeviceID(m.Chain)):
 		return fmt.Errorf("%w: keystore.json names a ledger chain that isn't a device id, or one for a device key it doesn't have", ErrDamaged)
+	case m.Account != "" && (m.Store == "" || !m.Account.known()):
+		return fmt.Errorf("%w: keystore.json names a store for the device's sign-in that isn't valid, or one without a device key", ErrDamaged)
 	}
 	for i, k := range m.Unconfirmed {
 		if !k.known() || slices.Contains(m.Unconfirmed[:i], k) {

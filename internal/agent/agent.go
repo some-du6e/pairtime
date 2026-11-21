@@ -8,10 +8,12 @@
 // timer goes through, and the HTTP server on 127.0.0.1. WP-AG2 added the
 // socket that hooks hand their messages to and the inbox they spool to
 // when the agent is down (packages ipc and inbox), WP-AG3 what the agent
-// makes of each hook call (hooks.go, package hookpath), and WP-OS8 the
-// notifier that shows the coach's notification. The other components of
-// DESIGN 3.3 arrive in later work packages, each as a package under
-// internal/agent that Run starts.
+// makes of each hook call (hooks.go, package hookpath), WP-OS8 the
+// notifier that shows the coach's notification, WP-AG4 the scorer loop
+// and the stores it writes (packages scorer and store), and WP-AG5 the
+// uploader (package uploader). The other
+// components of DESIGN 3.3 arrive in later work packages, each as a
+// package under internal/agent that Run starts.
 package agent
 
 import (
@@ -40,8 +42,13 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/presence"
 	"github.com/some-du6e/pairtime/internal/agent/procs"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
+	"github.com/some-du6e/pairtime/internal/agent/scorer"
 	"github.com/some-du6e/pairtime/internal/agent/state"
+	"github.com/some-du6e/pairtime/internal/agent/store"
+	"github.com/some-du6e/pairtime/internal/agent/uploader"
+	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/version"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 // ErrAlreadyRunning means another agent holds the lock on the same data
@@ -76,6 +83,21 @@ type Options struct {
 	// that can pass, such as a locked keyring; 15 s otherwise. Tests set
 	// it so they needn't wait.
 	LedgerRetry time.Duration
+	// Zone, when set, replaces time.Local as the time zone the agent
+	// counts days in. Tests set it.
+	Zone *time.Location
+	// Mac is the macOS notification loop, which cmd/pairtime runs on the
+	// main thread while Run runs on another goroutine. It gives presence
+	// its suspends, resumes, locks and unlocks, and focus its app
+	// activations (WP-OS9). Nil means none runs: presence still samples
+	// idle time, and GET /v1/status says that power, locks and focus go
+	// unseen. Other OSes ignore it.
+	Mac *MacLoop
+	// Walk, when set, replaces how the agent reads the parent chain of a
+	// hook connection's peer, which is hookpath.ReadChain otherwise
+	// (ipc.Options.Walk). Tests use it to hand captured calls in from
+	// under the processes the capture recorded.
+	Walk func(pid int) []platform.Proc
 }
 
 // linked keeps heavyModules' entry points reachable (see heavy_linux.go).
@@ -96,8 +118,12 @@ type agent struct {
 	state   *state.Store
 	cfg     atomic.Pointer[config.Config]
 	port    int
-	procs   *procs.Scanner // the harness process scan (DESIGN 3.3)
-	journal *inbox.Journal // nil when it couldn't be opened
+	// linkPort is port while the HTTP server listens, and 0 before and
+	// after, for the sign-in links the socket hands out (dashboard.go),
+	// which can be asked for before the port is known.
+	linkPort atomic.Int32
+	procs    *procs.Scanner // the harness process scan (DESIGN 3.3)
+	journal  *inbox.Journal // nil when it couldn't be opened
 	// ipcSrv is the socket's or the pipe's server, nil while hooks can't
 	// reach the agent.
 	ipcSrv atomic.Pointer[ipc.Server]
@@ -116,11 +142,44 @@ type agent struct {
 	// sessions, once keySessions has derived it from the device key.
 	hooked   *hookTies
 	kSession atomic.Pointer[[]byte]
+	// adapt runs the harness adapters and the git adapter, which turn the
+	// hook calls the journal stores, and the commits in the sessions'
+	// repos, into ledger records (adapters.go, git.go; WP-AG7).
+	// adaptersHost makes it on first use.
+	adapt     *adapterHost
+	adaptOnce sync.Once
 	// ledgerIn takes presence's and focus's records, and presence's
 	// seals, to the ledger writer once it opens (WP-LG5).
-	ledgerIn    *ledger.Presence
+	ledgerIn *ledger.Presence
+	// signals says where each OS signal comes from, for GET /v1/status
+	// (openOS).
+	signals     func() signalsReply
 	keyStores   []keys.Store  // Options.KeyStores
 	ledgerRetry time.Duration // the first wait before the ledger opens again
+	// table is the parameter table the agent scores with, which the
+	// ledger writer and presence get too.
+	table *params.Table
+	// scorer steps pkg/score over every sealed batch and writes buckets,
+	// which the local API reads (WP-AG4). Both are nil when the bucket
+	// store didn't open.
+	scorer  *scorer.Loop
+	buckets *store.Buckets
+	// upload sends the device's tier-1 data once the ledger is open and
+	// the device is signed in (WP-AG5). It is nil before the ledger opens.
+	upload atomic.Pointer[uploader.Uploader]
+	// early are the batches the ledger writer sealed before upload was
+	// set, with their modes, for handEarly; earlyMu orders them with it.
+	earlyMu sync.Mutex
+	early   []earlyBatch
+	// signIn keeps the sign-in between uploads (credentials).
+	signIn signInCache
+	// loc is Options.Zone (zone).
+	loc *time.Location
+
+	// sessions are the dashboard's sign-ins (DESIGN 3.9). The dashboard
+	// reads the same day and session routes as the CLI views, which
+	// scorer.go serves from the scorer's stores (WP-AG4; D-shadow-shape).
+	sessions *localhttp.Sessions
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
@@ -158,6 +217,9 @@ func Run(ctx context.Context, opts Options) error {
 		problems:    make(map[string]string),
 		keyStores:   opts.KeyStores,
 		ledgerRetry: defaultLedgerRetry,
+		table:       newestTable(),
+		loc:         opts.Zone,
+		sessions:    localhttp.NewSessions(nil),
 		hooked:      newHookTies(),
 	}
 	if opts.LedgerRetry > 0 {
@@ -170,8 +232,9 @@ func Run(ctx context.Context, opts Options) error {
 
 	// Each part that starts adds the step that stops it, and they stop in
 	// reverse order: the HTTP server, port.json, the socket and the inbox,
-	// focus, the process scan, the config watch, presence, the ledger, the
-	// scheduler, the notifier, state.json.
+	// focus, the process scan, the config watch, presence, the OS's
+	// sources, the ledger, the scorer, which scores the ledger's last seal,
+	// the scheduler, the notifier, state.json.
 	var closers []func()
 	defer func() {
 		for i := len(closers) - 1; i >= 0; i-- {
@@ -206,13 +269,20 @@ func Run(ctx context.Context, opts Options) error {
 		stopSched()
 		<-schedDone
 	})
+	closers = append(closers, a.startScorer())
 	closers = append(closers, a.startLedger())
-	closers = append(closers, a.startPresence())
+	src := a.openOS(opts)
+	a.signals = src.signals
+	if src.close != nil {
+		closers = append(closers, src.close)
+	}
+	closers = append(closers, a.startPresence(src.presence))
 
 	closers = append(closers, a.watchConfig())
-	a.newFocus(focus.ThisOS())
+	a.newFocus(src.focus)
 	closers = append(closers, a.startProcs())
 	closers = append(closers, a.startFocus())
+	closers = append(closers, a.startAdapters())
 	closers = append(closers, a.startIPC(opts))
 
 	ln, pf, err := a.listen(opts.Ports)
@@ -236,7 +306,11 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
+	// The listener is bound, so a browser sent to a link from now on waits
+	// in its queue until Serve takes it.
+	a.linkPort.Store(int32(a.port))
 	closers = append(closers, func() {
+		a.linkPort.Store(0)
 		sctx, cancel := context.WithTimeout(context.Background(), shutdownWait)
 		defer cancel()
 		if err := srv.Shutdown(sctx); err != nil {

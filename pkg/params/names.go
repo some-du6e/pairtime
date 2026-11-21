@@ -39,6 +39,11 @@ var (
 	// KEYS_PRE_S is how soon before a prompt is submitted input must come
 	// for the prompt to count as typed by a person.
 	KEYS_PRE_S = IntParam{"KEYS_PRE_S"}
+	// INPUT_RELEASE_GRACE_MS is how long after a prompt is submitted input
+	// still counts for SM 2.2 rules 6 and 7: the key that sends the prompt
+	// can be released after the hook stamps the submit. Table 0.2.0 added
+	// it.
+	INPUT_RELEASE_GRACE_MS = IntParam{"INPUT_RELEASE_GRACE_MS"}
 	// TYPING_MAX_CPS is the fastest plausible typing; typed length beyond
 	// it counts as pasted.
 	TYPING_MAX_CPS = IntParam{"TYPING_MAX_CPS"}
@@ -121,8 +126,9 @@ var (
 
 // SM 8.4, attribution.
 var (
-	// ATTRIB_STICKY_S is how long a multi-session terminal keeps the
-	// project of its last anchor when no upcoming lead applies.
+	// ATTRIB_STICKY_S is how long a terminal hosting several sessions keeps
+	// the session of its last anchor when the look-ahead doesn't apply (SM
+	// 3.2, 8.4).
 	ATTRIB_STICKY_S = IntParam{"ATTRIB_STICKY_S"}
 	// PROC_SCAN_S is the interval of the harness process scan.
 	PROC_SCAN_S = IntParam{"PROC_SCAN_S"}
@@ -290,16 +296,14 @@ var (
 	AUDIT_BASE_P = RatParam{"AUDIT_BASE_P"}
 )
 
-// all lists every parameter, in the order of SM 8 and DESIGN 6.3. A table
-// must give each of them a value of its type and may hold nothing else.
-// TestDeclaredParams checks that every variable above is here exactly once.
-//
-// While every table has the same parameters, one list serves them all. The
-// first MAJOR version that adds or drops a parameter makes it a list per
-// MAJOR version.
+// all lists every parameter of any table, in the order of SM 8 and DESIGN
+// 6.3. A table must give each parameter its version has a value of its type
+// and may hold nothing else (added). TestDeclaredParams checks that every
+// variable above is here exactly once.
 var all = []param{
 	SAMPLE_S, SLEEP_GAP_S, PRESENCE_GAP_S, PRESENCE_TAIL_S, RETURN_GAP_MAX_S, KEYS_PRE_S,
-	TYPING_MAX_CPS, SUBSTANTIVE_CHARS, ERROR_PASTE_TEXT_MAX, CRON_PREFIX_CHARS, PA_MIN_LATENCY_MS,
+	INPUT_RELEASE_GRACE_MS, TYPING_MAX_CPS, SUBSTANTIVE_CHARS, ERROR_PASTE_TEXT_MAX, CRON_PREFIX_CHARS,
+	PA_MIN_LATENCY_MS,
 
 	THINK_LEAD_S, COMPOSE_CPS, COMPOSE_MAX_S, LOW_LEAD_S, ANSWER_LEAD_S, PA_MAX_S, PA_TRAIL_S,
 	INT_LEAD_S, INT_TRAIL_S, EDIT_LEAD_S, CMD_LEAD_S, CMD_TRAIL_S, CMD_WATCH_MAX_S, COMMIT_LEAD_S,
@@ -322,6 +326,32 @@ var all = []param{
 	BUILD_DAY_LAG_S, WEEKLY_GOAL_DEFAULT, FREEZE_EARN_DAYS, FREEZE_MAX, BOARD_WINDOW_D,
 	CONSISTENCY_WINDOW_D, LONG_FIGHT_MIN_S, REVEAL_POST_S, CHALLENGE_K_MIN, CHALLENGE_K_FRAC,
 	CHALLENGE_K_MAX, PREAPPROVE_ROW_MAX_S, COMPOSE_NEEDS_KEYS, AUDIT_BASE_P,
+}
+
+// added lists the parameters that tables after the first added, each with
+// the version of the first table that has it. A table has every parameter
+// in all except those added after its own version, and Parse holds it to
+// exactly those, so a published table keeps its parameters, and its hash,
+// when a later one adds a parameter. A new parameter comes with a new rule,
+// so its table's version is a rule change's: a new MAJOR from 1.0.0 on, a
+// new MINOR while scoring versions are 0.x (DESIGN 6.6, 10.2). Dropping a
+// parameter will need the version that dropped it here too.
+var added = []struct {
+	p       param
+	version string
+}{
+	{INPUT_RELEASE_GRACE_MS, "0.2.0"},
+}
+
+// since returns the version of the first table that has p, or "" when
+// every table has it.
+func since(p param) string {
+	for _, a := range added {
+		if a.p == p {
+			return a.version
+		}
+	}
+	return ""
 }
 
 // kind is the type of a parameter's value.

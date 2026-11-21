@@ -35,8 +35,11 @@ type Slot struct {
 	PresentUntil int64          `json:"present_until"`
 	Then         event.Presence `json:"then"`
 	// FocusClass, FocusProject and Hosted describe the window that held
-	// focus longest in the slot (SM 2.5, 3.2). Resolving a terminal that
-	// hosts several sessions to one of them is WP-SC3's.
+	// focus longest in the slot, as its os.focus records give them (SM 2.5):
+	// FocusProject is set when the client resolved the window to one
+	// project. The project SM 3.2 resolves the slot to, which for a window
+	// hosting sessions of several projects depends on their anchors and
+	// reading buckets, is the ProjectKey of the slot's Credit.
 	FocusClass   event.AppClass `json:"focus_class"`
 	FocusProject string         `json:"focus_project,omitempty"`
 	Hosted       []string       `json:"hosted_sessions,omitempty"`
@@ -556,9 +559,21 @@ func (p *presence) keysAt(t int64) bool {
 }
 
 // inputBefore reports whether input came in the window before t: key
-// presses where the OS reports them, else any input (SM 2.2 rule 6).
+// presses where the OS reports them, else any input, as a typed command's
+// evidence test reads it (SM 2.3).
 func (p *presence) inputBefore(t, window int64) bool {
-	return p.inputIn(t-window, t, p.keysAt(t))
+	return p.inputAround(t, window, 0)
+}
+
+// inputAround reports whether input came in the before milliseconds up to
+// t or the after milliseconds past it: key presses where the OS reports
+// them, else any input. SM 2.2 rules 6 and 7 read a prompt's input this
+// way, with after INPUT_RELEASE_GRACE_MS, because the key that sends the
+// prompt can be released after the hook stamps t. A sample only dates the
+// last input before it, so the release, landing between t and the hook's
+// sample, hides the typing before it.
+func (p *presence) inputAround(t, before, after int64) bool {
+	return p.inputIn(t-before, t+after, p.keysAt(t))
 }
 
 // inputSlots counts the slots overlapping [from, to) with input: key

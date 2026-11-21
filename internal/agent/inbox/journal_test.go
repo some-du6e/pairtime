@@ -53,6 +53,19 @@ func TestJournal(t *testing.T) {
 			},
 		},
 		{
+			name: "Store says it stored the first delivery of an id and not the second",
+			run: func(t *testing.T, dir string) {
+				j := open(t, dir, day)
+				m := newMessage(t, 1)
+				d := Delivery{Message: m, Via: ViaSocket, Received: clock.Stamp{Wall: day}}
+				first, err1 := j.Store(d)
+				second, err2 := j.Store(d)
+				if !first || second || err1 != nil || err2 != nil {
+					t.Errorf("Store = %v, %v then %v, %v; want true then false, with no error", first, err1, second, err2)
+				}
+			},
+		},
+		{
 			name: "ids stored before a restart are known after it",
 			run: func(t *testing.T, dir string) {
 				m := newMessage(t, 1)

@@ -131,6 +131,22 @@ func TestPresence(t *testing.T) {
 				{at: 780, present: event.PresentYes}},
 		},
 		{
+			// The sampler reads idle time on every slot boundary but records
+			// only the minute's reading and one that shows new input, here
+			// at 765 s (D-d14-cadence, whose D14 text P07 lands). pkg/score
+			// already reads that gap as slow cadence, one of its readings.
+			name: "after CONTEXT_IDLE_S without input, a sample 45 s after a minute sample that shows new input is no sleep, and the slot holding the input is yes (D-d14-cadence)",
+			build: func(b *tl) {
+				b.mouse(at(5), at(760))
+				b.samples(at(0), at(660))
+				for _, s := range []int64{720, 765, 780} {
+					b.sample(at(s))
+				}
+			},
+			want: []slotWant{{at: 720, present: event.PresentNo}, {at: 735, present: event.PresentNo},
+				{at: 750, present: event.PresentYes}},
+		},
+		{
 			name: "slots before the first sample are unknown",
 			build: func(b *tl) {
 				b.harness(at(0), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 10})
@@ -177,13 +193,31 @@ func TestFocusLongest(t *testing.T) {
 			class: event.AppTerminal, hosted: []string{"s_1"},
 		},
 		{
-			name: "a window written again when a session starts under it is one window, and its longest piece gives the hosted sessions",
+			name: "a window written again when a session starts under it is one window, and the hosted set it held longest gives the slot's sessions",
 			focus: func(b *tl) {
 				b.focus(at(0), event.AppBrowser, "")
 				b.focus(at(6), event.AppTerminal, "p_1")
 				b.focus(at(10), event.AppTerminal, "p_1", "s_1")
 			},
 			class: event.AppTerminal, hosted: []string{"s_1"},
+		},
+		{
+			name: "E-6.6-codes: of a window's hosted sets the one it held longest in total gives the slot's sessions, 4 + 5 s against a single 6 s",
+			focus: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "", "s_1", "s_2")
+				b.focus(at(4), event.AppTerminal, "", "s_1", "s_2", "s_3")
+				b.focus(at(10), event.AppTerminal, "", "s_2", "s_1")
+			},
+			class: event.AppTerminal, hosted: []string{"s_1", "s_2"},
+		},
+		{
+			name: "a hosted set is a set: a record that lists a session twice hosts what one listing it once does, 4 + 5 s against 6 s",
+			focus: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "", "s_1", "s_2")
+				b.focus(at(4), event.AppTerminal, "", "s_1", "s_2", "s_3")
+				b.focus(at(10), event.AppTerminal, "", "s_2", "s_1", "s_1")
+			},
+			class: event.AppTerminal, hosted: []string{"s_1", "s_2"},
 		},
 		{
 			name: "on a tie the window that had focus first holds the slot",

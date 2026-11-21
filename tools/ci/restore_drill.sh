@@ -37,22 +37,29 @@
 # Never run it with set -x: read-only writes the keys into a file.
 set -euo pipefail
 
-# image_paths are what goes into the server image: pairtimed's code and the
-# files it embeds, the modules and the patched module copies it builds with,
-# the notices tool, and the Dockerfile's other inputs. server-image.yml builds
-# a new image on a push to main that changes one of them, and tools/ci's
-# TestDrillImagePaths keeps its list and this one the same.
+# image_paths are what goes into the server image: pairtimed's code, the
+# packages it imports and the files they embed, the patched module copy it
+# builds with, the notices tool, and the Dockerfile's other inputs.
+# server-image.yml builds a new image on a push to main that changes one of
+# them, and tools/ci's TestDrillImagePaths keeps its list and this one the
+# same.
 image_paths=(
 	cmd/pairtimed
 	internal/server
-	internal/version
-	docs/embed.go
-	docs/retention.json
 	'deploy/*.go'
 	deploy/pairtime.toml.tmpl
 	deploy/litestream.yml
-	third_party
+	docs/embed.go
+	docs/retention.json
+	internal/devtoken
+	internal/version
+	pkg/event
+	pkg/ledger
+	pkg/params
+	third_party/burntsushi-toml
 	tools/release
+	internal/release
+	LICENSE
 	Dockerfile.pairtimed
 	go.mod
 	go.sum

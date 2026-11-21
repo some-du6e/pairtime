@@ -109,6 +109,21 @@ func TestReturnRule(t *testing.T) {
 	typedPrompt := func(resume int64) func(b *tl) {
 		return func(b *tl) { b.prompt(at(resume+19), event.ViaHook, "s_1", "p_1", "t_2", 30) }
 	}
+	t.Run("SM 2.1, 3.2 rule 4: a silence in a browser returns nothing, though its focus record names the prompt's project, since a browser resolves to none", func(t *testing.T) {
+		got := silence(event.AppBrowser, 451, typedPrompt(451)).run(t, Device{})
+		// The prompt is still a substantive anchor, the one that returns
+		// the same silence in a terminal (below).
+		prompt := false
+		for _, a := range got.Anchors {
+			prompt = prompt || a.T == at(470) && a.Kind == event.AnchorSubstantivePrompt
+		}
+		if !prompt {
+			t.Fatalf("anchors %+v, want the substantive prompt at 470 s", got.Anchors)
+		}
+		if len(got.Returns) != 0 {
+			t.Errorf("returned runs %+v, want none", got.Returns)
+		}
+	})
 	t.Run("SM 2.1: a 160-word answer after the last touch, a 6-minute silence, then a typed prompt, earns 53 + 120 = 173 s", func(t *testing.T) {
 		got := silence(event.AppTerminal, 451, typedPrompt(451)).run(t, Device{})
 		if len(got.Returns) != 1 {
@@ -208,4 +223,68 @@ func TestReturnRule(t *testing.T) {
 			t.Errorf("returned runs %+v, want one with no unread words and THINK_LEAD_S of credit", got.Returns)
 		}
 	})
+
+	// The return rule's horizon is READ_HORIZON_S from the run's start, and
+	// an act counts once it is on record (docs/errata/2026-11-19-return-rule-lookahead.md,
+	// decided 2026-11-20 as E-return-lookahead). These cases pin the code
+	// half of that rule change; main's SM 2.1 still counts 600 s from the
+	// run's end, and P10 lands its new text. silence's run starts at 105 s,
+	// so its horizon is 705 s.
+	command := func(b *tl) event.Event {
+		return b.shell(at(762), "p_1", &event.ShellCommand{CmdClass: event.CmdRun, TStart: at(470), TEnd: at(760),
+			Interactive: true})
+	}
+	for _, c := range []struct {
+		name   string
+		resume int64
+		act    func(b *tl) event.Event
+		// returned says whether the run is returned, and by the act's
+		// anchor.
+		returned bool
+	}{
+		{
+			name:   "an act on record READ_HORIZON_S after the run's start returns it",
+			resume: 686,
+			act: func(b *tl) event.Event {
+				return b.prompt(at(705), event.ViaHook, "s_1", "p_1", "t_2", 30)
+			},
+			returned: true,
+		},
+		{
+			name:   "an act on record 601 s after the run's start doesn't return it, though it comes 31 s after the run's end",
+			resume: 687,
+			act: func(b *tl) event.Event {
+				return b.prompt(at(706), event.ViaHook, "s_1", "p_1", "t_2", 30)
+			},
+		},
+		{
+			name:   "a typed command started within READ_HORIZON_S of the run's start but recorded when it ends, past it, returns nothing",
+			resume: 451,
+			act:    command,
+		},
+		{
+			name:   "an act recorded too late is passed over, and the first act on record in time decides",
+			resume: 451,
+			act: func(b *tl) event.Event {
+				command(b)
+				b.press(every(atMS(490_500), atMS(499_500), 1000)...)
+				return b.prompt(at(500), event.ViaHook, "s_1", "p_1", "t_2", 30)
+			},
+			returned: true,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var e event.Event
+			got := silence(event.AppTerminal, c.resume, func(b *tl) { e = c.act(b) }).run(t, Device{})
+			if !c.returned {
+				if len(got.Returns) != 0 {
+					t.Errorf("returned runs %+v, want none", got.Returns)
+				}
+				return
+			}
+			if len(got.Returns) != 1 || got.Returns[0].RunStart != at(105) || got.Returns[0].Anchor != e.EventID {
+				t.Errorf("returned runs %+v, want one from 105 s returned by %s", got.Returns, e.EventID)
+			}
+		})
+	}
 }

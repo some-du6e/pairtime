@@ -72,11 +72,16 @@ func (s State) now(r rules) int64 {
 }
 
 // NewState returns the state of a scorer that has seen no records and
-// scores with table t the records of the device d describes.
+// scores with table t the records of the device d describes. t must hold
+// every parameter the scorer reads: NewState panics on a table older than
+// one of them, such as table 0.1.0, which predates INPUT_RELEASE_GRACE_MS
+// (pkg/params, added). The agent scores with the newest table, and pkg/params
+// checks that it holds them all.
 func NewState(t *params.Table, d Device) State {
 	if t == nil {
 		panic("score: NewState needs a parameter table")
 	}
+	newRules(t)
 	return State{table: t, device: d}
 }
 
@@ -205,8 +210,8 @@ func merge(old, add []event.Event) []event.Event {
 	return out
 }
 
-// recordCmp orders records by t, then seq, then event_id. seq is gapless
-// per device and assigned as the agent writes, so events of the same
+// recordCmp orders records by t, then seq, then event_id. seq rises with
+// every record the agent writes (ledger-v1 4.1), so events of the same
 // millisecond keep the order the agent wrote them in.
 func recordCmp(a, b event.Event) int {
 	if c := cmp.Compare(a.T, b.T); c != 0 {

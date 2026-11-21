@@ -13,6 +13,10 @@ const spoolFlags = os.O_WRONLY | os.O_APPEND | os.O_CREATE
 // readFlags open a taken spool file for a drain.
 const readFlags = os.O_RDONLY
 
+// guardFlags are the flags OpenPrivate adds: none, since the data
+// directory's DACL decides who may open what is in it.
+const guardFlags = 0
+
 // privateDir checks that dir, the inbox directory, is a directory. On
 // Windows, file modes and owners don't say who may open a file: the data
 // directory's DACL, which the inbox inherits, does (internal/agent/home).

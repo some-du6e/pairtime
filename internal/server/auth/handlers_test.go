@@ -137,3 +137,69 @@ func TestSameOrigin(t *testing.T) {
 		})
 	}
 }
+
+func TestDisplayName(t *testing.T) {
+	tests := []struct {
+		name, claims, want string
+	}{
+		{name: "given_name is the display name", claims: `{"given_name":"Robin","nickname":"Robbie","name":"Robin Fakename","family_name":"Fakename"}`, want: "Robin"},
+		{name: "without given_name the nickname is", claims: `{"nickname":"Robbie"}`, want: "Robbie"},
+		{name: "a given_name with nothing to show once cleaned gives way to the nickname", claims: `{"given_name":" \t ","nickname":"Robbie"}`, want: "Robbie"},
+		{name: "a given_name that isn't a string counts as none, and the token still parses", claims: `{"given_name":42,"nickname":"Robbie"}`, want: "Robbie"},
+		{name: "a null given_name counts as none", claims: `{"given_name":null,"nickname":"Robbie"}`, want: "Robbie"},
+		{name: "a nickname that isn't a string counts as none too", claims: `{"nickname":{"first":"Robbie"}}`, want: ""},
+		{name: "the full name and the family name never become the display name", claims: `{"name":"Robin Fakename","family_name":"Fakename"}`, want: ""},
+		{name: "without profile claims there is no display name", claims: `{"sub":"ident!fake1"}`, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var c claims
+			if err := json.Unmarshal([]byte(tt.claims), &c); err != nil {
+				t.Fatalf("the claims don't parse: %v", err)
+			}
+			if got := displayName(&c); got != tt.want {
+				t.Errorf("displayName = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanName(t *testing.T) {
+	// Built from code points, so the source shows what each one is.
+	var (
+		nbsp = string(rune(0x00a0))
+		zwsp = string(rune(0x200b))
+		zwj  = string(rune(0x200d))
+		rlo  = string(rune(0x202e))
+		lri  = string(rune(0x2066))
+		pdi  = string(rune(0x2069))
+		ls   = string(rune(0x2028))
+		ps   = string(rune(0x2029))
+		e    = string(rune(0x00e9))
+	)
+	tests := []struct {
+		name, in, want string
+	}{
+		{name: "a plain name stays as it is", in: "Robin", want: "Robin"},
+		{name: "the ends are trimmed", in: "  Robin \t", want: "Robin"},
+		{name: "a run of spaces, tabs and line breaks becomes one space", in: "Robin \t\r\n Lee", want: "Robin Lee"},
+		{name: "a no-break space is a space", in: "Robin" + nbsp + "Lee", want: "Robin Lee"},
+		{name: "control characters count as spaces", in: "Robin" + string(rune(0)) + string(rune(0x1b)) + "Lee", want: "Robin Lee"},
+		{name: "line and paragraph separators count as spaces", in: "Robin" + ls + "Lee" + ps + "Jr", want: "Robin Lee Jr"},
+		{name: "a right-to-left override is dropped, so it can't reorder the Slack ID the pages show after the name", in: "Robin" + rlo + "1ELPMAXE0U", want: "Robin1ELPMAXE0U"},
+		{name: "bidirectional isolates are dropped", in: lri + "Robin" + pdi, want: "Robin"},
+		{name: "a zero-width space is dropped", in: "Ro" + zwsp + "bin", want: "Robin"},
+		{name: "the zero-width joiner stays, since emoji sequences and joined scripts need it", in: "a" + zwj + "b", want: "a" + zwj + "b"},
+		{name: "letters beyond ASCII stay", in: "Zo" + e + " L" + e + "a", want: "Zo" + e + " L" + e + "a"},
+		{name: "at most 64 characters stay, counted in characters rather than bytes", in: strings.Repeat(e, 70), want: strings.Repeat(e, 64)},
+		{name: "a name cut at 64 characters doesn't end in a space", in: strings.Repeat("a", 63) + " b", want: strings.Repeat("a", 63)},
+		{name: "a name of only spaces and formatting characters is empty", in: " \t" + rlo + zwsp + "\n", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cleanName(tt.in); got != tt.want {
+				t.Errorf("cleanName(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

@@ -1,6 +1,6 @@
 # Erratum: Ari refuses the journal entries DESIGN 5.10's bridge would send
 
-Date 2026-11-20. Raised by the review of #13 (WP-PG0) in issue #44, written in PR #55. Status: waiting for Karim. DESIGN 5.10 and WP-PG8's Build line stay as they are. `testdata/upstream/ari/` already holds Ari's rules, and WP-PG8's CI check validates the bridge's output against them.
+Date 2026-11-20. Raised by the review of #13 (WP-PG0) in issue #44, written in PR #55. Status: decided 2026-11-20 by the orchestrator for Karim: one `journals[]` entry per row, valued as pairtime's review stands, with `text` and `seconds` rounded down; a row over 86,400 s cut at each UTC midnight; past 200 entries, one entry per person per UTC day, refused past that. DESIGN 5.10, WP-PG8 and `testdata/upstream/ari/` change in one docs PR. `testdata/upstream/ari/` already holds Ari's rules, and WP-PG8's CI check validates the bridge's output against them.
 
 ## Input
 
@@ -42,3 +42,13 @@ The cap bites whenever one window holds more than 24 credited hours: a teen with
 
    The first changes less, since every window that fits keeps DESIGN's one row per devlog. Both need a work session to fit in one entry. SM 5.3 breaks sessions at 20-minute gaps and caps a day at 12 credited hours, so a session over 86,400 s would have to run through a whole local day with no 20-minute break between credited minutes. The bridge still has to cut such a session if one turns up.
 3. Past 200 entries: should the bridge merge adjacent windows until the ship fits, or refuse and ask the program to split the submission?
+
+## Decision
+
+Decided 2026-11-20 by the orchestrator for Karim. DESIGN 5.10 now has the bridge, and WP-PG8's Build and CI lines follow it.
+
+1. `text` is added. It names pairtime and gives the row's start, end and seconds, and `markdown` adds the row's evidence link.
+2. One entry per row, the second option: each work-session row, a loop row once a reviewer raises it (D12) and held minutes once a reviewer clears them (D7), valued as pairtime's review stands when the program builds the ship. Ari's reviewer then cuts the sitting pairtime's review page shows (D13; AD D5), and the cap never touches an honest teen, because credit can't pass wall time (SM 3.1, 3.4). A row over 86,400 s is still cut at each UTC midnight, and each part says "part k of n" with the whole row's start, end and seconds.
+3. Past 200 entries, one entry per person per UTC day, and the bridge refuses past that. Day entries and midnight cuts use the frozen minute buckets, never a total split pro rata.
+
+Three points this erratum didn't raise. `wholeSeconds` (`payload.go` lines 132-138) refuses fractions and pairtime credits in half-seconds, so `seconds` is rounded down, and a row that rounds to 0 sends nothing. Ari adds up every journal entry (`settlement.ts` lines 135-153, 170), so the bridge's entries are the only ones with seconds, and a program's own devlog entries go at 0 s and count toward the 200. Ari answers 409 `already_queued` to a ship sent under the `external_id` of one still open (`internal/ingest/process.go` lines 103-105), so a raise or clearance after the ship went out reaches Ari only when the program ships again.

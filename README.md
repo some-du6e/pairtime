@@ -6,7 +6,7 @@ We're building it for Hack Club's AI time tracking bounty. [docs/BOUNTY.md](docs
 
 ## Status
 
-Research and design are in progress, and the code is a skeleton. Both binaries build for every target and answer `version` and `help`, `pairtime agent` runs the background agent's skeleton, `pairtimed serve` starts the server on SQLite, signs people in with Hack Club Auth and answers health checks, and `pkg/event` holds the event model, but nothing tracks time yet. There's nothing to install.
+Research and design are in progress, and the code is a skeleton. Both binaries build for every target and answer `version` and `help`, `pairtime agent` runs the background agent's skeleton, `pairtimed serve` starts the server on SQLite, signs people in with Hack Club Auth and answers health checks, and `pkg/event` holds the event model, but nothing tracks time yet. `pairtime install` sets the client up without admin rights: it shows every change as a diff before it makes any, puts the binary at its per-user path, adds the login item, starts the agent and adds Claude Code's hooks once `pairtime hook` passes a self-test. `pairtime uninstall` takes it all back out and deletes the device key with what pairtime recorded, keeping only the daily totals and recaps unless told to delete those too.
 
 ## Layout
 
@@ -14,14 +14,14 @@ One Go module holds the client, the server and the code they share.
 
 | Path | What's in it |
 |---|---|
-| `cmd/pairtime` | The client. One binary will be the background agent, the hook receiver for AI harnesses and the CLI |
+| `cmd/pairtime` | The client. One binary will be the background agent, the hook receiver for AI harnesses and the CLI. `today` and `statusline` print your time and your agent's from the days the agent stores, `recap` asks the running agent over its socket, and `dashboard` opens the local dashboard in your browser, signed in |
 | `cmd/pairtimed` | The server. `serve` checks SQLite, applies the migrations, signs people in with Hack Club Auth and serves until it's stopped, `migrate` applies them alone, and `healthcheck` asks a running server whether it's ready. `init`, `keys`, `snapshot` and `doctor` set up, back up and check a deployment. Projects, rollups and the live dashboard come later |
 | `deploy` | The deploy bundle: `compose.yml` with pairtimed under Litestream, cloudflared and the witness sidecar, `litestream.yml`, the `pairtime.toml` template, and [runbook.md](deploy/runbook.md), the procedure a deploy agent follows. `Dockerfile.pairtimed` at the top builds the image server-image.yml pushes |
 | `pkg/event` | The event model from the [struggle-metric spec](docs/design/struggle-metric.md): the envelope, the 18 event kinds, the records the scorer derives from them, and validation for all of it |
 | `pkg/params` | The public parameter table: every tunable value in the credit rule (SM 8, DESIGN 6.3), as canonical JSON with its SHA-256 |
 | `pkg/score` | The scorer: turns events into credited human seconds, following SM with DESIGN 6.2's deviations |
 | `pkg/ledger` | The [ledger format](docs/spec/ledger-v1.md): device keys, records, Merkle trees and inclusion proofs, the batch chain, the server's receipts, day trees and verification, and the content: the commitment of each prompt, final agent message and track label, the redacted reveal that opens one, the keyed features (`features`) and the challenge draw |
-| `pkg/redact` | Finds what in a prompt or agent message must stay on the device: the teen's own values, secrets and personal data that passes a checksum (DESIGN 8.7) |
+| `pkg/redact` | Finds what in a prompt or agent message must stay on the device: the teen's own values, secrets and personal data that passes Presidio's checks, email addresses included (DESIGN 8.7) |
 | `internal/agent` | The background agent: its data directories, the single-instance lock, `config.toml`, `state.json`, the scheduler every timer goes through, the HTTP server on 127.0.0.1, the socket hooks hand their events to (`ipc`) and the spool they fall back on (`inbox`), `pairtime hook`'s fast path and what the agent makes of each hook call (`hookpath`), the scan for harness processes no hook has spoken for (`procs`), and the one notification per work session (`notifier`) |
 | `internal/agent/presence` | Presence and power: idle-time samples on each 15-second slot boundary and suspend, resume, lock and unlock, recorded only while a project context is live (DESIGN 3.3, D14) |
 | `internal/agent/focus` | Focus: an `os.focus` record each time another window comes to the front, with its app class, the harness sessions it hosts and a keyed hash of the app, recorded only while a project context is live (DESIGN 3.3, SM 3.2). Window titles are never read |
@@ -33,10 +33,14 @@ One Go module holds the client, the server and the code they share.
 | `internal/platform/clock` | A moment as an event records it: the wall clock, the OS's monotonic clock that keeps counting through sleep, and the id of the boot it counts from. The hook stamps each call with it, and the agent each message it takes in |
 | `internal/platform/proctest` | Tests of the three process-table readers against process chains the tests start themselves. No code outside its tests |
 | `internal/adapters/git` | The git adapter: which project a folder belongs to, and the commits, amends and rebases made there, read from `.git` (DESIGN 5.8) |
-| `internal/install` | What `pairtime install` writes outside pairtime's own directories, the harness hooks and the login item, merged beside what's there, and the uninstall that puts each file back byte for byte (DESIGN 5.9) |
+| `internal/install` | What `pairtime install` writes outside pairtime's own directories, the harness hooks and the login item, merged beside what's there, and the uninstall that puts each file back byte for byte; which harnesses are on the machine; and `consent`, the screen that shows each change before install makes it (DESIGN 5.9) |
+| `internal/coach/text` | The words pairtime shows a teen about their time, shared by the coach, the CLI and the dashboard: your time, each agent's time named after it, the rest said for what it was, and nothing that scolds (DESIGN 3.8) |
 | `internal/server` | The server's packages: `config` reads `pairtime.toml`, `store` opens the database (SQLite in WAL mode, or Postgres), `migrations` holds the schema, `writer` is the one goroutine every write goes through, `ops` serves the health and readiness endpoints, `accounts` keeps accounts and web sessions, `auth` signs people in with Hack Club Auth, `objstore` is the S3 client for evidence and snapshots, and `backup` holds the server's keys, their encrypted backup, the nightly snapshot and the replica's lag |
 | `internal/release` | The [update manifest](docs/spec/update-manifest.md), the signed list of release archives a client checks its downloads against, and the release keys built into the client |
+| `install` | The install scripts every release carries, `install.sh` for macOS and Linux and `install.ps1` for Windows, which check a release's signature and SHA-256s and hand the binary to `pairtime install`, which puts it in place after the consent screen's yes, and their end-to-end tests in `e2e` |
 | `internal/timelines` | Loads `testdata/timelines`, the struggle-metric spec's worked examples written out as events. The scorer's tests compare their output with them |
+| `internal/jsonschema` | A JSON Schema validator for the keywords the schemas in `docs/schema` use, so tests can check JSON a command prints. The client doesn't link it |
+| `internal/rehearsal` | The end-to-end rehearsal of a teen's first hour: the real binaries, Hack Club Auth sign-in (against a mock), `pairtime install`, `pairtime login` approved on `/device`, a Claude Code session typed at the keyboard under Xvfb, the hours on `/dashboard`, and `pairtime uninstall`. platform.yml's Linux desktop job runs it |
 | `internal/webui` | The local dashboard's built files, embedded in the client. The repo carries a placeholder, so Go builds never need Node |
 | `web` | The web UI in Svelte 5 and TypeScript: the local dashboard the agent serves, the server UI, and the components they share. [web/README.md](web/README.md) says how it builds |
 | `docs/api` | OpenAPI specs of pairtime's HTTP APIs. The UI's TypeScript types are generated from them |
@@ -45,6 +49,7 @@ One Go module holds the client, the server and the code they share.
 | `third_party/` | Patched copies of modules, built in place of the originals through `replace` lines in `go.mod`, each under its own license with a `PROVENANCE.md`: `burntsushi-toml`, the TOML parser, which reads the local time zone on first use rather than as every pairtime process starts |
 | `testdata/` | What the tests read: the timelines, ledger vectors, captures of upstream interfaces, the consistency checks' scenarios, harness fixtures, the redaction corpus, and the license check's seeded modules |
 | `docs/schema/event.schema.json` | A JSON Schema for events, for adapters written in other languages. A test fails if it drifts from `pkg/event` |
+| `docs/schema/cli-today.schema.json` | What `pairtime today --json` prints. A test fails if it drifts from the Go types |
 | `docs/` | Requirements, research, the design docs and the specs |
 
 ## Build from source

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"sync"
@@ -20,8 +21,8 @@ import (
 )
 
 // table010 returns parameter table 0.1.0, whose sampling parameters are
-// D14's 15 s, 60 s and 600 s. These tests pin it, as pkg/score's fixture
-// tests do, so that a newer table doesn't change what they expect.
+// D14's 15 s, 60 s and 600 s. These tests pin it, as pkg/score's tests pin
+// theirs, so that a newer table doesn't change what they expect.
 func table010(t *testing.T) *params.Table {
 	t.Helper()
 	tab, err := params.ByVersion("0.1.0")
@@ -32,19 +33,27 @@ func table010(t *testing.T) *params.Table {
 }
 
 // tableWith returns table 0.1.0 with the given parameters changed, as a
-// later table might change them, under a version no real table has.
+// later table might change them, under a version no real table has. That
+// version comes after every table's, so the table also holds the
+// parameters later tables added, with the newest table's values.
 func tableWith(t *testing.T, change map[params.IntParam]int64) *params.Table {
 	t.Helper()
 	if len(change) == 0 {
 		return table010(t)
 	}
-	var doc struct {
+	type table struct {
 		Version string                     `json:"version"`
 		Params  map[string]json.RawMessage `json:"params"`
 	}
-	if err := json.Unmarshal(table010(t).Canonical(), &doc); err != nil {
+	var doc, old table
+	tables := params.Tables()
+	if err := json.Unmarshal(tables[len(tables)-1].Canonical(), &doc); err != nil {
 		t.Fatal(err)
 	}
+	if err := json.Unmarshal(table010(t).Canonical(), &old); err != nil {
+		t.Fatal(err)
+	}
+	maps.Copy(doc.Params, old.Params)
 	doc.Version = "9.9.9"
 	for p, v := range change {
 		doc.Params[p.String()] = json.RawMessage(strconv.FormatInt(v, 10))
@@ -579,15 +588,19 @@ func TestSampler(t *testing.T) {
 			want:   []string{"1s presence idle=0.5 keys=0.5"},
 		},
 		{
-			name:   "with no idle source nothing is ever recorded or sealed",
+			name:   "with no idle source nothing is ever sampled or recorded, but suspends and locks still seal (DESIGN 3.3, 3.6)",
 			noIdle: true,
 			acts: []act{
 				at(s(1), focusOn(event.AppTerminal)),
 				at(s(2), power(event.PowerLock)),
+				at(s(3), power(event.PowerUnlock)),
+				at(s(4), power(event.PowerSuspend)),
+				at(s(5), power(event.PowerResume)),
 			},
-			end:     s(61),
-			want:    []string{},
-			noTimer: true,
+			end:       s(61),
+			want:      []string{},
+			wantSeals: []event.PowerOp{event.PowerLock, event.PowerSuspend},
+			noTimer:   true,
 		},
 	}
 	for _, tt := range tests {

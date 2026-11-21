@@ -70,11 +70,13 @@ type PutOptions struct {
 }
 
 // Put stores body under key, from body's current offset to its end. It
-// reads the body twice: once for its size and SHA-256, which is signed
-// into the request so the store refuses a body that changed on the way,
-// and once to send it. The SHA-256 is also stored with the object, as
-// x-amz-meta-sha256, and Get and Head return it in ObjectInfo.SHA256.
-// Bodies over MaxPutSize fail with ErrTooLarge.
+// reads the body for its size and SHA-256, which is signed into the
+// request so the store refuses a body that changed on the way, and then
+// once for each attempt to send it. Nothing reads the body after Put
+// returns, even when the store answered before it had all of it. The
+// SHA-256 is also stored with the object, as x-amz-meta-sha256, and Get
+// and Head return it in ObjectInfo.SHA256. Bodies over MaxPutSize fail
+// with ErrTooLarge.
 func (b *Bucket) Put(ctx context.Context, key string, body io.ReadSeeker, opts PutOptions) (ObjectInfo, error) {
 	if err := CheckKey(key); err != nil {
 		return ObjectInfo{}, err
@@ -174,9 +176,8 @@ func (b *Bucket) Head(ctx context.Context, key string) (ObjectInfo, error) {
 }
 
 // Delete removes key. Deleting a missing key succeeds, as it does in S3.
-// In a bucket with versioning on, the store keeps the old versions behind
-// a delete marker, so Delete alone doesn't purge an object there
-// (docs/errata/2026-11-20-evidence-versioning.md).
+// pairtimed's buckets never keep versions (DESIGN 10.3), and pairtimed
+// doctor fails on one that does, so Delete removes the object for good.
 func (b *Bucket) Delete(ctx context.Context, key string) error {
 	if err := CheckKey(key); err != nil {
 		return err

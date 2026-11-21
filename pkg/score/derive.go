@@ -11,9 +11,9 @@ import (
 )
 
 // deriver derives everything from one sorted list of records, in passes:
-// focus and presence, sessions and turns, anchors, `pairtime track` calls,
-// the return rule, which needs the anchors, then the reading buckets and
-// the per-second credit, which need all of them.
+// focus and presence, editor heartbeats, sessions and turns, anchors,
+// `pairtime track` calls, the return rule, which needs the anchors, then
+// the reading buckets and the per-second credit, which need all of them.
 type deriver struct {
 	r    rules
 	dev  Device
@@ -33,9 +33,9 @@ type deriver struct {
 	buckets  map[string]*bucket
 	fills    []Fill
 	credits  []Credit
-	// noInputLeads are the leads the no-input prompts would have had, had a
-	// person typed them (SM 2.2 rule 8, 5.2's X.no_input).
-	noInputLeads []projLead
+	// beats are the editor heartbeats SM 3.2 rule 2 reads, which resolve
+	// editor slots and SC1's typed-edit focus test (attrib.go).
+	beats beatLine
 	// lookups are the browser and chat-app runs, whose credit waits for
 	// their end (Step).
 	lookups []span
@@ -51,6 +51,7 @@ func derive(r rules, dev Device, recs []event.Event, now int64) (Derived, []span
 	d := &deriver{r: r, dev: dev, recs: recs, now: now}
 	d.focus = buildFocus(recs)
 	d.pres = buildPresence(r, recs, now, d.focus)
+	d.buildBeats()
 	d.buildSessions()
 	d.buildTurns()
 	d.promptAnchors()
@@ -72,12 +73,6 @@ func derive(r rules, dev Device, recs []event.Event, now int64) (Derived, []span
 	return out, d.lookups
 }
 
-// projLead is a lead's span in one project.
-type projLead struct {
-	proj string
-	span
-}
-
 // Flag is a review flag a record raised (SM 8.7, DESIGN 5.4). Flags change
 // review priority, never credit.
 type Flag struct {
@@ -91,8 +86,8 @@ type Flag struct {
 const (
 	// FlagTrackWithoutPrompt is a `pairtime track` call from a session that
 	// pairtime sees through hooks or a log reader, with no prompt from it
-	// near the call: something outside the agent's turn ran the CLI
-	// (DESIGN 5.4).
+	// within TRACK_DEDUPE_S of the call (E-track-windows): something outside
+	// the agent's turn ran the CLI (DESIGN 5.4).
 	FlagTrackWithoutPrompt = "track_without_prompt"
 	// FlagPermissionTooFast is a permission answer faster than
 	// PA_MIN_LATENCY_MS, which a script gives, not a person. It opens no

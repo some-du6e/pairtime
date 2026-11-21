@@ -26,8 +26,9 @@ const mockEnv = "PAIRTIME_TEST_OIDC_URL"
 // ci.yml starts the server, pinned by digest, with
 // testdata/mock-oauth2-server.json, and sets PAIRTIME_TEST_OIDC_URL. The
 // config gives each client id the claims one case needs: an HCA-shaped
-// verified or ineligible identity, or a token with a wrong nonce, issuer,
-// audience or expiry.
+// verified or ineligible identity, the verified one with HCA's profile
+// claims, so its session keeps "Mock" as its display name, or a token with
+// a wrong nonce, issuer, audience or expiry.
 //
 // A fresh login sends prompt=login and no max_age, and the server answers
 // prompt=login with its login form, which shows the request reached it. The
@@ -109,7 +110,7 @@ func TestMockOAuth2Server(t *testing.T) {
 			}
 			me := checkSignedIn(t, h, f, "/")
 			if me.HCASub != "ident!mockVerified" || me.VerificationStatus != "verified" || !me.CanSubmit ||
-				me.Email != "verified@example.org" || me.SlackID != "U0MOCKVERIFIED" {
+				me.Email != "verified@example.org" || me.SlackID != "U0MOCKVERIFIED" || me.Session.DisplayName != "Mock" {
 				t.Errorf("me = %+v", me)
 			}
 			if tt.opts.query != fresh {

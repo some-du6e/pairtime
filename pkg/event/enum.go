@@ -138,6 +138,9 @@ var harnesses = enum[Harness]{name: "harness", values: []Harness{
 	HarnessDevin, HarnessCline, HarnessOpenCode, HarnessOther, HarnessNone,
 }}
 
+// Harnesses returns every harness, HarnessNone last, in the schema's order.
+func Harnesses() []Harness { return slices.Clone(harnesses.values) }
+
 // StartKind says how a harness session began (session.start).
 type StartKind string
 
@@ -372,6 +375,9 @@ const (
 var actors = enum[Actor]{name: "actor", values: []Actor{
 	ActorHuman, ActorAgent, ActorUnknown,
 }}
+
+// Actors returns every actor, in the schema's order.
+func Actors() []Actor { return slices.Clone(actors.values) }
 
 // AppClass sorts the app that has focus (os.focus, and a slot's
 // focus_class).

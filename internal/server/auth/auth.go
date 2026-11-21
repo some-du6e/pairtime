@@ -10,11 +10,11 @@
 //   - GET /auth/hca/login sets a short-lived login cookie holding a random
 //     state and a random secret, whose SHA-256 is the nonce, with an HMAC
 //     so no browser can write one of its own. It redirects to HCA's
-//     authorization endpoint asking for the scopes "openid email slack_id
-//     verification_status". They are named explicitly, because HCA's
-//     discovery document lists only "openid profile phone birthdate" (SP
-//     3.1). With fresh=1 it also sends prompt=login, and no max_age, for the
-//     fresh login a submission freeze asks for (DESIGN 7.5 step 2).
+//     authorization endpoint asking for the scopes "openid email profile
+//     slack_id verification_status". They are named explicitly, because
+//     HCA's discovery document lists only "openid profile phone birthdate"
+//     (SP 3.1). With fresh=1 it also sends prompt=login, and no max_age, for
+//     the fresh login a submission freeze asks for (DESIGN 7.5 step 2).
 //   - GET /auth/hca/callback checks the state against the cookie before it
 //     redeems the code, redeems it at the token endpoint with the client
 //     secret, and checks the ID token by OIDC Core 3.1.3.7: an RS256
@@ -27,7 +27,9 @@
 //     ineligible identity is refused, and sign-ups may be closed (DESIGN
 //     8.6). A sign-in it accepts gets a session cookie that is __Host-
 //     prefixed, Secure, HttpOnly and SameSite=Lax, Lax so that it is set on
-//     the redirect back from HCA.
+//     the redirect back from HCA. Of the names the profile scope brings,
+//     the session keeps one, given_name or else nickname, and the account
+//     none (D-display-name; displayName).
 //   - POST /auth/logout ends the session, and GET /api/v1/users/me shows
 //     the signed-in account.
 //
@@ -59,9 +61,17 @@ const (
 	MePath       = "/api/v1/users/me"
 )
 
-// Scopes are the scopes pairtimed asks HCA for: all four are community
-// scopes (SP 3.1). profile isn't asked for, so HCA never sends a name.
-var Scopes = []string{"openid", "email", "slack_id", "verification_status"}
+// Scopes are the scopes pairtimed asks HCA for: all five are community
+// scopes (SP 3.1). profile brings the person's names, of which a session
+// keeps one (displayName).
+//
+// The HCA app must have every one of them. For a scope the app lacks, HCA
+// answers the authorization request with an invalid_scope page of its own
+// and never comes back to the callback, so nobody can sign in, and
+// pairtimed logs nothing about it. Add a scope to the app before deploying
+// a pairtimed that asks for it: asking for fewer scopes than the app has
+// is fine.
+var Scopes = []string{"openid", "email", "profile", "slack_id", "verification_status"}
 
 // SessionCookie is the name of the session cookie. The __Host- prefix makes
 // browsers refuse it unless it is Secure, has Path=/ and no Domain.

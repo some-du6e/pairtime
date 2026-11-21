@@ -19,6 +19,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 	"github.com/some-du6e/pairtime/internal/agent/state"
@@ -199,11 +200,18 @@ func TestRun(t *testing.T) {
 	}{
 		{name: "status with the token answers 200 and says local mode", method: "GET", path: "/v1/status", token: true, wantCode: 200, wantBody: `"mode":"local"`},
 		{name: "status without the token answers 401", method: "GET", path: "/v1/status", wantCode: 401},
+		{name: "today's day with the token answers 200 with its projects", method: "GET", path: "/v1/days/today", token: true, wantCode: 200, wantBody: `"projects":[`},
+		{name: "a day without the token or a session answers 401", method: "GET", path: "/v1/days/today", wantCode: 401},
+		{name: "a day that isn't a date answers 400", method: "GET", path: "/v1/days/yesterday", token: true, wantCode: 400},
+		{name: "the last session before any work is null", method: "GET", path: "/v1/sessions/last", token: true, wantCode: 200, wantBody: `"session":null`},
 		{name: "a foreign Host answers 403", method: "GET", path: "/v1/status", host: "attacker.example", token: true, wantCode: 403},
 		{name: "a foreign Origin answers 403", method: "GET", path: "/v1/status", origin: "https://attacker.example", token: true, wantCode: 403},
 		{name: "stop needs POST", method: "GET", path: "/v1/agent/stop", token: true, wantCode: 405},
+		{name: "stop without the token answers 401", method: "POST", path: "/v1/agent/stop", wantCode: 401},
 		{name: "the placeholder dashboard is served without a token", method: "GET", path: "/", wantCode: 200, wantBody: "pairtime"},
 		{name: "the dashboard refuses POST", method: "POST", path: "/", wantCode: 405},
+		{name: "a new agent's day has no projects", method: "GET", path: "/v1/days/today", token: true, wantCode: 200, wantBody: `"projects":[]`},
+		{name: "a sign-in link isn't served over HTTP, since the CLI asks the socket for it", method: "POST", path: "/v1/dashboard/link", token: true, wantCode: 404},
 	}
 	for _, tt := range httpTests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -217,6 +225,75 @@ func TestRun(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("a link from the socket signs a browser in once, with a cookie that reads and can't stop the agent", func(t *testing.T) {
+		ep, err := ipc.EndpointFor(dirs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		ans, err := ipc.Ask(ctx, ep, ipc.AskDashboardLink)
+		if err != nil {
+			t.Fatalf("asking the socket for a link: %v", err)
+		}
+		var link ipc.DashboardLink
+		if err := json.Unmarshal(ans, &link); err != nil || !strings.HasPrefix(link.URL, base+"/signin?code=") || link.ExpiresInS != int(localhttp.CodeTTL/time.Second) {
+			t.Fatalf("the socket's link is %s (%v), want one to %s/signin that works for %s", ans, err, base, localhttp.CodeTTL)
+		}
+		// A browser follows the 303 itself; this client stops at it.
+		client := &http.Client{
+			Timeout:       10 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
+		signIn := func() *http.Response {
+			resp, err := client.Get(link.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			return resp
+		}
+		first := signIn()
+		var session *http.Cookie
+		for _, c := range first.Cookies() {
+			if c.Name == localhttp.CookieName {
+				session = c
+			}
+		}
+		if first.StatusCode != http.StatusSeeOther || first.Header.Get("Location") != "/" || session == nil || !session.HttpOnly || session.SameSite != http.SameSiteStrictMode {
+			t.Fatalf("GET /signin = %d to %q with cookie %v; want 303 to / with an HttpOnly, SameSite=Strict session", first.StatusCode, first.Header.Get("Location"), session)
+		}
+		withCookie := func(method, path string) int {
+			req, err := http.NewRequest(method, base+path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.AddCookie(session)
+			// A browser's fetch from the dashboard's page sends its Origin.
+			req.Header.Set("Origin", base)
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			return resp.StatusCode
+		}
+		for _, path := range []string{"/v1/status", "/v1/days/today", "/v1/sessions/last"} {
+			if code := withCookie("GET", path); code != http.StatusOK {
+				t.Errorf("GET %s with the session cookie = %d, want 200", path, code)
+			}
+		}
+		if code := withCookie("POST", "/v1/agent/stop"); code != http.StatusUnauthorized {
+			t.Errorf("POST /v1/agent/stop with the session cookie = %d, want 401: only the token stops the agent", code)
+		}
+		if s := getStatus(t, a); s.PID != os.Getpid() {
+			t.Errorf("the agent's status after the cookie's stop = %+v, want it running", s)
+		}
+		if again := signIn(); again.Header.Get("Location") != "/?signin=expired" || len(again.Cookies()) != 0 {
+			t.Errorf("the link used a second time went to %q with %d cookies, want /?signin=expired and none", again.Header.Get("Location"), len(again.Cookies()))
+		}
+	})
 
 	t.Run("a second agent on the same data directory gets ErrAlreadyRunning", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -240,11 +317,11 @@ func TestRun(t *testing.T) {
 	})
 
 	t.Run("an unknown mode in config.toml is reported and the agent stays local", func(t *testing.T) {
-		if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \"online\"\n"), 0o600); err != nil {
+		if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \"cloud\"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		waitStatus(t, a, func(s statusReply) bool {
-			return strings.Contains(s.Problems["config"], `"online"`) && s.Mode == config.Local
+			return strings.Contains(s.Problems["config"], `"cloud"`) && s.Mode == config.Local
 		})
 	})
 
@@ -253,6 +330,15 @@ func TestRun(t *testing.T) {
 			t.Fatal(err)
 		}
 		waitStatus(t, a, func(s statusReply) bool { return s.Problems["config"] == "" })
+	})
+
+	t.Run("the status reply says where idle time, focus, power and the lock state come from, or why each is unknown (D-design-5.9)", func(t *testing.T) {
+		s := getStatus(t, a)
+		for name, sig := range map[string]signalReply{"idle": s.Signals.Idle, "focus": s.Signals.Focus, "power": s.Signals.Power, "lock": s.Signals.Lock} {
+			if (sig.Via == "") == (sig.Unknown == "") {
+				t.Errorf("signals.%s = %+v, want exactly one of via and unknown", name, sig)
+			}
+		}
 	})
 
 	t.Run("POST /v1/agent/stop stops the agent cleanly", func(t *testing.T) {

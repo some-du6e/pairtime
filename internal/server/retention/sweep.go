@@ -25,11 +25,15 @@ type Job struct {
 	// MaxAge is the entry's period, for a job by days: rows whose time is
 	// at least this old are deleted.
 	MaxAge time.Duration
-	// WindowMonths is the spot-check window, for a job by the window: rows
-	// whose time is a decision whose window has closed are deleted.
+	// WindowMonths is the spot-check window, for a job by the window: a row
+	// is deleted once the window that opened at its time has closed. Its
+	// time is when its submission's spot-check window opened (DESIGN 4.4),
+	// and NULL until WP-SV18 writes it.
 	WindowMonths int
 	// Hold, when set, keeps the rows a submission uses.
 	Hold *Hold
+	// KeptBy lists the tables whose rows keep the rows they name by Key.
+	KeptBy []string
 }
 
 // Hold is the hold table a job consults.
@@ -40,9 +44,20 @@ type Hold struct {
 	WindowMonths int
 }
 
+// evidenceJobsAwait is the work package that runs the evidence entries'
+// jobs (D-evidence-retention-wp).
+const evidenceJobsAwait = "WP-SV18"
+
 // Jobs returns the jobs whose tables exist: those without awaits, each
-// with its hold unless the hold awaits its table. off lists the rest, as
-// "server.devices/devices awaits WP-SV3", for the log.
+// with its hold and its kept_by tables, less the ones that await their
+// tables. off lists what is left out, as "server.devices/devices awaits
+// WP-SV3", for the log.
+//
+// A job of an evidence entry stays off even once its table exists, as
+// "evidence.revealed/<table> awaits WP-SV18". Sweep deletes rows only, and
+// an evidence row can name a blob in the evidence store that has to be
+// deleted first, or the blob would outlive the only row that names it.
+// WP-SV18 runs those jobs, deleting each blob before its row.
 func (p *Policy) Jobs() (jobs []Job, off []string) {
 	for _, e := range p.Entries {
 		for _, spec := range e.Jobs {
@@ -51,9 +66,21 @@ func (p *Policy) Jobs() (jobs []Job, off []string) {
 				off = append(off, job.ID+" awaits "+spec.Awaits)
 				continue
 			}
+			if e.Where == Evidence {
+				off = append(off, job.ID+" awaits "+evidenceJobsAwait)
+				continue
+			}
 			if h := spec.Hold; h != nil && h.Awaits != "" {
 				off = append(off, job.ID+" hold awaits "+h.Awaits)
 				job.Hold = nil
+			}
+			job.KeptBy = nil
+			for _, k := range spec.KeptBy {
+				if k.Awaits != "" {
+					off = append(off, job.ID+" kept_by "+k.Table+" awaits "+k.Awaits)
+					continue
+				}
+				job.KeptBy = append(job.KeptBy, k.Table)
 			}
 			jobs = append(jobs, job)
 		}
@@ -61,8 +88,8 @@ func (p *Policy) Jobs() (jobs []Job, off []string) {
 	return jobs, off
 }
 
-// AllJobs returns every job with its hold, whether or not its tables exist
-// yet. Tests run them against tables they create.
+// AllJobs returns every job with its hold and kept_by tables, whether or
+// not its tables exist yet. Tests run them against tables they create.
 func (p *Policy) AllJobs() []Job {
 	var jobs []Job
 	for _, e := range p.Entries {
@@ -88,6 +115,9 @@ func (p *Policy) job(e Entry, spec JobSpec) Job {
 	}
 	if h := spec.Hold; h != nil {
 		j.Hold = &Hold{Table: h.Table, DecidedColumn: h.DecidedColumn, WindowMonths: p.SpotCheckWindow.Months}
+	}
+	for _, k := range spec.KeptBy {
+		j.KeptBy = append(j.KeptBy, k.Table)
 	}
 	return j
 }
@@ -152,9 +182,11 @@ func Sweep(ctx context.Context, d Doer, jobs []Job, now time.Time, batch int) []
 // deleteSQL is one batch's DELETE and its arguments, in the portable SQL of
 // package store. A row whose time is at or before now minus MaxAge, or for
 // a job by the window at or before lastClosed, is past its period. A hold
-// keeps its row while the hold's decision time is NULL, because the
-// submission is open, or later than lastClosed, because the decision's
-// spot-check window is still open (Window.Closes).
+// keeps its row while the hold's time, when its submission's spot-check
+// window opened (DESIGN 4.4), is NULL, because the window hasn't opened or
+// WP-SV18 hasn't written it yet, or later than lastClosed, because the
+// window is still open (Window.Closes). A kept_by table keeps every row one
+// of its rows names.
 func (j Job) deleteSQL(now time.Time, batch int) (string, []any) {
 	col := func(alias string, cols []string) []string {
 		out := make([]string, len(cols))
@@ -185,6 +217,14 @@ func (j Job) deleteSQL(now time.Time, batch int) (string, []any) {
 		b.WriteString(" AND NOT EXISTS (SELECT 1 FROM " + h.Table + " h WHERE " + strings.Join(match, " AND ") +
 			" AND (" + decided + " IS NULL OR " + decided + " > $3))")
 		args = append(args, lastClosed(now, h.WindowMonths).UnixMilli())
+	}
+	for n, table := range j.KeptBy {
+		alias := fmt.Sprintf("k%d", n)
+		match := make([]string, len(j.Key))
+		for i, k := range j.Key {
+			match[i] = alias + "." + k + " = t." + k
+		}
+		b.WriteString(" AND NOT EXISTS (SELECT 1 FROM " + table + " " + alias + " WHERE " + strings.Join(match, " AND ") + ")")
 	}
 	b.WriteString(" LIMIT $2)")
 	return b.String(), args

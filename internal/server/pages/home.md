@@ -5,6 +5,8 @@ Not the time your AI spends.
 
 Thinking, writing prompts, reading what the agent did, testing and fixing all count. The time your agent works on its own doesn't, however long it runs. When you ship a project to a Hack Club program, the program can use the hours pairtime counted.
 
+[See a sample dashboard](/demo)
+
 {{if .SignupsOpen -}}
 > **Early pilot.** Sign-ups on this server are open.{{if .SignIn}} Sign in with Hack Club to make your account.{{else}} Sign-in isn't set up on this server yet, though.{{end}}
 {{- else -}}

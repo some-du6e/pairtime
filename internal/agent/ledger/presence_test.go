@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/presence"
@@ -46,6 +47,31 @@ func TestPresence(t *testing.T) {
 		}
 	})
 
+	t.Run("a writer attached before Close gets every record queued, even when presence's goroutine first runs during Close", func(t *testing.T) {
+		// On a busy machine, the goroutine NewPresence starts can first
+		// run only after Attach has returned and Close has closed stop,
+		// while Close waits for it. Each round runs it that late, so its
+		// first select finds the writer and the stop both ready. A select
+		// picks between ready cases at random, so unless run prefers the
+		// writer, each round loses its record half the time and all 16
+		// pass once in 65,536 runs.
+		for round := range 16 {
+			dir := t.TempDir()
+			w := open(t, dir, newClock(testT))
+			p := newPresence(nil)
+			p.Record(sample)
+			p.Attach(w)
+			p.once.Do(func() { close(p.stop) }) // Close, short of its wait for the goroutine
+			p.run()
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if n := len(records(verify(t, dir, keysOf(t, testKDev)))); n != 1 {
+				t.Fatalf("round %d: %d records, want the 1 queued before Close", round, n)
+			}
+		}
+	})
+
 	t.Run("an os.focus record the agent passes on is written in the order queued, as an OS event, with its local app_hash left out", func(t *testing.T) {
 		dir := t.TempDir()
 		p := NewPresence(nil)
@@ -80,30 +106,40 @@ func TestPresence(t *testing.T) {
 		dir := t.TempDir()
 		sealed := make(chan Batch, 2)
 		w := open(t, dir, newClock(testT), func(o *Options) { o.Sealed = func(b Batch) { sealed <- b } })
-		p := NewPresence(nil)
-		defer p.Close()
-		p.Attach(w)
-		p.Record(sample)
-		p.Record(suspend)
-		p.Seal(event.PowerSuspend)
-		select {
-		case b := <-sealed:
-			if len(b.Records) != 2 {
-				t.Errorf("the batch sealed on suspend holds %d records, want the 2 before it", len(b.Records))
+		// In a bubble, sealWait's timer can't fire while presence's
+		// goroutine writes and seals, so a slow disk can't end the wait.
+		// The writer and its directory stay outside, so that on Windows
+		// their file retries still sleep in real time.
+		synctest.Test(t, func(t *testing.T) {
+			p := NewPresence(nil)
+			defer p.Close()
+			p.Attach(w)
+			p.Record(sample)
+			p.Record(suspend)
+			p.Seal(event.PowerSuspend)
+			select {
+			case b := <-sealed:
+				if len(b.Records) != 2 {
+					t.Errorf("the batch sealed on suspend holds %d records, want the 2 before it", len(b.Records))
+				}
+			default:
+				t.Fatal("Seal returned before the batch was sealed")
 			}
-		default:
-			t.Fatal("Seal returned before the batch was sealed")
-		}
+		})
 	})
 
 	t.Run("a seal with no writer to seal with returns within sealWait", func(t *testing.T) {
-		p := NewPresence(nil)
-		defer p.Close()
-		start := time.Now()
-		p.Seal(event.PowerLock)
-		if d := time.Since(start); d < sealWait/2 || d > sealWait+5*time.Second {
-			t.Errorf("Seal took %v, want about %v", d, sealWait)
-		}
+		// The bubble's clock moves only when every goroutine in it waits,
+		// so Seal waits exactly sealWait, however busy the machine is.
+		synctest.Test(t, func(t *testing.T) {
+			p := NewPresence(nil)
+			defer p.Close()
+			start := time.Now()
+			p.Seal(event.PowerLock)
+			if d := time.Since(start); d != sealWait {
+				t.Errorf("Seal took %v, want sealWait, %v", d, sealWait)
+			}
+		})
 	})
 
 	t.Run("records dropped before the writer opens are reported as lost once it opens", func(t *testing.T) {

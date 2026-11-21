@@ -2,7 +2,7 @@
 
 Status: version 1, from WP-RL1 (docs/PLAN.md). `internal/release` implements it, `tools/release` writes the files, and `.github/workflows/release.yml` publishes them.
 
-Every pairtime release publishes one archive per platform, `checksums.txt` and `manifest.json`. Before the client installs or updates itself, it checks `manifest.json` against the release keys compiled into it (DESIGN 3.3 and 5.9, CP 4.6). This file specifies those files, the keys and the checks.
+Every pairtime release publishes one archive per platform, `checksums.txt`, `manifest.json` and the install scripts. Before pairtime is installed, the install script checks `manifest.json` against the release keys written into it (Install scripts), and before the client updates itself, it checks it against the release keys compiled into it (DESIGN 3.3, CP 4.6). This file specifies those files, the keys and the checks.
 
 ## Release files
 
@@ -12,6 +12,7 @@ Every pairtime release publishes one archive per platform, `checksums.txt` and `
 | `pairtime_<version>_<os>_<arch>.tar.gz` | The macOS and Linux clients |
 | `checksums.txt` | The SHA-256 of every archive |
 | `manifest.json` | The signed manifest |
+| `install.sh`, `install.ps1` | The install scripts for macOS and Linux and for Windows, which install this release. The signed manifest lists their SHA-256s (Install scripts) |
 
 `<version>` is the tag without its `v`, as in `pairtime_0.1.0-alpha.1_windows_amd64.zip`. There is one archive for each target in CP section 7: `windows/amd64`, `windows/386`, `windows/arm64`, `darwin/amd64`, `darwin/arm64`, `linux/amd64` and `linux/arm64`.
 
@@ -50,7 +51,7 @@ The file opens with the binary's main package, platform and Go version and a lis
 
 ### checksums.txt
 
-One line per archive in `sha256sum`'s format: the SHA-256 in lowercase hex, two spaces, the file name. Lines are sorted by file name. `sha256sum -c checksums.txt`, run where the downloads are, checks them. `manifest.json` isn't listed, because its signature covers it.
+One line per archive in `sha256sum`'s format: the SHA-256 in lowercase hex, two spaces, the file name. Lines are sorted by file name. `sha256sum -c checksums.txt`, run where the downloads are, checks them. `manifest.json` isn't listed, because its signature covers it, and neither are the install scripts, whose SHA-256s are in the signed manifest.
 
 ## manifest.json
 
@@ -75,7 +76,11 @@ The envelope's payload is this JSON object, indented by two spaces, with a final
       "size": 3145728,
       "binary_sha256": "<64 hex digits>"
     }
-  ]
+  ],
+  "install_scripts": {
+    "install.ps1": "<64 hex digits>",
+    "install.sh": "<64 hex digits>"
+  }
 }
 ```
 
@@ -84,13 +89,14 @@ The envelope's payload is this JSON object, indented by two spaces, with a final
 | `version` | The release version: `v` and a SemVer 2.0.0 version without build metadata. It's the tag, and what `pairtime version` prints |
 | `commit` | The full git commit hash, 40 or 64 lowercase hex digits |
 | `date` | The commit time in RFC 3339, UTC, whole seconds |
-| `minimum_version` | The oldest client version the release still supports, at most `version`. A client older than this should update before it does anything else. Tags take it from `tools/release/minimum-version.txt`, which holds exactly one version; `release.yml` and `tools/release`'s tests check it on every run. A prerelease sorts before its release, so to require 0.3.0 while its prereleases ship, the file says `v0.3.0-alpha.1` |
+| `minimum_version` | The oldest client version the release still supports, at most `version`. A client older than this should update before it does anything else. One whose update fails step 8 of Verifying keeps its own binary and keeps working, and `doctor` says it is below the minimum. Raising the minimum past the last release built with Go 1.26 ends macOS 12 support (DESIGN 3.12). Tags take it from `tools/release/minimum-version.txt`, which holds exactly one version; `release.yml` and `tools/release`'s tests check it on every run. A prerelease sorts before its release, so to require 0.3.0 while its prereleases ship, the file says `v0.3.0-alpha.1` |
 | `artifacts` | One entry per platform, at least one, no platform twice |
 | `os`, `arch` | Go's `GOOS` and `GOARCH`: lowercase letters and digits. A client skips platforms it doesn't know |
 | `url` | Where the archive is published: absolute `https`, no credentials, ending in a file name. Plain `http` is allowed only for a loopback host, which test fixtures use |
 | `sha256` | The archive's SHA-256 in lowercase hex |
 | `size` | The archive's length in bytes, more than 0 |
 | `binary_sha256` | The SHA-256 of the binary inside the archive, so a binary that came some other way, such as inside an editor extension, can be checked too |
+| `install_scripts` | The SHA-256 in lowercase hex of each install script the release carries, by file name, each a plain name with no directory: `install.sh` and `install.ps1` (Install scripts). A release without the scripts leaves the field out. It was added after version 1 shipped, as a field older readers ignore, so the payload type stayed the same; whatever serves or checks a script compares it with this |
 
 Versions compare by SemVer precedence, so `v0.0.0-snapshot.9 < v0.1.0-alpha.1 < v0.1.0-beta.1 < v0.1.0`. Readers ignore fields they don't know, so a release can add fields without breaking older clients. A change older clients can't read needs a new payload type.
 
@@ -129,6 +135,7 @@ A client, or anything else that checks a manifest:
 5. Parses the payload it verified, not a second decoding of the envelope, and refuses it if a field breaks a rule above.
 6. Takes the entry for its own `os` and `arch`, downloads `url`, checks `size` and `sha256` before unpacking, and checks the binary against `binary_sha256` after.
 7. Never installs a version that isn't newer than its own.
+8. Before it replaces its own binary, runs the new one's `version` subcommand with a 60 s timeout, and keeps its own binary unless that exits 0. It records the failure for `doctor` and tries that version again at most once a week. So a build that can't run on the machine, such as a Go 1.27 build on macOS 12 (DESIGN 3.12), is never swapped in. The VS Code extension runs the same check before it puts its bundled binary in place of an installed one.
 
 `internal/release.Open` does steps 1 to 5. Step 7 means a replayed old manifest can't downgrade a client. Nothing here detects a frozen feed, where someone keeps serving an old manifest; a client on such a feed just stays on its version.
 
@@ -239,6 +246,8 @@ gh api -X PUT repos/some-du6e/pairtime/collaborators/<the agents' account>
 
 Once it accepts the invitation, sign the agents' `gh` and git credentials in as that account, and keep `some-du6e`'s tokens off the machines they run on, since an agent can use any token it can read. The tag ruleset then refuses their `v*` tags, and they can't approve the environment, because only Karim reviews it. They can still merge PRs, so a tag signs whatever `main` holds when Karim pushes it, and his approval is where he checks that.
 
+Immutable releases is on for the repository, so a published release's files and its tag can't be changed or replaced (D-immutable-releases; the orchestrator turned the setting on for Karim on 2026-11-20). That matters most for the install scripts. `curl -fsSL <release>/install.sh | sh` runs `install.sh` before anything else, and it carries the release keys that the rest of the download is checked against, so whoever could swap it would control every new install without the signing key, and write access, the agents' account's included, would be enough. The publish job uploads into a draft, which stays editable, and publishes once every file is there, so the files freeze complete. The signed payload lists both scripts' SHA-256s as well (`install_scripts`), so `check.sh`, and `pairtimed` once it serves the scripts (WP-OP2), can check the copy they have. To see the setting, `gh api repos/some-du6e/pairtime/immutable-releases` prints `"enabled":true`. GitHub also attests each immutable release, and `gh release verify-asset <tag> install.sh` checks a downloaded copy against that attestation.
+
 ### Replacing a key
 
 An installed client trusts only the keys compiled into it, so the release that brings a new key has to be signed with the old one. Between rotations, `$HOME/release-signing-key.age` holds the key `RELEASE_SIGNING_KEY` holds. During one, `$HOME/release-signing-key-next.age` holds the key waiting to replace it.
@@ -284,10 +293,32 @@ A leaked secret key can sign manifests that every client trusting it accepts, un
 
 Every release has `manifest.json` as an asset. The newest stable one is at `https://github.com/some-du6e/pairtime/releases/latest/download/manifest.json`. GitHub's latest-release redirect skips prereleases, so while every release is an alpha, the updater (DESIGN 3.3) has to list releases through the API. Its work package decides how.
 
+## Install scripts
+
+`install/install.sh` (POSIX sh) and `install/install.ps1` (Windows PowerShell 5.1 and PowerShell 7) are the one-line installs, `curl -fsSL <release>/install.sh | sh` and `irm <release>/install.ps1 | iex` (docs/PLAN.md, WP-RL2). `tools/release scripts` writes the copies a release carries: each repository copy with two lines filled in, the release's version and the keys in `release-keys.txt`. So a release's scripts install that release and trust exactly the keys its binaries trust. The repository's copies have neither and need both given. With `-payload`, which `release.yml` passes, `scripts` also lists both copies' SHA-256s in the payload as `install_scripts` before it's signed, and `tools/release verify` and `check.sh` refuse a release whose copies don't match, or that carries a script the payload doesn't list (What gets signed).
+
+Each script checks `manifest.json` itself, before it runs anything it downloaded, because a downloaded binary can't vouch for itself. macOS's `openssl` can't check Ed25519 and Windows PowerShell 5.1 has no Ed25519, so each carries RFC 8032's verification: `install.sh` in POSIX `bc`, `install.ps1` with .NET's big integers. Each does Verifying steps 1 to 4, refusing base64 that isn't canonical as `internal/release` does, and steps 5 and 6 for the fields it uses:
+
+- it refuses a payload whose `version` isn't the one it was asked for, so an older signed manifest can't stand in for it, one that lists its platform twice, and one whose SHA-256s or size for its platform break the rules above. `commit`, `date` and `minimum_version`, which it doesn't use, it doesn't check;
+- it downloads the archive from the directory `manifest.json` came from, after checking that the manifest's `url` names the same file, rather than from `url` itself, since the signed SHA-256 decides whether it's good;
+- it checks the archive's size and SHA-256 before unpacking it, and the binary's SHA-256 after.
+
+Then each one:
+
+- stages the new binary beside its final place and runs its `version`, for at most 60 seconds, and goes on only if that exits 0 and names the release (DESIGN 3.12);
+- if the binary has `pairtime install`, runs the staged copy's `install`, with the terminal as its input when the script came through a pipe. `pairtime install` puts the binary at the per-user path, `~/.local/bin/pairtime` or `%LOCALAPPDATA%\pairtime\bin\pairtime.exe`, once the teen says yes, after its own checks that the file there is pairtime and that hooks which run it would still work (docs/errata/2026-11-20-install-binary-after-consent.md). The script passes `--made <folder>` for each folder it made for the binary, `~/.local` and `~/.local/bin` or `pairtime` and `pairtime\bin` in `%LOCALAPPDATA%`, so that `pairtime uninstall` removes those too, and every install command it prints for later carries the same flags. After a no, or a failure before the binary is in place, it removes the staged copy and those folders;
+- otherwise, with `--no-install` or for a build without that command, puts the binary at the per-user path itself, without admin rights. On Windows a running `pairtime.exe` is renamed to `pairtime.old.exe` first, since it can't be replaced.
+
+The scripts install for the person running them. They refuse to run as root, or with the elevated half of a split Windows token, as from "Run as administrator", before downloading anything. On Windows that is the test `pairtime hook` makes before it starts the agent, so an administrator whose token isn't split, as with UAC off, can still install.
+
+While no key is listed, every release is unsigned, and the scripts refuse it unless told to allow it: `--allow-unsigned`, which under a pipe is `sh -s -- --allow-unsigned`, or for `install.ps1` `-AllowUnsigned` or `$env:PAIRTIME_ALLOW_UNSIGNED = '1'`. `install.ps1` removes that variable from the session once it has read it, and `install.sh` reads no variable for it, so it lasts for one install. It applies only to a script that trusts no key: once a script trusts one, pinned or given with `--release-keys`, a manifest that no trusted key signed is always refused (D-allow-unsigned-scope).
+
+A failure stops the script with a message and removes whatever it downloaded and the folders it made. Once the binary is in place, it stays, and a failure says where it is. The scripts make no request but the downloads, which carry a `User-Agent` naming the script and pairtime's repository. The commands they print for you to run quote any path that needs it. `e2e-install.yml` runs both against a snapshot release built the way `release.yml` builds one, and against broken copies of it. It also runs the script with `--yes` in an empty home, then `pairtime uninstall --yes --delete-data`, and checks that the home is empty again and no agent is left.
+
 ## How it's checked
 
 - `internal/release`'s tests run RFC 8032 section 7.1's five vectors through the key parser and signer, use DSSE's own example of the encoding, use semver.org's regular expression and its precedence examples, refuse a signed manifest with a byte changed at any offset, and check that a secret key never prints.
 - `tools/release`'s tests run dist, sign and verify in a temporary directory, rebuild to check the archives are reproducible, check that no tar.gz header holds a time or an owner, and check what verify refuses. They build the notices for a fake binary over a fake module cache, refuse one whose modules go list doesn't confirm, and check the checked-in `minimum-version.txt` and `extra-notices.txt`.
 - `ci.yml` writes the notices for all fourteen binaries it cross-compiles, `pairtimed` included, so a new module whose license can't be found fails in the PR that adds it.
 - `web.yml` runs `tools/ci/npm_notices.py` on the dashboard it builds, and `release.yml`'s dashboard job on the one a release embeds, so a new package with code in the bundle, or an upgrade that changes a license or version, fails until its copies and lines are committed. `release.yml` then checks that every archive's `THIRD_PARTY_NOTICES.txt` holds each of the `internal/webui` files.
-- `release.yml` checks every build twice: with `tools/release verify`, then with `tools/release/check.sh`, which uses only `sha256sum`, jq, tar, unzip and OpenSSL. On a tag it also checks that the shipped linux/amd64 binary names the signing key.
+- `release.yml` checks every build twice: with `tools/release verify`, then with `tools/release/check.sh`, which uses only `sha256sum`, jq, tar, unzip and OpenSSL. Both check the install scripts against `install_scripts` too, and the tampering step makes sure both refuse a changed archive, payload, signature and script. On a tag it also checks that the shipped linux/amd64 binary names the signing key.
