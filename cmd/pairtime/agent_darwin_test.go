@@ -35,12 +35,12 @@ func TestAgentOnMac(t *testing.T) {
 		}
 	})
 	waitForAgent(t, ptHome)
-	st := waitStatus(t, ptHome, 30*time.Second, "started its notification loop", func(s agentStatus) bool { return s.Signals.Loop != nil })
+	st := waitStatus(t, ptHome, 30*time.Second, "started its notification loop", func(s runStatus) bool { return s.Signals.Loop != nil })
 	// The process scan runs on the minute; after its first run the fake
 	// claude has made a project context live, and presence has sampled.
-	waitStatus(t, ptHome, 90*time.Second, "run its process scan", func(s agentStatus) bool { return s.runs("procs.scan") > 0 })
+	waitStatus(t, ptHome, 90*time.Second, "run its process scan", func(s runStatus) bool { return s.runs("procs.scan") > 0 })
 	time.Sleep(time.Second)
-	stopAgent(t, ptHome, cmd)
+	stopRunAgent(t, ptHome, cmd)
 	samples := recorded(t, ptHome, event.KindOSPresence)
 
 	tests := []struct {
