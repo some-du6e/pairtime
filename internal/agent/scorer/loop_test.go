@@ -1163,3 +1163,47 @@ func TestHoldFor(t *testing.T) {
 		})
 	}
 }
+
+func TestFollower(t *testing.T) {
+	short := func(t *testing.T, b, first, n uint64) ledger.Batch {
+		out := notes(t, b, first, n)
+		out.Records = out.Records[:n-1]
+		return out
+	}
+	tests := []struct {
+		name    string
+		batches func(t *testing.T) []ledger.Batch
+		scored  []bool
+	}{
+		{"batches that follow on are all scored", func(t *testing.T) []ledger.Batch {
+			return []ledger.Batch{notes(t, 3, 10, 1), notes(t, 4, 11, 2), notes(t, 5, 13, 1)}
+		}, []bool{true, true, true}},
+		{"the first batch read starts the count, whatever its number", func(t *testing.T) []ledger.Batch {
+			return []ledger.Batch{notes(t, 7, 40, 2)}
+		}, []bool{true}},
+		{"a batch whose first record skips numbers isn't scored, and the next one follows its row", func(t *testing.T) []ledger.Batch {
+			return []ledger.Batch{notes(t, 3, 10, 1), notes(t, 4, 14, 1), notes(t, 5, 15, 1)}
+		}, []bool{true, false, true}},
+		{"a batch that repeats a record number isn't scored, and the next one follows its row", func(t *testing.T) []ledger.Batch {
+			return []ledger.Batch{notes(t, 3, 10, 2), notes(t, 4, 11, 1), notes(t, 5, 12, 1)}
+		}, []bool{true, false, true}},
+		{"a batch holding fewer records than its row says isn't scored", func(t *testing.T) []ledger.Batch {
+			return []ledger.Batch{notes(t, 3, 10, 1), short(t, 4, 11, 3), notes(t, 5, 14, 1)}
+		}, []bool{true, false, true}},
+		{"a batch after batches the files don't hold starts the count again from its own row", func(t *testing.T) []ledger.Batch {
+			return []ledger.Batch{notes(t, 3, 10, 1), notes(t, 6, 30, 1), notes(t, 7, 31, 1)}
+		}, []bool{true, true, true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var f follower
+			var got []bool
+			for _, b := range tt.batches(t) {
+				got = append(got, f.next(b))
+			}
+			if !slices.Equal(got, tt.scored) {
+				t.Errorf("scored %v, want %v", got, tt.scored)
+			}
+		})
+	}
+}

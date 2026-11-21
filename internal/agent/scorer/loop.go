@@ -442,9 +442,15 @@ func (l *Loop) open() error {
 		l.days[date] = true
 	}
 	if c.Batch > 0 && c.FromBatch > 0 && c.FromBatch <= c.Batch {
+		// A batch that failed when the loop took it stays out of the window
+		// (follower). FromBatch holds window records, so it didn't fail.
+		var f follower
 		err := l.readBatches(c.FromBatch, func(b ledger.Batch) error {
 			if b.Row.B > c.Batch {
 				return errEnough
+			}
+			if !f.next(b) {
+				return nil
 			}
 			for _, rec := range b.Records {
 				ev, ok, err := eventOf(rec, c.Device)
@@ -453,7 +459,7 @@ func (l *Loop) open() error {
 				}
 			}
 			return nil
-		}, func(first uint64, err error) {
+		}, func(first, _ uint64, err error) {
 			l.log.Warn("a batch of the scorer's window doesn't read, and the window goes on without it", "batch", first, "err", err)
 		})
 		if err != nil && !errors.Is(err, errEnough) {
@@ -520,6 +526,12 @@ func (l *Loop) take(b ledger.Batch) {
 	if l.stuck != nil || b.Row.B <= l.cur.Batch {
 		return
 	}
+	if b.Row.B == l.cur.Batch+1 && l.readMsg != "" {
+		// The read that failed missed nothing, since b follows the last
+		// batch taken.
+		l.readMsg = ""
+		l.publish()
+	}
 	if b.Row.B > l.cur.Batch+1 {
 		// The batches between were sealed before the queue had them, or
 		// the queue dropped them. Those the files don't hold fail in apply.
@@ -562,12 +574,21 @@ func (l *Loop) readLedger(upTo uint64) error {
 		}
 		l.apply(b)
 		return l.stuck
-	}, func(first uint64, err error) {
+	}, func(first, resume uint64, err error) {
 		if upTo != 0 && first > upTo {
 			return // a batch this read doesn't need
 		}
 		l.log.Warn("a ledger batch doesn't read, and the scorer goes on after it", "batch", first, "err", err)
 		l.damage = err
+		if l.cur.Batch == 0 {
+			// With no place, apply counts no batch before the first it
+			// takes, so the batches passed over are counted here.
+			n := uint64(1)
+			if resume > first {
+				n = resume - first
+			}
+			l.failed += n
+		}
 		l.gapMsg = fmt.Sprintf("ledger batch %d doesn't read, so the time in it isn't counted: %v", first, err)
 		l.publish()
 	})
@@ -596,9 +617,10 @@ func (l *Loop) unread(err error) {
 // readBatches calls fn with each batch from from on that the ledger's
 // files hold whole, in order, as ledger.ReadBatches does, until fn returns
 // an error, which it returns. Where a batch doesn't read, or a run of them
-// is in a segment that is gone, it tells damaged the first one and why, and
-// goes on from the next batch the files hold.
-func (l *Loop) readBatches(from uint64, fn func(ledger.Batch) error, damaged func(first uint64, err error)) error {
+// is in a segment that is gone, it tells damaged the first one, the batch
+// it goes on from, 0 for none, and why, and goes on from there: the next
+// batch the files hold.
+func (l *Loop) readBatches(from uint64, fn func(ledger.Batch) error, damaged func(first, resume uint64, err error)) error {
 	for {
 		next := max(from, 1) // the batch ReadBatches hands fn next
 		err := ledger.ReadBatches(l.opts.Ledger, from, func(b ledger.Batch) error {
@@ -612,7 +634,7 @@ func (l *Loop) readBatches(from uint64, fn func(ledger.Batch) error, damaged fun
 		if herr != nil {
 			return herr
 		}
-		damaged(next, err)
+		damaged(next, resume, err)
 		if resume == 0 {
 			return nil
 		}
@@ -672,6 +694,25 @@ func (l *Loop) apply(b ledger.Batch) {
 		l.save()
 	}
 	l.report()
+}
+
+// follower follows batches as apply takes them, to rebuild the window
+// from the ledger's files: the first batch starts it, a batch after ones
+// the files don't hold starts it again from its own row, and a batch whose
+// numbers don't follow the last one's fails and moves it on to its own row.
+type follower struct{ b, s uint64 }
+
+// next reports whether apply scored batch b, and moves on to it.
+func (f *follower) next(b ledger.Batch) bool {
+	if f.b == 0 || b.Row.B > f.b+1 {
+		f.b = b.Row.B - 1
+		if b.Row.FirstSeq > 0 {
+			f.s = b.Row.FirstSeq - 1
+		}
+	}
+	ok := checkBatch(b, f.b, f.s) == nil
+	f.b, f.s = b.Row.B, b.Row.FirstSeq+b.Row.N-1
+	return ok
 }
 
 // step scores the window after batch b and stores what changed.

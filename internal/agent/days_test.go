@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,11 +11,13 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -473,8 +476,8 @@ func TestAnswerQuestion(t *testing.T) {
 			name:     "a question the agent has no answer for is refused",
 			question: "days/today",
 			check: func(t *testing.T, ans json.RawMessage, err error, _ []byte) {
-				if !errors.Is(err, errUnknownQuestion) || ans != nil {
-					t.Errorf("answer %s, %v; want errUnknownQuestion", ans, err)
+				if !errors.Is(err, ipc.ErrUnknownQuestion) || ans != nil {
+					t.Errorf("answer %s, %v; want ipc.ErrUnknownQuestion", ans, err)
 				}
 			},
 		},
@@ -498,7 +501,7 @@ func TestAnswerQuestion(t *testing.T) {
 			a.cfg.Store(&cfg)
 			q := tt.question
 			if q == "" {
-				q = askLastSession
+				q = ipc.AskLastSession
 			}
 			reply, err := a.lastSession(time.Now())
 			if err != nil {
@@ -510,6 +513,59 @@ func TestAnswerQuestion(t *testing.T) {
 			}
 			ans, err := a.answerQuestion(q)
 			tt.check(t, ans, err, want)
+		})
+	}
+}
+
+func TestSessionsLastOverTheSocket(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Minute)
+	tests := []struct {
+		name   string
+		config string
+	}{
+		{"sessions/last over the agent's socket gets what GET /v1/sessions/last gives", ""},
+		{"with display.shadow on, sessions/last over the socket leaves out what GET /v1/sessions/last does", "[display]\nshadow = true\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// A short path, which the socket's name needs.
+			dir, err := os.MkdirTemp("", "pt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.RemoveAll(dir) })
+			dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+			if err := dirs.Create(); err != nil {
+				t.Fatal(err)
+			}
+			if tt.config != "" {
+				if err := os.WriteFile(dirs.ConfigFile(), []byte(tt.config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			putMinutes(t, dirs, now.Add(-5*time.Minute), loopMinute)
+			a := startAgent(t, Options{Dirs: dirs, Ports: []int{0}, KeyStores: []keys.Store{}, Zone: time.UTC})
+			ep, err := ipc.EndpointFor(dirs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			ans, err := ipc.Ask(ctx, ep, ipc.AskLastSession)
+			if err != nil {
+				t.Fatalf("Ask: %v", err)
+			}
+			var overSocket, overHTTP map[string]any
+			if err := json.Unmarshal(ans, &overSocket); err != nil {
+				t.Fatalf("the answer %s: %v", ans, err)
+			}
+			get(t, a, "/v1/sessions/last", &overHTTP)
+			if !reflect.DeepEqual(overSocket, overHTTP) {
+				t.Errorf("over the socket %v,\nover HTTP %v", overSocket, overHTTP)
+			}
+			if overSocket["session"] == nil {
+				t.Error("no session over the socket")
+			}
 		})
 	}
 }
