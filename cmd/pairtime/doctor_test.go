@@ -7,6 +7,7 @@ package main
 // test makes up, as the agent answers it with GET /v1/status's reply.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -835,5 +836,68 @@ func TestDoctorKeystoreLine(t *testing.T) {
 				t.Errorf("keystore is %+v, want %s with %q", c, tt.want, tt.wantText)
 			}
 		})
+	}
+}
+
+// TestDoctorOfARealAgent runs doctor and its report against a real agent
+// in a process of its own, so the agent's own status, socket and footprint
+// are what doctor reads, on each OS platform.yml runs it on.
+func TestDoctorOfARealAgent(t *testing.T) {
+	ptHome := shortHome(t)
+	t.Setenv(home.EnvHome, ptHome)
+	var agentOut bytes.Buffer
+	agent := startPairtime(t, ptHome, "agent", &agentOut)
+	// Registered after shortHome's cleanup, so it runs first: Windows
+	// can't delete the folder while the agent has files in it open.
+	t.Cleanup(func() {
+		agent.Process.Kill()
+		agent.Wait()
+		if t.Failed() {
+			t.Logf("the agent's output:\n%s", agentOut.String())
+		}
+	})
+	waitForAgent(t, ptHome)
+	swap(t, &doctorHooks, func() []doctor.Hooks { return nil })
+	swap(t, &doctorReportSpan, 2*time.Second)
+	// The report times this binary's start as pairtime's. Set only now:
+	// the agent's process took its own runEnv, and the first one in an
+	// environment is the one a process reads.
+	t.Setenv(runEnv, ownArgs)
+
+	tests := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{"doctor reads the real agent over its socket: it runs, and its idle, focus and spool lines come from it", func(t *testing.T) {
+			checks, _ := doctorChecks(t)
+			if c := checks["agent"]; c.Result == doctor.Fail || c.Result == doctor.Skip || !strings.Contains(c.Text, "running pairtime") {
+				t.Errorf("agent is %+v", c)
+			}
+			for _, name := range []string{"idle", "focus", "spool"} {
+				if c := checks[name]; c.Result == doctor.Skip || c.Text == "" {
+					t.Errorf("%s is %+v, want it read from the agent", name, c)
+				}
+			}
+		}},
+		{"the report has the agent's memory and CPU as its OS gives them", func(t *testing.T) {
+			code, out, errOut := runCmd("doctor", "--report")
+			if code != 0 {
+				t.Fatalf("doctor --report = %d, stderr %q", code, errOut)
+			}
+			memory := "MB now, "
+			if runtime.GOOS == "darwin" {
+				memory = "MB at most"
+			}
+			// The agent has run for seconds, under the minute a wakeup rate
+			// since its start needs.
+			for _, want := range []string{"agent memory:    ", memory, "% since it started; ", " a minute over the same span", "start-up alone:  "} {
+				if !strings.Contains(out, want) {
+					t.Errorf("the report doesn't have %q:\n%s", want, out)
+				}
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, tt.check)
 	}
 }

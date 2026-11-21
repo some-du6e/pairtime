@@ -47,6 +47,9 @@ on:
       # The git adapter drives the real git CLI and watches .git with file
       # notifications, both of which differ on Windows (PLAN, WP-AD5).
       - internal/adapters/git/**
+      # doctor reads the OS build, the data folder's disk and the binary's
+      # signature through each OS's own calls (WP-AG6).
+      - internal/agent/doctor/**
       - cmd/pairtime/**
       - .github/workflows/platform.yml
       - tools/ci/test_existing.sh
@@ -75,7 +78,7 @@ permissions:
 env:
   # pairtime never uses cgo (AGENTS.md).
   CGO_ENABLED: "0"
-  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp internal/agent/presence internal/agent/focus internal/agent/notifier internal/agent/keys internal/agent/ledger internal/agent/hookpath internal/adapters/git cmd/pairtime
+  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp internal/agent/presence internal/agent/focus internal/agent/notifier internal/agent/keys internal/agent/ledger internal/agent/hookpath internal/adapters/git internal/agent/doctor cmd/pairtime
 
 jobs:
   windows:
