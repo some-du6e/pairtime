@@ -14,6 +14,8 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -26,18 +28,19 @@ const fixturesUsage = `Usage:
 Scrub takes out of captured harness fixtures what must not be committed
 (DESIGN 5.1): this machine's account name, home directory, hostname and git
 name and email, the values given with the flags below, anything one of
-gitleaks' rules calls a secret, and personal data that passes its checksum.
-Every file under <dir> is rewritten in place, with the fixed placeholders
-of testdata/fixtures/README.md written the way the file writes each value:
-the home becomes C:\Users\capture, /Users/capture or /home/capture, the
-account capture, the hostname capture-host, the git name Capture User, git
-and other email addresses capture@example.invalid, other listed values
-REDACTED, and a secret REDACTED_ and its gitleaks rule, such as
-REDACTED_GITHUB_PAT. A tool's own address, such as noreply@anthropic.com,
-and one at a domain reserved for examples stay. One line is printed per
-span, without the text it removed, for the review by hand that has to
-follow. Run it with -n first to see what it would change. PROVENANCE.md
-files are left alone.
+gitleaks' rules calls a secret, and personal data that passes Presidio's
+checks, email addresses included. Every file under <dir> is rewritten in
+place, with the fixed placeholders of testdata/fixtures/README.md written
+the way the file writes each value: the home becomes C:\Users\capture,
+/Users/capture or /home/capture, the account capture, the hostname
+capture-host, the git name Capture User, git and other email addresses
+capture@example.invalid, other listed values REDACTED, and a secret
+REDACTED_ and its gitleaks rule, such as REDACTED_GITHUB_PAT. A tool's own
+address, such as noreply@anthropic.com, and one at a domain reserved for
+examples stay, though a known value or a key inside one is still replaced.
+One line is printed per span, without the text it removed, for the review
+by hand that has to follow. Run it with -n first to see what it would
+change. PROVENANCE.md files are left alone.
 
 It exits 1 when something needs that review before anything is committed: a
 binary file it can't scrub, a symlink, or a file or directory name that
@@ -254,12 +257,33 @@ func (s *scrubber) file(path, shown string) {
 		return
 	}
 	text := string(b)
+	// An address that can stay goes before the spans are merged, so a known
+	// value or a URL's password inside it keeps a span of its own and is
+	// still replaced. Merged first, the address would be the longest span
+	// and take whatever it holds with it (D-email-redaction). Most keys
+	// get no span of their own right before an @ or a colon, so localPart
+	// and urlCredentials look for them.
+	var found []redact.Span
+	for _, sp := range slices.Concat(s.r.Find(text), telemetryIDs(text), s.urlCredentials(text)) {
+		if sp.Type == redact.TypeEmail && publicAddress(text[sp.Start:sp.End]) {
+			found = append(found, s.localPart(text, sp)...)
+			continue
+		}
+		found = append(found, sp)
+	}
+	// A placeholder from an earlier run stays, even where a rule other than
+	// the one that wrote it finds it, as url-password finds
+	// REDACTED_STRIPE_ACCESS_TOKEN in a URL's password, or the capture of
+	// capture@example.invalid. So scrubbing a scrubbed file changes nothing.
+	found = slices.DeleteFunc(found, func(sp redact.Span) bool {
+		return earlierPlaceholder(text[sp.Start:sp.End])
+	})
 	var edits []edit
-	for _, sp := range redact.Merge(append(s.r.Find(text), telemetryIDs(text)...)) {
+	for _, sp := range redact.Merge(found) {
 		with := s.placeholder(text, sp)
 		if with == text[sp.Start:sp.End] {
-			// A placeholder from an earlier run, or an address that can
-			// stay, so scrubbing a scrubbed file changes nothing.
+			// A placeholder from an earlier run, so scrubbing a scrubbed
+			// file changes nothing.
 			continue
 		}
 		edits = append(edits, edit{sp, with})
@@ -368,15 +392,11 @@ func isNumber(s string) bool {
 // JSON-escaped home gets a JSON-escaped placeholder and Claude Code's
 // project folder for it, C--Users-Maya-Chen-robot, becomes
 // C--Users-capture-robot. A span that holds more than one value, once
-// merged, gets REDACTED. An email address that can stay is its own
-// placeholder.
+// merged, gets REDACTED.
 func (s *scrubber) placeholder(text string, sp redact.Span) string {
 	matched := text[sp.Start:sp.End]
 	switch {
 	case sp.Type == redact.TypeEmail:
-		if publicAddress(matched) {
-			return matched
-		}
 		return placeholderEmail
 	case sp.Type == redact.TypeSecret:
 		if sp.Rule == "" {
@@ -459,10 +479,14 @@ func homePlaceholder(home string) string {
 }
 
 // publicAddresses are addresses tools write into commits and remotes, such
-// as Claude Code's Co-Authored-By trailer. They name nobody, and keeping
-// them keeps fixtures true to what the harness wrote, as scrub.py did.
+// as the Co-Authored-By trailers of Claude Code and Aider, which the git
+// adapter reads to tell an agent's commit from a person's (HS 13.3). They
+// name nobody, and keeping them keeps fixtures true to what the harness
+// wrote. testdata/fixtures/README.md lists them, and scrub.py keeps the
+// same ones.
 var publicAddresses = map[string]bool{
 	"noreply@anthropic.com": true,
+	"aider@aider.chat":      true,
 	"noreply@github.com":    true,
 	"noreply@openai.com":    true,
 	"git@github.com":        true,
@@ -473,7 +497,11 @@ var publicAddresses = map[string]bool{
 
 // publicAddress reports whether an email address can stay in a fixture:
 // one of publicAddresses, or one at a domain reserved for examples, which
-// reaches nobody (RFC 2606 and RFC 6761).
+// reaches nobody (RFC 2606 and RFC 6761). Under the reserved top-level
+// domains, only a name of one label counts, such as example.invalid or
+// myapp.test. A longer one, such as westfield.edu.invalid, is a real
+// address with a reserved label appended, which is how sandbox anonymizers
+// disable one, and it still names someone (D-email-redaction-tld).
 func publicAddress(addr string) bool {
 	a := strings.ToLower(addr)
 	if publicAddresses[a] {
@@ -486,11 +514,167 @@ func publicAddress(addr string) bool {
 		}
 	}
 	for _, tld := range []string{".example", ".invalid", ".test", ".localhost"} {
-		if strings.HasSuffix(domain, tld) {
+		if label, ok := strings.CutSuffix(domain, tld); ok && label != "" && !strings.Contains(label, ".") {
 			return true
 		}
 	}
 	return false
+}
+
+// Most of gitleaks' rules end a key at a quote, whitespace, a semicolon or
+// the end of the text, never at an @ or a colon, so Find gives a key right
+// before one no span. localPart and urlCredentials scan the places where
+// a key sits that way on their own, where the end of the text ends it.
+
+// localPart returns spans for a key that is a kept address's local part,
+// as in sk_live_...@api.example.com. The address's span was the only one
+// that covered it.
+func (s *scrubber) localPart(text string, sp redact.Span) []redact.Span {
+	i := strings.LastIndexByte(text[sp.Start:sp.End], '@')
+	if i < 0 {
+		// Not reached: jsonView blanks an escaped @, so every address Find
+		// gives holds a real one.
+		return nil
+	}
+	return s.findIn(text, sp.Start, sp.Start+i)
+}
+
+// urlCredentials returns spans for the user and the password of each URL
+// in text that has them, whatever its host: USER and PASSWORD in
+// https://USER:PASSWORD@host. A URL here is two or more slashes, among
+// backslashes when the URL sits in JSON as \/\/ or \\/\\/, then an
+// authority holding an @. The user runs to the first colon and the
+// password from there to the last @, as in pkg/redact's url-password rule.
+// The user is scanned on its own, since no span covers a key followed by
+// the colon, or by the @ of a host that isn't an address. The password gets
+// url-password's span, which the rule gives it only after scheme://, so a
+// URL written in JSON or without its scheme would keep it at a kept
+// address.
+func (s *scrubber) urlCredentials(text string) []redact.Span {
+	var found []redact.Span
+	for i := 0; i < len(text); {
+		if text[i] != '/' && text[i] != '\\' {
+			i++
+			continue
+		}
+		slash := i
+		j, slashes := i, 0
+		for ; j < len(text) && (text[j] == '/' || text[j] == '\\'); j++ {
+			if text[j] == '/' {
+				slashes++
+			}
+		}
+		end := j
+		for end < len(text) {
+			if authorityByte(text[end]) {
+				end++
+			} else if n := escapedAuthorityByte(text, end); n > 0 {
+				end += n
+			} else {
+				break
+			}
+		}
+		i = end
+		at := strings.LastIndexByte(text[j:end], '@')
+		if slashes < 2 || at < 0 {
+			continue
+		}
+		at += j
+		userEnd := at
+		if colon := strings.IndexByte(text[j:at], ':'); colon >= 0 {
+			userEnd = j + colon
+		}
+		found = append(found, s.findIn(text, j, userEnd)...)
+		// A run that goes on into a query or a fragment, as in
+		// http://KEY@localhost?next=a@b, holds the host's @, or a ? or #,
+		// in the user, and no rule ends a key at those. So the part before
+		// the first of them is scanned on its own as well.
+		if k := strings.IndexAny(text[j:userEnd], "@?#"); k >= 0 {
+			found = append(found, s.findIn(text, j, j+k)...)
+		}
+		// RFC 3986 keeps [ and ] out of a user and a password, and two
+		// slashes with no scheme before them are often something else, such
+		// as the namespaced XPath //xs:element[@name]. So there a user
+		// holding one has no password, and a password ends at the last @
+		// before one, as in scrub.py.
+		pwStart, pwEnd := userEnd+1, at
+		if pwStart < pwEnd && !afterScheme(text, slash) {
+			if strings.ContainsAny(text[j:userEnd], "[]") {
+				pwEnd = pwStart
+			} else if b := strings.IndexAny(text[pwStart:pwEnd], "[]"); b >= 0 {
+				pwEnd = pwStart + max(strings.LastIndexByte(text[pwStart:pwStart+b], '@'), 0)
+			}
+		}
+		if pwStart < pwEnd {
+			found = append(found, redact.Span{Start: pwStart, End: pwEnd, Type: redact.TypeSecret, Rule: "url-password"})
+		}
+	}
+	return found
+}
+
+// authorityByte reports whether c can be part of a URL's user, password or
+// host as a capture writes it. A control character, a space, a slash, a
+// backslash, a quote or an angle bracket ends the URL or the JSON string
+// around it. ? and # end an authority in RFC 3986, but people put them in
+// passwords, so they don't end it here.
+func authorityByte(c byte) bool {
+	return c > ' ' && c != 0x7f && !strings.ContainsRune(`/\'"<>`, rune(c))
+}
+
+// escapedAuthorityByte returns the length of the JSON \u escape at text[i:]
+// when it stands for a character authorityByte accepts, as encoding/json
+// writes the & of a password, or 0.
+func escapedAuthorityByte(text string, i int) int {
+	if i+6 > len(text) || text[i] != '\\' || text[i+1] != 'u' {
+		return 0
+	}
+	v, err := strconv.ParseUint(text[i+2:i+6], 16, 16)
+	if err != nil || v < 0x80 && !authorityByte(byte(v)) {
+		return 0
+	}
+	return 6
+}
+
+// afterScheme reports whether text[:i] ends with a URL's scheme and its
+// colon, such as postgres:.
+func afterScheme(text string, i int) bool {
+	if i == 0 || text[i-1] != ':' {
+		return false
+	}
+	k := i - 1
+	for k > 0 && strings.IndexByte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-", text[k-1]) >= 0 {
+		k--
+	}
+	c := text[k] | 0x20
+	return k < i-1 && c >= 'a' && c <= 'z'
+}
+
+// findIn returns Find's spans for text[start:end] alone, as offsets into
+// text.
+func (s *scrubber) findIn(text string, start, end int) []redact.Span {
+	if start >= end {
+		return nil
+	}
+	spans := s.r.Find(text[start:end])
+	for i := range spans {
+		spans[i].Start += start
+		spans[i].End += start
+	}
+	return spans
+}
+
+// earlierPlaceholder reports whether s is a whole placeholder the scrub
+// writes: one of README's, or REDACTED and a rule's or a type's name, in
+// capitals with _ for -. A span that runs on past one, as the
+// REDACTED_URL_PASSWORD@ssw0rd of a password with an @ that scrub.py
+// ended at the first, isn't one.
+func earlierPlaceholder(s string) bool {
+	switch s {
+	case placeholderAccount, placeholderHost, placeholderName, placeholderEmail, placeholderID, placeholderOther:
+		return true
+	}
+	name, ok := strings.CutPrefix(s, placeholderOther+"_")
+	return ok && name != "" && strings.Trim(name, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == ""
 }
 
 // kinds names the spans' types, with the gitleaks rule for a secret.
