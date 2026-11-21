@@ -182,7 +182,8 @@ harnesses='claude codex cursor-agent copilot gemini devin opencode cline'
 # codex -c key=value exec or codex -p work exec: the root options in
 # codex-rs/cli/src/main.rs, codex-rs/tui/src/cli.rs and codex-rs/utils/cli
 # at d64451b. A value joined to its option with = needs no skipping. -i,
-# --image isn't here: it takes every argument up to the next option.
+# --image isn't here: it takes every argument up to the next one that starts
+# with -.
 codex_values='-c --config --enable --disable --remote --remote-auth-token-env -a --ask-for-approval -m --model --local-provider -p --profile -s --sandbox -C --cd --add-dir'
 found=$(awk -v harnesses="$harnesses" '
 	BEGIN {
@@ -236,8 +237,12 @@ if [ -n "$found" ]; then
 			{
 				# codex has no print flag; its exec subcommand, or e, is the
 				# first argument that is neither an option nor the value of
-				# one. -i takes as many values as come before the next option,
-				# as clap reads its num_args = 1.. (shared_options.rs).
+				# one. -i takes every argument after it up to the next one
+				# that starts with -, as clap reads its num_args = 1..
+				# (shared_options.rs). Two argument lists read wrong, and no
+				# capture step runs codex either way: clap also takes a lone -
+				# as an image, and it reads an exec after a prompt, as in
+				# codex "hi" exec "fix it", as the subcommand.
 				if (name == "codex") {
 					if (!subcommand) {
 						operand = (substr($0, 1, 1) != "-")

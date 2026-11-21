@@ -61,7 +61,7 @@ $harnesses = @('claude', 'codex', 'cursor-agent', 'copilot', 'gemini', 'devin', 
 # codex-rs/cli/src/main.rs, codex-rs/tui/src/cli.rs and codex-rs/utils/cli
 # at d64451b. A value joined to its option with = needs no skipping. -c and
 # -C differ, so they are compared with case. -i, --image isn't here: it
-# takes every argument up to the next option.
+# takes every argument up to the next one that starts with -.
 $codexValues = @('-c', '--config', '--enable', '--disable', '--remote', '--remote-auth-token-env', '-a', '--ask-for-approval', '-m', '--model', '--local-provider', '-p', '--profile', '-s', '--sandbox', '-C', '--cd', '--add-dir')
 
 # Split-CommandLine splits a Windows command line into its arguments the
@@ -139,8 +139,12 @@ function Get-Answers([string]$key, [string[]]$words) {
         if ($key -eq 'codex') {
             # codex has no print flag; its exec subcommand, or e, is the
             # first argument that is neither an option nor the value of one.
-            # -i takes as many values as come before the next option, as
-            # clap reads its num_args = 1.. (shared_options.rs).
+            # -i takes every argument after it up to the next one that starts
+            # with -, as clap reads its num_args = 1.. (shared_options.rs).
+            # Two argument lists read wrong, and no capture step runs codex
+            # either way: clap also takes a lone - as an image, and it reads
+            # an exec after a prompt, as in codex "hi" exec "fix it", as the
+            # subcommand.
             if (-not $subcommand) {
                 $operand = -not $a.StartsWith('-', [StringComparison]::Ordinal)
                 if ($value) {
