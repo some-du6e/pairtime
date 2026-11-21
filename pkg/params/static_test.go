@@ -3,13 +3,14 @@
 package params
 
 // TE WP0.6's static check: every parameter pkg/score reads through Int,
-// Rat or Bool is in the public table. The parameter types are opaque
-// (names.go), so a params.NAME selector is the only way another package can
-// name a parameter to those three. Table.Text takes a string and isn't
-// checked; it's for code that shows a whole table.
-// paramReads finds those selectors with go/ast, without building the
-// package, and TestScoreReadsOnlyTableParams compares them with every
-// embedded table.
+// Rat or Bool is in the public table the agent scores with, the newest
+// one. The parameter types are opaque (names.go), so a params.NAME selector
+// is the only way another package can name a parameter to those three.
+// Table.Text takes a string and isn't checked; it's for code that shows a
+// whole table. paramReads finds those selectors with go/ast, without
+// building the package, and TestScoreReadsOnlyTableParams compares them
+// with the newest embedded table. An older table can lack a parameter a
+// later version added, and pkg/score's NewState refuses such a table.
 
 import (
 	"errors"
@@ -133,7 +134,7 @@ func TestScoreReadsOnlyTableParams(t *testing.T) {
 		name string
 		dir  string
 	}{
-		{"pkg/score reads only parameters every table has", filepath.Join("..", "score")},
+		{"pkg/score reads only parameters the newest table, the one the agent scores with, has", filepath.Join("..", "score")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -146,7 +147,8 @@ func TestScoreReadsOnlyTableParams(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, m := range missing(reads, Tables()) {
+			tables := Tables()
+			for _, m := range missing(reads, tables[len(tables)-1:]) {
 				t.Error(m)
 			}
 			t.Logf("%s reads %d parameters", c.dir, len(reads))
@@ -196,6 +198,49 @@ func TestParamReads(t *testing.T) {
 	t.Run("a dot import is refused", func(t *testing.T) {
 		if _, err := paramReads(filepath.Join("testdata", "dotimport")); err == nil {
 			t.Error("paramReads accepted a dot import")
+		}
+	})
+}
+
+// TestAdded checks added against all and the embedded tables: each entry
+// names a parameter once, with the version of an embedded table, and that
+// table is the first to have the parameter, so Parse's rule and the
+// published tables agree.
+func TestAdded(t *testing.T) {
+	seen := make(map[string]bool)
+	for _, a := range added {
+		t.Run(a.p.String()+" is first in table "+a.version, func(t *testing.T) {
+			if seen[a.p.String()] {
+				t.Errorf("added lists %s twice", a.p)
+			}
+			seen[a.p.String()] = true
+			if !slices.Contains(all, a.p) {
+				t.Errorf("added lists %s, which all doesn't", a.p)
+			}
+			if _, ok := parseVersion(a.version); !ok {
+				t.Fatalf("added gives %s the version %q, which isn't MAJOR.MINOR.PATCH", a.p, a.version)
+			}
+			if _, err := ByVersion(a.version); err != nil {
+				t.Errorf("added gives %s the version %s, which no embedded table has: %v", a.p, a.version, err)
+			}
+			for _, tab := range Tables() {
+				_, has := tab.Text(a.p.String())
+				if want := compareVersions(tab.Version(), a.version) >= 0; has != want {
+					t.Errorf("table %s has %s: %v, want %v", tab.Version(), a.p, has, want)
+				}
+			}
+		})
+	}
+	t.Run("every other parameter is in every table", func(t *testing.T) {
+		for _, p := range all {
+			if since(p) != "" {
+				continue
+			}
+			for _, tab := range Tables() {
+				if _, ok := tab.Text(p.String()); !ok {
+					t.Errorf("table %s has no %s", tab.Version(), p)
+				}
+			}
 		}
 	})
 }
