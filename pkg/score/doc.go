@@ -86,7 +86,11 @@
 // project and whether or not its act has a session, in SM 3.3's order. The
 // window that credits the slot's first credited second gives the slot its
 // project, only that project's windows credit the rest of it, and what they
-// don't credit is X.ambiguous.
+// don't credit is X.ambiguous. A terminal hosting no harness is ambiguous
+// too, as SM 3.2 rule 1 has it until v1.5's shell hook reports a cwd, and
+// the orchestrator extended D-ambiguous-anchors to it on 2026-11-20, so
+// anchors count there as well. An agent app hosting no session keeps rule
+// 3 and resolves to no project.
 //
 // Rule 2 prefers verified heartbeats (D-rule2-sidedoor). A side-door one,
 // from a plugin, the bridge or a heartbeat that failed the peer-process
@@ -120,29 +124,49 @@
 //   - SC1's typed-edit focus test takes the editor's project the same way,
 //     at the edit: the latest heartbeat with input in the same or previous
 //     slot, up to the edit itself, a verified one first, then the record.
-//   - The return rule (SM 2.1) still needs a window that names one
-//     project, so a long silence in a window hosting several ends with its
-//     tail. Its think part credits a slot only when the slot resolves to
-//     the run's project or to none, so that a slot keeps one project (SM
-//     5.1) when a heartbeat after the input that ends the run gives an
-//     editor slot to another one.
+//   - The return rule (SM 2.1) still needs a window that SM 3.2 resolves
+//     to one project: a terminal, an editor or an agent app whose focus
+//     record names it. So a long silence in a window hosting several ends
+//     with its tail, and so does one in a browser, a chat app or another
+//     app, whatever its record names. Its think part credits a slot only
+//     when the slot resolves to the run's project, so that a slot keeps one
+//     project (SM 5.1) when a heartbeat after the input that ends the run
+//     gives an editor slot to another one, and no lookup shares a returned
+//     slot with another project.
+//
+// # What WP-SC4 builds
+//
+// What the agent uploads and shows (SM 5, DESIGN 3.7). Minutes groups the
+// credit slots by UTC minute, and Minute.Bucket summarizes a minute as SM
+// 5.1's bucket. Revisions writes a new revision of a minute's bucket each
+// time a Step changes it, pending until PENDING_WINDOW_S after the minute
+// and final after. Rollups sums minutes into SM 5.3's work sessions, local
+// days and projects, and Submission.Totals gives a submission's totals (SM
+// 5.3, 5.4). Each timeline under testdata/timelines has a golden.jsonl with
+// its buckets, and TestGolden holds the output to it (DESIGN 6.6).
 //
 // # Final and pending
 //
-// Records can arrive late, up to PENDING_WINDOW_S (DESIGN 6.2 D1), and some
-// rules look ahead: the return rule up to RETURN_GAP_MAX_S plus
-// READ_HORIZON_S, which covers a lead's reach and the reading horizon. So
-// what Step derives for a time stays pending until the latest record is
-// that much later, then becomes final and is output once. No record
-// changes what was derived for a time further back than that look-ahead
-// before its own t, so whatever it changes is still pending when it
-// arrives. Where an act's record comes later than that, as a long typed
-// command's does at its end, the windows the act would open before then
-// credit nothing, in every Step alike, and the anchor is final from its
-// record's time. A browser run with credit just before it may be a lookup,
-// whose credit waits for the run's end, so nothing from such a run on is
-// final until its end bracket is, however long the run lasts
-// (docs/errata/2026-11-20-lookup-lookahead.md). Until WP-SC5 adds
+// What Step derives for a time stays pending until now is PENDING_WINDOW_S
+// later, then becomes final and is output once (DESIGN 3.7, 6.2 D1). No
+// record changes what was derived for a time more than READ_HORIZON_S before
+// its own t: a lead reaches back at most THINK_LEAD_S + COMPOSE_MAX_S,
+// reading needs a human act within READ_HORIZON_S, and the return rule an
+// act on record within READ_HORIZON_S of the silence's start. So a record
+// that arrives up to PENDING_WINDOW_S - READ_HORIZON_S late changes only
+// what is still pending. That bound and the return rule's horizon are the
+// code half of E-return-lookahead
+// (docs/errata/2026-11-19-return-rule-lookahead.md, decided 2026-11-20),
+// which lets its code land before its text: SM 2.1, DESIGN 3.7 and D1 state
+// them once P10 lands, and main's SM 2.1 still counts the return rule's
+// horizon from the run's end. An anchor is decided at the latest t of its
+// records; where that is later than its windows allow, as a long typed
+// command's record is at its end, the windows it would open before then
+// credit nothing, in every Step alike. A browser run with credit just before
+// it may be a lookup, whose credit waits for the run's end, so nothing from
+// such a run on is final until its end bracket is. SM 2.5 sets no bound on
+// that (docs/errata/2026-11-19-return-rule-lookahead.md,
+// docs/errata/2026-11-20-lookup-lookahead.md). Until WP-SC5 adds
 // checkpoints, a State holds every record it was given.
 //
 // # Readings of the spec
@@ -150,8 +174,12 @@
 // Where SM and DESIGN leave a choice open, the scorer takes these, each
 // stated again where it is implemented:
 //
-//   - Leads are whole seconds: a typing time is rounded to the nearest
-//     second, as SM 6.4 (161 s) and 6.5 (143 s) round theirs.
+//   - A lead's typing part, and the reading part of RETURN_CREDIT, are
+//     rounded to the nearest second, halves up, as SM 6.4 (161 s) and 6.5
+//     (143 s) round theirs. Other lengths, such as a permission wait or a
+//     command's run, keep their milliseconds. E-6.4-prompt-lengths decided
+//     this reading, and SM 1.3 gains it with P11
+//     (docs/errata/2026-11-19-sm-6.4-prompt-lengths.md).
 //   - A silent run's length is its slots' length, from the end of the last
 //     input slot to the start of the next, because samples show when the
 //     last input before a silence came but not when the first one after it
@@ -159,7 +187,8 @@
 //   - A gap between samples longer than SLEEP_GAP_S is a hard break, except
 //     one that follows CONTEXT_IDLE_S without input and lasts at most twice
 //     SLOW_SAMPLE_S: the agent samples once a minute then, which DESIGN 6.2
-//     D14 says changes no credit.
+//     D14 says changes no credit. D-d14-cadence decided that D14 states
+//     this rule, and P07 lands that text.
 //   - "Input in its slot" is any input, and "input_keys where available"
 //     means key presses where the OS reports them, exactly as each row of
 //     SM 2.3 says.
@@ -174,9 +203,17 @@
 //   - A message from another session (origin_declared cross_session) is
 //     origin subagent: SM 2.2 has no rule for it, and like a subagent's it
 //     is one agent prompting another (TP DI 26).
-//   - A `pairtime track` call 10 to 30 s from a prompt of its session is
-//     track_matched and raises no flag, as
-//     docs/errata/2026-11-19-track-match-windows.md proposes.
+//   - One window decides a `pairtime track` call from a session pairtime
+//     sees through hooks or a log reader: within TRACK_DEDUPE_S of one of
+//     the session's hook or log prompts, before or after, the call is
+//     track_matched, and with none it raises track_without_prompt, where
+//     DESIGN 5.4 still flags a call with no prompt within
+//     TRACK_LOG_MATCH_S. The session counts as seen only from the call's
+//     log_match or from a hook or log record dated at most TRACK_DEDUPE_S
+//     after the call, so no later record changes what the call did. This
+//     is the code half of E-track-windows
+//     (docs/errata/2026-11-19-track-match-windows.md, decided 2026-11-20),
+//     whose DESIGN 5.4 text lands with P10.
 //   - The editor in focus on a session's project hosts a session only the
 //     WakaTime bridge reports, as it does an IDE session, since the bridge
 //     reads it from the editor's wakatime-cli (DESIGN 5.7).
@@ -194,7 +231,9 @@
 // WP-SC2 adds these:
 //
 //   - A second belongs to a window when the second's start does, so
-//     window edges are applied to whole seconds (SM 1.3).
+//     window edges are applied to whole seconds (SM 1.3). The same holds
+//     for a turn's run, a tail and the reading horizon, as
+//     E-6.4-prompt-lengths decided; SM 1.3 says so once P11 lands.
 //   - Presence after a silence longer than PRESENCE_GAP_S starts at the
 //     second of the first input a sample taken inside the slot reports,
 //     and at the slot's start when only the sample at its end reports one,
@@ -212,15 +251,17 @@
 //     (docs/errata/2026-11-19-turns-without-a-stop.md). A silence of a
 //     turn's agent records longer than BUCKET_TTL_S ends a hooked turn's
 //     run BUCKET_TTL_S after the last one, and one longer than
-//     RETURN_GAP_MAX_S + READ_HORIZON_S ends any other turn's at the last
-//     one, so no record reaches further back than the scorer's look-ahead.
+//     READ_HORIZON_S ends any other turn's at the last one, so no record
+//     reaches further back than the scorer's look-ahead.
 //     A continuation whose first record comes later than that after the
 //     previous stop starts at the record. The rules for hooked turns and
-//     for silences are docs/errata/2026-11-20-hooked-turn-runs.md.
+//     for silences are docs/errata/2026-11-20-hooked-turn-runs.md, which
+//     gives the silence as 1,200 s: RETURN_GAP_MAX_S + READ_HORIZON_S, the
+//     reach before E-return-lookahead, whose P10 updates it.
 //   - A queued message resets the bucket when the agent picks it up, which
 //     no record says, so at the session's first agent record after the
 //     enqueue, the next point an agent takes up queued input, or at the
-//     enqueue when none follows within RETURN_GAP_MAX_S + READ_HORIZON_S.
+//     enqueue when none follows within READ_HORIZON_S.
 //   - A lookup second needs presence, and a run of browser or chat-app
 //     slots ends at a hard break. Its brackets are credited seconds of the
 //     same project, other than lookups, ending at most LOOKUP_BRACKET_S

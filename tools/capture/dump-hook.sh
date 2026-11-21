@@ -9,13 +9,26 @@
 #
 #   time     when the call arrived: unix_ns, utc and the clock used
 #   argv     the arguments, one per line (RUN_DIR and LABEL first)
-#   env      the names of the environment variables, sorted. Never the values
+#   env      the names of the environment variables, sorted. Never the
+#            values, but for entrypoint's
+#   entrypoint
+#            the value of CLAUDE_CODE_ENTRYPOINT, the token Claude Code gives
+#            its hooks, when it is 1 to 32 characters of a-z, 0-9, - and _,
+#            or other when it isn't. No file when it is unset. The only
+#            value of a variable written
 #   cwd      the working directory
 #   parents  pid, controlling terminal and executable name of each parent
 #            process, nearest first: "1234 pts/3 claude". The terminal is ?
 #            (?? on macOS) when the process has none. Never command lines,
 #            which can hold prompts
 #   stdin    the bytes on stdin, unchanged
+#   flags    the harness the hook runs under, the nearest parent with a
+#            harness's executable name: name=claude, then print=,
+#            stream_json= and bare=, each yes or no, for a print flag (-p,
+#            --print, --prompt, codex exec), stream-json input or output,
+#            and --bare among its arguments, or ? where it can't tell. The
+#            arguments are read in memory and never written. Written last,
+#            as flags.tmp renamed into place, so it is whole or missing
 #   stderr   only if something in this script failed
 #
 # LABEL is the hook event the entry was registered for, such as
@@ -98,6 +111,24 @@ done >"$call/argv"
 # mistaken for a name, whatever it contains.
 awk 'BEGIN { for (name in ENVIRON) print name }' | LC_ALL=C sort >"$call/env"
 
+# The one value of a variable kept: CLAUDE_CODE_ENTRYPOINT, the token Claude
+# Code gives its hooks, such as cli or sdk-cli (E-cc-transcript-labels). A
+# value that isn't 1 to 32 of the characters below becomes other, and an
+# unset one writes no file. The letters are spelled out, since in some
+# shells and locales a range such as a-z takes in capitals.
+if [ -n "${CLAUDE_CODE_ENTRYPOINT+set}" ]; then
+	entrypoint=other
+	case $CLAUDE_CODE_ENTRYPOINT in
+	'' | *[!abcdefghijklmnopqrstuvwxyz0123456789_-]*) ;;
+	*)
+		if [ "${#CLAUDE_CODE_ENTRYPOINT}" -le 32 ]; then
+			entrypoint=$CLAUDE_CODE_ENTRYPOINT
+		fi
+		;;
+	esac
+	printf '%s\n' "$entrypoint" >"$call/entrypoint"
+fi
+
 pwd >"$call/cwd"
 
 # Walk up from our parent through one ps listing. tty is the controlling
@@ -130,13 +161,136 @@ ps -A -o pid= -o ppid= -o tty= -o comm= 2>/dev/null | awk -v start="$PPID" '
 		}
 	}' >"$call/parents"
 
-# Last, because it can block until the harness closes the pipe. A terminal
-# on stdin means a person ran this by hand: write an empty file and go.
+# After the quick files, because it can block until the harness closes the
+# pipe. A terminal on stdin means a person ran this by hand: write an empty
+# file and go.
 if [ -t 0 ]; then
 	: >"$call/stdin"
 else
 	cat >"$call/stdin"
 fi
+
+# flags comes after everything else, so a hook the harness cuts short while
+# this reads a command line has written every other file (E-procs-cmdlines).
+# The harness is the nearest parent with one of the executable names that
+# internal/platform/appclass.json gives a harness. Its command line goes
+# through a pipe into awk, which keeps three answers and drops the rest:
+# no argument is ever written. The file is put together first, written as
+# flags.tmp and renamed into place, so flags is whole or missing.
+harnesses='claude codex cursor-agent copilot gemini devin opencode cline'
+# The options codex takes a value with before its subcommand, as in
+# codex -c key=value exec or codex -p work exec: the root options in
+# codex-rs/cli/src/main.rs, codex-rs/tui/src/cli.rs and codex-rs/utils/cli
+# at d64451b. A value joined to its option with = needs no skipping. -i,
+# --image isn't here: it takes every argument up to the next one that starts
+# with -.
+codex_values='-c --config --enable --disable --remote --remote-auth-token-env -a --ask-for-approval -m --model --local-provider -p --profile -s --sandbox -C --cd --add-dir'
+found=$(awk -v harnesses="$harnesses" '
+	BEGIN {
+		n = split(harnesses, list, " ")
+		for (i = 1; i <= n; i++) {
+			known[list[i]] = 1
+		}
+	}
+	{
+		name = $0
+		sub(/^[^ ]+ [^ ]+ /, "", name)
+		key = tolower(name)
+		sub(/\.exe$/, "", key)
+		if (key in known) {
+			print $1 " " key " " name
+			exit
+		}
+	}' "$call/parents")
+if [ -n "$found" ]; then
+	# The pid, the name as appclass.json lists it, and the name as parents
+	# shows it, which is the one written.
+	pid=${found%% *}
+	rest=${found#* }
+	key=${rest%% *}
+	name=${rest#* }
+	# One argument per line. On Linux each NUL in /proc/PID/cmdline ends an
+	# argument, and a newline inside one becomes a carriage return, so each
+	# line is one whole argument. macOS has no /proc, and its ps joins the
+	# arguments with spaces, so there they are split at whitespace.
+	answers=$(
+		if [ -r "/proc/$pid/cmdline" ]; then
+			tr '\n\000' '\r\n' <"/proc/$pid/cmdline"
+		else
+			ps -o args= -p "$pid" | awk '{ for (i = 1; i <= NF; i++) print $i }'
+		fi | awk -v name="$key" -v codex_values="$codex_values" '
+			BEGIN {
+				print_flag = "no"
+				stream = "no"
+				bare = "no"
+				n = split(codex_values, list, " ")
+				for (i = 1; i <= n; i++) {
+					takes_value[list[i]] = 1
+				}
+			}
+			NR == 1 {
+				next # the executable
+			}
+			$0 == "--" {
+				exit
+			}
+			{
+				# codex has no print flag; its exec subcommand, or e, is the
+				# first argument that is neither an option nor the value of
+				# one. -i takes every argument after it up to the next one
+				# that starts with -, as clap reads its num_args = 1..
+				# (shared_options.rs). Two argument lists read wrong, and no
+				# capture step runs codex either way: clap also takes a lone -
+				# as an image, and it reads an exec after a prompt, as in
+				# codex "hi" exec "fix it", as the subcommand.
+				if (name == "codex") {
+					if (!subcommand) {
+						operand = (substr($0, 1, 1) != "-")
+						if (value) {
+							value = 0
+						} else if (!operand) {
+							images = ($0 == "-i" || $0 == "--image")
+							value = (!images && ($0 in takes_value))
+						} else if (!images) {
+							subcommand = 1
+							if ($0 == "exec" || $0 == "e") {
+								print_flag = "yes"
+							}
+						}
+					}
+				} else if ($0 == "-p" || $0 == "--print" || $0 == "--prompt" || substr($0, 1, 9) == "--prompt=") {
+					print_flag = "yes"
+				}
+				if ($0 == "--bare") {
+					bare = "yes"
+				}
+				if ($0 == "--input-format=stream-json" || $0 == "--output-format=stream-json") {
+					stream = "yes"
+				}
+				if ($0 == "stream-json" && (previous == "--input-format" || previous == "--output-format")) {
+					stream = "yes"
+				}
+				previous = $0
+			}
+			END {
+				if (NR == 0) {
+					# Nothing could be read: the process is gone or hidden.
+					print_flag = stream = bare = "?"
+				}
+				print "print=" print_flag
+				print "stream_json=" stream
+				print "bare=" bare
+			}'
+	)
+	flags="name=$name
+$answers"
+else
+	flags='name=?
+print=?
+stream_json=?
+bare=?'
+fi
+printf '%s\n' "$flags" >"$call/flags.tmp" && mv -f "$call/flags.tmp" "$call/flags"
 
 if [ ! -s "$call/stderr" ]; then
 	rm -f "$call/stderr"

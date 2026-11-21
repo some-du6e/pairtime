@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"net"
 	"strings"
 	"sync"
@@ -187,6 +189,28 @@ func TestAsk(t *testing.T) {
 			},
 		},
 		{
+			name: "an answer short enough that only its escaping makes it too long for a frame is an error, and the connection carries on",
+			run: func(t *testing.T, ep Endpoint) {
+				// json.Marshal writes each < as six bytes.
+				big := json.RawMessage(`"` + strings.Repeat("<", maxAnswer/5) + `"`)
+				a := &answers{by: map[string]json.RawMessage{AskLastSession: big}}
+				_, sink := serve(t, ep, Options{Answer: a.answer}, nil)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				c, err := Dial(ctx, ep)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				if _, err := c.Ask(ctx, AskLastSession); err == nil || errors.Is(err, ErrUnknownQuestion) || errors.Is(err, io.EOF) {
+					t.Errorf("Ask = %v, want an error reply", err)
+				}
+				if err := c.Send(ctx, message(1)); err != nil || len(sink.deliveries()) != 1 {
+					t.Errorf("a message after the long answer: %v, %d stored", err, len(sink.deliveries()))
+				}
+			},
+		},
+		{
 			name: "questions and messages take turns on one connection",
 			run: func(t *testing.T, ep Endpoint) {
 				a := &answers{by: map[string]json.RawMessage{AskLastSession: session}}
@@ -261,15 +285,14 @@ func TestAsk(t *testing.T) {
 		{
 			name: "nothing is asked of an agent that runs as another user",
 			run: func(t *testing.T, ep Endpoint) {
+				// ask is Ask with the user the agent must run as given:
+				// here not the one that runs it.
 				a := &answers{by: map[string]json.RawMessage{AskLastSession: session}}
 				serve(t, ep, Options{Answer: a.answer}, nil)
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
-				if c, err := dial(ctx, ep, otherUser(t)); !errors.Is(err, ErrNotAgent) {
-					if c != nil {
-						c.Close()
-					}
-					t.Errorf("dial = %v, want ErrNotAgent", err)
+				if got, err := ask(ctx, ep, otherUser(t), AskLastSession); !errors.Is(err, ErrNotAgent) {
+					t.Errorf("ask = %s, %v; want ErrNotAgent", got, err)
 				}
 				if q := a.questions(); len(q) != 0 {
 					t.Errorf("Answer was asked %q", q)
@@ -294,6 +317,22 @@ func TestAsk(t *testing.T) {
 			tt.run(t, endpointIn(t, shortDir(t)))
 		})
 	}
+	t.Run("a question that comes during the socket's self-test is turned away, and Answer isn't asked", func(t *testing.T) {
+		a := &answers{by: map[string]json.RawMessage{AskLastSession: session}}
+		s := &Server{answerer: a.answer, log: slog.New(slog.DiscardHandler)}
+		qn := question{ID: inbox.NewID(), Ask: AskLastSession}
+		b, err := json.Marshal(qn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rep, keep := s.take(b, nil, 0, nil, false)
+		if rep.OK || rep.ID != qn.ID || rep.Error == "" || len(rep.Answer) != 0 || keep {
+			t.Errorf("take = %+v, keep %v; want an error reply that ends the connection", rep, keep)
+		}
+		if q := a.questions(); len(q) != 0 {
+			t.Errorf("Answer was asked %q", q)
+		}
+	})
 	t.Run("a question's frame is no message to an agent from before questions", func(t *testing.T) {
 		b, err := json.Marshal(question{ID: inbox.NewID(), Ask: AskLastSession})
 		if err != nil {

@@ -17,10 +17,13 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/auth"
 	"github.com/some-du6e/pairtime/internal/server/backup"
 	"github.com/some-du6e/pairtime/internal/server/config"
+	"github.com/some-du6e/pairtime/internal/server/dashboard"
+	"github.com/some-du6e/pairtime/internal/server/device"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/ops"
 	"github.com/some-du6e/pairtime/internal/server/pages"
 	"github.com/some-du6e/pairtime/internal/server/retention"
+	"github.com/some-du6e/pairtime/internal/server/rollup"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 	"github.com/some-du6e/pairtime/internal/version"
@@ -169,6 +172,27 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		<-retentionDone
 	}()
 
+	// The settle job runs beside the sweep, through the writer: a minute
+	// its device left pending counts as final by the server's clock once
+	// PENDING_WINDOW_S has passed since it ended (D-server-settles-pending).
+	// It too stops before the writer does.
+	settled := reg.Counter("pairtime_rollup_settled_minutes_total", "Minutes their devices left pending that the server settled as final (D-server-settles-pending).")
+	settleCtx, stopSettle := context.WithCancel(ctx)
+	settleDone := make(chan struct{})
+	go func() {
+		defer close(settleDone)
+		rollup.RunSettle(settleCtx, w, db.Read, rollup.SettleEvery, time.Now, func(n int, err error) {
+			settled.Add(uint64(n))
+			if err != nil && settleCtx.Err() == nil {
+				logger.Error("settling pending minutes failed", "settled", n, "err", err)
+			}
+		})
+	}()
+	defer func() {
+		stopSettle()
+		<-settleDone
+	}()
+
 	checks := []ops.Check{{
 		Name: "database",
 		Run: func(ctx context.Context) error {
@@ -238,7 +262,28 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		logger.Warn(envHeartbeatURL + " isn't set, so no push monitor hears from pairtimed (DESIGN 10.4)")
 	}
 
-	signIn, err := newSignIn(cfg, db, w, logger, site.Signups.MayCreate)
+	// The device grant, /device, /account/devices and the device API
+	// (WP-SV3). With sign-in off, the grant refuses new codes and the
+	// pages say linking isn't open yet. Sign-in removes the devices of an
+	// account Hack Club Auth turns ineligible, in the transaction that
+	// revokes its sessions (D-device-account-binding).
+	devices, err := device.New(device.Options{DB: db, Writer: w})
+	if err != nil {
+		return err
+	}
+	signIn, err := newSignIn(cfg, db, w, logger, site.Signups.MayCreate, devices.RemoveAccount)
+	if err != nil {
+		return err
+	}
+	linking, err := device.NewService(device.Config{
+		Store:       devices,
+		BaseURL:     cfg.BaseURL,
+		SignIn:      signIn,
+		Site:        site,
+		Handle:      handle,
+		SignupsOpen: site.Signups.Open,
+		Logger:      logger,
+	})
 	if err != nil {
 		return err
 	}
@@ -247,6 +292,8 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	public.HandleFunc("GET /healthz", ops.Healthz)
 	site.Register(public)
 	signIn.Register(public)
+	linking.Register(public)
+	newIngest(cfg, db, w, devices, series, logger).Register(public)
 	visit := pages.SignIn{
 		Enabled:    signIn.Enabled(),
 		LoginPath:  auth.LoginPath,
@@ -257,9 +304,28 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	site.RegisterHome(public, visit)
 	// /demo, the dashboard page drawn from a fixed, labelled sample.
 	site.RegisterDemo(public, visit, time.Now)
+	// The signed-in owner's dashboard, as a page and as JSON, from the
+	// rollups (WP-SV7). Ingest's bucket revisions reach them through
+	// rollup.ApplyEvent, which newIngest sets as ingest's Rollup.
+	rollups := dashboard.Rollups{DB: db.Read}
+	owner := accountOf(signIn)
+	site.RegisterDashboard(public, visit, pages.Dashboard{
+		Source:  rollups,
+		Account: owner,
+		SetZone: func(ctx context.Context, account, zone string) error {
+			return w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+				return rollup.SetZone(ctx, tx, account, zone)
+			})
+		},
+		SameOrigin: signIn.SameOrigin,
+		Now:        time.Now,
+		Logger:     logger,
+	})
+	public.HandleFunc("GET "+dashboard.APIPath, dashboard.API(rollups, owner, time.Now, logger))
 	maintainCtx, stopMaintain := context.WithCancel(ctx)
 	defer stopMaintain()
 	go signIn.Maintain(maintainCtx)
+	go linking.Maintain(maintainCtx)
 
 	pubLn, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {

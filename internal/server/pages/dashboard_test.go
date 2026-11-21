@@ -4,8 +4,11 @@ package pages
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -16,6 +19,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/dashboard"
+	"github.com/some-du6e/pairtime/internal/server/rollup"
 )
 
 // demoClock is when the tests look at the sample.
@@ -129,7 +133,7 @@ func TestDemoPage(t *testing.T) {
 			want: []string{
 				`<span class="seg c1 f26" title="chip8-emulator, 1h 3m"></span><span class="seg c1 pend f4" title="chip8-emulator, 9m pending"></span><span class="seg c2 f17" title="robotics-scouting, 41m"></span><small class="cap">1h 53m</small>`,
 				`<li><span class="key c1 pend"></span>Faded means pending</li>`,
-				"Pending minutes can still change until your computer sends their final version, usually within 15 minutes, so they stay faded until then.",
+				"Pending minutes can still change, so they stay faded until they settle, within about 15 minutes of when they end.",
 			},
 		},
 		{
@@ -203,8 +207,15 @@ func TestDemoPage(t *testing.T) {
 			name:    "with sign-ups open the banner offers Hack Club sign-in",
 			opts:    Options{SignupsOpen: true},
 			signIn:  signInOn(""),
-			want:    []string{`<a class="button" href="/auth/hca/login">Sign in with Hack Club</a> and run <code>pairtime login</code>`},
+			want:    []string{`<a class="button" href="/auth/hca/login?return_to=/dashboard">Sign in with Hack Club</a> and run <code>pairtime login</code>`},
 			notWant: []string{"Sign-ups are closed", "isn&#39;t set up"},
+		},
+		{
+			name:    "a signed-in visitor gets a link to their own dashboard instead of a sign-in button",
+			opts:    Options{SignupsOpen: true},
+			signIn:  signInOn("U0FAKEVERIFIED"),
+			want:    []string{`<a class="button" href="/dashboard">See your own dashboard</a>`},
+			notWant: []string{"Sign in with Hack Club</a>", "Sign-ups are closed"},
 		},
 		{
 			name:    "the page has no script, no form, no style attribute and no SVG",
@@ -245,7 +256,7 @@ func TestDemoHeaders(t *testing.T) {
 	}{
 		{name: "the page is HTML", header: "Content-Type", want: "text/html; charset=utf-8"},
 		{name: "browsers may not read it as another type", header: "X-Content-Type-Options", want: "nosniff"},
-		{name: "the page changes every day, so a cache must ask again", header: "Cache-Control", want: "no-cache"},
+		{name: "the page differs by session and changes every day, so nothing may store it", header: "Cache-Control", want: "no-store"},
 		{name: "links from the page carry no referrer", header: "Referrer-Policy", want: "no-referrer"},
 		{name: "the CSP is the one the privacy notice and evidence page send, allowing no form, even for a signed-in visitor", header: "Content-Security-Policy", want: s.csp},
 	}
@@ -340,9 +351,15 @@ func TestPageClasses(t *testing.T) {
 	}
 	_, demo := getDemo(t, Options{SignupsOpen: true}, signInOn(""))
 	_, home := getHome(t, Options{}, signInOn("U0FAKEVERIFIED"))
+	// The owner's page with a refused time zone shows every part it has.
+	mux, _ := ownerSite(t, signInOn("U0FAKEVERIFIED"), "u1", fakeSource{v: ownerView(t)}, true, rollup.ErrBadZone)
+	r := httptest.NewRequest(http.MethodPost, "/dashboard/zone", strings.NewReader("zone=Mars"))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	_, owner := serve(mux, r)
 	for _, p := range []struct{ name, page string }{
 		{name: "the sample dashboard", page: demo},
 		{name: "the home page", page: home},
+		{name: "the owner's dashboard", page: owner},
 	} {
 		seen := make(map[string]bool)
 		for _, m := range classAttr.FindAllStringSubmatch(p.page, -1) {
@@ -487,6 +504,449 @@ func TestFill(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := fill(tt.v, tt.top); got != tt.want {
 				t.Errorf("fill(%v, %v) = %q, want %q", tt.v, tt.top, got, tt.want)
+			}
+		})
+	}
+}
+
+// fakeSource is a dashboard.Source with one answer.
+type fakeSource struct {
+	v   dashboard.View
+	err error
+}
+
+func (f fakeSource) View(context.Context, string, time.Time) (dashboard.View, error) {
+	return f.v, f.err
+}
+
+// ownerView is the sample's numbers as an owner's own view, which names
+// the agent as real dashboards do.
+func ownerView(t *testing.T) dashboard.View {
+	t.Helper()
+	v, err := dashboard.Demo{}.View(context.Background(), "", demoClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.Sample, v.Agent, v.TZ = false, dashboard.AgentName, "Europe/London"
+	return v
+}
+
+// unreadable is the account ownerSite takes for a session that can't be
+// read.
+const unreadable = "!"
+
+// splitView is ownerView as dashboard.Rollups makes it until project
+// registration (WP-SV10): each computer's projects count apart.
+func splitView(t *testing.T) dashboard.View {
+	t.Helper()
+	v := ownerView(t)
+	v.SplitByDevice = true
+	return v
+}
+
+// emptyView is a new account's view: 30 days with nothing in them.
+func emptyView(t *testing.T) dashboard.View {
+	t.Helper()
+	v, err := dashboard.Build(dashboard.Meta{Today: "2026-11-20", TZ: "UTC", Agent: dashboard.AgentName}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// zoneCall records what SetZone was asked.
+type zoneCall struct{ account, zone string }
+
+// ownerSite serves the owner's dashboard with sign-in as in, the request
+// signed in to account ("" for none), src as the views, and setZone's
+// answer to the form. account "!" stands for a session that can't be
+// read.
+func ownerSite(t *testing.T, in SignIn, account string, src dashboard.Source, sameOrigin bool, setZone error) (*http.ServeMux, *[]zoneCall) {
+	t.Helper()
+	var calls []zoneCall
+	mux := http.NewServeMux()
+	newSite(t, Options{}).RegisterDashboard(mux, in, Dashboard{
+		Source: src,
+		Account: func(*http.Request) (string, error) {
+			switch account {
+			case "":
+				return "", dashboard.ErrNotSignedIn
+			case unreadable:
+				return "", errors.New("database is locked")
+			}
+			return account, nil
+		},
+		SetZone:    func(_ context.Context, a, z string) error { calls = append(calls, zoneCall{a, z}); return setZone },
+		SameOrigin: func(*http.Request) bool { return sameOrigin },
+		Now:        func() time.Time { return demoClock },
+		Logger:     slog.New(slog.DiscardHandler),
+	})
+	return mux, &calls
+}
+
+func serve(mux *http.ServeMux, r *http.Request) (*http.Response, string) {
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, r)
+	resp := rec.Result()
+	body, _ := io.ReadAll(resp.Body)
+	return resp, string(body)
+}
+
+func TestOwnerDashboard(t *testing.T) {
+	tests := []struct {
+		name         string
+		signIn       SignIn
+		account      string
+		src          dashboard.Source
+		wantCode     int
+		wantLocation string
+		want         []string
+		notWant      []string
+		wantHeaders  map[string]string
+	}{
+		{
+			name:     "with sign-in off and sign-ups closed the page says there's no dashboard of your own, promises none, and links the sample",
+			signIn:   SignIn{},
+			wantCode: 200,
+			want: []string{
+				"Sign-in isn&#39;t set up on this server yet, so there&#39;s no dashboard of your own to show. Sign-ups are closed for now too, and testers join by invitation, using pairtime on their own computers until sign-ups open.</p>",
+				`<a class="button" href="/demo">See a sample dashboard</a>`,
+			},
+			notWant:     []string{"<form", "Sample data"},
+			wantHeaders: map[string]string{"Cache-Control": "no-store"},
+		},
+		{
+			name:         "a visitor who isn't signed in goes to Hack Club sign-in, which brings them back to the dashboard",
+			signIn:       signInOn(""),
+			wantCode:     303,
+			wantLocation: "/auth/hca/login?return_to=/dashboard",
+		},
+		{
+			name:     "a signed-in owner sees their own time, named as theirs and the agent's, with no sample label",
+			signIn:   signInOn("U0FAKEVERIFIED"),
+			account:  "u1",
+			src:      fakeSource{v: ownerView(t)},
+			wantCode: 200,
+			want: []string{
+				"<title>Your dashboard · pairtime</title>",
+				"<h1>Your dashboard</h1>",
+				"Your agent worked on its own for 3h 32m.",
+				`<p class="face"><span>Your agent</span> <strong>2h 40m</strong>`,
+				"Two clocks, not a score. Your agent&#39;s clock counts the time it worked on a project with none of your time counted there",
+				`<span class="kname">Following your agent as it works</span>`,
+				`<span class="agent">Your agent 15h 5m</span>`,
+			},
+			notWant: []string{"Sample data", "made-up", "Nothing counted yet."},
+		},
+		{
+			name:     "the owner's header shows who is signed in, a link to the dashboard and the sign-out form",
+			signIn:   signInOn("U0FAKEVERIFIED"),
+			account:  "u1",
+			src:      fakeSource{v: ownerView(t)},
+			wantCode: 200,
+			want: []string{
+				`<a href="/dashboard">Your dashboard</a>`,
+				"<p>Signed in as <strong>U0FAKEVERIFIED</strong></p>",
+				`<form method="post" action="/auth/logout"><button type="submit">Sign out</button></form>`,
+			},
+		},
+		{
+			name:     "the owner can set the time zone the days are counted in",
+			signIn:   signInOn("U0FAKEVERIFIED"),
+			account:  "u1",
+			src:      fakeSource{v: ownerView(t)},
+			wantCode: 200,
+			want: []string{
+				"pairtime counts your days in <strong>Europe/London</strong> time.",
+				`<form class="zone" method="post" action="/dashboard/zone">`,
+				`<input id="zone-name" name="zone" value="Europe/London" required maxlength="64" autocomplete="off" spellcheck="false">`,
+				"days already counted stay as they are.",
+			},
+			wantHeaders: map[string]string{"Cache-Control": "no-store", "Referrer-Policy": "same-origin"},
+		},
+		{
+			name:     "an owner with no time yet is told how to link the app, instead of empty charts",
+			signIn:   signInOn("U0FAKEVERIFIED"),
+			account:  "u1",
+			src:      fakeSource{v: emptyView(t)},
+			wantCode: 200,
+			want: []string{
+				"<strong>Nothing counted yet.</strong> Install pairtime on your computer and run <code>pairtime login</code> to link it to this account.",
+				`<a href="/demo">See a sample dashboard</a>`,
+				`<form class="zone"`,
+			},
+			notWant: []string{`<ol class="bars">`, `<section aria-labelledby="today">`, "Sample data"},
+		},
+		{
+			name:     "a view that doesn't load gets an error, not a dashboard with wrong numbers",
+			signIn:   signInOn("U0FAKEVERIFIED"),
+			account:  "u1",
+			src:      fakeSource{err: context.DeadlineExceeded},
+			wantCode: 500,
+			want:     []string{"Your dashboard didn't load."},
+		},
+		{
+			name:     "a session that can't be read gets an error, not a trip to sign-in, which wouldn't help",
+			signIn:   signInOn("U0FAKEVERIFIED"),
+			account:  unreadable,
+			src:      fakeSource{v: ownerView(t)},
+			wantCode: 500,
+			want:     []string{"Your dashboard didn't load."},
+		},
+		{
+			name:     "while each computer's projects count apart, the projects table says a repo on two computers shows as two projects",
+			signIn:   signInOn("U0FAKEVERIFIED"),
+			account:  "u1",
+			src:      fakeSource{v: splitView(t)},
+			wantCode: 200,
+			want:     []string{`<p class="note">For now, a repo you work on from two computers shows as two projects here, one for each computer.</p>`},
+		},
+		{
+			name:     "a view that doesn't split projects by computer says nothing about it",
+			signIn:   signInOn("U0FAKEVERIFIED"),
+			account:  "u1",
+			src:      fakeSource{v: ownerView(t)},
+			wantCode: 200,
+			notWant:  []string{"two computers"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux, _ := ownerSite(t, tt.signIn, tt.account, tt.src, true, nil)
+			resp, page := serve(mux, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
+			if resp.StatusCode != tt.wantCode {
+				t.Fatalf("GET /dashboard = %d, want %d", resp.StatusCode, tt.wantCode)
+			}
+			if got := resp.Header.Get("Location"); got != tt.wantLocation {
+				t.Errorf("Location = %q, want %q", got, tt.wantLocation)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(page, w) {
+					t.Errorf("the page doesn't contain %q", w)
+				}
+			}
+			for _, w := range tt.notWant {
+				if strings.Contains(page, w) {
+					t.Errorf("the page contains %q", w)
+				}
+			}
+			for h, want := range tt.wantHeaders {
+				if got := resp.Header.Get(h); got != want {
+					t.Errorf("%s = %q, want %q", h, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestOwnerDashboardCSP(t *testing.T) {
+	s := newSite(t, Options{})
+	tests := []struct {
+		name    string
+		signIn  SignIn
+		account string
+		want    string
+	}{
+		{name: "the signed-in owner's page lets its forms post to this server only", signIn: signInOn("U0FAKEVERIFIED"), account: "u1", want: s.cspForm},
+		{name: "with sign-in off the page has no form, and its CSP allows none", signIn: SignIn{}, want: s.csp},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux, _ := ownerSite(t, tt.signIn, tt.account, fakeSource{v: ownerView(t)}, true, nil)
+			resp, page := serve(mux, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
+			if got := resp.Header.Get("Content-Security-Policy"); got != tt.want {
+				t.Errorf("CSP %q, want %q", got, tt.want)
+			}
+			if m := fetches.FindString(page); m != "" {
+				t.Errorf("the page has %q, which makes a browser fetch something", m)
+			}
+			for _, m := range formAction.FindAllStringSubmatch(page, -1) {
+				if !strings.HasPrefix(m[1], "/") || strings.HasPrefix(m[1], "//") {
+					t.Errorf("a form posts to %q, which isn't a path on this server", m[1])
+				}
+			}
+		})
+	}
+}
+
+func TestZoneForm(t *testing.T) {
+	post := func(zone string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/dashboard/zone", strings.NewReader("zone="+zone))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		return r
+	}
+	tests := []struct {
+		name         string
+		signIn       SignIn
+		account      string
+		sameOrigin   bool
+		setZone      error
+		body         string
+		wantCode     int
+		wantLocation string
+		wantCalls    []zoneCall
+		want         string
+	}{
+		{
+			name:   "a zone sent from the owner's dashboard is saved for their account, trimmed, and the browser goes back to the dashboard",
+			signIn: signInOn("U0FAKEVERIFIED"), account: "u1", sameOrigin: true, body: "+America%2FNew_York+",
+			wantCode: 303, wantLocation: "/dashboard", wantCalls: []zoneCall{{"u1", "America/New_York"}},
+		},
+		{
+			name:   "a zone pairtime doesn't know is refused beside the form, and the dashboard still shows",
+			signIn: signInOn("U0FAKEVERIFIED"), account: "u1", sameOrigin: true, body: "Mars", setZone: fmt.Errorf("rollup: %q: %w", "Mars", rollup.ErrBadZone),
+			wantCode: 422, wantCalls: []zoneCall{{"u1", "Mars"}}, want: `<p class="error" role="alert">That isn&#39;t a time zone pairtime knows.`,
+		},
+		{
+			name:   "a zone that doesn't save for another reason is an error, not a refusal",
+			signIn: signInOn("U0FAKEVERIFIED"), account: "u1", sameOrigin: true, body: "Europe%2FParis", setZone: context.DeadlineExceeded,
+			wantCode: 500, wantCalls: []zoneCall{{"u1", "Europe/Paris"}},
+		},
+		{
+			name:   "a post that doesn't come from this server's pages is refused, and nothing is saved",
+			signIn: signInOn("U0FAKEVERIFIED"), account: "u1", sameOrigin: false, body: "UTC",
+			wantCode: 403,
+		},
+		{
+			name:   "a post that isn't signed in goes to sign-in, and nothing is saved",
+			signIn: signInOn(""), sameOrigin: true, body: "UTC",
+			wantCode: 303, wantLocation: "/auth/hca/login?return_to=/dashboard",
+		},
+		{
+			name:   "a post whose session can't be read is an error, not a trip to sign-in, and nothing is saved",
+			signIn: signInOn("U0FAKEVERIFIED"), account: unreadable, sameOrigin: true, body: "UTC",
+			wantCode: 500,
+		},
+		{
+			name:   "with sign-in off the form saves nothing and goes back to the dashboard",
+			signIn: SignIn{}, sameOrigin: true, body: "UTC",
+			wantCode: 303, wantLocation: "/dashboard",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux, calls := ownerSite(t, tt.signIn, tt.account, fakeSource{v: ownerView(t)}, tt.sameOrigin, tt.setZone)
+			resp, page := serve(mux, post(tt.body))
+			if resp.StatusCode != tt.wantCode {
+				t.Fatalf("POST /dashboard/zone = %d, want %d", resp.StatusCode, tt.wantCode)
+			}
+			if got := resp.Header.Get("Location"); got != tt.wantLocation {
+				t.Errorf("Location = %q, want %q", got, tt.wantLocation)
+			}
+			if !reflect.DeepEqual(*calls, tt.wantCalls) {
+				t.Errorf("SetZone calls %v, want %v", *calls, tt.wantCalls)
+			}
+			if tt.want != "" && !strings.Contains(page, tt.want) {
+				t.Errorf("the page doesn't contain %q", tt.want)
+			}
+		})
+	}
+}
+
+func TestCapitalize(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{name: "a lower-case first letter goes up", in: "your agent", want: "Your agent"},
+		{name: "a name that starts in upper case stays", in: "Claude Code", want: "Claude Code"},
+		{name: "nothing stays nothing", in: "", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := capitalize(tt.in); got != tt.want {
+				t.Errorf("capitalize(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// manyView is an owner's view of seven projects, p1 the busiest over the
+// month and p7 the quietest, with today's time in the projects week names,
+// and today's agent-only time, and none of the owner's, in those
+// agentWeek names.
+func manyView(t *testing.T, agentWeek []string, week ...string) dashboard.View {
+	t.Helper()
+	var rows []dashboard.Row
+	for i := 1; i <= 7; i++ {
+		key := "p" + strconv.Itoa(i)
+		// Earlier in the month, more for the lower numbers.
+		rows = append(rows, dashboard.Row{Day: "2026-11-01", Project: key, Kind: "prompting", Level: "A", Seconds: float64((8 - i) * 3600)})
+	}
+	for _, key := range week {
+		rows = append(rows, dashboard.Row{Day: "2026-11-20", Project: key, Kind: "prompting", Level: "A", Seconds: 1800})
+	}
+	for _, key := range agentWeek {
+		rows = append(rows, dashboard.Row{Day: "2026-11-20", Project: key, Agent: true, Seconds: 2400})
+	}
+	v, err := dashboard.Build(dashboard.Meta{Today: "2026-11-20", TZ: "UTC", Agent: dashboard.AgentName}, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestManyProjects(t *testing.T) {
+	tests := []struct {
+		name      string
+		week      []string
+		agentWeek []string
+		section   string
+		want      []string
+		notWant   []string
+	}{
+		{
+			name:    "past five projects in a week, the chart draws the rest together as Other, in its own gray",
+			week:    []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7"},
+			section: "week",
+			want: []string{
+				`<li><span class="key c5"></span>p5</li>`,
+				`<li><span class="key co"></span>Other</li>`,
+				`title="Other, 1h"`,
+			},
+			notWant: []string{`<li><span class="key co"></span>p6</li>`, `<span class="key c6">`},
+		},
+		{
+			name:    "the table still lists each project past the fifth by name",
+			week:    []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7"},
+			section: "week",
+			want:    []string{"<th>p6</th><th>p7</th><th>Total</th>"},
+		},
+		{
+			name:    "a project that is the week's only one gets a color of its own, though the month ranks it sixth",
+			week:    []string{"p6"},
+			section: "week",
+			want:    []string{`<li><span class="key c1"></span>p6</li>`, `title="p6, 30m"`},
+			notWant: []string{"Other"},
+		},
+		{
+			name:      "projects with only the agent's time this week don't take the colors, so the week's one project with the owner's time gets one though five agent-only projects rank above it",
+			week:      []string{"p6"},
+			agentWeek: []string{"p1", "p2", "p3", "p4", "p5"},
+			section:   "week",
+			want:      []string{`<li><span class="key c1"></span>p6</li>`, `title="p6, 30m"`},
+			notWant:   []string{"Other"},
+		},
+		{
+			name:    "a project keeps its color in every section: the week's only project is c1 in the projects table too",
+			week:    []string{"p6"},
+			section: "projects",
+			want:    []string{`<tr><td><span class="key c1"></span>p6</td>`, `<tr><td><span class="key c2"></span>p1</td>`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mux, _ := ownerSite(t, signInOn("U0FAKEVERIFIED"), "u1", fakeSource{v: manyView(t, tt.agentWeek, tt.week...)}, true, nil)
+			_, page := serve(mux, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
+			if page = sectionOf(page, tt.section); page == "" {
+				t.Fatalf("the page has no section %q", tt.section)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(page, w) {
+					t.Errorf("the section doesn't contain %q", w)
+				}
+			}
+			for _, w := range tt.notWant {
+				if strings.Contains(page, w) {
+					t.Errorf("the section contains %q", w)
+				}
 			}
 		})
 	}

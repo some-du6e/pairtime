@@ -16,7 +16,7 @@
     "source": {"$ref": "#/$defs/source", "description": "What the record claims produced it."},
     "via": {"$ref": "#/$defs/via", "description": "How the pairtime agent received the record. The agent sets it and overwrites whatever a sender wrote, so a sender can't choose its own."},
     "harness": {"$ref": "#/$defs/harness"},
-    "harness_version": {"$ref": "#/$defs/text64", "description": "The harness's version as it reports it."},
+    "harness_version": {"$ref": "#/$defs/version", "description": "The harness's version as it reports it, when that is a version. Absent when the harness reports none, or reports something else."},
     "session_key": {"$ref": "#/$defs/key", "description": "The harness session id salted per device, or \"none\" for OS and git events."},
     "project_key": {"$ref": "#/$defs/key", "description": "The client's id for the project. Absent when no project applies."},
     "kind": {"$ref": "#/$defs/kind"},
@@ -69,6 +69,7 @@
     "count": {"type": "integer", "minimum": 0},
     "seconds": {"type": "number", "minimum": 0},
     "text64": {"type": "string", "maxLength": 64, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$", "description": "One line of text: no control characters."},
+    "version": {"type": "string", "maxLength": 64, "pattern": "^v?[0-9]+(\\.[0-9]+){0,3}([-+][0-9A-Za-z][0-9A-Za-z.-]{0,40})?$", "description": "A version, such as 2.1.327, v0.1.0-alpha.1 or 0.1.0+3dbf6d4: an optional v, one to four dot-separated numbers, and an optional - or + suffix of letters, digits, dots and hyphens (D-version-grammar). A bare word, such as a file, folder or host name, is not a version."},
 
     "kind": {"enum": ["session.start", "session.end", "prompt.submit", "agent.output", "agent.tool", "agent.permission", "agent.interrupt", "agent.queue", "agent.stop", "agent.subagent", "editor.activity", "shell.command", "git.change", "os.presence", "os.focus", "os.power", "otel.active_time", "cli.track"]},
     "source": {"enum": ["hook", "log", "otel", "os", "editor", "shell", "git", "cli", "mcp"], "description": "What the record claims produced it. cli is the AGENTS.md fallback, pairtime track."},
