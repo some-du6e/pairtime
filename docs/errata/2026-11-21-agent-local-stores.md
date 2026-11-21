@@ -1,6 +1,6 @@
 # Erratum: DESIGN 3.5's store table has no row for the commit records that wait for the uploader, nor for the hook calls that wait to be parsed
 
-Date 2026-11-21. Raised by WP-AG7, from the review of #136 (#148). Status: decided 2026-11-21 by the orchestrator for Karim (D-commit-records-local, D-held-calls-inbox-class). The agent keeps each change's commit records in `commits/` until the uploader sends them, and keeps the hook calls it can't parse yet in `held.jsonl`, its pending log and its replay file, with `inbox/`'s protections and a 7-day bound. DESIGN 3.5 gets the two rows below. #136 writes both stores. The uploader sends the commit records from theirs in a follow-up to WP-AG5, after #131.
+Date 2026-11-21. Raised by WP-AG7, from the review of #136 (#148). Status: decided 2026-11-21 by the orchestrator for Karim (D-commit-records-local, D-held-calls-inbox-class). The agent keeps each change's commit records in `commits/` until the uploader sends them, and keeps the hook calls it can't parse yet in `held.jsonl`, its pending log and its replay file, with `inbox/`'s protections and a 7-day bound. DESIGN 3.5 gets the two rows below. #136 writes both stores. The uploader sends the commit records from theirs in a follow-up to WP-AG5, after #131. Applied to DESIGN 3.5 on 2026-11-21 by #160.
 
 ## Input
 

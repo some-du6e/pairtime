@@ -1,6 +1,6 @@
 # Erratum: the server can't draw DESIGN 3.8's chess clock, because a tier-1 bucket carries neither agent-only seconds nor the agent's project
 
-Date 2026-11-20. Raised by WP-DB0 (the dashboard wave), from the review of #125. Status: decided 2026-11-20 by the orchestrator for Karim: option 1 (D-bucket-agent-only). Every tier-1 minute bucket gains `agent_only{p: s}`, the seconds in the minute a turn of each project ran that weren't credited to that project. WP-EV3 adds it to DESIGN 4.3, `pkg/event` and the schema. WP-SC4 fills it, ingest accepts it, the uploader sends it, and the server's chess clock reads it. Until those land, `/demo`'s sample already shows agent-only time per project, and no real dashboard is served.
+Date 2026-11-20. Raised by WP-DB0 (the dashboard wave), from the review of #125. Status: decided 2026-11-20 by the orchestrator for Karim: option 1 (D-bucket-agent-only). Every tier-1 minute bucket gains `agent_only{p: s}`, the seconds in the minute a turn of each project ran that weren't credited to that project. WP-EV3 adds it to DESIGN 4.3 and to `pkg/event`'s minute bucket, whose `Tier1BucketFields` lists the tier-1 fields. docs/schema/event.schema.json describes events, not buckets, so it doesn't change. WP-SC4 fills it, ingest accepts it, the uploader sends it, and the server's chess clock reads it. Until those land, `/demo`'s sample already shows agent-only time per project, and no real dashboard is served.
 
 ## Input
 

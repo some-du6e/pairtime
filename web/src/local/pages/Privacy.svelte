@@ -10,10 +10,10 @@
 	//
 	// The periods are docs/retention.json's device entries, in the file's
 	// order, then the inbox's row (retention.ts). This version has no vault
-	// (DESIGN 3.5), so the only prompt text it keeps is the inbox's, as
-	// plain text. Who can read it says so, and speaks of the vault's
-	// encryption only as what a later version, which keeps prompt text
-	// there, will do.
+	// (DESIGN 3.5), so the only prompt text it keeps is in the inbox and in
+	// the hook calls the agent holds, as plain text. Who can read it says
+	// so, and speaks of the vault's encryption only as what a later
+	// version, which keeps prompt text there, will do.
 	interface Props {
 		mode: Mode;
 	}
@@ -69,10 +69,10 @@
 <section class="pt-card" aria-labelledby="who-title" data-testid="who">
 	<h2 id="who-title">Who can read it</h2>
 	<p>
-		This version of pairtime keeps the text of your prompts, and what your AI tool sent with them, in one place only:
-		the inbox, until the agent reads it, as the table above says. The inbox is plain text, not encrypted. It's in a folder that other people's accounts on this
-		computer can't open, but an administrator can, and so can any program running as you. A backup of your home folder
-		can copy it as it is.
+		This version of pairtime keeps the text of your prompts, and what your AI tool sent with them, in two places only:
+		the inbox, until the agent reads it, and the hook calls it holds, until it has recorded them, as the table above says.
+		Both are plain text, not encrypted. They're in a folder that other people's accounts on this computer can't open, but
+		an administrator can, and so can any program running as you. A backup of your home folder can copy them as they are.
 	</p>
 	<p data-testid="sketches">
 		The prompt similarity sketches (MinHash) in the table are not encrypted either. They're numbers worked out from your

@@ -766,8 +766,8 @@ Exit check: `restore-drill.yml` green; `probe.yml` green against `https://<host>
 
 - Depends on: WP-SV6.
 - Touches: `internal/server/rollup/`.
-- Build: additive upserts into `rollups_daily (user, project, day, activity_kind, level)`, so public totals can leave level C out (D11), from the delta between a bucket's revisions; one human minute per wall-clock minute per account across devices, with the `concurrent_devices` flag (SM 3.4); pending and final kept apart; `GET /api/v1/users/me/dashboard`. SM 5.3's `DAY_CAP_S` per user and local day across devices, applied after the merge, so a second device can't lift the cap.
-- CI checks: replaying revisions in random order converges to the same rollups; two devices crediting one minute keep one and raise the flag; dashboard totals equal the sum of stored final buckets.
+- Build: additive upserts into `rollups_daily (user, project, day, activity_kind, level)`, so public totals can leave level C out (D11), from the delta between a bucket's revisions; one human minute per wall-clock minute per account across devices (SM 3.4), with no stored flag, since the submission freeze computes `concurrent_devices` over the submitted window from `rollup_minutes` (D-no-ingest-flags); pending and final kept apart; `GET /api/v1/users/me/dashboard`. SM 5.3's `DAY_CAP_S` per user and local day across devices, applied after the merge, so a second device can't lift the cap.
+- CI checks: replaying revisions in random order converges to the same rollups; two devices crediting one minute keep one and store no flag, and `rollup.ConcurrentMinutes` counts the minute as concurrent over a window that holds it; dashboard totals equal the sum of stored final buckets.
 - Oracle: SM 3.4; the sum invariant over stored buckets.
 
 ### WP-SV8. Live stream and the owner dashboard
@@ -1230,8 +1230,8 @@ Exit check: `loadtest.yml` green; the red-team step green or every remaining cas
 
 - Depends on: WP-RL1, WP-IN2, WP-AD16.
 - Touches: `extension/vscode/`, `.github/workflows/{web,release}.yml`.
-- Build: DESIGN 5.11: an install channel and a status bar. Per-platform VSIX packages (`vsce package --target win32-x64` and the other targets of CP 4.2) carry the signed binary; first activation shows the consent screen and runs `pairtime install`; before it puts its bundled binary in place of an installed one, it runs the bundled binary's `version` with the same 60 s timeout and keeps the installed binary if that fails (docs/spec/update-manifest.md, Verifying step 8); the status-bar item reads the local `statusbar/today` endpoint; release publishes to the Marketplace and Open VSX. No change-shape events in v1.
-- CI checks: `web.yml` packages every target; each VSIX loads under `@vscode/test-electron` and finds its binary; a VSIX whose bundled binary exits non-zero leaves the installed binary in place; the status bar shows a fixture store's total.
+- Build: DESIGN 5.11: an install channel and a status bar. Per-platform VSIX packages (`vsce package --target win32-x64` and the other targets of CP 4.2) carry the signed binary; the extension checks its bundled binary against the signed release manifest's `binary_sha256` before it runs it, since no install script checked that binary (DESIGN 5.9 step 1); first activation shows the consent screen and runs `pairtime install`; before it puts its bundled binary in place of an installed one, it runs the bundled binary's `version` with the same 60 s timeout and keeps the installed binary if that fails (docs/spec/update-manifest.md, Verifying step 8); the status-bar item reads the local `statusbar/today` endpoint; release publishes to the Marketplace and Open VSX. No change-shape events in v1.
+- CI checks: `web.yml` packages every target; each VSIX loads under `@vscode/test-electron` and finds its binary; a VSIX whose bundled binary doesn't match the signed manifest's `binary_sha256` never runs it; a VSIX whose bundled binary exits non-zero leaves the installed binary in place; the status bar shows a fixture store's total.
 - Oracle: VS Code's own extension host.
 - Human: Karim creates the Marketplace publisher and the Open VSX namespace and adds their tokens.
 

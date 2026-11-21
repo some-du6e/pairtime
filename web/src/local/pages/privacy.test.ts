@@ -117,11 +117,13 @@ describe('Privacy', () => {
 			},
 		},
 		{
-			name: "the inbox's days are inbox.KeepDays in the Go source, so the words change with it",
+			name: "the inbox's days are inbox.KeepDays in the Go source, in its own row and in the transcripts entry pairtimed's notice shows too, so the words change with it",
 			check: (html) => {
 				const n = keepDays();
+				const later = n === 1 ? '1 day' : `${n} days`;
 				expect(inboxKeepDays).toBe(n);
-				expect(rows(html).at(-1)?.kept).toContain(`deletes it ${n === 1 ? '1 day' : `${n} days`} later`);
+				expect(rows(html).at(-1)?.kept).toContain(`deletes it ${later} later`);
+				expect(device.find((e) => e.id === 'device.transcripts')?.kept).toContain(`set aside and deleted ${later} later`);
 			},
 		},
 		{
@@ -135,10 +137,12 @@ describe('Privacy', () => {
 			},
 		},
 		{
-			name: 'Who can read it says the inbox is the one place this version keeps prompt text, and that a program running as you can read it',
+			name: 'Who can read it says the inbox and the hook calls the agent holds are the two places this version keeps prompt text, and that a program running as you can read them',
 			check: (html) => {
 				const t = text(html);
-				expect(t).toContain('This version of pairtime keeps the text of your prompts, and what your AI tool sent with them, in one place only: the inbox');
+				expect(t).toContain(
+					'This version of pairtime keeps the text of your prompts, and what your AI tool sent with them, in two places only: the inbox, until the agent reads it, and the hook calls it holds, until it has recorded them',
+				);
 				expect(t).toContain('so can any program running as you');
 				expect(t).toContain('but not from a program running as you');
 			},
