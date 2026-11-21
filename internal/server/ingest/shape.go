@@ -116,67 +116,67 @@ func join(path, name string) string {
 // index names element i of the list at path.
 func index(path string, i int) string { return fmt.Sprintf("%s[%d]", path, i) }
 
-// member is one member of a JSON object, as it appears.
-type member struct {
-	name  string
-	value json.RawMessage
-}
-
-// members reads the JSON object raw member by member, in the order they
-// appear, a repeated name as often as it appears. It reports false when
-// raw isn't an object.
-func members(raw json.RawMessage) ([]member, bool) {
+// eachMember calls fn with each member of the JSON object raw, in the
+// order they appear and a repeated name as often as it appears, until fn
+// returns false. It reads raw as it goes, so a caller that stops early
+// never pays for the members after that. It reports false when raw isn't
+// an object.
+func eachMember(raw json.RawMessage, fn func(name string, value json.RawMessage) bool) bool {
 	if jsonKind(raw) != '{' {
-		return nil, false
+		return false
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
-		return nil, false
+		return false
 	}
-	var out []member
 	for dec.More() {
 		t, err := dec.Token()
 		if err != nil {
-			return nil, false
+			return false
 		}
 		name, ok := t.(string)
 		if !ok {
-			return nil, false
+			return false
 		}
 		var v json.RawMessage
 		if err := dec.Decode(&v); err != nil {
-			return nil, false
+			return false
 		}
-		out = append(out, member{name: name, value: v})
+		if !fn(name, v) {
+			return true
+		}
 	}
-	if t, err := dec.Token(); err != nil || t != json.Delim('}') {
-		return nil, false
-	}
-	return out, true
+	t, err := dec.Token()
+	return err == nil && t == json.Delim('}')
 }
 
-// memberMap reads the JSON object raw into a map. repeated reports a name
-// that appears twice, which ingest-v1 2.3 refuses; ok is false when raw
-// isn't an object.
-func memberMap(raw json.RawMessage) (m map[string]json.RawMessage, repeated, ok bool) {
-	ms, ok := members(raw)
-	if !ok {
-		return nil, false, false
-	}
-	m = make(map[string]json.RawMessage, len(ms))
-	for _, mb := range ms {
-		if _, seen := m[mb.name]; seen {
+// memberMap reads the JSON object raw, a map of at most max members. It
+// stops at the first name that repeats, which ingest-v1 2.3 refuses
+// (repeated), or at member max + 1 (over), so a map past its bound costs
+// no more than max members. ok is false when raw isn't an object.
+func memberMap(raw json.RawMessage, max int) (m map[string]json.RawMessage, repeated, over, ok bool) {
+	m = map[string]json.RawMessage{}
+	ok = eachMember(raw, func(name string, v json.RawMessage) bool {
+		if _, seen := m[name]; seen {
 			repeated = true
+			return false
 		}
-		m[mb.name] = mb.value
-	}
-	return m, repeated, true
+		if len(m) == max {
+			over = true
+			return false
+		}
+		m[name] = v
+		return true
+	})
+	return m, repeated, over, ok
 }
 
 // object reads the object at path and checks its members against the
 // allowlist, in the order they appear: a member it doesn't name is
 // unknown_field at path, and a name that repeats is bad_rule at path,
-// neither naming the member. A missing required one is missing_field.
+// neither naming the member. Either stops the reading there, so an object
+// holds at most the allowlist's members however many it has. A missing
+// required one is missing_field.
 func object(raw json.RawMessage, path string, required, optional []string) (map[string]json.RawMessage, *itemErr) {
 	if jsonKind(raw) != '{' {
 		if path == "" {
@@ -184,19 +184,26 @@ func object(raw json.RawMessage, path string, required, optional []string) (map[
 		}
 		return nil, shapeErr(CodeBadType, path)
 	}
-	ms, ok := members(raw)
-	if !ok {
+	m := make(map[string]json.RawMessage, len(required)+len(optional))
+	var e *itemErr
+	ok := eachMember(raw, func(name string, v json.RawMessage) bool {
+		_, seen := m[name]
+		switch {
+		case !slices.Contains(required, name) && !slices.Contains(optional, name):
+			e = shapeErr(CodeUnknownField, path)
+		case seen:
+			e = shapeErr(CodeBadRule, path)
+		default:
+			m[name] = v
+			return true
+		}
+		return false
+	})
+	switch {
+	case e != nil:
+		return nil, e
+	case !ok:
 		return nil, shapeErr(CodeBadType, path)
-	}
-	m := make(map[string]json.RawMessage, len(ms))
-	for _, mb := range ms {
-		if !slices.Contains(required, mb.name) && !slices.Contains(optional, mb.name) {
-			return nil, shapeErr(CodeUnknownField, path)
-		}
-		if _, seen := m[mb.name]; seen {
-			return nil, shapeErr(CodeBadRule, path)
-		}
-		m[mb.name] = mb.value
 	}
 	for _, name := range required {
 		if _, ok := m[name]; !ok {
@@ -494,14 +501,13 @@ func parseBucket(raw json.RawMessage) (event.MinuteBucket, *itemErr) {
 // (D-bucket-agent-only). Names are checked in sorted order, so the same
 // bucket always fails the same way.
 func parseAgentOnly(raw json.RawMessage) (map[string]float64, *itemErr) {
-	m, repeated, ok := memberMap(raw)
+	m, repeated, over, ok := memberMap(raw, maxAgentOnly)
 	switch {
 	case !ok:
 		return nil, shapeErr(CodeBadType, "agent_only")
 	case repeated:
 		return nil, shapeErr(CodeBadRule, "agent_only")
-	}
-	if len(m) > maxAgentOnly {
+	case over:
 		return nil, shapeErr(CodeTooMany, "agent_only")
 	}
 	names := make([]string, 0, len(m))
@@ -581,14 +587,13 @@ func parseSlot(raw json.RawMessage, path string) (event.BucketSlot, *itemErr) {
 // codes, checked in sorted order so the same bucket always fails the same
 // way.
 func parseUncredited(raw json.RawMessage) (map[event.Reason]float64, *itemErr) {
-	m, repeated, ok := memberMap(raw)
+	m, repeated, over, ok := memberMap(raw, maxUncredited)
 	switch {
 	case !ok:
 		return nil, shapeErr(CodeBadType, "uncredited")
 	case repeated:
 		return nil, shapeErr(CodeBadRule, "uncredited")
-	}
-	if len(m) > maxUncredited {
+	case over:
 		return nil, shapeErr(CodeTooMany, "uncredited")
 	}
 	out := make(map[event.Reason]float64, len(m))
@@ -737,18 +742,15 @@ func hasRepeat[T comparable](vs []T) bool {
 // objectMember returns member name of the object raw, when raw is an
 // object that has it exactly once.
 func objectMember(raw json.RawMessage, name string) (json.RawMessage, bool) {
-	ms, ok := members(raw)
-	if !ok {
-		return nil, false
-	}
 	var v json.RawMessage
 	n := 0
-	for _, mb := range ms {
-		if mb.name == name {
-			v, n = mb.value, n+1
+	ok := eachMember(raw, func(k string, value json.RawMessage) bool {
+		if k == name {
+			v, n = value, n+1
 		}
-	}
-	return v, n == 1
+		return n < 2
+	})
+	return v, ok && n == 1
 }
 
 // optCount reads one of a commit's optional counts.
@@ -767,14 +769,13 @@ func optCount(m map[string]json.RawMessage, field string) (*int64, *itemErr) {
 // parseKinds reads credited_seconds_since_parent{kind: s}: each member's
 // name an activity kind of SM 5.1, and its value seconds, 0 to 1e9.
 func parseKinds(raw json.RawMessage, field string) (map[event.Activity]float64, *itemErr) {
-	m, repeated, ok := memberMap(raw)
+	m, repeated, over, ok := memberMap(raw, maxKinds)
 	switch {
 	case !ok:
 		return nil, shapeErr(CodeBadType, field)
 	case repeated:
 		return nil, shapeErr(CodeBadRule, field)
-	}
-	if len(m) > maxKinds {
+	case over:
 		return nil, shapeErr(CodeTooMany, field)
 	}
 	names := make([]string, 0, len(m))

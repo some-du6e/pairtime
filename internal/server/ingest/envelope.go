@@ -336,9 +336,10 @@ func parseBody(data []byte) (body, *refusal) {
 			case '{':
 				// An empty object means no labels, as an absent member
 				// does (ingest-v1 2.3).
-				if ms, ok := members(raw); !ok {
+				some := false
+				if !eachMember(raw, func(string, json.RawMessage) bool { some = true; return false }) {
 					err = errShape
-				} else if len(ms) > 0 {
+				} else if some {
 					b.labels = raw
 				}
 			default:

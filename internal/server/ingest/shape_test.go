@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -741,6 +742,54 @@ func TestRepeatedNames(t *testing.T) {
 			t.Errorf("b = %d with %+v, want no b and a refusal", br.b, e)
 		}
 	})
+}
+
+// TestObjectsStopEarly checks that an object of hundreds of thousands of
+// members, which a few KiB of gzip inflate to, is refused at the first
+// member that fails, without a slice or map entry per member: an item
+// allocates a few copies of its own bytes at most (ingest-v1 2.4).
+func TestObjectsStopEarly(t *testing.T) {
+	const n = 300_000
+	many := func(prefix string) string {
+		var b strings.Builder
+		b.WriteByte('{')
+		for i := range n {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			fmt.Fprintf(&b, `"%s%d":0`, prefix, i)
+		}
+		b.WriteByte('}')
+		return b.String()
+	}
+	bucket := string(shareableJSON(t, sampleBucket("d_test", sampleMinute, 1)))
+	tests := []struct {
+		name string
+		raw  []byte
+		want shapeResult
+	}{
+		{"a bucket of unknown members is refused at the first", []byte(strings.TrimSuffix(bucket, "}") + "," + many("zz")[1:]), shapeResult{CodeUnknownField, ""}},
+		{"an uncredited map past its bound is refused at the member after it", []byte(strings.Replace(bucket, `"uncredited":{"X.absent":15,"X.agent_only":2.5}`, `"uncredited":`+many("X.a"), 1)), shapeResult{CodeTooMany, "uncredited"}},
+		{"an agent_only map past its bound is refused at the member after it", []byte(strings.Replace(bucket, `"agent_running_s":30`, `"agent_running_s":30,"agent_only":`+many("p_"), 1)), shapeResult{CodeTooMany, "agent_only"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if len(tt.raw) < n*5 {
+				t.Fatalf("the item is %d bytes, so it holds no big object and tests nothing", len(tt.raw))
+			}
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			_, e := checkBucket(tt.raw)
+			runtime.ReadMemStats(&after)
+			if got := outcomeOf(e); got != tt.want {
+				t.Fatalf("got %+v, want %+v", got, tt.want)
+			}
+			if grew, limit := after.TotalAlloc-before.TotalAlloc, uint64(8*len(tt.raw)+1<<20); grew > limit {
+				t.Errorf("checking %d bytes allocated %d, more than %d: it kept a member past the one that failed", len(tt.raw), grew, limit)
+			}
+		})
+	}
 }
 
 func TestRuleField(t *testing.T) {
