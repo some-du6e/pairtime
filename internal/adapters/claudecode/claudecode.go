@@ -221,8 +221,8 @@ type session struct {
 	// time, in Unix milliseconds, at which a call named it. Calls can reach
 	// Parse in another order than they were made, a spooled one after a
 	// later one over the socket, so whether a call is earlier than another
-	// goes by the times they carry. An id of started with no time, as from
-	// memory an older adapter saved, counts as named before any call.
+	// goes by the times they carry. An id of started with no time, such as
+	// one loaded from saved memory, counts as named before any call.
 	named map[string]int64
 	// turn is the turn the session's latest call named: its prompt_id, or
 	// one the adapter made up when Claude Code sent none.

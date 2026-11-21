@@ -222,6 +222,9 @@ func TestQueuedMessage(t *testing.T) {
 		{name: "a message queued after such a prompt is still that turn's agent.queue",
 			calls: []adapters.RawRecord{tool("p1"), prompt("p1", goal), prompt("p1", "Then say which test.")}, at: []int64{2000, 1000, 3000},
 			want: "agent.tool,prompt.submit,agent.queue", turn: "p1"},
+		{name: "a message queued before the turn's call that reached the adapter first is agent.queue too, since the late prompt dates the turn",
+			calls: []adapters.RawRecord{tool("p1"), prompt("p1", goal), prompt("p1", "Then say which test.")}, at: []int64{2000, 1000, 1500},
+			want: "agent.tool,prompt.submit,agent.queue", turn: "p1"},
 	}
 	keys := adapters.FixtureKeys()
 	const sid = "11111111-2222-4333-8444-555555555555" // hookRaw's
