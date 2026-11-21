@@ -16,6 +16,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/internal/agent/presence"
 	"github.com/some-du6e/pairtime/internal/agent/procs"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
@@ -57,7 +58,7 @@ func TestFocusWiring(t *testing.T) {
 		})
 	}
 	t.Cleanup(stopAll)
-	stops = append(stops, a.startLedger(), a.startPresence())
+	stops = append(stops, a.startLedger(), a.startPresence(presence.OS{}))
 
 	// The keystore opens on the ledger's goroutine. Waiting for K_app means
 	// every record below is made with it.

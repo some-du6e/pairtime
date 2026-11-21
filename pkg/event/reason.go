@@ -2,7 +2,10 @@
 
 package event
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // Reason is a reason code (SM 5.2): why a second was credited, or why not.
 // Uncredited reasons start with "X.". A credit reason may end in
@@ -147,6 +150,23 @@ func (r Reason) Credited() bool { return r.Activity() != "" }
 
 // Uncredited reports whether r is an uncredited reason.
 func (r Reason) Uncredited() bool { return uncreditedReasons.has(r) }
+
+// DarkFlow reports whether r is one of SM 4.2's dark-flow discounts, the
+// loops: X.reroll, X.rewrite_loop, X.same_error or X.autopilot.
+func (r Reason) DarkFlow() bool { return darkFlowReasons.has(r) }
+
+// CreditReasons returns every credit reason, without suffixes, in SM 5.2
+// order.
+func CreditReasons() []Reason {
+	out := make([]Reason, len(creditReasons))
+	for i, cr := range creditReasons {
+		out[i] = cr.reason
+	}
+	return out
+}
+
+// UncreditedReasons returns every uncredited reason, in SM 5.2 order.
+func UncreditedReasons() []Reason { return slices.Clone(uncreditedReasons.values) }
 
 // Valid reports whether r is a reason code in SM 5.2.
 func (r Reason) Valid() bool { return r.Credited() || r.Uncredited() }

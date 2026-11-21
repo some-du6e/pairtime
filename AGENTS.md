@@ -28,6 +28,7 @@ A change is done when every workflow its PR started is green. A WP marked "Race:
 | server-image.yml | the server image for linux/amd64 and linux/arm64, pushed to ghcr.io/some-du6e/pairtimed as `sha-<commit>`, and as `main` from main | pushes to main touching cmd/pairtimed/, internal/server/, deploy/, Dockerfile.pairtimed, go.mod or go.sum; by hand |
 | tidy.yml | `go mod tidy` and npm lockfiles, committed to the branch | by hand |
 | fixtures.yml | the fixture provenance check | by hand |
+| pages-preview.yml | pairtimed's public pages as the server sends them, with each page's CSP in headers.json, uploaded as the `pages` artifact to open in a browser | PRs touching internal/server/pages/, internal/server/dashboard/ or tools/pagespreview/; by hand |
 
 Any workflow also runs by hand: `gh workflow run <file> --ref <branch>`.
 

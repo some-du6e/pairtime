@@ -579,15 +579,19 @@ func TestSampler(t *testing.T) {
 			want:   []string{"1s presence idle=0.5 keys=0.5"},
 		},
 		{
-			name:   "with no idle source nothing is ever recorded or sealed",
+			name:   "with no idle source nothing is ever sampled or recorded, but suspends and locks still seal (DESIGN 3.3, 3.6)",
 			noIdle: true,
 			acts: []act{
 				at(s(1), focusOn(event.AppTerminal)),
 				at(s(2), power(event.PowerLock)),
+				at(s(3), power(event.PowerUnlock)),
+				at(s(4), power(event.PowerSuspend)),
+				at(s(5), power(event.PowerResume)),
 			},
-			end:     s(61),
-			want:    []string{},
-			noTimer: true,
+			end:       s(61),
+			want:      []string{},
+			wantSeals: []event.PowerOp{event.PowerLock, event.PowerSuspend},
+			noTimer:   true,
 		},
 	}
 	for _, tt := range tests {
