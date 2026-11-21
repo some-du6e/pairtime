@@ -6,7 +6,7 @@ pairtime is an open-source AI time tracker, licensed AGPL-3.0. So far it's a pub
 
 ## What it credits
 
-A second counts only when a human act opened a window over it, the OS saw the person at the machine, and focus was on that project. The acts are prompts, permission answers, interrupts, hand edits, typed commands and commits. Reading the agent's output counts up to the time it takes to read. Agent-only runtime, headless and scheduled runs, re-roll loops, idle time and jigglers earn nothing.
+A second counts only when a human act opened a window over it, the OS saw the person at the machine, and focus was on that project. Where the computer can't tell which window is in front, as on some Linux desktops, a second that passes the other tests still counts, at level C. The acts are prompts, permission answers, interrupts, hand edits, typed commands and commits. Reading the agent's output counts up to the time it takes to read. Agent-only runtime, headless and scheduled runs, re-roll loops, idle time and jigglers earn nothing.
 
 A reviewer can recompute any credited minute by hand from the public rules and the events listed against it. pairtime won't accept a program's decision on a submission until the rules are calibrated against two human raters and frozen, planned for 2027-01-04 (DESIGN 1.1, 6.1, 6.7).
 
@@ -18,7 +18,7 @@ Each credited second gets one level (DESIGN 6.4):
 |---|---|
 | A | Witnessed, meaning our server got it within 15 minutes, with OS input showing presence and the opt-in typing evidence showing the keyboard in use, with keys that other programs send left out |
 | B | Witnessed, without opt-in typing evidence: the OS shows input but can't tell keys from other input, or, on a Mac, can't tell a pressed key from one a program sends. Most Windows and Mac minutes are B unless the teen opts in to typing evidence |
-| C | Lookback, late uploads beyond the offline cap, or side-door records with no typing evidence. Only with program opt-in, only inside commit intervals that reached the forge, and at most at the handbook's third |
+| C | Lookback, late uploads beyond the offline cap, side-door records with no typing evidence, or time credited where the computer can't tell which window is in front (Linux desktops such as GNOME on Wayland without our extension, and KDE). Only with program opt-in, only inside commit intervals that reached the forge, and at most at the handbook's third |
 
 Time sent late after failed uploads keeps its A or B level for up to 3 hours per submission, and only if a commit reached the forge within 24 hours of reconnecting (DESIGN 6.2 D6).
 
