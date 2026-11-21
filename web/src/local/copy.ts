@@ -18,11 +18,17 @@ export const counts = [
 	"When the agent works on its own, that time is the agent's. It goes on the agent's clock, next to yours. The two clocks aren't a race. A long agent clock usually means the agent did big jobs while you steered.",
 ];
 
-/** Why a minute counts at each level, beside en.json's short words for it (SM 5.1, DESIGN 6.4, 6.2 D11). */
+/**
+ * Why a minute counts at each level, beside en.json's short words for it
+ * (SM 5.1, DESIGN 6.4, 6.2 D11). Level C leaves out D-focus-unknown's
+ * desktop that hides which window is in front: until WP-SC8 the scorer
+ * credits such time nothing, so saying it counts at level C would be
+ * untrue (D-design-5.9). WP-SC8 adds it here, with Focus.level_c.
+ */
 export const levelWhy: Record<Level, string> = {
 	A: 'Your computer saw you typing around the prompt, edit or command that started this time, and the tool you used reported that act itself.',
 	B: "Your computer saw your keyboard or mouse, but it can't tell typing apart from other input. Most Windows and Linux computers work this way. The tool you used reported the act itself.",
-	C: "pairtime had less to go on. The act came from pairtime track or a plugin with no typing seen before it, or from an editor pairtime couldn't check, or the desktop doesn't say which window is in front. Level C time shows here on your dashboard, but not on your profile, your build days or most programs.",
+	C: "pairtime had less to go on. The act came from pairtime track or a plugin with no typing seen before it, or from an editor pairtime couldn't check. Level C time shows here on your dashboard, but not on your profile, your build days or most programs.",
 };
 
 /**
