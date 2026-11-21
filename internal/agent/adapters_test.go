@@ -1165,11 +1165,13 @@ func TestFolderStillResolving(t *testing.T) {
 					t.Fatal(err)
 				}
 				runGit(t, dir, "init", "-q")
-				if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o600); err != nil {
+				// Each its own first commit, so the two repos' root commits,
+				// and so their projects, differ.
+				if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte(filepath.Base(dir)+"\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 				runGit(t, dir, "add", "README.md")
-				runGit(t, dir, "commit", "-q", "-m", "first")
+				runGit(t, dir, "commit", "-q", "-m", "first in "+filepath.Base(dir))
 			}
 			hold := holdGit(t, slow)
 
@@ -1347,6 +1349,60 @@ func TestMemorySavedWithItsRecords(t *testing.T) {
 			a.cancel()
 			if err := a.waitExit(t); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// TestHookCallsAfterTheWriterStopped checks that once the ledger writer
+// has stopped after a failure, a hook call waits for the next start, in
+// held.jsonl, rather than being parsed, refused and emptied out of the
+// pending log, and that the next start, whose Open recovers the ledger,
+// makes its records.
+func TestHookCallsAfterTheWriterStopped(t *testing.T) {
+	calls := readCapture(t)[:2] // the session's start, and its first prompt
+	r := newHookReplay(t)
+	opts := r.options([]keys.Store{})
+	a := startAgent(t, opts)
+	r.send(t, event.HarnessClaudeCode, calls[0], calls[0].Arrived)
+	waitParsed(t, a, 1)
+	writerFailedForTest.Store(true)
+	t.Cleanup(func() { writerFailedForTest.Store(false) })
+	r.send(t, event.HarnessClaudeCode, calls[1], calls[0].Arrived)
+	during := waitStatus(t, a, func(s statusReply) bool { return s.Adapters.Waiting == 1 && s.Problems["adapters.ledger"] != "" })
+	a.cancel()
+	if err := a.waitExit(t); err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.ReadFile(r.dirs.Held())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+	_, pendingErr := os.Stat(r.dirs.Held() + pendingSuffix)
+	writerFailedForTest.Store(false)
+	a = startAgent(t, opts)
+	waitParsed(t, a, 1)
+	a.cancel()
+	if err := a.waitExit(t); err != nil {
+		t.Fatal(err)
+	}
+	recs := readLedger(t, r.dirs, event.SourceHook)
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"while the writer was down the call waited unparsed, and doctor heard why",
+			during.Adapters.Waiting == 1 && during.Adapters.Harnesses[event.HarnessClaudeCode].Calls == 1},
+		{"the stop left it in held.jsonl, and nothing in the pending log",
+			bytes.Count(held, []byte(`"mac":`)) == 1 && errors.Is(pendingErr, fs.ErrNotExist)},
+		{"the next start made its record once, after the session's start, via plugin as an earlier run's held call",
+			len(recs) == 2 && recs[0].ev.Kind() == event.KindSessionStart && recs[1].ev.Kind() == event.KindPromptSubmit &&
+				recs[1].ev.Via == event.ViaPlugin},
+	}
+	for _, c := range checks {
+		t.Run(c.name, func(t *testing.T) {
+			if !c.ok {
+				t.Errorf("no: status %+v, problems %v, held %q, pending %v, %d records", during.Adapters, during.Problems, held, pendingErr, len(recs))
 			}
 		})
 	}
