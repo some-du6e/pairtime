@@ -19,8 +19,11 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
+	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/internal/devtoken"
+	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 )
 
 // TestUploadMode is config.toml as uploads obey it, read from the file:
@@ -166,6 +169,121 @@ func TestSignedIn(t *testing.T) {
 			sig, err := c.Sign(msg)
 			if err != nil || !ed25519.Verify(pub, msg, sig) {
 				t.Errorf("the signer doesn't sign with the key pairtime login registered: %v", err)
+			}
+		})
+	}
+}
+
+func TestSignInCache(t *testing.T) {
+	dir := t.TempDir()
+	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+	if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \"online\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := func(t *testing.T, at string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "account.json"), []byte(`{"v":1,"server":"https://pairtime.example","device_id":"d_testdevice00000000000000a","linked_at":"`+at+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	saved := accountCredentials
+	t.Cleanup(func() { accountCredentials = saved })
+	var (
+		reads int
+		fail  error
+	)
+	accountCredentials = func(home.Dirs, []keys.Store) (uploader.Credentials, bool, error) {
+		reads++
+		if fail != nil {
+			return uploader.Credentials{}, false, fail
+		}
+		return uploader.Credentials{Server: "https://pairtime.example", Token: "ptd_test"}, true, nil
+	}
+	a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}}
+	link(t, "2026-11-21T09:30:00Z")
+	a.credentials()
+	a.credentials()
+	once := reads
+	link(t, "2026-11-21T10:00:00Z") // pairtime logout, then pairtime login
+	_, relinked := a.credentials()
+	again := reads
+	fail = errors.New("the keyring is locked")
+	link(t, "2026-11-21T10:30:00Z")
+	a.credentials()
+	a.credentials()
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"the keystore is read once while account.json and keystore.json stay as they are", once == 1},
+		{"a new sign-in is read at the next upload", again == 2 && relinked},
+		{"a sign-in that doesn't read isn't asked for again at once", reads == 3},
+		{"doctor hears why", strings.Contains(a.currentProblems()["account"], "the keyring is locked")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: %d reads (%d, then %d)", reads, once, again)
+			}
+		})
+	}
+}
+
+// earlyLedger is the ledger writer as the uploader needs it, for an
+// uploader that never uploads.
+type earlyLedger struct{}
+
+func (earlyLedger) DeviceID() string                             { return "d_testdevice00000000000000a" }
+func (earlyLedger) StoreReceipt(uint64, pkgledger.Receipt) error { return nil }
+func (earlyLedger) UploadFailure(uint64, string) (uint64, error) { return 0, nil }
+
+// TestEarlyBatches is a batch the ledger writer seals before the uploader
+// exists, as ledger.Open seals what a crash left: it waits for the
+// uploader, which records it in the mode config.toml had at its seal, so a
+// batch sealed in local-only mode never goes.
+func TestEarlyBatches(t *testing.T) {
+	dir := t.TempDir()
+	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+	write := func(t *testing.T, text string) {
+		t.Helper()
+		if err := os.WriteFile(dirs.ConfigFile(), []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}}
+	write(t, "mode = \"local\"\n")
+	a.sealed(ledger.Batch{Row: pkgledger.BatchRow{B: 7, FirstSeq: 7, N: 1}, SealedAt: time.Now()})
+	write(t, "mode = \"online\"\n") // and online again by the time the uploader starts
+	st, _, err := state.Open(dirs.StateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := uploader.New(uploader.Options{
+		Ledger: earlyLedger{}, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
+		Params: newestTable(), LocalOnly: a.localOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.handEarly(u)
+	u.Close() // a stopped uploader records the modes it took in state.json
+	var place struct {
+		LocalFrom uint64 `json:"local_from"`
+	}
+	if _, err := st.Get(uploader.StateKey, &place); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"the batch sealed in local mode before the uploader existed is recorded local-only", place.LocalFrom == 7},
+		{"the uploader takes the batches sealed after it from then on", a.upload.Load() == u && len(a.early) == 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: local from %d", place.LocalFrom)
 			}
 		})
 	}

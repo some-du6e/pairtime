@@ -77,7 +77,7 @@ func (a *agent) serveStatus(w http.ResponseWriter, r *http.Request) {
 		PID:      os.Getpid(),
 		Started:  a.started.UTC(),
 		UptimeS:  int64(time.Since(a.started) / time.Second),
-		Mode:     a.config().Mode,
+		Mode:     a.uploadMode(),
 		Port:     a.port,
 		Wakeups:  a.sched.Wakeups(),
 		Jobs:     jobs,

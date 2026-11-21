@@ -20,7 +20,9 @@ const configDebounce = 300 * time.Millisecond
 // switching an opt-in off takes effect at once. It watches the directory,
 // not the file, because many editors save by renaming a new file over the
 // old one. If the watch can't start, edits apply at the next start, and the
-// status says so. It returns the step that stops the watch.
+// status says so; uploads follow config.toml's mode at once either way,
+// since they read the file itself (UploadConfig). It returns the step that
+// stops the watch.
 func (a *agent) watchConfig() func() {
 	w, err := fsnotify.NewWatcher()
 	if err == nil {
@@ -29,7 +31,7 @@ func (a *agent) watchConfig() func() {
 		}
 	}
 	if err != nil {
-		a.setProblem("config-watch", fmt.Sprintf("changes to config.toml apply at the next start, because watching it failed: %v", err))
+		a.setProblem("config-watch", fmt.Sprintf("changes to config.toml apply at the next start, apart from its mode, which uploads follow at once, because watching it failed: %v", err))
 		return func() {}
 	}
 	name := filepath.Base(a.dirs.ConfigFile())

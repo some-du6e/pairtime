@@ -72,12 +72,13 @@ func runPrivacy(args []string, stdout, stderr io.Writer) int {
 	// computer local-only until it's fixed.
 	cfg, broken := agent.UploadConfig(dirs)
 	if broken != "" && agent.Linked(dirs) {
-		fmt.Fprintf(stderr, "Nothing: %s.\nThe error: %s\n", agent.ConfigBroken, broken)
+		fmt.Fprintf(stderr, "Nothing: %s.\nThe error: %s\nOnce %s.\n", agent.ConfigBroken, broken, strings.TrimPrefix(agent.ConfigFixed, "once "))
 		return 0
 	}
 	creds, ok, err := agent.SignedIn(dirs, cfg, agentKeyStores)
 	if err != nil {
-		fmt.Fprintf(stderr, "pairtime privacy show: this computer is linked to a server, but its sign-in doesn't read, so nothing uploads: %v\n", err)
+		fmt.Fprintf(stderr, "Nothing: this computer is linked to a server, but its sign-in doesn't read, so it uploads nothing until it does, and what pairtime records meanwhile stays on this computer.\nThe error: %v\n", err)
+		return 0
 	}
 	return showUpload(stdout, stderr, dirs, creds, ok)
 }
@@ -107,6 +108,10 @@ func showUpload(stdout, stderr io.Writer, dirs home.Dirs, creds uploader.Credent
 		fmt.Fprintf(stderr, uploadsForked, p.Fork)
 		return 0
 	}
+	if p.Mismatch {
+		fmt.Fprint(stderr, uploadsMismatch)
+		return 0
+	}
 	if p.Stopped > 0 {
 		fmt.Fprint(stderr, uploadsStopped)
 	}
@@ -133,11 +138,11 @@ upload before it goes.
 
 // uploadsStopped is what privacy show says while the batch roots stop at a
 // batch sealed in local-only mode (uploader.Preview.Stopped).
-const uploadsStopped = `Uploads are stopped. config.toml said mode = "local" for a while after this
-computer was linked, and nothing pairtime records in local-only mode leaves
-this computer, so nothing it recorded from then on goes. To upload again,
-run pairtime logout, then pairtime login; what it records after that goes
-as usual.
+const uploadsStopped = `Uploads are stopped. config.toml kept this computer local-only for a while
+after it was linked (it said mode = "local", or it had an error), and
+nothing pairtime records in local-only mode leaves this computer, so
+nothing it recorded from then on goes. To upload again, run pairtime
+logout, then pairtime login; what it records after that goes as usual.
 
 `
 
@@ -147,6 +152,14 @@ const uploadsForked = `Uploads are stopped. The server's record of this computer
 from it at batch %d, as after a home folder restored from an old backup. This
 version of pairtime can't go on uploading under this computer's ID yet, so
 nothing more goes, and what pairtime records stays on this computer.
+`
+
+// uploadsMismatch is what privacy show says once the server said this
+// computer's device ID is another account's (uploader.Preview.Mismatch).
+const uploadsMismatch = `Uploads are stopped. The server says this computer's device ID belongs to
+another account. This version of pairtime can't go on uploading under this
+computer's ID yet, so nothing more goes, and what pairtime records stays on
+this computer.
 `
 
 // describeUpload says in plain words what upload p holds and where it goes.
