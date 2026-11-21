@@ -61,6 +61,9 @@ func Snapshot(ctx context.Context, o SnapshotOptions) (objstore.ObjectInfo, erro
 	if err := checkPrivateDir(o.Dir); err != nil {
 		return objstore.ObjectInfo{}, err
 	}
+	if err := CheckRoom(o.Dir, o.DBPath); err != nil {
+		return objstore.ObjectInfo{}, err
+	}
 	copyPath := filepath.Join(o.Dir, "pairtime-"+takenAt.Format(keyBackupTime)+".db")
 	// VACUUM INTO writes into an empty file that exists, and keeps its
 	// mode, so the copy is never readable by anyone else, not even while
@@ -93,6 +96,67 @@ func Snapshot(ctx context.Context, o SnapshotOptions) (objstore.ObjectInfo, erro
 		return objstore.ObjectInfo{}, err
 	}
 	return info, nil
+}
+
+// SnapshotMargin is the room a snapshot leaves on its disk beyond the copy
+// itself, for the database and its WAL to go on growing meanwhile.
+const SnapshotMargin = 64 << 20
+
+// ErrNoRoom is what Snapshot returns, wrapped, when the disk that holds
+// the database hasn't room for the snapshot's copy.
+var ErrNoRoom = errors.New("backup: no room for the snapshot's copy")
+
+// CheckRoom fails with ErrNoRoom when the disk that holds dir hasn't room
+// for a copy of the database at dbPath and SnapshotMargin more. VACUUM INTO
+// writes a copy about the database's size, on the database's own disk in
+// the deploy bundle, so a snapshot that went ahead would fill the disk the
+// database needs. Failing first leaves the snapshot's push monitor
+// unpinged, so it alerts (#133). Where DiskSpace can't tell, it passes.
+func CheckRoom(dir, dbPath string) error {
+	need, err := DatabaseSize(dbPath)
+	if err != nil {
+		return err
+	}
+	free, _, ok, err := diskSpace(dir)
+	if err != nil {
+		return err
+	}
+	if ok && free < uint64(need)+SnapshotMargin {
+		return fmt.Errorf("%w: the database is %s, and %s is free on the disk that holds %s, under the copy's size and %s more. Grow the disk (deploy/runbook.md, What Karim provides)",
+			ErrNoRoom, Bytes(uint64(need)), Bytes(free), dir, Bytes(SnapshotMargin))
+	}
+	return nil
+}
+
+// diskSpace is DiskSpace, which tests replace.
+var diskSpace = DiskSpace
+
+// DatabaseSize is the size of the SQLite database at path and of its WAL,
+// which the database's next checkpoint folds into it.
+func DatabaseSize(path string) (int64, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("backup: %w", err)
+	}
+	size := fi.Size()
+	if wal, err := os.Stat(path + "-wal"); err == nil {
+		size += wal.Size()
+	}
+	return size, nil
+}
+
+// Bytes says n bytes in binary units, such as "1.5 GiB".
+func Bytes(n uint64) string {
+	const unit = 1 << 10
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := uint64(unit), 0
+	for m := n / unit; m >= unit && exp < 4; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTP"[exp])
 }
 
 // errUploadStopped ends the encryption when the upload stopped reading.

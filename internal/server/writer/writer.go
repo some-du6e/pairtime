@@ -42,7 +42,8 @@ const (
 )
 
 // Tx is the part of *sql.Tx an op may use. Ops never commit or roll back:
-// the writer does that, for the whole batch.
+// the writer does that, for the whole batch. Ops write with ExecContext,
+// which is how the writer counts the rows they change (Commit.Changed).
 type Tx interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
@@ -65,6 +66,12 @@ type Commit struct {
 	Ops, Rows int
 	// Failed is how many of those ops failed and were rolled back alone.
 	Failed int
+	// Changed is how many rows the ops that succeeded changed, as their
+	// ExecContext statements' RowsAffected report it; a statement whose
+	// driver can't tell counts as one. A transaction that changed no row,
+	// such as a DELETE that matched nothing, wrote no page, so Litestream
+	// has nothing of it to copy. It is 0 when Err is set.
+	Changed int64
 	// Err is the error that failed the whole transaction, if one did.
 	Err error
 }
@@ -295,8 +302,9 @@ func (w *Writer) run(batch []*request) {
 
 	c := Commit{Start: time.Now(), Ops: len(live), Rows: rows}
 	ctx, cancel := context.WithTimeout(context.Background(), w.opts.BatchTimeout)
-	errs, err := w.write(ctx, live)
+	errs, changed, err := w.write(ctx, live)
 	cancel()
+	c.Changed = changed
 	c.Duration = time.Since(c.Start)
 	c.Err = err
 	for _, e := range errs {
@@ -321,35 +329,69 @@ func (w *Writer) run(batch []*request) {
 const savepoint = "pairtime_op"
 
 // write runs ops in one transaction, each inside a savepoint, and commits.
-// It returns each op's error, or the error that failed the transaction.
-func (w *Writer) write(ctx context.Context, ops []*request) ([]error, error) {
+// It returns each op's error and how many rows the ops that succeeded
+// changed, or the error that failed the transaction.
+func (w *Writer) write(ctx context.Context, ops []*request) ([]error, int64, error) {
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, fmt.Errorf("writer: begin: %w", err)
+		return nil, 0, fmt.Errorf("writer: begin: %w", err)
 	}
-	abort := func(what string, err error) ([]error, error) {
+	abort := func(what string, err error) ([]error, int64, error) {
 		tx.Rollback()
-		return nil, fmt.Errorf("writer: %s: %w", what, err)
+		return nil, 0, fmt.Errorf("writer: %s: %w", what, err)
 	}
 	errs := make([]error, len(ops))
+	var changed int64
 	for i, r := range ops {
 		if _, err := tx.ExecContext(ctx, "SAVEPOINT "+savepoint); err != nil {
 			return abort("savepoint", err)
 		}
-		if err := call(ctx, tx, r.op); err != nil {
+		ct := &countingTx{tx: tx}
+		if err := call(ctx, ct, r.op); err != nil {
 			errs[i] = err
 			if _, err := tx.ExecContext(ctx, "ROLLBACK TO SAVEPOINT "+savepoint); err != nil {
 				return abort("rolling back a failed op", err)
 			}
+		} else {
+			changed += ct.changed
 		}
 		if _, err := tx.ExecContext(ctx, "RELEASE SAVEPOINT "+savepoint); err != nil {
 			return abort("releasing the savepoint", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("writer: commit: %w", err)
+		return nil, 0, fmt.Errorf("writer: commit: %w", err)
 	}
-	return errs, nil
+	return errs, changed, nil
+}
+
+// countingTx is the Tx an op gets: the batch's transaction, counting the
+// rows the op's ExecContext statements change. It hides Commit and
+// Rollback, which only the writer calls.
+type countingTx struct {
+	tx      *sql.Tx
+	changed int64
+}
+
+func (t *countingTx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	res, err := t.tx.ExecContext(ctx, query, args...)
+	if err == nil {
+		n, rerr := res.RowsAffected()
+		if rerr != nil || n < 0 {
+			// The driver can't tell, so the statement may have written.
+			n = 1
+		}
+		t.changed += n
+	}
+	return res, err
+}
+
+func (t *countingTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return t.tx.QueryContext(ctx, query, args...)
+}
+
+func (t *countingTx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return t.tx.QueryRowContext(ctx, query, args...)
 }
 
 // call runs op and turns a panic into an error, so one bad op fails alone

@@ -172,13 +172,9 @@ func runHeartbeat(ctx context.Context, raw string, checks []ops.Check, logger *s
 // publisher's 00:10 UTC day root and in Europe's and America's night.
 const snapshotAt = 3*time.Hour + 10*time.Minute
 
-// snapshotStale is how old the newest snapshot may be when serve starts
-// before it takes one early, after snapshotStartDelay: a server that was
-// down at 03:10 still gets its night's snapshot.
-const snapshotStale = 25 * time.Hour
-
-// snapshotStartDelay is the wait for that early snapshot, so a server
-// that restarts over and over doesn't copy its database each time.
+// snapshotStartDelay is how long serve waits before an early snapshot,
+// when the last night's is missing (firstSnapshotWait), so a server that
+// restarts over and over doesn't copy its database each time.
 const snapshotStartDelay = 10 * time.Minute
 
 // nextSnapshot is the first snapshotAt past a UTC midnight after now.
@@ -192,13 +188,15 @@ func nextSnapshot(now time.Time) time.Time {
 }
 
 // firstSnapshotWait is how long serve waits before its first snapshot:
-// snapshotStartDelay when the newest one is older than snapshotStale or
-// there is none, and until the next snapshotAt otherwise.
+// snapshotStartDelay when there is none, or when the newest is older than
+// the last snapshotAt, so a server that was down or restarting then still
+// gets that night's snapshot; and until the next snapshotAt otherwise.
 func firstSnapshotWait(now, newest time.Time) time.Duration {
-	if newest.IsZero() || now.Sub(newest) > snapshotStale {
+	next := nextSnapshot(now)
+	if newest.IsZero() || newest.Before(next.Add(-24*time.Hour)) {
 		return snapshotStartDelay
 	}
-	return nextSnapshot(now).Sub(now)
+	return next.Sub(now)
 }
 
 // runSnapshots takes a snapshot every night until ctx ends.

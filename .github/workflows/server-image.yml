@@ -16,6 +16,10 @@
 # by hand:
 #
 #   gh workflow run server-image.yml --ref main
+#
+# Nothing else in deploy/ is in the image, so a PR that only pins an image
+# or edits the runbook builds none, and the newest image stays the one with
+# the newest code (deploy/runbook.md, The image pin).
 name: server-image
 
 on:
@@ -24,11 +28,19 @@ on:
     # Every file the image is built from. tools/ci's TestServerImagePaths
     # walks pairtimed's imports for both Linux targets, and the notices
     # tool's, and fails when a Go file they compile, or a file they embed,
-    # is under none of these.
+    # is under none of these. tools/ci/restore_drill.sh lists the same
+    # paths as its image_paths, and tools/ci's TestDrillImagePaths keeps
+    # the two lists the same.
     paths:
       - cmd/pairtimed/**
       - internal/server/**
-      - deploy/**
+      # Of deploy/, only embed.go, the one file of the package init imports
+      # that isn't a test, the template it embeds, and litestream.yml,
+      # which the Dockerfile copies in. A pin in compose.yml, a runbook edit
+      # or a change to deploy's tests builds no image.
+      - deploy/embed.go
+      - deploy/pairtime.toml.tmpl
+      - deploy/litestream.yml
       # The packages outside internal/server that pairtimed imports.
       # docs/embed.go embeds docs/retention.json, which /privacy and the
       # retention jobs read, and pkg/params embeds the parameter tables.
@@ -103,6 +115,8 @@ jobs:
           done
           go run ./tools/release notices -bin "$ctx/dist/linux_amd64/pairtimed" -out "$ctx/dist/THIRD_PARTY_NOTICES.txt"
           cp Dockerfile.pairtimed LICENSE "$ctx/"
+          mkdir "$ctx/deploy"
+          cp deploy/litestream.yml "$ctx/deploy/"
           got=$("$ctx/dist/linux_amd64/pairtimed" version | head -n 1)
           echo "$got"
           case "$got" in
@@ -145,14 +159,22 @@ jobs:
           echo "::notice title=Pin this image in deploy/compose.yml::image: $IMAGE:$TAG@$digest"
 
       - name: The pushed image starts
-        # Pulled back by digest and run: both programs answer, and it runs
-        # as the nonroot user.
+        # Pulled back by digest and run: both programs answer, it runs as
+        # the nonroot user, and it holds the litestream.yml it was built
+        # with.
         run: |
           docker run --rm --platform linux/amd64 "$PINNED" pairtimed version
           docker run --rm --platform linux/amd64 "$PINNED" litestream version
           user=$(docker image inspect "$PINNED" --format '{{.Config.User}}')
           if [ "$user" != "65532:65532" ]; then
             echo "::error::the image runs as '$user', not 65532:65532"
+            exit 1
+          fi
+          cid=$(docker create --platform linux/amd64 "$PINNED")
+          docker cp "$cid:/etc/litestream.yml" - | tar -xO > "$RUNNER_TEMP/litestream.yml"
+          docker rm "$cid" > /dev/null
+          if ! cmp -s "$RUNNER_TEMP/litestream.yml" deploy/litestream.yml; then
+            echo "::error::the image's /etc/litestream.yml isn't deploy/litestream.yml"
             exit 1
           fi
           {

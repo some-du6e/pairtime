@@ -100,20 +100,26 @@ func TestNextSnapshot(t *testing.T) {
 }
 
 func TestFirstSnapshotWait(t *testing.T) {
-	now := time.Date(2026, 11, 20, 2, 0, 0, 0, time.UTC)
+	day := time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
+	at := func(h, m int) time.Time { return day.Add(time.Duration(h)*time.Hour + time.Duration(m)*time.Minute) }
 	tests := []struct {
-		name   string
-		newest time.Time
-		want   time.Duration
+		name        string
+		now, newest time.Time
+		want        time.Duration
 	}{
-		{name: "with no snapshot yet one runs soon after start", want: snapshotStartDelay},
-		{name: "a newest snapshot over 25 hours old means a night was missed, so one runs soon", newest: now.Add(-30 * time.Hour), want: snapshotStartDelay},
-		{name: "a recent snapshot means the next waits for 03:10 UTC", newest: now.Add(-2 * time.Hour), want: 70 * time.Minute},
+		{name: "with no snapshot yet one runs soon after start", now: at(2, 0), want: snapshotStartDelay},
+		{name: "a newest snapshot over a day old means a night was missed, so one runs soon", now: at(2, 0), newest: at(2, 0).Add(-30 * time.Hour), want: snapshotStartDelay},
+		{name: "a snapshot from after the last 03:10 UTC means the next waits for the next 03:10", now: at(2, 0), newest: at(0, 0), want: 70 * time.Minute},
+		{name: "a server back within an hour of a 03:10 it missed takes that night's snapshot soon, though the newest is under 25 hours old",
+			now: at(4, 0), newest: at(3, 12).Add(-24 * time.Hour), want: snapshotStartDelay},
+		{name: "a server that restarted during the 03:10 snapshot takes it again soon", now: at(3, 15), newest: at(3, 11).Add(-24 * time.Hour), want: snapshotStartDelay},
+		{name: "a snapshot taken by hand after the last 03:10 stands in for that night's", now: at(20, 0), newest: at(15, 0), want: 7*time.Hour + 10*time.Minute},
+		{name: "last night's snapshot, a few minutes after its 03:10, means the next waits for tonight's", now: at(20, 0), newest: at(3, 12), want: 7*time.Hour + 10*time.Minute},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := firstSnapshotWait(now, tt.newest); got != tt.want {
-				t.Errorf("firstSnapshotWait = %s, want %s", got, tt.want)
+			if got := firstSnapshotWait(tt.now, tt.newest); got != tt.want {
+				t.Errorf("firstSnapshotWait(%s, %s) = %s, want %s", tt.now, tt.newest, got, tt.want)
 			}
 		})
 	}

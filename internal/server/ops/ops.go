@@ -35,10 +35,15 @@ type Check struct {
 	Run  func(ctx context.Context) error
 }
 
-// Healthz answers 200 "ok" while the process can answer at all.
+// Healthz answers 200 "ok" while the process can answer at all. Its
+// headers are the pages' own: no caching, no sniffing a type other than
+// text/plain, nothing to load and no framing (#119).
 func Healthz(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
+	h := w.Header()
+	h.Set("Content-Type", "text/plain; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
 	w.Write([]byte("ok\n"))
 }
 

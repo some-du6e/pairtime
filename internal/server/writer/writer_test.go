@@ -219,6 +219,38 @@ func TestWriterRules(t *testing.T) {
 			},
 		},
 		{
+			name: "Changed counts the rows the ops that succeeded changed, so a delete of nothing and a failed op's rows count none",
+			run: func(t *testing.T, db *store.DB) {
+				var log commitLog
+				w := start(t, db, writer.Options{Window: 300 * time.Millisecond}, &log)
+				deleteNothing := func(ctx context.Context, tx writer.Tx) error {
+					_, err := tx.ExecContext(ctx, "DELETE FROM w_rows WHERE id = $1", -1)
+					return err
+				}
+				bad := func(ctx context.Context, tx writer.Tx) error {
+					if err := insert(62)(ctx, tx); err != nil {
+						return err
+					}
+					_, err := tx.ExecContext(ctx, "INSERT INTO w_missing (id) VALUES (1)")
+					return err
+				}
+				errs := doAll(ctx, w, 1, insert(60), insert(61), deleteNothing, bad)
+				if errs[0] != nil || errs[1] != nil || errs[2] != nil || errs[3] == nil {
+					t.Fatalf("errors = %v, want only the last op's", errs)
+				}
+				if cs := log.all(); len(cs) != 1 || cs[0].Changed != 2 {
+					t.Errorf("transactions = %+v, want one that changed 2 rows", cs)
+				}
+				if err := w.Do(ctx, 1, deleteNothing); err != nil {
+					t.Fatal(err)
+				}
+				cs := log.all()
+				if last := cs[len(cs)-1]; last.Changed != 0 || last.Err != nil {
+					t.Errorf("a transaction holding only a delete of nothing = %+v, want Changed 0", last)
+				}
+			},
+		},
+		{
 			name: "a panicking op fails alone and the writer keeps going",
 			run: func(t *testing.T, db *store.DB) {
 				var log commitLog

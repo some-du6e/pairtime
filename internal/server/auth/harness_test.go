@@ -364,6 +364,25 @@ func checkRefused(t *testing.T, h *harness, f *flow, status int, code string) {
 	if !strings.Contains(h.logs.String(), "code="+code) {
 		t.Errorf("the log doesn't record code=%s:\n%s", code, h.logs.String())
 	}
+	// The page offers sign-in again only where that can help, and always
+	// links the home page (#119).
+	retry := strings.Contains(f.resp.body, `href="`+auth.LoginPath+`"`)
+	switch code {
+	case auth.CodeSignupsClosed, auth.CodeIneligible:
+		if retry {
+			t.Errorf("the %s page offers to sign in again, which would only show it again", code)
+		}
+	default:
+		if !retry {
+			t.Errorf("the %s page doesn't offer to sign in again", code)
+		}
+	}
+	if !strings.Contains(f.resp.body, `<a href="/">`) {
+		t.Errorf("the %s page doesn't link the home page", code)
+	}
+	if status == http.StatusUnauthorized && f.resp.header.Get("WWW-Authenticate") == "" {
+		t.Errorf("the %s page is a 401 without WWW-Authenticate (RFC 9110 15.5.2)", code)
+	}
 }
 
 // checkSignedIn checks that a sign-in succeeded and that the session

@@ -439,6 +439,7 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 		if !errors.Is(err, accounts.ErrNoSession) {
 			s.log.Error("reading a session", "err", err)
 		}
+		w.Header().Set("WWW-Authenticate", sessionChallenge)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "not_signed_in"})
 		return
 	}
@@ -548,6 +549,12 @@ func expiredCookie(name string) *http.Cookie {
 	}
 }
 
+// sessionChallenge is the WWW-Authenticate challenge every 401 carries
+// (RFC 9110 15.5.2). A request authenticates with the session cookie that
+// Hack Club Auth sign-in sets, which no registered scheme describes, so
+// the scheme is pairtime's own; browsers show no prompt for it.
+const sessionChallenge = `Session realm="pairtime"`
+
 func noStore(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 }
@@ -588,7 +595,8 @@ var page = template.Must(template.New("page").Parse(`<!doctype html>
 <h1>{{.Title}}</h1>
 <p>{{.Message}}</p>
 <p>Error code: <code>{{.Code}}</code></p>
-<p><a href="{{.Retry}}">Sign in with Hack Club Auth</a></p>
+{{with .Retry}}<p><a href="{{.}}">Sign in with Hack Club Auth</a></p>
+{{end}}<p><a href="/">pairtime's home page</a></p>
 </body>
 </html>
 `))
@@ -613,10 +621,28 @@ func (s *Service) fail(w http.ResponseWriter, r *http.Request, e *Error) {
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Content-Security-Policy", "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	if e.Status == http.StatusUnauthorized {
+		h.Set("WWW-Authenticate", sessionChallenge)
+	}
 	title := e.Title
 	if title == "" {
 		title = "Sign-in didn't work"
 	}
 	w.WriteHeader(e.Status)
-	page.Execute(w, struct{ Title, Message, Code, Retry string }{title, e.Message, e.Code, LoginPath})
+	page.Execute(w, struct{ Title, Message, Code, Retry string }{title, e.Message, e.Code, retryLink(r, e)})
+}
+
+// retryLink is where the error page's sign-in link goes, or "" for no
+// link where signing in again can't help (#119): sign-in that isn't set
+// up, and refusals that would repeat, would only show the same page again,
+// and a failed sign-out is tried again from the home page, which every
+// error page links.
+func retryLink(r *http.Request, e *Error) string {
+	switch {
+	case r.URL.Path == LogoutPath:
+		return ""
+	case e.Code == CodeNotConfigured, e.Code == CodeSignupsClosed, e.Code == CodeIneligible:
+		return ""
+	}
+	return LoginPath
 }

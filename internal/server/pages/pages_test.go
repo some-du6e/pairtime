@@ -151,6 +151,10 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"This notice isn&#39;t final.", "takes no sign-ups except test accounts for the people who run it", "The controller here is <strong>[not named yet]</strong>.", "contact <strong>[not named yet]</strong>."},
 		},
 		{
+			name: "the notice says a hook call can wait unencrypted until the agent takes it in, as the held calls do (D-held-calls-inbox-class)",
+			want: []string{"The exception is a hook call that arrives while pairtime&#39;s agent isn&#39;t running or hasn&#39;t opened its keys yet. It waits unencrypted in pairtime&#39;s folder, which only you can read, until the agent takes it in."},
+		},
+		{
 			name:    "a named controller and contact replace their placeholders and the warning",
 			opts:    Options{Controller: Controller{Name: "Hack Club", Contact: "privacy@example.org"}},
 			want:    []string{"The controller here is Hack Club.", `contact <a href="mailto:privacy@example.org">privacy@example.org</a>.`},
@@ -296,6 +300,36 @@ func TestPrivacyNotice(t *testing.T) {
 		{
 			name: "the notice says Cloudflare runs bot detection on requests to this server, and that pairtime's pages block the script it adds for that",
 			want: []string{"It also runs automated bot detection on requests to this server, and pairtime&#39;s pages block the script it adds to them for that."},
+		},
+		{
+			name: "the notice says Cloudflare asks browsers to report failed requests to it (#119)",
+			want: []string{"And it asks your browser to report requests to this server that fail, a browser feature called Network Error Logging"},
+		},
+		{
+			name:    "the notice names a monitoring service of the operator's choice, not one company, since a deployment may ping any push monitor (#119)",
+			want:    []string{"<strong>A monitoring service</strong> the operator chooses gets a ping every 5 minutes while this server works, and one after each nightly backup"},
+			notWant: []string{"Healthchecks"},
+		},
+		{
+			name: "while this server runs only its pages, the notice's first lines say sign-in, uploads, submissions, the evidence store and day roots don't run yet (#119)",
+			want: []string{"<strong>Not everything here runs yet.</strong> This server doesn&#39;t yet let anyone sign in, receive uploads from the pairtime program, take hours you submit to programs, keep an evidence store, or publish day roots."},
+		},
+		{
+			name:    "with sign-in set up, the notice no longer says nobody can sign in",
+			opts:    Options{Running: Running{SignIn: true}},
+			want:    []string{"This server doesn&#39;t yet receive uploads from the pairtime program, take hours you submit to programs, keep an evidence store, or publish day roots."},
+			notWant: []string{"let anyone sign in"},
+		},
+		{
+			name:    "with only day roots left to come, the notice names that one",
+			opts:    Options{Running: Running{SignIn: true, Uploads: true, Submissions: true}},
+			want:    []string{"This server doesn&#39;t yet publish day roots."},
+			notWant: []string{"keep an evidence store", "let anyone sign in", "receive uploads from"},
+		},
+		{
+			name:    "once everything the notice describes runs, the line goes",
+			opts:    Options{Running: Running{SignIn: true, Uploads: true, Submissions: true, DayRoots: true}},
+			notWant: []string{"runs yet", "doesn&#39;t yet"},
 		},
 		{
 			name: "the notice says where data goes outside the UK and the EU (GDPR Art. 13(1)(f))",

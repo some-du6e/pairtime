@@ -89,9 +89,10 @@ bucket = {{toml .S3.Bucket}}
 # The nightly snapshots, with a 30-day lifecycle rule. Never the same bucket.
 snapshot_bucket = {{toml .S3.SnapshotBucket}}
 {{- else}}
-# Off: PAIRTIME_S3_ENDPOINT wasn't set when pairtimed init ran, so there is
-# no replica, evidence store or snapshot. A deployment needs both buckets
-# (DESIGN 10.5 item 4); set the PAIRTIME_S3_* variables and run init again.
+# Off: pairtimed init ran with -no-object-storage, so there is no replica,
+# evidence store or snapshot. A deployment needs both buckets (DESIGN 10.5
+# item 4): set the PAIRTIME_S3_* variables and run init again with -force,
+# which keeps the keys but starts this file over, so copy your edits to it.
 {{- end}}
 
 # The reviewer allowlist from HQ (DESIGN 10.2): one table per HCA sub.
