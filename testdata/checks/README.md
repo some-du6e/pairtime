@@ -114,7 +114,7 @@ Bodies follow ledger-v1.md 4.5: `{"n": nonce, "e": the event after Event.Shareab
 
 ### The live buckets
 
-CC5 and CC6 read the minute buckets the server received live, which a scenario doesn't list. Each device's live buckets are its own re-score: `pkg/score` over its events at the 0.1.0 parameter table. It takes content-derived features from the bodies' `f` where they exist, as the server does (DESIGN 6.2 D18), and from the base fixture's `prompts.json` otherwise. Then `live.mutations` apply. The one mutation, `move_project`, gives every credited slot of one minute the `to` project instead of `from`, and states the seconds that minute holds.
+CC5 and CC6 read the minute buckets the server received live, which a scenario doesn't list. Each device's live buckets are its own re-score: `pkg/score` over its events at the parameter table the scorer runs with (0.2.0 since D-input-release-grace). It takes content-derived features from the bodies' `f` where they exist, as the server does (DESIGN 6.2 D18), and from the base fixture's `prompts.json` otherwise. Then `live.mutations` apply. The one mutation, `move_project`, gives every credited slot of one minute the `to` project instead of `from`, and states the seconds that minute holds.
 
 ## How each check is read
 

@@ -838,7 +838,7 @@ The public checks live in `pkg/check`. The client runs them before a submission,
 | Check | Compares | Catches |
 |---|---|---|
 | CC1 hook vs log | Each hook `prompt.submit` with the transcript's user entry for the same turn (order, time within 5 s, normalized `len_chars`), and the reverse | Fabricated or imported transcripts; a script calling `pairtime hook` with invented payloads, which leaves no transcript |
-| CC2 prompt vs OS | The share of human-origin prompts with OS input in the 10 s before submit and focus on the host window | pty and `tmux send-keys` drivers |
+| CC2 prompt vs OS | The share of human-origin prompts with OS input in the 10 s before submit or the `INPUT_RELEASE_GRACE_MS` after it (SM 2.2 rule 6's input test, D-input-release-grace) and focus on the host window | pty and `tmux send-keys` drivers |
 | CC3 edits vs git | Lines changed by agent edit tools plus hand-edit deltas in a commit interval, against the commit's `--shortstat`. `unexplained_lines` when more than half of a commit's lines, and more than 200, have no recorded edit | Copied projects, reconstruction, edits by a process pairtime can't see |
 | CC4 commit clocks | `observed_at` before `server_first_seen_at` before `observed_at` plus 15 minutes; on App-installed repos, push time not earlier than `observed_at` minus 60 s; forge SHA and diffstat match | Backdated history; commits made elsewhere |
 | CC5 one attention stream | No slot credited twice across devices or projects | Second machines, account sharing, parallel-agent splitting |
