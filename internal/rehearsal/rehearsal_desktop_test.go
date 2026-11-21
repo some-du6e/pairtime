@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"maps"
@@ -457,8 +458,11 @@ func (r *rehearsal) startServer(t *testing.T) {
 		close(r.srvExited)
 	}()
 	deadline := time.Now().Add(30 * time.Second)
+	// A server that takes the connection and never answers mustn't hold
+	// the loop past its deadline.
+	probe := &http.Client{Timeout: 2 * time.Second}
 	for {
-		resp, err := http.Get(r.server + "/api/v1/time")
+		resp, err := probe.Get(r.server + "/api/v1/time")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -848,18 +852,21 @@ func (r *rehearsal) stepSession(t *testing.T) {
 	p.leave()
 	r.ok["session"] = true
 
+	// The writer seals a batch at once after a prompt or a stop, and the
+	// tool records of the last turn with its stop, so the poll waits for
+	// every record checkLedger needs.
 	var evs []event.Event
 	deadline := time.Now().Add(90 * time.Second)
 	for {
 		var err error
 		evs, err = r.ledgerEvents()
-		if err == nil && countKind(evs, event.KindPromptSubmit) >= 3 {
+		if err == nil && recordedAll(evs) {
 			break
 		}
 		if time.Now().After(deadline) {
 			r.saveLedger(evs)
-			t.Fatalf("90 s after the session the ledger holds %d prompt.submit records, want 3 (%v); the agent's status:\n%s",
-				countKind(evs, event.KindPromptSubmit), err, r.statusText())
+			t.Fatalf("90 s after the session the ledger holds %s, want at least %s (%v); the agent's status:\n%s",
+				recordCounts(evs, false), recordCounts(evs, true), err, r.statusText())
 		}
 		time.Sleep(2 * time.Second)
 	}
@@ -919,10 +926,7 @@ func (r *rehearsal) checkLedger(t *testing.T, evs []event.Event) {
 			}
 		}
 	}
-	for _, w := range []struct {
-		kind event.Kind
-		min  int
-	}{{event.KindSessionStart, 1}, {event.KindPromptSubmit, 3}, {event.KindAgentOutput, 3}, {event.KindAgentTool, 3}, {event.KindAgentStop, 3}} {
+	for _, w := range sessionRecords {
 		if harness[w.kind] < w.min {
 			t.Errorf("the ledger holds %d %s records from Claude Code's hooks, want at least %d", harness[w.kind], w.kind, w.min)
 		}
@@ -961,7 +965,7 @@ func (r *rehearsal) stepCredit(t *testing.T) {
 	var last string
 	for range 5 {
 		today, raw, err := r.today()
-		api, err2 := r.clientDays([]string{today.Date})
+		api, _, err2 := r.clientDays([]string{today.Date})
 		if err == nil && err2 == nil && sameCredit(byDay{today.Date: today.credit()}, api) {
 			t.Logf("pairtime today: %s", raw)
 			return
@@ -997,6 +1001,9 @@ func (r *rehearsal) checkPromptsTyped(t *testing.T) {
 		for _, date := range r.dates() {
 			latest, _ := r.latestBuckets(date)
 			for _, bk := range latest {
+				if !slices.ContainsFunc(bk.Slots, func(s slotRev) bool { return s.CR > 0 }) {
+					continue // a minute with no credit names no anchor that counted
+				}
 				for _, a := range bk.Anchors {
 					anchors[a] = true
 				}
@@ -1026,21 +1033,18 @@ func (r *rehearsal) stepUpload(t *testing.T) {
 	dates := r.dates()
 	deadline := time.Now().Add(20 * time.Minute)
 	var firstSeen time.Time
-	var client, server byDay
-	var view map[string]any
+	var g uploadReading
 	for {
-		var cerr, serr error
-		client, cerr = r.clientDays(dates)
-		server, view, serr = r.serverDays(dates)
-		if serr == nil && firstSeen.IsZero() && server.total() > 0 {
+		g = r.readUpload(dates)
+		if g.serr == nil && firstSeen.IsZero() && g.server.total() > 0 {
 			firstSeen = time.Now()
-			t.Logf("pairtimed's dashboard first showed the person's time %v after the first prompt (its empty state promises about a minute after a prompt)", firstSeen.Sub(r.firstPrompt).Round(time.Second))
+			t.Logf("pairtimed's dashboard first showed the person's time %v after the first prompt (its empty state says within a few minutes of a prompt)", firstSeen.Sub(r.firstPrompt).Round(time.Second))
 		}
-		if cerr == nil && serr == nil && client.total() > 0 && sameCredit(client, server) {
+		if g.agrees(dates) {
 			break
 		}
 		if time.Now().After(deadline) {
-			text := fmt.Sprintf("client (GET /v1/days, %v):\n%vserver (GET /api/v1/users/me/dashboard, %v):\n%v", cerr, client, serr, server)
+			text := g.String()
 			r.save("compare.txt", text)
 			out := r.cmd(time.Minute, r.pt, "privacy", "show")
 			r.save("privacy-show.txt", out.stdout+"\nstderr:\n"+out.stderr)
@@ -1049,60 +1053,127 @@ func (r *rehearsal) stepUpload(t *testing.T) {
 		time.Sleep(10 * time.Second)
 	}
 	r.ok["uploaded"] = true
-	b, _ := json.MarshalIndent(view, "", "  ")
+	b, _ := json.MarshalIndent(g.view, "", "  ")
 	r.save("server-dashboard.json", string(b))
-	t.Logf("client and server agree:\n%v", client)
-
-	// The teen's own view says the same as the server's today.
-	today, raw, err := r.today()
-	if srvToday := str(view, "today"); err != nil || today.Date != srvToday || !sameCredit(byDay{today.Date: today.credit()}, byDay{srvToday: server[srvToday]}) {
-		t.Errorf("pairtime today --json (%v) doesn't match the server's today %s %v:\n%s", err, srvToday, server[srvToday], raw)
+	t.Logf("client and server agree:\n%v", g.client)
+	if len(dates) == 1 {
+		t.Logf("the client's uploaded slots and the server's week both split it %v by level and %v by kind, and the agent ran on its own %.1f s on both", g.srvLevels, g.srvKinds, g.srvAgent)
+	} else {
+		t.Logf("the session spans %v, so the splits by level and kind, which the server gives for the week, aren't compared", dates)
 	}
-	// So does the page.
+
+	// The teen's own view says the same as the server, for a day the
+	// session's credit is on.
+	today, raw, err := r.today()
+	switch {
+	case err != nil:
+		t.Errorf("pairtime today --json: %v\n%s", err, raw)
+	case !slices.Contains(dates, today.Date):
+		t.Logf("pairtime today now shows %s, a day the session didn't touch, so it isn't compared", today.Date)
+	case len(dates) == 1 && today.total() <= 0:
+		t.Errorf("pairtime today --json shows none of your time on %s, the session's only day:\n%s", today.Date, raw)
+	case !sameCredit(byDay{today.Date: today.credit()}, byDay{today.Date: g.server[today.Date]}):
+		t.Errorf("pairtime today --json for %s doesn't match the server's %v:\n%s", today.Date, g.server[today.Date], raw)
+	}
+
+	// So does the page: it names the project and gives the day's total
+	// as it writes durations, in whole minutes rounded down.
 	d := r.get(t, r.server+"/dashboard")
 	r.save("dashboard-after.html", d.body)
 	if d.status != http.StatusOK || strings.Contains(d.body, "Nothing counted yet") {
 		t.Errorf("/dashboard answered %d, or still says nothing is counted:\n%s", d.status, clip(d.body))
 	}
-	for _, ps := range server {
+	for _, ps := range g.server {
 		for key := range ps {
 			if short := key[:min(len(key), 12)]; !strings.Contains(d.body, short) {
 				t.Errorf("/dashboard doesn't name the project %s… the client credits", short)
 			}
 		}
 	}
-	// The rollups split the time as the minutes the client uploaded do:
-	// by evidence level (DESIGN 6.4) and by kind of work, each 15-second
-	// slot under its one reason's kind and its one level (SM 5.1), and
-	// the agent's time on its own beside the person's
-	// (D-bucket-agent-only). The account is new, so its week is this one
-	// day.
-	if len(dates) != 1 || err != nil {
-		t.Logf("not comparing the splits: the session spans %v (%v)", dates, err)
-		return
+	if srvToday := str(g.view, "today"); slices.Contains(dates, srvToday) {
+		total := 0.0
+		for _, c := range g.server[srvToday] {
+			total += c.S
+		}
+		if want := "<strong>" + html.EscapeString(pageDuration(total)) + "</strong> of your time"; !strings.Contains(d.body, want) {
+			t.Errorf("/dashboard doesn't say %q, for the server's %.1f s today", want, total)
+		}
 	}
-	srvLevels, srvKinds, srvAgent := serverSplits(view, today.Date)
-	slotLevels, slotKinds, err := r.slotSplits(today.Date)
-	if err != nil {
-		t.Errorf("reading the client's minute buckets: %v", err)
-	}
-	if !sameSplit(slotLevels, srvLevels) {
-		t.Errorf("by evidence level the client's uploaded slots have %v and the server's week %v", slotLevels, srvLevels)
-	}
-	if !sameSplit(slotKinds, srvKinds) {
-		t.Errorf("by kind of work the client's uploaded slots have %v and the server's week %v", slotKinds, srvKinds)
-	}
-	levels, kinds, agent := today.splits()
-	if math.Abs(agent-srvAgent) > 0.01 {
-		t.Errorf("the agent's time on its own is %.1f s on the client and %.1f s on the server", agent, srvAgent)
-	}
+
 	// The client's own views split each second exactly, so a slot whose
 	// seconds had two reasons or two levels reads differently there than
 	// on the server's dashboard, which counts its split per slot
 	// (D-kind-split-by-slot). Same total, other split.
-	if !sameSplit(levels, srvLevels) || !sameSplit(kinds, srvKinds) {
-		t.Logf("pairtime today splits the same time %v by level and %v by kind; pairtimed's dashboard, from one reason and one level a slot, %v and %v", levels, kinds, srvLevels, srvKinds)
+	if len(dates) == 1 && err == nil {
+		if levels, kinds, _ := today.splits(); !sameSplit(levels, g.srvLevels) || !sameSplit(kinds, g.srvKinds) {
+			t.Logf("pairtime today splits the same time %v by level and %v by kind; pairtimed's dashboard, from one reason and one level a slot, %v and %v", levels, kinds, g.srvLevels, g.srvKinds)
+		}
 	}
+}
+
+// uploadReading is one poll of both sides. stepUpload waits for a poll
+// whose readings all agree and checks the rest against that poll alone,
+// since the scorer may write another revision of a pending minute
+// between two reads.
+type uploadReading struct {
+	client, server byDay
+	clientAgent    map[string]float64
+	view           map[string]any
+	cerr, serr     error
+	// The client's uploaded slots and the server's week, by evidence level
+	// (DESIGN 6.4) and by kind (SM 5.1), each slot under its one reason
+	// and its one level, and the server's day of the agent's time on its
+	// own (D-bucket-agent-only). Read only when the session is on one day,
+	// as the server's split is the week's, and the account is new.
+	slotLevels, slotKinds, srvLevels, srvKinds map[string]float64
+	srvAgent                                   float64
+	splitErr                                   error
+}
+
+func (r *rehearsal) readUpload(dates []string) uploadReading {
+	var g uploadReading
+	g.client, g.clientAgent, g.cerr = r.clientDays(dates)
+	g.server, g.view, g.serr = r.serverDays(dates)
+	if len(dates) == 1 && g.serr == nil {
+		g.slotLevels, g.slotKinds, g.splitErr = r.slotSplits(dates[0])
+		g.srvLevels, g.srvKinds, g.srvAgent = serverSplits(g.view, dates[0])
+	}
+	return g
+}
+
+// agrees reports whether the poll shows the client's credit on the server,
+// per day and project, and, on one day, the uploaded slots' splits and the
+// agent's time on its own as well.
+func (g uploadReading) agrees(dates []string) bool {
+	if g.cerr != nil || g.serr != nil || g.client.total() <= 0 || !sameCredit(g.client, g.server) {
+		return false
+	}
+	if len(dates) != 1 {
+		return true
+	}
+	return g.splitErr == nil && sameSplit(g.slotLevels, g.srvLevels) && sameSplit(g.slotKinds, g.srvKinds) &&
+		math.Abs(g.clientAgent[dates[0]]-g.srvAgent) <= 0.01
+}
+
+func (g uploadReading) String() string {
+	return fmt.Sprintf("client (GET /v1/days, %v):\n%v  the agent on its own: %v\nserver (GET /api/v1/users/me/dashboard, %v):\n%v  the agent on its own: %.1f s\nthe client's uploaded slots (%v): by level %v, by kind %v\nthe server's week: by level %v, by kind %v\n",
+		g.cerr, g.client, g.clientAgent, g.serr, g.server, g.srvAgent, g.splitErr, g.slotLevels, g.slotKinds, g.srvLevels, g.srvKinds)
+}
+
+// pageDuration writes seconds as /dashboard does: hours and minutes,
+// rounded down to the minute, and "<1m" for more than nothing but under a
+// minute.
+func pageDuration(s float64) string {
+	m := int64(s / 60)
+	switch {
+	case m == 0 && s > 0:
+		return "<1m"
+	case m < 60:
+		return strconv.FormatInt(m, 10) + "m"
+	case m%60 == 0:
+		return strconv.FormatInt(m/60, 10) + "h"
+	}
+	return strconv.FormatInt(m/60, 10) + "h " + strconv.FormatInt(m%60, 10) + "m"
 }
 
 // slotSplits is the client's minute buckets of date by evidence level and
@@ -1127,16 +1198,20 @@ func (r *rehearsal) slotSplits(date string) (levels, kinds map[string]float64, e
 
 // bucketRev is a line of the agent's minute buckets, the parts read here.
 type bucketRev struct {
-	Minute string `json:"minute"`
-	Rev    int    `json:"rev"`
-	Slots  []struct {
-		CR   float64 `json:"cr"`
-		Kind string  `json:"kind"`
-		EV   string  `json:"ev"`
-	} `json:"slots"`
+	Minute string    `json:"minute"`
+	Rev    int       `json:"rev"`
+	Slots  []slotRev `json:"slots"`
 	// Anchors are the human acts whose windows the minute's credit came
 	// from, by event id: local, never uploaded (DESIGN 4.3).
 	Anchors []string `json:"anchors"`
+}
+
+// slotRev is one 15-second slot of a minute bucket: its credit, and the
+// kind and level of its one reason (SM 5.1).
+type slotRev struct {
+	CR   float64 `json:"cr"`
+	Kind string  `json:"kind"`
+	EV   string  `json:"ev"`
 }
 
 // latestBuckets is the latest revision of each minute in the agent's
@@ -1203,10 +1278,13 @@ func (r *rehearsal) stepUninstall(t *testing.T) {
 	r.collect(t)
 	last := len(r.plan.Steps) - 1
 	if r.ok["claude"] && r.claudeAt(last, "waiting") {
-		// The teen quits Claude Code first, which runs SessionEnd.
-		r.typePrompt(t, r.plan.Steps[last].Prompt)
-		r.waitCalls(t, last, time.Minute)
-		r.waitClaude(t, 10*time.Second, "claude exiting", func(log []claudeEvent) bool { return hasClaude(log, last+1, "done") })
+		// The teen quits Claude Code first, which runs SessionEnd. Its own
+		// subtest, so the uninstall below runs whatever it finds.
+		t.Run("Claude Code's /exit runs its SessionEnd hook, which exits 0", func(t *testing.T) {
+			r.typePrompt(t, r.plan.Steps[last].Prompt)
+			r.waitCalls(t, last, time.Minute)
+			r.waitClaude(t, 10*time.Second, "claude exiting", func(log []claudeEvent) bool { return hasClaude(log, last+1, "done") })
+		})
 	}
 	res := r.run(t, "uninstall", 3*time.Minute, r.pt, "uninstall", "--yes", "--delete-data")
 	if res.code != 0 {
@@ -1219,7 +1297,7 @@ func (r *rehearsal) stepUninstall(t *testing.T) {
 	for _, c := range []struct {
 		dir, keep, what string
 	}{
-		{r.home, filepath.Join(r.home, "projects"), "the home folder"},
+		{r.home, r.project, "the home folder"},
 		{r.runtime, "", "XDG_RUNTIME_DIR"},
 		{r.tmp, "", "TMPDIR"},
 	} {
@@ -1576,24 +1654,26 @@ func (r *rehearsal) dates() []string {
 	return out
 }
 
-// clientDays is the agent's GET /v1/days for each date.
-func (r *rehearsal) clientDays(dates []string) (byDay, error) {
-	out := byDay{}
+// clientDays is the agent's GET /v1/days for each date: the credit, and
+// the agent's time on its own over every project (SM 5.3's agent_only_s).
+func (r *rehearsal) clientDays(dates []string) (byDay, map[string]float64, error) {
+	out, agent := byDay{}, map[string]float64{}
 	for _, date := range dates {
 		m, _, err := r.agentGet("/v1/days/" + date)
 		if err != nil {
-			return out, err
+			return out, agent, err
 		}
 		out[date] = map[string]credit{}
 		projects, _ := m["projects"].([]any)
 		for _, p := range projects {
 			pm, _ := p.(map[string]any)
+			agent[date] += num(pm, "agent_only_s")
 			if c := (credit{S: num(pm, "credited_s"), PendingS: num(pm, "pending_s")}); c.S > 0 {
 				out[date][str(pm, "project")] = c
 			}
 		}
 	}
-	return out, nil
+	return out, agent, nil
 }
 
 // serverDays is the signed-in account's GET /api/v1/users/me/dashboard,
@@ -1748,6 +1828,39 @@ func (r *rehearsal) saveLedger(evs []event.Event) {
 		b.WriteByte('\n')
 	}
 	r.save("ledger-events.jsonl", b.String())
+}
+
+// sessionRecords are the least the session's hook calls leave in the
+// ledger, by kind: the capture's calls 000001 to 000014 make one session
+// start, and three turns with their outputs, tool calls and stops.
+var sessionRecords = []struct {
+	kind event.Kind
+	min  int
+}{{event.KindSessionStart, 1}, {event.KindPromptSubmit, 3}, {event.KindAgentOutput, 3}, {event.KindAgentTool, 3}, {event.KindAgentStop, 3}}
+
+// recordedAll reports whether evs hold every record sessionRecords asks
+// for.
+func recordedAll(evs []event.Event) bool {
+	for _, w := range sessionRecords {
+		if countKind(evs, w.kind) < w.min {
+			return false
+		}
+	}
+	return true
+}
+
+// recordCounts writes how many records of each of sessionRecords' kinds
+// evs hold, or with want set, how many they must.
+func recordCounts(evs []event.Event, want bool) string {
+	var parts []string
+	for _, w := range sessionRecords {
+		n := countKind(evs, w.kind)
+		if want {
+			n = w.min
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", n, w.kind))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func countKind(evs []event.Event, k event.Kind) int {
@@ -2184,7 +2297,7 @@ func waitGone(pid int, timeout time.Duration) bool {
 }
 
 // leftIn lists what is in dir, its subfolders' contents included, apart
-// from keep and what it holds.
+// from keep, what it holds, and the folders on the way to it.
 func leftIn(dir, keep string) ([]string, error) {
 	var left []string
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
@@ -2194,8 +2307,11 @@ func leftIn(dir, keep string) ([]string, error) {
 		if p == dir {
 			return nil
 		}
-		if keep != "" && (p == keep || strings.HasPrefix(p, keep+string(filepath.Separator))) {
+		if keep != "" && p == keep {
 			return filepath.SkipDir
+		}
+		if keep != "" && d.IsDir() && strings.HasPrefix(keep, p+string(filepath.Separator)) {
+			return nil // a folder keep is in: look inside, but it isn't left over itself
 		}
 		rel, _ := filepath.Rel(dir, p)
 		if d.IsDir() {
