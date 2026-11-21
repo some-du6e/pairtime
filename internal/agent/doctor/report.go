@@ -162,7 +162,7 @@ func diskWords(kind string) string {
 	case "ssd":
 		return "ssd"
 	}
-	return "unknown on this OS"
+	return "unknown: the OS doesn't say for the disk pairtime's data is on"
 }
 
 // mb says bytes in megabytes, as footprint.yml's 25 MB budget counts them.

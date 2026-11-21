@@ -126,18 +126,23 @@ func TestReadRecords(t *testing.T) {
 			wantErr: ErrDamaged,
 		},
 		{
-			name: "a seal that closes more records than its segment has, after a seal it read, is damage",
+			name: "a seal that doesn't close the records before it is damage, said once the rest is read, and leaves them in no batch",
 			setup: func(t *testing.T, dir string, w *Writer, c *clock, rng *rand.Rand) {
 				writeAt(t, w, c, rng, testT)
 				seal(t, w, c, testT+1000)
 				writeAt(t, w, c, rng, testT+2000)
-				seal(t, w, c, testT+3000)
 				w.Close()
-				// A third seal claims a record the segment doesn't have.
-				sp := []byte(`{"b":3,"first_seq":3,"n":1}`)
-				appendTo(t, segPath(dir, "2026-11-19"), appendFrame(nil, kindSeal, sp))
+				// After the writer's seal of record 2, a seal that claims two
+				// records of which the segment has none, then a record after.
+				seg := segPath(dir, "2026-11-19")
+				appendTo(t, seg, appendFrame(nil, kindSeal, []byte(`{"b":3,"first_seq":3,"n":2}`)))
+				var h ledger.Header
+				binary.BigEndian.PutUint64(h[:8], 3)
+				h[8] = 0x13
+				body := []byte(`{"n":"` + string(make64('0')) + `","e":{"t":1795089604000}}`)
+				appendTo(t, seg, appendFrame(nil, kindRecord, append(h[:], body...)))
 			},
-			want:    []shown{{1, "2026-11-19", 1}, {2, "2026-11-19", 2}},
+			want:    []shown{{1, "2026-11-19", 1}, {2, "2026-11-19", 2}, {3, "2026-11-19", 0}},
 			wantErr: ErrDamaged,
 		},
 		{

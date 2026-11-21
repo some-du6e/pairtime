@@ -52,27 +52,35 @@ func TestDoctorReadsTheStatus(t *testing.T) {
 	if err := json.Unmarshal(b, &d); err != nil {
 		t.Fatalf("doctor can't read the agent's status: %v", err)
 	}
-	t.Run("every field doctor reads is one the agent writes", func(t *testing.T) {
-		for _, path := range zeroFields(reflect.ValueOf(d), "status") {
-			t.Errorf("%s is empty after reading a full status: the agent writes no field of that name", path)
-		}
-	})
-	t.Run("each value doctor reads is the one the agent wrote", func(t *testing.T) {
-		back, err := json.Marshal(d)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var agentSide, doctorSide map[string]any
-		if err := json.Unmarshal(b, &agentSide); err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(back, &doctorSide); err != nil {
-			t.Fatal(err)
-		}
-		for _, diff := range sameValues(doctorSide, agentSide, "status") {
-			t.Error(diff)
-		}
-	})
+	tests := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{"every field doctor reads is one the agent writes", func(t *testing.T) {
+			for _, path := range zeroFields(reflect.ValueOf(d), "status") {
+				t.Errorf("%s is empty after reading a full status: the agent writes no field of that name", path)
+			}
+		}},
+		{"each value doctor reads is the one the agent wrote", func(t *testing.T) {
+			back, err := json.Marshal(d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var agentSide, doctorSide map[string]any
+			if err := json.Unmarshal(b, &agentSide); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(back, &doctorSide); err != nil {
+				t.Fatal(err)
+			}
+			for _, diff := range sameValues(doctorSide, agentSide, "status") {
+				t.Error(diff)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, tt.check)
+	}
 }
 
 // zeroFields lists the paths of the empty values in v, a struct, through
@@ -206,7 +214,7 @@ func TestFootprint(t *testing.T) {
 				t.Errorf("rss %d is above its peak %d", f.RSSBytes, f.PeakRSSBytes)
 			}
 		}},
-		{"on the OSes pairtime ships for, the peak resident set is known and more than a megabyte", func(t *testing.T, f footprintReply) {
+		{"the peak resident set is known and more than a megabyte", func(t *testing.T, f footprintReply) {
 			if f.PeakRSSBytes < 1<<20 {
 				t.Errorf("peak rss = %d bytes", f.PeakRSSBytes)
 			}

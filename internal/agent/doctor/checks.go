@@ -197,18 +197,29 @@ func adapterChecks(f Facts) []Check {
 		n := a.Harnesses[h]
 		c.Result = OK
 		c.Text = fmt.Sprintf("found; since the agent started, %s made %s", count(n.Calls, "call", "calls"), count(n.Records, "record", "records"))
-		switch {
-		case n.Calls == 0:
-			c.Text = "found; no hook call has come in since the agent started"
-		case n.ParseFailures > 0:
-			c.Result = Warn
-			c.Text += fmt.Sprintf(", and %s didn't fully parse, the last: %s. pairtime may count less of this harness until it does, so report it at %s", count(n.ParseFailures, "call", "calls"), reason(n.LastFailure), issues)
-		default:
-			c.Text += ", with no parse failures"
+		// The agent keeps one last failure for both kinds, so it is named
+		// for neither.
+		var trouble []string
+		if n.ParseFailures > 0 {
+			trouble = append(trouble, count(n.ParseFailures, "call", "calls")+" didn't fully parse")
 		}
 		if n.WriteFailures > 0 {
+			trouble = append(trouble, "the ledger refused "+count(n.WriteFailures, "record", "records"))
+		}
+		switch {
+		case n.Calls == 0 && len(trouble) == 0:
+			c.Text = "found; no hook call has come in since the agent started"
+		case len(trouble) == 0:
+			c.Text += ", with no parse failures"
+		default:
 			c.Result = Warn
-			c.Text += fmt.Sprintf("; the ledger refused %s, and the ledger line says why", count(n.WriteFailures, "record", "records"))
+			c.Text += ", but " + strings.Join(trouble, " and ")
+			if n.LastFailure != "" {
+				c.Text += "; the last failure: " + reason(n.LastFailure)
+			}
+			if n.ParseFailures > 0 {
+				c.Text += ". pairtime may count less of this harness until it reads them, so report it at " + issues
+			}
 		}
 		if !slices.Contains(f.Adapters, h) {
 			c.Text += "; this pairtime has no adapter for it, but the agent does"
@@ -244,22 +255,32 @@ func spoolCheck(f Facts) Check {
 	return c
 }
 
-// promptWords says how many of the spooled calls were prompts.
+// promptWords says how many of the spooled calls were prompts, of those
+// whose journal lines say: the lines an older version wrote don't.
 func promptWords(s Spooled) string {
-	if s.Calls == 1 {
-		switch {
-		case s.Unknown == 1:
-			return "from a pairtime too old to record whether it was a prompt"
-		case s.Prompts == 1:
-			return "and it was a prompt"
-		}
+	unknown := min(s.Unknown, s.Calls)
+	known := s.Calls - unknown
+	switch {
+	case known == 0 && s.Calls == 1:
+		return "from a pairtime too old to record whether it was a prompt"
+	case known == 0:
+		return "all from a pairtime too old to record whether they were prompts"
+	case s.Calls == 1 && s.Prompts > 0:
+		return "and it was a prompt"
+	case s.Calls == 1:
 		return "and it wasn't a prompt"
+	case unknown == 0:
+		return count(s.Prompts, "of them a prompt", "of them prompts")
 	}
-	w := count(s.Prompts, "of them a prompt", "of them prompts")
-	if s.Unknown > 0 {
-		w += fmt.Sprintf(", and %d from a pairtime too old to record whether they were", s.Unknown)
+	were := "were prompts"
+	if s.Prompts == 1 {
+		were = "was a prompt"
 	}
-	return w
+	them := "they were"
+	if unknown == 1 {
+		them = "it was"
+	}
+	return fmt.Sprintf("%d of the %d it can tell %s, and %d from a pairtime too old to record whether %s", s.Prompts, known, were, unknown, them)
 }
 
 // problemChecks are the problems the agent reports, each in its own

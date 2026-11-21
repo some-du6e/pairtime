@@ -278,21 +278,30 @@ func TestDoctorAgentLine(t *testing.T) {
 }
 
 func TestDoctorSlowAgent(t *testing.T) {
-	old := doctorWait
-	doctorWait = 200 * time.Millisecond
-	t.Cleanup(func() { doctorWait = old })
-	h := newDoctorHome(t)
-	release := make(chan struct{})
-	h.agent(func(string) (json.RawMessage, error) {
-		<-release
-		return nil, ipc.ErrUnknownQuestion
-	})
-	// Registered after the agent's, so it runs first and the agent can
-	// stop.
-	t.Cleanup(func() { close(release) })
-	checks, code := doctorChecks(t)
-	if c := checks["agent"]; c.Result != doctor.Fail || !strings.Contains(c.Text, "didn't answer within 0.2 s") || code != 1 {
-		t.Errorf("a stuck agent gives %+v and exit %d, want a failure that says it didn't answer within 0.2 s, and exit 1", c, code)
+	tests := []struct {
+		name     string
+		wait     time.Duration
+		wantText string
+	}{
+		{"an agent that doesn't answer within doctor's wait fails, saying it may be stuck", 200 * time.Millisecond, "didn't answer within 0.2 s, so it may be stuck"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			swap(t, &doctorWait, tt.wait)
+			h := newDoctorHome(t)
+			release := make(chan struct{})
+			h.agent(func(string) (json.RawMessage, error) {
+				<-release
+				return nil, ipc.ErrUnknownQuestion
+			})
+			// Registered after the agent's, so it runs first and the agent
+			// can stop.
+			t.Cleanup(func() { close(release) })
+			checks, code := doctorChecks(t)
+			if c := checks["agent"]; c.Result != doctor.Fail || !strings.Contains(c.Text, tt.wantText) || code != 1 {
+				t.Errorf("a stuck agent gives %+v and exit %d, want a failure that says %q, and exit 1", c, code, tt.wantText)
+			}
+		})
 	}
 }
 
@@ -614,22 +623,34 @@ func TestDoctorReportNamesNothing(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("doctor --report = %d, stderr %q", code, errOut)
 	}
-	// The 20 round trips take 10 to 29 ms and the starts 5 to 24 ms, so
-	// their medians are 19.5 and 14.5 ms, which round up.
-	for _, want := range []string{"pairtime footprint report", "agent memory:    18.2 MB now, 21.4 MB at most", "hook round trip: claude_code: 20 ms median",
-		"start-up alone:  15 ms median"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("the report doesn't have %q:\n%s", want, out)
-		}
+	tests := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{"the username, hostname, home path and data folder planted everywhere never reach the report, nor does this computer's own name", func(t *testing.T) {
+			planted := []string{user, host, homeDir, filepath.ToSlash(homeDir), strings.ReplaceAll(homeDir, "/", `\`), data, filepath.ToSlash(data)}
+			if real, err := os.Hostname(); err == nil && len(real) >= 6 {
+				planted = append(planted, real)
+			}
+			for _, p := range planted {
+				if strings.Contains(strings.ToLower(out), strings.ToLower(p)) {
+					t.Errorf("the report has %q:\n%s", p, out)
+				}
+			}
+		}},
+		{"with all of that scrubbed, the report still has the agent's memory and the hook's times", func(t *testing.T) {
+			// The 20 round trips take 10 to 29 ms and the starts 5 to 24
+			// ms, so their medians are 19.5 and 14.5 ms, which round up.
+			for _, want := range []string{"pairtime footprint report", "agent memory:    18.2 MB now, 21.4 MB at most", "hook round trip: claude_code: 20 ms median",
+				"start-up alone:  15 ms median"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("the report doesn't have %q:\n%s", want, out)
+				}
+			}
+		}},
 	}
-	planted := []string{user, host, homeDir, filepath.ToSlash(homeDir), strings.ReplaceAll(homeDir, "/", `\`), data, filepath.ToSlash(data)}
-	if real, err := os.Hostname(); err == nil && len(real) >= 6 {
-		planted = append(planted, real)
-	}
-	for _, p := range planted {
-		if strings.Contains(strings.ToLower(out), strings.ToLower(p)) {
-			t.Errorf("the report has %q:\n%s", p, out)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, tt.check)
 	}
 }
 

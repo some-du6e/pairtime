@@ -52,6 +52,7 @@ func TestChecks(t *testing.T) {
 		check   string
 		want    Result
 		wantHas []string
+		wantNot []string
 		absent  bool
 	}{
 		{name: "a running agent of this version is ok, with what its mode uploads and how fast it answered",
@@ -122,11 +123,17 @@ func TestChecks(t *testing.T) {
 		{name: "settings that don't read warn that doctor can't tell",
 			edit:  claude(func(h *Hooks) { h.ReadError = "settings.json isn't valid JSON" }),
 			check: "hook.claude_code", want: Warn, wantHas: []string{"can't tell", "isn't valid JSON"}},
-		{name: "an adapter's parse failures warn, with the last one",
+		{name: "an adapter's parse failures warn, with the last failure and where to report them",
 			edit: func(f *Facts) {
 				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, ParseFailures: 2, LastFailure: "Stop: unknown field"}
 			},
-			check: "adapter.claude_code", want: Warn, wantHas: []string{"2 calls didn't fully parse", "Stop: unknown field"}},
+			check: "adapter.claude_code", want: Warn, wantHas: []string{"but 2 calls didn't fully parse; the last failure: Stop: unknown field", "report it at"}},
+		{name: "a record the ledger refused warns, and isn't called a parse failure",
+			edit: func(f *Facts) {
+				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, Records: 4, WriteFailures: 1, LastFailure: "the ledger refused a prompt.submit record: closed"}
+			},
+			check: "adapter.claude_code", want: Warn, wantHas: []string{"but the ledger refused 1 record; the last failure: the ledger refused a prompt.submit record"},
+			wantNot: []string{"parse", "report it at"}},
 		{name: "an unsigned release is ok, and says releases aren't signed yet",
 			edit: func(*Facts) {}, check: "signing", want: OK,
 			wantHas: []string{"release v0.1.0 from commit 0123456789ab, not code-signed", "aren't code-signed yet"}},
@@ -170,9 +177,13 @@ func TestChecks(t *testing.T) {
 		{name: "one spooled prompt reads as one",
 			edit: func(f *Facts) { f.Agent.IPC.Spooled = Spooled{Calls: 1, Prompts: 1} }, check: "spool", want: Warn,
 			wantHas: []string{"1 hook call of the last 7 days reached the agent only through the spool, and it was a prompt"}},
-		{name: "spooled calls an older version recorded say their kind isn't known",
+		{name: "spooled calls an older version recorded count apart from those whose kind is known",
 			edit: func(f *Facts) { f.Agent.IPC.Spooled = Spooled{Calls: 4, Prompts: 1, Unknown: 2} }, check: "spool", want: Warn,
-			wantHas: []string{"1 of them a prompt, and 2 from a pairtime too old to record whether they were"}},
+			wantHas: []string{"4 hook calls", "1 of the 2 it can tell was a prompt, and 2 from a pairtime too old to record whether they were"}},
+		{name: "when no spooled call's kind is known, the line counts no prompts at all",
+			edit: func(f *Facts) { f.Agent.IPC.Spooled = Spooled{Calls: 3, Unknown: 3} }, check: "spool", want: Warn,
+			wantHas: []string{"3 hook calls of the last 7 days reached the agent only through the spool, all from a pairtime too old to record whether they were prompts"},
+			wantNot: []string{"0 of"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -194,6 +205,11 @@ func TestChecks(t *testing.T) {
 			for _, w := range tt.wantHas {
 				if !strings.Contains(c.Text, w) {
 					t.Errorf("%s says %q, want it to say %q", tt.check, c.Text, w)
+				}
+			}
+			for _, w := range tt.wantNot {
+				if strings.Contains(c.Text, w) {
+					t.Errorf("%s says %q, which it mustn't", tt.check, c.Text)
 				}
 			}
 		})

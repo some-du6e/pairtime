@@ -57,11 +57,13 @@ func osRelease(b []byte) string {
 	return strings.TrimSpace(vals["NAME"] + " " + vals["VERSION_ID"])
 }
 
-// DiskKind says whether the disk that holds dir spins, from its block device's
-// queue/rotational in sysfs, or its parent's for a partition: "hdd",
-// "ssd", or "unknown" for a file system with no block device of its own,
-// such as btrfs or tmpfs. A virtual machine's disk often says it spins
-// whatever the host's does.
+// DiskKind says whether the disk that holds dir spins, from its block
+// device's queue/rotational in sysfs, or its parent's for a partition:
+// "hdd", "ssd", or "unknown" when sysfs doesn't say. A file system whose
+// files carry a device number of its own rather than the disk's, as
+// btrfs's do, is looked up in /proc/self/mountinfo, whose source names the
+// disk; one with no disk, such as tmpfs, is unknown. A virtual machine's
+// disk often says it spins whatever the host's does.
 func DiskKind(dir string) string {
 	fi, err := os.Stat(dir)
 	if err != nil {
@@ -74,7 +76,17 @@ func DiskKind(dir string) string {
 	dev := uint64(st.Dev)
 	major, minor := unix.Major(dev), unix.Minor(dev)
 	if major == 0 {
-		return "unknown"
+		b, err := os.ReadFile("/proc/self/mountinfo")
+		if err != nil {
+			return "unknown"
+		}
+		src := mountSource(b, major, minor)
+		var ds syscall.Stat_t
+		if src == "" || syscall.Stat(src, &ds) != nil || ds.Mode&syscall.S_IFMT != syscall.S_IFBLK {
+			return "unknown"
+		}
+		dev = uint64(ds.Rdev)
+		major, minor = unix.Major(dev), unix.Minor(dev)
 	}
 	base := fmt.Sprintf("/sys/dev/block/%d:%d", major, minor)
 	for _, p := range []string{base + "/queue/rotational", base + "/../queue/rotational"} {
@@ -90,4 +102,46 @@ func DiskKind(dir string) string {
 		}
 	}
 	return "unknown"
+}
+
+// mountSource returns the source of the mount mountinfo lists with device
+// major:minor, when it is a device under /dev, and "" otherwise. A line of
+// mountinfo is "36 35 0:42 / /home rw,relatime - btrfs /dev/nvme0n1p3
+// rw,ssd": the third field is the device, and the second after " - " the
+// source, with spaces and the like written as octal escapes.
+func mountSource(mountinfo []byte, major, minor uint32) string {
+	want := fmt.Sprintf("%d:%d", major, minor)
+	sc := bufio.NewScanner(bytes.NewReader(mountinfo))
+	sc.Buffer(nil, 1<<20)
+	for sc.Scan() {
+		head, tail, ok := strings.Cut(sc.Text(), " - ")
+		f, t := strings.Fields(head), strings.Fields(tail)
+		if !ok || len(f) < 5 || len(t) < 2 || f[2] != want {
+			continue
+		}
+		if src := unescapeMount(t[1]); strings.HasPrefix(src, "/dev/") {
+			return src
+		}
+		return ""
+	}
+	return ""
+}
+
+// unescapeMount undoes mountinfo's octal escapes, such as \040 for a space.
+func unescapeMount(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+3 < len(s) {
+			if n, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
+				b.WriteByte(byte(n))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }

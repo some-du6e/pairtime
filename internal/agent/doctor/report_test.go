@@ -88,7 +88,7 @@ func TestReportText(t *testing.T) {
 		{
 			name: "a disk whose kind the OS doesn't say is unknown",
 			edit: func(r *Report) { r.Disk = "unknown" },
-			want: []string{"disk:            unknown on this OS\n"},
+			want: []string{"disk:            unknown: the OS doesn't say for the disk pairtime's data is on\n"},
 		},
 	}
 	for _, tt := range tests {

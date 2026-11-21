@@ -5,6 +5,7 @@ package ledger
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"strings"
 
@@ -35,12 +36,13 @@ type Stored struct {
 // root or head. A segment can start inside a batch whose first records are
 // in a segment from leaves out or retention deleted: its records take the
 // batch of the seal that closes them. A record of a kind added after this
-// version (ledger-v1 4.2) is read like any other. A segment before the
-// newest that ends in a frame that isn't whole is damaged, and what came
-// after that frame is lost: ReadRecords goes on with the next segment, and
-// once it has read the rest it returns an error wrapping ErrDamaged that
-// names the segments. A seal that doesn't close the records before it
-// stops it with ErrDamaged.
+// version (ledger-v1 4.2) is read like any other. Damage doesn't stop it:
+// a seal that doesn't close the records before it leaves them with batch
+// 0, and a segment before the newest that ends in a frame that isn't whole
+// has lost what came after it, so ReadRecords goes on with the next
+// segment. Once it has read the rest it returns an error wrapping
+// ErrDamaged that says where. A frame that isn't a record or a seal, or a
+// record frame that doesn't read, stops it with ErrDamaged at once.
 func ReadRecords(dir, from string, fn func(Stored) error) error {
 	days, err := segments(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -65,7 +67,7 @@ func ReadRecords(dir, from string, fn func(Stored) error) error {
 		waiting = waiting[:0]
 		return nil
 	}
-	var torn []string
+	var damage []string
 	for i, day := range days {
 		if day < from {
 			continue
@@ -84,7 +86,9 @@ func ReadRecords(dir, from string, fn func(Stored) error) error {
 					return damaged("the segment of %s, offset %d: %v", day, fm.off, err)
 				}
 				if !closes(sp, waiting, fresh) {
-					return damaged("the seal of batch %d, in the segment of %s, doesn't close the records before it", sp.B, day)
+					damage = append(damage, fmt.Sprintf("the seal of batch %d, in the segment of %s, doesn't close the records before it", sp.B, day))
+					fresh = true
+					return emit(0)
 				}
 				fresh = false
 				return emit(sp.B)
@@ -98,7 +102,7 @@ func ReadRecords(dir, from string, fn func(Stored) error) error {
 		}
 		if !more && i < len(days)-1 {
 			// The seal of the records waiting may be in what was lost.
-			torn = append(torn, day)
+			damage = append(damage, fmt.Sprintf("the segment of %s ends in a frame that isn't whole, so what came after it is lost", day))
 			if err := emit(0); err != nil {
 				return err
 			}
@@ -108,8 +112,8 @@ func ReadRecords(dir, from string, fn func(Stored) error) error {
 	if err := emit(0); err != nil {
 		return err
 	}
-	if len(torn) > 0 {
-		return damaged("the segments of %s end in a frame that isn't whole, so what came after it in each is lost", strings.Join(torn, ", "))
+	if len(damage) > 0 {
+		return damaged("%s", strings.Join(damage, "; "))
 	}
 	return nil
 }
