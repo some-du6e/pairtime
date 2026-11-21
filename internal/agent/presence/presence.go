@@ -19,8 +19,10 @@
 // reconstructs the gap exactly, and gaps come from wall-clock values,
 // never from time.Since (CP 2.2).
 //
-// The OS sources live under internal/platform; ThisOS picks the ones for
-// the OS the agent runs on. The focus watcher (WP-OS2), the process
+// The OS sources live under internal/platform. ThisOS picks the ones for
+// Windows. On macOS and Linux presence shares one connection to the OS
+// with the focus component, so the agent opens it and builds the sources
+// with MacOS or LinuxOS (WP-OS9). The focus watcher (WP-OS2), the process
 // scanner (WP-OS6) and the hook path (WP-AG3) report to a Sampler through
 // FocusAt, HarnessProcesses and Hook.
 package presence
@@ -65,10 +67,13 @@ type Idle struct {
 	// Any is the time since the last keyboard or mouse input in this
 	// session.
 	Any time.Duration
-	// Keys is the time since the last key press. It is valid only when
-	// HasKeys is set: Windows can't tell keys from other input without a
-	// keyboard listener, which pairtime doesn't run before its builds are
-	// signed (DESIGN 7.2 item 5, 11 risk 18).
+	// Keys is the time since the last key-down the OS saw. It is valid only
+	// when HasKeys is set: Windows and Linux can't tell keys from other
+	// input without a keyboard listener, which pairtime doesn't run before
+	// its builds are signed (DESIGN 7.2 item 5, 11 risk 18). macOS gives it,
+	// but its count includes key-downs other processes post, so it says a
+	// key event reached the session, not that a person pressed a key
+	// (internal/platform/darwin, D-macos-hid-posted).
 	Keys    time.Duration
 	HasKeys bool
 }
@@ -76,7 +81,8 @@ type Idle struct {
 // OS is what the sampler needs from the operating system.
 type OS struct {
 	// Idle reads the input idle time. Nil means this OS has no source yet,
-	// so the sampler records nothing and presence stays unknown (SM 2.1).
+	// so the sampler records nothing and presence stays unknown (SM 2.1);
+	// its power watches still run, so suspends and locks still seal.
 	Idle func() (Idle, error)
 	// Locked reports whether the session is locked. The sampler asks once,
 	// at Start, after the lock watch has started, and follows lock and
@@ -120,10 +126,11 @@ type Options struct {
 	// return quickly and must not call the Sampler. Nil drops records.
 	Record func(Record)
 	// Seal, when set, is called after every suspend and lock, whether or
-	// not a project context is live, so the ledger writer can seal a
-	// batch (DESIGN 3.3, 3.6). For a suspend it runs on the thread Windows
-	// delivers the event on, which gets about two seconds before the
-	// machine sleeps.
+	// not a project context is live and whether or not the OS gives idle
+	// time, so the ledger writer can seal a batch (DESIGN 3.3, 3.6). For a
+	// suspend it runs before the machine sleeps: on Windows on the thread
+	// the event comes on, which gets about two seconds, on macOS inside the
+	// Loop's Power call, and on Linux before logind's delay lock is let go.
 	Seal func(op event.PowerOp)
 	// Problem gets a description of what is wrong, for doctor and the
 	// status endpoint, each time it changes; "" means nothing is.
@@ -146,11 +153,12 @@ type Sampler struct {
 	watching bool
 	started  bool
 	stopped  bool
-	stops    []func()      // stop the power watches
-	timer    *sched.Job    // nil until a context first goes live
-	due      time.Time     // when timer fires; zero while it is stopped
-	every    time.Duration // the cadence timer was armed for
-	last     time.Time     // the time of the latest sample
+	stops    []func()        // stop the power watches
+	watched  map[string]bool // the power watches that run, by source
+	timer    *sched.Job      // nil until a context first goes live
+	due      time.Time       // when timer fires; zero while it is stopped
+	every    time.Duration   // the cadence timer was armed for
+	last     time.Time       // the time of the latest sample
 	// recAt is the time of the latest record, the sampler's own or one a
 	// FocusAt caller wrote, which no later record goes before.
 	recAt    time.Time
@@ -168,19 +176,20 @@ func New(opts Options) *Sampler {
 		tables := params.Tables()
 		tab = tables[len(tables)-1]
 	}
-	return &Sampler{opts: opts, g: gate{cadence: cadenceOf(tab)}, problems: make(map[string]string)}
+	return &Sampler{opts: opts, g: gate{cadence: cadenceOf(tab)}, problems: make(map[string]string), watched: make(map[string]bool)}
 }
 
 // Start starts the power watches, reads the session's lock state and
 // starts sampling. A source that fails is reported through
-// Options.Problem, and the sampler carries on without it. With no idle
-// source, Start does nothing. Focus, Hook and HarnessProcesses may come
-// before Start: the gate keeps what they report, and sampling starts with
-// Start.
+// Options.Problem, and the sampler carries on without it. Focus, Hook and
+// HarnessProcesses may come before Start: the gate keeps what they report,
+// and sampling starts with Start.
+//
+// With no idle source, presence is unknown (SM 2.1), so Start starts the
+// power watches and nothing else: nothing is sampled or recorded, but every
+// suspend and lock still calls Options.Seal, because DESIGN 3.3 and 3.6
+// seal the open batch on each one whether or not idle time is known.
 func (s *Sampler) Start() {
-	if s.opts.OS.Idle == nil {
-		return
-	}
 	s.mu.Lock()
 	if s.watching || s.stopped {
 		s.mu.Unlock()
@@ -191,6 +200,11 @@ func (s *Sampler) Start() {
 
 	s.watch("suspend", "suspend and resume go unrecorded", s.opts.OS.WatchSuspend)
 	s.watch("lock", "lock and unlock go unrecorded", s.opts.OS.WatchLock)
+	if s.opts.OS.Idle == nil {
+		// started stays false, so Power seals but records nothing, and no
+		// sample is ever taken.
+		return
+	}
 
 	// The lock state is read only now, because Windows tells a new
 	// registration nothing about the state it starts in: read before the
@@ -239,6 +253,7 @@ func (s *Sampler) watch(source, loss string, start func(func(event.PowerOp)) (fu
 		return
 	}
 	s.stops = append(s.stops, stop)
+	s.watched[source] = true
 	s.mu.Unlock()
 }
 
@@ -253,6 +268,7 @@ func (s *Sampler) Stop() {
 	s.due, s.every = time.Time{}, 0
 	stops := s.stops
 	s.stops = nil
+	clear(s.watched)
 	s.mu.Unlock()
 	for _, stop := range stops {
 		stop()
@@ -328,9 +344,10 @@ func (s *Sampler) HarnessProcesses(n int) {
 }
 
 // Power reports a suspend, resume, lock or unlock. The OS's watcher calls
-// it, and so may anything else that learns of one. In a live context it
-// records the event and a sample after it; suspends and locks call
-// Options.Seal in any case.
+// it, and so may anything else that learns of one. Once sampling has
+// started, a live context records the event and a sample after it. With no
+// idle source sampling never starts, so nothing is recorded. Between Start
+// and Stop, suspends and locks call Options.Seal in any case.
 func (s *Sampler) Power(op event.PowerOp) {
 	s.mu.Lock()
 	if !s.watching || s.stopped {
@@ -347,7 +364,8 @@ func (s *Sampler) Power(op event.PowerOp) {
 		s.setProblem("lock-state", "")
 	}
 	// While Start is still reading the lock state, an event only sets the
-	// state its first sample shows.
+	// state its first sample shows. With no idle source started stays
+	// false, so an event only seals.
 	if s.started {
 		if s.g.interval(wall(now)) != 0 {
 			s.emit(Record{At: now, Data: &event.OSPower{Op: op}})
@@ -369,6 +387,10 @@ type Status struct {
 	Every   time.Duration
 	Locked  bool
 	Samples uint64
+	// Watching names the power watches that run, "suspend" and "lock", in
+	// that order. A watch the OS has none of, or that failed to start, is
+	// missing, and so is every watch before Start and after Stop.
+	Watching []string
 	// Problems are what is wrong, by source.
 	Problems []string
 }
@@ -378,7 +400,20 @@ func (s *Sampler) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	every := s.g.interval(wall(time.Now()))
-	return Status{Live: every != 0, Every: every, Locked: s.locked, Samples: s.samples, Problems: s.problemList()}
+	return Status{Live: every != 0, Every: every, Locked: s.locked, Samples: s.samples,
+		Watching: s.watchingList(), Problems: s.problemList()}
+}
+
+// watchingList returns the names of the power watches that run, in the
+// order Start starts them.
+func (s *Sampler) watchingList() []string {
+	var names []string
+	for _, name := range []string{"suspend", "lock"} {
+		if s.watched[name] {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // update applies change to the gate, takes a sample at once if a context
