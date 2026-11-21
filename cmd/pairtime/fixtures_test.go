@@ -302,7 +302,7 @@ func TestFixturesScrub(t *testing.T) {
 		},
 		{
 			// RFC 3986 keeps [ and ] out of a user and a password.
-			name:     "two slashes with no scheme before them aren't a URL when a bracket follows, as in namespaced XPath",
+			name:     "with no scheme, a password ends at the last @ before a bracket, so namespaced XPath, with no @ before its bracket, is left alone",
 			files:    map[string]string{"xpath.py": "tree.xpath('//xs:element[@name]', namespaces=ns)\npom.findall(\".//pom:dependency[@scope]\")\n"},
 			wantCode: 0,
 			wantOut:  []string{"removed 0 spans from 0 of 1 files"},
@@ -310,8 +310,12 @@ func TestFixturesScrub(t *testing.T) {
 		{
 			// The scan runs on past the host into the query or fragment,
 			// so the last @ there ends the user, and the key in it is
-			// followed by the host's @, a ? or a #. The second line's port
-			// colon starts a password, as it does in pkg/redact's rule.
+			// followed by the host's @, a ? or a #. On the second line the
+			// port's colon starts a password that runs to the query's @, as
+			// scrub.py's URL_PASSWORD has it, so the port and the kept
+			// address's local part are replaced too. pkg/redact's
+			// url-password rule finds nothing on that line, since its user
+			// stops at the host's @.
 			name: "a key as a URL's user is still found when the URL runs on into a query or fragment holding an @",
 			files: map[string]string{
 				"query.txt": "http://" + stripe + "@localhost?next=a@b\n" +
