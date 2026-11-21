@@ -26,7 +26,9 @@
 # 3. Right before it makes the draft, and again right before it publishes
 #    it, it checks that refs/tags/VERSION on origin still names GITHUB_SHA,
 #    so a tag moved after checkout, or while the files upload, can't carry
-#    this build.
+#    this build. It checks once more after publishing, since an admin can
+#    still move the tag in the moment before, and the release then goes
+#    out under the moved tag.
 # 4. A draft stays editable by anyone who can write to the repository, so
 #    before it publishes, it checks that the release is still a draft and
 #    that its assets are exactly the files, each at its SHA-256. It
@@ -36,9 +38,10 @@
 #
 # If it stops after making the draft and before publishing it, the draft
 # stays unpublished, and the next run's step 1 deletes it. The exceptions
-# are a draft someone published outside this run, and a publish answer
-# that isn't the release this run uploaded: that release is out and
-# frozen, so the job fails and says to check it.
+# are a draft someone published outside this run, a publish answer that
+# isn't the release this run uploaded, and a tag that names another commit
+# once the release is out: that release is out and frozen, so the job
+# fails and says to check it.
 #
 # GH_REPO names the repository (owner/name), and gh reads its token from
 # GH_TOKEN. PUBLISH_RETRY_SECONDS, 5 unless set, is the pause before an
@@ -87,13 +90,21 @@ check_assets() {
 	fi
 }
 
-# check_tag stops the script unless refs/tags/VERSION on origin names
-# GITHUB_SHA. An annotated tag's own line names the tag object, and its ^{}
-# line the commit the tag points at.
-check_tag() {
-	local refs tagged
+# read_tag sets tagged to the commit refs/tags/VERSION on origin names, or
+# to nothing when origin has no such tag. An annotated tag's own line names
+# the tag object, and its ^{} line the commit the tag points at. It runs in
+# the script's own shell, not in a $(...), so a failed ls-remote stops the
+# script rather than reading as no tag.
+read_tag() {
+	local refs
 	refs=$(git ls-remote origin "refs/tags/$version" "refs/tags/$version^{}")
 	tagged=$(awk -v ref="refs/tags/$version" '$2 == ref { plain = $1 } $2 == ref "^{}" { peeled = $1 } END { print (peeled != "" ? peeled : plain) }' <<<"$refs")
+}
+
+# check_tag stops the script unless refs/tags/VERSION on origin names
+# GITHUB_SHA.
+check_tag() {
+	read_tag
 	if [ "$tagged" != "$GITHUB_SHA" ]; then
 		echo "::error::refs/tags/$version on origin names ${tagged:-no commit}, not $GITHUB_SHA, which this run built, so it won't be published"
 		exit 1
@@ -191,13 +202,21 @@ if [ "$draft" != false ]; then
 	echo "::error::publishing draft release $id answered draft $draft, so $version isn't out"
 	exit 1
 fi
-# Out and frozen from here, so report a wrong tag and wrong files both.
+# Out and frozen from here, so report a wrong tag, a moved tag and wrong
+# files all.
+frozen=false
 if [ "$tag" != "$version" ]; then
 	echo "::error::release $id is published under tag $tag, not $version, and immutable releases keep it as it is. Check the release now."
+	frozen=true
+fi
+read_tag
+if [ "$tagged" != "$GITHUB_SHA" ]; then
+	echo "::error::release $id of $version is published, but its tag refs/tags/$version now names ${tagged:-no commit}, not $GITHUB_SHA, the commit this run built, and immutable releases keep it as it is. Check the release now."
+	frozen=true
 fi
 got=$(jq -r '.assets[] | "\(.name)\t\(.digest)"' <<<"$published" | sort)
 check_assets "release $id of $version is published, but its files aren't exactly the ones this run uploaded, and immutable releases keep them as they are. Check the release now:" "$got"
-if [ "$tag" != "$version" ]; then
+if [ "$frozen" = true ]; then
 	exit 1
 fi
 url=$(jq -r .html_url <<<"$published")

@@ -195,26 +195,27 @@ type publishCase struct {
 	version  string // v1.2.0 if empty
 	releases string // the release list's answer, a page a line
 	// lsRemote is what git ls-remote prints; empty means the version's tag
-	// at builtSHA, unless noTag is set. lsRemote2 replaces it for the
-	// second call.
-	lsRemote, lsRemote2 string
-	noTag               bool
-	listFails           bool           // the release list answers HTTP 502
-	preset              []releaseAsset // assets the draft holds before any upload
-	digestSwaps         string         // digest-swaps.json, if set
-	uploadFails         int            // how many uploads of the first file fail
-	uploadState         string         // what an upload answers as its state
-	uploadSize          string         // what an upload answers as its size
-	uploadLost          string         // a file whose upload keeps nothing
-	publishedOutside    bool           // release 900 is published before the asset check
-	patchAssets         []releaseAsset // the publish answer's assets, if set
-	patchTag            string         // the publish answer's tag, if set
-	patchDraft          bool           // the publish answer is still a draft
-	noFiles             bool           // the script gets only VERSION and NOTES
-	wantCode            int
-	wantCalls           []string // FAKE_DIR is TMP in them
-	wantOut             string   // a substring of the script's output
-	notOut              string   // a string the output must not hold, if set
+	// at builtSHA, unless noTag is set. lsRemote2 and lsRemote3 replace it
+	// for the second call, right before the publish, and the third, right
+	// after it.
+	lsRemote, lsRemote2, lsRemote3 string
+	noTag                          bool
+	listFails                      bool           // the release list answers HTTP 502
+	preset                         []releaseAsset // assets the draft holds before any upload
+	digestSwaps                    string         // digest-swaps.json, if set
+	uploadFails                    int            // how many uploads of the first file fail
+	uploadState                    string         // what an upload answers as its state
+	uploadSize                     string         // what an upload answers as its size
+	uploadLost                     string         // a file whose upload keeps nothing
+	publishedOutside               bool           // release 900 is published before the asset check
+	patchAssets                    []releaseAsset // the publish answer's assets, if set
+	patchTag                       string         // the publish answer's tag, if set
+	patchDraft                     bool           // the publish answer is still a draft
+	noFiles                        bool           // the script gets only VERSION and NOTES
+	wantCode                       int
+	wantCalls                      []string // FAKE_DIR is TMP in them
+	wantOut                        string   // a substring of the script's output
+	notOut                         string   // a string the output must not hold, if set
 }
 
 // TestPublishRelease runs publish_release.sh, which release.yml's publish
@@ -272,14 +273,16 @@ func TestPublishRelease(t *testing.T) {
 	// made is the calls from the first tag check on, for a run that
 	// publishes.
 	made := func(v string, prerelease bool) []string {
-		return slices.Concat([]string{lsRemote(v), create(v, prerelease)}, uploads, []string{release, assets, lsRemote(v), publish(v, prerelease)})
+		return slices.Concat([]string{lsRemote(v), create(v, prerelease)}, uploads, []string{release, assets, lsRemote(v), publish(v, prerelease), lsRemote(v)})
 	}
 	// uploaded is the calls of a run up to its last upload, checked those
-	// of one that stops at the check of the draft's assets, and published
-	// those of one that gets to publish.
+	// of one that stops at the check of the draft's assets, published those
+	// of one that gets to publish, and verified those of one that also
+	// reads the tag again after publishing.
 	uploaded := slices.Concat([]string{list, lsRemote("v1.2.0"), create("v1.2.0", false)}, uploads)
 	checked := slices.Concat(uploaded, []string{release, assets})
 	published := slices.Concat(checked, []string{lsRemote("v1.2.0"), publish("v1.2.0", false)})
+	verified := slices.Concat(published, []string{lsRemote("v1.2.0")})
 	// asUploaded is each file's asset as the draft holds it once uploaded.
 	var asUploaded []releaseAsset
 	for i, f := range releaseFiles {
@@ -400,7 +403,7 @@ func TestPublishRelease(t *testing.T) {
 			preset:      []releaseAsset{{ID: 31, Name: firstFile, State: "starter"}},
 			uploadFails: 1,
 			wantCalls: slices.Concat([]string{list, lsRemote("v1.2.0"), create("v1.2.0", false), upload(firstFile), assets, delAsset(31)},
-				uploads, []string{release, assets, lsRemote("v1.2.0"), publish("v1.2.0", false)}),
+				uploads, []string{release, assets, lsRemote("v1.2.0"), publish("v1.2.0", false), lsRemote("v1.2.0")}),
 			wantOut: "Uploading " + firstFile + " failed, so it goes again",
 		},
 		{
@@ -474,7 +477,7 @@ func TestPublishRelease(t *testing.T) {
 				{ID: asUploaded[2].ID, Name: asUploaded[2].Name, State: "uploaded", Digest: func() *string { d := otherDigest; return &d }()},
 			},
 			wantCode:  1,
-			wantCalls: published,
+			wantCalls: verified,
 			wantOut:   "release 900 of v1.2.0 is published, but its files aren't exactly the ones this run uploaded",
 		},
 		{
@@ -482,7 +485,7 @@ func TestPublishRelease(t *testing.T) {
 			releases:  `[]`,
 			patchTag:  "v1.2.1",
 			wantCode:  1,
-			wantCalls: published,
+			wantCalls: verified,
 			wantOut:   "release 900 is published under tag v1.2.1, not v1.2.0, and immutable releases keep it as it is",
 		},
 		{
@@ -492,6 +495,15 @@ func TestPublishRelease(t *testing.T) {
 			wantCode:   1,
 			wantCalls:  published,
 			wantOut:    "publishing draft release 900 answered draft true, so v1.2.0 isn't out",
+		},
+		{
+			name:      "a tag moved in the moment before the publish fails the job, which says the release is out and frozen under the moved tag",
+			releases:  `[]`,
+			lsRemote3: otherSHA + "\trefs/tags/v1.2.0\n",
+			wantCode:  1,
+			wantCalls: verified,
+			wantOut:   "release 900 of v1.2.0 is published, but its tag refs/tags/v1.2.0 now names " + otherSHA + ", not " + builtSHA + ", the commit this run built, and immutable releases keep it as it is",
+			notOut:    "Published v1.2.0:",
 		},
 		{
 			name:     "without a file to publish it is a usage error, and it calls nothing",
@@ -540,6 +552,7 @@ func TestPublishRelease(t *testing.T) {
 			}
 			optional := map[string]string{
 				"ls-remote.2":       tt.lsRemote2,
+				"ls-remote.3":       tt.lsRemote3,
 				"digest-swaps.json": tt.digestSwaps,
 				"upload-state":      tt.uploadState,
 				"upload-size":       tt.uploadSize,
