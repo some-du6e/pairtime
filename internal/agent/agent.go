@@ -151,10 +151,6 @@ type agent struct {
 	// upload sends the device's tier-1 data once the ledger is open and
 	// the device is signed in (WP-AG5). It is nil before the ledger opens.
 	upload atomic.Pointer[uploader.Uploader]
-	// mode is config.toml's mode as it last read cleanly, for the
-	// uploader's LocalOnly: modeUnread until it has (upload.go).
-	mode atomic.Int32
-
 	// loc is Options.Zone (zone).
 	loc *time.Location
 
@@ -340,7 +336,7 @@ func (a *agent) currentProblems() map[string]string {
 // reads, so a file the teen deleted stays deleted and the defaults apply.
 func (a *agent) loadConfig(first bool) {
 	name := a.dirs.ConfigFile()
-	cfg, problems, parsed, err := config.LoadParsed(name)
+	cfg, problems, err := config.Load(name)
 	switch {
 	case errors.Is(err, fs.ErrNotExist) && first:
 		if err := config.WriteDefault(name); err != nil {
@@ -351,11 +347,6 @@ func (a *agent) loadConfig(first bool) {
 		problems = append(problems, fmt.Sprintf("couldn't read config.toml, so every setting has its default and notifications are off: %v", err))
 	}
 	a.cfg.Store(&cfg)
-	if parsed {
-		// A file that doesn't read, or that isn't TOML, as after a typo,
-		// says nothing of the mode the teen chose.
-		a.mode.Store(modeRead(cfg))
-	}
 	a.setProblem("config", strings.Join(problems, "; "))
 	for _, p := range problems {
 		a.log.Warn(p)

@@ -5,6 +5,8 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"strings"
 
 	"github.com/some-du6e/pairtime/internal/agent/account"
 	"github.com/some-du6e/pairtime/internal/agent/config"
@@ -21,32 +23,62 @@ import (
 // untyped constant, which the tests use as a config.Mode.
 const modeOnline = "online"
 
-// What agent.mode holds: config.toml's mode as it last read cleanly.
-const (
-	modeUnread     int32 = iota // it hasn't read cleanly since the start
-	modeReadOnline              // mode = "online"
-	modeReadLocal               // any other mode: local-only (DESIGN 4.2)
-)
-
-// modeRead is the agent.mode of a config.toml that read as cfg.
-func modeRead(cfg config.Config) int32 {
-	if string(cfg.Mode) == modeOnline {
-		return modeReadOnline
+// UploadConfig reads config.toml as uploads obey it: from the file itself
+// at each call, so an edit the config watch misses, as to the target of a
+// symlinked config.toml, takes effect at the next upload and the next
+// sealed batch (device-auth-v1 8). Its mode is "online" only for a file
+// that parses and says so. A file that can't be read, isn't TOML or has a
+// value of the wrong type keeps the computer local-only until it's fixed,
+// and broken says what is wrong with it: a typo can make pairtime more
+// private, never less.
+func UploadConfig(dirs home.Dirs) (cfg config.Config, broken string) {
+	cfg, problems, parsed, err := config.LoadParsed(dirs.ConfigFile())
+	switch {
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		return cfg, err.Error()
+	case !parsed:
+		return cfg, strings.Join(problems, "; ")
 	}
-	return modeReadLocal
+	return cfg, ""
+}
+
+// ConfigBroken is what doctor and `pairtime privacy show` say of a linked
+// computer whose config.toml has an error (UploadConfig).
+const ConfigBroken = "config.toml has an error, so this computer uploads nothing until it's fixed, and what pairtime records meanwhile stays on this computer"
+
+// Linked reports whether `pairtime login` linked this computer to a
+// server: whether account.json reads.
+func Linked(dirs home.Dirs) bool {
+	_, err := account.Load(dirs.Data)
+	return err == nil
 }
 
 // localOnly is the uploader's LocalOnly: whether config.toml keeps the
-// device local-only, as it last read cleanly, and not known before it
-// has. Batches sealed then never go, nor their minutes (D-local-gap).
+// computer local-only right now, as the uploads obey it (UploadConfig).
+// Batches sealed then never go, nor their minutes (D-local-gap), so a
+// batch counts as local-only exactly when nothing could have uploaded it.
+// It reads one small file, quick enough for the ledger writer's Sealed.
 func (a *agent) localOnly() (local, known bool) {
-	switch a.mode.Load() {
-	case modeReadLocal:
-		return true, true
-	case modeReadOnline:
-		return false, true
+	cfg, _ := UploadConfig(a.dirs)
+	return string(cfg.Mode) != modeOnline, true
+}
+
+// credentials is the uploader's Login: the sign-in, while config.toml, as
+// it reads now, says online (SignedIn). Doctor hears why a linked computer
+// uploads nothing when config.toml has an error or its sign-in doesn't
+// read.
+func (a *agent) credentials() (uploader.Credentials, bool) {
+	cfg, broken := UploadConfig(a.dirs)
+	c, ok, err := SignedIn(a.dirs, cfg, a.keyStores)
+	switch {
+	case err != nil:
+		a.setProblem("account", fmt.Sprintf("pairtime uploads nothing, because this computer is linked to a server but its sign-in doesn't read: %v", err))
+	case broken != "" && Linked(a.dirs):
+		a.setProblem("account", ConfigBroken+": "+broken)
+	default:
+		a.setProblem("account", "")
 	}
-	return false, false
+	return c, ok
 }
 
 // SignedIn returns the sign-in that uploads go with, and false while there
@@ -107,15 +139,7 @@ func (a *agent) startUploader(w *ledger.Writer) func() {
 		BucketDir: a.dirs.Buckets(),
 		DataDir:   a.dirs.Data,
 		State:     a.state,
-		Login: uploader.LoginFunc(func() (uploader.Credentials, bool) {
-			c, ok, err := SignedIn(a.dirs, a.config(), a.keyStores)
-			if err != nil {
-				a.setProblem("account", fmt.Sprintf("pairtime uploads nothing, because this computer is linked to a server but its sign-in doesn't read: %v", err))
-			} else {
-				a.setProblem("account", "")
-			}
-			return c, ok
-		}),
+		Login:     uploader.LoginFunc(a.credentials),
 		LocalOnly: a.localOnly,
 		Params:    a.table,
 		Device:    score.Device{},

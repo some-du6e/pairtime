@@ -133,10 +133,11 @@ type Options struct {
 	// Login gives the sign-in. Nil means the device is never signed in.
 	Login Login
 	// LocalOnly reports whether config.toml's mode is local-only right
-	// now (DESIGN 4.2), with known false while the agent doesn't know, as
-	// before config.toml has read cleanly. Sealed asks it of every batch:
-	// none sealed in local-only mode goes, neither its root nor its
-	// minutes (D-local-gap). Nil means the mode is never local-only.
+	// now (DESIGN 4.2), as the uploads obey it, so that a batch counts as
+	// local-only exactly when nothing could have uploaded it, with known
+	// false while that can't be told. Sealed asks it of every batch: none
+	// sealed in local-only mode goes, neither its root nor its minutes
+	// (D-local-gap). Nil means the mode is never local-only.
 	LocalOnly func() (local, known bool)
 	// Params is the table the scorer runs with: its version and hash go
 	// in the labels, and WITNESS_LAG_S reads the witness labels.

@@ -12,88 +12,79 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
+	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/internal/devtoken"
 )
 
-func TestLocalOnlyMode(t *testing.T) {
-	reads := []struct {
-		name         string
-		cfg          config.Config
-		local, known bool
-	}{
-		{"a config.toml that reads mode = \"local\" is local-only", config.Config{Mode: config.Local}, true, true},
-		{"one that reads mode = \"online\" isn't", config.Config{Mode: modeOnline}, false, true},
-		{"one with no mode is local-only, as its default is", config.Config{}, true, true},
-	}
-	for _, tc := range reads {
-		t.Run(tc.name, func(t *testing.T) {
-			var a agent
-			a.mode.Store(modeRead(tc.cfg))
-			if local, known := a.localOnly(); local != tc.local || known != tc.known {
-				t.Errorf("localOnly() = %v, %v; want %v, %v", local, known, tc.local, tc.known)
-			}
-		})
-	}
-
-	// loadConfig as the agent runs it, on files that read and files that
-	// don't.
+// TestUploadMode is config.toml as uploads obey it, read from the file:
+// the uploader's LocalOnly for each sealed batch, and its Login before
+// each upload, which agree on every file.
+func TestUploadMode(t *testing.T) {
 	dir := t.TempDir()
 	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
-	newAgent := func() *agent {
-		return &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}}
+	// A linked computer: account.json, and a sign-in that reads.
+	if err := os.WriteFile(filepath.Join(dir, "account.json"), []byte(`{"v":1,"server":"https://pairtime.example","device_id":"d_testdevice00000000000000a","linked_at":"2026-11-21T09:30:00Z"}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	write := func(t *testing.T, text string) {
+	saved := accountCredentials
+	t.Cleanup(func() { accountCredentials = saved })
+	accountCredentials = func(home.Dirs, []keys.Store) (uploader.Credentials, bool, error) {
+		return uploader.Credentials{Server: "https://pairtime.example", Token: "ptd_test"}, true, nil
+	}
+	write := func(t *testing.T, text *string) {
 		t.Helper()
-		if err := os.WriteFile(dirs.ConfigFile(), []byte(text), 0o600); err != nil {
+		if text == nil {
+			if err := os.Remove(dirs.ConfigFile()); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				t.Fatal(err)
+			}
+			return
+		}
+		if err := os.WriteFile(dirs.ConfigFile(), []byte(*text), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	loads := []struct {
-		name         string
-		run          func(t *testing.T) *agent
-		local, known bool
+	str := func(s string) *string { return &s }
+	tests := []struct {
+		name string
+		// before is the file the config watch last loaded, and text the
+		// file as it is now.
+		before, text *string
+		// local is whether a batch sealed now is local-only, and so whether
+		// nothing uploads; broken whether doctor hears config.toml has an
+		// error.
+		local, broken bool
 	}{
-		{"before config.toml has read, the mode isn't known", func(t *testing.T) *agent { return newAgent() }, false, false},
-		{"a file that reads sets the mode", func(t *testing.T) *agent {
-			write(t, "mode = \"local\"\n")
-			a := newAgent()
-			a.loadConfig(true)
-			return a
-		}, true, true},
-		{"a file that isn't TOML, as after a typo, leaves the mode as it last read", func(t *testing.T) *agent {
-			write(t, "mode = \"local\"\n")
-			a := newAgent()
-			a.loadConfig(true)
-			write(t, "mode = \"loc") // an editor halfway through writing it
-			a.loadConfig(false)
-			return a
-		}, true, true},
-		{"a file that isn't TOML at the start leaves the mode unknown", func(t *testing.T) *agent {
-			write(t, "mode = [")
-			a := newAgent()
-			a.loadConfig(true)
-			return a
-		}, false, false},
-		{"no config.toml reads as the defaults, which are local-only", func(t *testing.T) *agent {
-			if err := os.Remove(dirs.ConfigFile()); err != nil && !os.IsNotExist(err) {
-				t.Fatal(err)
-			}
-			a := newAgent()
-			a.loadConfig(false)
-			return a
-		}, true, true},
+		{"mode = \"online\" uploads, and isn't local-only", nil, str("mode = \"online\"\n"), false, false},
+		{"mode = \"local\" is local-only, and uploads nothing", nil, str("mode = \"local\"\n"), true, false},
+		{"a file with no mode is local-only, as its default is", nil, str("[display]\nshadow = true\n"), true, false},
+		{"no config.toml is local-only, as the defaults are", nil, nil, true, false},
+		{"a file that isn't TOML is local-only until it's fixed, whatever it said before", str("mode = \"online\"\n"), str("mode = \"onl"), true, true},
+		{"a value of the wrong type keeps it local-only too, whatever its mode says", str("mode = \"online\"\n"), str("mode = \"online\"\n[http]\nport = \"8123\"\n"), true, true},
+		{"an edit the config watch didn't see takes effect at once", str("mode = \"online\"\n"), str("mode = \"local\"\n"), true, false},
 	}
-	for _, tc := range loads {
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			a := tc.run(t)
-			if local, known := a.localOnly(); local != tc.local || known != tc.known {
-				t.Errorf("localOnly() = %v, %v; want %v, %v", local, known, tc.local, tc.known)
+			a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}}
+			if tc.before != nil {
+				write(t, tc.before)
+				a.loadConfig(false)
+			}
+			write(t, tc.text)
+			if local, known := a.localOnly(); local != tc.local || !known {
+				t.Errorf("localOnly() = %v, %v; want %v, true", local, known, tc.local)
+			}
+			if _, ok := a.credentials(); ok == tc.local {
+				t.Errorf("uploads go: %v, while a batch sealed now is local-only: %v", ok, tc.local)
+			}
+			if got := strings.Contains(a.currentProblems()["account"], ConfigBroken); got != tc.broken {
+				t.Errorf("doctor hears %q", a.currentProblems()["account"])
 			}
 		})
 	}

@@ -17,11 +17,14 @@ func TestLoadParsed(t *testing.T) {
 		text    *string // nil: no file
 		parsed  bool
 		missing bool
+		mode    Mode
 	}{
-		{"a file that is TOML parsed", ptr("mode = \"local\"\n"), true, false},
-		{"one with an unknown setting parsed, with its problem", ptr("colour = \"blue\"\n"), true, false},
-		{"one that isn't TOML didn't", ptr("mode = \"loc"), false, false},
-		{"no file counts as parsed, with the defaults", nil, true, true},
+		{"a file that is TOML parsed", ptr("mode = \"local\"\n"), true, false, Local},
+		{"one that says online parsed, with its mode", ptr("mode = \"online\"\n"), true, false, Online},
+		{"one with an unknown setting parsed, with its problem", ptr("colour = \"blue\"\n"), true, false, Local},
+		{"one that isn't TOML didn't, and is local", ptr("mode = \"onl"), false, false, Local},
+		{"one with a value of the wrong type didn't, as Parse ignores it, and is local whatever its mode says", ptr("mode = \"online\"\n[http]\nport = \"8123\"\n"), false, false, Local},
+		{"no file counts as parsed, with the defaults", nil, true, true, Local},
 	}
 	for i, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -38,8 +41,8 @@ func TestLoadParsed(t *testing.T) {
 			if got := errors.Is(err, fs.ErrNotExist); got != tc.missing {
 				t.Errorf("err = %v", err)
 			}
-			if cfg.Mode != Local {
-				t.Errorf("mode %q, want %q", cfg.Mode, Local)
+			if cfg.Mode != tc.mode {
+				t.Errorf("mode %q, want %q", cfg.Mode, tc.mode)
 			}
 		})
 	}

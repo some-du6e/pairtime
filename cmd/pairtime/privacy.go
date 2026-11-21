@@ -7,11 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"strings"
 
 	"github.com/some-du6e/pairtime/internal/agent"
-	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/pkg/params"
@@ -70,11 +68,12 @@ func runPrivacy(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pairtime privacy show: %v\n", err)
 		return 1
 	}
-	cfg, _, err := config.Load(dirs.ConfigFile())
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		// config.Load gives the private defaults with the error, and those
-		// upload nothing.
-		fmt.Fprintf(stderr, "pairtime privacy show: config.toml: %v\n", err)
+	// As the agent's uploads do: a config.toml with an error keeps this
+	// computer local-only until it's fixed.
+	cfg, broken := agent.UploadConfig(dirs)
+	if broken != "" && agent.Linked(dirs) {
+		fmt.Fprintf(stderr, "Nothing: %s.\nThe error: %s\n", agent.ConfigBroken, broken)
+		return 0
 	}
 	creds, ok, err := agent.SignedIn(dirs, cfg, agentKeyStores)
 	if err != nil {
