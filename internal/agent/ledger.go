@@ -175,6 +175,7 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 		Params:  a.table,
 		Sched:   a.sched,
 		Sealed:  a.sealed,
+		Online:  a.online,
 		Problem: func(msg string) { a.setProblem("ledger", msg) },
 	})
 }

@@ -99,6 +99,16 @@ type Options struct {
 	// decided; spec wording pending).
 	// Batches sealed before Open are on disk for ReadBatches.
 	Sealed func(Batch)
+	// Online, when set, reports whether config.toml's mode lets the
+	// computer upload right now (DESIGN 4.2). Each seal asks it once the
+	// batch's last record is in, with the Writer's lock held, so it must
+	// return quickly and never call the Writer, and the seal frame records
+	// the answer. So a batch's mode is on disk with the seal, in the same
+	// flush, before Sealed hears of it, and no crash can lose it. A batch
+	// whose seal frame doesn't say it was sealed online, as one an older
+	// writer sealed, counts as sealed in local-only mode (Batch.Online).
+	// Nil means every batch is sealed online.
+	Online func() bool
 	// Problem gets a description of what went wrong when a seal that no
 	// caller waits for fails, and "" when one succeeds after that.
 	Problem func(msg string)
@@ -108,11 +118,16 @@ type Options struct {
 }
 
 // Batch is a sealed batch as the writer stores it: its row, when it was
-// sealed, and its records.
+// sealed, whether it was sealed online, and its records.
 type Batch struct {
 	Row      ledger.BatchRow
 	SealedAt time.Time
-	Records  []ledger.Record
+	// Online is set when the batch was sealed while config.toml's mode let
+	// the computer upload, as its seal frame records (Options.Online).
+	// Nothing a batch without it holds may leave the device, neither its
+	// root nor its minutes (DESIGN 4.2; D-local-gap).
+	Online  bool
+	Records []ledger.Record
 }
 
 // Input is an event as the agent received it, and what its record commits
@@ -162,6 +177,7 @@ type Writer struct {
 	batchS   time.Duration
 	now      func() time.Time
 	sealedFn func(Batch)
+	online   func() bool
 	problem  func(string)
 	device   string
 
@@ -239,6 +255,7 @@ func Open(opts Options) (*Writer, error) {
 		batchS:   time.Duration(table.Int(params.BATCH_S)) * time.Second,
 		now:      now,
 		sealedFn: opts.Sealed,
+		online:   opts.Online,
 		problem:  opts.Problem,
 		next:     1,
 		kick:     make(chan struct{}, 1),
@@ -497,6 +514,10 @@ type sealPayload struct {
 	Head     ledger.Hash `json:"head"`
 	// SealedAt is when the batch was sealed, in Unix ms.
 	SealedAt int64 `json:"sealed_at"`
+	// Online is set when the batch was sealed online (Options.Online). It
+	// is in the seal frame, so the batch's mode reaches the disk in the
+	// seal's flush, and in the row, which Open rebuilds from that frame.
+	Online bool `json:"online,omitempty"`
 	// Q is what the prompt classes' questions remember after the batch's
 	// last record (score.Questions), in the seal frame of every
 	// questionRows-th batch, so Open can restore them exactly rather than
@@ -588,8 +609,12 @@ func (w *Writer) seal() (Batch, bool, error) {
 		return Batch{}, false, err
 	}
 	at := w.now()
+	// Asked after the batch's last record went in, under the lock every
+	// record takes, so no record written after a switch to local-only mode
+	// is in a batch sealed online.
+	online := w.online == nil || w.online()
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
-		SealedAt: at.UnixMilli()}
+		SealedAt: at.UnixMilli(), Online: online}
 	snap := w.snap
 	if row.B%questionRows == 0 {
 		// w.q has taken every record the batch holds and none after.
@@ -636,7 +661,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 		w.fail(err)
 		return Batch{}, false, err
 	}
-	batch := Batch{Row: row, SealedAt: time.UnixMilli(sp.SealedAt), Records: recs}
+	batch := Batch{Row: row, SealedAt: time.UnixMilli(sp.SealedAt), Online: sp.Online, Records: recs}
 	if w.sealedFn != nil {
 		w.sealedFn(batch)
 	}

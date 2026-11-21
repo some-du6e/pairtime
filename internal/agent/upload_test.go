@@ -27,8 +27,8 @@ import (
 )
 
 // TestUploadMode is config.toml as uploads obey it, read from the file:
-// the uploader's LocalOnly for each sealed batch, and its Login before
-// each upload, which agree on every file.
+// the ledger writer's Online for each seal, which the seal frame records,
+// and the uploader's Login before each upload, which agree on every file.
 func TestUploadMode(t *testing.T) {
 	dir := t.TempDir()
 	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
@@ -80,8 +80,8 @@ func TestUploadMode(t *testing.T) {
 				a.loadConfig(false)
 			}
 			write(t, tc.text)
-			if local, known := a.localOnly(); local != tc.local || !known {
-				t.Errorf("localOnly() = %v, %v; want %v, true", local, known, tc.local)
+			if online := a.online(); online == tc.local {
+				t.Errorf("online() = %v, want %v", online, !tc.local)
 			}
 			if _, ok := a.credentials(); ok == tc.local {
 				t.Errorf("uploads go: %v, while a batch sealed now is local-only: %v", ok, tc.local)
@@ -237,53 +237,44 @@ func (earlyLedger) DeviceID() string                             { return "d_tes
 func (earlyLedger) StoreReceipt(uint64, pkgledger.Receipt) error { return nil }
 func (earlyLedger) UploadFailure(uint64, string) (uint64, error) { return 0, nil }
 
-// TestEarlyBatches is a batch the ledger writer seals before the uploader
-// exists, as ledger.Open seals what a crash left: it waits for the
-// uploader, which records it in the mode config.toml had at its seal, so a
-// batch sealed in local-only mode never goes.
+// TestEarlyBatches is the batches the ledger writer seals before the
+// uploader exists, as ledger.Open seals what a crash left: up to earlyMax
+// of them wait for it, for the harnesses their records name, and it takes
+// every batch sealed after it. Their modes are in their seal frames, and
+// so in the rows the uploader reads when it first uploads
+// (uploader.TestKillKeepsModes).
 func TestEarlyBatches(t *testing.T) {
 	dir := t.TempDir()
 	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
-	write := func(t *testing.T, text string) {
-		t.Helper()
-		if err := os.WriteFile(dirs.ConfigFile(), []byte(text), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
 	a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}}
-	write(t, "mode = \"local\"\n")
-	a.sealed(ledger.Batch{Row: pkgledger.BatchRow{B: 7, FirstSeq: 7, N: 1}, SealedAt: time.Now()})
-	write(t, "mode = \"online\"\n") // and online again by the time the uploader starts
+	for b := uint64(1); b <= earlyMax+1; b++ {
+		a.sealed(ledger.Batch{Row: pkgledger.BatchRow{B: b, FirstSeq: b, N: 1}, SealedAt: time.Now()})
+	}
+	kept := len(a.early)
 	st, _, err := state.Open(dirs.StateFile())
 	if err != nil {
 		t.Fatal(err)
 	}
 	u, err := uploader.New(uploader.Options{
 		Ledger: earlyLedger{}, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
-		Params: newestTable(), LocalOnly: a.localOnly,
+		Params: newestTable(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(u.Close)
 	a.handEarly(u)
-	u.Close() // a stopped uploader records the modes it took in state.json
-	var place struct {
-		LocalFrom uint64 `json:"local_from"`
-	}
-	if _, err := st.Get(uploader.StateKey, &place); err != nil {
-		t.Fatal(err)
-	}
 	tests := []struct {
 		name string
 		ok   bool
 	}{
-		{"the batch sealed in local mode before the uploader existed is recorded local-only", place.LocalFrom == 7},
-		{"the uploader takes the batches sealed after it from then on", a.upload.Load() == u && len(a.early) == 0},
+		{"the batches sealed before the uploader existed wait for it, up to earlyMax", kept == earlyMax},
+		{"the uploader takes them, and the batches sealed after it from then on", a.upload.Load() == u && len(a.early) == 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
-				t.Errorf("no: local from %d", place.LocalFrom)
+				t.Errorf("no: %d kept, %d left", kept, len(a.early))
 			}
 		})
 	}

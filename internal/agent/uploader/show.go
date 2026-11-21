@@ -97,13 +97,16 @@ func Next(o PreviewOptions) (Preview, error) {
 		// As the agent's load does, the runs of batches sealed in local-only
 		// mode stay: they are the ledger's.
 		foreign := st.Server != ""
-		st = saved{Chain: rows.device, Harnesses: st.Harnesses, LocalFrom: st.LocalFrom, Gaps: st.Gaps}
+		st = saved{Chain: rows.device, Harnesses: st.Harnesses, LocalFrom: st.LocalFrom, Gaps: st.Gaps, Modes: st.Modes}
 		if foreign {
 			rows.forgetReceipts() // they are the old server's
 			st.Foreign = rows.last()
 		}
 	}
 	st.prepare(rows)
+	// As the agent's load does, the modes of the batches sealed since the
+	// place last took one go in from the rows.
+	st.foldModes(rows)
 	if st.Fork != 0 || st.Mismatch {
 		// As the agent does, nothing more goes after a fork or a
 		// device_mismatch.

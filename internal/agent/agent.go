@@ -168,9 +168,9 @@ type agent struct {
 	// the device is signed in (WP-AG5). It is nil before the ledger opens.
 	upload atomic.Pointer[uploader.Uploader]
 	// early are the batches the ledger writer sealed before upload was
-	// set, with their modes, for handEarly; earlyMu orders them with it.
+	// set, for handEarly; earlyMu orders them with it.
 	earlyMu sync.Mutex
-	early   []earlyBatch
+	early   []ledger.Batch
 	// signIn keeps the sign-in between uploads (credentials).
 	signIn signInCache
 	// loc is Options.Zone (zone).

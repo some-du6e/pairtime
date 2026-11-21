@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -471,6 +472,84 @@ func TestSeals(t *testing.T) {
 			t.Errorf("jobs %+v, want ledger.seal every 60 s", jobs)
 		}
 	})
+}
+
+// TestSealMode checks that the mode a batch was sealed in is on disk with
+// its seal (DESIGN 4.2): the seal frame says whether config.toml let the
+// computer upload as the batch sealed (Options.Online), and the batch
+// Sealed gets, its row and ReadBatches say the same, as a row Open
+// rebuilds from the seal frame after a crash does.
+func TestSealMode(t *testing.T) {
+	type mode struct {
+		sealed, row, read []bool
+	}
+	cases := []struct {
+		name string
+		// online is what Options.Online says at each of three seals, nil
+		// for a writer without it.
+		online []bool
+		// crash, when set, leaves the ledger as a crash after the third
+		// seal's flush does: batches.seg lacks its row, which the next Open
+		// rebuilds, with Options.Online saying online by then.
+		crash bool
+		want  []bool
+	}{
+		{"a batch sealed online says so, and one sealed in local-only mode doesn't", []bool{true, false, true}, false, []bool{true, false, true}},
+		{"a writer without Online seals every batch online", nil, false, []bool{true, true, true}},
+		{"a row a crash lost from batches.seg keeps its batch's mode when Open rebuilds it from the seal frame", []bool{true, true, false}, true, []bool{true, true, false}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			var (
+				online    atomic.Bool
+				delivered []Batch
+			)
+			w := open(t, dir, newClock(testT), func(o *Options) {
+				o.Sealed = func(b Batch) { delivered = append(delivered, b) }
+				if c.online != nil {
+					o.Online = online.Load
+				}
+			})
+			rng := rand.New(rand.NewPCG(5, 6))
+			for i := range 3 {
+				if c.online != nil {
+					online.Store(c.online[i])
+				}
+				if _, _, err := write(w, rng, "os.presence", testT+int64(i)*1000); err != nil {
+					t.Fatal(err)
+				}
+				if _, ok, err := w.Seal(); !ok || err != nil {
+					t.Fatalf("seal %d: %v, %v", i+1, ok, err)
+				}
+			}
+			if c.crash {
+				abandon(w)
+				batches := filepath.Join(dir, batchesName)
+				// Frame 0 is the chain frame, and frames 1 to 3 the rows.
+				truncate(t, batches, framesOf(t, batches)[2].end)
+				online.Store(true)
+				open(t, dir, newClock(testT+60_000), func(o *Options) { o.Online = online.Load })
+			}
+			_, rows, err := ReadRows(dir, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got mode
+			for _, b := range delivered {
+				got.sealed = append(got.sealed, b.Online)
+			}
+			for _, r := range rows {
+				got.row = append(got.row, r.Online)
+			}
+			for _, b := range readAll(t, dir) {
+				got.read = append(got.read, b.Online)
+			}
+			if !slices.Equal(got.sealed, c.want) || !slices.Equal(got.row, c.want) || !slices.Equal(got.read, c.want) {
+				t.Errorf("online: Sealed %v, rows %v, ReadBatches %v; want %v for each", got.sealed, got.row, got.read, c.want)
+			}
+		})
+	}
 }
 
 // TestSegments checks that records go to the segment of the UTC day they
