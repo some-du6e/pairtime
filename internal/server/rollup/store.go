@@ -146,16 +146,16 @@ agent_only_pending_ms = rollups_daily.agent_only_pending_ms + excluded.agent_onl
 // toProjects turns the device's project keys in d, its slots' and its
 // agent_only's, into the account-level project ids rollup_projects gives
 // them (D-account-project-id). A key the device hasn't named before gets
-// a new id, stamped with minuteMS's UTC day. Two keys of the device that
-// project registration (WP-SV10) has linked to one id may both name agent
-// time; the larger counts, as it does across devices (merge).
-func toProjects(ctx context.Context, tx writer.Tx, account string, minuteMS int64, d *device) error {
+// a new id. Two keys of the device that project registration (WP-SV10) has
+// linked to one id may both name agent time; the larger counts, as it does
+// across devices (merge).
+func toProjects(ctx context.Context, tx writer.Tx, account string, d *device) error {
 	ids := make(map[string]string)
 	idOf := func(key string) (string, error) {
 		if id, ok := ids[key]; ok {
 			return id, nil
 		}
-		id, err := projectID(ctx, tx, account, d.id, key, minuteMS)
+		id, err := projectID(ctx, tx, account, d.id, key)
 		if err != nil {
 			return "", err
 		}
@@ -188,14 +188,13 @@ func toProjects(ctx context.Context, tx writer.Tx, account string, minuteMS int6
 }
 
 // projectID returns the project id of the device's project key. A key
-// the device hasn't named before gets a new id, stamped with minuteMS's
-// UTC day.
-func projectID(ctx context.Context, tx writer.Tx, account, device, key string, minuteMS int64) (string, error) {
+// the device hasn't named before gets a new id.
+func projectID(ctx context.Context, tx writer.Tx, account, device, key string) (string, error) {
 	var id string
 	err := tx.QueryRowContext(ctx, `SELECT project_id FROM rollup_projects
 WHERE user_id = $1 AND device_id = $2 AND project_key = $3`, account, device, key).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		id = newProjectID(minuteMS)
+		id = newProjectID()
 		_, err = tx.ExecContext(ctx, `INSERT INTO rollup_projects (user_id, device_id, project_key, project_id)
 VALUES ($1, $2, $3, $4)`, account, device, key, id)
 	}
@@ -205,21 +204,15 @@ VALUES ($1, $2, $3, $4)`, account, device, key, id)
 	return id, nil
 }
 
-// newProjectID returns a new project id: a UUIDv7 (RFC 9562 section 5.7),
-// the id form of package store's rules. Its time field is the start of the
-// UTC day of minuteMS, the minute the key was first named in, and no finer:
-// the id lasts as long as the account, and past 180 days the rollups keep
-// days, not minutes. RFC 9562 section 6.1 lets a UUIDv7 carry a coarser
-// time.
-func newProjectID(minuteMS int64) string {
-	const dayMS = 24 * 60 * 60 * 1000
-	day := uint64(minuteMS - minuteMS%dayMS)
+// newProjectID returns a new project id, a random UUIDv4 (RFC 9562
+// section 5.4). It carries no time, as the UUIDv7 ids of package store's
+// rules do: the id lasts as long as the account, and any time in it, even
+// a day, would tell whether a key first appeared early or late in the
+// owner's own day.
+func newProjectID() string {
 	var b [16]byte
 	rand.Read(b[:])
-	for i := range 6 {
-		b[i] = byte(day >> (40 - 8*i))
-	}
-	b[6] = b[6]&0x0f | 0x70
+	b[6] = b[6]&0x0f | 0x40
 	b[8] = b[8]&0x3f | 0x80
 	h := hex.EncodeToString(b[:])
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]

@@ -11,11 +11,12 @@
 -- (D-account-project-id). A device's project keys are HMACs under its own
 -- secret, so one repo has a different key on each computer. Until project
 -- registration (WP-SV10) links the keys of one repo to one project_id,
--- each (device, key) has a project_id of its own, a UUIDv7. A row stays
--- as long as the account, as rollups_daily, which names its project_id,
--- does, so a key used again after a long gap keeps its project, and
--- registration can always link it. The commit records ingest keeps for
--- the account's lifetime hold the same pairs of device and key.
+-- each (device, key) has a project_id of its own, a random UUIDv4 with no
+-- time in it. A row stays as long as the account, as rollups_daily, which
+-- names its project_id, does (D-project-map-lifetime), so a key used
+-- again after a long gap keeps its project, and registration can always
+-- link it. The commit records ingest keeps for the account's lifetime
+-- hold the same pairs of device and key.
 CREATE TABLE rollup_projects (
     user_id TEXT NOT NULL REFERENCES users (id),
     device_id TEXT NOT NULL,

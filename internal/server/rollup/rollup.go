@@ -174,7 +174,7 @@ func Apply(ctx context.Context, tx writer.Tx, prev *Bucket, next Bucket) error {
 	}
 	// The other devices' rows already hold project ids, so in's keys
 	// become ids before the merge compares them.
-	if err := toProjects(ctx, tx, next.Account, minuteMS, &in); err != nil {
+	if err := toProjects(ctx, tx, next.Account, &in); err != nil {
 		return err
 	}
 	day := LocalDay(next.Minute, zone)
@@ -207,25 +207,8 @@ func remerge(ctx context.Context, tx writer.Tx, account string, before []device,
 
 // ApplyEvent is Apply for ingest, which holds a revision as pkg/event's
 // MinuteBucket, agent_only included, and the account apart. prev is the
-// revision next replaces, or nil.
-//
-// Once ingest's Revision is a MinuteBucket, which #127 plans now that
-// pkg/event's MinuteBucket has AgentOnly (WP-EV3), ingest's RollupFunc has
-// this signature, and serve.go wires the rollups as Rollup:
-// rollup.ApplyEvent. While a Revision still holds AgentOnly beside its
-// MinuteBucket, the adapter copies it into the bucket first:
-//
-//	func(ctx context.Context, tx writer.Tx, account string, prev *ingest.Revision, next ingest.Revision) error {
-//		var p *event.MinuteBucket
-//		if prev != nil {
-//			b := prev.MinuteBucket
-//			b.AgentOnly = prev.AgentOnly
-//			p = &b
-//		}
-//		n := next.MinuteBucket
-//		n.AgentOnly = next.AgentOnly
-//		return rollup.ApplyEvent(ctx, tx, account, p, n)
-//	}
+// revision next replaces, or nil. It has ingest's RollupFunc signature,
+// and pairtimed passes it as ingest's Rollup (cmd/pairtimed/ingest.go).
 func ApplyEvent(ctx context.Context, tx writer.Tx, account string, prev *event.MinuteBucket, next event.MinuteBucket) error {
 	var p *Bucket
 	if prev != nil {

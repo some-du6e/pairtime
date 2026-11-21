@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -866,7 +865,7 @@ func TestPendingWindow(t *testing.T) {
 }
 
 func TestProjects(t *testing.T) {
-	uuidv7 := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	uuidv4 := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	db := newDB(t, store.SQLite, "u1")
 	if err := run(t, db, "u1", []step{
 		bk("d2", base+60, 0, "final", ao("g_b", 10), sl("g_a", 15, "prompting", "A")),
@@ -884,25 +883,15 @@ func TestProjects(t *testing.T) {
 	for id, keys := range got {
 		byKeys[strings.Join(keys, "+")] = id
 	}
-	t.Run("each device's key has an id of its own, a UUIDv7, though two devices name the same key", func(t *testing.T) {
+	t.Run("each device's key has an id of its own, though two devices name the same key", func(t *testing.T) {
 		if len(got) != 4 {
-			t.Fatalf("Projects = %v, want 4 projects", got)
-		}
-		for id, keys := range got {
-			if len(keys) == 1 && !uuidv7.MatchString(id) {
-				t.Errorf("project %s of %v isn't a UUIDv7", id, keys)
-			}
+			t.Errorf("Projects = %v, want 4 projects", got)
 		}
 	})
-	t.Run("a project id gives away no more than the UTC day its key was first named on", func(t *testing.T) {
-		day := time.Unix(base, 0).UTC().Truncate(24 * time.Hour).UnixMilli()
+	t.Run("a project id is a random UUIDv4, so it carries no time of the owner's", func(t *testing.T) {
 		for id, keys := range got {
-			if len(keys) != 1 {
-				continue
-			}
-			ms, err := strconv.ParseInt(strings.ReplaceAll(id[:13], "-", ""), 16, 64)
-			if err != nil || ms != day {
-				t.Errorf("project %s of %v has time %d (%v), want %d, its day's start", id, keys, ms, err, day)
+			if len(keys) == 1 && !uuidv4.MatchString(id) {
+				t.Errorf("project %s of %v isn't a UUIDv4", id, keys)
 			}
 		}
 	})

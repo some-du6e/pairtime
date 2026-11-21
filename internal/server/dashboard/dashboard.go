@@ -16,8 +16,9 @@
 // The server can't see display.shadow, SM 7.5's calibration week: no
 // tier-1 field carries it, so a real dashboard shows credited time
 // whatever the device's setting says. D-shadow-scope hides it on the
-// device's own views; how shadow mode reaches the server is still to be
-// decided.
+// device's own views. On the server an account flag the operator sets
+// will carry it, before 2026-12-01 (D-server-shadow); until then the
+// dashboard ignores shadow mode.
 package dashboard
 
 import (
