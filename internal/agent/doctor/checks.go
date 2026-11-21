@@ -66,6 +66,7 @@ func Checks(f Facts) []Check {
 		}
 	}
 	out = append(out, adapterChecks(f)...)
+	out = append(out, spoolCheck(f))
 	out = append(out, problemChecks(f)...)
 	return out
 }
@@ -200,8 +201,49 @@ func adapterChecks(f Facts) []Check {
 	return out
 }
 
+// spoolCheck is the line DESIGN 5.2's spool rule asks for: the hook calls
+// of the last week that only the spool delivered, and how many were
+// prompts. Their events get via = plugin, so they earn side-door credit
+// and the scorer counts a transcript entry of their turns as one with no
+// hook record (CC1); the line measures what the rule costs.
+func spoolCheck(f Facts) Check {
+	c := Check{Name: "spool"}
+	if f.Reach != Reached || f.Agent == nil {
+		c.Result, c.Text = Skip, notAsked(f)
+		return c
+	}
+	s := f.Agent.IPC.Spooled
+	if s.Calls == 0 {
+		c.Result, c.Text = OK, "every hook call of the last 7 days reached the agent directly, none only through the spool"
+		return c
+	}
+	c.Result = Warn
+	c.Text = fmt.Sprintf("%s of the last 7 days reached the agent only through the spool, %s", count(s.Calls, "hook call", "hook calls"), promptWords(s))
+	c.Text += ", so pairtime trusts them as little as a plugin's and credits less of their time. Calls go to the spool while the agent isn't running or answering, and logging in starts it"
+	return c
+}
+
+// promptWords says how many of the spooled calls were prompts.
+func promptWords(s Spooled) string {
+	if s.Calls == 1 {
+		switch {
+		case s.Unknown == 1:
+			return "from a pairtime too old to record whether it was a prompt"
+		case s.Prompts == 1:
+			return "and it was a prompt"
+		}
+		return "and it wasn't a prompt"
+	}
+	w := count(s.Prompts, "of them a prompt", "of them prompts")
+	if s.Unknown > 0 {
+		w += fmt.Sprintf(", and %d from a pairtime too old to record whether they were", s.Unknown)
+	}
+	return w
+}
+
 // problemChecks are the problems the agent reports, each in its own
-// words, by where it comes from.
+// words, by where it comes from. The keystore's warning is left out,
+// since the keystore line gives it.
 func problemChecks(f Facts) []Check {
 	if f.Agent == nil {
 		return nil

@@ -69,7 +69,7 @@ import (
 )
 
 // Kind is the inbox message kind of a hook call.
-const Kind = "hook"
+const Kind = inbox.KindHook
 
 // MaxStdin is how much of stdin a hook reads (DESIGN 3.2). What comes after
 // it is left unread, and the call is marked Cut.

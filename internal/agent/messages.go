@@ -183,12 +183,34 @@ type ipcReply struct {
 	// Refused counts connections turned away because they didn't come from
 	// this user.
 	Refused uint64 `json:"refused"`
+	// Spooled counts the hook calls of the last week that only the spool
+	// delivered, for doctor (DESIGN 5.2).
+	Spooled spooledReply `json:"spooled"`
+}
+
+// spooledWindow is how far back doctor's spool line looks: the last week,
+// which the journal keeps (inbox.KeepDays).
+const spooledWindow = inbox.KeepDays * 24 * time.Hour
+
+// spooledReply counts the hook calls made since Since that reached the
+// agent only through the spool, as when it wasn't running or didn't take
+// them in time. Their events get via = plugin, so they earn side-door
+// credit (DESIGN 5.2; D-spool-via), which doctor's spool line measures.
+type spooledReply struct {
+	Since time.Time `json:"since"`
+	Calls uint64    `json:"calls"`
+	// Prompts is how many of the calls were prompts, and Unknown how many
+	// the journal can't tell, whose lines an older version wrote.
+	Prompts uint64 `json:"prompts"`
+	Unknown uint64 `json:"unknown,omitempty"`
 }
 
 func (a *agent) ipcStatus() ipcReply {
 	var r ipcReply
+	r.Spooled.Since = time.Now().Add(-spooledWindow).UTC().Truncate(time.Second)
 	if a.journal != nil {
 		r.Stored, r.Duplicates = a.journal.Stats()
+		r.Spooled.Calls, r.Spooled.Prompts, r.Spooled.Unknown = a.journal.Spooled(r.Spooled.Since)
 	}
 	if srv := a.ipcSrv.Load(); srv != nil {
 		// Via is "" once the server stopped listening, as it does when

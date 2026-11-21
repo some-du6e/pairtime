@@ -284,10 +284,17 @@ components:
         problems:
           type: object
           description: >
-            What isn't working, keyed by where it comes from (`config`,
-            `config-watch`, `state`, `port`, `ipc`, `presence`, `focus`,
-            `ledger`, `scorer`, `uploader`, `account`), in words for the
-            teen. Absent when nothing is wrong.
+            What isn't working, keyed by where it comes from (`account`,
+            `adapters.dropped`, `adapters.held`, `adapters.keys`,
+            `adapters.ledger`, `adapters.pending`, `adapters.recover`,
+            `adapters.replay`, `config`, `config-watch`, `focus`, `git`,
+            `git.commits`, `git.ledger`, `ipc`, `keystore`, `ledger`,
+            `ledger.presence`, `notifications`, `port`, `presence`, `procs`,
+            `scorer`, `state`, `uploader`), in words for the teen. A value
+            can join several problems of one source with "; ", so it is
+            shown whole. `pairtime doctor` prints each as a line of its own,
+            but for `keystore`, whose warning its keystore line gives.
+            Absent when nothing is wrong.
           additionalProperties:
             type: string
     Version:
@@ -340,7 +347,7 @@ components:
     IPC:
       type: object
       additionalProperties: false
-      required: [stored, duplicates, refused]
+      required: [stored, duplicates, refused, spooled]
       description: >
         The per-user socket hooks hand their messages to the agent on
         (DESIGN 3.3).
@@ -366,6 +373,37 @@ components:
           type: integer
           minimum: 0
           description: Connections turned away because they didn't come from this user.
+        spooled:
+          $ref: "#/components/schemas/Spooled"
+    Spooled:
+      type: object
+      additionalProperties: false
+      required: [since, calls, prompts]
+      description: >
+        The hook calls made since `since`, a week before the reply, that
+        reached the agent only through the spool, as when it wasn't
+        running or didn't take them in time, of those its journal keeps.
+        Their events get `via = plugin`, so they earn side-door credit
+        (DESIGN 5.2), and `pairtime doctor` says how many there were.
+      properties:
+        since:
+          type: string
+          format: date-time
+          description: The start of the week counted, in UTC.
+        calls:
+          type: integer
+          minimum: 0
+        prompts:
+          type: integer
+          minimum: 0
+          description: How many of the calls were prompts.
+        unknown:
+          type: integer
+          minimum: 0
+          description: >
+            How many of the calls the journal can't tell prompts from
+            other events for, because a version before WP-AG6 recorded
+            them. Absent when none.
     Adapters:
       type: object
       additionalProperties: false

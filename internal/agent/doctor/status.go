@@ -38,10 +38,22 @@ type Version struct {
 type IPC struct {
 	// Via is socket or pipe, and "" while hooks can't reach the agent and
 	// spool their calls.
-	Via        string `json:"via,omitempty"`
-	Stored     uint64 `json:"stored"`
-	Duplicates uint64 `json:"duplicates"`
-	Refused    uint64 `json:"refused"`
+	Via        string  `json:"via,omitempty"`
+	Stored     uint64  `json:"stored"`
+	Duplicates uint64  `json:"duplicates"`
+	Refused    uint64  `json:"refused"`
+	Spooled    Spooled `json:"spooled"`
+}
+
+// Spooled counts the hook calls made since Since that reached the agent
+// only through the spool (DESIGN 5.2).
+type Spooled struct {
+	Since   time.Time `json:"since"`
+	Calls   uint64    `json:"calls"`
+	Prompts uint64    `json:"prompts"`
+	// Unknown is how many calls the agent can't tell prompts from other
+	// events for, whose journal lines an older version wrote.
+	Unknown uint64 `json:"unknown,omitempty"`
 }
 
 // Signals says where the agent reads idle time and focus, or why it

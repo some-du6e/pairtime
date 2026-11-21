@@ -269,10 +269,15 @@ type Delivery struct {
 	Walk []platform.Proc
 	// EventVia and Harness are what the agent made of where the message
 	// came from: the via its events get, and the harness whose process
-	// sent it, as hookpath.Of says. A sink in front of the Journal sets
-	// them, and the Journal records them; they are "" until then.
-	EventVia event.Via
-	Harness  event.Harness
+	// sent it, as hookpath.Of says. EventKind is the kind of event the
+	// agent takes a hook call as (hookpath.PresenceKind), such as
+	// prompt.submit, and "" for one that only shows its session is active.
+	// A sink in front of the Journal sets them, and the Journal records
+	// them, EventKind as whether a hook call was a prompt; they are ""
+	// until then.
+	EventVia  event.Via
+	Harness   event.Harness
+	EventKind event.Kind
 	// Received is the agent's own stamp from when it took the message in,
 	// by its wall clock and its monotonic clock (clock.Now): as the message
 	// arrived over the socket or the pipe, and for the spool when a drain
