@@ -447,8 +447,9 @@ func (p position) before(q position) bool {
 
 // scan reads the segments from where the last row of batches.seg says its
 // batch ends, and leaves the writer ready to append after the last whole
-// frame: w.next, w.b, w.head, w.pending and w.seg. It returns the rows of
-// batches whose seal frames it found and whose rows batches.seg lacks.
+// frame: w.next, w.b, w.head, w.pending, w.seg, and w.lastLocal, from the
+// newest batch's mode. It returns the rows of batches whose seal frames it
+// found and whose rows batches.seg lacks.
 //
 // A frame that isn't whole is a torn tail, which a crash or a power cut
 // leaves, only at the end of the newest segment and after the last row's
@@ -463,9 +464,11 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 	}
 	var start, from, snap position
 	next, b, head := uint64(1), uint64(0), ledger.Hash{}
+	lastLocal := false
 	if n := len(rows); n > 0 {
 		last := rows[n-1]
 		start, next, b, head, snap = last.End, last.LastSeq+1, last.B, last.Head, last.Snap
+		lastLocal = !last.online()
 		if !slices.Contains(days, start.Seg) {
 			return nil, damaged("batch %d ends in the segment of %s, which isn't there", last.B, start.Seg)
 		}
@@ -581,7 +584,7 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 				}
 				rp.Snap = snap
 				restored = append(restored, rp)
-				b, head = rp.B, rp.Head
+				b, head, lastLocal = rp.B, rp.Head, !rp.online()
 				w.pending = nil
 			default:
 				f.close()
@@ -594,7 +597,7 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 			f.close()
 		}
 	}
-	w.next, w.b, w.head, w.snap = next, b, head, snap
+	w.next, w.b, w.head, w.snap, w.lastLocal = next, b, head, snap, lastLocal
 	return restored, nil
 }
 

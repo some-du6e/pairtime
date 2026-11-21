@@ -207,11 +207,12 @@ func (s *saved) addGap(a, b uint64) {
 // foldModes takes into the runs the modes of the batches rows holds that
 // the place hasn't taken yet, from the next root's batch or the one after
 // Modes, in batch order: a batch whose row doesn't say it was sealed
-// online, as one an older writer sealed, counts as sealed in local-only
-// mode (DESIGN 4.2). The batches before the next root went or were passed
-// over already. It reports whether a run changed. Modes moving alone needs
-// no save: the runs then hold what the batches after the saved Modes say,
-// so taking their modes again changes nothing.
+// online, as one an older pairtime version sealed, which recorded no mode
+// (ledger.Row.NoMode), counts as sealed in local-only mode (DESIGN 4.2).
+// The batches before the next root went or were passed over already. It
+// reports whether a run changed. Modes moving alone needs no save: the
+// runs then hold what the batches after the saved Modes say, so taking
+// their modes again changes nothing.
 func (s *saved) foldModes(rows *rowIndex) bool {
 	changed := false
 	for b := max(s.Modes+1, s.Next, rows.first); b <= rows.last(); b++ {
@@ -219,7 +220,7 @@ func (s *saved) foldModes(rows *rowIndex) bool {
 		if !ok {
 			break
 		}
-		changed = s.mode(b, !r.Online) || changed
+		changed = s.mode(b, !r.Online, r.Back) || changed
 	}
 	s.Modes = max(s.Modes, rows.last())
 	return changed
@@ -250,12 +251,15 @@ func (s saved) localOnly(b uint64) bool {
 // mode records that batch b was sealed while config.toml's mode was local
 // (local) or online. The first batch sealed in local mode opens a run at
 // LocalFrom, and the first one sealed online after it closes the run into
-// Gaps, itself included: its records began while the mode was still
-// local, as the first one's began before it was. A batch sealed in local
+// Gaps, itself included: its records may have begun while the mode was
+// still local, as the first one's began before it was. A batch whose
+// records all came after the agent's config watch noted the switch back
+// online (back, ledger.Row.Back) closes the run before itself instead, so
+// the first batch after a pairtime login can go. A batch sealed in local
 // mode before the open run, as an older writer's row below a run an older
 // place recorded, takes the run down to it, and one sealed online before
 // it leaves the run as it is. It reports whether anything changed.
-func (s *saved) mode(b uint64, local bool) bool {
+func (s *saved) mode(b uint64, local, back bool) bool {
 	switch {
 	case b == 0:
 		return false
@@ -263,7 +267,11 @@ func (s *saved) mode(b uint64, local bool) bool {
 		s.LocalFrom = b
 		return true
 	case !local && s.LocalFrom > 0 && b >= s.LocalFrom:
-		s.addGap(s.LocalFrom, b)
+		to := b
+		if back {
+			to = b - 1
+		}
+		s.addGap(s.LocalFrom, to)
 		s.LocalFrom = 0
 		return true
 	}
@@ -277,7 +285,7 @@ func (s *saved) mode(b uint64, local bool) bool {
 // or before its change reached the agent, joins the link's gap rather
 // than stopping the roots (D-local-gap). An open run takes in every batch
 // from LocalFrom on, so From is then the next batch to be sealed, last + 1,
-// until one is sealed online and closes the run with itself in it.
+// until one is sealed online and closes the run (mode).
 func (s *saved) settle(last uint64) {
 	if !s.Linking || s.From == 0 {
 		return

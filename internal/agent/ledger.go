@@ -76,14 +76,17 @@ func (a *agent) startLedger() func() {
 		// mode from here on (ledger.Writer.NoteMode). The mode the agent
 		// started in isn't noted: every install starts in local mode, and
 		// the watch notes pairtime login only after its debounce, so the
-		// records just after the login would count as local-only, and the
-		// first batch sealed online after them with them. A stretch from
-		// the start that no seal falls in, as from pairtime install to
-		// pairtime login, takes the mode of its seal. So do the records
-		// that waited for the writer, presence's queue and the hook calls
-		// the adapters held, which attach on goroutines of their own:
-		// those made in a local-only stretch while the ledger was shut can
-		// be sealed online, a gap #131 had too.
+		// records just after the login would count as local-only. A
+		// stretch from the start that no seal falls in, as from pairtime
+		// install to pairtime login, takes the mode of its seal. Once a
+		// seal has read config.toml as local-only, the login's note seals
+		// what is pending, and the first batch after it goes (Batch.Back).
+		// The records that waited for the writer, presence's queue and the
+		// hook calls the adapters held, attach on goroutines of their own
+		// and take the mode of their seal too: those made in a local-only
+		// stretch while the ledger was shut can be sealed online, a gap
+		// #131 had too, which a WP-AG5 follow-up closes before the teen
+		// pilot (docs/PLAN.md).
 		a.writer.Store(lw)
 		a.ledgerIn.Attach(lw)
 		if a.scorer != nil {

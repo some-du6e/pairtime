@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"hash/crc32"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -35,12 +37,11 @@ func smallChain(t *testing.T, dirs home.Dirs, n int) (*ledger.Writer, []ledger.R
 	return smallChainWith(t, dirs, n, nil)
 }
 
-// smallChainWith is smallChain, with batch k sealed online as online(k)
-// says, every one when online is nil. A batch it seals otherwise has a
-// seal frame without online, as an older writer's had.
-func smallChainWith(t *testing.T, dirs home.Dirs, n int, online func(k int) bool) (*ledger.Writer, []ledger.Row) {
+// smallChainWith is smallChain, with the batches older(k) names sealed
+// as an older pairtime version sealed them, its rows recording no mode
+// (ledger.Row.NoMode), when older isn't nil.
+func smallChainWith(t *testing.T, dirs home.Dirs, n int, older func(k int) bool) (*ledger.Writer, []ledger.Row) {
 	t.Helper()
-	sealOnline := true // read by Online at each seal, which runs here
 	kDev := sha256.Sum256([]byte("uploader resume test K_dev"))
 	keys, err := pkgledger.DeriveKeys(kDev[:])
 	if err != nil {
@@ -51,20 +52,19 @@ func smallChainWith(t *testing.T, dirs home.Dirs, n int, online func(k int) bool
 		mu  sync.Mutex
 		now = start
 	)
-	w, err := ledger.Open(ledger.Options{
+	opts := ledger.Options{
 		Dir: dirs.Ledger(), Keys: keys, KeyID: "0123456789abcdef", Params: newestTable(),
 		Now:    func() time.Time { mu.Lock(); defer mu.Unlock(); return now },
-		Online: func() bool { mu.Lock(); defer mu.Unlock(); return sealOnline },
-	})
+		Online: func() bool { return true },
+	}
+	w, err := ledger.Open(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { w.Close() })
 	for k := 1; k <= n; k++ {
 		q := start.Add(time.Duration(k) * 15 * time.Minute)
 		mu.Lock()
 		now = q
-		sealOnline = online == nil || online(k)
 		mu.Unlock()
 		if _, err := w.Checkpoint("p_test", uint64(q.UnixMilli()), json.RawMessage(`{}`)); err != nil {
 			t.Fatal(err)
@@ -73,11 +73,71 @@ func smallChainWith(t *testing.T, dirs home.Dirs, n int, online func(k int) bool
 			t.Fatal(err)
 		}
 	}
+	if older != nil {
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		dropModes(t, dirs.Ledger(), func(b uint64) bool { return older(int(b)) })
+		if w, err = ledger.Open(opts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { w.Close() })
 	_, rows, err := ledger.ReadRows(dirs.Ledger(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return w, rows
+}
+
+// dropModes rewrites the rows of the batches older names in the ledger
+// directory dir's batches.seg without the modes their seal frames record,
+// as pairtime 0.1.0-alpha.1's writer wrote rows, which recorded none. No
+// ledger writer may have the directory open. It writes the frames as
+// internal/agent/ledger lays them out (frame.go): u8(kind) || u32(len) ||
+// payload || u32(CRC-32C of the rest), big-endian, a row's kind being 'b'.
+func dropModes(t *testing.T, dir string, older func(b uint64) bool) {
+	t.Helper()
+	name := filepath.Join(dir, "batches.seg")
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := crc32.MakeTable(crc32.Castagnoli)
+	var out []byte
+	for len(data) > 0 {
+		if len(data) < 9 || len(data) < 9+int(binary.BigEndian.Uint32(data[1:5])) {
+			t.Fatal("batches.seg ends inside a frame")
+		}
+		kind, size := data[0], int(binary.BigEndian.Uint32(data[1:5]))
+		payload := data[5 : 5+size]
+		data = data[9+size:]
+		if kind == 'b' {
+			var row map[string]json.RawMessage
+			var b uint64
+			if err := json.Unmarshal(payload, &row); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(row["b"], &b); err != nil {
+				t.Fatal(err)
+			}
+			if older(b) {
+				delete(row, "online")
+				delete(row, "back")
+				if payload, err = json.Marshal(row); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		at := len(out)
+		out = append(out, kind)
+		out = binary.BigEndian.AppendUint32(out, uint32(len(payload)))
+		out = append(out, payload...)
+		out = binary.BigEndian.AppendUint32(out, crc32.Checksum(out[at:], table))
+	}
+	if err := os.WriteFile(name, out, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // hold makes the fake server hold rows as if it had taken them before,
@@ -614,6 +674,16 @@ type rig struct {
 	creds  Credentials
 	client *http.Client
 	u      *Uploader
+
+	pmu     sync.Mutex
+	problem string // what the uploader last told doctor
+}
+
+// doctor is what the uploader last told doctor.
+func (r *rig) doctor() string {
+	r.pmu.Lock()
+	defer r.pmu.Unlock()
+	return r.problem
 }
 
 // newRig makes a chain of n batches a quarter hour apart from start, and
@@ -623,13 +693,13 @@ func newRig(t *testing.T, n int, minutes []int, linkedAfter time.Duration) *rig 
 	return newRigWith(t, n, minutes, linkedAfter, nil)
 }
 
-// newRigWith is newRig, with batch k sealed online as online(k) says
-// (smallChainWith).
-func newRigWith(t *testing.T, n int, minutes []int, linkedAfter time.Duration, online func(k int) bool) *rig {
+// newRigWith is newRig, with the batches older(k) names sealed as an older
+// pairtime version sealed them (smallChainWith).
+func newRigWith(t *testing.T, n int, minutes []int, linkedAfter time.Duration, older func(k int) bool) *rig {
 	t.Helper()
 	dir := t.TempDir()
 	r := &rig{dirs: home.Dirs{Data: dir, Config: dir, Runtime: dir}}
-	r.w, r.rows = smallChainWith(t, r.dirs, n, online)
+	r.w, r.rows = smallChainWith(t, r.dirs, n, older)
 	r.start = r.rows[0].SealedAt.Add(-15 * time.Minute)
 	bs, err := store.OpenBuckets(r.dirs.Buckets())
 	if err != nil {
@@ -663,6 +733,11 @@ func (r *rig) newUploader(t *testing.T) *Uploader {
 		Ledger: r.w, LedgerDir: r.dirs.Ledger(), BucketDir: r.dirs.Buckets(), DataDir: r.dirs.Data, State: r.st,
 		Login:  LoginFunc(func() (Credentials, bool) { return r.creds, true }),
 		Params: newestTable(), Client: r.client, Draw: func(int64) int64 { return 0 },
+		Problem: func(msg string) {
+			r.pmu.Lock()
+			r.problem = msg
+			r.pmu.Unlock()
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1008,12 +1083,14 @@ func TestRelinkRestart(t *testing.T) {
 
 // TestOutboxAfterUpgrade is a request an older version left waiting for
 // its retry, after an upgrade, in a place that took no modes from the
-// rows: its root is of batch 4, which an older writer sealed, with no
-// online in its seal frame, so it counts as sealed in local-only mode now
-// (foldModes). privacy show shows the plan made again, not the request,
-// and the uploader never sends it, nor any root from batch 4 on.
+// rows: its root is of batch 4, which an older writer sealed, recording no
+// mode, so it counts as sealed in local-only mode now (foldModes). privacy
+// show shows the plan made again, not the request, and the uploader never
+// sends it, nor any root from batch 4 on. Both say the cause, batches an
+// older version sealed, and the way out, pairtime logout and pairtime
+// login.
 func TestOutboxAfterUpgrade(t *testing.T) {
-	r := newRigWith(t, 6, nil, -time.Minute, func(k int) bool { return k < 4 })
+	r := newRigWith(t, 6, nil, -time.Minute, func(k int) bool { return k >= 4 })
 	hold(t, r.f, r.rows[:3], 1)
 	for _, row := range r.rows[:3] {
 		fr := r.f.rows[row.B]
@@ -1053,7 +1130,9 @@ func TestOutboxAfterUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.run(t, "a state read", func(f *fakeIngest) bool { return f.gets > 0 })
+	r.run(t, "a state read, and doctor to hear why uploads stopped", func(f *fakeIngest) bool {
+		return f.gets > 0 && strings.Contains(r.doctor(), "stopped uploading")
+	})
 	r.f.mu.Lock()
 	defer r.f.mu.Unlock()
 	sent := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Equal(b, js) })
@@ -1065,11 +1144,13 @@ func TestOutboxAfterUpgrade(t *testing.T) {
 		{"privacy show shows the plan made again, with no root and no minute, not the waiting request", !pv.Retry && pv.Batches == 0 && pv.Buckets == 0 && !bytes.Equal(pv.JSON, js) && pv.Stopped == 4},
 		{"the uploader never sent the waiting request, nor any root from batch 4 on", !sent && r.f.head.b == 3 && r.f.rows[4].b == 0},
 		{"the waiting request is gone", errors.Is(kept, fs.ErrNotExist)},
+		{"privacy show says an older version sealed the batch the roots stop at", pv.NoMode},
+		{"doctor hears that cause and the way out", strings.Contains(r.doctor(), noModeProblem)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
-				t.Errorf("no: privacy show %+v; the server holds head %d after %q", pv, r.f.head.b, r.f.bodies)
+				t.Errorf("no: privacy show %+v; the server holds head %d after %q; doctor hears %q", pv, r.f.head.b, r.f.bodies, r.doctor())
 			}
 		})
 	}

@@ -106,10 +106,12 @@ type Options struct {
 	// records the batch's mode: online only when Online says so and no
 	// record in the batch came while the mode NoteMode last noted was
 	// local-only. So a batch's mode is on disk with the seal, in the same
-	// flush, before Sealed hears of it, and no crash can lose it. A batch
-	// whose seal frame doesn't say it was sealed online, as one an older
-	// writer sealed, counts as sealed in local-only mode (Batch.Online).
-	// Nil means every batch is sealed online, but for NoteMode.
+	// flush, before Sealed hears of it, and no crash can lose it. Every
+	// seal frame the writer writes records the mode, online or local-only;
+	// a batch whose seal frame records none, as an older pairtime version's
+	// doesn't, counts as sealed in local-only mode (Batch.Online,
+	// Row.NoMode). Nil means every batch is sealed online, but for
+	// NoteMode.
 	Online func() bool
 	// Problem gets a description of what went wrong when a seal that no
 	// caller waits for fails, and "" when one succeeds after that.
@@ -128,7 +130,14 @@ type Batch struct {
 	// the computer upload, as its seal frame records (Options.Online).
 	// Nothing a batch without it holds may leave the device, neither its
 	// root nor its minutes (DESIGN 4.2; D-local-gap).
-	Online  bool
+	Online bool
+	// Back marks the first batch sealed online whose records all came
+	// after the agent's config watch noted config.toml back online, with
+	// no seal since that read the file as local-only (NoteMode): the run of
+	// batches sealed in local-only mode before it ends before it, so it can
+	// go, where an unmarked batch sealed online just after the run counts
+	// as part of it.
+	Back    bool
 	Records []ledger.Record
 }
 
@@ -204,9 +213,14 @@ type Writer struct {
 	// local is set while the mode NoteMode last noted is local-only, and
 	// taint once a record in pending came then. stretchSealed is set once
 	// a batch holding a record of the current local-only stretch is sealed.
-	// notes counts NoteMode's calls.
-	local, taint, stretchSealed bool
-	notes                       uint64
+	// lastLocal is set while the newest batch, sealed by this writer or
+	// found by Open, counts as sealed in local-only mode. back is the s of
+	// the first record written after NoteMode noted a switch back online,
+	// until the batch it marks is sealed (Batch.Back) or a seal reads
+	// config.toml as local-only, and 0 while there is none. notes counts
+	// NoteMode's calls.
+	local, taint, stretchSealed, lastLocal bool
+	back, notes                            uint64
 
 	kick     chan struct{}
 	stop     chan struct{}
@@ -492,19 +506,29 @@ func (w *Writer) append(rec ledger.Record) error {
 // file changed, and with nothing pending the stretch's first record seals
 // at once: either way the stretch reaches the disk before a crash can cut
 // the records after it, and the batch sealed online after it counts as
-// local-only too (the uploader's saved.mode). The switch back online seals
-// the stretch's last records, so the records after it go in a batch of
-// their own. A switch back the watch misses, as to a symlinked
-// config.toml's target, ends the stretch at the next seal that reads the
-// file online.
+// local-only too (the uploader's saved.mode). The switch back online, after
+// a noted stretch or while the newest batch counts as local-only, as at
+// pairtime login after batches sealed while config.toml said local, seals
+// what it finds pending, and the first batch after it whose records all
+// came after the note is marked as one (Batch.Back): the run of local-only
+// batches ends before it, so the first prompt after the switch keeps its
+// credit. A switch back the watch misses, as to a symlinked config.toml's
+// target, ends the stretch at the next seal that reads the file online,
+// and marks no batch.
 func (w *Writer) NoteMode(online bool) {
 	w.mu.Lock()
 	w.notes++
-	back := w.local && online
+	back := online && (w.local || w.lastLocal)
 	begins := !online && !w.local
 	if begins {
 		w.stretchSealed = false
 		w.taint = w.taint || len(w.pending) > 0
+	}
+	switch {
+	case back && w.back == 0:
+		w.back = w.next
+	case !online:
+		w.back = 0
 	}
 	w.local = !online
 	seal := back || (begins && w.taint)
@@ -561,10 +585,16 @@ type sealPayload struct {
 	Head     ledger.Hash `json:"head"`
 	// SealedAt is when the batch was sealed, in Unix ms.
 	SealedAt int64 `json:"sealed_at"`
-	// Online is set when the batch was sealed online (Options.Online). It
+	// Online says whether the batch was sealed online (Options.Online). It
 	// is in the seal frame, so the batch's mode reaches the disk in the
 	// seal's flush, and in the row, which Open rebuilds from that frame.
-	Online bool `json:"online,omitempty"`
+	// The writer writes it in every seal frame, false as well as true, so a
+	// frame without it is one an older pairtime version wrote, which
+	// recorded no mode (Row.NoMode).
+	Online *bool `json:"online,omitempty"`
+	// Back marks the first batch sealed online after a noted switch back
+	// online (Batch.Back).
+	Back bool `json:"back,omitempty"`
 	// Q is what the prompt classes' questions remember after the batch's
 	// last record (score.Questions), in the seal frame of every
 	// questionRows-th batch, so Open can restore them exactly rather than
@@ -572,10 +602,14 @@ type sealPayload struct {
 	Q *score.QuestionsState `json:"q,omitempty"`
 }
 
+// online reports whether the batch was sealed online, as its seal frame
+// records: one that records no mode counts as sealed in local-only mode.
+func (sp sealPayload) online() bool { return sp.Online != nil && *sp.Online }
+
 // rowPayload is a batch frame's payload in batches.seg: DESIGN 3.5's row,
-// {b, first_seq, last_seq, n, R_b, H_b, sealed_at}, with prev, online and
-// where the batch's frames are. The receipt goes in a receipt frame of its own,
-// when it arrives.
+// {b, first_seq, last_seq, n, R_b, H_b, sealed_at}, with prev, online,
+// back and where the batch's frames are. The receipt goes in a receipt
+// frame of its own, when it arrives.
 type rowPayload struct {
 	sealPayload
 	LastSeq uint64 `json:"last_seq"`
@@ -651,6 +685,13 @@ func (w *Writer) seal() (Batch, bool, error) {
 		// NoteMode ends a stretch.
 		w.local = false
 	}
+	if !online {
+		// config.toml says local-only since the switch back online was
+		// noted, as before the watch notes a switch to it: the records
+		// after the note may have come in local-only mode, so no batch
+		// after it is marked (Batch.Back).
+		w.back = 0
+	}
 	if err := w.usable(); err != nil {
 		w.mu.Unlock()
 		return Batch{}, false, err
@@ -678,8 +719,9 @@ func (w *Writer) seal() (Batch, bool, error) {
 		return Batch{}, false, err
 	}
 	at := w.now()
+	on := online && !w.taint
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
-		SealedAt: at.UnixMilli(), Online: online && !w.taint}
+		SealedAt: at.UnixMilli(), Online: &on, Back: on && w.back > 0 && row.FirstSeq >= w.back}
 	snap := w.snap
 	if row.B%questionRows == 0 {
 		// w.q has taken every record the batch holds and none after.
@@ -708,6 +750,10 @@ func (w *Writer) seal() (Batch, bool, error) {
 	w.pending = nil
 	w.stretchSealed = w.stretchSealed || w.taint
 	w.taint = false
+	w.lastLocal = !on
+	if sp.Back {
+		w.back = 0
+	}
 	w.b, w.head, w.snap = row.B, row.Head, snap
 	w.mu.Unlock()
 
@@ -728,7 +774,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 		w.fail(err)
 		return Batch{}, false, err
 	}
-	batch := Batch{Row: row, SealedAt: time.UnixMilli(sp.SealedAt), Online: sp.Online, Records: recs}
+	batch := Batch{Row: row, SealedAt: time.UnixMilli(sp.SealedAt), Online: on, Back: sp.Back, Records: recs}
 	if w.sealedFn != nil {
 		w.sealedFn(batch)
 	}

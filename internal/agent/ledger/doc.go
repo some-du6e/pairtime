@@ -14,13 +14,16 @@
 //   - YYYY-MM-DD.seg, one per UTC day the writer wrote in: the records of
 //     that day, each a record frame holding its 33-byte header and its
 //     body as stored, and after each batch's last record a seal frame
-//     with the batch's b, first_seq, n, prev, R_b, H_b and sealed_at, and
-//     online when it was sealed while config.toml let the computer upload
-//     and none of its records came while the agent's config watch said
-//     local-only (Options.Online, Writer.NoteMode).
+//     with the batch's b, first_seq, n, prev, R_b, H_b and sealed_at; its
+//     online, true when it was sealed while config.toml let the computer
+//     upload and none of its records came while the agent's config watch
+//     said local-only, false otherwise (Options.Online, Writer.NoteMode),
+//     and missing only from an older version's seal frames, which recorded
+//     no mode; and back on the first batch sealed online after the watch
+//     noted a switch back online (Batch.Back).
 //   - batches.seg: a chain frame naming the device id and the device
 //     key's id, then a row per batch, {b, first_seq, last_seq, n, prev,
-//     R_b, H_b, sealed_at, online} and where its frames are, and the
+//     R_b, H_b, sealed_at, online, back} and where its frames are, and the
 //     server's receipts with their received_at (DESIGN 3.5; ledger-v1 7).
 //   - old/<key id>/: the chain of a device key this installation no
 //     longer writes with, kept for reading.

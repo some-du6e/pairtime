@@ -479,7 +479,8 @@ func TestSeals(t *testing.T) {
 // computer upload as the batch sealed (Options.Online), asked at the seal
 // rather than at the batch's first record, and the batch Sealed gets, its
 // row and ReadBatches say the same, as a row Open rebuilds from the seal
-// frame after a crash does.
+// frame after a crash does. Every row records its mode, a local-only
+// one's too, so none reads as an older version's (Row.NoMode).
 func TestSealMode(t *testing.T) {
 	type mode struct {
 		sealed, row, read []bool
@@ -554,7 +555,117 @@ func TestSealMode(t *testing.T) {
 			if !slices.Equal(got.sealed, c.want) || !slices.Equal(got.row, c.want) || !slices.Equal(got.read, c.want) {
 				t.Errorf("online: Sealed %v, rows %v, ReadBatches %v; want %v for each", got.sealed, got.row, got.read, c.want)
 			}
+			for _, r := range rows {
+				if r.NoMode {
+					t.Errorf("batch %d's row records no mode", r.B)
+				}
+			}
 		})
+	}
+}
+
+// TestNoModeRows checks the rows of batches whose seal frames record no
+// mode, as pairtime 0.1.0-alpha.1's don't: they read as sealed in
+// local-only mode by an older version (Row.NoMode), and a writer that
+// opens on a ledger whose newest row is one seals at the switch back
+// online, as at the pairtime login that follows an upgrade's pairtime
+// logout, and marks the batch after it (Batch.Back).
+func TestNoModeRows(t *testing.T) {
+	dir := t.TempDir()
+	rng := rand.New(rand.NewPCG(15, 16))
+	w := open(t, dir, newClock(testT))
+	for i := range 2 {
+		if _, _, err := write(w, rng, "os.presence", testT+int64(i)*1000); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, err := w.Seal(); !ok || err != nil {
+			t.Fatalf("seal %d: %v, %v", i+1, ok, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dropModes(t, dir)
+	_, older, err := ReadRows(dir, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed := make(chan Batch, 4)
+	w = open(t, dir, newClock(testT+60_000), func(o *Options) {
+		o.Online = func() bool { return true }
+		o.Sealed = func(b Batch) { sealed <- b }
+	})
+	var got []Batch
+	take := func() {
+		t.Helper()
+		select {
+		case b := <-sealed:
+			got = append(got, b)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("no batch %d was sealed", len(got)+3)
+		}
+	}
+	if _, _, err := write(w, rng, "os.presence", testT+2000); err != nil {
+		t.Fatal(err)
+	}
+	w.NoteMode(true)
+	take()
+	if _, _, err := write(w, rng, "os.presence", testT+3000); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := w.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	take()
+	_, rows, err := ReadRows(dir, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"a row whose seal frame records no mode reads as an older version's, sealed in local-only mode",
+			len(older) == 2 && older[0].NoMode && older[1].NoMode && !older[0].Online && !older[1].Online},
+		{"the switch back online seals what was pending", len(got) == 2 && got[0].Row.B == 3 && len(got[0].Records) == 1 && got[0].Online && !got[0].Back},
+		{"and marks the batch after it", len(got) == 2 && got[1].Online && got[1].Back},
+		{"the rows the writer seals since record their modes", len(rows) == 4 && !rows[2].NoMode && !rows[3].NoMode && rows[3].Back},
+	}
+	for _, ch := range checks {
+		t.Run(ch.name, func(t *testing.T) {
+			if !ch.ok {
+				t.Errorf("no: rows %+v, then %+v; batches sealed %+v", older, rows, got)
+			}
+		})
+	}
+}
+
+// dropModes rewrites the rows of dir's batches.seg without the modes their
+// seal frames record, as pairtime 0.1.0-alpha.1's writer wrote rows, which
+// recorded none. The segments keep their seal frames as they are: Open
+// rebuilds no row here, and ReadRows reads batches.seg alone.
+func dropModes(t *testing.T, dir string) {
+	t.Helper()
+	name := filepath.Join(dir, batchesName)
+	var out []byte
+	for _, fm := range framesOf(t, name) {
+		payload := fm.payload
+		if fm.kind == kindBatch {
+			var row map[string]json.RawMessage
+			if err := json.Unmarshal(payload, &row); err != nil {
+				t.Fatal(err)
+			}
+			delete(row, "online")
+			delete(row, "back")
+			var err error
+			if payload, err = json.Marshal(row); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out = appendFrame(out, fm.kind, payload)
+	}
+	if err := os.WriteFile(name, out, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -563,54 +674,74 @@ func TestSealMode(t *testing.T) {
 // batch local-only, though config.toml says online by the seal; the switch
 // seals what it finds pending at once, and with nothing pending the
 // stretch's first record does, so a crash after it can't take the switch
-// with it; the switch back online seals what the stretch left; and a
-// switch back the watch misses ends the stretch at the next seal that reads
-// the file online.
+// with it; the switch back online seals what the stretch left, or what was
+// pending after a seal that read the file local-only, and marks the first
+// batch whose records all came after it (Batch.Back); and a switch back the
+// watch misses ends the stretch at the next seal that reads the file
+// online, marking no batch. Each batch's row and its seal frame say what
+// Sealed got, as the rows Open rebuilds after a crash do.
 func TestNoteMode(t *testing.T) {
 	// A step changes config.toml ("file-local", "file-online"), notes the
 	// mode as the config watch does ("local", "online"), writes a record
 	// ("write"), seals ("seal"), waits for the batch a seal of the writer's
-	// own sealed ("sealed"), or gives one that shouldn't come time to
-	// ("pause"). A first step "no-online" opens the writer without
+	// own sealed ("sealed"), gives one that shouldn't come time to
+	// ("pause"), opens the writer again after it closed ("reopen"), or
+	// after a crash that lost every row of batches.seg but the first, which
+	// Open rebuilds from the seal frames while config.toml says local
+	// ("crash"). A first step "no-online" opens the writer without
 	// Options.Online.
 	cases := []struct {
 		name  string
 		steps []string
-		// online is the mode of each batch sealed, and records how many
-		// records each holds.
-		online  []bool
-		records []int
+		// online is the mode of each batch sealed, back whether it is
+		// marked as the first after a switch back online, and records how
+		// many records each holds.
+		online, back []bool
+		records      []int
 	}{
 		{"records pending at a switch to local-only mode seal at once, local-only",
-			[]string{"write", "file-local", "local", "sealed"}, []bool{false}, []int{1}},
+			[]string{"write", "file-local", "local", "sealed"}, []bool{false}, []bool{false}, []int{1}},
 		{"with nothing pending, the stretch's first record seals at once, local-only",
-			[]string{"file-local", "local", "write", "sealed"}, []bool{false}, []int{1}},
+			[]string{"file-local", "local", "write", "sealed"}, []bool{false}, []bool{false}, []int{1}},
 		{"only the stretch's first seal comes at once",
-			[]string{"file-local", "local", "write", "sealed", "write", "write", "pause", "seal"}, []bool{false, false}, []int{1, 2}},
-		{"a record written in the stretch makes its batch local-only though config.toml says online by the seal the switch back makes",
-			[]string{"file-local", "local", "write", "sealed", "write", "file-online", "online", "sealed", "write", "seal"}, []bool{false, false, true}, []int{1, 1, 1}},
-		{"a switch back the config watch misses ends the stretch at the next seal that reads config.toml online",
-			[]string{"file-local", "local", "write", "sealed", "write", "file-online", "seal", "write", "seal"}, []bool{false, false, true}, []int{1, 1, 1}},
-		{"a switch with no record written in it leaves the next batch online",
-			[]string{"local", "online", "write", "seal"}, []bool{true}, []int{1}},
+			[]string{"file-local", "local", "write", "sealed", "write", "write", "pause", "seal"}, []bool{false, false}, []bool{false, false}, []int{1, 2}},
+		{"a record written in the stretch makes its batch local-only though config.toml says online by the seal the switch back makes, and the batch after it is marked",
+			[]string{"file-local", "local", "write", "sealed", "write", "file-online", "online", "sealed", "write", "seal"}, []bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
+		{"a switch back the config watch misses ends the stretch at the next seal that reads config.toml online, and marks no batch",
+			[]string{"file-local", "local", "write", "sealed", "write", "file-online", "seal", "write", "seal"}, []bool{false, false, true}, []bool{false, false, false}, []int{1, 1, 1}},
+		{"a switch with no record written in it leaves the next batch online, marked as the first after it",
+			[]string{"local", "online", "write", "seal"}, []bool{true}, []bool{true}, []int{1}},
 		{"a switch to local-only and straight back still seals what was pending as local-only",
-			[]string{"write", "file-local", "local", "file-online", "online", "sealed"}, []bool{false}, []int{1}},
+			[]string{"write", "file-local", "local", "file-online", "online", "sealed"}, []bool{false}, []bool{false}, []int{1}},
 		{"without Online, only the switch back ends a stretch, since no seal reads config.toml",
-			[]string{"no-online", "local", "write", "sealed", "write", "seal", "online", "write", "seal"}, []bool{false, false, true}, []int{1, 1, 1}},
+			[]string{"no-online", "local", "write", "sealed", "write", "seal", "online", "write", "seal"}, []bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"a second stretch's first record seals at once too",
-			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "file-local", "local", "write", "sealed"}, []bool{false, true, false}, []int{1, 1, 1}},
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "file-local", "local", "write", "sealed"}, []bool{false, true, false}, []bool{false, true, false}, []int{1, 1, 1}},
+		{"a switch back online after a seal that read config.toml local-only, as at the first pairtime login, seals what is pending, and marks the batch after it",
+			[]string{"file-local", "write", "seal", "write", "file-online", "online", "sealed", "write", "seal"}, []bool{false, true, true}, []bool{false, false, true}, []int{1, 1, 1}},
+		{"a seal that reads config.toml local-only after a switch back marks no batch after it",
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "file-local", "write", "seal", "file-online", "write", "seal"}, []bool{false, false, true}, []bool{false, false, false}, []int{1, 1, 1}},
+		{"a writer that opens on a ledger whose newest batch is local-only seals at the switch back online too",
+			[]string{"file-local", "write", "seal", "reopen", "write", "file-online", "online", "sealed", "write", "seal"}, []bool{false, true, true}, []bool{false, false, true}, []int{1, 1, 1}},
+		{"rows a crash lost keep their batches' modes and marks when Open rebuilds them from the seal frames",
+			[]string{"file-local", "local", "write", "sealed", "write", "file-online", "online", "sealed", "write", "seal", "crash"}, []bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
 			var file atomic.Bool // config.toml says online
 			file.Store(true)
 			sealed := make(chan Batch, 8)
-			w := open(t, t.TempDir(), newClock(testT), func(o *Options) {
-				if len(c.steps) == 0 || c.steps[0] != "no-online" {
-					o.Online = file.Load
-				}
-				o.Sealed = func(b Batch) { sealed <- b }
-			})
+			withOnline := len(c.steps) == 0 || c.steps[0] != "no-online"
+			openWriter := func(online func() bool) *Writer {
+				return open(t, dir, newClock(testT), func(o *Options) {
+					if withOnline {
+						o.Online = online
+					}
+					o.Sealed = func(b Batch) { sealed <- b }
+				})
+			}
+			w := openWriter(file.Load)
 			rng := rand.New(rand.NewPCG(9, 10))
 			var got []Batch
 			take := func() {
@@ -648,6 +779,17 @@ func TestNoteMode(t *testing.T) {
 						t.Fatalf("step %d: batch %d was sealed meanwhile", i, b.Row.B)
 					default:
 					}
+				case "reopen":
+					if err := w.Close(); err != nil {
+						t.Fatalf("step %d: %v", i, err)
+					}
+					w = openWriter(file.Load)
+				case "crash":
+					abandon(w)
+					batches := filepath.Join(dir, batchesName)
+					// Frame 0 is the chain frame, and frame 1 batch 1's row.
+					truncate(t, batches, framesOf(t, batches)[1].end)
+					w = openWriter(func() bool { return false })
 				}
 			}
 			select {
@@ -655,13 +797,29 @@ func TestNoteMode(t *testing.T) {
 				t.Fatalf("batch %d was sealed after the last step", b.Row.B)
 			case <-time.After(200 * time.Millisecond):
 			}
-			var online []bool
+			var online, back []bool
 			var records []int
 			for _, b := range got {
-				online, records = append(online, b.Online), append(records, len(b.Records))
+				online, back, records = append(online, b.Online), append(back, b.Back), append(records, len(b.Records))
 			}
-			if !slices.Equal(online, c.online) || !slices.Equal(records, c.records) {
-				t.Errorf("batches sealed online %v holding %v records, want %v holding %v", online, records, c.online, c.records)
+			if !slices.Equal(online, c.online) || !slices.Equal(back, c.back) || !slices.Equal(records, c.records) {
+				t.Errorf("batches sealed online %v, marked %v, holding %v records; want %v, %v and %v", online, back, records, c.online, c.back, c.records)
+			}
+			_, rows, err := ReadRows(dir, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			read := readAll(t, dir)
+			if len(rows) != len(got) || len(read) != len(got) {
+				t.Fatalf("%d rows and %d batches read back, for %d sealed", len(rows), len(read), len(got))
+			}
+			for i, b := range got {
+				if r := rows[i]; r.Online != b.Online || r.Back != b.Back || r.NoMode {
+					t.Errorf("batch %d's row says online %v, marked %v, with no mode %v", b.Row.B, r.Online, r.Back, r.NoMode)
+				}
+				if rb := read[i]; rb.Online != b.Online || rb.Back != b.Back {
+					t.Errorf("batch %d's seal frame says online %v, marked %v", b.Row.B, rb.Online, rb.Back)
+				}
 			}
 		})
 	}

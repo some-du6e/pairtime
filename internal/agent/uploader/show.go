@@ -30,8 +30,11 @@ type Preview struct {
 	More bool
 	// Stopped is the first batch sealed in local-only mode after the
 	// chain's last link: no batch root from it on goes until the next link,
-	// nor the minutes it holds. 0 for none.
+	// nor the minutes it holds. 0 for none. NoMode is set when an older
+	// pairtime version sealed it, which recorded no mode, so it counts as
+	// local-only (ledger.Row.NoMode).
 	Stopped uint64
+	NoMode  bool
 	// Fork is the batch the server's record of this computer's chain parts
 	// from its ledger at, after which nothing more goes under its device ID
 	// (#150 R5). 0 for none.
@@ -119,9 +122,10 @@ func Next(o PreviewOptions) (Preview, error) {
 	fresh := relinked(st, c)
 	relink(&st, rows, c)
 	stop := st.localStop(rows.last())
+	noMode := stoppedNoMode(rows, stop)
 	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil && !fresh && !older {
 		pv := previewOf(p.plan, true)
-		pv.Stopped = stop
+		pv.Stopped, pv.NoMode = stop, noMode
 		return pv, nil
 	}
 	if fresh {
@@ -150,7 +154,7 @@ func Next(o PreviewOptions) (Preview, error) {
 		return Preview{}, err
 	}
 	pv := previewOf(p, false)
-	pv.Stopped = stop
+	pv.Stopped, pv.NoMode = stop, noMode
 	return pv, nil
 }
 

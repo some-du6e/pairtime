@@ -42,11 +42,14 @@ func TestLocalRuns(t *testing.T) {
 		// changed is what mode reports, for the cases that call it.
 		changed bool
 	}{
-		{"the first batch sealed in local mode opens a run", saved{}, func(s *saved) bool { return s.mode(5, true) }, check{localFrom: 5}, true},
-		{"more batches sealed in local mode change nothing", saved{LocalFrom: 5}, func(s *saved) bool { return s.mode(6, true) }, check{localFrom: 5}, false},
-		{"the first batch sealed online again closes the run, itself included", saved{LocalFrom: 5}, func(s *saved) bool { return s.mode(9, false) }, check{gaps: []gap{{5, 9}}}, true},
-		{"a batch sealed online with no run open changes nothing", saved{Gaps: []gap{{2, 3}}}, func(s *saved) bool { return s.mode(9, false) }, check{gaps: []gap{{2, 3}}}, false},
-		{"a run that touches a gap becomes one with it", saved{Gaps: []gap{{1, 4}}, LocalFrom: 5}, func(s *saved) bool { return s.mode(7, false) }, check{gaps: []gap{{1, 7}}}, true},
+		{"the first batch sealed in local mode opens a run", saved{}, func(s *saved) bool { return s.mode(5, true, false) }, check{localFrom: 5}, true},
+		{"more batches sealed in local mode change nothing", saved{LocalFrom: 5}, func(s *saved) bool { return s.mode(6, true, false) }, check{localFrom: 5}, false},
+		{"the first batch sealed online again closes the run, itself included", saved{LocalFrom: 5}, func(s *saved) bool { return s.mode(9, false, false) }, check{gaps: []gap{{5, 9}}}, true},
+		{"a batch marked as the first after a noted switch back online closes the run before itself", saved{LocalFrom: 5}, func(s *saved) bool { return s.mode(9, false, true) }, check{gaps: []gap{{5, 8}}}, true},
+		{"a marked batch just after the run's first batch leaves a run of one", saved{LocalFrom: 5}, func(s *saved) bool { return s.mode(6, false, true) }, check{gaps: []gap{{5, 5}}}, true},
+		{"a marked batch with no run open changes nothing", saved{Gaps: []gap{{2, 3}}}, func(s *saved) bool { return s.mode(9, false, true) }, check{gaps: []gap{{2, 3}}}, false},
+		{"a batch sealed online with no run open changes nothing", saved{Gaps: []gap{{2, 3}}}, func(s *saved) bool { return s.mode(9, false, false) }, check{gaps: []gap{{2, 3}}}, false},
+		{"a run that touches a gap becomes one with it", saved{Gaps: []gap{{1, 4}}, LocalFrom: 5}, func(s *saved) bool { return s.mode(7, false, false) }, check{gaps: []gap{{1, 7}}}, true},
 		{"gaps that overlap merge", saved{Gaps: []gap{{1, 4}, {10, 12}}}, func(s *saved) bool { s.addGap(3, 6); return false }, check{gaps: []gap{{1, 6}, {10, 12}}}, false},
 		{"a gap between two that it touches joins them", saved{Gaps: []gap{{1, 4}, {8, 9}}}, func(s *saved) bool { s.addGap(5, 7); return false }, check{gaps: []gap{{1, 9}}}, false},
 		{"a gap inside one changes nothing", saved{Gaps: []gap{{1, 9}}}, func(s *saved) bool { s.addGap(3, 4); return false }, check{gaps: []gap{{1, 9}}}, false},
@@ -57,16 +60,15 @@ func TestLocalRuns(t *testing.T) {
 		{"a run that opens after From leaves it, since From's root goes before it", saved{Linking: true, From: 6, LocalFrom: 8}, func(s *saved) bool { s.settle(9); return false }, check{localFrom: 8, from: 6}, false},
 		{"a run before From leaves it", saved{Linking: true, From: 6, Gaps: []gap{{2, 3}}}, func(s *saved) bool { s.settle(9); return false }, check{gaps: []gap{{2, 3}}, from: 6}, false},
 		{"once the link's first batch is stored, From stays where it is", saved{From: 6, Gaps: []gap{{6, 7}}}, func(s *saved) bool { s.settle(9); return false }, check{gaps: []gap{{6, 7}}, from: 6}, false},
-		{"the modes of the batches after Modes go in from their rows, in order", saved{}, func(s *saved) bool { return s.foldModes(modeRows(true, false, false, true)) }, check{gaps: []gap{{2, 4}}, modes: 4}, true},
-		{"a row that doesn't say its batch was sealed online, as an older writer's, opens a run", saved{}, func(s *saved) bool { return s.foldModes(modeRows(true, false)) }, check{localFrom: 2, modes: 2}, true},
-		{"the rows up to Modes are in the runs already", saved{Modes: 2, LocalFrom: 2}, func(s *saved) bool { return s.foldModes(modeRows(true, false, false)) }, check{localFrom: 2, modes: 3}, false},
-		{"the rows before the next root went already", saved{Next: 3}, func(s *saved) bool { return s.foldModes(modeRows(false, false, true)) }, check{modes: 3}, false},
-		{"a batch sealed in local mode before an open run takes the run down to it", saved{LocalFrom: 10}, func(s *saved) bool { return s.mode(5, true) }, check{localFrom: 5}, true},
-		{"a batch sealed online before an open run leaves it open", saved{LocalFrom: 10}, func(s *saved) bool { return s.mode(5, false) }, check{localFrom: 10}, false},
+		{"the modes of the batches after Modes go in from their rows, in order", saved{}, func(s *saved) bool { return s.foldModes(modeRows("ollo")) }, check{gaps: []gap{{2, 4}}, modes: 4}, true},
+		{"a row marked as the first after a noted switch back online ends the run before it", saved{}, func(s *saved) bool { return s.foldModes(modeRows("ollbo")) }, check{gaps: []gap{{2, 3}}, modes: 5}, true},
+		{"a row whose seal frame records no mode, as an older version's, opens a run", saved{}, func(s *saved) bool { return s.foldModes(modeRows("on")) }, check{localFrom: 2, modes: 2}, true},
+		{"the rows up to Modes are in the runs already", saved{Modes: 2, LocalFrom: 2}, func(s *saved) bool { return s.foldModes(modeRows("oll")) }, check{localFrom: 2, modes: 3}, false},
+		{"the rows before the next root went already", saved{Next: 3}, func(s *saved) bool { return s.foldModes(modeRows("llo")) }, check{modes: 3}, false},
+		{"a batch sealed in local mode before an open run takes the run down to it", saved{LocalFrom: 10}, func(s *saved) bool { return s.mode(5, true, false) }, check{localFrom: 5}, true},
+		{"a batch sealed online before an open run leaves it open", saved{LocalFrom: 10}, func(s *saved) bool { return s.mode(5, false, false) }, check{localFrom: 10}, false},
 		{"after an upgrade, an older writer's rows below the run an older place recorded are local-only too", saved{Next: 5, LocalFrom: 10},
-			func(s *saved) bool {
-				return s.foldModes(modeRows(true, true, true, true, false, false, false, false, false, false))
-			}, check{localFrom: 5, modes: 10}, true},
+			func(s *saved) bool { return s.foldModes(modeRows("oooonnnnnn")) }, check{localFrom: 5, modes: 10}, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,6 +117,23 @@ func TestLocalRuns(t *testing.T) {
 		})
 	}
 
+	causes := []struct {
+		name  string
+		modes string
+		stop  uint64
+		want  string
+	}{
+		{"a stop at a batch sealed in local-only mode blames config.toml", "oollo", 3, localOnlyProblem},
+		{"a stop at a batch an older version sealed, which recorded no mode, says so", "oonno", 3, noModeProblem},
+	}
+	for _, tc := range causes {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := stopProblem(modeRows(tc.modes), tc.stop); got != tc.want {
+				t.Errorf("doctor hears %q", got)
+			}
+		})
+	}
+
 	only := []struct {
 		name string
 		st   saved
@@ -134,12 +153,15 @@ func TestLocalRuns(t *testing.T) {
 	}
 }
 
-// modeRows is the rows of batches 1 on, each sealed online or not as
-// online says.
-func modeRows(online ...bool) *rowIndex {
+// modeRows is the rows of batches 1 on, a letter of modes each: o sealed
+// online, b online and marked as the first after a noted switch back
+// online (ledger.Row.Back), l in local-only mode, and n by an older
+// version, which recorded no mode (ledger.Row.NoMode).
+func modeRows(modes string) *rowIndex {
 	ix := &rowIndex{}
-	for i, on := range online {
-		if err := ix.add(ledger.Row{BatchRow: pkgledger.BatchRow{B: uint64(i + 1)}, Online: on}); err != nil {
+	for i, m := range modes {
+		r := ledger.Row{BatchRow: pkgledger.BatchRow{B: uint64(i + 1)}, Online: m == 'o' || m == 'b', Back: m == 'b', NoMode: m == 'n'}
+		if err := ix.add(r); err != nil {
 			panic(err)
 		}
 	}
@@ -730,6 +752,112 @@ func TestRelinkLocal(t *testing.T) {
 	})
 }
 
+// TestFirstBatchAfterLogin is the first prompt after pairtime login, in
+// the batch sealed just after it, when batches were sealed in local-only
+// mode before the login: the config watch's note of the switch back online
+// seals what is pending then, and marks the next batch as the first whose
+// records all came after the note (ledger.Batch.Back), so its root and its
+// minutes reach the server, and nothing sealed before it does.
+func TestFirstBatchAfterLogin(t *testing.T) {
+	cases := []struct {
+		name string
+		// before runs what comes before the first prompt after the login,
+		// and returns stop, the first batch none of whose roots or minutes
+		// may go, and first, the batch of that prompt, which the test seals:
+		// the batches from stop to first-1 hold only what came in local-only
+		// mode or before the login.
+		before func(t *testing.T, r *liveRig) (stop, first int)
+		// signedIn is set for a device linked and online from its start,
+		// and serverStart is the first batch the server's chain holds, for
+		// a first sign-in.
+		signedIn    bool
+		serverStart uint64
+	}{
+		{"a first sign-in after batches sealed while config.toml said local, with a record pending at the login", func(t *testing.T, r *liveRig) (int, int) {
+			r.seal(t, 1)
+			r.seal(t, 2)
+			r.record(t, 3) // pending as the login finishes
+			r.link(r.sealedAt(3).Add(-time.Minute))
+			r.local.Store(false) // pairtime login sets mode = "online", which the watch notes
+			r.w.NoteMode(true)
+			waitFor(t, "the switch back online to seal what was pending", func() bool { return r.w.Status().Batches == 3 })
+			return 1, 4
+		}, false, 4},
+		{"a re-link after a noted stretch of local-only mode, with a record pending at the login", func(t *testing.T, r *liveRig) (int, int) {
+			r.seal(t, 1)
+			r.seal(t, 2)
+			r.wait(t, "batches 1 and 2 and their minutes", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 })
+			// pairtime logout sets mode = "local", which the watch notes.
+			r.linked.Store(false)
+			r.local.Store(true)
+			r.w.NoteMode(false)
+			r.record(t, 3)
+			waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 3 })
+			r.record(t, 4) // pending as the login finishes
+			r.link(r.sealedAt(4).Add(-time.Minute))
+			r.local.Store(false)
+			r.w.NoteMode(true)
+			waitFor(t, "the switch back online to seal the stretch's last record", func() bool { return r.w.Status().Batches == 4 })
+			return 3, 5
+		}, true, 0},
+		{"a re-link after a noted stretch that left nothing pending at the login", func(t *testing.T, r *liveRig) (int, int) {
+			r.seal(t, 1)
+			r.seal(t, 2)
+			r.wait(t, "batches 1 and 2 and their minutes", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 })
+			r.linked.Store(false)
+			r.local.Store(true)
+			r.w.NoteMode(false)
+			r.record(t, 3)
+			waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 3 })
+			r.link(r.sealedAt(3).Add(time.Minute))
+			r.local.Store(false)
+			r.w.NoteMode(true)
+			return 3, 4
+		}, true, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLiveRig(t, 90)
+			if !c.signedIn {
+				r.linked.Store(false)
+				r.local.Store(true) // a new install's mode
+			}
+			r.u.Start()
+			stop, first := c.before(t, r)
+			r.seal(t, first) // the first prompt after the login
+			r.u.Wake()
+			r.wait(t, fmt.Sprintf("batch %d and its minutes", first), func(f *fakeIngest) bool {
+				return f.head != nil && f.head.b == uint64(first) && r.minutesIn(f, 15*(first-1), 15*first-1) == 15
+			})
+			r.drain()
+			r.f.mu.Lock()
+			defer r.f.mu.Unlock()
+			none := true
+			for b := stop; b < first; b++ {
+				none = none && r.f.rows[uint64(b)].b == 0
+			}
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"the first prompt's batch went, its root and its minutes", r.f.rows[uint64(first)].b == uint64(first) && r.minutesIn(r.f, 15*(first-1), 15*first-1) == 15},
+				{"no root of a batch sealed before it after the run began went", none},
+				{"no minute of those batches went", r.minutesIn(r.f, 15*(stop-1), 15*(first-1)-1) == 0},
+				{"the server's chain starts where it should", c.serverStart == 0 || r.f.start == c.serverStart},
+				{"the run is a gap that ends before the first prompt's batch", c.serverStart != 0 || slices.Contains(r.f.gaps, [2]uint64{uint64(stop), uint64(first - 1)})},
+				{"doctor doesn't hear that uploads stopped", !strings.Contains(r.doctor(), "stopped uploading")},
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: the server holds head %d from %d, gaps %v and %d minutes; the uploader says %+v", r.f.head.b, r.f.start, r.f.gaps, len(r.f.buckets), r.u.Status())
+					}
+				})
+			}
+		})
+	}
+}
+
 // TestServerGaps is a device that lost state.json after a re-link: the
 // server holds batches 1 to 3 and 6, and recorded 4 and 5 as a local-only
 // gap. The gap comes back from the state answer, so the minutes of
@@ -795,9 +923,9 @@ func TestServerGaps(t *testing.T) {
 }
 
 // TestTakeSealed is what the loop takes of the batches Sealed queued while
-// a cycle ran: their rows with the modes their seal frames record, before
-// anything is planned, and the harnesses of the batches not sealed in
-// local-only mode.
+// a cycle ran: their rows with the modes and marks their seal frames
+// record, before anything is planned, and the harnesses of the batches not
+// sealed in local-only mode, by their own mode as well as the runs.
 func TestTakeSealed(t *testing.T) {
 	rtype, ok := pkgledger.RTypeOf(event.KindAgentTool)
 	if !ok {
@@ -845,6 +973,28 @@ func TestTakeSealed(t *testing.T) {
 		u.takeSealed()
 		if want := map[event.Harness]string{event.HarnessClaudeCode: "2.1.327"}; !maps.Equal(u.st.Harnesses, want) {
 			t.Errorf("the labels' harnesses are %v, want %v", u.st.Harnesses, want)
+		}
+	})
+	t.Run("a batch marked as the first after a noted switch back online ends the run before it, and its harness goes", func(t *testing.T) {
+		u := newUploader(t)
+		u.Sealed(batch(t, 1, false, event.HarnessDevin, "1.0.0"))
+		marked := batch(t, 2, true, event.HarnessCodex, "0.9.1")
+		marked.Back = true
+		u.Sealed(marked)
+		u.takeSealed()
+		if want := map[event.Harness]string{event.HarnessCodex: "0.9.1"}; !maps.Equal(u.st.Harnesses, want) || !slices.Equal(u.st.Gaps, []gap{{1, 1}}) || u.st.LocalFrom != 0 {
+			t.Errorf("the labels' harnesses are %v, want %v, with gaps %v and local from %d", u.st.Harnesses, want, u.st.Gaps, u.st.LocalFrom)
+		}
+	})
+	t.Run("a batch sealed in local-only mode whose row the rows don't hold keeps its harness out of the labels", func(t *testing.T) {
+		u := newUploader(t)
+		// Batch 3 doesn't follow the rows, and batches.seg, read again,
+		// holds batch 1 alone, as when a read fails: its row isn't in the
+		// rows, so its mode never reaches the runs.
+		u.Sealed(batch(t, 3, false, event.HarnessDevin, "1.0.0"))
+		u.takeSealed()
+		if len(u.st.Harnesses) != 0 || u.st.LocalFrom != 0 {
+			t.Errorf("the labels' harnesses are %v, with local from %d", u.st.Harnesses, u.st.LocalFrom)
 		}
 	})
 }

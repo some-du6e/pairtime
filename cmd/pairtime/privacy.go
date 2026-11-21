@@ -112,7 +112,10 @@ func showUpload(stdout, stderr io.Writer, dirs home.Dirs, creds uploader.Credent
 		fmt.Fprint(stderr, uploadsMismatch)
 		return 0
 	}
-	if p.Stopped > 0 {
+	switch {
+	case p.Stopped > 0 && p.NoMode:
+		fmt.Fprint(stderr, uploadsStoppedNoMode)
+	case p.Stopped > 0:
 		fmt.Fprint(stderr, uploadsStopped)
 	}
 	if p.JSON == nil {
@@ -142,6 +145,17 @@ const uploadsStopped = `Uploads are stopped. config.toml kept this computer loca
 after it was linked (it said mode = "local", or it had an error), and
 nothing pairtime records in local-only mode leaves this computer, so
 nothing it recorded from then on goes. To upload again, run pairtime
+logout, then pairtime login; what it records after that goes as usual.
+
+`
+
+// uploadsStoppedNoMode is what privacy show says while the batch roots stop
+// at a batch an older pairtime version sealed, which recorded no mode, so
+// it counts as local-only (uploader.Preview.NoMode).
+const uploadsStoppedNoMode = `Uploads are stopped. An older version of pairtime sealed batches on this
+computer without recording whether config.toml let them upload, so they
+count as recorded in local-only mode, which never leaves this computer, and
+nothing recorded after them goes either. To upload again, run pairtime
 logout, then pairtime login; what it records after that goes as usual.
 
 `
