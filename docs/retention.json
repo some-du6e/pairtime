@@ -72,13 +72,20 @@
     {
       "id": "server.devices",
       "where": "server",
-      "data": "Your devices: for each computer you link with pairtime login, a random device ID, a hash of its sign-in token (never the token itself), the public key that signs its uploads, the OS family, the pairtime build, when you linked it and when it last connected, how many times it has been linked, how far its uploads have got (the number of its last upload, the number, hash and arrival time of the last batch root it sent, the batch its record starts at, and which batches it kept to itself in local-only mode), and the names and versions of your AI tools",
-      "kept": "Until you remove the device, then {days} more. A device removed before it uploaded anything is deleted at once",
+      "data": "Your devices: for each computer you link with pairtime login, a random device ID, a hash of its sign-in token (never the token itself), the public key that signs its uploads, the OS family, the pairtime build, when you linked it, when it last connected and when you removed it, how many times it has been linked, how far its uploads have got (the number of its last upload, the number, hash and arrival time of the last batch root it sent, the batch its record starts at, and the numbers of the batches it kept to itself in local-only mode between two sign-ins), and the names and versions of your AI tools",
+      "kept": "Until you remove the device, then {days} more, or for as long as this server keeps anything the device uploaded, if that's longer. A device removed before it uploaded anything is deleted at once",
       "days": 90,
       "jobs": [{
         "table": "devices",
         "key": ["device_id"],
-        "time_column": "removed_at_ms"
+        "time_column": "removed_at_ms",
+        "kept_by": [
+          {"table": "witness_rows", "awaits": "WP-SV4"},
+          {"table": "minute_buckets", "awaits": "WP-SV4"},
+          {"table": "minute_bucket_revisions", "awaits": "WP-SV4"},
+          {"table": "commit_records", "awaits": "WP-SV4"},
+          {"table": "device_labels", "awaits": "WP-SV4"}
+        ]
       }]
     },
     {

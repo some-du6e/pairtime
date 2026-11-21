@@ -40,8 +40,9 @@ you type stays on this computer. pairtime logout undoes the link.
 
 Exit status:
   0  linked
-  1  not linked: the code was turned down or expired, the server isn't
-     taking sign-ins yet, or something failed
+  1  not linked: the code was turned down or expired, this computer's
+     device ID belongs to another account there, the server isn't taking
+     sign-ins yet, or something failed
   2  usage error
 `
 

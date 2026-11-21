@@ -25,15 +25,20 @@
 //     rows leaves exactly those totals.
 //   - Witness rows, 180 days after they were received, unless a
 //     submission still inside its spot-check window uses them.
-//   - Device rows, 90 days after the device was removed. A device that
-//     hasn't been removed has no removal time, so its row stays.
+//   - Device rows, 90 days after the device was removed, but only once
+//     ingest holds nothing from the device: the job's kept_by tables
+//     keep a removed device's row while any of their rows names it, so
+//     its device id stays with its account (D-device-account-binding). A
+//     device that hasn't been removed has no removal time, so its row
+//     stays.
 //   - The holds that say which minute buckets and witness rows a
 //     submission uses, once its spot-check window has closed. Load
 //     refuses a hold whose table no job of its entry deletes from this
 //     way, so no hold outlives the window it stands for.
 //
 // The tables belong to the work packages that create them. Until a table
-// exists, its job or hold names that package in awaits and doesn't run.
+// exists, its job, hold or kept_by guard names that package in awaits and
+// isn't used.
 // TestTables fails when a table the migrations create has no entry, when a
 // job's table lacks the columns its entry names, and when an awaited table
 // appears, so the package that creates a table also turns its job on.
@@ -159,8 +164,24 @@ type JobSpec struct {
 	Period string `json:"period,omitempty"`
 	// Hold, when set, keeps the rows a submission uses.
 	Hold *HoldSpec `json:"hold,omitempty"`
+	// KeptBy lists tables that keep a row of Table while any of their
+	// rows names it by the job's key columns, which each of them has.
+	// Ingest's tables keep a removed device's row this way, so its device
+	// id stays with its account while ingest holds anything from it
+	// (D-device-account-binding).
+	KeptBy []KeepSpec `json:"kept_by,omitempty"`
 	// Awaits names the work package that creates Table. The job is off
 	// while it is set.
+	Awaits string `json:"awaits,omitempty"`
+}
+
+// KeepSpec is one table of a job's kept_by.
+type KeepSpec struct {
+	// Table is the table, which has the job's key columns.
+	Table string `json:"table"`
+	// Awaits names the work package that creates Table. The job runs
+	// without this table's guard while it is set, which is right only
+	// while the table doesn't exist.
 	Awaits string `json:"awaits,omitempty"`
 }
 
@@ -235,6 +256,10 @@ func (p *Policy) check() error {
 	// One entry may name a table more than once, as a job's table and as
 	// a hold.
 	owner := make(map[string]string)
+	// keepers are the kept_by tables in use, each with where it's named,
+	// checked against owner once every table is claimed.
+	type keeper struct{ at, table string }
+	var keepers []keeper
 	claim := func(table, by string) {
 		if !identifier.MatchString(table) {
 			fail("%s: table %q isn't a lowercase SQL name", by, table)
@@ -361,6 +386,25 @@ func (p *Policy) check() error {
 					fail("%s: nothing deletes the holds in %s; give the entry a job on %s with \"period\": \"window\" and time_column %s, so each hold goes once its window has closed", jat, h.Table, h.Table, h.DecidedColumn)
 				}
 			}
+			for n, k := range j.KeptBy {
+				switch {
+				case !identifier.MatchString(k.Table):
+					fail("%s: kept_by table %q isn't a lowercase SQL name", jat, k.Table)
+				case k.Table == j.Table:
+					fail("%s: kept_by names the job's own table", jat)
+				case slices.ContainsFunc(j.KeptBy[:n], func(o KeepSpec) bool { return o.Table == k.Table }):
+					fail("%s: kept_by names %s twice", jat, k.Table)
+				case k.Awaits == "":
+					keepers = append(keepers, keeper{jat, k.Table})
+				}
+			}
+		}
+	}
+	// A guard in use reads a table the schedule places, so a misspelt
+	// name can't keep rows, or fail the job, unnoticed.
+	for _, k := range keepers {
+		if _, ok := owner[k.table]; !ok {
+			fail("%s: kept_by table %s isn't in the schedule; give it an entry, or set awaits to the work package that creates it", k.at, k.table)
 		}
 	}
 	return errors.Join(errs...)

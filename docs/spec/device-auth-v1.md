@@ -74,13 +74,13 @@ RFC 8628 3.4. A form: `grant_type=urn:ietf:params:oauth:grant-type:device_code`,
 {"access_token": "ptd_...", "token_type": "Bearer", "scope": "ingest read:self", "device_id": "d_...", "public_key": "<base64>", "account": "U0123ABCD"}
 ```
 
-`public_key` is the key the code named, which the token works with. `pairtime login` checks it is the key it sent. `account` names the account that approved the code, as the server's pages show it: its Slack ID, or its Hack Club Auth ID without one. `pairtime login` prints it and says the same name is at the top of the server's pages while that account is signed in, so a teen whose code someone else approved finds out at once (RFC 8628 5.4). Logging out before the first upload then leaves nothing behind (section 1). The token doesn't expire. It works until the device is removed or linked again. Errors, each `400` JSON (RFC 8628 3.5):
+`public_key` is the key the code named, which the token works with. `pairtime login` checks it is the key it sent. `account` names the account that approved the code, as the server's pages show it: its Slack ID, or its Hack Club Auth ID without one. `pairtime login` prints it and says the same name is at the top of the server's pages while that account is signed in, so a teen whose code someone else approved finds out at once (RFC 8628 5.4). Logging out before the first upload then leaves nothing behind (section 1). The token doesn't expire. It works until the device is removed or linked again. Errors are RFC 6749 5.2 JSON, each with status 400 except `server_error`, which comes with 500 (RFC 8628 3.5):
 
 | `error` | When | The app |
 |---|---|---|
 | `authorization_pending` | Nobody has approved or denied the code yet | waits `interval` seconds and asks again |
 | `slow_down` | It asked again less than `interval` seconds after its last request (with 0.5 s of slack); the server raises this code's interval by 5 s | adds 5 s to its interval, waits, asks again |
-| `access_denied` | The teen chose Don't link | stops |
+| `access_denied` | The teen chose Don't link, or Hack Club Auth has marked the approving account ineligible since | stops |
 | `device_taken` | An account other than the one the device id belongs to approved the code, or chose Stop (section 1) | stops; it can link to that account only as a new device |
 | `expired_token` | 15 minutes passed, or the server restarted, before the app got its token | stops; `pairtime login` starts over |
 | `invalid_grant` | No such device code, or its token was already handed out | stops |
@@ -88,7 +88,7 @@ RFC 8628 3.4. A form: `grant_type=urn:ietf:params:oauth:grant-type:device_code`,
 
 A code approved before it expired can still be redeemed for a minute after, so an approval in its last seconds isn't lost to the wait before the app's next poll.
 
-The app stops on any error code but `authorization_pending` and `slow_down`, as RFC 8628 3.5 says. An answer without an RFC 6749 error body, such as a proxy's 502 page or a 429, isn't the server's answer to the code. The app waits twice as long as before, up to a minute and never less than the interval, as after a network error, and asks again until the code's lifetime has passed.
+The app stops on any error code but `authorization_pending` and `slow_down`, as RFC 8628 3.5 says. A 5xx or 429 answer without an RFC 6749 error body, such as a proxy's 502 page, isn't the server's answer to the code. The app waits twice as long as before, up to a minute and never less than the interval, as after a network error, and asks again until the code's lifetime has passed. Any other answer without an error body ends the polling.
 
 The app never follows a redirect from these endpoints: a redirect could carry the device code to another host, or the token over plain http. A 3xx is an error.
 
@@ -124,14 +124,14 @@ An upload goes out only while config.toml's mode is `online` and the keystore ho
 
 | Table | Kept |
 |---|---|
-| `devices`: the device id, the account, the token's hash, the public key, the OS family, the build, when it was linked and last seen, when it was removed, its link generation, and ingest's state for it | until 90 days after the device is removed (docs/retention.json `server.devices`). A device removed before ingest took anything from it is deleted at once |
+| `devices`: the device id, the account, the token's hash, the public key, the OS family, the build, when it was linked and last seen, when it was removed, its link generation, and ingest's state for it | until 90 days after the device is removed, or while ingest keeps anything the device uploaded, if that's longer (docs/retention.json `server.devices`). A device removed before ingest took anything from it is deleted at once |
 | `device_codes`: the two code hashes, the run that made the code, the device id, OS family, build and public key the app sent, when it asked and last polled, and who approved, denied or stopped it, and when | 1 day after the code expires (`server.device_codes`, deleted by package device) |
 
-No other table has a foreign key to `devices`, because its retention job deletes rows (AGENTS.md, Retention). Other packages find a device through `device.Store.Authenticate(ctx, token)`, which checks the checksum first, then the hash, and refuses a removed device and an account Hack Club Auth has marked ineligible. When an account turns ineligible, sign-in removes its devices in the transaction that revokes its sessions (`accounts.Options.Ineligible`, which pairtimed sets to `device.Store.RemoveAccount`).
+No other table has a foreign key to `devices`, because its retention job deletes rows (AGENTS.md, Retention). That job's `kept_by` tables, ingest's witness rows, buckets, commit records and labels, keep a removed device's row while any of their rows names its device id (D-device-account-binding). Each waits, with `awaits`, for the work package that creates its table, and TestTables fails once the table exists until that package turns its guard on. Other packages find a device through `device.Store.Authenticate(ctx, token)`, which checks the checksum first, then the hash, and refuses a removed device and an account Hack Club Auth has marked ineligible. When an account turns ineligible, sign-in removes its devices in the transaction that revokes its sessions (`accounts.Options.Ineligible`, which pairtimed sets to `device.Store.RemoveAccount`).
 
 ### Ingest's state for a device
 
-Ingest's state for a device lives on its `devices` row, as nullable columns, and goes with the row: the device's lifetime, then 90 days, and the tombstone's (AGENTS.md, Retention; D-device-row-chain-state). No ingest table keeps a copy, so a device silent for months comes back to the head ingest last stored, and a chain gap is still caught. Ingest reads and writes the state only through these, inside its own writer transaction, and never with SQL against `devices`:
+Ingest's state for a device lives on its `devices` row, as nullable columns, and goes with the row: the device's lifetime, then 90 days, or as long as the tombstone stays (AGENTS.md, Retention; D-device-row-chain-state). No ingest table keeps a copy, so a device silent for months comes back to the head ingest last stored, and a chain gap is still caught. Ingest reads and writes the state only through these, inside its own writer transaction, and never with SQL against `devices`:
 
 ```go
 // State is ingest's state for one device, on its devices row.

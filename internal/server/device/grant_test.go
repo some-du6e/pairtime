@@ -131,6 +131,24 @@ func TestGrant(t *testing.T) {
 						t.Errorf("poll = %q, want expired_token", tr.Error)
 					}
 				}},
+				{name: "an account Hack Club Auth turns ineligible between approving and the app's poll gets no device", run: func(t *testing.T, h *harness) {
+					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
+					c := h.requestCode(testDeviceID)
+					if r := b.decide(c.UserCode, true); !strings.Contains(r.body, "<h1>Linked</h1>") {
+						t.Fatalf("approving answered %d:\n%s", r.status, r.body)
+					}
+					gone := verified("ident!teen1", "U0TEEN1")
+					gone.VerificationStatus = "ineligible"
+					if again, _ := h.trySignIn(gone); again.signedIn() {
+						t.Fatal("an ineligible identity signed in")
+					}
+					if status, tr := h.poll(c.DeviceCode); status != http.StatusBadRequest || tr.Error != "access_denied" {
+						t.Errorf("poll = %d %+v, want access_denied", status, tr)
+					}
+					if n := h.count(`SELECT count(*) FROM devices`); n != 0 {
+						t.Errorf("the poll linked %d devices for an ineligible account", n)
+					}
+				}},
 				{name: "a denied code gets access_denied, and links nothing", run: func(t *testing.T, h *harness) {
 					b := h.signIn(verified("ident!teen1", "U0TEEN1"))
 					c := h.requestCode(testDeviceID)
