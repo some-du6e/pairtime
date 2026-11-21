@@ -83,8 +83,9 @@ jobs:
   rehearsal:
     name: rehearsal (Xvfb, D-Bus, mock OIDC)
     runs-on: ubuntu-latest
-    # The rehearsal step takes about 15 minutes of real time: a session
-    # typed at human speed, then the minutes' way to the server.
+    # The rehearsal step takes minutes of real time, 6 to 6.5 in four runs
+    # on 2026-11-21: a session typed at human speed, then the minutes' way
+    # to the server. The rest is room for a slow runner.
     timeout-minutes: 45
     defaults:
       run:
