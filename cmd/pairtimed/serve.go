@@ -86,6 +86,9 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	if err != nil {
 		return err
 	}
+	// Ingest takes uploads once the server key loads (newIngest), and the
+	// privacy notice says whether it does.
+	_, keyErr := backup.Load(backup.KeysDir(cfg.DataDir))
 	site, err := pages.New(pages.Options{
 		BaseURL: cfg.BaseURL,
 		Controller: pages.Controller{
@@ -102,10 +105,10 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		Commit:         sourceCommit(version.Get()),
 		Retention:      policy,
 		// What the privacy notice describes that this server runs. Sign-in
-		// runs once hca.client_id is set (newSignIn); the work package that
-		// adds uploads (WP-SV4), submissions (WP-SB1) or day roots
-		// (WP-SV17) sets its own here.
-		Running: pages.Running{SignIn: cfg.HCA.ClientID != ""},
+		// runs once hca.client_id is set (newSignIn), and uploads (WP-SV4)
+		// once the server key loads. The work package that adds
+		// submissions (WP-SB1) or day roots (WP-SV17) sets its own here.
+		Running: pages.Running{SignIn: cfg.HCA.ClientID != "", Uploads: keyErr == nil},
 	})
 	if err != nil {
 		return err
