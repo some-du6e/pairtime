@@ -21,6 +21,7 @@ on:
       - internal/server/auth/**
       - internal/server/device/**
       - internal/server/retention/**
+      - internal/server/ingest/**
       - docs/retention.json
       - docs/embed.go
       - .github/workflows/postgres.yml

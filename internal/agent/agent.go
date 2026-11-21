@@ -8,10 +8,11 @@
 // timer goes through, and the HTTP server on 127.0.0.1. WP-AG2 added the
 // socket that hooks hand their messages to and the inbox they spool to
 // when the agent is down (packages ipc and inbox), WP-AG3 what the agent
-// makes of each hook call (hooks.go, package hookpath), and WP-OS8 the
-// notifier that shows the coach's notification. The other components of
-// DESIGN 3.3 arrive in later work packages, each as a package under
-// internal/agent that Run starts.
+// makes of each hook call (hooks.go, package hookpath), WP-OS8 the
+// notifier that shows the coach's notification, and WP-AG4 the scorer loop
+// and the stores it writes (packages scorer and store). The other
+// components of DESIGN 3.3 arrive in later work packages, each as a
+// package under internal/agent that Run starts.
 package agent
 
 import (
@@ -40,8 +41,11 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/presence"
 	"github.com/some-du6e/pairtime/internal/agent/procs"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
+	"github.com/some-du6e/pairtime/internal/agent/scorer"
 	"github.com/some-du6e/pairtime/internal/agent/state"
+	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/internal/version"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 // ErrAlreadyRunning means another agent holds the lock on the same data
@@ -76,6 +80,9 @@ type Options struct {
 	// that can pass, such as a locked keyring; 15 s otherwise. Tests set
 	// it so they needn't wait.
 	LedgerRetry time.Duration
+	// Zone, when set, replaces time.Local as the time zone the agent
+	// counts days in. Tests set it.
+	Zone *time.Location
 	// Mac is the macOS notification loop, which cmd/pairtime runs on the
 	// main thread while Run runs on another goroutine. It gives presence
 	// its suspends, resumes, locks and unlocks, and focus its app
@@ -131,6 +138,16 @@ type agent struct {
 	signals     func() signalsReply
 	keyStores   []keys.Store  // Options.KeyStores
 	ledgerRetry time.Duration // the first wait before the ledger opens again
+	// table is the parameter table the agent scores with, which the
+	// ledger writer and presence get too.
+	table *params.Table
+	// scorer steps pkg/score over every sealed batch and writes buckets,
+	// which the local API reads (WP-AG4). Both are nil when the bucket
+	// store didn't open.
+	scorer  *scorer.Loop
+	buckets *store.Buckets
+	// loc is Options.Zone (zone).
+	loc *time.Location
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
@@ -168,6 +185,8 @@ func Run(ctx context.Context, opts Options) error {
 		problems:    make(map[string]string),
 		keyStores:   opts.KeyStores,
 		ledgerRetry: defaultLedgerRetry,
+		table:       newestTable(),
+		loc:         opts.Zone,
 		hooked:      newHookTies(),
 	}
 	if opts.LedgerRetry > 0 {
@@ -181,7 +200,8 @@ func Run(ctx context.Context, opts Options) error {
 	// Each part that starts adds the step that stops it, and they stop in
 	// reverse order: the HTTP server, port.json, the socket and the inbox,
 	// focus, the process scan, the config watch, presence, the OS's
-	// sources, the ledger, the scheduler, the notifier, state.json.
+	// sources, the ledger, the scorer, which scores the ledger's last seal,
+	// the scheduler, the notifier, state.json.
 	var closers []func()
 	defer func() {
 		for i := len(closers) - 1; i >= 0; i-- {
@@ -216,6 +236,7 @@ func Run(ctx context.Context, opts Options) error {
 		stopSched()
 		<-schedDone
 	})
+	closers = append(closers, a.startScorer())
 	closers = append(closers, a.startLedger())
 	src := a.openOS(opts)
 	a.signals = src.signals

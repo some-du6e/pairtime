@@ -72,21 +72,25 @@
     {
       "id": "server.devices",
       "where": "server",
-      "data": "Your devices: for each computer you link with pairtime login, a random device ID, a hash of its sign-in token (never the token itself), the public key that signs its uploads, the OS family, the pairtime build, when you linked it, when it last connected and when you removed it, how many times it has been linked, how far its uploads have got (the number of its last upload, the number, hash and arrival time of the last batch root it sent, the batch its record starts at, and the numbers of the batches it kept to itself in local-only mode between two sign-ins), and the names and versions of your AI tools",
-      "kept": "Until you remove the device. Then its device ID, when you removed it, how many times it has been linked and how far its uploads have got stay {days} more, or as long as this server keeps anything the device uploaded, if that's longer. Everything else about the device goes at once, except the names and versions of your AI tools, which stay until {days} after the device last sent them. A device removed before it uploaded anything is deleted at once",
+      "data": "Your devices: for each computer you link with pairtime login, a random device ID, a hash of its sign-in token (never the token itself), the public key that signs its uploads, the OS family, the pairtime build, when you linked it, when it last connected and when you removed it, how many times it has been linked, how far its uploads have got (the number of its last upload, the number, hash and arrival time of the last batch root it sent, the batch its record starts at, and the numbers of the batches it kept to itself in local-only mode between two sign-ins), and the labels its uploads carry: the names and versions of your AI tools, the scoring version and parameter hash, whether the typing module is on, and whether pairtime thinks it runs in a virtual machine",
+      "kept": "Until you remove the device. Then its device ID, when you removed it, how many times it has been linked and how far its uploads have got stay {days} more, or as long as this server keeps anything the device uploaded, if that's longer. Everything else about the device goes at once, except the labels its uploads carry, which stay until {days} after the device last sent them. A device removed before it uploaded anything is deleted at once",
       "days": 90,
       "jobs": [{
         "table": "devices",
         "key": ["device_id"],
         "time_column": "removed_at_ms",
         "kept_by": [
-          {"table": "witness_rows", "awaits": "WP-SV4"},
-          {"table": "minute_buckets", "awaits": "WP-SV4"},
-          {"table": "minute_bucket_revisions", "awaits": "WP-SV4"},
-          {"table": "commit_records", "awaits": "WP-SV4"},
-          {"table": "device_labels", "awaits": "WP-SV4"},
-          {"table": "ingest_replies", "awaits": "WP-SV4"}
+          {"table": "witness_rows"},
+          {"table": "minute_buckets"},
+          {"table": "minute_bucket_revisions"},
+          {"table": "commit_records"},
+          {"table": "device_labels"},
+          {"table": "ingest_replies"}
         ]
+      }, {
+        "table": "device_labels",
+        "key": ["device_id"],
+        "time_column": "received_at_ms"
       }]
     },
     {
@@ -105,14 +109,13 @@
       "jobs": [{
         "table": "request_origins",
         "key": ["id"],
-        "time_column": "seen_at_ms",
-        "awaits": "WP-SV4"
+        "time_column": "seen_at_ms"
       }]
     },
     {
       "id": "server.minute_buckets",
       "where": "server",
-      "data": "Minute buckets: for each 15 seconds, the credited seconds by project key, why they were credited and what kind of work they counted as, with the reasons for seconds that weren't credited and how long an AI agent was running",
+      "data": "Minute buckets: for each 15 seconds, the credited seconds by project key, why they were credited and what kind of work they counted as, with the reasons for seconds that weren't credited, how long an AI agent was running, and for each project key how long an AI agent ran there without you getting credit there",
       "kept": "Per-minute detail for {days}, the furthest back a submission can reach. Minutes a submission uses stay until its spot-check window closes ({window}). After that only daily totals per project and kind of work stay, for as long as your account exists",
       "days": 180,
       "lifetime_tables": ["rollups_daily"],
@@ -120,7 +123,15 @@
         "table": "minute_buckets",
         "key": ["device_id", "minute_ms"],
         "time_column": "minute_ms",
-        "awaits": "WP-SV7",
+        "hold": {
+          "table": "submission_minutes",
+          "decided_column": "decided_at_ms",
+          "awaits": "WP-SB4"
+        }
+      }, {
+        "table": "minute_bucket_revisions",
+        "key": ["device_id", "minute_ms"],
+        "time_column": "minute_ms",
         "hold": {
           "table": "submission_minutes",
           "decided_column": "decided_at_ms",
@@ -137,14 +148,13 @@
     {
       "id": "server.witness",
       "where": "server",
-      "data": "Witness rows and batch roots: the hash of each upload batch, and when the server received it",
+      "data": "Witness rows and batch roots: the hash of each upload batch, and when the server received it, and for each computer the server's answer to its latest upload, which a retry of that upload gets again",
       "kept": "{days}. Rows that a submission uses stay until its spot-check window closes ({window})",
       "days": 180,
       "jobs": [{
         "table": "witness_rows",
         "key": ["device_id", "b"],
         "time_column": "received_at_ms",
-        "awaits": "WP-SV4",
         "hold": {
           "table": "submission_batches",
           "decided_column": "decided_at_ms",
@@ -156,13 +166,18 @@
         "time_column": "decided_at_ms",
         "period": "window",
         "awaits": "WP-SB4"
+      }, {
+        "table": "ingest_replies",
+        "key": ["device_id"],
+        "time_column": "received_at_ms"
       }]
     },
     {
       "id": "server.commits",
       "where": "server",
       "data": "Commit records (commit IDs, times and line counts, with file paths only as keyed hashes), project fingerprints, and the pushes pairtime's GitHub App reports if you install it",
-      "kept": "While your account exists"
+      "kept": "While your account exists",
+      "tables": ["commit_records"]
     },
     {
       "id": "server.program_links",

@@ -324,10 +324,10 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"The continuous backup isn&#39;t encrypted with a key of the operator&#39;s own, so the storage provider could read it."},
 		},
 		{
-			name: "a removed device keeps its link count with its ID and upload progress, and its AI tools' names and versions go 90 days after it last sent them (D-device-account-binding)",
+			name: "a removed device keeps its link count with its ID and upload progress, and the labels its uploads carry go 90 days after it last sent them (D-device-account-binding)",
 			want: []string{
 				"Then its device ID, when you removed it, how many times it has been linked and how far its uploads have got stay 90 days more",
-				"Everything else about the device goes at once, except the names and versions of your AI tools, which stay until 90 days after the device last sent them.",
+				"Everything else about the device goes at once, except the labels its uploads carry, which stay until 90 days after the device last sent them.",
 			},
 			notWant: []string{"removal time and upload progress stay", "and the rest goes at once"},
 		},

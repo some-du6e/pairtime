@@ -149,7 +149,8 @@ func readStatus() (*statusJSON, error) {
 	if err != nil {
 		return nil, err
 	}
-	d, _, err := dayStore{dirs.Days()}.day(localToday())
+	days := dayStore{dirs.Days()}
+	d, _, err := days.day(days.today())
 	if err != nil {
 		return nil, err
 	}

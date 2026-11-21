@@ -91,6 +91,66 @@ func (c *checker) optKey(field, v string) {
 	}
 }
 
+// MaxVersionLen bounds a version, in bytes (D-version-grammar).
+const MaxVersionLen = 64
+
+// VersionPattern is the form IsVersion accepts, as the regular expression
+// docs/schema/event.schema.json's version $defs entry holds. IsVersion
+// doesn't compile it: a package-level regexp would cost every pairtime
+// hook its compile time at start.
+const VersionPattern = `^v?[0-9]+(\.[0-9]+){0,3}([-+][0-9A-Za-z][0-9A-Za-z.-]{0,40})?$`
+
+// IsVersion reports whether s is a version (D-version-grammar): 1 to
+// MaxVersionLen bytes in VersionPattern's form, which is an optional v,
+// one to four dot-separated numbers, and an optional - or + suffix of
+// letters, digits, dots and hyphens, such as 2.1.327, v0.1.0-alpha.1,
+// 0.1.0+3dbf6d4 or a Go pseudo-version. A bare word isn't one, so a file,
+// folder or host name can't pass. Tier 1 carries versions as they are,
+// unkeyed (DESIGN 4.3), so this form is all that keeps a name out of a
+// harness version or a client build.
+func IsVersion(s string) bool {
+	if len(s) == 0 || len(s) > MaxVersionLen {
+		return false
+	}
+	i := 0
+	if s[0] == 'v' {
+		i++
+	}
+	for part := 0; ; part++ {
+		start := i
+		for i < len(s) && isDigit(s[i]) {
+			i++
+		}
+		if i == start {
+			return false
+		}
+		if part == 3 || i == len(s) || s[i] != '.' {
+			break
+		}
+		i++
+	}
+	if i == len(s) {
+		return true
+	}
+	if s[i] != '-' && s[i] != '+' {
+		return false
+	}
+	suffix := s[i+1:]
+	if len(suffix) == 0 || len(suffix) > 41 || !isAlnum(suffix[0]) {
+		return false
+	}
+	for j := 1; j < len(suffix); j++ {
+		if b := suffix[j]; !isAlnum(b) && b != '.' && b != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func isDigit(b byte) bool { return '0' <= b && b <= '9' }
+
+func isAlnum(b byte) bool { return isDigit(b) || 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' }
+
 // keys checks a list of keys and reports at most its first bad entry.
 func (c *checker) keys(field string, vs []string) {
 	if len(vs) > maxList {
