@@ -52,6 +52,16 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      capture:
+        # iterm2 records internal/agent/focus's golden process table and
+        # runs nothing else (the iterm2-capture job):
+        #
+        #   gh workflow run platform.yml --ref <branch> -f capture=iterm2
+        description: "iterm2: only capture the macOS process table for internal/agent/focus's iTerm2 golden test"
+        type: choice
+        options: [none, iterm2]
+        default: none
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -68,6 +78,9 @@ env:
 jobs:
   windows:
     name: windows
+    # inputs is empty outside workflow_dispatch, so every other event runs
+    # this job.
+    if: inputs.capture != 'iterm2'
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:
@@ -91,6 +104,7 @@ jobs:
 
   macos:
     name: macos
+    if: inputs.capture != 'iterm2'
     runs-on: macos-latest
     timeout-minutes: 20
     defaults:
@@ -130,6 +144,7 @@ jobs:
     # TestDesktop* tests in *_desktop_test.go files, built with -tags
     # desktop (AGENTS.md). Every other Linux test runs in ci.yml.
     name: linux desktop (Xvfb, D-Bus)
+    if: inputs.capture != 'iterm2'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -204,3 +219,56 @@ jobs:
             # to own them.
             bash tools/ci/desktop_session.sh go test -p 1 -tags desktop -run '^TestDesktop' -count=1 $PKGS
           fi
+
+  iterm2-capture:
+    # By hand only, with capture=iterm2 (decision E-6.3-two-tabs). It
+    # records the process table that internal/agent/focus's TestITerm2Golden
+    # reads in ci.yml: harness stubs in a session of iTerm2, from its
+    # Homebrew cask, under an iTermServer that doesn't descend from iTerm2,
+    # and in Terminal. TestCaptureITerm2 opens windows and kills and
+    # restarts iTerm2, so no check rests on it (JE must-fix 11). Copy the
+    # artifact's iterm2-macos-latest.json to internal/agent/focus/testdata/.
+    name: iTerm2 capture (macOS)
+    if: github.event_name == 'workflow_dispatch' && inputs.capture == 'iterm2'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.mod
+            go.sum
+
+      - name: Install iTerm2 from its Homebrew cask
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+          HOMEBREW_NO_ANALYTICS: "1"
+        run: |
+          brew install --cask iterm2
+          # Gatekeeper asks before the first launch of an app downloaded
+          # from the internet, and nobody is there to answer.
+          xattr -dr com.apple.quarantine /Applications/iTerm.app || true
+          plutil -extract CFBundleShortVersionString raw -o - /Applications/iTerm.app/Contents/Info.plist
+
+      - name: go test -run '^TestCaptureITerm2$'
+        env:
+          PAIRTIME_CAPTURE_ITERM2: ${{ runner.temp }}/iterm2-capture
+        run: |
+          mkdir -p "$PAIRTIME_CAPTURE_ITERM2"
+          go test -count=1 -v -run '^TestCaptureITerm2$' ./internal/agent/focus/
+
+      - name: Upload the capture
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: iterm2-capture
+          path: ${{ runner.temp }}/iterm2-capture/
+          if-no-files-found: error
+          retention-days: 90

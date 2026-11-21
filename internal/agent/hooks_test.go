@@ -23,6 +23,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/internal/agent/presence"
 	"github.com/some-du6e/pairtime/internal/agent/procs"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
@@ -413,7 +414,7 @@ func TestHookedFocus(t *testing.T) {
 		})
 	}
 	t.Cleanup(stopAll)
-	stops = append(stops, a.startLedger(), a.startPresence())
+	stops = append(stops, a.startLedger(), a.startPresence(presence.OS{}))
 	deadline := time.Now().Add(20 * time.Second)
 	for a.sessionSecret() == nil {
 		if time.Now().After(deadline) {

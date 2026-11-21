@@ -35,8 +35,11 @@ type Slot struct {
 	PresentUntil int64          `json:"present_until"`
 	Then         event.Presence `json:"then"`
 	// FocusClass, FocusProject and Hosted describe the window that held
-	// focus longest in the slot (SM 2.5, 3.2). Resolving a terminal that
-	// hosts several sessions to one of them is WP-SC3's.
+	// focus longest in the slot, as its os.focus records give them (SM 2.5):
+	// FocusProject is set when the client resolved the window to one
+	// project. The project SM 3.2 resolves the slot to, which for a window
+	// hosting sessions of several projects depends on their anchors and
+	// reading buckets, is the ProjectKey of the slot's Credit.
 	FocusClass   event.AppClass `json:"focus_class"`
 	FocusProject string         `json:"focus_project,omitempty"`
 	Hosted       []string       `json:"hosted_sessions,omitempty"`

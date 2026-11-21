@@ -77,6 +77,13 @@ type Options struct {
 	// that can pass, such as a locked keyring; 15 s otherwise. Tests set
 	// it so they needn't wait.
 	LedgerRetry time.Duration
+	// Mac is the macOS notification loop, which cmd/pairtime runs on the
+	// main thread while Run runs on another goroutine. It gives presence
+	// its suspends, resumes, locks and unlocks, and focus its app
+	// activations (WP-OS9). Nil means none runs: presence still samples
+	// idle time, and GET /v1/status says that power, locks and focus go
+	// unseen. Other OSes ignore it.
+	Mac *MacLoop
 	// Walk, when set, replaces how the agent reads the parent chain of a
 	// hook connection's peer, which is hookpath.ReadChain otherwise
 	// (ipc.Options.Walk). Tests use it to hand captured calls in from
@@ -130,7 +137,10 @@ type agent struct {
 	adaptOnce sync.Once
 	// ledgerIn takes presence's and focus's records, and presence's
 	// seals, to the ledger writer once it opens (WP-LG5).
-	ledgerIn    *ledger.Presence
+	ledgerIn *ledger.Presence
+	// signals says where each OS signal comes from, for GET /v1/status
+	// (openOS).
+	signals     func() signalsReply
 	keyStores   []keys.Store  // Options.KeyStores
 	ledgerRetry time.Duration // the first wait before the ledger opens again
 
@@ -182,8 +192,8 @@ func Run(ctx context.Context, opts Options) error {
 
 	// Each part that starts adds the step that stops it, and they stop in
 	// reverse order: the HTTP server, port.json, the socket and the inbox,
-	// focus, the process scan, the config watch, presence, the ledger, the
-	// scheduler, the notifier, state.json.
+	// focus, the process scan, the config watch, presence, the OS's
+	// sources, the ledger, the scheduler, the notifier, state.json.
 	var closers []func()
 	defer func() {
 		for i := len(closers) - 1; i >= 0; i-- {
@@ -219,10 +229,15 @@ func Run(ctx context.Context, opts Options) error {
 		<-schedDone
 	})
 	closers = append(closers, a.startLedger())
-	closers = append(closers, a.startPresence())
+	src := a.openOS(opts)
+	a.signals = src.signals
+	if src.close != nil {
+		closers = append(closers, src.close)
+	}
+	closers = append(closers, a.startPresence(src.presence))
 
 	closers = append(closers, a.watchConfig())
-	a.newFocus(focus.ThisOS())
+	a.newFocus(src.focus)
 	closers = append(closers, a.startProcs())
 	closers = append(closers, a.startFocus())
 	closers = append(closers, a.startAdapters())
