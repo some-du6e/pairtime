@@ -134,37 +134,6 @@ func TestLocalRuns(t *testing.T) {
 	}
 }
 
-// TestOutboxAllowed is which request waiting for its retry may go as it is
-// (saved.allows): none with a root, a minute, or a pending minute's credit
-// on a batch the runs mark local-only, as a request from before an upgrade
-// can hold once the older writer's rows count as local-only.
-func TestOutboxAllowed(t *testing.T) {
-	// Batches 1 to 4, sealed at minutes 1 to 4 of day0, of which batch 3
-	// was sealed in local-only mode.
-	ix := indexOf(t, []float64{1, 2, 3, 4}, []float64{-1, -1, -1, -1})
-	st := saved{Next: 1, Gaps: []gap{{3, 3}}}
-	bucket := func(minute int) event.MinuteBucket {
-		return event.MinuteBucket{Minute: day0.Add(time.Duration(minute) * time.Minute)}
-	}
-	tests := []struct {
-		name string
-		p    plan
-		ok   bool
-	}{
-		{"a request of online batches' roots and minutes goes as it is", plan{body: Body{Batches: []Root{{B: 1}, {B: 2}}, Buckets: []event.MinuteBucket{bucket(0)}}}, true},
-		{"one with the root of a batch sealed in local-only mode is planned again", plan{body: Body{Batches: []Root{{B: 2}, {B: 3}}}}, false},
-		{"one with a minute whose records that batch holds is planned again", plan{body: Body{Buckets: []event.MinuteBucket{bucket(2)}}}, false},
-		{"one with a pending minute whose credit rests on that batch is planned again", plan{body: Body{Buckets: []event.MinuteBucket{bucket(0)}}, sent: map[int64]sentRev{at(0): {B: 3}}}, false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := st.allows(ix, tc.p); got != tc.ok {
-				t.Errorf("allows = %v, want %v", got, tc.ok)
-			}
-		})
-	}
-}
-
 // modeRows is the rows of batches 1 on, each sealed online or not as
 // online says.
 func modeRows(online ...bool) *rowIndex {

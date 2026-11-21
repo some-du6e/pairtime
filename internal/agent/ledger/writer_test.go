@@ -596,7 +596,7 @@ func TestNoteMode(t *testing.T) {
 		{"a switch to local-only and straight back still seals what was pending as local-only",
 			[]string{"write", "file-local", "local", "file-online", "online", "sealed"}, []bool{false}, []int{1}},
 		{"without Online, only the switch back ends a stretch, since no seal reads config.toml",
-			[]string{"no-online", "local", "write", "sealed", "write", "seal"}, []bool{false, false}, []int{1, 1}},
+			[]string{"no-online", "local", "write", "sealed", "write", "seal", "online", "write", "seal"}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"a second stretch's first record seals at once too",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "file-local", "local", "write", "sealed"}, []bool{false, true, false}, []int{1, 1, 1}},
 	}

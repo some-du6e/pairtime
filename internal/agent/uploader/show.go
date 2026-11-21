@@ -105,7 +105,9 @@ func Next(o PreviewOptions) (Preview, error) {
 	}
 	st.prepare(rows)
 	// As the agent's load does, the modes of the batches sealed since the
-	// place last took one go in from the rows.
+	// place last took one go in from the rows, and a request an older
+	// version left waiting is planned again.
+	older := st.Modes == 0 && st.Outbox != nil
 	st.foldModes(rows)
 	if st.Fork != 0 || st.Mismatch {
 		// As the agent does, nothing more goes after a fork or a
@@ -117,9 +119,7 @@ func Next(o PreviewOptions) (Preview, error) {
 	fresh := relinked(st, c)
 	relink(&st, rows, c)
 	stop := st.localStop(rows.last())
-	// As the agent's load does, the request waiting for its retry goes as
-	// it is only while the place lets every item of it go (allows).
-	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil && !fresh && st.allows(rows, p.plan) {
+	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil && !fresh && !older {
 		pv := previewOf(p.plan, true)
 		pv.Stopped = stop
 		return pv, nil

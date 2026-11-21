@@ -225,30 +225,6 @@ func (s *saved) foldModes(rows *rowIndex) bool {
 	return changed
 }
 
-// allows reports whether every item of p may go by st's runs: none of its
-// roots is of a batch sealed in local-only mode, nor the batch a bucket's
-// minute was sealed in, nor the one a pending minute's credit rests on. A
-// request waiting for its retry from before the place took the modes from
-// the rows, as an older version's after an upgrade, can hold items whose
-// batches now count as local-only (foldModes).
-func (st saved) allows(rows *rowIndex, p plan) bool {
-	for _, r := range p.body.Batches {
-		if st.localOnly(r.B) {
-			return false
-		}
-	}
-	for _, b := range p.body.Buckets {
-		ms := b.Minute.UnixMilli()
-		if bs, ok := rows.sealedAfter(ms + 60_000); ok && st.localOnly(bs) {
-			return false
-		}
-		if rev, ok := p.sent[ms]; ok && st.localOnly(rev.B) {
-			return false
-		}
-	}
-	return true
-}
-
 // localOnly reports whether batch b was sealed in local-only mode: in a
 // recorded gap, at or after LocalFrom while the mode is local, or between
 // the server's head and From, where the state read that records the gap

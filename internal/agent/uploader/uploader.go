@@ -758,6 +758,11 @@ func (u *Uploader) load(c Credentials) error {
 	if rows.device != chain {
 		return fmt.Errorf("the ledger's batches.seg is %s's chain, and the writer writes %s's", rows.device, chain)
 	}
+	// A request an older version left waiting for its retry, whose place
+	// took no modes from the rows, may hold items whose batches count as
+	// local-only now, and doesn't say which batch each minute's credit
+	// rests on: it is planned again (below).
+	older := st.Modes == 0 && st.Outbox != nil
 	// Every row says the mode its batch was sealed in, so the modes of the
 	// batches sealed since the place last took one go in from the rows,
 	// before the link's start is worked out over them: whatever a crash
@@ -769,12 +774,11 @@ func (u *Uploader) load(c Credentials) error {
 	u.st, u.rows, u.loaded, u.synced = st, rows, true, false
 	u.lastReq = max(u.lastReq, st.Req)
 	u.pending = u.readOutbox()
-	if u.pending != nil && (fresh || !u.st.allows(u.rows, u.pending.plan)) {
+	if u.pending != nil && (fresh || older) {
 		// A request from before the link may carry roots the gap now
-		// holds, which the server never takes, and one from before an
-		// upgrade items of batches that now count as local-only, which
-		// may never go: its items are planned again from where they
-		// stood.
+		// holds, which the server never takes, and one an older version
+		// left items of batches that now count as local-only, which may
+		// never go: its items are planned again from where they stood.
 		u.pending = nil
 		u.removeOutbox()
 		u.save()

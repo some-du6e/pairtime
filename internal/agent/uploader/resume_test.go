@@ -8,6 +8,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,6 +32,15 @@ import (
 // dirs, a quarter of an hour apart, and returns the writer and the rows.
 func smallChain(t *testing.T, dirs home.Dirs, n int) (*ledger.Writer, []ledger.Row) {
 	t.Helper()
+	return smallChainWith(t, dirs, n, nil)
+}
+
+// smallChainWith is smallChain, with batch k sealed online as online(k)
+// says, every one when online is nil. A batch it seals otherwise has a
+// seal frame without online, as an older writer's had.
+func smallChainWith(t *testing.T, dirs home.Dirs, n int, online func(k int) bool) (*ledger.Writer, []ledger.Row) {
+	t.Helper()
+	sealOnline := true // read by Online at each seal, which runs here
 	kDev := sha256.Sum256([]byte("uploader resume test K_dev"))
 	keys, err := pkgledger.DeriveKeys(kDev[:])
 	if err != nil {
@@ -42,7 +53,8 @@ func smallChain(t *testing.T, dirs home.Dirs, n int) (*ledger.Writer, []ledger.R
 	)
 	w, err := ledger.Open(ledger.Options{
 		Dir: dirs.Ledger(), Keys: keys, KeyID: "0123456789abcdef", Params: newestTable(),
-		Now: func() time.Time { mu.Lock(); defer mu.Unlock(); return now },
+		Now:    func() time.Time { mu.Lock(); defer mu.Unlock(); return now },
+		Online: func() bool { mu.Lock(); defer mu.Unlock(); return sealOnline },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +64,7 @@ func smallChain(t *testing.T, dirs home.Dirs, n int) (*ledger.Writer, []ledger.R
 		q := start.Add(time.Duration(k) * 15 * time.Minute)
 		mu.Lock()
 		now = q
+		sealOnline = online == nil || online(k)
 		mu.Unlock()
 		if _, err := w.Checkpoint("p_test", uint64(q.UnixMilli()), json.RawMessage(`{}`)); err != nil {
 			t.Fatal(err)
@@ -607,9 +620,16 @@ type rig struct {
 // a bucket store holding the given minutes of start, credited 30 s each.
 func newRig(t *testing.T, n int, minutes []int, linkedAfter time.Duration) *rig {
 	t.Helper()
+	return newRigWith(t, n, minutes, linkedAfter, nil)
+}
+
+// newRigWith is newRig, with batch k sealed online as online(k) says
+// (smallChainWith).
+func newRigWith(t *testing.T, n int, minutes []int, linkedAfter time.Duration, online func(k int) bool) *rig {
+	t.Helper()
 	dir := t.TempDir()
 	r := &rig{dirs: home.Dirs{Data: dir, Config: dir, Runtime: dir}}
-	r.w, r.rows = smallChain(t, r.dirs, n)
+	r.w, r.rows = smallChainWith(t, r.dirs, n, online)
 	r.start = r.rows[0].SealedAt.Add(-15 * time.Minute)
 	bs, err := store.OpenBuckets(r.dirs.Buckets())
 	if err != nil {
@@ -958,6 +978,7 @@ func TestRelinkRestart(t *testing.T) {
 		Chain: r.w.DeviceID(), Server: r.creds.Server, Device: r.w.DeviceID(), Req: 64, Next: 6, From: 6, Linking: true, Head: 3, ChainStart: 1,
 		LinkedAt:  r.creds.LinkedAt.UnixMilli(), // the re-link, seen before the restart
 		Gaps:      []gap{{4, 5}},
+		Modes:     6, // this version's place, which takes the modes from the rows
 		ServerKey: &ServerKey{KeyID: r.f.keyID, PublicKey: hex.EncodeToString(pub)},
 		Outbox:    &outbox{Key: event.NewEventID(time.Now()), Hash: hex.EncodeToString(sum[:])},
 	}); err != nil {
@@ -980,6 +1001,75 @@ func TestRelinkRestart(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
 				t.Errorf("no: the requests were %q", r.f.bodies)
+			}
+		})
+	}
+}
+
+// TestOutboxAfterUpgrade is a request an older version left waiting for
+// its retry, after an upgrade, in a place that took no modes from the
+// rows: its root is of batch 4, which an older writer sealed, with no
+// online in its seal frame, so it counts as sealed in local-only mode now
+// (foldModes). privacy show shows the plan made again, not the request,
+// and the uploader never sends it, nor any root from batch 4 on.
+func TestOutboxAfterUpgrade(t *testing.T) {
+	r := newRigWith(t, 6, nil, -time.Minute, func(k int) bool { return k < 4 })
+	hold(t, r.f, r.rows[:3], 1)
+	for _, row := range r.rows[:3] {
+		fr := r.f.rows[row.B]
+		sig, _ := hex.DecodeString(fr.sig)
+		rc := pkgledger.Receipt{ReceivedAt: fr.receivedAt}
+		copy(rc.Signature[:], sig)
+		if err := r.w.StoreReceipt(row.B, rc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	row := r.rows[3]
+	js, err := encodeBody(Body{Batches: []Root{{B: row.B, N: row.N, Root: row.Root, Head: row.Head, Prev: row.Prev}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.dirs.Data, OutboxName), js, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(js)
+	pub := r.f.key.Public().(ed25519.PublicKey)
+	// The place an older version saved, which kept no modes from the rows.
+	if err := r.st.Put(StateKey, saved{
+		Chain: r.w.DeviceID(), Server: r.creds.Server, Device: r.w.DeviceID(), Req: 64, Next: 4, From: 1, Head: 3, ChainStart: 1,
+		LinkedAt:  r.creds.LinkedAt.UnixMilli(),
+		ServerKey: &ServerKey{KeyID: r.f.keyID, PublicKey: hex.EncodeToString(pub)},
+		Outbox:    &outbox{Key: event.NewEventID(time.Now()), Hash: hex.EncodeToString(sum[:])},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	pv, err := Next(PreviewOptions{
+		LedgerDir: r.dirs.Ledger(), BucketDir: r.dirs.Buckets(), DataDir: r.dirs.Data, StateFile: r.dirs.StateFile(),
+		Params: newestTable(), Credentials: r.creds,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.run(t, "a state read", func(f *fakeIngest) bool { return f.gets > 0 })
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	sent := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Equal(b, js) })
+	_, kept := os.Stat(filepath.Join(r.dirs.Data, OutboxName))
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"privacy show shows the plan made again, which sends nothing, not the waiting request", !pv.Retry && pv.JSON == nil && pv.Stopped == 4},
+		{"the uploader never sent the waiting request, nor any root from batch 4 on", !sent && r.f.head.b == 3 && r.f.rows[4].b == 0},
+		{"the waiting request is gone", errors.Is(kept, fs.ErrNotExist)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: privacy show %+v; the server holds head %d after %q", pv, r.f.head.b, r.f.bodies)
 			}
 		})
 	}
