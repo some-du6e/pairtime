@@ -659,6 +659,24 @@ func TestPendingLog(t *testing.T) {
 		h.parked = append(h.parked, hostCall{d: d, live: true})
 		h.count(func() { h.parkedN++; h.parkedLive++ })
 	}
+	// during is a copiedForTest hook that takes d in, as a hook's call that
+	// comes while the rewrite copies, and settles it. The rewrite holds no
+	// lock there, so the ack mustn't wait for the copy, nor for the disk to
+	// flush it.
+	during := func(t *testing.T, h *adapterHost, d inbox.Delivery, stored bool) func() {
+		return func() {
+			acked := make(chan struct{})
+			go func() {
+				h.pend(d)(stored)
+				close(acked)
+			}()
+			select {
+			case <-acked:
+			case <-time.After(10 * time.Second):
+				t.Error("a call taken in during the rewrite's copy waited for it")
+			}
+		}
+	}
 	// lose has h without the file open, as after a rewrite that couldn't
 	// open it again.
 	lose := func(h *adapterHost) {
@@ -755,33 +773,38 @@ func TestPendingLog(t *testing.T) {
 			takeQueue(h)
 			park(h, waiting)
 			h.pend(waiting)(false) // a copy
-			h.copiedForTest = func() {
-				// A hook call that comes while the rewrite copies: its ack
-				// mustn't wait for the copy, nor for the disk to flush it.
-				acked := make(chan struct{})
-				go func() {
-					h.pend(late)(true)
-					close(acked)
-				}()
-				select {
-				case <-acked:
-				case <-time.After(10 * time.Second):
-					t.Error("a call taken in during the rewrite's copy waited for it")
-				}
-			}
+			h.copiedForTest = during(t, h, late, true)
 			h.donePending(false)
 			wl, ll := lineOf(t, h, waiting), lineOf(t, h, late)
 			if got := read(t, pending); !bytes.Equal(got, slices.Concat(wl, ll)) {
 				t.Errorf("the file holds %q, want the waiting call's line, once, and then the one taken in during the rewrite", got)
 			}
-			want := map[string]inbox.Span{waiting.ID: {Off: 0, Len: int64(len(wl))}, late.ID: {Off: int64(len(wl)), Len: int64(len(ll))}}
-			if !maps.Equal(h.pendingAt, want) {
+			want := map[string][]inbox.Span{waiting.ID: {{Off: 0, Len: int64(len(wl))}}, late.ID: {{Off: int64(len(wl)), Len: int64(len(ll))}}}
+			if !maps.EqualFunc(h.pendingAt, want, slices.Equal[[]inbox.Span]) {
 				t.Errorf("pendingAt is %v, want %v", h.pendingAt, want)
 			}
 			takeQueue(h)
 			h.donePending(false)
 			if got := read(t, pending); !bytes.Equal(got, wl) {
 				t.Errorf("once the late call is parsed too, the file holds %q, want the waiting call's line alone", got)
+			}
+		}},
+		{"a copy the journal stores while a rewrite copies keeps its line once the call waits, though the rewrite dropped the first copy, which the journal didn't store", func(t *testing.T, dirs home.Dirs, pending string) {
+			h := newHost(dirs)
+			done, waiting, x := call(t, "done"), call(t, "waiting"), call(t, "x")
+			h.pend(done)(true)
+			h.pend(waiting)(true)
+			h.pend(x)(false) // its first copy, which the journal failed to store
+			takeQueue(h)
+			park(h, waiting)
+			h.copiedForTest = during(t, h, x, true) // its spooled copy, which the journal stores
+			h.donePending(false)
+			h.copiedForTest = nil
+			takeQueue(h)
+			park(h, x)
+			h.donePending(false)
+			if got, want := read(t, pending), slices.Concat(lineOf(t, h, waiting), lineOf(t, h, x)); !bytes.Equal(got, want) {
+				t.Errorf("the file holds %q, want the two waiting calls' lines", got)
 			}
 		}},
 		{"the step after a rewrite that couldn't open the file again opens it, and empties it", func(t *testing.T, dirs home.Dirs, pending string) {
@@ -1753,7 +1776,7 @@ func TestHeldRetention(t *testing.T) {
 				t.Errorf("adapters.dropped is %q", p)
 			}
 		}},
-		{"as the agent runs, a held call goes at the minute job's first look after its seventh day, and the status counts it no more", func(t *testing.T, h *adapterHost) {
+		{"as the agent runs, expireRun drops a held call at its first look after the call's seventh day, and the status counts it no more", func(t *testing.T, h *adapterHost) {
 			write(t, h.a.dirs.Held(), line(t, h, call(t, "new-1", time.Hour, false)), line(t, h, call(t, "new-2", time.Minute, false)))
 			h.expireHeld(now)
 			h.countHeld()
@@ -1770,6 +1793,16 @@ func TestHeldRetention(t *testing.T) {
 			}
 			if w := h.status().Waiting; w != 1 {
 				t.Errorf("the status counts %d calls waiting, want 1", w)
+			}
+		}},
+		{"the minute job has the next step drop a held call that has waited seven days, with no keys or ledger yet", func(t *testing.T, h *adapterHost) {
+			if rest := h.hold([]inbox.Delivery{call(t, "old-1", week+time.Minute, false)}); len(rest) != 0 {
+				t.Fatalf("hold kept %d calls back", len(rest))
+			}
+			h.minute()
+			h.step(false)
+			if _, err := os.Stat(h.a.dirs.Held()); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("held.jsonl is still there (%v)", err)
 			}
 		}},
 		{"a call held as the agent runs comes due by its own stamp", func(t *testing.T, h *adapterHost) {
@@ -1795,6 +1828,43 @@ func TestHeldRetention(t *testing.T) {
 			h.expireRun(due.Add(heldRetry))
 			if _, err := os.Stat(replay); !errors.Is(err, fs.ErrNotExist) {
 				t.Errorf("with no replay begun, .replay is still there (%v)", err)
+			}
+		}},
+		{"as the agent runs, a .replay file left half read behind a stopped ledger writer is cut, and the status stops counting only its unread calls", func(t *testing.T, h *adapterHost) {
+			replay := h.a.dirs.Held() + ".replay"
+			first := line(t, h, call(t, "new-1", time.Hour, false))
+			write(t, replay, first, line(t, h, call(t, "new-2", 2*time.Hour, false)))
+			h.expireHeld(now)
+			h.countHeld()
+			// The replay took the first call in, then the writer stopped, and
+			// nothing in this run reads the file again.
+			h.replayAt = int64(len(first))
+			h.count(func() { h.held-- })
+			h.down = true
+			h.expireRun(now.Add(week - time.Hour + time.Minute))
+			if _, err := os.Stat(replay); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf(".replay is still there (%v)", err)
+			}
+			if w := h.status().Waiting; w != 0 {
+				t.Errorf("the status counts %d calls waiting, want none", w)
+			}
+		}},
+		{"as the agent runs, a .replay file stuck for the run is cut, and the status, which no longer counted its calls, doesn't change", func(t *testing.T, h *adapterHost) {
+			replay := h.a.dirs.Held() + ".replay"
+			b := slices.Concat(line(t, h, call(t, "new-1", time.Hour, false)), line(t, h, call(t, "new-2", time.Minute, false)))
+			write(t, replay, b)
+			if rest := h.hold([]inbox.Delivery{call(t, "held", 0, false)}); len(rest) != 0 { // a call held.jsonl holds for a later replay
+				t.Fatalf("hold kept %d calls back", len(rest))
+			}
+			h.expireHeld(now)
+			// The replay read it all, and the file couldn't be deleted.
+			h.replayAt, h.replayStuck = int64(len(b)), true
+			h.expireRun(now.Add(week - time.Hour + time.Minute))
+			if got := prompts(t, replay); !slices.Equal(got, []string{"new-2"}) {
+				t.Errorf(".replay holds %q, want new-2 alone", got)
+			}
+			if w := h.status().Waiting; w != 1 {
+				t.Errorf("the status counts %d calls waiting, want the one in held.jsonl", w)
 			}
 		}},
 		{"as the agent runs, what an earlier run left in the pending log goes at the log's next rewrite once due, and this run's lines stay", func(t *testing.T, h *adapterHost) {
@@ -1960,7 +2030,7 @@ func TestKillDuringSlowResolve(t *testing.T) {
 		file string // the file the waiting calls are left in, beside held.jsonl
 	}{
 		{"calls the socket took in wait in the pending log alone, once each though one came twice", false, pendingSuffix},
-		{"calls an earlier run held wait in the replay file alone", true, ".replay"},
+		{"calls an earlier run held wait in the replay file alone, once each though one was held twice", true, ".replay"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1994,7 +2064,7 @@ func TestKillDuringSlowResolve(t *testing.T) {
 				}
 				earlier := newAdapterHost(&agent{dirs: r.dirs, log: slog.New(slog.DiscardHandler), problems: make(map[string]string)})
 				var held []byte
-				for _, call := range calls {
+				for i, call := range calls {
 					call.Arrived = time.Now().UTC()
 					d := adapters.DeliveryOf(event.HarnessClaudeCode, call, adapters.Walked, base)
 					d.Received.Wall = call.Arrived
@@ -2003,6 +2073,12 @@ func TestKillDuringSlowResolve(t *testing.T) {
 						t.Fatal(err)
 					}
 					held = append(held, line...)
+					if i == 1 {
+						// A second line of a waiting call, as a killed run's
+						// pending log leaves for a call the hook spooled too:
+						// the replay takes it in once.
+						held = append(held, line...)
+					}
 				}
 				if err := os.WriteFile(r.dirs.Held(), held, 0o600); err != nil {
 					t.Fatal(err)

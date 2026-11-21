@@ -71,11 +71,24 @@ func TestSplice(t *testing.T) {
 			}
 			defer closeWriter()
 
-			s, err := StartSplice(name, ".held.jsonl.tmp-", tt.size, tt.keep)
+			copied := 0
+			s, err := StartSplice(name, ".held.jsonl.tmp-", tt.size, tt.keep, func() { copied++ })
 			if (err != nil) != tt.startErr {
 				t.Fatalf("StartSplice: %v, want an error: %v", err, tt.startErr)
 			}
+			// copied runs once a splice has copied its parts, and not for one
+			// refused before that.
+			want := 1
+			if tt.startErr {
+				want = 0
+			}
+			if copied != want {
+				t.Errorf("copied ran %d times, want %d", copied, want)
+			}
 			if err == nil {
+				// A test that fails before Finish leaves no handle open,
+				// which Windows' TempDir cleanup couldn't delete around.
+				defer s.Abort()
 				if _, err := w.Write([]byte(tt.appended)); err != nil {
 					t.Fatal(err)
 				}

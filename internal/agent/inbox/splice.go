@@ -37,10 +37,11 @@ type Splice struct {
 // StartSplice begins a splice of name, which it opens as OpenPrivate does.
 // It copies keep, parts of the file's first size bytes, in the order given,
 // to a new file in the same folder, named tmpPrefix and a random suffix, and
-// flushes that to disk. Until Finish or Abort, nothing may change name but
-// appends past size, and a part keep names that the file doesn't hold is
-// an error.
-func StartSplice(name, tmpPrefix string, size int64, keep []Span) (*Splice, error) {
+// flushes that to disk. copied, when not nil, runs once the parts are
+// copied, before the flush: a test can append there while the splice is
+// still at work. Until Finish or Abort, nothing may change name but appends
+// past size, and a part keep names that the file doesn't hold is an error.
+func StartSplice(name, tmpPrefix string, size int64, keep []Span, copied func()) (*Splice, error) {
 	src, err := OpenPrivate(name, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
@@ -66,6 +67,9 @@ func StartSplice(name, tmpPrefix string, size int64, keep []Span) (*Splice, erro
 			return nil, err
 		}
 		s.written += n
+	}
+	if copied != nil {
+		copied()
 	}
 	if err := w.Flush(); err != nil {
 		s.Abort()
