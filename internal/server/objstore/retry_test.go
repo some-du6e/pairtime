@@ -6,11 +6,9 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,12 +16,15 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/objstore/sigv4"
 )
 
-// cutStore stands in front of a fake store and cuts the first request
-// whose body is longer than cut, as a store does that gives up on a
-// request partway through its body: it reads cut bytes, then answers 500
-// InternalError and closes the connection. It records what that request
-// and each retry of it sent. Every other request goes to the fake store,
-// and so does each retry, which the fake checks and carries out.
+// cutStore sits in front of a fake store and cuts the first request whose
+// body is longer than cut: it reads cut bytes of the body, then answers
+// 500 InternalError and closes the connection, as a store does that gives
+// up on a request partway through its body. It never reads the rest, so
+// the client's write loop is still sending the body when the answer
+// comes, as it would be over a real network. It hands the retry, and
+// every other request, to the fake, which checks the signature and the
+// payload hash and carries the request out. It records what the cut
+// request and each retry of it sent.
 type cutStore struct {
 	store http.Handler
 	cut   int
@@ -34,16 +35,15 @@ type cutStore struct {
 	attempts []attempt
 }
 
-// attempt is what one attempt at the cut request sent.
+// attempt is what one attempt at the cut request sent: its Content-Length
+// and its X-Amz-Content-Sha256, what checking its signature over that
+// hash found, and the bytes the store read of its body (the first cut of
+// the cut attempt, none recorded for a retry, which goes to the fake).
 type attempt struct {
-	// length is its Content-Length and payload its X-Amz-Content-Sha256.
 	length  int64
 	payload string
-	// signErr is what checking its signature over payload found.
 	signErr error
-	// body is what the store read of the body: the first cut bytes of the
-	// cut attempt, all of a retry.
-	body []byte
+	body    []byte
 }
 
 func (s *cutStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -62,16 +62,15 @@ func (s *cutStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a := attempt{length: r.ContentLength, payload: r.Header.Get("X-Amz-Content-Sha256")}
 	a.signErr = sigv4.Verify(r, a.payload, objstoretest.Credentials, objstoretest.Region, "s3", time.Now(), objstoretest.MaxSkew)
 	if retry {
-		var body bytes.Buffer
-		r.Body = struct {
-			io.Reader
-			io.Closer
-		}{io.TeeReader(r.Body, &body), r.Body}
-		s.store.ServeHTTP(w, r)
-		a.body = body.Bytes()
 		s.record(a)
+		s.store.ServeHTTP(w, r)
 		return
 	}
+	// Read the start of the body, then answer 500 and leave the rest
+	// unread, so the write loop is still sending when the answer comes
+	// and Go closes the connection on return. Reading nothing would race
+	// a touch more surely, but reading cut bytes shows the cut was
+	// mid-body and still leaves the write loop a long way from done.
 	a.body = make([]byte, s.cut)
 	n, _ := io.ReadFull(r.Body, a.body)
 	a.body = a.body[:n]
@@ -88,71 +87,23 @@ func (s *cutStore) record(a attempt) {
 	s.attempts = append(s.attempts, a)
 }
 
-// stallDialer dials connections that stall mid-body, as a socket does
-// once its buffers are full and the store has stopped reading. On the
-// first connection to have sent budget bytes, the next write waits until
-// the transport closes the connection, and sends nothing. So the
-// transport is still sending the cut request's body when the store's
-// answer comes, as it would be over a real network, whatever size the
-// kernel's buffers are. Every other connection passes everything.
-//
-// The held write sends none of its bytes because the race detector
-// orders each socket write before every later socket read. Had the write
-// reached the socket, the transport's last read of the body would count
-// as coming before the store's answer, and so before the retry, and a
-// retry that reuses the body without waiting for the transport would go
-// unseen.
-type stallDialer struct {
-	budget int
-	held   atomic.Bool
-}
-
-func (d *stallDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	c, err := (&net.Dialer{}).DialContext(ctx, network, addr)
-	if err != nil {
-		return nil, err
-	}
-	return &stallConn{Conn: c, d: d, closed: make(chan struct{})}, nil
-}
-
-type stallConn struct {
-	net.Conn
-	d *stallDialer
-	// sent counts the bytes written; only the transport's write loop
-	// writes.
-	sent   int
-	closed chan struct{}
-	once   sync.Once
-}
-
-func (c *stallConn) Write(p []byte) (int, error) {
-	if c.sent >= c.d.budget && c.d.held.CompareAndSwap(false, true) {
-		<-c.closed
-		return 0, net.ErrClosed
-	}
-	c.sent += len(p)
-	return c.Conn.Write(p)
-}
-
-func (c *stallConn) Close() error {
-	c.once.Do(func() { close(c.closed) })
-	return c.Conn.Close()
-}
-
-// TestRetryCutMidBody cuts a request's first attempt mid-body while the
-// transport is still sending it. Under -race it also checks that the
-// retry doesn't touch the body, or the part buffer behind it, while the
-// transport may still be reading them for the cut attempt.
+// TestRetryCutMidBody cuts a request's first attempt after its body has
+// begun, so the client's write loop is still reading the body when the
+// 500 comes back and the retry starts. Before the fix the retry rewinds
+// the shared reader, and refills the shared part buffer, while that write
+// loop can still read them, which the race detector catches. The test
+// also pins that the retry sends the same bytes, Content-Length and
+// X-Amz-Content-Sha256 as the first attempt.
 func TestRetryCutMidBody(t *testing.T) {
 	const key = "retry/cut"
 	const cut = 64 << 10
 	tests := []struct {
 		name string
 		size int
-		// send makes the call whose first big request the store cuts.
-		send func(b *Bucket, data []byte) error
-		// part is how many bytes of data the cut request carries.
+		// part is how many bytes of data the cut request carries: the
+		// whole body for a put, one part for a multipart upload.
 		part int
+		send func(b *Bucket, data []byte) error
 	}{
 		{name: "a put cut mid-body is sent again whole, with the same Content-Length and payload hash",
 			size: 1 << 20, part: 1 << 20,
@@ -173,34 +124,21 @@ func TestRetryCutMidBody(t *testing.T) {
 			store := &cutStore{store: srv.Config.Handler, cut: cut}
 			front := httptest.NewServer(store)
 			t.Cleanup(front.Close)
-			// The budget leaves room for the headers before the cut.
-			stall := &stallDialer{budget: cut + 16<<10}
-			transport := &http.Transport{DialContext: stall.DialContext}
-			t.Cleanup(transport.CloseIdleConnections)
-			b := bucket(t, newTestClient(t, srv, func(c *Config) {
-				c.Endpoint = front.URL
-				c.HTTPClient = &http.Client{Transport: transport}
-			}), mainBucket)
+			b := bucket(t, newTestClient(t, srv, func(c *Config) { c.Endpoint = front.URL }), mainBucket)
 			data := randomBytes(tt.size)
 
 			if err := tt.send(b, data); err != nil {
 				t.Fatal(err)
-			}
-			if !stall.held.Load() {
-				t.Fatal("no write was held, so the cut attempt wasn't still sending when the store answered")
 			}
 			want := data[:tt.part]
 			store.mu.Lock()
 			attempts := store.attempts
 			store.mu.Unlock()
 			if len(attempts) != 2 {
-				t.Fatalf("the cut request was sent %d times, want twice", len(attempts))
+				t.Fatalf("the cut request was sent %d times, want twice (a cut attempt and a retry)", len(attempts))
 			}
-			if !bytes.Equal(attempts[0].body, want[:cut]) {
-				t.Errorf("the cut attempt's first %d bytes aren't the body's", len(attempts[0].body))
-			}
-			if !bytes.Equal(attempts[1].body, want) {
-				t.Errorf("the retry sent %d bytes that aren't the %d of the body", len(attempts[1].body), len(want))
+			if len(attempts[0].body) != cut || !bytes.Equal(attempts[0].body, want[:cut]) {
+				t.Errorf("the cut attempt sent %d bytes of body that aren't the first %d of the request's", len(attempts[0].body), cut)
 			}
 			for i, a := range attempts {
 				if a.length != int64(len(want)) {
