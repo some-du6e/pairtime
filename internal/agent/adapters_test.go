@@ -27,6 +27,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -1268,6 +1269,84 @@ func TestFolderStillResolving(t *testing.T) {
 						t.Errorf("no: waiting %d, change %+v, mine %+v, other %+v, slow %q, quick %q", during.Adapters.Waiting, change, mine, other, slowKey, quickKey)
 					}
 				})
+			}
+		})
+	}
+}
+
+// TestMemorySavedWithItsRecords checks that the adapters' memory goes to
+// state.json in the step that wrote the records it goes with, a session's
+// start or a stop's scheduled prompts, and not up to a minute later, so a
+// kill right after can't lose what the next prompt is read against. The
+// agent runs throughout, and state.json is read well inside the minute job.
+func TestMemorySavedWithItsRecords(t *testing.T) {
+	// The part of the Claude Code adapter's saved memory the cases read.
+	type session struct {
+		HookStart bool `json:"hook_start"`
+		Crons     []struct {
+			Key string `json:"key"`
+		} `json:"crons"`
+	}
+	type saved struct {
+		Sessions []session `json:"sessions"`
+	}
+	cases := []struct {
+		name    string
+		through string // the last call sent, by its directory
+		ok      func(m saved) bool
+	}{
+		{"a session's start from the walk is saved at once", "000001", func(m saved) bool {
+			return slices.ContainsFunc(m.Sessions, func(s session) bool { return s.HookStart })
+		}},
+		{"a stop's scheduled prompt is saved at once, as its key", "000060", func(m saved) bool {
+			for _, s := range m.Sessions {
+				for _, c := range s.Crons {
+					if strings.HasPrefix(c.Key, "c") {
+						return true
+					}
+				}
+			}
+			return false
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			calls := readCapture(t)
+			r := newHookReplay(t)
+			started := time.Now()
+			a := startAgent(t, r.options([]keys.Store{}))
+			sent := uint64(0)
+			for _, call := range calls {
+				r.send(t, event.HarnessClaudeCode, call, calls[0].Arrived)
+				sent++
+				if call.Dir == c.through {
+					break
+				}
+			}
+			waitParsed(t, a, sent)
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				var m saved
+				if st, _, err := state.Open(r.dirs.StateFile()); err == nil {
+					var mem adaptersState
+					if ok, err := st.Get(adaptersKey, &mem); ok && err == nil {
+						json.Unmarshal(mem.Adapters[event.HarnessClaudeCode], &m)
+					}
+				}
+				if c.ok(m) {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("state.json never held it; saved memory %+v", m)
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			if time.Since(started) >= adaptersSaveEvery {
+				t.Skip("the run took past the minute job, which saves too, so the check proves nothing")
+			}
+			a.cancel()
+			if err := a.waitExit(t); err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

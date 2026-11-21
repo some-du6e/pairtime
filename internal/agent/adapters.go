@@ -40,9 +40,14 @@ import (
 const adaptersKey = "adapters"
 
 // adaptersSaveEvery is how often the adapters' memory, the git watcher's
-// cursors and the project map go to state.json when they changed. A
-// crash loses at most this much of it, and the ledger's own unsealed
-// tail is about as long (BATCH_S).
+// cursors and the project map go to state.json when they changed. A call
+// whose records the memory goes with, a session's start, a prompt or a
+// stop, has it saved at once instead, in the step that wrote them (parse):
+// the writer seals a prompt and a stop at once, and by then has each record
+// in its segment file, which a kill doesn't lose (ledger.Open seals what a
+// crash left unsealed). So the memory a scheduled prompt or a queued
+// message is read against is never older than the ledger by more than that
+// step, and what a crash can lose of the rest is at most this much.
 const adaptersSaveEvery = time.Minute
 
 // keyRetry is how long the adapters first wait before they try again to
@@ -594,6 +599,11 @@ func (h *adapterHost) step(last bool) {
 		h.admit(d, false, last)
 	}
 	h.donePending(false)
+	// Read again: the calls parsed above can have made a save due.
+	h.mu.Lock()
+	saveDue = saveDue || h.saveDue
+	h.saveDue = false
+	h.mu.Unlock()
 	if saveDue && !last {
 		h.save(false)
 	}
@@ -958,8 +968,21 @@ func (h *adapterHost) parse(c hostCall) {
 		}
 		return
 	}
+	due := false
 	for _, r := range recs {
 		h.write(c.st, r)
+		switch r.Event.Kind() {
+		case event.KindSessionStart, event.KindPromptSubmit, event.KindAgentStop:
+			due = true
+		}
+	}
+	if due {
+		// The memory these records go with, a session's start from the
+		// walk, a turn's id or a stop's scheduled prompts, goes to
+		// state.json with them (adaptersSaveEvery).
+		h.mu.Lock()
+		h.saveDue = true
+		h.mu.Unlock()
 	}
 }
 
