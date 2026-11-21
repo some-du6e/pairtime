@@ -35,15 +35,19 @@ type savedState struct {
 }
 
 type savedSession struct {
-	ID        string         `json:"id"`
-	HookStart bool           `json:"hook_start,omitempty"`
-	Started   []string       `json:"started,omitempty"`
-	Turn      string         `json:"turn,omitempty"`
-	Unnamed   int            `json:"unnamed,omitempty"`
-	Crons     []savedCron    `json:"crons,omitempty"`
-	Requests  []savedRequest `json:"requests,omitempty"`
-	Posts     []savedPost    `json:"posts,omitempty"`
-	Seen      uint64         `json:"seen"`
+	ID        string   `json:"id"`
+	HookStart bool     `json:"hook_start,omitempty"`
+	Started   []string `json:"started,omitempty"`
+	// Named is when a call first named each of Started's ids, in Unix ms
+	// (session.named). Memory saved before it existed has none, and an id
+	// with no time counts as named before any call.
+	Named    map[string]int64 `json:"named,omitempty"`
+	Turn     string           `json:"turn,omitempty"`
+	Unnamed  int              `json:"unnamed,omitempty"`
+	Crons    []savedCron      `json:"crons,omitempty"`
+	Requests []savedRequest   `json:"requests,omitempty"`
+	Posts    []savedPost      `json:"posts,omitempty"`
+	Seen     uint64           `json:"seen"`
 }
 
 type savedCron struct {
@@ -78,8 +82,9 @@ type savedPost struct {
 // SaveState returns what the adapter remembers of the sessions it parsed,
 // for the agent to keep in state.json across a restart (adapters.Stateful):
 // which sessions have a session.start from the walk, the turn ids the
-// session's calls named, the scheduled prompts each session's last stop
-// listed, and the permission requests held for Decide. It keeps the
+// session's calls named and when each was first named, the scheduled
+// prompts each session's last stop listed, and the permission requests held
+// for Decide. It keeps the
 // maxSavedSessions sessions heard from last, and of each the maxSavedTurns
 // turn ids named last. The same memory gives the same bytes.
 func (a *Adapter) SaveState() (json.RawMessage, error) {
@@ -98,6 +103,14 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 	for _, s := range all {
 		ss := savedSession{ID: s.id, HookStart: s.hookStart, Turn: s.turn, Unnamed: s.unnamed, Seen: s.seen}
 		ss.Started = slices.Clone(s.started[max(0, len(s.started)-maxSavedTurns):])
+		for _, id := range ss.Started {
+			if t, ok := s.named[id]; ok {
+				if ss.Named == nil {
+					ss.Named = make(map[string]int64, len(ss.Started))
+				}
+				ss.Named[id] = t
+			}
+		}
 		for _, sc := range s.crons {
 			ss.Crons = append(ss.Crons, savedCron{Key: sc.key, N: sc.n, Cut: sc.cut})
 		}
@@ -136,6 +149,14 @@ func (a *Adapter) LoadState(raw json.RawMessage) error {
 		}
 		s := &session{id: ss.ID, hookStart: ss.HookStart, turn: ss.Turn, unnamed: max(ss.Unnamed, 0), seen: ss.Seen}
 		s.started = slices.Clone(ss.Started[max(0, len(ss.Started)-maxTurns):])
+		for _, id := range s.started {
+			if t, ok := ss.Named[id]; ok {
+				if s.named == nil {
+					s.named = make(map[string]int64, len(s.started))
+				}
+				s.named[id] = t
+			}
+		}
 		for _, c := range ss.Crons {
 			s.crons = append(s.crons, scheduled{key: c.Key, n: c.N, cut: c.Cut})
 		}

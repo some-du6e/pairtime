@@ -376,6 +376,24 @@ func TestConformProvenance(t *testing.T) {
 			t.Errorf("results %+v", results)
 		}
 	})
+	t.Run("a captured run whose pending.md says why its expected records wait is reported pending, not replayed or failed", func(t *testing.T) {
+		c := captures("false")
+		for name, f := range captures("false") {
+			if rest, ok := strings.CutPrefix(name, "1.0.0/linux/cli/"); ok {
+				c["1.0.0/linux/vscode/"+rest] = f
+			}
+		}
+		c["1.0.0/linux/vscode/"+PendingFile] = &fstest.MapFile{Data: []byte("The oracle can't class VS Code's parents yet.\n")}
+		c["1.0.0/linux/cli/"+PendingFile] = &fstest.MapFile{Data: []byte("Written before its expected records.\n")}
+		results, err := Conform(mk, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(results) != 2 || !results[0].OK() || results[0].Pending ||
+			!results[1].Pending || results[1].Err != nil || results[1].Records != 0 || results[1].OK() {
+			t.Errorf("results %+v", results)
+		}
+	})
 	t.Run("a capture whose provenance doesn't say counts as synthetic", func(t *testing.T) {
 		c := captures("false")
 		c["1.0.0/linux/PROVENANCE.md"] = &fstest.MapFile{Data: []byte("# no front matter\n")}

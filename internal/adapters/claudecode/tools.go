@@ -46,7 +46,10 @@ type patch struct {
 // non-zero. It has no tool_response, only its error's text, which is what
 // Claude Code shows for it (the hooks reference;
 // docs/errata/2026-11-20-claude-code-tool-failure.md). A failed edit
-// changed nothing, so it counts no lines.
+// changed nothing, so it names no file and counts no lines: DESIGN 5.7
+// takes the person's own edits of a file the agent's edit names, within
+// 120 s, for the agent's. An aborted call's text, with is_interrupt set,
+// is Claude Code's own, not the command's, so it shows no output.
 func (c *call) tool(failed bool) {
 	name, _ := c.f.str("tool_name")
 	var in toolInput
@@ -69,13 +72,21 @@ func (c *call) tool(failed bool) {
 	switch name {
 	case "Edit", "MultiEdit", "NotebookEdit":
 		t.ToolClass = event.ToolEdit
-		r = c.edit(t, in, resp)
+		if !failed {
+			r = c.edit(t, in, resp)
+		}
 	case "Write":
 		t.ToolClass = event.ToolWrite
-		r = c.edit(t, in, resp)
+		if !failed {
+			r = c.edit(t, in, resp)
+		}
 	case "Bash":
 		if failed {
-			if code, out, ok := exitLine(resp.Stdout); ok {
+			code, out, ok := exitLine(resp.Stdout)
+			switch {
+			case c.f.boolean("is_interrupt"):
+				resp.Stdout = ""
+			case ok:
 				t.ExitCode, resp.Stdout = &code, out
 			}
 		}

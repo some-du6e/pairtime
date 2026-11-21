@@ -217,6 +217,13 @@ type session struct {
 	// each prompt's that started a turn, and the turn of any other call,
 	// such as one that took up a queued message.
 	started []string
+	// named holds, for each id this adapter added to started, the earliest
+	// time, in Unix milliseconds, at which a call named it. Calls can reach
+	// Parse in another order than they were made, a spooled one after a
+	// later one over the socket, so whether a call is earlier than another
+	// goes by the times they carry. An id of started with no time, as from
+	// memory an older adapter saved, counts as named before any call.
+	named map[string]int64
 	// turn is the turn the session's latest call named: its prompt_id, or
 	// one the adapter made up when Claude Code sent none.
 	turn string
@@ -280,20 +287,37 @@ func (s *session) startedTurn(id string) bool {
 	return false
 }
 
-// start records that prompt_id id started a turn.
-func (s *session) start(id string) { s.note(id) }
+// namedBefore reports whether a call of the session made before t named
+// prompt_id id, or the memory an older adapter saved holds it.
+func (s *session) namedBefore(id string, t int64) bool {
+	if !s.startedTurn(id) {
+		return false
+	}
+	first, ok := s.named[id]
+	return !ok || first < t
+}
 
-// note records that a call of the session named turn id, which is then the
-// session's latest. A turn that took up a queued message has no prompt of
-// its own, so its first other call, a PostToolUse, PermissionRequest,
-// Notification, SubagentStart, SubagentStop, Stop or StopFailure, is where
-// the adapter learns its id (E-cc-queued-turn).
-func (s *session) note(id string) {
+// start records that a prompt made at t started turn id.
+func (s *session) start(id string, t int64) { s.note(id, t) }
+
+// note records that a call of the session made at t named turn id, which
+// is then the session's latest. A turn that took up a queued message has
+// no prompt of its own, so its first other call, a PostToolUse,
+// PermissionRequest, Notification, SubagentStart, SubagentStop, Stop or
+// StopFailure, is where the adapter learns its id (E-cc-queued-turn).
+func (s *session) note(id string, t int64) {
 	if !s.startedTurn(id) {
 		s.started = append(s.started, id)
 		if len(s.started) > maxTurns {
+			delete(s.named, s.started[0])
 			s.started = s.started[1:]
 		}
+		if s.named == nil {
+			s.named = map[string]int64{}
+		}
+		s.named[id] = t
+	} else if first, ok := s.named[id]; ok && t < first {
+		s.named[id] = t
 	}
 	s.turn = id
 }

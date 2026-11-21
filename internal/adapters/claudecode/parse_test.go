@@ -185,6 +185,9 @@ func TestQueuedMessage(t *testing.T) {
 		turn string
 		// problem says the last call is a parse failure.
 		problem bool
+		// at are when the calls were made, in milliseconds after the
+		// first; by default each comes a second after the one before.
+		at []int64
 	}{
 		{name: "a second prompt with the prompt_id of a running turn is that turn's agent.queue, with its length and no text",
 			calls: []adapters.RawRecord{prompt("p1", goal), prompt("p1", "Then say which test.")},
@@ -213,6 +216,12 @@ func TestQueuedMessage(t *testing.T) {
 			calls: []adapters.RawRecord{prompt("p1", goal), prompt("p1", "Then say which test."), stop("p1", false),
 				prompt("p2", "And push it.")},
 			want: "prompt.submit,agent.queue,agent.stop,prompt.submit", turn: "p2"},
+		{name: "a prompt that reaches the adapter after a later call of its turn, as through the spool, is still the turn's prompt.submit: earlier goes by the calls' own times",
+			calls: []adapters.RawRecord{tool("p1"), prompt("p1", goal)}, at: []int64{2000, 1000},
+			want: "agent.tool,prompt.submit", turn: "p1"},
+		{name: "a message queued after such a prompt is still that turn's agent.queue",
+			calls: []adapters.RawRecord{tool("p1"), prompt("p1", goal), prompt("p1", "Then say which test.")}, at: []int64{2000, 1000, 3000},
+			want: "agent.tool,prompt.submit,agent.queue", turn: "p1"},
 	}
 	keys := adapters.FixtureKeys()
 	const sid = "11111111-2222-4333-8444-555555555555" // hookRaw's
@@ -223,6 +232,10 @@ func TestQueuedMessage(t *testing.T) {
 			var last []adapters.Record
 			var lastErr error
 			for i, raw := range tc.calls {
+				raw.Arrival.T = t0 + int64(i)*1000
+				if tc.at != nil {
+					raw.Arrival.T = t0 + tc.at[i]
+				}
 				recs, err := a.Parse(raw)
 				if i < len(tc.calls)-1 && err != nil {
 					t.Fatalf("call %d: %v", i+1, err)
@@ -594,10 +607,16 @@ func TestToolFailure(t *testing.T) {
 		{name: "a failed call without duration_ms starts and ends as its hook fires",
 			raw:   failure("Bash", command("go test ./..."), "Exit code 1\n"+goFail, map[string]any{"duration_ms": nil}),
 			class: event.ToolTest, exit: "1", output: goFail, visible: 5, command: "go test ./..."},
-		{name: "a failed edit is agent.tool for its file, with no lines and no exit code",
+		{name: "a failed edit is agent.tool with no file and no lines, so DESIGN 5.7 can't take the person's next edits of the file for the agent's",
 			raw: failure("Edit", map[string]any{"file_path": "/home/capture/proj/wc.py", "old_string": "a", "new_string": "b"},
-				"File has been modified since read, either by the user or by a linter.", nil),
-			class: event.ToolEdit, files: []string{"wc.py"}, spanMS: 4187},
+				"EACCES: permission denied, open '/home/capture/proj/wc.py'", nil),
+			class: event.ToolEdit, spanMS: 4187},
+		{name: "a failed write names no file either",
+			raw:   failure("Write", map[string]any{"file_path": "/home/capture/proj/notes.txt", "content": "x\n"}, "EACCES: permission denied", nil),
+			class: event.ToolWrite, spanMS: 4187},
+		{name: "an aborted command's text is Claude Code's, not the command's, so it shows no output and has no exit code or error signature",
+			raw:   failure("Bash", command("go test ./..."), "AbortError: The operation was aborted", map[string]any{"is_interrupt": true}),
+			class: event.ToolTest, command: "go test ./...", spanMS: 4187},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

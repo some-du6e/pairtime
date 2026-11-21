@@ -389,7 +389,7 @@ def main(capture, out_path):
         parents = parents_of(open(os.path.join(cdir, "parents"), encoding="utf-8").read())
         parent_class, has_tty = lineage(parents)
         sid = j["session_id"]
-        s = sessions.setdefault(sid, {"hook_start": False, "started": [], "turn": "", "crons": []})
+        s = sessions.setdefault(sid, {"hook_start": False, "started": [], "named": {}, "turn": "", "crons": []})
         cwd = j.get("cwd", "")
         env = {"t": t, "source": "hook", "via": "hook", "harness": "claude_code",
                "session_key": ("session", sid), "project_key": ("project", cwd)}
@@ -408,9 +408,16 @@ def main(capture, out_path):
             return ("turn", (sid, pid))
 
         def note(pid):
+            # When a call first named each turn, by the calls' own times
+            # (claudecode.go, session.named).
             if pid not in s["started"]:
                 s["started"].append(pid)
-                s["started"] = s["started"][-MAX_TURNS:]
+                if len(s["started"]) > MAX_TURNS:
+                    s["named"].pop(s["started"][0], None)
+                    s["started"] = s["started"][1:]
+                s["named"][pid] = t
+            elif pid in s["named"] and t < s["named"][pid]:
+                s["named"][pid] = t
             s["turn"] = pid
 
         if j.get("prompt_id") and name != "UserPromptSubmit":
@@ -431,8 +438,9 @@ def main(capture, out_path):
             # Rules 1 and 3 read a queued message's text too (E-cc-queued-turn).
             cron = matches_cron(s["crons"], text)
             notification = text.lstrip(" \t\r\n").startswith("<task-notification>")
-            if pid and pid in s["started"]:
-                # A person's message queued in the running turn. A scheduled
+            if pid and pid in s["started"] and (pid not in s["named"] or s["named"][pid] < t):
+                # A person's message queued in the running turn: an earlier
+                # call, by the calls' own times, named its prompt_id. A scheduled
                 # prompt or a task notification with a known prompt_id is a
                 # parse failure that makes no record.
                 if not (cron or notification):
@@ -486,7 +494,10 @@ def main(capture, out_path):
             data = {"tool_class": "other", "lines_added": 0, "lines_removed": 0, "visible_output_lines": 0,
                     "t_start": t - dur if dur is not None else t, "t_end": t}
             command, edits = "", []
-            if tool in ("Edit", "MultiEdit", "NotebookEdit", "Write"):
+            if tool in ("Edit", "MultiEdit", "NotebookEdit", "Write") and failed:
+                # A failed edit changed nothing: no file, no lines.
+                data["tool_class"] = "write" if tool == "Write" else "edit"
+            elif tool in ("Edit", "MultiEdit", "NotebookEdit", "Write"):
                 data["tool_class"] = "write" if tool == "Write" else "edit"
                 lp = ledger_path(cwd, tresp.get("filePath") or tin.get("file_path", ""))
                 if lp is None:
@@ -505,7 +516,10 @@ def main(capture, out_path):
                 data["lines_added"] = sum(e["new_lines"] for e in edits)
                 data["lines_removed"] = sum(e["old_lines"] for e in edits)
             elif tool == "Bash":
-                if failed and exit_line(tresp["stdout"]) is not None:
+                if failed and j.get("is_interrupt"):
+                    # An abort: the text is Claude Code's, not the command's.
+                    tresp["stdout"] = ""
+                elif failed and exit_line(tresp["stdout"]) is not None:
                     data["exit_code"], tresp["stdout"] = exit_line(tresp["stdout"])
                 command = tin["command"]
                 data["tool_class"] = command_class(command)
