@@ -60,7 +60,7 @@ RFC 8628 3.3. The page asks a signed-in teen for the code, then shows what is as
 The page has two other forms, by the state of the code's device id:
 
 - The id belongs to the signed-in account and the device is linked now. The page says the computer has been linked to this account since a date and last connected on a date, and that linking it again signs that copy of pairtime out: its token stops working. That is the case of a code someone else asked for in this device's name (RFC 8628 5.4), so the page says to choose Don't link unless the teen just ran `pairtime login` on that computer.
-- The id belongs to another account. The page says the computer can't be linked to this one, and offers one button, Stop pairtime login, which ends the code. The app then gets `device_taken`. Leaving the page leaves the code pending, so the teen can sign in as the account the computer is linked to and type the code again.
+- The id belongs to another account. The page says the computer can't be linked to this one, and offers one button, Stop pairtime login, which ends the code and never links anything. The app then gets `device_taken`. If the id no longer belongs to the other account by the time Stop arrives, as when that account removed the device after the page was shown, Stop ends the code as Don't link does, and the app gets `access_denied`. Leaving the page leaves the code pending, so the teen can sign in as the account the computer is linked to and type the code again.
 
 The same answer twice from the same account, as from a double click, gets the first answer's page and costs no try.
 
@@ -80,7 +80,7 @@ RFC 8628 3.4. A form: `grant_type=urn:ietf:params:oauth:grant-type:device_code`,
 |---|---|---|
 | `authorization_pending` | Nobody has approved or denied the code yet | waits `interval` seconds and asks again |
 | `slow_down` | It asked again less than `interval` seconds after its last request (with 0.5 s of slack); the server raises this code's interval by 5 s | adds 5 s to its interval, waits, asks again |
-| `access_denied` | The teen chose Don't link, or Hack Club Auth has marked the approving account ineligible since | stops |
+| `access_denied` | The teen chose Don't link, or chose Stop after the device id stopped belonging to another account (section 3), or Hack Club Auth has marked the approving account ineligible since | stops |
 | `device_taken` | An account other than the one the device id belongs to approved the code, or chose Stop (section 1) | stops; it can link to that account only as a new device |
 | `expired_token` | 15 minutes passed, or the server restarted, before the app got its token | stops; `pairtime login` starts over |
 | `invalid_grant` | No such device code, or its token was already handed out | stops |

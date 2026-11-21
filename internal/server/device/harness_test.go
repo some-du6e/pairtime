@@ -435,17 +435,15 @@ func (b *browser) csrf(path string) string {
 	return m[1]
 }
 
-// decide types code on /device and answers it, as a person would.
-func (b *browser) decide(code string, approve bool) response {
+// decide types code on /device and clicks the page's button for decision
+// (approve, deny or stop), as a person would. A page without that button
+// is returned as it is, with the code still waiting.
+func (b *browser) decide(code, decision string) response {
 	b.h.t.Helper()
 	tok := b.csrf(device.PagePath)
 	r := b.post(device.PagePath, url.Values{"csrf": {tok}, "user_code": {code}})
-	if r.status != http.StatusOK || !strings.Contains(r.body, `name="decision"`) {
+	if r.status != http.StatusOK || !strings.Contains(r.body, `name="decision" value="`+decision+`"`) {
 		return r
-	}
-	decision := "deny"
-	if approve {
-		decision = "approve"
 	}
 	return b.post(device.DecisionPath, url.Values{"csrf": {tok}, "user_code": {code}, "decision": {decision}})
 }
@@ -461,7 +459,7 @@ func (h *harness) link(b *browser, id string) tokenReply {
 func (h *harness) linkWith(b *browser, id string, priv ed25519.PrivateKey) tokenReply {
 	h.t.Helper()
 	c := h.requestCodeWith(id, priv)
-	if r := b.decide(c.UserCode, true); r.status != http.StatusOK || !strings.Contains(r.body, "<h1>Linked</h1>") {
+	if r := b.decide(c.UserCode, "approve"); r.status != http.StatusOK || !strings.Contains(r.body, "<h1>Linked</h1>") {
 		h.t.Fatalf("approving answered %d:\n%s", r.status, r.body)
 	}
 	status, tr := h.poll(c.DeviceCode)

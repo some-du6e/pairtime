@@ -88,7 +88,7 @@ var tmpl = template.Must(template.New("device").Funcs(template.FuncMap{
 <form method="post" action="/device/decision">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input type="hidden" name="user_code" value="{{.UserCode}}">
-<p><button class="button" type="submit" name="decision" value="approve">Stop pairtime login</button></p>
+<p><button class="button" type="submit" name="decision" value="stop">Stop pairtime login</button></p>
 </form>
 {{- end}}
 
@@ -292,7 +292,12 @@ func (s *Service) lookup(w http.ResponseWriter, r *http.Request, sess *accounts.
 	}
 }
 
-// decide is POST /device/decision: Link it, or Don't link.
+// decisions are the values of the pages' decision buttons: Link it and
+// Don't link, and the taken page's Stop pairtime login.
+var decisions = map[string]Decision{"approve": Approve, "deny": Deny, "stop": Stop}
+
+// decide is POST /device/decision: Link it, Don't link, or Stop pairtime
+// login.
 func (s *Service) decide(w http.ResponseWriter, r *http.Request) {
 	f, problem := form(w, r)
 	if problem != "" {
@@ -309,9 +314,9 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request) {
 		s.render(w, http.StatusForbidden, "Link the pairtime app", "enter", d, sess)
 		return
 	}
-	approve := f.Get("decision") == "approve"
-	if !approve && f.Get("decision") != "deny" {
-		http.Error(w, "decision must be approve or deny", http.StatusBadRequest)
+	decision, ok := decisions[f.Get("decision")]
+	if !ok {
+		http.Error(w, "decision must be approve, deny or stop", http.StatusBadRequest)
 		return
 	}
 	// A decision names its code itself, so it is held to the same limit
@@ -326,7 +331,7 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request) {
 	code, ok := NormalizeUserCode(f.Get("user_code"))
 	err := ErrNoCode
 	if ok {
-		err = s.store.Decide(r.Context(), code, sess.User.ID, approve)
+		err = s.store.Decide(r.Context(), code, sess.User.ID, decision)
 	}
 	if !errors.Is(err, ErrNoCode) {
 		s.tries.refund(key)
@@ -344,10 +349,13 @@ func (s *Service) decide(w http.ResponseWriter, r *http.Request) {
 		d.Problem = "Something went wrong on this pairtime server, and nothing was linked. Try again in a minute."
 		s.render(w, http.StatusInternalServerError, "Link the pairtime app", "enter", d, sess)
 	default:
-		s.log.Info("a device code was answered", "user", sess.User.ID, "approved", approve)
-		d.Approved = approve
+		// A Stop for a device id no other account has any more ends the
+		// code as denied, so it gets Don't link's page.
+		approved := decision == Approve
+		s.log.Info("a device code was answered", "user", sess.User.ID, "decision", f.Get("decision"), "approved", approved)
+		d.Approved = approved
 		title := "Not linked"
-		if approve {
+		if approved {
 			title = "Linked"
 		}
 		s.render(w, http.StatusOK, title, "done", d, sess)
