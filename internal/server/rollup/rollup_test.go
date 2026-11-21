@@ -469,13 +469,13 @@ func TestApplyWritesOnlyRollups(t *testing.T) {
 		r.Close()
 		var written []string
 		for _, n := range tables {
-			var rows int
-			if err := db.Read.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM `+n).Scan(&rows); err != nil {
+			var count int
+			if err := db.Read.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM `+n).Scan(&count); err != nil {
 				t.Fatal(err)
 			}
 			// newDB's account and the migrations' own records were there
 			// before.
-			if rows > 0 && n != "users" && n != "schema_migrations" {
+			if count > 0 && n != "users" && n != "schema_migrations" {
 				written = append(written, n)
 			}
 		}
