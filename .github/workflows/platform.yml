@@ -4,6 +4,8 @@
 # with another busy project, so they run only here, only when platform code
 # changes, on release tags and by hand (DESIGN 3.13). Each job tests the
 # platform packages, not the whole module: ci.yml already does that on Linux.
+# The end-to-end rehearsal, which builds the server too, has a workflow of
+# its own, rehearsal.yml, so a server PR runs it without these runners.
 name: platform
 
 on:
@@ -46,10 +48,6 @@ on:
       # notifications, both of which differ on Windows (PLAN, WP-AD5).
       - internal/adapters/git/**
       - cmd/pairtime/**
-      # The end-to-end rehearsal the Linux desktop job runs: install,
-      # login, a Claude Code session typed at the keyboard, the hours on
-      # pairtimed's /dashboard, uninstall.
-      - internal/rehearsal/**
       - .github/workflows/platform.yml
       - tools/ci/test_existing.sh
       - tools/ci/desktop_session.sh
@@ -150,9 +148,7 @@ jobs:
     name: linux desktop (Xvfb, D-Bus)
     if: inputs.capture != 'iterm2'
     runs-on: ubuntu-latest
-    # The rehearsal step takes about 15 minutes of real time: a session
-    # typed at human speed, then the minutes' way to the server.
-    timeout-minutes: 45
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
@@ -167,8 +163,9 @@ jobs:
         id: find
         run: |
           # testdata holds separate modules, such as licensecheck's seeded
-          # desktop test, which aren't pairtime's to run.
-          pkgs=$(git ls-files -- '*_desktop_test.go' ':(exclude)testdata/*' ':(exclude)*/testdata/*' | xargs -r -n 1 dirname | sort -u | sed 's|^|./|' | tr '\n' ' ')
+          # desktop test, which aren't pairtime's to run. rehearsal.yml runs
+          # internal/rehearsal's TestDesktopRehearsal.
+          pkgs=$(git ls-files -- '*_desktop_test.go' ':(exclude)testdata/*' ':(exclude)*/testdata/*' ':(exclude)internal/rehearsal/*' | xargs -r -n 1 dirname | sort -u | sed 's|^|./|' | tr '\n' ' ')
           echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
           why=""
           if [ -n "$pkgs" ]; then
@@ -223,56 +220,8 @@ jobs:
             # fakesecret, which own org.freedesktop.Notifications or
             # org.freedesktop.secrets on the one private bus, or need nobody
             # to own them.
-            # TestDesktopRehearsal has a step of its own, below.
-            bash tools/ci/desktop_session.sh go test -p 1 -tags desktop -run '^TestDesktop' -skip '^TestDesktopRehearsal$' -count=1 $PKGS
+            bash tools/ci/desktop_session.sh go test -p 1 -tags desktop -run '^TestDesktop' -count=1 $PKGS
           fi
-
-      - name: Rehearsal of a teen's first hour (internal/rehearsal), against an independent OIDC server
-        # TestDesktopRehearsal builds both binaries as release.yml does,
-        # starts pairtimed on SQLite with sign-in through
-        # navikt/mock-oauth2-server (pinned by digest, as in ci.yml), and
-        # does what a teen does: sign in, pairtime install --yes in an empty
-        # home folder, pairtime login approved on /device, three prompts
-        # typed into a Claude Code session in an xterm with real XTEST
-        # input, then pairtime uninstall --yes --delete-data. It checks
-        # that pairtimed's /dashboard and its API show exactly what the
-        # client credits. The test skips without PAIRTIME_TEST_OIDC_URL, so
-        # this step fails unless it ran and passed.
-        if: ${{ !cancelled() && steps.find.outputs.run == 'true' }}
-        env:
-          PAIRTIME_TEST_OIDC_URL: http://localhost:8080
-          PAIRTIME_REHEARSAL_OUT: ${{ runner.temp }}/rehearsal
-          # 6.1.4, 2026-10-28.
-          IMAGE: ghcr.io/navikt/mock-oauth2-server:6.1.4@sha256:647dd8c78a54f0e6fcd58d79c884e612f8f998a0662276f3e1db22e464a50192
-        run: |
-          docker run -d --name oidc -p 8080:8080 \
-            -e JSON_CONFIG_PATH=/config/mock-oauth2-server.json \
-            -v "$PWD/internal/server/auth/testdata:/config:ro" \
-            "$IMAGE" >/dev/null
-          for _ in $(seq 1 60); do
-            if curl -fsS http://localhost:8080/isalive >/dev/null 2>&1; then break; fi
-            sleep 1
-          done
-          mkdir -p "$PAIRTIME_REHEARSAL_OUT"
-          log="$PAIRTIME_REHEARSAL_OUT/go-test.txt"
-          set +e
-          bash tools/ci/desktop_session.sh go test -tags desktop -run '^TestDesktopRehearsal$' -count=1 -v -timeout 40m ./internal/rehearsal 2>&1 | tee "$log"
-          code=${PIPESTATUS[0]}
-          set -e
-          docker logs oidc >"$PAIRTIME_REHEARSAL_OUT/mock-oauth2-server.log" 2>&1 || true
-          if [ "$code" -ne 0 ] || ! grep -q -- '--- PASS: TestDesktopRehearsal ' "$log"; then
-            echo "::error::TestDesktopRehearsal didn't run and pass; the rehearsal artifact has each step's output"
-            exit 1
-          fi
-
-      - name: Upload the rehearsal's diagnostics
-        if: ${{ always() && steps.find.outputs.run == 'true' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: rehearsal
-          path: ${{ runner.temp }}/rehearsal
-          if-no-files-found: ignore
-          retention-days: 14
 
   iterm2-capture:
     # By hand only, with capture=iterm2 (decision E-6.3-two-tabs). It
