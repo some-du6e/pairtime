@@ -1851,7 +1851,7 @@ func TestScrub(t *testing.T) {
 		{"an address that is a URL's user is replaced or kept like any other address",
 			"ftp://jane@westfield.edu:s3cretpw@ftp.example.com/\nftp://noreply@anthropic.com:s3cretpw@ftp.example.com/\n",
 			"ftp://capture@example.invalid:REDACTED_URL_PASSWORD@ftp.example.com/\nftp://noreply@anthropic.com:REDACTED_URL_PASSWORD@ftp.example.com/\n"},
-		{"two slashes with no scheme before them aren't a URL when a bracket follows, as in namespaced XPath",
+		{"with no scheme, a password ends at the last @ before a bracket, so namespaced XPath, with no @ before its bracket, is left alone",
 			"tree.xpath('//xs:element[@name]', namespaces=ns)\npom.findall(\".//pom:dependency[@scope]\")\n",
 			"tree.xpath('//xs:element[@name]', namespaces=ns)\npom.findall(\".//pom:dependency[@scope]\")\n"},
 		{"a key as a URL's user is still found when the URL runs on into a query or fragment holding an @",

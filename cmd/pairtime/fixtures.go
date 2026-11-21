@@ -544,7 +544,9 @@ func (s *scrubber) localPart(text string, sp redact.Span) []redact.Span {
 // https://USER:PASSWORD@host. A URL here is two or more slashes, among
 // backslashes when the URL sits in JSON as \/\/ or \\/\\/, then an
 // authority holding an @. The user runs to the first colon and the
-// password from there to the last @, as in pkg/redact's url-password rule.
+// password from there to the last @, the split scrub.py's URL_PASSWORD
+// makes. pkg/redact's url-password rule makes it too, but only when the
+// user holds no @.
 // The user is scanned on its own, since no span covers a key followed by
 // the colon, or by the @ of a host that isn't an address. The password gets
 // url-password's span, which the rule gives it only after scheme://, so a
