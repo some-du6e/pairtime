@@ -559,9 +559,21 @@ func (p *presence) keysAt(t int64) bool {
 }
 
 // inputBefore reports whether input came in the window before t: key
-// presses where the OS reports them, else any input (SM 2.2 rule 6).
+// presses where the OS reports them, else any input, as a typed command's
+// evidence test reads it (SM 2.3).
 func (p *presence) inputBefore(t, window int64) bool {
-	return p.inputIn(t-window, t, p.keysAt(t))
+	return p.inputAround(t, window, 0)
+}
+
+// inputAround reports whether input came in the before milliseconds up to
+// t or the after milliseconds past it: key presses where the OS reports
+// them, else any input. SM 2.2 rules 6 and 7 read a prompt's input this
+// way, with after INPUT_RELEASE_GRACE_MS, because the key that sends the
+// prompt can be released after the hook stamps t. A sample only dates the
+// last input before it, so the release, landing between t and the hook's
+// sample, hides the typing before it.
+func (p *presence) inputAround(t, before, after int64) bool {
+	return p.inputIn(t-before, t+after, p.keysAt(t))
 }
 
 // inputSlots counts the slots overlapping [from, to) with input: key

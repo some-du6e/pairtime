@@ -19,6 +19,7 @@ type rules struct {
 	presenceTail   int64
 	returnGapMax   int64
 	keysPre        int64
+	releaseGrace   int64 // SM 2.2 rules 6 and 7 only
 	typingMaxCPS   int64
 	substantive    int64 // characters
 	errorPasteMax  int64 // characters
@@ -103,6 +104,7 @@ func newRules(t *params.Table) rules {
 		presenceTail:   ms(params.PRESENCE_TAIL_S),
 		returnGapMax:   ms(params.RETURN_GAP_MAX_S),
 		keysPre:        ms(params.KEYS_PRE_S),
+		releaseGrace:   t.Int(params.INPUT_RELEASE_GRACE_MS),
 		typingMaxCPS:   t.Int(params.TYPING_MAX_CPS),
 		substantive:    t.Int(params.SUBSTANTIVE_CHARS),
 		errorPasteMax:  t.Int(params.ERROR_PASTE_TEXT_MAX),

@@ -559,10 +559,13 @@ func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.Prom
 	case st != nil && st.Entrypoint == event.EntrypointCloud:
 		return event.OriginCloud, "", 0
 	}
-	// Rules 6 to 8: input in the KEYS_PRE_S before the submit, focus on a
-	// window hosting the session, and a typed length the input could
-	// have produced.
-	if !d.pres.inputBefore(e.T, d.r.keysPre) || !d.hostedBy(d.focus.before(tb.primary), tb.sess, tb.primary) {
+	// Rules 6 to 8: input in the KEYS_PRE_S before the submit or the
+	// INPUT_RELEASE_GRACE_MS after it, focus at the submit on a window
+	// hosting the session, and a typed length the input could have
+	// produced. Only the input test takes the grace: focus is the record
+	// before the prompt's, and the plausibility test counts input slots
+	// in the lead, which ends at the submit.
+	if !d.pres.inputAround(e.T, d.r.keysPre, d.r.releaseGrace) || !d.hostedBy(d.focus.before(tb.primary), tb.sess, tb.primary) {
 		return event.OriginNoInput, "", 0
 	}
 	class := d.classify(tb.sess, tb.primary, p)

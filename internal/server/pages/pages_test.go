@@ -588,6 +588,29 @@ func TestEvidenceIsDesign64(t *testing.T) {
 	}
 }
 
+// TestBuiltinScoringVersion checks the scoring version a server with no
+// scoring_version says it runs against the scorer it is built with.
+func TestBuiltinScoringVersion(t *testing.T) {
+	data, err := os.ReadFile("../../../pkg/score/VERSION")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"BuiltinScoringVersion is pkg/score/VERSION, as pkg/score's Version trims it", BuiltinScoringVersion, strings.TrimSpace(string(data))},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.got != c.want {
+				t.Errorf("BuiltinScoringVersion is %s, but pkg/score/VERSION holds %s", c.got, c.want)
+			}
+		})
+	}
+}
+
 // TestEvidenceValues checks every value an evidence definition states, as
 // `NAME` = N s, against the parameter table of each scoring version it
 // covers. A MINOR version is new parameter values only (DESIGN 6.6), so
