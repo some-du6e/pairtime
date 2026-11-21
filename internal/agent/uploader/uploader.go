@@ -1029,6 +1029,12 @@ func (u *Uploader) sync(c Credentials) bool {
 		}
 		u.log.Warn("the server's chain is behind what it took, so the minutes after its head go again", "head", st.Head, "next", held, "from", from)
 	}
+	// The server's own gaps go in too: a lost state.json forgets the
+	// gaps of earlier re-links, whose batches would otherwise wait for
+	// receipts that never come, and hold up the minutes after them.
+	for _, g := range st.Gaps {
+		u.st.addGap(g.First, g.Last)
+	}
 	// While the server holds no batch of the device, its chain starts at
 	// the first batch sealed after the sign-in (ingest-v1 5.3), and after a
 	// re-link it goes on from there (D-local-gap): the batches between are

@@ -235,6 +235,19 @@ func TestHarnesses(t *testing.T) {
 			}
 		})
 	}
+	clients := []struct {
+		name, build, want string
+	}{
+		{"a release sends its version", "v0.1.0", "v0.1.0"},
+		{"a build from a checkout sends v0.0.0-dev, as ingest-v1 2.3.4 has it", "dev", "v0.0.0-dev"},
+	}
+	for _, tc := range clients {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := clientBuild(tc.build); got != tc.want || !versionForm(got) {
+				t.Errorf("clientBuild(%q) = %q, want %q", tc.build, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestLabelsDue(t *testing.T) {

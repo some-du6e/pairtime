@@ -52,6 +52,7 @@ type fakeIngest struct {
 	labels            int                          // labels accepted
 	futures           int                          // buckets answered future_minute
 	relinked          bool                         // the device re-linked, so its next batch may skip a gap
+	gaps              [][2]uint64                  // the local-only gaps it recorded, first and last
 	witness           map[event.Witness]int        // the readings of the revisions accepted
 	lastKey, lastHash string
 	lastResp          []byte
@@ -168,8 +169,13 @@ func (f *fakeIngest) state(w http.ResponseWriter, r *http.Request) {
 		head = map[string]any{"b": f.head.b, "H_b": f.head.head, "received_at": f.head.receivedAt}
 		start = f.start
 	}
+	gaps := []map[string]uint64{}
+	for _, g := range f.gaps {
+		gaps = append(gaps, map[string]uint64{"first": g[0], "last": g[1]})
+	}
 	f.json(w, 200, map[string]any{
 		"device": f.device, "req": f.counter, "head": head, "chain_start": start,
+		"relinked": f.relinked && f.head != nil, "gaps": gaps,
 		"server_key": map[string]string{"key_id": f.keyID, "public_key": hex.EncodeToString(f.key.Public().(ed25519.PublicKey))},
 	})
 }
@@ -392,6 +398,7 @@ func (f *fakeIngest) root(raw json.RawMessage, receivedAt uint64) map[string]any
 		// After a re-link the first batch may skip a local-only gap, with its
 		// prev taken as given (D-local-gap).
 		f.relinked = false
+		f.gaps = append(f.gaps, [2]uint64{f.head.b + 1, b - 1})
 	case b > f.head.b+1:
 		return map[string]any{"status": 409, "code": "chain_gap", "b": b}
 	case b <= f.head.b:
@@ -409,6 +416,7 @@ func (f *fakeIngest) root(raw json.RawMessage, receivedAt uint64) map[string]any
 	row := fakeRow{b: b, n: n, root: r.Root, head: r.Head, prev: r.Prev, receivedAt: receivedAt, sig: hex.EncodeToString(rc.Signature[:]), keyID: f.keyID}
 	f.rows[b] = row
 	f.head = &row
+	f.relinked = false // a batch stored under the new sign-in ends it (ingest-v1 3)
 	return map[string]any{"status": 200, "code": "accepted", "b": b,
 		"receipt": map[string]any{"received_at": receivedAt, "key_id": f.keyID, "sig": row.sig}}
 }

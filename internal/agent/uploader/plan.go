@@ -463,11 +463,11 @@ func versionForm(s string) bool {
 }
 
 // clientBuild returns the client_build the labels carry: the running
-// build when it is a version, and 0.0.0+dev for a build from a checkout,
-// whose version is a word such as dev.
+// build when it is a version, and v0.0.0-dev for a build from a checkout,
+// whose version is a word such as dev (ingest-v1 2.3.4).
 func clientBuild(v string) string {
 	if versionForm(v) {
 		return v
 	}
-	return "0.0.0+dev"
+	return "v0.0.0-dev"
 }

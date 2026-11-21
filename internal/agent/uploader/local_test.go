@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http/httptest"
 	"slices"
@@ -364,6 +365,70 @@ func TestLocalMode(t *testing.T) {
 	}
 	for _, tc := range relinked {
 		t.Run("relinked/"+tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Error("no")
+			}
+		})
+	}
+}
+
+// TestServerGaps is a device that lost state.json after a re-link: the
+// server holds batches 1 to 3 and 6, and recorded 4 and 5 as a local-only
+// gap. The gap comes back from the state answer, so the minutes of
+// batches 4 and 5 never go, and they don't hold up the minutes after them
+// by waiting for receipts that can't come.
+func TestServerGaps(t *testing.T) {
+	minutes := make([]int, 90)
+	for i := range minutes {
+		minutes[i] = i
+	}
+	r := newRig(t, 6, minutes, 80*time.Minute) // the re-link, between batches 5 and 6
+	held := []ledger.Row{r.rows[0], r.rows[1], r.rows[2], r.rows[5]}
+	hold(t, r.f, held, 1)
+	for _, row := range held {
+		fr := r.f.rows[row.B]
+		sig, _ := hex.DecodeString(fr.sig)
+		rc := pkgledger.Receipt{ReceivedAt: fr.receivedAt}
+		copy(rc.Signature[:], sig)
+		if err := r.w.StoreReceipt(row.B, rc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.f.gaps = [][2]uint64{{4, 5}}
+	r.run(t, "every minute but those of batches 4 and 5", func(f *fakeIngest) bool { return len(f.buckets) == 60 })
+	var st saved
+	if _, err := r.st.Get(StateKey, &st); err != nil {
+		t.Fatal(err)
+	}
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	in := func(from, to int) int {
+		n := 0
+		for ms := range r.f.buckets {
+			if m := int((ms - r.start.UnixMilli()) / 60_000); m >= from && m <= to {
+				n++
+			}
+		}
+		return n
+	}
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"the server's gap is in the uploader's place again", slices.Contains(st.Gaps, gap{4, 5})},
+		{"no minute of the gap went", in(45, 74) == 0},
+		{"the minutes before and after it went", in(0, 44) == 45 && in(75, 89) == 15},
+		{"no batch root went", func() bool {
+			for _, b := range r.f.bodies {
+				if bytes.Contains(b, []byte(`"batches"`)) {
+					return false
+				}
+			}
+			return true
+		}()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
 				t.Error("no")
 			}

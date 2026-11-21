@@ -107,11 +107,24 @@ type Refusal struct {
 
 // State is GET /api/v1/ingest/state's answer (ingest-v1 3).
 type State struct {
-	Device     string     `json:"device"`
-	Req        uint64     `json:"req"`
-	Head       *Head      `json:"head"`
-	ChainStart *uint64    `json:"chain_start"`
-	ServerKey  *ServerKey `json:"server_key"`
+	Device     string  `json:"device"`
+	Req        uint64  `json:"req"`
+	Head       *Head   `json:"head"`
+	ChainStart *uint64 `json:"chain_start"`
+	// Relinked is set when the device signed in again after the server
+	// stored its head and hasn't stored a batch since, and Gaps are the
+	// local-only gaps the server recorded, oldest first: it never takes
+	// their roots (D-local-gap).
+	Relinked  bool       `json:"relinked"`
+	Gaps      []StateGap `json:"gaps"`
+	ServerKey *ServerKey `json:"server_key"`
+}
+
+// StateGap is one of the server's local-only gaps: the first and the last
+// batch it skipped.
+type StateGap struct {
+	First uint64 `json:"first"`
+	Last  uint64 `json:"last"`
 }
 
 // ServerKey is the key receipts are signed with now: its id, the first 16
