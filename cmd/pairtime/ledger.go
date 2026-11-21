@@ -96,19 +96,21 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 	if day == "" {
 		day = localToday()
 	}
-	start, err := time.ParseInLocation(time.DateOnly, day, viewZone())
-	if err != nil || start.Format(time.DateOnly) != day {
+	// The date is checked on its own: in a zone whose clocks jump over
+	// midnight, as Chile's do, the day's midnight doesn't exist.
+	date, err := time.Parse(time.DateOnly, day)
+	if err != nil || date.Format(time.DateOnly) != day {
 		fmt.Fprintf(stderr, "pairtime ledger show: --day wants a day such as 2026-11-24, got %q\n", day)
 		return 2
 	}
-	end := time.Date(start.Year(), start.Month(), start.Day()+1, 0, 0, 0, 0, start.Location())
+	start, end := dayStart(date, 0, viewZone()), dayStart(date, 1, viewZone())
 	dirs, err := home.Default()
 	if err != nil {
 		fmt.Fprintf(stderr, "pairtime ledger show: can't find pairtime's folders: %v\n", err)
 		return 1
 	}
 	out := bufio.NewWriter(stdout)
-	n, err := showRecords(out, dirs.Ledger(), start, end)
+	n, timeless, err := showRecords(out, dirs.Ledger(), start, end)
 	if ferr := out.Flush(); err == nil {
 		err = ferr
 	}
@@ -120,6 +122,13 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 	default:
 		fmt.Fprintf(stderr, "%d records on %s.\n", n, dayTitle(day))
 	}
+	switch timeless {
+	case 0:
+	case 1:
+		fmt.Fprintln(stderr, "1 record of a kind this pairtime doesn't know says no time, so it isn't on any day. A newer pairtime shows it.")
+	default:
+		fmt.Fprintf(stderr, "%d records of kinds this pairtime doesn't know say no time, so they aren't on any day. A newer pairtime shows them.\n", timeless)
+	}
 	if err != nil {
 		sayStoreFailure(stderr, err)
 		return 1
@@ -127,17 +136,38 @@ func runLedger(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// dayStart is the first instant of the local day days after date's, in
+// zone. Where the clocks jump over midnight, midnight doesn't exist, and
+// time.Date may give the hour before it, on the day before: the day then
+// starts when the zone that skipped midnight does.
+func dayStart(date time.Time, days int, zone *time.Location) time.Time {
+	y, m, d := date.Date()
+	t := time.Date(y, m, d+days, 0, 0, 0, 0, zone)
+	want := time.Date(y, m, d+days, 0, 0, 0, 0, time.UTC)
+	if ty, tm, td := t.Date(); ty != want.Year() || tm != want.Month() || td != want.Day() {
+		if _, next := t.ZoneBounds(); !next.IsZero() {
+			t = next
+		}
+	}
+	return t
+}
+
 // showRecords writes each record of the ledger in dir whose time is in
-// [start, end), one per line, and returns how many it wrote. A record is
-// written at its time or later, by a clock that may be off from the one
-// that gave its time by less than a day, so the segments of UTC days more
-// than a day before start's can't hold one and aren't read.
-func showRecords(w io.Writer, dir string, start, end time.Time) (int, error) {
+// [start, end), one per line, and returns how many it wrote, and how many
+// records of kinds this version doesn't know it passed over because their
+// bodies say no time (ledger-v1 4.2 leaves such bodies to the kind). A
+// record is written at its time or later, by a clock that may be off from
+// the one that gave its time by less than a day, so the segments of UTC
+// days more than a day before start's can't hold one and aren't read.
+func showRecords(w io.Writer, dir string, start, end time.Time) (n, timeless int, err error) {
 	from, to := start.UnixMilli(), end.UnixMilli()
 	first := start.Add(-24 * time.Hour).UTC().Format(time.DateOnly)
-	n := 0
-	err := agentledger.ReadRecords(dir, first, func(s agentledger.Stored) error {
+	err = agentledger.ReadRecords(dir, first, func(s agentledger.Stored) error {
 		t, err := recordTime(s.Record)
+		if err != nil && s.Record.Header.RType().Later() {
+			timeless++
+			return nil
+		}
 		if err != nil {
 			return fmt.Errorf("record %d: %w", s.Record.Header.Seq(), err)
 		}
@@ -152,7 +182,7 @@ func showRecords(w io.Writer, dir string, start, end time.Time) (int, error) {
 		_, err = w.Write(line)
 		return err
 	})
-	return n, err
+	return n, timeless, err
 }
 
 // recordTime is the time a record describes, in Unix ms: the t of its

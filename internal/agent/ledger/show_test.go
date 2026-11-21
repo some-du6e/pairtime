@@ -146,6 +146,25 @@ func TestReadRecords(t *testing.T) {
 			wantErr: ErrDamaged,
 		},
 		{
+			name: "records numbered with a gap under one seal are damage, and are left in no batch",
+			setup: func(t *testing.T, dir string, w *Writer, c *clock, rng *rand.Rand) {
+				writeAt(t, w, c, rng, testT)
+				seal(t, w, c, testT+1000)
+				w.Close()
+				seg := segPath(dir, "2026-11-19")
+				for _, seq := range []uint64{2, 4} {
+					var h ledger.Header
+					binary.BigEndian.PutUint64(h[:8], seq)
+					h[8] = 0x13
+					body := []byte(`{"n":"` + string(make64('0')) + `","e":{"t":1795089602000}}`)
+					appendTo(t, seg, appendFrame(nil, kindRecord, append(h[:], body...)))
+				}
+				appendTo(t, seg, appendFrame(nil, kindSeal, []byte(`{"b":2,"first_seq":2,"n":2}`)))
+			},
+			want:    []shown{{1, "2026-11-19", 1}, {2, "2026-11-19", 0}, {4, "2026-11-19", 0}},
+			wantErr: ErrDamaged,
+		},
+		{
 			name: "a record of a kind added after this version is read, with its rtype",
 			setup: func(t *testing.T, dir string, w *Writer, c *clock, rng *rand.Rand) {
 				writeAt(t, w, c, rng, testT)

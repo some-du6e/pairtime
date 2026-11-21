@@ -119,14 +119,22 @@ func ReadRecords(dir, from string, fn func(Stored) error) error {
 }
 
 // closes reports whether sp seals waiting, the records read since the
-// last seal. When fresh, the batch's first records may be in a segment
-// that wasn't read: waiting must then be its last ones.
+// last seal, numbered one after another to the batch's last. When fresh,
+// the batch's first records may be in a segment that wasn't read: waiting
+// must then be its last ones.
 func closes(sp sealPayload, waiting []Stored, fresh bool) bool {
 	n := uint64(len(waiting))
-	if !fresh || n == sp.N {
-		return n == sp.N && n > 0 && sp.FirstSeq == waiting[0].Record.Header.Seq()
+	switch {
+	case n > sp.N, !fresh && n != sp.N, n == 0 && !fresh:
+		return false
 	}
-	return n < sp.N && (n == 0 || waiting[0].Record.Header.Seq() == sp.FirstSeq+sp.N-n)
+	first := sp.FirstSeq + sp.N - n
+	for i, s := range waiting {
+		if s.Record.Header.Seq() != first+uint64(i) {
+			return false
+		}
+	}
+	return true
 }
 
 // storedRecord reads a record frame's payload as recordOf does, but takes

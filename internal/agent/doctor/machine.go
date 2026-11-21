@@ -203,6 +203,8 @@ func signingCheck(s Signing) Check {
 	}
 	c.Text = what + ", " + text.Printable(s.State)
 	switch s.Verdict {
+	case Unchecked:
+		c.Result = Skip
 	case Broken:
 		c.Result = Fail
 		c.Text += ", so it changed after it was signed. Download pairtime again and run pairtime install"

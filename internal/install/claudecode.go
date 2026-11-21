@@ -544,7 +544,12 @@ func ReadClaudeHooks(env Env) (ClaudeHooks, error) {
 				if !isPairtimeHook(it.Value) {
 					continue
 				}
-				held[ev.Key] = true
+				// A pairtime hook counts for its event only with the
+				// arguments install writes for it: one that lost its
+				// --event, or names another, records nothing there.
+				if slices.Equal(strs(it.Value.Get("args")), hookArgs(ev.Key)) {
+					held[ev.Key] = true
+				}
 				if exe := it.Value.Get("command").Text; !slices.Contains(h.Exes, exe) {
 					h.Exes = append(h.Exes, exe)
 				}

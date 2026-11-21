@@ -352,7 +352,10 @@ func runReport(dirs home.Dirs, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pairtime doctor: couldn't check the report for names and paths, so it isn't printed: %v\n", err)
 		return 1
 	}
-	fmt.Fprint(stdout, out)
+	if _, err := io.WriteString(stdout, out); err != nil {
+		fmt.Fprintf(stderr, "pairtime doctor: couldn't print the report: %v\n", err)
+		return 1
+	}
 	return 0
 }
 

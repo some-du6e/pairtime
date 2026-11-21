@@ -8,9 +8,11 @@ import (
 	binenc "encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -300,5 +302,112 @@ func TestLedgerShowUsage(t *testing.T) {
 				t.Errorf("%q printed %q on stdout, want nothing", tt.args, stdout)
 			}
 		})
+	}
+}
+
+// TestLedgerShowWhereMidnightIsSkipped shows the days around a jump of the
+// clocks over midnight: on 2026-09-06 Chile's go from 23:59 on the 5th to
+// 01:00, so that day has no midnight, and its first instant is 01:00.
+func TestLedgerShowWhereMidnightIsSkipped(t *testing.T) {
+	zone, err := time.LoadLocation("America/Santiago")
+	if err != nil {
+		t.Skipf("this system has no America/Santiago: %v", err)
+	}
+	if m := time.Date(2026, 9, 6, 0, 0, 0, 0, zone); m.Day() == 6 && m.Hour() == 0 {
+		t.Skip("this system's America/Santiago has a midnight on 2026-09-06")
+	}
+	r := newLedgerRig(t)
+	setZone(t, zone)
+	evening := r.presence(t, time.Date(2026, 9, 5, 22, 30, 0, 0, zone))
+	lastHour := r.presence(t, time.Date(2026, 9, 5, 23, 30, 0, 0, zone))
+	firstHour := r.presence(t, time.Date(2026, 9, 6, 1, 30, 0, 0, zone))
+	r.seal(t)
+	tests := []struct {
+		name     string
+		day      string
+		wantSeqs []uint64
+	}{
+		{"the day before the jump keeps its last hour, up to the jump", "2026-09-05", []uint64{evening, lastHour}},
+		{"the day with no midnight is a valid day, and starts at the jump", "2026-09-06", []uint64{firstHour}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, stdout, stderr := runCmd("ledger", "show", "--day", tt.day)
+			if code != 0 {
+				t.Fatalf("ledger show --day %s = %d, stderr %q", tt.day, code, stderr)
+			}
+			recs, _ := parseShown(t, stdout)
+			var seqs []uint64
+			for _, rec := range recs {
+				seqs = append(seqs, rec.Header.Seq())
+			}
+			if !slices.Equal(seqs, tt.wantSeqs) {
+				t.Errorf("ledger show --day %s printed records %v, want %v", tt.day, seqs, tt.wantSeqs)
+			}
+		})
+	}
+}
+
+// appendRecordFrame appends to the ledger's segment of day a record frame
+// the writer would never write: header h and body, framed as ledger-v1's
+// files are (internal/agent/ledger, doc.go).
+func appendRecordFrame(t *testing.T, dir, day string, h ledger.Header, body []byte) {
+	t.Helper()
+	payload := append(h[:], body...)
+	frame := []byte{'r'}
+	frame = binenc.BigEndian.AppendUint32(frame, uint32(len(payload)))
+	frame = append(frame, payload...)
+	frame = binenc.BigEndian.AppendUint32(frame, crc32.Checksum(frame, crc32.MakeTable(crc32.Castagnoli)))
+	f, err := os.OpenFile(filepath.Join(dir, day+".seg"), os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.Write(frame); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLedgerShowUnknownKinds(t *testing.T) {
+	r := newLedgerRig(t)
+	setZone(t, ledgerZone)
+	known := r.presence(t, at("2026-11-24", "10:00"))
+	r.seal(t)
+	if err := r.w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	nonce := `"` + strings.Repeat("0", 64) + `"`
+	later := func(seq uint64) ledger.Header {
+		var h ledger.Header
+		binenc.BigEndian.PutUint64(h[:8], seq)
+		h[8] = 0x13 // a kind added after this version (ledger-v1 4.2)
+		return h
+	}
+	day := at("2026-11-24", "10:00").UTC().Format(time.DateOnly)
+	appendRecordFrame(t, r.h.dirs().Ledger(), day, later(known+1), []byte(`{"n":`+nonce+`,"e":{"t":`+strconv.FormatInt(at("2026-11-24", "11:00").UnixMilli(), 10)+`}}`))
+	appendRecordFrame(t, r.h.dirs().Ledger(), day, later(known+2), []byte(`{"n":`+nonce+`,"e":{"what":"no time"}}`))
+
+	code, stdout, stderr := runCmd("ledger", "show", "--day", "2026-11-24")
+	recs, batches := parseShown(t, stdout)
+	tests := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{"a record of a later kind with a time is shown on its day, with its rtype and no batch", func(t *testing.T) {
+			if len(recs) != 2 || recs[1].Header.Seq() != known+1 || recs[1].Header.RType() != 0x13 || batches[1] != 0 {
+				t.Errorf("ledger show printed %d records, batches %v:\n%s", len(recs), batches, stdout)
+			}
+			if !strings.Contains(stdout, `"type":"rtype 0x13"`) {
+				t.Errorf("the later kind's type isn't rtype 0x13:\n%s", stdout)
+			}
+		}},
+		{"a record of a later kind with no time is on no day, said on stderr, and stops nothing", func(t *testing.T) {
+			if code != 0 || !strings.Contains(stderr, "1 record of a kind this pairtime doesn't know says no time") {
+				t.Errorf("ledger show = %d, stderr %q", code, stderr)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, tt.check)
 	}
 }

@@ -154,6 +154,11 @@ func TestChecks(t *testing.T) {
 			edit: func(f *Facts) {
 				f.Signing.Verdict, f.Signing.State = Untrusted, "signed, but Windows doesn't trust the signature"
 			}, check: "signing", want: Warn},
+		{name: "a signature doctor couldn't check is skipped, never ok",
+			edit: func(f *Facts) {
+				f.Signing.Verdict, f.Signing.State = Unchecked, "its signature couldn't be checked: it isn't a 64-bit Mach-O binary"
+			}, check: "signing", want: Skip,
+			wantHas: []string{"couldn't be checked"}},
 		{name: "a trusted signature is ok",
 			edit: func(f *Facts) {
 				f.Signing.Verdict, f.Signing.State = Trusted, "signed, and Windows trusts the signature"

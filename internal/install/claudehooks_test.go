@@ -111,6 +111,17 @@ func TestReadClaudeHooks(t *testing.T) {
 			wantExes:    []string{exe, "/opt/pairtime"},
 		},
 		{
+			name: "a pairtime hook that lost its --event records nothing, so its event is missing though its binary is named",
+			write: func(t *testing.T, env Env) {
+				b := []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"` + exe + `","args":["hook","--harness","claude_code","--event","SessionStart"]}]}],` +
+					`"UserPromptSubmit":[{"hooks":[{"type":"command","command":"` + exe + `","args":["hook","--harness","claude_code"]}]}]}}`)
+				writeSettings(t, env, b)
+			},
+			wantEvents:  []string{"SessionStart"},
+			wantMissing: all[1:],
+			wantExes:    []string{exe},
+		},
+		{
 			name:    "a file that isn't JSON is an error that names it",
 			write:   func(t *testing.T, env Env) { writeSettings(t, env, []byte(`{"hooks": `)) },
 			wantErr: "settings.json isn't valid JSON",
