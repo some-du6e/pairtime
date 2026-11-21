@@ -103,15 +103,17 @@ type Options struct {
 	// computer upload right now (DESIGN 4.2). Each seal asks it as it
 	// begins, before it takes the lock records take, so a slow read holds
 	// up no record, and it must never call the Writer. The seal frame
-	// records the batch's mode: online only when Online says so and no
-	// record in the batch came while the mode NoteMode last noted was
-	// local-only. So a batch's mode is on disk with the seal, in the same
-	// flush, before Sealed hears of it, and no crash can lose it. Every
-	// seal frame the writer writes records the mode, online or local-only;
-	// a batch whose seal frame records none, as an older pairtime version's
-	// doesn't, counts as sealed in local-only mode (Batch.Online,
-	// Row.NoMode). Nil means every batch is sealed online, but for
-	// NoteMode.
+	// records the batch's mode: online only when Online says so, no record
+	// in the batch came while the mode NoteMode last noted was local-only,
+	// and none is an event made before a noted switch back online that the
+	// writer got after it, while the batch after the switch is still due
+	// its mark (Batch.Back). So a batch's mode is on disk with the seal, in
+	// the same flush, before Sealed hears of it, and no crash can lose it.
+	// Every seal frame the writer writes records the mode, online or
+	// local-only; a batch whose seal frame records none, as an older
+	// pairtime version's doesn't, counts as sealed in local-only mode
+	// (Batch.Online, Row.NoMode). Nil means every batch is sealed online,
+	// but for NoteMode.
 	Online func() bool
 	// Problem gets a description of what went wrong when a seal that no
 	// caller waits for fails, and "" when one succeeds after that.
@@ -140,7 +142,8 @@ type Batch struct {
 	// after the note and, for an event, the event's own time is after it
 	// too: a git change the watcher held past the note, or a hook call
 	// parked behind its folder's first Track, made before it, may have
-	// come in local-only mode, and keeps its batch unmarked.
+	// come in local-only mode, so its batch is sealed local-only, and the
+	// mark waits for the next batch whose records all came after the note.
 	Back    bool
 	Records []ledger.Record
 }
@@ -372,8 +375,10 @@ func (w *Writer) Write(in Input) (uint64, error) {
 	if w.back > 0 && ev.T < w.backAt {
 		// Made before the switch back online was noted, as a git change the
 		// watcher held or a hook call parked behind its folder's first
-		// Track: it may have come in local-only mode, so its batch takes no
-		// mark (Batch.Back), and joins the run before it.
+		// Track: it may have come in local-only mode, so its batch is sealed
+		// local-only, and the mark waits for the next batch (Batch.Back).
+		// Both times are the wall clock's, so a step back while a record is
+		// held can hide it, as the git sink's mono assumes none falls there.
 		w.late = true
 	}
 	w.q.Observe(ev)
@@ -526,9 +531,9 @@ func (w *Writer) append(rec ledger.Record) error {
 // came after the note is marked as one (Batch.Back): the run of local-only
 // batches ends before it, so its root and the minutes after the switch can
 // go. An event made before the note that the writer gets after it, as a
-// git change the watcher held, keeps its batch unmarked, and the mark goes
-// on the next batch whose records all came after the note. A switch back
-// the watch misses, as to a symlinked config.toml's target, ends the
+// git change the watcher held, makes its batch local-only, and the mark
+// goes on the next batch whose records all came after the note. A switch
+// back the watch misses, as to a symlinked config.toml's target, ends the
 // stretch at the next seal that reads the file online, and marks no batch.
 func (w *Writer) NoteMode(online bool) {
 	w.mu.Lock()
@@ -735,9 +740,13 @@ func (w *Writer) seal() (Batch, bool, error) {
 		return Batch{}, false, err
 	}
 	at := w.now()
-	on := online && !w.taint
+	// A batch holding an event made before a noted switch back is
+	// local-only in its own right: the uploader takes it into the open run,
+	// or opens one at it when the switch-back seal's batch closed the run,
+	// and the next batch's mark closes that one before itself.
+	on := online && !w.taint && !w.late
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
-		SealedAt: at.UnixMilli(), Online: &on, Back: on && w.back > 0 && row.FirstSeq >= w.back && !w.late}
+		SealedAt: at.UnixMilli(), Online: &on, Back: on && w.back > 0 && row.FirstSeq >= w.back}
 	snap := w.snap
 	if row.B%questionRows == 0 {
 		// w.q has taken every record the batch holds and none after.

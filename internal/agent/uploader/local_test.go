@@ -1038,15 +1038,18 @@ func TestLoginMinute(t *testing.T) {
 	}
 }
 
-// TestHeldRecord is a record made in a re-link's stretch of local-only
-// mode that the writer gets only after the switch back online was noted:
-// a git change the watcher held past the note, which the git host seals at
-// once as a batch of its own, or a hook call parked behind its folder's
-// first Track, which lands in the first prompt's batch. Its event came
-// before the note, so its batch takes no mark (ledger.Batch.Back) and
-// joins the stretch's run: neither its root, which carries its count of
-// records, nor the harness it names reaches the server. The next batch
-// takes the mark, and goes.
+// TestHeldRecord is a record made in local-only mode that the writer gets
+// only after the switch back online was noted: a git change the watcher
+// held past the note, which the git host seals at once as a batch of its
+// own, or a hook call parked behind its folder's first Track, which lands
+// in the first prompt's batch. Its event came before the note, so its
+// batch is sealed local-only in its own right and takes no mark
+// (ledger.Batch.Back). After a re-link it joins the stretch's run. After a
+// first sign-in with a record pending at the login, whose switch-back seal
+// seals that record online and so closes the run, it opens a run of its
+// own. Either way neither its root, which carries its count of records,
+// nor the harness it names reaches the server, and the next batch takes
+// the mark and goes.
 func TestHeldRecord(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1057,32 +1060,54 @@ func TestHeldRecord(t *testing.T) {
 		// does, before the first prompt's batch; otherwise it waits for that
 		// batch.
 		alone bool
+		// firstSignIn makes the switch back the first pairtime login, after
+		// batches sealed while config.toml said local, with a record pending
+		// at the login, rather than a re-link after a noted stretch with
+		// nothing pending.
+		firstSignIn bool
 	}{
-		{"a git change the watcher held past the note, sealed as a batch of its own", gitChange, true},
-		{"a hook call parked behind its folder's first Track, sealed with the first prompt", hookCall, false},
+		{"after a re-link, a git change the watcher held past the note, sealed as a batch of its own", gitChange, true, false},
+		{"after a re-link, a hook call parked behind its folder's first Track, sealed with the first prompt", hookCall, false, false},
+		{"after a first sign-in with a record pending at it, a git change the watcher held past the note, sealed as a batch of its own", gitChange, true, true},
+		{"after a first sign-in with a record pending at it, a hook call parked behind its folder's first Track, sealed with the first prompt", hookCall, false, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := newLiveRig(t, 30)
-			r.u.Start()
-			r.seal(t, 1)
-			r.seal(t, 2)
-			r.wait(t, "batches 1 and 2 and their minutes", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 })
-			// pairtime logout sets mode = "local", which the watch notes, and
-			// the stretch's first record seals at once as batch 3.
-			r.linked.Store(false)
-			r.local.Store(true)
-			r.w.NoteMode(false)
-			r.record(t, 3)
-			waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 3 })
-			made := r.sealedAt(3).Add(2 * time.Minute) // in the stretch
-			login := made.Add(time.Minute)
-			// pairtime login, which the watch notes 300 ms later, with nothing
-			// pending.
+			var made, login time.Time
+			if c.firstSignIn {
+				r.linked.Store(false)
+				r.local.Store(true) // a new install's mode
+				r.u.Start()
+				r.seal(t, 1)
+				r.seal(t, 2)
+				r.record(t, 3)                             // pending as the login finishes
+				made = r.sealedAt(3).Add(-2 * time.Minute) // before the login
+				login = r.sealedAt(3).Add(time.Minute)
+			} else {
+				r.u.Start()
+				r.seal(t, 1)
+				r.seal(t, 2)
+				r.wait(t, "batches 1 and 2 and their minutes", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 })
+				// pairtime logout sets mode = "local", which the watch notes, and
+				// the stretch's first record seals at once as batch 3.
+				r.linked.Store(false)
+				r.local.Store(true)
+				r.w.NoteMode(false)
+				r.record(t, 3)
+				waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 3 })
+				made = r.sealedAt(3).Add(2 * time.Minute) // in the stretch
+				login = made.Add(time.Minute)
+			}
+			// pairtime login, which the watch notes 300 ms later. After a
+			// first sign-in, the switch back seals the record pending then as
+			// batch 3, online, which closes the run before it; after the
+			// re-link nothing is pending.
 			r.link(login)
 			r.local.Store(false)
 			r.setClock(login.Add(300 * time.Millisecond))
 			r.w.NoteMode(true)
+			waitFor(t, "batch 3", func() bool { return r.w.Status().Batches == 3 })
 			// The held record reaches the writer 3 s after the note: batch 4,
 			// alone or with the first prompt's record.
 			r.setClock(login.Add(3300 * time.Millisecond))
@@ -1107,29 +1132,35 @@ func TestHeldRecord(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(rows) == 0 || rows[0].Back || !rows[0].Online || !rows[1].Back {
-				t.Fatalf("the held record's batch and the next are sealed %+v, want the held one online and unmarked, and the next marked", rows)
+			if len(rows) < 2 || rows[0].Online || rows[0].Back || !rows[1].Online || !rows[1].Back {
+				t.Fatalf("the held record's batch and the next are sealed %+v, want the held one local-only and unmarked, and the next online and marked", rows)
 			}
 			held := rows[0].Root.String()
 			r.u.Wake()
-			r.wait(t, fmt.Sprintf("batch %d", last), func(f *fakeIngest) bool { return f.head.b == last })
+			r.wait(t, fmt.Sprintf("batch %d", last), func(f *fakeIngest) bool { return f.head != nil && f.head.b == last })
 			r.drain()
 			r.f.mu.Lock()
 			defer r.f.mu.Unlock()
 			sent := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Contains(b, []byte(held)) })
 			named := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Contains(b, []byte(`"`+string(event.HarnessClaudeCode)+`"`)) })
-			checks := []struct {
+			type check struct {
 				name string
 				ok   bool
-			}{
-				{"the held record's batch joined the stretch's run, and its root and count of records never went", r.f.rows[4].b == 0 && !sent && slices.Contains(r.f.gaps, [2]uint64{3, 4})},
+			}
+			checks := []check{
+				{"the held record's batch never went, its root and count of records with it", r.f.rows[4].b == 0 && !sent},
 				{"the labels never named the harness its record names", !named},
 				{"the batch after it took the mark and went, and so did the rest", r.f.rows[5].b == 5 && r.f.head.b == last},
+			}
+			if c.firstSignIn {
+				checks = append(checks, check{"the server's chain starts at the batch that took the mark", r.f.start == 5})
+			} else {
+				checks = append(checks, check{"the server took the stretch's gap, the held record's batch in it", slices.Contains(r.f.gaps, [2]uint64{3, 4})})
 			}
 			for _, ch := range checks {
 				t.Run(ch.name, func(t *testing.T) {
 					if !ch.ok {
-						t.Errorf("no: the server holds head %d and gaps %v, after %d POSTs", r.f.head.b, r.f.gaps, r.f.posts)
+						t.Errorf("no: the server holds head %d from %d and gaps %v, after %d POSTs", r.f.head.b, r.f.start, r.f.gaps, r.f.posts)
 					}
 				})
 			}
