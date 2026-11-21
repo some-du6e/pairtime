@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -795,11 +797,160 @@ func TestRelink(t *testing.T) {
 		{"a batch after the gap isn't", saved{Gaps: []gap{{4, 5}}, Next: 7, From: 6}, 6, false},
 		{"a batch before the gap, of the link before it, isn't", saved{Gaps: []gap{{4, 5}}, Next: 7, From: 6}, 3, false},
 		{"before the first state read, the batches before From are", saved{From: 4}, 2, true},
+		{"after a state read, the batches between the server's head and From are", saved{Head: 7, Next: 5, From: 12}, 9, true},
+		{"but not those at or below the server's head", saved{Head: 7, Next: 5, From: 12}, 6, false},
 	}
 	for _, tc := range gaps {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.st.localOnly(tc.b); got != tc.want {
 				t.Errorf("localOnly(%d) = %v", tc.b, got)
+			}
+		})
+	}
+	t.Run("after a re-link the roots at or below the server's head with no receipt go again, over the link's gap, with the link's first root alone", func(t *testing.T) {
+		sealed, got := make([]float64, 13), make([]float64, 13)
+		for i := range sealed {
+			sealed[i], got[i] = float64(i+1), -1
+		}
+		for i := range 4 {
+			got[i] = float64(i + 1)
+		}
+		st := saved{Head: 7, Next: 5, From: 12, Linking: true, Gaps: []gap{{8, 11}}}
+		roots, more := rootsOf(planInput{rows: indexOf(t, sealed, got), st: st}, 100)
+		var bs []uint64
+		for _, r := range roots {
+			bs = append(bs, r.B)
+		}
+		if !slices.Equal(bs, []uint64{5, 6, 7, 12}) || !more {
+			t.Errorf("roots %v, more %v; want [5 6 7 12], true", bs, more)
+		}
+	})
+}
+
+// TestRelinkRecovery is a re-link after a request the server stored but
+// whose answer was lost: the server holds batches 1 to 3, the device the
+// receipt of batch 1 alone, batch 4 was sealed in local-only mode, and the
+// re-link was before batch 5. Batches 2 and 3 go again, and their
+// duplicates bring the receipts their minutes wait for; the chain goes on
+// from batch 5 over batch 4's gap.
+func TestRelinkRecovery(t *testing.T) {
+	minutes := make([]int, 75)
+	for i := range minutes {
+		minutes[i] = i
+	}
+	r := newRig(t, 5, minutes, 65*time.Minute) // the re-link, between batches 4 and 5
+	hold(t, r.f, r.rows[:3], 1)
+	fr := r.f.rows[1]
+	sig, _ := hex.DecodeString(fr.sig)
+	rc := pkgledger.Receipt{ReceivedAt: fr.receivedAt}
+	copy(rc.Signature[:], sig)
+	if err := r.w.StoreReceipt(1, rc); err != nil {
+		t.Fatal(err)
+	}
+	r.f.relinked = true
+	pub := r.f.key.Public().(ed25519.PublicKey)
+	if err := r.st.Put(StateKey, saved{
+		Chain: r.w.DeviceID(), Server: r.creds.Server, Device: r.w.DeviceID(), Req: 64, Next: 2, From: 1, ChainStart: 1, Head: 1,
+		LinkedAt:  r.start.Add(-time.Minute).UnixMilli(), // the first link, before batch 1
+		Gaps:      []gap{{4, 4}},                         // sealed after pairtime logout
+		ServerKey: &ServerKey{KeyID: r.f.keyID, PublicKey: hex.EncodeToString(pub)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	r.run(t, "every minute but batch 4's", func(f *fakeIngest) bool { return len(f.buckets) == 60 })
+	_, rows, err := ledger.ReadRows(r.dirs.Ledger(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	in := func(from, to int) int {
+		n := 0
+		for ms := range r.f.buckets {
+			if m := int((ms - r.start.UnixMilli()) / 60_000); m >= from && m <= to {
+				n++
+			}
+		}
+		return n
+	}
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"batches 2 and 3 got their receipts back from their duplicates", len(rows) == 5 && rows[1].Receipt != nil && rows[2].Receipt != nil},
+		{"the chain went on from batch 5, over batch 4's gap", r.f.rows[5].b == 5 && r.f.rows[4].b == 0 && slices.Contains(r.f.gaps, [2]uint64{4, 4})},
+		{"the minutes of batches 2 and 3 went", in(15, 44) == 30},
+		{"no minute of batch 4 went", in(45, 59) == 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Error("no")
+			}
+		})
+	}
+}
+
+// TestRelinkRestart is a restart after a re-link was seen and before its
+// first batch was stored, with that batch's root waiting for its retry:
+// Next is above the server's head by design, which says nothing of a
+// server that lost writes, so the request goes as it waited.
+func TestRelinkRestart(t *testing.T) {
+	minutes := make([]int, 90)
+	for i := range minutes {
+		minutes[i] = i
+	}
+	r := newRig(t, 6, minutes, 80*time.Minute) // the re-link, between batches 5 and 6
+	hold(t, r.f, r.rows[:3], 1)
+	for _, row := range r.rows[:3] {
+		fr := r.f.rows[row.B]
+		sig, _ := hex.DecodeString(fr.sig)
+		rc := pkgledger.Receipt{ReceivedAt: fr.receivedAt}
+		copy(rc.Signature[:], sig)
+		if err := r.w.StoreReceipt(row.B, rc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.f.relinked = true
+	row := r.rows[5]
+	js, err := encodeBody(Body{Batches: []Root{{B: row.B, N: row.N, Root: row.Root, Head: row.Head, Prev: row.Prev}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.dirs.Data, OutboxName), js, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(js)
+	pub := r.f.key.Public().(ed25519.PublicKey)
+	if err := r.st.Put(StateKey, saved{
+		Chain: r.w.DeviceID(), Server: r.creds.Server, Device: r.w.DeviceID(), Req: 64, Next: 6, From: 6, Linking: true, Head: 3, ChainStart: 1,
+		LinkedAt:  r.creds.LinkedAt.UnixMilli(), // the re-link, seen before the restart
+		Gaps:      []gap{{4, 5}},
+		ServerKey: &ServerKey{KeyID: r.f.keyID, PublicKey: hex.EncodeToString(pub)},
+		Outbox:    &outbox{Key: event.NewEventID(time.Now()), Hash: hex.EncodeToString(sum[:])},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	r.run(t, "batch 6", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 6 })
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"the request that waited went first, as it waited", len(r.f.bodies) > 0 && bytes.Equal(r.f.bodies[0], js)},
+		{"the chain went on from batch 6, over the gap of batches 4 and 5", slices.Contains(r.f.gaps, [2]uint64{4, 5})},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: the requests were %q", r.f.bodies)
 			}
 		})
 	}

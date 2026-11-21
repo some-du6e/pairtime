@@ -1055,15 +1055,34 @@ func (u *Uploader) sync(c Credentials) bool {
 	if st.ChainStart != nil {
 		u.st.ChainStart = *st.ChainStart
 	}
-	if held := u.st.Next; held > 1 && (st.Head == nil || st.Head.B+1 < held) {
+	head := uint64(0)
+	if st.Head != nil {
+		head = st.Head.B
+	}
+	// The server's own gaps go in too: a lost state.json forgets the
+	// gaps of earlier re-links, whose batches would otherwise wait for
+	// receipts that never come, and hold up the minutes after them.
+	for _, g := range st.Gaps {
+		u.st.addGap(g.First, g.Last)
+	}
+	if st.Head != nil && head >= u.st.From {
+		// The server holds a batch from where this link's chain goes on,
+		// as after a request whose answer was lost: no later batch skips.
+		u.st.Linking = false
+	}
+	// Until then From is worked out again at each state read, past the
+	// batches sealed in local-only mode since the link.
+	u.st.settle(u.rows.last())
+	if held := u.st.Next; held > max(head+1, u.st.From) {
 		// The server no longer holds batches it took, as after a restore
 		// that lost its last writes, and it may have lost the buckets that
 		// went with them: the days from an hour before its head's seal go
 		// again, and it answers the revisions it kept as duplicates. The
-		// first receipts stay (receipt).
+		// first receipts stay (receipt). A link's gap, which Next goes past
+		// by design, says nothing of the kind.
 		cutoff := int64(0)
-		if st.Head != nil && st.Head.B >= 1 && st.Head.B <= u.rows.last() {
-			cutoff = u.rows.times[st.Head.B-1].sealedMax - time.Hour.Milliseconds()
+		if head >= 1 && head <= u.rows.last() {
+			cutoff = u.rows.times[head-1].sealedMax - time.Hour.Milliseconds()
 		}
 		from := store.DayOf(cutoff)
 		maps.DeleteFunc(u.st.Marks, func(day string, _ store.Mark) bool { return day >= from })
@@ -1076,34 +1095,17 @@ func (u *Uploader) sync(c Credentials) bool {
 		}
 		u.log.Warn("the server's chain is behind what it took, so the minutes after its head go again", "head", st.Head, "next", held, "from", from)
 	}
-	// The server's own gaps go in too: a lost state.json forgets the
-	// gaps of earlier re-links, whose batches would otherwise wait for
-	// receipts that never come, and hold up the minutes after them.
-	for _, g := range st.Gaps {
-		u.st.addGap(g.First, g.Last)
-	}
-	if st.Head != nil && st.Head.B >= u.st.From {
-		// The server holds a batch from where this link's chain goes on,
-		// as after a request whose answer was lost: no later batch skips.
-		u.st.Linking = false
-	}
-	// Until then From is worked out again at each state read, past the
-	// batches sealed in local-only mode since the link.
-	u.st.settle(u.rows.last())
+	u.st.Head = head
 	// While the server holds no batch of the device, its chain starts at
 	// the first batch sealed after the sign-in (ingest-v1 5.3), and after a
 	// re-link it goes on from there (D-local-gap): the batches between are
 	// local-only mode's.
-	base := uint64(1)
-	if st.Head != nil {
-		base = st.Head.B + 1
-	}
+	base := head + 1
 	if u.st.From > base {
 		u.st.addGap(base, u.st.From-1)
 	}
-	next := max(u.st.From, 1)
+	next := max(u.st.From, base)
 	if st.Head != nil {
-		next = max(st.Head.B+1, u.st.From)
 		switch b := u.forkAt(st.Head); {
 		case b != 0:
 			// The lower fork stays: no root goes after either.
@@ -1119,9 +1121,15 @@ func (u *Uploader) sync(c Credentials) bool {
 			u.setProblem("chain", "")
 		}
 		// A batch the server holds that the device has no receipt for
-		// goes again, and its duplicate brings the receipt back. Batches
-		// the server said it no longer holds (Gone) are skipped.
-		for b := max(u.st.ChainStart, u.st.Gone+1, u.st.From, 1); b <= st.Head.B && b <= u.rows.last(); b++ {
+		// goes again, and its duplicate brings the receipt back, below
+		// From too, as after a re-link that dropped a request whose answer
+		// was lost: a duplicate stores nothing, so the server still takes
+		// the link's gap after it. Batches the server said it no longer
+		// holds (Gone), and those in a local-only gap, are passed over.
+		for b := max(u.st.ChainStart, u.st.Gone+1, 1); b <= head && b <= u.rows.last(); b++ {
+			if u.st.localOnly(b) {
+				continue
+			}
 			if _, ok := u.rows.receivedAt(b); !ok {
 				next = b
 				break
@@ -1410,14 +1418,14 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 	u.backoff.ok()
 	more := false
 	resync, took, refetched := false, false, false
-	next := max(u.st.Next, 1)
+	went := map[uint64]bool{}
 	for i, res := range resp.Batches {
 		root := p.body.Batches[i]
-		passed := false
 		switch res.Code {
 		case codeAccepted, codeDuplicate:
 			u.receipt(c, root, res.Receipt, &refetched)
-			passed, took = true, true
+			went[root.B], took = true, true
+			u.st.Head = max(u.st.Head, root.B)
 			if root.B >= u.st.From {
 				u.st.Linking = false // the link's first batch is stored
 			}
@@ -1425,7 +1433,7 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 			// The server holds no row for it any more: no receipt comes
 			// for it, so no state read sends it again.
 			u.st.Gone = max(u.st.Gone, root.B)
-			passed, resync = true, true
+			went[root.B], resync = true, true
 		case codePrevMismatch, codeChainGap:
 			resync = true
 		default:
@@ -1435,9 +1443,12 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 				u.st.Fork = root.B
 			}
 		}
-		if passed && root.B == next {
-			next = root.B + 1
-		}
+	}
+	// Next goes past the roots that went, and past the batches of a gap
+	// the chain skips at a link, which never go.
+	next := max(u.st.Next, 1)
+	for next <= u.rows.last() && (went[next] || (next < u.st.From && u.st.localOnly(next))) {
+		next++
 	}
 	u.st.Next = next
 	if u.st.Foreign > 0 && u.st.Next > u.st.Foreign {

@@ -94,6 +94,10 @@ type saved struct {
 	// sealed in local-only mode, until a batch is sealed online again and
 	// the run moves into Gaps (mode). 0 while the mode isn't local.
 	LocalFrom uint64 `json:"local_from,omitempty"`
+	// Head is the server's head, the newest batch of the chain it holds, as
+	// the last state read and the answers since say, 0 while it holds none
+	// or it isn't known yet.
+	Head uint64 `json:"head,omitempty"`
 	// ChainStart is the first batch of the device's witnessed chain on the
 	// server, 0 while the server holds none or it isn't known yet. Rows
 	// before it are never sent again: the server answers them
@@ -188,9 +192,11 @@ func (s *saved) addGap(a, b uint64) {
 }
 
 // localOnly reports whether batch b was sealed in local-only mode: in a
-// recorded gap, at or after LocalFrom while the mode is local, or before
-// From where the state read that records the gap hasn't run yet, as for
-// `pairtime privacy show` before an agent's first upload.
+// recorded gap, at or after LocalFrom while the mode is local, or between
+// the server's head and From, where the state read that records the gap
+// hasn't run yet, as for `pairtime privacy show` before an agent's first
+// upload. With no head known, Next stands for the batch after it, as in a
+// state.json from before Head was kept.
 func (s saved) localOnly(b uint64) bool {
 	if s.LocalFrom > 0 && b >= s.LocalFrom {
 		return true
@@ -200,7 +206,10 @@ func (s saved) localOnly(b uint64) bool {
 			return true
 		}
 	}
-	base := max(s.Next, 1)
+	base := s.Head + 1
+	if s.Head == 0 {
+		base = max(s.Next, 1)
+	}
 	return s.From > base && b >= base && b < s.From
 }
 

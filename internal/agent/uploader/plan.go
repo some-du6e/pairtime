@@ -148,27 +148,34 @@ func makePlan(in planInput) (plan, error) {
 }
 
 // rootsOf returns the batch roots that go next: up to n from st.Next on,
-// none after a fork, and none from the first batch sealed in local-only
+// none after a fork, passing over the batches of a gap the chain skips at
+// a link, below From, and none from the first batch sealed in local-only
 // mode since the chain's last link on, until the next link (localStop).
-// While the link's first batch isn't stored (Linking), a request carries
-// that one root alone, and the rest go once it is: in one request, a fork
-// refused at the batch after the server's head, followed by a higher root,
-// would be taken as a skip, and the fork stored as a local-only gap
-// (ingest-v1 5.3). more says whether a root that could go waits behind
-// them.
+// Roots at or below the server's head go again for the receipts the
+// device lacks. While the link's first batch isn't stored (Linking), a
+// request carries one root above the head alone, and the rest go once it
+// is: in one request, a fork refused at the batch after the server's head,
+// followed by a higher root, would be taken as a skip, and the fork stored
+// as a local-only gap (ingest-v1 5.3). more says whether a root that could
+// go waits behind them.
 func rootsOf(in planInput, n int) (roots []Root, more bool) {
 	if in.st.Fork != 0 {
 		return nil, false
 	}
-	if in.st.Linking {
-		n = 1
-	}
-	for _, r := range in.rows.rowsFrom(max(in.st.Next, in.st.From, 1), n+1) {
+	fresh := 0 // roots above the server's head
+	for _, r := range in.rows.rowsFrom(max(in.st.Next, 1), len(in.rows.queue)) {
 		if in.st.localOnly(r.B) {
+			if r.B < in.st.From {
+				continue
+			}
 			break
 		}
-		if len(roots) == n {
+		above := r.B > in.st.Head
+		if len(roots) == n || (above && in.st.Linking && fresh > 0) {
 			return roots, true
+		}
+		if above {
+			fresh++
 		}
 		roots = append(roots, Root{B: r.B, N: r.N, Root: r.Root, Head: r.Head, Prev: r.Prev})
 	}
