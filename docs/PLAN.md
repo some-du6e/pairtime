@@ -1231,7 +1231,7 @@ Exit check: `loadtest.yml` green; the red-team step green or every remaining cas
 - Depends on: WP-RL1, WP-IN2, WP-AD16.
 - Touches: `extension/vscode/`, `.github/workflows/{web,release}.yml`.
 - Build: DESIGN 5.11: an install channel and a status bar. Per-platform VSIX packages (`vsce package --target win32-x64` and the other targets of CP 4.2) carry the signed binary; the extension checks its bundled binary against the signed release manifest's `binary_sha256` before it runs it, since no install script checked that binary (DESIGN 5.9 step 1); first activation shows the consent screen and runs `pairtime install`; before it puts its bundled binary in place of an installed one, it runs the bundled binary's `version` with the same 60 s timeout and keeps the installed binary if that fails (docs/spec/update-manifest.md, Verifying step 8); the status-bar item reads the local `statusbar/today` endpoint; release publishes to the Marketplace and Open VSX. No change-shape events in v1.
-- CI checks: `web.yml` packages every target; each VSIX loads under `@vscode/test-electron` and finds its binary; a VSIX whose bundled binary exits non-zero leaves the installed binary in place; the status bar shows a fixture store's total.
+- CI checks: `web.yml` packages every target; each VSIX loads under `@vscode/test-electron` and finds its binary; a VSIX whose bundled binary doesn't match the signed manifest's `binary_sha256` never runs it; a VSIX whose bundled binary exits non-zero leaves the installed binary in place; the status bar shows a fixture store's total.
 - Oracle: VS Code's own extension host.
 - Human: Karim creates the Marketplace publisher and the Open VSX namespace and adds their tokens.
 

@@ -1,6 +1,6 @@
 # Erratum: the device keeps a record of its past uploads, which DESIGN 3.5 and 4.4 don't list
 
-Date 2026-11-21. Raised by the review of #131 (WP-AG5) in issue #150. Status: decided 2026-11-21 by the orchestrator for Karim (#150 ruling R6): the uploader keeps a bounded local log of each answered request, 90 days, with the body's SHA-256 and never the body. This erratum proposes its rows in DESIGN 3.5 and 4.4. Applied to DESIGN 3.5 and 4.4, and to docs/retention.json, on 2026-11-21 by #160. The Privacy page that lists the log stays a WP-UI1 follow-up.
+Date 2026-11-21. Raised by the review of #131 (WP-AG5) in issue #150. Status: decided 2026-11-21 by the orchestrator for Karim (#150 ruling R6): the uploader keeps a bounded local log of each answered request, 90 days, with the body's SHA-256 and never the body. This erratum proposes its rows in DESIGN 3.5 and 4.4. The Privacy page that lists the log stays a WP-UI1 follow-up. Applied to DESIGN 3.5 and 4.4, and to docs/retention.json, on 2026-11-21 by #160.
 
 ## Input
 

@@ -117,11 +117,13 @@ describe('Privacy', () => {
 			},
 		},
 		{
-			name: "the inbox's days are inbox.KeepDays in the Go source, so the words change with it",
+			name: "the inbox's days are inbox.KeepDays in the Go source, in its own row and in the transcripts entry pairtimed's notice shows too, so the words change with it",
 			check: (html) => {
 				const n = keepDays();
+				const later = n === 1 ? '1 day' : `${n} days`;
 				expect(inboxKeepDays).toBe(n);
-				expect(rows(html).at(-1)?.kept).toContain(`deletes it ${n === 1 ? '1 day' : `${n} days`} later`);
+				expect(rows(html).at(-1)?.kept).toContain(`deletes it ${later} later`);
+				expect(device.find((e) => e.id === 'device.transcripts')?.kept).toContain(`set aside and deleted ${later} later`);
 			},
 		},
 		{
