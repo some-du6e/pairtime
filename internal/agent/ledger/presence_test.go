@@ -47,13 +47,14 @@ func TestPresence(t *testing.T) {
 		}
 	})
 
-	t.Run("a writer attached before Close gets every record queued, even when presence's goroutine first runs after both", func(t *testing.T) {
+	t.Run("a writer attached before Close gets every record queued, even when presence's goroutine first runs during Close", func(t *testing.T) {
 		// On a busy machine, the goroutine NewPresence starts can first
-		// run after Attach and Close have both returned. Each round runs
-		// it that late, so its first select finds the writer and the stop
-		// both waiting. A select picks between ready cases at random, so
-		// unless run prefers the writer, each round loses its record half
-		// the time and all 16 pass once in 65,536 runs.
+		// run only after Attach has returned and Close has closed stop,
+		// while Close waits for it. Each round runs it that late, so its
+		// first select finds the writer and the stop both ready. A select
+		// picks between ready cases at random, so unless run prefers the
+		// writer, each round loses its record half the time and all 16
+		// pass once in 65,536 runs.
 		for round := range 16 {
 			dir := t.TempDir()
 			w := open(t, dir, newClock(testT))
@@ -102,12 +103,14 @@ func TestPresence(t *testing.T) {
 	})
 
 	t.Run("a seal on suspend waits for a batch that holds the suspend's record", func(t *testing.T) {
+		dir := t.TempDir()
+		sealed := make(chan Batch, 2)
+		w := open(t, dir, newClock(testT), func(o *Options) { o.Sealed = func(b Batch) { sealed <- b } })
 		// In a bubble, sealWait's timer can't fire while presence's
 		// goroutine writes and seals, so a slow disk can't end the wait.
+		// The writer and its directory stay outside, so that on Windows
+		// their file retries still sleep in real time.
 		synctest.Test(t, func(t *testing.T) {
-			dir := t.TempDir()
-			sealed := make(chan Batch, 2)
-			w := open(t, dir, newClock(testT), func(o *Options) { o.Sealed = func(b Batch) { sealed <- b } })
 			p := NewPresence(nil)
 			defer p.Close()
 			p.Attach(w)
