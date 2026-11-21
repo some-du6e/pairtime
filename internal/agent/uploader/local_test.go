@@ -8,6 +8,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -593,4 +595,72 @@ func TestServerGaps(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTakeSealed is what the loop takes of the batches Sealed queued while
+// a cycle ran: their modes with their rows, before anything is planned,
+// and the harnesses of the batches not sealed in local-only mode.
+func TestTakeSealed(t *testing.T) {
+	rtype, ok := pkgledger.RTypeOf(event.KindAgentTool)
+	if !ok {
+		t.Fatal("agent.tool has no record type")
+	}
+	// batch is batch b, with one record that names harness h at version v.
+	batch := func(t *testing.T, b uint64, h event.Harness, v string) ledger.Batch {
+		t.Helper()
+		hdr, err := pkgledger.NewHeader(b, rtype, "p_test", "s_test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := fmt.Sprintf(`{"e":{"harness":%q,"harness_version":%q}}`, h, v)
+		return ledger.Batch{
+			Row:      pkgledger.BatchRow{B: b, FirstSeq: b, N: 1},
+			SealedAt: day0.Add(time.Duration(b) * time.Minute),
+			Records:  []pkgledger.Record{{Header: hdr, Body: []byte(body)}},
+		}
+	}
+	// newUploader is an uploader whose place is as a cycle's load leaves
+	// it, linked before batch 1, with config.toml's mode as local says.
+	newUploader := func(t *testing.T, local *bool) *Uploader {
+		t.Helper()
+		dir := t.TempDir()
+		dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+		w, _ := smallChain(t, dirs, 1)
+		st, _, err := state.Open(dirs.StateFile())
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, err := New(Options{
+			Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st, Params: newestTable(),
+			LocalOnly: func() (bool, bool) { return *local, true },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		u.st, u.rows, u.loaded = saved{Chain: w.DeviceID(), From: 1}, &rowIndex{device: w.DeviceID()}, true
+		return u
+	}
+	t.Run("a batch sealed in local mode during a cycle has its mode in the place before it is planned", func(t *testing.T) {
+		local := true
+		u := newUploader(t, &local)
+		u.Sealed(batch(t, 1, event.HarnessCodex, "0.9.1"))
+		u.takeSealed()
+		if roots, _ := rootsOf(planInput{rows: u.rows, st: u.st}, 10); u.st.LocalFrom != 1 || len(roots) != 0 {
+			t.Errorf("local from %d, and the roots %v go", u.st.LocalFrom, roots)
+		}
+	})
+	t.Run("a harness named only in batches sealed in local-only mode stays out of the labels, and one named online goes", func(t *testing.T) {
+		local := true
+		u := newUploader(t, &local)
+		u.Sealed(batch(t, 1, event.HarnessDevin, "1.0.0"))
+		local = false
+		// Sealed online, but its records began in local mode: it ends the
+		// run, and is in it.
+		u.Sealed(batch(t, 2, event.HarnessCodex, "0.9.1"))
+		u.Sealed(batch(t, 3, event.HarnessClaudeCode, "2.1.327"))
+		u.takeSealed()
+		if want := map[event.Harness]string{event.HarnessClaudeCode: "2.1.327"}; !maps.Equal(u.st.Harnesses, want) {
+			t.Errorf("the labels' harnesses are %v, want %v", u.st.Harnesses, want)
+		}
+	})
 }

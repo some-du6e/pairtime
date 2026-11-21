@@ -228,7 +228,6 @@ type Uploader struct {
 	// lost is set when the queue was full and dropped batches, which the
 	// loop then reads from batches.seg.
 	lost    bool
-	seen    map[event.Harness]string
 	running bool
 	status  Status
 	// modeSeen is the mode Sealed last saw, and modes the changes it saw
@@ -263,11 +262,13 @@ type Uploader struct {
 	splitRoots, splitBuckets, splitOK int
 }
 
-// sealedRow is what the uploader takes of a sealed batch: its row and when
-// it was sealed, without its records.
+// sealedRow is what the uploader takes of a sealed batch: its row, when it
+// was sealed, and the harnesses its records named, each with the version
+// it last named, for the labels, without its records.
 type sealedRow struct {
-	row      pkgledger.BatchRow
-	sealedAt time.Time
+	row       pkgledger.BatchRow
+	sealedAt  time.Time
+	harnesses map[event.Harness]string
 }
 
 // sealedQueueMax bounds the sealed batches waiting for the loop, as while the
@@ -400,17 +401,9 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 	}
 	u.mu.Lock()
 	if len(u.sealed) < sealedQueueMax {
-		u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt})
+		u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt, harnesses: learned})
 	} else {
 		u.sealed, u.lost = nil, true
-	}
-	for h, v := range learned {
-		if u.seen == nil {
-			u.seen = map[event.Harness]string{}
-		}
-		if v != "" || u.seen[h] == "" {
-			u.seen[h] = v
-		}
 	}
 	changed := false
 	if m := modeOf(local); known && m != u.modeSeen {
@@ -870,14 +863,21 @@ func firstLinked(rows *rowIndex, linkedAt time.Time) uint64 {
 }
 
 // takeSealed adds the batches Sealed took to the rows, and the harnesses
-// their records named to the labels.
+// their records named to the labels. It takes the rows and the modes
+// Sealed recorded with them under one hold, and records the modes first,
+// so a batch's mode is in the place before its root or its minutes can be
+// planned, however late in a cycle it was sealed. The harnesses of a batch
+// sealed in local-only mode stay out of the labels, as everything it holds
+// stays on the device (DESIGN 4.2).
 func (u *Uploader) takeSealed() {
 	u.mu.Lock()
-	batches, lost := u.sealed, u.lost
-	u.sealed, u.lost = nil, false
-	seen := u.seen
-	u.seen = nil
+	batches, lost, changes := u.sealed, u.lost, u.modes
+	u.sealed, u.lost, u.modes = nil, false, nil
 	u.mu.Unlock()
+	changed := false
+	for _, c := range changes {
+		changed = u.st.mode(c.b, c.local) || changed
+	}
 	if lost {
 		if rows, err := loadRows(u.opts.LedgerDir, max(u.st.Next, 1)); err == nil {
 			u.st.prepare(rows)
@@ -902,18 +902,22 @@ func (u *Uploader) takeSealed() {
 			}
 		}
 	}
-	changed := false
-	for h, v := range seen {
-		old, known := u.st.Harnesses[h]
-		if v == "" && known {
-			continue // a record that names no version keeps the one known
+	for _, sb := range batches {
+		if u.st.localOnly(sb.row.B) {
+			continue
 		}
-		if !known || old != v {
-			if u.st.Harnesses == nil {
-				u.st.Harnesses = map[event.Harness]string{}
+		for h, v := range sb.harnesses {
+			old, known := u.st.Harnesses[h]
+			if v == "" && known {
+				continue // a record that names no version keeps the one known
 			}
-			u.st.Harnesses[h] = v
-			changed = true
+			if !known || old != v {
+				if u.st.Harnesses == nil {
+					u.st.Harnesses = map[event.Harness]string{}
+				}
+				u.st.Harnesses[h] = v
+				changed = true
+			}
 		}
 	}
 	if changed {
