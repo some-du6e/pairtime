@@ -1093,3 +1093,182 @@ func TestCommitsInAHookedSession(t *testing.T) {
 		})
 	}
 }
+
+// moved is call c as session sid made it in folder dir, renamed name, with
+// edit applied to its payload.
+func moved(t *testing.T, c adapters.Call, name, dir, sid string, edit func(map[string]any)) adapters.Call {
+	t.Helper()
+	var p map[string]any
+	if err := json.Unmarshal(c.Stdin, &p); err != nil {
+		t.Fatal(err)
+	}
+	p["cwd"], p["session_id"] = dir, sid
+	if edit != nil {
+		edit(p)
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Dir, c.Stdin = name, b
+	return c
+}
+
+// holdGit puts a git first on PATH that, run in folder dir, waits while
+// the file it returns is there, as git walking a big repo's history would,
+// and runs the real git otherwise. Removing the file lets it go on.
+func holdGit(t *testing.T, dir string) string {
+	t.Helper()
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git isn't installed")
+	}
+	bin := t.TempDir()
+	hold := filepath.Join(bin, "hold")
+	script := "#!/bin/sh\ncase \"$(pwd -P)\" in\n'" + dir + "' | '" + dir + "'/*)\n" +
+		"\twhile [ -e '" + hold + "' ]; do sleep 0.05; done\n\t;;\nesac\nexec '" + real + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hold, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(hold) })
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return hold
+}
+
+// TestFolderStillResolving checks D-park-unresolved in a real agent. While
+// the first resolve of one session's folder is held back, that session's
+// calls wait, a later one of them in a folder already known waits behind
+// them, and another session's calls go on, its agent's commit included,
+// which the watcher still takes for the agent's. Once the resolve ends, the
+// waiting calls make their records in order, each with its own folder's
+// project; at a stop before it ends, they make them without the held
+// folder's.
+func TestFolderStillResolving(t *testing.T) {
+	cases := []struct {
+		name    string
+		release bool // the held resolve ends before the agent stops
+	}{
+		{"once the held resolve ends, the waiting calls make their records with their folders' projects", true},
+		{"at a stop before it ends, the waiting calls make their records, without the held folder's project", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			capture := readCapture(t)
+			r := newHookReplay(t)
+			slow, quick := filepath.Join(r.home, "slow"), r.folder()
+			for _, dir := range []string{slow, quick} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				runGit(t, dir, "init", "-q")
+				if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				runGit(t, dir, "add", "README.md")
+				runGit(t, dir, "commit", "-q", "-m", "first")
+			}
+			hold := holdGit(t, slow)
+
+			const waiting = "aaaaaaaa-1111-4222-8333-444444444444" // the session that starts in the slow folder
+			// Each call is made as it is sent, so its monotonic reading,
+			// counted from base, never goes below the first's.
+			base := time.Now().UTC()
+			send := func(c adapters.Call) {
+				c.Arrived = time.Now().UTC()
+				r.send(t, event.HarnessClaudeCode, c, base)
+			}
+			a := startAgent(t, r.options([]keys.Store{}))
+			send(moved(t, capture[0], "f00021", slow, waiting, nil))
+			send(moved(t, capture[1], "f00022", quick, waiting, nil))
+			send(moved(t, capture[0], "f00023", quick, captureSession, nil))
+			waitStatus(t, a, func(s statusReply) bool {
+				return s.Adapters.Git.Watched == 1 && s.Adapters.Harnesses[event.HarnessClaudeCode].Calls == 1
+			})
+			// The other session's agent commits in its folder, and its
+			// PostToolUse comes as the command ends.
+			if err := os.WriteFile(filepath.Join(quick, "b.txt"), []byte("b\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			runGit(t, quick, "add", "b.txt")
+			runGit(t, quick, "commit", "-q", "-m", "by the agent")
+			agentSHA := runGit(t, quick, "rev-parse", "HEAD")
+			send(moved(t, capture[2], "f00024", quick, captureSession, func(p map[string]any) {
+				input, _ := p["tool_input"].(map[string]any)
+				input["command"] = `git commit -q -m "by the agent"`
+				p["tool_use_id"], p["duration_ms"] = "toolu_test_commit", 4000
+			}))
+			during := waitStatus(t, a, func(s statusReply) bool {
+				return s.Adapters.Git.Changes == 1 && s.Adapters.Harnesses[event.HarnessClaudeCode].Calls == 2
+			})
+			if c.release {
+				os.Remove(hold)
+				waitParsed(t, a, 4)
+			}
+			a.cancel()
+			if err := a.waitExit(t); err != nil {
+				t.Fatal(err)
+			}
+			os.Remove(hold)
+
+			_, secret := deviceKeys(t, r.dirs, []keys.Store{})
+			k := adapters.NewKeys(secret)
+			hooked := readLedger(t, r.dirs, event.SourceHook)
+			var mine, other []event.Event // the waiting session's records, and the other's
+			firstMine, firstOther := -1, -1
+			for i, rec := range hooked {
+				switch rec.ev.SessionKey {
+				case k.Session(waiting):
+					mine = append(mine, rec.ev)
+					if firstMine < 0 {
+						firstMine = i
+					}
+				case k.Session(captureSession):
+					other = append(other, rec.ev)
+					if firstOther < 0 {
+						firstOther = i
+					}
+				}
+			}
+			var change event.GitChange
+			if changes := readLedger(t, r.dirs, event.SourceGit); len(changes) == 1 {
+				if g, ok := changes[0].ev.Data.(*event.GitChange); ok {
+					change = *g
+				}
+			}
+			slowKey := ""
+			if c.release {
+				slowKey = projectKeyOf(t, r.dirs, []keys.Store{}, slow)
+			}
+			quickKey := projectKeyOf(t, r.dirs, []keys.Store{}, quick)
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"while the resolve was held, the session's two calls waited, the one in a known folder too, and the other session's went on",
+					during.Adapters.Waiting == 2},
+				{"the agent's commit in the other folder, made meanwhile, is the agent's", change.SHA == agentSHA && change.Actor == event.ActorAgent},
+				{"the other session's records carry its folder's project and come first in the ledger",
+					len(other) == 2 && other[0].ProjectKey == quickKey && other[1].ProjectKey == quickKey && firstOther < firstMine},
+				{"the waiting calls made their records in order, each with its own folder's project, none for a folder still resolving",
+					len(mine) == 2 && mine[0].Kind() == event.KindSessionStart && mine[0].ProjectKey == slowKey &&
+						mine[1].Kind() == event.KindPromptSubmit && mine[1].ProjectKey == quickKey},
+			}
+			if c.release {
+				checks = append(checks, struct {
+					name string
+					ok   bool
+				}{"the held folder's project is the one its repo gives", strings.HasPrefix(slowKey, "g") && slowKey != quickKey})
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: waiting %d, change %+v, mine %+v, other %+v, slow %q, quick %q", during.Adapters.Waiting, change, mine, other, slowKey, quickKey)
+					}
+				})
+			}
+		})
+	}
+}

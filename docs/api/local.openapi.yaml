@@ -309,8 +309,9 @@ components:
           type: integer
           minimum: 0
           description: >
-            Calls that wait for the device key and the ledger to open before
-            they are parsed, in memory and in held.jsonl.
+            Calls that wait to be parsed: for the device key and the ledger to
+            open, in memory and in held.jsonl, or for the git adapter to work
+            out their folder's project.
         dropped:
           type: integer
           minimum: 0

@@ -28,6 +28,34 @@ type call struct {
 	recs []adapters.Record
 }
 
+// Folder returns the folder a hook call ran in, the cwd its payload names,
+// which Parse resolves to a project, or "" for a call Parse resolves no
+// folder for (adapters.Placer). It reads the payload as Parse does and
+// keeps nothing.
+func (a *Adapter) Folder(raw adapters.RawRecord) string {
+	switch {
+	case raw.Source != adapters.SourceHook, raw.Incomplete,
+		raw.Arrival.Harness != "" && raw.Arrival.Harness != harness:
+		return ""
+	}
+	f, ok := decode(raw.Payload, &adapters.ParseError{})
+	if !ok {
+		return ""
+	}
+	name := raw.Event
+	if hen, ok := f.str("hook_event_name"); ok {
+		name = hen
+	}
+	if _, ok := own[name]; !ok {
+		return ""
+	}
+	if sid, _ := f.str("session_id"); sid == "" {
+		return ""
+	}
+	cwd, _ := f.str("cwd")
+	return cwd
+}
+
 // Parse turns one Claude Code hook call into records (the package doc
 // says which). The records carry no event_id, seq or device_id, which the
 // agent sets when it writes them.

@@ -56,6 +56,11 @@ const keyRetry = time.Minute
 // it are counted as lost.
 const maxQueued = 4096
 
+// maxParked bounds the calls that wait for their folder's project (park).
+// Past it the oldest goes on without waiting more, and so without the
+// project if its folder still has none.
+const maxParked = 4096
+
 // adapterHost runs the harness adapters inside the agent (WP-AG7; DESIGN
 // 3.3, 3.4). The hook sink hands it every hook call it stored (hooks.go),
 // and it does the rest on a goroutine of its own, off the hook's ack path:
@@ -67,6 +72,16 @@ const maxQueued = 4096
 // are still written (DESIGN 5.3). It also hosts the git adapter (git.go):
 // each hooked session's folder becomes a project, the watcher watches its
 // repo, and the session's project goes to focus (hookTies.setProject).
+//
+// A call whose folder's project is still being worked out waits, parked
+// in the order the calls came, until the git adapter's Track of the folder
+// ends, and the calls of other folders go on (admit; D-park-unresolved).
+// So no record goes without its project because a big repo's first
+// resolve was slow, and no call waits for the resolver inside Parse, under
+// the adapter's lock, while another session's git command needs the
+// watcher to hear of it within its hold (git.DefaultHold). A folder whose
+// Track gives up, and every folder at the agent's stop, gives its calls no
+// project.
 //
 // Nothing is parsed before the keystore has opened and the ledger writer
 // with it. An adapter keys session, turn, subagent and scheduled-prompt
@@ -133,6 +148,10 @@ type adapterHost struct {
 	// settled yet: the file isn't emptied under them.
 	unsettled int
 	retrying  bool // a goroutine derives the keys again (retryKeysLocked)
+	// parkedN counts the calls that wait for their folder's project
+	// (parked), and parkedLive those of them held.jsonl.pending keeps: the
+	// file isn't emptied under them either.
+	parkedN, parkedLive int
 
 	kick chan struct{}
 	stop chan struct{}
@@ -141,13 +160,25 @@ type adapterHost struct {
 
 	// The rest belong to the worker goroutine, and to close once the
 	// worker is gone.
-	ready    bool  // the adapters and the git host are made
-	replayed bool  // held.jsonl was read, and nothing has been held since
-	replayAt int64 // how far into the .replay file the calls are parsed
-	built    map[event.Harness]adapters.Adapter
-	ignored  bool // the call being parsed ran in a folder out of pairtime
-	memory   adaptersState
-	lastSave []byte // the adapters' memory as last saved
+	ready    bool // the adapters and the git host are made
+	replayed bool // held.jsonl was read, and nothing has been held since
+	// The .replay file's calls: replayAt is how far into it they are read,
+	// replayRead says they are read to its end, replayTaken counts them,
+	// and replayOut counts those still parked, before whose records the file
+	// can't go (endReplay). replayStuck says it couldn't be deleted, and
+	// stays for the next start.
+	replayAt                int64
+	replayRead, replayStuck bool
+	replayTaken, replayOut  int
+	built                   map[event.Harness]adapters.Adapter
+	ignored                 bool // the call being parsed ran in a folder out of pairtime
+	memory                  adaptersState
+	lastSave                []byte // the adapters' memory as last saved
+	// parked are the calls that wait for their folder's project, in the
+	// order they came, and parkedBy counts them by session, whose later
+	// calls wait behind them (park).
+	parked   []hostCall
+	parkedBy map[string]int
 
 	// git is the git adapter, which prepare makes; nil before, and when it
 	// couldn't start. The status reads it too.
@@ -188,8 +219,9 @@ type adaptersReply struct {
 	Harnesses map[event.Harness]harnessStats `json:"harnesses"`
 	// Other counts calls of a harness pairtime has no adapter for.
 	Other harnessStats `json:"other"`
-	// Waiting counts the calls taken in that wait for the keystore and
-	// the ledger, in memory and in held.jsonl.
+	// Waiting counts the calls taken in that wait to be parsed: for the
+	// keystore and the ledger, in memory and in held.jsonl, or for their
+	// folder's project (adapterHost.park).
 	Waiting int `json:"waiting"`
 	// Dropped counts calls lost because held.jsonl was full.
 	Dropped uint64 `json:"dropped,omitempty"`
@@ -217,14 +249,15 @@ func newAdapterHost(a *agent) *adapterHost {
 	key := make([]byte, 32)
 	rand.Read(key) // never fails: crypto/rand panics instead
 	return &adapterHost{
-		a:       a,
-		goos:    runtime.GOOS,
-		lineKey: key,
-		stats:   make(map[event.Harness]*harnessStats),
-		built:   make(map[event.Harness]adapters.Adapter),
-		kick:    make(chan struct{}, 1),
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
+		a:        a,
+		goos:     runtime.GOOS,
+		lineKey:  key,
+		stats:    make(map[event.Harness]*harnessStats),
+		built:    make(map[event.Harness]adapters.Adapter),
+		parkedBy: make(map[string]int),
+		kick:     make(chan struct{}, 1),
+		stop:     make(chan struct{}),
+		done:     make(chan struct{}),
 	}
 }
 
@@ -377,8 +410,9 @@ func (h *adapterHost) writePendingLocked(line []byte) error {
 }
 
 // donePending empties held.jsonl.pending once every call pend wrote to it
-// is parsed or held, which an empty queue and no call left to settle say
-// under the lock pend writes with: back to what an earlier run left in it,
+// is parsed or held, which an empty queue, no call left to settle and none
+// waiting for its folder's project say under the lock pend writes with:
+// back to what an earlier run left in it,
 // pendingBase, which is zero but for a recovery that failed. At the last
 // step it closes the file, and deletes it when nothing is left in it.
 func (h *adapterHost) donePending(last bool) {
@@ -387,7 +421,7 @@ func (h *adapterHost) donePending(last bool) {
 	if h.pending == nil {
 		return
 	}
-	idle := len(h.queue) == 0 && h.unsettled == 0
+	idle := len(h.queue) == 0 && h.unsettled == 0 && h.parkedLive == 0
 	if idle && h.pendingSize > h.pendingBase {
 		if err := h.pending.Truncate(h.pendingBase); err != nil {
 			h.a.log.Warn("couldn't empty held.jsonl.pending", "err", err)
@@ -525,9 +559,11 @@ func (h *adapterHost) finish() {
 }
 
 // step parses the calls taken since the last step, after the ones held
-// before them, once the adapters can run, and holds them until then. On
-// the last step, at the agent's stop, what can't be parsed is held for
-// the next run.
+// before them, once the adapters can run, and holds them until then. The
+// calls that wait for their folder's project go first, as their folders'
+// projects become known (release). On the last step, at the agent's stop,
+// nothing waits for a project any more, and what can't be parsed is held
+// for the next run.
 func (h *adapterHost) step(last bool) {
 	// The batch is taken after prepare, so calls that come while it works
 	// go with it.
@@ -545,19 +581,17 @@ func (h *adapterHost) step(last bool) {
 		h.donePending(false)
 		return
 	}
-	if !h.replayed || held > 0 {
-		if h.replayed = h.replayHeld(); !h.replayed {
+	h.release(last)
+	if !h.replayed || held > 0 || h.replayRead {
+		if h.replayed = h.replayHeld(last); !h.replayed {
 			// The calls held before these come first: these are held
 			// behind them, as while the agent has no keys.
 			h.keep(h.hold(batch))
-			h.donePending(false)
-			h.a.setProblem("adapters.replay", "the hook calls held while the ledger wasn't open can't be read yet, and the calls after them wait behind them; the agent's log says why")
-			return
+			batch = nil
 		}
-		h.a.setProblem("adapters.replay", "")
 	}
 	for _, d := range batch {
-		h.handle(d)
+		h.admit(d, false, last)
 	}
 	h.donePending(false)
 	if saveDue && !last {
@@ -739,9 +773,11 @@ func (h *adapterHost) adapter(name event.Harness) adapters.Adapter {
 }
 
 // project is the adapters' project resolver (adapters.Options.Project):
-// the git adapter's, which also starts watching the folder's repo. A
-// folder out of pairtime marks the call being parsed, whose records the
-// host then drops (DESIGN 8.8). Only the worker calls it, from Parse.
+// the answer the git adapter's last Track of the folder gave, which also
+// started watching its repo, and which admit waited for. It never waits
+// itself. A folder out of pairtime marks the call being parsed, whose
+// records the host then drops (DESIGN 8.8). Only the worker calls it, from
+// Parse.
 func (h *adapterHost) project(dir string) (adapters.Project, bool) {
 	g := h.git.Load()
 	if g == nil {
@@ -754,38 +790,166 @@ func (h *adapterHost) project(dir string) (adapters.Project, bool) {
 	return p, ok
 }
 
-// handle parses one stored call and writes its records.
-func (h *adapterHost) handle(d inbox.Delivery) {
+// hostCall is a stored hook call on its way to its adapter, as read made
+// it ready for Parse.
+type hostCall struct {
+	st  *harnessStats
+	ad  adapters.Adapter
+	raw adapters.RawRecord
+	// dir is the folder Parse resolves to a project (adapters.Placer), ""
+	// for none, and session the harness's own session id, which orders the
+	// session's calls. Both stay in memory.
+	dir, session string
+	// replay says the call came from the .replay file, which keeps it until
+	// it is parsed (endReplay), and live that held.jsonl.pending keeps it
+	// (donePending).
+	replay, live bool
+}
+
+// read makes a stored call ready for its adapter: the adapter of its
+// harness, the raw record HookRecord makes of it, and its folder and
+// session. A call it can't take that far is counted as done, a failure,
+// and read reports false.
+func (h *adapterHost) read(d inbox.Delivery) (hostCall, bool) {
 	b, err := hookpath.DecodeBody(d.Message)
 	name := event.Harness(b.Harness)
 	var ad adapters.Adapter
 	if err == nil {
 		ad = h.adapter(name)
 	}
-	st := h.statsOf(name, ad != nil)
-	// Counted once the call is done with, so a status that counts it
-	// finds its records in the ledger writer.
-	defer h.count(func() { st.Calls++ })
+	c := hostCall{st: h.statsOf(name, ad != nil), ad: ad}
 	switch {
 	case err != nil:
-		h.fail(st, "the call's body isn't a hook call's")
-		return
+		h.fail(c.st, "the call's body isn't a hook call's")
 	case ad == nil:
-		h.fail(st, "pairtime has no adapter for the call's harness")
+		h.fail(c.st, "pairtime has no adapter for the call's harness")
+	default:
+		if c.raw, err = adapters.HookRecord(ad, h.goos, d); err != nil {
+			h.fail(c.st, err.Error())
+			break
+		}
+		if p, ok := ad.(adapters.Placer); ok {
+			c.dir = p.Folder(c.raw)
+		}
+		c.session = hookpath.SessionID(b)
+		return c, true
+	}
+	h.count(func() { c.st.Calls++ })
+	return hostCall{}, false
+}
+
+// admit takes a stored call to its adapter (D-park-unresolved). It parses
+// the call at once, unless the project of the call's folder is still being
+// worked out (gitHost.known) or an earlier call of its session waits; the
+// call then waits too, parked behind them, until release parses it. So the
+// calls of other folders go on, and none is parsed without its project
+// because a resolve was slow. On the last step nothing waits. replay says
+// the call came from the .replay file.
+func (h *adapterHost) admit(d inbox.Delivery, replay, last bool) {
+	c, ok := h.read(d)
+	if !ok {
 		return
 	}
-	raw, err := adapters.HookRecord(ad, h.goos, d)
-	if err != nil {
-		h.fail(st, err.Error())
+	c.replay, c.live = replay, !replay
+	if !last && (c.session != "" && h.parkedBy[c.session] > 0 || h.waits(c.dir)) {
+		h.park(c)
 		return
 	}
+	h.parse(c)
+}
+
+// waits reports whether the calls of folder dir wait for its project:
+// never for no folder, or with no git adapter, which resolves none.
+func (h *adapterHost) waits(dir string) bool {
+	g := h.git.Load()
+	return dir != "" && g != nil && !g.known(dir)
+}
+
+// park puts c behind the calls that wait already. Past maxParked, the
+// oldest of those goes on first, without waiting more.
+func (h *adapterHost) park(c hostCall) {
+	if len(h.parked) >= maxParked {
+		first := h.parked[0]
+		h.parked[0] = hostCall{}
+		h.parked = h.parked[1:]
+		h.parse(first)
+		h.unparked(first)
+	}
+	h.parked = append(h.parked, c)
+	if c.session != "" {
+		h.parkedBy[c.session]++
+	}
+	if c.replay {
+		h.replayOut++
+	}
+	h.count(func() {
+		h.parkedN++
+		if c.live {
+			h.parkedLive++
+		}
+	})
+}
+
+// unparked counts c, which waited, as gone from the calls that wait.
+func (h *adapterHost) unparked(c hostCall) {
+	if c.session != "" {
+		if h.parkedBy[c.session]--; h.parkedBy[c.session] <= 0 {
+			delete(h.parkedBy, c.session)
+		}
+	}
+	if c.replay {
+		h.replayOut--
+	}
+	h.count(func() {
+		h.parkedN--
+		if c.live {
+			h.parkedLive--
+		}
+	})
+}
+
+// release parses the calls that wait and can go now, in the order they
+// came: each whose folder's project is known, unless an earlier call of
+// its session still waits. On the last step it parses every one, and a
+// folder still resolving then gives its calls no project, as one whose
+// resolve timed out does.
+func (h *adapterHost) release(last bool) {
+	if len(h.parked) == 0 {
+		return
+	}
+	held := make(map[string]bool)
+	var ready []hostCall
+	kept := h.parked[:0]
+	for _, c := range h.parked {
+		if !last && (c.session != "" && held[c.session] || h.waits(c.dir)) {
+			if c.session != "" {
+				held[c.session] = true
+			}
+			kept = append(kept, c)
+			continue
+		}
+		ready = append(ready, c)
+	}
+	clear(h.parked[len(kept):])
+	h.parked = kept
+	for _, c := range ready {
+		h.parse(c)
+		h.unparked(c)
+	}
+}
+
+// parse has c's adapter parse it, and writes its records.
+func (h *adapterHost) parse(c hostCall) {
+	// Counted once the call is done with, so a status that counts it finds
+	// its records in the ledger writer.
+	defer h.count(func() { c.st.Calls++ })
 	h.ignored = false
-	recs, err := ad.Parse(raw)
+	recs, err := c.ad.Parse(c.raw)
 	if err != nil && !errors.Is(err, adapters.ErrOtherHarness) {
-		h.fail(st, err.Error())
+		h.fail(c.st, err.Error())
 	}
 	if h.ignored {
-		h.count(func() { st.Ignored++ })
+		h.count(func() { c.st.Ignored++ })
 		// Its session's window shows no project any more (focus_project).
 		for _, r := range recs {
 			if k := r.Event.SessionKey; k != "" && k != event.NoSession && h.a.hooked.dropProject(k) {
@@ -795,7 +959,7 @@ func (h *adapterHost) handle(d inbox.Delivery) {
 		return
 	}
 	for _, r := range recs {
-		h.write(st, r)
+		h.write(c.st, r)
 	}
 }
 
@@ -878,7 +1042,7 @@ func clip(s string) string {
 func (h *adapterHost) status() adaptersReply {
 	h.mu.Lock()
 	r := adaptersReply{Harnesses: make(map[event.Harness]harnessStats, len(h.stats)), Other: h.other,
-		Waiting: len(h.queue) + h.held, Dropped: h.dropped}
+		Waiting: len(h.queue) + h.held + h.parkedN, Dropped: h.dropped}
 	for name, st := range h.stats {
 		r.Harnesses[name] = *st
 	}
@@ -1045,67 +1209,90 @@ func (h *adapterHost) dropHeld(n int, err error) {
 	h.a.setProblem("adapters.dropped", fmt.Sprintf("%d hook calls that waited for the ledger to open were lost: %v", dropped, err))
 }
 
-// replayHeld parses the calls held.jsonl holds, oldest first, then seals
-// their records and deletes the file, and reports whether it is done. It
-// renames the file first, so calls held meanwhile go to a new one, and a
-// .replay file a crash left goes before it. A crash during a replay
-// replays the file again at the next start, so its records that were
-// sealed by then come out twice, never none. A .replay file that is parsed
-// but can't be deleted stops the replay for the run: the calls held behind
-// it wait for the next start, and calls taken in meanwhile are parsed
-// before them.
-func (h *adapterHost) replayHeld() bool {
+// replayProblem is what doctor hears while the held calls can't be read.
+const replayProblem = "the hook calls held while the ledger wasn't open can't be read yet, and the calls after them wait behind them; the agent's log says why"
+
+// replayHeld takes the calls held.jsonl holds to their adapters, oldest
+// first, and reports whether it is done: whether no held call is left
+// unread, so that the calls taken in since can go behind them. It renames
+// the file first, so calls held meanwhile go to a new one, and a .replay
+// file a crash left goes before it. Each call it reads is parsed, or waits
+// for its folder's project like any other (admit), and the file is sealed
+// and deleted once each of its calls is parsed (endReplay). Until then,
+// what is held behind it waits too. A crash during a replay replays the
+// file again at the next start, so its records that were sealed by then
+// come out twice, never none. A .replay file that is parsed but can't be
+// deleted stops the replay for the run: the calls held behind it wait for
+// the next start, and calls taken in meanwhile are parsed before them.
+func (h *adapterHost) replayHeld(last bool) bool {
 	name := h.a.dirs.Held()
 	replay := name + ".replay"
 	for {
+		switch {
+		case h.replayStuck:
+			return true // parsed, and left for the next start
+		case h.replayRead && h.replayOut > 0:
+			// Its calls wait for their folders' projects, and what is held
+			// behind it waits for them.
+			_, err := os.Stat(name)
+			return errors.Is(err, fs.ErrNotExist)
+		case h.replayRead:
+			h.endReplay(replay)
+			continue
+		}
 		if _, err := os.Stat(replay); errors.Is(err, fs.ErrNotExist) {
 			if err := os.Rename(name, replay); err != nil {
 				if !errors.Is(err, fs.ErrNotExist) {
 					h.a.log.Warn("the held hook calls can't be read", "err", err)
+					h.a.setProblem("adapters.replay", replayProblem)
 					return false
 				}
+				h.a.setProblem("adapters.replay", "")
 				return true // nothing is held
 			}
 		}
-		read, gone := h.replayFile(replay)
-		switch {
-		case !read:
+		if !h.readReplay(replay, last) {
+			h.a.setProblem("adapters.replay", replayProblem)
 			return false // the file stays, and the next step tries again
-		case !gone:
-			return true // parsed, and left for the next start
 		}
+		h.a.setProblem("adapters.replay", "")
+		h.replayRead = true
 	}
 }
 
-// replayFile parses the held calls in name, seals their records and
-// deletes the file. It reports whether it read the whole file, and whether
-// the file is gone.
-func (h *adapterHost) replayFile(name string) (read, gone bool) {
+// readReplay reads the held calls in name, from where it got to, and
+// admits each, and reports whether it read the whole file. A read that
+// fails partway resumes after the last call it took, so none is taken
+// twice in a run.
+func (h *adapterHost) readReplay(name string, last bool) bool {
 	f, err := os.Open(name)
 	if err != nil {
 		h.a.log.Warn("the held hook calls can't be read", "err", err)
-		return false, false
+		return false
 	}
-	// A read that failed partway resumes after the last call it parsed,
-	// so none is parsed twice in a run.
+	defer f.Close()
 	if _, err := f.Seek(h.replayAt, io.SeekStart); err != nil {
 		h.a.log.Warn("the held hook calls can't be read", "err", err)
-		f.Close()
-		return false, false
+		return false
 	}
 	n, bad := 0, 0
+	defer func() {
+		h.replayTaken += n
+		h.count(func() { h.held = max(h.held-n-bad, 0) })
+		if n > 0 || bad > 0 {
+			h.a.log.Info("read the hook calls held while the ledger wasn't open", "calls", n, "bad_lines", bad)
+		}
+	}()
 	r := bufio.NewReader(f)
 	for {
 		line, err := r.ReadBytes('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
 			h.a.log.Warn("reading the held hook calls stopped early", "err", err)
-			f.Close()
-			h.count(func() { h.held = max(h.held-n-bad, 0) })
-			return false, false
+			return false
 		}
 		if len(bytes.TrimSpace(line)) > 0 {
 			if d, ok := h.readHeld(line); ok {
-				h.handle(d)
+				h.admit(d, true, last)
 				n++
 			} else {
 				bad++
@@ -1113,34 +1300,35 @@ func (h *adapterHost) replayFile(name string) (read, gone bool) {
 		}
 		h.replayAt += int64(len(line))
 		if err != nil {
-			break // EOF
+			return true // EOF
 		}
 	}
-	f.Close()
-	h.mu.Lock()
-	w := h.writer
-	h.held = max(h.held-n-bad, 0)
-	h.mu.Unlock()
-	if n > 0 {
-		// Their records are written; replaying the file again would write
-		// them twice, so it goes even when the seal fails, and the next
-		// seal takes them.
+}
+
+// endReplay seals the records of the calls read from the .replay file,
+// name, once each of them is parsed, and deletes the file. Its records are
+// written, and replaying the file again would write them twice, so it goes
+// even when the seal fails, and the next seal takes them. One that can't
+// be deleted stays for the next start (replayStuck): replayed again in
+// this run, it would write its records twice; left, it does at most once
+// more.
+func (h *adapterHost) endReplay(name string) {
+	if h.replayTaken > 0 {
+		h.mu.Lock()
+		w := h.writer
+		h.mu.Unlock()
 		if _, _, err := w.Seal(); err != nil {
 			h.a.log.Warn("couldn't seal the held hook calls' records", "err", err)
 		}
 	}
-	if n > 0 || bad > 0 {
-		h.a.log.Info("parsed the hook calls held while the ledger wasn't open", "calls", n, "bad_lines", bad)
-	}
+	h.replayRead, h.replayTaken = false, 0
 	if err := os.Remove(name); err != nil {
-		// Replayed again, it would write its records twice in this run;
-		// left for the next start, it does at most once more.
 		h.a.log.Warn("couldn't delete the held hook calls once replayed", "err", err)
 		h.a.setProblem("adapters.held", fmt.Sprintf("the hook calls held while the ledger wasn't open were parsed, but couldn't be deleted, so the next start parses them again: %v", err))
-		return true, false
+		h.replayStuck = true
+		return
 	}
 	h.replayAt = 0
-	return true, true
 }
 
 // countHeld counts the calls an earlier run left held, for the status.

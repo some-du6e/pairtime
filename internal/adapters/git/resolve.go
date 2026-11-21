@@ -381,6 +381,13 @@ func (r *Resolver) Ignored(dir string) bool {
 	return r.ignored(abs) || r.ignored(canonicalDir(abs))
 }
 
+// IgnoredLoc reports whether loc, a Location Resolve or Track gave, is out
+// of pairtime now: its folder is, or, for a linked worktree, its repo's
+// main worktree is (ignoredLoc). It runs no git, so a caller that keeps an
+// answer, as the agent keeps a session folder's, still keeps the folder out
+// from the moment a .pairtime-ignore appears, as Track does.
+func (r *Resolver) IgnoredLoc(loc Location) bool { return r.ignoredLoc(loc) }
+
 // ignored reports whether dir is out of pairtime.
 func (r *Resolver) ignored(dir string) bool {
 	return r.ex.Match(dir) || ignoreFileAbove(dir) != ""

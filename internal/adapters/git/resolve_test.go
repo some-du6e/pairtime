@@ -152,6 +152,28 @@ func TestResolve(t *testing.T) {
 			},
 		},
 		{
+			name: "IgnoredLoc keeps a linked worktree out from the moment its main folder gets a .pairtime-ignore, with no Resolve",
+			run: func(t *testing.T, g *gitEnv) {
+				r := g.initRepo()
+				r.commit("one", map[string]string{"a.txt": "a\n"})
+				wt := filepath.Join(t.TempDir(), "worktrees", "feature")
+				r.git("worktree", "add", "-q", wt, "-b", "feature")
+				res := g.resolver(ProjectMap{}, Excludes{})
+				loc, err := res.Resolve(ctx, wt)
+				if err != nil || !loc.Linked {
+					t.Fatalf("got %+v, %v; want a linked worktree", loc, err)
+				}
+				if res.IgnoredLoc(loc) {
+					t.Error("IgnoredLoc says the worktree is out before any .pairtime-ignore")
+				}
+				// Not committed, so the linked worktree has no copy.
+				r.write(map[string]string{IgnoreFile: ""})
+				if !res.IgnoredLoc(loc) {
+					t.Error("IgnoredLoc misses the main folder's .pairtime-ignore")
+				}
+			},
+		},
+		{
 			name: "a .pairtime-ignore added after a folder was resolved keeps it out from the next check",
 			run: func(t *testing.T, g *gitEnv) {
 				r := g.initRepo()

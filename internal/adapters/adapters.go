@@ -264,6 +264,17 @@ type Stateful interface {
 	LoadState(json.RawMessage) error
 }
 
+// Placer is an adapter that can say, before Parse, which folder a raw
+// record's call ran in: the working directory Parse would resolve to a
+// project (Options.Project), or "" when it would resolve none. The agent
+// holds a call back until its folder's project is known, rather than have
+// Parse wait for the resolver or go without the project, and the calls of
+// other folders go on meanwhile (D-park-unresolved). Folder reads the raw
+// record as Parse does and changes nothing.
+type Placer interface {
+	Folder(raw RawRecord) string
+}
+
 // Options are what an adapter needs from the agent to make records.
 type Options struct {
 	// Keys keys the harness's own ids: sessions, turns and subagents. An

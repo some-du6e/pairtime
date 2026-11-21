@@ -29,13 +29,13 @@ const (
 	gitwatchKey = "gitwatch"
 )
 
-// maxResting bounds the folders that rest at once (trackRest), and
-// maxResolving the resolves that go on past trackWait at once: each walks a
-// repo's whole history, and the folders of one repo, its worktrees say,
-// would each start one.
+// maxResolving bounds the Tracks that run at once: the first of a big
+// repo walks its whole history, and the folders of one repo, its worktrees
+// say, would each start one. The others wait in line (gitHost.known).
+// maxFolders bounds the folders the host keeps an answer for.
 const (
-	maxResting   = 256
 	maxResolving = 2
+	maxFolders   = 1024
 )
 
 // gitPollEvery is how often the watcher looks at the repos it watches
@@ -43,19 +43,23 @@ const (
 // (DESIGN 3.3; git.Watcher.Poll).
 const gitPollEvery = time.Minute
 
-// trackWait bounds how long a call waits for its folder to resolve to a
-// project. A folder resolves in a few git calls, well within it, and once
-// resolved its answer is cached. The first sight of a big repo can take
-// minutes, walking its whole history for the root commits; its calls then
-// go on without a project, and the walk goes on without them, for up to
-// trackLimit, so the session's later calls find its answer cached.
-// A folder whose resolve ran out of trackLimit isn't cached, and the
-// resolver would walk the history again for its next call; it sits out
-// trackRest first.
+// trackLimit bounds one Track of a session's folder. A folder resolves in
+// a few git calls, and its answer is cached, but the first sight of a big
+// repo can take minutes, walking its whole history for the root commits.
+// Its calls wait meanwhile, parked by the adapter host, and the calls of
+// other folders go on (D-park-unresolved). A folder whose Track runs out of
+// trackLimit gives up: its calls go on without a project, and it sits out
+// trackRest before it is tried again, since the resolver keeps no answer
+// for it and would walk the history again. trackWait is how long a Track
+// may run before a git command in its folder is left out of the watcher
+// (noteCommand), and trackFresh how old an answer gets before the folder's
+// next call has it looked at again, in the background, as often as the
+// resolver itself looks again.
 const (
-	trackWait  = 3 * time.Second
 	trackLimit = 5 * time.Minute
 	trackRest  = 10 * time.Minute
+	trackWait  = 3 * time.Second
+	trackFresh = git.DefaultRecheck
 )
 
 // gitHost is the git adapter in the agent (DESIGN 5.8; PLAN WP-AD5,
@@ -86,15 +90,35 @@ type gitHost struct {
 	writer  *ledger.Writer
 	changes uint64 // git.change records written
 	saved   []byte // the project map and cursors as last put in state.json
-	// tracked are the git directories of the worktrees sessions worked in
-	// this run, which the watcher reads, and slow the folders whose first
-	// resolve outlasted trackWait and goes on (project).
-	tracked map[string]bool
-	slow    map[string]bool
-	rest    map[string]time.Time // folders whose resolve timed out, until when they rest
-	running int                  // resolves going on, slow ones included
 	// logged are the watcher's own problems as last logged.
 	logged map[string]string
+
+	// fmu guards what the host knows of the session folders, apart from mu,
+	// so that looking up a call's folder never waits for a change's record
+	// to be written. tracked are the git directories of the worktrees
+	// sessions worked in this run, which the watcher reads; folders are the
+	// session folders of this run, by path; waiting are the folders whose
+	// Track waits for a slot, oldest first; running counts the Tracks going
+	// on.
+	fmu     sync.Mutex
+	tracked map[string]bool
+	folders map[string]*folder
+	waiting []string
+	running int
+}
+
+// folder is what the git host knows of one session folder in this run.
+type folder struct {
+	// known says a Track of it has ended, with loc and err: its project,
+	// git.ErrIgnored, a timeout (trackLimit) or another error.
+	known bool
+	loc   git.Location
+	err   error
+	at    time.Time // when the last Track ended
+	// queued says a Track of it waits for a slot, and inflight that one
+	// runs, since started.
+	queued, inflight bool
+	started          time.Time
 }
 
 // gitReply is the git adapter's part of GET /v1/status.
@@ -137,7 +161,7 @@ func newGitHost(a *agent, secret []byte, w *ledger.Writer) (*gitHost, error) {
 		return nil, err
 	}
 	g := &gitHost{a: a, res: res, writer: w, commits: &commitStore{dir: a.dirs.Commits()},
-		tracked: make(map[string]bool), slow: make(map[string]bool), rest: make(map[string]time.Time)}
+		tracked: make(map[string]bool), folders: make(map[string]*folder)}
 	g.commits.prune(time.Now())
 	g.w, err = git.NewWatcher(git.WatcherOptions{
 		Resolver: res,
@@ -158,89 +182,132 @@ func newGitHost(a *agent, secret []byte, w *ledger.Writer) (*gitHost, error) {
 	return g, nil
 }
 
-// tracked is what one Track gave.
-type tracked struct {
-	loc git.Location
-	err error
+// known reports whether the calls of dir, a session's working directory,
+// can be parsed now: whether a Track of it has ended in this run, so its
+// project, or that it has none, is known (project). When none has, it
+// starts one, or puts the folder in line for a slot, and reports false:
+// the call waits, parked by the adapter host, which track pokes once the
+// Track ends (D-park-unresolved). A folder whose answer is older than
+// trackFresh, or was an error other than a timeout or git.ErrIgnored, such
+// as a folder that was gone, gets a new Track in the background, and its
+// calls go on with the answer they have. One whose Track timed out rests
+// for trackRest first.
+func (g *gitHost) known(dir string) bool {
+	now := time.Now()
+	g.fmu.Lock()
+	defer g.fmu.Unlock()
+	f := g.folders[dir]
+	if f == nil {
+		if len(g.folders) >= maxFolders {
+			// Their next calls wait for a Track again, which the resolver's
+			// cache makes quick.
+			maps.DeleteFunc(g.folders, func(_ string, o *folder) bool { return o.known && !o.queued && !o.inflight })
+		}
+		f = &folder{}
+		g.folders[dir] = f
+	}
+	if !f.queued && !f.inflight && f.due(now) {
+		if g.running < maxResolving {
+			g.startLocked(dir, f, now)
+		} else {
+			f.queued = true
+			g.waiting = append(g.waiting, dir)
+		}
+	}
+	return f.known
 }
 
-// project resolves dir, a session's working directory, to its project and
-// starts watching its repo, once. It reports whether dir has one, and
-// whether it is out of pairtime (a .pairtime-ignore, DESIGN 8.8). A folder
-// that is gone has no project for this call, and the next call asks again.
-// One git can't answer for within trackWait has none yet either: its
-// resolve goes on, and until it ends the folder's calls don't wait again.
-// A call that goes without its project still learns, from a few stats,
-// whether its folder is out of pairtime (git.Resolver.Ignored).
-func (g *gitHost) project(dir string) (p adapters.Project, ok, ignored bool) {
-	g.mu.Lock()
-	wait := !g.slow[dir] && !time.Now().Before(g.rest[dir]) && g.running < maxResolving
-	if wait {
-		g.running++
-	}
-	g.mu.Unlock()
-	if !wait {
-		return adapters.Project{}, false, g.res.Ignored(dir)
-	}
-	done := make(chan tracked, 1)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), trackLimit)
-		defer cancel()
-		loc, err := g.w.Track(ctx, dir)
-		g.mu.Lock()
-		switch {
-		case err == nil && loc.GitDir != "" && !loc.Bare:
-			g.tracked[loc.GitDir] = true
-		case errors.Is(err, context.DeadlineExceeded):
-			if len(g.rest) >= maxResting {
-				clear(g.rest)
-			}
-			g.rest[dir] = time.Now().Add(trackRest)
-		}
-		g.mu.Unlock()
-		// Sent before slow is cleared: project then either takes the
-		// answer or marks the folder slow, and never leaves it marked.
-		done <- tracked{loc, err}
-		g.mu.Lock()
-		delete(g.slow, dir)
-		g.running--
-		g.mu.Unlock()
-	}()
-	t := time.NewTimer(trackWait)
-	defer t.Stop()
-	var r tracked
-	select {
-	case r = <-done:
-	case <-t.C:
-		g.mu.Lock()
-		select {
-		case r = <-done:
-			g.mu.Unlock()
-		default:
-			g.slow[dir] = true
-			g.mu.Unlock()
-			return adapters.Project{}, false, g.res.Ignored(dir)
-		}
-	}
+// due reports whether f wants a Track at now.
+func (f *folder) due(now time.Time) bool {
 	switch {
-	case errors.Is(r.err, git.ErrIgnored):
+	case !f.known:
+		return true
+	case errors.Is(f.err, context.DeadlineExceeded):
+		return !now.Before(f.at.Add(trackRest))
+	case f.err != nil && !errors.Is(f.err, git.ErrIgnored):
+		return true
+	}
+	return now.Sub(f.at) >= trackFresh
+}
+
+// resting reports whether f's last Track timed out less than trackRest
+// before now.
+func (f *folder) resting(now time.Time) bool {
+	return errors.Is(f.err, context.DeadlineExceeded) && now.Before(f.at.Add(trackRest))
+}
+
+// startLocked starts a Track of dir. g.fmu is held.
+func (g *gitHost) startLocked(dir string, f *folder, now time.Time) {
+	g.running++
+	f.queued, f.inflight, f.started = false, true, now
+	go g.track(dir, f)
+}
+
+// track runs one Track of dir, which also starts watching its repo, keeps
+// the answer, gives the slot to the next folder in line, and pokes the
+// adapter host, which then parses the calls that waited for the folder.
+func (g *gitHost) track(dir string, f *folder) {
+	ctx, cancel := context.WithTimeout(context.Background(), trackLimit)
+	loc, err := g.w.Track(ctx, dir)
+	cancel()
+	now := time.Now()
+	g.fmu.Lock()
+	f.known, f.loc, f.err, f.at, f.inflight = true, loc, err, now, false
+	if err == nil && loc.GitDir != "" && !loc.Bare {
+		g.tracked[loc.GitDir] = true
+	}
+	g.running--
+	for g.running < maxResolving && len(g.waiting) > 0 {
+		next := g.waiting[0]
+		g.waiting = g.waiting[1:]
+		if nf := g.folders[next]; nf != nil && nf.queued {
+			g.startLocked(next, nf, now)
+		}
+	}
+	g.fmu.Unlock()
+	g.a.adaptersHost().poke()
+}
+
+// project returns dir's project as the last Track of it found (known), and
+// whether dir is out of pairtime (a .pairtime-ignore, DESIGN 8.8). It never
+// waits: a call reaches Parse once its folder is known, or when the host
+// stops waiting, at its stop, and then has no project. Every call looks
+// for a .pairtime-ignore again, with a few stats, in its folder and above
+// it and, for a linked worktree, in its repo's main one, so one counts from
+// the moment it appears, as it does for Track (git.Resolver.Ignored,
+// IgnoredLoc).
+func (g *gitHost) project(dir string) (p adapters.Project, ok, ignored bool) {
+	g.fmu.Lock()
+	f := g.folders[dir]
+	known := f != nil && f.known
+	var loc git.Location
+	var err error
+	if known {
+		loc, err = f.loc, f.err
+	}
+	g.fmu.Unlock()
+	switch {
+	case errors.Is(err, git.ErrIgnored), g.res.Ignored(dir), known && err == nil && g.res.IgnoredLoc(loc):
 		return adapters.Project{}, false, true
-	case r.err != nil || r.loc.Project == "":
+	case !known || err != nil || loc.Project == "":
 		return adapters.Project{}, false, false
 	}
-	return adapters.Project{Key: r.loc.Project, Root: r.loc.Dir}, true, false
+	return adapters.Project{Key: loc.Project, Root: loc.Dir}, true, false
 }
 
 // noteCommand tells the watcher about the command an agent's bash call
 // ran, r's, with the call's span from its agent.tool, t: Claude Code's
 // PostToolUse arrives as the call ends, and its duration_ms gives the
-// start (git.AgentCommand). A command in a folder whose resolve goes on is
-// left out: the watcher would resolve the folder on its only loop, waiting
-// for that resolve, so its commit goes by its trailers alone.
+// start (git.AgentCommand). A command in a folder with no answer yet, one
+// whose Track has run past trackWait or one that rests after a timeout is
+// left out: the watcher resolves the folder on its only loop, which would
+// wait for that resolve, so its commit goes by its trailers alone.
 func (g *gitHost) noteCommand(r adapters.Record, t *event.AgentTool) {
-	g.mu.Lock()
-	busy := g.slow[r.Dir] || time.Now().Before(g.rest[r.Dir])
-	g.mu.Unlock()
+	now := time.Now()
+	g.fmu.Lock()
+	f := g.folders[r.Dir]
+	busy := f == nil || !f.known || f.inflight && now.Sub(f.started) > trackWait || f.resting(now)
+	g.fmu.Unlock()
 	if busy {
 		return
 	}
@@ -351,8 +418,10 @@ func gitProblem(kind string) string {
 func (g *gitHost) status() gitReply {
 	worktrees := g.w.State().Worktrees
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	r := gitReply{Changes: g.changes}
+	g.mu.Unlock()
+	g.fmu.Lock()
+	defer g.fmu.Unlock()
 	for dir := range g.tracked {
 		if st, ok := worktrees[dir]; ok && st.Cursor.Set {
 			r.Watched++
