@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -200,24 +199,6 @@ func TestLogoutWithoutKeystore(t *testing.T) {
 			}
 		})
 	}
-}
-
-// syncBuffer collects what a command writes from another goroutine.
-type syncBuffer struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (s *syncBuffer) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.Write(p)
-}
-
-func (s *syncBuffer) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.String()
 }
 
 // runLoginApproving runs `pairtime login --server <srv> --no-browser`,
