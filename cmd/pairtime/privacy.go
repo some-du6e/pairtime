@@ -103,6 +103,10 @@ func showUpload(stdout, stderr io.Writer, dirs home.Dirs, creds uploader.Credent
 		fmt.Fprintf(stderr, "pairtime privacy show: can't work out the next upload: %v\n", err)
 		return 1
 	}
+	if p.Fork > 0 {
+		fmt.Fprintf(stderr, uploadsForked, p.Fork)
+		return 0
+	}
 	if p.Stopped > 0 {
 		fmt.Fprint(stderr, uploadsStopped)
 	}
@@ -135,6 +139,14 @@ this computer, so nothing it recorded from then on goes. To upload again,
 run pairtime logout, then pairtime login; what it records after that goes
 as usual.
 
+`
+
+// uploadsForked is what privacy show says once nothing more goes under
+// this computer's device ID (uploader.Preview.Fork).
+const uploadsForked = `Uploads are stopped. The server's record of this computer's ledger differs
+from it at batch %d, as after a home folder restored from an old backup. This
+version of pairtime can't go on uploading under this computer's ID yet, so
+nothing more goes, and what pairtime records stays on this computer.
 `
 
 // describeUpload says in plain words what upload p holds and where it goes.

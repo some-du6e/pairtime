@@ -91,24 +91,22 @@ func TestResume(t *testing.T) {
 		check func(t *testing.T, f *fakeIngest, u *Uploader, dirs home.Dirs, problems func() string)
 	}{
 		{
-			name: "a server head the ledger disagrees with stops every batch root",
+			name: "a server head the ledger disagrees with stops every upload under the device's ID, and doctor hears why",
 			prep: func(t *testing.T, f *fakeIngest, rows []ledger.Row) {
 				forked := rows[0]
 				forked.Head[0] ^= 0xff
 				hold(t, f, []ledger.Row{forked}, 1)
 			},
-			until: func(f *fakeIngest, u *Uploader) bool { return u.Status().Fork != 0 && f.labels > 0 },
+			until: func(f *fakeIngest, u *Uploader) bool { return u.Status().Fork != 0 },
 			check: func(t *testing.T, f *fakeIngest, u *Uploader, _ home.Dirs, problems func() string) {
 				if fork := u.Status().Fork; fork != 1 {
 					t.Errorf("fork at %d", fork)
 				}
-				for _, b := range f.bodies {
-					if bytes.Contains(b, []byte(`"batches"`)) {
-						t.Errorf("a root went after the fork: %s", b)
-					}
+				if f.posts != 0 {
+					t.Errorf("%d uploads went after the fork: %q", f.posts, f.bodies)
 				}
-				if !strings.Contains(problems(), "batch 1") {
-					t.Errorf("doctor wasn't told: %q", problems())
+				if p := problems(); !strings.Contains(p, "batch 1") || !strings.Contains(p, "can't go on uploading under this computer's ID") {
+					t.Errorf("doctor wasn't told: %q", p)
 				}
 			},
 		},
@@ -735,7 +733,7 @@ func TestRestoredLedger(t *testing.T) {
 		r.f.head = &row
 		prev = head
 	}
-	r.run(t, "every minute", func(f *fakeIngest) bool { return len(f.buckets) == 3 })
+	r.run(t, "the fork", func(f *fakeIngest) bool { return r.u.Status().Fork != 0 })
 	r.f.mu.Lock()
 	defer r.f.mu.Unlock()
 	tests := []struct {
@@ -743,15 +741,7 @@ func TestRestoredLedger(t *testing.T) {
 		ok   bool
 	}{
 		{"the fork is at the device's next batch, which the server already holds", r.u.Status().Fork == 4},
-		{"no root went after the fork", func() bool {
-			for _, b := range r.f.bodies {
-				if bytes.Contains(b, []byte(`"batches"`)) {
-					return false
-				}
-			}
-			return true
-		}()},
-		{"the minutes still went, backfilled", r.f.witness[event.Backfilled] == 3},
+		{"nothing more went under the device's ID: no root, no minute and no labels (#150 R5)", r.f.posts == 0 && len(r.f.buckets) == 0 && r.f.labels == 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

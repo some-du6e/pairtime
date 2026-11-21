@@ -689,6 +689,14 @@ func (u *Uploader) cycle() bool {
 	if !u.synced && !u.sync(c) {
 		return false
 	}
+	if u.st.Fork != 0 {
+		// Nothing more goes under this device's ID and key, roots, minutes
+		// or labels, and what it records stays on this computer, until a
+		// new device ID, key and chain take over (WP-AG8; #150 R5).
+		u.takeSealed()
+		u.setProblem("chain", forkProblem(u.st.Fork))
+		return false
+	}
 	if !u.urgent.Swap(false) && !u.flush() {
 		return false // stopping
 	}
@@ -1137,10 +1145,21 @@ func (u *Uploader) sync(c Credentials) bool {
 	return true
 }
 
+// newDeviceProblem is what doctor hears once this computer can't upload
+// under its device ID any more, for the reason why: after a fork, or the
+// server's device_mismatch. Going on as a new device, with a new device ID,
+// K_dev and chain, is WP-AG8's (#150 R5).
+func newDeviceProblem(why string) string {
+	return why + "; this version of pairtime can't go on uploading under this computer's ID yet, so it uploads nothing more, and what it records stays on this computer"
+}
+
 // forkProblem is what doctor hears about a fork at batch b.
 func forkProblem(b uint64) string {
-	return fmt.Sprintf("the server's record of this computer's ledger differs from it at batch %d, so pairtime sends no more batch roots, and the minutes after it go up as backfilled; this is a bug, or the ledger was changed", b)
+	return newDeviceProblem(fmt.Sprintf("the server's record of this computer's ledger differs from it at batch %d, as after a home folder restored from an old backup, or a bug", b))
 }
+
+// mismatchProblem is what doctor hears after the server's device_mismatch.
+var mismatchProblem = newDeviceProblem("the server says this computer's device ID belongs to another account")
 
 // forkAt returns the batch of the server's head when the device's own row
 // of that batch has another H_b, and the device's next batch when it has
@@ -1301,11 +1320,12 @@ func (u *Uploader) refused(c Credentials, p plan, a answer) {
 	}
 	switch code {
 	case refusalMismatch:
-		// The device id belongs to another account: this computer signs in
-		// again as a new device, with a new device id and K_dev
-		// (D-device-account-binding).
+		// The device id belongs to another account: this computer goes on
+		// as a new device, with a new device id and K_dev
+		// (D-device-account-binding), which is WP-AG8's. Nothing more goes
+		// under this one.
 		u.blocked = c.Token
-		u.setProblem("server", "the server says this computer's device id belongs to another account, so pairtime uploads nothing until it signs in again as a new device")
+		u.setProblem("server", mismatchProblem)
 	case refusalTokenMissing, refusalTokenInvalid, refusalRevoked, refusalKeyMissing:
 		// Not this token again: signing in again gives a new one, and binds
 		// the device key with it (ingest-v1 2.6; D-key-at-grant).
@@ -1351,7 +1371,10 @@ func fromPairtimed(a answer) bool {
 func (u *Uploader) refusedState(c Credentials, a answer) {
 	code := a.refusal.Error
 	switch code {
-	case refusalTokenMissing, refusalTokenInvalid, refusalRevoked, refusalMismatch, refusalKeyMissing, refusalSignature:
+	case refusalMismatch:
+		u.blocked = c.Token
+		u.setProblem("server", mismatchProblem)
+	case refusalTokenMissing, refusalTokenInvalid, refusalRevoked, refusalKeyMissing, refusalSignature:
 		// None of them passes with the same sign-in: signing in again binds
 		// a new token and device key (ingest-v1 2.6).
 		u.blocked = c.Token

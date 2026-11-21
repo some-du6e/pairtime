@@ -32,6 +32,10 @@ type Preview struct {
 	// chain's last link: no batch root from it on goes until the next link,
 	// nor the minutes it holds. 0 for none.
 	Stopped uint64
+	// Fork is the batch the server's record of this computer's chain parts
+	// from its ledger at, after which nothing more goes under its device ID
+	// (#150 R5). 0 for none.
+	Fork uint64
 }
 
 // PreviewOptions say where an installation keeps its files, and what the
@@ -97,6 +101,10 @@ func Next(o PreviewOptions) (Preview, error) {
 		}
 	}
 	st.prepare(rows)
+	if st.Fork != 0 {
+		// As the agent does, nothing more goes after a fork.
+		return Preview{Fork: st.Fork}, nil
+	}
 	// As the agent's load does: the link first, then the request waiting
 	// for its retry, which a new link drops.
 	fresh := relinked(st, c)
