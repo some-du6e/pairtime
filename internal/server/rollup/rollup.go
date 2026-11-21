@@ -205,24 +205,39 @@ func remerge(ctx context.Context, tx writer.Tx, account string, before []device,
 	return addDaily(ctx, tx, account, delta)
 }
 
-// FromEvent turns a minute bucket as pkg/event holds it into a Bucket of
-// account's, with agentOnly as its agent_only (D-bucket-agent-only).
-// Ingest holds agent_only beside the bucket, as ingest.Revision's
-// AgentOnly, until pkg/event's MinuteBucket carries it (WP-EV3); the
-// caller passes whichever holds it.
+// ApplyEvent is Apply for ingest, which holds a revision as pkg/event's
+// MinuteBucket, agent_only included, and the account apart. prev is the
+// revision next replaces, or nil.
 //
-// Ingest's RollupFunc takes ingest.Revision, so serve.go wires the
-// rollups as
+// Once ingest's Revision is a MinuteBucket, which #127 plans now that
+// pkg/event's MinuteBucket has AgentOnly (WP-EV3), ingest's RollupFunc has
+// this signature, and serve.go wires the rollups as Rollup:
+// rollup.ApplyEvent. While a Revision still holds AgentOnly beside its
+// MinuteBucket, the adapter copies it into the bucket first:
 //
 //	func(ctx context.Context, tx writer.Tx, account string, prev *ingest.Revision, next ingest.Revision) error {
-//		var p *rollup.Bucket
+//		var p *event.MinuteBucket
 //		if prev != nil {
-//			b := rollup.FromEvent(account, prev.MinuteBucket, prev.AgentOnly)
+//			b := prev.MinuteBucket
+//			b.AgentOnly = prev.AgentOnly
 //			p = &b
 //		}
-//		return rollup.Apply(ctx, tx, p, rollup.FromEvent(account, next.MinuteBucket, next.AgentOnly))
+//		n := next.MinuteBucket
+//		n.AgentOnly = next.AgentOnly
+//		return rollup.ApplyEvent(ctx, tx, account, p, n)
 //	}
-func FromEvent(account string, m event.MinuteBucket, agentOnly map[string]float64) Bucket {
+func ApplyEvent(ctx context.Context, tx writer.Tx, account string, prev *event.MinuteBucket, next event.MinuteBucket) error {
+	var p *Bucket
+	if prev != nil {
+		b := FromEvent(account, *prev)
+		p = &b
+	}
+	return Apply(ctx, tx, p, FromEvent(account, next))
+}
+
+// FromEvent turns a minute bucket as pkg/event holds it, agent_only
+// included (D-bucket-agent-only), into a Bucket of account's.
+func FromEvent(account string, m event.MinuteBucket) Bucket {
 	b := Bucket{
 		Account:       account,
 		Device:        m.Device,
@@ -245,9 +260,9 @@ func FromEvent(account string, m event.MinuteBucket, agentOnly map[string]float6
 			b.Uncredited[string(r)] = s
 		}
 	}
-	if len(agentOnly) > 0 {
-		b.AgentOnly = make(map[string]float64, len(agentOnly))
-		for p, s := range agentOnly {
+	if len(m.AgentOnly) > 0 {
+		b.AgentOnly = make(map[string]float64, len(m.AgentOnly))
+		for p, s := range m.AgentOnly {
 			b.AgentOnly[p] = s
 		}
 	}

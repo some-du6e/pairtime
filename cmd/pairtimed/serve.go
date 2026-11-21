@@ -282,8 +282,8 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	site.RegisterDemo(public, visit, time.Now)
 	// The signed-in owner's dashboard, as a page and as JSON, from the
 	// rollups (WP-SV7). Ingest's bucket revisions reach them through
-	// rollup.Apply, each turned into a rollup.Bucket by rollup.FromEvent
-	// with its agent_only; the comment on FromEvent has the adapter.
+	// rollup.ApplyEvent, whose comment has the wiring for ingest's
+	// RollupFunc.
 	rollups := dashboard.Rollups{DB: db.Read}
 	owner := accountOf(signIn)
 	site.RegisterDashboard(public, visit, pages.Dashboard{

@@ -910,20 +910,50 @@ func TestFromEvent(t *testing.T) {
 	tests := []struct {
 		name      string
 		agentOnly map[string]float64
-		want      map[string]float64
 	}{
 		{name: "a pkg/event minute bucket keeps every field it carries, as a Bucket of the account's"},
-		{name: "the agent_only ingest holds beside the bucket becomes the Bucket's (D-bucket-agent-only)", agentOnly: map[string]float64{"p1": 4.5, "p2": 6}, want: map[string]float64{"p1": 4.5, "p2": 6}},
+		{name: "the bucket's agent_only becomes the Bucket's (D-bucket-agent-only)", agentOnly: map[string]float64{"p1": 4.5, "p2": 6}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w := want
-			w.AgentOnly = tt.want
-			if got := FromEvent("u1", m, tt.agentOnly); !reflect.DeepEqual(got, w) {
+			in, w := m, want
+			in.AgentOnly, w.AgentOnly = tt.agentOnly, tt.agentOnly
+			if got := FromEvent("u1", in); !reflect.DeepEqual(got, w) {
 				t.Errorf("FromEvent:\n got %+v\nwant %+v", got, w)
 			}
 		})
 	}
+}
+
+func TestApplyEvent(t *testing.T) {
+	t.Run("a pkg/event bucket's agent_only reaches the rollups, beside its credit", func(t *testing.T) {
+		db := newDB(t, store.SQLite, "u1")
+		ctx := context.Background()
+		tx, err := db.Write.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := event.MinuteBucket{
+			Minute:        time.Unix(base, 0).UTC(),
+			Device:        "d1",
+			Slots:         []event.BucketSlot{{Project: "p1", Credited: 15, Why: "P", Kind: "prompting", Ev: "A"}},
+			CreditedS:     15,
+			AgentRunningS: 40,
+			AgentOnly:     map[string]float64{"p2": 40},
+			State:         "final",
+		}
+		if err := ApplyEvent(ctx, tx, "u1", nil, m); err != nil {
+			tx.Rollback()
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		want := []Day{final("d1/p1", "2026-11-20", "prompting", 0, 15000), agent("d1/p2", "2026-11-20", 40000, 0)}
+		if got := rows(t, db, "u1"); !reflect.DeepEqual(got, want) {
+			t.Errorf("rollups_daily:\n got %+v\nwant %+v", got, want)
+		}
+	})
 }
 
 func TestLocalDay(t *testing.T) {
