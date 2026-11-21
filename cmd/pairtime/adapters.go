@@ -213,7 +213,7 @@ func adaptersTest(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "  hooks/%s: %v\n", c, r.Failures[c])
 		}
 		diffs := r.Diffs
-		if *showContent {
+		if *showContent && r.Err == nil {
 			diffs = adapters.DiffContent(r.Lines, lines, 20)
 		}
 		for _, d := range diffs {

@@ -500,6 +500,9 @@ type Result struct {
 	Run string
 	// Synthetic says the capture's PROVENANCE.md says synthetic: true.
 	Synthetic bool
+	// Pending says the run has no expected records yet and holds a
+	// PendingFile saying why, so Conform didn't replay it.
+	Pending bool
 	// Records is how many records the replay made, and Lines those records
 	// as an expected file writes them.
 	Records int
@@ -514,7 +517,9 @@ type Result struct {
 
 // OK reports whether the run replayed to its expected records with no
 // parse failure.
-func (r Result) OK() bool { return r.Err == nil && len(r.Failures) == 0 && len(r.Diffs) == 0 }
+func (r Result) OK() bool {
+	return r.Err == nil && !r.Pending && len(r.Failures) == 0 && len(r.Diffs) == 0
+}
 
 // CheckRun replays the calls of one captured run through a, walked, and
 // diffs the records it makes with want. run holds the run's files, and
@@ -547,19 +552,28 @@ func GOOS(dir string) string {
 }
 
 // ErrNoExpected is the Err of a captured run that an adapter's Fixtures
-// has no expected records for. Every captured payload maps to its expected
-// records (docs/PLAN.md, WP-AD2's CI checks), so a capture lands with them,
-// written with the adapter's oracle, such as Claude Code's gen_expected.py.
+// has no expected records for and that holds no PendingFile. Every
+// captured payload maps to its expected records (docs/PLAN.md, WP-AD2's CI
+// checks), so no capture passes unchecked.
 var ErrNoExpected = errors.New("adapters: the adapter has no expected records for this capture")
+
+// PendingFile is the file a captured run holds, saying why, while the
+// adapter has no expected records for it, such as because the adapter's
+// oracle can't class the run's parent chains yet. A capture lands in a PR
+// that may add captures alone (docs/PLAN.md, WP-AD1), so that PR adds this
+// file, and Conform reports the run as pending instead of failing it. The
+// file stops counting once the adapter's expected records exist, so the
+// PR that adds them can leave it for a fixtures PR to delete.
+const PendingFile = "pending.md"
 
 // Conform replays each captured run that the adapter's Fixtures has
 // expected records for against captures, which holds
 // testdata/fixtures/<harness>: <version>/<os>/PROVENANCE.md and
 // <version>/<os>/<run>/hooks. mk makes a fresh adapter for each run, so
 // what one run's sessions leave in its memory can't change another's. A
-// captured run with no expected records gets a Result too, whose Err is
-// ErrNoExpected, so that no capture passes unchecked. The Results are in
-// order of Run.
+// captured run with no expected records gets a Result too: Pending when it
+// holds a PendingFile, and else one whose Err is ErrNoExpected. The
+// Results are in order of Run.
 //
 // It returns an error when the adapter has no capture at all, or only
 // synthetic ones: an adapter can't ship with synthetic fixtures alone
@@ -617,7 +631,12 @@ func Conform(mk func() Adapter, captures fs.FS) ([]Result, error) {
 		if fi, err := fs.Stat(captures, h); have[run] || err != nil || !fi.IsDir() {
 			continue
 		}
-		results = append(results, Result{Run: run, Err: fmt.Errorf("%w: its fixtures have no %s/expected.jsonl", ErrNoExpected, run)})
+		r := Result{Run: run, Err: fmt.Errorf("%w: its fixtures have no %s/expected.jsonl, and the run holds no %s saying why they wait",
+			ErrNoExpected, run, PendingFile)}
+		if _, err := fs.Stat(captures, run+"/"+PendingFile); err == nil {
+			r = Result{Run: run, Pending: true}
+		}
+		results = append(results, r)
 	}
 	slices.SortStableFunc(results, func(a, b Result) int { return strings.Compare(a.Run, b.Run) })
 	if real == 0 {

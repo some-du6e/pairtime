@@ -92,7 +92,7 @@ func (a *Adapter) Parse(raw adapters.RawRecord) ([]adapters.Record, error) {
 		// Every call names the turn it is in, and a turn that took up a
 		// queued message names its own only in calls like this one, so a
 		// message queued while it runs is its agent.queue (E-cc-queued-turn).
-		c.s.note(c.pid)
+		c.s.note(c.pid, c.env.T)
 	}
 	switch name {
 	case EventSessionStart:
@@ -208,7 +208,7 @@ func (c *call) prompt() {
 	cron := c.s.matchesCron(text)
 	// Machine text from a background subagent, which no person typed.
 	notification := strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), taskNotification)
-	if c.pid != "" && c.s.startedTurn(c.pid) {
+	if c.pid != "" && c.s.namedBefore(c.pid, c.env.T) {
 		// A message typed while the agent works: Claude Code runs the hook
 		// as it queues the message, with the running turn's prompt_id, and
 		// the turn that takes the message up later has a prompt_id no hook
@@ -216,13 +216,15 @@ func (c *call) prompt() {
 		// prompt whose prompt_id an earlier call of the session carried is
 		// that turn's agent.queue, SM 2.3's Q anchor, and never a second
 		// prompt of the turn, which the scorer would take for another copy
-		// of the first (E-cc-queued-turn). Only a person's message is
-		// queued: Claude Code runs a scheduled prompt's or a task
-		// notification's hook as it takes it up, with a prompt_id of its
-		// own. A message queued in a turn that took up another before any
-		// call of that turn named its prompt_id is still a prompt.submit,
-		// until WP-AD3 learns the turn's key from the transcript's
-		// promptSource queued entry.
+		// of the first (E-cc-queued-turn). Earlier goes by the calls' own
+		// times, so a prompt that reaches the adapter through the spool
+		// after a later call of its turn still starts it. Only a person's
+		// message is queued: Claude Code runs a scheduled prompt's or a
+		// task notification's hook as it takes it up, with a prompt_id of
+		// its own. A message queued in a turn that took up another before
+		// any call of that turn named its prompt_id is still a
+		// prompt.submit, until WP-AD3 learns the turn's key from the
+		// transcript's promptSource queued entry.
 		if cron || notification {
 			c.perr.Problem("a scheduled prompt or a task notification came with a running turn's prompt_id, which Claude Code 2.1.327 doesn't send")
 			return
@@ -234,7 +236,7 @@ func (c *call) prompt() {
 	if id == "" {
 		id = c.s.newTurn()
 	}
-	c.s.start(id)
+	c.s.start(id, c.env.T)
 	p := &event.PromptSubmit{
 		TurnKey:            c.turnKey(id),
 		LenChars:           n,

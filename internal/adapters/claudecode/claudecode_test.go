@@ -116,6 +116,9 @@ func TestConformance(t *testing.T) {
 	}
 	for _, r := range results {
 		t.Run("every captured payload of "+r.Run+" maps to its expected records", func(t *testing.T) {
+			if r.Pending {
+				t.Skipf("%s has no expected records yet, and its %s says why", r.Run, adapters.PendingFile)
+			}
 			if r.Err != nil {
 				t.Fatal(r.Err)
 			}
@@ -216,9 +219,9 @@ func TestDeliveries(t *testing.T) {
 		}
 	})
 
-	// The Cursor desktop chains are hookpath's TestOf's: Cursor's desktop
-	// app runs hooks through PowerShell on Windows and through sh from its
-	// plugin helper on macOS (HS 4.1).
+	// The Windows and macOS chains of Cursor's desktop app are hookpath's
+	// TestOf's: it runs hooks through PowerShell on Windows and through sh
+	// from its plugin helper on macOS (HS 4.1).
 	none := platform.TTYNone
 	others := []struct {
 		name    string
