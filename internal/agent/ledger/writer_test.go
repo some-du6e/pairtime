@@ -495,7 +495,7 @@ func TestSealMode(t *testing.T) {
 		// seal's flush does, with batches.seg's rows of batches 2 and 3
 		// lost, which the next Open rebuilds from their seal frames. Online
 		// says local-only by then, so a rebuild that asked it would lose
-		// batch 3's mark.
+		// batch 3's online mode.
 		crash bool
 		want  []bool
 	}{
@@ -605,12 +605,14 @@ func TestNoModeRows(t *testing.T) {
 			t.Fatalf("no batch %d was sealed", len(got)+3)
 		}
 	}
-	if _, _, err := write(w, rng, "os.presence", testT+2000); err != nil {
+	// The records come after the new writer's clock, as presence's do: an
+	// event made before the switch back would keep its batch unmarked.
+	if _, _, err := write(w, rng, "os.presence", testT+61_000); err != nil {
 		t.Fatal(err)
 	}
 	w.NoteMode(true)
 	take()
-	if _, _, err := write(w, rng, "os.presence", testT+3000); err != nil {
+	if _, _, err := write(w, rng, "os.presence", testT+62_000); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := w.Seal(); err != nil {
@@ -683,9 +685,12 @@ func dropModes(t *testing.T, dir string) {
 func TestNoteMode(t *testing.T) {
 	// A step changes config.toml ("file-local", "file-online"), notes the
 	// mode as the config watch does ("local", "online"), writes a record
-	// ("write"), seals ("seal"), waits for the batch a seal of the writer's
-	// own sealed ("sealed"), gives one that shouldn't come time to
-	// ("pause"), opens the writer again after it closed ("reopen"), or
+	// ("write"), or one whose event came a minute before the writer's clock,
+	// as a git change the watcher held does ("write-old"), seals ("seal"),
+	// waits for the batch a seal of the writer's own sealed ("sealed"),
+	// gives one that shouldn't come time to ("pause"), holds every seal
+	// back until a step lets them go ("hold", "release"), opens the writer
+	// again after it closed ("reopen"), or
 	// after a crash that lost every row of batches.seg but the first, which
 	// Open rebuilds from the seal frames while config.toml says local
 	// ("crash"). A first step "no-online" opens the writer without
@@ -723,6 +728,12 @@ func TestNoteMode(t *testing.T) {
 			[]string{"file-local", "write", "seal", "write", "file-online", "online", "sealed", "write", "seal"}, []bool{false, true, true}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"a seal that reads config.toml local-only after a switch back marks no batch after it",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "file-local", "write", "seal", "file-online", "write", "seal"}, []bool{false, false, true}, []bool{false, false, false}, []int{1, 1, 1}},
+		{"an event made before the switch back that the writer gets after it, as a git change the watcher held, leaves its batch unmarked, and the next batch takes the mark",
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write-old", "seal", "write", "seal"}, []bool{false, true, true}, []bool{false, false, true}, []int{1, 1, 1}},
+		{"an event made before the switch back, pending with records that came after it, keeps their batch unmarked too",
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "pause", "write", "write-old", "seal", "write", "seal"}, []bool{false, true, true}, []bool{false, false, true}, []int{1, 2, 1}},
+		{"a switch-back seal that also takes a record written after the note leaves its batch unmarked, since not all its records came after it",
+			[]string{"file-local", "write", "seal", "write", "hold", "file-online", "online", "write", "release", "sealed", "write", "seal"}, []bool{false, true, true}, []bool{false, false, true}, []int{1, 2, 1}},
 		{"a writer that opens on a ledger whose newest batch is local-only seals at the switch back online too",
 			[]string{"file-local", "write", "seal", "reopen", "write", "file-online", "online", "sealed", "write", "seal"}, []bool{false, true, true}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"rows a crash lost keep their batches' modes and marks when Open rebuilds them from the seal frames",
@@ -765,6 +776,10 @@ func TestNoteMode(t *testing.T) {
 					if _, _, err := write(w, rng, "os.presence", testT+int64(i)*1000); err != nil {
 						t.Fatal(err)
 					}
+				case "write-old":
+					if _, _, err := write(w, rng, "os.presence", testT-60_000); err != nil {
+						t.Fatal(err)
+					}
 				case "seal":
 					// A seal the writer still owed may take the records first,
 					// and then this one has none.
@@ -781,6 +796,10 @@ func TestNoteMode(t *testing.T) {
 						t.Fatalf("step %d: batch %d was sealed meanwhile", i, b.Row.B)
 					default:
 					}
+				case "hold":
+					w.sealMu.Lock()
+				case "release":
+					w.sealMu.Unlock()
 				case "reopen":
 					if err := w.Close(); err != nil {
 						t.Fatalf("step %d: %v", i, err)

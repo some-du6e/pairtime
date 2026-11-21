@@ -24,7 +24,8 @@ type Row struct {
 	// Online is set when the batch was sealed online, as its seal frame
 	// records (Batch.Online), and Back when it is the first batch sealed
 	// online whose records all came after the noted switch back online,
-	// with no seal since that read config.toml as local-only (Batch.Back).
+	// events by their own time too, with no seal since that read
+	// config.toml as local-only (Batch.Back).
 	Online, Back bool
 	// NoMode is set when the batch's seal frame records no mode, as those
 	// of pairtime 0.1.0-alpha.1 and before don't: the batch counts as

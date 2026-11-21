@@ -405,13 +405,42 @@ func TestLedgerMode(t *testing.T) {
 			t.Errorf("rows %+v, want one local-only batch sealed at once", got)
 		}
 	})
+	t.Run("a switch to local-only the config watch notes while the ledger waits to open is noted as the writer is published", func(t *testing.T) {
+		dir := t.TempDir()
+		dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+		setMode := func(mode string) {
+			t.Helper()
+			if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \""+mode+"\"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		setMode("local")
+		a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}, table: newestTable(), keyStores: []keys.Store{}}
+		// The watch's reload of the switch, with no writer to tell yet.
+		a.reloadConfig()
+		t.Cleanup(a.startLedger())
+		var w *ledger.Writer
+		for deadline := time.Now().Add(10 * time.Second); w == nil && time.Now().Before(deadline); time.Sleep(25 * time.Millisecond) {
+			w = a.writer.Load()
+		}
+		if w == nil {
+			t.Fatal("the ledger didn't open")
+		}
+		// Back online before any seal reads the file, which the watch,
+		// not running here, doesn't note: the record written in the
+		// stretch seals at once, local-only, as the stretch's first.
+		setMode("online")
+		if got := sealsAtOnce(t, a.writer.Load, dirs); len(got) != 1 || got[0].Online {
+			t.Errorf("rows %+v, want one local-only batch sealed at once", got)
+		}
+	})
 	t.Run("the config watch tells the writer of a switch to local-only mode, after which the next record seals at once, local-only", func(t *testing.T) {
 		a, w, dirs := open(t, str("mode = \"online\"\n"))
 		ctx, cancel := context.WithCancel(context.Background())
 		a.sched = sched.New()
 		go a.sched.Run(ctx)
 		t.Cleanup(cancel)
-		a.writer.Store(w) // as the ledger's start does
+		a.publishWriter(w) // as the ledger's start does
 		t.Cleanup(a.watchConfig())
 		record(t, w)
 		time.Sleep(200 * time.Millisecond)

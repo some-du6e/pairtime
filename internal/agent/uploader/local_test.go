@@ -1038,6 +1038,126 @@ func TestLoginMinute(t *testing.T) {
 	}
 }
 
+// TestHeldRecord is a record made in a re-link's stretch of local-only
+// mode that the writer gets only after the switch back online was noted:
+// a git change the watcher held past the note, which the git host seals at
+// once as a batch of its own, or a hook call parked behind its folder's
+// first Track, which lands in the first prompt's batch. Its event came
+// before the note, so its batch takes no mark (ledger.Batch.Back) and
+// joins the stretch's run: neither its root, which carries its count of
+// records, nor the harness it names reaches the server. The next batch
+// takes the mark, and goes.
+func TestHeldRecord(t *testing.T) {
+	cases := []struct {
+		name string
+		// held is the record, made at made, that the writer gets after the
+		// note.
+		held func(made time.Time) ledger.Input
+		// alone seals it at once in a batch of its own, as the git host
+		// does, before the first prompt's batch; otherwise it waits for that
+		// batch.
+		alone bool
+	}{
+		{"a git change the watcher held past the note, sealed as a batch of its own", gitChange, true},
+		{"a hook call parked behind its folder's first Track, sealed with the first prompt", hookCall, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLiveRig(t, 30)
+			r.u.Start()
+			r.seal(t, 1)
+			r.seal(t, 2)
+			r.wait(t, "batches 1 and 2 and their minutes", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 })
+			// pairtime logout sets mode = "local", which the watch notes, and
+			// the stretch's first record seals at once as batch 3.
+			r.linked.Store(false)
+			r.local.Store(true)
+			r.w.NoteMode(false)
+			r.record(t, 3)
+			waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 3 })
+			made := r.sealedAt(3).Add(2 * time.Minute) // in the stretch
+			login := made.Add(time.Minute)
+			// pairtime login, which the watch notes 300 ms later, with nothing
+			// pending.
+			r.link(login)
+			r.local.Store(false)
+			r.setClock(login.Add(300 * time.Millisecond))
+			r.w.NoteMode(true)
+			// The held record reaches the writer 3 s after the note: batch 4,
+			// alone or with the first prompt's record.
+			r.setClock(login.Add(3300 * time.Millisecond))
+			if _, err := r.w.Write(c.held(made)); err != nil {
+				t.Fatal(err)
+			}
+			if c.alone {
+				if _, _, err := r.w.Seal(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.recordAt(t, login.Add(40*time.Second)) // the first prompt
+			if _, _, err := r.w.Seal(); err != nil {
+				t.Fatal(err)
+			}
+			r.recordAt(t, login.Add(2*time.Minute))
+			if _, _, err := r.w.Seal(); err != nil {
+				t.Fatal(err)
+			}
+			last := r.w.Status().Batches
+			_, rows, err := ledger.ReadRows(r.dirs.Ledger(), 4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) == 0 || rows[0].Back || !rows[0].Online || !rows[1].Back {
+				t.Fatalf("the held record's batch and the next are sealed %+v, want the held one online and unmarked, and the next marked", rows)
+			}
+			held := rows[0].Root.String()
+			r.u.Wake()
+			r.wait(t, fmt.Sprintf("batch %d", last), func(f *fakeIngest) bool { return f.head.b == last })
+			r.drain()
+			r.f.mu.Lock()
+			defer r.f.mu.Unlock()
+			sent := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Contains(b, []byte(held)) })
+			named := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Contains(b, []byte(`"`+string(event.HarnessClaudeCode)+`"`)) })
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"the held record's batch joined the stretch's run, and its root and count of records never went", r.f.rows[4].b == 0 && !sent && slices.Contains(r.f.gaps, [2]uint64{3, 4})},
+				{"the labels never named the harness its record names", !named},
+				{"the batch after it took the mark and went, and so did the rest", r.f.rows[5].b == 5 && r.f.head.b == last},
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: the server holds head %d and gaps %v, after %d POSTs", r.f.head.b, r.f.gaps, r.f.posts)
+					}
+				})
+			}
+		})
+	}
+}
+
+// gitChange is a commit made at made, as the git watcher's sink writes one.
+func gitChange(made time.Time) ledger.Input {
+	return ledger.Input{Event: event.Event{
+		Envelope: event.Envelope{EventID: event.NewEventID(made), T: made.UnixMilli(), Mono: 1, BootID: "b_test",
+			Source: event.SourceGit, Via: event.ViaGit, Harness: event.HarnessNone, SessionKey: event.NoSession, ProjectKey: "p_test"},
+		Data: &event.GitChange{Op: event.GitCommit, SHA: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b", FilesChanged: 3,
+			Insertions: 40, Deletions: 12, Actor: event.ActorHuman},
+	}}
+}
+
+// hookCall is Claude Code's session.end made at made, as the adapters
+// write a hook call once its folder's first Track lets it go.
+func hookCall(made time.Time) ledger.Input {
+	return ledger.Input{Event: event.Event{
+		Envelope: event.Envelope{EventID: event.NewEventID(made), T: made.UnixMilli(), Mono: 1, BootID: "b_test",
+			Source: event.SourceHook, Via: event.ViaHook, Harness: event.HarnessClaudeCode, HarnessVersion: "2.1.327",
+			SessionKey: "s_test", ProjectKey: "p_test"},
+		Data: &event.SessionEnd{Reason: "prompt_input_exit"},
+	}}
+}
+
 // TestServerGaps is a device that lost state.json after a re-link: the
 // server holds batches 1 to 3 and 6, and recorded 4 and 5 as a local-only
 // gap. The gap comes back from the state answer, so the minutes of

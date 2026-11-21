@@ -77,9 +77,35 @@ func (a *agent) online() bool {
 // noteMode tells the ledger writer, once it is open, config.toml's mode as
 // uploads obey it (ledger.Writer.NoteMode): a record written while it is
 // local-only makes its batch local-only, even if no seal reads the file
-// before the teen switches back online.
+// before the teen switches back online. A note that comes before the
+// writer is published is kept, and publishWriter gives it to the writer,
+// so a switch to local-only while the ledger waited to open still counts
+// for the records written once it is open.
 func (a *agent) noteMode() {
 	if w := a.writer.Load(); w != nil {
+		w.NoteMode(a.online())
+		return
+	}
+	a.noteKept.Store(true)
+	// publishWriter may have stored the writer since the load, and looked
+	// for a kept note before this one was kept.
+	if w := a.writer.Load(); w != nil && a.noteKept.Swap(false) {
+		w.NoteMode(a.online())
+	}
+}
+
+// publishWriter makes w the writer noteMode tells, and first gives it the
+// note the config watch kept while there was none, as config.toml reads
+// now, so the records written once w is published already take it. With no
+// note kept, it notes nothing: the mode the agent started in isn't noted
+// (startLedger).
+func (a *agent) publishWriter(w *ledger.Writer) {
+	if a.noteKept.Swap(false) {
+		w.NoteMode(a.online())
+	}
+	a.writer.Store(w)
+	// A note kept between that look and the store.
+	if a.noteKept.Swap(false) {
 		w.NoteMode(a.online())
 	}
 }

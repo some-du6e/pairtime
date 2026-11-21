@@ -136,7 +136,11 @@ type Batch struct {
 	// no seal since that read the file as local-only (NoteMode): the run of
 	// batches sealed in local-only mode before it ends before it, so it can
 	// go, where an unmarked batch sealed online just after the run counts
-	// as part of it.
+	// as part of it. A record came after the note when the writer got it
+	// after the note and, for an event, the event's own time is after it
+	// too: a git change the watcher held past the note, or a hook call
+	// parked behind its folder's first Track, made before it, may have
+	// come in local-only mode, and keeps its batch unmarked.
 	Back    bool
 	Records []ledger.Record
 }
@@ -217,10 +221,12 @@ type Writer struct {
 	// found by Open, counts as sealed in local-only mode. back is the s of
 	// the first record written after NoteMode noted a switch back online,
 	// until the batch it marks is sealed (Batch.Back) or a seal reads
-	// config.toml as local-only, and 0 while there is none. notes counts
-	// NoteMode's calls.
-	local, taint, stretchSealed, lastLocal bool
-	back, notes                            uint64
+	// config.toml as local-only, and 0 while there is none; backAt is when
+	// that note came, in Unix ms, and late is set once a record in pending
+	// is an event made before it. notes counts NoteMode's calls.
+	local, taint, stretchSealed, lastLocal, late bool
+	back, notes                                  uint64
+	backAt                                       int64
 
 	kick     chan struct{}
 	stop     chan struct{}
@@ -362,6 +368,13 @@ func (w *Writer) Write(in Input) (uint64, error) {
 	}
 	if err := w.append(rec); err != nil {
 		return 0, err
+	}
+	if w.back > 0 && ev.T < w.backAt {
+		// Made before the switch back online was noted, as a git change the
+		// watcher held or a hook call parked behind its folder's first
+		// Track: it may have come in local-only mode, so its batch takes no
+		// mark (Batch.Back), and joins the run before it.
+		w.late = true
 	}
 	w.q.Observe(ev)
 	if k := ev.Kind(); k == event.KindPromptSubmit || k == event.KindAgentStop {
@@ -512,9 +525,11 @@ func (w *Writer) append(rec ledger.Record) error {
 // what it finds pending, and the first batch after it whose records all
 // came after the note is marked as one (Batch.Back): the run of local-only
 // batches ends before it, so its root and the minutes after the switch can
-// go. A switch back the watch misses, as to a symlinked config.toml's
-// target, ends the stretch at the next seal that reads the file online,
-// and marks no batch.
+// go. An event made before the note that the writer gets after it, as a
+// git change the watcher held, keeps its batch unmarked, and the mark goes
+// on the next batch whose records all came after the note. A switch back
+// the watch misses, as to a symlinked config.toml's target, ends the
+// stretch at the next seal that reads the file online, and marks no batch.
 func (w *Writer) NoteMode(online bool) {
 	w.mu.Lock()
 	w.notes++
@@ -526,7 +541,7 @@ func (w *Writer) NoteMode(online bool) {
 	}
 	switch {
 	case back && w.back == 0:
-		w.back = w.next
+		w.back, w.backAt = w.next, w.now().UnixMilli()
 	case !online:
 		w.back = 0
 	}
@@ -593,8 +608,8 @@ type sealPayload struct {
 	// recorded no mode (Row.NoMode).
 	Online *bool `json:"online,omitempty"`
 	// Back marks the first batch sealed online whose records all came
-	// after the noted switch back online, with no seal since that read
-	// config.toml as local-only (Batch.Back).
+	// after the noted switch back online, events by their own time too,
+	// with no seal since that read config.toml as local-only (Batch.Back).
 	Back bool `json:"back,omitempty"`
 	// Q is what the prompt classes' questions remember after the batch's
 	// last record (score.Questions), in the seal frame of every
@@ -722,7 +737,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 	at := w.now()
 	on := online && !w.taint
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
-		SealedAt: at.UnixMilli(), Online: &on, Back: on && w.back > 0 && row.FirstSeq >= w.back}
+		SealedAt: at.UnixMilli(), Online: &on, Back: on && w.back > 0 && row.FirstSeq >= w.back && !w.late}
 	snap := w.snap
 	if row.B%questionRows == 0 {
 		// w.q has taken every record the batch holds and none after.
@@ -750,7 +765,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 	retired := w.takeRetired()
 	w.pending = nil
 	w.stretchSealed = w.stretchSealed || w.taint
-	w.taint = false
+	w.taint, w.late = false, false
 	w.lastLocal = !on
 	if sp.Back {
 		w.back = 0
