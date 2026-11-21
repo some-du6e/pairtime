@@ -28,7 +28,8 @@ type Page struct {
 // it.
 type Header struct {
 	SignedIn bool
-	// Handle names the signed-in account.
+	// Handle names the signed-in person: the display name of their
+	// sign-in, or their account's handle without one.
 	Handle string
 	// Login and Logout are the sign-in button's link and the sign-out
 	// form's action.

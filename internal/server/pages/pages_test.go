@@ -257,7 +257,15 @@ func TestPrivacyNotice(t *testing.T) {
 			name: "the short version names the exception for submissions and what identifies you (UK Children's Code Std 4)",
 			want: []string{
 				"stay on your computer, unless you submit hours: then a few prompts, and the agent replies they answered, go to the program&#39;s reviewers.",
-				"This server gets your Hack Club identity and email address, the IP address each upload comes from, and numbers",
+				"This server gets your Hack Club identity, first name and email address, the IP address each upload comes from, and numbers",
+			},
+		},
+		{
+			name: "the notice says sign-in brings your name, of which only the first name is kept, with that sign-in (D-display-name)",
+			want: []string{
+				"the server gets your Hack Club Auth ID, your Slack ID, your email address, your name, and whether Hack Club has verified you.",
+				"Of your name it keeps only your first name, and only with that sign-in, so its pages can show who you&#39;re signed in as.",
+				`It never stores your full name or your last name, and your first name goes when that sign-in&#39;s record does, as <a href="#how-long-we-keep-things">How long we keep things</a> says.`,
 			},
 		},
 		{

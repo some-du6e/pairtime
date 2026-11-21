@@ -70,9 +70,11 @@ func newSignIn(cfg *config.Config, db *store.DB, w *writer.Writer, logger *slog.
 	return svc, nil
 }
 
-// visitor tells the home page who a request is signed in as. A session
-// that can't be read is logged, and the page shows the visitor as signed
-// out, so / never fails because the database does.
+// visitor tells the home page who a request is signed in as: the display
+// name of the session's sign-in, or the account's handle without one
+// (D-display-name). A session that can't be read is logged, and the page
+// shows the visitor as signed out, so / never fails because the database
+// does.
 func visitor(svc *auth.Service, logger *slog.Logger) func(*http.Request) (string, bool) {
 	return func(r *http.Request) (string, bool) {
 		sess, err := svc.Session(r)
@@ -81,6 +83,9 @@ func visitor(svc *auth.Service, logger *slog.Logger) func(*http.Request) (string
 				logger.Error("reading a session for the home page", "err", err)
 			}
 			return "", false
+		}
+		if sess.DisplayName != "" {
+			return sess.DisplayName, true
 		}
 		return handle(&sess.User), true
 	}
@@ -105,10 +110,12 @@ func accountOf(svc *auth.Service) func(*http.Request) (string, error) {
 	}
 }
 
-// handle is the name the home page shows for an account: its Slack ID, or
-// its HCA subject when HCA sent no Slack ID. pairtime has no handles of its
-// own until profiles come (DESIGN 8.3). The page never shows the email
-// address, which a screenshot of the page would otherwise carry.
+// handle is an account's handle, the name of it that stays the same: its
+// Slack ID, or its HCA subject when HCA sent no Slack ID. The header shows
+// it when the sign-in brought no display name, and the device pages show
+// it beside one. pairtime has no handles of its own until profiles come
+// (DESIGN 8.3). No page shows the email address, which a screenshot of the
+// page would otherwise carry.
 func handle(u *accounts.User) string {
 	if u.SlackID != "" {
 		return u.SlackID

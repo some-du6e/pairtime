@@ -14,7 +14,11 @@
             "email_verified": true,
             "slack_id": "U0MOCKVERIFIED",
             "verification_status": "verified",
-            "ysws_eligible": true
+            "ysws_eligible": true,
+            "name": "Mock Verified",
+            "given_name": "Mock",
+            "family_name": "Verified",
+            "nickname": "Mock"
           }
         },
         {

@@ -52,6 +52,14 @@ func sectionOf(page, id string) string {
 	return s
 }
 
+// kindSplitNote is the dashboard's note under its split by kind, for the
+// agent named agent: a bucket's 15-second slot carries one kind and one
+// level, and the app splits every second (D-kind-split-by-slot).
+func kindSplitNote(agent string) string {
+	return `<p class="note">This page gives each 15 seconds one kind of work and one evidence level, so these splits can differ from the pairtime app on your computer by a few seconds, but your totals and the time ` +
+		agent + ` worked on its own match it exactly.</p>`
+}
+
 func TestDemoPage(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -185,6 +193,12 @@ func TestDemoPage(t *testing.T) {
 			},
 		},
 		{
+			name:    "the split by kind says it is counted per 15-second slot, so it can be a few seconds off the app's while totals and the agent's time match (D-kind-split-by-slot)",
+			signIn:  signInOn(""),
+			section: "kinds",
+			want:    []string{kindSplitNote("Claude Code")},
+		},
+		{
 			name:    "without sign-in and with sign-ups closed, as on the live server, the banner says both, as the home page does, and promises no dashboard of your own",
 			signIn:  SignIn{},
 			want:    []string{"Sign-ups are closed for now, and testers join by invitation, using pairtime on their own computers until sign-ups open. Sign-in isn&#39;t set up on this server yet."},
@@ -207,7 +221,7 @@ func TestDemoPage(t *testing.T) {
 			name:    "with sign-ups open the banner offers Hack Club sign-in",
 			opts:    Options{SignupsOpen: true},
 			signIn:  signInOn(""),
-			want:    []string{`<a class="button" href="/auth/hca/login?return_to=/dashboard">Sign in with Hack Club</a> and run <code>pairtime login</code>`},
+			want:    []string{`<a class="button" href="/auth/hca/login?return_to=%2Fdashboard">Sign in with Hack Club</a> and run <code>pairtime login</code>`},
 			notWant: []string{"Sign-ups are closed", "isn&#39;t set up"},
 		},
 		{
@@ -616,10 +630,10 @@ func TestOwnerDashboard(t *testing.T) {
 			wantHeaders: map[string]string{"Cache-Control": "no-store"},
 		},
 		{
-			name:         "a visitor who isn't signed in goes to Hack Club sign-in, which brings them back to the dashboard",
+			name:         "a visitor who isn't signed in goes to Hack Club sign-in, which brings them back to the dashboard, with return_to encoded as the device pages encode it",
 			signIn:       signInOn(""),
 			wantCode:     303,
-			wantLocation: "/auth/hca/login?return_to=/dashboard",
+			wantLocation: "/auth/hca/login?return_to=%2Fdashboard",
 		},
 		{
 			name:     "a signed-in owner sees their own time, named as theirs and the agent's, with no sample label",
@@ -637,6 +651,14 @@ func TestOwnerDashboard(t *testing.T) {
 				`<span class="agent">Your agent 15h 5m</span>`,
 			},
 			notWant: []string{"Sample data", "made-up", "Nothing counted yet."},
+		},
+		{
+			name:     "the owner's split by kind says it is counted per 15-second slot, so it can be a few seconds off the app's while totals and the agent's time match (D-kind-split-by-slot)",
+			signIn:   signInOn("U0FAKEVERIFIED"),
+			account:  "u1",
+			src:      fakeSource{v: ownerView(t)},
+			wantCode: 200,
+			want:     []string{kindSplitNote("your agent")},
 		},
 		{
 			name:     "the owner's header shows who is signed in, a link to the dashboard and the sign-out form",
@@ -810,7 +832,7 @@ func TestZoneForm(t *testing.T) {
 		{
 			name:   "a post that isn't signed in goes to sign-in, and nothing is saved",
 			signIn: signInOn(""), sameOrigin: true, body: "UTC",
-			wantCode: 303, wantLocation: "/auth/hca/login?return_to=/dashboard",
+			wantCode: 303, wantLocation: "/auth/hca/login?return_to=%2Fdashboard",
 		},
 		{
 			name:   "a post whose session can't be read is an error, not a trip to sign-in, and nothing is saved",

@@ -239,7 +239,7 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 	}
 	if in.LoginPath != "" {
 		// Sign-in brings the visitor to their own dashboard.
-		p.Login = in.LoginPath + "?return_to=" + DashboardPath
+		p.Login = LoginURL(in.LoginPath, DashboardPath)
 	}
 	// Colors go to the projects with the owner's time this week first, in
 	// the view's order, then to the rest, so the week chart, which draws
@@ -719,7 +719,7 @@ func (s *Site) RegisterDashboard(mux *http.ServeMux, in SignIn, d Dashboard) {
 		id, err := d.Account(r)
 		switch {
 		case errors.Is(err, dashboard.ErrNotSignedIn):
-			http.Redirect(w, r, in.LoginPath+"?return_to="+DashboardPath, http.StatusSeeOther)
+			http.Redirect(w, r, LoginURL(in.LoginPath, DashboardPath), http.StatusSeeOther)
 			return
 		case err != nil:
 			d.Logger.Error("reading a session for the dashboard", "err", err)
@@ -762,7 +762,7 @@ func (s *Site) serveDashboard(w http.ResponseWriter, r *http.Request, in SignIn,
 	id, err := d.Account(r)
 	switch {
 	case errors.Is(err, dashboard.ErrNotSignedIn):
-		http.Redirect(w, r, in.LoginPath+"?return_to="+DashboardPath, http.StatusSeeOther)
+		http.Redirect(w, r, LoginURL(in.LoginPath, DashboardPath), http.StatusSeeOther)
 		return
 	case err != nil:
 		d.Logger.Error("reading a session for the dashboard", "err", err)

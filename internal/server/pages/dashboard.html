@@ -133,6 +133,7 @@
 <li><span class="kname">{{.Name}}</span><span class="track" aria-hidden="true">{{range .Bars}}<span class="bar {{.Class}}" title="{{.Title}}"></span>{{end}}</span><span class="kt">{{.Time}}</span></li>
 {{- end}}
 </ul>
+<p class="note">This page gives each 15 seconds one kind of work and one evidence level, so these splits can differ from the pairtime app on your computer by a few seconds, but your totals and the time {{.Agent}} worked on its own match it exactly.</p>
 {{- else}}
 <p class="note">Nothing counted in the last 7 days.</p>
 {{- end}}

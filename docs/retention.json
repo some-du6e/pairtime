@@ -65,7 +65,7 @@
     {
       "id": "server.sessions",
       "where": "server",
-      "data": "Sign-in sessions: for each browser you sign in with, a hash of its session cookie (never the cookie itself), when you signed in, and when Hack Club Auth last checked it was you",
+      "data": "Sign-in sessions: for each browser you sign in with, a hash of its session cookie (never the cookie itself), when you signed in, when Hack Club Auth last checked it was you, and the first name Hack Club Auth gave at that sign-in, which the pages show as who's signed in",
       "kept": "Until you sign out, or 30 days after you sign in at the latest. The record is deleted 1 day after the session ends",
       "tables": ["sessions"]
     },

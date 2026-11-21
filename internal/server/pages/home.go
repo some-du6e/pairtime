@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"io"
 	"net/http"
+	"net/url"
 )
 
 // The home page is the page at / exactly, and where a sign-in without
@@ -34,9 +35,20 @@ type SignIn struct {
 	// LoginPath is where the sign-in button goes, and LogoutPath is where
 	// the sign-out form posts.
 	LoginPath, LogoutPath string
-	// Visitor returns the handle of the account a request is signed in to,
-	// and whether it is signed in at all. Nil means no request is.
-	Visitor func(r *http.Request) (handle string, ok bool)
+	// Visitor returns the name the header shows for the person a request
+	// is signed in as, and whether it is signed in at all: the display
+	// name of their sign-in, or their account's handle without one. Nil
+	// means no request is.
+	Visitor func(r *http.Request) (name string, ok bool)
+}
+
+// LoginURL is where a sign-in starts that brings the browser back to
+// returnTo, a path on this server: loginPath with returnTo as return_to,
+// query-encoded, so a path with a query of its own comes back whole. Every
+// page that sends a visitor through sign-in and back uses it: /dashboard
+// here, and /device and /account/devices in package device.
+func LoginURL(loginPath, returnTo string) string {
+	return loginPath + "?return_to=" + url.QueryEscape(returnTo)
 }
 
 // homeData is what home.md reads.
@@ -55,7 +67,8 @@ type homeData struct {
 // header. A page without one shows none.
 type account struct {
 	SignedIn bool
-	// Handle names the signed-in account.
+	// Handle names the signed-in person: the display name of their
+	// sign-in, or their account's handle without one.
 	Handle string
 	// Login and Logout are the sign-in button's link and the sign-out
 	// form's action.
