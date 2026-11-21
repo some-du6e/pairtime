@@ -1658,3 +1658,40 @@ func TestHeldRetention(t *testing.T) {
 	}
 }
 
+// TestIgnoreCountsAtOnce checks that a .pairtime-ignore made in a session's
+// folder after the folder resolved keeps the session's next call out at
+// once, by the few stats every call makes (gitHost.project), and not when
+// the folder's answer is next looked at again.
+func TestIgnoreCountsAtOnce(t *testing.T) {
+	calls := readCapture(t)[:2] // the session's start and its first prompt
+	r := newHookReplay(t)
+	a := startAgent(t, r.options([]keys.Store{}))
+	r.send(t, event.HarnessClaudeCode, calls[0], calls[0].Arrived)
+	waitParsed(t, a, 1)
+	if err := os.WriteFile(filepath.Join(r.folder(), git.IgnoreFile), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.send(t, event.HarnessClaudeCode, calls[1], calls[0].Arrived)
+	s := waitParsed(t, a, 2)
+	a.cancel()
+	if err := a.waitExit(t); err != nil {
+		t.Fatal(err)
+	}
+	recs := readLedger(t, r.dirs, event.SourceHook)
+	st := s.Adapters.Harnesses[event.HarnessClaudeCode]
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"the prompt after the .pairtime-ignore counts as ignored", st.Ignored == 1},
+		{"the ledger holds the session's start alone, from before it",
+			len(recs) == 1 && recs[0].ev.Kind() == event.KindSessionStart},
+	}
+	for _, c := range checks {
+		t.Run(c.name, func(t *testing.T) {
+			if !c.ok {
+				t.Errorf("no: counts %+v, %d records", st, len(recs))
+			}
+		})
+	}
+}

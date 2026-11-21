@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -610,6 +611,205 @@ func TestHookedFocus(t *testing.T) {
 			t.Errorf("hosted_sessions across the records %v, want %s twice", hosted, want)
 		}
 	})
+}
+
+// TestIgnoredSessionLeavesFocus checks the focus side of a folder that a
+// .pairtime-ignore keeps out (DESIGN 8.8), with the real adapters, focus,
+// presence, process scan and ledger over a process table the test
+// supplies. Once a call of a hosted session parses in such a folder, the
+// terminal hosts the session no more and shows no project for it, a later
+// call of it ties nothing, and a call of it that counts again lets it back
+// in. The ignored folder, a git repo, is never watched, and no record of
+// its calls reaches the ledger.
+func TestIgnoredSessionLeavesFocus(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git isn't installed")
+	}
+	store, problem, err := state.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil || problem != "" {
+		t.Fatalf("state.Open: %v %q", err, problem)
+	}
+	dirs := home.Dirs{Data: t.TempDir(), Config: t.TempDir()}
+	dirs.Runtime = dirs.Data
+	a := &agent{
+		dirs:      dirs,
+		log:       slog.New(slog.DiscardHandler),
+		sched:     sched.New(),
+		state:     store,
+		problems:  make(map[string]string),
+		keyStores: []keys.Store{}, // K_dev goes in a key file, off the OS's store
+		hooked:    newHookTies(),
+	}
+	var stops []func()
+	var stopOnce sync.Once
+	stopAll := func() {
+		stopOnce.Do(func() {
+			for i := len(stops) - 1; i >= 0; i-- {
+				stops[i]()
+			}
+		})
+	}
+	t.Cleanup(stopAll)
+	stops = append(stops, a.startLedger(), a.startPresence(presence.OS{}))
+	deadline := time.Now().Add(20 * time.Second)
+	for a.sessionSecret() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the agent had no K_session 20 s after its keystore started opening")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	now := time.Now().UTC()
+	const me = "session:1"
+	desk := []platform.Proc{
+		{PID: 4, Name: "System", Start: now.Add(-time.Hour)},
+		{PID: 4520, PPID: 4480, Name: "explorer", Start: now.Add(-50 * time.Minute), Owner: me},
+		{PID: 6100, PPID: 4520, Name: "WindowsTerminal", Start: now.Add(-10 * time.Minute), Owner: me},
+		{PID: 6200, PPID: 6100, Name: "pwsh", Start: now.Add(-9 * time.Minute), Owner: me},
+	}
+	claude := platform.Proc{PID: 6210, PPID: 6200, Name: "claude", Start: now.Add(-time.Minute), Owner: me}
+	hook := platform.Proc{PID: 6300, PPID: 6210, Name: "pairtime", Start: now, Owner: me}
+	table := append(slices.Clone(desk), claude)
+	read := func() ([]platform.Proc, error) { return slices.Clone(table), nil }
+	a.procs = procs.New(a.procsOptions(procs.Options{Read: read, OS: platform.Windows, Self: me, Boot: "test-boot", Now: func() time.Time { return now }}))
+	var front func(focus.Change)
+	a.newFocus(focus.OS{
+		Via:  "fake",
+		GOOS: platform.Windows,
+		Read: read,
+		Watch: func(fn func(focus.Change)) (func(), error) {
+			front = fn
+			return func() {}, nil
+		},
+	})
+	stops = append(stops, a.startFocus(), a.startAdapters())
+	sink := newHookSink(&recorder{}, platform.Windows, a.hooked, a.hookSteps())
+
+	// kept is a folder that counts, out a repo a .pairtime-ignore keeps out.
+	kept, out := t.TempDir(), t.TempDir()
+	runGit(t, out, "init", "-q")
+	if err := os.WriteFile(filepath.Join(out, "a.txt"), []byte("a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, out, "add", "a.txt")
+	runGit(t, out, "commit", "-q", "-m", "first")
+	if err := os.WriteFile(filepath.Join(out, ".pairtime-ignore"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	self := inbox.Proc{PID: hook.PID, Name: hook.Name, Start: hook.Start}
+	sent := uint64(0)
+	deliver := func(t *testing.T, name, dir string) {
+		t.Helper()
+		payload, err := json.Marshal(map[string]string{"session_id": "stub-session", "cwd": dir, "prompt": "hi"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := inbox.Delivery{Message: hookMessage(t, name, string(payload), self, now), Via: inbox.ViaSocket, PeerPID: hook.PID,
+			Walk: []platform.Proc{hook, claude, desk[3], desk[2], desk[1]}}
+		if err := sink.Deliver(d); err != nil {
+			t.Fatal(err)
+		}
+		sent++
+	}
+	// parsed waits until the adapters have parsed every call sent.
+	parsed := func(t *testing.T) adaptersReply {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			st := a.adaptersHost().status()
+			if st.Harnesses[event.HarnessClaudeCode].Calls >= sent && st.Waiting == 0 {
+				return st
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the adapters parsed %+v of %d calls", st, sent)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	session := func() string { return hookpath.SessionKey(a.sessionSecret(), "stub-session") }
+
+	steps := []struct {
+		name    string
+		do      func(t *testing.T)
+		hosted  int
+		project bool // focus has a project for the session
+	}{
+		{"focus on the terminal hosts nothing yet", func(*testing.T) {
+			front(focus.Change{At: now, PID: 6100})
+		}, 0, false},
+		{"a call in a folder that counts makes the terminal host the session, with the folder's project", func(t *testing.T) {
+			deliver(t, "SessionStart", kept)
+			parsed(t)
+		}, 1, true},
+		{"a call of it in the ignored repo leaves the terminal hosting none, and no project", func(t *testing.T) {
+			deliver(t, "UserPromptSubmit", out)
+			parsed(t)
+		}, 0, false},
+		{"a later call of it ties nothing", func(t *testing.T) {
+			deliver(t, "Stop", out)
+			parsed(t)
+		}, 0, false},
+		{"a call of it that counts again lets it back in, and the next ties it", func(t *testing.T) {
+			deliver(t, "UserPromptSubmit", kept)
+			parsed(t)
+			deliver(t, "Stop", kept)
+			parsed(t)
+		}, 1, true},
+	}
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			step.do(t)
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				st := a.focus.Status()
+				if st.Class == event.AppTerminal && st.Hosted == step.hosted && (a.hooked.projectOf(session()) != "") == step.project {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("focus status %+v, project %q; want a terminal hosting %d, with a project %v",
+						st, a.hooked.projectOf(session()), step.hosted, step.project)
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		})
+	}
+	st := parsed(t)
+	stopAll()
+	var kinds []event.Kind
+	if err := ledger.ReadBatches(dirs.Ledger(), 1, func(b ledger.Batch) error {
+		for _, r := range b.Records {
+			body, err := pkgledger.ParseBody(r.Body)
+			if err != nil {
+				return err
+			}
+			ev, err := body.Event()
+			if err != nil {
+				return err
+			}
+			if ev.Source == event.SourceHook || ev.Source == event.SourceGit {
+				kinds = append(kinds, ev.Kind())
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("reading the ledger back: %v", err)
+	}
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"the two calls in the ignored repo count as ignored", st.Harnesses[event.HarnessClaudeCode].Ignored == 2},
+		{"the ignored repo is never watched", st.Git.Watched == 0},
+		{"the ledger holds the three calls that counted, and nothing of the ignored repo",
+			slices.Equal(kinds, []event.Kind{event.KindSessionStart, event.KindPromptSubmit, event.KindAgentStop})},
+	}
+	for _, c := range checks {
+		t.Run(c.name, func(t *testing.T) {
+			if !c.ok {
+				t.Errorf("no: adapters %+v, ledger %v", st, kinds)
+			}
+		})
+	}
 }
 
 // TestListenAgain checks that an agent whose socket can't listen tries
