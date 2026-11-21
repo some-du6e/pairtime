@@ -17,6 +17,7 @@
 {{- with .Account}}
 <div class="account">
 {{- if .SignedIn}}
+<a href="/dashboard">Your dashboard</a>
 <p>Signed in{{with .Handle}} as <strong>{{.}}</strong>{{end}}</p>
 <form method="post" action="{{.Logout}}"><button type="submit">Sign out</button></form>
 {{- else}}

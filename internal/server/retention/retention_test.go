@@ -321,6 +321,7 @@ func TestJobs(t *testing.T) {
 			wantJobs: []string{
 				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions",
+				"server.minute_buckets/rollup_minutes",
 				"server.witness/witness_rows", "server.witness/ingest_replies",
 			},
 			wantOff: []string{
@@ -341,6 +342,7 @@ func TestJobs(t *testing.T) {
 			wantJobs: []string{
 				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions", "server.minute_buckets/submission_minutes",
+				"server.minute_buckets/rollup_minutes",
 				"server.witness/witness_rows", "server.witness/submission_batches", "server.witness/ingest_replies",
 			},
 			wantOff: []string{
@@ -366,6 +368,7 @@ func TestJobs(t *testing.T) {
 			wantJobs: []string{
 				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/minute_bucket_revisions+hold", "server.minute_buckets/submission_minutes",
+				"server.minute_buckets/rollup_minutes",
 				"server.witness/witness_rows+hold", "server.witness/submission_batches", "server.witness/ingest_replies",
 			},
 		},
