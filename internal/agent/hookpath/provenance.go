@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
@@ -114,15 +115,39 @@ func counts(d inbox.Delivery) bool {
 
 // Hosts lists, for each harness whose hooks an IDE or an agent desktop app
 // runs itself, the processes that host its sessions there: Cursor's desktop
-// app runs hook commands itself, through PowerShell on Windows (HS 4.1), and
-// VS Code runs those of the Copilot agent in it (HS 5). It stands in for
-// DESIGN 3.4's Adapter.Hosts until the adapters exist (WP-AD2). Names are
-// compared without case and without ".exe", and one ending in "*" matches
-// every name that starts with the rest, as in the app-class table, whose
-// role for the process must also be ide or desktop.
+// app runs hook commands itself, through PowerShell on Windows (HS 4.1), VS
+// Code runs those of the Copilot agent in it (HS 5), and Devin Desktop, once
+// Windsurf, runs Devin Local's, which reads Claude Code's hooks too (HS 8).
+// It stands in for DESIGN 3.4's Adapter.Hosts until the adapters exist
+// (WP-AD2). Names are compared without case and without ".exe", and one
+// ending in "*" matches every name that starts with the rest, as in the
+// app-class table, whose role for the process must also be ide or desktop.
+// No name is listed for two harnesses.
 var Hosts = map[event.Harness][]string{
 	event.HarnessCursor:  {"cursor", "cursor helper*"},
 	event.HarnessCopilot: {"code", "code helper*"},
+	event.HarnessDevin: {"devin-desktop", "devin desktop", "windsurf", "devin helper*", "devin desktop helper*",
+		"windsurf helper*"},
+}
+
+// HostedBy returns the harness whose hooks p, an IDE or agent desktop
+// process, runs as their host by Hosts, or "" when Hosts lists p for none.
+// Of counts such a process only for the harness the call names. This names
+// it for the copies of a call that another harness's host made, as when
+// Cursor's desktop app runs Claude Code's hooks (HS 4.1), which that
+// harness's adapter records (DESIGN 5.1).
+func HostedBy(goos string, p platform.Proc) event.Harness {
+	hs := make([]event.Harness, 0, len(Hosts))
+	for h := range Hosts {
+		hs = append(hs, h)
+	}
+	slices.Sort(hs)
+	for _, h := range hs {
+		if hosts(goos, h, p) {
+			return h
+		}
+	}
+	return ""
 }
 
 // hosts reports whether p, the process a hook runs under, is an IDE or

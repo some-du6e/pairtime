@@ -173,7 +173,9 @@ type Envelope struct {
 	// Via is how the agent received it, set by the agent; see [Via].
 	Via     Via     `json:"via"`
 	Harness Harness `json:"harness"`
-	// HarnessVersion is the harness's version as it reports it.
+	// HarnessVersion is the harness's version as it reports it, when that
+	// is a version in IsVersion's form. An adapter whose harness reports
+	// none, or reports something else, leaves it empty (D-version-grammar).
 	HarnessVersion string `json:"harness_version,omitempty"`
 	// SessionKey is the harness session id, salted per device, or
 	// NoSession for OS and git events.
@@ -289,7 +291,9 @@ func checkEnvelope(c *checker, e Envelope) {
 	checkEnum(c, "source", sources, e.Source)
 	checkEnum(c, "via", vias, e.Via)
 	checkEnum(c, "harness", harnesses, e.Harness)
-	c.text("harness_version", e.HarnessVersion, 64)
+	if e.HarnessVersion != "" && !IsVersion(e.HarnessVersion) {
+		c.addf("harness_version", "must be a version such as 2.1.327, or absent (D-version-grammar)")
+	}
 	c.key("session_key", e.SessionKey)
 	c.optKey("project_key", e.ProjectKey)
 }

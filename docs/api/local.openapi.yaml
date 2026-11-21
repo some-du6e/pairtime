@@ -7,7 +7,7 @@
 openapi: 3.1.0
 info:
   title: pairtime agent, local API
-  version: 0.1.0
+  version: 0.2.0
   license:
     name: AGPL-3.0-or-later
     identifier: AGPL-3.0-or-later
@@ -20,16 +20,28 @@ info:
     gets 403, which stops DNS rebinding and cross-site requests.
 
     The dashboard's static files at `/` need nothing more. Routes under
-    `/v1/` also need the bearer token from port.json, which only the user who
-    runs the agent can read. The dashboard's own sign-in, a one-time URL that
-    sets a `SameSite=Strict`, `HttpOnly` cookie, comes with WP-UI1. Until
-    then the dashboard calls GET /v1/status with no token, gets 401, and
-    says this version can't open it yet.
+    `/v1/` also need one of two credentials. Local tools send the bearer
+    token from port.json, which only the user who runs the agent can read.
+    The dashboard sends the `pairtime_session` cookie instead. The cookie
+    opens the routes the dashboard reads and none that changes anything:
+    POST /v1/agent/stop takes the bearer token alone.
+
+    `pairtime dashboard` signs the teen's browser in (DESIGN 3.9;
+    D-dashboard-link). It asks the running agent for a one-time URL over the
+    per-user socket, the way `pairtime recap` asks for the last work
+    session, so it sends no token over TCP. It hands the URL to the browser
+    in a file that only the user can read, so the code is on no process's
+    command line. The file is in the data directory, or, where the default
+    browser is a snap, which can't read the data directory, in that snap's
+    `~/snap/<name>/common`. GET /signin trades the code for
+    the cookie, `SameSite=Strict` and `HttpOnly`, and sends the browser on
+    to the dashboard.
 servers:
   - url: http://127.0.0.1:7247
     description: the default port; port.json has the real one
 security:
   - bearer: []
+  - session: []
 paths:
   /v1/status:
     get:
@@ -56,7 +68,10 @@ paths:
       description: >
         Answers first, then stops the agent the same way on every OS.
         Windows has no signal for a process without a console, and
-        footprint.yml uses this to stop the agent cleanly.
+        footprint.yml uses this to stop the agent cleanly. Only the bearer
+        token can stop the agent; the dashboard's cookie can't.
+      security:
+        - bearer: []
       responses:
         "202":
           description: The agent is stopping.
@@ -68,15 +83,132 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+  /v1/days/{date}:
+    get:
+      operationId: getDay
+      summary: One local day of this device, by project
+      description: >
+        One local day of this device, with a tally for each project that has
+        anything in it (SM 5.3). The agent answers from the day's rollup in
+        `days/`, which its scorer rewrites each time one of the day's minute
+        buckets changes (DESIGN 3.5, 3.7; WP-AG4), and sums the day from its
+        bucket store when there is none. `pairtime today` and `statusline`
+        read the same rollups (WP-CO0). The dashboard asks for today about
+        once a minute while it is open, so pending minutes turn final on the
+        page, and for each earlier day of the span it shows. While `shadow`
+        is true the answer leaves out everything the hidden credited time
+        could be worked out from (Shadow). The answer is never cached.
+      parameters:
+        - name: date
+          in: path
+          required: true
+          description: A day as YYYY-MM-DD, or `today` for today in the device's time zone.
+          schema:
+            type: string
+          examples:
+            today:
+              value: today
+            date:
+              value: "2026-11-24"
+      responses:
+        "200":
+          description: The day's tallies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Day"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/StoreError"
+  /v1/sessions/last:
+    get:
+      operationId: getLastSession
+      summary: The last work session, or the one still going
+      description: >
+        The most recent work session (SM 5.3: a run of one project's
+        credited minutes, split where one ends more than `SESSION_GAP_S`,
+        1,200 s, before the next starts), or the one still going, with the
+        same tally as a day. The agent gives the same JSON to the CLI's
+        `sessions/last` question over its socket, which `pairtime recap`
+        asks (WP-CO0), and the dashboard's Today page shows it. `session` is
+        null before the first. While `shadow` is true a session is its
+        project and local date alone, with the tally Shadow allows. The
+        answer is never cached.
+      responses:
+        "200":
+          description: The session, or null.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LastSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/StoreError"
+  /signin:
+    get:
+      operationId: signIn
+      summary: Sign this browser in to the dashboard
+      description: >
+        The one-time URL `pairtime dashboard` gets from the agent over its
+        socket. A good code sets the session cookie and sends the browser to
+        the dashboard. A used, old or wrong one sends it to
+        `/?signin=expired`, where the dashboard says to run `pairtime
+        dashboard` again. Either way the answer is a 303 and never cached.
+        Only a GET uses a code up, so a HEAD, such as a link preview's,
+        can't.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          description: >
+            The code in the URL `pairtime dashboard` opened: 32 random bytes
+            in unpadded base64url. It works once, for two minutes.
+          schema:
+            type: string
+      responses:
+        "303":
+          description: >
+            To `/` with a `Set-Cookie` for the session, or to
+            `/?signin=expired` without one.
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              description: >
+                `pairtime_session=<id>; Path=/; HttpOnly; SameSite=Strict`,
+                only for a good code. The session lasts until the agent
+                stops, or until 8 hours pass with no request that uses it.
+                The cookie sets no Expires or Max-Age.
+              schema:
+                type: string
+        "403":
+          $ref: "#/components/responses/Forbidden"
 components:
   securitySchemes:
     bearer:
       type: http
       scheme: bearer
       description: The `token` field of port.json, 32 random bytes in unpadded base64url.
+    session:
+      type: apiKey
+      in: cookie
+      name: pairtime_session
+      description: >
+        The dashboard's sign-in, which GET /signin sets: 32 random bytes in
+        unpadded base64url. The agent keeps its sessions in memory only.
   responses:
     Unauthorized:
-      description: The request had no bearer token, or the wrong one.
+      description: The request had no bearer token or session cookie, or a wrong one.
       headers:
         WWW-Authenticate:
           schema:
@@ -89,7 +221,22 @@ components:
     Forbidden:
       description: >
         The request came from another computer, or its Host or Origin wasn't
-        the agent's own.
+        the agent's own, or the session cookie signed in a change without
+        the dashboard's Origin.
+      content:
+        text/plain:
+          schema:
+            type: string
+    BadRequest:
+      description: A parameter isn't what the route takes; the text says which.
+      content:
+        text/plain:
+          schema:
+            type: string
+    StoreError:
+      description: >
+        The agent couldn't read its stores. The text says so, and the
+        agent's log says why.
       content:
         text/plain:
           schema:
@@ -136,7 +283,8 @@ components:
           type: object
           description: >
             What isn't working, keyed by where it comes from (`config`,
-            `config-watch`, `state`, `port`, `ipc`, `presence`, `focus`), in
+            `config-watch`, `state`, `port`, `ipc`, `presence`, `focus`,
+            `ledger`, `scorer`), in
             words for the teen. Absent when nothing is wrong.
           additionalProperties:
             type: string
@@ -169,8 +317,10 @@ components:
       type: string
       description: >
         Whether anything leaves the device (DESIGN 4.2). `local` uploads
-        nothing, and it is the only mode until signing in exists (WP-SV3).
-      enum: [local]
+        nothing. `online` uploads the tier-1 numbers of DESIGN 4.3 to the
+        server `pairtime login` linked, and `pairtime logout` goes back to
+        `local` (WP-SV3).
+      enum: [local, online]
     Job:
       type: object
       additionalProperties: false
@@ -241,6 +391,25 @@ components:
           description: The kind of desktop session, on Linux only.
         loop:
           $ref: "#/components/schemas/Loop"
+        gnome_extension:
+          type: string
+          enum: [needs_login, unticked]
+          description: >
+            On GNOME, why pairtime's Shell extension isn't reporting which
+            window is in front: `needs_login` until the teen logs out and
+            back in once after install, `unticked` when install left it out
+            (D-focus-unknown). The dashboard's Today page says what to do.
+            Absent elsewhere, and until the extension's WP reports it.
+        focus_level_c:
+          type: boolean
+          description: >
+            True once the scorer credits the slots of a desktop that hides
+            focus at level C (SM 2.5; D-focus-unknown), which WP-SC8 sets,
+            the first WP in which it is so (D-design-5.9). While
+            `focus.unknown` is set the dashboard's Today page says this
+            desktop doesn't tell pairtime which window is in front, and only
+            once this is true does it add where that time counts. Absent
+            until then.
     Signal:
       type: object
       additionalProperties: false
@@ -285,3 +454,335 @@ components:
         status:
           type: string
           const: stopping
+    Day:
+      type: object
+      additionalProperties: false
+      required: [date, zone, start, end, shadow, projects]
+      description: One local day, as GET /v1/days/{date} gives it.
+      properties:
+        date:
+          type: string
+          format: date
+          description: The day, as YYYY-MM-DD. Asked for `today`, the agent says which day that is.
+          examples: ["2026-11-24"]
+        zone:
+          type: string
+          description: The name of the time zone the day is counted in, as the device's clock gives it.
+          examples: [Local]
+        start:
+          type: string
+          format: date-time
+          description: The start of the day, in UTC.
+        end:
+          type: string
+          format: date-time
+          description: The end of the day, in UTC. A day is 23 or 25 hours long where the clocks change.
+        shadow:
+          $ref: "#/components/schemas/Shadow"
+        projects:
+          type: array
+          description: A row for each project with credit, agent time or uncredited time in the day, in project key order.
+          items:
+            $ref: "#/components/schemas/DayProject"
+    DayProject:
+      type: object
+      additionalProperties: false
+      required: [project, name, agent_only_s, agent_only_by_harness, uncredited]
+      description: >
+        One project's tally over a day (SM 5.1, 5.3). Seconds may be halves.
+        While `shadow` is true the credited fields are absent (Shadow).
+      properties:
+        project:
+          type: string
+          description: The project's opaque key (AGENTS.md).
+        name:
+          $ref: "#/components/schemas/ProjectName"
+        credited_s:
+          $ref: "#/components/schemas/CreditedS"
+        pending_s:
+          $ref: "#/components/schemas/PendingS"
+        credited_by_kind:
+          $ref: "#/components/schemas/ByKind"
+        credited_by_evidence:
+          $ref: "#/components/schemas/ByEvidence"
+        credited_by_reason:
+          $ref: "#/components/schemas/ByReason"
+        agent_only_s:
+          $ref: "#/components/schemas/AgentOnlyS"
+        agent_only_by_harness:
+          $ref: "#/components/schemas/AgentOnlyByHarness"
+        uncredited:
+          $ref: "#/components/schemas/Uncredited"
+        on_hold_s:
+          $ref: "#/components/schemas/OnHoldS"
+    LastSession:
+      type: object
+      additionalProperties: false
+      required: [shadow, session]
+      properties:
+        shadow:
+          $ref: "#/components/schemas/Shadow"
+        session:
+          $ref: "#/components/schemas/WorkSession"
+    WorkSession:
+      type: [object, "null"]
+      additionalProperties: false
+      required: [project, name, date, agent_only_s, agent_only_by_harness, uncredited]
+      description: >
+        A work session (SM 5.3) with the same tally as a project's day, or
+        null before the first one. While `shadow` is true it has no `start`,
+        `end` or `open`: with how long the session ran, the rest of its
+        tally would give its credited time away (D-shadow-scope). `date`
+        says which day it was then.
+      properties:
+        project:
+          type: string
+          description: The project's opaque key (AGENTS.md).
+        name:
+          $ref: "#/components/schemas/ProjectName"
+        date:
+          type: string
+          format: date
+          description: >
+            The local day the session started on, as YYYY-MM-DD, in the zone
+            the agent counts days in: the day its first credited minute
+            starts in. It is there whether or not `shadow` is true, and while
+            it is, it is all the session says of when it was.
+          examples: ["2026-11-24"]
+        start:
+          type: string
+          format: date-time
+          description: The start of the session's first credited minute, in UTC. Absent while `shadow` is true.
+        end:
+          type: string
+          format: date-time
+          description: The end of its last credited minute so far, in UTC. Absent while `shadow` is true.
+        open:
+          type: boolean
+          description: >
+            True while the session goes on: SESSION_GAP_S hasn't passed
+            since `end`, and no lock or suspend came after its credit
+            stopped (DESIGN 3.8). Absent while `shadow` is true, since it
+            says whether the last minute counted.
+        credited_s:
+          $ref: "#/components/schemas/CreditedS"
+        pending_s:
+          $ref: "#/components/schemas/PendingS"
+        credited_by_kind:
+          $ref: "#/components/schemas/ByKind"
+        credited_by_evidence:
+          $ref: "#/components/schemas/ByEvidence"
+        credited_by_reason:
+          $ref: "#/components/schemas/ByReason"
+        agent_only_s:
+          $ref: "#/components/schemas/AgentOnlyS"
+        agent_only_by_harness:
+          $ref: "#/components/schemas/AgentOnlyByHarness"
+        uncredited:
+          $ref: "#/components/schemas/Uncredited"
+        on_hold_s:
+          $ref: "#/components/schemas/OnHoldS"
+    Shadow:
+      type: boolean
+      description: >
+        `display.shadow` in config.toml (DESIGN 6.7 step 2; SM 7.5). While
+        it is true, every view shows your time as "calibrating", and the
+        answer leaves out everything the hidden credited time could be
+        worked out from (D-shadow-scope): the credited and pending seconds,
+        the credited-by-kind, by-evidence and by-reason maps, `on_hold_s`,
+        every uncredited code but SM 4.2's loops (`X.reroll`,
+        `X.rewrite_loop`, `X.same_error`, `X.autopilot`), `X.day_cap`
+        included, and a session's `start`, `end` and `open`. The agent's
+        time (`agent_only_s`, `agent_only_by_harness`) stays, and so do the
+        loops with their seconds. A client reads a number that is left out
+        as 0 and a map as empty. The files in `days/` and `buckets/` keep
+        every number.
+    ProjectName:
+      type: string
+      description: >
+        The project's display name from the local project map: its
+        repository's folder name, or the name the teen gave it. Like everything
+        this API serves, it stays on this computer. Empty when the map has
+        none, and then the views show the key.
+    CreditedS:
+      type: number
+      minimum: 0
+      description: Credited seconds, your time, pending minutes included. Absent while `shadow` is true.
+    PendingS:
+      type: number
+      minimum: 0
+      description: >
+        The part of `credited_s` in minutes that are still pending (DESIGN
+        3.7), which late records may change. Absent while `shadow` is true.
+    AgentOnlyS:
+      type: number
+      minimum: 0
+      description: >
+        SM 5.3's `agent_only_s` for the project, the agent's side of the
+        chess clock (DESIGN 3.8): the seconds this project's agent turns ran
+        that this project didn't credit, including seconds credited to
+        another project (SM 6.3; testdata/timelines/6.3,
+        `agent_only_s.<project>`). These aren't the `X.agent_only` seconds,
+        which nothing credited: SM 6.3's afternoon has 93 minutes of agent
+        time and 4 of `X.agent_only`, and in SM 6.4 all 23,180 seconds of
+        it are `X.absent`.
+    OnHoldS:
+      type: number
+      minimum: 0
+      description: >
+        The part of `uncredited`'s `X.noprog` in minutes still pending or
+        provisional (SM 4.3, 5.1): half-weighted seconds that progress
+        within PROGRESS_RESTORE_S can still bring back. The views call only
+        these "on hold" (approach-teen.md D5). Absent means 0, and it is
+        absent while `shadow` is true.
+    ByKind:
+      type: object
+      additionalProperties: false
+      description: >
+        `credited_s` by activity kind (SM 5.1), pending minutes included. A
+        kind with no seconds may be left out. Absent while `shadow` is true.
+      properties:
+        prompting:
+          type: number
+          minimum: 0
+        reading_output:
+          type: number
+          minimum: 0
+        supervising:
+          type: number
+          minimum: 0
+        reviewing:
+          type: number
+          minimum: 0
+        testing:
+          type: number
+          minimum: 0
+        debugging:
+          type: number
+          minimum: 0
+        hand_edit:
+          type: number
+          minimum: 0
+        lookup:
+          type: number
+          minimum: 0
+    ByEvidence:
+      type: object
+      additionalProperties: false
+      description: >
+        `credited_s` by evidence level (SM 5.1, DESIGN 6.4), pending minutes
+        included at the level they have so far. A level with no seconds may
+        be left out. Absent while `shadow` is true.
+      properties:
+        A:
+          type: number
+          minimum: 0
+        B:
+          type: number
+          minimum: 0
+        C:
+          type: number
+          minimum: 0
+    ByReason:
+      type: object
+      description: >
+        `credited_s` by SM 5.2's credit code, with its `~r` and `+restored`
+        suffixes, such as `READ~r` (SM 5.3), only the codes with credit.
+        Absent while `shadow` is true.
+      additionalProperties:
+        type: number
+        minimum: 0
+    AgentOnlyByHarness:
+      type: object
+      additionalProperties: false
+      description: >
+        `agent_only_s` by the harness whose turn ran (SM 1.1). It lists every
+        harness that had a session in the project in the span, with 0 for one
+        that had no time on its own, so the views can name the agent whose
+        answers were read: "reading Claude's answers".
+      properties:
+        claude_code:
+          type: number
+          minimum: 0
+        cursor:
+          type: number
+          minimum: 0
+        copilot:
+          type: number
+          minimum: 0
+        codex:
+          type: number
+          minimum: 0
+        gemini:
+          type: number
+          minimum: 0
+        devin:
+          type: number
+          minimum: 0
+        cline:
+          type: number
+          minimum: 0
+        opencode:
+          type: number
+          minimum: 0
+        other:
+          type: number
+          minimum: 0
+    Uncredited:
+      type: object
+      additionalProperties: false
+      description: >
+        The project's seconds pairtime looked at and didn't credit, by
+        reason code (SM 5.2). Agent-only seconds that no project credited
+        are in it under the code each got, such as `X.agent_only`,
+        `X.automated` or `X.absent`. Those another project credited aren't
+        (SM 6.3), so `agent_only_s` can be more than `X.agent_only` and
+        `X.automated` together. Credit past the day's cap is under
+        `X.day_cap`. A reason with no seconds may be left out. While
+        `shadow` is true only SM 4.2's loops are in it (Shadow).
+      properties:
+        X.absent:
+          type: number
+          minimum: 0
+        X.other_focus:
+          type: number
+          minimum: 0
+        X.ambiguous:
+          type: number
+          minimum: 0
+        X.no_anchor:
+          type: number
+          minimum: 0
+        X.agent_only:
+          type: number
+          minimum: 0
+        X.automated:
+          type: number
+          minimum: 0
+        X.no_input:
+          type: number
+          minimum: 0
+        X.reroll:
+          type: number
+          minimum: 0
+        X.rewrite_loop:
+          type: number
+          minimum: 0
+        X.same_error:
+          type: number
+          minimum: 0
+        X.autopilot:
+          type: number
+          minimum: 0
+        X.noprog:
+          type: number
+          minimum: 0
+        X.lookup_cap:
+          type: number
+          minimum: 0
+        X.bucket_cap:
+          type: number
+          minimum: 0
+        X.day_cap:
+          type: number
+          minimum: 0

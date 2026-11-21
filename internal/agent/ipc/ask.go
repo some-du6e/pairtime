@@ -22,6 +22,21 @@ import (
 // so one function can serve both.
 const AskLastSession = "sessions/last"
 
+// AskDashboardLink asks for a one-time URL that signs a browser in to the
+// dashboard (DESIGN 3.9), which `pairtime dashboard` opens. The answer is
+// a DashboardLink. Asked here, the link needs no bearer token, so the CLI
+// sends the token nowhere (D-dashboard-link).
+const AskDashboardLink = "dashboard/link"
+
+// DashboardLink is the agent's answer to AskDashboardLink.
+type DashboardLink struct {
+	// URL is http://127.0.0.1:<port>/signin?code=<code>, and the code works
+	// once, for ExpiresInS seconds. URL is "" while the agent's HTTP server
+	// doesn't listen yet, just after the agent started: ask again then.
+	URL        string `json:"url"`
+	ExpiresInS int    `json:"expires_in_s"`
+}
+
 // ErrUnknownQuestion means the agent doesn't answer the question: it has
 // no answer for it, or it predates questions and refused the frame.
 var ErrUnknownQuestion = errors.New("ipc: the agent doesn't answer that question")
@@ -30,10 +45,9 @@ const (
 	// maxQuestion bounds a question frame. A longer frame is never taken
 	// for a question, so the agent doesn't parse a hook's message twice.
 	maxQuestion = 4 << 10
-	// maxAnswer bounds an answer frame, and answerRoom is what the reply
-	// around an answer takes at most.
-	maxAnswer  = 1 << 20
-	answerRoom = 512
+	// maxAnswer bounds an answer frame: the reply around the answer, as
+	// json.Marshal encodes it.
+	maxAnswer = 1 << 20
 )
 
 // question is the frame a question goes in: a new id, which the reply
@@ -54,7 +68,16 @@ func Ask(ctx context.Context, ep Endpoint, q string) (json.RawMessage, error) {
 	if !validQuestion(q) {
 		return nil, fmt.Errorf("ipc: %q isn't a question's name", q)
 	}
-	c, err := Dial(ctx, ep)
+	me, err := self()
+	if err != nil {
+		return nil, err
+	}
+	return ask(ctx, ep, me, q)
+}
+
+// ask is Ask of an agent that must run as want.
+func ask(ctx context.Context, ep Endpoint, want identity, q string) (json.RawMessage, error) {
+	c, err := dial(ctx, ep, want)
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +92,8 @@ func (c *Conn) Ask(ctx context.Context, q string) (json.RawMessage, error) {
 	if !validQuestion(q) {
 		return nil, fmt.Errorf("ipc: %q isn't a question's name", q)
 	}
-	ask := question{ID: inbox.NewID(), Ask: q}
-	body, err := json.Marshal(ask)
+	qn := question{ID: inbox.NewID(), Ask: q}
+	body, err := json.Marshal(qn)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +110,7 @@ func (c *Conn) Ask(ctx context.Context, q string) (json.RawMessage, error) {
 		// An agent from before questions took the frame for a message
 		// without a kind.
 		return nil, fmt.Errorf("%w: %s", ErrUnknownQuestion, rep.Error)
-	case rep.ID != ask.ID:
+	case rep.ID != qn.ID:
 		return nil, errors.New("ipc: the agent answered another question")
 	case rep.Unknown:
 		return nil, fmt.Errorf("%w: %s", ErrUnknownQuestion, rep.Error)
@@ -135,11 +158,16 @@ func (s *Server) answer(q question) (reply, bool) {
 	case !json.Valid(ans):
 		s.log.Warn("ipc: an answer isn't JSON", "question", q.Ask)
 		return reply{ID: q.ID, Error: "the agent's answer to " + q.Ask + " isn't JSON"}, true
-	case len(ans) > maxAnswer-answerRoom:
-		s.log.Warn("ipc: an answer is too long for a frame", "question", q.Ask, "bytes", len(ans))
+	}
+	// The frame holds the reply as json.Marshal encodes it, which escapes
+	// <, > and & in the answer, and U+2028 and U+2029, to six bytes each,
+	// so it is that encoding that has to fit, not the answer.
+	rep := reply{ID: q.ID, OK: true, Answer: ans}
+	if b, err := json.Marshal(rep); err != nil || len(b) > maxAnswer {
+		s.log.Warn("ipc: an answer is too long for a frame", "question", q.Ask, "bytes", len(b), "err", err)
 		return reply{ID: q.ID, Error: "the agent's answer to " + q.Ask + " is too long"}, true
 	}
-	return reply{ID: q.ID, OK: true, Answer: ans}, true
+	return rep, true
 }
 
 // validQuestion reports whether q can name a question: 1 to 64 lowercase

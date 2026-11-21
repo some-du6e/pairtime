@@ -260,6 +260,31 @@ func TestAttribution(t *testing.T) {
 			keys: map[int64]string{135: "p_2", 150: "p_3"},
 		},
 		{
+			name: "SM 3.2 rule 1: a terminal hosting no harness is ambiguous too, so a human commit's lead credits it (D-ambiguous-anchors)",
+			build: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "")
+				b.mouse(every(at(1), at(296), 5000)...)
+				b.git(at(195), "p_3", event.ActorHuman)
+				b.samples(at(0), at(300))
+			},
+			want: []projWant{
+				{0, 135, projSecs{"": {xAmbig: 135}}},
+				{135, 195, projSecs{"p_3": {rG: 60}}},
+			},
+			keys: map[int64]string{120: "", 135: "p_3"},
+		},
+		{
+			name: "SM 3.2 rule 3: an agent app hosting no session resolves to no project and isn't ambiguous, so the same commit's lead credits nothing there",
+			build: func(b *tl) {
+				b.focus(at(0), event.AppAgentApp, "")
+				b.mouse(every(at(1), at(296), 5000)...)
+				b.git(at(195), "p_3", event.ActorHuman)
+				b.samples(at(0), at(300))
+			},
+			want: []projWant{{0, 195, projSecs{"": {xAmbig: 195}}}},
+			keys: map[int64]string{135: ""},
+		},
+		{
 			name: "SM 3.2 rule 2: an editor whose focus record names no project takes the project of the latest heartbeat with input in the same or previous slot",
 			build: func(b *tl) {
 				b.focus(at(0), event.AppEditor, "")
@@ -436,7 +461,8 @@ func TestEditorAttribution(t *testing.T) {
 	// spam has verified navigations in p_1 at 30, 60, 90 and 120 s, whose
 	// leads cover [0 s, 120 s), and a plugin posting a paste into p_2 every
 	// 5 s from 2 s to 147 s, so the latest heartbeat of every slot to 150 s
-	// is the plugin's.
+	// is the plugin's. Only the plugin's are in the same or previous slot of
+	// the slots from 0 s to 30 s and from 150 s to 165 s.
 	spam := func(b *tl) {
 		b.focus(at(0), event.AppEditor, "")
 		b.mouse(every(at(1), at(296), 5000)...)
@@ -512,7 +538,7 @@ func TestEditorAttribution(t *testing.T) {
 			build: spam,
 			want: []projWant{
 				{0, 30, projSecs{"": {xNoAnch: 30}}},
-				{120, 150, projSecs{"": {xNoAnch: 30}}},
+				{150, 165, projSecs{"": {xNoAnch: 15}}},
 			},
 		},
 		{

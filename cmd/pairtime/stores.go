@@ -10,7 +10,8 @@ package main
 //     days/YYYY-MM-DD.json (DESIGN 3.5), in the shape of WP-AG4's
 //     internal/agent/store.Day (matched at 6c15be9), and display.shadow
 //     from config.toml, the way the agent reads it (config.Load). This is
-//     PLAN WP-CO0's "reading days/ only".
+//     PLAN WP-CO0's "reading days/ only". Today is the day whose rollup
+//     holds now (dayStore.today).
 //   - recap asks the agent for its last work session over the per-user
 //     socket (ipc.Ask), which checks that the agent runs as this user
 //     before it writes anything. The agent works the session out from its
@@ -182,6 +183,27 @@ func (s dayStore) day(date string) (dayFile, bool, error) {
 		d.Projects = []dayProject{}
 	}
 	return d, true, nil
+}
+
+// today returns the date of the local day the agent counts now in: of the
+// days around now's date in viewZone, the one whose rollup holds now
+// between its start and end, which are the agent's bounds for the day. The
+// agent reads its time zone once, when it starts, and this process reads
+// its own, so after the computer's zone changes the two can name different
+// days for the same instant, and the agent goes on writing its own. With no
+// rollup that holds now, as before the agent has written today's, it is
+// localToday.
+func (s dayStore) today() string {
+	now := viewNow()
+	y, m, d := now.In(viewZone()).Date()
+	// Two zones' dates are at most two days apart.
+	for _, delta := range []int{0, -1, 1, -2, 2} {
+		date := time.Date(y, m, d+delta, 12, 0, 0, 0, time.UTC).Format(time.DateOnly)
+		if day, found, err := s.day(date); err == nil && found && !now.Before(day.Start) && now.Before(day.End) {
+			return date
+		}
+	}
+	return localToday()
 }
 
 // readShadow reads display.shadow from config.toml as the agent does: off

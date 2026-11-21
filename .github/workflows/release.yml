@@ -7,7 +7,8 @@
 #   RELEASE_SIGNING_KEY secret and publishes a GitHub release, if main
 #   contains the tagged commit and the release environment's reviewer
 #   approves the run. A tag with a prerelease part, such as v0.1.0-alpha.1,
-#   publishes a prerelease.
+#   publishes a prerelease. Every release carries install.sh and
+#   install.ps1, which install that release (WP-RL2).
 # - workflow_dispatch, and a PR that changes the release code, build a
 #   snapshot signed with a throwaway key and keep it as a workflow
 #   artifact. They never publish, and the release environment that holds
@@ -259,6 +260,20 @@ jobs:
             -targets "$TARGETS" -bin "$STAGE/bin" -extra LICENSE,README.md \
             -out "$STAGE/dist" -payload "$STAGE/payload.json"
 
+      - name: The install scripts
+        # install/install.sh and install.ps1 with this release's version
+        # and the release keys its binaries trust written into them, so the
+        # copies attached to a release install that release and check its
+        # manifest against those keys (docs/PLAN.md, WP-RL2). With no key
+        # yet, they refuse the release unless told to allow it unsigned.
+        # Their SHA-256s go into the payload before it's signed, so the
+        # signature covers the first file `curl | sh` runs, and immutable
+        # releases keep a published copy from being replaced
+        # (D-immutable-releases). e2e-install.yml installs from copies made
+        # the same way.
+        run: |
+          "$TOOL" scripts -version "$VERSION" -out "$STAGE/dist" -payload "$STAGE/payload.json"
+
       - name: Sign with a throwaway key
         # Made here, used once, never stored. The publish job re-signs a
         # tag's manifest with RELEASE_SIGNING_KEY.
@@ -356,6 +371,10 @@ jobs:
           jq -c --arg sig "$other" '.signatures[0].sig = $sig' \
             "$STAGE/dist/manifest.json" > "$RUNNER_TEMP/bad-signature/manifest.json"
           refuse "$RUNNER_TEMP/bad-signature" "another key's signature under the trusted key's id"
+
+          cp -r "$STAGE/dist" "$RUNNER_TEMP/bad-script"
+          echo 'echo changed after signing' >> "$RUNNER_TEMP/bad-script/install.sh"
+          refuse "$RUNNER_TEMP/bad-script" "an install script changed after signing"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -482,12 +501,37 @@ jobs:
           notes=$RUNNER_TEMP/notes.md
           # The tag's annotation, if it has one, becomes the release notes.
           git fetch --quiet --no-tags origin "+refs/tags/$VERSION:refs/tags/$VERSION"
+          download=https://github.com/$GH_REPO/releases/download/$VERSION
           {
             if [ "$SIGNED" = true ]; then
               echo "manifest.json is signed with release key \`$KEY_ID\`, which this release's \`pairtime\` binaries trust."
             else
               echo "**Unsigned.** No release signing key exists yet, so manifest.json is signed with a throwaway key that no pairtime client trusts. Check downloads against checksums.txt."
             fi
+            echo
+            # The install scripts check manifest.json against the keys this
+            # release trusts, so an unsigned release needs them told to
+            # skip that, and the notes say what that gives up.
+            if [ "$SIGNED" = true ]; then
+              echo "To install it on macOS or Linux:"
+              sh_flags=""
+            else
+              echo "The install scripts refuse an unsigned release. To install it anyway, knowing that only the SHA-256s in its own manifest check the download, on macOS or Linux:"
+              sh_flags=" -s -- --allow-unsigned"
+            fi
+            echo
+            echo '```sh'
+            echo "curl -fsSL $download/install.sh | sh$sh_flags"
+            echo '```'
+            echo
+            echo "On Windows, in PowerShell:"
+            echo
+            echo '```powershell'
+            if [ "$SIGNED" != true ]; then
+              echo "\$env:PAIRTIME_ALLOW_UNSIGNED = '1'"
+            fi
+            echo "irm $download/install.ps1 | iex"
+            echo '```'
             echo
             if [ "$(git cat-file -t "refs/tags/$VERSION")" = tag ]; then
               git for-each-ref --format='%(contents:subject)%0a%0a%(contents:body)' "refs/tags/$VERSION"

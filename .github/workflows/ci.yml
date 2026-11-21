@@ -261,6 +261,35 @@ jobs:
             exit 1
           fi
 
+      - name: Device sign-in against the same OIDC server
+        if: ${{ !cancelled() }}
+        # WP-SV3's oracle: the real pairtime login links an install to a
+        # real pairtimed whose sign-in goes through mock-oauth2-server,
+        # which the step above started, while a browser approves on
+        # /device; then pairtime logout unlinks it. TestLoginEndToEnd
+        # skips that case without PAIRTIME_TEST_OIDC_URL, so this step
+        # fails unless it ran and passed.
+        env:
+          PAIRTIME_TEST_OIDC_URL: http://localhost:8080
+        run: |
+          if ! curl -fsS http://localhost:8080/isalive >/dev/null 2>&1; then
+            echo "::error::mock-oauth2-server isn't running; the step above starts it"
+            exit 1
+          fi
+          set +e
+          out=$(go test -count=1 -v -run '^TestLoginEndToEnd$' ./cmd/pairtime 2>&1)
+          code=$?
+          set -e
+          grep -E -- '--- (PASS|FAIL|SKIP)' <<<"$out" || true
+          if [ "$code" -ne 0 ] || ! grep -q -- '--- PASS: TestLoginEndToEnd/mock-oauth2-server ' <<<"$out"; then
+            echo "$out"
+            echo "::group::mock-oauth2-server log"
+            docker logs oidc 2>&1 | tail -n 200
+            echo "::endgroup::"
+            echo "::error::TestLoginEndToEnd didn't run and pass against mock-oauth2-server"
+            exit 1
+          fi
+
       - name: Module licenses
         if: ${{ !cancelled() }}
         run: |
@@ -379,3 +408,44 @@ jobs:
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         run: |
           git -c core.quotePath=false diff --name-status -M HEAD^1 HEAD | bash tools/ci/oracle_guard.sh
+
+      - name: Score regression
+        # Each timeline under testdata/timelines has a golden.jsonl with the
+        # minute buckets pkg/score writes for it (DESIGN 6.6, SM 7.6).
+        # TestGolden, which go test above runs too, fails when the output
+        # differs from them. Then this step writes the output into the
+        # goldens for the score-goldens artifact below. A PR that means to
+        # change the output commits them, with a higher pkg/score/VERSION
+        # unless it changes the timelines' own inputs.
+        id: goldens
+        if: ${{ !cancelled() }}
+        run: |
+          if go test -count=1 -run '^TestGolden$' ./pkg/score; then
+            exit 0
+          fi
+          go test -count=1 -run '^TestGolden$' ./pkg/score -update >/dev/null || true
+          git status --short -- testdata/timelines
+          echo "::error::pkg/score's bucket output differs from testdata/timelines/*/golden.jsonl. This run's score-goldens artifact holds every timeline's new golden. gh run download never overwrites a file, so delete the old ones first: find testdata/timelines -name golden.jsonl -delete && gh run download $GITHUB_RUN_ID -n score-goldens -D testdata/timelines. If the change is meant, commit them. A PR that changes these timelines' own inputs, or adds them, needs no version change; any other needs a higher pkg/score/VERSION in the same PR (DESIGN 6.6): MAJOR for a rule, MINOR for a parameter value, PATCH only if the goldens differ in v alone."
+          exit 1
+
+      - name: Upload the rewritten goldens
+        if: ${{ !cancelled() && steps.goldens.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: score-goldens
+          path: testdata/timelines/**/golden.jsonl
+          if-no-files-found: ignore
+
+      - name: Score regression guard
+        # A PR that rewrites a golden changes the scorer's output, so it
+        # needs a higher pkg/score/VERSION (DESIGN 6.6, EV WP1.7), unless
+        # the golden's own timeline inputs change with it, which makes the
+        # PR an oracle change. The guard reads the same diff as the oracle
+        # guard, the version at the base and at the merge commit, and, for
+        # a PATCH-only bump, both commits' goldens.
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        run: |
+          OLD_VERSION=$(git show HEAD^1:pkg/score/VERSION 2>/dev/null || true)
+          NEW_VERSION=$(git show HEAD:pkg/score/VERSION 2>/dev/null || true)
+          export OLD_VERSION NEW_VERSION SCORE_BASE=HEAD^1 SCORE_HEAD=HEAD
+          git -c core.quotePath=false diff --name-status -M HEAD^1 HEAD | bash tools/ci/score_regression.sh

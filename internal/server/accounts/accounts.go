@@ -203,6 +203,13 @@ type Options struct {
 	// that finds no account, so it must be quick and must not write. Nil
 	// means sign-ups are closed to everyone.
 	MayCreate func(sub string) bool
+	// Ineligible runs inside the transaction that marks an account
+	// ineligible, drops its contact details and revokes its sessions,
+	// with the account's id, so whatever it does lands with them.
+	// pairtimed passes device.Store.RemoveAccount, which removes the
+	// account's devices, since the account can't sign in to remove them
+	// (D-device-account-binding). Nil does nothing more.
+	Ineligible func(ctx context.Context, tx writer.Tx, account string, now time.Time) error
 	// SessionLifetime is how long a session lasts. Zero means
 	// DefaultSessionLifetime.
 	SessionLifetime time.Duration
@@ -217,8 +224,10 @@ type Store struct {
 	emails    *EmailCipher
 	roles     map[string][]string
 	mayCreate func(sub string) bool
-	lifetime  time.Duration
-	now       func() time.Time
+	// ineligible is Options.Ineligible.
+	ineligible func(ctx context.Context, tx writer.Tx, account string, now time.Time) error
+	lifetime   time.Duration
+	now        func() time.Time
 }
 
 // New returns a Store.
@@ -227,13 +236,14 @@ func New(o Options) (*Store, error) {
 		return nil, errors.New("accounts: New needs a database, a writer and an email cipher")
 	}
 	s := &Store{
-		db:        o.DB,
-		w:         o.Writer,
-		emails:    o.Emails,
-		roles:     make(map[string][]string, len(o.Reviewers)),
-		mayCreate: o.MayCreate,
-		lifetime:  o.SessionLifetime,
-		now:       o.Now,
+		db:         o.DB,
+		w:          o.Writer,
+		emails:     o.Emails,
+		roles:      make(map[string][]string, len(o.Reviewers)),
+		mayCreate:  o.MayCreate,
+		ineligible: o.Ineligible,
+		lifetime:   o.SessionLifetime,
+		now:        o.Now,
 	}
 	for _, r := range o.Reviewers {
 		s.roles[r.Sub] = slices.Clone(r.Roles)
@@ -335,6 +345,11 @@ WHERE id = $1`,
 			if _, err := tx.ExecContext(ctx, `UPDATE sessions SET revoked_at_ms = $2 WHERE user_id = $1 AND revoked_at_ms IS NULL`,
 				userID, nowMs); err != nil {
 				return fmt.Errorf("accounts: revoking the account's sessions: %w", err)
+			}
+			if s.ineligible != nil {
+				if err := s.ineligible(ctx, tx, userID, now); err != nil {
+					return fmt.Errorf("accounts: closing what the account kept: %w", err)
+				}
 			}
 			refused = ErrIneligible
 			return nil
