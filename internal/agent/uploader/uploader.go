@@ -220,8 +220,13 @@ type Uploader struct {
 	done   chan struct{}
 	once   sync.Once
 	soon   atomic.Bool // a SoonDelay wake is armed
-	hook   atomic.Bool // the next cycle is a SoonDelay wake's (hookWait)
 	urgent atomic.Bool // the next cycle doesn't wait for the scorer
+	// hookAt is when the oldest prompt or stop whose batch no plan has
+	// taken yet came, in Unix ms on the wall clock, 0 for none, which
+	// bounds the wait for the scorer (hookBound); hookC tells a flush that
+	// is waiting when one comes, or an urgent upload.
+	hookAt atomic.Int64
+	hookC  chan struct{}
 	job    *sched.Job
 
 	mu     sync.Mutex
@@ -299,7 +304,7 @@ const modeQueueMax = 64
 
 // localOnlyProblem is what doctor hears while the batch roots stop at a
 // batch sealed in local-only mode (saved.localStop).
-const localOnlyProblem = `pairtime has stopped uploading, because config.toml's mode was "local" for a while after this computer was linked, and nothing it records in local-only mode may leave it; to upload again, run pairtime logout, then pairtime login`
+const localOnlyProblem = `pairtime has stopped uploading, because config.toml kept this computer local-only for a while after it was linked (it said mode = "local", or it had an error), and nothing it records in local-only mode may leave it; to upload again, run pairtime logout, then pairtime login`
 
 // pendingReq is a request waiting for its retry: the same body goes again
 // with the same Idempotency-Key (ingest-v1 2.10).
@@ -360,6 +365,7 @@ func New(opts Options) (*Uploader, error) {
 		ctx:       ctx,
 		cancel:    cancel,
 		kick:      make(chan struct{}, 1),
+		hookC:     make(chan struct{}, 1),
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
 		problems:  map[string]string{},
@@ -376,6 +382,21 @@ func defaultBuild() string { return version.Get().Version }
 // can be called from ledger.Options.Sealed. A batch that holds a prompt
 // or a stop makes the uploader send within SoonDelay.
 func (u *Uploader) Sealed(b ledger.Batch) {
+	local, known := false, false
+	if u.opts.LocalOnly != nil {
+		local, known = u.opts.LocalOnly()
+	}
+	u.sealedAs(b, local, known)
+}
+
+// SealedWhile is Sealed for a batch sealed while config.toml's mode was
+// local or not, as one the ledger writer sealed before the uploader
+// existed: its mode is recorded as it was at its seal.
+func (u *Uploader) SealedWhile(b ledger.Batch, local bool) { u.sealedAs(b, local, true) }
+
+// sealedAs takes batch b, sealed in local-only mode (local) or not, which
+// known says is known.
+func (u *Uploader) sealedAs(b ledger.Batch, local, known bool) {
 	soon := false
 	var learned map[event.Harness]string
 	for _, rec := range b.Records {
@@ -398,15 +419,15 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 			}
 		}
 	}
-	local, known := false, false
-	if u.opts.LocalOnly != nil {
-		local, known = u.opts.LocalOnly()
-	}
 	u.mu.Lock()
 	if len(u.sealed) < sealedQueueMax {
 		u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt, harnesses: learned})
 	} else {
 		u.sealed, u.lost = nil, true
+	}
+	if soon {
+		// With the row, so the plan that takes the row clears it.
+		u.hookAt.CompareAndSwap(0, time.Now().UnixMilli())
 	}
 	changed := false
 	if m := modeOf(local); known && m != u.modeSeen {
@@ -430,7 +451,7 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 		}
 	}
 	if soon {
-		u.Soon()
+		u.soonWake()
 	}
 }
 
@@ -511,25 +532,42 @@ func harnessOf(body []byte) (event.Harness, string, bool) {
 }
 
 // Soon makes the uploader send within SoonDelay, as after a prompt or a
-// stop hook. Calls while one is armed add nothing, so a burst of hooks
+// stop hook, and within DESIGN 3.3's 10 s whatever the scorer is doing
+// (hookBound). Calls while one is armed add nothing, so a burst of hooks
 // goes in one upload.
 func (u *Uploader) Soon() {
+	u.hookAt.CompareAndSwap(0, time.Now().UnixMilli())
+	u.soonWake()
+}
+
+// soonWake arms the wake SoonDelay after a hook, and tells a flush that
+// is waiting.
+func (u *Uploader) soonWake() {
+	u.tellFlush()
 	if !u.soon.CompareAndSwap(false, true) {
 		return
 	}
 	time.AfterFunc(SoonDelay, func() {
 		u.soon.Store(false)
-		u.hook.Store(true)
 		u.Wake()
 	})
+}
+
+// tellFlush tells a flush that is waiting to work out its wait again.
+func (u *Uploader) tellFlush() {
+	select {
+	case u.hookC <- struct{}{}:
+	default:
+	}
 }
 
 // Urgent makes the uploader send at once without waiting for the scorer
 // or its pace, as on lock and suspend, when the machine may sleep within
 // seconds: the batch roots go first, and buckets the scorer hasn't written
-// yet follow on the next wake (DESIGN 3.3).
+// yet follow on the next wake (DESIGN 3.3). A flush already waiting stops.
 func (u *Uploader) Urgent() {
 	u.urgent.Store(true)
+	u.tellFlush()
 	u.Wake()
 }
 
@@ -611,6 +649,7 @@ func (u *Uploader) run() {
 		case <-timer.C:
 		}
 		u.applyModes()
+		u.prunePast()
 		for {
 			if wait := u.holdOff(); wait > 0 {
 				// The cycle runs once the wait ends, with no other wake
@@ -688,6 +727,13 @@ func (u *Uploader) cycle() bool {
 		return false
 	}
 	u.setProblem("login", "")
+	if u.st.Mismatch {
+		// The server said this device id is another account's: no state
+		// read or upload goes under it any more (#150 R5).
+		u.takeSealed()
+		u.setProblem("server", mismatchProblem)
+		return false
+	}
 	if !u.synced && !u.sync(c) {
 		return false
 	}
@@ -699,8 +745,7 @@ func (u *Uploader) cycle() bool {
 		u.setProblem("chain", forkProblem(u.st.Fork))
 		return false
 	}
-	hook := u.hook.Swap(false)
-	if !u.urgent.Swap(false) && !u.flush(flushWaitFor(hook)) {
+	if !u.urgent.Swap(false) && !u.flush() {
 		return false // stopping
 	}
 	u.takeSealed()
@@ -742,25 +787,19 @@ func (u *Uploader) cycle() bool {
 // meanwhile, and the batch roots shouldn't wait for it.
 const flushWait = 10 * time.Second
 
-// hookWait is flushWait for the wake SoonDelay after a prompt or a stop,
-// so that its upload goes within DESIGN 3.3's 10 s of the hook, whatever
-// the scorer is doing: the roots don't depend on it, and buckets it hasn't
-// written yet go with the next wake.
-const hookWait = 10*time.Second - SoonDelay
+// hookBound is how long after a prompt or a stop the wait for the scorer
+// ends at the latest, so that the hook's upload goes within DESIGN 3.3's
+// 10 s, whatever the scorer is doing: the second left covers the plan, the
+// signature and the round trip. The roots don't depend on the scorer, and
+// buckets it hasn't written yet go with the next wake.
+const hookBound = 9 * time.Second
 
-// flushWaitFor is how long a cycle waits for the scorer: hookWait for a
-// hook's wake, and flushWait otherwise.
-func flushWaitFor(hook bool) time.Duration {
-	if hook {
-		return hookWait
-	}
-	return flushWait
-}
-
-// flush waits, up to wait, until the scorer has scored every batch sealed
-// so far, so the upload carries their buckets. It returns false when the
-// uploader is stopping.
-func (u *Uploader) flush(wait time.Duration) bool {
+// flush waits until the scorer has scored every batch sealed so far, so
+// the upload carries their buckets: up to flushWait, and no longer than
+// hookBound after the oldest prompt or stop no plan has taken yet, which
+// may come while it waits. An urgent upload ends the wait. It returns
+// false when the uploader is stopping.
+func (u *Uploader) flush() bool {
 	if u.opts.Flush == nil {
 		return true
 	}
@@ -769,15 +808,38 @@ func (u *Uploader) flush(wait time.Duration) bool {
 		u.opts.Flush()
 		close(done)
 	}()
-	t := time.NewTimer(wait)
-	defer t.Stop()
-	select {
-	case <-done:
-	case <-t.C:
-	case <-u.stop:
-		return false
+	until := time.Now().Add(flushWait)
+	for {
+		t := time.NewTimer(flushLimit(time.Now(), until, u.hookAt.Load(), u.urgent.Load()))
+		select {
+		case <-done:
+			t.Stop()
+			return true
+		case <-t.C:
+			return true
+		case <-u.hookC:
+			t.Stop() // a hook came, or an urgent upload: the wait shortens
+		case <-u.stop:
+			t.Stop()
+			return false
+		}
 	}
-	return true
+}
+
+// flushLimit is how much longer, from now, a flush that may last until
+// until still waits for the scorer: no longer than hookBound after the
+// prompt or stop at hookAt, in Unix ms, 0 for none, and not at all for an
+// urgent upload.
+func flushLimit(now, until time.Time, hookAt int64, urgent bool) time.Duration {
+	if urgent {
+		return 0
+	}
+	if hookAt != 0 {
+		if end := time.UnixMilli(hookAt).Add(hookBound); end.Before(until) {
+			until = end
+		}
+	}
+	return max(until.Sub(now), 0)
 }
 
 // load reads the uploader's place from state.json and the chain's rows
@@ -823,6 +885,18 @@ func (u *Uploader) load(c Credentials) error {
 	st.prepare(rows)
 	if rows.device != chain {
 		return fmt.Errorf("the ledger's batches.seg is %s's chain, and the writer writes %s's", rows.device, chain)
+	}
+	// The writer puts a batch in batches.seg before Sealed queues its mode,
+	// so the modes of the rows just read may still wait: they go in before
+	// the link's start is worked out over them.
+	u.keepMu.Lock()
+	u.mu.Lock()
+	changes := u.modes
+	u.modes = nil
+	u.mu.Unlock()
+	u.keepMu.Unlock()
+	for _, m := range changes {
+		st.mode(m.b, m.local)
 	}
 	fresh := relinked(st, c)
 	relink(&st, rows, c)
@@ -901,6 +975,7 @@ func (u *Uploader) takeSealed() {
 	u.mu.Lock()
 	batches, lost, changes := u.sealed, u.lost, u.modes
 	u.sealed, u.lost, u.modes = nil, false, nil
+	u.hookAt.Store(0) // every hook's batch is in this plan
 	u.mu.Unlock()
 	changed := false
 	for _, c := range changes {
@@ -1089,14 +1164,15 @@ func (u *Uploader) sync(c Credentials) bool {
 	for _, g := range st.Gaps {
 		u.st.addGap(g.First, g.Last)
 	}
+	// While the link's first batch isn't stored, From is worked out again
+	// at each state read, past the batches sealed in local-only mode since
+	// the link and past the gaps the server recorded.
+	u.st.settle(u.rows.last())
 	if st.Head != nil && head >= u.st.From {
 		// The server holds a batch from where this link's chain goes on,
 		// as after a request whose answer was lost: no later batch skips.
 		u.st.Linking = false
 	}
-	// Until then From is worked out again at each state read, past the
-	// batches sealed in local-only mode since the link.
-	u.st.settle(u.rows.last())
 	if held := u.st.Next; held > max(head+1, u.st.From) {
 		// The server no longer holds batches it took, as after a restore
 		// that lost its last writes, and it may have lost the buckets that
@@ -1268,6 +1344,14 @@ func (u *Uploader) send(c Credentials, p plan, key string) bool {
 		if err == nil && a.status != http.StatusTooManyRequests && a.status < 500 && !fromPairtimed(a) {
 			err = errNotPairtimed
 		}
+		if err == nil && a.status != http.StatusOK && fromPairtimed(a) {
+			// Each refusal pairtimed answers is a past upload, the ones the
+			// uploader tries again at once and the 429s and 5xx included;
+			// answered records the 200s.
+			e := pastUpload(u.now(), c.Server, p, a)
+			e.Refused = a.refusal.Error
+			u.recordUpload(e)
+		}
 		if err != nil || a.status == http.StatusTooManyRequests || a.status >= 500 {
 			u.failed(c, err, a, &pendingReq{plan: p, key: key})
 			return false
@@ -1278,10 +1362,11 @@ func (u *Uploader) send(c Credentials, p plan, key string) bool {
 		case a.refusal.Error == refusalClockSkew:
 			continue // the answer set the clock's offset
 		case a.refusal.Error == refusalCounter:
-			if !u.sync(c) {
-				return false
-			}
-			continue
+			// The state read sets the counter, and may find a fork, after
+			// which nothing more goes (#150 R5), or a server that lost
+			// writes, after which this plan's marks don't hold: the next
+			// cycle plans again from what it read.
+			return u.sync(c)
 		case a.refusal.Error == refusalBodyHash:
 			continue // the body changed on the way
 		case a.refusal.Error == refusalBodyUnreadable:
@@ -1344,19 +1429,14 @@ func (u *Uploader) refused(c Credentials, p plan, a answer) {
 	if code == "" {
 		code = fmt.Sprintf("status %d", a.status)
 	}
-	if a.status != 0 {
-		e := pastUpload(u.now(), c.Server, p, a)
-		e.Refused = code
-		u.recordUpload(e)
-	}
 	switch code {
 	case refusalMismatch:
 		// The device id belongs to another account: this computer goes on
 		// as a new device, with a new device id and K_dev
 		// (D-device-account-binding), which is WP-AG8's. Nothing more goes
-		// under this one.
-		u.blocked = c.Token
-		u.setProblem("server", mismatchProblem)
+		// under this one, after a restart too.
+		u.mismatched(c)
+		u.drop()
 	case refusalTokenMissing, refusalTokenInvalid, refusalRevoked, refusalKeyMissing:
 		// Not this token again: signing in again gives a new one, and binds
 		// the device key with it (ingest-v1 2.6; D-key-at-grant).
@@ -1388,6 +1468,16 @@ func (u *Uploader) refused(c Credentials, p plan, a answer) {
 	u.log.Warn("the server refused an upload", "code", code, "detail", a.refusal.Detail)
 }
 
+// mismatched records the server's device_mismatch for c's server and
+// device in the uploader's place, so nothing goes under them any more,
+// after a restart too, until WP-AG8 makes a new device (#150 R5).
+func (u *Uploader) mismatched(c Credentials) {
+	u.blocked = c.Token
+	u.st.Mismatch = true
+	u.save()
+	u.setProblem("server", mismatchProblem)
+}
+
 // fromPairtimed reports whether an answer is pairtimed's: it carries the
 // server's time and, unless it is a 200, pairtimed's JSON refusal.
 func fromPairtimed(a answer) bool {
@@ -1403,8 +1493,7 @@ func (u *Uploader) refusedState(c Credentials, a answer) {
 	code := a.refusal.Error
 	switch code {
 	case refusalMismatch:
-		u.blocked = c.Token
-		u.setProblem("server", mismatchProblem)
+		u.mismatched(c)
 	case refusalTokenMissing, refusalTokenInvalid, refusalRevoked, refusalKeyMissing, refusalSignature:
 		// None of them passes with the same sign-in: signing in again binds
 		// a new token and device key (ingest-v1 2.6).

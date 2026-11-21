@@ -107,6 +107,11 @@ type saved struct {
 	// holds no row for it any more, so no receipt comes for it or for the
 	// batches before it, and their minutes read backfilled.
 	Gone uint64 `json:"gone,omitempty"`
+	// Mismatch is set once the server answered device_mismatch for Server
+	// and Device: the device id is another account's, and nothing more
+	// goes under it, not even a state read, until WP-AG8 makes a new device
+	// (#150 R5). A sign-in to another server or device starts afresh.
+	Mismatch bool `json:"mismatch,omitempty"`
 	// Fork is the batch the server answered batch_conflict for: the
 	// device's ledger and the server's witness rows disagree there, which
 	// is a bug or tampering, and the uploader sends no batch root after it

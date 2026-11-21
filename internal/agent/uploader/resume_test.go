@@ -592,14 +592,15 @@ func TestKeyRotation(t *testing.T) {
 // rig is a signed-in uploader against a fake server, over a small chain
 // and a bucket store, for the tests that follow.
 type rig struct {
-	dirs  home.Dirs
-	w     *ledger.Writer
-	rows  []ledger.Row
-	start time.Time
-	f     *fakeIngest
-	st    *state.Store
-	creds Credentials
-	u     *Uploader
+	dirs   home.Dirs
+	w      *ledger.Writer
+	rows   []ledger.Row
+	start  time.Time
+	f      *fakeIngest
+	st     *state.Store
+	creds  Credentials
+	client *http.Client
+	u      *Uploader
 }
 
 // newRig makes a chain of n batches a quarter hour apart from start, and
@@ -630,16 +631,43 @@ func newRig(t *testing.T, n int, minutes []int, linkedAfter time.Duration) *rig 
 		t.Fatal(err)
 	}
 	r.creds = Credentials{Server: srv.URL, Token: testToken, DeviceID: r.w.DeviceID(), Sign: KeySigner(devKey), LinkedAt: r.start.Add(linkedAfter)}
-	r.u, err = New(Options{
+	r.client = srv.Client()
+	r.u = r.newUploader(t)
+	return r
+}
+
+// newUploader makes an uploader over the rig's files that isn't started.
+func (r *rig) newUploader(t *testing.T) *Uploader {
+	t.Helper()
+	u, err := New(Options{
 		Ledger: r.w, LedgerDir: r.dirs.Ledger(), BucketDir: r.dirs.Buckets(), DataDir: r.dirs.Data, State: r.st,
 		Login:  LoginFunc(func() (Credentials, bool) { return r.creds, true }),
-		Params: newestTable(), Client: srv.Client(), Draw: func(int64) int64 { return 0 },
+		Params: newestTable(), Client: r.client, Draw: func(int64) int64 { return 0 },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(r.u.Close)
-	return r
+	t.Cleanup(u.Close)
+	return u
+}
+
+// restart stops the uploader and runs another over the same files for a
+// few wakes, as the next agent does: it reads state.json from disk again.
+func (r *rig) restart(t *testing.T) {
+	t.Helper()
+	r.u.Close()
+	st, _, err := state.Open(r.dirs.StateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.st = st
+	r.u = r.newUploader(t)
+	r.u.Start()
+	for range 3 {
+		r.u.Wake()
+		time.Sleep(100 * time.Millisecond)
+	}
+	r.u.Close()
 }
 
 // run starts the uploader, waits until cond holds under the fake's lock,
@@ -990,6 +1018,123 @@ func TestOneRequestAWake(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
 				t.Errorf("no: %d requests and %d minutes after the first wake, %d requests after the next", firstPosts, firstBuckets, lastPosts)
+			}
+		})
+	}
+}
+
+// receipts stores the fake server's receipts of rows in the device's
+// batches.seg, as if their answers had come.
+func receipts(t *testing.T, r *rig, rows []ledger.Row) {
+	t.Helper()
+	for _, row := range rows {
+		fr := r.f.rows[row.B]
+		sig, _ := hex.DecodeString(fr.sig)
+		rc := pkgledger.Receipt{ReceivedAt: fr.receivedAt}
+		copy(rc.Signature[:], sig)
+		if err := r.w.StoreReceipt(row.B, rc); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestStaleFork is an upload refused counter_stale, whose state read then
+// finds a fork, as when another computer with the same identity got there
+// first: nothing more goes under the device id, not even the refused
+// request's minutes (#150 R5).
+func TestStaleFork(t *testing.T) {
+	r := newRig(t, 3, []int{0, 1, 2}, -time.Minute)
+	hold(t, r.f, r.rows[:1], 1)
+	receipts(t, r, r.rows[:1])
+	r.f.faults = map[int]string{1: "stale-fork"}
+	r.run(t, "the fork", func(f *fakeIngest) bool { return r.u.Status().Fork != 0 })
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"the fork is at the batch the other computer stored", r.u.Status().Fork == 2},
+		{"no request went after the refused one", r.f.posts == 1},
+		{"no minute of it was stored", len(r.f.buckets) == 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: %d POSTs, %d minutes, fork %d", r.f.posts, len(r.f.buckets), r.u.Status().Fork)
+			}
+		})
+	}
+}
+
+// TestMismatch is the server's device_mismatch: nothing more goes under
+// the device id, after a restart too, when not even a state read goes,
+// and privacy show says uploads are stopped (#150 R5).
+func TestMismatch(t *testing.T) {
+	r := newRig(t, 3, []int{0}, -time.Minute)
+	r.f.faults = map[int]string{1: "mismatch"}
+	r.run(t, "the refused upload", func(f *fakeIngest) bool { return f.posts == 1 })
+	r.f.mu.Lock()
+	gets := r.f.gets
+	r.f.mu.Unlock()
+	p, err := Next(PreviewOptions{
+		LedgerDir: r.dirs.Ledger(), BucketDir: r.dirs.Buckets(), DataDir: r.dirs.Data, StateFile: r.dirs.StateFile(),
+		Params: newestTable(), Credentials: r.creds,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.restart(t)
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"nothing more went after the refusal", r.f.posts == 1},
+		{"privacy show says uploads are stopped, and prints no upload", p.Mismatch && p.JSON == nil},
+		{"a restarted uploader asked the server nothing under the device id", r.f.gets == gets},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: %d POSTs, %d state reads (%d before the restart), preview %+v", r.f.posts, r.f.gets, gets, p)
+			}
+		})
+	}
+}
+
+// TestLostStateGap is a device that lost state.json after a re-link whose
+// first batches were sealed in local mode: the server holds batches 1, 2,
+// 5 and 6 and recorded 3 and 4 as the link's gap, and the device lacks
+// batch 2's receipt. The link's start settles past the server's gap, so
+// the receipt comes back over it and the roots don't stop there.
+func TestLostStateGap(t *testing.T) {
+	minutes := make([]int, 90)
+	for i := range minutes {
+		minutes[i] = i
+	}
+	r := newRig(t, 6, minutes, 35*time.Minute) // linked between batches 2 and 3, which config.toml still sealed local
+	held := []ledger.Row{r.rows[0], r.rows[1], r.rows[4], r.rows[5]}
+	hold(t, r.f, held, 1)
+	receipts(t, r, []ledger.Row{r.rows[0], r.rows[4], r.rows[5]})
+	r.f.gaps = [][2]uint64{{3, 4}}
+	r.run(t, "every minute but those of batches 3 and 4", func(f *fakeIngest) bool { return len(f.buckets) == 60 })
+	_, rows, err := ledger.ReadRows(r.dirs.Ledger(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"batch 2 got its receipt back", len(rows) == 6 && rows[1].Receipt != nil},
+		{"the roots don't stop at the server's gap", r.u.Status().Stopped == 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: status %+v", r.u.Status())
 			}
 		})
 	}

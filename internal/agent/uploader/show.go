@@ -36,6 +36,9 @@ type Preview struct {
 	// from its ledger at, after which nothing more goes under its device ID
 	// (#150 R5). 0 for none.
 	Fork uint64
+	// Mismatch is set once the server said the device ID is another
+	// account's, after which nothing more goes under it (#150 R5).
+	Mismatch bool
 }
 
 // PreviewOptions say where an installation keeps its files, and what the
@@ -101,9 +104,10 @@ func Next(o PreviewOptions) (Preview, error) {
 		}
 	}
 	st.prepare(rows)
-	if st.Fork != 0 {
-		// As the agent does, nothing more goes after a fork.
-		return Preview{Fork: st.Fork}, nil
+	if st.Fork != 0 || st.Mismatch {
+		// As the agent does, nothing more goes after a fork or a
+		// device_mismatch.
+		return Preview{Fork: st.Fork, Mismatch: st.Mismatch}, nil
 	}
 	// As the agent's load does: the link first, then the request waiting
 	// for its retry, which a new link drops.

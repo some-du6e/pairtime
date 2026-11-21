@@ -99,13 +99,20 @@ func resultsOf(resp Response) *Results {
 	return r
 }
 
-// recordUpload appends a past upload to uploads.jsonl, and once a day lets
-// go of those older than uploadsKeep. A record that doesn't write is
-// logged and changes nothing else: the upload went all the same.
+// recordUpload appends a past upload to uploads.jsonl. A record that
+// doesn't write is logged and changes nothing else: the upload went all
+// the same.
 func (u *Uploader) recordUpload(e PastUpload) {
 	if err := appendUpload(u.opts.DataDir, e); err != nil {
 		u.log.Warn("couldn't record a past upload in "+UploadsName, "err", err)
 	}
+}
+
+// prunePast lets go of the past uploads older than uploadsKeep, once a
+// day, at a wake of the loop, whether answers come or not, as after a
+// fork stopped the uploads. The loop alone appends to the file, so no line
+// is lost between the read and the rename.
+func (u *Uploader) prunePast() {
 	if now := u.now(); now.Sub(u.pruned) >= 24*time.Hour {
 		u.pruned = now
 		if err := pruneUploads(u.opts.DataDir, now); err != nil {

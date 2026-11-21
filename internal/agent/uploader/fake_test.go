@@ -39,7 +39,7 @@ type fakeIngest struct {
 	now    func() time.Time
 
 	mu                sync.Mutex
-	faults            map[int]string // by POST attempt, from 1: "429", "503", "lost", "down"
+	faults            map[int]string // by POST attempt, from 1: "429", "503", "lost", "down", "mismatch", "stale-fork"
 	posts             int            // POST attempts that reached the handler
 	gets              int
 	bodies            [][]byte // the inflated body of every signed POST attempt, in order
@@ -273,6 +273,26 @@ func (f *fakeIngest) batches(w http.ResponseWriter, r *http.Request) {
 		return
 	case "503":
 		f.refuse(w, 503, "unavailable")
+		return
+	case "mismatch":
+		// The device id is another account's.
+		f.refuse(w, 403, "device_mismatch")
+		return
+	case "stale-fork":
+		// Another computer with the same identity got there first: it took
+		// higher counters and stored its own batch after the head.
+		var root, head ledger.Hash
+		root[0], head[0] = 0xf0, 0xf1
+		b := uint64(1)
+		prev := ledger.Hash{}.String()
+		if f.head != nil {
+			b, prev = f.head.b+1, f.head.head
+		}
+		row := fakeRow{b: b, n: 1, root: root.String(), head: head.String(), prev: prev, receivedAt: uint64(f.now().UnixMilli()), sig: "00", keyID: f.keyID}
+		f.rows[b] = row
+		f.head = &row
+		f.counter += 1000
+		f.refuse(w, 409, "counter_stale")
 		return
 	}
 	var top map[string]json.RawMessage

@@ -646,21 +646,8 @@ func TestTakeSealed(t *testing.T) {
 	// it, linked before batch 1, with config.toml's mode as local says.
 	newUploader := func(t *testing.T, local *bool) *Uploader {
 		t.Helper()
-		dir := t.TempDir()
-		dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
-		w, _ := smallChain(t, dirs, 1)
-		st, _, err := state.Open(dirs.StateFile())
-		if err != nil {
-			t.Fatal(err)
-		}
-		u, err := New(Options{
-			Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st, Params: newestTable(),
-			LocalOnly: func() (bool, bool) { return *local, true },
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		u.st, u.rows, u.loaded = saved{Chain: w.DeviceID(), From: 1}, &rowIndex{device: w.DeviceID()}, true
+		u := bareUploader(t, func(o *Options) { o.LocalOnly = func() (bool, bool) { return *local, true } })
+		u.st, u.rows, u.loaded = saved{Chain: u.opts.Ledger.DeviceID(), From: 1}, &rowIndex{device: u.opts.Ledger.DeviceID()}, true
 		return u
 	}
 	t.Run("a batch sealed in local mode during a cycle has its mode in the place before it is planned", func(t *testing.T) {
@@ -670,6 +657,17 @@ func TestTakeSealed(t *testing.T) {
 		u.takeSealed()
 		if roots, _ := rootsOf(planInput{rows: u.rows, st: u.st}, 10); u.st.LocalFrom != 1 || len(roots) != 0 {
 			t.Errorf("local from %d, and the roots %v go", u.st.LocalFrom, roots)
+		}
+	})
+	t.Run("a batch's mode still queued when the place loads goes in before the link's start is worked out", func(t *testing.T) {
+		local := true
+		u := bareUploader(t, func(o *Options) { o.LocalOnly = func() (bool, bool) { return local, true } })
+		u.Sealed(batch(t, 2, event.HarnessCodex, "0.9.1")) // queued, as while a cycle's applyModes has run
+		if err := u.load(Credentials{Server: "https://pairtime.example", DeviceID: u.opts.Ledger.DeviceID()}); err != nil {
+			t.Fatal(err)
+		}
+		if u.st.LocalFrom != 2 {
+			t.Errorf("local from %d, want 2", u.st.LocalFrom)
 		}
 	})
 	t.Run("a harness named only in batches sealed in local-only mode stays out of the labels, and one named online goes", func(t *testing.T) {
@@ -686,4 +684,27 @@ func TestTakeSealed(t *testing.T) {
 			t.Errorf("the labels' harnesses are %v, want %v", u.st.Harnesses, want)
 		}
 	})
+}
+
+// bareUploader is an uploader over a ledger of one batch and a state.json
+// of its own, with no server, that isn't started; edit sets its options.
+func bareUploader(t *testing.T, edit func(*Options)) *Uploader {
+	t.Helper()
+	dir := t.TempDir()
+	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+	w, _ := smallChain(t, dirs, 1)
+	st, _, err := state.Open(dirs.StateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := Options{Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st, Params: newestTable()}
+	if edit != nil {
+		edit(&o)
+	}
+	u, err := New(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(u.Close)
+	return u
 }

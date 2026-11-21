@@ -56,6 +56,33 @@ func TestPastUploads(t *testing.T) {
 			}
 		}
 	})
+	t.Run("a refusal pairtimed answers is a past upload too, one the uploader tries again included", func(t *testing.T) {
+		r := newRig(t, 3, []int{0}, -time.Minute)
+		r.f.faults = map[int]string{1: "503"}
+		r.run(t, "the minute", func(f *fakeIngest) bool { return len(f.buckets) == 1 })
+		past, err := PastUploads(r.dirs.Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.f.mu.Lock()
+		bodies := len(r.f.bodies)
+		r.f.mu.Unlock()
+		if len(past) != bodies || len(past) == 0 || past[0].Status != 503 || past[0].Refused != "unavailable" || past[0].Results != nil {
+			t.Errorf("past uploads %+v for %d requests, want the 503 first", past, bodies)
+		}
+	})
+	t.Run("past uploads older than 90 days go at a wake, whether answers come or not", func(t *testing.T) {
+		u := bareUploader(t, nil)
+		for _, at := range []time.Time{time.Now().Add(-91 * 24 * time.Hour), time.Now().Add(-time.Hour)} {
+			if err := appendUpload(u.opts.DataDir, PastUpload{At: at}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		u.prunePast()
+		if past, err := PastUploads(u.opts.DataDir); err != nil || len(past) != 1 {
+			t.Errorf("past uploads %+v, %v; want the one an hour old", past, err)
+		}
+	})
 	t.Run("past uploads older than 90 days go, with a line a crash cut short, and the rest stay", func(t *testing.T) {
 		dir := t.TempDir()
 		now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)

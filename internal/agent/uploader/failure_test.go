@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	agentledger "github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/ledger"
 )
 
@@ -211,19 +213,72 @@ func TestPace(t *testing.T) {
 	})
 }
 
-func TestFlushWait(t *testing.T) {
-	tests := []struct {
-		name string
-		ok   bool
+func TestFlushBound(t *testing.T) {
+	t0 := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	limits := []struct {
+		name      string
+		got, want time.Duration
 	}{
-		{"a wake after a prompt or a stop waits for the scorer no longer than lets its upload go within DESIGN 3.3's 10 s", SoonDelay+flushWaitFor(true) <= 10*time.Second},
-		{"any other wake waits up to flushWait", flushWaitFor(false) == flushWait},
+		{"with no hook waiting, a flush waits up to its end", flushLimit(t0, t0.Add(flushWait), 0, false), flushWait},
+		{"a hook leaves it no more than hookBound after the hook", flushLimit(t0, t0.Add(flushWait), t0.Add(-2*time.Second).UnixMilli(), false), hookBound - 2*time.Second},
+		{"a hook longer ago than hookBound ends it at once", flushLimit(t0, t0.Add(flushWait), t0.Add(-hookBound-time.Second).UnixMilli(), false), 0},
+		{"an urgent upload ends it at once", flushLimit(t0, t0.Add(flushWait), 0, true), 0},
 	}
-	for _, tc := range tests {
+	for _, tc := range limits {
 		t.Run(tc.name, func(t *testing.T) {
-			if !tc.ok {
-				t.Errorf("no: %v after the hook, then %v for the scorer", SoonDelay, flushWaitFor(true))
+			if tc.got != tc.want {
+				t.Errorf("wait %v, want %v", tc.got, tc.want)
 			}
 		})
 	}
+	// A scorer that never catches up, as during a long rebuild.
+	slow := func(t *testing.T) *Uploader {
+		t.Helper()
+		block := make(chan struct{})
+		t.Cleanup(func() { close(block) })
+		return bareUploader(t, func(o *Options) { o.Flush = func() { <-block } })
+	}
+	waits := []struct {
+		name string
+		meet func(u *Uploader) // what happens while the flush waits
+	}{
+		{"a hook that comes while a flush waits for a slow scorer ends the wait hookBound after the hook", func(u *Uploader) {
+			u.hookAt.Store(time.Now().Add(300*time.Millisecond - hookBound).UnixMilli())
+			u.tellFlush()
+		}},
+		{"an urgent upload ends a flush that waits", func(u *Uploader) { u.Urgent() }},
+	}
+	for _, tc := range waits {
+		t.Run(tc.name, func(t *testing.T) {
+			u := slow(t)
+			start := time.Now()
+			time.AfterFunc(100*time.Millisecond, func() { tc.meet(u) })
+			if !u.flush() {
+				t.Fatal("the flush says the uploader is stopping")
+			}
+			if took := time.Since(start); took > 3*time.Second {
+				t.Errorf("the flush waited %v, where flushWait would be %v", took, flushWait)
+			}
+		})
+	}
+	t.Run("a batch with a stop starts the bound, and the plan that takes its row ends it", func(t *testing.T) {
+		u := bareUploader(t, nil)
+		u.st, u.rows, u.loaded = saved{Chain: u.opts.Ledger.DeviceID(), From: 1}, &rowIndex{device: u.opts.Ledger.DeviceID()}, true
+		rtype, _ := ledger.RTypeOf(event.KindAgentStop)
+		hdr, err := ledger.NewHeader(1, rtype, "p_test", "s_test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		u.Sealed(agentledger.Batch{Row: ledger.BatchRow{B: 1, FirstSeq: 1, N: 1}, SealedAt: time.Now(), Records: []ledger.Record{{Header: hdr, Body: []byte(`{"e":{}}`)}}})
+		set := u.hookAt.Load() != 0
+		u.takeSealed()
+		if !set || u.hookAt.Load() != 0 {
+			t.Errorf("the bound started %v, and ends at %d", set, u.hookAt.Load())
+		}
+	})
+	t.Run("a hook's upload goes within DESIGN 3.3's 10 s, with a second for the plan and the round trip", func(t *testing.T) {
+		if hookBound+time.Second > 10*time.Second || SoonDelay >= hookBound {
+			t.Errorf("hookBound %v, SoonDelay %v", hookBound, SoonDelay)
+		}
+	})
 }
