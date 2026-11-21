@@ -17,6 +17,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
+	"github.com/some-du6e/pairtime/internal/platform"
 )
 
 // linkAnswer answers ipc.AskDashboardLink with url, as the agent does, and
@@ -58,6 +59,7 @@ func TestDashboard(t *testing.T) {
 		open     error                              // what opening the page returns
 		ask      time.Duration                      // how long each question may take; 0 is 2 s
 		restart  time.Duration                      // how long before a start is tried again; 0 is never
+		alive    func(w *world) (int, bool)         // agentAlive; nil is no agent running
 		wantCode int
 		check    func(t *testing.T, w *world, stdout, stderr string)
 	}{
@@ -174,8 +176,17 @@ func TestDashboard(t *testing.T) {
 			start:    func(t *testing.T, w *world) error { return errNotTheUsers },
 			wantCode: 1,
 			check: func(t *testing.T, w *world, stdout, stderr string) {
-				if !strings.Contains(stderr, "won't start it from here") || !strings.Contains(stderr, "as yourself") || len(w.opened) != 0 {
+				if !strings.Contains(stderr, "pairtime won't start it here") || len(w.opened) != 0 {
 					t.Errorf("stderr %q, opened %v", stderr, w.opened)
+				}
+				// Windows refuses an elevated token; elsewhere the data
+				// directory's owner is someone else.
+				if want := w.h.dir; runtime.GOOS == "windows" {
+					if !strings.Contains(stderr, "administrator") {
+						t.Errorf("stderr %q doesn't name administrator rights", stderr)
+					}
+				} else if !strings.Contains(stderr, want) || !strings.Contains(stderr, "belongs to another user") {
+					t.Errorf("stderr %q doesn't say %s belongs to another user", stderr, want)
 				}
 			},
 		},
@@ -265,7 +276,7 @@ func TestDashboard(t *testing.T) {
 			restart:  200 * time.Millisecond,
 			wantCode: 1,
 			check: func(t *testing.T, w *world, stdout, stderr string) {
-				if !strings.Contains(stderr, "won't start it from here") || len(w.opened) != 0 {
+				if !strings.Contains(stderr, "pairtime won't start it here") || len(w.opened) != 0 {
 					t.Errorf("stderr %q, opened %v", stderr, w.opened)
 				}
 			},
@@ -279,6 +290,27 @@ func TestDashboard(t *testing.T) {
 			check: func(t *testing.T, w *world, stdout, stderr string) {
 				if len(w.opened) != 1 || filepath.Dir(w.opened[0]) != w.pages || len(signInPages(t, w.h.dir)) != 0 {
 					t.Errorf("opened %v, want a page in %s and none in %s", w.opened, w.pages, w.h.dir)
+				}
+			},
+		},
+		{
+			name:     "an agent that runs with a socket this terminal can't reach is named, and no second agent starts",
+			alive:    func(w *world) (int, bool) { return 4242, true },
+			wantCode: 1,
+			check: func(t *testing.T, w *world, stdout, stderr string) {
+				if !strings.Contains(stderr, "is running, as process 4242, but pairtime dashboard can't reach it") || w.started != 0 || len(w.opened) != 0 {
+					t.Errorf("stderr %q, started %d, opened %v", stderr, w.started, w.opened)
+				}
+			},
+		},
+		{
+			name:     "a started agent that runs but never answers here is named once the wait is over, not said not to have started",
+			start:    func(t *testing.T, w *world) error { return nil },
+			alive:    func(w *world) (int, bool) { return 4242, w.started > 0 },
+			wantCode: 1,
+			check: func(t *testing.T, w *world, stdout, stderr string) {
+				if !strings.Contains(stderr, "can't reach it") || strings.Contains(stderr, "didn't start") || w.started != 1 {
+					t.Errorf("stderr %q, started %d", stderr, w.started)
 				}
 			},
 		},
@@ -313,6 +345,12 @@ func TestDashboard(t *testing.T) {
 				openFile: func(p string) error {
 					w.opened = append(w.opened, p)
 					return tt.open
+				},
+				agentAlive: func(home.Dirs) (int, bool) {
+					if tt.alive == nil {
+						return 0, false
+					}
+					return tt.alive(w)
 				},
 				pageDir: func(d home.Dirs) string {
 					if w.pages != "" {
@@ -459,6 +497,44 @@ func TestSignInPage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.check(t, t.TempDir())
+		})
+	}
+}
+
+func TestAgentRunning(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	me := filepath.Base(exe)
+	tests := []struct {
+		name  string
+		pid   int // port.json's; -1 for no port.json
+		procs []platform.Proc
+		err   error // from reading the process table
+		want  bool
+	}{
+		{name: "port.json naming a live process of this program is a running agent", pid: 4242, procs: []platform.Proc{{PID: 4242, Name: me}}, want: true},
+		{name: "a pid another program has since is no agent", pid: 4242, procs: []platform.Proc{{PID: 4242, Name: "firefox"}}},
+		{name: "a pid no process has is no agent", pid: 4242, procs: []platform.Proc{{PID: 1, Name: me}}},
+		{name: "an agent that stopped cleanly wrote pid 0", pid: 0, procs: []platform.Proc{{PID: 0, Name: me}}},
+		{name: "no port.json is no agent", pid: -1, procs: []platform.Proc{{PID: 4242, Name: me}}},
+		{name: "this process is never taken for the agent", pid: 7, procs: []platform.Proc{{PID: 7, Name: me}}},
+		{name: "a process table that can't be read says nothing", pid: 4242, err: errors.New("no /proc")},
+		{name: "the name matches case aside on Windows only", pid: 4242, procs: []platform.Proc{{PID: 4242, Name: strings.ToUpper(me)}}, want: runtime.GOOS == "windows" && strings.ToUpper(me) != me},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dirs := home.Dirs{Data: t.TempDir()}
+			if tt.pid >= 0 {
+				if err := localhttp.WritePortFile(dirs.PortFile(), localhttp.PortFile{Port: 7247, Token: localhttp.NewToken(), PID: tt.pid}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			procs := func() ([]platform.Proc, error) { return tt.procs, tt.err }
+			if _, got := agentRunning(dirs, procs, 7); got != tt.want {
+				t.Errorf("agentRunning = %v, want %v", got, tt.want)
+			}
 		})
 	}
 }

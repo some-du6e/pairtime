@@ -24,6 +24,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
+	"github.com/some-du6e/pairtime/internal/platform"
 )
 
 const dashboardUsage = `Usage: pairtime dashboard [--no-open]
@@ -62,6 +63,9 @@ type dashboardDeps struct {
 	// and never as root or with an elevated token, for which it returns
 	// errNotTheUsers.
 	startAgent func(home.Dirs) error
+	// agentAlive returns the pid of an agent that runs although its socket
+	// doesn't answer here, and whether there is one (agentRunning).
+	agentAlive func(home.Dirs) (int, bool)
 	// openFile asks the OS to open a local file in the default browser,
 	// and pageDir names the folder the sign-in page goes in for it
 	// (signInDir).
@@ -77,6 +81,7 @@ func runDashboard(args []string, stdout, stderr io.Writer) int {
 	return dashboard(args, stdout, stderr, dashboardDeps{
 		dirs:       home.Default,
 		startAgent: startHookAgent,
+		agentAlive: func(d home.Dirs) (int, bool) { return agentRunning(d, processTable, os.Getpid()) },
 		openFile:   openBrowser,
 		pageDir:    signInDir,
 		wait:       15 * time.Second,
@@ -86,8 +91,12 @@ func runDashboard(args []string, stdout, stderr io.Writer) int {
 }
 
 // errAgentStarting is an agent that answers on its socket but whose HTTP
-// server doesn't listen yet, so it has no link to give.
-var errAgentStarting = errors.New("the agent is still starting")
+// server doesn't listen yet, so it has no link to give, and errNoAnswer
+// is waitForLink running out of time.
+var (
+	errAgentStarting = errors.New("the agent is still starting")
+	errNoAnswer      = errors.New("the pairtime agent didn't start")
+)
 
 func dashboard(args []string, stdout, stderr io.Writer, deps dashboardDeps) int {
 	flags := flag.NewFlagSet("dashboard", flag.ContinueOnError)
@@ -112,8 +121,16 @@ func dashboard(args []string, stdout, stderr io.Writer, deps dashboardDeps) int 
 	link, err := askLink(dirs, deps.ask)
 	var started time.Time
 	if errors.Is(err, errAgentDown) {
+		// An agent can run with a socket this terminal can't reach: one
+		// started with another XDG_RUNTIME_DIR, or whose socket failed to
+		// listen. A second agent would only exit, as the first holds the
+		// lock.
+		if pid, ok := deps.agentAlive(dirs); ok {
+			sayUnreachable(stderr, dirs, pid)
+			return 1
+		}
 		if err := deps.startAgent(dirs); err != nil {
-			sayNotStarted(stderr, err)
+			sayNotStarted(stderr, dirs, err)
 			return 1
 		}
 		started = time.Now()
@@ -125,8 +142,14 @@ func dashboard(args []string, stdout, stderr io.Writer, deps dashboardDeps) int 
 	}
 	var notStarted startError
 	if errors.As(err, &notStarted) {
-		sayNotStarted(stderr, notStarted.err)
+		sayNotStarted(stderr, dirs, notStarted.err)
 		return 1
+	}
+	if errors.Is(err, errNoAnswer) {
+		if pid, ok := deps.agentAlive(dirs); ok {
+			sayUnreachable(stderr, dirs, pid)
+			return 1
+		}
 	}
 	if err != nil {
 		sayNoLink(stderr, err)
@@ -237,7 +260,7 @@ func waitForLink(dirs home.Dirs, deps dashboardDeps, started time.Time) (ipc.Das
 		case !errors.Is(err, errAgentDown) && !errors.Is(err, errAgentStarting) && !errors.Is(err, errAgentSlow):
 			return ipc.DashboardLink{}, err
 		case time.Now().After(deadline):
-			return ipc.DashboardLink{}, fmt.Errorf("the pairtime agent didn't start within %s: %v. Run `pairtime agent` to see why", words(deps.wait), err)
+			return ipc.DashboardLink{}, fmt.Errorf("%w within %s: %v. Run `pairtime agent` to see why", errNoAnswer, words(deps.wait), err)
 		case errors.Is(err, errAgentDown) && time.Since(started) >= deps.restart:
 			if err := deps.startAgent(dirs); err != nil {
 				return ipc.DashboardLink{}, startError{err}
@@ -249,13 +272,63 @@ func waitForLink(dirs home.Dirs, deps dashboardDeps, started time.Time) (ipc.Das
 }
 
 // sayNotStarted says why the agent that `pairtime dashboard` found down
-// isn't running now.
-func sayNotStarted(stderr io.Writer, err error) {
-	if errors.Is(err, errNotTheUsers) {
-		fmt.Fprintln(stderr, "pairtime dashboard: the pairtime agent isn't running, and pairtime won't start it from here: this runs as root or with administrator rights, which the agent would keep on your files. Run pairtime dashboard as yourself, without sudo or an administrator terminal.")
-		return
+// isn't running now. errNotTheUsers is mayStartAgent's refusal: on
+// Windows an elevated token, elsewhere a data directory, or the folder it
+// would be made in, that another user owns (hook_unix.go).
+func sayNotStarted(stderr io.Writer, dirs home.Dirs, err error) {
+	switch {
+	case errors.Is(err, errNotTheUsers) && runtime.GOOS == "windows":
+		fmt.Fprintln(stderr, "pairtime dashboard: the pairtime agent isn't running, and pairtime won't start it here: this runs with administrator rights, which the agent would keep on your files. Run pairtime dashboard in a terminal that isn't run as administrator.")
+	case errors.Is(err, errNotTheUsers):
+		fmt.Fprintf(stderr, "pairtime dashboard: the pairtime agent isn't running, and pairtime won't start it here: %s, the folder it keeps your data in, or the folder it would be made in, belongs to another user than the one this runs as, as it does under sudo. Run pairtime dashboard as the user who owns it.\n", dirs.Data)
+	default:
+		fmt.Fprintf(stderr, "pairtime dashboard: the pairtime agent isn't running, and starting it failed: %v\n", err)
 	}
-	fmt.Fprintf(stderr, "pairtime dashboard: the pairtime agent isn't running, and starting it failed: %v\n", err)
+}
+
+// sayUnreachable says that the agent runs, as process pid, but this
+// terminal can't reach its socket, so there is no link to open.
+func sayUnreachable(stderr io.Writer, dirs home.Dirs, pid int) {
+	where := "its socket"
+	if ep, err := ipc.EndpointFor(dirs); err == nil {
+		where = ep.Socket
+	}
+	fmt.Fprintf(stderr, "pairtime dashboard: the pairtime agent is running, as process %d, but pairtime dashboard can't reach it at %s, so it can't sign your browser in. Logging out and back in starts the agent again.\n", pid, where)
+}
+
+// agentRunning returns port.json's pid, and whether it names a process
+// that runs this same program and isn't self: an agent that runs, whether
+// or not its socket answers here. A crashed agent leaves its pid behind,
+// and another program may have it since, so the program's name has to
+// match too. It reads the pid alone: port.json's token goes nowhere.
+func agentRunning(dirs home.Dirs, procs func() ([]platform.Proc, error), self int) (int, bool) {
+	pf, err := localhttp.ReadPortFile(dirs.PortFile())
+	if err != nil || pf.PID <= 0 || pf.PID == self {
+		return 0, false
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return 0, false
+	}
+	list, err := procs()
+	if err != nil {
+		return 0, false
+	}
+	for _, p := range list {
+		if p.PID == pf.PID {
+			return pf.PID, sameProgram(p.Name, filepath.Base(exe))
+		}
+	}
+	return 0, false
+}
+
+// sameProgram reports whether a process named name runs the program whose
+// file is exe, as the OS names each: case aside on Windows.
+func sameProgram(name, exe string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(name, exe)
+	}
+	return name == exe
 }
 
 // sayNoLink says why there is no link to open.
