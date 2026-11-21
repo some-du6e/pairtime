@@ -124,11 +124,14 @@ func validSubmission() Rollup {
 	return r
 }
 
-// tier1Bucket is validBucket with every field set, slot labels and a
-// revision included, so TestTier1Shape sees every key a bucket can write.
+// tier1Bucket is validBucket with every field set, slot labels, agent-only
+// seconds and a revision included, so TestTier1Shape sees every key a
+// bucket can write. A turn in another project, p_77aa, ran in the same 6 s
+// as p_9f2c's, and nothing credited them to p_77aa.
 func tier1Bucket() MinuteBucket {
 	m := validBucket()
 	m.State, m.Rev = StatePending, 2
+	m.AgentOnly = map[string]float64{"p_77aa": 6}
 	m.Slots[0].Lbl = []Label{LabelViaTrack}
 	m.Slots[1].Lbl = []Label{LabelViaPlugin}
 	m.Slots[2].Lbl = []Label{LabelViaBridge}
@@ -301,6 +304,27 @@ func TestMinuteBucketValidate(t *testing.T) {
 		{"credit without anchor ids, as uploaded", func(m *MinuteBucket) { m.Anchors = nil }, ""},
 		{"anchor ids are event ids", func(m *MinuteBucket) { m.Anchors = []string{"e_01JDQ4"} }, "anchors[0]:"},
 		{"agent time fits in the minute", func(m *MinuteBucket) { m.AgentRunningS = 61 }, "agent_running_s:"},
+		// D-bucket-agent-only: agent_only{p: s}, the seconds a turn of p ran
+		// that weren't credited to p.
+		{"agent-only seconds by project, none in the credited one", func(m *MinuteBucket) {
+			m.AgentOnly = map[string]float64{"p_77aa": 6, "p_9f2c": 0}
+		}, ""},
+		{"agent-only seconds of two projects can add up to more than a minute", func(m *MinuteBucket) {
+			m.AgentRunningS, m.AgentOnly = 60, map[string]float64{"p_77aa": 60, "p_c0de": 59.5}
+		}, ""},
+		{"agent-only keys are project keys", func(m *MinuteBucket) { m.AgentOnly = map[string]float64{"/home/teen/game": 6} },
+			`agent_only: has an invalid key "/home/teen/game"`},
+		{"agent-only seconds fit in the minute", func(m *MinuteBucket) {
+			m.AgentRunningS, m.AgentOnly = 60, map[string]float64{"p_77aa": 61}
+		}, "agent_only[p_77aa]: must be 0 to 60 seconds in steps of 0.5, got 61"},
+		{"agent-only seconds come in steps of half a second", func(m *MinuteBucket) { m.AgentOnly = map[string]float64{"p_77aa": 2.25} },
+			"agent_only[p_77aa]: must be 0 to 60 seconds in steps of 0.5, got 2.25"},
+		{"agent-only seconds aren't negative", func(m *MinuteBucket) { m.AgentOnly = map[string]float64{"p_77aa": -1} },
+			"agent_only[p_77aa]: must be 0 to 60 seconds in steps of 0.5, got -1"},
+		{"agent-only seconds are finite", func(m *MinuteBucket) { m.AgentOnly = map[string]float64{"p_77aa": math.NaN()} },
+			"agent_only[p_77aa]: must be 0 to 60 seconds in steps of 0.5, got NaN"},
+		{"an agent-only second is a second a turn ran", func(m *MinuteBucket) { m.AgentOnly = map[string]float64{"p_77aa": 6.5} },
+			"agent_only[p_77aa]: is 6.5, more than agent_running_s (6)"},
 		{"pending, in a later revision", func(m *MinuteBucket) { m.State, m.Rev = StatePending, 3 }, ""},
 		{"unknown state", func(m *MinuteBucket) { m.State = "done" }, "state:"},
 		{"unknown witness", func(m *MinuteBucket) { m.Witness = "seen" }, "witness:"},
@@ -624,7 +648,7 @@ func TestSubmissionTotalsValidate(t *testing.T) {
 
 func TestDerivedJSONRoundTrip(t *testing.T) {
 	records := []interface{ Validate() error }{
-		validSlot(), validTurn(), validAnchor(), validCreditSlot(), validBucket(),
+		validSlot(), validTurn(), validAnchor(), validCreditSlot(), validBucket(), tier1Bucket(),
 		validRollup(), validDayRollup(), validSubmission(),
 	}
 	for _, rec := range records {

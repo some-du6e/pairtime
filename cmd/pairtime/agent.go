@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/some-du6e/pairtime/internal/agent"
@@ -77,6 +78,11 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 	if *detach {
 		return detachAgent(stdout, stderr)
 	}
+	// A copy of the binary that an install moved aside on Windows while
+	// something ran it goes once nothing does (commitBinary).
+	if exe, err := os.Executable(); err == nil {
+		removeOldBinaries(filepath.Dir(exe))
+	}
 	dirs, err := home.Default()
 	if err != nil {
 		fmt.Fprintf(stderr, "pairtime agent: %v\n", err)
@@ -88,7 +94,7 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 	// agent the usual way.
 	context.AfterFunc(ctx, stop)
 
-	err = agent.Run(ctx, agent.Options{Dirs: dirs, Log: slog.New(slog.NewTextHandler(stderr, nil)), KeyStores: agentKeyStores})
+	err = runAgentMain(ctx, agent.Options{Dirs: dirs, Log: slog.New(slog.NewTextHandler(stderr, nil)), KeyStores: agentKeyStores})
 	switch {
 	case errors.Is(err, agent.ErrAlreadyRunning):
 		fmt.Fprintf(stderr, "pairtime agent: already running for %s\n", dirs.Data)
