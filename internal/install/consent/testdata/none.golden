@@ -1,0 +1,36 @@
+pairtime install
+
+This is everything pairtime install changes on this computer. Nothing
+changes until you say yes, and pairtime uninstall takes it all back out.
+
+pairtime goes in /home/teen/.local/bin/pairtime.
+It runs in local-only mode: what it records stays on this computer.
+
+AI tools pairtime looked for:
+  Claude Code         not found
+  Cursor              not found
+  GitHub Copilot CLI  not found
+  OpenAI Codex        not found
+  Gemini CLI          not found
+
+[x] 1. Start pairtime when you log in
+
+    pairtime's agent starts in the background each time you log in, so it
+    notices when you build without you starting it.
+
+    Saying no doesn't stop you from using pairtime.
+    Without it, pairtime starts again after you log in only when a hook
+    starts it or you run pairtime agent, so it misses what comes before.
+    You can turn it off any time in your desktop's Startup Applications, or
+    with pairtime uninstall.
+
+    --- /dev/null
+    +++ /home/teen/.config/autostart/pairtime.desktop
+    @@ -0,0 +1,7 @@
+    +[Desktop Entry]
+    +Type=Application
+    +Name=pairtime
+    +Comment=Counts the time you spend building with AI
+    +Exec=/home/teen/.local/bin/pairtime agent
+    +TryExec=/home/teen/.local/bin/pairtime
+    +Terminal=false
