@@ -2,7 +2,7 @@
 <script lang="ts">
 	import type { Result } from '$shared/api/client.ts';
 	import AppShell from '$shared/components/AppShell.svelte';
-	import { api, type Day, type LastSession, type Status } from './api.ts';
+	import { api, type Day, focusOf, type LastSession, type Status } from './api.ts';
 	import SignedOut from './components/SignedOut.svelte';
 	import { addDays, dates, mayChange, monday } from './model.ts';
 	import Privacy from './pages/Privacy.svelte';
@@ -211,7 +211,7 @@
 			week={shown.days}
 			unread={shown.unread}
 			session={session?.ok ? session.data : undefined}
-			focus={status.data.focus}
+			focus={focusOf(status.data)}
 		/>
 	{/if}
 </AppShell>

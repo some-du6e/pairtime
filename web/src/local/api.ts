@@ -11,7 +11,7 @@ type Schemas = components['schemas'];
 
 export type Status = Schemas['Status'];
 export type Mode = Schemas['Mode'];
-export type Focus = Schemas['Focus'];
+export type Signals = Schemas['Signals'];
 /** GET /v1/days/{date}. */
 export type Day = Schemas['Day'];
 export type DayProject = Schemas['DayProject'];
@@ -52,6 +52,29 @@ export type Tally = Pick<
 >;
 
 export const api = createClient<paths>();
+
+/**
+ * What Today says about focus (D-focus-unknown), as GET /v1/status's
+ * signals give it (WP-OS9; D-design-5.9).
+ */
+export interface Focus {
+	/** False while signals.focus.unknown is set: the desktop doesn't say which window is in front. */
+	known: boolean;
+	/** On GNOME, why pairtime's Shell extension isn't reporting. */
+	gnome_extension?: Signals['gnome_extension'];
+	/** True once the scorer credits such time at level C, which WP-SC8 sets. */
+	level_c?: boolean;
+}
+
+/**
+ * The status's focus as Today reads it. An agent always serves the
+ * dashboard it embeds, so its status has signals; one that somehow lacks
+ * them reads as focus known, and the page says nothing about focus.
+ */
+export function focusOf(status: Status): Focus {
+	const s = status.signals as Signals | undefined;
+	return { known: s?.focus?.unknown === undefined, gnome_extension: s?.gnome_extension, level_c: s?.focus_level_c };
+}
 
 /** The mode in words for the teen (DESIGN 4.2). */
 export function describeMode(mode: Mode): string {

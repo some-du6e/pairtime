@@ -18,6 +18,7 @@
 // sums it promises.
 
 import type { components } from '../../src/gen/local-api.ts';
+import type { Focus } from '../../src/local/api.ts';
 
 type Schemas = components['schemas'];
 type Day = Schemas['Day'];
@@ -318,6 +319,29 @@ export function lastSession(options: { shadow?: boolean; none?: boolean; open?: 
 	return options.shadow ? shadowSession(reply) : reply;
 }
 
+/**
+ * GET /v1/status's signals (WP-OS9) from a Linux desktop on X11, where each
+ * has a source, or with focus as given: unknown while focus.known is false,
+ * as on GNOME on Wayland without pairtime's extension, with the GNOME
+ * extension's state and WP-SC8's level-C flag when focus has them.
+ */
+export function signalsFor(focus: Focus = { known: true }): Schemas['Signals'] {
+	const s: Schemas['Signals'] = {
+		idle: { via: 'MIT-SCREEN-SAVER' },
+		focus: focus.known ? { via: '_NET_ACTIVE_WINDOW' } : { unknown: 'this Wayland desktop tells other programs nothing about the window in front' },
+		power: { via: 'logind PrepareForSleep' },
+		lock: { via: 'logind Lock and Unlock' },
+		session: focus.known ? 'x11' : 'wayland',
+	};
+	if (focus.gnome_extension !== undefined) {
+		s.gnome_extension = focus.gnome_extension;
+	}
+	if (focus.level_c !== undefined) {
+		s.focus_level_c = focus.level_c;
+	}
+	return s;
+}
+
 /** GET /v1/status from an agent that has run since 08:00. */
 export function status(overrides: Partial<Schemas['Status']> = {}): Schemas['Status'] {
 	return {
@@ -330,6 +354,7 @@ export function status(overrides: Partial<Schemas['Status']> = {}): Schemas['Sta
 		wakeups: 522,
 		jobs: [{ name: 'inbox-drain', every_s: 60, runs: 522 }],
 		ipc: { via: 'socket', stored: 118, duplicates: 0, refused: 0 },
+		signals: signalsFor(),
 		...overrides,
 	};
 }

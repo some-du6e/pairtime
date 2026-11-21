@@ -145,7 +145,7 @@ test.describe('Today', () => {
 	});
 
 	test('with focus known, or not reported, there is no such sentence', async ({ page }) => {
-		await fakeAgent(page, { focus: { known: true, via: 'SetWinEventHook' } });
+		await fakeAgent(page, { focus: { known: true } });
 		await page.goto(dashboardURL);
 		await expect(page.getByTestId('today-clock')).toBeVisible();
 		await expect(page.getByTestId('focus-unknown')).toHaveCount(0);

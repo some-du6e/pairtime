@@ -6,7 +6,7 @@ We're building it for Hack Club's AI time tracking bounty. [docs/BOUNTY.md](docs
 
 ## Status
 
-Research and design are in progress, and the code is a skeleton. Both binaries build for every target and answer `version` and `help`, `pairtime agent` runs the background agent's skeleton, `pairtimed serve` starts the server on SQLite, signs people in with Hack Club Auth and answers health checks, and `pkg/event` holds the event model, but nothing tracks time yet. There's nothing to install.
+Research and design are in progress, and the code is a skeleton. Both binaries build for every target and answer `version` and `help`, `pairtime agent` runs the background agent's skeleton, `pairtimed serve` starts the server on SQLite, signs people in with Hack Club Auth and answers health checks, and `pkg/event` holds the event model, but nothing tracks time yet. `pairtime install` sets the client up without admin rights: it shows every change as a diff before it makes any, puts the binary at its per-user path, adds the login item, starts the agent and adds Claude Code's hooks once `pairtime hook` passes a self-test. `pairtime uninstall` takes it all back out and deletes the device key with what pairtime recorded, keeping only the daily totals and recaps unless told to delete those too.
 
 ## Layout
 
@@ -33,7 +33,7 @@ One Go module holds the client, the server and the code they share.
 | `internal/platform/clock` | A moment as an event records it: the wall clock, the OS's monotonic clock that keeps counting through sleep, and the id of the boot it counts from. The hook stamps each call with it, and the agent each message it takes in |
 | `internal/platform/proctest` | Tests of the three process-table readers against process chains the tests start themselves. No code outside its tests |
 | `internal/adapters/git` | The git adapter: which project a folder belongs to, and the commits, amends and rebases made there, read from `.git` (DESIGN 5.8) |
-| `internal/install` | What `pairtime install` writes outside pairtime's own directories, the harness hooks and the login item, merged beside what's there, and the uninstall that puts each file back byte for byte (DESIGN 5.9) |
+| `internal/install` | What `pairtime install` writes outside pairtime's own directories, the harness hooks and the login item, merged beside what's there, and the uninstall that puts each file back byte for byte; which harnesses are on the machine; and `consent`, the screen that shows each change before install makes it (DESIGN 5.9) |
 | `internal/coach/text` | The words pairtime shows a teen about their time, shared by the coach, the CLI and the dashboard: your time, each agent's time named after it, the rest said for what it was, and nothing that scolds (DESIGN 3.8) |
 | `internal/server` | The server's packages: `config` reads `pairtime.toml`, `store` opens the database (SQLite in WAL mode, or Postgres), `migrations` holds the schema, `writer` is the one goroutine every write goes through, `ops` serves the health and readiness endpoints, `accounts` keeps accounts and web sessions, `auth` signs people in with Hack Club Auth, `objstore` is the S3 client for evidence and snapshots, and `backup` holds the server's keys, their encrypted backup, the nightly snapshot and the replica's lag |
 | `internal/release` | The [update manifest](docs/spec/update-manifest.md), the signed list of release archives a client checks its downloads against, and the release keys built into the client |

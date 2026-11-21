@@ -18,6 +18,7 @@ import {
 	shadowCodes,
 	shadowHides,
 	shadowHidesOfSession,
+	signalsFor,
 	status,
 	todayFinal,
 } from './fake-days.ts';
@@ -126,12 +127,12 @@ describe("the fake agent's answers keep to the spec", () => {
 		{ name: 'GET /v1/status is a Status', value: status, schema: 'Status' },
 		{
 			name: 'GET /v1/status with focus unknown on GNOME is a Status',
-			value: () => status({ focus: { known: false, gnome_extension: 'needs_login' } }),
+			value: () => status({ signals: signalsFor({ known: false, gnome_extension: 'needs_login' }) }),
 			schema: 'Status',
 		},
 		{
 			name: 'GET /v1/status with focus unknown once such time is level C is a Status',
-			value: () => status({ focus: { known: false, level_c: true } }),
+			value: () => status({ signals: signalsFor({ known: false, level_c: true }) }),
 			schema: 'Status',
 		},
 		...fixtureDates.map((date) => ({

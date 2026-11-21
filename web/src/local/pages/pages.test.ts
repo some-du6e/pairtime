@@ -177,7 +177,7 @@ describe('Today', () => {
 		},
 		{
 			name: 'with focus known, or not reported, there is no such sentence',
-			html: () => today({ focus: { known: true, via: 'SetWinEventHook' } }) + today(),
+			html: () => today({ focus: { known: true } }) + today(),
 			check: (html) => expect(text(html)).not.toContain("doesn't tell pairtime which window"),
 		},
 		{

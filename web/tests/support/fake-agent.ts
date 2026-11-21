@@ -8,15 +8,16 @@
 
 import type { Page } from '@playwright/test';
 import type { components } from '../../src/gen/local-api.ts';
-import { dayReply, lastSession, shadowDay, shadowSession, status } from './fake-days.ts';
+import type { Focus } from '../../src/local/api.ts';
+import { dayReply, lastSession, shadowDay, shadowSession, signalsFor, status } from './fake-days.ts';
 
 type Schemas = components['schemas'];
 
 export interface FakeOptions {
 	/** false answers every request with 401, as to a browser without the cookie. */
 	signedIn?: boolean;
-	/** Status.focus, which WP-AG6 adds to the real reply. */
-	focus?: Schemas['Focus'];
+	/** What GET /v1/status's signals say of focus (signalsFor). */
+	focus?: Focus;
 	/**
 	 * display.shadow: each day and the session take the shape the agent
 	 * gives them then, with what D-shadow-scope hides left out
@@ -63,7 +64,7 @@ export async function fakeAgent(page: Page, options: FakeOptions = {}): Promise<
 		}
 		const day = /^\/v1\/days\/([^/]+)$/.exec(url.pathname);
 		if (url.pathname === '/v1/status') {
-			await route.fulfill({ json: options.focus ? status({ focus: options.focus }) : status() });
+			await route.fulfill({ json: options.focus ? status({ signals: signalsFor(options.focus) }) : status() });
 		} else if (day?.[1]) {
 			const date = decodeURIComponent(day[1]);
 			if (date !== 'today' && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {

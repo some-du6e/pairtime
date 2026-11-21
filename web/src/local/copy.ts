@@ -23,7 +23,7 @@ export const counts = [
  * (SM 5.1, DESIGN 6.4, 6.2 D11). Level C leaves out D-focus-unknown's
  * desktop that hides which window is in front: until WP-SC8 the scorer
  * credits such time nothing, so saying it counts at level C would be
- * untrue (D-design-5.9). WP-SC8 adds it here, with Focus.level_c.
+ * untrue (D-design-5.9). WP-SC8 adds it here, with signals.focus_level_c.
  */
 export const levelWhy: Record<Level, string> = {
 	A: 'Your computer saw you typing around the prompt, edit or command that started this time, and the tool you used reported that act itself.',
@@ -41,11 +41,12 @@ export const pendingWords =
 
 /**
  * What Today says while /v1/status says the desktop doesn't tell pairtime
- * which window is in front (D-focus-unknown), with its GNOME additions.
- * Where such time counts it says only once focus.level_c is true, which
- * WP-SC8 sets, the first WP in which that time is level C (D-design-5.9).
- * Until then the sentence stops at its first clause: the agent's
- * `known: false` alone doesn't make the claim true.
+ * which window is in front (signals.focus.unknown; D-focus-unknown), with
+ * its GNOME additions. Where such time counts it says only once
+ * focus.level_c is true, signals.focus_level_c, which WP-SC8 sets, the
+ * first WP in which that time is level C (D-design-5.9). Until then the
+ * sentence stops at its first clause: focus being unknown alone doesn't
+ * make the claim true.
  */
 export function focusWords(focus: Focus): string[] {
 	const words = [
