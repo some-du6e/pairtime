@@ -99,7 +99,7 @@ type Policy struct {
 
 // Window is the spot-check window.
 type Window struct {
-	// Months is how long the window stays open after the decision.
+	// Months is how long the window stays open after it opens (DESIGN 4.4).
 	Months int `json:"months"`
 	// Provisional, when set, says why Months is a stand-in: it is the
 	// design's default until Hack Club HQ sets the window (DESIGN 13.2).
@@ -407,13 +407,13 @@ func Days(n int) string {
 	return fmt.Sprintf("%d days", n)
 }
 
-// Closes returns when the spot-check window of a decision made at decided
-// closes: Months calendar months later, in UTC. When that month lacks the
+// Closes returns when a spot-check window that opened at opened closes:
+// Months calendar months later, in UTC. When that month lacks the
 // day, as one month after 31 March does, the window stays open to the end
 // of the month and closes as the next month starts. The evidence store
 // uses the same rule.
-func (w Window) Closes(decided time.Time) time.Time {
-	d := decided.UTC()
+func (w Window) Closes(opened time.Time) time.Time {
+	d := opened.UTC()
 	c := d.AddDate(0, w.Months, 0)
 	if c.Day() != d.Day() {
 		// AddDate rolled an impossible date, such as 31 April, into the
