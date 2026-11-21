@@ -23,6 +23,8 @@ func TestParse(t *testing.T) {
 		{name: "an empty file gives the defaults", file: "", want: Default()},
 		{name: "the defaults are local mode and the default port", file: "", want: Config{Mode: Local, HTTP: HTTP{Port: 0}}},
 		{name: "mode local is kept", file: `mode = "local"`, want: Default()},
+		{name: "display.shadow = true shows credited time as calibrating", file: "[display]\nshadow = true\n", want: Config{Mode: Local, Display: Display{Shadow: true}}},
+		{name: "display.shadow is off by default", file: "[display]\n", want: Default()},
 		{
 			name:        "a mode this release lacks falls back to local and is reported",
 			file:        `mode = "cloud"`,

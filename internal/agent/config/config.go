@@ -46,9 +46,10 @@ const DefaultServer = "https://pairtime.karimeltaib.com"
 
 // Config is config.toml.
 type Config struct {
-	Mode   Mode   `toml:"mode"`
-	HTTP   HTTP   `toml:"http"`
-	Server Server `toml:"server"`
+	Mode    Mode    `toml:"mode"`
+	HTTP    HTTP    `toml:"http"`
+	Server  Server  `toml:"server"`
+	Display Display `toml:"display"`
 	// Notifications is [notifications], which Parse reads through
 	// notificationsFile.
 	Notifications Notifications `toml:"-"`
@@ -60,6 +61,7 @@ type fileConfig struct {
 	Mode          Mode              `toml:"mode"`
 	HTTP          HTTP              `toml:"http"`
 	Server        Server            `toml:"server"`
+	Display       Display           `toml:"display"`
 	Notifications notificationsFile `toml:"notifications"`
 }
 
@@ -76,6 +78,17 @@ type Server struct {
 type HTTP struct {
 	// Port is the port to try first. 0 means the default.
 	Port int `toml:"port"`
+}
+
+// Display is [display], how the agent's views show time.
+type Display struct {
+	// Shadow is display.shadow (DESIGN 6.7 step 2): while it is on, every
+	// view shows credited time as "calibrating" and leaves its numbers
+	// out, and keeps moments, loops and the agent's time, so nobody learns
+	// to steer the rules before they are fitted (SM 7.5). Calibration
+	// volunteers have it on from 12-01 until the scoring freeze; it is off
+	// for everyone else.
+	Shadow bool `toml:"shadow"`
 }
 
 // Default is the configuration of a config.toml with nothing in it.
@@ -124,6 +137,9 @@ func Parse(data []byte) (cfg Config, problems []string) {
 			problems = append(problems, fmt.Sprintf("config.toml: http.port %d isn't 0 or from 1024 to 65535, so the default port is used", p))
 		}
 	}
+	if md.IsDefined("display", "shadow") {
+		cfg.Display.Shadow = file.Display.Shadow
+	}
 	problems = append(problems, parseNotifications(&cfg, file.Notifications, md.Keys())...)
 	return cfg, problems
 }
@@ -169,6 +185,12 @@ port = 0
 # The pairtime server that pairtime login links this computer to. ""
 # means https://pairtime.karimeltaib.com.
 url = ""
+
+[display]
+# true shows your credited time as "calibrating" while pairtime's rules are
+# being fitted, and keeps the agent's time and your moments. Calibration
+# volunteers have it on until the scoring freeze.
+shadow = false
 
 [notifications]
 # One quiet notification when a work session ends, to say its recap is

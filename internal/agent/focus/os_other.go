@@ -4,10 +4,10 @@
 
 package focus
 
-// thisOS has no focus source yet. internal/platform/darwin (WP-OS3) and
-// internal/platform/linux (WP-OS4) watch focus on macOS and Linux, and
-// WP-OS9 wires them in here. Until then the component records nothing
-// there, and every slot's focus is none (SM 2.5).
+// thisOS has no focus source of its own here. On macOS and Linux focus
+// shares its OS connection with presence: one darwin.Loop on the main
+// thread, or one linux.Desktop, which the agent opens and passes to MacOS
+// or LinuxOS (WP-OS9). Anywhere else the component records nothing.
 func thisOS() OS {
-	return OS{}
+	return OS{Unknown: "pairtime reads no focus on this OS"}
 }
