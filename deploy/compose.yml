@@ -31,9 +31,9 @@ name: pairtime
 services:
   pairtimed:
     # A server-image.yml push, by tag and digest (deploy/runbook.md, The
-    # image pin). This one is main at 7bbde53: #152's server plus your first
-    # name in the header from Hack Club Auth (#153).
-    image: ghcr.io/some-du6e/pairtimed:sha-7bbde53ebec7@sha256:8e593078924c95de1240b60275dc51b7617873ecae5a80b4d36a39ee1fbae175
+    # image pin). This one is main at 4c66364: #154's server plus the deploy
+    # bundle fixes (#123), scoring 0.2.0 (#151) and the held-calls notice (#156).
+    image: ghcr.io/some-du6e/pairtimed:sha-4c66364cb246@sha256:9e6f7e4f606ae8df7fe6aa6682506232f57e5c3f0bc38f19dfafb43c700ceb67
     restart: unless-stopped
     # Litestream restores /data/pairtime.db from the replica when the file
     # is missing, then runs "pairtimed serve" as its subprocess and copies
@@ -44,15 +44,6 @@ services:
       # Local disk only, never NFS or SMB: SQLite's locks don't hold there.
       - ./data:/data
       - ./config:/etc/pairtime:ro
-      # Images built from #123 on carry litestream.yml at this path, so each
-      # runs the copy it was built and drilled with. The older image pinned
-      # above has none, so it gets litestream.frozen.yml, a copy that changes
-      # only with that image: a change to litestream.yml reaches hosts with
-      # the next image it is drilled in, never this one. The PR that first
-      # pins a newer image deletes these lines and that file. Its restore
-      # drill fails while the mount is there, and TestFrozenLitestream while
-      # the file is (deploy/runbook.md, The image pin).
-      - ./litestream.frozen.yml:/etc/litestream.yml:ro
       # Where pairtimed writes each day's signed witness root (WP-SV17).
       - ./witness-roots:/witness
       # /tmp in memory, since the root filesystem is read-only, and bounded,
