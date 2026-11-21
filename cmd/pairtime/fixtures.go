@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -263,14 +264,13 @@ func (s *scrubber) file(path, shown string) {
 	// get no span of their own right before an @ or a colon, so localPart
 	// and urlCredentials look for them.
 	var found []redact.Span
-	for _, sp := range append(s.r.Find(text), telemetryIDs(text)...) {
+	for _, sp := range slices.Concat(s.r.Find(text), telemetryIDs(text), s.urlCredentials(text)) {
 		if sp.Type == redact.TypeEmail && publicAddress(text[sp.Start:sp.End]) {
 			found = append(found, s.localPart(text, sp)...)
 			continue
 		}
 		found = append(found, sp)
 	}
-	found = append(found, s.urlCredentials(text)...)
 	// A placeholder from an earlier run stays, even where a rule other than
 	// the one that wrote it finds it, as url-password finds
 	// REDACTED_STRIPE_ACCESS_TOKEN in a URL's password, or the capture of
@@ -543,11 +543,12 @@ func (s *scrubber) localPart(text string, sp redact.Span) []redact.Span {
 // in text that has them, whatever its host: USER and PASSWORD in
 // https://USER:PASSWORD@host. A URL here is two or more slashes, among
 // backslashes when the URL sits in JSON as \/\/ or \\/\\/, then an
-// authority holding an @. The user is scanned on its own, since no span
-// covers a key followed by the colon, or by the @ of a host that isn't an
-// address. The password gets the span of pkg/redact's url-password rule,
-// which finds it only after scheme://, so a URL written in JSON or without
-// its scheme would keep it at a kept address.
+// authority holding an @. The password runs to the last @, as in
+// pkg/redact's url-password rule. The user is scanned on its own, since no
+// span covers a key followed by the colon, or by the @ of a host that
+// isn't an address. The password gets url-password's span, which the rule
+// gives it only after scheme://, so a URL written in JSON or without its
+// scheme would keep it at a kept address.
 func (s *scrubber) urlCredentials(text string) []redact.Span {
 	var found []redact.Span
 	for i := 0; i < len(text); {
@@ -555,6 +556,7 @@ func (s *scrubber) urlCredentials(text string) []redact.Span {
 			i++
 			continue
 		}
+		slash := i
 		j, slashes := i, 0
 		for ; j < len(text) && (text[j] == '/' || text[j] == '\\'); j++ {
 			if text[j] == '/' {
@@ -562,8 +564,14 @@ func (s *scrubber) urlCredentials(text string) []redact.Span {
 			}
 		}
 		end := j
-		for end < len(text) && authorityByte(text[end]) {
-			end++
+		for end < len(text) {
+			if authorityByte(text[end]) {
+				end++
+			} else if n := escapedAuthorityByte(text, end); n > 0 {
+				end += n
+			} else {
+				break
+			}
 		}
 		i = end
 		at := strings.LastIndexByte(text[j:end], '@')
@@ -571,6 +579,12 @@ func (s *scrubber) urlCredentials(text string) []redact.Span {
 			continue
 		}
 		at += j
+		// RFC 3986 keeps [ and ] out of a user and a password. Two slashes
+		// with no scheme before them are often something else, such as the
+		// namespaced XPath //xs:element[@name].
+		if !afterScheme(text, slash) && strings.ContainsAny(text[j:at], "[]") {
+			continue
+		}
 		userEnd := at
 		if colon := strings.IndexByte(text[j:at], ':'); colon >= 0 {
 			userEnd = j + colon
@@ -585,10 +599,39 @@ func (s *scrubber) urlCredentials(text string) []redact.Span {
 
 // authorityByte reports whether c can be part of a URL's user, password or
 // host as a capture writes it. A control character, a space, a slash, a
-// backslash, a quote, a backtick or an angle bracket ends the URL or the
-// JSON string around it, and ? or # ends the authority (RFC 3986).
+// backslash, a quote or an angle bracket ends the URL or the JSON string
+// around it. ? and # end an authority in RFC 3986, but people put them in
+// passwords, so they don't end it here.
 func authorityByte(c byte) bool {
-	return c > ' ' && c != 0x7f && !strings.ContainsRune("/\\'\"`<>?#", rune(c))
+	return c > ' ' && c != 0x7f && !strings.ContainsRune(`/\'"<>`, rune(c))
+}
+
+// escapedAuthorityByte returns the length of the JSON \u escape at text[i:]
+// when it stands for a character authorityByte accepts, as encoding/json
+// writes the & of a password, or 0.
+func escapedAuthorityByte(text string, i int) int {
+	if i+6 > len(text) || text[i] != '\\' || text[i+1] != 'u' {
+		return 0
+	}
+	v, err := strconv.ParseUint(text[i+2:i+6], 16, 16)
+	if err != nil || v < 0x80 && !authorityByte(byte(v)) {
+		return 0
+	}
+	return 6
+}
+
+// afterScheme reports whether text[:i] ends with a URL's scheme and its
+// colon, such as postgres:.
+func afterScheme(text string, i int) bool {
+	if i == 0 || text[i-1] != ':' {
+		return false
+	}
+	k := i - 1
+	for k > 0 && strings.IndexByte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-", text[k-1]) >= 0 {
+		k--
+	}
+	c := text[k] | 0x20
+	return k < i-1 && c >= 'a' && c <= 'z'
 }
 
 // findIn returns Find's spans for text[start:end] alone, as offsets into
@@ -605,14 +648,18 @@ func (s *scrubber) findIn(text string, start, end int) []redact.Span {
 	return spans
 }
 
-// earlierPlaceholder reports whether s is a placeholder the scrub writes:
-// one of README's, or REDACTED and a rule's name.
+// earlierPlaceholder reports whether s is a whole placeholder the scrub
+// writes: one of README's, or REDACTED and a rule's or a type's name, in
+// capitals with _ for -. A span that runs on past one, as the
+// REDACTED_URL_PASSWORD@ssw0rd of a password with an @ that scrub.py
+// ended at the first, isn't one.
 func earlierPlaceholder(s string) bool {
 	switch s {
-	case placeholderAccount, placeholderHost, placeholderName, placeholderEmail, placeholderID:
+	case placeholderAccount, placeholderHost, placeholderName, placeholderEmail, placeholderID, placeholderOther:
 		return true
 	}
-	return strings.HasPrefix(s, placeholderOther)
+	name, ok := strings.CutPrefix(s, placeholderOther+"_")
+	return ok && name != "" && strings.Trim(name, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == ""
 }
 
 // kinds names the spans' types, with the gitleaks rule for a secret.

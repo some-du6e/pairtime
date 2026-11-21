@@ -1836,6 +1836,24 @@ func TestScrub(t *testing.T) {
 				"https://REDACTED_STRIPE_KEY:capture@example.invalid/v1/charges\n",
 			"postgres://app:REDACTED_STRIPE_KEY@db.example.com/app\npostgres://app:capture@example.invalid/app\n" +
 				"https://REDACTED_STRIPE_KEY:capture@example.invalid/v1/charges\n"},
+		{"a span that runs on past a placeholder isn't one, so all of it is replaced",
+			"postgres://app:REDACTED_URL_PASSWORD@ssw0rd@db.example.com/app\n",
+			"postgres://app:REDACTED_URL_PASSWORD@db.example.com/app\n"},
+		{"a URL's password with ?, # or @ in it runs to its last @, and the user before it is still scanned",
+			"https://" + stripe + ":pa?ss1@api.example.com/v1/charges\n" +
+				`{"url":"postgres:\/\/app:Tr0ub#4dor@db.example.com\/app"}` + "\n" +
+				"//app:Tr0ub?4dor@db:5432/app\n" +
+				"postgres://app:p@ssw0rd@db.example.com/app\n",
+			"https://REDACTED_STRIPE_KEY:REDACTED_URL_PASSWORD@api.example.com/v1/charges\n" +
+				`{"url":"postgres:\/\/app:REDACTED_URL_PASSWORD@db.example.com\/app"}` + "\n" +
+				"//app:REDACTED_URL_PASSWORD@db:5432/app\n" +
+				"postgres://app:REDACTED_URL_PASSWORD@db.example.com/app\n"},
+		{"an address that is a URL's user is replaced or kept like any other address",
+			"ftp://jane@westfield.edu:s3cretpw@ftp.example.com/\nftp://noreply@anthropic.com:s3cretpw@ftp.example.com/\n",
+			"ftp://capture@example.invalid:REDACTED_URL_PASSWORD@ftp.example.com/\nftp://noreply@anthropic.com:REDACTED_URL_PASSWORD@ftp.example.com/\n"},
+		{"two slashes with no scheme before them aren't a URL when a bracket follows, as in namespaced XPath",
+			"tree.xpath('//xs:element[@name]', namespaces=ns)\npom.findall(\".//pom:dependency[@scope]\")\n",
+			"tree.xpath('//xs:element[@name]', namespaces=ns)\npom.findall(\".//pom:dependency[@scope]\")\n"},
 		// D-email-redaction-tld.
 		{"under a reserved top-level domain only a one-label name is kept, so a real address with .invalid appended is replaced",
 			"Owner: jane.doe@westfield.edu.invalid\nci@runner.ci.test ci@build.example.invalid\n" +

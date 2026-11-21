@@ -73,10 +73,12 @@ NAME = "Capture User"
 EMAIL = "capture@example.invalid"
 OTHER = "REDACTED"
 ACCOUNT_ID = "00000000-0000-4000-8000-000000000000"
-# What a scrubbed file holds in place of a value. A rule that finds one, as
-# URL_PASSWORD finds the capture in capture@example.invalid, leaves it, so
-# scrubbing twice changes nothing.
-PLACEHOLDERS = {USER, HOST, NAME, EMAIL, ACCOUNT_ID}
+# What a scrubbed file holds in place of a value. A rule that finds a whole
+# one, as URL_PASSWORD finds the capture in capture@example.invalid, leaves
+# it, so scrubbing twice changes nothing. A hit that runs on past one isn't
+# one.
+PLACEHOLDERS = {USER, HOST, NAME, EMAIL, ACCOUNT_ID, OTHER}
+REDACTED_NAME = re.compile(r"REDACTED_[A-Z0-9_]+")
 
 # Public addresses that tools write into commits and remotes, and domains
 # reserved for examples, as testdata/fixtures/README.md lists them. Keeping
@@ -147,11 +149,17 @@ SECRET_PATTERNS = [
     ("HUGGINGFACE_TOKEN", B + r"hf_[A-Za-z0-9]{30,}"),
     ("NPM_TOKEN", B + r"npm_[A-Za-z0-9]{36}"),
     ("JWT", B + r"eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
-    # A password after scheme:// or after a bare //, with the slashes also
-    # written as JSON writes them, \/\/, or JSON inside a JSON string, \\/\\/.
-    # The user may be empty, as in redis://:pw@cache.
-    ("URL_PASSWORD", r"(?i)(?:(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*:)?(?<![/\\])(?:\\*/){2}(?![/\\])"
-                     r"[^/\s:@\"']*:(?P<secret>[^/\s@\"']+)@"),
+    # A URL's password, after scheme:// or after a bare //, with the slashes
+    # also written as JSON writes them, \/\/, or JSON inside a JSON string,
+    # \\/\\/. The user may be empty, as in redis://:pw@cache, and the user and
+    # the password may hold an @: the password runs to the last one, as in
+    # pkg/redact's url-password rule. Without a scheme neither may hold [ or ],
+    # which RFC 3986 keeps out of them, so namespaced XPath such as
+    # //xs:element[@name] stays.
+    ("URL_PASSWORD", r"(?i)(?<![a-z0-9+.-])[a-z][a-z0-9+.-]*:(?:\\*/){2}(?![/\\])"
+                     r"[^/\s:\"']*:(?P<secret>[^/\s\"']+)@"),
+    ("URL_PASSWORD", r"(?<![/\\])(?:\\*/){2}(?![/\\])[^/\s:\"'\[\]]*:"
+                     r"(?P<secret>[^/\s\"'\[\]]+)@"),
     ("BEARER_TOKEN", r"(?i)(?:\b|" + ESC + r")bearer\s+(?P<secret>[A-Za-z0-9._~+/-]{16,}=*)"),
     ("SECRET", r"(?i)(?:api[_-]?key|access[_-]?key|secret(?:[_-]?key)?|(?:access|auth|refresh|session|bearer)?[_-]?token"
                r"|passwd|password|pwd)[\"']?\s*[:=]\s*[\"']?(?P<secret>[A-Za-z0-9_\-./+=]{12,})"),
@@ -446,6 +454,10 @@ def build_rules(known, common=()):
         domain = t.rsplit("@", 1)[-1]
         if t in KEEP_EMAILS or any(domain == d or domain.endswith("." + d) for d in KEEP_EMAIL_DOMAINS):
             return True
+        # REDACTED_URL_PASSWORD@api.stripe.com is what an earlier run left of
+        # a URL whose password it replaced, not an address.
+        if REDACTED_NAME.fullmatch(text.rsplit("@", 1)[0]):
+            return True
         labels = [domain[:-len(tld)] for tld in KEEP_EMAIL_TLDS if domain.endswith(tld)]
         return any(label and "." not in label for label in labels)
 
@@ -468,7 +480,7 @@ def find_hits(text, rules):
                 start, end = m.span()
             found = text[start:end]
             # Never replace a placeholder, so scrubbing twice changes nothing.
-            if start == end or found == rule.placeholder or found.startswith("REDACTED") or found in PLACEHOLDERS:
+            if start == end or found == rule.placeholder or found in PLACEHOLDERS or REDACTED_NAME.fullmatch(found):
                 continue
             if rule.keep and rule.keep(found):
                 continue

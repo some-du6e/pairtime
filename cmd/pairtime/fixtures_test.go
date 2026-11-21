@@ -18,6 +18,9 @@ func TestFixturesScrub(t *testing.T) {
 	// Built at run time, so no file in the repo looks like a leaked key.
 	stripe := "sk_" + "live_" + strings.Repeat("Qw81Zx4LmN", 3)
 	anthropic := "sk-ant-" + "api03-" + strings.Repeat("aB3_x9Kq-Z", 10)[:93] + "AA"
+	// encoding/json's escape for &, built here so no tool that edits this
+	// file turns it into the character.
+	amp := `\` + "u0026"
 	maya := []string{"--account", "maya", "--home", "/home/maya"}
 	tests := []struct {
 		name      string
@@ -216,6 +219,91 @@ func TestFixturesScrub(t *testing.T) {
 			// place of the one there.
 			name:     "a placeholder an earlier run wrote is left alone, even where another rule finds it",
 			files:    map[string]string{"again.txt": "postgres://app:REDACTED_STRIPE_ACCESS_TOKEN@db.example.com/app\npostgres://app:capture@example.invalid/app\nhttps://REDACTED_STRIPE_ACCESS_TOKEN:capture@example.invalid/v1/charges\n"},
+			wantCode: 0,
+			wantOut:  []string{"removed 0 spans from 0 of 1 files"},
+		},
+		{
+			// scrub.py ended this password at its first @, which left
+			// ssw0rd glued to a placeholder.
+			name:     "a span that runs on past a placeholder isn't one, so all of it is replaced",
+			files:    map[string]string{"glued.txt": "postgres://app:REDACTED_URL_PASSWORD@ssw0rd@db.example.com/app\n"},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"glued.txt": "postgres://app:REDACTED_URL_PASSWORD@db.example.com/app\n",
+			},
+			wantOut: []string{"glued.txt:1:16: secret url-password, 28 bytes\n", "removed 1 spans from 1 of 1 files"},
+			notOut:  []string{"ssw0rd"},
+		},
+		{
+			// RFC 3986 keeps ? and # out of an authority, but people put
+			// them in passwords, and a password may hold an @ as well.
+			name: "a URL's password with ?, # or @ in it runs to its last @, and the user before it is still scanned",
+			files: map[string]string{
+				"special.txt": "https://" + stripe + ":pa?ss1@api.example.com/v1/charges\n" +
+					`{"url":"postgres:\/\/app:Tr0ub#4dor@db.example.com\/app"}` + "\n" +
+					"//app:Tr0ub?4dor@db:5432/app\n" +
+					"postgres://app:p@ssw0rd@db.example.com/app\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"special.txt": "https://REDACTED_STRIPE_ACCESS_TOKEN:REDACTED_URL_PASSWORD@api.example.com/v1/charges\n" +
+					`{"url":"postgres:\/\/app:REDACTED_URL_PASSWORD@db.example.com\/app"}` + "\n" +
+					"//app:REDACTED_URL_PASSWORD@db:5432/app\n" +
+					"postgres://app:REDACTED_URL_PASSWORD@db.example.com/app\n",
+			},
+			wantOut: []string{
+				"special.txt:1:9: secret stripe-access-token, 38 bytes\n",
+				"special.txt:1:48: secret url-password, 6 bytes\n",
+				"special.txt:2:26: secret url-password, 10 bytes\n",
+				"special.txt:3:7: secret url-password, 10 bytes\n",
+				"special.txt:4:16: secret url-password, 8 bytes\n",
+				"removed 5 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe, "pa?ss1", "Tr0ub", "ssw0rd"},
+		},
+		{
+			// The address there is the password and the host, which
+			// pkg/redact merges into one span, so the host goes too.
+			name: "a key before a password with # or JSON's escaped & in it is replaced at a host that isn't kept",
+			files: map[string]string{
+				"realhost.txt": "https://" + stripe + ":pa#ss1@api.stripe.com/v1/charges\n" +
+					`{"url":"https://` + stripe + `:pa` + amp + `ss@api.stripe.com/x"}` + "\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"realhost.txt": "https://REDACTED_STRIPE_ACCESS_TOKEN:capture@example.invalid/v1/charges\n" +
+					`{"url":"https://REDACTED_STRIPE_ACCESS_TOKEN:capture@example.invalid/x"}` + "\n",
+			},
+			wantOut: []string{
+				"realhost.txt:1:9: secret stripe-access-token, 38 bytes\n",
+				"realhost.txt:1:48: email, 21 bytes\n",
+				"realhost.txt:2:17: secret stripe-access-token, 38 bytes\n",
+				"realhost.txt:2:56: email, 25 bytes\n",
+				"removed 4 spans from 1 of 1 files",
+			},
+			notOut: []string{stripe},
+		},
+		{
+			name: "an address that is a URL's user is replaced or kept like any other address",
+			files: map[string]string{
+				"users.txt": "ftp://jane@westfield.edu:s3cretpw@ftp.example.com/\nftp://noreply@anthropic.com:s3cretpw@ftp.example.com/\n",
+			},
+			wantCode: 0,
+			wantFiles: map[string]string{
+				"users.txt": "ftp://capture@example.invalid:REDACTED_URL_PASSWORD@ftp.example.com/\nftp://noreply@anthropic.com:REDACTED_URL_PASSWORD@ftp.example.com/\n",
+			},
+			wantOut: []string{
+				"users.txt:1:7: email, 18 bytes\n",
+				"users.txt:1:26: secret url-password, 8 bytes\n",
+				"users.txt:2:29: secret url-password, 8 bytes\n",
+				"removed 3 spans from 1 of 1 files",
+			},
+			notOut: []string{"jane", "s3cretpw"},
+		},
+		{
+			// RFC 3986 keeps [ and ] out of a user and a password.
+			name:     "two slashes with no scheme before them aren't a URL when a bracket follows, as in namespaced XPath",
+			files:    map[string]string{"xpath.py": "tree.xpath('//xs:element[@name]', namespaces=ns)\npom.findall(\".//pom:dependency[@scope]\")\n"},
 			wantCode: 0,
 			wantOut:  []string{"removed 0 spans from 0 of 1 files"},
 		},
