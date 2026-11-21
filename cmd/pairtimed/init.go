@@ -62,7 +62,7 @@ func runInit(ctx context.Context, e *env, args []string) int {
 	}
 	out := fs.String("config-out", defaultOut, `where to write pairtime.toml; "-" writes it to standard output, which compose's read-only config mount needs`)
 	force := fs.Bool("force", false, "write pairtime.toml even where one exists, losing operators and every edit made to it; the keys are never replaced")
-	newKeys := fs.Bool("new-keys", false, "make new keys even where the data directory or the main bucket shows that a server ran before, whose keys should come from their backup instead (deploy/runbook.md, Restoring the keys)")
+	newKeys := fs.Bool("new-keys", false, "make new keys even where the data directory or the main bucket shows that a server ran before, whose keys should come from their backup instead (deploy/runbook.md, Restoring the keys). Starting over leaves that server's database behind: serve refuses one written with other keys, so it and its replica go first (deploy/runbook.md, Starting over with new keys)")
 	noObjects := fs.Bool("no-object-storage", false, "write pairtime.toml with object storage off, for a server without buckets, which the deploy bundle can't run")
 	if code, done := parse(fs, args); done {
 		return code
@@ -159,24 +159,39 @@ func runInit(ctx context.Context, e *env, args []string) int {
 	}
 
 	keysDir := backup.KeysDir(dir)
-	if !*newKeys && !anyKey(keysDir) {
+	// What shows that a server ran here before (#133). Without -new-keys
+	// init refuses to make keys over it. With it, init makes them and warns
+	// about what would bring the old server's database back under them:
+	// the database itself, its replica, and evidence sealed to the old key.
+	// Old key backups stop nothing.
+	var leftover string
+	if !anyKey(keysDir) {
 		objs, err := openBuckets(cfg)
 		if err != nil {
 			return fail("%v", err)
 		}
-		lctx, cancel := context.WithTimeout(ctx, time.Minute)
-		why, err := usedBefore(lctx, dir, objs)
-		cancel()
-		if err != nil {
-			return fail("%v. Pass -new-keys only if this server is to start over with new keys", err)
+		prefixes := []string{litestreamPrefix, objstore.EvidencePrefix, backup.KeyBackupPrefix}
+		if *newKeys {
+			prefixes = prefixes[:2]
 		}
-		if why != "" {
-			return fail("%s, so a server ran here before, and %s holds no keys. Restore that server's keys from their backup first (deploy/runbook.md, Restoring the keys), then run init again, which keeps them. New keys would break every receipt and every project's identity, and pairtimed serve refuses a database written with other keys. Only to start over with new keys anyway, pass -new-keys", why, keysDir)
+		lctx, cancel := context.WithTimeout(ctx, time.Minute)
+		leftover, err = usedBefore(lctx, dir, objs, prefixes...)
+		cancel()
+		switch {
+		case err != nil && *newKeys:
+			fmt.Fprintf(e.stderr, "pairtimed init: warning: %v, so init can't tell whether an old database would come back under the new keys (deploy/runbook.md, Starting over with new keys)\n", err)
+		case err != nil:
+			return fail("%v. Pass -new-keys only to start this server over with new keys, leaving its database behind (deploy/runbook.md, Starting over with new keys)", err)
+		case leftover != "" && !*newKeys:
+			return fail("%s, so a server ran here before, and %s holds no keys. Restore that server's keys from their backup first (deploy/runbook.md, Restoring the keys), then run init again, which keeps them. New keys would break every receipt and every project's identity, and pairtimed serve refuses a database written with other keys. Only to start the server over with new keys, leaving its database behind, pass -new-keys once the database and its replica are gone (deploy/runbook.md, Starting over with new keys)", leftover, keysDir)
 		}
 	}
 	keys, made, err := ensureKeys(keysDir)
 	if err != nil {
 		return fail("%v", err)
+	}
+	if made && leftover != "" {
+		fmt.Fprintf(e.stderr, "pairtimed init: warning: %s. pairtimed serve refuses a database written with other keys, and Litestream restores the old one from its replica whenever %s holds none, so before the first start move the database aside and delete litestream/ and evidence/ from the main bucket (deploy/runbook.md, Starting over with new keys)\n", leftover, dir)
 	}
 
 	if *out == "-" {
@@ -245,13 +260,18 @@ func anyKey(dir string) bool {
 	return false
 }
 
+// litestreamPrefix is the replica's path in deploy/litestream.yml, with
+// its slash.
+const litestreamPrefix = "litestream/"
+
 // usedBefore says what shows that a server ran on this data directory or
-// these buckets before, or "" when nothing does: a database in dataDir,
-// or Litestream's replica, evidence or key backups in the main bucket.
-// init makes keys only where none are, so on a host that was rebuilt or
-// moved, or lost its disk, it would otherwise make new ones for the old
-// database that Litestream then restores (#133).
-func usedBefore(ctx context.Context, dataDir string, objs *buckets) (string, error) {
+// these buckets before, or "" when nothing does: a database in dataDir, or
+// an object in the main bucket under one of prefixes, such as Litestream's
+// replica, evidence or key backups. init makes keys only where none are,
+// so on a host that was rebuilt or moved, or lost its disk, it would
+// otherwise make new ones for the old database that Litestream then
+// restores (#133).
+func usedBefore(ctx context.Context, dataDir string, objs *buckets, prefixes ...string) (string, error) {
 	db := filepath.Join(dataDir, config.DefaultDatabaseFile)
 	if _, err := os.Lstat(db); err == nil {
 		return db + " exists", nil
@@ -261,8 +281,7 @@ func usedBefore(ctx context.Context, dataDir string, objs *buckets) (string, err
 	if objs == nil {
 		return "", nil
 	}
-	// litestream/ is the replica's path in deploy/litestream.yml.
-	for _, prefix := range []string{"litestream/", objstore.EvidencePrefix, backup.KeyBackupPrefix} {
+	for _, prefix := range prefixes {
 		for o, err := range objs.main.List(ctx, prefix) {
 			if err != nil {
 				return "", fmt.Errorf("can't tell whether %s holds another server's data: %w", objs.main.Name(), err)

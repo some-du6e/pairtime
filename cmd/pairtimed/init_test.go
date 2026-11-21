@@ -70,6 +70,8 @@ func TestInit(t *testing.T) {
 		wantCode int
 		// wantErr is in stderr when the code isn't 0.
 		wantErr string
+		// wantStderr is in stderr, and notStderr isn't, whatever the code.
+		wantStderr, notStderr string
 		// wantKeys is whether the key files exist afterwards.
 		wantKeys bool
 		// check looks at the loaded file and its text.
@@ -201,11 +203,24 @@ func TestInit(t *testing.T) {
 				s3.SetObject("pairtime-data", backup.KeyBackupPrefix+"pairtime-keys-20261120T101500Z.tar.age", []byte("armored"))
 			},
 			wantCode: 1, wantErr: "Restoring the keys"},
-		{name: "-new-keys makes keys anyway, for a server that starts over",
+		{name: "-new-keys makes keys anyway, for a server that starts over, and warns that serve refuses the database the replica still in the bucket brings back",
 			args: []string{"-new-keys"}, environ: s3Environ, wantKeys: true,
 			setup: func(t *testing.T, _, _ string, s3 *objstoretest.Server) {
 				s3.SetObject("pairtime-data", "litestream/0000/0000000000000001-0000000000000001.ltx", []byte("ltx"))
-			}},
+			},
+			wantStderr: "pairtime-data holds litestream/0000/0000000000000001-0000000000000001.ltx. pairtimed serve refuses a database written with other keys"},
+		{name: "-new-keys beside a database in the data directory warns that serve refuses it, naming the runbook's way to start over",
+			args: []string{"-new-keys"}, environ: s3Environ, wantKeys: true,
+			setup: func(t *testing.T, data, _ string, _ *objstoretest.Server) {
+				writeFile(t, filepath.Join(data, config.DefaultDatabaseFile), "", 0o600)
+			},
+			wantStderr: "Starting over with new keys"},
+		{name: "-new-keys where only old key backups are left makes keys without a warning, since they stop nothing",
+			args: []string{"-new-keys"}, environ: s3Environ, wantKeys: true,
+			setup: func(t *testing.T, _, _ string, s3 *objstoretest.Server) {
+				s3.SetObject("pairtime-data", backup.KeyBackupPrefix+"pairtime-keys-20261120T101500Z.tar.age", []byte("armored"))
+			},
+			notStderr: "warning"},
 		{name: "a bucket init can't ask is refused, since it can't tell whether a server ran there",
 			environ: s3Environ,
 			setup: func(t *testing.T, _, _ string, s3 *objstoretest.Server) {
@@ -302,6 +317,12 @@ func TestInit(t *testing.T) {
 			_, err := os.Stat(filepath.Join(backup.KeysDir(data), backup.ServerKeyFile))
 			if (err == nil) != tt.wantKeys {
 				t.Errorf("server key exists: %v, want %v", err == nil, tt.wantKeys)
+			}
+			if tt.wantStderr != "" && !strings.Contains(stderr.String(), tt.wantStderr) {
+				t.Errorf("stderr = %q, want it to say %q", stderr, tt.wantStderr)
+			}
+			if tt.notStderr != "" && strings.Contains(stderr.String(), tt.notStderr) {
+				t.Errorf("stderr = %q, which says %q", stderr, tt.notStderr)
 			}
 			if code != 0 {
 				if !strings.Contains(stderr.String(), tt.wantErr) {
