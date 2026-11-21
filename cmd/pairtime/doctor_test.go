@@ -324,7 +324,7 @@ func TestDoctorAdaptersAndProblems(t *testing.T) {
 			edit:    func(s *doctor.Status) { s.Adapters.Harnesses = map[string]doctor.HarnessCounts{} },
 			check:   "adapter.claude_code",
 			want:    doctor.OK,
-			wantHas: []string{"found; since the agent started, 0 calls made 0 records"},
+			wantHas: []string{"found; no hook call has come in since the agent started"},
 		},
 		{
 			name:    "calls of harnesses with no adapter are a warning that they count for nothing",

@@ -198,6 +198,8 @@ func adapterChecks(f Facts) []Check {
 		c.Result = OK
 		c.Text = fmt.Sprintf("found; since the agent started, %s made %s", count(n.Calls, "call", "calls"), count(n.Records, "record", "records"))
 		switch {
+		case n.Calls == 0:
+			c.Text = "found; no hook call has come in since the agent started"
 		case n.ParseFailures > 0:
 			c.Result = Warn
 			c.Text += fmt.Sprintf(", and %s didn't fully parse, the last: %s. pairtime may count less of this harness until it does, so report it at %s", count(n.ParseFailures, "call", "calls"), reason(n.LastFailure), issues)

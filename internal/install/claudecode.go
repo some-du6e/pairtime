@@ -559,10 +559,15 @@ func ReadClaudeHooks(env Env) (ClaudeHooks, error) {
 			h.Missing = append(h.Missing, hk.event)
 		}
 	}
+	// Events pairtime doesn't install, as an older version's, come last,
+	// sorted.
+	var other []string
 	for ev := range held {
 		if !slices.Contains(h.Events, ev) {
-			h.Events = append(h.Events, ev)
+			other = append(other, ev)
 		}
 	}
+	slices.Sort(other)
+	h.Events = append(h.Events, other...)
 	return h, nil
 }
