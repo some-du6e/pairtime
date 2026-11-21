@@ -155,8 +155,8 @@ func (p *Presence) Seal(event.PowerOp) {
 // Dropped returns how many records Record had to drop.
 func (p *Presence) Dropped() uint64 { return p.dropped.Load() }
 
-// Close stops p once it has written what it holds, if a writer is
-// attached. It doesn't close the writer.
+// Close stops p once it has written what it holds, if Attach came before
+// it. It doesn't close the writer.
 func (p *Presence) Close() {
 	p.once.Do(func() { close(p.stop) })
 	<-p.done
@@ -168,7 +168,15 @@ func (p *Presence) run() {
 	select {
 	case w = <-p.attach:
 	case <-p.stop:
-		return
+		// When Attach and Close both come before this goroutine first
+		// runs, as on a busy machine, the select above finds the writer
+		// and the stop both ready and takes either at random. A writer
+		// attached before Close still gets what p holds.
+		select {
+		case w = <-p.attach:
+		default:
+			return
+		}
 	}
 	p.markAttached()
 	for {
