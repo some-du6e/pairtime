@@ -14,33 +14,56 @@ import (
 var claudeCapture = filepath.Join("..", "..", "testdata", "fixtures", "claude_code", "2.1.327", "linux")
 
 func TestAdapters(t *testing.T) {
+	osDir, err := filepath.Abs(claudeCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
 	differs := filepath.Join(t.TempDir(), "expected.jsonl")
 	line := `{"from":"000001","event":{"data":{"reason":"other"},"harness":"claude_code","kind":"session.end","session_key":"session-1","source":"hook","t":1,"via":"hook"}}` + "\n"
 	if err := os.WriteFile(differs, []byte(line), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {
-		name       string
+		name string
+		// dir is the folder the command runs in, "" for the package's.
+		dir        string
 		args       []string
 		code       int
 		wantStdout string
 		wantStderr string
+		// inStdout and notInStdout must and mustn't be in what it prints.
+		inStdout, notInStdout []string
 	}{
 		{name: "list names Claude Code and the hook events its adapter reads", args: []string{"list"},
-			wantStdout: "claude_code\thooks: SessionStart, UserPromptSubmit, Stop, StopFailure, Notification, PermissionRequest, PostToolUse, SubagentStart, SubagentStop, SessionEnd\n"},
+			wantStdout: "claude_code\thooks: SessionStart, UserPromptSubmit, Stop, StopFailure, Notification, PermissionRequest, PostToolUse, PostToolUseFailure, SubagentStart, SubagentStop, SessionEnd\n"},
 		{name: "the real Claude Code capture replays to the adapter's expected records, run by run",
 			args: []string{"test", claudeCapture}, wantStdout: "ok   claude_code/2.1.327/linux/cli: 89 records\n"},
 		{name: "a run's own folder replays alone",
 			args: []string{"test", filepath.Join(claudeCapture, "cli")}, wantStdout: "ok   claude_code/2.1.327/linux/cli: 89 records\n"},
+		{name: "a run's folder given as . from inside it replays", dir: filepath.Join(osDir, "cli"),
+			args: []string{"test", "."}, wantStdout: "ok   claude_code/2.1.327/linux/cli: 89 records\n"},
+		{name: "the OS folder given as . from inside it replays its runs", dir: osDir,
+			args: []string{"test", "."}, wantStdout: "ok   claude_code/2.1.327/linux/cli: 89 records\n"},
+		{name: "a run given by its name from inside its OS folder replays", dir: osDir,
+			args: []string{"test", "cli"}, wantStdout: "ok   claude_code/2.1.327/linux/cli: 89 records\n"},
 		{name: "a run that doesn't replay to the expected file fails, saying where",
 			args: []string{"test", "--expected", differs, filepath.Join(claudeCapture, "cli")}, code: 1,
 			wantStdout: "FAIL claude_code/2.1.327/linux/cli\n  record 1:\n"},
+		{name: "a record that differs is shown without its prompt, reply, command line or paths, which say only that they differ",
+			args: []string{"test", "--expected", differs, filepath.Join(claudeCapture, "cli")}, code: 1,
+			inStdout: []string{"  text differs: ", " chars vs none"}, notInStdout: []string{`"text":`, `"command":`, `"edits":`}},
+		{name: "--show-content shows the records that differ whole",
+			args: []string{"test", "--show-content", "--expected", differs, filepath.Join(claudeCapture, "cli")}, code: 1,
+			inStdout: []string{`"text":`, `"command":`}, notInStdout: []string{"text differs: "}},
 		{name: "a folder with no run fails", args: []string{"test", t.TempDir()}, code: 1, wantStderr: "holds no run with hooks/"},
 		{name: "test with no folder is a usage error", args: []string{"test"}, code: 2, wantStderr: "Usage:"},
 		{name: "an unknown subcommand is a usage error", args: []string{"frob"}, code: 2, wantStderr: `unknown command "frob"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.dir != "" {
+				t.Chdir(tc.dir)
+			}
 			var stdout, stderr bytes.Buffer
 			code := run(append([]string{"adapters"}, tc.args...), &stdout, &stderr)
 			if code != tc.code {
@@ -51,6 +74,16 @@ func TestAdapters(t *testing.T) {
 			}
 			if tc.wantStderr != "" && !strings.Contains(stderr.String(), tc.wantStderr) {
 				t.Errorf("stderr %q, want %q in it", stderr.String(), tc.wantStderr)
+			}
+			for _, s := range tc.inStdout {
+				if !strings.Contains(stdout.String(), s) {
+					t.Errorf("stdout has no %q", s)
+				}
+			}
+			for _, s := range tc.notInStdout {
+				if strings.Contains(stdout.String(), s) {
+					t.Errorf("stdout has %q", s)
+				}
 			}
 		})
 	}

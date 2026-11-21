@@ -17,7 +17,8 @@ const stateVersion = 1
 // Bounds on what SaveState keeps, which the agent writes to state.json
 // about once a minute: the sessions heard from most recently, and in each
 // the turns that started last. A queued message names the turn that is
-// running (WP-AD1's step 21), so a few turns back is plenty.
+// running (WP-AD1's step 21), or one a call of the session named before it
+// (E-cc-queued-turn), so a few turns back is plenty.
 const (
 	maxSavedSessions = 64
 	maxSavedTurns    = 16
@@ -76,11 +77,11 @@ type savedPost struct {
 
 // SaveState returns what the adapter remembers of the sessions it parsed,
 // for the agent to keep in state.json across a restart (adapters.Stateful):
-// which sessions have a session.start from the walk, the turns that
-// started, the scheduled prompts each session's last stop listed, and the
-// permission requests held for Decide. It keeps the maxSavedSessions
-// sessions heard from last, and of each the maxSavedTurns turns that
-// started last. The same memory gives the same bytes.
+// which sessions have a session.start from the walk, the turn ids the
+// session's calls named, the scheduled prompts each session's last stop
+// listed, and the permission requests held for Decide. It keeps the
+// maxSavedSessions sessions heard from last, and of each the maxSavedTurns
+// turn ids named last. The same memory gives the same bytes.
 func (a *Adapter) SaveState() (json.RawMessage, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

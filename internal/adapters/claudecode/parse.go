@@ -15,9 +15,11 @@ import (
 
 // call is one hook call while Parse reads it.
 type call struct {
-	a    *Adapter
-	raw  adapters.RawRecord
-	f    fields
+	a   *Adapter
+	raw adapters.RawRecord
+	f   fields
+	// pid is the payload's prompt_id, "" when it has none.
+	pid  string
 	s    *session
 	env  event.Envelope
 	cwd  string // the payload's cwd, which stays on the device
@@ -87,6 +89,13 @@ func (a *Adapter) Parse(raw adapters.RawRecord) ([]adapters.Record, error) {
 			ParentClass: parentOf(*w), HasTTY: w.HasTTY}, nil)
 		c.s.hookStart = true
 	}
+	c.pid, _ = f.str("prompt_id")
+	if c.pid != "" && name != EventUserPromptSubmit {
+		// Every call names the turn it is in, and a turn that took up a
+		// queued message names its own only in calls like this one, so a
+		// message queued while it runs is its agent.queue (E-cc-queued-turn).
+		c.s.note(c.pid)
+	}
 	switch name {
 	case EventSessionStart:
 		c.sessionStart()
@@ -96,8 +105,8 @@ func (a *Adapter) Parse(raw adapters.RawRecord) ([]adapters.Record, error) {
 		c.stop(false)
 	case EventStopFailure:
 		c.stop(true)
-	case EventPostToolUse:
-		c.tool()
+	case EventPostToolUse, EventPostToolUseFailure:
+		c.tool(name == EventPostToolUseFailure)
 	case EventPermissionRequest:
 		c.permissionRequest()
 	case EventSubagentStart, EventSubagentStop:
@@ -119,12 +128,12 @@ func (c *call) add(p event.Payload, text []byte) *adapters.Record {
 // turnKey returns the turn_key of Claude Code's turn id.
 func (c *call) turnKey(id string) string { return c.a.keys.Turn(c.s.id, id) }
 
-// entrypointOf is the entrypoint a walk found: ide or desktop, else
-// unknown, since the chain can't tell `claude` from `claude -p`
-// (platform.Lineage).
+// entrypointOf is the entrypoint a walk found: ide or desktop from its
+// host, sdk or exec once the command-line follow-up reads print flags
+// (E-procs-cmdlines), else unknown.
 func entrypointOf(l platform.Lineage) event.Entrypoint {
 	switch l.Entrypoint {
-	case event.EntrypointIDE, event.EntrypointDesktop:
+	case event.EntrypointIDE, event.EntrypointDesktop, event.EntrypointSDK, event.EntrypointExec:
 		return l.Entrypoint
 	}
 	return event.EntrypointUnknown
@@ -196,18 +205,34 @@ func (c *call) prompt() {
 		text = strings.ToValidUTF8(text, "\uFFFD")
 	}
 	n := utf8.RuneCountInString(text)
-	pid, _ := c.f.str("prompt_id")
-	if pid != "" && c.s.startedTurn(pid) {
+	// SM 2.2 rules 1 and 3 read a queued message's text as they read a
+	// prompt's (E-cc-queued-turn).
+	cron := c.s.matchesCron(c.a.keys, text)
+	// Machine text from a background subagent, which no person typed.
+	notification := strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), taskNotification)
+	if c.pid != "" && c.s.startedTurn(c.pid) {
 		// A message typed while the agent works: Claude Code runs the hook
 		// as it queues the message, with the running turn's prompt_id, and
-		// the turn the message starts later has a prompt_id no hook names
-		// before it ends (WP-AD1's step 21). So it is the running turn's
-		// agent.queue, SM 2.3's Q anchor, and never a second prompt of the
-		// turn, which the scorer would take for another copy of the first.
-		c.add(&event.AgentQueue{TurnKey: c.turnKey(pid), LenChars: n}, nil)
+		// the turn that takes the message up later has a prompt_id no hook
+		// names before that turn's own calls (WP-AD1's step 21). So a
+		// prompt whose prompt_id an earlier call of the session carried is
+		// that turn's agent.queue, SM 2.3's Q anchor, and never a second
+		// prompt of the turn, which the scorer would take for another copy
+		// of the first (E-cc-queued-turn). Only a person's message is
+		// queued: Claude Code runs a scheduled prompt's or a task
+		// notification's hook as it takes it up, with a prompt_id of its
+		// own. A message queued in a turn that took up another before any
+		// call of that turn named its prompt_id is still a prompt.submit,
+		// until WP-AD3 learns the turn's key from the transcript's
+		// promptSource queued entry.
+		if cron || notification {
+			c.perr.Problem("a scheduled prompt or a task notification came with a running turn's prompt_id, which Claude Code 2.1.327 doesn't send")
+			return
+		}
+		c.add(&event.AgentQueue{TurnKey: c.turnKey(c.pid), LenChars: n}, nil)
 		return
 	}
-	id := pid
+	id := c.pid
 	if id == "" {
 		id = c.s.newTurn()
 	}
@@ -218,12 +243,11 @@ func (c *call) prompt() {
 		TypedLenEst:        n,
 		SlashCommand:       slashCommand(text),
 		OriginDeclared:     event.DeclaredNone,
-		MatchesPendingCron: c.s.matchesCron(c.a.keys, text),
+		MatchesPendingCron: cron,
 		LowEffort:          score.LowEffort(text),
 	}
-	if strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), taskNotification) {
-		// Machine text from a background subagent, which no person typed
-		// (SM 2.2 rule 3).
+	if notification {
+		// SM 2.2 rule 3.
 		p.OriginDeclared = event.DeclaredSubagent
 	}
 	c.add(p, []byte(text))
@@ -275,12 +299,15 @@ type cron struct {
 	Prompt    string `json:"prompt"`
 }
 
-// stop maps Stop, or StopFailure when failed.
+// stop maps Stop, or StopFailure when failed. StopFailure's
+// last_assistant_message is the API error's text as the conversation shows
+// it, such as "API Error: Rate limit reached", not Claude's reply, so it
+// makes no agent.output and isn't committed as the turn's final message
+// (SM 1.2; the hooks reference).
 func (c *call) stop(failed bool) {
-	pid, _ := c.f.str("prompt_id")
-	key := c.turnKey(c.s.turnOf(pid))
+	key := c.turnKey(c.s.turnOf(c.pid))
 	reason := event.StopEndTurn
-	if msg, ok := c.f.str("last_assistant_message"); ok && msg != "" {
+	if msg, ok := c.f.str("last_assistant_message"); ok && msg != "" && !failed {
 		o := outputOf(msg)
 		c.add(&event.AgentOutput{TurnKey: key, Words: o.words, CodeLines: o.codeLines, IsFinal: true,
 			AsksQuestion: o.asks, OffersOptions: o.offers}, []byte(msg))

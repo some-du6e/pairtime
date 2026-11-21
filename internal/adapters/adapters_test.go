@@ -5,6 +5,7 @@ package adapters
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
@@ -111,6 +112,15 @@ func TestHookRecord(t *testing.T) {
 			harness: event.HarnessCursor},
 		{name: "over the socket from under a script, the call is via plugin and names no harness",
 			way: Walked, parents: []platform.Proc{{PID: 12, Name: "python3"}}, via: event.ViaPlugin},
+		{name: "over the socket from under Cursor's desktop app, which runs these hooks too, the call is via plugin and names Cursor",
+			way: Walked, parents: []platform.Proc{{PID: 13, Name: "sh"}, {PID: 11, Name: "cursor"}, {PID: 1, Name: "systemd"}},
+			via: event.ViaPlugin, harness: event.HarnessCursor},
+		{name: "through the spool from under Cursor's desktop app, the recorded chain names Cursor",
+			way: Spooled, parents: []platform.Proc{{PID: 13, Name: "sh"}, {PID: 11, Name: "cursor"}, {PID: 1, Name: "systemd"}},
+			via: event.ViaPlugin, harness: event.HarnessCursor},
+		{name: "over the socket from under an editor that hosts no harness's hooks, the call names none",
+			way: Walked, parents: []platform.Proc{{PID: 13, Name: "sh"}, {PID: 11, Name: "zed"}, {PID: 1, Name: "systemd"}},
+			via: event.ViaPlugin},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -209,6 +219,21 @@ func TestKeys(t *testing.T) {
 			seen[key[1:]] = true
 		}
 	})
+	t.Run("NewKeys refuses a K_session that isn't 32 bytes, the nil one the agent has before its keystore opens included", func(t *testing.T) {
+		for _, secret := range [][]byte{nil, {}, make([]byte, 16), make([]byte, 33)} {
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Errorf("NewKeys took a %d-byte secret", len(secret))
+					}
+				}()
+				NewKeys(secret)
+			}()
+		}
+		if k := NewKeys(make([]byte, hookpath.SessionSecretLen)); k == nil {
+			t.Error("NewKeys refused a 32-byte secret")
+		}
+	})
 	t.Run("Keys never prints its secret", func(t *testing.T) {
 		for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%x"} {
 			if s := fmt.Sprintf(verb, k); strings.Contains(s, "pairtime adapters") || strings.Contains(s, hex.EncodeToString([]byte("pairtime"))) {
@@ -283,6 +308,27 @@ func TestNormalize(t *testing.T) {
 			t.Errorf("Diff = %v", d)
 		}
 	})
+	t.Run("Diff says a record's text, command and edits differ by length, never what they hold, and DiffContent shows them", func(t *testing.T) {
+		secret := "my prompt about my friend"
+		got := append([]Line(nil), lines[:1]...)
+		got[0].Text, got[0].Command = &secret, "cat /home/teen/diary.txt"
+		got[0].Edits = []LineEdit{{Path: "/home/teen/diary.txt", NewStart: 1, NewLines: 1}}
+		d := Diff(got, lines[:1], 10)
+		if len(d) != 1 {
+			t.Fatalf("Diff = %v", d)
+		}
+		for _, want := range []string{"text differs: 25 chars vs none", "command differs: 24 vs 0 chars", "edits differ: 1 vs 0 hunks"} {
+			if !strings.Contains(d[0], want) {
+				t.Errorf("Diff = %s, want %q in it", d[0], want)
+			}
+		}
+		if strings.Contains(d[0], "friend") || strings.Contains(d[0], "diary") {
+			t.Errorf("Diff shows content: %s", d[0])
+		}
+		if c := DiffContent(got, lines[:1], 10); len(c) != 1 || !strings.Contains(c[0], "friend") || !strings.Contains(c[0], "diary") {
+			t.Errorf("DiffContent = %v", c)
+		}
+	})
 }
 
 func TestConformProvenance(t *testing.T) {
@@ -312,6 +358,22 @@ func TestConformProvenance(t *testing.T) {
 	t.Run("an adapter whose only fixtures are synthetic fails the conformance runner", func(t *testing.T) {
 		if _, err := Conform(mk, captures("true")); err == nil {
 			t.Error("Conform passed an adapter with synthetic fixtures alone")
+		}
+	})
+	t.Run("a captured run with no expected records fails, so no capture passes unchecked", func(t *testing.T) {
+		c := captures("false")
+		for name, f := range captures("false") {
+			if rest, ok := strings.CutPrefix(name, "1.0.0/linux/cli/"); ok {
+				c["1.0.0/linux/vscode/"+rest] = f
+			}
+		}
+		results, err := Conform(mk, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(results) != 2 || results[0].Run != "1.0.0/linux/cli" || !results[0].OK() ||
+			results[1].Run != "1.0.0/linux/vscode" || !errors.Is(results[1].Err, ErrNoExpected) || results[1].OK() {
+			t.Errorf("results %+v", results)
 		}
 	})
 	t.Run("a capture whose provenance doesn't say counts as synthetic", func(t *testing.T) {

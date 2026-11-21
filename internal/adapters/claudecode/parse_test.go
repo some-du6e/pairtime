@@ -5,8 +5,12 @@ package claudecode
 import (
 	"encoding/json"
 	"errors"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
 	"github.com/some-du6e/pairtime/internal/platform"
@@ -150,28 +154,123 @@ func TestPrompts(t *testing.T) {
 	}
 }
 
+// TestQueuedMessage is E-cc-queued-turn's adapter rule: a prompt whose
+// prompt_id an earlier call of the session carried is agent.queue in that
+// turn, unless rule 1 or 3 marks its text as a machine's.
 func TestQueuedMessage(t *testing.T) {
-	a := newTest()
-	first := hookRaw(EventUserPromptSubmit, map[string]any{"prompt_id": "p-goal", "prompt": "/goal Make the test pass."}, nil)
-	queued := hookRaw(EventUserPromptSubmit, map[string]any{"prompt_id": "p-goal", "prompt": "Then say which test."}, nil)
-	recs1, err := a.Parse(first)
-	if err != nil {
-		t.Fatal(err)
+	const goal = "/goal Make the test pass."
+	prompt := func(pid, text string) adapters.RawRecord {
+		return hookRaw(EventUserPromptSubmit, map[string]any{"prompt_id": pid, "prompt": text}, nil)
 	}
-	recs2, err := a.Parse(queued)
-	if err != nil {
-		t.Fatal(err)
+	stop := func(pid string, continued bool, crons ...string) adapters.RawRecord {
+		list := []any{}
+		for _, c := range crons {
+			list = append(list, map[string]any{"id": "c1", "schedule": "*/5 * * * *", "recurring": true, "prompt": c})
+		}
+		return hookRaw(EventStop, map[string]any{"prompt_id": pid, "stop_hook_active": continued,
+			"last_assistant_message": "", "session_crons": list}, nil)
 	}
-	t.Run("a second prompt with the prompt_id of a running turn is that turn's agent.queue, with its length and no text", func(t *testing.T) {
-		if len(recs2) != 1 || recs2[0].Event.Kind() != event.KindAgentQueue {
-			t.Fatalf("records %v", kinds(recs2))
-		}
-		q := recs2[0].Event.Data.(*event.AgentQueue)
-		p := recs1[len(recs1)-1].Event.Data.(*event.PromptSubmit)
-		if q.TurnKey != p.TurnKey || q.LenChars != len("Then say which test.") || recs2[0].Text != nil {
-			t.Errorf("queue %+v, prompt turn %s", *q, p.TurnKey)
-		}
-	})
+	tool := func(pid string) adapters.RawRecord {
+		return hookRaw(EventPostToolUse, map[string]any{"prompt_id": pid, "tool_name": "Bash",
+			"tool_input": map[string]any{"command": "go test ./..."}, "tool_response": map[string]any{"stdout": "ok\n", "stderr": ""},
+			"tool_use_id": "toolu_q", "duration_ms": 1200}, nil)
+	}
+	cases := []struct {
+		name  string
+		calls []adapters.RawRecord
+		// want are the kinds of the records the calls make, in order,
+		// without the session.start the first call gets from its walk.
+		want string
+		// turn is the prompt_id the last call's record names.
+		turn string
+		// problem says the last call is a parse failure.
+		problem bool
+	}{
+		{name: "a second prompt with the prompt_id of a running turn is that turn's agent.queue, with its length and no text",
+			calls: []adapters.RawRecord{prompt("p1", goal), prompt("p1", "Then say which test.")},
+			want:  "prompt.submit,agent.queue", turn: "p1"},
+		{name: "two messages queued in a row are two agent.queue records in the running turn",
+			calls: []adapters.RawRecord{prompt("p1", goal), prompt("p1", "Then say which test."), prompt("p1", "And push it.")},
+			want:  "prompt.submit,agent.queue,agent.queue", turn: "p1"},
+		{name: "a prompt whose prompt_id only a PostToolUse carried is agent.queue in that turn",
+			calls: []adapters.RawRecord{prompt("p1", goal), prompt("p1", "Then say which test."), stop("p1", false), tool("p2"),
+				prompt("p2", "And push it.")},
+			want: "prompt.submit,agent.queue,agent.stop,agent.tool,agent.queue", turn: "p2"},
+		{name: "a prompt whose prompt_id only a Stop carried is agent.queue in that turn",
+			calls: []adapters.RawRecord{prompt("p1", goal), stop("p1", false), stop("p2", true), prompt("p2", "And push it.")},
+			want:  "prompt.submit,agent.stop,agent.stop,agent.queue", turn: "p2"},
+		{name: "a prompt with a prompt_id no call carried is prompt.submit",
+			calls: []adapters.RawRecord{prompt("p1", goal), stop("p1", false), prompt("p2", "Now add a test.")},
+			want:  "prompt.submit,agent.stop,prompt.submit", turn: "p2"},
+		{name: "a task notification with a running turn's prompt_id makes no record and is a parse failure",
+			calls: []adapters.RawRecord{prompt("p1", goal), prompt("p1", "<task-notification>\n<task-id>a1</task-id>\n</task-notification>")},
+			want:  "prompt.submit", problem: true},
+		{name: "a scheduled prompt with a running turn's prompt_id makes no record and is a parse failure",
+			calls: []adapters.RawRecord{prompt("p1", "/loop 5m Reply with tick."), stop("p1", false, "Reply with tick."),
+				prompt("p1", "Reply with tick.")},
+			want: "prompt.submit,agent.stop", problem: true},
+		{name: "a message queued in a picked-up turn before any of that turn's calls is still prompt.submit, which WP-AD3 closes",
+			calls: []adapters.RawRecord{prompt("p1", goal), prompt("p1", "Then say which test."), stop("p1", false),
+				prompt("p2", "And push it.")},
+			want: "prompt.submit,agent.queue,agent.stop,prompt.submit", turn: "p2"},
+	}
+	keys := adapters.FixtureKeys()
+	const sid = "11111111-2222-4333-8444-555555555555" // hookRaw's
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTest()
+			var got []string
+			var last []adapters.Record
+			var lastErr error
+			for i, raw := range tc.calls {
+				recs, err := a.Parse(raw)
+				if i < len(tc.calls)-1 && err != nil {
+					t.Fatalf("call %d: %v", i+1, err)
+				}
+				for _, r := range recs {
+					if r.Event.Kind() != event.KindSessionStart {
+						got = append(got, string(r.Event.Kind()))
+					}
+				}
+				last, lastErr = recs, err
+			}
+			if strings.Join(got, ",") != tc.want {
+				t.Fatalf("records %v, want %s", got, tc.want)
+			}
+			var perr *adapters.ParseError
+			switch {
+			case tc.problem:
+				if !errors.As(lastErr, &perr) || !slices.Contains(perr.Problems,
+					"a scheduled prompt or a task notification came with a running turn's prompt_id, which Claude Code 2.1.327 doesn't send") {
+					t.Errorf("err %v, want the parse failure", lastErr)
+				}
+				if len(last) != 0 {
+					t.Errorf("the last call made %v", kinds(last))
+				}
+				return
+			case lastErr != nil:
+				t.Fatalf("the last call: %v", lastErr)
+			}
+			r := last[len(last)-1]
+			text := map[string]any{}
+			if err := json.Unmarshal(tc.calls[len(tc.calls)-1].Payload, &text); err != nil {
+				t.Fatal(err)
+			}
+			body := text["prompt"].(string)
+			switch d := r.Event.Data.(type) {
+			case *event.AgentQueue:
+				if d.TurnKey != keys.Turn(sid, tc.turn) || d.LenChars != utf8.RuneCountInString(body) || r.Text != nil {
+					t.Errorf("queue %+v with text %q, want turn %s's key, %d chars and no text", *d, r.Text, tc.turn, utf8.RuneCountInString(body))
+				}
+			case *event.PromptSubmit:
+				if d.TurnKey != keys.Turn(sid, tc.turn) || string(r.Text) != body {
+					t.Errorf("prompt %+v, want turn %s's key and the prompt as its text", *d, tc.turn)
+				}
+			default:
+				t.Errorf("the last record is %s", r.Event.Kind())
+			}
+		})
+	}
 }
 
 func TestStops(t *testing.T) {
@@ -216,6 +315,18 @@ func TestStops(t *testing.T) {
 			check: func(t *testing.T, recs []adapters.Record) {
 				if r := recs[0].Event.Data.(*event.AgentStop).StopReason; r != event.StopError {
 					t.Errorf("stop_reason %s", r)
+				}
+			}},
+		{name: "StopFailure's last_assistant_message is the API error's text, not Claude's reply, so it makes agent.stop alone and commits no text",
+			event: EventStopFailure, fields: map[string]any{"prompt_id": "p1", "error": "rate_limit",
+				"error_details": "429 Too Many Requests", "last_assistant_message": "API Error: Rate limit reached"},
+			want: []string{"agent.stop"},
+			check: func(t *testing.T, recs []adapters.Record) {
+				if r := recs[0].Event.Data.(*event.AgentStop).StopReason; r != event.StopLimit {
+					t.Errorf("stop_reason %s", r)
+				}
+				if recs[0].Text != nil {
+					t.Errorf("the record commits %q", recs[0].Text)
 				}
 			}},
 		{name: "a final message that ends on a question stops the turn on a question",
@@ -385,10 +496,16 @@ func TestSessionFields(t *testing.T) {
 		Walk: &platform.Lineage{ParentClass: event.ParentIDE, Entrypoint: event.EntrypointIDE, HasTTY: false}}
 	spool := &adapters.Arrival{Via: event.ViaPlugin, T: t0, Mono: 1, BootID: "b", Harness: event.HarnessClaudeCode,
 		Walk: &platform.Lineage{ParentClass: event.ParentIDE, Entrypoint: event.EntrypointIDE, HasTTY: true}}
+	walked := func(e event.Entrypoint) *adapters.Arrival {
+		return &adapters.Arrival{Via: event.ViaHook, T: t0, Mono: 1, BootID: "b", Harness: event.HarnessClaudeCode,
+			Walk: &platform.Lineage{ParentClass: event.ParentTerminalApp, Entrypoint: e, HasTTY: true}}
+	}
 	cases := []struct {
 		name string
 		raw  adapters.RawRecord
 		want event.SessionStart
+		// problem says the call is a parse failure too.
+		problem bool
 	}{
 		{name: "a walked SessionStart takes the walk's IDE entrypoint, parent class and terminal",
 			raw:  hookRaw(EventSessionStart, map[string]any{"source": "resume", "permission_mode": "acceptEdits"}, ide),
@@ -397,17 +514,182 @@ func TestSessionFields(t *testing.T) {
 			raw:  hookRaw(EventSessionStart, map[string]any{"source": "startup"}, spool),
 			want: event.SessionStart{StartKind: event.StartStartup, Entrypoint: event.EntrypointUnknown, ParentClass: event.ParentUnknown}},
 		{name: "an unknown source is a startup, and a parse failure",
-			raw:  hookRaw(EventSessionStart, map[string]any{"source": "teleport"}, ide),
-			want: event.SessionStart{StartKind: event.StartStartup, Entrypoint: event.EntrypointIDE, ParentClass: event.ParentIDE}},
+			raw:     hookRaw(EventSessionStart, map[string]any{"source": "teleport"}, ide),
+			want:    event.SessionStart{StartKind: event.StartStartup, Entrypoint: event.EntrypointIDE, ParentClass: event.ParentIDE},
+			problem: true},
+		{name: "a walk whose lineage names sdk gives the hook's session.start entrypoint sdk",
+			raw:  hookRaw(EventSessionStart, map[string]any{"source": "startup"}, walked(event.EntrypointSDK)),
+			want: event.SessionStart{StartKind: event.StartStartup, Entrypoint: event.EntrypointSDK, ParentClass: event.ParentTerminalApp, HasTTY: true}},
+		{name: "a walk whose lineage names exec gives the hook's session.start entrypoint exec",
+			raw:  hookRaw(EventSessionStart, map[string]any{"source": "startup"}, walked(event.EntrypointExec)),
+			want: event.SessionStart{StartKind: event.StartStartup, Entrypoint: event.EntrypointExec, ParentClass: event.ParentTerminalApp, HasTTY: true}},
+		{name: "a walk whose lineage names cli gives entrypoint unknown: a walk gives only ide, desktop, sdk and exec",
+			raw:  hookRaw(EventSessionStart, map[string]any{"source": "startup"}, walked(event.EntrypointCLI)),
+			want: event.SessionStart{StartKind: event.StartStartup, Entrypoint: event.EntrypointUnknown, ParentClass: event.ParentTerminalApp, HasTTY: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			recs, _ := newTest().Parse(tc.raw)
+			recs, err := newTest().Parse(tc.raw)
+			var perr *adapters.ParseError
+			if tc.problem != errors.As(err, &perr) || !tc.problem && err != nil {
+				t.Errorf("err %v, want a parse failure: %v", err, tc.problem)
+			}
 			if len(recs) != 1 {
 				t.Fatalf("records %v", kinds(recs))
 			}
 			if st := recs[0].Event.Data.(*event.SessionStart); !sameStart(st, &tc.want) {
 				t.Errorf("session.start %+v, want %+v", *st, tc.want)
+			}
+		})
+	}
+}
+
+// TestToolFailure is how the adapter reads PostToolUseFailure, which Claude
+// Code runs for a tool call that started and failed, such as a command that
+// exited non-zero (the hooks reference): agent.tool, as PostToolUse gives,
+// from the text of the error, which is what Claude Code shows for it.
+func TestToolFailure(t *testing.T) {
+	opts := adapters.FixtureOptions()
+	const goFail = "--- FAIL: TestSplit (0.00s)\n    split_test.go:9: got 2 words, want 3\nFAIL\nFAIL\texample.com/wc\t0.004s\nFAIL"
+	const ccFail = "main.c:3:7: error: expected ';' before '}' token\nmake: *** [Makefile:2: main] Error 1"
+	failure := func(tool string, input map[string]any, msg string, more map[string]any) adapters.RawRecord {
+		p := map[string]any{"prompt_id": "p1", "cwd": "/home/capture/proj", "tool_name": tool, "tool_input": input,
+			"tool_use_id": "toolu_f", "error": msg, "is_interrupt": false, "duration_ms": 4187}
+		for k, v := range more {
+			if v == nil {
+				delete(p, k)
+			} else {
+				p[k] = v
+			}
+		}
+		return hookRaw(EventPostToolUseFailure, p, nil)
+	}
+	command := func(cmd string) map[string]any { return map[string]any{"command": cmd, "description": "Run it"} }
+	cases := []struct {
+		name    string
+		raw     adapters.RawRecord
+		class   event.ToolClass
+		exit    string // the exit code, "" for none
+		output  string // what the call showed, for its visible lines and error signature
+		visible int
+		command string // the command line the record commits
+		files   []string
+		spanMS  int64
+	}{
+		{name: "a test run that exited non-zero is agent.tool with class test, its exit code, and the lines it printed with their error signature",
+			raw:   failure("Bash", command("go test ./..."), "Exit code 1\n"+goFail, nil),
+			class: event.ToolTest, exit: "1", output: goFail, visible: 5, command: "go test ./...", spanMS: 4187},
+		{name: "a failed build is class build, with its exit code and its compiler's error",
+			raw:   failure("Bash", command("make"), "Exit code 2\n"+ccFail, nil),
+			class: event.ToolBuild, exit: "2", output: ccFail, visible: 2, command: "make", spanMS: 4187},
+		{name: "a command whose shell didn't start has no exit code, and its message is what it shows",
+			raw:   failure("Bash", command("ls"), "spawn /bin/bash ENOENT", nil),
+			class: event.ToolBash, output: "spawn /bin/bash ENOENT", visible: 1, command: "ls", spanMS: 4187},
+		{name: "an exit code past 32 bits, as Windows gives, is kept whole",
+			raw:   failure("Bash", command("go test ./..."), "Exit code 3221225477\n", nil),
+			class: event.ToolTest, exit: "3221225477", command: "go test ./...", spanMS: 4187},
+		{name: "a subagent's failed run shows no output lines, as its PostToolUse wouldn't",
+			raw:   failure("Bash", command("go test ./..."), "Exit code 1\n"+goFail, map[string]any{"agent_id": "a1", "agent_type": "general-purpose"}),
+			class: event.ToolTest, exit: "1", output: goFail, command: "go test ./...", spanMS: 4187},
+		{name: "a failed call without duration_ms starts and ends as its hook fires",
+			raw:   failure("Bash", command("go test ./..."), "Exit code 1\n"+goFail, map[string]any{"duration_ms": nil}),
+			class: event.ToolTest, exit: "1", output: goFail, visible: 5, command: "go test ./..."},
+		{name: "a failed edit is agent.tool for its file, with no lines and no exit code",
+			raw: failure("Edit", map[string]any{"file_path": "/home/capture/proj/wc.py", "old_string": "a", "new_string": "b"},
+				"File has been modified since read, either by the user or by a linter.", nil),
+			class: event.ToolEdit, files: []string{"wc.py"}, spanMS: 4187},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recs, err := newTest().Parse(tc.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(recs) > 0 && recs[0].Event.Kind() == event.KindSessionStart {
+				recs = recs[1:]
+			}
+			if len(recs) != 1 || recs[0].Event.Kind() != event.KindAgentTool {
+				t.Fatalf("records %v", kinds(recs))
+			}
+			e := recs[0].Event
+			got := e.Data.(*event.AgentTool)
+			exit := ""
+			if got.ExitCode != nil {
+				exit = strconv.FormatInt(*got.ExitCode, 10)
+			}
+			var sig, cmd string
+			if v, ok := opts.Features.ErrorSig(tc.output); ok && tc.output != "" {
+				sig = v.String()
+			}
+			if v, ok := opts.Features.Command(tc.command); ok {
+				cmd = v.String()
+			}
+			var files []string
+			for _, f := range tc.files {
+				v, err := opts.Features.Path(f)
+				if err != nil {
+					t.Fatal(err)
+				}
+				files = append(files, v.String())
+			}
+			if got.ToolClass != tc.class || exit != tc.exit || got.VisibleOutputLines != tc.visible || got.ErrorSig != sig ||
+				got.CmdHash != cmd || !slices.Equal(got.Files, files) || got.LinesAdded != 0 || got.LinesRemoved != 0 ||
+				got.TEnd != e.T || got.TEnd-got.TStart != tc.spanMS {
+				t.Errorf("agent.tool %+v, exit code %q", *got, exit)
+			}
+			if recs[0].Command != tc.command || recs[0].Edits != nil || recs[0].Text != nil {
+				t.Errorf("content: command %q, %d edits, text %q", recs[0].Command, len(recs[0].Edits), recs[0].Text)
+			}
+			e.EventID, e.Seq, e.DeviceID = event.NewEventID(time.UnixMilli(e.T)), 1, "d_test"
+			if err := e.Validate(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	t.Run("a failed run's output has the error signature the same output gets from a PostToolUse", func(t *testing.T) {
+		fail, err := newTest().Parse(failure("Bash", command("go test ./..."), "Exit code 1\n"+goFail, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ok, err := newTest().Parse(hookRaw(EventPostToolUse, map[string]any{"prompt_id": "p1", "cwd": "/home/capture/proj",
+			"tool_name": "Bash", "tool_input": command("go test ./... | tail -5"), "tool_response": map[string]any{"stdout": goFail, "stderr": ""},
+			"tool_use_id": "toolu_s", "duration_ms": 4187}, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		f, s := fail[len(fail)-1].Event.Data.(*event.AgentTool), ok[len(ok)-1].Event.Data.(*event.AgentTool)
+		if f.ErrorSig == "" || f.ErrorSig != s.ErrorSig || f.VisibleOutputLines != s.VisibleOutputLines {
+			t.Errorf("PostToolUseFailure gives %+v, PostToolUse %+v", *f, *s)
+		}
+	})
+}
+
+// TestPendingCrons pins ledger-v1 section 3's cron key to what a Stop lists:
+// prefix is the scheduled prompt without the marker of a cut and any U+FFFD
+// that the cut left at its end, at most its first 1,000 code points. The
+// vectors were computed apart from this code, with Python's hmac.
+func TestPendingCrons(t *testing.T) {
+	const sid = "617e16a3-ddb4-44ca-af68-72cf58ed1a34"
+	cases := []struct{ name, listed, want string }{
+		{"a prompt Stop didn't cut is keyed as listed", "Reply with the word tick and nothing else.", "c81715e31a20c0bb3f23196f4f3b0e3c5"},
+		{"a cut prompt is keyed by what Stop kept, without the cut marker",
+			strings.Repeat("x", 1000) + "\u2026 [+200 chars]", "cfa4b3ac233120822b7bb616717179fd8"},
+		{"a cut that split a surrogate pair is keyed without the U+FFFD it left",
+			strings.Repeat("x", 999) + "\uFFFD\u2026 [+201 chars]", "c054878035a20d2d6fc3c7a12b4847b7b"},
+		{"a cut prompt of astral characters is keyed by the code points Stop kept",
+			strings.Repeat("\U0001F600", 500) + "\u2026 [+200 chars]", "cc2e7043800329ceb5e9ea8e69f526d77"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recs, err := newTest().Parse(hookRaw(EventStop, map[string]any{"session_id": sid, "prompt_id": "p1",
+				"stop_hook_active": false, "last_assistant_message": "", "session_crons": []any{
+					map[string]any{"id": "c1", "schedule": "*/5 * * * *", "recurring": true, "prompt": tc.listed}}}, nil))
+			if err != nil {
+				t.Fatal(err)
+			}
+			st := recs[len(recs)-1].Event.Data.(*event.AgentStop)
+			if len(st.PendingCrons) != 1 || st.PendingCrons[0].PrefixHash != tc.want {
+				t.Errorf("pending_crons %+v, want prefix_hash %s", st.PendingCrons, tc.want)
 			}
 		})
 	}

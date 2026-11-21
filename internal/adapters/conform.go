@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/some-du6e/pairtime/internal/agent/hookpath"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
@@ -397,23 +398,82 @@ func ReadLines(b []byte) ([]Line, error) {
 }
 
 // Diff compares replayed Lines with expected ones and returns a
-// description of each difference, at most limit of them.
-func Diff(got, want []Line, limit int) []string {
+// description of each difference, at most limit of them. It shows no
+// content: each differing record's event, whose keys are symbols, and of
+// its text, command and edits only whether they differ, by their lengths. A
+// capture that isn't scrubbed yet holds a person's prompts, Claude's
+// replies, command lines and paths (DiffContent shows them).
+func Diff(got, want []Line, limit int) []string { return diff(got, want, limit, false) }
+
+// DiffContent is Diff with each differing record shown whole, content
+// included, for a capture whose content may be shown, such as one already
+// scrubbed.
+func DiffContent(got, want []Line, limit int) []string { return diff(got, want, limit, true) }
+
+func diff(got, want []Line, limit int, content bool) []string {
 	var diffs []string
 	n := max(len(got), len(want))
 	for i := 0; i < n && len(diffs) < limit; i++ {
-		var g, w string
+		var g, w *Line
 		if i < len(got) {
-			g = canonical(got[i])
+			g = &got[i]
 		}
 		if i < len(want) {
-			w = canonical(want[i])
+			w = &want[i]
 		}
-		if g != w {
-			diffs = append(diffs, fmt.Sprintf("record %d:\n  got  %s\n  want %s", i+1, orNone(g), orNone(w)))
+		if canonicalOf(g, true) == canonicalOf(w, true) {
+			continue
 		}
+		d := fmt.Sprintf("record %d:\n  got  %s\n  want %s", i+1, orNone(canonicalOf(g, content)), orNone(canonicalOf(w, content)))
+		if !content {
+			for _, c := range contentDiffs(g, w) {
+				d += "\n  " + c
+			}
+		}
+		diffs = append(diffs, d)
 	}
 	return diffs
+}
+
+// canonicalOf is canonical(*l), without l's content unless content is set,
+// and "" for no Line.
+func canonicalOf(l *Line, content bool) string {
+	if l == nil {
+		return ""
+	}
+	c := *l
+	if !content {
+		c.Text, c.Command, c.Edits = nil, "", nil
+	}
+	return canonical(c)
+}
+
+// contentDiffs says which of two records' content differs, by length alone.
+func contentDiffs(g, w *Line) []string {
+	var gl, wl Line
+	if g != nil {
+		gl = *g
+	}
+	if w != nil {
+		wl = *w
+	}
+	var out []string
+	text := func(l Line) string {
+		if l.Text == nil {
+			return "none"
+		}
+		return strconv.Itoa(utf8.RuneCountInString(*l.Text)) + " chars"
+	}
+	if (gl.Text == nil) != (wl.Text == nil) || gl.Text != nil && *gl.Text != *wl.Text {
+		out = append(out, "text differs: "+text(gl)+" vs "+text(wl))
+	}
+	if gl.Command != wl.Command {
+		out = append(out, fmt.Sprintf("command differs: %d vs %d chars", utf8.RuneCountInString(gl.Command), utf8.RuneCountInString(wl.Command)))
+	}
+	if !slices.Equal(gl.Edits, wl.Edits) {
+		out = append(out, fmt.Sprintf("edits differ: %d vs %d hunks", len(gl.Edits), len(wl.Edits)))
+	}
+	return out
 }
 
 func orNone(s string) string {
@@ -440,8 +500,10 @@ type Result struct {
 	Run string
 	// Synthetic says the capture's PROVENANCE.md says synthetic: true.
 	Synthetic bool
-	// Records is how many records the replay made.
+	// Records is how many records the replay made, and Lines those records
+	// as an expected file writes them.
 	Records int
+	Lines   []Line
 	// Failures are the replay's parse failures, by call.
 	Failures map[string]error
 	// Diffs are the differences from the expected records.
@@ -471,7 +533,7 @@ func CheckRun(a Adapter, run fs.FS, goos string, want []Line) Result {
 		r.Err = err
 		return r
 	}
-	r.Diffs = Diff(got, want, 20)
+	r.Lines, r.Diffs = got, Diff(got, want, 20)
 	return r
 }
 
@@ -484,11 +546,20 @@ func GOOS(dir string) string {
 	return dir
 }
 
+// ErrNoExpected is the Err of a captured run that an adapter's Fixtures
+// has no expected records for. Every captured payload maps to its expected
+// records (docs/PLAN.md, WP-AD2's CI checks), so a capture lands with them,
+// written with the adapter's oracle, such as Claude Code's gen_expected.py.
+var ErrNoExpected = errors.New("adapters: the adapter has no expected records for this capture")
+
 // Conform replays each captured run that the adapter's Fixtures has
 // expected records for against captures, which holds
 // testdata/fixtures/<harness>: <version>/<os>/PROVENANCE.md and
 // <version>/<os>/<run>/hooks. mk makes a fresh adapter for each run, so
-// what one run's sessions leave in its memory can't change another's.
+// what one run's sessions leave in its memory can't change another's. A
+// captured run with no expected records gets a Result too, whose Err is
+// ErrNoExpected, so that no capture passes unchecked. The Results are in
+// order of Run.
 //
 // It returns an error when the adapter has no capture at all, or only
 // synthetic ones: an adapter can't ship with synthetic fixtures alone
@@ -533,6 +604,22 @@ func Conform(mk func() Adapter, captures fs.FS) ([]Result, error) {
 		r.Run = run
 		results = append(results, r)
 	}
+	runs, err := fs.Glob(captures, "*/*/*/hooks")
+	if err != nil {
+		return nil, err
+	}
+	have := map[string]bool{}
+	for _, e := range expected {
+		have[path.Dir(e)] = true
+	}
+	for _, h := range runs {
+		run := path.Dir(h)
+		if fi, err := fs.Stat(captures, h); have[run] || err != nil || !fi.IsDir() {
+			continue
+		}
+		results = append(results, Result{Run: run, Err: fmt.Errorf("%w: its fixtures have no %s/expected.jsonl", ErrNoExpected, run)})
+	}
+	slices.SortStableFunc(results, func(a, b Result) int { return strings.Compare(a.Run, b.Run) })
 	if real == 0 {
 		return results, errors.New("adapters: no capture that isn't synthetic: an adapter can't ship with synthetic fixtures alone (DESIGN 5.1)")
 	}

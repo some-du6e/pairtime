@@ -6,8 +6,9 @@
         internal/adapters/claudecode/fixtures/2.1.327/linux/cli/expected.jsonl
 
 This is the conformance oracle's second implementation: it reads the
-captured hook calls and applies SM 1.2, SM 2.2 rule 1, D-spool-via and
-E-6.1-permission to them in Python, apart from the Go adapter, with
+captured hook calls and applies SM 1.2, SM 2.2 rules 1 and 3, D-spool-via,
+E-6.1-permission and E-cc-queued-turn to them in Python, apart from the Go
+adapter, with
 tools/ledger_ref.py for what ledger-v1 10.2 and 10.6 define (words, error
 signatures, hunks, the path form, command text). The Go conformance test
 replays the same calls through the adapter, as walked socket calls, and
@@ -26,6 +27,7 @@ stops the script.
 
 import json
 import os
+import re
 import sys
 import unicodedata
 
@@ -44,11 +46,15 @@ OWN = {
     "Notification": {"message", "title", "notification_type"},
     "PermissionRequest": {"tool_name", "tool_input", "permission_suggestions"},
     "PostToolUse": {"tool_name", "tool_input", "tool_response", "tool_use_id", "duration_ms"},
+    "PostToolUseFailure": {"tool_name", "tool_input", "tool_use_id", "error", "is_interrupt", "duration_ms"},
     "SubagentStart": set(),
     "SubagentStop": {"stop_hook_active", "last_assistant_message", "background_tasks", "session_crons",
                      "agent_transcript_path"},
     "SessionEnd": {"reason"},
 }
+
+# How many turn ids the adapter remembers per session (claudecode.go).
+MAX_TURNS = 64
 
 START_KINDS = {"startup": "startup", "resume": "resume", "clear": "clear", "compact": "compact", "fork": "fork"}
 SHELLS = {"bash", "sh", "dash", "zsh", "ksh", "mksh", "ash", "fish", "tcsh", "csh"}
@@ -276,6 +282,21 @@ def command_class(cmd):
     return cls
 
 
+def exit_line(msg):
+    """exitLine: the "Exit code N" line Claude Code puts first in the error
+    of a command that ran and failed, as N and the rest."""
+    first, _, rest = msg.partition("\n")
+    if not first.startswith("Exit code "):
+        return None
+    v = first[len("Exit code "):]
+    if not re.fullmatch(r"[+-]?[0-9]+", v):
+        return None
+    n = int(v)
+    if not -(1 << 63) <= n < (1 << 63):
+        return None
+    return n, rest
+
+
 def count_lines(text):
     if not text:
         return 0
@@ -386,6 +407,17 @@ def main(capture, out_path):
         def turn(pid):
             return ("turn", (sid, pid))
 
+        def note(pid):
+            if pid not in s["started"]:
+                s["started"].append(pid)
+                s["started"] = s["started"][-MAX_TURNS:]
+            s["turn"] = pid
+
+        if j.get("prompt_id") and name != "UserPromptSubmit":
+            # Every call names its turn, and a turn that took up a queued
+            # message names its own only in calls like this (E-cc-queued-turn).
+            note(j["prompt_id"])
+
         if name == "SessionStart":
             data = {"start_kind": START_KINDS[j["source"]], "entrypoint": "unknown",
                     "parent_class": parent_class, "has_tty": has_tty}
@@ -396,20 +428,26 @@ def main(capture, out_path):
         elif name == "UserPromptSubmit":
             text, pid = j["prompt"], j.get("prompt_id", "")
             n = len(text)
+            # Rules 1 and 3 read a queued message's text too (E-cc-queued-turn).
+            cron = matches_cron(s["crons"], text)
+            notification = text.lstrip(" \t\r\n").startswith("<task-notification>")
             if pid and pid in s["started"]:
-                add("agent.queue", {"turn_key": turn(pid), "len_chars": n})
+                # A person's message queued in the running turn. A scheduled
+                # prompt or a task notification with a known prompt_id is a
+                # parse failure that makes no record.
+                if not (cron or notification):
+                    add("agent.queue", {"turn_key": turn(pid), "len_chars": n})
             else:
                 if not pid:
                     raise SystemExit("%s: a prompt without prompt_id" % d)
-                s["started"].append(pid)
-                s["turn"] = pid
+                note(pid)
                 data = {"turn_key": turn(pid), "len_chars": n, "pasted_chars": 0, "typed_len_est": n,
-                        "origin_declared": "none", "matches_pending_cron": matches_cron(s["crons"], text),
+                        "origin_declared": "none", "matches_pending_cron": cron,
                         "answers_question": False, "low_effort": low_effort(text)}
                 sc = slash_command(text)
                 if sc:
                     data["slash_command"] = sc
-                if text.lstrip(" \t\r\n").startswith("<task-notification>"):
+                if notification:
                     data["origin_declared"] = "subagent"
                 add("prompt.submit", data, text=text)
         elif name in ("Stop", "StopFailure"):
@@ -417,7 +455,8 @@ def main(capture, out_path):
             key = turn(pid)
             reason = "end_turn"
             msg = j.get("last_assistant_message") or ""
-            if msg:
+            if msg and name == "Stop":
+                # StopFailure's is the API error's text, not Claude's reply.
                 o = output_of(msg)
                 add("agent.output", {"turn_key": key, "words": o["words"], "code_lines": o["code_lines"],
                                      "is_final": True, "asks_question": o["asks"],
@@ -435,11 +474,17 @@ def main(capture, out_path):
                 if pending:
                     data["pending_crons"] = pending
             add("agent.stop", data)
-        elif name == "PostToolUse":
+        elif name in ("PostToolUse", "PostToolUseFailure"):
             tool = j["tool_name"]
             tin, tresp = j.get("tool_input") or {}, j.get("tool_response") or {}
+            failed = name == "PostToolUseFailure"
+            if failed:
+                # No tool_response, only the error's text, which is what
+                # Claude Code shows for the call.
+                tresp = {"stdout": j.get("error") or ""}
+            dur = j.get("duration_ms")
             data = {"tool_class": "other", "lines_added": 0, "lines_removed": 0, "visible_output_lines": 0,
-                    "t_start": t - j["duration_ms"], "t_end": t}
+                    "t_start": t - dur if dur is not None else t, "t_end": t}
             command, edits = "", []
             if tool in ("Edit", "MultiEdit", "NotebookEdit", "Write"):
                 data["tool_class"] = "write" if tool == "Write" else "edit"
@@ -460,6 +505,8 @@ def main(capture, out_path):
                 data["lines_added"] = sum(e["new_lines"] for e in edits)
                 data["lines_removed"] = sum(e["old_lines"] for e in edits)
             elif tool == "Bash":
+                if failed and exit_line(tresp["stdout"]) is not None:
+                    data["exit_code"], tresp["stdout"] = exit_line(tresp["stdout"])
                 command = tin["command"]
                 data["tool_class"] = command_class(command)
                 stdout, stderr = tresp.get("stdout", ""), tresp.get("stderr", "")

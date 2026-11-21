@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
+	"github.com/some-du6e/pairtime/pkg/event"
 )
 
 // promptsIn returns the texts a call's payload carries that only content
@@ -87,6 +88,65 @@ func TestSavedMemory(t *testing.T) {
 			checkDiff(t, lines, want)
 			if leaked != "" {
 				t.Errorf("the memory saved before hooks/%s holds the text of a prompt", leaked)
+			}
+		})
+	}
+}
+
+// TestSavedTurns checks, on synthetic calls, that the turn ids the memory
+// keeps are every one the session's calls named (E-cc-queued-turn): an
+// adapter loaded from it takes a message queued in a turn that took up an
+// earlier queued message for that turn's agent.queue.
+func TestSavedTurns(t *testing.T) {
+	const (
+		sid = "11111111-2222-4333-8444-555555555555" // hookRaw's session
+		p1  = "aaaaaaaa-1111-4111-8111-111111111111"
+		p2  = "bbbbbbbb-2222-4222-8222-222222222222"
+	)
+	prompt := func(pid, text string) adapters.RawRecord {
+		return hookRaw(EventUserPromptSubmit, map[string]any{"prompt_id": pid, "prompt": text}, nil)
+	}
+	stop := hookRaw(EventStop, map[string]any{"prompt_id": p1, "stop_hook_active": false,
+		"last_assistant_message": "Done, the test passes."}, nil)
+	tool := hookRaw(EventPostToolUse, map[string]any{"prompt_id": p2, "tool_name": "Bash", "tool_use_id": "toolu_saved_turns",
+		"tool_input": map[string]any{"command": "ls"}, "tool_response": map[string]any{"stdout": "a.txt\n", "stderr": ""},
+		"duration_ms": 40}, nil)
+	cases := []struct {
+		name   string
+		before []adapters.RawRecord // parsed by the adapter that saves its memory
+		after  adapters.RawRecord   // parsed by the one that loads it
+		turn   string               // the agent.queue's turn
+	}{
+		{name: "an adapter loaded after a picked-up turn's first PostToolUse makes a message queued then that turn's agent.queue",
+			before: []adapters.RawRecord{prompt(p1, "Fix the failing test."), prompt(p1, "Then update the README."), stop, tool},
+			after:  prompt(p2, "And bump the version too."), turn: p2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTest()
+			for _, r := range tc.before {
+				if _, err := a.Parse(r); err != nil {
+					t.Fatal(err)
+				}
+			}
+			raw, err := a.SaveState()
+			if err != nil {
+				t.Fatal(err)
+			}
+			b := newTest()
+			if err := b.LoadState(raw); err != nil {
+				t.Fatal(err)
+			}
+			recs, err := b.Parse(tc.after)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(recs) != 1 {
+				t.Fatalf("records %v, want one agent.queue", kinds(recs))
+			}
+			q, ok := recs[0].Event.Data.(*event.AgentQueue)
+			if !ok || q.TurnKey != b.keys.Turn(sid, tc.turn) {
+				t.Errorf("record %s %+v, want the agent.queue of turn %s", recs[0].Event.Kind(), recs[0].Event.Data, tc.turn)
 			}
 		})
 	}

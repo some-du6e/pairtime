@@ -3,10 +3,13 @@
 package claudecode
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -213,15 +216,63 @@ func TestDeliveries(t *testing.T) {
 		}
 	})
 
-	t.Run("a call another harness's process ran is that harness's to record", func(t *testing.T) {
-		cursor := []platform.Proc{{PID: 5151, Name: "cursor-agent", TTY: platform.TTYAttached}, {PID: 5150, Name: "zsh"}}
-		d := adapters.DeliveryOf(event.HarnessClaudeCode, withParents(prompt, cursor), adapters.Walked, prompt.Arrived)
-		raw, err := adapters.HookRecord(newTest(), "linux", d)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if recs, err := newTest().Parse(raw); !errors.Is(err, adapters.ErrOtherHarness) || len(recs) != 0 {
-			t.Errorf("Parse = %d records, %v", len(recs), err)
+	// The Cursor desktop chains are hookpath's TestOf's: Cursor's desktop
+	// app runs hooks through PowerShell on Windows and through sh from its
+	// plugin helper on macOS (HS 4.1).
+	none := platform.TTYNone
+	others := []struct {
+		name    string
+		goos    string
+		way     adapters.Delivery
+		parents []platform.Proc
+		harness event.Harness
+	}{
+		{name: "a call cursor-agent ran is Cursor's to record", goos: "linux", way: adapters.Walked,
+			parents: []platform.Proc{{PID: 5151, Name: "cursor-agent", TTY: platform.TTYAttached}, {PID: 5150, Name: "zsh"}},
+			harness: event.HarnessCursor},
+		{name: "a call Cursor's desktop app ran on Linux is Cursor's to record", goos: "linux", way: adapters.Walked,
+			parents: []platform.Proc{{PID: 5152, Name: "sh", TTY: none}, {PID: 5150, Name: "cursor", TTY: none}, {PID: 1, Name: "systemd", TTY: none}},
+			harness: event.HarnessCursor},
+		{name: "a call Cursor's desktop app ran through PowerShell on Windows is Cursor's to record", goos: "windows", way: adapters.Walked,
+			parents: []platform.Proc{{PID: 800, Name: "powershell", TTY: none}, {PID: 700, Name: "Cursor", TTY: none}, {PID: 600, Name: "explorer", TTY: none}},
+			harness: event.HarnessCursor},
+		{name: "a call Cursor's plugin helper ran through sh on macOS is Cursor's to record", goos: "darwin", way: adapters.Walked,
+			parents: []platform.Proc{{PID: 820, Name: "sh", TTY: none}, {PID: 810, Name: "Cursor Helper (Plugin)", TTY: none},
+				{PID: 700, Name: "Cursor", TTY: none}, {PID: 1, Name: "launchd", TTY: none}},
+			harness: event.HarnessCursor},
+		{name: "a spooled call whose recorded chain names Cursor's desktop app is Cursor's to record", goos: "windows", way: adapters.Spooled,
+			parents: []platform.Proc{{PID: 800, Name: "powershell", TTY: none}, {PID: 700, Name: "Cursor", TTY: none}, {PID: 600, Name: "explorer", TTY: none}},
+			harness: event.HarnessCursor},
+		{name: "a call Devin Desktop ran on Linux is Devin's to record", goos: "linux", way: adapters.Walked,
+			parents: []platform.Proc{{PID: 5152, Name: "sh", TTY: none}, {PID: 5150, Name: "devin-desktop", TTY: none}, {PID: 1, Name: "systemd", TTY: none}},
+			harness: event.HarnessDevin},
+		{name: "a call the Devin CLI ran is Devin's to record", goos: "linux", way: adapters.Walked,
+			parents: []platform.Proc{{PID: 5151, Name: "devin", TTY: platform.TTYAttached}, {PID: 5150, Name: "bash"}},
+			harness: event.HarnessDevin},
+	}
+	for _, tc := range others {
+		t.Run(tc.name, func(t *testing.T) {
+			d := adapters.DeliveryOf(event.HarnessClaudeCode, withParents(prompt, tc.parents), tc.way, prompt.Arrived)
+			raw, err := adapters.HookRecord(newTest(), tc.goos, d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if raw.Arrival.Via != event.ViaPlugin || raw.Arrival.Harness != tc.harness || raw.Arrival.Walk != nil {
+				t.Errorf("via %s, harness %q, walk %v; want plugin and %s with no walk", raw.Arrival.Via, raw.Arrival.Harness,
+					raw.Arrival.Walk, tc.harness)
+			}
+			if recs, err := newTest().Parse(raw); !errors.Is(err, adapters.ErrOtherHarness) || len(recs) != 0 {
+				t.Errorf("Parse = %d records, %v", len(recs), err)
+			}
+		})
+	}
+
+	t.Run("a call VS Code's Claude Code extension ran is Claude Code's, through the claude it starts", func(t *testing.T) {
+		parents := []platform.Proc{{PID: 7001, Name: "claude", TTY: none, Start: prompt.Arrived.Add(-time.Minute)},
+			{PID: 7000, Name: "code", TTY: none}, {PID: 1, Name: "systemd", TTY: none}}
+		recs := parse(t, newTest(), prompt, adapters.Walked, parents)
+		if kinds := kindsOf(recs); !slices.Equal(kinds, []string{"session.start/hook", "prompt.submit/hook"}) {
+			t.Fatalf("records %v", kinds)
 		}
 	})
 }
@@ -392,6 +443,7 @@ func TestPermissions(t *testing.T) {
 	// Interleave the calls and the reports by arrival.
 	a := newTest()
 	byTool := map[string]event.Event{}
+	reportOf := map[string]ToolDecision{}
 	var recorded []event.Event
 	ri := 0
 	decideUntil := func(until time.Time) {
@@ -399,6 +451,7 @@ func TestPermissions(t *testing.T) {
 			if rec, ok := a.Decide(reports[ri].ToolDecision); ok {
 				recorded = append(recorded, rec.Event)
 				byTool[reports[ri].ToolUseID] = rec.Event
+				reportOf[reports[ri].ToolUseID] = reports[ri].ToolDecision
 			}
 			ri++
 		}
@@ -420,26 +473,29 @@ func TestPermissions(t *testing.T) {
 	}
 	ms := func(dir string) int64 { return calls[mustIndex(t, calls, dir)].Arrived.UnixMilli() }
 
+	// In each of the capture's answers, Claude Code stamped its report
+	// before the call's PostToolUse arrived, and the report itself arrived
+	// seconds later, with its OTLP batch. TestAnsweredAt has the other
+	// orders.
 	cases := []struct {
-		name                string
-		toolUseID           string
-		request, toolCall   string // the hook calls
-		decision            event.Decision
-		by                  event.DecidedBy
-		answeredByTimestamp bool
+		name              string
+		toolUseID         string
+		request, toolCall string // the hook calls
+		decision          event.Decision
+		by                event.DecidedBy
 	}{
-		{name: "step 4: the edit the person accepted is accept by user, answered when Claude Code reports it, before its PostToolUse",
+		{name: "step 4: the edit the person accepted is accept by user, answered when Claude Code reports it, 84 ms before its PostToolUse",
 			toolUseID: "toolu_bdrk_01T3dpcw63DcUeQ2GbQ5Ago3", request: "000008", toolCall: "000010",
-			decision: event.DecisionAccept, by: event.DecidedByUser, answeredByTimestamp: true},
-		{name: "step 4: the command the person accepted once is accept by user",
+			decision: event.DecisionAccept, by: event.DecidedByUser},
+		{name: "step 4: the command the person accepted once is accept by user, answered at the report's timestamp",
 			toolUseID: "toolu_bdrk_01X7hAW4BHxHc4odkrqUd3ag", request: "000011", toolCall: "000013",
-			decision: event.DecisionAccept, by: event.DecidedByUser, answeredByTimestamp: true},
-		{name: "step 6: the rm the person turned down is reject by user, with no PostToolUse",
+			decision: event.DecisionAccept, by: event.DecidedByUser},
+		{name: "step 6: the rm the person turned down is reject by user, answered at the report's timestamp, with no PostToolUse",
 			toolUseID: "toolu_bdrk_01XFz5ytj5TGdiVUC3pDRFcP", request: "000021",
-			decision: event.DecisionReject, by: event.DecidedByUser, answeredByTimestamp: true},
-		{name: "step 22: the write allow-once.sh allowed is decided_by hook",
+			decision: event.DecisionReject, by: event.DecidedByUser},
+		{name: "step 22: the write allow-once.sh allowed is decided_by hook, answered at the report's timestamp",
 			toolUseID: "toolu_bdrk_0173LvGuQ9HSwUyKyDJseP52", request: "000024", toolCall: "000025",
-			decision: event.DecisionAccept, by: event.DecidedByHook, answeredByTimestamp: true},
+			decision: event.DecisionAccept, by: event.DecidedByHook},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -450,11 +506,12 @@ func TestPermissions(t *testing.T) {
 			if p.RequestedAt != ms(tc.request) {
 				t.Errorf("requested_at %d, want hooks/%s's arrival %d", p.RequestedAt, tc.request, ms(tc.request))
 			}
-			if p.AnsweredAt < p.RequestedAt {
-				t.Errorf("answered_at %d before requested_at %d", p.AnsweredAt, p.RequestedAt)
+			r := reportOf[tc.toolUseID]
+			if p.AnsweredAt != r.Timestamp {
+				t.Errorf("answered_at %d, want the report's event.timestamp %d", p.AnsweredAt, r.Timestamp)
 			}
-			if tc.toolCall != "" && p.AnsweredAt > ms(tc.toolCall) {
-				t.Errorf("answered_at %d after the PostToolUse at %d", p.AnsweredAt, ms(tc.toolCall))
+			if r.Timestamp >= r.Arrival || tc.toolCall != "" && r.Timestamp >= ms(tc.toolCall) {
+				t.Errorf("the report's timestamp %d isn't the earliest of the three times, so the case says nothing: it arrived at %d", r.Timestamp, r.Arrival)
 			}
 			if e.T != p.AnsweredAt || e.Source != event.SourceHook || e.Via != event.ViaHook {
 				t.Errorf("envelope t %d source %s via %s, want t = answered_at %d and the request hook's source and via",
@@ -509,6 +566,56 @@ func TestPermissions(t *testing.T) {
 	})
 }
 
+// TestAnsweredAt is E-6.1-permission's answered_at: the earliest of the
+// report's event.timestamp, its arrival and the arrival of the call's
+// PostToolUse by tool_use_id, and never before requested_at.
+func TestAnsweredAt(t *testing.T) {
+	at := func(ms int64) *adapters.Arrival {
+		return &adapters.Arrival{Via: event.ViaHook, T: t0 + ms, Mono: 5000 + ms, BootID: "boot",
+			Walk:    &platform.Lineage{ParentClass: event.ParentTerminalApp, Entrypoint: event.EntrypointUnknown, HasTTY: true},
+			Harness: event.HarnessClaudeCode}
+	}
+	const sid = "11111111-2222-4333-8444-555555555555" // hookRaw's
+	cases := []struct {
+		name string
+		// post is when the call's PostToolUse arrived, after the request,
+		// or 0 for none; stamped and arrival are the report's.
+		post, stamped, arrival int64
+		want                   int64
+	}{
+		{name: "the report's timestamp, when Claude Code stamped it first", post: 400, stamped: 300, arrival: 5300, want: 300},
+		{name: "the PostToolUse's arrival, when it came before the report's timestamp", post: 200, stamped: 300, arrival: 5300, want: 200},
+		{name: "the report's arrival, when it came before the report's own timestamp", stamped: 5300, arrival: 900, want: 900},
+		{name: "never before requested_at, even when the report seems to arrive first", stamped: 300, arrival: -50, want: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTest()
+			if _, err := a.Parse(hookRaw(EventPermissionRequest, map[string]any{"prompt_id": "p1", "tool_name": "Bash",
+				"tool_input": map[string]any{"command": "go test ./..."}}, at(0))); err != nil {
+				t.Fatal(err)
+			}
+			if tc.post > 0 {
+				if _, err := a.Parse(hookRaw(EventPostToolUse, map[string]any{"prompt_id": "p1", "tool_name": "Bash",
+					"tool_input": map[string]any{"command": "go test ./..."}, "tool_response": map[string]any{"stdout": "ok\n"},
+					"tool_use_id": "toolu_a", "duration_ms": 10}, at(tc.post))); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rec, ok := a.Decide(ToolDecision{SessionID: sid, ToolName: "Bash", ToolUseID: "toolu_a", Decision: "accept",
+				Source: "user_temporary", Timestamp: t0 + tc.stamped, Arrival: t0 + tc.arrival, PeerChecked: true})
+			if !ok {
+				t.Fatal("no record")
+			}
+			p := rec.Event.Data.(*event.AgentPermission)
+			if p.RequestedAt != t0 || p.AnsweredAt != t0+tc.want || rec.Event.T != p.AnsweredAt || rec.Event.Mono != 5000+tc.want {
+				t.Errorf("requested_at %d, answered_at %d, t %d, mono %d; want answered_at %d", p.RequestedAt-t0, p.AnsweredAt-t0,
+					rec.Event.T-t0, rec.Event.Mono, tc.want)
+			}
+		})
+	}
+}
+
 func mustIndex(t *testing.T, calls []adapters.Call, dir string) int {
 	t.Helper()
 	for i, c := range calls {
@@ -535,16 +642,20 @@ func TestExpectedFromInput(t *testing.T) {
 		}
 		byDir[c.Dir], arrived[c.Dir] = m, c.Arrived.UnixMilli()
 	}
-	ids := map[string]map[string]string{} // symbol -> the id it stands for
+	ids := map[string]map[string]string{}  // symbol -> the id it stands for
+	syms := map[string]map[string]string{} // id -> the symbol that stands for it
 	same := func(t *testing.T, family, sym, id string) {
 		t.Helper()
 		if ids[family] == nil {
-			ids[family] = map[string]string{}
+			ids[family], syms[family] = map[string]string{}, map[string]string{}
 		}
 		if prev, ok := ids[family][sym]; ok && prev != id {
 			t.Errorf("%s stands for %q and %q", sym, prev, id)
 		}
-		ids[family][sym] = id
+		if prev, ok := syms[family][id]; ok && prev != sym {
+			t.Errorf("%q is %s and %s", id, prev, sym)
+		}
+		ids[family][sym], syms[family][id] = id, sym
 	}
 	for i, l := range readExpected(t) {
 		raw, ok := byDir[l.From]
@@ -622,5 +733,43 @@ func TestExpectedFromInput(t *testing.T) {
 				same(t, "agent", str(data, "agent_key"), str(raw, "agent_id"))
 			}
 		})
+	}
+}
+
+// TestGenExpected reruns the conformance oracle's second implementation,
+// testdata/gen_expected.py, over the capture and checks that it writes the
+// committed expected file byte for byte. Without it the file could drift
+// from the oracle, or be written from the Go adapter's own output, and every
+// other test would stay green. It needs python3; without it the test is
+// skipped, except in CI, where it fails.
+func TestGenExpected(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		if os.Getenv("CI") != "" {
+			t.Fatal("python3 is needed to rerun gen_expected.py")
+		}
+		t.Skip("python3 not found")
+	}
+	out := filepath.Join(t.TempDir(), "expected.jsonl")
+	cmd := exec.Command(python, "-I", "-B", filepath.Join("testdata", "gen_expected.py"), filepath.Join(captures, cliRun), out)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("gen_expected.py: %v\n%s", err, b)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := fs.ReadFile(newTest().Fixtures(), cliRun+"/expected.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(got, want) {
+		return
+	}
+	g, w := bytes.Split(got, []byte("\n")), bytes.Split(want, []byte("\n"))
+	for i := 0; i < max(len(g), len(w)); i++ {
+		if i >= len(g) || i >= len(w) || !bytes.Equal(g[i], w[i]) {
+			t.Fatalf("line %d differs: gen_expected.py writes %d lines, fixtures/%s/expected.jsonl has %d", i+1, len(g), cliRun, len(w))
+		}
 	}
 }
