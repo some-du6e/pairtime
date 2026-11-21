@@ -128,7 +128,12 @@ func (s *hookSink) Deliver(d inbox.Delivery) error {
 		session := s.sessionKey(b)
 		// A session whose calls ran in a folder out of pairtime is tied to
 		// no window and sampled by no presence (DESIGN 8.8; hookTies.ignore).
+		// Its end lets the marker go: a session that comes back is looked at
+		// afresh by its next call.
 		out := s.ties.ignoring(session)
+		if out && kind == event.KindSessionEnd {
+			s.ties.unignore(session)
+		}
 		if p.Host != nil {
 			if s.steps.claim != nil {
 				s.steps.claim(*p.Host)
@@ -256,7 +261,12 @@ func (t *hookTies) ignore(session string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !t.ignored[session] && len(t.ignored) >= maxIgnored {
-		clear(t.ignored)
+		// Room for one: whichever marker goes, its session is looked at
+		// afresh by its next call.
+		for k := range t.ignored {
+			delete(t.ignored, k)
+			break
+		}
 	}
 	t.ignored[session] = true
 	_, news := t.projects[session]
@@ -293,14 +303,15 @@ func (t *hookTies) ignoring(session string) bool {
 }
 
 // tie records that the process id runs session, and reports whether that
-// is new.
+// is new. A session ignore keeps out isn't tied, even when the hook sink
+// looked before ignore ran.
 func (t *hookTies) tie(id platform.ID, session string) bool {
 	if t == nil {
 		return false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.sessions[id] == session {
+	if t.sessions[id] == session || t.ignored[session] {
 		return false
 	}
 	t.sessions[id] = session

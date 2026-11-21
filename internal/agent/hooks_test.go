@@ -282,6 +282,18 @@ func TestHookSink(t *testing.T) {
 			},
 		},
 		{
+			name:    "the end of a session kept out lets its marker go, so a session that comes back is looked at afresh",
+			ignored: []string{"s1"},
+			calls: func() []inbox.Delivery {
+				return []inbox.Delivery{socket("SessionEnd", `{"session_id":"s1","hook_event_name":"SessionEnd"}`)}
+			},
+			check: func(t *testing.T, r *recorder, ties *hookTies) {
+				if ties.ignoring(key("s1")) || len(r.presence) != 0 {
+					t.Errorf("after its end the session is kept out %v, and presence heard %v", ties.ignoring(key("s1")), r.presence)
+				}
+			},
+		},
+		{
 			name: "a message that isn't a hook call goes straight to the journal",
 			calls: func() []inbox.Delivery {
 				d := socket("UserPromptSubmit", s1)
@@ -367,6 +379,9 @@ func TestHookTies(t *testing.T) {
 			if !ties.ignoring("s1") || ties.ignoring("s2") || ties.ignoring("") {
 				t.Error("ignoring names the wrong sessions")
 			}
+			if ties.tie(a, "s1") || ties.merged(nil)[a] == "s1" {
+				t.Error("an ignored session was tied again")
+			}
 		}},
 		{"unignore lets an ignored session be kept out no longer, and the set stays bounded", func(t *testing.T, ties *hookTies) {
 			ties.ignore("s1")
@@ -377,8 +392,8 @@ func TestHookTies(t *testing.T) {
 			for i := range maxIgnored + 1 {
 				ties.ignore(fmt.Sprintf("s%d", i))
 			}
-			if n := len(ties.ignored); n > maxIgnored {
-				t.Errorf("%d sessions kept out, more than %d", n, maxIgnored)
+			if n := len(ties.ignored); n != maxIgnored || !ties.ignoring(fmt.Sprintf("s%d", maxIgnored)) {
+				t.Errorf("%d sessions kept out, want %d with the newest among them: one made room, not all", n, maxIgnored)
 			}
 		}},
 		{"a session's end unties only that session from the process", func(t *testing.T, ties *hookTies) {

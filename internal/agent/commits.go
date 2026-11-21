@@ -5,6 +5,7 @@ package agent
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters/git"
+	"github.com/some-du6e/pairtime/internal/agent/home"
 )
 
 // commitsKeep is how long commits/ keeps a day's file: 180 days, as the
@@ -48,8 +50,11 @@ func (s *commitStore) add(commits []git.Commit, now time.Time) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := os.MkdirAll(s.dir, 0o700); err != nil {
-		return err
+	if _, err := os.Stat(s.dir); errors.Is(err, fs.ErrNotExist) {
+		if err := os.MkdirAll(s.dir, 0o700); err != nil {
+			return err
+		}
+		home.SyncDir(filepath.Dir(s.dir))
 	}
 	s.pruneLocked(now)
 	lines := make(map[string][]byte)
@@ -78,11 +83,17 @@ func (s *commitStore) add(commits []git.Commit, now time.Time) error {
 	return errors.Join(errs...)
 }
 
-// appendSynced appends b to the file name with one write, and flushes it.
+// appendSynced appends b to the file name with one write, and flushes it,
+// and its folder too when the file is new, so its name outlives a power cut
+// as its lines do.
 func appendSynced(name string, b []byte) error {
+	_, statErr := os.Stat(name)
 	f, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return err
+	}
+	if errors.Is(statErr, fs.ErrNotExist) {
+		defer home.SyncDir(filepath.Dir(name))
 	}
 	_, err = f.Write(b)
 	if err == nil {

@@ -622,9 +622,10 @@ func (j *pendingJournal) Store(inbox.Delivery) (bool, error) {
 func TestPendingLog(t *testing.T) {
 	at := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
 	self := inbox.Proc{PID: 4242, Name: "pairtime", Start: at}
+	// call is a prompt the socket took in just now, as the agent stamps it.
 	call := func(t *testing.T, prompt string) inbox.Delivery {
 		return inbox.Delivery{Message: hookMessage(t, "UserPromptSubmit", `{"session_id":"s1","prompt":"`+prompt+`"}`, self, at),
-			Via: inbox.ViaSocket}
+			Via: inbox.ViaSocket, Received: clock.Stamp{Wall: time.Now().UTC()}}
 	}
 	newHost := func(dirs home.Dirs) *adapterHost {
 		return newAdapterHost(&agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: make(map[string]string)})
@@ -746,6 +747,26 @@ func TestPendingLog(t *testing.T) {
 			h.donePending(true)
 			if got := read(t, pending); !bytes.Equal(got, left) {
 				t.Errorf("the pending file holds %q, want the earlier run's %q", got, left)
+			}
+		}},
+		{"a move that fails still drops the calls held longer than seven days", func(t *testing.T, dirs home.Dirs, pending string) {
+			earlier := newHost(dirs)
+			old := call(t, "old")
+			old.Received.Wall = time.Now().Add(-heldKeep - time.Hour)
+			left := lineOf(t, earlier, call(t, "left"))
+			if err := os.WriteFile(pending, slices.Concat(lineOf(t, earlier, old), left), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(dirs.Held(), 0o700); err != nil { // so held.jsonl can't be written
+				t.Fatal(err)
+			}
+			h := newHost(dirs)
+			h.recoverPending()
+			if got := read(t, pending); !bytes.Equal(bytes.TrimSpace(got), bytes.TrimSpace(left)) {
+				t.Errorf("the pending file holds %q, want the newer call alone", got)
+			}
+			if p := h.a.currentProblems()["adapters.dropped"]; !strings.Contains(p, "1 hook calls") {
+				t.Errorf("adapters.dropped is %q", p)
 			}
 		}},
 		{"when the move fails, this run empties the file only back to what the killed run left, and keeps it", func(t *testing.T, dirs home.Dirs, pending string) {
@@ -1202,6 +1223,9 @@ func holdGit(t *testing.T, dir string) string {
 // project; at a stop before it ends, they make them without the held
 // folder's.
 func TestFolderStillResolving(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git isn't installed")
+	}
 	cases := []struct {
 		name    string
 		release bool // the held resolve ends before the agent stops

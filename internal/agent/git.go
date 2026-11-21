@@ -82,6 +82,10 @@ type gitHost struct {
 	w       *git.Watcher
 	job     *sched.Job
 	commits *commitStore
+	// ctx ends the Tracks still running when the host closes, and the git
+	// they run with them.
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	// mu orders a change's record, and the seal that puts it on disk,
 	// before the watcher state that says it went (put): the cursor never
@@ -162,6 +166,7 @@ func newGitHost(a *agent, secret []byte, w *ledger.Writer) (*gitHost, error) {
 	}
 	g := &gitHost{a: a, res: res, writer: w, commits: &commitStore{dir: a.dirs.Commits()},
 		tracked: make(map[string]bool), folders: make(map[string]*folder)}
+	g.ctx, g.cancel = context.WithCancel(context.Background())
 	g.commits.prune(time.Now())
 	g.w, err = git.NewWatcher(git.WatcherOptions{
 		Resolver: res,
@@ -170,6 +175,7 @@ func newGitHost(a *agent, secret []byte, w *ledger.Writer) (*gitHost, error) {
 		Log:      a.log.With("component", "git"),
 	})
 	if err != nil {
+		g.cancel()
 		return nil, err
 	}
 	g.saved, _ = json.Marshal(gitState{Projects: m, Watch: ws})
@@ -247,7 +253,7 @@ func (g *gitHost) startLocked(dir string, f *folder, now time.Time) {
 // the answer, gives the slot to the next folder in line, and pokes the
 // adapter host, which then parses the calls that waited for the folder.
 func (g *gitHost) track(dir string, f *folder) {
-	ctx, cancel := context.WithTimeout(context.Background(), trackLimit)
+	ctx, cancel := context.WithTimeout(g.ctx, trackLimit)
 	loc, err := g.w.Track(ctx, dir)
 	cancel()
 	now := time.Now()
@@ -430,8 +436,10 @@ func (g *gitHost) status() gitReply {
 	return r
 }
 
-// close stops the poll and the watcher, whose held changes go to sink.
+// close stops the poll, the Tracks still running and the watcher, whose
+// held changes go to sink.
 func (g *gitHost) close() {
+	g.cancel()
 	g.job.Stop()
 	if err := g.w.Close(); err != nil {
 		g.a.log.Warn("closing the git watcher", "err", err)

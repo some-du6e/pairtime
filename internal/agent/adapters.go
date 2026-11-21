@@ -155,10 +155,10 @@ type adapterHost struct {
 	pending     *os.File
 	pendingSize int64
 	pendingBad  bool // the last write to it failed, and doctor heard so
-	// pendingBase is how much of held.jsonl.pending an earlier run left
-	// that this run couldn't move to held.jsonl (recoverPending), or found
-	// there when it first opened the file: the file is emptied only back
-	// to it, and kept for the next start.
+	// pendingBase is how much held.jsonl.pending held when this run first
+	// opened it: what an earlier run left that this run couldn't move to
+	// held.jsonl (recoverPending). The file is emptied only back to it, and
+	// kept for the next start.
 	pendingBase int64
 	// unsettled counts the calls pend wrote down that the hook sink hasn't
 	// settled yet: the file isn't emptied under them.
@@ -199,6 +199,9 @@ type adapterHost struct {
 	// calls wait behind them (park).
 	parked   []hostCall
 	parkedBy map[string]int
+	// holding are the calls holdBack keeps for the next start, which the
+	// step holds together (holdBackNow).
+	holding []inbox.Delivery
 
 	// git is the git adapter, which prepare makes; nil before, and when it
 	// couldn't start. The status reads it too.
@@ -475,8 +478,9 @@ func (h *adapterHost) donePending(last bool) {
 // killed had acked and not yet parsed or held, to the end of held.jsonl,
 // whose replay then parses them after the calls held before them.
 // startAdapters calls it before the socket can deliver a call. When it
-// can't, the calls stay in the file, which this run then empties only back
-// to them (pendingBase), and the next start tries again.
+// can't, the calls stay in the file but for those held longer than
+// heldKeep, this run empties it only back to them (pendingBase), and the
+// next start tries again.
 func (h *adapterHost) recoverPending() {
 	name := h.a.dirs.Held() + pendingSuffix
 	fi, err := os.Stat(name)
@@ -512,13 +516,15 @@ func (h *adapterHost) recoverPending() {
 		}
 	}
 	if err != nil {
-		size := int64(0)
-		if fi != nil {
-			size = fi.Size()
-		}
-		h.pendingBase = size
 		h.a.log.Warn("the hook calls an earlier run left pending couldn't be held", "err", err)
 		h.a.setProblem("adapters.recover", fmt.Sprintf("hook calls a run that was killed had taken in wait in held.jsonl.pending, because they couldn't be moved to held.jsonl, and the next start tries again: %v", err))
+		// They stay, but no longer than held calls do (heldKeep). Nothing
+		// has the file open yet, so it can be rewritten; the run's first
+		// pend then takes what is left as what it mustn't empty
+		// (writePendingLocked).
+		if n := h.expireFile(name, time.Now().Add(-heldKeep)); n > 0 {
+			h.dropHeld(n, fmt.Errorf("they were held longer than %v, which is as long as hook calls are kept", heldKeep))
+		}
 	}
 }
 
@@ -579,13 +585,15 @@ func (h *adapterHost) run() {
 // watcher, whose held changes go to the ledger first, and saves state.json.
 func (h *adapterHost) finish() {
 	h.step(true)
-	h.donePending(true)
 	if g := h.git.Load(); g != nil {
 		g.close()
 	}
 	if h.ready && !h.down {
 		h.save(true)
 	}
+	// Last: a kill before the save leaves the calls whose memory it holds
+	// in held.jsonl.pending for the next start.
+	h.donePending(true)
 }
 
 // step parses the calls taken since the last step, after the ones held
@@ -616,8 +624,11 @@ func (h *adapterHost) step(last bool) {
 		// it: the calls that wait for their folders, then these, wait for
 		// that start in held.jsonl, in the order they came.
 		h.release(true)
-		h.keep(h.hold(batch))
-		h.donePending(false)
+		h.holding = append(h.holding, batch...)
+		h.holdBackNow()
+		if !last {
+			h.donePending(false)
+		}
 		return
 	}
 	h.release(last)
@@ -632,7 +643,7 @@ func (h *adapterHost) step(last bool) {
 	for _, d := range batch {
 		h.admit(d, false, last)
 	}
-	h.donePending(false)
+	h.holdBackNow() // the calls the writer stopped under, if it did
 	// Read again: the calls parsed above can have made a save due.
 	h.mu.Lock()
 	saveDue = saveDue || h.saveDue
@@ -640,6 +651,13 @@ func (h *adapterHost) step(last bool) {
 	h.mu.Unlock()
 	if saveDue && !last && !h.down {
 		h.save(false)
+	}
+	// Only once the memory they made is saved does held.jsonl.pending let
+	// go of the calls, so a kill in between parses them again rather than
+	// leave the ledger ahead of state.json (adaptersSaveEvery). The last
+	// step leaves it to finish, after its own save.
+	if !last {
+		h.donePending(false)
 	}
 }
 
@@ -1075,13 +1093,25 @@ func (h *adapterHost) writerDown() bool {
 // holdBack keeps c for the next start, once the writer is down: a call
 // held.jsonl.pending keeps goes to held.jsonl, behind the calls held
 // before it, and one read from the .replay file stays there, which this run
-// no longer deletes.
+// no longer deletes. The step holds them all at once, in the order they
+// came (holdBackNow), so a write that fails for one can't put a later one
+// ahead of it.
 func (h *adapterHost) holdBack(c hostCall) {
 	if c.replay {
 		h.replayStuck = true
 		return
 	}
-	h.keep(h.hold([]inbox.Delivery{c.d}))
+	h.holding = append(h.holding, c.d)
+}
+
+// holdBackNow holds what holdBack kept, in order, and keeps whatever it
+// couldn't write at the head of the queue, still in order (keep).
+func (h *adapterHost) holdBackNow() {
+	if len(h.holding) == 0 {
+		return
+	}
+	h.keep(h.hold(h.holding))
+	h.holding = nil
 }
 
 // write writes one record to the ledger, with its content beside the
