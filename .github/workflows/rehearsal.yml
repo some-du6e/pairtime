@@ -116,8 +116,10 @@ jobs:
         # typed into a Claude Code session in an xterm with real XTEST
         # input, then pairtime uninstall --yes --delete-data. It checks
         # that pairtimed's /dashboard and its API show exactly what the
-        # client credits. The test skips without PAIRTIME_TEST_OIDC_URL, so
-        # this step fails unless it ran and passed.
+        # client credits. The step runs every TestDesktop* test in
+        # internal/rehearsal, since no other job runs that package's. The
+        # test skips without PAIRTIME_TEST_OIDC_URL, so the step fails
+        # unless TestDesktopRehearsal ran and passed.
         env:
           PAIRTIME_TEST_OIDC_URL: http://localhost:8080
           PAIRTIME_REHEARSAL_OUT: ${{ runner.temp }}/rehearsal
@@ -135,7 +137,7 @@ jobs:
           mkdir -p "$PAIRTIME_REHEARSAL_OUT"
           log="$PAIRTIME_REHEARSAL_OUT/go-test.txt"
           set +e
-          bash tools/ci/desktop_session.sh go test -tags desktop -run '^TestDesktopRehearsal$' -count=1 -v -timeout 40m ./internal/rehearsal 2>&1 | tee "$log"
+          bash tools/ci/desktop_session.sh go test -tags desktop -run '^TestDesktop' -count=1 -v -timeout 40m ./internal/rehearsal 2>&1 | tee "$log"
           code=${PIPESTATUS[0]}
           set -e
           docker logs oidc >"$PAIRTIME_REHEARSAL_OUT/mock-oauth2-server.log" 2>&1 || true

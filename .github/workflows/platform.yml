@@ -164,7 +164,7 @@ jobs:
         run: |
           # testdata holds separate modules, such as licensecheck's seeded
           # desktop test, which aren't pairtime's to run. rehearsal.yml runs
-          # internal/rehearsal's TestDesktopRehearsal.
+          # internal/rehearsal's.
           pkgs=$(git ls-files -- '*_desktop_test.go' ':(exclude)testdata/*' ':(exclude)*/testdata/*' ':(exclude)internal/rehearsal/*' | xargs -r -n 1 dirname | sort -u | sed 's|^|./|' | tr '\n' ' ')
           echo "pkgs=$pkgs" >> "$GITHUB_OUTPUT"
           why=""
