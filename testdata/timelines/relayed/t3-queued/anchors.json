@@ -4,8 +4,8 @@
     {
       "event_id": "01a2106f-5b18-7a8c-8142-bba8b515ade4",
       "kind": "substantive_prompt",
-      "t": 1795572063000,
-      "local": "20:01:03",
+      "t": 1795572060000,
+      "local": "20:01:00",
       "project_key": "p_8646aaa49bce",
       "origin": "relayed",
       "prompt_class": "substantive",
@@ -15,16 +15,14 @@
       "via": "app",
       "level": "C",
       "sm": "2.3: typing time, 90 / 1.5 = 60 s",
-      "sent_at": 1795572060000,
-      "local_sent_at": "20:01:00",
       "prompt": "01a2106f-5348-7171-abd7-6ecae28b5e32",
       "labels": ["via_relay"]
     },
     {
       "event_id": "01a2106f-6ea0-77e5-aee8-3711588ff65f",
       "kind": "substantive_prompt",
-      "t": 1795572068000,
-      "local": "20:01:08",
+      "t": 1795572065000,
+      "local": "20:01:05",
       "project_key": "p_8646aaa49bce",
       "origin": "relayed",
       "prompt_class": "substantive",
@@ -34,16 +32,14 @@
       "via": "app",
       "level": "C",
       "sm": "2.3: typing time, capped at the 5 s since M1",
-      "sent_at": 1795572065000,
-      "local_sent_at": "20:01:05",
       "prompt": "01a21076-a648-75d8-849e-b376adae0a10",
       "labels": ["via_relay"]
     },
     {
       "event_id": "01a2107b-41f8-70b5-850f-d91db4716013",
       "kind": "substantive_prompt",
-      "t": 1795572843000,
-      "local": "20:14:03",
+      "t": 1795572840000,
+      "local": "20:14:00",
       "project_key": "p_8646aaa49bce",
       "origin": "relayed",
       "prompt_class": "substantive",
@@ -53,8 +49,6 @@
       "via": "app",
       "level": "C",
       "sm": "2.3: typing time, 90 / 1.5 = 60 s",
-      "sent_at": 1795572840000,
-      "local_sent_at": "20:14:00",
       "prompt": "01a2107b-3a28-74f3-b769-96f5aaef2f44",
       "labels": ["via_relay"]
     }

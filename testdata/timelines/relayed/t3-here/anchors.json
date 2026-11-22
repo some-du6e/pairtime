@@ -4,8 +4,8 @@
     {
       "event_id": "01a20b48-f748-746c-8750-e2f07278935d",
       "kind": "substantive_prompt",
-      "t": 1795485660000,
-      "local": "20:01:00",
+      "t": 1795485661000,
+      "local": "20:01:01",
       "project_key": "p_8480974b6054",
       "origin": "human_typed",
       "prompt_class": "substantive",
@@ -15,6 +15,8 @@
       "via": "hook",
       "level": "A",
       "sm": "2.2 rule 6 at the app's stamp; 2.3: 120 + 90 / 1.5 = 180 s, ending at the stamp",
+      "sent_at": 1795485660000,
+      "local_sent_at": "20:01:00",
       "relay": "01a20b48-ff18-7bcf-af79-05c06cc2b9c9"
     }
   ],

@@ -53,7 +53,7 @@ def relay(t, sent, length, low=False):
     """The T3 reader's record of a user-role message whose createdBy is
     user. Its prompt is filled in once the events are built, since the
     prompt.submit it names came first."""
-    return fx.emit(at(t), "relay.message", {"app": "t3_code", "sent_at": at(sent), "thread_key": THREAD,
+    return fx.emit(at(t), "relay.message", {"app": "t3_code", "client": "web", "sent_at": at(sent), "thread_key": THREAD,
                                             "declared": "none", "len_chars": length, "low_effort": low,
                                             "prompt": ""},
                    source="log", via="app", **ENV)
@@ -221,7 +221,7 @@ for r, p in link:
                                    prompt_class="low_effort" if low else "substantive", lead_s=lead,
                                    sm=f"2.3: a relayed message's lead is its typing time, "
                                       f"{re['data']['len_chars']} / 1.5 = {lead} s, ending at sent_at"))
-anchors.sort(key=lambda a: a["sent_at"])
+anchors.sort(key=lambda a: a["t"])
 for name, cls, origin in (("T1", "substantive", "relayed"), ("T2", "substantive", "relayed"),
                           ("T3", None, "headless"), ("T4", "low_effort", "relayed")):
     sub = [e for e in events if e["kind"] == "prompt.submit" and e["data"]["turn_key"] == TURN[name]][0]

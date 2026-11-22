@@ -51,7 +51,7 @@ def prompt(t, turn, length):
 def relay(t, sent, length):
     """The T3 reader's record of a message that passed T3's own test for a
     message a person sent from a client and started a run of its own."""
-    return fx.emit(at(t), "relay.message", {"app": "t3_code", "sent_at": at(sent), "thread_key": THREAD,
+    return fx.emit(at(t), "relay.message", {"app": "t3_code", "client": "web", "sent_at": at(sent), "thread_key": THREAD,
                                             "declared": "none", "len_chars": length, "low_effort": False,
                                             "prompt": ""},
                    source="log", via="app", **ENV)
@@ -209,7 +209,7 @@ for name, rname, kind in (("P1", "R1", "substantive_prompt"), ("P2", "R2", "subs
     anchors.append(rl.anchor_entry(fx, re, E[name], kind=kind, prompt_class="substantive", lead_s=lead,
                                    sm="2.3: typing time, capped at the 5 s since M1" if name == "P2"
                                    else f"2.3: typing time, {re['data']['len_chars']} / 1.5 = {lead} s"))
-anchors.sort(key=lambda a: a["sent_at"])
+anchors.sort(key=lambda a: a["t"])
 turns = []
 for name, cls, origin in (("T1", "substantive", "relayed"), ("T2", "substantive", "relayed"),
                           ("T4", "substantive", "relayed"), ("T5", None, "headless")):

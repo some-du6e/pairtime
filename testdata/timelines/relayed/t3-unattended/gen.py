@@ -98,7 +98,7 @@ def relay(thread, t, sent, length, declared):
     sent, and none of the other marks), cron for one with a scheduledTaskId,
     cross_session for one with linkedSender. Its prompt is filled in, or
     removed, once the events are built."""
-    return fx.emit(at(t), "relay.message", {"app": "t3_code", "sent_at": at(sent), "thread_key": THREAD[thread],
+    return fx.emit(at(t), "relay.message", {"app": "t3_code", "client": "web", "sent_at": at(sent), "thread_key": THREAD[thread],
                                             "declared": declared, "len_chars": length, "low_effort": False,
                                             "prompt": ""},
                    source="log", via="app", **ENV[thread])

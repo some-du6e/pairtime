@@ -72,7 +72,7 @@ p1 = hook("20:01:01", "prompt.submit", {"turn_key": TURN["T1"], "len_chars": 90,
 # the server: createdBy user, creationSource web (T3's desktop window runs
 # the web client), a run of its own.
 r1 = fx.emit(at("20:01:03"), "relay.message",
-             {"app": "t3_code", "sent_at": at(STAMP), "thread_key": THREAD, "declared": "none", "len_chars": 90,
+             {"app": "t3_code", "client": "web", "sent_at": at(STAMP), "thread_key": THREAD, "declared": "none", "len_chars": 90,
               "low_effort": False, "prompt": ""},
              source="log", via="app", **ENV)
 hook("20:01:20", "agent.output", {"turn_key": TURN["T1"], "words": 60, "code_lines": 0, "is_final": False,
@@ -157,8 +157,9 @@ expected = exp.doc(
 anchors = [tl.anchor(fx, pe, kind="substantive_prompt", origin="human_typed", prompt_class="substantive", lead_s=180,
                      trail_s=0, lead_from="params", level="A",
                      sm="2.2 rule 6 at the app's stamp; 2.3: 120 + 90 / 1.5 = 180 s, ending at the stamp")]
-anchors[0]["t"] = at(STAMP)
-anchors[0]["local"] = fx.hhmmss(at(STAMP))
+# The anchor stays at its prompt's t; the stamp its lead ends at is sent_at.
+anchors[0]["sent_at"] = at(STAMP)
+anchors[0]["local_sent_at"] = fx.hhmmss(at(STAMP))
 anchors[0]["relay"] = re["event_id"]
 turns = [tl.turn(fx, pe["t"], at("20:03:30"), session=S, turn_key=TURN["T1"], origin="human_typed",
                  prompt_class="substantive", sm="2.2 rule 6, tested at the app's stamp")]

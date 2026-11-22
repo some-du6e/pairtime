@@ -130,7 +130,7 @@ for h in range(24):
 # for. It passes T3's own test for a message a person sent, so the reader
 # records it 4 s later, but no session pairtime sees took its run: the
 # record names no session, and no prompt ever pairs with it.
-fx.emit(at("14:59:04"), "relay.message", {"app": "t3_code", "sent_at": at("14:59:00"), "thread_key": THREAD,
+fx.emit(at("14:59:04"), "relay.message", {"app": "t3_code", "client": "web", "sent_at": at("14:59:00"), "thread_key": THREAD,
                                           "declared": "none", "len_chars": 90, "low_effort": False,
                                           "prompt": ""},
         source="log", via="app", project=DESK)

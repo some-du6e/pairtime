@@ -14,6 +14,7 @@ Standard library only.
 
 import json
 import os
+import re
 import sys
 from fractions import Fraction
 
@@ -39,6 +40,10 @@ UNKNOWN_BUCKET_MAX_S = 120     # the cap for a relayed session (SM 8.6)
 READ_FOLLOW_S = 600            # the next relayed message within 600 s of the stop (SM 2.4)
 RELAY_MATCH_S = 600            # SM 8.1
 RELAY_SEEN_LAG_S = 60          # SM 8.1
+PENDING_WINDOW_S = 900         # SM 8.1
+# SM 2.4: a message vouches for a stop's reading only if it pairs while the
+# stop's minute is still pending, within PENDING_WINDOW_S - 60 s of the stop.
+VOUCH_PAIR_S = PENDING_WINDOW_S - 60
 
 # Credit reasons relayed credit can give: a prompt's, an answer's or a
 # go-ahead's typing lead, and reading after a stop. Never SUP: a relayed
@@ -81,9 +86,11 @@ def declared(ps):
 
 def headless(start):
     """SM 2.2 rule 4 for a session.start, on a machine whose OS reports no
-    key presses before it."""
+    key presses before it. agent_app is on rule 4's list: a session an agent
+    app's server runs is headless unless an app message witnesses its
+    prompt."""
     ep, parent = start["entrypoint"], start["parent_class"]
-    if ep in ("sdk", "exec", "mcp") or parent in ("script_runtime", "scheduler", "agent"):
+    if ep in ("sdk", "exec", "mcp") or parent in ("script_runtime", "scheduler", "agent", "agent_app"):
         return True
     return not start["has_tty"] and ep not in ("ide", "desktop") and parent != "ide"
 
@@ -92,7 +99,13 @@ class Replay:
     """D-relayed applied second by second over [start, end), Unix ms on
     whole seconds, on a device that sampled no presence and recorded no
     focus, as a server with no desktop. It knows sessions, prompts, relay
-    records, outputs, tools and stops.
+    records, outputs, tools and stops. With desktop=True the device has
+    presence and focus records, which Replay ignores: relayed credit reads
+    none of them (SM 2.3), every relay record there must come from T3's
+    phone app, which skips rules 6 and 7, and every other prompt must be
+    one rule 4 takes. The case itself checks that the person was present
+    with a window hosting the session in front throughout, so no presence
+    or focus code applies, and that no second is X.bucket_cap.
 
     Pairing (SM 2.2). A relay record and a prompt.submit pair when one names
     the other (the record's prompt or the prompt's relay), the record's
@@ -100,20 +113,23 @@ class Replay:
     record's sent_at and at most RELAY_MATCH_S after it, and the record came
     at most RELAY_SEEN_LAG_S after sent_at. A record of declared cron or
     cross_session gives its prompt rule 1's or rule 3's origin. One of
-    declared none witnesses it: rule 4 is skipped when the session's
-    parent_class is agent_app, and with no local input, rules 6 and 7 never
-    hold, so the prompt is relayed. A record that pairs with nothing opens
-    nothing. Every other prompt goes by rules 1 to 4, and the cases have no
-    prompt that rule 4 lets through.
+    declared none witnesses it only in a session whose parent_class is
+    agent_app (rule 9), and with no local input, or from the phone app,
+    rules 6 and 7 never hold, so the prompt is relayed. A record that pairs
+    with nothing opens nothing. Every other prompt goes by rules 1 to 4,
+    and agent_app is on rule 4's list, so the cases have no prompt that
+    rule 4 lets through.
 
-    A relayed prompt opens an anchor at its record's sent_at. Its lead is
-    the typing time of the record's len_chars, capped at the seconds since
-    the thread's previous record of declared none, and it ends at sent_at.
-    The prompt resets the session's bucket to R_TURN_BASE_S; output fills
-    it up to UNKNOWN_BUCKET_MAX_S. Reading drains it after one of the
-    session's stops, until the session's next relayed message is sent or
-    its next turn starts, whichever is first, when that message's sent_at
-    comes within READ_FOLLOW_S after the stop. A lead beats reading (SM 3.3
+    A relayed prompt's anchor is its record, at the record's sent_at. Its
+    lead is the typing time of the record's len_chars, at most the hook's
+    typed_len_est, capped at the seconds since the thread's previous record
+    of declared none, and it ends at sent_at. The prompt resets the
+    session's bucket to R_TURN_BASE_S; output fills it up to
+    UNKNOWN_BUCKET_MAX_S. Reading drains it after one of the session's
+    stops, until the thread's next relayed message is sent or the session's
+    next turn starts, whichever is first, when that message's sent_at comes
+    within READ_FOLLOW_S after the stop and its pairing, the later of its
+    record and its prompt, within VOUCH_PAIR_S. A lead beats reading (SM 3.3
     rule 2). Two sessions never want one second here; Replay checks that.
 
     credited maps each credited second to (session, reason). running holds
@@ -121,9 +137,10 @@ class Replay:
     turn was automated, and capped the seconds nobody wanted that only
     UNKNOWN_BUCKET_MAX_S kept a session from reading."""
 
-    def __init__(self, events, start, end):
+    def __init__(self, events, start, end, desktop=False):
         tl.check(start % 1000 == 0 and end % 1000 == 0, "the replay runs on whole seconds")
-        tl.check(not any(e["kind"].startswith("os.") for e in events), "no presence, focus or power record")
+        if not desktop:
+            tl.check(not any(e["kind"].startswith("os.") for e in events), "no presence, focus or power record")
         by_id = {e["event_id"]: e for e in events}
         starts, prompts, stops, fills, relays = {}, {}, {}, {}, []
         for e in events:
@@ -175,6 +192,9 @@ class Replay:
                 if own or app:
                     self.origin[q["event_id"]] = own or app
                 elif r and starts.get(s, {}).get("parent_class") == "agent_app":
+                    tl.check(r["data"]["client"] in ("web", "mobile"), f"relay {r['event_id']} names its client")
+                    tl.check(not desktop or r["data"]["client"] == "mobile",
+                             "with presence records, Replay scores only phone messages; rules 6 and 7 decide the rest")
                     self.origin[q["event_id"]] = "relayed"
                     self.relay_of[q["event_id"]] = r
                 elif s in starts and headless(starts[s]):
@@ -205,20 +225,24 @@ class Replay:
                 lead = min(lead, sa - earlier[-1])
             reason = "GO" if r["data"]["low_effort"] else "P"
             self.anchors.append({"id": r["event_id"], "sent_at": sa, "lead_ms": lead, "session": q["session_key"],
-                                 "prompt": pid, "reason": reason, "thread": r["data"]["thread_key"]})
+                                 "prompt": pid, "reason": reason, "thread": r["data"]["thread_key"],
+                                 "paired_at": max(r["t"], q["t"])})
 
         # Reading spans.
         self.spans = {}
         for s, ts in stops.items():
             # SM 2.4: the thread's next relayed anchor, whichever session its prompt is in.
             threads = {a["thread"] for a in self.anchors if a["session"] == s}
-            sends = sorted(a["sent_at"] for a in self.anchors if a["thread"] in threads)
+            sends = sorted((a["sent_at"], a["paired_at"]) for a in self.anchors if a["thread"] in threads)
             turn_starts = sorted(t for (s2, t, _, _) in self.turns if s2 == s)
             for stop in ts:
-                nxt = [t for t in sends if t > stop]
-                if not nxt or nxt[0] - stop > READ_FOLLOW_S * 1000:
+                nxt = [(t, p) for t, p in sends if t > stop]
+                if not nxt or nxt[0][0] - stop > READ_FOLLOW_S * 1000:
                     continue
-                end_at = min([nxt[0]] + [t for t in turn_starts if t >= stop])
+                if nxt[0][1] - stop > VOUCH_PAIR_S * 1000:
+                    self.late = getattr(self, "late", []) + [(s, stop, nxt[0][0])]
+                    continue
+                end_at = min([nxt[0][0]] + [t for t in turn_starts if t >= stop])
                 self.spans.setdefault(s, []).append((stop, end_at))
 
         # Bucket changes in time order: a relayed prompt resets its session's
@@ -277,9 +301,10 @@ class Replay:
         self.left = bucket
 
     def code(self, t):
-        """SM 5.2's code for an uncredited second t of a presence-unknown
-        slot: X.bucket_cap where only the 120 s cap kept a session from
-        reading, X.agent_only or X.automated while a turn runs, else
+        """SM 5.2's code for an uncredited second t of a live slot whose
+        presence is unknown: X.bucket_cap where only the 120 s cap kept a
+        session from reading, else X.agent_only while a turn a person
+        started runs, else X.automated while an automated turn runs, else
         X.no_anchor."""
         if t in self.capped:
             return "X.bucket_cap"
@@ -345,11 +370,34 @@ def readme_rows(path, header):
     return rows
 
 
+# An uncredited code with its seconds in a README's Arithmetic cell:
+# "X.agent_only 59", "X.agent_only 2 × 60", "X.no_anchor 1 + 9",
+# "X.automated 30 + 24 × 60 + 22 = 1,492".
+_NUM = r"\d{1,3}(?:,\d{3})+|\d+"
+_CODE_ITEM = re.compile(r"(X\.[a-z_]+) ((?:%s)(?: ?[+×] ?(?:%s))*)(?: ?= ?(%s))?" % (_NUM, _NUM, _NUM))
+_BUCKET_MINUTES = re.compile(r"(?:(\d+) bucket minutes|[Bb]uckets in the (\d+) minutes)")
+
+
+def readme_codes(cell):
+    """The uncredited seconds an Arithmetic cell states, by code, summed
+    over its mentions. A code named without seconds states nothing."""
+    out = {}
+    for code, expr, total in _CODE_ITEM.findall(cell):
+        n = lb.arithmetic(expr)
+        if total:
+            tl.check(n == int(total.replace(",", "")), f"README arithmetic {expr} = {total}")
+        out[code] = out.get(code, 0) + n
+    return out
+
+
 def check_readme(path, exp_doc, names):
     """Checks that every row of the README's minute tables says what
-    expected.json says for that minute, and that every total's arithmetic
-    gives its seconds and the seconds are expected.json's. names maps
-    project keys to the names the README uses."""
+    expected.json says for that minute: its credit and reasons, the seconds
+    its Arithmetic cell gives any uncredited code, and its claims about
+    buckets ("no bucket" in a one-minute row, "N bucket minutes" or
+    "Buckets in the N minutes"). It also checks that every total's
+    arithmetic gives its seconds and the seconds are expected.json's. names
+    maps project keys to the names the README uses."""
     by_local = {r["local"]: r for r in exp_doc["rows"]}
     rows = readme_rows(path, "| Minute | Credited | Reasons |")
     tl.check(rows, f"{path} has a minute table")
@@ -370,6 +418,17 @@ def check_readme(path, exp_doc, names):
                 got.setdefault(key, {})[parts[-2]] = float(parts[-1])
         want = {p: {k: float(v) for k, v in c.items()} for p, c in r.get("credit", {}).items()}
         tl.check(got == want, f"{path}: {minute} has {got} in the README, {want} in expected.json")
+        arith = cells[3] if len(cells) > 3 else ""
+        unc = r.get("uncredited", {}) if r.get("bucket") else {}
+        for code, n in readme_codes(arith).items():
+            tl.check(unc.get(code, 0) == n,
+                     f"{path}: {minute} gives {code} {n} s in the README, {unc.get(code, 0)} in expected.json")
+        if r.get("minutes", 1) == 1 and re.search(r"\bno bucket\b", arith):
+            tl.check(not r.get("bucket"), f"{path}: {minute} has a bucket, though the README says it has none")
+        for a, b in _BUCKET_MINUTES.findall(arith):
+            n = int(a or b)
+            tl.check(r.get("bucket_minutes", 0) == n,
+                     f"{path}: {minute} has {r.get('bucket_minutes', 0)} bucket minutes, the README says {n}")
     tl.check(seen == set(by_local), f"{path}: the minute table has every row of expected.json")
     tot = exp_doc["totals"]
     trows = readme_rows(path, "| Total | Seconds | Arithmetic |")
@@ -391,12 +450,14 @@ def check_readme(path, exp_doc, names):
 
 
 def anchor_entry(fx, relay_event, prompt_event, *, kind, prompt_class, lead_s, sm):
-    """anchors.json's entry for a relayed anchor: the relay record behind
-    it, its stamp, the prompt it paired with and its label."""
+    """anchors.json's entry for a relayed anchor. Its event is the relay
+    record, and its t is the record's sent_at, the app's stamp, where the
+    lead ends (SM 2.3), not the record's own t. It names the prompt it
+    paired with and carries its label."""
     a = tl.anchor(fx, relay_event, kind=kind, origin="relayed", prompt_class=prompt_class, lead_s=lead_s,
                   trail_s=0, lead_from="params", level="C", sm=sm)
-    a["sent_at"] = relay_event["data"]["sent_at"]
-    a["local_sent_at"] = fx.hhmmss(relay_event["data"]["sent_at"])
+    a["t"] = relay_event["data"]["sent_at"]
+    a["local"] = fx.hhmmss(relay_event["data"]["sent_at"])
     a["prompt"] = prompt_event["event_id"]
     a["labels"] = ["via_relay"]
     return a

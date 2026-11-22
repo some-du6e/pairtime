@@ -4,8 +4,8 @@
     {
       "event_id": "01a2241d-80b8-70fd-b884-90a17c98088f",
       "kind": "substantive_prompt",
-      "t": 1795902243000,
-      "local": "16:44:03",
+      "t": 1795902240000,
+      "local": "16:44:00",
       "project_key": "p_7fe5f5541eb2",
       "origin": "relayed",
       "prompt_class": "substantive",
@@ -15,16 +15,14 @@
       "via": "app",
       "level": "C",
       "sm": "2.3: a relayed message's lead is its typing time, 135 / 1.5 = 90 s, ending at sent_at",
-      "sent_at": 1795902240000,
-      "local_sent_at": "16:44:00",
       "prompt": "01a2241e-1528-7606-a9e2-f120e5b2cc72",
       "labels": ["via_relay"]
     },
     {
       "event_id": "01a22427-92d8-7abd-863e-6b9f2ee9ddfd",
       "kind": "substantive_prompt",
-      "t": 1795902903000,
-      "local": "16:55:03",
+      "t": 1795902900000,
+      "local": "16:55:00",
       "project_key": "p_7fe5f5541eb2",
       "origin": "relayed",
       "prompt_class": "substantive",
@@ -34,8 +32,6 @@
       "via": "app",
       "level": "C",
       "sm": "2.3: a relayed message's lead is its typing time, 90 / 1.5 = 60 s, ending at sent_at",
-      "sent_at": 1795902900000,
-      "local_sent_at": "16:55:00",
       "prompt": "01a22427-8b08-737f-95d6-7de721825a12",
       "labels": ["via_relay"]
     }
