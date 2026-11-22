@@ -741,6 +741,13 @@ func TestModesSeen(t *testing.T) {
 			if row := sealNow(t, w, dirs.Ledger()); row.Online {
 				t.Error("a record written after config.toml went back to local-only was sealed online")
 			}
+			// The seal's seeSoon keeps state.json, which the test's cleanup
+			// deletes.
+			for deadline := time.Now().Add(10 * time.Second); a.seeing.Load(); time.Sleep(5 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("modes never looked")
+				}
+			}
 		}},
 		{"a link the uploader had settled whose second isn't after the end state.json kept, as after a step back of the wall clock, ends the stretch where the agent finds it, by both clocks", func(t *testing.T) {
 			a, dirs := modesAgent(t, "online")
