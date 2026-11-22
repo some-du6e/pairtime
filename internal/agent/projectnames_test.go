@@ -70,7 +70,7 @@ func projectsDir(t *testing.T, dirs home.Dirs, linked bool, shown map[string]str
 		t.Fatal(err)
 	}
 	if err := store.WriteDay(dirs.Days(), store.Day{Date: today, Zone: "Local", Start: start.UTC(), End: end.UTC(),
-		Projects: []store.DayProject{{Project: folderKey}}}); err != nil {
+		Projects: []store.DayProject{{Project: chip8Key}, {Project: folderKey}}}); err != nil {
 		t.Fatal(err)
 	}
 	if !linked {
@@ -213,6 +213,27 @@ func TestProjectsAPI(t *testing.T) {
 		{
 			name:  "the name route takes no GET",
 			steps: []step{{method: "GET", path: name, code: 405}},
+		},
+		{
+			name: "a day's answer names a repo's project by its local name, and leaves a plain folder's unnamed",
+			steps: []step{{method: "GET", path: "/v1/days/today", code: 200, check: func(t *testing.T, body string, _ map[string]config.Project) {
+				var d struct {
+					Projects []struct {
+						Project string `json:"project"`
+						Name    string `json:"name"`
+					} `json:"projects"`
+				}
+				if err := json.Unmarshal([]byte(body), &d); err != nil {
+					t.Fatal(err)
+				}
+				got := map[string]string{}
+				for _, p := range d.Projects {
+					got[p.Project] = p.Name
+				}
+				if len(got) != 2 || got[chip8Key] != "chip8-emulator" || got[folderKey] != "" {
+					t.Errorf("GET /v1/days/today named %v", got)
+				}
+			}}},
 		},
 	}
 	for _, tt := range tests {

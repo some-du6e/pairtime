@@ -167,6 +167,27 @@ func (a *agent) serveProjectName(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, replyOf(p))
 }
 
+// localNames is the name pairtime shows on this computer for each project
+// of the git adapter's project map in memory (projects.LocalNames), for
+// the answers about days and sessions, whose rollups carry no name.
+func (a *agent) localNames() map[string]string {
+	var m git.ProjectMap
+	if a.state != nil {
+		if _, err := a.state.Get(projectsKey, &m); err != nil {
+			return nil
+		}
+	}
+	return projects.LocalNames(m)
+}
+
+// named is name, or the local name of the project key when it has none.
+func named(name string, local map[string]string, key string) string {
+	if name != "" {
+		return name
+	}
+	return local[key]
+}
+
 // deref is *s, or "" for nil.
 func deref(s *string) string {
 	if s == nil {

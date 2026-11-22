@@ -358,3 +358,31 @@ func equalProjects(a, b map[string]config.Project) bool {
 	}
 	return true
 }
+
+func TestTodayLocalNames(t *testing.T) {
+	tests := []struct {
+		name string
+		home projectsHome
+		want string
+	}{
+		{
+			name: "pairtime today calls a repo's project by the name pairtime shows for it here, its folder's",
+			home: projectsHome{config: online},
+			want: "\nchip8-emulator: you 1h · Claude 10m\n",
+		},
+		{
+			name: "a project the project map doesn't keep is still called by its key",
+			home: projectsHome{config: online, folder: true},
+			want: "\n" + folderKey + ": you 0m\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.home.write(t)
+			code, out, errOut := runCmd("today")
+			if code != 0 || !strings.Contains(out, tt.want) {
+				t.Errorf("pairtime today = %d\n%s\n%s\nwant it to hold %q", code, out, errOut, tt.want)
+			}
+		})
+	}
+}
