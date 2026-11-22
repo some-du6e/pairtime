@@ -341,10 +341,8 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 	if !ll.Idle && !ll.TooLong && ll.Entry == nil && ll.DecodeErr == nil {
 		ll.Entry, ll.DecodeErr = lr.DecodeLog(line.Bytes)
 	}
-	now := wallNow()
-	mono, boot := ledger.RunClock(now)
-	raw := adapters.RawRecord{Source: adapters.SourceLog, Payload: line.Bytes, Log: &ll,
-		Arrival: adapters.Arrival{Via: event.ViaLog, T: now.UnixMilli(), Mono: mono, BootID: boot}}
+	now := time.Now() // with its monotonic reading, which this run's clock needs
+	raw := adapters.RawRecord{Source: adapters.SourceLog, Payload: line.Bytes, Log: &ll, Arrival: logArrival(now, now)}
 	if _, ok := lr.LogResume(ll.File); !ok && ll.Offset > 0 && !ll.Idle && !line.Fresh {
 		// The adapter has no memory of a file the tailers resume in its
 		// middle, as after a restore made it forget, or it forgot a file
@@ -432,6 +430,19 @@ func (h *adapterHost) hint(c hostCall) {
 			t.Hint(c.ad.Name(), p, root)
 		}
 	}
+}
+
+// logArrival is a log line's arrival, read at wall by the wall clock and at
+// run by this run's clock (ledger.RunClock), as time.Now gives both: run
+// must keep Go's monotonic reading, which neither a suspend nor a step of
+// the wall clock moves, since the ledger holds a record of this run to the
+// moment config.toml said local-only by that reading (ledger.moment). A
+// record's mono comes from the arrival's, less how long before its read
+// its line says it happened (claudecode's env), so a line the agent read
+// after a switch back online, made before it, still counts as made before.
+func logArrival(wall, run time.Time) adapters.Arrival {
+	mono, boot := ledger.RunClock(run)
+	return adapters.Arrival{Via: event.ViaLog, T: wall.UnixMilli(), Mono: mono, BootID: boot}
 }
 
 // logEventID is a log record's event_id: a UUIDv7 with the record's time,

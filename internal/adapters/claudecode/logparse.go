@@ -434,11 +434,15 @@ func finalEnds(e *entry, fin *pendingFinal) bool {
 }
 
 // env is the envelope of a record of the line that happened at t, in
-// session sid.
+// session sid. Its mono is the arrival's less how long before the read t
+// is, by the wall clock, and never after the read, as for a line whose
+// time a wall clock ahead of the reader's stamped. A line from before the
+// agent's run gets 0, no reading of the run's clock, so the ledger holds
+// it to its t (internal/agent/ledger's moment.before).
 func (l *logLine) env(t int64, sid string) event.Envelope {
 	arr := l.raw.Arrival
 	return event.Envelope{
-		T: t, Mono: max(arr.Mono+(t-arr.T), 0), BootID: arr.BootID,
+		T: t, Mono: max(arr.Mono+min(t-arr.T, 0), 0), BootID: arr.BootID,
 		Source: event.SourceLog, Via: arr.Via, Harness: harness, HarnessVersion: l.f.st.Version,
 		SessionKey: l.a.keys.Session(sid), ProjectKey: l.f.st.Project,
 	}

@@ -637,6 +637,34 @@ func TestTailer(t *testing.T) {
 				t.Errorf("handed over %v, want the line written after it was taken up alone", got)
 			}
 		}},
+		{"a file the first listing can't open, which a hint names through a link to its folder while it still can't be opened, is taken up at its end", func(t *testing.T, r *rig) {
+			if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+				t.Skip("needs a file this user can't open")
+			}
+			r.write("s.jsonl", "{\"n\":1}\n")
+			link := filepath.Join(r.dir, "q")
+			if err := os.Symlink(filepath.Join(r.dir, "p"), link); err != nil {
+				t.Skipf("no symlinks here: %v", err)
+			}
+			if err := os.Chmod(r.path("s.jsonl"), 0); err != nil {
+				t.Fatal(err)
+			}
+			r.step(0, false) // the first listing can't open it
+			r.tl.Hint(event.HarnessClaudeCode, filepath.Join(link, "s.jsonl"), adapters.LogRoot{})
+			r.step(time.Second, false)
+			if err := os.Chmod(r.path("s.jsonl"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r.step(HotPoll, true) // a rescan takes it up
+			r.write("s.jsonl", "{\"n\":2}\n")
+			r.step(HotPoll, false)
+			r.tl.mu.Lock()
+			n := len(r.tl.files)
+			r.tl.mu.Unlock()
+			if got := r.texts(0); n != 1 || !slices.Equal(got, []string{`{"n":2}`}) {
+				t.Errorf("%d files handed over %v, want one that hands over the line written after it was taken up alone", n, got)
+			}
+		}},
 		{"a file the first listing can't open, which a hint names through a link to its folder, is taken up at its end", func(t *testing.T, r *rig) {
 			if runtime.GOOS == "windows" || os.Geteuid() == 0 {
 				t.Skip("needs a file this user can't open")

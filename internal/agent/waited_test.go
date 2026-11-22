@@ -5,6 +5,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -1533,4 +1534,115 @@ func sealNow(t *testing.T, w *ledger.Writer, dir string) ledger.Row {
 		t.Fatalf("the newest row doesn't read (%v): %+v", err, rows)
 	}
 	return rows[0]
+}
+
+// TestLogRecordsByTheRunClock checks how the ledger holds a log record to
+// the moment config.toml was last known to say local-only (#174). A record
+// of a line read in this run goes by this run's clock, which neither a
+// suspend nor a step of the wall clock moves (takeLine, logArrival). So a
+// line made before a switch back online, read after it while the wall
+// clock runs ahead, is sealed local-only. A line written before the run
+// began goes by its t, so a restart over an old stretch's end seals it
+// online.
+func TestLogRecordsByTheRunClock(t *testing.T) {
+	// prompt is the Claude Code adapter's records of a transcript prompt
+	// made at made, read with the arrival arr, as takeLine has them.
+	prompt := func(t *testing.T, arr adapters.Arrival, made time.Time) []adapters.Record {
+		t.Helper()
+		ad, ok := adapters.Default.New(event.HarnessClaudeCode, adapters.Options{Keys: adapters.NewKeys(bytes.Repeat([]byte{7}, hookpath.SessionSecretLen))})
+		if !ok {
+			t.Fatal("no Claude Code adapter")
+		}
+		b, err := json.Marshal(map[string]any{"type": "user", "sessionId": "66666666-0000-4000-8000-000000000006",
+			"promptId": "ffffffff-0000-4000-8000-000000000061", "timestamp": made.UTC().Format(time.RFC3339Nano), "cwd": "/home/teen/p",
+			"version": "2.1.327", "entrypoint": "cli", "isSidechain": false, "promptSource": "typed", "turnOrigin": "human",
+			"message": map[string]any{"role": "user", "content": "What does this do?"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		file := "/home/teen/.claude/projects/-p/s.jsonl"
+		ll := adapters.LogLine{File: file, Path: file, End: int64(len(b) + 1)}
+		if ll.Entry, err = ad.(adapters.LogReader).DecodeLog(b); err != nil {
+			t.Fatal(err)
+		}
+		recs, err := ad.Parse(adapters.RawRecord{Source: adapters.SourceLog, Payload: b, Log: &ll, Arrival: arr})
+		if err != nil || len(recs) == 0 {
+			t.Fatalf("the line gave %d records: %v", len(recs), err)
+		}
+		return recs
+	}
+	// write writes recs as adapterHost.write does a log line's.
+	write := func(t *testing.T, w *ledger.Writer, recs []adapters.Record) {
+		t.Helper()
+		for _, r := range recs {
+			ev := r.Event
+			ev.EventID = event.NewEventID(time.UnixMilli(ev.T))
+			if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	online := func(o *ledger.Options) { o.Online = func() bool { return true } }
+	cases := []struct {
+		name string
+		run  func(t *testing.T, dirs home.Dirs) ledger.Row
+		// online is how the line's batch is sealed.
+		online bool
+	}{
+		{"a line made before a switch back online, read after it while the wall clock runs an hour ahead of this run's, is sealed local-only",
+			func(t *testing.T, dirs home.Dirs) ledger.Row {
+				w := optionsWriter(t, dirs, online)
+				made := time.Now()
+				time.Sleep(5 * time.Millisecond)
+				// A stretch that ends now: the moment.
+				w.NoteMode(false)
+				w.NoteMode(true)
+				time.Sleep(5 * time.Millisecond)
+				read := time.Now()
+				// The wall clock, the line's and its read's, runs an hour ahead
+				// of this run's, as after a suspend the run's clock skips.
+				write(t, w, prompt(t, logArrival(read.Add(time.Hour), read), made.Add(time.Hour)))
+				return sealNow(t, w, dirs.Ledger())
+			}, false},
+		{"a line written before this run began, after the stretch the newest seal frame ends, is sealed online",
+			func(t *testing.T, dirs home.Dirs) ledger.Row {
+				// An earlier run ended a stretch two hours ago, which the seal
+				// frames since record.
+				end := time.Now().Add(-2 * time.Hour).Round(0)
+				lk, err := pkgledger.DeriveKeys(bytes.Repeat([]byte{9}, 32))
+				if err != nil {
+					t.Fatal(err)
+				}
+				before, err := ledger.Open(ledger.Options{Dir: dirs.Ledger(), Keys: lk, KeyID: "0123456789abcdef",
+					Online: func() bool { return true }, Now: func() time.Time { return end }})
+				if err != nil {
+					t.Fatal(err)
+				}
+				before.NoteMode(false)
+				before.NoteMode(true)
+				if _, err := before.Write(presenceAt(end)); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := before.Seal(); err != nil {
+					t.Fatal(err)
+				}
+				if err := before.Close(); err != nil {
+					t.Fatal(err)
+				}
+				// This run's writer, and a line written an hour ago, while no
+				// agent ran, which this run reads.
+				w := optionsWriter(t, dirs, online)
+				read := time.Now()
+				write(t, w, prompt(t, logArrival(read, read), read.Add(-time.Hour)))
+				return sealNow(t, w, dirs.Ledger())
+			}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if r := tc.run(t, home.Dirs{Data: dir, Config: dir, Runtime: dir}); r.Online != tc.online {
+				t.Errorf("the line's batch was sealed online %v, want %v", r.Online, tc.online)
+			}
+		})
+	}
 }

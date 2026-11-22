@@ -541,6 +541,12 @@ func (t *Tailer) Hint(h event.Harness, path string, root adapters.LogRoot) {
 		if f == nil {
 			t.mu.Unlock()
 			id := pathID(path)
+			if id == "" && t.laterSame(path) {
+				// A file the root's first listing couldn't open, which the
+				// hook names otherwise and which still can't be opened: the
+				// listing takes it up at its end once it can be.
+				return
+			}
 			other := t.alias(path, id)
 			if other == nil {
 				if later := t.laterOf(path, id); later != "" {
@@ -628,6 +634,30 @@ func (t *Tailer) laterOf(path, id string) string {
 		}
 	}
 	return ""
+}
+
+// laterSame reports whether the file at path is one of later under another
+// spelling, by os.SameFile, which reads neither: one that still can't be
+// opened has no file id for laterOf to match. t.mu isn't held.
+func (t *Tailer) laterSame(path string) bool {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	t.mu.Lock()
+	var paths []string
+	for p := range t.later {
+		if p != path {
+			paths = append(paths, p)
+		}
+	}
+	t.mu.Unlock()
+	for _, p := range paths {
+		if o, err := os.Stat(p); err == nil && os.SameFile(fi, o) {
+			return true
+		}
+	}
+	return false
 }
 
 // known returns the file the tailer knows at path, under its own key or
