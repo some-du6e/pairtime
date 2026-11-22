@@ -165,7 +165,7 @@ session = SHA-256(ascii(session_key))[0:8],  or zero(8) for the session "none"
 
 | Record | `project_key` | `session_key` |
 |---|---|---|
-| An event, `0x01` to `0x12` | the event's `project_key`; no project when it is absent | the event's `session_key`, which is `none` for OS and git events (`pkg/event`'s `NoSession`) |
+| An event, `0x01` to `0x13` | the event's `project_key`; no project when it is absent | the event's `session_key`, which is `none` for OS and git events (`pkg/event`'s `NoSession`) |
 | `os.presence`, `os.focus`, `os.power` | always no project | `none` |
 | Checkpoint, `0x40` | the project whose state it holds, always present | `none` |
 | Upload-failure note, `0x41` | no project | `none` |

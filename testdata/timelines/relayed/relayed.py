@@ -164,7 +164,6 @@ class Replay:
                      f"relay {r['event_id']}'s prompt comes within RELAY_MATCH_S of sent_at")
             tl.check(d["sent_at"] <= r["t"] <= d["sent_at"] + RELAY_SEEN_LAG_S * 1000,
                      f"relay {r['event_id']} was seen within RELAY_SEEN_LAG_S of sent_at")
-            tl.check(d["len_chars"] <= q["data"]["typed_len_est"], "the app's typed length is at most the hook's")
 
         # Origins.
         self.origin, self.relay_of = {}, {}
@@ -175,10 +174,10 @@ class Replay:
                 app = {"cron": "scheduled", "cross_session": "subagent"}.get(r["data"]["declared"]) if r else None
                 if own or app:
                     self.origin[q["event_id"]] = own or app
-                elif r and starts[s]["parent_class"] == "agent_app":
+                elif r and starts.get(s, {}).get("parent_class") == "agent_app":
                     self.origin[q["event_id"]] = "relayed"
                     self.relay_of[q["event_id"]] = r
-                elif headless(starts[s]):
+                elif s in starts and headless(starts[s]):
                     self.origin[q["event_id"]] = "headless"
                 else:
                     tl.check(False, "no case has a prompt that rule 4 lets through")
@@ -200,7 +199,8 @@ class Replay:
             tl.check(sa % 1000 == 0, "every relayed message is sent on a whole second")
             earlier = [w["data"]["sent_at"] for w in witnesses
                        if w["data"]["thread_key"] == r["data"]["thread_key"] and w["data"]["sent_at"] < sa]
-            lead = typing_ms(r["data"]["len_chars"])
+            # SM 2.2: the length never exceeds the hook's typed_len_est.
+            lead = typing_ms(min(r["data"]["len_chars"], q["data"]["typed_len_est"]))
             if earlier:
                 lead = min(lead, sa - earlier[-1])
             reason = "GO" if r["data"]["low_effort"] else "P"
@@ -210,7 +210,9 @@ class Replay:
         # Reading spans.
         self.spans = {}
         for s, ts in stops.items():
-            sends = sorted(a["sent_at"] for a in self.anchors if a["session"] == s)
+            # SM 2.4: the thread's next relayed anchor, whichever session its prompt is in.
+            threads = {a["thread"] for a in self.anchors if a["session"] == s}
+            sends = sorted(a["sent_at"] for a in self.anchors if a["thread"] in threads)
             turn_starts = sorted(t for (s2, t, _, _) in self.turns if s2 == s)
             for stop in ts:
                 nxt = [t for t in sends if t > stop]

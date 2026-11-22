@@ -27,7 +27,7 @@ Each case is a directory with the files of [`../README.md`](../README.md)'s form
 ## Readings the cases share
 
 - **The lead ends at the app's stamp**, `sent_at`, not at the prompt's `t`, and the second or two between them belongs to no window.
-- **A relayed lead is typing time only**, from the app's own text, capped at the seconds since the thread's previous witnessed message. Every relayed message has a length divisible by 3, so its typing time is whole seconds and no rounding rule matters.
+- **A relayed lead is typing time only**, from the app's own text, capped at the seconds since the thread's previous `relay.message` of `declared` `none`, paired or not. Every relayed message has a length divisible by 3, so its typing time is whole seconds and no rounding rule matters.
 - **Relayed reading** runs from one of the session's stops until the thread's next relayed message is sent or the session's next turn starts, and only when that message comes within 600 s of the stop. The bucket holds at most 120 s from the relayed prompt's pickup.
 - **One session at a time.** No second here is wanted by two relayed sessions, and Replay checks that, so 2.7's rule for two relayed sessions isn't exercised.
 
