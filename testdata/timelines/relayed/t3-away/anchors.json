@@ -1,0 +1,107 @@
+{
+  "fixture": "relayed/t3-away",
+  "anchors": [
+    {
+      "event_id": "01a20b48-ff18-7199-8ec9-55b22396ff9a",
+      "kind": "substantive_prompt",
+      "t": 1795485663000,
+      "local": "20:01:03",
+      "project_key": "p_12b356f22578",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "lead_s": 60,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "app",
+      "level": "C",
+      "sm": "2.3: a relayed message's lead is its typing time, 90 / 1.5 = 60 s, ending at sent_at",
+      "sent_at": 1795485660000,
+      "local_sent_at": "20:01:00",
+      "prompt": "01a20b48-f748-7e9e-9868-9dd6b09d8b5c",
+      "labels": ["via_relay"]
+    },
+    {
+      "event_id": "01a20b4e-7d58-70d0-bef5-975e993cba57",
+      "kind": "substantive_prompt",
+      "t": 1795486023000,
+      "local": "20:07:03",
+      "project_key": "p_12b356f22578",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "lead_s": 30,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "app",
+      "level": "C",
+      "sm": "2.3: a relayed message's lead is its typing time, 45 / 1.5 = 30 s, ending at sent_at",
+      "sent_at": 1795486020000,
+      "local_sent_at": "20:07:00",
+      "prompt": "01a20b4e-7588-7549-a077-81359e144034",
+      "labels": ["via_relay"]
+    },
+    {
+      "event_id": "01a20b5f-e278-7f8d-a41d-aba73e0ae23a",
+      "kind": "go_ahead",
+      "t": 1795487163000,
+      "local": "20:26:03",
+      "project_key": "p_12b356f22578",
+      "origin": "relayed",
+      "prompt_class": "low_effort",
+      "lead_s": 2,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "app",
+      "level": "C",
+      "sm": "2.3: a relayed message's lead is its typing time, 3 / 1.5 = 2 s, ending at sent_at",
+      "sent_at": 1795487160000,
+      "local_sent_at": "20:26:00",
+      "prompt": "01a20b5f-daa8-7e0c-b711-469e86fa31db",
+      "labels": ["via_relay"]
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_4a4ce92a8213",
+      "turn_key": "t_6320cd9dbd67",
+      "t_submit": 1795485661000,
+      "local_submit": "20:01:01",
+      "t_stop": 1795485810000,
+      "local_stop": "20:03:30",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 9"
+    },
+    {
+      "session_key": "s_4a4ce92a8213",
+      "turn_key": "t_a526b018a3a9",
+      "t_submit": 1795486021000,
+      "local_submit": "20:07:01",
+      "t_stop": 1795486140000,
+      "local_stop": "20:09:00",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 9"
+    },
+    {
+      "session_key": "s_4a4ce92a8213",
+      "turn_key": "t_031c4204e4eb",
+      "t_submit": 1795486320000,
+      "local_submit": "20:12:00",
+      "t_stop": 1795486500000,
+      "local_stop": "20:15:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4"
+    },
+    {
+      "session_key": "s_4a4ce92a8213",
+      "turn_key": "t_4d80e963ac0e",
+      "t_submit": 1795487161000,
+      "local_submit": "20:26:01",
+      "t_stop": 1795487250000,
+      "local_stop": "20:27:30",
+      "origin": "relayed",
+      "prompt_class": "low_effort",
+      "sm": "2.2 rule 9"
+    }
+  ]
+}
