@@ -398,12 +398,14 @@ var anchorEventKinds = map[event.AnchorKind]event.Kind{
 
 // promptAnchorClasses lists the prompt classes each prompt and queued
 // message anchor kind comes from (SM 2.3): a queued message's lead is that
-// of a prompt of its class, so it has an origin and a class too.
+// of a prompt of its class, so it has an origin and a class too. Its
+// record keeps no text, so its class comes from its length and the
+// question before it, and is never an error paste.
 var promptAnchorClasses = map[event.AnchorKind][]event.PromptClass{
 	event.AnchorSubstantivePrompt: {event.ClassSubstantive, event.ClassErrorPaste},
 	event.AnchorAnswer:            {event.ClassAnswer},
 	event.AnchorGoAhead:           {event.ClassLowEffort},
-	event.AnchorQueuedMessage:     {event.ClassSubstantive, event.ClassErrorPaste, event.ClassAnswer, event.ClassLowEffort},
+	event.AnchorQueuedMessage:     {event.ClassSubstantive, event.ClassAnswer, event.ClassLowEffort},
 }
 
 // TestAnchors checks anchors.json against the events.

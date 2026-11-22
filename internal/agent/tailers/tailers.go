@@ -542,6 +542,22 @@ func (t *Tailer) Hint(h event.Harness, path string, root adapters.LogRoot) {
 			t.mu.Unlock()
 			id := pathID(path)
 			other := t.alias(path, id)
+			if other == nil {
+				if later := t.laterOf(path, id); later != "" {
+					// A file the root's first listing couldn't open, which
+					// the hook names otherwise: taken up at its end under
+					// the listing's name, as the listing would have.
+					t.adopt(r, later, t.opts.Now())
+					t.mu.Lock()
+					if f := t.files[later]; f != nil {
+						t.spelled[path] = later
+						f.due = true
+					}
+					t.mu.Unlock()
+					t.wake()
+					return
+				}
+			}
 			t.mu.Lock()
 			switch f = t.files[path]; {
 			case f != nil:
@@ -589,6 +605,29 @@ func (t *Tailer) alias(path, id string) *file {
 		}
 	}
 	return nil
+}
+
+// laterOf returns the file of later, one a root's first listing couldn't
+// open, that is the file at path under another spelling, whose file id is
+// id, or "" when there is none. t.mu isn't held.
+func (t *Tailer) laterOf(path, id string) string {
+	if id == "" {
+		return ""
+	}
+	t.mu.Lock()
+	var paths []string
+	for p := range t.later {
+		if p != path {
+			paths = append(paths, p)
+		}
+	}
+	t.mu.Unlock()
+	for _, p := range paths {
+		if pathID(p) == id {
+			return p
+		}
+	}
+	return ""
 }
 
 // known returns the file the tailer knows at path, under its own key or
