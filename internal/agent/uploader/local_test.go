@@ -157,8 +157,10 @@ func TestLocalRuns(t *testing.T) {
 			[]float64{1, 2, 3.5, 7.5}, []gap{{3, 3}}, 4, true, map[uint64]float64{4: 5.2}},
 		{"the minute after the stretch ended doesn't",
 			[]float64{1, 2, 3.5, 7.5}, []gap{{3, 3}}, 6, false, map[uint64]float64{4: 5.2}},
-		{"a moment the run's last batch records counts as the stretch's end too",
-			[]float64{1, 2, 3.5, 7.5}, []gap{{3, 3}}, 5, true, map[uint64]float64{3: 5.2}},
+		{"a moment ahead of its own batch's seal, as an earlier run's after a step back of the wall clock, ends the stretch no later than that seal",
+			[]float64{1, 2, 3.5, 4.5}, []gap{{3, 3}}, 5, false, map[uint64]float64{4: 7.2}},
+		{"so the minute that seal lands in still holds the run's end",
+			[]float64{1, 2, 3.5, 4.5}, []gap{{3, 3}}, 4, true, map[uint64]float64{4: 7.2}},
 		{"a moment from before the run's last seal leaves the run's end at that seal",
 			[]float64{1, 2, 3.5, 7.5}, []gap{{3, 3}}, 4, false, map[uint64]float64{4: 2}},
 	}

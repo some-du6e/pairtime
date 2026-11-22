@@ -13,8 +13,8 @@ import (
 // TestMoment checks how an event is held to the moment config.toml was
 // last known to say local-only: by the monotonic clock it carries when the
 // moment holds that clock too, so a step of the wall clock either way
-// can't move it across the moment, and by its t otherwise; and how
-// moments combine.
+// can't move it across the moment, and by its t otherwise; how moments
+// combine; and how a seal frame's moment reads back.
 func TestMoment(t *testing.T) {
 	const boot = "b_os"
 	m := moment{wall: 10_000, run: 5_000, os: 7_000, boot: boot}
@@ -87,6 +87,9 @@ func TestMoment(t *testing.T) {
 		{"a later moment with no reading of a clock drops the moment's, which is of an earlier time",
 			moment{wall: 10, run: 20, os: 30, boot: boot}, moment{wall: 20}, boot,
 			moment{wall: 20}},
+		{"with no boot from the OS for the writer, a later moment's reading fills a moment that holds none",
+			moment{wall: 10}, moment{wall: 20, os: 7, boot: boot}, "",
+			moment{wall: 20, os: 7, boot: boot}},
 	}
 	for _, c := range raises {
 		t.Run(c.name, func(t *testing.T) {
@@ -140,28 +143,6 @@ func TestMoment(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got := momentAt(c.at, c.s); got != c.want {
 				t.Errorf("momentAt(%v, %+v) = %+v, want %+v", c.at, c.s, got, c.want)
-			}
-		})
-	}
-
-	wider := []struct {
-		name string
-		e    event.Envelope
-		want bool
-	}{
-		{"an event before the moment by its t may have been made before it, though its mono is after",
-			event.Envelope{T: 9_999, BootID: runBoot, Mono: 5_000}, true},
-		{"so may one before it by its mono, though its t is after",
-			event.Envelope{T: 20_000, BootID: boot, Mono: 6_999}, true},
-		{"so may one of this run before it by this run's clock, though its t is after",
-			event.Envelope{T: 20_000, BootID: runBoot, Mono: 4_999}, true},
-		{"one after it by every clock it carries wasn't",
-			event.Envelope{T: 10_000, BootID: runBoot, Mono: 5_000}, false},
-	}
-	for _, c := range wider {
-		t.Run(c.name, func(t *testing.T) {
-			if got := m.madeBefore(c.e); got != c.want {
-				t.Errorf("madeBefore(%+v) = %v, want %v", c.e, got, c.want)
 			}
 		})
 	}

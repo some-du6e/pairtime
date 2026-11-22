@@ -131,11 +131,14 @@ type Options struct {
 	// first Track, or held while the adapters' keys or the writer weren't
 	// there, a git change the watcher holds, or a record presence queued.
 	// before takes the event's times, its t and its mono in its boot, and
-	// says yes for one made before the moment by any of them (moment), so
-	// whatever Write would seal local-only counts. While the first batch
-	// after a switch back online is due its mark (Batch.Back), each seal
-	// asks it as it begins, outside the lock records take, and it must
-	// never call the Writer. While it says yes, the batch is sealed
+	// says yes for one made before the moment by the clock Write holds it
+	// to (moment.before), so it counts exactly what Write would seal
+	// local-only. A hook call counts by its records' times and by the
+	// hook's own stamp, as Write takes them (Input.Sent). While the first
+	// batch after a switch back online is due its mark (Batch.Back), and
+	// while the newest batch counts as local-only, each seal asks it as it
+	// begins, outside the lock records take, and it must never call the
+	// Writer. While it says yes, the batch is sealed
 	// local-only and the mark waits for the next one: so an event made in
 	// local-only mode that reaches the writer late is sealed in the run of
 	// local-only batches before the first batch the server can take, and
@@ -679,15 +682,20 @@ func (w *Writer) noteLocked(online bool, at moment) bool {
 // agent saw ended, the moment it saw the file back online, by Go's clock
 // with its monotonic reading and by the OS's, or the zero time for none.
 // The agent starts seeing at its start, which is where every install's
-// first stretch begins, and for a link it didn't see, as one made while it
-// was stopped, it counts the stretch to the link's time (account.Linked).
+// first stretch begins, and a link it didn't see, as one made while it was
+// stopped, ends the stretch where the agent finds it.
 // Earlier says an earlier run of the agent saw Ended, as state.json kept
-// it, so every event of this run came after it (Writer.earlier).
+// it, so every event of this run came after it (Writer.earlier). Until,
+// when later than Ended by the wall clock, is how long the stretch may
+// have lasted by the wall clock alone, as to the end of the second of a
+// link the agent didn't see (D-relink-boundary): an event the moment holds
+// by no monotonic clock it carries is held to it.
 type Seen struct {
 	Local   bool
 	Ended   time.Time
 	OS      osclock.Stamp
 	Earlier bool
+	Until   time.Time
 }
 
 // NoteSeen takes what the agent saw of config.toml's mode before it
@@ -724,6 +732,9 @@ func (w *Writer) seenLocked(s Seen, at moment) bool {
 		ended := momentAt(s.Ended, s.OS)
 		if s.Earlier {
 			ended = w.earlier(ended)
+		}
+		if !s.Until.IsZero() {
+			ended.wall = max(ended.wall, s.Until.UnixMilli())
 		}
 		newer := ended.run > w.until.run || ended.wall > w.until.wall
 		if w.local {
@@ -943,7 +954,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 		// reach the writer after the mark, so the batch is local-only and
 		// the mark waits (Options.Waiting).
 		asked = due && online
-		waiting = asked && w.waiting(until.madeBefore)
+		waiting = asked && w.waiting(until.before)
 		w.mu.Lock()
 		if w.notes == notes && w.next == next {
 			break

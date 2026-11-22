@@ -35,6 +35,7 @@ func (a *agent) startIPC(opts Options) func() {
 	j, err := inbox.OpenJournal(a.journalDir(), time.Now())
 	if err != nil {
 		a.setProblem("ipc", fmt.Sprintf("hooks spool their messages, because the agent can't open its journal: %v", err))
+		a.spoolNoDrain.Store(true)
 		return func() {}
 	}
 	a.journal = j
@@ -169,6 +170,14 @@ const (
 	drainSoonAfter = spoolSlack + 250*time.Millisecond
 )
 
+// spoolBusyAsks bounds the asks in a row a spool file that stays busy holds
+// the mark for (spoolHolds): only another program holds one so long, and
+// its calls wait for a drain that can take the file.
+const spoolBusyAsks = 3
+
+// scanSpool is inbox.Scan, which a test replaces.
+var scanSpool = inbox.Scan
+
 // spoolScanned bounds how many of a spool file's calls spoolHolds reads.
 // Senders append calls in the order they make them, each within
 // spoolSlack of its stamp, so one made before a moment comes after one
@@ -206,21 +215,32 @@ func (a *agent) drainSoon() {
 // carry (hookpath.Times) and by the hook's own stamp (stampOf). So a call
 // made after the switch, as one spooled while the agent restarted, holds
 // nothing. drainSoon has a call made before the switch handed over within
-// seconds. A spool file Scan couldn't open for a moment, as while a drain
-// renames it on Windows, may hold one, so it holds the mark until the
-// next seal asks. The spool is used only while hooks can't reach the
-// socket, so it is empty almost always. With no drain running in this
-// run, as when the journal couldn't open, its calls wait for the next
-// start, and hold nothing.
+// seconds. It reads the spool from the agent's start, before startIPC's
+// first drain, since that drain runs in this run. A spool file Scan
+// couldn't open for a moment, as while a drain renames it on Windows, may
+// hold one, so it holds the mark, for spoolBusyAsks asks in a row at
+// most: one another program keeps busy longer is passed over. The spool
+// is used only while hooks can't reach the socket, so it is empty almost
+// always. With no drain running in this run, as when the journal couldn't
+// open, its calls wait for the next start, and hold nothing.
 func (a *agent) spoolHolds(before func(event.Envelope) bool) bool {
-	if a.spoolKick.Load() == nil {
+	if a.spoolNoDrain.Load() {
 		return false
 	}
 	now := clock.Now()
-	found, err := inbox.Scan(a.dirs.Inbox(), spoolScanned, func(m inbox.Message) bool {
+	found, err := scanSpool(a.dirs.Inbox(), spoolScanned, func(m inbox.Message) bool {
 		return stampOf(inbox.Delivery{Message: m, Via: inbox.ViaInbox, Received: now}).waits(before)
 	})
-	return found || err != nil
+	if err == nil {
+		a.spoolBusy.Store(0)
+		return found
+	}
+	if n := a.spoolBusy.Add(1); n <= spoolBusyAsks {
+		return true
+	} else if n == spoolBusyAsks+1 {
+		a.log.Warn("a file of the inbox's spool stayed busy through several seals, so the first batch after config.toml went back online no longer waits for it", "err", err)
+	}
+	return false
 }
 
 // drain moves what the inbox holds into the journal.

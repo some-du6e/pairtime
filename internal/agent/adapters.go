@@ -204,6 +204,10 @@ type adapterHost struct {
 	stepping []callStamp
 	parkedAt map[callStamp]int
 	heldFrom earliestStamp
+	// uncounted is set from the agent's start until the worker has counted
+	// what held.jsonl and a .replay file hold (countHeld), which the ledger
+	// writer may open before: until then any of them may be on its way.
+	uncounted bool
 	// expireDue says the minute job has run since the worker last looked
 	// for held calls to drop (expireRun). heldDue is when the oldest call in
 	// held.jsonl or an unread .replay file will have waited heldKeep, zero
@@ -1972,9 +1976,9 @@ func (h *adapterHost) readReplay(name string, last bool) bool {
 // name, once each of them is parsed, and deletes the file. Its records are
 // written, and replaying the file again would write them twice, so it goes
 // even when the seal fails, and the next seal takes them. One that can't
-// be deleted stays for the next start (replayStuck): replayed again in
-// this run, it would write its records twice; left, it does at most once
-// more.
+// be deleted stays for the next start (replayStuck), emptied when it can
+// be, so that start parses none of it again. Only one that can't be
+// emptied either is parsed once more there, and its records written twice.
 func (h *adapterHost) endReplay(name string) {
 	if h.replayTaken > 0 {
 		h.mu.Lock()
@@ -1985,7 +1989,16 @@ func (h *adapterHost) endReplay(name string) {
 		}
 	}
 	h.replayRead, h.replayTaken, h.replayKept, h.replayIDs = false, 0, 0, nil
-	if err := os.Remove(name); err != nil {
+	if err := os.Remove(name); err != nil && os.Truncate(name, 0) == nil {
+		// Emptied, so the next start parses none of its calls again, whose
+		// records are in the ledger already: one made in a local-only
+		// stretch would seal a local-only batch after the server's (Write).
+		// The next start deletes the empty file.
+		h.a.log.Warn("couldn't delete the held hook calls once replayed, so they were emptied for the next start to delete", "err", err)
+		h.replayStuck = true
+		h.replayStopped()
+		return
+	} else if err != nil {
 		h.a.log.Warn("couldn't delete the held hook calls once replayed", "err", err)
 		h.a.setProblem("adapters.held", fmt.Sprintf("the hook calls held while the ledger wasn't open were parsed, but couldn't be deleted, so the next start parses them again: %v", err))
 		h.replayStuck = true
@@ -2227,7 +2240,16 @@ func (h *adapterHost) countHeld() {
 	h.count(func() {
 		h.held += n
 		h.heldFrom.merge(from)
+		h.uncounted = false
 	})
+}
+
+// expectCount has waiting count every call as on its way until the worker
+// has counted the held ones (countHeld), which the agent's start asks for
+// before the ledger opens on a goroutine of its own, so no seal can take a
+// mark while held calls aren't counted yet.
+func (h *adapterHost) expectCount() {
+	h.count(func() { h.uncounted = true })
 }
 
 // lessHeldLocked counts n calls as gone from held: parsed, or dropped.
@@ -2253,7 +2275,7 @@ func (h *adapterHost) lessHeldLocked(n int) {
 func (h *adapterHost) waiting(before func(event.Envelope) bool) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.held > 0 && h.heldFrom.waits(before) {
+	if h.uncounted || h.held > 0 && h.heldFrom.waits(before) {
 		return true
 	}
 	for _, s := range h.stepping {
@@ -2300,9 +2322,24 @@ func stampOf(d inbox.Delivery) callStamp {
 
 // sentOf is the hook's own stamp of call d, which its records' times may
 // have set aside (hookpath.Times), for the ledger writer to hold its
-// records to as well (ledger.Input.Sent).
+// records to as well (ledger.Input.Sent). A hook with no monotonic reading
+// gives only its wall time, which a step of the wall clock can move. For a
+// call that came over the socket or the pipe, the agent's own stamp
+// places it instead: the hook takes its stamp first and gives up on the
+// agent within spoolSlack, so the call was made at most spoolSlack before
+// the agent took it, by the OS's clock. That holds while the hook's wall
+// time is within spoolSlack of the agent's too: a wider gap, as a hook
+// stopped between its stamp and its send leaves, keeps the wall time.
 func sentOf(d inbox.Delivery) clock.Stamp {
-	return clock.Stamp{Wall: d.Sent, Mono: d.Mono, BootID: d.BootID}
+	s := clock.Stamp{Wall: d.Sent, Mono: d.Mono, BootID: d.BootID}
+	r := d.Received
+	if s.HasMono() || !r.HasMono() || d.Via != inbox.ViaSocket && d.Via != inbox.ViaPipe {
+		return s
+	}
+	if gap := r.Wall.Sub(d.Sent); gap < -spoolSlack || gap > spoolSlack {
+		return s
+	}
+	return clock.Stamp{Wall: d.Sent, Mono: max(r.Mono-spoolSlack.Milliseconds(), 1), BootID: r.BootID}
 }
 
 // waits reports whether before says the call may have been made before

@@ -5,6 +5,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -204,6 +205,8 @@ func TestAdaptersWaiting(t *testing.T) {
 		{"a held call counts by the hook's own stamp too", func(h *adapterHost) { h.held = 1; h.heldFrom.add(stampOf(resent(moment-1, moment+5))) }, true},
 		{"a call whose own stamp and its records' are both after the moment doesn't count",
 			func(h *adapterHost) { h.queue = []inbox.Delivery{resent(moment+1, moment+5)} }, false},
+		{"from the agent's start until the worker has counted the held calls, any of them may be on its way", func(h *adapterHost) { h.expectCount() }, true},
+		{"once it has counted them, none held counts for nothing", func(h *adapterHost) { h.expectCount(); h.countHeld() }, false},
 		{"nothing to parse counts for nothing", func(*adapterHost) {}, false},
 	}
 	for _, c := range states {
@@ -314,6 +317,50 @@ func TestAdaptersWaiting(t *testing.T) {
 	}
 	for _, c := range flows {
 		t.Run(c.name, c.check)
+	}
+}
+
+// TestSentOf checks the stamp a hook call's records are also held to
+// (sentOf, ledger.Input.Sent): the hook's own, unless it gave no monotonic
+// reading and came over the socket or the pipe within spoolSlack of its
+// stamp, which places it by the agent's own stamp, spoolSlack before it.
+func TestSentOf(t *testing.T) {
+	sent := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	slack := spoolSlack.Milliseconds()
+	cases := []struct {
+		name string
+		// mono is the hook's own reading, via how the call came, and
+		// received the agent's stamp.
+		mono     int64
+		via      inbox.Via
+		received clock.Stamp
+		want     clock.Stamp
+	}{
+		{"a hook's own stamp with its monotonic reading is the stamp", 500, inbox.ViaSocket,
+			clock.Stamp{Wall: sent.Add(10 * time.Millisecond), Mono: 600, BootID: "b_os"}, clock.Stamp{Wall: sent, Mono: 500, BootID: "b_os"}},
+		{"a socket call with no monotonic reading is placed by the agent's stamp, spoolSlack before it", 0, inbox.ViaSocket,
+			clock.Stamp{Wall: sent.Add(10 * time.Millisecond), Mono: 10_000, BootID: "b_os"}, clock.Stamp{Wall: sent, Mono: 10_000 - slack, BootID: "b_os"}},
+		{"so is a pipe call", 0, inbox.ViaPipe,
+			clock.Stamp{Wall: sent.Add(10 * time.Millisecond), Mono: 10_000, BootID: "b_os"}, clock.Stamp{Wall: sent, Mono: 10_000 - slack, BootID: "b_os"}},
+		{"a call that waited in the spool keeps the hook's wall time alone", 0, inbox.ViaInbox,
+			clock.Stamp{Wall: sent.Add(10 * time.Millisecond), Mono: 10_000, BootID: "b_os"}, clock.Stamp{Wall: sent}},
+		{"a socket call whose wall time is further from the agent's than spoolSlack keeps it alone", 0, inbox.ViaSocket,
+			clock.Stamp{Wall: sent.Add(time.Minute), Mono: 10_000, BootID: "b_os"}, clock.Stamp{Wall: sent}},
+		{"a socket call the agent couldn't stamp by the OS's clock keeps the hook's wall time alone", 0, inbox.ViaSocket,
+			clock.Stamp{Wall: sent.Add(10 * time.Millisecond)}, clock.Stamp{Wall: sent}},
+		{"the agent's reading less spoolSlack is a reading still", 0, inbox.ViaSocket,
+			clock.Stamp{Wall: sent.Add(10 * time.Millisecond), Mono: 100, BootID: "b_os"}, clock.Stamp{Wall: sent, Mono: 1, BootID: "b_os"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := inbox.Delivery{Message: inbox.Message{Sent: sent}, Via: c.via, Received: c.received}
+			if c.mono > 0 {
+				d.Mono, d.BootID = c.mono, "b_os"
+			}
+			if got := sentOf(d); !got.Wall.Equal(c.want.Wall) || got.Mono != c.want.Mono || got.BootID != c.want.BootID {
+				t.Errorf("sentOf = %+v, want %+v", got, c.want)
+			}
+		})
 	}
 }
 
@@ -445,19 +492,68 @@ func TestModesSeen(t *testing.T) {
 					waited.Online, waited.Back, after.Online, after.Back)
 			}
 		}},
-		{"an event made in the second a pairtime login the agent didn't see linked the computer is sealed local-only, and the batch after it is marked", func(t *testing.T) {
+		{"a pairtime login the agent didn't see ends the stretch where the agent finds it, by both clocks: an event made in the link's second, or before the agent's start, is sealed local-only, and the batch after them is marked", func(t *testing.T) {
 			a, dirs := modesAgent(t, "online")
 			linked := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
-			if err := os.WriteFile(filepath.Join(dirs.Data, "account.json"), []byte(`{"v":1,"server":"https://pairtime.example","device_id":"d_testdevice00000000000000a","linked_at":"`+linked.Format(time.RFC3339)+`"}`), 0o600); err != nil {
-				t.Fatal(err)
-			}
+			writeAccount(t, dirs, linked)
+			// An event of this run made before the agent found the link, by
+			// this run's clock, though after the link by the wall clock.
+			made := time.Now()
 			t.Cleanup(a.startLedger())
 			w := opened(t, a)
-			before := sealOne(t, a, w, linked.Add(500*time.Millisecond))
-			after := sealOne(t, a, w, linked.Add(1500*time.Millisecond))
-			if before.Online || !after.Online || !after.Back {
-				t.Errorf("the event in the link's second sealed online %v, and the next online %v, marked %v; want local-only, then online and marked",
-					before.Online, after.Online, after.Back)
+			inSecond := sealOne(t, a, w, linked.Add(500*time.Millisecond))
+			if _, err := w.Write(runPresenceAt(made)); err != nil {
+				t.Fatal(err)
+			}
+			beforeStart := sealNow(t, w, dirs.Ledger())
+			if _, err := w.Write(runPresenceAt(time.Now().Add(time.Second))); err != nil {
+				t.Fatal(err)
+			}
+			after := sealNow(t, w, dirs.Ledger())
+			if inSecond.Online || beforeStart.Online || !after.Online || !after.Back {
+				t.Errorf("the event in the link's second sealed online %v, the one made before the agent's start %v, and the next online %v, marked %v; want local-only, local-only, then online and marked",
+					inSecond.Online, beforeStart.Online, after.Online, after.Back)
+			}
+		}},
+		{"a link state.json keeps as seen is no link the agent didn't see at the next start", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			linked := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			writeAccount(t, dirs, linked)
+			ended := time.Now().Add(-time.Minute).Round(0)
+			keepState(t, dirs, map[string]any{modesKey: modesState{Ended: ended, Linked: linked.UnixMilli()}})
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			a.startModes()
+			if got := a.seen(); !got.Ended.Equal(ended) || !got.Earlier || !got.Until.IsZero() {
+				t.Errorf("the start saw %+v, want the stretch end state.json kept, as an earlier run's, with no link's end", got)
+			}
+		}},
+		{"a state.json from before modes kept its link takes the link the uploader had settled as seen", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			linked := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			writeAccount(t, dirs, linked)
+			keepState(t, dirs, map[string]any{uploader.StateKey: map[string]int64{"linked_at": linked.UnixMilli()}})
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			a.startModes()
+			got, ms := a.seen(), kept(t, dirs)
+			if !got.Ended.IsZero() || !got.Until.IsZero() || ms.Linked != linked.UnixMilli() {
+				t.Errorf("the start saw %+v, and state.json keeps %+v; want no stretch end, and the uploader's link kept as seen", got, ms)
+			}
+		}},
+		{"a state.json from before modes kept its link, whose uploader had settled another link, takes account.json's as a link the agent didn't see", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			linked := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			writeAccount(t, dirs, linked)
+			keepState(t, dirs, map[string]any{uploader.StateKey: map[string]int64{"linked_at": linked.Add(-time.Hour).UnixMilli()}})
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			a.startModes()
+			if got := a.seen(); got.Ended.IsZero() || got.Earlier || !got.Until.Equal(linked.Add(time.Second)) || !got.OS.HasMono() {
+				t.Errorf("the start saw %+v, want the stretch ended now, by both clocks, and by the wall clock to the end of the link's second", got)
 			}
 		}},
 		{"the end of a stretch asks for a drain of the inbox's spool once a call made just before it can have reached the spool, and within seconds, and a note that repeats online doesn't", func(t *testing.T) {
@@ -529,11 +625,14 @@ func TestModesSeen(t *testing.T) {
 			setMode(t, dirs, "local")
 			a.noteMode()
 			reloaded := kept(t, dirs)
+			// pairtime login writes account.json, then config.toml.
+			linked := time.Now().UTC().Truncate(time.Second)
+			writeAccount(t, dirs, linked)
 			setMode(t, dirs, "online")
 			a.noteBack()
 			looked := kept(t, dirs)
-			if !reloaded.Local || looked.Local || looked.Ended.IsZero() || looked.OSMono <= 0 || looked.OSBoot == "" {
-				t.Errorf("state.json said %+v after the reload of the switch to local-only, and %+v after the first look at the switch back; want local-only, then online with the stretch's end by both clocks",
+			if !reloaded.Local || looked.Local || looked.Ended.IsZero() || looked.OSMono <= 0 || looked.OSBoot == "" || looked.Linked != linked.UnixMilli() {
+				t.Errorf("state.json said %+v after the reload of the switch to local-only, and %+v after the first look at the switch back; want local-only, then online with the stretch's end by both clocks and the link seen",
 					reloaded, looked)
 			}
 			// The next start reads it back, as an earlier run's.
@@ -546,6 +645,16 @@ func TestModesSeen(t *testing.T) {
 			want := ledger.Seen{Ended: looked.Ended, OS: clock.Stamp{Mono: looked.OSMono, BootID: looked.OSBoot}, Earlier: true}
 			if got := next.seen(); got.Local || !got.Ended.Equal(want.Ended) || got.OS != want.OS || !got.Earlier {
 				t.Errorf("the next start saw %+v, want %+v", got, want)
+			}
+			// A logout and a login the reload notes, with no first look.
+			setMode(t, dirs, "local")
+			a.noteMode()
+			relinked := linked.Add(time.Minute)
+			writeAccount(t, dirs, relinked)
+			setMode(t, dirs, "online")
+			a.noteMode()
+			if ms := kept(t, dirs); ms.Linked != relinked.UnixMilli() {
+				t.Errorf("state.json keeps %+v after the reload of a switch back with a new link, want that link seen", ms)
 			}
 		}},
 	}
@@ -585,7 +694,9 @@ func TestSpoolHolds(t *testing.T) {
 	cases := []struct {
 		name         string
 		spool, taken []call
-		// noDrain has no drain running in this run.
+		// noDrain has no drain run in this run, as when the journal
+		// couldn't open. Without it a drain is to come, as before
+		// startIPC's first.
 		noDrain bool
 		want    bool
 	}{
@@ -606,10 +717,7 @@ func TestSpoolHolds(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			a, dirs := modesAgent(t, "online")
-			if !c.noDrain {
-				kick := make(chan struct{}, 1)
-				a.spoolKick.Store(&kick)
-			}
+			a.spoolNoDrain.Store(c.noDrain)
 			message := func(cl call) inbox.Message {
 				sent := now.Wall.Add(-cl.ago)
 				if cl.ahead != 0 {
@@ -693,6 +801,14 @@ func TestAgentWaiting(t *testing.T) {
 			if _, err := g.w.Track(context.Background(), repo); err != nil {
 				t.Fatal(err)
 			}
+			// The first scan only notes where the reflog ends: it must be over
+			// before the commit, which it would take as its start otherwise.
+			anything := func(event.Envelope) bool { return true }
+			for deadline := time.Now().Add(10 * time.Second); a.waiting(anything); time.Sleep(5 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("the worktree's first scan never ended")
+				}
+			}
 			// The moment is a minute on, by this run's clock: a change of the
 			// repo's is before it only when asked about by that clock.
 			mono, boot := ledger.RunClock(time.Now().Add(time.Minute))
@@ -717,14 +833,51 @@ func TestAgentWaiting(t *testing.T) {
 				t.Error("the held change wasn't asked about by this run's clock from when its scan began")
 			}
 		}},
-		{"the drain startIPC runs lets the spool hold the mark, and its stop ends that", func(t *testing.T) {
+		{"the drain startIPC runs takes drainSoon's kick while it runs, and none after its stop", func(t *testing.T) {
 			a, _ := modesAgent(t, "online")
 			a.hooked = newHookTies()
 			stop := a.startIPC(Options{DrainEvery: time.Hour})
 			running := a.spoolKick.Load() != nil
 			stop()
-			if !running || a.spoolKick.Load() != nil {
-				t.Errorf("a drain to kick while startIPC ran: %v, after its stop: %v; want true, false", running, a.spoolKick.Load() != nil)
+			if !running || a.spoolKick.Load() != nil || a.spoolNoDrain.Load() {
+				t.Errorf("a drain to kick while startIPC ran: %v, after its stop: %v, and no drain at all: %v; want true, false, false",
+					running, a.spoolKick.Load() != nil, a.spoolNoDrain.Load())
+			}
+		}},
+		{"a journal that can't open leaves no drain to wait for in the run, so the spool holds nothing", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			a.hooked = newHookTies()
+			// A file where the journal's folder goes.
+			if err := os.WriteFile(a.journalDir(), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			stop := a.startIPC(Options{DrainEvery: time.Hour})
+			t.Cleanup(stop)
+			m := hookMessage(t, "UserPromptSubmit", `{"session_id":"s","hook_event_name":"UserPromptSubmit"}`, inbox.Proc{PID: 4242, Name: "claude"}, time.Now().Add(-time.Hour))
+			if err := inbox.Append(dirs.Inbox(), m); err != nil {
+				t.Fatal(err)
+			}
+			if !a.spoolNoDrain.Load() || a.spoolHolds(func(event.Envelope) bool { return true }) {
+				t.Errorf("no drain in the run: %v, the spool holding the mark: %v; want true, false", a.spoolNoDrain.Load(), a.spoolHolds(func(event.Envelope) bool { return true }))
+			}
+		}},
+		{"a spool file that stays busy holds the mark for spoolBusyAsks asks in a row and no more, and a read that works counts them again", func(t *testing.T) {
+			a, _ := modesAgent(t, "online")
+			// What each Scan gives: busy, busy, busy, busy, read, busy.
+			script := []error{errBusy, errBusy, errBusy, errBusy, nil, errBusy}
+			saved := scanSpool
+			t.Cleanup(func() { scanSpool = saved })
+			scanSpool = func(string, int, func(inbox.Message) bool) (bool, error) {
+				err := script[0]
+				script = script[1:]
+				return false, err
+			}
+			var got []bool
+			for range 6 {
+				got = append(got, a.spoolHolds(func(event.Envelope) bool { return true }))
+			}
+			if want := []bool{true, true, true, false, false, true}; !slices.Equal(got, want) {
+				t.Errorf("the spool held the mark %v, want %v", got, want)
 			}
 		}},
 	}
@@ -781,6 +934,9 @@ func TestGitSinkClock(t *testing.T) {
 	}
 }
 
+// errBusy is a spool file's busy open, as Scan gives it.
+var errBusy = errors.New("the file is busy")
+
 // modesAgent is an agent in a new data directory whose config.toml says
 // mode = mode, with a scheduler that doesn't run.
 func modesAgent(t *testing.T, mode string) (*agent, home.Dirs) {
@@ -825,6 +981,41 @@ func presenceAt(at time.Time) ledger.Input {
 			Source: event.SourceOS, Via: event.ViaOS, Harness: event.HarnessNone, SessionKey: event.NoSession},
 		Data: &event.OSPresence{IdleAnyS: 1},
 	}}
+}
+
+// runPresenceAt is an os.presence event made at at, of this run's clock,
+// as presence's records are.
+func runPresenceAt(at time.Time) ledger.Input {
+	in := presenceAt(at)
+	in.Event.Mono, in.Event.BootID = ledger.RunClock(at)
+	return in
+}
+
+// writeAccount writes account.json as pairtime login does, linked at
+// linked.
+func writeAccount(t *testing.T, dirs home.Dirs, linked time.Time) {
+	t.Helper()
+	b := []byte(`{"v":1,"server":"https://pairtime.example","device_id":"d_testdevice00000000000000a","linked_at":"` + linked.Format(time.RFC3339) + `"}`)
+	if err := home.WriteFile(filepath.Join(dirs.Data, "account.json"), b); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// keepState puts keys in state.json, as an earlier run left it.
+func keepState(t *testing.T, dirs home.Dirs, keys map[string]any) {
+	t.Helper()
+	st, _, err := state.Open(dirs.StateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range keys {
+		if err := st.Put(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.Save(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // sealNow seals what w, the writer of the ledger in dir, has pending, and

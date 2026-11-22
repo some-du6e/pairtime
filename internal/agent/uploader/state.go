@@ -252,10 +252,14 @@ func (s saved) localOnly(b uint64) bool {
 // holds the end of a run of batches sealed in local-only mode: it starts
 // before the stretch the run holds ended and ends after the run's last
 // batch was sealed, as the minute pairtime login lands in does. The
-// stretch ends where the batch that closes the run, or the run's last,
-// says config.toml was last known to say local-only (ledger.Row.LocalUntil),
-// which comes after the run's last seal when nothing was pending at the
-// switch back, and at it otherwise. The first batch sealed after such a
+// stretch ends where the batch after the run's last says config.toml was
+// last known to say local-only (ledger.Row.LocalUntil), which comes after
+// the run's last seal when nothing was pending at the switch back, and at
+// it otherwise, though by its writer's clock no later than its own seal: a
+// moment later than that is one an earlier run recorded ahead of a clock
+// stepped back since, which the writer keeps for the records it judges by
+// their t (ledger.Writer.earlier), and the minutes this run's clock reads
+// before it are online ones. The first batch sealed after such a
 // minute can be online, as one marked as the first after a noted switch
 // back online is (mode), but part of the minute came in local-only mode,
 // and a later revision's credit can reach back into it, as a first
@@ -270,10 +274,11 @@ func (s saved) straddles(rows *rowIndex, minute int64) bool {
 			continue
 		}
 		end := t
-		for _, b := range []uint64{g.To, g.To + 1} {
-			if lu, ok := rows.localUntil(b); ok {
-				end = max(end, lu)
+		if lu, ok := rows.localUntil(g.To + 1); ok {
+			if sa, ok := rows.sealedAt(g.To + 1); ok {
+				lu = min(lu, sa)
 			}
+			end = max(end, lu)
 		}
 		if minute < end && t < minute+60_000 {
 			return true

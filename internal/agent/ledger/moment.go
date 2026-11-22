@@ -54,33 +54,16 @@ func momentAt(at time.Time, s osclock.Stamp) moment {
 	return m
 }
 
-// madeBefore reports whether the event e may have been made before m by
-// any clock it carries that m holds: by its t, or by its mono. It is wider
-// than before, for what may still be on its way to the writer
-// (Options.Waiting): every event before counts as made before m counts
-// here too, so each holds the mark until it comes, whichever way a step of
-// the wall clock went.
-func (m moment) madeBefore(e event.Envelope) bool {
-	switch {
-	case e.T < m.wall:
-		return true
-	case m.run > 0 && e.BootID == runBoot:
-		return e.Mono < m.run
-	case m.os > 0 && e.Mono > 0 && e.BootID == m.boot:
-		return e.Mono < m.os
-	}
-	return false
-}
-
 // raise moves m on to n by each clock where n is later. cur is the boot
-// the writer runs in. A reading of cur replaces one of another boot, since
-// only one boot runs at a time and cur is the newest. One of another boot
-// than cur replaces m's only when n is later by the wall clock and m holds
-// no reading of cur: an older boot's moment, as state.json kept it, says
-// nothing of the boots after it. When n is later by the wall clock and has
-// no reading of a clock m has, as a moment kept by the wall clock alone,
-// m's reading is of an earlier time than the moment now is, so it goes,
-// and events of that clock are held to the wall clock.
+// the writer runs in, "" when the OS gave none. A reading of cur replaces
+// one of another boot, since only one boot runs at a time and cur is the
+// newest. One of another boot than cur replaces m's only when n is later
+// by the wall clock and m holds no reading of cur: an older boot's moment,
+// as state.json kept it, says nothing of the boots after it. When n is
+// later by the wall clock and has no reading of a clock m has, as a moment
+// kept by the wall clock alone, m's reading is of an earlier time than the
+// moment now is, so it goes, and events of that clock are held to the wall
+// clock.
 func (m *moment) raise(n moment, cur string) {
 	later := n.wall > m.wall
 	m.wall = max(m.wall, n.wall)
@@ -93,7 +76,7 @@ func (m *moment) raise(n moment, cur string) {
 	switch {
 	case n.os > 0 && m.boot == n.boot:
 		m.os = max(m.os, n.os)
-	case n.os > 0 && (n.boot == cur || later && m.boot != cur):
+	case n.os > 0 && (n.boot == cur || later && (m.os == 0 || m.boot != cur)):
 		m.os, m.boot = n.os, n.boot
 	case n.os == 0 && later:
 		m.os, m.boot = 0, ""

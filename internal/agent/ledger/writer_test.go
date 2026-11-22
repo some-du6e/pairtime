@@ -829,9 +829,10 @@ func TestNoteMode(t *testing.T) {
 			// waits is whether an event made before the moment Waiting is
 			// asked about is on its way, and asked whether the moment it was
 			// last asked about held an event made a moment before the switch
-			// back's note, and not one made at it, and held the event made
-			// before it by its t though not by the OS's mono, since Waiting
-			// is asked by either clock (moment.madeBefore).
+			// back's note, and not one made at it; and held a hook call of the
+			// note's boot by the OS's mono alone, as Write does: made before
+			// it, though its t is after, and not one made after it, though its
+			// t is before.
 			var (
 				waits, asked atomic.Bool
 			)
@@ -850,7 +851,8 @@ func TestNoteMode(t *testing.T) {
 					o.Sealed = func(b Batch) { sealed <- b }
 					o.Waiting = func(before func(event.Envelope) bool) bool {
 						asked.Store(before(event.Envelope{T: testT - 1}) && !before(event.Envelope{T: testT}) &&
-							before(event.Envelope{T: testT - 1, Mono: osMono + 1000, BootID: osBoot}))
+							before(event.Envelope{T: testT + 60_000, Mono: osMono - 1000, BootID: osBoot}) &&
+							!before(event.Envelope{T: testT - 1, Mono: osMono + 1000, BootID: osBoot}))
 						return waits.Load()
 					}
 					o.Clock = func() osclock.Stamp {
@@ -998,7 +1000,7 @@ func TestNoteMode(t *testing.T) {
 				t.Errorf("batches sealed online %v, marked %v, holding %v records; want %v, %v and %v", online, back, records, c.online, c.back, c.records)
 			}
 			if slices.Contains(c.steps, "waiting") && !asked.Load() {
-				t.Error("Waiting was last asked about another moment than the switch back's note, or not by either clock")
+				t.Error("Waiting was last asked about another moment than the switch back's note, or not by the clocks Write holds events to")
 			}
 			_, rows, err := ReadRows(dir, 1)
 			if err != nil {
@@ -1196,6 +1198,72 @@ func TestNoteSeen(t *testing.T) {
 	}
 }
 
+// TestSeenByRunClock checks which stretch end the agent gives the writer
+// counts as newer than the moment the newest seal frame recorded: one the
+// agent saw in this run is newer by this run's clock, though a step back of
+// the wall clock since put it before that moment, and it arms the mark;
+// one an earlier run saw, read back from disk, isn't, and arms none.
+func TestSeenByRunClock(t *testing.T) {
+	cases := []struct {
+		name   string
+		seen   func() Seen
+		marked bool
+	}{
+		{"a stretch end the agent saw in this run is newer, by this run's clock, than a moment recorded ahead of the clock, and arms the mark",
+			func() Seen { return Seen{Ended: time.Now()} }, true},
+		{"one an earlier run saw, read back from disk, isn't newer, and arms none",
+			func() Seen { return Seen{Ended: time.Now().Round(0), Earlier: true} }, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			// The first writer's clock is an hour ahead, and so is the
+			// moment its seal frame records.
+			ahead := func() time.Time { return time.Now().Add(time.Hour) }
+			w := open(t, dir, newClock(testT), func(o *Options) {
+				o.Now = ahead
+				o.Online = func() bool { return true }
+			})
+			w.NoteMode(false)
+			w.NoteMode(true)
+			rng := rand.New(rand.NewPCG(27, 28))
+			if _, _, err := write(w, rng, "os.presence", ahead().UnixMilli()); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := w.Seal(); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			sealed := make(chan Batch, 4)
+			w = open(t, dir, newClock(testT), func(o *Options) {
+				o.Now = time.Now
+				o.Online = func() bool { return true }
+				o.Seen = c.seen
+				o.Sealed = func(b Batch) { sealed <- b }
+			})
+			in := sampleInput(rng, "os.presence", time.Now().UnixMilli(), "", "")
+			// An event of this run, an hour on by its clock.
+			in.Event.Mono, in.Event.BootID = RunClock(time.Now().Add(time.Hour))
+			if _, err := w.Write(in); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := w.Seal(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case b := <-sealed:
+				if !b.Online || b.Back != c.marked {
+					t.Errorf("the batch after the reopen was sealed online %v, marked %v; want online, marked %v", b.Online, b.Back, c.marked)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("no batch was sealed")
+			}
+		})
+	}
+}
+
 // TestSealReadsModeAgain checks a note, or a record, that comes while a
 // seal reads config.toml (Options.Online), which it does without the
 // Writer's lock: the seal reads the file again, so a record written after
@@ -1264,37 +1332,45 @@ func TestSealReadsModeAgain(t *testing.T) {
 // record lock, each with a record coming during it, the seal reads the
 // file once more under the lock, so no record comes during that read, and
 // the batch is sealed in the mode it reads. Waiting can't be asked under
-// the lock, so a batch due its mark whose last read without the lock found
-// config.toml local-only, so that Waiting wasn't asked, is sealed as while
-// an event of the stretch is on its way. The test's Online writes the
-// records itself, which a real one never does, to land them in each read.
+// the lock, so a batch that asks Waiting, as one due its mark or one after
+// a local-only batch, whose last read without the lock found config.toml
+// local-only, so that Waiting wasn't asked, is sealed as while an event of
+// the stretch is on its way. The test's Online writes the records itself,
+// which a real one never does, to land them in each read.
 func TestSealReadsUnderLock(t *testing.T) {
 	cases := []struct {
 		name string
 		// reads are what config.toml says at each read without the lock,
-		// locked what it says at the read under it, and mark arms the mark
-		// before the seal.
-		reads        []bool
-		locked, mark bool
+		// and locked what it says at the read under it. mark arms the mark
+		// before the seal, and localFirst seals a local-only batch first.
+		reads                    []bool
+		locked, mark, localFirst bool
 		// online and back are the first batch's mode and mark, and next
 		// the second batch's mark.
 		online, back, next bool
 	}{
 		{"a switch to local-only during the last read without the lock seals the records that came in it local-only, by the read under the lock",
-			[]bool{true, true, true}, false, false, false, false, false},
+			[]bool{true, true, true}, false, false, false, false, false, false},
 		{"records that keep coming while config.toml stays online are sealed online, and none comes during the read under the lock",
-			[]bool{true, true, true}, true, false, true, false, false},
+			[]bool{true, true, true}, true, false, false, true, false, false},
 		{"a batch due its mark whose last read without the lock found config.toml local-only is sealed local-only after an online read under the lock, and the mark waits for the next",
-			[]bool{true, true, false}, true, true, false, false, true},
+			[]bool{true, true, false}, true, true, false, false, false, true},
+		{"so is a batch after a local-only one, which asks Waiting with no mark due",
+			[]bool{true, true, false}, true, false, true, false, false, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var (
 				w     *Writer
 				armed atomic.Bool
+				// file is what config.toml says to the reads before armed.
+				file  atomic.Bool
 				reads atomic.Int32
 				late  error
 			)
+			file.Store(true)
+			// unarmed hears of each read before armed.
+			unarmed := make(chan struct{}, 16)
 			rng := rand.New(rand.NewPCG(23, 24))
 			in := sampleInput(rng, "os.presence", testT, "", "")
 			// done closes once the record written as the read under the lock
@@ -1306,7 +1382,8 @@ func TestSealReadsUnderLock(t *testing.T) {
 				o.Waiting = func(func(event.Envelope) bool) bool { return false }
 				o.Online = func() bool {
 					if !armed.Load() {
-						return true
+						unarmed <- struct{}{}
+						return file.Load()
 					}
 					n := int(reads.Add(1))
 					switch {
@@ -1330,11 +1407,35 @@ func TestSealReadsUnderLock(t *testing.T) {
 					return true
 				}
 			})
+			heard := func(what string) {
+				t.Helper()
+				select {
+				case <-unarmed:
+				case <-time.After(10 * time.Second):
+					t.Fatalf("%s never read config.toml", what)
+				}
+			}
+			heard("Open's seal")
+			if c.localFirst {
+				file.Store(false)
+				if _, _, err := write(w, rng, "os.presence", testT); err != nil {
+					t.Fatal(err)
+				}
+				if b, ok, err := w.Seal(); !ok || err != nil || b.Online {
+					t.Fatalf("the first seal sealed %v, online %v (%v); want a local-only batch", ok, b.Online, err)
+				}
+				heard("the first seal")
+				<-sealed
+				file.Store(true)
+			}
 			if c.mark {
 				w.NoteMode(false)
 				w.NoteMode(true)
-				// The seal the note asks for, with nothing pending, goes first.
-				time.Sleep(200 * time.Millisecond)
+				// The seal the note asks for, with nothing pending, reads the
+				// file, and is done once the seals' lock is free.
+				heard("the note's seal")
+				w.sealMu.Lock()
+				w.sealMu.Unlock()
 			}
 			armed.Store(true)
 			if _, ok, err := w.Seal(); !ok || err != nil {
