@@ -17,6 +17,10 @@ package main
 //     before it writes anything. The agent works the session out from its
 //     buckets and the last lock or suspend it saw, which no file holds.
 //     The answer is what GET /v1/sessions/last gives.
+//   - today asks the running agent for its status over the same socket
+//     (ipc.AskStatus), as doctor does, only to learn whether focus is
+//     unknown on this desktop, and prints the day without that sentence
+//     when the agent doesn't answer (focusUnknown).
 //
 // The local API keeps GET /v1/days/{date} and GET /v1/sessions/last, which
 // the dashboard reads with its session cookie (WP-UI1).

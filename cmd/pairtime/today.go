@@ -3,6 +3,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,7 +12,9 @@ import (
 	"slices"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/doctor"
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/coach/text"
 )
 
@@ -20,6 +24,8 @@ Shows today's time for each project you worked on: your time, and what
 you spent it on; each agent's time working on its own; and the other time
 pairtime saw, described for what it was. It reads the day the agent has
 stored, so it shows what was tracked even while the agent is stopped.
+For today it also asks the running agent whether it can see which window
+is in front, and says so when it can't.
 
   --date  Show another day, such as 2026-11-24.
   --json  Print the same numbers as JSON, as described in
@@ -104,8 +110,37 @@ func runToday(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	writeToday(stdout, out, *date == "")
+	asToday := *date == ""
+	writeToday(stdout, out, asToday, asToday && !agentStopped(dirs) && focusUnknown(dirs))
 	return 0
+}
+
+// focusAskWait bounds how long today waits for the agent to say whether
+// it can see which window is in front. The answer only adds a sentence,
+// so a slow agent doesn't hold the day up long. Tests shorten it.
+var focusAskWait = time.Second
+
+// focusUnknown reports whether the running agent says focus is unknown on
+// this desktop: GET /v1/status's focus signal, which doctor's focus line
+// reads too (DESIGN 5.9). It asks over the per-user socket, as recap does,
+// so no token goes anywhere. An agent that doesn't answer in time, or is
+// older than the question, says nothing, and today prints no sentence.
+func focusUnknown(dirs home.Dirs) bool {
+	ep, err := ipc.EndpointFor(dirs)
+	if err != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), focusAskWait)
+	defer cancel()
+	ans, err := ipc.Ask(ctx, ep, ipc.AskStatus)
+	if err != nil {
+		return false
+	}
+	var st doctor.Status
+	if err := json.Unmarshal(ans, &st); err != nil {
+		return false
+	}
+	return st.Signals.Focus.Via == "" && st.Signals.Focus.Unknown != ""
 }
 
 // buildToday turns the agent's day into the view, projects with the most
@@ -134,8 +169,10 @@ func buildToday(d dayFile, shadow bool) todayJSON {
 
 // writeToday prints the day: its date, then each project's chess clock
 // and rows. today says whether the day was asked for as today, which
-// changes what an empty day says.
-func writeToday(w io.Writer, d todayJSON, today bool) {
+// changes what an empty day says. focusUnknown adds DESIGN 5.9's
+// focus-unknown sentence at the end, which explains time that pairtime
+// doesn't count on a desktop that hides which window is in front.
+func writeToday(w io.Writer, d todayJSON, today, focusUnknown bool) {
 	fmt.Fprintln(w, dayTitle(d.Date))
 	if len(d.Projects) == 0 {
 		fmt.Fprintln(w)
@@ -144,15 +181,18 @@ func writeToday(w io.Writer, d todayJSON, today bool) {
 		} else {
 			fmt.Fprintln(w, text.Phrase(text.KeyNothingOn))
 		}
-		return
 	}
 	for _, p := range d.Projects {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, p.title()+": "+p.clock())
 		writeRows(w, p.rows())
 	}
-	if d.Calibrating {
+	if d.Calibrating && len(d.Projects) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, text.Phrase(text.KeyCalibratingNote))
+	}
+	if focusUnknown {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, text.Phrase(text.KeyFocusUnknown))
 	}
 }

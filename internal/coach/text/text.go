@@ -123,6 +123,11 @@ const (
 	KeyAgentSlow       Key = "agent_slow"
 	KeyAgentError      Key = "agent_error"
 	KeyStoreError      Key = "store_error"
+	// KeyFocusUnknown is DESIGN 5.9's focus-unknown sentence, which
+	// pairtime today prints while the running agent says focus is unknown.
+	// It leaves out 5.9's ", so time here counts at level C" until WP-SC8
+	// makes that true.
+	KeyFocusUnknown Key = "focus_unknown"
 )
 
 // placeholders lists the placeholders each phrase may use. A phrase that

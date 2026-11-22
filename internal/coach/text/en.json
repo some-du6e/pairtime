@@ -67,6 +67,7 @@
     "agent_old": "The pairtime agent that's running can't show this yet. It can once it restarts on this version.",
     "agent_slow": "pairtime's agent didn't answer in time. Try again in a moment.",
     "agent_error": "pairtime couldn't get this from its agent: {error}",
-    "store_error": "pairtime couldn't read what its agent stored: {error}"
+    "store_error": "pairtime couldn't read what its agent stored: {error}",
+    "focus_unknown": "Focus unknown on this desktop. Run pairtime doctor to see why."
   }
 }
