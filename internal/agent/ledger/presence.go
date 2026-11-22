@@ -47,7 +47,18 @@ type Presence struct {
 	// lost once it has.
 	mu       sync.Mutex
 	attached bool
+
+	// queued counts the records queued and not yet written, by the times
+	// their events carry, for Waiting.
+	qmu    sync.Mutex
+	queued map[queuedAt]int
 }
+
+// queuedAt is the times of a queued record's event (presenceEvent): its t
+// and this run's mono.
+type queuedAt struct{ t, mono int64 }
+
+func queuedOf(r presence.Record) queuedAt { return queuedAt{t: r.At.UnixMilli(), mono: runMono(r.At)} }
 
 // presenceItem is a record, or a seal when sealed is set, which the
 // goroutine closes once the seal is done.
@@ -74,6 +85,7 @@ func newPresence(problem func(msg string)) *Presence {
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 		problem: problem,
+		queued:  make(map[queuedAt]int),
 	}
 }
 
@@ -89,11 +101,41 @@ func (p *Presence) Attach(w *Writer) {
 // Record queues r for the writer. It never blocks: when the queue is full,
 // r is dropped and counted.
 func (p *Presence) Record(r presence.Record) {
+	q := queuedOf(r)
+	p.count(q, 1)
 	select {
 	case p.items <- presenceItem{rec: r}:
 	default:
+		p.count(q, -1)
 		p.drop()
 	}
+}
+
+// count adds n records timed q to the ones queued.
+func (p *Presence) count(q queuedAt, n int) {
+	p.qmu.Lock()
+	defer p.qmu.Unlock()
+	if p.queued[q] += n; p.queued[q] <= 0 {
+		delete(p.queued, q)
+	}
+}
+
+// Waiting reports whether a record queued and not yet written is one that
+// before says may have been made before config.toml was last seen
+// local-only, as presence's records queued while a locked keyring kept the
+// ledger shut through pairtime login are: the writer's Waiting asks it
+// (agent.waiting), so the first batch after a switch back online takes its
+// mark only once they are written, though presence's own records come in
+// order, since the adapters' and the git watcher's can come between them.
+func (p *Presence) Waiting(before func(event.Envelope) bool) bool {
+	p.qmu.Lock()
+	defer p.qmu.Unlock()
+	for q := range p.queued {
+		if before(event.Envelope{T: q.t, Mono: q.mono, BootID: runBoot}) {
+			return true
+		}
+	}
+	return false
 }
 
 // drop counts a record Record dropped and says so.
@@ -205,7 +247,9 @@ func (p *Presence) handle(w *Writer, it presenceItem) {
 		}
 		return
 	}
-	if _, err := w.Write(Input{Event: presenceEvent(it.rec)}); err != nil && p.problem != nil {
+	_, err := w.Write(Input{Event: presenceEvent(it.rec)})
+	p.count(queuedOf(it.rec), -1)
+	if err != nil && p.problem != nil {
 		p.problem(fmt.Sprintf("the ledger couldn't write an %s record: %v", it.rec.Data.Kind(), err))
 	}
 }

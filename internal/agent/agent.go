@@ -137,6 +137,22 @@ type agent struct {
 	// ipcSrv is the socket's or the pipe's server, nil while hooks can't
 	// reach the agent.
 	ipcSrv atomic.Pointer[ipc.Server]
+	// spoolKick asks the drain goroutine for a drain of the inbox while it
+	// runs (startIPC, drainSoon), and is nil otherwise. spoolNoDrain is set
+	// when no drain runs in this run, as when the journal couldn't open.
+	spoolKick    atomic.Pointer[chan struct{}]
+	spoolNoDrain atomic.Bool
+	// spoolBusySince is when the asks in a row that found a spool file
+	// busy began, nil while none did (spoolHolds).
+	spoolBusySince atomic.Pointer[time.Time]
+	// linkedSeen is the link modes accounted for (modes.linked) once the
+	// writer has what modes saw of the stretch it ended, and modesLocal is
+	// modes.local, both for the writer's Online, which takes no lock
+	// (writerOnline, seenLinkLocked), and seeing is set while seeSoon's
+	// goroutine runs.
+	linkedSeen atomic.Int64
+	modesLocal atomic.Bool
+	seeing     atomic.Bool
 	// notifier shows the coach's notification when a work session ends
 	// (WP-OS8). The coach calls its Notify, and its UserPresent on unlock
 	// and resume (WP-CO1).
@@ -177,12 +193,11 @@ type agent struct {
 	// upload sends the device's tier-1 data once the ledger is open and
 	// the device is signed in (WP-AG5). It is nil before the ledger opens.
 	upload atomic.Pointer[uploader.Uploader]
-	// writer is the ledger writer once it is open, which noteMode tells
-	// config.toml's mode. noteKept is set when the config watch noted a
-	// change of the mode before the writer was published, and publishWriter
-	// notes it then.
-	writer   atomic.Pointer[ledger.Writer]
-	noteKept atomic.Bool
+	// writer is the ledger writer once it is published, and modes what the
+	// agent sees of config.toml's mode, which it tells the writer
+	// (noteMode, publishWriter).
+	writer atomic.Pointer[ledger.Writer]
+	modes  modes
 	// early are the batches the ledger writer sealed before upload was
 	// set, for handEarly; earlyMu orders them with it.
 	earlyMu sync.Mutex

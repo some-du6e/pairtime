@@ -15,6 +15,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/tailers"
 	"github.com/some-du6e/pairtime/internal/install"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -439,7 +440,8 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		if start, ok := r.Event.Data.(*event.SessionStart); ok && !ll.Replay {
 			r = h.tiedStart(r, start)
 		}
-		if !h.write(st, r) && h.writerDown() {
+		// A log line has no sender's stamp of its own (ledger.Input.Sent).
+		if !h.write(st, r, clock.Stamp{}) && h.writerDown() {
 			return false
 		}
 		switch r.Event.Kind() {
