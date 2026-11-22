@@ -9,16 +9,21 @@
   --note-bg: #fff6dc;
   --note-line: #c99400;
   --code-bg: #f1f1f4;
-  /* Charts. --c1 to --c5 are the first five slots of a categorical
-     palette that passes the color-vision checks for neighbors in a stack
-     (CVD dE >= 8, normal-vision dE >= 15) on this surface; --co is the
-     Other gray. --lv-a to --lv-c are a one-hue ordinal ramp for evidence
-     levels A to C, with the text color that reads inside each. */
+  /* Charts. --c1 to --c8 are the eight slots of a categorical palette
+     that passes the color-vision checks for neighbors in a stack (CVD dE
+     >= 8, normal-vision dE >= 15) on this surface, in this order; --co is
+     the Other gray. --c3 to --c5 are under 3:1 on white, so every swatch
+     has its project's name beside it and the week chart its table.
+     --lv-a to --lv-c are a one-hue ordinal ramp for evidence levels A to
+     C, with the text color that reads inside each. */
   --c1: #2a78d6;
   --c2: #eb6834;
   --c3: #1baf7a;
   --c4: #eda100;
   --c5: #e87ba4;
+  --c6: #008300;
+  --c7: #6250d6;
+  --c8: #e34948;
   --co: #8e8e96;
   --lv-a: #3a3a42;
   --lv-b: #6e6e78;
@@ -48,6 +53,9 @@
     --c3: #199e70;
     --c4: #c98500;
     --c5: #d55181;
+    --c6: #0ca30c;
+    --c7: #9085e9;
+    --c8: #e66767;
     --co: #6c6c74;
     --lv-a: #e2e2e7;
     --lv-b: #9d9da6;
@@ -154,12 +162,17 @@ footer { margin-top: 3rem; padding-bottom: 2rem; color: var(--muted); font-size:
 .note { color: var(--muted); font-size: 0.9rem; margin: 0.75rem 0 0; }
 .hero { margin: 0.5rem 0 0; color: var(--muted); font-size: 1.05rem; }
 .hero strong { display: block; color: var(--fg); font-size: clamp(3rem, 2.4rem + 2.5vw, 3.75rem); font-weight: 700; line-height: 1.05; letter-spacing: -0.03em; }
+/* Why none of the time is yours, under the number it explains. */
+.why { margin: 0.5rem 0 0.6rem; max-width: 36rem; color: var(--fg); font-size: 0.95rem; }
 .key { display: inline-block; width: 0.7rem; height: 0.7rem; margin-right: 0.45rem; border-radius: 3px; flex: none; }
 .c1 { background: var(--c1); }
 .c2 { background: var(--c2); }
 .c3 { background: var(--c3); }
 .c4 { background: var(--c4); }
 .c5 { background: var(--c5); }
+.c6 { background: var(--c6); }
+.c7 { background: var(--c7); }
+.c8 { background: var(--c8); }
 .co { background: var(--co); }
 .pend { opacity: 0.4; }
 .clocks { list-style: none; padding: 0; margin: 1.25rem 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.75rem; }
@@ -170,6 +183,11 @@ footer { margin-top: 3rem; padding-bottom: 2rem; color: var(--muted); font-size:
 .face span { color: var(--muted); font-size: 0.85rem; }
 .face strong { font-size: 1.4rem; line-height: 1.25; }
 .face small { color: var(--muted); font-size: 0.8rem; }
+/* The row today's quieter projects fold into, which opens to their clocks. */
+.more { margin: 0.75rem 0 0; }
+.more summary { padding: 0.55rem 1rem; border: 1px dashed var(--line); border-radius: 12px; font-weight: 600; }
+.more[open] summary { margin-bottom: 0.25rem; }
+.more .clocks { margin-top: 0.5rem; }
 .chart { display: grid; grid-template-columns: 3.25rem 1fr; margin: 2rem 0 0; }
 .yaxis { position: relative; height: 11rem; font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .yaxis span { position: absolute; right: 0.5rem; transform: translateY(50%); white-space: nowrap; }
@@ -222,6 +240,10 @@ details td, details th { white-space: nowrap; }
 .zone label { font-weight: 600; }
 .zone input { font: inherit; font-size: 0.95rem; padding: 0.45rem 0.65rem; min-width: 0; width: 16rem; max-width: 100%; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
 .zone input:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+/* An install command in the empty dashboard: it wraps on a phone instead
+   of scrolling, and copies as one line. */
+.install { margin: 0.25rem 0 0.75rem; padding: 0.55rem 0.75rem; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; font-size: 0.85rem; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.install code { background: none; padding: 0; font-size: inherit; }
 .error { margin: 0.75rem 0 0; padding: 0.5rem 0.9rem; background: var(--note-bg); border-left: 4px solid var(--error); border-radius: 0 8px 8px 0; }
 @media (max-width: 34rem) {
   .chart { grid-template-columns: 2.6rem 1fr; }

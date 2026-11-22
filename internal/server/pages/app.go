@@ -28,9 +28,9 @@ type Page struct {
 // it.
 type Header struct {
 	SignedIn bool
-	// Handle names the signed-in person: the display name of their
-	// sign-in, or their account's handle without one.
-	Handle string
+	// Name is the display name of the signed-in person's sign-in, or ""
+	// without one: the header never shows an id in its place.
+	Name string
 	// Login and Logout are the sign-in button's link and the sign-out
 	// form's action.
 	Login, Logout string
@@ -45,7 +45,7 @@ type Header struct {
 func (s *Site) WritePage(w http.ResponseWriter, status int, p Page) {
 	d := layoutData{Title: p.Title, Body: p.Body}
 	if h := p.Account; h != nil {
-		d.Account = &account{SignedIn: h.SignedIn, Handle: h.Handle, Login: h.Login, Logout: h.Logout}
+		d.Account = &account{SignedIn: h.SignedIn, Name: h.Name, Login: h.Login, Logout: h.Logout}
 	}
 	var page bytes.Buffer
 	if err := s.layout.wrap(&page, d); err != nil {

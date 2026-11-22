@@ -39,12 +39,17 @@ import (
 // legend or a table, and every bar segment names its project and time in
 // a title, so nothing rests on color or hover alone.
 
-// colorSlots is how many projects get a color of their own: --c1 to --c5
-// in style.css, the first five slots of a categorical palette that passes
-// the color-vision checks for neighbors in a stack, in light and dark
-// mode. The projects after them share --co and are drawn together as
-// Other.
-const colorSlots = 5
+// colorSlots is how many projects get a color of their own: --c1 to --c8
+// in style.css, the eight slots of a categorical palette that passes the
+// color-vision checks for neighbors in a stack, in light and dark mode.
+// The projects after them share --co and are drawn together as Other. A
+// ninth hue would be too close to one of the eight to tell apart.
+const colorSlots = 8
+
+// shownClocks is how many of today's projects get a chess clock on the
+// page at once, the most time first. The rest fold into one row that
+// opens to show theirs.
+const shownClocks = 6
 
 // otherName is what the week chart calls the projects past colorSlots.
 const otherName = "Other"
@@ -56,6 +61,20 @@ const minPrinted = 14
 // demoDescription is the sample's meta description, which link previews
 // show.
 const demoDescription = "A sample pairtime dashboard: a made-up teen's time building with Claude Code, and the time Claude Code ran."
+
+// installRelease is the release whose install lines the empty dashboard
+// shows: the newest one. Its notes give the same two commands, and so does
+// README.md, which TestInstallLines holds them to.
+const installRelease = "v0.1.0-alpha.3"
+
+// installLines are the commands that install pairtime, as the release's
+// notes and README.md give them. Each runs the release's own install
+// script, which checks the release's signature first and asks before it
+// changes anything.
+var installLines = []installLine{
+	{Where: "On macOS or Linux:", Command: "curl -fsSL " + SourceURL + "/releases/download/" + installRelease + "/install.sh | sh"},
+	{Where: "On Windows, in PowerShell:", Command: "irm " + SourceURL + "/releases/download/" + installRelease + "/install.ps1 | iex"},
+}
 
 // levelText says what each evidence level means, in the home page's words
 // (home.md) and DESIGN 6.4's sense.
@@ -117,9 +136,11 @@ type dashPage struct {
 	// Agent names the agent in a sentence, and AgentStart at its start or
 	// alone, as in "Your agent worked on its own for 2h".
 	Agent, AgentStart string
-	Today             todayPart
-	Week              weekPart
-	Projects          []projectRow
+	// Install says how to install pairtime, for the empty state.
+	Install  []installLine
+	Today    todayPart
+	Week     weekPart
+	Projects []projectRow
 	// AllProjects totals the projects.
 	AllProjects projectRow
 	Levels      levelsPart
@@ -128,28 +149,60 @@ type dashPage struct {
 
 type todayPart struct {
 	// Date is today, such as "Friday 20 November".
-	Date       string
-	You, Agent string
+	Date string
+	You  string
+	// Why says why none of the day is your time when the agent's clock
+	// ran, or is "" (zeroWhy).
+	Why string
+	// AgentLine says how long the agent worked on its own (agentLine).
+	AgentLine string
 	// YouPending is how much of You is pending, or "" for none.
 	YouPending string
-	Clocks     []clockRow
+	// Clocks are the projects' chess clocks shown at once, and More the
+	// row the rest fold into, nil when there are none.
+	Clocks []clockRow
+	More   *moreClocks
 }
 
-// clockRow is one project's chess clock.
+// clockRow is one project's chess clock: a face for each clock that ran
+// in the project today, so a project with none of your time shows the
+// agent's alone, never a big 0m.
 type clockRow struct {
 	Color, Name string
-	You, Agent  string
-	// YouPending and AgentPending are "" when nothing is pending.
-	YouPending, AgentPending string
+	// Title is the project's full key when the page calls it by its short
+	// code, or "".
+	Title string
+	Faces []faceRow
 }
 
+// faceRow is one clock of a project: You, or the agent.
+type faceRow struct {
+	Label, Time string
+	// Pending is "" when nothing is pending.
+	Pending string
+}
+
+// moreClocks is the row today's quieter projects fold into: Summary says
+// how many and how much time they hold, and opening it shows their
+// clocks.
+type moreClocks struct {
+	Summary string
+	Clocks  []clockRow
+}
+
+// installLine is one way to install pairtime: where it works, and the
+// command.
+type installLine struct{ Where, Command string }
+
 type weekPart struct {
-	You, Agent string
-	Ticks      []tick
-	Columns    []column
-	Legend     []legendItem
-	HasPending bool
-	Table      weekTable
+	You string
+	// AgentLine and Why say what todayPart's do, for the last 7 days.
+	AgentLine, Why string
+	Ticks          []tick
+	Columns        []column
+	Legend         []legendItem
+	HasPending     bool
+	Table          weekTable
 }
 
 // tick is a label on the week chart's axis: At is its class, at25 to
@@ -172,13 +225,19 @@ type column struct {
 // and Title names what it counts.
 type segment struct{ Class, Title string }
 
-type legendItem struct{ Color, Name string }
+// legendItem names a project of the week chart. Title is the project's
+// full key when the page calls it by its short code, or "".
+type legendItem struct{ Color, Name, Title string }
 
 // weekTable is the week chart's numbers as a table.
 type weekTable struct {
-	Names []string
+	Names []nameCell
 	Rows  []weekRow
 }
+
+// nameCell heads a project's column: Title is its full key when the page
+// calls it by its short code, or "".
+type nameCell struct{ Name, Title string }
 
 type weekRow struct {
 	Day   string
@@ -186,9 +245,10 @@ type weekRow struct {
 	Total string
 }
 
-// projectRow is a row of the projects table.
+// projectRow is a row of the projects table. Title is the project's full
+// key when the page calls it by its short code, or "".
 type projectRow struct {
-	Color, Name           string
+	Color, Name, Title    string
 	Week, Month           string
 	WeekAgent, MonthAgent string
 }
@@ -235,70 +295,129 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 	p := dashPage{
 		Sample: v.Sample, SignIn: in.Enabled, SignupsOpen: signupsOpen, SignedIn: signedIn, Agent: agent, AgentStart: capitalize(agent),
 		Owner: !v.Sample, Empty: !v.Sample && v.Month.You.Total() == 0 && v.Month.Agent.Total() == 0, SplitByDevice: v.SplitByDevice,
-		Zone: v.TZ, ZonePath: ZonePath,
+		Zone: v.TZ, ZonePath: ZonePath, Install: installLines,
 	}
 	if in.LoginPath != "" {
 		// Sign-in brings the visitor to their own dashboard.
 		p.Login = LoginURL(in.LoginPath, DashboardPath)
 	}
+	today := v.Days[len(v.Days)-1]
+	date, err := time.Parse(dashboard.DateLayout, today.Date)
+	if err != nil {
+		return dashPage{}, fmt.Errorf("pages: %w", err)
+	}
+
+	// Today's clocks go the most time first, yours and the agent's
+	// together, and a tie keeps the view's order.
+	clocks := slices.Clone(today.Projects)
+	slices.SortStableFunc(clocks, func(a, b dashboard.ProjectTime) int {
+		return cmp.Compare(b.You.Total()+b.Agent.Total(), a.You.Total()+a.Agent.Total())
+	})
+
 	// Colors go to the projects with the owner's time this week first, in
-	// the view's order, then to the rest, so the week chart, which draws
-	// only the owner's time, never folds one of the week's projects into
-	// Other while a quieter one keeps a color. A project with only the
-	// agent's time this week isn't on the chart, so it waits with the
-	// rest. Each project keeps its color across the page.
+	// the view's order, the order the week chart stacks them in, so the
+	// chart, which draws only the owner's time, never folds one of the
+	// week's projects into Other while a quieter one keeps a color, and
+	// its neighbors are mostly neighbors in the palette too. Today's other
+	// projects come next, the most time first, so the clocks the page
+	// shows at once get colors of their own, then the rest. Each project
+	// keeps its color across the page.
 	inWeek := make(map[string]bool, len(v.Week.Projects))
 	for _, pt := range v.Week.Projects {
 		if pt.You.Total() > 0 {
 			inWeek[pt.Project] = true
 		}
 	}
-	var order []string
-	for _, week := range []bool{true, false} {
-		for _, pr := range v.Projects {
-			if inWeek[pr.ID] == week {
-				order = append(order, pr.ID)
-			}
-		}
-	}
 	color := make(map[string]string, len(v.Projects))
-	names := make(map[string]string, len(v.Projects))
-	for i, key := range order {
-		color[key] = "c" + strconv.Itoa(i+1)
-		if i >= colorSlots {
-			color[key] = "co"
+	give := func(key string) {
+		if _, ok := color[key]; ok {
+			return
+		}
+		color[key] = "co"
+		if n := len(color); n <= colorSlots {
+			color[key] = "c" + strconv.Itoa(n)
 		}
 	}
 	for _, pr := range v.Projects {
+		if inWeek[pr.ID] {
+			give(pr.ID)
+		}
+	}
+	for _, pt := range clocks {
+		give(pt.Project)
+	}
+	for _, pr := range v.Projects {
+		give(pr.ID)
+	}
+	// A project the page calls by its short code has its full key in a
+	// title, so the owner can match it with what their computer says.
+	names := make(map[string]string, len(v.Projects))
+	titles := make(map[string]string, len(v.Projects))
+	for _, pr := range v.Projects {
 		names[pr.ID] = pr.Name
+		if pr.Code != "" {
+			titles[pr.ID] = pr.ID
+			if len(pr.Keys) > 0 {
+				titles[pr.ID] = pr.Keys[0]
+			}
+		}
 	}
 
-	today := v.Days[len(v.Days)-1]
-	date, err := time.Parse(dashboard.DateLayout, today.Date)
-	if err != nil {
-		return dashPage{}, fmt.Errorf("pages: %w", err)
+	ran := newDayClock(v)
+	week := v.Days[len(v.Days)-dashboard.WeekDays:]
+	p.Today = todayPart{
+		Date: date.Format("Monday 2 January"), You: duration(today.You.Total()), YouPending: pendingOf(today.You),
+		AgentLine: agentLine(agent, today.Agent.Total(), ran.atOnce(today, true)),
 	}
-	p.Today = todayPart{Date: date.Format("Monday 2 January"), You: duration(today.You.Total()), Agent: duration(today.Agent.Total()), YouPending: pendingOf(today.You)}
-	for _, pt := range today.Projects {
-		p.Today.Clocks = append(p.Today.Clocks, clockRow{
-			Color: color[pt.Project], Name: names[pt.Project],
-			You: duration(pt.You.Total()), Agent: duration(pt.Agent.Total()),
-			YouPending: pendingOf(pt.You), AgentPending: pendingOf(pt.Agent),
-		})
+	if today.You.Total() == 0 && today.Agent.Total() > 0 {
+		p.Today.Why = zeroWhy(agent)
+	}
+	var moreYou, moreAgent float64
+	for i, pt := range clocks {
+		row := clockRow{Color: color[pt.Project], Name: names[pt.Project], Title: titles[pt.Project]}
+		if pt.You.Total() > 0 {
+			row.Faces = append(row.Faces, faceRow{Label: "You", Time: duration(pt.You.Total()), Pending: pendingOf(pt.You)})
+		}
+		if pt.Agent.Total() > 0 {
+			row.Faces = append(row.Faces, faceRow{Label: capitalize(agent), Time: duration(pt.Agent.Total()), Pending: pendingOf(pt.Agent)})
+		}
+		if i < shownClocks {
+			p.Today.Clocks = append(p.Today.Clocks, row)
+			continue
+		}
+		if p.Today.More == nil {
+			p.Today.More = &moreClocks{}
+		}
+		p.Today.More.Clocks = append(p.Today.More.Clocks, row)
+		moreYou += pt.You.Total()
+		moreAgent += pt.Agent.Total()
+	}
+	if m := p.Today.More; m != nil {
+		m.Summary = moreSummary(len(m.Clocks), moreYou, moreAgent, agent)
 	}
 
-	if p.Week, err = newWeekPart(v, v.Days[len(v.Days)-dashboard.WeekDays:], color, names); err != nil {
+	if p.Week, err = newWeekPart(v, week, color, names, titles); err != nil {
 		return dashPage{}, err
 	}
+	weekAtOnce := false
+	for i, d := range week {
+		weekAtOnce = weekAtOnce || ran.atOnce(d, i == len(week)-1)
+	}
+	p.Week.AgentLine = agentLine(agent, v.Week.Agent.Total(), weekAtOnce)
+	// Today's sentence says it already when today has the agent's time,
+	// so the page says it once.
+	if v.Week.You.Total() == 0 && v.Week.Agent.Total() > 0 && p.Today.Why == "" {
+		p.Week.Why = zeroWhy(agent)
+	}
 
-	week := make(map[string]dashboard.ProjectTime, len(v.Week.Projects))
+	byWeek := make(map[string]dashboard.ProjectTime, len(v.Week.Projects))
 	for _, pt := range v.Week.Projects {
-		week[pt.Project] = pt
+		byWeek[pt.Project] = pt
 	}
 	for _, pt := range v.Month.Projects {
-		w := week[pt.Project]
+		w := byWeek[pt.Project]
 		p.Projects = append(p.Projects, projectRow{
-			Color: color[pt.Project], Name: names[pt.Project],
+			Color: color[pt.Project], Name: names[pt.Project], Title: titles[pt.Project],
 			Week: duration(w.You.Total()), Month: duration(pt.You.Total()),
 			WeekAgent: duration(w.Agent.Total()), MonthAgent: duration(pt.Agent.Total()),
 		})
@@ -327,9 +446,98 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 	return p, nil
 }
 
+// agentLine says how long the agent worked on its own in a window, s
+// seconds. That time adds up each project's, so agents working at once in
+// several projects can pass the hours the window had, and atOnce says
+// they did on one of its days: then the line says the time is a sum and
+// that some of the agents ran at the same time, which is all the number
+// shows, so it doesn't read as one agent working more hours than a day
+// has. Either way it is information, beside your time, never a target
+// (DESIGN 3.8).
+func agentLine(agent string, s float64, atOnce bool) string {
+	if atOnce {
+		return capitalize(several(agent)) + " worked on their own for " + duration(s) + " in all, some of them at the same time."
+	}
+	return capitalize(agent) + " worked on its own for " + duration(s) + "."
+}
+
+// several names more than one of the agent: "your agents", or "Claude
+// Code agents".
+func several(agent string) string {
+	if strings.HasSuffix(agent, "agent") {
+		return agent + "s"
+	}
+	return agent + " agents"
+}
+
+// zeroWhy says why none of a window is your time though the agent worked
+// on its own in it: pairtime counts your time from input on the computer
+// the agent runs on (SM 2.1), so time of an agent that runs elsewhere is
+// only the agent's (SM 3.4's SSH gap). It says what the rule implies and
+// nothing about which computer the owner used.
+func zeroWhy(agent string) string {
+	return "pairtime counts your time from your typing and mouse on the computer where " + agent +
+		" runs, so when it runs on a server you reach over SSH or from a remote app, its time shows here and yours doesn't."
+}
+
+// moreSummary is the row n of today's projects fold into: how many, and
+// their time on each clock that ran in them.
+func moreSummary(n int, you, agentS float64, agent string) string {
+	s := strconv.Itoa(n) + " more projects: "
+	if n == 1 {
+		s = "1 more project: "
+	}
+	var clocks []string
+	if you > 0 {
+		clocks = append(clocks, "you "+duration(you))
+	}
+	if agentS > 0 {
+		clocks = append(clocks, agent+" "+duration(agentS))
+	}
+	return s + strings.Join(clocks, ", ")
+}
+
+// dayClock tells how long a view's days had run when it was read, in its
+// time zone.
+type dayClock struct {
+	loc  *time.Location
+	asOf time.Time
+	// whole counts today as a whole day: the samples' numbers don't
+	// follow the clock, and a view that doesn't say when it was read
+	// can't say how much of today had passed.
+	whole bool
+}
+
+func newDayClock(v dashboard.View) dayClock {
+	c := dayClock{loc: time.UTC, asOf: v.AsOf, whole: v.Sample || v.AsOf.IsZero()}
+	if loc, err := rollup.LoadZone(v.TZ); err == nil {
+		c.loc = loc
+	} else {
+		c.whole = true
+	}
+	return c
+}
+
+// atOnce reports whether the agent's time on day d, today when isToday,
+// passes the time the day had run: all of a past day, and today up to
+// when the view was read. Only agents working at the same time give a
+// day more of their time than it has.
+func (c dayClock) atOnce(d dashboard.Day, isToday bool) bool {
+	date, err := time.Parse(dashboard.DateLayout, d.Date)
+	if err != nil {
+		return false
+	}
+	start := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, c.loc)
+	end := time.Date(date.Year(), date.Month(), date.Day()+1, 0, 0, 0, 0, c.loc)
+	if isToday && !c.whole && c.asOf.After(start) && c.asOf.Before(end) {
+		end = c.asOf
+	}
+	return d.Agent.Total() > end.Sub(start).Seconds()
+}
+
 // newWeekPart lays out the week chart over days, the last 7.
-func newWeekPart(v dashboard.View, days []dashboard.Day, color, names map[string]string) (weekPart, error) {
-	w := weekPart{You: duration(v.Week.You.Total()), Agent: duration(v.Week.Agent.Total())}
+func newWeekPart(v dashboard.View, days []dashboard.Day, color, names, titles map[string]string) (weekPart, error) {
+	w := weekPart{You: duration(v.Week.You.Total())}
 	most := 0.0
 	for _, d := range days {
 		most = math.Max(most, d.You.Total())
@@ -348,11 +556,11 @@ func newWeekPart(v dashboard.View, days []dashboard.Day, color, names map[string
 		if pt.You.Total() == 0 {
 			continue
 		}
-		w.Table.Names = append(w.Table.Names, names[pt.Project])
+		w.Table.Names = append(w.Table.Names, nameCell{Name: names[pt.Project], Title: titles[pt.Project]})
 		if color[pt.Project] == "co" {
 			other = true
 		} else {
-			w.Legend = append(w.Legend, legendItem{Color: color[pt.Project], Name: names[pt.Project]})
+			w.Legend = append(w.Legend, legendItem{Color: color[pt.Project], Name: names[pt.Project], Title: titles[pt.Project]})
 		}
 	}
 	if other {
@@ -774,7 +982,7 @@ func (s *Site) serveDashboard(w http.ResponseWriter, r *http.Request, in SignIn,
 	if err == nil {
 		acct := &account{SignedIn: true, Login: in.LoginPath, Logout: in.LogoutPath}
 		if in.Visitor != nil {
-			acct.Handle, _ = in.Visitor(r)
+			acct.Name, _ = in.Visitor(r)
 		}
 		page, err = s.ownerPage(v, in, acct, zoneError)
 	}

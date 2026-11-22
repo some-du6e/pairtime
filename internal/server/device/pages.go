@@ -210,7 +210,9 @@ func (s *Service) render(w http.ResponseWriter, status int, title, name string, 
 	}
 	p := pages.Page{Title: title, Body: template.HTML(body.String()), Form: true}
 	if sess != nil {
-		p.Account = &pages.Header{SignedIn: true, Handle: s.nameOf(sess).Name, Login: auth.LoginPath, Logout: auth.LogoutPath}
+		// The header shows the display name alone, never the handle in
+		// its place; the page itself names the account with its ID.
+		p.Account = &pages.Header{SignedIn: true, Name: sess.DisplayName, Login: auth.LoginPath, Logout: auth.LogoutPath}
 	}
 	s.site.WritePage(w, status, p)
 }

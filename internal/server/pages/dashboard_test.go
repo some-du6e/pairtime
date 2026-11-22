@@ -661,16 +661,27 @@ func TestOwnerDashboard(t *testing.T) {
 			want:     []string{kindSplitNote("your agent")},
 		},
 		{
-			name:     "the owner's header shows who is signed in, a link to the dashboard and the sign-out form",
-			signIn:   signInOn("U0FAKEVERIFIED"),
+			name:     "the owner's header names them by their sign-in's display name, beside a link to the dashboard and the sign-out form",
+			signIn:   signInOn("Robin"),
 			account:  "u1",
 			src:      fakeSource{v: ownerView(t)},
 			wantCode: 200,
 			want: []string{
 				`<a href="/dashboard">Your dashboard</a>`,
-				"<p>Signed in as <strong>U0FAKEVERIFIED</strong></p>",
+				"<p>Signed in as <strong>Robin</strong></p>",
 				`<form method="post" action="/auth/logout"><button type="submit">Sign out</button></form>`,
 			},
+		},
+		{
+			name:     "an owner whose sign-in brought no display name gets no id in the header in its place, only the link to the dashboard and the sign-out button",
+			signIn:   signedInNoName(),
+			account:  "u1",
+			src:      fakeSource{v: ownerView(t)},
+			wantCode: 200,
+			want: []string{
+				`<a href="/dashboard">Your dashboard</a>` + "\n" + `<form method="post" action="/auth/logout"><button type="submit">Sign out</button></form>`,
+			},
+			notWant: []string{"Signed in"},
 		},
 		{
 			name:     "the owner can set the time zone the days are counted in",
@@ -693,7 +704,9 @@ func TestOwnerDashboard(t *testing.T) {
 			src:      fakeSource{v: emptyView(t)},
 			wantCode: 200,
 			want: []string{
-				"<strong>Nothing counted yet.</strong> Install pairtime on your computer and run <code>pairtime login</code> to link it to this account.",
+				"<strong>Nothing counted yet.</strong> Install pairtime on the computer where you run your agent, then run <code>pairtime login</code> on it to link it to this account.",
+				`<pre class="install"><code>curl -fsSL `,
+				`<pre class="install"><code>irm `,
 				`<a href="/demo">See a sample dashboard</a>`,
 				`<form class="zone"`,
 			},
@@ -880,17 +893,17 @@ func TestCapitalize(t *testing.T) {
 	}
 }
 
-// manyView is an owner's view of seven projects, p1 the busiest over the
-// month and p7 the quietest, with today's time in the projects week names,
-// and today's agent-only time, and none of the owner's, in those
+// manyView is an owner's view of ten projects, p1 the busiest over the
+// month and p10 the quietest, with today's time in the projects week
+// names, and today's agent-only time, and none of the owner's, in those
 // agentWeek names.
 func manyView(t *testing.T, agentWeek []string, week ...string) dashboard.View {
 	t.Helper()
 	var rows []dashboard.Row
-	for i := 1; i <= 7; i++ {
+	for i := 1; i <= 10; i++ {
 		key := "p" + strconv.Itoa(i)
 		// Earlier in the month, more for the lower numbers.
-		rows = append(rows, dashboard.Row{Day: "2026-11-01", Project: key, Kind: "prompting", Level: "A", Seconds: float64((8 - i) * 3600)})
+		rows = append(rows, dashboard.Row{Day: "2026-11-01", Project: key, Kind: "prompting", Level: "A", Seconds: float64((11 - i) * 3600)})
 	}
 	for _, key := range week {
 		rows = append(rows, dashboard.Row{Day: "2026-11-20", Project: key, Kind: "prompting", Level: "A", Seconds: 1800})
@@ -915,21 +928,21 @@ func TestManyProjects(t *testing.T) {
 		notWant   []string
 	}{
 		{
-			name:    "past five projects in a week, the chart draws the rest together as Other, in its own gray",
-			week:    []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7"},
+			name:    "past eight projects in a week, the chart draws the rest together as Other, in its own gray, and never a ninth hue",
+			week:    []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"},
 			section: "week",
 			want: []string{
-				`<li><span class="key c5"></span>p5</li>`,
+				`<li><span class="key c8"></span>p8</li>`,
 				`<li><span class="key co"></span>Other</li>`,
 				`title="Other, 1h"`,
 			},
-			notWant: []string{`<li><span class="key co"></span>p6</li>`, `<span class="key c6">`},
+			notWant: []string{`<li><span class="key co"></span>p9</li>`, `<span class="key c9">`},
 		},
 		{
-			name:    "the table still lists each project past the fifth by name",
-			week:    []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7"},
+			name:    "the table still lists each project past the eighth by name",
+			week:    []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9", "p10"},
 			section: "week",
-			want:    []string{"<th>p6</th><th>p7</th><th>Total</th>"},
+			want:    []string{"<th>p9</th><th>p10</th><th>Total</th>"},
 		},
 		{
 			name:    "a project that is the week's only one gets a color of its own, though the month ranks it sixth",
@@ -939,11 +952,11 @@ func TestManyProjects(t *testing.T) {
 			notWant: []string{"Other"},
 		},
 		{
-			name:      "projects with only the agent's time this week don't take the colors, so the week's one project with the owner's time gets one though five agent-only projects rank above it",
-			week:      []string{"p6"},
-			agentWeek: []string{"p1", "p2", "p3", "p4", "p5"},
+			name:      "projects with only the agent's time this week don't take the first colors, so the week's one project with the owner's time gets c1 though eight agent-only projects rank above it",
+			week:      []string{"p9"},
+			agentWeek: []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"},
 			section:   "week",
-			want:      []string{`<li><span class="key c1"></span>p6</li>`, `title="p6, 30m"`},
+			want:      []string{`<li><span class="key c1"></span>p9</li>`, `title="p9, 30m"`},
 			notWant:   []string{"Other"},
 		},
 		{

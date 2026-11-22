@@ -143,6 +143,20 @@ func TestBuild(t *testing.T) {
 			},
 		},
 		{
+			name: "a project's short code comes from Codes, and a project without one has none",
+			meta: func(m *Meta) {
+				m.Names = map[string]string{"p1": "Project 7c41e9"}
+				m.Codes = map[string]string{"p1": "7c41e9"}
+			},
+			rows: []Row{you("2026-11-20", "p1", "prompting", "A", 600), you("2026-11-20", "p2", "prompting", "A", 500)},
+			check: func(t *testing.T, v View) {
+				want := []Project{{ID: "p1", Keys: []string{}, Name: "Project 7c41e9", Code: "7c41e9"}, {ID: "p2", Keys: []string{}, Name: "p2"}}
+				if !reflect.DeepEqual(v.Projects, want) {
+					t.Errorf("projects %+v, want %+v", v.Projects, want)
+				}
+			},
+		},
+		{
 			name: "a project lists its device keys, and the view says whether each device's keys are projects of their own",
 			meta: func(m *Meta) {
 				m.Keys = map[string][]string{"p1": {"g_laptop", "g_desktop"}}

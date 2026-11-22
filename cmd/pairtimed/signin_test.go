@@ -249,8 +249,9 @@ func TestServeSignups(t *testing.T) {
 		// wantCode is the error page's code, or "" for a sign-in that
 		// succeeds.
 		wantCode string
-		// shown is who the home page says is signed in, and "" means the
-		// identity's Slack ID.
+		// shown is who the home page says is signed in, and "" means no
+		// one: without a display name the header names nobody, and shows
+		// no id in a name's place.
 		shown string
 	}{
 		{name: "while signups_open is false an identity on the operators list signs in and gets an account", identity: operator},
@@ -280,14 +281,16 @@ func TestServeSignups(t *testing.T) {
 				t.Errorf("the callback sent the browser to %q, want /", landing)
 			}
 			resp, body = get(t, "http://"+public+"/", session)
-			shown := tt.shown
-			if shown == "" {
-				shown = tt.identity.SlackID
-			}
-			signedIn := "<p>Signed in as <strong>" + shown + "</strong></p>"
+			signedIn := "<p>Signed in as <strong>" + tt.shown + "</strong></p>"
 			signOut := `<form method="post" action="` + auth.LogoutPath + `"><button type="submit">Sign out</button></form>`
-			if resp.StatusCode != http.StatusOK || !strings.Contains(body, signedIn) || !strings.Contains(body, signOut) {
-				t.Errorf("/ with the session answered %d, want 200 with %q and the sign-out form; body:\n%s", resp.StatusCode, signedIn, body)
+			if resp.StatusCode != http.StatusOK || !strings.Contains(body, signOut) {
+				t.Errorf("/ with the session answered %d, want 200 with the sign-out form; body:\n%s", resp.StatusCode, body)
+			}
+			switch {
+			case tt.shown != "" && !strings.Contains(body, signedIn):
+				t.Errorf("/ with the session doesn't say %q; body:\n%s", signedIn, body)
+			case tt.shown == "" && (strings.Contains(body, "Signed in") || tt.identity.SlackID != "" && strings.Contains(body, tt.identity.SlackID) || strings.Contains(body, tt.identity.Sub)):
+				t.Errorf("/ with a session that brought no display name names the account in the header, by its Slack ID %s or its subject; body:\n%s", tt.identity.SlackID, body)
 			}
 			if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "form-action 'self'") {
 				t.Errorf("the signed-in home page's CSP is %q, which doesn't let its sign-out form post", csp)
