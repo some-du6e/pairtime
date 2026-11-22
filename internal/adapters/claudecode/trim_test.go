@@ -171,8 +171,9 @@ func TestTranscriptMemoryKeepsLiveFiles(t *testing.T) {
 // TestTranscriptMemoryKeepsLiveSessions checks which session the reader's
 // memory forgets when full: one no remembered file names, so a session
 // that was running at install, with no hooks, keeps the memory that its
-// session.start was written while lookback reads hundreds of others, and
-// its next entry writes no second one, after a restart too.
+// session.start was written while lookback reads hundreds of others and a
+// hook call of a new session comes, and its next entry writes no second
+// one, after a restart too.
 func TestTranscriptMemoryKeepsLiveSessions(t *testing.T) {
 	entry := func(sid, id string, at time.Time) string {
 		return userText(id, "hello there", map[string]any{"turnOrigin": "human", "promptSource": "typed",
@@ -208,6 +209,12 @@ func TestTranscriptMemoryKeepsLiveSessions(t *testing.T) {
 		l := logLines(entry(fmt.Sprintf("s-%03d", i), "q", old.Add(-time.Duration(i)*time.Minute)))[0]
 		l.file = fmt.Sprintf("p/old-%03d.jsonl", i)
 		starts(t, a, l)
+	}
+	// Then a hook call of a new session, which comes with no file of its
+	// own to forget.
+	if _, err := a.Parse(hookRaw(EventUserPromptSubmit, map[string]any{"session_id": "hooked", "prompt_id": "h1",
+		"prompt": "and this?", "cwd": "/home/capture/p", "transcript_path": "/home/capture/p/hooked.jsonl"}, nil)); err != nil {
+		t.Fatal(err)
 	}
 	mem, err := a.SaveState()
 	if err != nil {

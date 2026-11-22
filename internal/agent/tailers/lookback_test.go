@@ -755,6 +755,63 @@ func TestLookback(t *testing.T) {
 				t.Errorf("replays %v, fresh %v and %v; want the history's end again as a fresh replay", got, r.got[1].Fresh, r.got[2].Fresh)
 			}
 		}},
+		{"after a restart, a Rewind of a file whose history lookback gave up on goes through the child from where that history ended, its first line fresh", func(t *testing.T) {
+			r := lookbackRig(t, func() (Child, error) { return Child{}, errors.New("no binary") })
+			r.write("v.jsonl", "{\"v\":1}\n")
+			r.open()
+			r.step(0, false)
+			r.settle()
+			for i := range maxLookbackTries - 1 {
+				r.step(lookbackPause<<i, false)
+				r.settle()
+			}
+			r.write("v.jsonl", "{\"v\":2}\n")
+			r.step(HotPoll, false)
+			if _, err := r.tl.Put(); err != nil {
+				t.Fatal(err)
+			}
+			// The agent's next start, with a child that works, and an adapter
+			// that forgot the file: as takeLine does, it has a line that isn't
+			// fresh read again until one is.
+			pc := &pipeChild{trim: upper}
+			r.lookback = pc.start
+			r.open()
+			var mu sync.Mutex
+			forgot := true
+			r.take = func(l Line) bool {
+				mu.Lock()
+				defer mu.Unlock()
+				if forgot && !l.Fresh && l.Log.Offset > 0 {
+					r.tl.Rewind(l.Log.File)
+					return false
+				}
+				forgot = false
+				return true
+			}
+			from := len(r.got)
+			r.write("v.jsonl", "{\"v\":3}\n")
+			r.step(HotPoll, false)
+			deadline := time.Now().Add(10 * time.Second)
+			for r.tl.Progress().Running && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if r.tl.Progress().Running {
+				r.tl.mu.Lock()
+				r.tl.stopped = true
+				r.tl.mu.Unlock()
+				close(r.tl.stop)
+				r.settle()
+				t.Fatalf("lookback still reads the file again, after %d children", pc.started)
+			}
+			r.settle()
+			r.step(time.Second, false)
+			if got := r.texts(from); pc.started != 1 || !slices.Equal(got, []string{`{"V":2}`, `{"v":3}`}) {
+				t.Fatalf("handed over %v from %d children, want the history's end through the child, then the new line", got, pc.started)
+			}
+			if l := r.got[from]; l.Log.Offset != 8 || !l.Fresh || !l.Log.Replay || r.got[from+1].Fresh || r.got[from+1].Log.Replay {
+				t.Errorf("lines %+v and %+v, want the first fresh and a replay at 8, the second neither", l, r.got[from+1])
+			}
+		}},
 		{"after the last failure, a root listed later gives its files no history, so the tailer reads them", func(t *testing.T) {
 			r := lookbackRig(t, func() (Child, error) { return Child{}, errors.New("no binary") })
 			r.write("g.jsonl", "{\"g\":1}\n")

@@ -74,9 +74,10 @@ const (
 	// maxLogFiles and maxLogSessions bound the transcript files and the
 	// sessions it remembers: those it read from last, for files those it
 	// would forget last (older), and for sessions those a remembered file
-	// names first.
+	// names first. There is room for more sessions than the files can name,
+	// so none a file names is the one forgotten (logSessionFor).
 	maxLogFiles    = 256
-	maxLogSessions = 256
+	maxLogSessions = maxLogFiles + 64
 	// recentFiles is how many of the files it read from last it keeps
 	// over the rest: lookback hands a history over a batch at a time, and
 	// other files' lines come between its batches.
