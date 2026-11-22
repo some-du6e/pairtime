@@ -312,6 +312,11 @@ type Project struct {
 	// Root is the project's folder, which file paths are keyed relative
 	// to (ledger-v1 10.6).
 	Root string
+	// Ignored says the folder is out of pairtime (DESIGN 8.8), which the
+	// resolver says with false: the host drops the records of the call or
+	// line being parsed, and a log reader keeps the file out with it until
+	// a line names a folder that counts (LogReader.LogIgnored).
+	Ignored bool
 }
 
 // ErrOtherHarness is what Parse returns for a hook call that another

@@ -24,8 +24,8 @@ func TestQueuedMessageCopies(t *testing.T) {
 	}{
 		{"a hook's and a transcript's copy of one message, 25 ms apart, are one Q, the hook's, corroborated",
 			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_025, event.ViaLog) }, 1, true},
-		{"the transcript's copy coming first changes nothing",
-			func(b *tl) { queued(b, 58_025, event.ViaLog); queued(b, 58_000, event.ViaHook) }, 1, true},
+		{"the transcript's copy coming first, 25 ms before the hook's, changes nothing",
+			func(b *tl) { queued(b, 58_000, event.ViaLog); queued(b, 58_025, event.ViaHook) }, 1, true},
 		{"two messages a hook reported 3 s apart are two",
 			func(b *tl) { queued(b, 55_000, event.ViaHook); queued(b, 58_000, event.ViaHook) }, 2, false},
 		{"two messages a hook reported in the same millisecond are two",

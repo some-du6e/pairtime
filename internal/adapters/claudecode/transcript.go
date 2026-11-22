@@ -43,6 +43,9 @@ type entry struct {
 	PermissionMode string   `json:"permissionMode"`
 	IsSidechain    bool     `json:"isSidechain"`
 	Message        *message `json:"message"`
+	// IsMeta marks a user entry Claude Code wrote for the model, such as a
+	// slash command's expanded instructions, which no person sent.
+	IsMeta bool `json:"isMeta"`
 	// ToolUseResult is a tool result entry's structured result, or the
 	// text Claude Code put in its place, such as "User rejected tool use".
 	ToolUseResult  toolResult `json:"toolUseResult"`

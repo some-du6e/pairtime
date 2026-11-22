@@ -69,6 +69,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 
@@ -255,6 +256,12 @@ type session struct {
 	// the PostToolUse calls that may answer one, oldest first (Decide).
 	requests []*request
 	posts    []post
+	// hookStops are the turns whose Stop or StopFailure came via hook,
+	// oldest first, at most maxTurns: the hook reported the turn's final
+	// output and stop, so the transcript's copies of them would count the
+	// turn twice, a turn the session turned native at its Stop included
+	// (logparse.go resolveFinal).
+	hookStops []string
 	// nativeAt is the hook stamp of the session's first session.start
 	// with via hook, in Unix ms, set with hookStart: from then on its hooks
 	// report its stops and tool calls, and a transcript's copies of those
@@ -262,6 +269,24 @@ type session struct {
 	// has 0, the session's start.
 	nativeAt int64
 	seen     uint64
+}
+
+// noteHookStop records that the Stop or StopFailure of turn came via hook.
+func (s *session) noteHookStop(turn string) {
+	if slices.Contains(s.hookStops, turn) {
+		return
+	}
+	if len(s.hookStops) >= maxTurns {
+		s.hookStops = slices.Delete(s.hookStops, 0, len(s.hookStops)-maxTurns+1)
+	}
+	s.hookStops = append(s.hookStops, turn)
+}
+
+// hookStopped reports whether the Stop or StopFailure of session sid's turn
+// came via hook. a.mu is held.
+func (a *Adapter) hookStopped(sid, turn string) bool {
+	s := a.sessions[sid]
+	return s != nil && slices.Contains(s.hookStops, turn)
 }
 
 // markNative records that a session.start with via hook was made for the
@@ -297,13 +322,13 @@ func (a *Adapter) sessionFor(id string) *session {
 }
 
 // HookReported reports whether a hook call of Claude Code's session id has
-// reached the adapter, over the socket, the pipe or the spool. A log reader
-// writes session.start only for a session no hook reported, so that its
-// placeholder, with parent_class unknown and has_tty false, never stands in
-// for a hooked session's own (E-2.8-lookback; SM 1.2). That holds for a
-// session whose hooks only the spool delivered too: its records are side
-// doors, and a log reader's session.start would be the one SM 2.2 rule 4
-// read, making it headless.
+// reached the adapter, over the socket, the pipe or the spool. The
+// transcript reader writes session.start only for a session no via-hook
+// call reported, so that its placeholder, with parent_class unknown and
+// has_tty false, never stands in for a hooked session's own
+// (E-2.8-lookback; SM 1.2). A session whose hooks only the spool delivered
+// gets it: pkg/score reads no side door's session.start in a session a log
+// reader covers, so SM 2.2 rules 4 and 5 would have nothing to read.
 func (a *Adapter) HookReported(sessionID string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()

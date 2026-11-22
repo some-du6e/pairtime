@@ -343,7 +343,11 @@ type cron struct {
 // makes no agent.output and isn't committed as the turn's final message
 // (SM 1.2; the hooks reference).
 func (c *call) stop(failed bool) {
-	key := c.turnKey(c.s.turnOf(c.pid))
+	turn := c.s.turnOf(c.pid)
+	key := c.turnKey(turn)
+	if c.env.Via == event.ViaHook {
+		c.s.noteHookStop(turn)
+	}
 	reason := event.StopEndTurn
 	if msg, ok := c.f.str("last_assistant_message"); ok && msg != "" && !failed {
 		o := outputOf(msg)
