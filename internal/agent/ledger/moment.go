@@ -83,6 +83,20 @@ func (m *moment) raise(n moment, cur string) {
 	}
 }
 
+// earlierThan reports whether m is earlier than n: by this run's clock
+// when both hold it, by the OS's when both hold the same boot's, and by the
+// wall clock otherwise, as before holds an event to a moment. A zero n has
+// nothing m is earlier than.
+func (m moment) earlierThan(n moment) bool {
+	switch {
+	case m.run > 0 && n.run > 0:
+		return m.run < n.run
+	case m.os > 0 && n.os > 0 && m.boot == n.boot:
+		return m.os < n.os
+	}
+	return m.wall < n.wall
+}
+
 // before reports whether the event e was made before m: by e's mono when
 // m holds the clock it counts, this run's for the agent's own events and
 // the OS's of m's boot for a hook call, since a monotonic clock is the one

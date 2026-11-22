@@ -337,7 +337,10 @@ func (a *agent) seeSoon() {
 		changed = a.unseenLinkLocked() || changed
 		switch {
 		case changed:
+			// The writer has the note before the flush, as with the watch's.
+			w.NoteSeenThen(a.seenNowLocked(), a.seenLinkLocked)
 			a.keepLocked()
+			return
 		case !online:
 			// config.toml said local-only again by the time modes looked,
 			// which modes saw already, but the writer took the seal's
@@ -350,8 +353,7 @@ func (a *agent) seeSoon() {
 			// would ask again.
 			return
 		}
-		// What modes saw, and a link it took in whose stretch's end the
-		// writer may not have yet.
+		// A link modes took in whose stretch's end the writer may not have yet.
 		w.NoteSeenThen(a.seenNowLocked(), a.seenLinkLocked)
 	}()
 }

@@ -299,8 +299,11 @@ type Writer struct {
 	until                                              moment
 	// prior holds the OS readings of other boots that until and the
 	// agent's Seen held as Open read them back, which earlier traded for
-	// this boot's start, one per boot (bounds).
-	prior []moment
+	// this boot's start (bounds). localAt is when the writer last took
+	// config.toml as local-only: a seal's local-only read, a note of a
+	// switch to it, or a Seen that says it (seenLocked).
+	prior   []moment
+	localAt moment
 
 	kick     chan struct{}
 	stop     chan struct{}
@@ -365,15 +368,10 @@ func (b bounds) before(e event.Envelope) bool {
 // bounds is what the writer holds events to now. w.mu is held.
 func (w *Writer) bounds() bounds { return bounds{w.until, w.prior} }
 
-// addPrior keeps m's OS reading of another boot in prior, the later of
-// two of the same boot. Open alone calls it, before the writer is shared.
+// addPrior keeps m's OS reading of another boot in prior. Open alone
+// calls it, before the writer is shared. bounds.before checks every
+// reading, so two of one boot hold what the later one does.
 func (w *Writer) addPrior(m moment) {
-	for i, p := range w.prior {
-		if p.boot == m.boot {
-			w.prior[i].os = max(p.os, m.os)
-			return
-		}
-	}
 	w.prior = append(w.prior, moment{os: m.os, boot: m.boot})
 }
 
@@ -759,6 +757,9 @@ func (w *Writer) noteLocked(online bool, at moment) bool {
 	case !online:
 		w.back = 0
 	}
+	if !online {
+		w.localAt = at
+	}
 	w.local, w.seen = !online, !online
 	return back || (begins && w.taint)
 }
@@ -842,8 +843,11 @@ func (w *Writer) seenLocked(s Seen, at moment) bool {
 		// Frames that recorded no moment leave only the newest batch's seal
 		// to tell an earlier run's end from one the writer never had.
 		sealedSince := s.Earlier && w.until.wall == 0 && w.until.os == 0 && w.sealed > ended.wall
-		newer := !sealedSince && (ended.run > w.until.run || ended.wall > w.until.wall ||
-			ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os)
+		// An end the agent read before the writer last took config.toml as
+		// local-only, as one seeSoon read before a seal's local-only read, ends
+		// nothing that came after that, and arms no mark for it.
+		newer := !sealedSince && !ended.earlierThan(w.localAt) && (ended.run > w.until.run ||
+			ended.wall > w.until.wall || ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os)
 		was := w.until
 		if w.local && newer {
 			// A stretch the writer took as going on, which the agent saw end.
@@ -1119,7 +1123,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 			// so the stretch begins here, as at a noted switch: the records
 			// after this read count as made in it, its first sealed at once,
 			// until a note or a read says online.
-			w.seen = true
+			w.seen, w.localAt = true, w.momentNow()
 			if len(w.pending) == 0 && !w.local {
 				w.local, w.stretchSealed = true, false
 			}

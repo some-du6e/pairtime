@@ -148,6 +148,30 @@ func TestMoment(t *testing.T) {
 	}
 }
 
+// TestEarlierThan checks which clock orders two moments: this run's when
+// both hold it, the OS's of one boot, and the wall clock otherwise.
+func TestEarlierThan(t *testing.T) {
+	cases := []struct {
+		name string
+		m, n moment
+		want bool
+	}{
+		{"this run's clock orders two moments that hold it, whatever the wall clock says", moment{wall: 9, run: 1}, moment{wall: 1, run: 2}, true},
+		{"the OS's clock of one boot orders two moments that hold it, whatever the wall clock says", moment{wall: 9, os: 1, boot: "b"}, moment{wall: 1, os: 2, boot: "b"}, true},
+		{"readings of two boots don't order two moments, the wall clock does", moment{wall: 9, os: 1, boot: "b"}, moment{wall: 1, os: 2, boot: "c"}, false},
+		{"the wall clock orders two moments with no clock in common", moment{wall: 1}, moment{wall: 2, os: 5, boot: "b"}, true},
+		{"a moment at the same time isn't earlier", moment{wall: 2}, moment{wall: 2}, false},
+		{"no moment is earlier than none", moment{wall: 2, run: 1}, moment{}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.m.earlierThan(c.n); got != c.want {
+				t.Errorf("earlierThan = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 // TestEarlier checks the bounds a moment an earlier run recorded takes at
 // Open (Writer.earlier): every event of this run, and every hook call of
 // this boot when the moment was recorded in another boot, came after it.

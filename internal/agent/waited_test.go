@@ -718,36 +718,47 @@ func TestModesSeen(t *testing.T) {
 			w := opened(t, a)
 			// No config watch runs here to hear the switches.
 			setMode(t, dirs, "online")
+			looked := func() {
+				t.Helper()
+				for deadline := time.Now().Add(10 * time.Second); a.seeing.Load(); time.Sleep(5 * time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Fatal("modes never looked")
+					}
+				}
+			}
 			func() {
 				// modes looks only once the file says local-only again: the
-				// seals' seeSoon waits for its lock.
+				// seal's seeSoon waits for its lock.
+				a.modes.mu.Lock()
+				defer a.modes.mu.Unlock()
+				// The stretch's first record asks for a seal of its own, which
+				// reads config.toml online, and no other seal is due.
+				if _, err := w.Write(runPresenceAt(time.Now())); err != nil {
+					t.Fatal(err)
+				}
+				for deadline := time.Now().Add(10 * time.Second); w.Status().Batches < 1; time.Sleep(5 * time.Millisecond) {
+					if time.Now().After(deadline) {
+						t.Fatal("the stretch's first record was never sealed")
+					}
+				}
+				setMode(t, dirs, "local")
+			}()
+			looked()
+			func() {
+				// No seeSoon reaches the writer while the next seal reads.
 				a.modes.mu.Lock()
 				defer a.modes.mu.Unlock()
 				if _, err := w.Write(runPresenceAt(time.Now())); err != nil {
 					t.Fatal(err)
 				}
-				sealNow(t, w, dirs.Ledger())
-				setMode(t, dirs, "local")
-			}()
-			for deadline := time.Now().Add(10 * time.Second); a.seeing.Load(); time.Sleep(5 * time.Millisecond) {
-				if time.Now().After(deadline) {
-					t.Fatal("modes never looked")
+				setMode(t, dirs, "online")
+				if row := sealNow(t, w, dirs.Ledger()); row.Online {
+					t.Error("a record written after config.toml went back to local-only was sealed online")
 				}
-			}
-			if _, err := w.Write(runPresenceAt(time.Now())); err != nil {
-				t.Fatal(err)
-			}
-			setMode(t, dirs, "online")
-			if row := sealNow(t, w, dirs.Ledger()); row.Online {
-				t.Error("a record written after config.toml went back to local-only was sealed online")
-			}
+			}()
 			// The seal's seeSoon keeps state.json, which the test's cleanup
 			// deletes.
-			for deadline := time.Now().Add(10 * time.Second); a.seeing.Load(); time.Sleep(5 * time.Millisecond) {
-				if time.Now().After(deadline) {
-					t.Fatal("modes never looked")
-				}
-			}
+			looked()
 		}},
 		{"a link the uploader had settled whose second isn't after the end state.json kept, as after a step back of the wall clock, ends the stretch where the agent finds it, by both clocks", func(t *testing.T) {
 			a, dirs := modesAgent(t, "online")
