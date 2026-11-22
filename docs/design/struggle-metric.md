@@ -20,7 +20,7 @@ Research docs are cited by short name and section:
 ## Summary
 
 - The unit is a human second, not agent time and not wall clock. Each second of a user's day is credited to at most one project, at a weight of 1, 0.5 or 0, with one reason code.
-- A second counts only when three things hold. A human act opened a window that covers it (a typed prompt, a permission answer, an interrupt, a typed edit, a typed command, a commit). The OS saw input recently enough to call the person present. Focus was on that project's terminal, editor or agent window, or on a short, bracketed lookup in between.
+- A second counts only when three things hold. A human act opened a window that covers it (a typed prompt, a permission answer, an interrupt, a typed edit, a typed command, a commit). The OS saw input recently enough to call the person present. Focus was on that project's terminal, editor or agent window, or on a short, bracketed lookup in between. Where the desktop doesn't say which window is in front, a second can still count, at evidence level C (2.5).
 - Reading the agent's output is credited from a per-session reading bucket. The agent's visible output fills it at 180 words a minute of prose and 8 lines a minute of diff. Present, focused seconds drain it. Watching a spinner adds nothing, and an hour of unread output can't be banked past 10 minutes.
 - Dark flow is handled by four deterministic rules that zero out credit: re-rolls (a third near-identical prompt with nothing changed in between), the agent rewriting the same lines a third time, the same error coming back a third time to a person who adds no reasoning, and runs of go-aheads sent faster than the output could be read. A separate progress rule halves credit after two hours with no progress of any kind, and gives it back when a commit, a passing test or a fixed error arrives.
 - Agent-only time is reported next to credited time and never credited. For agent-assisted windows the output also reports what Hackatime would have logged as `ai coding`, so a reviewer can see in one line whether pairtime credits more or less than the handbook's one third, and which minutes justify it.
@@ -69,7 +69,7 @@ Fields marked "local" never leave tier 0. Everything else may appear in tier 2 e
 | `shell.command` | `cmd_class` (`test`, `build`, `run`, `git`, `install`, `other`); `cmd_hash` (local); `exit_code`; `t_start`; `t_end`; `interactive`; `error_sig` | Shell hook or OSC 133/633 marks (v1.5); zsh `EXTENDED_HISTORY` and fish history timestamps for lookback (HS 13.2) |
 | `git.change` | `op` (`commit`, `amend`, `rebase`, `reset`, `checkout`, `merge`, `revert`, `push`, `stash`); `sha`; `parents[]`; `files_changed`; `insertions`; `deletions`; `actor` (`human`, `agent`, `unknown`); `agent_trailer` | `.git` watcher (`HEAD`, `index`, `logs/HEAD`) (CP 3.2); `actor = agent` when an `agent.tool` bash call ran the same git command within 2 s; trailers per HS 13.3 |
 | `os.presence` | `idle_any_s`; `idle_keys_s` (null where unavailable); `locked` | One sample every 15 s (CP 3.3). `idle_keys_s` comes from `CGEventSourceSecondsSinceLastEventType` with the key-down event type on macOS, the same permission-free call ActivityWatch makes with the any-input type (HS 13.4; that the key-down variant also needs no permission is to be verified on current macOS); on Windows and X11 it needs an opt-in key counter that records counts only (Raw Input, XI2); Wayland has none (HS 13.4) |
-| `os.focus` | `app_class` (`terminal`, `editor`, `agent_app`, `browser`, `chat_app`, `other`, `none`); `app_hash` (local); `hosted_sessions[]` (harness `session_key`s whose process runs under this window's process); `focus_project` | Event-driven foreground hooks (CP 3.3). Window titles are never read unless the user opts in |
+| `os.focus` | `app_class` (`terminal`, `editor`, `agent_app`, `browser`, `chat_app`, `other`, `none`, `unknown`); `app_hash` (local); `hosted_sessions[]` (harness `session_key`s whose process runs under this window's process); `focus_project`. `unknown` means the client can't tell which window is in front; such a record has no `app_hash`, `hosted_sessions` or `focus_project` (2.5) | Event-driven foreground hooks (CP 3.3), and on GNOME on Wayland pairtime's GNOME Shell extension, which reports the process of the window in front. Where no source answers (GNOME on Wayland without the extension, KDE and wlroots, an X11 window manager that doesn't keep `_NET_ACTIVE_WINDOW`, an X11 connection being re-made), one record with `unknown` each time focus turns unknown, ended by the next window report. Window titles are never read unless the user opts in |
 | `os.power` | `op` (`suspend`, `resume`, `lock`, `unlock`) | `PBT_APMSUSPEND`, IOKit sleep, logind `PrepareForSleep`, session lock notifications (CP 2.2) |
 | `otel.active_time` | `type` (`user`, `cli`); `seconds` | Claude Code `claude_code.active_time.total` (HS 3.3). Used as a calibration reference only, never as credit |
 | `cli.track` | `label` | AGENTS.md fallback. A self-declared claim from the model; never an anchor on its own (HS 11.3) |
@@ -135,7 +135,7 @@ Why these numbers, compared with Hackatime. Hackatime credits `min(gap, 120 s)` 
 | 7 | `human_pasted` | As rule 6, grace after submit included, but the plausibility test fails or `pasted_chars > 0`. The submit is still a human act. The typed length used for compose credit is cut to `min(typed_len_est, TYPING_MAX_CPS * active_input_s)` | as above |
 | 8 | `no_input` | None of the above. Not an anchor. Counted toward the reviewer flag `no_input_prompts` (grit's rule: at least 2 prompts and a quarter of all prompts) | |
 
-Declared flags (rules 1-5) catch honest automation, which is most of it, and they label it instead of calling it fraud (HS 12.1). They don't survive a determined cheater, who can drive the interactive TUI with `tmux send-keys` or an LLM-controlled terminal (HS 12.1). Rule 6 is what stops that: those tools write to the pty, not the OS input queue, so OS idle keeps rising and the prompt has no input before it (TP A3 T3). Rule 6 is weaker where only `input_any` exists (Windows and X11 without the opt-in key counter, all of Wayland), because a jiggler satisfies it. Section 5 marks those minutes `evidence = B`, and the Risks section comes back to this.
+Declared flags (rules 1-5) catch honest automation, which is most of it, and they label it instead of calling it fraud (HS 12.1). They don't survive a determined cheater, who can drive the interactive TUI with `tmux send-keys` or an LLM-controlled terminal (HS 12.1). Rule 6 is what stops that: those tools write to the pty, not the OS input queue, so OS idle keeps rising and the prompt has no input before it (TP A3 T3). Rule 6 is weaker where only `input_any` exists (Windows and X11 without the opt-in key counter, all of Wayland), because a jiggler satisfies it. Section 5 marks those minutes `evidence = B`, and the Risks section comes back to this. Where the client can't tell which window is in front (an `os.focus` with `app_class` `unknown`, 2.5), rule 6's focus test can't be applied and passes for every session, so a script typing into a terminal while the person uses another app passes too; every second it supports is evidence level C (2.5, 5.1).
 
 The grace after submit in rules 6 and 7 is for the key that sends the prompt. The hook binary stamps `t` when it starts (1.1), after that key's press, and the agent takes a presence sample for the hook a few milliseconds later. A sample only says when the last input before it came. If the key's release lands between the two, the sample dates the last input after `t` and hides the typing before it, so a typed prompt would score `no_input`. The release comes less than one key press after `t`, and nothing tells it apart from the typing. Nothing else takes the grace: rule 4's test before `session.start`, focus at submit, the plausibility test, presence, the typing part of a lead (2.3) and the other anchors' evidence tests read input as before. For a script driving the pty, the grace adds a quarter of a second to the 10 s in which a real key press would have to come.
 
@@ -220,6 +220,8 @@ Browsers and desktop chat apps are ambiguous: they might hold documentation or a
 
 Looking up documentation is a named activity in CUPS and one of Barke's exploration-mode validation strategies (PA 2.2), so it should count. For a web project the browser is also where the person checks the running app, and the 180 s cap under-credits long manual tests there; the v2 browser extension fixes that by classifying `localhost` and dev-server tabs as `testing` for the project. But the lookup rule is the easiest one to farm, which is why it needs anchors on both sides and has the shortest cap.
 
+**Focus unknown.** Where the client can't tell which window is in front, it records an `os.focus` with `app_class` `unknown` (1.2), and a slot that record holds longest gets `focus_class` `unknown` and no `focus_project`. Such a slot, and an act whose window in front is unknown, passes every focus test of sections 2 and 3 for every project: rule 6's window at submit (2.2), the focus in 2.3's evidence tests, where windows are realized, where buckets drain (2.4), the focus a returned run needs held through its silence, with an input slot of unknown focus counting as one where every session was in focus (2.1), and rule 1 of 3.3. Presence, input and every other test still apply. Where candidates of several projects want a second, 3.3's rules 2 to 6 choose among them, and buckets of different projects go to the project whose human anchor qualifying the drain (2.4) is nearest the second, the earlier anchor on a tie, then the lower `project_key`. Every second credited in such a slot is evidence level C with the label `focus_unknown`, and so is every second credited from an anchor that passed its focus test only this way (5.1). An uncredited second in such a slot takes 5.2's codes without `X.other_focus` and `X.ambiguous`, and the turn step reads every project's running turns. Such a slot is never a browser slot, so it holds no lookup, and where presence is unknown too, 2.8 applies instead. The level is C because pairtime can't tell project work there from a game or a video in the next window: a script typing into an agent's terminal while the person plays would pass every test that is left (2.2).
+
 ### 2.6 The agent running: waiting, watching, walking away
 
 Agent time is never credited as such. During a run, the human is in one of four states, and each is handled by the rules above:
@@ -239,20 +241,22 @@ For each second `τ` in the user's global timeline, on each device:
 
 ```text
 candidates = []
+# on(s, p): focus_project(s) == p, or focus_class(s) == unknown (2.5)
 for each anchor A whose lead or trail window contains τ:
     if τ is in the typing part of A's lead and input_keys(slot(τ)) == false:
         continue                                   # keyboard known, and silent (2.3)
-    if present(slot(τ)) in {yes, bridged, tail}            and focus_project(slot(τ)) == A.project
+    if present(slot(τ)) in {yes, bridged, tail}            and on(slot(τ), A.project)
        or present(slot(τ)) == returned and τ is in A's think part, inside the return credit (2.1):
         candidates += (A.project, A.reason, priority 1)
 for each session σ with b_σ > 0 and a human anchor in σ.project within READ_HORIZON_S of τ:
     if (present(slot(τ)) in {yes, bridged, tail}
         or present(slot(τ)) == returned and τ is in the reading part of the return credit)
-       and focus_project(slot(τ)) == σ.project:
+       and on(slot(τ), σ.project):
         candidates += (σ.project, SUP or READ, priority 2)
 if slot(τ) is in a qualifying lookup run for project p:
         candidates += (p, LOOKUP, priority 3)
 choose one candidate by the attribution order in 3.3; credit τ to it (draining b_σ if READ/SUP)
+level = C, label focus_unknown, if focus_class(slot(τ)) == unknown or the anchor passed its focus test only through unknown focus (2.5)
 weight = 0 if the anchor or turn is discounted (4.2), 0.5 under the no-progress cap (4.3), else 1
 ```
 
@@ -288,12 +292,13 @@ Agents don't get a share of the stream. Five agents running in five repos produc
 3. **Agent desktop app** (Claude desktop's Code tab, Copilot app): the `cwd` of the session it hosts, by the same process-tree walk.
 4. **Browser, chat app.** No project. Only the lookup rule (2.5) can credit these slots.
 5. **Other.** No project, never credited.
+6. **Unknown.** An `os.focus` with `app_class` `unknown`: the client can't tell which window is in front. The slot has no project; every project's windows and buckets may use it, at evidence level C (2.5).
 
 ### 3.3 When two candidates want the same second
 
 After 2.7 has collected candidates for a second, the second goes to one of them:
 
-1. Only candidates whose project equals the slot's `focus_project` survive, except lookups (resolved by their brackets) and returned slots (focus had to be on the anchor's project throughout the gap anyway).
+1. Only candidates whose project equals the slot's `focus_project` survive, except lookups (resolved by their brackets), returned slots (focus had to be on the anchor's project throughout the gap anyway) and slots whose focus is unknown, where every candidate survives and 2.5 says which project's bucket drains.
 2. Anchor windows beat the reading bucket, which beats lookups. Being in the middle of an act is better evidence than having output to read.
 3. Among anchor windows, the lead of the next anchor at or after the second wins over the trail of an earlier one. Time just before an act is preparation for it.
 4. Among buckets in the same project, the oldest entry drains first (FIFO across sessions).
@@ -465,9 +470,9 @@ Evidence levels:
 
 | Level | Meaning |
 |---|---|
-| `A` | Witnessed; present by OS input; anchors backed by keyboard input (`input_keys`) |
-| `B` | Witnessed; present by OS input; keyboard-specific input unavailable (`input_any` only) |
-| `C` | Backfilled, or presence `unknown` (lookback, 2.8) |
+| `A` | Witnessed; present by OS input; anchors backed by keyboard input (`input_keys`); focus known (2.5) |
+| `B` | Witnessed; present by OS input; keyboard-specific input unavailable (`input_any` only); focus known (2.5) |
+| `C` | Backfilled, presence `unknown` (lookback, 2.8), or focus unknown (2.5) |
 
 ### 5.2 Reason codes
 
@@ -548,7 +553,7 @@ Then the evidence, one line per claim:
 
 - **Crediting more than a third.** Every AI-assisted second pairtime credits has a human act within its window and OS presence behind it, or falls inside the bounded return credit of 2.1. The submission shows the counts that make that concrete: typed prompts, answers, permission decisions (with rejections called out), interrupts, hand edits, test runs per AI hour; the share of `ai_credited_s` at evidence level A and B; the share that is reading (`SUP` and `READ`), which is bounded by output size; and the progress events in the window. A reviewer who doubts a stretch opens its minutes. Fifteen typed prompts, fifteen permission decisions and five commits in three hours, each prompt followed by reading time that fits the length of the answer (6.1), is the kind of significant evidence the handbook asks for.
 - **Crediting less than a third.** `agent_only_s` and `idle_s` show the agent running while nobody was there; `X.automated` shows turns no human started; `excluded_loops_s` shows the loops. An agent left on `/goal` overnight has an `ai_ratio` near zero, and the flat third would have paid it a third of the night (6.4).
-- **Where the evidence is thin.** For level-C seconds (backfilled, or no presence data), pairtime recommends `min(credited, ai_logged / 3)` for that portion, so lookback can never beat the handbook rule without presence data behind it. Levels A and B are recommended as credited. Whether Quality and Integrity treat level B (no keyboard-specific signal) as "significant evidence" is their call (Open questions).
+- **Where the evidence is thin.** For level-C seconds (backfilled, no presence data, or focus unknown, 2.5), pairtime recommends `min(credited, ai_logged / 3)` for that portion, so lookback can never beat the handbook rule without presence data behind it. Levels A and B are recommended as credited. Whether Quality and Integrity treat level B (no keyboard-specific signal) as "significant evidence" is their call (Open questions).
 
 The submission's handbook text (SP 10.6) states the three numbers side by side, for example: "pairtime credited 5.9 h. Hackatime would log 9.1 h for this window, 7.4 h of it as AI coding, so the handbook's third allows at most 4.2 h. Of the 7.4 h of agent-assisted time pairtime credited 4.6 h (62%), backed by 212 typed prompts, 38 permission decisions and 9 interrupts; 97% of credited time was witnessed. Review link: …". The `Alternate Tracking Method` field gets the method summary, the review URL goes in `Additional Justification` (HC 3.7).
 
@@ -954,6 +959,7 @@ These change review priority, never credit (4.5). The values below are the publi
 8. **Goodhart.** The credit rule is public, so people will learn to keep the terminal focused, type longer prompts, or commit more often. Caps, the presence gate, private tier-2 flags and audits limit the gain; recaps that show what someone did, not a score to push up, limit the motive (PA 4.2, 4.4).
 9. **No calibration data, no accuracy claim.** If Hack Club can't share review data and the pilot can't recruit enough labeled sessions, every number here stays a guess, and R2 can't be shown to pass.
 10. **Lookback inflation.** Level-C hours are unverifiable by construction. If programs treat them like witnessed hours, the system inherits Hackatime's weaknesses. The handbook-third fallback in 5.4 exists for this, and it only works if programs keep the split visible.
+11. **Desktops that hide focus.** GNOME on Wayland, the default desktop of Ubuntu and Fedora, whose newest releases offer no GNOME on X11 session (to verify), says nothing about which window is in front without pairtime's GNOME extension, and KDE and wlroots compositors say nothing in v1. Their minutes are level C (2.5): on the teen's own dashboard, never in public totals, build days or boards, and in a submission only where a program opts in to level C, at the handbook third, which pays hand coding on such a desktop nothing (5.4; Open question 8). The extension brings GNOME back to level B, but nothing checks that its report is true: an edited or patched extension can name the terminal while a game has focus, as an X client can by writing `_NET_ACTIVE_WINDOW` on X11 (DESIGN 7.12).
 
 ## Open questions
 
@@ -966,7 +972,7 @@ Only Karim or Hack Club staff can answer these.
 5. **Can reviewers restore discounted time?** Ari only lets reviewers cut. If a reviewer decides a rewrite loop was legitimate tuning, can they add it back with a reason, or should pairtime's discounts become cuttable rows with the discounted seconds shown as captured? (Ari maintainers and Quality and Integrity.)
 6. **Calibration data.** Will Hack Club share Stardance's per-project submitted and approved hours, the approval rate over reviewed hours only, and the Hackatime heartbeats behind them, under what privacy terms? (Hack Club staff; 7.4.)
 7. **Who labels the pilot, and where does it run?** Can Hack Club reviewers label pilot sessions (paid or volunteer), and can the pilot be a pairtime-native YSWS with its own grants? (Karim and Hack Club staff; 7.5.)
-8. **Lookback hours.** Are level-C hours acceptable for YSWS at all, and is capping them at the handbook's third the right rule? (Hack Club staff; 2.8, 5.4.)
+8. **Level-C hours.** Are level-C hours acceptable for YSWS at all, and is capping them at the handbook's third the right rule? They come from lookback and side doors, and from desktops that hide which window is in front, whose minutes have witnessed presence behind them and might earn the handbook value of the same time, so that hand coding there isn't paid less than Hackatime pays it. (Hack Club staff; 2.5, 2.8, 5.4.)
 9. **One number or two?** Do programs want AI-assisted and hand-work hours reported separately, or a single credited total with the split as evidence? (Hack Club staff; PA 7 question 7.)
 10. **Caps.** Do the 12-hour daily cap, the 60-minute uncommitted cap and the two-hour no-progress half rate match what reviewers would do, or should they follow Stardance's 10 hours per devlog? (Hack Club staff.)
 11. **Remote and WSL setups.** Are SSH dev boxes, Codespaces and WSL in scope for v1? WSL needs the two-agent hand-off (CP 6.4), and SSH needs a server-side join of keyboard input on one device with prompts on another. (Karim.)
