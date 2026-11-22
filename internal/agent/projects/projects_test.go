@@ -289,8 +289,13 @@ func TestList(t *testing.T) {
 	off := func(label string) config.Config {
 		return config.Config{Projects: map[string]config.Project{chip8Key: {Name: label}}}
 	}
+	// The codes the server's last answer gave this computer's keys.
+	codes := map[string]string{chip8Key: "7c41e9", plantKey: "5be03d", folderKey: "d2a8f6"}
 	shows := func(names map[string]string) uploader.Names {
-		return uploader.Names{V: 1, Server: server, Device: device, Confirmed: names}
+		return uploader.Names{V: 1, Server: server, Device: device, Confirmed: names, Codes: codes}
+	}
+	hid := func(h uploader.HiddenName) uploader.Names {
+		return uploader.Names{V: 1, Server: server, Device: device, Codes: codes, Hidden: map[string]uploader.HiddenName{chip8Key: h}}
 	}
 	hiddenAt := time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC)
 	tests := []struct {
@@ -300,14 +305,14 @@ func TestList(t *testing.T) {
 		wantFound bool
 	}{
 		{
-			name:      "a project of the map is listed with its local name and code, its name off, and the local name as the label it would show",
-			in:        Input{Map: repos},
+			name:      "a project of the map is listed with its local name and the code the server gave it, its name off, and the local name as the label it would show",
+			in:        Input{Map: repos, Names: shows(nil), Server: server, Device: device},
 			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Off, Label: "chip8-emulator"},
 			wantFound: true,
 		},
 		{
 			name:      "a name off keeps the label config.toml kept as the one it would show",
-			in:        Input{Map: repos, Config: off("Chip-8")},
+			in:        Input{Map: repos, Config: off("Chip-8"), Names: shows(nil), Server: server, Device: device},
 			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Off, Label: "Chip-8"},
 			wantFound: true,
 		},
@@ -324,15 +329,15 @@ func TestList(t *testing.T) {
 			wantFound: true,
 		},
 		{
-			name:      "a name on while the computer isn't linked waits to be sent",
+			name:      "a name on while the computer isn't linked waits to be sent, and no code counts",
 			in:        Input{Map: repos, Config: on("Chip-8"), Names: shows(map[string]string{chip8Key: "Chip-8"})},
-			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Sending, Label: "Chip-8"},
+			want:      Project{Key: chip8Key, LocalName: "chip8-emulator", State: Sending, Label: "Chip-8"},
 			wantFound: true,
 		},
 		{
-			name:      "names another sign-in confirmed count for nothing",
+			name:      "the names and codes another sign-in was given count for nothing",
 			in:        Input{Map: repos, Config: on("Chip-8"), Names: shows(map[string]string{chip8Key: "Chip-8"}), Server: "https://other.example.org", Device: device},
-			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Sending, Label: "Chip-8"},
+			want:      Project{Key: chip8Key, LocalName: "chip8-emulator", State: Sending, Label: "Chip-8"},
 			wantFound: true,
 		},
 		{
@@ -342,35 +347,32 @@ func TestList(t *testing.T) {
 			wantFound: true,
 		},
 		{
-			name: "a name hidden on the dashboard is hidden, with when, and the label it showed",
-			in: Input{Map: repos, Config: off("Chip-8"), Server: server, Device: device,
-				Names: uploader.Names{V: 1, Server: server, Device: device, Hidden: map[string]uploader.HiddenName{chip8Key: {Label: "Chip-8", At: hiddenAt.UnixMilli()}}}},
+			name:      "a name hidden on the dashboard is hidden, with when, and the label it showed",
+			in:        Input{Map: repos, Config: off("Chip-8"), Server: server, Device: device, Names: hid(uploader.HiddenName{Label: "Chip-8", At: hiddenAt.UnixMilli()})},
 			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Hidden, Label: "Chip-8", HiddenAt: hiddenAt},
 			wantFound: true,
 		},
 		{
-			name: "a hidden name turned on again is being sent",
-			in: Input{Map: repos, Config: on("Chip-8"), Server: server, Device: device,
-				Names: uploader.Names{V: 1, Server: server, Device: device, Hidden: map[string]uploader.HiddenName{chip8Key: {Label: "Chip-8", At: hiddenAt.UnixMilli()}}}},
+			name:      "a hidden name turned on again is being sent",
+			in:        Input{Map: repos, Config: on("Chip-8"), Server: server, Device: device, Names: hid(uploader.HiddenName{Label: "Chip-8", At: hiddenAt.UnixMilli()})},
 			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Sending, Label: "Chip-8"},
 			wantFound: true,
 		},
 		{
-			name: "a hidden name config.toml couldn't be changed for is hidden, though config.toml still has it on",
-			in: Input{Map: repos, Config: on("Chip-8"), Server: server, Device: device,
-				Names: uploader.Names{V: 1, Server: server, Device: device, Hidden: map[string]uploader.HiddenName{chip8Key: {Label: "Chip-8", At: hiddenAt.UnixMilli(), Pending: true}}}},
+			name:      "a hidden name config.toml couldn't be changed for is hidden, though config.toml still has it on",
+			in:        Input{Map: repos, Config: on("Chip-8"), Server: server, Device: device, Names: hid(uploader.HiddenName{Label: "Chip-8", At: hiddenAt.UnixMilli(), Pending: true})},
 			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Hidden, Label: "Chip-8", HiddenAt: hiddenAt},
 			wantFound: true,
 		},
 		{
 			name:      "a project of the last 30 days that the map doesn't keep, as a plain folder, is listed without a local name or a label",
-			in:        Input{Days: []string{folderKey}},
+			in:        Input{Days: []string{folderKey}, Names: shows(nil), Server: server, Device: device},
 			want:      Project{Key: folderKey, Code: "d2a8f6", State: Off},
 			wantFound: true,
 		},
 		{
 			name:      "a project config.toml names is listed, so its name can be turned off",
-			in:        Input{Config: config.Config{Projects: map[string]config.Project{plantKey: {Name: "plant-sensor", Online: true}}}},
+			in:        Input{Config: config.Config{Projects: map[string]config.Project{plantKey: {Name: "plant-sensor", Online: true}}}, Names: shows(nil), Server: server, Device: device},
 			want:      Project{Key: plantKey, Code: "5be03d", State: Sending, Label: "plant-sensor"},
 			wantFound: true,
 		},
@@ -381,10 +383,23 @@ func TestList(t *testing.T) {
 			wantFound: true,
 		},
 		{
-			name: "a code is long enough to tell keys apart, old keys of the map's projects included",
-			in: Input{Map: git.ProjectMap{Repos: []git.RepoProject{{CommonDir: filepath.Join("/a", "chip8-emulator", ".git"), Key: chip8Key, Kind: git.KindRepo,
-				Aliases: []string{"g7c41e9b2d05b8f63e1a94c7d2b6f0e85"}}}}},
+			name: "a project's code is the one the server gave its key, a longer one too, never one worked out here",
+			in: Input{Map: repos, Server: server, Device: device,
+				Names: uploader.Names{V: 1, Server: server, Device: device, Codes: map[string]string{chip8Key: "7c41e9a"}}},
 			want:      Project{Key: chip8Key, Code: "7c41e9a", LocalName: "chip8-emulator", State: Off, Label: "chip8-emulator"},
+			wantFound: true,
+		},
+		{
+			name: "a project the server gave no code, as one it has no minutes of yet, has none",
+			in: Input{Map: repos, Days: []string{folderKey}, Server: server, Device: device,
+				Names: uploader.Names{V: 1, Server: server, Device: device, Codes: map[string]string{plantKey: "5be03d"}}},
+			want:      Project{Key: folderKey, State: Off},
+			wantFound: true,
+		},
+		{
+			name:      "a computer that never read its codes has none",
+			in:        Input{Map: repos, Server: server, Device: device},
+			want:      Project{Key: chip8Key, LocalName: "chip8-emulator", State: Off, Label: "chip8-emulator"},
 			wantFound: true,
 		},
 	}
@@ -402,33 +417,65 @@ func TestList(t *testing.T) {
 	}
 }
 
+func TestTitle(t *testing.T) {
+	tests := []struct {
+		name string
+		p    Project
+		want string
+	}{
+		{name: "a project with a local name is called by it", p: Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator"}, want: "chip8-emulator"},
+		{name: "one without is called by the server's code, as the dashboard calls it", p: Project{Key: folderKey, Code: "d2a8f6"}, want: "Project d2a8f6"},
+		{name: "one without a code either is called by its key", p: Project{Key: folderKey}, want: folderKey},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.p.Title(); got != tt.want {
+				t.Errorf("Title() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestListOrder(t *testing.T) {
 	m := git.ProjectMap{Repos: []git.RepoProject{
 		{CommonDir: filepath.Join("/a", "zebra", ".git"), Key: chip8Key},
 		{CommonDir: filepath.Join("/a", "Apple", ".git"), Key: plantKey},
 	}}
-	list := List(Input{Map: m, Days: []string{folderKey, "p_bad key"}})
-	var titles []string
-	for _, p := range list {
-		titles = append(titles, p.Title())
+	titles := func(in Input) []string {
+		var out []string
+		for _, p := range List(in) {
+			out = append(out, p.Title())
+		}
+		return out
 	}
+	coded := uploader.Names{V: 1, Server: server, Device: device, Codes: map[string]string{folderKey: "d2a8f6"}}
 	tests := []struct {
 		name string
-		ok   bool
+		got  []string
+		want []string
 	}{
-		{name: "projects come in the order of their titles, in either case, a code's title among them", ok: slices.Equal(titles, []string{"Apple", "Project d2a8f6", "zebra"})},
+		{
+			name: "projects come in the order of their titles, in either case, a code's title among them",
+			got:  titles(Input{Map: m, Days: []string{folderKey, "p_bad key"}, Names: coded, Server: server, Device: device}),
+			want: []string{"Apple", "Project d2a8f6", "zebra"},
+		},
+		{
+			name: "a project without a code comes by its key",
+			got:  titles(Input{Map: m, Days: []string{folderKey, "p_bad key"}}),
+			want: []string{"Apple", folderKey, "zebra"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if !tt.ok {
-				t.Errorf("titles %q", titles)
+			if !slices.Equal(tt.got, tt.want) {
+				t.Errorf("titles %q, want %q", tt.got, tt.want)
 			}
 		})
 	}
 }
 
 func TestFind(t *testing.T) {
-	list := []Project{{Key: chip8Key, Code: "7c41e9"}, {Key: "p_Plant", Code: "p_Plan"}, {Key: "p_plant", Code: "p_plan"}}
+	list := []Project{{Key: chip8Key, Code: "7c41e9"}, {Key: "p_Plant", Code: "p_Plan"}, {Key: "p_plant", Code: "p_plan"}, {Key: folderKey}}
 	tests := []struct {
 		name, arg string
 		want      string // the key found, "" for none
@@ -441,6 +488,9 @@ func TestFind(t *testing.T) {
 		{name: "a code in other case that two projects match finds none", arg: "P_PLAN", want: ""},
 		{name: "an exact code wins over another case", arg: "p_plan", want: "p_plant"},
 		{name: "a code no project has finds none", arg: "abcdef", want: ""},
+		{name: "a project without a code isn't found by what a code cut from its key would be", arg: "d2a8f6", want: ""},
+		{name: "nor by the dashboard's words for it", arg: "Project d2a8f6", want: ""},
+		{name: "but its whole key finds it", arg: folderKey, want: folderKey},
 		{name: "nothing finds nothing", arg: "Project ", want: ""},
 	}
 	for _, tt := range tests {
