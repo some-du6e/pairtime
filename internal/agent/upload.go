@@ -334,13 +334,17 @@ func (a *agent) seeSoon() {
 		}
 		changed := a.seeLocked(a.online())
 		changed = a.unseenLinkLocked() || changed
-		if !changed {
+		switch {
+		case changed:
+			a.keepLocked()
+		case a.linkedSeen.Load() == a.modes.linked:
 			// Nothing for the writer: a Seen it has already would only ask
 			// for a seal, whose Online, as while account.json can't be read,
 			// would ask again.
 			return
 		}
-		a.keepLocked()
+		// What modes saw, and a link it took in whose stretch's end the
+		// writer may not have yet.
 		w.NoteSeenThen(a.seenNowLocked(), a.seenLinkLocked)
 	}()
 }
