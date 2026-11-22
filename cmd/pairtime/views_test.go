@@ -1480,6 +1480,7 @@ func TestTodayFocusUnknown(t *testing.T) {
 	stops := text.Phrase(text.KeyFocusUnknown)
 	counts := text.Phrase(text.KeyFocusUnknownLevelC)
 	login := text.Phrase(text.KeyGnomeNeedsLogin)
+	unticked := text.Phrase(text.KeyGnomeUnticked)
 	// status answers AskStatus with signals whose focus is focus, plus the
 	// extra members of GET /v1/status's signals in extra.
 	status := func(focus doctor.Signal, extra map[string]any) func(q string) (json.RawMessage, error) {
@@ -1499,6 +1500,8 @@ func TestTodayFocusUnknown(t *testing.T) {
 	unknown := doctor.Signal{Unknown: "Wayland gives other programs no focus signal"}
 	tracked := dayFile{Date: "2026-11-24", Zone: "UTC", Start: time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC),
 		End: time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC), Projects: mixedDay.Projects}
+	yesterday := tracked
+	yesterday.Date, yesterday.Start, yesterday.End = "2026-11-23", tracked.Start.AddDate(0, 0, -1), tracked.Start
 	cases := []struct {
 		name   string
 		answer func(q string) (json.RawMessage, error)
@@ -1515,11 +1518,15 @@ func TestTodayFocusUnknown(t *testing.T) {
 			status(unknown, map[string]any{"focus_level_c": true}), []dayFile{tracked}, []string{"today"}, counts, []string{ipc.AskStatus}},
 		{"on GNOME before the next login, the line that turns the extension on follows",
 			status(unknown, map[string]any{"gnome_extension": "needs_login"}), []dayFile{tracked}, []string{"today"}, stops + "\n" + login, []string{ipc.AskStatus}},
+		{"on GNOME with the extension unticked at install, the line that brings it back follows",
+			status(unknown, map[string]any{"gnome_extension": "unticked"}), []dayFile{tracked}, []string{"today"}, stops + "\n" + unticked, []string{ipc.AskStatus}},
 		{"while the agent sees the window in front, today says nothing about focus",
 			status(doctor.Signal{Via: "_NET_ACTIVE_WINDOW"}, nil), []dayFile{tracked}, []string{"today"}, "", []string{ipc.AskStatus}},
 		{"an agent that can't answer status, as one older than it, leaves the sentence out and today still works",
 			func(string) (json.RawMessage, error) { return nil, ipc.ErrUnknownQuestion }, []dayFile{tracked}, []string{"today"}, "", []string{ipc.AskStatus}},
 		{"another day, asked for with --date, never asks the agent, since the sentence is about now",
+			status(unknown, nil), []dayFile{tracked, yesterday}, []string{"today", "--date", "2026-11-23"}, "", nil},
+		{"a day asked for by --date, even today's own, is shown by its date as its empty-day words are, and asks nothing",
 			status(unknown, nil), []dayFile{tracked}, []string{"today", "--date", "2026-11-24"}, "", nil},
 		{"--json keeps to its schema and asks nothing",
 			status(unknown, nil), []dayFile{tracked}, []string{"today", "--json"}, "", nil},
@@ -1545,7 +1552,8 @@ func TestTodayFocusUnknown(t *testing.T) {
 		})
 	}
 	t.Run("the words are DESIGN 5.9's teen-facing sentence, the first clause alone until WP-SC8 makes the rest true", func(t *testing.T) {
-		if stops != "This desktop doesn't tell pairtime which window is in front." || !strings.HasPrefix(counts, strings.TrimSuffix(stops, ".")+", so your time here counts only on your own dashboard") {
+		const whole = "This desktop doesn't tell pairtime which window is in front, so your time here counts only on your own dashboard, not on your profile, build days or most programs."
+		if stops != "This desktop doesn't tell pairtime which window is in front." || counts != whole {
 			t.Errorf("sentence %q, and with level C %q", stops, counts)
 		}
 	})

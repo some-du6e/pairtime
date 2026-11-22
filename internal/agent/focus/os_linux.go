@@ -30,7 +30,8 @@ const linuxVia = "_NET_ACTIVE_WINDOW"
 // manager's _NET_ACTIVE_WINDOW, and the process table from /proc.
 //
 // Where focus can't be read, the component records an os.focus with
-// app_class unknown, whose slots credit at level C (SM 2.5). On Wayland,
+// app_class unknown, whose slots SM 2.5 credits at level C (pkg/score does
+// from WP-SC8; until then it credits them nothing). On Wayland,
 // which tells other programs nothing about focus without pairtime's GNOME
 // Shell extension (WP-OS14), and with no graphical session, d has no Focus
 // channel, so focus is unknown from the start and d's Status says why. On

@@ -23,8 +23,8 @@
 //
 // A signal the desktop doesn't give is reported as unknown, with the reason
 // in Status, and never guessed. Where focus is unknown, the agent records
-// an os.focus with app_class unknown, whose slots credit at level C (SM
-// 2.5); the Focus channel says each time focus turns unknown, and its next
+// an os.focus with app_class unknown, whose slots SM 2.5 credits at level
+// C; the Focus channel says each time focus turns unknown, and its next
 // window report says it is known again (Desktop.Focus). On Wayland the X11
 // calls would only see XWayland's own clients, so they aren't used there
 // even when DISPLAY is set.
