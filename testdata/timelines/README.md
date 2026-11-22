@@ -10,7 +10,7 @@ These files are oracle paths (docs/PLAN.md, ground rule 5). A PR that changes a 
 | [6.4](6.4/) | 6.4 | A `/goal` agent running unattended overnight: Claude Code on Linux X11 with the key counter, level A | 810 s; agent 23,400 s, 23,180 s of it agent-only | [prompt lengths](../../docs/errata/2026-11-19-sm-6.4-prompt-lengths.md) |
 | [6.6](6.6/) | 6.6 | A scripted `claude -p` loop with a mouse jiggler on Windows 10 | 0 s | [uncredited codes](../../docs/errata/2026-11-19-sm-6.6-uncredited-codes.md) |
 
-WP-FX2 adds 6.3, its two-tab variant, 6.5 and SM 4.2's alternation case; WP-FX3 adds 6.1; WP-FX4 adds `sidedoor/`.
+WP-FX2 adds 6.3, its two-tab variant, 6.5 and SM 4.2's alternation case; WP-FX3 adds 6.1; WP-FX4 adds `sidedoor/`. WP-AD3 adds [`copies`](copies/): a prompt and a queued message that a hook and the transcript reader both recorded, which pins SM 2.2's rules 1 to 3 over every copy of a prompt and SM 2.3's one Q anchor for a queued message's two copies.
 
 ## A fixture directory
 
@@ -66,7 +66,7 @@ A scorer test feeds every event to the scorer, takes the buckets for minutes ins
 
 ### `anchors.json`
 
-`anchors` lists the human acts in time order: the event behind each (`event_id`, `t`, `project_key`, `via`), its kind (SM 2.3), its origin and prompt class for prompts (SM 2.2), `lead_s` and `trail_s`, and `level` (SM 5.1, DESIGN 6.4). `lead_from` is `sm` when SM states the lead and `params` when it comes from SM 2.3's table and SM 8's parameters. `turns` lists every turn: session, `turn_key`, submit and stop times, and the origin and class SM gives.
+`anchors` lists the human acts in time order: the event behind each (`event_id`, `t`, `project_key`, `via`), its kind (SM 2.3), its origin and prompt class for prompts and queued messages (SM 2.2), `lead_s` and `trail_s`, and `level` (SM 5.1, DESIGN 6.4). `lead_from` is `sm` when SM states the lead and `params` when it comes from SM 2.3's table and SM 8's parameters. `turns` lists every turn: session, `turn_key`, submit and stop times, and the origin and class SM gives.
 
 ### `prompts.json`
 

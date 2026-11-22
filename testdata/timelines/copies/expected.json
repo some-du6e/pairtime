@@ -1,0 +1,192 @@
+{
+  "fixture": "copies",
+  "title": "Hook and transcript copies of a typed prompt, a queued message and a scheduled prompt",
+  "sm": "docs/design/struggle-metric.md 2.2 and 2.3",
+  "date": "2026-11-25",
+  "timezone": "America/Chicago",
+  "utc_offset": "-06:00",
+  "os": "macos",
+  "input_keys": true,
+  "evidence": "A",
+  "witness": "witnessed",
+  "device": "d_9d8f66705418",
+  "projects": {"p_dc19a7d5b709": "flashcards"},
+  "window": {"start": "2026-11-25T22:20:00Z", "end": "2026-11-25T22:30:00Z", "local": "16:20-16:30"},
+  "rows": [
+    {
+      "start": "2026-11-25T22:20:00Z",
+      "minutes": 1,
+      "local": "16:20",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_dc19a7d5b709": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3, substantive prompt: P1's think part",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T22:21:00Z",
+      "minutes": 1,
+      "local": "16:21",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_dc19a7d5b709": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3, substantive prompt: P1's think part",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T22:22:00Z",
+      "minutes": 1,
+      "local": "16:22",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_dc19a7d5b709": {"P": 40, "Q": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 20,
+      "sm": "2.3, substantive prompt and queued message",
+      "note": "P1's typing part to 16:22:40, then the queued message's lead, its think part to 16:22:45 and its typing part after, since its lead is the next anchor's (SM 3.3 rule 3) and beats P1's bucket (rule 2).",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T22:23:00Z",
+      "minutes": 1,
+      "local": "16:23",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_dc19a7d5b709": {"Q": 5, "SUP": 35, "READ": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 40,
+      "sm": "2.3, queued message; 2.4",
+      "note": "The queued message's typing part to 16:23:05, the hook copy's time. The transcript copy 25 ms later is the same message and opens no window of its own. Then P1's bucket while P1 runs, reset to its base at 16:23:10, when the agent takes the message up, and READ after P1's stop at 16:23:40.",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T22:24:00Z",
+      "minutes": 1,
+      "local": "16:24",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_dc19a7d5b709": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T22:25:00Z",
+      "minutes": 1,
+      "local": "16:25",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_dc19a7d5b709": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T22:26:00Z",
+      "minutes": 1,
+      "local": "16:26",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_dc19a7d5b709": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4",
+      "note": "The bucket runs dry at 16:27:00.",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T22:27:00Z",
+      "minutes": 1,
+      "local": "16:27",
+      "bucket": false,
+      "codes": ["X.no_anchor"],
+      "sm": "2.2, rule 1, and 5.1",
+      "note": "He is at the keyboard and focused on the terminal, typing from 16:27:50, but no window covers the minute and the bucket is empty. Nothing is credited and no agent runs, so the minute has no bucket (SM 5.1). Read from its hook copy alone, P2 would be human_typed, and its 154 s lead would credit this minute.",
+      "derived": ["bucket"]
+    },
+    {
+      "start": "2026-11-25T22:28:00Z",
+      "minutes": 1,
+      "local": "16:28",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 45,
+      "credit": {
+        "p_dc19a7d5b709": {"SUP": 45}
+      },
+      "uncredited": {"X.automated": 15},
+      "agent_running_s": 60,
+      "sm": "2.2, rule 1; 2.4",
+      "note": "P2 is scheduled, so it opens no anchor, adds no base and resets nothing. Its own output fills the bucket, and the queued message, within READ_HORIZON_S, lets it drain as SUP from 16:28:05 to 16:28:15 and from 16:28:25. The 15 s with the bucket empty are X.automated by the uncredited-codes erratum's rule, which pkg/score applies.",
+      "derived": ["credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-19-sm-6.6-uncredited-codes"
+    },
+    {
+      "start": "2026-11-25T22:29:00Z",
+      "minutes": 1,
+      "local": "16:29",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_dc19a7d5b709": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4",
+      "note": "P2's answer and the rest of its edit, 145 s, read from P2's stop.",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    }
+  ],
+  "totals": {
+    "credited_s": 525,
+    "credited_by_project": {"p_dc19a7d5b709": 525},
+    "credited_by_reason": {"P": 160, "Q": 25, "SUP": 80, "READ": 260},
+    "uncredited": {"X.automated": 15},
+    "agent_running_s": 120,
+    "agent_only_s": 15,
+    "level_a_s": 525
+  },
+  "stated": [],
+  "approx": {},
+  "errata": [
+    "2026-11-20-claude-code-transcript-labels",
+    "2026-11-20-claude-code-queued-turn",
+    "2026-11-19-sm-6.6-uncredited-codes"
+  ],
+  "notes": [
+    "A derived fixture. SM states no rows for it, so every row follows from SM's rules applied to this timeline, with pkg/score's readings where SM leaves a choice (README.md).",
+    "SM 2.2 rules 1 to 3 read every copy of a prompt that came through a hook or a log reader (E-cc-transcript-labels). P2's hook copy declares nothing and its transcript copy declares cron, so P2 is scheduled and opens no anchor, though he types in the 10 s before it on the terminal that hosts the session.",
+    "A hook's and a transcript's agent.queue of one message, in one turn and within TRACK_LOG_MATCH_S, are one queued message (E-cc-queued-turn), with one Q anchor, the hook's, corroborated, and one reset of the bucket.",
+    "Each lead is 120 s plus the typing time. P1's 60 characters give 160 s and the queued message's 30 give 140 s.",
+    "The bucket holds 85 s when the records end at 16:30:00, P2's 145 s less the 60 s read in 16:29.",
+    "Row 16:28 names the 6.6 uncredited-codes erratum, whose rule makes the uncredited seconds of a turn that automation started X.automated. SM 5.2 alone doesn't say whether they are X.automated or X.agent_only."
+  ]
+}

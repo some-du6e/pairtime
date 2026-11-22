@@ -181,9 +181,10 @@ type actKey struct {
 	sess     string
 	key      string
 	from, to int64
-	// n tells apart two queued messages of one turn and millisecond that
-	// one code path reported.
-	n int
+	// chars is a queued message's len_chars, which its copies share, and n
+	// tells apart two queued messages of one turn, length and millisecond
+	// that one code path reported.
+	chars, n int
 }
 
 // eventAnchors makes anchors of the human acts other than prompts (SM 2.3):
@@ -204,16 +205,16 @@ func (d *deriver) eventAnchors() {
 	perms := map[string][]actKey{}
 	// queues holds each session's queued-message groups. A hook and a log
 	// reader report a queued message apart, the hook as the person queues
-	// it and the transcript's enqueue a few milliseconds later: a record of
-	// the same turn within TRACK_LOG_MATCH_S of a group, through a code
-	// path the group has no record from, is that message (E-cc-queued-turn).
-	// So two messages one hook reported stay two.
+	// it and the transcript's enqueue a few milliseconds later: a log
+	// reader's record and another path's, of the same turn and len_chars
+	// within TRACK_LOG_MATCH_S, are that message, paired one to one, oldest
+	// first (E-cc-queued-turn). So two messages one hook reported stay two.
 	queues := map[string][]actKey{}
 	for i, e := range d.recs {
 		var k actKey
 		switch p := e.Data.(type) {
 		case *event.AgentQueue:
-			k = actKey{kind: event.KindAgentQueue, sess: e.SessionKey, key: p.TurnKey, from: e.T}
+			k = actKey{kind: event.KindAgentQueue, sess: e.SessionKey, key: p.TurnKey, from: e.T, chars: p.LenChars}
 		case *event.AgentPermission:
 			k = actKey{kind: event.KindAgentPermission, sess: e.SessionKey, from: p.RequestedAt, to: p.AnsweredAt}
 		case *event.AgentInterrupt:
@@ -241,7 +242,8 @@ func (d *deriver) eventAnchors() {
 		if k.kind == event.KindAgentQueue {
 			matched := false
 			for _, g := range queues[k.sess] {
-				if g.key == k.key && absDiff(g.from, k.from) <= d.r.trackLogMatch && !d.hasVia(groups[g], e.Via) {
+				if g.key == k.key && g.chars == k.chars && absDiff(g.from, k.from) <= d.r.trackLogMatch &&
+					!d.hasVia(groups[g], e.Via) && (e.Via == event.ViaLog || d.hasVia(groups[g], event.ViaLog)) {
 					k, matched = g, true
 					break
 				}
