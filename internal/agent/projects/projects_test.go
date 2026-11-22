@@ -71,6 +71,10 @@ func gitRun(t *testing.T, env []string, dir string, args ...string) {
 func gitSetup(t *testing.T) []string {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
+		if os.Getenv("GITHUB_ACTIONS") == "true" {
+			// A skip there would pass without checking the worktree rule.
+			t.Fatal("git isn't on the runner's PATH")
+		}
 		t.Skip("git isn't installed")
 	}
 	home := t.TempDir()
