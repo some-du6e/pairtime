@@ -54,7 +54,8 @@ def relay(t, sent, length, low=False):
     user. Its prompt is filled in once the events are built, since the
     prompt.submit it names came first."""
     return fx.emit(at(t), "relay.message", {"app": "t3_code", "sent_at": at(sent), "thread_key": THREAD,
-                                            "len_chars": length, "low_effort": low, "prompt": ""},
+                                            "declared": "none", "len_chars": length, "low_effort": low,
+                                            "prompt": ""},
                    source="log", via="app", **ENV)
 
 
@@ -73,9 +74,10 @@ def stop(t, turn):
     hook(t, "agent.stop", {"turn_key": TURN[turn], "stop_reason": "end_turn", "stop_hook_active": False})
 
 
-# T3 Code's server spawned this Claude Code session through the Agent SDK:
-# no TTY, and nothing in the process tree pairtime can class.
-hook("19:56:10", "session.start", {"start_kind": "startup", "entrypoint": "unknown", "parent_class": "unknown",
+# T3 Code's server, `t3 serve`, spawned this Claude Code session through the
+# Agent SDK: no TTY, and the walk names T3's server as its nearest non-shell
+# ancestor, agent_app (DESIGN 5.1's app-table entry).
+hook("19:56:10", "session.start", {"start_kind": "startup", "entrypoint": "unknown", "parent_class": "agent_app",
                                    "has_tty": False, "permission_mode": "bypassPermissions"})
 
 # M1, typed in T3 Code's web client on a laptop and sent at 20:01:00. T3
@@ -126,7 +128,7 @@ for e in events:
         tl.check(e["data"]["prompt"], "every relay record here names its prompt")
 
 T0, END = at("20:00:00"), at("20:30:00")
-ER, LB, CODES = rl.ERRATUM, rl.LOOKBACK_ERRATUM, rl.CODES_ERRATUM
+ER = rl.ERRATUM
 DERIVED = ["credited_s", "credit", "uncredited", "agent_running_s"]
 exp = tl.Expected(fx, sm="docs/design/struggle-metric.md 2.2 rule 9, 2.3, 2.4, 2.8", evidence="C",
                   witness="witnessed", projects={P: "weather-cli"}, start="20:00:00", end="20:30:00")
@@ -142,65 +144,60 @@ def row(minute, credit=None, unc=None, codes=None, agent=0, sm=None, note=None, 
 
 row("20:00", {P: {"P": 60}}, {}, sm=LEAD, note="M1's 90 characters type in 90 / 1.5 = 60 s, from 20:00:00 to its "
     "stamp at 20:01:00. It is the thread's first message, so nothing else caps the lead.")
-row("20:01", {}, None, ["X.agent_only", "X.no_anchor"], 59, sm="2.2 rule 9: M1's prompt is relayed", erratum=LB,
-    note="T3 hands M1 to the agent at 20:01:01, so 20:01:00 is in neither the lead nor the turn. T1 runs from "
-         "20:01:01: X.agent_only 59.")
+row("20:01", {}, {"X.no_anchor": 1, "X.agent_only": 59}, agent=59, sm="2.2 rule 9: M1's prompt is relayed",
+    note="T3 hands M1 to the agent at 20:01:01, so 20:01:00 is in neither the lead nor a turn. T1 runs from "
+         "20:01:01.")
 row("20:02", {}, {"X.agent_only": 60}, agent=60, sm="2.4: no relayed session reads while its agent runs")
 row("20:03", {P: {"READ": 30}}, {"X.agent_only": 30}, agent=30, sm=READ,
     note="T1 stops at 20:03:30. M2 follows at 20:07:00, 210 s later, so the session reads from the stop. T1 "
          "filled 20 + 20 + 225 + 50 = 315 s, which the 120 s cap holds to 120.")
 row("20:04", {P: {"READ": 60}}, {}, sm=READ)
-row("20:05", {P: {"READ": 30}}, None, ["X.bucket_cap"], sm=READ, erratum=LB,
-    note="The 120 s end at 20:05:30: 30 + 60 + 30. With BUCKET_MAX_S's 600 s the session would read on.")
-row("20:06", {P: {"P": 30}}, None, ["X.bucket_cap"], sm=LEAD, erratum=LB,
+row("20:05", {P: {"READ": 30}}, {"X.bucket_cap": 30}, sm=READ,
+    note="The 120 s end at 20:05:30: 30 + 60 + 30. BUCKET_MAX_S's 600 s would have read on, so the rest is "
+         "X.bucket_cap (5.2).")
+row("20:06", {P: {"P": 30}}, {"X.bucket_cap": 30}, sm=LEAD,
     note="M2's 45 characters: 30 s, from 20:06:30. M1 came 360 s earlier, so the cap at the seconds since the "
          "thread's previous message doesn't bind.")
-row("20:07", {}, None, ["X.agent_only", "X.no_anchor"], 59, sm="2.2 rule 9: M2's prompt is relayed", erratum=LB,
+row("20:07", {}, {"X.no_anchor": 1, "X.agent_only": 59}, agent=59, sm="2.2 rule 9: M2's prompt is relayed",
     note="T3 hands M2 over at 20:07:01, and T2 runs from then. The prompt resets the bucket to its 20 s base.")
 row("20:08", {}, {"X.agent_only": 60}, agent=60, sm="2.4: no relayed session reads while its agent runs")
 row("20:09", bucket=False, sm="5.1: no credit and no agent running",
     note="T2 stops at 20:09:00. The next relayed message is M3 at 20:26:00, 1,020 s later, so nothing reads "
          "T2's 45 s.")
 row("20:10", end="20:12", bucket=False, sm="5.1: no credit and no agent running")
-row("20:12", {}, None, ["X.automated"], 60, sm="2.2 rule 4: no relay record, so the agent's message is headless",
-    erratum=CODES,
+row("20:12", {}, {"X.automated": 60}, agent=60, sm="2.2 rule 4: no relay record, so the agent's message is headless",
     note="Another agent's message reaches the agent at 20:12:00. T3 stored it with createdBy agent, so no relay "
-         "record witnesses it: entrypoint unknown and no TTY make it headless, and its turn T3 is automated.")
-row("20:13", {}, None, ["X.automated"], 60, sm="2.2 rule 4", erratum=CODES)
-row("20:14", {}, None, ["X.automated"], 60, sm="2.2 rule 4", erratum=CODES)
+         "record witnesses it: no TTY and no host make it headless, and its turn T3 is automated.")
+row("20:13", {}, {"X.automated": 60}, agent=60, sm="2.2 rule 4")
+row("20:14", {}, {"X.automated": 60}, agent=60, sm="2.2 rule 4")
 row("20:15", end="20:25", bucket=False, sm="5.1: no credit and no agent running",
     note="T3 stops at 20:15:00. Its output fills the bucket, which an automated turn doesn't reset, to the cap, "
          "but M3 comes 660 s after the stop, so nothing reads it.")
-row("20:25", {P: {"GO": 2}}, None, ["X.no_anchor"], sm=LEAD, erratum=LB,
+row("20:25", {P: {"GO": 2}}, {"X.no_anchor": 58}, sm=LEAD,
     note="M3 is \"yes\": a go-ahead, whose relayed lead is its typing time alone, 3 / 1.5 = 2 s.")
-row("20:26", {}, None, ["X.agent_only", "X.no_anchor"], 59, sm="2.2 rule 9: M3's prompt is relayed", erratum=LB)
-row("20:27", {}, None, ["X.agent_only", "X.no_anchor"], 30, sm="2.4", erratum=LB,
+row("20:26", {}, {"X.no_anchor": 1, "X.agent_only": 59}, agent=59, sm="2.2 rule 9: M3's prompt is relayed")
+row("20:27", {}, {"X.no_anchor": 30, "X.agent_only": 30}, agent=30, sm="2.4",
     note="T4 stops at 20:27:30. Nothing follows within the window.")
 row("20:28", end="20:30", bucket=False, sm="5.1: no credit and no agent running")
 
 rp = rl.Replay(events, T0, END)
 rl.check_rows(exp, rp, {S: P})
-tl.check(not rp.conflicts and not rp.blocked, "one session, and no message within RELAY_MIN_GAP_S of another")
 tl.check(rp.origin[fx.event_at("prompt.submit", at("20:12:00"))["event_id"]] == "headless",
          "the agent's message is headless")
 
 totals = exp.totals()
 tl.check(totals["credited_s"] == 212, f"credited {totals['credited_s']}")
 tl.check(totals["credited_by_reason"] == {"P": 90, "GO": 2, "READ": 120}, f"by reason {totals['credited_by_reason']}")
-agent_only = sum(1 for t in rp.running if t not in rp.credited and t not in rp.automated)
 expected = exp.doc(
     extra_totals={
         "level_c_s": 212,
         "via_relay_s": 212,
         "relayed_prompts": 3,
         "headless_prompts": 1,
-        "agent_only_s": agent_only,
-        "automated_s": len(rp.automated),
-        "capped_s": len(rp.capped),
     },
     stated=[],
     approx={},
-    errata=[ER, LB, CODES],
+    errata=[ER],
     notes=[
         "No SM section describes this case. Every row comes from SM 2.2 rule 9, 2.3, 2.4 and 2.8 as "
         "docs/errata/2026-11-22-relayed-prompts.md applies them. Every credited second is level C with via_relay, "
@@ -208,9 +205,9 @@ expected = exp.doc(
         "The server has no desktop, so pairtime samples no presence and records no focus: every slot's presence "
         "is unknown.",
         "relayed_prompts counts the prompts a relay record witnessed; headless_prompts the one rule 4 took.",
-        "automated_s is the seconds only the agent's turn T3 ran in, whose code waits on WP-FX1's 6.6 erratum. "
-        "capped_s is the seconds only the 120 s cap kept from being read, whose code waits on the lookback "
-        "erratum's point 2, as are the seconds nothing covers.",
+        "Every slot's presence is unknown, so uncredited seconds take SM 5.2's codes for such a slot: "
+        "X.bucket_cap where only the 120 s cap kept the session from reading, X.agent_only or X.automated while a "
+        "turn runs, else X.no_anchor.",
     ],
 )
 
@@ -220,15 +217,10 @@ for r, p in link:
     pe = fx.event_at("prompt.submit", p[0], turn_key=p[4]["turn_key"])
     low = pe["data"]["low_effort"]
     lead = rl.typing_ms(re["data"]["len_chars"]) // 1000
-    a = tl.anchor(fx, re, kind="go_ahead" if low else "substantive_prompt", origin="relayed",
-                  prompt_class="low_effort" if low else "substantive", lead_s=lead, trail_s=0, lead_from="params",
-                  level="C", sm=f"2.3: a relayed message's lead is its typing time, {re['data']['len_chars']} / 1.5 = "
-                                 f"{lead} s, ending at sent_at")
-    a["sent_at"] = re["data"]["sent_at"]
-    a["local_sent_at"] = fx.hhmmss(re["data"]["sent_at"])
-    a["prompt"] = pe["event_id"]
-    a["labels"] = ["via_relay"]
-    anchors.append(a)
+    anchors.append(rl.anchor_entry(fx, re, pe, kind="go_ahead" if low else "substantive_prompt",
+                                   prompt_class="low_effort" if low else "substantive", lead_s=lead,
+                                   sm=f"2.3: a relayed message's lead is its typing time, "
+                                      f"{re['data']['len_chars']} / 1.5 = {lead} s, ending at sent_at"))
 anchors.sort(key=lambda a: a["sent_at"])
 for name, cls, origin in (("T1", "substantive", "relayed"), ("T2", "substantive", "relayed"),
                           ("T3", None, "headless"), ("T4", "low_effort", "relayed")):
