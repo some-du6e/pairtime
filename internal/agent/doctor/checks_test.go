@@ -60,13 +60,21 @@ func TestChecks(t *testing.T) {
 			wantHas: []string{"running pairtime v0.1.0 for 1h, in local mode, which uploads nothing; it answered in 2 ms"}},
 		{name: "a signed-in agent says it uploads your hours' numbers",
 			edit: func(f *Facts) { f.Agent.Mode = "online" }, check: "agent", want: OK, wantHas: []string{"signed in, so it uploads your hours' numbers"}},
-		{name: "a signed-in agent whose uploader reports a problem says its uploads are held back, and points at problem.uploader",
+		{name: "a signed-in agent whose uploader reports a problem names problem.uploader rather than saying it uploads",
 			edit: func(f *Facts) {
 				f.Agent.Mode = "online"
 				f.Agent.Problems = map[string]string{"uploader": "pairtime has stopped uploading; to upload again, run pairtime logout, then pairtime login"}
 			}, check: "agent", want: OK,
-			wantHas: []string{"signed in, but its uploads are held back (problem.uploader says why, and what to do)"},
+			wantHas: []string{"signed in, but its uploader reports a problem, which problem.uploader names"},
 			wantNot: []string{"so it uploads"}},
+		{name: "a signed-in agent whose sign-in doesn't read says it uploads nothing, and names problem.account",
+			edit: func(f *Facts) {
+				f.Agent.Mode = "online"
+				f.Agent.Problems = map[string]string{"account": "pairtime uploads nothing, because this computer is linked to a server but its sign-in doesn't read: the keyring is locked",
+					"uploader": "the server's receipt for batch 3 doesn't check out, so it isn't kept"}
+			}, check: "agent", want: OK,
+			wantHas: []string{"linked to a server, but it uploads nothing (problem.account says why)"},
+			wantNot: []string{"so it uploads", "problem.uploader"}},
 		{name: "a signed-in agent with other problems only still says it uploads",
 			edit: func(f *Facts) {
 				f.Agent.Mode = "online"
@@ -125,6 +133,14 @@ func TestChecks(t *testing.T) {
 		{name: "on X11, presence unknown because the connection's setup failed names the X connection",
 			edit: func(f *Facts) {
 				f.Agent.Signals.Idle, f.Agent.Signals.Session = Signal{Unknown: "X connection setup: unexpected EOF"}, "x11"
+			}, check: "idle", want: Fail, wantHas: []string{"the agent couldn't reach the X server"}, wantNot: []string{"MIT-SCREEN-SAVER"}},
+		{name: "on X11, focus unknown because DISPLAY names a screen the X display hasn't names the X connection",
+			edit: func(f *Facts) {
+				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "the X display has no screen 1"}, "x11"
+			}, check: "focus", want: Fail, wantHas: []string{"the agent couldn't reach the X server"}, wantNot: []string{"_NET_ACTIVE_WINDOW"}},
+		{name: "on X11, presence unknown because the X server wants more authentication names the X connection",
+			edit: func(f *Facts) {
+				f.Agent.Signals.Idle, f.Agent.Signals.Session = Signal{Unknown: "the X server wants more authentication: Kerberos"}, "x11"
 			}, check: "idle", want: Fail, wantHas: []string{"the agent couldn't reach the X server"}, wantNot: []string{"MIT-SCREEN-SAVER"}},
 		{name: "on X11, focus unknown because DISPLAY can't be read names the X connection",
 			edit: func(f *Facts) {

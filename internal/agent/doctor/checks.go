@@ -157,16 +157,21 @@ func agentCheck(f Facts) Check {
 	return c
 }
 
-// modeWords says what the agent's mode uploads (DESIGN 4.2). While the
-// uploader reports a problem, a signed-in computer's uploads are held back,
-// stopped or in part, and problem.uploader says why and what to do.
+// modeWords says what the agent's mode uploads (DESIGN 4.2). A signed-in
+// computer whose sign-in doesn't read uploads nothing, as problem.account
+// says, and one whose uploader reports a problem, as problem.uploader
+// does, may have its uploads stopped, or some of them, or none: its line
+// names the problem's line rather than saying it uploads.
 func modeWords(a *Status) string {
 	switch a.Mode {
 	case "local":
 		return "in local mode, which uploads nothing"
 	case "online":
-		if strings.TrimSpace(a.Problems["uploader"]) != "" {
-			return "signed in, but its uploads are held back (problem.uploader says why, and what to do)"
+		switch {
+		case strings.TrimSpace(a.Problems["account"]) != "":
+			return "linked to a server, but it uploads nothing (problem.account says why)"
+		case strings.TrimSpace(a.Problems["uploader"]) != "":
+			return "signed in, but its uploader reports a problem, which problem.uploader names"
 		}
 		return "signed in, so it uploads your hours' numbers"
 	}
@@ -234,7 +239,8 @@ func unknownCost(s Signals, why string, focus bool) string {
 // reach the X server at the agent's start: a DISPLAY they can't use, a
 // connection that failed, or one the X server refused, as without its X
 // authority (internal/platform/linux's parseDisplay and openX11).
-var xConnects = []string{"DISPLAY ", "can't connect to the X display", "X connection setup", "the X server refused the connection"}
+var xConnects = []string{"DISPLAY ", "can't connect to the X display", "X connection setup", "the X server refused the connection",
+	"the X server wants more authentication", "the X display has no screen"}
 
 // xConnection reports whether why is a reason of xConnects'.
 func xConnection(why string) bool {

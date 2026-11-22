@@ -1020,16 +1020,16 @@ func TestInstallCycle(t *testing.T) {
 
 // TestSetUpLine checks install's last word on where what pairtime records
 // goes: local-only mode, as every install starts in, unless pairtime login
-// linked the computer and config.toml says online, when its hours'
-// numbers go to the server it's linked to.
+// linked the computer and config.toml says online, when config.toml lets
+// its hours' numbers go to the server it's linked to.
 func TestSetUpLine(t *testing.T) {
 	linked := `{"v":1,"server":"https://pairtime.example","device_id":"d_testdevice00000000000000a","linked_at":"2026-11-22T10:00:00Z"}`
 	cases := []struct {
 		name, account, config, want string
 	}{
 		{"a computer no login linked runs local-only, whatever config.toml says", "", "mode = \"online\"\n", "It runs in local-only mode"},
-		{"a linked computer whose config.toml says online uploads its numbers to its server", linked, "mode = \"online\"\n",
-			"This computer is linked to https://pairtime.example, so it uploads your hours' numbers there."},
+		{"a linked computer whose config.toml says online names its server", linked, "mode = \"online\"\n",
+			"This computer is linked to https://pairtime.example, and config.toml lets it upload your hours' numbers there; pairtime doctor says if anything holds them back."},
 		{"a linked computer whose config.toml says local runs local-only", linked, "mode = \"local\"\n", "It runs in local-only mode"},
 		{"a linked computer whose config.toml has an error runs local-only", linked, "mode = [\n", "It runs in local-only mode"},
 	}
