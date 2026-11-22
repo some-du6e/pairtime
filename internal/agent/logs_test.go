@@ -234,72 +234,125 @@ func listedHome(t *testing.T, r *hookReplay) (home, file string) {
 	return home, file
 }
 
-// TestTranscriptTiedToItsProcess checks the procs tie (WP-AD3): a live
-// session no hook reported gets, beside its transcript's session.start,
-// the process scan's, under the session's key, with the parent and the
-// TTY SM 2.2 rule 4 reads, which no transcript states.
+// TestTranscriptTiedToItsProcess checks the procs tie (WP-AD3): a session
+// no hook reports, whose transcript a real agent reads as it is written,
+// is tied to the one claude that can be running it, and its session.start
+// is then the process scan's, one record, with the parent and the TTY SM
+// 2.2 rule 4 reads, which no transcript states. With two claudes that
+// could be it, nothing is tied, and the transcript's session.start stands.
 func TestTranscriptTiedToItsProcess(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the capture's paths are Linux's")
 	}
-	raw, err := os.ReadFile(captureTranscript)
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := newHookReplay(t)
-	raw = bytes.ReplaceAll(raw, []byte(captureHome), []byte(r.home))
-	home, file := listedHome(t, r)
-	// claude in bash in a terminal, started just before the capture's
-	// first entry, 2026-11-20 16:48:30 UTC.
+	now := time.Now().UTC()
 	me := platform.UIDOwner(uint32(os.Geteuid()))
-	started := time.Date(2026, 11, 20, 16, 48, 0, 0, time.UTC)
-	table := []platform.Proc{
-		{PID: 1, Name: "systemd", PGID: 1, TTY: platform.TTYNone, Start: started.Add(-time.Hour), Owner: "uid:0"},
-		{PID: 100, PPID: 1, Name: "gnome-terminal-server", PGID: 100, TTY: platform.TTYNone, Start: started.Add(-10 * time.Minute), Owner: me},
-		{PID: 110, PPID: 100, Name: "bash", PGID: 110, TTY: platform.TTYAttached, Start: started.Add(-5 * time.Minute), Owner: me},
-		{PID: 111, PPID: 110, Name: "claude", PGID: 111, TTY: platform.TTYAttached, Start: started, Owner: me},
-	}
-	opts := r.options([]keys.Store{})
-	opts.Env = &install.Env{GOOS: runtime.GOOS, Home: home}
-	opts.Procs = func() ([]platform.Proc, error) { return slices.Clone(table), nil }
-	a := startAgent(t, opts)
-	if err := os.WriteFile(file, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	lines := bytes.Count(raw, []byte("\n"))
-	waitStatusFor(t, a, 40*time.Second, func(s statusReply) bool {
-		return s.Adapters.Harnesses[event.HarnessClaudeCode].Lines >= uint64(lines)
-	})
-	a.cancel()
-	if err := a.waitExit(t); err != nil {
-		t.Fatalf("stopping the agent: %v", err)
-	}
-	_, kSession := deviceKeys(t, r.dirs, []keys.Store{})
-	k := adapters.NewKeys(kSession)
-	var tied []*event.SessionStart
-	for _, rec := range readLedger(t, r.dirs, event.SourceOS) {
-		if s, ok := rec.ev.Data.(*event.SessionStart); ok && rec.ev.Via == event.ViaOS && rec.ev.SessionKey == k.Session(captureSession) {
-			tied = append(tied, s)
+	claudeIn := func(pid, shell int) []platform.Proc {
+		return []platform.Proc{
+			{PID: shell, PPID: 100, Name: "bash", PGID: shell, TTY: platform.TTYAttached, Start: now.Add(-30 * time.Minute), Owner: me},
+			{PID: pid, PPID: shell, Name: "claude", PGID: pid, TTY: platform.TTYAttached, Start: now.Add(-5 * time.Minute), Owner: me},
 		}
 	}
-	logStarts := 0
-	for _, rec := range readLedger(t, r.dirs, event.SourceLog) {
-		if _, ok := rec.ev.Data.(*event.SessionStart); ok {
-			logStarts++
-		}
+	desktop := []platform.Proc{
+		{PID: 1, Name: "systemd", PGID: 1, TTY: platform.TTYNone, Start: now.Add(-time.Hour), Owner: "uid:0"},
+		{PID: 100, PPID: 1, Name: "gnome-terminal-server", PGID: 100, TTY: platform.TTYNone, Start: now.Add(-40 * time.Minute), Owner: me},
 	}
 	cases := []struct {
-		name string
-		ok   bool
+		name  string
+		table []platform.Proc
+		// via and parent are the session.start the ledger gets.
+		via    event.Via
+		parent event.ParentClass
+		tty    bool
 	}{
-		{"the session's transcript gives its session.start", logStarts == 1},
-		{"and the scan's comes after it under the session's key, one", len(tied) == 1},
-		{"with the terminal as its parent and a TTY", len(tied) == 1 && tied[0].ParentClass == event.ParentTerminalApp && tied[0].HasTTY},
+		{"one claude: the scan's session.start, with the terminal as its parent and a TTY",
+			append(slices.Clone(desktop), claudeIn(111, 110)...), event.ViaOS, event.ParentTerminalApp, true},
+		{"two claudes: nothing is tied, and the transcript's session.start stands",
+			append(append(slices.Clone(desktop), claudeIn(111, 110)...), claudeIn(121, 120)...), event.ViaLog, event.ParentUnknown, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if !tc.ok {
-				t.Errorf("%d log session.starts, tied %+v", logStarts, tied)
+			r := newHookReplay(t)
+			home, file := listedHome(t, r)
+			opts := r.options([]keys.Store{})
+			opts.Env = &install.Env{GOOS: runtime.GOOS, Home: home}
+			opts.Procs = func() ([]platform.Proc, error) { return slices.Clone(tc.table), nil }
+			a := startAgent(t, opts)
+			// The first prompt states the token 85 s ago, so its
+			// session.start waits out the 90 s hook grace; the second, just
+			// written, is the fresh line the tie needs. The tailers' idle
+			// marker after it lets the session.start go.
+			line := func(prompt, text string, at time.Time) []byte {
+				b, _ := json.Marshal(map[string]any{"type": "user", "sessionId": captureSession, "promptId": prompt,
+					"timestamp": at.Format(time.RFC3339Nano), "cwd": r.folder(), "version": "2.1.327", "entrypoint": "cli",
+					"isSidechain": false, "promptSource": "typed", "turnOrigin": "human",
+					"message": map[string]any{"role": "user", "content": text}})
+				return append(b, '\n')
+			}
+			body := append(line("ffffffff-0000-4000-8000-000000000001", "What does this do?", time.Now().Add(-85*time.Second)),
+				line("ffffffff-0000-4000-8000-000000000002", "And this one?", time.Now())...)
+			if err := os.WriteFile(file, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// Two prompts and the session.start.
+			waitStatusFor(t, a, 60*time.Second, func(s statusReply) bool {
+				return s.Adapters.Harnesses[event.HarnessClaudeCode].Records >= 3
+			})
+			a.cancel()
+			if err := a.waitExit(t); err != nil {
+				t.Fatalf("stopping the agent: %v", err)
+			}
+			_, kSession := deviceKeys(t, r.dirs, []keys.Store{})
+			key := adapters.NewKeys(kSession).Session(captureSession)
+			var starts []ledgerRecord
+			for _, src := range []event.Source{event.SourceLog, event.SourceOS} {
+				for _, rec := range readLedger(t, r.dirs, src) {
+					if _, ok := rec.ev.Data.(*event.SessionStart); ok && rec.ev.SessionKey == key {
+						starts = append(starts, rec)
+					}
+				}
+			}
+			if len(starts) != 1 {
+				t.Fatalf("%d session.starts for the session, want one", len(starts))
+			}
+			got := starts[0].ev
+			s := got.Data.(*event.SessionStart)
+			if got.Via != tc.via || s.ParentClass != tc.parent || s.HasTTY != tc.tty {
+				t.Errorf("the session.start is via %s, %+v; want via %s, parent %s, TTY %v", got.Via, s, tc.via, tc.parent, tc.tty)
+			}
+		})
+	}
+}
+
+// TestTiedStartOf checks the session.start of a session tied to its
+// process: the walk's parent and TTY, the log's start kind and permission
+// mode, and the entrypoint E-cc-transcript-labels gives, whose labels only
+// ever withhold credit.
+func TestTiedStartOf(t *testing.T) {
+	walk := func(ep event.Entrypoint, parent event.ParentClass) event.SessionStart {
+		return event.SessionStart{StartKind: event.StartStartup, Entrypoint: ep, ParentClass: parent, HasTTY: true}
+	}
+	log := func(ep event.Entrypoint) *event.SessionStart {
+		return &event.SessionStart{StartKind: event.StartResume, Entrypoint: ep, ParentClass: event.ParentUnknown, PermissionMode: "plan"}
+	}
+	cases := []struct {
+		name string
+		walk event.SessionStart
+		log  *event.SessionStart
+		want event.Entrypoint
+	}{
+		{"the transcript's sdk stands under an IDE", walk(event.EntrypointIDE, event.ParentIDE), log(event.EntrypointSDK), event.EntrypointSDK},
+		{"the transcript's sdk stands under a desktop app", walk(event.EntrypointDesktop, event.ParentUnknown), log(event.EntrypointSDK), event.EntrypointSDK},
+		{"the transcript's cloud stands over a terminal", walk(event.EntrypointUnknown, event.ParentTerminalApp), log(event.EntrypointCloud), event.EntrypointCloud},
+		{"a walk's exec stands over the transcript's unknown", walk(event.EntrypointExec, event.ParentScriptRuntime), log(event.EntrypointUnknown), event.EntrypointExec},
+		{"a walk's sdk stands over the transcript's cloud", walk(event.EntrypointSDK, event.ParentTerminalApp), log(event.EntrypointCloud), event.EntrypointSDK},
+		{"the walk's ide stands over the transcript's unknown", walk(event.EntrypointIDE, event.ParentIDE), log(event.EntrypointUnknown), event.EntrypointIDE},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tiedStartOf(tc.walk, tc.log)
+			if got.Entrypoint != tc.want || got.ParentClass != tc.walk.ParentClass || !got.HasTTY ||
+				got.StartKind != event.StartResume || got.PermissionMode != "plan" {
+				t.Errorf("tiedStartOf = %+v; want entrypoint %s with the walk's parent and TTY and the log's kind and mode", got, tc.want)
 			}
 		})
 	}

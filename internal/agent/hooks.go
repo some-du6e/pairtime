@@ -316,6 +316,22 @@ func (t *hookTies) ignoring(session string) bool {
 	return t.ignored[session]
 }
 
+// has reports whether a hook tied a process to session, which then fires
+// hooks: tieLive leaves it to them.
+func (t *hookTies) has(session string) bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, s := range t.sessions {
+		if s == session {
+			return true
+		}
+	}
+	return false
+}
+
 // tie records that the process id runs session, and reports whether that
 // is new. A session ignore keeps out isn't tied, even when the hook sink
 // looked before ignore ran.

@@ -286,6 +286,10 @@ type adapterHost struct {
 	// logRefused says a step that couldn't write to the ledger answered
 	// batches with none taken (refuseLogs).
 	logRefused bool
+	// Under mu: sessKeys keys sessions as the adapters do, once K_session
+	// is known, and tieTried is when tieLive last tried each session.
+	sessKeys *adapters.Keys
+	tieTried map[string]time.Time
 }
 
 // adapterKeys are the keys the adapters make records with, derived from

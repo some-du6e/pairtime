@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
+	"github.com/some-du6e/pairtime/internal/agent/hookpath"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/tailers"
 	"github.com/some-du6e/pairtime/internal/install"
@@ -125,41 +126,107 @@ func (h *adapterHost) forgetLog(harness event.Harness, file string) {
 	h.poke()
 }
 
-// tieProcs ties a session.start a log reader wrote, for a session no hook
-// reported, to the harness process the scan found running it
-// (procs.Scanner.Tie), and writes the scan's session.start under the
-// session's key, at the same moment, so it comes after the log's: the
-// parent, the TTY and the entrypoint the process's walk gives, which SM
-// 2.2 rule 4 reads and no transcript states (WP-AD3). It reports false
-// when the ledger refused the record.
-func (h *adapterHost) tieProcs(st *harnessStats, r adapters.Record, start *event.SessionStart, file, key string) bool {
+// tieFresh is how recently a log line must have been written for the
+// session it is from to be tied to a process that runs now (tieLive): a
+// line read later, as after the agent was down, may be from a session
+// whose process has ended. tieRetry is how often a session no hook
+// reports is tied again at most, each try a read of the process table.
+const (
+	tieFresh = time.Minute
+	tieRetry = 30 * time.Second
+)
+
+// maxTieTried bounds the sessions tieLive remembers it tried.
+const maxTieTried = 256
+
+// tieLive ties the session of harness h, id sid, that a line written at at
+// is from, to the process running it, when no hook reports the session and
+// the line was written in the last tieFresh (procs.Scanner.Tie): focus
+// then finds the session in the window that hosts it, which SM 2.2 rule 6
+// reads, and the session.start its log reader writes, once its hooks had
+// their grace, is the scan's (tiedStart). Each line keeps the session's
+// touch fresh (procs.Scanner.Touch); a session is tied again at most every
+// tieRetry, so a session whose process ended gets the one it resumed in.
+func (h *adapterHost) tieLive(harness event.Harness, sid string, at int64) {
 	p := h.a.procs
-	if p == nil {
-		return true
+	now := wallNow()
+	if p == nil || at == 0 || now.UnixMilli()-at > tieFresh.Milliseconds() {
+		return
 	}
-	at := time.UnixMilli(r.Event.T)
-	sess, ok := p.Tie(r.Event.Harness, at, r.Event.SessionKey)
-	if !ok {
-		// The scan may not have found the process yet: it runs every
-		// PROC_SCAN_S, and this is once per session no hook reported.
-		p.Scan()
-		if sess, ok = p.Tie(r.Event.Harness, at, r.Event.SessionKey); !ok {
-			return true
+	key := h.sessionKey(sid)
+	if key == "" || h.a.hooked != nil && h.a.hooked.has(key) {
+		return
+	}
+	p.Touch(key, time.UnixMilli(at))
+	h.mu.Lock()
+	if now.Sub(h.tieTried[key]) < tieRetry {
+		h.mu.Unlock()
+		return
+	}
+	if h.tieTried == nil || len(h.tieTried) >= maxTieTried {
+		h.tieTried = make(map[string]time.Time)
+	}
+	h.tieTried[key] = now
+	h.mu.Unlock()
+	if _, tied := p.TiedTo(key); tied {
+		return
+	}
+	if _, ok := p.Tie(harness, key, time.UnixMilli(at)); ok {
+		h.a.refreshFocus()
+	}
+}
+
+// sessionKey returns the key of session sid under this installation's
+// K_session, as the adapters key it (adapters.Keys.Session), or "" while
+// the agent has none.
+func (h *adapterHost) sessionKey(sid string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.sessKeys == nil {
+		secret := h.a.sessionSecret()
+		if len(secret) != hookpath.SessionSecretLen {
+			return ""
 		}
+		h.sessKeys = adapters.NewKeys(secret)
 	}
-	tied := sess.Event
-	tied.StartKind, tied.PermissionMode = start.StartKind, start.PermissionMode
-	if tied.Entrypoint == event.EntrypointUnknown {
-		tied.Entrypoint = start.Entrypoint
+	return h.sessKeys.Session(sid)
+}
+
+// tiedStart returns r, a session.start a log reader wrote for a session no
+// hook reported, as the process scan's when tieLive tied the session to its
+// process (tiedStartOf): one record, with the walk's parent and TTY, so the
+// session's parent class never changes mid-session (DESIGN 7.3, CC9). A
+// session tied only after its log's session.start keeps that one.
+func (h *adapterHost) tiedStart(r adapters.Record, start *event.SessionStart) adapters.Record {
+	p := h.a.procs
+	if p == nil || r.Event.Source != event.SourceLog {
+		return r
 	}
-	e := r.Event
-	e.Source, e.Via, e.Data = event.SourceOS, event.ViaOS, &tied
-	e.EventID = h.logEventID(e.T, file, key+".procs")
-	ok = h.write(st, adapters.Record{Event: e})
-	// The window in front may host the session, which focus finds under
-	// its key now (procs.Scanner.Sessions).
-	h.a.refreshFocus()
-	return ok
+	sess, ok := p.TiedTo(r.Event.SessionKey)
+	if !ok {
+		return r
+	}
+	st := tiedStartOf(sess.Event, start)
+	r.Event.Source, r.Event.Via, r.Event.Data = event.SourceOS, event.ViaOS, &st
+	return r
+}
+
+// tiedStartOf is the session.start of a session tied to its process: the
+// walk's parent and TTY, the log's start kind and permission mode, and the
+// entrypoint by E-cc-transcript-labels, whose labels only ever withhold
+// credit: the walk's sdk or exec stands, else the log's sdk or cloud
+// stands, else the walk's stands. The log's sdk stands for every sdk-*
+// token, sdk-ts and sdk-py under an IDE too, which the decision would let
+// the IDE decide: the log's record no longer says which token it read.
+func tiedStartOf(walk event.SessionStart, log *event.SessionStart) event.SessionStart {
+	st := walk
+	st.StartKind, st.PermissionMode = log.StartKind, log.PermissionMode
+	switch {
+	case walk.Entrypoint == event.EntrypointSDK || walk.Entrypoint == event.EntrypointExec:
+	case log.Entrypoint == event.EntrypointSDK || log.Entrypoint == event.EntrypointCloud:
+		st.Entrypoint = log.Entrypoint
+	}
+	return st
 }
 
 // drained reports whether the inbox's first drain has handed its calls to
@@ -298,7 +365,7 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		t.Rewind(ll.File)
 		return false
 	}
-	dir, session := lr.LogPlace(raw)
+	dir, session, at := lr.LogPlace(raw)
 	if session != "" && h.parkedBy[session] > 0 || h.waits(dir) {
 		return false
 	}
@@ -314,6 +381,8 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		// A folder out of pairtime (DESIGN 8.8): its lines make no record.
 		recs = nil
 		h.count(func() { st.Ignored++ })
+	} else if session != "" && !ll.Replay {
+		h.tieLive(line.Harness, session, at)
 	}
 	if !ll.Idle && !ll.Replay {
 		h.count(func() { st.Lines++ })
@@ -325,13 +394,11 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 			key = fmt.Sprintf("%d.%d", ll.Offset, i)
 		}
 		r.Event.EventID = h.logEventID(r.Event.T, ll.File, key)
+		if start, ok := r.Event.Data.(*event.SessionStart); ok && !ll.Replay {
+			r = h.tiedStart(r, start)
+		}
 		if !h.write(st, r) && h.writerDown() {
 			return false
-		}
-		if start, ok := r.Event.Data.(*event.SessionStart); ok {
-			if !h.tieProcs(st, r, start, ll.File, key) && h.writerDown() {
-				return false
-			}
 		}
 		switch r.Event.Kind() {
 		case event.KindSessionStart, event.KindPromptSubmit, event.KindAgentStop:

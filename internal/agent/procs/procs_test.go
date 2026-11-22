@@ -818,8 +818,8 @@ func oneClaude() []platform.Proc {
 	return slices.DeleteFunc(terminal(), func(p platform.Proc) bool { return p.PID == 120 || p.PID == 121 })
 }
 
-// TestTie checks how a session a log reader found is tied to the process
-// the scan found running it (WP-AD3): only when one process can be it.
+// TestTie checks how a session a log reader reads live is tied to the
+// process running it (WP-AD3): only when one process can be it.
 func TestTie(t *testing.T) {
 	claude := event.HarnessClaudeCode
 	keyOf := func(s *Scanner, pid int) string {
@@ -830,47 +830,86 @@ func TestTie(t *testing.T) {
 		}
 		return ""
 	}
-	type tie struct {
-		at  time.Time
-		key string
+	// young is oneClaude's claude started 3 s ago, younger than Grace.
+	young := func() []platform.Proc {
+		ps := oneClaude()
+		for i := range ps {
+			if ps[i].PID == 111 {
+				ps[i].Start = sec(-3)
+			}
+		}
+		return ps
+	}
+	// step is one thing done to the scanner: a table to read from now on,
+	// a scan, a claim, a touch or a tie, in that order of its fields' use.
+	type step struct {
+		table []platform.Proc
+		scan  bool
+		claim int
+		touch string
+		key   string
+		at    time.Time
 	}
 	cases := []struct {
 		name  string
-		procs []platform.Proc
-		ties  []tie
+		steps []step
 		// want is the pid the last tie gave, 0 for none.
 		want int
 	}{
-		{"the only claude the scan reported, started before the session, is tied", oneClaude(), []tie{{sec(-100), "s_one"}}, 111},
-		{"a claude that started after the session isn't tied", oneClaude(), []tie{{sec(-400), "s_one"}}, 0},
-		{"a claude that started within TieSlack after the session is tied", oneClaude(), []tie{{sec(-301), "s_one"}}, 111},
-		{"with two claudes that could be it, none is tied", terminal(), []tie{{sec(-100), "s_one"}}, 0},
-		{"a claude another session is tied to isn't tied again", oneClaude(), []tie{{sec(-100), "s_one"}, {sec(-50), "s_two"}}, 0},
-		{"a session tied already gets its process again", oneClaude(), []tie{{sec(-100), "s_one"}, {sec(-50), "s_one"}}, 111},
-		{"a codex process isn't tied to a Claude Code session", slices.DeleteFunc(oneClaude(), func(p platform.Proc) bool { return p.PID == 111 }),
-			[]tie{{sec(-50), "s_one"}}, 0},
+		{"the only claude running, started by the line, is tied, and Sessions gives the session's key for it",
+			[]step{{table: oneClaude(), key: "s_one", at: sec(-100)}}, 111},
+		{"a claude younger than Grace is tied too", []step{{table: young(), key: "s_one", at: sec(-1)}}, 111},
+		{"a claude that started after the line isn't tied", []step{{table: oneClaude(), key: "s_one", at: sec(-400)}}, 0},
+		{"a claude that started within TieSlack after the line is tied", []step{{table: oneClaude(), key: "s_one", at: sec(-301)}}, 111},
+		{"with two claudes that could be it, none is tied", []step{{table: terminal(), key: "s_one", at: sec(-100)}}, 0},
+		{"a claude a hook claimed isn't tied", []step{{table: oneClaude(), claim: 111}, {key: "s_one", at: sec(-100)}}, 0},
+		{"a codex isn't tied to a Claude Code session",
+			[]step{{table: slices.DeleteFunc(oneClaude(), func(p platform.Proc) bool { return p.PID == 111 }), key: "s_one", at: sec(-50)}}, 0},
+		{"a session tied already keeps its process", []step{{table: oneClaude(), key: "s_one", at: sec(-100)}, {key: "s_one", at: sec(-50)}}, 111},
+		{"a claude whose session still writes isn't tied to another",
+			[]step{{table: oneClaude(), key: "s_one", at: sec(-100)}, {touch: "s_one", at: sec(-10)}, {key: "s_two", at: sec(-20)}}, 0},
+		{"a claude whose session went quiet before the new one's first line passes to it, as at /clear",
+			[]step{{table: oneClaude(), key: "s_one", at: sec(-100)}, {touch: "s_one", at: sec(-60)}, {key: "s_two", at: sec(-20)}}, 111},
+		{"a session whose claude ended gets the one it resumed in, once a scan saw the old one gone",
+			[]step{{table: oneClaude(), key: "s_one", at: sec(-100)},
+				{table: slices.DeleteFunc(terminal(), func(p platform.Proc) bool { return p.PID == 111 }), scan: true, key: "s_one", at: sec(-10)}}, 121},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := &fake{procs: tc.procs}
+			f := &fake{}
 			now := sec(0)
 			var got []Session
 			s := newScanner(f, &now, &got)
-			if _, err := s.Scan(); err != nil {
-				t.Fatal(err)
-			}
 			var sess Session
 			var ok bool
-			for _, ti := range tc.ties {
-				sess, ok = s.Tie(claude, ti.at, ti.key)
+			var last string
+			for _, st := range tc.steps {
+				if st.table != nil {
+					f.procs = st.table
+				}
+				if st.scan {
+					if _, err := s.Scan(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if st.claim != 0 {
+					p, _ := platform.NewTable(platform.Linux, f.procs).Get(st.claim)
+					s.Claim(boot, p)
+				}
+				if st.touch != "" {
+					s.Touch(st.touch, st.at)
+				}
+				if st.key != "" {
+					sess, ok = s.Tie(claude, st.key, st.at)
+					last = st.key
+				}
 			}
-			last := tc.ties[len(tc.ties)-1]
 			switch {
 			case tc.want == 0 && ok:
 				t.Errorf("tied process %d, want none", sess.PID)
-			case tc.want != 0 && (!ok || sess.PID != tc.want || !sess.Tied || sess.Key != last.key):
+			case tc.want != 0 && (!ok || sess.PID != tc.want || !sess.Tied || sess.Key != last):
 				t.Errorf("tie %+v, %v; want process %d", sess, ok, tc.want)
-			case tc.want != 0 && keyOf(s, tc.want) != last.key:
+			case tc.want != 0 && keyOf(s, tc.want) != last:
 				t.Errorf("Sessions gives %q for process %d, want the session's key", keyOf(s, tc.want), tc.want)
 			}
 		})
@@ -896,7 +935,7 @@ func TestTieAcrossRestarts(t *testing.T) {
 	if _, err := s.Scan(); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s.Tie(event.HarnessClaudeCode, sec(-100), "s_one"); !ok {
+	if _, ok := s.Tie(event.HarnessClaudeCode, "s_one", sec(-100)); !ok {
 		t.Fatal("no tie")
 	}
 	s = start(t)
@@ -912,8 +951,9 @@ func TestTieAcrossRestarts(t *testing.T) {
 			}
 			return false
 		}()},
-		{"and ties it to no other session", func() bool {
-			_, ok := s.Tie(event.HarnessClaudeCode, sec(-50), "s_two")
+		{"and ties it to no other session that comes while the first still writes", func() bool {
+			s.Touch("s_one", sec(-5))
+			_, ok := s.Tie(event.HarnessClaudeCode, "s_two", sec(-50))
 			return !ok
 		}()},
 	}

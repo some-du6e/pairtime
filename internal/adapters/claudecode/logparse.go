@@ -996,18 +996,18 @@ func (a *Adapter) logSessionFor(sid string) *txSession {
 
 // LogPlace returns the folder a transcript line ran in and its session id
 // (adapters.LogReader).
-func (a *Adapter) LogPlace(raw adapters.RawRecord) (dir, session string) {
+func (a *Adapter) LogPlace(raw adapters.RawRecord) (dir, session string, at int64) {
 	if raw.Source != adapters.SourceLog || raw.Log == nil || raw.Log.Idle || raw.Log.TooLong || raw.Log.DecodeErr != nil {
-		return "", ""
+		return "", "", 0
 	}
 	e, ok := raw.Log.Entry.(*entry)
 	if !ok || e == nil {
 		var err error
 		if e, err = decodeEntry(raw.Payload); err != nil {
-			return "", ""
+			return "", "", 0
 		}
 	}
-	return e.CWD, e.SessionID
+	return e.CWD, e.SessionID, e.t
 }
 
 // LogResume returns where in file the adapter's memory of it starts

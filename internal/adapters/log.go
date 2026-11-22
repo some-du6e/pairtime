@@ -72,10 +72,11 @@ type LogReader interface {
 	// hand Parse the result in LogLine.Entry.
 	DecodeLog(line []byte) (any, error)
 	// LogPlace returns the folder a log record's line ran in, which Parse
-	// resolves to a project (Options.Project), and the harness's id of
-	// the session it belongs to, which orders it after the session's hook
-	// calls: "" for either that the line doesn't name.
-	LogPlace(raw RawRecord) (dir, session string)
+	// resolves to a project (Options.Project), the harness's id of the
+	// session it belongs to, which orders it after the session's hook
+	// calls, and the moment the line states, in Unix ms: "" or 0 for what
+	// the line doesn't say.
+	LogPlace(raw RawRecord) (dir, session string, at int64)
 	// LogResume returns where in file the adapter's memory of it starts:
 	// the offset a restart must deliver the file again from, so that the
 	// memory SaveState returned is rebuilt, and false for a file it
