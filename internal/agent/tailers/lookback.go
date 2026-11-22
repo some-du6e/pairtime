@@ -200,6 +200,12 @@ func (f *file) inHistory() bool {
 // hasn't ended, or lines a Rewind gave it. t.mu is held.
 func (f *file) lookbacks() bool { return f.hist > 0 && !f.histDone || f.rewindTo > 0 }
 
+// rewindOnly says what lookback has left of f is lines a Rewind gave it:
+// f's history, if it has one, is done or read. t.mu is held.
+func (f *file) rewindOnly() bool {
+	return f.rewindTo > 0 && (f.hist == 0 || f.histDone || f.read >= f.hist)
+}
+
 // lookbackUsable says lookback's reader may be started: lookback is on,
 // and its reader hasn't failed maxLookbackTries times in this run. t.mu is
 // held.
@@ -215,12 +221,13 @@ func (t *Tailer) lookbackNow() bool {
 }
 
 // leaveHistory takes f from lookback, when no child is to read it: what is
-// left of its history stays unread, and the tailer reads on after it, the
-// file's adapter starting afresh there (Line.Fresh). The lines a Rewind
-// gave lookback of a file whose history was all read, or that has none,
-// the tailer reads again itself from pos, as replays. t.mu is held.
+// left of a history lookback hasn't ended stays unread, and the tailer
+// reads on after it, the file's adapter starting afresh there
+// (Line.Fresh). The lines a Rewind gave lookback of a file whose history
+// was ended or read, or that has none, the tailer reads again itself from
+// pos, as replays. t.mu is held.
 func (f *file) leaveHistory() {
-	if f.read < f.hist {
+	if !f.histDone && f.read < f.hist {
 		f.read, f.resume, f.pos, f.hash = f.hist, f.hist, f.hist, ""
 		f.fresh = f.hist
 	}
@@ -331,16 +338,16 @@ func (t *Tailer) runLookback() {
 		t.lb.err = err.Error()
 		t.lb.next = t.opts.Now().Add(lookbackPause << (t.lb.failures - 1))
 		t.opts.Log.Warn("tailers: lookback's reader failed", "err", err, "failures", t.lb.failures)
-		if t.lb.failures >= maxLookbackTries {
-			// No child reads again in this run, so the tailer reads each
-			// file on itself, at the agent's priority, after what is left
-			// of its history (leaveHistory): a file it has read to its
-			// history's end too, which a relocate or a Rewind would
-			// otherwise give lookback again.
-			for _, f := range t.files {
-				if f.lookbacks() {
-					f.leaveHistory()
-				}
+		// The tailer reads on itself, at the agent's priority (leaveHistory),
+		// each file whose lookback work is a Rewind's lines at once, since
+		// a live session can't wait out the pause, and after the last try
+		// in this run every file lookback isn't done with: a file it has
+		// read to its history's end too, which a relocate or a Rewind would
+		// otherwise give lookback again.
+		last := t.lb.failures >= maxLookbackTries
+		for _, f := range t.files {
+			if f.lookbacks() && (last || f.rewindOnly()) {
+				f.leaveHistory()
 			}
 		}
 	}
@@ -393,8 +400,12 @@ func (t *Tailer) lookbackJob() error {
 		job.Files[i] = jobFile{Harness: f.harness, Path: f.path, From: f.pos, To: to}
 		reads[i], hists[i] = f.read, f.hist
 	}
+	stopped := t.stopped
 	t.mu.Unlock()
-	if len(files) == 0 {
+	switch {
+	case stopped:
+		return stoppedError{}
+	case len(files) == 0:
 		return nil
 	}
 	child, err := t.opts.Lookback()
@@ -403,7 +414,7 @@ func (t *Tailer) lookbackJob() error {
 	}
 	t.mu.Lock()
 	t.lb.child = &child
-	stopped := t.stopped
+	stopped = t.stopped
 	t.mu.Unlock()
 	done := false
 	var waited sync.Once
@@ -521,14 +532,16 @@ func (t *Tailer) lookbackJob() error {
 func (t *Tailer) deliverHistory(f *file, b Batch) error {
 	for {
 		t.mu.Lock()
-		known, again := t.files[f.key] == f, t.lb.again
+		known, again, stopped := t.files[f.key] == f, t.lb.again, t.stopped
 		t.mu.Unlock()
-		if again {
+		switch {
+		case stopped:
+			return stoppedError{}
+		case again:
 			// The job starts again from the cursors, with the file a Rewind
 			// gave it, which was written last, first.
 			return restartError{}
-		}
-		if !known {
+		case !known:
 			// Gone, and forgotten: its adapter has no use for the rest.
 			return nil
 		}

@@ -431,6 +431,50 @@ func TestLookback(t *testing.T) {
 				t.Errorf("replays %v", got)
 			}
 		}},
+		{"a Rewind's lines go to the tailer at once when the child after the Rewind fails, of a history that ended before its last bytes too", func(t *testing.T) {
+			calls := 0
+			r := lookbackRig(t, func() (Child, error) {
+				calls++
+				if calls > 1 {
+					return Child{}, errors.New("no binary")
+				}
+				pc := &pipeChild{trim: upper}
+				return pc.start()
+			})
+			// A blank line at the history's end, which lookback's end
+			// leaves after the history's last line.
+			r.write("s.jsonl", "{\"s\":1}\n\n")
+			r.write("u.jsonl", "{\"u\":1}\n")
+			earlier := r.now.Add(-time.Hour)
+			if err := os.Chtimes(r.path("u.jsonl"), earlier, earlier); err != nil {
+				t.Fatal(err)
+			}
+			r.open()
+			r.step(0, false)
+			r.settle()
+			if got := r.texts(0); !slices.Equal(got, []string{`{"S":1}`, `{"U":1}`}) {
+				t.Fatalf("the histories handed over %v", got)
+			}
+			rewound := false
+			r.take = func(l Line) bool {
+				if string(l.Bytes) == `{"s":2}` && !rewound {
+					rewound = true
+					r.tl.Rewind(l.Log.File)
+					return false
+				}
+				return true
+			}
+			r.write("s.jsonl", "{\"s\":2}\n")
+			r.step(HotPoll, false) // the Rewind, and a child for its lines that can't start
+			r.settle()
+			r.step(time.Second, false)
+			if got := r.texts(2); calls != 2 || !slices.Equal(got, []string{`{"s":1}`, `{"s":2}`}) {
+				t.Fatalf("%d children, then handed over %v, want the file again from its start at once", calls, got)
+			}
+			if got := r.replays(2); !slices.Equal(got, []bool{true, false}) || r.got[2].Fresh || r.got[3].Fresh {
+				t.Errorf("replays %v, fresh %v and %v; want the line read before as a replay, and neither fresh", got, r.got[2].Fresh, r.got[3].Fresh)
+			}
+		}},
 		{"after the last failure, a root listed later gives its files no history, so the tailer reads them", func(t *testing.T) {
 			r := lookbackRig(t, func() (Child, error) { return Child{}, errors.New("no binary") })
 			r.write("g.jsonl", "{\"g\":1}\n")
