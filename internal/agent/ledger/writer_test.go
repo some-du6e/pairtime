@@ -824,6 +824,9 @@ func TestNoteMode(t *testing.T) {
 		{"an event a kill left in the boot before, made before the newest seal frame's moment by that boot's clock though its t is after, is sealed local-only by the next Open in another boot",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "write-stepped", "kill-reboot", "sealed"},
 			[]bool{false, true, false}, []bool{false, true, false}, []int{1, 1, 1}},
+		{"a hook call of the boot before, which reaches a writer opened in a new boot, made before the newest seal frame's moment by that boot's clock though its t is after, is sealed local-only",
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reboot", "write-stepped", "seal", "write", "seal"},
+			[]bool{false, true, false, true}, []bool{false, true, false, false}, []int{1, 1, 1, 1}},
 		{"a stretch end an earlier run saw after the newest seal, later by the OS's clock of the same boot though earlier by the wall clock, is newer, and marks the first batch after it",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reopen-seen-os", "write-run", "seal"},
 			[]bool{false, true, true}, []bool{false, true, true}, []int{1, 1, 1}},
@@ -1504,6 +1507,37 @@ func TestSealReadsUnderLock(t *testing.T) {
 				len(first.Records) != sealReads || len(second.Records) != 1 {
 				t.Errorf("the first batch of %d records sealed online %v, marked %v, and the next of %d marked %v; want %d, %v, %v, then 1, %v",
 					len(first.Records), first.Online, first.Back, len(second.Records), second.Back, sealReads, c.online, c.back, c.next)
+			}
+		})
+	}
+}
+
+// TestNoteThen checks that NoteModeThen and NoteSeenThen run what they're
+// given with the record lock held, so no seal reads config.toml between
+// the note and it.
+func TestNoteThen(t *testing.T) {
+	cases := []struct {
+		name string
+		note func(w *Writer, then func())
+	}{
+		{"NoteModeThen runs then with the record lock held", func(w *Writer, then func()) { w.NoteModeThen(true, then) }},
+		{"NoteSeenThen runs then with the record lock held", func(w *Writer, then func()) {
+			w.NoteSeenThen(Seen{Ended: time.UnixMilli(testT)}, then)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := open(t, t.TempDir(), newClock(testT))
+			ran := false
+			c.note(w, func() {
+				ran = true
+				if w.mu.TryLock() {
+					w.mu.Unlock()
+					t.Error("then ran without the record lock")
+				}
+			})
+			if !ran {
+				t.Error("then didn't run")
 			}
 		})
 	}

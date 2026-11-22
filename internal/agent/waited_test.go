@@ -1094,6 +1094,34 @@ func TestAgentWaiting(t *testing.T) {
 				t.Errorf("no drain in the run: %v, the spool holding the mark: %v; want true, false", a.spoolNoDrain.Load(), a.spoolHolds(func(event.Envelope) bool { return true }))
 			}
 		}},
+		{"a stretch end modes sees, at a switch back or a link it didn't see, starts a busy spool file's count again", func(t *testing.T) {
+			ends := []struct {
+				name string
+				end  func(t *testing.T, a *agent, dirs home.Dirs)
+			}{
+				{"a switch back modes sees starts the count again", func(t *testing.T, a *agent, dirs home.Dirs) {
+					a.seeLocked(false)
+					a.seeLocked(true)
+				}},
+				{"a link modes didn't account for starts it again", func(t *testing.T, a *agent, dirs home.Dirs) {
+					writeAccount(t, dirs, time.Now().UTC().Truncate(time.Second))
+					a.unseenLinkLocked()
+				}},
+			}
+			for _, e := range ends {
+				t.Run(e.name, func(t *testing.T) {
+					a, dirs := modesAgent(t, "online")
+					past := time.Now().Add(-time.Hour)
+					a.spoolBusySince.Store(&past)
+					a.modes.mu.Lock()
+					e.end(t, a, dirs)
+					a.modes.mu.Unlock()
+					if a.spoolBusySince.Load() != nil {
+						t.Error("a busy file's count still ran from an earlier stretch's end")
+					}
+				})
+			}
+		}},
 		{"a spool file that stays busy holds the mark for spoolBusyHold from the first ask that finds it so and no longer, and a batch sealed online or a read that works starts the count again", func(t *testing.T) {
 			a, _ := modesAgent(t, "online")
 			// What each Scan gives: busy, busy past the bound twice, busy at a

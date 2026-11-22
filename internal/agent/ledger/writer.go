@@ -297,6 +297,9 @@ type Writer struct {
 	local, taint, seen, stretchSealed, lastLocal, late bool
 	back, notes                                        uint64
 	until                                              moment
+	// prior is the OS reading of the boot before that until held as Open
+	// read it back, which earlier traded for this boot's start (bounds).
+	prior moment
 
 	kick     chan struct{}
 	stop     chan struct{}
@@ -318,10 +321,10 @@ type pending struct {
 	has  bool
 }
 
-// madeBefore reports whether p is an event made before m, by its event's
-// own times or by its sender's stamp, as Write holds a record to the
-// moment.
-func (p pending) madeBefore(m moment) bool {
+// madeBefore reports whether before says p is an event made before a
+// moment, by its event's own times or by its sender's stamp, as Write holds
+// a record to the moment.
+func (p pending) madeBefore(before func(event.Envelope) bool) bool {
 	e, ok := p.env, p.has
 	if !ok {
 		e, ok = envelopeOf(p.rec)
@@ -329,9 +332,26 @@ func (p pending) madeBefore(m moment) bool {
 	if !ok {
 		return false
 	}
-	return m.before(e) || !p.sent.Wall.IsZero() &&
-		m.before(event.Envelope{T: p.sent.Wall.UnixMilli(), Mono: p.sent.Mono, BootID: p.sent.BootID})
+	return before(e) || !p.sent.Wall.IsZero() &&
+		before(event.Envelope{T: p.sent.Wall.UnixMilli(), Mono: p.sent.Mono, BootID: p.sent.BootID})
 }
+
+// bounds is what the writer holds an event to: the moment, and prior, the
+// OS reading of the boot before that the moment held as the newest seal
+// frame, or the agent, recorded it, which Writer.earlier trades for this
+// boot's start. A hook call of that boot that reaches the writer in this
+// one, as one held.jsonl kept across a reboot, is held to that reading by
+// its mono too, as that boot's writer held it.
+type bounds struct{ until, prior moment }
+
+// before reports whether e was made before b, by the moment or, for a hook
+// call of prior's boot, by prior.
+func (b bounds) before(e event.Envelope) bool {
+	return b.until.before(e) || b.prior.os > 0 && e.Mono > 0 && e.BootID == b.prior.boot && e.Mono < b.prior.os
+}
+
+// bounds is what the writer holds events to now. w.mu is held.
+func (w *Writer) bounds() bounds { return bounds{w.until, w.prior} }
 
 // position is a place in the segments: a segment's day and an offset in it.
 type position struct {
@@ -410,6 +430,14 @@ func Open(opts Options) (*Writer, error) {
 	// to it by its t.
 	recorded := w.until
 	w.until = w.earlier(w.until)
+	for i, m := range []moment{recorded, seen.moment()} {
+		if i == 1 && seen.Ended.IsZero() {
+			break
+		}
+		if m.os > 0 && w.boot != "" && m.boot != w.boot && (w.prior.os == 0 || m.boot == w.prior.boot && m.os > w.prior.os) {
+			w.prior = moment{os: m.os, boot: m.boot}
+		}
+	}
 	w.seenLocked(seen, w.momentNow())
 	// An event a crash left without a batch that was made before
 	// config.toml was last known to say local-only, as the newest seal
@@ -418,8 +446,8 @@ func Open(opts Options) (*Writer, error) {
 	// by each as it was recorded, whose OS reading holds a hook call of the
 	// boot it was taken in to it by that boot's clock, where the moment
 	// now holds only this boot's start (earlier).
-	w.late = w.late || madeBefore(w.until, w.pending) || madeBefore(recorded, w.pending) ||
-		!seen.Ended.IsZero() && madeBefore(seen.moment(), w.pending)
+	w.late = w.late || madeBefore(w.bounds().before, w.pending) || madeBefore(recorded.before, w.pending) ||
+		!seen.Ended.IsZero() && madeBefore(seen.moment().before, w.pending)
 	w.mu.Unlock()
 	// Records a crash left without a batch go in one now, so that once
 	// Open returns everything on disk is sealed. The uploader keeps an
@@ -497,7 +525,7 @@ func (w *Writer) Write(in Input) (uint64, error) {
 	}
 	p := &w.pending[len(w.pending)-1]
 	p.env, p.sent, p.has = ev.Envelope, in.Sent, true
-	if p.madeBefore(w.until) {
+	if p.madeBefore(w.bounds().before) {
 		// Made before config.toml was last known to say local-only, as a
 		// git change the watcher held, a hook call parked behind its
 		// folder's first Track or held while the keys or the writer weren't
@@ -666,10 +694,19 @@ func (w *Writer) append(rec ledger.Record) error {
 // (Options.Waiting). A switch back the watch misses, as to a symlinked
 // config.toml's target, ends the stretch at the next seal that reads the
 // file online, and marks no batch.
-func (w *Writer) NoteMode(online bool) {
+func (w *Writer) NoteMode(online bool) { w.NoteModeThen(online, nil) }
+
+// NoteModeThen is NoteMode, and runs then, when set, with the record lock
+// still held: a seal that read config.toml before the note reads it again
+// after both, as after any note, and none reads it between the two, as the
+// agent's Online, which then tells when it may say online, needs.
+func (w *Writer) NoteModeThen(online bool, then func()) {
 	at := w.momentNow()
 	w.mu.Lock()
 	seal := w.noteLocked(online, at)
+	if then != nil {
+		then()
+	}
 	w.mu.Unlock()
 	if seal {
 		w.RequestSeal()
@@ -736,10 +773,17 @@ type Seen struct {
 // same from Options.Seen before it seals what a crash left, and the agent
 // calls NoteSeen as it publishes the writer, for what it saw since, and as
 // it takes in a pairtime login it didn't see.
-func (w *Writer) NoteSeen(s Seen) {
+func (w *Writer) NoteSeen(s Seen) { w.NoteSeenThen(s, nil) }
+
+// NoteSeenThen is NoteSeen, and runs then, when set, with the record lock
+// still held, as NoteModeThen does.
+func (w *Writer) NoteSeenThen(s Seen, then func()) {
 	at := w.momentNow()
 	w.mu.Lock()
 	seal := w.seenLocked(s, at)
+	if then != nil {
+		then()
+	}
 	w.mu.Unlock()
 	if seal {
 		w.RequestSeal()
@@ -773,16 +817,18 @@ func (w *Writer) seenLocked(s Seen, at moment) bool {
 		if s.Earlier {
 			ended = w.earlier(ended)
 		}
-		newer := (ended.run > w.until.run || ended.wall > w.until.wall ||
-			ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os) &&
-			!(s.Earlier && w.until.wall == 0 && w.until.os == 0 && w.sealed > ended.wall)
+		// Frames that recorded no moment leave only the newest batch's seal
+		// to tell an earlier run's end from one the writer never had.
+		sealedSince := s.Earlier && w.until.wall == 0 && w.until.os == 0 && w.sealed > ended.wall
+		newer := !sealedSince && (ended.run > w.until.run || ended.wall > w.until.wall ||
+			ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os)
 		was := w.until
 		if w.local {
 			// A stretch the writer took as going on, which the agent saw end.
 			seal = w.noteLocked(true, ended)
 		}
 		w.until.raise(ended, w.boot)
-		if w.until != was && madeBefore(w.until, w.pending) {
+		if w.until != was && madeBefore(w.bounds().before, w.pending) {
 			w.late = true
 		}
 		if newer && w.back == 0 {
@@ -998,7 +1044,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 		// event of the stretch that reaches the writer late must land in it,
 		// not after the online batch that closes it.
 		due := w.waiting != nil && (w.back > 0 || w.lastLocal) && len(w.pending) > 0
-		until := w.until
+		b := w.bounds()
 		w.mu.Unlock()
 		// A switch to local-only mode that came before the seal makes the
 		// batch local-only, whenever its records came.
@@ -1007,7 +1053,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 		// reach the writer after the mark, so the batch is local-only and
 		// the mark waits (Options.Waiting).
 		asked = due && online
-		waiting = asked && w.waiting(until.before)
+		waiting = asked && w.waiting(b.before)
 		w.mu.Lock()
 		if w.notes == notes && w.next == next {
 			break

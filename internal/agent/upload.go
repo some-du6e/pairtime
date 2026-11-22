@@ -141,8 +141,10 @@ func (a *agent) seeLocked(online bool) bool {
 	if online {
 		m.ended, m.os, m.kept, m.until = time.Now(), clock.Now(), false, time.Time{}
 		// A hook call made just before, that went to the spool, comes
-		// within seconds.
+		// within seconds, and a spool file found busy from here holds the
+		// mark for spoolBusyHold again (spoolHolds).
 		a.drainSoon()
+		a.spoolBusySince.Store(nil)
 	}
 	m.local = !online
 	a.modesLocal.Store(m.local)
@@ -213,9 +215,12 @@ func (a *agent) setLinkedLocked(l int64) {
 
 // seenLinkLocked lets the writer's Online see the link modes accounted
 // for (writerOnline), once the writer has what modes saw of the stretch
-// it ended (ledger.Options.Seen, ledger.Writer.NoteSeen, NoteMode): until
-// then Online says local-only, so no seal takes a record of a stretch the
-// writer doesn't know of yet for an online one. a.modes.mu is held.
+// it ended (ledger.Options.Seen, ledger.Writer.NoteSeenThen,
+// NoteModeThen): until then Online says local-only, so no seal takes a
+// record of a stretch the writer doesn't know of yet for an online one.
+// The writer runs it under its record lock with the note, so no seal reads
+// Online between the two, as one would find the link unaccounted for and
+// clear the mark the note armed. a.modes.mu is held.
 func (a *agent) seenLinkLocked() {
 	a.linkedSeen.Store(a.modes.linked)
 }
@@ -267,6 +272,7 @@ func (a *agent) unseenLinkLocked() bool {
 		return false
 	}
 	a.setLinkedLocked(l)
+	a.spoolBusySince.Store(nil) // as at any stretch end (seeLocked)
 	end := time.UnixMilli(l).Add(time.Second)
 	if l == m.settled {
 		switch {
@@ -330,8 +336,7 @@ func (a *agent) seeSoon() {
 			a.keepLocked()
 		}
 		// seenLocked takes the link in, and keeps it in state.json.
-		w.NoteSeen(a.seenLocked())
-		a.seenLinkLocked()
+		w.NoteSeenThen(a.seenLocked(), a.seenLinkLocked)
 	}()
 }
 
@@ -352,8 +357,7 @@ func (a *agent) noteMode() {
 		}
 	}
 	if w := a.modes.w; w != nil {
-		w.NoteMode(online)
-		a.seenLinkLocked()
+		w.NoteModeThen(online, a.seenLinkLocked)
 	}
 	if changed {
 		a.keepLocked()
@@ -382,8 +386,7 @@ func (a *agent) noteBack() {
 		a.setLinkedLocked(l)
 	}
 	if w := a.modes.w; w != nil {
-		w.NoteMode(true)
-		a.seenLinkLocked()
+		w.NoteModeThen(true, a.seenLinkLocked)
 	}
 	a.keepLocked()
 }
@@ -417,8 +420,7 @@ func (a *agent) seenLocked() ledger.Seen {
 func (a *agent) publishWriter(w *ledger.Writer) {
 	a.modes.mu.Lock()
 	defer a.modes.mu.Unlock()
-	w.NoteSeen(a.seenLocked())
-	a.seenLinkLocked()
+	w.NoteSeenThen(a.seenLocked(), a.seenLinkLocked)
 	a.modes.w = w
 	a.writer.Store(w)
 }
