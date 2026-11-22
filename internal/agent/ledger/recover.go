@@ -682,12 +682,11 @@ func (w *Writer) observe(rec ledger.Record) {
 	w.q.Observe(body.E)
 }
 
-// madeBefore reports whether a record in recs is an event made before
-// w.until by its own time (moment.before), as Write would have found it.
-// w.mu is held.
-func (w *Writer) madeBefore(recs []pending) bool {
+// madeBefore reports whether a record in recs is an event made before m,
+// as Write would have found it (pending.madeBefore).
+func madeBefore(m moment, recs []pending) bool {
 	for _, p := range recs {
-		if e, ok := envelopeOf(p.rec); ok && w.until.before(e) {
+		if p.madeBefore(m) {
 			return true
 		}
 	}

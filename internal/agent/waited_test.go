@@ -85,6 +85,32 @@ func TestCallParkedAcrossLogin(t *testing.T) {
 	waitStatus(t, a, func(s statusReply) bool {
 		return s.Adapters.Harnesses[event.HarnessClaudeCode].Calls == 2 && s.Adapters.Waiting == 1
 	})
+	// The prompt asks for a seal of its own: its batch is sealed while the
+	// SessionStart still waits, and local-only for it.
+	promptSealed := func() (sealed, online bool) {
+		ledger.ReadBatches(r.dirs.Ledger(), 1, func(b ledger.Batch) error {
+			for _, rec := range b.Records {
+				if body, err := pkgledger.ParseBody(rec.Body); err == nil {
+					if ev, err := body.Event(); err == nil && ev.Kind() == event.KindPromptSubmit {
+						sealed, online = true, b.Online
+					}
+				}
+			}
+			return nil
+		})
+		return sealed, online
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if sealed, online := promptSealed(); sealed {
+			if online {
+				t.Fatal("the prompt sent while the SessionStart waited was sealed online before the SessionStart reached the ledger")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the prompt sent while the SessionStart waited was never sealed")
+		}
+	}
 	// The slow folder's first resolve ends, and the SessionStart goes, with
 	// its session's first prompt after it.
 	os.Remove(hold)
@@ -598,6 +624,47 @@ func TestModesSeen(t *testing.T) {
 				t.Errorf("the seal that found the link sealed online %v, and the next online %v, marked %v; want local-only, then online and marked", unseen.Online, after.Online, after.Back)
 			}
 		}},
+		{"the writer's Online sees the link modes accounted for from the Seen Open takes, so Open's seal of what a crash left reads config.toml as it is", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			linked := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			writeAccount(t, dirs, linked)
+			keepState(t, dirs, map[string]any{modesKey: modesState{Ended: linked.Add(time.Minute), Linked: linked.UnixMilli()}})
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			a.startModes()
+			a.seen()
+			if !a.writerOnline() {
+				t.Error("the writer's Online said local-only after the Seen Open takes, for a link modes accounted for")
+			}
+		}},
+		{"a link modes takes in leaves the writer's Online local-only until the writer has the stretch's end, and then it sees the link", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			first := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			writeAccount(t, dirs, first)
+			keepState(t, dirs, map[string]any{modesKey: modesState{Ended: first.Add(time.Minute), Linked: first.UnixMilli()}})
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			t.Cleanup(a.startLedger())
+			opened(t, a)
+			relinked := time.Now().UTC().Truncate(time.Second)
+			writeAccount(t, dirs, relinked)
+			// As takeLinkSoon's goroutine takes the link in, under modes' lock,
+			// before it gives the writer the stretch's end.
+			a.modes.mu.Lock()
+			took := a.unseenLinkLocked()
+			early := a.writerOnline()
+			a.modes.mu.Unlock()
+			for deadline := time.Now().Add(10 * time.Second); a.linkedSeen.Load() != relinked.UnixMilli() || a.takingLink.Load(); time.Sleep(5 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("the writer's Online never saw the link")
+				}
+			}
+			if !took || early || !a.writerOnline() {
+				t.Errorf("the link was taken in %v, and the writer's Online said online %v before the writer had the stretch's end, and %v after; want true, false, true", took, early, a.writerOnline())
+			}
+		}},
 		{"held calls an earlier run left count as on their way from the ledger's start until the adapters have counted them", func(t *testing.T) {
 			a, _ := modesAgent(t, "online")
 			leftHeld(t, a.adaptersHost())
@@ -762,8 +829,10 @@ func TestSpoolHolds(t *testing.T) {
 			[]call{{ago: 2 * time.Minute, noMono: true}}, nil, false, true},
 		{"a call without the hook's monotonic reading made after the moment holds nothing", []call{{ago: time.Second, noMono: true}}, nil, false, false},
 		{"a call made before the moment in a file a drain took and hasn't finished holds the mark", nil, []call{early}, false, true},
-		{"a call made before the moment behind as many made after it as a file's scan reads holds nothing, since calls reach the spool in about the order they are made",
-			append(slices.Repeat([]call{late}, spoolScanned), early), nil, false, false},
+		{"calls past as many as a file's scan reads may hold one made before the moment, so they hold the mark, for spoolBusyHold at most, as a file the scan can't read to its end does",
+			append(slices.Repeat([]call{late}, spoolScanned), late), nil, false, true},
+		{"as many calls made after the moment as a file's scan reads hold nothing",
+			slices.Repeat([]call{late}, spoolScanned), nil, false, false},
 		{"with no drain running in this run, a call made before the moment waits for the next start, and holds nothing", []call{early}, nil, true, false},
 		{"an empty inbox holds nothing", nil, nil, false, false},
 	}

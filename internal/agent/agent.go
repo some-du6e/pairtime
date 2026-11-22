@@ -135,9 +135,10 @@ type agent struct {
 	// spoolBusySince is when the asks in a row that found a spool file
 	// busy began, nil while none did (spoolHolds).
 	spoolBusySince atomic.Pointer[time.Time]
-	// linkedSeen is the link modes accounted for (modes.linked), for the
-	// writer's Online, which takes no lock (writerOnline), and takingLink
-	// is set while takeLinkSoon's goroutine runs.
+	// linkedSeen is the link modes accounted for (modes.linked) once the
+	// writer has what modes saw of the stretch it ended, for the writer's
+	// Online, which takes no lock (writerOnline, seenLinkLocked), and
+	// takingLink is set while takeLinkSoon's goroutine runs.
 	linkedSeen atomic.Int64
 	takingLink atomic.Bool
 	// notifier shows the coach's notification when a work session ends

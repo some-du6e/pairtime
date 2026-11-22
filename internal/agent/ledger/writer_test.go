@@ -720,7 +720,11 @@ func TestNoteMode(t *testing.T) {
 	// the OS's monotonic clock, as a hook call the agent stamped after a step
 	// back of the wall clock ("write-resent"); or a hook call of the boot the
 	// writer runs in, half a minute before the start by its t ("write-boot");
-	// or opens the writer again in another boot ("reboot").
+	// or opens the writer again in another boot ("reboot"), or after a kill,
+	// in another boot ("kill-reboot"); or opens it again with a stretch end
+	// an earlier run saw after the newest seal, later than the last note by
+	// the OS's clock in the same boot, though a step back of the wall clock
+	// put it before ("reopen-seen-os").
 	cases := []struct {
 		name  string
 		steps []string
@@ -817,6 +821,12 @@ func TestNoteMode(t *testing.T) {
 		{"a stretch only a seal's read saw, with records pending, ends at the next seal that reads config.toml online, so an event made before that read is sealed local-only",
 			[]string{"file-local", "write", "seal", "file-online", "seal-none", "write-old", "seal", "write", "seal"},
 			[]bool{false, false, true}, []bool{false, false, false}, []int{1, 1, 1}},
+		{"an event a kill left in the boot before, made before the newest seal frame's moment by that boot's clock though its t is after, is sealed local-only by the next Open in another boot",
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "write-stepped", "kill-reboot", "sealed"},
+			[]bool{false, true, false}, []bool{false, true, false}, []int{1, 1, 1}},
+		{"a stretch end an earlier run saw after the newest seal, later by the OS's clock of the same boot though earlier by the wall clock, is newer, and marks the first batch after it",
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reopen-seen-os", "write-run", "seal"},
+			[]bool{false, true, true}, []bool{false, true, true}, []int{1, 1, 1}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -843,11 +853,14 @@ func TestNoteMode(t *testing.T) {
 			bootNow.Store(osBoot)
 			var monoNow atomic.Int64
 			monoNow.Store(osMono)
+			// seen is what the agent saw, for the next Open.
+			var seen Seen
 			openWriter := func(online func() bool) *Writer {
 				return open(t, dir, clk, func(o *Options) {
 					if withOnline {
 						o.Online = online
 					}
+					o.Seen = func() Seen { return seen }
 					o.Sealed = func(b Batch) { sealed <- b }
 					o.Waiting = func(before func(event.Envelope) bool) bool {
 						asked.Store(before(event.Envelope{T: testT - 1}) && !before(event.Envelope{T: testT}) &&
@@ -925,6 +938,20 @@ func TestNoteMode(t *testing.T) {
 					bootNow.Store("b_os2")
 					monoNow.Store(10_000)
 					w = openWriter(file.Load)
+				case "kill-reboot":
+					abandon(w)
+					bootNow.Store("b_os2")
+					monoNow.Store(10_000)
+					w = openWriter(file.Load)
+				case "reopen-seen-os":
+					if err := w.Close(); err != nil {
+						t.Fatalf("step %d: %v", i, err)
+					}
+					monoNow.Store(osMono + 20_000)
+					at := time.UnixMilli(testT - 10_000)
+					seen = Seen{Ended: at, OS: osclock.Stamp{Wall: at, Mono: osMono + 10_000, BootID: osBoot}, Earlier: true}
+					w = openWriter(file.Load)
+					seen = Seen{}
 				case "write-stepped":
 					writeAt(i, testT+60_000, func(in *Input) { in.Event.BootID, in.Event.Mono = osBoot, osMono-1000 })
 				case "waiting", "arrived":
@@ -1127,6 +1154,8 @@ func TestNoteSeen(t *testing.T) {
 			Seen{Ended: time.UnixMilli(testT + 60_000), Earlier: true}, false, false, []string{"write-run", "seal"}, []bool{true}, []bool{true}},
 		{"a stretch that lasted, by the wall clock alone, past its end, as to the end of a link's second, holds an event judged by its t until then",
 			Seen{Ended: time.UnixMilli(testT), Until: time.UnixMilli(testT + 2500)}, false, false, []string{"write", "seal", "write", "seal"}, []bool{false, true}, []bool{false, true}},
+		{"a record the writer took before NoteSeen gave it a stretch end it didn't know of, made before that end, is sealed local-only, and the batch after it is marked",
+			Seen{}, false, false, []string{"write", "seen-after", "seal", "write", "seal"}, []bool{false, true}, []bool{false, true}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1182,6 +1211,9 @@ func TestNoteSeen(t *testing.T) {
 				case "seen-ended":
 					file.Store(true)
 					w.NoteSeen(ended)
+				case "seen-after":
+					// The end of a stretch after the record written before it.
+					w.NoteSeen(Seen{Ended: time.UnixMilli(testT + 2500)})
 				case "reopen":
 					if err := w.Close(); err != nil {
 						t.Fatalf("step %d: %v", i, err)
@@ -1395,6 +1427,10 @@ func TestSealReadsUnderLock(t *testing.T) {
 						}
 						return c.reads[n-1]
 					case n == sealReads+1:
+						if w.mu.TryLock() {
+							w.mu.Unlock()
+							t.Error("the last read ran without the record lock")
+						}
 						go func() {
 							_, late = w.Write(in)
 							close(done)
@@ -1472,12 +1508,14 @@ func TestSealReadsUnderLock(t *testing.T) {
 func TestSealReadsSeenAgain(t *testing.T) {
 	cases := []struct {
 		name string
-		// seen has NoteSeen give a stretch end during the first read.
+		// seen has NoteSeen give a stretch end during the first read, and
+		// reads is how many times the seal reads config.toml.
 		seen   bool
 		online bool
+		reads  int32
 	}{
-		{"a stretch end NoteSeen gives while a seal reads config.toml has the seal read it again and ask Waiting, which holds the batch local-only", true, false},
-		{"with no NoteSeen meanwhile, Waiting isn't asked, and the batch is sealed online", false, true},
+		{"a stretch end NoteSeen gives while a seal reads config.toml has the seal read it again and ask Waiting, which holds the batch local-only", true, false, 2},
+		{"with no NoteSeen meanwhile, Waiting isn't asked, and the batch is sealed online", false, true, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1505,8 +1543,8 @@ func TestSealReadsSeenAgain(t *testing.T) {
 			if _, ok, err := w.Seal(); !ok || err != nil {
 				t.Fatalf("Seal sealed %v, %v", ok, err)
 			}
-			if b := <-sealed; b.Online != c.online {
-				t.Errorf("the batch was sealed online %v, want %v", b.Online, c.online)
+			if b := <-sealed; b.Online != c.online || reads.Load() != c.reads {
+				t.Errorf("the batch was sealed online %v after %d reads of config.toml, want %v after %d", b.Online, reads.Load(), c.online, c.reads)
 			}
 		})
 	}

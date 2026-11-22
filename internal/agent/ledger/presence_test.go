@@ -40,10 +40,19 @@ func TestPresenceWaiting(t *testing.T) {
 				p.Record(presence.Record{At: time.UnixMilli(ms), Data: &event.OSPresence{IdleAnyS: 1}})
 			}
 			if c.written {
-				p.Attach(open(t, t.TempDir(), newClock(testT)))
+				dir := t.TempDir()
+				w := open(t, dir, newClock(testT))
+				p.Attach(w)
 				// Close waits for the goroutine, which writes what was queued
 				// first.
 				p.Close()
+				if err := w.Close(); err != nil {
+					t.Fatal(err)
+				}
+				// The writer took them, and didn't turn them away.
+				if n := len(records(verify(t, dir, keysOf(t, testKDev)))); n != len(c.times) {
+					t.Fatalf("the writer holds %d records, want %d", n, len(c.times))
+				}
 			}
 			got := p.Waiting(before)
 			p.Close()

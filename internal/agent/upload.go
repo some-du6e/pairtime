@@ -98,10 +98,11 @@ type modes struct {
 	// OS's (os), zero before any. kept is set while ended is the one
 	// state.json kept from an earlier run (ledger.Seen.Earlier). linked is
 	// account.json's linked_at, in Unix ms, of the link modes has accounted
-	// for, which agent.linkedSeen mirrors, and until the wall-clock bound of
-	// the end of a link the agent didn't see (unseenLinkLocked), zero for
-	// none. settled is the link the uploader had settled as the agent
-	// started, as state.json kept it.
+	// for, which agent.linkedSeen takes once the writer has what modes saw
+	// of the stretch it ended (seenLinkLocked), and until the wall-clock
+	// bound of the end of a link the agent didn't see (unseenLinkLocked),
+	// zero for none. settled is the link the uploader had settled as the
+	// agent started, as state.json kept it.
 	local   bool
 	ended   time.Time
 	os      clock.Stamp
@@ -201,11 +202,20 @@ func (a *agent) startModes() {
 	}
 }
 
-// setLinkedLocked has modes account for link l, and the writer's Online
-// see it (writerOnline). a.modes.mu is held.
+// setLinkedLocked has modes account for link l. The writer's Online sees
+// it once the writer has what modes saw of the stretch the link ended
+// (seenLinkLocked). a.modes.mu is held.
 func (a *agent) setLinkedLocked(l int64) {
 	a.modes.linked = l
-	a.linkedSeen.Store(l)
+}
+
+// seenLinkLocked lets the writer's Online see the link modes accounted
+// for (writerOnline), once the writer has what modes saw of the stretch
+// it ended (ledger.Options.Seen, ledger.Writer.NoteSeen, NoteMode): until
+// then Online says local-only, so no seal takes a record of a stretch the
+// writer doesn't know of yet for an online one. a.modes.mu is held.
+func (a *agent) seenLinkLocked() {
+	a.linkedSeen.Store(a.modes.linked)
 }
 
 // linkedAt is account.json's linked_at, in Unix ms, 0 when it names no
@@ -256,12 +266,13 @@ func (a *agent) unseenLinkLocked() bool {
 }
 
 // writerOnline is the ledger writer's Online: online, and local-only while
-// account.json names a link modes hasn't accounted for (linkedSeen), as
-// after a pairtime logout and a login the config watch didn't hear, as
-// with a symbolic link for config.toml or a watch that failed: the records
-// a seal finds then may have come between the two, while config.toml said
-// local-only. It asks for the link to be taken in off the seal's path
-// (takeLinkSoon), so it takes no lock of the agent's, as Online mustn't.
+// account.json names a link the writer hasn't had the stretch's end of
+// (linkedSeen), as after a pairtime logout and a login the config watch
+// didn't hear, as with a symbolic link for config.toml or a watch that
+// failed: the records a seal finds then may have come between the two,
+// while config.toml said local-only. It asks for the link to be taken in
+// off the seal's path (takeLinkSoon), so it takes no lock of the agent's,
+// as Online mustn't.
 func (a *agent) writerOnline() bool {
 	if !a.online() {
 		return false
@@ -275,9 +286,12 @@ func (a *agent) writerOnline() bool {
 
 // takeLinkSoon takes in a link the agent didn't see (unseenLinkLocked) on
 // a goroutine of its own, and gives the writer the stretch's end, as
-// publishWriter does: the records still on their way that were made
-// before it are sealed local-only when they come, and the first batch
-// after them takes the mark. One at a time.
+// publishWriter does, before the writer's Online sees the link
+// (seenLinkLocked): the records the writer holds or gets that were made
+// before the end are sealed local-only, and the first batch after them
+// takes the mark. The seal read config.toml online, so a switch back the
+// watch hasn't noted yet ends the stretch here, as noteBack would. Until
+// the writer is published, publishWriter does all this. One at a time.
 func (a *agent) takeLinkSoon() {
 	if !a.takingLink.CompareAndSwap(false, true) {
 		return
@@ -286,13 +300,16 @@ func (a *agent) takeLinkSoon() {
 		defer a.takingLink.Store(false)
 		a.modes.mu.Lock()
 		defer a.modes.mu.Unlock()
-		if !a.unseenLinkLocked() {
+		w := a.modes.w
+		if w == nil {
 			return
 		}
-		a.keepLocked()
-		if w := a.modes.w; w != nil {
-			w.NoteSeen(a.seenLocked())
+		if a.seeLocked(a.online()) {
+			a.keepLocked()
 		}
+		// seenLocked takes the link in, and keeps it in state.json.
+		w.NoteSeen(a.seenLocked())
+		a.seenLinkLocked()
 	}()
 }
 
@@ -312,6 +329,7 @@ func (a *agent) noteMode() {
 	}
 	if w := a.modes.w; w != nil {
 		w.NoteMode(online)
+		a.seenLinkLocked()
 	}
 	if changed {
 		a.keepLocked()
@@ -339,16 +357,21 @@ func (a *agent) noteBack() {
 	a.setLinkedLocked(a.linkedAt())
 	if w := a.modes.w; w != nil {
 		w.NoteMode(true)
+		a.seenLinkLocked()
 	}
 	a.keepLocked()
 }
 
 // seen is the ledger writer's Seen: what modes saw of config.toml's mode
-// before the writer could hear the watch's notes.
+// before the writer could hear the watch's notes. Open takes it before it
+// seals anything, so the writer's Online sees the link from here on
+// (seenLinkLocked).
 func (a *agent) seen() ledger.Seen {
 	a.modes.mu.Lock()
 	defer a.modes.mu.Unlock()
-	return a.seenLocked()
+	s := a.seenLocked()
+	a.seenLinkLocked()
+	return s
 }
 
 // seenLocked is seen, with a link the agent didn't see taken in first
@@ -369,6 +392,7 @@ func (a *agent) publishWriter(w *ledger.Writer) {
 	a.modes.mu.Lock()
 	defer a.modes.mu.Unlock()
 	w.NoteSeen(a.seenLocked())
+	a.seenLinkLocked()
 	a.modes.w = w
 	a.writer.Store(w)
 }

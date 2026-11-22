@@ -305,10 +305,31 @@ type Writer struct {
 }
 
 // pending is a record written since the last seal, with where its frame
-// starts.
+// starts. One Write wrote keeps its event's times and its sender's stamp
+// (Input.Sent) too, with has set, so that a stretch end the writer hears
+// of later holds it to the moment again (NoteSeen); one recovery read back
+// gives its event's times from its body (envelopeOf).
 type pending struct {
-	rec ledger.Record
-	pos position
+	rec  ledger.Record
+	pos  position
+	env  event.Envelope
+	sent osclock.Stamp
+	has  bool
+}
+
+// madeBefore reports whether p is an event made before m, by its event's
+// own times or by its sender's stamp, as Write holds a record to the
+// moment.
+func (p pending) madeBefore(m moment) bool {
+	e, ok := p.env, p.has
+	if !ok {
+		e, ok = envelopeOf(p.rec)
+	}
+	if !ok {
+		return false
+	}
+	return m.before(e) || !p.sent.Wall.IsZero() &&
+		m.before(event.Envelope{T: p.sent.Wall.UnixMilli(), Mono: p.sent.Mono, BootID: p.sent.BootID})
 }
 
 // position is a place in the segments: a segment's day and an offset in it.
@@ -386,13 +407,18 @@ func Open(opts Options) (*Writer, error) {
 	// a step back of the wall clock while the agent was stopped: an event
 	// of an earlier run or boot, as a call held.jsonl kept, is still held
 	// to it by its t.
+	recorded := w.until
 	w.until = w.earlier(w.until)
 	w.seenLocked(seen, w.momentNow())
 	// An event a crash left without a batch that was made before
 	// config.toml was last known to say local-only, as the newest seal
 	// frame recorded it or the agent saw it, is sealed local-only, as it
-	// would have been without the crash.
-	w.late = w.late || w.madeBefore(w.pending)
+	// would have been without the crash: by the moment as it is now, and
+	// by each as it was recorded, whose OS reading holds a hook call of the
+	// boot it was taken in to it by that boot's clock, where the moment
+	// now holds only this boot's start (earlier).
+	w.late = w.late || madeBefore(w.until, w.pending) || madeBefore(recorded, w.pending) ||
+		!seen.Ended.IsZero() && madeBefore(seen.moment(), w.pending)
 	w.mu.Unlock()
 	// Records a crash left without a batch go in one now, so that once
 	// Open returns everything on disk is sealed. The uploader keeps an
@@ -468,8 +494,9 @@ func (w *Writer) Write(in Input) (uint64, error) {
 	if err := w.append(rec); err != nil {
 		return 0, err
 	}
-	if w.until.before(ev.Envelope) || !in.Sent.Wall.IsZero() &&
-		w.until.before(event.Envelope{T: in.Sent.Wall.UnixMilli(), Mono: in.Sent.Mono, BootID: in.Sent.BootID}) {
+	p := &w.pending[len(w.pending)-1]
+	p.env, p.sent, p.has = ev.Envelope, in.Sent, true
+	if p.madeBefore(w.until) {
 		// Made before config.toml was last known to say local-only, as a
 		// git change the watcher held, a hook call parked behind its
 		// folder's first Track or held while the keys or the writer weren't
@@ -701,12 +728,13 @@ type Seen struct {
 // NoteSeen takes what the agent saw of config.toml's mode before it
 // published the writer to its config watch: a local-only stretch it saw
 // end makes every event made before its end local-only, whenever it comes
-// (Write), and the first batch after it that has none, sealed while no
-// such event is still on its way, is marked (Batch.Back), as after a
-// noted switch back. A file that says local-only now begins a stretch, as
-// NoteMode(false) does. Open takes the same from Options.Seen before it
-// seals what a crash left, and the agent calls NoteSeen as it publishes
-// the writer, for what it saw since.
+// (Write), those the writer took already included, and the first batch
+// after it that has none, sealed while no such event is still on its way,
+// is marked (Batch.Back), as after a noted switch back. A file that says
+// local-only now begins a stretch, as NoteMode(false) does. Open takes the
+// same from Options.Seen before it seals what a crash left, and the agent
+// calls NoteSeen as it publishes the writer, for what it saw since, and as
+// it takes in a pairtime login it didn't see.
 func (w *Writer) NoteSeen(s Seen) {
 	at := w.momentNow()
 	w.mu.Lock()
@@ -722,26 +750,32 @@ func (w *Writer) NoteSeen(s Seen) {
 // the newest seal frame recorded it, arms no mark: the agent sees the same
 // end at every start, and a mark due then would hold the first batch for
 // what is still on its way after any restart. One the agent saw in this
-// run is newer by this run's clock, whatever the wall clock says. w.mu is
-// held.
+// run is newer by this run's clock, and one of the boot the moment's OS
+// reading is of by that clock, whatever the wall clock says. A record the
+// writer took before it heard of the end, as one the agent took in before
+// it found a pairtime login it hadn't seen, was made in the stretch if it
+// was made before the end, so its batch is local-only, as Write would have
+// sealed it. w.mu is held.
 func (w *Writer) seenLocked(s Seen, at moment) bool {
 	// A seal reading config.toml meanwhile reads it again, as after a note.
 	w.notes++
 	seal := false
 	if !s.Ended.IsZero() {
-		ended := momentAt(s.Ended, s.OS)
+		ended := s.moment()
 		if s.Earlier {
 			ended = w.earlier(ended)
 		}
-		if !s.Until.IsZero() {
-			ended.wall = max(ended.wall, s.Until.UnixMilli())
-		}
-		newer := ended.run > w.until.run || ended.wall > w.until.wall
+		newer := ended.run > w.until.run || ended.wall > w.until.wall ||
+			ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os
+		was := w.until
 		if w.local {
 			// A stretch the writer took as going on, which the agent saw end.
 			seal = w.noteLocked(true, ended)
 		}
 		w.until.raise(ended, w.boot)
+		if w.until != was && madeBefore(w.until, w.pending) {
+			w.late = true
+		}
 		if newer && w.back == 0 {
 			w.back = w.next
 		}
@@ -750,6 +784,16 @@ func (w *Writer) seenLocked(s Seen, at moment) bool {
 		seal = w.noteLocked(false, at) || seal
 	}
 	return seal
+}
+
+// moment is the stretch end s gives, by each clock it was read by, and by
+// the wall clock to Until when that is later.
+func (s Seen) moment() moment {
+	m := momentAt(s.Ended, s.OS)
+	if !s.Until.IsZero() {
+		m.wall = max(m.wall, s.Until.UnixMilli())
+	}
+	return m
 }
 
 // momentNow is now by each clock a moment holds.

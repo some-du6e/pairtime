@@ -170,7 +170,7 @@ type DrainResult struct {
 	// (ErrRejected). They are skipped too.
 	Rejected int
 	// Failed is how many spool files couldn't be read this time. Each is
-	// read again by the next drain, until maxFileFailures drains in a row
+	// read again by the next drain, until MaxFileFailures drains in a row
 	// have failed it and it is set aside.
 	Failed int
 	// SetAside is how many spool files were renamed to end in .bad,
@@ -191,11 +191,11 @@ const (
 	renameWait  = 20 * time.Millisecond
 )
 
-// maxFileFailures is how many drains in a row may fail to read a spool
+// MaxFileFailures is how many drains in a row may fail to read a spool
 // file before Drain sets it aside. What this is for, such as a disk error,
 // doesn't pass; what does pass, such as running out of file descriptors,
 // gets a few minutes to.
-const maxFileFailures = 3
+const MaxFileFailures = 3
 
 // A Drainer drains one inbox directory into one sink, again and again,
 // and remembers what earlier drains left of each taken file: where the
@@ -244,7 +244,7 @@ func Drain(dir string, sink Sink, now func() clock.Stamp) (DrainResult, error) {
 // skipped. Any other sink error stops the drain: the file waits, and so
 // does everything after it, since the same sink would get it. A file that
 // can't be read is passed over, and the files after it are drained. It is
-// tried again by the next drain, and set aside once maxFileFailures drains
+// tried again by the next drain, and set aside once MaxFileFailures drains
 // in a row have failed it, or at once when it isn't this user's alone
 // (privateFile).
 //
@@ -322,7 +322,7 @@ func (d *Drainer) drainFile(name string, res *DrainResult) (stop bool, err error
 		left.failures = 0 // it got further than the last drain did
 	}
 	left.failures++
-	if left.failures < maxFileFailures && !isNotPrivate(err) {
+	if left.failures < MaxFileFailures && !isNotPrivate(err) {
 		return false, fmt.Errorf("inbox: reading %s, which waits for the next drain: %w", filepath.Base(name), err)
 	}
 	delete(d.left, name)
@@ -454,15 +454,16 @@ func retry(op func() error) error {
 // and a file that is gone by the time Scan opens it was deleted by a drain
 // that had handed all of it over. Lines that aren't a message are passed
 // over, and so are files no drain reads: those of an inbox directory that
-// isn't this user's alone (privateDir), one set aside (.bad), one that
-// isn't this user's alone (privateFile), or one that can't be read, which
-// a drain sets aside in time. Scan writes nothing, and its opens let a
-// drain rename and delete the files meanwhile, Windows included
-// (openShared). A file that is there but can't be opened for a moment, as
-// while a drain renames it on Windows, may hold any message: once the
-// tries a sender gets are over (busy), Scan reads the other files on, and
-// reports the first such file's error when none of them had the message
-// each takes.
+// isn't this user's alone (privateDir), one set aside (.bad), and one that
+// isn't a regular file or isn't this user's alone (privateFile), which a
+// drain sets aside at once. Scan writes nothing, and its opens let a drain
+// rename and delete the files meanwhile, Windows included (openShared). A
+// file Scan can't read to its end may hold any message, and a drain may
+// still take it: one that can't be opened, as while a drain renames it on
+// Windows once the tries a sender gets are over (busy), or read, which a
+// drain tries again MaxFileFailures times, or one that holds more than
+// limit messages. Scan reads the other files on, and reports the first
+// such file's error when none of them had the message each takes.
 func Scan(dir string, limit int, each func(Message) bool) (bool, error) {
 	if privateDir(dir) != nil {
 		return false, nil
@@ -494,27 +495,43 @@ func Scan(dir string, limit int, each func(Message) bool) (bool, error) {
 	return false, held
 }
 
-// scanFile is Scan of the one file name.
+// scanFile is Scan of the one file name. It reports an error for a file
+// it couldn't read to its end, which a drain may still take.
 func scanFile(name string, limit int, each func(Message) bool) (bool, error) {
-	if fi, err := os.Lstat(name); err != nil || !fi.Mode().IsRegular() {
+	unread := func(err error) error { return fmt.Errorf("inbox: %s can't be read: %w", filepath.Base(name), err) }
+	fi, err := os.Lstat(name)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, unread(err)
+	case !fi.Mode().IsRegular():
 		return false, nil
 	}
 	f, err := openScan(name)
-	if err != nil {
-		if busy(err) {
-			return false, fmt.Errorf("inbox: %s stayed busy: %w", filepath.Base(name), err)
-		}
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
 		return false, nil
+	case busy(err):
+		return false, fmt.Errorf("inbox: %s stayed busy: %w", filepath.Base(name), err)
+	case err != nil:
+		return false, unread(err)
 	}
 	defer f.Close()
-	if fi, err := f.Stat(); err != nil || privateFile(name, fi) != nil {
+	if fi, err = f.Stat(); err != nil {
+		return false, unread(err)
+	}
+	if privateFile(name, fi) != nil {
 		return false, nil
 	}
 	r := bufio.NewReaderSize(f, 64<<10)
-	for n := 0; n < limit; {
+	for n := 0; ; {
 		line, long, err := readLine(r, MaxMessage)
-		if err != nil {
+		if errors.Is(err, io.EOF) {
 			return false, nil
+		}
+		if err != nil {
+			return false, unread(err)
 		}
 		if long || len(line) == 0 {
 			continue
@@ -523,12 +540,14 @@ func scanFile(name string, limit int, each func(Message) bool) (bool, error) {
 		if err != nil {
 			continue
 		}
+		if n == limit {
+			return false, fmt.Errorf("inbox: %s holds more than %d messages", filepath.Base(name), limit)
+		}
 		n++
 		if each(m) {
 			return true, nil
 		}
 	}
-	return false, nil
 }
 
 // openScan opens a spool file for Scan, and tries again while another

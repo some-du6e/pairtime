@@ -17,12 +17,14 @@
 //     with the batch's b, first_seq, n, prev, R_b, H_b and sealed_at; its
 //     online, true when it was sealed while config.toml let the computer
 //     upload, none of its records came while the agent's config watch said
-//     local-only, and none is an event made, by its own time, before
-//     config.toml was last known to say local-only, false otherwise
-//     (Options.Online, Writer.NoteMode, Writer.Write), and missing only from
-//     an older version's seal frames, which recorded no mode; back on the
-//     first batch sealed online whose records all came after the watch
-//     noted a switch back online, events by their own time too, with no
+//     local-only, none is an event made, by its own times or by its
+//     sender's stamp (Input.Sent), before config.toml was last known to
+//     say local-only, and no such event was still on its way to the writer
+//     as it was sealed (Options.Waiting), false otherwise (Options.Online,
+//     Writer.NoteMode, Writer.NoteSeen, Writer.Write), and missing only
+//     from an older version's seal frames, which recorded no mode; back on
+//     the first batch sealed online whose records all came after the watch
+//     noted a switch back online, events by their own times too, with no
 //     seal since that read config.toml as local-only (Batch.Back); and
 //     local_until, when config.toml was last known, or taken, to say
 //     local-only as the batch was sealed, with local_until_os, the same
