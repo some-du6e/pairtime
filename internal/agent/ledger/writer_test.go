@@ -724,7 +724,11 @@ func TestNoteMode(t *testing.T) {
 	// in another boot ("kill-reboot"); or opens it again with a stretch end
 	// an earlier run saw after the newest seal, later than the last note by
 	// the OS's clock in the same boot, though a step back of the wall clock
-	// put it before ("reopen-seen-os").
+	// put it before ("reopen-seen-os"); or opens it again in a third boot,
+	// with a stretch end state.json kept from a second boot that sealed no
+	// batch ("reboot-seen-other"), and writes a hook call of that second
+	// boot made before that end by its clock, though its t is after
+	// ("write-other-boot").
 	cases := []struct {
 		name  string
 		steps []string
@@ -827,6 +831,9 @@ func TestNoteMode(t *testing.T) {
 		{"a hook call of the boot before, which reaches a writer opened in a new boot, made before the newest seal frame's moment by that boot's clock though its t is after, is sealed local-only",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reboot", "write-stepped", "seal", "write", "seal"},
 			[]bool{false, true, false, true}, []bool{false, true, false, false}, []int{1, 1, 1, 1}},
+		{"a hook call of a boot between the newest seal frame's and the writer's, held to the stretch end state.json kept from that boot by its clock, is sealed local-only though its t is after",
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reboot-seen-other", "write-other-boot", "seal"},
+			[]bool{false, true, false}, []bool{false, true, false}, []int{1, 1, 1}},
 		{"a stretch end an earlier run saw after the newest seal, later by the OS's clock of the same boot though earlier by the wall clock, is newer, and marks the first batch after it",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reopen-seen-os", "write-run", "seal"},
 			[]bool{false, true, true}, []bool{false, true, true}, []int{1, 1, 1}},
@@ -946,6 +953,18 @@ func TestNoteMode(t *testing.T) {
 					bootNow.Store("b_os2")
 					monoNow.Store(10_000)
 					w = openWriter(file.Load)
+				case "reboot-seen-other":
+					if err := w.Close(); err != nil {
+						t.Fatalf("step %d: %v", i, err)
+					}
+					bootNow.Store("b_os3")
+					monoNow.Store(10_000)
+					at := time.UnixMilli(testT - 5000)
+					seen = Seen{Ended: at, OS: osclock.Stamp{Wall: at, Mono: 20_000, BootID: "b_os2"}, Earlier: true}
+					w = openWriter(file.Load)
+					seen = Seen{}
+				case "write-other-boot":
+					writeAt(i, testT+60_000, func(in *Input) { in.Event.BootID, in.Event.Mono = "b_os2", 15_000 })
 				case "reopen-seen-os":
 					if err := w.Close(); err != nil {
 						t.Fatalf("step %d: %v", i, err)

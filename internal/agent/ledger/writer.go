@@ -297,9 +297,10 @@ type Writer struct {
 	local, taint, seen, stretchSealed, lastLocal, late bool
 	back, notes                                        uint64
 	until                                              moment
-	// prior is the OS reading of the boot before that until held as Open
-	// read it back, which earlier traded for this boot's start (bounds).
-	prior moment
+	// prior holds the OS readings of other boots that until and the
+	// agent's Seen held as Open read them back, which earlier traded for
+	// this boot's start, one per boot (bounds).
+	prior []moment
 
 	kick     chan struct{}
 	stop     chan struct{}
@@ -337,21 +338,44 @@ func (p pending) madeBefore(before func(event.Envelope) bool) bool {
 }
 
 // bounds is what the writer holds an event to: the moment, and prior, the
-// OS reading of the boot before that the moment held as the newest seal
+// OS readings of earlier boots that the moment held as the newest seal
 // frame, or the agent, recorded it, which Writer.earlier trades for this
-// boot's start. A hook call of that boot that reaches the writer in this
-// one, as one held.jsonl kept across a reboot, is held to that reading by
-// its mono too, as that boot's writer held it.
-type bounds struct{ until, prior moment }
+// boot's start. A hook call of one of those boots that reaches the writer
+// in this one, as one held.jsonl kept across a reboot, is held to that
+// boot's reading by its mono too, as that boot's writer held it.
+type bounds struct {
+	until moment
+	prior []moment
+}
 
 // before reports whether e was made before b, by the moment or, for a hook
-// call of prior's boot, by prior.
+// call of a boot prior holds, by that boot's reading.
 func (b bounds) before(e event.Envelope) bool {
-	return b.until.before(e) || b.prior.os > 0 && e.Mono > 0 && e.BootID == b.prior.boot && e.Mono < b.prior.os
+	if b.until.before(e) {
+		return true
+	}
+	for _, p := range b.prior {
+		if e.Mono > 0 && e.BootID == p.boot && e.Mono < p.os {
+			return true
+		}
+	}
+	return false
 }
 
 // bounds is what the writer holds events to now. w.mu is held.
 func (w *Writer) bounds() bounds { return bounds{w.until, w.prior} }
+
+// addPrior keeps m's OS reading of another boot in prior, the later of
+// two of the same boot. Open alone calls it, before the writer is shared.
+func (w *Writer) addPrior(m moment) {
+	for i, p := range w.prior {
+		if p.boot == m.boot {
+			w.prior[i].os = max(p.os, m.os)
+			return
+		}
+	}
+	w.prior = append(w.prior, moment{os: m.os, boot: m.boot})
+}
 
 // position is a place in the segments: a segment's day and an offset in it.
 type position struct {
@@ -431,12 +455,10 @@ func Open(opts Options) (*Writer, error) {
 	recorded := w.until
 	w.until = w.earlier(w.until)
 	for i, m := range []moment{recorded, seen.moment()} {
-		if i == 1 && seen.Ended.IsZero() {
-			break
+		if i == 1 && seen.Ended.IsZero() || m.os == 0 || w.boot == "" || m.boot == w.boot {
+			continue
 		}
-		if m.os > 0 && w.boot != "" && m.boot != w.boot && (w.prior.os == 0 || m.boot == w.prior.boot && m.os > w.prior.os) {
-			w.prior = moment{os: m.os, boot: m.boot}
-		}
+		w.addPrior(m)
 	}
 	w.seenLocked(seen, w.momentNow())
 	// An event a crash left without a batch that was made before
