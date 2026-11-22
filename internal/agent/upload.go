@@ -335,26 +335,21 @@ func (a *agent) seeSoon() {
 		online := a.online()
 		changed := a.seeLocked(online)
 		changed = a.unseenLinkLocked() || changed
-		switch {
-		case changed:
-			// The writer has the note before the flush, as with the watch's.
-			w.NoteSeenThen(a.seenNowLocked(), a.seenLinkLocked)
-			a.keepLocked()
-			return
-		case !online:
-			// config.toml said local-only again by the time modes looked,
-			// which modes saw already, but the writer took the seal's
-			// online read: it hears the switch, as from the watch.
-			w.NoteModeThen(false, a.seenLinkLocked)
-			return
-		case a.linkedSeen.Load() == a.modes.linked:
+		if !changed && online && a.linkedSeen.Load() == a.modes.linked {
 			// Nothing for the writer: a Seen it has already would only ask
 			// for a seal, whose Online, as while account.json can't be read,
 			// would ask again.
 			return
 		}
-		// A link modes took in whose stretch's end the writer may not have yet.
-		w.NoteSeenThen(a.seenNowLocked(), a.seenLinkLocked)
+		// The writer reads config.toml again with its record lock held, and
+		// takes the end, or the switch to local-only again, from that read
+		// (NoteSeenWhile), so no seal's read between the two outlasts it,
+		// and a link modes took in reaches it; then state.json keeps what
+		// modes saw, after the writer has the note, as with the watch's.
+		w.NoteSeenWhile(a.seenNowLocked(), a.online, a.seenLinkLocked)
+		if changed {
+			a.keepLocked()
+		}
 	}()
 }
 
@@ -443,7 +438,12 @@ func (a *agent) seenNowLocked() ledger.Seen {
 func (a *agent) publishWriter(w *ledger.Writer) {
 	a.modes.mu.Lock()
 	defer a.modes.mu.Unlock()
-	w.NoteSeenThen(a.seenLocked(), a.seenLinkLocked)
+	took := a.unseenLinkLocked()
+	// The writer has the note before state.json's flush, as with the watch's.
+	w.NoteSeenThen(a.seenNowLocked(), a.seenLinkLocked)
+	if took {
+		a.keepLocked()
+	}
 	a.modes.w = w
 	a.writer.Store(w)
 }

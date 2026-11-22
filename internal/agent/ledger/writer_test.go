@@ -734,7 +734,9 @@ func TestNoteMode(t *testing.T) {
 	// a step put three minutes after it ("write-stepped-far"); or opens the
 	// writer again after a kill with a stretch end by the wall clock alone,
 	// later than the newest seal frame's moment, that state.json kept
-	// ("kill-seen-wall").
+	// ("kill-seen-wall"); or sets both of the writer's clocks to N ms after
+	// the start ("now:N"), has the agent give a stretch end at N by both
+	// ("seen-at:N"), or writes a hook call made then by both ("write-hook-at:N").
 	cases := []struct {
 		name  string
 		steps []string
@@ -837,6 +839,9 @@ func TestNoteMode(t *testing.T) {
 		{"a hook call of the boot before, which reaches a writer opened in a new boot, made before the newest seal frame's moment by that boot's clock though its t is after, is sealed local-only",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reboot", "write-stepped", "seal", "write", "seal"},
 			[]bool{false, true, false, true}, []bool{false, true, false, false}, []int{1, 1, 1, 1}},
+		{"a stretch end the agent gives after a seal's local-only read with records pending ends what that read saw, so the next online read doesn't move the moment past it, and a call made after the end that comes late is online",
+			[]string{"file-local", "write", "seal", "now:1000", "file-online", "seen-at:2000", "now:5000", "write", "seal", "write-hook-at:3000", "seal"},
+			[]bool{false, true, true}, []bool{false, true, false}, []int{1, 1, 1}},
 		{"a seal after a reboot, while the newest batch is local-only, asks Waiting by the boot before's reading too, so a call of that boot still on its way keeps the batch in the run",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "pause", "write-old", "seal", "reboot", "write", "seal", "asked-old-boot"},
 			[]bool{false, false, true}, []bool{false, false, false}, []int{1, 1, 1}},
@@ -945,6 +950,22 @@ func TestNoteMode(t *testing.T) {
 				}
 				if ms, ok := strings.CutPrefix(step, "write-at:"); ok {
 					writeAt(i, testT+atoi(t, ms), nil)
+					continue
+				}
+				if ms, ok := strings.CutPrefix(step, "now:"); ok {
+					clk.set(testT + atoi(t, ms))
+					monoNow.Store(osMono + atoi(t, ms))
+					continue
+				}
+				if ms, ok := strings.CutPrefix(step, "seen-at:"); ok {
+					n := atoi(t, ms)
+					at := time.UnixMilli(testT + n)
+					w.NoteSeen(Seen{Ended: at, OS: osclock.Stamp{Wall: at, Mono: osMono + n, BootID: osBoot}})
+					continue
+				}
+				if ms, ok := strings.CutPrefix(step, "write-hook-at:"); ok {
+					n := atoi(t, ms)
+					writeAt(i, testT+n, func(in *Input) { in.Event.BootID, in.Event.Mono = osBoot, osMono+n })
 					continue
 				}
 				switch step {
@@ -1217,6 +1238,14 @@ func TestNoteSeen(t *testing.T) {
 			Seen{}, false, false, []string{"write", "seal", "seen-earlier", "write", "seal"}, []bool{true, true}, []bool{false, false}},
 		{"a stretch end this run saw before the newest batch, on frames that keep no moment, is newer, and marks the batch after it",
 			Seen{}, false, false, []string{"write", "seal", "seen-before", "write", "seal"}, []bool{true, true}, []bool{false, true}},
+		{"a stretch end the agent found by its own read ends where the writer reads config.toml again under its lock, so a seal's local-only read before it doesn't outlast it, and the batch after it is marked",
+			Seen{}, false, false, []string{"file-local", "seal-none", "hold", "file-online", "seen-while", "release", "write", "seal"},
+			[]bool{true}, []bool{true}},
+		{"a stretch end the agent found by its own read, which the writer's read under its lock finds local-only again, ends nothing and begins a stretch",
+			Seen{}, false, false, []string{"write", "seal", "file-local", "seen-while", "file-online", "write", "seal"},
+			[]bool{true, false}, []bool{false, false}},
+		{"a noted switch to local-only is a local-only take too, so a stretch end the agent read before it ends nothing",
+			Seen{}, false, false, []string{"note-local", "seen-before", "write", "seal"}, []bool{false}, []bool{false}},
 		{"a stretch end the agent read before a seal took config.toml as local-only, with nothing pending, doesn't end the stretch that read began",
 			Seen{}, false, false, []string{"file-local", "seal-none", "hold", "seen-before", "file-online", "release", "write", "seal"},
 			[]bool{false}, []bool{false}},
@@ -1292,6 +1321,11 @@ func TestNoteSeen(t *testing.T) {
 					w.NoteSeen(Seen{Ended: time.UnixMilli(testT - 1000)})
 				case "seen-again":
 					w.NoteSeen(c.open)
+				case "seen-while":
+					// The agent's own read found config.toml online before this.
+					w.NoteSeenWhile(Seen{Ended: time.UnixMilli(testT - 1000)}, file.Load, nil)
+				case "note-local":
+					w.NoteMode(false)
 				case "file-local", "file-online":
 					file.Store(step == "file-online")
 				case "seal-none":
@@ -1614,6 +1648,9 @@ func TestNoteThen(t *testing.T) {
 		{"NoteModeThen runs then with the record lock held", func(w *Writer, then func()) { w.NoteModeThen(true, then) }},
 		{"NoteSeenThen runs then with the record lock held", func(w *Writer, then func()) {
 			w.NoteSeenThen(Seen{Ended: time.UnixMilli(testT)}, then)
+		}},
+		{"NoteSeenWhile reads config.toml and runs then with the record lock held", func(w *Writer, then func()) {
+			w.NoteSeenWhile(Seen{Ended: time.UnixMilli(testT)}, func() bool { then(); return true }, then)
 		}},
 	}
 	for _, c := range cases {

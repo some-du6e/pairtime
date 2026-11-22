@@ -813,6 +813,31 @@ func (w *Writer) NoteSeenThen(s Seen, then func()) {
 	}
 }
 
+// NoteSeenWhile is NoteSeenThen for a stretch end the agent found by its
+// own read of config.toml, as for a switch back a seal read and the config
+// watch didn't note, which online reads again with the record lock held:
+// the end is that read, by each clock, so no local-only read a seal took
+// before it outlasts it; and a read that finds config.toml local-only
+// again begins a stretch, as a seal's would, and ends none.
+func (w *Writer) NoteSeenWhile(s Seen, online func() bool, then func()) {
+	w.mu.Lock()
+	on := online()
+	now, stamp := w.now(), w.osNow()
+	if on {
+		s.Ended, s.OS, s.Earlier = now, stamp, false
+	} else {
+		s.Ended, s.Local = time.Time{}, true
+	}
+	seal := w.seenLocked(s, momentAt(now, stamp))
+	if then != nil {
+		then()
+	}
+	w.mu.Unlock()
+	if seal {
+		w.RequestSeal()
+	}
+}
+
 // seenLocked is NoteSeen's change of state, now at at, and reports
 // whether it asks for a seal. A stretch end the writer has already, as
 // the newest seal frame recorded it, arms no mark: the agent sees the same
@@ -849,10 +874,12 @@ func (w *Writer) seenLocked(s Seen, at moment) bool {
 		newer := !sealedSince && !ended.earlierThan(w.localAt) && (ended.run > w.until.run ||
 			ended.wall > w.until.wall || ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os)
 		was := w.until
-		if w.local && newer {
-			// A stretch the writer took as going on, which the agent saw end.
-			// An end the writer had already came before the stretch began, so
-			// it ends nothing.
+		if (w.local || w.seen) && newer {
+			// A stretch the writer took as going on, or one a seal's
+			// local-only read saw, which the agent saw end: the next online
+			// read then moves the moment no further than this end. An end the
+			// writer had already came before the stretch began, so it ends
+			// nothing.
 			seal = w.noteLocked(true, ended)
 		}
 		w.until.raise(ended, w.boot)
