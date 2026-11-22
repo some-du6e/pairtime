@@ -134,4 +134,5 @@ In the scorer PR, under the `oracle-change` label:
 
 - Live prompts keep rule 4 as it stands. Only a witnessed prompt whose session an agent app's server started skips it, and SM 2.8 applies to backfilled records only, so lookback and live T3 sessions never meet.
 - Nothing about typing into a terminal, an IDE or an agent's own desktop app changes.
-- No tier-1 field is added. `lbl` gains one value.
+- No tier-1 field is added. `lbl` gains one value, which is why DESIGN 4.3's table doesn't change.
+- DESIGN 4.4 gains no row. The agent keeps no copy of an app's text or a relay call's: it reads them, measures and classes them, and drops them. The T3 reader's cursor lives in `state.json` (3.5), which holds nothing personal. The records themselves are ledger records like any other, kept as 4.4 already says.
