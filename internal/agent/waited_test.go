@@ -611,7 +611,7 @@ func TestModesSeen(t *testing.T) {
 			relinked := time.Now().UTC().Truncate(time.Second)
 			writeAccount(t, dirs, relinked)
 			unseen := sealNow(t, w, dirs.Ledger())
-			for deadline := time.Now().Add(10 * time.Second); a.linkedSeen.Load() != relinked.UnixMilli() || a.takingLink.Load(); time.Sleep(5 * time.Millisecond) {
+			for deadline := time.Now().Add(10 * time.Second); a.linkedSeen.Load() != relinked.UnixMilli() || a.seeing.Load(); time.Sleep(5 * time.Millisecond) {
 				if time.Now().After(deadline) {
 					t.Fatal("the agent never took the link in")
 				}
@@ -622,6 +622,53 @@ func TestModesSeen(t *testing.T) {
 			after := sealNow(t, w, dirs.Ledger())
 			if unseen.Online || !after.Online || !after.Back {
 				t.Errorf("the seal that found the link sealed online %v, and the next online %v, marked %v; want local-only, then online and marked", unseen.Online, after.Online, after.Back)
+			}
+		}},
+		{"a seal that reads config.toml online while modes still says local-only, as with a config watch that hears nothing, has modes see it, so state.json keeps the stretch's end and the next start ends none", func(t *testing.T) {
+			a, dirs := modesAgent(t, "local")
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			t.Cleanup(a.startLedger())
+			w := opened(t, a)
+			// No config watch runs here to hear the switch.
+			setMode(t, dirs, "online")
+			if _, err := w.Write(runPresenceAt(time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			sealNow(t, w, dirs.Ledger())
+			for deadline := time.Now().Add(10 * time.Second); a.modesLocal.Load() || a.seeing.Load(); time.Sleep(5 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("modes never saw config.toml online")
+				}
+			}
+			if ms := kept(t, dirs); ms.Local || ms.Ended.IsZero() {
+				t.Errorf("state.json keeps %+v, want the stretch ended, so the next start doesn't end it there", ms)
+			}
+		}},
+		{"a link the uploader had settled whose second isn't after the end state.json kept, as after a step back of the wall clock, ends the stretch where the agent finds it, by both clocks", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			linked := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			writeAccount(t, dirs, linked)
+			keepState(t, dirs, map[string]any{
+				modesKey:          modesState{Ended: linked.Add(30 * time.Minute), Linked: linked.Add(-2 * time.Hour).UnixMilli()},
+				uploader.StateKey: map[string]int64{"linked_at": linked.UnixMilli()},
+			})
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			a.startModes()
+			if got := a.seen(); got.Earlier || !got.OS.HasMono() || !got.Until.Equal(linked.Add(time.Second)) {
+				t.Errorf("the start saw %+v, want the stretch ended now, by both clocks, and by the wall clock to the end of the link's second", got)
+			}
+		}},
+		{"an account.json that can't be read may name a link modes didn't account for, so the writer's Online says local-only", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			if err := home.WriteFile(filepath.Join(dirs.Data, "account.json"), []byte("{not json")); err != nil {
+				t.Fatal(err)
+			}
+			if a.writerOnline() {
+				t.Error("the writer's Online said online with an account.json that can't be read")
 			}
 		}},
 		{"the writer's Online sees the link modes accounted for from the Seen Open takes, so Open's seal of what a crash left reads config.toml as it is", func(t *testing.T) {
@@ -650,13 +697,13 @@ func TestModesSeen(t *testing.T) {
 			opened(t, a)
 			relinked := time.Now().UTC().Truncate(time.Second)
 			writeAccount(t, dirs, relinked)
-			// As takeLinkSoon's goroutine takes the link in, under modes' lock,
+			// As seeSoon's goroutine takes the link in, under modes' lock,
 			// before it gives the writer the stretch's end.
 			a.modes.mu.Lock()
 			took := a.unseenLinkLocked()
 			early := a.writerOnline()
 			a.modes.mu.Unlock()
-			for deadline := time.Now().Add(10 * time.Second); a.linkedSeen.Load() != relinked.UnixMilli() || a.takingLink.Load(); time.Sleep(5 * time.Millisecond) {
+			for deadline := time.Now().Add(10 * time.Second); a.linkedSeen.Load() != relinked.UnixMilli() || a.seeing.Load(); time.Sleep(5 * time.Millisecond) {
 				if time.Now().After(deadline) {
 					t.Fatal("the writer's Online never saw the link")
 				}

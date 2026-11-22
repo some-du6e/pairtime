@@ -1156,6 +1156,8 @@ func TestNoteSeen(t *testing.T) {
 			Seen{Ended: time.UnixMilli(testT), Until: time.UnixMilli(testT + 2500)}, false, false, []string{"write", "seal", "write", "seal"}, []bool{false, true}, []bool{false, true}},
 		{"a record the writer took before NoteSeen gave it a stretch end it didn't know of, made before that end, is sealed local-only, and the batch after it is marked",
 			Seen{}, false, false, []string{"write", "seen-after", "seal", "write", "seal"}, []bool{false, true}, []bool{false, true}},
+		{"a stretch end an earlier run saw before a batch it sealed arms no mark at the next start, as after an upgrade from a version whose seal frames keep no moment",
+			Seen{}, false, false, []string{"write", "seal", "reopen-earlier", "write", "seal"}, []bool{true, true}, []bool{false, false}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1163,16 +1165,16 @@ func TestNoteSeen(t *testing.T) {
 			sealed := make(chan Batch, 8)
 			var file atomic.Bool // config.toml says online
 			file.Store(!c.local)
-			openWriter := func() *Writer {
+			openWriter := func(seen Seen) *Writer {
 				return open(t, dir, newClock(testT), func(o *Options) {
 					if !c.noOnline {
 						o.Online = file.Load
 					}
-					o.Seen = func() Seen { return c.open }
+					o.Seen = func() Seen { return seen }
 					o.Sealed = func(b Batch) { sealed <- b }
 				})
 			}
-			w := openWriter()
+			w := openWriter(c.open)
 			rng := rand.New(rand.NewPCG(19, 20))
 			var got []Batch
 			take := func() {
@@ -1214,11 +1216,17 @@ func TestNoteSeen(t *testing.T) {
 				case "seen-after":
 					// The end of a stretch after the record written before it.
 					w.NoteSeen(Seen{Ended: time.UnixMilli(testT + 2500)})
-				case "reopen":
+				case "reopen", "reopen-earlier":
 					if err := w.Close(); err != nil {
 						t.Fatalf("step %d: %v", i, err)
 					}
-					w = openWriter()
+					seen := c.open
+					if step == "reopen-earlier" {
+						// A stretch end state.json kept from before the batch
+						// sealed above.
+						seen = Seen{Ended: time.UnixMilli(testT - 30_000), Earlier: true}
+					}
+					w = openWriter(seen)
 				}
 			}
 			var online, back []bool

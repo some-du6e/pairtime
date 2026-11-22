@@ -272,6 +272,7 @@ type Writer struct {
 	next    uint64        // s of the next record
 	b       uint64        // the last sealed batch, 0 before the first
 	head    ledger.Hash   // its H_b, zero(32) before the first
+	sealed  int64         // its sealed_at, in Unix ms, 0 before the first
 	pending []pending     // the records since the last seal
 	q       score.Questions
 	snap    position // where the newest seal frame that holds q starts
@@ -749,9 +750,14 @@ func (w *Writer) NoteSeen(s Seen) {
 // whether it asks for a seal. A stretch end the writer has already, as
 // the newest seal frame recorded it, arms no mark: the agent sees the same
 // end at every start, and a mark due then would hold the first batch for
-// what is still on its way after any restart. One the agent saw in this
-// run is newer by this run's clock, and one of the boot the moment's OS
-// reading is of by that clock, whatever the wall clock says. A record the
+// what is still on its way after any restart. Nor does one an earlier run
+// saw before a batch it sealed, as when an older version's seal frames
+// recorded no moment: that run marked the batch after the end, or sealed
+// the ones since local-only, after which each seal asks Waiting while the
+// newest is (lastLocal), and the server may hold those after, so a mark
+// due now would only hold back credit. One the agent saw in this run is
+// newer by this run's clock, and one of the boot the moment's OS reading
+// is of by that clock, whatever the wall clock says. A record the
 // writer took before it heard of the end, as one the agent took in before
 // it found a pairtime login it hadn't seen, was made in the stretch if it
 // was made before the end, so its batch is local-only, as Write would have
@@ -765,8 +771,9 @@ func (w *Writer) seenLocked(s Seen, at moment) bool {
 		if s.Earlier {
 			ended = w.earlier(ended)
 		}
-		newer := ended.run > w.until.run || ended.wall > w.until.wall ||
-			ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os
+		newer := (ended.run > w.until.run || ended.wall > w.until.wall ||
+			ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os) &&
+			!(s.Earlier && w.sealed > ended.wall)
 		was := w.until
 		if w.local {
 			// A stretch the writer took as going on, which the agent saw end.
@@ -1125,7 +1132,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 	if sp.Back {
 		w.back = 0
 	}
-	w.b, w.head, w.snap = row.B, row.Head, snap
+	w.b, w.head, w.snap, w.sealed = row.B, row.Head, snap, sp.SealedAt
 	w.mu.Unlock()
 
 	// The one flush of the seal. Records written since the seal frame go

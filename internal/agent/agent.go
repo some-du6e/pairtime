@@ -136,11 +136,13 @@ type agent struct {
 	// busy began, nil while none did (spoolHolds).
 	spoolBusySince atomic.Pointer[time.Time]
 	// linkedSeen is the link modes accounted for (modes.linked) once the
-	// writer has what modes saw of the stretch it ended, for the writer's
-	// Online, which takes no lock (writerOnline, seenLinkLocked), and
-	// takingLink is set while takeLinkSoon's goroutine runs.
+	// writer has what modes saw of the stretch it ended, and modesLocal is
+	// modes.local, both for the writer's Online, which takes no lock
+	// (writerOnline, seenLinkLocked), and seeing is set while seeSoon's
+	// goroutine runs.
 	linkedSeen atomic.Int64
-	takingLink atomic.Bool
+	modesLocal atomic.Bool
+	seeing     atomic.Bool
 	// notifier shows the coach's notification when a work session ends
 	// (WP-OS8). The coach calls its Notify, and its UserPresent on unlock
 	// and resume (WP-CO1).
