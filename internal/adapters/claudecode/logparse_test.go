@@ -223,8 +223,13 @@ func readWithHooks(t *testing.T, way adapters.Delivery) (hooks, logs []adapters.
 			}
 			steps = append(steps, step{at: at.Add(readDelay), line: &ls[i]})
 		}
-		// The tailers' idle marker, IdleAfter after the file's last line.
-		steps = append(steps, step{at: at.Add(readDelay + 10*time.Second), line: &ls[len(ls)-1], idle: true})
+		// The tailers' idle markers: IdleAfter after the file's last line,
+		// and then every IdleAfter while the adapter holds something back,
+		// for which one startGrace later stands, by when a session.start
+		// that waits for its hooks has waited long enough.
+		idle := at.Add(readDelay + 10*time.Second)
+		steps = append(steps, step{at: idle, line: &ls[len(ls)-1], idle: true},
+			step{at: idle.Add(startGrace * time.Millisecond), line: &ls[len(ls)-1], idle: true})
 	}
 	sort.SliceStable(steps, func(i, j int) bool {
 		if !steps[i].at.Equal(steps[j].at) {
@@ -1013,41 +1018,41 @@ func TestTranscriptUnlabeledEntries(t *testing.T) {
 	cases := []struct {
 		name    string
 		entries []string
-		// prompts are the prompt.submits of the last entry, and fails says
-		// it is a parse failure.
-		prompts int
-		fails   bool
+		// prompts are the prompt.submits of the last entry, and fails how
+		// many of the entries are parse failures.
+		prompts, fails int
 	}{
-		{"an unlabeled entry with text is a prompt and a failure", []string{userText("q2", "hello there", nil)}, 1, true},
-		{"an unlabeled isMeta entry is neither", []string{userText("q2", "the command's instructions", map[string]any{"isMeta": true})}, 0, false},
-		{"an unlabeled local command's output is neither", []string{userText("q2", "<local-command-stdout>done</local-command-stdout>", nil)}, 0, false},
-		{"an unlabeled entry with no text is neither", []string{userText("q2", "  ", nil)}, 0, false},
+		{"an unlabeled entry with text is a prompt and a failure", []string{userText("q2", "hello there", nil)}, 1, 1},
+		{"an unlabeled isMeta entry is neither", []string{userText("q2", "the command's instructions", map[string]any{"isMeta": true})}, 0, 0},
+		{"an unlabeled local command's output is neither", []string{userText("q2", "<local-command-stdout>done</local-command-stdout>", nil)}, 0, 0},
+		{"an unlabeled entry with no text is neither", []string{userText("q2", "  ", nil)}, 0, 0},
 		{"the unlabeled pickup of a message queued in the turn before is no prompt, and a failure",
-			[]string{labeled, enqueue, userText("q2", "and then the docs", nil)}, 0, true},
-		{"an unlabeled entry after the pickup is a prompt again",
-			[]string{labeled, enqueue, userText("q2", "and then the docs", nil), userText("q3", "now the release notes", nil)}, 1, true},
+			[]string{labeled, enqueue, userText("q2", "and then the docs", nil)}, 0, 1},
+		{"an unlabeled entry after the pickup is a prompt again, and both are failures",
+			[]string{labeled, enqueue, userText("q2", "and then the docs", nil), userText("q3", "now the release notes", nil)}, 1, 2},
 		{"a labeled pickup takes the wait up too",
 			[]string{labeled, enqueue, userText("q2", "and then the docs", map[string]any{"turnOrigin": "human", "promptSource": "queued"}),
-				userText("q3", "now the release notes", nil)}, 1, true},
+				userText("q3", "now the release notes", nil)}, 1, 1},
 		{"a message removed from the queue is no pickup's",
 			[]string{labeled, enqueue, entryJSON("queue-operation", map[string]any{"operation": "remove", "timestamp": "2026-11-20T17:00:12.000Z"}),
-				userText("q2", "and then the docs", nil)}, 1, true},
+				userText("q2", "and then the docs", nil)}, 1, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			a := newTest()
-			lines := logLines(tc.entries...)
-			for _, l := range lines[:len(lines)-1] {
-				if _, err := a.Parse(logRaw(l, false, false)); err != nil {
-					t.Fatalf("an earlier entry: %v", err)
+			var recs []adapters.Record
+			var errs []error
+			for _, l := range logLines(tc.entries...) {
+				var err error
+				if recs, err = a.Parse(logRaw(l, false, false)); err != nil {
+					errs = append(errs, err)
 				}
 			}
-			recs, err := a.Parse(logRaw(lines[len(lines)-1], false, false))
-			if (err != nil) != tc.fails {
-				t.Errorf("Parse error %v, want a failure: %v", err, tc.fails)
+			if len(errs) != tc.fails {
+				t.Errorf("parse failures %v, want %d", errs, tc.fails)
 			}
 			if ps := ofKind[*event.PromptSubmit](recs); len(ps) != tc.prompts {
-				t.Errorf("records %v, want %d prompt.submit", recs, tc.prompts)
+				t.Errorf("the last entry's records %v, want %d prompt.submit", recs, tc.prompts)
 			}
 		})
 	}
