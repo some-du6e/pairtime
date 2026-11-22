@@ -228,7 +228,7 @@ func (t *Tailer) lookbackNow() bool {
 // pos, as replays. t.mu is held.
 func (f *file) leaveHistory() {
 	if !f.histDone && f.read < f.hist {
-		f.read, f.resume, f.pos, f.hash = f.hist, f.hist, f.hist, ""
+		f.read, f.resume, f.pos, f.hash = f.hist, f.hist, f.hist, f.histHash
 		f.fresh = f.hist
 	}
 	f.histDone, f.rewindTo, f.due = true, 0, true

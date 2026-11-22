@@ -524,8 +524,21 @@ func TestTailer(t *testing.T) {
 	}
 }
 
+// countedReader counts the bytes read through it.
+type countedReader struct {
+	r    io.ReaderAt
+	read int64
+}
+
+func (c *countedReader) ReadAt(p []byte, off int64) (int, error) {
+	n, err := c.r.ReadAt(p, off)
+	c.read += int64(n)
+	return n, err
+}
+
 // TestLastLine checks where a file's last complete line ends, which a
-// file taken up at its end goes on from.
+// file taken up at its end goes on from, read back with each byte read
+// once at most.
 func TestLastLine(t *testing.T) {
 	cases := []struct {
 		name, text string
@@ -556,9 +569,13 @@ func TestLastLine(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer fh.Close()
-			end, hash, err := lastLine(fh, int64(len(tc.text)))
+			cr := &countedReader{r: fh}
+			end, hash, err := lastLine(cr, int64(len(tc.text)))
 			if err != nil {
 				t.Fatal(err)
+			}
+			if cr.read > int64(len(tc.text)) {
+				t.Errorf("read %d bytes of a file of %d", cr.read, len(tc.text))
 			}
 			want := ""
 			if tc.hashOf != "" {

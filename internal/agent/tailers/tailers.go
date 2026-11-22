@@ -261,10 +261,13 @@ type file struct {
 	due, waiting, rewound bool
 	// hist is where the file's history ends, the lines before it being
 	// lookback's, and histFrom when their records may start (Line.Lookback),
-	// both 0 for a file with none. histDone says lookback is done with it.
-	// rewindTo is where the lines a Rewind gave lookback end, which it
-	// reads as replays, and 0 for none.
+	// both 0 for a file with none. histHash is the Hash of the line that
+	// ends there, "" when unknown, which the cursor takes when lookback
+	// gives the history up, so relocate can still tell the file. histDone
+	// says lookback is done with it. rewindTo is where the lines a Rewind
+	// gave lookback end, which it reads as replays, and 0 for none.
 	hist, histFrom int64
+	histHash       string
 	histDone       bool
 	rewindTo       int64
 	// fresh is where a history lookback gave up on ended, at which the
@@ -304,13 +307,14 @@ type savedFile struct {
 	Read    int64         `json:"read"`
 	Resume  int64         `json:"resume"`
 	Hash    string        `json:"hash,omitempty"`
-	// Hist, HistFrom, HistDone and RewindTo are the file's history and
-	// what a Rewind gave lookback (file.hist).
-	Hist     int64 `json:"hist,omitempty"`
-	HistFrom int64 `json:"hist_from,omitempty"`
-	HistDone bool  `json:"hist_done,omitempty"`
-	RewindTo int64 `json:"rewind_to,omitempty"`
-	Fresh    int64 `json:"fresh,omitempty"`
+	// Hist, HistFrom, HistHash, HistDone and RewindTo are the file's
+	// history and what a Rewind gave lookback (file.hist).
+	Hist     int64  `json:"hist,omitempty"`
+	HistFrom int64  `json:"hist_from,omitempty"`
+	HistHash string `json:"hist_hash,omitempty"`
+	HistDone bool   `json:"hist_done,omitempty"`
+	RewindTo int64  `json:"rewind_to,omitempty"`
+	Fresh    int64  `json:"fresh,omitempty"`
 }
 
 // New makes a Tailer with the cursors Store kept. It reads nothing until
@@ -374,8 +378,8 @@ func (t *Tailer) load() {
 		// the file may come to say so.
 		f := &file{key: sf.Path, path: sf.Path, harness: sf.Harness, id: sf.ID, size: sf.Size,
 			mtime: time.Unix(0, sf.MTime), read: sf.Read, resume: sf.Resume, hash: sf.Hash, pos: sf.Resume,
-			due: sf.Resume < sf.Read || sf.Read < sf.Size, hist: sf.Hist, histFrom: sf.HistFrom, histDone: sf.HistDone,
-			rewindTo: sf.RewindTo, fresh: sf.Fresh}
+			due: sf.Resume < sf.Read || sf.Read < sf.Size, hist: sf.Hist, histFrom: sf.HistFrom, histHash: sf.HistHash,
+			histDone: sf.HistDone, rewindTo: sf.RewindTo, fresh: sf.Fresh}
 		if f.lookbacks() && t.opts.Lookback == nil {
 			f.leaveHistory()
 		}
@@ -395,7 +399,7 @@ func (t *Tailer) Put() (bool, error) {
 	for _, f := range t.files {
 		st.Files = append(st.Files, savedFile{Path: f.path, Harness: f.harness, ID: f.id, Size: f.size,
 			MTime: f.mtime.UnixNano(), Read: f.read, Resume: f.resume, Hash: f.hash,
-			Hist: f.hist, HistFrom: f.histFrom, HistDone: f.histDone, RewindTo: f.rewindTo, Fresh: f.fresh})
+			Hist: f.hist, HistFrom: f.histFrom, HistHash: f.histHash, HistDone: f.histDone, RewindTo: f.rewindTo, Fresh: f.fresh})
 	}
 	for d := range t.listed {
 		st.Roots = append(st.Roots, d)
@@ -885,7 +889,7 @@ func (t *Tailer) adopt(r Root, path string, now time.Time) {
 		f := &file{key: path, path: path, harness: r.Harness, id: fileID(fh, fi), size: fi.Size(),
 			mtime: fi.ModTime(), read: end, resume: end, pos: end, hash: hash}
 		if history && t.lookbackUsable() {
-			f.hist, f.histFrom = end, now.Add(-LookbackWindow).UnixMilli()
+			f.hist, f.histFrom, f.histHash = end, now.Add(-LookbackWindow).UnixMilli(), hash
 			f.read, f.resume, f.pos, f.hash = 0, 0, 0, ""
 		}
 		t.files[path] = f
@@ -897,25 +901,26 @@ func (t *Tailer) adopt(r Root, path string, now time.Time) {
 // none. Blank lines after it are no lines: the tailers take them into the
 // next line's span, so a file taken up there reads on as it would have. A
 // last line longer than readLine reads has its end and no hash.
-func lastLine(fh *os.File, size int64) (int64, string, error) {
-	// w holds the file from at to end, read back a buffer at a time, and
-	// only as far back as the line looked at needs.
+func lastLine(r io.ReaderAt, size int64) (int64, string, error) {
+	// w holds the file from at to end, read back no further than the line
+	// looked at needs, a buffer at a time, or as much as w holds when that
+	// is more, so a long line costs a few reads and copies.
 	at, end := size, int64(-1)
 	var w []byte
-	back := func() error {
-		n := min(int64(readBuffer), at)
+	back := func() (int, error) {
+		n := min(max(int64(readBuffer), int64(len(w))), at)
 		chunk := make([]byte, n, n+int64(len(w)))
-		if _, err := fh.ReadAt(chunk, at-n); err != nil && !errors.Is(err, io.EOF) {
-			return err
+		if _, err := r.ReadAt(chunk, at-n); err != nil && !errors.Is(err, io.EOF) {
+			return 0, err
 		}
 		at -= n
 		w = append(chunk, w...)
-		return nil
+		return int(n), nil
 	}
 	// The end, after the last newline, which a last line still being
 	// written can put further back than MaxLine.
 	for end < 0 && at > 0 {
-		if err := back(); err != nil {
+		if _, err := back(); err != nil {
 			return 0, "", err
 		}
 		if i := bytes.LastIndexByte(w, '\n'); i >= 0 {
@@ -925,12 +930,13 @@ func lastLine(fh *os.File, size int64) (int64, string, error) {
 		}
 	}
 	for end > 0 {
-		// The line that ends at end, without its newline: w ends with
-		// that newline.
+		// The line that ends at end, without its newline: w ends with that
+		// newline, and unseen is how much of w before it no search looked
+		// at.
 		var line []byte
 		long := false
-		for {
-			if j := bytes.LastIndexByte(w[:len(w)-1], '\n'); j >= 0 {
+		for unseen := len(w) - 1; ; {
+			if j := bytes.LastIndexByte(w[:unseen], '\n'); j >= 0 {
 				line = w[j+1 : len(w)-1]
 				break
 			}
@@ -942,9 +948,11 @@ func lastLine(fh *os.File, size int64) (int64, string, error) {
 				long = true
 				break
 			}
-			if err := back(); err != nil {
+			n, err := back()
+			if err != nil {
 				return 0, "", err
 			}
+			unseen = n
 		}
 		switch {
 		case long || int64(len(line)) > MaxLine+1:
@@ -1232,7 +1240,7 @@ func hashLine(b []byte) string {
 // with no such line all of it is new, for an adapter that starts the file
 // afresh (an adapters.LogLine at offset 0). Its history goes where the
 // lines it was went: with the copy, to the cut, or, in another file,
-// nowhere.
+// nowhere; and once it was read it is done.
 func (t *Tailer) relocate(fh *os.File, f *file, size int64, replaced bool) {
 	t.mu.Lock()
 	read, hash := f.read, f.hash
@@ -1265,29 +1273,37 @@ func (t *Tailer) relocate(fh *os.File, f *file, size int64, replaced bool) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	switch {
-	case found == read && read > 0:
+	if found == read && read > 0 {
 		return // the file kept what was read where it was
+	}
+	f.histDone = f.histDone || f.hist > 0 && read >= f.hist
+	switch {
 	case found > 0:
 		// A copy of what was read, at another offset: the history moves
-		// with it, ending at that line at most, and is done if it was read.
+		// with it, to end at that line at most.
 		if f.hist > 0 {
-			f.histDone = f.histDone || read >= f.hist
-			f.hist = min(max(f.hist+found-read, 0), found)
+			if moved := min(max(f.hist+found-read, 0), found); moved == found {
+				f.hist, f.histHash = moved, hash
+			} else {
+				f.hist = moved
+			}
 		}
 		f.read, f.resume, f.pos = found, 0, 0
-	case replaced && hash != "":
+	case replaced:
 		// Another file, holding none of what was read: none of it is a
 		// history's.
 		f.read, f.resume, f.pos, f.hash, f.hist = 0, 0, 0, "", 0
 	default:
-		// The file was cut, or what was read can't be told from it: what is
-		// left of the history, up to the cut, is still the history.
-		f.read, f.resume, f.pos, f.hash, f.hist = 0, 0, 0, "", min(f.hist, size)
+		// The file was cut: what is left of the history, up to the cut, is
+		// still the history.
+		f.read, f.resume, f.pos, f.hash = 0, 0, 0, ""
+		if size < f.hist {
+			f.hist, f.histHash = size, ""
+		}
 	}
 	f.rewindTo, f.fresh = 0, 0
 	if f.hist == 0 {
-		f.histFrom, f.histDone = 0, false
+		f.histFrom, f.histHash, f.histDone = 0, "", false
 	}
 }
 
