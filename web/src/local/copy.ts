@@ -9,7 +9,7 @@
 // holds every sentence here, allSentences(), to the same rules as en.json:
 // nothing scolds, sets a target or counts a streak (PA 4.3, 4.4).
 
-import type { Focus, Level } from './api.ts';
+import type { Focus, Level, NameState } from './api.ts';
 import * as text from './text.ts';
 
 /** What pairtime counts, for the explainer on Today. */
@@ -91,6 +91,48 @@ export function unreadSession(): string {
 }
 
 /**
+ * Who sees a project's name the owner shows on their dashboard, beside each
+ * switch (D-owner-names): them alone, and nothing else about the project
+ * goes with it.
+ */
+export const nameWho =
+	"Only you see it, on your own pairtime dashboard while you're signed in. Nothing else about the project leaves this computer.";
+
+/**
+ * Where a project's name stands on the owner's dashboard, by its state in
+ * GET /v1/projects. code is the project's short code, and online says the
+ * names turned on go to the server now.
+ */
+export function nameWords(state: NameState, code: string, online: boolean): string {
+	switch (state) {
+		case 'on':
+			return 'Your dashboard shows it.';
+		case 'sending':
+			return online
+				? "It goes to your dashboard with pairtime's next upload."
+				: 'It goes to your dashboard once this computer is linked and online.';
+		case 'removing':
+			return online
+				? `Your dashboard shows it until pairtime's next upload, then calls the project Project ${code}.`
+				: `Your dashboard shows it until this computer is online again, then calls the project Project ${code}.`;
+		case 'hidden':
+			return "You hid it on your dashboard, so it's off here too. Turn it on to show it again.";
+		default:
+			return `Your dashboard calls the project Project ${code}.`;
+	}
+}
+
+/** What a project with no name on this computer says in place of its switch. */
+export function noNameWords(code: string): string {
+	return `This project has no name on this computer. To show one on your dashboard, run pairtime projects show-name ${code} with the name.`;
+}
+
+/** What a switch says when the agent didn't take its change, with the agent's words. */
+export function nameRefused(detail: string): string {
+	return `pairtime couldn't change this: ${detail}`;
+}
+
+/**
  * Every sentence copy.ts can say, each once, with sample dates where a
  * sentence names some: copy.test.ts holds them all to en.json's rules.
  */
@@ -113,6 +155,13 @@ export function allSentences(): string[] {
 			unreadDays(['2026-11-17', '2026-11-18']),
 			unreadDays(['2026-11-16', '2026-11-17', '2026-11-18']),
 			unreadSession(),
+			nameWho,
+			...(['off', 'on', 'sending', 'removing', 'hidden'] as const).flatMap((state) => [
+				nameWords(state, '7c41e9', true),
+				nameWords(state, '7c41e9', false),
+			]),
+			noNameWords('d2a8f6'),
+			nameRefused('config.toml has an error'),
 		]),
 	];
 }

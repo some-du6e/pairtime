@@ -15,6 +15,8 @@ import {
 	dayReply,
 	fixtureDates,
 	lastSession,
+	nameAnswer,
+	projectsReply,
 	shadowCodes,
 	shadowHides,
 	shadowHidesOfSession,
@@ -180,6 +182,24 @@ describe("the fake agent's answers keep to the spec", () => {
 		},
 		{ name: 'GET /v1/sessions/last before the first session is a LastSession', value: () => lastSession({ none: true }), schema: 'LastSession' },
 		{ name: 'an open session is a LastSession', value: () => lastSession({ open: true }), schema: 'LastSession' },
+		{ name: 'GET /v1/projects is a Projects', value: () => projectsReply(), schema: 'Projects' },
+		{ name: 'GET /v1/projects from a local-only computer is a Projects', value: () => projectsReply(false), schema: 'Projects' },
+		...projectsReply().projects.flatMap((entry) =>
+			[true, false].map((online) => ({
+				name: `PUT /v1/projects/${entry.project}/name turning its name ${online ? 'on' : 'off'} answers a ProjectEntry, or a refusal the spec has`,
+				value: () => {
+					const a = nameAnswer(entry, { online, label: entry.label });
+					return 'entry' in a ? a.entry : entry;
+				},
+				schema: 'ProjectEntry',
+				fits: () => {
+					const a = nameAnswer(entry, { online, label: entry.label });
+					return 'entry' in a || a.status === 422 ? [] : [`a ${a.status}`];
+				},
+			})),
+		),
+		{ name: "the body the Projects page sends to turn a name on is a NameChoice", value: () => ({ online: true, label: 'portfolio' }), schema: 'NameChoice' },
+		{ name: 'the body the Projects page sends to turn a name off is a NameChoice', value: () => ({ online: false, label: 'portfolio' }), schema: 'NameChoice' },
 	];
 	for (const c of cases) {
 		test(c.name, () => {
@@ -259,6 +279,58 @@ describe('a shadow answer leaves out what D-shadow-scope hides', () => {
 	for (const c of cases) {
 		test(c.name, () => {
 			expect(c.problems()).toEqual([]);
+		});
+	}
+});
+
+describe("the fake's PUT /v1/projects/{key}/name keeps the spec's rules", () => {
+	const entry = (key: string) => {
+		const e = projectsReply().projects.find((p) => p.project === key);
+		if (!e) {
+			throw new Error(`no ${key} in projectsReply()`);
+		}
+		return e;
+	};
+	const cases: { name: string; got: () => unknown; want: unknown }[] = [
+		{
+			name: 'a name turned on goes with its label and waits to be sent',
+			got: () => nameAnswer(entry('p_plant'), { online: true, label: 'plant-sensor' }),
+			want: { entry: { project: 'p_plant', code: 'p_plan', local_name: 'plant-sensor', state: 'sending', label: 'plant-sensor' } },
+		},
+		{
+			name: 'a label is cleaned of extra spaces before it is kept',
+			got: () => nameAnswer(entry('p_plant'), { online: true, label: '  my   plant ' }),
+			want: { entry: { project: 'p_plant', code: 'p_plan', local_name: 'plant-sensor', state: 'sending', label: 'my plant' } },
+		},
+		{
+			name: 'a name shown on the dashboard and turned off shows until the next upload, and keeps its label',
+			got: () => nameAnswer(entry('p_portfolio'), { online: false, label: 'portfolio' }),
+			want: { entry: { project: 'p_portfolio', code: 'p_port', local_name: 'portfolio', state: 'removing', label: 'portfolio' } },
+		},
+		{
+			name: 'a name hidden on the dashboard and turned on here again goes, and is hidden no more',
+			got: () => nameAnswer(entry('p_bot'), { online: true, label: 'discord-bot' }),
+			want: { entry: { project: 'p_bot', code: 'p_bot', local_name: 'discord-bot', state: 'sending', label: 'discord-bot' } },
+		},
+		{
+			name: 'a project with no name here, turned on without a label, is 422',
+			got: () => nameAnswer(entry('dd2a8f61c94e07b35a8c1f6e29d4b7a03'), { online: true }),
+			want: { status: 422, text: 'the project has no name on this computer, so turning it on needs a label' },
+		},
+		{
+			name: 'a body without online is 400',
+			got: () => nameAnswer(entry('p_plant'), { label: 'x' }),
+			want: { status: 400, text: 'the body must be {"online": true or false}' },
+		},
+		{
+			name: 'a body with a member the spec lacks is 400',
+			got: () => nameAnswer(entry('p_plant'), { online: true, public: true }),
+			want: { status: 400, text: 'the body must be {"online": true or false}' },
+		},
+	];
+	for (const c of cases) {
+		test(c.name, () => {
+			expect(c.got()).toEqual(c.want);
 		});
 	}
 });
@@ -343,6 +415,18 @@ describe('the checks can fail', () => {
 				return s ? hidden('session', { ...s, start: '2026-11-20T14:05:00Z' }, shadowHidesOfSession) : [];
 			},
 			want: 'has start',
+		},
+		{
+			name: "a project's name in a state the spec doesn't have fails the schema",
+			problems: () => {
+				const r = projectsReply();
+				const p = r.projects[0];
+				if (p) {
+					(p as { state: string }).state = 'public';
+				}
+				return check(r, ref('Projects'), spec);
+			},
+			want: 'public',
 		},
 		{
 			name: 'on_hold_s past X.noprog breaks the on-hold sum',

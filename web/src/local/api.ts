@@ -17,6 +17,14 @@ export type Day = Schemas['Day'];
 export type DayProject = Schemas['DayProject'];
 /** GET /v1/sessions/last. */
 export type LastSession = Schemas['LastSession'];
+/** GET /v1/projects: every project this computer knows, and whether its name shows on the owner's dashboard. */
+export type Projects = Schemas['Projects'];
+/** One project of GET /v1/projects, and PUT /v1/projects/{key}/name's answer. */
+export type ProjectEntry = Schemas['ProjectEntry'];
+/** Where a project's name stands on the owner's dashboard. */
+export type NameState = ProjectEntry['state'];
+/** PUT /v1/projects/{key}/name's body. */
+export type NameChoice = Schemas['NameChoice'];
 export type WorkSession = NonNullable<Schemas['WorkSession']>;
 export type ByKind = Schemas['ByKind'];
 export type ByEvidence = Schemas['ByEvidence'];

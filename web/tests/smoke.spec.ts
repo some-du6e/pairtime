@@ -285,6 +285,26 @@ test('without the token or the cookie every secured GET in the spec answers 401,
 	}
 });
 
+test("PUT /v1/projects/{key}/name reaches the agent with the token, and from the dashboard's own page with the cookie, which knows no such project yet", async ({
+	browser,
+	request,
+}) => {
+	const path = 'v1/projects/g7c41e9a2d05b8f63e1a94c7d2b6f0e85/name';
+	const res = await request.put(new URL(path, base).href, { headers: bearer(), data: { online: true } });
+	expect(res.status()).toBe(404);
+	const { context, page } = await signedIn(browser);
+	// The page's fetch carries the dashboard's Origin, which a change signed
+	// in by the cookie must have.
+	const status = await page.evaluate(
+		async (p) => (await fetch(p, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{"online":false}' })).status,
+		`/${path}`,
+	);
+	expect(status).toBe(404);
+	await context.close();
+	const unsigned = await request.put(new URL(path, base).href, { data: { online: true } });
+	expect(unsigned.status()).toBe(401);
+});
+
 test('a request from another site gets 403, for the page and the API alike', async ({ request }) => {
 	for (const path of ['', 'v1/status', 'v1/days/today']) {
 		const res = await request.get(new URL(path, base).href, {
