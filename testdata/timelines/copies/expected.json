@@ -128,7 +128,7 @@
       "bucket": false,
       "codes": ["X.no_anchor"],
       "sm": "2.2, rule 1, and 5.1",
-      "note": "He is at the keyboard and focused on the terminal, typing from 16:27:50, but no window covers the minute and the bucket is empty. Nothing is credited and no agent runs, so the minute has no bucket (SM 5.1). Read from its hook copy alone, P2 would be human_typed, and its 154 s lead would credit this minute.",
+      "note": "They are at the keyboard and focused on the terminal, typing from 16:27:50, but no window covers the minute and the bucket is empty. Nothing is credited and no agent runs, so the minute has no bucket (SM 5.1). Read from its hook copy alone, P2 would be human_typed, and its 154 s lead would credit this minute.",
       "derived": ["bucket"]
     },
     {
@@ -183,7 +183,7 @@
   ],
   "notes": [
     "A derived fixture. SM states no rows for it, so every row follows from SM's rules applied to this timeline, with pkg/score's readings where SM leaves a choice (README.md).",
-    "SM 2.2 rules 1 to 3 read every copy of a prompt that came through a hook or a log reader (E-cc-transcript-labels). P2's hook copy declares nothing and its transcript copy declares cron, so P2 is scheduled and opens no anchor, though he types in the 10 s before it on the terminal that hosts the session.",
+    "SM 2.2 rules 1 to 3 read every copy of a prompt that came through a hook or a log reader (E-cc-transcript-labels). P2's hook copy declares nothing and its transcript copy declares cron, so P2 is scheduled and opens no anchor, though they type in the 10 s before it on the terminal that hosts the session.",
     "A hook's and a transcript's agent.queue of one message, in one turn and within TRACK_LOG_MATCH_S, are one queued message (E-cc-queued-turn), with one Q anchor, the hook's, corroborated, and one reset of the bucket.",
     "Each lead is 120 s plus the typing time. P1's 60 characters give 160 s and the queued message's 30 give 140 s.",
     "The bucket holds 85 s when the records end at 16:30:00, P2's 145 s less the 60 s read in 16:29.",
