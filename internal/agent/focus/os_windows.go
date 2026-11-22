@@ -5,6 +5,8 @@
 package focus
 
 import (
+	"time"
+
 	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/platform/windows"
 )
@@ -21,10 +23,24 @@ func thisOS() OS {
 	}
 }
 
+// noWindowSettle is how long a moment with no foreground window waits
+// before it counts as focus pairtime can't see, so that a switch, which
+// passes through one, costs one os.focus record (settler). It is X11's
+// focusSettle (internal/platform/linux).
+const noWindowSettle = 50 * time.Millisecond
+
 func watchWindows(fn func(Change)) (func(), error) {
-	return windows.WatchForeground(func(f windows.Foreground) {
-		fn(changeOf(f))
+	s := &settler{fn: fn, wait: noWindowSettle}
+	stop, err := windows.WatchForeground(func(f windows.Foreground) {
+		s.pass(changeOf(f), f.Unknown == windows.UnknownNoWindow)
 	})
+	if err != nil {
+		return nil, err
+	}
+	return func() {
+		stop()
+		s.stop()
+	}, nil
 }
 
 // changeOf turns the watch's report into a Change. A report with no window
