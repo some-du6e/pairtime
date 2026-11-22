@@ -1,0 +1,34 @@
+{
+  "fixture": "relayed/t3-here",
+  "anchors": [
+    {
+      "event_id": "01a20b48-f748-746c-8750-e2f07278935d",
+      "kind": "substantive_prompt",
+      "t": 1795485660000,
+      "local": "20:01:00",
+      "project_key": "p_8480974b6054",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 180,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "A",
+      "sm": "2.2 rule 6 at the app's stamp; 2.3: 120 + 90 / 1.5 = 180 s, ending at the stamp",
+      "relay": "01a20b48-ff18-7bcf-af79-05c06cc2b9c9"
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_13917d863557",
+      "turn_key": "t_4da94bbcb2a9",
+      "t_submit": 1795485661000,
+      "local_submit": "20:01:01",
+      "t_stop": 1795485810000,
+      "local_stop": "20:03:30",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 6, tested at the app's stamp"
+    }
+  ]
+}

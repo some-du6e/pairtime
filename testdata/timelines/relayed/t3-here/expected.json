@@ -1,0 +1,177 @@
+{
+  "fixture": "relayed/t3-here",
+  "title": "A T3 Code message typed into T3's desktop app on this computer",
+  "sm": "docs/design/struggle-metric.md 2.2 rules 6 and 9, 2.3, 2.4",
+  "date": "2026-11-23",
+  "timezone": "America/Chicago",
+  "utc_offset": "-06:00",
+  "os": "macos",
+  "input_keys": true,
+  "evidence": "A",
+  "witness": "witnessed",
+  "device": "d_1241f3554ad9",
+  "projects": {"p_8480974b6054": "weather-cli"},
+  "window": {"start": "2026-11-24T01:58:00Z", "end": "2026-11-24T02:07:00Z", "local": "19:58-20:07"},
+  "rows": [
+    {
+      "start": "2026-11-24T01:58:00Z",
+      "minutes": 1,
+      "local": "19:58",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_8480974b6054": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3: a substantive prompt's lead, 120 + 90 / 1.5 = 180 s, ending at the app's stamp (2.2)",
+      "note": "The lead runs from 19:58:00 to the stamp at 20:01:00.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T01:59:00Z",
+      "minutes": 1,
+      "local": "19:59",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_8480974b6054": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3: a substantive prompt's lead, 120 + 90 / 1.5 = 180 s, ending at the app's stamp (2.2)",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:00:00Z",
+      "minutes": 1,
+      "local": "20:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_8480974b6054": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3: a substantive prompt's lead, 120 + 90 / 1.5 = 180 s, ending at the app's stamp (2.2)",
+      "note": "The typing part, 60 s, with key presses in every slot.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:01:00Z",
+      "minutes": 1,
+      "local": "20:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 40,
+      "credit": {
+        "p_8480974b6054": {"SUP": 40}
+      },
+      "uncredited": {"X.no_anchor": 1, "X.agent_only": 19},
+      "agent_running_s": 59,
+      "sm": "2.4: watching the agent work",
+      "note": "20:01:00 is after the lead and before the turn: X.no_anchor. T1 starts at 20:01:01 with the 20 s base; 60 words add 20 s at 20:01:20, and both are read by 20:01:41. Nothing new until the edit at 20:02:00.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:02:00Z",
+      "minutes": 1,
+      "local": "20:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_8480974b6054": {"SUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "2.4",
+      "note": "The 30-line edit adds 225 s at 20:02:00.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:03:00Z",
+      "minutes": 1,
+      "local": "20:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_8480974b6054": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "2.4",
+      "note": "T1 stops at 20:03:30 with 150 words, 50 s more: 135 + 50 = 185 s left to read.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:04:00Z",
+      "minutes": 1,
+      "local": "20:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_8480974b6054": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:05:00Z",
+      "minutes": 1,
+      "local": "20:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_8480974b6054": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:06:00Z",
+      "minutes": 1,
+      "local": "20:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_8480974b6054": {"READ": 35}
+      },
+      "uncredited": {"X.no_anchor": 25},
+      "agent_running_s": 0,
+      "sm": "2.4",
+      "note": "The bucket empties at 20:06:35.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    }
+  ],
+  "totals": {
+    "credited_s": 495,
+    "credited_by_project": {"p_8480974b6054": 495},
+    "credited_by_reason": {"P": 180, "SUP": 130, "READ": 185},
+    "uncredited": {"X.no_anchor": 26, "X.agent_only": 19},
+    "agent_running_s": 149,
+    "level_a_s": 495,
+    "via_relay_s": 0,
+    "relayed_prompts": 0,
+    "typed_prompts": 1
+  },
+  "stated": [],
+  "approx": {},
+  "errata": ["2026-11-22-relayed-prompts"],
+  "notes": [
+    "No SM section describes this case. It is t3-away's first message, typed into T3 Code's desktop app on the computer that runs the agent. Every row comes from SM 2.2 rules 6 and 9, 2.3 and 2.4 as docs/errata/2026-11-22-relayed-prompts.md applies them.",
+    "Without the relay record the prompt would be headless: no TTY, and T3's server for its nearest non-shell ancestor (SM 2.2 rule 4). The record witnesses it, so rule 4 is skipped, and rule 6, tested at the app's stamp, holds: key presses in the 10 s before 20:01:00 and T3's window, which hosts the session, in front.",
+    "Every credited second is level A: key presses in the anchor's evidence window, on macOS."
+  ]
+}
