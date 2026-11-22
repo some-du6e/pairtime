@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -64,6 +65,8 @@ type rig struct {
 	// until says when its records end (Options.LookbackUntil).
 	lookback func() (Child, error)
 	until    func() time.Time
+	// reported is the progress the tailer last reported (Options.Progress).
+	reported atomic.Pointer[Progress]
 }
 
 func newRig(t *testing.T) *rig {
@@ -102,6 +105,7 @@ func (r *rig) open() {
 		NoNotify:      true,
 		Lookback:      r.lookback,
 		LookbackUntil: r.until,
+		Progress:      func(p Progress) { r.reported.Store(&p) },
 	})
 }
 

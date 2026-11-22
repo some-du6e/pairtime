@@ -1184,6 +1184,71 @@ func TestTranscriptHistoryOfAHookedSession(t *testing.T) {
 	}
 }
 
+// TestTranscriptReplayOfAHookedSession checks that a hooked session's old
+// lines, read again as replays, as a Rewind reads a file taken up at its
+// end, give no session.start: the hook's start is the session's, and the
+// next line read live would write the replay's dated at the session's first
+// entry, before any stretch the ledger knows of. An unhooked session's
+// replays still give the reader's start, its only one.
+func TestTranscriptReplayOfAHookedSession(t *testing.T) {
+	const hooked = 1_795_194_000_000 // 2026-11-20T17:00:00Z, the session's first via-hook call
+	walked := &adapters.Arrival{Via: event.ViaHook, T: hooked, Mono: 5000, BootID: "boot", Harness: event.HarnessClaudeCode,
+		Walk: &platform.Lineage{ParentClass: event.ParentTerminalApp, Entrypoint: event.EntrypointUnknown, HasTTY: true}}
+	lines := logLines(
+		userText("q1", "fix the failing test", map[string]any{"turnOrigin": "human", "promptSource": "typed",
+			"timestamp": "2026-11-19T17:00:00.000Z"}),
+		assistantText("m1", "end_turn", "Done.", "2026-11-19T17:00:09.000Z"),
+		userText("q2", "now the docs", map[string]any{"turnOrigin": "human", "promptSource": "typed",
+			"timestamp": "2026-11-21T17:33:00.000Z"}),
+	)
+	cases := []struct {
+		name string
+		// hook is when the session's first via-hook call comes: "first",
+		// before the replays; "after", between them and the line read live;
+		// "" for never. starts is how many session.starts the transcript
+		// gives.
+		hook   string
+		starts int
+	}{
+		{"a hooked session's old lines read again as replays, then a line read live, give no session.start", "first", 0},
+		{"replays from before the session's first via-hook call, which comes before the next line read live, give no session.start", "after", 0},
+		{"an unhooked session's old lines read again as replays give the reader's session.start at the next line read live", "", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTest()
+			hook := func() {
+				if _, err := a.Parse(hookRaw(EventSessionStart, map[string]any{"session_id": "s1", "cwd": "/home/capture/p",
+					"source": "resume"}, walked)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.hook == "first" {
+				hook()
+			}
+			for _, l := range lines[:2] {
+				if _, err := a.Parse(logRaw(l, false, true)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.hook == "after" {
+				hook()
+			}
+			var recs []adapters.Record
+			for _, raw := range []adapters.RawRecord{logRaw(lines[2], false, false), logRaw(lines[2], true, false)} {
+				got, err := a.Parse(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				recs = append(recs, got...)
+			}
+			if got := len(ofKind[*event.SessionStart](recs)); got != tc.starts {
+				t.Errorf("%d session.starts from the transcript, want %d", got, tc.starts)
+			}
+		})
+	}
+}
+
 // TestQueuedPickupLearned checks the case parse.go left to WP-AD3
 // (E-cc-queued-turn): a message queued in a turn that took up an earlier
 // queued message, before any call of that turn, is that turn's agent.queue

@@ -1225,10 +1225,13 @@ func (t *Tailer) look(now time.Time, all, poll bool) {
 	}
 }
 
-// gone forgets f, which is gone, and has its adapter forget it.
+// gone forgets f, which is gone, and has its adapter forget it. A file
+// with a history leaves lookback's progress, as Start's report or a
+// child's counted it, so the progress goes out again (Options.Progress).
 func (t *Tailer) gone(f *file) {
 	t.mu.Lock()
 	ours := t.files[f.key] == f
+	hist := f.hist
 	if ours {
 		delete(t.files, f.key)
 		for sp, k := range t.spelled {
@@ -1240,6 +1243,9 @@ func (t *Tailer) gone(f *file) {
 	t.mu.Unlock()
 	if ours && t.opts.Forget != nil {
 		t.opts.Forget(f.harness, f.key)
+	}
+	if ours && hist > 0 {
+		t.report()
 	}
 }
 

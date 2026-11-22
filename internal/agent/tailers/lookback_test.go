@@ -150,6 +150,24 @@ func TestLookback(t *testing.T) {
 				t.Errorf("progress %+v", p)
 			}
 		}},
+		{"a file with a history that goes away leaves the progress the tailer reports", func(t *testing.T) {
+			pc := &pipeChild{trim: upper}
+			r := lookbackRig(t, pc.start)
+			r.write("g.jsonl", "{\"n\":1}\n{\"n\":2}\n")
+			r.open()
+			r.step(0, false)
+			r.settle()
+			if p := r.reported.Load(); p == nil || p.Files != 1 {
+				t.Fatalf("reported %+v, want the file's history", p)
+			}
+			if err := os.Remove(r.path("g.jsonl")); err != nil {
+				t.Fatal(err)
+			}
+			r.step(HotPoll, true)
+			if p := r.reported.Load(); p == nil || p.Files != 0 || p.Bytes != 0 {
+				t.Errorf("reported %+v once the file went, want no history", p)
+			}
+		}},
 		{"a file last written longer ago than LookbackWindow has no history", func(t *testing.T) {
 			pc := &pipeChild{trim: upper}
 			r := lookbackRig(t, pc.start)
