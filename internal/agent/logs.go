@@ -142,21 +142,22 @@ const maxTieTried = 256
 
 // tieLive ties the session of harness h, id sid, that a line written at at
 // is from, to the process running it, when no hook reports the session,
-// by the adapter's memory (hooked) or this run's hook ties, and the line
-// was written in the last tieFresh (procs.Scanner.Tie): focus
-// then finds the session in the window that hosts it, which SM 2.2 rule 6
-// reads, and the session.start its log reader writes, once its hooks had
-// their grace, is the scan's (tiedStart). Each line keeps the session's
-// touch fresh (procs.Scanner.Touch); a session is tied again at most every
-// tieRetry, so a session whose process ended gets the one it resumed in.
-func (h *adapterHost) tieLive(harness event.Harness, sid string, at int64, hooked bool) {
+// by the memory of lr, the harness's log reader (LogHooked), or this run's
+// hook ties, and the line was written in the last tieFresh
+// (procs.Scanner.Tie): focus then finds the session in the window that
+// hosts it, which SM 2.2 rule 6 reads, and the session.start its log
+// reader writes, once its hooks had their grace, is the scan's
+// (tiedStart). Each line keeps the session's touch fresh
+// (procs.Scanner.Touch); a session is tied again at most every tieRetry,
+// so a session whose process ended gets the one it resumed in.
+func (h *adapterHost) tieLive(lr adapters.LogReader, harness event.Harness, sid string, at int64) {
 	p := h.a.procs
 	now := wallNow()
-	if p == nil || hooked || at == 0 || now.UnixMilli()-at > tieFresh.Milliseconds() {
+	if p == nil || at == 0 || now.UnixMilli()-at > tieFresh.Milliseconds() {
 		return
 	}
 	key := h.sessionKey(sid)
-	if key == "" || h.a.hooked.has(key) {
+	if key == "" || h.a.hooked.has(key) || lr.LogHooked(sid) {
 		return
 	}
 	p.Touch(key, time.UnixMilli(at))
@@ -418,7 +419,7 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		recs = nil
 		h.count(func() { st.Ignored++ })
 	} else if session != "" && !ll.Replay {
-		h.tieLive(line.Harness, session, at, lr.LogHooked(session))
+		h.tieLive(lr, line.Harness, session, at)
 	}
 	if !ll.Idle && !ll.Replay {
 		h.count(func() { st.Lines++ })

@@ -153,8 +153,9 @@ type Scanner struct {
 	reported map[platform.ID]Session
 	// touched is when each session no hook reports was last read live
 	// (Touch), seen the harness processes the table reads found and when
-	// last, and ended the ties whose process a scan saw gone, by session
-	// key, with when: all for Tie and TieOf, and none saved.
+	// last, and ended the ties whose process a scan saw gone, or that
+	// passed to another session, by session key, with when: all for Tie and
+	// TieOf, and none saved.
 	touched  map[string]touch
 	seen     map[platform.ID]seenProc
 	ended    map[string]endedTie
@@ -471,9 +472,10 @@ func (s *Scanner) TiedTo(key string) (Session, bool) {
 // at /clear, which starts the new session in the same process.
 const ClearGap = 5 * time.Minute
 
-// EndedKeep is how long after a scan saw a tied process gone TieOf still
-// gives its tie, long enough for the session's session.start, which waits
-// out its hooks' grace, to be written as the scan's.
+// EndedKeep is how long after a scan saw a tied process gone, or after the
+// process passed to another session, TieOf still gives its tie, long
+// enough for the session's session.start, which waits out its hooks'
+// grace, to be written as the scan's.
 const EndedKeep = 2 * time.Minute
 
 // seenKeep is how long the scanner remembers a harness process a table
@@ -486,7 +488,8 @@ type seenProc struct {
 	start, last time.Time
 }
 
-// endedTie is a tie whose process a scan saw gone, and when.
+// endedTie is a tie whose process a scan saw gone, or that passed to
+// another session, and when.
 type endedTie struct {
 	sess Session
 	at   time.Time
@@ -526,8 +529,9 @@ func (s *Scanner) quietBefore(key string, first time.Time) bool {
 }
 
 // TieOf returns the tie of session key while its process runs (TiedTo),
-// and for EndedKeep after a scan saw the process gone, as a session.start
-// written after a short session ended needs.
+// and for EndedKeep after a scan saw the process gone or the process
+// passed to another session, as a session.start written after a short
+// session ended needs.
 func (s *Scanner) TieOf(key string) (Session, bool) {
 	if sess, ok := s.TiedTo(key); ok {
 		return sess, true
@@ -628,6 +632,12 @@ func (s *Scanner) Tie(h event.Harness, key string, at time.Time) (Session, bool)
 	l := platform.Classify(s.opts.OS, v.t.Chain(pick.PID))
 	sess := Session{Key: key, Tied: true, Harness: h, PID: pick.PID, Started: pick.Start, Found: now,
 		Event: event.SessionStart{StartKind: event.StartStartup, Entrypoint: l.Entrypoint, ParentClass: l.ParentClass, HasTTY: l.HasTTY}}
+	if old, ok := s.reported[pick.ID()]; ok && old.Tied && old.Key != key {
+		// The process passes on, as at /clear: the session it leaves keeps
+		// the tie for EndedKeep (TieOf), for a session.start it still
+		// waits to write.
+		s.ended[old.Key] = endedTie{sess: old, at: now}
+	}
 	s.reported[pick.ID()] = sess
 	delete(s.seen, pick.ID())
 	s.putLocked()

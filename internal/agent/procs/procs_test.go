@@ -877,6 +877,9 @@ func TestTie(t *testing.T) {
 			[]step{{table: oneClaude(), key: "s_one", at: sec(-100)}, {touch: "s_one", at: sec(-60)}, {key: "s_two", at: sec(-20)}}, 111},
 		{"a claude whose session went quiet longer than ClearGap before the new one's first line keeps its session",
 			[]step{{table: oneClaude(), key: "s_one", at: sec(-100)}, {touch: "s_one", at: sec(-400)}, {key: "s_two", at: sec(-20)}}, 0},
+		{"a claude whose session wrote after the new one's first line keeps it, though quiet before the new one's later line",
+			[]step{{table: oneClaude(), key: "s_one", at: sec(-200)}, {touch: "s_two", at: sec(-150)}, {touch: "s_one", at: sec(-100)},
+				{key: "s_two", at: sec(-70)}}, 0},
 		{"with a claude a read found while the session wrote and gone now, nothing is tied: it could have been the session's",
 			[]step{{table: terminal(), scan: true}, {table: without(terminal(), 111), key: "s_one", at: sec(-5)}}, 0},
 		{"a claude that went before the session's first line doesn't count",
@@ -980,8 +983,9 @@ func TestTieAcrossRestarts(t *testing.T) {
 }
 
 // TestTieOf checks that a tie outlives its process for EndedKeep, for the
-// session.start a short session writes after its process ended, while
-// TiedTo, which focus's sessions follow, lets it go at once.
+// session.start a short session writes after its process ended, and so
+// does one whose process passed to another session at /clear, while
+// TiedTo, which focus's sessions follow, lets either go at once.
 func TestTieOf(t *testing.T) {
 	f := &fake{procs: oneClaude()}
 	now := sec(0)
@@ -998,6 +1002,24 @@ func TestTieOf(t *testing.T) {
 	_, kept := s.TieOf("s_one")
 	now = sec(0).Add(EndedKeep + time.Second)
 	_, later := s.TieOf("s_one")
+
+	// At /clear the process passes to the new session, and the one it left
+	// keeps its tie as one whose process ended does.
+	g := &fake{procs: oneClaude()}
+	cleared := sec(0)
+	var reports []Session
+	c := newScanner(g, &cleared, &reports)
+	if _, ok := c.Tie(event.HarnessClaudeCode, "s_one", sec(-100)); !ok {
+		t.Fatal("no tie")
+	}
+	c.Touch("s_one", sec(-60))
+	if sess, ok := c.Tie(event.HarnessClaudeCode, "s_two", sec(-20)); !ok || sess.PID != 111 {
+		t.Fatal("the process didn't pass to the new session")
+	}
+	_, leftTied := c.TiedTo("s_one")
+	left, leftKept := c.TieOf("s_one")
+	cleared = sec(0).Add(EndedKeep + time.Second)
+	_, leftLater := c.TieOf("s_one")
 	cases := []struct {
 		name string
 		ok   bool
@@ -1005,6 +1027,9 @@ func TestTieOf(t *testing.T) {
 		{"TiedTo lets a tie go once a scan saw its process gone", !tied},
 		{"TieOf keeps it for EndedKeep", kept},
 		{"and not longer", !later},
+		{"TiedTo lets a tie go once its process passed to another session", !leftTied},
+		{"TieOf keeps that one for EndedKeep too, as the session it left had it", leftKept && left.PID == 111 && left.Key == "s_one"},
+		{"and not longer either", !leftLater},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
