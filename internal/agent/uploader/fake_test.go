@@ -57,6 +57,19 @@ type fakeIngest struct {
 	lastKey, lastHash string
 	lastResp          []byte
 	replays           int
+
+	// The owner's project names (docs/spec/project-names-v1.md): the
+	// device's names by key, and every names request's attempt, from 1,
+	// with its faults: "503", "429", "down", "stale" (another computer
+	// took higher counters), "html" (an answer that isn't pairtimed's) and
+	// "label_invalid".
+	names       map[string]string
+	namesPosts  int
+	namesFaults map[int]string
+	namesBodies [][]byte // the inflated body of every signed names attempt
+	// counters are the X-Pairtime-Req of every signed POST, uploads and
+	// names alike, in the order they came.
+	counters []uint64
 }
 
 type fakeRow struct {
@@ -75,7 +88,7 @@ func newFakeIngest(device, token string, devKey ed25519.PublicKey) *fakeIngest {
 	return &fakeIngest{
 		device: device, token: token, devKey: devKey, key: key, keyID: hex.EncodeToString(sum[:8]),
 		now: time.Now, faults: map[int]string{}, rows: map[uint64]fakeRow{}, buckets: map[int64]event.MinuteBucket{},
-		witness: map[event.Witness]int{},
+		witness: map[event.Witness]int{}, names: map[string]string{}, namesFaults: map[int]string{},
 	}
 }
 
@@ -100,6 +113,8 @@ func (f *fakeIngest) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.state(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/ingest/batches":
 		f.batches(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/projects/names":
+		f.projectNames(w, r)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -247,6 +262,9 @@ func (f *fakeIngest) batches(w http.ResponseWriter, r *http.Request) {
 	if !ed25519.Verify(f.devKey, []byte(m), sig) {
 		f.refuse(w, 401, "signature_invalid")
 		return
+	}
+	if req, err := strconv.ParseUint(reqS, 10, 64); err == nil {
+		f.counters = append(f.counters, req)
 	}
 	br := bytes.NewReader(raw)
 	zr, err := gzip.NewReader(br)

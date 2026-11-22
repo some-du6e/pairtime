@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { describe, expect, test } from 'vitest';
-import { dayReply, lastSession } from '../../tests/support/fake-days.ts';
-import type { Day, Tally, WorkSession } from './api.ts';
+import { dayReply, lastSession, projectsReply } from '../../tests/support/fake-days.ts';
+import type { Day, NameState, ProjectEntry, Tally, WorkSession } from './api.ts';
 import {
 	addDays,
 	agentList,
@@ -11,11 +11,14 @@ import {
 	clockLine,
 	dates,
 	dayLabel,
+	entryTitle,
 	mayChange,
 	monday,
+	nameShown,
 	notes,
 	otherRows,
 	projects,
+	projectTitle,
 	scaleOf,
 	segments,
 	sessionHead,
@@ -585,4 +588,46 @@ describe('dates', () => {
 	for (const c of cases) {
 		test(c.name, c.check);
 	}
+});
+
+describe("a project's name on the owner's dashboard", () => {
+	const states: { name: string; state: NameState; want: boolean }[] = [
+		{ name: 'a name the dashboard shows has its switch on', state: 'on', want: true },
+		{ name: 'a name on its way has its switch on', state: 'sending', want: true },
+		{ name: 'a name on its way off has its switch off', state: 'removing', want: false },
+		{ name: 'a name hidden on the dashboard has its switch off', state: 'hidden', want: false },
+		{ name: 'a name off has its switch off', state: 'off', want: false },
+	];
+	for (const c of states) {
+		test(c.name, () => {
+			expect(nameShown(c.state)).toBe(c.want);
+		});
+	}
+	const entry = (over: Partial<ProjectEntry>): ProjectEntry => ({ project: 'p_x', code: 'p_x', local_name: 'x-cli', state: 'off', label: 'x-cli', ...over });
+	const view = (key: string, name: string) => buildProject(key, name, { agent_only_s: 0, agent_only_by_harness: {}, uncredited: {} }, false);
+	const titles: { name: string; got: () => string; want: string }[] = [
+		{ name: "a project the day names keeps the day's name", got: () => projectTitle(view('p_x', 'from-the-day'), entry({})), want: 'from-the-day' },
+		{ name: 'a project the day leaves unnamed takes its local name', got: () => projectTitle(view('p_x', ''), entry({})), want: 'x-cli' },
+		{
+			name: "one with no local name either is called by its code, as the owner's dashboard calls it",
+			got: () => projectTitle(view('p_x', ''), entry({ local_name: '' })),
+			want: 'Project p_x',
+		},
+		{ name: 'one GET /v1/projects lacks is called by its key', got: () => projectTitle(view('p_x', ''), undefined), want: 'p_x' },
+		{ name: 'the other projects are called by their local names', got: () => entryTitle(entry({})), want: 'x-cli' },
+		{ name: 'or by their codes', got: () => entryTitle(entry({ local_name: '' })), want: 'Project p_x' },
+		{
+			name: "a local name's control characters can't reach the page",
+			got: () => entryTitle(entry({ local_name: `a${String.fromCodePoint(0x202e)}b` })),
+			want: `a${String.fromCodePoint(0xfffd)}b`,
+		},
+	];
+	for (const c of titles) {
+		test(c.name, () => {
+			expect(c.got()).toBe(c.want);
+		});
+	}
+	test("the fake agent's list has one project of each state the page shows", () => {
+		expect(new Set(projectsReply().projects.map((p) => p.state))).toEqual(new Set(['on', 'sending', 'off', 'hidden']));
+	});
 });

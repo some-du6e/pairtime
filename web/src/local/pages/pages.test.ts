@@ -6,8 +6,8 @@
 
 import { render } from 'svelte/server';
 import { describe, expect, test } from 'vitest';
-import { dayReply, lastSession, status } from '../../../tests/support/fake-days.ts';
-import type { Day, Focus, LastSession, Tally } from '../api.ts';
+import { dayReply, lastSession, projectsReply, status } from '../../../tests/support/fake-days.ts';
+import type { Day, Focus, LastSession, Projects as ProjectList, Tally } from '../api.ts';
 import Clock from '../components/Clock.svelte';
 import { buildProject, dates } from '../model.ts';
 import Projects from './Projects.svelte';
@@ -388,6 +388,110 @@ describe('Projects', () => {
 				expect(part(html, 'p', 'unread-days')).toBe(
 					"pairtime couldn't read Tuesday, November 17 and Wednesday, November 18 from its agent, so the times here leave those days out. It asks again in a minute.",
 				),
+		},
+	];
+	for (const c of cases) {
+		test(c.name, () => c.check(c.html()));
+	}
+});
+
+describe("Projects' switches for a project's name on the owner's dashboard", () => {
+	const who =
+		"Only you see it, on your own pairtime dashboard while you're signed in. Nothing else about the project leaves this computer.";
+	const page = (options: { names?: ProjectList; days?: Day[]; refused?: ReadonlyMap<string, string> } = {}) =>
+		render(Projects, {
+			props: {
+				days: options.days ?? week(),
+				range: 'week' as const,
+				from: '2026-11-16',
+				to: '2026-11-20',
+				names: options.names,
+				refused: options.refused,
+			},
+		}).body;
+	/** The HTML of a project's switch, from its wrapper to the end of the wrapper. */
+	const switchOf = (html: string, key: string): string => {
+		const at = html.indexOf(`data-project="${key}"`);
+		if (at < 0) {
+			throw new Error(`no switch for ${key}`);
+		}
+		return html.slice(at, html.indexOf('</div>', at));
+	};
+	const cases: { name: string; html: () => string; check: (html: string) => void }[] = [
+		{
+			name: 'a name the dashboard shows has its switch on, with the label, who sees it and where it stands',
+			html: () => page({ names: projectsReply() }),
+			check: (html) => {
+				const s = switchOf(html, 'p_portfolio');
+				expect(s).toContain('data-state="on"');
+				expect(s).toMatch(/<input[^>]*\bchecked/);
+				expect(text(s)).toContain(`Show this name on my dashboard: "portfolio" Your dashboard shows it. ${who}`);
+			},
+		},
+		{
+			name: 'a name off has its switch off, with the label it would show',
+			html: () => page({ names: projectsReply() }),
+			check: (html) => {
+				const s = switchOf(html, 'p_plant');
+				expect(s).not.toMatch(/<input[^>]*\bchecked/);
+				expect(text(s)).toContain('Show this name on my dashboard: "plant-sensor" Your dashboard calls the project Project p_plan.');
+			},
+		},
+		{
+			name: 'a name on its way says it goes with the next upload',
+			html: () => page({ names: projectsReply() }),
+			check: (html) => expect(text(switchOf(html, 'p_homework'))).toContain('"Homework helper" It goes to your dashboard with pairtime\'s next upload.'),
+		},
+		{
+			name: 'on a local-only computer a name on its way says it waits until the computer is online',
+			html: () => page({ names: projectsReply(false) }),
+			check: (html) =>
+				expect(text(switchOf(html, 'p_homework'))).toContain('It goes to your dashboard once this computer is linked and online.'),
+		},
+		{
+			name: 'a name hidden on the dashboard says so, and how to show it again',
+			html: () => page({ names: projectsReply() }),
+			check: (html) =>
+				expect(text(switchOf(html, 'p_bot'))).toContain("You hid it on your dashboard, so it's off here too. Turn it on to show it again."),
+		},
+		{
+			name: 'a project of this computer the span holds no time of is listed after the rest, and one with no name here says how to give it one',
+			html: () => page({ names: projectsReply() }),
+			check: (html) => {
+				expect(part(html, 'section', 'other-projects')).toBe(
+					'Other projects on this computer Project d2a8f6 This project has no name on this computer. To show one on your dashboard, run pairtime projects show-name d2a8f6 with the name.',
+				);
+			},
+		},
+		{
+			name: "a change the agent didn't take says why beside the switch",
+			html: () => page({ names: projectsReply(), refused: new Map([['p_plant', 'config.toml has an error']]) }),
+			check: (html) => expect(text(switchOf(html, 'p_plant'))).toContain("pairtime couldn't change this: config.toml has an error"),
+		},
+		{
+			name: "until GET /v1/projects's answer comes no switch shows",
+			html: () => page(),
+			check: (html) => {
+				expect(html).not.toContain('data-testid="name"');
+				expect(html).not.toContain('data-testid="other-projects"');
+			},
+		},
+		{
+			name: "a project the agent's days leave unnamed is called by its local name, and one the list lacks by its key",
+			html: () => {
+				const today = dayReply('today');
+				for (const p of today.projects) {
+					p.name = '';
+				}
+				const names = projectsReply();
+				names.projects = names.projects.filter((p) => p.project !== 'p_rusty');
+				return page({ days: [today], names });
+			},
+			check: (html) => {
+				const headings = [...html.matchAll(/<h2[^>]*>([^<]*)<\/h2>/g)].map((m) => m[1]);
+				expect(headings).toContain('portfolio');
+				expect(headings).toContain('p_rusty');
+			},
 		},
 	];
 	for (const c of cases) {

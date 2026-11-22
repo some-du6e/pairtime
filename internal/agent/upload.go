@@ -111,10 +111,34 @@ func (a *agent) publishWriter(w *ledger.Writer) {
 }
 
 // reloadConfig is the config watch's reload: config.toml as the agent's
-// settings, and its mode for the ledger writer.
+// settings, and its mode for the ledger writer. The uploader wakes, so a
+// project name turned on or off there goes to the server at once
+// (D-owner-names).
 func (a *agent) reloadConfig() {
 	a.loadConfig(false)
 	a.noteMode()
+	if u := a.upload.Load(); u != nil {
+		u.Wake()
+	}
+}
+
+// namesOn is the uploader's Names: the project names config.toml turns on,
+// read from the file itself at each call, as uploads read it
+// (UploadConfig). A config.toml with an error says nothing, so no name
+// changes on the server until it's fixed; it keeps the computer local-only
+// meanwhile anyway.
+func (a *agent) namesOn() (map[string]string, bool) {
+	cfg, broken := UploadConfig(a.dirs)
+	if broken != "" {
+		return nil, false
+	}
+	return cfg.NamesOn(), true
+}
+
+// hideName is the uploader's HideName: it turns off in config.toml the
+// name of a project the owner hid on their dashboard.
+func (a *agent) hideName(key string) error {
+	return config.HideName(a.dirs.ConfigFile(), key)
 }
 
 // uploadMode is config.toml's mode as uploads obey it, for GET /v1/status.
@@ -259,6 +283,8 @@ func (a *agent) startUploader(w *ledger.Writer) func() {
 		Started:   a.started,
 		Sched:     a.sched,
 		Flush:     flush,
+		Names:     a.namesOn,
+		HideName:  a.hideName,
 		Problem:   func(msg string) { a.setProblem("uploader", msg) },
 		Log:       a.log.With("component", "uploader"),
 	})

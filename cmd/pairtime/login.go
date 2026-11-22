@@ -192,7 +192,10 @@ func runLogin(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "\nLinked. This computer is device %s on %s.\n", r.Linked.DeviceID, srv)
 	if r.Account != "" {
-		fmt.Fprintf(stdout, "It's linked to the account %s, the name the top of %s's pages shows while that account is signed in.\n"+
+		// r.Account is the account's Slack ID, or its Hack Club Auth ID,
+		// which the devices page shows beside the display name; the pages'
+		// header shows the name alone.
+		fmt.Fprintf(stdout, "It's linked to the account %s. %s/account/devices shows that same ID beside the owner's name while that account is signed in.\n"+
 			"If that isn't your account, run pairtime logout right away: until this computer's first upload, logging out leaves nothing on the server, and the next pairtime login can link it to yours.\n", r.Account, srv)
 	}
 	fmt.Fprintf(stdout, "pairtime uploads the minutes it counts here to that server, as numbers. What you type stays on this computer.\nSee your linked computers at %s/account/devices, and unlink this one with pairtime logout.\n", srv)

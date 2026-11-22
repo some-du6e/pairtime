@@ -110,6 +110,11 @@ func testLoginEndToEnd(t *testing.T, p oidcProvider) {
 	if !strings.Contains(out, "Linked. This computer is device "+deviceID) || !strings.Contains(out, "It's linked to the account U0") {
 		t.Errorf("pairtime login printed:\n%s", out)
 	}
+	// The account's ID shows beside the owner's name on the devices page,
+	// and the pages' header shows the name alone.
+	if !strings.Contains(out, ". "+srv.URL+"/account/devices shows that same ID beside the owner's name while that account is signed in.\n") || strings.Contains(out, "the top of") {
+		t.Errorf("pairtime login says where to check the account wrongly:\n%s", out)
+	}
 
 	l, err := account.Load(dir)
 	if err != nil || l.Server != srv.URL || l.DeviceID != deviceID {
