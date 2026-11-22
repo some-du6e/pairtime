@@ -65,6 +65,8 @@ Each refusal is ingest-v1 2.6's JSON body, with these new codes:
 | 422 | `project_repeated` | A key twice in one request | Fix the client |
 | 422 | `label_invalid` | A label that is empty, longer than 64 code points, not valid UTF-8, or not already clean | Fix the client, which cleans every label before the owner sees it |
 
+The endpoint never answers 404. A 404 comes from a server without it, as an older `pairtimed`, whose router has no such path, or from a proxy that doesn't route it, and it carries no refusal to act on (ingest-v1 5 item 5). The client tells doctor nothing, holds back no upload, and sends the same body again a day later, or a changed one at once, so such a server hears from it once a day and at each change.
+
 ### 1.6 Processing and the response
 
 In one writer transaction, the server deletes each `delete` key's name, then stores each `set` item under the token's account, the device and the key, with the time it stored it, and moves the counter. A request is idempotent by its content: sending the same body again, signed again with a new counter, stores the same names. So the server keeps no reply for it, and the device's most recent ingest reply stays as it was (ingest-v1 2.10).

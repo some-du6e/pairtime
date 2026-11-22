@@ -520,13 +520,15 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, raw []byte, hash str
 	return true, u.namesRefused(c, hash, answer{refusal: Refusal{Error: "retries"}})
 }
 
-// namesMissing handles a 404 to a names request: a server without the
-// names endpoint, as one older than it, since pairtimed refuses no names
-// request with a 404. Like an answer that isn't pairtimed's, it tells
-// doctor nothing, and the cycle goes on to the upload, which it never
-// holds back. The same body waits a day, the daily read's pace, while a
-// change to the names in config.toml goes at once, so a server that never
-// gets the endpoint hears from the names once a day and at each change.
+// namesMissing handles a 404 to a names request, which pairtimed's names
+// endpoint never answers: a server without the endpoint, as an older one,
+// whose own ServeMux answers it without X-Pairtime-Time, or a proxy that
+// doesn't route it (project-names-v1 1.5). It is no refusal to act on:
+// doctor hears nothing, and the cycle goes on to the upload, which it
+// never holds back. The same body waits a day, the daily read's pace,
+// while a change to the names in config.toml goes at once, so a server
+// that never gets the endpoint hears from the names once a day and at
+// each change.
 func (u *Uploader) namesMissing(hash string, a answer) (sent, more bool) {
 	u.namesHeld, u.namesAfter = hash, u.now().Add(namesReadEvery)
 	u.log.Info("the server has no project names endpoint, so pairtime asks again in a day or when the names change", "status", a.status)

@@ -52,9 +52,11 @@ func (f *fakeIngest) projectNames(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fault == "404" {
-		// A server without the endpoint, which reads nothing of the
-		// request: a 404 in pairtimed's JSON, with its X-Pairtime-Time.
-		f.refuse(w, 404, "not_found")
+		// A server without the endpoint, as an older pairtimed, which
+		// reads nothing of the request: its ServeMux's own plain 404,
+		// without X-Pairtime-Time.
+		w.Header().Del("X-Pairtime-Time")
+		http.NotFound(w, r)
 		return
 	}
 	if !f.auth(w, r) {
@@ -131,11 +133,12 @@ func (f *fakeIngest) projectNames(w http.ResponseWriter, r *http.Request) {
 		f.refuse(w, 429, "rate_limited")
 		return
 	case "html":
-		// A proxy's page: no X-Pairtime-Time, no JSON.
+		// A proxy's page, as a firewall's block: no X-Pairtime-Time, no
+		// JSON.
 		w.Header().Del("X-Pairtime-Time")
 		w.Header().Set("Content-Type", "text/html")
-		w.WriteHeader(404)
-		io.WriteString(w, "<html>not here</html>")
+		w.WriteHeader(403)
+		io.WriteString(w, "<html>blocked</html>")
 		return
 	case "stale":
 		// Another computer with the same identity took higher counters.

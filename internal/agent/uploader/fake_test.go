@@ -64,10 +64,10 @@ type fakeIngest struct {
 	// project keys, which a test sets, and every names request's attempt,
 	// from 1, with its faults: "503", "429", "down", "stale" (another
 	// computer took higher counters), "html" (an answer that isn't
-	// pairtimed's), "404" (a server without the endpoint, in pairtimed's
-	// JSON), "label_invalid", and "lost" (the server stores the request,
-	// then its answer is lost). namesThen runs after an attempt, by its
-	// number.
+	// pairtimed's: a proxy's 403 page), "404" (a server without the
+	// endpoint, as an older pairtimed's ServeMux answers),
+	// "label_invalid", and "lost" (the server stores the request, then its
+	// answer is lost). namesThen runs after an attempt, by its number.
 	names       map[string]string
 	namesHidden map[string]bool
 	codes       map[string]string

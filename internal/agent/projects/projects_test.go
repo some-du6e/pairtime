@@ -359,9 +359,9 @@ func TestList(t *testing.T) {
 			wantFound: true,
 		},
 		{
-			name:      "a hidden name config.toml couldn't be changed for is hidden, though config.toml still has it on",
+			name:      "a hidden name config.toml couldn't be changed for is hidden, and pending, though config.toml still has it on",
 			in:        Input{Map: repos, Config: on("Chip-8"), Server: server, Device: device, Names: hid(uploader.HiddenName{Label: "Chip-8", At: hiddenAt.UnixMilli(), Pending: true})},
-			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Hidden, Label: "Chip-8", HiddenAt: hiddenAt},
+			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Hidden, Label: "Chip-8", HiddenAt: hiddenAt, Pending: true},
 			wantFound: true,
 		},
 		{
