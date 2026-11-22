@@ -10,7 +10,7 @@ These files are oracle paths (docs/PLAN.md, ground rule 5). A PR that changes a 
 | [6.4](6.4/) | 6.4 | A `/goal` agent running unattended overnight: Claude Code on Linux X11 with the key counter, level A | 810 s; agent 23,400 s, 23,180 s of it agent-only | [prompt lengths](../../docs/errata/2026-11-19-sm-6.4-prompt-lengths.md) |
 | [6.6](6.6/) | 6.6 | A scripted `claude -p` loop with a mouse jiggler on Windows 10 | 0 s | [uncredited codes](../../docs/errata/2026-11-19-sm-6.6-uncredited-codes.md) |
 
-WP-FX2 adds 6.3, its two-tab variant, 6.5 and SM 4.2's alternation case; WP-FX3 adds 6.1; WP-FX4 adds `sidedoor/`.
+WP-FX2 adds 6.3, its two-tab variant, 6.5 and SM 4.2's alternation case; WP-FX3 adds 6.1; WP-FX4 adds `sidedoor/`. `lookback/` holds WP-FX5's cases for SM 2.8, and `relayed/` D-relayed's cases for SM 2.2 rule 9, prompts a person sent through an agent app or a chat bot (docs/errata/2026-11-22-relayed-prompts.md).
 
 ## A fixture directory
 
