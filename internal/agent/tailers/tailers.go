@@ -193,6 +193,12 @@ type Tailer struct {
 	listed   map[string]bool
 	unread   map[string]bool
 	later    map[string]bool
+	// spelled maps another spelling of a known file, one a hook named or
+	// a listing found, to the key the tailer knows it by (alias), so the
+	// spelling finds the file without opening it, and an event named by
+	// it marks the file due without a rescan. It isn't saved: after a
+	// restart, alias finds each spelling again by its file id.
+	spelled map[string]string
 	// lastPoll is when the hot files were last looked at, and lastPut the
 	// cursors as Put last handed them to Store.
 	lastPoll time.Time
@@ -289,6 +295,7 @@ func New(opts Options) *Tailer {
 		listed:   make(map[string]bool),
 		unread:   make(map[string]bool),
 		later:    make(map[string]bool),
+		spelled:  make(map[string]string),
 		scanDue:  true,
 		checkAll: true,
 		kick:     make(chan struct{}, 1),
@@ -460,7 +467,7 @@ func (t *Tailer) Hint(h event.Harness, path string, root adapters.LogRoot) {
 	case !t.listed[r.Dir]:
 		// The root's first listing takes the file up, as every other there.
 		t.scanDue = true
-	case t.files[path] == nil && t.later[path]:
+	case t.known(path) == nil && t.later[path]:
 		// A file the root's first listing couldn't open: taken up at its
 		// end, as the listing would have.
 		t.mu.Unlock()
@@ -470,7 +477,7 @@ func (t *Tailer) Hint(h event.Harness, path string, root adapters.LogRoot) {
 			f.due = true
 		}
 	default:
-		f := t.files[path]
+		f := t.known(path)
 		if f == nil {
 			t.mu.Unlock()
 			id := pathID(path)
@@ -480,6 +487,7 @@ func (t *Tailer) Hint(h event.Harness, path string, root adapters.LogRoot) {
 			case f != nil:
 			case other != nil && t.files[other.key] == other:
 				f = other
+				t.spelled[path] = other.key
 			default:
 				f = &file{key: path, path: path, harness: r.Harness, id: id}
 				t.files[path] = f
@@ -501,19 +509,41 @@ func (t *Tailer) alias(path, id string) *file {
 	if id == "" {
 		return nil
 	}
+	// An entry with no id yet, as a hint that came before its file makes,
+	// can be the file too: those are few, and come after the id's own.
 	t.mu.Lock()
-	var f *file
+	var same, unknown []*file
 	for _, o := range t.files {
-		if o.id == id && o.path != path {
-			f = o
-			break
+		switch {
+		case o.path == path:
+		case o.id == id:
+			same = append(same, o)
+		case o.id == "":
+			unknown = append(unknown, o)
 		}
 	}
 	t.mu.Unlock()
-	if f == nil || pathID(f.path) != id {
-		return nil
+	for _, o := range slices.Concat(same, unknown) {
+		if pathID(o.path) == id {
+			return o
+		}
 	}
-	return f
+	return nil
+}
+
+// known returns the file the tailer knows at path, under its own key or
+// another spelling of it (spelled). t.mu is held.
+func (t *Tailer) known(path string) *file {
+	if f := t.files[path]; f != nil {
+		return f
+	}
+	if k, ok := t.spelled[path]; ok {
+		if f := t.files[k]; f != nil {
+			return f
+		}
+		delete(t.spelled, path)
+	}
+	return nil
 }
 
 // pathID returns the file id of the file at path (fileID), "" when it
@@ -661,7 +691,7 @@ func (t *Tailer) notified(ev fsnotify.Event) {
 		// it again, once something is there.
 		delete(t.watching, name)
 	}
-	if f := t.files[name]; f != nil {
+	if f := t.known(name); f != nil {
 		f.due = true
 		return
 	}
@@ -824,7 +854,7 @@ func (t *Tailer) walk(r Root, dir, rel string, depth int, now time.Time, known m
 			continue
 		}
 		t.mu.Lock()
-		f := t.files[full]
+		f := t.known(full)
 		if f == nil && (first || t.later[full]) {
 			t.mu.Unlock()
 			t.adopt(r, full)
@@ -840,6 +870,7 @@ func (t *Tailer) walk(r Root, dir, rel string, depth int, now time.Time, known m
 			case other != nil && t.files[other.key] == other:
 				// The file a hook named otherwise, read under its name.
 				f = other
+				t.spelled[full] = other.key
 			default:
 				// A file that came since the root was listed: a new session.
 				t.files[full] = &file{key: full, path: full, harness: r.Harness, id: id, due: true, grew: now}
@@ -886,7 +917,12 @@ func (t *Tailer) adopt(r Root, path string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.later, path)
-	if t.files[path] == nil && (other == nil || t.files[other.key] != other) {
+	switch {
+	case t.files[path] != nil:
+	case other != nil && t.files[other.key] == other:
+		// Known under another spelling already: a hook named it.
+		t.spelled[path] = other.key
+	default:
 		t.files[path] = &file{key: path, path: path, harness: r.Harness, id: id, size: fi.Size(),
 			mtime: fi.ModTime(), read: end, resume: end, pos: end, hash: hash}
 	}
@@ -995,6 +1031,11 @@ func (t *Tailer) gone(f *file) {
 	ours := t.files[f.key] == f
 	if ours {
 		delete(t.files, f.key)
+		for sp, k := range t.spelled {
+			if k == f.key {
+				delete(t.spelled, sp)
+			}
+		}
 	}
 	t.mu.Unlock()
 	if ours && t.opts.Forget != nil {

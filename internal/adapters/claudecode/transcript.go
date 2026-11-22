@@ -44,8 +44,12 @@ type entry struct {
 	IsSidechain    bool     `json:"isSidechain"`
 	Message        *message `json:"message"`
 	// IsMeta marks a user entry Claude Code wrote for the model, such as a
-	// slash command's expanded instructions, which no person sent.
-	IsMeta bool `json:"isMeta"`
+	// slash command's expanded instructions, which no person sent, and
+	// IsCompactSummary the summary a compaction puts in place of the
+	// conversation, which IsVisibleInTranscriptOnly marks too.
+	IsMeta                    bool `json:"isMeta"`
+	IsCompactSummary          bool `json:"isCompactSummary"`
+	IsVisibleInTranscriptOnly bool `json:"isVisibleInTranscriptOnly"`
 	// ToolUseResult is a tool result entry's structured result, or the
 	// text Claude Code put in its place, such as "User rejected tool use".
 	ToolUseResult  toolResult `json:"toolUseResult"`

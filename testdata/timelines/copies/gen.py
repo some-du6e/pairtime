@@ -55,18 +55,18 @@ P1, Q, P2 = at("16:22:40"), at("16:23:05"), at("16:28:00")
 P1_STOP, P2_STOP = at("16:23:40"), at("16:29:00")
 TURN = {"P1": tl.key("t", "copies turn P1"), "P2": tl.key("t", "copies turn P2")}
 
-# Input. He reads the code before writing P1 and types P1 in the 40 s
-# before he sends it, the typing part of its lead. While the agent starts
-# on it he types the queued message, then watches and reads with the
-# mouse. He has begun typing his next prompt when the scheduler sends P2,
-# and goes back to the mouse to watch its turn.
+# Input. They read the code before writing P1 and type P1 in the 40 s
+# before they send it, the typing part of its lead. While the agent starts
+# on it they type the queued message, then watch and read with the
+# mouse. They have begun typing their next prompt when the scheduler
+# sends P2, and go back to the mouse to watch its turn.
 fx.pointer("16:19:20.300")                              # clicks Terminal
 fx.typing("16:19:23.000", "16:19:26.000", 600)          # "claude", Enter
 fx.pointer_every("16:19:37.300", "16:21:57.300", 10_000)  # reads src/search.ts
 fx.typing("16:22:00.400", "16:22:39.600", 650)          # types P1
 fx.typing("16:22:46.300", "16:23:04.600", 600)          # types the queued message
 fx.pointer_every("16:23:08.300", "16:27:48.300", 10_000)  # watches the agent, reads its answer
-fx.typing("16:27:50.400", "16:27:59.600", 650)          # starts typing his next prompt
+fx.typing("16:27:50.400", "16:27:59.600", 650)          # starts typing their next prompt
 fx.pointer_every("16:28:03.300", "16:29:53.300", 10_000)  # watches P2's turn, reads its answer
 fx.ticks("16:19:30", "16:30:00", tl.SLOT_MS)
 
@@ -111,7 +111,7 @@ h = {}
 h["P1"] = prompt(P1, "P1", P1_TEXT, "none", "hook")
 h["P1 log"] = prompt(P1 + COPY_MS, "P1", P1_TEXT, "none", "log")
 h["P1 plan"] = output(P1 + 5_000, "P1", 30, False, "log")
-# The queued message, in P1's turn: the hook as he queues it, then the
+# The queued message, in P1's turn: the hook as they queue it, then the
 # transcript's enqueue. Claude Code hands it to the agent with the result
 # of the agent's next tool call, the edit, inside P1's turn.
 h["Q"] = fx.emit(Q, "agent.queue", {"turn_key": TURN["P1"], "len_chars": len(Q_TEXT)}, **hook)
@@ -325,7 +325,7 @@ row("16:26", {"READ": 60}, {}, 0, sm="2.4", note="The bucket runs dry at 16:27:0
 got, ran = ROWS["16:27"]
 tl.check(got == {"X.no_anchor": 60} and ran == 0, f"16:27 credits nothing and runs no agent: {got}")
 exp.row("16:27", bucket=False, codes=["X.no_anchor"], sm="2.2, rule 1, and 5.1", derived=["bucket"],
-        note="He is at the keyboard and focused on the terminal, typing from 16:27:50, but no window covers the "
+        note="They are at the keyboard and focused on the terminal, typing from 16:27:50, but no window covers the "
              "minute and the bucket is empty. Nothing is credited and no agent runs, so the minute has no bucket "
              "(SM 5.1). Read from its hook copy alone, P2 would be human_typed, and its 154 s lead would credit "
              "this minute.")
@@ -346,7 +346,7 @@ expected = exp.doc(
         "timeline, with pkg/score's readings where SM leaves a choice (README.md).",
         "SM 2.2 rules 1 to 3 read every copy of a prompt that came through a hook or a log reader "
         "(E-cc-transcript-labels). P2's hook copy declares nothing and its transcript copy declares cron, so P2 is "
-        "scheduled and opens no anchor, though he types in the 10 s before it on the terminal that hosts the session.",
+        "scheduled and opens no anchor, though they type in the 10 s before it on the terminal that hosts the session.",
         "A hook's and a transcript's agent.queue of one message, in one turn and within TRACK_LOG_MATCH_S, are one "
         "queued message (E-cc-queued-turn), with one Q anchor, the hook's, corroborated, and one reset of the bucket.",
         "Each lead is 120 s plus the typing time. P1's 60 characters give 160 s and the queued message's 30 give "

@@ -3,6 +3,7 @@
 package score
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -10,8 +11,10 @@ import (
 
 // TestQueuedMessageCopies checks E-cc-queued-turn's rule that pkg/score
 // takes a log reader's agent.queue and another path's of one message, of
-// one length and within TRACK_LOG_MATCH_S, for one corroborated act, while
-// two messages one code path reported stay two.
+// one length and within TRACK_LOG_MATCH_S, for one act, paired one to one,
+// oldest first, while two messages one code path reported stay two. The
+// act goes by its most trusted copy, and is corroborated when one of its
+// copies came through a hook (DESIGN 6.4).
 func TestQueuedMessageCopies(t *testing.T) {
 	queued := func(b *tl, ms int64, v event.Via, n ...int) {
 		chars := 40
@@ -20,26 +23,47 @@ func TestQueuedMessageCopies(t *testing.T) {
 		}
 		b.harness(atMS(ms), v, "s_1", "p_1", &event.AgentQueue{TurnKey: "t_q", LenChars: chars})
 	}
-	cases := []struct {
-		name         string
-		add          func(b *tl)
-		want         int
+	// q is a Q anchor: its time, in ms after the timeline's start, the via
+	// of the copy it goes by, and whether it is corroborated.
+	type q struct {
+		ms           int64
+		via          event.Via
 		corroborated bool
+	}
+	cases := []struct {
+		name string
+		add  func(b *tl)
+		want []q
 	}{
 		{"a hook's and a transcript's copy of one message, 25 ms apart, are one Q, the hook's, corroborated",
-			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_025, event.ViaLog) }, 1, true},
+			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_025, event.ViaLog) }, []q{{58_000, event.ViaHook, true}}},
 		{"the transcript's copy coming first, 25 ms before the hook's, changes nothing",
-			func(b *tl) { queued(b, 58_000, event.ViaLog); queued(b, 58_025, event.ViaHook) }, 1, true},
+			func(b *tl) { queued(b, 58_000, event.ViaLog); queued(b, 58_025, event.ViaHook) }, []q{{58_025, event.ViaHook, true}}},
 		{"two messages a hook reported 3 s apart are two",
-			func(b *tl) { queued(b, 55_000, event.ViaHook); queued(b, 58_000, event.ViaHook) }, 2, false},
+			func(b *tl) { queued(b, 55_000, event.ViaHook); queued(b, 58_000, event.ViaHook) },
+			[]q{{55_000, event.ViaHook, false}, {58_000, event.ViaHook, false}}},
 		{"two messages a hook reported in the same millisecond are two",
-			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_000, event.ViaHook) }, 2, false},
+			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_000, event.ViaHook) },
+			[]q{{58_000, event.ViaHook, false}, {58_000, event.ViaHook, false}}},
 		{"copies further apart than TRACK_LOG_MATCH_S are two messages",
-			func(b *tl) { queued(b, 40_000, event.ViaHook); queued(b, 58_000, event.ViaLog) }, 2, false},
+			func(b *tl) { queued(b, 40_000, event.ViaHook); queued(b, 58_000, event.ViaLog) },
+			[]q{{40_000, event.ViaHook, false}, {58_000, event.ViaLog, false}}},
 		{"a hook's and a transcript's of other lengths are two messages",
-			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_025, event.ViaLog, 41) }, 2, false},
+			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_025, event.ViaLog, 41) },
+			[]q{{58_000, event.ViaHook, false}, {58_025, event.ViaLog, false}}},
 		{"a hook's and a plugin's, with no log reader's, are two messages",
-			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_025, event.ViaPlugin) }, 2, false},
+			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_025, event.ViaPlugin) },
+			[]q{{58_000, event.ViaHook, false}, {58_025, event.ViaPlugin, false}}},
+		{"a plugin's and a transcript's copy of one message are one Q, the transcript's, not corroborated",
+			func(b *tl) { queued(b, 58_000, event.ViaPlugin); queued(b, 58_025, event.ViaLog) }, []q{{58_025, event.ViaLog, false}}},
+		{"a pair takes no third copy: two messages 3 s apart, the first spooled, pair oldest first",
+			func(b *tl) {
+				queued(b, 55_000, event.ViaPlugin)
+				queued(b, 55_025, event.ViaLog)
+				queued(b, 58_000, event.ViaHook)
+				queued(b, 58_025, event.ViaLog)
+			},
+			[]q{{55_025, event.ViaLog, false}, {58_000, event.ViaHook, true}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -49,17 +73,14 @@ func TestQueuedMessageCopies(t *testing.T) {
 			tc.add(b)
 			b.samples(at(0), at(90))
 			got := b.run(t, Device{})
-			var qs []Anchor
+			var qs []q
 			for _, a := range got.Anchors {
 				if a.Kind == event.AnchorQueuedMessage {
-					qs = append(qs, a)
+					qs = append(qs, q{a.T - base, a.Via, a.Corroborated})
 				}
 			}
-			if len(qs) != tc.want {
-				t.Fatalf("%d Q anchors, want %d", len(qs), tc.want)
-			}
-			if tc.corroborated && (!qs[0].Corroborated || qs[0].Via != event.ViaHook) {
-				t.Errorf("the anchor via %s corroborated %v, want the hook's, corroborated", qs[0].Via, qs[0].Corroborated)
+			if !slices.Equal(qs, tc.want) {
+				t.Errorf("Q anchors %+v, want %+v", qs, tc.want)
 			}
 		})
 	}
