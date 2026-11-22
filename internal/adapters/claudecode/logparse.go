@@ -421,16 +421,30 @@ func finalEnds(e *entry, fin *pendingFinal) bool {
 	return false
 }
 
+// lateRead is LATE_READ_S, in ms: a line whose time is more than this
+// before the agent read it carries no reading of the run's clock (env).
+const lateRead = 10_000
+
 // env is the envelope of a record of the line that happened at t, in
 // session sid. Its mono is the arrival's less how long before the read t
 // is, by the wall clock, and never after the read, as for a line whose
-// time a wall clock ahead of the reader's stamped. A line from before the
-// agent's run gets 0, no reading of the run's clock, so the ledger holds
-// it to its t (internal/agent/ledger's moment.before).
+// time a wall clock ahead of the reader's stamped. A line read more than
+// lateRead after its t gets 0, no reading of the run's clock, as a line
+// from before the agent's run does, so the ledger holds it to its t by the
+// wall clock (internal/agent/ledger's moment.before). The run's clock
+// leaves out the time the computer slept, which the wall clock counts, so
+// for a line read after a suspend, or found by a rescan a minute late,
+// the wall clock's gap would date it a whole suspend too early, before a
+// stretch that ended after it was made. By its t, a line made in a
+// local-only stretch and read late is still before the stretch's end.
 func (l *logLine) env(t int64, sid string) event.Envelope {
 	arr := l.raw.Arrival
+	var mono int64
+	if arr.T-t <= lateRead {
+		mono = max(arr.Mono+min(t-arr.T, 0), 0)
+	}
 	return event.Envelope{
-		T: t, Mono: max(arr.Mono+min(t-arr.T, 0), 0), BootID: arr.BootID,
+		T: t, Mono: mono, BootID: arr.BootID,
 		Source: event.SourceLog, Via: arr.Via, Harness: harness, HarnessVersion: l.f.st.Version,
 		SessionKey: l.a.keys.Session(sid), ProjectKey: l.f.st.Project,
 	}

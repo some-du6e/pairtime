@@ -26,6 +26,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/presence"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
+	"github.com/some-du6e/pairtime/internal/agent/tailers"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -1536,23 +1537,43 @@ func sealNow(t *testing.T, w *ledger.Writer, dir string) ledger.Row {
 	return rows[0]
 }
 
-// TestLogRecordsByTheRunClock checks how the ledger holds a log record to
-// the moment config.toml was last known to say local-only (#174). A record
-// of a line read in this run goes by this run's clock, which neither a
-// suspend nor a step of the wall clock moves (takeLine, logArrival). So a
-// line made before a switch back online, read after it while the wall
-// clock runs ahead, is sealed local-only. A line written before the run
-// began goes by its t, so a restart over an old stretch's end seals it
-// online.
+// TestLogRecordsByTheRunClock checks how takeLine dates a transcript line
+// for the ledger, which holds a log record to the moment config.toml was
+// last known to say local-only (#174): by this run's clock, which a step of
+// the wall clock doesn't move, for a line read within LATE_READ_S of its
+// time, and by its t for one read later, as for a line from before the run.
+// The run's clock leaves out a suspend, so a line made after a switch back
+// online and read after one is sealed online, and one made before the
+// switch is sealed local-only however late it is read. A restart over an
+// old stretch's end seals a line written while no agent ran online.
 func TestLogRecordsByTheRunClock(t *testing.T) {
-	// prompt is the Claude Code adapter's records of a transcript prompt
-	// made at made, read with the arrival arr, as takeLine has them.
-	prompt := func(t *testing.T, arr adapters.Arrival, made time.Time) []adapters.Record {
+	// shift is how far ahead the writer's clock runs, so this run's clock
+	// reads more than a suspend at its moment, as an agent's that has run
+	// for hours does.
+	const shift = 2 * time.Hour
+	ahead := func() time.Time { return time.Now().Add(shift) } // with its monotonic reading
+	online := func(o *ledger.Options) {
+		o.Online = func() bool { return true }
+		o.Now = ahead
+	}
+	// host is an adapter host with the Claude Code adapter, writing to w as
+	// the worker's does.
+	host := func(dirs home.Dirs, w *ledger.Writer) *adapterHost {
+		a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}, hooked: newHookTies()}
+		secret := bytes.Repeat([]byte{7}, hookpath.SessionSecretLen)
+		a.kSession.Store(&secret)
+		h := newAdapterHost(a)
+		h.keys = &adapterKeys{}
+		h.attach(w)
+		return h
+	}
+	// take has h take a transcript prompt made at made, read at wall by the
+	// wall clock and at run by this run's (logRead).
+	take := func(t *testing.T, h *adapterHost, made, wall, run time.Time) {
 		t.Helper()
-		ad, ok := adapters.Default.New(event.HarnessClaudeCode, adapters.Options{Keys: adapters.NewKeys(bytes.Repeat([]byte{7}, hookpath.SessionSecretLen))})
-		if !ok {
-			t.Fatal("no Claude Code adapter")
-		}
+		saved := logRead
+		logRead = func() (time.Time, time.Time) { return wall, run }
+		defer func() { logRead = saved }()
 		b, err := json.Marshal(map[string]any{"type": "user", "sessionId": "66666666-0000-4000-8000-000000000006",
 			"promptId": "ffffffff-0000-4000-8000-000000000061", "timestamp": made.UTC().Format(time.RFC3339Nano), "cwd": "/home/teen/p",
 			"version": "2.1.327", "entrypoint": "cli", "isSidechain": false, "promptSource": "typed", "turnOrigin": "human",
@@ -1561,51 +1582,60 @@ func TestLogRecordsByTheRunClock(t *testing.T) {
 			t.Fatal(err)
 		}
 		file := "/home/teen/.claude/projects/-p/s.jsonl"
-		ll := adapters.LogLine{File: file, Path: file, End: int64(len(b) + 1)}
-		if ll.Entry, err = ad.(adapters.LogReader).DecodeLog(b); err != nil {
-			t.Fatal(err)
-		}
-		recs, err := ad.Parse(adapters.RawRecord{Source: adapters.SourceLog, Payload: b, Log: &ll, Arrival: arr})
-		if err != nil || len(recs) == 0 {
-			t.Fatalf("the line gave %d records: %v", len(recs), err)
-		}
-		return recs
-	}
-	// write writes recs as adapterHost.write does a log line's.
-	write := func(t *testing.T, w *ledger.Writer, recs []adapters.Record) {
-		t.Helper()
-		for _, r := range recs {
-			ev := r.Event
-			ev.EventID = event.NewEventID(time.UnixMilli(ev.T))
-			if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text}); err != nil {
-				t.Fatal(err)
-			}
+		line := tailers.Line{Harness: event.HarnessClaudeCode, Bytes: b, Log: adapters.LogLine{File: file, Path: file, End: int64(len(b) + 1)}}
+		if !h.takeLine(tailers.New(tailers.Options{NoNotify: true}), line) {
+			t.Fatal("takeLine didn't take the line")
 		}
 	}
-	online := func(o *ledger.Options) { o.Online = func() bool { return true } }
+	// stretch notes a local-only stretch that ends now, by w's clock.
+	stretch := func(w *ledger.Writer) time.Time {
+		w.NoteMode(false)
+		w.NoteMode(true)
+		return ahead()
+	}
 	cases := []struct {
 		name string
-		run  func(t *testing.T, dirs home.Dirs) ledger.Row
+		// run takes the line, and returns the mono its prompt.submit should
+		// have, -1 for any.
+		run func(t *testing.T, dirs home.Dirs) (*ledger.Writer, int64)
 		// online is how the line's batch is sealed.
 		online bool
 	}{
-		{"a line made before a switch back online, read after it while the wall clock runs an hour ahead of this run's, is sealed local-only",
-			func(t *testing.T, dirs home.Dirs) ledger.Row {
+		{"a line read promptly keeps the read's reading of this run's clock",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, int64) {
 				w := optionsWriter(t, dirs, online)
-				made := time.Now()
-				time.Sleep(5 * time.Millisecond)
-				// A stretch that ends now: the moment.
-				w.NoteMode(false)
-				w.NoteMode(true)
-				time.Sleep(5 * time.Millisecond)
-				read := time.Now()
-				// The wall clock, the line's and its read's, runs an hour ahead
-				// of this run's, as after a suspend the run's clock skips.
-				write(t, w, prompt(t, logArrival(read.Add(time.Hour), read), made.Add(time.Hour)))
-				return sealNow(t, w, dirs.Ledger())
+				read := ahead()
+				take(t, host(dirs, w), read, read, read)
+				mono, _ := ledger.RunClock(read)
+				return w, mono
+			}, true},
+		{"a line read 11 s after it was made has no reading of this run's clock",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, int64) {
+				w := optionsWriter(t, dirs, online)
+				read := ahead()
+				take(t, host(dirs, w), read.Add(-11*time.Second), read, read)
+				return w, 0
+			}, true},
+		{"a line made in a local-only stretch and read after a suspend is sealed local-only",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, int64) {
+				w := optionsWriter(t, dirs, online)
+				end := stretch(w)
+				read := ahead()
+				take(t, host(dirs, w), end.Add(-5*time.Second), read.Add(30*time.Minute), read)
+				return w, -1
 			}, false},
-		{"a line written before this run began, after the stretch the newest seal frame ends, is sealed online",
-			func(t *testing.T, dirs home.Dirs) ledger.Row {
+		{"a line made after a switch back online and read after a suspend is sealed online",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, int64) {
+				w := optionsWriter(t, dirs, online)
+				end := stretch(w)
+				made := end.Add(time.Second)
+				// Read two seconds later by this run's clock, which leaves out
+				// the 30 minutes the computer slept since.
+				take(t, host(dirs, w), made, made.Add(30*time.Minute), ahead().Add(2*time.Second))
+				return w, 0
+			}, true},
+		{"a line written while no agent ran, after the stretch the newest seal frame ends, is sealed online",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, int64) {
 				// An earlier run ended a stretch two hours ago, which the seal
 				// frames since record.
 				end := time.Now().Add(-2 * time.Hour).Round(0)
@@ -1629,19 +1659,30 @@ func TestLogRecordsByTheRunClock(t *testing.T) {
 				if err := before.Close(); err != nil {
 					t.Fatal(err)
 				}
-				// This run's writer, and a line written an hour ago, while no
-				// agent ran, which this run reads.
-				w := optionsWriter(t, dirs, online)
+				// This run's writer, and a line written an hour ago, which this
+				// run reads now.
+				w := optionsWriter(t, dirs, func(o *ledger.Options) { o.Online = func() bool { return true } })
 				read := time.Now()
-				write(t, w, prompt(t, logArrival(read, read), read.Add(-time.Hour)))
-				return sealNow(t, w, dirs.Ledger())
+				take(t, host(dirs, w), read.Add(-time.Hour), read, read)
+				return w, 0
 			}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if r := tc.run(t, home.Dirs{Data: dir, Config: dir, Runtime: dir}); r.Online != tc.online {
+			dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+			w, mono := tc.run(t, dirs)
+			if r := sealNow(t, w, dirs.Ledger()); r.Online != tc.online {
 				t.Errorf("the line's batch was sealed online %v, want %v", r.Online, tc.online)
+			}
+			var got []int64
+			for _, rec := range readLedger(t, dirs, event.SourceLog) {
+				if _, ok := rec.ev.Data.(*event.PromptSubmit); ok {
+					got = append(got, rec.ev.Mono)
+				}
+			}
+			if len(got) != 1 || mono >= 0 && got[0] != mono {
+				t.Errorf("the prompt.submit monos are %v, want one of %d", got, mono)
 			}
 		})
 	}
