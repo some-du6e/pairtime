@@ -460,7 +460,7 @@ func TestModesSeen(t *testing.T) {
 					before.Online, after.Online, after.Back)
 			}
 		}},
-		{"the end of a stretch asks for a drain of the inbox's spool within seconds, and a note that repeats online doesn't", func(t *testing.T) {
+		{"the end of a stretch asks for a drain of the inbox's spool once a call made just before it can have reached the spool, and within seconds, and a note that repeats online doesn't", func(t *testing.T) {
 			a, _ := modesAgent(t, "online")
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)

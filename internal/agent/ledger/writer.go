@@ -714,10 +714,8 @@ func (w *Writer) NoteSeen(s Seen) {
 // the newest seal frame recorded it, arms no mark: the agent sees the same
 // end at every start, and a mark due then would hold the first batch for
 // what is still on its way after any restart. One the agent saw in this
-// run is newer by this run's clock, whatever the wall clock says. While
-// the newest batch counts as local-only, the first batch the server could
-// take is still to come, so it is due its mark again, as at a restart
-// before the batch after a switch back was sealed. w.mu is held.
+// run is newer by this run's clock, whatever the wall clock says. w.mu is
+// held.
 func (w *Writer) seenLocked(s Seen, at moment) bool {
 	// A seal reading config.toml meanwhile reads it again, as after a note.
 	w.notes++
@@ -736,9 +734,6 @@ func (w *Writer) seenLocked(s Seen, at moment) bool {
 		if newer && w.back == 0 {
 			w.back = w.next
 		}
-	}
-	if w.lastLocal && w.back == 0 {
-		w.back = w.next
 	}
 	if s.Local {
 		seal = w.noteLocked(false, at) || seal
@@ -932,8 +927,13 @@ func (w *Writer) seal() (Batch, bool, error) {
 	var online, waiting, asked bool
 	for reads := 1; ; reads++ {
 		notes, next := w.notes, w.next
-		// The first batch after a switch back online is due its mark.
-		due := w.waiting != nil && w.back > 0 && len(w.pending) > 0
+		// The first batch after a switch back online is due its mark. So,
+		// short of the mark, is any batch while the newest counts as
+		// local-only, as after a restart before the batch after a switch
+		// back took its mark: a run of local-only batches is open, and an
+		// event of the stretch that reaches the writer late must land in it,
+		// not after the online batch that closes it.
+		due := w.waiting != nil && (w.back > 0 || w.lastLocal) && len(w.pending) > 0
 		until := w.until
 		w.mu.Unlock()
 		// A switch to local-only mode that came before the seal makes the
@@ -962,7 +962,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 			// batch these records made due its mark is sealed as while one
 			// of the stretch is on its way, and the mark waits for the next.
 			online = w.online == nil || w.online()
-			waiting = waiting || online && !asked && w.waiting != nil && w.back > 0
+			waiting = waiting || online && !asked && w.waiting != nil && (w.back > 0 || w.lastLocal)
 			break
 		}
 	}
