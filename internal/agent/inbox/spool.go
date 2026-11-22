@@ -170,7 +170,7 @@ type DrainResult struct {
 	// (ErrRejected). They are skipped too.
 	Rejected int
 	// Failed is how many spool files couldn't be read this time. Each is
-	// read again by the next drain, until maxFileFailures drains in a row
+	// read again by the next drain, until MaxFileFailures drains in a row
 	// have failed it and it is set aside.
 	Failed int
 	// SetAside is how many spool files were renamed to end in .bad,
@@ -191,11 +191,11 @@ const (
 	renameWait  = 20 * time.Millisecond
 )
 
-// maxFileFailures is how many drains in a row may fail to read a spool
+// MaxFileFailures is how many drains in a row may fail to read a spool
 // file before Drain sets it aside. What this is for, such as a disk error,
 // doesn't pass; what does pass, such as running out of file descriptors,
 // gets a few minutes to.
-const maxFileFailures = 3
+const MaxFileFailures = 3
 
 // A Drainer drains one inbox directory into one sink, again and again,
 // and remembers what earlier drains left of each taken file: where the
@@ -244,7 +244,7 @@ func Drain(dir string, sink Sink, now func() clock.Stamp) (DrainResult, error) {
 // skipped. Any other sink error stops the drain: the file waits, and so
 // does everything after it, since the same sink would get it. A file that
 // can't be read is passed over, and the files after it are drained. It is
-// tried again by the next drain, and set aside once maxFileFailures drains
+// tried again by the next drain, and set aside once MaxFileFailures drains
 // in a row have failed it, or at once when it isn't this user's alone
 // (privateFile).
 //
@@ -322,7 +322,7 @@ func (d *Drainer) drainFile(name string, res *DrainResult) (stop bool, err error
 		left.failures = 0 // it got further than the last drain did
 	}
 	left.failures++
-	if left.failures < maxFileFailures && !isNotPrivate(err) {
+	if left.failures < MaxFileFailures && !isNotPrivate(err) {
 		return false, fmt.Errorf("inbox: reading %s, which waits for the next drain: %w", filepath.Base(name), err)
 	}
 	delete(d.left, name)
@@ -441,6 +441,129 @@ func retry(op func() error) error {
 		}
 	}
 	return err
+}
+
+// Scan hands the messages the inbox in dir holds, which no drain has
+// finished with, to each, and reports whether each returned true for one:
+// the spool's first, then those of the files drains took, oldest first,
+// each file's in the order its senders appended them, up to the first
+// limit messages of a file. It reads a message a drain has handed to its
+// sink already again, since a drain keeps how far it got to itself. It
+// reads the spool before it lists the taken files, so a message the spool
+// held as Scan began is read even when a drain takes the spool meanwhile,
+// and a file that is gone by the time Scan opens it was deleted by a drain
+// that had handed all of it over. Lines that aren't a message are passed
+// over, and so are files no drain reads: those of an inbox directory that
+// isn't this user's alone (privateDir), one set aside (.bad), and one that
+// isn't a regular file or isn't this user's alone (privateFile), which a
+// drain sets aside at once. Scan writes nothing, and its opens let a drain
+// rename and delete the files meanwhile, Windows included (openShared). A
+// file Scan can't read to its end may hold any message, and a drain may
+// still take it: one that can't be opened, as while a drain renames it on
+// Windows once the tries a sender gets are over (busy), or read, which a
+// drain tries again MaxFileFailures times, or one that holds more than
+// limit messages. Scan reads the other files on, and reports the first
+// such file's error when none of them had the message each takes.
+func Scan(dir string, limit int, each func(Message) bool) (bool, error) {
+	if privateDir(dir) != nil {
+		return false, nil
+	}
+	var held error
+	if found, err := scanFile(filepath.Join(dir, SpoolName), limit, each); found {
+		return true, nil
+	} else if err != nil {
+		held = err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, held
+	}
+	var names []string
+	for _, e := range entries {
+		if n := e.Name(); strings.HasPrefix(n, "spool-") && strings.HasSuffix(n, takenSuffix) {
+			names = append(names, n)
+		}
+	}
+	slices.Sort(names)
+	for _, n := range names {
+		if found, err := scanFile(filepath.Join(dir, n), limit, each); found {
+			return true, nil
+		} else if err != nil && held == nil {
+			held = err
+		}
+	}
+	return false, held
+}
+
+// scanFile is Scan of the one file name. It reports an error for a file
+// it couldn't read to its end, which a drain may still take.
+func scanFile(name string, limit int, each func(Message) bool) (bool, error) {
+	unread := func(err error) error { return fmt.Errorf("inbox: %s can't be read: %w", filepath.Base(name), err) }
+	fi, err := os.Lstat(name)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, unread(err)
+	case !fi.Mode().IsRegular():
+		return false, nil
+	}
+	f, err := openScan(name)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case busy(err):
+		return false, fmt.Errorf("inbox: %s stayed busy: %w", filepath.Base(name), err)
+	case err != nil:
+		return false, unread(err)
+	}
+	defer f.Close()
+	if fi, err = f.Stat(); err != nil {
+		return false, unread(err)
+	}
+	if privateFile(name, fi) != nil {
+		return false, nil
+	}
+	r := bufio.NewReaderSize(f, 64<<10)
+	for n := 0; ; {
+		line, long, err := readLine(r, MaxMessage)
+		if errors.Is(err, io.EOF) {
+			return false, nil
+		}
+		if err != nil {
+			return false, unread(err)
+		}
+		if long || len(line) == 0 {
+			continue
+		}
+		m, err := Decode(line)
+		if err != nil {
+			continue
+		}
+		if n == limit {
+			return false, fmt.Errorf("inbox: %s holds more than %d messages", filepath.Base(name), limit)
+		}
+		n++
+		if each(m) {
+			return true, nil
+		}
+	}
+}
+
+// openScan opens a spool file for Scan, and tries again while another
+// process holds it for a moment, as openSpool does (busy).
+func openScan(name string) (*os.File, error) {
+	var err error
+	for i := range openTries {
+		var f *os.File
+		if f, err = openShared(name); err == nil || !busy(err) {
+			return f, err
+		}
+		if i < openTries-1 {
+			time.Sleep(openWait)
+		}
+	}
+	return nil, err
 }
 
 // taken lists the spool files that drains took, oldest first, and deletes

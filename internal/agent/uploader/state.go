@@ -250,17 +250,37 @@ func (s saved) localOnly(b uint64) bool {
 
 // straddles reports whether the minute that starts at minute, in Unix ms,
 // holds the end of a run of batches sealed in local-only mode: it starts
-// before the run's last batch was sealed and ends after, as the minute
-// pairtime login lands in does. The first batch sealed after the minute
-// can be online, as one marked as the first after a noted switch back
-// online is (mode), but part of the minute came in local-only mode, and a
-// later revision's credit can reach back into it, as a first prompt's lead
-// does (SM 2.3). So it never goes, though the marked batch's root and the
-// minutes after it do. The cost is at most that minute's credit, when the
-// first prompt after the switch falls in it.
+// before the stretch the run holds ended and ends after the run's last
+// batch was sealed, as the minute pairtime login lands in does. The
+// stretch ends where the batch after the run's last says config.toml was
+// last known to say local-only (ledger.Row.LocalUntil), which comes after
+// the run's last seal when nothing was pending at the switch back, and at
+// it otherwise, though by its writer's clock no later than its own seal: a
+// moment later than that is one an earlier run recorded ahead of a clock
+// stepped back since, which the writer keeps for the records it judges by
+// their t (ledger.Writer.earlier), and the minutes this run's clock reads
+// before it are online ones. The first batch sealed after such a
+// minute can be online, as one marked as the first after a noted switch
+// back online is (mode), but part of the minute came in local-only mode,
+// and a later revision's credit can reach back into it, as a first
+// prompt's lead does (SM 2.3). So it never goes, though the marked batch's
+// root and the minutes after it do. The cost is at most the switch's
+// minute's credit, when the first prompt after the switch falls in it:
+// the minutes before it came in local-only mode.
 func (s saved) straddles(rows *rowIndex, minute int64) bool {
 	for _, g := range s.Gaps {
-		if t, ok := rows.sealedAt(g.To); ok && minute < t && t < minute+60_000 {
+		t, ok := rows.sealedAt(g.To)
+		if !ok {
+			continue
+		}
+		end := t
+		if lu, ok := rows.localUntil(g.To + 1); ok {
+			if sa, ok := rows.sealedAt(g.To + 1); ok {
+				lu = min(lu, sa)
+			}
+			end = max(end, lu)
+		}
+		if minute < end && t < minute+60_000 {
 			return true
 		}
 	}

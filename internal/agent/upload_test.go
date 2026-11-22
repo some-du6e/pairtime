@@ -378,7 +378,7 @@ func TestLedgerMode(t *testing.T) {
 		}
 		return nil
 	}
-	t.Run("the ledger's start notes no mode and hands the writer to the config watch, whose notes begin at its first reload", func(t *testing.T) {
+	t.Run("the ledger's start sees config.toml say local-only, as an install's first start does, so the stretch's first record seals at once, local-only", func(t *testing.T) {
 		dir := t.TempDir()
 		dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
 		if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \"local\"\n"), 0o600); err != nil {
@@ -386,23 +386,12 @@ func TestLedgerMode(t *testing.T) {
 		}
 		a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}, table: newestTable(), keyStores: []keys.Store{}}
 		t.Cleanup(a.startLedger())
-		var w *ledger.Writer
-		for deadline := time.Now().Add(10 * time.Second); w == nil && time.Now().Before(deadline); time.Sleep(25 * time.Millisecond) {
-			w = a.writer.Load()
-		}
-		if w == nil {
-			t.Fatal("the ledger didn't open")
-		}
-		// Unnoted, as records just after pairtime login are until the
-		// watch notes it, a record doesn't seal at once.
-		record(t, w)
-		time.Sleep(200 * time.Millisecond)
-		if got := rows(t, dirs); len(got) != 0 {
-			t.Fatalf("a record sealed at once after the ledger's start: %+v", got)
-		}
-		a.reloadConfig() // the watch's reload of a change that leaves mode = "local"
-		if got := sealsAtOnce(t, a.writer.Load, dirs); len(got) != 1 || got[0].Online {
-			t.Errorf("rows %+v, want one local-only batch sealed at once", got)
+		// The start's own read, before the ledger opens on its goroutine.
+		a.modes.mu.Lock()
+		seen := a.modes.local
+		a.modes.mu.Unlock()
+		if got := sealsAtOnce(t, a.writer.Load, dirs); !seen || len(got) != 1 || got[0].Online {
+			t.Errorf("the start saw local-only %v, and rows %+v; want local-only, and one local-only batch sealed at once", seen, got)
 		}
 	})
 	t.Run("a switch to local-only the config watch notes while the ledger waits to open is noted as the writer is published", func(t *testing.T) {
