@@ -65,8 +65,10 @@ const stateKey = "procs"
 type Session struct {
 	// Key is a random opaque key for the process (AGENTS.md). The scan
 	// can't know the harness's own session id; whoever joins this to the
-	// session a log reader finds maps the key.
+	// session a log reader finds maps the key (Tie), and Tied says one
+	// did: Key is then that session's.
 	Key     string        `json:"key"`
+	Tied    bool          `json:"tied,omitempty"`
 	Harness event.Harness `json:"harness"`
 	// PID and Started name the process on this device. They are local and
 	// never leave it.
@@ -356,9 +358,10 @@ func (s *Scanner) Scan() ([]Session, error) {
 }
 
 // Sessions returns the key of each session the scan has reported, by its
-// process, until a scan sees the process gone or a hook claims it. The
-// focus component reads it to find the sessions the window in front hosts
-// (SM 3.2, DESIGN 3.3).
+// process, until a scan sees the process gone or a hook claims it: the
+// key of the session a log reader found running there once Tie tied it.
+// The focus component reads it to find the sessions the window in front
+// hosts (SM 3.2, DESIGN 3.3).
 func (s *Scanner) Sessions() map[platform.ID]string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -367,6 +370,46 @@ func (s *Scanner) Sessions() map[platform.ID]string {
 		out[id] = sess.Key
 	}
 	return out
+}
+
+// TieSlack is how much later than a session's transcript says it started
+// its process may have started, by the process table's clock, to be tied
+// to it: the two clocks are one, read at different moments.
+const TieSlack = 2 * time.Second
+
+// Tie ties a session no hook reported, keyed key in the ledger, whose log
+// a log reader found and says came by at, to the harness process the scan
+// found running it, when there is one to tie: the only process of harness
+// h that the scan reported, that no hook claimed, that no other session is
+// tied to, and that started by at (TieSlack). The session then has the
+// process's parent, TTY and entrypoint, which SM 2.2 rule 4 reads and no
+// log states (WP-AD3), and Sessions gives key for the process, so focus
+// finds the session in the window that hosts it. A session tied already
+// gets its process again. With two such processes or none it ties
+// nothing: a wrong tie would give the session another's parent and TTY.
+func (s *Scanner) Tie(h event.Harness, at time.Time, key string) (Session, bool) {
+	s.mu.Lock()
+	var cand []platform.ID
+	for id, sess := range s.reported {
+		switch {
+		case sess.Tied && sess.Key == key:
+			s.mu.Unlock()
+			return sess, true
+		case sess.Harness == h && !sess.Tied && (sess.Started.IsZero() || !sess.Started.After(at.Add(TieSlack))):
+			cand = append(cand, id)
+		}
+	}
+	if len(cand) != 1 || key == "" {
+		s.mu.Unlock()
+		return Session{}, false
+	}
+	sess := s.reported[cand[0]]
+	sess.Key, sess.Tied = key, true
+	s.reported[cand[0]] = sess
+	s.putLocked()
+	s.mu.Unlock()
+	s.save()
+	return sess, true
 }
 
 // Claimed reports whether a hook has claimed the process id, and no scan

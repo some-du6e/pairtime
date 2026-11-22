@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
@@ -122,6 +123,43 @@ func (h *adapterHost) forgetLog(harness event.Harness, file string) {
 	h.forgets = append(h.forgets, forgetReq{harness: harness, file: file})
 	h.mu.Unlock()
 	h.poke()
+}
+
+// tieProcs ties a session.start a log reader wrote, for a session no hook
+// reported, to the harness process the scan found running it
+// (procs.Scanner.Tie), and writes the scan's session.start under the
+// session's key, at the same moment, so it comes after the log's: the
+// parent, the TTY and the entrypoint the process's walk gives, which SM
+// 2.2 rule 4 reads and no transcript states (WP-AD3). It reports false
+// when the ledger refused the record.
+func (h *adapterHost) tieProcs(st *harnessStats, r adapters.Record, start *event.SessionStart, file, key string) bool {
+	p := h.a.procs
+	if p == nil {
+		return true
+	}
+	at := time.UnixMilli(r.Event.T)
+	sess, ok := p.Tie(r.Event.Harness, at, r.Event.SessionKey)
+	if !ok {
+		// The scan may not have found the process yet: it runs every
+		// PROC_SCAN_S, and this is once per session no hook reported.
+		p.Scan()
+		if sess, ok = p.Tie(r.Event.Harness, at, r.Event.SessionKey); !ok {
+			return true
+		}
+	}
+	tied := sess.Event
+	tied.StartKind, tied.PermissionMode = start.StartKind, start.PermissionMode
+	if tied.Entrypoint == event.EntrypointUnknown {
+		tied.Entrypoint = start.Entrypoint
+	}
+	e := r.Event
+	e.Source, e.Via, e.Data = event.SourceOS, event.ViaOS, &tied
+	e.EventID = h.logEventID(e.T, file, key+".procs")
+	ok = h.write(st, adapters.Record{Event: e})
+	// The window in front may host the session, which focus finds under
+	// its key now (procs.Scanner.Sessions).
+	h.a.refreshFocus()
+	return ok
 }
 
 // drained reports whether the inbox's first drain has handed its calls to
@@ -289,6 +327,11 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		r.Event.EventID = h.logEventID(r.Event.T, ll.File, key)
 		if !h.write(st, r) && h.writerDown() {
 			return false
+		}
+		if start, ok := r.Event.Data.(*event.SessionStart); ok {
+			if !h.tieProcs(st, r, start, ll.File, key) && h.writerDown() {
+				return false
+			}
 		}
 		switch r.Event.Kind() {
 		case event.KindSessionStart, event.KindPromptSubmit, event.KindAgentStop:

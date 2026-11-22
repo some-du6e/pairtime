@@ -812,3 +812,116 @@ func TestGoldenBare(t *testing.T) {
 		})
 	}
 }
+
+// oneClaude is terminal() with one claude session and codex.
+func oneClaude() []platform.Proc {
+	return slices.DeleteFunc(terminal(), func(p platform.Proc) bool { return p.PID == 120 || p.PID == 121 })
+}
+
+// TestTie checks how a session a log reader found is tied to the process
+// the scan found running it (WP-AD3): only when one process can be it.
+func TestTie(t *testing.T) {
+	claude := event.HarnessClaudeCode
+	keyOf := func(s *Scanner, pid int) string {
+		for id, k := range s.Sessions() {
+			if id.PID == pid {
+				return k
+			}
+		}
+		return ""
+	}
+	type tie struct {
+		at  time.Time
+		key string
+	}
+	cases := []struct {
+		name  string
+		procs []platform.Proc
+		ties  []tie
+		// want is the pid the last tie gave, 0 for none.
+		want int
+	}{
+		{"the only claude the scan reported, started before the session, is tied", oneClaude(), []tie{{sec(-100), "s_one"}}, 111},
+		{"a claude that started after the session isn't tied", oneClaude(), []tie{{sec(-400), "s_one"}}, 0},
+		{"a claude that started within TieSlack after the session is tied", oneClaude(), []tie{{sec(-301), "s_one"}}, 111},
+		{"with two claudes that could be it, none is tied", terminal(), []tie{{sec(-100), "s_one"}}, 0},
+		{"a claude another session is tied to isn't tied again", oneClaude(), []tie{{sec(-100), "s_one"}, {sec(-50), "s_two"}}, 0},
+		{"a session tied already gets its process again", oneClaude(), []tie{{sec(-100), "s_one"}, {sec(-50), "s_one"}}, 111},
+		{"a codex process isn't tied to a Claude Code session", slices.DeleteFunc(oneClaude(), func(p platform.Proc) bool { return p.PID == 111 }),
+			[]tie{{sec(-50), "s_one"}}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fake{procs: tc.procs}
+			now := sec(0)
+			var got []Session
+			s := newScanner(f, &now, &got)
+			if _, err := s.Scan(); err != nil {
+				t.Fatal(err)
+			}
+			var sess Session
+			var ok bool
+			for _, ti := range tc.ties {
+				sess, ok = s.Tie(claude, ti.at, ti.key)
+			}
+			last := tc.ties[len(tc.ties)-1]
+			switch {
+			case tc.want == 0 && ok:
+				t.Errorf("tied process %d, want none", sess.PID)
+			case tc.want != 0 && (!ok || sess.PID != tc.want || !sess.Tied || sess.Key != last.key):
+				t.Errorf("tie %+v, %v; want process %d", sess, ok, tc.want)
+			case tc.want != 0 && keyOf(s, tc.want) != last.key:
+				t.Errorf("Sessions gives %q for process %d, want the session's key", keyOf(s, tc.want), tc.want)
+			}
+		})
+	}
+}
+
+// TestTieAcrossRestarts checks that a tie outlives an agent restart: the
+// restarted scan gives the session's key for the process, and doesn't tie
+// it to another session.
+func TestTieAcrossRestarts(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "state.json")
+	f := &fake{procs: oneClaude()}
+	now := sec(0)
+	start := func(t *testing.T) *Scanner {
+		t.Helper()
+		st, problem, err := state.Open(name)
+		if err != nil || problem != "" {
+			t.Fatalf("state.Open: %v %s", err, problem)
+		}
+		return New(Options{Read: f.read, OS: platform.Linux, Self: me, Boot: boot, Store: st, Now: func() time.Time { return now }})
+	}
+	s := start(t)
+	if _, err := s.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.Tie(event.HarnessClaudeCode, sec(-100), "s_one"); !ok {
+		t.Fatal("no tie")
+	}
+	s = start(t)
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"the restarted scan gives the session's key for the process", func() bool {
+			for id, k := range s.Sessions() {
+				if id.PID == 111 {
+					return k == "s_one"
+				}
+			}
+			return false
+		}()},
+		{"and ties it to no other session", func() bool {
+			_, ok := s.Tie(event.HarnessClaudeCode, sec(-50), "s_two")
+			return !ok
+		}()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Error("the tie didn't survive the restart")
+			}
+		})
+	}
+}

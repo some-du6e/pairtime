@@ -16,6 +16,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/install"
+	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -45,33 +46,7 @@ func TestTranscriptLinesReachTheLedger(t *testing.T) {
 	if len(lines[len(lines)-1]) == 0 {
 		lines = lines[:len(lines)-1]
 	}
-	home := filepath.Join(filepath.Dir(r.home), "teen")
-	file := filepath.Join(home, ".claude", "projects", "-cli", captureSession+".jsonl")
-	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// There before the agent's first look, empty. The projects folder
-	// counts as listed already, as after a run that found it empty, so
-	// whenever that first look comes, which can be after the first lines
-	// are written, the file is a new one, read from its start: a root's
-	// first listing would take its files up at their end.
-	if err := os.WriteFile(file, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(r.dirs.Data, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	store, _, err := state.Open(r.dirs.StateFile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	listed := map[string]any{"v": 1, "files": []any{}, "roots": []string{filepath.Join(home, ".claude", "projects")}}
-	if err := store.Put("tailers", listed); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Save(); err != nil {
-		t.Fatal(err)
-	}
+	home, file := listedHome(t, r)
 	opts := r.options([]keys.Store{})
 	opts.Env = &install.Env{GOOS: runtime.GOOS, Home: home}
 	a := startAgent(t, opts)
@@ -222,5 +197,110 @@ func waitStatusFor(t *testing.T, r *running, d time.Duration, ok func(statusRepl
 			t.Fatalf("the status never got there in %s; last: %+v", d, s.Adapters)
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// listedHome makes the home folder of a replay's teen, with Claude Code's
+// projects folder and an empty transcript of the capture's main session in
+// it, and the projects folder counted as listed already, as after a run
+// that found it empty: whenever the agent's first look comes, which can be
+// after the first lines are written, the file is a new one, read from its
+// start, where a root's first listing would take its files up at their
+// end.
+func listedHome(t *testing.T, r *hookReplay) (home, file string) {
+	t.Helper()
+	home = filepath.Join(filepath.Dir(r.home), "teen")
+	file = filepath.Join(home, ".claude", "projects", "-cli", captureSession+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(r.dirs.Data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, _, err := state.Open(r.dirs.StateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]any{"v": 1, "files": []any{}, "roots": []string{filepath.Join(home, ".claude", "projects")}}
+	if err := store.Put("tailers", listed); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(); err != nil {
+		t.Fatal(err)
+	}
+	return home, file
+}
+
+// TestTranscriptTiedToItsProcess checks the procs tie (WP-AD3): a live
+// session no hook reported gets, beside its transcript's session.start,
+// the process scan's, under the session's key, with the parent and the
+// TTY SM 2.2 rule 4 reads, which no transcript states.
+func TestTranscriptTiedToItsProcess(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the capture's paths are Linux's")
+	}
+	raw, err := os.ReadFile(captureTranscript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newHookReplay(t)
+	raw = bytes.ReplaceAll(raw, []byte(captureHome), []byte(r.home))
+	home, file := listedHome(t, r)
+	// claude in bash in a terminal, started just before the capture's
+	// first entry, 2026-11-20 16:48:30 UTC.
+	me := platform.UIDOwner(uint32(os.Geteuid()))
+	started := time.Date(2026, 11, 20, 16, 48, 0, 0, time.UTC)
+	table := []platform.Proc{
+		{PID: 1, Name: "systemd", PGID: 1, TTY: platform.TTYNone, Start: started.Add(-time.Hour), Owner: "uid:0"},
+		{PID: 100, PPID: 1, Name: "gnome-terminal-server", PGID: 100, TTY: platform.TTYNone, Start: started.Add(-10 * time.Minute), Owner: me},
+		{PID: 110, PPID: 100, Name: "bash", PGID: 110, TTY: platform.TTYAttached, Start: started.Add(-5 * time.Minute), Owner: me},
+		{PID: 111, PPID: 110, Name: "claude", PGID: 111, TTY: platform.TTYAttached, Start: started, Owner: me},
+	}
+	opts := r.options([]keys.Store{})
+	opts.Env = &install.Env{GOOS: runtime.GOOS, Home: home}
+	opts.Procs = func() ([]platform.Proc, error) { return slices.Clone(table), nil }
+	a := startAgent(t, opts)
+	if err := os.WriteFile(file, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Count(raw, []byte("\n"))
+	waitStatusFor(t, a, 40*time.Second, func(s statusReply) bool {
+		return s.Adapters.Harnesses[event.HarnessClaudeCode].Lines >= uint64(lines)
+	})
+	a.cancel()
+	if err := a.waitExit(t); err != nil {
+		t.Fatalf("stopping the agent: %v", err)
+	}
+	_, kSession := deviceKeys(t, r.dirs, []keys.Store{})
+	k := adapters.NewKeys(kSession)
+	var tied []*event.SessionStart
+	for _, rec := range readLedger(t, r.dirs, event.SourceOS) {
+		if s, ok := rec.ev.Data.(*event.SessionStart); ok && rec.ev.Via == event.ViaOS && rec.ev.SessionKey == k.Session(captureSession) {
+			tied = append(tied, s)
+		}
+	}
+	logStarts := 0
+	for _, rec := range readLedger(t, r.dirs, event.SourceLog) {
+		if _, ok := rec.ev.Data.(*event.SessionStart); ok {
+			logStarts++
+		}
+	}
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"the session's transcript gives its session.start", logStarts == 1},
+		{"and the scan's comes after it under the session's key, one", len(tied) == 1},
+		{"with the terminal as its parent and a TTY", len(tied) == 1 && tied[0].ParentClass == event.ParentTerminalApp && tied[0].HasTTY},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("%d log session.starts, tied %+v", logStarts, tied)
+			}
+		})
 	}
 }
