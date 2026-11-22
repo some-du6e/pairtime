@@ -14,6 +14,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/adapters"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
+	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
@@ -49,9 +50,26 @@ func TestTranscriptLinesReachTheLedger(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// There before the agent's first look, empty: it reads it from its
-	// start as it grows.
+	// There before the agent's first look, empty. The projects folder
+	// counts as listed already, as after a run that found it empty, so
+	// whenever that first look comes, which can be after the first lines
+	// are written, the file is a new one, read from its start: a root's
+	// first listing would take its files up at their end.
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(r.dirs.Data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, _, err := state.Open(r.dirs.StateFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]any{"v": 1, "files": []any{}, "roots": []string{filepath.Join(home, ".claude", "projects")}}
+	if err := store.Put("tailers", listed); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(); err != nil {
 		t.Fatal(err)
 	}
 	opts := r.options([]keys.Store{})

@@ -84,6 +84,13 @@ const (
 // comes every minute (internal/agent), with room for a slow one.
 const startGrace = 90_000
 
+// maxToolWait is how long after its use a tool use waits for its result
+// once the file is idle: a session killed while a tool ran writes none,
+// and a tool use that waits holds the file's memory back (LogResume).
+// Claude Code's own limit on a command is 10 minutes; a subagent can run
+// longer.
+const maxToolWait = 6 * 60 * 60 * 1000
+
 // turnOrigins and promptSources are the values of turnOrigin and
 // promptSource that WP-AD1's capture shows (E-cc-transcript-labels).
 var (
@@ -258,6 +265,7 @@ func (a *Adapter) parseLog(raw adapters.RawRecord) ([]adapters.Record, error) {
 		if ll.Offset == f.at {
 			l.resolveFinal()
 			l.resolveStart()
+			l.settle()
 		}
 	default:
 		if ll.Offset == 0 || ll.Offset != f.at {
@@ -285,6 +293,22 @@ func (a *Adapter) parseLog(raw adapters.RawRecord) ([]adapters.Record, error) {
 		return nil, nil
 	}
 	return l.recs, perr.Err()
+}
+
+// settle drops, once the file is idle, what no later line will resolve: a
+// slash command's markup whose turn didn't start, as /exit's, and tool uses
+// that have waited longer than maxToolWait.
+func (l *logLine) settle() {
+	f := l.f
+	f.pend.command = nil
+	kept := f.pend.tools[:0]
+	for _, pt := range f.pend.tools {
+		if pt.t > 0 && l.raw.Arrival.T-pt.t < maxToolWait {
+			kept = append(kept, pt)
+		}
+	}
+	clear(f.pend.tools[len(kept):])
+	f.pend.tools = kept
 }
 
 // entryOf returns the line's entry: as the tailers decoded it, or decoded
@@ -509,6 +533,10 @@ func (l *logLine) user(e *entry, sid string) {
 			// /goal's markup comes in an entry of its own, before the one
 			// that starts the turn; /exit's in one that starts none.
 			l.f.pend.command = &pendingCommand{promptID: e.PromptID, text: cmd}
+		} else if cmd := l.f.pend.command; cmd != nil && cmd.promptID == e.PromptID {
+			// The command's own output, which started no turn: /goal's
+			// output is the entry that starts its turn.
+			l.f.pend.command = nil
 		}
 	}
 }
@@ -826,11 +854,13 @@ func (l *logLine) toolResult(e *entry, sid string, i int, p msgPart) {
 	case "Edit", "MultiEdit", "NotebookEdit":
 		t.ToolClass = event.ToolEdit
 		if !p.IsError {
+			l.badPatch(e)
 			r = kit.edit(t, toolInput{FilePath: pt.file}, resp)
 		}
 	case "Write":
 		t.ToolClass = event.ToolWrite
 		if !p.IsError {
+			l.badPatch(e)
 			r = kit.edit(t, toolInput{FilePath: pt.file}, resp)
 		}
 	case "Bash":
@@ -866,6 +896,14 @@ func (l *logLine) toolResult(e *entry, sid string, i int, p msgPart) {
 		// For the git watcher, which tells an agent's commit from the
 		// person's by the command that made it (NoteAgentCommand).
 		rec.Dir, rec.Call = e.CWD, p.ToolUseID
+	}
+}
+
+// badPatch counts an edit's structuredPatch that isn't a list of hunks,
+// whose lines the reader can't count.
+func (l *logLine) badPatch(e *entry) {
+	if e.ToolUseResult.BadPatch {
+		l.perr.Problem("an edit's structuredPatch isn't a list of hunks")
 	}
 }
 

@@ -192,6 +192,9 @@ type Tailer struct {
 	// cursors as Put last handed them to Store.
 	lastPoll time.Time
 	lastPut  []byte
+	// pokes counts the Pokes, so a read whose lines weren't all taken can
+	// tell whether one came while it waited for Deliver.
+	pokes uint64
 
 	w       *fsnotify.Watcher
 	kick    chan struct{}
@@ -305,8 +308,12 @@ func (t *Tailer) load() {
 		if sf.Path == "" || !filepath.IsAbs(sf.Path) || t.files[sf.Path] != nil || sf.Read < 0 || sf.Resume < 0 || sf.Resume > sf.Read {
 			continue
 		}
+		// A file whose adapter needs lines again, or that has lines the
+		// agent didn't take before it stopped, is read at once: no change to
+		// the file may come to say so.
 		t.files[sf.Path] = &file{key: sf.Path, path: sf.Path, harness: sf.Harness, id: sf.ID, size: sf.Size,
-			mtime: time.Unix(0, sf.MTime), read: sf.Read, resume: sf.Resume, hash: sf.Hash, pos: sf.Resume}
+			mtime: time.Unix(0, sf.MTime), read: sf.Read, resume: sf.Resume, hash: sf.Hash, pos: sf.Resume,
+			due: sf.Resume < sf.Read || sf.Read < sf.Size}
 	}
 }
 
@@ -385,6 +392,7 @@ func (t *Tailer) Advance(key string, end int64, hash string, resume int64) {
 // project of their folder became known.
 func (t *Tailer) Poke() {
 	t.mu.Lock()
+	t.pokes++
 	for _, f := range t.files {
 		if f.waiting {
 			f.waiting, f.due = false, true
@@ -864,12 +872,20 @@ func (t *Tailer) read(f *file, now time.Time) {
 		for {
 			batch, next, more := t.lines(br, f, pos, read)
 			if len(batch) > 0 {
+				t.mu.Lock()
+				pokes := t.pokes
+				t.mu.Unlock()
 				n := t.opts.Deliver(batch)
 				if n < len(batch) {
 					t.mu.Lock()
-					if f.rewound {
+					switch {
+					case f.rewound:
 						f.rewound, f.due = false, true
-					} else {
+					case t.pokes != pokes:
+						// A Poke came while Deliver ran, before the file
+						// was waiting: it is offered again at once.
+						f.due = true
+					default:
 						f.waiting = true
 					}
 					t.mu.Unlock()
@@ -904,9 +920,17 @@ func (t *Tailer) idle(f *file, now time.Time) {
 		return
 	}
 	marker := Line{Harness: h, Log: adapters.LogLine{File: key, Path: path, Offset: at, End: at, Idle: true}, Hash: hash}
+	t.mu.Lock()
+	pokes := t.pokes
+	t.mu.Unlock()
 	if t.opts.Deliver(Batch{marker}) < 1 {
 		t.mu.Lock()
-		f.idleAt, f.waiting = time.Time{}, true
+		f.idleAt = time.Time{}
+		if t.pokes != pokes {
+			f.due = true
+		} else {
+			f.waiting = true
+		}
 		t.mu.Unlock()
 	}
 }
