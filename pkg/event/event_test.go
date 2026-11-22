@@ -263,6 +263,23 @@ func TestEventValidate(t *testing.T) {
 		{"keys are idle at least as long as any input", KindOSPresence, func(e *Event) { e.Data.(*OSPresence).IdleKeysS = ptr(1.0) }, "data.idle_keys_s:"},
 		{"app_class is required", KindOSFocus, func(e *Event) { e.Data.(*OSFocus).AppClass = "" }, "data.app_class:"},
 		{"hosted sessions are keys", KindOSFocus, func(e *Event) { e.Data.(*OSFocus).HostedSessions = []string{"pid 4242"} }, "data.hosted_sessions[0]:"},
+		// SM 2.5: where the client can't tell which window is in front, the
+		// record says unknown and nothing about a window.
+		{"focus the client can't see is an unknown record with no other field", KindOSFocus, func(e *Event) {
+			e.Data = &OSFocus{AppClass: AppUnknown}
+		}, ""},
+		{"an unknown record names no app, so it has no app_hash", KindOSFocus, func(e *Event) {
+			e.Data = &OSFocus{AppClass: AppUnknown, AppHash: "app_5d"}
+		}, `data.app_hash: is set, but an "unknown" record can't tell which app is in front`},
+		{"an unknown record knows no window, so it hosts no session", KindOSFocus, func(e *Event) {
+			e.Data = &OSFocus{AppClass: AppUnknown, HostedSessions: []string{"s_4be1f0"}}
+		}, `data.hosted_sessions: is set, but an "unknown" record can't tell which window is in front, so it hosts no session`},
+		{"an unknown record knows no window, so no project resolves from it", KindOSFocus, func(e *Event) {
+			e.Data = &OSFocus{AppClass: AppUnknown, FocusProject: "p_9f2c"}
+		}, `data.focus_project: is set, but an "unknown" record`},
+		{"no window in front is none, and may still name nothing", KindOSFocus, func(e *Event) {
+			e.Data = &OSFocus{AppClass: AppNone}
+		}, ""},
 		{"unknown power op", KindOSPower, func(e *Event) { e.Data.(*OSPower).Op = "hibernate" }, "data.op:"},
 		{"otel seconds aren't negative", KindOTelActiveTime, func(e *Event) { e.Data.(*OTelActiveTime).Seconds = -5 }, "data.seconds:"},
 		{"a track label is one line", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).Label = "line one\nline two" }, "data.label: must not contain control characters"},

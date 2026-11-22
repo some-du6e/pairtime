@@ -89,7 +89,7 @@
     "cmd_class": {"enum": ["test", "build", "run", "git", "install", "other"]},
     "git_op": {"enum": ["commit", "amend", "rebase", "reset", "checkout", "merge", "revert", "push", "stash"]},
     "actor": {"enum": ["human", "agent", "unknown"]},
-    "app_class": {"enum": ["terminal", "editor", "agent_app", "browser", "chat_app", "other", "none"]},
+    "app_class": {"enum": ["terminal", "editor", "agent_app", "browser", "chat_app", "other", "none", "unknown"]},
     "power_op": {"enum": ["suspend", "resume", "lock", "unlock"]},
     "active_time_type": {"enum": ["user", "cli"]},
     "log_match": {"enum": ["matched", "unmatched", "no_reader"], "description": "matched: a log reader holds the user entry from the same session within TRACK_LOG_MATCH_S; unmatched: a reader covers the session but held no match when the call was recorded; no_reader: no reader covers the session."},
@@ -288,7 +288,7 @@
       }
     },
     "os.focus": {
-      "description": "The foreground app changed.",
+      "description": "The foreground app changed, or the client can no longer tell which window is in front: app_class unknown, with no app_hash, hosted_sessions or focus_project (SM 2.5).",
       "type": "object",
       "additionalProperties": false,
       "required": ["app_class"],
