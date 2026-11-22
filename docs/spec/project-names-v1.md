@@ -79,12 +79,12 @@ The response is 200:
 
 ## 2. Where a name shows, and how it goes
 
-A name shows only to its owner: on their own signed-in `/dashboard`, in place of the project's short code, with the code in a `title` attribute, and in `GET /api/v1/users/me/dashboard`, as the project's `name` beside its `code`. Never on a public page, in a program's read, in an export for anyone else, or on /demo.
+A name shows only to its owner: on their own signed-in `/dashboard`, in place of the project's short code, with the code's name ("Project 7c41e9") in a `title` attribute, and in `GET /api/v1/users/me/dashboard`, as the project's `name` beside its `code`, with `"named": true`. A project with names on several of its device keys shows the first key's. Never on a public page, in a program's read, in an export for anyone else, or on /demo.
 
 It goes when:
 
 - the device sends its key in `delete`, when the owner turns the name off on the computer;
-- the owner presses "Hide this name" on the dashboard, which deletes the name of every device key of that project for the account at once. The website can hide a name but never set or change one;
+- the owner presses "Hide this name" on the dashboard, a form that posts the project's id to `POST /dashboard/projects/hide` from the dashboard itself (the zone form's same-origin rule), which deletes the name of every device key of that project for the account at once. The website can hide a name but never set or change one;
 - the device is removed and 90 days pass: the retention job deletes the names of a device removed 90 days ago, as D-project-map-lifetime deletes its other project rows. A device linked again before then keeps them (`server.project_names`, docs/retention.json);
 - the account is deleted.
 
