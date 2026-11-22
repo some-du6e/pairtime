@@ -129,12 +129,17 @@ type agent struct {
 	ipcSrv atomic.Pointer[ipc.Server]
 	// spoolKick asks the drain goroutine for a drain of the inbox while it
 	// runs (startIPC, drainSoon), and is nil otherwise. spoolNoDrain is set
-	// when no drain runs in this run, as when the journal couldn't open,
-	// and spoolBusy counts the asks in a row that found a spool file busy
-	// (spoolHolds).
+	// when no drain runs in this run, as when the journal couldn't open.
 	spoolKick    atomic.Pointer[chan struct{}]
 	spoolNoDrain atomic.Bool
-	spoolBusy    atomic.Int32
+	// spoolBusySince is when the asks in a row that found a spool file
+	// busy began, nil while none did (spoolHolds).
+	spoolBusySince atomic.Pointer[time.Time]
+	// linkedSeen is the link modes accounted for (modes.linked), for the
+	// writer's Online, which takes no lock (writerOnline), and takingLink
+	// is set while takeLinkSoon's goroutine runs.
+	linkedSeen atomic.Int64
+	takingLink atomic.Bool
 	// notifier shows the coach's notification when a work session ends
 	// (WP-OS8). The coach calls its Notify, and its UserPresent on unlock
 	// and resume (WP-CO1).
@@ -283,11 +288,6 @@ func Run(ctx context.Context, opts Options) error {
 		<-schedDone
 	})
 	closers = append(closers, a.startScorer())
-	// The ledger opens on a goroutine of its own, and may seal before the
-	// adapters have counted the calls held from an earlier run, and before
-	// startIPC drains the spool: until they have, a call made before
-	// config.toml was last seen local-only may be on its way (waiting).
-	a.adaptersHost().expectCount()
 	closers = append(closers, a.startLedger())
 	src := a.openOS(opts)
 	a.signals = src.signals

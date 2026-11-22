@@ -1125,6 +1125,8 @@ func TestNoteSeen(t *testing.T) {
 			Seen{Ended: time.UnixMilli(testT + 60_000)}, false, false, []string{"write", "seal"}, []bool{false}, []bool{false}},
 		{"a stretch end an earlier run saw, as state.json kept it, holds none of this run's events, though it is ahead of the clock",
 			Seen{Ended: time.UnixMilli(testT + 60_000), Earlier: true}, false, false, []string{"write-run", "seal"}, []bool{true}, []bool{true}},
+		{"a stretch that lasted, by the wall clock alone, past its end, as to the end of a link's second, holds an event judged by its t until then",
+			Seen{Ended: time.UnixMilli(testT), Until: time.UnixMilli(testT + 2500)}, false, false, []string{"write", "seal", "write", "seal"}, []bool{false, true}, []bool{false, true}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

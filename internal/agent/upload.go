@@ -98,14 +98,17 @@ type modes struct {
 	// OS's (os), zero before any. kept is set while ended is the one
 	// state.json kept from an earlier run (ledger.Seen.Earlier). linked is
 	// account.json's linked_at, in Unix ms, of the link modes has accounted
-	// for, and until the wall-clock bound of the end of a link the agent
-	// didn't see (unseenLinkLocked), zero for none.
-	local  bool
-	ended  time.Time
-	os     clock.Stamp
-	kept   bool
-	linked int64
-	until  time.Time
+	// for, which agent.linkedSeen mirrors, and until the wall-clock bound of
+	// the end of a link the agent didn't see (unseenLinkLocked), zero for
+	// none. settled is the link the uploader had settled as the agent
+	// started, as state.json kept it.
+	local   bool
+	ended   time.Time
+	os      clock.Stamp
+	kept    bool
+	linked  int64
+	until   time.Time
+	settled int64
 }
 
 // modesKey is what modes saw last, in state.json (modesState).
@@ -181,23 +184,28 @@ func (a *agent) startModes() {
 	a.modes.local, a.modes.ended = last.Local, last.Ended
 	a.modes.os = clock.Stamp{Mono: last.OSMono, BootID: last.OSBoot}
 	a.modes.kept = !last.Ended.IsZero()
-	a.modes.linked, a.modes.until = last.Linked, last.Until
-	changed := false
-	if last.Linked == 0 && a.state != nil {
-		// A state.json from before modes kept its link, as an older
-		// pairtime's: the link the uploader had settled was accounted for.
+	a.modes.until = last.Until
+	a.setLinkedLocked(last.Linked)
+	if a.state != nil {
 		var up struct {
 			LinkedAt int64 `json:"linked_at"`
 		}
-		if _, err := a.state.Get(uploader.StateKey, &up); err == nil && up.LinkedAt != 0 && up.LinkedAt == a.linkedAt() {
-			a.modes.linked, changed = up.LinkedAt, true
+		if _, err := a.state.Get(uploader.StateKey, &up); err == nil {
+			a.modes.settled = up.LinkedAt
 		}
 	}
-	changed = a.seeLocked(a.online()) || changed
+	changed := a.seeLocked(a.online())
 	changed = a.unseenLinkLocked() || changed
 	if changed {
 		a.keepLocked()
 	}
+}
+
+// setLinkedLocked has modes account for link l, and the writer's Online
+// see it (writerOnline). a.modes.mu is held.
+func (a *agent) setLinkedLocked(l int64) {
+	a.modes.linked = l
+	a.linkedSeen.Store(l)
 }
 
 // linkedAt is account.json's linked_at, in Unix ms, 0 when it names no
@@ -212,16 +220,22 @@ func (a *agent) linkedAt() int64 {
 
 // unseenLinkLocked takes in a link the agent didn't see: account.json
 // names another link than the one modes accounted for, as after a
-// pairtime login while the agent was stopped, or while a locked keyring
-// kept the ledger shut and the config watch heard nothing. A record made
-// before the link was made while config.toml said local-only, which every
-// install starts in and pairtime logout goes back to. The link came before
-// the agent read account.json, so the stretch ended by now, by both
-// clocks, and the records made before now count as made in it, whatever a
-// step of the wall clock did to its order with the stretch ends kept
-// before. By the wall clock alone, for what carries no monotonic reading
-// the moment holds, it lasted to the end of the link's second, whose time
-// account.json keeps cut to the second (D-relink-boundary). It reports
+// pairtime login while the agent was stopped, or a logout and a login the
+// config watch heard nothing of. A record made before the link was made
+// while config.toml said local-only, which every install starts in and
+// pairtime logout goes back to.
+//
+// A link the uploader had settled as the agent started came in an earlier
+// run: its stretch ended by the end of the link's second, whose time
+// account.json keeps cut to the second (D-relink-boundary), and by then,
+// by the wall clock alone, the stretch ends, as an earlier run's, unless
+// modes holds a later end. A state.json from before modes kept its link
+// takes the uploader's that way too. Any other link came before the agent
+// read account.json, so its stretch ended by now, by both clocks, and the
+// records made before now count as made in it, whatever a step of the
+// wall clock did to their order with the stretch ends kept before; by the
+// wall clock alone, for what carries no monotonic reading the moment
+// holds, it lasted to the end of the link's second at least. It reports
 // whether modes changed. a.modes.mu is held.
 func (a *agent) unseenLinkLocked() bool {
 	l := a.linkedAt()
@@ -229,10 +243,57 @@ func (a *agent) unseenLinkLocked() bool {
 	if l == 0 || l == m.linked {
 		return false
 	}
-	m.linked = l
-	m.ended, m.os, m.kept = time.Now(), clock.Now(), false
-	m.until = time.UnixMilli(l).Add(time.Second)
+	a.setLinkedLocked(l)
+	end := time.UnixMilli(l).Add(time.Second)
+	if l == m.settled {
+		if end.UnixMilli() > m.ended.UnixMilli() {
+			m.ended, m.os, m.kept, m.until = end, clock.Stamp{}, true, time.Time{}
+		}
+		return true
+	}
+	m.ended, m.os, m.kept, m.until = time.Now(), clock.Now(), false, end
 	return true
+}
+
+// writerOnline is the ledger writer's Online: online, and local-only while
+// account.json names a link modes hasn't accounted for (linkedSeen), as
+// after a pairtime logout and a login the config watch didn't hear, as
+// with a symbolic link for config.toml or a watch that failed: the records
+// a seal finds then may have come between the two, while config.toml said
+// local-only. It asks for the link to be taken in off the seal's path
+// (takeLinkSoon), so it takes no lock of the agent's, as Online mustn't.
+func (a *agent) writerOnline() bool {
+	if !a.online() {
+		return false
+	}
+	if l := a.linkedAt(); l != 0 && l != a.linkedSeen.Load() {
+		a.takeLinkSoon()
+		return false
+	}
+	return true
+}
+
+// takeLinkSoon takes in a link the agent didn't see (unseenLinkLocked) on
+// a goroutine of its own, and gives the writer the stretch's end, as
+// publishWriter does: the records still on their way that were made
+// before it are sealed local-only when they come, and the first batch
+// after them takes the mark. One at a time.
+func (a *agent) takeLinkSoon() {
+	if !a.takingLink.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer a.takingLink.Store(false)
+		a.modes.mu.Lock()
+		defer a.modes.mu.Unlock()
+		if !a.unseenLinkLocked() {
+			return
+		}
+		a.keepLocked()
+		if w := a.modes.w; w != nil {
+			w.NoteSeen(a.seenLocked())
+		}
+	}()
 }
 
 // noteMode is the config watch's note of config.toml's mode, at its reload
@@ -247,7 +308,7 @@ func (a *agent) noteMode() {
 	changed := a.seeLocked(online)
 	if changed && online {
 		// A switch back the watch saw: a link login made with it is seen.
-		a.modes.linked = a.linkedAt()
+		a.setLinkedLocked(a.linkedAt())
 	}
 	if w := a.modes.w; w != nil {
 		w.NoteMode(online)
@@ -275,7 +336,7 @@ func (a *agent) noteBack() {
 	a.seeLocked(true)
 	// pairtime login writes account.json before it renames config.toml into
 	// place, so the link it made is the one account.json names now.
-	a.modes.linked = a.linkedAt()
+	a.setLinkedLocked(a.linkedAt())
 	if w := a.modes.w; w != nil {
 		w.NoteMode(true)
 	}

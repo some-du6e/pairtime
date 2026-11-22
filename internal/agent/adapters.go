@@ -2246,11 +2246,19 @@ func (h *adapterHost) countHeld() {
 }
 
 // expectCount has waiting count every call as on its way until the worker
-// has counted the held ones (countHeld), which the agent's start asks for
-// before the ledger opens on a goroutine of its own, so no seal can take a
-// mark while held calls aren't counted yet.
+// has counted the held ones (countHeld), when an earlier run left any in
+// held.jsonl, a .replay file or the pending log, which the ledger's start
+// asks for before the ledger opens on a goroutine of its own, so no seal
+// can take a mark while held calls aren't counted yet.
 func (h *adapterHost) expectCount() {
-	h.count(func() { h.uncounted = true })
+	held := false
+	for _, name := range []string{h.a.dirs.Held(), h.a.dirs.Held() + ".replay", h.a.dirs.Held() + pendingSuffix} {
+		if fi, err := os.Stat(name); err == nil && fi.Size() > 0 {
+			held = true
+			break
+		}
+	}
+	h.count(func() { h.uncounted = held })
 }
 
 // lessHeldLocked counts n calls as gone from held: parsed, or dropped.
@@ -2276,7 +2284,8 @@ func (h *adapterHost) lessHeldLocked(n int) {
 func (h *adapterHost) waiting(before func(event.Envelope) bool) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.uncounted || h.held > 0 && h.heldFrom.waits(before) {
+	// A moment that holds nothing, as at a first start, holds no call.
+	if h.uncounted && before(event.Envelope{}) || h.held > 0 && h.heldFrom.waits(before) {
 		return true
 	}
 	for _, s := range h.stepping {
@@ -2324,23 +2333,11 @@ func stampOf(d inbox.Delivery) callStamp {
 // sentOf is the hook's own stamp of call d, which its records' times may
 // have set aside (hookpath.Times), for the ledger writer to hold its
 // records to as well (ledger.Input.Sent). A hook with no monotonic reading
-// gives only its wall time, which a step of the wall clock can move. For a
-// call that came over the socket or the pipe, the agent's own stamp
-// places it instead: the hook takes its stamp first and gives up on the
-// agent within spoolSlack, so the call was made at most spoolSlack before
-// the agent took it, by the OS's clock. That holds while the hook's wall
-// time is within spoolSlack of the agent's too: a wider gap, as a hook
-// stopped between its stamp and its send leaves, keeps the wall time.
+// gives its wall time alone, and its call is held to the moment by that,
+// which a step of the wall clock can move either way: nothing else bounds
+// when it was made, as a hook stopped between its stamp and its send shows.
 func sentOf(d inbox.Delivery) clock.Stamp {
-	s := clock.Stamp{Wall: d.Sent, Mono: d.Mono, BootID: d.BootID}
-	r := d.Received
-	if s.HasMono() || !r.HasMono() || d.Via != inbox.ViaSocket && d.Via != inbox.ViaPipe {
-		return s
-	}
-	if gap := r.Wall.Sub(d.Sent); gap < -spoolSlack || gap > spoolSlack {
-		return s
-	}
-	return clock.Stamp{Wall: d.Sent, Mono: max(r.Mono-spoolSlack.Milliseconds(), 1), BootID: r.BootID}
+	return clock.Stamp{Wall: d.Sent, Mono: d.Mono, BootID: d.BootID}
 }
 
 // waits reports whether before says the call may have been made before

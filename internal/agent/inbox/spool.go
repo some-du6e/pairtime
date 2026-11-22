@@ -459,18 +459,23 @@ func retry(op func() error) error {
 // a drain sets aside in time. Scan writes nothing, and its opens let a
 // drain rename and delete the files meanwhile, Windows included
 // (openShared). A file that is there but can't be opened for a moment, as
-// while a drain renames it on Windows, may hold any message, so Scan stops
-// at it with its error once the tries a sender gets are over (busy).
+// while a drain renames it on Windows, may hold any message: once the
+// tries a sender gets are over (busy), Scan reads the other files on, and
+// reports the first such file's error when none of them had the message
+// each takes.
 func Scan(dir string, limit int, each func(Message) bool) (bool, error) {
 	if privateDir(dir) != nil {
 		return false, nil
 	}
-	if found, err := scanFile(filepath.Join(dir, SpoolName), limit, each); found || err != nil {
-		return found, err
+	var held error
+	if found, err := scanFile(filepath.Join(dir, SpoolName), limit, each); found {
+		return true, nil
+	} else if err != nil {
+		held = err
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return false, nil
+		return false, held
 	}
 	var names []string
 	for _, e := range entries {
@@ -480,11 +485,13 @@ func Scan(dir string, limit int, each func(Message) bool) (bool, error) {
 	}
 	slices.Sort(names)
 	for _, n := range names {
-		if found, err := scanFile(filepath.Join(dir, n), limit, each); found || err != nil {
-			return found, err
+		if found, err := scanFile(filepath.Join(dir, n), limit, each); found {
+			return true, nil
+		} else if err != nil && held == nil {
+			held = err
 		}
 	}
-	return false, nil
+	return false, held
 }
 
 // scanFile is Scan of the one file name.

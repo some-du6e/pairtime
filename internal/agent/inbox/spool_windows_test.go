@@ -59,6 +59,21 @@ func TestScanSharing(t *testing.T) {
 				t.Errorf("Scan reported %v, %v; want the message, read once the hold was over", found, err)
 			}
 		}},
+		{"a spool another process holds without sharing doesn't keep Scan from reading the files after it", func(t *testing.T, dir, spool string) {
+			h := exclusive(t, spool)
+			defer windows.CloseHandle(h)
+			b, err := newMessage(t, 2).Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "spool-00000000000000000001-0badc0de"+takenSuffix), append(b, '\n'), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			found, err := Scan(dir, 10, func(Message) bool { return true })
+			if !found || err != nil {
+				t.Errorf("Scan reported %v, %v; want the taken file's message, though the spool was busy", found, err)
+			}
+		}},
 		{"a spool another process holds without sharing stops Scan with an error once a sender's tries are over", func(t *testing.T, dir, spool string) {
 			h := exclusive(t, spool)
 			defer windows.CloseHandle(h)

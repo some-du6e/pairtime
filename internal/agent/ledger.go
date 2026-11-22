@@ -52,6 +52,11 @@ func (a *agent) startLedger() func() {
 	// Every record made from here on counts by what the agent sees of
 	// config.toml's mode, whenever the writer opens (modes).
 	a.startModes()
+	// The ledger opens on a goroutine of its own, and may seal before the
+	// adapters have counted the calls held from an earlier run: until they
+	// have, a call made before config.toml was last seen local-only may be
+	// on its way (waiting).
+	a.adaptersHost().expectCount()
 	var (
 		mu         sync.Mutex
 		w          *ledger.Writer
@@ -193,7 +198,7 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 		Params:  a.table,
 		Sched:   a.sched,
 		Sealed:  a.sealed,
-		Online:  a.online,
+		Online:  a.writerOnline,
 		Seen:    a.seen,
 		Waiting: a.waiting,
 		Problem: func(msg string) { a.setProblem("ledger", msg) },

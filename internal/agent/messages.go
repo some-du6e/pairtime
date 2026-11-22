@@ -170,10 +170,11 @@ const (
 	drainSoonAfter = spoolSlack + 250*time.Millisecond
 )
 
-// spoolBusyAsks bounds the asks in a row a spool file that stays busy holds
-// the mark for (spoolHolds): only another program holds one so long, and
-// its calls wait for a drain that can take the file.
-const spoolBusyAsks = 3
+// spoolBusyHold bounds how long a spool file that stays busy holds the mark
+// (spoolHolds): a minute's drain and drainSoon's, after which only another
+// program holds a file so long, and its calls wait for a drain that can
+// take it.
+const spoolBusyHold = drainEvery + drainSoonAfter
 
 // scanSpool is inbox.Scan, which a test replaces.
 var scanSpool = inbox.Scan
@@ -218,11 +219,12 @@ func (a *agent) drainSoon() {
 // seconds. It reads the spool from the agent's start, before startIPC's
 // first drain, since that drain runs in this run. A spool file Scan
 // couldn't open for a moment, as while a drain renames it on Windows, may
-// hold one, so it holds the mark, for spoolBusyAsks asks in a row at
-// most: one another program keeps busy longer is passed over. The spool
-// is used only while hooks can't reach the socket, so it is empty almost
-// always. With no drain running in this run, as when the journal couldn't
-// open, its calls wait for the next start, and hold nothing.
+// hold one, so it holds the mark, for spoolBusyHold at most, while the
+// other files are read on: one another program keeps busy longer is
+// passed over. The spool is used only while hooks can't reach the socket,
+// so it is empty almost always. With no drain running in this run, as when
+// the journal couldn't open, its calls wait for the next start, and hold
+// nothing.
 func (a *agent) spoolHolds(before func(event.Envelope) bool) bool {
 	if a.spoolNoDrain.Load() {
 		return false
@@ -232,13 +234,20 @@ func (a *agent) spoolHolds(before func(event.Envelope) bool) bool {
 		return stampOf(inbox.Delivery{Message: m, Via: inbox.ViaInbox, Received: now}).waits(before)
 	})
 	if err == nil {
-		a.spoolBusy.Store(0)
+		a.spoolBusySince.Store(nil)
 		return found
 	}
-	if n := a.spoolBusy.Add(1); n <= spoolBusyAsks {
+	// Only the writer's seals ask, one at a time.
+	since := a.spoolBusySince.Load()
+	if since == nil {
+		t := time.Now()
+		a.spoolBusySince.Store(&t)
+		since = &t
+	}
+	if d := time.Since(*since); d < spoolBusyHold {
 		return true
-	} else if n == spoolBusyAsks+1 {
-		a.log.Warn("a file of the inbox's spool stayed busy through several seals, so the first batch after config.toml went back online no longer waits for it", "err", err)
+	} else if d < spoolBusyHold+time.Minute {
+		a.log.Warn("a file of the inbox's spool stays busy, so the first batch after config.toml went back online no longer waits for it", "err", err)
 	}
 	return false
 }
