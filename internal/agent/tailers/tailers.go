@@ -894,7 +894,8 @@ func (t *Tailer) adopt(r Root, path string, now time.Time) {
 
 // lastLine returns where the last complete line of a file of size bytes
 // ends, and its Hash, reading back from the end: 0 and "" for a file with
-// none.
+// none. Blank lines after it are no lines: the tailers take them into the
+// next line's span, so a file taken up there reads on as it would have.
 func lastLine(fh *os.File, size int64) (int64, string, error) {
 	// The end, after the last newline, which a last line still being
 	// written can put further back than MaxLine: one buffer at a time.
@@ -911,35 +912,47 @@ func lastLine(fh *os.File, size int64) (int64, string, error) {
 			end = at + int64(i) + 1
 		}
 	}
-	if end < 0 {
-		return 0, "", nil
-	}
-	// The line that ends there, for its hash, read back to the newline
-	// before it.
-	var line []byte
-	for at := end - 1; ; {
-		if at == 0 {
+	for end > 0 {
+		line, whole, err := lineBefore(fh, end)
+		switch {
+		case err != nil:
+			return 0, "", err
+		case !whole:
+			// A last line longer than MaxLine: the file goes on from its
+			// end, and a truncation is told by the size alone.
+			return end, "", nil
+		case len(bytes.TrimSpace(line)) > 0:
 			return end, hashLine(bytes.TrimRight(line, "\r")), nil
 		}
+		end -= int64(len(line)) + 1
+	}
+	return 0, "", nil
+}
+
+// lineBefore returns the line that ends with the newline before end, read
+// back to the newline before it, without its newline, and whether it was
+// MaxLine long at most.
+func lineBefore(fh *os.File, end int64) ([]byte, bool, error) {
+	var line []byte
+	for at := end - 1; at > 0; {
 		n := min(int64(readBuffer), at)
 		at -= n
 		chunk := make([]byte, n)
 		m, err := fh.ReadAt(chunk, at)
 		if err != nil && !errors.Is(err, io.EOF) {
-			return 0, "", err
+			return nil, false, err
 		}
 		chunk = chunk[:m]
 		j := bytes.LastIndexByte(chunk, '\n')
 		line = append(chunk[j+1:], line...)
 		if len(line) > MaxLine {
-			// A last line longer than MaxLine: the file goes on from its
-			// end, and a truncation is told by the size alone.
-			return end, "", nil
+			return nil, false, nil
 		}
 		if j >= 0 {
-			return end, hashLine(bytes.TrimRight(line, "\r")), nil
+			break
 		}
 	}
+	return line, true, nil
 }
 
 // look stats the files that want it: every known file at the start, and
@@ -1248,9 +1261,11 @@ func (t *Tailer) relocate(fh *os.File, f *file, size int64) {
 	case found == read && read > 0:
 		// The file kept what was read where it was.
 	case found > 0:
-		f.read, f.resume, f.pos = found, 0, 0
+		f.read, f.resume, f.pos, f.fresh = found, 0, 0, 0
 	default:
+		// None of it was read, so none of it is a history's or a Rewind's.
 		f.read, f.resume, f.pos, f.hash = 0, 0, 0, ""
+		f.hist, f.histFrom, f.histDone, f.rewindTo, f.fresh = 0, 0, false, 0, 0
 	}
 }
 
