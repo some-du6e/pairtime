@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -29,16 +30,30 @@ const (
 // LowestNice is the nicest a thread can be.
 const LowestNice = 19
 
-// Background puts every thread of the calling process at nice 19 and in
-// the idle I/O class, the lowest CPU and I/O priority Linux gives a process
-// without privileges: the lookback reader runs so, since it reads 30 days
-// of transcripts on what may be an old laptop's spinning disk (DESIGN 5.9
-// step 9; TE 4.7). Linux keeps both per thread, and a thread takes them
-// from the thread that started it, so Background sets each thread that
-// /proc/self/task lists until a pass finds none left to set. Nothing
-// raises them again: the process runs so until it exits.
+// Background puts every thread of the calling process at nice 19, in the
+// idle scheduling policy (SCHED_IDLE) and in the idle I/O class, and, for
+// a process that leads a session of its own, its session's autogroup at
+// nice 19: the lookback reader runs so, since it reads 30 days of
+// transcripts on what may be an old laptop's spinning disk (DESIGN 5.9
+// step 9; TE 4.7). Linux keeps the first three per thread, and a thread
+// takes them from the thread that started it, so Background sets each
+// thread that /proc/self/task lists until a pass finds none left to set.
+// None of it can be raised again without privileges: the process runs so
+// until it exits.
+//
+// The scheduler weighs a thread against the others of its task group,
+// and the groups against each other (sched(7)). The autogroup puts the
+// session below the person's terminal sessions where the processes share
+// the root CPU group. Where the cpu controller gives the agent's cgroup a
+// weight of its own, as systemd's user manager can, the child competes
+// with the person's apps at that cgroup's weight, and only a cgroup of its
+// own at an idle weight would put it below them; none of these calls can
+// make one.
 func Background() error {
 	const passes = 100
+	// noIdle says the kernel or a sandbox refused SCHED_IDLE, which nice
+	// and the I/O class then stand in for.
+	noIdle := false
 	for range passes {
 		ps, err := priorities("/proc/self/task")
 		if err != nil {
@@ -52,6 +67,17 @@ func Background() error {
 				}
 				set++
 			}
+			if p.Policy != unix.SCHED_IDLE && !noIdle {
+				attr := &unix.SchedAttr{Size: unix.SizeofSchedAttr, Policy: unix.SCHED_IDLE, Nice: LowestNice}
+				switch err := unix.SchedSetAttr(p.TID, attr, 0); {
+				case errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EPERM):
+					noIdle = true
+				case err != nil && !errors.Is(err, unix.ESRCH):
+					return fmt.Errorf("sched_setattr(%d, SCHED_IDLE): %w", p.TID, err)
+				default:
+					set++
+				}
+			}
 			if p.IOClass != IOClassIdle {
 				if err := setIOPriority(p.TID, IOClassIdle, 0); err != nil && !errors.Is(err, unix.ESRCH) {
 					return fmt.Errorf("ioprio_set(%d, idle): %w", p.TID, err)
@@ -60,10 +86,50 @@ func Background() error {
 			}
 		}
 		if set == 0 {
+			lowerAutogroup()
 			return nil
 		}
 	}
 	return fmt.Errorf("background: threads were still starting after %d passes", passes)
+}
+
+// lowerAutogroup sets the autogroup of the calling process's session to
+// nice 19, when the process leads the session: the autogroup is the whole
+// session's, the agent's too in one it shares. It is best effort: a kernel
+// without autogroups has no file to write, and one that rate-limits the
+// write gets a second try.
+func lowerAutogroup() {
+	if sid, err := unix.Getsid(0); err != nil || sid != os.Getpid() {
+		return
+	}
+	for try := range 2 {
+		fh, err := os.OpenFile("/proc/self/autogroup", os.O_WRONLY, 0)
+		if err != nil {
+			return
+		}
+		_, err = fh.Write([]byte(strconv.Itoa(LowestNice)))
+		fh.Close()
+		if !errors.Is(err, unix.EAGAIN) || try > 0 {
+			return
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+}
+
+// AutogroupNice reads the nice value of process pid's autogroup from
+// /proc/<pid>/autogroup, and false when the kernel keeps none.
+func AutogroupNice(pid int) (int, bool) {
+	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "autogroup"))
+	if err != nil {
+		return 0, false
+	}
+	// "/autogroup-123 nice 19"
+	f := bytes.Fields(b)
+	if len(f) != 3 || string(f[1]) != "nice" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(string(f[2]))
+	return n, err == nil
 }
 
 // ThreadPriority is one thread's CPU and I/O priority, as the kernel gives
@@ -75,6 +141,9 @@ type ThreadPriority struct {
 	// IOClass and IOLevel are its ioprio_get(2) value: IOPRIO_CLASS_NONE
 	// (0), RT (1), BE (2) or IDLE (3), and the level within the class.
 	IOClass, IOLevel int
+	// Policy is its scheduling policy, as sched_getattr(2) gives it:
+	// SCHED_OTHER (0) or SCHED_IDLE (5), among others.
+	Policy uint32
 }
 
 // Priorities reads the priority of every thread of process pid.
@@ -113,7 +182,16 @@ func priorities(dir string) ([]ThreadPriority, error) {
 		if err != nil {
 			return nil, fmt.Errorf("ioprio_get(%d): %w", tid, err)
 		}
-		out = append(out, ThreadPriority{TID: tid, Nice: nice, IOClass: class, IOLevel: level})
+		var policy uint32
+		switch attr, err := unix.SchedGetAttr(tid, 0); {
+		case errors.Is(err, unix.ESRCH):
+			continue
+		case err == nil:
+			policy = attr.Policy
+		case !errors.Is(err, unix.ENOSYS) && !errors.Is(err, unix.EPERM):
+			return nil, fmt.Errorf("sched_getattr(%d): %w", tid, err)
+		}
+		out = append(out, ThreadPriority{TID: tid, Nice: nice, IOClass: class, IOLevel: level, Policy: policy})
 	}
 	return out, nil
 }

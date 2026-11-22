@@ -269,6 +269,9 @@ func (t *Tailer) report() {
 func (t *Tailer) runLookback() {
 	defer t.lb.wg.Done()
 	err := t.lookbackOnce()
+	if _, stopped := err.(stoppedError); stopped {
+		err = nil
+	}
 	t.mu.Lock()
 	t.lb.running, t.lb.child = false, nil
 	if err != nil && !t.stopped {
@@ -283,7 +286,7 @@ func (t *Tailer) runLookback() {
 			for _, f := range t.files {
 				if f.inHistory() {
 					f.read, f.resume, f.pos, f.hash = f.hist, f.hist, f.hist, ""
-					f.histDone, f.due = true, true
+					f.histDone, f.due, f.fresh = true, true, f.hist
 				}
 			}
 		}
@@ -300,6 +303,12 @@ func (t *Tailer) runLookback() {
 type restartError struct{}
 
 func (restartError) Error() string { return "tailers: a file was rewound during lookback" }
+
+// stoppedError says the tailer stopped while the agent hadn't taken a
+// batch: the job ends there, and no file's history is done by it.
+type stoppedError struct{}
+
+func (stoppedError) Error() string { return "tailers: stopped during lookback" }
 
 func (t *Tailer) lookbackOnce() error {
 	for {
@@ -467,14 +476,14 @@ func (t *Tailer) deliverHistory(f *file, b Batch) error {
 		t.mu.Unlock()
 		switch {
 		case stopped:
-			return nil
+			return stoppedError{}
 		case rewound:
 			return restartError{}
 		}
 		select {
 		case <-t.lb.poke:
 		case <-t.stop:
-			return nil
+			return stoppedError{}
 		}
 	}
 }

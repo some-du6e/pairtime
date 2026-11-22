@@ -274,11 +274,12 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 	mono, boot := ledger.RunClock(now)
 	raw := adapters.RawRecord{Source: adapters.SourceLog, Payload: line.Bytes, Log: &ll,
 		Arrival: adapters.Arrival{Via: event.ViaLog, T: now.UnixMilli(), Mono: mono, BootID: boot}}
-	if _, ok := lr.LogResume(ll.File); !ok && ll.Offset > 0 && !ll.Idle {
+	if _, ok := lr.LogResume(ll.File); !ok && ll.Offset > 0 && !ll.Idle && !line.Fresh {
 		// The adapter has no memory of a file the tailers resume in its
 		// middle, as after a restore made it forget, or it forgot a file
 		// it read long ago: reading it from its start again, the lines it
-		// had as replays, gives the adapter what it knew of it.
+		// had as replays, gives the adapter what it knew of it. A fresh
+		// line, after a history lookback gave up on, starts it afresh.
 		t.Rewind(ll.File)
 		return false
 	}

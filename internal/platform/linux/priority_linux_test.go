@@ -10,7 +10,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // backgroundEnv, set, makes the test binary the child TestBackground reads
@@ -72,8 +75,12 @@ func TestBackground(t *testing.T) {
 		backgroundChild()
 		return
 	}
+	before, autogroups := AutogroupNice(os.Getpid())
 	cmd := exec.Command(os.Args[0], "-test.run=^TestBackground$")
 	cmd.Env = append(os.Environ(), backgroundEnv+"=1")
+	// A session of its own, as the agent starts lookback's reader, whose
+	// autogroup Background may lower.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +133,18 @@ func TestBackground(t *testing.T) {
 		check func(t *testing.T)
 	}{
 		{"every thread runs at nice 19", every(func(p ThreadPriority) bool { return p.Nice == LowestNice })},
+		{"every thread runs in the idle scheduling policy", every(func(p ThreadPriority) bool { return p.Policy == unix.SCHED_IDLE })},
 		{"every thread is in the idle I/O class", every(func(p ThreadPriority) bool { return p.IOClass == IOClassIdle })},
+		{"the child's session's autogroup is at nice 19, and the test's own is as it was", func(t *testing.T) {
+			if !autogroups {
+				t.Skip("this kernel keeps no autogroups")
+			}
+			child, ok := AutogroupNice(cmd.Process.Pid)
+			after, _ := AutogroupNice(os.Getpid())
+			if !ok || child != LowestNice || after != before {
+				t.Errorf("the child's autogroup is at %d (%v), the test's at %d, was %d", child, ok, after, before)
+			}
+		}},
 		{"the threads started after Background are among them", func(t *testing.T) {
 			found := 0
 			for _, p := range ps {

@@ -464,10 +464,7 @@ func deriveAdapterKeys(ks *keys.Keystore) (*adapterKeys, error) {
 // attach gives the host the ledger writer, once it is open (startLedger),
 // and the moment its chain began, which ends lookback's window.
 func (h *adapterHost) attach(w *ledger.Writer) {
-	var began int64
-	if info, err := ledger.ReadChain(h.a.dirs.Ledger()); err == nil {
-		began = info.Created.UnixMilli()
-	}
+	began := w.Created().UnixMilli()
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()

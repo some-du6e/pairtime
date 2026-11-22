@@ -198,6 +198,8 @@ type Writer struct {
 	online   func() bool
 	problem  func(string)
 	device   string
+	// created is when the chain began, in Unix ms (chainPayload.Created).
+	created int64
 
 	// sealMu orders seals and every write to batches.seg. It is taken
 	// before mu.
@@ -337,6 +339,11 @@ func newDeviceID() string { return "d_" + strings.ToLower(rand.Text()) }
 // DeviceID returns the id of the device whose chain the writer writes. It
 // goes in every event's device_id.
 func (w *Writer) DeviceID() string { return w.device }
+
+// Created returns when the writer's chain began, at the writer's first
+// start under its key (ChainInfo.Created). No record of a time before it
+// was written live: those are lookback's (DESIGN 6.2 D11).
+func (w *Writer) Created() time.Time { return time.UnixMilli(w.created) }
 
 // Write appends the record of in.Event and returns its sequence number s,
 // which is also the event's seq (ledger-v1 4.1). It sets the event's seq

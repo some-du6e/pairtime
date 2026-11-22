@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -251,10 +252,37 @@ func TestLookback(t *testing.T) {
 			r.step(HotPoll, false)
 			p := r.tl.Progress()
 			if got := r.texts(0); tries != maxLookbackTries || !slices.Equal(got, []string{`{"n":2}`}) || r.got[0].Log.Offset != 8 {
-				t.Errorf("%d tries, then handed over %v", tries, got)
+				t.Fatalf("%d tries, then handed over %v", tries, got)
+			}
+			if !r.got[0].Fresh {
+				t.Error("the line after the history isn't fresh, so an adapter with no memory of the file would have it read again from its start")
 			}
 			if p.Failures != maxLookbackTries || !strings.Contains(p.Err, "no binary") || !p.Done() {
 				t.Errorf("progress %+v", p)
+			}
+		}},
+		{"a stop while the agent hasn't taken a history's lines leaves the history to the next run", func(t *testing.T) {
+			pc := &pipeChild{trim: upper}
+			r := lookbackRig(t, pc.start)
+			var offered atomic.Int32
+			r.take = func(Line) bool {
+				offered.Add(1)
+				return false // the agent is stopping: dropLogs answers none taken
+			}
+			r.write("j.jsonl", "{\"n\":1}\n")
+			r.open()
+			r.step(0, false)
+			deadline := time.Now().Add(10 * time.Second)
+			for offered.Load() == 0 && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			r.tl.mu.Lock()
+			r.tl.stopped = true
+			r.tl.mu.Unlock()
+			close(r.tl.stop)
+			r.settle()
+			if p := r.tl.Progress(); offered.Load() == 0 || p.FilesDone != 0 || p.Failures != 0 {
+				t.Errorf("offered %d times, then progress %+v; want the history still to read and no failure", offered.Load(), p)
 			}
 		}},
 		{"a child isn't tried again before its pause", func(t *testing.T) {

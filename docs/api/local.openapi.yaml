@@ -548,7 +548,9 @@ components:
         files_done:
           type: integer
           minimum: 0
-          description: The files lookback is done with.
+          description: >
+            The files lookback is done with: read, or left unread for good,
+            as after its reader failed three times or the file went away.
         bytes:
           type: integer
           minimum: 0
@@ -556,7 +558,10 @@ components:
         bytes_done:
           type: integer
           minimum: 0
-          description: The bytes lookback has read of them.
+          description: >
+            The bytes lookback is done with: all of the files it is done
+            with, as files_done counts them, and what it has read of the
+            others.
         running:
           type: boolean
           description: Whether lookback's reader runs now.

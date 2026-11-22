@@ -1162,3 +1162,38 @@ func TestFiles(t *testing.T) {
 		}
 	})
 }
+
+// TestCreated checks that the writer says when its chain began: when the
+// first writer under the key made it, and the same moment after a
+// restart, as batches.seg's chain frame keeps it. Lookback's records are
+// those of times before it (internal/agent, lookbackWindow).
+func TestCreated(t *testing.T) {
+	dir := t.TempDir()
+	c := newClock(testT)
+	first := open(t, dir, c)
+	made := first.Created()
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	c.set(testT + 3_600_000)
+	again := open(t, dir, c)
+	info, err := ReadChain(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"a new chain began when the writer made it", made.Equal(time.UnixMilli(testT))},
+		{"a chain opened again began when it did, not when it was opened", again.Created().Equal(made)},
+		{"which is what batches.seg says", info.Created.Equal(made)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("made %v, reopened %v, batches.seg %v", made, again.Created(), info.Created)
+			}
+		})
+	}
+}

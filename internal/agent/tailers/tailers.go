@@ -137,6 +137,10 @@ type Line struct {
 	// took the file up: the agent keeps those of its records that fall
 	// between then and the start of its ledger.
 	Lookback int64
+	// Fresh says the line's adapter is to start the file afresh at it:
+	// what came before it, a history lookback gave up on, stays unread,
+	// so an adapter with no memory of the file has none to rebuild.
+	Fresh bool
 }
 
 // Batch is lines of one file, in the order the file holds them.
@@ -253,6 +257,9 @@ type file struct {
 	// both 0 for a file with none. histDone says lookback is done with it.
 	hist, histFrom int64
 	histDone       bool
+	// fresh is where a history lookback gave up on ended, at which the
+	// file's next line starts its adapter afresh (Line.Fresh); 0 for none.
+	fresh int64
 }
 
 // readAll says the tailer has handed over every whole line of f, as it
@@ -291,6 +298,7 @@ type savedFile struct {
 	Hist     int64 `json:"hist,omitempty"`
 	HistFrom int64 `json:"hist_from,omitempty"`
 	HistDone bool  `json:"hist_done,omitempty"`
+	Fresh    int64 `json:"fresh,omitempty"`
 }
 
 // New makes a Tailer with the cursors Store kept. It reads nothing until
@@ -354,7 +362,7 @@ func (t *Tailer) load() {
 		// the file may come to say so.
 		t.files[sf.Path] = &file{key: sf.Path, path: sf.Path, harness: sf.Harness, id: sf.ID, size: sf.Size,
 			mtime: time.Unix(0, sf.MTime), read: sf.Read, resume: sf.Resume, hash: sf.Hash, pos: sf.Resume,
-			due: sf.Resume < sf.Read || sf.Read < sf.Size, hist: sf.Hist, histFrom: sf.HistFrom, histDone: sf.HistDone}
+			due: sf.Resume < sf.Read || sf.Read < sf.Size, hist: sf.Hist, histFrom: sf.HistFrom, histDone: sf.HistDone, fresh: sf.Fresh}
 	}
 }
 
@@ -370,7 +378,7 @@ func (t *Tailer) Put() (bool, error) {
 	for _, f := range t.files {
 		st.Files = append(st.Files, savedFile{Path: f.path, Harness: f.harness, ID: f.id, Size: f.size,
 			MTime: f.mtime.UnixNano(), Read: f.read, Resume: f.resume, Hash: f.hash,
-			Hist: f.hist, HistFrom: f.histFrom, HistDone: f.histDone})
+			Hist: f.hist, HistFrom: f.histFrom, HistDone: f.histDone, Fresh: f.fresh})
 	}
 	for d := range t.listed {
 		st.Roots = append(st.Roots, d)
@@ -988,7 +996,7 @@ func (t *Tailer) read(f *file, now time.Time) {
 		f.grew = now
 	}
 	f.id, f.size, f.mtime = id, size, fi.ModTime()
-	pos, read, hist, histFrom := f.pos, f.read, f.hist, f.histFrom
+	pos, read, hist, histFrom, fresh := f.pos, f.read, f.hist, f.histFrom, f.fresh
 	t.mu.Unlock()
 
 	if pos < size {
@@ -998,6 +1006,9 @@ func (t *Tailer) read(f *file, now time.Time) {
 		br := bufio.NewReaderSize(fh, readBuffer)
 		for {
 			batch, next, more, failed := t.lines(br, f, pos, read, hist, histFrom)
+			for i := range batch {
+				batch[i].Fresh = fresh > 0 && batch[i].Log.Offset == fresh
+			}
 			if len(batch) > 0 {
 				t.mu.Lock()
 				pokes := t.pokes
