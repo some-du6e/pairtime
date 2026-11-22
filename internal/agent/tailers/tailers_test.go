@@ -59,8 +59,10 @@ type rig struct {
 	// end otherwise: what the adapter needs a restart to start from.
 	take   func(Line) bool
 	resume func(Line) int64
-	// lookback, when set, starts lookback's child (Options.Lookback).
+	// lookback, when set, starts lookback's child (Options.Lookback), and
+	// until says when its records end (Options.LookbackUntil).
 	lookback func() (Child, error)
+	until    func() time.Time
 }
 
 func newRig(t *testing.T) *rig {
@@ -75,12 +77,13 @@ func (r *rig) open() {
 	r.tl = New(Options{
 		Roots: []Root{{Harness: event.HarnessClaudeCode, LogRoot: adapters.LogRoot{Dir: r.dir, Depth: 2,
 			Match: func(rel string) bool { return strings.Count(rel, "/") == 1 && strings.HasSuffix(rel, ".jsonl") }}}},
-		Store:    r.store,
-		Deliver:  r.deliver,
-		Forget:   func(_ event.Harness, file string) { r.forgot = append(r.forgot, file) },
-		Now:      func() time.Time { return r.now },
-		NoNotify: true,
-		Lookback: r.lookback,
+		Store:         r.store,
+		Deliver:       r.deliver,
+		Forget:        func(_ event.Harness, file string) { r.forgot = append(r.forgot, file) },
+		Now:           func() time.Time { return r.now },
+		NoNotify:      true,
+		Lookback:      r.lookback,
+		LookbackUntil: r.until,
 	})
 }
 

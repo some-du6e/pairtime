@@ -285,6 +285,48 @@ func TestLookback(t *testing.T) {
 				t.Errorf("offered %d times, then progress %+v; want the history still to read and no failure", offered.Load(), p)
 			}
 		}},
+		{"a Rewind sends the lines read before through the child, trimmed, as replays", func(t *testing.T) {
+			pc := &pipeChild{trim: upper}
+			r := lookbackRig(t, pc.start)
+			r.write("k.jsonl", "{\"n\":1}\n{\"n\":2}\n")
+			r.open()
+			r.step(0, false)
+			r.settle()
+			rewound := false
+			r.take = func(l Line) bool {
+				if string(l.Bytes) == `{"n":3}` && !rewound {
+					rewound = true
+					r.tl.Rewind(l.Log.File) // the agent's, for an adapter that forgot the file
+					return false
+				}
+				return true
+			}
+			r.write("k.jsonl", "{\"n\":3}\n")
+			from := len(r.got)
+			r.step(HotPoll, false)
+			r.settle()
+			r.step(HotPoll, false)
+			if got := r.texts(from); !slices.Equal(got, []string{`{"N":1}`, `{"N":2}`, `{"n":3}`}) || pc.started != 2 {
+				t.Fatalf("after the rewind %v from %d children, want the history again through a child and then the new line", got, pc.started)
+			}
+			if got := r.replays(from); !slices.Equal(got, []bool{true, true, false}) {
+				t.Errorf("replays %v", got)
+			}
+		}},
+		{"a root's first listing gives no history when the ledger began LookbackWindow ago", func(t *testing.T) {
+			pc := &pipeChild{trim: upper}
+			r := lookbackRig(t, pc.start)
+			r.until = func() time.Time { return r.now.Add(-LookbackWindow - time.Hour) }
+			r.write("m.jsonl", "{\"n\":1}\n")
+			r.open()
+			r.step(0, false)
+			r.settle()
+			r.write("m.jsonl", "{\"n\":2}\n")
+			r.step(HotPoll, false)
+			if got := r.texts(0); !slices.Equal(got, []string{`{"n":2}`}) || pc.started != 0 || r.tl.Progress().Files != 0 {
+				t.Errorf("handed over %v from %d children, want the new line alone", got, pc.started)
+			}
+		}},
 		{"a child isn't tried again before its pause", func(t *testing.T) {
 			tries := 0
 			r := lookbackRig(t, func() (Child, error) {

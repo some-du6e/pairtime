@@ -46,10 +46,11 @@ type savedState struct {
 }
 
 type savedFile struct {
-	Key   string  `json:"key"`
-	At    int64   `json:"at"`
-	State txState `json:"state"`
-	Seen  uint64  `json:"seen"`
+	Key    string  `json:"key"`
+	At     int64   `json:"at"`
+	State  txState `json:"state"`
+	Seen   uint64  `json:"seen"`
+	Newest int64   `json:"newest,omitempty"`
 }
 
 type savedLogSession struct {
@@ -182,7 +183,7 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 		if i >= maxSavedFiles && f.snapAt >= f.at {
 			break
 		}
-		st.Files = append(st.Files, savedFile{Key: f.key, At: f.snapAt, State: f.snap, Seen: f.seen})
+		st.Files = append(st.Files, savedFile{Key: f.key, At: f.snapAt, State: f.snap, Seen: f.seen, Newest: f.newest})
 	}
 	logs := make([]*txSession, 0, len(a.logSessions))
 	for _, s := range a.logSessions {
@@ -248,7 +249,7 @@ func (a *Adapter) LoadState(raw json.RawMessage) error {
 		if sf.Key == "" || files[sf.Key] != nil || len(files) >= maxLogFiles || sf.At < 0 {
 			continue
 		}
-		files[sf.Key] = &txFile{key: sf.Key, at: sf.At, st: sf.State, snap: sf.State, snapAt: sf.At, seen: sf.Seen}
+		files[sf.Key] = &txFile{key: sf.Key, at: sf.At, st: sf.State, snap: sf.State, snapAt: sf.At, seen: sf.Seen, newest: sf.Newest}
 		clock = max(clock, sf.Seen)
 	}
 	logs := make(map[string]*txSession, len(st.LogSessions))

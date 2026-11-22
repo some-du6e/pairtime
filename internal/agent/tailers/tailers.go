@@ -189,6 +189,12 @@ type Options struct {
 	// Progress, when set, hears how far lookback has read, on the
 	// goroutine that reads.
 	Progress func(Progress)
+	// LookbackUntil, when set, says when lookback's records end, at the
+	// start of the agent's ledger, or the zero time while that isn't
+	// known: a root's first listing gives no file a history when that end
+	// is LookbackWindow ago or longer, since none of its records would
+	// count.
+	LookbackUntil func() time.Time
 }
 
 // Tailer watches log roots and hands new lines of their files over.
@@ -504,12 +510,21 @@ func (t *Tailer) Hint(h event.Harness, path string, root adapters.LogRoot) {
 // Rewind has the tailer read the file key from its start again, the lines
 // it had handed over as replays: its adapter has no memory of the file, as
 // after a restore, and rebuilds it from them. The agent calls it while it
-// takes a batch of the file, instead of taking the line.
+// takes a batch of the file, instead of taking the line. With lookback,
+// the lines up to where the tailer had read go through lookback's reader,
+// trimmed and at its priority, as a history of the file (lookback.go),
+// since a file forgotten while lookback reads hundreds of others can be a
+// long one.
 func (t *Tailer) Rewind(key string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if f := t.files[key]; f != nil {
-		f.pos, f.resume, f.rewound = 0, 0, true
+	f := t.files[key]
+	if f == nil {
+		return
+	}
+	f.pos, f.resume, f.rewound = 0, 0, true
+	if t.lookbackUsable() && f.read > 0 {
+		f.hist, f.histDone = max(f.hist, f.read), false
 	}
 }
 
@@ -837,12 +852,14 @@ func (t *Tailer) adopt(r Root, path string, now time.Time) {
 	if err != nil {
 		return
 	}
+	// Before the lock: LookbackUntil is the agent's.
+	history := t.opts.Lookback != nil && end > 0 && now.Sub(fi.ModTime()) <= LookbackWindow && t.lookbackCounts(now)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.files[path] == nil {
 		f := &file{key: path, path: path, harness: r.Harness, id: fileID(fh, fi), size: fi.Size(),
 			mtime: fi.ModTime(), read: end, resume: end, pos: end, hash: hash}
-		if t.opts.Lookback != nil && end > 0 && now.Sub(fi.ModTime()) <= LookbackWindow {
+		if history {
 			f.hist, f.histFrom = end, now.Add(-LookbackWindow).UnixMilli()
 			f.read, f.resume, f.pos, f.hash = 0, 0, 0, ""
 		}

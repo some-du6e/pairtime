@@ -188,8 +188,28 @@ func serveFile(i int, jf jobFile, enc *json.Encoder, trim Trimmer) error {
 }
 
 // inHistory says f's history is still to be read: the tailer leaves f to
-// lookback. t.mu is held.
-func (f *file) inHistory() bool { return f.hist > 0 && !f.histDone && f.read < f.hist }
+// lookback until the line at pos, where its next line starts, is past
+// it. After a restart pos is the resume, and after a Rewind the file's
+// start. t.mu is held.
+func (f *file) inHistory() bool { return f.hist > 0 && !f.histDone && f.pos < f.hist }
+
+// lookbackUsable says lookback's reader may be started: lookback is on,
+// and its reader hasn't failed maxLookbackTries times in this run. t.mu is
+// held.
+func (t *Tailer) lookbackUsable() bool {
+	return t.opts.Lookback != nil && t.lb.failures < maxLookbackTries
+}
+
+// lookbackCounts reports whether a history read at now can have records
+// that count: lookback's records end where the agent's ledger began
+// (Options.LookbackUntil), which must be later than LookbackWindow ago.
+func (t *Tailer) lookbackCounts(now time.Time) bool {
+	if t.opts.LookbackUntil == nil {
+		return true
+	}
+	until := t.opts.LookbackUntil()
+	return until.IsZero() || until.After(now.Add(-LookbackWindow))
+}
 
 // lookbackDue starts lookback when files wait for their history and no
 // child reads, unless the last one failed less than its pause ago.
@@ -199,7 +219,7 @@ func (t *Tailer) lookbackDue(now time.Time) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.lb.running || t.stopped || now.Before(t.lb.next) {
+	if t.lb.running || t.stopped || now.Before(t.lb.next) || !t.lookbackUsable() {
 		return
 	}
 	for _, f := range t.files {

@@ -3,9 +3,11 @@
 package claudecode
 
 import (
+	"fmt"
 	"reflect"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
 )
@@ -89,3 +91,46 @@ func TestTrimLog(t *testing.T) {
 }
 
 var _ adapters.LogReader = (*Adapter)(nil)
+
+// TestTranscriptMemoryKeepsLiveFiles checks which file the reader's memory
+// forgets when full (older): the hundreds of histories lookback reads
+// after a session being written now go first, oldest entries first, so the
+// live session's next line finds its memory and isn't read again from its
+// start.
+func TestTranscriptMemoryKeepsLiveFiles(t *testing.T) {
+	a := newTest()
+	prompt := func(file, ts string) adapters.RawRecord {
+		l := logLines(userText("q1", "hello there", map[string]any{"turnOrigin": "human", "promptSource": "typed",
+			"entrypoint": nil, "timestamp": ts}))[0]
+		l.file = file
+		return logRaw(l, false, false)
+	}
+	if _, err := a.Parse(prompt("p/live.jsonl", "2026-11-21T10:00:00.000Z")); err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxLogFiles {
+		ts := time.Date(2026, 11, 1, 0, 0, i, 0, time.UTC).Format(time.RFC3339Nano)
+		if _, err := a.Parse(prompt(fmt.Sprintf("p/old-%03d.jsonl", i), ts)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	remembered := func(file string) bool {
+		_, ok := a.LogResume(file)
+		return ok
+	}
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"the session being written now is remembered", remembered("p/live.jsonl")},
+		{"the history with the oldest entries went first", !remembered("p/old-000.jsonl")},
+		{"a history with newer entries is remembered", remembered(fmt.Sprintf("p/old-%03d.jsonl", maxLogFiles-1))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Error("the reader forgot another file than the one with the oldest entries")
+			}
+		})
+	}
+}

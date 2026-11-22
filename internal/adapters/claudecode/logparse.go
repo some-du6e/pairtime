@@ -156,6 +156,9 @@ type txFile struct {
 	snap   txState
 	snapAt int64
 	seen   uint64
+	// newest is the time of the newest entry the reader took from the
+	// file, in Unix ms, which ranks it for eviction (older).
+	newest int64
 }
 
 // txState is the part of what the reader knows of a file at a point in
@@ -287,6 +290,7 @@ func (a *Adapter) parseLog(raw adapters.RawRecord) ([]adapters.Record, error) {
 			perr.Problem("a line longer than the tailers read")
 		} else if e, ok := l.entryOf(); ok {
 			l.take(e)
+			f.newest = max(f.newest, e.t)
 		}
 		if !ll.Replay {
 			l.resolveStart()
@@ -943,9 +947,7 @@ func (l *logLine) badPatch(e *entry) {
 }
 
 // fileFor returns what the reader remembers of file key, making it, and
-// marks it read from now. Past maxLogFiles it forgets the file read from
-// least recently that holds nothing back, or else the one read from least
-// recently.
+// marks it read from now. Past maxLogFiles it forgets a file (older).
 func (a *Adapter) fileFor(key string) *txFile {
 	a.clock++
 	f := a.files[key]
@@ -953,8 +955,7 @@ func (a *Adapter) fileFor(key string) *txFile {
 		if len(a.files) >= maxLogFiles {
 			var oldest *txFile
 			for _, o := range a.files {
-				if oldest == nil || o.pend.empty() && !oldest.pend.empty() ||
-					o.pend.empty() == oldest.pend.empty() && o.seen < oldest.seen {
+				if oldest == nil || older(o, oldest) {
 					oldest = o
 				}
 			}
@@ -965,6 +966,22 @@ func (a *Adapter) fileFor(key string) *txFile {
 	}
 	f.seen = a.clock
 	return f
+}
+
+// older reports whether the reader's memory, when full, forgets file o
+// before p: a file that holds nothing back first, then the one whose
+// newest entry is oldest, so the hundreds of histories lookback reads go
+// before a session being written now, and then the one read from least
+// recently. A file forgotten while it is written to again is read again
+// from its start.
+func older(o, p *txFile) bool {
+	if o.pend.empty() != p.pend.empty() {
+		return o.pend.empty()
+	}
+	if o.newest != p.newest {
+		return o.newest < p.newest
+	}
+	return o.seen < p.seen
 }
 
 // restart starts what the reader knows of a file afresh at offset at.

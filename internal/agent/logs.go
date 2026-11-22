@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
@@ -74,7 +75,8 @@ func (a *agent) startTailers(opts Options) func() {
 		st = a.state
 	}
 	t := tailers.New(tailers.Options{Store: st, Sched: a.sched, Deliver: h.deliverLogs, Forget: h.forgetLog,
-		Ready: h.logReady, Log: a.log.With("component", "tailers"), Lookback: opts.Lookback, Progress: h.setLookback})
+		Ready: h.logReady, Log: a.log.With("component", "tailers"), Lookback: opts.Lookback, Progress: h.setLookback,
+		LookbackUntil: h.lookbackUntil})
 	h.mu.Lock()
 	h.logEnv = *env
 	h.mu.Unlock()
@@ -131,6 +133,17 @@ func (h *adapterHost) setLookback(p tailers.Progress) {
 	h.mu.Lock()
 	h.lookback = p
 	h.mu.Unlock()
+}
+
+// lookbackUntil is when lookback's records end, the ledger's start, and the
+// zero time before the ledger is open (tailers.Options.LookbackUntil).
+func (h *adapterHost) lookbackUntil() time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ledgerBegan == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(h.ledgerBegan)
 }
 
 // lookbackWindow keeps the records of a line of a file's history that fall
@@ -313,12 +326,16 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 			key = fmt.Sprintf("%d.%d", ll.Offset, i)
 		}
 		r.Event.EventID = h.logEventID(r.Event.T, ll.File, key)
+		// A history's records need no seal and no save of their own: the
+		// timed seal and the minute's save cover them, and a crash before
+		// those reads the lines again, to the same event_ids.
+		r.Late = line.Lookback > 0
 		if !h.write(st, r) && h.writerDown() {
 			return false
 		}
 		switch r.Event.Kind() {
 		case event.KindSessionStart, event.KindPromptSubmit, event.KindAgentStop:
-			due = true
+			due = due || !r.Late
 		}
 	}
 	resume, ok := lr.LogResume(ll.File)

@@ -1639,7 +1639,7 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record) bool {
 	if ev.EventID == "" {
 		ev.EventID = event.NewEventID(time.UnixMilli(ev.T))
 	}
-	if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command}); err != nil {
+	if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command, Late: r.Late}); err != nil {
 		h.count(func() {
 			st.WriteFailures++
 			st.LastFailure = clip(fmt.Sprintf("the ledger refused a %s record: %v", ev.Kind(), err))

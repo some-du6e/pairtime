@@ -387,20 +387,31 @@ func TestSeals(t *testing.T) {
 	cases := []struct {
 		name string
 		kind string
-		// atOnce is set when writing kind seals without Seal being called.
-		atOnce bool
+		// atOnce is set when writing kind seals without Seal being called,
+		// and late when the record is Late.
+		atOnce, late bool
 	}{
-		{"a prompt seals at once", "prompt.submit", true},
-		{"an agent.stop seals at once", "agent.stop", true},
-		{"a presence sample waits for the next seal", "os.presence", false},
-		{"a tool call waits for the next seal", "agent.tool", false},
+		{"a prompt seals at once", "prompt.submit", true, false},
+		{"an agent.stop seals at once", "agent.stop", true, false},
+		{"a presence sample waits for the next seal", "os.presence", false, false},
+		{"a tool call waits for the next seal", "agent.tool", false, false},
+		{"a late prompt, as lookback's, waits for the next seal", "prompt.submit", false, true},
+		{"a late agent.stop waits for the next seal", "agent.stop", false, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			sealed := make(chan Batch, 4)
 			w := open(t, t.TempDir(), newClock(testT), func(o *Options) { o.Sealed = func(b Batch) { sealed <- b } })
 			rng := rand.New(rand.NewPCG(7, 8))
-			s, _, err := write(w, rng, c.kind, testT)
+			var s uint64
+			var err error
+			if c.late {
+				in := sampleInput(rng, c.kind, testT, "s_1", "p_web")
+				in.Late = true
+				s, err = w.Write(in)
+			} else {
+				s, _, err = write(w, rng, c.kind, testT)
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -260,6 +260,10 @@ type Record struct {
 	// line read again after a crash makes records pkg/score takes for the
 	// ones the ledger has. It is "" for a record of anything but a log.
 	LogKey string
+	// Late, which the agent sets, says the record tells of a time long
+	// past, as lookback's do: the ledger seals it in its own time
+	// (ledger.Input.Late).
+	Late bool
 }
 
 // Stateful is an adapter whose memory of the sessions it parses can

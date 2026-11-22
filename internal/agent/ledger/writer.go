@@ -168,6 +168,10 @@ type Input struct {
 	Edits []features.Edit
 	// Command is the command line an agent.tool or shell.command ran.
 	Command string
+	// Late says the record tells of a time long past, as lookback's do: a
+	// prompt or a stop that is Late asks for no seal of its own, and waits
+	// for BATCH_S's, since no one waits for it (WP-AD3).
+	Late bool
 }
 
 // Writer is a device's ledger writer. It appends each record to the day's
@@ -389,7 +393,7 @@ func (w *Writer) Write(in Input) (uint64, error) {
 		w.late = true
 	}
 	w.q.Observe(ev)
-	if k := ev.Kind(); k == event.KindPromptSubmit || k == event.KindAgentStop {
+	if k := ev.Kind(); (k == event.KindPromptSubmit || k == event.KindAgentStop) && !in.Late {
 		w.RequestSeal()
 	}
 	return rec.Header.Seq(), nil
