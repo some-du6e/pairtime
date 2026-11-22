@@ -65,6 +65,7 @@ image_paths=(
 	pkg/event
 	pkg/ledger
 	pkg/params
+	pkg/projectname
 	third_party/burntsushi-toml
 	tools/release
 	internal/release
