@@ -18,6 +18,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/install"
+	"github.com/some-du6e/pairtime/internal/platform"
 )
 
 // The hooks install writes run `pairtime hook` (WP-AG3). A binary without
@@ -81,60 +82,103 @@ func hooksWouldBreak(err error, exe string) error {
 // hands the event over. It returns how long the call took, from start to
 // exit.
 //
-// Nothing of the call reaches the teen's agent or ledger. The command runs
-// with PAIRTIME_HOME set to a folder of its own, where this process listens
-// as the agent would, through package ipc, and keeps the agent's lock, so
-// that an agent the hook starts exits at once (exitAlreadyRunning) instead
-// of making a device key for a throwaway folder.
+// Nothing of the call reaches the teen's agent or ledger: it goes to a
+// hookRig.
 func hookTest(exe string) (took time.Duration, err error) {
+	r, err := newHookRig(nil)
+	if err != nil {
+		return 0, err
+	}
+	defer r.close()
+	return r.call(exe, "claude_code", "SessionStart", hookTestPayload)
+}
+
+// hookRig is a data directory of its own where this process listens for
+// hook calls as the agent would, through package ipc, so that a call of
+// `pairtime hook` can be made and timed without anything of it reaching
+// the teen's agent or ledger. The command runs with PAIRTIME_HOME set to
+// the rig's folder, and the rig keeps the agent's lock there, so that an
+// agent the hook starts exits at once (exitAlreadyRunning) instead of
+// making a device key for a throwaway folder. install's self-test and
+// doctor's round trips use it.
+type hookRig struct {
+	dir    string
+	lock   *home.Lock
+	srv    *ipc.Server
+	served chan struct{}
+	got    chan inbox.Message
+	// missed is set once a call didn't reach the rig.
+	missed bool
+}
+
+// newHookRig starts a rig. walk, when set, reads each caller's parent
+// chain as the agent's listener does (ipc.Options.Walk), so a round trip
+// takes as long as one to the agent.
+func newHookRig(walk func(pid int) []platform.Proc) (*hookRig, error) {
 	dir, err := os.MkdirTemp("", "pt")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	defer removeTemp(dir)
+	r := &hookRig{dir: dir, got: make(chan inbox.Message, 8)}
 	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
-	lock, err := home.Acquire(dir)
-	if err != nil {
-		return 0, err
+	if r.lock, err = home.Acquire(dir); err != nil {
+		removeTemp(dir)
+		return nil, err
 	}
-	got := make(chan inbox.Message, 8)
-	reached := false
-	defer func() {
-		if !reached {
-			time.Sleep(hookGrace)
-		}
-		lock.Release()
-	}()
 	ep, err := ipc.EndpointFor(dirs)
-	if err != nil {
-		return 0, err
+	if err == nil {
+		r.srv, err = ipc.Listen(ep, ipc.Options{Walk: walk})
+		if err != nil {
+			err = fmt.Errorf("listening for the test call: %w", err)
+		}
 	}
-	srv, err := ipc.Listen(ep, ipc.Options{})
 	if err != nil {
-		return 0, fmt.Errorf("listening for the test call: %w", err)
+		r.lock.Release()
+		removeTemp(dir)
+		return nil, err
 	}
-	served := make(chan struct{})
+	r.served = make(chan struct{})
 	go func() {
-		defer close(served)
-		srv.Serve(sinkFunc(func(d inbox.Delivery) error {
+		defer close(r.served)
+		r.srv.Serve(sinkFunc(func(d inbox.Delivery) error {
 			select {
-			case got <- d.Message:
+			case r.got <- d.Message:
 			default:
 			}
 			return nil
 		}))
 	}()
-	defer func() {
-		srv.Close()
-		<-served
-	}()
+	return r, nil
+}
 
+// close stops the rig. After a call that didn't reach it, it keeps the
+// folder locked for hookGrace first, for the agent that call may have
+// started to find the lock taken and exit.
+func (r *hookRig) close() {
+	r.srv.Close()
+	<-r.served
+	if r.missed {
+		time.Sleep(hookGrace)
+	}
+	r.lock.Release()
+	removeTemp(r.dir)
+}
+
+// call runs exe's hook command for harness and event with payload on
+// stdin, as Claude Code runs its hooks, and checks that it exits 0, prints
+// nothing and hands the event over. It returns how long the call took,
+// from start to exit.
+func (r *hookRig) call(exe, harness, event, payload string) (took time.Duration, err error) {
+	// A message an earlier call's hook handed over late isn't this one's.
+	for len(r.got) > 0 {
+		<-r.got
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), hookTestWait)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, "hook", "--harness", "claude_code", "--event", "SessionStart")
-	cmd.Env = setEnv(os.Environ(), home.EnvHome, dir)
-	cmd.Dir = dir
-	cmd.Stdin = strings.NewReader(hookTestPayload)
+	cmd := exec.CommandContext(ctx, exe, "hook", "--harness", harness, "--event", event)
+	cmd.Env = setEnv(os.Environ(), home.EnvHome, r.dir)
+	cmd.Dir = r.dir
+	cmd.Stdin = strings.NewReader(payload)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	start := time.Now()
@@ -147,13 +191,17 @@ func hookTest(exe string) (took time.Duration, err error) {
 	if runErr != nil {
 		wait = 0
 	}
+	reached := false
 	select {
-	case m := <-got:
+	case m := <-r.got:
 		reached = true
-		if err := checkHookMessage(m); err != nil {
+		if err := checkHookMessage(m, harness, event, payload); err != nil {
 			return 0, err
 		}
 	case <-time.After(wait):
+	}
+	if !reached {
+		r.missed = true
 	}
 	switch {
 	case ctx.Err() != nil:
@@ -178,8 +226,8 @@ func exitText(err error) string {
 }
 
 // checkHookMessage checks that m is the test call: a hook message for
-// claude_code's SessionStart, with the payload the test wrote.
-func checkHookMessage(m inbox.Message) error {
+// harness's event, with the payload the test wrote.
+func checkHookMessage(m inbox.Message, harness, event, payload string) error {
 	var b struct {
 		Harness string          `json:"harness"`
 		Event   string          `json:"event"`
@@ -188,11 +236,11 @@ func checkHookMessage(m inbox.Message) error {
 	if m.Kind != "hook" || json.Unmarshal(m.Body, &b) != nil {
 		return fmt.Errorf("the agent got a %q message that isn't a hook call", m.Kind)
 	}
-	if b.Harness != "claude_code" || b.Event != "SessionStart" {
-		return fmt.Errorf("the agent got harness %q and event %q, not claude_code and SessionStart", b.Harness, b.Event)
+	if b.Harness != harness || b.Event != event {
+		return fmt.Errorf("the agent got harness %q and event %q, not %s and %s", b.Harness, b.Event, harness, event)
 	}
 	var sent, recv any
-	if json.Unmarshal([]byte(hookTestPayload), &sent) != nil || json.Unmarshal(b.Payload, &recv) != nil || !jsonEqual(sent, recv) {
+	if json.Unmarshal([]byte(payload), &sent) != nil || json.Unmarshal(b.Payload, &recv) != nil || !jsonEqual(sent, recv) {
 		return errors.New("the agent didn't get the event the test wrote on stdin")
 	}
 	return nil

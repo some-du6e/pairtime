@@ -224,3 +224,117 @@ func TestJournal(t *testing.T) {
 		})
 	}
 }
+
+func TestJournalSpooled(t *testing.T) {
+	now := time.Date(2026, 11, 19, 15, 0, 0, 0, time.UTC)
+	week := now.Add(-KeepDays * 24 * time.Hour)
+	// call is a hook call sent at sent, which the agent took as kind.
+	call := func(sent time.Time, via Via, kind event.Kind) Delivery {
+		m := New(KindHook, json.RawMessage(`{}`))
+		m.Sent = sent
+		return Delivery{Message: m, Via: via, EventKind: kind, Received: clock.Stamp{Wall: now}}
+	}
+	open := func(t *testing.T, dir string) *Journal {
+		t.Helper()
+		j, err := OpenJournal(dir, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { j.Close() })
+		return j
+	}
+	store := func(t *testing.T, j *Journal, ds ...Delivery) {
+		t.Helper()
+		for _, d := range ds {
+			if _, err := j.Store(d); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	type counts struct{ calls, prompts, unknown uint64 }
+	tests := []struct {
+		name string
+		run  func(t *testing.T, dir string) *Journal
+		want counts
+	}{
+		{
+			name: "hook calls only the spool delivered count, with how many were prompts, and the socket's don't",
+			run: func(t *testing.T, dir string) *Journal {
+				j := open(t, dir)
+				store(t, j,
+					call(now.Add(-time.Hour), ViaInbox, event.KindPromptSubmit),
+					call(now.Add(-time.Hour), ViaInbox, event.KindAgentStop),
+					call(now.Add(-time.Hour), ViaInbox, ""),
+					call(now.Add(-time.Hour), ViaSocket, event.KindPromptSubmit),
+					call(now.Add(-time.Hour), ViaPipe, event.KindPromptSubmit))
+				return j
+			},
+			want: counts{calls: 3, prompts: 1},
+		},
+		{
+			name: "a spooled call made before the week doesn't count, though a late drain put it in the journal today",
+			run: func(t *testing.T, dir string) *Journal {
+				j := open(t, dir)
+				store(t, j, call(week.Add(-time.Minute), ViaInbox, event.KindPromptSubmit), call(week, ViaInbox, event.KindPromptSubmit))
+				return j
+			},
+			want: counts{calls: 1, prompts: 1},
+		},
+		{
+			name: "messages other than hook calls never count, though the spool delivered them",
+			run: func(t *testing.T, dir string) *Journal {
+				j := open(t, dir)
+				for _, kind := range []string{"emit", "track"} {
+					m := New(kind, json.RawMessage(`{}`))
+					store(t, j, Delivery{Message: m, Via: ViaInbox, EventKind: event.KindPromptSubmit, Received: clock.Stamp{Wall: now}})
+				}
+				return j
+			},
+		},
+		{
+			name: "a spooled call that came twice counts once",
+			run: func(t *testing.T, dir string) *Journal {
+				j := open(t, dir)
+				d := call(now.Add(-time.Hour), ViaInbox, event.KindPromptSubmit)
+				store(t, j, d, d)
+				return j
+			},
+			want: counts{calls: 1, prompts: 1},
+		},
+		{
+			name: "a reopened journal counts the spooled calls its day files hold",
+			run: func(t *testing.T, dir string) *Journal {
+				j := open(t, dir)
+				store(t, j, call(now.Add(-time.Hour), ViaInbox, event.KindPromptSubmit), call(now.Add(-time.Hour), ViaInbox, event.KindAgentTool),
+					call(now.Add(-time.Hour), ViaSocket, event.KindPromptSubmit))
+				j.Close()
+				return open(t, dir)
+			},
+			want: counts{calls: 2, prompts: 1},
+		},
+		{
+			name: "a spooled call an older version wrote, which says nothing of prompts, counts with its kind unknown",
+			run: func(t *testing.T, dir string) *Journal {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				old := `{"id":"0123456789abcdef0123456789abcdef","kind":"hook","via":"inbox","sent":"2026-11-19T14:00:00Z","received":"2026-11-19T14:01:00Z","body_bytes":2,"event_via":"plugin"}` + "\n"
+				if err := os.WriteFile(filepath.Join(dir, "2026-11-19.jsonl"), []byte(old), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return open(t, dir)
+			},
+			want: counts{calls: 1, unknown: 1},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			j := tt.run(t, filepath.Join(t.TempDir(), "received"))
+			var got counts
+			got.calls, got.prompts, got.unknown = j.Spooled(week)
+			if got != tt.want {
+				t.Errorf("Spooled = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}

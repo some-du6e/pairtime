@@ -119,16 +119,19 @@ func (s *hookSink) Deliver(d inbox.Delivery) error {
 	b, berr := hookpath.DecodeBody(d.Message)
 	p := hookpath.Of(s.goos, d, event.Harness(b.Harness))
 	d.EventVia, d.Harness = p.Via, p.Harness
+	var kind event.Kind
+	if berr == nil {
+		kind = hookpath.PresenceKind(b)
+	}
+	// The journal keeps whether a call was a prompt, so doctor can say how
+	// many prompts only the spool delivered (DESIGN 5.2).
+	d.EventKind = kind
 	if !p.Walked {
 		// A walk that doesn't count is no walk: none of the call's events
 		// can be via = hook, and nothing may read it later (DESIGN 3.4).
 		d.Walk = nil
 	}
 	if d.Via != inbox.ViaInbox {
-		var kind event.Kind
-		if berr == nil {
-			kind = hookpath.PresenceKind(b)
-		}
 		session := s.sessionKey(b)
 		// A session whose calls ran in a folder out of pairtime is tied to
 		// no window and sampled by no presence (DESIGN 8.8; hookTies.ignore).

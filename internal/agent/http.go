@@ -66,9 +66,12 @@ type statusReply struct {
 	IPC     ipcReply   `json:"ipc"`
 	// Signals says where idle time, focus, power and the lock state come
 	// from, for doctor's idle and focus lines (DESIGN 5.9, D-design-5.9).
-	Signals  signalsReply      `json:"signals"`
-	Adapters adaptersReply     `json:"adapters"`
-	Problems map[string]string `json:"problems,omitempty"`
+	Signals  signalsReply  `json:"signals"`
+	Adapters adaptersReply `json:"adapters"`
+	// Footprint is what the agent costs the computer, as the OS reports it,
+	// for doctor --report (DESIGN 5.9, 9.7).
+	Footprint footprintReply    `json:"footprint"`
+	Problems  map[string]string `json:"problems,omitempty"`
 }
 
 type jobReply struct {
@@ -78,24 +81,33 @@ type jobReply struct {
 }
 
 func (a *agent) serveStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.status())
+}
+
+// status is GET /v1/status, and the agent's answer to the CLI's status
+// question (ipc.AskStatus), which `pairtime doctor` asks.
+func (a *agent) status() statusReply {
 	jobs := []jobReply{}
 	for _, j := range a.sched.Jobs() {
 		jobs = append(jobs, jobReply{Name: j.Name, EveryS: j.Every.Seconds(), Runs: j.Runs})
 	}
-	writeJSON(w, http.StatusOK, statusReply{
-		Version:  version.Get(),
-		PID:      os.Getpid(),
-		Started:  a.started.UTC(),
-		UptimeS:  int64(time.Since(a.started) / time.Second),
-		Mode:     a.uploadMode(),
-		Port:     a.port,
-		Wakeups:  a.sched.Wakeups(),
-		Jobs:     jobs,
-		IPC:      a.ipcStatus(),
-		Signals:  a.signalsNow(),
-		Adapters: a.adaptersHost().status(),
-		Problems: a.currentProblems(),
-	})
+	return statusReply{
+		Version: version.Get(),
+		PID:     os.Getpid(),
+		Started: a.started.UTC(),
+		UptimeS: int64(time.Since(a.started) / time.Second),
+		Mode:    a.uploadMode(),
+		// The socket answers the status question before Run has the port,
+		// so it reads the one the HTTP server published (agent.linkPort).
+		Port:      int(a.linkPort.Load()),
+		Wakeups:   a.sched.Wakeups(),
+		Jobs:      jobs,
+		IPC:       a.ipcStatus(),
+		Signals:   a.signalsNow(),
+		Adapters:  a.adaptersHost().status(),
+		Footprint: footprintNow(),
+		Problems:  a.currentProblems(),
+	}
 }
 
 // serveStop answers POST /v1/agent/stop and then stops the agent, the same

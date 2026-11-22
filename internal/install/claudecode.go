@@ -488,3 +488,100 @@ func noValue(c Content) bool {
 	_, err := jsonc.Parse(c.Data)
 	return errors.Is(err, jsonc.ErrEmpty)
 }
+
+// ClaudeHooks is what Claude Code's user settings hold of pairtime's hooks,
+// for doctor (DESIGN 5.9).
+type ClaudeHooks struct {
+	// Path is the settings file, ClaudeSettings.
+	Path string
+	// Events are the hook events whose lists hold a pairtime hook, and
+	// Missing the ones of DESIGN 5.1 that pairtime installs and that don't,
+	// both in the order pairtime installs them. Missing is nil when the
+	// file holds no pairtime hook at all.
+	Events, Missing []string
+	// Stale are the events whose pairtime hook runs with other arguments
+	// than install writes for it, such as one that lost its --event, in
+	// the order of Events. Claude Code still runs it, and the adapter goes
+	// by the payload's own event name, but each call counts as a parse
+	// failure.
+	Stale []string
+	// Exes are the binaries the pairtime hooks run, sorted: one, the
+	// per-user path, when install wrote them.
+	Exes []string
+	// Disabled is set when the settings say "disableAllHooks": true, which
+	// makes Claude Code run no hook at all (HS 3.1).
+	Disabled bool
+}
+
+// ReadClaudeHooks reads which of pairtime's hooks Claude Code's user
+// settings hold. It reads the file alone and takes no lock, so doctor can
+// ask while an install runs; a file that isn't there holds no hooks.
+func ReadClaudeHooks(env Env) (ClaudeHooks, error) {
+	h := ClaudeHooks{Path: ClaudeSettings(env)}
+	c, err := readFile(h.Path)
+	if err != nil || !c.Exists {
+		return h, err
+	}
+	root, err := parseSettings(c.Data)
+	if err != nil || root == nil {
+		if err != nil {
+			err = fmt.Errorf("%s %w", h.Path, err)
+		}
+		return h, err
+	}
+	if v := root.Get("disableAllHooks"); v != nil && v.Kind == jsonc.Bool && v.Text == "true" {
+		h.Disabled = true
+	}
+	hooks := root.Get("hooks")
+	if hooks == nil || hooks.Kind != jsonc.Object {
+		return h, nil
+	}
+	held, stale := map[string]bool{}, map[string]bool{}
+	for _, ev := range hooks.Items {
+		if ev.Value.Kind != jsonc.Array {
+			continue
+		}
+		for _, g := range ev.Value.Items {
+			hs := g.Value.Get("hooks")
+			if hs == nil || hs.Kind != jsonc.Array {
+				continue
+			}
+			for _, it := range hs.Items {
+				if !isPairtimeHook(it.Value) {
+					continue
+				}
+				held[ev.Key] = true
+				if !slices.Equal(strs(it.Value.Get("args")), hookArgs(ev.Key)) {
+					stale[ev.Key] = true
+				}
+				if exe := it.Value.Get("command").Text; !slices.Contains(h.Exes, exe) {
+					h.Exes = append(h.Exes, exe)
+				}
+			}
+		}
+	}
+	slices.Sort(h.Exes)
+	for _, hk := range claudeHooks {
+		if held[hk.event] {
+			h.Events = append(h.Events, hk.event)
+		} else if len(held) > 0 {
+			h.Missing = append(h.Missing, hk.event)
+		}
+	}
+	// Events pairtime doesn't install, as an older version's, come last,
+	// sorted.
+	var other []string
+	for ev := range held {
+		if !slices.Contains(h.Events, ev) {
+			other = append(other, ev)
+		}
+	}
+	slices.Sort(other)
+	h.Events = append(h.Events, other...)
+	for _, ev := range h.Events {
+		if stale[ev] {
+			h.Stale = append(h.Stale, ev)
+		}
+	}
+	return h, nil
+}

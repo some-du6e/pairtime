@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # The agent's local API: what the agent serves on 127.0.0.1 to the local
-# dashboard and to local tools such as `pairtime doctor` (DESIGN 3.9; CP 6.3).
+# dashboard and to local tools such as footprint.yml (DESIGN 3.9; CP 6.3).
+# `pairtime doctor` gets GET /v1/status's JSON over the agent's per-user
+# socket instead (ipc.AskStatus), with no bearer token.
 # web/ generates its TypeScript types from this file (SP 7.3), so a route or
 # field changes here and in internal/agent in the same PR.
 openapi: 3.1.0
@@ -48,8 +50,10 @@ paths:
       operationId: getStatus
       summary: What the running agent is doing
       description: >
-        Read by `pairtime doctor`, footprint.yml and the dashboard. The
-        answer is never cached.
+        Read by footprint.yml and the dashboard. `pairtime doctor` gets the
+        same JSON over the agent's socket (ipc.AskStatus), which needs no
+        bearer token, so it sends the token over no TCP connection (#120).
+        The answer is never cached.
       responses:
         "200":
           description: The agent's build, uptime, mode and scheduler.
@@ -245,7 +249,7 @@ components:
     Status:
       type: object
       additionalProperties: false
-      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs, ipc, signals, adapters]
+      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs, ipc, signals, adapters, footprint]
       properties:
         version:
           $ref: "#/components/schemas/Version"
@@ -264,9 +268,12 @@ components:
           $ref: "#/components/schemas/Mode"
         port:
           type: integer
-          minimum: 1
+          minimum: 0
           maximum: 65535
-          description: The port the agent listens on.
+          description: >
+            The port the agent listens on, and 0 while its HTTP server isn't
+            listening yet, as a status asked over the socket at start-up can
+            find it.
         wakeups:
           type: integer
           minimum: 0
@@ -281,15 +288,48 @@ components:
           $ref: "#/components/schemas/Signals"
         adapters:
           $ref: "#/components/schemas/Adapters"
+        footprint:
+          $ref: "#/components/schemas/Footprint"
         problems:
           type: object
           description: >
-            What isn't working, keyed by where it comes from (`config`,
-            `config-watch`, `state`, `port`, `ipc`, `presence`, `focus`,
-            `ledger`, `scorer`, `uploader`, `account`), in words for the
-            teen. Absent when nothing is wrong.
+            What isn't working, keyed by where it comes from (`account`,
+            `adapters.dropped`, `adapters.held`, `adapters.keys`,
+            `adapters.ledger`, `adapters.pending`, `adapters.recover`,
+            `adapters.replay`, `config`, `config-watch`, `focus`, `git`,
+            `git.commits`, `git.ledger`, `ipc`, `keystore`, `ledger`,
+            `ledger.presence`, `notifications`, `port`, `presence`, `procs`,
+            `scorer`, `state`, `uploader`), in words for the teen. A value
+            can join several problems of one source with "; ", so it is
+            shown whole. `pairtime doctor` prints each as a line of its own,
+            but for `keystore`, whose warning its keystore line gives.
+            Absent when nothing is wrong.
           additionalProperties:
             type: string
+    Footprint:
+      type: object
+      additionalProperties: false
+      required: [cpu_s]
+      description: >
+        What the agent costs the computer since it started, as the OS reports
+        it for the agent's own process: the R8 numbers `pairtime doctor
+        --report` shares (DESIGN 5.9, 9.7). footprint.yml measures the same
+        working set from outside the process, on Windows.
+      properties:
+        rss_bytes:
+          type: integer
+          minimum: 0
+          description: >
+            The resident set now, the working set on Windows. Absent where the
+            OS doesn't say, as on macOS.
+        peak_rss_bytes:
+          type: integer
+          minimum: 0
+          description: The most the resident set has been. Absent where the OS doesn't say.
+        cpu_s:
+          type: number
+          minimum: 0
+          description: The CPU time the agent has used, user and system, in seconds.
     Version:
       type: object
       additionalProperties: false
@@ -340,7 +380,7 @@ components:
     IPC:
       type: object
       additionalProperties: false
-      required: [stored, duplicates, refused]
+      required: [stored, duplicates, refused, spooled]
       description: >
         The per-user socket hooks hand their messages to the agent on
         (DESIGN 3.3).
@@ -366,6 +406,37 @@ components:
           type: integer
           minimum: 0
           description: Connections turned away because they didn't come from this user.
+        spooled:
+          $ref: "#/components/schemas/Spooled"
+    Spooled:
+      type: object
+      additionalProperties: false
+      required: [since, calls, prompts]
+      description: >
+        The hook calls made since `since`, a week before the reply, that
+        reached the agent only through the spool, as when it wasn't
+        running or didn't take them in time, of those its journal keeps.
+        Their events get `via = plugin`, so they earn side-door credit
+        (DESIGN 5.2), and `pairtime doctor` says how many there were.
+      properties:
+        since:
+          type: string
+          format: date-time
+          description: The start of the week counted, in UTC.
+        calls:
+          type: integer
+          minimum: 0
+        prompts:
+          type: integer
+          minimum: 0
+          description: How many of the calls were prompts.
+        unknown:
+          type: integer
+          minimum: 0
+          description: >
+            How many of the calls the journal can't tell prompts from
+            other events for, because a version before WP-AG6 recorded
+            them. Absent when none.
     Adapters:
       type: object
       additionalProperties: false

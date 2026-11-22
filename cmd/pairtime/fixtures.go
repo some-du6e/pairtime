@@ -151,9 +151,16 @@ func runScrub(args []string, stdout, stderr io.Writer) int {
 
 // machineKnown is what this machine says about its user. A value it can't
 // read is left out.
-func machineKnown() redact.Known {
+func machineKnown() redact.Known { return machineKnownWith(user.Current) }
+
+// machineKnownWith is machineKnown with the OS account from current, or
+// with none when current is nil, as doctor --report has it on Windows.
+func machineKnownWith(current func() (*user.User, error)) redact.Known {
 	var k redact.Known
-	if u, err := user.Current(); err == nil {
+	if current == nil {
+		current = func() (*user.User, error) { return nil, errors.ErrUnsupported }
+	}
+	if u, err := current(); err == nil {
 		name := u.Username
 		if i := strings.LastIndexByte(name, '\\'); i >= 0 {
 			name = name[i+1:] // DOMAIN\name on Windows

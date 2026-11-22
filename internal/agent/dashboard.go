@@ -5,9 +5,10 @@ package agent
 // The questions the CLI asks the agent over its socket or pipe (ipc.Ask),
 // which go through the same checks of who runs each end as a hook's
 // message, so they need no bearer token and their answers reach no other
-// user. The agent answers ipc.AskDashboardLink here, and
+// user. The agent answers ipc.AskDashboardLink here,
 // ipc.AskLastSession with what GET /v1/sessions/last gives (scorer.go's
-// answerQuestion, WP-AG4).
+// answerQuestion, WP-AG4), and ipc.AskStatus with what GET /v1/status
+// gives (http.go's status), for `pairtime doctor` (WP-AG6).
 
 import (
 	"encoding/json"
@@ -28,6 +29,8 @@ func (a *agent) answer(q string) (json.RawMessage, error) {
 		return json.Marshal(a.dashboardLink())
 	case ipc.AskLastSession:
 		return a.answerQuestion(q)
+	case ipc.AskStatus:
+		return json.Marshal(a.status())
 	}
 	return nil, ipc.ErrUnknownQuestion
 }

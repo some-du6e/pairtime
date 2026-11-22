@@ -108,6 +108,8 @@ func TestKnownValues(t *testing.T) {
 			`"Author:\nmaya.k@example.com"`, `"Author:\n[GIT_EMAIL]"`},
 		{"the git email goes between unicode escapes, as Go writes a trailer's angle brackets", teen,
 			"Maya Kowalski \x5cu003cmaya.k@example.com\x5cu003e", "[GIT_NAME] \x5cu003c[GIT_EMAIL]\x5cu003e"},
+		{"a known value that isn't UTF-8, which no text can hold, is passed over and the rest still go", Known{GitNames: []string{"Jos\xe9"}, Accounts: []string{"maya"}},
+			"maya and Jos", "[ACCOUNT] and Jos"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

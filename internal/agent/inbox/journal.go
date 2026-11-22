@@ -61,7 +61,22 @@ type Journal struct {
 type journalDay struct {
 	day string
 	ids map[[16]byte]struct{}
+	// spooled are the hook calls of the day that only the spool delivered,
+	// for doctor's spool line (DESIGN 5.2). They are few: a call goes to
+	// the spool only while the agent doesn't take it over the socket.
+	spooled []spooledCall
 }
+
+// spooledCall is a hook call only the spool delivered: when its sender
+// made it, and whether it was a prompt.
+type spooledCall struct {
+	sent time.Time
+	// prompt is nil for a line from before the journal recorded it.
+	prompt *bool
+}
+
+// KindHook is the inbox message kind of a hook call (hookpath.Kind).
+const KindHook = "hook"
 
 // journalLine is one line of a day file.
 type journalLine struct {
@@ -78,6 +93,10 @@ type journalLine struct {
 	Walk     int           `json:"walk,omitempty"`
 	EventVia event.Via     `json:"event_via,omitempty"`
 	Harness  event.Harness `json:"harness,omitempty"`
+	// Prompt says whether a hook call was a prompt, by the kind of event
+	// the agent took it as (Delivery.EventKind). It is absent from other
+	// messages, and from the lines of versions before it.
+	Prompt *bool `json:"prompt,omitempty"`
 }
 
 // OpenJournal opens the journal in dir, making dir if it has to, readable
@@ -106,11 +125,11 @@ func OpenJournal(dir string, now time.Time) (*Journal, error) {
 			}
 			continue
 		}
-		ids, err := readIDs(name)
+		ids, spooled, err := readDay(name)
 		if err != nil {
 			return nil, err
 		}
-		j.days = append(j.days, journalDay{day: day, ids: ids})
+		j.days = append(j.days, journalDay{day: day, ids: ids, spooled: spooled})
 	}
 	return j, nil
 }
@@ -125,36 +144,47 @@ func validDay(day string) bool {
 	return err == nil
 }
 
-// readIDs reads the ids in one day file, skipping lines that don't parse,
-// such as one cut short when the agent was killed.
-func readIDs(name string) (map[[16]byte]struct{}, error) {
+// readDay reads the ids in one day file, and the hook calls in it that
+// only the spool delivered, skipping lines that don't parse, such as one
+// cut short when the agent was killed.
+func readDay(name string) (map[[16]byte]struct{}, []spooledCall, error) {
 	f, err := os.Open(name)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 	ids := make(map[[16]byte]struct{})
+	var spooled []spooledCall
 	r := bufio.NewReader(f)
 	for {
 		line, long, err := readLine(r, maxJournalLine)
 		if errors.Is(err, io.EOF) {
-			return ids, nil
+			return ids, spooled, nil
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if long || len(line) == 0 {
 			continue
 		}
 		var l struct {
-			ID string `json:"id"`
+			ID     string    `json:"id"`
+			Kind   string    `json:"kind"`
+			Via    Via       `json:"via"`
+			Sent   time.Time `json:"sent"`
+			Prompt *bool     `json:"prompt"`
 		}
 		if json.Unmarshal(line, &l) != nil {
 			continue
 		}
-		if k, ok := idKey(l.ID); ok {
-			ids[k] = struct{}{}
+		k, ok := idKey(l.ID)
+		if !ok {
+			continue
 		}
+		if _, dup := ids[k]; !dup && l.Kind == KindHook && l.Via == ViaInbox {
+			spooled = append(spooled, spooledCall{sent: l.Sent, prompt: l.Prompt})
+		}
+		ids[k] = struct{}{}
 	}
 }
 
@@ -199,6 +229,11 @@ func (j *Journal) Store(d Delivery) (bool, error) {
 	if err := j.openDay(day); err != nil {
 		return false, err
 	}
+	var prompt *bool
+	if d.Kind == KindHook {
+		p := d.EventKind == event.KindPromptSubmit
+		prompt = &p
+	}
 	b, err := json.Marshal(journalLine{
 		ID:       d.ID,
 		Kind:     d.Kind,
@@ -210,6 +245,7 @@ func (j *Journal) Store(d Delivery) (bool, error) {
 		Walk:     len(d.Walk),
 		EventVia: d.EventVia,
 		Harness:  d.Harness,
+		Prompt:   prompt,
 	})
 	if err != nil {
 		return false, err
@@ -226,6 +262,9 @@ func (j *Journal) Store(d Delivery) (bool, error) {
 	}
 	j.torn = false
 	j.add(day, k)
+	if d.Kind == KindHook && d.Via == ViaInbox {
+		j.addSpooled(day, spooledCall{sent: d.Sent.UTC(), prompt: prompt})
+	}
 	j.stored++
 	return true, nil
 }
@@ -247,6 +286,44 @@ func (j *Journal) add(day string, k [16]byte) {
 		}
 	}
 	j.days = append(j.days, journalDay{day: day, ids: map[[16]byte]struct{}{k: {}}})
+}
+
+// addSpooled notes a hook call of day that only the spool delivered. The
+// day is there: add has just added it, or found it.
+func (j *Journal) addSpooled(day string, c spooledCall) {
+	for i := range j.days {
+		if j.days[i].day == day {
+			j.days[i].spooled = append(j.days[i].spooled, c)
+			return
+		}
+	}
+}
+
+// Spooled counts the hook calls made at since or after that only the spool
+// delivered, of those the journal still keeps, and how many of them were
+// prompts (DESIGN 5.2). The events of each such call get via = plugin, so
+// it earns side-door credit, and doctor says how many there were. Unknown
+// counts the calls whose lines don't say whether they were prompts, which
+// a version before this one wrote. A call counts by when its sender made
+// it (Message.Sent).
+func (j *Journal) Spooled(since time.Time) (calls, prompts, unknown uint64) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, d := range j.days {
+		for _, c := range d.spooled {
+			if c.sent.Before(since) {
+				continue
+			}
+			calls++
+			switch {
+			case c.prompt == nil:
+				unknown++
+			case *c.prompt:
+				prompts++
+			}
+		}
+	}
+	return calls, prompts, unknown
 }
 
 // openDay makes the file for day the one Deliver appends to. A new day also
