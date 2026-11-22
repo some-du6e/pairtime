@@ -171,7 +171,7 @@ func TestEnums(t *testing.T) {
 	}{
 		{"activities are pkg/event's", names(activities), names(event.Activities())},
 		{"evidence levels are pkg/event's", names(evidences), names(event.Evidences())},
-		{"slot labels are pkg/event's: the three side doors, then focus_unknown", names(slotLabels), names(event.SlotLabels())},
+		{"slot labels are pkg/event's", names(slotLabels), names(event.SlotLabels())},
 		{"bucket states are pkg/event's", names(bucketStates), names(event.BucketStates())},
 		{"witness labels are pkg/event's", names(witnesses), names(event.Witnesses())},
 		{"actors are the event schema's", names(actors), schema["actor"]},
@@ -263,12 +263,17 @@ func TestBucketShape(t *testing.T) {
 		{"side-door labels out of order break a rule", func(m map[string]any) {
 			slot(m, 0)["lbl"] = []any{"via_bridge", "via_track"}
 		}, shapeResult{CodeBadRule, "slots[0].lbl"}},
-		{"focus_unknown after a slot's side-door labels passes, a value of lbl and not a field (SM 2.5)", func(m map[string]any) {
+		{"focus_unknown after a slot's side-door labels, at level C, passes: a value of lbl and not a field (SM 2.5)", func(m map[string]any) {
+			slot(m, 0)["ev"] = "C"
 			slot(m, 0)["lbl"] = []any{"via_track", "via_plugin", "via_bridge", "focus_unknown"}
 		}, shapeResult{}},
 		{"focus_unknown before a side-door label breaks a rule", func(m map[string]any) {
+			slot(m, 0)["ev"] = "C"
 			slot(m, 0)["lbl"] = []any{"focus_unknown", "via_track"}
 		}, shapeResult{CodeBadRule, "slots[0].lbl"}},
+		{"a slot labeled focus_unknown above level C breaks MinuteBucket.Validate's rule, since its weakest second is level C", func(m map[string]any) {
+			slot(m, 0)["lbl"] = []any{"focus_unknown"}
+		}, shapeResult{CodeBadRule, "slots[0].ev"}},
 		{"five labels on a slot are too_many", func(m map[string]any) {
 			slot(m, 0)["lbl"] = []any{"via_track", "via_plugin", "via_bridge", "focus_unknown", "via_track"}
 		}, shapeResult{CodeTooMany, "slots[0].lbl"}},

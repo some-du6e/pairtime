@@ -604,8 +604,9 @@ type BucketSlot struct {
 	// which minutes rest on a side door (DESIGN 4.1 E-6), and focus_unknown
 	// when some of them are level C because the window in front was
 	// unknown (SM 2.5): via_track, via_plugin, via_bridge and
-	// focus_unknown, each at most once and in that order. A slot can mix
-	// those seconds with others, so focus_unknown doesn't fix Ev.
+	// focus_unknown, each at most once and in that order. A slot labeled
+	// focus_unknown is level C, since a slot claims no more than its
+	// weakest second (DESIGN 6.4).
 	Lbl []Label `json:"lbl,omitempty"`
 }
 
@@ -684,6 +685,11 @@ func (s BucketSlot) check(c *checker) {
 			c.addf("kind", "must be %q for reason %q, got %q", want, s.Why, s.Kind)
 		}
 		checkEnum(c, "ev", evidences, s.Ev)
+		// Every second credited where focus was unknown is level C, and a
+		// slot claims no more than its weakest second (SM 2.5, DESIGN 6.4).
+		if slices.Contains(s.Lbl, LabelFocusUnknown) && s.Ev != EvidenceC {
+			c.addf("ev", "must be %q in a slot labeled %q, whose weakest second is level C, got %q", EvidenceC, LabelFocusUnknown, s.Ev)
+		}
 		return
 	}
 	c.optKey("p", s.Project)
