@@ -294,14 +294,18 @@ func (t *Tailer) runLookback() {
 	t.wake()
 }
 
-// errRestart says a file was rewound while its history was read, so the
-// job starts again from the cursors.
-var errRestart = errors.New("tailers: a file was rewound during lookback")
+// restartError says a file was rewound while its history was read, so the
+// job starts again from the cursors. It is a type rather than an
+// errors.New value, so the package does no work at init: the hook's
+// binary links it.
+type restartError struct{}
+
+func (restartError) Error() string { return "tailers: a file was rewound during lookback" }
 
 func (t *Tailer) lookbackOnce() error {
 	for {
 		err := t.lookbackJob()
-		if !errors.Is(err, errRestart) {
+		if _, again := err.(restartError); !again {
 			return err
 		}
 	}
@@ -466,7 +470,7 @@ func (t *Tailer) deliverHistory(f *file, b Batch) error {
 		case stopped:
 			return nil
 		case rewound:
-			return errRestart
+			return restartError{}
 		}
 		select {
 		case <-t.lb.poke:
