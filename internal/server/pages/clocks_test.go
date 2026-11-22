@@ -359,14 +359,14 @@ func TestAgentLine(t *testing.T) {
 		{
 			name:  "past the hours the day has had, it reads as every agent's time added up",
 			v:     unattendedView,
-			today: "Your agents worked on their own for 31h 5m, adding up every agent's time.",
+			today: "Your agents worked on their own for 31h 5m, adding up every agent&#39;s time.",
 		},
 		{
 			name: "it goes by the hours so far today, not a whole day: 10h by 06:00 took agents working at once",
 			v: func(t *testing.T) dashboard.View {
 				return twoAt(t, time.Date(2026, 11, 20, 6, 0, 0, 0, time.UTC), "UTC", 5*3600)
 			},
-			today: "Your agents worked on their own for 10h, adding up every agent's time.",
+			today: "Your agents worked on their own for 10h, adding up every agent&#39;s time.",
 		},
 		{
 			name: "the same 10h by 23:00 reads as one agent's",
@@ -387,7 +387,7 @@ func TestAgentLine(t *testing.T) {
 			v: func(t *testing.T) dashboard.View {
 				return twoAt(t, time.Date(2026, 11, 20, 15, 0, 0, 0, time.UTC), "America/New_York", 5.5*3600)
 			},
-			today: "Your agents worked on their own for 11h, adding up every agent's time.",
+			today: "Your agents worked on their own for 11h, adding up every agent&#39;s time.",
 		},
 		{
 			name: "the week's line is a sum once one of its days had more agent time than hours, though today's isn't",
@@ -397,7 +397,7 @@ func TestAgentLine(t *testing.T) {
 					timeRow{project: "p1", agent: true, s: 3600})
 			},
 			today: "Your agent worked on its own for 1h.",
-			week:  "Your agents worked on their own for 31h, adding up every agent's time.",
+			week:  "Your agents worked on their own for 31h, adding up every agent&#39;s time.",
 		},
 		{
 			name: "a day whose midnight the clocks skip is 23 hours long, so 23h 30m of agent time on it passes it: Santiago's 2027-09-05",
@@ -405,7 +405,7 @@ func TestAgentLine(t *testing.T) {
 				return dayView(t, time.Date(2027, 9, 6, 12, 0, 0, 0, time.UTC), "America/Santiago", "",
 					timeRow{project: "p1", ago: 1, agent: true, s: 11.75 * 3600}, timeRow{project: "p2", ago: 1, agent: true, s: 11.75 * 3600})
 			},
-			week: "Your agents worked on their own for 23h 30m, adding up every agent's time.",
+			week: "Your agents worked on their own for 23h 30m, adding up every agent&#39;s time.",
 		},
 		{
 			name: "a named agent reads as several of it",
@@ -413,7 +413,7 @@ func TestAgentLine(t *testing.T) {
 				return dayView(t, time.Date(2026, 11, 20, 6, 0, 0, 0, time.UTC), "UTC", "Claude Code",
 					timeRow{project: "p1", agent: true, s: 4 * 3600}, timeRow{project: "p2", agent: true, s: 4 * 3600})
 			},
-			today: "Claude Code agents worked on their own for 8h, adding up every agent's time.",
+			today: "Claude Code agents worked on their own for 8h, adding up every agent&#39;s time.",
 		},
 	}
 	for _, tt := range tests {
