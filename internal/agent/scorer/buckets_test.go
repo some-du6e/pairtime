@@ -116,12 +116,12 @@ func everyFixture(t *testing.T) []*timelines.Fixture {
 // level and labels from both. The reason may differ: slotSummary takes the
 // largest entry's, Bucket the reason with the most credit. The side-door
 // timelines hold slots with labels, so a summary that dropped one fails
-// here. Where a timeline credits a slot at two levels, a summary that took
-// the largest entry's level fails too; TestSlotSummary's mixed slot holds
-// that rule either way.
+// here. Where a timeline has a slot whose largest entry isn't at its
+// weakest level, a summary that took the largest entry's level fails too;
+// TestSlotSummary's mixed slot holds that rule either way.
 func TestSlotSummaryMatchesPkgScore(t *testing.T) {
 	table := testTable()
-	var mixed, labeled int
+	var disagree, labeled int
 	for _, f := range everyFixture(t) {
 		t.Run(f.Name+": the agent's slots claim what pkg/score's do", func(t *testing.T) {
 			_, out := score.Step(score.NewState(table, fixtureDevice(f)), f.Events)
@@ -133,8 +133,8 @@ func TestSlotSummaryMatchesPkgScore(t *testing.T) {
 				b := m.Bucket(score.BucketInfo{Table: table, Device: "d_test", State: event.StateFinal, Witness: event.Witnessed})
 				for _, s := range m.Slots {
 					got, want := slotSummary(s.Credit), b.Slots[(s.Slot-m.Start)/event.SlotMS]
-					if len(levelsOf(s.Credit)) > 1 {
-						mixed++
+					if largestLevel(s.Credit) != weakestLevel(s.Credit) {
+						disagree++
 					}
 					if len(want.Lbl) > 0 {
 						labeled++
@@ -154,20 +154,38 @@ func TestSlotSummaryMatchesPkgScore(t *testing.T) {
 			t.Error("no timeline's slot has a label")
 		}
 	})
-	t.Run("a slot credited at two levels, whose weakest level isn't its largest entry's, is compared above", func(t *testing.T) {
-		if mixed == 0 {
-			t.Skip("no timeline credits a slot at two levels yet; TestSlotSummary's mixed slot holds the rule")
+	t.Run("a slot whose largest entry isn't at its weakest level, where the two rules disagree, is compared above", func(t *testing.T) {
+		if disagree == 0 {
+			t.Skip("no timeline has a slot whose largest entry isn't at its weakest level yet; TestSlotSummary's mixed slot holds the rule")
 		}
 	})
 }
 
-// levelsOf returns the levels a slot's credited entries carry, each once.
-func levelsOf(c score.Credit) []event.Evidence {
-	var out []event.Evidence
-	for _, e := range c.Credited {
-		if e.Halves > 0 && !slices.Contains(out, e.Level) {
-			out = append(out, e.Level)
+// largestLevel is the level of a slot's largest credited entry, the first
+// of them on a tie, the entry slotSummary takes the project and reason
+// from; "" for a slot nothing credited.
+func largestLevel(c score.Credit) event.Evidence {
+	best := -1
+	for i, e := range c.Credited {
+		if e.Halves > 0 && (best < 0 || e.Halves > c.Credited[best].Halves) {
+			best = i
 		}
 	}
-	return out
+	if best < 0 {
+		return ""
+	}
+	return c.Credited[best].Level
+}
+
+// weakestLevel is the weakest level among a slot's credited entries, the
+// level pkg/score's Minute.Bucket gives the slot; "" for a slot nothing
+// credited.
+func weakestLevel(c score.Credit) event.Evidence {
+	var level event.Evidence
+	for _, e := range c.Credited {
+		if e.Halves > 0 {
+			level = weakest(level, e.Level)
+		}
+	}
+	return level
 }

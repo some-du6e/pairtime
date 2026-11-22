@@ -539,9 +539,11 @@ func (d *Desktop) Locked() (bool, error) {
 // the X connection. So a nil channel isn't what says whether focus is
 // known. The channel says when focus turns unknown, with a report whose
 // Unknown is set: first thing when the watcher starts without such a
-// window manager, and when the X connection drops. The first report once
-// focus is known again, and the first after each reconnect, names the
-// window focused then. Status().Focus says the same at any moment.
+// window manager, and when the X connection drops. The first report after
+// Open or a reconnect is a report that focus is unknown when no window
+// manager keeps _NET_ACTIVE_WINDOW, and otherwise names the window focused
+// then; the first report once focus is known again names that window.
+// Status().Focus says the same at any moment.
 func (d *Desktop) Focus() <-chan Focus { return d.focus }
 
 // Power returns suspends, resumes, locks and unlocks. It is nil when

@@ -183,10 +183,18 @@ func TestMacLoopFocusUnknown(t *testing.T) {
 			}
 			if tc.loop.err == nil {
 				// Run is serving the Loop; the observer's report comes after
-				// Ready, so wait for the record before stopping it.
+				// Ready, so wait for the record before stopping it. In the
+				// agent the Loop runs until the agent stops, and by then the
+				// focus component has stopped too, so a record that waited
+				// for Run to return would never be written.
 				deadline := time.Now().Add(10 * time.Second)
 				for w.Status().Records == 0 && time.Now().Before(deadline) {
 					time.Sleep(time.Millisecond)
+				}
+				if w.Status().Records == 0 {
+					cancel()
+					<-ran
+					t.Fatal("no os.focus while the Loop runs; it must not wait for Run to return")
 				}
 			}
 			cancel()
