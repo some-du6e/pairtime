@@ -37,10 +37,10 @@
 //     than MaxLine is handed over without its bytes, marked too long.
 //
 // The first time the tailer lists a root, it takes up every file there at
-// the end of its last complete line, and reads none of what came before:
-// that is the time before pairtime read the root, which hooks recorded, if
-// any did, and the lookback reader reads at low priority for the rest
-// (WP-AD3, PR 2). A file that appears after that is read from its start.
+// the end of its last complete line: what came before is the time before
+// pairtime read the root, which lookback reads, at low priority, for the
+// files written in the last LookbackWindow (lookback.go). A file that
+// appears after that is read from its start.
 package tailers
 
 import (
@@ -132,6 +132,11 @@ type Line struct {
 	// Hash names the line's content, which the cursor keeps for the last
 	// line handed over (Advance).
 	Hash string
+	// Lookback, set for a line of a file's history (lookback.go), is the
+	// Unix ms its records may start at, LookbackWindow before the tailer
+	// took the file up: the agent keeps those of its records that fall
+	// between then and the start of its ledger.
+	Lookback int64
 }
 
 // Batch is lines of one file, in the order the file holds them.
@@ -172,6 +177,14 @@ type Options struct {
 	Log *slog.Logger
 	// NoNotify watches with polls and rescans alone, without fsnotify.
 	NoNotify bool
+	// Lookback starts lookback's reader, a child process that runs
+	// ServeLookback at low priority. Nil reads no file's history: a
+	// root's first listing takes its files up at their end, and that is
+	// all.
+	Lookback func() (Child, error)
+	// Progress, when set, hears how far lookback has read, on the
+	// goroutine that reads.
+	Progress func(Progress)
 }
 
 // Tailer watches log roots and hands new lines of their files over.
@@ -201,6 +214,8 @@ type Tailer struct {
 	jobs    []*sched.Job
 	poll    *sched.Job
 	every   time.Duration // poll's interval, 0 while it is stopped
+
+	lb lookbackState
 }
 
 // file is what the tailer knows of one log file.
@@ -225,6 +240,11 @@ type file struct {
 	// rewound that its adapter has it read again from its start (Rewind).
 	grew, statAt, idleAt  time.Time
 	due, waiting, rewound bool
+	// hist is where the file's history ends, the lines before it being
+	// lookback's, and histFrom when their records may start (Line.Lookback),
+	// both 0 for a file with none. histDone says lookback is done with it.
+	hist, histFrom int64
+	histDone       bool
 }
 
 // active is when f was last written, by the tailer's sight or its mtime.
@@ -253,6 +273,10 @@ type savedFile struct {
 	Read    int64         `json:"read"`
 	Resume  int64         `json:"resume"`
 	Hash    string        `json:"hash,omitempty"`
+	// Hist, HistFrom and HistDone are the file's history (file.hist).
+	Hist     int64 `json:"hist,omitempty"`
+	HistFrom int64 `json:"hist_from,omitempty"`
+	HistDone bool  `json:"hist_done,omitempty"`
 }
 
 // New makes a Tailer with the cursors Store kept. It reads nothing until
@@ -276,6 +300,7 @@ func New(opts Options) *Tailer {
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
 	}
+	t.lb.poke = make(chan struct{}, 1)
 	for i := range t.roots {
 		t.roots[i].Dir = filepath.Clean(t.roots[i].Dir)
 	}
@@ -302,11 +327,13 @@ func (t *Tailer) load() {
 		t.listed[d] = true
 	}
 	for _, sf := range st.Files {
-		if sf.Path == "" || !filepath.IsAbs(sf.Path) || t.files[sf.Path] != nil || sf.Read < 0 || sf.Resume < 0 || sf.Resume > sf.Read {
+		if sf.Path == "" || !filepath.IsAbs(sf.Path) || t.files[sf.Path] != nil || sf.Read < 0 || sf.Resume < 0 || sf.Resume > sf.Read ||
+			sf.Hist < 0 {
 			continue
 		}
 		t.files[sf.Path] = &file{key: sf.Path, path: sf.Path, harness: sf.Harness, id: sf.ID, size: sf.Size,
-			mtime: time.Unix(0, sf.MTime), read: sf.Read, resume: sf.Resume, hash: sf.Hash, pos: sf.Resume}
+			mtime: time.Unix(0, sf.MTime), read: sf.Read, resume: sf.Resume, hash: sf.Hash, pos: sf.Resume,
+			hist: sf.Hist, histFrom: sf.HistFrom, histDone: sf.HistDone}
 	}
 }
 
@@ -321,7 +348,8 @@ func (t *Tailer) Put() (bool, error) {
 	st := saved{V: stateVersion, Files: make([]savedFile, 0, len(t.files))}
 	for _, f := range t.files {
 		st.Files = append(st.Files, savedFile{Path: f.path, Harness: f.harness, ID: f.id, Size: f.size,
-			MTime: f.mtime.UnixNano(), Read: f.read, Resume: f.resume, Hash: f.hash})
+			MTime: f.mtime.UnixNano(), Read: f.read, Resume: f.resume, Hash: f.hash,
+			Hist: f.hist, HistFrom: f.histFrom, HistDone: f.histDone})
 	}
 	for d := range t.listed {
 		st.Roots = append(st.Roots, d)
@@ -391,6 +419,10 @@ func (t *Tailer) Poke() {
 		}
 	}
 	t.mu.Unlock()
+	select {
+	case t.lb.poke <- struct{}{}:
+	default:
+	}
 	t.wake()
 }
 
@@ -488,8 +520,13 @@ func (t *Tailer) Start() func() {
 	return func() {
 		t.mu.Lock()
 		t.stopped = true
+		child := t.lb.child
 		t.mu.Unlock()
 		close(t.stop)
+		if child != nil {
+			child.Kill()
+		}
+		t.lb.wg.Wait()
 		<-t.done
 		for _, j := range t.jobs {
 			j.Stop()
@@ -587,6 +624,7 @@ func (t *Tailer) Step() {
 	}
 	t.watch(now)
 	t.pace(now)
+	t.lookbackDue(now)
 }
 
 func (t *Tailer) stopping() bool {
@@ -683,7 +721,7 @@ func (t *Tailer) walk(r Root, dir, rel string, depth int, now time.Time, known m
 		switch {
 		case f == nil && first:
 			t.mu.Unlock()
-			t.adopt(r, full)
+			t.adopt(r, full, now)
 			continue
 		case f == nil:
 			// A file that came since the root was listed: a new session.
@@ -697,8 +735,12 @@ func (t *Tailer) walk(r Root, dir, rel string, depth int, now time.Time, known m
 }
 
 // adopt takes the file at path up at the end of its last complete line,
-// as the tailer does for each file of a root it lists the first time.
-func (t *Tailer) adopt(r Root, path string) {
+// as the tailer does for each file of a root it lists the first time. With
+// lookback, a file written in the last LookbackWindow has what came before
+// as its history, which the tailer leaves to lookback: its cursor starts
+// at the file's start, and the tailer reads it live from where lookback
+// gets to.
+func (t *Tailer) adopt(r Root, path string, now time.Time) {
 	fh, err := os.Open(path)
 	if err != nil {
 		return
@@ -715,8 +757,13 @@ func (t *Tailer) adopt(r Root, path string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.files[path] == nil {
-		t.files[path] = &file{key: path, path: path, harness: r.Harness, id: fileID(fh, fi), size: fi.Size(),
+		f := &file{key: path, path: path, harness: r.Harness, id: fileID(fh, fi), size: fi.Size(),
 			mtime: fi.ModTime(), read: end, resume: end, pos: end, hash: hash}
+		if t.opts.Lookback != nil && end > 0 && now.Sub(fi.ModTime()) <= LookbackWindow {
+			f.hist, f.histFrom = end, now.Add(-LookbackWindow).UnixMilli()
+			f.read, f.resume, f.pos, f.hash = 0, 0, 0, ""
+		}
+		t.files[path] = f
 	}
 }
 
@@ -813,7 +860,7 @@ func (t *Tailer) dueFiles() []*file {
 	defer t.mu.Unlock()
 	var out []*file
 	for _, f := range t.files {
-		if f.due && !f.waiting {
+		if f.due && !f.waiting && !f.inHistory() {
 			out = append(out, f)
 		}
 	}
@@ -853,7 +900,7 @@ func (t *Tailer) read(f *file, now time.Time) {
 		f.grew = now
 	}
 	f.id, f.size, f.mtime = id, size, fi.ModTime()
-	pos, read := f.pos, f.read
+	pos, read, hist, histFrom := f.pos, f.read, f.hist, f.histFrom
 	t.mu.Unlock()
 
 	if pos < size {
@@ -862,7 +909,7 @@ func (t *Tailer) read(f *file, now time.Time) {
 		}
 		br := bufio.NewReaderSize(fh, readBuffer)
 		for {
-			batch, next, more := t.lines(br, f, pos, read)
+			batch, next, more := t.lines(br, f, pos, read, hist, histFrom)
 			if len(batch) > 0 {
 				n := t.opts.Deliver(batch)
 				if n < len(batch) {
@@ -913,11 +960,12 @@ func (t *Tailer) idle(f *file, now time.Time) {
 
 // lines reads the next lines of f from pos, which br reads from, up to a
 // batch's worth. read is how far an earlier run handed lines over: those
-// ending by then are replays. It returns the lines, where the next one
+// ending by then are replays. Those that end by hist, f's history, carry
+// histFrom (Line.Lookback). It returns the lines, where the next one
 // starts, and whether there may be more after the batch. A last line with
 // no newline yet isn't one, and blank lines are taken into the next line's
 // span, so each line starts where the one before it ended.
-func (t *Tailer) lines(br *bufio.Reader, f *file, pos, read int64) (Batch, int64, bool) {
+func (t *Tailer) lines(br *bufio.Reader, f *file, pos, read, hist, histFrom int64) (Batch, int64, bool) {
 	var batch Batch
 	bytesIn := 0
 	start := pos
@@ -935,6 +983,9 @@ func (t *Tailer) lines(br *bufio.Reader, f *file, pos, read int64) (Batch, int64
 		}
 		l := Line{Harness: f.harness, Log: adapters.LogLine{File: f.key, Path: f.path, Offset: start, End: end,
 			Replay: end <= read, TooLong: tooLong}}
+		if end <= hist {
+			l.Lookback = histFrom
+		}
 		if !tooLong {
 			l.Bytes, l.Hash = body, hashLine(body)
 		}

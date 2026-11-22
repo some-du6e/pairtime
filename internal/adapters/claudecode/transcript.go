@@ -325,3 +325,135 @@ func (a *Adapter) LogHint(raw adapters.RawRecord) (string, adapters.LogRoot, boo
 	}
 	return p, projectsRoot(root), true
 }
+
+// TrimLog returns line with only what the reader reads of it, which it
+// reads as it reads line (adapters.LogReader): the fields entry decodes,
+// less the parts of them no record is made from. A tool result's text
+// stays only for a failed call, whose first line says a command's exit
+// code, a Write's content only for a file it made, and a tool's result
+// text only when it says the person refused the call. A message keeps
+// every part, so each keeps its place, which names its record.
+func (*Adapter) TrimLog(line []byte) ([]byte, error) {
+	e, err := decodeEntry(line)
+	if err != nil {
+		return nil, err
+	}
+	// Without HTML escaping, the markup of slash commands and tool output
+	// stays as short as the transcript has it.
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(trimEntry(e)); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
+}
+
+// trimmedEntry is an entry as TrimLog writes it, under entry's names.
+type trimmedEntry struct {
+	Type               string             `json:"type"`
+	Subtype            string             `json:"subtype,omitempty"`
+	SessionID          string             `json:"sessionId,omitempty"`
+	PromptID           string             `json:"promptId,omitempty"`
+	Timestamp          string             `json:"timestamp,omitempty"`
+	Version            string             `json:"version,omitempty"`
+	CWD                string             `json:"cwd,omitempty"`
+	Entrypoint         *string            `json:"entrypoint,omitempty"`
+	PromptSource       *string            `json:"promptSource,omitempty"`
+	TurnOrigin         *string            `json:"turnOrigin,omitempty"`
+	PermissionMode     string             `json:"permissionMode,omitempty"`
+	IsSidechain        bool               `json:"isSidechain,omitempty"`
+	Message            *trimmedMessage    `json:"message,omitempty"`
+	ToolUseResult      any                `json:"toolUseResult,omitempty"`
+	ToolDenialKind     string             `json:"toolDenialKind,omitempty"`
+	PermissionDecision *trimmedPermission `json:"permissionDecision,omitempty"`
+	Operation          string             `json:"operation,omitempty"`
+	Content            string             `json:"content,omitempty"`
+	Attachment         *attachment        `json:"attachment,omitempty"`
+}
+
+type trimmedPermission struct {
+	Source string `json:"source"`
+}
+
+type trimmedMessage struct {
+	ID         string `json:"id,omitempty"`
+	StopReason string `json:"stop_reason,omitempty"`
+	// Content is the message's string, or its parts.
+	Content any `json:"content"`
+}
+
+type trimmedPart struct {
+	Type      string    `json:"type"`
+	Text      string    `json:"text,omitempty"`
+	ID        string    `json:"id,omitempty"`
+	Name      string    `json:"name,omitempty"`
+	Input     *useInput `json:"input,omitempty"`
+	ToolUseID string    `json:"tool_use_id,omitempty"`
+	IsError   bool      `json:"is_error,omitempty"`
+	Content   string    `json:"content,omitempty"`
+}
+
+type trimmedResponse struct {
+	Type            string  `json:"type,omitempty"`
+	FilePath        string  `json:"filePath,omitempty"`
+	Content         string  `json:"content,omitempty"`
+	StructuredPatch []patch `json:"structuredPatch,omitempty"`
+	Stdout          string  `json:"stdout,omitempty"`
+	Stderr          string  `json:"stderr,omitempty"`
+}
+
+// rejectedText is the result text of a tool call the person refused.
+const rejectedText = "User rejected tool use"
+
+func trimEntry(e *entry) trimmedEntry {
+	t := trimmedEntry{Type: e.Type, Subtype: e.Subtype, SessionID: e.SessionID, PromptID: e.PromptID,
+		Timestamp: e.Timestamp, Version: e.Version, CWD: e.CWD, Entrypoint: e.Entrypoint,
+		PromptSource: e.PromptSource, TurnOrigin: e.TurnOrigin, PermissionMode: e.PermissionMode,
+		IsSidechain: e.IsSidechain, ToolDenialKind: e.ToolDenialKind, Operation: e.Operation,
+		Attachment: e.Attachment}
+	if e.Type == "queue-operation" {
+		// The message it queues. Other entries' content, such as a system
+		// entry's command output, the reader doesn't read.
+		t.Content = string(e.Content)
+	}
+	if s := e.PermissionDecision.Source; s != "" {
+		t.PermissionDecision = &trimmedPermission{Source: s}
+	}
+	if m := e.Message; m != nil {
+		tm := &trimmedMessage{ID: m.ID, StopReason: m.StopReason}
+		if m.Content.IsText {
+			tm.Content = m.Content.Text
+		} else {
+			parts := make([]trimmedPart, len(m.Content.Parts))
+			for i, p := range m.Content.Parts {
+				tp := trimmedPart{Type: p.Type, Text: p.Text, ID: p.ID, Name: p.Name, ToolUseID: p.ToolUseID, IsError: p.IsError}
+				if p.Input != (useInput{}) {
+					in := p.Input
+					tp.Input = &in
+				}
+				if p.IsError {
+					tp.Content = string(p.Content)
+				}
+				parts[i] = tp
+			}
+			tm.Content = parts
+		}
+		t.Message = tm
+	}
+	if r := e.ToolUseResult; r.Set {
+		switch {
+		case r.Text == rejectedText:
+			t.ToolUseResult = rejectedText
+		case r.Resp.Type != "" || r.Resp.FilePath != "" || r.Resp.StructuredPatch != nil || r.Resp.Stdout != "" ||
+			r.Resp.Stderr != "" || r.Resp.Content != "":
+			resp := trimmedResponse{Type: r.Resp.Type, FilePath: r.Resp.FilePath, StructuredPatch: r.Resp.StructuredPatch,
+				Stdout: r.Resp.Stdout, Stderr: r.Resp.Stderr}
+			if len(r.Resp.StructuredPatch) == 0 && r.Resp.Type == "create" {
+				resp.Content = r.Resp.Content
+			}
+			t.ToolUseResult = resp
+		}
+	}
+	return t
+}

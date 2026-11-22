@@ -52,6 +52,8 @@ type rig struct {
 	// end otherwise: what the adapter needs a restart to start from.
 	take   func(Line) bool
 	resume func(Line) int64
+	// lookback, when set, starts lookback's child (Options.Lookback).
+	lookback func() (Child, error)
 }
 
 func newRig(t *testing.T) *rig {
@@ -71,6 +73,7 @@ func (r *rig) open() {
 		Forget:   func(_ event.Harness, file string) { r.forgot = append(r.forgot, file) },
 		Now:      func() time.Time { return r.now },
 		NoNotify: true,
+		Lookback: r.lookback,
 	})
 }
 
