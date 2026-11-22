@@ -12,11 +12,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/adapters/git"
 	"github.com/some-du6e/pairtime/internal/agent/account"
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/internal/agent/projects"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/score"
@@ -139,6 +141,37 @@ func (a *agent) namesOn() (map[string]string, bool) {
 // name of a project the owner hid on their dashboard.
 func (a *agent) hideName(key string) error {
 	return config.HideName(a.dirs.ConfigFile(), key)
+}
+
+// ownKeys is the uploader's OwnKeys: the keys of the projects this
+// computer has seen, which a name may go for. They are the git adapter's
+// project map's keys, and each key one of its repos had before, and the
+// keys in today's and yesterday's rollups, which hold a folder without git
+// too. An older project the server holds minutes of has a code from the
+// server, which the uploader takes as well, so it reads no more days.
+func (a *agent) ownKeys() map[string]bool {
+	own := make(map[string]bool)
+	var m git.ProjectMap
+	if a.state != nil {
+		if _, err := a.state.Get(projectsKey, &m); err != nil {
+			a.log.Warn("the project map in state.json doesn't read, so names go only for the projects of the last two days' rollups", "err", err)
+		}
+	}
+	for _, r := range m.Repos {
+		own[r.Key] = true
+		for _, key := range r.Aliases {
+			own[key] = true
+		}
+	}
+	today := time.Now().In(a.zone()).Format(time.DateOnly)
+	keys, err := projects.DayKeys(a.dirs.Days(), projects.Dates(today, 2))
+	if err != nil {
+		a.log.Warn("a day's rollup doesn't read, so a name for one of its projects may wait", "err", err)
+	}
+	for _, key := range keys {
+		own[key] = true
+	}
+	return own
 }
 
 // uploadMode is config.toml's mode as uploads obey it, for GET /v1/status.
@@ -285,6 +318,7 @@ func (a *agent) startUploader(w *ledger.Writer) func() {
 		Flush:     flush,
 		Names:     a.namesOn,
 		HideName:  a.hideName,
+		OwnKeys:   a.ownKeys,
 		Problem:   func(msg string) { a.setProblem("uploader", msg) },
 		Log:       a.log.With("component", "uploader"),
 	})

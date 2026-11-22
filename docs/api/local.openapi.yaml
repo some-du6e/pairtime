@@ -233,7 +233,9 @@ paths:
         "409":
           description: >
             pairtime couldn't change config.toml, as when it doesn't parse or
-            holds the project as an inline table. The text says what to write
+            holds the project as an inline table, or the name is one the
+            owner hid on the dashboard that pairtime couldn't turn off there
+            then, which config.toml still has on. The text says what to write
             by hand, and the file stays as it was.
           content:
             text/plain:
@@ -891,8 +893,11 @@ components:
           description: >
             The name pairtime shows for the project on this computer: the
             folder of its repo's main checkout, never a worktree's, or a bare
-            repo's folder without `.git`. Empty when it has none, as a plain
-            folder has none.
+            repo's folder without `.git`. For a repo whose git directory
+            lives apart from its checkout (`git init --separate-git-dir`),
+            it is that directory's folder, since git doesn't record the
+            checkout there. Empty when it has none, as a plain folder has
+            none.
         state:
           type: string
           enum: ["off", "on", sending, removing, hidden]
@@ -902,8 +907,9 @@ components:
             in config.toml and goes with the uploader's next request, once
             the computer is online; `removing` is off in config.toml and
             still shown until that request; `hidden` is one the owner hid on
-            the dashboard, which pairtime then turned off here, so it stays
-            hidden until they turn it on again on this computer.
+            the dashboard, which pairtime then turned off here, or, when it
+            couldn't change config.toml, no longer sends, so it stays hidden
+            until they turn it on again on this computer.
         label:
           type: string
           description: >

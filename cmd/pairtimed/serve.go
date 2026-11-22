@@ -350,7 +350,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		// on, never set one (D-owner-names).
 		HideName: func(ctx context.Context, account, project string) error {
 			return w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
-				return projectnames.Hide(ctx, tx, account, project)
+				return projectnames.Hide(ctx, tx, account, project, time.Now().UnixMilli())
 			})
 		},
 		SameOrigin: signIn.SameOrigin,

@@ -167,6 +167,11 @@ type Options struct {
 	// the owner hid on their dashboard (project-names-v1 2), so it isn't
 	// sent again until they turn it on on the computer.
 	HideName func(key string) error
+	// OwnKeys returns the keys of the projects the computer has seen,
+	// which a name may go for besides the keys the server gave a code
+	// (project-names-v1 2). The uploader asks only when a name it would
+	// send has no code. Nil lets every key config.toml turns on go.
+	OwnKeys func() map[string]bool
 	// Problem gets what doctor should hear about uploads, and "" once it
 	// is solved.
 	Problem func(msg string)
@@ -1788,7 +1793,7 @@ func (u *Uploader) setProblem(source, msg string) {
 		return
 	}
 	var all []string
-	for _, s := range []string{"login", "local-only", "server", "chain", "receipts", "buckets", "names", "hidden", "local"} {
+	for _, s := range []string{"login", "local-only", "server", "chain", "receipts", "buckets", "names", "hidden", "names-elsewhere", "local"} {
 		if m := u.problems[s]; m != "" {
 			all = append(all, m)
 		}

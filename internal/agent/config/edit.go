@@ -3,6 +3,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -14,6 +15,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/BurntSushi/toml"
 
@@ -168,11 +170,25 @@ func HideName(name, key string) error {
 	})
 }
 
+// editMu serializes this process's edits of config.toml, as the
+// uploader turning off a name hidden on the dashboard while the local API
+// turns another on (rewrite).
+var editMu sync.Mutex
+
+// beforeReplace runs, when set, after rewrite has made its new text and
+// before it reads the file again: a test's other writer.
+var beforeReplace func(name string)
+
 // rewrite changes the config.toml at name with change, the text edit, and
 // checks that the file then parses to what it parsed to before with apply
 // done to it, and to nothing else. byHand says what the teen can write
-// instead, when it refuses.
+// instead, when it refuses. It holds editMu, and reads the file again
+// just before it replaces it: when another process changed it meanwhile,
+// as `pairtime projects show-name` beside the running agent, it starts
+// over from the new text, so neither change undoes the other.
 func rewrite(name, byHand string, change func(text string) string, apply func(*Config)) error {
+	editMu.Lock()
+	defer editMu.Unlock()
 	if fi, err := os.Lstat(name); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
 		target, err := filepath.EvalSymlinks(name)
 		if err != nil {
@@ -180,23 +196,53 @@ func rewrite(name, byHand string, change func(text string) string, apply func(*C
 		}
 		name = target
 	}
+	byHand += " in " + name + " by hand"
+	for try := 0; ; try++ {
+		data, err := readEdited(name)
+		if err != nil {
+			return err
+		}
+		out, err := edited(string(data), byHand, change, apply)
+		if err != nil || out == string(data) {
+			return err
+		}
+		if beforeReplace != nil {
+			beforeReplace(name)
+		}
+		now, err := readEdited(name)
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(now, data) {
+			return home.WriteFile(name, []byte(out))
+		}
+		if try == 2 {
+			return fmt.Errorf("config: config.toml kept changing while pairtime changed it, so it didn't; try again, or %s", byHand)
+		}
+	}
+}
+
+// readEdited reads the config.toml at name for an edit: defaultFile when
+// there is none.
+func readEdited(name string) ([]byte, error) {
 	data, err := os.ReadFile(name)
 	if errors.Is(err, fs.ErrNotExist) {
-		data, err = []byte(defaultFile), nil
+		return []byte(defaultFile), nil
 	}
-	if err != nil {
-		return err
-	}
-	text := string(data)
-	byHand += " in " + name + " by hand"
+	return data, err
+}
+
+// edited returns text with change made, once it checked that it parses
+// to what text parsed to with apply done to it, and to nothing else.
+func edited(text, byHand string, change func(text string) string, apply func(*Config)) (string, error) {
 	if _, err := toml.Decode(text, &fileConfig{}); err != nil {
-		return fmt.Errorf("config: config.toml doesn't parse, so pairtime didn't change it (%v); %s", err, byHand)
+		return "", fmt.Errorf("config: config.toml doesn't parse, so pairtime didn't change it (%v); %s", err, byHand)
 	}
 	if strings.Contains(text, `"""`) || strings.Contains(text, `'''`) {
 		// A multi-line string could hold a line that looks like a key.
-		return fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", byHand)
+		return "", fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", byHand)
 	}
-	before, _ := Parse(data)
+	before, _ := Parse([]byte(text))
 	out := change(text)
 	after, _ := Parse([]byte(out))
 	want := before
@@ -209,12 +255,9 @@ func rewrite(name, byHand string, change func(text string) string, apply func(*C
 		want.Projects = nil
 	}
 	if !reflect.DeepEqual(after, want) {
-		return fmt.Errorf("config: pairtime couldn't change config.toml without changing other settings, so it didn't; %s", byHand)
+		return "", fmt.Errorf("config: pairtime couldn't change config.toml without changing other settings, so it didn't; %s", byHand)
 	}
-	if out == text {
-		return nil
-	}
-	return home.WriteFile(name, []byte(out))
+	return out, nil
 }
 
 // patch rewrites the top-level mode line and the url line of [server],

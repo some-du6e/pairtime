@@ -59,12 +59,15 @@ type namesBody struct {
 }
 
 // namesAnswer is a names request's 200 response: every name the server
-// holds for the device afterwards, and the short code the owner's
-// dashboard gives each project key of the device the server has minutes
-// of, which the device can't work out itself (project-names-v1 1.6).
+// holds for the device afterwards, the keys of those the owner hid on the
+// dashboard that the device hasn't turned off since, and the short code
+// the owner's dashboard gives each project key of the device the server
+// has minutes of, which the device can't work out itself (project-names-v1
+// 1.6).
 type namesAnswer struct {
-	Names []projectnames.Name `json:"names"`
-	Codes map[string]string   `json:"codes"`
+	Names  []projectnames.Name `json:"names"`
+	Hidden []string            `json:"hidden"`
+	Codes  map[string]string   `json:"codes"`
 }
 
 // parseNames reads a names request's inflated body (project-names-v1 1.3
@@ -291,9 +294,9 @@ func (s *Service) processNames(ctx context.Context, tx writer.Tx, dev device.Dev
 		return outcome{}, err
 	}
 	if n > projectnames.MaxPerDevice {
-		return outcome{}, refusedError{refuse(CodeTooManyNames, "The server holds at most 1000 names for a device; turn some off first.")}
+		return outcome{}, refusedError{refuse(CodeTooManyNames, "The server holds at most 1000 names for a device, hidden ones included; turn some off first.")}
 	}
-	names, err := projectnames.OfDevice(ctx, tx, dev.ID)
+	names, hidden, err := projectnames.OfDevice(ctx, tx, dev.ID)
 	if err != nil {
 		return outcome{}, err
 	}
@@ -301,7 +304,7 @@ func (s *Service) processNames(ctx context.Context, tx writer.Tx, dev device.Dev
 	if err != nil {
 		return outcome{}, err
 	}
-	data, err := json.Marshal(namesAnswer{Names: names, Codes: codes})
+	data, err := json.Marshal(namesAnswer{Names: names, Hidden: hidden, Codes: codes})
 	if err != nil {
 		return outcome{}, err
 	}

@@ -54,8 +54,9 @@ func send(t *testing.T, a *running, method, path, body string) (int, string) {
 // projectsDir fills a data directory with a project map holding
 // chip8-emulator's repo, and today's rollup with a plain folder's
 // project, which the map doesn't keep, and, when linked, the names and
-// codes the server last gave.
-func projectsDir(t *testing.T, dirs home.Dirs, linked bool, shown, codes map[string]string) {
+// codes the server last gave, and the notes of names hidden on the
+// dashboard.
+func projectsDir(t *testing.T, dirs home.Dirs, linked bool, shown, codes map[string]string, hidden map[string]uploader.HiddenName) {
 	t.Helper()
 	m := git.ProjectMap{Repos: []git.RepoProject{{CommonDir: filepath.Join(dirs.Data, "code", "chip8-emulator", ".git"), Key: chip8Key, Kind: git.KindRepo}}}
 	st, err := json.Marshal(map[string]any{"v": 1, projectsKey: m})
@@ -81,7 +82,7 @@ func projectsDir(t *testing.T, dirs home.Dirs, linked bool, shown, codes map[str
 	if err := os.WriteFile(account.File(dirs.Data), []byte(l), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	n, err := json.Marshal(uploader.Names{V: 1, Server: namesServer, Device: namesDevice, Confirmed: shown, Codes: codes, AnsweredAt: 1})
+	n, err := json.Marshal(uploader.Names{V: 1, Server: namesServer, Device: namesDevice, Confirmed: shown, Codes: codes, AnsweredAt: 1, Hidden: hidden})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +113,7 @@ func TestProjectsAPI(t *testing.T) {
 		linked bool
 		shown  map[string]string
 		codes  map[string]string // the codes the server last gave
+		hidden map[string]uploader.HiddenName
 		steps  []step
 	}{
 		{
@@ -245,6 +247,21 @@ func TestProjectsAPI(t *testing.T) {
 			},
 		},
 		{
+			name:   "turning on a name hidden on the dashboard that pairtime couldn't turn off in config.toml is 409, which says what to write first",
+			config: "mode = \"online\"\n[projects." + chip8Key + "]\nname = \"Chip-8\"\nonline = true\n",
+			linked: true,
+			codes:  map[string]string{chip8Key: "7c41e9"},
+			hidden: map[string]uploader.HiddenName{chip8Key: {Label: "Chip-8", At: 1, Pending: true}},
+			steps: []step{{method: "PUT", path: name, body: `{"online":true}`, code: 409, check: func(t *testing.T, body string, names map[string]config.Project) {
+				if !strings.Contains(body, "set online = false under its [projects.<key>] table there by hand, then turn it on again") {
+					t.Errorf("PUT answered %s", body)
+				}
+				if names[chip8Key] != (config.Project{Name: "Chip-8", Online: true}) {
+					t.Errorf("config.toml has %+v", names)
+				}
+			}}},
+		},
+		{
 			name:   "a config.toml pairtime can't change is 409, and stays as it was",
 			config: "mode = \"local\"\n[unclosed\n",
 			steps:  []step{{method: "PUT", path: name, body: `{"online":true}`, code: 409}},
@@ -279,7 +296,7 @@ func TestProjectsAPI(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var cfgFile string
 			a := startWith(t, tt.config, nil, func(dirs home.Dirs) {
-				projectsDir(t, dirs, tt.linked, tt.shown, tt.codes)
+				projectsDir(t, dirs, tt.linked, tt.shown, tt.codes, tt.hidden)
 				cfgFile = dirs.ConfigFile()
 			})
 			before, _ := os.ReadFile(cfgFile)

@@ -288,3 +288,64 @@ func TestNameEdits(t *testing.T) {
 		})
 	}
 }
+
+func TestEditStartsOver(t *testing.T) {
+	chip8On := "[projects." + chip8Key + "]\nname = \"chip8-emulator\"\nonline = true\n"
+	plantOn := "\n[projects." + plantKey + "]\nname = \"plant-watering\"\nonline = true\n"
+	tests := []struct {
+		name string
+		file string
+		// other is what another process writes while the edit runs, one
+		// text each time the edit is about to replace the file, and
+		// nothing once they run out.
+		other   []string
+		want    string
+		wantErr string
+	}{
+		{
+			name:  "a name another process turned on while pairtime turned one off stays on, and pairtime's change lands on top of it",
+			file:  chip8On,
+			other: []string{chip8On + plantOn},
+			want:  strings.Replace(chip8On, "online = true", "online = false", 1) + plantOn,
+		},
+		{
+			name:    "a file that keeps changing is left as the other process wrote it, and the edit says so",
+			file:    chip8On,
+			other:   []string{chip8On + "# 1\n", chip8On + "# 2\n", chip8On + "# 3\n"},
+			want:    chip8On + "# 3\n",
+			wantErr: "kept changing while pairtime changed it",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(name, []byte(tt.file), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			n := 0
+			beforeReplace = func(string) {
+				if n < len(tt.other) {
+					if err := os.WriteFile(name, []byte(tt.other[n]), 0o600); err != nil {
+						t.Error(err)
+					}
+					n++
+				}
+			}
+			t.Cleanup(func() { beforeReplace = nil })
+			err := HideName(name, chip8Key)
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Fatalf("error %v", err)
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Fatalf("error %v, want one containing %q", err, tt.wantErr)
+			}
+			got, err := os.ReadFile(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("config.toml is\n%q\nwant\n%q", got, tt.want)
+			}
+		})
+	}
+}

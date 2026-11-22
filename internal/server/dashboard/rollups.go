@@ -50,20 +50,12 @@ func (r Rollups) View(ctx context.Context, account string, now time.Time) (View,
 	if err != nil {
 		return View{}, err
 	}
-	// The names the owner turned on, by device key (D-owner-names). A
-	// project is called by the name of its first key that has one.
-	byKey, err := projectnames.OfAccount(ctx, r.DB, account)
+	// The names the owner turned on, by project id (D-owner-names): a
+	// project is called by the name of its first key that has one, and a
+	// name counts only for the project its own device's key maps to.
+	labels, err := projectnames.OfAccount(ctx, r.DB, account)
 	if err != nil {
 		return View{}, err
-	}
-	labels := make(map[string]string)
-	for id, ks := range keys {
-		for _, k := range ks {
-			if l := byKey[k]; l != "" {
-				labels[id] = l
-				break
-			}
-		}
 	}
 	// The codes are unique among all the account's projects, not only the
 	// month's, so a project's code doesn't change when others go quiet,

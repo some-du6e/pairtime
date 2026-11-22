@@ -31,6 +31,7 @@ func TestNamesDiff(t *testing.T) {
 	tests := []struct {
 		name              string
 		wanted, confirmed map[string]string
+		acks              []string // the keys the server lists as hidden, whose names config.toml has off
 		set               []nameItem
 		del               []string
 	}{
@@ -66,10 +67,27 @@ func TestNamesDiff(t *testing.T) {
 			set:       []nameItem{{Project: otherKey, Label: "a"}, {Project: nameKey, Label: "b"}},
 			del:       []string{"p_one", "p_two"},
 		},
+		{
+			name: "a key the server lists as hidden goes as a delete, which tells the server the device turned the name off too",
+			acks: []string{nameKey},
+			del:  []string{nameKey},
+		},
+		{
+			name:   "a hidden name the owner turned on again goes as a set, never as a delete too",
+			wanted: map[string]string{nameKey: "chip8-emulator"},
+			acks:   []string{nameKey},
+			set:    []nameItem{{Project: nameKey, Label: "chip8-emulator"}},
+		},
+		{
+			name:      "the deletes of shown and hidden names come together in key order, each once",
+			confirmed: map[string]string{"p_two": "x"},
+			acks:      []string{"p_two", "p_one"},
+			del:       []string{"p_one", "p_two"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			set, del := namesDiff(tt.wanted, tt.confirmed)
+			set, del := namesDiff(tt.wanted, tt.confirmed, tt.acks)
 			if !reflect.DeepEqual(set, tt.set) || !reflect.DeepEqual(del, tt.del) {
 				t.Errorf("namesDiff = %v, %v; want %v, %v", set, del, tt.set, tt.del)
 			}
@@ -209,6 +227,24 @@ func TestNames(t *testing.T) {
 			t.Errorf("project-names.json = %+v, %v; want none, since no answer was pairtimed's names", n, err)
 		}
 	}
+	// missing checks that a 404, a server without the names endpoint, told
+	// doctor nothing, kept nothing, and holds its body for a day, off the
+	// backoffs, after one request.
+	missing := func(t *testing.T, r *rig, _ string) {
+		if p := r.doctor(); p != "" {
+			t.Errorf("doctor heard %q, want nothing", p)
+		}
+		if r.f.namesPosts != 1 || r.u.namesBackoff.failing() != 0 || r.u.backoff.failing() != 0 {
+			t.Errorf("%d names requests, the names' backoff counts %d failures and the uploads' %d; want one request and no failure", r.f.namesPosts, r.u.namesBackoff.failing(), r.u.backoff.failing())
+		}
+		if r.u.namesHeld == "" || r.u.namesAfter.Before(time.Now().Add(23*time.Hour)) {
+			t.Errorf("the body is held until %v, want a day from now", r.u.namesAfter)
+		}
+		n, err := ReadNames(r.dirs.Data)
+		if !errors.Is(err, fs.ErrNotExist) || len(n.Confirmed) != 0 || len(n.Codes) != 0 {
+			t.Errorf("project-names.json = %+v, %v; want none, since no answer was pairtimed's names", n, err)
+		}
+	}
 	// codes checks project-names.json's codes, and that its names are the
 	// rig's server's.
 	codes := func(want map[string]string) rigCheck {
@@ -224,9 +260,12 @@ func TestNames(t *testing.T) {
 		config string            // config.toml
 		held   map[string]string // the names the server holds at the start
 		codes  map[string]string // the codes the server gives the device's keys
+		hidden []string          // the keys the server lists as hidden on the dashboard at the start
 		known  map[string]string // project-names.json's names, as the server confirmed them
 		server string            // the server project-names.json is for, the rig's when ""
 		faults map[int]string    // the names requests' faults, by attempt
+		then   map[int]string    // config.toml as the owner leaves it after an attempt, by its number
+		own    []string          // the keys of the projects the computer has seen (Options.OwnKeys), every key when nil
 		local  bool              // the computer is local-only: no sign-in to upload with
 		until  func(f *fakeIngest, cfgPath string) bool
 		checks []rigCheck
@@ -282,30 +321,89 @@ func TestNames(t *testing.T) {
 			checks: []rigCheck{bodies(`{}`)},
 		},
 		{
-			name:   "a name the owner hid on the dashboard while the agent was off turns off in config.toml, with a note, and isn't sent again",
+			name:   "a name the owner hid on the dashboard while the agent was off turns off in config.toml, with a note, isn't sent again, and a delete tells the server so",
 			config: projectTable(nameKey, "chip8-emulator", true),
+			hidden: []string{nameKey},
 			known:  map[string]string{nameKey: "chip8-emulator"},
 			until: func(f *fakeIngest, cfgPath string) bool {
 				cfg, _, _ := config.Load(cfgPath)
-				return f.namesPosts > 0 && !cfg.Projects[nameKey].Online && f.head != nil && f.head.b == 3
+				return f.namesPosts == 2 && len(f.namesHidden) == 0 && !cfg.Projects[nameKey].Online && f.head != nil && f.head.b == 3
 			},
 			checks: []rigCheck{
-				bodies(`{}`),
+				bodies(`{}`, `{"delete":["`+nameKey+`"]}`),
 				func(t *testing.T, r *rig, cfgPath string) {
 					cfg, _, err := config.Load(cfgPath)
 					if err != nil || cfg.Projects[nameKey] != (config.Project{Name: "chip8-emulator"}) {
 						t.Errorf("config.toml has %+v, %v; want the name off with its label kept", cfg.Projects[nameKey], err)
 					}
 					n, err := ReadNames(r.dirs.Data)
-					if h := n.Hidden[nameKey]; err != nil || h.Label != "chip8-emulator" || h.At == 0 || h.Pending || len(n.Confirmed) != 0 {
-						t.Errorf("project-names.json = %+v, %v; want a note of the hidden name", n, err)
+					if h := n.Hidden[nameKey]; err != nil || h.Label != "chip8-emulator" || h.At == 0 || h.Pending || len(n.Confirmed) != 0 || len(n.Hides) != 0 {
+						t.Errorf("project-names.json = %+v, %v; want a note of the hidden name, and nothing the server still lists", n, err)
 					}
 				},
 			},
 		},
 		{
-			name:   "a hidden name config.toml can't be changed for isn't sent again, and doctor says what to write",
+			name:   "a name the server no longer holds, as after the device's purge or a restore, isn't taken for one the owner hid: it stays on and goes again",
+			config: projectTable(nameKey, "chip8-emulator", true),
+			known:  map[string]string{nameKey: "chip8-emulator"},
+			until: func(f *fakeIngest, _ string) bool {
+				return f.names[nameKey] == "chip8-emulator" && f.head != nil && f.head.b == 3
+			},
+			checks: []rigCheck{
+				bodies(`{}`, `{"set":[{"project":"`+nameKey+`","label":"chip8-emulator"}]}`),
+				func(t *testing.T, r *rig, cfgPath string) {
+					cfg, _, err := config.Load(cfgPath)
+					if err != nil || !cfg.Projects[nameKey].Online {
+						t.Errorf("config.toml has %+v, %v; want the name still on", cfg.Projects[nameKey], err)
+					}
+					n, err := ReadNames(r.dirs.Data)
+					if _, noted := n.Hidden[nameKey]; err != nil || noted || n.Confirmed[nameKey] != "chip8-emulator" {
+						t.Errorf("project-names.json = %+v, %v; want the name confirmed again, with no note of a hide", n, err)
+					}
+				},
+			},
+		},
+		{
+			name:   "a name turned off after a set whose answer was lost goes as a delete at once, after a read finds it stored",
+			config: projectTable(nameKey, "chip8-emulator", false),
+			faults: map[int]string{2: "lost"},
+			then: map[int]string{
+				1: projectTable(nameKey, "chip8-emulator", true),
+				2: projectTable(nameKey, "chip8-emulator", false),
+			},
+			until: func(f *fakeIngest, _ string) bool { return f.namesPosts >= 3 && len(f.names) == 0 },
+			checks: []rigCheck{
+				func(t *testing.T, r *rig, _ string) {
+					var got []string
+					for _, b := range r.f.namesBodies {
+						got = append(got, string(b))
+					}
+					// The transport may send the lost request again itself,
+					// which the server refuses as counter_stale.
+					want := []string{`{}`, `{"delete":["` + nameKey + `"]}`}
+					if len(got) < 4 || got[0] != `{}` || got[1] != `{"set":[{"project":"`+nameKey+`","label":"chip8-emulator"}]}` || !slices.Equal(got[len(got)-2:], want) {
+						t.Errorf("the names requests carried %q, want a read, the set, and then a read and the delete", got)
+					}
+				},
+			},
+		},
+		{
+			name:   "no names request goes before the server holds a batch from the link, even with a name on, so pairtime logout after a wrong approval still frees the device's id",
+			config: projectTable(nameKey, "chip8-emulator", true),
+			until:  func(f *fakeIngest, _ string) bool { return f.names[nameKey] == "chip8-emulator" },
+			checks: []rigCheck{
+				func(t *testing.T, r *rig, _ string) {
+					if r.f.namesEarly != 0 || r.f.posts == 0 {
+						t.Errorf("%d names requests came before the server held a batch, after %d uploads; want none", r.f.namesEarly, r.f.posts)
+					}
+				},
+			},
+		},
+		{
+			name:   "a hidden name config.toml can't be changed for isn't sent again, nor its delete, and doctor says what to write",
 			config: "[projects]\n" + nameKey + " = { name = \"chip8-emulator\", online = true }\n",
+			hidden: []string{nameKey},
 			known:  map[string]string{nameKey: "chip8-emulator"},
 			until: func(f *fakeIngest, _ string) bool {
 				return f.namesPosts > 0 && f.head != nil && f.head.b == 3
@@ -398,19 +496,40 @@ func TestNames(t *testing.T) {
 			checks: []rigCheck{quiet},
 		},
 		{
-			name:   "a 404 to the read at the start, from a server without the names endpoint, tells doctor nothing, waits on the names' backoff, and holds back no upload",
+			name:   "a 404 to the read at the start, from a server without the names endpoint, tells doctor nothing, holds back no upload, and waits a day to read again",
 			config: "mode = \"online\"\n",
 			codes:  map[string]string{nameKey: "7c41e9"},
 			faults: allFaults("404"),
 			until:  func(f *fakeIngest, _ string) bool { return f.namesPosts > 0 && f.head != nil && f.head.b == 3 },
-			checks: []rigCheck{quiet},
+			checks: []rigCheck{missing},
 		},
 		{
-			name:   "a 404 to a name turned on is as quiet, and the name waits for a server that has the endpoint",
+			name:   "a 404 to a name turned on is as quiet, and the name waits a day for a server that has the endpoint",
 			config: projectTable(nameKey, "chip8-emulator", true),
 			faults: allFaults("404"),
 			until:  func(f *fakeIngest, _ string) bool { return f.namesPosts > 0 && f.head != nil && f.head.b == 3 },
-			checks: []rigCheck{quiet},
+			checks: []rigCheck{missing},
+		},
+		{
+			name:   "a name config.toml turns on for a project this computer never worked in, as in a config.toml copied from another computer, never goes, and doctor says which",
+			config: projectTable(otherKey, "copied", true),
+			own:    []string{nameKey},
+			until:  func(f *fakeIngest, _ string) bool { return f.namesPosts == 1 && f.head != nil && f.head.b == 3 },
+			checks: []rigCheck{
+				bodies(`{}`),
+				func(t *testing.T, r *rig, _ string) {
+					if p := r.doctor(); !strings.Contains(p, "config.toml turns on the names of projects this computer hasn't worked in, as when it was copied from another computer, so pairtime doesn't send them: "+otherKey) {
+						t.Errorf("doctor heard %q", p)
+					}
+				},
+			},
+		},
+		{
+			name:   "a name for a project this computer worked in goes before the server gives the project a code",
+			config: projectTable(nameKey, "chip8-emulator", true),
+			own:    []string{nameKey},
+			until:  func(f *fakeIngest, _ string) bool { return f.names[nameKey] == "chip8-emulator" },
+			checks: []rigCheck{bodies(`{"set":[{"project":"` + nameKey + `","label":"chip8-emulator"}]}`)},
 		},
 		{
 			name:   "nothing goes while the computer is local-only",
@@ -435,6 +554,17 @@ func TestNames(t *testing.T) {
 			maps.Copy(r.f.names, tt.held)
 			maps.Copy(r.f.codes, tt.codes)
 			maps.Copy(r.f.namesFaults, tt.faults)
+			for _, key := range tt.hidden {
+				r.f.namesHidden[key] = true
+			}
+			r.f.namesThen = map[int]func(){}
+			for attempt, text := range tt.then {
+				r.f.namesThen[attempt] = func() {
+					if err := os.WriteFile(cfgPath, []byte(text), 0o600); err != nil {
+						t.Error(err)
+					}
+				}
+			}
 			if tt.known != nil {
 				server := tt.server
 				if server == "" {
@@ -451,6 +581,15 @@ func TestNames(t *testing.T) {
 			}
 			r.u.Close()
 			r.u = r.namesUploader(t, cfgPath, func() (Credentials, bool) { return r.creds, !tt.local })
+			if tt.own != nil {
+				r.u.opts.OwnKeys = func() map[string]bool {
+					own := map[string]bool{}
+					for _, key := range tt.own {
+						own[key] = true
+					}
+					return own
+				}
+			}
 			if tt.until == nil {
 				r.u.Start()
 				for range 5 {
@@ -465,6 +604,9 @@ func TestNames(t *testing.T) {
 			defer r.f.mu.Unlock()
 			for _, check := range tt.checks {
 				check(t, r, cfgPath)
+			}
+			if r.f.namesEarly != 0 {
+				t.Errorf("%d names requests came before the server held a batch from the link, want none", r.f.namesEarly)
 			}
 		})
 	}

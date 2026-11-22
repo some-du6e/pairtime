@@ -148,7 +148,11 @@ func (a *agent) serveProjectName(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		err = projects.Show(a.dirs.ConfigFile(), p, label)
-		if err != nil {
+		switch {
+		case errors.Is(err, projects.ErrHidePending):
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		case err != nil:
 			http.Error(w, fmt.Sprintf("pairtime couldn't change config.toml: %v", err), http.StatusConflict)
 			return
 		}

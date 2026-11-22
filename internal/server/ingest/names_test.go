@@ -16,19 +16,28 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/writer"
 )
 
-// namesOf decodes a names request's 200 answer.
+// namesOf decodes a names request's 200 answer's names.
 func namesOf(t *testing.T, code int, body []byte) []projectnames.Name {
+	t.Helper()
+	names, _ := answerOf(t, code, body)
+	return names
+}
+
+// answerOf decodes a names request's 200 answer: its names, and the keys
+// it lists as hidden on the dashboard.
+func answerOf(t *testing.T, code int, body []byte) ([]projectnames.Name, []string) {
 	t.Helper()
 	if code != http.StatusOK {
 		t.Fatalf("status %d, want 200: %s", code, body)
 	}
 	var a struct {
-		Names []projectnames.Name `json:"names"`
+		Names  []projectnames.Name `json:"names"`
+		Hidden []string            `json:"hidden"`
 	}
 	if err := json.Unmarshal(body, &a); err != nil {
 		t.Fatal(err)
 	}
-	return a.Names
+	return a.Names, a.Hidden
 }
 
 // TestNames checks POST /api/v1/projects/names (project-names-v1): what a
@@ -112,10 +121,28 @@ func TestNames(t *testing.T) {
 					t.Errorf("codes %v (%v), want this device's key alone, with its lengthened code: %s", a.Codes, err, rec.Body)
 				}
 			}},
-			{name: "a device the server has no minutes from gets no codes, as {} rather than null", run: func(t *testing.T, h *harness, d *testDevice) {
+			{name: "a device the server has no minutes from gets no codes, as {} rather than null, and nothing hidden, as []", run: func(t *testing.T, h *harness, d *testDevice) {
 				rec := h.send(t, upload{dev: d, names: true, json: []byte(`{}`)})
-				if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"codes":{}`) {
-					t.Errorf("answer %d %s, want codes {}", rec.Code, rec.Body)
+				if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"codes":{}`) || !strings.Contains(rec.Body.String(), `"hidden":[]`) {
+					t.Errorf("answer %d %s, want codes {} and hidden []", rec.Code, rec.Body)
+				}
+			}},
+			{name: "a name hidden on the dashboard is listed as hidden, without its label, until the device's delete says it turned it off too", run: func(t *testing.T, h *harness, d *testDevice) {
+				h.exec(t, `INSERT INTO rollup_projects (user_id, device_id, project_key, project_id) VALUES ($1, $2, 'k1', 'P1')`, d.Account, d.ID)
+				h.send(t, upload{dev: d, names: true, body: set("k1", "chip8", "k2", "portfolio")})
+				if err := h.writer.Do(context.Background(), 1, func(ctx context.Context, tx writer.Tx) error {
+					return projectnames.Hide(ctx, tx, d.Account, "P1", 5)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				rec := h.send(t, upload{dev: d, names: true, json: []byte(`{}`)})
+				names, hidden := answerOf(t, rec.Code, rec.Body.Bytes())
+				if !reflect.DeepEqual(names, []projectnames.Name{{Project: "k2", Label: "portfolio"}}) || !reflect.DeepEqual(hidden, []string{"k1"}) || strings.Contains(rec.Body.String(), "chip8") {
+					t.Errorf("answer %s, want portfolio named and k1 hidden, without its label", rec.Body)
+				}
+				rec = h.send(t, upload{dev: d, names: true, json: []byte(`{"delete":["k1"]}`)})
+				if names, hidden := answerOf(t, rec.Code, rec.Body.Bytes()); len(names) != 1 || len(hidden) != 0 {
+					t.Errorf("answer after the delete %s, want portfolio alone and nothing hidden", rec.Body)
 				}
 			}},
 			{name: "a device with names under another account is refused with device_mismatch", run: func(t *testing.T, h *harness, d *testDevice) {
@@ -181,7 +208,7 @@ func TestNamesRefusals(t *testing.T) {
 		{name: "a key in set and in delete is project_repeated", body: `{"set":[{"project":"k1","label":"chip8"}],"delete":["k1"]}`, status: 422, code: CodeProjectRepeated},
 		{name: "an empty label is label_invalid", body: `{"set":[{"project":"k1","label":""}]}`, status: 422, code: CodeLabelInvalid},
 		{name: "a label cleaning would trim is label_invalid, so the server never stores one the owner didn't see", body: `{"set":[{"project":"k1","label":" chip8"}]}`, status: 422, code: CodeLabelInvalid},
-		{name: "a label with a bidirectional override is label_invalid", body: `{"set":[{"project":"k1","label":"chip8‮"}]}`, status: 422, code: CodeLabelInvalid},
+		{name: "a label with a bidirectional override is label_invalid", body: `{"set":[{"project":"k1","label":"chip8\u202e"}]}`, status: 422, code: CodeLabelInvalid},
 		{name: "a label of 65 characters is label_invalid", body: `{"set":[{"project":"k1","label":"` + strings.Repeat("a", 65) + `"}]}`, status: 422, code: CodeLabelInvalid},
 		{name: "more than 200 items is too_many_names", body: `{"delete":[` + strings.Join(many, ",") + `]}`, status: 413, code: CodeTooManyNames},
 		{name: "a body that isn't an object is body_shape", body: `[]`, status: 422, code: CodeBodyShape},

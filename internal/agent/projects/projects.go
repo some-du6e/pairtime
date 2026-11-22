@@ -86,6 +86,11 @@ type Project struct {
 	// HiddenAt is when pairtime found the name hidden on the dashboard,
 	// for Hidden.
 	HiddenAt time.Time
+	// Pending says, for Hidden, that pairtime couldn't turn the name off
+	// in config.toml when it found it hidden (uploader.HiddenName.Pending):
+	// config.toml still has it on, and pairtime doesn't send it, so showing
+	// it again takes setting online = false there first, by hand.
+	Pending bool
 }
 
 // Title is what the list calls p: its local name, or "Project <code>",
@@ -105,7 +110,9 @@ func (p Project) Title() string {
 // keeps it: the folder of the main checkout, which holds .git, for a repo
 // with worktrees too, since its worktrees share that directory, or else
 // the common directory's own folder name without ".git", as for a bare
-// repo. It is that folder's name only, never a path, cleaned with
+// repo, or a repo whose git directory lives apart from its checkout (git
+// init --separate-git-dir), since that directory doesn't name the
+// checkout. It is that folder's name only, never a path, cleaned with
 // projectname.CleanLabel, and "" when there is none.
 func LocalName(commonDir string) string {
 	if commonDir == "" {
@@ -256,6 +263,7 @@ func List(in Input) []Project {
 	for key := range listed {
 		p := Project{Key: key, Code: codes[key], LocalName: local[key]}
 		p.State, p.Label, p.HiddenAt = state(key, local[key], in.Config.Projects[key], confirmed, in.Names.Hidden)
+		p.Pending = p.State == Hidden && in.Names.Hidden[key].Pending
 		out = append(out, p)
 	}
 	slices.SortFunc(out, func(a, b Project) int {
@@ -320,6 +328,10 @@ func Find(list []Project, arg string) (Project, bool) {
 	return Project{}, false
 }
 
+// ErrHidePending is turning on a name hidden on the dashboard that
+// pairtime couldn't turn off in config.toml (Project.Pending).
+var ErrHidePending = errors.New("you hid this name on your dashboard, and pairtime couldn't turn it off in config.toml then, so it doesn't send it while config.toml has it on; set online = false under its [projects.<key>] table there by hand, then turn it on again")
+
 // The labels Label refuses.
 var (
 	// ErrNoLabel is no label given for a project with none to show: no
@@ -350,8 +362,13 @@ func Label(p Project, label string, given bool) (string, error) {
 
 // Show turns p's name on with label, which Label returned, in the
 // config.toml at configFile. The running agent's config watch picks the
-// change up, and its uploader sends it.
+// change up, and its uploader sends it. A name hidden on the dashboard
+// that pairtime couldn't turn off there is ErrHidePending: config.toml has
+// it on already, and turning it on again changes nothing.
 func Show(configFile string, p Project, label string) error {
+	if p.Pending {
+		return ErrHidePending
+	}
 	return config.ShowName(configFile, p.Key, label)
 }
 

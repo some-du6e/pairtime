@@ -28,13 +28,24 @@ var projectKeyForm = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 // sharing none of the uploader's wire types: ingest-v1 2.5's checks with
 // M_names in place of M, the body's shape (1.3, 1.5), the device's one
 // request counter, which uploads move too, and the answer, every name the
-// device has, in key order, and the code of each of its keys the test
-// gave the server (1.6). The server stores no reply for a names request.
+// device has, in key order, the keys of those hidden on the dashboard, and
+// the code of each of its keys the test gave the server (1.6). The server
+// stores no reply for a names request.
 func (f *fakeIngest) projectNames(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.namesPosts++
 	fault := f.namesFaults[f.namesPosts]
+	// namesThen's step runs before the answer goes, or the connection
+	// drops, so the uploader never acts on the answer before it.
+	then, ran := f.namesThen[f.namesPosts], false
+	runThen := func() {
+		if then != nil && !ran {
+			ran = true
+			then()
+		}
+	}
+	defer runThen()
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 262_145))
 	if err != nil || fault == "down" {
 		drop(w)
@@ -95,6 +106,9 @@ func (f *fakeIngest) projectNames(w http.ResponseWriter, r *http.Request) {
 	}
 	req, _ := strconv.ParseUint(reqS, 10, 64)
 	f.counters = append(f.counters, req)
+	if f.head == nil {
+		f.namesEarly++
+	}
 	br := bytes.NewReader(raw)
 	zr, err := gzip.NewReader(br)
 	if err != nil {
@@ -197,16 +211,27 @@ func (f *fakeIngest) projectNames(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, k := range del {
 		delete(f.names, k)
+		delete(f.namesHidden, k)
 	}
 	for _, it := range items {
 		f.names[it.project] = it.label
+		delete(f.namesHidden, it.project)
 	}
 	f.counter = req
+	if fault == "lost" {
+		runThen()
+		drop(w)
+		return
+	}
 	out := []map[string]string{}
 	for _, k := range slices.Sorted(maps.Keys(f.names)) {
 		out = append(out, map[string]string{"project": k, "label": f.names[k]})
 	}
+	hidden := slices.Sorted(maps.Keys(f.namesHidden))
+	if hidden == nil {
+		hidden = []string{}
+	}
 	codes := map[string]string{}
 	maps.Copy(codes, f.codes)
-	f.json(w, 200, map[string]any{"names": out, "codes": codes})
+	f.json(w, 200, map[string]any{"names": out, "hidden": hidden, "codes": codes})
 }

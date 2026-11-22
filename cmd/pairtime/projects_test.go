@@ -185,6 +185,13 @@ func TestProjectsList(t *testing.T) {
 			want: []string{"  On your dashboard: Project 7c41e9, since you hid its name there on Saturday, November 21; pairtime turned it off here, and show-name shows it again\n"},
 		},
 		{
+			name: "a name hidden on the dashboard that pairtime couldn't turn off in config.toml says so, and what to write before it shows again",
+			home: projectsHome{config: online + chip8Table("chip8-emulator", true), linked: true, codes: serverCodes,
+				hidden: map[string]uploader.HiddenName{chip8Key: {Label: "chip8-emulator", At: time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC).UnixMilli(), Pending: true}}},
+			want:    []string{"  On your dashboard: Project 7c41e9, since you hid its name there on Saturday, November 21; pairtime couldn't turn it off in config.toml, so it doesn't send it, and to show it again set online = false under its table there, then run show-name\n"},
+			notWant: []string{"pairtime turned it off here"},
+		},
+		{
 			name: "a project the map doesn't keep has no name here, and show-name needs one",
 			home: projectsHome{config: online, linked: true, folder: true, codes: serverCodes},
 			want: []string{"Project d2a8f6\n  Today: you 0m\n  On your dashboard: Project d2a8f6; it has no name on this computer, so show-name needs one\n"},
@@ -200,9 +207,10 @@ func TestProjectsList(t *testing.T) {
 			want: []string{"This computer is local-only, as config.toml says, so no name goes to your dashboard until it's online again.\n"},
 		},
 		{
-			name: "a config.toml with an error turns every name off, and says so",
-			home: projectsHome{config: online + chip8Table("chip8-emulator", true) + "[unclosed\n", linked: true, codes: serverCodes},
-			want: []string{"On your dashboard: Project 7c41e9; show-name shows it as \"chip8-emulator\"\n", "config.toml has an error, so every name is off until it's fixed"},
+			name:    "a config.toml with an error turns every name off, and says so",
+			home:    projectsHome{config: online + chip8Table("chip8-emulator", true) + "[unclosed\n", linked: true, codes: serverCodes},
+			want:    []string{"On your dashboard: Project 7c41e9; show-name shows it as \"chip8-emulator\"\n", "config.toml has an error, so every name is off until it's fixed", "\nconfig.toml has an error, so no name goes to your dashboard until it's fixed.\n"},
+			notWant: []string{"local-only, as config.toml says"},
 		},
 	}
 	for _, tt := range tests {
@@ -257,15 +265,27 @@ func TestProjectsNames(t *testing.T) {
 		wantCode int
 		wantOut  string // a substring of stdout
 		wantErr  string // a substring of stderr
-		want     map[string]config.Project
+		notOut   string // what stdout must not hold
+		// want is config.toml's projects after it, checked when the
+		// command succeeds, or when it's set.
+		want map[string]config.Project
 	}{
 		{
-			name:     "show-name with the server's code prints the local name before it saves it, says who sees it, and turns the name on in config.toml",
+			name:     "show-name with the server's code and a label turns the name on in config.toml, then says what the dashboard shows and who sees it",
 			home:     projectsHome{config: online, linked: true, codes: serverCodes},
-			args:     []string{"projects", "show-name", "5be03d"},
+			args:     []string{"projects", "show-name", "5be03d", "plant-sensor"},
 			wantOut:  "Your pairtime dashboard will show Project 5be03d as \"plant-sensor\". Only you see it there, on your own dashboard while you're signed in, and nothing else about the project leaves this computer with it.\nSaved in config.toml. pairtime sends it with its next upload.\n",
 			want:     map[string]config.Project{plantKey: {Name: "plant-sensor", Online: true}},
 			wantCode: 0,
+		},
+		{
+			name:     "show-name without a label suggests the local name and changes nothing, since the owner approves the label by giving it",
+			home:     projectsHome{config: online, linked: true, codes: serverCodes},
+			args:     []string{"projects", "show-name", "5be03d"},
+			wantCode: 2,
+			wantErr:  "pairtime projects: say what your dashboard shows for Project 5be03d, such as the name it has here, and nothing changes until you do: pairtime projects show-name 5be03d \"plant-sensor\"\n",
+			notOut:   "will show",
+			want:     map[string]config.Project{},
 		},
 		{
 			name:    "show-name takes Project and the code as two words, and a label of several, cleaned",
@@ -277,35 +297,36 @@ func TestProjectsNames(t *testing.T) {
 		{
 			name:    "show-name takes Project and the code as one word",
 			home:    projectsHome{config: online, linked: true, codes: serverCodes},
-			args:    []string{"projects", "show-name", "Project 5be03d"},
+			args:    []string{"projects", "show-name", "Project 5be03d", "plant-sensor"},
 			wantOut: "Your pairtime dashboard will show Project 5be03d as \"plant-sensor\".",
 			want:    map[string]config.Project{plantKey: {Name: "plant-sensor", Online: true}},
 		},
 		{
 			name:    "show-name takes the project's whole key, which names a project with a code too",
 			home:    projectsHome{config: online, linked: true, codes: serverCodes},
-			args:    []string{"projects", "show-name", plantKey},
+			args:    []string{"projects", "show-name", plantKey, "plant-sensor"},
 			wantOut: "Your pairtime dashboard will show Project 5be03d as \"plant-sensor\".",
 			want:    map[string]config.Project{plantKey: {Name: "plant-sensor", Online: true}},
 		},
 		{
 			name:    "show-name takes the whole key of a project the server gave no code yet, and calls it by its key",
 			home:    projectsHome{config: online, linked: true},
-			args:    []string{"projects", "show-name", plantKey},
+			args:    []string{"projects", "show-name", plantKey, "plant-sensor"},
 			wantOut: "Your pairtime dashboard will show the project " + plantKey + " as \"plant-sensor\".",
 			want:    map[string]config.Project{plantKey: {Name: "plant-sensor", Online: true}},
 		},
 		{
-			name:    "show-name without a label shows the label config.toml kept from before",
-			home:    projectsHome{config: online + chip8Table("Chip-8", false), linked: true, codes: serverCodes},
-			args:    []string{"projects", "show-name", "Project 7c41e9"},
-			wantOut: "as \"Chip-8\"",
-			want:    map[string]config.Project{chip8Key: {Name: "Chip-8", Online: true}},
+			name:     "show-name without a label suggests the label config.toml kept from before, and leaves the name off",
+			home:     projectsHome{config: online + chip8Table("Chip-8", false), linked: true, codes: serverCodes},
+			args:     []string{"projects", "show-name", "Project 7c41e9"},
+			wantCode: 2,
+			wantErr:  "pairtime projects show-name 7c41e9 \"Chip-8\"\n",
+			want:     map[string]config.Project{chip8Key: {Name: "Chip-8"}},
 		},
 		{
 			name:    "on a computer that isn't linked show-name saves the name, and says it goes once the computer is",
 			home:    projectsHome{},
-			args:    []string{"projects", "show-name", chip8Key},
+			args:    []string{"projects", "show-name", chip8Key, "chip8-emulator"},
 			wantOut: "Saved in config.toml. This computer isn't linked to a pairtime server",
 			want:    map[string]config.Project{chip8Key: {Name: "chip8-emulator", Online: true}},
 		},
@@ -341,14 +362,14 @@ func TestProjectsNames(t *testing.T) {
 			name:     "show-name refuses a project with no name here when no label is given",
 			home:     projectsHome{config: online, linked: true, folder: true, codes: serverCodes},
 			args:     []string{"projects", "show-name", "d2a8f6"},
-			wantCode: 1,
+			wantCode: 2,
 			wantErr:  "Project d2a8f6 has no name on this computer, so say what your dashboard shows: pairtime projects show-name d2a8f6 \"a name\"",
 		},
 		{
 			name:     "a project with no name here and no code yet says to give its whole key and a name",
 			home:     projectsHome{config: online, linked: true, folder: true},
 			args:     []string{"projects", "show-name", folderKey},
-			wantCode: 1,
+			wantCode: 2,
 			wantErr:  "the project " + folderKey + " has no name on this computer, so say what your dashboard shows: pairtime projects show-name " + folderKey + " \"a name\"",
 		},
 		{
@@ -359,11 +380,22 @@ func TestProjectsNames(t *testing.T) {
 			wantErr:  "that name is empty once its spaces and invisible characters are taken out",
 		},
 		{
-			name:     "show-name refuses to change a config.toml that doesn't parse, and says what to write",
+			name:     "show-name refuses to change a config.toml that doesn't parse, says what to write, and never says the dashboard will show it",
 			home:     projectsHome{config: online + "[unclosed\n", linked: true, codes: serverCodes},
-			args:     []string{"projects", "show-name", "5be03d"},
+			args:     []string{"projects", "show-name", "5be03d", "plant-sensor"},
 			wantCode: 1,
 			wantErr:  "set name = \"plant-sensor\" and online = true under [projects." + plantKey + "]",
+			notOut:   "will show",
+		},
+		{
+			name: "show-name refuses a name hidden on the dashboard that pairtime couldn't turn off in config.toml, and says what to write first",
+			home: projectsHome{config: online + chip8Table("chip8-emulator", true), linked: true, codes: serverCodes,
+				hidden: map[string]uploader.HiddenName{chip8Key: {Label: "chip8-emulator", At: 1, Pending: true}}},
+			args:     []string{"projects", "show-name", "7c41e9", "chip8-emulator"},
+			wantCode: 1,
+			wantErr:  "pairtime couldn't turn it off in config.toml then, so it doesn't send it while config.toml has it on; set online = false under its [projects.<key>] table there by hand, then turn it on again",
+			notOut:   "will show",
+			want:     map[string]config.Project{chip8Key: {Name: "chip8-emulator", Online: true}},
 		},
 		{
 			name:    "hide-name turns a shown name off and keeps its label",
@@ -377,6 +409,20 @@ func TestProjectsNames(t *testing.T) {
 			home:    projectsHome{config: online + chip8Table("chip8-emulator", true), linked: true, shown: map[string]string{chip8Key: "chip8-emulator"}},
 			args:    []string{"projects", "hide-name", chip8Key},
 			wantOut: "Turned off in config.toml. Your pairtime dashboard calls it by its code again once pairtime uploads the change.\n",
+			want:    map[string]config.Project{chip8Key: {Name: "chip8-emulator"}},
+		},
+		{
+			name:    "hide-name on a local-only computer says the dashboard keeps the name until the change can go, and points at Hide this name",
+			home:    projectsHome{config: "mode = \"local\"\n" + chip8Table("chip8-emulator", true), linked: true, shown: map[string]string{chip8Key: "chip8-emulator"}, codes: serverCodes},
+			args:    []string{"projects", "hide-name", "7c41e9"},
+			wantOut: "Turned off in config.toml. Your pairtime dashboard shows the name until this computer uploads the change, then calls it Project 7c41e9; its Hide this name button takes it off at once meanwhile.\nThis computer is local-only, as config.toml says, so no name goes to your dashboard until it's online again.\n",
+			want:    map[string]config.Project{chip8Key: {Name: "chip8-emulator"}},
+		},
+		{
+			name:    "hide-name on a computer that isn't linked says it can't change the dashboard, and points at Hide this name",
+			home:    projectsHome{config: online + chip8Table("chip8-emulator", true)},
+			args:    []string{"projects", "hide-name", chip8Key},
+			wantOut: "Turned off in config.toml. This computer isn't linked to a pairtime server, so it can't change your dashboard: if your dashboard still shows the name, its Hide this name button takes it off at once.\n",
 			want:    map[string]config.Project{chip8Key: {Name: "chip8-emulator"}},
 		},
 		{
@@ -400,6 +446,18 @@ func TestProjectsNames(t *testing.T) {
 			wantErr:  "Usage: pairtime projects",
 		},
 		{
+			name:    "show-name --help prints the usage on stdout, as pairtime projects --help does",
+			home:    projectsHome{config: online},
+			args:    []string{"projects", "show-name", "--help"},
+			wantOut: "Usage: pairtime projects",
+		},
+		{
+			name:    "hide-name -h prints the usage on stdout too",
+			home:    projectsHome{config: online},
+			args:    []string{"projects", "hide-name", "-h"},
+			wantOut: "Usage: pairtime projects",
+		},
+		{
 			name:     "show-name without a code is a usage error",
 			home:     projectsHome{config: online},
 			args:     []string{"projects", "show-name"},
@@ -421,7 +479,10 @@ func TestProjectsNames(t *testing.T) {
 			if code != tt.wantCode || !strings.Contains(out, tt.wantOut) || !strings.Contains(errOut, tt.wantErr) {
 				t.Fatalf("pairtime %s = %d\nstdout %q\nstderr %q\nwant %d, stdout with %q, stderr with %q", strings.Join(tt.args, " "), code, out, errOut, tt.wantCode, tt.wantOut, tt.wantErr)
 			}
-			if tt.wantCode != 0 {
+			if tt.notOut != "" && strings.Contains(out, tt.notOut) {
+				t.Errorf("stdout %q holds %q", out, tt.notOut)
+			}
+			if tt.wantCode != 0 && tt.want == nil {
 				return
 			}
 			if got := h.names(t); !equalProjects(got, tt.want) {

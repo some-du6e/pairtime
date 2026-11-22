@@ -285,6 +285,21 @@ func TestRollupsView(t *testing.T) {
 			},
 		},
 		{
+			name: "a name another device stored for this device's key shows nowhere, as from a config.toml copied between computers",
+			zone: "UTC",
+			now:  time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC),
+			buckets: []rollup.Bucket{
+				{Account: "u1", Device: "d1", Minute: time.Date(2026, 11, 20, 17, 0, 0, 0, time.UTC).Unix(), State: "final",
+					Slots: []rollup.Slot{{Project: laptopKey, CreditedS: 15, Kind: "prompting", Level: "A"}}},
+			},
+			names: [][3]string{{"d2", laptopKey, "copied"}},
+			check: func(t *testing.T, v View) {
+				if len(v.Projects) != 1 || v.Projects[0].Named || v.Projects[0].Name != "Project 7c41e9" {
+					t.Errorf("projects %+v, want the project called by its code", v.Projects)
+				}
+			},
+		},
+		{
 			name: "pending minutes stay apart from final ones",
 			zone: "UTC",
 			now:  time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC),

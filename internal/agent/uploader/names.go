@@ -30,11 +30,14 @@ import (
 // the names that answer listed in project-names.json, with the short code
 // it gives each project key the device uploaded minutes of: the code the
 // owner's dashboard calls the project by, which the device can't work out
-// from its own keys (project-names-v1 1.6). A name the device sent that an
-// answer lacks, the owner hid on the dashboard: the uploader turns it off
-// in config.toml, so it stays hidden until the owner turns it on again on
-// the computer. Only the labels the owner approved and the keys they name
-// go: nothing else about a project.
+// from its own keys (project-names-v1 1.6). A name an answer lists as
+// hidden, the owner hid on the dashboard: the uploader turns it off in
+// config.toml, so it stays hidden until the owner turns it on again on the
+// computer, and then tells the server with a delete. Only the labels the
+// owner approved and the keys of the device's own projects go: nothing
+// else about a project. Nothing goes before the server holds a batch from
+// the device's link, so pairtime logout after a sign-in the wrong account
+// approved still frees the device's id (project-names-v1 2).
 
 // pathNames is the names endpoint (project-names-v1 1).
 const pathNames = "/api/v1/projects/names"
@@ -99,6 +102,10 @@ type Names struct {
 	// Hidden are the names the owner hid on the dashboard, by key, each
 	// turned off in config.toml when it was found.
 	Hidden map[string]HiddenName `json:"hidden,omitempty"`
+	// Hides are the keys the server's last answer listed as hidden on the
+	// dashboard: the server keeps each, without its label, until a delete
+	// tells it the device turned the name off too (acks).
+	Hides []string `json:"hides,omitempty"`
 }
 
 // HiddenName is a name the owner hid on their dashboard.
@@ -150,12 +157,14 @@ type namesBody struct {
 }
 
 // namesReply is the answer to a names request, status 200: every name the
-// server holds for the device after it, and the short code of each project
-// key the device uploaded minutes of, by key (project-names-v1 1.6). An
-// answer without codes gives none.
+// server holds for the device after it, the keys of those the owner hid on
+// the dashboard, and the short code of each project key the device
+// uploaded minutes of, by key (project-names-v1 1.6). An answer without
+// codes gives none, and one without hidden keys hides nothing.
 type namesReply struct {
-	Names []nameItem        `json:"names"`
-	Codes map[string]string `json:"codes"`
+	Names  []nameItem        `json:"names"`
+	Hidden []string          `json:"hidden"`
+	Codes  map[string]string `json:"codes"`
 }
 
 // encodeNames returns b's JSON as it goes: encoding/json's, with a label's
@@ -214,10 +223,11 @@ func keptCodes(codes map[string]string) map[string]string {
 }
 
 // namesDiff returns what the server needs to show wanted, the names
-// config.toml turns on, when it shows confirmed: every name on whose label
-// the server doesn't show, and every key it shows a name for that is off,
-// each in key order.
-func namesDiff(wanted, confirmed map[string]string) ([]nameItem, []string) {
+// config.toml turns on, when it shows confirmed and lists acks as hidden on
+// the dashboard: every name on whose label the server doesn't show, and
+// every key it shows a name for, or lists as hidden, that is off, each in
+// key order.
+func namesDiff(wanted, confirmed map[string]string, acks []string) ([]nameItem, []string) {
 	var set []nameItem
 	for _, key := range slices.Sorted(maps.Keys(wanted)) {
 		label := wanted[key]
@@ -234,7 +244,14 @@ func namesDiff(wanted, confirmed map[string]string) ([]nameItem, []string) {
 			del = append(del, key)
 		}
 	}
-	return set, del
+	for _, key := range acks {
+		_, on := wanted[key]
+		if _, shown := confirmed[key]; !on && !shown && keyForm(key) {
+			del = append(del, key)
+		}
+	}
+	slices.Sort(del)
+	return set, slices.Compact(del)
 }
 
 // takeNames returns the body of the next request for set and del: the
@@ -260,9 +277,13 @@ func readDue(at int64, now time.Time) bool {
 // it. The request carries what config.toml changed since that answer, or,
 // when nothing changed, a read, {}, at the start and a day after the last
 // answer, which a device with no name on sends too, to learn the codes the
-// owner's dashboard calls its projects by.
+// owner's dashboard calls its projects by. None goes while the link's
+// first batch isn't stored (Linking): a names request stores the device's
+// ingest state as an upload does, after which pairtime logout no longer
+// frees the device's id (device-auth-v1 1), and before that batch the
+// server has no minutes to show a name on anyway.
 func (u *Uploader) syncNames(c Credentials) (sent, more bool) {
-	if u.opts.Names == nil {
+	if u.opts.Names == nil || u.st.Linking {
 		return false, false
 	}
 	wanted, ok := u.opts.Names()
@@ -275,7 +296,8 @@ func (u *Uploader) syncNames(c Credentials) (sent, more bool) {
 	wanted = maps.Clone(wanted)
 	u.loadNames(c)
 	u.hidePending(wanted)
-	set, del := namesDiff(wanted, u.names.Confirmed)
+	set, del := namesDiff(wanted, u.names.Confirmed, u.acks())
+	set = u.ownNames(set)
 	var body namesBody
 	switch {
 	case len(set)+len(del) > 0:
@@ -322,6 +344,54 @@ func (u *Uploader) loadNames(c Credentials) {
 	u.names = &n
 	u.namesStarted = false
 	u.namesKey, u.namesHash, u.namesHeld = "", "", ""
+}
+
+// acks returns the keys the server lists as hidden on the dashboard whose
+// names config.toml has off now: their deletes tell the server the device
+// turned them off too, so it forgets them. A name pairtime couldn't turn
+// off there (HiddenName.Pending) stays hidden on the server until it
+// could.
+func (u *Uploader) acks() []string {
+	var out []string
+	for _, key := range u.names.Hides {
+		if !u.names.Hidden[key].Pending {
+			out = append(out, key)
+		}
+	}
+	return out
+}
+
+// ownNames returns the names of set whose keys are the device's own: a key
+// the server gave a code, which it holds minutes of from this device, or
+// one of the projects the computer has seen (Options.OwnKeys). Another key,
+// as in a config.toml copied from another computer, never goes, and doctor
+// hears which (project-names-v1 2).
+func (u *Uploader) ownNames(set []nameItem) []nameItem {
+	if len(set) == 0 || u.opts.OwnKeys == nil {
+		u.setProblem("names-elsewhere", "")
+		return set
+	}
+	var own map[string]bool
+	asked := false
+	var out []nameItem
+	var other []string
+	for _, it := range set {
+		_, coded := u.names.Codes[it.Project]
+		if !coded && !asked {
+			own, asked = u.opts.OwnKeys(), true
+		}
+		if coded || own[it.Project] {
+			out = append(out, it)
+		} else {
+			other = append(other, it.Project)
+		}
+	}
+	if len(other) == 0 {
+		u.setProblem("names-elsewhere", "")
+	} else {
+		u.setProblem("names-elsewhere", fmt.Sprintf("config.toml turns on the names of projects this computer hasn't worked in, as when it was copied from another computer, so pairtime doesn't send them: %s", strings.Join(other, ", ")))
+	}
+	return out
 }
 
 // saveNames writes project-names.json.
@@ -414,8 +484,7 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, raw []byte, hash str
 		switch {
 		case err != nil:
 		case a.status == http.StatusNotFound:
-			// A server without the names endpoint (errNoNames).
-			err = errNoNames
+			return u.namesMissing(hash, a)
 		case a.status != http.StatusTooManyRequests && a.status < 500 && !fromPairtimed(a):
 			// A proxy's answer, or Cloudflare's: a network error (ingest-v1
 			// 5.5), never acted on.
@@ -431,7 +500,12 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, raw []byte, hash str
 			continue // the answer set the clock's offset
 		case a.refusal.Error == refusalCounter:
 			// The state read sets the counter above the server's, and the
-			// next cycle sends the names again (ingest-v1 5.1).
+			// next cycle sends the names again (ingest-v1 5.1). The counter
+			// may be this request's own, taken by a try whose answer was
+			// lost, as when the transport sends a request again after a
+			// connection dropped: the next request, when config.toml has
+			// nothing new to send, is a read (namesFailed).
+			u.namesStarted = false
 			return true, u.sync(c)
 		case a.refusal.Error == refusalBodyHash:
 			continue // the body changed on the way
@@ -446,21 +520,31 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, raw []byte, hash str
 	return true, u.namesRefused(c, hash, answer{refusal: Refusal{Error: "retries"}})
 }
 
-// errNoNames is a 404 to a names request: a server without the names
-// endpoint, as one older than it, since pairtimed refuses no names request
-// with a 404. Like an answer that isn't pairtimed's, it tells doctor
-// nothing: the names wait on their own backoff (namesFailed).
-var errNoNames = errors.New("uploader: the server has no project names endpoint")
+// namesMissing handles a 404 to a names request: a server without the
+// names endpoint, as one older than it, since pairtimed refuses no names
+// request with a 404. Like an answer that isn't pairtimed's, it tells
+// doctor nothing, and the cycle goes on to the upload, which it never
+// holds back. The same body waits a day, the daily read's pace, while a
+// change to the names in config.toml goes at once, so a server that never
+// gets the endpoint hears from the names once a day and at each change.
+func (u *Uploader) namesMissing(hash string, a answer) (sent, more bool) {
+	u.namesHeld, u.namesAfter = hash, u.now().Add(namesReadEvery)
+	u.log.Info("the server has no project names endpoint, so pairtime asks again in a day or when the names change", "status", a.status)
+	return false, false
+}
 
 // namesFailed handles a names request that didn't reach the server, got
-// an answer that isn't pairtimed's or a 404 (errNoNames), or got a 429 or
-// a 5xx: the names wait as an upload would, with full jitter on a backoff
-// of their own and the server's Retry-After, and are sent again once it
-// ends, and doctor hears nothing of it. They leave the upload's backoff
-// and its upload-failure notes alone: the cycle goes on to the upload,
-// which tries the server itself, so a server whose names endpoint fails,
-// or one too old to have it, never holds back an upload. After a 429 the
-// cycle ends instead, since the server's bucket for the device ran dry.
+// an answer that isn't pairtimed's, or got a 429 or a 5xx: the names wait
+// as an upload would, with full jitter on a backoff of their own and the
+// server's Retry-After, and are sent again once it ends, and doctor hears
+// nothing of it. They leave the upload's backoff and its upload-failure
+// notes alone: the cycle goes on to the upload, which tries the server
+// itself, so a server whose names endpoint fails never holds back an
+// upload. After a 429 the cycle ends instead, since the server's bucket
+// for the device ran dry. Any other failure may have come after the
+// server stored the request, as a timeout after it committed: the next
+// request, when config.toml has nothing new to send, is a read, so a name
+// turned off meanwhile still goes as a delete at once.
 func (u *Uploader) namesFailed(err error, a answer) (sent, more bool) {
 	if errors.Is(err, context.Canceled) {
 		return true, false // the agent is stopping
@@ -472,15 +556,19 @@ func (u *Uploader) namesFailed(err error, a answer) (sent, more bool) {
 		u.pace.drain(time.Now())
 		return true, false
 	}
+	u.namesStarted = false
 	return false, false
 }
 
 // namesAnswered handles a names request's 200: its names are what the
 // owner's dashboard shows now, and its codes what it calls the device's
-// projects by, which replace the ones kept before. A name the device sent,
-// in this request or before, that they lack, and that this request didn't
-// delete, the owner hid on the dashboard: it goes off in config.toml
-// (project-names-v1 2).
+// projects by, which replace the ones kept before. A key it lists as
+// hidden, the owner hid on the dashboard: its name goes off in config.toml
+// (project-names-v1 2), and the next request's delete tells the server so.
+// A name the server showed before that it neither shows nor lists as
+// hidden, and that this request didn't delete, the server no longer holds,
+// as after the device's purge or a restore of its database: it isn't
+// confirmed any more, so it goes again while config.toml has it on.
 func (u *Uploader) namesAnswered(sent namesBody, hash string, a answer) bool {
 	var reply namesReply
 	if err := json.Unmarshal(a.body, &reply); err != nil || reply.Names == nil {
@@ -495,19 +583,29 @@ func (u *Uploader) namesAnswered(sent namesBody, hash string, a answer) bool {
 			got[n.Project] = n.Label
 		}
 	}
-	gone := make(map[string]string)
-	for key, label := range u.names.Confirmed {
-		if _, ok := got[key]; !ok && !slices.Contains(sent.Delete, key) {
-			gone[key] = label
+	hid := make(map[string]bool, len(reply.Hidden))
+	for _, key := range reply.Hidden {
+		if _, shown := got[key]; keyForm(key) && !shown {
+			hid[key] = true
 		}
+	}
+	// The label each hidden name showed: the one the server showed
+	// before, or the one this request sent.
+	showed := maps.Clone(u.names.Confirmed)
+	if showed == nil {
+		showed = make(map[string]string)
 	}
 	mismatch := false
 	for _, it := range sent.Set {
-		switch label, ok := got[it.Project]; {
-		case !ok:
-			gone[it.Project] = it.Label
-		case label != it.Label:
+		showed[it.Project] = it.Label
+		if label, ok := got[it.Project]; !ok || label != it.Label {
 			mismatch = true
+		}
+	}
+	dropped := 0
+	for key := range u.names.Confirmed {
+		if _, ok := got[key]; !ok && !hid[key] && !slices.Contains(sent.Delete, key) {
+			dropped++
 		}
 	}
 	now := u.now().UnixMilli()
@@ -515,12 +613,21 @@ func (u *Uploader) namesAnswered(sent namesBody, hash string, a answer) bool {
 	if len(got) == 0 {
 		u.names.Confirmed = nil
 	}
+	u.names.Hides = slices.Sorted(maps.Keys(hid))
+	if len(hid) == 0 {
+		u.names.Hides = nil
+	}
 	for key := range got {
 		// Shown again: the owner turned it on on the computer.
 		delete(u.names.Hidden, key)
 	}
-	for _, key := range slices.Sorted(maps.Keys(gone)) {
-		u.hidden(key, gone[key], now)
+	for _, key := range u.names.Hides {
+		if _, noted := u.names.Hidden[key]; !noted {
+			u.hidden(key, showed[key], now)
+		}
+	}
+	if dropped > 0 {
+		u.log.Info("the server no longer holds project names it showed, as after the device's purge or a restore, so pairtime sends the ones config.toml has on again", "names", dropped)
 	}
 	u.namesStarted = true
 	u.saveNames()
