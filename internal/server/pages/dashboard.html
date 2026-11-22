@@ -108,15 +108,15 @@
 <section aria-labelledby="projects">
 <h2 id="projects">Projects</h2>
 {{- if .Projects}}
-<div class="table"><table class="projects">
-<thead><tr><th>Project</th><th>Last 7 days</th><th>Last 30 days</th></tr></thead>
-<tbody>
+<div class="table"><table class="projects" role="table">
+<thead role="rowgroup"><tr role="row"><th role="columnheader">Project</th><th role="columnheader">Last 7 days</th><th role="columnheader">Last 30 days</th></tr></thead>
+<tbody role="rowgroup">
 {{- range .Projects}}
-<tr><td{{with .Title}} title="{{.}}"{{end}}><span class="key {{.Color}}"></span>{{.Name}}{{if and .Hide $.HidePath}}<form class="hide" method="post" action="{{$.HidePath}}"><input type="hidden" name="project" value="{{.ID}}"><button type="submit">Hide this name</button></form>{{end}}</td><td>{{if .WeekNone}}<span class="none">{{.Week}}</span>{{else}}<strong>{{.Week}}</strong>{{end}} <span class="agent">{{$.AgentStart}} {{.WeekAgent}}</span></td><td>{{if .MonthNone}}<span class="none">{{.Month}}</span>{{else}}<strong>{{.Month}}</strong>{{end}} <span class="agent">{{$.AgentStart}} {{.MonthAgent}}</span></td></tr>
+<tr role="row"><td role="cell"{{with .Title}} title="{{.}}"{{end}}>{{template "key" .Color}}{{.Name}}{{if and .Hide $.HidePath}}<form class="hide" method="post" action="{{$.HidePath}}"><input type="hidden" name="project" value="{{.ID}}"><button type="submit">Hide this name</button></form>{{end}}</td>{{template "cell" .Week}}{{template "cell" .Month}}</tr>
 {{- end}}
 </tbody>
-<tfoot>
-<tr><th>{{.AllProjects.Name}}</th><td>{{if .AllProjects.WeekNone}}<span class="none">{{.AllProjects.Week}}</span>{{else}}<strong>{{.AllProjects.Week}}</strong>{{end}} <span class="agent">{{.AgentStart}} {{.AllProjects.WeekAgent}}</span></td><td>{{if .AllProjects.MonthNone}}<span class="none">{{.AllProjects.Month}}</span>{{else}}<strong>{{.AllProjects.Month}}</strong>{{end}} <span class="agent">{{.AgentStart}} {{.AllProjects.MonthAgent}}</span></td></tr>
+<tfoot role="rowgroup">
+<tr role="row"><th role="rowheader">{{.AllProjects.Name}}</th>{{template "cell" .AllProjects.Week}}{{template "cell" .AllProjects.Month}}</tr>
 </tfoot>
 </table></div>
 {{- if .SplitByDevice}}
@@ -177,8 +177,10 @@
 <p class="note">Use a name like America/New_York or Europe/London. Minutes counted after a change count in the new zone, and days already counted stay as they are.</p>
 </section>
 {{- end}}
+{{define "key"}}{{if .}}<span class="key {{.}}"></span>{{else}}<span class="key nokey"></span>{{end}}{{end}}
+{{define "cell"}}<td role="cell" data-label="{{.Label}}">{{if not .YouNone}}<strong>{{.You}}</strong> <span class="agent">{{.Agent}}</span>{{else if not .AgentNone}}<span class="agent">{{.Agent}}</span>{{else}}<span class="none">0m</span>{{end}}</td>{{end}}
 {{define "clock"}}<li>
-<p class="clock-name"{{with .Title}} title="{{.}}"{{end}}><span class="key {{.Color}}"></span>{{.Name}}</p>
+<p class="clock-name"{{with .Title}} title="{{.}}"{{end}}>{{template "key" .Color}}{{.Name}}</p>
 {{- range .Faces}}
 <p class="face"><span>{{.Label}}</span> <strong>{{.Time}}</strong>{{with .Pending}} <small>{{.}} pending</small>{{end}}</p>
 {{- end}}

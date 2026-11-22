@@ -19,7 +19,8 @@ The header names the person when their sign-in brought a name, and shows no id a
 - Without one, the header shows no name and no id: the link to the dashboard and the Sign out button alone. It never puts the Slack ID, the Hack Club Auth subject or the email address in a name's place.
 - `/device`, its confirmation, relink and taken pages, and `/account/devices` keep naming the account in their text as D-display-name says: "<name> (Slack ID <id>)", or "<name> (Hack Club Auth ID <sub>)" for an account without a Slack ID, and the Slack ID or subject alone when the sign-in brought no name. Their header follows the rule above.
 - Signing in again brings the name, now that pairtimed asks for `profile`.
+- Two texts still tell a teen to check the account in the header, which no longer shows any id: `pairtime login`'s sentence in `cmd/pairtime/login.go`, "It's linked to the account <id>, the name the top of <server>'s pages shows while that account is signed in", and docs/spec/device-auth-v1.md section 4's "`pairtime login` prints it and says the same name is at the top of the server's pages while that account is signed in". Both will point at `<server>/account/devices` instead, which keeps the Slack ID, or the Hack Club Auth ID, in its text, so a teen whose code someone else approved still finds out at once (RFC 8628 5.4). The PR that changes `login.go` changes the spec line with it, so the spec never disagrees with the client. Clients already released print the old sentence until they update.
 
 ## For Karim
 
-The orchestrator decided this for you, so nothing waits on you here. No DESIGN text names the header's fallback, so nothing else changes.
+The orchestrator decided this for you, so nothing waits on you here. No DESIGN text names the header's fallback; the login sentence and the spec line above are the only other texts it changes.

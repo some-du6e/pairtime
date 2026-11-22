@@ -86,7 +86,7 @@ func TestNamedProjects(t *testing.T) {
 				return page
 			},
 			section: "projects",
-			want:    []string{`<tr><td title="Project 7c41e9"><span class="key c1"></span>chip8-emulator` + hideButton + `</td>`},
+			want:    []string{`<tr role="row"><td role="cell" title="Project 7c41e9"><span class="key c1"></span>chip8-emulator` + hideButton + `</td>`},
 		},
 		{
 			name: "a project called by its code has no hide button, since there is no name to hide",
@@ -96,7 +96,7 @@ func TestNamedProjects(t *testing.T) {
 				return page
 			},
 			section: "projects",
-			want:    []string{`<tr><td title="gd2a8f61c94e07b35a8c1f6e29d4b7a03"><span class="key c2"></span>Project d2a8f6</td>`},
+			want:    []string{`<tr role="row"><td role="cell" title="gd2a8f61c94e07b35a8c1f6e29d4b7a03"><span class="key c2"></span>Project d2a8f6</td>`},
 		},
 		{
 			name: "today's clock of a named project shows the name, with its code's name in a title",
