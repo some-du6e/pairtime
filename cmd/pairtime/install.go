@@ -13,6 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent"
+	"github.com/some-du6e/pairtime/internal/agent/account"
+	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/install/consent"
@@ -382,7 +385,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	fmt.Fprintln(stdout, "pairtime is set up. It runs in local-only mode, so what it records stays on this computer.")
+	fmt.Fprintln(stdout, setUpLine(dirs))
 	if slices.Contains(chosen, install.ItemClaudeCode) {
 		// Claude Code's file watcher picks up a change to the hooks in its
 		// settings in sessions that are open, and a folder's trust dialog
@@ -447,6 +450,20 @@ func hasClaudeHooks(in *install.Installer, env install.Env) (bool, error) {
 // user's only (DESIGN 3.5), and on Windows the binary's folder inside the
 // data directory inherits that. A data directory a script made took its
 // parent's permissions instead, and gets home's here (protectDir).
+// setUpLine is install's last word on where what pairtime records goes:
+// it stays on this computer in local-only mode, as every install starts
+// in, and on a computer pairtime login linked, while config.toml says
+// online and reads (agent.UploadConfig), its hours' numbers go to the
+// server it's linked to.
+func setUpLine(dirs home.Dirs) string {
+	if l, err := account.Load(dirs.Data); err == nil {
+		if cfg, broken := agent.UploadConfig(dirs); broken == "" && cfg.Mode == config.Online {
+			return fmt.Sprintf("pairtime is set up. This computer is linked to %s, so it uploads your hours' numbers there.", install.Printable(l.Server))
+		}
+	}
+	return "pairtime is set up. It runs in local-only mode, so what it records stays on this computer."
+}
+
 func makeHome(env install.Env, dirs home.Dirs, made, scriptMade []string) error {
 	if err := dirs.Create(); err != nil {
 		return err

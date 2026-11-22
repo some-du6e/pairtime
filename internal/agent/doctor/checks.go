@@ -141,7 +141,7 @@ func agentCheck(f Facts) Check {
 		}
 		c.Result = OK
 		c.Text = fmt.Sprintf("running pairtime %s for %s, %s; it answered in %s", text.Printable(a.Version.Version),
-			text.Duration(float64(a.UptimeS)), modeWords(a.Mode), Millis(f.AskTook))
+			text.Duration(float64(a.UptimeS)), modeWords(a), Millis(f.AskTook))
 		// The agent answered over the socket or pipe that hooks use, so
 		// they reach it too.
 		if a.IPC.Via == "pipe" {
@@ -157,15 +157,20 @@ func agentCheck(f Facts) Check {
 	return c
 }
 
-// modeWords says what the agent's mode uploads (DESIGN 4.2).
-func modeWords(mode string) string {
-	switch mode {
+// modeWords says what the agent's mode uploads (DESIGN 4.2). While the
+// uploader reports a problem, a signed-in computer's uploads are held back,
+// stopped or in part, and problem.uploader says why and what to do.
+func modeWords(a *Status) string {
+	switch a.Mode {
 	case "local":
 		return "in local mode, which uploads nothing"
 	case "online":
+		if strings.TrimSpace(a.Problems["uploader"]) != "" {
+			return "signed in, but its uploads are held back (problem.uploader says why, and what to do)"
+		}
 		return "signed in, so it uploads your hours' numbers"
 	}
-	return "in mode " + strconv.Quote(mode)
+	return "in mode " + strconv.Quote(a.Mode)
 }
 
 // idleCheck is DESIGN 5.9's idle line: idle detection working with its
@@ -199,9 +204,10 @@ func focusCheck(s Signals) Check {
 // on Wayland, whose desktops tell other programs neither signal, an X11
 // session; on X11, a window manager that keeps _NET_ACTIVE_WINDOW for
 // focus and the X server's MIT-SCREEN-SAVER extension for idle time,
-// unless the agent is only reconnecting to the X server; and with no
-// desktop session, or a macOS or Windows source that didn't start, a new
-// login, which starts the agent in the desktop's session.
+// unless the agent is only reconnecting to the X server, or couldn't reach
+// it at its start (xConnection); and with no desktop session, or a macOS
+// or Windows source that didn't start, a new login, which starts the agent
+// in the desktop's session.
 func unknownCost(s Signals, why string, focus bool) string {
 	const cost = ". pairtime counts none of your time here yet; "
 	sees := "when you're at the keyboard"
@@ -213,12 +219,31 @@ func unknownCost(s Signals, why string, focus bool) string {
 		return cost + "an X11 session, where your login screen offers one, lets it see " + sees
 	case s.Session == "x11" && strings.Contains(why, "reconnecting"):
 		return cost + "the agent is reconnecting to the X server, so run pairtime doctor again in a minute"
+	case s.Session == "x11" && xConnection(why):
+		return cost + "the agent couldn't reach the X server, as with a DISPLAY or an X authority that isn't your desktop's; " +
+			"logging out and back in starts the agent in your desktop's session, where it can see " + sees
 	case s.Session == "x11" && focus:
 		return cost + "a window manager that keeps _NET_ACTIVE_WINDOW, as most do, lets it see " + sees
 	case s.Session == "x11":
 		return cost + "an X server with the MIT-SCREEN-SAVER extension, as most have, lets it see " + sees
 	}
 	return cost + "logging out and back in starts the agent in your desktop's session, where it can see " + sees
+}
+
+// xConnects open the reasons the Linux sources give when they couldn't
+// reach the X server at the agent's start: a DISPLAY they can't use, a
+// connection that failed, or one the X server refused, as without its X
+// authority (internal/platform/linux's parseDisplay and openX11).
+var xConnects = []string{"DISPLAY ", "can't connect to the X display", "X connection setup", "the X server refused the connection"}
+
+// xConnection reports whether why is a reason of xConnects'.
+func xConnection(why string) bool {
+	for _, p := range xConnects {
+		if strings.HasPrefix(why, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // loopCheck warns when the macOS notification loop runs off the main

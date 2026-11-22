@@ -60,6 +60,18 @@ func TestChecks(t *testing.T) {
 			wantHas: []string{"running pairtime v0.1.0 for 1h, in local mode, which uploads nothing; it answered in 2 ms"}},
 		{name: "a signed-in agent says it uploads your hours' numbers",
 			edit: func(f *Facts) { f.Agent.Mode = "online" }, check: "agent", want: OK, wantHas: []string{"signed in, so it uploads your hours' numbers"}},
+		{name: "a signed-in agent whose uploader reports a problem says its uploads are held back, and points at problem.uploader",
+			edit: func(f *Facts) {
+				f.Agent.Mode = "online"
+				f.Agent.Problems = map[string]string{"uploader": "pairtime has stopped uploading; to upload again, run pairtime logout, then pairtime login"}
+			}, check: "agent", want: OK,
+			wantHas: []string{"signed in, but its uploads are held back (problem.uploader says why, and what to do)"},
+			wantNot: []string{"so it uploads"}},
+		{name: "a signed-in agent with other problems only still says it uploads",
+			edit: func(f *Facts) {
+				f.Agent.Mode = "online"
+				f.Agent.Problems = map[string]string{"focus": "focus detection stopped"}
+			}, check: "agent", want: OK, wantHas: []string{"signed in, so it uploads your hours' numbers"}},
 		{name: "an agent on the named pipe says hooks reach it there",
 			edit: func(f *Facts) { f.Agent.IPC.Via = "pipe" }, check: "agent", want: OK, wantHas: []string{"named pipe"}},
 		{name: "an agent of another version warns, and says how to move it to this one",
@@ -98,6 +110,26 @@ func TestChecks(t *testing.T) {
 			}, check: "idle", want: Fail,
 			wantHas: []string{"an X server with the MIT-SCREEN-SAVER extension, as most have, lets it see when you're at the keyboard"},
 			wantNot: []string{"logging out"}},
+		{name: "on X11, focus unknown because the agent couldn't connect to the X display at its start names the X connection, not a window manager",
+			edit: func(f *Facts) {
+				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "can't connect to the X display: dial unix /tmp/.X11-unix/X0: connect: no such file or directory"}, "x11"
+			}, check: "focus", want: Fail,
+			wantHas: []string{"the agent couldn't reach the X server, as with a DISPLAY or an X authority that isn't your desktop's; logging out and back in starts the agent in your desktop's session, where it can see the window in front"},
+			wantNot: []string{"_NET_ACTIVE_WINDOW"}},
+		{name: "on X11, presence unknown because the X server refused the connection names the X connection, not an extension",
+			edit: func(f *Facts) {
+				f.Agent.Signals.Idle, f.Agent.Signals.Session = Signal{Unknown: "the X server refused the connection: Authorization required"}, "x11"
+			}, check: "idle", want: Fail,
+			wantHas: []string{"the agent couldn't reach the X server", "where it can see when you're at the keyboard"},
+			wantNot: []string{"MIT-SCREEN-SAVER"}},
+		{name: "on X11, presence unknown because the connection's setup failed names the X connection",
+			edit: func(f *Facts) {
+				f.Agent.Signals.Idle, f.Agent.Signals.Session = Signal{Unknown: "X connection setup: unexpected EOF"}, "x11"
+			}, check: "idle", want: Fail, wantHas: []string{"the agent couldn't reach the X server"}, wantNot: []string{"MIT-SCREEN-SAVER"}},
+		{name: "on X11, focus unknown because DISPLAY can't be read names the X connection",
+			edit: func(f *Facts) {
+				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "DISPLAY has no display number"}, "x11"
+			}, check: "focus", want: Fail, wantHas: []string{"the agent couldn't reach the X server"}, wantNot: []string{"_NET_ACTIVE_WINDOW"}},
 		{name: "on X11, focus unknown while the agent reconnects to the X server says to run doctor again",
 			edit: func(f *Facts) {
 				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "lost the X connection; reconnecting"}, "x11"

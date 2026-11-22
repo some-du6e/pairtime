@@ -158,6 +158,16 @@ func TestAsk(t *testing.T) {
 			},
 		},
 		{
+			name: "an answer that says the agent can't answer yet is ErrStarting, for the asker to ask again",
+			run: func(t *testing.T, ep Endpoint) {
+				a := &answers{err: ErrStarting}
+				serve(t, ep, Options{Answer: a.answer}, nil)
+				if _, err := askOne(t, ep, AskLastSession); !errors.Is(err, ErrStarting) || errors.Is(err, ErrUnknownQuestion) {
+					t.Errorf("Ask = %v, want ErrStarting", err)
+				}
+			},
+		},
+		{
 			name: "an answer that isn't JSON is an error",
 			run: func(t *testing.T, ep Endpoint) {
 				a := &answers{by: map[string]json.RawMessage{AskLastSession: json.RawMessage(`{"shadow":`)}}
