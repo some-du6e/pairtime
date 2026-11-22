@@ -1,0 +1,29 @@
+{
+  "fixture": "relayed/chat-bot",
+  "prompts": [
+    {
+      "turn_key": "t_231d65e9ab0a",
+      "t": 1795662003000,
+      "local": "21:00:03",
+      "text": null,
+      "len_chars": 126,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_0f6630a55a3b",
+      "t": 1795662303000,
+      "local": "21:05:03",
+      "text": null,
+      "len_chars": 60,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_8bfb9c1eb7bd",
+      "t": 1795662903000,
+      "local": "21:15:03",
+      "text": null,
+      "len_chars": 45,
+      "source": "invented for this case; only its length matters"
+    }
+  ]
+}

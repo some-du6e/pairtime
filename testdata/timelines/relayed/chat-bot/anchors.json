@@ -1,0 +1,77 @@
+{
+  "fixture": "relayed/chat-bot",
+  "anchors": [
+    {
+      "event_id": "01a215cb-b368-727d-9fdd-e93104f4c61a",
+      "kind": "substantive_prompt",
+      "t": 1795662001000,
+      "local": "21:00:01",
+      "project_key": "p_78beb9f1189f",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "lead_s": 80,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "plugin",
+      "level": "C",
+      "sm": "2.3: typing time of the call's own text, 120 / 1.5 = 80 s",
+      "sent_at": 1795662000000,
+      "local_sent_at": "21:00:00",
+      "prompt": "01a215cb-bb38-7bc0-9919-5d404fcbb702",
+      "labels": ["via_plugin", "via_relay"]
+    },
+    {
+      "event_id": "01a215d0-4748-767a-857c-9fdf45ebf839",
+      "kind": "substantive_prompt",
+      "t": 1795662301000,
+      "local": "21:05:01",
+      "project_key": "p_78beb9f1189f",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "lead_s": 40,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "plugin",
+      "level": "C",
+      "sm": "2.3: typing time of the call's own text, 60 / 1.5 = 40 s",
+      "sent_at": 1795662300000,
+      "local_sent_at": "21:05:00",
+      "prompt": "01a215d0-4f18-7a4d-a040-a79c83c3dc54",
+      "labels": ["via_plugin", "via_relay"]
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_4e629c01f5f1",
+      "turn_key": "t_231d65e9ab0a",
+      "t_submit": 1795662003000,
+      "local_submit": "21:00:03",
+      "t_stop": 1795662120000,
+      "local_stop": "21:02:00",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 9"
+    },
+    {
+      "session_key": "s_4e629c01f5f1",
+      "turn_key": "t_0f6630a55a3b",
+      "t_submit": 1795662303000,
+      "local_submit": "21:05:03",
+      "t_stop": 1795662390000,
+      "local_stop": "21:06:30",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 9"
+    },
+    {
+      "session_key": "s_fd489a8bc5b0",
+      "turn_key": "t_8bfb9c1eb7bd",
+      "t_submit": 1795662903000,
+      "local_submit": "21:15:03",
+      "t_stop": 1795662960000,
+      "local_stop": "21:16:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4"
+    }
+  ]
+}
