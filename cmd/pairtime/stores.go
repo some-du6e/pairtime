@@ -19,8 +19,8 @@ package main
 //     The answer is what GET /v1/sessions/last gives.
 //   - today asks the running agent for its status over the same socket
 //     (ipc.AskStatus), as doctor does, only to learn whether focus is
-//     unknown on this desktop, and prints the day without that sentence
-//     when the agent doesn't answer (focusUnknown).
+//     unknown on this desktop, and prints the day without DESIGN 5.9's
+//     sentence about it when the agent doesn't answer (focusLines).
 //
 // The local API keeps GET /v1/days/{date} and GET /v1/sessions/last, which
 // the dashboard reads with its session cookie (WP-UI1).

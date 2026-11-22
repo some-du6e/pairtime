@@ -32,7 +32,7 @@ var (
 		KeyCalibratingNote, KeyLevelCNote, KeyPendingNote, KeyNothingToday, KeyNothingOn,
 		KeySessionLast, KeySessionOpen, KeySessionSpan, KeySessionSince, KeyNoSession,
 		KeyLevelsHead, KeyLevelLine, KeyAgentDown, KeyAgentOld, KeyAgentSlow, KeyAgentError, KeyStoreError,
-		KeyFocusUnknown,
+		KeyFocusUnknown, KeyFocusUnknownLevelC, KeyGnomeNeedsLogin, KeyGnomeUnticked,
 	}
 )
 

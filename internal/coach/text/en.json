@@ -68,6 +68,9 @@
     "agent_slow": "pairtime's agent didn't answer in time. Try again in a moment.",
     "agent_error": "pairtime couldn't get this from its agent: {error}",
     "store_error": "pairtime couldn't read what its agent stored: {error}",
-    "focus_unknown": "Focus unknown on this desktop. Run pairtime doctor to see why."
+    "focus_unknown": "This desktop doesn't tell pairtime which window is in front.",
+    "focus_unknown_level_c": "This desktop doesn't tell pairtime which window is in front, so your time here counts only on your own dashboard, not on your profile, build days or most programs.",
+    "gnome_needs_login": "Log out and back in once to turn on pairtime's GNOME extension.",
+    "gnome_unticked": "Run pairtime install again and keep pairtime's GNOME extension."
   }
 }

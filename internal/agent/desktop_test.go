@@ -7,6 +7,7 @@ import (
 	"errors"
 	"runtime"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -105,6 +106,113 @@ func TestMacHandler(t *testing.T) {
 			}
 			if !slices.Equal(pids, tt.pids) {
 				t.Errorf("focus changes for processes %v, want %v", pids, tt.pids)
+			}
+		})
+	}
+}
+
+// fakeNotifyLoop stands in for a MacLoop's darwin.Loop, whose Status comes
+// from macOS: its Run closes Ready, as the Loop does once its sources are
+// registered, then returns err at once, or runs until ctx ends when err is
+// nil. Status is what it registered.
+type fakeNotifyLoop struct {
+	st    darwin.Status
+	err   error
+	ready chan struct{}
+}
+
+func (l *fakeNotifyLoop) Run(ctx context.Context) error {
+	close(l.ready)
+	if l.err != nil {
+		return l.err
+	}
+	<-ctx.Done()
+	return nil
+}
+
+func (l *fakeNotifyLoop) Ready() <-chan struct{} { return l.ready }
+func (l *fakeNotifyLoop) Status() darwin.Status  { return l.st }
+
+// TestMacLoopFocusUnknown checks that MacFocus, whose Watch always starts,
+// hears when no activation will come: a MacLoop whose activation observer
+// didn't register, or whose Loop didn't run, makes focus unknown, and the
+// focus component records one os.focus with app_class unknown (SM 2.5).
+func TestMacLoopFocusUnknown(t *testing.T) {
+	registered := darwin.Status{MainThread: true}
+	noObserver := darwin.Status{MainThread: true, Focus: errors.New("NSWorkspace has no notification center")}
+	cases := []struct {
+		name     string
+		loop     *fakeNotifyLoop
+		activate bool // an app comes to the front while the Loop runs
+		want     event.AppClass
+		unknown  string // what the focus component's Status says after
+	}{
+		{name: "a Loop whose activation observer didn't register gives one os.focus unknown, though the Loop runs on for power and locks",
+			loop: &fakeNotifyLoop{st: noObserver}, want: event.AppUnknown, unknown: "NSWorkspace has no notification center"},
+		{name: "a Loop whose Run fails gives one os.focus unknown, with the reason GET /v1/status gives",
+			loop: &fakeNotifyLoop{err: errors.New("darwin: no notification source works")}, want: event.AppUnknown,
+			unknown: "the macOS notification loop didn't start: darwin: no notification source works"},
+		{name: "off macOS, where Run fails at once, focus is unknown too",
+			loop: &fakeNotifyLoop{err: errors.ErrUnsupported}, want: event.AppUnknown, unknown: "the macOS notification loop runs on macOS only"},
+		{name: "a Loop whose sources all registered says nothing of unknown focus, and its activations make the records",
+			loop: &fakeNotifyLoop{st: registered}, activate: true, want: event.AppTerminal},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.loop.ready = make(chan struct{})
+			m := &MacLoop{loop: tc.loop}
+			now := time.Now()
+			read := func() ([]platform.Proc, error) {
+				return []platform.Proc{{PID: 4242, PPID: 1, Name: "zsh", Start: now.Add(-time.Hour), Owner: "uid:501"}}, nil
+			}
+			var mu sync.Mutex
+			var recs []focus.Record
+			w := focus.New(focus.Options{OS: focus.MacOS(&m.focus, read), Record: func(r focus.Record) {
+				mu.Lock()
+				defer mu.Unlock()
+				recs = append(recs, r)
+			}})
+			w.Start()
+			defer w.Stop()
+			ctx, cancel := context.WithCancel(context.Background())
+			ran := make(chan error, 1)
+			go func() { ran <- m.Run(ctx) }()
+			<-tc.loop.ready
+			if tc.activate {
+				macHandler{m}.Focus(now, darwin.App{PID: 4242})
+			}
+			if tc.loop.err == nil {
+				// Run is serving the Loop; the observer's report comes after
+				// Ready, so wait for the record before stopping it.
+				deadline := time.Now().Add(10 * time.Second)
+				for w.Status().Records == 0 && time.Now().Before(deadline) {
+					time.Sleep(time.Millisecond)
+				}
+			}
+			cancel()
+			if err := <-ran; (err != nil) != (tc.loop.err != nil) {
+				t.Fatalf("Run returned %v, want %v", err, tc.loop.err)
+			}
+			// Every change has been delivered by now; wait for the worker.
+			deadline := time.Now().Add(10 * time.Second)
+			for st := w.Status(); st.Records < 1 && time.Now().Before(deadline); st = w.Status() {
+				time.Sleep(time.Millisecond)
+			}
+			st := w.Status()
+			mu.Lock()
+			defer mu.Unlock()
+			if len(recs) != 1 || recs[0].Data.AppClass != tc.want || st.Changes != 1 {
+				var got []event.AppClass
+				for _, r := range recs {
+					got = append(got, r.Data.AppClass)
+				}
+				t.Fatalf("records %v from %d changes, want one %s", got, st.Changes, tc.want)
+			}
+			if err := recs[0].Data.Validate(); err != nil {
+				t.Errorf("the record doesn't validate: %v", err)
+			}
+			if st.Unknown != tc.unknown {
+				t.Errorf("Status.Unknown %q, want %q", st.Unknown, tc.unknown)
 			}
 		})
 	}

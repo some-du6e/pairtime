@@ -110,8 +110,11 @@ func runToday(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	asToday := *date == ""
-	writeToday(stdout, out, asToday, asToday && !agentStopped(dirs) && focusUnknown(dirs))
+	var focus []string
+	if *date == "" && !agentStopped(dirs) {
+		focus = focusLines(dirs)
+	}
+	writeToday(stdout, out, *date == "", focus)
 	return 0
 }
 
@@ -120,27 +123,52 @@ func runToday(args []string, stdout, stderr io.Writer) int {
 // so a slow agent doesn't hold the day up long. Tests shorten it.
 var focusAskWait = time.Second
 
-// focusUnknown reports whether the running agent says focus is unknown on
-// this desktop: GET /v1/status's focus signal, which doctor's focus line
-// reads too (DESIGN 5.9). It asks over the per-user socket, as recap does,
-// so no token goes anywhere. An agent that doesn't answer in time, or is
-// older than the question, says nothing, and today prints no sentence.
-func focusUnknown(dirs home.Dirs) bool {
+// focusLines is what today says about a desktop that hides which window is
+// in front: DESIGN 5.9's teen-facing sentence while the running agent's GET
+// /v1/status says focus is unknown, the signal doctor's focus line reads
+// too, and nothing otherwise. As on the dashboard's Today page
+// (web/src/local/copy.ts), the sentence stops at "in front" until the
+// status says such time counts at level C (focus_level_c, which WP-SC8
+// sets), and on GNOME the line the status's gnome_extension calls for
+// follows. today asks over the per-user socket, as recap does, so no token
+// goes anywhere. An agent that doesn't answer in time, or is older than the
+// question, says nothing, and today prints none of it.
+func focusLines(dirs home.Dirs) []string {
 	ep, err := ipc.EndpointFor(dirs)
 	if err != nil {
-		return false
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), focusAskWait)
 	defer cancel()
 	ans, err := ipc.Ask(ctx, ep, ipc.AskStatus)
 	if err != nil {
-		return false
+		return nil
 	}
-	var st doctor.Status
+	var st struct {
+		Signals struct {
+			Focus          doctor.Signal `json:"focus"`
+			FocusLevelC    bool          `json:"focus_level_c"`
+			GnomeExtension string        `json:"gnome_extension"`
+		} `json:"signals"`
+	}
 	if err := json.Unmarshal(ans, &st); err != nil {
-		return false
+		return nil
 	}
-	return st.Signals.Focus.Via == "" && st.Signals.Focus.Unknown != ""
+	sig := st.Signals
+	if sig.Focus.Via != "" || sig.Focus.Unknown == "" {
+		return nil
+	}
+	lines := []string{text.Phrase(text.KeyFocusUnknown)}
+	if sig.FocusLevelC {
+		lines[0] = text.Phrase(text.KeyFocusUnknownLevelC)
+	}
+	switch sig.GnomeExtension {
+	case "needs_login":
+		lines = append(lines, text.Phrase(text.KeyGnomeNeedsLogin))
+	case "unticked":
+		lines = append(lines, text.Phrase(text.KeyGnomeUnticked))
+	}
+	return lines
 }
 
 // buildToday turns the agent's day into the view, projects with the most
@@ -169,10 +197,10 @@ func buildToday(d dayFile, shadow bool) todayJSON {
 
 // writeToday prints the day: its date, then each project's chess clock
 // and rows. today says whether the day was asked for as today, which
-// changes what an empty day says. focusUnknown adds DESIGN 5.9's
-// focus-unknown sentence at the end, which explains time that pairtime
-// doesn't count on a desktop that hides which window is in front.
-func writeToday(w io.Writer, d todayJSON, today, focusUnknown bool) {
+// changes what an empty day says. focus, the lines focusLines gives, end
+// the view: they explain time pairtime doesn't count on a desktop that
+// hides which window is in front.
+func writeToday(w io.Writer, d todayJSON, today bool, focus []string) {
 	fmt.Fprintln(w, dayTitle(d.Date))
 	if len(d.Projects) == 0 {
 		fmt.Fprintln(w)
@@ -191,8 +219,10 @@ func writeToday(w io.Writer, d todayJSON, today, focusUnknown bool) {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, text.Phrase(text.KeyCalibratingNote))
 	}
-	if focusUnknown {
+	if len(focus) > 0 {
 		fmt.Fprintln(w)
-		fmt.Fprintln(w, text.Phrase(text.KeyFocusUnknown))
+		for _, l := range focus {
+			fmt.Fprintln(w, l)
+		}
 	}
 }
