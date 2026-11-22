@@ -277,7 +277,8 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		// nor do the file's lines and idle markers that name no folder,
 		// after one that named it.
 		recs = nil
-		if !ll.Idle {
+		if !ll.Idle && !ll.Replay {
+			// A replay was counted when it was first read.
 			h.count(func() { st.Ignored++ })
 		}
 	}
