@@ -728,7 +728,13 @@ func TestNoteMode(t *testing.T) {
 	// with a stretch end state.json kept from a second boot that sealed no
 	// batch ("reboot-seen-other"), and writes a hook call of that second
 	// boot made before that end by its clock, though its t is after
-	// ("write-other-boot").
+	// ("write-other-boot"); checks that the last Waiting asked held a hook
+	// call of the boot before by that boot's reading ("asked-old-boot");
+	// writes an event made before the last note by the OS's clock, whose t
+	// a step put three minutes after it ("write-stepped-far"); or opens the
+	// writer again after a kill with a stretch end by the wall clock alone,
+	// later than the newest seal frame's moment, that state.json kept
+	// ("kill-seen-wall").
 	cases := []struct {
 		name  string
 		steps []string
@@ -831,6 +837,12 @@ func TestNoteMode(t *testing.T) {
 		{"a hook call of the boot before, which reaches a writer opened in a new boot, made before the newest seal frame's moment by that boot's clock though its t is after, is sealed local-only",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reboot", "write-stepped", "seal", "write", "seal"},
 			[]bool{false, true, false, true}, []bool{false, true, false, false}, []int{1, 1, 1, 1}},
+		{"a seal after a reboot, while the newest batch is local-only, asks Waiting by the boot before's reading too, so a call of that boot still on its way holds the mark",
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "pause", "write-old", "seal", "reboot", "write", "seal", "asked-old-boot"},
+			[]bool{false, false, true}, []bool{false, false, false}, []int{1, 1, 1}},
+		{"an event a kill left, made before the newest seal frame's moment by the OS's clock, is sealed local-only by the next Open, though a later stretch end by the wall clock alone dropped the moment's OS reading",
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "pause", "write", "seal", "write-stepped-far", "kill-seen-wall", "sealed"},
+			[]bool{false, true, false}, []bool{false, true, false}, []int{1, 1, 1}},
 		{"a hook call of a boot between the newest seal frame's and the writer's, held to the stretch end state.json kept from that boot by its clock, is sealed local-only though its t is after",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reboot-seen-other", "write-other-boot", "seal"},
 			[]bool{false, true, false}, []bool{false, true, false}, []int{1, 1, 1}},
@@ -853,8 +865,11 @@ func TestNoteMode(t *testing.T) {
 			// note's boot by the OS's mono alone, as Write does: made before
 			// it, though its t is after, and not one made after it, though its
 			// t is before.
+			// heldOld is whether the moment Waiting was last asked about held
+			// a hook call of the note's boot, made before the note by that
+			// boot's clock, though its t is after.
 			var (
-				waits, asked atomic.Bool
+				waits, asked, heldOld atomic.Bool
 			)
 			const osBoot, osMono = "b_os", 50_000
 			// The OS's clock as the writer reads it, in the boot "reboot"
@@ -873,6 +888,7 @@ func TestNoteMode(t *testing.T) {
 					o.Seen = func() Seen { return seen }
 					o.Sealed = func(b Batch) { sealed <- b }
 					o.Waiting = func(before func(event.Envelope) bool) bool {
+						heldOld.Store(before(event.Envelope{T: testT + 60_000, Mono: osMono - 1000, BootID: osBoot}))
 						asked.Store(before(event.Envelope{T: testT - 1}) && !before(event.Envelope{T: testT}) &&
 							before(event.Envelope{T: testT + 60_000, Mono: osMono - 1000, BootID: osBoot}) &&
 							!before(event.Envelope{T: testT - 1, Mono: osMono + 1000, BootID: osBoot}))
@@ -948,6 +964,18 @@ func TestNoteMode(t *testing.T) {
 					bootNow.Store("b_os2")
 					monoNow.Store(10_000)
 					w = openWriter(file.Load)
+					heldOld.Store(false)
+				case "asked-old-boot":
+					if !heldOld.Load() {
+						t.Errorf("step %d: the seal's Waiting wasn't asked by the boot before's reading", i)
+					}
+				case "write-stepped-far":
+					writeAt(i, testT+180_000, func(in *Input) { in.Event.BootID, in.Event.Mono = osBoot, osMono-1000 })
+				case "kill-seen-wall":
+					abandon(w)
+					seen = Seen{Ended: time.UnixMilli(testT + 120_000), Earlier: true}
+					w = openWriter(file.Load)
+					seen = Seen{}
 				case "kill-reboot":
 					abandon(w)
 					bootNow.Store("b_os2")
@@ -1180,9 +1208,9 @@ func TestNoteSeen(t *testing.T) {
 			Seen{}, false, false, []string{"write", "seen-after", "seal", "write", "seal"}, []bool{false, true}, []bool{false, true}},
 		{"a stretch end an earlier run saw before a batch it sealed arms no mark at the next start, as after an upgrade from a version whose seal frames keep no moment",
 			Seen{}, false, false, []string{"write", "seal", "reopen-earlier", "write", "seal"}, []bool{true, true}, []bool{false, false}},
-		{"so does one before a batch whose row a crash lost, once Open rebuilds the row from its seal frame",
+		{"a stretch end an earlier run saw before a batch whose row a crash lost arms no mark once Open rebuilds the row from its seal frame",
 			Seen{}, false, false, []string{"write", "seal", "crash-earlier", "write", "seal"}, []bool{true, true}, []bool{false, false}},
-		{"so does one NoteSeen gives after a batch the writer sealed itself",
+		{"an earlier run's stretch end that NoteSeen gives after a batch this writer sealed arms no mark",
 			Seen{}, false, false, []string{"write", "seal", "seen-earlier", "write", "seal"}, []bool{true, true}, []bool{false, false}},
 		{"a stretch end this run saw before the newest batch, on frames that keep no moment, is newer, and marks the batch after it",
 			Seen{}, false, false, []string{"write", "seal", "seen-before", "write", "seal"}, []bool{true, true}, []bool{false, true}},
