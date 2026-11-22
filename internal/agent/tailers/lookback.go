@@ -187,17 +187,44 @@ func serveFile(i int, jf jobFile, enc *json.Encoder, trim Trimmer) error {
 	return enc.Encode(childLine{F: i, O: start, End: true})
 }
 
-// inHistory says f's history is still to be read: the tailer leaves f to
-// lookback until the line at pos, where its next line starts, is past
-// it. After a restart pos is the resume, and after a Rewind the file's
-// start. t.mu is held.
-func (f *file) inHistory() bool { return f.hist > 0 && !f.histDone && f.pos < f.hist }
+// inHistory says f has lines for lookback still to read, of its history or
+// that a Rewind gave it (file.rewindTo): the tailer leaves f to lookback
+// until the line at pos, where its next line starts, is past them. After
+// a restart pos is the resume, and after a Rewind the file's start. t.mu
+// is held.
+func (f *file) inHistory() bool {
+	return f.hist > 0 && !f.histDone && f.pos < f.hist || f.pos < f.rewindTo
+}
+
+// lookbacks says lookback isn't done with f: it has a history lookback
+// hasn't ended, or lines a Rewind gave it. t.mu is held.
+func (f *file) lookbacks() bool { return f.hist > 0 && !f.histDone || f.rewindTo > 0 }
 
 // lookbackUsable says lookback's reader may be started: lookback is on,
 // and its reader hasn't failed maxLookbackTries times in this run. t.mu is
 // held.
 func (t *Tailer) lookbackUsable() bool {
 	return t.opts.Lookback != nil && t.lb.failures < maxLookbackTries
+}
+
+// lookbackNow says lookback's reader can read a file now: it runs, or the
+// next Step may start it, with no pause after a failure to wait out. t.mu
+// is held.
+func (t *Tailer) lookbackNow() bool {
+	return t.lookbackUsable() && (t.lb.running || !t.opts.Now().Before(t.lb.next))
+}
+
+// leaveHistory takes f from lookback, when no child is to read it: what is
+// left of its history stays unread, and the tailer reads on after it, the
+// file's adapter starting afresh there (Line.Fresh). The lines a Rewind
+// gave lookback of a file whose history was all read, or that has none,
+// the tailer reads again itself from pos, as replays. t.mu is held.
+func (f *file) leaveHistory() {
+	if f.read < f.hist {
+		f.read, f.resume, f.pos, f.hash = f.hist, f.hist, f.hist, ""
+		f.fresh = f.hist
+	}
+	f.histDone, f.rewindTo, f.due = true, 0, true
 }
 
 // lookbackCounts reports whether a history read at now can have records
@@ -241,13 +268,18 @@ type lookbackState struct {
 	// next is when a child may start again after one failed.
 	next time.Time
 	// child is the one reading now, poke wakes a runner whose lines the
-	// agent didn't all take, and wg is the runner.
+	// agent didn't all take, and wg is the runner. again says a Rewind gave
+	// lookback a file since the job that runs began, which then starts
+	// again to take it up.
 	child *Child
 	poke  chan struct{}
 	wg    sync.WaitGroup
+	again bool
 }
 
-// progress returns how far lookback has read. t.mu is held.
+// progress returns how far lookback has read: of the histories a root's
+// first listing gave, and not of the lines a Rewind gave it, which pairtime
+// had read before. t.mu is held.
 func (t *Tailer) progress() Progress {
 	p := Progress{Running: t.lb.running, Failures: t.lb.failures, Err: t.lb.err}
 	for _, f := range t.files {
@@ -300,13 +332,14 @@ func (t *Tailer) runLookback() {
 		t.lb.next = t.opts.Now().Add(lookbackPause << (t.lb.failures - 1))
 		t.opts.Log.Warn("tailers: lookback's reader failed", "err", err, "failures", t.lb.failures)
 		if t.lb.failures >= maxLookbackTries {
-			// What is left of each history stays unread, and the tailer
-			// reads on after it, at the agent's priority; the file's
-			// adapter starts afresh there.
+			// No child reads again in this run, so the tailer reads each
+			// file on itself, at the agent's priority, after what is left
+			// of its history (leaveHistory): a file it has read to its
+			// history's end too, which a relocate or a Rewind would
+			// otherwise give lookback again.
 			for _, f := range t.files {
-				if f.inHistory() {
-					f.read, f.resume, f.pos, f.hash = f.hist, f.hist, f.hist, ""
-					f.histDone, f.due, f.fresh = true, true, f.hist
+				if f.lookbacks() {
+					f.leaveHistory()
 				}
 			}
 		}
@@ -342,6 +375,7 @@ func (t *Tailer) lookbackOnce() error {
 // lookbackJob runs one child over the files that wait now.
 func (t *Tailer) lookbackJob() error {
 	t.mu.Lock()
+	t.lb.again = false
 	var files []*file
 	for _, f := range t.files {
 		if f.inHistory() {
@@ -350,10 +384,14 @@ func (t *Tailer) lookbackJob() error {
 	}
 	slices.SortFunc(files, func(a, b *file) int { return b.mtime.Compare(a.mtime) })
 	job := lookbackJob{Files: make([]jobFile, len(files))}
-	reads := make([]int64, len(files))
+	reads, hists := make([]int64, len(files)), make([]int64, len(files))
 	for i, f := range files {
-		job.Files[i] = jobFile{Harness: f.harness, Path: f.path, From: f.pos, To: f.hist}
-		reads[i] = f.read
+		to := f.rewindTo
+		if !f.histDone {
+			to = max(to, f.hist)
+		}
+		job.Files[i] = jobFile{Harness: f.harness, Path: f.path, From: f.pos, To: to}
+		reads[i], hists[i] = f.read, f.hist
 	}
 	t.mu.Unlock()
 	if len(files) == 0 {
@@ -447,12 +485,15 @@ func (t *Tailer) lookbackJob() error {
 				return err
 			}
 			t.mu.Lock()
-			f.histDone, f.due = true, true
+			f.histDone, f.rewindTo, f.due = true, 0, true
 			t.mu.Unlock()
 			t.wake()
 			continue
 		}
-		l := Line{Harness: f.harness, Lookback: f.histFrom}
+		l := Line{Harness: f.harness}
+		if cl.E <= hists[cl.F] {
+			l.Lookback = f.histFrom
+		}
 		l.Log.File, l.Log.Path, l.Log.Offset, l.Log.End = f.key, f.path, cl.O, cl.E
 		l.Log.Replay, l.Log.TooLong = cl.E <= reads[cl.F], cl.Long
 		if !cl.Long {
@@ -474,13 +515,19 @@ func (t *Tailer) lookbackJob() error {
 }
 
 // deliverHistory hands a batch of f's history to the agent, and waits for
-// a Poke while the agent leaves some untaken. A Rewind of f starts the job
-// again, and the tailer's stop ends it.
+// a Poke while the agent leaves some untaken. A Rewind of f, or one that
+// gave lookback another file, starts the job again, and the tailer's stop
+// ends it.
 func (t *Tailer) deliverHistory(f *file, b Batch) error {
 	for {
 		t.mu.Lock()
-		known := t.files[f.key] == f
+		known, again := t.files[f.key] == f, t.lb.again
 		t.mu.Unlock()
+		if again {
+			// The job starts again from the cursors, with the file a Rewind
+			// gave it, which was written last, first.
+			return restartError{}
+		}
 		if !known {
 			// Gone, and forgotten: its adapter has no use for the rest.
 			return nil

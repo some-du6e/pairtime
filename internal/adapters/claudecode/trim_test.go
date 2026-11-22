@@ -3,6 +3,7 @@
 package claudecode
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -93,43 +94,74 @@ func TestTrimLog(t *testing.T) {
 var _ adapters.LogReader = (*Adapter)(nil)
 
 // TestTranscriptMemoryKeepsLiveFiles checks which file the reader's memory
-// forgets when full (older): the hundreds of histories lookback reads
-// after a session being written now go first, oldest entries first, so the
-// live session's next line finds its memory and isn't read again from its
-// start.
+// forgets when full (older): of the hundreds of histories lookback reads
+// after a session being written now, those it read before the last few go
+// first, oldest entries first. So the live session's next line finds its
+// memory and isn't read again from its start, and the history lookback
+// reads now isn't read again from its start each time a session starts.
 func TestTranscriptMemoryKeepsLiveFiles(t *testing.T) {
 	a := newTest()
-	prompt := func(file, ts string) adapters.RawRecord {
+	parse := func(file string, at time.Time) {
+		t.Helper()
 		l := logLines(userText("q1", "hello there", map[string]any{"turnOrigin": "human", "promptSource": "typed",
-			"entrypoint": nil, "timestamp": ts}))[0]
+			"entrypoint": nil, "timestamp": at.Format(time.RFC3339Nano)}))[0]
 		l.file = file
-		return logRaw(l, false, false)
-	}
-	if _, err := a.Parse(prompt("p/live.jsonl", "2026-11-21T10:00:00.000Z")); err != nil {
-		t.Fatal(err)
-	}
-	for i := range maxLogFiles {
-		ts := time.Date(2026, 11, 1, 0, 0, i, 0, time.UTC).Format(time.RFC3339Nano)
-		if _, err := a.Parse(prompt(fmt.Sprintf("p/old-%03d.jsonl", i), ts)); err != nil {
+		if _, err := a.Parse(logRaw(l, false, false)); err != nil {
 			t.Fatal(err)
 		}
+	}
+	live := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC)
+	parse("p/live.jsonl", live)
+	// Lookback reads the histories written last first, so each has older
+	// entries than the one before it, and the memory is full.
+	old := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	for i := range maxLogFiles - 1 {
+		parse(fmt.Sprintf("p/old-%03d.jsonl", i), old.Add(-time.Duration(i)*time.Minute))
+	}
+	// The history read now has older entries yet, and new sessions' lines
+	// come between its batches.
+	parse("p/reading.jsonl", old.Add(-time.Duration(maxLogFiles)*time.Minute))
+	for i := range 3 {
+		parse(fmt.Sprintf("p/new-%d.jsonl", i), live.Add(time.Duration(i+1)*time.Minute))
 	}
 	remembered := func(file string) bool {
 		_, ok := a.LogResume(file)
 		return ok
+	}
+	raw, err := a.SaveState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var st savedState
+	if err := json.Unmarshal(raw, &st); err != nil {
+		t.Fatal(err)
+	}
+	saved := func(file string) bool {
+		for _, f := range st.Files {
+			if f.Key == file {
+				return true
+			}
+		}
+		return false
 	}
 	cases := []struct {
 		name string
 		ok   bool
 	}{
 		{"the session being written now is remembered", remembered("p/live.jsonl")},
-		{"the history with the oldest entries went first", !remembered("p/old-000.jsonl")},
-		{"a history with newer entries is remembered", remembered(fmt.Sprintf("p/old-%03d.jsonl", maxLogFiles-1))},
+		{"the memory saved for a restart keeps the session being written now, and the history read now",
+			len(st.Files) == maxSavedFiles && saved("p/live.jsonl") && saved("p/reading.jsonl")},
+		{"the history read now is remembered, though its entries are the oldest", remembered("p/reading.jsonl")},
+		{"the sessions that started since are remembered", remembered("p/new-0.jsonl") && remembered("p/new-2.jsonl")},
+		{"the history with the oldest entries, of those read before the last few, went first",
+			!remembered(fmt.Sprintf("p/old-%03d.jsonl", maxLogFiles-2-recentFiles))},
+		{"the histories read last before the one read now are remembered", remembered(fmt.Sprintf("p/old-%03d.jsonl", maxLogFiles-2))},
+		{"a history with newer entries is remembered", remembered("p/old-000.jsonl")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
-				t.Error("the reader forgot another file than the one with the oldest entries")
+				t.Error("the reader forgot another file than the one it should have")
 			}
 		})
 	}

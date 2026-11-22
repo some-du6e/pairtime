@@ -23,9 +23,10 @@ const (
 	maxSavedSessions = 64
 	maxSavedTurns    = 16
 	// maxSavedFiles and maxSavedLogSessions bound the transcript files and
-	// sessions whose memory the transcript reader saves: those read from
-	// last. A file whose memory isn't saved starts afresh where the
-	// tailers resume it.
+	// sessions whose memory the transcript reader saves: the sessions read
+	// from last, and the files its memory would forget last (older). A
+	// file whose memory isn't saved starts afresh where the tailers resume
+	// it.
 	maxSavedFiles       = 64
 	maxSavedLogSessions = 64
 )
@@ -169,7 +170,10 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 	}
 	// A file whose state holds something back always goes, past the
 	// bound: without it a restart would start the file afresh in the
-	// middle of a turn. The rest go newest first.
+	// middle of a turn. The rest go in the order the memory keeps them,
+	// so a session written to now goes before the histories lookback read
+	// since.
+	recent := recentSeen(a.files)
 	slices.SortFunc(files, func(x, y *txFile) int {
 		if px, py := x.snapAt < x.at, y.snapAt < y.at; px != py {
 			if px {
@@ -177,7 +181,13 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 			}
 			return 1
 		}
-		return cmp.Compare(y.seen, x.seen)
+		switch {
+		case older(y, x, recent):
+			return -1
+		case older(x, y, recent):
+			return 1
+		}
+		return 0
 	})
 	for i, f := range files {
 		if i >= maxSavedFiles && f.snapAt >= f.at {

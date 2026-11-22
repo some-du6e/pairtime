@@ -3,6 +3,7 @@
 package claudecode
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -71,9 +72,14 @@ import (
 // Bounds on what the reader remembers.
 const (
 	// maxLogFiles and maxLogSessions bound the transcript files and the
-	// sessions it remembers: those it read from last.
+	// sessions it remembers: those it read from last, and for files those
+	// it would forget last (older).
 	maxLogFiles    = 256
 	maxLogSessions = 256
+	// recentFiles is how many of the files it read from last it keeps
+	// over the rest: lookback hands a history over a batch at a time, and
+	// other files' lines come between its batches.
+	recentFiles = 16
 	// maxPendingTools bounds the tool uses of one file that wait for their
 	// results.
 	maxPendingTools = 64
@@ -953,9 +959,10 @@ func (a *Adapter) fileFor(key string) *txFile {
 	f := a.files[key]
 	if f == nil {
 		if len(a.files) >= maxLogFiles {
+			recent := recentSeen(a.files)
 			var oldest *txFile
 			for _, o := range a.files {
-				if oldest == nil || older(o, oldest) {
+				if oldest == nil || older(o, oldest, recent) {
 					oldest = o
 				}
 			}
@@ -969,19 +976,38 @@ func (a *Adapter) fileFor(key string) *txFile {
 }
 
 // older reports whether the reader's memory, when full, forgets file o
-// before p: a file that holds nothing back first, then the one whose
-// newest entry is oldest, so the hundreds of histories lookback reads go
-// before a session being written now, and then the one read from least
-// recently. A file forgotten while it is written to again is read again
-// from its start.
-func older(o, p *txFile) bool {
+// before p: a file that holds nothing back first, then one that isn't
+// among the recentFiles it read from last, those whose seen is recent or
+// later (recentSeen), so the history lookback reads now stays, then the
+// one whose newest entry is oldest, so the hundreds of histories lookback
+// reads go before a session being written now, and then the one read from
+// least recently. A file forgotten while it is written to again is read
+// again from its start.
+func older(o, p *txFile, recent uint64) bool {
 	if o.pend.empty() != p.pend.empty() {
 		return o.pend.empty()
+	}
+	if or, pr := o.seen >= recent, p.seen >= recent; or != pr {
+		return pr
 	}
 	if o.newest != p.newest {
 		return o.newest < p.newest
 	}
 	return o.seen < p.seen
+}
+
+// recentSeen returns the seen of the recentFiles-th of files read from
+// last, or 0 when there are no more files than that.
+func recentSeen(files map[string]*txFile) uint64 {
+	if len(files) <= recentFiles {
+		return 0
+	}
+	seen := make([]uint64, 0, len(files))
+	for _, f := range files {
+		seen = append(seen, f.seen)
+	}
+	slices.Sort(seen)
+	return seen[len(seen)-recentFiles]
 }
 
 // restart starts what the reader knows of a file afresh at offset at.

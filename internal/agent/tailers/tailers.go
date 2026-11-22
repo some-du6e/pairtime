@@ -132,10 +132,11 @@ type Line struct {
 	// Hash names the line's content, which the cursor keeps for the last
 	// line handed over (Advance).
 	Hash string
-	// Lookback, set for a line of a file's history (lookback.go), is the
-	// Unix ms its records may start at, LookbackWindow before the tailer
-	// took the file up: the agent keeps those of its records that fall
-	// between then and the start of its ledger.
+	// Lookback, set for a line of a file's history (lookback.go) and for
+	// the idle marker at its end, is the Unix ms its records may start at,
+	// LookbackWindow before the tailer took the file up: the agent keeps
+	// those of its records that fall between then and the start of its
+	// ledger.
 	Lookback int64
 	// Fresh says the line's adapter is to start the file afresh at it:
 	// what came before it, a history lookback gave up on, stays unread,
@@ -261,8 +262,11 @@ type file struct {
 	// hist is where the file's history ends, the lines before it being
 	// lookback's, and histFrom when their records may start (Line.Lookback),
 	// both 0 for a file with none. histDone says lookback is done with it.
+	// rewindTo is where the lines a Rewind gave lookback end, which it
+	// reads as replays, and 0 for none.
 	hist, histFrom int64
 	histDone       bool
+	rewindTo       int64
 	// fresh is where a history lookback gave up on ended, at which the
 	// file's next line starts its adapter afresh (Line.Fresh); 0 for none.
 	fresh int64
@@ -300,10 +304,12 @@ type savedFile struct {
 	Read    int64         `json:"read"`
 	Resume  int64         `json:"resume"`
 	Hash    string        `json:"hash,omitempty"`
-	// Hist, HistFrom and HistDone are the file's history (file.hist).
+	// Hist, HistFrom, HistDone and RewindTo are the file's history and
+	// what a Rewind gave lookback (file.hist).
 	Hist     int64 `json:"hist,omitempty"`
 	HistFrom int64 `json:"hist_from,omitempty"`
 	HistDone bool  `json:"hist_done,omitempty"`
+	RewindTo int64 `json:"rewind_to,omitempty"`
 	Fresh    int64 `json:"fresh,omitempty"`
 }
 
@@ -360,15 +366,20 @@ func (t *Tailer) load() {
 	}
 	for _, sf := range st.Files {
 		if sf.Path == "" || !filepath.IsAbs(sf.Path) || t.files[sf.Path] != nil || sf.Read < 0 || sf.Resume < 0 || sf.Resume > sf.Read ||
-			sf.Hist < 0 {
+			sf.Hist < 0 || sf.RewindTo < 0 {
 			continue
 		}
 		// A file whose adapter needs lines again, or that has lines the
 		// agent didn't take before it stopped, is read at once: no change to
 		// the file may come to say so.
-		t.files[sf.Path] = &file{key: sf.Path, path: sf.Path, harness: sf.Harness, id: sf.ID, size: sf.Size,
+		f := &file{key: sf.Path, path: sf.Path, harness: sf.Harness, id: sf.ID, size: sf.Size,
 			mtime: time.Unix(0, sf.MTime), read: sf.Read, resume: sf.Resume, hash: sf.Hash, pos: sf.Resume,
-			due: sf.Resume < sf.Read || sf.Read < sf.Size, hist: sf.Hist, histFrom: sf.HistFrom, histDone: sf.HistDone, fresh: sf.Fresh}
+			due: sf.Resume < sf.Read || sf.Read < sf.Size, hist: sf.Hist, histFrom: sf.HistFrom, histDone: sf.HistDone,
+			rewindTo: sf.RewindTo, fresh: sf.Fresh}
+		if f.lookbacks() && t.opts.Lookback == nil {
+			f.leaveHistory()
+		}
+		t.files[sf.Path] = f
 	}
 }
 
@@ -384,7 +395,7 @@ func (t *Tailer) Put() (bool, error) {
 	for _, f := range t.files {
 		st.Files = append(st.Files, savedFile{Path: f.path, Harness: f.harness, ID: f.id, Size: f.size,
 			MTime: f.mtime.UnixNano(), Read: f.read, Resume: f.resume, Hash: f.hash,
-			Hist: f.hist, HistFrom: f.histFrom, HistDone: f.histDone, Fresh: f.fresh})
+			Hist: f.hist, HistFrom: f.histFrom, HistDone: f.histDone, RewindTo: f.rewindTo, Fresh: f.fresh})
 	}
 	for d := range t.listed {
 		st.Roots = append(st.Roots, d)
@@ -510,11 +521,13 @@ func (t *Tailer) Hint(h event.Harness, path string, root adapters.LogRoot) {
 // Rewind has the tailer read the file key from its start again, the lines
 // it had handed over as replays: its adapter has no memory of the file, as
 // after a restore, and rebuilds it from them. The agent calls it while it
-// takes a batch of the file, instead of taking the line. With lookback,
-// the lines up to where the tailer had read go through lookback's reader,
-// trimmed and at its priority, as a history of the file (lookback.go),
-// since a file forgotten while lookback reads hundreds of others can be a
-// long one.
+// takes a batch of the file, instead of taking the line. When lookback's
+// reader can read now, the lines up to where the tailer had read go
+// through it, trimmed and at its priority, as a history of the file
+// (lookback.go), since a file forgotten while lookback reads hundreds of
+// others can be a long one; a job that runs starts again to take the file
+// up. Otherwise the tailer reads them itself, but those of a history
+// still to read, which wait for the next child.
 func (t *Tailer) Rewind(key string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -523,8 +536,20 @@ func (t *Tailer) Rewind(key string) {
 		return
 	}
 	f.pos, f.resume, f.rewound = 0, 0, true
-	if t.lookbackUsable() && f.read > 0 {
-		f.hist, f.histDone = max(f.hist, f.read), false
+	switch {
+	case f.hist > 0 && !f.histDone && f.read < f.hist && t.lookbackUsable():
+		// Its history is still to read: lookback reads it from the start.
+	case f.read > 0 && t.lookbackNow():
+		f.rewindTo = f.read
+	case f.lookbacks():
+		f.leaveHistory()
+	}
+	if f.inHistory() && t.lb.running {
+		t.lb.again = true
+		select {
+		case t.lb.poke <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -859,7 +884,7 @@ func (t *Tailer) adopt(r Root, path string, now time.Time) {
 	if t.files[path] == nil {
 		f := &file{key: path, path: path, harness: r.Harness, id: fileID(fh, fi), size: fi.Size(),
 			mtime: fi.ModTime(), read: end, resume: end, pos: end, hash: hash}
-		if history {
+		if history && t.lookbackUsable() {
 			f.hist, f.histFrom = end, now.Add(-LookbackWindow).UnixMilli()
 			f.read, f.resume, f.pos, f.hash = 0, 0, 0, ""
 		}
@@ -1078,6 +1103,12 @@ func (t *Tailer) idle(f *file, now time.Time) {
 	send := f.resume < f.read && f.readAll() && !f.waiting && now.Sub(f.active()) >= IdleAfter &&
 		now.Sub(f.idleAt) >= IdleAfter
 	at, h, key, path, hash := f.pos, f.harness, f.key, f.path, f.hash
+	var lookback int64
+	if at <= f.hist {
+		// At its history's end: what the marker resolves, such as the
+		// history's last turn, is the history's.
+		lookback = f.histFrom
+	}
 	if send {
 		f.idleAt = now
 	}
@@ -1085,7 +1116,8 @@ func (t *Tailer) idle(f *file, now time.Time) {
 	if !send {
 		return
 	}
-	marker := Line{Harness: h, Log: adapters.LogLine{File: key, Path: path, Offset: at, End: at, Idle: true}, Hash: hash}
+	marker := Line{Harness: h, Log: adapters.LogLine{File: key, Path: path, Offset: at, End: at, Idle: true}, Hash: hash,
+		Lookback: lookback}
 	t.mu.Lock()
 	pokes := t.pokes
 	t.mu.Unlock()

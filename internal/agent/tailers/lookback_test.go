@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/adapters"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -325,6 +326,188 @@ func TestLookback(t *testing.T) {
 			r.step(HotPoll, false)
 			if got := r.texts(0); !slices.Equal(got, []string{`{"n":2}`}) || pc.started != 0 || r.tl.Progress().Files != 0 {
 				t.Errorf("handed over %v from %d children, want the new line alone", got, pc.started)
+			}
+		}},
+		{"the idle marker at a history's end carries its Lookback, and one after the file's live lines doesn't", func(t *testing.T) {
+			pc := &pipeChild{trim: upper}
+			r := lookbackRig(t, pc.start)
+			r.resume = func(Line) int64 { return 0 } // the adapter holds back the last turn
+			r.write("n.jsonl", "{\"n\":1}\n")
+			r.open()
+			from := r.now.Add(-LookbackWindow).UnixMilli()
+			r.step(0, false)
+			r.settle()
+			r.step(IdleAfter+time.Second, false)
+			r.write("n.jsonl", "{\"n\":2}\n")
+			r.step(HotPoll, false)
+			r.step(IdleAfter+time.Second, false)
+			if got := r.texts(0); !slices.Equal(got, []string{`{"N":1}`, "idle", `{"n":2}`, "idle"}) {
+				t.Fatalf("handed over %v", got)
+			}
+			if got := r.lookbacks(0); !slices.Equal(got, []int64{from, from, 0, 0}) {
+				t.Errorf("Lookback %v, want the window's start on the history and the marker at its end", got)
+			}
+		}},
+		{"a Rewind while a job runs starts the job again, the rewound file first, and Progress leaves it out", func(t *testing.T) {
+			pc := &pipeChild{trim: upper, hold: make(chan struct{})}
+			r := lookbackRig(t, pc.start)
+			r.write("l.jsonl", "{\"l\":1}\n")
+			old := r.now.Add(-LookbackWindow - time.Hour)
+			if err := os.Chtimes(r.path("l.jsonl"), old, old); err != nil {
+				t.Fatal(err)
+			}
+			r.write("h.jsonl", "{\"h\":1}\n{\"h\":2}\n")
+			earlier := r.now.Add(-time.Hour)
+			if err := os.Chtimes(r.path("h.jsonl"), earlier, earlier); err != nil {
+				t.Fatal(err)
+			}
+			r.open()
+			r.step(0, false)
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				pc.mu.Lock()
+				started := pc.started
+				pc.mu.Unlock()
+				if started > 0 || time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			rewound := false
+			r.take = func(l Line) bool {
+				if string(l.Bytes) == `{"l":2}` && !rewound {
+					rewound = true
+					r.tl.Rewind(l.Log.File) // the agent's, for an adapter that forgot the file
+					return false
+				}
+				return true
+			}
+			r.write("l.jsonl", "{\"l\":2}\n")
+			r.step(HotPoll, true) // the rescan finds the quiet file grew
+			close(pc.hold)
+			r.settle()
+			r.step(HotPoll, false)
+			if got := r.texts(0); !slices.Equal(got, []string{`{"L":1}`, `{"H":1}`, `{"H":2}`, `{"l":2}`}) || pc.started != 2 {
+				t.Fatalf("handed over %v from %d children, want the rewound file through the job started again, first", got, pc.started)
+			}
+			if got := r.replays(0); !slices.Equal(got, []bool{true, false, false, false}) {
+				t.Errorf("replays %v", got)
+			}
+			if p := r.tl.Progress(); p.Files != 1 || p.Bytes != 16 || !p.Done() {
+				t.Errorf("progress %+v, want the history alone", p)
+			}
+		}},
+		{"a Rewind with a failed child's pause still to wait out has the tailer read the file again itself", func(t *testing.T) {
+			tries := 0
+			r := lookbackRig(t, func() (Child, error) {
+				tries++
+				return Child{}, errors.New("no binary")
+			})
+			r.write("q.jsonl", "{\"q\":1}\n")
+			old := r.now.Add(-LookbackWindow - time.Hour)
+			if err := os.Chtimes(r.path("q.jsonl"), old, old); err != nil {
+				t.Fatal(err)
+			}
+			r.write("w.jsonl", "{\"w\":1}\n") // a history, whose child fails
+			r.open()
+			r.step(0, false)
+			r.settle()
+			rewound := false
+			r.take = func(l Line) bool {
+				if string(l.Bytes) == `{"q":2}` && !rewound {
+					rewound = true
+					r.tl.Rewind(l.Log.File)
+					return false
+				}
+				return true
+			}
+			r.write("q.jsonl", "{\"q\":2}\n")
+			r.step(HotPoll, true) // the rescan finds the quiet file grew
+			r.step(time.Second, false)
+			if got := r.texts(0); tries != 1 || !slices.Equal(got, []string{`{"q":1}`, `{"q":2}`}) {
+				t.Fatalf("%d tries, then handed over %v, want the file again at once", tries, got)
+			}
+			if got := r.replays(0); !slices.Equal(got, []bool{true, false}) {
+				t.Errorf("replays %v", got)
+			}
+		}},
+		{"after the last failure, a root listed later gives its files no history, so the tailer reads them", func(t *testing.T) {
+			r := lookbackRig(t, func() (Child, error) { return Child{}, errors.New("no binary") })
+			r.write("g.jsonl", "{\"g\":1}\n")
+			r.open()
+			r.step(0, false)
+			r.settle()
+			for i := range maxLookbackTries - 1 {
+				r.step(lookbackPause<<i, false)
+				r.settle()
+			}
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "p"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			z := filepath.Join(dir, "p", "z.jsonl")
+			if err := os.WriteFile(z, []byte("{\"z\":1}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r.tl.AddRoots([]Root{{Harness: event.HarnessClaudeCode, LogRoot: adapters.LogRoot{Dir: dir, Depth: 2,
+				Match: func(rel string) bool { return strings.HasSuffix(rel, ".jsonl") }}}})
+			r.step(0, false)
+			fh, err := os.OpenFile(z, os.O_WRONLY|os.O_APPEND, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fh.WriteString("{\"z\":2}\n"); err != nil {
+				t.Fatal(err)
+			}
+			fh.Close()
+			r.step(HotPoll, false)
+			r.settle()
+			if got := r.texts(0); !slices.Equal(got, []string{`{"z":2}`}) || r.tl.Progress().Files != 1 {
+				t.Errorf("handed over %v, progress %+v; want the new root's new line, and no history for it", got, r.tl.Progress())
+			}
+		}},
+		{"after the last failure, a file read to its history's end without its end isn't left to lookback once it is replaced", func(t *testing.T) {
+			calls := 0
+			r := lookbackRig(t, func() (Child, error) {
+				calls++
+				if calls > 1 {
+					return Child{}, errors.New("no binary")
+				}
+				pc := &pipeChild{trim: upper, cut: 1} // a's line, and then it crashes
+				return pc.start()
+			})
+			r.write("a.jsonl", "{\"a\":1}\n")
+			r.write("b.jsonl", "{\"b\":1}\n")
+			earlier := r.now.Add(-time.Hour)
+			if err := os.Chtimes(r.path("b.jsonl"), earlier, earlier); err != nil {
+				t.Fatal(err)
+			}
+			r.open()
+			r.step(0, false)
+			r.settle()
+			for i := range maxLookbackTries - 1 {
+				r.step(lookbackPause<<i, false)
+				r.settle()
+			}
+			if got := r.texts(0); calls != maxLookbackTries || !slices.Equal(got, []string{`{"A":1}`}) {
+				t.Fatalf("%d children, then handed over %v", calls, got)
+			}
+			// The replaced file is read from its start, and the agent has its
+			// first line wait, so the file is read again after a Poke.
+			waited := false
+			r.take = func(Line) bool {
+				if !waited {
+					waited = true
+					return false
+				}
+				return true
+			}
+			r.replace("a.jsonl", "{\"x\":1}\n{\"a\":2}\n")
+			r.step(HotPoll, false)
+			r.tl.Poke()
+			r.step(time.Second, false)
+			if got := r.texts(1); !waited || !slices.Equal(got, []string{`{"x":1}`, `{"a":2}`}) {
+				t.Errorf("after the replace, handed over %v, want the file read live", got)
 			}
 		}},
 		{"a child isn't tried again before its pause", func(t *testing.T) {
