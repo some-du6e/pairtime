@@ -506,8 +506,14 @@ func (a *agent) listen(ports []int) (net.Listener, localhttp.PortFile, error) {
 }
 
 // markDrained records that the inbox's first drain has handed its calls to
-// the adapter host, or that there is no drain, and has the host look.
+// the adapter host, or that there is no drain, and has the host look. An
+// agent built without the drained channel, as some tests build one, has
+// none to close.
 func (a *agent) markDrained() {
-	a.drainOnce.Do(func() { close(a.drained) })
+	a.drainOnce.Do(func() {
+		if a.drained != nil {
+			close(a.drained)
+		}
+	})
 	a.adaptersHost().poke()
 }
