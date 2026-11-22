@@ -20,8 +20,10 @@ import (
 // adapter of its own in the same order, so the agent's share of lookback
 // is the decoding of what it records, and nothing is lost by it. Beside
 // the capture's transcripts it reads one with the shapes the capture
-// lacks: a synchronous Agent result, an edit's malformed structuredPatch
-// and an attachment whose fields have other types.
+// lacks: a synchronous Agent result, an edit's malformed structuredPatch,
+// an attachment whose fields have other types, and two entries with
+// neither label, a person's prompt and one marked isMeta, which only the
+// first of is a prompt.
 func TestTrimLog(t *testing.T) {
 	files := readTranscripts(t)
 	files["p/s.jsonl"] = logLines(
@@ -31,6 +33,8 @@ func TestTrimLog(t *testing.T) {
 		toolUse("e1", "Edit", map[string]any{"file_path": "/home/capture/p/a.go"}, "2026-11-20T17:00:06.000Z"),
 		toolDone("e1", map[string]any{"filePath": "/home/capture/p/a.go", "structuredPatch": "none"}, "2026-11-20T17:00:07.000Z"),
 		entryJSON("attachment", map[string]any{"attachment": map[string]any{"type": "goal_status", "met": "yes", "sentinel": 1}}),
+		userText("q2", "Expanded instructions for the command.", map[string]any{"isMeta": true}),
+		userText("q3", "and then the tests, please", nil),
 	)
 	whole, trimmed := newTest(), newTest()
 	var wholeBytes, trimmedBytes int

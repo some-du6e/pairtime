@@ -58,7 +58,6 @@ type savedLogSession struct {
 	ID       string `json:"id"`
 	Token    string `json:"token,omitempty"`
 	Started  bool   `json:"started,omitempty"`
-	Reported bool   `json:"reported,omitempty"`
 	NativeAt int64  `json:"native_at,omitempty"`
 	Seen     uint64 `json:"seen"`
 }
@@ -76,6 +75,8 @@ type savedSession struct {
 	Crons    []savedCron      `json:"crons,omitempty"`
 	Requests []savedRequest   `json:"requests,omitempty"`
 	Posts    []savedPost      `json:"posts,omitempty"`
+	// HookStops are session.hookStops' last maxSavedTurns.
+	HookStops []string `json:"hook_stops,omitempty"`
 	// NativeAt is session.nativeAt; memory saved before it existed has
 	// none, and a session with HookStart is then native from its start.
 	NativeAt int64  `json:"native_at,omitempty"`
@@ -140,6 +141,7 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 	for _, s := range all {
 		ss := savedSession{ID: s.id, HookStart: s.hookStart, Turn: s.turn, Unnamed: s.unnamed, Seen: s.seen}
 		ss.Started = slices.Clone(s.started[max(0, len(s.started)-maxSavedTurns):])
+		ss.HookStops = slices.Clone(s.hookStops[max(0, len(s.hookStops)-maxSavedTurns):])
 		for _, id := range ss.Started {
 			if t, ok := s.named[id]; ok {
 				if ss.Named == nil {
@@ -222,7 +224,7 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 			break
 		}
 		st.LogSessions = append(st.LogSessions, savedLogSession{ID: s.id, Token: s.token, Started: s.started,
-			Reported: s.reported, NativeAt: s.nativeAt, Seen: s.seen})
+			NativeAt: s.nativeAt, Seen: s.seen})
 	}
 	return json.Marshal(st)
 }
@@ -247,6 +249,7 @@ func (a *Adapter) LoadState(raw json.RawMessage) error {
 		}
 		s := &session{id: ss.ID, hookStart: ss.HookStart, turn: ss.Turn, unnamed: max(ss.Unnamed, 0), seen: ss.Seen}
 		s.started = slices.Clone(ss.Started[max(0, len(ss.Started)-maxTurns):])
+		s.hookStops = slices.Clone(ss.HookStops[max(0, len(ss.HookStops)-maxTurns):])
 		for _, id := range s.started {
 			if t, ok := ss.Named[id]; ok {
 				if s.named == nil {
@@ -287,8 +290,8 @@ func (a *Adapter) LoadState(raw json.RawMessage) error {
 		if sl.ID == "" || logs[sl.ID] != nil || len(logs) >= maxLogSessions {
 			continue
 		}
-		logs[sl.ID] = &txSession{id: sl.ID, token: sl.Token, started: sl.Started, reported: sl.Reported,
-			nativeAt: max(sl.NativeAt, 0), seen: sl.Seen}
+		logs[sl.ID] = &txSession{id: sl.ID, token: sl.Token, started: sl.Started, nativeAt: max(sl.NativeAt, 0),
+			seen: sl.Seen}
 		clock = max(clock, sl.Seen)
 	}
 	a.mu.Lock()

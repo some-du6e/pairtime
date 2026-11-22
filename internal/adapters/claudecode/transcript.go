@@ -43,6 +43,9 @@ type entry struct {
 	PermissionMode string   `json:"permissionMode"`
 	IsSidechain    bool     `json:"isSidechain"`
 	Message        *message `json:"message"`
+	// IsMeta marks a user entry Claude Code wrote for the model, such as a
+	// slash command's expanded instructions, which no person sent.
+	IsMeta bool `json:"isMeta"`
 	// ToolUseResult is a tool result entry's structured result, or the
 	// text Claude Code put in its place, such as "User rejected tool use".
 	ToolUseResult  toolResult `json:"toolUseResult"`
@@ -437,6 +440,7 @@ type trimmedEntry struct {
 	PermissionMode     string             `json:"permissionMode,omitempty"`
 	IsSidechain        bool               `json:"isSidechain,omitempty"`
 	Message            *trimmedMessage    `json:"message,omitempty"`
+	IsMeta             bool               `json:"isMeta,omitempty"`
 	ToolUseResult      any                `json:"toolUseResult,omitempty"`
 	ToolDenialKind     string             `json:"toolDenialKind,omitempty"`
 	PermissionDecision *trimmedPermission `json:"permissionDecision,omitempty"`
@@ -485,7 +489,7 @@ func trimEntry(e *entry) trimmedEntry {
 	t := trimmedEntry{Type: e.Type, Subtype: e.Subtype, SessionID: e.SessionID, PromptID: e.PromptID,
 		Timestamp: e.Timestamp, Version: e.Version, CWD: e.CWD, Entrypoint: e.Entrypoint,
 		PromptSource: e.PromptSource, TurnOrigin: e.TurnOrigin, PermissionMode: e.PermissionMode,
-		IsSidechain: e.IsSidechain, ToolDenialKind: e.ToolDenialKind, Operation: e.Operation,
+		IsSidechain: e.IsSidechain, IsMeta: e.IsMeta, ToolDenialKind: e.ToolDenialKind, Operation: e.Operation,
 		Attachment: e.Attachment}
 	if e.Type == "queue-operation" {
 		// The message it queues. Other entries' content, such as a system

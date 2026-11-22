@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -516,6 +517,65 @@ func TestTailer(t *testing.T) {
 				t.Errorf("handed over %v, want the line written after the hint alone", got)
 			}
 		}},
+		{"a hint that names a known file through a link to its folder reads the file once", func(t *testing.T, r *rig) {
+			r.write("a.jsonl", "{\"n\":1}\n")
+			r.step(0, false) // the first listing takes it up at its end
+			link := filepath.Join(r.dir, "q")
+			if err := os.Symlink(filepath.Join(r.dir, "p"), link); err != nil {
+				t.Skipf("no symlinks here: %v", err)
+			}
+			r.tl.Hint(event.HarnessClaudeCode, filepath.Join(link, "a.jsonl"), adapters.LogRoot{})
+			r.write("a.jsonl", "{\"n\":2}\n")
+			r.step(HotPoll, true)
+			r.step(HotPoll, false)
+			r.tl.mu.Lock()
+			n := len(r.tl.files)
+			r.tl.mu.Unlock()
+			if got := r.texts(0); n != 1 || !slices.Equal(got, []string{`{"n":2}`}) {
+				t.Errorf("%d files handed over %v, want one that hands the new line over once", n, got)
+			}
+		}},
+		{"a hint that names a known file in another case, where the file system ignores case, reads the file once", func(t *testing.T, r *rig) {
+			r.write("a.jsonl", "{\"n\":1}\n")
+			r.step(0, false)
+			other := filepath.Join(r.dir, "P", "A.jsonl")
+			if _, err := os.Stat(other); err != nil {
+				t.Skip("this file system tells case apart")
+			}
+			r.tl.Hint(event.HarnessClaudeCode, other, adapters.LogRoot{})
+			r.write("a.jsonl", "{\"n\":2}\n")
+			r.step(HotPoll, true)
+			r.step(HotPoll, false)
+			r.tl.mu.Lock()
+			n := len(r.tl.files)
+			r.tl.mu.Unlock()
+			if got := r.texts(0); n != 1 || !slices.Equal(got, []string{`{"n":2}`}) {
+				t.Errorf("%d files handed over %v, want one that hands the new line over once", n, got)
+			}
+		}},
+		{"a file the first listing can't open is taken up at its end once it can be, after a restart too", func(t *testing.T, r *rig) {
+			if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+				t.Skip("needs a file this user can't open")
+			}
+			r.write("s.jsonl", "{\"n\":1}\n")
+			if err := os.Chmod(r.path("s.jsonl"), 0); err != nil {
+				t.Fatal(err)
+			}
+			r.step(0, false) // the first listing can't open it
+			if _, err := r.tl.Put(); err != nil {
+				t.Fatal(err)
+			}
+			r.open() // the agent's next start
+			if err := os.Chmod(r.path("s.jsonl"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r.step(HotPoll, true) // a later listing takes it up
+			r.write("s.jsonl", "{\"n\":2}\n")
+			r.step(HotPoll, false)
+			if got := r.texts(0); !slices.Equal(got, []string{`{"n":2}`}) {
+				t.Errorf("handed over %v, want the line written after it was taken up alone", got)
+			}
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -536,6 +596,44 @@ func (c *countedReader) ReadAt(p []byte, off int64) (int, error) {
 	c.calls++
 	c.read += int64(n)
 	return n, err
+}
+
+// TestPollEvery checks the hot poll's pace (CP 3.2 item 3): every HotPoll
+// while a file grew in the last QuietAfter, every QuietPoll while one did in
+// the last HotWindow, and no poll once none did. The hottest file sets it.
+func TestPollEvery(t *testing.T) {
+	cases := []struct {
+		name string
+		// quiet is how long ago the files were last written.
+		quiet []time.Duration
+		want  time.Duration
+	}{
+		{"a file written a minute ago is looked at every HotPoll", []time.Duration{time.Minute}, HotPoll},
+		{"one quiet for longer than QuietAfter, every QuietPoll", []time.Duration{QuietAfter + time.Minute}, QuietPoll},
+		{"one quiet for longer than HotWindow, never", []time.Duration{HotWindow + time.Minute}, 0},
+		{"the hottest file sets the pace", []time.Duration{HotWindow + time.Minute, QuietAfter + time.Minute, time.Minute}, HotPoll},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRig(t)
+			for i, quiet := range tc.quiet {
+				name := fmt.Sprintf("f%d.jsonl", i)
+				r.write(name, "{\"n\":1}\n")
+				when := r.now.Add(-quiet)
+				if err := os.Chtimes(r.path(name), when, when); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.open()
+			r.step(0, false)
+			r.tl.mu.Lock()
+			got := r.tl.pollEvery(r.now)
+			r.tl.mu.Unlock()
+			if got != tc.want {
+				t.Errorf("polls every %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
 
 // TestLastLine checks where a file's last complete line ends, which a

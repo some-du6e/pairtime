@@ -312,8 +312,8 @@ type harnessStats struct {
 	ParseFailures uint64 `json:"parse_failures"`
 	// WriteFailures counts records the ledger writer refused.
 	WriteFailures uint64 `json:"write_failures,omitempty"`
-	// Ignored counts calls that ran in a folder out of pairtime, which
-	// make no record (DESIGN 8.8).
+	// Ignored counts calls and log lines from a folder out of pairtime,
+	// which make no record (DESIGN 8.8).
 	Ignored uint64 `json:"ignored,omitempty"`
 	// LastRecord is the t of the newest record written, in Unix ms.
 	LastRecord int64 `json:"last_record,omitempty"`
@@ -323,8 +323,7 @@ type harnessStats struct {
 	// Lines counts the lines of the harness's log files the adapter read,
 	// and LineFailures those it couldn't fully read: lines that aren't
 	// JSON, entries of a type or with a value its harness's version doesn't
-	// write, lines too long to read (DESIGN 5.3; WP-AD3). Ignored counts
-	// lines of a folder out of pairtime too.
+	// write, lines too long to read (DESIGN 5.3; WP-AD3).
 	Lines        uint64 `json:"lines,omitempty"`
 	LineFailures uint64 `json:"line_failures,omitempty"`
 }
@@ -1299,7 +1298,7 @@ func (h *adapterHost) project(dir string) (adapters.Project, bool) {
 	}
 	p, ok, ignored := g.project(dir)
 	if ignored {
-		h.ignored = true
+		h.ignored, p.Ignored = true, true
 	}
 	return p, ok
 }

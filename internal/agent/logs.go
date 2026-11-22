@@ -308,10 +308,14 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 			st.LastFailure = clip(err.Error())
 		})
 	}
-	if h.ignored {
-		// A folder out of pairtime (DESIGN 8.8): its lines make no record.
+	if h.ignored || lr.LogIgnored(ll.File) {
+		// A folder out of pairtime (DESIGN 8.8): its lines make no record,
+		// nor do the file's lines and idle markers that name no folder,
+		// after one that named it.
 		recs = nil
-		h.count(func() { st.Ignored++ })
+		if !ll.Idle {
+			h.count(func() { st.Ignored++ })
+		}
 	}
 	if line.Lookback > 0 {
 		recs = h.lookbackWindow(recs, line.Lookback)

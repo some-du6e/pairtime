@@ -481,7 +481,7 @@ components:
         records:
           type: integer
           minimum: 0
-          description: The ledger records the calls made.
+          description: The ledger records the calls and log lines made.
         parse_failures:
           type: integer
           minimum: 0
@@ -496,7 +496,7 @@ components:
         ignored:
           type: integer
           minimum: 0
-          description: Calls from a folder a .pairtime-ignore keeps out, which make no record. Absent when none.
+          description: Calls and log lines from a folder a .pairtime-ignore keeps out, which make no record. Absent when none.
         last_record:
           type: integer
           description: The time of the newest record, in Unix milliseconds. Absent before the first.

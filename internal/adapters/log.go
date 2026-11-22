@@ -89,6 +89,12 @@ type LogReader interface {
 	LogResume(file string) (int64, bool)
 	// ForgetLog drops what the adapter remembers of file, which is gone.
 	ForgetLog(file string)
+	// LogIgnored reports whether the last line of file that named a folder
+	// named one out of pairtime (Project.Ignored, DESIGN 8.8). The host
+	// drops the records of the file's lines and idle markers while it
+	// holds, those of lines that name no folder included. The adapter's
+	// saved memory keeps it.
+	LogIgnored(file string) bool
 	// LogHint returns the log file a hook call names, such as Claude
 	// Code's transcript_path, or "" for none. The agent has the tailers
 	// read it soon, and watch its root, which may not be one LogRoots
