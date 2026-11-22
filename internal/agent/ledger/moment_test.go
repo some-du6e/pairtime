@@ -13,8 +13,9 @@ import (
 // TestMoment checks how an event is held to the moment config.toml was
 // last known to say local-only: by the monotonic clock it carries when the
 // moment holds that clock too, so a step of the wall clock either way
-// can't move it across the moment, and by its t otherwise; how moments
-// combine; and how a seal frame's moment reads back.
+// can't move it across the moment, and by its t otherwise; that a zero
+// moment holds none; how moments combine; how a seal frame's moment reads
+// back; and the times a record takes from when the writer took it in.
 func TestMoment(t *testing.T) {
 	const boot = "b_os"
 	m := moment{wall: 10_000, run: 5_000, os: 7_000, boot: boot}
@@ -61,6 +62,22 @@ func TestMoment(t *testing.T) {
 			}
 			if got := at.before(c.e); got != c.want {
 				t.Errorf("before(%+v) of %+v = %v, want %v", c.e, at, got, c.want)
+			}
+		})
+	}
+
+	zero := []struct {
+		name string
+		e    event.Envelope
+		want bool
+	}{
+		{"a zero moment holds no event, not even one with no times, as the adapters' probe of the calls an earlier run held asks about",
+			event.Envelope{}, false},
+	}
+	for _, c := range zero {
+		t.Run(c.name, func(t *testing.T) {
+			if got := (moment{}).before(c.e); got != c.want {
+				t.Errorf("before(%+v) of a zero moment = %v, want %v", c.e, got, c.want)
 			}
 		})
 	}
@@ -149,6 +166,31 @@ func TestMoment(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got := momentAt(c.at, c.s); got != c.want {
 				t.Errorf("momentAt(%v, %+v) = %+v, want %+v", c.at, c.s, got, c.want)
+			}
+		})
+	}
+}
+
+// TestArrival checks the times Write holds a lookback record to in place of
+// its event's (Input.Lookback): when the writer took it in, by this run's
+// clock where that time has Go's monotonic reading, and by the wall clock
+// alone otherwise, as momentAt reads a time.
+func TestArrival(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name string
+		at   time.Time
+		want event.Envelope
+	}{
+		{"a record taken in at a time with Go's monotonic reading is timed by this run's clock too",
+			now, event.Envelope{T: now.UnixMilli(), Mono: runMono(now), BootID: runBoot}},
+		{"one taken in at a time with no monotonic reading, as a test's clock gives, is timed by the wall clock alone",
+			now.Round(0), event.Envelope{T: now.UnixMilli()}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := arrival(c.at); got != c.want {
+				t.Errorf("arrival(%v) = %+v, want %+v", c.at, got, c.want)
 			}
 		})
 	}

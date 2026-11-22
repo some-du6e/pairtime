@@ -756,8 +756,9 @@ func TestWatcher(t *testing.T) {
 // has it, not at all.
 func TestWatcherWaiting(t *testing.T) {
 	const moment = int64(1_795_100_000_000)
-	// before is the agent's test of a change against the moment, by its t.
-	before := func(t int64, _ time.Time) bool { return t < moment }
+	// before is the agent's test of a change against the moment, by its t,
+	// holding the moment's own millisecond (ledger moment.before).
+	before := func(t int64, _ time.Time) bool { return t <= moment }
 	changeAt := func(ms int64) *heldChange {
 		return &heldChange{c: Change{Event: event.Event{Envelope: event.Envelope{T: ms}}}}
 	}
@@ -767,13 +768,16 @@ func TestWatcherWaiting(t *testing.T) {
 		want bool
 	}{
 		{"a held change made before the moment counts", &Watcher{held: []*heldChange{changeAt(moment + 5), changeAt(moment - 1)}}, true},
-		{"a held change made at the moment or after it doesn't", &Watcher{held: []*heldChange{changeAt(moment)}}, false},
+		{"a held change made at the moment counts, since one of the moment's own millisecond can't be told from one made before it", &Watcher{held: []*heldChange{changeAt(moment)}}, true},
+		{"a held change made after the moment doesn't", &Watcher{held: []*heldChange{changeAt(moment + 1)}}, false},
 		{"a change being given to the sink, made before the moment, counts", &Watcher{delivering: &changeAt(moment - 1).c}, true},
 		{"a change being given to the sink, made after it, doesn't", &Watcher{delivering: &changeAt(moment + 1).c}, false},
 		{"a scan that began before the moment counts, since its changes are timed from its start",
 			&Watcher{trees: map[string]*tree{"r": {scanning: true, scanFrom: time.UnixMilli(moment - 1)}}}, true},
-		{"a scan that began at the moment or after it doesn't",
-			&Watcher{trees: map[string]*tree{"r": {scanning: true, scanFrom: time.UnixMilli(moment)}}}, false},
+		{"a scan that began at the moment counts too",
+			&Watcher{trees: map[string]*tree{"r": {scanning: true, scanFrom: time.UnixMilli(moment)}}}, true},
+		{"a scan that began after the moment doesn't",
+			&Watcher{trees: map[string]*tree{"r": {scanning: true, scanFrom: time.UnixMilli(moment + 1)}}}, false},
 		{"a worktree not being scanned doesn't", &Watcher{trees: map[string]*tree{"r": {scanFrom: time.UnixMilli(moment - 1)}}}, false},
 		{"nothing on its way counts for nothing", &Watcher{}, false},
 	}

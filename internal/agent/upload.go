@@ -175,15 +175,19 @@ func (a *agent) keepLocked() {
 // on from what the last run saw (modesState): a stretch it saw end still
 // counts, and one it saw going on lasted, as far as the agent knows, until
 // now, so the hook calls held.jsonl or the spool kept from it are
-// local-only too.
+// local-only too. When state.json kept neither, as after it was set aside,
+// it rebuilds what it can from the ledger (rebuildModesLocked).
 func (a *agent) startModes() {
 	a.modes.mu.Lock()
 	defer a.modes.mu.Unlock()
 	var last modesState
+	found := false
 	if a.state != nil {
-		if _, err := a.state.Get(modesKey, &last); err != nil {
-			last = modesState{} // rebuilt, like any damaged state
+		ok, err := a.state.Get(modesKey, &last)
+		if err != nil {
+			last = modesState{} // damaged, so rebuilt as a lost one is
 		}
+		found = ok && err == nil
 	}
 	a.modes.local, a.modes.ended = last.Local, last.Ended
 	a.modes.os = clock.Stamp{Mono: last.OSMono, BootID: last.OSBoot}
@@ -198,12 +202,55 @@ func (a *agent) startModes() {
 			a.modes.settled = up.LinkedAt
 		}
 	}
+	rebuilt := !found && a.modes.settled == 0 && a.rebuildModesLocked()
 	changed := a.seeLocked(a.online())
-	changed = a.unseenLinkLocked() || changed
+	changed = a.unseenLinkLocked() || changed || rebuilt
 	a.modesLocal.Store(a.modes.local)
 	if changed {
 		a.keepLocked()
 	}
+}
+
+// rebuildModesLocked rebuilds what modes saw from the ledger, for a
+// state.json that kept neither modes nor the uploader's link, as one set
+// aside (DESIGN 3.5). A batch sealed online after the link's second shows
+// that the agent had accounted for account.json's link, since the writer's
+// Online says local-only until the writer has had the end of the stretch
+// the link ended (writerOnline), and the newest seal frame records when
+// config.toml was last known to say local-only (ledger.Row.LocalUntil),
+// where that stretch ended, as an earlier run saw it. A newest batch that
+// counts as local-only may have been sealed in a stretch still going on as
+// the last run stopped, so that stretch ends where the agent finds
+// config.toml online, as one state.json kept going on would. Without both,
+// as when only an older version's seal frames, which record no moment,
+// follow the link, the link counts as one the agent didn't see
+// (unseenLinkLocked). It reports whether modes changed. a.modes.mu is
+// held.
+func (a *agent) rebuildModesLocked() bool {
+	l, ok := a.linkedAt()
+	if !ok || l == 0 {
+		return false
+	}
+	_, rows, err := ledger.ReadRows(a.dirs.Ledger(), 0)
+	if err != nil || len(rows) == 0 || rows[len(rows)-1].LocalUntil.IsZero() {
+		return false
+	}
+	seen := false
+	for _, r := range rows {
+		// account.json keeps linked_at cut to the second (D-relink-boundary).
+		if r.Online && r.SealedAt.UnixMilli() >= l+1000 {
+			seen = true
+			break
+		}
+	}
+	if !seen {
+		return false
+	}
+	m, newest := &a.modes, rows[len(rows)-1]
+	a.setLinkedLocked(l)
+	m.ended, m.os, m.kept, m.until = newest.LocalUntil, clock.Stamp{}, true, time.Time{}
+	m.local = !newest.Online
+	return true
 }
 
 // setLinkedLocked has modes account for link l. The writer's Online sees

@@ -18,8 +18,8 @@ import (
 // is written, and one the full queue dropped never does.
 func TestPresenceWaiting(t *testing.T) {
 	// before is the writer's test of an event against a moment at testT,
-	// by its t, of this run's clock.
-	before := func(e event.Envelope) bool { return e.BootID == runBoot && e.T < testT }
+	// by its t, of this run's clock, holding the moment's own millisecond.
+	before := func(e event.Envelope) bool { return e.BootID == runBoot && e.T <= testT }
 	cases := []struct {
 		name string
 		// times are when the records queued were made, in Unix ms, and
@@ -29,7 +29,8 @@ func TestPresenceWaiting(t *testing.T) {
 		want    bool
 	}{
 		{"a record made before the moment counts while it is queued", []int64{testT + 5, testT - 1}, false, true},
-		{"a record made at the moment doesn't count", []int64{testT}, false, false},
+		{"a record made at the moment counts, since one of the moment's own millisecond can't be told from one made before it", []int64{testT}, false, true},
+		{"a record made after the moment doesn't count", []int64{testT + 1}, false, false},
 		{"a record counts no more once it is written", []int64{testT - 1}, true, false},
 		{"a record the full queue dropped doesn't count", append(slices.Repeat([]int64{testT + 1}, presenceQueue), testT-1), false, false},
 	}

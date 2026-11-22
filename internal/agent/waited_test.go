@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -193,8 +194,11 @@ func TestCallParkedAcrossLogin(t *testing.T) {
 func TestAdaptersWaiting(t *testing.T) {
 	const moment, boot = int64(1_795_100_000_000), "b_os"
 	// before is the writer's test of an event against the moment: by its
-	// t, or by its mono in boot, where the moment is mono 50,000.
-	before := func(e event.Envelope) bool { return e.T < moment || e.BootID == boot && e.Mono > 0 && e.Mono < 50_000 }
+	// t, or by its mono in boot, where the moment is mono 50,000, each
+	// holding its own millisecond (ledger moment.before).
+	before := func(e event.Envelope) bool {
+		return e.T <= moment || e.BootID == boot && e.Mono > 0 && e.Mono <= 50_000
+	}
 	call := func(ms int64) inbox.Delivery { return inbox.Delivery{Received: clock.Stamp{Wall: time.UnixMilli(ms)}} }
 	// resent is a call the hook stamped at sent with no monotonic reading,
 	// so its records carry the agent's stamp, from received
@@ -220,7 +224,8 @@ func TestAdaptersWaiting(t *testing.T) {
 		want bool
 	}{
 		{"a call made before the moment counts while it waits for the worker", func(h *adapterHost) { h.queue = []inbox.Delivery{call(moment - 1)} }, true},
-		{"a call made at the moment or after it doesn't count", func(h *adapterHost) { h.queue = []inbox.Delivery{call(moment)} }, false},
+		{"a call made at the moment counts, since one of the moment's own millisecond can't be told from one made before it", func(h *adapterHost) { h.queue = []inbox.Delivery{call(moment)} }, true},
+		{"a call made after the moment doesn't count", func(h *adapterHost) { h.queue = []inbox.Delivery{call(moment + 1)} }, false},
 		{"a call made before the moment counts while the step that took it works", func(h *adapterHost) { h.stepping = []callStamp{at(moment + 1), at(moment - 1)} }, true},
 		{"a parked call made before the moment counts", func(h *adapterHost) { h.parkedAt[at(moment-1)] = 1 }, true},
 		{"a parked call made after it doesn't", func(h *adapterHost) { h.parkedAt[at(moment+1)] = 2 }, false},
@@ -274,12 +279,36 @@ func TestAdaptersWaiting(t *testing.T) {
 				t.Errorf("before the count: %v, after it: %v; want true, false", uncounted, h.waiting(before))
 			}
 		}},
-		{"a moment that holds nothing, as at a first start, holds no call the worker hasn't counted yet", func(t *testing.T) {
+		{"a moment that holds nothing, as after an upgrade from a version whose seal frames keep none, holds no call the worker hasn't counted yet", func(t *testing.T) {
 			h := newHost()
 			leftHeld(t, h)
 			h.expectCount()
-			if h.waiting(func(e event.Envelope) bool { return e.T < 0 }) {
-				t.Error("a moment with no time held a call that isn't counted yet")
+			// The newest batch counts as local-only, and its seal frame keeps
+			// no moment, so the next seal asks Waiting by the writer's own
+			// moment, which holds nothing.
+			first := optionsWriter(t, h.a.dirs, func(o *ledger.Options) { o.Online = func() bool { return false } })
+			if _, err := first.Write(presenceAt(time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			if err := first.Close(); err != nil {
+				t.Fatal(err)
+			}
+			_, rows, err := ledger.ReadRows(h.a.dirs.Ledger(), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 || rows[0].Online || !rows[0].LocalUntil.IsZero() {
+				t.Fatalf("the first writer sealed %+v, want one local-only batch with no moment", rows)
+			}
+			w := optionsWriter(t, h.a.dirs, func(o *ledger.Options) {
+				o.Online = func() bool { return true }
+				o.Waiting = h.waiting
+			})
+			if _, err := w.Write(presenceAt(time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			if b, ok, err := w.Seal(); !ok || err != nil || !b.Online {
+				t.Errorf("the batch after the local-only one was sealed %v, online %v (%v); want online, since a moment that holds nothing holds no call", ok, b.Online, err)
 			}
 		}},
 		{"a parked call counts until it is parsed, by the time its records carry", func(t *testing.T) {
@@ -594,6 +623,111 @@ func TestModesSeen(t *testing.T) {
 			}
 			if got := a.seen(); got.Ended.IsZero() || got.Earlier || !got.Until.Equal(linked.Add(time.Second)) || !got.OS.HasMono() {
 				t.Errorf("the start saw %+v, want the stretch ended now, by both clocks, and by the wall clock to the end of the link's second", got)
+			}
+		}},
+		{"a state.json set aside, which kept neither modes nor the uploader's link, is rebuilt from the ledger: a batch sealed online after the link's second has the link count as seen, and the newest seal frame's local_until ends the stretch, as an earlier run's", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			linked := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			writeAccount(t, dirs, linked)
+			// The last run saw the stretch end a minute after the link, and
+			// sealed a batch online after it.
+			ended := linked.Add(time.Minute)
+			w := optionsWriter(t, dirs, func(o *ledger.Options) { o.Online = func() bool { return true } })
+			w.NoteSeen(ledger.Seen{Ended: ended})
+			if _, err := w.Write(presenceAt(time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			if row := sealNow(t, w, dirs.Ledger()); !row.Online || !row.LocalUntil.Equal(ended) {
+				t.Fatalf("the last run's batch sealed online %v, local-only until %v; want online, until %v", row.Online, row.LocalUntil, ended)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			a.startModes()
+			got, ms := a.seen(), kept(t, dirs)
+			if got.Local || !got.Ended.Equal(ended) || !got.Earlier || got.OS.HasMono() || !got.Until.IsZero() ||
+				ms.Linked != linked.UnixMilli() || a.linkedSeen.Load() != linked.UnixMilli() {
+				t.Errorf("the start saw %+v, and state.json keeps %+v; want the stretch ended at the newest seal frame's local_until, as an earlier run's, and the link seen", got, ms)
+			}
+		}},
+		{"a state.json set aside, with no batch sealed online after the link's second, leaves the link one the agent didn't see, which ends the stretch where the agent finds it", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			linked := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			writeAccount(t, dirs, linked)
+			w := optionsWriter(t, dirs, func(o *ledger.Options) { o.Online = func() bool { return false } })
+			// The seal frames record a moment, so only the missing online
+			// batch keeps the link unseen.
+			w.NoteSeen(ledger.Seen{Ended: linked.Add(time.Minute)})
+			if _, err := w.Write(presenceAt(time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			a.startModes()
+			if got := a.seen(); got.Earlier || !got.OS.HasMono() || !got.Until.Equal(linked.Add(time.Second)) {
+				t.Errorf("the start saw %+v, want the stretch ended now, by both clocks, and by the wall clock to the end of the link's second", got)
+			}
+		}},
+		{"a state.json set aside, whose ledger's newest seal frame records no moment, as an older version's doesn't, leaves the link one the agent didn't see", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			linked := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			writeAccount(t, dirs, linked)
+			w := optionsWriter(t, dirs, func(o *ledger.Options) { o.Online = func() bool { return true } })
+			if _, err := w.Write(presenceAt(time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			if row := sealNow(t, w, dirs.Ledger()); !row.Online || !row.LocalUntil.IsZero() {
+				t.Fatalf("the batch sealed online %v, local-only until %v; want online, with no moment", row.Online, row.LocalUntil)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			a.startModes()
+			if got := a.seen(); got.Earlier || !got.OS.HasMono() || !got.Until.Equal(linked.Add(time.Second)) {
+				t.Errorf("the start saw %+v, want the stretch ended now, by both clocks, and by the wall clock to the end of the link's second", got)
+			}
+		}},
+		{"a state.json set aside, whose ledger's newest batch counts as local-only, rebuilds the link as seen and the stretch as going on as the last run stopped, so it ends at the start, by both clocks", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			linked := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			writeAccount(t, dirs, linked)
+			var on atomic.Bool
+			on.Store(true)
+			w := optionsWriter(t, dirs, func(o *ledger.Options) { o.Online = on.Load })
+			w.NoteSeen(ledger.Seen{Ended: linked.Add(time.Minute)})
+			if _, err := w.Write(presenceAt(time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			if row := sealNow(t, w, dirs.Ledger()); !row.Online {
+				t.Fatal("the last run's first batch was sealed local-only")
+			}
+			on.Store(false)
+			if _, err := w.Write(presenceAt(time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			if row := sealNow(t, w, dirs.Ledger()); row.Online {
+				t.Fatal("the last run's newest batch was sealed online")
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			start := time.Now()
+			a.startModes()
+			if got := a.seen(); got.Earlier || !got.OS.HasMono() || !got.Until.IsZero() || got.Ended.Before(start) || a.linkedSeen.Load() != linked.UnixMilli() {
+				t.Errorf("the start saw %+v, want the stretch ended at the start, by both clocks, and the link seen", got)
 			}
 		}},
 		{"a pairtime login made after the start, which the config watch didn't hear, is taken in as the ledger opens: the stretch ends there by both clocks, and state.json keeps the link", func(t *testing.T) {
@@ -978,9 +1112,9 @@ func TestSpoolHolds(t *testing.T) {
 	moment, bound := now.Wall.Add(-time.Minute).UnixMilli(), monoNow-60_000
 	before := func(e event.Envelope) bool {
 		if e.BootID == boot && e.Mono > 0 {
-			return e.Mono < bound
+			return e.Mono <= bound
 		}
-		return e.T < moment
+		return e.T <= moment
 	}
 	type call struct {
 		// ago is how long before now the hook stamped it, by both clocks
@@ -1074,7 +1208,7 @@ func TestAgentWaiting(t *testing.T) {
 			made := time.Now()
 			a.ledgerIn.Record(presence.Record{At: made, Data: &event.OSPresence{IdleAnyS: 1}})
 			cut := made.Add(time.Second).UnixMilli()
-			if !a.waiting(func(e event.Envelope) bool { return e.T < cut }) {
+			if !a.waiting(func(e event.Envelope) bool { return e.T <= cut }) {
 				t.Error("a record of presence's queued before the moment held nothing")
 			}
 		}},
@@ -1115,7 +1249,7 @@ func TestAgentWaiting(t *testing.T) {
 			// The moment is a minute on, by this run's clock: a change of the
 			// repo's is before it only when asked about by that clock.
 			mono, boot := ledger.RunClock(time.Now().Add(time.Minute))
-			before := func(e event.Envelope) bool { return e.BootID == boot && e.Mono > 0 && e.Mono < mono }
+			before := func(e event.Envelope) bool { return e.BootID == boot && e.Mono > 0 && e.Mono <= mono }
 			if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("b\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -1301,13 +1435,21 @@ func modesAgent(t *testing.T, mode string) (*agent, home.Dirs) {
 
 // testWriter is a ledger writer on dirs' ledger with test keys, closed
 // when the test ends.
-func testWriter(t *testing.T, dirs home.Dirs) *ledger.Writer {
+func testWriter(t *testing.T, dirs home.Dirs) *ledger.Writer { return optionsWriter(t, dirs, nil) }
+
+// optionsWriter is testWriter with the options edit sets, when it isn't
+// nil.
+func optionsWriter(t *testing.T, dirs home.Dirs, edit func(*ledger.Options)) *ledger.Writer {
 	t.Helper()
 	lk, err := pkgledger.DeriveKeys(bytes.Repeat([]byte{9}, 32))
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := ledger.Open(ledger.Options{Dir: dirs.Ledger(), Keys: lk, KeyID: "0123456789abcdef"})
+	opts := ledger.Options{Dir: dirs.Ledger(), Keys: lk, KeyID: "0123456789abcdef"}
+	if edit != nil {
+		edit(&opts)
+	}
+	w, err := ledger.Open(opts)
 	if err != nil {
 		t.Fatal(err)
 	}

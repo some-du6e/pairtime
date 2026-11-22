@@ -123,7 +123,7 @@ func TestLocalRuns(t *testing.T) {
 		stop  uint64
 		want  string
 	}{
-		{"a stop at a batch sealed in local-only mode blames config.toml", "oollo", 3, localOnlyProblem},
+		{"a stop at a batch sealed in local-only mode names both causes, config.toml and a record from before the link that came late", "oollo", 3, localOnlyProblem},
 		{"a stop at a batch an older version sealed, which recorded no mode, says so", "oonno", 3, noModeProblem},
 	}
 	for _, tc := range causes {

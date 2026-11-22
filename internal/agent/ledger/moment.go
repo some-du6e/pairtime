@@ -25,7 +25,7 @@ import (
 // Each bound holds its own millisecond: the moment is taken after the
 // switch it ends, so an event of the same millisecond can't be told from
 // one made before it, and privacy wins what can't be told (#174's ruling).
-// Zero means no bound by that clock. A
+// Zero means no bound by that clock, so a zero moment holds no event. A
 // moment an earlier run recorded, read back from disk, holds the bounds of
 // this run's start and, when it was recorded in another boot, of this
 // boot's (Writer.earlier): every event of this run, and every hook call of
@@ -111,5 +111,17 @@ func (m moment) before(e event.Envelope) bool {
 	case m.os > 0 && e.Mono > 0 && e.BootID == m.boot:
 		return e.Mono <= m.os
 	}
-	return e.T <= m.wall
+	return m.wall > 0 && e.T <= m.wall
+}
+
+// arrival is at, when the writer took a record in, as an event's times by
+// this run's clock: what Write holds a lookback record to in place of its
+// event's (Input.Lookback). A time with no monotonic reading gives the
+// wall clock's alone, as momentAt does.
+func arrival(at time.Time) event.Envelope {
+	e := event.Envelope{T: at.UnixMilli()}
+	if at != at.Round(0) { // Round(0) strips the monotonic reading
+		e.Mono, e.BootID = runMono(at), runBoot
+	}
+	return e
 }

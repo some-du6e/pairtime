@@ -18,7 +18,8 @@
 //     online, true when it was sealed while config.toml let the computer
 //     upload, none of its records came while the agent's config watch said
 //     local-only, none is an event made, by its own times or by its
-//     sender's stamp (Input.Sent), before config.toml was last known to
+//     sender's stamp (Input.Sent), or for lookback's by when the writer
+//     took it in (Input.Lookback), before config.toml was last known to
 //     say local-only, and no such event was still on its way to the writer
 //     as it was sealed (Options.Waiting), false otherwise (Options.Online,
 //     Writer.NoteMode, Writer.NoteSeen, Writer.Write), and missing only
