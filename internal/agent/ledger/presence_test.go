@@ -13,6 +13,57 @@ import (
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
+// TestPresenceWaiting checks presence's part of the writer's Waiting: a
+// record queued and not yet written counts, by its event's times, until it
+// is written, and one the full queue dropped never does.
+func TestPresenceWaiting(t *testing.T) {
+	// before is the writer's test of an event against a moment at testT,
+	// by its t, of this run's clock, holding the moment's own millisecond.
+	before := func(e event.Envelope) bool { return e.BootID == runBoot && e.T <= testT }
+	cases := []struct {
+		name string
+		// times are when the records queued were made, in Unix ms, and
+		// written has a writer take them all before Waiting is asked.
+		times   []int64
+		written bool
+		want    bool
+	}{
+		{"a record made before the moment counts while it is queued", []int64{testT + 5, testT - 1}, false, true},
+		{"a record made at the moment counts, since one of the moment's own millisecond can't be told from one made before it", []int64{testT}, false, true},
+		{"a record made after the moment doesn't count", []int64{testT + 1}, false, false},
+		{"a record counts no more once it is written", []int64{testT - 1}, true, false},
+		{"a record the full queue dropped doesn't count", append(slices.Repeat([]int64{testT + 1}, presenceQueue), testT-1), false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := NewPresence(nil)
+			for _, ms := range c.times {
+				p.Record(presence.Record{At: time.UnixMilli(ms), Data: &event.OSPresence{IdleAnyS: 1}})
+			}
+			if c.written {
+				dir := t.TempDir()
+				w := open(t, dir, newClock(testT))
+				p.Attach(w)
+				// Close waits for the goroutine, which writes what was queued
+				// first.
+				p.Close()
+				if err := w.Close(); err != nil {
+					t.Fatal(err)
+				}
+				// The writer took them, and didn't turn them away.
+				if n := len(records(verify(t, dir, keysOf(t, testKDev)))); n != len(c.times) {
+					t.Fatalf("the writer holds %d records, want %d", n, len(c.times))
+				}
+			}
+			got := p.Waiting(before)
+			p.Close()
+			if got != c.want {
+				t.Errorf("Waiting = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 // TestPresence checks how presence's records and seals reach the writer
 // (WP-OS1's presence.Options.Record and Seal).
 func TestPresence(t *testing.T) {

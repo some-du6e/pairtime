@@ -1907,6 +1907,22 @@ func TestHeldRetention(t *testing.T) {
 				t.Errorf("the status counts %d calls waiting, want the one in held.jsonl", w)
 			}
 		}},
+		{"a .replay file whose calls were all parsed but that can't be deleted is emptied, so the next start parses none of them again", func(t *testing.T, h *adapterHost) {
+			if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+				t.Skip("a folder's mode keeps a delete out only on Unix, and not for root")
+			}
+			replay := h.a.dirs.Held() + ".replay"
+			write(t, replay, line(t, h, call(t, "new-1", time.Hour, false)))
+			dir := filepath.Dir(replay)
+			if err := os.Chmod(dir, 0o500); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.Chmod(dir, 0o700) })
+			h.endReplay(replay)
+			if fi, err := os.Stat(replay); err != nil || fi.Size() != 0 || !h.replayStuck {
+				t.Errorf("after the replay, .replay is %v (%v), stuck for the run %v; want there, empty, and stuck", fi, err, h.replayStuck)
+			}
+		}},
 		{"as the agent runs, what an earlier run left in the pending log goes at the log's next rewrite once due, and this run's lines stay", func(t *testing.T, h *adapterHost) {
 			pending := h.a.dirs.Held() + pendingSuffix
 			earlier := newAdapterHost(&agent{dirs: h.a.dirs, log: slog.New(slog.DiscardHandler), problems: make(map[string]string)})

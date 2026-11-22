@@ -10,6 +10,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/pkg/event"
 )
 
 // ledgerOpenWait bounds how long a stop waits for the ledger to finish
@@ -48,6 +49,14 @@ const (
 // to drop; "keystore" where the device key is kept.
 func (a *agent) startLedger() func() {
 	a.ledgerIn = ledger.NewPresence(func(msg string) { a.setProblem("ledger.presence", msg) })
+	// Every record made from here on counts by what the agent sees of
+	// config.toml's mode, whenever the writer opens (modes).
+	a.startModes()
+	// The ledger opens on a goroutine of its own, and may seal before the
+	// adapters have counted the calls held from an earlier run: until they
+	// have, a call made before config.toml was last seen local-only may be
+	// on its way (waiting).
+	a.adaptersHost().expectCount()
 	var (
 		mu         sync.Mutex
 		w          *ledger.Writer
@@ -68,29 +77,25 @@ func (a *agent) startLedger() func() {
 			lw.Close()
 			return
 		}
-		// The adapters parse the hook calls that waited for the keys and
-		// the writer (adapters.go).
-		a.adaptersHost().attach(lw)
 		w = lw
 		// The config watch tells the writer each change of config.toml's
 		// mode from here on (ledger.Writer.NoteMode), and publishWriter
-		// gives it the one the watch noted while the ledger waited to open.
-		// The mode the agent started in isn't noted: every install starts
-		// in local mode, and the watch notes pairtime login only after its
-		// debounce, so the records just after the login would count as
-		// local-only. A stretch from the start that no seal falls in, as
-		// from pairtime install to pairtime login, takes the mode of its
-		// seal. Once a batch has been sealed local-only, the login's note
-		// seals what is pending, and the root of the first batch after it
-		// goes, and the minutes after the switch (Batch.Back).
-		// The records that waited for the writer, presence's queue and the
-		// hook calls the adapters held, attach on goroutines of their own
-		// and take the mode of their seal too: those made in a local-only
-		// stretch while the ledger was shut can be sealed online, a gap
-		// #131 had too, which a WP-AG5 follow-up closes before the teen
-		// pilot (docs/PLAN.md).
+		// first gives it what the agent saw since the start, which Open
+		// took too (ledger.Seen): every install starts in local mode, so
+		// the stretch up to pairtime login counts, as does one the watch
+		// noted while the ledger waited to open. The watch notes the login
+		// at its first look at config.toml, not after its debounce
+		// (noteBack), so the records just after it are online. Once the
+		// writer has the stretch, the records that waited for it, presence's
+		// queue and the hook calls the adapters held, attach: those made
+		// before the stretch ended are sealed local-only, by their own time,
+		// and the first batch after them that holds none takes the mark
+		// (Batch.Back), once none is still on its way (a.waiting).
 		a.publishWriter(lw)
 		a.ledgerIn.Attach(lw)
+		// The adapters parse the hook calls that waited for the keys and
+		// the writer (adapters.go).
+		a.adaptersHost().attach(lw)
 		if a.scorer != nil {
 			a.scorer.Start()
 		}
@@ -193,7 +198,33 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 		Params:  a.table,
 		Sched:   a.sched,
 		Sealed:  a.sealed,
-		Online:  a.online,
+		Online:  a.writerOnline,
+		Seen:    a.seen,
+		Waiting: a.waiting,
 		Problem: func(msg string) { a.setProblem("ledger", msg) },
+	})
+}
+
+// waiting is the ledger writer's Waiting: whether a record that before
+// says may have been made before config.toml was last seen local-only is
+// still on its way to it: one of presence's still queued, a hook call in
+// the inbox's spool, parked behind its folder's first Track or held while
+// the adapters' keys or the writer weren't there, or a git change the
+// watcher holds for its actor. A git change carries this run's clock from
+// when its scan began (gitHost.sink), and is asked about by it. It takes
+// presence's, the adapter host's and the git watcher's locks, none of
+// which is held while the writer is called.
+func (a *agent) waiting(before func(event.Envelope) bool) bool {
+	if a.ledgerIn != nil && a.ledgerIn.Waiting(before) || a.spoolHolds(before) {
+		return true
+	}
+	h := a.adaptersHost()
+	if h.waiting(before) {
+		return true
+	}
+	g := h.git.Load()
+	return g != nil && g.w.Waiting(func(t int64, found time.Time) bool {
+		mono, boot := ledger.RunClock(found)
+		return before(event.Envelope{T: t, Mono: mono, BootID: boot})
 	})
 }

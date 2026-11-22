@@ -140,12 +140,15 @@ upload before it goes.
 `
 
 // uploadsStopped is what privacy show says while the batch roots stop at a
-// batch sealed in local-only mode (uploader.Preview.Stopped).
-const uploadsStopped = `Uploads are stopped. config.toml kept this computer local-only for a while
-after it was linked (it said mode = "local", or it had an error), and
-nothing pairtime records in local-only mode leaves this computer, so
-nothing it recorded from then on goes. To upload again, run pairtime
-logout, then pairtime login; what it records after that goes as usual.
+// batch sealed in local-only mode (uploader.Preview.Stopped), with both of
+// its causes, as doctor gives them (uploader's localOnlyProblem).
+const uploadsStopped = `Uploads are stopped. After this computer was linked, pairtime recorded
+something in local-only mode: config.toml said mode = "local", or had an
+error, for a while, or something made before the link, as a hook call that
+waited, reached pairtime only after it. Nothing pairtime records in
+local-only mode leaves this computer, so nothing it recorded from then on
+goes. To upload again, run pairtime logout, then pairtime login; what it
+records after that goes as usual.
 
 `
 
