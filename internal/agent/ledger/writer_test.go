@@ -1477,7 +1477,9 @@ func TestSealReadsModeAgain(t *testing.T) {
 					if !c.unnoted {
 						w.NoteMode(c.note)
 					}
-					if _, _, err := write(w, rng, "os.presence", testT); err != nil {
+					// A millisecond after the note: one of the note's own
+					// millisecond counts as made before it.
+					if _, _, err := write(w, rng, "os.presence", testT+1); err != nil {
 						t.Error(err)
 					}
 					return c.before
@@ -1545,7 +1547,9 @@ func TestSealReadsUnderLock(t *testing.T) {
 			// unarmed hears of each read before armed.
 			unarmed := make(chan struct{}, 16)
 			rng := rand.New(rand.NewPCG(23, 24))
-			in := sampleInput(rng, "os.presence", testT, "", "")
+			// Records a millisecond after the mark's note, which holds its
+			// own millisecond.
+			in := sampleInput(rng, "os.presence", testT+1, "", "")
 			// done closes once the record written as the read under the lock
 			// begins is written, which waits for the lock.
 			done := make(chan struct{})
@@ -1561,7 +1565,7 @@ func TestSealReadsUnderLock(t *testing.T) {
 					n := int(reads.Add(1))
 					switch {
 					case n <= sealReads:
-						if _, _, err := write(w, rng, "os.presence", testT); err != nil {
+						if _, _, err := write(w, rng, "os.presence", testT+1); err != nil {
 							t.Error(err)
 						}
 						return c.reads[n-1]
