@@ -38,7 +38,9 @@ type projectsReply struct {
 }
 
 // projectReply is one project of GET /v1/projects, and the answer to PUT
-// /v1/projects/{key}/name.
+// /v1/projects/{key}/name. Code is the short code the server gave the
+// project, "" while it gave none (projects.Project.Code), when the page
+// calls the project by its key.
 type projectReply struct {
 	Project   string         `json:"project"`
 	Code      string         `json:"code"`

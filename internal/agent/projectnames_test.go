@@ -53,8 +53,9 @@ func send(t *testing.T, a *running, method, path, body string) (int, string) {
 
 // projectsDir fills a data directory with a project map holding
 // chip8-emulator's repo, and today's rollup with a plain folder's
-// project, which the map doesn't keep.
-func projectsDir(t *testing.T, dirs home.Dirs, linked bool, shown map[string]string) {
+// project, which the map doesn't keep, and, when linked, the names and
+// codes the server last gave.
+func projectsDir(t *testing.T, dirs home.Dirs, linked bool, shown, codes map[string]string) {
 	t.Helper()
 	m := git.ProjectMap{Repos: []git.RepoProject{{CommonDir: filepath.Join(dirs.Data, "code", "chip8-emulator", ".git"), Key: chip8Key, Kind: git.KindRepo}}}
 	st, err := json.Marshal(map[string]any{"v": 1, projectsKey: m})
@@ -80,7 +81,7 @@ func projectsDir(t *testing.T, dirs home.Dirs, linked bool, shown map[string]str
 	if err := os.WriteFile(account.File(dirs.Data), []byte(l), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	n, err := json.Marshal(uploader.Names{V: 1, Server: namesServer, Device: namesDevice, Confirmed: shown, AnsweredAt: 1})
+	n, err := json.Marshal(uploader.Names{V: 1, Server: namesServer, Device: namesDevice, Confirmed: shown, Codes: codes, AnsweredAt: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,21 +111,59 @@ func TestProjectsAPI(t *testing.T) {
 		config string
 		linked bool
 		shown  map[string]string
+		codes  map[string]string // the codes the server last gave
 		steps  []step
 	}{
 		{
-			name: "GET /v1/projects lists a repo by its local name and code, with its name off and that name to show, and a plain folder with neither",
+			name: "GET /v1/projects lists a repo by its local name, with its name off and that name to show, and a plain folder with neither, and no code before a server gives one",
 			steps: []step{{method: "GET", path: "/v1/projects", code: 200, check: func(t *testing.T, body string, _ map[string]config.Project) {
 				var r projectsReply
 				if err := json.Unmarshal([]byte(body), &r); err != nil {
 					t.Fatal(err)
 				}
 				want := []projectReply{
-					{Project: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: "off", Label: "chip8-emulator"},
-					{Project: folderKey, Code: "d2a8f6", State: "off"},
+					{Project: chip8Key, LocalName: "chip8-emulator", State: "off", Label: "chip8-emulator"},
+					{Project: folderKey, State: "off"},
 				}
 				if r.Date != time.Now().Format(time.DateOnly) || r.Linked || r.Online || len(r.Projects) != 2 || r.Projects[0] != want[0] || r.Projects[1] != want[1] {
 					t.Errorf("GET /v1/projects = %s", body)
+				}
+				if !strings.Contains(body, `"code":""`) {
+					t.Errorf("GET /v1/projects = %s; want each project's code, empty while it has none", body)
+				}
+			}}},
+		},
+		{
+			name:   "a linked computer's projects have the codes the server gave them, and one it gave none has an empty code",
+			config: "mode = \"online\"\n",
+			linked: true,
+			codes:  map[string]string{chip8Key: "7c41e9a"},
+			steps: []step{{method: "GET", path: "/v1/projects", code: 200, check: func(t *testing.T, body string, _ map[string]config.Project) {
+				var r projectsReply
+				if err := json.Unmarshal([]byte(body), &r); err != nil {
+					t.Fatal(err)
+				}
+				want := []projectReply{
+					{Project: chip8Key, Code: "7c41e9a", LocalName: "chip8-emulator", State: "off", Label: "chip8-emulator"},
+					{Project: folderKey, State: "off"},
+				}
+				if len(r.Projects) != 2 || r.Projects[0] != want[0] || r.Projects[1] != want[1] {
+					t.Errorf("GET /v1/projects = %s", body)
+				}
+			}}},
+		},
+		{
+			name:   "turning a name on answers the project with the code the server gave it",
+			config: "mode = \"online\"\n",
+			linked: true,
+			codes:  map[string]string{chip8Key: "7c41e9"},
+			steps: []step{{method: "PUT", path: "/v1/projects/" + chip8Key + "/name", body: `{"online":true}`, code: 200, check: func(t *testing.T, body string, _ map[string]config.Project) {
+				var r projectReply
+				if err := json.Unmarshal([]byte(body), &r); err != nil {
+					t.Fatal(err)
+				}
+				if r != (projectReply{Project: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: "sending", Label: "chip8-emulator"}) {
+					t.Errorf("PUT answered %s", body)
 				}
 			}}},
 		},
@@ -240,7 +279,7 @@ func TestProjectsAPI(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var cfgFile string
 			a := startWith(t, tt.config, nil, func(dirs home.Dirs) {
-				projectsDir(t, dirs, tt.linked, tt.shown)
+				projectsDir(t, dirs, tt.linked, tt.shown, tt.codes)
 				cfgFile = dirs.ConfigFile()
 			})
 			before, _ := os.ReadFile(cfgFile)

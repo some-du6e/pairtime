@@ -378,14 +378,18 @@ export const fixtureDates = Object.keys(days);
 /** A plain folder Sam worked in, which the project map doesn't keep, so it has no name on the computer. */
 export const scratchKey = 'dd2a8f61c94e07b35a8c1f6e29d4b7a03';
 
+/** A repo the project map keeps that holds no time yet, so the server has none of its minutes and gave it no code. */
+export const uncodedKey = 'p_pixel';
+
 /**
  * GET /v1/projects (D-owner-names): Sam's five projects, each named by its
- * folder and called by the short code of its key, which for keys like these
- * fake ones is their first six characters, and the plain folder, with no
- * name. portfolio's name shows on Sam's dashboard and homework-helper's is
- * on its way, as "Homework helper"; Sam hid discord-bot's there; the rest
- * are off. They come in `pairtime projects`' order, by title. online false
- * is a computer that is local-only.
+ * folder and called by the short code the server gave its key, which for
+ * keys like these fake ones is their first six characters; the plain
+ * folder, with no name; and pixel-garden, a repo with no time yet, which
+ * the server gave no code. portfolio's name shows on Sam's dashboard and
+ * homework-helper's is on its way, as "Homework helper"; Sam hid
+ * discord-bot's there; the rest are off. They come in `pairtime projects`'
+ * order, by title. online false is a computer that is local-only.
  */
 export function projectsReply(online = true): Schemas['Projects'] {
 	return {
@@ -395,6 +399,7 @@ export function projectsReply(online = true): Schemas['Projects'] {
 		projects: [
 			{ project: 'p_bot', code: 'p_bot', local_name: 'discord-bot', state: 'hidden', label: 'discord-bot', hidden_at: '2026-11-19T18:00:00Z' },
 			{ project: 'p_homework', code: 'p_home', local_name: 'homework-helper', state: 'sending', label: 'Homework helper' },
+			{ project: uncodedKey, code: '', local_name: 'pixel-garden', state: 'off', label: 'pixel-garden' },
 			{ project: 'p_plant', code: 'p_plan', local_name: 'plant-sensor', state: 'off', label: 'plant-sensor' },
 			{ project: 'p_portfolio', code: 'p_port', local_name: 'portfolio', state: 'on', label: 'portfolio' },
 			{ project: scratchKey, code: 'd2a8f6', local_name: '', state: 'off', label: '' },

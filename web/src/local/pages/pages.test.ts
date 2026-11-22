@@ -459,8 +459,43 @@ describe("Projects' switches for a project's name on the owner's dashboard", () 
 			html: () => page({ names: projectsReply() }),
 			check: (html) => {
 				expect(part(html, 'section', 'other-projects')).toBe(
-					'Other projects on this computer Project d2a8f6 This project has no name on this computer. To show one on your dashboard, run pairtime projects show-name d2a8f6 with the name.',
+					`Other projects on this computer pixel-garden Show this name on my dashboard: "pixel-garden" Your dashboard gives the project a code once its first minutes reach the server, and pairtime shows the code here within a day, or when the agent next starts. ${who} Project d2a8f6 This project has no name on this computer. To show one on your dashboard, run pairtime projects show-name d2a8f6 with the name.`,
 				);
+			},
+		},
+		{
+			name: 'a name off that the server gave no code says when the dashboard gives the project one',
+			html: () => page({ names: projectsReply() }),
+			check: (html) =>
+				expect(text(switchOf(html, 'p_pixel'))).toContain(
+					`Show this name on my dashboard: "pixel-garden" Your dashboard gives the project a code once its first minutes reach the server, and pairtime shows the code here within a day, or when the agent next starts. ${who}`,
+				),
+		},
+		{
+			name: 'a name on its way off without a code says the dashboard then calls the project by its code',
+			html: () => {
+				const names = projectsReply();
+				names.projects = names.projects.map((p) => (p.project === 'p_portfolio' ? { ...p, state: 'removing' as const, code: '' } : p));
+				return page({ names });
+			},
+			check: (html) =>
+				expect(text(switchOf(html, 'p_portfolio'))).toContain(
+					`Show this name on my dashboard: "portfolio" Your dashboard shows it until pairtime's next upload, then calls the project by its code. ${who}`,
+				),
+		},
+		{
+			name: 'a project with no name here and no code is called by its key, and says to run show-name with the key',
+			html: () => {
+				const names = projectsReply();
+				names.projects = names.projects.map((p) => (p.local_name === '' ? { ...p, code: '' } : p));
+				return page({ names });
+			},
+			check: (html) => {
+				const others = part(html, 'section', 'other-projects');
+				expect(others).toContain(
+					'dd2a8f61c94e07b35a8c1f6e29d4b7a03 This project has no name on this computer. To show one on your dashboard, run pairtime projects show-name dd2a8f61c94e07b35a8c1f6e29d4b7a03 with the name.',
+				);
+				expect(others).not.toContain('Project d2a8f6');
 			},
 		},
 		{

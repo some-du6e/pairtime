@@ -13,7 +13,7 @@
 import { expect, type Page, test } from '@playwright/test';
 import { dashboardURL } from './support/env.ts';
 import { fakeAgent } from './support/fake-agent.ts';
-import { dayReply, projectsReply, todayFinal } from './support/fake-days.ts';
+import { dayReply, projectsReply, scratchKey, todayFinal, uncodedKey } from './support/fake-days.ts';
 import { contrast, look, type RGB } from './support/style.ts';
 
 const origin = new URL(dashboardURL).origin;
@@ -410,11 +410,39 @@ test.describe("Projects' names on the owner's dashboard", () => {
 		await fakeAgent(page);
 		await page.goto(`${dashboardURL}#/projects`);
 		const others = page.getByTestId('other-project');
-		await expect(others.locator('h3')).toHaveText(['Project d2a8f6']);
-		await expect(others.getByTestId('no-name')).toHaveText(
+		await expect(others.locator('h3')).toHaveText(['pixel-garden', 'Project d2a8f6']);
+		const scratch = others.filter({ has: page.getByRole('heading', { name: 'Project d2a8f6', exact: true }) });
+		await expect(scratch.getByTestId('no-name')).toHaveText(
 			'This project has no name on this computer. To show one on your dashboard, run pairtime projects show-name d2a8f6 with the name.',
 		);
-		await expect(others.getByRole('checkbox')).toHaveCount(0);
+		await expect(scratch.getByRole('checkbox')).toHaveCount(0);
+	});
+
+	test('a project the server gave no code yet says when the dashboard gives it one, and its name still turns on', async ({ page }) => {
+		const fake = await fakeAgent(page);
+		await page.goto(`${dashboardURL}#/projects`);
+		const pixel = page.getByTestId('other-project').filter({ has: page.getByRole('heading', { name: 'pixel-garden', exact: true }) });
+		await expect(pixel.getByTestId('name-state')).toHaveText(
+			`Your dashboard gives the project a code once its first minutes reach the server, and pairtime shows the code here within a day, or when the agent next starts. ${who}`,
+		);
+		const box = pixel.getByRole('checkbox', { name: 'Show this name on my dashboard: "pixel-garden"' });
+		await expect(box).not.toBeChecked();
+		await box.click();
+		await expect(box).toBeChecked();
+		await expect(pixel.getByTestId('name-state')).toHaveText(`It goes to your dashboard with pairtime's next upload. ${who}`);
+		expect(fake.names).toEqual([{ key: uncodedKey, body: { online: true, label: 'pixel-garden' } }]);
+	});
+
+	test('a project with no name here and no code yet is called by its key, and says to give show-name the key', async ({ page }) => {
+		const names = projectsReply();
+		names.projects = names.projects.map((p) => (p.project === scratchKey ? { ...p, code: '' } : p));
+		await fakeAgent(page, { projects: names });
+		await page.goto(`${dashboardURL}#/projects`);
+		const others = page.getByTestId('other-project');
+		await expect(others.locator('h3')).toHaveText(['pixel-garden', scratchKey]);
+		await expect(others.getByTestId('no-name')).toHaveText(
+			`This project has no name on this computer. To show one on your dashboard, run pairtime projects show-name ${scratchKey} with the name.`,
+		);
 	});
 
 	test('on a local-only computer a name on its way says it waits until the computer is online', async ({ page }) => {

@@ -2,7 +2,7 @@
 <script lang="ts">
 	import type { ProjectEntry } from '../api.ts';
 	import { nameRefused, nameWho, nameWords, noNameWords } from '../copy.ts';
-	import { nameShown } from '../model.ts';
+	import { nameShown, projectArg } from '../model.ts';
 	import * as text from '../text.ts';
 
 	// A project's switch for its name on the owner's own pairtime dashboard
@@ -38,7 +38,7 @@
 
 <div class="name" data-testid="name" data-project={entry.project} data-state={entry.state}>
 	{#if entry.label === ''}
-		<p class="pt-note" data-testid="no-name">{noNameWords(entry.code)}</p>
+		<p class="pt-note" data-testid="no-name">{noNameWords(projectArg(entry))}</p>
 	{:else}
 		<p class="switch">
 			<input id="{uid}-show" type="checkbox" checked={on} disabled={busy} onchange={change} />

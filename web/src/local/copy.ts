@@ -100,10 +100,12 @@ export const nameWho =
 
 /**
  * Where a project's name stands on the owner's dashboard, by its state in
- * GET /v1/projects. code is the project's short code, and online says the
- * names turned on go to the server now.
+ * GET /v1/projects. code is the project's short code, as the server gave
+ * it, "" while it gave none, and online says the names turned on go to the
+ * server now.
  */
 export function nameWords(state: NameState, code: string, online: boolean): string {
+	const called = code !== '' ? `Project ${code}` : 'by its code';
 	switch (state) {
 		case 'on':
 			return 'Your dashboard shows it.';
@@ -113,18 +115,24 @@ export function nameWords(state: NameState, code: string, online: boolean): stri
 				: 'It goes to your dashboard once this computer is linked and online.';
 		case 'removing':
 			return online
-				? `Your dashboard shows it until pairtime's next upload, then calls the project Project ${code}.`
-				: `Your dashboard shows it until this computer is online again, then calls the project Project ${code}.`;
+				? `Your dashboard shows it until pairtime's next upload, then calls the project ${called}.`
+				: `Your dashboard shows it until this computer is online again, then calls the project ${called}.`;
 		case 'hidden':
 			return "You hid it on your dashboard, so it's off here too. Turn it on to show it again.";
 		default:
-			return `Your dashboard calls the project Project ${code}.`;
+			return code !== ''
+				? `Your dashboard calls the project ${called}.`
+				: 'Your dashboard gives the project a code once its first minutes reach the server, and pairtime shows the code here within a day, or when the agent next starts.';
 	}
 }
 
-/** What a project with no name on this computer says in place of its switch. */
-export function noNameWords(code: string): string {
-	return `This project has no name on this computer. To show one on your dashboard, run pairtime projects show-name ${code} with the name.`;
+/**
+ * What a project with no name on this computer says in place of its
+ * switch. arg is what `pairtime projects show-name` takes for it: its
+ * code, or its key while it has none (model.ts's projectArg).
+ */
+export function noNameWords(arg: string): string {
+	return `This project has no name on this computer. To show one on your dashboard, run pairtime projects show-name ${arg} with the name.`;
 }
 
 /** What a switch says when the agent didn't take its change, with the agent's words. */
@@ -159,8 +167,11 @@ export function allSentences(): string[] {
 			...(['off', 'on', 'sending', 'removing', 'hidden'] as const).flatMap((state) => [
 				nameWords(state, '7c41e9', true),
 				nameWords(state, '7c41e9', false),
+				nameWords(state, '', true),
+				nameWords(state, '', false),
 			]),
 			noNameWords('d2a8f6'),
+			noNameWords('dd2a8f61c94e07b35a8c1f6e29d4b7a03'),
 			nameRefused('config.toml has an error'),
 		]),
 	];
