@@ -203,6 +203,12 @@ func TestAdaptersWaiting(t *testing.T) {
 		return inbox.Delivery{Message: inbox.Message{Sent: time.UnixMilli(sent)}, Received: clock.Stamp{Wall: time.UnixMilli(received)}}
 	}
 	at := func(ms int64) callStamp { return callStamp{t: ms} }
+	// leave writes what an earlier run left in held.jsonl, with suffix.
+	leave := func(h *adapterHost, suffix, body string) {
+		if err := os.WriteFile(h.a.dirs.Held()+suffix, []byte(body), 0o600); err != nil {
+			panic(err)
+		}
+	}
 	newHost := func() *adapterHost {
 		dir := t.TempDir()
 		return newAdapterHost(&agent{dirs: home.Dirs{Data: dir, Config: dir, Runtime: dir}, log: slog.New(slog.DiscardHandler),
@@ -233,6 +239,15 @@ func TestAdaptersWaiting(t *testing.T) {
 		{"a call whose own stamp and its records' are both after the moment doesn't count",
 			func(h *adapterHost) { h.queue = []inbox.Delivery{resent(moment+1, moment+5)} }, false},
 		{"with nothing an earlier run held, nothing waits to be counted", func(h *adapterHost) { h.expectCount() }, false},
+		{"calls a kill mid-replay left in held.jsonl's .replay file may be on their way until they are counted",
+			func(h *adapterHost) { leave(h, ".replay", "{}\n"); h.expectCount() }, true},
+		{"so may calls a kill left in the pending log", func(h *adapterHost) { leave(h, pendingSuffix, "{}\n"); h.expectCount() }, true},
+		{"an empty held.jsonl holds no call", func(h *adapterHost) { leave(h, "", ""); h.expectCount() }, false},
+		{"a socket call with no monotonic reading of the hook's, stamped and taken after the moment, doesn't count, though the agent took it within spoolSlack of the moment",
+			func(h *adapterHost) {
+				h.queue = []inbox.Delivery{{Message: inbox.Message{Sent: time.UnixMilli(moment + 1)}, Via: inbox.ViaSocket,
+					Received: clock.Stamp{Wall: time.UnixMilli(moment + 5), Mono: 50_001, BootID: boot}}}
+			}, false},
 		{"nothing to parse counts for nothing", func(*adapterHost) {}, false},
 	}
 	for _, c := range states {
@@ -550,7 +565,8 @@ func TestModesSeen(t *testing.T) {
 			linked := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
 			writeAccount(t, dirs, linked)
 			keepState(t, dirs, map[string]any{
-				modesKey:          modesState{Ended: linked.Add(-time.Hour), Linked: linked.Add(-2 * time.Hour).UnixMilli()},
+				modesKey: modesState{Ended: linked.Add(-time.Hour), OSMono: 12_345, OSBoot: "b_kept",
+					Linked: linked.Add(-2 * time.Hour).UnixMilli()},
 				uploader.StateKey: map[string]int64{"linked_at": linked.UnixMilli()},
 			})
 			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
@@ -616,6 +632,9 @@ func TestModesSeen(t *testing.T) {
 					t.Fatal("the agent never took the link in")
 				}
 			}
+			if ms := kept(t, dirs); ms.Linked != relinked.UnixMilli() || ms.Ended.IsZero() || !ms.Until.Equal(relinked.Add(time.Second)) {
+				t.Errorf("state.json keeps %+v after the link was taken in, want the link, with the stretch's end", ms)
+			}
 			if _, err := w.Write(runPresenceAt(time.Now().Add(time.Second))); err != nil {
 				t.Fatal(err)
 			}
@@ -644,6 +663,50 @@ func TestModesSeen(t *testing.T) {
 			}
 			if ms := kept(t, dirs); ms.Local || ms.Ended.IsZero() {
 				t.Errorf("state.json keeps %+v, want the stretch ended, so the next start doesn't end it there", ms)
+			}
+		}},
+		{"a link the uploader had settled, after a stretch the last run saw going on, keeps the end the start gave that stretch, by both clocks", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			linked := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			writeAccount(t, dirs, linked)
+			keepState(t, dirs, map[string]any{
+				modesKey:          modesState{Local: true, Linked: linked.Add(-2 * time.Hour).UnixMilli()},
+				uploader.StateKey: map[string]int64{"linked_at": linked.UnixMilli()},
+			})
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			a.startModes()
+			if got := a.seen(); got.Earlier || !got.OS.HasMono() || !got.Until.IsZero() || got.Ended.Before(linked.Add(time.Minute)) {
+				t.Errorf("the start saw %+v, want the stretch ended at the start, by both clocks, with no wall-clock bound", got)
+			}
+		}},
+		{"a switch back the config watch's reload notes, with a link made with it, lets the writer's Online see the link at once", func(t *testing.T) {
+			a, dirs := modesAgent(t, "local")
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			t.Cleanup(a.startLedger())
+			opened(t, a)
+			writeAccount(t, dirs, time.Now().UTC().Truncate(time.Second))
+			setMode(t, dirs, "online")
+			a.noteMode()
+			if !a.writerOnline() {
+				t.Error("the writer's Online said local-only after the reload noted the switch back with its link")
+			}
+		}},
+		{"a switch back the config watch's first look notes, with a link made with it, lets the writer's Online see the link at once", func(t *testing.T) {
+			a, dirs := modesAgent(t, "local")
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			t.Cleanup(a.startLedger())
+			opened(t, a)
+			writeAccount(t, dirs, time.Now().UTC().Truncate(time.Second))
+			setMode(t, dirs, "online")
+			a.noteBack()
+			if !a.writerOnline() {
+				t.Error("the writer's Online said local-only after the first look noted the switch back with its link")
 			}
 		}},
 		{"a link the uploader had settled whose second isn't after the end state.json kept, as after a step back of the wall clock, ends the stretch where the agent finds it, by both clocks", func(t *testing.T) {
@@ -1031,10 +1094,11 @@ func TestAgentWaiting(t *testing.T) {
 				t.Errorf("no drain in the run: %v, the spool holding the mark: %v; want true, false", a.spoolNoDrain.Load(), a.spoolHolds(func(event.Envelope) bool { return true }))
 			}
 		}},
-		{"a spool file that stays busy holds the mark for spoolBusyHold and no longer, and a read that works starts the count again", func(t *testing.T) {
+		{"a spool file that stays busy holds the mark for spoolBusyHold from the first ask that finds it so and no longer, and a batch sealed online or a read that works starts the count again", func(t *testing.T) {
 			a, _ := modesAgent(t, "online")
-			// What each Scan gives: busy, busy, busy past the bound, read, busy.
-			script := []error{errBusy, errBusy, errBusy, nil, errBusy}
+			// What each Scan gives: busy, busy past the bound twice, busy at a
+			// later switch back, read, busy.
+			script := []error{errBusy, errBusy, errBusy, errBusy, nil, errBusy}
 			saved := scanSpool
 			t.Cleanup(func() { scanSpool = saved })
 			scanSpool = func(string, int, func(inbox.Message) bool) (bool, error) {
@@ -1044,15 +1108,23 @@ func TestAgentWaiting(t *testing.T) {
 			}
 			anything := func(event.Envelope) bool { return true }
 			var got []bool
-			for i := range 5 {
-				if i == 2 {
-					// The file has stayed busy past the bound.
-					past := time.Now().Add(-spoolBusyHold - time.Second)
-					a.spoolBusySince.Store(&past)
-				}
-				got = append(got, a.spoolHolds(anything))
+			ask := func() { got = append(got, a.spoolHolds(anything)) }
+			ask()
+			since := a.spoolBusySince.Load()
+			if since == nil {
+				t.Fatal("the first ask that found the file busy didn't record when")
 			}
-			if want := []bool{true, true, false, false, true}; !slices.Equal(got, want) {
+			// The file has stayed busy past the bound since.
+			past := since.Add(-spoolBusyHold - time.Second)
+			a.spoolBusySince.Store(&past)
+			ask()
+			ask()
+			// The mark went with a batch sealed online.
+			a.sealed(ledger.Batch{Online: true})
+			ask()
+			ask()
+			ask()
+			if want := []bool{true, false, false, true, false, true}; !slices.Equal(got, want) {
 				t.Errorf("the spool held the mark %v, want %v", got, want)
 			}
 		}},

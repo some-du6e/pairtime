@@ -613,6 +613,11 @@ func (a *agent) handEarly(u *uploader.Uploader) {
 // uploader reads when it first uploads: one past earlyMax isn't kept, and
 // loses only its harnesses.
 func (a *agent) sealed(b ledger.Batch) {
+	if b.Online {
+		// The mark went, or none was due: a spool file found busy at a
+		// later switch back holds it for spoolBusyHold again (spoolHolds).
+		a.spoolBusySince.Store(nil)
+	}
 	a.earlyMu.Lock()
 	u := a.upload.Load()
 	if u == nil && len(a.early) < earlyMax {

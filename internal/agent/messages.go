@@ -240,7 +240,8 @@ func (a *agent) spoolHolds(before func(event.Envelope) bool) bool {
 		a.spoolBusySince.Store(nil)
 		return found
 	}
-	// Only the writer's seals ask, one at a time.
+	// Only the writer's seals ask, one at a time, and a batch sealed online
+	// ends the asks in a row (agent.sealed).
 	since := a.spoolBusySince.Load()
 	if since == nil {
 		t := time.Now()
