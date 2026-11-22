@@ -59,11 +59,14 @@ type fakeIngest struct {
 	replays           int
 
 	// The owner's project names (docs/spec/project-names-v1.md): the
-	// device's names by key, and every names request's attempt, from 1,
-	// with its faults: "503", "429", "down", "stale" (another computer
-	// took higher counters), "html" (an answer that isn't pairtimed's) and
-	// "label_invalid".
+	// device's names by key, the short code the server gives each of the
+	// device's project keys, which a test sets, and every names request's
+	// attempt, from 1, with its faults: "503", "429", "down", "stale"
+	// (another computer took higher counters), "html" (an answer that
+	// isn't pairtimed's), "404" (a server without the endpoint, in
+	// pairtimed's JSON) and "label_invalid".
 	names       map[string]string
+	codes       map[string]string
 	namesPosts  int
 	namesFaults map[int]string
 	namesBodies [][]byte // the inflated body of every signed names attempt
@@ -88,7 +91,7 @@ func newFakeIngest(device, token string, devKey ed25519.PublicKey) *fakeIngest {
 	return &fakeIngest{
 		device: device, token: token, devKey: devKey, key: key, keyID: hex.EncodeToString(sum[:8]),
 		now: time.Now, faults: map[int]string{}, rows: map[uint64]fakeRow{}, buckets: map[int64]event.MinuteBucket{},
-		witness: map[event.Witness]int{}, names: map[string]string{}, namesFaults: map[int]string{},
+		witness: map[event.Witness]int{}, names: map[string]string{}, codes: map[string]string{}, namesFaults: map[int]string{},
 	}
 }
 

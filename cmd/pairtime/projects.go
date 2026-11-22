@@ -30,9 +30,10 @@ Your dashboard doesn't know your projects' names. It calls each one by a
 code, such as Project 7c41e9, unless you show its name there, one project
 at a time, from this computer. Only you see the name, on your own dashboard
 while you're signed in, and nothing else about the project leaves this
-computer with it. A code on your dashboard can be a character longer than
-here, when another of your computers has a project whose code starts the
-same way.
+computer with it. The codes are your dashboard's own: pairtime reads them
+from the server when the agent starts, and again once a day. A project
+gets its code once its first minutes reach the server, and until pairtime
+has read it, the list shows the project's whole key instead.
 
   show-name <code> [label]  Shows the project's name on your dashboard:
                             the label, or else the one it showed before or
@@ -41,10 +42,11 @@ same way.
   hide-name <code>          Takes the name off your dashboard again.
 
 <code> is a code pairtime projects lists, "Project <code>" as your dashboard
-shows it, or the project's whole key. Both write the project's table in
-config.toml, which the running agent reads again at once, and it sends the
-change with its next upload. Hiding a name on your dashboard turns it off
-here too, until you show it again.
+shows it, or the project's whole key, as pairtime projects lists a project
+with no code yet. Both write the project's table in config.toml, which the
+running agent reads again at once, and it sends the change with its next
+upload. Hiding a name on your dashboard turns it off here too, until you
+show it again.
 
 Exit status:
   0  done
@@ -147,18 +149,24 @@ func readProjects(stderr io.Writer) (projectsView, bool) {
 	return v, true
 }
 
-// writeProjects prints the list: each project's title and code, its time
-// today, and its name on the dashboard, then what couldn't be read and how
-// to show a name.
+// noCode is what pairtime projects says after a list with a project the
+// server has given no code yet (projects.Project.Code).
+const noCode = "A project listed by its key has no code yet: your dashboard gives it one once the project's first minutes reach the server, and pairtime reads it back within a day, or when the agent next starts. show-name and hide-name take the key meanwhile."
+
+// writeProjects prints the list: each project's title and the code the
+// server gave it, or its key while it gave none, its time today, and its
+// name on the dashboard, then what couldn't be read and how to show a name.
 func writeProjects(w io.Writer, v projectsView) {
 	if len(v.list) == 0 {
 		fmt.Fprintln(w, "pairtime knows no projects on this computer yet. A project shows up here once you work on it with an AI agent.")
 	}
+	uncoded := false
 	for i, p := range v.list {
 		if i > 0 {
 			fmt.Fprintln(w)
 		}
-		title := projectname.CodeName(p.Code)
+		title := dashboardName(p, p.Key)
+		uncoded = uncoded || p.Code == ""
 		if p.LocalName != "" {
 			title = text.Printable(p.LocalName) + " (" + title + ")"
 		}
@@ -181,7 +189,29 @@ func writeProjects(w io.Writer, v projectsView) {
 	if !v.online {
 		fmt.Fprintln(w, notOnline(v))
 	}
+	if uncoded {
+		fmt.Fprintln(w, noCode)
+	}
 	fmt.Fprintln(w, "pairtime projects show-name <code> shows a project's name on your own pairtime dashboard, where only you see it, and hide-name takes it off.")
+}
+
+// dashboardName is what the owner's dashboard calls p in place of its
+// name, "Project <code>" with the code the server gave it, or none, the
+// words the sentence takes while the server has given it no code.
+func dashboardName(p projects.Project, none string) string {
+	if p.Code == "" {
+		return none
+	}
+	return projectname.CodeName(p.Code)
+}
+
+// projectArg is what show-name and hide-name take for p: its code, or its
+// whole key while it has none.
+func projectArg(p projects.Project) string {
+	if p.Code == "" {
+		return p.Key
+	}
+	return p.Code
 }
 
 // nameWords says where p's name stands on the dashboard.
@@ -193,14 +223,14 @@ func nameWords(p projects.Project) string {
 	case projects.Sending:
 		return "shows the name " + label + " once pairtime uploads it"
 	case projects.Removing:
-		return "shows its name until pairtime uploads the change, then " + projectname.CodeName(p.Code)
+		return "shows its name until pairtime uploads the change, then " + dashboardName(p, "its code")
 	case projects.Hidden:
-		return fmt.Sprintf("%s, since you hid its name there on %s; pairtime turned it off here, and show-name shows it again", projectname.CodeName(p.Code), text.Day(p.HiddenAt.In(viewZone())))
+		return fmt.Sprintf("%s, since you hid its name there on %s; pairtime turned it off here, and show-name shows it again", dashboardName(p, "its code"), text.Day(p.HiddenAt.In(viewZone())))
 	}
 	if p.Label == "" {
-		return projectname.CodeName(p.Code) + "; it has no name on this computer, so show-name needs one"
+		return dashboardName(p, "no code yet") + "; it has no name on this computer, so show-name needs one"
 	}
-	return projectname.CodeName(p.Code) + "; show-name shows it as " + label
+	return dashboardName(p, "no code yet") + "; show-name shows it as " + label
 }
 
 // notOnline says why no name goes to the dashboard from this computer now.
@@ -224,11 +254,13 @@ func projectArgs(args []string) (code string, rest []string) {
 }
 
 // findProject finds the project code names, and says on stderr when none
-// has it.
+// has it. pairtime knows only the codes the server gave it, so a code it
+// doesn't hold, as one the server gave since pairtime last read them,
+// names nothing, and the whole key still does.
 func findProject(v projectsView, code string, stderr io.Writer) (projects.Project, bool) {
 	p, ok := projects.Find(v.list, code)
 	if !ok {
-		fmt.Fprintf(stderr, "pairtime projects: no project on this computer has the code %q; pairtime projects lists them\n", text.Printable(code))
+		fmt.Fprintf(stderr, "pairtime projects: no project on this computer has the code %q; pairtime knows only the codes the server gave it, so give the project's whole key, as pairtime projects lists it\n", text.Printable(code))
 	}
 	return p, ok
 }
@@ -250,7 +282,7 @@ func runShowName(args []string, stdout, stderr io.Writer) int {
 	label, err := projects.Label(p, strings.Join(rest, " "), len(rest) > 0)
 	switch {
 	case errors.Is(err, projects.ErrNoLabel):
-		fmt.Fprintf(stderr, "pairtime projects: %s has no name on this computer, so say what your dashboard shows: pairtime projects show-name %s \"a name\"\n", projectname.CodeName(p.Code), p.Code)
+		fmt.Fprintf(stderr, "pairtime projects: %s has no name on this computer, so say what your dashboard shows: pairtime projects show-name %s \"a name\"\n", dashboardName(p, "the project "+p.Key), projectArg(p))
 		return 1
 	case errors.Is(err, projects.ErrEmptyLabel):
 		fmt.Fprintln(stderr, "pairtime projects: that name is empty once its spaces and invisible characters are taken out, so it can't show")
@@ -260,7 +292,7 @@ func runShowName(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "Your pairtime dashboard will show %s as \"%s\". Only you see it there, on your own dashboard while you're signed in, and nothing else about the project leaves this computer with it.\n",
-		projectname.CodeName(p.Code), text.Printable(label))
+		dashboardName(p, "the project "+p.Key), text.Printable(label))
 	if err := projects.Show(v.dirs.ConfigFile(), p, label); err != nil {
 		fmt.Fprintf(stderr, "pairtime projects: %v\n", err)
 		return 1
@@ -291,13 +323,14 @@ func runHideName(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pairtime projects: %v\n", err)
 		return 1
 	}
+	called := dashboardName(p, "by its code")
 	switch p.State {
 	case projects.On, projects.Removing:
-		fmt.Fprintf(stdout, "Turned off in config.toml. Your pairtime dashboard calls it %s again once pairtime uploads the change.\n", projectname.CodeName(p.Code))
+		fmt.Fprintf(stdout, "Turned off in config.toml. Your pairtime dashboard calls it %s again once pairtime uploads the change.\n", called)
 	case projects.Sending:
-		fmt.Fprintf(stdout, "Turned off in config.toml before it was sent. Your pairtime dashboard calls it %s.\n", projectname.CodeName(p.Code))
+		fmt.Fprintf(stdout, "Turned off in config.toml before it was sent. Your pairtime dashboard calls it %s.\n", called)
 	default:
-		fmt.Fprintf(stdout, "Its name was off already. Your pairtime dashboard calls it %s.\n", projectname.CodeName(p.Code))
+		fmt.Fprintf(stdout, "Its name was off already. Your pairtime dashboard calls it %s.\n", called)
 	}
 	return 0
 }

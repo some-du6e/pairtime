@@ -23,6 +23,7 @@ import {
 	signalsFor,
 	status,
 	todayFinal,
+	uncodedKey,
 } from './fake-days.ts';
 import { check, type Schema } from './schema.ts';
 
@@ -313,6 +314,11 @@ describe("the fake's PUT /v1/projects/{key}/name keeps the spec's rules", () => 
 			want: { entry: { project: 'p_bot', code: 'p_bot', local_name: 'discord-bot', state: 'sending', label: 'discord-bot' } },
 		},
 		{
+			name: 'a project the server gave no code keeps its empty code when its name turns on',
+			got: () => nameAnswer(entry(uncodedKey), { online: true }),
+			want: { entry: { project: uncodedKey, code: '', local_name: 'pixel-garden', state: 'sending', label: 'pixel-garden' } },
+		},
+		{
 			name: 'a project with no name here, turned on without a label, is 422',
 			got: () => nameAnswer(entry('dd2a8f61c94e07b35a8c1f6e29d4b7a03'), { online: true }),
 			want: { status: 422, text: 'the project has no name on this computer, so turning it on needs a label' },
@@ -415,6 +421,18 @@ describe('the checks can fail', () => {
 				return s ? hidden('session', { ...s, start: '2026-11-20T14:05:00Z' }, shadowHidesOfSession) : [];
 			},
 			want: 'has start',
+		},
+		{
+			name: 'a project without its code fails the schema, since an empty code is how the agent says the server gave none',
+			problems: () => {
+				const r = projectsReply();
+				const p = r.projects.find((q) => q.project === uncodedKey);
+				if (p) {
+					delete (p as { code?: string }).code;
+				}
+				return check(r, ref('Projects'), spec);
+			},
+			want: 'the required field "code" is missing',
 		},
 		{
 			name: "a project's name in a state the spec doesn't have fails the schema",

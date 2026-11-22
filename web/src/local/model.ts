@@ -265,18 +265,32 @@ export function nameShown(state: NameState): boolean {
  * What the Projects page calls a project: its name from the day's answer,
  * or, while the agent's days carry none, the local name GET /v1/projects
  * gives it, or "Project <code>" as the owner's dashboard calls it, and its
- * key only when neither answer names it.
+ * key when neither answer names it and the server gave it no code.
  */
 export function projectTitle(view: ProjectView, entry: ProjectEntry | undefined): string {
 	if (entry === undefined || view.title !== text.printable(view.key)) {
 		return view.title;
 	}
-	return text.printable(entry.local_name !== '' ? entry.local_name : `Project ${entry.code}`);
+	return entryTitle(entry);
 }
 
-/** What the list of other projects calls one: its local name, or "Project <code>". */
+/**
+ * What the list of other projects calls one: its local name, or "Project
+ * <code>", or its key while the server has given it no code.
+ */
 export function entryTitle(entry: ProjectEntry): string {
-	return text.printable(entry.local_name !== '' ? entry.local_name : `Project ${entry.code}`);
+	if (entry.local_name !== '') {
+		return text.printable(entry.local_name);
+	}
+	return text.printable(entry.code !== '' ? `Project ${entry.code}` : entry.project);
+}
+
+/**
+ * What `pairtime projects show-name` takes for a project: the code the
+ * server gave it, or its key while it gave none.
+ */
+export function projectArg(entry: ProjectEntry): string {
+	return entry.code !== '' ? entry.code : entry.project;
 }
 
 /** All of the days' projects as one view: the day's or the week's whole clock. */

@@ -3,10 +3,10 @@
 // Package projects is the list `pairtime projects` and the local
 // dashboard's Projects page show: every project this computer knows, with
 // the name pairtime shows for it here, the short code its owner's
-// dashboard calls it by, and whether its name shows on that dashboard
-// (D-owner-names; docs/spec/project-names-v1.md). Both read it the same
-// way, through List, and turn a name on and off through Label, Show and
-// Hide.
+// dashboard calls it by, as the server gave it, and whether its name shows
+// on that dashboard (D-owner-names; docs/spec/project-names-v1.md). Both
+// read it the same way, through List, and turn a name on and off through
+// Label, Show and Hide.
 package projects
 
 import (
@@ -65,11 +65,14 @@ const (
 type Project struct {
 	// Key is the project's key.
 	Key string
-	// Code is its short code, projectname.ShortCodes over the keys this
-	// computer knows: the dashboard calls the project "Project <code>"
-	// while its name is off. The dashboard's code can be a character
-	// longer, when another of the owner's computers has a key that starts
-	// the same way.
+	// Code is its short code, as the server's last answer about the
+	// device's names gave it (uploader.Names.Codes): the dashboard calls
+	// the project "Project <code>" while its name is off. It is "" while
+	// the server has given none, as it gives none to a key it has no
+	// minutes of, or before the device reads its codes again. A device
+	// can't work a code out from its own keys: the server works codes out
+	// over every key the account's devices uploaded, and a code gets
+	// longer when another device's key starts the same way (#185).
 	Code string
 	// LocalName is the name pairtime shows for the project on this
 	// computer (LocalName), "" when it has none.
@@ -85,12 +88,16 @@ type Project struct {
 	HiddenAt time.Time
 }
 
-// Title is what the list calls p: its local name, or "Project <code>".
+// Title is what the list calls p: its local name, or "Project <code>",
+// or its key while it has no code.
 func (p Project) Title() string {
-	if p.LocalName != "" {
+	switch {
+	case p.LocalName != "":
 		return p.LocalName
+	case p.Code != "":
+		return projectname.CodeName(p.Code)
 	}
-	return projectname.CodeName(p.Code)
+	return p.Key
 }
 
 // LocalName is the name pairtime shows on this computer for the repo whose
@@ -214,7 +221,8 @@ type Input struct {
 	Config config.Config
 	// Names is the uploader's project-names.json, and Server and Device
 	// the sign-in uploads go with now, "" while there is none: the names
-	// the server confirmed to another sign-in count for nothing.
+	// the server confirmed to another sign-in count for nothing, nor do the
+	// codes it gave.
 	Names          uploader.Names
 	Server, Device string
 }
@@ -222,13 +230,13 @@ type Input struct {
 // List returns every project this computer knows: those of the project
 // map, of the last Days days' rollups, of config.toml's project tables and
 // of the names the server shows. They are in the order of their titles,
-// then of their keys, each with its code, its local name, and its name's
-// state.
+// then of their keys, each with the code the server gave it, its local
+// name, and its name's state.
 func List(in Input) []Project {
 	local := LocalNames(in.Map)
-	var confirmed map[string]string
+	var confirmed, codes map[string]string
 	if in.Server != "" && in.Names.Server == in.Server && in.Names.Device == in.Device {
-		confirmed = in.Names.Confirmed
+		confirmed, codes = in.Names.Confirmed, in.Names.Codes
 	}
 	listed := make(map[string]bool)
 	for _, r := range in.Map.Repos {
@@ -244,18 +252,6 @@ func List(in Input) []Project {
 		listed[key] = true
 	}
 	maps.DeleteFunc(listed, func(key string, _ bool) bool { return !config.IsProjectKey(key) })
-	// The codes come from every key this computer knows, old ones too,
-	// which the server may hold minutes under, as the dashboard's come
-	// from every key it holds.
-	known := slices.Collect(maps.Keys(listed))
-	for _, r := range in.Map.Repos {
-		for _, a := range r.Aliases {
-			if config.IsProjectKey(a) {
-				known = append(known, a)
-			}
-		}
-	}
-	codes := projectname.ShortCodes(known)
 	out := make([]Project, 0, len(listed))
 	for key := range listed {
 		p := Project{Key: key, Code: codes[key], LocalName: local[key]}
@@ -295,7 +291,10 @@ func state(key, local string, cfg config.Project, confirmed map[string]string, h
 // Find returns the project of list that arg names: its short code, as
 // `pairtime projects` and the dashboard show it, "Project <code>", or its
 // whole key, matched exactly or else in either case when only one
-// matches.
+// matches. A code is only one the server gave (Project.Code), so a code
+// the device doesn't hold, as one the server gave since its last read,
+// finds nothing: the whole key, which `pairtime projects` lists for a
+// project without a code, still does.
 func Find(list []Project, arg string) (Project, bool) {
 	a := strings.TrimSpace(arg)
 	if len(a) > len("Project ") && strings.EqualFold(a[:len("Project ")], "Project ") {

@@ -169,10 +169,10 @@ paths:
         rollups, of config.toml's `[projects.<key>]` tables and of the names
         the server shows (D-owner-names; docs/spec/project-names-v1.md),
         each with the name pairtime shows for it on this computer, the code
-        the owner's pairtime dashboard calls it by, and whether its name
-        shows there. Like everything this API serves, it stays on this
-        computer: only the uploader sends a name, once config.toml turns it
-        on. The answer is never cached.
+        the owner's pairtime dashboard calls it by, as the server gave it,
+        and whether its name shows there. Like everything this API serves,
+        it stays on this computer: only the uploader sends a name, once
+        config.toml turns it on. The answer is never cached.
       responses:
         "200":
           description: The projects, in the order `pairtime projects` lists them.
@@ -876,10 +876,16 @@ components:
         code:
           type: string
           description: >
-            Its short code: the owner's dashboard calls it "Project <code>"
-            while its name is off. The dashboard's code can be a character
-            longer, when another of the owner's computers has a key that
-            starts the same way.
+            Its short code, as the server's last answer about this
+            computer's project names gave it (docs/spec/project-names-v1.md
+            1.6): the owner's dashboard calls it "Project <code>" while its
+            name is off. The server works codes out over every key the
+            owner's computers uploaded, so this computer never works one out
+            itself. Empty while the server has given none, as before the
+            project's first minutes reach it, or before the agent reads the
+            codes again, at its start and once a day; then `pairtime
+            projects` and the page call the project by its key, which
+            `pairtime projects show-name` takes too.
         local_name:
           type: string
           description: >

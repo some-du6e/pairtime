@@ -28,8 +28,8 @@ var projectKeyForm = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 // sharing none of the uploader's wire types: ingest-v1 2.5's checks with
 // M_names in place of M, the body's shape (1.3, 1.5), the device's one
 // request counter, which uploads move too, and the answer, every name the
-// device has, in key order (1.6). The server stores no reply for a names
-// request.
+// device has, in key order, and the code of each of its keys the test
+// gave the server (1.6). The server stores no reply for a names request.
 func (f *fakeIngest) projectNames(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -38,6 +38,12 @@ func (f *fakeIngest) projectNames(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 262_145))
 	if err != nil || fault == "down" {
 		drop(w)
+		return
+	}
+	if fault == "404" {
+		// A server without the endpoint, which reads nothing of the
+		// request: a 404 in pairtimed's JSON, with its X-Pairtime-Time.
+		f.refuse(w, 404, "not_found")
 		return
 	}
 	if !f.auth(w, r) {
@@ -200,5 +206,7 @@ func (f *fakeIngest) projectNames(w http.ResponseWriter, r *http.Request) {
 	for _, k := range slices.Sorted(maps.Keys(f.names)) {
 		out = append(out, map[string]string{"project": k, "label": f.names[k]})
 	}
-	f.json(w, 200, map[string]any{"names": out})
+	codes := map[string]string{}
+	maps.Copy(codes, f.codes)
+	f.json(w, 200, map[string]any{"names": out, "codes": codes})
 }

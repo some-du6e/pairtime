@@ -27,11 +27,14 @@ import (
 // turns it on. The uploader sends what config.toml changed since the
 // server's last answer in POST /api/v1/projects/names, signed like an
 // upload over M_names, with the device's one request counter, and keeps
-// the names that answer listed in project-names.json. A name the device
-// sent that an answer lacks, the owner hid on the dashboard: the uploader
-// turns it off in config.toml, so it stays hidden until the owner turns it
-// on again on the computer. Only the labels the owner approved and the
-// keys they name go: nothing else about a project.
+// the names that answer listed in project-names.json, with the short code
+// it gives each project key the device uploaded minutes of: the code the
+// owner's dashboard calls the project by, which the device can't work out
+// from its own keys (project-names-v1 1.6). A name the device sent that an
+// answer lacks, the owner hid on the dashboard: the uploader turns it off
+// in config.toml, so it stays hidden until the owner turns it on again on
+// the computer. Only the labels the owner approved and the keys they name
+// go: nothing else about a project.
 
 // pathNames is the names endpoint (project-names-v1 1).
 const pathNames = "/api/v1/projects/names"
@@ -53,10 +56,10 @@ const namesVersion = 1
 // requests after.
 const namesMax = 200
 
-// namesReadEvery is how often the uploader reads the device's names, with
-// {}, while the server shows any of them: the read at the start finds the
-// names hidden on the dashboard while the agent wasn't running, and this
-// one those hidden since.
+// namesReadEvery is how often the uploader reads the device's names and
+// codes, with {}: the read at the start finds the names hidden on the
+// dashboard while the agent wasn't running and the codes the server gave
+// meanwhile, and this one those since.
 const namesReadEvery = 24 * time.Hour
 
 // namesHold is how long a body the server refused for a reason sending it
@@ -82,6 +85,14 @@ type Names struct {
 	// Confirmed are the names the server's last answer listed, each
 	// project's label by its key: what the owner's dashboard shows.
 	Confirmed map[string]string `json:"confirmed,omitempty"`
+	// Codes are the short codes the server's last answer gave the
+	// device's project keys, each by its key: the owner's dashboard calls
+	// the project "Project <code>" while its name is off. The server works
+	// them out over every key the account's devices uploaded, and a code
+	// gets longer when another device's key starts the same way, so the
+	// device can't work one out itself. A key the server has no minutes of
+	// has none (project-names-v1 1.6).
+	Codes map[string]string `json:"codes,omitempty"`
 	// AnsweredAt is when that answer came, in Unix ms on the device's
 	// clock, 0 before the first.
 	AnsweredAt int64 `json:"answered_at,omitempty"`
@@ -104,7 +115,9 @@ type HiddenName struct {
 
 // ReadNames reads project-names.json in the data directory dataDir. A
 // missing file is an error that wraps fs.ErrNotExist, and the device then
-// knows of no names on the server.
+// knows of no names on the server, nor of any code. A code that isn't one
+// counts for nothing, so what the file says can't put anything else where
+// `pairtime projects` and the local dashboard show a code.
 func ReadNames(dataDir string) (Names, error) {
 	data, err := os.ReadFile(filepath.Join(dataDir, NamesFileName))
 	if err != nil {
@@ -117,6 +130,7 @@ func ReadNames(dataDir string) (Names, error) {
 	if n.V != namesVersion {
 		return Names{}, fmt.Errorf("%s is format %d, not %d", NamesFileName, n.V, namesVersion)
 	}
+	n.Codes = keptCodes(n.Codes)
 	return n, nil
 }
 
@@ -136,9 +150,12 @@ type namesBody struct {
 }
 
 // namesReply is the answer to a names request, status 200: every name the
-// server holds for the device after it (project-names-v1 1.6).
+// server holds for the device after it, and the short code of each project
+// key the device uploaded minutes of, by key (project-names-v1 1.6). An
+// answer without codes gives none.
 type namesReply struct {
-	Names []nameItem `json:"names"`
+	Names []nameItem        `json:"names"`
+	Codes map[string]string `json:"codes"`
 }
 
 // encodeNames returns b's JSON as it goes: encoding/json's, with a label's
@@ -162,6 +179,38 @@ func keyForm(s string) bool {
 	return !strings.ContainsFunc(s, func(r rune) bool {
 		return !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '_' || r == '-')
 	})
+}
+
+// codeMax is the longest code the server gives one of the device's keys:
+// a git adapter's whole key, its kind prefix and 32 hex digits, which
+// projectname.ShortCodes falls back to when no part of it tells two keys
+// apart.
+const codeMax = 33
+
+// codeForm reports whether s has a short code's form, as the server's
+// answer gives one: 1 to codeMax of 0-9 a-z _ -.
+func codeForm(s string) bool {
+	if s == "" || len(s) > codeMax {
+		return false
+	}
+	return !strings.ContainsFunc(s, func(r rune) bool {
+		return !('a' <= r && r <= 'z' || '0' <= r && r <= '9' || r == '_' || r == '-')
+	})
+}
+
+// keptCodes returns the codes of codes that are a key's and have a code's
+// form, nil for none: what the device shows, and keeps.
+func keptCodes(codes map[string]string) map[string]string {
+	var out map[string]string
+	for key, code := range codes {
+		if keyForm(key) && codeForm(code) {
+			if out == nil {
+				out = make(map[string]string, len(codes))
+			}
+			out[key] = code
+		}
+	}
+	return out
 }
 
 // namesDiff returns what the server needs to show wanted, the names
@@ -209,8 +258,9 @@ func readDue(at int64, now time.Time) bool {
 // answer call for, if any, and reports whether it made one, which is then
 // the cycle's request, and whether more goes at once, as the upload after
 // it. The request carries what config.toml changed since that answer, or,
-// when nothing changed while the server shows any of the device's names,
-// a read, {}, at the start and a day after the last answer.
+// when nothing changed, a read, {}, at the start and a day after the last
+// answer, which a device with no name on sends too, to learn the codes the
+// owner's dashboard calls its projects by.
 func (u *Uploader) syncNames(c Credentials) (sent, more bool) {
 	if u.opts.Names == nil {
 		return false, false
@@ -230,8 +280,9 @@ func (u *Uploader) syncNames(c Credentials) (sent, more bool) {
 	switch {
 	case len(set)+len(del) > 0:
 		body = takeNames(set, del)
-	case len(u.names.Confirmed) > 0 && (!u.namesStarted || readDue(u.names.AnsweredAt, u.now())):
-		// A read: its answer says which names the owner hid.
+	case !u.namesStarted || readDue(u.names.AnsweredAt, u.now()):
+		// A read: its answer says which names the owner hid, and gives
+		// the codes.
 	default:
 		return false, false
 	}
@@ -360,7 +411,12 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, raw []byte, hash str
 		}
 		setHeaders(hr.Header, c, u.namesKey, hash, sg, u.userAgent)
 		a, err := u.do(u.ctx, hr)
-		if err == nil && a.status != http.StatusTooManyRequests && a.status < 500 && !fromPairtimed(a) {
+		switch {
+		case err != nil:
+		case a.status == http.StatusNotFound:
+			// A server without the names endpoint (errNoNames).
+			err = errNoNames
+		case a.status != http.StatusTooManyRequests && a.status < 500 && !fromPairtimed(a):
 			// A proxy's answer, or Cloudflare's: a network error (ingest-v1
 			// 5.5), never acted on.
 			err = errNotPairtimed
@@ -390,14 +446,21 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, raw []byte, hash str
 	return true, u.namesRefused(c, hash, answer{refusal: Refusal{Error: "retries"}})
 }
 
-// namesFailed handles a names request that didn't reach the server, or got
-// a 429 or a 5xx: the names wait as an upload would, with full jitter on a
-// backoff of their own and the server's Retry-After, and are sent again
-// once it ends. They leave the upload's backoff and its upload-failure
-// notes alone: the cycle goes on to the upload, which tries the server
-// itself, so a server whose names endpoint fails, or one too old to have
-// it, never holds back an upload. After a 429 the cycle ends instead,
-// since the server's bucket for the device ran dry.
+// errNoNames is a 404 to a names request: a server without the names
+// endpoint, as one older than it, since pairtimed refuses no names request
+// with a 404. Like an answer that isn't pairtimed's, it tells doctor
+// nothing: the names wait on their own backoff (namesFailed).
+var errNoNames = errors.New("uploader: the server has no project names endpoint")
+
+// namesFailed handles a names request that didn't reach the server, got
+// an answer that isn't pairtimed's or a 404 (errNoNames), or got a 429 or
+// a 5xx: the names wait as an upload would, with full jitter on a backoff
+// of their own and the server's Retry-After, and are sent again once it
+// ends, and doctor hears nothing of it. They leave the upload's backoff
+// and its upload-failure notes alone: the cycle goes on to the upload,
+// which tries the server itself, so a server whose names endpoint fails,
+// or one too old to have it, never holds back an upload. After a 429 the
+// cycle ends instead, since the server's bucket for the device ran dry.
 func (u *Uploader) namesFailed(err error, a answer) (sent, more bool) {
 	if errors.Is(err, context.Canceled) {
 		return true, false // the agent is stopping
@@ -413,9 +476,11 @@ func (u *Uploader) namesFailed(err error, a answer) (sent, more bool) {
 }
 
 // namesAnswered handles a names request's 200: its names are what the
-// owner's dashboard shows now. A name the device sent, in this request or
-// before, that they lack, and that this request didn't delete, the owner
-// hid on the dashboard: it goes off in config.toml (project-names-v1 2).
+// owner's dashboard shows now, and its codes what it calls the device's
+// projects by, which replace the ones kept before. A name the device sent,
+// in this request or before, that they lack, and that this request didn't
+// delete, the owner hid on the dashboard: it goes off in config.toml
+// (project-names-v1 2).
 func (u *Uploader) namesAnswered(sent namesBody, hash string, a answer) bool {
 	var reply namesReply
 	if err := json.Unmarshal(a.body, &reply); err != nil || reply.Names == nil {
@@ -446,7 +511,7 @@ func (u *Uploader) namesAnswered(sent namesBody, hash string, a answer) bool {
 		}
 	}
 	now := u.now().UnixMilli()
-	u.names.Confirmed, u.names.AnsweredAt = got, now
+	u.names.Confirmed, u.names.Codes, u.names.AnsweredAt = got, keptCodes(reply.Codes), now
 	if len(got) == 0 {
 		u.names.Confirmed = nil
 	}

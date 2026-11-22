@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/config"
+	"github.com/some-du6e/pairtime/internal/agent/state"
 )
 
 // Made-up project keys in the git adapter's form.
@@ -194,10 +195,35 @@ func TestNames(t *testing.T) {
 			}
 		}
 	}
+	// quiet checks that the names requests told doctor nothing and kept
+	// nothing, and waited on the names' own backoff, not the uploads'.
+	quiet := func(t *testing.T, r *rig, _ string) {
+		if p := r.doctor(); p != "" {
+			t.Errorf("doctor heard %q, want nothing", p)
+		}
+		if r.u.namesBackoff.failing() == 0 || r.u.backoff.failing() != 0 {
+			t.Errorf("the names' backoff counts %d failures and the uploads' %d; want the names' alone", r.u.namesBackoff.failing(), r.u.backoff.failing())
+		}
+		n, err := ReadNames(r.dirs.Data)
+		if !errors.Is(err, fs.ErrNotExist) || len(n.Confirmed) != 0 || len(n.Codes) != 0 {
+			t.Errorf("project-names.json = %+v, %v; want none, since no answer was pairtimed's names", n, err)
+		}
+	}
+	// codes checks project-names.json's codes, and that its names are the
+	// rig's server's.
+	codes := func(want map[string]string) rigCheck {
+		return func(t *testing.T, r *rig, _ string) {
+			n, err := ReadNames(r.dirs.Data)
+			if err != nil || !maps.Equal(n.Codes, want) || n.Server != r.creds.Server || n.AnsweredAt == 0 {
+				t.Errorf("project-names.json = %+v, %v; want the codes %v from the rig's server", n, err, want)
+			}
+		}
+	}
 	tests := []struct {
 		name   string
 		config string            // config.toml
 		held   map[string]string // the names the server holds at the start
+		codes  map[string]string // the codes the server gives the device's keys
 		known  map[string]string // project-names.json's names, as the server confirmed them
 		server string            // the server project-names.json is for, the rig's when ""
 		faults map[int]string    // the names requests' faults, by attempt
@@ -208,12 +234,13 @@ func TestNames(t *testing.T) {
 		{
 			name:   "a name turned on in config.toml goes in a names request, and the server's answer is kept in project-names.json for its owner alone",
 			config: projectTable(nameKey, "chip8-emulator", true),
+			codes:  map[string]string{nameKey: "7c41e9"},
 			until:  func(f *fakeIngest, _ string) bool { return f.names[nameKey] == "chip8-emulator" },
 			checks: []rigCheck{
 				bodies(`{"set":[{"project":"` + nameKey + `","label":"chip8-emulator"}]}`),
 				func(t *testing.T, r *rig, _ string) {
 					n, err := ReadNames(r.dirs.Data)
-					if err != nil || !maps.Equal(n.Confirmed, map[string]string{nameKey: "chip8-emulator"}) || n.AnsweredAt == 0 || n.Server != r.creds.Server || n.Device != r.creds.DeviceID {
+					if err != nil || !maps.Equal(n.Confirmed, map[string]string{nameKey: "chip8-emulator"}) || !maps.Equal(n.Codes, map[string]string{nameKey: "7c41e9"}) || n.AnsweredAt == 0 || n.Server != r.creds.Server || n.Device != r.creds.DeviceID {
 						t.Errorf("project-names.json = %+v, %v", n, err)
 					}
 					fi, err := os.Stat(filepath.Join(r.dirs.Data, NamesFileName))
@@ -297,18 +324,36 @@ func TestNames(t *testing.T) {
 			},
 		},
 		{
-			name:   "with no name on and none shown, no names request goes",
+			name:   "a device with no name on and none shown sends one read, {}, at the start, and keeps the codes it gives",
 			config: "mode = \"online\"\n",
-			until:  func(f *fakeIngest, _ string) bool { return f.head != nil && f.head.b == 3 },
-			checks: []rigCheck{bodies()},
+			codes:  map[string]string{nameKey: "7c41e9", otherKey: "5be03d"},
+			until:  func(f *fakeIngest, _ string) bool { return f.namesPosts == 1 && f.head != nil && f.head.b == 3 },
+			checks: []rigCheck{
+				bodies(`{}`),
+				codes(map[string]string{nameKey: "7c41e9", otherKey: "5be03d"}),
+				func(t *testing.T, r *rig, _ string) {
+					if n, err := ReadNames(r.dirs.Data); err != nil || len(n.Confirmed) != 0 {
+						t.Errorf("project-names.json = %+v, %v; want no name", n, err)
+					}
+				},
+			},
 		},
 		{
-			name:   "the names a sign-in to another server confirmed count for nothing here",
+			name:   "the names a sign-in to another server confirmed count for nothing here, and the start reads this one's",
 			config: projectTable(nameKey, "chip8-emulator", false),
 			known:  map[string]string{nameKey: "chip8-emulator"},
 			server: "https://other.example.org",
-			until:  func(f *fakeIngest, _ string) bool { return f.head != nil && f.head.b == 3 },
-			checks: []rigCheck{bodies()},
+			codes:  map[string]string{otherKey: "5be03d"},
+			until:  func(f *fakeIngest, _ string) bool { return f.namesPosts == 1 && f.head != nil && f.head.b == 3 },
+			checks: []rigCheck{
+				bodies(`{}`),
+				codes(map[string]string{otherKey: "5be03d"}),
+				func(t *testing.T, r *rig, _ string) {
+					if n, err := ReadNames(r.dirs.Data); err != nil || len(n.Confirmed) != 0 {
+						t.Errorf("project-names.json = %+v, %v; want none of the other server's names", n, err)
+					}
+				},
+			},
 		},
 		{
 			name:   "a 503 and another computer's higher counters are retried, and every request, names and uploads, raises the one counter",
@@ -346,18 +391,26 @@ func TestNames(t *testing.T) {
 			},
 		},
 		{
-			name:   "an answer that isn't pairtimed's counts as a network error, is never acted on, and holds back no upload",
+			name:   "an answer that isn't pairtimed's counts as a network error, is never acted on, tells doctor nothing, and holds back no upload",
 			config: projectTable(nameKey, "chip8-emulator", true),
 			faults: allFaults("html"),
 			until:  func(f *fakeIngest, _ string) bool { return f.namesPosts > 0 && f.head != nil && f.head.b == 3 },
-			checks: []rigCheck{
-				func(t *testing.T, r *rig, _ string) {
-					n, err := ReadNames(r.dirs.Data)
-					if !errors.Is(err, fs.ErrNotExist) || len(n.Confirmed) != 0 {
-						t.Errorf("project-names.json = %+v, %v; want none, since no answer was pairtimed's", n, err)
-					}
-				},
-			},
+			checks: []rigCheck{quiet},
+		},
+		{
+			name:   "a 404 to the read at the start, from a server without the names endpoint, tells doctor nothing, waits on the names' backoff, and holds back no upload",
+			config: "mode = \"online\"\n",
+			codes:  map[string]string{nameKey: "7c41e9"},
+			faults: allFaults("404"),
+			until:  func(f *fakeIngest, _ string) bool { return f.namesPosts > 0 && f.head != nil && f.head.b == 3 },
+			checks: []rigCheck{quiet},
+		},
+		{
+			name:   "a 404 to a name turned on is as quiet, and the name waits for a server that has the endpoint",
+			config: projectTable(nameKey, "chip8-emulator", true),
+			faults: allFaults("404"),
+			until:  func(f *fakeIngest, _ string) bool { return f.namesPosts > 0 && f.head != nil && f.head.b == 3 },
+			checks: []rigCheck{quiet},
 		},
 		{
 			name:   "nothing goes while the computer is local-only",
@@ -380,6 +433,7 @@ func TestNames(t *testing.T) {
 				t.Fatal(err)
 			}
 			maps.Copy(r.f.names, tt.held)
+			maps.Copy(r.f.codes, tt.codes)
 			maps.Copy(r.f.namesFaults, tt.faults)
 			if tt.known != nil {
 				server := tt.server
@@ -411,6 +465,134 @@ func TestNames(t *testing.T) {
 			defer r.f.mu.Unlock()
 			for _, check := range tt.checks {
 				check(t, r, cfgPath)
+			}
+		})
+	}
+}
+
+func TestNamesCodes(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string              // config.toml
+		starts []map[string]string // the codes the server gives at each start of the agent, in order
+		want   map[string]string   // project-names.json's codes after the last
+	}{
+		{
+			name:   "the codes the read at the start gets are kept, on a device with no name on too",
+			config: "mode = \"online\"\n",
+			starts: []map[string]string{{nameKey: "7c41e9", otherKey: "5be03d"}},
+			want:   map[string]string{nameKey: "7c41e9", otherKey: "5be03d"},
+		},
+		{
+			name:   "the next answer's codes replace the ones kept: a code that got longer, and one the server no longer gives",
+			config: projectTable(nameKey, "chip8-emulator", true),
+			starts: []map[string]string{{nameKey: "7c41e9", otherKey: "5be03d"}, {nameKey: "7c41e9a"}},
+			want:   map[string]string{nameKey: "7c41e9a"},
+		},
+		{
+			name:   "an answer with no code leaves none kept",
+			config: "mode = \"online\"\n",
+			starts: []map[string]string{{nameKey: "7c41e9"}, {}},
+			want:   nil,
+		},
+		{
+			name:   "a code that isn't one, and a code of what isn't a key, aren't kept",
+			config: "mode = \"online\"\n",
+			starts: []map[string]string{{nameKey: "7C41E9", otherKey: "5be03d", "not a key": "abcdef", "p_long": strings.Repeat("a", 34)}},
+			want:   map[string]string{otherKey: "5be03d"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRig(t, 3, nil, -time.Minute)
+			cfgPath := filepath.Join(r.dirs.Config, "config.toml")
+			if err := os.WriteFile(cfgPath, []byte(tt.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for i, codes := range tt.starts {
+				// Each start is another agent's, over the same files.
+				r.u.Close()
+				st, _, err := state.Open(r.dirs.StateFile())
+				if err != nil {
+					t.Fatal(err)
+				}
+				r.st = st
+				r.f.mu.Lock()
+				r.f.codes = maps.Clone(codes)
+				r.f.mu.Unlock()
+				r.u = r.namesUploader(t, cfgPath, func() (Credentials, bool) { return r.creds, true })
+				r.run(t, "the start's names request", func(f *fakeIngest) bool {
+					return f.namesPosts == i+1 && f.head != nil && f.head.b == 3
+				})
+			}
+			n, err := ReadNames(r.dirs.Data)
+			if err != nil || !maps.Equal(n.Codes, tt.want) {
+				t.Errorf("project-names.json = %+v, %v; want the codes %v", n, err, tt.want)
+			}
+			r.f.mu.Lock()
+			defer r.f.mu.Unlock()
+			if r.f.namesPosts != len(tt.starts) {
+				t.Errorf("%d names requests, want one at each of the %d starts", r.f.namesPosts, len(tt.starts))
+			}
+		})
+	}
+}
+
+func TestKeptCodes(t *testing.T) {
+	tests := []struct {
+		name  string
+		codes map[string]string
+		want  map[string]string
+	}{
+		{name: "a code of 0-9 a-z _ - is kept by its key", codes: map[string]string{nameKey: "7c41e9", "p_bot": "p_bot"}, want: map[string]string{nameKey: "7c41e9", "p_bot": "p_bot"}},
+		{name: "a git adapter's whole key, 33 characters, is a code", codes: map[string]string{nameKey: nameKey}, want: map[string]string{nameKey: nameKey}},
+		{name: "a code of 34 characters isn't one", codes: map[string]string{nameKey: strings.Repeat("a", 34)}},
+		{name: "a code with a capital letter isn't one", codes: map[string]string{nameKey: "7C41e9"}},
+		{name: "a code with a space or a control character isn't one", codes: map[string]string{nameKey: "7c41 e9", otherKey: "5be03d\u202e"}},
+		{name: "an empty code isn't one", codes: map[string]string{nameKey: ""}},
+		{name: "a code of what isn't a key isn't kept", codes: map[string]string{"g7c41e9/a": "7c41e9"}},
+		{name: "none kept is nil", codes: map[string]string{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := keptCodes(tt.codes)
+			if !maps.Equal(got, tt.want) || (tt.want == nil) != (got == nil) {
+				t.Errorf("keptCodes(%q) = %q, want %q", tt.codes, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReadNamesCodes(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		want map[string]string
+	}{
+		{
+			name: "the codes the uploader kept are read by their keys",
+			file: `{"v":1,"server":"https://pairtime.example.org","device":"d_example","codes":{"` + nameKey + `":"7c41e9"}}`,
+			want: map[string]string{nameKey: "7c41e9"},
+		},
+		{
+			name: "a code the file holds that isn't one counts for nothing, so nothing else shows as a code",
+			file: `{"v":1,"server":"https://pairtime.example.org","device":"d_example","codes":{"` + nameKey + `":"7c41e9\u001b[31m","` + otherKey + `":"5be03d"}}`,
+			want: map[string]string{otherKey: "5be03d"},
+		},
+		{
+			name: "a file from before codes has none",
+			file: `{"v":1,"server":"https://pairtime.example.org","device":"d_example","confirmed":{"` + nameKey + `":"chip8-emulator"}}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, NamesFileName), []byte(tt.file), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			n, err := ReadNames(dir)
+			if err != nil || !maps.Equal(n.Codes, tt.want) {
+				t.Errorf("ReadNames = %+v, %v; want the codes %v", n, err, tt.want)
 			}
 		})
 	}
