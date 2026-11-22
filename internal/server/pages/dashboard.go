@@ -40,10 +40,13 @@ import (
 // a title, so nothing rests on color or hover alone.
 
 // colorSlots is how many projects get a color of their own: --c1 to --c8
-// in style.css, the eight slots of a categorical palette that passes the
-// color-vision checks for neighbors in a stack, in light and dark mode.
-// The projects after them share --co and are drawn together as Other. A
-// ninth hue would be too close to one of the eight to tell apart.
+// in style.css, the eight slots of a categorical palette whose neighbors
+// in slot order pass the color-vision checks, in light and dark mode. Two
+// slots further apart can look alike to a color-blind reader, as no eight
+// hues can all be told apart, so a color is never all a project has:
+// every swatch has its name beside it, and every bar its title and a
+// table. The projects after them share --co and are drawn together as
+// Other, never in a ninth hue.
 const colorSlots = 8
 
 // shownClocks is how many of today's projects get a chess clock on the
@@ -63,8 +66,8 @@ const minPrinted = 14
 const demoDescription = "A sample pairtime dashboard: a made-up teen's time building with Claude Code, and the time Claude Code ran."
 
 // installRelease is the release whose install lines the empty dashboard
-// shows: the newest one. Its notes give the same two commands, and so does
-// README.md, which TestInstallLines holds them to.
+// shows. Its notes give the same two commands, and so does README.md,
+// which TestInstallLines holds them to, so a new release changes both.
 const installRelease = "v0.1.0-alpha.3"
 
 // installLines are the commands that install pairtime, as the release's
@@ -325,12 +328,12 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 	})
 
 	// Colors go to the projects with the owner's time this week first, in
-	// the view's order, the order the week chart stacks them in, so the
-	// chart, which draws only the owner's time, never folds one of the
-	// week's projects into Other while a quieter one keeps a color, and
-	// its neighbors are mostly neighbors in the palette too. Today's other
-	// projects come next, the most time first, so the clocks the page
-	// shows at once get colors of their own, then the rest. Each project
+	// the view's order, the order the week chart stacks them in, so its
+	// neighbors are mostly neighbors in the palette too. But the clocks
+	// the page shows at once always get colors of their own: the week's
+	// projects that aren't among them stop short of the slots those still
+	// need, and fold into the chart's Other past that. Today's other
+	// projects come next, the most time first, then the rest. Each project
 	// keeps its color across the page.
 	inWeek := make(map[string]bool, len(v.Week.Projects))
 	for _, pt := range v.Week.Projects {
@@ -338,6 +341,11 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 			inWeek[pt.Project] = true
 		}
 	}
+	shown := make(map[string]bool, shownClocks)
+	for _, pt := range clocks[:min(len(clocks), shownClocks)] {
+		shown[pt.Project] = true
+	}
+	shownLeft := len(shown) // shown clocks without a color yet
 	color := make(map[string]string, len(v.Projects))
 	give := func(key string) {
 		if _, ok := color[key]; ok {
@@ -347,9 +355,14 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 		if n := len(color); n <= colorSlots {
 			color[key] = "c" + strconv.Itoa(n)
 		}
+		if shown[key] {
+			shownLeft--
+		}
 	}
 	for _, pr := range v.Projects {
-		if inWeek[pr.ID] {
+		// A week's project that isn't shown at once takes a slot only
+		// while every shown clock still without one has one left.
+		if inWeek[pr.ID] && (shown[pr.ID] || len(color) < colorSlots-shownLeft) {
 			give(pr.ID)
 		}
 	}
@@ -460,15 +473,16 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 
 // agentLine says how long the agent worked on its own in a window, s
 // seconds. That time adds up each project's, so agents working at once in
-// several projects can pass the hours the window had, and atOnce says
-// they did on one of its days: then the line says the time is a sum and
-// that some of the agents ran at the same time, which is all the number
-// shows, so it doesn't read as one agent working more hours than a day
-// has. Either way it is information, beside your time, never a target
-// (DESIGN 3.8).
+// several projects can pass the hours the window had, and atOnce says it
+// did on one of its days: then the line says the time is every agent's
+// added up, so it doesn't read as one agent working more hours than a day
+// has. It says no more: a day can also pass its hours when the account's
+// time zone changed that day, and the minutes of both zones' versions of
+// the date count toward it. Either way it is information, beside your
+// time, never a target (DESIGN 3.8).
 func agentLine(agent string, s float64, atOnce bool) string {
 	if atOnce {
-		return capitalize(several(agent)) + " worked on their own for " + duration(s) + " in all, some of them at the same time."
+		return capitalize(several(agent)) + " worked on their own for " + duration(s) + ", adding up every agent's time."
 	}
 	return capitalize(agent) + " worked on its own for " + duration(s) + "."
 }
@@ -532,19 +546,46 @@ func newDayClock(v dashboard.View) dayClock {
 
 // atOnce reports whether the agent's time on day d, today when isToday,
 // passes the time the day had run: all of a past day, and today up to
-// when the view was read. Only agents working at the same time give a
-// day more of their time than it has.
+// when the view was read, and the few minutes a device's clock may run
+// ahead. Mostly that takes agents working at the same time; the day of a
+// time zone change can pass its hours too (agentLine).
 func (c dayClock) atOnce(d dashboard.Day, isToday bool) bool {
 	date, err := time.Parse(dashboard.DateLayout, d.Date)
 	if err != nil {
 		return false
 	}
-	start := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, c.loc)
-	end := time.Date(date.Year(), date.Month(), date.Day()+1, 0, 0, 0, 0, c.loc)
-	if isToday && !c.whole && c.asOf.After(start) && c.asOf.Before(end) {
-		end = c.asOf
+	start, end := firstInstant(date, c.loc), firstInstant(date.AddDate(0, 0, 1), c.loc)
+	// Ingest takes a minute up to ingest.MaxSkewMS ahead of the server's
+	// clock, so today may hold that much more than has passed.
+	if until := c.asOf.Add(skew); isToday && !c.whole && c.asOf.After(start) && until.Before(end) {
+		end = until
 	}
 	return d.Agent.Total() > end.Sub(start).Seconds()
+}
+
+// skew is how far ahead of the server's clock a device's minute may be:
+// ingest-v1's 300 s (ingest.MaxSkewMS).
+const skew = 300 * time.Second
+
+// firstInstant returns the first instant, to the second, whose date in loc
+// is day's or a later one, where day is a date at midnight UTC: local
+// midnight, or on a day whose midnight the clocks skip, the first second
+// after the jump, which time.Date doesn't promise to give (its doc says
+// so). No offset from UTC reaches a day, so the instant is within two days
+// of day, and a binary search over those seconds finds it, as
+// internal/agent/store's DayBounds does on the device.
+func firstInstant(day time.Time, loc *time.Location) time.Time {
+	want := day.Format(dashboard.DateLayout)
+	lo, hi := day.Unix()-2*86400, day.Unix()+2*86400
+	for hi-lo > 1 {
+		mid := lo + (hi-lo)/2
+		if time.Unix(mid, 0).In(loc).Format(dashboard.DateLayout) >= want {
+			hi = mid
+		} else {
+			lo = mid
+		}
+	}
+	return time.Unix(hi, 0)
 }
 
 // newWeekPart lays out the week chart over days, the last 7.

@@ -65,6 +65,15 @@ func TestShortCodes(t *testing.T) {
 			},
 		},
 		{
+			name: "a code that would equal a key two others fell back to is the whole key too, so no two projects share one",
+			keys: []string{"g" + strings.Repeat("d", 32), "d" + strings.Repeat("d", 32), strings.Repeat("d", 34)},
+			want: map[string]string{
+				"g" + strings.Repeat("d", 32): "g" + strings.Repeat("d", 32),
+				"d" + strings.Repeat("d", 32): "d" + strings.Repeat("d", 32),
+				strings.Repeat("d", 34):       strings.Repeat("d", 34),
+			},
+		},
+		{
 			name: "a key of another form is called by its own first characters, and a short one by all of it",
 			keys: []string{"p_0123456789abcdef", "p1", "G7C41E9A2D05B8F63E1A94C7D2B6F0E85"},
 			want: map[string]string{"p_0123456789abcdef": "p_0123", "p1": "p1", "G7C41E9A2D05B8F63E1A94C7D2B6F0E85": "G7C41E"},

@@ -16,7 +16,7 @@ Not built yet: harnesses other than Claude Code, Claude Code's transcripts and O
 
 ## Install
 
-Install pairtime on the computer where you run Claude Code, since pairtime counts your time from your typing and mouse on that computer. The newest release is v0.1.0-alpha.3. Its install script checks the release's signature, then shows what `pairtime install` would change before it changes anything.
+Install pairtime on the computer where you run Claude Code, since pairtime counts your time from your typing and mouse on that computer. These commands install v0.1.0-alpha.3. Its install script checks the release's signature, then shows what `pairtime install` would change before it changes anything.
 
 On macOS or Linux:
 

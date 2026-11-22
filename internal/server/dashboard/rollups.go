@@ -51,7 +51,8 @@ func (r Rollups) View(ctx context.Context, account string, now time.Time) (View,
 		return View{}, err
 	}
 	// The codes are unique among all the account's projects, not only the
-	// month's, so a project keeps its code while others come and go.
+	// month's, so a project's code doesn't change when others go quiet,
+	// and gets longer only when a new key clashes with it.
 	// rollup_projects keeps a project's keys as long as the account, so a
 	// code comes from the id only for a project nothing maps.
 	codeFrom := make(map[string]string, len(keys)) // by project id
@@ -114,8 +115,8 @@ const CodeLen = 6
 // A key of any other form gives its own first characters. Two keys whose
 // codes would be the same both get longer ones, a character at a time,
 // until they differ, and no other key's code changes; keys that differ
-// only in their kind prefix keep it. So every key's code is unique among
-// keys. Keys are opaque HMACs under a device secret (DESIGN 4.3), so a
+// only in their kind prefix keep it, and so does any key whose code would
+// still be another's. So every key's code is unique among keys. Keys are opaque HMACs under a device secret (DESIGN 4.3), so a
 // code says nothing about its project either.
 func ShortCodes(keys []string) map[string]string {
 	codes := make(map[string]string, len(keys))
@@ -147,7 +148,30 @@ func ShortCodes(keys []string) map[string]string {
 		}
 	}
 	assign(slices.Compact(slices.Sorted(slices.Values(keys))), CodeLen)
-	return codes
+	// A key that fell back to itself can equal the code cut from a longer
+	// key of another form, as "d" and 32 d's does the first 33 characters
+	// of 34 d's. Every key whose code another key also has gets its full
+	// key instead, until no code repeats. Keys are distinct, so that ends.
+	for {
+		owners := make(map[string][]string, len(codes))
+		for k, c := range codes {
+			owners[c] = append(owners[c], k)
+		}
+		shared := false
+		for _, ks := range owners {
+			if len(ks) < 2 {
+				continue
+			}
+			for _, k := range ks {
+				if codes[k] != k {
+					codes[k], shared = k, true
+				}
+			}
+		}
+		if !shared {
+			return codes
+		}
+	}
 }
 
 // codeBody is what a key's short code is cut from: one of the git
