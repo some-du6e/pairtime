@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"slices"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
@@ -73,7 +74,7 @@ func (a *agent) startTailers(opts Options) func() {
 		st = a.state
 	}
 	t := tailers.New(tailers.Options{Store: st, Sched: a.sched, Deliver: h.deliverLogs, Forget: h.forgetLog,
-		Ready: h.logReady, Log: a.log.With("component", "tailers")})
+		Ready: h.logReady, Log: a.log.With("component", "tailers"), Lookback: opts.Lookback, Progress: h.setLookback})
 	h.mu.Lock()
 	h.logEnv = *env
 	h.mu.Unlock()
@@ -122,6 +123,27 @@ func (h *adapterHost) forgetLog(harness event.Harness, file string) {
 	h.forgets = append(h.forgets, forgetReq{harness: harness, file: file})
 	h.mu.Unlock()
 	h.poke()
+}
+
+// setLookback keeps how far lookback has read, for the status
+// (tailers.Options.Progress).
+func (h *adapterHost) setLookback(p tailers.Progress) {
+	h.mu.Lock()
+	h.lookback = p
+	h.mu.Unlock()
+}
+
+// lookbackWindow keeps the records of a line of a file's history that fall
+// in lookback's window: from its start, from, which is LookbackWindow
+// before the tailers took the file up, to when the ledger began. From then
+// on the agent was running, and its hooks wrote the session's records, if
+// any came; a session no hook reported then is the one lookback can't fill
+// in, and only an agent upgraded from a release without lookback has one.
+func (h *adapterHost) lookbackWindow(recs []adapters.Record, from int64) []adapters.Record {
+	h.mu.Lock()
+	until := h.ledgerBegan
+	h.mu.Unlock()
+	return slices.DeleteFunc(recs, func(r adapters.Record) bool { return r.Event.T < from || r.Event.T >= until })
 }
 
 // drained reports whether the inbox's first drain has handed its calls to
@@ -273,6 +295,9 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		// A folder out of pairtime (DESIGN 8.8): its lines make no record.
 		recs = nil
 		h.count(func() { st.Ignored++ })
+	}
+	if line.Lookback > 0 {
+		recs = h.lookbackWindow(recs, line.Lookback)
 	}
 	if !ll.Idle && !ll.Replay {
 		h.count(func() { st.Lines++ })

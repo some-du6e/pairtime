@@ -125,8 +125,11 @@ var installStdin io.Reader = os.Stdin
 //
 // The agent runs in local-only mode, the only mode of this release, which
 // it writes into config.toml at its first start (internal/agent/config).
-// Lookback over old transcripts arrives with WP-AD3, and the WakaTime
-// line, Karim's AGENTS.md entry and sign-in with their work packages.
+// Once it runs, the agent reads the last 30 days of transcripts by itself,
+// at low priority (lookback, internal/agent/tailers), and its status says
+// how far it got; the progress bar and the welcome recap come with the
+// dashboard's work packages, and the WakaTime line, Karim's AGENTS.md
+// entry and sign-in with theirs.
 func runInstall(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("install", flag.ContinueOnError)
 	flags.SetOutput(stderr)

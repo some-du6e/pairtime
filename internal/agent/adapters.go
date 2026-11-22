@@ -286,6 +286,11 @@ type adapterHost struct {
 	// logRefused says a step that couldn't write to the ledger answered
 	// batches with none taken (refuseLogs).
 	logRefused bool
+	// Under mu: lookback is how far the tailers' lookback has read, and
+	// ledgerBegan when the ledger's chain began, in Unix ms, which ends
+	// the window of lookback's records (lookbackWindow).
+	lookback    tailers.Progress
+	ledgerBegan int64
 }
 
 // adapterKeys are the keys the adapters make records with, derived from
@@ -337,6 +342,23 @@ type adaptersReply struct {
 	Dropped uint64 `json:"dropped,omitempty"`
 	// Git says what the git adapter watches.
 	Git gitReply `json:"git"`
+	// Lookback says how far lookback has read what the harnesses logged
+	// before pairtime did (WP-AD3), absent when there was nothing to read.
+	Lookback *lookbackReply `json:"lookback,omitempty"`
+}
+
+// lookbackReply is tailers.Progress in the status: the files with a
+// history and their bytes, all and read, whether lookback's reader runs
+// now, and the failures of its child processes, with the last one's
+// error.
+type lookbackReply struct {
+	Files     int    `json:"files"`
+	FilesDone int    `json:"files_done"`
+	Bytes     int64  `json:"bytes"`
+	BytesDone int64  `json:"bytes_done"`
+	Running   bool   `json:"running"`
+	Failures  int    `json:"failures,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // adaptersState is what state.json keeps of the adapters: the memory of
@@ -439,14 +461,19 @@ func deriveAdapterKeys(ks *keys.Keystore) (*adapterKeys, error) {
 	return k, nil
 }
 
-// attach gives the host the ledger writer, once it is open (startLedger).
+// attach gives the host the ledger writer, once it is open (startLedger),
+// and the moment its chain began, which ends lookback's window.
 func (h *adapterHost) attach(w *ledger.Writer) {
+	var began int64
+	if info, err := ledger.ReadChain(h.a.dirs.Ledger()); err == nil {
+		began = info.Created.UnixMilli()
+	}
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		return
 	}
-	h.writer = w
+	h.writer, h.ledgerBegan = w, began
 	h.mu.Unlock()
 	h.poke()
 }
@@ -1688,6 +1715,10 @@ func (h *adapterHost) status() adaptersReply {
 		Waiting: len(h.queue) + h.held + h.parkedN, Dropped: h.dropped}
 	for name, st := range h.stats {
 		r.Harnesses[name] = *st
+	}
+	if p := h.lookback; p.Files > 0 || p.Failures > 0 {
+		r.Lookback = &lookbackReply{Files: p.Files, FilesDone: p.FilesDone, Bytes: p.Bytes, BytesDone: p.BytesDone,
+			Running: p.Running, Failures: p.Failures, Error: clip(p.Err)}
 	}
 	h.mu.Unlock()
 	if g := h.git.Load(); g != nil {
