@@ -153,8 +153,9 @@ type BucketInfo struct {
 //   - ev, the weakest evidence level among the slot's credited seconds, so
 //     a slot claims no more than its weakest second (DESIGN 6.4), and C in
 //     a backfilled minute;
-//   - lbl, the side-door labels of the anchors behind its credit (DESIGN
-//     4.1 E-6).
+//   - lbl, the labels of pkg/event's slot list (event.SlotLabels) that the
+//     anchors behind its credit carry, in that list's order: the side-door
+//     labels (DESIGN 4.1 E-6), then focus_unknown (SM 2.5).
 //
 // A slot nothing credited, or the scorer didn't derive, is empty. The
 // minute's uncredited seconds, agent_running_s, agent_only and anchors sum
@@ -244,7 +245,7 @@ func (s MinuteSlot) bucketSlot(backfilled bool) event.BucketSlot {
 		Kind:     why.Activity(),
 		Ev:       level,
 	}
-	for _, l := range []event.Label{event.LabelViaTrack, event.LabelViaPlugin, event.LabelViaBridge} {
+	for _, l := range event.SlotLabels() {
 		if labels[l] {
 			out.Lbl = append(out.Lbl, l)
 		}

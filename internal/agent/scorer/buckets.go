@@ -325,13 +325,13 @@ func most(m map[string]int64) string {
 	return best
 }
 
-// sideDoorLabels are the labels a bucket slot carries, in the order
-// pkg/event checks (DESIGN 4.1 E-6).
-var sideDoorLabels = []event.Label{event.LabelViaTrack, event.LabelViaPlugin, event.LabelViaBridge}
-
 // slotSummary sums one slot's credit up the way SM 5.1's slots[4] does:
-// credited seconds, and the project, reason, activity and level of the
-// largest credit entry. Part of the WP-SC4 seam.
+// credited seconds; the project, reason and activity of the largest credit
+// entry; the weakest evidence level among the credited entries, so a slot
+// claims no more than its weakest second (DESIGN 6.4), as pkg/score's
+// Minute.Bucket has it; and the labels of pkg/event's slot list
+// (event.SlotLabels) that the credited entries carry, in that list's
+// order: the side doors, then focus_unknown. Part of the WP-SC4 seam.
 func slotSummary(c score.Credit) event.BucketSlot {
 	var s event.BucketSlot
 	h := c.Halves()
@@ -339,14 +339,18 @@ func slotSummary(c score.Credit) event.BucketSlot {
 		return s
 	}
 	best := 0
+	var level event.Evidence
 	for i, e := range c.Credited {
 		if e.Halves > c.Credited[best].Halves {
 			best = i
 		}
+		if e.Halves > 0 {
+			level = weakest(level, e.Level)
+		}
 	}
 	d := c.Credited[best]
-	s.Project, s.Credited, s.Why, s.Kind, s.Ev = d.ProjectKey, float64(h)/2, d.Reason, d.Reason.Activity(), d.Level
-	for _, l := range sideDoorLabels {
+	s.Project, s.Credited, s.Why, s.Kind, s.Ev = d.ProjectKey, float64(h)/2, d.Reason, d.Reason.Activity(), level
+	for _, l := range event.SlotLabels() {
 		for _, e := range c.Credited {
 			if e.Halves > 0 && slices.Contains(e.Labels, l) {
 				s.Lbl = append(s.Lbl, l)
@@ -355,6 +359,15 @@ func slotSummary(c score.Credit) event.BucketSlot {
 		}
 	}
 	return s
+}
+
+// weakest returns the weaker of two evidence levels, C below B below A;
+// "" is none yet, so any level is weaker.
+func weakest(a, b event.Evidence) event.Evidence {
+	if a > b { // "C" > "B" > "A" > ""
+		return a
+	}
+	return b
 }
 
 // emptyBucket is the revision that says a pending minute turned out to
