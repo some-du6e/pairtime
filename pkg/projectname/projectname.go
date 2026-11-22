@@ -71,7 +71,11 @@ const CodeLen = 6
 // ShortCodes gives each of keys, the device keys an account's projects
 // are called by, the short code the owner's dashboard and `pairtime
 // projects` call its project by, since the server never learns a
-// project's name unless the owner shows it. A code is the first CodeLen characters of the key after
+// project's name unless the owner shows it. Codes depend on every key in
+// the set, and get longer on a clash, so only the server, which holds
+// every key the account's devices uploaded, can work out a project's
+// code: a device can't from its own keys, and gets its keys' codes from
+// the server instead (docs/spec/project-names-v1.md 1.6; #185). A code is the first CodeLen characters of the key after
 // its kind prefix: the git adapter's keys start with a letter that says
 // what kind of identity the key came from (g for a repo's root commits, d
 // for a folder), and 32 hex digits, so "g7c41e9…" has the code "7c41e9".
@@ -150,6 +154,29 @@ func codeBody(key string) string {
 		}
 	}
 	return key[1:]
+}
+
+// ProjectCodes returns the short code of each of an account's projects,
+// by project id, from keys, each project's device keys in the order
+// rollup.Projects gives them: ShortCodes over each project's first key, so
+// every code is unique among all the account's projects. The dashboard and
+// the names endpoint both call it, so a device gets the code its owner's
+// dashboard shows.
+func ProjectCodes(keys map[string][]string) map[string]string {
+	first := make([]string, 0, len(keys))
+	for _, ks := range keys {
+		if len(ks) > 0 {
+			first = append(first, ks[0])
+		}
+	}
+	short := ShortCodes(first)
+	codes := make(map[string]string, len(keys))
+	for id, ks := range keys {
+		if len(ks) > 0 {
+			codes[id] = short[ks[0]]
+		}
+	}
+	return codes
 }
 
 // CodeName is what the owner's dashboard calls a project with the short

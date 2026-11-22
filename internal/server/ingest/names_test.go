@@ -99,6 +99,25 @@ func TestNames(t *testing.T) {
 					t.Errorf("got %d %s, want 401 signature_invalid", s, c)
 				}
 			}},
+			{name: "the answer gives each key the device uploaded the dashboard's code, worked out over all the account's projects", run: func(t *testing.T, h *harness, d *testDevice) {
+				// The device's key and another device's key of the same
+				// account start alike, so both codes are a digit longer.
+				h.exec(t, `INSERT INTO rollup_projects (user_id, device_id, project_key, project_id) VALUES ($1, $2, 'g7c41e9a2d05b8f63e1a94c7d2b6f0e85', 'P1')`, d.Account, d.ID)
+				h.exec(t, `INSERT INTO rollup_projects (user_id, device_id, project_key, project_id) VALUES ($1, 'd_desktop', 'g7c41e9b6c18a2f05d3e7b94a1c6d0f28', 'P2')`, d.Account)
+				rec := h.send(t, upload{dev: d, names: true, json: []byte(`{}`)})
+				var a struct {
+					Codes map[string]string `json:"codes"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &a); err != nil || !reflect.DeepEqual(a.Codes, map[string]string{"g7c41e9a2d05b8f63e1a94c7d2b6f0e85": "7c41e9a"}) {
+					t.Errorf("codes %v (%v), want this device's key alone, with its lengthened code: %s", a.Codes, err, rec.Body)
+				}
+			}},
+			{name: "a device the server has no minutes from gets no codes, as {} rather than null", run: func(t *testing.T, h *harness, d *testDevice) {
+				rec := h.send(t, upload{dev: d, names: true, json: []byte(`{}`)})
+				if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"codes":{}`) {
+					t.Errorf("answer %d %s, want codes {}", rec.Code, rec.Body)
+				}
+			}},
 			{name: "a device with names under another account is refused with device_mismatch", run: func(t *testing.T, h *harness, d *testDevice) {
 				other := h.device("d_other", false)
 				h.exec(t, `INSERT INTO project_names (device_id, project_key, user_id, label, set_at_ms) VALUES ($1, 'k9', $2, 'theirs', 0)`, d.ID, other.Account)

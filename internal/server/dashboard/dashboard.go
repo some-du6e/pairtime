@@ -87,10 +87,12 @@ type Project struct {
 	// (D-owner-names), or projectname.CodeName of its Code without one,
 	// since the server never learns a project's name otherwise.
 	Name string `json:"name"`
-	// Code is the project's short code (projectname.ShortCodes), such as
-	// "7c41e9": unique among the account's projects, so the owner can
-	// tell projects apart and match them with pairtime projects. The
-	// samples' made-up projects have names and no code.
+	// Code is the project's short code (projectname.ProjectCodes), such
+	// as "7c41e9": unique among the account's projects, so the owner can
+	// tell projects apart and match them with pairtime projects. A device
+	// can't work a code out from its own keys, since codes depend on every
+	// key the account's devices uploaded; the names endpoint hands it its
+	// keys' codes. The samples' made-up projects have names and no code.
 	Code string `json:"code,omitempty"`
 	// Named says Name is a label the owner turned on, which the dashboard
 	// can hide, rather than the code's name.

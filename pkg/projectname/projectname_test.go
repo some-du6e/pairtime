@@ -150,6 +150,31 @@ func TestCodeName(t *testing.T) {
 	}
 }
 
+func TestProjectCodes(t *testing.T) {
+	const (
+		a1 = "g7c41e9a2d05b8f63e1a94c7d2b6f0e85"
+		a2 = "g7c41e9b6c18a2f05d3e7b94a1c6d0f28"
+		b1 = "g5be03d7f18a6c92e4b07d5a1c8f3e962"
+	)
+	tests := []struct {
+		name string
+		keys map[string][]string
+		want map[string]string
+	}{
+		{name: "each project is called by the code of its first key", keys: map[string][]string{"P1": {a1}, "P2": {b1}}, want: map[string]string{"P1": "7c41e9", "P2": "5be03d"}},
+		{name: "two projects whose first keys start alike both get longer codes", keys: map[string][]string{"P1": {a1}, "P2": {a2}}, want: map[string]string{"P1": "7c41e9a", "P2": "7c41e9b"}},
+		{name: "a project's other keys don't take part, so they can't lengthen another's code", keys: map[string][]string{"P1": {b1, a2}, "P2": {a1}}, want: map[string]string{"P1": "5be03d", "P2": "7c41e9"}},
+		{name: "a project with no key has no code", keys: map[string][]string{"P1": {a1}, "P2": nil}, want: map[string]string{"P1": "7c41e9"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ProjectCodes(tt.keys); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ProjectCodes = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCleanLabel(t *testing.T) {
 	tests := []struct{ name, in, want string }{
 		{name: "a plain name stays as it is", in: "chip8-emulator", want: "chip8-emulator"},

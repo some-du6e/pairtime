@@ -72,10 +72,12 @@ In one writer transaction, the server deletes each `delete` key's name, then sto
 The response is 200:
 
 ```json
-{"names": [{"project": "<key>", "label": "<label>"}, ...]}
+{"names": [{"project": "<key>", "label": "<label>"}, ...], "codes": {"<key>": "<code>", ...}}
 ```
 
 `names` is every name the server holds for the device after the request, in key order, `[]` for none. The client reads it to learn what the owner's dashboard shows, which includes a name the owner hid there (2).
+
+`codes` gives each project key the device uploaded minutes of the short code the owner's dashboard calls its project by, such as `"7c41e9"`, `{}` for none. Codes are worked out over every key the account's devices uploaded (`pkg/projectname.ProjectCodes`), and a code gets longer when another device's key starts the same way, so a device can't work one out from its own keys. It shows the codes this answer gives, and none for a key the server has no minutes of yet. A `{}` read every day keeps them current.
 
 ## 2. Where a name shows, and how it goes
 

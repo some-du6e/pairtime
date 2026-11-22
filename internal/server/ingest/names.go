@@ -16,6 +16,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/server/device"
 	"github.com/some-du6e/pairtime/internal/server/projectnames"
+	"github.com/some-du6e/pairtime/internal/server/rollup"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 	"github.com/some-du6e/pairtime/pkg/projectname"
 )
@@ -58,9 +59,12 @@ type namesBody struct {
 }
 
 // namesAnswer is a names request's 200 response: every name the server
-// holds for the device afterwards (project-names-v1 1.6).
+// holds for the device afterwards, and the short code the owner's
+// dashboard gives each project key of the device the server has minutes
+// of, which the device can't work out itself (project-names-v1 1.6).
 type namesAnswer struct {
 	Names []projectnames.Name `json:"names"`
+	Codes map[string]string   `json:"codes"`
 }
 
 // parseNames reads a names request's inflated body (project-names-v1 1.3
@@ -233,6 +237,28 @@ func (s *Service) names(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// deviceCodes returns the short code of each project key dev uploaded, as
+// the owner's dashboard shows it: projectname.ProjectCodes over all the
+// account's projects, the codes Rollups.View gives them (#185).
+func deviceCodes(ctx context.Context, tx writer.Tx, dev device.Device) (map[string]string, error) {
+	keys, err := rollup.Projects(ctx, tx, dev.Account)
+	if err != nil {
+		return nil, err
+	}
+	byProject := projectname.ProjectCodes(keys)
+	mine, err := rollup.DeviceProjects(ctx, tx, dev.Account, dev.ID)
+	if err != nil {
+		return nil, err
+	}
+	codes := make(map[string]string, len(mine))
+	for key, id := range mine {
+		if c := byProject[id]; c != "" {
+			codes[key] = c
+		}
+	}
+	return codes, nil
+}
+
 // processNames runs project-names-v1 1.5 step 3 and 1.6 in the writer's
 // transaction: the account check and the counter as ingest-v1 2.5 step 13
 // has them, without the stored reply, then the names. A refusal after the
@@ -271,7 +297,11 @@ func (s *Service) processNames(ctx context.Context, tx writer.Tx, dev device.Dev
 	if err != nil {
 		return outcome{}, err
 	}
-	data, err := json.Marshal(namesAnswer{Names: names})
+	codes, err := deviceCodes(ctx, tx, dev)
+	if err != nil {
+		return outcome{}, err
+	}
+	data, err := json.Marshal(namesAnswer{Names: names, Codes: codes})
 	if err != nil {
 		return outcome{}, err
 	}

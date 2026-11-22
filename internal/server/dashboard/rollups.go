@@ -4,8 +4,6 @@ package dashboard
 
 import (
 	"context"
-	"maps"
-	"slices"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/projectnames"
@@ -69,26 +67,20 @@ func (r Rollups) View(ctx context.Context, account string, now time.Time) (View,
 	}
 	// The codes are unique among all the account's projects, not only the
 	// month's, so a project's code doesn't change when others go quiet,
-	// and gets longer only when a new key clashes with it.
-	// rollup_projects keeps a project's keys as long as the account, so a
-	// code comes from the id only for a project nothing maps.
-	codeFrom := make(map[string]string, len(keys)) // by project id
-	for id, k := range keys {
-		if len(k) > 0 {
-			codeFrom[id] = k[0]
-		}
-	}
+	// and gets longer only when a new key clashes with it. The names
+	// endpoint hands each device its keys' codes from the same
+	// ProjectCodes, so pairtime projects shows the code this page does.
+	// rollup_projects keeps a project's keys as long as the account; a
+	// project nothing maps is called by its id's own code.
+	codes := projectname.ProjectCodes(keys)
 	for _, day := range days {
-		if _, ok := codeFrom[day.ProjectID]; !ok && day.ProjectID != "" {
-			codeFrom[day.ProjectID] = day.ProjectID
+		if id := day.ProjectID; id != "" && codes[id] == "" {
+			codes[id] = projectname.ShortCodes([]string{id})[id]
 		}
 	}
-	short := projectname.ShortCodes(slices.Collect(maps.Values(codeFrom)))
-	names := make(map[string]string, len(codeFrom))
-	codes := make(map[string]string, len(codeFrom))
-	for id, key := range codeFrom {
-		codes[id] = short[key]
-		names[id] = projectname.CodeName(short[key])
+	names := make(map[string]string, len(codes))
+	for id, code := range codes {
+		names[id] = projectname.CodeName(code)
 	}
 	var rows []Row
 	for _, day := range days {
