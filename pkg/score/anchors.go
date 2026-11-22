@@ -242,8 +242,10 @@ func (d *deriver) eventAnchors() {
 		if k.kind == event.KindAgentQueue {
 			matched := false
 			for _, g := range queues[k.sess] {
+				// One to one: a group of one copy takes the message's other,
+				// when one of the two is a log reader's.
 				if g.key == k.key && g.chars == k.chars && absDiff(g.from, k.from) <= d.r.trackLogMatch &&
-					!d.hasVia(groups[g], e.Via) && (e.Via == event.ViaLog || d.hasVia(groups[g], event.ViaLog)) {
+					len(groups[g]) == 1 && (e.Via == event.ViaLog) != (d.recs[groups[g][0]].Via == event.ViaLog) {
 					k, matched = g, true
 					break
 				}
@@ -273,16 +275,6 @@ func (d *deriver) eventAnchors() {
 		}
 		d.harnessAnchor(best, pos)
 	}
-}
-
-// hasVia reports whether any of the records at pos came via v.
-func (d *deriver) hasVia(pos []int, v event.Via) bool {
-	for _, i := range pos {
-		if d.recs[i].Via == v {
-			return true
-		}
-	}
-	return false
 }
 
 // absDiff returns |a - b|.

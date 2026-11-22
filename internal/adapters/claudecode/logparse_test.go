@@ -1007,14 +1007,20 @@ func TestTranscriptResume(t *testing.T) {
 // TestTranscriptUnlabeledEntries checks which main-conversation user
 // entries with neither turnOrigin nor promptSource the reader takes for a
 // prompt, each with a parse failure: one a person typed. A slash command's
-// expanded instructions (isMeta) and a local command's output are none, and
-// nor is the pickup of a message queued while the turn before ran, whose
-// agent.queue already recorded it (E-cc-queued-turn).
+// expanded instructions (isMeta), a local command's output, bash mode's
+// lines, a memory note and a compaction's summary are none, labeled or
+// not, and nor is the pickup of a message queued while the turn before
+// ran, whose agent.queue already recorded it (E-cc-queued-turn). A task
+// notification is never that pickup, and ends no message's wait.
 func TestTranscriptUnlabeledEntries(t *testing.T) {
 	labeled := userText("q1", "fix the failing test", map[string]any{"turnOrigin": "human", "promptSource": "typed",
 		"timestamp": "2026-11-20T17:00:00.000Z"})
 	enqueue := entryJSON("queue-operation", map[string]any{"operation": "enqueue", "content": "and then the docs",
 		"timestamp": "2026-11-20T17:00:10.000Z"})
+	const report = "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n</task-notification>"
+	notified := entryJSON("queue-operation", map[string]any{"operation": "enqueue", "content": report,
+		"timestamp": "2026-11-20T17:00:11.000Z"})
+	summary := "This session is being continued from a previous conversation that ran out of context."
 	cases := []struct {
 		name    string
 		entries []string
@@ -1026,6 +1032,16 @@ func TestTranscriptUnlabeledEntries(t *testing.T) {
 		{"an unlabeled isMeta entry is neither", []string{userText("q2", "the command's instructions", map[string]any{"isMeta": true})}, 0, 0},
 		{"an unlabeled local command's output is neither", []string{userText("q2", "<local-command-stdout>done</local-command-stdout>", nil)}, 0, 0},
 		{"an unlabeled entry with no text is neither", []string{userText("q2", "  ", nil)}, 0, 0},
+		{"bash mode's unlabeled command is neither", []string{userText("q2", "<bash-input>git status</bash-input>", nil)}, 0, 0},
+		{"bash mode's unlabeled output is neither",
+			[]string{userText("q2", "<bash-stdout>On branch main</bash-stdout><bash-stderr></bash-stderr>", nil)}, 0, 0},
+		{"an unlabeled memory note is neither", []string{userText("q2", "<user-memory-input>use tabs</user-memory-input>", nil)}, 0, 0},
+		{"an unlabeled compaction summary is neither",
+			[]string{userText("q2", summary, map[string]any{"isCompactSummary": true, "isVisibleInTranscriptOnly": true})}, 0, 0},
+		{"an unlabeled entry shown in the transcript only is neither",
+			[]string{userText("q2", summary, map[string]any{"isVisibleInTranscriptOnly": true})}, 0, 0},
+		{"a compaction summary with the running turn's labels is no prompt either",
+			[]string{labeled, userText("q1", summary, map[string]any{"isCompactSummary": true, "turnOrigin": "human", "promptSource": "typed"})}, 0, 0},
 		{"the unlabeled pickup of a message queued in the turn before is no prompt, and a failure",
 			[]string{labeled, enqueue, userText("q2", "and then the docs", nil)}, 0, 1},
 		{"an unlabeled entry after the pickup is a prompt again, and both are failures",
@@ -1036,6 +1052,13 @@ func TestTranscriptUnlabeledEntries(t *testing.T) {
 		{"a message removed from the queue is no pickup's",
 			[]string{labeled, enqueue, entryJSON("queue-operation", map[string]any{"operation": "remove", "timestamp": "2026-11-20T17:00:12.000Z"}),
 				userText("q2", "and then the docs", nil)}, 1, 1},
+		{"an unlabeled task notification taken up while a message waits is a prompt of its own, and a failure",
+			[]string{labeled, enqueue, notified, userText("q2", report, nil)}, 1, 1},
+		{"and the waiting message's pickup after it is still no prompt",
+			[]string{labeled, enqueue, notified, userText("q2", report, nil), userText("q3", "and then the docs", nil)}, 0, 2},
+		{"a task notification removed from the queue leaves the person's message waiting",
+			[]string{labeled, enqueue, entryJSON("queue-operation", map[string]any{"operation": "remove", "content": report,
+				"timestamp": "2026-11-20T17:00:12.000Z"}), userText("q2", "and then the docs", nil)}, 0, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

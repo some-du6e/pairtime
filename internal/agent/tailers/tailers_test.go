@@ -69,6 +69,23 @@ func newRig(t *testing.T) *rig {
 	return r
 }
 
+// linkedFolder lists the rig's root once, with no file in it yet, and
+// makes its folder p with a link q to it, returning q: a hook can name p's
+// files through q, as it can by another case where the file system ignores
+// it. It skips the test where links can't be made.
+func linkedFolder(t *testing.T, r *rig) string {
+	t.Helper()
+	r.step(0, false)
+	if err := os.MkdirAll(filepath.Join(r.dir, "p"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(r.dir, "q")
+	if err := os.Symlink(filepath.Join(r.dir, "p"), link); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	return link
+}
+
 // open makes a Tailer from what the store holds, as an agent's start does.
 func (r *rig) open() {
 	r.tl = New(Options{
@@ -545,6 +562,50 @@ func TestTailer(t *testing.T) {
 			r.tl.mu.Unlock()
 			if got := r.texts(0); n != 1 || !slices.Equal(got, []string{`{"n":2}`}) {
 				t.Errorf("%d files handed over %v, want one that hands the new line over once", n, got)
+			}
+		}},
+		{"a new file a hint names through a link to its folder is the one a rescan lists under its own name, read once", func(t *testing.T, r *rig) {
+			link := linkedFolder(t, r)
+			r.write("b.jsonl", "{\"n\":1}\n")
+			r.tl.Hint(event.HarnessClaudeCode, filepath.Join(link, "b.jsonl"), adapters.LogRoot{})
+			r.step(time.Second, false) // the hinted file is read from its start
+			r.write("b.jsonl", "{\"n\":2}\n")
+			r.step(HotPoll, true) // a rescan lists it as p/b.jsonl
+			r.step(HotPoll, false)
+			r.tl.mu.Lock()
+			n := len(r.tl.files)
+			r.tl.mu.Unlock()
+			if got := r.texts(0); n != 1 || !slices.Equal(got, []string{`{"n":1}`, `{"n":2}`}) {
+				t.Errorf("%d files handed over %v, want one that hands each line over once", n, got)
+			}
+		}},
+		{"a hint that comes before its file is the file a listing then finds under another name, read once", func(t *testing.T, r *rig) {
+			link := linkedFolder(t, r)
+			r.tl.Hint(event.HarnessClaudeCode, filepath.Join(link, "b.jsonl"), adapters.LogRoot{}) // no file yet
+			r.write("b.jsonl", "{\"n\":1}\n")
+			r.step(HotPoll, true) // the listing comes before the hinted entry's first read
+			r.step(HotPoll, false)
+			r.tl.mu.Lock()
+			n := len(r.tl.files)
+			r.tl.mu.Unlock()
+			if got := r.texts(0); n != 1 || !slices.Equal(got, []string{`{"n":1}`}) {
+				t.Errorf("%d files handed over %v, want one that hands the line over once", n, got)
+			}
+		}},
+		{"an event named by the listing's spelling of a hinted file marks the file due, with no rescan", func(t *testing.T, r *rig) {
+			link := linkedFolder(t, r)
+			r.write("b.jsonl", "{\"n\":1}\n")
+			r.tl.Hint(event.HarnessClaudeCode, filepath.Join(link, "b.jsonl"), adapters.LogRoot{})
+			r.step(time.Second, false)
+			r.step(HotPoll, true) // a rescan finds the other spelling
+			r.write("b.jsonl", "{\"n\":2}\n")
+			r.tl.notified(fsnotify.Event{Name: r.path("b.jsonl"), Op: fsnotify.Write})
+			r.tl.mu.Lock()
+			f := r.tl.files[filepath.Join(link, "b.jsonl")]
+			due, scan := f != nil && f.due, r.tl.scanDue
+			r.tl.mu.Unlock()
+			if !due || scan {
+				t.Errorf("the file is due %v and a rescan due %v; want it due and no rescan", due, scan)
 			}
 		}},
 		{"a file the first listing can't open is taken up at its end once it can be, after a restart too", func(t *testing.T, r *rig) {
