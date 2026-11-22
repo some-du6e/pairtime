@@ -386,3 +386,19 @@ func TestTodayLocalNames(t *testing.T) {
 		})
 	}
 }
+
+func TestUninstallKnowsNamesFile(t *testing.T) {
+	tests := []struct {
+		name, file string
+	}{
+		{name: "uninstall deletes the project names the server showed, through a linked data directory too", file: uploader.NamesFileName},
+		{name: "and the temporary file of an atomic write of it", file: "." + uploader.NamesFileName + ".tmp-123"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !isPairtimeEntry(tt.file) {
+				t.Errorf("%s isn't one of pairtimeEntries", tt.file)
+			}
+		})
+	}
+}
