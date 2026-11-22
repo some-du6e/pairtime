@@ -709,6 +709,39 @@ func TestModesSeen(t *testing.T) {
 				t.Error("the writer's Online said local-only after the first look noted the switch back with its link")
 			}
 		}},
+		{"a seal's online read that modes hadn't seen, where config.toml says local-only again by the time modes looks, has the writer begin the stretch again", func(t *testing.T) {
+			a, dirs := modesAgent(t, "local")
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			t.Cleanup(a.startLedger())
+			w := opened(t, a)
+			// No config watch runs here to hear the switches.
+			setMode(t, dirs, "online")
+			func() {
+				// modes looks only once the file says local-only again: the
+				// seals' seeSoon waits for its lock.
+				a.modes.mu.Lock()
+				defer a.modes.mu.Unlock()
+				if _, err := w.Write(runPresenceAt(time.Now())); err != nil {
+					t.Fatal(err)
+				}
+				sealNow(t, w, dirs.Ledger())
+				setMode(t, dirs, "local")
+			}()
+			for deadline := time.Now().Add(10 * time.Second); a.seeing.Load(); time.Sleep(5 * time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("modes never looked")
+				}
+			}
+			if _, err := w.Write(runPresenceAt(time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			setMode(t, dirs, "online")
+			if row := sealNow(t, w, dirs.Ledger()); row.Online {
+				t.Error("a record written after config.toml went back to local-only was sealed online")
+			}
+		}},
 		{"a link the uploader had settled whose second isn't after the end state.json kept, as after a step back of the wall clock, ends the stretch where the agent finds it, by both clocks", func(t *testing.T) {
 			a, dirs := modesAgent(t, "online")
 			linked := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)

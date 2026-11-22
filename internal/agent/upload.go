@@ -332,11 +332,18 @@ func (a *agent) seeSoon() {
 		if w == nil {
 			return
 		}
-		changed := a.seeLocked(a.online())
+		online := a.online()
+		changed := a.seeLocked(online)
 		changed = a.unseenLinkLocked() || changed
 		switch {
 		case changed:
 			a.keepLocked()
+		case !online:
+			// config.toml said local-only again by the time modes looked,
+			// which modes saw already, but the writer took the seal's
+			// online read: it hears the switch, as from the watch.
+			w.NoteModeThen(false, a.seenLinkLocked)
+			return
 		case a.linkedSeen.Load() == a.modes.linked:
 			// Nothing for the writer: a Seen it has already would only ask
 			// for a seal, whose Online, as while account.json can't be read,
