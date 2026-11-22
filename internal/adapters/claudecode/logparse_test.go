@@ -193,11 +193,15 @@ type step struct {
 	idle bool
 }
 
+// readDelay is how long after a line is written the replay with hooks has
+// the tailers read it.
+const readDelay = 50 * time.Millisecond
+
 // readWithHooks replays the capture as the agent takes it in live: every
-// hook call, delivered as way says, and every transcript line, read 50 ms
-// after it and the lines above it were written, in the order they
-// happened, a hook call before a line of the same moment. It returns the
-// hooks' records and the transcripts' apart.
+// hook call, delivered as way says, and every transcript line, read
+// readDelay after it and the lines above it were written, in the order
+// the agent gets them, a hook call before a line read at the same moment.
+// It returns the hooks' records and the transcripts' apart.
 func readWithHooks(t *testing.T, way adapters.Delivery) (hooks, logs []adapters.Record) {
 	t.Helper()
 	calls := readCalls(t)
@@ -216,10 +220,10 @@ func readWithHooks(t *testing.T, way adapters.Delivery) (hooks, logs []adapters.
 			if ls[i].t.After(at) {
 				at = ls[i].t
 			}
-			steps = append(steps, step{at: at, line: &ls[i]})
+			steps = append(steps, step{at: at.Add(readDelay), line: &ls[i]})
 		}
 		// The tailers' idle marker, IdleAfter after the file's last line.
-		steps = append(steps, step{at: at.Add(10 * time.Second), line: &ls[len(ls)-1], idle: true})
+		steps = append(steps, step{at: at.Add(readDelay + 10*time.Second), line: &ls[len(ls)-1], idle: true})
 	}
 	sort.SliceStable(steps, func(i, j int) bool {
 		if !steps[i].at.Equal(steps[j].at) {
@@ -242,7 +246,7 @@ func readWithHooks(t *testing.T, way adapters.Delivery) (hooks, logs []adapters.
 			hooks = append(hooks, recs...)
 			continue
 		}
-		recs, err := a.Parse(logRawAt(*s.line, s.idle, false, s.at.UnixMilli()+50))
+		recs, err := a.Parse(logRawAt(*s.line, s.idle, false, s.at.UnixMilli()))
 		if err != nil {
 			t.Errorf("%s at %d: %v", s.line.file, s.line.offset, err)
 		}
@@ -546,7 +550,11 @@ func TestTranscriptPrompts(t *testing.T) {
 		}
 	})
 	t.Run("step 21's queued message is no prompt.submit when its turn takes it up", func(t *testing.T) {
-		key := adapters.FixtureKeys().Turn(mainSession, ids["7ca5940f"])
+		id, ok := ids["7ca5940f"]
+		if !ok {
+			t.Fatal("the capture has no pickup 7ca5940f")
+		}
+		key := adapters.FixtureKeys().Turn(mainSession, id)
 		for _, r := range ofKind[*event.PromptSubmit](recs) {
 			if r.Event.Data.(*event.PromptSubmit).TurnKey == key {
 				t.Error("the pickup of the queued message became a prompt.submit")
@@ -806,6 +814,7 @@ func TestTranscriptLabels(t *testing.T) {
 		{"a turnOrigin no capture has shown declares nothing and is a failure", userText("q1", "hello there", map[string]any{"turnOrigin": "webhook"}), true, event.DeclaredNone},
 		{"a promptSource no capture has shown declares nothing and is a failure", userText("q1", "hello there", map[string]any{"promptSource": "voice", "turnOrigin": "human"}), true, event.DeclaredNone},
 		{"an entrypoint token HS 3.3 doesn't list is a failure", userText("q1", "hello there", map[string]any{"turnOrigin": "human", "entrypoint": "claude-watch"}), true, event.DeclaredNone},
+		{"a labeled prompt whose text is an interrupt's is a prompt", userText("q1", "[Request interrupted by user]", map[string]any{"turnOrigin": "human", "promptSource": "typed"}), false, event.DeclaredNone},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1149,6 +1158,158 @@ func TestTranscriptLetsGo(t *testing.T) {
 			resume, _ := a.LogResume(last.file)
 			if free := resume == last.end; free != tc.free {
 				t.Errorf("the memory starts at %d of %d, want it let go: %v", resume, last.end, tc.free)
+			}
+		})
+	}
+}
+
+// TestTranscriptTokenChanges checks E-cc-transcript-labels' rule for a
+// session no hook reported: a session.start at the first entry that
+// states a token and another wherever it changes, a change that comes
+// while the first start waits for startGrace included.
+func TestTranscriptTokenChanges(t *testing.T) {
+	entry := func(tok, ts string) string {
+		return userText("q1", "hello there", map[string]any{"turnOrigin": "human", "promptSource": "typed", "entrypoint": tok, "timestamp": ts})
+	}
+	at := func(s string) int64 { ts, _ := time.Parse(time.RFC3339Nano, s); return ts.UnixMilli() }
+	cases := []struct {
+		name  string
+		lines []string
+		want  []event.Entrypoint
+	}{
+		{"a token stated twice gives one start", []string{entry("cli", "2026-11-20T17:00:00.000Z"), entry("cli", "2026-11-20T17:00:10.000Z")},
+			[]event.Entrypoint{event.EntrypointUnknown}},
+		{"a token that changes within startGrace gives a start of its own", []string{entry("cli", "2026-11-20T17:00:00.000Z"), entry("sdk-cli", "2026-11-20T17:00:10.000Z")},
+			[]event.Entrypoint{event.EntrypointUnknown, event.EntrypointSDK}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTest()
+			ls := logLines(tc.lines...)
+			var recs []adapters.Record
+			for _, l := range ls {
+				r, err := a.Parse(logRawAt(l, false, false, at("2026-11-20T17:00:11.000Z")))
+				if err != nil {
+					t.Fatal(err)
+				}
+				recs = append(recs, r...)
+			}
+			r, err := a.Parse(logRawAt(ls[len(ls)-1], true, false, at("2026-11-20T17:05:00.000Z")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			recs = append(recs, r...)
+			var got []event.Entrypoint
+			for _, s := range ofKind[*event.SessionStart](recs) {
+				got = append(got, s.Event.Data.(*event.SessionStart).Entrypoint)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("session.starts %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTranscriptTextBlockKeys checks that each text block of a turn's
+// last message makes records of its own key, so that no two records of
+// different blocks share an event_id (adapters.Record.LogKey).
+func TestTranscriptTextBlockKeys(t *testing.T) {
+	msg := entryJSON("assistant", map[string]any{"timestamp": "2026-11-20T17:00:05.000Z", "message": map[string]any{"id": "m1", "role": "assistant",
+		"stop_reason": "end_turn", "content": []any{map[string]any{"type": "text", "text": "One."}, map[string]any{"type": "text", "text": "Two."},
+			map[string]any{"type": "text", "text": "Three?"}}}})
+	cases := []struct {
+		name string
+		ok   func([]adapters.Record) bool
+	}{
+		{"two outputs before the final one, each block's", func(recs []adapters.Record) bool {
+			var finals, others int
+			for _, r := range ofKind[*event.AgentOutput](recs) {
+				if r.Event.Data.(*event.AgentOutput).IsFinal {
+					finals++
+				} else {
+					others++
+				}
+			}
+			return finals == 1 && others == 2
+		}},
+		{"no two records share a key", func(recs []adapters.Record) bool {
+			seen := map[string]bool{}
+			for _, r := range recs {
+				if seen[r.LogKey] {
+					return false
+				}
+				seen[r.LogKey] = true
+			}
+			return true
+		}},
+	}
+	a := newTest()
+	ls := logLines(userText("q1", "say three things", map[string]any{"turnOrigin": "human", "promptSource": "typed"}), msg)
+	var recs []adapters.Record
+	for _, l := range ls {
+		r, err := a.Parse(logRaw(l, false, false))
+		if err != nil {
+			t.Fatal(err)
+		}
+		recs = append(recs, r...)
+	}
+	r, err := a.Parse(logRaw(ls[len(ls)-1], true, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs = append(recs, r...)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok(recs) {
+				for _, r := range recs {
+					t.Logf("%s %s", r.Event.Kind(), r.LogKey)
+				}
+				t.Error("the records don't keep each block apart")
+			}
+		})
+	}
+}
+
+// TestNativeCutoffOutlivesHookMemory checks that the reader keeps a
+// session's native cutoff once the hook calls' memory of the session is
+// gone, as after 256 other sessions: it still leaves the finals and stops
+// to the hooks that reported them.
+func TestNativeCutoffOutlivesHookMemory(t *testing.T) {
+	a := newTest()
+	if _, fails := adapters.Replay(a, readCalls(t), adapters.ReplayOptions{GOOS: "linux", Way: adapters.Walked}); len(fails) > 0 {
+		t.Fatalf("the hook calls failed: %v", fails)
+	}
+	for sid := range a.sessions {
+		delete(a.sessions, sid)
+	}
+	files := readTranscripts(t)
+	var recs []adapters.Record
+	for _, k := range sessionFiles(files) {
+		recs = append(recs, readLog(t, a, k, files[k])...)
+	}
+	count := func(keep func(adapters.Record) bool) int {
+		n := 0
+		for _, r := range recs {
+			if keep(r) {
+				n++
+			}
+		}
+		return n
+	}
+	cases := []struct {
+		name string
+		keep func(adapters.Record) bool
+	}{
+		{"no stop", func(r adapters.Record) bool { return r.Event.Kind() == event.KindAgentStop }},
+		{"no final output", func(r adapters.Record) bool {
+			o, ok := r.Event.Data.(*event.AgentOutput)
+			return ok && o.IsFinal
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if n := count(tc.keep); n != 0 {
+				t.Errorf("%d such records, want none: the hooks reported them", n)
 			}
 		})
 	}

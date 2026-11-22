@@ -212,12 +212,15 @@ func (h *adapterHost) refuseLogs() {
 // many it took: up to the first that has to wait.
 func (h *adapterHost) takeBatch(t *tailers.Tailer, b tailers.Batch) int {
 	for i, line := range b {
+		// The Tracks that ended before takeLine looked, so one that ends
+		// after it looked counts as a change, which pokes the tailers.
+		tracks := h.tracksEnded()
 		if !h.takeLine(t, line) {
 			if !h.logWait {
 				h.mu.Lock()
 				h.logParked = h.parkedN
 				h.mu.Unlock()
-				h.logWait, h.logTracks = true, h.tracksEnded()
+				h.logWait, h.logTracks = true, tracks
 			}
 			return i
 		}

@@ -119,6 +119,7 @@ func (a *Adapter) Parse(raw adapters.RawRecord) ([]adapters.Record, error) {
 		c.add(&event.SessionStart{StartKind: event.StartStartup, Entrypoint: entrypointOf(*w),
 			ParentClass: parentOf(*w), HasTTY: w.HasTTY}, nil)
 		c.s.markNative(c.env.T)
+		c.a.noteNative(c.s)
 	}
 	c.pid, _ = f.str("prompt_id")
 	if c.pid != "" && name != EventUserPromptSubmit {
@@ -197,6 +198,7 @@ func (c *call) sessionStart() {
 	if w := c.raw.Arrival.Walk; w != nil && c.raw.Arrival.Via == event.ViaHook {
 		st.Entrypoint, st.ParentClass, st.HasTTY = entrypointOf(*w), parentOf(*w), w.HasTTY
 		c.s.markNative(c.env.T)
+		c.a.noteNative(c.s)
 	}
 	if pm, ok := c.f.str("permission_mode"); ok {
 		if isKey(pm) {

@@ -3,14 +3,21 @@
 package tailers
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -171,8 +178,11 @@ func TestTailer(t *testing.T) {
 			}
 			r.write("a.jsonl", "{\"n\":3}\n")
 			r.step(HotPoll, false)
-			if got := r.texts(0); !slices.Equal(got, []string{`{"n":3}`}) || r.got[0].Log.Offset != 16 {
-				t.Errorf("handed over %v at %d, want the third line at 16", got, r.got[0].Log.Offset)
+			if got := r.texts(0); !slices.Equal(got, []string{`{"n":3}`}) {
+				t.Fatalf("handed over %v, want the third line", got)
+			}
+			if r.got[0].Log.Offset != 16 {
+				t.Errorf("the third line is at %d, want 16", r.got[0].Log.Offset)
 			}
 		}},
 		{"a file that comes after the first listing is read from its start, each line starting where the last ended", func(t *testing.T, r *rig) {
@@ -410,6 +420,63 @@ func TestTailer(t *testing.T) {
 				t.Errorf("handed over %v", got)
 			}
 		}},
+		{"a file deleted while nothing watched it is forgotten at a rescan", func(t *testing.T, r *rig) {
+			r.step(0, false)
+			r.write("u.jsonl", "{\"n\":1}\n")
+			r.step(HotPoll, true)
+			if err := os.Remove(r.path("u.jsonl")); err != nil {
+				t.Fatal(err)
+			}
+			r.step(HotWindow+time.Minute, true) // cold, so no poll stats it
+			if !slices.Equal(r.forgot, []string{r.path("u.jsonl")}) {
+				t.Errorf("forgot %v", r.forgot)
+			}
+		}},
+		{"an adapter that holds something back hears the file is idle while its last line is half written", func(t *testing.T, r *rig) {
+			r.resume = func(Line) int64 { return 0 }
+			r.step(0, false)
+			r.write("v.jsonl", "{\"n\":1}\n{\"n\"")
+			r.step(HotPoll, true)
+			r.step(IdleAfter, false)
+			if got := r.texts(0); !slices.Equal(got, []string{`{"n":1}`, "idle"}) || r.got[len(r.got)-1].Log.Offset != 8 {
+				t.Errorf("handed over %v, want the whole line and an idle marker after it", got)
+			}
+		}},
+		{"a replaced file that kept two like lines where they were goes on after them", func(t *testing.T, r *rig) {
+			r.step(0, false)
+			r.write("w.jsonl", "{\"n\":1}\n{\"n\":1}\n")
+			r.step(HotPoll, true)
+			r.replace("w.jsonl", "{\"n\":1}\n{\"n\":1}\n{\"n\":2}\n")
+			from := len(r.got)
+			r.step(HotPoll, false)
+			if got := r.texts(from); !slices.Equal(got, []string{`{"n":2}`}) || slices.Contains(r.replays(from), true) {
+				t.Errorf("handed over %v, want the new line alone", got)
+			}
+		}},
+		{"a folder the first listing couldn't read has its files taken up at their end once it can", func(t *testing.T, r *rig) {
+			if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+				t.Skip("a folder's mode keeps no one out here")
+			}
+			dir := filepath.Join(r.dir, "p")
+			r.write("x.jsonl", "{\"n\":1}\n")
+			if err := os.Chmod(dir, 0); err != nil {
+				t.Fatal(err)
+			}
+			r.open()
+			r.step(0, false)
+			if err := os.Chmod(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			r.step(HotPoll, true)
+			if len(r.got) != 0 {
+				t.Fatalf("read %v from before pairtime", r.texts(0))
+			}
+			r.write("x.jsonl", "{\"n\":2}\n")
+			r.step(HotPoll, false)
+			if got := r.texts(0); !slices.Equal(got, []string{`{"n":2}`}) {
+				t.Errorf("handed over %v, want the line written after", got)
+			}
+		}},
 		{"a hint reads a new file of a listed root at once", func(t *testing.T, r *rig) {
 			r.step(0, false)
 			r.write("o.jsonl", "{\"n\":1}\n")
@@ -465,6 +532,8 @@ func TestLastLine(t *testing.T) {
 		{"an empty file has none", "", 0, ""},
 		{"a file with no newline has none", "{\"a\":1}", 0, ""},
 		{"a last line longer than the read buffer is read back whole", "{\"a\":1}\n" + strings.Repeat("y", 3*readBuffer) + "\n", 8 + 3*readBuffer + 1, strings.Repeat("y", 3*readBuffer)},
+		{"a line being written that is longer than MaxLine is passed over", "{\"a\":1}\n" + strings.Repeat("z", MaxLine+5), 8, `{"a":1}`},
+		{"a last line longer than MaxLine has its end and no hash", "{\"a\":1}\n" + strings.Repeat("y", MaxLine+5) + "\n", 8 + MaxLine + 6, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -487,6 +556,84 @@ func TestLastLine(t *testing.T) {
 			}
 			if end != tc.end || hash != want {
 				t.Errorf("lastLine = %d, %q; want %d, %q", end, hash, tc.end, want)
+			}
+		})
+	}
+}
+
+// TestLinesReadError checks that a read that fails before the file's end
+// is told from a last line not yet whole, so the file is read again
+// rather than left until it changes.
+func TestLinesReadError(t *testing.T) {
+	cases := []struct {
+		name   string
+		r      io.Reader
+		failed bool
+	}{
+		{"a last line without its newline is no failure", strings.NewReader("{\"n\":1}\n{\"n\""), false},
+		{"an error before the end is the read's", io.MultiReader(strings.NewReader("{\"n\":1}\n{\"n\""), iotest.ErrReader(errors.New("disk gone"))), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tl := New(Options{NoNotify: true})
+			batch, next, more, failed := tl.lines(bufio.NewReader(tc.r), &file{key: "k", path: "/k"}, 0, 0)
+			if len(batch) != 1 || next != 8 || more || failed != tc.failed {
+				t.Errorf("lines = %d lines, %d, more %v, failed %v; want 1, 8, false, %v", len(batch), next, more, failed, tc.failed)
+			}
+		})
+	}
+}
+
+// TestNotifiedRemovedWatch checks that a watched folder fsnotify reports
+// removed is no longer counted as watched, so it is watched again once it
+// is back: the backend drops its watch with the folder.
+func TestNotifiedRemovedWatch(t *testing.T) {
+	cases := []struct {
+		name string
+		op   fsnotify.Op
+		kept bool
+	}{
+		{"a removed folder is watched no more", fsnotify.Remove, false},
+		{"a renamed folder is watched no more", fsnotify.Rename, false},
+		{"a write keeps the watch", fsnotify.Write, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tl := New(Options{NoNotify: true})
+			dir := filepath.Join(t.TempDir(), "p")
+			tl.watching[dir] = true
+			tl.notified(fsnotify.Event{Name: dir, Op: tc.op})
+			if tl.watching[dir] != tc.kept {
+				t.Errorf("watching %v, want %v", tl.watching[dir], tc.kept)
+			}
+		})
+	}
+}
+
+// TestOpenLog checks that the tailer opens a regular file and refuses a
+// folder at once, whatever the OS.
+func TestOpenLog(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "f.jsonl")
+	if err := os.WriteFile(file, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, path string
+		ok         bool
+	}{
+		{"a regular file opens", file, true},
+		{"a folder is refused", dir, false},
+		{"a missing file is missing", filepath.Join(dir, "none.jsonl"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fh, err := openLog(tc.path)
+			if fh != nil {
+				fh.Close()
+			}
+			if (err == nil) != tc.ok {
+				t.Errorf("openLog = %v, want it to open: %v", err, tc.ok)
 			}
 		})
 	}
