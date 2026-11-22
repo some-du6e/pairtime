@@ -524,7 +524,9 @@ func (t *Tailer) Hint(h event.Harness, path string, root adapters.LogRoot) {
 
 // Rewind has the tailer read the file key from its start again, the lines
 // it had handed over as replays: its adapter has no memory of the file, as
-// after a restore, and rebuilds it from them. The agent calls it while it
+// after a restore, and rebuilds it from them. A file whose history lookback
+// gave up on is read again from where that history ended (Line.Fresh),
+// where its adapter started it afresh. The agent calls it while it
 // takes a batch of the file, instead of taking the line. When lookback's
 // reader can read now, the lines up to where the tailer had read go
 // through it, trimmed and at its priority, as a history of the file
@@ -539,11 +541,12 @@ func (t *Tailer) Rewind(key string) {
 	if f == nil {
 		return
 	}
-	f.pos, f.resume, f.rewound = 0, 0, true
+	from := f.fresh
+	f.pos, f.resume, f.rewound = from, from, true
 	switch {
 	case f.hist > 0 && !f.histDone && f.read < f.hist && t.lookbackUsable():
 		// Its history is still to read: lookback reads it from the start.
-	case f.read > 0 && t.lookbackNow():
+	case f.read > from && t.lookbackNow():
 		f.rewindTo = f.read
 	case f.lookbacks():
 		f.leaveHistory()

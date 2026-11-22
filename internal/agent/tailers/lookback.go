@@ -391,14 +391,14 @@ func (t *Tailer) lookbackJob() error {
 	}
 	slices.SortFunc(files, func(a, b *file) int { return b.mtime.Compare(a.mtime) })
 	job := lookbackJob{Files: make([]jobFile, len(files))}
-	reads, hists := make([]int64, len(files)), make([]int64, len(files))
+	reads, hists, freshes := make([]int64, len(files)), make([]int64, len(files)), make([]int64, len(files))
 	for i, f := range files {
 		to := f.rewindTo
 		if !f.histDone {
 			to = max(to, f.hist)
 		}
 		job.Files[i] = jobFile{Harness: f.harness, Path: f.path, From: f.pos, To: to}
-		reads[i], hists[i] = f.read, f.hist
+		reads[i], hists[i], freshes[i] = f.read, f.hist, f.fresh
 	}
 	stopped := t.stopped
 	t.mu.Unlock()
@@ -501,7 +501,7 @@ func (t *Tailer) lookbackJob() error {
 			t.wake()
 			continue
 		}
-		l := Line{Harness: f.harness}
+		l := Line{Harness: f.harness, Fresh: freshes[cl.F] > 0 && cl.O == freshes[cl.F]}
 		if cl.E <= hists[cl.F] {
 			l.Lookback = f.histFrom
 		}
@@ -551,7 +551,7 @@ func (t *Tailer) deliverHistory(f *file, b Batch) error {
 		}
 		b = b[n:]
 		t.mu.Lock()
-		rewound, stopped := f.rewound, t.stopped
+		rewound, stopped, known := f.rewound, t.stopped, t.files[f.key] == f
 		f.rewound = false
 		t.mu.Unlock()
 		switch {
@@ -559,6 +559,10 @@ func (t *Tailer) deliverHistory(f *file, b Batch) error {
 			return stoppedError{}
 		case rewound:
 			return restartError{}
+		case !known:
+			// Forgotten while the agent was offered it, as a file that went:
+			// its adapter forgot it too, and no Poke would come for it.
+			return nil
 		}
 		select {
 		case <-t.lb.poke:

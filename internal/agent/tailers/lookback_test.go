@@ -455,6 +455,9 @@ func TestLookback(t *testing.T) {
 			if got := r.texts(0); !slices.Equal(got, []string{`{"S":1}`, `{"U":1}`}) {
 				t.Fatalf("the histories handed over %v", got)
 			}
+			if p := r.tl.Progress(); p.Bytes != 16 {
+				t.Errorf("progress %+v, want s's history to end at its last line, before the blank one", p)
+			}
 			rewound := false
 			r.take = func(l Line) bool {
 				if string(l.Bytes) == `{"s":2}` && !rewound {
@@ -682,6 +685,74 @@ func TestLookback(t *testing.T) {
 			}
 			if got := r.lookbacks(2); !slices.Equal(got, []int64{from, from, 0}) {
 				t.Errorf("Lookback %v, want the window on the history's lines alone", got)
+			}
+		}},
+		{"a history batch of a file forgotten while the agent was offered it ends that file, and lookback reads on", func(t *testing.T) {
+			pc := &pipeChild{trim: upper}
+			r := lookbackRig(t, pc.start)
+			r.write("x.jsonl", "{\"x\":1}\n{\"x\":2}\n")
+			r.write("y.jsonl", "{\"y\":1}\n")
+			earlier := r.now.Add(-time.Hour)
+			if err := os.Chtimes(r.path("y.jsonl"), earlier, earlier); err != nil {
+				t.Fatal(err)
+			}
+			r.take = func(l Line) bool {
+				if string(l.Bytes) != `{"X":1}` {
+					return true
+				}
+				// The tailer found the file gone, and the agent forgot it
+				// before it took the batch, so the line isn't taken.
+				r.tl.mu.Lock()
+				f := r.tl.files[l.Log.File]
+				r.tl.mu.Unlock()
+				if f != nil {
+					r.tl.gone(f)
+				}
+				return false
+			}
+			r.open()
+			r.step(0, false)
+			deadline := time.Now().Add(10 * time.Second)
+			for r.tl.Progress().Running && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if r.tl.Progress().Running {
+				t.Fatal("lookback still waits on the forgotten file's batch")
+			}
+			r.settle()
+			if got := r.texts(0); !slices.Equal(got, []string{`{"Y":1}`}) {
+				t.Errorf("handed over %v, want the next file's history", got)
+			}
+		}},
+		{"a Rewind of a file whose history lookback gave up on reads it again from where that history ended", func(t *testing.T) {
+			r := lookbackRig(t, func() (Child, error) { return Child{}, errors.New("no binary") })
+			r.write("v.jsonl", "{\"v\":1}\n")
+			r.open()
+			r.step(0, false)
+			r.settle()
+			for i := range maxLookbackTries - 1 {
+				r.step(lookbackPause<<i, false)
+				r.settle()
+			}
+			r.write("v.jsonl", "{\"v\":2}\n")
+			r.step(HotPoll, false)
+			rewound := false
+			r.take = func(l Line) bool {
+				if string(l.Bytes) == `{"v":3}` && !rewound {
+					rewound = true
+					r.tl.Rewind(l.Log.File) // the agent's, for an adapter that forgot the file
+					return false
+				}
+				return true
+			}
+			r.write("v.jsonl", "{\"v\":3}\n")
+			r.step(HotPoll, false)
+			r.step(time.Second, false)
+			if got := r.texts(0); !rewound || !slices.Equal(got, []string{`{"v":2}`, `{"v":2}`, `{"v":3}`}) {
+				t.Fatalf("handed over %v, want the line after the history, then it again and the new line", got)
+			}
+			if got := r.replays(1); !slices.Equal(got, []bool{true, false}) || !r.got[1].Fresh || r.got[2].Fresh {
+				t.Errorf("replays %v, fresh %v and %v; want the history's end again as a fresh replay", got, r.got[1].Fresh, r.got[2].Fresh)
 			}
 		}},
 		{"after the last failure, a root listed later gives its files no history, so the tailer reads them", func(t *testing.T) {

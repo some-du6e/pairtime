@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
+	"github.com/some-du6e/pairtime/pkg/event"
 )
 
 // TestTrimLog checks the lines the lookback reader's child process sends
@@ -162,6 +163,72 @@ func TestTranscriptMemoryKeepsLiveFiles(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
 				t.Error("the reader forgot another file than the one it should have")
+			}
+		})
+	}
+}
+
+// TestTranscriptMemoryKeepsLiveSessions checks which session the reader's
+// memory forgets when full: one no remembered file names, so a session
+// that was running at install, with no hooks, keeps the memory that its
+// session.start was written while lookback reads hundreds of others, and
+// its next entry writes no second one, after a restart too.
+func TestTranscriptMemoryKeepsLiveSessions(t *testing.T) {
+	entry := func(sid, id string, at time.Time) string {
+		return userText(id, "hello there", map[string]any{"turnOrigin": "human", "promptSource": "typed",
+			"sessionId": sid, "entrypoint": "cli", "timestamp": at.Format(time.RFC3339Nano)})
+	}
+	starts := func(t *testing.T, a *Adapter, l txLine) int {
+		t.Helper()
+		recs, err := a.Parse(logRaw(l, false, false))
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := 0
+		for _, r := range recs {
+			if _, ok := r.Event.Data.(*event.SessionStart); ok {
+				n++
+			}
+		}
+		return n
+	}
+	// The live session's entries are older than the read by more than the
+	// hooks' grace, so its first writes its session.start at once.
+	live := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	lines := logLines(entry("live", "p1", live), entry("live", "p2", live.Add(time.Minute)))
+	for i := range lines {
+		lines[i].file = "p/live.jsonl"
+	}
+	a := newTest()
+	first := starts(t, a, lines[0])
+	// Lookback reads more histories than the memory holds, each of a
+	// session of its own.
+	old := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	for i := range maxLogSessions + 10 {
+		l := logLines(entry(fmt.Sprintf("s-%03d", i), "q", old.Add(-time.Duration(i)*time.Minute)))[0]
+		l.file = fmt.Sprintf("p/old-%03d.jsonl", i)
+		starts(t, a, l)
+	}
+	mem, err := a.SaveState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := newTest()
+	if err := restarted.LoadState(mem); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"the live session's first entry writes its session.start", first == 1},
+		{"its next entry writes no second one", starts(t, a, lines[1]) == 0},
+		{"nor after a restart", starts(t, restarted, lines[1]) == 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Error("the reader forgot that the live session's start was written")
 			}
 		})
 	}

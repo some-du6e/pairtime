@@ -72,8 +72,9 @@ import (
 // Bounds on what the reader remembers.
 const (
 	// maxLogFiles and maxLogSessions bound the transcript files and the
-	// sessions it remembers: those it read from last, and for files those
-	// it would forget last (older).
+	// sessions it remembers: those it read from last, for files those it
+	// would forget last (older), and for sessions those a remembered file
+	// names first.
 	maxLogFiles    = 256
 	maxLogSessions = 256
 	// recentFiles is how many of the files it read from last it keeps
@@ -1016,17 +1017,29 @@ func (f *txFile) restart(at int64) {
 }
 
 // logSessionFor returns what the reader remembers of session sid, making
-// it. Past maxLogSessions it forgets the session read from least recently.
+// it. Past maxLogSessions it forgets the session read from least recently
+// of those no remembered file names, so a session that went quiet while
+// lookback read hundreds of others keeps what it knows, as its file does
+// (older), or of all of them when every one is named.
 func (a *Adapter) logSessionFor(sid string) *txSession {
 	a.clock++
 	s := a.logSessions[sid]
 	if s == nil {
 		if len(a.logSessions) >= maxLogSessions {
-			var oldest *txSession
+			named := a.namedSessions()
+			var oldest, oldestNamed *txSession
 			for _, o := range a.logSessions {
-				if oldest == nil || o.seen < oldest.seen {
+				switch {
+				case named[o.id]:
+					if oldestNamed == nil || o.seen < oldestNamed.seen {
+						oldestNamed = o
+					}
+				case oldest == nil || o.seen < oldest.seen:
 					oldest = o
 				}
+			}
+			if oldest == nil {
+				oldest = oldestNamed
 			}
 			delete(a.logSessions, oldest.id)
 		}
@@ -1035,6 +1048,18 @@ func (a *Adapter) logSessionFor(sid string) *txSession {
 	}
 	s.seen = a.clock
 	return s
+}
+
+// namedSessions returns the sessions the files the reader remembers name.
+// a.mu is held.
+func (a *Adapter) namedSessions() map[string]bool {
+	named := make(map[string]bool, len(a.files))
+	for _, f := range a.files {
+		if f.st.Session != "" {
+			named[f.st.Session] = true
+		}
+	}
+	return named
 }
 
 // LogPlace returns the folder a transcript line ran in and its session id
