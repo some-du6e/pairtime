@@ -1477,6 +1477,10 @@ func TestTodayIsTheDayTheAgentWrites(t *testing.T) {
 // agent's status says focus is unknown, and only then, in the words the
 // dashboard's Today page uses.
 func TestTodayFocusUnknown(t *testing.T) {
+	// A slow runner still answers within this; one case shortens it.
+	old := focusAskWait
+	focusAskWait = 10 * time.Second
+	t.Cleanup(func() { focusAskWait = old })
 	stops := text.Phrase(text.KeyFocusUnknown)
 	counts := text.Phrase(text.KeyFocusUnknownLevelC)
 	login := text.Phrase(text.KeyGnomeNeedsLogin)
@@ -1549,8 +1553,27 @@ func TestTodayFocusUnknown(t *testing.T) {
 			if got := asked(); !slices.Equal(got, tc.asked) {
 				t.Errorf("asked the agent %q, want %q", got, tc.asked)
 			}
+			if slices.Contains(tc.args, "--json") {
+				checkSchema(t, loadTodaySchema(t), out)
+			}
 		})
 	}
+	t.Run("an agent that doesn't answer within focusAskWait leaves the sentence out, and today prints the day all the same", func(t *testing.T) {
+		focusAskWait = 200 * time.Millisecond
+		t.Cleanup(func() { focusAskWait = 10 * time.Second })
+		onDay(t, "2026-11-24", time.UTC)
+		h := newHome(t).running().writeDays(tracked)
+		block := make(chan struct{})
+		h.agent(func(string) (json.RawMessage, error) {
+			<-block
+			return nil, ipc.ErrUnknownQuestion
+		})
+		t.Cleanup(func() { close(block) }) // before the agent's own cleanup, which waits for the answer
+		code, out, errOut := runCmd("today")
+		if code != 0 || errOut != "" || !strings.HasPrefix(out, dayTitle("2026-11-24")+"\n") || strings.Contains(out, "doesn't tell pairtime which window") {
+			t.Errorf("exit %d, stderr %q, stdout\n%s\nwant the day without the sentence", code, errOut, out)
+		}
+	})
 	t.Run("the words are DESIGN 5.9's teen-facing sentence, the first clause alone until WP-SC8 makes the rest true", func(t *testing.T) {
 		const whole = "This desktop doesn't tell pairtime which window is in front, so your time here counts only on your own dashboard, not on your profile, build days or most programs."
 		if stops != "This desktop doesn't tell pairtime which window is in front." || counts != whole {
