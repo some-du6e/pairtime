@@ -542,6 +542,47 @@ func TestLookback(t *testing.T) {
 				t.Errorf("Lookback %v, progress %+v; want neither line the old file's history's, and no history", got, r.tl.Progress())
 			}
 		}},
+		{"a file cut below what was read keeps its history up to the cut, so its old line keeps its window and a new one has none", func(t *testing.T) {
+			pc := &pipeChild{trim: upper}
+			r := lookbackRig(t, pc.start)
+			r.write("k.jsonl", "{\"k\":1}\n{\"k\":2}\n")
+			r.open()
+			from := r.now.Add(-LookbackWindow).UnixMilli()
+			r.step(0, false)
+			r.settle()
+			if err := os.Truncate(r.path("k.jsonl"), 8); err != nil {
+				t.Fatal(err)
+			}
+			r.step(HotPoll, false)
+			r.write("k.jsonl", "{\"k\":3}\n")
+			r.step(HotPoll, false)
+			if got := r.texts(2); !slices.Equal(got, []string{`{"k":1}`, `{"k":3}`}) {
+				t.Fatalf("after the cut, handed over %v", got)
+			}
+			if got := r.lookbacks(2); !slices.Equal(got, []int64{from, 0}) {
+				t.Errorf("Lookback %v, want the window on the history's line alone", got)
+			}
+		}},
+		{"a file replaced by a copy that lost lines before what was read keeps its history up to the same line, so a line after it has no window", func(t *testing.T) {
+			pc := &pipeChild{trim: upper}
+			r := lookbackRig(t, pc.start)
+			r.write("p.jsonl", "{\"p\":1}\n{\"p\":2}\n")
+			r.open()
+			from := r.now.Add(-LookbackWindow).UnixMilli()
+			r.step(0, false)
+			r.settle()
+			r.replace("p.jsonl", "{\"p\":2}\n{\"p\":3}\n")
+			r.step(HotPoll, false)
+			if got := r.texts(2); !slices.Equal(got, []string{`{"p":2}`, `{"p":3}`}) {
+				t.Fatalf("after the replace, handed over %v", got)
+			}
+			if got := r.lookbacks(2); !slices.Equal(got, []int64{from, 0}) {
+				t.Errorf("Lookback %v, want the window on the history's line alone", got)
+			}
+			if got := r.replays(2); !slices.Equal(got, []bool{true, false}) {
+				t.Errorf("replays %v", got)
+			}
+		}},
 		{"after the last failure, a root listed later gives its files no history, so the tailer reads them", func(t *testing.T) {
 			r := lookbackRig(t, func() (Child, error) { return Child{}, errors.New("no binary") })
 			r.write("g.jsonl", "{\"g\":1}\n")
@@ -577,17 +618,17 @@ func TestLookback(t *testing.T) {
 				t.Errorf("handed over %v, progress %+v; want the new root's new line, and no history for it", got, r.tl.Progress())
 			}
 		}},
-		{"after the last failure, a file read to its history's end without its end isn't left to lookback once it is replaced", func(t *testing.T) {
+		{"after the last failure, a file read to its history's end without its end isn't left to lookback once it is cut", func(t *testing.T) {
 			calls := 0
 			r := lookbackRig(t, func() (Child, error) {
 				calls++
 				if calls > 1 {
 					return Child{}, errors.New("no binary")
 				}
-				pc := &pipeChild{trim: upper, cut: 1} // a's line, and then it crashes
+				pc := &pipeChild{trim: upper, cut: 2} // a's lines, and then it crashes
 				return pc.start()
 			})
-			r.write("a.jsonl", "{\"a\":1}\n")
+			r.write("a.jsonl", "{\"a\":1}\n{\"a\":2}\n")
 			r.write("b.jsonl", "{\"b\":1}\n")
 			earlier := r.now.Add(-time.Hour)
 			if err := os.Chtimes(r.path("b.jsonl"), earlier, earlier); err != nil {
@@ -600,13 +641,12 @@ func TestLookback(t *testing.T) {
 				r.step(lookbackPause<<i, false)
 				r.settle()
 			}
-			if got := r.texts(0); calls != maxLookbackTries || !slices.Equal(got, []string{`{"A":1}`}) {
+			if got := r.texts(0); calls != maxLookbackTries || !slices.Equal(got, []string{`{"A":1}`, `{"A":2}`}) {
 				t.Fatalf("%d children, then handed over %v", calls, got)
 			}
-			// The file is replaced by a copy with a line before what was read,
-			// and read from its start, the lines up to what was read as
-			// replays; the agent has its first line wait, so the file is read
-			// again after a Poke.
+			// The file is cut to its first line, which keeps its place in
+			// the history, and read from its start; the agent has the line
+			// wait, so the file is read again after a Poke.
 			waited := false
 			r.take = func(Line) bool {
 				if !waited {
@@ -615,15 +655,14 @@ func TestLookback(t *testing.T) {
 				}
 				return true
 			}
-			r.replace("a.jsonl", "{\"x\":0}\n{\"a\":1}\n{\"a\":2}\n")
+			if err := os.Truncate(r.path("a.jsonl"), 8); err != nil {
+				t.Fatal(err)
+			}
 			r.step(HotPoll, false)
 			r.tl.Poke()
 			r.step(time.Second, false)
-			if got := r.texts(1); !waited || !slices.Equal(got, []string{`{"x":0}`, `{"a":1}`, `{"a":2}`}) {
-				t.Errorf("after the replace, handed over %v, want the file read live", got)
-			}
-			if got := r.replays(1); !slices.Equal(got, []bool{true, true, false}) {
-				t.Errorf("replays %v", got)
+			if got := r.texts(2); !waited || !slices.Equal(got, []string{`{"a":1}`}) {
+				t.Errorf("after the cut, handed over %v, want the file read live", got)
 			}
 		}},
 		{"a child isn't tried again before its pause", func(t *testing.T) {

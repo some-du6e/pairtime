@@ -540,7 +540,9 @@ func TestLastLine(t *testing.T) {
 		{"a last line longer than the read buffer is read back whole", "{\"a\":1}\n" + strings.Repeat("y", 3*readBuffer) + "\n", 8 + 3*readBuffer + 1, strings.Repeat("y", 3*readBuffer)},
 		{"a line being written that is longer than MaxLine is passed over", "{\"a\":1}\n" + strings.Repeat("z", MaxLine+5), 8, `{"a":1}`},
 		{"a last line longer than MaxLine has its end and no hash", "{\"a\":1}\n" + strings.Repeat("y", MaxLine+5) + "\n", 8 + MaxLine + 6, ""},
+		{"a last line of MaxLine bytes and a CRLF, which readLine reads whole, has its hash", "{\"a\":1}\n" + strings.Repeat("y", MaxLine) + "\r\n", 8 + MaxLine + 2, strings.Repeat("y", MaxLine)},
 		{"blank lines after the last line are no lines, so the file ends at that line", "{\"a\":1}\n\n \r\n", 8, `{"a":1}`},
+		{"blank lines past the read buffer are passed over too", "{\"a\":1}\n" + strings.Repeat("\n", 2*readBuffer+5) + strings.Repeat(" \r\n", readBuffer), 8, `{"a":1}`},
 		{"a file of blank lines has none", "\n\n", 0, ""},
 	}
 	for _, tc := range cases {
