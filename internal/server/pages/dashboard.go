@@ -198,11 +198,15 @@ type weekPart struct {
 	You string
 	// AgentLine and Why say what todayPart's do, for the last 7 days.
 	AgentLine, Why string
-	Ticks          []tick
-	Columns        []column
-	Legend         []legendItem
-	HasPending     bool
-	Table          weekTable
+	// Chart says the week has some of your time for the chart to draw.
+	// Without any, the page leaves out the chart and its table, which
+	// would hold nothing but zeros.
+	Chart      bool
+	Ticks      []tick
+	Columns    []column
+	Legend     []legendItem
+	HasPending bool
+	Table      weekTable
 }
 
 // tick is a label on the week chart's axis: At is its class, at25 to
@@ -246,14 +250,20 @@ type weekRow struct {
 }
 
 // projectRow is a row of the projects table. Title is the project's full
-// key when the page calls it by its short code, or "".
+// key when the page calls it by its short code, or "". WeekNone and
+// MonthNone say there is none of your time in the window, which the
+// table prints quietly instead of as a bold 0m.
 type projectRow struct {
 	Color, Name, Title    string
 	Week, Month           string
+	WeekNone, MonthNone   bool
 	WeekAgent, MonthAgent string
 }
 
 type levelsPart struct {
+	// None says the window has none of your time, so there is nothing to
+	// split and the page says so instead of listing every level at 0%.
+	None bool
 	// Blocks are the segmented bar's parts, the levels with time.
 	Blocks []levelBlock
 	// Label is the bar's accessible name.
@@ -419,12 +429,14 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 		p.Projects = append(p.Projects, projectRow{
 			Color: color[pt.Project], Name: names[pt.Project], Title: titles[pt.Project],
 			Week: duration(w.You.Total()), Month: duration(pt.You.Total()),
+			WeekNone: w.You.Total() == 0, MonthNone: pt.You.Total() == 0,
 			WeekAgent: duration(w.Agent.Total()), MonthAgent: duration(pt.Agent.Total()),
 		})
 	}
 	p.AllProjects = projectRow{
 		Name: "All projects",
 		Week: duration(v.Week.You.Total()), Month: duration(v.Month.You.Total()),
+		WeekNone: v.Week.You.Total() == 0, MonthNone: v.Month.You.Total() == 0,
 		WeekAgent: duration(v.Week.Agent.Total()), MonthAgent: duration(v.Month.Agent.Total()),
 	}
 
@@ -537,7 +549,7 @@ func (c dayClock) atOnce(d dashboard.Day, isToday bool) bool {
 
 // newWeekPart lays out the week chart over days, the last 7.
 func newWeekPart(v dashboard.View, days []dashboard.Day, color, names, titles map[string]string) (weekPart, error) {
-	w := weekPart{You: duration(v.Week.You.Total())}
+	w := weekPart{You: duration(v.Week.You.Total()), Chart: v.Week.You.Total() > 0}
 	most := 0.0
 	for _, d := range days {
 		most = math.Max(most, d.You.Total())
@@ -634,7 +646,7 @@ func newWeekPart(v dashboard.View, days []dashboard.Day, color, names, titles ma
 
 // newLevelsPart lays out the split by evidence level of the window t.
 func newLevelsPart(t dashboard.Totals) levelsPart {
-	var l levelsPart
+	l := levelsPart{None: t.You.Total() == 0}
 	values := make([]float64, len(t.Levels))
 	for i, lt := range t.Levels {
 		values[i] = lt.Total()

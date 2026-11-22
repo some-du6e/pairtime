@@ -286,6 +286,61 @@ func TestZeroSentence(t *testing.T) {
 	}
 }
 
+func TestNoneOfYourTime(t *testing.T) {
+	tests := []struct {
+		name    string
+		v       func(*testing.T) dashboard.View
+		section string
+		want    []string
+		notWant []string
+	}{
+		{
+			name:    "a week with none of your time leaves out the chart and its table, which would hold only zeros",
+			v:       unattendedView,
+			section: "week",
+			notWant: []string{`<div class="chart"`, "The last 7 days as a table"},
+		},
+		{
+			name:    "a week with some of your time keeps them",
+			v:       ownerView,
+			section: "week",
+			want:    []string{`<div class="chart" aria-hidden="true">`, "<summary>The last 7 days as a table</summary>"},
+		},
+		{
+			name:    "the projects table says a window with none of your time quietly, not as a bold 0m",
+			v:       unattendedView,
+			section: "projects",
+			want: []string{
+				`<span class="key c1"></span>Project 889f4c</td><td><span class="none">0m</span> <span class="agent">Your agent 52h 5m</span></td><td><span class="none">0m</span> <span class="agent">Your agent 65h 5m</span></td></tr>`,
+				`<tr><th>All projects</th><td><span class="none">0m</span> <span class="agent">`,
+			},
+			notWant: []string{"<strong>0m</strong>"},
+		},
+		{
+			name:    "with none of your time in the week, the evidence levels say there's nothing to back up instead of listing each level at 0%",
+			v:       unattendedView,
+			section: "levels",
+			want:    []string{`<p class="note">There&#39;s none of your time in the last 7 days to back up yet.</p>`, `<a href="/docs/evidence">What A, B and C mean</a>`},
+			notWant: []string{`<ul class="levels">`, "0%"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := sectionOf(getOwner(t, signInOn("Robin"), tt.v(t)), tt.section)
+			for _, w := range tt.want {
+				if !strings.Contains(s, w) {
+					t.Errorf("section %s doesn't contain %q:\n%s", tt.section, w, s)
+				}
+			}
+			for _, w := range tt.notWant {
+				if strings.Contains(s, w) {
+					t.Errorf("section %s contains %q", tt.section, w)
+				}
+			}
+		})
+	}
+}
+
 func TestAgentLine(t *testing.T) {
 	twoAt := func(t *testing.T, asOf time.Time, tz string, each float64) dashboard.View {
 		return dayView(t, asOf, tz, "", timeRow{project: "p1", agent: true, s: each}, timeRow{project: "p2", agent: true, s: each})
