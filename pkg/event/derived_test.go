@@ -370,9 +370,16 @@ func TestMinuteBucketValidate(t *testing.T) {
 			m.Slots[1].Ev, m.Slots[1].Lbl = EvidenceC, []Label{LabelViaPlugin, LabelFocusUnknown}
 		}, ""},
 		{"focus_unknown before a side-door label is out of order", func(m *MinuteBucket) {
-			m.Slots[1].Lbl = []Label{LabelFocusUnknown, LabelViaTrack}
+			m.Slots[1].Ev, m.Slots[1].Lbl = EvidenceC, []Label{LabelFocusUnknown, LabelViaTrack}
 		}, "slots[1].lbl: must list each label once, in the order"},
-		{"a slot that mixes focus-unknown seconds with others keeps its level", func(m *MinuteBucket) {
+		{"a slot with focus-unknown credit is level C, its weakest second's, whatever else it holds (SM 2.5, DESIGN 6.4)", func(m *MinuteBucket) {
+			m.Slots[1].Lbl = []Label{LabelFocusUnknown}
+		}, `slots[1].ev: must be "C" in a slot labeled "focus_unknown"`},
+		{"a backfilled minute's focus-unknown slot is level C on both counts", func(m *MinuteBucket) {
+			m.Witness = Backfilled
+			for i := range m.Slots {
+				m.Slots[i].Ev = EvidenceC
+			}
 			m.Slots[1].Lbl = []Label{LabelFocusUnknown}
 		}, ""},
 	})
