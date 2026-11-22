@@ -576,6 +576,11 @@ func (l *logLine) user(e *entry, sid string) {
 		// and no hook sent (SM 2.2 rule 3).
 		return
 	}
+	if e.IsCompactSummary {
+		// The summary a compaction puts in place of the conversation,
+		// with the running turn's promptId, which no person sent.
+		return
+	}
 	text := m.Content.text()
 	switch {
 	case e.TurnOrigin != nil || e.PromptSource != nil:
@@ -593,7 +598,7 @@ func (l *logLine) user(e *entry, sid string) {
 			// The command's own output, which started no turn: /goal's
 			// output is the entry that starts its turn.
 			l.f.pend.command = nil
-		} else if strings.TrimSpace(text) != "" && !e.IsMeta && !strings.HasPrefix(text, "<local-command-") {
+		} else if strings.TrimSpace(text) != "" && !e.IsMeta && !e.IsVisibleInTranscriptOnly && !opensWith(text, notPrompts) {
 			// A prompt of a version that writes neither label, or of one
 			// that renamed them: it still counts, declaring nothing, and the
 			// failure says the format moved (SM Risks; HS 17.7).
@@ -602,6 +607,29 @@ func (l *logLine) user(e *entry, sid string) {
 		}
 	}
 }
+
+// notPrompts open the user entries without labels that Claude Code writes
+// for what no person sent the agent as a prompt: a local command's output,
+// bash mode's command and its output, a memory note, a teammate's message
+// and an MCP server's update.
+var notPrompts = []string{"<local-command-", "<bash-input", "<bash-stdout", "<bash-stderr", "<user-memory-input",
+	"<teammate-message", "<mcp-resource-update", "<mcp-polling-update"}
+
+// opensWith reports whether text, past its leading white space, opens with
+// one of marks.
+func opensWith(text string, marks []string) bool {
+	text = strings.TrimLeft(text, " \t\r\n")
+	for _, m := range marks {
+		if strings.HasPrefix(text, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// isTaskNotification reports whether text is the report Claude Code sends
+// the main agent when a background subagent finishes (SM 2.2 rule 3).
+func isTaskNotification(text string) bool { return opensWith(text, []string{taskNotification}) }
 
 // interruptTexts are the lines Claude Code writes as a user entry when the
 // person stops a running turn.
@@ -625,21 +653,31 @@ func (l *logLine) interrupt(e *entry, sid string) {
 // prompt reads an entry that starts a turn.
 func (l *logLine) prompt(e *entry, sid, text string, unlabeled bool) {
 	var src, origin string
-	if unlabeled && l.f.st.Queued > 0 {
+	if e.TurnOrigin != nil {
+		origin = *e.TurnOrigin
+		if !contains(turnOrigins, origin) {
+			l.perr.Problem("a turnOrigin no capture has shown")
+		}
+	}
+	declared := event.DeclaredNone
+	switch {
+	case origin == "scheduled":
+		// SM 2.2 rule 1: the session's scheduler fired it.
+		declared = event.DeclaredCron
+	case origin == "task_notification", isTaskNotification(text):
+		// SM 2.2 rule 3: a background subagent's report.
+		declared = event.DeclaredSubagent
+	}
+	if unlabeled && l.f.st.Queued > 0 && declared == event.DeclaredNone {
 		// The pickup of a message queued while the turn before ran, which
-		// its agent.queue already recorded.
+		// its agent.queue already recorded. A task notification is none:
+		// what was queued decides (E-cc-queued-turn).
 		src = "queued"
 	}
 	if e.PromptSource != nil {
 		src = *e.PromptSource
 		if !contains(promptSources, src) {
 			l.perr.Problem("a promptSource no capture has shown")
-		}
-	}
-	if e.TurnOrigin != nil {
-		origin = *e.TurnOrigin
-		if !contains(turnOrigins, origin) {
-			l.perr.Problem("a turnOrigin no capture has shown")
 		}
 	}
 	if e.PromptID == "" || sid == "" {
@@ -670,8 +708,11 @@ func (l *logLine) prompt(e *entry, sid, text string, unlabeled bool) {
 		f.st.Queued = max(f.st.Queued-1, 0)
 		return
 	}
-	// A prompt of its own ends the wait of any message queued before it.
-	f.st.Queued = 0
+	if declared == event.DeclaredNone {
+		// A prompt of its own that rules 1 to 3 leave unlabeled ends the
+		// wait of any message queued before it (E-cc-queued-turn).
+		f.st.Queued = 0
+	}
 	cmd := f.pend.command
 	f.pend.command = nil
 	switch {
@@ -695,16 +736,8 @@ func (l *logLine) prompt(e *entry, sid, text string, unlabeled bool) {
 		LenChars:       n,
 		TypedLenEst:    n,
 		SlashCommand:   slashCommand(text),
-		OriginDeclared: event.DeclaredNone,
+		OriginDeclared: declared,
 		LowEffort:      score.LowEffort(text),
-	}
-	switch {
-	case origin == "scheduled":
-		// SM 2.2 rule 1: the session's scheduler fired it.
-		p.OriginDeclared = event.DeclaredCron
-	case origin == "task_notification", strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), taskNotification):
-		// SM 2.2 rule 3: a background subagent's report.
-		p.OriginDeclared = event.DeclaredSubagent
 	}
 	l.add(l.key("prompt"), l.env(e.t, sid), p, []byte(text))
 }
@@ -863,7 +896,11 @@ func (l *logLine) queued(e *entry, sid string) {
 		// Taken up: its pickup is the next prompt entry.
 		return
 	case "remove":
-		l.f.st.Queued = max(l.f.st.Queued-1, 0)
+		// Out of the queue without a pickup: a message that made an
+		// agent.queue waits no longer. A task notification made none.
+		if !isTaskNotification(string(e.Content)) {
+			l.f.st.Queued = max(l.f.st.Queued-1, 0)
+		}
 		return
 	case "popAll":
 		// Back in the input box, to be sent again as a prompt of its own.
@@ -875,8 +912,7 @@ func (l *logLine) queued(e *entry, sid string) {
 	}
 	f := l.f
 	text := string(e.Content)
-	if sid == "" || e.t == 0 || !f.st.Running || f.st.Turn == "" ||
-		strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), taskNotification) {
+	if sid == "" || e.t == 0 || !f.st.Running || f.st.Turn == "" || isTaskNotification(text) {
 		return
 	}
 	l.add(l.key("queue"), l.env(e.t, sid), &event.AgentQueue{TurnKey: l.a.keys.Turn(sid, f.st.Turn),

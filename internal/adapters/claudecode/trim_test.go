@@ -21,9 +21,9 @@ import (
 // is the decoding of what it records, and nothing is lost by it. Beside
 // the capture's transcripts it reads one with the shapes the capture
 // lacks: a synchronous Agent result, an edit's malformed structuredPatch,
-// an attachment whose fields have other types, and two entries with
-// neither label, a person's prompt and one marked isMeta, which only the
-// first of is a prompt.
+// an attachment whose fields have other types, and entries with neither
+// label: a person's prompt, which alone of them is a prompt, one marked
+// isMeta, bash mode's command and a compaction's summary.
 func TestTrimLog(t *testing.T) {
 	files := readTranscripts(t)
 	files["p/s.jsonl"] = logLines(
@@ -35,6 +35,10 @@ func TestTrimLog(t *testing.T) {
 		entryJSON("attachment", map[string]any{"attachment": map[string]any{"type": "goal_status", "met": "yes", "sentinel": 1}}),
 		userText("q2", "Expanded instructions for the command.", map[string]any{"isMeta": true}),
 		userText("q3", "and then the tests, please", nil),
+		userText("q4", "<bash-input>git status</bash-input>", nil),
+		userText("q4", "This session is being continued from a previous conversation.",
+			map[string]any{"isCompactSummary": true, "isVisibleInTranscriptOnly": true}),
+		userText("q5", "This line is shown in the transcript only.", map[string]any{"isVisibleInTranscriptOnly": true}),
 	)
 	whole, trimmed := newTest(), newTest()
 	var wholeBytes, trimmedBytes int

@@ -44,8 +44,12 @@ type entry struct {
 	IsSidechain    bool     `json:"isSidechain"`
 	Message        *message `json:"message"`
 	// IsMeta marks a user entry Claude Code wrote for the model, such as a
-	// slash command's expanded instructions, which no person sent.
-	IsMeta bool `json:"isMeta"`
+	// slash command's expanded instructions, which no person sent, and
+	// IsCompactSummary the summary a compaction puts in place of the
+	// conversation, which IsVisibleInTranscriptOnly marks too.
+	IsMeta                    bool `json:"isMeta"`
+	IsCompactSummary          bool `json:"isCompactSummary"`
+	IsVisibleInTranscriptOnly bool `json:"isVisibleInTranscriptOnly"`
 	// ToolUseResult is a tool result entry's structured result, or the
 	// text Claude Code put in its place, such as "User rejected tool use".
 	ToolUseResult  toolResult `json:"toolUseResult"`
@@ -427,26 +431,28 @@ func (*Adapter) TrimLog(line []byte) ([]byte, error) {
 
 // trimmedEntry is an entry as TrimLog writes it, under entry's names.
 type trimmedEntry struct {
-	Type               string             `json:"type"`
-	Subtype            string             `json:"subtype,omitempty"`
-	SessionID          string             `json:"sessionId,omitempty"`
-	PromptID           string             `json:"promptId,omitempty"`
-	Timestamp          string             `json:"timestamp,omitempty"`
-	Version            string             `json:"version,omitempty"`
-	CWD                string             `json:"cwd,omitempty"`
-	Entrypoint         *string            `json:"entrypoint,omitempty"`
-	PromptSource       *string            `json:"promptSource,omitempty"`
-	TurnOrigin         *string            `json:"turnOrigin,omitempty"`
-	PermissionMode     string             `json:"permissionMode,omitempty"`
-	IsSidechain        bool               `json:"isSidechain,omitempty"`
-	Message            *trimmedMessage    `json:"message,omitempty"`
-	IsMeta             bool               `json:"isMeta,omitempty"`
-	ToolUseResult      any                `json:"toolUseResult,omitempty"`
-	ToolDenialKind     string             `json:"toolDenialKind,omitempty"`
-	PermissionDecision *trimmedPermission `json:"permissionDecision,omitempty"`
-	Operation          string             `json:"operation,omitempty"`
-	Content            string             `json:"content,omitempty"`
-	Attachment         *attachment        `json:"attachment,omitempty"`
+	Type                      string             `json:"type"`
+	Subtype                   string             `json:"subtype,omitempty"`
+	SessionID                 string             `json:"sessionId,omitempty"`
+	PromptID                  string             `json:"promptId,omitempty"`
+	Timestamp                 string             `json:"timestamp,omitempty"`
+	Version                   string             `json:"version,omitempty"`
+	CWD                       string             `json:"cwd,omitempty"`
+	Entrypoint                *string            `json:"entrypoint,omitempty"`
+	PromptSource              *string            `json:"promptSource,omitempty"`
+	TurnOrigin                *string            `json:"turnOrigin,omitempty"`
+	PermissionMode            string             `json:"permissionMode,omitempty"`
+	IsSidechain               bool               `json:"isSidechain,omitempty"`
+	Message                   *trimmedMessage    `json:"message,omitempty"`
+	IsMeta                    bool               `json:"isMeta,omitempty"`
+	IsCompactSummary          bool               `json:"isCompactSummary,omitempty"`
+	IsVisibleInTranscriptOnly bool               `json:"isVisibleInTranscriptOnly,omitempty"`
+	ToolUseResult             any                `json:"toolUseResult,omitempty"`
+	ToolDenialKind            string             `json:"toolDenialKind,omitempty"`
+	PermissionDecision        *trimmedPermission `json:"permissionDecision,omitempty"`
+	Operation                 string             `json:"operation,omitempty"`
+	Content                   string             `json:"content,omitempty"`
+	Attachment                *attachment        `json:"attachment,omitempty"`
 }
 
 type trimmedPermission struct {
@@ -489,7 +495,8 @@ func trimEntry(e *entry) trimmedEntry {
 	t := trimmedEntry{Type: e.Type, Subtype: e.Subtype, SessionID: e.SessionID, PromptID: e.PromptID,
 		Timestamp: e.Timestamp, Version: e.Version, CWD: e.CWD, Entrypoint: e.Entrypoint,
 		PromptSource: e.PromptSource, TurnOrigin: e.TurnOrigin, PermissionMode: e.PermissionMode,
-		IsSidechain: e.IsSidechain, IsMeta: e.IsMeta, ToolDenialKind: e.ToolDenialKind, Operation: e.Operation,
+		IsSidechain: e.IsSidechain, IsMeta: e.IsMeta, IsCompactSummary: e.IsCompactSummary,
+		IsVisibleInTranscriptOnly: e.IsVisibleInTranscriptOnly, ToolDenialKind: e.ToolDenialKind, Operation: e.Operation,
 		Attachment: e.Attachment}
 	if e.Type == "queue-operation" {
 		// The message it queues. Other entries' content, such as a system
