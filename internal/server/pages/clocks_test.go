@@ -357,16 +357,16 @@ func TestAgentLine(t *testing.T) {
 			week:  "Your agent worked on its own for 21h 2m.",
 		},
 		{
-			name:  "past the hours the day has had, it reads as a sum over agents that ran at the same time",
+			name:  "past the hours the day has had, it reads as every agent's time added up",
 			v:     unattendedView,
-			today: "Your agents worked on their own for 31h 5m in all, some of them at the same time.",
+			today: "Your agents worked on their own for 31h 5m, adding up every agent's time.",
 		},
 		{
 			name: "it goes by the hours so far today, not a whole day: 10h by 06:00 took agents working at once",
 			v: func(t *testing.T) dashboard.View {
 				return twoAt(t, time.Date(2026, 11, 20, 6, 0, 0, 0, time.UTC), "UTC", 5*3600)
 			},
-			today: "Your agents worked on their own for 10h in all, some of them at the same time.",
+			today: "Your agents worked on their own for 10h, adding up every agent's time.",
 		},
 		{
 			name: "the same 10h by 23:00 reads as one agent's",
@@ -376,11 +376,18 @@ func TestAgentLine(t *testing.T) {
 			today: "Your agent worked on its own for 10h.",
 		},
 		{
+			name: "a device clock a few minutes fast doesn't make one agent read as several: 8m by 00:03 is within ingest's 5 minutes of skew",
+			v: func(t *testing.T) dashboard.View {
+				return dayView(t, time.Date(2026, 11, 20, 0, 3, 0, 0, time.UTC), "UTC", "", timeRow{project: "p1", agent: true, s: 8 * 60})
+			},
+			today: "Your agent worked on its own for 8m.",
+		},
+		{
 			name: "the hours so far count from midnight in the account's zone: 11h by 10:00 in New York, though 15:00 in UTC",
 			v: func(t *testing.T) dashboard.View {
 				return twoAt(t, time.Date(2026, 11, 20, 15, 0, 0, 0, time.UTC), "America/New_York", 5.5*3600)
 			},
-			today: "Your agents worked on their own for 11h in all, some of them at the same time.",
+			today: "Your agents worked on their own for 11h, adding up every agent's time.",
 		},
 		{
 			name: "the week's line is a sum once one of its days had more agent time than hours, though today's isn't",
@@ -390,7 +397,15 @@ func TestAgentLine(t *testing.T) {
 					timeRow{project: "p1", agent: true, s: 3600})
 			},
 			today: "Your agent worked on its own for 1h.",
-			week:  "Your agents worked on their own for 31h in all, some of them at the same time.",
+			week:  "Your agents worked on their own for 31h, adding up every agent's time.",
+		},
+		{
+			name: "a day whose midnight the clocks skip is 23 hours long, so 23h 30m of agent time on it passes it: Santiago's 2027-09-05",
+			v: func(t *testing.T) dashboard.View {
+				return dayView(t, time.Date(2027, 9, 6, 12, 0, 0, 0, time.UTC), "America/Santiago", "",
+					timeRow{project: "p1", ago: 1, agent: true, s: 11.75 * 3600}, timeRow{project: "p2", ago: 1, agent: true, s: 11.75 * 3600})
+			},
+			week: "Your agents worked on their own for 23h 30m, adding up every agent's time.",
 		},
 		{
 			name: "a named agent reads as several of it",
@@ -398,7 +413,7 @@ func TestAgentLine(t *testing.T) {
 				return dayView(t, time.Date(2026, 11, 20, 6, 0, 0, 0, time.UTC), "UTC", "Claude Code",
 					timeRow{project: "p1", agent: true, s: 4 * 3600}, timeRow{project: "p2", agent: true, s: 4 * 3600})
 			},
-			today: "Claude Code agents worked on their own for 8h in all, some of them at the same time.",
+			today: "Claude Code agents worked on their own for 8h, adding up every agent's time.",
 		},
 	}
 	for _, tt := range tests {
@@ -449,6 +464,61 @@ func TestClockColors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestShownClockColors(t *testing.T) {
+	// The owner typed in a1 to a3 two days ago, and today agents worked in
+	// six other projects, all of whose clocks show at once.
+	rows := []timeRow{{project: "a1", ago: 2, s: 600}, {project: "a2", ago: 2, s: 600}, {project: "a3", ago: 2, s: 600}}
+	page := getOwner(t, signInOn("Robin"), dayView(t, time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC), "UTC", "", append(rows, agentOnly(6)...)...))
+	var clocks []string
+	for _, m := range keyClass.FindAllStringSubmatch(sectionOf(page, "today"), -1) {
+		clocks = append(clocks, m[1])
+	}
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{name: "every clock shown at once has a color of its own, though the week's own projects came first", ok: slices.Equal(clocks, []string{"c3", "c4", "c5", "c6", "c7", "c8"})},
+		{name: "the week's projects keep the first colors, in the chart's order", ok: strings.Contains(sectionOf(page, "week"), `<li><span class="key c1"></span>a1</li>`+"\n"+`<li><span class="key c2"></span>a2</li>`)},
+		{name: "the week's project that no color is left for folds into the chart's Other", ok: strings.Contains(sectionOf(page, "week"), `<li><span class="key co"></span>Other</li>`)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.ok {
+				t.Errorf("today's clocks are %v; the page:\n%s", clocks, page)
+			}
+		})
+	}
+}
+
+func TestShownWeekClockColors(t *testing.T) {
+	// The owner typed in b1 to b6 earlier this week and in b7 today, and
+	// agents worked today in b7 and five projects of their own: b7 is a
+	// shown clock that the week's order reaches last.
+	var rows []timeRow
+	for i := 1; i <= 6; i++ {
+		rows = append(rows, timeRow{project: "b" + strconv.Itoa(i), ago: 3, s: float64(1200 - i)})
+	}
+	rows = append(rows, timeRow{project: "b7", s: 60}, timeRow{project: "b7", agent: true, s: 20000})
+	page := getOwner(t, signInOn("Robin"), dayView(t, time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC), "UTC", "", append(rows, agentOnly(5)...)...))
+	var clocks []string
+	for _, m := range keyClass.FindAllStringSubmatch(sectionOf(page, "today"), -1) {
+		clocks = append(clocks, m[1])
+	}
+	t.Run("a shown clock the week's order reaches last still leaves a color for every other shown clock", func(t *testing.T) {
+		seen := make(map[string]bool)
+		for _, c := range clocks {
+			if c == "co" || seen[c] {
+				t.Errorf("today's clocks are %v, want six colors of their own", clocks)
+				break
+			}
+			seen[c] = true
+		}
+		if len(clocks) != 6 {
+			t.Errorf("today has %d clocks, want 6", len(clocks))
+		}
+	})
 }
 
 func TestShortCodeTitles(t *testing.T) {

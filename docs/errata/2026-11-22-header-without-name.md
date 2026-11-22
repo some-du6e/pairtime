@@ -6,7 +6,7 @@ Date 2026-11-22. Raised on 2026-11-22, when the live server's owner shared a scr
 
 - The screenshot's header said "Signed in as" and then the account's Slack ID. The session was opened before pairtimed asked Hack Club Auth for the `profile` scope, so it holds no display name, and D-display-name's fallback showed the Slack ID in its place.
 - D-display-name, "What changes": "The header says "Signed in as <name>", and without a name it falls back to the Slack ID, or the HCA subject, as before."
-- The header is on every page a signed-in browser opens, so the id was in every screenshot of any of them. It reads like a debug page, and it ties a screenshot to one Slack account.
+- The header's sign-in area is on `/`, `/dashboard`, the device pages and `/account/devices`, so the id was in every screenshot of them. It reads like a debug page, and it ties a screenshot to one Slack account.
 - The pages that ask whether an account is yours need the id, because anyone can pick a name and nobody can pick a Slack ID: `/device`, its confirmation, relink and taken pages, and `/account/devices`.
 
 ## Expected

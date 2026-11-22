@@ -10,10 +10,12 @@
   --note-line: #c99400;
   --code-bg: #f1f1f4;
   /* Charts. --c1 to --c8 are the eight slots of a categorical palette
-     that passes the color-vision checks for neighbors in a stack (CVD dE
-     >= 8, normal-vision dE >= 15) on this surface, in this order; --co is
-     the Other gray. --c3 to --c5 are under 3:1 on white, so every swatch
-     has its project's name beside it and the week chart its table.
+     whose neighbors in this order pass the color-vision checks (CVD dE
+     >= 8, normal-vision dE >= 15) on this surface; slots further apart can
+     look alike to a color-blind reader, so color is never all a project
+     has. --co is the Other gray. --c3 to --c5 are under 3:1 on white, so
+     every swatch has its project's name beside it and the week chart its
+     table.
      --lv-a to --lv-c are a one-hue ordinal ramp for evidence levels A to
      C, with the text color that reads inside each. */
   --c1: #2a78d6;
