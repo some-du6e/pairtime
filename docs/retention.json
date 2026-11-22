@@ -205,6 +205,18 @@
       "tables": ["commit_records"]
     },
     {
+      "id": "server.project_names",
+      "where": "server",
+      "data": "The names of your projects you chose to show on your own dashboard: for each one, the label you approved on your computer, the device and project key it names, and when the server got it. Only your own dashboard shows them",
+      "kept": "Until you turn the name off on your computer or hide it on your dashboard. A removed device's names go {days} after you remove it, unless you link it again first, and all of them go when your account is deleted",
+      "days": 90,
+      "jobs": [{
+        "table": "project_names",
+        "key": ["device_id", "project_key"],
+        "time_column": "device_removed_at_ms"
+      }]
+    },
+    {
       "id": "server.program_links",
       "where": "server",
       "data": "Keyed hashes of the Hackatime project names you link to a program",
