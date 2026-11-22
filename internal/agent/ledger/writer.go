@@ -750,17 +750,19 @@ func (w *Writer) NoteSeen(s Seen) {
 // whether it asks for a seal. A stretch end the writer has already, as
 // the newest seal frame recorded it, arms no mark: the agent sees the same
 // end at every start, and a mark due then would hold the first batch for
-// what is still on its way after any restart. Nor does one an earlier run
-// saw before a batch it sealed, as when an older version's seal frames
-// recorded no moment: that run marked the batch after the end, or sealed
-// the ones since local-only, after which each seal asks Waiting while the
-// newest is (lastLocal), and the server may hold those after, so a mark
-// due now would only hold back credit. One the agent saw in this run is
+// what is still on its way after any restart. Nor, when the seal frames
+// recorded no moment, as an older version's didn't, does one an earlier
+// run saw before the newest batch was sealed: that run marked the batch
+// after the end, or sealed the ones since local-only, after which each
+// seal asks Waiting while the newest is (lastLocal), and the server may
+// hold those after, so a mark due now would only hold back credit. Where
+// the frames record a moment, an end later than it is one the writer never
+// had, so no batch was sealed after it. One the agent saw in this run is
 // newer by this run's clock, and one of the boot the moment's OS reading
-// is of by that clock, whatever the wall clock says. A record the
-// writer took before it heard of the end, as one the agent took in before
-// it found a pairtime login it hadn't seen, was made in the stretch if it
-// was made before the end, so its batch is local-only, as Write would have
+// is of by that clock, whatever the wall clock says. A record the writer
+// took before it heard of the end, as one the agent took in before it
+// found a pairtime login it hadn't seen, was made in the stretch if it was
+// made before the end, so its batch is local-only, as Write would have
 // sealed it. w.mu is held.
 func (w *Writer) seenLocked(s Seen, at moment) bool {
 	// A seal reading config.toml meanwhile reads it again, as after a note.
@@ -773,7 +775,7 @@ func (w *Writer) seenLocked(s Seen, at moment) bool {
 		}
 		newer := (ended.run > w.until.run || ended.wall > w.until.wall ||
 			ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os) &&
-			!(s.Earlier && w.sealed > ended.wall)
+			!(s.Earlier && w.until.wall == 0 && w.until.os == 0 && w.sealed > ended.wall)
 		was := w.until
 		if w.local {
 			// A stretch the writer took as going on, which the agent saw end.
