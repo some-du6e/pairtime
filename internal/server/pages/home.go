@@ -35,10 +35,10 @@ type SignIn struct {
 	// LoginPath is where the sign-in button goes, and LogoutPath is where
 	// the sign-out form posts.
 	LoginPath, LogoutPath string
-	// Visitor returns the name the header shows for the person a request
-	// is signed in as, and whether it is signed in at all: the display
-	// name of their sign-in, or their account's handle without one. Nil
-	// means no request is.
+	// Visitor returns the display name of the sign-in a request is signed
+	// in with, or "" when it brought none, and whether the request is
+	// signed in at all. Nil means no request is. The header shows the name
+	// and never an id in its place (docs/errata/2026-11-22-header-without-name.md).
 	Visitor func(r *http.Request) (name string, ok bool)
 }
 
@@ -67,9 +67,11 @@ type homeData struct {
 // header. A page without one shows none.
 type account struct {
 	SignedIn bool
-	// Handle names the signed-in person: the display name of their
-	// sign-in, or their account's handle without one.
-	Handle string
+	// Name is the display name of the signed-in person's sign-in, or ""
+	// without one, when the header shows no name: an id there, such as a
+	// Slack ID, would read like a debug page and travels with every
+	// screenshot of it.
+	Name string
 	// Login and Logout are the sign-in button's link and the sign-out
 	// form's action.
 	Login, Logout string
@@ -93,7 +95,8 @@ func (s *Site) renderHome(o Options) error {
 	}{
 		{body: s.homeNoSignIn},
 		{body: s.homeSignIn, acct: &account{Login: "/sign-in", Logout: "/sign-out"}},
-		{body: s.homeSignIn, acct: &account{SignedIn: true, Handle: "U0EXAMPLE", Login: "/sign-in", Logout: "/sign-out"}},
+		{body: s.homeSignIn, acct: &account{SignedIn: true, Name: "Example", Login: "/sign-in", Logout: "/sign-out"}},
+		{body: s.homeSignIn, acct: &account{SignedIn: true, Login: "/sign-in", Logout: "/sign-out"}},
 	}
 	for _, st := range states {
 		if err := s.layout.wrap(io.Discard, homeLayout(st.body, st.acct)); err != nil {
@@ -127,7 +130,7 @@ func (s *Site) RegisterHome(mux *http.ServeMux, in SignIn) {
 		if in.Enabled {
 			a = &account{Login: in.LoginPath, Logout: in.LogoutPath}
 			if in.Visitor != nil {
-				a.Handle, a.SignedIn = in.Visitor(r)
+				a.Name, a.SignedIn = in.Visitor(r)
 			}
 		}
 		var page bytes.Buffer

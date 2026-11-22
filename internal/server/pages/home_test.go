@@ -23,6 +23,14 @@ func signInOn(handle string) SignIn {
 	}
 }
 
+// signedInNoName is sign-in with every request signed in, with a sign-in
+// that brought no display name.
+func signedInNoName() SignIn {
+	in := signInOn("")
+	in.Visitor = func(*http.Request) (string, bool) { return "", true }
+	return in
+}
+
 // getHome serves GET / from a Site built from o with sign-in wired as in,
 // and returns the response and its body.
 func getHome(t *testing.T, o Options, in SignIn) (*http.Response, string) {
@@ -117,13 +125,19 @@ func TestHome(t *testing.T) {
 			notWant: []string{"U0NOTSHOWN", "Signed in", "<form"},
 		},
 		{
-			name:    "a signed-in visitor sees who they're signed in as and a sign-out button that posts to /auth/logout",
-			signIn:  signInOn("U0FAKEVERIFIED"),
-			want:    []string{"<p>Signed in as <strong>U0FAKEVERIFIED</strong></p>", signOutForm},
+			name:    "a signed-in visitor sees the display name they're signed in as and a sign-out button that posts to /auth/logout",
+			signIn:  signInOn("Robin"),
+			want:    []string{"<p>Signed in as <strong>Robin</strong></p>", signOutForm},
 			notWant: []string{signInButton},
 		},
 		{
-			name:    "a handle is shown as text, never as markup",
+			name:    "a visitor whose sign-in brought no display name sees no name and no id in its place, only the sign-out button",
+			signIn:  signedInNoName(),
+			want:    []string{`<a href="/dashboard">Your dashboard</a>` + "\n" + signOutForm},
+			notWant: []string{"Signed in", signInButton},
+		},
+		{
+			name:    "a display name is shown as text, never as markup",
 			signIn:  signInOn(`<script>alert(1)</script>`),
 			want:    []string{"Signed in as <strong>&lt;script&gt;alert(1)&lt;/script&gt;</strong>"},
 			notWant: []string{"<script>"},
