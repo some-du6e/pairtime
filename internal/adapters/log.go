@@ -13,8 +13,9 @@ package adapters
 // they had read before come again as replays, from which the adapter
 // rebuilds what it held in memory and makes no record.
 type LogLine struct {
-	// File names the file across the agent's runs: its root's name and its
-	// path under the root. Like Path, it stays on the device.
+	// File names the file across the agent's runs: the tailers keep its
+	// cursor under it, and the adapter its memory of the file. It is the
+	// file's path on this machine, and like Path it stays on the device.
 	File string
 	// Path is the file's path on this machine.
 	Path string
@@ -43,10 +44,6 @@ type LogLine struct {
 
 // LogRoot is a folder that holds a harness's log files.
 type LogRoot struct {
-	// Name names the root across the agent's runs, such as
-	// "claude_code/projects". It is the first part of each file's
-	// LogLine.File.
-	Name string
 	// Dir is the folder, an absolute path on this machine.
 	Dir string
 	// Depth is how many folders deep under Dir the log files lie, at

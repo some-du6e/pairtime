@@ -1033,3 +1033,123 @@ func TestQueuedPickupLearned(t *testing.T) {
 		})
 	}
 }
+
+// toolUse writes an assistant entry that asks for tool name with input.
+func toolUse(id, name string, input any, ts string) string {
+	return entryJSON("assistant", map[string]any{"timestamp": ts, "message": map[string]any{"id": "m_" + id, "role": "assistant",
+		"stop_reason": "tool_use", "content": []any{map[string]any{"type": "tool_use", "id": id, "name": name, "input": input}}}})
+}
+
+// toolDone writes the user entry that holds the result of tool use id,
+// with result as its toolUseResult.
+func toolDone(id string, result any, ts string) string {
+	return entryJSON("user", map[string]any{"timestamp": ts, "promptId": "q1", "toolUseResult": result,
+		"message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": "done"}}}})
+}
+
+// TestTranscriptToolShapes checks that a field a tool gives a type of its
+// own costs the reader that field, never the entry: tools put fields of
+// other types under the names the reader reads (objectFields).
+func TestTranscriptToolShapes(t *testing.T) {
+	prompt := userText("q1", "run it", map[string]any{"turnOrigin": "human", "promptSource": "typed"})
+	cases := []struct {
+		name  string
+		lines []string
+		// class is the class of the one tool call, "" for none.
+		class event.ToolClass
+		fails bool
+	}{
+		{"a synchronous Agent call's result, whose content is a list, is a subagent call and no failure",
+			[]string{toolUse("a1", "Agent", map[string]any{"prompt": "look", "subagent_type": "Explore"}, "2026-11-20T17:00:01.000Z"),
+				toolDone("a1", map[string]any{"status": "completed", "agentId": "x", "content": []any{map[string]any{"type": "text", "text": "found"}},
+					"totalDurationMs": 4000}, "2026-11-20T17:00:05.000Z")},
+			event.ToolSubagent, false},
+		{"an MCP tool's input whose command isn't a string is no failure",
+			[]string{toolUse("m1", "mcp__db__query", map[string]any{"command": map[string]any{"sql": "select 1"}}, "2026-11-20T17:00:01.000Z"),
+				toolDone("m1", map[string]any{"rows": 1}, "2026-11-20T17:00:02.000Z")},
+			event.ToolOther, false},
+		{"an edit's structuredPatch that isn't a list of hunks is a failure, and the call still counts",
+			[]string{toolUse("e1", "Edit", map[string]any{"file_path": "/home/capture/p/a.go"}, "2026-11-20T17:00:01.000Z"),
+				toolDone("e1", map[string]any{"filePath": "/home/capture/p/a.go", "structuredPatch": "none"}, "2026-11-20T17:00:02.000Z")},
+			event.ToolEdit, true},
+		{"an attachment whose met isn't a boolean is no failure",
+			[]string{entryJSON("attachment", map[string]any{"attachment": map[string]any{"type": "goal_status", "met": "yes"}})},
+			"", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTest()
+			var recs []adapters.Record
+			var errs []error
+			for _, l := range logLines(append([]string{prompt}, tc.lines...)...) {
+				r, err := a.Parse(logRaw(l, false, false))
+				recs = append(recs, r...)
+				if err != nil {
+					errs = append(errs, err)
+				}
+			}
+			tools := ofKind[*event.AgentTool](recs)
+			switch {
+			case tc.class == "" && len(tools) != 0:
+				t.Errorf("tools %v, want none", tools)
+			case tc.class != "" && (len(tools) != 1 || tools[0].Event.Data.(*event.AgentTool).ToolClass != tc.class):
+				t.Errorf("tools %v, want one of class %s", tools, tc.class)
+			}
+			if (len(errs) > 0) != tc.fails {
+				t.Errorf("failures %v, want some: %v", errs, tc.fails)
+			}
+		})
+	}
+}
+
+// TestTranscriptLetsGo checks that once a file is idle the reader holds
+// back nothing that no later line will resolve, so the file's memory
+// moves on (LogResume) and the tailers stop sending idle markers: a slash
+// command that started no turn, and a tool use whose result never came
+// within maxToolWait.
+func TestTranscriptLetsGo(t *testing.T) {
+	prompt := userText("q1", "run it", map[string]any{"turnOrigin": "human", "promptSource": "typed"})
+	exit := []string{
+		userText("q9", "<command-name>/exit</command-name>\n<command-message>exit</command-message>\n<command-args></command-args>", nil),
+		userText("q9", "<local-command-stdout>Catch you later!</local-command-stdout>", nil),
+	}
+	use := toolUse("b1", "Bash", map[string]any{"command": "sleep 100000"}, "2026-11-20T17:00:01.000Z")
+	at := func(s string) int64 { ts, _ := time.Parse(time.RFC3339Nano, s); return ts.UnixMilli() }
+	cases := []struct {
+		name  string
+		lines []string
+		// at is when the agent reads the lines, in Unix ms, past the
+		// session.start's grace, and idle whether the idle marker follows.
+		at   int64
+		idle bool
+		free bool
+	}{
+		{"/exit's output lets its markup go at once", exit, at("2026-11-20T17:02:00.000Z"), false, true},
+		{"a file that ends in a command's markup holds nothing back once idle", exit[:1], at("2026-11-20T17:02:00.000Z"), true, true},
+		{"a tool use whose result hasn't come holds the file back within maxToolWait", []string{prompt, use},
+			at("2026-11-20T17:00:01.000Z") + maxToolWait - 1, true, false},
+		{"a tool use whose result hasn't come in maxToolWait is let go once idle", []string{prompt, use},
+			at("2026-11-20T17:00:01.000Z") + maxToolWait, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTest()
+			ls := logLines(tc.lines...)
+			for _, l := range ls {
+				if _, err := a.Parse(logRawAt(l, false, false, tc.at)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			last := ls[len(ls)-1]
+			if tc.idle {
+				if _, err := a.Parse(logRawAt(last, true, false, tc.at)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			resume, _ := a.LogResume(last.file)
+			if free := resume == last.end; free != tc.free {
+				t.Errorf("the memory starts at %d of %d, want it let go: %v", resume, last.end, tc.free)
+			}
+		})
+	}
+}

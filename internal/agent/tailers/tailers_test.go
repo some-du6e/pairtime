@@ -66,7 +66,7 @@ func newRig(t *testing.T) *rig {
 // open makes a Tailer from what the store holds, as an agent's start does.
 func (r *rig) open() {
 	r.tl = New(Options{
-		Roots: []Root{{Harness: event.HarnessClaudeCode, LogRoot: adapters.LogRoot{Name: "test", Dir: r.dir, Depth: 2,
+		Roots: []Root{{Harness: event.HarnessClaudeCode, LogRoot: adapters.LogRoot{Dir: r.dir, Depth: 2,
 			Match: func(rel string) bool { return strings.Count(rel, "/") == 1 && strings.HasSuffix(rel, ".jsonl") }}}},
 		Store:    r.store,
 		Deliver:  r.deliver,
@@ -363,6 +363,56 @@ func TestTailer(t *testing.T) {
 				t.Errorf("replays %v", got)
 			}
 		}},
+		{"after a restart, lines the agent didn't take before it stopped are read with nothing written since", func(t *testing.T, r *rig) {
+			refused := true
+			r.take = func(l Line) bool { return !refused || string(l.Bytes) != `{"n":2}` }
+			r.step(0, false)
+			r.write("p.jsonl", "{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n")
+			r.step(HotPoll, true)
+			if _, err := r.tl.Put(); err != nil {
+				t.Fatal(err)
+			}
+			refused = false
+			r.open()
+			from := len(r.got)
+			r.step(time.Second, false)
+			if got := r.texts(from); !slices.Equal(got, []string{`{"n":2}`, `{"n":3}`}) {
+				t.Errorf("handed over %v", got)
+			}
+		}},
+		{"after a restart, an adapter that needs lines again gets them with nothing written since", func(t *testing.T, r *rig) {
+			r.resume = func(Line) int64 { return 0 }
+			r.step(0, false)
+			r.write("q.jsonl", "{\"n\":1}\n")
+			r.step(HotPoll, true)
+			if _, err := r.tl.Put(); err != nil {
+				t.Fatal(err)
+			}
+			r.open()
+			from := len(r.got)
+			r.step(time.Second, false)
+			if got := r.replays(from); len(got) == 0 || !got[0] {
+				t.Errorf("handed over %v, want the line again as a replay", r.texts(from))
+			}
+		}},
+		{"a Poke that comes while Deliver runs offers the lines again", func(t *testing.T, r *rig) {
+			poked := false
+			r.take = func(l Line) bool {
+				if string(l.Bytes) == `{"n":2}` && !poked {
+					poked = true
+					r.tl.Poke() // the worker's, as a Track ends
+					return false
+				}
+				return true
+			}
+			r.step(0, false)
+			r.write("s.jsonl", "{\"n\":1}\n{\"n\":2}\n")
+			r.step(HotPoll, true)
+			r.step(time.Second, false)
+			if got := r.texts(0); !slices.Equal(got, []string{`{"n":1}`, `{"n":2}`}) {
+				t.Errorf("handed over %v", got)
+			}
+		}},
 		{"a hint reads a new file of a listed root at once", func(t *testing.T, r *rig) {
 			r.step(0, false)
 			r.write("o.jsonl", "{\"n\":1}\n")
@@ -382,7 +432,7 @@ func TestTailer(t *testing.T) {
 				t.Fatal(err)
 			}
 			r.step(0, false)
-			root := adapters.LogRoot{Name: "other", Dir: other, Depth: 2, Match: func(rel string) bool { return strings.HasSuffix(rel, ".jsonl") }}
+			root := adapters.LogRoot{Dir: other, Depth: 2, Match: func(rel string) bool { return strings.HasSuffix(rel, ".jsonl") }}
 			r.tl.Hint(event.HarnessClaudeCode, old, root)
 			r.step(time.Second, false)
 			f, err := os.OpenFile(old, os.O_WRONLY|os.O_APPEND, 0o600)

@@ -14,9 +14,20 @@ import (
 // the agent (WP-AD3): each captured transcript line, trimmed, gives the
 // same records and the same problems as the line itself, read by an
 // adapter of its own in the same order, so the agent's share of lookback
-// is the decoding of what it records, and nothing is lost by it.
+// is the decoding of what it records, and nothing is lost by it. Beside
+// the capture's transcripts it reads one with the shapes the capture
+// lacks: a synchronous Agent result, an edit's malformed structuredPatch
+// and an attachment whose fields have other types.
 func TestTrimLog(t *testing.T) {
 	files := readTranscripts(t)
+	files["p/s.jsonl"] = logLines(
+		userText("q1", "run it", map[string]any{"turnOrigin": "human", "promptSource": "typed"}),
+		toolUse("a1", "Agent", map[string]any{"prompt": "look"}, "2026-11-20T17:00:01.000Z"),
+		toolDone("a1", map[string]any{"status": "completed", "content": []any{map[string]any{"type": "text", "text": "found"}}}, "2026-11-20T17:00:05.000Z"),
+		toolUse("e1", "Edit", map[string]any{"file_path": "/home/capture/p/a.go"}, "2026-11-20T17:00:06.000Z"),
+		toolDone("e1", map[string]any{"filePath": "/home/capture/p/a.go", "structuredPatch": "none"}, "2026-11-20T17:00:07.000Z"),
+		entryJSON("attachment", map[string]any{"attachment": map[string]any{"type": "goal_status", "met": "yes", "sentinel": 1}}),
+	)
 	whole, trimmed := newTest(), newTest()
 	var wholeBytes, trimmedBytes int
 	type diff struct {

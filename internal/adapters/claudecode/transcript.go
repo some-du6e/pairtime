@@ -49,9 +49,7 @@ type entry struct {
 	ToolDenialKind string     `json:"toolDenialKind"`
 	// PermissionDecision says who let a tool call run: config, a hook, or
 	// the person (user_temporary, user_permanent).
-	PermissionDecision struct {
-		Source string `json:"source"`
-	} `json:"permissionDecision"`
+	PermissionDecision permissionDecision `json:"permissionDecision"`
 	// Operation and Content are a queue-operation's: enqueue, dequeue,
 	// remove or popAll, and the message it queues.
 	Operation  string      `json:"operation"`
@@ -124,6 +122,43 @@ type msgPart struct {
 	Content   resultValue `json:"content"`
 }
 
+// Each tool gives its input and its result fields of its own, under
+// names other tools use with other types: a synchronous Agent call's
+// result holds a list as its content, where a Write's holds the file's
+// text, and an MCP tool's input can hold anything as its command. So the
+// reader decodes those objects field by field (objectFields), and a field
+// of another type costs it that field, never the entry.
+
+// objectFields returns the fields of b, a JSON object, and false for
+// anything else.
+func objectFields(b []byte) (map[string]json.RawMessage, bool) {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(b, &m) != nil {
+		return nil, false
+	}
+	return m, true
+}
+
+// fieldString returns field name of m when it is a string, and "" for
+// anything else.
+func fieldString(m map[string]json.RawMessage, name string) string {
+	var s string
+	if raw, ok := m[name]; !ok || json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
+}
+
+// fieldBool returns field name of m when it is a boolean, and false and
+// not ok for anything else.
+func fieldBool(m map[string]json.RawMessage, name string) (v, ok bool) {
+	raw, found := m[name]
+	if !found || json.Unmarshal(raw, &v) != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return false, false
+	}
+	return v, true
+}
+
 // useInput holds the tool_use input fields the reader reads: a Bash
 // call's command and an edit's file. An edit's own text it leaves alone,
 // since its result has the hunks.
@@ -132,13 +167,20 @@ type useInput struct {
 	Command  string `json:"command"`
 }
 
+func (in *useInput) UnmarshalJSON(b []byte) error {
+	m, _ := objectFields(b)
+	in.FilePath, in.Command = fieldString(m, "file_path"), fieldString(m, "command")
+	return nil
+}
+
 // toolResult is an entry's toolUseResult: the structured result, as the
 // PostToolUse hook's tool_response holds it, or a string.
 type toolResult struct {
 	Resp toolResponse
 	Text string
-	// Set says the entry has one.
-	Set bool
+	// Set says the entry has one, and BadPatch that its structuredPatch
+	// isn't a list of hunks.
+	Set, BadPatch bool
 }
 
 func (r *toolResult) UnmarshalJSON(b []byte) error {
@@ -151,10 +193,30 @@ func (r *toolResult) UnmarshalJSON(b []byte) error {
 		return json.Unmarshal(b, &r.Text)
 	case b[0] == '{':
 		r.Set = true
-		return json.Unmarshal(b, &r.Resp)
+		m, _ := objectFields(b)
+		r.Resp = toolResponse{Type: fieldString(m, "type"), FilePath: fieldString(m, "filePath"),
+			Content: fieldString(m, "content"), Stdout: fieldString(m, "stdout"), Stderr: fieldString(m, "stderr")}
+		if raw, ok := m["structuredPatch"]; ok && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			if json.Unmarshal(raw, &r.Resp.StructuredPatch) != nil {
+				r.Resp.StructuredPatch, r.BadPatch = nil, true
+			}
+		}
+		return nil
 	}
 	// A list or a number: no tool's result the reader reads.
 	r.Set = true
+	return nil
+}
+
+// permissionDecision is a tool result entry's permissionDecision, of which
+// the reader reads who decided.
+type permissionDecision struct {
+	Source string
+}
+
+func (p *permissionDecision) UnmarshalJSON(b []byte) error {
+	m, _ := objectFields(b)
+	p.Source = fieldString(m, "source")
 	return nil
 }
 
@@ -210,11 +272,22 @@ func (v *stringValue) UnmarshalJSON(b []byte) error {
 }
 
 // attachment holds the attachment fields the reader reads: a goal_status
-// verdict's (HS 3.5).
+// verdict's (HS 3.5). Every kind of attachment has fields of its own, so
+// it is decoded field by field too.
 type attachment struct {
 	Type     string `json:"type"`
 	Met      *bool  `json:"met"`
 	Sentinel bool   `json:"sentinel"`
+}
+
+func (a *attachment) UnmarshalJSON(b []byte) error {
+	m, _ := objectFields(b)
+	a.Type = fieldString(m, "type")
+	if v, ok := fieldBool(m, "met"); ok {
+		a.Met = &v
+	}
+	a.Sentinel, _ = fieldBool(m, "sentinel")
+	return nil
 }
 
 // readTypes are the entry types the reader makes records of, which
@@ -269,7 +342,7 @@ func (*Adapter) LogRoots(env adapters.Env) []adapters.LogRoot {
 
 // projectsRoot is the LogRoot of a Claude Code projects folder.
 func projectsRoot(dir string) adapters.LogRoot {
-	return adapters.LogRoot{Name: "claude_code", Dir: dir, Depth: 4, Match: transcriptFile, Hot: transcriptFolder}
+	return adapters.LogRoot{Dir: dir, Depth: 4, Match: transcriptFile, Hot: transcriptFolder}
 }
 
 // transcriptFile reports whether rel, under a projects folder, is a
@@ -395,12 +468,14 @@ type trimmedPart struct {
 }
 
 type trimmedResponse struct {
-	Type            string  `json:"type,omitempty"`
-	FilePath        string  `json:"filePath,omitempty"`
-	Content         string  `json:"content,omitempty"`
-	StructuredPatch []patch `json:"structuredPatch,omitempty"`
-	Stdout          string  `json:"stdout,omitempty"`
-	Stderr          string  `json:"stderr,omitempty"`
+	Type     string `json:"type,omitempty"`
+	FilePath string `json:"filePath,omitempty"`
+	Content  string `json:"content,omitempty"`
+	// StructuredPatch is the hunks, or for a structuredPatch that wasn't a
+	// list of them, a string, which reads back as just as bad.
+	StructuredPatch any    `json:"structuredPatch,omitempty"`
+	Stdout          string `json:"stdout,omitempty"`
+	Stderr          string `json:"stderr,omitempty"`
 }
 
 // rejectedText is the result text of a tool call the person refused.
@@ -446,9 +521,14 @@ func trimEntry(e *entry) trimmedEntry {
 		case r.Text == rejectedText:
 			t.ToolUseResult = rejectedText
 		case r.Resp.Type != "" || r.Resp.FilePath != "" || r.Resp.StructuredPatch != nil || r.Resp.Stdout != "" ||
-			r.Resp.Stderr != "" || r.Resp.Content != "":
-			resp := trimmedResponse{Type: r.Resp.Type, FilePath: r.Resp.FilePath, StructuredPatch: r.Resp.StructuredPatch,
-				Stdout: r.Resp.Stdout, Stderr: r.Resp.Stderr}
+			r.Resp.Stderr != "" || r.Resp.Content != "" || r.BadPatch:
+			resp := trimmedResponse{Type: r.Resp.Type, FilePath: r.Resp.FilePath, Stdout: r.Resp.Stdout, Stderr: r.Resp.Stderr}
+			switch {
+			case r.BadPatch:
+				resp.StructuredPatch = "malformed"
+			case r.Resp.StructuredPatch != nil:
+				resp.StructuredPatch = r.Resp.StructuredPatch
+			}
 			if len(r.Resp.StructuredPatch) == 0 && r.Resp.Type == "create" {
 				resp.Content = r.Resp.Content
 			}
