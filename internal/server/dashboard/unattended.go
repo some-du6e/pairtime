@@ -19,6 +19,9 @@ import (
 // count apart.
 //
 // Like Demo, the numbers never change, and the last day is today in UTC.
+// One project's agent clock is wall time (SM 2.6), so its busiest project's
+// 15h 5m today needs the day to have run that long: read it from late in
+// the day, as the tests and the pages preview do at 18:00.
 type Unattended struct{}
 
 // unattendedKeys are the sample's project keys, made up in the git

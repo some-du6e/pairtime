@@ -159,9 +159,11 @@ func ownerView(now time.Time) (dashboard.View, error) {
 	return v, err
 }
 
-// agentsView is dashboard.Unattended's day.
+// agentsView is dashboard.Unattended's day, read at 18:00 UTC today, late
+// enough for its busiest project's 15h 5m.
 func agentsView(now time.Time) (dashboard.View, error) {
-	return dashboard.Unattended{}.View(context.Background(), "", now)
+	evening := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 18, 0, 0, 0, time.UTC)
+	return dashboard.Unattended{}.View(context.Background(), "", evening)
 }
 
 // emptyView is a new account's view.

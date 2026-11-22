@@ -18,9 +18,10 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/rollup"
 )
 
-// noonClock is when the tests look at dashboard.Unattended: twelve hours
-// into its day.
-var noonClock = time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+// eveningClock is when the tests look at dashboard.Unattended: 18:00, late
+// enough for its busiest project's 15h 5m, since one project's agent clock
+// is wall time.
+var eveningClock = time.Date(2026, 11, 22, 18, 0, 0, 0, time.UTC)
 
 // whySentence is the sentence that says why none of the time is yours,
 // for the owner's agent.
@@ -38,10 +39,10 @@ func getOwner(t *testing.T, in SignIn, v dashboard.View) string {
 	return page
 }
 
-// unattendedView is dashboard.Unattended at noon.
+// unattendedView is dashboard.Unattended at 18:00.
 func unattendedView(t *testing.T) dashboard.View {
 	t.Helper()
-	v, err := dashboard.Unattended{}.View(context.Background(), "", noonClock)
+	v, err := dashboard.Unattended{}.View(context.Background(), "", eveningClock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,14 +308,14 @@ func TestNoneOfYourTime(t *testing.T) {
 			want:    []string{`<div class="chart" aria-hidden="true">`, "<summary>The last 7 days as a table</summary>"},
 		},
 		{
-			name:    "the projects table says a window with none of your time quietly, not as a bold 0m",
+			name:    "a window of the projects table with none of your time shows the agent's time alone, as a clock does, with no 0m",
 			v:       unattendedView,
 			section: "projects",
 			want: []string{
-				`<span class="key c1"></span>Project 889f4c</td><td><span class="none">0m</span> <span class="agent">Your agent 52h 5m</span></td><td><span class="none">0m</span> <span class="agent">Your agent 65h 5m</span></td></tr>`,
-				`<tr><th>All projects</th><td><span class="none">0m</span> <span class="agent">`,
+				`<span class="key c1"></span>Project 889f4c</td><td role="cell" data-label="Last 7 days"><span class="agent">Your agent 52h 5m</span></td><td role="cell" data-label="Last 30 days"><span class="agent">Your agent 65h 5m</span></td></tr>`,
+				`<tr role="row"><th role="rowheader">All projects</th><td role="cell" data-label="Last 7 days"><span class="agent">Your agent 96h 25m</span></td>`,
 			},
-			notWant: []string{"<strong>0m</strong>"},
+			notWant: []string{">0m<"},
 		},
 		{
 			name:    "with none of your time in the week, the evidence levels say there's nothing to back up instead of listing each level at 0%",
@@ -357,16 +358,16 @@ func TestAgentLine(t *testing.T) {
 			week:  "Your agent worked on its own for 21h 2m.",
 		},
 		{
-			name:  "past the hours the day has had, it reads as every agent's time added up",
+			name:  "past the hours the day has had, it reads as the agents' time added up across projects",
 			v:     unattendedView,
-			today: "Your agents worked on their own for 31h 5m, adding up every agent&#39;s time.",
+			today: "Your agents worked on their own for 31h 5m, added up across projects.",
 		},
 		{
 			name: "it goes by the hours so far today, not a whole day: 10h by 06:00 took agents working at once",
 			v: func(t *testing.T) dashboard.View {
 				return twoAt(t, time.Date(2026, 11, 20, 6, 0, 0, 0, time.UTC), "UTC", 5*3600)
 			},
-			today: "Your agents worked on their own for 10h, adding up every agent&#39;s time.",
+			today: "Your agents worked on their own for 10h, added up across projects.",
 		},
 		{
 			name: "the same 10h by 23:00 reads as one agent's",
@@ -387,7 +388,7 @@ func TestAgentLine(t *testing.T) {
 			v: func(t *testing.T) dashboard.View {
 				return twoAt(t, time.Date(2026, 11, 20, 15, 0, 0, 0, time.UTC), "America/New_York", 5.5*3600)
 			},
-			today: "Your agents worked on their own for 11h, adding up every agent&#39;s time.",
+			today: "Your agents worked on their own for 11h, added up across projects.",
 		},
 		{
 			name: "the week's line is a sum once one of its days had more agent time than hours, though today's isn't",
@@ -397,7 +398,7 @@ func TestAgentLine(t *testing.T) {
 					timeRow{project: "p1", agent: true, s: 3600})
 			},
 			today: "Your agent worked on its own for 1h.",
-			week:  "Your agents worked on their own for 31h, adding up every agent&#39;s time.",
+			week:  "Your agents worked on their own for 31h, added up across projects.",
 		},
 		{
 			name: "a day whose midnight the clocks skip is 23 hours long, so 23h 30m of agent time on it passes it: Santiago's 2027-09-05",
@@ -405,7 +406,7 @@ func TestAgentLine(t *testing.T) {
 				return dayView(t, time.Date(2027, 9, 6, 12, 0, 0, 0, time.UTC), "America/Santiago", "",
 					timeRow{project: "p1", ago: 1, agent: true, s: 11.75 * 3600}, timeRow{project: "p2", ago: 1, agent: true, s: 11.75 * 3600})
 			},
-			week: "Your agents worked on their own for 23h 30m, adding up every agent&#39;s time.",
+			week: "Your agents worked on their own for 23h 30m, added up across projects.",
 		},
 		{
 			name: "a named agent reads as several of it",
@@ -413,7 +414,7 @@ func TestAgentLine(t *testing.T) {
 				return dayView(t, time.Date(2026, 11, 20, 6, 0, 0, 0, time.UTC), "UTC", "Claude Code",
 					timeRow{project: "p1", agent: true, s: 4 * 3600}, timeRow{project: "p2", agent: true, s: 4 * 3600})
 			},
-			today: "Claude Code agents worked on their own for 8h, adding up every agent&#39;s time.",
+			today: "Claude Code agents worked on their own for 8h, added up across projects.",
 		},
 	}
 	for _, tt := range tests {
@@ -450,7 +451,7 @@ func TestClockColors(t *testing.T) {
 		{name: "one project gets the first color", n: 1, want: []string{"c1"}},
 		{name: "six projects, all shown at once, get six colors of their own", n: 6, want: []string{"c1", "c2", "c3", "c4", "c5", "c6"}},
 		{name: "eight projects get the palette's eight colors, the folded ones too", n: 8, want: []string{"c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"}},
-		{name: "a ninth project shares Other's gray, never a ninth hue", n: 9, want: []string{"c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "co"}},
+		{name: "a ninth project gets no key, never a ninth hue or the chart's Other gray", n: 9, want: []string{"c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "nokey"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -509,7 +510,7 @@ func TestShownWeekClockColors(t *testing.T) {
 	t.Run("a shown clock the week's order reaches last still leaves a color for every other shown clock", func(t *testing.T) {
 		seen := make(map[string]bool)
 		for _, c := range clocks {
-			if c == "co" || seen[c] {
+			if c == "co" || c == "nokey" || seen[c] {
 				t.Errorf("today's clocks are %v, want six colors of their own", clocks)
 				break
 			}
@@ -519,6 +520,120 @@ func TestShownWeekClockColors(t *testing.T) {
 			t.Errorf("today has %d clocks, want 6", len(clocks))
 		}
 	})
+}
+
+// colSegments finds each column of the week chart, and in it each
+// segment's title.
+var (
+	weekColumn = regexp.MustCompile(`<li class="col">(.*?)</li>`)
+	segTitle   = regexp.MustCompile(`<span class="seg [^"]*" title="([^"]*)">`)
+)
+
+// otherOnTop reports whether a column's Other segments, its final time
+// and its pending time at most, all sit together at its top, the end of
+// the column's segments.
+func otherOnTop(col string) bool {
+	var titles []string
+	for _, m := range segTitle.FindAllStringSubmatch(col, -1) {
+		titles = append(titles, m[1])
+	}
+	first := slices.IndexFunc(titles, func(s string) bool { return strings.HasPrefix(s, "Other, ") })
+	if first < 0 {
+		return true
+	}
+	for _, s := range titles[first:] {
+		if !strings.HasPrefix(s, "Other, ") {
+			return false
+		}
+	}
+	return len(titles)-first <= 2
+}
+
+func TestOtherOncePerColumn(t *testing.T) {
+	// The reviewer's case: by your time this month n1 > n2 > n3 > s1 > n4,
+	// all five with your time yesterday. Today s1 and five agent-only
+	// projects are the six clocks shown at once, so s1 takes a color ahead
+	// of n3, which ranks above it, and n3 and n4 share Other.
+	rows := []timeRow{
+		{project: "n1", ago: 1, s: 5000}, {project: "n2", ago: 1, s: 4000}, {project: "n3", ago: 1, s: 3000},
+		{project: "s1", ago: 1, s: 2000}, {project: "n4", ago: 1, s: 1000},
+		{project: "s1", agent: true, s: 30000},
+	}
+	for i := 2; i <= 6; i++ {
+		rows = append(rows, timeRow{project: "s" + strconv.Itoa(i), agent: true, s: float64(20000 - i*100)})
+	}
+	week := sectionOf(getOwner(t, signInOn("Robin"), dayView(t, time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC), "UTC", "", rows...)), "week")
+	columns := weekColumn.FindAllStringSubmatch(week, -1)
+	if len(columns) != 7 {
+		t.Fatalf("the chart has %d columns, want 7", len(columns))
+	}
+	yesterday := columns[5][1]
+	var titles []string
+	for _, m := range segTitle.FindAllStringSubmatch(yesterday, -1) {
+		titles = append(titles, m[1])
+	}
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{name: "a column draws the projects past the palette as one Other, though a colored project sits between them in the view's order", ok: slices.Equal(titles, []string{"n1, 1h 23m", "n2, 1h 6m", "s1, 33m", "Other, 1h 6m"})},
+		{name: "every column has at most one Other part, on top", ok: !slices.ContainsFunc(columns, func(c []string) bool { return !otherOnTop(c[1]) })},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.ok {
+				t.Errorf("yesterday's segments are %q; the chart:\n%s", titles, week)
+			}
+		})
+	}
+}
+
+func TestNoKeyPastThePalette(t *testing.T) {
+	tests := []struct {
+		name    string
+		v       func(*testing.T) dashboard.View
+		section string
+		want    []string
+		notWant []string
+	}{
+		{
+			name:    "the projects table shows a project past the palette with no key, not the chart's Other gray",
+			v:       unattendedView,
+			section: "projects",
+			want:    []string{`<span class="key nokey"></span>Project 44f882</td>`},
+			notWant: []string{`class="key co"`},
+		},
+		{
+			name:    "so does its clock in the folded row",
+			v:       unattendedView,
+			section: "today",
+			want:    []string{`<span class="key nokey"></span>Project 44f882</p>`},
+			notWant: []string{`class="key co"`},
+		},
+		{
+			name: "a window with no time at all in it says 0m, quietly",
+			v: func(t *testing.T) dashboard.View {
+				return dayView(t, time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC), "UTC", "", timeRow{project: "p1", ago: 10, agent: true, s: 600})
+			},
+			section: "projects",
+			want:    []string{`<td role="cell" data-label="Last 7 days"><span class="none">0m</span></td><td role="cell" data-label="Last 30 days"><span class="agent">Your agent 10m</span></td>`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := sectionOf(getOwner(t, signInOn("Robin"), tt.v(t)), tt.section)
+			for _, w := range tt.want {
+				if !strings.Contains(s, w) {
+					t.Errorf("section %s doesn't contain %q:\n%s", tt.section, w, s)
+				}
+			}
+			for _, w := range tt.notWant {
+				if strings.Contains(s, w) {
+					t.Errorf("section %s contains %q", tt.section, w)
+				}
+			}
+		})
+	}
 }
 
 func TestShortCodeTitles(t *testing.T) {
@@ -559,13 +674,13 @@ func TestShortCodeTitles(t *testing.T) {
 			name:    "and so does the projects table",
 			v:       coded,
 			section: "projects",
-			want:    []string{`<tr><td title="g5be03d7f18a6c92e4b07d5a1c8f3e962"><span class="key c3"></span>Project 5be03d</td>`},
+			want:    []string{`<tr role="row"><td role="cell" title="g5be03d7f18a6c92e4b07d5a1c8f3e962"><span class="key c3"></span>Project 5be03d</td>`},
 		},
 		{
 			name:    "a project with a name has no title",
 			v:       ownerView,
 			section: "projects",
-			want:    []string{`<tr><td><span class="key c1"></span>chip8-emulator</td>`},
+			want:    []string{`<tr role="row"><td role="cell"><span class="key c1"></span>chip8-emulator</td>`},
 			notWant: []string{"title="},
 		},
 	}

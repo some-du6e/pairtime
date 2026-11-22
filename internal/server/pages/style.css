@@ -218,11 +218,14 @@ details .table { margin-top: 0.5rem; }
 details td, .projects td { font-variant-numeric: tabular-nums; }
 details td, details th { white-space: nowrap; }
 .projects { margin-top: 0.5rem; }
-.projects td:first-child { overflow-wrap: anywhere; }
-.projects strong { display: block; font-size: 1.05rem; }
-.projects .agent { display: block; color: var(--muted); font-size: 0.85rem; }
-/* None of your time in a window: said quietly, not as a bold 0m. */
-.projects .none { display: block; color: var(--muted); }
+.projects td:first-child { overflow-wrap: break-word; }
+.projects strong { display: block; font-size: 1.05rem; white-space: nowrap; }
+.projects .agent { display: block; color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
+/* No time at all in a window: said quietly, not as a bold 0m. */
+.projects .none { display: block; color: var(--muted); white-space: nowrap; }
+/* A project past the palette has no key, rather than Other's gray; this
+   keeps its name in line with the others'. */
+.nokey { background: none; }
 .projects tfoot th, .projects tfoot td { border-bottom: 0; padding-top: 0.75rem; }
 .segbar { display: flex; gap: 2px; height: 28px; margin: 1.1rem 0 1rem; }
 .segbar span { width: var(--f); min-width: 0; display: flex; align-items: center; padding: 0 0.35rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
@@ -254,6 +257,15 @@ details td, details th { white-space: nowrap; }
   /* "1h 53m" breaks into two lines, so neighbors never touch. */
   .cap { width: min-content; font-size: 0.7rem; line-height: 1.15; text-align: center; white-space: normal; }
   .levels li { grid-template-columns: auto 1fr; }
+  /* The projects table stacks each row: the name across, then its two
+     windows side by side, each with its column's name. */
+  .projects thead { display: none; }
+  .projects, .projects tbody, .projects tfoot { display: block; }
+  .projects tr { display: grid; grid-template-columns: 1fr 1fr; gap: 0.2rem 0.75rem; padding: 0.6rem 0; border-bottom: 1px solid var(--line); }
+  .projects tfoot tr { border-bottom: 0; }
+  .projects td, .projects th { padding: 0; border-bottom: 0; }
+  .projects td:first-child, .projects tfoot th { grid-column: 1 / -1; }
+  .projects td[data-label]::before { content: attr(data-label); display: block; color: var(--muted); font-size: 0.75rem; }
   .levels .lt { grid-column: 2; padding-left: 0; }
   .kinds li { grid-template-columns: 1fr auto; }
   .kinds .track { grid-column: 1 / -1; grid-row: 2; margin-top: 0.3rem; }

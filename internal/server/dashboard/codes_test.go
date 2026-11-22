@@ -152,9 +152,10 @@ func TestCodeName(t *testing.T) {
 	}
 }
 
-// unattendedNow is a moment the second sample is viewed at: noon, so
-// twelve hours of the day have passed.
-var unattendedNow = time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+// unattendedNow is a moment the second sample is viewed at: 18:00, late
+// enough for its busiest project's 15h 5m, since one project's agent clock
+// is wall time.
+var unattendedNow = time.Date(2026, 11, 22, 18, 0, 0, 0, time.UTC)
 
 func TestUnattended(t *testing.T) {
 	v, err := Unattended{}.View(context.Background(), "", unattendedNow)

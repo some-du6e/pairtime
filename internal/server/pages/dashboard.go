@@ -252,15 +252,33 @@ type weekRow struct {
 	Total string
 }
 
-// projectRow is a row of the projects table. Title is the project's full
-// key when the page calls it by its short code, or "". WeekNone and
-// MonthNone say there is none of your time in the window, which the
-// table prints quietly instead of as a bold 0m.
+// projectRow is a row of the projects table: its color, "" for a project
+// past colorSlots, which the table shows with no key rather than Other's
+// gray, its name, and Title, the project's full key when the page calls it
+// by its short code, or "".
 type projectRow struct {
-	Color, Name, Title    string
-	Week, Month           string
-	WeekNone, MonthNone   bool
-	WeekAgent, MonthAgent string
+	Color, Name, Title string
+	Week, Month        windowCell
+}
+
+// windowCell is one window's time in the projects table. A window with
+// none of your time shows the agent's alone, as a clock does, and one with
+// no time at all a quiet 0m.
+type windowCell struct {
+	// Label heads the cell's column, which a narrow screen prints in it.
+	Label string
+	// You and Agent are the window's times; Agent comes with the agent's
+	// name, as "Your agent 52h 5m".
+	You, Agent         string
+	YouNone, AgentNone bool
+}
+
+// newCell lays out a window's cell from your time and the agent's.
+func newCell(label, agentStart string, you, agentS float64) windowCell {
+	return windowCell{
+		Label: label, You: duration(you), Agent: agentStart + " " + duration(agentS),
+		YouNone: you == 0, AgentNone: agentS == 0,
+	}
 }
 
 type levelsPart struct {
@@ -398,6 +416,10 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 	var moreYou, moreAgent float64
 	for i, pt := range clocks {
 		row := clockRow{Color: color[pt.Project], Name: names[pt.Project], Title: titles[pt.Project]}
+		if row.Color == "co" {
+			// Past the palette: no key, rather than Other's gray.
+			row.Color = ""
+		}
 		if pt.You.Total() > 0 {
 			row.Faces = append(row.Faces, faceRow{Label: "You", Time: duration(pt.You.Total()), Pending: pendingOf(pt.You)})
 		}
@@ -439,18 +461,20 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 	}
 	for _, pt := range v.Month.Projects {
 		w := byWeek[pt.Project]
+		c := color[pt.Project]
+		if c == "co" {
+			c = ""
+		}
 		p.Projects = append(p.Projects, projectRow{
-			Color: color[pt.Project], Name: names[pt.Project], Title: titles[pt.Project],
-			Week: duration(w.You.Total()), Month: duration(pt.You.Total()),
-			WeekNone: w.You.Total() == 0, MonthNone: pt.You.Total() == 0,
-			WeekAgent: duration(w.Agent.Total()), MonthAgent: duration(pt.Agent.Total()),
+			Color: c, Name: names[pt.Project], Title: titles[pt.Project],
+			Week:  newCell("Last 7 days", p.AgentStart, w.You.Total(), w.Agent.Total()),
+			Month: newCell("Last 30 days", p.AgentStart, pt.You.Total(), pt.Agent.Total()),
 		})
 	}
 	p.AllProjects = projectRow{
-		Name: "All projects",
-		Week: duration(v.Week.You.Total()), Month: duration(v.Month.You.Total()),
-		WeekNone: v.Week.You.Total() == 0, MonthNone: v.Month.You.Total() == 0,
-		WeekAgent: duration(v.Week.Agent.Total()), MonthAgent: duration(v.Month.Agent.Total()),
+		Name:  "All projects",
+		Week:  newCell("Last 7 days", p.AgentStart, v.Week.You.Total(), v.Week.Agent.Total()),
+		Month: newCell("Last 30 days", p.AgentStart, v.Month.You.Total(), v.Month.Agent.Total()),
 	}
 
 	p.Levels = newLevelsPart(v.Week)
@@ -472,17 +496,18 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 }
 
 // agentLine says how long the agent worked on its own in a window, s
-// seconds. That time adds up each project's, so agents working at once in
-// several projects can pass the hours the window had, and atOnce says it
-// did on one of its days: then the line says the time is every agent's
-// added up, so it doesn't read as one agent working more hours than a day
-// has. It says no more: a day can also pass its hours when the account's
-// time zone changed that day, and the minutes of both zones' versions of
-// the date count toward it. Either way it is information, beside your
-// time, never a target (DESIGN 3.8).
+// seconds. That time adds up each project's agent clock, which is wall
+// time: agents running at once in one project count once there (SM 2.6),
+// but agents in several projects at once add up, and can pass the hours
+// the window had. atOnce says that happened on one of its days: then the
+// line says the time is added up across projects, so it doesn't read as
+// one agent working more hours than a day has. It says no more: a day can
+// also pass its hours when the account's time zone changed that day, and
+// the minutes of both zones' versions of the date count toward it. Either
+// way it is information, beside your time, never a target (DESIGN 3.8).
 func agentLine(agent string, s float64, atOnce bool) string {
 	if atOnce {
-		return capitalize(several(agent)) + " worked on their own for " + duration(s) + ", adding up every agent's time."
+		return capitalize(several(agent)) + " worked on their own for " + duration(s) + ", added up across projects."
 	}
 	return capitalize(agent) + " worked on its own for " + duration(s) + "."
 }
@@ -635,27 +660,30 @@ func newWeekPart(v dashboard.View, days []dashboard.Day, color, names, titles ma
 			c.Total = duration(d.You.Total())
 		}
 
-		// One stack part per color, projects past colorSlots together.
+		// One stack part per colored project, in the view's order, and the
+		// projects past colorSlots together as one Other part on top: a
+		// shown clock can take a color ahead of a week's project the view
+		// ranks above it, so Other's projects needn't sit together in the
+		// stack.
 		type part struct {
 			color, name string
 			you         dashboard.Time
 		}
 		var parts []part
+		folded := part{color: "co", name: otherName}
 		byProject := make(map[string]dashboard.Time, len(d.Projects))
 		for _, pt := range d.Projects {
 			byProject[pt.Project] = pt.You
-			if pt.You.Total() == 0 {
-				continue
+			switch {
+			case pt.You.Total() == 0:
+			case color[pt.Project] == "co":
+				folded.you = folded.you.Add(pt.You)
+			default:
+				parts = append(parts, part{color: color[pt.Project], name: names[pt.Project], you: pt.You})
 			}
-			name := names[pt.Project]
-			if color[pt.Project] == "co" {
-				name = otherName
-			}
-			if n := len(parts); n > 0 && parts[n-1].color == color[pt.Project] {
-				parts[n-1].you = parts[n-1].you.Add(pt.You)
-				continue
-			}
-			parts = append(parts, part{color: color[pt.Project], name: name, you: pt.You})
+		}
+		if folded.you.Total() > 0 {
+			parts = append(parts, folded)
 		}
 		var sizes []float64
 		var segs []segment

@@ -163,10 +163,10 @@ func TestDemoPage(t *testing.T) {
 			signIn:  signInOn(""),
 			section: "projects",
 			want: []string{
-				`<tr><td><span class="key c1"></span>chip8-emulator</td><td><strong>6h 59m</strong> <span class="agent">Claude Code 15h 5m</span></td><td><strong>18h 34m</strong> <span class="agent">Claude Code 39h 25m</span></td></tr>`,
-				`<tr><td><span class="key c2"></span>robotics-scouting</td><td><strong>3h 51m</strong> <span class="agent">Claude Code 5h 7m</span></td><td><strong>10h 6m</strong> <span class="agent">Claude Code 13h 32m</span></td></tr>`,
-				`<tr><td><span class="key c3"></span>portfolio-site</td><td><strong>1h 23m</strong> <span class="agent">Claude Code 50m</span></td><td><strong>5h 3m</strong> <span class="agent">Claude Code 3h 10m</span></td></tr>`,
-				`<tr><th>All projects</th><td><strong>12h 13m</strong> <span class="agent">Claude Code 21h 2m</span></td><td><strong>33h 43m</strong> <span class="agent">Claude Code 56h 7m</span></td></tr>`,
+				`<tr role="row"><td role="cell"><span class="key c1"></span>chip8-emulator</td><td role="cell" data-label="Last 7 days"><strong>6h 59m</strong> <span class="agent">Claude Code 15h 5m</span></td><td role="cell" data-label="Last 30 days"><strong>18h 34m</strong> <span class="agent">Claude Code 39h 25m</span></td></tr>`,
+				`<tr role="row"><td role="cell"><span class="key c2"></span>robotics-scouting</td><td role="cell" data-label="Last 7 days"><strong>3h 51m</strong> <span class="agent">Claude Code 5h 7m</span></td><td role="cell" data-label="Last 30 days"><strong>10h 6m</strong> <span class="agent">Claude Code 13h 32m</span></td></tr>`,
+				`<tr role="row"><td role="cell"><span class="key c3"></span>portfolio-site</td><td role="cell" data-label="Last 7 days"><strong>1h 23m</strong> <span class="agent">Claude Code 50m</span></td><td role="cell" data-label="Last 30 days"><strong>5h 3m</strong> <span class="agent">Claude Code 3h 10m</span></td></tr>`,
+				`<tr role="row"><th role="rowheader">All projects</th><td role="cell" data-label="Last 7 days"><strong>12h 13m</strong> <span class="agent">Claude Code 21h 2m</span></td><td role="cell" data-label="Last 30 days"><strong>33h 43m</strong> <span class="agent">Claude Code 56h 7m</span></td></tr>`,
 			},
 		},
 		{
@@ -963,7 +963,7 @@ func TestManyProjects(t *testing.T) {
 			name:    "a project keeps its color in every section: the week's only project is c1 in the projects table too",
 			week:    []string{"p6"},
 			section: "projects",
-			want:    []string{`<tr><td><span class="key c1"></span>p6</td>`, `<tr><td><span class="key c2"></span>p1</td>`},
+			want:    []string{`<tr role="row"><td role="cell"><span class="key c1"></span>p6</td>`, `<tr role="row"><td role="cell"><span class="key c2"></span>p1</td>`},
 		},
 	}
 	for _, tt := range tests {
