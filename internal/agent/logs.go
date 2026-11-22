@@ -14,6 +14,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/tailers"
 	"github.com/some-du6e/pairtime/internal/install"
+	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -390,9 +391,10 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		r.Event.EventID = h.logEventID(r.Event.T, ll.File, key)
 		// A history's records need no seal and no save of their own: the
 		// timed seal and the minute's save cover them, and a crash before
-		// those reads the lines again, to the same event_ids.
+		// those reads the lines again, to the same event_ids. A log line has
+		// no sender's stamp of its own (ledger.Input.Sent).
 		r.Late = line.Lookback > 0
-		if !h.write(st, r) && h.writerDown() {
+		if !h.write(st, r, clock.Stamp{}) && h.writerDown() {
 			return false
 		}
 		switch r.Event.Kind() {

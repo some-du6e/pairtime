@@ -24,6 +24,10 @@ type rowTime struct {
 	// unchecked is set when received comes from a receipt the uploader
 	// couldn't check, which batches.seg doesn't keep.
 	unchecked bool
+	// localUntil is when config.toml was last known to say local-only as
+	// the batch was sealed (ledger.Row.LocalUntil), in Unix ms, 0 for
+	// never.
+	localUntil int64
 }
 
 // rowIndex holds the device's chain as the uploader needs it: the times of
@@ -66,6 +70,9 @@ func (ix *rowIndex) add(r ledger.Row) error {
 		return fmt.Errorf("uploader: batch %d doesn't follow batch %d", r.B, ix.last())
 	}
 	t := rowTime{sealed: r.SealedAt.UnixMilli()}
+	if !r.LocalUntil.IsZero() {
+		t.localUntil = r.LocalUntil.UnixMilli()
+	}
 	t.sealedMax = t.sealed
 	if n := len(ix.times); n > 0 {
 		t.sealedMax = max(t.sealed, ix.times[n-1].sealedMax)
@@ -114,6 +121,16 @@ func (ix *rowIndex) sealedAt(b uint64) (int64, bool) {
 		return 0, false
 	}
 	return ix.times[b-1].sealed, true
+}
+
+// localUntil returns when config.toml was last known to say local-only
+// as batch b was sealed, in Unix ms, while the device has the batch, and 0
+// for never.
+func (ix *rowIndex) localUntil(b uint64) (int64, bool) {
+	if !ix.holdsRow(b) {
+		return 0, false
+	}
+	return ix.times[b-1].localUntil, true
 }
 
 // holdsRow reports whether the device has a batch b, whether or not the

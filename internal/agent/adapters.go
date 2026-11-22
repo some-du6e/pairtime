@@ -16,6 +16,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -197,6 +198,18 @@ type adapterHost struct {
 	// (parked), and parkedLive those of them that came through
 	// held.jsonl.pending, which keeps their lines meanwhile.
 	parkedN, parkedLive int
+	// For waiting: stepping are the times of the calls the worker's step
+	// took from queue, until it is done with them; parkedAt counts the
+	// parked calls by theirs, until each is parsed; and heldFrom is the
+	// earliest of the calls held counts that the agent could read, by the
+	// wall clock and by each boot's monotonic clock. Empty for none.
+	stepping []callStamp
+	parkedAt map[callStamp]int
+	heldFrom earliestStamp
+	// uncounted is set from the agent's start until the worker has counted
+	// what held.jsonl and a .replay file hold (countHeld), which the ledger
+	// writer may open before: until then any of them may be on its way.
+	uncounted bool
 	// expireDue says the minute job has run since the worker last looked
 	// for held calls to drop (expireRun). heldDue is when the oldest call in
 	// held.jsonl or an unread .replay file will have waited heldKeep, zero
@@ -398,6 +411,7 @@ func newAdapterHost(a *agent) *adapterHost {
 		stats:     make(map[event.Harness]*harnessStats),
 		built:     make(map[event.Harness]adapters.Adapter),
 		parkedBy:  make(map[string]int),
+		parkedAt:  make(map[callStamp]int),
 		pendingAt: make(map[string][]inbox.Span),
 		kick:      make(chan struct{}, 1),
 		stop:      make(chan struct{}),
@@ -1048,12 +1062,16 @@ func (h *adapterHost) step(last bool) {
 	h.mu.Lock()
 	batch := h.queue
 	h.queue = nil
+	h.stepping = stampsOf(batch)
 	saveDue := h.saveDue
 	h.saveDue = false
 	expireDue := h.expireDue
 	h.expireDue = false
 	held := h.held
 	h.mu.Unlock()
+	// The batch's calls are parsed, parked or held by the step's end, and
+	// waiting finds those last two where they went.
+	defer h.count(func() { h.stepping = nil })
 	if expireDue && !last {
 		// In every state, since calls are held longest while the agent has
 		// no keys or its writer is down.
@@ -1440,6 +1458,7 @@ func (h *adapterHost) park(c hostCall) {
 		if c.live {
 			h.parkedLive++
 		}
+		h.parkedAt[stampOf(c.d)]++
 	})
 }
 
@@ -1475,6 +1494,11 @@ func (h *adapterHost) unparked(c hostCall) {
 		h.parkedN--
 		if c.live {
 			h.parkedLive--
+		}
+		if s := stampOf(c.d); h.parkedAt[s] <= 1 {
+			delete(h.parkedAt, s)
+		} else {
+			h.parkedAt[s]--
 		}
 	})
 }
@@ -1561,7 +1585,7 @@ func (h *adapterHost) parse(c hostCall) {
 	h.hint(c)
 	due, refused := false, false
 	for _, r := range recs {
-		if !h.write(c.st, r) {
+		if !h.write(c.st, r, sentOf(c.d)) {
 			refused = true
 		}
 		switch r.Event.Kind() {
@@ -1642,10 +1666,10 @@ func (h *adapterHost) holdBackNow() {
 	h.holding = nil
 }
 
-// write writes one record to the ledger, with its content beside the
-// event, tells focus and the git watcher what it says, and reports whether
-// the ledger took it.
-func (h *adapterHost) write(st *harnessStats, r adapters.Record) bool {
+// write writes one record to the ledger, with its content and its call's
+// own stamp (sentOf) beside the event, tells focus and the git watcher what
+// it says, and reports whether the ledger took it.
+func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stamp) bool {
 	h.mu.Lock()
 	w := h.writer
 	h.mu.Unlock()
@@ -1653,7 +1677,11 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record) bool {
 	if ev.EventID == "" {
 		ev.EventID = event.NewEventID(time.UnixMilli(ev.T))
 	}
-	if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command, Late: r.Late}); err != nil {
+	// A late record is one the lookback reader read (takeLine): the ledger
+	// seals it in its own time, and judges whether it stays on the device
+	// by when the writer took it in (ledger.Input.Late, Lookback).
+	if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command, Sent: sent,
+		Late: r.Late, Lookback: r.Late}); err != nil {
 		h.count(func() {
 			st.WriteFailures++
 			st.LastFailure = clip(fmt.Sprintf("the ledger refused a %s record: %v", ev.Kind(), err))
@@ -1868,6 +1896,7 @@ func (h *adapterHost) hold(calls []inbox.Delivery) []inbox.Delivery {
 		h.count(func() {
 			h.held++
 			h.dueByLocked(d.Received.Wall.Add(heldKeep))
+			h.heldFrom.add(stampOf(d))
 		})
 	}
 	return nil
@@ -2016,7 +2045,7 @@ func (h *adapterHost) readReplay(name string, last bool) bool {
 	n, bad, again := 0, 0, 0
 	defer func() {
 		h.replayTaken += n
-		h.count(func() { h.held = max(h.held-n-bad-again, 0) })
+		h.count(func() { h.lessHeldLocked(n + bad + again) })
 		if n > 0 || bad > 0 || again > 0 {
 			h.a.log.Info("read the hook calls held while the ledger wasn't open", "calls", n, "bad_lines", bad, "repeated", again)
 		}
@@ -2054,9 +2083,9 @@ func (h *adapterHost) readReplay(name string, last bool) bool {
 // name, once each of them is parsed, and deletes the file. Its records are
 // written, and replaying the file again would write them twice, so it goes
 // even when the seal fails, and the next seal takes them. One that can't
-// be deleted stays for the next start (replayStuck): replayed again in
-// this run, it would write its records twice; left, it does at most once
-// more.
+// be deleted stays for the next start (replayStuck), emptied when it can
+// be, so that start parses none of it again. Only one that can't be
+// emptied either is parsed once more there, and its records written twice.
 func (h *adapterHost) endReplay(name string) {
 	if h.replayTaken > 0 {
 		h.mu.Lock()
@@ -2067,7 +2096,17 @@ func (h *adapterHost) endReplay(name string) {
 		}
 	}
 	h.replayRead, h.replayTaken, h.replayKept, h.replayIDs = false, 0, 0, nil
-	if err := os.Remove(name); err != nil {
+	if err := os.Remove(name); err != nil && os.Truncate(name, 0) == nil {
+		// Emptied, so the next start parses none of its calls again, whose
+		// records are in the ledger already: one made in a local-only
+		// stretch would seal a local-only batch after the server's (Write).
+		// The next start deletes the empty file.
+		h.a.log.Warn("couldn't delete the held hook calls once replayed, so they were emptied for the next start to delete", "err", err)
+		h.a.setProblem("adapters.held", fmt.Sprintf("the hook calls held while the ledger wasn't open were parsed, but couldn't be deleted, so they were emptied, and the next start deletes the file: %v", err))
+		h.replayStuck = true
+		h.replayStopped()
+		return
+	} else if err != nil {
 		h.a.log.Warn("couldn't delete the held hook calls once replayed", "err", err)
 		h.a.setProblem("adapters.held", fmt.Sprintf("the hook calls held while the ledger wasn't open were parsed, but couldn't be deleted, so the next start parses them again: %v", err))
 		h.replayStuck = true
@@ -2171,7 +2210,7 @@ func (h *adapterHost) expireRun(now time.Time) {
 		h.replayAt = at // where the replay stopped, in the file as cut
 	}
 	if n > 0 {
-		h.count(func() { h.held = max(h.held-n, 0) })
+		h.count(func() { h.lessHeldLocked(n) })
 	}
 }
 
@@ -2285,7 +2324,7 @@ func heldAt(line []byte) (time.Time, bool) {
 
 // countHeld counts the calls an earlier run left held, for the status.
 func (h *adapterHost) countHeld() {
-	n := 0
+	n, from := 0, earliestStamp{}
 	for _, name := range []string{h.a.dirs.Held() + ".replay", h.a.dirs.Held()} {
 		f, err := inbox.OpenPrivate(name, os.O_RDONLY, 0)
 		if err != nil {
@@ -2296,6 +2335,9 @@ func (h *adapterHost) countHeld() {
 			line, err := r.ReadBytes('\n')
 			if len(bytes.TrimSpace(line)) > 0 {
 				n++
+				if d, ok := h.readHeld(line); ok {
+					from.add(stampOf(d))
+				}
 			}
 			if err != nil {
 				break
@@ -2303,7 +2345,191 @@ func (h *adapterHost) countHeld() {
 		}
 		f.Close()
 	}
-	h.count(func() { h.held += n })
+	h.count(func() {
+		h.held += n
+		h.heldFrom.merge(from)
+		h.uncounted = false
+	})
+}
+
+// expectCount has waiting count every call as on its way until the worker
+// has counted the held ones (countHeld), when an earlier run left any in
+// held.jsonl, a .replay file or the pending log, which the ledger's start
+// asks for before the ledger opens on a goroutine of its own, so no seal
+// can take a mark while held calls aren't counted yet.
+func (h *adapterHost) expectCount() {
+	held := false
+	for _, name := range []string{h.a.dirs.Held(), h.a.dirs.Held() + ".replay", h.a.dirs.Held() + pendingSuffix} {
+		if fi, err := os.Stat(name); err == nil && fi.Size() > 0 {
+			held = true
+			break
+		}
+	}
+	h.count(func() { h.uncounted = held })
+}
+
+// lessHeldLocked counts n calls as gone from held: parsed, or dropped.
+// With none left, nothing held waits (waiting). h.mu is held.
+func (h *adapterHost) lessHeldLocked(n int) {
+	h.held = max(h.held-n, 0)
+	if h.held == 0 {
+		h.heldFrom = earliestStamp{}
+	}
+}
+
+// waiting reports whether a hook call that before says may have been made
+// before config.toml was last seen local-only is still to be parsed, and
+// its records to reach the ledger writer: taken in and waiting for the
+// worker, in the step the worker is on, parked behind its folder's first
+// Track, or held in held.jsonl or a .replay file while the keys or the
+// writer weren't there. It is the adapters' part of the writer's Waiting
+// (agent.waiting), which a seal asks while the first batch after a switch
+// back online is due its mark, so it takes only mu. A call counts by the
+// times its records carry (hookpath.Times) and by the hook's own stamp, as
+// Write holds them (ledger.Input.Sent), and stays counted until its
+// records are written, so no seal falls between the two.
+func (h *adapterHost) waiting(before func(event.Envelope) bool) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	// A moment that holds nothing, as at a first start, holds no call.
+	if h.uncounted && before(event.Envelope{}) || h.held > 0 && h.heldFrom.waits(before) {
+		return true
+	}
+	for _, s := range h.stepping {
+		if s.waits(before) {
+			return true
+		}
+	}
+	for _, d := range h.queue {
+		if stampOf(d).waits(before) {
+			return true
+		}
+	}
+	for s := range h.parkedAt {
+		if s.waits(before) {
+			return true
+		}
+	}
+	return false
+}
+
+// callStamp is the times of a hook call: those of its records
+// (adapters.HookRecord), its t by the wall clock, in Unix ms, and its mono
+// in boot; and the hook's own stamp, sent, smono and sboot, which
+// hookpath.Times sets aside for the agent's when it is later than the
+// agent took the call, as after a step back of the wall clock, or has no
+// monotonic reading. sent is 0 when the hook gave none.
+type callStamp struct {
+	t, mono     int64
+	boot        string
+	sent, smono int64
+	sboot       string
+}
+
+// stampOf is the times hook call d's records carry (hookpath.Times), with
+// the hook's own stamp.
+func stampOf(d inbox.Delivery) callStamp {
+	at := hookpath.Times(d)
+	s := callStamp{t: at.Wall.UnixMilli(), mono: at.Mono, boot: at.BootID}
+	if sent := sentOf(d); !sent.Wall.IsZero() {
+		s.sent, s.smono, s.sboot = sent.Wall.UnixMilli(), sent.Mono, sent.BootID
+	}
+	return s
+}
+
+// sentOf is the hook's own stamp of call d, which its records' times may
+// have set aside (hookpath.Times), for the ledger writer to hold its
+// records to as well (ledger.Input.Sent). A hook with no monotonic reading
+// gives its wall time alone, and its call is held to the moment by that,
+// which a step of the wall clock can move either way: nothing else bounds
+// when it was made, as a hook stopped between its stamp and its send shows.
+func sentOf(d inbox.Delivery) clock.Stamp {
+	return clock.Stamp{Wall: d.Sent, Mono: d.Mono, BootID: d.BootID}
+}
+
+// waits reports whether before says the call may have been made before
+// the moment, by its records' times or by the hook's own.
+func (s callStamp) waits(before func(event.Envelope) bool) bool {
+	return before(s.envelope()) || s.sent != 0 && before(event.Envelope{T: s.sent, Mono: s.smono, BootID: s.sboot})
+}
+
+// stampsOf is each call's times.
+func stampsOf(calls []inbox.Delivery) []callStamp {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]callStamp, len(calls))
+	for i, d := range calls {
+		out[i] = stampOf(d)
+	}
+	return out
+}
+
+// envelope is s as the envelope of the call's records.
+func (s callStamp) envelope() event.Envelope {
+	return event.Envelope{T: s.t, Mono: s.mono, BootID: s.boot}
+}
+
+// earliestStamp is the earliest of some calls' times by each clock: by the
+// wall clock, and by the monotonic clock of each boot they were made in.
+// The zero value holds none.
+type earliestStamp struct {
+	wall int64
+	set  bool
+	mono map[string]int64
+}
+
+// add takes in s, by its records' times and by the hook's own.
+func (e *earliestStamp) add(s callStamp) {
+	e.addOne(s.t, s.mono, s.boot)
+	if s.sent != 0 {
+		e.addOne(s.sent, s.smono, s.sboot)
+	}
+}
+
+// addOne takes in one time: t by the wall clock, and mono in boot.
+func (e *earliestStamp) addOne(t, mono int64, boot string) {
+	if !e.set || t < e.wall {
+		e.wall, e.set = t, true
+	}
+	if mono > 0 && boot != "" {
+		if e.mono == nil {
+			e.mono = make(map[string]int64)
+		}
+		if cur, ok := e.mono[boot]; !ok || mono < cur {
+			e.mono[boot] = mono
+		}
+	}
+}
+
+// merge takes in what o holds.
+func (e *earliestStamp) merge(o earliestStamp) {
+	if o.set {
+		e.addOne(o.wall, 0, "")
+	}
+	for boot, mono := range o.mono {
+		if e.mono == nil {
+			e.mono = make(map[string]int64)
+		}
+		if cur, ok := e.mono[boot]; !ok || mono < cur {
+			e.mono[boot] = mono
+		}
+	}
+}
+
+// waits reports whether before says some call e holds may have been made
+// before the moment: the earliest by the wall clock, or the earliest of a
+// boot by its monotonic clock, each asked alone.
+func (e earliestStamp) waits(before func(event.Envelope) bool) bool {
+	if e.set && before(event.Envelope{T: e.wall}) {
+		return true
+	}
+	for boot, mono := range e.mono {
+		if before(event.Envelope{T: math.MaxInt64, Mono: mono, BootID: boot}) {
+			return true
+		}
+	}
+	return false
 }
 
 // readHeld reads a line of held.jsonl. Only a line this run wrote, whose

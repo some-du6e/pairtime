@@ -469,6 +469,7 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 		last := rows[n-1]
 		start, next, b, head, snap = last.End, last.LastSeq+1, last.B, last.Head, last.Snap
 		lastLocal = !last.online()
+		w.until, w.sealed = last.until(), last.SealedAt
 		if !slices.Contains(days, start.Seg) {
 			return nil, damaged("batch %d ends in the segment of %s, which isn't there", last.B, start.Seg)
 		}
@@ -585,6 +586,7 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 				rp.Snap = snap
 				restored = append(restored, rp)
 				b, head, lastLocal = rp.B, rp.Head, !rp.online()
+				w.until, w.sealed = rp.until(), rp.SealedAt
 				w.pending = nil
 			default:
 				f.close()
@@ -678,6 +680,58 @@ func (w *Writer) observe(rec ledger.Record) {
 		return
 	}
 	w.q.Observe(body.E)
+}
+
+// arrivedLocked gives each record a crash left that lookback took in the
+// earliest time it can have reached the writer, which a moment then holds
+// it to, as Write held it to when it did (Input.Lookback): when the newest
+// batch was sealed, or the chain began, since it came after both. Lookback
+// isn't on disk, so here a record counts as lookback's when it is one the
+// rule is for: an event that came through a log reader, dated before the
+// chain began. w.mu is held.
+func (w *Writer) arrivedLocked() {
+	for i := range w.pending {
+		p := &w.pending[i]
+		if p.has {
+			continue
+		}
+		if e, ok := envelopeOf(p.rec); ok && e.Via == event.ViaLog && e.T < w.created {
+			p.env, p.has = event.Envelope{T: max(w.sealed, w.created)}, true
+		}
+	}
+}
+
+// madeBefore reports whether before says a record in recs is an event made
+// before a moment, as Write would have found it (pending.madeBefore).
+func madeBefore(before func(event.Envelope) bool, recs []pending) bool {
+	for _, p := range recs {
+		if p.madeBefore(before) {
+			return true
+		}
+	}
+	return false
+}
+
+// envelopeOf returns the times of an event record's event, which are all
+// a moment holds it to, with its via, which tells lookback's records
+// (arrivedLocked), or false for a record that holds no event, as a
+// checkpoint or an upload-failure note doesn't.
+func envelopeOf(rec ledger.Record) (event.Envelope, bool) {
+	if _, ok := rec.Header.RType().EventKind(); !ok {
+		return event.Envelope{}, false
+	}
+	var body struct {
+		E struct {
+			T      int64     `json:"t"`
+			Mono   int64     `json:"mono"`
+			BootID string    `json:"boot_id"`
+			Via    event.Via `json:"via"`
+		} `json:"e"`
+	}
+	if json.Unmarshal(rec.Body, &body) != nil {
+		return event.Envelope{}, false
+	}
+	return event.Envelope{T: body.E.T, Mono: body.E.Mono, BootID: body.E.BootID, Via: body.E.Via}, true
 }
 
 // harnessKind reports whether events of kind k can belong to a harness

@@ -17,17 +17,28 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
+	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/hookpath"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
+	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/tailers"
 	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/pkg/event"
+	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 )
 
 // inProcessLookback starts lookback's reader in the test's own process,
 // over pipes, trimming with the Claude Code adapter as `pairtime lookback`
 // does, but lowering no priority. started counts the readers it started.
 func inProcessLookback(started *atomic.Int32) func() (tailers.Child, error) {
+	open := make(chan struct{})
+	close(open)
+	return gatedLookback(started, open)
+}
+
+// gatedLookback is inProcessLookback with readers that read nothing until
+// open is closed, as a reader the OS holds back at its low priority.
+func gatedLookback(started *atomic.Int32, open <-chan struct{}) func() (tailers.Child, error) {
 	return func() (tailers.Child, error) {
 		started.Add(1)
 		ad, ok := adapters.Default.New(event.HarnessClaudeCode, adapters.Options{Keys: adapters.NewKeys(make([]byte, hookpath.SessionSecretLen))})
@@ -39,17 +50,27 @@ func inProcessLookback(started *atomic.Int32) func() (tailers.Child, error) {
 		inR, inW := io.Pipe()
 		outR, outW := io.Pipe()
 		done := make(chan error, 1)
+		killed := make(chan struct{})
 		go func() {
-			err := tailers.ServeLookback(inR, outW, trim)
+			err := errors.New("killed")
+			select {
+			case <-open:
+				err = tailers.ServeLookback(inR, outW, trim)
+			case <-killed:
+			}
 			outW.CloseWithError(err)
 			inR.Close()
 			done <- err
 		}()
-		var once sync.Once
+		var once, kill sync.Once
 		var werr error
 		return tailers.Child{In: inW, Out: outR,
 			Wait: func() error { once.Do(func() { werr = <-done }); return werr },
-			Kill: func() { outR.CloseWithError(errors.New("killed")); inW.Close() }}, nil
+			Kill: func() {
+				kill.Do(func() { close(killed) })
+				outR.CloseWithError(errors.New("killed"))
+				inW.Close()
+			}}, nil
 	}
 }
 
@@ -226,6 +247,77 @@ func TestLookbackReachesTheLedger(t *testing.T) {
 		}
 		if lb := st.Adapters.Lookback; lb.Running || lb.Bytes != lb.BytesDone || started.Load() != 1 {
 			t.Errorf("lookback %+v from %d readers, want the first run's, read through, with no reader since", lb, started.Load())
+		}
+	})
+}
+
+// TestLookbackAfterLoginSealsOnline checks a history lookback's reader
+// reads after pairtime login switched config.toml online, in a real agent
+// that started local, as every install does (#182): its records are dated
+// before the ledger began, while config.toml said local, but the writer
+// judges a lookback record by when it took it in (ledger.Input.Lookback),
+// so its batch is sealed online.
+func TestLookbackAfterLoginSealsOnline(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the replay's folders are Linux paths")
+	}
+	r := newHookReplay(t)
+	teen := filepath.Join(filepath.Dir(r.home), "teen")
+	dir := filepath.Join(teen, ".claude", "projects", "-cli")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const sid = "44444444-0000-4000-8000-000000000004"
+	b, _ := json.Marshal(map[string]any{"type": "user", "sessionId": sid, "promptId": "ffffffff-0000-4000-8000-000000000041",
+		"timestamp": time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339Nano), "cwd": r.folder(), "version": "2.1.327",
+		"entrypoint": "cli", "isSidechain": false, "promptSource": "typed", "turnOrigin": "human",
+		"message": map[string]any{"role": "user", "content": "What does this do?"}})
+	if err := os.WriteFile(filepath.Join(dir, sid+".jsonl"), append(b, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var started atomic.Int32
+	open := make(chan struct{})
+	opts := r.options([]keys.Store{})
+	opts.Env = &install.Env{GOOS: runtime.GOOS, Home: teen}
+	opts.Lookback = gatedLookback(&started, open)
+	// The agent writes the default config.toml, which says mode = "local".
+	a := startAgent(t, opts)
+	waitStatusFor(t, a, 30*time.Second, func(s statusReply) bool { return started.Load() == 1 })
+	// pairtime login switches config.toml online, and the reader reads on
+	// once the config watch has noted it, past its debounce.
+	if err := home.WriteFile(r.dirs.ConfigFile(), []byte("mode = \"online\"\n")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	close(open)
+	waitStatusFor(t, a, 60*time.Second, func(s statusReply) bool {
+		lb := s.Adapters.Lookback
+		return lb != nil && lb.FilesDone == 1 && !lb.Running
+	})
+	a.cancel()
+	if err := a.waitExit(t); err != nil {
+		t.Fatalf("stopping the agent: %v", err)
+	}
+	_, secret := deviceKeys(t, r.dirs, []keys.Store{})
+	key := adapters.NewKeys(secret).Session(sid)
+	found, online := false, false
+	if err := ledger.ReadBatches(r.dirs.Ledger(), 1, func(batch ledger.Batch) error {
+		for _, rec := range batch.Records {
+			body, err := pkgledger.ParseBody(rec.Body)
+			if err != nil {
+				return err
+			}
+			if ev, err := body.Event(); err == nil && ev.Kind() == event.KindPromptSubmit && ev.SessionKey == key {
+				found, online = true, batch.Online
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Run("the history's prompt, read after the login, is in a batch sealed online", func(t *testing.T) {
+		if !found || !online {
+			t.Errorf("the prompt is in the ledger %v, in a batch sealed online %v", found, online)
 		}
 	})
 }

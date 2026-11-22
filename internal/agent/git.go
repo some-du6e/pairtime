@@ -347,10 +347,10 @@ func (g *gitHost) noteCommand(r adapters.Record, t *event.AgentTool) {
 // which is when the watcher moves the cursor past the change. The watcher
 // gives it the envelope's t, source, harness, session and project; the
 // agent adds the rest: the id, via git, and the run's mono and boot_id, as
-// its other own events have them (ledger.RunClock). The mono is read now,
-// from the clock presence's records are read from, less how long ago t was
-// by the wall clock: a few seconds of hold, which no sleep or clock step
-// falls in. The writer adds the device and the sequence number. The record
+// its other own events have them (ledger.RunClock). The mono is the run's
+// clock when the scan that found the change began (git.Change.Found), which
+// t gives by the wall clock, so a step of the wall clock during the hold
+// moves neither. The writer adds the device and the sequence number. The record
 // is sealed at once, so a cursor saved after it never runs ahead of the
 // ledger. The commit records go first, so a ledger that refuses the
 // git.change still leaves them for the uploader.
@@ -370,7 +370,15 @@ func (g *gitHost) sink(c git.Change) {
 	ev.EventID = event.NewEventID(time.UnixMilli(ev.T))
 	ev.Via = event.ViaGit
 	ev.Mono, ev.BootID = ledger.RunClock(now)
-	ev.Mono = max(ev.Mono-max(now.UnixMilli()-ev.T, 0), 0)
+	if c.Found.IsZero() {
+		ev.Mono = max(ev.Mono-max(now.UnixMilli()-ev.T, 0), 0)
+	} else {
+		// The scan's own reading, which the hold, up to 10 minutes while an
+		// agent's shell call runs, doesn't move by a step of the wall clock:
+		// the ledger writer holds the event to it when config.toml said
+		// local-only meanwhile (ledger.Writer.Write).
+		ev.Mono, ev.BootID = ledger.RunClock(c.Found)
+	}
 	if _, err := g.writer.Write(ledger.Input{Event: ev}); err != nil {
 		g.a.log.Warn("the ledger refused a git.change record", "op", c.Op(), "err", err)
 		g.a.setProblem("git.ledger", fmt.Sprintf("the ledger refused a git.change record: %v", err))
