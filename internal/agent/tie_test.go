@@ -12,6 +12,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/adapters"
 	"github.com/some-du6e/pairtime/internal/agent/hookpath"
+	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/procs"
 	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -180,6 +181,35 @@ func TestTieLive(t *testing.T) {
 			_, tied := r.a.procs.TiedTo(r.h.sessionKey(sid))
 			if tied != tc.tied || r.reads != tc.reads {
 				t.Errorf("tied %v after %d table reads; want tied %v after %d", tied, r.reads, tc.tied, tc.reads)
+			}
+		})
+	}
+}
+
+// TestScanStartMono checks the run clock of the scan's session.start
+// (scanStart): its mono is this run's clock less how long before now the
+// start is dated, and never later than now, as for a first line dated
+// ahead of its read.
+func TestScanStartMono(t *testing.T) {
+	cases := []struct {
+		name string
+		// first is when the session's first line read live was written,
+		// from now, and before how far before now the start's mono is, at
+		// least, while the run is that old.
+		first, before time.Duration
+	}{
+		{"a first line five seconds old gives a mono five seconds before now", -5 * time.Second, 4 * time.Second},
+		{"a first line dated ahead of its read gives a mono no later than now", 5 * time.Second, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTieRig(t, nil)
+			key := r.h.sessionKey("617e16a3-ddb4-44ca-af68-72cf58ed1a34")
+			r.a.procs.Touch(key, time.Now().Add(tc.first))
+			rec, ok := r.h.scanStart(procs.Session{Event: event.SessionStart{StartKind: event.StartStartup}}, event.HarnessClaudeCode, key, nil)
+			after, _ := ledger.RunClock(time.Now())
+			if want := max(after-tc.before.Milliseconds(), 0); !ok || rec.Event.Mono > want {
+				t.Errorf("the scan's start has mono %d (%v); want at most %d", rec.Event.Mono, ok, want)
 			}
 		})
 	}

@@ -90,9 +90,10 @@ type LogReader interface {
 	// session is tied to none.
 	LogCleared(session string) bool
 	// LogStarted reports whether the adapter wrote a session.start for the
-	// harness's session session from its log, or holds one that waits: a
-	// procs tie writes the scan's for a session it has none of, so SM 2.2
-	// rule 4 reads the walk.
+	// harness's session session from its log, or holds one that waits, for
+	// the session's hooks or for a procs tie (LogHoldStart): a procs tie
+	// writes the scan's for a session it has none of, so SM 2.2 rule 4
+	// reads the walk.
 	LogStarted(session string) bool
 	// LogHoldStart holds the session.start of the harness's session
 	// session that waits (LogStarted) for up to past ms beyond the grace it

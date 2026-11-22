@@ -85,7 +85,8 @@ const (
 // walk's start instead: Claude Code can write a session's first entries
 // before its first hook call reaches the agent, as while the agent starts,
 // with room for a slow one. A call the spool delivered cancels nothing
-// (sessionStart).
+// (sessionStart). A session's first start waits longer while the host
+// holds it for a procs tie (LogHoldStart).
 const startGrace = 90_000
 
 // maxToolWait is how long after its use a tool use waits for its result
@@ -145,10 +146,9 @@ type txSession struct {
 	// that the first such was the /clear command, which starts the new
 	// session in the process of the one it clears (LogCleared).
 	opened, cleared bool
-	// hold is how long past startGrace the host holds the session's
-	// session.start while its procs tie waits, in ms (LogHoldStart). It
-	// isn't saved: after a restart the start waits out its grace alone,
-	// until the next try of the tie holds it again.
+	// hold is how long past startGrace the host holds the session's first
+	// session.start while its procs tie waits, in ms (LogHoldStart), saved
+	// with the rest, so the start a restart's replay makes waits as long.
 	hold int64
 	seen uint64
 }
@@ -1150,13 +1150,17 @@ func (a *Adapter) LogStarted(sid string) bool {
 	return false
 }
 
-// LogHoldStart holds the session.start of session sid that waits for up to
-// past ms beyond startGrace, and lets it go then with 0
-// (adapters.LogReader).
+// LogHoldStart holds the first session.start of session sid, while it
+// waits, for up to past ms beyond startGrace, and lets it go then with 0
+// (adapters.LogReader). A session whose first start is written gets no
+// hold, so a start at a change of its token waits startGrace alone, and
+// nor does one the reader has no memory of, which has no start waiting.
 func (a *Adapter) LogHoldStart(sid string, past int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.logSessionFor(sid).hold = max(past, 0)
+	if ls := a.logSessions[sid]; ls != nil && !ls.started {
+		ls.hold = max(past, 0)
+	}
 }
 
 // LogIgnored reports whether the last entry of file that named a folder

@@ -1289,35 +1289,53 @@ func TestLogStarted(t *testing.T) {
 // TestLogHoldStart checks the hold the procs tie puts on a session.start
 // that waits (LogHoldStart): the start waits out its grace and the hold
 // past it, and goes once both have passed, or once its grace has, when
-// the hold is let go.
+// the hold is let go. The hold is saved with the reader's memory, so a
+// restarted reader holds the start its replay makes as long.
 func TestLogHoldStart(t *testing.T) {
 	const entry = 1_795_194_000_000 // 2026-11-20T17:00:00Z, the entry's time
+	l := logLines(userText("q1", "fix the failing test", map[string]any{"turnOrigin": "human", "promptSource": "typed",
+		"timestamp": "2026-11-20T17:00:00.000Z"}))[0]
 	cases := []struct {
 		name string
-		// hold is the hold set once the entry is read, and release says it
-		// is let go before the idle markers come, at idle seconds after the
-		// entry. starts is how many session.starts they give.
-		hold    int64
-		release bool
-		idle    []int64
-		starts  int
+		// hold is the hold set once the entry is read, release says it is
+		// let go before the idle markers come, and restart that the
+		// reader's memory goes to another, which reads the entry again as a
+		// replay. idle are the idle markers' times, in seconds after the
+		// entry, and starts how many session.starts they give.
+		hold             int64
+		release, restart bool
+		idle             []int64
+		starts           int
 	}{
-		{"with no hold, the start goes once its grace has passed", 0, false, []int64{95}, 1},
-		{"a hold keeps it past its grace", 30_000, false, []int64{95, 115}, 0},
-		{"and lets it go once the hold has passed too", 30_000, false, []int64{95, 125}, 1},
-		{"a hold let go lets it go at the next marker past its grace", 30_000, true, []int64{95}, 1},
+		{"with no hold, the start goes once its grace has passed", 0, false, false, []int64{95}, 1},
+		{"a hold keeps it past its grace", 30_000, false, false, []int64{95, 115}, 0},
+		{"and lets it go once the hold has passed too", 30_000, false, false, []int64{95, 125}, 1},
+		{"a hold let go lets it go at the next marker past its grace", 30_000, true, false, []int64{95}, 1},
+		{"a restarted reader holds the start its replay makes as long", 30_000, false, true, []int64{95, 115}, 0},
+		{"and lets it go once the hold has passed", 30_000, false, true, []int64{95, 125}, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			a := newTest()
-			l := logLines(userText("q1", "fix the failing test", map[string]any{"turnOrigin": "human", "promptSource": "typed",
-				"timestamp": "2026-11-20T17:00:00.000Z"}))[0]
 			if _, err := a.Parse(logRawAt(l, false, false, entry+1_000)); err != nil {
 				t.Fatal(err)
 			}
 			a.LogHoldStart("s1", tc.hold)
 			if tc.release {
 				a.LogHoldStart("s1", 0)
+			}
+			if tc.restart {
+				mem, err := a.SaveState()
+				if err != nil {
+					t.Fatal(err)
+				}
+				a = newTest()
+				if err := a.LoadState(mem); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := a.Parse(logRawAt(l, false, true, entry+2_000)); err != nil {
+					t.Fatal(err)
+				}
 			}
 			var recs []adapters.Record
 			for _, s := range tc.idle {
@@ -1329,6 +1347,51 @@ func TestLogHoldStart(t *testing.T) {
 			}
 			if got := len(ofKind[*event.SessionStart](recs)); got != tc.starts {
 				t.Errorf("%d session.starts, want %d", got, tc.starts)
+			}
+		})
+	}
+}
+
+// TestLogHoldStartAfterTheFirst checks that only a session's first
+// session.start can be held (LogHoldStart): one at a change of its token,
+// once the first is written, waits out its grace alone.
+func TestLogHoldStartAfterTheFirst(t *testing.T) {
+	const entry = 1_795_194_000_000 // 2026-11-20T17:00:00Z, the first entry's time
+	lines := logLines(
+		userText("q1", "fix the failing test", map[string]any{"turnOrigin": "human", "promptSource": "typed",
+			"timestamp": "2026-11-20T17:00:00.000Z"}),
+		userText("q2", "now the docs", map[string]any{"turnOrigin": "human", "promptSource": "typed",
+			"timestamp": "2026-11-20T17:05:00.000Z", "entrypoint": "sdk-cli"}),
+	)
+	cases := []struct {
+		name string
+		// starts is how many session.starts the second entry's markers give.
+		starts int
+	}{
+		{"a start at a change of token, held once the first is written, goes at its grace", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTest()
+			for _, raw := range []adapters.RawRecord{logRawAt(lines[0], false, false, entry+1_000), logRawAt(lines[0], true, false, entry+95_000)} {
+				if _, err := a.Parse(raw); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !a.LogStarted("s1") {
+				t.Fatal("the first start wasn't written")
+			}
+			second := int64(entry + 300_000)
+			if _, err := a.Parse(logRawAt(lines[1], false, false, second+1_000)); err != nil {
+				t.Fatal(err)
+			}
+			a.LogHoldStart("s1", 30_000)
+			recs, err := a.Parse(logRawAt(lines[1], true, false, second+95_000))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(ofKind[*event.SessionStart](recs)); got != tc.starts {
+				t.Errorf("%d session.starts at the second entry's grace, want %d", got, tc.starts)
 			}
 		})
 	}

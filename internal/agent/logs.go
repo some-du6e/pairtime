@@ -185,6 +185,8 @@ func (h *adapterHost) tieLive(lr adapters.LogReader, harness event.Harness, sid 
 		return adapters.Record{}, false
 	}
 	if _, tied := p.TiedTo(key); tied {
+		// As after a restart whose saved hold outlived its tie's release.
+		lr.LogHoldStart(sid, 0)
 		return adapters.Record{}, false
 	}
 	sess, tied, judged := p.Tie(harness, key, time.UnixMilli(at))
@@ -223,7 +225,7 @@ func (h *adapterHost) scanStart(sess procs.Session, harness event.Harness, key s
 	t := first.UnixMilli() - 1
 	now := time.Now() // with its monotonic reading, which this run's clock needs
 	mono, boot := ledger.RunClock(now)
-	env := event.Envelope{T: t, Mono: max(mono-(now.UnixMilli()-t), 0), BootID: boot, Source: event.SourceOS,
+	env := event.Envelope{T: t, Mono: max(mono-max(now.UnixMilli()-t, 0), 0), BootID: boot, Source: event.SourceOS,
 		Via: event.ViaOS, Harness: harness, SessionKey: key}
 	for _, r := range recs {
 		if r.Event.SessionKey == key {
