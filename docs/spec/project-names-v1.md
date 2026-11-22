@@ -36,7 +36,7 @@ One gzip member holding one JSON object with up to two members, each optional. A
 | `set` | Names to show: each a project key of this device (ingest-v1 1's key) and its label. A key already named gets the new label |
 | `delete` | Project keys whose names the owner turned off. A key with no name is no error |
 
-A label is 1 to 64 Unicode code points of valid UTF-8, already in the form D-display-name's cleaning gives: no control character (Unicode Cc) and no formatting character (Cf), no space at either end, and no two spaces in a row. The client cleans a label before the owner sees it, so the label sent is the one the owner approved, and the server refuses a label that cleaning would change rather than store one the owner didn't see.
+A label is valid UTF-8, not empty, and already in the form D-display-name's cleaning gives, which `pkg/projectname`'s `CleanLabel` does on both sides: each run of spaces, line breaks and control characters becomes one space, the ends are trimmed, formatting characters other than the zero-width joiner and non-joiner are dropped, and at most 64 code points stay. So a label has no control character, no formatting character but those two, no space at either end, no two whitespace characters in a row, and at most 64 code points (`ValidLabel`). The client cleans a label before the owner sees it, so the label sent is the one the owner approved, and the server refuses a label that cleaning would change rather than store one the owner didn't see.
 
 An object with neither member, `{}`, is a read: it changes nothing and its answer lists the device's names (1.6).
 
@@ -44,14 +44,13 @@ An object with neither member, `{}`, is a read: it changes nothing and its answe
 
 | What | Limit |
 |---|---|
-| Raw body | 16,384 bytes |
-| Inflated body | 65,536 bytes |
+| Raw body, and inflated body | ingest-v1 2.4's: 262,144 and 4,194,304 bytes |
 | Items in `set` and `delete` together | 200 |
 | Names the server holds for one device | 1,000 |
 
 ### 1.5 Checks, in order
 
-Steps 1 to 12 of ingest-v1 2.5, with `M_names` in place of `M` in step 10 and the limits of 1.4 in steps 8 and 11, then:
+Steps 1 to 12 of ingest-v1 2.5, with `M_names` in place of `M` in step 10, then:
 
 1. The body's members: a member that isn't `set` or `delete`, of another JSON type, or there twice is `body_shape`; more than 200 items is `too_many_names`.
 2. Each item: a `set` item that isn't an object with exactly `project` and `label` as strings is `body_shape`; a `project` or a `delete` entry that isn't a key is `project_invalid`; a key twice in the request, in either member, is `project_repeated`; a label that isn't one as 1.3 says is `label_invalid`.

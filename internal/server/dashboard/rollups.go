@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/rollup"
+	"github.com/some-du6e/pairtime/pkg/projectname"
 )
 
 // AgentName is what a real dashboard calls the agent. Tier-1 buckets
@@ -28,7 +29,7 @@ type Rollups struct {
 // View returns the account's last MonthDays local days as of now. Its
 // projects are the account-level ones the rollups count
 // (D-account-project-id), each called by the short code of its first
-// device key (ShortCodes). Until project registration (WP-SV10) links the
+// device key (projectname.ShortCodes). Until project registration (WP-SV10) links the
 // keys of one repo, each device's key is a project of its own, and the
 // view says so.
 func (r Rollups) View(ctx context.Context, account string, now time.Time) (View, error) {
@@ -66,12 +67,12 @@ func (r Rollups) View(ctx context.Context, account string, now time.Time) (View,
 			codeFrom[day.ProjectID] = day.ProjectID
 		}
 	}
-	short := ShortCodes(slices.Collect(maps.Values(codeFrom)))
+	short := projectname.ShortCodes(slices.Collect(maps.Values(codeFrom)))
 	names := make(map[string]string, len(codeFrom))
 	codes := make(map[string]string, len(codeFrom))
 	for id, key := range codeFrom {
 		codes[id] = short[key]
-		names[id] = CodeName(short[key])
+		names[id] = projectname.CodeName(short[key])
 	}
 	var rows []Row
 	for _, day := range days {
@@ -100,94 +101,3 @@ func (r Rollups) View(ctx context.Context, account string, now time.Time) (View,
 // seconds turns milliseconds into seconds. Credit moves in steps of half
 // a second, which float64 holds exactly.
 func seconds(ms int64) float64 { return float64(ms) / 1000 }
-
-// CodeLen is how many characters a project's short code has, unless
-// another of the account's projects shares them.
-const CodeLen = 6
-
-// ShortCodes gives each of keys, the device keys an account's projects
-// are called by, the short code the owner's dashboard calls its project
-// by, since the server never learns a project's name unless the owner
-// publishes it. A code is the first CodeLen characters of the key after
-// its kind prefix: the git adapter's keys start with a letter that says
-// what kind of identity the key came from (g for a repo's root commits, d
-// for a folder), and 32 hex digits, so "g7c41e9…" has the code "7c41e9".
-// A key of any other form gives its own first characters. Two keys whose
-// codes would be the same both get longer ones, a character at a time,
-// until they differ, and no other key's code changes; keys that differ
-// only in their kind prefix keep it, and so does any key whose code would
-// still be another's. So every key's code is unique among keys. Keys are opaque HMACs under a device secret (DESIGN 4.3), so a
-// code says nothing about its project either.
-func ShortCodes(keys []string) map[string]string {
-	codes := make(map[string]string, len(keys))
-	var assign func(group []string, n int)
-	assign = func(group []string, n int) {
-		byCode := make(map[string][]string, len(group))
-		for _, k := range group {
-			body := codeBody(k)
-			c := body[:min(n, len(body))]
-			byCode[c] = append(byCode[c], k)
-		}
-		for c, ks := range byCode {
-			whole := true
-			for _, k := range ks {
-				whole = whole && len(codeBody(k)) <= n
-			}
-			switch {
-			case len(ks) == 1:
-				codes[ks[0]] = c
-			case whole:
-				// The same body under two kind prefixes: only the
-				// prefix tells them apart.
-				for _, k := range ks {
-					codes[k] = k
-				}
-			default:
-				assign(ks, n+1)
-			}
-		}
-	}
-	assign(slices.Compact(slices.Sorted(slices.Values(keys))), CodeLen)
-	// A key that fell back to itself can equal the code cut from a longer
-	// key of another form, as "d" and 32 d's does the first 33 characters
-	// of 34 d's. Every key whose code another key also has gets its full
-	// key instead, until no code repeats. Keys are distinct, so that ends.
-	for {
-		owners := make(map[string][]string, len(codes))
-		for k, c := range codes {
-			owners[c] = append(owners[c], k)
-		}
-		shared := false
-		for _, ks := range owners {
-			if len(ks) < 2 {
-				continue
-			}
-			for _, k := range ks {
-				if codes[k] != k {
-					codes[k], shared = k, true
-				}
-			}
-		}
-		if !shared {
-			return codes
-		}
-	}
-}
-
-// codeBody is what a key's short code is cut from: one of the git
-// adapter's keys without its kind prefix, or any other key whole.
-func codeBody(key string) string {
-	if len(key) != 33 || key[0] < 'a' || key[0] > 'z' {
-		return key
-	}
-	for i := 1; i < len(key); i++ {
-		if c := key[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return key
-		}
-	}
-	return key[1:]
-}
-
-// CodeName is what the owner's dashboard calls a project with the short
-// code code: "Project 7c41e9".
-func CodeName(code string) string { return "Project " + code }

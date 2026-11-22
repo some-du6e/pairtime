@@ -16,6 +16,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/server/dashboard"
 	"github.com/some-du6e/pairtime/internal/server/rollup"
+	"github.com/some-du6e/pairtime/pkg/projectname"
 )
 
 // noonClock is when the tests look at dashboard.Unattended: twelve hours
@@ -527,9 +528,9 @@ func TestShortCodeTitles(t *testing.T) {
 	coded := func(t *testing.T) dashboard.View {
 		v := ownerView(t)
 		keys := []string{"g7c41e9a2d05b8f63e1a94c7d2b6f0e85", "gd2a8f61c94e07b35a8c1f6e29d4b7a03", "g5be03d7f18a6c92e4b07d5a1c8f3e962"}
-		codes := dashboard.ShortCodes(keys)
+		codes := projectname.ShortCodes(keys)
 		for i := range v.Projects {
-			v.Projects[i].Keys, v.Projects[i].Code, v.Projects[i].Name = []string{keys[i]}, codes[keys[i]], dashboard.CodeName(codes[keys[i]])
+			v.Projects[i].Keys, v.Projects[i].Code, v.Projects[i].Name = []string{keys[i]}, codes[keys[i]], projectname.CodeName(codes[keys[i]])
 		}
 		return v
 	}

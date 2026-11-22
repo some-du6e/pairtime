@@ -33,6 +33,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/dashboard"
 	"github.com/some-du6e/pairtime/internal/server/pages"
 	"github.com/some-du6e/pairtime/internal/server/retention"
+	"github.com/some-du6e/pairtime/pkg/projectname"
 )
 
 func main() {
@@ -151,10 +152,10 @@ var ownerKeys = []string{
 func ownerView(now time.Time) (dashboard.View, error) {
 	v, err := dashboard.Demo{}.View(context.Background(), "", now)
 	v.Sample, v.Agent, v.TZ, v.SplitByDevice = false, dashboard.AgentName, "Europe/London", true
-	codes := dashboard.ShortCodes(ownerKeys)
+	codes := projectname.ShortCodes(ownerKeys)
 	for i := range v.Projects {
 		key := ownerKeys[i%len(ownerKeys)]
-		v.Projects[i].Keys, v.Projects[i].Code, v.Projects[i].Name = []string{key}, codes[key], dashboard.CodeName(codes[key])
+		v.Projects[i].Keys, v.Projects[i].Code, v.Projects[i].Name = []string{key}, codes[key], projectname.CodeName(codes[key])
 	}
 	return v, err
 }
