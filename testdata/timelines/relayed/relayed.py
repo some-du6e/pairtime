@@ -40,7 +40,7 @@ UNKNOWN_BUCKET_MAX_S = 120     # the cap for a relayed session (SM 8.6)
 READ_FOLLOW_S = 600            # the next relayed message within 600 s of the stop (SM 2.4)
 RELAY_MATCH_S = 600            # SM 8.1
 RELAY_SEEN_LAG_S = 60          # SM 8.1
-PENDING_WINDOW_S = 900         # SM 8.1
+PENDING_WINDOW_S = 900         # DESIGN 6.2 D1: a minute stays open 900 s after it ends
 # SM 2.4: a message vouches for a stop's reading only if it pairs while the
 # stop's minute is still pending, within PENDING_WINDOW_S - 60 s of the stop.
 VOUCH_PAIR_S = PENDING_WINDOW_S - 60
