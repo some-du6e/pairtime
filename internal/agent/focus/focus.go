@@ -296,11 +296,13 @@ func (w *Watcher) Start() {
 
 // noSource makes focus unknown from at on, for reason, when the component
 // has no running source: Status says so at once, and the worker records it
-// (unknown). It replaces anything a source reported before it failed. The
-// caller holds w.mu and signals the worker.
+// (unknown), unless Stop has run meanwhile. It replaces anything a source
+// reported before it failed. The caller holds w.mu and signals the worker.
 func (w *Watcher) noSource(at time.Time, reason string) {
 	w.status.Unknown, w.status.NoSource = reason, reason
-	w.pending = &Change{At: at, Unknown: reason}
+	if !w.stopped {
+		w.pending = &Change{At: at, Unknown: reason}
+	}
 }
 
 // Stop stops the OS's focus source and the component. Nothing is recorded
