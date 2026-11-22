@@ -42,14 +42,15 @@ import (
 //     (WP-AD1's capture). A call refused before it ran is none.
 //   - A subagent's entries, isSidechain, give its tool calls alone, with no
 //     visible output: the person reads none of a subagent's work (SM 2.4).
-//   - session.start comes only for a session no hook reported, at the
-//     first entry that states an entrypoint token and again wherever the
-//     token changes, with parent_class unknown, has_tty false and the
-//     token's entrypoint (E-2.8-lookback; E-cc-transcript-labels). Claude
-//     Code can write a session's first entries before its SessionStart
-//     hook runs, and a spooled hook comes with the next drain, so for an
-//     entry the reader reads as it is written the record waits startGrace
-//     for a hook first.
+//   - session.start comes only for a session no via-hook call reported,
+//     at the first entry that states an entrypoint token and again
+//     wherever the token changes, with parent_class unknown, has_tty false
+//     and the token's entrypoint (E-2.8-lookback; E-cc-transcript-labels).
+//     Claude Code can write a session's first entries before its first
+//     hook call reaches the agent, so for an entry the reader reads as it
+//     is written the record waits startGrace for a via-hook call, whose
+//     walk gives the session its start instead. A call the spool delivered
+//     cancels nothing.
 //   - No agent.permission: the transcript says who answered a permission
 //     request, but dates no answer of a command (SM 1.2;
 //     docs/errata/2026-11-21-claude-code-transcript-permissions.md).
@@ -79,9 +80,12 @@ const (
 	maxPendingTools = 64
 )
 
-// startGrace is how long a session.start waits for a hook of its session
-// before the reader writes it: past a spooled hook's next drain, which
-// comes every minute (internal/agent), with room for a slow one.
+// startGrace is how long a session.start waits for a via-hook call of its
+// session before the reader writes it, a call that gives the session the
+// walk's start instead: Claude Code can write a session's first entries
+// before its first hook call reaches the agent, as while the agent starts,
+// with room for a slow one. A call the spool delivered cancels nothing
+// (sessionStart).
 const startGrace = 90_000
 
 // maxToolWait is how long after its use a tool use waits for its result
