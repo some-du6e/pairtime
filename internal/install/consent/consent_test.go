@@ -73,8 +73,9 @@ func teenPaths(s, root string) string {
 }
 
 // TestScreenSnapshots checks the whole consent screen for three sets of
-// detected harnesses, for a hook command that fails its self-test, and for
-// a settings file Claude Code's planner refuses, against testdata/*.golden
+// detected harnesses, for a hook command that fails its self-test, for a
+// settings file Claude Code's planner refuses, and for a computer pairtime
+// login linked, which config.toml lets upload, against testdata/*.golden
 // (docs/PLAN.md, WP-IN2). A screen that differs is printed in base64, so a
 // new snapshot can be read out of the CI log byte for byte, looked over
 // and committed.
@@ -86,21 +87,26 @@ func TestScreenSnapshots(t *testing.T) {
 		found    []string
 		hook     HookTest
 		readOnly bool
+		// linked is the server the computer is linked to (Input.Linked).
+		linked string
 	}{
 		{"with no AI tool found, only autostart is offered, and each tool says it wasn't found",
-			"none.golden", nil, HookTest{}, false},
+			"none.golden", nil, HookTest{}, false, ""},
 		{"with Claude Code found, autostart and Claude Code's hooks are offered, each with its diff",
-			"claude.golden", []string{".claude"}, passed, false},
+			"claude.golden", []string{".claude"}, passed, false, ""},
 		{"with Claude Code, Cursor and Codex found, the hooks card says Cursor runs them too, and Codex has no hooks yet",
-			"claude-cursor-codex.golden", []string{".claude", ".cursor", ".codex"}, passed, false},
+			"claude-cursor-codex.golden", []string{".claude", ".cursor", ".codex"}, passed, false, ""},
 		{"with a hook command that fails its self-test, no hooks are offered and the screen says why",
-			"hook-failed.golden", []string{".claude"}, HookTest{Why: "pairtime hook failed its self-test (it exited with status 2), so pairtime leaves Claude Code's settings alone"}, false},
+			"hook-failed.golden", []string{".claude"}, HookTest{Why: "pairtime hook failed its self-test (it exited with status 2), so pairtime leaves Claude Code's settings alone"}, false, ""},
 		{"with a Claude Code settings file its planner won't edit, the hooks are left out and Claude Code's line says why, and autostart is still offered",
-			"planner-refused.golden", []string{".claude"}, passed, true},
+			"planner-refused.golden", []string{".claude"}, passed, true, ""},
+		{"on a computer pairtime login linked, which config.toml lets upload, the screen names the server in place of local-only mode",
+			"linked.golden", []string{".claude"}, passed, false, "https://pairtime.example"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s, root := screenFor(t, tt.found, tt.hook, tt.readOnly)
+			s.in.Linked = tt.linked
 			var b strings.Builder
 			s.Render(&b)
 			got := teenPaths(b.String(), root)

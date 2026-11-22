@@ -73,8 +73,15 @@ func TestChecks(t *testing.T) {
 				f.Agent.Problems = map[string]string{"account": "pairtime uploads nothing, because this computer is linked to a server but its sign-in doesn't read: the keyring is locked",
 					"uploader": "the server's receipt for batch 3 doesn't check out, so it isn't kept"}
 			}, check: "agent", want: OK,
-			wantHas: []string{"linked to a server, but it uploads nothing (problem.account says why)"},
+			wantHas: []string{"in online mode, but it uploads nothing (problem.account says why)"},
 			wantNot: []string{"so it uploads", "problem.uploader"}},
+		{name: "an online agent whose ledger hasn't opened names problem.ledger rather than saying it uploads, since no uploader runs",
+			edit: func(f *Facts) {
+				f.Agent.Mode = "online"
+				f.Agent.Problems = map[string]string{"ledger": "the agent records nothing in the ledger until it opens, and tries again in 30s: the keyring is locked"}
+			}, check: "agent", want: OK,
+			wantHas: []string{"in online mode, but its ledger reports a problem, which problem.ledger names"},
+			wantNot: []string{"so it uploads", "signed in"}},
 		{name: "a signed-in agent with other problems only still says it uploads",
 			edit: func(f *Facts) {
 				f.Agent.Mode = "online"

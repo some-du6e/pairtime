@@ -169,9 +169,13 @@ func modeWords(a *Status) string {
 	case "online":
 		switch {
 		case strings.TrimSpace(a.Problems["account"]) != "":
-			return "linked to a server, but it uploads nothing (problem.account says why)"
+			return "in online mode, but it uploads nothing (problem.account says why)"
 		case strings.TrimSpace(a.Problems["uploader"]) != "":
 			return "signed in, but its uploader reports a problem, which problem.uploader names"
+		case strings.TrimSpace(a.Problems["ledger"]) != "":
+			// The uploader starts once the ledger opens, so until then
+			// nothing says whether the computer is signed in.
+			return "in online mode, but its ledger reports a problem, which problem.ledger names"
 		}
 		return "signed in, so it uploads your hours' numbers"
 	}

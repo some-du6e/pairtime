@@ -1045,7 +1045,7 @@ func TestSetUpLine(t *testing.T) {
 			if err := os.WriteFile(dirs.ConfigFile(), []byte(tc.config), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if got := setUpLine(dirs); !strings.Contains(got, tc.want) {
+			if got := setUpLine(linkedServer(dirs)); !strings.Contains(got, tc.want) {
 				t.Errorf("install says %q, want %q", got, tc.want)
 			}
 		})

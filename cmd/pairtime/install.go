@@ -126,10 +126,12 @@ var installStdin io.Reader = os.Stdin
 // refuses to replace the binary at all (hooksWouldBreak), whether or not
 // the teen leaves the hooks out.
 //
-// The agent runs in local-only mode, the only mode of this release, which
-// it writes into config.toml at its first start (internal/agent/config).
-// Lookback over old transcripts arrives with WP-AD3, and the WakaTime
-// line, Karim's AGENTS.md entry and sign-in with their work packages.
+// The agent starts in local-only mode, which it writes into config.toml
+// at its first start (internal/agent/config). pairtime login links the
+// computer and sets it online, and install leaves both as they are, so the
+// consent screen and install's last line say which the computer is in
+// (linkedServer). Lookback over old transcripts arrives with WP-AD3, and
+// the WakaTime line and Karim's AGENTS.md entry with their work packages.
 func runInstall(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("install", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -255,6 +257,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+	linked := linkedServer(dirs)
 	screen := consent.New(consent.Input{
 		GOOS:      env.GOOS,
 		Binary:    env.Exe,
@@ -262,6 +265,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		Hook:      hook,
 		Diffs:     diffs,
 		Left:      left,
+		Linked:    linked,
 	})
 
 	// 2. The teen's say.
@@ -385,7 +389,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	fmt.Fprintln(stdout, setUpLine(dirs))
+	fmt.Fprintln(stdout, setUpLine(linked))
 	if slices.Contains(chosen, install.ItemClaudeCode) {
 		// Claude Code's file watcher picks up a change to the hooks in its
 		// settings in sessions that are open, and a folder's trust dialog
@@ -442,18 +446,30 @@ func hasClaudeHooks(in *install.Installer, env install.Env) (bool, error) {
 	return slices.ContainsFunc(p.Problems, func(problem string) bool { return strings.Contains(problem, settings) }), nil
 }
 
+// linkedServer is the server pairtime login linked this computer to,
+// while config.toml says online and reads (agent.UploadConfig), and ""
+// otherwise: where config.toml lets its hours' numbers go, as the consent
+// screen and setUpLine say. Install reads neither the sign-in nor the
+// uploader's state, so neither promises an upload.
+func linkedServer(dirs home.Dirs) string {
+	l, err := account.Load(dirs.Data)
+	if err != nil {
+		return ""
+	}
+	if cfg, broken := agent.UploadConfig(dirs); broken != "" || cfg.Mode != config.Online {
+		return ""
+	}
+	return l.Server
+}
+
 // setUpLine is install's last word on where what pairtime records goes:
 // it stays on this computer in local-only mode, as every install starts
-// in, and on a computer pairtime login linked, while config.toml says
-// online and reads (agent.UploadConfig), config.toml lets its hours'
-// numbers go to the server it's linked to. Install reads neither the
-// sign-in nor the uploader's state, so doctor says what holds them back.
-func setUpLine(dirs home.Dirs) string {
-	if l, err := account.Load(dirs.Data); err == nil {
-		if cfg, broken := agent.UploadConfig(dirs); broken == "" && cfg.Mode == config.Online {
-			return fmt.Sprintf("pairtime is set up. This computer is linked to %s, and config.toml lets it upload your hours' numbers there; pairtime doctor says if anything holds them back.",
-				install.Printable(l.Server))
-		}
+// in, and on a computer linked to server (linkedServer), config.toml lets
+// its hours' numbers go there, while doctor says what holds them back.
+func setUpLine(server string) string {
+	if server != "" {
+		return fmt.Sprintf("pairtime is set up. This computer is linked to %s, and config.toml lets it upload your hours' numbers there; pairtime doctor says if anything holds them back.",
+			install.Printable(server))
 	}
 	return "pairtime is set up. It runs in local-only mode, so what it records stays on this computer."
 }
