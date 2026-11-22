@@ -78,8 +78,10 @@ type LogReader interface {
 	// the line doesn't say.
 	LogPlace(raw RawRecord) (dir, session string, at int64)
 	// LogHooked reports whether a hook call of the harness's session
-	// session came, as the adapter remembers it across the agent's
-	// restarts: a session the hooks report.
+	// session came through the walk, as the adapter remembers it across
+	// the agent's restarts: a session the hooks report, whose
+	// session.start is theirs. Calls that all came through the spool
+	// don't make it one.
 	LogHooked(session string) bool
 	// LogResume returns where in file the adapter's memory of it starts:
 	// the offset a restart must deliver the file again from, so that the
@@ -88,6 +90,12 @@ type LogReader interface {
 	LogResume(file string) (int64, bool)
 	// ForgetLog drops what the adapter remembers of file, which is gone.
 	ForgetLog(file string)
+	// LogIgnored reports whether the last line of file that named a folder
+	// named one out of pairtime (Project.Ignored, DESIGN 8.8). The host
+	// drops the records of the file's lines and idle markers while it
+	// holds, those of lines that name no folder included. The adapter's
+	// saved memory keeps it.
+	LogIgnored(file string) bool
 	// LogHint returns the log file a hook call names, such as Claude
 	// Code's transcript_path, or "" for none. The agent has the tailers
 	// read it soon, and watch its root, which may not be one LogRoots

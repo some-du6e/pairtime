@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
+	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -204,6 +205,14 @@ const readDelay = 50 * time.Millisecond
 // It returns the hooks' records and the transcripts' apart.
 func readWithHooks(t *testing.T, way adapters.Delivery) (hooks, logs []adapters.Record) {
 	t.Helper()
+	_, hooks, logs = replayWithHooks(t, way)
+	return hooks, logs
+}
+
+// replayWithHooks is readWithHooks, which also returns the adapter that
+// read them.
+func replayWithHooks(t *testing.T, way adapters.Delivery) (a *Adapter, hooks, logs []adapters.Record) {
+	t.Helper()
 	calls := readCalls(t)
 	files := readTranscripts(t)
 	var steps []step
@@ -231,7 +240,7 @@ func readWithHooks(t *testing.T, way adapters.Delivery) (hooks, logs []adapters.
 		}
 		return steps[i].call != nil && steps[j].call == nil
 	})
-	a := newTest()
+	a = newTest()
 	base := calls[0].Arrived
 	for _, s := range steps {
 		if s.call != nil {
@@ -253,7 +262,7 @@ func readWithHooks(t *testing.T, way adapters.Delivery) (hooks, logs []adapters.
 		logs = append(logs, recs...)
 	}
 	checkRecords(t, logs)
-	return hooks, logs
+	return a, hooks, logs
 }
 
 // replayHooks replays the capture's hook calls alone, walked.
@@ -457,29 +466,75 @@ func TestTranscriptSessionStarts(t *testing.T) {
 	alone := readAlone(t)
 	want := map[string]event.Entrypoint{mainSession: event.EntrypointUnknown, clearSession: event.EntrypointUnknown,
 		nestedSession: event.EntrypointSDK, headlessRun: event.EntrypointSDK}
-	for sid, ep := range want {
-		t.Run("read alone, "+sid[:8]+" gets one session.start with entrypoint "+string(ep), func(t *testing.T) {
-			got := ofKind[*event.SessionStart](sessionOf(alone, sid))
-			if len(got) != 1 {
-				t.Fatalf("%d session.starts, want 1", len(got))
-			}
-			st := got[0].Event.Data.(*event.SessionStart)
-			if st.Entrypoint != ep || st.ParentClass != event.ParentUnknown || st.HasTTY || st.StartKind != event.StartStartup {
-				t.Errorf("session.start %+v, want startup, %s, parent unknown, no TTY", *st, ep)
-			}
-		})
+	for _, read := range []struct {
+		how  string
+		recs []adapters.Record
+	}{{"read alone", alone}, {"read with hooks only the spool delivered", withSpooled}} {
+		for sid, ep := range want {
+			t.Run(read.how+", "+sid[:8]+" gets one session.start with entrypoint "+string(ep), func(t *testing.T) {
+				got := ofKind[*event.SessionStart](sessionOf(read.recs, sid))
+				if len(got) != 1 {
+					t.Fatalf("%d session.starts, want 1", len(got))
+				}
+				st := got[0].Event.Data.(*event.SessionStart)
+				if st.Entrypoint != ep || st.ParentClass != event.ParentUnknown || st.HasTTY || st.StartKind != event.StartStartup {
+					t.Errorf("session.start %+v, want startup, %s, parent unknown, no TTY", *st, ep)
+				}
+			})
+		}
+	}
+	t.Run("read with their hooks via hook, the transcripts give no session.start", func(t *testing.T) {
+		if got := ofKind[*event.SessionStart](withHooks); len(got) != 0 {
+			t.Errorf("%d session.starts", len(got))
+		}
+	})
+}
+
+// TestLogHooked checks which sessions the procs tie leaves to their hooks
+// (LogHooked): those the hooks report from a call that came through the
+// walk on, as only such a call keeps out the reader's session.start
+// (sessionStart), so not those whose calls all came through the spool,
+// and the reader's memory of that call stands when the hooks' memory of
+// the session is gone, as after a restart past its bounds.
+func TestLogHooked(t *testing.T) {
+	restarted := func(a *Adapter) *Adapter {
+		st, err := a.SaveState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := newTest()
+		if err := b.LoadState(st); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	read := func(way adapters.Delivery) *Adapter {
+		a, _, _ := replayWithHooks(t, way)
+		return a
 	}
 	cases := []struct {
 		name string
-		recs []adapters.Record
+		a    func() *Adapter
+		sid  string
+		want bool
 	}{
-		{"read with their hooks, the transcripts give no session.start", withHooks},
-		{"read with hooks only the spool delivered, they give none either", withSpooled},
+		{"a session whose hooks came through the walk is the hooks'", func() *Adapter { return read(adapters.Walked) }, mainSession, true},
+		{"and stays theirs after a restart", func() *Adapter { return restarted(read(adapters.Walked)) }, mainSession, true},
+		{"and when only the reader remembers its walked call", func() *Adapter {
+			a := read(adapters.Walked)
+			a.mu.Lock()
+			delete(a.sessions, mainSession)
+			a.mu.Unlock()
+			return a
+		}, mainSession, true},
+		{"a session whose hooks all came through the spool isn't", func() *Adapter { return read(adapters.Spooled) }, mainSession, false},
+		{"nor after a restart", func() *Adapter { return restarted(read(adapters.Spooled)) }, mainSession, false},
+		{"a session no hook named isn't", func() *Adapter { return read(adapters.Walked) }, "ffffffff-0000-4000-8000-00000000000f", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ofKind[*event.SessionStart](tc.recs); len(got) != 0 {
-				t.Errorf("%d session.starts", len(got))
+			if got := tc.a().LogHooked(tc.sid); got != tc.want {
+				t.Errorf("LogHooked(%s) = %v, want %v", tc.sid[:8], got, tc.want)
 			}
 		})
 	}
@@ -815,6 +870,8 @@ func TestTranscriptLabels(t *testing.T) {
 		{"a promptSource no capture has shown declares nothing and is a failure", userText("q1", "hello there", map[string]any{"promptSource": "voice", "turnOrigin": "human"}), true, event.DeclaredNone},
 		{"an entrypoint token HS 3.3 doesn't list is a failure", userText("q1", "hello there", map[string]any{"turnOrigin": "human", "entrypoint": "claude-watch"}), true, event.DeclaredNone},
 		{"a labeled prompt whose text is an interrupt's is a prompt", userText("q1", "[Request interrupted by user]", map[string]any{"turnOrigin": "human", "promptSource": "typed"}), false, event.DeclaredNone},
+		{"a prompt with neither label, as an older version writes it, declares nothing and is a failure", userText("q1", "hello there", nil), true, event.DeclaredNone},
+		{"a task notification with neither label declares subagent and is a failure", userText("q1", "<task-notification>a report</task-notification>", nil), true, event.DeclaredSubagent},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -995,6 +1052,127 @@ func TestTranscriptResume(t *testing.T) {
 			got = append(got, recs...)
 			if g := norm(got); !slices.Equal(g, want) {
 				t.Errorf("%d records, want the %d of one reading", len(g), len(want))
+			}
+		})
+	}
+}
+
+// TestTranscriptUnlabeledEntries checks which main-conversation user
+// entries with neither turnOrigin nor promptSource the reader takes for a
+// prompt, each with a parse failure: one a person typed. A slash command's
+// expanded instructions (isMeta) and a local command's output are none, and
+// nor is the pickup of a message queued while the turn before ran, whose
+// agent.queue already recorded it (E-cc-queued-turn).
+func TestTranscriptUnlabeledEntries(t *testing.T) {
+	labeled := userText("q1", "fix the failing test", map[string]any{"turnOrigin": "human", "promptSource": "typed",
+		"timestamp": "2026-11-20T17:00:00.000Z"})
+	enqueue := entryJSON("queue-operation", map[string]any{"operation": "enqueue", "content": "and then the docs",
+		"timestamp": "2026-11-20T17:00:10.000Z"})
+	cases := []struct {
+		name    string
+		entries []string
+		// prompts are the prompt.submits of the last entry, and fails says
+		// it is a parse failure.
+		prompts int
+		fails   bool
+	}{
+		{"an unlabeled entry with text is a prompt and a failure", []string{userText("q2", "hello there", nil)}, 1, true},
+		{"an unlabeled isMeta entry is neither", []string{userText("q2", "the command's instructions", map[string]any{"isMeta": true})}, 0, false},
+		{"an unlabeled local command's output is neither", []string{userText("q2", "<local-command-stdout>done</local-command-stdout>", nil)}, 0, false},
+		{"an unlabeled entry with no text is neither", []string{userText("q2", "  ", nil)}, 0, false},
+		{"the unlabeled pickup of a message queued in the turn before is no prompt, and a failure",
+			[]string{labeled, enqueue, userText("q2", "and then the docs", nil)}, 0, true},
+		{"an unlabeled entry after the pickup is a prompt again",
+			[]string{labeled, enqueue, userText("q2", "and then the docs", nil), userText("q3", "now the release notes", nil)}, 1, true},
+		{"a labeled pickup takes the wait up too",
+			[]string{labeled, enqueue, userText("q2", "and then the docs", map[string]any{"turnOrigin": "human", "promptSource": "queued"}),
+				userText("q3", "now the release notes", nil)}, 1, true},
+		{"a message removed from the queue is no pickup's",
+			[]string{labeled, enqueue, entryJSON("queue-operation", map[string]any{"operation": "remove", "timestamp": "2026-11-20T17:00:12.000Z"}),
+				userText("q2", "and then the docs", nil)}, 1, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTest()
+			lines := logLines(tc.entries...)
+			for _, l := range lines[:len(lines)-1] {
+				if _, err := a.Parse(logRaw(l, false, false)); err != nil {
+					t.Fatalf("an earlier entry: %v", err)
+				}
+			}
+			recs, err := a.Parse(logRaw(lines[len(lines)-1], false, false))
+			if (err != nil) != tc.fails {
+				t.Errorf("Parse error %v, want a failure: %v", err, tc.fails)
+			}
+			if ps := ofKind[*event.PromptSubmit](recs); len(ps) != tc.prompts {
+				t.Errorf("records %v, want %d prompt.submit", recs, tc.prompts)
+			}
+		})
+	}
+}
+
+// TestTranscriptNativeAtItsStop checks a session whose hook calls came
+// through the spool until its turn's Stop, the first that came via hook, as
+// one started while the agent was down: that Stop reports the turn's final
+// output and stop, so the transcript's final message, stamped a little
+// before the Stop and read after it, adds neither. A turn whose Stop the
+// spool delivered keeps the transcript's.
+func TestTranscriptNativeAtItsStop(t *testing.T) {
+	const at = 1_795_194_000_000 // 2026-11-20T17:00:00Z, the entries' time
+	spooled := func(ms int64) *adapters.Arrival {
+		return &adapters.Arrival{Via: event.ViaPlugin, T: ms, Mono: 5000, BootID: "boot", Harness: event.HarnessClaudeCode}
+	}
+	walked := func(ms int64) *adapters.Arrival {
+		return &adapters.Arrival{Via: event.ViaHook, T: ms, Mono: 5000, BootID: "boot", Harness: event.HarnessClaudeCode,
+			Walk: &platform.Lineage{ParentClass: event.ParentTerminalApp, Entrypoint: event.EntrypointUnknown, HasTTY: true}}
+	}
+	cases := []struct {
+		name string
+		stop *adapters.Arrival
+		// fromLog is the final outputs and the stops the transcript gives.
+		fromLog int
+	}{
+		{"a turn whose Stop came via hook gets no final output or stop from the transcript", walked(at + 2_150), 0},
+		{"a turn whose Stop the spool delivered keeps the transcript's", spooled(at + 2_150), 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTest()
+			call := func(name string, payload map[string]any, arr *adapters.Arrival) {
+				t.Helper()
+				payload["session_id"], payload["cwd"] = "s1", "/home/capture/p"
+				if _, err := a.Parse(hookRaw(name, payload, arr)); err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+			}
+			var logs []adapters.Record
+			read := func(l txLine) {
+				t.Helper()
+				recs, err := a.Parse(logRaw(l, false, false))
+				if err != nil {
+					t.Fatal(err)
+				}
+				logs = append(logs, recs...)
+			}
+			lines := logLines(
+				userText("q1", "fix the failing test", map[string]any{"turnOrigin": "human", "promptSource": "typed"}),
+				assistantText("m1", "end_turn", "Done: the test passes.", "2026-11-20T17:00:02.000Z"),
+				entryJSON("system", map[string]any{"subtype": "turn_duration", "timestamp": "2026-11-20T17:00:02.300Z"}))
+			call(EventSessionStart, map[string]any{"source": "startup"}, spooled(at-1_000))
+			call(EventUserPromptSubmit, map[string]any{"prompt_id": "q1", "prompt": "fix the failing test"}, spooled(at))
+			read(lines[0])
+			read(lines[1])
+			call(EventStop, map[string]any{"prompt_id": "q1", "last_assistant_message": "Done: the test passes.",
+				"stop_hook_active": false}, tc.stop)
+			read(lines[2])
+			finals := 0
+			for _, r := range ofKind[*event.AgentOutput](logs) {
+				if r.Event.Data.(*event.AgentOutput).IsFinal {
+					finals++
+				}
+			}
+			if stops := len(ofKind[*event.AgentStop](logs)); finals != tc.fromLog || stops != tc.fromLog {
+				t.Errorf("the transcript gave %d final outputs and %d stops, want %d of each", finals, stops, tc.fromLog)
 			}
 		})
 	}

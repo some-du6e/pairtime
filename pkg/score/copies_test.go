@@ -9,12 +9,16 @@ import (
 )
 
 // TestQueuedMessageCopies checks E-cc-queued-turn's rule that pkg/score
-// takes a hook's and a log reader's agent.queue of one message, within
-// TRACK_LOG_MATCH_S, for one corroborated act, while two messages one code
-// path reported stay two.
+// takes a log reader's agent.queue and another path's of one message, of
+// one length and within TRACK_LOG_MATCH_S, for one corroborated act, while
+// two messages one code path reported stay two.
 func TestQueuedMessageCopies(t *testing.T) {
-	queued := func(b *tl, ms int64, v event.Via) {
-		b.harness(atMS(ms), v, "s_1", "p_1", &event.AgentQueue{TurnKey: "t_q", LenChars: 40})
+	queued := func(b *tl, ms int64, v event.Via, n ...int) {
+		chars := 40
+		if len(n) > 0 {
+			chars = n[0]
+		}
+		b.harness(atMS(ms), v, "s_1", "p_1", &event.AgentQueue{TurnKey: "t_q", LenChars: chars})
 	}
 	cases := []struct {
 		name         string
@@ -24,14 +28,18 @@ func TestQueuedMessageCopies(t *testing.T) {
 	}{
 		{"a hook's and a transcript's copy of one message, 25 ms apart, are one Q, the hook's, corroborated",
 			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_025, event.ViaLog) }, 1, true},
-		{"the transcript's copy coming first changes nothing",
-			func(b *tl) { queued(b, 58_025, event.ViaLog); queued(b, 58_000, event.ViaHook) }, 1, true},
+		{"the transcript's copy coming first, 25 ms before the hook's, changes nothing",
+			func(b *tl) { queued(b, 58_000, event.ViaLog); queued(b, 58_025, event.ViaHook) }, 1, true},
 		{"two messages a hook reported 3 s apart are two",
 			func(b *tl) { queued(b, 55_000, event.ViaHook); queued(b, 58_000, event.ViaHook) }, 2, false},
 		{"two messages a hook reported in the same millisecond are two",
 			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_000, event.ViaHook) }, 2, false},
 		{"copies further apart than TRACK_LOG_MATCH_S are two messages",
 			func(b *tl) { queued(b, 40_000, event.ViaHook); queued(b, 58_000, event.ViaLog) }, 2, false},
+		{"a hook's and a transcript's of other lengths are two messages",
+			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_025, event.ViaLog, 41) }, 2, false},
+		{"a hook's and a plugin's, with no log reader's, are two messages",
+			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_025, event.ViaPlugin) }, 2, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

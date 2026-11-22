@@ -396,12 +396,14 @@ var anchorEventKinds = map[event.AnchorKind]event.Kind{
 	event.AnchorHumanCommit:       event.KindGitChange,
 }
 
-// promptAnchorClasses lists the prompt classes each prompt anchor kind
-// comes from (SM 2.3).
+// promptAnchorClasses lists the prompt classes each prompt and queued
+// message anchor kind comes from (SM 2.3): a queued message's lead is that
+// of a prompt of its class, so it has an origin and a class too.
 var promptAnchorClasses = map[event.AnchorKind][]event.PromptClass{
 	event.AnchorSubstantivePrompt: {event.ClassSubstantive, event.ClassErrorPaste},
 	event.AnchorAnswer:            {event.ClassAnswer},
 	event.AnchorGoAhead:           {event.ClassLowEffort},
+	event.AnchorQueuedMessage:     {event.ClassSubstantive, event.ClassErrorPaste, event.ClassAnswer, event.ClassLowEffort},
 }
 
 // TestAnchors checks anchors.json against the events.
@@ -435,7 +437,7 @@ func TestAnchors(t *testing.T) {
 						t.Errorf("%s: origin %q and class %q don't make a %s", where, a.Origin, a.PromptClass, a.Kind)
 					}
 				} else if a.Origin != "" || a.PromptClass != "" {
-					t.Errorf("%s: only prompt anchors have an origin and a class", where)
+					t.Errorf("%s: only prompt and queued message anchors have an origin and a class", where)
 				}
 				if a.LeadFrom != "sm" && a.LeadFrom != "params" {
 					t.Errorf("%s: lead_from %q, want sm or params", where, a.LeadFrom)

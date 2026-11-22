@@ -46,15 +46,17 @@ func newTieRig(t *testing.T, table []platform.Proc) *tieRig {
 }
 
 // hookCall has the rig's adapter parse a prompt's hook call of session
-// sid, from under a claude in a terminal.
-func (r *tieRig) hookCall(t *testing.T, sid string, at time.Time) {
+// sid: via hook, from under a claude in a terminal, or via plugin, from
+// the spool, with no walk.
+func (r *tieRig) hookCall(t *testing.T, sid string, at time.Time, via event.Via) {
 	t.Helper()
 	b, _ := json.Marshal(map[string]any{"session_id": sid, "hook_event_name": "UserPromptSubmit", "prompt_id": "p1",
 		"prompt": "What does this do?", "cwd": "/home/capture/p", "transcript_path": "/home/capture/p/" + sid + ".jsonl"})
 	raw := adapters.RawRecord{Source: adapters.SourceHook, Event: "UserPromptSubmit", Payload: b,
-		Arrival: adapters.Arrival{Via: event.ViaHook, T: at.UnixMilli(), Mono: 5000, BootID: "test-boot",
-			Walk:    &platform.Lineage{ParentClass: event.ParentTerminalApp, Entrypoint: event.EntrypointUnknown, HasTTY: true},
-			Harness: event.HarnessClaudeCode}}
+		Arrival: adapters.Arrival{Via: via, T: at.UnixMilli(), Mono: 5000, BootID: "test-boot", Harness: event.HarnessClaudeCode}}
+	if via == event.ViaHook {
+		raw.Arrival.Walk = &platform.Lineage{ParentClass: event.ParentTerminalApp, Entrypoint: event.EntrypointUnknown, HasTTY: true}
+	}
 	if _, err := r.ad.Parse(raw); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +65,9 @@ func (r *tieRig) hookCall(t *testing.T, sid string, at time.Time) {
 // TestTieLive checks the gates tieLive puts before a tie (WP-AD3): only a
 // fresh line of a session no hook reports, by the log reader's memory or
 // this run's hook ties, reaches procs.Scanner.Tie, and a session that
-// wasn't tied reads the process table again only after tieRetry.
+// wasn't tied reads the process table again only after tieRetry. A
+// session whose hook calls all came through the spool is one no hook
+// reports, as it is for the reader's session.start (LogHooked).
 func TestTieLive(t *testing.T) {
 	now := time.Now()
 	me := platform.UIDOwner(uint32(os.Geteuid()))
@@ -96,12 +100,12 @@ func TestTieLive(t *testing.T) {
 			}, false, 0},
 		{"a session the log reader remembers a hook reported ties nothing", one,
 			func(t *testing.T, r *tieRig) {
-				r.hookCall(t, sid, now.Add(-time.Minute))
+				r.hookCall(t, sid, now.Add(-time.Minute), event.ViaHook)
 				r.h.tieLive(r.lr, event.HarnessClaudeCode, sid, now.UnixMilli())
 			}, false, 0},
 		{"a session the log reader remembers a hook reported before a restart ties nothing", one,
 			func(t *testing.T, r *tieRig) {
-				r.hookCall(t, sid, now.Add(-time.Minute))
+				r.hookCall(t, sid, now.Add(-time.Minute), event.ViaHook)
 				mem, err := r.ad.(adapters.Stateful).SaveState()
 				if err != nil {
 					t.Fatal(err)
@@ -112,6 +116,11 @@ func TestTieLive(t *testing.T) {
 				}
 				r.h.tieLive(ad.(adapters.LogReader), event.HarnessClaudeCode, sid, now.UnixMilli())
 			}, false, 0},
+		{"a session whose hook calls all came through the spool ties as one no hook reports", one,
+			func(t *testing.T, r *tieRig) {
+				r.hookCall(t, sid, now.Add(-time.Minute), event.ViaPlugin)
+				r.h.tieLive(r.lr, event.HarnessClaudeCode, sid, now.UnixMilli())
+			}, true, 1},
 		{"a session a hook tied in this run ties nothing", one,
 			func(t *testing.T, r *tieRig) {
 				r.a.hooked.tie(platform.ID{PID: 999}, r.h.sessionKey(sid))

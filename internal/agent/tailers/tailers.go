@@ -186,11 +186,13 @@ type Tailer struct {
 	scanDue, checkAll bool
 	// watching are the folders, or on macOS the files, fsnotify watches,
 	// and listed the roots the tailer has listed once. unread are the
-	// folders a root's first listing couldn't read: their files are taken
-	// up at their end once the tailer can read them.
+	// folders a root's first listing couldn't read, and later the files it
+	// couldn't open: they are taken up at their end once the tailer can
+	// read them.
 	watching map[string]bool
 	listed   map[string]bool
 	unread   map[string]bool
+	later    map[string]bool
 	// lastPoll is when the hot files were last looked at, and lastPut the
 	// cursors as Put last handed them to Store.
 	lastPoll time.Time
@@ -253,9 +255,10 @@ type saved struct {
 	Files []savedFile `json:"files"`
 	// Roots are the roots the tailer has listed once, whose files were all
 	// taken up then (scan), but those in Unread, folders the listing
-	// couldn't read.
+	// couldn't read, and those in Later, files it couldn't open.
 	Roots  []string `json:"roots,omitempty"`
 	Unread []string `json:"unread,omitempty"`
+	Later  []string `json:"later,omitempty"`
 }
 
 type savedFile struct {
@@ -285,6 +288,7 @@ func New(opts Options) *Tailer {
 		watching: make(map[string]bool),
 		listed:   make(map[string]bool),
 		unread:   make(map[string]bool),
+		later:    make(map[string]bool),
 		scanDue:  true,
 		checkAll: true,
 		kick:     make(chan struct{}, 1),
@@ -319,6 +323,9 @@ func (t *Tailer) load() {
 	for _, d := range st.Unread {
 		t.unread[d] = true
 	}
+	for _, p := range st.Later {
+		t.later[p] = true
+	}
 	for _, sf := range st.Files {
 		if sf.Path == "" || !filepath.IsAbs(sf.Path) || t.files[sf.Path] != nil || sf.Read < 0 || sf.Resume < 0 || sf.Resume > sf.Read {
 			continue
@@ -351,10 +358,14 @@ func (t *Tailer) Put() (bool, error) {
 	for d := range t.unread {
 		st.Unread = append(st.Unread, d)
 	}
+	for p := range t.later {
+		st.Later = append(st.Later, p)
+	}
 	last := t.lastPut
 	t.mu.Unlock()
 	slices.Sort(st.Roots)
 	slices.Sort(st.Unread)
+	slices.Sort(st.Later)
 	slices.SortFunc(st.Files, func(a, b savedFile) int { return strings.Compare(a.Path, b.Path) })
 	b, err := json.Marshal(st)
 	if err != nil {
@@ -449,17 +460,75 @@ func (t *Tailer) Hint(h event.Harness, path string, root adapters.LogRoot) {
 	case !t.listed[r.Dir]:
 		// The root's first listing takes the file up, as every other there.
 		t.scanDue = true
+	case t.files[path] == nil && t.later[path]:
+		// A file the root's first listing couldn't open: taken up at its
+		// end, as the listing would have.
+		t.mu.Unlock()
+		t.adopt(r, path)
+		t.mu.Lock()
+		if f := t.files[path]; f != nil {
+			f.due = true
+		}
 	default:
 		f := t.files[path]
 		if f == nil {
-			f = &file{key: path, path: path, harness: r.Harness}
-			t.files[path] = f
+			t.mu.Unlock()
+			id := pathID(path)
+			other := t.alias(path, id)
+			t.mu.Lock()
+			switch f = t.files[path]; {
+			case f != nil:
+			case other != nil && t.files[other.key] == other:
+				f = other
+			default:
+				f = &file{key: path, path: path, harness: r.Harness, id: id}
+				t.files[path] = f
+			}
 		}
 		f.due = true
 		f.grew = t.opts.Now()
 	}
 	t.mu.Unlock()
 	t.wake()
+}
+
+// alias returns the file the tailer knows under another spelling of path,
+// whose file id is id: the one a hook named on a file system that ignores
+// case, or a root that is another under a link. It has to be at its own
+// path still, so a file id a new file took over from a deleted one isn't
+// taken for it. t.mu isn't held.
+func (t *Tailer) alias(path, id string) *file {
+	if id == "" {
+		return nil
+	}
+	t.mu.Lock()
+	var f *file
+	for _, o := range t.files {
+		if o.id == id && o.path != path {
+			f = o
+			break
+		}
+	}
+	t.mu.Unlock()
+	if f == nil || pathID(f.path) != id {
+		return nil
+	}
+	return f
+}
+
+// pathID returns the file id of the file at path (fileID), "" when it
+// can't be opened.
+func pathID(path string) string {
+	fh, err := openLog(path)
+	if err != nil {
+		return ""
+	}
+	defer fh.Close()
+	fi, err := fh.Stat()
+	if err != nil {
+		return ""
+	}
+	return fileID(fh, fi)
 }
 
 // Rewind has the tailer read the file key from its start again, the lines
@@ -695,11 +764,18 @@ func (t *Tailer) walk(r Root, dir, rel string, depth int, now time.Time, known m
 		delete(t.unread, dir)
 	}
 	t.mu.Unlock()
-	if mine := byDir[dir]; len(mine) > 0 {
-		names := make(map[string]bool, len(entries))
-		for _, de := range entries {
-			names[de.Name()] = true
+	names := make(map[string]bool, len(entries))
+	for _, de := range entries {
+		names[de.Name()] = true
+	}
+	t.mu.Lock()
+	for p := range t.later {
+		if filepath.Dir(p) == dir && !names[filepath.Base(p)] {
+			delete(t.later, p) // gone before it could be opened
 		}
+	}
+	t.mu.Unlock()
+	if mine := byDir[dir]; len(mine) > 0 {
 		for _, f := range mine {
 			// Not in its folder: deleted while nothing watched it. Lstat
 			// says whether it is, since a path a hook spelled otherwise, on
@@ -749,15 +825,29 @@ func (t *Tailer) walk(r Root, dir, rel string, depth int, now time.Time, known m
 		}
 		t.mu.Lock()
 		f := t.files[full]
-		switch {
-		case f == nil && first:
+		if f == nil && (first || t.later[full]) {
 			t.mu.Unlock()
 			t.adopt(r, full)
 			continue
-		case f == nil:
-			// A file that came since the root was listed: a new session.
-			t.files[full] = &file{key: full, path: full, harness: r.Harness, due: true, grew: now}
-		case fi.Size() != f.size || !fi.ModTime().Equal(f.mtime):
+		}
+		if f == nil {
+			t.mu.Unlock()
+			id := pathID(full)
+			other := t.alias(full, id)
+			t.mu.Lock()
+			switch f = t.files[full]; {
+			case f != nil:
+			case other != nil && t.files[other.key] == other:
+				// The file a hook named otherwise, read under its name.
+				f = other
+			default:
+				// A file that came since the root was listed: a new session.
+				t.files[full] = &file{key: full, path: full, harness: r.Harness, id: id, due: true, grew: now}
+				t.mu.Unlock()
+				continue
+			}
+		}
+		if fi.Size() != f.size || !fi.ModTime().Equal(f.mtime) {
 			f.due = true
 		}
 		t.mu.Unlock()
@@ -777,23 +867,39 @@ func (t *Tailer) isUnread(dir string) bool {
 func (t *Tailer) adopt(r Root, path string) {
 	fh, err := openLog(path)
 	if err != nil {
+		t.adoptLater(path)
 		return
 	}
 	defer fh.Close()
 	fi, err := fh.Stat()
 	if err != nil {
+		t.adoptLater(path)
 		return
 	}
 	end, hash, err := lastLine(fh, fi.Size())
 	if err != nil {
+		t.adoptLater(path)
 		return
 	}
+	id := fileID(fh, fi)
+	other := t.alias(path, id)
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.files[path] == nil {
-		t.files[path] = &file{key: path, path: path, harness: r.Harness, id: fileID(fh, fi), size: fi.Size(),
+	delete(t.later, path)
+	if t.files[path] == nil && (other == nil || t.files[other.key] != other) {
+		t.files[path] = &file{key: path, path: path, harness: r.Harness, id: id, size: fi.Size(),
 			mtime: fi.ModTime(), read: end, resume: end, pos: end, hash: hash}
 	}
+}
+
+// adoptLater keeps path, a file a root's listing couldn't open, as
+// sudo's root-owned transcript, a sharing violation or too many open files
+// can make it, for a later listing to take up at its end: read from its
+// start, every line written before it would come as new.
+func (t *Tailer) adoptLater(path string) {
+	t.mu.Lock()
+	t.later[path] = true
+	t.mu.Unlock()
 }
 
 // lastLine returns where the last complete line of a file of size bytes
@@ -1204,20 +1310,30 @@ func (t *Tailer) watch(now time.Time) {
 	}
 }
 
-// pace runs the poll while a file is hot: every HotPoll while one grew in
-// the last QuietAfter, and not at all once none has grown in HotWindow.
+// pollEvery is how often the hot files are looked at (CP 3.2 item 3):
+// every HotPoll while a file grew in the last QuietAfter, every QuietPoll
+// while one did in the last HotWindow, and never otherwise. t.mu is held.
+func (t *Tailer) pollEvery(now time.Time) time.Duration {
+	var every time.Duration
+	for _, f := range t.files {
+		switch idle := now.Sub(f.active()); {
+		case idle <= QuietAfter:
+			return HotPoll
+		case idle <= HotWindow:
+			every = QuietPoll
+		}
+	}
+	return every
+}
+
+// pace runs the poll at pollEvery's pace, and stops it once no file has
+// grown in HotWindow.
 func (t *Tailer) pace(now time.Time) {
 	if t.poll == nil {
 		return
 	}
 	t.mu.Lock()
-	var every time.Duration
-	for _, f := range t.files {
-		if now.Sub(f.active()) <= HotWindow {
-			every = HotPoll
-			break
-		}
-	}
+	every := t.pollEvery(now)
 	change := every != t.every
 	t.every = every
 	t.mu.Unlock()

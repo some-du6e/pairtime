@@ -132,10 +132,9 @@ type txSession struct {
 	// wrote for the session, and started says it wrote one.
 	token   string
 	started bool
-	// reported says a hook call of the session reached the adapter, and
-	// nativeAt when its hooks came via hook from (session.nativeAt), 0 for
-	// never. They stay when the adapter forgets the session's calls.
-	reported bool
+	// nativeAt is when the session's hooks came via hook from
+	// (session.nativeAt), 0 for never: a call the spool delivered doesn't
+	// count. It stays when the adapter forgets the session's calls.
 	nativeAt int64
 	seen     uint64
 }
@@ -173,9 +172,16 @@ type txState struct {
 	Blocked bool `json:"blocked,omitempty"`
 	// Project is the project_key of the last entry that named a folder,
 	// and Version the last harness version an entry stated, for the
-	// records of entries that name neither.
+	// records of entries that name neither. Ignored says that folder is out
+	// of pairtime (LogIgnored), which keeps the records of every line and
+	// idle marker of the file out until an entry names one that counts.
 	Project string `json:"project,omitempty"`
 	Version string `json:"version,omitempty"`
+	Ignored bool   `json:"ignored,omitempty"`
+	// Queued counts the messages queued while a turn ran, each of which an
+	// agent.queue recorded, that no entry has picked up yet: a version
+	// without the labels marks no pickup (E-cc-queued-turn).
+	Queued int `json:"queued,omitempty"`
 }
 
 // txPending is what the reader holds of a file in memory alone: tool uses
@@ -357,10 +363,14 @@ func (l *logLine) take(e *entry) {
 		f.st.Version = e.Version
 	}
 	if e.CWD != "" {
-		f.st.Project, l.root = "", ""
+		f.st.Project, f.st.Ignored, l.root = "", false, ""
 		if l.a.opts.Project != nil {
-			if p, ok := l.a.opts.Project(e.CWD); ok {
+			p, ok := l.a.opts.Project(e.CWD)
+			switch {
+			case ok:
 				f.st.Project, l.root = p.Key, p.Root
+			case p.Ignored:
+				f.st.Ignored = true
 			}
 		}
 	}
@@ -425,17 +435,14 @@ func (l *logLine) add(key string, env event.Envelope, p event.Payload, text []by
 }
 
 // logSession returns what the reader remembers of session sid, with what
-// the adapter's hook memory says of it now: whether a hook call of it
-// came, and since when they come via hook.
+// the adapter's hook memory says of it now: since when its hooks come via
+// hook.
 func (a *Adapter) logSession(sid string) *txSession {
 	ls := a.logSessionFor(sid)
-	if s := a.sessions[sid]; s != nil {
-		ls.reported = true
-		if s.hookStart && (ls.nativeAt == 0 || s.nativeAt < ls.nativeAt) {
-			// 0 is a session native from its start, as an older build's
-			// memory says, so it can stand for one only when ls has none.
-			ls.nativeAt = max(s.nativeAt, 1)
-		}
+	if s := a.sessions[sid]; s != nil && s.hookStart && (ls.nativeAt == 0 || s.nativeAt < ls.nativeAt) {
+		// 0 is a session native from its start, as an older build's memory
+		// says, so it can stand for one only when ls has none.
+		ls.nativeAt = max(s.nativeAt, 1)
 	}
 	return ls
 }
@@ -446,7 +453,6 @@ func (a *Adapter) logSession(sid string) *txSession {
 // before the session's transcript is read. a.mu is held.
 func (a *Adapter) noteNative(s *session) {
 	ls := a.logSessionFor(s.id)
-	ls.reported = true
 	if ls.nativeAt == 0 || s.nativeAt < ls.nativeAt {
 		ls.nativeAt = max(s.nativeAt, 1)
 	}
@@ -459,18 +465,21 @@ func (a *Adapter) native(sid string, t int64) bool {
 	return ls.nativeAt > 0 && t >= ls.nativeAt
 }
 
-// sessionStart has a session no hook reported get the session.start a log
-// reader writes: at the first entry that states an entrypoint token, and
-// again where the token changes (E-cc-transcript-labels). A subagent's
-// entries state the session's token too, and are no start of it. It waits
-// in pend until startGrace after the entry, unless the entry is that old
-// already (resolveStart).
+// sessionStart has a session no hook reported via hook get the
+// session.start a log reader writes: at the first entry that states an
+// entrypoint token, and again where the token changes
+// (E-cc-transcript-labels). A session whose hooks only the spool delivered
+// gets it too, since pkg/score reads no side door's start in a session a
+// log reader covers, so its own would leave SM 2.2 rules 4 and 5 nothing
+// to read. A subagent's entries state the session's token too, and are no
+// start of it. It waits in pend until startGrace after the entry, unless
+// the entry is that old already (resolveStart).
 func (l *logLine) sessionStart(e *entry, sid string) {
 	if e.Entrypoint == nil || e.IsSidechain || sid == "" || e.t == 0 {
 		return
 	}
 	ls := l.a.logSession(sid)
-	if ls.reported {
+	if ls.nativeAt > 0 {
 		return
 	}
 	// The session's token as of this entry: the last waiting start's, or
@@ -507,8 +516,8 @@ func (l *logLine) sessionStart(e *entry, sid string) {
 }
 
 // resolveStart writes the pending session.start once startGrace has
-// passed since its entry with no hook of its session, and drops it when a
-// hook came. One written after its entry's line is dated a millisecond
+// passed since its entry with no via-hook call of its session, and drops it
+// when one came. One written after its entry's line is dated a millisecond
 // before the entry, so it sorts before the entry's other records (pkg/score
 // orders records by time, then by when they were written).
 func (l *logLine) resolveStart() {
@@ -516,7 +525,7 @@ func (l *logLine) resolveStart() {
 		ps := l.f.pend.starts[0]
 		ls := l.a.logSession(ps.session)
 		switch {
-		case ls.reported:
+		case ls.nativeAt > 0:
 		case l.raw.Arrival.T-ps.env.T >= startGrace:
 			ls.started, ls.token = true, ps.token
 			env := ps.env
@@ -560,7 +569,7 @@ func (l *logLine) user(e *entry, sid string) {
 	case e.TurnOrigin != nil || e.PromptSource != nil:
 		// A prompt, whatever its text says: Claude Code labels no
 		// interrupt entry.
-		l.prompt(e, sid, text)
+		l.prompt(e, sid, text, false)
 	case isInterrupt(text):
 		l.interrupt(e, sid)
 	case e.PromptID != "":
@@ -572,6 +581,12 @@ func (l *logLine) user(e *entry, sid string) {
 			// The command's own output, which started no turn: /goal's
 			// output is the entry that starts its turn.
 			l.f.pend.command = nil
+		} else if strings.TrimSpace(text) != "" && !e.IsMeta && !strings.HasPrefix(text, "<local-command-") {
+			// A prompt of a version that writes neither label, or of one
+			// that renamed them: it still counts, declaring nothing, and the
+			// failure says the format moved (SM Risks; HS 17.7).
+			l.perr.Problem("a user entry with neither turnOrigin nor promptSource")
+			l.prompt(e, sid, text, true)
 		}
 	}
 }
@@ -596,8 +611,13 @@ func (l *logLine) interrupt(e *entry, sid string) {
 }
 
 // prompt reads an entry that starts a turn.
-func (l *logLine) prompt(e *entry, sid, text string) {
+func (l *logLine) prompt(e *entry, sid, text string, unlabeled bool) {
 	var src, origin string
+	if unlabeled && l.f.st.Queued > 0 {
+		// The pickup of a message queued while the turn before ran, which
+		// its agent.queue already recorded.
+		src = "queued"
+	}
 	if e.PromptSource != nil {
 		src = *e.PromptSource
 		if !contains(promptSources, src) {
@@ -635,8 +655,11 @@ func (l *logLine) prompt(e *entry, sid, text string) {
 			s.learn(e.PromptID, e.t)
 		}
 		f.pend.command = nil
+		f.st.Queued = max(f.st.Queued-1, 0)
 		return
 	}
+	// A prompt of its own ends the wait of any message queued before it.
+	f.st.Queued = 0
 	cmd := f.pend.command
 	f.pend.command = nil
 	switch {
@@ -779,7 +802,11 @@ func (l *logLine) resolveFinal() {
 	if !fin.continued {
 		f.st.Running = false
 	}
-	if l.a.native(fin.session, fin.env.T) {
+	if l.a.native(fin.session, fin.env.T) || l.a.hookStopped(fin.session, fin.turn) {
+		// The hooks report the turn's end: from the session's first
+		// session.start with via hook on, or at a Stop that came via hook,
+		// as for a session that turned native at that Stop, whose final
+		// message is stamped before it.
 		return
 	}
 	key := l.a.keys.Turn(fin.session, fin.turn)
@@ -820,7 +847,15 @@ func (l *logLine) attachment(e *entry) {
 func (l *logLine) queued(e *entry, sid string) {
 	switch e.Operation {
 	case "enqueue":
-	case "dequeue", "remove", "popAll":
+	case "dequeue":
+		// Taken up: its pickup is the next prompt entry.
+		return
+	case "remove":
+		l.f.st.Queued = max(l.f.st.Queued-1, 0)
+		return
+	case "popAll":
+		// Back in the input box, to be sent again as a prompt of its own.
+		l.f.st.Queued = 0
 		return
 	default:
 		l.perr.Problem("a queue-operation Claude Code 2.1.327 doesn't write")
@@ -834,6 +869,7 @@ func (l *logLine) queued(e *entry, sid string) {
 	}
 	l.add(l.key("queue"), l.env(e.t, sid), &event.AgentQueue{TurnKey: l.a.keys.Turn(sid, f.st.Turn),
 		LenChars: utf8.RuneCountInString(text)}, nil)
+	f.st.Queued++
 }
 
 // pendTool holds a tool use until its result comes, dropping the oldest
@@ -1010,16 +1046,28 @@ func (a *Adapter) LogPlace(raw adapters.RawRecord) (dir, session string, at int6
 	return e.CWD, e.SessionID, e.t
 }
 
-// LogHooked reports whether a hook call of session sid came, as the reader
-// remembers it (adapters.LogReader).
+// LogHooked reports whether a hook call of session sid came through the
+// walk, as the reader remembers it (adapters.LogReader): from that call's
+// session.start on, the hooks report the session, as nativeAt says. Calls
+// that all came through the spool don't make a session one, as they don't
+// keep out the reader's session.start (sessionStart).
 func (a *Adapter) LogHooked(sid string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.sessions[sid] != nil {
+	if s := a.sessions[sid]; s != nil && s.hookStart {
 		return true
 	}
 	ls := a.logSessions[sid]
-	return ls != nil && ls.reported
+	return ls != nil && ls.nativeAt > 0
+}
+
+// LogIgnored reports whether the last entry of file that named a folder
+// named one out of pairtime (adapters.LogReader).
+func (a *Adapter) LogIgnored(file string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	f := a.files[file]
+	return f != nil && f.st.Ignored
 }
 
 // LogResume returns where in file the adapter's memory of it starts
