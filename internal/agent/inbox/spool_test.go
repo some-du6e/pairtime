@@ -521,7 +521,7 @@ func TestDrainer(t *testing.T) {
 			},
 		},
 		{
-			name: "a file that can't be read is passed over, and set aside once it has failed maxFileFailures drains",
+			name: "a file that can't be read is passed over, and set aside once it has failed MaxFileFailures drains",
 			run: func(t *testing.T, inbox, journal string) {
 				if runtime.GOOS == "windows" {
 					t.Skip("on Windows a file's mode doesn't keep its owner from reading it")
@@ -540,13 +540,13 @@ func TestDrainer(t *testing.T) {
 				}
 				appendAll(t, inbox, m2)
 				d := NewDrainer(inbox, openJournal(t, journal), stampNow)
-				for i := 1; i <= maxFileFailures; i++ {
+				for i := 1; i <= MaxFileFailures; i++ {
 					res, err := d.Drain()
 					if err == nil || res.Failed != 1 {
 						t.Fatalf("drain %d = %+v, %v; want the unreadable file to fail", i, res, err)
 					}
-					if aside := res.SetAside == 1; aside != (i == maxFileFailures) {
-						t.Errorf("drain %d set aside %d files, want 1 only at drain %d", i, res.SetAside, maxFileFailures)
+					if aside := res.SetAside == 1; aside != (i == MaxFileFailures) {
+						t.Errorf("drain %d set aside %d files, want 1 only at drain %d", i, res.SetAside, MaxFileFailures)
 					}
 				}
 				if got := journalIDs(t, journal); got[m2.ID] != 1 || got[m1.ID] != 0 {
@@ -594,6 +594,130 @@ func TestDrainer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			tt.run(t, filepath.Join(dir, "inbox"), filepath.Join(dir, "received"))
+		})
+	}
+}
+
+// TestScan checks what Scan hands its func: the spool's messages first,
+// then those of the files drains took, oldest first, each file's in the
+// order they were written and up to the limit, until the func takes one,
+// passing over lines that aren't a message and files no drain reads.
+func TestScan(t *testing.T) {
+	cases := []struct {
+		name string
+		// files are the inbox's files by name, each a list of lines: n for
+		// the message newMessage(n) makes, and -1 for a line that isn't a
+		// message.
+		files map[string][]int
+		// perm is the files' mode, 0o600 when zero, dirPerm the inbox
+		// directory's, 0o700 when zero, and link makes spool.jsonl a
+		// symbolic link to a file of the messages files gives it. locked
+		// names a file no one but root may open.
+		perm, dirPerm os.FileMode
+		link          bool
+		locked        string
+		// limit is Scan's, and stop the message the func takes, 0 for none.
+		limit, stop int
+		// read are the messages the func is handed, in order, want what Scan
+		// reports, and unread whether it reports a file it couldn't read to
+		// its end.
+		read         []int
+		want, unread bool
+	}{
+		{"the spool is read first, then the taken files, oldest first, each in order",
+			map[string][]int{SpoolName: {1, 2}, "spool-2.drain": {5}, "spool-1.drain": {3, 4}}, 0, 0, false, "", 10, 0, []int{1, 2, 3, 4, 5}, false, false},
+		{"the read ends at the first message the func takes, which Scan reports",
+			map[string][]int{SpoolName: {1, 2}, "spool-1.drain": {3, 4}}, 0, 0, false, "", 10, 3, []int{1, 2, 3}, true, false},
+		{"a file's messages past the limit aren't read, the next file's are, and Scan reports the file it couldn't read to its end",
+			map[string][]int{SpoolName: {1, 2, 3}, "spool-1.drain": {4}}, 0, 0, false, "", 2, 0, []int{1, 2, 4}, false, true},
+		{"a file of as many messages as the limit, with lines that aren't messages after them, is read to its end",
+			map[string][]int{SpoolName: {1, 2, -1}}, 0, 0, false, "", 2, 0, []int{1, 2}, false, false},
+		{"a line that isn't a message is passed over, and counts for nothing toward the limit",
+			map[string][]int{SpoolName: {-1, 1, 2}}, 0, 0, false, "", 2, 0, []int{1, 2}, false, false},
+		{"a file set aside is no drain's, and isn't read",
+			map[string][]int{"spool-1.bad": {1}, "spool-2.drain": {2}}, 0, 0, false, "", 10, 0, []int{2}, false, false},
+		{"a file that can't be opened, which a drain tries again, may hold any message, so Scan reports it, and reads the others on",
+			map[string][]int{"spool-1.drain": {1}, "spool-2.drain": {2}}, 0, 0, false, "spool-1.drain", 10, 0, []int{2}, false, true},
+		{"a spool others may open is no drain's, and isn't read",
+			map[string][]int{SpoolName: {1}}, 0o644, 0, false, "", 10, 0, nil, false, false},
+		{"a file Scan can't look up, in an inbox directory it may list but not search, may hold any message, so Scan reports it",
+			map[string][]int{SpoolName: {1}}, 0, 0o600, false, "", 10, 0, nil, false, true},
+		{"an inbox directory others may write in is no drain's, and nothing in it is read",
+			map[string][]int{SpoolName: {1}}, 0, 0o775, false, "", 10, 0, nil, false, false},
+		{"a spool that is a symbolic link is no drain's, and isn't read",
+			map[string][]int{SpoolName: {1}}, 0, 0, true, "", 10, 0, nil, false, false},
+		{"an inbox with nothing in it hands over nothing", map[string][]int{}, 0, 0, false, "", 10, 0, nil, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if (c.perm != 0 || c.dirPerm != 0 || c.locked != "") && runtime.GOOS == "windows" {
+				t.Skip("on Windows the data directory's DACL, not a file's mode, says who may open it")
+			}
+			if (c.locked != "" || c.dirPerm != 0 && c.dirPerm&0o100 == 0) && os.Geteuid() == 0 {
+				t.Skip("root opens a file whatever its mode")
+			}
+			dir := filepath.Join(t.TempDir(), "inbox")
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			perm := c.perm
+			if perm == 0 {
+				perm = 0o600
+			}
+			for name, lines := range c.files {
+				var b []byte
+				for _, n := range lines {
+					line := []byte("{not a message")
+					if n >= 0 {
+						var err error
+						if line, err = newMessage(t, n).Encode(); err != nil {
+							t.Fatal(err)
+						}
+					}
+					b = append(append(b, line...), '\n')
+				}
+				path := filepath.Join(dir, name)
+				if c.link {
+					// The messages are in a file beside the inbox, which the link
+					// names.
+					path = filepath.Join(filepath.Dir(dir), name+".target")
+				}
+				if err := os.WriteFile(path, b, perm); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, perm); err != nil { // past the umask
+					t.Fatal(err)
+				}
+				if c.link {
+					if err := os.Symlink(path, filepath.Join(dir, name)); err != nil {
+						t.Skipf("can't make a symbolic link here: %v", err)
+					}
+				}
+			}
+			if c.locked != "" {
+				if err := os.Chmod(filepath.Join(dir, c.locked), 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if c.dirPerm != 0 {
+				if err := os.Chmod(dir, c.dirPerm); err != nil {
+					t.Fatal(err)
+				}
+				// t.TempDir's cleanup removes what is in it.
+				t.Cleanup(func() { os.Chmod(dir, 0o700) })
+			}
+			var read []int
+			got, err := Scan(dir, c.limit, func(m Message) bool {
+				var body struct{ N int }
+				if err := json.Unmarshal(m.Body, &body); err != nil {
+					t.Fatal(err)
+				}
+				read = append(read, body.N)
+				return body.N == c.stop
+			})
+			if (err != nil) != c.unread || got != c.want || !slices.Equal(read, c.read) {
+				t.Errorf("Scan handed over %v and reported %v, %v; want %v and %v, with an error %v", read, got, err, c.read, c.want, c.unread)
+			}
 		})
 	}
 }

@@ -5,6 +5,8 @@ package inbox
 import (
 	"io/fs"
 	"os"
+
+	"golang.org/x/sys/windows"
 )
 
 // spoolFlags open the spool for Append.
@@ -12,6 +14,24 @@ const spoolFlags = os.O_WRONLY | os.O_APPEND | os.O_CREATE
 
 // readFlags open a taken spool file for a drain.
 const readFlags = os.O_RDONLY
+
+// openShared opens a spool file for Scan to read, sharing delete as well
+// as read and write, which os.OpenFile doesn't: so while Scan reads it, a
+// drain can still rename it (take) and delete it, and a sender append to
+// it.
+func openShared(name string) (*os.File, error) {
+	p, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return nil, err
+	}
+	h, err := windows.CreateFile(p, windows.GENERIC_READ,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: err}
+	}
+	return os.NewFile(uintptr(h), name), nil
+}
 
 // guardFlags are the flags OpenPrivate adds: none, since the data
 // directory's DACL decides who may open what is in it.

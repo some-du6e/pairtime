@@ -291,6 +291,7 @@ type sealedRow struct {
 	row          pkgledger.BatchRow
 	sealedAt     time.Time
 	online, back bool
+	localUntil   time.Time
 	harnesses    map[event.Harness]string
 }
 
@@ -300,11 +301,14 @@ type sealedRow struct {
 const sealedQueueMax = 1024
 
 // localOnlyProblem is what doctor hears while the batch roots stop at a
-// batch sealed in local-only mode (saved.localStop), and noModeProblem
+// batch sealed in local-only mode (saved.localStop): config.toml said so
+// for a while after the link, or a record made or waiting while the
+// computer was local-only, before the link, reached the ledger after its
+// uploads began (ledger.Writer.Write). noModeProblem is what it hears
 // while they stop at one an older pairtime version sealed, which recorded
 // no mode, so it counts as local-only (ledger.Row.NoMode).
 const (
-	localOnlyProblem = `pairtime has stopped uploading, because config.toml kept this computer local-only for a while after it was linked (it said mode = "local", or it had an error), and nothing it records in local-only mode may leave it; to upload again, run pairtime logout, then pairtime login`
+	localOnlyProblem = `pairtime has stopped uploading, because after this computer was linked it recorded something in local-only mode: config.toml said mode = "local", or had an error, for a while, or something made before the link, as a hook call that waited, reached pairtime only after it. Nothing recorded in local-only mode may leave this computer; to upload again, run pairtime logout, then pairtime login`
 	noModeProblem    = `pairtime has stopped uploading, because an older pairtime version sealed batches on this computer without recording whether config.toml let them upload, so they count as local-only, and nothing recorded in local-only mode may leave it; to upload again, run pairtime logout, then pairtime login`
 )
 
@@ -431,7 +435,8 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 	}
 	u.mu.Lock()
 	if len(u.sealed) < sealedQueueMax {
-		u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt, online: b.Online, back: b.Back, harnesses: learned})
+		u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt, online: b.Online, back: b.Back,
+			localUntil: b.LocalUntil, harnesses: learned})
 	} else {
 		u.sealed, u.lost = nil, true
 	}
@@ -923,7 +928,8 @@ func (u *Uploader) takeSealed() {
 		case sb.row.B <= u.rows.last():
 			// Read from batches.seg already.
 		case sb.row.B == u.rows.last()+1:
-			r := ledger.Row{BatchRow: sb.row, Prev: u.rows.lastHead, SealedAt: sb.sealedAt, Online: sb.online, Back: sb.back}
+			r := ledger.Row{BatchRow: sb.row, Prev: u.rows.lastHead, SealedAt: sb.sealedAt, Online: sb.online, Back: sb.back,
+				LocalUntil: sb.localUntil}
 			if err := u.rows.add(r); err != nil {
 				u.log.Warn("a sealed batch doesn't follow the rows", "err", err)
 			}

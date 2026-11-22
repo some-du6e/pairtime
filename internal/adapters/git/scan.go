@@ -30,6 +30,12 @@ type Change struct {
 	// began and finished the operation, in Unix seconds of git's clock. A
 	// rebase spans several entries; anything else has one.
 	GitStart, GitEnd int64
+	// Found is when the scan that found the change began, which the
+	// event's T gives by the wall clock, with Go's monotonic reading when
+	// the scanner's clock gives one: the agent takes the event's mono from
+	// it, so a step of the wall clock while the watcher holds the change
+	// doesn't move it.
+	Found time.Time
 }
 
 // Op returns the change's git operation.
@@ -498,7 +504,7 @@ func (s *Scanner) build(ctx context.Context, ops []op, now time.Time) ([]Change,
 		if tip == nil {
 			continue // the commit is gone, as after an aggressive gc
 		}
-		c := Change{GitStart: o.first.Time, GitEnd: o.last.Time}
+		c := Change{GitStart: o.first.Time, GitEnd: o.last.Time, Found: now}
 		var made, arrived []*meta
 		var rewrites []Rewrite
 		kind := o.kind

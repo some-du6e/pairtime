@@ -19,9 +19,11 @@ type ChainInfo struct {
 	DeviceID string
 	// KeyID is the id of the device key that writes it.
 	KeyID string
-	// Created is when the chain began, at the writer's first start under
-	// the key. No record of a time before it was written live: those are
-	// lookback's, read from logs (DESIGN 6.2 D11).
+	// Created is when the chain began, at the writer's first Open under the
+	// key. A record dated before it is lookback's, read from logs (DESIGN
+	// 6.2 D11), or one that waited for that Open, as presence's queue and
+	// held hook calls do while a locked keyring keeps the ledger shut
+	// (Writer.Created).
 	Created time.Time
 }
 
@@ -105,7 +107,8 @@ func ReadBatches(dir string, from uint64, fn func(Batch) error) error {
 				if r, ok := bf.receipts[sp.B]; ok {
 					row.Receipt = &r
 				}
-				batch := Batch{Row: row, SealedAt: time.UnixMilli(sp.SealedAt), Online: sp.online(), Back: sp.Back, Records: recs}
+				batch := Batch{Row: row, SealedAt: time.UnixMilli(sp.SealedAt), Online: sp.online(), Back: sp.Back,
+					LocalUntil: msTime(sp.LocalUntil), Records: recs}
 				recs, next, prev = nil, sp.B+1, sp.Head
 				if sp.B >= from {
 					return fn(batch)

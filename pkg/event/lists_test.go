@@ -22,7 +22,7 @@ func TestLists(t *testing.T) {
 			"P", "ANS", "GO", "Q", "PA", "INT", "E", "NAV", "CMD", "TEST", "G", "SUP", "READ", "LOOKUP"}},
 		{"UncreditedReasons lists SM 5.2's uncredited reasons in order", names(UncreditedReasons()), names(uncreditedReasons.values)},
 		{"Evidences lists the levels A, B and C", names(Evidences()), []string{"A", "B", "C"}},
-		{"SlotLabels lists the side-door labels in a slot's order", names(SlotLabels()), []string{"via_track", "via_plugin", "via_bridge"}},
+		{"SlotLabels lists the side-door labels, then focus_unknown, in a slot's order", names(SlotLabels()), []string{"via_track", "via_plugin", "via_bridge", "focus_unknown"}},
 		{"BucketStates lists every bucket state", names(BucketStates()), names(bucketStates.values)},
 		{"Witnesses lists every witness label", names(Witnesses()), names(witnesses.values)},
 		{"Actors lists every actor in the schema's order", names(Actors()), names(actors.values)},

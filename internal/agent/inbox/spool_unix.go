@@ -19,6 +19,10 @@ const spoolFlags = os.O_WRONLY | os.O_APPEND | os.O_CREATE | syscall.O_NOFOLLOW 
 // readFlags open a taken spool file for a drain, with the same guards.
 const readFlags = os.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 
+// openShared opens a spool file for Scan to read. A rename or a delete
+// never waits for an open file here.
+func openShared(name string) (*os.File, error) { return os.OpenFile(name, readFlags, 0) }
+
 // guardFlags are those guards alone, which OpenPrivate adds to its flags.
 const guardFlags = syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 
