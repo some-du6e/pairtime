@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/some-du6e/pairtime/internal/coach/text"
 )
@@ -96,10 +97,12 @@ func Checks(f Facts) []Check {
 // tilde writes each of homes as ~ in s, in both its slashes' spellings
 // and in any case: Windows and macOS read paths that way, so the same
 // folder can come back in another case. Each pattern is compiled here,
-// when doctor runs, rather than at package init.
+// when doctor runs, rather than at package init. A home that isn't UTF-8,
+// as a Linux path can be, is passed over: regexp refuses it, and the
+// lines, which text.Printable has made UTF-8, can't hold it.
 func tilde(s string, homes []string) string {
 	for _, home := range homes {
-		if len(home) < 3 {
+		if len(home) < 3 || !utf8.ValidString(home) {
 			continue
 		}
 		for _, h := range []string{home, strings.ReplaceAll(home, `\`, "/"), strings.ReplaceAll(home, "/", `\`)} {

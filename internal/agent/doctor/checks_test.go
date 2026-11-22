@@ -345,3 +345,25 @@ func TestMillis(t *testing.T) {
 		})
 	}
 }
+
+func TestTilde(t *testing.T) {
+	tests := []struct {
+		name  string
+		text  string
+		homes []string
+		want  string
+	}{
+		{"a home folder reads as ~ in both its slashes' spellings", `couldn't read /home/teen/x and \home\teen\y`, []string{"/home/teen"}, `couldn't read ~/x and ~\y`},
+		{"a home folder too short to name anyone is left as it is", "couldn't read /a/x", []string{"/a"}, "couldn't read /a/x"},
+		{"a home folder that isn't UTF-8, as a Linux path can be, is passed over with no panic, and the text stays as it was",
+			"couldn't read /home/jos\xe9/x", []string{"/home/jos\xe9"}, "couldn't read /home/jos\xe9/x"},
+		{"a home that isn't UTF-8 doesn't keep the next spelling from reading as ~", "couldn't read /home/teen/x", []string{"/home/jos\xe9", "/home/teen"}, "couldn't read ~/x"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tilde(tt.text, tt.homes); got != tt.want {
+				t.Errorf("tilde(%q, %q) = %q, want %q", tt.text, tt.homes, got, tt.want)
+			}
+		})
+	}
+}
