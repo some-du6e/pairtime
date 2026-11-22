@@ -90,6 +90,33 @@ func TestScanSharing(t *testing.T) {
 				t.Errorf("Scan with a taken file held without sharing reported %v, %v; want false and a busy error", found, err)
 			}
 		}},
+		{"a taken file whose bytes another process has locked, though it shares the file, stops Scan with an error when no file has the message", func(t *testing.T, dir, spool string) {
+			b, err := newMessage(t, 2).Encode()
+			if err != nil {
+				t.Fatal(err)
+			}
+			taken := filepath.Join(dir, "spool-00000000000000000001-0badc0de"+takenSuffix)
+			if err := os.WriteFile(taken, append(b, '\n'), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			p, err := windows.UTF16PtrFromString(taken)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h, err := windows.CreateFile(p, windows.GENERIC_READ|windows.GENERIC_WRITE,
+				windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer windows.CloseHandle(h)
+			if err := windows.LockFileEx(h, windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &windows.Overlapped{}); err != nil {
+				t.Fatal(err)
+			}
+			found, err := Scan(dir, 10, func(Message) bool { return false })
+			if found || err == nil {
+				t.Errorf("Scan with a taken file it couldn't read reported %v, %v; want false and an error", found, err)
+			}
+		}},
 		{"a spool another process holds without sharing stops Scan with an error once a sender's tries are over", func(t *testing.T, dir, spool string) {
 			h := exclusive(t, spool)
 			defer windows.CloseHandle(h)

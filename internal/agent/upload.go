@@ -332,11 +332,16 @@ func (a *agent) seeSoon() {
 		if w == nil {
 			return
 		}
-		if a.seeLocked(a.online()) {
-			a.keepLocked()
+		changed := a.seeLocked(a.online())
+		changed = a.unseenLinkLocked() || changed
+		if !changed {
+			// Nothing for the writer: a Seen it has already would only ask
+			// for a seal, whose Online, as while account.json can't be read,
+			// would ask again.
+			return
 		}
-		// seenLocked takes the link in, and keeps it in state.json.
-		w.NoteSeenThen(a.seenLocked(), a.seenLinkLocked)
+		a.keepLocked()
+		w.NoteSeenThen(a.seenNowLocked(), a.seenLinkLocked)
 	}()
 }
 
@@ -410,6 +415,11 @@ func (a *agent) seenLocked() ledger.Seen {
 	if a.unseenLinkLocked() {
 		a.keepLocked()
 	}
+	return a.seenNowLocked()
+}
+
+// seenNowLocked is what modes saw, as ledger.Seen. a.modes.mu is held.
+func (a *agent) seenNowLocked() ledger.Seen {
 	m := &a.modes
 	return ledger.Seen{Local: m.local, Ended: m.ended, OS: m.os, Earlier: m.kept, Until: m.until}
 }

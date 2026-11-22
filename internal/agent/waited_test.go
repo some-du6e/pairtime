@@ -725,6 +725,23 @@ func TestModesSeen(t *testing.T) {
 				t.Errorf("the start saw %+v, want the stretch ended now, by both clocks, and by the wall clock to the end of the link's second", got)
 			}
 		}},
+		{"a login that lands between Open's Seen and the writer's publish is taken in as it publishes, and the writer's Online sees it at once", func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			first := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+			writeAccount(t, dirs, first)
+			keepState(t, dirs, map[string]any{modesKey: modesState{Ended: first.Add(time.Minute), Linked: first.UnixMilli()}})
+			if a.state, _, _ = state.Open(dirs.StateFile()); a.state == nil {
+				t.Fatal("state.json didn't open")
+			}
+			a.startModes()
+			a.seen()
+			relinked := time.Now().UTC().Truncate(time.Second)
+			writeAccount(t, dirs, relinked)
+			a.publishWriter(testWriter(t, dirs))
+			if !a.writerOnline() {
+				t.Error("the writer's Online said local-only after the publish took the login in")
+			}
+		}},
 		{"an account.json that can't be read may name a link modes didn't account for, so the writer's Online says local-only", func(t *testing.T) {
 			a, dirs := modesAgent(t, "online")
 			if err := home.WriteFile(filepath.Join(dirs.Data, "account.json"), []byte("{not json")); err != nil {
@@ -1126,7 +1143,7 @@ func TestAgentWaiting(t *testing.T) {
 			a, _ := modesAgent(t, "online")
 			// What each Scan gives: busy, busy past the bound twice, busy at a
 			// later switch back, read, busy.
-			script := []error{errBusy, errBusy, errBusy, errBusy, nil, errBusy}
+			script := []error{errBusy, errBusy, errBusy, errBusy, errBusy, nil, errBusy}
 			saved := scanSpool
 			t.Cleanup(func() { scanSpool = saved })
 			scanSpool = func(string, int, func(inbox.Message) bool) (bool, error) {
@@ -1142,6 +1159,11 @@ func TestAgentWaiting(t *testing.T) {
 			if since == nil {
 				t.Fatal("the first ask that found the file busy didn't record when")
 			}
+			// Past a minute's drain and drainSoon's, the drains after it may
+			// still take the file.
+			drained := since.Add(-drainEvery - drainSoonAfter - time.Second)
+			a.spoolBusySince.Store(&drained)
+			ask()
 			// The file has stayed busy past the bound since.
 			past := since.Add(-spoolBusyHold - time.Second)
 			a.spoolBusySince.Store(&past)
@@ -1152,7 +1174,7 @@ func TestAgentWaiting(t *testing.T) {
 			ask()
 			ask()
 			ask()
-			if want := []bool{true, false, false, true, false, true}; !slices.Equal(got, want) {
+			if want := []bool{true, true, false, false, true, false, true}; !slices.Equal(got, want) {
 				t.Errorf("the spool held the mark %v, want %v", got, want)
 			}
 		}},

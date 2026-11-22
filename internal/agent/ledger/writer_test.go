@@ -786,7 +786,7 @@ func TestNoteMode(t *testing.T) {
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "crash-online", "write-old", "seal"},
 			[]bool{false, true, false}, []bool{false, true, false}, []int{1, 1, 1}},
 		{"an event a kill left without a batch, made before the newest seal frame's moment, is sealed local-only by the next Open",
-			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "write-old", "kill", "sealed"},
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "pause", "write", "seal", "write-old", "kill", "sealed"},
 			[]bool{false, true, false}, []bool{false, true, false}, []int{1, 1, 1}},
 		{"while an event made before the switch back is still on its way, a batch is sealed local-only, and the mark waits for the batch after it",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "waiting", "write", "seal", "arrived", "write-old", "seal", "write", "seal"},
@@ -822,7 +822,7 @@ func TestNoteMode(t *testing.T) {
 			[]string{"file-local", "write", "seal", "file-online", "seal-none", "write-old", "seal", "write", "seal"},
 			[]bool{false, false, true}, []bool{false, false, false}, []int{1, 1, 1}},
 		{"an event a kill left in the boot before, made before the newest seal frame's moment by that boot's clock though its t is after, is sealed local-only by the next Open in another boot",
-			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "write-stepped", "kill-reboot", "sealed"},
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "pause", "write", "seal", "write-stepped", "kill-reboot", "sealed"},
 			[]bool{false, true, false}, []bool{false, true, false}, []int{1, 1, 1}},
 		{"a hook call of the boot before, which reaches a writer opened in a new boot, made before the newest seal frame's moment by that boot's clock though its t is after, is sealed local-only",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reboot", "write-stepped", "seal", "write", "seal"},
@@ -1161,6 +1161,15 @@ func TestNoteSeen(t *testing.T) {
 			Seen{}, false, false, []string{"write", "seen-after", "seal", "write", "seal"}, []bool{false, true}, []bool{false, true}},
 		{"a stretch end an earlier run saw before a batch it sealed arms no mark at the next start, as after an upgrade from a version whose seal frames keep no moment",
 			Seen{}, false, false, []string{"write", "seal", "reopen-earlier", "write", "seal"}, []bool{true, true}, []bool{false, false}},
+		{"so does one before a batch whose row a crash lost, once Open rebuilds the row from its seal frame",
+			Seen{}, false, false, []string{"write", "seal", "crash-earlier", "write", "seal"}, []bool{true, true}, []bool{false, false}},
+		{"so does one NoteSeen gives after a batch the writer sealed itself",
+			Seen{}, false, false, []string{"write", "seal", "seen-earlier", "write", "seal"}, []bool{true, true}, []bool{false, false}},
+		{"a stretch end this run saw before the newest batch, on frames that keep no moment, is newer, and marks the batch after it",
+			Seen{}, false, false, []string{"write", "seal", "seen-before", "write", "seal"}, []bool{true, true}, []bool{false, true}},
+		{"a stretch the writer took as going on, from a seal's local-only read, isn't ended by a stretch end it had already, which came before the stretch began",
+			Seen{Ended: time.UnixMilli(testT)}, false, false, []string{"file-local", "seal-none", "hold", "seen-again", "file-online", "release", "write", "seal"},
+			[]bool{false}, []bool{false}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1219,6 +1228,32 @@ func TestNoteSeen(t *testing.T) {
 				case "seen-after":
 					// The end of a stretch after the record written before it.
 					w.NoteSeen(Seen{Ended: time.UnixMilli(testT + 2500)})
+				case "seen-earlier":
+					// One state.json kept from before the batch sealed above.
+					w.NoteSeen(Seen{Ended: time.UnixMilli(testT - 30_000), Earlier: true})
+				case "seen-before":
+					// One this run saw before the batch sealed above.
+					w.NoteSeen(Seen{Ended: time.UnixMilli(testT - 1000)})
+				case "seen-again":
+					w.NoteSeen(c.open)
+				case "file-local", "file-online":
+					file.Store(step == "file-online")
+				case "seal-none":
+					if _, ok, err := w.Seal(); ok || err != nil {
+						t.Fatalf("step %d: Seal sealed a batch %v, %v; want nothing to seal", i, ok, err)
+					}
+				case "hold":
+					w.sealMu.Lock()
+				case "release":
+					w.sealMu.Unlock()
+				case "crash-earlier":
+					// A kill that also lost every row of batches.seg, and the
+					// next start with a stretch end state.json kept from before
+					// the batch.
+					abandon(w)
+					batches := filepath.Join(dir, batchesName)
+					truncate(t, batches, framesOf(t, batches)[0].end)
+					w = openWriter(Seen{Ended: time.UnixMilli(testT - 30_000), Earlier: true})
 				case "reopen", "reopen-earlier":
 					if err := w.Close(); err != nil {
 						t.Fatalf("step %d: %v", i, err)

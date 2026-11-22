@@ -823,8 +823,10 @@ func (w *Writer) seenLocked(s Seen, at moment) bool {
 		newer := !sealedSince && (ended.run > w.until.run || ended.wall > w.until.wall ||
 			ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os)
 		was := w.until
-		if w.local {
+		if w.local && newer {
 			// A stretch the writer took as going on, which the agent saw end.
+			// An end the writer had already came before the stretch began, so
+			// it ends nothing.
 			seal = w.noteLocked(true, ended)
 		}
 		w.until.raise(ended, w.boot)

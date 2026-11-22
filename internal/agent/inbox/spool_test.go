@@ -640,6 +640,8 @@ func TestScan(t *testing.T) {
 			map[string][]int{"spool-1.drain": {1}, "spool-2.drain": {2}}, 0, 0, false, "spool-1.drain", 10, 0, []int{2}, false, true},
 		{"a spool others may open is no drain's, and isn't read",
 			map[string][]int{SpoolName: {1}}, 0o644, 0, false, "", 10, 0, nil, false, false},
+		{"a file Scan can't look up, in an inbox directory it may list but not search, may hold any message, so Scan reports it",
+			map[string][]int{SpoolName: {1}}, 0, 0o600, false, "", 10, 0, nil, false, true},
 		{"an inbox directory others may write in is no drain's, and nothing in it is read",
 			map[string][]int{SpoolName: {1}}, 0, 0o775, false, "", 10, 0, nil, false, false},
 		{"a spool that is a symbolic link is no drain's, and isn't read",
@@ -651,7 +653,7 @@ func TestScan(t *testing.T) {
 			if (c.perm != 0 || c.dirPerm != 0 || c.locked != "") && runtime.GOOS == "windows" {
 				t.Skip("on Windows the data directory's DACL, not a file's mode, says who may open it")
 			}
-			if c.locked != "" && os.Geteuid() == 0 {
+			if (c.locked != "" || c.dirPerm != 0 && c.dirPerm&0o100 == 0) && os.Geteuid() == 0 {
 				t.Skip("root opens a file whatever its mode")
 			}
 			dir := filepath.Join(t.TempDir(), "inbox")
@@ -701,6 +703,8 @@ func TestScan(t *testing.T) {
 				if err := os.Chmod(dir, c.dirPerm); err != nil {
 					t.Fatal(err)
 				}
+				// t.TempDir's cleanup removes what is in it.
+				t.Cleanup(func() { os.Chmod(dir, 0o700) })
 			}
 			var read []int
 			got, err := Scan(dir, c.limit, func(m Message) bool {
