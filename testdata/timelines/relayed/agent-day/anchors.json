@@ -1,0 +1,1926 @@
+{
+  "fixture": "relayed/agent-day",
+  "anchors": [],
+  "turns": [
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_6bcb6199b2bc",
+      "t_submit": 1795413630000,
+      "local_submit": "00:00:30",
+      "t_stop": 1795413720000,
+      "local_stop": "00:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_0475b3becc02",
+      "turn_key": "t_39feeabf52d1",
+      "t_submit": 1795413672000,
+      "local_submit": "00:01:12",
+      "t_stop": 1795414272000,
+      "local_stop": "00:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_5f8fc6a5ed19",
+      "turn_key": "t_b94cd1ecd511",
+      "t_submit": 1795413702000,
+      "local_submit": "00:01:42",
+      "t_stop": 1795413942000,
+      "local_stop": "00:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_5f8fc6a5ed19",
+      "turn_key": "t_84100a9a7836",
+      "t_submit": 1795414268000,
+      "local_submit": "00:11:08",
+      "t_stop": 1795414508000,
+      "local_stop": "00:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_0475b3becc02",
+      "turn_key": "t_1b1b8f478c83",
+      "t_submit": 1795414504000,
+      "local_submit": "00:15:04",
+      "t_stop": 1795414864000,
+      "local_stop": "00:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_5f8fc6a5ed19",
+      "turn_key": "t_caf0d735acb8",
+      "t_submit": 1795414860000,
+      "local_submit": "00:21:00",
+      "t_stop": 1795414980000,
+      "local_stop": "00:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_0475b3becc02",
+      "turn_key": "t_56e67699533a",
+      "t_submit": 1795414976000,
+      "local_submit": "00:22:56",
+      "t_stop": 1795415036000,
+      "local_stop": "00:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_fa02fcabfc5a",
+      "t_submit": 1795415032000,
+      "local_submit": "00:23:52",
+      "t_stop": 1795415122000,
+      "local_stop": "00:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_931625cfe533",
+      "t_submit": 1795417230000,
+      "local_submit": "01:00:30",
+      "t_stop": 1795417320000,
+      "local_stop": "01:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_fa95290b31b0",
+      "turn_key": "t_9d2fe938a11e",
+      "t_submit": 1795417272000,
+      "local_submit": "01:01:12",
+      "t_stop": 1795417872000,
+      "local_stop": "01:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_49e068bf4431",
+      "turn_key": "t_15b227047fc9",
+      "t_submit": 1795417302000,
+      "local_submit": "01:01:42",
+      "t_stop": 1795417542000,
+      "local_stop": "01:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_49e068bf4431",
+      "turn_key": "t_e21c867bcf19",
+      "t_submit": 1795417868000,
+      "local_submit": "01:11:08",
+      "t_stop": 1795418108000,
+      "local_stop": "01:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_fa95290b31b0",
+      "turn_key": "t_2594465c9378",
+      "t_submit": 1795418104000,
+      "local_submit": "01:15:04",
+      "t_stop": 1795418464000,
+      "local_stop": "01:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_49e068bf4431",
+      "turn_key": "t_a6d47c074faf",
+      "t_submit": 1795418460000,
+      "local_submit": "01:21:00",
+      "t_stop": 1795418580000,
+      "local_stop": "01:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_fa95290b31b0",
+      "turn_key": "t_85501b1a8122",
+      "t_submit": 1795418576000,
+      "local_submit": "01:22:56",
+      "t_stop": 1795418636000,
+      "local_stop": "01:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_e6d628e46716",
+      "t_submit": 1795418632000,
+      "local_submit": "01:23:52",
+      "t_stop": 1795418722000,
+      "local_stop": "01:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_592e0f86e4ff",
+      "t_submit": 1795420830000,
+      "local_submit": "02:00:30",
+      "t_stop": 1795420920000,
+      "local_stop": "02:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_2ce918423cf8",
+      "turn_key": "t_792c129a9092",
+      "t_submit": 1795420872000,
+      "local_submit": "02:01:12",
+      "t_stop": 1795421472000,
+      "local_stop": "02:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_02b72c6f2706",
+      "turn_key": "t_5963fc38ee60",
+      "t_submit": 1795420902000,
+      "local_submit": "02:01:42",
+      "t_stop": 1795421142000,
+      "local_stop": "02:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_02b72c6f2706",
+      "turn_key": "t_f2fb0e6eb329",
+      "t_submit": 1795421468000,
+      "local_submit": "02:11:08",
+      "t_stop": 1795421708000,
+      "local_stop": "02:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_2ce918423cf8",
+      "turn_key": "t_66cc620d28dc",
+      "t_submit": 1795421704000,
+      "local_submit": "02:15:04",
+      "t_stop": 1795422064000,
+      "local_stop": "02:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_02b72c6f2706",
+      "turn_key": "t_ac5a78829938",
+      "t_submit": 1795422060000,
+      "local_submit": "02:21:00",
+      "t_stop": 1795422180000,
+      "local_stop": "02:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_2ce918423cf8",
+      "turn_key": "t_b4acbad3799f",
+      "t_submit": 1795422176000,
+      "local_submit": "02:22:56",
+      "t_stop": 1795422236000,
+      "local_stop": "02:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_a39182e3036a",
+      "t_submit": 1795422232000,
+      "local_submit": "02:23:52",
+      "t_stop": 1795422322000,
+      "local_stop": "02:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_adb2ed4bc60e",
+      "t_submit": 1795424430000,
+      "local_submit": "03:00:30",
+      "t_stop": 1795424520000,
+      "local_stop": "03:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_b0100ab7dbdc",
+      "turn_key": "t_3a050c25fe82",
+      "t_submit": 1795424472000,
+      "local_submit": "03:01:12",
+      "t_stop": 1795425072000,
+      "local_stop": "03:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_b500eef8adb7",
+      "turn_key": "t_8b29715395b7",
+      "t_submit": 1795424502000,
+      "local_submit": "03:01:42",
+      "t_stop": 1795424742000,
+      "local_stop": "03:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_b500eef8adb7",
+      "turn_key": "t_ca9d2d3b7057",
+      "t_submit": 1795425068000,
+      "local_submit": "03:11:08",
+      "t_stop": 1795425308000,
+      "local_stop": "03:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_b0100ab7dbdc",
+      "turn_key": "t_00d91193b330",
+      "t_submit": 1795425304000,
+      "local_submit": "03:15:04",
+      "t_stop": 1795425664000,
+      "local_stop": "03:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_b500eef8adb7",
+      "turn_key": "t_5cf7009cfa42",
+      "t_submit": 1795425660000,
+      "local_submit": "03:21:00",
+      "t_stop": 1795425780000,
+      "local_stop": "03:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_b0100ab7dbdc",
+      "turn_key": "t_e802a0312516",
+      "t_submit": 1795425776000,
+      "local_submit": "03:22:56",
+      "t_stop": 1795425836000,
+      "local_stop": "03:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_d436c5946fcb",
+      "t_submit": 1795425832000,
+      "local_submit": "03:23:52",
+      "t_stop": 1795425922000,
+      "local_stop": "03:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_f304ec6ff210",
+      "t_submit": 1795428030000,
+      "local_submit": "04:00:30",
+      "t_stop": 1795428120000,
+      "local_stop": "04:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_78ddc9234c79",
+      "turn_key": "t_16bd67847722",
+      "t_submit": 1795428072000,
+      "local_submit": "04:01:12",
+      "t_stop": 1795428672000,
+      "local_stop": "04:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_5fa2e4fce890",
+      "turn_key": "t_7ca01d1d8777",
+      "t_submit": 1795428102000,
+      "local_submit": "04:01:42",
+      "t_stop": 1795428342000,
+      "local_stop": "04:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_5fa2e4fce890",
+      "turn_key": "t_efca48e09913",
+      "t_submit": 1795428668000,
+      "local_submit": "04:11:08",
+      "t_stop": 1795428908000,
+      "local_stop": "04:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_78ddc9234c79",
+      "turn_key": "t_f838a07224af",
+      "t_submit": 1795428904000,
+      "local_submit": "04:15:04",
+      "t_stop": 1795429264000,
+      "local_stop": "04:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_5fa2e4fce890",
+      "turn_key": "t_03bfb1d68c90",
+      "t_submit": 1795429260000,
+      "local_submit": "04:21:00",
+      "t_stop": 1795429380000,
+      "local_stop": "04:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_78ddc9234c79",
+      "turn_key": "t_95fa122eef7b",
+      "t_submit": 1795429376000,
+      "local_submit": "04:22:56",
+      "t_stop": 1795429436000,
+      "local_stop": "04:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_d0f0aee8b2f8",
+      "t_submit": 1795429432000,
+      "local_submit": "04:23:52",
+      "t_stop": 1795429522000,
+      "local_stop": "04:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_7e3916683168",
+      "t_submit": 1795431630000,
+      "local_submit": "05:00:30",
+      "t_stop": 1795431720000,
+      "local_stop": "05:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_2398d8244454",
+      "turn_key": "t_6e9c6ad4275c",
+      "t_submit": 1795431672000,
+      "local_submit": "05:01:12",
+      "t_stop": 1795432272000,
+      "local_stop": "05:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_449c5cfc1071",
+      "turn_key": "t_8ac3c9258e1c",
+      "t_submit": 1795431702000,
+      "local_submit": "05:01:42",
+      "t_stop": 1795431942000,
+      "local_stop": "05:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_449c5cfc1071",
+      "turn_key": "t_f147cf42372c",
+      "t_submit": 1795432268000,
+      "local_submit": "05:11:08",
+      "t_stop": 1795432508000,
+      "local_stop": "05:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_2398d8244454",
+      "turn_key": "t_9dea4599945c",
+      "t_submit": 1795432504000,
+      "local_submit": "05:15:04",
+      "t_stop": 1795432864000,
+      "local_stop": "05:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_449c5cfc1071",
+      "turn_key": "t_b8ec3b712907",
+      "t_submit": 1795432860000,
+      "local_submit": "05:21:00",
+      "t_stop": 1795432980000,
+      "local_stop": "05:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_2398d8244454",
+      "turn_key": "t_debe8692c748",
+      "t_submit": 1795432976000,
+      "local_submit": "05:22:56",
+      "t_stop": 1795433036000,
+      "local_stop": "05:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_eb932ed35074",
+      "t_submit": 1795433032000,
+      "local_submit": "05:23:52",
+      "t_stop": 1795433122000,
+      "local_stop": "05:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_b79018ce3eb8",
+      "t_submit": 1795435230000,
+      "local_submit": "06:00:30",
+      "t_stop": 1795435320000,
+      "local_stop": "06:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_e63107920dda",
+      "turn_key": "t_e7c930601401",
+      "t_submit": 1795435272000,
+      "local_submit": "06:01:12",
+      "t_stop": 1795435872000,
+      "local_stop": "06:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_a34b66278557",
+      "turn_key": "t_e840dee9ffa7",
+      "t_submit": 1795435302000,
+      "local_submit": "06:01:42",
+      "t_stop": 1795435542000,
+      "local_stop": "06:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_a34b66278557",
+      "turn_key": "t_0f5173ac3380",
+      "t_submit": 1795435868000,
+      "local_submit": "06:11:08",
+      "t_stop": 1795436108000,
+      "local_stop": "06:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_e63107920dda",
+      "turn_key": "t_686751bf03df",
+      "t_submit": 1795436104000,
+      "local_submit": "06:15:04",
+      "t_stop": 1795436464000,
+      "local_stop": "06:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_a34b66278557",
+      "turn_key": "t_f13193de7ea6",
+      "t_submit": 1795436460000,
+      "local_submit": "06:21:00",
+      "t_stop": 1795436580000,
+      "local_stop": "06:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_e63107920dda",
+      "turn_key": "t_06666df7d958",
+      "t_submit": 1795436576000,
+      "local_submit": "06:22:56",
+      "t_stop": 1795436636000,
+      "local_stop": "06:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_7121af99c154",
+      "t_submit": 1795436632000,
+      "local_submit": "06:23:52",
+      "t_stop": 1795436722000,
+      "local_stop": "06:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_7806d80b15d5",
+      "t_submit": 1795438830000,
+      "local_submit": "07:00:30",
+      "t_stop": 1795438920000,
+      "local_stop": "07:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_fea1c31552f0",
+      "turn_key": "t_d648177925cf",
+      "t_submit": 1795438872000,
+      "local_submit": "07:01:12",
+      "t_stop": 1795439472000,
+      "local_stop": "07:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_7134ecf77c2e",
+      "turn_key": "t_0e5a6b93db1a",
+      "t_submit": 1795438902000,
+      "local_submit": "07:01:42",
+      "t_stop": 1795439142000,
+      "local_stop": "07:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_7134ecf77c2e",
+      "turn_key": "t_d60cd9b6eb51",
+      "t_submit": 1795439468000,
+      "local_submit": "07:11:08",
+      "t_stop": 1795439708000,
+      "local_stop": "07:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_fea1c31552f0",
+      "turn_key": "t_3e53b487c073",
+      "t_submit": 1795439704000,
+      "local_submit": "07:15:04",
+      "t_stop": 1795440064000,
+      "local_stop": "07:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_7134ecf77c2e",
+      "turn_key": "t_4b176a7d8a82",
+      "t_submit": 1795440060000,
+      "local_submit": "07:21:00",
+      "t_stop": 1795440180000,
+      "local_stop": "07:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_fea1c31552f0",
+      "turn_key": "t_99d08d0da7d2",
+      "t_submit": 1795440176000,
+      "local_submit": "07:22:56",
+      "t_stop": 1795440236000,
+      "local_stop": "07:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_ef494becd3cf",
+      "t_submit": 1795440232000,
+      "local_submit": "07:23:52",
+      "t_stop": 1795440322000,
+      "local_stop": "07:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_b30f674cbaee",
+      "t_submit": 1795442430000,
+      "local_submit": "08:00:30",
+      "t_stop": 1795442520000,
+      "local_stop": "08:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_e42652d209d5",
+      "turn_key": "t_a5291587e9e6",
+      "t_submit": 1795442472000,
+      "local_submit": "08:01:12",
+      "t_stop": 1795443072000,
+      "local_stop": "08:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_140972e63c68",
+      "turn_key": "t_a98d7ba357ee",
+      "t_submit": 1795442502000,
+      "local_submit": "08:01:42",
+      "t_stop": 1795442742000,
+      "local_stop": "08:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_140972e63c68",
+      "turn_key": "t_9a690422802c",
+      "t_submit": 1795443068000,
+      "local_submit": "08:11:08",
+      "t_stop": 1795443308000,
+      "local_stop": "08:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_e42652d209d5",
+      "turn_key": "t_bcbc77b64e4e",
+      "t_submit": 1795443304000,
+      "local_submit": "08:15:04",
+      "t_stop": 1795443664000,
+      "local_stop": "08:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_140972e63c68",
+      "turn_key": "t_57b0d7994764",
+      "t_submit": 1795443660000,
+      "local_submit": "08:21:00",
+      "t_stop": 1795443780000,
+      "local_stop": "08:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_e42652d209d5",
+      "turn_key": "t_c0c0feeecf30",
+      "t_submit": 1795443776000,
+      "local_submit": "08:22:56",
+      "t_stop": 1795443836000,
+      "local_stop": "08:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_f7d60d30ca6e",
+      "t_submit": 1795443832000,
+      "local_submit": "08:23:52",
+      "t_stop": 1795443922000,
+      "local_stop": "08:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_032c354fd5c5",
+      "t_submit": 1795446030000,
+      "local_submit": "09:00:30",
+      "t_stop": 1795446120000,
+      "local_stop": "09:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_a1d3d3f06065",
+      "turn_key": "t_693a2d48e792",
+      "t_submit": 1795446072000,
+      "local_submit": "09:01:12",
+      "t_stop": 1795446672000,
+      "local_stop": "09:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_1308cdcaa14d",
+      "turn_key": "t_9ef4f44e9144",
+      "t_submit": 1795446102000,
+      "local_submit": "09:01:42",
+      "t_stop": 1795446342000,
+      "local_stop": "09:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_1308cdcaa14d",
+      "turn_key": "t_6a8dc26c3290",
+      "t_submit": 1795446668000,
+      "local_submit": "09:11:08",
+      "t_stop": 1795446908000,
+      "local_stop": "09:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_a1d3d3f06065",
+      "turn_key": "t_bd8d0d123860",
+      "t_submit": 1795446904000,
+      "local_submit": "09:15:04",
+      "t_stop": 1795447264000,
+      "local_stop": "09:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_1308cdcaa14d",
+      "turn_key": "t_bca25f42e094",
+      "t_submit": 1795447260000,
+      "local_submit": "09:21:00",
+      "t_stop": 1795447380000,
+      "local_stop": "09:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_a1d3d3f06065",
+      "turn_key": "t_8739b5c18202",
+      "t_submit": 1795447376000,
+      "local_submit": "09:22:56",
+      "t_stop": 1795447436000,
+      "local_stop": "09:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_7ff8138e1625",
+      "t_submit": 1795447432000,
+      "local_submit": "09:23:52",
+      "t_stop": 1795447522000,
+      "local_stop": "09:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_6e870c726fad",
+      "t_submit": 1795449630000,
+      "local_submit": "10:00:30",
+      "t_stop": 1795449720000,
+      "local_stop": "10:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_5f08d2cdf2fc",
+      "turn_key": "t_6e9f21884174",
+      "t_submit": 1795449672000,
+      "local_submit": "10:01:12",
+      "t_stop": 1795450272000,
+      "local_stop": "10:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_965c13bda61e",
+      "turn_key": "t_6ce628bd81c1",
+      "t_submit": 1795449702000,
+      "local_submit": "10:01:42",
+      "t_stop": 1795449942000,
+      "local_stop": "10:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_965c13bda61e",
+      "turn_key": "t_851c3cd0e0c9",
+      "t_submit": 1795450268000,
+      "local_submit": "10:11:08",
+      "t_stop": 1795450508000,
+      "local_stop": "10:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_5f08d2cdf2fc",
+      "turn_key": "t_aa784033507b",
+      "t_submit": 1795450504000,
+      "local_submit": "10:15:04",
+      "t_stop": 1795450864000,
+      "local_stop": "10:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_965c13bda61e",
+      "turn_key": "t_c49ada54c36b",
+      "t_submit": 1795450860000,
+      "local_submit": "10:21:00",
+      "t_stop": 1795450980000,
+      "local_stop": "10:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_5f08d2cdf2fc",
+      "turn_key": "t_432798c1ca7f",
+      "t_submit": 1795450976000,
+      "local_submit": "10:22:56",
+      "t_stop": 1795451036000,
+      "local_stop": "10:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_f24a24481781",
+      "t_submit": 1795451032000,
+      "local_submit": "10:23:52",
+      "t_stop": 1795451122000,
+      "local_stop": "10:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_0840bb22c9a9",
+      "t_submit": 1795453230000,
+      "local_submit": "11:00:30",
+      "t_stop": 1795453320000,
+      "local_stop": "11:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_7aabd8601a6f",
+      "turn_key": "t_99d234e9bb93",
+      "t_submit": 1795453272000,
+      "local_submit": "11:01:12",
+      "t_stop": 1795453872000,
+      "local_stop": "11:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_7a3904854561",
+      "turn_key": "t_255a8cfe246a",
+      "t_submit": 1795453302000,
+      "local_submit": "11:01:42",
+      "t_stop": 1795453542000,
+      "local_stop": "11:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_7a3904854561",
+      "turn_key": "t_d5aed9c5cde5",
+      "t_submit": 1795453868000,
+      "local_submit": "11:11:08",
+      "t_stop": 1795454108000,
+      "local_stop": "11:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_7aabd8601a6f",
+      "turn_key": "t_998800fae619",
+      "t_submit": 1795454104000,
+      "local_submit": "11:15:04",
+      "t_stop": 1795454464000,
+      "local_stop": "11:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_7a3904854561",
+      "turn_key": "t_0e8e05427ab2",
+      "t_submit": 1795454460000,
+      "local_submit": "11:21:00",
+      "t_stop": 1795454580000,
+      "local_stop": "11:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_7aabd8601a6f",
+      "turn_key": "t_bd32622adf55",
+      "t_submit": 1795454576000,
+      "local_submit": "11:22:56",
+      "t_stop": 1795454636000,
+      "local_stop": "11:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_53e7e6cced0a",
+      "t_submit": 1795454632000,
+      "local_submit": "11:23:52",
+      "t_stop": 1795454722000,
+      "local_stop": "11:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_605516a537b7",
+      "t_submit": 1795456830000,
+      "local_submit": "12:00:30",
+      "t_stop": 1795456920000,
+      "local_stop": "12:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_daaaf2425b14",
+      "turn_key": "t_7fdc3d3a9999",
+      "t_submit": 1795456872000,
+      "local_submit": "12:01:12",
+      "t_stop": 1795457472000,
+      "local_stop": "12:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_17a9e82ec800",
+      "turn_key": "t_8ea40514ae2d",
+      "t_submit": 1795456902000,
+      "local_submit": "12:01:42",
+      "t_stop": 1795457142000,
+      "local_stop": "12:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_17a9e82ec800",
+      "turn_key": "t_e1624d8a933c",
+      "t_submit": 1795457468000,
+      "local_submit": "12:11:08",
+      "t_stop": 1795457708000,
+      "local_stop": "12:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_daaaf2425b14",
+      "turn_key": "t_8b8304c32bcf",
+      "t_submit": 1795457704000,
+      "local_submit": "12:15:04",
+      "t_stop": 1795458064000,
+      "local_stop": "12:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_17a9e82ec800",
+      "turn_key": "t_273e78b9c341",
+      "t_submit": 1795458060000,
+      "local_submit": "12:21:00",
+      "t_stop": 1795458180000,
+      "local_stop": "12:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_daaaf2425b14",
+      "turn_key": "t_879e6aa96b31",
+      "t_submit": 1795458176000,
+      "local_submit": "12:22:56",
+      "t_stop": 1795458236000,
+      "local_stop": "12:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_af3249365bee",
+      "t_submit": 1795458232000,
+      "local_submit": "12:23:52",
+      "t_stop": 1795458322000,
+      "local_stop": "12:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_676c61da9cc1",
+      "t_submit": 1795460430000,
+      "local_submit": "13:00:30",
+      "t_stop": 1795460520000,
+      "local_stop": "13:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_894df8a051ca",
+      "turn_key": "t_6d867b5e4e02",
+      "t_submit": 1795460472000,
+      "local_submit": "13:01:12",
+      "t_stop": 1795461072000,
+      "local_stop": "13:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_8209fd4b9904",
+      "turn_key": "t_03858f22f8bc",
+      "t_submit": 1795460502000,
+      "local_submit": "13:01:42",
+      "t_stop": 1795460742000,
+      "local_stop": "13:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_8209fd4b9904",
+      "turn_key": "t_39636171f136",
+      "t_submit": 1795461068000,
+      "local_submit": "13:11:08",
+      "t_stop": 1795461308000,
+      "local_stop": "13:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_894df8a051ca",
+      "turn_key": "t_6a44c0724ae0",
+      "t_submit": 1795461304000,
+      "local_submit": "13:15:04",
+      "t_stop": 1795461664000,
+      "local_stop": "13:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_8209fd4b9904",
+      "turn_key": "t_1445c4fea6db",
+      "t_submit": 1795461660000,
+      "local_submit": "13:21:00",
+      "t_stop": 1795461780000,
+      "local_stop": "13:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_894df8a051ca",
+      "turn_key": "t_c46db4efce9b",
+      "t_submit": 1795461776000,
+      "local_submit": "13:22:56",
+      "t_stop": 1795461836000,
+      "local_stop": "13:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_15d4ca6fe6aa",
+      "t_submit": 1795461832000,
+      "local_submit": "13:23:52",
+      "t_stop": 1795461922000,
+      "local_stop": "13:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_ccabf19bf0e1",
+      "t_submit": 1795464030000,
+      "local_submit": "14:00:30",
+      "t_stop": 1795464120000,
+      "local_stop": "14:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_a15554b8a4a7",
+      "turn_key": "t_829848176bda",
+      "t_submit": 1795464072000,
+      "local_submit": "14:01:12",
+      "t_stop": 1795464672000,
+      "local_stop": "14:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_2ba648c9f881",
+      "turn_key": "t_ef00ab42be5b",
+      "t_submit": 1795464102000,
+      "local_submit": "14:01:42",
+      "t_stop": 1795464342000,
+      "local_stop": "14:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_2ba648c9f881",
+      "turn_key": "t_df70ae2f579c",
+      "t_submit": 1795464668000,
+      "local_submit": "14:11:08",
+      "t_stop": 1795464908000,
+      "local_stop": "14:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_a15554b8a4a7",
+      "turn_key": "t_6377cc54abe1",
+      "t_submit": 1795464904000,
+      "local_submit": "14:15:04",
+      "t_stop": 1795465264000,
+      "local_stop": "14:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_2ba648c9f881",
+      "turn_key": "t_1218d51112b5",
+      "t_submit": 1795465260000,
+      "local_submit": "14:21:00",
+      "t_stop": 1795465380000,
+      "local_stop": "14:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_a15554b8a4a7",
+      "turn_key": "t_38dc0075c3f6",
+      "t_submit": 1795465376000,
+      "local_submit": "14:22:56",
+      "t_stop": 1795465436000,
+      "local_stop": "14:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_289a1be68f77",
+      "t_submit": 1795465432000,
+      "local_submit": "14:23:52",
+      "t_stop": 1795465522000,
+      "local_stop": "14:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_3f40cb7d2f26",
+      "t_submit": 1795467630000,
+      "local_submit": "15:00:30",
+      "t_stop": 1795467720000,
+      "local_stop": "15:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_f672950adc42",
+      "turn_key": "t_0a712699772a",
+      "t_submit": 1795467672000,
+      "local_submit": "15:01:12",
+      "t_stop": 1795468272000,
+      "local_stop": "15:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_94aa6c99c9de",
+      "turn_key": "t_6a5a83f21a32",
+      "t_submit": 1795467702000,
+      "local_submit": "15:01:42",
+      "t_stop": 1795467942000,
+      "local_stop": "15:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_94aa6c99c9de",
+      "turn_key": "t_a26145b06dea",
+      "t_submit": 1795468268000,
+      "local_submit": "15:11:08",
+      "t_stop": 1795468508000,
+      "local_stop": "15:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_f672950adc42",
+      "turn_key": "t_73ddf81a88fc",
+      "t_submit": 1795468504000,
+      "local_submit": "15:15:04",
+      "t_stop": 1795468864000,
+      "local_stop": "15:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_94aa6c99c9de",
+      "turn_key": "t_7cbe810274b3",
+      "t_submit": 1795468860000,
+      "local_submit": "15:21:00",
+      "t_stop": 1795468980000,
+      "local_stop": "15:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_f672950adc42",
+      "turn_key": "t_85751101c5da",
+      "t_submit": 1795468976000,
+      "local_submit": "15:22:56",
+      "t_stop": 1795469036000,
+      "local_stop": "15:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_aea986f1beb9",
+      "t_submit": 1795469032000,
+      "local_submit": "15:23:52",
+      "t_stop": 1795469122000,
+      "local_stop": "15:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_ce4ba1049702",
+      "t_submit": 1795471230000,
+      "local_submit": "16:00:30",
+      "t_stop": 1795471320000,
+      "local_stop": "16:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_94cf764d0d8c",
+      "turn_key": "t_1e0352debf57",
+      "t_submit": 1795471272000,
+      "local_submit": "16:01:12",
+      "t_stop": 1795471872000,
+      "local_stop": "16:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_7d9f56711db2",
+      "turn_key": "t_5ea5becd8972",
+      "t_submit": 1795471302000,
+      "local_submit": "16:01:42",
+      "t_stop": 1795471542000,
+      "local_stop": "16:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_7d9f56711db2",
+      "turn_key": "t_23dbb6ea2d28",
+      "t_submit": 1795471868000,
+      "local_submit": "16:11:08",
+      "t_stop": 1795472108000,
+      "local_stop": "16:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_94cf764d0d8c",
+      "turn_key": "t_0c6e6c735b3d",
+      "t_submit": 1795472104000,
+      "local_submit": "16:15:04",
+      "t_stop": 1795472464000,
+      "local_stop": "16:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_7d9f56711db2",
+      "turn_key": "t_b8ffd73c3258",
+      "t_submit": 1795472460000,
+      "local_submit": "16:21:00",
+      "t_stop": 1795472580000,
+      "local_stop": "16:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_94cf764d0d8c",
+      "turn_key": "t_054b5443c611",
+      "t_submit": 1795472576000,
+      "local_submit": "16:22:56",
+      "t_stop": 1795472636000,
+      "local_stop": "16:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_047dda55ec5e",
+      "t_submit": 1795472632000,
+      "local_submit": "16:23:52",
+      "t_stop": 1795472722000,
+      "local_stop": "16:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_455a3273e352",
+      "t_submit": 1795474830000,
+      "local_submit": "17:00:30",
+      "t_stop": 1795474920000,
+      "local_stop": "17:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_4ea0d466cd12",
+      "turn_key": "t_30600b104dc9",
+      "t_submit": 1795474872000,
+      "local_submit": "17:01:12",
+      "t_stop": 1795475472000,
+      "local_stop": "17:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_e49f5b063d24",
+      "turn_key": "t_0aa3fff6e1ed",
+      "t_submit": 1795474902000,
+      "local_submit": "17:01:42",
+      "t_stop": 1795475142000,
+      "local_stop": "17:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_e49f5b063d24",
+      "turn_key": "t_fa0fcb4ee0fa",
+      "t_submit": 1795475468000,
+      "local_submit": "17:11:08",
+      "t_stop": 1795475708000,
+      "local_stop": "17:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_4ea0d466cd12",
+      "turn_key": "t_f4db8e27c54f",
+      "t_submit": 1795475704000,
+      "local_submit": "17:15:04",
+      "t_stop": 1795476064000,
+      "local_stop": "17:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_e49f5b063d24",
+      "turn_key": "t_60c670a23305",
+      "t_submit": 1795476060000,
+      "local_submit": "17:21:00",
+      "t_stop": 1795476180000,
+      "local_stop": "17:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_4ea0d466cd12",
+      "turn_key": "t_00a1b45a4de1",
+      "t_submit": 1795476176000,
+      "local_submit": "17:22:56",
+      "t_stop": 1795476236000,
+      "local_stop": "17:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_54ebb1d87267",
+      "t_submit": 1795476232000,
+      "local_submit": "17:23:52",
+      "t_stop": 1795476322000,
+      "local_stop": "17:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_ae6de41705b1",
+      "t_submit": 1795478430000,
+      "local_submit": "18:00:30",
+      "t_stop": 1795478520000,
+      "local_stop": "18:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_cc69a0afb28f",
+      "turn_key": "t_1e88ae552357",
+      "t_submit": 1795478472000,
+      "local_submit": "18:01:12",
+      "t_stop": 1795479072000,
+      "local_stop": "18:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_e0ccc706f5f1",
+      "turn_key": "t_343e218c4d02",
+      "t_submit": 1795478502000,
+      "local_submit": "18:01:42",
+      "t_stop": 1795478742000,
+      "local_stop": "18:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_e0ccc706f5f1",
+      "turn_key": "t_afe3c349d562",
+      "t_submit": 1795479068000,
+      "local_submit": "18:11:08",
+      "t_stop": 1795479308000,
+      "local_stop": "18:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_cc69a0afb28f",
+      "turn_key": "t_7e3da61ad345",
+      "t_submit": 1795479304000,
+      "local_submit": "18:15:04",
+      "t_stop": 1795479664000,
+      "local_stop": "18:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_e0ccc706f5f1",
+      "turn_key": "t_297efccdaeb7",
+      "t_submit": 1795479660000,
+      "local_submit": "18:21:00",
+      "t_stop": 1795479780000,
+      "local_stop": "18:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_cc69a0afb28f",
+      "turn_key": "t_52f8d6d833a9",
+      "t_submit": 1795479776000,
+      "local_submit": "18:22:56",
+      "t_stop": 1795479836000,
+      "local_stop": "18:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_31bc5394a0fc",
+      "t_submit": 1795479832000,
+      "local_submit": "18:23:52",
+      "t_stop": 1795479922000,
+      "local_stop": "18:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_093287462162",
+      "t_submit": 1795482030000,
+      "local_submit": "19:00:30",
+      "t_stop": 1795482120000,
+      "local_stop": "19:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_44b87147e927",
+      "turn_key": "t_b58598b98cbb",
+      "t_submit": 1795482072000,
+      "local_submit": "19:01:12",
+      "t_stop": 1795482672000,
+      "local_stop": "19:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_1a634c9cf913",
+      "turn_key": "t_59878eaae5e9",
+      "t_submit": 1795482102000,
+      "local_submit": "19:01:42",
+      "t_stop": 1795482342000,
+      "local_stop": "19:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_1a634c9cf913",
+      "turn_key": "t_bfb5ed92e949",
+      "t_submit": 1795482668000,
+      "local_submit": "19:11:08",
+      "t_stop": 1795482908000,
+      "local_stop": "19:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_44b87147e927",
+      "turn_key": "t_ffe0648cfa6f",
+      "t_submit": 1795482904000,
+      "local_submit": "19:15:04",
+      "t_stop": 1795483264000,
+      "local_stop": "19:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_1a634c9cf913",
+      "turn_key": "t_745435cb0db5",
+      "t_submit": 1795483260000,
+      "local_submit": "19:21:00",
+      "t_stop": 1795483380000,
+      "local_stop": "19:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_44b87147e927",
+      "turn_key": "t_c21f25d156cb",
+      "t_submit": 1795483376000,
+      "local_submit": "19:22:56",
+      "t_stop": 1795483436000,
+      "local_stop": "19:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_37d2cdf2b3c0",
+      "t_submit": 1795483432000,
+      "local_submit": "19:23:52",
+      "t_stop": 1795483522000,
+      "local_stop": "19:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_1b1739ebd6fc",
+      "t_submit": 1795485630000,
+      "local_submit": "20:00:30",
+      "t_stop": 1795485720000,
+      "local_stop": "20:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_4160d43eabdc",
+      "turn_key": "t_1558e7e5afa7",
+      "t_submit": 1795485672000,
+      "local_submit": "20:01:12",
+      "t_stop": 1795486272000,
+      "local_stop": "20:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_6c917fae5297",
+      "turn_key": "t_f89fbc02ac5d",
+      "t_submit": 1795485702000,
+      "local_submit": "20:01:42",
+      "t_stop": 1795485942000,
+      "local_stop": "20:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_6c917fae5297",
+      "turn_key": "t_4613d70e9ebd",
+      "t_submit": 1795486268000,
+      "local_submit": "20:11:08",
+      "t_stop": 1795486508000,
+      "local_stop": "20:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_4160d43eabdc",
+      "turn_key": "t_1e4434798193",
+      "t_submit": 1795486504000,
+      "local_submit": "20:15:04",
+      "t_stop": 1795486864000,
+      "local_stop": "20:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_6c917fae5297",
+      "turn_key": "t_6e1a6f25a3b5",
+      "t_submit": 1795486860000,
+      "local_submit": "20:21:00",
+      "t_stop": 1795486980000,
+      "local_stop": "20:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_4160d43eabdc",
+      "turn_key": "t_0e2ab2296f15",
+      "t_submit": 1795486976000,
+      "local_submit": "20:22:56",
+      "t_stop": 1795487036000,
+      "local_stop": "20:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_6d3d0559d7e2",
+      "t_submit": 1795487032000,
+      "local_submit": "20:23:52",
+      "t_stop": 1795487122000,
+      "local_stop": "20:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_48fa37362860",
+      "t_submit": 1795489230000,
+      "local_submit": "21:00:30",
+      "t_stop": 1795489320000,
+      "local_stop": "21:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_1a8368cffcd3",
+      "turn_key": "t_d7751547a1c5",
+      "t_submit": 1795489272000,
+      "local_submit": "21:01:12",
+      "t_stop": 1795489872000,
+      "local_stop": "21:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_837eb0b5bab5",
+      "turn_key": "t_b15c3934aa0a",
+      "t_submit": 1795489302000,
+      "local_submit": "21:01:42",
+      "t_stop": 1795489542000,
+      "local_stop": "21:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_837eb0b5bab5",
+      "turn_key": "t_1b3344831112",
+      "t_submit": 1795489868000,
+      "local_submit": "21:11:08",
+      "t_stop": 1795490108000,
+      "local_stop": "21:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_1a8368cffcd3",
+      "turn_key": "t_64597cd8092a",
+      "t_submit": 1795490104000,
+      "local_submit": "21:15:04",
+      "t_stop": 1795490464000,
+      "local_stop": "21:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_837eb0b5bab5",
+      "turn_key": "t_2425dbd07bd7",
+      "t_submit": 1795490460000,
+      "local_submit": "21:21:00",
+      "t_stop": 1795490580000,
+      "local_stop": "21:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_1a8368cffcd3",
+      "turn_key": "t_a550c442e129",
+      "t_submit": 1795490576000,
+      "local_submit": "21:22:56",
+      "t_stop": 1795490636000,
+      "local_stop": "21:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_c387f1641f70",
+      "t_submit": 1795490632000,
+      "local_submit": "21:23:52",
+      "t_stop": 1795490722000,
+      "local_stop": "21:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_042695e15622",
+      "t_submit": 1795492830000,
+      "local_submit": "22:00:30",
+      "t_stop": 1795492920000,
+      "local_stop": "22:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_d73a6fa66581",
+      "turn_key": "t_a30d9e1b3fe7",
+      "t_submit": 1795492872000,
+      "local_submit": "22:01:12",
+      "t_stop": 1795493472000,
+      "local_stop": "22:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_41ce64c1a841",
+      "turn_key": "t_f57bba3dd1ca",
+      "t_submit": 1795492902000,
+      "local_submit": "22:01:42",
+      "t_stop": 1795493142000,
+      "local_stop": "22:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_41ce64c1a841",
+      "turn_key": "t_d24c0926b2ca",
+      "t_submit": 1795493468000,
+      "local_submit": "22:11:08",
+      "t_stop": 1795493708000,
+      "local_stop": "22:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_d73a6fa66581",
+      "turn_key": "t_dca4e0570983",
+      "t_submit": 1795493704000,
+      "local_submit": "22:15:04",
+      "t_stop": 1795494064000,
+      "local_stop": "22:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_41ce64c1a841",
+      "turn_key": "t_50012bb3bfc8",
+      "t_submit": 1795494060000,
+      "local_submit": "22:21:00",
+      "t_stop": 1795494180000,
+      "local_stop": "22:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_d73a6fa66581",
+      "turn_key": "t_cf98b53f9cf0",
+      "t_submit": 1795494176000,
+      "local_submit": "22:22:56",
+      "t_stop": 1795494236000,
+      "local_stop": "22:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_03e5a79f4048",
+      "t_submit": 1795494232000,
+      "local_submit": "22:23:52",
+      "t_stop": 1795494322000,
+      "local_stop": "22:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_fff30cff0178",
+      "t_submit": 1795496430000,
+      "local_submit": "23:00:30",
+      "t_stop": 1795496520000,
+      "local_stop": "23:02:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_81a786498b68",
+      "turn_key": "t_de4c5b9618a8",
+      "t_submit": 1795496472000,
+      "local_submit": "23:01:12",
+      "t_stop": 1795497072000,
+      "local_stop": "23:11:12",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_efcaca7a9977",
+      "turn_key": "t_a353abaf8d36",
+      "t_submit": 1795496502000,
+      "local_submit": "23:01:42",
+      "t_stop": 1795496742000,
+      "local_stop": "23:05:42",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_efcaca7a9977",
+      "turn_key": "t_afb22dec7052",
+      "t_submit": 1795497068000,
+      "local_submit": "23:11:08",
+      "t_stop": 1795497308000,
+      "local_stop": "23:15:08",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_81a786498b68",
+      "turn_key": "t_455222a01137",
+      "t_submit": 1795497304000,
+      "local_submit": "23:15:04",
+      "t_stop": 1795497664000,
+      "local_stop": "23:21:04",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_efcaca7a9977",
+      "turn_key": "t_4ad528e087c6",
+      "t_submit": 1795497660000,
+      "local_submit": "23:21:00",
+      "t_stop": 1795497780000,
+      "local_stop": "23:23:00",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_81a786498b68",
+      "turn_key": "t_99e7a8a88cc6",
+      "t_submit": 1795497776000,
+      "local_submit": "23:22:56",
+      "t_stop": 1795497836000,
+      "local_stop": "23:23:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    },
+    {
+      "session_key": "s_13f87057fa1e",
+      "turn_key": "t_c1b380543f7e",
+      "t_submit": 1795497832000,
+      "local_submit": "23:23:52",
+      "t_stop": 1795497922000,
+      "local_stop": "23:25:22",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"
+    }
+  ]
+}

@@ -1,0 +1,157 @@
+{
+  "fixture": "relayed/t3-unattended",
+  "prompts": [
+    {
+      "turn_key": "t_136b182dc2e1",
+      "t": 1795899601000,
+      "local": "16:00:01",
+      "text": null,
+      "len_chars": 150,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_2aaaf852c010",
+      "t": 1795900201000,
+      "local": "16:10:01",
+      "text": null,
+      "len_chars": 150,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_d8695543ddb7",
+      "t": 1795900801000,
+      "local": "16:20:01",
+      "text": null,
+      "len_chars": 150,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_f8f39e1b9c4f",
+      "t": 1795901221000,
+      "local": "16:27:01",
+      "text": null,
+      "len_chars": 228,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_307f588aaae4",
+      "t": 1795901401000,
+      "local": "16:30:01",
+      "text": null,
+      "len_chars": 150,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_db0aa38b262e",
+      "t": 1795902001000,
+      "local": "16:40:01",
+      "text": null,
+      "len_chars": 150,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_e7bb63dcd24f",
+      "t": 1795902241000,
+      "local": "16:44:01",
+      "text": "/compact",
+      "len_chars": 8,
+      "source": "the command T3 Code's web composer sends when compaction is due"
+    },
+    {
+      "turn_key": "t_404e48efb4b6",
+      "t": 1795902281000,
+      "local": "16:44:41",
+      "text": null,
+      "len_chars": 135,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_11be65fc0a19",
+      "t": 1795902601000,
+      "local": "16:50:01",
+      "text": null,
+      "len_chars": 150,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_582046860eb6",
+      "t": 1795902901000,
+      "local": "16:55:01",
+      "text": null,
+      "len_chars": 90,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_202cadaaa6ef",
+      "t": 1795903201000,
+      "local": "17:00:01",
+      "text": null,
+      "len_chars": 150,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_a793bdedd331",
+      "t": 1795903801000,
+      "local": "17:10:01",
+      "text": null,
+      "len_chars": 150,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_705694160a26",
+      "t": 1795904041000,
+      "local": "17:14:01",
+      "text": null,
+      "len_chars": 133,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_9131ae0b7f02",
+      "t": 1795904401000,
+      "local": "17:20:01",
+      "text": null,
+      "len_chars": 150,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_fb868ff6fa45",
+      "t": 1795904701000,
+      "local": "17:25:01",
+      "text": null,
+      "len_chars": 174,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_998dbed32df8",
+      "t": 1795905001000,
+      "local": "17:30:01",
+      "text": null,
+      "len_chars": 150,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_15e6d1e63d74",
+      "t": 1795905021000,
+      "local": "17:30:21",
+      "text": null,
+      "len_chars": 231,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_1476e843b37e",
+      "t": 1795905601000,
+      "local": "17:40:01",
+      "text": null,
+      "len_chars": 150,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_2bd7a9f776e1",
+      "t": 1795906201000,
+      "local": "17:50:01",
+      "text": null,
+      "len_chars": 150,
+      "source": "invented for this case; only its length matters"
+    }
+  ]
+}

@@ -216,7 +216,7 @@ class Replay:
                 nxt = [t for t in sends if t > stop]
                 if not nxt or nxt[0] - stop > READ_FOLLOW_S * 1000:
                     continue
-                end_at = min([nxt[0]] + [t for t in turn_starts if t > stop])
+                end_at = min([nxt[0]] + [t for t in turn_starts if t >= stop])
                 self.spans.setdefault(s, []).append((stop, end_at))
 
         # Bucket changes in time order: a relayed prompt resets its session's

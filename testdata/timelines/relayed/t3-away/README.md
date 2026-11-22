@@ -35,7 +35,7 @@ Each relay record comes 3 s after its stamp, inside `RELAY_SEEN_LAG_S`, and each
 
 ## Credit, minute by minute
 
-Every slot's presence is unknown, so an uncredited second is `X.bucket_cap` where only the 120 s cap kept the session from reading, `X.agent_only` or `X.automated` while a turn runs, and `X.no_anchor` otherwise (SM 5.2).
+Every slot's presence is unknown, so an uncredited second is `X.bucket_cap` where only the 120 s cap kept the session from reading, `X.agent_only` while a person's turn runs, `X.automated` while only automated turns do, and `X.no_anchor` otherwise (SM 5.2).
 
 | Minute | Credited | Reasons | Arithmetic |
 |---|---|---|---|

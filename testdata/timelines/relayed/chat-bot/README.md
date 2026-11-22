@@ -34,7 +34,7 @@ Every call's send time is 1 s before it arrives, inside the 5 s the plugin rule 
 
 ## Credit, minute by minute
 
-Every slot's presence is unknown, so an uncredited second is `X.agent_only` or `X.automated` while a turn runs and `X.no_anchor` otherwise (SM 5.2).
+Every slot's presence is unknown, so an uncredited second is `X.agent_only` while a person's turn runs, `X.automated` while only automated turns do, and `X.no_anchor` otherwise (SM 5.2).
 
 | Minute | Credited | Reasons | Arithmetic |
 |---|---|---|---|

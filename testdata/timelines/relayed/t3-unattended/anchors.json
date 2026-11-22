@@ -1,0 +1,237 @@
+{
+  "fixture": "relayed/t3-unattended",
+  "anchors": [
+    {
+      "event_id": "01a2241d-80b8-70fd-b884-90a17c98088f",
+      "kind": "substantive_prompt",
+      "t": 1795902243000,
+      "local": "16:44:03",
+      "project_key": "p_7fe5f5541eb2",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "lead_s": 90,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "app",
+      "level": "C",
+      "sm": "2.3: a relayed message's lead is its typing time, 135 / 1.5 = 90 s, ending at sent_at",
+      "sent_at": 1795902240000,
+      "local_sent_at": "16:44:00",
+      "prompt": "01a2241e-1528-7606-a9e2-f120e5b2cc72",
+      "labels": ["via_relay"]
+    },
+    {
+      "event_id": "01a22427-92d8-7abd-863e-6b9f2ee9ddfd",
+      "kind": "substantive_prompt",
+      "t": 1795902903000,
+      "local": "16:55:03",
+      "project_key": "p_7fe5f5541eb2",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "lead_s": 60,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "app",
+      "level": "C",
+      "sm": "2.3: a relayed message's lead is its typing time, 90 / 1.5 = 60 s, ending at sent_at",
+      "sent_at": 1795902900000,
+      "local_sent_at": "16:55:00",
+      "prompt": "01a22427-8b08-737f-95d6-7de721825a12",
+      "labels": ["via_relay"]
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_a615c4b92fa8",
+      "turn_key": "t_136b182dc2e1",
+      "t_submit": 1795899601000,
+      "local_submit": "16:00:01",
+      "t_stop": 1795899651000,
+      "local_stop": "16:00:51",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    },
+    {
+      "session_key": "s_a615c4b92fa8",
+      "turn_key": "t_2aaaf852c010",
+      "t_submit": 1795900201000,
+      "local_submit": "16:10:01",
+      "t_stop": 1795900251000,
+      "local_stop": "16:10:51",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    },
+    {
+      "session_key": "s_a615c4b92fa8",
+      "turn_key": "t_d8695543ddb7",
+      "t_submit": 1795900801000,
+      "local_submit": "16:20:01",
+      "t_stop": 1795900851000,
+      "local_stop": "16:20:51",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    },
+    {
+      "session_key": "s_c8811acaec18",
+      "turn_key": "t_f8f39e1b9c4f",
+      "t_submit": 1795901221000,
+      "local_submit": "16:27:01",
+      "t_stop": 1795901311000,
+      "local_stop": "16:28:31",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    },
+    {
+      "session_key": "s_a615c4b92fa8",
+      "turn_key": "t_307f588aaae4",
+      "t_submit": 1795901401000,
+      "local_submit": "16:30:01",
+      "t_stop": 1795901451000,
+      "local_stop": "16:30:51",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    },
+    {
+      "session_key": "s_a615c4b92fa8",
+      "turn_key": "t_db0aa38b262e",
+      "t_submit": 1795902001000,
+      "local_submit": "16:40:01",
+      "t_stop": 1795902051000,
+      "local_stop": "16:40:51",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    },
+    {
+      "session_key": "s_52dd53dfac3f",
+      "turn_key": "t_e7bb63dcd24f",
+      "t_submit": 1795902241000,
+      "local_submit": "16:44:01",
+      "t_stop": 1795902280000,
+      "local_stop": "16:44:40",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no relay record, the /compact carries idleCompaction"
+    },
+    {
+      "session_key": "s_52dd53dfac3f",
+      "turn_key": "t_404e48efb4b6",
+      "t_submit": 1795902281000,
+      "local_submit": "16:44:41",
+      "t_stop": 1795902495000,
+      "local_stop": "16:48:15",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 9"
+    },
+    {
+      "session_key": "s_a615c4b92fa8",
+      "turn_key": "t_11be65fc0a19",
+      "t_submit": 1795902601000,
+      "local_submit": "16:50:01",
+      "t_stop": 1795902651000,
+      "local_stop": "16:50:51",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    },
+    {
+      "session_key": "s_52dd53dfac3f",
+      "turn_key": "t_582046860eb6",
+      "t_submit": 1795902901000,
+      "local_submit": "16:55:01",
+      "t_stop": 1795903050000,
+      "local_stop": "16:57:30",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 9"
+    },
+    {
+      "session_key": "s_a615c4b92fa8",
+      "turn_key": "t_202cadaaa6ef",
+      "t_submit": 1795903201000,
+      "local_submit": "17:00:01",
+      "t_stop": 1795903251000,
+      "local_stop": "17:00:51",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    },
+    {
+      "session_key": "s_a615c4b92fa8",
+      "turn_key": "t_a793bdedd331",
+      "t_submit": 1795903801000,
+      "local_submit": "17:10:01",
+      "t_stop": 1795903851000,
+      "local_stop": "17:10:51",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    },
+    {
+      "session_key": "s_264bacba66e3",
+      "turn_key": "t_705694160a26",
+      "t_submit": 1795904041000,
+      "local_submit": "17:14:01",
+      "t_stop": 1795904096000,
+      "local_stop": "17:14:56",
+      "origin": "headless",
+      "sm": "2.2 rule 4: no relay record, the guest's message carries context.guest"
+    },
+    {
+      "session_key": "s_a615c4b92fa8",
+      "turn_key": "t_9131ae0b7f02",
+      "t_submit": 1795904401000,
+      "local_submit": "17:20:01",
+      "t_stop": 1795904451000,
+      "local_stop": "17:20:51",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    },
+    {
+      "session_key": "s_264bacba66e3",
+      "turn_key": "t_fb868ff6fa45",
+      "t_submit": 1795904701000,
+      "local_submit": "17:25:01",
+      "t_stop": 1795904791000,
+      "local_stop": "17:26:31",
+      "origin": "subagent",
+      "sm": "2.2 rule 3: the relay record declares cross_session (linkedSender)"
+    },
+    {
+      "session_key": "s_a615c4b92fa8",
+      "turn_key": "t_998dbed32df8",
+      "t_submit": 1795905001000,
+      "local_submit": "17:30:01",
+      "t_stop": 1795905051000,
+      "local_stop": "17:30:51",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    },
+    {
+      "session_key": "s_c8811acaec18",
+      "turn_key": "t_15e6d1e63d74",
+      "t_submit": 1795905021000,
+      "local_submit": "17:30:21",
+      "t_stop": 1795905111000,
+      "local_stop": "17:31:51",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    },
+    {
+      "session_key": "s_a615c4b92fa8",
+      "turn_key": "t_1476e843b37e",
+      "t_submit": 1795905601000,
+      "local_submit": "17:40:01",
+      "t_stop": 1795905651000,
+      "local_stop": "17:40:51",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    },
+    {
+      "session_key": "s_a615c4b92fa8",
+      "turn_key": "t_2bd7a9f776e1",
+      "t_submit": 1795906201000,
+      "local_submit": "17:50:01",
+      "t_stop": 1795906251000,
+      "local_stop": "17:50:51",
+      "origin": "scheduled",
+      "sm": "2.2 rule 1: the relay record declares cron (scheduledTaskId)"
+    }
+  ]
+}
