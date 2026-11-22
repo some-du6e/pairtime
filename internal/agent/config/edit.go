@@ -6,16 +6,19 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/pkg/projectname"
 )
 
 // CheckServerURL checks the base URL of a pairtime server and returns it
@@ -105,6 +108,71 @@ func SetLocal(name string) error {
 
 // edit sets mode, and [server] url when serverURL isn't "", in the file.
 func edit(name string, mode Mode, serverURL string) error {
+	byHand := fmt.Sprintf("set mode = %q", string(mode))
+	if serverURL != "" {
+		byHand += fmt.Sprintf(" and, under [server], url = %q", serverURL)
+	}
+	return rewrite(name, byHand, func(text string) string { return patch(text, mode, serverURL) }, func(c *Config) {
+		c.Mode = mode
+		if serverURL != "" {
+			c.Server.URL = serverURL
+		}
+	})
+}
+
+// ShowName turns on the name of the project key in the config.toml at
+// name, with label, which projectname.ValidLabel must take: its
+// [projects.<key>] table gets name = label and online = true, and is added
+// at the end of the file when there is none. HideName turns it off: online
+// = false, with the name kept, so turning it on again can show the same
+// label; a project with no table has no name on, and HideName leaves the
+// file as it is. pairtime projects show-name and hide-name, the local
+// dashboard's Projects page and the uploader, when the owner hid a name on
+// their dashboard, call them (D-owner-names).
+//
+// Both change only those lines, the way SetOnline does: comments, order,
+// line endings and every other setting stay byte for byte, a symlinked
+// config.toml stays one, a missing file is written from the default
+// first, and a file they can't change that way, such as one that doesn't
+// parse or one whose project is an inline table, is left alone with an
+// error that says what to write.
+func ShowName(name, key, label string) error {
+	switch {
+	case !IsProjectKey(key):
+		return fmt.Errorf("config: %q isn't a project's key", key)
+	case !projectname.ValidLabel(label):
+		return fmt.Errorf("config: %q isn't a name pairtime can show", label)
+	}
+	byHand := fmt.Sprintf("set name = %s and online = true under [projects.%s]", tomlString(label), key)
+	return rewrite(name, byHand, func(text string) string {
+		return patchProject(text, key, []projectLine{{"name", tomlString(label)}, {"online", "true"}})
+	}, func(c *Config) {
+		c.Projects[key] = Project{Name: label, Online: true}
+	})
+}
+
+// HideName turns off the name of the project key in the config.toml at
+// name (ShowName).
+func HideName(name, key string) error {
+	if !IsProjectKey(key) {
+		return fmt.Errorf("config: %q isn't a project's key", key)
+	}
+	byHand := fmt.Sprintf("set online = false under [projects.%s]", key)
+	return rewrite(name, byHand, func(text string) string {
+		return patchProject(text, key, []projectLine{{"online", "false"}})
+	}, func(c *Config) {
+		if p, ok := c.Projects[key]; ok {
+			p.Online = false
+			c.Projects[key] = p
+		}
+	})
+}
+
+// rewrite changes the config.toml at name with change, the text edit, and
+// checks that the file then parses to what it parsed to before with apply
+// done to it, and to nothing else. byHand says what the teen can write
+// instead, when it refuses.
+func rewrite(name, byHand string, change func(text string) string, apply func(*Config)) error {
 	if fi, err := os.Lstat(name); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
 		target, err := filepath.EvalSymlinks(name)
 		if err != nil {
@@ -120,10 +188,6 @@ func edit(name string, mode Mode, serverURL string) error {
 		return err
 	}
 	text := string(data)
-	byHand := fmt.Sprintf("set mode = %q", string(mode))
-	if serverURL != "" {
-		byHand += fmt.Sprintf(" and, under [server], url = %q", serverURL)
-	}
 	byHand += " in " + name + " by hand"
 	if _, err := toml.Decode(text, &fileConfig{}); err != nil {
 		return fmt.Errorf("config: config.toml doesn't parse, so pairtime didn't change it (%v); %s", err, byHand)
@@ -133,12 +197,16 @@ func edit(name string, mode Mode, serverURL string) error {
 		return fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", byHand)
 	}
 	before, _ := Parse(data)
-	out := patch(text, mode, serverURL)
+	out := change(text)
 	after, _ := Parse([]byte(out))
 	want := before
-	want.Mode = mode
-	if serverURL != "" {
-		want.Server.URL = serverURL
+	want.Projects = maps.Clone(before.Projects)
+	if want.Projects == nil {
+		want.Projects = make(map[string]Project)
+	}
+	apply(&want)
+	if len(want.Projects) == 0 {
+		want.Projects = nil
 	}
 	if !reflect.DeepEqual(after, want) {
 		return fmt.Errorf("config: pairtime couldn't change config.toml without changing other settings, so it didn't; %s", byHand)
@@ -202,6 +270,13 @@ func patch(text string, mode Mode, serverURL string) string {
 // one line, it writes whole instead, and edit's check catches anything
 // that changes.
 func setValue(line, value, whole string) string {
+	return setRaw(line, `"`+value+`"`, whole)
+}
+
+// setRaw is setValue for a value already written as TOML, raw, such as a
+// quoted string or true. The old value may be a string on one line, true
+// or false; another one is written whole.
+func setRaw(line, raw, whole string) string {
 	body := strings.TrimRight(line, "\r\n")
 	ending := line[len(body):]
 	eq := strings.IndexByte(body, '=')
@@ -212,28 +287,183 @@ func setValue(line, value, whole string) string {
 	for start < len(body) && (body[start] == ' ' || body[start] == '\t') {
 		start++
 	}
-	end := -1
-	switch {
-	case start < len(body) && body[start] == '"':
+	end := valueEnd(body, start)
+	if end < 0 {
+		return indentOf(line) + whole + ending
+	}
+	return body[:start] + raw + body[end:] + ending
+}
+
+// valueEnd returns where the value that starts at start in a line's body
+// ends, for a string on one line, true or false, or -1 for any other.
+func valueEnd(body string, start int) int {
+	if start >= len(body) {
+		return -1
+	}
+	switch rest := body[start:]; {
+	case rest[0] == '"':
 		for j := start + 1; j < len(body); j++ {
 			if body[j] == '\\' {
 				j++
 				continue
 			}
 			if body[j] == '"' {
-				end = j + 1
-				break
+				return j + 1
 			}
 		}
-	case start < len(body) && body[start] == '\'':
+	case rest[0] == '\'':
 		if j := strings.IndexByte(body[start+1:], '\''); j >= 0 {
-			end = start + 1 + j + 1
+			return start + 1 + j + 1
+		}
+	case strings.HasPrefix(rest, "true"), strings.HasPrefix(rest, "false"):
+		end := start + 4
+		if rest[0] == 'f' {
+			end++
+		}
+		if end == len(body) || body[end] == ' ' || body[end] == '\t' || body[end] == '#' {
+			return end
 		}
 	}
-	if end < 0 {
-		return indentOf(line) + whole + ending
+	return -1
+}
+
+// projectLine is a setting of a project's table and its value, written as
+// TOML.
+type projectLine struct{ key, raw string }
+
+// patchProject sets each of lines in the [projects.<key>] table: it
+// rewrites a setting's line where the table has it, and adds the others
+// just under the table's header. A file with no such table gets one at its
+// end, unless every line turns something off, which a project without a
+// table has off already.
+func patchProject(text, key string, lines []projectLine) string {
+	nl := "\n"
+	if strings.Contains(text, "\r\n") {
+		nl = "\r\n"
 	}
-	return body[:start] + `"` + value + `"` + body[end:] + ending
+	all := strings.SplitAfter(text, "\n")
+	header := -1
+	done := make([]bool, len(lines))
+	in := false
+	for i, line := range all {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "[") {
+			path, ok := tablePath(tableName(t))
+			in = ok && header < 0 && slices.Equal(path, []string{projectsTable, key})
+			if in {
+				header = i
+			}
+			continue
+		}
+		if !in {
+			continue
+		}
+		for j, l := range lines {
+			if !done[j] && isKey(t, l.key) {
+				all[i] = setRaw(line, l.raw, l.key+" = "+l.raw)
+				done[j] = true
+			}
+		}
+	}
+	var add []string
+	for j, l := range lines {
+		if !done[j] {
+			add = append(add, l.key+" = "+l.raw+nl)
+		}
+	}
+	if header >= 0 {
+		if len(add) == 0 {
+			return strings.Join(all, "")
+		}
+		if !strings.HasSuffix(all[header], "\n") {
+			all[header] += nl
+		}
+		all = append(all[:header+1], append(add, all[header+1:]...)...)
+		return strings.Join(all, "")
+	}
+	turnsOn := false
+	for _, l := range lines {
+		turnsOn = turnsOn || l.raw != "false"
+	}
+	if !turnsOn {
+		return text
+	}
+	out := text
+	if out != "" && !strings.HasSuffix(out, "\n") {
+		out += nl
+	}
+	if out != "" {
+		out += nl
+	}
+	out += "[" + projectsTable + "." + key + "]" + nl
+	for _, l := range lines {
+		out += l.key + " = " + l.raw + nl
+	}
+	return out
+}
+
+// tablePath splits a table's name, as tableName returns it, into its keys:
+// bare ones, and quoted ones without escapes, with blanks around the dots.
+// It reports false for a name it can't split that way, which then matches
+// no table pairtime looks for.
+func tablePath(name string) ([]string, bool) {
+	var path []string
+	rest := strings.TrimSpace(name)
+	for {
+		var part string
+		switch {
+		case rest == "":
+			return nil, false
+		case rest[0] == '"' || rest[0] == '\'':
+			end := strings.IndexByte(rest[1:], rest[0])
+			if end < 0 {
+				return nil, false
+			}
+			part = rest[1 : 1+end]
+			if rest[0] == '"' && strings.ContainsRune(part, '\\') {
+				return nil, false
+			}
+			rest = rest[2+end:]
+		default:
+			end := strings.IndexAny(rest, ". \t")
+			if end < 0 {
+				end = len(rest)
+			}
+			part, rest = rest[:end], rest[end:]
+		}
+		path = append(path, part)
+		rest = strings.TrimLeft(rest, " \t")
+		if rest == "" {
+			return path, true
+		}
+		if rest[0] != '.' {
+			return nil, false
+		}
+		rest = strings.TrimLeft(rest[1:], " \t")
+	}
+}
+
+// tomlString returns s as a TOML basic string: in double quotes, with the
+// quote, the backslash and the control characters TOML doesn't take in one
+// escaped. A label has no control characters (projectname.CleanLabel), so
+// they are escaped only to be safe.
+func tomlString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch {
+		case r == '"':
+			b.WriteString(`\"`)
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, "%cu%04X", '\\', r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // tableName returns the name a [table] header line opens, as written, or

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -179,7 +180,7 @@ func TestParse(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, problems := Parse([]byte(tt.file))
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Parse() = %+v, want %+v", got, tt.want)
 			}
 			switch {
@@ -222,7 +223,7 @@ func TestLoad(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Load() error = %v, want an error: %v", err, tt.wantErr)
 			}
-			if cfg != tt.want || len(problems) != 0 {
+			if !reflect.DeepEqual(cfg, tt.want) || len(problems) != 0 {
 				t.Errorf("Load() = %+v with problems %q, want %+v and none", cfg, problems, tt.want)
 			}
 		})
