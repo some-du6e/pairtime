@@ -191,6 +191,10 @@ class Replay:
                 app = {"cron": "scheduled", "cross_session": "subagent"}.get(r["data"]["declared"]) if r else None
                 if own or app:
                     self.origin[q["event_id"]] = own or app
+                elif q["data"].get("guest"):
+                    # SM 2.2 rule 4 takes a guest's prompt whatever its session.
+                    tl.check(not r, f"nothing witnesses guest prompt {q['event_id']}")
+                    self.origin[q["event_id"]] = "headless"
                 elif r and starts.get(s, {}).get("parent_class") == "agent_app":
                     tl.check(r["data"]["client"] in ("web", "mobile"), f"relay {r['event_id']} names its client")
                     tl.check(not desktop or r["data"]["client"] == "mobile",

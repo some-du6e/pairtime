@@ -83,12 +83,14 @@ def start(thread, t):
                                       "has_tty": False, "permission_mode": "bypassPermissions"})
 
 
-def prompt(thread, t, turn, length, slash=None):
+def prompt(thread, t, turn, length, slash=None, guest=False):
     data = {"turn_key": TURN[turn], "len_chars": length, "pasted_chars": 0, "typed_len_est": length}
     if slash:
         data["slash_command"] = slash
     data.update({"origin_declared": "none", "matches_pending_cron": False, "answers_question": False,
                  "low_effort": False})
+    if guest:
+        data["guest"] = True
     return hook(thread, t, "prompt.submit", data)
 
 
@@ -198,9 +200,10 @@ task(8)
 # G: Ines, a friend Mateo let into the review thread as a guest, writes a
 # message, and he sends it on. T3 stores it with context.guest, and the
 # reader's query, whose WHERE clause holds the guest test, never selects
-# it: no record.
+# it: no record. The query does return the run it started, so the agent
+# marks the prompt guest and keeps no text for it, and rule 4 takes it.
 start("review", "17:14:00")
-g = prompt("review", "17:14:01", "G", LEN["G"])
+g = prompt("review", "17:14:01", "G", LEN["G"], guest=True)
 output("review", "17:14:56", "G", 50, final=True)
 stop("review", "17:14:56", "G")
 
@@ -405,7 +408,7 @@ for name, rec in (("M1", R1), ("M2", fx.event_at("relay.message", at("16:55:03")
                                    sm=f"2.3: a relayed message's lead is its typing time, "
                                       f"{rec['data']['len_chars']} / 1.5 = {lead} s, ending at sent_at"))
 ORIGIN = {"K": ("headless", "2.2 rule 4: no relay record, the /compact carries idleCompaction"),
-          "G": ("headless", "2.2 rule 4: no relay record, the guest's message carries context.guest"),
+          "G": ("headless", "2.2 rule 4: the prompt is marked guest, and no relay record witnesses it"),
           "M1": ("relayed", "2.2 rule 9"), "M2": ("relayed", "2.2 rule 9"),
           "L": ("subagent", "2.2 rule 3: the relay record declares cross_session (linkedSender)")}
 turns = []

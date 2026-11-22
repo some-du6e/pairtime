@@ -357,7 +357,6 @@
     "The server has no desktop, so pairtime samples no presence and records no focus: every slot's presence is unknown, and uncredited seconds take SM 5.2's codes for such a slot.",
     "Every prompt carries a message an agent sent through T3's MCP tools, which T3 stores with createdBy agent, so the T3 reader writes no relay record for it and rule 4 makes the prompt headless. headless_prompts counts them; relayed_prompts the prompts a relay record witnessed, none.",
     "unpaired_relay_records counts M1, the one relay record: a message the owner sent to a thread whose run went to a provider pairtime has no hooks for, so the reader couldn't tie it to a session and it pairs with nothing.",
-    "The day repeats one hour's shape, so every hour's row is the same. Hour 14 has two rows, so that M1's minutes have one of their own.",
-    "Read SM 2.2's declarations as recording a message another thread sent (senderThreadId) as declared cross_session, and every prompt here would be a cross-session subagent by rule 3 instead of headless: the same rows, but no prompt for rule 4. The case reads it as relayed/t3-away does: createdBy agent, no record."
+    "The day repeats one hour's shape, so every hour's row is the same. Hour 14 has two rows, so that M1's minutes have one of their own."
   ]
 }

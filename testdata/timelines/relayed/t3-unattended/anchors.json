@@ -167,7 +167,7 @@
       "t_stop": 1795904096000,
       "local_stop": "17:14:56",
       "origin": "headless",
-      "sm": "2.2 rule 4: no relay record, the guest's message carries context.guest"
+      "sm": "2.2 rule 4: the prompt is marked guest, and no relay record witnesses it"
     },
     {
       "session_key": "s_a615c4b92fa8",

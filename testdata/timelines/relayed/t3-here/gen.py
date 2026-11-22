@@ -147,8 +147,8 @@ expected = exp.doc(
         "No SM section describes this case. It is t3-away's first message, typed into T3 Code's desktop app on "
         "the computer that runs the agent. Every row comes from SM 2.2 rules 6 and 9, 2.3 and 2.4 as "
         "docs/errata/2026-11-22-relayed-prompts.md applies them.",
-        "Without the relay record the prompt would be headless: no TTY, and T3's server for its nearest non-shell "
-        "ancestor (SM 2.2 rule 4). The record witnesses it, so rule 4 is skipped, and rule 6, tested at the app's "
+        "Without the relay record the prompt would be headless: T3's server is its nearest non-shell ancestor, "
+        "parent_class agent_app, which SM 2.2 rule 4 lists. The record witnesses it, so rule 4 is skipped, and rule 6, tested at the app's "
         "stamp, holds: key presses in the 10 s before 20:01:00 and T3's window, which hosts the session, in front.",
         "Every credited second is level A: key presses in the anchor's evidence window, on macOS.",
     ],

@@ -83,5 +83,5 @@ Every slot's presence is unknown, so an uncredited second is `X.bucket_cap` wher
 - **No think part.** A relayed lead is typing time only, whatever the class (SM 2.3): M3, a go-ahead, earns its 2 s of typing and not `LOW_LEAD_S`.
 - **Reading waits for a stop and a following relayed message.** T1's 120 s are read because M2 follows its stop within 600 s. T2's and the agent turn's output is never read, because M3 comes later than that after both stops.
 - **The agent's message.** T3 records it with `createdBy` `agent`, so no relay record exists and rule 4 applies. Its turn's output still fills the bucket, as an automated turn's output does (SM 2.4), and would have been read had M3 come within 600 s of 20:15:00.
-- **Rule 4 is skipped** for the three witnessed prompts because the session's nearest non-shell ancestor is T3's server, `parent_class` `agent_app`. The agent's prompt has no witness, so rule 4 takes it.
+- **Rule 4 takes only the agent's prompt.** The session's nearest non-shell ancestor is T3's server, `parent_class` `agent_app`, which rule 4 lists. A witnessed prompt skips rule 4, so the three relay records save Lena's prompts from it, and the agent's prompt, with no witness, is `headless`.
 - **The relay record names the prompt** because the prompt reached the agent first (SM 2.2). The prompt carries no `relay` here.

@@ -220,10 +220,6 @@ expected = exp.doc(
         "with nothing.",
         "The day repeats one hour's shape, so every hour's row is the same. Hour 14 has two rows, so that M1's "
         "minutes have one of their own.",
-        "Read SM 2.2's declarations as recording a message another thread sent (senderThreadId) as declared "
-        "cross_session, and every prompt here would be a cross-session subagent by rule 3 instead of headless: "
-        "the same rows, but no prompt for rule 4. The case reads it as relayed/t3-away does: createdBy agent, no "
-        "record.",
     ],
 )
 
@@ -232,7 +228,7 @@ for e in prompts:
     stp = [x for x in events if x["kind"] == "agent.stop" and x["data"]["turn_key"] == e["data"]["turn_key"]]
     tl.check(len(stp) == 1, f"one stop for the turn at {fx.hhmmss(e['t'])}")
     turns.append(tl.turn(fx, e["t"], stp[0]["t"], session=e["session_key"], turn_key=e["data"]["turn_key"],
-                         origin="headless", sm="2.2 rule 4: no witness, no TTY and no IDE or desktop-app host"))
+                         origin="headless", sm="2.2 rule 4: no witness, parent_class agent_app"))
 
 prompt_entries = [{"turn_key": e["data"]["turn_key"], "t": e["t"], "local": fx.hhmmss(e["t"]), "text": None,
                    "len_chars": e["data"]["len_chars"],
