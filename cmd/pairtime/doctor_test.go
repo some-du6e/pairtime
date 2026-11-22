@@ -53,6 +53,77 @@ func newDoctorHome(t *testing.T) fakeHome {
 	return newHome(t)
 }
 
+// waitFor sets how long doctor keeps asking an agent that holds the data
+// folder but doesn't answer, and how often, for the rest of the test.
+func (h fakeHome) waitFor(bound, poll time.Duration) {
+	h.t.Helper()
+	swap(h.t, &doctorStartWait, bound)
+	swap(h.t, &doctorPoll, poll)
+}
+
+// lockFor holds the data folder's lock, as an agent does from its start to
+// its stop, and lets it go after d.
+func (h fakeHome) lockFor(d time.Duration) {
+	h.t.Helper()
+	l, err := home.Acquire(h.dir)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	var once sync.Once
+	release := func() { once.Do(func() { l.Release() }) }
+	timer := time.AfterFunc(d, release)
+	h.t.Cleanup(func() {
+		timer.Stop()
+		release()
+	})
+}
+
+// statusAgentAfter starts, after d, a fake agent that answers the status
+// question with st, as an agent that is starting listens once it has
+// opened the OS's sources and its journal.
+func (h fakeHome) statusAgentAfter(d time.Duration, st doctor.Status) {
+	h.t.Helper()
+	b, err := json.Marshal(st)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	ep, err := ipc.EndpointFor(h.dirs())
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	type late struct {
+		srv    *ipc.Server
+		served chan struct{}
+	}
+	started := make(chan late, 1)
+	go func() {
+		time.Sleep(d)
+		srv, err := ipc.Listen(ep, ipc.Options{Answer: func(q string) (json.RawMessage, error) {
+			if q != ipc.AskStatus {
+				return nil, ipc.ErrUnknownQuestion
+			}
+			return b, nil
+		}})
+		if err != nil {
+			h.t.Errorf("listening late on the agent's socket: %v", err)
+			started <- late{}
+			return
+		}
+		served := make(chan struct{})
+		go func() {
+			defer close(served)
+			srv.Serve(noMessages{})
+		}()
+		started <- late{srv, served}
+	}()
+	h.t.Cleanup(func() {
+		if l := <-started; l.srv != nil {
+			l.srv.Close()
+			<-l.served
+		}
+	})
+}
+
 // runningStatus is a running agent's status for the tests to change.
 func runningStatus() doctor.Status {
 	return doctor.Status{
@@ -255,18 +326,35 @@ func TestDoctorAgentLine(t *testing.T) {
 			wantSkips: []string{"idle", "focus"},
 		},
 		{
-			name: "an agent that holds the data folder but answers nothing on its socket fails, and says how to restart it",
+			name: "an agent that holds the data folder for as long as an agent takes to start but answers nothing on its socket fails, and says how to restart it",
 			agent: func(h fakeHome) {
-				swap(h.t, &doctorSettle, 10*time.Millisecond)
-				l, err := home.Acquire(h.dir)
-				if err != nil {
-					h.t.Fatal(err)
-				}
-				h.t.Cleanup(func() { l.Release() })
+				h.waitFor(150*time.Millisecond, 20*time.Millisecond)
+				h.lockFor(time.Hour)
 			},
 			wantCode:  1,
 			want:      doctor.Fail,
 			wantText:  "runs, but nothing answers on its socket",
+			wantSkips: []string{"idle", "focus", "spool"},
+		},
+		{
+			name: "an agent still starting, which holds the data folder and listens a moment later, is running, not deaf",
+			agent: func(h fakeHome) {
+				h.waitFor(10*time.Second, 20*time.Millisecond)
+				h.lockFor(time.Hour)
+				h.statusAgentAfter(200*time.Millisecond, runningStatus())
+			},
+			want:     doctor.OK,
+			wantText: "running pairtime",
+		},
+		{
+			name: "an agent stopping, which lets go of the data folder a moment after its socket, isn't running, not deaf",
+			agent: func(h fakeHome) {
+				h.waitFor(10*time.Second, 20*time.Millisecond)
+				h.lockFor(200 * time.Millisecond)
+			},
+			wantCode:  1,
+			want:      doctor.Fail,
+			wantText:  "isn't running",
 			wantSkips: []string{"idle", "focus", "spool"},
 		},
 		{
@@ -764,6 +852,25 @@ func TestDoctorReportSpan(t *testing.T) {
 			name:  "an agent from before doctor is one that can't say",
 			agent: func(h fakeHome) { h.agent(nil) },
 			want:  []string{"agent:           an older pairtime that can't say"},
+		},
+		{
+			name: "an agent that holds the data folder for as long as an agent takes to start but never answers is deaf in the report",
+			agent: func(h fakeHome) {
+				h.waitFor(150*time.Millisecond, 20*time.Millisecond)
+				h.lockFor(time.Hour)
+			},
+			want: []string{"agent:           running, but answering nothing on its socket"},
+			not:  []string{"agent memory"},
+		},
+		{
+			name: "an agent still starting when the report asks is watched once it answers, and isn't called deaf",
+			agent: func(h fakeHome) {
+				h.waitFor(10*time.Second, 20*time.Millisecond)
+				h.lockFor(time.Hour)
+				h.statusAgentAfter(200*time.Millisecond, first)
+			},
+			want: []string{"agent memory:    18.0 MB now"},
+			not:  []string{"answering nothing"},
 		},
 	}
 	for _, tt := range tests {

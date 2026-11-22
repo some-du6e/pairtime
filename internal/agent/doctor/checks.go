@@ -4,6 +4,7 @@ package doctor
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -57,9 +58,10 @@ type Facts struct {
 	Keystore Keystore
 	// Signing is what this binary is and how it is signed.
 	Signing Signing
-	// Home is the home folder, which the lines show as ~, so that a line
-	// someone shares names fewer of their folders.
-	Home string
+	// Homes are the home folder's spellings (HomeSpellings), which the
+	// lines show as ~, so that a line someone shares names fewer of their
+	// folders.
+	Homes []string
 }
 
 // Checks works out doctor's lines from f, in the order DESIGN 5.9 lists
@@ -86,18 +88,23 @@ func Checks(f Facts) []Check {
 	out = append(out, signingCheck(f.Signing), keystoreCheck(f.Keystore), spoolCheck(f))
 	out = append(out, problemChecks(f)...)
 	for i := range out {
-		out[i].Text = tilde(out[i].Text, f.Home)
+		out[i].Text = tilde(out[i].Text, f.Homes)
 	}
 	return out
 }
 
-// tilde writes home as ~ in s, in both its slashes' spellings.
-func tilde(s, home string) string {
-	if len(home) < 3 {
-		return s
-	}
-	for _, h := range []string{home, strings.ReplaceAll(home, `\`, "/"), strings.ReplaceAll(home, "/", `\`)} {
-		s = strings.ReplaceAll(s, h, "~")
+// tilde writes each of homes as ~ in s, in both its slashes' spellings
+// and in any case: Windows and macOS read paths that way, so the same
+// folder can come back in another case. Each pattern is compiled here,
+// when doctor runs, rather than at package init.
+func tilde(s string, homes []string) string {
+	for _, home := range homes {
+		if len(home) < 3 {
+			continue
+		}
+		for _, h := range []string{home, strings.ReplaceAll(home, `\`, "/"), strings.ReplaceAll(home, "/", `\`)} {
+			s = regexp.MustCompile("(?i)"+regexp.QuoteMeta(h)).ReplaceAllLiteralString(s, "~")
+		}
 	}
 	return s
 }
@@ -167,7 +174,7 @@ func idleCheck(s Signals) Check {
 		return Check{Name: "idle", Result: OK, Text: "idle detection working, from " + text.Printable(s.Idle.Via)}
 	}
 	return Check{Name: "idle", Result: Fail,
-		Text: "presence unknown on this desktop: " + reason(s.Idle.Unknown) + unknownCost(s, "when you're at the keyboard")}
+		Text: "presence unknown on this desktop: " + reason(s.Idle.Unknown) + unknownCost(s, s.Idle.Unknown, false)}
 }
 
 // focusCheck is DESIGN 5.9's focus line: focus detection working with its
@@ -181,16 +188,32 @@ func focusCheck(s Signals) Check {
 		return Check{Name: "focus", Result: OK, Text: "focus detection working, from " + text.Printable(s.Focus.Via)}
 	}
 	return Check{Name: "focus", Result: Fail,
-		Text: "focus unknown on this desktop: " + reason(s.Focus.Unknown) + unknownCost(s, "the window in front")}
+		Text: "focus unknown on this desktop: " + reason(s.Focus.Unknown) + unknownCost(s, s.Focus.Unknown, true)}
 }
 
-// unknownCost is what an unknown signal costs, and the one thing to do: on
-// Wayland, whose desktops tell other programs neither, an X11 session;
-// elsewhere, a new login, which starts the agent in the desktop's session.
-func unknownCost(s Signals, sees string) string {
+// unknownCost is what an unknown signal costs, and the one thing to do,
+// from the session and the cause (internal/platform/linux names both):
+// on Wayland, whose desktops tell other programs neither signal, an X11
+// session; on X11, a window manager that keeps _NET_ACTIVE_WINDOW for
+// focus and the X server's MIT-SCREEN-SAVER extension for idle time,
+// unless the agent is only reconnecting to the X server; and with no
+// desktop session, or a macOS or Windows source that didn't start, a new
+// login, which starts the agent in the desktop's session.
+func unknownCost(s Signals, why string, focus bool) string {
 	const cost = ". pairtime counts none of your time here yet; "
-	if s.Session == "wayland" {
+	sees := "when you're at the keyboard"
+	if focus {
+		sees = "the window in front"
+	}
+	switch {
+	case s.Session == "wayland":
 		return cost + "an X11 session, where your login screen offers one, lets it see " + sees
+	case s.Session == "x11" && strings.Contains(why, "reconnecting"):
+		return cost + "the agent is reconnecting to the X server, so run pairtime doctor again in a minute"
+	case s.Session == "x11" && focus:
+		return cost + "a window manager that keeps _NET_ACTIVE_WINDOW, as most do, lets it see " + sees
+	case s.Session == "x11":
+		return cost + "an X server with the MIT-SCREEN-SAVER extension, as most have, lets it see " + sees
 	}
 	return cost + "logging out and back in starts the agent in your desktop's session, where it can see " + sees
 }

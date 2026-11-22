@@ -88,10 +88,23 @@ var (
 	doctorSignature  = doctor.OSSignature
 )
 
-// doctorSettle is how long doctor waits to ask again when nothing answers
-// on the agent's socket but an agent holds the data folder: one that has
-// just started listens a moment later. Tests shorten it.
-var doctorSettle = time.Second
+// doctorStartWait is how long doctor keeps asking while nothing answers on
+// the agent's socket but an agent holds the data folder's lock: an agent
+// takes the lock as it starts and listens only after it has opened the
+// OS's sources and its journal, which can take seconds on an old laptop,
+// and it still holds the lock for a moment once it has stopped
+// listening. It is the bound install waits for an agent it starts
+// (startWait). doctorPoll is how often doctor asks meanwhile. Tests
+// shorten both.
+var (
+	doctorStartWait = startWait
+	doctorPoll      = 100 * time.Millisecond
+)
+
+// errAgentDeaf is an agent that held the data folder's lock for as long as
+// an agent takes to start and answered nothing on its socket all that
+// time.
+var errAgentDeaf = errors.New("the agent holds its folder but answers nothing on its socket")
 
 // doctorReportSpan is how long --report watches the agent at rest, as
 // footprint.yml watches an idle agent, and doctorReportCalls how many warm
@@ -128,7 +141,13 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	if *report {
 		return runReport(dirs, stdout, stderr)
 	}
-	facts := gatherFacts(dirs)
+	// The --json output is the JSON alone, so only the text says why
+	// doctor waits.
+	wait := stderr
+	if *asJSON {
+		wait = io.Discard
+	}
+	facts := gatherFacts(dirs, wait)
 	checks := doctor.Checks(facts)
 	if *asJSON {
 		if err := writeJSON(stdout, doctorJSON{V: jsonVersion, Checks: checks, Summary: doctor.Summarize(checks)}); err != nil {
@@ -146,13 +165,16 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 }
 
 // gatherFacts finds out what doctor's checks need: the running agent's
-// status, over its socket, and what this computer holds.
-func gatherFacts(dirs home.Dirs) doctor.Facts {
+// status, over its socket, and what this computer holds. It says on wait
+// when it waits for an agent that is starting.
+func gatherFacts(dirs home.Dirs, wait io.Writer) doctor.Facts {
 	f := doctor.Facts{Version: version.Get().Version, AskWait: doctorWait}
 	for _, h := range adapters.Default.Harnesses() {
 		f.Adapters = append(f.Adapters, string(h))
 	}
-	f.Home, _ = os.UserHomeDir()
+	if h, err := os.UserHomeDir(); err == nil {
+		f.Homes = doctor.HomeSpellings(h)
+	}
 	f.Hooks = doctorHooks()
 	for i, h := range f.Hooks {
 		if len(h.Events) > 0 && len(h.Exes) > 0 && !h.Disabled && h.ReadError == "" {
@@ -168,25 +190,13 @@ func gatherFacts(dirs home.Dirs) doctor.Facts {
 	}
 	f.Keystore = inspectKeystore(dirs)
 	f.Signing = binarySigning()
-	start := time.Now()
-	st, err := askStatus(dirs)
-	f.AskTook = time.Since(start)
-	if errors.Is(err, errAgentDown) && agentLocked(dirs) {
-		// An agent holds the data folder: it may have just started.
-		time.Sleep(doctorSettle)
-		start = time.Now()
-		st, err = askStatus(dirs)
-		f.AskTook = time.Since(start)
-		// An agent that is stopping has closed its socket and still holds
-		// the lock for a moment; one that holds it after the wait is deaf.
-		if errors.Is(err, errAgentDown) && agentLocked(dirs) {
-			f.Reach = doctor.Deaf
-			return f
-		}
-	}
+	st, took, err := askAgent(dirs, wait)
+	f.AskTook = took
 	switch {
 	case err == nil:
 		f.Reach, f.Agent = doctor.Reached, &st
+	case errors.Is(err, errAgentDeaf):
+		f.Reach = doctor.Deaf
 	case errors.Is(err, errAgentDown):
 		f.Reach = doctor.Down
 	case errors.Is(err, errAgentOld):
@@ -197,6 +207,33 @@ func gatherFacts(dirs home.Dirs) doctor.Facts {
 		f.Reach, f.AgentError = doctor.Unreached, err.Error()
 	}
 	return f
+}
+
+// askAgent asks the agent for its status, as askStatus does, and tells an
+// agent that is starting or stopping from a deaf one: while nothing
+// answers but an agent holds the data folder's lock, it asks again every
+// doctorPoll for up to doctorStartWait, saying once on wait that it does.
+// An agent that answers meanwhile is reached, one that lets go of its
+// lock is errAgentDown, and one that holds it all that time without
+// answering is errAgentDeaf. took is how long the last ask took.
+func askAgent(dirs home.Dirs, wait io.Writer) (st doctor.Status, took time.Duration, err error) {
+	deadline := time.Now().Add(doctorStartWait)
+	for said := false; ; {
+		start := time.Now()
+		st, err = askStatus(dirs)
+		took = time.Since(start)
+		if !errors.Is(err, errAgentDown) || !agentLocked(dirs) {
+			return st, took, err
+		}
+		if !time.Now().Before(deadline) {
+			return st, took, errAgentDeaf
+		}
+		if !said {
+			fmt.Fprintln(wait, "pairtime's agent is starting or stopping, so doctor waits for it to answer.")
+			said = true
+		}
+		time.Sleep(doctorPoll)
+	}
 }
 
 // askStatus asks the agent for its status over the socket
@@ -321,12 +358,9 @@ func runReport(dirs home.Dirs, stdout, stderr io.Writer) int {
 	v := version.Get()
 	r := doctor.Report{Version: v.Version, Platform: v.Platform, GoVersion: v.GoVersion,
 		OS: doctor.OSBuild(), CPUs: runtime.NumCPU(), Disk: doctor.DiskKind(dirs.Data)}
-	first, err := askStatus(dirs)
+	first, _, err := askAgent(dirs, stderr)
 	if err != nil {
 		r.NoAgent = noAgentWords(err)
-		if errors.Is(err, errAgentDown) && agentLocked(dirs) {
-			r.NoAgent = "running, but answering nothing on its socket"
-		}
 	} else {
 		fmt.Fprintf(stderr, "Watching pairtime's agent at rest for %s, then timing its hook. Leave this computer be until it's done.\n", text.Duration(doctorReportSpan.Seconds()))
 		start := time.Now()
@@ -402,6 +436,8 @@ func hookCalls(s doctor.Status) uint64 {
 // an error's text, which can name a path.
 func noAgentWords(err error) string {
 	switch {
+	case errors.Is(err, errAgentDeaf):
+		return "running, but answering nothing on its socket"
 	case errors.Is(err, errAgentDown):
 		return "not running"
 	case errors.Is(err, errAgentOld):

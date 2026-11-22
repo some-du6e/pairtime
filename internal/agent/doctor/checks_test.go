@@ -78,9 +78,31 @@ func TestChecks(t *testing.T) {
 			edit: func(f *Facts) { f.Reach, f.Agent = Down, nil }, check: "spool", want: Skip},
 		{name: "idle time with a source is idle detection working, from it",
 			edit: func(*Facts) {}, check: "idle", want: OK, wantHas: []string{"idle detection working, from GetLastInputInfo"}},
-		{name: "no idle source is presence unknown on this desktop, a failure, since pairtime counts none of that time, with a new login to fix it",
-			edit: func(f *Facts) { f.Agent.Signals.Idle = Signal{Unknown: "no session bus"} }, check: "idle", want: Fail,
-			wantHas: []string{"presence unknown on this desktop: no session bus. pairtime counts none of your time here yet; logging out and back in"}},
+		{name: "no idle source with no desktop session is presence unknown on this desktop, a failure, since pairtime counts none of that time, with a new login to fix it",
+			edit: func(f *Facts) {
+				f.Agent.Signals.Idle, f.Agent.Signals.Session = Signal{Unknown: "no graphical session: DISPLAY and WAYLAND_DISPLAY are unset"}, "none"
+			}, check: "idle", want: Fail,
+			wantHas: []string{"presence unknown on this desktop: no graphical session: DISPLAY and WAYLAND_DISPLAY are unset. pairtime counts none of your time here yet; logging out and back in"}},
+		{name: "a macOS or Windows source that didn't start fails with a new login to fix it",
+			edit: func(f *Facts) { f.Agent.Signals.Focus = Signal{Unknown: "the macOS notification loop didn't start"} }, check: "focus", want: Fail,
+			wantHas: []string{"logging out and back in starts the agent in your desktop's session"}},
+		{name: "on X11, focus unknown because the window manager doesn't keep _NET_ACTIVE_WINDOW names a window manager that does",
+			edit: func(f *Facts) {
+				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "the window manager doesn't keep _NET_ACTIVE_WINDOW"}, "x11"
+			}, check: "focus", want: Fail,
+			wantHas: []string{"a window manager that keeps _NET_ACTIVE_WINDOW, as most do, lets it see the window in front"},
+			wantNot: []string{"logging out"}},
+		{name: "on X11, presence unknown names the X server's MIT-SCREEN-SAVER extension",
+			edit: func(f *Facts) {
+				f.Agent.Signals.Idle, f.Agent.Signals.Session = Signal{Unknown: "the X server has no MIT-SCREEN-SAVER extension"}, "x11"
+			}, check: "idle", want: Fail,
+			wantHas: []string{"an X server with the MIT-SCREEN-SAVER extension, as most have, lets it see when you're at the keyboard"},
+			wantNot: []string{"logging out"}},
+		{name: "on X11, focus unknown while the agent reconnects to the X server says to run doctor again",
+			edit: func(f *Facts) {
+				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "lost the X connection; reconnecting"}, "x11"
+			}, check: "focus", want: Fail,
+			wantHas: []string{"the agent is reconnecting to the X server, so run pairtime doctor again in a minute"}},
 		{name: "no focus source on Wayland is focus unknown on this desktop, a failure that names the X11 session to fix it, without the level-C clause WP-SC8 adds",
 			edit: func(f *Facts) {
 				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "Wayland gives other programs no focus signal"}, "wayland"
@@ -117,10 +139,17 @@ func TestChecks(t *testing.T) {
 			wantNot: []string{"failed a test call", "pairtime install"}},
 		{name: "the home folder in a line reads as ~, so a line someone shares names fewer of their folders",
 			edit: func(f *Facts) {
-				f.Home = "/home/teen"
+				f.Homes = []string{"/home/teen"}
 				f.Agent.Problems = map[string]string{"config": "couldn't read /home/teen/.config/pairtime/config.toml"}
 			},
 			check: "problem.config", want: Warn, wantHas: []string{"couldn't read ~/.config/pairtime/config.toml"}, wantNot: []string{"/home/teen"}},
+		{name: "a Windows home folder reads as ~ in any case and in its 8.3 short form, as TEMP and the test listener's errors spell it",
+			edit: func(f *Facts) {
+				f.Homes = []string{`C:\Users\karimeltaib`, `C:\Users\KARIME~1`}
+				f.Agent.Problems = map[string]string{"ipc": `mkdir C:\Users\KARIME~1\AppData\Local\Temp\pt1: denied; c:\users\KARIMELTAIB\x is gone`}
+			},
+			check: "problem.ipc", want: Warn, wantHas: []string{`mkdir ~\AppData\Local\Temp\pt1: denied; ~\x is gone`},
+			wantNot: []string{"KARIME", "karime"}},
 		{name: "a hook that runs without install's arguments warns that its calls count as parse failures",
 			edit:  claude(func(h *Hooks) { h.Stale = []string{"UserPromptSubmit"} }),
 			check: "hook.claude_code", want: Warn, wantHas: []string{"the hooks for UserPromptSubmit don't run with the arguments install writes", "parse failure", "pairtime install"}},

@@ -41,6 +41,21 @@ func TestSystem(t *testing.T) {
 				t.Errorf("DiskKind = %q on macOS, which pairtime doesn't ask yet", got)
 			}
 		}},
+		{"the home folder's spellings start with itself, and on Windows add its 8.3 short form when it has one", func(t *testing.T) {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				t.Skip(err)
+			}
+			got := HomeSpellings(home)
+			if len(got) == 0 || got[0] != home {
+				t.Fatalf("HomeSpellings(%q) = %q", home, got)
+			}
+			for _, short := range got[1:] {
+				if runtime.GOOS != "windows" || !strings.Contains(short, "~") {
+					t.Errorf("HomeSpellings(%q) adds %q on %s", home, short, runtime.GOOS)
+				}
+			}
+		}},
 		{"a test binary has the signature its linker gives it: none on Windows and Intel Macs, ad hoc on Apple silicon", func(t *testing.T) {
 			exe, err := os.Executable()
 			if err != nil {

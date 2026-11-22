@@ -98,12 +98,13 @@ func hookChecks(h Hooks) []Check {
 			are = "is"
 		}
 		c.Text += fmt.Sprintf("; %d of pairtime's hooks %s missing from %s (%s), so pairtime misses those events. Run pairtime install to put them back",
-			len(h.Missing), are, settings, strings.Join(h.Missing, ", "))
+			len(h.Missing), are, settings, text.Printable(strings.Join(h.Missing, ", ")))
 	}
 	if len(h.Stale) > 0 && c.Result != Fail {
 		c.Result = Warn
+		// Stale holds settings.json's own keys, which can be anything.
 		c.Text += fmt.Sprintf("; the hooks for %s don't run with the arguments install writes, so each of their calls counts as a parse failure. Run pairtime install to write them again",
-			strings.Join(h.Stale, ", "))
+			text.Printable(strings.Join(h.Stale, ", ")))
 	}
 	if len(h.Exes) > 1 {
 		if c.Result == OK {
