@@ -15,6 +15,7 @@ on:
       - docs/retention.json
       - internal/server/retention/**
       - tools/pagespreview/**
+      - pkg/projectname/**
       - .github/workflows/pages-preview.yml
   workflow_dispatch:
 

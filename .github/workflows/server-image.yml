@@ -51,6 +51,7 @@ on:
       - pkg/event/**
       - pkg/ledger/**
       - pkg/params/**
+      - pkg/projectname/**
       # The patched BurntSushi/toml that go.mod's replace builds in.
       - third_party/burntsushi-toml/**
       # tools/release notices writes the image's THIRD_PARTY_NOTICES.txt,
