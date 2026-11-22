@@ -139,11 +139,18 @@ func (h *adapterHost) drained() bool {
 // in order, once the hook calls before them are parsed or wait in park,
 // and answers each batch. The first time, it gives the tailers the log
 // roots of the adapters that read logs and lets them start. The worker
-// runs it in a step that can write to the ledger.
+// runs it in a step that can write to the ledger; a step that can't, while
+// the agent has no keys or no ledger writer, or the held calls replay,
+// answers the batches with none taken instead (refuseLogs).
 func (h *adapterHost) takeLogs() {
 	t := h.tail.Load()
 	if t == nil {
 		return
+	}
+	if h.logRefused {
+		// The tailers offer what they were refused again.
+		h.logRefused = false
+		t.Poke()
 	}
 	if !h.rooted {
 		if !h.drained() {
@@ -185,8 +192,9 @@ func (h *adapterHost) takeLogs() {
 	}
 }
 
-// refuseLogs answers every batch that waits with none taken, as at the
-// last step, when nothing more goes to the ledger.
+// refuseLogs answers every batch that waits with none taken: in a step
+// that can't write to the ledger, so the tailers don't wait for it, and at
+// the last step. The next step that can has the tailers offer them again.
 func (h *adapterHost) refuseLogs() {
 	h.mu.Lock()
 	reqs := h.logReqs
@@ -194,6 +202,9 @@ func (h *adapterHost) refuseLogs() {
 	h.mu.Unlock()
 	for _, r := range reqs {
 		r.took <- 0
+	}
+	if len(reqs) > 0 {
+		h.logRefused = true
 	}
 }
 
@@ -238,6 +249,14 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 	mono, boot := ledger.RunClock(now)
 	raw := adapters.RawRecord{Source: adapters.SourceLog, Payload: line.Bytes, Log: &ll,
 		Arrival: adapters.Arrival{Via: event.ViaLog, T: now.UnixMilli(), Mono: mono, BootID: boot}}
+	if _, ok := lr.LogResume(ll.File); !ok && ll.Offset > 0 && !ll.Idle {
+		// The adapter has no memory of a file the tailers resume in its
+		// middle, as after a restore made it forget, or it forgot a file
+		// it read long ago: reading it from its start again, the lines it
+		// had as replays, gives the adapter what it knew of it.
+		t.Rewind(ll.File)
+		return false
+	}
 	dir, session := lr.LogPlace(raw)
 	if session != "" && h.parkedBy[session] > 0 || h.waits(dir) {
 		return false
@@ -260,7 +279,11 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 	}
 	due := false
 	for i, r := range recs {
-		r.Event.EventID = h.logEventID(r.Event.T, ll.File, ll.Offset, i)
+		key := r.LogKey
+		if key == "" {
+			key = fmt.Sprintf("%d.%d", ll.Offset, i)
+		}
+		r.Event.EventID = h.logEventID(r.Event.T, ll.File, key)
 		if !h.write(st, r) && h.writerDown() {
 			return false
 		}
@@ -303,17 +326,18 @@ func (h *adapterHost) hint(c hostCall) {
 
 // logEventID is a log record's event_id: a UUIDv7 with the record's time,
 // whose other bits are an HMAC, under K_session and a domain of its own,
-// of the file, where its line starts and which of the line's records it
-// is. A line read again makes the same ids, so pkg/score, which drops a
-// record whose event_id it has, counts it once.
-func (h *adapterHost) logEventID(t int64, file string, offset int64, i int) string {
+// of the file and the record's LogKey, which names the line its content
+// came from and which of that line's records it is. A line read again
+// makes the same ids, so pkg/score, which drops a record whose event_id it
+// has, counts it once.
+func (h *adapterHost) logEventID(t int64, file, key string) string {
 	m := hmac.New(sha256.New, h.a.sessionSecret())
 	m.Write([]byte("pairtime/v1/log-event"))
-	var n [16]byte
-	binary.BigEndian.PutUint64(n[:8], uint64(offset))
-	binary.BigEndian.PutUint64(n[8:], uint64(i))
+	var n [8]byte
+	binary.BigEndian.PutUint64(n[:], uint64(len(file)))
 	m.Write(n[:])
 	m.Write([]byte(file))
+	m.Write([]byte(key))
 	return eventIDFrom(t, m.Sum(nil))
 }
 

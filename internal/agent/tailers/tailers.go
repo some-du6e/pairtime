@@ -36,10 +36,11 @@
 //   - A line is handed over only once its newline is written. A line longer
 //     than MaxLine is handed over without its bytes, marked too long.
 //
-// A file the tailer has no cursor for is read from its start when it is
-// hot, which is a session being written now. Older files wait for the
-// lookback reader, which reads the last 30 days at low priority (WP-AD3,
-// PR 2).
+// The first time the tailer lists a root, it takes up every file there at
+// the end of its last complete line, and reads none of what came before:
+// that is the time before pairtime read the root, which hooks recorded, if
+// any did, and the lookback reader reads at low priority for the rest
+// (WP-AD3, PR 2). A file that appears after that is read from its start.
 package tailers
 
 import (
@@ -103,15 +104,17 @@ const (
 	stateVersion = 1
 )
 
-// maxWatched bounds the folders watched at once: fsnotify opens a
-// descriptor for every file of a watched folder on macOS, and an inotify
-// watch pins the folder's inode on Linux (CP 3.1).
-func maxWatched() int {
-	if runtime.GOOS == "darwin" {
-		return 4
-	}
-	return 32
-}
+// maxWatched bounds what fsnotify watches at once: an inotify watch pins
+// a folder's inode on Linux, and on macOS each watched file costs a
+// descriptor (CP 3.1).
+const maxWatched = 32
+
+// watchFiles says fsnotify watches the hot files themselves, not their
+// folders: on macOS, where its kqueue backend opens a descriptor for every
+// entry of a watched folder, which for a folder of a month's transcripts is
+// hundreds (CP 3.1, 3.2). New files there are found by the polls and the
+// rescans.
+var watchFiles = runtime.GOOS == "darwin"
 
 // Root is a log root and the harness whose adapter reads it.
 type Root struct {
@@ -181,8 +184,10 @@ type Tailer struct {
 	// scanDue says the roots are to be listed again, and checkAll that
 	// every file with a cursor is to be looked at, as at the start.
 	scanDue, checkAll bool
-	// watching are the folders fsnotify watches.
+	// watching are the folders, or on macOS the files, fsnotify watches,
+	// and listed the roots the tailer has listed once.
 	watching map[string]bool
+	listed   map[string]bool
 	// lastPoll is when the hot files were last looked at, and lastPut the
 	// cursors as Put last handed them to Store.
 	lastPoll time.Time
@@ -215,11 +220,11 @@ type file struct {
 	// restart, read otherwise.
 	pos int64
 	// grew is when the tailer saw the file grow last, statAt when it last
-	// looked at it, due says it is to be read, waiting that its next line
-	// wasn't taken, and idleSent that its adapter heard it was idle since it
-	// last grew.
-	grew, statAt           time.Time
-	due, waiting, idleSent bool
+	// looked at it and idleAt when its adapter last heard it was idle; due
+	// says it is to be read, waiting that its next line wasn't taken, and
+	// rewound that its adapter has it read again from its start (Rewind).
+	grew, statAt, idleAt  time.Time
+	due, waiting, rewound bool
 }
 
 // active is when f was last written, by the tailer's sight or its mtime.
@@ -234,6 +239,9 @@ func (f *file) active() time.Time {
 type saved struct {
 	V     int         `json:"v"`
 	Files []savedFile `json:"files"`
+	// Roots are the roots the tailer has listed once, whose files were all
+	// taken up then (scan).
+	Roots []string `json:"roots,omitempty"`
 }
 
 type savedFile struct {
@@ -241,7 +249,7 @@ type savedFile struct {
 	Harness event.Harness `json:"harness"`
 	ID      string        `json:"id,omitempty"`
 	Size    int64         `json:"size"`
-	MTime   int64         `json:"mtime"`
+	MTime   int64         `json:"mtime"` // Unix ns, as the file system gives it
 	Read    int64         `json:"read"`
 	Resume  int64         `json:"resume"`
 	Hash    string        `json:"hash,omitempty"`
@@ -261,6 +269,7 @@ func New(opts Options) *Tailer {
 		roots:    slices.Clone(opts.Roots),
 		files:    make(map[string]*file),
 		watching: make(map[string]bool),
+		listed:   make(map[string]bool),
 		scanDue:  true,
 		checkAll: true,
 		kick:     make(chan struct{}, 1),
@@ -289,12 +298,15 @@ func (t *Tailer) load() {
 	case !ok || st.V != stateVersion:
 		return
 	}
+	for _, d := range st.Roots {
+		t.listed[d] = true
+	}
 	for _, sf := range st.Files {
 		if sf.Path == "" || !filepath.IsAbs(sf.Path) || t.files[sf.Path] != nil || sf.Read < 0 || sf.Resume < 0 || sf.Resume > sf.Read {
 			continue
 		}
 		t.files[sf.Path] = &file{key: sf.Path, path: sf.Path, harness: sf.Harness, id: sf.ID, size: sf.Size,
-			mtime: time.UnixMilli(sf.MTime), read: sf.Read, resume: sf.Resume, hash: sf.Hash, pos: sf.Resume}
+			mtime: time.Unix(0, sf.MTime), read: sf.Read, resume: sf.Resume, hash: sf.Hash, pos: sf.Resume}
 	}
 }
 
@@ -309,10 +321,14 @@ func (t *Tailer) Put() (bool, error) {
 	st := saved{V: stateVersion, Files: make([]savedFile, 0, len(t.files))}
 	for _, f := range t.files {
 		st.Files = append(st.Files, savedFile{Path: f.path, Harness: f.harness, ID: f.id, Size: f.size,
-			MTime: f.mtime.UnixMilli(), Read: f.read, Resume: f.resume, Hash: f.hash})
+			MTime: f.mtime.UnixNano(), Read: f.read, Resume: f.resume, Hash: f.hash})
+	}
+	for d := range t.listed {
+		st.Roots = append(st.Roots, d)
 	}
 	last := t.lastPut
 	t.mu.Unlock()
+	slices.Sort(st.Roots)
 	slices.SortFunc(st.Files, func(a, b savedFile) int { return strings.Compare(a.Path, b.Path) })
 	b, err := json.Marshal(st)
 	if err != nil {
@@ -397,7 +413,12 @@ func (t *Tailer) Hint(h event.Harness, path string, root adapters.LogRoot) {
 		r = Root{Harness: h, LogRoot: root}
 		t.roots = append(t.roots, r)
 	}
-	if r.Match(rel) {
+	switch {
+	case !r.Match(rel):
+	case !t.listed[r.Dir]:
+		// The root's first listing takes the file up, as every other there.
+		t.scanDue = true
+	default:
 		f := t.files[path]
 		if f == nil {
 			f = &file{key: path, path: path, harness: r.Harness}
@@ -408,6 +429,18 @@ func (t *Tailer) Hint(h event.Harness, path string, root adapters.LogRoot) {
 	}
 	t.mu.Unlock()
 	t.wake()
+}
+
+// Rewind has the tailer read the file key from its start again, the lines
+// it had handed over as replays: its adapter has no memory of the file, as
+// after a restore, and rebuilds it from them. The agent calls it while it
+// takes a batch of the file, instead of taking the line.
+func (t *Tailer) Rewind(key string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if f := t.files[key]; f != nil {
+		f.pos, f.resume, f.rewound = 0, 0, true
+	}
 }
 
 // rootOf returns the root that holds path, and path under it. t.mu is held.
@@ -562,8 +595,9 @@ func (t *Tailer) stopping() bool {
 	return t.stopped
 }
 
-// scan lists every root. A file the tailer has no cursor for starts one,
-// at the file's start, when it is hot; a known file that changed is due.
+// scan lists every root. A file the tailer has no cursor for gets one: at
+// its end on the root's first listing, and at its start after that, when
+// it is a new file. A known file that changed is due.
 func (t *Tailer) scan(now time.Time) {
 	t.mu.Lock()
 	roots := slices.Clone(t.roots)
@@ -579,7 +613,14 @@ func (t *Tailer) scan(now time.Time) {
 	}
 	t.mu.Unlock()
 	for _, r := range roots {
-		t.walk(r, r.Dir, "", 0, now, known)
+		t.mu.Lock()
+		first := !t.listed[r.Dir]
+		t.mu.Unlock()
+		if t.walk(r, r.Dir, "", 0, now, known, first) {
+			t.mu.Lock()
+			t.listed[r.Dir] = true
+			t.mu.Unlock()
+		}
 	}
 }
 
@@ -587,13 +628,28 @@ func (t *Tailer) scan(now time.Time) {
 // Below the first level it goes only into folders written in the last
 // HotWindow or holding a file it knows, so an idle root costs a listing of
 // its top folders.
-func (t *Tailer) walk(r Root, dir, rel string, depth int, now time.Time, known map[string]bool) {
+//
+// On a root's first listing, first, it takes every file up at its end
+// (adopt). It reports whether it could list dir, or found it missing: a
+// root that doesn't exist yet counts as listed, and its files, when they
+// come, are new.
+func (t *Tailer) walk(r Root, dir, rel string, depth int, now time.Time, known map[string]bool, first bool) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			t.opts.Log.Debug("tailers: listing a log folder", "err", err)
+			return false
 		}
-		return
+		return true
+	}
+	// Folders named for a hot file of this folder, as Claude Code names a
+	// session's folder of subagents for its transcript, are read whatever
+	// their own times say.
+	stems := make(map[string]bool)
+	for _, de := range entries {
+		if fi, err := de.Info(); err == nil && !de.IsDir() && now.Sub(fi.ModTime()) <= HotWindow {
+			stems[strings.TrimSuffix(de.Name(), filepath.Ext(de.Name()))] = true
+		}
 	}
 	for _, de := range entries {
 		name := de.Name()
@@ -606,13 +662,13 @@ func (t *Tailer) walk(r Root, dir, rel string, depth int, now time.Time, known m
 			if depth+1 >= r.Depth {
 				continue
 			}
-			if depth >= 1 && !known[full] {
+			if depth >= 1 && !known[full] && !stems[name] && !first {
 				fi, err := de.Info()
 				if err != nil || now.Sub(fi.ModTime()) > HotWindow {
 					continue
 				}
 			}
-			t.walk(r, full, sub, depth+1, now, known)
+			t.walk(r, full, sub, depth+1, now, known, first)
 			continue
 		}
 		if !de.Type().IsRegular() || r.Match == nil || !r.Match(sub) {
@@ -625,13 +681,80 @@ func (t *Tailer) walk(r Root, dir, rel string, depth int, now time.Time, known m
 		t.mu.Lock()
 		f := t.files[full]
 		switch {
-		case f == nil && now.Sub(fi.ModTime()) <= HotWindow:
+		case f == nil && first:
+			t.mu.Unlock()
+			t.adopt(r, full)
+			continue
+		case f == nil:
+			// A file that came since the root was listed: a new session.
 			t.files[full] = &file{key: full, path: full, harness: r.Harness, due: true, grew: now}
-		case f != nil && (fi.Size() != f.size || !fi.ModTime().Equal(f.mtime)):
+		case fi.Size() != f.size || !fi.ModTime().Equal(f.mtime):
 			f.due = true
 		}
 		t.mu.Unlock()
 	}
+	return true
+}
+
+// adopt takes the file at path up at the end of its last complete line,
+// as the tailer does for each file of a root it lists the first time.
+func (t *Tailer) adopt(r Root, path string) {
+	fh, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer fh.Close()
+	fi, err := fh.Stat()
+	if err != nil {
+		return
+	}
+	end, hash, err := lastLine(fh, fi.Size())
+	if err != nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.files[path] == nil {
+		t.files[path] = &file{key: path, path: path, harness: r.Harness, id: fileID(fh, fi), size: fi.Size(),
+			mtime: fi.ModTime(), read: end, resume: end, pos: end, hash: hash}
+	}
+}
+
+// lastLine returns where the last complete line of a file of size bytes
+// ends, and its Hash, reading back from the end: 0 and "" for a file with
+// none.
+func lastLine(fh *os.File, size int64) (int64, string, error) {
+	var tail []byte
+	end := int64(-1)
+	for at := size; at > 0 && len(tail) <= MaxLine; {
+		n := min(int64(readBuffer), at)
+		at -= n
+		chunk := make([]byte, n)
+		if _, err := fh.ReadAt(chunk, at); err != nil && !errors.Is(err, io.EOF) {
+			return 0, "", err
+		}
+		tail = append(chunk, tail...)
+		if end < 0 {
+			i := bytes.LastIndexByte(tail, '\n')
+			if i < 0 {
+				continue
+			}
+			end = at + int64(i) + 1
+			tail = tail[:i]
+		}
+		if j := bytes.LastIndexByte(tail, '\n'); j >= 0 {
+			return end, hashLine(bytes.TrimRight(tail[j+1:], "\r")), nil
+		}
+		if at == 0 {
+			return end, hashLine(bytes.TrimRight(tail, "\r")), nil
+		}
+	}
+	if end < 0 {
+		return 0, "", nil
+	}
+	// A last line longer than MaxLine: the file goes on from its end, and a
+	// truncation is told by the size alone.
+	return end, "", nil
 }
 
 // look stats the files that want it: every known file at the start, and
@@ -651,7 +774,7 @@ func (t *Tailer) look(now time.Time, all, poll bool) {
 			check = append(check, f)
 			f.statAt = now
 		}
-		if !f.idleSent && f.resume < f.read && f.pos >= f.size && now.Sub(last) >= IdleAfter && !f.waiting {
+		if f.resume < f.read && f.pos >= f.size && !f.waiting && now.Sub(last) >= IdleAfter && now.Sub(f.idleAt) >= IdleAfter {
 			f.due = true
 		}
 	}
@@ -727,7 +850,7 @@ func (t *Tailer) read(f *file, now time.Time) {
 	}
 	t.mu.Lock()
 	if size > f.size || moved {
-		f.grew, f.idleSent = now, false
+		f.grew = now
 	}
 	f.id, f.size, f.mtime = id, size, fi.ModTime()
 	pos, read := f.pos, f.read
@@ -744,7 +867,11 @@ func (t *Tailer) read(f *file, now time.Time) {
 				n := t.opts.Deliver(batch)
 				if n < len(batch) {
 					t.mu.Lock()
-					f.waiting = true
+					if f.rewound {
+						f.rewound, f.due = false, true
+					} else {
+						f.waiting = true
+					}
 					t.mu.Unlock()
 					return
 				}
@@ -761,15 +888,16 @@ func (t *Tailer) read(f *file, now time.Time) {
 	t.idle(f, now)
 }
 
-// idle tells f's adapter that f is idle, once, when the adapter holds
-// something back and f hasn't grown for IdleAfter, or was written before
-// that, as a file caught up on after a restart was.
+// idle tells f's adapter that f is idle, every IdleAfter while the adapter
+// holds something back and f hasn't grown for IdleAfter, or was written
+// before that, as a file caught up on after a restart was.
 func (t *Tailer) idle(f *file, now time.Time) {
 	t.mu.Lock()
-	send := !f.idleSent && f.resume < f.read && f.pos >= f.size && !f.waiting && now.Sub(f.active()) >= IdleAfter
+	send := f.resume < f.read && f.pos >= f.size && !f.waiting && now.Sub(f.active()) >= IdleAfter &&
+		now.Sub(f.idleAt) >= IdleAfter
 	at, h, key, path, hash := f.pos, f.harness, f.key, f.path, f.hash
 	if send {
-		f.idleSent = true
+		f.idleAt = now
 	}
 	t.mu.Unlock()
 	if !send {
@@ -778,7 +906,7 @@ func (t *Tailer) idle(f *file, now time.Time) {
 	marker := Line{Harness: h, Log: adapters.LogLine{File: key, Path: path, Offset: at, End: at, Idle: true}, Hash: hash}
 	if t.opts.Deliver(Batch{marker}) < 1 {
 		t.mu.Lock()
-		f.idleSent, f.waiting = false, true
+		f.idleAt, f.waiting = time.Time{}, true
 		t.mu.Unlock()
 	}
 }
@@ -891,15 +1019,18 @@ func (t *Tailer) relocate(fh *os.File, f *file, size int64) {
 }
 
 // watch keeps fsnotify on the roots and on the folders of the hot files,
-// the files grown most recently first, up to maxWatched.
+// the files grown most recently first, up to maxWatched, or on macOS on
+// the hot files alone (watchFiles).
 func (t *Tailer) watch(now time.Time) {
 	if t.w == nil {
 		return
 	}
 	t.mu.Lock()
 	want := make(map[string]bool)
-	for _, r := range t.roots {
-		want[r.Dir] = true
+	if !watchFiles {
+		for _, r := range t.roots {
+			want[r.Dir] = true
+		}
 	}
 	var hot []*file
 	for _, f := range t.files {
@@ -909,10 +1040,14 @@ func (t *Tailer) watch(now time.Time) {
 	}
 	slices.SortFunc(hot, func(a, b *file) int { return b.active().Compare(a.active()) })
 	for _, f := range hot {
-		if len(want) >= maxWatched() {
+		if len(want) >= maxWatched {
 			break
 		}
-		want[filepath.Dir(f.path)] = true
+		if watchFiles {
+			want[f.path] = true
+		} else {
+			want[filepath.Dir(f.path)] = true
+		}
 	}
 	var add, drop []string
 	for d := range want {

@@ -253,6 +253,13 @@ type Record struct {
 	// (git.Watcher.NoteAgentCommand). Both stay on the device, like the
 	// command: Dir is a path, and neither goes in the event.
 	Dir, Call string
+	// LogKey names a log line's record among the records that line, read
+	// again, makes again: where in its file the line that holds the
+	// record's content starts, and which record of that line it is, such as
+	// "1234.prompt". The agent derives the record's event_id from it, so a
+	// line read again after a crash makes records pkg/score takes for the
+	// ones the ledger has. It is "" for a record of anything but a log.
+	LogKey string
 }
 
 // Stateful is an adapter whose memory of the sessions it parses can

@@ -118,7 +118,7 @@ func (a *Adapter) Parse(raw adapters.RawRecord) ([]adapters.Record, error) {
 		// builds one, so SM 2.2 rule 4 reads the session's parent chain.
 		c.add(&event.SessionStart{StartKind: event.StartStartup, Entrypoint: entrypointOf(*w),
 			ParentClass: parentOf(*w), HasTTY: w.HasTTY}, nil)
-		c.s.hookStart = true
+		c.s.markNative(c.env.T)
 	}
 	c.pid, _ = f.str("prompt_id")
 	if c.pid != "" && name != EventUserPromptSubmit {
@@ -196,7 +196,7 @@ func (c *call) sessionStart() {
 	st := &event.SessionStart{StartKind: kind, Entrypoint: event.EntrypointUnknown, ParentClass: event.ParentUnknown}
 	if w := c.raw.Arrival.Walk; w != nil && c.raw.Arrival.Via == event.ViaHook {
 		st.Entrypoint, st.ParentClass, st.HasTTY = entrypointOf(*w), parentOf(*w), w.HasTTY
-		c.s.hookStart = true
+		c.s.markNative(c.env.T)
 	}
 	if pm, ok := c.f.str("permission_mode"); ok {
 		if isKey(pm) {
@@ -341,13 +341,7 @@ type cron struct {
 // makes no agent.output and isn't committed as the turn's final message
 // (SM 1.2; the hooks reference).
 func (c *call) stop(failed bool) {
-	id := c.s.turnOf(c.pid)
-	key := c.turnKey(id)
-	if c.raw.Arrival.Via == event.ViaHook {
-		// The turn's own record of its stop, which a transcript's copy
-		// would count twice (logLine.resolveFinal).
-		c.s.stopNative(id)
-	}
+	key := c.turnKey(c.s.turnOf(c.pid))
 	reason := event.StopEndTurn
 	if msg, ok := c.f.str("last_assistant_message"); ok && msg != "" && !failed {
 		o := outputOf(msg)

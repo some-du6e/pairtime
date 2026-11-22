@@ -3,6 +3,7 @@
 package claudecode
 
 import (
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -28,7 +29,7 @@ import (
 //     whose agent.queue the enqueue made: it starts its turn and is no
 //     prompt (E-cc-queued-turn).
 //   - A queue-operation enqueue while a turn runs is agent.queue in that
-//     turn, unless a task notification queued itself.
+//     turn, unless a task notification queued itself (rule 3).
 //   - Each text block of an assistant entry is agent.output in its turn,
 //     is_final for the turn's message whose stop_reason is end_turn, and
 //     that message is also the turn's agent.stop, at its last entry, with
@@ -44,22 +45,28 @@ import (
 //   - session.start comes only for a session no hook reported, at the
 //     first entry that states an entrypoint token and again wherever the
 //     token changes, with parent_class unknown, has_tty false and the
-//     token's entrypoint (E-2.8-lookback; E-cc-transcript-labels).
+//     token's entrypoint (E-2.8-lookback; E-cc-transcript-labels). Claude
+//     Code can write a session's first entries before its SessionStart
+//     hook runs, and a spooled hook comes with the next drain, so for an
+//     entry the reader reads as it is written the record waits startGrace
+//     for a hook first.
 //   - No agent.permission: the transcript says who answered a permission
-//     request, but dates no answer the scorer could anchor (SM 1.2;
+//     request, but dates no answer of a command (SM 1.2;
 //     docs/errata/2026-11-21-claude-code-transcript-permissions.md).
 //
-// For a session a hook reported, the hooks' records are the session's own
-// for what they report, and a second record of it would count twice
-// (pkg/score sums every agent.output and agent.tool of a turn). So there
-// the reader writes no session.start and no agent.queue, writes the final
-// message and stop of a turn only when no via hook Stop of the turn came,
-// and a tool call only when no via hook PostToolUse of it came. A call or
-// Stop that only the spool delivered is via plugin, which the scorer
-// leaves out of a session a log reader covers (DESIGN 5.2), so the
-// transcript's copy is the one that counts. Prompts and interrupts it
-// always writes: copies of one prompt or one interrupt are one act to the
-// scorer, and a prompt's log copy is CC1's.
+// A session's own hooks report its stops and its Edit, Write and Bash calls
+// from the first session.start with via hook on (session.nativeAt), and a
+// second record of one would count it twice: pkg/score sums every
+// agent.output and agent.tool of a turn. So from then on the reader writes
+// no final output, no agent.stop and no Edit, Write or Bash call that
+// succeeded, whatever it remembers of the hook calls, which a kill can lose,
+// and no other call that a via hook PostToolUse reported. A spooled hook
+// call is via plugin, which the scorer leaves out of a session a log reader
+// covers (DESIGN 5.2), so for a session whose hooks only the spool
+// delivered the transcript's copies are the ones that count, and it writes
+// them. Prompts, interrupts and queued messages it always writes: the
+// scorer takes the copies of one such act for one act, and a prompt's log
+// copy is CC1's.
 
 // Bounds on what the reader remembers.
 const (
@@ -70,10 +77,12 @@ const (
 	// maxPendingTools bounds the tool uses of one file that wait for their
 	// results.
 	maxPendingTools = 64
-	// maxStops bounds the turns of one session whose via hook Stop the
-	// adapter remembers.
-	maxStops = 16
 )
+
+// startGrace is how long a session.start waits for a hook of its session
+// before the reader writes it: past a spooled hook's next drain, which
+// comes every minute (internal/agent), with room for a slow one.
+const startGrace = 90_000
 
 // turnOrigins and promptSources are the values of turnOrigin and
 // promptSource that WP-AD1's capture shows (E-cc-transcript-labels).
@@ -88,6 +97,10 @@ var entrypointTokens = []string{
 	"cli", "sdk-cli", "sdk-ts", "sdk-py", "claude-vscode", "claude-desktop", "claude-desktop-3p", "claude-in-slack",
 	"remote", "remote_desktop", "remote_mobile",
 }
+
+// hookedTools are the tools whose calls pairtime's PostToolUse hook
+// reports, as its matcher names them (toolMatcher; DESIGN 5.1).
+var hookedTools = []string{"Edit", "Write", "Bash"}
 
 // tokenEntrypoint maps an entrypoint token to the entrypoint a log
 // reader's session.start states: sdk for the SDK's, cloud for a session on
@@ -112,10 +125,12 @@ type txSession struct {
 	// wrote for the session, and started says it wrote one.
 	token   string
 	started bool
-	// hooked says a hook call of the session reached the adapter, and
-	// stays set when the adapter forgets the session's calls.
-	hooked bool
-	seen   uint64
+	// reported says a hook call of the session reached the adapter, and
+	// nativeAt when its hooks came via hook from (session.nativeAt), 0 for
+	// never. They stay when the adapter forgets the session's calls.
+	reported bool
+	nativeAt int64
+	seen     uint64
 }
 
 // txFile is what the reader remembers of one transcript file.
@@ -124,7 +139,7 @@ type txFile struct {
 	// at is where the last line the reader took ends.
 	at int64
 	// st is what the reader knows of the file after that line, and pend
-	// the content it holds for records a later line completes.
+	// what it holds for records a later line completes.
 	st   txState
 	pend txPending
 	// snap is st as it was at snapAt, the end of the last line after
@@ -156,17 +171,21 @@ type txState struct {
 	Version string `json:"version,omitempty"`
 }
 
-// txPending is what the reader holds of a file in memory alone, since it
-// is content: tool uses waiting for their results, a slash command's
-// markup waiting for the entry that says it starts a turn, and a turn's
-// last message waiting for the line that shows the turn stopped there.
+// txPending is what the reader holds of a file in memory alone: tool uses
+// waiting for their results, a slash command's markup waiting for the
+// entry that says it starts a turn, a turn's last message waiting for the
+// line that shows the turn stopped there, all of which are content, and a
+// session.start waiting for startGrace to pass.
 type txPending struct {
 	tools   []pendingTool
 	command *pendingCommand
 	final   *pendingFinal
+	start   *pendingStart
 }
 
-func (p *txPending) empty() bool { return len(p.tools) == 0 && p.command == nil && p.final == nil }
+func (p *txPending) empty() bool {
+	return len(p.tools) == 0 && p.command == nil && p.final == nil && p.start == nil
+}
 
 // pendingTool is a tool use whose result hasn't come yet.
 type pendingTool struct {
@@ -187,13 +206,25 @@ type pendingCommand struct {
 // is the turn's last unless a later entry of the turn shows otherwise.
 type pendingFinal struct {
 	msg, turn, session string
-	env                event.Envelope
-	text               string
-	out                output
+	// at is where the line holding its text starts, which names its
+	// records (adapters.Record.LogKey).
+	at   int64
+	env  event.Envelope
+	text string
+	out  output
 	// active says the stop is a stop hook's continuation, and continued
 	// that a /goal verdict after the message found the goal unmet, so the
 	// turn goes on.
 	active, continued bool
+}
+
+// pendingStart is a session.start that waits for a hook of its session.
+type pendingStart struct {
+	session string
+	at      int64 // where the entry that stated the token starts
+	env     event.Envelope
+	start   event.SessionStart
+	token   string
 }
 
 // logLine is one transcript line while Parse reads it.
@@ -226,6 +257,7 @@ func (a *Adapter) parseLog(raw adapters.RawRecord) ([]adapters.Record, error) {
 		// while: a turn's last message is its last, whatever comes later.
 		if ll.Offset == f.at {
 			l.resolveFinal()
+			l.resolveStart()
 		}
 	default:
 		if ll.Offset == 0 || ll.Offset != f.at {
@@ -238,6 +270,9 @@ func (a *Adapter) parseLog(raw adapters.RawRecord) ([]adapters.Record, error) {
 			perr.Problem("a line longer than the tailers read")
 		} else if e, ok := l.entryOf(); ok {
 			l.take(e)
+		}
+		if !ll.Replay {
+			l.resolveStart()
 		}
 		f.at = ll.End
 	}
@@ -270,6 +305,11 @@ func (l *logLine) entryOf() (*entry, bool) {
 	}
 	return e, true
 }
+
+// key names the record of this line that kind says (adapters.Record.LogKey).
+func (l *logLine) key(kind string) string { return logKey(l.raw.Log.Offset, kind) }
+
+func logKey(at int64, kind string) string { return strconv.FormatInt(at, 10) + "." + kind }
 
 // take reads one entry.
 func (l *logLine) take(e *entry) {
@@ -321,10 +361,7 @@ func (l *logLine) take(e *entry) {
 
 // finalEnds reports whether entry e shows that the pending message is its
 // turn's last: the summary Claude Code writes once the Stop hooks ran, the
-// turn's duration, any user entry, or another message. A Stop hook comes
-// after the message's entries are written and before that summary (WP-AD1's
-// capture), so a via hook Stop of the turn has reached the adapter by then
-// (resolveFinal).
+// turn's duration, any user entry, or another message.
 func finalEnds(e *entry, fin *pendingFinal) bool {
 	switch e.Type {
 	case "system":
@@ -348,33 +385,48 @@ func (l *logLine) env(t int64, sid string) event.Envelope {
 	}
 }
 
-// add appends a record of payload p with content text.
-func (l *logLine) add(env event.Envelope, p event.Payload, text []byte) *adapters.Record {
-	l.recs = append(l.recs, adapters.Record{Event: event.Event{Envelope: env, Data: p}, Text: text})
+// add appends a record of payload p with content text, named key.
+func (l *logLine) add(key string, env event.Envelope, p event.Payload, text []byte) *adapters.Record {
+	l.recs = append(l.recs, adapters.Record{Event: event.Event{Envelope: env, Data: p}, Text: text, LogKey: key})
 	return &l.recs[len(l.recs)-1]
 }
 
-// hooked reports whether a hook call of session sid reached the adapter
-// (HookReported), and remembers that it did.
-func (a *Adapter) hooked(sid string) bool {
+// logSession returns what the reader remembers of session sid, with what
+// the adapter's hook memory says of it now: whether a hook call of it
+// came, and since when they come via hook.
+func (a *Adapter) logSession(sid string) *txSession {
 	ls := a.logSessionFor(sid)
-	if a.sessions[sid] != nil {
-		ls.hooked = true
+	if s := a.sessions[sid]; s != nil {
+		ls.reported = true
+		if s.hookStart && (ls.nativeAt == 0 || s.nativeAt < ls.nativeAt) {
+			// 0 is a session native from its start, as an older build's
+			// memory says, so it can stand for one only when ls has none.
+			ls.nativeAt = max(s.nativeAt, 1)
+		}
 	}
-	return ls.hooked
+	return ls
 }
 
-// sessionStart writes the session.start a log reader writes for a session
-// no hook reported: at the first entry that states an entrypoint token, and
+// native reports whether session sid's hooks came via hook at t, when they
+// report its stops and tool calls themselves.
+func (a *Adapter) native(sid string, t int64) bool {
+	ls := a.logSession(sid)
+	return ls.nativeAt > 0 && t >= ls.nativeAt
+}
+
+// sessionStart has a session no hook reported get the session.start a log
+// reader writes: at the first entry that states an entrypoint token, and
 // again where the token changes (E-cc-transcript-labels). A subagent's
-// entries state the session's token too, and are no start of it.
+// entries state the session's token too, and are no start of it. It waits
+// in pend until startGrace after the entry, unless the entry is that old
+// already (resolveStart).
 func (l *logLine) sessionStart(e *entry, sid string) {
-	if e.Entrypoint == nil || e.IsSidechain || sid == "" || e.t == 0 || l.a.hooked(sid) {
+	if e.Entrypoint == nil || e.IsSidechain || sid == "" || e.t == 0 || l.f.pend.start != nil {
 		return
 	}
-	ls := l.a.logSessionFor(sid)
+	ls := l.a.logSession(sid)
 	tok := *e.Entrypoint
-	if ls.started && ls.token == tok {
+	if ls.reported || ls.started && ls.token == tok {
 		return
 	}
 	ep, known := tokenEntrypoint(tok)
@@ -385,12 +437,44 @@ func (l *logLine) sessionStart(e *entry, sid string) {
 	if ls.started {
 		kind = event.StartResume
 	}
-	ls.started, ls.token = true, tok
-	st := &event.SessionStart{StartKind: kind, Entrypoint: ep, ParentClass: event.ParentUnknown}
+	ps := &pendingStart{session: sid, at: l.raw.Log.Offset, env: l.env(e.t, sid), token: tok,
+		start: event.SessionStart{StartKind: kind, Entrypoint: ep, ParentClass: event.ParentUnknown}}
 	if isKey(e.PermissionMode) {
-		st.PermissionMode = e.PermissionMode
+		ps.start.PermissionMode = e.PermissionMode
 	}
-	l.add(l.env(e.t, sid), st, nil)
+	l.f.pend.start = ps
+	if !l.raw.Log.Replay {
+		// In a replay it waits for the lines after it: the time it went by
+		// is today's, which would write it there, where its record goes.
+		l.resolveStart()
+	}
+}
+
+// resolveStart writes the pending session.start once startGrace has
+// passed since its entry with no hook of its session, and drops it when a
+// hook came. One written after its entry's line is dated a millisecond
+// before the entry, so it sorts before the entry's other records (pkg/score
+// orders records by time, then by when they were written).
+func (l *logLine) resolveStart() {
+	ps := l.f.pend.start
+	if ps == nil {
+		return
+	}
+	ls := l.a.logSession(ps.session)
+	switch {
+	case ls.reported:
+		l.f.pend.start = nil
+	case l.raw.Arrival.T-ps.env.T >= startGrace:
+		l.f.pend.start = nil
+		ls.started, ls.token = true, ps.token
+		env := ps.env
+		if l.raw.Log.Offset != ps.at || l.raw.Log.Idle {
+			env.T--
+			env.Mono = max(env.Mono-1, 0)
+		}
+		st := ps.start
+		l.add(logKey(ps.at, "start"), env, &st, nil)
+	}
 }
 
 // user reads a user entry: tool results, an interrupt, a prompt, or a
@@ -404,9 +488,9 @@ func (l *logLine) user(e *entry, sid string) {
 	if e.PromptID != "" && !e.IsSidechain {
 		l.f.st.Turn = e.PromptID
 	}
-	for _, p := range m.Content.Parts {
+	for i, p := range m.Content.Parts {
 		if p.Type == "tool_result" {
-			l.toolResult(e, sid, p)
+			l.toolResult(e, sid, i, p)
 		}
 	}
 	if e.IsSidechain {
@@ -445,7 +529,7 @@ func (l *logLine) interrupt(e *entry, sid string) {
 	if turn == "" || sid == "" || e.t == 0 {
 		return
 	}
-	l.add(l.env(e.t, sid), &event.AgentInterrupt{TurnKey: l.a.keys.Turn(sid, turn)}, nil)
+	l.add(l.key("interrupt"), l.env(e.t, sid), &event.AgentInterrupt{TurnKey: l.a.keys.Turn(sid, turn)}, nil)
 }
 
 // prompt reads an entry that starts a turn.
@@ -524,7 +608,7 @@ func (l *logLine) prompt(e *entry, sid, text string) {
 		// SM 2.2 rule 3: a background subagent's report.
 		p.OriginDeclared = event.DeclaredSubagent
 	}
-	l.add(l.env(e.t, sid), p, []byte(text))
+	l.add(l.key("prompt"), l.env(e.t, sid), p, []byte(text))
 }
 
 // commandText returns the prompt a slash command's markup stands for,
@@ -574,7 +658,7 @@ func (l *logLine) assistant(e *entry, sid string) {
 	f := l.f
 	final := m.StopReason == "end_turn" || m.StopReason == "stop_sequence"
 	main := !e.IsSidechain && f.st.Turn != "" && sid != "" && e.t > 0
-	for _, p := range m.Content.Parts {
+	for i, p := range m.Content.Parts {
 		switch p.Type {
 		case "tool_use":
 			if p.ID != "" {
@@ -589,8 +673,8 @@ func (l *logLine) assistant(e *entry, sid string) {
 				l.pendFinal(e, sid, m.ID, p.Text)
 			} else {
 				o := outputOf(p.Text)
-				l.add(l.env(e.t, sid), &event.AgentOutput{TurnKey: l.a.keys.Turn(sid, f.st.Turn), Words: o.words,
-					CodeLines: o.codeLines, AsksQuestion: o.asks, OffersOptions: o.offers}, nil)
+				l.add(l.key("output"+strconv.Itoa(i)), l.env(e.t, sid), &event.AgentOutput{TurnKey: l.a.keys.Turn(sid, f.st.Turn),
+					Words: o.words, CodeLines: o.codeLines, AsksQuestion: o.asks, OffersOptions: o.offers}, nil)
 			}
 		}
 	}
@@ -608,10 +692,11 @@ func (l *logLine) pendFinal(e *entry, sid, msg, text string) {
 	f := l.f
 	if old := f.pend.final; old != nil && old.msg == msg && old.text != "" && text != "" {
 		o := old.out
-		l.add(old.env, &event.AgentOutput{TurnKey: l.a.keys.Turn(old.session, old.turn), Words: o.words,
-			CodeLines: o.codeLines, AsksQuestion: o.asks, OffersOptions: o.offers}, nil)
+		l.add(logKey(old.at, "output"), old.env, &event.AgentOutput{TurnKey: l.a.keys.Turn(old.session, old.turn),
+			Words: o.words, CodeLines: o.codeLines, AsksQuestion: o.asks, OffersOptions: o.offers}, nil)
 	}
-	fin := &pendingFinal{msg: msg, turn: f.st.Turn, session: sid, env: l.env(e.t, sid), text: text, active: f.st.Blocked}
+	fin := &pendingFinal{msg: msg, turn: f.st.Turn, session: sid, at: l.raw.Log.Offset, env: l.env(e.t, sid), text: text,
+		active: f.st.Blocked}
 	if text != "" {
 		fin.out = outputOf(text)
 	}
@@ -619,8 +704,8 @@ func (l *logLine) pendFinal(e *entry, sid, msg, text string) {
 }
 
 // resolveFinal writes the pending message as its turn's final output and
-// stop, at the message's last entry, unless the turn's own Stop hook came
-// via hook and reported both.
+// stop, at the message's last entry, unless the session's hooks came via
+// hook by then, whose Stop reports both.
 func (l *logLine) resolveFinal() {
 	f := l.f
 	fin := f.pend.final
@@ -631,20 +716,20 @@ func (l *logLine) resolveFinal() {
 	if !fin.continued {
 		f.st.Running = false
 	}
-	if s := l.a.sessions[fin.session]; s != nil && s.stoppedNative(fin.turn) {
+	if l.a.native(fin.session, fin.env.T) {
 		return
 	}
 	key := l.a.keys.Turn(fin.session, fin.turn)
 	reason := event.StopEndTurn
 	if fin.text != "" {
 		o := fin.out
-		l.add(fin.env, &event.AgentOutput{TurnKey: key, Words: o.words, CodeLines: o.codeLines, IsFinal: true,
-			AsksQuestion: o.asks, OffersOptions: o.offers}, []byte(fin.text))
+		l.add(logKey(fin.at, "final"), fin.env, &event.AgentOutput{TurnKey: key, Words: o.words, CodeLines: o.codeLines,
+			IsFinal: true, AsksQuestion: o.asks, OffersOptions: o.offers}, []byte(fin.text))
 		if o.asks {
 			reason = event.StopQuestion
 		}
 	}
-	l.add(fin.env, &event.AgentStop{TurnKey: key, StopReason: reason, StopHookActive: fin.active}, nil)
+	l.add(logKey(fin.at, "stop"), fin.env, &event.AgentStop{TurnKey: key, StopReason: reason, StopHookActive: fin.active}, nil)
 }
 
 // attachment reads a /goal verdict: one that finds the goal unmet makes
@@ -667,7 +752,8 @@ func (l *logLine) attachment(e *entry) {
 // anchor, which SM 1.2 fills from it (E-cc-queued-turn). Scheduled
 // prompts and task notifications are queued too, while no turn runs, and a
 // task notification can be queued during one: rule 3 makes it a
-// subagent's. A hooked session's queued messages are its hooks' records.
+// subagent's. In a hooked session the hook reported the message too, as it
+// was queued, and pkg/score takes the two for one corroborated act.
 func (l *logLine) queued(e *entry, sid string) {
 	switch e.Operation {
 	case "enqueue":
@@ -679,11 +765,12 @@ func (l *logLine) queued(e *entry, sid string) {
 	}
 	f := l.f
 	text := string(e.Content)
-	if sid == "" || e.t == 0 || !f.st.Running || f.st.Turn == "" || l.a.hooked(sid) ||
+	if sid == "" || e.t == 0 || !f.st.Running || f.st.Turn == "" ||
 		strings.HasPrefix(strings.TrimLeft(text, " \t\r\n"), taskNotification) {
 		return
 	}
-	l.add(l.env(e.t, sid), &event.AgentQueue{TurnKey: l.a.keys.Turn(sid, f.st.Turn), LenChars: utf8.RuneCountInString(text)}, nil)
+	l.add(l.key("queue"), l.env(e.t, sid), &event.AgentQueue{TurnKey: l.a.keys.Turn(sid, f.st.Turn),
+		LenChars: utf8.RuneCountInString(text)}, nil)
 }
 
 // pendTool holds a tool use until its result comes, dropping the oldest
@@ -708,9 +795,11 @@ func (f *txFile) takeTool(id string) (pendingTool, bool) {
 }
 
 // toolResult writes the agent.tool of a tool use whose result entry e
-// holds: from e's toolUseResult, as AD2 reads a PostToolUse hook's
-// tool_response (tool), with the call's span from its use to its result.
-func (l *logLine) toolResult(e *entry, sid string, p msgPart) {
+// holds, as its i-th part: from e's toolUseResult, as AD2 reads a
+// PostToolUse hook's tool_response (tool), with the call's span from its
+// use to its result. A call the person approved waited for them in between,
+// which the transcript doesn't date, so its span starts at its result.
+func (l *logLine) toolResult(e *entry, sid string, i int, p msgPart) {
 	pt, ok := l.f.takeTool(p.ToolUseID)
 	if !ok || sid == "" || e.t == 0 {
 		return
@@ -719,13 +808,15 @@ func (l *logLine) toolResult(e *entry, sid string, p msgPart) {
 		// Refused before it ran, so no tool ran.
 		return
 	}
-	if l.a.hooked(sid) {
-		if s := l.a.sessions[sid]; s != nil && s.postedNative(p.ToolUseID) {
-			return
-		}
+	if l.a.native(sid, e.t) && !p.IsError && contains(hookedTools, pt.name) {
+		// The session's PostToolUse hook reports the call.
+		return
+	}
+	if s := l.a.sessions[sid]; s != nil && s.postedNative(p.ToolUseID) {
+		return
 	}
 	t := &event.AgentTool{ToolClass: event.ToolOther, TStart: e.t, TEnd: e.t}
-	if pt.t > 0 && pt.t <= e.t {
+	if pt.t > 0 && pt.t <= e.t && !strings.HasPrefix(e.PermissionDecision.Source, "user_") {
 		t.TStart = pt.t
 	}
 	kit := toolKit{feat: l.a.opts.Features, root: l.root, perr: l.perr}
@@ -767,7 +858,7 @@ func (l *logLine) toolResult(e *entry, sid string, p msgPart) {
 		// person reads (SM 2.4), as for a hook call with agent_id.
 		t.VisibleOutputLines = 0
 	}
-	rec := l.add(l.env(e.t, sid), t, nil)
+	rec := l.add(l.key("tool"+strconv.Itoa(i)), l.env(e.t, sid), t, nil)
 	if r != nil {
 		rec.Edits, rec.Command = r.edits, r.command
 	}
@@ -780,7 +871,8 @@ func (l *logLine) toolResult(e *entry, sid string, p msgPart) {
 
 // fileFor returns what the reader remembers of file key, making it, and
 // marks it read from now. Past maxLogFiles it forgets the file read from
-// least recently.
+// least recently that holds nothing back, or else the one read from least
+// recently.
 func (a *Adapter) fileFor(key string) *txFile {
 	a.clock++
 	f := a.files[key]
@@ -788,7 +880,8 @@ func (a *Adapter) fileFor(key string) *txFile {
 		if len(a.files) >= maxLogFiles {
 			var oldest *txFile
 			for _, o := range a.files {
-				if oldest == nil || o.seen < oldest.seen {
+				if oldest == nil || o.pend.empty() && !oldest.pend.empty() ||
+					o.pend.empty() == oldest.pend.empty() && o.seen < oldest.seen {
 					oldest = o
 				}
 			}
@@ -862,23 +955,6 @@ func (a *Adapter) ForgetLog(file string) {
 	defer a.mu.Unlock()
 	delete(a.files, file)
 }
-
-// stopNative records that turn id's Stop came via hook, keeping the
-// maxStops turns named last.
-func (s *session) stopNative(id string) {
-	if contains(s.stops, id) {
-		return
-	}
-	s.stops = append(s.stops, id)
-	if len(s.stops) > maxStops {
-		s.stops = s.stops[1:]
-	}
-}
-
-// stoppedNative reports whether a via hook Stop of turn id came: a
-// transcript's copy of the turn's final message and stop would count them
-// twice (logLine.resolveFinal).
-func (s *session) stoppedNative(id string) bool { return contains(s.stops, id) }
 
 // learn records that turn id began at t, which a transcript's queued
 // pickup says and no hook call of the turn's says before the turn's own

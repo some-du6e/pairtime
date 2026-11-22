@@ -283,6 +283,9 @@ type adapterHost struct {
 	logWait   bool
 	logTracks uint64
 	logParked int
+	// logRefused says a step that couldn't write to the ledger answered
+	// batches with none taken (refuseLogs).
+	logRefused bool
 }
 
 // adapterKeys are the keys the adapters make records with, derived from
@@ -1030,9 +1033,11 @@ func (h *adapterHost) step(last bool) {
 	if !ready {
 		h.keep(h.hold(batch))
 		h.donePending(false)
+		h.refuseLogs()
 		return
 	}
 	if h.writerDown() {
+		h.refuseLogs()
 		// Nothing goes to the ledger until the next start's Open recovers
 		// it: the calls that wait for their folders, then these, wait for
 		// that start in held.jsonl, in the order they came.
@@ -1057,10 +1062,13 @@ func (h *adapterHost) step(last bool) {
 		h.admit(d, false, last)
 	}
 	h.holdBackNow() // the calls the writer stopped under, if it did
-	if h.replayed && !last {
+	switch {
+	case h.replayed && !last:
 		// After the hook calls before them, so a session's hooks reach its
 		// adapter before its log lines (logs.go).
 		h.takeLogs()
+	case !last:
+		h.refuseLogs()
 	}
 	// Read again: the calls parsed above can have made a save due.
 	h.mu.Lock()

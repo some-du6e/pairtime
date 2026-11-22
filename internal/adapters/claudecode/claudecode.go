@@ -255,11 +255,22 @@ type session struct {
 	// the PostToolUse calls that may answer one, oldest first (Decide).
 	requests []*request
 	posts    []post
-	// stops are the turns whose Stop or StopFailure came via hook, oldest
-	// first, which a transcript's copy of their last message and stop
-	// would count twice (stopNative).
-	stops []string
-	seen  uint64
+	// nativeAt is the hook stamp of the session's first session.start
+	// with via hook, in Unix ms, set with hookStart: from then on its hooks
+	// report its stops and tool calls, and a transcript's copies of those
+	// would count them twice (logparse.go). Memory saved before it existed
+	// has 0, the session's start.
+	nativeAt int64
+	seen     uint64
+}
+
+// markNative records that a session.start with via hook was made for the
+// session, by a call made at t.
+func (s *session) markNative(t int64) {
+	if !s.hookStart || t < s.nativeAt {
+		s.nativeAt = t
+	}
+	s.hookStart = true
 }
 
 // sessionFor returns the session with Claude Code's id, making it, and

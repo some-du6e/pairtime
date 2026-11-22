@@ -47,6 +47,11 @@ type entry struct {
 	// text Claude Code put in its place, such as "User rejected tool use".
 	ToolUseResult  toolResult `json:"toolUseResult"`
 	ToolDenialKind string     `json:"toolDenialKind"`
+	// PermissionDecision says who let a tool call run: config, a hook, or
+	// the person (user_temporary, user_permanent).
+	PermissionDecision struct {
+		Source string `json:"source"`
+	} `json:"permissionDecision"`
 	// Operation and Content are a queue-operation's: enqueue, dequeue,
 	// remove or popAll, and the message it queues.
 	Operation  string      `json:"operation"`

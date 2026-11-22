@@ -199,6 +199,13 @@ func (d *deriver) eventAnchors() {
 	// that close, since a person takes at least that long over each (SM
 	// 2.3).
 	perms := map[string][]actKey{}
+	// queues holds each session's queued-message groups. A hook and a log
+	// reader report a queued message apart, the hook as the person queues
+	// it and the transcript's enqueue a few milliseconds later: a record of
+	// the same turn within TRACK_LOG_MATCH_S of a group, through a code
+	// path the group has no record from, is that message (E-cc-queued-turn).
+	// So two messages one hook reported stay two.
+	queues := map[string][]actKey{}
 	for i, e := range d.recs {
 		var k actKey
 		switch p := e.Data.(type) {
@@ -228,10 +235,21 @@ func (d *deriver) eventAnchors() {
 				}
 			}
 		}
+		if k.kind == event.KindAgentQueue {
+			for _, g := range queues[k.sess] {
+				if g.key == k.key && absDiff(g.from, k.from) <= d.r.trackLogMatch && !d.hasVia(groups[g], e.Via) {
+					k = g
+					break
+				}
+			}
+		}
 		if _, ok := groups[k]; !ok {
 			order = append(order, k)
-			if k.kind == event.KindAgentPermission {
+			switch k.kind {
+			case event.KindAgentPermission:
 				perms[k.sess] = append(perms[k.sess], k)
+			case event.KindAgentQueue:
+				queues[k.sess] = append(queues[k.sess], k)
 			}
 		}
 		groups[k] = append(groups[k], i)
@@ -246,6 +264,16 @@ func (d *deriver) eventAnchors() {
 		}
 		d.harnessAnchor(best, pos)
 	}
+}
+
+// hasVia reports whether any of the records at pos came via v.
+func (d *deriver) hasVia(pos []int, v event.Via) bool {
+	for _, i := range pos {
+		if d.recs[i].Via == v {
+			return true
+		}
+	}
+	return false
 }
 
 // absDiff returns |a - b|.

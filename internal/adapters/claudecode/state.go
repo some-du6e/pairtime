@@ -53,11 +53,12 @@ type savedFile struct {
 }
 
 type savedLogSession struct {
-	ID      string `json:"id"`
-	Token   string `json:"token,omitempty"`
-	Started bool   `json:"started,omitempty"`
-	Hooked  bool   `json:"hooked,omitempty"`
-	Seen    uint64 `json:"seen"`
+	ID       string `json:"id"`
+	Token    string `json:"token,omitempty"`
+	Started  bool   `json:"started,omitempty"`
+	Reported bool   `json:"reported,omitempty"`
+	NativeAt int64  `json:"native_at,omitempty"`
+	Seen     uint64 `json:"seen"`
 }
 
 type savedSession struct {
@@ -73,9 +74,10 @@ type savedSession struct {
 	Crons    []savedCron      `json:"crons,omitempty"`
 	Requests []savedRequest   `json:"requests,omitempty"`
 	Posts    []savedPost      `json:"posts,omitempty"`
-	// Stops are the turns whose Stop came via hook (session.stops).
-	Stops []string `json:"stops,omitempty"`
-	Seen  uint64   `json:"seen"`
+	// NativeAt is session.nativeAt; memory saved before it existed has
+	// none, and a session with HookStart is then native from its start.
+	NativeAt int64  `json:"native_at,omitempty"`
+	Seen     uint64 `json:"seen"`
 }
 
 type savedCron struct {
@@ -113,7 +115,8 @@ type savedPost struct {
 // which sessions have a session.start from the walk, the turn ids the
 // session's calls named and when each was first named, the scheduled
 // prompts each session's last stop listed, the permission requests held
-// for Decide, and which tool calls and stops came via hook. It keeps the
+// for Decide, which tool calls came via hook, and since when the session's
+// hooks are via hook. It keeps the
 // maxSavedSessions sessions heard from last, and of each the maxSavedTurns
 // turn ids named last. Of the transcript reader it keeps each file's state
 // where a restart delivers the file from again, which holds no content,
@@ -156,15 +159,29 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 		for _, p := range s.posts {
 			ss.Posts = append(ss.Posts, savedPost{T: p.t, ToolUseID: p.toolUseID, Tool: p.tool, Agent: p.agent, Native: p.native})
 		}
-		ss.Stops = slices.Clone(s.stops)
+		ss.NativeAt = s.nativeAt
 		st.Sessions = append(st.Sessions, ss)
 	}
 	files := make([]*txFile, 0, len(a.files))
 	for _, f := range a.files {
 		files = append(files, f)
 	}
-	slices.SortFunc(files, func(x, y *txFile) int { return cmp.Compare(y.seen, x.seen) })
-	for _, f := range files[:min(len(files), maxSavedFiles)] {
+	// A file whose state holds something back always goes, past the
+	// bound: without it a restart would start the file afresh in the
+	// middle of a turn. The rest go newest first.
+	slices.SortFunc(files, func(x, y *txFile) int {
+		if px, py := x.snapAt < x.at, y.snapAt < y.at; px != py {
+			if px {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Compare(y.seen, x.seen)
+	})
+	for i, f := range files {
+		if i >= maxSavedFiles && f.snapAt >= f.at {
+			break
+		}
 		st.Files = append(st.Files, savedFile{Key: f.key, At: f.snapAt, State: f.snap, Seen: f.seen})
 	}
 	logs := make([]*txSession, 0, len(a.logSessions))
@@ -173,7 +190,8 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 	}
 	slices.SortFunc(logs, func(x, y *txSession) int { return cmp.Compare(y.seen, x.seen) })
 	for _, s := range logs[:min(len(logs), maxSavedLogSessions)] {
-		st.LogSessions = append(st.LogSessions, savedLogSession{ID: s.id, Token: s.token, Started: s.started, Hooked: s.hooked, Seen: s.seen})
+		st.LogSessions = append(st.LogSessions, savedLogSession{ID: s.id, Token: s.token, Started: s.started,
+			Reported: s.reported, NativeAt: s.nativeAt, Seen: s.seen})
 	}
 	return json.Marshal(st)
 }
@@ -219,7 +237,9 @@ func (a *Adapter) LoadState(raw json.RawMessage) error {
 		for _, p := range ss.Posts[max(0, len(ss.Posts)-maxHeld):] {
 			s.posts = append(s.posts, post{t: p.T, toolUseID: p.ToolUseID, tool: p.Tool, agent: p.Agent, native: p.Native})
 		}
-		s.stops = slices.Clone(ss.Stops[max(0, len(ss.Stops)-maxStops):])
+		if ss.HookStart {
+			s.nativeAt = max(ss.NativeAt, 0)
+		}
 		sessions[ss.ID] = s
 		clock = max(clock, ss.Seen)
 	}
@@ -236,7 +256,8 @@ func (a *Adapter) LoadState(raw json.RawMessage) error {
 		if sl.ID == "" || logs[sl.ID] != nil || len(logs) >= maxLogSessions {
 			continue
 		}
-		logs[sl.ID] = &txSession{id: sl.ID, token: sl.Token, started: sl.Started, hooked: sl.Hooked, seen: sl.Seen}
+		logs[sl.ID] = &txSession{id: sl.ID, token: sl.Token, started: sl.Started, reported: sl.Reported,
+			nativeAt: max(sl.NativeAt, 0), seen: sl.Seen}
 		clock = max(clock, sl.Seen)
 	}
 	a.mu.Lock()

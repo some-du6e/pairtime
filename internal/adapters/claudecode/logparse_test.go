@@ -112,12 +112,18 @@ func sessionFiles(files map[string][]txLine) []string {
 }
 
 // logBase is the agent's reading of the clock when it read the lines, which
-// a log record's mono counts back from.
-const logBase = 1_795_200_000_000
+// a log record's mono counts back from: a day after the capture, as for a
+// lookback.
+const logBase = 1_795_280_000_000
 
 func logRaw(l txLine, idle, replay bool) adapters.RawRecord {
+	return logRawAt(l, idle, replay, logBase)
+}
+
+// logRawAt is logRaw for a line the agent read at Unix ms at.
+func logRawAt(l txLine, idle, replay bool, at int64) adapters.RawRecord {
 	raw := adapters.RawRecord{Source: adapters.SourceLog, Payload: l.text,
-		Arrival: adapters.Arrival{Via: event.ViaLog, T: logBase, Mono: 10_000_000, BootID: "replay"},
+		Arrival: adapters.Arrival{Via: event.ViaLog, T: at, Mono: 10_000_000, BootID: "replay"},
 		Log:     &adapters.LogLine{File: l.file, Path: "/home/capture/" + l.file, Offset: l.offset, End: l.end, Replay: replay}}
 	if idle {
 		raw.Payload = nil
@@ -188,9 +194,10 @@ type step struct {
 }
 
 // readWithHooks replays the capture as the agent takes it in live: every
-// hook call, delivered as way says, and every transcript line, in the order
-// they happened, a hook call before a line of the same moment. It returns
-// the hooks' records and the transcripts' apart.
+// hook call, delivered as way says, and every transcript line, read 50 ms
+// after it was written, in the order they happened, a hook call before a
+// line of the same moment. It returns the hooks' records and the
+// transcripts' apart.
 func readWithHooks(t *testing.T, way adapters.Delivery) (hooks, logs []adapters.Record) {
 	t.Helper()
 	calls := readCalls(t)
@@ -228,7 +235,7 @@ func readWithHooks(t *testing.T, way adapters.Delivery) (hooks, logs []adapters.
 			hooks = append(hooks, recs...)
 			continue
 		}
-		recs, err := a.Parse(logRaw(*s.line, s.idle, false))
+		recs, err := a.Parse(logRawAt(*s.line, s.idle, false, s.at.UnixMilli()+50))
 		if err != nil {
 			t.Errorf("%s at %d: %v", s.line.file, s.line.offset, err)
 		}
@@ -377,7 +384,10 @@ func TestTranscriptMatchesHooks(t *testing.T) {
 			for i := range ht {
 				hd, ld := *ht[i].Event.Data.(*event.AgentTool), *lt[i].Event.Data.(*event.AgentTool)
 				// The spans come from different clocks: the hook's from its
-				// arrival less duration_ms, the transcript's from its entries.
+				// arrival less duration_ms, the transcript's from its
+				// entries, and for a call the person approved, which waited
+				// for them, from its result alone. Every call of the capture
+				// ran under 5 s.
 				if !within(hd.TStart, ld.TStart, cc1Skew) || !within(hd.TEnd, ld.TEnd, cc1Skew) || !within(ht[i].Event.T, lt[i].Event.T, cc1Skew) {
 					t.Errorf("tool %d: hook span %d-%d, transcript %d-%d", i, hd.TStart, hd.TEnd, ld.TStart, ld.TEnd)
 				}
@@ -663,12 +673,13 @@ func TestTranscriptScheduledMarks(t *testing.T) {
 // TestTranscriptWithHooks checks that a transcript read beside its
 // session's hooks counts nothing twice, since pkg/score sums every
 // agent.output and agent.tool of a turn: with every hook via hook it
-// writes each prompt again, as CC1 needs, the interrupt, the text the
-// hooks don't see and the tools they don't, but no session.start, no
-// agent.queue, no final output or stop, and no call a hook reported. With
-// hooks only the spool delivered, which the scorer leaves out of a session
-// a log reader covers (DESIGN 5.2), the transcript's copies of those are
-// the ones that count, and it writes them.
+// writes each prompt and the queued message again, which pkg/score takes
+// with the hook's for one act and CC1 needs, the interrupt, the text the
+// hooks don't see and the tools they don't, but no session.start, no final
+// output or stop, and no Edit, Write or Bash call. With hooks only the spool
+// delivered, which the scorer leaves out of a session a log reader covers
+// (DESIGN 5.2), the transcript's copies of those are the ones that count,
+// and it writes them.
 func TestTranscriptWithHooks(t *testing.T) {
 	alone := readAlone(t)
 	hooks, logs := readWithHooks(t, adapters.Walked)
@@ -711,7 +722,7 @@ func TestTranscriptWithHooks(t *testing.T) {
 		{"no final output beside a via hook Stop", logs, final, 0},
 		{"no stop beside a via hook Stop", logs, isKind(event.KindAgentStop), 0},
 		{"no session.start", logs, isKind(event.KindSessionStart), 0},
-		{"no agent.queue beside the hook's", logs, isKind(event.KindAgentQueue), 0},
+		{"the queued message, as when it read alone", logs, isKind(event.KindAgentQueue), count(alone, isKind(event.KindAgentQueue))},
 		{"no Edit, Write or Bash call a via hook PostToolUse reported", logs, hookTool, 0},
 		{"the text the Stop hook doesn't carry, as when it read alone", logs, nonFinal, count(alone, nonFinal)},
 		{"the tools no hook reports, as when it read alone", logs, otherTool, count(alone, otherTool)},
