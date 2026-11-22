@@ -341,8 +341,8 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 	if !ll.Idle && !ll.TooLong && ll.Entry == nil && ll.DecodeErr == nil {
 		ll.Entry, ll.DecodeErr = lr.DecodeLog(line.Bytes)
 	}
-	now := time.Now() // with its monotonic reading, which this run's clock needs
-	raw := adapters.RawRecord{Source: adapters.SourceLog, Payload: line.Bytes, Log: &ll, Arrival: logArrival(now, now)}
+	wall, run := logRead()
+	raw := adapters.RawRecord{Source: adapters.SourceLog, Payload: line.Bytes, Log: &ll, Arrival: logArrival(wall, run)}
 	if _, ok := lr.LogResume(ll.File); !ok && ll.Offset > 0 && !ll.Idle && !line.Fresh {
 		// The adapter has no memory of a file the tailers resume in its
 		// middle, as after a restore made it forget, or it forgot a file
@@ -430,6 +430,14 @@ func (h *adapterHost) hint(c hostCall) {
 			t.Hint(c.ad.Name(), p, root)
 		}
 	}
+}
+
+// logRead is when takeLine reads a line, by the wall clock and by this
+// run's clock: time.Now's, whose monotonic reading the run's clock needs.
+// A test gives the two apart, as a suspend sets them apart.
+var logRead = func() (wall, run time.Time) {
+	now := time.Now()
+	return now, now
 }
 
 // logArrival is a log line's arrival, read at wall by the wall clock and at

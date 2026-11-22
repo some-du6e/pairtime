@@ -61,7 +61,10 @@ const (
 	ReasonAbsent Reason = "X.absent"
 	// ReasonOtherFocus is input to an app outside the project.
 	ReasonOtherFocus Reason = "X.other_focus"
-	// ReasonAmbiguous is focus that couldn't be resolved to one project.
+	// ReasonAmbiguous is focus that couldn't be resolved to one project
+	// (SM 3.2), or a slot before the client's first os.focus record. A slot
+	// whose focus is unknown is never ambiguous: every project may use it,
+	// and its uncredited seconds take another code (SM 2.5, 5.2).
 	ReasonAmbiguous Reason = "X.ambiguous"
 	// ReasonNoAnchor is present and focused, but no window covered the
 	// second. A mouse jiggler on an open terminal ends up here.

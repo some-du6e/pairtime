@@ -136,16 +136,20 @@ const (
 	// conditions; present by OS input; with an anchor backed by keyboard
 	// input (input_keys) that arrived via hook, log, shell, git or editor,
 	// or a track, plugin or bridge anchor with keyboard input in the host
-	// window in the 10 s before it.
+	// window in the 10 s before it; and with focus known (SM 2.5).
 	EvidenceA Evidence = "A"
 	// EvidenceB is witnessed, or offline within D6's conditions; present by
 	// OS input with no keyboard-specific signal (input_any only); with an
-	// anchor that arrived via hook, log, shell, git or editor.
+	// anchor that arrived via hook, log, shell, git or editor; and with
+	// focus known, as for A.
 	EvidenceB Evidence = "B"
 	// EvidenceC is everything else: backfilled and lookback minutes, track,
 	// plugin and bridge anchors without keyboard input in the host window
-	// in the 10 s before them, editor_unverified anchors, and offline
-	// minutes beyond the cap or without the forge push.
+	// in the 10 s before them, editor_unverified anchors, offline minutes
+	// beyond the cap or without the forge push, and seconds credited where
+	// focus was unknown (SM 2.5): in a slot whose focus is unknown, or from
+	// an anchor whose focus test passed only because the window in front
+	// was unknown. Those carry LabelFocusUnknown.
 	EvidenceC Evidence = "C"
 )
 
@@ -154,9 +158,10 @@ var evidences = enum[Evidence]{values: []Evidence{EvidenceA, EvidenceB, Evidence
 // Evidences returns the evidence levels, A first.
 func Evidences() []Evidence { return slices.Clone(evidences.values) }
 
-// Label is a provenance label carried beside an evidence level. Labels
-// never change a level (DESIGN 6.4). DESIGN 6.4's sixth label,
-// editor_typing, isn't in v1 (DESIGN 5.11, 12 JB 3).
+// Label is a label carried beside an evidence level: where the credit came
+// from (a side door, the typing module, a VM), or, for focus_unknown, why
+// it is level C. Labels never change a level (DESIGN 6.4). DESIGN 6.4's
+// editor_typing isn't in v1 (DESIGN 5.11, 12 JB 3).
 type Label string
 
 const (
@@ -174,20 +179,28 @@ const (
 	// LabelVM marks an anchor scored on a machine labeled as a VM, where the
 	// typing module alone can't make it level A (DESIGN 6.2 D17).
 	LabelVM Label = "vm"
+	// LabelFocusUnknown marks credit that is level C because the window in
+	// front was unknown (SM 2.5): a second credited in a slot whose focus is
+	// unknown, or an anchor whose focus test passed only through unknown
+	// focus, and the seconds credited from it.
+	LabelFocusUnknown Label = "focus_unknown"
 )
 
 var (
 	// anchorLabels are the labels an anchor may carry.
 	anchorLabels = enum[Label]{values: []Label{
-		LabelViaTrack, LabelViaPlugin, LabelViaBridge, LabelTypingModule, LabelVM,
+		LabelViaTrack, LabelViaPlugin, LabelViaBridge, LabelTypingModule, LabelVM, LabelFocusUnknown,
 	}}
-	// slotLabels are the side-door labels, the ones a minute bucket's slot
-	// carries to tier 1 (DESIGN 4.1 E-6).
-	slotLabels = enum[Label]{values: []Label{LabelViaTrack, LabelViaPlugin, LabelViaBridge}}
+	// slotLabels are the labels a minute bucket's slot carries to tier 1:
+	// the side-door labels (DESIGN 4.1 E-6), then focus_unknown (SM 2.5).
+	slotLabels = enum[Label]{values: []Label{LabelViaTrack, LabelViaPlugin, LabelViaBridge, LabelFocusUnknown}}
+	// sideDoorLabels are the labels only an anchor that arrived through its
+	// side door carries (sideDoorLabel).
+	sideDoorLabels = enum[Label]{values: []Label{LabelViaTrack, LabelViaPlugin, LabelViaBridge}}
 )
 
-// SlotLabels returns the side-door labels a minute bucket's slot may
-// carry, in the order a slot lists them.
+// SlotLabels returns the labels a minute bucket's slot may carry, in the
+// order a slot lists them: the side-door labels, then focus_unknown.
 func SlotLabels() []Label { return slices.Clone(slotLabels.values) }
 
 // corroboratingVias are the vias an anchor can arrive by and still be
@@ -305,7 +318,9 @@ type Slot struct {
 	InputKeys *bool    `json:"input_keys"`
 	Present   Presence `json:"present"`
 	// FocusClass and FocusProject describe the app that held focus longest
-	// in the slot and the project it resolves to.
+	// in the slot and the project it resolves to. A slot whose focus is
+	// unknown (AppUnknown) has no project: every project may use it, at
+	// level C (SM 2.5).
 	FocusClass   AppClass `json:"focus_class"`
 	FocusProject string   `json:"focus_project,omitempty"`
 	Asleep       bool     `json:"asleep"`
@@ -328,6 +343,9 @@ func (s Slot) Validate() error {
 	}
 	checkEnum(c, "focus_class", appClasses, s.FocusClass)
 	c.optKey("focus_project", s.FocusProject)
+	if s.FocusClass == AppUnknown && s.FocusProject != "" {
+		c.addf("focus_project", "is set, but focus_class is %q; a slot whose focus is unknown resolves to no project (SM 2.5)", AppUnknown)
+	}
 	return c.err()
 }
 
@@ -421,7 +439,9 @@ type Anchor struct {
 	Corroborated bool `json:"corroborated"`
 	// Labels ride along with the anchor's level and never change it
 	// (DESIGN 6.4). A track, plugin or bridge anchor always carries its
-	// via_* label; no other anchor carries one.
+	// via_* label; no other anchor carries one. An anchor of any via
+	// carries focus_unknown when its focus test passed only because the
+	// window in front was unknown, which makes it level C (SM 2.5).
 	Labels []Label `json:"labels,omitempty"`
 }
 
@@ -447,7 +467,7 @@ func (a Anchor) Validate() error {
 		c.addf("labels", "missing %q; a %s anchor always carries it", want, a.Via)
 	}
 	for _, l := range a.Labels {
-		if slotLabels.has(l) && l != want {
+		if sideDoorLabels.has(l) && l != want {
 			c.addf("labels", "has %q, but the anchor arrived via %q", l, a.Via)
 		}
 	}
@@ -579,10 +599,14 @@ type BucketSlot struct {
 	Why  Reason   `json:"why,omitempty"`
 	Kind Activity `json:"kind,omitempty"`
 	Ev   Evidence `json:"ev,omitempty"`
-	// Lbl lists the side-door labels of the anchors behind the slot's
-	// credited seconds, so programs and reviewers see which minutes rest
-	// on a side door (DESIGN 4.1 E-6): via_track, via_plugin and
-	// via_bridge, each at most once and in that order.
+	// Lbl lists the labels of the slot's credited seconds: the side-door
+	// labels of the anchors behind them, so programs and reviewers see
+	// which minutes rest on a side door (DESIGN 4.1 E-6), and focus_unknown
+	// when some of them are level C because the window in front was
+	// unknown (SM 2.5): via_track, via_plugin, via_bridge and
+	// focus_unknown, each at most once and in that order. A slot labeled
+	// focus_unknown is level C, since a slot claims no more than its
+	// weakest second (DESIGN 6.4).
 	Lbl []Label `json:"lbl,omitempty"`
 }
 
@@ -661,6 +685,11 @@ func (s BucketSlot) check(c *checker) {
 			c.addf("kind", "must be %q for reason %q, got %q", want, s.Why, s.Kind)
 		}
 		checkEnum(c, "ev", evidences, s.Ev)
+		// Every second credited where focus was unknown is level C, and a
+		// slot claims no more than its weakest second (SM 2.5, DESIGN 6.4).
+		if slices.Contains(s.Lbl, LabelFocusUnknown) && s.Ev != EvidenceC {
+			c.addf("ev", "must be %q in a slot labeled %q, whose weakest second is level C, got %q", EvidenceC, LabelFocusUnknown, s.Ev)
+		}
 		return
 	}
 	c.optKey("p", s.Project)

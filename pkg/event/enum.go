@@ -392,10 +392,15 @@ const (
 	AppChatApp  AppClass = "chat_app"
 	AppOther    AppClass = "other"
 	AppNone     AppClass = "none"
+	// AppUnknown is focus the client can't see: it can't tell which window
+	// is in front (SM 2.5). An os.focus record with it names no app, hosts
+	// no session and resolves to no project, and a slot it holds longest
+	// has no focus_project.
+	AppUnknown AppClass = "unknown"
 )
 
 var appClasses = enum[AppClass]{name: "app_class", values: []AppClass{
-	AppTerminal, AppEditor, AppAgentApp, AppBrowser, AppChatApp, AppOther, AppNone,
+	AppTerminal, AppEditor, AppAgentApp, AppBrowser, AppChatApp, AppOther, AppNone, AppUnknown,
 }}
 
 // PowerOp is a suspend, resume, lock or unlock (os.power).
