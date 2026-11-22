@@ -28,7 +28,8 @@
 //     noted a switch back online, or after a stretch end the agent saw, as
 //     at a start after a switch back no batch was sealed since or at a
 //     pairtime login the watch didn't hear (Options.Seen, Writer.NoteSeen),
-//     events by their own times too, with no seal since that read
+//     events by their own times too, or for lookback's by when the writer
+//     took them in (Input.Lookback), with no seal since that read
 //     config.toml as local-only (Batch.Back); and
 //     local_until, when config.toml was last known, or taken, to say
 //     local-only as the batch was sealed, with local_until_os, the same
