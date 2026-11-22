@@ -279,7 +279,7 @@ func (w *Watcher) Start() {
 	w.mu.Lock()
 	if err != nil {
 		w.noSource(failed, "the focus source didn't start: "+err.Error())
-		w.setProblem("source", fmt.Sprintf("focus changes go unrecorded, because %s didn't start: %v", w.opts.OS.Via, err))
+		w.setProblem("source", fmt.Sprintf("pairtime can't tell which window is in front, because %s didn't start: %v", w.opts.OS.Via, err))
 		w.mu.Unlock()
 		w.signal()
 		return
@@ -545,7 +545,7 @@ func (w *Watcher) changePending() bool {
 func (w *Watcher) table() (*platform.Table, error) {
 	procs, err := w.opts.OS.Read()
 	if err != nil {
-		w.setProblemLocked("table", fmt.Sprintf("couldn't read the process table, so focus changes go unrecorded: %v", err))
+		w.setProblemLocked("table", fmt.Sprintf("couldn't read the process table, so pairtime can't tell which window is in front: %v", err))
 		return nil, err
 	}
 	w.setProblemLocked("table", "")
