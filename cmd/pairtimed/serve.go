@@ -23,6 +23,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/ops"
 	"github.com/some-du6e/pairtime/internal/server/pages"
+	"github.com/some-du6e/pairtime/internal/server/projectnames"
 	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/rollup"
 	"github.com/some-du6e/pairtime/internal/server/store"
@@ -343,6 +344,13 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		SetZone: func(ctx context.Context, account, zone string) error {
 			return w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
 				return rollup.SetZone(ctx, tx, account, zone)
+			})
+		},
+		// "Hide this name": the website can hide a name the owner turned
+		// on, never set one (D-owner-names).
+		HideName: func(ctx context.Context, account, project string) error {
+			return w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+				return projectnames.Hide(ctx, tx, account, project)
 			})
 		},
 		SameOrigin: signIn.SameOrigin,

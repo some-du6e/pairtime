@@ -224,6 +224,9 @@ details td, details th { white-space: nowrap; }
 /* None of your time in a window: said quietly, not as a bold 0m. */
 .projects .none { display: block; color: var(--muted); }
 .projects tfoot th, .projects tfoot td { border-bottom: 0; padding-top: 0.75rem; }
+/* The button that hides a name its owner turned on (D-owner-names). */
+.hide { margin: 0.3rem 0 0; }
+.hide button { font-size: 0.8rem; font-weight: 500; padding: 0.2rem 0.55rem; }
 .segbar { display: flex; gap: 2px; height: 28px; margin: 1.1rem 0 1rem; }
 .segbar span { width: var(--f); min-width: 0; display: flex; align-items: center; padding: 0 0.35rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600; white-space: nowrap; }
 .lva { background: var(--lv-a); color: var(--on-lv-a); }

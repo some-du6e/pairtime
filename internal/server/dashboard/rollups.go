@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/projectnames"
 	"github.com/some-du6e/pairtime/internal/server/rollup"
 	"github.com/some-du6e/pairtime/pkg/projectname"
 )
@@ -51,6 +52,21 @@ func (r Rollups) View(ctx context.Context, account string, now time.Time) (View,
 	if err != nil {
 		return View{}, err
 	}
+	// The names the owner turned on, by device key (D-owner-names). A
+	// project is called by the name of its first key that has one.
+	byKey, err := projectnames.OfAccount(ctx, r.DB, account)
+	if err != nil {
+		return View{}, err
+	}
+	labels := make(map[string]string)
+	for id, ks := range keys {
+		for _, k := range ks {
+			if l := byKey[k]; l != "" {
+				labels[id] = l
+				break
+			}
+		}
+	}
 	// The codes are unique among all the account's projects, not only the
 	// month's, so a project's code doesn't change when others go quiet,
 	// and gets longer only when a new key clashes with it.
@@ -91,7 +107,7 @@ func (r Rollups) View(ctx context.Context, account string, now time.Time) (View,
 	}
 	return Build(Meta{
 		AsOf: now, TZ: name, Today: today.Format(DateLayout), Agent: AgentName,
-		Names: names, Codes: codes, Keys: keys,
+		Names: names, Codes: codes, Labels: labels, Keys: keys,
 		// TODO(WP-SV10): false once registration links the keys of one
 		// repo across devices.
 		SplitByDevice: true,

@@ -112,7 +112,7 @@
 <thead><tr><th>Project</th><th>Last 7 days</th><th>Last 30 days</th></tr></thead>
 <tbody>
 {{- range .Projects}}
-<tr><td{{with .Title}} title="{{.}}"{{end}}><span class="key {{.Color}}"></span>{{.Name}}</td><td>{{if .WeekNone}}<span class="none">{{.Week}}</span>{{else}}<strong>{{.Week}}</strong>{{end}} <span class="agent">{{$.AgentStart}} {{.WeekAgent}}</span></td><td>{{if .MonthNone}}<span class="none">{{.Month}}</span>{{else}}<strong>{{.Month}}</strong>{{end}} <span class="agent">{{$.AgentStart}} {{.MonthAgent}}</span></td></tr>
+<tr><td{{with .Title}} title="{{.}}"{{end}}><span class="key {{.Color}}"></span>{{.Name}}{{if and .Hide $.HidePath}}<form class="hide" method="post" action="{{$.HidePath}}"><input type="hidden" name="project" value="{{.ID}}"><button type="submit">Hide this name</button></form>{{end}}</td><td>{{if .WeekNone}}<span class="none">{{.Week}}</span>{{else}}<strong>{{.Week}}</strong>{{end}} <span class="agent">{{$.AgentStart}} {{.WeekAgent}}</span></td><td>{{if .MonthNone}}<span class="none">{{.Month}}</span>{{else}}<strong>{{.Month}}</strong>{{end}} <span class="agent">{{$.AgentStart}} {{.MonthAgent}}</span></td></tr>
 {{- end}}
 </tbody>
 <tfoot>
