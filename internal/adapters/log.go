@@ -24,8 +24,9 @@ type LogLine struct {
 	// what it remembers of the file afresh there, as for a file it hasn't
 	// read, or one the tailers found truncated or replaced.
 	Offset, End int64
-	// Replay says the adapter's records of this line went to the ledger
-	// before the agent's last stop: Parse only rebuilds its memory from it.
+	// Replay says Parse is to rebuild its memory from the line and make no
+	// record of it: the tailers handed it over before, after a restart or
+	// a Rewind, or found it again in a file that was replaced.
 	Replay bool
 	// Idle says this is no line, but the tailers' word that the file has
 	// had no new line for a while, at Offset, the end of what they read.

@@ -187,12 +187,19 @@ type txPending struct {
 	tools   []pendingTool
 	command *pendingCommand
 	final   *pendingFinal
-	start   *pendingStart
+	// starts are the session.starts that wait, in the order their entries
+	// came: one more for each change of the token.
+	starts []*pendingStart
 }
 
 func (p *txPending) empty() bool {
-	return len(p.tools) == 0 && p.command == nil && p.final == nil && p.start == nil
+	return len(p.tools) == 0 && p.command == nil && p.final == nil && len(p.starts) == 0
 }
+
+// maxPendingStarts bounds the session.starts of one file that wait: a
+// token that changes more often than that within startGrace waits for the
+// next entry that states it.
+const maxPendingStarts = 4
 
 // pendingTool is a tool use whose result hasn't come yet.
 type pendingTool struct {
@@ -213,9 +220,11 @@ type pendingCommand struct {
 // is the turn's last unless a later entry of the turn shows otherwise.
 type pendingFinal struct {
 	msg, turn, session string
-	// at is where the line holding its text starts, which names its
-	// records (adapters.Record.LogKey).
+	// at is where the line holding its text starts, and part the text's
+	// place in its message's content, which name its records
+	// (adapters.Record.LogKey).
 	at   int64
+	part int
 	env  event.Envelope
 	text string
 	out  output
@@ -431,6 +440,18 @@ func (a *Adapter) logSession(sid string) *txSession {
 	return ls
 }
 
+// noteNative copies the native cutoff of session s, which a hook call just
+// set, into the reader's memory of the session, so the reader keeps it
+// when the hook calls' memory of the session is gone, as after 256 others,
+// before the session's transcript is read. a.mu is held.
+func (a *Adapter) noteNative(s *session) {
+	ls := a.logSessionFor(s.id)
+	ls.reported = true
+	if ls.nativeAt == 0 || s.nativeAt < ls.nativeAt {
+		ls.nativeAt = max(s.nativeAt, 1)
+	}
+}
+
 // native reports whether session sid's hooks came via hook at t, when they
 // report its stops and tool calls themselves.
 func (a *Adapter) native(sid string, t int64) bool {
@@ -445,12 +466,23 @@ func (a *Adapter) native(sid string, t int64) bool {
 // in pend until startGrace after the entry, unless the entry is that old
 // already (resolveStart).
 func (l *logLine) sessionStart(e *entry, sid string) {
-	if e.Entrypoint == nil || e.IsSidechain || sid == "" || e.t == 0 || l.f.pend.start != nil {
+	if e.Entrypoint == nil || e.IsSidechain || sid == "" || e.t == 0 {
 		return
 	}
 	ls := l.a.logSession(sid)
+	if ls.reported {
+		return
+	}
+	// The session's token as of this entry: the last waiting start's, or
+	// the last one written.
 	tok := *e.Entrypoint
-	if ls.reported || ls.started && ls.token == tok {
+	started, last := ls.started, ls.token
+	for _, ps := range l.f.pend.starts {
+		if ps.session == sid {
+			started, last = true, ps.token
+		}
+	}
+	if started && last == tok || len(l.f.pend.starts) >= maxPendingStarts {
 		return
 	}
 	ep, known := tokenEntrypoint(tok)
@@ -458,7 +490,7 @@ func (l *logLine) sessionStart(e *entry, sid string) {
 		l.perr.Problem("an entrypoint token HS 3.3 doesn't list")
 	}
 	kind := event.StartStartup
-	if ls.started {
+	if started {
 		kind = event.StartResume
 	}
 	ps := &pendingStart{session: sid, at: l.raw.Log.Offset, env: l.env(e.t, sid), token: tok,
@@ -466,7 +498,7 @@ func (l *logLine) sessionStart(e *entry, sid string) {
 	if isKey(e.PermissionMode) {
 		ps.start.PermissionMode = e.PermissionMode
 	}
-	l.f.pend.start = ps
+	l.f.pend.starts = append(l.f.pend.starts, ps)
 	if !l.raw.Log.Replay {
 		// In a replay it waits for the lines after it: the time it went by
 		// is today's, which would write it there, where its record goes.
@@ -480,24 +512,25 @@ func (l *logLine) sessionStart(e *entry, sid string) {
 // before the entry, so it sorts before the entry's other records (pkg/score
 // orders records by time, then by when they were written).
 func (l *logLine) resolveStart() {
-	ps := l.f.pend.start
-	if ps == nil {
-		return
-	}
-	ls := l.a.logSession(ps.session)
-	switch {
-	case ls.reported:
-		l.f.pend.start = nil
-	case l.raw.Arrival.T-ps.env.T >= startGrace:
-		l.f.pend.start = nil
-		ls.started, ls.token = true, ps.token
-		env := ps.env
-		if l.raw.Log.Offset != ps.at || l.raw.Log.Idle {
-			env.T--
-			env.Mono = max(env.Mono-1, 0)
+	for len(l.f.pend.starts) > 0 {
+		ps := l.f.pend.starts[0]
+		ls := l.a.logSession(ps.session)
+		switch {
+		case ls.reported:
+		case l.raw.Arrival.T-ps.env.T >= startGrace:
+			ls.started, ls.token = true, ps.token
+			env := ps.env
+			if l.raw.Log.Offset != ps.at || l.raw.Log.Idle {
+				env.T--
+				env.Mono = max(env.Mono-1, 0)
+			}
+			st := ps.start
+			l.add(logKey(ps.at, "start"), env, &st, nil)
+		default:
+			// It waits, and the ones after it, in their order.
+			return
 		}
-		st := ps.start
-		l.add(logKey(ps.at, "start"), env, &st, nil)
+		l.f.pend.starts = l.f.pend.starts[1:]
 	}
 }
 
@@ -524,10 +557,12 @@ func (l *logLine) user(e *entry, sid string) {
 	}
 	text := m.Content.text()
 	switch {
+	case e.TurnOrigin != nil || e.PromptSource != nil:
+		// A prompt, whatever its text says: Claude Code labels no
+		// interrupt entry.
+		l.prompt(e, sid, text)
 	case isInterrupt(text):
 		l.interrupt(e, sid)
-	case e.TurnOrigin != nil || e.PromptSource != nil:
-		l.prompt(e, sid, text)
 	case e.PromptID != "":
 		if cmd, ok := commandText(text); ok {
 			// /goal's markup comes in an entry of its own, before the one
@@ -698,7 +733,7 @@ func (l *logLine) assistant(e *entry, sid string) {
 				continue
 			}
 			if final {
-				l.pendFinal(e, sid, m.ID, p.Text)
+				l.pendFinal(e, sid, m.ID, p.Text, i)
 			} else {
 				o := outputOf(p.Text)
 				l.add(l.key("output"+strconv.Itoa(i)), l.env(e.t, sid), &event.AgentOutput{TurnKey: l.a.keys.Turn(sid, f.st.Turn),
@@ -709,21 +744,21 @@ func (l *logLine) assistant(e *entry, sid string) {
 	if final && main && (f.pend.final == nil || f.pend.final.msg != m.ID) {
 		// The turn stops at this message, which has shown no text yet: a
 		// text block of it may follow.
-		l.pendFinal(e, sid, m.ID, "")
+		l.pendFinal(e, sid, m.ID, "", len(m.Content.Parts))
 	}
 }
 
 // pendFinal holds the end_turn message's text block until a later line
 // shows it is the turn's last. An earlier text block of the same message
 // isn't, and is written as output that isn't final.
-func (l *logLine) pendFinal(e *entry, sid, msg, text string) {
+func (l *logLine) pendFinal(e *entry, sid, msg, text string, part int) {
 	f := l.f
 	if old := f.pend.final; old != nil && old.msg == msg && old.text != "" && text != "" {
 		o := old.out
-		l.add(logKey(old.at, "output"), old.env, &event.AgentOutput{TurnKey: l.a.keys.Turn(old.session, old.turn),
+		l.add(logKey(old.at, "output"+strconv.Itoa(old.part)), old.env, &event.AgentOutput{TurnKey: l.a.keys.Turn(old.session, old.turn),
 			Words: o.words, CodeLines: o.codeLines, AsksQuestion: o.asks, OffersOptions: o.offers}, nil)
 	}
-	fin := &pendingFinal{msg: msg, turn: f.st.Turn, session: sid, at: l.raw.Log.Offset, env: l.env(e.t, sid), text: text,
+	fin := &pendingFinal{msg: msg, turn: f.st.Turn, session: sid, at: l.raw.Log.Offset, part: part, env: l.env(e.t, sid), text: text,
 		active: f.st.Blocked}
 	if text != "" {
 		fin.out = outputOf(text)

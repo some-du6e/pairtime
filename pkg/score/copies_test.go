@@ -28,6 +28,8 @@ func TestQueuedMessageCopies(t *testing.T) {
 			func(b *tl) { queued(b, 58_025, event.ViaLog); queued(b, 58_000, event.ViaHook) }, 1, true},
 		{"two messages a hook reported 3 s apart are two",
 			func(b *tl) { queued(b, 55_000, event.ViaHook); queued(b, 58_000, event.ViaHook) }, 2, false},
+		{"two messages a hook reported in the same millisecond are two",
+			func(b *tl) { queued(b, 58_000, event.ViaHook); queued(b, 58_000, event.ViaHook) }, 2, false},
 		{"copies further apart than TRACK_LOG_MATCH_S are two messages",
 			func(b *tl) { queued(b, 40_000, event.ViaHook); queued(b, 58_000, event.ViaLog) }, 2, false},
 	}

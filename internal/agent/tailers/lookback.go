@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 	"sync"
 	"time"
@@ -141,7 +140,7 @@ func ServeLookback(in io.Reader, out io.Writer, trim Trimmer) error {
 
 // serveFile writes the lines of one file of the job, and its end.
 func serveFile(i int, jf jobFile, enc *json.Encoder, trim Trimmer) error {
-	fh, err := os.Open(jf.Path)
+	fh, err := openLog(jf.Path)
 	if err != nil {
 		return enc.Encode(childLine{F: i, End: true, Gone: true})
 	}

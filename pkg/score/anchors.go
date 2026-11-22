@@ -181,6 +181,9 @@ type actKey struct {
 	sess     string
 	key      string
 	from, to int64
+	// n tells apart two queued messages of one turn and millisecond that
+	// one code path reported.
+	n int
 }
 
 // eventAnchors makes anchors of the human acts other than prompts (SM 2.3):
@@ -236,11 +239,15 @@ func (d *deriver) eventAnchors() {
 			}
 		}
 		if k.kind == event.KindAgentQueue {
+			matched := false
 			for _, g := range queues[k.sess] {
 				if g.key == k.key && absDiff(g.from, k.from) <= d.r.trackLogMatch && !d.hasVia(groups[g], e.Via) {
-					k = g
+					k, matched = g, true
 					break
 				}
+			}
+			for !matched && groups[k] != nil {
+				k.n++ // a message of the same moment the same path reported
 			}
 		}
 		if _, ok := groups[k]; !ok {
