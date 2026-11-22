@@ -393,7 +393,10 @@ func (p *OSPresence) check(c *checker) {
 	}
 }
 
-// OSFocus is os.focus: the foreground app changed.
+// OSFocus is os.focus: the foreground app changed, or the client can no
+// longer tell which window is in front. Then AppClass is AppUnknown and the
+// record has no other field; it holds until the next window report (SM
+// 2.5).
 type OSFocus struct {
 	AppClass AppClass `json:"app_class"`
 	// AppHash is a per-device hash of the focused app's identity.
@@ -413,6 +416,20 @@ func (p *OSFocus) check(c *checker) {
 	c.optKey("app_hash", p.AppHash)
 	c.keys("hosted_sessions", p.HostedSessions)
 	c.optKey("focus_project", p.FocusProject)
+	if p.AppClass != AppUnknown {
+		return
+	}
+	// An unknown record knows no window, so nothing can describe one. The
+	// values aren't echoed: app_hash is local.
+	if p.AppHash != "" {
+		c.addf("app_hash", "is set, but an %q record can't tell which app is in front, so it has none", AppUnknown)
+	}
+	if len(p.HostedSessions) > 0 {
+		c.addf("hosted_sessions", "is set, but an %q record can't tell which window is in front, so it hosts no session", AppUnknown)
+	}
+	if p.FocusProject != "" {
+		c.addf("focus_project", "is set, but an %q record can't tell which window is in front, so no project resolves from it", AppUnknown)
+	}
 }
 
 // OSPower is os.power: the machine suspended, resumed, locked or unlocked.
