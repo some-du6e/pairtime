@@ -449,7 +449,9 @@ func TestModesSeen(t *testing.T) {
 					t.Fatal("the config watch's first look didn't note the switch back online")
 				}
 			}
-			if b := sealOne(t, a, w, time.Now()); !b.Online || !b.Back {
+			// A millisecond after the note: one of the note's own millisecond
+			// counts as made before it.
+			if b := sealOne(t, a, w, time.Now().Add(time.Millisecond)); !b.Online || !b.Back {
 				t.Errorf("the batch after the switch back was sealed online %v, marked %v; want both", b.Online, b.Back)
 			}
 		}},
@@ -501,7 +503,7 @@ func TestModesSeen(t *testing.T) {
 				}
 			}
 			waited := sealNow(t, w, dirs.Ledger())
-			after := sealOne(t, a, w, time.Now())
+			after := sealOne(t, a, w, time.Now().Add(time.Millisecond))
 			if waited.Online || waited.Back || !after.Online || !after.Back {
 				t.Errorf("the queued record's batch sealed online %v, marked %v, and the next online %v, marked %v; want local-only, then online and marked",
 					waited.Online, waited.Back, after.Online, after.Back)

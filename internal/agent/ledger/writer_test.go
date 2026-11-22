@@ -897,7 +897,7 @@ func TestNoteMode(t *testing.T) {
 					o.Sealed = func(b Batch) { sealed <- b }
 					o.Waiting = func(before func(event.Envelope) bool) bool {
 						heldOld.Store(before(event.Envelope{T: testT + 60_000, Mono: osMono - 1000, BootID: osBoot}))
-						asked.Store(before(event.Envelope{T: testT - 1}) && !before(event.Envelope{T: testT}) &&
+						asked.Store(before(event.Envelope{T: testT - 1}) && !before(event.Envelope{T: testT + 1}) &&
 							before(event.Envelope{T: testT + 60_000, Mono: osMono - 1000, BootID: osBoot}) &&
 							!before(event.Envelope{T: testT - 1, Mono: osMono + 1000, BootID: osBoot}))
 						return waits.Load()
@@ -1199,7 +1199,10 @@ func TestRunClock(t *testing.T) {
 // the clock's time ("seen-ended"), or closes the writer and opens it again
 // with the same Seen, as the agent's next start does ("reopen").
 func TestNoteSeen(t *testing.T) {
-	ended := Seen{Ended: time.UnixMilli(testT)}
+	// ended is a stretch end a moment after the writer's clock, which reads
+	// testT throughout: one at testT itself isn't surely after a local-only
+	// take the writer made then.
+	ended := Seen{Ended: time.UnixMilli(testT + 1)}
 	cases := []struct {
 		name string
 		open Seen

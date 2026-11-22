@@ -358,7 +358,7 @@ func (b bounds) before(e event.Envelope) bool {
 		return true
 	}
 	for _, p := range b.prior {
-		if e.Mono > 0 && e.BootID == p.boot && e.Mono < p.os {
+		if e.Mono > 0 && e.BootID == p.boot && e.Mono <= p.os {
 			return true
 		}
 	}
@@ -458,7 +458,7 @@ func Open(opts Options) (*Writer, error) {
 		}
 		w.addPrior(m)
 	}
-	w.seenLocked(seen, w.momentNow())
+	w.seenLocked(seen, w.momentNow(), false)
 	// An event a crash left without a batch that was made before
 	// config.toml was last known to say local-only, as the newest seal
 	// frame recorded it or the agent saw it, is sealed local-only, as it
@@ -803,7 +803,7 @@ func (w *Writer) NoteSeen(s Seen) { w.NoteSeenThen(s, nil) }
 func (w *Writer) NoteSeenThen(s Seen, then func()) {
 	at := w.momentNow()
 	w.mu.Lock()
-	seal := w.seenLocked(s, at)
+	seal := w.seenLocked(s, at, false)
 	if then != nil {
 		then()
 	}
@@ -828,7 +828,7 @@ func (w *Writer) NoteSeenWhile(s Seen, online func() bool, then func()) {
 	} else {
 		s.Ended, s.Local = time.Time{}, true
 	}
-	seal := w.seenLocked(s, momentAt(now, stamp))
+	seal := w.seenLocked(s, momentAt(now, stamp), on)
 	if then != nil {
 		then()
 	}
@@ -856,7 +856,7 @@ func (w *Writer) NoteSeenWhile(s Seen, online func() bool, then func()) {
 // found a pairtime login it hadn't seen, was made in the stretch if it was
 // made before the end, so its batch is local-only, as Write would have
 // sealed it. w.mu is held.
-func (w *Writer) seenLocked(s Seen, at moment) bool {
+func (w *Writer) seenLocked(s Seen, at moment, sure bool) bool {
 	// A seal reading config.toml meanwhile reads it again, as after a note.
 	w.notes++
 	seal := false
@@ -868,10 +868,14 @@ func (w *Writer) seenLocked(s Seen, at moment) bool {
 		// Frames that recorded no moment leave only the newest batch's seal
 		// to tell an earlier run's end from one the writer never had.
 		sealedSince := s.Earlier && w.until.wall == 0 && w.until.os == 0 && w.sealed > ended.wall
-		// An end the agent read before the writer last took config.toml as
-		// local-only, as one seeSoon read before a seal's local-only read, ends
-		// nothing that came after that, and arms no mark for it.
-		newer := !sealedSince && !ended.earlierThan(w.localAt) && (ended.run > w.until.run ||
+		// An end that isn't surely after the writer's last local-only take,
+		// as one the agent read before a seal's local-only read, or one of
+		// the same millisecond, ends nothing that came after that take, and
+		// arms no mark for it: privacy wins what can't be told. sure is set
+		// for an end the writer read itself under the record lock, after
+		// every take it has (NoteSeenWhile).
+		after := sure || w.localAt == (moment{}) || w.localAt.earlierThan(ended)
+		newer := !sealedSince && after && (ended.run > w.until.run ||
 			ended.wall > w.until.wall || ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os)
 		was := w.until
 		if (w.local || w.seen) && newer {

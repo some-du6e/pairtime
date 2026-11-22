@@ -22,8 +22,10 @@ import (
 // while it waited can neither hide it, nor make an event made after the
 // moment count as made before.
 //
-// Each bound is exclusive: an event made at the moment itself was made
-// once config.toml said online. Zero means no bound by that clock. A
+// Each bound holds its own millisecond: the moment is taken after the
+// switch it ends, so an event of the same millisecond can't be told from
+// one made before it, and privacy wins what can't be told (#174's ruling).
+// Zero means no bound by that clock. A
 // moment an earlier run recorded, read back from disk, holds the bounds of
 // this run's start and, when it was recorded in another boot, of this
 // boot's (Writer.earlier): every event of this run, and every hook call of
@@ -105,9 +107,9 @@ func (m moment) earlierThan(n moment) bool {
 func (m moment) before(e event.Envelope) bool {
 	switch {
 	case m.run > 0 && e.BootID == runBoot:
-		return e.Mono < m.run
+		return e.Mono <= m.run
 	case m.os > 0 && e.Mono > 0 && e.BootID == m.boot:
-		return e.Mono < m.os
+		return e.Mono <= m.os
 	}
-	return e.T < m.wall
+	return e.T <= m.wall
 }
