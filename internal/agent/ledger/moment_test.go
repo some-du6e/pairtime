@@ -62,27 +62,60 @@ func TestMoment(t *testing.T) {
 	raises := []struct {
 		name    string
 		from, n moment
-		want    moment
+		// cur is the boot the writer runs in.
+		cur  string
+		want moment
 	}{
 		{"each clock moves on to the later reading",
-			moment{wall: 10, run: 20, os: 30, boot: boot}, moment{wall: 11, run: 19, os: 31, boot: boot},
+			moment{wall: 10, run: 20, os: 30, boot: boot}, moment{wall: 11, run: 19, os: 31, boot: boot}, boot,
 			moment{wall: 11, run: 20, os: 31, boot: boot}},
-		{"a reading of the OS's clock in another boot replaces the moment's, as the newer",
-			moment{wall: 10, os: 30, boot: boot}, moment{wall: 5, os: 2, boot: "b_new"},
+		{"a reading of the boot the writer runs in replaces another boot's, as the newest, whatever the wall clock says",
+			moment{wall: 10, os: 30, boot: boot}, moment{wall: 5, os: 2, boot: "b_new"}, "b_new",
 			moment{wall: 10, os: 2, boot: "b_new"}},
+		{"an older boot's reading, though later by the wall clock, doesn't replace one of the boot the writer runs in",
+			moment{wall: 10, os: 30, boot: boot}, moment{wall: 20, os: 7, boot: "b_old"}, boot,
+			moment{wall: 20, os: 30, boot: boot}},
+		{"another boot's reading later by the wall clock replaces one of a boot the writer doesn't run in either",
+			moment{wall: 10, os: 30, boot: "b_a"}, moment{wall: 20, os: 7, boot: "b_b"}, boot,
+			moment{wall: 20, os: 7, boot: "b_b"}},
+		{"another boot's reading earlier by the wall clock leaves the moment's, which is newer",
+			moment{wall: 20, os: 30, boot: "b_a"}, moment{wall: 10, os: 7, boot: "b_b"}, boot,
+			moment{wall: 20, os: 30, boot: "b_a"}},
 		{"an earlier moment with no reading of a clock leaves the moment's",
-			moment{wall: 10, run: 20, os: 30, boot: boot}, moment{wall: 5},
+			moment{wall: 10, run: 20, os: 30, boot: boot}, moment{wall: 5}, boot,
 			moment{wall: 10, run: 20, os: 30, boot: boot}},
 		{"a later moment with no reading of a clock drops the moment's, which is of an earlier time",
-			moment{wall: 10, run: 20, os: 30, boot: boot}, moment{wall: 20},
+			moment{wall: 10, run: 20, os: 30, boot: boot}, moment{wall: 20}, boot,
 			moment{wall: 20}},
 	}
 	for _, c := range raises {
 		t.Run(c.name, func(t *testing.T) {
 			got := c.from
-			got.raise(c.n)
+			got.raise(c.n, c.cur)
 			if got != c.want {
-				t.Errorf("raise(%+v) on %+v = %+v, want %+v", c.n, c.from, got, c.want)
+				t.Errorf("raise(%+v, %q) on %+v = %+v, want %+v", c.n, c.cur, c.from, got, c.want)
+			}
+		})
+	}
+
+	untils := []struct {
+		name string
+		sp   sealPayload
+		want moment
+	}{
+		{"a seal frame's moment by the OS's clock comes back with its boot",
+			sealPayload{LocalUntil: 10, LocalUntilOS: &untilOS{Mono: 7, Boot: boot}}, moment{wall: 10, os: 7, boot: boot}},
+		{"one with no reading of the OS's clock comes back by the wall clock alone",
+			sealPayload{LocalUntil: 10}, moment{wall: 10}},
+		{"one whose reading has no mono comes back by the wall clock alone",
+			sealPayload{LocalUntil: 10, LocalUntilOS: &untilOS{Boot: boot}}, moment{wall: 10}},
+		{"one whose reading names no boot comes back by the wall clock alone",
+			sealPayload{LocalUntil: 10, LocalUntilOS: &untilOS{Mono: 7}}, moment{wall: 10}},
+	}
+	for _, c := range untils {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.sp.until(); got != c.want {
+				t.Errorf("until() of %+v = %+v, want %+v", c.sp, got, c.want)
 			}
 		})
 	}
@@ -129,6 +162,37 @@ func TestMoment(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if got := m.madeBefore(c.e); got != c.want {
 				t.Errorf("madeBefore(%+v) = %v, want %v", c.e, got, c.want)
+			}
+		})
+	}
+}
+
+// TestEarlier checks the bounds a moment an earlier run recorded takes at
+// Open (Writer.earlier): every event of this run, and every hook call of
+// this boot when the moment was recorded in another boot, came after it.
+func TestEarlier(t *testing.T) {
+	const cur = "b_cur"
+	cases := []struct {
+		name string
+		// boot is the boot the writer runs in.
+		boot     string
+		in, want moment
+	}{
+		{"a moment of this boot holds this run's events from the run's start, and keeps its reading of the boot",
+			cur, moment{wall: 10, os: 7, boot: cur}, moment{wall: 10, run: 1, os: 7, boot: cur}},
+		{"a moment of another boot holds this boot's hook calls from the boot's start too",
+			cur, moment{wall: 10, os: 7, boot: "b_old"}, moment{wall: 10, run: 1, os: 1, boot: cur}},
+		{"a moment by the wall clock alone says nothing of its boot, so it holds this boot's hook calls by their t",
+			cur, moment{wall: 10}, moment{wall: 10, run: 1}},
+		{"with no boot from the OS, a moment keeps another boot's reading",
+			"", moment{wall: 10, os: 7, boot: "b_old"}, moment{wall: 10, run: 1, os: 7, boot: "b_old"}},
+		{"no moment stays none", cur, moment{}, moment{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := &Writer{boot: c.boot}
+			if got := w.earlier(c.in); got != c.want {
+				t.Errorf("earlier(%+v) in boot %q = %+v, want %+v", c.in, c.boot, got, c.want)
 			}
 		})
 	}

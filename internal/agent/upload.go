@@ -69,7 +69,9 @@ func Linked(dirs home.Dirs) bool {
 // writer records it in each batch's seal frame, and batches sealed while
 // it says no never go, nor their minutes (D-local-gap), so a batch counts
 // as local-only exactly when nothing could have uploaded it. It reads one
-// small file, quick enough for a seal, and calls nothing of the writer.
+// small file, quick enough for a seal, which may read it under the lock
+// every record takes (ledger.Options.Online), and it takes no lock and
+// calls nothing of the writer.
 func (a *agent) online() bool {
 	cfg, _ := UploadConfig(a.dirs)
 	return string(cfg.Mode) == modeOnline
@@ -93,10 +95,12 @@ type modes struct {
 	// local is set while the newest thing seen said local-only, and ended
 	// is when the newest stretch seen ended, the moment the agent saw the
 	// file back online, by Go's clock with its monotonic reading and by the
-	// OS's (os), zero before any.
+	// OS's (os), zero before any. kept is set while ended is the one
+	// state.json kept from an earlier run (ledger.Seen.Earlier).
 	local bool
 	ended time.Time
 	os    clock.Stamp
+	kept  bool
 }
 
 // modesKey is what modes saw last, in state.json (modesState).
@@ -122,7 +126,7 @@ func (a *agent) seeLocked(online bool) bool {
 		return false
 	}
 	if online {
-		m.ended, m.os = time.Now(), clock.Now()
+		m.ended, m.os, m.kept = time.Now(), clock.Now(), false
 		// A hook call made just before, that went to the spool, comes
 		// within seconds.
 		a.drainSoon()
@@ -167,6 +171,7 @@ func (a *agent) startModes() {
 	}
 	a.modes.local, a.modes.ended = last.Local, last.Ended
 	a.modes.os = clock.Stamp{Mono: last.OSMono, BootID: last.OSBoot}
+	a.modes.kept = !last.Ended.IsZero()
 	if a.seeLocked(a.online()) {
 		a.keepLocked()
 	}
@@ -230,10 +235,12 @@ func (a *agent) seen() ledger.Seen {
 // comes after the link's time, which login takes before it writes
 // config.toml, and counts as seen. a.modes.mu is held.
 func (a *agent) seenLocked() ledger.Seen {
-	s := ledger.Seen{Local: a.modes.local, Ended: a.modes.ended, OS: a.modes.os}
+	s := ledger.Seen{Local: a.modes.local, Ended: a.modes.ended, OS: a.modes.os, Earlier: a.modes.kept}
 	if l, err := account.Load(a.dirs.Data); err == nil && !l.LinkedAt.IsZero() && s.Ended.Before(l.LinkedAt) {
-		// The OS's clock wasn't read then.
-		s.Ended, s.OS = l.LinkedAt.Add(time.Second), clock.Stamp{}
+		// The OS's clock wasn't read then, and the link may have come in
+		// this run, as while a locked keyring kept the ledger shut and the
+		// watch heard nothing.
+		s.Ended, s.OS, s.Earlier = l.LinkedAt.Add(time.Second), clock.Stamp{}, false
 	}
 	return s
 }

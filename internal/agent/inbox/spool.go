@@ -453,17 +453,24 @@ func retry(op func() error) error {
 // held as Scan began is read even when a drain takes the spool meanwhile,
 // and a file that is gone by the time Scan opens it was deleted by a drain
 // that had handed all of it over. Lines that aren't a message are passed
-// over, and so are files no drain reads: one set aside (.bad), one that
+// over, and so are files no drain reads: those of an inbox directory that
+// isn't this user's alone (privateDir), one set aside (.bad), one that
 // isn't this user's alone (privateFile), or one that can't be read, which
-// a drain sets aside in time. Scan writes nothing, so a drain can run
-// meanwhile.
-func Scan(dir string, limit int, each func(Message) bool) bool {
-	if scanFile(filepath.Join(dir, SpoolName), limit, each) {
-		return true
+// a drain sets aside in time. Scan writes nothing, and its opens let a
+// drain rename and delete the files meanwhile, Windows included
+// (openShared). A file that is there but can't be opened for a moment, as
+// while a drain renames it on Windows, may hold any message, so Scan stops
+// at it with its error once the tries a sender gets are over (busy).
+func Scan(dir string, limit int, each func(Message) bool) (bool, error) {
+	if privateDir(dir) != nil {
+		return false, nil
+	}
+	if found, err := scanFile(filepath.Join(dir, SpoolName), limit, each); found || err != nil {
+		return found, err
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	var names []string
 	for _, e := range entries {
@@ -473,31 +480,34 @@ func Scan(dir string, limit int, each func(Message) bool) bool {
 	}
 	slices.Sort(names)
 	for _, n := range names {
-		if scanFile(filepath.Join(dir, n), limit, each) {
-			return true
+		if found, err := scanFile(filepath.Join(dir, n), limit, each); found || err != nil {
+			return found, err
 		}
 	}
-	return false
+	return false, nil
 }
 
 // scanFile is Scan of the one file name.
-func scanFile(name string, limit int, each func(Message) bool) bool {
+func scanFile(name string, limit int, each func(Message) bool) (bool, error) {
 	if fi, err := os.Lstat(name); err != nil || !fi.Mode().IsRegular() {
-		return false
+		return false, nil
 	}
-	f, err := os.OpenFile(name, readFlags, 0)
+	f, err := openScan(name)
 	if err != nil {
-		return false
+		if busy(err) {
+			return false, fmt.Errorf("inbox: %s stayed busy: %w", filepath.Base(name), err)
+		}
+		return false, nil
 	}
 	defer f.Close()
 	if fi, err := f.Stat(); err != nil || privateFile(name, fi) != nil {
-		return false
+		return false, nil
 	}
 	r := bufio.NewReaderSize(f, 64<<10)
 	for n := 0; n < limit; {
 		line, long, err := readLine(r, MaxMessage)
 		if err != nil {
-			return false
+			return false, nil
 		}
 		if long || len(line) == 0 {
 			continue
@@ -508,10 +518,26 @@ func scanFile(name string, limit int, each func(Message) bool) bool {
 		}
 		n++
 		if each(m) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
+}
+
+// openScan opens a spool file for Scan, and tries again while another
+// process holds it for a moment, as openSpool does (busy).
+func openScan(name string) (*os.File, error) {
+	var err error
+	for i := range openTries {
+		var f *os.File
+		if f, err = openShared(name); err == nil || !busy(err) {
+			return f, err
+		}
+		if i < openTries-1 {
+			time.Sleep(openWait)
+		}
+	}
+	return nil, err
 }
 
 // taken lists the spool files that drains took, oldest first, and deletes

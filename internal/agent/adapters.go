@@ -1497,7 +1497,7 @@ func (h *adapterHost) parse(c hostCall) {
 	h.a.hooked.unignore(session)
 	due, refused := false, false
 	for _, r := range recs {
-		if !h.write(c.st, r) {
+		if !h.write(c.st, r, sentOf(c.d)) {
 			refused = true
 		}
 		switch r.Event.Kind() {
@@ -1578,10 +1578,10 @@ func (h *adapterHost) holdBackNow() {
 	h.holding = nil
 }
 
-// write writes one record to the ledger, with its content beside the
-// event, tells focus and the git watcher what it says, and reports whether
-// the ledger took it.
-func (h *adapterHost) write(st *harnessStats, r adapters.Record) bool {
+// write writes one record to the ledger, with its content and its call's
+// own stamp (sentOf) beside the event, tells focus and the git watcher what
+// it says, and reports whether the ledger took it.
+func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stamp) bool {
 	h.mu.Lock()
 	w := h.writer
 	h.mu.Unlock()
@@ -1589,7 +1589,7 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record) bool {
 	if ev.EventID == "" {
 		ev.EventID = event.NewEventID(time.UnixMilli(ev.T))
 	}
-	if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command}); err != nil {
+	if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command, Sent: sent}); err != nil {
 		h.count(func() {
 			st.WriteFailures++
 			st.LastFailure = clip(fmt.Sprintf("the ledger refused a %s record: %v", ev.Kind(), err))
@@ -2247,7 +2247,8 @@ func (h *adapterHost) lessHeldLocked(n int) {
 // writer weren't there. It is the adapters' part of the writer's Waiting
 // (agent.waiting), which a seal asks while the first batch after a switch
 // back online is due its mark, so it takes only mu. A call counts by the
-// times its records carry (hookpath.Times), and stays counted until its
+// times its records carry (hookpath.Times) and by the hook's own stamp, as
+// Write holds them (ledger.Input.Sent), and stays counted until its
 // records are written, so no seal falls between the two.
 func (h *adapterHost) waiting(before func(event.Envelope) bool) bool {
 	h.mu.Lock()
@@ -2256,34 +2257,58 @@ func (h *adapterHost) waiting(before func(event.Envelope) bool) bool {
 		return true
 	}
 	for _, s := range h.stepping {
-		if before(s.envelope()) {
+		if s.waits(before) {
 			return true
 		}
 	}
 	for _, d := range h.queue {
-		if before(stampOf(d).envelope()) {
+		if stampOf(d).waits(before) {
 			return true
 		}
 	}
 	for s := range h.parkedAt {
-		if before(s.envelope()) {
+		if s.waits(before) {
 			return true
 		}
 	}
 	return false
 }
 
-// callStamp is the times of a hook call's records (adapters.HookRecord):
-// its t by the wall clock, in Unix ms, and its mono in boot.
+// callStamp is the times of a hook call: those of its records
+// (adapters.HookRecord), its t by the wall clock, in Unix ms, and its mono
+// in boot; and the hook's own stamp, sent, smono and sboot, which
+// hookpath.Times sets aside for the agent's when it is later than the
+// agent took the call, as after a step back of the wall clock, or has no
+// monotonic reading. sent is 0 when the hook gave none.
 type callStamp struct {
-	t, mono int64
-	boot    string
+	t, mono     int64
+	boot        string
+	sent, smono int64
+	sboot       string
 }
 
-// stampOf is the times hook call d's records carry (hookpath.Times).
+// stampOf is the times hook call d's records carry (hookpath.Times), with
+// the hook's own stamp.
 func stampOf(d inbox.Delivery) callStamp {
 	at := hookpath.Times(d)
-	return callStamp{t: at.Wall.UnixMilli(), mono: at.Mono, boot: at.BootID}
+	s := callStamp{t: at.Wall.UnixMilli(), mono: at.Mono, boot: at.BootID}
+	if sent := sentOf(d); !sent.Wall.IsZero() {
+		s.sent, s.smono, s.sboot = sent.Wall.UnixMilli(), sent.Mono, sent.BootID
+	}
+	return s
+}
+
+// sentOf is the hook's own stamp of call d, which its records' times may
+// have set aside (hookpath.Times), for the ledger writer to hold its
+// records to as well (ledger.Input.Sent).
+func sentOf(d inbox.Delivery) clock.Stamp {
+	return clock.Stamp{Wall: d.Sent, Mono: d.Mono, BootID: d.BootID}
+}
+
+// waits reports whether before says the call may have been made before
+// the moment, by its records' times or by the hook's own.
+func (s callStamp) waits(before func(event.Envelope) bool) bool {
+	return before(s.envelope()) || s.sent != 0 && before(event.Envelope{T: s.sent, Mono: s.smono, BootID: s.sboot})
 }
 
 // stampsOf is each call's times.
@@ -2312,17 +2337,25 @@ type earliestStamp struct {
 	mono map[string]int64
 }
 
-// add takes in s.
+// add takes in s, by its records' times and by the hook's own.
 func (e *earliestStamp) add(s callStamp) {
-	if !e.set || s.t < e.wall {
-		e.wall, e.set = s.t, true
+	e.addOne(s.t, s.mono, s.boot)
+	if s.sent != 0 {
+		e.addOne(s.sent, s.smono, s.sboot)
 	}
-	if s.mono > 0 && s.boot != "" {
+}
+
+// addOne takes in one time: t by the wall clock, and mono in boot.
+func (e *earliestStamp) addOne(t, mono int64, boot string) {
+	if !e.set || t < e.wall {
+		e.wall, e.set = t, true
+	}
+	if mono > 0 && boot != "" {
 		if e.mono == nil {
 			e.mono = make(map[string]int64)
 		}
-		if cur, ok := e.mono[s.boot]; !ok || s.mono < cur {
-			e.mono[s.boot] = s.mono
+		if cur, ok := e.mono[boot]; !ok || mono < cur {
+			e.mono[boot] = mono
 		}
 	}
 }
@@ -2330,7 +2363,7 @@ func (e *earliestStamp) add(s callStamp) {
 // merge takes in what o holds.
 func (e *earliestStamp) merge(o earliestStamp) {
 	if o.set {
-		e.add(callStamp{t: o.wall})
+		e.addOne(o.wall, 0, "")
 	}
 	for boot, mono := range o.mono {
 		if e.mono == nil {

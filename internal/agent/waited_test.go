@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -167,6 +168,12 @@ func TestAdaptersWaiting(t *testing.T) {
 	// t, or by its mono in boot, where the moment is mono 50,000.
 	before := func(e event.Envelope) bool { return e.T < moment || e.BootID == boot && e.Mono > 0 && e.Mono < 50_000 }
 	call := func(ms int64) inbox.Delivery { return inbox.Delivery{Received: clock.Stamp{Wall: time.UnixMilli(ms)}} }
+	// resent is a call the hook stamped at sent with no monotonic reading,
+	// so its records carry the agent's stamp, from received
+	// (hookpath.Times).
+	resent := func(sent, received int64) inbox.Delivery {
+		return inbox.Delivery{Message: inbox.Message{Sent: time.UnixMilli(sent)}, Received: clock.Stamp{Wall: time.UnixMilli(received)}}
+	}
 	at := func(ms int64) callStamp { return callStamp{t: ms} }
 	newHost := func() *adapterHost {
 		dir := t.TempDir()
@@ -190,6 +197,13 @@ func TestAdaptersWaiting(t *testing.T) {
 			func(h *adapterHost) { h.held = 1; h.heldFrom.add(callStamp{t: moment + 1, mono: 49_000, boot: boot}) }, true},
 		{"held calls that were all made after it don't count", func(h *adapterHost) { h.held = 3; h.heldFrom.add(at(moment + 1)) }, false},
 		{"held calls none of which the agent could read don't count", func(h *adapterHost) { h.held = 2 }, false},
+		{"a call whose records carry the agent's stamp counts by the hook's own when that is before the moment",
+			func(h *adapterHost) { h.queue = []inbox.Delivery{resent(moment-1, moment+5)} }, true},
+		{"a parked call counts by the hook's own stamp too", func(h *adapterHost) { h.parkedAt[stampOf(resent(moment-1, moment+5))] = 1 }, true},
+		{"a call in the step counts by the hook's own stamp too", func(h *adapterHost) { h.stepping = []callStamp{stampOf(resent(moment-1, moment+5))} }, true},
+		{"a held call counts by the hook's own stamp too", func(h *adapterHost) { h.held = 1; h.heldFrom.add(stampOf(resent(moment-1, moment+5))) }, true},
+		{"a call whose own stamp and its records' are both after the moment doesn't count",
+			func(h *adapterHost) { h.queue = []inbox.Delivery{resent(moment+1, moment+5)} }, false},
 		{"nothing to parse counts for nothing", func(*adapterHost) {}, false},
 	}
 	for _, c := range states {
@@ -260,6 +274,41 @@ func TestAdaptersWaiting(t *testing.T) {
 			if !during || h.waiting(before) || w.Status().Next < 2 {
 				t.Errorf("while the step parsed it: %v, once its records were written: %v, records written %d; want true, false, and some",
 					during, h.waiting(before), w.Status().Next-1)
+			}
+		}},
+		{"a call's records reach the writer with the hook's own stamp, which seals them local-only when only it is before the moment", func(t *testing.T) {
+			capture := readCapture(t)
+			h := newHost()
+			secret := bytes.Repeat([]byte{7}, hookpath.SessionSecretLen)
+			h.a.kSession.Store(&secret)
+			lk, err := pkgledger.DeriveKeys(bytes.Repeat([]byte{9}, 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			w, err := ledger.Open(ledger.Options{Dir: h.a.dirs.Ledger(), Keys: lk, KeyID: "0123456789abcdef"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { w.Close() })
+			// A stretch that ends now: the moment.
+			w.NoteMode(false)
+			w.NoteMode(true)
+			h.keys = &adapterKeys{feat: lk.Features(), project: bytes.Repeat([]byte{8}, 32)}
+			h.writer, h.ready = w, true
+			c := capture[0]
+			c.Arrived = time.Now().Add(-time.Minute)
+			d := adapters.DeliveryOf(event.HarnessClaudeCode, c, adapters.Walked, c.Arrived)
+			// The hook gave no monotonic reading, so its records carry the
+			// agent's stamp, from after the moment.
+			d.Mono, d.BootID = 0, ""
+			d.Received = clock.Now()
+			h.queue = []inbox.Delivery{d}
+			h.step(false)
+			if w.Status().Next < 2 {
+				t.Fatal("the call's records weren't written")
+			}
+			if r := sealNow(t, w, h.a.dirs.Ledger()); r.Online {
+				t.Error("the batch of the call's records was sealed online, want local-only")
 			}
 		}},
 	}
@@ -423,21 +472,26 @@ func TestModesSeen(t *testing.T) {
 				a.seeLocked(online)
 				a.modes.mu.Unlock()
 			}
-			kicked := func() bool {
+			kickedWithin := func(d time.Duration) bool {
 				select {
 				case <-kick:
 					return true
-				case <-time.After(drainSoonAfter + 2*time.Second):
+				case <-time.After(d):
 					return false
 				}
 			}
 			see(false)
 			see(true)
-			ended := kicked()
+			// Not before a call made just before the switch can have reached
+			// the spool, which takes up to spoolSlack; the scheduler runs a
+			// job at most 50 ms early.
+			early := kickedWithin(spoolSlack + 100*time.Millisecond)
+			ended := kickedWithin(2 * time.Second)
 			see(true)
-			repeated := kicked()
-			if !ended || repeated {
-				t.Errorf("a drain asked for at the stretch's end: %v, at a note that repeats online: %v; want true, false", ended, repeated)
+			repeated := kickedWithin(drainSoonAfter + 2*time.Second)
+			if early || !ended || repeated {
+				t.Errorf("a drain asked for within spoolSlack of the stretch's end: %v, soon after: %v, at a note that repeats online: %v; want false, true, false",
+					early, ended, repeated)
 			}
 		}},
 		{"a stretch the last run saw going on, which state.json kept, lasts until the next start, so an event made before it is sealed local-only", func(t *testing.T) {
@@ -482,6 +536,17 @@ func TestModesSeen(t *testing.T) {
 				t.Errorf("state.json said %+v after the reload of the switch to local-only, and %+v after the first look at the switch back; want local-only, then online with the stretch's end by both clocks",
 					reloaded, looked)
 			}
+			// The next start reads it back, as an earlier run's.
+			next, _ := modesAgent(t, "online")
+			next.dirs = dirs
+			if next.state, _, err = state.Open(dirs.StateFile()); err != nil {
+				t.Fatal(err)
+			}
+			next.startModes()
+			want := ledger.Seen{Ended: looked.Ended, OS: clock.Stamp{Mono: looked.OSMono, BootID: looked.OSBoot}, Earlier: true}
+			if got := next.seen(); got.Local || !got.Ended.Equal(want.Ended) || got.OS != want.OS || !got.Earlier {
+				t.Errorf("the next start saw %+v, want %+v", got, want)
+			}
 		}},
 	}
 	for _, c := range cases {
@@ -492,18 +557,29 @@ func TestModesSeen(t *testing.T) {
 // TestSpoolHolds checks the inbox spool's part of the ledger writer's
 // Waiting (agent.spoolHolds): a hook call there that no drain has handed
 // on holds the first batch after a switch back when the times its records
-// will carry (hookpath.Times) are before the moment asked about, and only
-// while a drain runs in this run.
+// will carry (hookpath.Times), or the hook's own stamp, are before the
+// moment asked about, and only while a drain runs in this run.
 func TestSpoolHolds(t *testing.T) {
 	now := clock.Now()
-	// The moment asked about is a minute ago, by the wall clock.
-	moment := now.Wall.Add(-time.Minute).UnixMilli()
-	before := func(e event.Envelope) bool { return e.T < moment }
+	// The calls are of a boot of their own, whose monotonic clock reads
+	// monoNow now. The moment asked about is a minute ago by both clocks,
+	// and a call is held to it as the writer holds one: by its mono in the
+	// moment's boot, and by its t otherwise (ledger moment.before).
+	const boot, monoNow = "b_spool", int64(1_060_000)
+	moment, bound := now.Wall.Add(-time.Minute).UnixMilli(), monoNow-60_000
+	before := func(e event.Envelope) bool {
+		if e.BootID == boot && e.Mono > 0 {
+			return e.Mono < bound
+		}
+		return e.T < moment
+	}
 	type call struct {
-		// ago is how long before now the hook stamped it, and noMono leaves
-		// out the OS's monotonic reading.
-		ago    time.Duration
-		noMono bool
+		// ago is how long before now the hook stamped it, by both clocks
+		// unless ahead puts its wall time that far after now, as a step
+		// back of the wall clock since leaves it; noMono leaves out the
+		// monotonic reading.
+		ago, ahead time.Duration
+		noMono     bool
 	}
 	early, late := call{ago: 2 * time.Minute}, call{ago: time.Second}
 	cases := []struct {
@@ -516,8 +592,14 @@ func TestSpoolHolds(t *testing.T) {
 		{"a call in the spool made before the moment holds the mark", []call{early}, nil, false, true},
 		{"a call in the spool made after the moment holds nothing", []call{late}, nil, false, false},
 		{"a call made before the moment behind one made after it holds the mark", []call{late, early}, nil, false, true},
-		{"a call without the hook's monotonic reading, which its drain will time, holds nothing", []call{{ago: 2 * time.Minute, noMono: true}}, nil, false, false},
+		{"a call whose wall time is ahead of the drain's, so that its records will carry the drain's stamp, holds the mark by the hook's own monotonic reading",
+			[]call{{ago: 2 * time.Minute, ahead: time.Hour}}, nil, false, true},
+		{"a call without the hook's monotonic reading, whose records its drain will time, holds the mark by the hook's own wall time",
+			[]call{{ago: 2 * time.Minute, noMono: true}}, nil, false, true},
+		{"a call without the hook's monotonic reading made after the moment holds nothing", []call{{ago: time.Second, noMono: true}}, nil, false, false},
 		{"a call made before the moment in a file a drain took and hasn't finished holds the mark", nil, []call{early}, false, true},
+		{"a call made before the moment behind as many made after it as a file's scan reads holds nothing, since calls reach the spool in about the order they are made",
+			append(slices.Repeat([]call{late}, spoolScanned), early), nil, false, false},
 		{"with no drain running in this run, a call made before the moment waits for the next start, and holds nothing", []call{early}, nil, true, false},
 		{"an empty inbox holds nothing", nil, nil, false, false},
 	}
@@ -530,9 +612,12 @@ func TestSpoolHolds(t *testing.T) {
 			}
 			message := func(cl call) inbox.Message {
 				sent := now.Wall.Add(-cl.ago)
+				if cl.ahead != 0 {
+					sent = now.Wall.Add(cl.ahead)
+				}
 				m := hookMessage(t, "UserPromptSubmit", `{"session_id":"s","hook_event_name":"UserPromptSubmit"}`, inbox.Proc{PID: 4242, Name: "claude"}, sent)
 				if !cl.noMono {
-					m.Mono, m.BootID = max(now.Mono-cl.ago.Milliseconds(), 1), now.BootID
+					m.Mono, m.BootID = monoNow-cl.ago.Milliseconds(), boot
 				}
 				return m
 			}
@@ -621,6 +706,15 @@ func TestAgentWaiting(t *testing.T) {
 				if time.Now().After(deadline) {
 					t.Fatal("the git change never held the mark")
 				}
+			}
+			// Well inside the watcher's hold for the change's actor
+			// (git.DefaultHold), with its scan done: a moment taken now is
+			// after the scan began, by this run's clock, and a reading taken
+			// as Waiting asks is not before it.
+			time.Sleep(300 * time.Millisecond)
+			mono, boot = ledger.RunClock(time.Now())
+			if !a.waiting(before) {
+				t.Error("the held change wasn't asked about by this run's clock from when its scan began")
 			}
 		}},
 		{"the drain startIPC runs lets the spool hold the mark, and its stop ends that", func(t *testing.T) {

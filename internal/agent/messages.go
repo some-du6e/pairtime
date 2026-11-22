@@ -201,24 +201,26 @@ func (a *agent) drainSoon() {
 // spoolHolds reports whether the inbox's spool holds a hook call, which no
 // drain has handed to the adapters yet, that before says may have been
 // made before config.toml was last seen local-only, for the ledger
-// writer's Waiting (agent.waiting). It reads each call's times as its
-// records will carry them once a drain hands it over (hookpath.Times), so
-// a call made after the switch, as one spooled while the agent restarted,
-// holds nothing, and one without the hook's monotonic reading, which is
-// timed by its drain, holds nothing either. drainSoon has a call made
-// before the switch handed over within seconds. The spool is used only
-// while hooks can't reach the socket, so it is empty almost always. With
-// no drain running in this run, as when the journal couldn't open, its
-// calls wait for the next start, and hold nothing.
+// writer's Waiting (agent.waiting). It judges each call as Write will
+// judge its records once a drain hands it over: by the times they will
+// carry (hookpath.Times) and by the hook's own stamp (stampOf). So a call
+// made after the switch, as one spooled while the agent restarted, holds
+// nothing. drainSoon has a call made before the switch handed over within
+// seconds. A spool file Scan couldn't open for a moment, as while a drain
+// renames it on Windows, may hold one, so it holds the mark until the
+// next seal asks. The spool is used only while hooks can't reach the
+// socket, so it is empty almost always. With no drain running in this
+// run, as when the journal couldn't open, its calls wait for the next
+// start, and hold nothing.
 func (a *agent) spoolHolds(before func(event.Envelope) bool) bool {
 	if a.spoolKick.Load() == nil {
 		return false
 	}
 	now := clock.Now()
-	return inbox.Scan(a.dirs.Inbox(), spoolScanned, func(m inbox.Message) bool {
-		at := hookpath.Times(inbox.Delivery{Message: m, Via: inbox.ViaInbox, Received: now})
-		return before(event.Envelope{T: at.Wall.UnixMilli(), Mono: at.Mono, BootID: at.BootID})
+	found, err := inbox.Scan(a.dirs.Inbox(), spoolScanned, func(m inbox.Message) bool {
+		return stampOf(inbox.Delivery{Message: m, Via: inbox.ViaInbox, Received: now}).waits(before)
 	})
+	return found || err != nil
 }
 
 // drain moves what the inbox holds into the journal.

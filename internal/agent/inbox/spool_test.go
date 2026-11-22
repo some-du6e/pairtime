@@ -609,8 +609,11 @@ func TestScan(t *testing.T) {
 		// the message newMessage(n) makes, and -1 for a line that isn't a
 		// message.
 		files map[string][]int
-		// perm is the files' mode, 0o600 when zero.
-		perm os.FileMode
+		// perm is the files' mode, 0o600 when zero, dirPerm the inbox
+		// directory's, 0o700 when zero, and link makes spool.jsonl a
+		// symbolic link to a file of the messages files gives it.
+		perm, dirPerm os.FileMode
+		link          bool
 		// limit is Scan's, and stop the message the func takes, 0 for none.
 		limit, stop int
 		// read are the messages the func is handed, in order, and want
@@ -619,25 +622,32 @@ func TestScan(t *testing.T) {
 		want bool
 	}{
 		{"the spool is read first, then the taken files, oldest first, each in order",
-			map[string][]int{SpoolName: {1, 2}, "spool-2.drain": {5}, "spool-1.drain": {3, 4}}, 0, 10, 0, []int{1, 2, 3, 4, 5}, false},
+			map[string][]int{SpoolName: {1, 2}, "spool-2.drain": {5}, "spool-1.drain": {3, 4}}, 0, 0, false, 10, 0, []int{1, 2, 3, 4, 5}, false},
 		{"the read ends at the first message the func takes, which Scan reports",
-			map[string][]int{SpoolName: {1, 2}, "spool-1.drain": {3, 4}}, 0, 10, 3, []int{1, 2, 3}, true},
+			map[string][]int{SpoolName: {1, 2}, "spool-1.drain": {3, 4}}, 0, 0, false, 10, 3, []int{1, 2, 3}, true},
 		{"a file's messages past the limit aren't read, and the next file's are",
-			map[string][]int{SpoolName: {1, 2, 3}, "spool-1.drain": {4}}, 0, 2, 0, []int{1, 2, 4}, false},
+			map[string][]int{SpoolName: {1, 2, 3}, "spool-1.drain": {4}}, 0, 0, false, 2, 0, []int{1, 2, 4}, false},
 		{"a line that isn't a message is passed over, and counts for nothing toward the limit",
-			map[string][]int{SpoolName: {-1, 1, 2}}, 0, 2, 0, []int{1, 2}, false},
+			map[string][]int{SpoolName: {-1, 1, 2}}, 0, 0, false, 2, 0, []int{1, 2}, false},
 		{"a file set aside is no drain's, and isn't read",
-			map[string][]int{"spool-1.bad": {1}, "spool-2.drain": {2}}, 0, 10, 0, []int{2}, false},
+			map[string][]int{"spool-1.bad": {1}, "spool-2.drain": {2}}, 0, 0, false, 10, 0, []int{2}, false},
 		{"a spool others may open is no drain's, and isn't read",
-			map[string][]int{SpoolName: {1}}, 0o644, 10, 0, nil, false},
-		{"an inbox with nothing in it hands over nothing", map[string][]int{}, 0, 10, 0, nil, false},
+			map[string][]int{SpoolName: {1}}, 0o644, 0, false, 10, 0, nil, false},
+		{"an inbox directory others may write in is no drain's, and nothing in it is read",
+			map[string][]int{SpoolName: {1}}, 0, 0o775, false, 10, 0, nil, false},
+		{"a spool that is a symbolic link is no drain's, and isn't read",
+			map[string][]int{SpoolName: {1}}, 0, 0, true, 10, 0, nil, false},
+		{"an inbox with nothing in it hands over nothing", map[string][]int{}, 0, 0, false, 10, 0, nil, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if c.perm != 0 && runtime.GOOS == "windows" {
+			if (c.perm != 0 || c.dirPerm != 0) && runtime.GOOS == "windows" {
 				t.Skip("on Windows the data directory's DACL, not a file's mode, says who may open it")
 			}
-			dir := t.TempDir()
+			dir := filepath.Join(t.TempDir(), "inbox")
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
 			perm := c.perm
 			if perm == 0 {
 				perm = 0o600
@@ -654,15 +664,31 @@ func TestScan(t *testing.T) {
 					}
 					b = append(append(b, line...), '\n')
 				}
-				if err := os.WriteFile(filepath.Join(dir, name), b, perm); err != nil {
+				path := filepath.Join(dir, name)
+				if c.link {
+					// The messages are in a file beside the inbox, which the link
+					// names.
+					path = filepath.Join(filepath.Dir(dir), name+".target")
+				}
+				if err := os.WriteFile(path, b, perm); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Chmod(filepath.Join(dir, name), perm); err != nil { // past the umask
+				if err := os.Chmod(path, perm); err != nil { // past the umask
+					t.Fatal(err)
+				}
+				if c.link {
+					if err := os.Symlink(path, filepath.Join(dir, name)); err != nil {
+						t.Skipf("can't make a symbolic link here: %v", err)
+					}
+				}
+			}
+			if c.dirPerm != 0 {
+				if err := os.Chmod(dir, c.dirPerm); err != nil {
 					t.Fatal(err)
 				}
 			}
 			var read []int
-			got := Scan(dir, c.limit, func(m Message) bool {
+			got, err := Scan(dir, c.limit, func(m Message) bool {
 				var body struct{ N int }
 				if err := json.Unmarshal(m.Body, &body); err != nil {
 					t.Fatal(err)
@@ -670,8 +696,8 @@ func TestScan(t *testing.T) {
 				read = append(read, body.N)
 				return body.N == c.stop
 			})
-			if got != c.want || !slices.Equal(read, c.read) {
-				t.Errorf("Scan handed over %v and reported %v; want %v and %v", read, got, c.read, c.want)
+			if err != nil || got != c.want || !slices.Equal(read, c.read) {
+				t.Errorf("Scan handed over %v and reported %v, %v; want %v and %v", read, got, err, c.read, c.want)
 			}
 		})
 	}

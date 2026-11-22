@@ -23,7 +23,11 @@ import (
 // moment count as made before.
 //
 // Each bound is exclusive: an event made at the moment itself was made
-// once config.toml said online. Zero means no bound by that clock.
+// once config.toml said online. Zero means no bound by that clock. A
+// moment an earlier run recorded, read back from disk, holds the bounds of
+// this run's start and, when it was recorded in another boot, of this
+// boot's (Writer.earlier): every event of this run, and every hook call of
+// this boot, was made after it, whatever the wall clock says.
 type moment struct {
 	// wall is in Unix ms.
 	wall int64
@@ -68,14 +72,16 @@ func (m moment) madeBefore(e event.Envelope) bool {
 	return false
 }
 
-// raise moves m on to n by each clock where n is later. An OS reading of
-// another boot than m's replaces m's, since only one boot runs at a time
-// and n's is the newer. When n is later by the wall clock and has no
-// reading of a clock m has, as a moment read back from disk or kept by
-// the wall clock alone, m's reading is of an earlier time than the moment
-// now is, so it goes, and events of that clock are held to the wall
-// clock.
-func (m *moment) raise(n moment) {
+// raise moves m on to n by each clock where n is later. cur is the boot
+// the writer runs in. A reading of cur replaces one of another boot, since
+// only one boot runs at a time and cur is the newest. One of another boot
+// than cur replaces m's only when n is later by the wall clock and m holds
+// no reading of cur: an older boot's moment, as state.json kept it, says
+// nothing of the boots after it. When n is later by the wall clock and has
+// no reading of a clock m has, as a moment kept by the wall clock alone,
+// m's reading is of an earlier time than the moment now is, so it goes,
+// and events of that clock are held to the wall clock.
+func (m *moment) raise(n moment, cur string) {
 	later := n.wall > m.wall
 	m.wall = max(m.wall, n.wall)
 	switch {
@@ -87,9 +93,9 @@ func (m *moment) raise(n moment) {
 	switch {
 	case n.os > 0 && m.boot == n.boot:
 		m.os = max(m.os, n.os)
-	case n.os > 0:
+	case n.os > 0 && (n.boot == cur || later && m.boot != cur):
 		m.os, m.boot = n.os, n.boot
-	case later:
+	case n.os == 0 && later:
 		m.os, m.boot = 0, ""
 	}
 }
