@@ -147,12 +147,13 @@ Checkpoints and upload-failure notes take numbers from the same sequence. So the
 | `0x10` | `os.power` |
 | `0x11` | `otel.active_time` |
 | `0x12` | `cli.track` |
-| `0x13` to `0x3f` | reserved for event kinds added later |
+| `0x13` | `relay.message` |
+| `0x14` to `0x3f` | reserved for event kinds added later |
 | `0x40` | scorer checkpoint (DESIGN 3.6, 6.5) |
 | `0x41` | upload-failure note (DESIGN 3.6, 7.4) |
 | `0x42` to `0xff` | reserved |
 
-`0x01` to `0x12` are the 18 kinds in the order of PR1's `kindTable`, as DESIGN 3.6 says. That order was used once. From now on the table is fixed: a code never changes meaning, even if `kindTable` is reordered, and a kind added later takes the next free code from `0x13` up. A writer never emits a reserved code. A verifier fails a record whose code is `0x00` or from `0x42` to `0xff`, which version 1 never assigns. A code from `0x13` to `0x3f` that a verifier doesn't know belongs to an event kind added after the verifier was built: it reports the record's kind as unknown and leaves its body unchecked, and it still checks the record's place in its batch, because checking roots and heads never reads `rtype`. A server is never older than the clients that write to it, so for a server such a code is a fault, as an `f.v` newer than its own is (10.7), and it refuses or holds a reveal that shows one.
+`0x01` to `0x12` are the 18 kinds in the order of PR1's `kindTable`, as DESIGN 3.6 says. That order was used once. From now on the table is fixed: a code never changes meaning, even if `kindTable` is reordered, and a kind added later takes the next free code from `0x13` up. The first one, `relay.message`, took `0x13` on 2026-11-22 (docs/errata/2026-11-22-relayed-prompts.md), so the next takes `0x14`. A writer never emits a reserved code. A verifier fails a record whose code is `0x00` or from `0x42` to `0xff`, which version 1 never assigns. A code from `0x13` to `0x3f` that a verifier doesn't know belongs to an event kind added after the verifier was built: it reports the record's kind as unknown and leaves its body unchecked, and it still checks the record's place in its batch, because checking roots and heads never reads `rtype`. A server is never older than the clients that write to it, so for a server such a code is a fault, as an `f.v` newer than its own is (10.7), and it refuses or holds a reveal that shows one.
 
 ### 4.3 Header
 
@@ -188,8 +189,8 @@ The writer emits each body the way Go's `encoding/json` writes `pkg/ledger`'s bo
 | Member | Holds | Present |
 |---|---|---|
 | `n` | the nonce, as 64 lowercase hex digits | always, first |
-| `e` | the record. For `0x01` to `0x12`, the event after `Event.Shareable()`, as `Event.MarshalJSON` writes it. For `0x40` and `0x41`, the objects of 4.7 | always |
-| `f` | the record's keyed scorer features, versioned by `f.v` (10.7) | on every `prompt.submit`, `agent.tool`, `shell.command` and `cli.track`, and on no other record |
+| `e` | the record. For `0x01` to `0x13`, the event after `Event.Shareable()`, as `Event.MarshalJSON` writes it. For `0x40` and `0x41`, the objects of 4.7 | always |
+| `f` | the record's keyed scorer features, versioned by `f.v` (10.7) | on every `prompt.submit`, `agent.tool`, `shell.command`, `cli.track` and `relay.message`, and on no other record |
 | `c` | the record's content commitment, `{"n": token count, "r": C}` (10.2) | on every `prompt.submit`, final `agent.output` and `cli.track` apart from the ones 10.1 lists whose text the device never had, and on no other record |
 
 So every body starts with the six bytes `{"n":"`, then the nonce in hex and a closing `"`. A body holds no text: `e` comes from `Shareable()`, and `f` and `c` hold keyed values, counts and the prompt class (DESIGN 3.6, 4.2). The counts and the class are plain values: `c.n`, the line numbers of `f.h`'s hunks, and `f.pc`. A metadata reveal shows them with each body it carries, so it tells the server every revealed prompt's token count, about twice its word count, which `len_chars` doesn't give.
@@ -352,7 +353,7 @@ Three kinds of record commit a text, one text each:
 | `0x04` | `agent.output` with `is_final` true | the turn's final agent message, cut to its first 16 KiB as below |
 | `0x12` | `cli.track` | the label after `pkg/redact` (DESIGN 5.4) |
 
-No other record has a `c` member. DESIGN 3.6 names prompts and final agent messages. `cli.track` joins them because DESIGN 5.4 stores and commits the label "so a `track`-anchored turn can be drawn by the challenge like any prompt", and DESIGN 7.5 step 4 puts `track` calls in the pool.
+No other record has a `c` member. DESIGN 3.6 names prompts and final agent messages. `cli.track` joins them because DESIGN 5.4 stores and commits the label "so a `track`-anchored turn can be drawn by the challenge like any prompt", and DESIGN 7.5 step 4 puts `track` calls in the pool. A `relay.message` doesn't: it never opens an anchor of its own, and the prompt it pairs with commits that prompt's text, which the challenge draws instead (DESIGN 5.4, 7.5 step 4).
 
 Some records of these kinds reach the device without their text, and only these may lack `c`:
 
@@ -545,13 +546,13 @@ DESIGN 3.6 writes a hunk as `(HMAC(K_feat, path), start line, end line)`. This s
 | `mh` | the sketch (10.5), 512 hex digits | `prompt.submit`, `cli.track`, when the record has `c` |
 | `th` | the template value (10.6) | `prompt.submit`, `cli.track`, when the record has `c` |
 | `es` | the error signature value (10.6) | `prompt.submit`, `cli.track`, when the record has `c` and its text has a signature |
-| `pc` | the prompt class: `substantive`, `low_effort`, `answer` or `error_paste` | `prompt.submit`, `cli.track` |
+| `pc` | the prompt class: `substantive`, `low_effort`, `answer` or `error_paste` | `prompt.submit`, `cli.track`, `relay.message` |
 | `h` | the edit hunks (10.6), a non-empty list | `agent.tool`, when the tool edited a file |
 | `ch` | the command value (10.6) | `agent.tool`, `shell.command`, when there is a command |
 
-The writer puts `f` in the body of every `prompt.submit`, `agent.tool`, `shell.command` and `cli.track` record, even when it holds only `v`, and in no other record (4.5). A prompt whose text the device never had, and so has no `c` (10.1), has an `f` of only `v` and `pc`. So an `f` fits its kind when it holds `v` and, for `prompt.submit` and `cli.track`, either `mh`, `th` and `pc` and maybe `es`, on a record with `c`, or `pc` alone, on one without; for `agent.tool`, maybe `h` and `ch`; for `shell.command`, maybe `ch`. Each hunk in `h` has exactly the five members of 10.6.
+The writer puts `f` in the body of every `prompt.submit`, `agent.tool`, `shell.command`, `cli.track` and `relay.message` record, even when it holds only `v`, and in no other record (4.5). A prompt whose text the device never had, and so has no `c` (10.1), has an `f` of only `v` and `pc`, and so does every `relay.message`. So an `f` fits its kind when it holds `v` and, for `prompt.submit` and `cli.track`, either `mh`, `th` and `pc` and maybe `es`, on a record with `c`, or `pc` alone, on one without; for `relay.message`, `pc` alone; for `agent.tool`, maybe `h` and `ch`; for `shell.command`, maybe `ch`. Each hunk in `h` has exactly the five members of 10.6.
 
-`pc` is SM 2.2's class of the text, as the writer computed it when it wrote the record, whatever origin the prompt later turns out to have (DESIGN 3.6 calls it "prompt_class as computed"). SM 2.2 and `pkg/score` own that rule, and CC8 recomputes it for challenged turns. `cli.track` carries the prompt features because DESIGN 5.4 classes a `track` anchor "like a prompt from its text length and content", while the server re-scores from bodies, never from text (DESIGN 6.5 and D18).
+`pc` is SM 2.2's class of the text, as the writer computed it when it wrote the record, whatever origin the prompt later turns out to have (DESIGN 3.6 calls it "prompt_class as computed"). SM 2.2 and `pkg/score` own that rule, and CC8 recomputes it for challenged turns. `cli.track` carries the prompt features because DESIGN 5.4 classes a `track` anchor "like a prompt from its text length and content", while the server re-scores from bodies, never from text (DESIGN 6.5 and D18). `relay.message` carries `pc` because a relayed anchor takes its class from the app's own text, not from the prompt the hook saw (SM 2.2 rule 9), and the server re-scores without either text.
 
 The writer emits `f` and `c` the way `encoding/json` writes `pkg/ledger`'s types, as for the rest of the body (4.5): members in the order of the table, absent where it says, and no insignificant whitespace. For the prompt in 10.10, `f` is
 
