@@ -29,7 +29,8 @@ func watchWindows(fn func(Change)) (func(), error) {
 
 // changeOf turns the watch's report into a Change. A report with no window
 // is focus pairtime can't name: a secure desktop, a window that closed at
-// once, or a moment between two windows (WP-OS2 decision 2).
+// once, or a moment between two windows (WP-OS2 decision 2). The component
+// records it as an os.focus with app_class unknown (SM 2.5).
 func changeOf(f windows.Foreground) Change {
 	if f.Unknown != "" || f.PID == 0 {
 		reason := f.Unknown

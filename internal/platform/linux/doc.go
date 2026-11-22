@@ -22,10 +22,12 @@
 //	                 don't, and their locks go unseen
 //
 // A signal the desktop doesn't give is reported as unknown, with the reason
-// in Status, and never guessed. SM 3.2 makes the slots of unknown focus
-// ambiguous, but no os.focus can say so yet, so that waits on the event
-// model. On Wayland the X11 calls would only see XWayland's own clients, so
-// they aren't used there even when DISPLAY is set.
+// in Status, and never guessed. Where focus is unknown, the agent records
+// an os.focus with app_class unknown, whose slots credit at level C (SM
+// 2.5); the Focus channel says each time focus turns unknown, and its next
+// window report says it is known again (Desktop.Focus). On Wayland the X11
+// calls would only see XWayland's own clients, so they aren't used there
+// even when DISPLAY is set.
 //
 // X11 is spoken directly over the display's socket, in pure Go, rather than
 // through libX11 and libXss loaded with purego: linking purego makes the
