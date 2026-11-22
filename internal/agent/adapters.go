@@ -1995,6 +1995,7 @@ func (h *adapterHost) endReplay(name string) {
 		// stretch would seal a local-only batch after the server's (Write).
 		// The next start deletes the empty file.
 		h.a.log.Warn("couldn't delete the held hook calls once replayed, so they were emptied for the next start to delete", "err", err)
+		h.a.setProblem("adapters.held", fmt.Sprintf("the hook calls held while the ledger wasn't open were parsed, but couldn't be deleted, so they were emptied, and the next start deletes the file: %v", err))
 		h.replayStuck = true
 		h.replayStopped()
 		return

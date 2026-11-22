@@ -498,8 +498,10 @@ func TestModesSeen(t *testing.T) {
 			linked := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
 			writeAccount(t, dirs, linked)
 			// An event of this run made before the agent found the link, by
-			// this run's clock, though after the link by the wall clock.
-			made := time.Now()
+			// this run's clock, though after the link by the wall clock: a
+			// second before, so the two readings, cut to the millisecond,
+			// can't be the same.
+			made := time.Now().Add(-time.Second)
 			t.Cleanup(a.startLedger())
 			w := opened(t, a)
 			inSecond := sealOne(t, a, w, linked.Add(500*time.Millisecond))
