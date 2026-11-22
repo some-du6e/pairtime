@@ -152,8 +152,12 @@ type Scanner struct {
 	claimed  map[platform.ID]uint64
 	reported map[platform.ID]Session
 	// touched is when each session no hook reports was last read live
-	// (Touch), for Tie.
+	// (Touch), seen the harness processes the table reads found and when
+	// last, and ended the ties whose process a scan saw gone, by session
+	// key, with when: all for Tie and TieOf, and none saved.
 	touched  map[string]touch
+	seen     map[platform.ID]seenProc
+	ended    map[string]endedTie
 	reads    uint64 // table reads begun
 	lastKick time.Time
 	kick     *sched.Job
@@ -199,6 +203,8 @@ func New(opts Options) *Scanner {
 		claimed:  make(map[platform.ID]uint64),
 		reported: make(map[platform.ID]Session),
 		touched:  make(map[string]touch),
+		seen:     make(map[platform.ID]seenProc),
+		ended:    make(map[string]endedTie),
 	}
 	s.load()
 	return s
@@ -224,6 +230,7 @@ func (s *Scanner) Claim(boot string, host platform.Proc) {
 	s.claimed[id] = s.reads
 	sess, wasReported := s.reported[id]
 	delete(s.reported, id)
+	delete(s.seen, id)
 	s.putLocked()
 	s.mu.Unlock()
 	s.save()
@@ -314,6 +321,7 @@ func (s *Scanner) Scan() ([]Session, error) {
 	t, all, live := v.t, v.all, v.live
 
 	s.mu.Lock()
+	s.noteSeen(v, now)
 	var found []Session
 	mine := 0 // this user's harness processes, launchers left out
 	for _, p := range all {
@@ -358,10 +366,18 @@ func (s *Scanner) Scan() ([]Session, error) {
 			changed = true
 		}
 	}
-	for id := range s.reported {
+	for id, sess := range s.reported {
 		if !live[id] {
 			delete(s.reported, id)
 			changed = true
+			if sess.Tied {
+				s.ended[sess.Key] = endedTie{sess: sess, at: now}
+			}
+		}
+	}
+	for key, e := range s.ended {
+		if now.Sub(e.at) > EndedKeep {
+			delete(s.ended, key)
 		}
 	}
 	for _, sess := range found {
@@ -450,6 +466,81 @@ func (s *Scanner) TiedTo(key string) (Session, bool) {
 	return Session{}, false
 }
 
+// ClearGap is how soon before a session's first line the session that last
+// had its process must have gone quiet for the process to pass to it, as
+// at /clear, which starts the new session in the same process.
+const ClearGap = 5 * time.Minute
+
+// EndedKeep is how long after a scan saw a tied process gone TieOf still
+// gives its tie, long enough for the session's session.start, which waits
+// out its hooks' grace, to be written as the scan's.
+const EndedKeep = 2 * time.Minute
+
+// seenKeep is how long the scanner remembers a harness process a table
+// read found.
+const seenKeep = 10 * time.Minute
+
+// seenProc is a harness process a table read found, and when last.
+type seenProc struct {
+	harness     event.Harness
+	start, last time.Time
+}
+
+// endedTie is a tie whose process a scan saw gone, and when.
+type endedTie struct {
+	sess Session
+	at   time.Time
+}
+
+// noteSeen records the harness processes of this user that v holds and
+// that could run a session no hook reports, none claimed by a hook and
+// none tied to a session, and forgets those not seen for seenKeep. s.mu is
+// held.
+func (s *Scanner) noteSeen(v tableView, now time.Time) {
+	for _, p := range v.all {
+		h, ok := v.own(p, s.self)
+		if !ok {
+			continue
+		}
+		id := p.ID()
+		if _, claimed := s.claimed[id]; claimed || s.reported[id].Tied {
+			delete(s.seen, id)
+			continue
+		}
+		s.seen[id] = seenProc{harness: h, start: p.Start, last: now}
+	}
+	for id, sp := range s.seen {
+		if now.Sub(sp.last) > seenKeep {
+			delete(s.seen, id)
+		}
+	}
+}
+
+// quietBefore reports whether session key, which no hook reports, wrote
+// its last line read live in this run before first, and not longer than
+// ClearGap before it. A session with no line read since the agent started
+// isn't quiet: it may write the next. s.mu is held.
+func (s *Scanner) quietBefore(key string, first time.Time) bool {
+	t, ok := s.touched[key]
+	return ok && !t.last.After(first) && first.Sub(t.last) <= ClearGap
+}
+
+// TieOf returns the tie of session key while its process runs (TiedTo),
+// and for EndedKeep after a scan saw the process gone, as a session.start
+// written after a short session ended needs.
+func (s *Scanner) TieOf(key string) (Session, bool) {
+	if sess, ok := s.TiedTo(key); ok {
+		return sess, true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.ended[key]
+	if !ok || s.opts.Now().Sub(e.at) > EndedKeep {
+		return Session{}, false
+	}
+	return e.sess, true
+}
+
 // Tie ties session key, of harness h, to the process running it, for a
 // session no hook reports whose line, written at at, a log reader has just
 // read (WP-AD3): the session then has the process's parent, TTY and
@@ -461,10 +552,13 @@ func (s *Scanner) TiedTo(key string) (Session, bool) {
 // report included: a hook that claims one later undoes its tie. A session
 // tied already keeps its process.
 //
+//   - A harness process a table read found since key's first line, and
+//     gone now, could have been the session's, so nothing is tied.
 //   - With exactly one such process that no session is tied to, key is tied
 //     to it.
-//   - With none, a process tied to a session that has written nothing since
-//     key's first line (Touch) passes to key, as a process does at /clear.
+//   - With none, a process tied to a session that went quiet in the
+//     ClearGap before key's first line (Touch) passes to key, as a process
+//     does at /clear.
 //   - Otherwise nothing is tied: a wrong tie would give the session
 //     another's parent and TTY.
 //
@@ -483,9 +577,22 @@ func (s *Scanner) Tie(h event.Harness, key string, at time.Time) (Session, bool)
 	}
 	now := s.opts.Now()
 	s.mu.Lock()
+	s.noteSeen(v, now)
 	first := at
 	if t, ok := s.touched[key]; ok && t.first.Before(at) {
 		first = t.first
+	}
+	// A process of the harness the table had when the session's first line
+	// was written, and lacks now, may have been the session's: then no
+	// process left in the table is surely it.
+	for id, sp := range s.seen {
+		if _, claimed := s.claimed[id]; claimed || v.live[id] || sp.harness != h {
+			continue
+		}
+		if (sp.start.IsZero() || !sp.start.After(at.Add(TieSlack))) && !sp.last.Before(first.Add(-TieSlack)) {
+			s.mu.Unlock()
+			return Session{}, false
+		}
 	}
 	var untied, quiet []platform.Proc
 	for _, p := range v.all {
@@ -504,7 +611,7 @@ func (s *Scanner) Tie(h event.Harness, key string, at time.Time) (Session, bool)
 		switch {
 		case !known || !sess.Tied:
 			untied = append(untied, p)
-		case !s.touched[sess.Key].last.After(first):
+		case s.quietBefore(sess.Key, first):
 			quiet = append(quiet, p)
 		}
 	}
@@ -522,6 +629,7 @@ func (s *Scanner) Tie(h event.Harness, key string, at time.Time) (Session, bool)
 	sess := Session{Key: key, Tied: true, Harness: h, PID: pick.PID, Started: pick.Start, Found: now,
 		Event: event.SessionStart{StartKind: event.StartStartup, Entrypoint: l.Entrypoint, ParentClass: l.ParentClass, HasTTY: l.HasTTY}}
 	s.reported[pick.ID()] = sess
+	delete(s.seen, pick.ID())
 	s.putLocked()
 	s.mu.Unlock()
 	s.save()

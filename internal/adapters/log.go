@@ -77,6 +77,10 @@ type LogReader interface {
 	// calls, and the moment the line states, in Unix ms: "" or 0 for what
 	// the line doesn't say.
 	LogPlace(raw RawRecord) (dir, session string, at int64)
+	// LogHooked reports whether a hook call of the harness's session
+	// session came, as the adapter remembers it across the agent's
+	// restarts: a session the hooks report.
+	LogHooked(session string) bool
 	// LogResume returns where in file the adapter's memory of it starts:
 	// the offset a restart must deliver the file again from, so that the
 	// memory SaveState returned is rebuilt, and false for a file it

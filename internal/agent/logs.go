@@ -128,11 +128,12 @@ func (h *adapterHost) forgetLog(harness event.Harness, file string) {
 
 // tieFresh is how recently a log line must have been written for the
 // session it is from to be tied to a process that runs now (tieLive): a
-// line read later, as after the agent was down, may be from a session
-// whose process has ended. tieRetry is how often a session no hook
-// reports is tied again at most, each try a read of the process table.
+// line read later, as one the tailers found at a rescan or after the agent
+// was down, may be from a session whose process has ended. It is twice
+// the hot files' poll. tieRetry is how often a session no hook reports is
+// tied again at most, each try a read of the process table.
 const (
-	tieFresh = time.Minute
+	tieFresh = 10 * time.Second
 	tieRetry = 30 * time.Second
 )
 
@@ -140,21 +141,22 @@ const (
 const maxTieTried = 256
 
 // tieLive ties the session of harness h, id sid, that a line written at at
-// is from, to the process running it, when no hook reports the session and
-// the line was written in the last tieFresh (procs.Scanner.Tie): focus
+// is from, to the process running it, when no hook reports the session,
+// by the adapter's memory (hooked) or this run's hook ties, and the line
+// was written in the last tieFresh (procs.Scanner.Tie): focus
 // then finds the session in the window that hosts it, which SM 2.2 rule 6
 // reads, and the session.start its log reader writes, once its hooks had
 // their grace, is the scan's (tiedStart). Each line keeps the session's
 // touch fresh (procs.Scanner.Touch); a session is tied again at most every
 // tieRetry, so a session whose process ended gets the one it resumed in.
-func (h *adapterHost) tieLive(harness event.Harness, sid string, at int64) {
+func (h *adapterHost) tieLive(harness event.Harness, sid string, at int64, hooked bool) {
 	p := h.a.procs
 	now := wallNow()
-	if p == nil || at == 0 || now.UnixMilli()-at > tieFresh.Milliseconds() {
+	if p == nil || hooked || at == 0 || now.UnixMilli()-at > tieFresh.Milliseconds() {
 		return
 	}
 	key := h.sessionKey(sid)
-	if key == "" || h.a.hooked != nil && h.a.hooked.has(key) {
+	if key == "" || h.a.hooked.has(key) {
 		return
 	}
 	p.Touch(key, time.UnixMilli(at))
@@ -194,37 +196,71 @@ func (h *adapterHost) sessionKey(sid string) string {
 
 // tiedStart returns r, a session.start a log reader wrote for a session no
 // hook reported, as the process scan's when tieLive tied the session to its
-// process (tiedStartOf): one record, with the walk's parent and TTY, so the
-// session's parent class never changes mid-session (DESIGN 7.3, CC9). A
-// session tied only after its log's session.start keeps that one.
+// process (procs.Scanner.TieOf, which keeps a tie a while after its process
+// ended, for a short session's start): one record, with the walk's parent
+// and TTY. A session's later starts, at a change of token, have the parent
+// and TTY its first had, so its parent class never changes mid-session
+// (DESIGN 7.3, CC9): a session whose first start was the transcript's,
+// untied, keeps the transcript's for the rest.
 func (h *adapterHost) tiedStart(r adapters.Record, start *event.SessionStart) adapters.Record {
 	p := h.a.procs
 	if p == nil || r.Event.Source != event.SourceLog {
 		return r
 	}
-	sess, ok := p.TiedTo(r.Event.SessionKey)
-	if !ok {
+	key := r.Event.SessionKey
+	h.mu.Lock()
+	first, seen := h.firstStarts[key]
+	h.mu.Unlock()
+	walk := first.walk
+	if !seen {
+		sess, ok := p.TieOf(key)
+		first = firstStart{tied: ok, walk: sess.Event}
+		walk = sess.Event
+		h.mu.Lock()
+		if h.firstStarts == nil || len(h.firstStarts) >= maxFirstStarts {
+			h.firstStarts = make(map[string]firstStart)
+		}
+		h.firstStarts[key] = first
+		h.mu.Unlock()
+	}
+	if !first.tied {
 		return r
 	}
-	st := tiedStartOf(sess.Event, start)
+	st := tiedStartOf(walk, start, r.Token)
 	r.Event.Source, r.Event.Via, r.Event.Data = event.SourceOS, event.ViaOS, &st
 	return r
 }
 
+// firstStart is how a session's first session.start went: the scan's, with
+// its process's walk, or the transcript's.
+type firstStart struct {
+	tied bool
+	walk event.SessionStart
+}
+
+// maxFirstStarts bounds the sessions tiedStart remembers.
+const maxFirstStarts = 256
+
 // tiedStartOf is the session.start of a session tied to its process: the
 // walk's parent and TTY, the log's start kind and permission mode, and the
-// entrypoint by E-cc-transcript-labels, whose labels only ever withhold
-// credit: the walk's sdk or exec stands, else the log's sdk or cloud
-// stands, else the walk's stands. The log's sdk stands for every sdk-*
-// token, sdk-ts and sdk-py under an IDE too, which the decision would let
-// the IDE decide: the log's record no longer says which token it read.
-func tiedStartOf(walk event.SessionStart, log *event.SessionStart) event.SessionStart {
+// entrypoint E-cc-transcript-labels gives a walk joined to a token, whose
+// labels only ever withhold credit. The walk's sdk or exec stands. sdk-cli
+// is sdk under any host, and sdk-ts and sdk-py are unless an IDE or an
+// agent desktop app hosts the session, which then decides. The log's
+// cloud stands. Otherwise the walk's entrypoint stands.
+func tiedStartOf(walk event.SessionStart, log *event.SessionStart, token string) event.SessionStart {
 	st := walk
 	st.StartKind, st.PermissionMode = log.StartKind, log.PermissionMode
 	switch {
 	case walk.Entrypoint == event.EntrypointSDK || walk.Entrypoint == event.EntrypointExec:
-	case log.Entrypoint == event.EntrypointSDK || log.Entrypoint == event.EntrypointCloud:
-		st.Entrypoint = log.Entrypoint
+	case token == "sdk-cli":
+		st.Entrypoint = event.EntrypointSDK
+	case token == "sdk-ts" || token == "sdk-py":
+		if walk.Entrypoint != event.EntrypointIDE && walk.Entrypoint != event.EntrypointDesktop {
+			st.Entrypoint = event.EntrypointSDK
+		}
+	case log.Entrypoint == event.EntrypointCloud:
+		st.Entrypoint = event.EntrypointCloud
 	}
 	return st
 }
@@ -382,7 +418,7 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		recs = nil
 		h.count(func() { st.Ignored++ })
 	} else if session != "" && !ll.Replay {
-		h.tieLive(line.Harness, session, at)
+		h.tieLive(line.Harness, session, at, lr.LogHooked(session))
 	}
 	if !ll.Idle && !ll.Replay {
 		h.count(func() { st.Lines++ })

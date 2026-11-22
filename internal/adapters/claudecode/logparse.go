@@ -525,7 +525,7 @@ func (l *logLine) resolveStart() {
 				env.Mono = max(env.Mono-1, 0)
 			}
 			st := ps.start
-			l.add(logKey(ps.at, "start"), env, &st, nil)
+			l.add(logKey(ps.at, "start"), env, &st, nil).Token = ps.token
 		default:
 			// It waits, and the ones after it, in their order.
 			return
@@ -1008,6 +1008,18 @@ func (a *Adapter) LogPlace(raw adapters.RawRecord) (dir, session string, at int6
 		}
 	}
 	return e.CWD, e.SessionID, e.t
+}
+
+// LogHooked reports whether a hook call of session sid came, as the reader
+// remembers it (adapters.LogReader).
+func (a *Adapter) LogHooked(sid string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.sessions[sid] != nil {
+		return true
+	}
+	ls := a.logSessions[sid]
+	return ls != nil && ls.reported
 }
 
 // LogResume returns where in file the adapter's memory of it starts

@@ -277,10 +277,10 @@ func TestTranscriptTiedToItsProcess(t *testing.T) {
 			opts.Env = &install.Env{GOOS: runtime.GOOS, Home: home}
 			opts.Procs = func() ([]platform.Proc, error) { return slices.Clone(tc.table), nil }
 			a := startAgent(t, opts)
-			// The first prompt states the token 85 s ago, so its
-			// session.start waits out the 90 s hook grace; the second, just
-			// written, is the fresh line the tie needs. The tailers' idle
-			// marker after it lets the session.start go.
+			// The first prompt states the token 65 s ago, so its
+			// session.start waits out the 90 s hook grace, with room for a
+			// slow read; the second, just written, is the fresh line the tie
+			// needs. The tailers' idle markers after it let the start go.
 			line := func(prompt, text string, at time.Time) []byte {
 				b, _ := json.Marshal(map[string]any{"type": "user", "sessionId": captureSession, "promptId": prompt,
 					"timestamp": at.Format(time.RFC3339Nano), "cwd": r.folder(), "version": "2.1.327", "entrypoint": "cli",
@@ -288,7 +288,7 @@ func TestTranscriptTiedToItsProcess(t *testing.T) {
 					"message": map[string]any{"role": "user", "content": text}})
 				return append(b, '\n')
 			}
-			body := append(line("ffffffff-0000-4000-8000-000000000001", "What does this do?", time.Now().Add(-85*time.Second)),
+			body := append(line("ffffffff-0000-4000-8000-000000000001", "What does this do?", time.Now().Add(-65*time.Second)),
 				line("ffffffff-0000-4000-8000-000000000002", "And this one?", time.Now())...)
 			if err := os.WriteFile(file, body, 0o600); err != nil {
 				t.Fatal(err)
@@ -325,8 +325,8 @@ func TestTranscriptTiedToItsProcess(t *testing.T) {
 
 // TestTiedStartOf checks the session.start of a session tied to its
 // process: the walk's parent and TTY, the log's start kind and permission
-// mode, and the entrypoint E-cc-transcript-labels gives, whose labels only
-// ever withhold credit.
+// mode, and the entrypoint E-cc-transcript-labels gives a walk joined to a
+// token, whose labels only ever withhold credit.
 func TestTiedStartOf(t *testing.T) {
 	walk := func(ep event.Entrypoint, parent event.ParentClass) event.SessionStart {
 		return event.SessionStart{StartKind: event.StartStartup, Entrypoint: ep, ParentClass: parent, HasTTY: true}
@@ -334,22 +334,26 @@ func TestTiedStartOf(t *testing.T) {
 	log := func(ep event.Entrypoint) *event.SessionStart {
 		return &event.SessionStart{StartKind: event.StartResume, Entrypoint: ep, ParentClass: event.ParentUnknown, PermissionMode: "plan"}
 	}
+	ide, desktop, term := walk(event.EntrypointIDE, event.ParentIDE), walk(event.EntrypointDesktop, event.ParentUnknown),
+		walk(event.EntrypointUnknown, event.ParentTerminalApp)
 	cases := []struct {
-		name string
-		walk event.SessionStart
-		log  *event.SessionStart
-		want event.Entrypoint
+		name  string
+		walk  event.SessionStart
+		log   *event.SessionStart
+		token string
+		want  event.Entrypoint
 	}{
-		{"the transcript's sdk stands under an IDE", walk(event.EntrypointIDE, event.ParentIDE), log(event.EntrypointSDK), event.EntrypointSDK},
-		{"the transcript's sdk stands under a desktop app", walk(event.EntrypointDesktop, event.ParentUnknown), log(event.EntrypointSDK), event.EntrypointSDK},
-		{"the transcript's cloud stands over a terminal", walk(event.EntrypointUnknown, event.ParentTerminalApp), log(event.EntrypointCloud), event.EntrypointCloud},
-		{"a walk's exec stands over the transcript's unknown", walk(event.EntrypointExec, event.ParentScriptRuntime), log(event.EntrypointUnknown), event.EntrypointExec},
-		{"a walk's sdk stands over the transcript's cloud", walk(event.EntrypointSDK, event.ParentTerminalApp), log(event.EntrypointCloud), event.EntrypointSDK},
-		{"the walk's ide stands over the transcript's unknown", walk(event.EntrypointIDE, event.ParentIDE), log(event.EntrypointUnknown), event.EntrypointIDE},
+		{"sdk-cli is sdk under an IDE", ide, log(event.EntrypointSDK), "sdk-cli", event.EntrypointSDK},
+		{"sdk-ts under an IDE is the IDE's", ide, log(event.EntrypointSDK), "sdk-ts", event.EntrypointIDE},
+		{"sdk-py under a desktop app is the app's", desktop, log(event.EntrypointSDK), "sdk-py", event.EntrypointDesktop},
+		{"sdk-ts under a terminal is sdk", term, log(event.EntrypointSDK), "sdk-ts", event.EntrypointSDK},
+		{"a cloud token stands over a terminal", term, log(event.EntrypointCloud), "remote", event.EntrypointCloud},
+		{"a walk's exec stands over sdk-cli", walk(event.EntrypointExec, event.ParentScriptRuntime), log(event.EntrypointSDK), "sdk-cli", event.EntrypointExec},
+		{"cli leaves the walk's ide", ide, log(event.EntrypointUnknown), "cli", event.EntrypointIDE},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tiedStartOf(tc.walk, tc.log)
+			got := tiedStartOf(tc.walk, tc.log, tc.token)
 			if got.Entrypoint != tc.want || got.ParentClass != tc.walk.ParentClass || !got.HasTTY ||
 				got.StartKind != event.StartResume || got.PermissionMode != "plan" {
 				t.Errorf("tiedStartOf = %+v; want entrypoint %s with the walk's parent and TTY and the log's kind and mode", got, tc.want)

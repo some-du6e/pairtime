@@ -840,15 +840,20 @@ func TestTie(t *testing.T) {
 		}
 		return ps
 	}
-	// step is one thing done to the scanner: a table to read from now on,
-	// a scan, a claim, a touch or a tie, in that order of its fields' use.
+	// step is one thing done to the scanner: a clock to read, a table to
+	// read from now on, a scan, a claim, a touch or a tie, in that order of
+	// its fields' use.
 	type step struct {
+		now   time.Time
 		table []platform.Proc
 		scan  bool
 		claim int
 		touch string
 		key   string
 		at    time.Time
+	}
+	without := func(ps []platform.Proc, pid int) []platform.Proc {
+		return slices.DeleteFunc(slices.Clone(ps), func(p platform.Proc) bool { return p.PID == pid })
 	}
 	cases := []struct {
 		name  string
@@ -870,6 +875,12 @@ func TestTie(t *testing.T) {
 			[]step{{table: oneClaude(), key: "s_one", at: sec(-100)}, {touch: "s_one", at: sec(-10)}, {key: "s_two", at: sec(-20)}}, 0},
 		{"a claude whose session went quiet before the new one's first line passes to it, as at /clear",
 			[]step{{table: oneClaude(), key: "s_one", at: sec(-100)}, {touch: "s_one", at: sec(-60)}, {key: "s_two", at: sec(-20)}}, 111},
+		{"a claude whose session went quiet longer than ClearGap before the new one's first line keeps its session",
+			[]step{{table: oneClaude(), key: "s_one", at: sec(-100)}, {touch: "s_one", at: sec(-400)}, {key: "s_two", at: sec(-20)}}, 0},
+		{"with a claude a read found while the session wrote and gone now, nothing is tied: it could have been the session's",
+			[]step{{table: terminal(), scan: true}, {table: without(terminal(), 111), key: "s_one", at: sec(-5)}}, 0},
+		{"a claude that went before the session's first line doesn't count",
+			[]step{{now: sec(-100), table: terminal(), scan: true}, {now: sec(0), table: without(terminal(), 111), key: "s_one", at: sec(-5)}}, 121},
 		{"a session whose claude ended gets the one it resumed in, once a scan saw the old one gone",
 			[]step{{table: oneClaude(), key: "s_one", at: sec(-100)},
 				{table: slices.DeleteFunc(terminal(), func(p platform.Proc) bool { return p.PID == 111 }), scan: true, key: "s_one", at: sec(-10)}}, 121},
@@ -884,6 +895,9 @@ func TestTie(t *testing.T) {
 			var ok bool
 			var last string
 			for _, st := range tc.steps {
+				if !st.now.IsZero() {
+					now = st.now
+				}
 				if st.table != nil {
 					f.procs = st.table
 				}
@@ -951,8 +965,7 @@ func TestTieAcrossRestarts(t *testing.T) {
 			}
 			return false
 		}()},
-		{"and ties it to no other session that comes while the first still writes", func() bool {
-			s.Touch("s_one", sec(-5))
+		{"and, its session having written nothing since the restart, ties it to no other session", func() bool {
 			_, ok := s.Tie(event.HarnessClaudeCode, "s_two", sec(-50))
 			return !ok
 		}()},
@@ -961,6 +974,42 @@ func TestTieAcrossRestarts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
 				t.Error("the tie didn't survive the restart")
+			}
+		})
+	}
+}
+
+// TestTieOf checks that a tie outlives its process for EndedKeep, for the
+// session.start a short session writes after its process ended, while
+// TiedTo, which focus's sessions follow, lets it go at once.
+func TestTieOf(t *testing.T) {
+	f := &fake{procs: oneClaude()}
+	now := sec(0)
+	var got []Session
+	s := newScanner(f, &now, &got)
+	if _, ok := s.Tie(event.HarnessClaudeCode, "s_one", sec(-100)); !ok {
+		t.Fatal("no tie")
+	}
+	f.procs = slices.DeleteFunc(oneClaude(), func(p platform.Proc) bool { return p.PID == 111 })
+	if _, err := s.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	_, tied := s.TiedTo("s_one")
+	_, kept := s.TieOf("s_one")
+	now = sec(0).Add(EndedKeep + time.Second)
+	_, later := s.TieOf("s_one")
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"TiedTo lets a tie go once a scan saw its process gone", !tied},
+		{"TieOf keeps it for EndedKeep", kept},
+		{"and not longer", !later},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("TiedTo %v, TieOf %v, then %v", tied, kept, later)
 			}
 		})
 	}

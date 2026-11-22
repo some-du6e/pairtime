@@ -260,6 +260,11 @@ type Record struct {
 	// line read again after a crash makes records pkg/score takes for the
 	// ones the ledger has. It is "" for a record of anything but a log.
 	LogKey string
+	// Token is, for a session.start a log reader wrote, the entrypoint
+	// token the harness's log stated, such as Claude Code's sdk-ts, which
+	// the agent needs to join the session to a process's walk
+	// (E-cc-transcript-labels). It never reaches the event.
+	Token string
 }
 
 // Stateful is an adapter whose memory of the sessions it parses can

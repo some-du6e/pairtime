@@ -287,9 +287,11 @@ type adapterHost struct {
 	// batches with none taken (refuseLogs).
 	logRefused bool
 	// Under mu: sessKeys keys sessions as the adapters do, once K_session
-	// is known, and tieTried is when tieLive last tried each session.
-	sessKeys *adapters.Keys
-	tieTried map[string]time.Time
+	// is known, tieTried is when tieLive last tried each session, and
+	// firstStarts how each session's first session.start went (tiedStart).
+	sessKeys    *adapters.Keys
+	tieTried    map[string]time.Time
+	firstStarts map[string]firstStart
 }
 
 // adapterKeys are the keys the adapters make records with, derived from
