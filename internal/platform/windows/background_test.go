@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"runtime"
 	"testing"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -28,9 +29,35 @@ type backgroundReport struct {
 	// mode once more, which it refuses to a process in it.
 	Again string
 	// IO is a thread's I/O priority hint, Background's own and one's that
-	// started after it.
+	// started after it, which LaterNew says was found.
 	IO, LaterIO uint32
+	LaterNew    bool
 	IOErr       string
+}
+
+// maxLater bounds the threads the child holds while it looks for one that
+// started after Background.
+const maxLater = 16
+
+// threadIDs returns the ids of this process's threads.
+func threadIDs() (map[uint32]bool, error) {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer windows.CloseHandle(snap)
+	pid := windows.GetCurrentProcessId()
+	ids := map[uint32]bool{}
+	e := windows.ThreadEntry32{Size: uint32(unsafe.Sizeof(windows.ThreadEntry32{}))}
+	for err = windows.Thread32First(snap, &e); err == nil; err = windows.Thread32Next(snap, &e) {
+		if e.OwnerProcessID == pid {
+			ids[e.ThreadID] = true
+		}
+	}
+	if !errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+		return nil, err
+	}
+	return ids, nil
 }
 
 func backgroundChild(string) int {
@@ -54,16 +81,40 @@ func backgroundChild(string) int {
 		r.IOErr = err.Error()
 		return 1
 	}
-	done := make(chan error, 1)
-	go func() {
-		runtime.LockOSThread()
-		var err error
-		r.LaterIO, err = ThreadIOPriority()
-		done <- err
-	}()
-	if err := <-done; err != nil {
+	before, err := threadIDs()
+	if err != nil {
 		r.IOErr = err.Error()
 		return 1
+	}
+	// Each locked goroutine holds a thread of its own, so the runtime
+	// starts new ones until one that wasn't there after Background reads
+	// its I/O priority.
+	type read struct {
+		io  uint32
+		err error
+		new bool
+	}
+	hold := make(chan struct{})
+	defer close(hold)
+	for i := 0; i < maxLater && !r.LaterNew; i++ {
+		got := make(chan read, 1)
+		go func() {
+			runtime.LockOSThread()
+			if !before[windows.GetCurrentThreadId()] {
+				io, err := ThreadIOPriority()
+				got <- read{io, err, true}
+				return
+			}
+			got <- read{}
+			<-hold
+		}()
+		if l := <-got; l.new {
+			if l.err != nil {
+				r.IOErr = l.err.Error()
+				return 1
+			}
+			r.LaterIO, r.LaterNew = l.io, true
+		}
 	}
 	return 0
 }
@@ -91,7 +142,7 @@ func TestBackground(t *testing.T) {
 		{"a process in background mode is refused it again, which says it is in it",
 			r.Again == windows.ERROR_PROCESS_MODE_ALREADY_BACKGROUND.Error()},
 		{"the calling thread's I/O priority is very low", r.IOErr == "" && r.IO == IoPriorityVeryLow},
-		{"a thread that starts after it has a very low I/O priority too", r.IOErr == "" && r.LaterIO == IoPriorityVeryLow},
+		{"a thread that starts after it has a very low I/O priority too", r.IOErr == "" && r.LaterNew && r.LaterIO == IoPriorityVeryLow},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

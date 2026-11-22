@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
@@ -152,11 +151,69 @@ func (h *adapterHost) lookbackUntil() time.Time {
 // on the agent was running, and its hooks wrote the session's records, if
 // any came; a session no hook reported then is the one lookback can't fill
 // in, and only an agent upgraded from a release without lookback has one.
+//
+// A log reader writes a session's session.start once, at its first entry,
+// which can lie before the window while the session's later records lie in
+// it. SM 2.2 rules 4 and 5 read that start, so the window carries it to the
+// session's first record inside it, dated at that record; the start of a
+// session wholly before the window, or of one the window ends before, waits
+// for nothing (maxCarried).
 func (h *adapterHost) lookbackWindow(recs []adapters.Record, from int64) []adapters.Record {
 	h.mu.Lock()
+	defer h.mu.Unlock()
 	until := h.ledgerBegan
-	h.mu.Unlock()
-	return slices.DeleteFunc(recs, func(r adapters.Record) bool { return r.Event.T < from || r.Event.T >= until })
+	out := make([]adapters.Record, 0, len(recs)+1)
+	for _, r := range recs {
+		key := r.Event.SessionKey
+		_, start := r.Event.Data.(*event.SessionStart)
+		switch {
+		case r.Event.T >= until:
+		case r.Event.T < from:
+			if start && key != "" {
+				h.carry(carriedStart{Event: r.Event, LogKey: r.LogKey})
+			}
+		default:
+			if c, ok := h.carried[key]; ok && key != "" {
+				delete(h.carried, key)
+				if !start {
+					c.Event.T, c.Event.Mono, c.Event.BootID = r.Event.T, r.Event.Mono, r.Event.BootID
+					out = append(out, adapters.Record{Event: c.Event, LogKey: c.LogKey})
+				}
+			}
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// carriedStart is a session.start lookback's window left out, with the
+// key of the line's record it was, which waits for its session's first
+// record inside the window (lookbackWindow).
+type carriedStart struct {
+	Event  event.Event `json:"event"`
+	LogKey string      `json:"log_key"`
+}
+
+// maxCarried bounds the session.starts that wait: past it, the oldest go.
+const maxCarried = 256
+
+// carry keeps c until its session's first record inside lookback's window,
+// in place of one of its session that waits already, as a later start says
+// how the session went on. h.mu is held.
+func (h *adapterHost) carry(c carriedStart) {
+	if h.carried == nil {
+		h.carried = make(map[string]carriedStart)
+	}
+	h.carried[c.Event.SessionKey] = c
+	for len(h.carried) > maxCarried {
+		oldest := ""
+		for k, o := range h.carried {
+			if oldest == "" || o.Event.T < h.carried[oldest].Event.T {
+				oldest = k
+			}
+		}
+		delete(h.carried, oldest)
+	}
 }
 
 // drained reports whether the inbox's first drain has handed its calls to

@@ -57,7 +57,9 @@ func inProcessLookback(started *atomic.Int32) func() (tailers.Child, error) {
 // transcripts in the projects folder when the agent first lists it go
 // through lookback's reader, and the records of what they say happened in
 // LookbackWindow before then, and before the ledger began, reach the
-// ledger as the tailers' own lines would.
+// ledger as the tailers' own lines would. A session whose first entry, the
+// one that states its entrypoint, lies before LookbackWindow keeps its
+// session.start, at its first record inside it, for SM 2.2 rules 4 and 5.
 func TestLookbackReachesTheLedger(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the capture's paths are Linux's")
@@ -95,6 +97,21 @@ func TestLookbackReachesTheLedger(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A session an SDK app started 31 days ago, whose first entry states
+	// its entrypoint, and which it prompted again yesterday.
+	const sdk = "33333333-0000-4000-8000-000000000003"
+	sdkPrompt := func(id string, at time.Time) []byte {
+		b, _ := json.Marshal(map[string]any{"type": "user", "sessionId": sdk, "promptId": id,
+			"timestamp": at.Format(time.RFC3339Nano), "cwd": r.folder(), "version": "2.1.327", "entrypoint": "sdk-cli", "isSidechain": false,
+			"promptSource": "sdk", "turnOrigin": "sdk", "message": map[string]any{"role": "user", "content": "Summarize the logs."}})
+		return append(b, '\n')
+	}
+	yesterday := now.Add(-24 * time.Hour)
+	sdkFile := slices.Concat(sdkPrompt("ffffffff-0000-4000-8000-000000000011", now.Add(-tailers.LookbackWindow-24*time.Hour)),
+		sdkPrompt("ffffffff-0000-4000-8000-000000000012", yesterday))
+	if err := os.WriteFile(filepath.Join(dir, sdk+".jsonl"), sdkFile, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	var started atomic.Int32
 	opts := r.options([]keys.Store{})
@@ -103,7 +120,7 @@ func TestLookbackReachesTheLedger(t *testing.T) {
 	a := startAgent(t, opts)
 	st := waitStatusFor(t, a, 60*time.Second, func(s statusReply) bool {
 		lb := s.Adapters.Lookback
-		return lb != nil && lb.Files == 3 && lb.FilesDone == 3 && !lb.Running
+		return lb != nil && lb.Files == 4 && lb.FilesDone == 4 && !lb.Running
 	})
 	a.cancel()
 	if err := a.waitExit(t); err != nil {
@@ -136,6 +153,28 @@ func TestLookbackReachesTheLedger(t *testing.T) {
 		}
 		return out
 	}
+	// kinds lists session s's records in ledger order: s for a
+	// session.start with its entrypoint, p for a prompt.submit, each with
+	// its time.
+	kinds := func(s string) (out []string, at []int64) {
+		for _, rec := range recs {
+			if rec.ev.SessionKey != k.Session(s) {
+				continue
+			}
+			switch d := rec.ev.Data.(type) {
+			case *event.SessionStart:
+				out = append(out, "s "+string(d.Entrypoint))
+			case *event.PromptSubmit:
+				out = append(out, "p")
+			default:
+				continue
+			}
+			at = append(at, rec.ev.T)
+		}
+		return out, at
+	}
+	sdkKinds, sdkAt := kinds(sdk)
+	olderKinds, _ := kinds(older)
 	lb := st.Adapters.Lookback
 	cases := []struct {
 		name string
@@ -150,6 +189,10 @@ func TestLookbackReachesTheLedger(t *testing.T) {
 		}()},
 		{"a prompt from after the ledger began is left to the session's hooks", len(bySession(later)) == 0},
 		{"a prompt from before LookbackWindow is left out", len(bySession(older)) == 0},
+		{"a session wholly before LookbackWindow gets no session.start either", len(olderKinds) == 0},
+		{"a session whose first entry lies before LookbackWindow keeps its session.start, at its first record inside it",
+			slices.Equal(sdkKinds, []string{"s " + string(event.EntrypointSDK), "p"}) && sdkAt[0] == sdkAt[1] &&
+				sdkAt[1] == yesterday.UnixMilli()},
 		{"every record is via log, and no two share an event_id", func() bool {
 			seen := map[string]bool{}
 			for _, rec := range recs {
@@ -160,13 +203,29 @@ func TestLookbackReachesTheLedger(t *testing.T) {
 			}
 			return len(recs) > 0
 		}()},
-		{"one reader read all three files, and the status says so", started.Load() == 1 && lb.Bytes == lb.BytesDone && lb.Failures == 0},
+		{"one reader read all four files, and the status says so", started.Load() == 1 && lb.Bytes == lb.BytesDone && lb.Failures == 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
-				t.Errorf("lookback %+v from %d readers, %d log records", lb, started.Load(), len(recs))
+				t.Errorf("lookback %+v from %d readers, %d log records; the SDK session's %v at %v", lb, started.Load(), len(recs),
+					sdkKinds, sdkAt)
 			}
 		})
 	}
+
+	t.Run("a restarted agent's status shows what lookback read before, with no reader of its own", func(t *testing.T) {
+		a := startAgent(t, opts)
+		st := waitStatusFor(t, a, 15*time.Second, func(s statusReply) bool {
+			lb := s.Adapters.Lookback
+			return lb != nil && lb.Files == 4 && lb.FilesDone == 4
+		})
+		a.cancel()
+		if err := a.waitExit(t); err != nil {
+			t.Fatalf("stopping the agent: %v", err)
+		}
+		if lb := st.Adapters.Lookback; lb.Running || lb.Bytes != lb.BytesDone || started.Load() != 1 {
+			t.Errorf("lookback %+v from %d readers, want the first run's, read through, with no reader since", lb, started.Load())
+		}
+	})
 }

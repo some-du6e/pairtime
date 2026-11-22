@@ -288,9 +288,12 @@ type adapterHost struct {
 	logRefused bool
 	// Under mu: lookback is how far the tailers' lookback has read, and
 	// ledgerBegan when the ledger's chain began, in Unix ms, which ends
-	// the window of lookback's records (lookbackWindow).
+	// the window of lookback's records (lookbackWindow). carried holds,
+	// by session key, the session.starts the window left out that wait for
+	// the session's first record inside it.
 	lookback    tailers.Progress
 	ledgerBegan int64
+	carried     map[string]carriedStart
 }
 
 // adapterKeys are the keys the adapters make records with, derived from
@@ -368,6 +371,10 @@ type lookbackReply struct {
 type adaptersState struct {
 	Keyed    string                            `json:"keyed"`
 	Adapters map[event.Harness]json.RawMessage `json:"adapters,omitempty"`
+	// Carried are the session.starts lookback's window left out that wait
+	// for their session's first record inside it (lookbackWindow), which
+	// go with the adapters' memory that wrote them.
+	Carried []carriedStart `json:"carried,omitempty"`
 }
 
 // memoryKey names the K_session a memory was saved under, as an opaque key
@@ -1143,6 +1150,14 @@ func (h *adapterHost) prepare() bool {
 		h.git.Store(g)
 	}
 	h.memory = h.loadMemory()
+	h.mu.Lock()
+	h.carried = make(map[string]carriedStart, len(h.memory.Carried))
+	for _, c := range h.memory.Carried {
+		if c.Event.SessionKey != "" {
+			h.carried[c.Event.SessionKey] = c
+		}
+	}
+	h.mu.Unlock()
 	h.ready = true
 	return true
 }
@@ -1735,6 +1750,12 @@ func (h *adapterHost) save(force bool) {
 	if st.Adapters == nil {
 		st.Adapters = make(map[event.Harness]json.RawMessage)
 	}
+	h.mu.Lock()
+	for _, c := range h.carried {
+		st.Carried = append(st.Carried, c)
+	}
+	h.mu.Unlock()
+	slices.SortFunc(st.Carried, func(a, b carriedStart) int { return strings.Compare(a.Event.SessionKey, b.Event.SessionKey) })
 	for name, ad := range h.built {
 		s, ok := ad.(adapters.Stateful)
 		if !ok {

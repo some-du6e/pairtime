@@ -539,18 +539,21 @@ components:
         How far lookback has read what the harnesses logged before pairtime
         did: the last 30 days of each log file a root's first listing found,
         read at low priority by a process of its own (DESIGN 5.9 step 9).
-        Absent when there was nothing to read.
+        It counts what earlier runs of the agent read too. Absent when
+        there was nothing to read.
       properties:
         files:
           type: integer
           minimum: 0
-          description: The files with lines from before pairtime.
+          description: >
+            The files with lines from before pairtime. A file that goes away
+            leaves this count and files_done alike.
         files_done:
           type: integer
           minimum: 0
           description: >
             The files lookback is done with: read, or left unread for good,
-            as after its reader failed three times or the file went away.
+            as after its reader failed three times.
         bytes:
           type: integer
           minimum: 0

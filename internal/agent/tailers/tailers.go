@@ -720,7 +720,9 @@ func relUnder(dir, path string) (string, bool) {
 }
 
 // Start runs the tailer on a goroutine of its own and returns the step
-// that stops it.
+// that stops it. It first reports how far lookback had read, as the
+// cursors Store kept say (Options.Progress), so a status after a restart
+// shows it before a child reads more.
 func (t *Tailer) Start() func() {
 	if !t.opts.NoNotify {
 		if w, err := fsnotify.NewWatcher(); err != nil {
@@ -739,6 +741,9 @@ func (t *Tailer) Start() func() {
 		t.poll = s.Every("tailers.poll", HotPoll, func(time.Time) { t.wake() })
 		t.poll.Stop()
 	}
+	// How far lookback had read, as the cursors say, before a child of
+	// this run reports more.
+	t.report()
 	go t.run()
 	return func() {
 		t.mu.Lock()

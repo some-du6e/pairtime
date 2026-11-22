@@ -1148,6 +1148,42 @@ func TestTranscriptNativeAtItsStop(t *testing.T) {
 	}
 }
 
+// TestTranscriptHistoryOfAHookedSession checks a session whose first
+// via-hook call came before lookback read its history (hookedAt): an entry
+// from before that call, by more than startGrace, keeps the reader's
+// session.start, which the hook's own, dated later, can't stand for in SM
+// 2.2 rules 4 and 5, and an entry from since gets none.
+func TestTranscriptHistoryOfAHookedSession(t *testing.T) {
+	const hooked = 1_795_194_000_000 // 2026-11-20T17:00:00Z, the session's first via-hook call
+	walked := &adapters.Arrival{Via: event.ViaHook, T: hooked, Mono: 5000, BootID: "boot", Harness: event.HarnessClaudeCode,
+		Walk: &platform.Lineage{ParentClass: event.ParentTerminalApp, Entrypoint: event.EntrypointUnknown, HasTTY: true}}
+	cases := []struct {
+		name string
+		// at is the entry's time, and starts the session.starts the
+		// transcript gives for it.
+		at     string
+		starts int
+	}{
+		{"an entry from a day before the session's first via-hook call keeps the reader's session.start", "2026-11-19T17:00:00.000Z", 1},
+		{"an entry from within startGrace before that call gets none", "2026-11-20T16:59:30.000Z", 0},
+		{"an entry from after that call gets none", "2026-11-20T17:00:05.000Z", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTest()
+			if _, err := a.Parse(hookRaw(EventSessionStart, map[string]any{"session_id": "s1", "cwd": "/home/capture/p",
+				"source": "startup"}, walked)); err != nil {
+				t.Fatal(err)
+			}
+			recs := readLog(t, a, "p/s.jsonl", logLines(userText("q1", "fix the failing test",
+				map[string]any{"turnOrigin": "human", "promptSource": "typed", "timestamp": tc.at})))
+			if got := len(ofKind[*event.SessionStart](recs)); got != tc.starts {
+				t.Errorf("%d session.starts from the transcript, want %d", got, tc.starts)
+			}
+		})
+	}
+}
+
 // TestQueuedPickupLearned checks the case parse.go left to WP-AD3
 // (E-cc-queued-turn): a message queued in a turn that took up an earlier
 // queued message, before any call of that turn, is that turn's agent.queue

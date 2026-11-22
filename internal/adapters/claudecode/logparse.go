@@ -463,6 +463,14 @@ func (a *Adapter) logSession(sid string) *txSession {
 	return ls
 }
 
+// hookedAt reports whether the session's via-hook calls, as s remembers
+// the first of them, describe a moment t: one no more than startGrace
+// before that call, as a session's first entries can be. An entry older
+// than that, as lookback reads from a session's history before its hooks
+// came, keeps the reader's session.start: the hook's own sorts after it,
+// so SM 2.2 rules 4 and 5 can't read that one for it.
+func (s *txSession) hookedAt(t int64) bool { return s.nativeAt > 0 && t >= s.nativeAt-startGrace }
+
 // noteNative copies the native cutoff of session s, which a hook call just
 // set, into the reader's memory of the session, so the reader keeps it
 // when the hook calls' memory of the session is gone, as after 256 others,
@@ -487,15 +495,17 @@ func (a *Adapter) native(sid string, t int64) bool {
 // (E-cc-transcript-labels). A session whose hooks only the spool delivered
 // gets it too, since pkg/score reads no side door's start in a session a
 // log reader covers, so its own would leave SM 2.2 rules 4 and 5 nothing
-// to read. A subagent's entries state the session's token too, and are no
-// start of it. It waits in pend until startGrace after the entry, unless
-// the entry is that old already (resolveStart).
+// to read. So does a hooked session's history from before its hooks came,
+// as lookback reads it (hookedAt). A subagent's entries state the
+// session's token too, and are no start of it. It waits in pend until
+// startGrace after the entry, unless the entry is that old already
+// (resolveStart).
 func (l *logLine) sessionStart(e *entry, sid string) {
 	if e.Entrypoint == nil || e.IsSidechain || sid == "" || e.t == 0 {
 		return
 	}
 	ls := l.a.logSession(sid)
-	if ls.nativeAt > 0 {
+	if ls.hookedAt(e.t) {
 		return
 	}
 	// The session's token as of this entry: the last waiting start's, or
@@ -533,7 +543,7 @@ func (l *logLine) sessionStart(e *entry, sid string) {
 
 // resolveStart writes the pending session.start once startGrace has
 // passed since its entry with no via-hook call of its session, and drops it
-// when one came. One written after its entry's line is dated a millisecond
+// when one came that the entry is no older than (hookedAt). One written after its entry's line is dated a millisecond
 // before the entry, so it sorts before the entry's other records (pkg/score
 // orders records by time, then by when they were written).
 func (l *logLine) resolveStart() {
@@ -541,7 +551,7 @@ func (l *logLine) resolveStart() {
 		ps := l.f.pend.starts[0]
 		ls := l.a.logSession(ps.session)
 		switch {
-		case ls.nativeAt > 0:
+		case ls.hookedAt(ps.env.T):
 		case l.raw.Arrival.T-ps.env.T >= startGrace:
 			ls.started, ls.token = true, ps.token
 			env := ps.env
