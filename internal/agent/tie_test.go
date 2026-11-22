@@ -64,10 +64,12 @@ func (r *tieRig) hookCall(t *testing.T, sid string, at time.Time, via event.Via)
 
 // TestTieLive checks the gates tieLive puts before a tie (WP-AD3): only a
 // fresh line of a session no hook reports, by the log reader's memory or
-// this run's hook ties, reaches procs.Scanner.Tie, and a session that
-// wasn't tied reads the process table again only after tieRetry. A
-// session whose hook calls all came through the spool is one no hook
-// reports, as it is for the reader's session.start (LogHooked).
+// this run's hook ties, and none of whose lines since its last that counts
+// is out of pairtime, reaches procs.Scanner.Tie. A session's first try only
+// reads the table, and its next line written after that read ties it, while
+// a session weighed and not tied reads the process table again only after
+// tieRetry. A session whose hook calls all came through the spool is one no
+// hook reports, as it is for the reader's session.start (LogHooked).
 func TestTieLive(t *testing.T) {
 	now := time.Now()
 	me := platform.UIDOwner(uint32(os.Geteuid()))
@@ -84,24 +86,33 @@ func TestTieLive(t *testing.T) {
 	one := append(slices.Clone(desktop), claude(111)...)
 	two := append(slices.Clone(one), claude(121)...)
 	const sid = "617e16a3-ddb4-44ca-af68-72cf58ed1a34"
+	// line has tieLive take a line of the session written at at, as the
+	// worker does, and lines a first line now and a second written after
+	// the read the first made.
+	line := func(r *tieRig, lr adapters.LogReader, at time.Time) {
+		r.h.tieLive(lr, event.HarnessClaudeCode, sid, "/home/capture/.claude/projects/-p", at.UnixMilli(), nil)
+	}
+	lines := func(r *tieRig) {
+		line(r, r.lr, now)
+		line(r, r.lr, time.Now().Add(time.Second))
+	}
 	cases := []struct {
 		name  string
 		table []platform.Proc
-		// run calls tieLive as the case says.
+		// run has tieLive take lines as the case says.
 		run   func(t *testing.T, r *tieRig)
 		tied  bool
 		reads int
 	}{
-		{"a fresh line of a session no hook reports ties it", one,
-			func(t *testing.T, r *tieRig) { r.h.tieLive(r.lr, event.HarnessClaudeCode, sid, now.UnixMilli()) }, true, 1},
+		{"a session's first fresh line only reads the table, and its next, written after that read, ties it", one,
+			func(t *testing.T, r *tieRig) { lines(r) }, true, 2},
+		{"a first line alone ties nothing", one, func(t *testing.T, r *tieRig) { line(r, r.lr, now) }, false, 1},
 		{"a line written longer than tieFresh ago ties nothing and reads no table", one,
-			func(t *testing.T, r *tieRig) {
-				r.h.tieLive(r.lr, event.HarnessClaudeCode, sid, now.Add(-tieFresh-time.Second).UnixMilli())
-			}, false, 0},
+			func(t *testing.T, r *tieRig) { line(r, r.lr, now.Add(-tieFresh-time.Second)) }, false, 0},
 		{"a session the log reader remembers a hook reported ties nothing", one,
 			func(t *testing.T, r *tieRig) {
 				r.hookCall(t, sid, now.Add(-time.Minute), event.ViaHook)
-				r.h.tieLive(r.lr, event.HarnessClaudeCode, sid, now.UnixMilli())
+				lines(r)
 			}, false, 0},
 		{"a session the log reader remembers a hook reported before a restart ties nothing", one,
 			func(t *testing.T, r *tieRig) {
@@ -114,23 +125,29 @@ func TestTieLive(t *testing.T) {
 				if err := ad.(adapters.Stateful).LoadState(mem); err != nil {
 					t.Fatal(err)
 				}
-				r.h.tieLive(ad.(adapters.LogReader), event.HarnessClaudeCode, sid, now.UnixMilli())
+				line(r, ad.(adapters.LogReader), now)
+				line(r, ad.(adapters.LogReader), time.Now().Add(time.Second))
 			}, false, 0},
 		{"a session whose hook calls all came through the spool ties as one no hook reports", one,
 			func(t *testing.T, r *tieRig) {
 				r.hookCall(t, sid, now.Add(-time.Minute), event.ViaPlugin)
-				r.h.tieLive(r.lr, event.HarnessClaudeCode, sid, now.UnixMilli())
-			}, true, 1},
+				lines(r)
+			}, true, 2},
 		{"a session a hook tied in this run ties nothing", one,
 			func(t *testing.T, r *tieRig) {
 				r.a.hooked.tie(platform.ID{PID: 999}, r.h.sessionKey(sid))
-				r.h.tieLive(r.lr, event.HarnessClaudeCode, sid, now.UnixMilli())
+				lines(r)
 			}, false, 0},
-		{"a session that couldn't be tied isn't tried again within tieRetry", two,
+		{"a session a line of which ran out of pairtime since its last that counts ties nothing", one,
 			func(t *testing.T, r *tieRig) {
-				r.h.tieLive(r.lr, event.HarnessClaudeCode, sid, now.UnixMilli())
-				r.h.tieLive(r.lr, event.HarnessClaudeCode, sid, now.UnixMilli())
-			}, false, 1},
+				r.a.hooked.ignore(r.h.sessionKey(sid))
+				lines(r)
+			}, false, 0},
+		{"a session weighed and not tied isn't weighed again within tieRetry", two,
+			func(t *testing.T, r *tieRig) {
+				lines(r)
+				line(r, r.lr, time.Now().Add(2*time.Second))
+			}, false, 2},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -170,7 +187,10 @@ func TestTiedStart(t *testing.T) {
 	}
 	tie := func(t *testing.T, r *tieRig) {
 		t.Helper()
-		if _, ok := r.a.procs.Tie(event.HarnessClaudeCode, r.h.sessionKey(sid), now); !ok {
+		// The first try reads the table, and a line written after it ties.
+		key := r.h.sessionKey(sid)
+		r.a.procs.Tie(event.HarnessClaudeCode, key, now, false)
+		if _, ok, _ := r.a.procs.Tie(event.HarnessClaudeCode, key, time.Now().Add(time.Second), false); !ok {
 			t.Fatal("no tie")
 		}
 	}

@@ -1656,9 +1656,16 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stam
 		st.Records++
 		st.LastRecord = max(st.LastRecord, ev.T)
 	})
-	// focus_project: the window that hosts the session shows its project.
+	// focus_project: the window that hosts the session shows its project,
+	// whether a hook or the process scan tied the session to its process.
 	if ev.SessionKey != "" && ev.SessionKey != event.NoSession && ev.ProjectKey != "" {
-		if h.a.hooked.setProject(ev.SessionKey, ev.ProjectKey) {
+		news := h.a.hooked.setProject(ev.SessionKey, ev.ProjectKey)
+		if p := h.a.procs; !news && p != nil {
+			if _, tied := p.TiedTo(ev.SessionKey); tied {
+				news = h.a.hooked.setTiedProject(ev.SessionKey, ev.ProjectKey)
+			}
+		}
+		if news {
 			h.a.refreshFocus()
 		}
 	}

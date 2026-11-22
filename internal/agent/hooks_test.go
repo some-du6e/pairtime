@@ -29,6 +29,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/procs"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
+	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -856,6 +857,220 @@ func TestIgnoredSessionLeavesFocus(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if !c.ok {
 				t.Errorf("no: adapters %+v, ledger %v", st, kinds)
+			}
+		})
+	}
+}
+
+// TestIgnoredTranscriptLeavesFocus checks the focus side of a folder a
+// .pairtime-ignore keeps out (DESIGN 8.8) for a session no hook reports,
+// which the procs tie hosts (WP-AD3), with the real tailers, adapters,
+// focus, process scan and ledger over a process table the test supplies:
+// once a line of the tied session runs in such a folder, the terminal hosts
+// the session no more, a later line of it there ties nothing, and one that
+// counts again ties it again. While tied, focus shows the project its
+// records carry, which no hook ties. No os.focus record names the session
+// while its lines are out of pairtime, so no minute of that stretch can
+// credit it, and the ledger holds none of those lines.
+func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the process table and the transcript's folders are Linux's")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git isn't installed")
+	}
+	store, problem, err := state.Open(filepath.Join(t.TempDir(), "state.json"))
+	if err != nil || problem != "" {
+		t.Fatalf("state.Open: %v %q", err, problem)
+	}
+	dirs := home.Dirs{Data: t.TempDir(), Config: t.TempDir()}
+	dirs.Runtime = dirs.Data
+	a := &agent{
+		dirs:      dirs,
+		log:       slog.New(slog.DiscardHandler),
+		sched:     sched.New(),
+		state:     store,
+		problems:  make(map[string]string),
+		keyStores: []keys.Store{}, // K_dev goes in a key file, off the OS's store
+		hooked:    newHookTies(),
+		drained:   make(chan struct{}),
+	}
+	var stops []func()
+	var stopOnce sync.Once
+	stopAll := func() {
+		stopOnce.Do(func() {
+			for i := len(stops) - 1; i >= 0; i-- {
+				stops[i]()
+			}
+		})
+	}
+	t.Cleanup(stopAll)
+	stops = append(stops, a.startLedger(), a.startPresence(presence.OS{}))
+	deadline := time.Now().Add(20 * time.Second)
+	for a.sessionSecret() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("the agent had no K_session 20 s after its keystore started opening")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	now := time.Now()
+	me := platform.UIDOwner(uint32(os.Geteuid()))
+	table := []platform.Proc{
+		{PID: 1, Name: "systemd", PGID: 1, TTY: platform.TTYNone, Start: now.Add(-time.Hour), Owner: "uid:0"},
+		{PID: 100, PPID: 1, Name: "gnome-terminal-server", PGID: 100, TTY: platform.TTYNone, Start: now.Add(-40 * time.Minute), Owner: me},
+		{PID: 110, PPID: 100, Name: "bash", PGID: 110, TTY: platform.TTYAttached, Start: now.Add(-30 * time.Minute), Owner: me},
+		{PID: 111, PPID: 110, Name: "claude", PGID: 111, TTY: platform.TTYAttached, Start: now.Add(-5 * time.Minute), Owner: me},
+	}
+	read := func() ([]platform.Proc, error) { return slices.Clone(table), nil }
+	a.procs = procs.New(a.procsOptions(procs.Options{Read: read, OS: platform.Linux, Self: me, Boot: "test-boot"}))
+	var front func(focus.Change)
+	a.newFocus(focus.OS{
+		Via:  "fake",
+		GOOS: platform.Linux,
+		Read: read,
+		Watch: func(fn func(focus.Change)) (func(), error) {
+			front = fn
+			return func() {}, nil
+		},
+	})
+	// kept is a repo that counts, out a folder a .pairtime-ignore keeps out.
+	kept, out := t.TempDir(), t.TempDir()
+	runGit(t, kept, "init", "-q")
+	if err := os.WriteFile(filepath.Join(kept, "a.txt"), []byte("a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, kept, "add", "a.txt")
+	runGit(t, kept, "commit", "-q", "-m", "first")
+	if err := os.WriteFile(filepath.Join(out, ".pairtime-ignore"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The transcript is there, empty, in a projects folder listed already,
+	// so the tailers read it from its start (listedHome).
+	const sid = "55555555-0000-4000-8000-000000000005"
+	teen := t.TempDir()
+	projects := filepath.Join(teen, ".claude", "projects")
+	file := filepath.Join(projects, "-p", sid+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put("tailers", map[string]any{"v": 1, "files": []any{}, "roots": []string{projects}}); err != nil {
+		t.Fatal(err)
+	}
+	stops = append(stops, a.startFocus(), a.startAdapters(), a.startTailers(Options{Env: &install.Env{GOOS: runtime.GOOS, Home: teen}}))
+	a.markDrained()
+	lines := 0
+	// write appends a prompt of the session in dir, written now, and waits
+	// until the adapters have read it.
+	write := func(t *testing.T, dir string) {
+		t.Helper()
+		lines++
+		b, _ := json.Marshal(map[string]any{"type": "user", "sessionId": sid, "promptId": fmt.Sprintf("ffffffff-0000-4000-8000-%012d", lines),
+			"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "cwd": dir, "version": "2.1.327", "isSidechain": false,
+			"promptSource": "typed", "turnOrigin": "human", "message": map[string]any{"role": "user", "content": "What does this do?"}})
+		f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Write(append(b, '\n'))
+		f.Close()
+		deadline := time.Now().Add(20 * time.Second)
+		for a.adaptersHost().status().Harnesses[event.HarnessClaudeCode].Lines < uint64(lines) {
+			if time.Now().After(deadline) {
+				t.Fatalf("the adapters read %d of %d lines", a.adaptersHost().status().Harnesses[event.HarnessClaudeCode].Lines, lines)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	key := hookpath.SessionKey(a.sessionSecret(), sid)
+	var stretch [2]time.Time // the stretch the session's lines were out of pairtime
+	steps := []struct {
+		name    string
+		do      func(t *testing.T)
+		hosted  int
+		project bool // focus has a project for the session
+	}{
+		{"focus on the terminal hosts nothing yet", func(*testing.T) { front(focus.Change{At: time.Now(), PID: 100}) }, 0, false},
+		{"a line in a repo that counts, then one written after its try read the table, tie the session, which the terminal hosts, with its project",
+			func(t *testing.T) {
+				write(t, kept)
+				write(t, kept)
+			}, 1, true},
+		{"a line of it in the ignored folder leaves the terminal hosting none, and no project", func(t *testing.T) { write(t, out) }, 0, false},
+		{"a later line of it there ties nothing", func(t *testing.T) {
+			stretch[0] = time.Now()
+			write(t, out)
+		}, 0, false},
+		{"a line of it that counts again ties it again", func(t *testing.T) {
+			stretch[1] = time.Now()
+			write(t, kept)
+		}, 1, true},
+	}
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			step.do(t)
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				st := a.focus.Status()
+				if st.Class == event.AppTerminal && st.Hosted == step.hosted && (a.projectOf(key) != "") == step.project {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("focus status %+v, project %q; want a terminal hosting %d, with a project %v", st, a.projectOf(key),
+						step.hosted, step.project)
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+		})
+	}
+	st := a.adaptersHost().status()
+	stopAll()
+	var named, namedIn int
+	prompts := 0
+	if err := ledger.ReadBatches(dirs.Ledger(), 1, func(b ledger.Batch) error {
+		for _, r := range b.Records {
+			body, err := pkgledger.ParseBody(r.Body)
+			if err != nil {
+				return err
+			}
+			ev, err := body.Event()
+			if err != nil {
+				return err
+			}
+			switch d := ev.Data.(type) {
+			case *event.OSFocus:
+				if slices.Contains(d.HostedSessions, key) {
+					named++
+					if at := time.UnixMilli(ev.T); !at.Before(stretch[0]) && at.Before(stretch[1]) {
+						namedIn++
+					}
+				}
+			case *event.PromptSubmit:
+				if ev.SessionKey == key {
+					prompts++
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("reading the ledger back: %v", err)
+	}
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"os.focus records name the session while it is tied", named > 0},
+		{"no os.focus record names it while its lines are out of pairtime", namedIn == 0},
+		{"its two lines in the ignored folder count as ignored", st.Harnesses[event.HarnessClaudeCode].Ignored == 2},
+		{"the ledger holds the prompts of its three lines that counted, and none of the ignored folder's", prompts == 3},
+	}
+	for _, c := range checks {
+		t.Run(c.name, func(t *testing.T) {
+			if !c.ok {
+				t.Errorf("no: %d records name the session, %d in the stretch %v; %d prompts; adapters %+v", named, namedIn, stretch, prompts, st)
 			}
 		})
 	}

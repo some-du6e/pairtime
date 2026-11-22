@@ -140,7 +140,12 @@ type txSession struct {
 	// (session.nativeAt), 0 for never: a call the spool delivered doesn't
 	// count. It stays when the adapter forgets the session's calls.
 	nativeAt int64
-	seen     uint64
+	// opened says a user entry of the session's main conversation came
+	// that isn't one Claude Code wrote for the model (isMeta), and cleared
+	// that the first such was the /clear command, which starts the new
+	// session in the process of the one it clears (LogCleared).
+	opened, cleared bool
+	seen            uint64
 }
 
 // txFile is what the reader remembers of one transcript file.
@@ -574,6 +579,13 @@ func (l *logLine) user(e *entry, sid string) {
 		return
 	}
 	text := m.Content.text()
+	if sid != "" && !e.IsMeta {
+		if ls := l.a.logSession(sid); !ls.opened {
+			ls.opened = true
+			cmd, ok := commandText(text)
+			ls.cleared = ok && (cmd == "/clear" || strings.HasPrefix(cmd, "/clear "))
+		}
+	}
 	switch {
 	case e.TurnOrigin != nil || e.PromptSource != nil:
 		// A prompt, whatever its text says: Claude Code labels no
@@ -1099,6 +1111,34 @@ func (a *Adapter) LogHooked(sid string) bool {
 	}
 	ls := a.logSessions[sid]
 	return ls != nil && ls.nativeAt > 0
+}
+
+// LogCleared reports whether the log of session sid opened with the /clear
+// command, as Claude Code starts the session it clears to
+// (adapters.LogReader).
+func (a *Adapter) LogCleared(sid string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ls := a.logSessions[sid]
+	return ls != nil && ls.cleared
+}
+
+// LogStarted reports whether the reader wrote a session.start for session
+// sid, or holds one that waits (adapters.LogReader).
+func (a *Adapter) LogStarted(sid string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if ls := a.logSessions[sid]; ls != nil && ls.started {
+		return true
+	}
+	for _, f := range a.files {
+		for _, ps := range f.pend.starts {
+			if ps.session == sid {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // LogIgnored reports whether the last entry of file that named a folder

@@ -83,6 +83,16 @@ type LogReader interface {
 	// session.start is theirs. Calls that all came through the spool
 	// don't make it one.
 	LogHooked(session string) bool
+	// LogCleared reports whether the log of the harness's session session
+	// opened with the command that clears the conversation, as Claude
+	// Code's /clear, which starts the new session in the process of the
+	// one it clears: the procs tie passes that one's process to it.
+	LogCleared(session string) bool
+	// LogStarted reports whether the adapter wrote a session.start for the
+	// harness's session session from its log, or holds one that waits: a
+	// procs tie writes the scan's for a session it has none of, so SM 2.2
+	// rule 4 reads the walk.
+	LogStarted(session string) bool
 	// LogResume returns where in file the adapter's memory of it starts:
 	// the offset a restart must deliver the file again from, so that the
 	// memory SaveState returned is rebuilt, and false for a file it

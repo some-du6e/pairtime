@@ -31,9 +31,10 @@ import (
 //     never adds one (DESIGN 5.2). The hook sink has the component look
 //     again when it ties a process to a session, and when a session starts
 //     or ends.
-//   - focus_project comes from the project each hooked session works in
-//     (hookTies.projectOf), which the adapters set from the project the
-//     git adapter resolved the session's folder to (adapters.go, WP-AG7).
+//   - focus_project comes from the project each hooked session works in,
+//     or each session the process scan tied to its process (projectOf),
+//     which the adapters set from the project the git adapter resolved the
+//     session's folder to (adapters.go, WP-AG7).
 //
 // src is the focus source: focus.ThisOS(), or a fake in tests. startLedger
 // and startPresence must have run.
@@ -41,7 +42,7 @@ func (a *agent) newFocus(src focus.OS) {
 	a.focus = focus.New(focus.Options{
 		OS:        src,
 		Sessions:  func() map[platform.ID]string { return a.hooked.merged(a.procs.Sessions()) },
-		ProjectOf: a.hooked.projectOf,
+		ProjectOf: a.projectOf,
 		AppSecret: a.appSecret,
 		Live:      func() bool { return a.presence.Status().Live },
 		Presence:  a.presence.FocusAt,
@@ -50,6 +51,22 @@ func (a *agent) newFocus(src focus.OS) {
 		Problem:   func(msg string) { a.setProblem("focus", msg) },
 		Log:       a.log.With("component", "focus"),
 	})
+}
+
+// projectOf is the project of session for focus (focus.Options.ProjectOf):
+// its hook tie's, or, for a session the process scan tied to its process
+// (procs.Scanner.TiedTo), the one its records carry while the tie lasts.
+func (a *agent) projectOf(session string) string {
+	if p := a.hooked.projectOf(session); p != "" {
+		return p
+	}
+	if a.procs == nil {
+		return ""
+	}
+	if _, tied := a.procs.TiedTo(session); !tied {
+		return ""
+	}
+	return a.hooked.tiedProjectOf(session)
 }
 
 // startFocus starts the focus component and returns the step that stops

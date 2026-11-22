@@ -253,14 +253,19 @@ type hookTies struct {
 	// pairtime (DESIGN 8.8), which the hook sink neither ties nor hands to
 	// presence, so no os.focus record names them (ignore).
 	ignored map[string]bool
+	// tiedProjects are the projects of the sessions the process scan tied
+	// to their processes (procs.Scanner.Tie), by session key, which no hook
+	// ties: focus reads one while the tie lasts (tiedProjectOf).
+	tiedProjects map[string]string
 }
 
-// maxIgnored bounds the sessions hookTies keeps out (ignore).
+// maxIgnored bounds the sessions hookTies keeps out (ignore), and the
+// projects of procs-tied sessions it keeps (setTiedProject).
 const maxIgnored = 256
 
 func newHookTies() *hookTies {
 	return &hookTies{sessions: make(map[platform.ID]string), projects: make(map[string]string),
-		ignored: make(map[string]bool)}
+		ignored: make(map[string]bool), tiedProjects: make(map[string]string)}
 }
 
 // ignore keeps session out of focus and presence from now on, because a
@@ -285,6 +290,10 @@ func (t *hookTies) ignore(session string) bool {
 	t.ignored[session] = true
 	_, news := t.projects[session]
 	delete(t.projects, session)
+	if _, ok := t.tiedProjects[session]; ok {
+		delete(t.tiedProjects, session)
+		news = true
+	}
 	for id, s := range t.sessions {
 		if s == session {
 			delete(t.sessions, id)
@@ -387,6 +396,40 @@ func (t *hookTies) runsLocked(session string) bool {
 		}
 	}
 	return false
+}
+
+// setTiedProject records the project of session, which the process scan
+// tied to its process and no hook did, for focus to read while the tie
+// lasts (tiedProjectOf), and reports whether that is news. The adapters
+// call it for a record whose session setProject turns away.
+func (t *hookTies) setTiedProject(session, project string) bool {
+	if t == nil || session == "" || project == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.tiedProjects[session] == project || t.ignored[session] {
+		return false
+	}
+	if _, ok := t.tiedProjects[session]; !ok && len(t.tiedProjects) >= maxIgnored {
+		for k := range t.tiedProjects {
+			delete(t.tiedProjects, k)
+			break
+		}
+	}
+	t.tiedProjects[session] = project
+	return true
+}
+
+// tiedProjectOf returns the project setTiedProject recorded for session,
+// or "".
+func (t *hookTies) tiedProjectOf(session string) string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.tiedProjects[session]
 }
 
 // projectOf returns the project key of session, or "" when it isn't known

@@ -255,10 +255,13 @@ func listedHome(t *testing.T, r *hookReplay) (home, file string) {
 
 // TestTranscriptTiedToItsProcess checks the procs tie (WP-AD3): a session
 // no hook reports, whose transcript a real agent reads as it is written,
-// is tied to the one claude that can be running it, and its session.start
-// is then the process scan's, one record, with the parent and the TTY SM
-// 2.2 rule 4 reads, which no transcript states. With two claudes that
-// could be it, nothing is tied, and the transcript's session.start stands.
+// is tied to the one claude that can be running it, by a line written
+// after the read its first fresh line made, and its session.start is then
+// the process scan's, one record, with the parent and the TTY SM 2.2 rule
+// 4 reads, which no transcript states. With two claudes that could be it,
+// nothing is tied, and the transcript's session.start stands. A transcript
+// that states no entrypoint, of which the reader writes no session.start,
+// gets the scan's, dated before the session's first line read live.
 func TestTranscriptTiedToItsProcess(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the capture's paths are Linux's")
@@ -278,15 +281,19 @@ func TestTranscriptTiedToItsProcess(t *testing.T) {
 	cases := []struct {
 		name  string
 		table []platform.Proc
+		// silent says the transcript's lines state no entrypoint.
+		silent bool
 		// via and parent are the session.start the ledger gets.
 		via    event.Via
 		parent event.ParentClass
 		tty    bool
 	}{
 		{"one claude: the scan's session.start, with the terminal as its parent and a TTY",
-			append(slices.Clone(desktop), claudeIn(111, 110)...), event.ViaOS, event.ParentTerminalApp, true},
+			append(slices.Clone(desktop), claudeIn(111, 110)...), false, event.ViaOS, event.ParentTerminalApp, true},
 		{"two claudes: nothing is tied, and the transcript's session.start stands",
-			append(append(slices.Clone(desktop), claudeIn(111, 110)...), claudeIn(121, 120)...), event.ViaLog, event.ParentUnknown, false},
+			append(append(slices.Clone(desktop), claudeIn(111, 110)...), claudeIn(121, 120)...), false, event.ViaLog, event.ParentUnknown, false},
+		{"one claude, and a transcript that states no entrypoint: the scan's session.start, before its first line read live",
+			append(slices.Clone(desktop), claudeIn(111, 110)...), true, event.ViaOS, event.ParentTerminalApp, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -298,23 +305,39 @@ func TestTranscriptTiedToItsProcess(t *testing.T) {
 			a := startAgent(t, opts)
 			// The first prompt states the token 65 s ago, so its
 			// session.start waits out the 90 s hook grace, with room for a
-			// slow read; the second, just written, is the fresh line the tie
-			// needs. The tailers' idle markers after it let the start go.
+			// slow read; the second, just written, is the session's first
+			// fresh line, whose try reads the table; the third, written once
+			// the agent read the second, is the one the tie needs. The
+			// tailers' idle markers after it let the start go.
 			line := func(prompt, text string, at time.Time) []byte {
-				b, _ := json.Marshal(map[string]any{"type": "user", "sessionId": captureSession, "promptId": prompt,
+				e := map[string]any{"type": "user", "sessionId": captureSession, "promptId": prompt,
 					"timestamp": at.Format(time.RFC3339Nano), "cwd": r.folder(), "version": "2.1.327", "entrypoint": "cli",
 					"isSidechain": false, "promptSource": "typed", "turnOrigin": "human",
-					"message": map[string]any{"role": "user", "content": text}})
+					"message": map[string]any{"role": "user", "content": text}}
+				if tc.silent {
+					delete(e, "entrypoint")
+				}
+				b, _ := json.Marshal(e)
 				return append(b, '\n')
 			}
+			fresh := time.Now()
 			body := append(line("ffffffff-0000-4000-8000-000000000001", "What does this do?", time.Now().Add(-65*time.Second)),
-				line("ffffffff-0000-4000-8000-000000000002", "And this one?", time.Now())...)
+				line("ffffffff-0000-4000-8000-000000000002", "And this one?", fresh)...)
 			if err := os.WriteFile(file, body, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			// Two prompts and the session.start.
+			waitStatusFor(t, a, 30*time.Second, func(s statusReply) bool {
+				return s.Adapters.Harnesses[event.HarnessClaudeCode].Lines >= 2
+			})
+			f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND, 0o600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.Write(line("ffffffff-0000-4000-8000-000000000003", "And that?", time.Now().Add(time.Second)))
+			f.Close()
+			// Three prompts and the session.start.
 			waitStatusFor(t, a, 60*time.Second, func(s statusReply) bool {
-				return s.Adapters.Harnesses[event.HarnessClaudeCode].Records >= 3
+				return s.Adapters.Harnesses[event.HarnessClaudeCode].Records >= 4
 			})
 			a.cancel()
 			if err := a.waitExit(t); err != nil {
@@ -337,6 +360,9 @@ func TestTranscriptTiedToItsProcess(t *testing.T) {
 			s := got.Data.(*event.SessionStart)
 			if got.Via != tc.via || s.ParentClass != tc.parent || s.HasTTY != tc.tty {
 				t.Errorf("the session.start is via %s, %+v; want via %s, parent %s, TTY %v", got.Via, s, tc.via, tc.parent, tc.tty)
+			}
+			if tc.silent && got.T >= fresh.UnixMilli() {
+				t.Errorf("the scan's session.start is dated %d, not before the session's first line read live, %d", got.T, fresh.UnixMilli())
 			}
 		})
 	}
