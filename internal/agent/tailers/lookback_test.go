@@ -663,6 +663,27 @@ func TestLookback(t *testing.T) {
 				t.Errorf("Lookback %v, progress %+v; want no window and no history", got, r.tl.Progress())
 			}
 		}},
+		{"a history whose last line was too long to hash, replaced by a copy with a line more, keeps its window, as it can't be told from another file", func(t *testing.T) {
+			pc := &pipeChild{trim: upper}
+			r := lookbackRig(t, pc.start)
+			long := strings.Repeat("y", MaxLine+5)
+			r.write("l.jsonl", "{\"l\":1}\n"+long+"\n")
+			r.open()
+			from := r.now.Add(-LookbackWindow).UnixMilli()
+			r.step(0, false)
+			r.settle()
+			if got := r.texts(0); !slices.Equal(got, []string{`{"L":1}`, "too long"}) {
+				t.Fatalf("the history handed over %v", got)
+			}
+			r.replace("l.jsonl", "{\"l\":1}\n"+long+"\n{\"l\":2}\n")
+			r.step(HotPoll, false)
+			if got := r.texts(2); !slices.Equal(got, []string{`{"l":1}`, "too long", `{"l":2}`}) {
+				t.Fatalf("after the replace, handed over %v", got)
+			}
+			if got := r.lookbacks(2); !slices.Equal(got, []int64{from, from, 0}) {
+				t.Errorf("Lookback %v, want the window on the history's lines alone", got)
+			}
+		}},
 		{"after the last failure, a root listed later gives its files no history, so the tailer reads them", func(t *testing.T) {
 			r := lookbackRig(t, func() (Child, error) { return Child{}, errors.New("no binary") })
 			r.write("g.jsonl", "{\"g\":1}\n")

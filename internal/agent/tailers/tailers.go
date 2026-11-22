@@ -904,11 +904,12 @@ func (t *Tailer) adopt(r Root, path string, now time.Time) {
 func lastLine(r io.ReaderAt, size int64) (int64, string, error) {
 	// w holds the file from at to end, read back no further than the line
 	// looked at needs, a buffer at a time, or as much as w holds when that
-	// is more, so a long line costs a few reads and copies.
+	// is more, so a long line costs a few reads and copies, and never past
+	// the MaxLine+3 bytes that tell a line too long for readLine.
 	at, end := size, int64(-1)
 	var w []byte
 	back := func() (int, error) {
-		n := min(max(int64(readBuffer), int64(len(w))), at)
+		n := min(max(int64(readBuffer), int64(len(w))), at, MaxLine+3-int64(len(w)))
 		chunk := make([]byte, n, n+int64(len(w)))
 		if _, err := r.ReadAt(chunk, at-n); err != nil && !errors.Is(err, io.EOF) {
 			return 0, err
@@ -1240,7 +1241,11 @@ func hashLine(b []byte) string {
 // with no such line all of it is new, for an adapter that starts the file
 // afresh (an adapters.LogLine at offset 0). Its history goes where the
 // lines it was went: with the copy, to the cut, or, in another file,
-// nowhere; and once it was read it is done.
+// nowhere; and once it was read it is done. A replaced file whose last
+// line read had no hash, as one too long for readLine, can't be told from
+// a copy, so it keeps its history as a cut one does: a window wrongly kept
+// loses records hooks report too, where one wrongly dropped would count
+// what pairtime didn't see.
 func (t *Tailer) relocate(fh *os.File, f *file, size int64, replaced bool) {
 	t.mu.Lock()
 	read, hash := f.read, f.hash
@@ -1289,13 +1294,13 @@ func (t *Tailer) relocate(fh *os.File, f *file, size int64, replaced bool) {
 			}
 		}
 		f.read, f.resume, f.pos = found, 0, 0
-	case replaced:
+	case replaced && hash != "":
 		// Another file, holding none of what was read: none of it is a
 		// history's.
 		f.read, f.resume, f.pos, f.hash, f.hist = 0, 0, 0, "", 0
 	default:
-		// The file was cut: what is left of the history, up to the cut, is
-		// still the history.
+		// The file was cut, or can't be told from a copy: what is left of
+		// the history, up to its size, is still the history.
 		f.read, f.resume, f.pos, f.hash = 0, 0, 0, ""
 		if size < f.hist {
 			f.hist, f.histHash = size, ""
