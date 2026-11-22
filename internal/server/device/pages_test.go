@@ -16,8 +16,9 @@ import (
 // TestAccountNames checks how the device pages name the account they are
 // signed in to (D-display-name). Where a page asks whether the account is
 // the reader's, it gives the display name of the sign-in with the Slack ID
-// beside it, since anyone can pick a name. The header gives the name alone,
-// and without a display name both give the Slack ID, as before.
+// beside it, since anyone can pick a name, and the Slack ID alone without
+// a display name. The header gives the name alone, and without one no name
+// and no id at all (docs/errata/2026-11-22-header-without-name.md).
 func TestAccountNames(t *testing.T) {
 	yes := true
 	named := verified("ident!teen1", "U0TEEN1")
@@ -84,11 +85,18 @@ func TestAccountNames(t *testing.T) {
 			want: []string{"your account, <strong><bdi>Sam</bdi> (Hack Club Auth ID ident!teen3)</strong>."},
 		},
 		{
-			name:    "without a display name the pages name the account by its Slack ID alone, as before",
+			name:    "without a display name the pages name the account by its Slack ID alone, as before, and the header shows no name and no id",
 			id:      verified("ident!teen1", "U0TEEN1"),
 			page:    enter,
-			want:    []string{"your account, <strong>U0TEEN1</strong>.", "<p>Signed in as <strong>U0TEEN1</strong></p>"},
-			notWant: []string{"<bdi>"},
+			want:    []string{"your account, <strong>U0TEEN1</strong>.", `<a href="/dashboard">Your dashboard</a>` + "\n" + `<form method="post" action="/auth/logout">`},
+			notWant: []string{"<bdi>", "Signed in", "<strong>U0TEEN1</strong></p>"},
+		},
+		{
+			name:    "/account/devices without a display name keeps the Slack ID in its text, and the header shows none",
+			id:      verified("ident!teen1", "U0TEEN1"),
+			page:    devices,
+			want:    []string{"The computers linked to your account, <strong>U0TEEN1</strong>."},
+			notWant: []string{"Signed in"},
 		},
 		{
 			name:    "a display name is shown as text, never as markup",

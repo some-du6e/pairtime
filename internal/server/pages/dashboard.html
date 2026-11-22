@@ -18,7 +18,11 @@
 {{- end}}
 {{- if .Empty}}
 <div class="sample" role="note">
-<p><strong>Nothing counted yet.</strong> Install pairtime on your computer and run <code>pairtime login</code> to link it to this account. Your time shows up here within a few minutes of your next prompt to your agent.</p>
+<p><strong>Nothing counted yet.</strong> Install pairtime on the computer where you run {{.Agent}}, then run <code>pairtime login</code> on it to link it to this account. Your time shows up here within a few minutes of your next prompt to {{.Agent}}.</p>
+{{- range .Install}}
+<p>{{.Where}}</p>
+<pre class="install"><code>{{.Command}}</code></pre>
+{{- end}}
 <p><a href="/demo">See a sample dashboard</a> for what it will look like.</p>
 </div>
 {{- else}}
@@ -26,17 +30,26 @@
 <section aria-labelledby="today">
 <h2 id="today">Today <span class="when">{{.Today.Date}}</span></h2>
 <p class="hero"><strong>{{.Today.You}}</strong> of your time</p>
-<p class="lede">{{.AgentStart}} worked on its own for {{.Today.Agent}}.{{with .Today.YouPending}} {{.}} of your time is still pending.{{end}}</p>
+{{- with .Today.Why}}
+<p class="why">{{.}}</p>
+{{- end}}
+<p class="lede">{{.Today.AgentLine}}{{with .Today.YouPending}} {{.}} of your time is still pending.{{end}}</p>
 {{- if .Today.Clocks}}
 <ul class="clocks">
 {{- range .Today.Clocks}}
-<li>
-<p class="clock-name"><span class="key {{.Color}}"></span>{{.Name}}</p>
-<p class="face"><span>You</span> <strong>{{.You}}</strong>{{with .YouPending}} <small>{{.}} pending</small>{{end}}</p>
-<p class="face"><span>{{$.AgentStart}}</span> <strong>{{.Agent}}</strong>{{with .AgentPending}} <small>{{.}} pending</small>{{end}}</p>
-</li>
+{{template "clock" .}}
 {{- end}}
 </ul>
+{{- with .Today.More}}
+<details class="more">
+<summary>{{.Summary}}</summary>
+<ul class="clocks">
+{{- range .Clocks}}
+{{template "clock" .}}
+{{- end}}
+</ul>
+</details>
+{{- end}}
 <p class="note">Two clocks, not a score. {{.AgentStart}}&#39;s clock counts the time it worked on a project with none of your time counted there, so the two never run at once, and there&#39;s no right ratio between them.</p>
 {{- else}}
 <p class="note">Nothing counted yet today.</p>
@@ -45,7 +58,11 @@
 
 <section aria-labelledby="week">
 <h2 id="week">Last 7 days</h2>
-<p class="lede"><strong>{{.Week.You}}</strong> of your time. {{.AgentStart}} worked on its own for {{.Week.Agent}}.</p>
+<p class="lede"><strong>{{.Week.You}}</strong> of your time. {{.Week.AgentLine}}</p>
+{{- with .Week.Why}}
+<p class="why">{{.}}</p>
+{{- end}}
+{{- if .Week.Chart}}
 <div class="chart" aria-hidden="true">
 <div class="yaxis">
 {{- range .Week.Ticks}}<span class="{{.At}}">{{.Label}}</span>{{end -}}
@@ -64,7 +81,7 @@
 {{- if .Week.Legend}}
 <ul class="legend">
 {{- range .Week.Legend}}
-<li><span class="key {{.Color}}"></span>{{.Name}}</li>
+<li{{with .Title}} title="{{.}}"{{end}}><span class="key {{.Color}}"></span>{{.Name}}</li>
 {{- end}}
 {{- if .Week.HasPending}}
 <li><span class="key c1 pend"></span>Faded means pending</li>
@@ -77,7 +94,7 @@
 <details>
 <summary>The last 7 days as a table</summary>
 <div class="table"><table>
-<thead><tr><th>Day</th>{{range .Week.Table.Names}}<th>{{.}}</th>{{end}}<th>Total</th></tr></thead>
+<thead><tr><th>Day</th>{{range .Week.Table.Names}}<th{{with .Title}} title="{{.}}"{{end}}>{{.Name}}</th>{{end}}<th>Total</th></tr></thead>
 <tbody>
 {{- range .Week.Table.Rows}}
 <tr><td>{{.Day}}</td>{{range .Cells}}<td>{{.}}</td>{{end}}<td>{{.Total}}</td></tr>
@@ -85,20 +102,21 @@
 </tbody>
 </table></div>
 </details>
+{{- end}}
 </section>
 
 <section aria-labelledby="projects">
 <h2 id="projects">Projects</h2>
 {{- if .Projects}}
-<div class="table"><table class="projects">
-<thead><tr><th>Project</th><th>Last 7 days</th><th>Last 30 days</th></tr></thead>
-<tbody>
+<div class="table"><table class="projects" role="table">
+<thead role="rowgroup"><tr role="row"><th role="columnheader">Project</th><th role="columnheader">Last 7 days</th><th role="columnheader">Last 30 days</th></tr></thead>
+<tbody role="rowgroup">
 {{- range .Projects}}
-<tr><td><span class="key {{.Color}}"></span>{{.Name}}</td><td><strong>{{.Week}}</strong> <span class="agent">{{$.AgentStart}} {{.WeekAgent}}</span></td><td><strong>{{.Month}}</strong> <span class="agent">{{$.AgentStart}} {{.MonthAgent}}</span></td></tr>
+<tr role="row"><td role="cell"{{with .Title}} title="{{.}}"{{end}}>{{template "key" .Color}}{{.Name}}</td>{{template "cell" .Week}}{{template "cell" .Month}}</tr>
 {{- end}}
 </tbody>
-<tfoot>
-<tr><th>{{.AllProjects.Name}}</th><td><strong>{{.AllProjects.Week}}</strong> <span class="agent">{{.AgentStart}} {{.AllProjects.WeekAgent}}</span></td><td><strong>{{.AllProjects.Month}}</strong> <span class="agent">{{.AgentStart}} {{.AllProjects.MonthAgent}}</span></td></tr>
+<tfoot role="rowgroup">
+<tr role="row"><th role="rowheader">{{.AllProjects.Name}}</th>{{template "cell" .AllProjects.Week}}{{template "cell" .AllProjects.Month}}</tr>
 </tfoot>
 </table></div>
 {{- if .SplitByDevice}}
@@ -112,6 +130,9 @@
 <section aria-labelledby="levels">
 <h2 id="levels">Evidence levels</h2>
 <p class="lede">How closely pairtime can back up your last 7 days. <a href="/docs/evidence">What A, B and C mean</a></p>
+{{- if .Levels.None}}
+<p class="note">There&#39;s none of your time in the last 7 days to back up yet.</p>
+{{- else}}
 {{- if .Levels.Blocks}}
 <div class="segbar" role="img" aria-label="{{.Levels.Label}}">
 {{- range .Levels.Blocks}}<span class="{{.Class}}" title="{{.Title}}">{{if .Printed}}{{.Share}}{{end}}</span>{{end -}}
@@ -122,6 +143,7 @@
 <li><span class="key {{.Swatch}}"></span><span><strong>Level {{.Level}}.</strong> {{.Text}}</span><span class="lt">{{.Time}}, {{.Share}}</span></li>
 {{- end}}
 </ul>
+{{- end}}
 </section>
 
 <section aria-labelledby="kinds">
@@ -155,6 +177,14 @@
 <p class="note">Use a name like America/New_York or Europe/London. Minutes counted after a change count in the new zone, and days already counted stay as they are.</p>
 </section>
 {{- end}}
+{{define "key"}}{{if .}}<span class="key {{.}}"></span>{{else}}<span class="key nokey"></span>{{end}}{{end}}
+{{define "cell"}}<td role="cell" data-label="{{.Label}}">{{if not .YouNone}}<strong>{{.You}}</strong> <span class="agent">{{.Agent}}</span>{{else if not .AgentNone}}<span class="agent">{{.Agent}}</span>{{else}}<span class="none">0m</span>{{end}}</td>{{end}}
+{{define "clock"}}<li>
+<p class="clock-name"{{with .Title}} title="{{.}}"{{end}}>{{template "key" .Color}}{{.Name}}</p>
+{{- range .Faces}}
+<p class="face"><span>{{.Label}}</span> <strong>{{.Time}}</strong>{{with .Pending}} <small>{{.}} pending</small>{{end}}</p>
+{{- end}}
+</li>{{end}}
 {{define "off"}}<h1>Your dashboard</h1>
 <p>Sign-in isn&#39;t set up on this server yet, so there&#39;s no dashboard of your own to show.
 {{- if .SignupsOpen}} Once it is, you sign in with Hack Club, run <code>pairtime login</code> on your computer, and your time shows up here.

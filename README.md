@@ -14,6 +14,24 @@ Nothing leaves the computer until `pairtime login` links it to a pairtime server
 
 Not built yet: harnesses other than Claude Code, Claude Code's transcripts and OpenTelemetry (WP-AD3, WP-AD4), and updates from inside the client.
 
+## Install
+
+Install pairtime on the computer where you run Claude Code, since pairtime counts your time from your typing and mouse on that computer. These commands install v0.1.0-alpha.3. Its install script checks the release's signature, then shows what `pairtime install` would change before it changes anything.
+
+On macOS or Linux:
+
+```sh
+curl -fsSL https://github.com/some-du6e/pairtime/releases/download/v0.1.0-alpha.3/install.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://github.com/some-du6e/pairtime/releases/download/v0.1.0-alpha.3/install.ps1 | iex
+```
+
+Then `pairtime login` links the computer to your account on a pairtime server. The empty dashboard on the server gives the same two commands.
+
 ## Layout
 
 One Go module holds the client, the server and the code they share.
