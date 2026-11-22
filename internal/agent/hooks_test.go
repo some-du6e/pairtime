@@ -963,13 +963,13 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 	stops = append(stops, a.startFocus(), a.startAdapters(), a.startTailers(Options{Env: &install.Env{GOOS: runtime.GOOS, Home: teen}}))
 	a.markDrained()
 	lines := 0
-	// write appends a prompt of the session in dir, written now, and waits
-	// until the adapters have read it.
-	write := func(t *testing.T, dir string) {
+	// write appends a prompt of the session in dir, dated ahead of now, and
+	// waits until the adapters have read it.
+	write := func(t *testing.T, dir string, ahead time.Duration) {
 		t.Helper()
 		lines++
 		b, _ := json.Marshal(map[string]any{"type": "user", "sessionId": sid, "promptId": fmt.Sprintf("ffffffff-0000-4000-8000-%012d", lines),
-			"timestamp": time.Now().UTC().Format(time.RFC3339Nano), "cwd": dir, "version": "2.1.327", "isSidechain": false,
+			"timestamp": time.Now().Add(ahead).UTC().Format(time.RFC3339Nano), "cwd": dir, "version": "2.1.327", "isSidechain": false,
 			"promptSource": "typed", "turnOrigin": "human", "message": map[string]any{"role": "user", "content": "What does this do?"}})
 		f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
@@ -996,17 +996,19 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 		{"focus on the terminal hosts nothing yet", func(*testing.T) { front(focus.Change{At: time.Now(), PID: 100}) }, 0, false},
 		{"a line in a repo that counts, then one written after its try read the table, tie the session, which the terminal hosts, with its project",
 			func(t *testing.T) {
-				write(t, kept)
-				write(t, kept)
+				write(t, kept, 0)
+				// A second ahead, so it can't share the millisecond the
+				// table read ended in (procs.Scanner.Tie).
+				write(t, kept, time.Second)
 			}, 1, true},
-		{"a line of it in the ignored folder leaves the terminal hosting none, and no project", func(t *testing.T) { write(t, out) }, 0, false},
+		{"a line of it in the ignored folder leaves the terminal hosting none, and no project", func(t *testing.T) { write(t, out, 0) }, 0, false},
 		{"a later line of it there ties nothing", func(t *testing.T) {
 			stretch[0] = time.Now()
-			write(t, out)
+			write(t, out, 0)
 		}, 0, false},
 		{"a line of it that counts again ties it again", func(t *testing.T) {
 			stretch[1] = time.Now()
-			write(t, kept)
+			write(t, kept, 0)
 		}, 1, true},
 	}
 	for _, step := range steps {

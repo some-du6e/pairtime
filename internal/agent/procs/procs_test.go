@@ -821,7 +821,9 @@ func oneClaude() []platform.Proc {
 // TestTie checks how a session a log reader reads live is tied to the
 // process running it (WP-AD3): only when one process can be it, which a
 // session's first line alone never shows, since a process that started
-// and ended between two reads is in none.
+// and ended between two reads is in none. A process tied to one session
+// never passes to another, and one that a read found, tied or not, and is
+// gone now could have been the session's.
 func TestTie(t *testing.T) {
 	claude := event.HarnessClaudeCode
 	keyOf := func(s *Scanner, pid int) string {
@@ -845,34 +847,29 @@ func TestTie(t *testing.T) {
 	// step is one thing done to the scanner: a clock to read, a table to
 	// read from now on, a scan, a claim, a touch, or a line of a session
 	// that tieLive hands Tie, touched first, in that order of its fields'
-	// use. folder is the line's log folder, and cleared says its session
-	// opened with /clear.
+	// use.
 	type step struct {
-		now     time.Time
-		table   []platform.Proc
-		scan    bool
-		claim   int
-		touch   string
-		key     string
-		at      time.Time
-		folder  string
-		cleared bool
+		now   time.Time
+		table []platform.Proc
+		scan  bool
+		claim int
+		touch string
+		key   string
+		at    time.Time
 	}
 	without := func(ps []platform.Proc, pid int) []platform.Proc {
 		return slices.DeleteFunc(slices.Clone(ps), func(p platform.Proc) bool { return p.PID == pid })
 	}
 	// tied is a session's line at at, read at sec(0), whose try reads the
 	// table, and its next, written at sec(1) after that read and read at
-	// sec(2), whose try weighs it, both in folder f.
-	tied := func(key string, at time.Time, f string) []step {
-		return []step{{now: sec(0), key: key, at: at, folder: f}, {now: sec(2), key: key, at: sec(1), folder: f}}
+	// sec(2), whose try weighs it.
+	tied := func(key string, at time.Time) []step {
+		return []step{{now: sec(0), key: key, at: at}, {now: sec(2), key: key, at: sec(1)}}
 	}
 	// later is a session's two lines, at at and two seconds later, read a
-	// second after each, in folder f, from a log that opened with /clear
-	// when cleared is set.
-	later := func(key string, at time.Time, f string, cleared bool) []step {
-		return []step{{now: at.Add(time.Second), key: key, at: at, folder: f, cleared: cleared},
-			{now: at.Add(3 * time.Second), key: key, at: at.Add(2 * time.Second), folder: f, cleared: cleared}}
+	// second after each.
+	later := func(key string, at time.Time) []step {
+		return []step{{now: at.Add(time.Second), key: key, at: at}, {now: at.Add(3 * time.Second), key: key, at: at.Add(2 * time.Second)}}
 	}
 	with := func(table []platform.Proc, steps ...[]step) []step {
 		out := []step{{table: table}}
@@ -888,7 +885,7 @@ func TestTie(t *testing.T) {
 		want int
 	}{
 		{"a line written after the read the session's first line made ties the only claude running, and Sessions gives the session's key for it",
-			with(oneClaude(), tied("s_one", sec(-100), "")), 111},
+			with(oneClaude(), tied("s_one", sec(-100))), 111},
 		{"a first line alone ties nothing: a claude that started and ended between two reads could have been the session's",
 			with(oneClaude(), []step{{now: sec(0), key: "s_one", at: sec(-100)}}), 0},
 		{"a line written before that read ties nothing", with(oneClaude(), []step{{now: sec(0), key: "s_one", at: sec(-100)},
@@ -896,49 +893,37 @@ func TestTie(t *testing.T) {
 		{"a scan's read that began after the session's first line serves for that read",
 			with(oneClaude(), []step{{now: sec(-90), touch: "s_one", at: sec(-100)}, {now: sec(-80), scan: true},
 				{now: sec(0), key: "s_one", at: sec(-50)}}), 111},
-		{"a claude younger than Grace is tied too", with(young(), tied("s_one", sec(-1), "")), 111},
-		{"a claude that started after the session's lines isn't tied",
-			with(oneClaude(), later("s_one", sec(-400), "", false)), 0},
-		{"a claude that started within TieSlack after the line is tied", with(oneClaude(), []step{
-			{now: sec(-310), key: "s_one", at: sec(-320)}, {now: sec(-300), key: "s_one", at: sec(-301)}}), 111},
-		{"with two claudes that could be it, none is tied", with(terminal(), tied("s_one", sec(-100), "")), 0},
-		{"a claude a hook claimed isn't tied", with(oneClaude(), []step{{claim: 111}}, tied("s_one", sec(-100), "")), 0},
-		{"a codex isn't tied to a Claude Code session", with(without(oneClaude(), 111), tied("s_one", sec(-50), "")), 0},
+		{"a claude younger than Grace is tied too", with(young(), tied("s_one", sec(-1))), 111},
+		{"a claude that started after the session's lines isn't tied", with(oneClaude(), later("s_one", sec(-400))), 0},
+		{"a claude that started after the session's first line isn't tied, though it started before the line that weighs it",
+			with(oneClaude(), []step{{now: sec(-319), key: "s_one", at: sec(-320)}, {now: sec(-289), key: "s_one", at: sec(-290)}}), 0},
+		{"a claude that started within TieSlack after the session's first line is tied", with(oneClaude(), []step{
+			{now: sec(-299), key: "s_one", at: sec(-301)}, {now: sec(-297), key: "s_one", at: sec(-298)}}), 111},
+		{"with two claudes that could be it, none is tied", with(terminal(), tied("s_one", sec(-100))), 0},
+		{"a claude a hook claimed isn't tied", with(oneClaude(), []step{{claim: 111}}, tied("s_one", sec(-100))), 0},
+		{"a codex isn't tied to a Claude Code session", with(without(oneClaude(), 111), tied("s_one", sec(-50))), 0},
 		{"a session tied already keeps its process",
-			with(oneClaude(), tied("s_one", sec(-100), ""), []step{{now: sec(4), key: "s_one", at: sec(3)}}), 111},
-		{"a claude whose session still writes isn't tied to another",
-			with(oneClaude(), tied("s_one", sec(-100), ""), []step{{now: sec(21), key: "s_two", at: sec(20)},
+			with(oneClaude(), tied("s_one", sec(-100)), []step{{now: sec(4), key: "s_one", at: sec(3)}}), 111},
+		{"a claude tied to a session that still writes isn't tied to another",
+			with(oneClaude(), tied("s_one", sec(-100)), []step{{now: sec(21), key: "s_two", at: sec(20)},
 				{now: sec(31), touch: "s_one", at: sec(30)}, {now: sec(41), key: "s_two", at: sec(40)}}), 0},
-		{"a claude whose session went quiet in the ClearGap before the new one's first line passes to it, as at /clear",
-			with(oneClaude(), tied("s_one", sec(-100), ""), later("s_two", sec(60), "", false)), 111},
-		{"a claude whose session went quiet longer than ClearGap before the new one's first line keeps its session",
-			with(oneClaude(), tied("s_one", sec(-100), ""), later("s_two", sec(400), "", false)), 0},
-		{"a session that opened with /clear takes the process of the quiet session in its folder, after six minutes too",
-			with(oneClaude(), tied("s_one", sec(-100), "f"), later("s_two", sec(400), "f", true)), 111},
-		{"a session that opened with /clear takes no process of a quiet session in another folder",
-			with(oneClaude(), tied("s_one", sec(-100), "f"), later("s_two", sec(400), "g", true)), 0},
-		{"of two quiet sessions in its folder, one that opened with /clear takes the process of the one that wrote last",
-			with(oneClaude(), tied("s_a", sec(-100), "f"), []step{{table: terminal()}}, later("s_b", sec(5), "f", false),
-				later("s_c", sec(20), "f", true)), 121},
-		{"of two quiet sessions in its folder that wrote last at once, one that opened with /clear takes neither",
-			with(oneClaude(), tied("s_a", sec(-100), "f"), []step{{table: terminal()}}, later("s_b", sec(5), "f", false),
-				[]step{{now: sec(16), touch: "s_a", at: sec(15), folder: "f"}, {now: sec(16), touch: "s_b", at: sec(15), folder: "f"}},
-				later("s_c", sec(20), "f", true)), 0},
-		{"a claude whose session wrote after the new one's first line keeps it, though quiet before the new one's later line",
-			with(oneClaude(), later("s_one", sec(-200), "", false), []step{{now: sec(-149), touch: "s_two", at: sec(-150)},
-				{now: sec(-99), touch: "s_one", at: sec(-100)}}, later("s_two", sec(-70), "", false)), 0},
+		{"a claude tied to a session that went quiet long ago isn't tied to a new one, as /clear or /resume would start there",
+			with(oneClaude(), tied("s_one", sec(-100)), later("s_two", sec(400))), 0},
 		{"with a claude a read found while the session wrote and gone now, nothing is tied: it could have been the session's",
 			[]step{{now: sec(-10), table: terminal(), scan: true}, {now: sec(0), table: without(terminal(), 111), key: "s_one", at: sec(-5)},
 				{now: sec(2), key: "s_one", at: sec(1)}}, 0},
+		{"a claude tied to another session, which a read found and which is gone now, could have been the session's, so the only untied claude isn't tied",
+			with(oneClaude(), tied("s_a", sec(-100)), []step{{table: terminal()}, {now: sec(21), key: "s_b", at: sec(20)},
+				{table: without(terminal(), 111)}, {now: sec(23), key: "s_b", at: sec(22)}}), 0},
 		{"a claude a read found gone before the session's first line doesn't count",
 			[]step{{now: sec(-100), table: terminal(), scan: true}, {now: sec(-50), table: without(terminal(), 111), scan: true},
 				{now: sec(0), key: "s_one", at: sec(-5)}, {now: sec(2), key: "s_one", at: sec(1)}}, 121},
 		{"a claude last seen before the session's first line, and found gone only since, still could have been the session's",
 			[]step{{now: sec(-50), table: terminal(), scan: true}, {now: sec(0), table: without(terminal(), 111), key: "s_one", at: sec(-5)},
 				{now: sec(2), key: "s_one", at: sec(1)}}, 0},
-		{"a session whose claude ended gets the one it resumed in, once a scan saw the old one gone",
-			with(oneClaude(), tied("s_one", sec(-100), ""), []step{{now: sec(10), table: without(terminal(), 111), scan: true},
-				{now: sec(21), key: "s_one", at: sec(20)}}), 121},
+		{"a session whose claude ended takes no other claude: its own could have written its late lines",
+			with(oneClaude(), tied("s_one", sec(-100)), []step{{now: sec(10), table: without(terminal(), 111), scan: true},
+				{now: sec(21), key: "s_one", at: sec(20)}}), 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -966,11 +951,11 @@ func TestTie(t *testing.T) {
 					s.Claim(boot, p)
 				}
 				if st.touch != "" {
-					s.Touch(st.touch, st.at, st.folder)
+					s.Touch(st.touch, st.at)
 				}
 				if st.key != "" {
-					s.Touch(st.key, st.at, st.folder)
-					sess, ok, _ = s.Tie(claude, st.key, st.at, st.cleared)
+					s.Touch(st.key, st.at)
+					sess, ok, _ = s.Tie(claude, st.key, st.at)
 					last = st.key
 				}
 			}
@@ -990,14 +975,14 @@ func TestTie(t *testing.T) {
 // second later, whose try reads the table, and its next, written at then,
 // after that read, and read a second after it. now is the scanner's clock,
 // which it leaves there.
-func tieTwice(t *testing.T, s *Scanner, now *time.Time, key string, at, then time.Time, folder string, cleared bool) Session {
+func tieTwice(t *testing.T, s *Scanner, now *time.Time, key string, at, then time.Time) Session {
 	t.Helper()
 	*now = at.Add(time.Second)
-	s.Touch(key, at, folder)
-	s.Tie(event.HarnessClaudeCode, key, at, cleared)
+	s.Touch(key, at)
+	s.Tie(event.HarnessClaudeCode, key, at)
 	*now = then.Add(time.Second)
-	s.Touch(key, then, folder)
-	sess, ok, _ := s.Tie(event.HarnessClaudeCode, key, then, cleared)
+	s.Touch(key, then)
+	sess, ok, _ := s.Tie(event.HarnessClaudeCode, key, then)
 	if !ok {
 		t.Fatalf("no tie of %s", key)
 	}
@@ -1005,10 +990,10 @@ func tieTwice(t *testing.T, s *Scanner, now *time.Time, key string, at, then tim
 }
 
 // TestTieAcrossRestarts checks that a tie outlives an agent restart: the
-// restarted scan gives the session's key for the process, and keeps the
-// session's last line read live, so a session that opened with /clear
-// still takes the process from it, while one that didn't, past ClearGap,
-// takes nothing.
+// restarted scan gives the session's key for the process. A tied claude it
+// loaded, which its first read finds gone, could have been the session a
+// line names after the restart, so the only untied claude isn't tied to
+// that session.
 func TestTieAcrossRestarts(t *testing.T) {
 	name := filepath.Join(t.TempDir(), "state.json")
 	f := &fake{procs: oneClaude()}
@@ -1025,54 +1010,47 @@ func TestTieAcrossRestarts(t *testing.T) {
 	if _, err := s.Scan(); err != nil {
 		t.Fatal(err)
 	}
-	tieTwice(t, s, &now, "s_one", sec(1), sec(3), "f", false)
+	tieTwice(t, s, &now, "s_one", sec(1), sec(3))
 	s = start(t)
-	keyOf := func() string {
-		for id, k := range s.Sessions() {
-			if id.PID == 111 {
-				return k
-			}
+	var restartedKey string
+	for id, k := range s.Sessions() {
+		if id.PID == 111 {
+			restartedKey = k
 		}
-		return ""
 	}
-	restartedKey := keyOf()
-	// A session that didn't open with /clear, its first line six minutes
-	// after s_one's last.
-	now = sec(362)
-	s.Touch("s_two", sec(361), "f")
-	s.Tie(event.HarnessClaudeCode, "s_two", sec(361), false)
-	now = sec(364)
-	s.Touch("s_two", sec(363), "f")
-	_, plainTied, _ := s.Tie(event.HarnessClaudeCode, "s_two", sec(363), false)
-	// One that did.
-	cleared := tieTwice(t, s, &now, "s_three", sec(370), sec(372), "f", true)
+	// The claude ends while the agent is down, and another, untied, runs.
+	f.procs = slices.DeleteFunc(terminal(), func(p platform.Proc) bool { return p.PID == 111 })
+	now = sec(21)
+	s.Touch("s_two", sec(20))
+	s.Tie(event.HarnessClaudeCode, "s_two", sec(20))
+	now = sec(23)
+	s.Touch("s_two", sec(22))
+	_, twoTied, _ := s.Tie(event.HarnessClaudeCode, "s_two", sec(22))
 	cases := []struct {
 		name string
 		ok   bool
 	}{
 		{"the restarted scan gives the session's key for the process", restartedKey == "s_one"},
-		{"a session that didn't open with /clear takes no process from a session quiet longer than ClearGap before it", !plainTied},
-		{"a session that opened with /clear takes the process from the session quiet before it, by its last line saved", cleared.PID == 111},
+		{"a tied claude the restarted scan loaded and found gone could have been a new session's, so the only untied claude isn't tied", !twoTied},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
-				t.Errorf("after the restart: key %q, a plain session tied %v, the /clear one %+v", restartedKey, plainTied, cleared)
+				t.Errorf("after the restart: key %q, the new session tied %v", restartedKey, twoTied)
 			}
 		})
 	}
 }
 
 // TestTieOf checks that a tie outlives its process for EndedKeep, for the
-// session.start a short session writes after its process ended, and so
-// does one whose process passed to another session at /clear, while
-// TiedTo, which focus's sessions follow, lets either go at once.
+// session.start a short session writes after its process ended, while
+// TiedTo, which focus's sessions follow, lets it go at once.
 func TestTieOf(t *testing.T) {
 	f := &fake{procs: oneClaude()}
 	now := sec(0)
 	var got []Session
 	s := newScanner(f, &now, &got)
-	tieTwice(t, s, &now, "s_one", sec(-100), sec(-97), "", false)
+	tieTwice(t, s, &now, "s_one", sec(-100), sec(-97))
 	now = sec(0)
 	f.procs = slices.DeleteFunc(oneClaude(), func(p platform.Proc) bool { return p.PID == 111 })
 	if _, err := s.Scan(); err != nil {
@@ -1082,23 +1060,6 @@ func TestTieOf(t *testing.T) {
 	_, kept := s.TieOf("s_one")
 	now = sec(0).Add(EndedKeep + time.Second)
 	_, later := s.TieOf("s_one")
-
-	// At /clear the process passes to the new session, and the one it left
-	// keeps its tie as one whose process ended does.
-	g := &fake{procs: oneClaude()}
-	cleared := sec(0)
-	var reports []Session
-	c := newScanner(g, &cleared, &reports)
-	tieTwice(t, c, &cleared, "s_one", sec(-100), sec(-97), "f", false)
-	c.Touch("s_one", sec(-60), "f")
-	if sess := tieTwice(t, c, &cleared, "s_two", sec(-20), sec(-17), "f", true); sess.PID != 111 {
-		t.Fatal("the process didn't pass to the new session")
-	}
-	cleared = sec(0)
-	_, leftTied := c.TiedTo("s_one")
-	left, leftKept := c.TieOf("s_one")
-	cleared = sec(0).Add(EndedKeep + time.Second)
-	_, leftLater := c.TieOf("s_one")
 	cases := []struct {
 		name string
 		ok   bool
@@ -1106,9 +1067,6 @@ func TestTieOf(t *testing.T) {
 		{"TiedTo lets a tie go once a scan saw its process gone", !tied},
 		{"TieOf keeps it for EndedKeep", kept},
 		{"and not longer", !later},
-		{"TiedTo lets a tie go once its process passed to another session", !leftTied},
-		{"TieOf keeps that one for EndedKeep too, as the session it left had it", leftKept && left.PID == 111 && left.Key == "s_one"},
-		{"and not longer either", !leftLater},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1135,8 +1093,8 @@ func TestScanKeepsATieMadeDuringItsRead(t *testing.T) {
 		during = false
 		// The tie reads a table of its own, which has the claude.
 		now = sec(3)
-		s.Touch("s_one", sec(2), "")
-		if _, ok, _ := s.Tie(event.HarnessClaudeCode, "s_one", sec(2), false); !ok {
+		s.Touch("s_one", sec(2))
+		if _, ok, _ := s.Tie(event.HarnessClaudeCode, "s_one", sec(2)); !ok {
 			t.Error("no tie during the scan's read")
 		}
 		return slices.DeleteFunc(slices.Clone(table), func(p platform.Proc) bool { return p.PID == 111 }), nil
@@ -1144,8 +1102,8 @@ func TestScanKeepsATieMadeDuringItsRead(t *testing.T) {
 	s = New(Options{Read: read, OS: platform.Linux, Self: me, Boot: boot, Now: func() time.Time { return now }})
 	// The session's first try reads the table.
 	now = sec(1)
-	s.Touch("s_one", sec(0), "")
-	s.Tie(event.HarnessClaudeCode, "s_one", sec(0), false)
+	s.Touch("s_one", sec(0))
+	s.Tie(event.HarnessClaudeCode, "s_one", sec(0))
 	during = true
 	if _, err := s.Scan(); err != nil {
 		t.Fatal(err)
@@ -1179,7 +1137,7 @@ func TestUntie(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			tieTwice(t, s, &now, "s_one", sec(1), sec(3), "", false)
+			tieTwice(t, s, &now, "s_one", sec(1), sec(3))
 			gone := s.Untie("s_one")
 			keys := s.Sessions()
 			_, tied := s.TiedTo("s_one")
@@ -1225,7 +1183,7 @@ func TestWithdrawAfterATie(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			tieTwice(t, s, &now, "s_one", sec(1), sec(3), "", false)
+			tieTwice(t, s, &now, "s_one", sec(1), sec(3))
 			p, _ := platform.NewTable(platform.Linux, f.procs).Get(111)
 			s.Claim(boot, p)
 			var want []string

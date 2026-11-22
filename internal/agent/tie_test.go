@@ -62,10 +62,29 @@ func (r *tieRig) hookCall(t *testing.T, sid string, at time.Time, via event.Via)
 	}
 }
 
+// clearLine has the rig's adapter read the first user entry of session
+// sid's transcript, written at at: the /clear command, which starts the
+// session in the process of the one it clears.
+func (r *tieRig) clearLine(t *testing.T, sid string, at time.Time) {
+	t.Helper()
+	b, _ := json.Marshal(map[string]any{"type": "user", "sessionId": sid, "timestamp": at.UTC().Format(time.RFC3339Nano),
+		"cwd": "/home/capture/p", "version": "2.1.327", "entrypoint": "cli", "isSidechain": false,
+		"message": map[string]any{"role": "user",
+			"content": "<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"}})
+	file := "/home/capture/.claude/projects/-p/" + sid + ".jsonl"
+	r.ad.Parse(adapters.RawRecord{Source: adapters.SourceLog, Payload: b, Log: &adapters.LogLine{File: file, Path: file, End: int64(len(b) + 1)},
+		Arrival: adapters.Arrival{Via: event.ViaLog, T: at.UnixMilli(), Mono: 5000, BootID: "test-boot"}})
+	if !r.lr.LogCleared(sid) {
+		t.Fatal("the reader doesn't take the log for one that opened with /clear")
+	}
+}
+
 // TestTieLive checks the gates tieLive puts before a tie (WP-AD3): only a
 // fresh line of a session no hook reports, by the log reader's memory or
 // this run's hook ties, and none of whose lines since its last that counts
-// is out of pairtime, reaches procs.Scanner.Tie. A session's first try only
+// is out of pairtime, reaches procs.Scanner.Tie, and none of a session
+// whose log opened with /clear, which runs in the process of the session it
+// cleared. A session's first try only
 // reads the table, and its next line written after that read ties it, while
 // a session weighed and not tied reads the process table again only after
 // tieRetry. A session whose hook calls all came through the spool is one no
@@ -90,7 +109,7 @@ func TestTieLive(t *testing.T) {
 	// worker does, and lines a first line now and a second written after
 	// the read the first made.
 	line := func(r *tieRig, lr adapters.LogReader, at time.Time) {
-		r.h.tieLive(lr, event.HarnessClaudeCode, sid, "/home/capture/.claude/projects/-p", at.UnixMilli(), nil)
+		r.h.tieLive(lr, event.HarnessClaudeCode, sid, at.UnixMilli(), nil)
 	}
 	lines := func(r *tieRig) {
 		line(r, r.lr, now)
@@ -143,6 +162,11 @@ func TestTieLive(t *testing.T) {
 				r.a.hooked.ignore(r.h.sessionKey(sid))
 				lines(r)
 			}, false, 0},
+		{"a session whose log opened with /clear ties nothing and reads no table", one,
+			func(t *testing.T, r *tieRig) {
+				r.clearLine(t, sid, now)
+				lines(r)
+			}, false, 0},
 		{"a session weighed and not tied isn't weighed again within tieRetry", two,
 			func(t *testing.T, r *tieRig) {
 				lines(r)
@@ -189,8 +213,8 @@ func TestTiedStart(t *testing.T) {
 		t.Helper()
 		// The first try reads the table, and a line written after it ties.
 		key := r.h.sessionKey(sid)
-		r.a.procs.Tie(event.HarnessClaudeCode, key, now, false)
-		if _, ok, _ := r.a.procs.Tie(event.HarnessClaudeCode, key, time.Now().Add(time.Second), false); !ok {
+		r.a.procs.Tie(event.HarnessClaudeCode, key, now)
+		if _, ok, _ := r.a.procs.Tie(event.HarnessClaudeCode, key, time.Now().Add(time.Second)); !ok {
 			t.Fatal("no tie")
 		}
 	}

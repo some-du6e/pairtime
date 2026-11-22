@@ -86,13 +86,20 @@ type LogReader interface {
 	// LogCleared reports whether the log of the harness's session session
 	// opened with the command that clears the conversation, as Claude
 	// Code's /clear, which starts the new session in the process of the
-	// one it clears: the procs tie passes that one's process to it.
+	// one it clears: no procs tie passes that one's process on, so the
+	// session is tied to none.
 	LogCleared(session string) bool
 	// LogStarted reports whether the adapter wrote a session.start for the
 	// harness's session session from its log, or holds one that waits: a
 	// procs tie writes the scan's for a session it has none of, so SM 2.2
 	// rule 4 reads the walk.
 	LogStarted(session string) bool
+	// LogHoldStart holds the session.start of the harness's session
+	// session that waits (LogStarted) for up to past ms beyond the grace it
+	// waits for the session's hooks, and with 0 lets it go then: the host
+	// holds it while a procs tie of the session waits for a line read after
+	// a table read, so the start is the scan's once the tie comes.
+	LogHoldStart(session string, past int64)
 	// LogResume returns where in file the adapter's memory of it starts:
 	// the offset a restart must deliver the file again from, so that the
 	// memory SaveState returned is rebuilt, and false for a file it

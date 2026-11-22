@@ -145,7 +145,12 @@ type txSession struct {
 	// that the first such was the /clear command, which starts the new
 	// session in the process of the one it clears (LogCleared).
 	opened, cleared bool
-	seen            uint64
+	// hold is how long past startGrace the host holds the session's
+	// session.start while its procs tie waits, in ms (LogHoldStart). It
+	// isn't saved: after a restart the start waits out its grace alone,
+	// until the next try of the tie holds it again.
+	hold int64
+	seen uint64
 }
 
 // txFile is what the reader remembers of one transcript file.
@@ -539,8 +544,8 @@ func (l *logLine) resolveStart() {
 		ls := l.a.logSession(ps.session)
 		switch {
 		case ls.nativeAt > 0:
-		case l.raw.Arrival.T-ps.env.T >= startGrace:
-			ls.started, ls.token = true, ps.token
+		case l.raw.Arrival.T-ps.env.T >= startGrace+ls.hold:
+			ls.started, ls.token, ls.hold = true, ps.token, 0
 			env := ps.env
 			if l.raw.Log.Offset != ps.at || l.raw.Log.Idle {
 				env.T--
@@ -1118,8 +1123,8 @@ func (a *Adapter) LogHooked(sid string) bool {
 }
 
 // LogCleared reports whether the log of session sid opened with the /clear
-// command, as Claude Code starts the session it clears to
-// (adapters.LogReader).
+// command, as Claude Code starts the session it clears to, in the process
+// of the one it clears (adapters.LogReader).
 func (a *Adapter) LogCleared(sid string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1143,6 +1148,15 @@ func (a *Adapter) LogStarted(sid string) bool {
 		}
 	}
 	return false
+}
+
+// LogHoldStart holds the session.start of session sid that waits for up to
+// past ms beyond startGrace, and lets it go then with 0
+// (adapters.LogReader).
+func (a *Adapter) LogHoldStart(sid string, past int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.logSessionFor(sid).hold = max(past, 0)
 }
 
 // LogIgnored reports whether the last entry of file that named a folder

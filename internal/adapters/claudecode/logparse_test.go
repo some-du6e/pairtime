@@ -1208,9 +1208,9 @@ func TestTranscriptNativeAtItsStop(t *testing.T) {
 
 // TestLogCleared checks which sessions' logs opened with /clear, which
 // starts the new session in the process of the one it clears, for the
-// procs tie (LogCleared): one whose first user entry that Claude Code
-// didn't write for the model is the /clear command, as step 17's
-// b0423624 is, and no other.
+// procs tie, which ties such a session to none (LogCleared): one whose
+// first user entry that Claude Code didn't write for the model is the
+// /clear command, as step 17's b0423624 is, and no other.
 func TestLogCleared(t *testing.T) {
 	a := newTest()
 	files := readTranscripts(t)
@@ -1281,6 +1281,54 @@ func TestLogStarted(t *testing.T) {
 			}
 			if got := a.LogStarted("s1"); got != tc.want {
 				t.Errorf("LogStarted = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLogHoldStart checks the hold the procs tie puts on a session.start
+// that waits (LogHoldStart): the start waits out its grace and the hold
+// past it, and goes once both have passed, or once its grace has, when
+// the hold is let go.
+func TestLogHoldStart(t *testing.T) {
+	const entry = 1_795_194_000_000 // 2026-11-20T17:00:00Z, the entry's time
+	cases := []struct {
+		name string
+		// hold is the hold set once the entry is read, and release says it
+		// is let go before the idle markers come, at idle seconds after the
+		// entry. starts is how many session.starts they give.
+		hold    int64
+		release bool
+		idle    []int64
+		starts  int
+	}{
+		{"with no hold, the start goes once its grace has passed", 0, false, []int64{95}, 1},
+		{"a hold keeps it past its grace", 30_000, false, []int64{95, 115}, 0},
+		{"and lets it go once the hold has passed too", 30_000, false, []int64{95, 125}, 1},
+		{"a hold let go lets it go at the next marker past its grace", 30_000, true, []int64{95}, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTest()
+			l := logLines(userText("q1", "fix the failing test", map[string]any{"turnOrigin": "human", "promptSource": "typed",
+				"timestamp": "2026-11-20T17:00:00.000Z"}))[0]
+			if _, err := a.Parse(logRawAt(l, false, false, entry+1_000)); err != nil {
+				t.Fatal(err)
+			}
+			a.LogHoldStart("s1", tc.hold)
+			if tc.release {
+				a.LogHoldStart("s1", 0)
+			}
+			var recs []adapters.Record
+			for _, s := range tc.idle {
+				got, err := a.Parse(logRawAt(l, true, false, entry+s*1_000))
+				if err != nil {
+					t.Fatal(err)
+				}
+				recs = append(recs, got...)
+			}
+			if got := len(ofKind[*event.SessionStart](recs)); got != tc.starts {
+				t.Errorf("%d session.starts, want %d", got, tc.starts)
 			}
 		})
 	}
