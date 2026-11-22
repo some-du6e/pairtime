@@ -195,9 +195,9 @@ type step struct {
 
 // readWithHooks replays the capture as the agent takes it in live: every
 // hook call, delivered as way says, and every transcript line, read 50 ms
-// after it was written, in the order they happened, a hook call before a
-// line of the same moment. It returns the hooks' records and the
-// transcripts' apart.
+// after it and the lines above it were written, in the order they
+// happened, a hook call before a line of the same moment. It returns the
+// hooks' records and the transcripts' apart.
 func readWithHooks(t *testing.T, way adapters.Delivery) (hooks, logs []adapters.Record) {
 	t.Helper()
 	calls := readCalls(t)
@@ -208,11 +208,18 @@ func readWithHooks(t *testing.T, way adapters.Delivery) (hooks, logs []adapters.
 	}
 	for _, k := range sessionFiles(files) {
 		ls := files[k]
+		// Claude Code stamps some entries a few ms before the line above
+		// them, and the tailers hand a file's lines over in its order: a
+		// line is read no earlier than the one before it.
+		var at time.Time
 		for i := range ls {
-			steps = append(steps, step{at: ls[i].t, line: &ls[i]})
+			if ls[i].t.After(at) {
+				at = ls[i].t
+			}
+			steps = append(steps, step{at: at, line: &ls[i]})
 		}
 		// The tailers' idle marker, IdleAfter after the file's last line.
-		steps = append(steps, step{at: ls[len(ls)-1].t.Add(10 * time.Second), line: &ls[len(ls)-1], idle: true})
+		steps = append(steps, step{at: at.Add(10 * time.Second), line: &ls[len(ls)-1], idle: true})
 	}
 	sort.SliceStable(steps, func(i, j int) bool {
 		if !steps[i].at.Equal(steps[j].at) {
