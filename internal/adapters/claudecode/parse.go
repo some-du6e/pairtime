@@ -60,10 +60,13 @@ func (a *Adapter) Folder(raw adapters.RawRecord) string {
 // says which). The records carry no event_id, seq or device_id, which the
 // agent sets when it writes them.
 func (a *Adapter) Parse(raw adapters.RawRecord) ([]adapters.Record, error) {
+	if raw.Source == adapters.SourceLog {
+		return a.parseLog(raw)
+	}
 	perr := &adapters.ParseError{Event: safeName(raw.Event)}
 	switch {
 	case raw.Source != adapters.SourceHook:
-		perr.Problem("Claude Code's adapter reads hooks only, not %s records", safeName(string(raw.Source)))
+		perr.Problem("Claude Code's adapter reads hooks and transcripts only, not %s records", safeName(string(raw.Source)))
 		return nil, perr
 	case raw.Arrival.Harness != "" && raw.Arrival.Harness != harness:
 		return nil, adapters.ErrOtherHarness
@@ -252,10 +255,12 @@ func (c *call) prompt() {
 		// it, as long as the hooks' own stamps stand. Only a person's
 		// message is queued: Claude Code runs a scheduled prompt's or a
 		// task notification's hook as it takes it up, with a prompt_id of
-		// its own. A message queued in a turn that took up another before
-		// any call of that turn named its prompt_id is still a
-		// prompt.submit, until WP-AD3 learns the turn's key from the
-		// transcript's promptSource queued entry.
+		// its own. A turn that took up another queued message has a
+		// prompt_id no hook names before that turn's own calls, which the
+		// transcript's promptSource queued entry states at once, and the
+		// transcript reader learns it from there (session.learn). A message
+		// queued in that turn before the reader read the entry, and before
+		// any call of the turn, is still a prompt.submit.
 		if cron || notification {
 			c.perr.Problem("a scheduled prompt or a task notification came with a running turn's prompt_id, which Claude Code 2.1.327 doesn't send")
 			return
@@ -336,7 +341,13 @@ type cron struct {
 // makes no agent.output and isn't committed as the turn's final message
 // (SM 1.2; the hooks reference).
 func (c *call) stop(failed bool) {
-	key := c.turnKey(c.s.turnOf(c.pid))
+	id := c.s.turnOf(c.pid)
+	key := c.turnKey(id)
+	if c.raw.Arrival.Via == event.ViaHook {
+		// The turn's own record of its stop, which a transcript's copy
+		// would count twice (logLine.resolveFinal).
+		c.s.stopNative(id)
+	}
 	reason := event.StopEndTurn
 	if msg, ok := c.f.str("last_assistant_message"); ok && msg != "" && !failed {
 		o := outputOf(msg)

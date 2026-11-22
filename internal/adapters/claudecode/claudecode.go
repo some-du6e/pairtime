@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package claudecode is Claude Code's adapter, part 1: its hooks (DESIGN
-// 5.1; docs/PLAN.md, WP-AD2). The transcript reader and the lookback
-// reader are part 2 (WP-AD3), and the OTLP receiver is WP-AD4's.
+// Package claudecode is Claude Code's adapter: its hooks (DESIGN 5.1;
+// docs/PLAN.md, WP-AD2) and its transcripts, which the agent's tailers
+// deliver line by line (WP-AD3; transcript.go and logparse.go say what
+// they become). The OTLP receiver is WP-AD4's.
 //
 // Each hook call `pairtime hook --harness claude_code --event <e>` hands
 // the agent becomes SM 1.2 events:
@@ -117,6 +118,13 @@ type Adapter struct {
 	mu       sync.Mutex
 	sessions map[string]*session
 	clock    uint64
+	// files and logSessions are what the transcript reader remembers of
+	// each transcript file and of each session it read entries of
+	// (logparse.go). They are apart from sessions, which only hook calls
+	// fill, so a session only a transcript shows never counts as one a
+	// hook reported (HookReported).
+	files       map[string]*txFile
+	logSessions map[string]*txSession
 }
 
 // New returns an adapter that keys ids and resolves projects with opts. It
@@ -126,7 +134,8 @@ func New(opts adapters.Options) *Adapter {
 	if opts.Keys == nil {
 		panic("claudecode: New needs Options.Keys, the device's K_session")
 	}
-	return &Adapter{opts: opts, keys: opts.Keys, sessions: map[string]*session{}}
+	return &Adapter{opts: opts, keys: opts.Keys, sessions: map[string]*session{},
+		files: map[string]*txFile{}, logSessions: map[string]*txSession{}}
 }
 
 // Name is claude_code.
@@ -162,16 +171,21 @@ var Events = []string{
 	EventSessionEnd,
 }
 
-// Sources lists the hook events Parse reads. The transcripts are WP-AD3's.
+// Sources lists the hook events Parse reads, then the transcripts under
+// Claude Code's projects folder, ~/.claude/projects unless
+// CLAUDE_CONFIG_DIR moves it (HS 3.2; LogRoots): each session's own and
+// its subagents'.
 func (*Adapter) Sources() []adapters.Source {
-	out := make([]adapters.Source, len(Events))
+	out := make([]adapters.Source, len(Events), len(Events)+2)
 	for i, e := range Events {
 		out[i] = adapters.Source{Kind: adapters.SourceHook, Event: e}
 		if e == EventPostToolUse || e == EventPostToolUseFailure {
 			out[i].Matcher = toolMatcher
 		}
 	}
-	return out
+	return append(out,
+		adapters.Source{Kind: adapters.SourceLog, Root: "~/.claude/projects", Glob: "*/*.jsonl"},
+		adapters.Source{Kind: adapters.SourceLog, Root: "~/.claude/projects", Glob: "*/*/subagents/*.jsonl"})
 }
 
 // Hosts returns the executables the platform's app-class table lists as
@@ -241,7 +255,11 @@ type session struct {
 	// the PostToolUse calls that may answer one, oldest first (Decide).
 	requests []*request
 	posts    []post
-	seen     uint64
+	// stops are the turns whose Stop or StopFailure came via hook, oldest
+	// first, which a transcript's copy of their last message and stop
+	// would count twice (stopNative).
+	stops []string
+	seen  uint64
 }
 
 // sessionFor returns the session with Claude Code's id, making it, and

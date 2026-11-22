@@ -501,6 +501,21 @@ components:
         last_failure:
           type: string
           description: What the last failure was, naming events and fields but never their values.
+        lines:
+          type: integer
+          minimum: 0
+          description: >
+            Lines of the harness's log files, such as Claude Code's
+            transcripts, that the adapter read since the agent started.
+            Absent when none.
+        line_failures:
+          type: integer
+          minimum: 0
+          description: >
+            Log lines the adapter couldn't fully read: a line that isn't JSON,
+            an entry of a type or with a value its harness's version doesn't
+            write, a line too long to read. Their other records are still
+            written. Absent when none.
     Git:
       type: object
       additionalProperties: false

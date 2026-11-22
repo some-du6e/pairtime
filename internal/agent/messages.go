@@ -33,6 +33,7 @@ func (a *agent) startIPC(opts Options) func() {
 	j, err := inbox.OpenJournal(a.journalDir(), time.Now())
 	if err != nil {
 		a.setProblem("ipc", fmt.Sprintf("hooks spool their messages, because the agent can't open its journal: %v", err))
+		a.markDrained() // no drain will come
 		return func() {}
 	}
 	a.journal = j
@@ -68,8 +69,11 @@ func (a *agent) startIPC(opts Options) func() {
 				if !first {
 					l.ensure()
 				}
-				first = false
 				a.drain(drainer)
+				if first {
+					a.markDrained()
+				}
+				first = false
 			}
 		}
 	}()

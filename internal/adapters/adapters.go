@@ -196,6 +196,9 @@ type RawRecord struct {
 	// it at 1 MiB, or it wasn't one JSON value, or it didn't fit a message.
 	Incomplete bool
 	Arrival    Arrival
+	// Log says where in a log file a record of SourceLog was read, and is
+	// nil for every other source.
+	Log *LogLine
 }
 
 // Arrival is what the agent, not the adapter or the sender, says about how
@@ -205,9 +208,14 @@ type Arrival struct {
 	// when it came over the socket or the pipe and the agent's own walk of
 	// its parent chain reached one of the adapter's Hosts, and plugin for
 	// every other one, spooled calls included (D-spool-via; DESIGN 5.2).
+	// For a line of a log file the tailers read, it is log.
 	Via event.Via
 	// T is when the call was made, in Unix milliseconds, never later than
-	// when the agent took it in; Mono and BootID go with it (SM 1.1).
+	// when the agent took it in; Mono and BootID go with it (SM 1.1). For
+	// a log line it is when the agent read the line: the line's own
+	// records carry the times the line states, and their mono is the
+	// agent's reading at T taken back by how much earlier they are, as
+	// git.change records are, and never below 0.
 	T      int64
 	Mono   int64
 	BootID string

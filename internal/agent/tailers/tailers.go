@@ -1,0 +1,970 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+// Package tailers reads harnesses' log files as the harnesses write them,
+// for the adapters that parse them (DESIGN 3.3; CP 3.2; docs/PLAN.md,
+// WP-AD3). One Tailer serves every adapter that reads logs
+// (adapters.LogReader): it watches each adapter's log roots and hands each
+// complete new line of a log file to the agent, in the order the file holds
+// them, which has the line's adapter parse it.
+//
+// It follows CP 3.2:
+//
+//   - It watches each root and the folders that hold a hot file, one a
+//     harness wrote in the last HotWindow, through fsnotify, never a whole
+//     tree, and lists every root again each RescanEvery for what the
+//     notifications missed. On macOS, where fsnotify opens a descriptor
+//     for every file of a watched folder, it watches fewer folders.
+//   - It stats each hot file every HotPoll while it grew in the last
+//     QuietAfter, then every QuietPoll, which covers Windows' late size
+//     notifications and filesystems that send none.
+//   - It keeps a cursor per file in state.json: the file's identity (its
+//     device and inode, or volume and file index), how far it has handed
+//     lines over (read), the hash of the last line it handed over, and
+//     where the file's adapter needs it to start again after a restart
+//     (resume), since an adapter can't save the content it holds while it
+//     waits for a later line (adapters.LogReader.LogResume). After a
+//     restart it hands the lines from resume to read over again as
+//     replays, of which the adapter makes no record.
+//   - A file that shrank, or whose identity changed, was truncated or
+//     replaced. When the line that ended where the tailer had read still
+//     ends there, the file kept what was read and it goes on; else it reads
+//     the file from its start, and the lines up to and including one that
+//     hashes like the last line it read come as replays, so nothing that
+//     was there before is recorded twice.
+//   - It opens a file only to read it and closes it at once, so a harness
+//     on Windows can always rename or delete its file.
+//   - A line is handed over only once its newline is written. A line longer
+//     than MaxLine is handed over without its bytes, marked too long.
+//
+// A file the tailer has no cursor for is read from its start when it is
+// hot, which is a session being written now. Older files wait for the
+// lookback reader, which reads the last 30 days at low priority (WP-AD3,
+// PR 2).
+package tailers
+
+import (
+	"bufio"
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"io/fs"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/fsnotify/fsnotify"
+
+	"github.com/some-du6e/pairtime/internal/adapters"
+	"github.com/some-du6e/pairtime/internal/agent/sched"
+	"github.com/some-du6e/pairtime/pkg/event"
+)
+
+// The tailer's timing (CP 3.2).
+const (
+	// HotWindow is how recently a file must have been written to be hot:
+	// polled, its folder watched, and read from its start when the tailer
+	// has no cursor for it.
+	HotWindow = 10 * time.Minute
+	// HotPoll is how often a hot file is looked at while one grew in the
+	// last QuietAfter, and QuietPoll how often after that.
+	HotPoll    = 5 * time.Second
+	QuietPoll  = 30 * time.Second
+	QuietAfter = 2 * time.Minute
+	// RescanEvery is how often every root is listed again.
+	RescanEvery = time.Minute
+	// IdleAfter is how long a file goes without a new line before its
+	// adapter, when it holds something back, hears that it is idle
+	// (adapters.LogLine.Idle).
+	IdleAfter = 10 * time.Second
+)
+
+// Bounds on what one read takes.
+const (
+	// MaxLine is the longest line handed over with its bytes.
+	MaxLine = 8 << 20
+	// batchLines and batchBytes bound one handover.
+	batchLines = 256
+	batchBytes = 1 << 20
+	// readBuffer is the read buffer of one file.
+	readBuffer = 64 << 10
+)
+
+// stateKey is the tailer's key in state.json, and stateVersion its format.
+const (
+	stateKey     = "tailers"
+	stateVersion = 1
+)
+
+// maxWatched bounds the folders watched at once: fsnotify opens a
+// descriptor for every file of a watched folder on macOS, and an inotify
+// watch pins the folder's inode on Linux (CP 3.1).
+func maxWatched() int {
+	if runtime.GOOS == "darwin" {
+		return 4
+	}
+	return 32
+}
+
+// Root is a log root and the harness whose adapter reads it.
+type Root struct {
+	Harness event.Harness
+	adapters.LogRoot
+}
+
+// Line is one line of a log file, handed to the agent with where it lies.
+type Line struct {
+	Harness event.Harness
+	Log     adapters.LogLine
+	// Bytes is the line without its newline, and nil for a line too long or
+	// an idle marker.
+	Bytes []byte
+	// Hash names the line's content, which the cursor keeps for the last
+	// line handed over (Advance).
+	Hash string
+}
+
+// Batch is lines of one file, in the order the file holds them.
+type Batch []Line
+
+// Store keeps the cursors across agent restarts: state.json
+// (internal/agent/state).
+type Store interface {
+	Get(key string, v any) (bool, error)
+	Put(key string, v any) error
+}
+
+// Options configure a Tailer.
+type Options struct {
+	// Roots are the roots to watch. Hint adds more.
+	Roots []Root
+	// Store keeps the cursors; nil keeps them in memory only.
+	Store Store
+	// Sched runs the tailer's timers. Nil runs none, for tests, which call
+	// Step.
+	Sched *sched.Scheduler
+	// Deliver hands lines of one file to the agent, on the tailer's
+	// goroutine. The agent takes them in order and calls Advance for each
+	// it took, and returns how many that was. Fewer than all leaves the
+	// file waiting for its next line to be taken, which the tailer offers
+	// again after Poke.
+	Deliver func(Batch) int
+	// Forget hears of a file that is gone, for its adapter to forget it.
+	Forget func(h event.Harness, file string)
+	// Ready, when set, holds the tailer's first look at its roots until it
+	// is closed: the agent closes it once the hook calls that came while it
+	// was down are with the adapters, so a session's hooks reach its
+	// adapter before its transcript does.
+	Ready <-chan struct{}
+	// Now is the wall clock. Nil means time.Now.
+	Now func() time.Time
+	// Log gets what goes wrong. Nil discards it.
+	Log *slog.Logger
+	// NoNotify watches with polls and rescans alone, without fsnotify.
+	NoNotify bool
+}
+
+// Tailer watches log roots and hands new lines of their files over.
+type Tailer struct {
+	opts Options
+
+	mu    sync.Mutex
+	roots []Root
+	files map[string]*file
+	// scanDue says the roots are to be listed again, and checkAll that
+	// every file with a cursor is to be looked at, as at the start.
+	scanDue, checkAll bool
+	// watching are the folders fsnotify watches.
+	watching map[string]bool
+	// lastPoll is when the hot files were last looked at, and lastPut the
+	// cursors as Put last handed them to Store.
+	lastPoll time.Time
+	lastPut  []byte
+
+	w       *fsnotify.Watcher
+	kick    chan struct{}
+	stop    chan struct{}
+	done    chan struct{}
+	stopped bool
+	jobs    []*sched.Job
+	poll    *sched.Job
+	every   time.Duration // poll's interval, 0 while it is stopped
+}
+
+// file is what the tailer knows of one log file.
+type file struct {
+	key, path string
+	harness   event.Harness
+	// id, size and mtime are the file as last seen.
+	id    string
+	size  int64
+	mtime time.Time
+	// read is how far the file's lines were handed over and taken, and
+	// hash the last of them's Hash; resume is where its adapter needs a
+	// restart to start (Advance).
+	read, resume int64
+	hash         string
+	// pos is where the next line to hand over starts: resume after a
+	// restart, read otherwise.
+	pos int64
+	// grew is when the tailer saw the file grow last, statAt when it last
+	// looked at it, due says it is to be read, waiting that its next line
+	// wasn't taken, and idleSent that its adapter heard it was idle since it
+	// last grew.
+	grew, statAt           time.Time
+	due, waiting, idleSent bool
+}
+
+// active is when f was last written, by the tailer's sight or its mtime.
+func (f *file) active() time.Time {
+	if f.mtime.After(f.grew) {
+		return f.mtime
+	}
+	return f.grew
+}
+
+// saved is what Store keeps under stateKey.
+type saved struct {
+	V     int         `json:"v"`
+	Files []savedFile `json:"files"`
+}
+
+type savedFile struct {
+	Path    string        `json:"path"`
+	Harness event.Harness `json:"harness"`
+	ID      string        `json:"id,omitempty"`
+	Size    int64         `json:"size"`
+	MTime   int64         `json:"mtime"`
+	Read    int64         `json:"read"`
+	Resume  int64         `json:"resume"`
+	Hash    string        `json:"hash,omitempty"`
+}
+
+// New makes a Tailer with the cursors Store kept. It reads nothing until
+// Start or Step.
+func New(opts Options) *Tailer {
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	if opts.Log == nil {
+		opts.Log = slog.New(slog.DiscardHandler)
+	}
+	t := &Tailer{
+		opts:     opts,
+		roots:    slices.Clone(opts.Roots),
+		files:    make(map[string]*file),
+		watching: make(map[string]bool),
+		scanDue:  true,
+		checkAll: true,
+		kick:     make(chan struct{}, 1),
+		stop:     make(chan struct{}),
+		done:     make(chan struct{}),
+	}
+	for i := range t.roots {
+		t.roots[i].Dir = filepath.Clean(t.roots[i].Dir)
+	}
+	t.load()
+	return t
+}
+
+// load takes the cursors Store kept. A damaged entry is dropped, like any
+// damaged state (DESIGN 3.5), and the hot files are then read afresh.
+func (t *Tailer) load() {
+	if t.opts.Store == nil {
+		return
+	}
+	var st saved
+	ok, err := t.opts.Store.Get(stateKey, &st)
+	switch {
+	case err != nil:
+		t.opts.Log.Warn("tailers: state.json's tailers entry doesn't parse, so the tailers start afresh", "err", err)
+		return
+	case !ok || st.V != stateVersion:
+		return
+	}
+	for _, sf := range st.Files {
+		if sf.Path == "" || !filepath.IsAbs(sf.Path) || t.files[sf.Path] != nil || sf.Read < 0 || sf.Resume < 0 || sf.Resume > sf.Read {
+			continue
+		}
+		t.files[sf.Path] = &file{key: sf.Path, path: sf.Path, harness: sf.Harness, id: sf.ID, size: sf.Size,
+			mtime: time.UnixMilli(sf.MTime), read: sf.Read, resume: sf.Resume, hash: sf.Hash, pos: sf.Resume}
+	}
+}
+
+// Put hands the cursors to Store, in memory, and reports whether they
+// changed since the last Put. The agent writes state.json with the
+// adapters' memory in the same Save, so the two agree.
+func (t *Tailer) Put() (bool, error) {
+	if t.opts.Store == nil {
+		return false, nil
+	}
+	t.mu.Lock()
+	st := saved{V: stateVersion, Files: make([]savedFile, 0, len(t.files))}
+	for _, f := range t.files {
+		st.Files = append(st.Files, savedFile{Path: f.path, Harness: f.harness, ID: f.id, Size: f.size,
+			MTime: f.mtime.UnixMilli(), Read: f.read, Resume: f.resume, Hash: f.hash})
+	}
+	last := t.lastPut
+	t.mu.Unlock()
+	slices.SortFunc(st.Files, func(a, b savedFile) int { return strings.Compare(a.Path, b.Path) })
+	b, err := json.Marshal(st)
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(b, last) {
+		return false, nil
+	}
+	if err := t.opts.Store.Put(stateKey, json.RawMessage(b)); err != nil {
+		return false, err
+	}
+	t.mu.Lock()
+	t.lastPut = b
+	t.mu.Unlock()
+	return true, nil
+}
+
+// AddRoots watches roots too, from the next step on. A root whose folder
+// the tailer watches already is left out.
+func (t *Tailer) AddRoots(roots []Root) {
+	t.mu.Lock()
+	for _, r := range roots {
+		r.Dir = filepath.Clean(r.Dir)
+		if r.Dir == "" || !filepath.IsAbs(r.Dir) || slices.ContainsFunc(t.roots, func(o Root) bool { return o.Dir == r.Dir }) {
+			continue
+		}
+		t.roots = append(t.roots, r)
+	}
+	t.scanDue = true
+	t.mu.Unlock()
+	t.wake()
+}
+
+// Advance records that the agent took a line of file ending at end, whose
+// Hash is hash, and that the file's adapter needs a restart to start at
+// resume. The agent calls it for each line it takes, before Deliver
+// returns, so that what it saves of the cursors and of the adapter's memory
+// is of the same point.
+func (t *Tailer) Advance(key string, end int64, hash string, resume int64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	f := t.files[key]
+	if f == nil {
+		return
+	}
+	if end > f.read || end == f.read && hash != "" {
+		f.read, f.hash = end, hash
+	}
+	f.resume = min(max(resume, 0), f.read)
+	f.pos = max(f.pos, end)
+}
+
+// Poke has the tailer offer the lines that waited again, as when the
+// project of their folder became known.
+func (t *Tailer) Poke() {
+	t.mu.Lock()
+	for _, f := range t.files {
+		if f.waiting {
+			f.waiting, f.due = false, true
+		}
+	}
+	t.mu.Unlock()
+	t.wake()
+}
+
+// Hint has the tailer read the log file at path soon, which a hook call of
+// the harness named: a session is being written there now. When no root
+// holds the file, root is watched from now on.
+func (t *Tailer) Hint(h event.Harness, path string, root adapters.LogRoot) {
+	if !filepath.IsAbs(path) {
+		return
+	}
+	path = filepath.Clean(path)
+	t.mu.Lock()
+	r, rel, ok := t.rootOf(path)
+	if !ok {
+		root.Dir = filepath.Clean(root.Dir)
+		if rel, ok = relUnder(root.Dir, path); !ok || root.Match == nil {
+			t.mu.Unlock()
+			return
+		}
+		r = Root{Harness: h, LogRoot: root}
+		t.roots = append(t.roots, r)
+	}
+	if r.Match(rel) {
+		f := t.files[path]
+		if f == nil {
+			f = &file{key: path, path: path, harness: r.Harness}
+			t.files[path] = f
+		}
+		f.due = true
+		f.grew = t.opts.Now()
+	}
+	t.mu.Unlock()
+	t.wake()
+}
+
+// rootOf returns the root that holds path, and path under it. t.mu is held.
+func (t *Tailer) rootOf(path string) (Root, string, bool) {
+	for _, r := range t.roots {
+		if rel, ok := relUnder(r.Dir, path); ok {
+			return r, rel, true
+		}
+	}
+	return Root{}, "", false
+}
+
+// relUnder returns path under dir, with '/' between its parts, when dir
+// holds it. filepath.Rel compares Windows paths without case, as Windows
+// does.
+func relUnder(dir, path string) (string, bool) {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+// Start runs the tailer on a goroutine of its own and returns the step
+// that stops it.
+func (t *Tailer) Start() func() {
+	if !t.opts.NoNotify {
+		if w, err := fsnotify.NewWatcher(); err != nil {
+			t.opts.Log.Warn("tailers: file notifications don't start, so the tailers poll alone", "err", err)
+		} else {
+			t.w = w
+		}
+	}
+	if s := t.opts.Sched; s != nil {
+		t.jobs = append(t.jobs, s.Every("tailers.rescan", RescanEvery, func(time.Time) {
+			t.mu.Lock()
+			t.scanDue = true
+			t.mu.Unlock()
+			t.wake()
+		}))
+		t.poll = s.Every("tailers.poll", HotPoll, func(time.Time) { t.wake() })
+		t.poll.Stop()
+	}
+	go t.run()
+	return func() {
+		t.mu.Lock()
+		t.stopped = true
+		t.mu.Unlock()
+		close(t.stop)
+		<-t.done
+		for _, j := range t.jobs {
+			j.Stop()
+		}
+		if t.poll != nil {
+			t.poll.Stop()
+		}
+		if t.w != nil {
+			t.w.Close()
+		}
+	}
+}
+
+func (t *Tailer) wake() {
+	select {
+	case t.kick <- struct{}{}:
+	default:
+	}
+}
+
+func (t *Tailer) run() {
+	defer close(t.done)
+	if t.opts.Ready != nil {
+		select {
+		case <-t.opts.Ready:
+		case <-t.stop:
+			return
+		}
+	}
+	var events <-chan fsnotify.Event
+	var errs <-chan error
+	if t.w != nil {
+		events, errs = t.w.Events, t.w.Errors
+	}
+	for {
+		t.Step()
+		select {
+		case <-t.stop:
+			return
+		case <-t.kick:
+		case ev, ok := <-events:
+			if !ok {
+				events = nil
+				continue
+			}
+			t.notified(ev)
+		case err, ok := <-errs:
+			if !ok {
+				errs = nil
+				continue
+			}
+			// An overflow drops events, so the roots are listed again.
+			t.opts.Log.Warn("tailers: file notifications", "err", err)
+			t.mu.Lock()
+			t.scanDue = true
+			t.mu.Unlock()
+		}
+	}
+}
+
+// notified marks what an fsnotify event names as due: the file, or, for a
+// folder or a file the tailer doesn't know, the roots, to be listed again.
+func (t *Tailer) notified(ev fsnotify.Event) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if f := t.files[filepath.Clean(ev.Name)]; f != nil {
+		f.due = true
+		return
+	}
+	t.scanDue = true
+}
+
+// Step does what is due: lists the roots, looks at the hot files and reads
+// what grew. The tailer's goroutine runs it on every wakeup, and tests call
+// it.
+func (t *Tailer) Step() {
+	now := t.opts.Now()
+	t.mu.Lock()
+	scan, all := t.scanDue, t.checkAll
+	t.scanDue, t.checkAll = false, false
+	pollDue := now.Sub(t.lastPoll) >= HotPoll-time.Second/2
+	if pollDue {
+		t.lastPoll = now
+	}
+	t.mu.Unlock()
+	if scan {
+		t.scan(now)
+	}
+	t.look(now, all, pollDue)
+	for _, f := range t.dueFiles() {
+		if t.stopping() {
+			return
+		}
+		t.read(f, now)
+	}
+	t.watch(now)
+	t.pace(now)
+}
+
+func (t *Tailer) stopping() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stopped
+}
+
+// scan lists every root. A file the tailer has no cursor for starts one,
+// at the file's start, when it is hot; a known file that changed is due.
+func (t *Tailer) scan(now time.Time) {
+	t.mu.Lock()
+	roots := slices.Clone(t.roots)
+	// Every folder above a known file, so the walk goes down to it.
+	known := make(map[string]bool)
+	for _, f := range t.files {
+		for d := filepath.Dir(f.path); !known[d]; d = filepath.Dir(d) {
+			known[d] = true
+			if filepath.Dir(d) == d {
+				break
+			}
+		}
+	}
+	t.mu.Unlock()
+	for _, r := range roots {
+		t.walk(r, r.Dir, "", 0, now, known)
+	}
+}
+
+// walk lists dir, rel under root r, and the folders below it to r.Depth.
+// Below the first level it goes only into folders written in the last
+// HotWindow or holding a file it knows, so an idle root costs a listing of
+// its top folders.
+func (t *Tailer) walk(r Root, dir, rel string, depth int, now time.Time, known map[string]bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.opts.Log.Debug("tailers: listing a log folder", "err", err)
+		}
+		return
+	}
+	for _, de := range entries {
+		name := de.Name()
+		sub := name
+		if rel != "" {
+			sub = rel + "/" + name
+		}
+		full := filepath.Join(dir, name)
+		if de.IsDir() {
+			if depth+1 >= r.Depth {
+				continue
+			}
+			if depth >= 1 && !known[full] {
+				fi, err := de.Info()
+				if err != nil || now.Sub(fi.ModTime()) > HotWindow {
+					continue
+				}
+			}
+			t.walk(r, full, sub, depth+1, now, known)
+			continue
+		}
+		if !de.Type().IsRegular() || r.Match == nil || !r.Match(sub) {
+			continue
+		}
+		fi, err := de.Info()
+		if err != nil {
+			continue
+		}
+		t.mu.Lock()
+		f := t.files[full]
+		switch {
+		case f == nil && now.Sub(fi.ModTime()) <= HotWindow:
+			t.files[full] = &file{key: full, path: full, harness: r.Harness, due: true, grew: now}
+		case f != nil && (fi.Size() != f.size || !fi.ModTime().Equal(f.mtime)):
+			f.due = true
+		}
+		t.mu.Unlock()
+	}
+}
+
+// look stats the files that want it: every known file at the start, and
+// the hot ones when a poll is due. One that changed is due, one that is
+// gone is forgotten, and one whose adapter holds something back hears it
+// is idle once it hasn't grown for IdleAfter.
+func (t *Tailer) look(now time.Time, all, poll bool) {
+	t.mu.Lock()
+	var check []*file
+	for _, f := range t.files {
+		last := f.active()
+		every := HotPoll
+		if now.Sub(last) > QuietAfter {
+			every = QuietPoll
+		}
+		if all || poll && now.Sub(last) <= HotWindow && now.Sub(f.statAt) >= every-time.Second/2 {
+			check = append(check, f)
+			f.statAt = now
+		}
+		if !f.idleSent && f.resume < f.read && f.pos >= f.size && now.Sub(last) >= IdleAfter && !f.waiting {
+			f.due = true
+		}
+	}
+	t.mu.Unlock()
+	for _, f := range check {
+		fi, err := os.Stat(f.path)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			t.gone(f)
+		case err == nil:
+			t.mu.Lock()
+			if fi.Size() != f.size || !fi.ModTime().Equal(f.mtime) {
+				f.due = true
+			}
+			t.mu.Unlock()
+		}
+	}
+}
+
+// gone forgets f, which is gone, and has its adapter forget it.
+func (t *Tailer) gone(f *file) {
+	t.mu.Lock()
+	ours := t.files[f.key] == f
+	if ours {
+		delete(t.files, f.key)
+	}
+	t.mu.Unlock()
+	if ours && t.opts.Forget != nil {
+		t.opts.Forget(f.harness, f.key)
+	}
+}
+
+// dueFiles returns the files to read, written last first.
+func (t *Tailer) dueFiles() []*file {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []*file
+	for _, f := range t.files {
+		if f.due && !f.waiting {
+			out = append(out, f)
+		}
+	}
+	slices.SortFunc(out, func(a, b *file) int { return b.mtime.Compare(a.mtime) })
+	return out
+}
+
+// read reads f from where its next line starts to its last complete line
+// and hands the lines over, a batch at a time.
+func (t *Tailer) read(f *file, now time.Time) {
+	t.mu.Lock()
+	f.due = false
+	t.mu.Unlock()
+	fh, err := os.Open(f.path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			t.gone(f)
+		} else {
+			t.opts.Log.Debug("tailers: opening a log file", "err", err)
+		}
+		return
+	}
+	defer fh.Close()
+	fi, err := fh.Stat()
+	if err != nil {
+		return
+	}
+	id, size := fileID(fh, fi), fi.Size()
+	t.mu.Lock()
+	moved := f.id != "" && id != "" && id != f.id || size < f.read
+	t.mu.Unlock()
+	if moved {
+		t.relocate(fh, f, size)
+	}
+	t.mu.Lock()
+	if size > f.size || moved {
+		f.grew, f.idleSent = now, false
+	}
+	f.id, f.size, f.mtime = id, size, fi.ModTime()
+	pos, read := f.pos, f.read
+	t.mu.Unlock()
+
+	if pos < size {
+		if _, err := fh.Seek(pos, io.SeekStart); err != nil {
+			return
+		}
+		br := bufio.NewReaderSize(fh, readBuffer)
+		for {
+			batch, next, more := t.lines(br, f, pos, read)
+			if len(batch) > 0 {
+				n := t.opts.Deliver(batch)
+				if n < len(batch) {
+					t.mu.Lock()
+					f.waiting = true
+					t.mu.Unlock()
+					return
+				}
+			}
+			pos = next
+			t.mu.Lock()
+			f.pos = max(f.pos, pos)
+			t.mu.Unlock()
+			if !more {
+				break
+			}
+		}
+	}
+	t.idle(f, now)
+}
+
+// idle tells f's adapter that f is idle, once, when the adapter holds
+// something back and f hasn't grown for IdleAfter, or was written before
+// that, as a file caught up on after a restart was.
+func (t *Tailer) idle(f *file, now time.Time) {
+	t.mu.Lock()
+	send := !f.idleSent && f.resume < f.read && f.pos >= f.size && !f.waiting && now.Sub(f.active()) >= IdleAfter
+	at, h, key, path, hash := f.pos, f.harness, f.key, f.path, f.hash
+	if send {
+		f.idleSent = true
+	}
+	t.mu.Unlock()
+	if !send {
+		return
+	}
+	marker := Line{Harness: h, Log: adapters.LogLine{File: key, Path: path, Offset: at, End: at, Idle: true}, Hash: hash}
+	if t.opts.Deliver(Batch{marker}) < 1 {
+		t.mu.Lock()
+		f.idleSent, f.waiting = false, true
+		t.mu.Unlock()
+	}
+}
+
+// lines reads the next lines of f from pos, which br reads from, up to a
+// batch's worth. read is how far an earlier run handed lines over: those
+// ending by then are replays. It returns the lines, where the next one
+// starts, and whether there may be more after the batch. A last line with
+// no newline yet isn't one, and blank lines are taken into the next line's
+// span, so each line starts where the one before it ended.
+func (t *Tailer) lines(br *bufio.Reader, f *file, pos, read int64) (Batch, int64, bool) {
+	var batch Batch
+	bytesIn := 0
+	start := pos
+	for len(batch) < batchLines && bytesIn < batchBytes {
+		line, n, tooLong, err := readLine(br)
+		if err != nil {
+			// io.EOF before a newline: the line isn't whole yet.
+			return batch, start, false
+		}
+		end := pos + n
+		pos = end
+		body := bytes.TrimRight(line, "\r\n")
+		if !tooLong && len(bytes.TrimSpace(body)) == 0 {
+			continue
+		}
+		l := Line{Harness: f.harness, Log: adapters.LogLine{File: f.key, Path: f.path, Offset: start, End: end,
+			Replay: end <= read, TooLong: tooLong}}
+		if !tooLong {
+			l.Bytes, l.Hash = body, hashLine(body)
+		}
+		batch = append(batch, l)
+		bytesIn += len(body)
+		start = end
+	}
+	return batch, start, true
+}
+
+// readLine reads one line through its newline, and how many bytes that
+// was. A line longer than MaxLine comes back empty and marked too long,
+// read through to its newline.
+func readLine(br *bufio.Reader) (line []byte, n int64, tooLong bool, err error) {
+	var buf []byte
+	for {
+		chunk, err := br.ReadSlice('\n')
+		n += int64(len(chunk))
+		if !tooLong {
+			if len(buf)+len(chunk) > MaxLine+2 {
+				tooLong, buf = true, nil
+			} else {
+				buf = append(buf, chunk...)
+			}
+		}
+		switch {
+		case err == nil:
+			return buf, n, tooLong, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		default:
+			return nil, n, false, err
+		}
+	}
+}
+
+// hashLine names a line's content: the first 8 bytes of its SHA-256.
+func hashLine(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8])
+}
+
+// relocate handles a file that was truncated or replaced. When the line
+// that ended at read still ends there with the same content, the file kept
+// what was read, and nothing changes. Otherwise the file is read from its
+// start: up to the end of a line that hashes like the last one read, which
+// the file kept, the lines come as replays, and with no such line all of
+// it is new, for an adapter that starts the file afresh (an adapters.LogLine
+// at offset 0).
+func (t *Tailer) relocate(fh *os.File, f *file, size int64) {
+	t.mu.Lock()
+	read, hash := f.read, f.hash
+	t.mu.Unlock()
+	if _, err := fh.Seek(0, io.SeekStart); err != nil {
+		return
+	}
+	br := bufio.NewReaderSize(fh, readBuffer)
+	// The first line that hashes like the last one read: the file is a
+	// copy of what was read with more after it, or no copy at all.
+	var pos, found int64 = 0, -1
+	for pos < size && hash != "" {
+		line, n, tooLong, err := readLine(br)
+		if err != nil {
+			break
+		}
+		pos += n
+		if !tooLong && hashLine(bytes.TrimRight(line, "\r\n")) == hash {
+			found = pos
+			break
+		}
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	switch {
+	case found == read && read > 0:
+		// The file kept what was read where it was.
+	case found > 0:
+		f.read, f.resume, f.pos = found, 0, 0
+	default:
+		f.read, f.resume, f.pos, f.hash = 0, 0, 0, ""
+	}
+}
+
+// watch keeps fsnotify on the roots and on the folders of the hot files,
+// the files grown most recently first, up to maxWatched.
+func (t *Tailer) watch(now time.Time) {
+	if t.w == nil {
+		return
+	}
+	t.mu.Lock()
+	want := make(map[string]bool)
+	for _, r := range t.roots {
+		want[r.Dir] = true
+	}
+	var hot []*file
+	for _, f := range t.files {
+		if now.Sub(f.active()) <= HotWindow {
+			hot = append(hot, f)
+		}
+	}
+	slices.SortFunc(hot, func(a, b *file) int { return b.active().Compare(a.active()) })
+	for _, f := range hot {
+		if len(want) >= maxWatched() {
+			break
+		}
+		want[filepath.Dir(f.path)] = true
+	}
+	var add, drop []string
+	for d := range want {
+		if !t.watching[d] {
+			add = append(add, d)
+		}
+	}
+	for d := range t.watching {
+		if !want[d] {
+			drop = append(drop, d)
+		}
+	}
+	t.mu.Unlock()
+	// Without the lock: fsnotify's calls can wait on its goroutine.
+	for _, d := range drop {
+		t.w.Remove(d)
+		t.mu.Lock()
+		delete(t.watching, d)
+		t.mu.Unlock()
+	}
+	for _, d := range add {
+		if err := t.w.Add(d); err != nil {
+			continue // a root that doesn't exist yet: the rescan finds it
+		}
+		t.mu.Lock()
+		t.watching[d] = true
+		t.mu.Unlock()
+	}
+}
+
+// pace runs the poll while a file is hot: every HotPoll while one grew in
+// the last QuietAfter, and not at all once none has grown in HotWindow.
+func (t *Tailer) pace(now time.Time) {
+	if t.poll == nil {
+		return
+	}
+	t.mu.Lock()
+	var every time.Duration
+	for _, f := range t.files {
+		if now.Sub(f.active()) <= HotWindow {
+			every = HotPoll
+			break
+		}
+	}
+	change := every != t.every
+	t.every = every
+	t.mu.Unlock()
+	switch {
+	case !change:
+	case every == 0:
+		t.poll.Stop()
+	default:
+		t.poll.Reset(every)
+	}
+}

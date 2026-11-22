@@ -32,6 +32,8 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
+	"github.com/some-du6e/pairtime/internal/agent/tailers"
+	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -260,6 +262,27 @@ type adapterHost struct {
 	// git is the git adapter, which prepare makes; nil before, and when it
 	// couldn't start. The status reads it too.
 	git atomic.Pointer[gitHost]
+
+	// tail is the tailers, which read the harnesses' log files and hand
+	// their lines to the worker (logs.go; WP-AD3), once startTailers made
+	// them. logReady lets them start, once the worker has given them the
+	// adapters' log roots.
+	tail     atomic.Pointer[tailers.Tailer]
+	logReady chan struct{}
+	// Under mu: logEnv is the machine the log roots are on, logReqs the
+	// batches of lines the tailers hand over, and forgets the files they
+	// found gone, oldest first; logsDone says the tailers stopped.
+	logEnv   install.Env
+	logReqs  []*logReq
+	forgets  []forgetReq
+	logsDone bool
+	// The worker's: rooted says the tailers have their roots, and logWait
+	// that a line had to wait, when the Tracks ended numbered logTracks and
+	// logParked calls were parked: the tailers get a poke once either moves.
+	rooted    bool
+	logWait   bool
+	logTracks uint64
+	logParked int
 }
 
 // adapterKeys are the keys the adapters make records with, derived from
@@ -289,6 +312,13 @@ type harnessStats struct {
 	// LastFailure says what the last failure was. It names events and
 	// fields, never their values (adapters.ParseError).
 	LastFailure string `json:"last_failure,omitempty"`
+	// Lines counts the lines of the harness's log files the adapter read,
+	// and LineFailures those it couldn't fully read: lines that aren't
+	// JSON, entries of a type or with a value its harness's version doesn't
+	// write, lines too long to read (DESIGN 5.3; WP-AD3). Ignored counts
+	// lines of a folder out of pairtime too.
+	Lines        uint64 `json:"lines,omitempty"`
+	LineFailures uint64 `json:"line_failures,omitempty"`
 }
 
 // adaptersReply is the adapters' part of GET /v1/status.
@@ -341,6 +371,7 @@ func newAdapterHost(a *agent) *adapterHost {
 		kick:      make(chan struct{}, 1),
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
+		logReady:  make(chan struct{}),
 	}
 }
 
@@ -959,6 +990,7 @@ func (h *adapterHost) run() {
 // watcher, whose held changes go to the ledger first, and saves state.json.
 func (h *adapterHost) finish() {
 	h.step(true)
+	h.refuseLogs()
 	if g := h.git.Load(); g != nil {
 		g.close()
 	}
@@ -1025,6 +1057,11 @@ func (h *adapterHost) step(last bool) {
 		h.admit(d, false, last)
 	}
 	h.holdBackNow() // the calls the writer stopped under, if it did
+	if h.replayed && !last {
+		// After the hook calls before them, so a session's hooks reach its
+		// adapter before its log lines (logs.go).
+		h.takeLogs()
+	}
 	// Read again: the calls parsed above can have made a save due.
 	h.mu.Lock()
 	saveDue = saveDue || h.saveDue
@@ -1475,6 +1512,7 @@ func (h *adapterHost) parse(c hostCall) {
 	// A call that does count lets its session back in, as when it moved to
 	// a folder that isn't out of pairtime.
 	h.a.hooked.unignore(session)
+	h.hint(c)
 	due, refused := false, false
 	for _, r := range recs {
 		if !h.write(c.st, r) {
@@ -1688,6 +1726,15 @@ func (h *adapterHost) save(force bool) {
 	}
 	if g := h.git.Load(); g != nil && g.put() {
 		changed = true
+	}
+	if t := h.tail.Load(); t != nil {
+		// The tailers' cursors, with the memory of the adapters whose lines
+		// they are (logs.go).
+		if moved, err := t.Put(); err != nil {
+			h.a.log.Warn("the tailers' cursors couldn't be saved", "err", err)
+		} else if moved {
+			changed = true
+		}
 	}
 	if !changed && !force {
 		return

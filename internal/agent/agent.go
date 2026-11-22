@@ -46,6 +46,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
+	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/version"
 	"github.com/some-du6e/pairtime/pkg/params"
@@ -98,6 +99,11 @@ type Options struct {
 	// (ipc.Options.Walk). Tests use it to hand captured calls in from
 	// under the processes the capture recorded.
 	Walk func(pid int) []platform.Proc
+	// Env, when set, replaces the machine whose harness logs the tailers
+	// read (adapters.LogReader.LogRoots), which is this one otherwise: the
+	// home folder and environment the agent runs with. Tests point it at
+	// a folder of their own.
+	Env *install.Env
 }
 
 // linked keeps heavyModules' entry points reachable (see heavy_linux.go).
@@ -189,6 +195,10 @@ type agent struct {
 
 	stop     chan struct{} // closed when a client asks the agent to stop
 	stopOnce sync.Once
+	// drained is closed once the inbox's first drain has handed its calls
+	// to the adapter host, after which the tailers may start (logs.go).
+	drained   chan struct{}
+	drainOnce sync.Once
 
 	mu       sync.Mutex
 	problems map[string]string // what doctor should hear about, by source
@@ -220,6 +230,7 @@ func Run(ctx context.Context, opts Options) error {
 		started:     time.Now(),
 		sched:       sched.New(),
 		stop:        make(chan struct{}),
+		drained:     make(chan struct{}),
 		problems:    make(map[string]string),
 		keyStores:   opts.KeyStores,
 		ledgerRetry: defaultLedgerRetry,
@@ -290,6 +301,9 @@ func Run(ctx context.Context, opts Options) error {
 	closers = append(closers, a.startFocus())
 	closers = append(closers, a.startAdapters())
 	closers = append(closers, a.startIPC(opts))
+	// After the socket, and stopped before it: the tailers' lines go to
+	// the adapters after the hook calls the inbox's first drain brings.
+	closers = append(closers, a.startTailers(opts))
 
 	ln, pf, err := a.listen(opts.Ports)
 	if err != nil {
@@ -468,4 +482,11 @@ func (a *agent) listen(ports []int) (net.Listener, localhttp.PortFile, error) {
 		return nil, localhttp.PortFile{}, fmt.Errorf("writing port.json: %w", err)
 	}
 	return ln, pf, nil
+}
+
+// markDrained records that the inbox's first drain has handed its calls to
+// the adapter host, or that there is no drain, and has the host look.
+func (a *agent) markDrained() {
+	a.drainOnce.Do(func() { close(a.drained) })
+	a.adaptersHost().poke()
 }

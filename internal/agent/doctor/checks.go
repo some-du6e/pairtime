@@ -263,17 +263,24 @@ func adapterChecks(f Facts) []Check {
 		n := a.Harnesses[h]
 		c.Result = OK
 		c.Text = fmt.Sprintf("found; since the agent started, %s made %s", count(n.Calls, "call", "calls"), count(n.Records, "record", "records"))
+		if n.Lines > 0 {
+			c.Text = fmt.Sprintf("found; since the agent started, %s and %s of its logs made %s", count(n.Calls, "call", "calls"),
+				count(n.Lines, "line", "lines"), count(n.Records, "record", "records"))
+		}
 		// The agent keeps one last failure for both kinds, so it is named
 		// for neither.
 		var trouble []string
 		if n.ParseFailures > 0 {
 			trouble = append(trouble, count(n.ParseFailures, "call", "calls")+" didn't fully parse")
 		}
+		if n.LineFailures > 0 {
+			trouble = append(trouble, count(n.LineFailures, "log line", "log lines")+" didn't fully parse")
+		}
 		if n.WriteFailures > 0 {
 			trouble = append(trouble, "the ledger refused "+count(n.WriteFailures, "record", "records"))
 		}
 		switch {
-		case n.Calls == 0 && len(trouble) == 0:
+		case n.Calls == 0 && n.Lines == 0 && len(trouble) == 0:
 			c.Text = "found; no hook call has come in since the agent started"
 		case len(trouble) == 0:
 			c.Text += ", with no parse failures"
@@ -283,7 +290,7 @@ func adapterChecks(f Facts) []Check {
 			if n.LastFailure != "" {
 				c.Text += "; the last failure: " + reason(n.LastFailure)
 			}
-			if n.ParseFailures > 0 {
+			if n.ParseFailures > 0 || n.LineFailures > 0 {
 				c.Text += ". pairtime may count less of this harness until it reads them. " + reportIt
 			}
 		}
