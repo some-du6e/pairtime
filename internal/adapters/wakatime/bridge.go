@@ -6,6 +6,7 @@ import (
 	"math"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,12 +29,9 @@ const AgentEditWindow = 120_000
 // internal/adapters/claudecode reads from a log (logLine.env).
 const lateRead = 10_000
 
-// maxSessions bounds the AI sessions, and maxNames the WakaTime project
-// names, the bridge remembers a project for.
-const (
-	maxSessions = 10_000
-	maxNames    = 10_000
-)
+// maxMarks bounds the AI sessions the bridge keeps a mark for, and the
+// WakaTime project names apart from them (Bridge.keep).
+const maxMarks = 10_000
 
 // mark is what the bridge knows of a WakaTime project name or an AI
 // session from its file heartbeats: whether the latest of them, by the
@@ -55,12 +53,14 @@ type mark struct {
 }
 
 // note returns m with a file heartbeat at t, out of pairtime or in the
-// project with key key.
+// project with key key. At equal times a heartbeat out of pairtime wins,
+// and of two tracked ones the smaller key, so the order heartbeats come in
+// never decides.
 func (m mark) note(t float64, out bool, key string) mark {
-	if t >= m.t {
+	if t > m.t || (t == m.t && out) {
 		m.t, m.out = t, out
 	}
-	if !out && t >= m.keyT {
+	if !out && (t > m.keyT || (t == m.keyT && key < m.key)) {
 		m.key, m.keyT = key, t
 	}
 	return m
@@ -111,7 +111,10 @@ type Clock struct {
 // Paths go no further than the bridge. A file's path becomes its key as
 // the ledger keys it, relative to its project's root (features.Key.Path),
 // the same key internal/adapters/claudecode gives the agent's own edit of
-// the file, so the two compare equal. A transcript-derived heartbeat's
+// the file, so the two compare equal. A file on a Windows share, which
+// wakatime-cli sends as \\server/share/dir/file, is placed by its folder
+// like any other, but neither adapter can key it, so its records name no
+// file and the 120 s rule passes it by. A transcript-derived heartbeat's
 // ai_session is the harness's session id, keyed as the hook path keys it
 // (adapters.Keys.Session), so a session a hook or log reader also reports
 // is one session, where the bridge's records are a cross-check (DESIGN
@@ -142,9 +145,10 @@ type Bridge struct {
 	// so the project tells main.go in one project from main.go in another.
 	agentEdits map[fileOf][]int64
 	// names holds a mark for each WakaTime project name, and sessions one
-	// for each AI session.
-	names    map[string]mark
-	sessions map[string]mark
+	// for each AI session, markLimit in each at most (keep).
+	names     map[string]mark
+	sessions  map[string]mark
+	markLimit int
 }
 
 // BridgeOptions are what a Bridge needs from the agent: the adapters'
@@ -173,7 +177,7 @@ func NewBridge(opts BridgeOptions) *Bridge {
 	if opts.Keys == nil {
 		panic("wakatime: NewBridge needs Options.Keys, the device's K_session")
 	}
-	return &Bridge{opts: opts, agentEdits: map[fileOf][]int64{}, names: map[string]mark{}, sessions: map[string]mark{}}
+	return &Bridge{opts: opts, agentEdits: map[fileOf][]int64{}, names: map[string]mark{}, sessions: map[string]mark{}, markLimit: maxMarks}
 }
 
 // fileOf names a file by its project's key and its own.
@@ -250,10 +254,7 @@ func (br *Bridge) Folders(b Batch) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, h := range b.Heartbeats {
-		if !isFile(h) {
-			continue
-		}
-		if d := filepath.Dir(h.Entity); !seen[d] {
+		if d, ok := folder(h); ok && !seen[d] {
 			seen[d] = true
 			out = append(out, d)
 		}
@@ -298,10 +299,42 @@ func (br *Bridge) sessionIgnored(id string) bool {
 func transcript(h wakacompat.Heartbeat) bool { return h.AISession != "" }
 
 // isFile reports whether h names a file by an absolute path, which alone
-// the project resolver and the ledger's path key can take.
+// the project resolver can take (folder).
 func isFile(h wakacompat.Heartbeat) bool {
-	_, ok := slashPath(h.Entity)
-	return h.Type == "file" && ok
+	_, ok := folder(h)
+	return ok
+}
+
+// folder returns the folder of the file h names, for the project resolver,
+// when h is a file heartbeat with an absolute path: one slashPath takes,
+// or a file on a Windows share, which wakatime-cli v2.28.4 sends as
+// \\server/share/dir/file (FormatFilePath in its pkg/windows). The ledger
+// can't key a file on a share, so it is placed by its folder alone.
+func folder(h wakacompat.Heartbeat) (string, bool) {
+	if h.Type != "file" {
+		return "", false
+	}
+	if _, ok := slashPath(h.Entity); ok {
+		return filepath.Dir(h.Entity), true
+	}
+	return shareDir(h.Entity)
+}
+
+// shareDir returns the folder of p when p is a file on a Windows share,
+// \\server\share\file, with '\' or '/' between its parts after the first
+// two. A server of "." or "?" begins one of Windows' device paths instead.
+func shareDir(p string) (string, bool) {
+	rest, ok := strings.CutPrefix(p, `\\`)
+	if !ok {
+		return "", false
+	}
+	parts := strings.Split(strings.ReplaceAll(rest, `\`, "/"), "/")
+	if len(parts) < 3 || parts[0] == "?" || slices.ContainsFunc(parts, func(s string) bool {
+		return s == "" || s == "." || s == ".."
+	}) {
+		return "", false
+	}
+	return filepath.Clean(p[:strings.LastIndexAny(p, `/\`)]), true
 }
 
 // aiLines is the lines h says an AI agent changed.
@@ -318,7 +351,8 @@ func (br *Bridge) placeFile(h wakacompat.Heartbeat) place {
 	if br.opts.Project != nil {
 		// A resolver reports a folder out of pairtime with ok false
 		// (adapters.Project.Ignored), so Ignored is read on any answer.
-		proj, ok := br.opts.Project(filepath.Dir(h.Entity))
+		dir, _ := folder(h)
+		proj, ok := br.opts.Project(dir)
 		if proj.Ignored {
 			br.remember(h, true, "")
 			return place{ignored: true}
@@ -342,17 +376,51 @@ func (br *Bridge) placeFile(h wakacompat.Heartbeat) place {
 // name and its AI session: out of pairtime, or in the project with key key.
 func (br *Bridge) remember(h wakacompat.Heartbeat, out bool, key string) {
 	if h.Project != nil && *h.Project != "" {
-		if _, ok := br.names[*h.Project]; !ok && len(br.names) >= maxNames {
-			clear(br.names)
-		}
-		br.names[*h.Project] = br.names[*h.Project].note(h.Time, out, key)
+		br.keep(br.names, *h.Project, br.names[*h.Project].note(h.Time, out, key))
 	}
 	if h.AISession != "" {
-		if _, ok := br.sessions[h.AISession]; !ok && len(br.sessions) >= maxSessions {
-			clear(br.sessions)
-		}
-		br.sessions[h.AISession] = br.sessions[h.AISession].note(h.Time, out, key)
+		br.keep(br.sessions, h.AISession, br.sessions[h.AISession].note(h.Time, out, key))
 	}
+}
+
+// keep stores mark m under k in marks, which holds markLimit marks at
+// most. A name or session the bridge forgets places nothing, and its
+// heartbeats with no file make records again. That costs a tracked mark
+// its project, but a forgotten mark out of pairtime would let excluded
+// work through. So past the limit a new mark takes the place of the
+// oldest tracked one. When every mark is out of pairtime, a new tracked
+// mark isn't kept, and a new one out of pairtime takes the place of the
+// oldest.
+func (br *Bridge) keep(marks map[string]mark, k string, m mark) {
+	if _, held := marks[k]; !held && len(marks) >= br.markLimit {
+		old, ok := oldest(marks, false)
+		if !ok {
+			if !m.out {
+				return
+			}
+			old, _ = oldest(marks, true)
+		}
+		delete(marks, old)
+	}
+	marks[k] = m
+}
+
+// oldest returns the key of the mark in marks with the earliest time, of
+// the tracked marks only unless all is true, and of equal times the
+// smaller key.
+func oldest(marks map[string]mark, all bool) (string, bool) {
+	var key string
+	var t float64
+	found := false
+	for k, m := range marks {
+		if m.out && !all {
+			continue
+		}
+		if !found || m.t < t || (m.t == t && k < key) {
+			key, t, found = k, m.t, true
+		}
+	}
+	return key, found
 }
 
 // placeOther places a heartbeat with no file by its AI session's mark, or,

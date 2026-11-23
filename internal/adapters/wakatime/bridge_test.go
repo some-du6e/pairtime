@@ -620,6 +620,23 @@ func TestBridgeProjects(t *testing.T) {
 					t.Error("the private folder's name went into ProjectNames")
 				}
 			}},
+		{"a file on a Windows share takes its folder's project, and names no file, since the ledger can't key it",
+			BridgeOptions{Options: adapters.FixtureOptions()},
+			func(t *testing.T) []wakacompat.Heartbeat {
+				ts, _ := at(0)
+				return []wakacompat.Heartbeat{
+					hb(t, fmt.Sprintf(`{"entity":%q,"type":"file","time":%v,"user_agent":%q,"project":"cli","human_line_changes":3}`, `\\server/share/repo/a.py`, ts, pluginUA)),
+				}
+			},
+			func(t *testing.T, br *Bridge, recs []adapters.Record) {
+				want, _ := br.opts.Project(`\\server/share/repo`)
+				if len(recs) != 1 || recs[0].Event.ProjectKey != want.Key {
+					t.Fatalf("records %s, want one editor edit in %s", kinds(recs), want.Key)
+				}
+				if a, ok := recs[0].Event.Data.(*event.EditorActivity); !ok || a.FileHash != "" {
+					t.Errorf("data %+v, want an editor.activity with no file_hash", recs[0].Event.Data)
+				}
+			}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -629,15 +646,20 @@ func TestBridgeProjects(t *testing.T) {
 	}
 }
 
-// privateDir is a folder out of pairtime in TestBridgeExclusions.
-const privateDir = "/home/capture/private"
+// privateDir is a folder out of pairtime in TestBridgeExclusions and
+// TestMarkLimit, and privateShare one on a Windows share, as wakatime-cli
+// writes it.
+const (
+	privateDir   = "/home/capture/private"
+	privateShare = `\\server/share/private`
+)
 
 func TestBridgeExclusions(t *testing.T) {
 	const session = "617e16a3-ddb4-44ca-af68-72cf58ed1a34"
 	opts := adapters.FixtureOptions()
 	inner := opts.Project
 	opts.Project = func(dir string) (adapters.Project, bool) {
-		if dir == privateDir {
+		if dir == privateDir || dir == privateShare {
 			return adapters.Project{Ignored: true}, false
 		}
 		return inner(dir)
@@ -723,6 +745,22 @@ func TestBridgeExclusions(t *testing.T) {
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 0)}, {editorIn(t, privateDir, "shared", 5)}, {prompt(t, session, "shared", 10)}}
 			}, "prompt.submit bridge", tracked.Key},
+		{"of a session's file heartbeats at one time, the one out of pairtime wins when it comes second", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 10), fileIn(t, privateDir, "private", 10), prompt(t, session, "", 20)}}
+			}, "agent.tool bridge", tracked.Key},
+		{"of a session's file heartbeats at one time, the one out of pairtime wins when it comes first", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "private", 10), fileIn(t, projectDir, "cli", 10), prompt(t, session, "", 20)}}
+			}, "agent.tool bridge", tracked.Key},
+		{"a file on a Windows share in a folder out of pairtime makes no record", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{editorIn(t, privateShare, "shared", 0), fileIn(t, privateShare, "shared", 1)}}
+			}, "", ""},
+		{"a file on a Windows share in a folder out of pairtime marks its session and its name", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, privateShare, "shared", 0)}, {prompt(t, session, "", 10), prompt(t, "other-session", "shared", 11)}}
+			}, "", ""},
 		{"the session test keeps the other sessions' prompts",
 			func(key string) bool { return key == opts.Keys.Session("kept-out") },
 			func(t *testing.T) [][]wakacompat.Heartbeat {
@@ -761,6 +799,12 @@ func TestProjectNames(t *testing.T) {
 		return inner(dir)
 	}
 	tracked, _ := inner(projectDir)
+	// smallerDir and largerDir are two tracked folders, by their keys.
+	smallerDir, largerDir := projectDir, "/home/capture/other"
+	smaller, _ := inner(smallerDir)
+	if larger, _ := inner(largerDir); larger.Key < smaller.Key {
+		smallerDir, largerDir, smaller = largerDir, smallerDir, larger
+	}
 	editorIn := func(t *testing.T, dir, project string, sec float64) wakacompat.Heartbeat {
 		ts, _ := at(sec)
 		return hb(t, fmt.Sprintf(`{"entity":%q,"type":"file","time":%v,"user_agent":%q,"project":%q}`, dir+"/x.md", ts, pluginUA, project))
@@ -792,6 +836,16 @@ func TestProjectNames(t *testing.T) {
 				return [][]wakacompat.Heartbeat{{editorIn(t, projectDir, "app", 10)}, {editorIn(t, "/home/capture/other", "app", 5)}}
 			},
 			map[string]string{"app": tracked.Key}, "editor.activity editor navigate unknown"},
+		{"a name two tracked projects share at one time keeps the smaller key when it comes second",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{editorIn(t, largerDir, "both", 10), editorIn(t, smallerDir, "both", 10)}}
+			},
+			map[string]string{"both": smaller.Key}, "editor.activity editor navigate unknown, editor.activity editor navigate unknown"},
+		{"a name two tracked projects share at one time keeps the smaller key when it comes first",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{editorIn(t, smallerDir, "both", 10), editorIn(t, largerDir, "both", 10)}}
+			},
+			map[string]string{"both": smaller.Key}, "editor.activity editor navigate unknown, editor.activity editor navigate unknown"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -805,6 +859,88 @@ func TestProjectNames(t *testing.T) {
 			}
 			if got := kinds(last); got != c.last {
 				t.Errorf("last batch's records %q, want %q", got, c.last)
+			}
+		})
+	}
+}
+
+func TestMarkLimit(t *testing.T) {
+	opts := adapters.FixtureOptions()
+	inner := opts.Project
+	opts.Project = func(dir string) (adapters.Project, bool) {
+		if dir == privateDir {
+			return adapters.Project{Ignored: true}, false
+		}
+		return inner(dir)
+	}
+	tracked, _ := inner(projectDir)
+	// edit is session's agent edit of a file in dir, named project.
+	edit := func(t *testing.T, session, dir, project string, sec float64) wakacompat.Heartbeat {
+		ts, _ := at(sec)
+		return hb(t, fmt.Sprintf(`{"entity":%q,"type":"file","time":%v,"user_agent":%q,"project":%q,"ai_session":%q,"ai_line_changes":2}`, dir+"/notes.md", ts, claudeUA, project, session))
+	}
+	// editorIn is an editor heartbeat of a file in dir, named project.
+	editorIn := func(t *testing.T, dir, project string, sec float64) wakacompat.Heartbeat {
+		ts, _ := at(sec)
+		return hb(t, fmt.Sprintf(`{"entity":%q,"type":"file","time":%v,"user_agent":%q,"project":%q}`, dir+"/x.md", ts, pluginUA, project))
+	}
+	// prompt is an app heartbeat of session, named project when it isn't "".
+	prompt := func(t *testing.T, session, project string, sec float64) wakacompat.Heartbeat {
+		ts, _ := at(sec)
+		name := ""
+		if project != "" {
+			name = fmt.Sprintf(`,"project":%q`, project)
+		}
+		return hb(t, fmt.Sprintf(`{"entity":"Claude x","type":"app","time":%v,"user_agent":%q,"ai_session":%q,"ai_prompt_length":30%s}`, ts, promptUA, session, name))
+	}
+	cases := []struct {
+		name    string
+		batches func(t *testing.T) [][]wakacompat.Heartbeat
+		// want is the kinds of the last batch's records, and projects the
+		// project of each, "" for none.
+		want     string
+		projects []string
+	}{
+		{"an excluded session's prompt makes nothing after tracked sessions fill the marks",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{edit(t, "out", privateDir, "private", 0)}, {edit(t, "s2", projectDir, "cli", 10)}, {edit(t, "s3", projectDir, "cli", 20)}, {prompt(t, "out", "", 30)}}
+			}, "", nil},
+		{"an excluded name's prompt makes nothing after tracked names fill the marks",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{editorIn(t, privateDir, "secret", 0)}, {editorIn(t, projectDir, "a", 10)}, {editorIn(t, projectDir, "b", 20)}, {prompt(t, "unseen", "secret", 30)}}
+			}, "", nil},
+		{"a new tracked session past the limit takes the place of the oldest tracked one",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{edit(t, "s1", projectDir, "cli", 0)}, {edit(t, "s2", projectDir, "cli", 10)}, {edit(t, "s3", projectDir, "cli", 20)}, {prompt(t, "s1", "", 30), prompt(t, "s2", "", 31), prompt(t, "s3", "", 32)}}
+			}, "prompt.submit bridge, prompt.submit bridge, prompt.submit bridge", []string{"", tracked.Key, tracked.Key}},
+		{"a session the bridge holds a mark for changes it in place at the limit, and none is forgotten",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{edit(t, "s1", projectDir, "cli", 0)}, {edit(t, "s2", projectDir, "cli", 10)}, {edit(t, "s1", privateDir, "private", 20)}, {prompt(t, "s1", "", 30), prompt(t, "s2", "", 31)}}
+			}, "prompt.submit bridge", []string{tracked.Key}},
+		{"when every mark is out of pairtime, a new tracked session isn't kept",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{edit(t, "o1", privateDir, "private", 0)}, {edit(t, "o2", privateDir, "private", 10)}, {edit(t, "s3", projectDir, "cli", 20)}, {prompt(t, "o1", "", 30), prompt(t, "o2", "", 31), prompt(t, "s3", "", 32)}}
+			}, "prompt.submit bridge", []string{""}},
+		{"when every mark is out of pairtime, a new one takes the place of the oldest",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{edit(t, "o1", privateDir, "private", 0)}, {edit(t, "o2", privateDir, "private", 10)}, {edit(t, "o3", privateDir, "private", 20)}, {prompt(t, "o1", "", 30), prompt(t, "o2", "", 31), prompt(t, "o3", "", 32)}}
+			}, "prompt.submit bridge", []string{""}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			br := NewBridge(BridgeOptions{Options: opts})
+			br.markLimit = 2
+			var last []adapters.Record
+			for _, b := range c.batches(t) {
+				last = br.Records(Batch{Heartbeats: b, Peer: passed}, testClock)
+			}
+			if got := kinds(last); got != c.want {
+				t.Fatalf("records %q, want %q", got, c.want)
+			}
+			for i, r := range last {
+				if r.Event.ProjectKey != c.projects[i] {
+					t.Errorf("record %d in project %q, want %q", i, r.Event.ProjectKey, c.projects[i])
+				}
 			}
 		})
 	}
@@ -840,6 +976,16 @@ func TestBridgeFolders(t *testing.T) {
 		{"a relative or remote path asks about no folder",
 			func(t *testing.T) []wakacompat.Heartbeat {
 				return []wakacompat.Heartbeat{file(t, "x.py"), file(t, "ssh://host/p/x.py")}
+			},
+			nil},
+		{"a file on a Windows share is asked by its folder, as wakatime-cli writes it or with backslashes",
+			func(t *testing.T) []wakacompat.Heartbeat {
+				return []wakacompat.Heartbeat{file(t, `\\server/share/repo/src/x.go`), file(t, `\\server\share\repo\y.go`)}
+			},
+			[]string{`\\server/share/repo/src`, `\\server\share\repo`}},
+		{"a Windows device path, or a share with no file, asks about no folder",
+			func(t *testing.T) []wakacompat.Heartbeat {
+				return []wakacompat.Heartbeat{file(t, `\\?\C:\p\x.py`), file(t, `\\.\pipe\x`), file(t, `\\server\share`), file(t, `\\server\share\`), file(t, `\\server/share/../x.py`)}
 			},
 			nil},
 	}
