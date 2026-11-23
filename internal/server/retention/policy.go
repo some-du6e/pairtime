@@ -37,6 +37,13 @@
 //     refuses a hold whose table no job of its entry deletes from this
 //     way, so no hold outlives the window it stands for.
 //
+// A job with no period of its own deletes a row once none of its kept_by
+// tables holds anything for it (PeriodKept). That is how a published day's
+// leaf hashes go: as long as any witness row of that day remains, through
+// the witness rows' days, a submission's window or an erasure, and not a
+// sweep longer. Such a guard can match by day: a witness row keeps the
+// leaves of the UTC day its received_at falls on.
+//
 // The tables belong to the work packages that create them. Until a table
 // exists, its job, hold or kept_by guard names that package in awaits and
 // isn't used.
@@ -153,6 +160,12 @@ const (
 	// its time has closed (Window.Closes). Its time is when the submission's
 	// window opened (DESIGN 4.4), which WP-SV18 writes.
 	PeriodWindow = "window"
+	// PeriodKept deletes a row once none of the job's kept_by tables holds
+	// anything for it: the row has no period of its own and stays as long
+	// as the rows it serves. Its job has no time column, at least one
+	// kept_by table, and no guard that awaits, since without its guards it
+	// would delete every row.
+	PeriodKept = "kept"
 )
 
 // JobSpec binds an entry to a table one of its jobs deletes from.
@@ -162,9 +175,11 @@ type JobSpec struct {
 	// Key is the table's primary key. The job deletes by it.
 	Key []string `json:"key"`
 	// TimeColumn holds when each row's period started, in epoch
-	// milliseconds. A row whose TimeColumn is NULL never expires.
-	TimeColumn string `json:"time_column"`
-	// Period is PeriodDays, the default when empty, or PeriodWindow.
+	// milliseconds. A row whose TimeColumn is NULL never expires. A job by
+	// PeriodKept has none.
+	TimeColumn string `json:"time_column,omitempty"`
+	// Period is PeriodDays, the default when empty, PeriodWindow or
+	// PeriodKept.
 	Period string `json:"period,omitempty"`
 	// Hold, when set, keeps the rows a submission uses.
 	Hold *HoldSpec `json:"hold,omitempty"`
@@ -181,8 +196,14 @@ type JobSpec struct {
 
 // KeepSpec is one table of a job's kept_by.
 type KeepSpec struct {
-	// Table is the table, which has the job's key columns.
+	// Table is the table, which has the job's key columns, or DayOf.
 	Table string `json:"table"`
+	// DayOf, when set, matches the table's rows by time instead of by key:
+	// a row keeps the job's row for the UTC day its DayOf column, in epoch
+	// milliseconds, falls on, and the job's key is one column holding that
+	// day's number, the days since 1970-01-01. A witness row keeps its
+	// day's leaf hashes so.
+	DayOf string `json:"day_of,omitempty"`
 	// Awaits names the work package that creates Table. The job runs
 	// without this table's guard while it is set, which is right only
 	// while the table doesn't exist.
@@ -348,8 +369,17 @@ func (p *Policy) check() error {
 				if !strings.Contains(e.Kept, "{window}") {
 					fail("%s: a job by the spot-check window needs kept to say {window}", jat)
 				}
+			case PeriodKept:
+				switch {
+				case j.TimeColumn != "":
+					fail("%s: a job by its kept_by tables has no time_column; its rows stay while those tables hold anything for them", jat)
+				case len(j.KeptBy) == 0:
+					fail("%s: a job by its kept_by tables needs one, or it would delete every row", jat)
+				case j.Hold != nil:
+					fail("%s: a job by its kept_by tables has no hold; hold the rows that keep it instead", jat)
+				}
 			default:
-				fail("%s: period is %q; use %q or %q", jat, j.Period, PeriodDays, PeriodWindow)
+				fail("%s: period is %q; use %q, %q or %q", jat, j.Period, PeriodDays, PeriodWindow, PeriodKept)
 			}
 			if jobTables[j.Table] {
 				fail("%s: another job of the entry deletes from %s", jat, j.Table)
@@ -372,7 +402,7 @@ func (p *Policy) check() error {
 				}
 				keys[c] = true
 			}
-			if !identifier.MatchString(j.TimeColumn) {
+			if j.Period != PeriodKept && !identifier.MatchString(j.TimeColumn) {
 				fail("%s: time_column %q isn't a lowercase SQL name", jat, j.TimeColumn)
 			}
 			if h := j.Hold; h != nil {
@@ -400,6 +430,12 @@ func (p *Policy) check() error {
 					fail("%s: kept_by names the job's own table", jat)
 				case slices.ContainsFunc(j.KeptBy[:n], func(o KeepSpec) bool { return o.Table == k.Table }):
 					fail("%s: kept_by names %s twice", jat, k.Table)
+				case k.DayOf != "" && !identifier.MatchString(k.DayOf):
+					fail("%s: kept_by %s's day_of %q isn't a lowercase SQL name", jat, k.Table, k.DayOf)
+				case k.DayOf != "" && len(j.Key) != 1:
+					fail("%s: kept_by %s matches by day_of, so the job's key must be one column, the day's number", jat, k.Table)
+				case j.Period == PeriodKept && k.Awaits != "":
+					fail("%s: kept_by %s awaits %s, and a job by its kept_by tables would delete every row without it", jat, k.Table, k.Awaits)
 				case k.Awaits == "":
 					keepers = append(keepers, keeper{jat, k.Table})
 				}

@@ -6,7 +6,7 @@
     "months": 12,
     "provisional": "DESIGN 4.4 and 13.2 item 4: 12 months after the decision until Hack Club HQ sets the spot-check window"
   },
-  "no_personal_data": ["schema_migrations", "ops_probe", "server_keys"],
+  "no_personal_data": ["schema_migrations", "ops_probe", "server_keys", "key_history", "day_heads"],
   "entries": [
     {
       "id": "device.prompt_text",
@@ -179,8 +179,8 @@
     {
       "id": "server.witness",
       "where": "server",
-      "data": "Witness rows and batch roots: the hash of each upload batch, and when the server received it, and for each computer the server's answer to its latest upload, which a retry of that upload gets again",
-      "kept": "{days}. Rows that a submission uses stay until its spot-check window closes ({window})",
+      "data": "Witness rows and batch roots: the hash of each upload batch, and when the server received it; the hashes behind each day root, one for each batch the server received that day, from which it proves that a batch arrived that day; and for each computer the server's answer to its latest upload, which a retry of that upload gets again",
+      "kept": "{days}. Rows that a submission uses stay until its spot-check window closes ({window}). The hashes behind a day root stay as long as any of that day's batch records do, yours among them after you delete your account, since taking one out would break the proofs of the day's other batches",
       "days": 180,
       "jobs": [{
         "table": "witness_rows",
@@ -191,6 +191,11 @@
           "decided_column": "decided_at_ms",
           "awaits": "WP-SB4"
         }
+      }, {
+        "table": "day_leaves",
+        "key": ["day"],
+        "period": "kept",
+        "kept_by": [{"table": "witness_rows", "day_of": "received_at_ms"}]
       }, {
         "table": "submission_batches",
         "key": ["submission_id", "device_id", "b"],
@@ -294,8 +299,8 @@
     {
       "id": "public.day_roots",
       "where": "public",
-      "data": "Day roots: one hash a day over every batch the server received, with a count, published in the public pairtime-witness repository",
-      "kept": "Permanently. They hold only hashes and a daily count"
+      "data": "Day roots: one hash a day over every batch the server received, with a count of those batches, published in the public pairtime-witness repository. On a server few people use, that count shows how many batches they uploaded that day. The server's operator can leave day roots off",
+      "kept": "Permanently. They hold only hashes and that daily count"
     }
   ]
 }
