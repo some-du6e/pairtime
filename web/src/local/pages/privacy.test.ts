@@ -125,24 +125,42 @@ describe('Privacy', () => {
 			},
 		},
 		{
-			name: 'it says prompts are encrypted only of a later version, never of this one',
+			name: 'it says only the vault is encrypted: every other sentence about encryption says not encrypted',
 			check: (html) => {
 				const said = sentences(html).filter((s) => /encrypt/i.test(s));
-				expect(said.length).toBeGreaterThan(0);
-				for (const s of said) {
-					expect(s).toMatch(/\b(?:not|isn't) encrypted\b|\blater version\b/i);
+				expect(said.filter((s) => /\bvault, which it encrypts\b/.test(s))).toHaveLength(1);
+				for (const s of said.filter((s) => !/\bvault, which it encrypts\b/.test(s))) {
+					expect(s).toMatch(/\b(?:not|isn't) encrypted\b/i);
 				}
 			},
 		},
 		{
-			name: 'Who can read it says the inbox and the hook calls the agent holds are the two places this version keeps prompt text, and that a program running as you can read them',
+			name: 'Who can read it says the vault keeps prompts, replies and recap paths encrypted, but not from a program running as you, and how to keep no prompt text',
 			check: (html) => {
 				const t = text(html);
 				expect(t).toContain(
-					'This version of pairtime keeps the text of your prompts, and what your AI tool sent with them, in two places only: the inbox, until the agent reads it, and the hook calls it holds, until it has read them',
+					"pairtime keeps the text of your prompts, the agent's final reply to each one and the file paths for your recaps in a vault, which it encrypts",
 				);
-				expect(t).toContain('so can any program running as you');
 				expect(t).toContain('but not from a program running as you');
+				expect(t).toContain('set keep_prompt_text = false under [privacy]');
+				expect(t).toContain('pairtime then deletes the text it kept');
+			},
+		},
+		{
+			name: 'Who can read it says the inbox and the hook calls the agent holds keep prompts as plain text until the agent has read them, which a program running as you can read',
+			check: (html) => {
+				const t = text(html);
+				expect(t).toContain('Until the agent has read them, the inbox and the hook calls the agent holds keep your prompts too');
+				expect(t).toContain('Those two are plain text, not encrypted.');
+				expect(t).toContain('so can any program running as you');
+			},
+		},
+		{
+			name: 'Delete everything says pairtime privacy delete deletes the key and everything kept, and that the button comes later',
+			check: (html) => {
+				const t = text(html);
+				expect(t).toContain("pairtime privacy delete , typed in a terminal, deletes pairtime's key and everything pairtime keeps on this computer");
+				expect(t).toContain('A button here comes in a later version of pairtime.');
 			},
 		},
 		{

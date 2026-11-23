@@ -6,14 +6,14 @@
 	// Privacy (DESIGN 3.9, 8.8; docs/PLAN.md, WP-UI1): what has left this
 	// computer, what pairtime keeps here and for how long (DESIGN 3.5, 4.4),
 	// what it never records, and who can read what it keeps (CP 5.2).
-	// "Delete everything" comes with the agent's wipe, in a later WP.
+	// "Delete everything" is pairtime privacy delete for now (WP-LG6), and
+	// its button comes in a later WP.
 	//
 	// The periods are docs/retention.json's device entries, in the file's
-	// order, then the inbox's row (retention.ts). This version has no vault
-	// (DESIGN 3.5), so the only prompt text it keeps is in the inbox and in
-	// the hook calls the agent holds, as plain text. Who can read it says
-	// so, and speaks of the vault's encryption only as what a later
-	// version, which keeps prompt text there, will do.
+	// order, then the inbox's row (retention.ts). The vault keeps prompt
+	// text encrypted (DESIGN 3.5; WP-LG6), and the inbox and the hook calls
+	// the agent holds keep it as plain text until the agent has read them.
+	// Who can read it says which is which.
 	interface Props {
 		mode: Mode;
 	}
@@ -68,20 +68,23 @@
 
 <section class="pt-card" aria-labelledby="who-title" data-testid="who">
 	<h2 id="who-title">Who can read it</h2>
+	<p data-testid="vault">
+		pairtime keeps the text of your prompts, the agent's final reply to each one and the file paths for your recaps in
+		a vault, which it encrypts with a key only this computer has. That keeps them from other people who use this
+		computer, from cloud backups of your home folder, and from a quick look, but not from a program running as you. To
+		keep no prompt text at all, set <code>keep_prompt_text = false</code> under <code>[privacy]</code> in pairtime's
+		config.toml: pairtime then deletes the text it kept, and a spot check of your hours goes on the rest of what it
+		recorded.
+	</p>
 	<p>
-		This version of pairtime keeps the text of your prompts, and what your AI tool sent with them, in two places only:
-		the inbox, until the agent reads it, and the hook calls it holds, until it has read them, as the table above says.
-		Both are plain text, not encrypted. They're in a folder that other people's accounts on this computer can't open, but
-		an administrator can, and so can any program running as you. A backup of your home folder can copy them as they are.
+		Until the agent has read them, the inbox and the hook calls the agent holds keep your prompts too, with what your AI
+		tool sent with them, as the table above says. Those two are plain text, not encrypted. They're in a folder that
+		other people's accounts on this computer can't open, but an administrator can, and so can any program running as
+		you. A backup of your home folder can copy them as they are.
 	</p>
 	<p data-testid="sketches">
 		The prompt similarity sketches (MinHash) in the table are not encrypted either. They're numbers worked out from your
 		prompts' words, not the words, and they're in the same pairtime folder as the inbox.
-	</p>
-	<p>
-		A later version will keep your prompts, the agent's final reply to each one and the file paths for your recaps in a
-		vault, which it encrypts. That will keep them from other people who use this computer, from cloud backups of your
-		home folder, and from a quick look, but not from a program running as you.
 	</p>
 	<p>
 		This dashboard opens only on this computer, in the browser that <code>pairtime dashboard</code> signed in.
@@ -91,8 +94,9 @@
 <section class="pt-card" aria-labelledby="delete-title" data-testid="delete">
 	<h2 id="delete-title">Delete everything</h2>
 	<p>
-		A button here will delete everything pairtime keeps on this computer, its key included. It comes in a later version
-		of pairtime.
+		<code>pairtime privacy delete</code>, typed in a terminal, deletes pairtime's key and everything pairtime keeps on
+		this computer, apart from pairtime itself and its settings. Nobody can bring any of it back, and the hours it
+		recorded can't be submitted after that. A button here comes in a later version of pairtime.
 	</p>
 </section>
 
