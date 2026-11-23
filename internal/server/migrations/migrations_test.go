@@ -194,6 +194,7 @@ var pinned = []struct{ id, sha256 string }{
 	{"0007_server_keys", "8c845044d294360fed77368260174dbd79f8993ace28c52af0906aab266b1080"},
 	{"0008_project_names", "e139fbdee2ed1641c9d8afc772df00a47afe665365d184af6963551d762fa5c4"},
 	{"0009_witness_labels", "4d35341f10fa31aa62e42ce05c2ab20468a794d934b945e8589db6e69151c176"},
+	{"0010_key_history_day_heads", "553e3df39383a4171d7aac619da2fc5c47c455042501aa67da38de6f0f393381"},
 }
 
 func TestPinnedChecksums(t *testing.T) {

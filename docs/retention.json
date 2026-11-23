@@ -6,7 +6,7 @@
     "months": 12,
     "provisional": "DESIGN 4.4 and 13.2 item 4: 12 months after the decision until Hack Club HQ sets the spot-check window"
   },
-  "no_personal_data": ["schema_migrations", "ops_probe", "server_keys"],
+  "no_personal_data": ["schema_migrations", "ops_probe", "server_keys", "key_history", "day_heads"],
   "entries": [
     {
       "id": "device.prompt_text",
