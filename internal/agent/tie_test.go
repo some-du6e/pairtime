@@ -295,10 +295,9 @@ func TestTiedStart(t *testing.T) {
 }
 
 // TestLookbackLeavesTies checks that a line a history lookback read
-// (tailers.Line.Lookback) neither ties its session nor makes its
-// session.start the scan's, though the session is tied now: it tells of a
-// time before the agent ran, and the process the session runs in now may
-// not be the one that started it then.
+// (tailers.Line.Lookback) neither tries to tie its session nor lets it
+// back in once a line of it ran out of pairtime: it tells of a time before
+// the agent ran, not of what runs now.
 func TestLookbackLeavesTies(t *testing.T) {
 	now := time.Now()
 	me := platform.UIDOwner(uint32(os.Geteuid()))
@@ -312,17 +311,13 @@ func TestLookbackLeavesTies(t *testing.T) {
 	cases := []struct {
 		name string
 		// made is how long before the ledger began the history's prompt was
-		// made, which starts the session; tied says the session is tied
-		// before lookback reads it, with the two table reads that takes.
+		// made, and out says a line of the session ran out of pairtime
+		// before lookback read it (hookTies.ignore).
 		made time.Duration
-		tied bool
-		// reads is how many times the process table is read in all, and
-		// start says the transcript's session.start reaches the ledger.
-		reads int
-		start bool
+		out  bool
 	}{
-		{"a line of a history made within tieFresh ties nothing and reads no table", 2 * time.Second, false, 0, false},
-		{"a history's session.start stays the transcript's, though its session is tied now", 2 * time.Minute, true, 2, true},
+		{"a line of a history made within tieFresh reads no table and ties nothing", 2 * time.Second, false},
+		{"a line of a history that counts leaves a session out of pairtime out", 2 * time.Minute, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -339,11 +334,8 @@ func TestLookbackLeavesTies(t *testing.T) {
 			h.keys = &adapterKeys{}
 			h.attach(w)
 			key := h.sessionKey(sid)
-			if tc.tied {
-				a.procs.Tie(event.HarnessClaudeCode, key, time.Now())
-				if _, ok, _ := a.procs.Tie(event.HarnessClaudeCode, key, time.Now().Add(time.Second)); !ok {
-					t.Fatal("no tie")
-				}
+			if tc.out {
+				a.hooked.ignore(key)
 			}
 			began := w.Created()
 			b, err := json.Marshal(map[string]any{"type": "user", "sessionId": sid, "promptId": "ffffffff-0000-4000-8000-000000000061",
@@ -359,23 +351,12 @@ func TestLookbackLeavesTies(t *testing.T) {
 			if !h.takeLine(tailers.New(tailers.Options{NoNotify: true}), line) {
 				t.Fatal("takeLine didn't take the line")
 			}
-			if _, tied := a.procs.TiedTo(key); tied != tc.tied || reads != tc.reads {
-				t.Errorf("tied %v after %d table reads; want tied %v after %d", tied, reads, tc.tied, tc.reads)
+			_, tied := a.procs.TiedTo(key)
+			if out := a.hooked.ignoring(key); tied || reads != 0 || out != tc.out {
+				t.Errorf("tied %v after %d table reads, out of pairtime %v; want untied with no read, out %v", tied, reads, out, tc.out)
 			}
-			sealNow(t, w, dirs.Ledger())
-			for _, rec := range readLedger(t, dirs, event.SourceOS) {
-				if _, ok := rec.ev.Data.(*event.SessionStart); ok {
-					t.Errorf("the history's session.start is the scan's: %+v", rec.ev.Envelope)
-				}
-			}
-			starts := 0
-			for _, rec := range readLedger(t, dirs, event.SourceLog) {
-				if _, ok := rec.ev.Data.(*event.SessionStart); ok {
-					starts++
-				}
-			}
-			if tc.start && starts != 1 {
-				t.Errorf("%d of the transcript's session.starts in the ledger, want 1", starts)
+			if _, ok := a.procs.FirstTouch(key); ok {
+				t.Error("the history's line is the session's first touch")
 			}
 		})
 	}

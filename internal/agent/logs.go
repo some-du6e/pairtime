@@ -664,7 +664,8 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 			if session != "" && line.Lookback == 0 {
 				// A line of a history lookback read tells of a time before
 				// the agent ran, not of what runs now, so it neither unties
-				// its session nor ties it (below).
+				// its session nor ties it, nor touches it (below): its time
+				// is no first line its process must have started by.
 				h.untieIgnored(session)
 				h.untieQuiet(lr, line.Harness, session, dir, at)
 			}
@@ -690,9 +691,7 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 			key = fmt.Sprintf("%d.%d", ll.Offset, i)
 		}
 		r.Event.EventID = h.logEventID(r.Event.T, ll.File, key)
-		if start, ok := r.Event.Data.(*event.SessionStart); ok && !ll.Replay && line.Lookback == 0 {
-			// A history's session.start stays the transcript's: the process
-			// its session runs in now may not be the one that started it.
+		if start, ok := r.Event.Data.(*event.SessionStart); ok && !ll.Replay {
 			r = h.tiedStart(r, start)
 		}
 		// A history's records need no seal and no save of their own: the
