@@ -17,7 +17,10 @@ import (
 // samples, such as a server with no desktop, whole minutes are derived
 // instead, from the one holding the first record, or the earliest lead a
 // relay.message can open if that is earlier, but no more than BUCKET_TTL_S
-// before the agent's first record, to the one holding now (presence.live).
+// before the agent's first record, to the one holding now
+// (presence.neverAt). The same goes for the slots before a sampling
+// device's first sample and after its sampler stopped, where they begin or
+// end the slots derived.
 type Slot struct {
 	// Start is the slot's start in Unix milliseconds, on :00, :15, :30 or
 	// :45.
@@ -159,34 +162,99 @@ type presence struct {
 	// lastIn holds, for each slot, the latest input a sample shows in it.
 	lastIn []int64
 	runs   []silentRun
-	// live is set on a device that never samples while its agent runs
-	// (liveUnknown), whose every slot is SM 2.1's unknown: whole minutes
-	// are derived, and SM 5.2's codes for a live slot whose presence is
-	// unknown apply to its seconds.
+	// live is set when some record came by a path only a running agent
+	// has, any but a log reader's: records lookback backfilled from
+	// transcripts come by a log reader alone (SM 2.8), and the range of
+	// lookback's own slots is WP-SC7's.
 	live bool
+	// reaches are the sampler's records, each with whether its reach ended
+	// before the next (sampledReaches), and never marks each slot that is a
+	// never-sampling device's (neverAt): SM 2.1's unknown, with SM 5.2's
+	// codes for a live slot whose presence is unknown, and whole minutes
+	// where the derived slots begin and end with one.
+	reaches []reach
+	never   []bool
 }
 
-// liveUnknown reports whether recs come from a device with no presence
-// sampler while its agent runs, such as a server with no desktop or a
-// desktop that gives no idle time (SM 2.1): no record of the sampler's,
-// os.presence or os.power (samplerRecord), and some record that came by a
-// path only a running agent has, any but a log reader's. It returns the t
-// of the first such record, where the agent's records start. The os.focus
-// that such a device's agent writes each time it starts, saying focus is
-// unknown, is no sample, so it doesn't make the device one that samples.
-// Every record lookback backfills from transcripts comes by a log reader
-// (SM 2.8), and the range of lookback's own slots is WP-SC7's, so such
-// records alone aren't one.
-func liveUnknown(recs []event.Event) (first int64, live bool) {
+// reach is a record of the presence sampler's, os.presence or os.power, at
+// t, and whether its reach ended before the sampler's next record (SM
+// 2.1): cut is set once a record the agent stamps itself that isn't the
+// sampler's (stampedRecord) is dated more than BUCKET_TTL_S after it and
+// before the next. That shows the agent running without its sampler, as
+// when a desktop session ends and the agent runs on, so the slots after t,
+// up to the next record of the sampler's, are a never-sampling device's.
+type reach struct {
+	t   int64
+	cut bool
+}
+
+// sampledReaches returns the sampler's records in recs, which are in record
+// order, with their reaches.
+func sampledReaches(r rules, recs []event.Event) []reach {
+	var out []reach
 	for _, e := range recs {
-		if samplerRecord(e) {
-			return 0, false
-		}
-		if e.Via != event.ViaLog && !live {
-			first, live = e.T, true
+		switch {
+		case samplerRecord(e):
+			out = append(out, reach{t: e.T})
+		case stampedRecord(e) && len(out) > 0 && e.T > out[len(out)-1].t+r.bucketTTL:
+			out[len(out)-1].cut = true
 		}
 	}
-	return first, live
+	return out
+}
+
+// neverAt reports whether the slot holding t is a never-sampling device's
+// (SM 2.1): its agent runs (live), and no record of the sampler's dated
+// before the slot ends keeps sampling there, because there is none, or the
+// latest one's reach ended. A sample dated after the slot never changes
+// that, so a device's first sample, or its sampler starting again, leaves
+// every slot before it as it was. Until a record shows the reach ended, the
+// slots after the sampler's latest record wait for its next one.
+func (p *presence) neverAt(t int64) bool {
+	if !p.live {
+		return false
+	}
+	i := p.reachAt(t)
+	return i < 0 || p.reaches[i].cut
+}
+
+// stopped reports whether the slot holding t comes after a record of the
+// sampler's whose reach ended (neverAt): the sampler stopped then. The
+// samples taken after it starts again don't reach back into those slots, so
+// a later sample's idle time dates no input there. Before the sampler's
+// first record nothing stopped, and the first sample's idle time still
+// dates the input just before it, such as the typing of the prompt whose
+// hook started the agent.
+func (p *presence) stopped(t int64) bool {
+	i := p.reachAt(t)
+	return p.live && i >= 0 && p.reaches[i].cut
+}
+
+// reachAt returns the index of the sampler's latest record dated before the
+// slot holding t ends, or -1 for none.
+func (p *presence) reachAt(t int64) int {
+	end := floorSlot(t) + event.SlotMS
+	return sort.Search(len(p.reaches), func(i int) bool { return p.reaches[i].t >= end }) - 1
+}
+
+// agentRecords reports whether some record in recs came by a path only a
+// running agent has, any but a log reader's (presence.live), and whether
+// the agent stamped one itself (stampedRecord), with the t of the first it
+// stamped: where the agent's own records start, which no transcript or
+// heartbeat time can date years back.
+func agentRecords(recs []event.Event) (first int64, stamped, live bool) {
+	for _, e := range recs {
+		if e.Via != event.ViaLog {
+			live = true
+		}
+		if !stamped && stampedRecord(e) {
+			first, stamped = e.T, true
+		}
+		if live && stamped {
+			break
+		}
+	}
+	return first, stamped, live
 }
 
 // earliestLead returns the earliest time a relayed lead can start for the
@@ -296,38 +364,37 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 
 	// Slots end with the slot holding now (Step), and the samples may end
 	// them earlier. They start with the first record, but no more than
-	// BUCKET_TTL_S before the sampler first ran; on a device whose agent
-	// never samples, before the agent's first record (liveUnknown), which is
-	// where its records start as a sampling device's start with its first
-	// sample; and before now when there is neither, as for records a log
-	// reader backfilled alone.
-	// Every slot before the first sample is unknown and credits nothing (SM
-	// 2.1), and what so old a record put in a bucket has expired by the time
-	// the sampler sees anything. A record dated years back, which a
-	// transcript or the bridge can carry, would otherwise derive a slot for
-	// every 15 s since. Lookback (SM 2.8, WP-SC7) will need its own range.
+	// BUCKET_TTL_S before the first record the agent stamped itself
+	// (agentRecords), where its own records start, and on a sampling device
+	// its sampler with them; and before now when there is none, as for
+	// records a log reader backfilled alone.
+	// Every slot before the first sample is unknown and credits nothing but
+	// relayed credit (SM 2.1), and what so old a record put in a bucket has
+	// expired by the time the agent records anything. A record dated years
+	// back, which a transcript or the bridge can carry, would otherwise
+	// derive a slot for every 15 s since. Lookback (SM 2.8, WP-SC7) will need
+	// its own range.
 	//
-	// A device that never samples counts from its agent's first record, not
-	// from now, so a Step after a silence longer than BUCKET_TTL_S still
-	// derives the minutes before the silence that were pending, as one Step
-	// over every record does, and a fresh State over the agent's window
-	// (internal/agent/scorer) derives every minute from the window's start.
+	// The range counts from the agent's first record, not from now, so a
+	// Step after a silence longer than BUCKET_TTL_S still derives the minutes
+	// before the silence that were pending, as one Step over every record
+	// does, and a fresh State over the agent's window (internal/agent/scorer)
+	// derives every minute from the window's start.
+	start, stamped, live := agentRecords(recs)
+	p.live, p.reaches = live, sampledReaches(r, recs)
 	ref := now
-	if len(p.samples) > 0 {
-		ref = p.samples[0].t
-	}
-	start, live := liveUnknown(recs)
-	if live {
+	if stamped {
 		ref = start
 	}
 	p.first = max(floorSlot(recs[0].T), floorSlot(ref-r.bucketTTL))
 	last := floorSlot(now)
-	// A device that never samples has nothing left to decide a slot once
-	// its minute holds a record, so every second of each minute that does
-	// is derived, the ones before its first record and after its last
-	// included: relayed anchors credit them, and SM 5.2's codes for a live
-	// slot whose presence is unknown fill the rest
-	// (testdata/timelines/relayed). What it derives past now is pending.
+	// A never-sampling device's slot (neverAt) has nothing left to decide it
+	// once its minute holds a record, so where the slots begin and end with
+	// one, every second of those minutes is derived, the ones before the
+	// first record and after the last included: relayed anchors credit
+	// them, and SM 5.2's codes for a live slot whose presence is unknown
+	// fill the rest (testdata/timelines/relayed). What it derives past now
+	// is pending.
 	//
 	// The app starts the run that takes a message, its session.start
 	// included, only after the message's stamp, and the message's relayed
@@ -337,20 +404,32 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 	// the agent's first record: a state that holds nothing older, a fresh
 	// one or the agent's window after a quiet night, then derives the whole
 	// lead, as one holding every record does.
-	if p.live = live; p.live {
+	if p.neverAt(p.first) {
 		if from, ok := earliestLead(r, recs); ok {
 			p.first = max(floorSlot(ref-r.bucketTTL), min(p.first, from))
 		}
 		p.first = floorMinute(p.first)
+	}
+	if p.neverAt(now) {
 		last = floorMinute(now) + MinuteMS - event.SlotMS
 	}
 	n := int((last-p.first)/event.SlotMS) + 1
 	asleepAt := p.mark(n, sleeps, gaps)
 	lockedAt := p.mark(n, locks)
+	never := make([]bool, n)
+	for k := range never {
+		// A never-sampling device's slot has no hard break: its sampler
+		// records no suspend or lock, and a lock or a suspend before its
+		// sampler stopped says nothing about the slots after.
+		if never[k] = p.neverAt(p.first + int64(k)*event.SlotMS); never[k] {
+			asleepAt[k], lockedAt[k] = false, false
+		}
+	}
 
 	// A slot is decided once a sample at or after its end exists, since
 	// that sample's idle time covers the whole slot, or when it is a hard
-	// break. The first undecided slot ends the list.
+	// break or a never-sampling device's. The first undecided slot ends the
+	// list.
 	firstSample, lastSampleT := int64(math.MaxInt64), int64(math.MinInt64)
 	if len(p.samples) > 0 {
 		firstSample, lastSampleT = p.samples[0].t, p.samples[len(p.samples)-1].t
@@ -358,22 +437,25 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 	for k := 0; k < n; k++ {
 		a := p.first + int64(k)*event.SlotMS
 		brk := asleepAt[k] || lockedAt[k]
-		if !brk && lastSampleT < a+event.SlotMS && a+event.SlotMS > firstSample {
+		if !never[k] && !brk && lastSampleT < a+event.SlotMS && a+event.SlotMS > firstSample {
 			n = k
 			break
 		}
 	}
 	p.slots = make([]Slot, n)
+	p.never = never[:n]
 	inputAt := make([]bool, n)
 	keyAt := make([]bool, n)
 	lastIn := make([]int64, n)
+	// A sample's idle time dates no input in a never-sampling device's slot,
+	// which only the sampler's earlier records decide (neverAt).
 	for _, s := range p.samples {
-		if k, ok := p.index(s.lastAny); ok {
+		if k, ok := p.index(s.lastAny); ok && !never[k] {
 			inputAt[k] = true
 			lastIn[k] = max(lastIn[k], s.lastAny)
 		}
 		if s.hasKeys {
-			if k, ok := p.index(s.lastKey); ok {
+			if k, ok := p.index(s.lastKey); ok && !never[k] {
 				keyAt[k] = true
 			}
 		}
@@ -395,13 +477,16 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 		case len(p.samples) > 0:
 			hasKeys = p.samples[len(p.samples)-1].hasKeys
 		}
-		if hasKeys {
+		if hasKeys && !never[k] {
 			s.InputKeys = ptr(keyAt[k])
 		}
 		s.InputAny = inputAt[k]
 		f := fl.longest(a, b)
 		s.FocusClass, s.FocusProject, s.Hosted = f.class, f.project, f.hosted
 		switch {
+		case never[k]:
+			// SM 2.1: the agent ran without its sampler.
+			s.Present = event.PresentUnknown
 		case s.Asleep || s.Locked:
 			s.Present = event.PresentNo
 		case b <= firstSample:
@@ -479,11 +564,12 @@ func floorSecond(t int64) int64 {
 	return q * 1000
 }
 
-// unsampled reports whether t falls before the presence sampler ran: there
-// is no sample, or none until after the slot holding t ends. Such a slot is
-// SM 2.1's unknown.
+// unsampled reports whether t falls where the presence sampler didn't run:
+// there is no sample, none until after the slot holding t ends, or the
+// slot is a never-sampling device's (neverAt). Such a slot is SM 2.1's
+// unknown.
 func (p *presence) unsampled(t int64) bool {
-	return len(p.samples) == 0 || floorSlot(t)+event.SlotMS <= p.samples[0].t
+	return len(p.samples) == 0 || floorSlot(t)+event.SlotMS <= p.samples[0].t || p.neverAt(t)
 }
 
 // mark returns, for each of the n slots, whether it overlaps any of the
@@ -589,16 +675,17 @@ func (p *presence) classifyRuns(lastIn []int64) {
 // inputIn reports whether a sample shows input, or a key press if keys is
 // set, at a time in [from, to]. Each sample says when the last input before
 // it came, so only samples from from on can show one, and the first sample
-// at or after to is the last that can.
+// at or after to is the last that can. An input it dates after the sampler
+// stopped counts for nothing (stopped).
 func (p *presence) inputIn(from, to int64, keys bool) bool {
 	i := sort.Search(len(p.samples), func(i int) bool { return p.samples[i].t >= from })
 	for ; i < len(p.samples); i++ {
 		s := p.samples[i]
 		if !keys {
-			if s.lastAny >= from && s.lastAny <= to {
+			if s.lastAny >= from && s.lastAny <= to && !p.stopped(s.lastAny) {
 				return true
 			}
-		} else if s.hasKeys && s.lastKey >= from && s.lastKey <= to {
+		} else if s.hasKeys && s.lastKey >= from && s.lastKey <= to && !p.stopped(s.lastKey) {
 			return true
 		}
 		if s.t >= to {
@@ -618,7 +705,7 @@ func (p *presence) inputWhere(from, to int64, keys bool, ok func(t int64) bool) 
 		if keys {
 			l, has = s.lastKey, s.hasKeys
 		}
-		if has && l >= from && l <= to && ok(l) {
+		if has && l >= from && l <= to && !p.stopped(l) && ok(l) {
 			return true
 		}
 		if s.t >= to {

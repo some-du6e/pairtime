@@ -318,10 +318,10 @@ func TestRelayedRecords(t *testing.T) {
 // split across Steps doesn't change what the scorer derives (DESIGN 3.7),
 // as TestFixtureSteps does for the SM fixtures. A Step a minute derives the
 // turns, anchors and relay records one Step over the records does, and the
-// same credit in the window's slots that both derive: one Step over a
-// device that never samples derives only the BUCKET_TTL_S before now, for
-// agent-day the last two hours of its day. Records in reverse order, each
-// twice, give what one Step gives.
+// same credit in the window's slots. One Step and a Step a minute derive the
+// same slots, from BUCKET_TTL_S before the agent's first record on (WP-HL1),
+// so the comparison covers the whole window, agent-day's whole day
+// included. Records in reverse order, each twice, give what one Step gives.
 func TestRelayedFixtureSteps(t *testing.T) {
 	for _, f := range relayedFixtures(t) {
 		dev := fixtureDevice(f)

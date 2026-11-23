@@ -38,8 +38,11 @@ type State struct {
 	// high is the largest t of any record, 0 before the first.
 	high int64
 	// own is the largest t of a record of the presence sampler's, an
-	// os.presence or os.power (samplerRecord), 0 before the first.
-	own int64
+	// os.presence or os.power (samplerRecord), 0 before the first, and
+	// stamped the largest t of any other record the agent stamps itself
+	// (stampedRecord), which ends own's reach once it is more than
+	// BUCKET_TTL_S later (State.now).
+	own, stamped int64
 	// done is the FinalBefore of the last Step: everything derived for a
 	// time before it has been emitted as final.
 	done int64
@@ -49,12 +52,12 @@ type State struct {
 // an os.presence sample, or an os.power, which the sampler records with a
 // sample after it (DESIGN 3.3). The agent stamps their t itself, from the
 // device's clock, and they come every 15 to 60 s while a project context
-// is live, so they are the scorer's clock (State.now), and a device with
-// none never samples (liveUnknown). An os.focus is neither, though the
-// agent stamps it too: the focus component writes one only when focus
-// changes, and where it can't see focus, as on a machine with no desktop,
-// once each time the agent starts (SM 1.2, 2.1), so it says nothing about
-// how far the present has come.
+// is live, so they are the scorer's clock (State.now), and they decide
+// which slots are a sampling device's (presence.neverAt). An os.focus is
+// neither, though the agent stamps it too: the focus component writes one
+// only when focus changes, and where it can't see focus, as on a machine
+// with no desktop, once each time the agent starts (SM 1.2, 2.1), so it
+// says nothing about how far the present has come.
 func samplerRecord(e event.Event) bool {
 	switch e.Data.(type) {
 	case *event.OSPresence, *event.OSPower:
@@ -63,17 +66,37 @@ func samplerRecord(e event.Event) bool {
 	return false
 }
 
+// stampedRecord reports whether the agent stamped e's t itself, as it
+// happened, by a path whose time no other program gives: a hook's, its own
+// watchers' (os) or an agent app reader's (app). A log reader's or the
+// bridge's record carries the time a transcript or a heartbeat gave it,
+// which can be skewed, and so do the other paths' records. One that isn't
+// the sampler's, dated more than BUCKET_TTL_S after the sampler's latest
+// record, shows the agent running without its sampler, which ends that
+// record's reach (SM 2.1): it no longer keeps the clock (State.now), and
+// the slots after it are a never-sampling device's (presence.neverAt).
+func stampedRecord(e event.Event) bool {
+	switch e.Via {
+	case event.ViaHook, event.ViaOS, event.ViaApp:
+		return true
+	}
+	return false
+}
+
 // now is the time the scorer takes as the present: the largest t of any
 // record, but no more than PENDING_WINDOW_S past the latest record of the
-// presence sampler's (samplerRecord). A record dated further ahead, such as
-// a bridge prompt whose transcript timestamp is hours off, so stays pending
-// until the samples reach it, instead of making every real record after it
-// come too late to be output. With no record of the sampler's, as on a
-// device whose agent never samples, now is high: nothing else keeps time
-// there, and a minute is final PENDING_WINDOW_S after the latest record
-// passes its end (SM 2.1).
+// presence sampler's (samplerRecord), while that record keeps the clock. A
+// record dated further ahead, such as a bridge prompt whose transcript
+// timestamp is hours off, so stays pending until the samples reach it,
+// instead of making every real record after it come too late to be output.
+// The sampler's latest record keeps the clock until another record the
+// agent stamps itself (stampedRecord) is dated more than BUCKET_TTL_S after
+// it, which shows the agent running without its sampler. Then, and with no
+// record of the sampler's at all, as on a device whose agent never samples,
+// now is high: nothing else keeps time there, and a minute is final once a
+// record is dated PENDING_WINDOW_S past its end (SM 2.1).
 func (s State) now(r rules) int64 {
-	if s.own == 0 {
+	if s.own == 0 || s.stamped > s.own+r.bucketTTL {
 		return s.high
 	}
 	return min(s.high, s.own+r.pendingWindow)
@@ -148,8 +171,8 @@ type Derived struct {
 // whose event_id it already holds. It reads no clock and does no I/O;
 // "now" is the largest t it has seen, but no more than PENDING_WINDOW_S
 // past the latest sample or power record, which the presence sampler
-// writes. Every record must pass event.Validate, as every record in the
-// ledger does.
+// writes, while that record keeps the clock (State.now). Every record must
+// pass event.Validate, as every record in the ledger does.
 //
 // A record whose t is before the state's FinalBefore still counts toward
 // what is pending, but what is final stays final.
@@ -157,13 +180,16 @@ func Step(s State, records []event.Event) (State, Output) {
 	if s.table == nil {
 		panic("score: Step on a State not made by NewState")
 	}
-	next := State{table: s.table, device: s.device, high: s.high, own: s.own, done: s.done}
+	next := State{table: s.table, device: s.device, high: s.high, own: s.own, stamped: s.stamped, done: s.done}
 	next.recs = merge(s.recs, records)
 	for _, e := range records {
 		if e.Data != nil {
 			next.high = max(next.high, e.T)
-			if samplerRecord(e) {
+			switch {
+			case samplerRecord(e):
 				next.own = max(next.own, e.T)
+			case stampedRecord(e):
+				next.stamped = max(next.stamped, e.T)
 			}
 		}
 	}

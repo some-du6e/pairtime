@@ -21,7 +21,9 @@ import (
 // one os.focus each time the agent starts, saying focus is unknown. Before
 // WP-HL1 that record was the scorer's clock, so nothing was final
 // PENDING_WINDOW_S after an agent's start, and after a silence longer than
-// BUCKET_TTL_S a Step derived none of the minutes before it.
+// BUCKET_TTL_S a Step derived none of the minutes before it. A device whose
+// sampler stops while its agent runs on is one too, from its last sample
+// on, once a record its agent stamps is dated BUCKET_TTL_S after it.
 
 // unknownFocus adds the os.focus an agent writes as it starts when it can't
 // tell which window is in front (SM 1.2).
@@ -141,6 +143,67 @@ func TestHeadlessScoring(t *testing.T) {
 			check: func(t *testing.T, finals Derived, _ Output, _ int64, _ Derived) {
 				if got := agentIn(finals, at(0), at(hour)); got != hourAgent {
 					t.Errorf("the first hour has %d s of agent time final, want %d", got, hourAgent)
+				}
+			},
+		},
+		{
+			name: "a desktop whose sampler stops while its agent runs on, as KDE on X11 and then on Wayland, is a never-sampling device from its last sample on, once a record its agent stamps is dated BUCKET_TTL_S after that sample",
+			build: func(b *tl) {
+				terminalSession(b)
+				b.mouse(every(at(1), at(1796), 5000)...)
+				b.samples(at(0), at(1800))
+				// The agent starts again on Wayland, which gives no idle
+				// time, a minute after the last sample. Its prompt at
+				// 9,070 s is the first record it stamps more than
+				// BUCKET_TTL_S after that sample.
+				b.unknownFocus(at(1860))
+				serverTurns(b, "s_2", 1860, 1860+4*hour)
+			},
+			check: func(t *testing.T, finals Derived, last Output, high int64, one Derived) {
+				if want := floorSlot(high - r.settle); last.FinalBefore != want {
+					t.Errorf("FinalBefore %d s, want %d s: PENDING_WINDOW_S behind the latest record",
+						(last.FinalBefore-base)/1000, (want-base)/1000)
+				}
+				for h := int64(1); h < 4; h++ {
+					if got := agentIn(finals, at(h*hour), at((h+1)*hour)); got != hourAgent {
+						t.Errorf("hour %d has %d s of agent time final, want %d", h, got, hourAgent)
+					}
+				}
+				for _, s := range one.Slots {
+					if s.Start >= at(1800) && (s.Present != event.PresentUnknown || s.InputAny) {
+						t.Fatalf("the slot at %d s is %q, input %v; want unknown with none, as after the sampler stopped",
+							(s.Start-base)/1000, s.Present, s.InputAny)
+					}
+				}
+				if got := sumIn(one, at(1800), at(4*hour)); got[event.ReasonAbsent] != 0 || got[event.ReasonAutomated] == 0 {
+					t.Errorf("uncredited after the last sample %v, want X.automated while the turns run and no X.absent", got)
+				}
+			},
+		},
+		{
+			name: "five hours with no sample and then samples: the minutes before the first sample stay a never-sampling device's, as they became final, and a Step a minute gives what one Step gives",
+			build: func(b *tl) {
+				b.unknownFocus(at(0))
+				serverTurns(b, "s_1", 0, 5*hour)
+				// A desktop session starts and its agent samples, with the
+				// last input an hour back, inside the minutes already final.
+				b.focus(at(5*hour), event.AppTerminal, "p_1", "s_1")
+				b.samples(at(5*hour), at(6*hour))
+			},
+			check: func(t *testing.T, finals Derived, _ Output, _ int64, one Derived) {
+				for h := int64(0); h < 4; h++ {
+					if got := agentIn(finals, at(h*hour), at((h+1)*hour)); got != hourAgent {
+						t.Errorf("hour %d has %d s of agent time final, want %d", h, got, hourAgent)
+					}
+				}
+				for _, s := range one.Slots {
+					if s.Start < at(5*hour) && (s.Present != event.PresentUnknown || s.InputAny) {
+						t.Fatalf("the slot at %d s is %q, input %v; want unknown with none, as before the first sample",
+							(s.Start-base)/1000, s.Present, s.InputAny)
+					}
+				}
+				if got := sumIn(one, at(0), at(5*hour))[event.ReasonAbsent]; got != 0 {
+					t.Errorf("%d s of X.absent before the first sample, want SM 5.2's codes for a live slot whose presence is unknown", got)
 				}
 			},
 		},

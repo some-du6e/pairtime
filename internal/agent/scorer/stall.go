@@ -54,7 +54,7 @@ func (l *Loop) watch(b ledger.Batch) {
 	msg := ""
 	if high > 0 {
 		at := min(high, b.SealedAt.UnixMilli())
-		msg = stallNote(at, l.cur.FinalBefore, l.pendingMS, sampled, focus)
+		msg = stallNote(at, l.cur.FinalBefore, l.pendingMS, l.win.ttl, sampled, focus)
 	}
 	if msg != l.stallMsg {
 		if msg != "" {
@@ -69,14 +69,17 @@ func (l *Loop) watch(b ledger.Batch) {
 // ends at fb, lags at, the newest record, by more than pending plus stallMS,
 // and why where the records say: no presence sample at all, which is
 // presence unknown on this computer, or no sample for longer than that lag
-// allows, which is the samples having stopped while records came. It
+// allows, which is the samples having stopped while records came: then
+// the minutes wait for the next sample, or for ttl, BUCKET_TTL_S, of the
+// agent's own records without one, after which pkg/score takes them for a
+// never-sampling device's (SM 2.1). It
 // returns "" for no lag, and for a lag while samples come and a browser or
 // chat app is in front: SM 2.5 holds the minutes after credit until such a
 // run ends, since it may be a lookup, which is the rule working, not a
 // fault, and doctor's agent line would call it one. sampled is the newest
 // presence sample or power record, 0 for none, and focus the app class of
 // the newest os.focus.
-func stallNote(at, fb, pending, sampled int64, focus event.AppClass) string {
+func stallNote(at, fb, pending, ttl, sampled int64, focus event.AppClass) string {
 	lag := at - fb
 	if lag <= pending+stallMS {
 		return ""
@@ -87,7 +90,8 @@ func stallNote(at, fb, pending, sampled int64, focus event.AppClass) string {
 	case sampled == 0:
 		msg += ": presence is unknown on this computer, so the scorer has no presence sample to keep time by"
 	case at-sampled > pending+stallMS:
-		msg += fmt.Sprintf(": no presence sample has come for %s, so they wait for the next one", lasting(at-sampled))
+		msg += fmt.Sprintf(": no presence sample has come for %s, so they wait for the next one, or for %s of the agent's records without one",
+			lasting(at-sampled), lasting(ttl))
 	case focus == event.AppBrowser || focus == event.AppChatApp:
 		return ""
 	}

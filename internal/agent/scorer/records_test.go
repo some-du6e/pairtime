@@ -181,7 +181,7 @@ func TestCarry(t *testing.T) {
 				if s == nil || s.Start.T != 100 || s.Prompt.T != 400 || s.Output.T != 600 || s.Stop.T != 500 || s.Last != 600 {
 					t.Errorf("session carry %+v", s)
 				}
-				if got := len(c.records(nil, 0, testGaps)); got != 4 {
+				if got := len(c.records(nil, 0, testGaps, 0, 0)); got != 4 {
 					t.Errorf("the carry gives %d records, want 4", got)
 				}
 			},
@@ -276,7 +276,7 @@ func TestCarryRuns(t *testing.T) {
 	// by seq.
 	dated := func(c *carry, from int64) map[uint64]int64 {
 		out := map[uint64]int64{}
-		for _, e := range c.records(nil, from, testGaps) {
+		for _, e := range c.records(nil, from, testGaps, 0, 0) {
 			if e.SessionKey == "s_1" {
 				out[e.Seq] = e.T
 			}

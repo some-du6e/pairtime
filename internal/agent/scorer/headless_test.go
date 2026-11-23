@@ -66,26 +66,46 @@ func agentDay(t *testing.T, from, to int64) []event.Event {
 }
 
 func TestHeadlessLoop(t *testing.T) {
+	// hours returns the runs of the agent that write the given hours of
+	// agent-day, each with a loop of its own, as after a restart.
+	hours := func(spans ...[2]int64) func(t *testing.T) [][]event.Event {
+		return func(t *testing.T) [][]event.Event {
+			var runs [][]event.Event
+			for _, h := range spans {
+				runs = append(runs, agentDay(t, h[0], h[1]))
+			}
+			return runs
+		}
+	}
 	cases := []struct {
 		name string
-		// runs are the hours of agent-day that each run of the agent
-		// writes, each with a loop of its own, as after a restart.
-		runs [][2]int64
+		runs func(t *testing.T) [][]event.Event
 	}{
 		{"a computer whose only OS record is the os.focus its agent writes as it starts keeps finalizing minutes for hours, past Lookback, as one Step over every record gives them",
-			[][2]int64{{0, 9}}},
+			hours([2]int64{0, 9})},
 		{"a restart after a stall longer than BUCKET_TTL_S derives every minute since the last final, the ones still pending when the agent stopped included",
-			[][2]int64{{0, 1}, {4, 5}}},
+			hours([2]int64{0, 1}, [2]int64{4, 5})},
 		{"a restart between two hours of turns keeps finalizing as one run does",
-			[][2]int64{{0, 3}, {3, 6}}},
+			hours([2]int64{0, 3}, [2]int64{3, 6})},
+		{"a desktop whose sampler stops, as KDE on X11 and then on Wayland, finalizes as a computer that can't sample once its agent's records come BUCKET_TTL_S after the last sample, and the window slides",
+			func(t *testing.T) [][]event.Event {
+				// An hour of a hooked turn on X11, sampled once a minute,
+				// ending three hours before agent-day's first record, which
+				// the agent writes on Wayland.
+				day := agentDay(t, 0, 8)
+				var tools []int64
+				for m := int64(5); m <= 60; m += 5 {
+					tools = append(tools, m*minuteMS)
+				}
+				return [][]event.Event{hookTurn(t, day[0].T-4*hourMS, tools), day}
+			}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			r := newRig(t, score.Device{})
 			var all []event.Event
-			for _, h := range c.runs {
-				evs := agentDay(t, h[0], h[1])
+			for _, evs := range c.runs(t) {
 				r.write(evs, nil)
 				all = append(all, evs...)
 			}
@@ -95,10 +115,39 @@ func TestHeadlessLoop(t *testing.T) {
 			}
 			want, fb := direct(r.table, r.dev, chain.DeviceID, all)
 			from, to := span(all)
-			compare(t, r.stored(from, to), want)
-			if st := r.rescore(); st.FinalBefore != fb {
+			got := r.stored(from, to)
+			compare(t, got, want)
+			st := r.rescore()
+			if st.FinalBefore != fb {
 				t.Errorf("the loop's FinalBefore is %s, and one Step's %s", time.UnixMilli(st.FinalBefore).UTC(),
 					time.UnixMilli(fb).UTC())
+			}
+			// One Step and the loop could stall alike, so the case holds
+			// both to what the records call for: FinalBefore PENDING_WINDOW_S
+			// behind the latest record, every minute before it with agent
+			// time final with that time, and the window Lookback behind it.
+			last := all[len(all)-1].T
+			pending := r.table.Int(params.PENDING_WINDOW_S) * 1000
+			if st.FinalBefore < last-pending-event.SlotMS || st.FinalBefore > last-pending {
+				t.Errorf("FinalBefore is %s, and the latest record %s: want PENDING_WINDOW_S between them",
+					time.UnixMilli(st.FinalBefore).UTC(), time.UnixMilli(last).UTC())
+			}
+			stored := map[int64]store.Bucket{}
+			for _, b := range got {
+				stored[b.At()] = b
+			}
+			for m, w := range want {
+				if w.AgentRunningS == 0 || m+minuteMS > st.FinalBefore {
+					continue
+				}
+				if g, ok := stored[m]; !ok || g.State != event.StateFinal || g.AgentRunningS != w.AgentRunningS {
+					t.Errorf("%s has %v s of agent time in one Step, and the loop's latest revision is %+v; want it final with that time",
+						time.UnixMilli(m).UTC(), w.AgentRunningS, g)
+				}
+			}
+			if cur := r.savedCursor(); cur.From < st.FinalBefore-DefaultLookback.Milliseconds()-15*minuteMS {
+				t.Errorf("the window starts at %s, more than Lookback before FinalBefore at %s",
+					time.UnixMilli(cur.From).UTC(), time.UnixMilli(st.FinalBefore).UTC())
 			}
 		})
 	}
