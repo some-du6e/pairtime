@@ -504,6 +504,15 @@ func checkFeatureVector(t *testing.T, fv featureVec) {
 			cmd = string(*fv.Command)
 		}
 		f = fk.Shell(cmd)
+	case event.KindRelayMessage:
+		// An app's message commits nothing: its f is v and the class of the
+		// app's own text (spec 10.7).
+		if fv.PromptClass == nil || fv.Text != nil || fv.ShingleValues != nil {
+			t.Fatal("an app message's features object has prompt_class, and no text or shingle_values")
+		}
+		if f, err = features.Relay(*fv.PromptClass); err != nil {
+			t.Fatal(err)
+		}
 	default:
 		t.Fatalf("rtype 0x%02x carries no features", fv.RType)
 	}

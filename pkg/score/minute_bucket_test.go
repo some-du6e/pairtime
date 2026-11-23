@@ -43,79 +43,87 @@ func fixtureBuckets(t *testing.T, f *timelines.Fixture) map[int64]event.MinuteBu
 
 func TestFixtureBuckets(t *testing.T) {
 	for _, f := range creditCases(t) {
-		got := fixtureBuckets(t, f)
-		t.Run(f.Name+": every bucket passes pkg/event validation, as the device keeps it and as it uploads", func(t *testing.T) {
-			if len(got) == 0 {
-				t.Fatal("no buckets")
+		checkBuckets(t, f, fixtureBuckets(t, f))
+	}
+}
+
+// checkBuckets checks a fixture's minute buckets, by minute start: each
+// passes pkg/event validation, as the device keeps it and as it uploads,
+// and each of its expected.json's rows has its buckets' credit by project,
+// uncredited seconds and agent time.
+func checkBuckets(t *testing.T, f *timelines.Fixture, got map[int64]event.MinuteBucket) {
+	t.Helper()
+	t.Run(f.Name+": every bucket passes pkg/event validation, as the device keeps it and as it uploads", func(t *testing.T) {
+		if len(got) == 0 {
+			t.Fatal("no buckets")
+		}
+		for _, m := range slices.Sorted(maps.Keys(got)) {
+			b := got[m]
+			if err := b.Validate(); err != nil {
+				t.Errorf("%s: %v", b.Minute.Format(time.RFC3339), err)
 			}
-			for _, m := range slices.Sorted(maps.Keys(got)) {
-				b := got[m]
-				if err := b.Validate(); err != nil {
-					t.Errorf("%s: %v", b.Minute.Format(time.RFC3339), err)
+			if err := b.Shareable().Validate(); err != nil {
+				t.Errorf("%s, shareable: %v", b.Minute.Format(time.RFC3339), err)
+			}
+		}
+	})
+	for _, row := range f.Expected.Rows {
+		name := fmt.Sprintf("%s %s: its buckets' credit by project, uncredited seconds and agent time are the row's", f.Name, row.Local)
+		if !row.Bucket {
+			name = fmt.Sprintf("%s %s credits nothing and runs no agent, so it has no bucket", f.Name, row.Local)
+		}
+		t.Run(name, func(t *testing.T) {
+			n := 0
+			var credited, agent float64
+			byProject := map[string]float64{}
+			uncredited := map[event.Reason]float64{}
+			for m := row.Start.UnixMilli(); m < row.End().UnixMilli(); m += MinuteMS {
+				b, ok := got[m]
+				if !ok {
+					continue
 				}
-				if err := b.Shareable().Validate(); err != nil {
-					t.Errorf("%s, shareable: %v", b.Minute.Format(time.RFC3339), err)
+				n++
+				credited += b.CreditedS
+				agent += b.AgentRunningS
+				for _, s := range b.Slots {
+					if s.Credited > 0 {
+						byProject[s.Project] += s.Credited
+					}
 				}
+				for r, v := range b.Uncredited {
+					uncredited[r] += v
+				}
+			}
+			if !row.Bucket {
+				if n > 0 {
+					t.Errorf("%d minutes have a bucket: %v s credited, %v s of agent time", n, credited, agent)
+				}
+				return
+			}
+			if n != row.BucketMinutes {
+				t.Errorf("%d minutes with a bucket, want %d", n, row.BucketMinutes)
+			}
+			want := map[string]float64{}
+			var total float64
+			for p, rs := range row.Credit {
+				for _, s := range rs {
+					want[p] += s
+					total += s
+				}
+			}
+			if !sameSeconds(byProject, want) {
+				t.Errorf("credit by project %v, want %v (%s)", byProject, want, row.SM)
+			}
+			if credited != total {
+				t.Errorf("credited_s %v, want %v", credited, total)
+			}
+			if row.Uncredited != nil && !sameSeconds(uncredited, row.Uncredited) {
+				t.Errorf("uncredited %v, want %v (%s)", uncredited, row.Uncredited, row.SM)
+			}
+			if agent != row.AgentRunningS {
+				t.Errorf("agent_running_s %v, want %v", agent, row.AgentRunningS)
 			}
 		})
-		for _, row := range f.Expected.Rows {
-			name := fmt.Sprintf("%s %s: its buckets' credit by project, uncredited seconds and agent time are the row's", f.Name, row.Local)
-			if !row.Bucket {
-				name = fmt.Sprintf("%s %s credits nothing and runs no agent, so it has no bucket", f.Name, row.Local)
-			}
-			t.Run(name, func(t *testing.T) {
-				n := 0
-				var credited, agent float64
-				byProject := map[string]float64{}
-				uncredited := map[event.Reason]float64{}
-				for m := row.Start.UnixMilli(); m < row.End().UnixMilli(); m += MinuteMS {
-					b, ok := got[m]
-					if !ok {
-						continue
-					}
-					n++
-					credited += b.CreditedS
-					agent += b.AgentRunningS
-					for _, s := range b.Slots {
-						if s.Credited > 0 {
-							byProject[s.Project] += s.Credited
-						}
-					}
-					for r, v := range b.Uncredited {
-						uncredited[r] += v
-					}
-				}
-				if !row.Bucket {
-					if n > 0 {
-						t.Errorf("%d minutes have a bucket: %v s credited, %v s of agent time", n, credited, agent)
-					}
-					return
-				}
-				if n != row.BucketMinutes {
-					t.Errorf("%d minutes with a bucket, want %d", n, row.BucketMinutes)
-				}
-				want := map[string]float64{}
-				var total float64
-				for p, rs := range row.Credit {
-					for _, s := range rs {
-						want[p] += s
-						total += s
-					}
-				}
-				if !sameSeconds(byProject, want) {
-					t.Errorf("credit by project %v, want %v (%s)", byProject, want, row.SM)
-				}
-				if credited != total {
-					t.Errorf("credited_s %v, want %v", credited, total)
-				}
-				if row.Uncredited != nil && !sameSeconds(uncredited, row.Uncredited) {
-					t.Errorf("uncredited %v, want %v (%s)", uncredited, row.Uncredited, row.SM)
-				}
-				if agent != row.AgentRunningS {
-					t.Errorf("agent_running_s %v, want %v", agent, row.AgentRunningS)
-				}
-			})
-		}
 	}
 }
 

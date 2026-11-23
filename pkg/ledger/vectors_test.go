@@ -177,9 +177,9 @@ func TestVectorsHaveWhatSpec11Lists(t *testing.T) {
 	}{
 		{"the vectors hold four key sets", len(f.Keys), 4},
 		{"the vectors hold nine digests", len(f.Digests), 9},
-		{"the vectors hold two chains", len(f.Chains), 2},
-		{"the chains hold 54 batches", batches, 54},
-		{"the batches hold 1,529 records", records, 1529},
+		{"the vectors hold three chains", len(f.Chains), 3},
+		{"the chains hold 55 batches", batches, 55},
+		{"the batches hold 1,532 records", records, 1532},
 		{"the vectors hold three days", len(f.Days), 3},
 	}
 	for _, c := range cases {

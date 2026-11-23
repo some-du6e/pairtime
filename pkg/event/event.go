@@ -35,6 +35,7 @@ const (
 	KindOSPower         Kind = "os.power"
 	KindOTelActiveTime  Kind = "otel.active_time"
 	KindCLITrack        Kind = "cli.track"
+	KindRelayMessage    Kind = "relay.message"
 )
 
 // kindRule says what may produce events of a kind (SM 1.2) and how the
@@ -56,7 +57,29 @@ var (
 	fromOS      = kindRule{sources: []Source{SourceOS}, vias: []Via{ViaOS}, noSession: true}
 	fromHarness = kindRule{inSession: true}
 	fromAnyone  = kindRule{}
+	// fromApp is an agent app's reader, which reads the app's own store as a
+	// log and is the one path that sets ViaApp (DESIGN 3.4, 5.1). Its record
+	// names the harness session the app bound the message's run to, or none
+	// when the reader didn't know it, so neither session rule applies.
+	fromApp = kindRule{sources: []Source{SourceLog}, vias: []Via{ViaApp}}
 )
+
+// exclusiveVias are the vias that only the kinds whose rules list them
+// arrive by. ViaApp is an agent app's reader, which writes relay.message
+// records and nothing else (DESIGN 4.1 E-12), so no prompt or tool call
+// can claim to have come from an app's store.
+var exclusiveVias = []Via{ViaApp}
+
+// viaKinds returns the kinds whose rule lists via v, in kindTable order.
+func viaKinds(v Via) []Kind {
+	var ks []Kind
+	for _, entry := range kindTable {
+		if slices.Contains(entry.rule.vias, v) {
+			ks = append(ks, entry.kind)
+		}
+	}
+	return ks
+}
 
 // kindTable lists every kind in SM 1.2 order with its payload type and
 // rule. It is the one place a new kind has to be registered in Go. The
@@ -85,6 +108,7 @@ var kindTable = []struct {
 	{KindOSPower, func() Payload { return new(OSPower) }, fromOS},
 	{KindOTelActiveTime, func() Payload { return new(OTelActiveTime) }, kindRule{sources: []Source{SourceOTel}, vias: []Via{ViaOTel}}},
 	{KindCLITrack, func() Payload { return new(CLITrack) }, kindRule{sources: []Source{SourceCLI, SourceMCP}, vias: []Via{ViaTrack}}},
+	{KindRelayMessage, func() Payload { return new(RelayMessage) }, fromApp},
 }
 
 var kinds = enum[Kind]{name: "kind", values: func() []Kind {
@@ -300,7 +324,8 @@ func checkEnvelope(c *checker, e Envelope) {
 
 // checkKindRules checks the envelope against the kind's rule: OS and git
 // events have no harness or session, a few kinds come from one source
-// and arrive one way only, and harness events belong to a session.
+// and arrive one way only, harness events belong to a session, and a via
+// in exclusiveVias carries only the kinds whose rules list it.
 func checkKindRules(c *checker, e Envelope, k Kind) {
 	r := ruleFor(k)
 	if r.sources != nil && !slices.Contains(r.sources, e.Source) {
@@ -308,6 +333,9 @@ func checkKindRules(c *checker, e Envelope, k Kind) {
 	}
 	if r.vias != nil && !slices.Contains(r.vias, e.Via) {
 		c.addf("via", "%s events arrive via %q, got %q", k, r.vias, e.Via)
+	}
+	if r.vias == nil && slices.Contains(exclusiveVias, e.Via) {
+		c.addf("via", "%s events never arrive via %q, which only %q events do", k, e.Via, viaKinds(e.Via))
 	}
 	if r.noSession {
 		if e.Harness != HarnessNone {

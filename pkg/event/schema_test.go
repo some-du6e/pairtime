@@ -15,6 +15,7 @@ package event
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -49,6 +50,7 @@ func schemaEnums() []enumInfo {
 		infoOf(decidedBys), infoOf(stopReasons), infoOf(subagentPhases), infoOf(editorActs),
 		infoOf(editSources), infoOf(cmdClasses), infoOf(gitOps), infoOf(actors), infoOf(appClasses),
 		infoOf(powerOps), infoOf(activeTimeTypes), infoOf(logMatches), infoOf(envHints),
+		infoOf(relayApps), infoOf(relayClients), infoOf(relayDeclareds),
 	}
 }
 
@@ -366,9 +368,11 @@ func (c *schemaCheck) enums() {
 
 // kindRules checks the schema's allOf: one if/then rule per kind, sending
 // "data" to that kind's $defs entry and restricting source, via, harness
-// and session_key exactly as the Go kind rule does.
+// and session_key exactly as the Go kind rule does, and one rule per via
+// in exclusiveVias, keeping it to the kinds whose Go rules list it.
 func (c *schemaCheck) kindRules() {
 	rules := map[Kind]map[string]any{}
+	viaRules := map[string][]string{}
 	allOf, ok := c.root["allOf"].([]any)
 	if !ok {
 		c.addf("the schema has no allOf list of kind rules")
@@ -377,7 +381,12 @@ func (c *schemaCheck) kindRules() {
 		where := fmt.Sprintf("allOf[%d]", i)
 		rule := c.object(r, where)
 		cond := c.object(rule["if"], where+".if")
-		k, _ := c.object(c.object(cond["properties"], where+".if.properties")["kind"], where+".if.properties.kind")["const"].(string)
+		condProps := c.object(cond["properties"], where+".if.properties")
+		if v, isVia := condProps["via"]; isVia {
+			c.viaRule(where, rule, cond, v, viaRules)
+			continue
+		}
+		k, _ := c.object(condProps["kind"], where+".if.properties.kind")["const"].(string)
 		if newPayload(Kind(k)) == nil {
 			c.addf("%s: its if names %q, which isn't a kind", where, k)
 			continue
@@ -431,6 +440,45 @@ func (c *schemaCheck) kindRules() {
 			if !slices.Contains([]string{"data", "source", "via", "harness", "session_key"}, name) {
 				c.addf("%s rule: unexpected property %q; checkSchema only knows data, source, via, harness and session_key", k, name)
 			}
+		}
+	}
+	for _, v := range exclusiveVias {
+		var want []string
+		for _, k := range viaKinds(v) {
+			want = append(want, string(k))
+		}
+		got, ok := viaRules[string(v)]
+		switch {
+		case !ok:
+			c.addf("the schema's allOf has no rule keeping via %q to %q, which Go's rules keep it to", v, want)
+		case !slices.Equal(got, want):
+			c.addf("via %q rule: the schema allows kinds %q, Go allows %q", v, got, want)
+		}
+	}
+	for _, v := range slices.Sorted(maps.Keys(viaRules)) {
+		if !slices.Contains(exclusiveVias, Via(v)) {
+			c.addf("the schema's allOf keeps via %q to some kinds, but in Go any kind without a via rule may arrive by it", v)
+		}
+	}
+}
+
+// viaRule reads an allOf rule that keeps a via to some kinds,
+// {"if": {"required": ["via"], "properties": {"via": {"const": v}}},
+// "then": {"properties": {"kind": {"const": k}}}}, with "enum" for several
+// kinds, and records the kinds it allows under v in seen.
+func (c *schemaCheck) viaRule(where string, rule, cond map[string]any, v any, seen map[string][]string) {
+	via, _ := c.object(v, where+".if.properties.via")["const"].(string)
+	if !slices.Contains(c.stringList(cond["required"], where+".if.required"), "via") {
+		c.addf("%s: its if must require \"via\", or it also matches events without one", where)
+	}
+	if _, dup := seen[via]; dup {
+		c.addf("%s: a second rule for via %q", where, via)
+	}
+	props := c.object(c.object(rule["then"], where+".then")["properties"], where+".then.properties")
+	seen[via] = c.allowed(props["kind"])
+	for name := range props {
+		if name != "kind" {
+			c.addf("%s: unexpected property %q; a via rule restricts kind only", where, name)
 		}
 	}
 }
@@ -540,16 +588,30 @@ func at(t *testing.T, root map[string]any, keys ...string) map[string]any {
 }
 
 // kindRuleAt returns the then.properties of kind k's allOf rule, and its
-// index in allOf.
+// index in allOf. It passes over the via rules, whose if names no kind.
 func kindRuleAt(t *testing.T, root map[string]any, k Kind) (map[string]any, int) {
 	t.Helper()
 	for i, r := range root["allOf"].([]any) {
 		rule := r.(map[string]any)
-		if at(t, rule, "if", "properties", "kind")["const"] == string(k) {
+		if kind, ok := at(t, rule, "if", "properties")["kind"].(map[string]any); ok && kind["const"] == string(k) {
 			return at(t, rule, "then", "properties"), i
 		}
 	}
 	t.Fatalf("schema has no allOf rule for %q", k)
+	return nil, -1
+}
+
+// viaRuleAt returns the then.properties of via v's allOf rule, and its
+// index in allOf.
+func viaRuleAt(t *testing.T, root map[string]any, v Via) (map[string]any, int) {
+	t.Helper()
+	for i, r := range root["allOf"].([]any) {
+		rule := r.(map[string]any)
+		if via, ok := at(t, rule, "if", "properties")["via"].(map[string]any); ok && via["const"] == string(v) {
+			return at(t, rule, "then", "properties"), i
+		}
+	}
+	t.Fatalf("schema has no allOf rule for via %q", v)
 	return nil, -1
 }
 
@@ -663,6 +725,41 @@ func TestSchemaDriftIsCaught(t *testing.T) {
 		{"a shared $def whose type changes", func(t *testing.T, root map[string]any) {
 			at(t, root, "$defs", "key_list", "items")["$ref"] = "#/$defs/count"
 		}, `session.start.automation_flags: the schema allows items of JSON types ["integer"], but Go writes ["string"]`},
+		{"an app message the schema lets arrive as a plugin", func(t *testing.T, root map[string]any) {
+			props, _ := kindRuleAt(t, root, KindRelayMessage)
+			props["via"] = map[string]any{"const": "plugin"}
+		}, "relay.message rule: the schema allows vias"},
+		{"a via only relay.message arrives by, open to every kind", func(t *testing.T, root map[string]any) {
+			_, i := viaRuleAt(t, root, ViaApp)
+			allOf := root["allOf"].([]any)
+			root["allOf"] = append(allOf[:i:i], allOf[i+1:]...)
+		}, `no rule keeping via "app" to ["relay.message"]`},
+		{"a via rule that lets a prompt arrive via app", func(t *testing.T, root map[string]any) {
+			props, _ := viaRuleAt(t, root, ViaApp)
+			props["kind"] = map[string]any{"enum": []any{"prompt.submit", "relay.message"}}
+		}, `via "app" rule: the schema allows kinds ["prompt.submit" "relay.message"], Go allows ["relay.message"]`},
+		{"a via rule for a via any kind may arrive by", func(t *testing.T, root map[string]any) {
+			root["allOf"] = append(root["allOf"].([]any), map[string]any{
+				"if":   map[string]any{"required": []any{"via"}, "properties": map[string]any{"via": map[string]any{"const": "plugin"}}},
+				"then": map[string]any{"properties": map[string]any{"kind": map[string]any{"const": "prompt.submit"}}},
+			})
+		}, `keeps via "plugin" to some kinds`},
+		{"a relay client only Go has", func(t *testing.T, root map[string]any) {
+			def := at(t, root, "$defs", "relay_client")
+			def["enum"] = []any{"web"}
+		}, "$defs/relay_client lists"},
+		{"a parent class only Go has", func(t *testing.T, root map[string]any) {
+			def := at(t, root, "$defs", "parent_class")
+			list := def["enum"].([]any)
+			def["enum"] = slices.DeleteFunc(slices.Clone(list), func(v any) bool { return v == "agent_app" })
+		}, "$defs/parent_class lists"},
+		{"a pairing link the schema marks local", func(t *testing.T, root map[string]any) {
+			at(t, root, "$defs", "prompt.submit", "properties", "relay")["x-local"] = true
+		}, `prompt.submit.relay: schema "x-local" is true`},
+		{"an app message's field the schema requires though Go may leave it out", func(t *testing.T, root map[string]any) {
+			def := at(t, root, "$defs", "relay.message")
+			def["required"] = append(def["required"].([]any), "prompt")
+		}, "relay.message: the schema requires"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

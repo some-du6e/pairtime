@@ -133,7 +133,8 @@ type Slot struct {
 	// Labels is lbl, pkg/event's slot labels (event.SlotLabels): the
 	// side-door labels of the anchors behind the credit, such as
 	// "via_track", then focus_unknown where some of it is level C because
-	// the window in front was unknown (SM 2.5).
+	// the window in front was unknown (SM 2.5), then via_relay where some
+	// rests on a relayed anchor (SM 2.2 rule 9).
 	Labels []string
 }
 

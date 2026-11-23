@@ -37,6 +37,8 @@ func TestValues(t *testing.T) {
 		{ERROR_PASTE_TEXT_MAX, "40", "SM 8.1"},
 		{CRON_PREFIX_CHARS, "1000", "SM 8.1"},
 		{PA_MIN_LATENCY_MS, "300", "SM 8.1"},
+		{RELAY_MATCH_S, "600", "SM 8.1"},
+		{RELAY_SEEN_LAG_S, "60", "SM 8.1"},
 
 		{THINK_LEAD_S, "120", "SM 8.2"},
 		{COMPOSE_CPS, "1.5", "SM 8.2"},

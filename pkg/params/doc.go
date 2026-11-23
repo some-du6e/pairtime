@@ -18,7 +18,8 @@
 // version with a new file and no code; adding or dropping a parameter
 // changes a rule, which is a MAJOR one (SM 7.6, DESIGN 6.6). Scoring
 // versions stay 0.x until the freeze (DESIGN 10.2), so until then a rule
-// change raises MINOR: table 0.2.0 added [INPUT_RELEASE_GRACE_MS]. Tables
+// change raises MINOR: table 0.2.0 added [INPUT_RELEASE_GRACE_MS], and
+// table 0.3.0 [RELAY_MATCH_S] and [RELAY_SEEN_LAG_S] (D-relayed). Tables
 // of different versions can therefore hold different parameters: a table
 // holds every parameter this package declares except those a later
 // version added. [ByVersion] and [ByHash] look tables up.

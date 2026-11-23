@@ -21,13 +21,14 @@ import (
 // and compare what comes out with anchors.json, and with the presence the
 // fixture READMEs state.
 
-// testTable returns parameter table 0.2.0, the newest. The tests pin it,
+// testTable returns parameter table 0.3.0, the newest. The tests pin it,
 // so a later table with other values doesn't change what they expect.
-// Table 0.1.0 predates INPUT_RELEASE_GRACE_MS, which the scorer reads, so
-// the scorer can't run with it.
+// Table 0.1.0 predates INPUT_RELEASE_GRACE_MS and table 0.2.0 predates
+// RELAY_MATCH_S and RELAY_SEEN_LAG_S, which the scorer reads, so the scorer
+// can't run with either.
 func testTable(t *testing.T) *params.Table {
 	t.Helper()
-	tab, err := params.ByVersion("0.2.0")
+	tab, err := params.ByVersion("0.3.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,12 +142,20 @@ func checkAnchors(t *testing.T, f *timelines.Fixture, got Derived) {
 		}
 	})
 	for _, want := range f.Anchors.Anchors {
-		name := fmt.Sprintf("%s %s %s has the oracle's kind, time, project, origin, class, lead, trail, via and level",
+		name := fmt.Sprintf("%s %s %s has the oracle's kind, time, project, origin, class, lead, trail, via, level and app message",
 			f.Name, want.Local, want.Kind)
 		t.Run(name, func(t *testing.T) {
 			a, ok := byID[want.EventID]
 			if !ok {
 				t.Fatalf("no anchor for event %s", want.EventID)
+			}
+			// A relayed anchor stands at its message's stamp, so anchors.json
+			// gives the stamp as its t, while a prompt typed at the stamp
+			// keeps its own t and gives the stamp as sent_at
+			// (testdata/timelines/relayed/README.md).
+			sentAt := want.SentAt
+			if want.Origin == event.OriginRelayed {
+				sentAt = want.T
 			}
 			for _, c := range []struct {
 				field     string
@@ -161,10 +170,16 @@ func checkAnchors(t *testing.T, f *timelines.Fixture, got Derived) {
 				{"trail_s", seconds(a.TrailMS), want.TrailS},
 				{"via", a.Via, want.Via},
 				{"level", a.Level, want.Level},
+				{"sent_at", a.SentAt, sentAt},
+				{"prompt", a.Prompt, want.Prompt},
+				{"relay", a.Relay, want.Relay},
 			} {
 				if c.got != c.want {
 					t.Errorf("%s = %v, want %v (%s)", c.field, c.got, c.want, want.SM)
 				}
+			}
+			if want.Labels != nil && !slices.Equal(a.Labels, want.Labels) {
+				t.Errorf("labels = %q, want %q (%s)", a.Labels, want.Labels, want.SM)
 			}
 			if err := a.Event().Validate(); err != nil {
 				t.Errorf("the anchor isn't a valid event.Anchor: %v", err)
@@ -176,7 +191,7 @@ func checkAnchors(t *testing.T, f *timelines.Fixture, got Derived) {
 // reaches reports whether any of an anchor's windows, its lead, its run or
 // its trail, overlaps [from, to).
 func reaches(a Anchor, from, to int64) bool {
-	return a.T-a.LeadMS < to && max(a.T+a.WatchMS, a.TrailFrom+a.TrailMS) > from
+	return a.leadEnd()-a.LeadMS < to && max(a.T+a.WatchMS, a.TrailFrom+a.TrailMS) > from
 }
 
 // checkTurns compares the turns the scorer derived for a fixture with its

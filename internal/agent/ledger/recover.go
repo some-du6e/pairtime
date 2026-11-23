@@ -822,12 +822,14 @@ func envelopeOf(rec ledger.Record) (event.Envelope, bool) {
 }
 
 // harnessKind reports whether events of kind k can belong to a harness
-// session, which is all score.Questions reads.
+// session, which is all score.Questions reads. An app's relay.message
+// names the session the app bound its message's run to, when the reader
+// knew it.
 func harnessKind(k event.Kind) bool {
 	switch k {
 	case event.KindSessionStart, event.KindSessionEnd, event.KindPromptSubmit, event.KindAgentOutput,
 		event.KindAgentTool, event.KindAgentPermission, event.KindAgentInterrupt, event.KindAgentQueue,
-		event.KindAgentStop, event.KindAgentSubagent, event.KindCLITrack:
+		event.KindAgentStop, event.KindAgentSubagent, event.KindCLITrack, event.KindRelayMessage:
 		return true
 	}
 	return false

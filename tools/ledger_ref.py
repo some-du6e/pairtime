@@ -117,9 +117,10 @@ def derive_keys(k_dev):
 # ---------------------------------------------------------------------------
 # 4. Records
 
-# 4.2. The 18 event kinds took 0x01 to 0x12 in PR1's kindTable order. The
-# table is frozen: a code never changes meaning, and a new kind takes the
-# next free code.
+# 4.2. The 18 event kinds took 0x01 to 0x12 in PR1's kindTable order, and
+# relay.message, the first kind added later, took 0x13 on 2026-11-22
+# (docs/errata/2026-11-22-relayed-prompts.md). The table is frozen: a code
+# never changes meaning, and a new kind takes the next free code.
 RTYPES = {
     0x01: "session.start",
     0x02: "session.end",
@@ -139,14 +140,15 @@ RTYPES = {
     0x10: "os.power",
     0x11: "otel.active_time",
     0x12: "cli.track",
+    0x13: "relay.message",
     0x40: "checkpoint",
     0x41: "upload_failure",
 }
-EVENT_RTYPES = tuple(range(0x01, 0x13))
+EVENT_RTYPES = tuple(range(0x01, 0x14))
 # Codes reserved for event kinds added later. A verifier that meets one
 # reports its kind as unknown and still checks the batch; 0x00 and 0x42 to
 # 0xff fail.
-LATER_RTYPES = range(0x13, 0x40)
+LATER_RTYPES = range(0x14, 0x40)
 OS_RTYPES = (0x0E, 0x0F, 0x10)
 CHECKPOINT = 0x40
 UPLOAD_FAILURE = 0x41
@@ -393,6 +395,9 @@ AGENT_OUTPUT = 0x04
 AGENT_TOOL = 0x05
 SHELL_COMMAND = 0x0C
 CLI_TRACK = 0x12
+# relay.message commits no text: the prompt it pairs with commits that
+# prompt's (10.1). It carries f, of v and pc alone (10.7).
+RELAY_MESSAGE = 0x13
 CONTENT_RTYPES = (PROMPT_SUBMIT, AGENT_OUTPUT, CLI_TRACK)
 MESSAGE_MAX = 16384
 
@@ -1075,13 +1080,15 @@ def hunks_from_patch(old_start, old_lines, new_start, new_lines, lines):
 
 FEATURES_V = 1
 PROMPT_CLASSES = ("substantive", "low_effort", "answer", "error_paste")
-FEATURE_RTYPES = (PROMPT_SUBMIT, AGENT_TOOL, SHELL_COMMAND, CLI_TRACK)
+FEATURE_RTYPES = (PROMPT_SUBMIT, AGENT_TOOL, SHELL_COMMAND, CLI_TRACK, RELAY_MESSAGE)
 
 
 def prompt_features(k_feat, text, prompt_class):
     """f for prompt.submit and cli.track, and the per-shingle values. text
-    is None for a prompt whose text the device never had (10.1), whose f
-    holds only v and pc."""
+    is None for a prompt whose text the device never had (10.1): a bridge
+    prompt, a plugin's that came without its text, or one marked guest,
+    whose text the agent drops. Its f holds only v and pc, as every
+    relay.message's does."""
     if prompt_class not in PROMPT_CLASSES:
         raise LedgerError("prompt class %s isn't one of %s" % (json.dumps(prompt_class), ", ".join(PROMPT_CLASSES)))
     if text is None:
@@ -1633,6 +1640,10 @@ def check_features(rep, obj, path):
         fields(obj, path, common + ("hunks",), ("command", "note"))
     elif rtype == SHELL_COMMAND:
         fields(obj, path, common, ("command", "note"))
+    elif rtype == RELAY_MESSAGE:
+        # An app's message commits no text, so it has neither text nor
+        # shingle values, and its f is v and pc alone (10.7).
+        fields(obj, path, common + ("prompt_class",), ("note",))
     else:
         raise FormatError("%s.rtype: 0x%02x records carry no features" % (path, rtype))
     keys = derive_keys(get_hex(obj, "k_dev", path, 32))
@@ -1646,6 +1657,8 @@ def check_features(rep, obj, path):
             given = [from_hex(v, "%s.shingle_values[%d]" % (path, i), 32)
                      for i, v in enumerate(get_list(obj, "shingle_values", path))] if "text" in obj else []
             rep.same_list(path + ".shingle_values", given, values)
+        elif rtype == RELAY_MESSAGE:
+            want, _ = prompt_features(keys["k_feat"], None, get_str(obj, "prompt_class", path))
         else:
             hunks = None
             if rtype == AGENT_TOOL:
@@ -1946,11 +1959,18 @@ def proof_indices(s, n, every=9):
     return sorted(picks)
 
 
-def make_chain(s, device_id, k_dev, sizes, received_ats):
+# 11.4: the record types chains A and B hold, the codes the table had when
+# the vectors were first written. They stay frozen, so a kind that takes a
+# code later changes none of the two chains' values, and a chain of its own
+# holds its records: chain C, relay.message's.
+CHAIN_AB_RTYPES = tuple(range(0x01, 0x13)) + (CHECKPOINT, UPLOAD_FAILURE)
+
+
+def make_chain(s, device_id, k_dev, sizes, received_ats, rtypes=CHAIN_AB_RTYPES):
     keys = derive_keys(k_dev)
     projects = ["p_" + s.take(6).hex() for _ in range(3)]
     sessions = ["s_" + s.take(6).hex() for _ in range(4)]
-    codes = sorted(RTYPES)
+    codes = sorted(rtypes)
     seq, prev, batches = 1, ZERO32, []
     for b, (n, received_at) in enumerate(zip(sizes, received_ats), 1):
         records, entries = [], []
@@ -2062,6 +2082,15 @@ def make_vectors():
     flushed = utc_ms("2026-11-20T00:05:00.000Z") + s.below(60000)
     chain_b = make_chain(s, device_id, k_dev, [2, 1, 5, 3], [flushed] * 4)
 
+    # Chain C: one batch of three relay.message records, rtype 0x13, the
+    # first kind added after chains A and B were written (4.2), received
+    # on 2026-11-22, a day the file has no tree for.
+    s = Stream("chain-c")
+    k_dev = s.take(32)
+    device_id = "d_" + s.take(8).hex()
+    received = utc_ms("2026-11-22T12:00:00.000Z") + s.below(60000)
+    chain_c = make_chain(s, device_id, k_dev, [3], [received], rtypes=(RELAY_MESSAGE,))
+
     first_day = day_of(chain_a["batches"][0]["received_at"])
     days = make_days(Stream("days"), [chain_a, chain_b], first_day, 3)
 
@@ -2072,7 +2101,7 @@ def make_vectors():
         "note": "Test keys and stand-in bodies; see testdata/ledger/README.md.",
         "keys": keys,
         "digests": digests,
-        "chains": [chain_a, chain_b],
+        "chains": [chain_a, chain_b, chain_c],
         "days": days,
     }
 
@@ -3153,10 +3182,16 @@ def test_check_catches():
             alone += 1
             expect(all(phrase in e for e in errors), "the change %s breaks other rules too: %s" % (name, errors[:3]))
     doc = json.loads(json.dumps(base))
-    rec(doc)["rtype"] = 0x13
+    rec(doc)["rtype"] = 0x14
     rep = check_document(reseal(doc))
     expect(not rep.errors and rep.counts.get("records of later kinds") == 1,
-           "check doesn't take a record of rtype 0x13 as a later kind: %s" % rep.errors[:3])
+           "check doesn't take a record of rtype 0x14 as a later kind: %s" % rep.errors[:3])
+    # 0x13 is relay.message's now (4.2): a known kind, never a later one.
+    doc = json.loads(json.dumps(base))
+    rec(doc)["rtype"] = RELAY_MESSAGE
+    rep = check_document(reseal(doc))
+    expect(not rep.errors and "records of later kinds" not in rep.counts,
+           "check takes a relay.message record, rtype 0x13, as a later kind: %s" % rep.errors[:3])
     return "%d kinds of tampering caught, %d of them alone" % (len(mutations), alone)
 
 

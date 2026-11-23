@@ -260,6 +260,14 @@ func (c *checker) eventID(field, v string) {
 	}
 }
 
+// optEventID checks an optional link to another event: absent, or its
+// event id.
+func (c *checker) optEventID(field, v string) {
+	if v != "" {
+		c.eventID(field, v)
+	}
+}
+
 func (c *checker) eventIDs(field string, vs []string) {
 	if len(vs) > maxList {
 		c.addf(field, "has %d entries, more than %d", len(vs), maxList)

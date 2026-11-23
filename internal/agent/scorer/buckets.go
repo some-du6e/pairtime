@@ -333,7 +333,8 @@ func most(m map[string]int64) string {
 // claims no more than its weakest second (DESIGN 6.4), as pkg/score's
 // Minute.Bucket has it; and the labels of pkg/event's slot list
 // (event.SlotLabels) that the credited entries carry, in that list's
-// order: the side doors, then focus_unknown. Part of the WP-SC4 seam.
+// order: the side doors, then focus_unknown, then via_relay. Part of the
+// WP-SC4 seam.
 func slotSummary(c score.Credit) event.BucketSlot {
 	var s event.BucketSlot
 	h := c.Halves()

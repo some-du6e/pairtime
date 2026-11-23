@@ -44,7 +44,8 @@ type Return struct {
 // returnsFor reports whether an anchor of kind k and class c is
 // substantive enough to end a returned run (SM 2.1): a substantive prompt,
 // answer or queued message, a typed edit, a typed command or a human
-// commit. Navigation, go-aheads, permission answers and interrupts don't.
+// commit. Navigation, go-aheads, permission answers and interrupts don't,
+// and neither do relayed messages, whatever their kind (markReturns).
 func returnsFor(k event.AnchorKind, c event.PromptClass) bool {
 	switch k {
 	case event.AnchorSubstantivePrompt, event.AnchorAnswer, event.AnchorTypedEdit, event.AnchorTypedCommand,
@@ -108,8 +109,12 @@ func (d *deriver) markReturns() {
 		if k == len(d.anchors) {
 			continue
 		}
+		// A relayed anchor, typed on another device, doesn't end a returned
+		// run, though its class may be substantive: as the first anchor after
+		// the run, it keeps the run from qualifying, as a go-ahead does (SM
+		// 2.1, 2.3).
 		a := d.anchors[k]
-		if a.decided > horizon || !returnsFor(a.Kind, a.PromptClass) || a.ProjectKey != focus.project ||
+		if a.decided > horizon || a.relayed() || !returnsFor(a.Kind, a.PromptClass) || a.ProjectKey != focus.project ||
 			d.focus.changed(start, a.T) || d.breakIn(end, a.T) {
 			continue
 		}

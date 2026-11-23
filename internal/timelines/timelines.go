@@ -207,6 +207,15 @@ type Anchors struct {
 }
 
 // Anchor is a human act that opens a window (SM 2.3).
+//
+// A relayed anchor (SM 2.2 rule 9) is the exception to "the event behind
+// the act, at its t": its event is the relay.message an agent app's reader
+// wrote, and its T and Local are the message's sent_at, the app's stamp,
+// where its lead ends, not the record's own t (SM 2.3). Prompt names the
+// prompt.submit the message paired with, and Labels carries via_relay. A
+// prompt that rules 6 and 7 made typed at the app's stamp keeps its own t,
+// with the stamp in SentAt and LocalSentAt and the record in Relay
+// (testdata/timelines/relayed/README.md).
 type Anchor struct {
 	// EventID is the event_id of the event behind the act.
 	EventID     string            `json:"event_id"`
@@ -224,6 +233,17 @@ type Anchor struct {
 	Via      event.Via      `json:"via"`
 	Level    event.Evidence `json:"level"`
 	SM       string         `json:"sm"`
+	// SentAt and LocalSentAt are the app's stamp of the message that
+	// witnessed a prompt typed at it, and Relay that message's
+	// relay.message. Prompt is a relayed anchor's prompt.submit.
+	SentAt      int64  `json:"sent_at"`
+	LocalSentAt string `json:"local_sent_at"`
+	Relay       string `json:"relay"`
+	Prompt      string `json:"prompt"`
+	// Labels are the anchor's labels (DESIGN 6.4) where anchors.json lists
+	// them, as the relayed cases do a relayed anchor's via_relay. Nil means
+	// the fixture doesn't say.
+	Labels []event.Label `json:"labels"`
 }
 
 // Turn is a prompt and the agent's work on it (SM 1.3), with the origin SM

@@ -57,7 +57,8 @@ func (p *SessionEnd) check(c *checker) {
 
 // PromptSubmit is prompt.submit: a prompt reached the agent. Whether a
 // person typed it is decided later, from OS evidence (SM 2.2). This holds
-// only what the harness and the hook saw.
+// what the harness and the hook saw, and what an agent app's reader said
+// about the run that delivered it: guest and relay (DESIGN 4.1 E-13).
 type PromptSubmit struct {
 	TurnKey     string `json:"turn_key"`
 	LenChars    int    `json:"len_chars"`
@@ -78,6 +79,20 @@ type PromptSubmit struct {
 	MatchesPendingCron bool           `json:"matches_pending_cron"`
 	AnswersQuestion    bool           `json:"answers_question"`
 	LowEffort          bool           `json:"low_effort"`
+	// Guest is set when an agent app's reader says a guest's message
+	// started the prompt's run (SM 1.2, DESIGN 5.1): another person's
+	// words, which the owner sent on. Such a prompt keeps no text, and SM
+	// 2.2 rule 4 takes it whatever its session, even when an app message
+	// witnesses it, so marking a prompt guest can only lose credit.
+	Guest bool `json:"guest,omitempty"`
+	// Relay is the event id of the relay.message the agent paired the
+	// prompt with, when that record came first (SM 2.2 rule 9). The agent
+	// writes a pairing on whichever of the two records arrives second, so a
+	// prompt that came first has none, and its record's prompt names it
+	// instead. The scorer reads only the link and checks its session and
+	// times. Like event_id, it leaves the device only in tier-2 ledger
+	// bodies (DESIGN 3.6).
+	Relay string `json:"relay,omitempty"`
 	// SealedText is the prompt text, encrypted on the device before the
 	// event is written; base64 in JSON. Plain prompt text never goes in a
 	// prompt.submit event. The one event field that holds it is
@@ -107,6 +122,12 @@ func (p *PromptSubmit) check(c *checker) {
 		c.addf("slash_command", "must be '/' then 1-64 letters, digits, '_', ':', '.' or '-', got %q", p.SlashCommand)
 	}
 	checkEnum(c, "origin_declared", declaredOrigins, p.OriginDeclared)
+	c.optEventID("relay", p.Relay)
+	// A guest's words never stay on the device (SM 1.2). The text isn't
+	// echoed: it is sealed content.
+	if p.Guest && len(p.SealedText) > 0 {
+		c.addf("text", "is set, but a guest's prompt keeps no text (SM 1.2)")
+	}
 }
 
 // AgentOutput is agent.output: output the agent showed in a turn.
@@ -510,4 +531,57 @@ func (p *CLITrack) check(c *checker) {
 		}
 	}
 	checkEnum(c, "log_match", logMatches, p.LogMatch)
+}
+
+// RelayMessage is relay.message: a message an agent app's own store says a
+// person sent, which the app's reader read on the device (SM 1.2, DESIGN
+// 5.1). It is the app's claim. It witnesses the prompt.submit it pairs
+// with (SM 2.2 rule 9), it opens no anchor unless it pairs, and it never
+// counts toward logged_s (DESIGN 6.2 D19). It holds no text and none of the
+// app's own ids, names or folders: the thread is an opaque key keyed per
+// device, and the envelope's session_key is the harness session the app
+// bound the message's run to, or none when the reader didn't know it.
+// Nothing in it is local, so all of it is shareable.
+type RelayMessage struct {
+	App RelayApp `json:"app"`
+	// Client is the app's word for where the message was typed: for T3
+	// Code, its creationSource. A message from the app's phone app skips SM
+	// 2.2 rules 6 and 7.
+	Client RelayClient `json:"client"`
+	// SentAt is the app's own stamp of the message, in Unix milliseconds:
+	// when the app took it from the person. A relayed anchor stands there,
+	// and its lead ends there (SM 2.3).
+	SentAt int64 `json:"sent_at"`
+	// ThreadKey is the app's thread as an opaque key keyed per device: an
+	// HMAC under a device key, never the app's own id, which isKey would
+	// pass (DESIGN 4.1 E-12). A relayed lead is capped at the seconds since
+	// the thread's previous message (SM 2.3).
+	ThreadKey string `json:"thread_key"`
+	// Declared is what the app says sent the message: none for a person,
+	// or its scheduler or another thread (SM 2.2).
+	Declared RelayDeclared `json:"declared"`
+	// LenChars is the typed length of the app's own text with the app's
+	// machine strings removed (SM 2.2): an upper bound, since the app keeps
+	// no paste flag.
+	LenChars int `json:"len_chars"`
+	// LowEffort is SM 2.2's go-ahead test on the app's own text.
+	LowEffort bool `json:"low_effort"`
+	// Prompt is the event id of the prompt.submit the agent paired the
+	// message with, when that prompt came first; otherwise the prompt's
+	// relay names this record (SM 2.2 rule 9). Like relay, it leaves the
+	// device only in tier-2 ledger bodies.
+	Prompt string `json:"prompt,omitempty"`
+}
+
+func (*RelayMessage) Kind() Kind        { return KindRelayMessage }
+func (p *RelayMessage) Validate() error { return validate(p.check) }
+
+func (p *RelayMessage) check(c *checker) {
+	checkEnum(c, "app", relayApps, p.App)
+	checkEnum(c, "client", relayClients, p.Client)
+	c.unixMS("sent_at", p.SentAt)
+	c.key("thread_key", p.ThreadKey)
+	checkEnum(c, "declared", relayDeclareds, p.Declared)
+	c.count("len_chars", p.LenChars)
+	c.optEventID("prompt", p.Prompt)
 }

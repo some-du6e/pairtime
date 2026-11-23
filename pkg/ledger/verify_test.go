@@ -432,10 +432,10 @@ func TestVerifyErrorTypes(t *testing.T) {
 			alone: true,
 		},
 		{
-			name: "a record of rtype 0x13, a kind added later, is reported as unknown, and its batch's root and head still verify",
+			name: "a record of rtype 0x14, a kind added later, is reported as unknown, and its batch's root and head still verify",
 			mutate: func(m *smallChain) Chain {
 				h := &m.records[1][0].Header
-				h[offRType] = 0x13
+				h[offRType] = 0x14
 				row, err := sealUnchecked(m.rows[0].Head, 2, entriesOf(m.records[1]))
 				if err != nil {
 					t.Fatal(err)
@@ -526,7 +526,7 @@ func TestSealRefuses(t *testing.T) {
 	}
 	var unknown Header
 	binary.BigEndian.PutUint64(unknown[:8], 1)
-	unknown[offRType] = 0x13
+	unknown[offRType] = 0x14
 	var someHead Hash
 	someHead[0] = 1
 	cases := []struct {

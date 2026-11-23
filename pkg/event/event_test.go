@@ -60,9 +60,11 @@ func sample(t *testing.T, k Kind) Event {
 	case KindSessionEnd:
 		p = &SessionEnd{Reason: "prompt_input_exit"}
 	case KindPromptSubmit:
+		// A guest's prompt keeps no text, so Guest is set in guestSample.
 		p = &PromptSubmit{TurnKey: "t_01", LenChars: 140, PastedChars: 40, TypedLenEst: 100, MinHash: testMinHash(),
 			TemplateHash: "th_5e", ErrorSig: "es_77", SlashCommand: "/review", OriginDeclared: DeclaredLoop,
-			MatchesPendingCron: true, AnswersQuestion: true, LowEffort: true, SealedText: []byte("sealed\x00\xffbox")}
+			MatchesPendingCron: true, AnswersQuestion: true, LowEffort: true, Relay: testEventID2,
+			SealedText: []byte("sealed\x00\xffbox")}
 	case KindAgentOutput:
 		p = &AgentOutput{TurnKey: "t_01", Words: 160, CodeLines: 12, IsFinal: true, AsksQuestion: true, OffersOptions: true}
 	case KindAgentTool:
@@ -110,16 +112,41 @@ func sample(t *testing.T, k Kind) Event {
 		env.Source, env.Via = SourceCLI, ViaTrack
 		p = &CLITrack{Label: "fix the login redirect loop", TextLen: 27,
 			EnvHints: []EnvHint{EnvClaudeCode, EnvClaudeCodeSessionID}, LogMatch: LogMatched}
+	case KindRelayMessage:
+		env.Source, env.Via = SourceLog, ViaApp
+		p = &RelayMessage{App: RelayAppT3Code, Client: RelayClientMobile, SentAt: testT - 3000, ThreadKey: "r_6454f1",
+			Declared: RelayDeclaredCron, LenChars: 90, LowEffort: true, Prompt: testEventID2}
 	default:
 		t.Fatalf("no sample for kind %q; add one", k)
 	}
 	return Event{Envelope: env, Data: p}
 }
 
+// guestSample is prompt.submit's second sample: a guest's prompt, which
+// keeps no text (SM 1.2), so sample's prompt, which has text, can't be one
+// too. Between them the two set every field.
+func guestSample(t *testing.T) Event {
+	t.Helper()
+	e := sample(t, KindPromptSubmit)
+	p := e.Data.(*PromptSubmit)
+	p.Guest, p.SealedText = true, nil
+	return e
+}
+
+// samples returns every sample of kind k: sample's, and for prompt.submit
+// guestSample's as well.
+func samples(t *testing.T, k Kind) []Event {
+	t.Helper()
+	if k == KindPromptSubmit {
+		return []Event{sample(t, k), guestSample(t)}
+	}
+	return []Event{sample(t, k)}
+}
+
 func TestKindTable(t *testing.T) {
 	ks := Kinds()
-	if len(ks) != 18 {
-		t.Errorf("Kinds() has %d kinds, SM 1.2 lists 18", len(ks))
+	if len(ks) != 19 {
+		t.Errorf("Kinds() has %d kinds, SM 1.2 lists 19", len(ks))
 	}
 	// Payloads whose zero value is a real event: an unexplained session end
 	// and an idle sample taken mid-keystroke. A track call always says
@@ -152,12 +179,13 @@ func TestKindTable(t *testing.T) {
 func TestEventValidateSamples(t *testing.T) {
 	for _, k := range Kinds() {
 		t.Run(string(k), func(t *testing.T) {
-			e := sample(t, k)
-			if err := e.Validate(); err != nil {
-				t.Errorf("Validate() = %v, want nil", err)
-			}
-			if err := e.Data.Validate(); err != nil {
-				t.Errorf("payload Validate() = %v, want nil", err)
+			for _, e := range samples(t, k) {
+				if err := e.Validate(); err != nil {
+					t.Errorf("Validate() = %v, want nil", err)
+				}
+				if err := e.Data.Validate(); err != nil {
+					t.Errorf("payload Validate() = %v, want nil", err)
+				}
 			}
 		})
 	}
@@ -200,6 +228,12 @@ func TestEventValidate(t *testing.T) {
 		{"git events have no session", KindGitChange, func(e *Event) { e.SessionKey = "s_1" }, `session_key: must be "none"`},
 		{"otel events come from otel", KindOTelActiveTime, func(e *Event) { e.Source = SourceHook }, "source:"},
 		{"track events don't come from hooks", KindCLITrack, func(e *Event) { e.Source = SourceHook }, "source:"},
+		{"an app's message comes from its store, which its reader reads as a log, never from a hook", KindRelayMessage,
+			func(e *Event) { e.Source = SourceHook }, `source: relay.message events come from ["log"], got "hook"`},
+		{"an app's message names the harness session the app bound its run to", KindRelayMessage, func(e *Event) {}, ""},
+		{"an app's message whose run the reader tied to no session has no harness and no session", KindRelayMessage, func(e *Event) {
+			e.Harness, e.HarnessVersion, e.SessionKey = HarnessNone, "", NoSession
+		}, ""},
 
 		// How the agent may receive each kind (DESIGN 4.1 E-2).
 		{"presence samples arrive from the OS watchers", KindOSPresence, func(e *Event) { e.Via = ViaPlugin }, `via: os.presence events arrive via ["os"], got "plugin"`},
@@ -208,6 +242,14 @@ func TestEventValidate(t *testing.T) {
 		{"git changes arrive from the git watcher", KindGitChange, func(e *Event) { e.Via = ViaBridge }, `via: git.change events arrive via ["git"], got "bridge"`},
 		{"track calls arrive through pairtime track", KindCLITrack, func(e *Event) { e.Via = ViaPlugin }, `via: cli.track events arrive via ["track"], got "plugin"`},
 		{"active time arrives through the OTLP receiver", KindOTelActiveTime, func(e *Event) { e.Via = ViaLog }, `via: otel.active_time events arrive via ["otel"], got "log"`},
+		{"an app's message arrives through the app's reader, never as a plugin", KindRelayMessage, func(e *Event) { e.Via = ViaPlugin },
+			`via: relay.message events arrive via ["app"], got "plugin"`},
+		{"only an app's message arrives via app, never a prompt (DESIGN 4.1 E-12)", KindPromptSubmit, func(e *Event) { e.Via = ViaApp },
+			`via: prompt.submit events never arrive via "app", which only ["relay.message"] events do`},
+		{"an editor event, which may arrive any other way, never arrives via app", KindEditorActivity, func(e *Event) { e.Via = ViaApp },
+			`via: editor.activity events never arrive via "app", which only ["relay.message"] events do`},
+		{"an OS event via app breaks the OS events' via rule", KindOSFocus, func(e *Event) { e.Via = ViaApp },
+			`via: os.focus events arrive via ["os"], got "app"`},
 		{"a hook kind may arrive through a plugin", KindPromptSubmit, func(e *Event) { e.Via = ViaPlugin }, ""},
 		{"a hook kind may arrive through the bridge", KindAgentTool, func(e *Event) { e.Via = ViaBridgeUnverified }, ""},
 		{"an editor kind may arrive unverified", KindEditorActivity, func(e *Event) { e.Via = ViaEditorUnverified }, ""},
@@ -232,6 +274,21 @@ func TestEventValidate(t *testing.T) {
 		{"slash command starts with a slash", KindPromptSubmit, func(e *Event) { e.Data.(*PromptSubmit).SlashCommand = "loop" }, "data.slash_command:"},
 		{"slash command has no arguments", KindPromptSubmit, func(e *Event) { e.Data.(*PromptSubmit).SlashCommand = "/loop 20m check CI" }, "data.slash_command:"},
 		{"origin_declared is required", KindPromptSubmit, func(e *Event) { e.Data.(*PromptSubmit).OriginDeclared = "" }, "data.origin_declared:"},
+		{"a prompt's relay is the event id of its app message", KindPromptSubmit, func(e *Event) { e.Data.(*PromptSubmit).Relay = "r_6454f1" },
+			`data.relay: must be a lowercase UUIDv7, got "r_6454f1"`},
+		{"a prompt that came before its app message, or has none, names no relay", KindPromptSubmit, func(e *Event) {
+			e.Data.(*PromptSubmit).Relay = ""
+		}, ""},
+		{"a guest's prompt keeps no text (SM 1.2)", KindPromptSubmit, func(e *Event) { e.Data.(*PromptSubmit).Guest = true },
+			"data.text: is set, but a guest's prompt keeps no text"},
+		{"a guest's prompt without its text", KindPromptSubmit, func(e *Event) {
+			p := e.Data.(*PromptSubmit)
+			p.Guest, p.SealedText = true, nil
+		}, ""},
+		{"a session an agent app's server started is agent_app", KindSessionStart, func(e *Event) {
+			p := e.Data.(*SessionStart)
+			p.ParentClass, p.Entrypoint, p.HasTTY = ParentAgentApp, EntrypointUnknown, false
+		}, ""},
 		{"word counts aren't negative", KindAgentOutput, func(e *Event) { e.Data.(*AgentOutput).Words = -1 }, "data.words:"},
 		{"tool files are hashes, not paths", KindAgentTool, func(e *Event) { e.Data.(*AgentTool).Files = []string{"src/main.go"} }, "data.files[0]:"},
 		{"a tool doesn't end before it starts", KindAgentTool, func(e *Event) {
@@ -308,6 +365,31 @@ func TestEventValidate(t *testing.T) {
 		{"a track call from no harness session", KindCLITrack, func(e *Event) {
 			e.Harness, e.SessionKey, e.Data.(*CLITrack).LogMatch = HarnessOther, NoSession, LogNoReader
 		}, ""},
+		{"an app's message names the app its reader read", KindRelayMessage, func(e *Event) { e.Data.(*RelayMessage).App = "" }, "data.app:"},
+		{"only an app pairtime has a reader for writes app messages", KindRelayMessage, func(e *Event) { e.Data.(*RelayMessage).App = "slack" },
+			`data.app: "slack" is not one of`},
+		{"an app's message says which of its clients typed it", KindRelayMessage, func(e *Event) { e.Data.(*RelayMessage).Client = "" }, "data.client:"},
+		{"the client is the app's web client or its phone app", KindRelayMessage, func(e *Event) { e.Data.(*RelayMessage).Client = "server" },
+			`data.client: "server" is not one of`},
+		{"a message typed in the app's web client", KindRelayMessage, func(e *Event) { e.Data.(*RelayMessage).Client = RelayClientWeb }, ""},
+		{"the app's stamp is in milliseconds", KindRelayMessage, func(e *Event) { e.Data.(*RelayMessage).SentAt = testT / 1000 },
+			"data.sent_at: must be Unix milliseconds"},
+		{"the thread is a key, never the app's own text or a path", KindRelayMessage, func(e *Event) {
+			e.Data.(*RelayMessage).ThreadKey = "threads/8b0c"
+		}, "data.thread_key:"},
+		{"an app's message says what sent it", KindRelayMessage, func(e *Event) { e.Data.(*RelayMessage).Declared = "" }, "data.declared:"},
+		{"what sent an app's message is a person, the app's scheduler or another thread", KindRelayMessage, func(e *Event) {
+			e.Data.(*RelayMessage).Declared = RelayDeclared(DeclaredLoop)
+		}, `data.declared: "loop" is not one of`},
+		{"a message the app says a person sent", KindRelayMessage, func(e *Event) { e.Data.(*RelayMessage).Declared = RelayDeclaredNone }, ""},
+		{"a message from another thread", KindRelayMessage, func(e *Event) { e.Data.(*RelayMessage).Declared = RelayDeclaredCrossSession }, ""},
+		{"an app message's typed length isn't negative", KindRelayMessage, func(e *Event) { e.Data.(*RelayMessage).LenChars = -1 },
+			"data.len_chars: must not be negative"},
+		{"an app message's prompt is the paired prompt's event id", KindRelayMessage, func(e *Event) { e.Data.(*RelayMessage).Prompt = "t_01" },
+			`data.prompt: must be a lowercase UUIDv7, got "t_01"`},
+		{"an app message that came before its prompt, or pairs with none, names no prompt", KindRelayMessage, func(e *Event) {
+			e.Data.(*RelayMessage).Prompt = ""
+		}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -374,30 +456,33 @@ func TestEnvHintErrorsLeaveOutTheEntry(t *testing.T) {
 func TestEventJSONRoundTrip(t *testing.T) {
 	for _, k := range Kinds() {
 		t.Run(string(k), func(t *testing.T) {
-			want := sample(t, k)
-			v := reflect.ValueOf(want.Data).Elem()
+			all := samples(t, k)
+			v := reflect.ValueOf(all[0].Data).Elem()
 			for i := 0; i < v.NumField(); i++ {
-				if v.Field(i).IsZero() {
-					t.Errorf("the sample leaves %s.%s unset; set every field so the round trip covers it", v.Type().Name(), v.Type().Field(i).Name)
+				set := slices.ContainsFunc(all, func(e Event) bool { return !reflect.ValueOf(e.Data).Elem().Field(i).IsZero() })
+				if !set {
+					t.Errorf("no sample sets %s.%s; set every field in one so the round trip covers it", v.Type().Name(), v.Type().Field(i).Name)
 				}
 			}
-			b, err := json.Marshal(want)
-			if err != nil {
-				t.Fatalf("Marshal: %v", err)
-			}
-			var got Event
-			if err := json.Unmarshal(b, &got); err != nil {
-				t.Fatalf("Unmarshal(%s): %v", b, err)
-			}
-			if !reflect.DeepEqual(got, want) {
-				t.Errorf("the round trip changed the event\njson: %s\n got: %+v %+v\nwant: %+v %+v", b, got.Envelope, got.Data, want.Envelope, want.Data)
-			}
-			again, err := json.Marshal(got)
-			if err != nil {
-				t.Fatalf("second Marshal: %v", err)
-			}
-			if !bytes.Equal(again, b) {
-				t.Errorf("the JSON changed on a second round trip\n first: %s\nsecond: %s", b, again)
+			for _, want := range all {
+				b, err := json.Marshal(want)
+				if err != nil {
+					t.Fatalf("Marshal: %v", err)
+				}
+				var got Event
+				if err := json.Unmarshal(b, &got); err != nil {
+					t.Fatalf("Unmarshal(%s): %v", b, err)
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("the round trip changed the event\njson: %s\n got: %+v %+v\nwant: %+v %+v", b, got.Envelope, got.Data, want.Envelope, want.Data)
+				}
+				again, err := json.Marshal(got)
+				if err != nil {
+					t.Fatalf("second Marshal: %v", err)
+				}
+				if !bytes.Equal(again, b) {
+					t.Errorf("the JSON changed on a second round trip\n first: %s\nsecond: %s", b, again)
+				}
 			}
 		})
 	}
@@ -497,6 +582,10 @@ func TestLocalFields(t *testing.T) {
 		KindOSFocus:      {"app_hash"},
 		KindCLITrack:     {"label"},
 		KindAgentStop:    {"pending_crons"},
+		// An app's message holds no text and no digest of it: the reader
+		// measures and classes the app's text and drops it (DESIGN 5.1).
+		// prompt.submit's guest and relay are shareable too.
+		KindRelayMessage: nil,
 	}
 	for _, k := range Kinds() {
 		t.Run(string(k), func(t *testing.T) {

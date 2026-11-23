@@ -511,6 +511,20 @@ func randomContent(t *testing.T) contentVectorsFile {
 		doc.Features = append(doc.Features, featureVec{KDev: kDev, RType: uint8(pick(rng, []RType{0x03, 0x12})),
 			Text: &textHex, PromptClass: &class, ShingleValues: &values, F: fJSON})
 		sketches = append(sketches, f.MH.Bytes())
+		if i%10 == 3 {
+			// An app's message of the same class: v and pc, with no text
+			// and no shingle values (spec 10.7). It draws nothing from rng,
+			// so the rest of the file stays as it was.
+			rf, err := features.Relay(class)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rfJSON, err := json.Marshal(rf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc.Features = append(doc.Features, featureVec{KDev: kDev, RType: 0x13, PromptClass: &class, F: rfJSON})
+		}
 
 		if i%3 == 1 {
 			// The CC8 reveal the client sends with the text's reveal,

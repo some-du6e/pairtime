@@ -35,7 +35,8 @@ const (
 	// act, of which only a bounded part can be credited.
 	PresentReturned Presence = "returned"
 	PresentNo       Presence = "no"
-	// PresentUnknown means the sampler wasn't running, as in lookback.
+	// PresentUnknown means the sampler wasn't running, as in lookback, or
+	// the machine has no desktop to sample, such as a server (SM 2.1).
 	PresentUnknown Presence = "unknown"
 )
 
@@ -54,16 +55,31 @@ const (
 	OriginCloud        Origin = "cloud"
 	OriginHumanTyped   Origin = "human_typed"
 	OriginHumanPasted  Origin = "human_pasted"
-	OriginNoInput      Origin = "no_input"
+	// OriginRelayed is a prompt an agent app's message witnesses, typed on
+	// another device (SM 2.2 rule 9). Its anchor is the app's message, at
+	// level C with the label via_relay (SM 2.3).
+	OriginRelayed Origin = "relayed"
+	OriginNoInput Origin = "no_input"
 )
 
 var origins = enum[Origin]{values: []Origin{
 	OriginScheduled, OriginSelfContinue, OriginSubagent, OriginHeadless,
-	OriginCloud, OriginHumanTyped, OriginHumanPasted, OriginNoInput,
+	OriginCloud, OriginHumanTyped, OriginHumanPasted, OriginRelayed, OriginNoInput,
 }}
 
-// Human reports whether a person submitted the turn's prompt.
+// Human reports whether a person typed or pasted the turn's prompt on this
+// device (SM 2.2 rules 6 and 7), so that the prompt is a human anchor. A
+// relayed prompt isn't one; see ByPerson.
 func (o Origin) Human() bool { return o == OriginHumanTyped || o == OriginHumanPasted }
+
+// ByPerson reports whether a person started the turn: a prompt typed or
+// pasted on this device, or one an agent app relayed from another (SM 2.2
+// rule 9). A relayed prompt is a person's prompt for its own turn: the
+// turn has a class and an attempt, it resets the session's bucket at
+// pickup, its running seconds are X.agent_only, and SM 4.2's detectors
+// count it. For everything else it is no human anchor, which is what
+// Human says (SM 2.2, 2.3).
+func (o Origin) ByPerson() bool { return o.Human() || o == OriginRelayed }
 
 // PromptClass sorts a human prompt (SM 2.2).
 type PromptClass string
@@ -79,7 +95,9 @@ var promptClasses = enum[PromptClass]{values: []PromptClass{
 	ClassSubstantive, ClassLowEffort, ClassAnswer, ClassErrorPaste,
 }}
 
-// AnchorKind is the human act behind an anchor, one per row of SM 2.3.
+// AnchorKind is the human act behind an anchor, one per row of SM 2.3. A
+// relayed message, 2.3's relayed row, takes its class's kind:
+// substantive_prompt, answer or go_ahead.
 type AnchorKind string
 
 const (
@@ -149,7 +167,9 @@ const (
 	// beyond the cap or without the forge push, and seconds credited where
 	// focus was unknown (SM 2.5): in a slot whose focus is unknown, or from
 	// an anchor whose focus test passed only because the window in front
-	// was unknown. Those carry LabelFocusUnknown.
+	// was unknown. Those carry LabelFocusUnknown. So are relayed anchors
+	// (SM 2.2 rule 9) and the reading they qualify, whatever backs them,
+	// which carry LabelViaRelay.
 	EvidenceC Evidence = "C"
 )
 
@@ -159,9 +179,10 @@ var evidences = enum[Evidence]{values: []Evidence{EvidenceA, EvidenceB, Evidence
 func Evidences() []Evidence { return slices.Clone(evidences.values) }
 
 // Label is a label carried beside an evidence level: where the credit came
-// from (a side door, the typing module, a VM), or, for focus_unknown, why
-// it is level C. Labels never change a level (DESIGN 6.4). DESIGN 6.4's
-// editor_typing isn't in v1 (DESIGN 5.11, 12 JB 3).
+// from (a side door, the typing module, a VM, an agent app's message), or,
+// for focus_unknown, why it is level C. Labels never change a level
+// (DESIGN 6.4). DESIGN 6.4's editor_typing isn't in v1 (DESIGN 5.11, 12 JB
+// 3).
 type Label string
 
 const (
@@ -184,23 +205,32 @@ const (
 	// unknown, or an anchor whose focus test passed only through unknown
 	// focus, and the seconds credited from it.
 	LabelFocusUnknown Label = "focus_unknown"
+	// LabelViaRelay marks credit that rests on a relayed anchor (SM 2.2
+	// rule 9): an origin label, not a side-door one. Every relayed anchor
+	// carries it, and its via is its app message's, app. Every second it
+	// credits is level C, though its witness label is the live one (DESIGN
+	// 4.1 E-14, 6.4).
+	LabelViaRelay Label = "via_relay"
 )
 
 var (
 	// anchorLabels are the labels an anchor may carry.
 	anchorLabels = enum[Label]{values: []Label{
-		LabelViaTrack, LabelViaPlugin, LabelViaBridge, LabelTypingModule, LabelVM, LabelFocusUnknown,
+		LabelViaTrack, LabelViaPlugin, LabelViaBridge, LabelTypingModule, LabelVM, LabelFocusUnknown, LabelViaRelay,
 	}}
 	// slotLabels are the labels a minute bucket's slot carries to tier 1:
-	// the side-door labels (DESIGN 4.1 E-6), then focus_unknown (SM 2.5).
-	slotLabels = enum[Label]{values: []Label{LabelViaTrack, LabelViaPlugin, LabelViaBridge, LabelFocusUnknown}}
+	// the side-door labels (DESIGN 4.1 E-6), then focus_unknown (SM 2.5),
+	// then via_relay (E-14).
+	slotLabels = enum[Label]{values: []Label{LabelViaTrack, LabelViaPlugin, LabelViaBridge, LabelFocusUnknown, LabelViaRelay}}
 	// sideDoorLabels are the labels only an anchor that arrived through its
-	// side door carries (sideDoorLabel).
+	// side door carries (sideDoorLabel). via_relay isn't one: it goes with
+	// an anchor's origin, not its side door.
 	sideDoorLabels = enum[Label]{values: []Label{LabelViaTrack, LabelViaPlugin, LabelViaBridge}}
 )
 
 // SlotLabels returns the labels a minute bucket's slot may carry, in the
-// order a slot lists them: the side-door labels, then focus_unknown.
+// order a slot lists them: the side-door labels, then focus_unknown, then
+// via_relay.
 func SlotLabels() []Label { return slices.Clone(slotLabels.values) }
 
 // corroboratingVias are the vias an anchor can arrive by and still be
@@ -211,7 +241,7 @@ func SlotLabels() []Label { return slices.Clone(slotLabels.values) }
 // editor one; the commit is only the second record, and a commit anchor
 // (via git) is never corroborated by it. On macOS, where the check doesn't
 // run, `editor` doesn't mean it passed (docs/errata/2026-11-19-bridge-unverified.md).
-// No shell, git, side-door or unverified editor anchor is in any pair.
+// No shell, git, side-door, unverified editor or app anchor is in any pair.
 var corroboratingVias = enum[Via]{values: []Via{ViaHook, ViaLog, ViaOTel, ViaEditor}}
 
 // sideDoorLabel returns the label an anchor that arrived via v carries, or
@@ -357,10 +387,11 @@ type Turn struct {
 	// TStop is 0 while the turn is still running.
 	TStop  int64  `json:"t_stop,omitempty"`
 	Origin Origin `json:"origin"`
-	// PromptClass is set for human turns only.
+	// PromptClass is set for the turns a person started only
+	// (Origin.ByPerson): human and relayed ones.
 	PromptClass PromptClass `json:"prompt_class,omitempty"`
 	// Attempt is the turn's position in a re-roll chain, from 1 (SM 4.2),
-	// for human turns. It is 0 for turns no person started.
+	// for the turns a person started. It is 0 for the others.
 	Attempt   int `json:"attempt"`
 	WordsOut  int `json:"words_out"`
 	DiffLines int `json:"diff_lines"`
@@ -385,14 +416,14 @@ func (t Turn) Validate() error {
 		c.span("t_submit", t.TSubmit, "t_stop", t.TStop)
 	}
 	checkEnum(c, "origin", origins, t.Origin)
-	if t.Origin.Human() {
+	if t.Origin.ByPerson() {
 		checkEnum(c, "prompt_class", promptClasses, t.PromptClass)
 		if t.Attempt < 1 {
-			c.addf("attempt", "must be at least 1 for a human turn, got %d", t.Attempt)
+			c.addf("attempt", "must be at least 1 for a turn a person started, got %d", t.Attempt)
 		}
 	} else {
 		if t.PromptClass != "" {
-			c.addf("prompt_class", "only human turns have one, got %q for origin %q", t.PromptClass, t.Origin)
+			c.addf("prompt_class", "only the turns a person started, human or relayed, have one, got %q for origin %q", t.PromptClass, t.Origin)
 		}
 		if t.Attempt != 0 {
 			c.addf("attempt", "must be 0 for a turn no person started, got %d", t.Attempt)
@@ -439,9 +470,12 @@ type Anchor struct {
 	Corroborated bool `json:"corroborated"`
 	// Labels ride along with the anchor's level and never change it
 	// (DESIGN 6.4). A track, plugin or bridge anchor always carries its
-	// via_* label; no other anchor carries one. An anchor of any via
-	// carries focus_unknown when its focus test passed only because the
-	// window in front was unknown, which makes it level C (SM 2.5).
+	// side door's via_* label; no other anchor carries one. An anchor of
+	// any via carries focus_unknown when its focus test passed only because
+	// the window in front was unknown, which makes it level C (SM 2.5). A
+	// relayed anchor, which stands on its app message and so arrived via
+	// app, always carries via_relay, and no other anchor does (SM 2.2 rule
+	// 9, DESIGN 4.1 E-14).
 	Labels []Label `json:"labels,omitempty"`
 }
 
@@ -470,6 +504,12 @@ func (a Anchor) Validate() error {
 		if sideDoorLabels.has(l) && l != want {
 			c.addf("labels", "has %q, but the anchor arrived via %q", l, a.Via)
 		}
+	}
+	switch relayed := slices.Contains(a.Labels, LabelViaRelay); {
+	case a.Via == ViaApp && !relayed:
+		c.addf("labels", "missing %q; an anchor on an agent app's message is relayed and always carries it", LabelViaRelay)
+	case relayed && a.Via != ViaApp:
+		c.addf("labels", "has %q, but the anchor arrived via %q; only a relayed anchor, which stands on its app message, carries it", LabelViaRelay, a.Via)
 	}
 	return c.err()
 }
@@ -601,12 +641,13 @@ type BucketSlot struct {
 	Ev   Evidence `json:"ev,omitempty"`
 	// Lbl lists the labels of the slot's credited seconds: the side-door
 	// labels of the anchors behind them, so programs and reviewers see
-	// which minutes rest on a side door (DESIGN 4.1 E-6), and focus_unknown
+	// which minutes rest on a side door (DESIGN 4.1 E-6), focus_unknown
 	// when some of them are level C because the window in front was
-	// unknown (SM 2.5): via_track, via_plugin, via_bridge and
-	// focus_unknown, each at most once and in that order. A slot labeled
-	// focus_unknown is level C, since a slot claims no more than its
-	// weakest second (DESIGN 6.4).
+	// unknown (SM 2.5), and via_relay when some rest on a relayed anchor
+	// (E-14): via_track, via_plugin, via_bridge, focus_unknown and
+	// via_relay, each at most once and in that order. A slot labeled
+	// focus_unknown or via_relay is level C, since a slot claims no more
+	// than its weakest second (DESIGN 6.4).
 	Lbl []Label `json:"lbl,omitempty"`
 }
 
@@ -685,10 +726,13 @@ func (s BucketSlot) check(c *checker) {
 			c.addf("kind", "must be %q for reason %q, got %q", want, s.Why, s.Kind)
 		}
 		checkEnum(c, "ev", evidences, s.Ev)
-		// Every second credited where focus was unknown is level C, and a
-		// slot claims no more than its weakest second (SM 2.5, DESIGN 6.4).
-		if slices.Contains(s.Lbl, LabelFocusUnknown) && s.Ev != EvidenceC {
-			c.addf("ev", "must be %q in a slot labeled %q, whose weakest second is level C, got %q", EvidenceC, LabelFocusUnknown, s.Ev)
+		// Every second credited where focus was unknown, and every relayed
+		// second, is level C, and a slot claims no more than its weakest
+		// second (SM 2.3, 2.5, DESIGN 6.4).
+		for _, l := range []Label{LabelFocusUnknown, LabelViaRelay} {
+			if slices.Contains(s.Lbl, l) && s.Ev != EvidenceC {
+				c.addf("ev", "must be %q in a slot labeled %q, whose weakest second is level C, got %q", EvidenceC, l, s.Ev)
+			}
 		}
 		return
 	}
@@ -726,6 +770,11 @@ type Rollup struct {
 	CreditedByProject map[string]float64 `json:"credited_by_project,omitempty"`
 	AgentRunningS     float64            `json:"agent_running_s"`
 	AnchorCounts      map[AnchorKind]int `json:"anchor_counts,omitempty"`
+	// RelayedMessages counts the relayed anchors (SM 2.2 rule 9): messages
+	// a person sent through an agent app that witnessed their prompts. SM
+	// 5.4 counts them apart from typed prompts, so AnchorCounts counts none
+	// of them under its kind.
+	RelayedMessages int `json:"relayed_messages,omitempty"`
 	// Totals is set at the submission level, and only there.
 	Totals *SubmissionTotals `json:"totals,omitempty"`
 }
@@ -789,6 +838,7 @@ func (r Rollup) Validate() error {
 			c.addf("anchor_counts", "has a negative count for %q: %d", k, n)
 		}
 	}
+	c.count("relayed_messages", r.RelayedMessages)
 	switch {
 	case r.Level == LevelSubmission && r.Totals == nil:
 		c.addf("totals", "missing; a submission rollup carries its totals")
@@ -838,7 +888,8 @@ type SubmissionTotals struct {
 	// LoggedS is what Hackatime would log for the same activity: all
 	// heartbeats and agent events as one series, summed as min(gap, 120 s).
 	// Only records with via hook, log, otel, editor or bridge count; track,
-	// plugin and unverified records never do (DESIGN 6.2 D19).
+	// plugin, app and unverified records never do (DESIGN 6.2 D19), so no
+	// relay.message does.
 	LoggedS float64 `json:"logged_s"`
 	// CreditedS is the credited seconds after the uncommitted cap (SM 4.3).
 	// Held seconds aren't in it. Each credited second has one witness
@@ -871,7 +922,12 @@ type SubmissionTotals struct {
 	BandBackfilledS   float64 `json:"band_backfilled_s"`
 	// ViaTrackS is the credited seconds that rest on `pairtime track`
 	// anchors, the ones labeled via_track (DESIGN 7.7).
-	ViaTrackS  float64 `json:"via_track_s"`
+	ViaTrackS float64 `json:"via_track_s"`
+	// ViaRelayS is the credited seconds that rest on relayed anchors (SM
+	// 2.2 rule 9), the ones labeled via_relay (DESIGN 4.1 E-14). Every one
+	// is level C, so they sit in the backfilled band, though their witness
+	// label is the live one (DESIGN 6.4).
+	ViaRelayS  float64 `json:"via_relay_s"`
 	AgentOnlyS float64 `json:"agent_only_s"`
 	// ExcludedLoopsS is X.reroll + X.rewrite_loop + X.same_error + X.autopilot.
 	ExcludedLoopsS float64 `json:"excluded_loops_s"`
@@ -911,7 +967,7 @@ func (t SubmissionTotals) check(c *checker) {
 		{"level_a_s", t.LevelAS}, {"level_b_s", t.LevelBS}, {"level_c_s", t.LevelCS},
 		{"band_corroborated_s", t.BandCorroboratedS}, {"band_witnessed_s", t.BandWitnessedS},
 		{"band_offline_s", t.BandOfflineS}, {"band_backfilled_s", t.BandBackfilledS},
-		{"via_track_s", t.ViaTrackS}, {"agent_only_s", t.AgentOnlyS},
+		{"via_track_s", t.ViaTrackS}, {"via_relay_s", t.ViaRelayS}, {"agent_only_s", t.AgentOnlyS},
 		{"excluded_loops_s", t.ExcludedLoopsS}, {"idle_s", t.IdleS}, {"ai_logged_s", t.AILoggedS},
 		{"coding_logged_s", t.CodingLoggedS}, {"handbook_s", t.HandbookS},
 		{"ai_credited_s", t.AICreditedS}, {"hand_credited_s", t.HandCreditedS},
@@ -939,6 +995,8 @@ func (t SubmissionTotals) check(c *checker) {
 	atMost("band_offline_s", t.BandOfflineS, "offline_s", t.OfflineS)
 	atMost("band_witnessed_s", t.BandWitnessedS, "witnessed_s - band_corroborated_s", t.WitnessedS-t.BandCorroboratedS)
 	atMost("via_track_s", t.ViaTrackS, "credited_s", t.CreditedS)
+	// Every relayed second is level C (SM 2.3, DESIGN 6.4).
+	atMost("via_relay_s", t.ViaRelayS, "level_c_s", t.LevelCS)
 	identity("coding_logged_s", t.CodingLoggedS, "logged_s - ai_logged_s", t.LoggedS-t.AILoggedS)
 	identity("handbook_s", t.HandbookS, "coding_logged_s + ai_logged_s / 3", t.CodingLoggedS+t.AILoggedS/3)
 	identity("hand_credited_s", t.HandCreditedS, "credited_s - ai_credited_s", t.CreditedS-t.AICreditedS)

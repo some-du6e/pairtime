@@ -762,11 +762,13 @@ This is the one published definition, used in the first Quality and Integrity co
 |---|---|
 | A | The second is witnessed, or offline within D6's conditions. Presence comes from OS input. The anchor is keyboard-backed: `input_keys` is true in its evidence window, from the macOS key-down idle time or from the opt-in typing module with injected input excluded, and not from the typing module on a VM-labeled machine (D17). The anchor's `via` is `hook`, `log`, `shell`, `git` or `editor`, or it is a `track`, `plugin` or `bridge` anchor with keyboard input in the host window in the 10 s before it |
 | B | Witnessed, or offline within D6's conditions. Presence from OS input, with keyboard-specific input unavailable (`input_any` only). The anchor's `via` is `hook`, `log`, `shell`, `git` or `editor` |
-| C | Anything else: backfilled or lookback minutes, `track`, `plugin` and `bridge` anchors without keyboard corroboration, `editor_unverified` anchors, and offline minutes beyond the cap or without the forge push |
+| C | Anything else: backfilled or lookback minutes, `track`, `plugin` and `bridge` anchors without keyboard corroboration, `editor_unverified` anchors, relayed anchors (SM 2.2 rule 9) and the reading they qualify, and offline minutes beyond the cap or without the forge push |
 
 A side-door event that a pairtime log reader matches gets no level of its own: the log record's anchor counts instead, at that record's level, and the side-door event is a cross-check (5.2).
 
-Labels ride along with levels and never change them: `via_track`, `via_plugin`, `via_bridge`, `typing_module`, `vm`, `editor_typing` (v1.5 at the earliest).
+A relayed anchor is a message the person sent through an agent app, read from the app's own store with `via` `app`. Its typing time and its session's reading count whatever this device saw of the person, unless the machine was asleep, and always at level C (SM 2.2 rule 9, 2.4).
+
+Labels ride along with levels and never change them: `via_track`, `via_plugin`, `via_bridge`, `typing_module`, `vm`, `editor_typing` (v1.5 at the earliest), and `via_relay`, an origin label that every relayed anchor carries.
 
 **Bands, per credited minute of a submission**, computed from public inputs only, so the teen's copy of the review page shows them too (EV 6.7, D9):
 
@@ -775,7 +777,7 @@ Labels ride along with levels and never change them: `via_track`, `via_plugin`, 
 | Corroborated | Witnessed, not offline. Level A, or level B in a row that also has editor acts passing CC10. The anchor was seen by two records written by different code paths: hook and transcript, hook and OTel, or an editor heartbeat that passed the peer-process check plus a commit whose diffstat covers the file. The row passes CC6, CC7 and CC9 |
 | Witnessed | Witnessed, level A or B, and misses a corroborated condition |
 | Offline | Offline, within D6's conditions, level A or B |
-| Backfilled | Level C, or late beyond D6's conditions. Shown with the handbook-third cap applied |
+| Backfilled | Level C, or late beyond D6's conditions. Shown with the handbook-third cap applied. Relayed minutes sit here because they are level C, though their witness label is the live one |
 
 Held minutes (D7) sit outside the bands and aren't credited until a reviewer clears them.
 

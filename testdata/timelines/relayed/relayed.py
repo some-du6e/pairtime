@@ -124,13 +124,21 @@ class Replay:
     lead is the typing time of the record's len_chars, at most the hook's
     typed_len_est, capped at the seconds since the thread's previous record
     of declared none, and it ends at sent_at. The prompt resets the
-    session's bucket to R_TURN_BASE_S; output fills it up to
-    UNKNOWN_BUCKET_MAX_S. Reading drains it after one of the session's
-    stops, until the thread's next relayed message is sent or the session's
-    next turn starts, whichever is first, when that message's sent_at comes
-    within READ_FOLLOW_S after the stop and its pairing, the later of its
-    record and its prompt, within VOUCH_PAIR_S. A lead beats reading (SM 3.3
-    rule 2). Two sessions never want one second here; Replay checks that.
+    session's bucket to R_TURN_BASE_S. Output fills the bucket up to
+    UNKNOWN_BUCKET_MAX_S from the session's first fill, whatever reset came
+    last, and full beside it up to BUCKET_MAX_S, so what full holds past the
+    bucket is what only the 120 s cap keeps from reading (SM 2.4, 5.2).
+    Reading drains the bucket after one of the session's stops, until the
+    relayed message that vouches for the stop is sent or the session's next
+    turn starts, whichever is first. The one that vouches is the first of
+    the thread's relayed messages sent after the stop whose pairing, the
+    later of its record and its prompt, comes within VOUCH_PAIR_S of the
+    stop, and it vouches only when its sent_at comes within READ_FOLLOW_S
+    after the stop. One that pairs later keeps its own lead, but it neither
+    vouches for the stop's reading nor ends it: late lists it as (session,
+    stop, sent_at) when it is sent within READ_FOLLOW_S after the stop and
+    before the one that vouches, if any. A lead beats reading (SM 3.3 rule
+    2). Two sessions never want one second here; Replay checks that.
 
     credited maps each credited second to (session, reason). running holds
     the seconds an agent turn ran, automated those in which every running
@@ -233,21 +241,32 @@ class Replay:
                                  "prompt": pid, "reason": reason, "thread": r["data"]["thread_key"],
                                  "paired_at": max(r["t"], q["t"])})
 
-        # Reading spans.
-        self.spans = {}
+        # Reading spans. SM 2.4: a stop's reading is vouched for by the first
+        # relayed anchor of the thread sent after the stop among those that
+        # pair within VOUCH_PAIR_S of it, if that one is sent within
+        # READ_FOLLOW_S of the stop. One that pairs later neither vouches nor
+        # ends the reading.
+        self.spans, self.late = {}, []
         for s, ts in stops.items():
-            # SM 2.4: the thread's next relayed anchor, whichever session its prompt is in.
+            # The thread's relayed anchors, whichever session their prompts are in.
             threads = {a["thread"] for a in self.anchors if a["session"] == s}
             sends = sorted((a["sent_at"], a["paired_at"]) for a in self.anchors if a["thread"] in threads)
             turn_starts = sorted(t for (s2, t, _, _) in self.turns if s2 == s)
             for stop in ts:
-                nxt = [(t, p) for t, p in sends if t > stop]
-                if not nxt or nxt[0][0] - stop > READ_FOLLOW_S * 1000:
+                vouch = None
+                for t, p in sends:
+                    if t <= stop:
+                        continue
+                    if t - stop > READ_FOLLOW_S * 1000:
+                        break
+                    if p - stop > VOUCH_PAIR_S * 1000:
+                        self.late.append((s, stop, t))
+                        continue
+                    vouch = t
+                    break
+                if vouch is None:
                     continue
-                if nxt[0][1] - stop > VOUCH_PAIR_S * 1000:
-                    self.late = getattr(self, "late", []) + [(s, stop, nxt[0][0])]
-                    continue
-                end_at = min([nxt[0][0]] + [t for t in turn_starts if t >= stop])
+                end_at = min([vouch] + [t for t in turn_starts if t >= stop])
                 self.spans.setdefault(s, []).append((stop, end_at))
 
         # Bucket changes in time order: a relayed prompt resets its session's
