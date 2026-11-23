@@ -135,14 +135,19 @@ describe('Privacy', () => {
 			},
 		},
 		{
-			name: 'Who can read it says the vault keeps prompts, replies and recap paths encrypted, but not from a program running as you, and how to keep no prompt text',
+			name: 'Who can read it says the vault keeps prompts, replies and recap paths encrypted, but not from a program running as you, and how to keep no prompt text: the command, then the edit by hand for either kind of config.toml',
 			check: (html) => {
 				const t = text(html);
 				expect(t).toContain(
 					"pairtime keeps the text of your prompts, the agent's final reply to each one and the file paths for your recaps in a vault, which it encrypts",
 				);
 				expect(t).toContain('but not from a program running as you');
-				expect(t).toContain("To keep no prompt text at all, add these two lines at the end of pairtime's config.toml");
+				// The command first, which edits either kind of config.toml
+				// (internal/agent/config's TestKeepTextEdits).
+				expect(t).toContain('To keep no prompt text at all, type pairtime privacy keep-text off in a terminal.');
+				expect(t).toContain(
+					"Or, by hand, set keep_prompt_text = false under [privacy] in pairtime's config.toml; if the file has no [privacy] line, as one written before this version has, add these two lines at the end",
+				);
 				expect(t).toContain('pairtime then deletes the text it kept');
 				// The table's header too: a config.toml from before [privacy]
 				// ends in [notifications], where the switch alone would land.

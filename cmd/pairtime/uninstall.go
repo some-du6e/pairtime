@@ -31,7 +31,9 @@ pairtime's record of what it installed is gone.
 It deletes pairtime's device key too, and with it the ledger and the rest
 of what pairtime recorded, as pairtime's privacy notice says. Your daily
 totals and recaps can stay until you delete them: uninstall asks, and
---delete-data and --keep-data answer for scripts.
+--delete-data and --keep-data answer for scripts. Copies that a backup or
+a synced folder already holds stay as they are, the key's file too when
+pairtime doctor says pairtime keeps its key in a file.
 
   --yes          go ahead without asking; your daily totals and recaps
                  stay unless --delete-data
@@ -175,7 +177,7 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 	}
 	purge := *deleteData
 	if len(keepable) > 0 && !*deleteData && !*keepData && !*yes {
-		fmt.Fprintf(stdout, "\nYour daily totals and recaps can stay, in %s, until you delete them. Once they're deleted, nobody can bring them back.\n", joinPaths(keepable))
+		fmt.Fprintf(stdout, "\nYour daily totals and recaps can stay, in %s, until you delete them. Once they're deleted, pairtime can't bring them back, though copies a backup or a synced folder already holds stay as they are.\n", joinPaths(keepable))
 		purge = askYes(answers, stdout, "Type y to delete them too, or n to keep them: ")
 	}
 	// What stays in the data directory unless it goes too: the day rollups
@@ -383,10 +385,17 @@ func dataFate(hadKey bool, data, keepable []string, purge bool, done string) str
 	if hadKey {
 		what = "pairtime's device key, and with it everything pairtime recorded in " + joinPaths(data) + ","
 	}
-	if len(keepable) == 0 || purge {
-		return what + " " + done + "."
+	// As "delete everything" says (runPrivacyDelete): what a backup holds,
+	// no deletion here reaches.
+	copies := " Copies a backup or a synced folder already holds stay as they are"
+	if hadKey {
+		copies += ", the key's file too when pairtime doctor says pairtime keeps its key in a file"
 	}
-	return what + " " + done + ", but for your daily totals and recaps in " + joinPaths(keepable) + ", which can stay."
+	copies += "."
+	if len(keepable) == 0 || purge {
+		return what + " " + done + "." + copies
+	}
+	return what + " " + done + ", but for your daily totals and recaps in " + joinPaths(keepable) + ", which can stay." + copies
 }
 
 // showUninstall shows what uninstall takes out.

@@ -709,6 +709,32 @@ func TestReconcileRules(t *testing.T) {
 			},
 		},
 		{
+			name: "before Reconcile, DropText deletes nothing and says why",
+			run: func(t *testing.T, dir string) {
+				v, _ := open(t, dir, 1, keyA, 1, true)
+				keepAll(v, day1, 1, 2)
+				v.Close()
+				v, err := Open(Options{Dir: dir, Keys: testKeys(t, 1), KeyID: keyA, KeepText: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer v.Close()
+				before := rawFiles(t, dir)
+				if n, err := v.DropText(); !errors.Is(err, ErrNotReady) || n != 0 {
+					t.Errorf("DropText before Reconcile = %d, %v; want ErrNotReady", n, err)
+				}
+				after := rawFiles(t, dir)
+				if len(after) != len(before) {
+					t.Fatalf("files %v, want %v", keysOf(after), keysOf(before))
+				}
+				for name, b := range before {
+					if !bytes.Equal(after[name], b) {
+						t.Errorf("%s changed", name)
+					}
+				}
+			},
+		},
+		{
 			name: "after a Reconcile that failed, DropText still deletes every text the files hold",
 			run: func(t *testing.T, dir string) {
 				if runtime.GOOS == "windows" || os.Geteuid() == 0 {
