@@ -1,24 +1,27 @@
 # The install scripts pairtimed serves
 
-pairtimed serves this folder's scripts at `/install.sh` and `/install.ps1`, so `curl -fsSL https://<host>/install.sh | sh` and `irm https://<host>/install.ps1 | iex` install pairtime from a deployed server (docs/PLAN.md, WP-RL2). Those commands can't pass flags, and the repository's `install/` scripts name no release and trust no key, so the server serves one release's own scripts.
+pairtimed serves this folder's `install.sh` and `install.ps1` at `/install.sh` and `/install.ps1`, so `curl -fsSL https://<host>/install.sh | sh` and `irm https://<host>/install.ps1 | iex` install pairtime from a deployed server (docs/PLAN.md, WP-RL2). Those commands can't pass flags, and the repository's `install/` scripts name no release and trust no key, so the server serves one release's own scripts.
 
-The folder holds that release's files, for the release `scriptsRelease` names in `../install.go`:
+The folder holds that release's files, for the release `ScriptsRelease` names in `../install.go`, each byte for byte as the release published it:
 
-- `install.sh`, `install.ps1` and `release-keys.txt`, as the release's tag has them in `install/` and `internal/release/`, before `tools/release scripts` stamps the scripts;
-- `manifest.json`, the release's signed manifest, byte for byte.
+- `install.sh` and `install.ps1`, which the release stamped with its version and the keys it trusts;
+- `manifest.json`, the release's signed manifest.
 
-At start, pairtimed stamps the scripts for the release with those keys, as `tools/release scripts` stamped them for the release. It then checks that each script's SHA-256 is the one the manifest lists in `install_scripts`, and that a key in `internal/release/release-keys.txt` signed the manifest. If either check fails, pairtimed doesn't start, and TestInstallScripts and TestStampScripts fail in CI first.
+At start, pairtimed checks that a key in `internal/release/release-keys.txt`, the keys this build trusts, signed the manifest, and that each script's SHA-256 is the one the manifest lists in `install_scripts`. If either check fails, pairtimed doesn't start. CI also fails while a served script trusts a key that `release-keys.txt` doesn't list (TestServedScriptsTrustOnlyThisBuildsKeys).
 
-The copy stays pinned to a release because pairtimed is built from `main`, where `install/` can be newer than any release. A script whose bytes no release lists would install a release it wasn't made for.
+The copy stays pinned to a release because pairtimed is built from `main`, where `install/` can be newer than any release.
 
-To serve a newer release, one whose manifest lists `install_scripts`, copy its files and set `scriptsRelease` in `../install.go` to its version:
+## Moving the pin
+
+After each release, a PR moves the copy to it. The release's manifest must list `install_scripts`:
 
 ```sh
 v=v0.1.0-alpha.7
-git show "$v:install/install.sh" > internal/server/pages/install/install.sh
-git show "$v:install/install.ps1" > internal/server/pages/install/install.ps1
-git show "$v:internal/release/release-keys.txt" > internal/server/pages/install/release-keys.txt
-gh release download "$v" --pattern manifest.json --dir internal/server/pages/install --clobber
+gh release download "$v" --repo some-du6e/pairtime --pattern install.sh --pattern install.ps1 --pattern manifest.json --dir internal/server/pages/install --clobber
 ```
 
-The server serves the new copy once its image is deployed.
+Then the same PR sets `ScriptsRelease` in `../install.go` to the release, and `installRelease` in `../dashboard.go` and the two install commands in README.md with it, which TestDashboardFollowsThePin and TestInstallLines hold together. The host serves the new copy once an image built from that commit is pinned (deploy/runbook.md, Upgrades).
+
+## Turning the pin off
+
+`ScriptsRelease = ""` turns the pin off. Both paths then answer 404, and pairtimed starts without them. The PR that drops a key from `internal/release/release-keys.txt` turns the pin off, unless the pin already names a release that a remaining key signed and whose scripts trust no dropped key. A later PR pins a release the new key signed (docs/spec/update-manifest.md, Replacing a key).

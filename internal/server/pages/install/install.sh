@@ -51,8 +51,8 @@ set -eu
 # this script to a release: the release's version, and the release keys its
 # binaries trust (internal/release/release-keys.txt). The copy in the
 # repository has neither, so it needs --version and --release-keys.
-pinned_version=''
-pinned_keys=''
+pinned_version='v0.1.0-alpha.6'
+pinned_keys='pairtime-release-ed25519-public:mP7O9NMJlzm7lu65zP4lHq10l/t0XcASchf+mZSRBbE='
 
 repo=https://github.com/some-du6e/pairtime
 payload_type=application/vnd.pairtime.update-manifest.v1+json

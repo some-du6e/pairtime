@@ -12,9 +12,10 @@ import (
 // script installs and the release keys it trusts. The repository's copies
 // leave both empty, so a script attached to a release installs that
 // release and trusts exactly the keys its binaries trust. tools/release
-// scripts stamps the copies a release carries, and pairtimed stamps the
-// copy it serves at /install.sh and /install.ps1 (internal/server/pages)
-// the same way, so both are the bytes the release's signed manifest lists.
+// scripts stamps the copies a release carries, whose SHA-256s its signed
+// manifest lists. pairtimed serves those published copies as they are at
+// /install.sh and /install.ps1 (internal/server/pages), so it stamps
+// nothing and doesn't depend on this code.
 type InstallScript struct {
 	// Name is the script's file name, in install/, among a release's
 	// files and in its manifest's install_scripts.

@@ -13,14 +13,18 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/release"
+	"github.com/some-du6e/pairtime/internal/server/pages"
 )
 
 // TestServeInstallScripts checks that pairtimed's public listener serves
-// the install scripts of the release internal/server/pages pins, at
-// /install.sh and /install.ps1, byte for byte the scripts that release's
-// signed manifest lists, and that the ops listener doesn't (docs/PLAN.md,
-// WP-RL2).
+// the install scripts of the release internal/server/pages pins
+// (pages.ScriptsRelease), at /install.sh and /install.ps1, byte for byte
+// the scripts that release's signed manifest lists, and that the ops
+// listener doesn't (docs/PLAN.md, WP-RL2).
 func TestServeInstallScripts(t *testing.T) {
+	if pages.ScriptsRelease == "" {
+		t.Skip("the pin is off, so pairtimed serves no install script")
+	}
 	configPath, _ := writeConfig(t)
 	public, private := startServe(t, configPath)
 	data, err := os.ReadFile(filepath.Join("..", "..", "internal", "server", "pages", "install", "manifest.json"))
@@ -32,8 +36,8 @@ func TestServeInstallScripts(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, _, err := release.Open(data, trusted)
-	if err != nil {
-		t.Fatalf("the served release's manifest: %v", err)
+	if err != nil || m.Version != pages.ScriptsRelease {
+		t.Fatalf("the served release's manifest: %v, %+v, want %s's", err, m, pages.ScriptsRelease)
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	get := func(t *testing.T, url string) (*http.Response, []byte) {
@@ -49,8 +53,8 @@ func TestServeInstallScripts(t *testing.T) {
 		}
 		return res, body
 	}
-	for _, s := range release.InstallScripts() {
-		path := "/" + s.Name
+	for _, name := range []string{"install.sh", "install.ps1"} {
+		path := "/" + name
 		res, body := get(t, public+path)
 		ops, _ := get(t, private+path)
 		sum := sha256.Sum256(body)
@@ -59,7 +63,7 @@ func TestServeInstallScripts(t *testing.T) {
 			ok   bool
 		}{
 			{"the public listener serves " + path, res.StatusCode == http.StatusOK},
-			{path + " is the script " + m.Version + "'s signed manifest lists, byte for byte", hex.EncodeToString(sum[:]) == m.InstallScripts[s.Name]},
+			{path + " is the script " + m.Version + "'s signed manifest lists, byte for byte", hex.EncodeToString(sum[:]) == m.InstallScripts[name]},
 			{path + " is plain text in UTF-8", res.Header.Get("Content-Type") == "text/plain; charset=utf-8"},
 			{path + " loads nothing, sends no referrer and is never stored, as every answer of the public listener",
 				res.Header.Get("Content-Security-Policy") == defaultHeaders["Content-Security-Policy"] &&

@@ -267,6 +267,19 @@ docker compose exec pairtimed pairtimed doctor
 
 Keep the copy of `pairtime.toml`: a rollback can need it. Migrations only add in v1 and run when pairtimed starts. The `install -d` line makes `data/tmp` on a host set up before #123, whose step 2 didn't, and only sets the owner and mode again where it is there: images from before #123 don't make it, and without it SQLite's temporary files go to the 256 MiB `/tmp`.
 
+**After each release.** The host's `/install.sh` and `/install.ps1` serve the release that `ScriptsRelease` pins in `internal/server/pages/install.go`, not the newest one. After each release, a PR moves that copy and sets `ScriptsRelease`, as `internal/server/pages/install/README.md` says. Then a bump pins an image built from that commit or a later one. Once the bump is up, check that the host serves the pinned release's scripts. Each pair of lines must print the same SHA-256: the first reads the pinned manifest's `install_scripts` from the commit the image was built from (it needs `jq`), and the second hashes what the host serves.
+
+```sh
+cd /srv/pairtime/deploy
+commit=$(sed -n 's/.*pairtimed:sha-\([0-9a-f]\{12\}\).*/\1/p' compose.yml)
+for f in install.sh install.ps1; do
+  git -C /srv/pairtime show "$commit:internal/server/pages/install/manifest.json" | jq -r .payload | base64 -d | jq -r --arg f "$f" '.install_scripts[$f]'
+  curl -fsS -A "$UA" "https://pairtime.karimeltaib.com/$f" | sha256sum | cut -d' ' -f1
+done
+```
+
+A PR that drops a release key can turn the pin off (`ScriptsRelease = ""`), and then both paths answer 404 until a later PR pins a release the new key signed (docs/spec/update-manifest.md, Replacing a key).
+
 ## Rolling back
 
 A rollback is the previous image. Find the commit before the bump and put its `deploy/` back, so `compose.yml` and every file it mounts are the ones that image ran with:
@@ -389,4 +402,6 @@ Before the native program pays out, the server moves to a Hetzner CCX13, or an A
 
 pairtimed listens on 8080, which only cloudflared reaches, and on 127.0.0.1:9091 inside its container for `/healthz`, `/readyz` and `/metrics`. compose publishes no port on the host. Never route the tunnel to 9091.
 
-Not deployed yet: `/.well-known/pairtime-keys.json` and the day roots (WP-SV17), and `install.sh` and `install.ps1` at `https://<host>/`, which WP-RL2 serves from pairtimed; until then the scripts are release assets.
+Not deployed yet: `/.well-known/pairtime-keys.json` and the day roots (WP-SV17).
+
+`install.sh` and `install.ps1` at `https://<host>/` go live with the first image pinned after #240, which serves the release `ScriptsRelease` pins (Upgrades); until then the scripts are release assets. While the zone's bot protection is on (Two things to know first), the host's install lines can be challenged from data-center and VPN addresses, since curl and PowerShell send their own User-Agent, so give those users the release-asset lines. The first deploy that serves these paths runs `curl -fsSL https://<host>/install.sh` once from a data-center address, with curl's own User-Agent, and writes down here what Cloudflare answered.

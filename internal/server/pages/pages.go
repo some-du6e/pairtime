@@ -207,7 +207,8 @@ type Site struct {
 	dash        *template.Template
 	signupsOpen bool
 	// scripts are the install scripts /install.sh and /install.ps1 serve,
-	// by file name, stamped for scriptsRelease (install.go).
+	// by file name, as ScriptsRelease published them, and none while the
+	// pin is off (install.go).
 	scripts map[string][]byte
 }
 
@@ -220,7 +221,7 @@ type evidencePage struct {
 // Markdown, on a controller contact that can't be a link, on a commit that
 // isn't a full hash, on a scoring version that no evidence definition
 // covers, and on an install script that isn't byte for byte the one its
-// release lists (stampScripts).
+// release lists (checkScripts).
 func New(o Options) (*Site, error) {
 	if o.Retention == nil {
 		return nil, errors.New("pages: no retention schedule")
@@ -280,7 +281,7 @@ func New(o Options) (*Site, error) {
 	if err := s.checkDashboard(); err != nil {
 		return nil, err
 	}
-	if s.scripts, err = servedScripts(); err != nil {
+	if s.scripts, err = servedScripts(ScriptsRelease); err != nil {
 		return nil, err
 	}
 	return s, nil

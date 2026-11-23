@@ -1,4 +1,4 @@
-# pairtimed serves these files' scripts stamped, and checks them against the
-# release's signed manifest byte for byte, so git must never change their line
-# endings, not even on a Windows checkout with core.autocrlf.
+# pairtimed serves these scripts byte for byte, and checks them and the
+# manifest against the release's signature, so git must never change their
+# line endings, not even on a Windows checkout with core.autocrlf.
 * -text
