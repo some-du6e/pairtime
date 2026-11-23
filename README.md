@@ -10,6 +10,13 @@ v0.1.0-alpha.1, the first signed release, came out on 2026-11-21. It tracks Clau
 
 Nothing leaves the computer until `pairtime login` links it to a pairtime server through Hack Club Auth. From then on the agent uploads signed batches that hold numbers, reason codes and opaque keys, never prompts, code, file paths or window titles, and `pairtime privacy show` prints the next upload before it goes. `pairtimed` signs people in with Hack Club Auth, links their computers, takes the uploads, rolls them up and shows each person's hours on its dashboard. One runs at https://pairtime.karimeltaib.com, backed up by Litestream and a nightly snapshot. `pairtime uninstall` takes it all back out and deletes the device key with what pairtime recorded, keeping only the daily totals and recaps unless told to delete those too.
 
+The agent keeps the text of your prompts and of the agent's final replies on the computer, encrypted, in its vault, so a spot check of your hours can see them. To keep none, and delete what's kept, add these two lines at the end of pairtime's `config.toml`:
+
+```toml
+[privacy]
+keep_prompt_text = false
+```
+
 `pairtime doctor` checks the agent, its idle and focus sources, Claude Code's hooks with a timed test call, the adapters, the device key's store, the binary's signature and the hook calls only the spool delivered, one line each, and `doctor --report` prints a footprint report with no names or paths in it to share. `pairtime ledger show --day <date>` prints in plain JSON every record of a day that the ledger holds under this computer's device key; records from an earlier key, as before a restore, aren't in it.
 
 Not built yet: harnesses other than Claude Code, Claude Code's transcripts and OpenTelemetry (WP-AD3, WP-AD4), and updates from inside the client.

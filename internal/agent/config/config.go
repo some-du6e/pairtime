@@ -122,21 +122,30 @@ func parse(data []byte) (cfg Config, problems []string, used bool) {
 	}
 	// Probably a typo, or a setting from a newer release.
 	for _, key := range md.Undecoded() {
-		if inNotifications(key) {
-			// Such as enable = false: it may be how the teen turned
-			// notifications off, so they stay off.
+		// Both rules can hold for one key. An unknown key in
+		// [notifications], such as enable = false, may be how the teen
+		// turned notifications off, so they stay off. A key in [privacy],
+		// or the switch wherever it landed, may be how the teen turned
+		// "keep prompt text" off, so no new text is kept: keep_prompt_text =
+		// false added at the end of a config.toml from before [privacy]
+		// existed lands in [notifications], the table those files end with.
+		notif, priv := inNotifications(key), inPrivacy(key)
+		if notif {
 			cfg.Notifications.Off = true
-			problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored, so notifications are off until it's fixed", key.String()))
-			continue
 		}
-		if inPrivacy(key) {
-			// Such as keep_prompt_txt = false: it may be how the teen
-			// turned "keep prompt text" off, so no new text is kept.
+		if priv {
 			cfg.Privacy.TextHeld = true
-			problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored, so pairtime keeps no new prompt text, and deletes none, until it's fixed", key.String()))
-			continue
 		}
-		problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored", key.String()))
+		switch {
+		case notif && priv:
+			problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored, so notifications are off, and pairtime keeps no new prompt text and deletes none, until it's fixed", key.String()))
+		case notif:
+			problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored, so notifications are off until it's fixed", key.String()))
+		case priv:
+			problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored, so pairtime keeps no new prompt text, and deletes none, until it's fixed", key.String()))
+		default:
+			problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored", key.String()))
+		}
 	}
 	if md.IsDefined("mode") {
 		if file.Mode == Local || file.Mode == Online {

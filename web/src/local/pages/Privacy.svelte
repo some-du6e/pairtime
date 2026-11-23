@@ -73,9 +73,12 @@
 		a vault, which it encrypts with a key only this computer has. That keeps them from other people who use this
 		computer and from a quick look, but not from a program running as you. It keeps them from cloud backups of your
 		home folder too, unless pairtime has to keep its key in a file there, which pairtime doctor tells you. To
-		keep no prompt text at all, set <code>keep_prompt_text = false</code> under <code>[privacy]</code> in pairtime's
-		config.toml: pairtime then deletes the text it kept, and a spot check of your hours goes on the rest of what it
-		recorded.
+		keep no prompt text at all, add these two lines at the end of pairtime's config.toml:
+	</p>
+	<pre data-testid="keep-off"><code>[privacy]
+keep_prompt_text = false</code></pre>
+	<p>
+		pairtime then deletes the text it kept, and a spot check of your hours goes on the rest of what it recorded.
 	</p>
 	<p>
 		Until the agent has read them, the inbox and the hook calls the agent holds keep your prompts too, with what your AI
@@ -96,8 +99,9 @@
 	<h2 id="delete-title">Delete everything</h2>
 	<p>
 		<code>pairtime privacy delete</code>, typed in a terminal, deletes pairtime's key and everything pairtime keeps on
-		this computer, apart from pairtime itself and its settings. Nobody can bring any of it back, and the hours it
-		recorded can't be submitted after that. A button here comes in a later version of pairtime.
+		this computer, apart from pairtime itself and its settings. The hours it recorded can't be submitted after that.
+		Copies a backup or a synced folder already holds stay as they are, the key's file too when pairtime doctor says
+		pairtime keeps its key in a file. A button here comes in a later version of pairtime.
 	</p>
 </section>
 

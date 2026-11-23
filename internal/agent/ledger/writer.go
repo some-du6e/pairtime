@@ -57,7 +57,9 @@ type ChainRecord interface {
 // Vault keeps, on the device, the content of the records the writer
 // writes, by their numbers: the text each commits, which the ledger holds
 // only a commitment to, and the paths of an agent's edits, for recaps
-// (DESIGN 3.5; WP-LG6). *vault.Vault is one.
+// (DESIGN 3.5; WP-LG6). *vault.Vault is one. Open it before the writer:
+// vault.Open flushes what a killed run kept, before the writer's Open
+// flushes the batches it restores.
 type Vault interface {
 	// Reconcile drops every entry from s = next on. Open calls it once,
 	// after it has cut what a crash left and before any record takes
