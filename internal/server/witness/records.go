@@ -92,10 +92,14 @@ type Result struct {
 // Records labels one device's records (DESIGN 7.4; the package
 // documentation says how). batches are the server's witness rows of the
 // device: the row of every batch whose records recs holds, and every row
-// from the batch before each late record's catch-up on. Records reads a
-// row it lacks as a batch the server never held. Its records get no label
-// and bound no other record's time, so leaving out a row the server holds
-// can make the other records of their boots read fresher than they are.
+// from the batch before the first catch-up of each late record's chain of
+// anchors on, since a chain of anchors holds only where the rows show each
+// of its catch-ups resuming after a silence. The rows are the server's own
+// receipts, so passing every row it holds of the device reveals nothing
+// and always meets this. Records reads a row it lacks as a batch the
+// server never held. Its records get no label and bound no other record's
+// time, so leaving out a row the server holds can make the other records
+// of their boots read fresher than they are.
 //
 // recs needs the timed records of the batch before each catch-up as well,
 // its os.presence, os.focus and os.power records at least, and, while that
@@ -246,17 +250,24 @@ func runs(got map[uint64]int64, lag int64) map[uint64]run {
 // batches.
 //
 // A batch closes, as far as the server can see, at the latest corrected
-// time of its timed records, and no earlier than any batch before it,
-// since a chain seals its batches in order. So every batch of a catch-up
-// closed no earlier than the time of the witnessed record its chain of
-// anchors goes back to, which is at most lag before that record's batch
-// reached the server, whatever records a caller leaves out. That keeps a
-// batch of backdated records sent after the device got batches of the
-// present through from reading offline. Which records inside that bound
-// read offline still depends on the records and notes a caller passes: a
-// record left out that was dated late in its batch would have raised the
-// close of every batch after it. The batches are decided in order, so an
-// anchor has its labels when the catch-up after it needs them.
+// time of its timed records, and no earlier than any batch before it, since
+// a chain seals its batches in order. So every batch of a catch-up closed
+// no earlier than the corrected time of the witnessed record its chain of
+// anchors goes back to, whatever records a caller leaves out, and no record
+// dated more than lag before that time reads offline. Every batch on the
+// chain after that record's came in a run that resumed after a silence and
+// reached the server within lag of the run's first batch, so, after that
+// record's batch reached the server, a record reads offline only for time
+// in which the server received no batch of the device, or only the batches
+// of one of those runs. A batch of the present that arrives after a silence
+// and reveals none of its records counts as a catch-up batch, so the
+// silence before it can read offline, as a device that stayed silent could
+// claim anyway, and OFFLINE_CAP_S and the forge push bound it (DESIGN 7.4,
+// D6). Which records inside those bounds read offline still depends on the
+// records and notes a caller passes: a record left out that was dated late
+// in its batch would have raised the close of every batch after it. The
+// batches are decided in order, so an anchor has its labels when the
+// catch-up after it needs them.
 //
 // A note may come before the close because the uploader waits between
 // tries: a session that ends asleep while the uploader waits leaves its

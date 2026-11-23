@@ -56,21 +56,34 @@
 // reads witnessed or offline, or when it came itself in an earlier
 // catch-up whose anchor holds, by the run rules a catch-up's records use:
 // its run began after a silence, and it arrived within the lag after the
-// run's first batch. So a backlog that reached the server in several
-// catch-ups ran on unbroken from a batch with a record that reads
-// witnessed. A batch closes no earlier than its latest record and no
-// earlier than the batch before it, since a chain seals its batches in
-// order. So every batch of a catch-up closed no earlier than the time of
-// the witnessed record its chain of anchors goes back to, and that time is
-// at most the lag before that record's batch reached the server, whatever
-// records a caller leaves out: a batch of backdated records sent after the
-// device got batches of the present through can't read offline. Which
-// records inside that bound read offline can still depend on what a caller
-// passes. A record no rule reveals, dated late in a batch of a first
-// catch-up, raises the close of every batch after it, so leaving it out
-// lets records of a second catch-up read offline that read backfilled with
-// it. Everything else late is backfilled, and so is every record the
-// caller marks as lookback's.
+// run's first batch. So a catch-up's chain of anchors always goes back to
+// a batch with a record that reads witnessed. A batch closes no earlier
+// than its latest record and no earlier than the batch before it, since a
+// chain seals its batches in order. Everything else late is backfilled,
+// and so is every record the caller marks as lookback's.
+//
+// Whatever records a caller leaves out, that guarantees:
+//
+//   - No record reads offline when it is dated more than WITNESS_LAG_S
+//     before the corrected time of the witnessed record its catch-up's
+//     chain of anchors goes back to, since every later batch closed no
+//     earlier than that.
+//   - Every batch on that chain after the witnessed record's came in a run
+//     that resumed after a silence and reached the server within
+//     WITNESS_LAG_S of the run's first batch. So, after that record's batch
+//     reached the server, a record can read offline only for time in which
+//     the server received no batch of the device, or only the batches of
+//     one of those runs.
+//   - A batch of the present that arrives after a silence and reveals none
+//     of its records counts as a catch-up batch. So the silence before it
+//     can read offline, as a device that stayed silent could claim anyway,
+//     and OFFLINE_CAP_S and the forge push bound it (DESIGN 7.4, D6).
+//
+// Which records inside those bounds read offline can still depend on what
+// a caller passes. A record no rule reveals, dated late in a batch of a
+// first catch-up, raises the close of every batch after it, so leaving it
+// out lets records of a second catch-up read offline that read backfilled
+// with it.
 //
 // The notes are the client's own claim (DESIGN 7.4), so the server can't
 // check them beyond their place in the chain. It reads their times from

@@ -322,6 +322,16 @@ func outage(notes bool) *chain {
 	return &c
 }
 
+// presences returns a presence record of each minute from from to to,
+// with no monotonic reading.
+func presences(from, to float64) []Record {
+	var out []Record
+	for m := from; m <= to; m++ {
+		out = append(out, Record{Type: presence, Timed: true, T: at(m)})
+	}
+	return out
+}
+
 // twoCatchUps is the outage of outage(true) on a network that let the
 // device through at minute 180.5 for batches 60 to 120 only, then dropped
 // it again, its uploader failing every four minutes, until minute 200.5,
@@ -455,7 +465,7 @@ func TestOfflineConditions(t *testing.T) {
 				}
 				return &c, c.batch(150, append(recs, note(24.5))...)
 			}, event.Backfilled, 0, 0},
-		{"a catch-up whose batch before it comes without its records reads backfilled, so leaving records out can't help",
+		{"a catch-up whose live batch before it comes without its records reads backfilled",
 			func() (*chain, int) {
 				// As above, but the caller gives the records of batch 121
 				// alone, and the rows of batches 120 and 121, as a reveal of
@@ -473,7 +483,7 @@ func TestOfflineConditions(t *testing.T) {
 				c.drop(1, 119)
 				return &c, 0
 			}, event.Backfilled, 0, 0},
-		{"a catch-up whose batch before it reads only backfilled doesn't wait out an outage",
+		{"a catch-up whose batch before it came live and reads only backfilled doesn't wait out an outage",
 			func() (*chain, int) {
 				// Batch 120 holds only a record of minute 100, 20 minutes
 				// late, so nothing shows it closed in time. The catch-up at
@@ -525,6 +535,68 @@ func TestOfflineConditions(t *testing.T) {
 				c.only(func(b uint64) bool { return b >= 151 && b <= 156 || b == 140 || b == 100 || b == 59 })
 				return c, c.find(150.5)
 			}, event.Offline, at(220.5), 2},
+		{"a batch of the present that arrives after a silence and reveals none of its records counts as a catch-up batch, so the silence before it can read offline",
+			func() (*chain, int) {
+				// Batches 1 to 59 went live. Batch 60 went at minute 180.5,
+				// after two hours of silence, with one record of minute 180
+				// that no reveal rule opens, so recs leaves it out. Batch 61
+				// went at minute 300 with records of minutes 60 to 70 and a
+				// note of 70.5. With batch 60's record passed, they would read
+				// backfilled.
+				var c chain
+				for m := 1.0; m <= 59; m++ {
+					c.batch(m+0.05, ev(m-0.5, m+100, "run-a"))
+				}
+				c.batch(180.5)
+				return &c, c.batch(300, append(presences(60, 70), note(70.5))...)
+			}, event.Offline, at(300), 1},
+		{"a batch that reveals none of its records and came within the lag after the batch before it resumed no run, so it anchors nothing",
+			func() (*chain, int) {
+				// As above, but batch 60 went live, at minute 60.05.
+				var c chain
+				for m := 1.0; m <= 59; m++ {
+					c.batch(m+0.05, ev(m-0.5, m+100, "run-a"))
+				}
+				c.batch(60.05)
+				return &c, c.batch(300, append(presences(60, 70), note(70.5))...)
+			}, event.Backfilled, 0, 0},
+		{"a backlog that reached the server in two catch-ups reads offline from the rows Records asks for, though the batch before the second holds no presence, focus or power record",
+			func() (*chain, int) {
+				c := twoCatchUps()
+				// A submission of minutes 170 to 180 reveals batches 171 to
+				// 181 and batch 59's presence. Batch 120 holds no presence,
+				// focus or power record, so rule (g) opens nothing of it. The
+				// rows are exactly the contract's: every row from batch 59,
+				// the one before the chain's first catch-up, on.
+				c.only(func(b uint64) bool { return b >= 171 && b <= 181 || b == 59 })
+				c.drop(1, 58)
+				return c, c.find(170.5)
+			}, event.Offline, at(200.5), 1},
+		{"a record dated while the server took in an earlier catch-up can read offline in a later one",
+			func() (*chain, int) {
+				// Batches 60 to 100 went one every 15 s from minute 180.5,
+				// so the server had batch 80 at 185.5. Then the device dropped
+				// again, and the rest went at minute 215. The record of 185.5
+				// waited for the second catch-up.
+				c := outage(true)
+				c.receive(60, 100, 180.5, 0.25)
+				c.receive(101, 200, 215, 0)
+				c.drop(201, 240)
+				return c, c.find(185.5)
+			}, event.Offline, at(215), 2},
+		{"the bound on what reads offline counts from the witnessed record's corrected time, not its date",
+			func() (*chain, int) {
+				// Batch 59's record is dated 61.5, on a clock 2.45 minutes
+				// fast, so it reads by its batch's receipt, 59.05. A record
+				// dated 45, 16.5 minutes before that date but 14.05 before
+				// the corrected time, went at minute 300 with a note of 46.
+				var c chain
+				for m := 1.0; m <= 58; m++ {
+					c.batch(m+0.05, ev(m-0.5, m+100, "run-a"))
+				}
+				c.batch(59.05, Record{Type: presence, Timed: true, T: at(61.5)})
+				return &c, c.batch(300, Record{Type: presence, Timed: true, T: at(45)}, note(46))
+			}, event.Offline, at(300), 1},
 		{"the last minutes of an outage that ends asleep are offline by the failures just before them",
 			func() (*chain, int) {
 				// The uploader failed every four minutes from minute 60 to

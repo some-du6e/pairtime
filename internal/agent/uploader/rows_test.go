@@ -170,6 +170,42 @@ func TestOutage(t *testing.T) {
 	}
 }
 
+// TestRefusedFromBase holds the per-batch 5-minute check to the ledger's
+// base: after a retention sweep the index's rows start at a later batch
+// (WP-LG6), and the check still reads each batch's own seal. The batches
+// are TestWitness's clock that seals at :50, numbered 5 to 7.
+func TestRefusedFromBase(t *testing.T) {
+	const lag = 900_000
+	sealed := []float64{9 + 50.0/60, 10 + 50.0/60, 11 + 50.0/60}
+	tests := []struct {
+		name string
+		got  []float64 // when the server received batches 5 to 7, minutes of day0
+		want event.Witness
+	}{
+		{"a clock 6 minutes fast reads backfilled", []float64{4 + 5.0/60, 5 + 5.0/60, 6 + 5.0/60}, event.Backfilled},
+		{"a clock 4.5 minutes fast reads witnessed", []float64{5 + 35.0/60, 6 + 35.0/60, 7 + 35.0/60}, event.Witnessed},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ix := &rowIndex{device: "d_test", base: 5}
+			for i, s := range sealed {
+				b := uint64(5 + i)
+				r := ledger.Row{
+					BatchRow: pkgledger.BatchRow{B: b, FirstSeq: b, N: 1,
+						Receipt: &pkgledger.Receipt{ReceivedAt: uint64(day0.Add(time.Duration(tc.got[i] * float64(time.Minute))).UnixMilli())}},
+					SealedAt: day0.Add(time.Duration(s * float64(time.Minute))),
+				}
+				if err := ix.add(r); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if w, ok := witnessOf(ix, at(10), 0, reading{lag: lag}); !ok || w != tc.want {
+				t.Errorf("witnessOf = %q, %v; want %q", w, ok, tc.want)
+			}
+		})
+	}
+}
+
 // TestTwoCatchUps is TestOutage's outage on a network that let the device
 // through at minute 180.5 for batches 60 to 120 only, then dropped it
 // again, the uploader failing every four minutes, until minute 200.5, when
