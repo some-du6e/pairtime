@@ -12,9 +12,9 @@ import (
 // stallMS is how much longer than PENDING_WINDOW_S FinalBefore may stay
 // behind the newest record before doctor hears of it. A minute is final
 // PENDING_WINDOW_S after it ends (DESIGN 3.7), and Step holds FinalBefore
-// back further only for a browser run that may be a lookup (SM 2.5) or,
-// for less than the think part of a lead, for an agent app's message that
-// hasn't paired yet (SM 2.3).
+// back further only for a browser or chat-app run that may be a lookup (SM
+// 2.5), which stallNote leaves silent, or, for less than the think part of
+// a lead, for an agent app's message that hasn't paired yet (SM 2.3).
 const stallMS = 10 * 60 * 1000
 
 // watch tells doctor when FinalBefore lags, after the Step that scored
@@ -28,7 +28,7 @@ const stallMS = 10 * 60 * 1000
 // has a FinalBefore of its own time.
 func (l *Loop) watch(b ledger.Batch) {
 	var high, sampled, focusAt int64
-	focus := event.AppClass("")
+	var focus event.AppClass
 	note := func(e *event.Event) {
 		switch d := e.Data.(type) {
 		case *event.OSPresence, *event.OSPower:
@@ -54,7 +54,7 @@ func (l *Loop) watch(b ledger.Batch) {
 	msg := ""
 	if high > 0 {
 		at := min(high, b.SealedAt.UnixMilli())
-		msg = stallNote(at, l.cur.FinalBefore, l.pendingMS, sampled, focus, focusAt)
+		msg = stallNote(at, l.cur.FinalBefore, l.pendingMS, sampled, focus)
 	}
 	if msg != l.stallMsg {
 		if msg != "" {
@@ -68,12 +68,15 @@ func (l *Loop) watch(b ledger.Batch) {
 // stallNote says what doctor hears when the newest final minute, which
 // ends at fb, lags at, the newest record, by more than pending plus stallMS,
 // and why where the records say: no presence sample at all, which is
-// presence unknown on this computer; no sample for longer than that lag
-// allows, which is the samples having stopped while records came; or a
-// browser or chat app in front, whose run may be a lookup. It returns ""
-// for no lag. sampled is the newest presence sample or power record, 0 for
-// none, and focus the app class of the newest os.focus, at focusAt.
-func stallNote(at, fb, pending, sampled int64, focus event.AppClass, focusAt int64) string {
+// presence unknown on this computer, or no sample for longer than that lag
+// allows, which is the samples having stopped while records came. It
+// returns "" for no lag, and for a lag while samples come and a browser or
+// chat app is in front: SM 2.5 holds the minutes after credit until such a
+// run ends, since it may be a lookup, which is the rule working, not a
+// fault, and doctor's agent line would call it one. sampled is the newest
+// presence sample or power record, 0 for none, and focus the app class of
+// the newest os.focus.
+func stallNote(at, fb, pending, sampled int64, focus event.AppClass) string {
 	lag := at - fb
 	if lag <= pending+stallMS {
 		return ""
@@ -86,8 +89,7 @@ func stallNote(at, fb, pending, sampled int64, focus event.AppClass, focusAt int
 	case at-sampled > pending+stallMS:
 		msg += fmt.Sprintf(": no presence sample has come for %s, so they wait for the next one", lasting(at-sampled))
 	case focus == event.AppBrowser || focus == event.AppChatApp:
-		msg += fmt.Sprintf(": a browser or chat app has been in front for %s, and minutes after credit wait for such a run to end, since it may be a lookup (SM 2.5)",
-			lasting(at-focusAt))
+		return ""
 	}
 	return msg
 }
