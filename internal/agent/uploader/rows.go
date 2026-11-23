@@ -216,15 +216,21 @@ func (ix *rowIndex) sealedAfter(t int64) (uint64, bool) {
 
 // reading is what a minute's witness reading rests on besides the rows:
 // where the server's chain starts and where it forked from the device's,
-// the server's clock less the device's, and the stretches the uploader
-// couldn't reach the server.
+// and the stretches the uploader couldn't reach the server.
 type reading struct {
 	lag        int64  // WITNESS_LAG_S, in ms
 	chainStart uint64 // the server's first batch, 0 when unknown
 	fork       uint64 // the batch the chains part at, 0 for none
-	offset     int64  // server clock less device clock, in ms
 	offline    []span
 }
+
+// refusedAhead is how long after the server received a batch its records
+// may be dated before a submission refuses them: SP 8.4's 5 minutes,
+// internal/server/witness's FutureMS. A minute that may hold a record
+// dated further ahead of its own batch's receipt reads backfilled, so the
+// dashboard never reads witnessed or offline a minute whose records a
+// submission refuses.
+const refusedAhead = 300_000
 
 // witnessOf reads the witness label of the minute that starts at minute,
 // in Unix ms on the device's clock, as the device sees it, and false when
@@ -236,9 +242,17 @@ type reading struct {
 // B*, because it takes a chain's batches in order. So the reading is B*'s
 // (DESIGN 7.4):
 //
-//   - witnessed when its receipt's received_at, on the server's clock,
-//     is at most lag after the minute's end, put on the server's clock
-//     by the offset the answers measured;
+//   - backfilled when a record of the minute may be dated more than
+//     refusedAhead after its own batch reached the server, as on a device
+//     clock that runs that far fast (refused): a submission checks each
+//     record against its own batch's receipt and refuses it (SP 8.4);
+//   - witnessed when the receipt's received_at, on the server's clock,
+//     is at most lag after the minute's end, on the device's clock. The
+//     server reads a minute by the device's clock too (WP-SV6), because
+//     nothing it trusts tells a slow clock from a late upload, so the
+//     reading never corrects the device's clock: the offset the answers
+//     measured corrects X-Pairtime-Time alone, and a device clock that
+//     runs slow reads its minutes late, by as much as it is slow;
 //   - offline when it was late, but B* was sealed within lag of the end
 //     and the uploader's failure notes fall within lag after that seal:
 //     it tried to send B* in time and couldn't reach the server;
@@ -272,6 +286,9 @@ func witnessOf(ix *rowIndex, minute int64, batch uint64, r reading) (event.Witne
 		return "", false
 	}
 	w, ok := r.of(ix, b, end)
+	if ok && ix.refused(minute, end, b) {
+		w = event.Backfilled
+	}
 	if !ok || batch <= b || batch > ix.last() {
 		return w, ok
 	}
@@ -282,11 +299,35 @@ func witnessOf(ix *rowIndex, minute int64, batch uint64, r reading) (event.Witne
 	return worse(w, wb), true
 }
 
+// refused reports whether a submission may refuse a record of the minute
+// from start to end, on the device's clock, whose last batch is b, B*: for
+// a batch from the first one sealed after start through b, the earlier of
+// end and the batch's seal, the latest a record of the minute in it can be
+// dated, is more than refusedAhead after the server received it. A
+// minute's earlier records sit in batches that reached the server up to a
+// seal interval before B*, and a submission checks each record against
+// its own batch's receipt (internal/server/witness). A clock less than
+// refusedAhead fast never seals a batch that far ahead of its receipt, so
+// it never reads backfilled by this.
+func (ix *rowIndex) refused(start, end int64, b uint64) bool {
+	first, ok := ix.sealedAfter(start)
+	if !ok {
+		return false
+	}
+	for k := first; k <= b; k++ {
+		if got, ok := ix.receivedAt(k); ok && min(end, ix.at(k).sealed)-got > refusedAhead {
+			return true
+		}
+	}
+	return false
+}
+
 // of reads batch b's witness label for records of the time due, on the
-// device's clock: witnessed when the server received it within lag after
-// due, offline when it was sealed within lag of due and waited out an
-// outage, backfilled otherwise, and backfilled for a batch the server can
-// never receive. It waits while b has no receipt.
+// device's clock: backfilled when due is more than refusedAhead after the
+// server received it, witnessed when the server received it within lag
+// after due, offline when it was sealed within lag of due and waited out
+// an outage, backfilled otherwise, and backfilled for a batch the server
+// can never receive. It waits while b has no receipt.
 func (r reading) of(ix *rowIndex, b uint64, due int64) (event.Witness, bool) {
 	if (r.chainStart > 0 && b < r.chainStart) || (r.fork > 0 && b >= r.fork) {
 		return event.Backfilled, true
@@ -301,7 +342,9 @@ func (r reading) of(ix *rowIndex, b uint64, due int64) (event.Witness, bool) {
 	}
 	sealed := ix.at(b).sealed
 	switch {
-	case got-(due+r.offset) <= r.lag:
+	case due-got > refusedAhead:
+		return event.Backfilled, true
+	case got-due <= r.lag:
 		return event.Witnessed, true
 	case sealed-due <= r.lag && waitedOut(r.offline, sealed, r.lag):
 		return event.Offline, true

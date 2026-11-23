@@ -53,6 +53,7 @@ func (u *Uploader) do(ctx context.Context, req *http.Request) (answer, error) {
 	got := u.now()
 	if ms, ok := serverTime(resp.Header); ok {
 		u.clock.observe(ms, sent, got)
+		u.noteClock()
 	}
 	if err != nil {
 		return answer{}, err
