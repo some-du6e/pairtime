@@ -246,14 +246,16 @@ func rewrite(name string, always bool, byHand func(name, text string) string, ch
 		}
 		name = target
 	}
-	release, err := home.LockFile(lock, lockWait)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		// No config directory, so no other process edits a config.toml in
-		// it: the edit goes on, and changes nothing or fails as it would.
+	release, lockErr := home.LockFile(lock, lockWait)
+	if errors.Is(lockErr, home.ErrBusy) {
+		return fmt.Errorf("config: pairtime couldn't lock config.toml to change it (%v), so it didn't; try again, or %s", lockErr, byHand(name, ""))
+	}
+	if lockErr != nil {
+		// The lock file can't be made, as in a config directory that
+		// doesn't exist or can't be written, where no other process changes
+		// config.toml either: an edit that changes nothing goes on, and one
+		// that would change it fails.
 		release = func() error { return nil }
-	case err != nil:
-		return fmt.Errorf("config: pairtime couldn't lock config.toml to change it (%v), so it didn't; try again, or %s", err, byHand(name, ""))
 	}
 	defer release()
 	for try := 0; ; try++ {
@@ -269,6 +271,9 @@ func rewrite(name string, always bool, byHand func(name, text string) string, ch
 		same := out == string(data)
 		if same && !always {
 			return nil
+		}
+		if lockErr != nil && !same {
+			return fmt.Errorf("config: pairtime couldn't lock config.toml to change it (%v), so it didn't; %s", lockErr, hand)
 		}
 		if beforeReplace != nil {
 			beforeReplace(name)
