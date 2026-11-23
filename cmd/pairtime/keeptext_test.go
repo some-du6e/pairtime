@@ -4,6 +4,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,6 +58,18 @@ func TestPrivacyKeepText(t *testing.T) {
 					t.Errorf("config.toml is %q and gives %+v", file, cfg.Privacy)
 				}
 				if !strings.Contains(out, "The text it deleted before stays deleted") {
+					t.Errorf("printed %q", out)
+				}
+			},
+		},
+		{
+			name: "on with no config.toml yet writes none, and says pairtime keeps the text, as by default",
+			args: []string{"on"},
+			check: func(t *testing.T, cfg config.Config, file, out, errOut string) {
+				if file != "" || !cfg.Privacy.KeepText() {
+					t.Errorf("config.toml is %q", file)
+				}
+				if !strings.Contains(out, "There's no config.toml, so pairtime keeps the text of your prompts") {
 					t.Errorf("printed %q", out)
 				}
 			},
@@ -141,7 +155,7 @@ func TestPrivacyKeepText(t *testing.T) {
 				t.Fatalf("exit %d, want %d; stdout:\n%s\nstderr:\n%s", code, tt.wantCode, out.String(), errOut.String())
 			}
 			data, err := os.ReadFile(name)
-			if err != nil {
+			if err != nil && !errors.Is(err, fs.ErrNotExist) {
 				t.Fatal(err)
 			}
 			cfg, _ := config.Parse(data)
