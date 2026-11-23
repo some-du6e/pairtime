@@ -28,8 +28,17 @@ const AgentEditWindow = 120_000
 // internal/adapters/claudecode reads from a log (logLine.env).
 const lateRead = 10_000
 
-// maxSessions bounds the AI sessions the bridge remembers a project for.
-const maxSessions = 10_000
+// maxSessions bounds the AI sessions, and maxNames the WakaTime project
+// names, the bridge remembers a project for.
+const (
+	maxSessions = 10_000
+	maxNames    = 10_000
+)
+
+// outside marks a WakaTime project name or an AI session whose latest file
+// heartbeat was in a folder out of pairtime (DESIGN 8.8). It stands where
+// a project key would, and no key holds a NUL.
+const outside = "\x00out of pairtime"
 
 // Clock is the agent's clock when it took a batch in: its wall time in
 // Unix milliseconds, its run clock in milliseconds and the boot id (SM
@@ -45,10 +54,15 @@ type Clock struct {
 //   - A heartbeat with ai_session is transcript-derived, since wakatime-cli's
 //     AI sync sets it on every heartbeat it makes and no plugin can
 //     (docs/errata/2026-11-23-wakatime-cli-2.28.4.md, item 1). With
-//     ai_prompt_length above 0 it becomes a prompt.submit with that many
-//     characters and no text, at the heartbeat's time; with ai_line_changes
-//     above 0, an agent.tool edit of its file. One heartbeat can be both, and
-//     the prompt comes first.
+//     ai_line_changes above 0 it becomes an agent.tool edit of its file;
+//     with ai_prompt_length above 0, a prompt.submit with that many
+//     characters and no text, at the heartbeat's time. One heartbeat can be
+//     both, and the edit comes first, because the prompt such a heartbeat
+//     carries is most often the next turn's. wakatime-cli stamps a prompt
+//     with the time of a transcript entry it batches it with, and can sum
+//     several prompts' lengths, so a bridge prompt's time and length are
+//     approximate, and stay as wakatime-cli gives them
+//     (docs/errata/2026-11-23-bridge-prompt-times.md).
 //   - Any other heartbeat is an editor heartbeat: an editor.activity save
 //     when is_write, else an edit when human_line_changes is above 0, else a
 //     navigate. Its category is never read, because wakatime-cli relabels
@@ -66,14 +80,19 @@ type Clock struct {
 // ai_session is the harness's session id, keyed as the hook path keys it
 // (adapters.Keys.Session), so a session a hook or log reader also reports
 // is one session, where the bridge's records are a cross-check (DESIGN
-// 5.2, 5.7). A folder out of pairtime makes no record (DESIGN 8.8).
+// 5.2, 5.7).
+//
+// A heartbeat out of pairtime makes no record (DESIGN 8.8): one whose file
+// is in a folder out of it, one of a session the agent keeps out
+// (BridgeOptions.SessionIgnored), and one with no file whose session or
+// WakaTime project name was last seen in such a folder.
 //
 // It also maps WakaTime project names to project keys, from the file
 // heartbeats whose folders resolve to a project, for program linking
 // (DESIGN 5.10). The names are content and stay on the device. It is safe
 // for concurrent use.
 type Bridge struct {
-	opts adapters.Options
+	opts BridgeOptions
 
 	mu sync.Mutex
 	// agentEdits holds the times of the agent's edits of each file, by
@@ -81,16 +100,32 @@ type Bridge struct {
 	// reaches. A file's key is its path relative to its project's root,
 	// so the project tells main.go in one project from main.go in another.
 	agentEdits map[fileOf][]int64
-	// names maps WakaTime project names to project keys, and sessions AI
-	// sessions to the project of their latest file heartbeat.
+	// names maps WakaTime project names, and sessions AI sessions, to the
+	// project of their latest file heartbeat, or to outside.
 	names    map[string]string
 	sessions map[string]string
 }
 
-// NewBridge returns a Bridge that keys ids and resolves projects with
-// opts. It panics when opts.Keys is nil, as an adapter does, since every
-// session and turn it records is keyed under the device's K_session.
-func NewBridge(opts adapters.Options) *Bridge {
+// BridgeOptions are what a Bridge needs from the agent: the adapters'
+// Options, which key ids and resolve folders, and a test of the sessions
+// the agent keeps out of pairtime.
+type BridgeOptions struct {
+	adapters.Options
+	// SessionIgnored reports whether the agent keeps the harness session
+	// with key session out of pairtime, because a hook call or a log line
+	// of it named a folder out of it (hookTies.ignored,
+	// LogReader.LogIgnored; DESIGN 8.8). Every heartbeat of such a session
+	// is dropped, the prompts that come before its first file heartbeat
+	// included. It is called with the bridge's lock held, so it must not
+	// call the bridge. Nil keeps no session out.
+	SessionIgnored func(session string) bool
+}
+
+// NewBridge returns a Bridge that keys ids, resolves projects and keeps
+// sessions out with opts. It panics when opts.Keys is nil, as an adapter
+// does, since every session and turn it records is keyed under the
+// device's K_session.
+func NewBridge(opts BridgeOptions) *Bridge {
 	if opts.Keys == nil {
 		panic("wakatime: NewBridge needs Options.Keys, the device's K_session")
 	}
@@ -100,20 +135,22 @@ func NewBridge(opts adapters.Options) *Bridge {
 // fileOf names a file by its project's key and its own.
 type fileOf struct{ project, file string }
 
-// place is where a heartbeat is: its project's key and root, its file's
-// key, and whether its folder is out of pairtime.
+// place is where a heartbeat is: its project's key, its file's key, and
+// whether it is out of pairtime.
 type place struct {
 	project, file string
 	ignored       bool
 }
 
 // Records returns the records batch b makes, in the order of its
-// heartbeats, read at the agent's clock reading at. It first places every
-// file heartbeat, which teaches it the projects of WakaTime names and AI
-// sessions, then the other heartbeats, then notes the batch's agent edits,
-// so an editor edit finds an agent edit of the same batch whichever came
+// heartbeats, read at the agent's clock reading at. It first drops the
+// heartbeats of the sessions the agent keeps out and places every file
+// heartbeat, which teaches it where WakaTime names and AI sessions are,
+// then places the other heartbeats, then notes the batch's agent edits, so
+// an editor edit finds an agent edit of the same batch whichever came
 // first. An agent edit that arrives in a later batch can't change an
-// editor record already made.
+// editor record already made. Before it runs, the agent resolves the
+// batch's Folders.
 //
 // Each record's LogKey is the heartbeat's Key and the record's role, so
 // the agent can make a replay's records the same event_ids, as it does for
@@ -124,12 +161,15 @@ func (br *Bridge) Records(b Batch, at Clock) []adapters.Record {
 	defer br.mu.Unlock()
 	places := make([]place, len(b.Heartbeats))
 	for i, h := range b.Heartbeats {
-		if isFile(h) {
+		switch {
+		case br.sessionIgnored(h.AISession):
+			places[i] = place{ignored: true}
+		case isFile(h):
 			places[i] = br.placeFile(h)
 		}
 	}
 	for i, h := range b.Heartbeats {
-		if !isFile(h) {
+		if !isFile(h) && !places[i].ignored {
 			places[i] = br.placeOther(h)
 		}
 	}
@@ -153,6 +193,28 @@ func (br *Bridge) Records(b Batch, at Clock) []adapters.Record {
 	return out
 }
 
+// Folders returns the folders Records asks the project resolver about for
+// batch b, each once, in order: the folder of each file its heartbeats
+// name. The agent makes each one known first (gitHost.known) and holds the
+// batch until their Tracks end, as it holds a hook call whose folder it is
+// still resolving (D-park-unresolved), so no heartbeat goes without its
+// project because a resolve was slow. The git adapter maps a subfolder to
+// its repo's project.
+func (br *Bridge) Folders(b Batch) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, h := range b.Heartbeats {
+		if !isFile(h) {
+			continue
+		}
+		if d := filepath.Dir(h.Entity); !seen[d] {
+			seen[d] = true
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // NoteAgentEdit tells the bridge of an agent's edit, at t in Unix
 // milliseconds, of the file with key file in the project with key project,
 // that came another way, such as a hook's agent.tool, so an editor edit
@@ -163,16 +225,25 @@ func (br *Bridge) NoteAgentEdit(project, file string, t int64) {
 	br.noteAgentEdit(fileOf{project, file}, t)
 }
 
-// ProjectNames returns the WakaTime project names the bridge has seen
-// resolve to a project, each with its project key.
+// ProjectNames returns the WakaTime project names whose latest file
+// heartbeat resolved to a project, each with its project key. A name last
+// seen in a folder out of pairtime isn't among them.
 func (br *Bridge) ProjectNames() map[string]string {
 	br.mu.Lock()
 	defer br.mu.Unlock()
 	out := make(map[string]string, len(br.names))
 	for n, k := range br.names {
-		out[n] = k
+		if k != outside {
+			out[n] = k
+		}
 	}
 	return out
+}
+
+// sessionIgnored reports whether the agent keeps the AI session with id
+// out of pairtime.
+func (br *Bridge) sessionIgnored(id string) bool {
+	return id != "" && br.opts.SessionIgnored != nil && br.opts.SessionIgnored(br.opts.Keys.Session(id))
 }
 
 // transcript reports whether h is transcript-derived.
@@ -197,10 +268,14 @@ func (br *Bridge) placeFile(h wakacompat.Heartbeat) place {
 	var p place
 	var root string
 	if br.opts.Project != nil {
-		if proj, ok := br.opts.Project(filepath.Dir(h.Entity)); ok {
-			if proj.Ignored {
-				return place{ignored: true}
-			}
+		// A resolver reports a folder out of pairtime with ok false
+		// (adapters.Project.Ignored), so Ignored is read on any answer.
+		proj, ok := br.opts.Project(filepath.Dir(h.Entity))
+		if proj.Ignored {
+			br.remember(h, outside)
+			return place{ignored: true}
+		}
+		if ok {
 			p.project, root = proj.Key, proj.Root
 		}
 	}
@@ -210,29 +285,50 @@ func (br *Bridge) placeFile(h wakacompat.Heartbeat) place {
 		}
 	}
 	if p.project != "" {
-		if h.Project != nil && *h.Project != "" {
-			br.names[*h.Project] = p.project
-		}
-		if h.AISession != "" {
-			if len(br.sessions) >= maxSessions {
-				clear(br.sessions)
-			}
-			br.sessions[h.AISession] = p.project
-		}
+		br.remember(h, p.project)
 	}
 	return p
 }
 
-// placeOther places a heartbeat with no file: in its AI session's project,
-// or else in the project its WakaTime name was seen with.
+// remember notes where the latest file heartbeat of h's WakaTime project
+// name and of its AI session was: in project, or outside pairtime.
+func (br *Bridge) remember(h wakacompat.Heartbeat, project string) {
+	if h.Project != nil && *h.Project != "" {
+		if len(br.names) >= maxNames {
+			clear(br.names)
+		}
+		br.names[*h.Project] = project
+	}
+	if h.AISession != "" {
+		if len(br.sessions) >= maxSessions {
+			clear(br.sessions)
+		}
+		br.sessions[h.AISession] = project
+	}
+}
+
+// placeOther places a heartbeat with no file: where its AI session's
+// latest file heartbeat was, or else where its WakaTime name's was.
 func (br *Bridge) placeOther(h wakacompat.Heartbeat) place {
-	if k := br.sessions[h.AISession]; h.AISession != "" && k != "" {
-		return place{project: k}
+	if h.AISession != "" {
+		if k, ok := br.sessions[h.AISession]; ok {
+			return placeIn(k)
+		}
 	}
 	if h.Project != nil {
-		return place{project: br.names[*h.Project]}
+		if k, ok := br.names[*h.Project]; ok {
+			return placeIn(k)
+		}
 	}
 	return place{}
+}
+
+// placeIn places a heartbeat in project, or out of pairtime for outside.
+func placeIn(project string) place {
+	if project == outside {
+		return place{ignored: true}
+	}
+	return place{project: project}
 }
 
 func (br *Bridge) noteAgentEdit(f fileOf, t int64) {
@@ -308,14 +404,8 @@ func (br *Bridge) bridgeRecords(h wakacompat.Heartbeat, p place, verified bool, 
 	}
 	key := h.Key().String()
 	var out []adapters.Record
-	if h.AIPromptLength > 0 {
-		n := count(h.AIPromptLength)
-		prompt := &event.PromptSubmit{
-			TurnKey:  br.opts.Keys.Turn(h.AISession, strconv.FormatInt(t, 10)),
-			LenChars: n, TypedLenEst: n, OriginDeclared: event.DeclaredNone,
-		}
-		out = append(out, adapters.Record{Event: event.Event{Envelope: env, Data: prompt}, LogKey: key + ".prompt"})
-	}
+	// The edit first: the prompt a heartbeat with both carries is most
+	// often the next turn's (docs/errata/2026-11-23-bridge-prompt-times.md).
 	if n := aiLines(h); n > 0 {
 		// WakaTime counts the lines an agent added and removed as one
 		// number, and the scorer reads only their sum (pkg/score's turn
@@ -325,6 +415,14 @@ func (br *Bridge) bridgeRecords(h wakacompat.Heartbeat, p place, verified bool, 
 			tool.Files = []string{p.file}
 		}
 		out = append(out, adapters.Record{Event: event.Event{Envelope: env, Data: tool}, LogKey: key + ".tool"})
+	}
+	if h.AIPromptLength > 0 {
+		n := count(h.AIPromptLength)
+		prompt := &event.PromptSubmit{
+			TurnKey:  br.opts.Keys.Turn(h.AISession, strconv.FormatInt(t, 10)),
+			LenChars: n, TypedLenEst: n, OriginDeclared: event.DeclaredNone,
+		}
+		out = append(out, adapters.Record{Event: event.Event{Envelope: env, Data: prompt}, LogKey: key + ".prompt"})
 	}
 	return out
 }

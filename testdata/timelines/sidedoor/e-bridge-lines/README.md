@@ -20,7 +20,7 @@ Unlike (a), (c) and (d), these records count toward `logged_s` and `ai_logged_s`
 
 ## Timing choices
 
-- The agent's write changes the open file, so the plugin sends a heartbeat and runs wakatime-cli, whose AI sync sends the transcript's prompt and edit first. The bridge keeps the transcript's timestamps (DESIGN 5.7). The prompt at :03 and the sync at :06 fall between two presence samples, so nothing else is recorded in between and arrival order stays time order. A later sync would deliver the prompt late, which the pending window handles (DESIGN 3.7); that isn't this case.
+- The agent's write changes the open file, so the plugin sends a heartbeat and runs wakatime-cli, whose AI sync sends the transcript's prompt and edit first. The bridge keeps each heartbeat's time, which here is the prompt's own (DESIGN 5.7). wakatime-cli can also stamp a prompt with an earlier transcript entry's time, or carry it on the edit's heartbeat, which this case leaves out ([bridge prompt times](../../../../docs/errata/2026-11-23-bridge-prompt-times.md)). The prompt at :03 and the sync at :06 fall between two presence samples, so nothing else is recorded in between and arrival order stays time order. A later sync would deliver the prompt late, which the pending window handles (DESIGN 3.7); that isn't this case.
 - The plugin's heartbeat shares the edit's millisecond. Within 120 s of an agent edit of the same file, the bridge marks it the agent's (DESIGN 5.7), and an agent's edit opens no anchor.
 - The jiggler moves at 14:02:59, 14:04:59 and 14:06:59 among other times, and the samples at :00 show it: the input in the 10 s before each prompt.
 - 90 characters gives a 60 s typing lead. The edit 3 s after the prompt makes `ai_logged_s` 243 s, a multiple of 3.

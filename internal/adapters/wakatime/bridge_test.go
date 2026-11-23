@@ -52,7 +52,7 @@ type tagged struct {
 func runCapture(t *testing.T, run string, verdict peer.Result) ([]tagged, *Bridge) {
 	t.Helper()
 	keys := loadKeys(t)
-	br := NewBridge(adapters.FixtureOptions())
+	br := NewBridge(BridgeOptions{Options: adapters.FixtureOptions()})
 	var out []tagged
 	var from map[string]string
 	e := newEndpoint(t, nil, Options{
@@ -313,13 +313,13 @@ func TestBridgeVia(t *testing.T) {
 			func(t *testing.T) wakacompat.Heartbeat {
 				return agentHB(t, "wordcount.py", 0, `,"ai_prompt_length":90,"ai_line_changes":5`)
 			},
-			"prompt.submit bridge, agent.tool bridge"},
+			"agent.tool bridge, prompt.submit bridge"},
 		{"a transcript-shaped post from a test script gives bridge_unverified records", notCLI,
 			func(t *testing.T) wakacompat.Heartbeat {
 				ts, _ := at(0)
 				return hb(t, fmt.Sprintf(`{"entity":%q,"type":"file","time":%v,"user_agent":%q,"ai_session":"s1","ai_prompt_length":90,"ai_line_changes":5}`, projectDir+"/wordcount.py", ts, scriptUA))
 			},
-			"prompt.submit bridge_unverified, agent.tool bridge_unverified"},
+			"agent.tool bridge_unverified, prompt.submit bridge_unverified"},
 		{"a connection whose client the check couldn't find fails it", noOwner,
 			func(t *testing.T) wakacompat.Heartbeat { return editorHB(t, "wordcount.py", 0, "") },
 			"editor.activity editor_unverified navigate unknown"},
@@ -331,7 +331,7 @@ func TestBridgeVia(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			br := NewBridge(adapters.FixtureOptions())
+			br := NewBridge(BridgeOptions{Options: adapters.FixtureOptions()})
 			recs := br.Records(Batch{Heartbeats: []wakacompat.Heartbeat{c.h(t)}, Peer: c.verdict}, testClock)
 			if got := kinds(recs); got != c.want {
 				t.Errorf("records %q, want %q", got, c.want)
@@ -345,6 +345,8 @@ func TestBridgeMapping(t *testing.T) {
 		name string
 		hbs  func(t *testing.T) []wakacompat.Heartbeat
 		want string
+		// noFile says no editor.activity may name a file.
+		noFile bool
 	}{
 		{"is_write makes a save, human_line_changes an edit, anything else a navigate",
 			func(t *testing.T) []wakacompat.Heartbeat {
@@ -354,41 +356,46 @@ func TestBridgeMapping(t *testing.T) {
 					editorHB(t, "wordcount.py", 20, `,"category":"debugging","lineno":4`),
 				}
 			},
-			"editor.activity editor save unknown, editor.activity editor edit unknown, editor.activity editor navigate unknown"},
+			"editor.activity editor save unknown, editor.activity editor edit unknown, editor.activity editor navigate unknown", false},
 		{"a category of ai coding doesn't make an editor heartbeat the agent's, since wakatime-cli relabels typing near agent activity",
 			func(t *testing.T) []wakacompat.Heartbeat {
 				return []wakacompat.Heartbeat{editorHB(t, "wordcount.py", 0, `,"category":"ai coding","human_line_changes":2`)}
 			},
-			"editor.activity editor edit unknown"},
+			"editor.activity editor edit unknown", false},
 		{"a transcript heartbeat with only token counts makes no record",
 			func(t *testing.T) []wakacompat.Heartbeat {
 				return []wakacompat.Heartbeat{agentHB(t, "wordcount.py", 0, `,"ai_input_tokens":9772,"ai_output_tokens":143,"is_write":false`)}
 			},
-			""},
+			"", false},
 		{"a transcript heartbeat that changed no lines makes no agent.tool",
 			func(t *testing.T) []wakacompat.Heartbeat {
 				return []wakacompat.Heartbeat{agentHB(t, "wordcount.py", 0, `,"ai_prompt_length":43,"ai_line_changes":0,"is_write":true`)}
 			},
-			"prompt.submit bridge"},
+			"prompt.submit bridge", false},
 		{"a prompt's own heartbeat with no model token is transcript-derived all the same",
 			func(t *testing.T) []wakacompat.Heartbeat {
 				ts, _ := at(0)
 				return []wakacompat.Heartbeat{hb(t, fmt.Sprintf(`{"entity":"Claude 2197af56","type":"app","time":%v,"user_agent":%q,"ai_session":"2197af56","ai_prompt_length":11,"project":"cli"}`, ts, promptUA))}
 			},
-			"prompt.submit bridge"},
-		{"a non-file entity is a navigate with no file",
+			"prompt.submit bridge", false},
+		{"a non-file heartbeat with human_line_changes is an edit with no file",
 			func(t *testing.T) []wakacompat.Heartbeat {
 				ts, _ := at(0)
 				return []wakacompat.Heartbeat{hb(t, fmt.Sprintf(`{"entity":"terminal","type":"app","time":%v,"user_agent":%q,"category":"running tests","human_line_changes":3}`, ts, pluginUA))}
 			},
-			"editor.activity editor edit unknown"},
+			"editor.activity editor edit unknown", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			br := NewBridge(adapters.FixtureOptions())
+			br := NewBridge(BridgeOptions{Options: adapters.FixtureOptions()})
 			recs := br.Records(Batch{Heartbeats: c.hbs(t), Peer: passed}, testClock)
 			if got := kinds(recs); got != c.want {
 				t.Errorf("records %q, want %q", got, c.want)
+			}
+			for _, r := range recs {
+				if a, ok := r.Event.Data.(*event.EditorActivity); ok && c.noFile && a.FileHash != "" {
+					t.Errorf("file_hash %q, want none", a.FileHash)
+				}
 			}
 		})
 	}
@@ -435,7 +442,7 @@ func TestAgentEdits(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			opts := adapters.FixtureOptions()
-			br := NewBridge(opts)
+			br := NewBridge(BridgeOptions{Options: opts})
 			if c.note {
 				proj, _ := opts.Project(projectDir)
 				key, err := opts.Features.Path("a.py")
@@ -516,20 +523,20 @@ func TestBridgeKeys(t *testing.T) {
 					t.Errorf("mono %d, want 0", recs[0].Event.Mono)
 				}
 			}},
-		{"a record's LogKey names its heartbeat and its role, so a replay's are the same",
+		{"a heartbeat with an edit and a prompt makes the edit first, and each record's LogKey names the heartbeat and the role",
 			func(t *testing.T) wakacompat.Heartbeat {
 				return agentHB(t, "wordcount.py", 0, `,"ai_prompt_length":12,"ai_line_changes":3`)
 			},
 			func(t *testing.T, recs []adapters.Record) {
-				if len(recs) != 2 || !strings.HasSuffix(recs[0].LogKey, ".prompt") || !strings.HasSuffix(recs[1].LogKey, ".tool") ||
-					strings.TrimSuffix(recs[0].LogKey, ".prompt") != strings.TrimSuffix(recs[1].LogKey, ".tool") {
+				if len(recs) != 2 || !strings.HasSuffix(recs[0].LogKey, ".tool") || !strings.HasSuffix(recs[1].LogKey, ".prompt") ||
+					strings.TrimSuffix(recs[0].LogKey, ".tool") != strings.TrimSuffix(recs[1].LogKey, ".prompt") {
 					t.Errorf("log keys %q, %q", recs[0].LogKey, recs[len(recs)-1].LogKey)
 				}
 			}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			br := NewBridge(opts)
+			br := NewBridge(BridgeOptions{Options: opts})
 			recs := br.Records(Batch{Heartbeats: []wakacompat.Heartbeat{c.hb(t)}, Peer: passed}, testClock)
 			if len(recs) == 0 {
 				t.Fatal("no records")
@@ -542,19 +549,22 @@ func TestBridgeKeys(t *testing.T) {
 func TestBridgeProjects(t *testing.T) {
 	ignored := adapters.FixtureOptions()
 	inner := ignored.Project
+	// The agent's resolver answers a folder out of pairtime with Ignored
+	// and false (gitHost.project; adapters.Project.Ignored).
 	ignored.Project = func(dir string) (adapters.Project, bool) {
-		p, ok := inner(dir)
-		p.Ignored = strings.HasSuffix(dir, "/private")
-		return p, ok
+		if strings.HasSuffix(dir, "/private") {
+			return adapters.Project{Ignored: true}, false
+		}
+		return inner(dir)
 	}
 	cases := []struct {
 		name  string
-		opts  adapters.Options
+		opts  BridgeOptions
 		hbs   func(t *testing.T) []wakacompat.Heartbeat
 		check func(t *testing.T, br *Bridge, recs []adapters.Record)
 	}{
 		{"an app heartbeat takes its project from its session's files in the same batch, whatever their order",
-			adapters.FixtureOptions(),
+			BridgeOptions{Options: adapters.FixtureOptions()},
 			func(t *testing.T) []wakacompat.Heartbeat {
 				ts, _ := at(0)
 				return []wakacompat.Heartbeat{
@@ -568,7 +578,7 @@ func TestBridgeProjects(t *testing.T) {
 				}
 			}},
 		{"a heartbeat with no file takes the project its WakaTime name was seen with",
-			adapters.FixtureOptions(),
+			BridgeOptions{Options: adapters.FixtureOptions()},
 			func(t *testing.T) []wakacompat.Heartbeat {
 				ts, _ := at(5)
 				return []wakacompat.Heartbeat{
@@ -585,7 +595,7 @@ func TestBridgeProjects(t *testing.T) {
 				}
 			}},
 		{"a heartbeat in a folder out of pairtime makes no record",
-			ignored,
+			BridgeOptions{Options: ignored},
 			func(t *testing.T) []wakacompat.Heartbeat {
 				ts, _ := at(0)
 				return []wakacompat.Heartbeat{
@@ -606,6 +616,149 @@ func TestBridgeProjects(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			br := NewBridge(c.opts)
 			c.check(t, br, br.Records(Batch{Heartbeats: c.hbs(t), Peer: passed}, testClock))
+		})
+	}
+}
+
+// privateDir is a folder out of pairtime in TestBridgeExclusions.
+const privateDir = "/home/capture/private"
+
+func TestBridgeExclusions(t *testing.T) {
+	const session = "617e16a3-ddb4-44ca-af68-72cf58ed1a34"
+	opts := adapters.FixtureOptions()
+	inner := opts.Project
+	opts.Project = func(dir string) (adapters.Project, bool) {
+		if dir == privateDir {
+			return adapters.Project{Ignored: true}, false
+		}
+		return inner(dir)
+	}
+	tracked, _ := inner(projectDir)
+	// fileIn is the session's agent edit of a file in dir, named project.
+	fileIn := func(t *testing.T, dir, project string, sec float64) wakacompat.Heartbeat {
+		ts, _ := at(sec)
+		return hb(t, fmt.Sprintf(`{"entity":%q,"type":"file","time":%v,"user_agent":%q,"project":%q,"ai_session":%q,"ai_line_changes":2}`, dir+"/notes.md", ts, claudeUA, project, session))
+	}
+	// prompt is an app heartbeat of sess, named project when it isn't "".
+	prompt := func(t *testing.T, sess, project string, sec float64) wakacompat.Heartbeat {
+		ts, _ := at(sec)
+		name := ""
+		if project != "" {
+			name = fmt.Sprintf(`,"project":%q`, project)
+		}
+		return hb(t, fmt.Sprintf(`{"entity":"Claude x","type":"app","time":%v,"user_agent":%q,"ai_session":%q,"ai_prompt_length":30%s}`, ts, promptUA, sess, name))
+	}
+	cases := []struct {
+		name string
+		// ignored is the agent's session test, by session key.
+		ignored func(key string) bool
+		batches func(t *testing.T) [][]wakacompat.Heartbeat
+		// want is the kinds of the last batch's records, and project the
+		// project they must be in, or "" for none.
+		want    string
+		project string
+	}{
+		{"an app prompt after its session's file heartbeat in a folder out of pairtime makes no record", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "private", 0)}, {prompt(t, session, "", 10)}}
+			}, "", ""},
+		{"an app prompt in the same batch as its session's excluded file heartbeat makes no record", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{prompt(t, session, "", 0), fileIn(t, privateDir, "private", 1)}}
+			}, "", ""},
+		{"a session whose latest file heartbeat moved into a folder out of pairtime loses its project", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 0)}, {fileIn(t, privateDir, "private", 10)}, {prompt(t, session, "", 20)}}
+			}, "", ""},
+		{"a session whose latest file heartbeat is in a tracked folder again takes that project", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "private", 0)}, {fileIn(t, projectDir, "cli", 10)}, {prompt(t, session, "", 20)}}
+			}, "prompt.submit bridge", tracked.Key},
+		{"a name seen in a folder out of pairtime makes a prompt of another session that carries it no record", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "shared", 0)}, {prompt(t, "other-session", "shared", 10)}}
+			}, "", ""},
+		{"a name seen in a folder out of pairtime and then in a tracked one maps to the tracked project", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "shared", 0)}, {fileIn(t, projectDir, "shared", 5)}, {prompt(t, "other-session", "shared", 10)}}
+			}, "prompt.submit bridge", tracked.Key},
+		{"the session test drops an app prompt that has no file heartbeat, by the session's key",
+			func(key string) bool { return key == opts.Keys.Session("kept-out") },
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{prompt(t, "kept-out", "cli", 0)}}
+			}, "", ""},
+		{"the session test drops the session's file heartbeats too",
+			func(key string) bool { return key == opts.Keys.Session(session) },
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 0), editorHB(t, "a.py", 1, "")}}
+			}, "editor.activity editor navigate unknown", tracked.Key},
+		{"the session test keeps the other sessions' prompts",
+			func(key string) bool { return key == opts.Keys.Session("kept-out") },
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{editorHB(t, "a.py", 0, "")}, {prompt(t, "another", "cli", 10)}}
+			}, "prompt.submit bridge", tracked.Key},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			br := NewBridge(BridgeOptions{Options: opts, SessionIgnored: c.ignored})
+			var last []adapters.Record
+			for _, b := range c.batches(t) {
+				last = br.Records(Batch{Heartbeats: b, Peer: passed}, testClock)
+			}
+			if got := kinds(last); got != c.want {
+				t.Fatalf("records %q, want %q", got, c.want)
+			}
+			for _, r := range last {
+				if r.Event.ProjectKey != c.project {
+					t.Errorf("%s in project %q, want %q", r.Event.Kind(), r.Event.ProjectKey, c.project)
+				}
+			}
+			if _, ok := br.ProjectNames()["private"]; ok {
+				t.Error("a name seen only in a folder out of pairtime is in ProjectNames")
+			}
+		})
+	}
+}
+
+func TestBridgeFolders(t *testing.T) {
+	file := func(t *testing.T, entity string) wakacompat.Heartbeat {
+		ts, _ := at(0)
+		return hb(t, fmt.Sprintf(`{"entity":%q,"type":"file","time":%v,"user_agent":%q}`, entity, ts, pluginUA))
+	}
+	app := func(t *testing.T) wakacompat.Heartbeat {
+		ts, _ := at(0)
+		return hb(t, fmt.Sprintf(`{"entity":"Claude x","type":"app","time":%v,"user_agent":%q,"ai_session":"s","ai_prompt_length":9}`, ts, promptUA))
+	}
+	cases := []struct {
+		name string
+		hbs  func(t *testing.T) []wakacompat.Heartbeat
+		want []string
+	}{
+		{"each file heartbeat's folder is asked once, in the batch's order",
+			func(t *testing.T) []wakacompat.Heartbeat {
+				return []wakacompat.Heartbeat{file(t, "/p/b/x.py"), file(t, "/p/a/y.py"), file(t, "/p/b/z.py")}
+			},
+			[]string{"/p/b", "/p/a"}},
+		{"a subfolder is asked as itself, for the git adapter to map to its repo",
+			func(t *testing.T) []wakacompat.Heartbeat {
+				return []wakacompat.Heartbeat{file(t, "/p/repo/src/deep/x.go")}
+			},
+			[]string{"/p/repo/src/deep"}},
+		{"a heartbeat with no file asks about no folder",
+			func(t *testing.T) []wakacompat.Heartbeat { return []wakacompat.Heartbeat{app(t)} },
+			nil},
+		{"a relative or remote path asks about no folder",
+			func(t *testing.T) []wakacompat.Heartbeat {
+				return []wakacompat.Heartbeat{file(t, "x.py"), file(t, "ssh://host/p/x.py")}
+			},
+			nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			br := NewBridge(BridgeOptions{Options: adapters.FixtureOptions()})
+			if got := br.Folders(Batch{Heartbeats: c.hbs(t)}); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("Folders = %q, want %q", got, c.want)
+			}
 		})
 	}
 }
