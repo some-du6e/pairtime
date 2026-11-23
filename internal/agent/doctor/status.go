@@ -35,7 +35,8 @@ type Ledger struct {
 	// life: made while config.toml said local-only, they reached it only
 	// after it had sealed a batch online since, so they never upload
 	// (D-late-local). HarnessCounts.LateLocal is each harness's part of it
-	// since the agent started.
+	// since the agent started. A log line read again after a restart is
+	// dropped, and counted, again.
 	LateLocal uint64 `json:"late_local"`
 }
 

@@ -604,11 +604,12 @@ func (h *adapterHost) takeBatch(t *tailers.Tailer, b tailers.Batch) int {
 
 // logsHeld is what the ledger holds for the log records takeLine writes
 // (heldLogs), read from the ledger the first time a line comes, which is
-// once the writer is there. A ledger that can't be read gives none, which
-// the agent's log notes. It runs on the adapters' worker.
+// once the writer is there, from heldLogsWindow before the newest batch
+// sealed before the agent started on. A ledger that can't be read gives
+// none, which the agent's log notes. It runs on the adapters' worker.
 func (h *adapterHost) logsHeld() *heldLogs {
 	if h.logHeld == nil {
-		held, err := loadHeldLogs(h.a.dirs.Ledger(), wallNow())
+		held, err := loadHeldLogs(h.a.dirs.Ledger(), h.a.started, wallNow())
 		if err != nil {
 			h.a.log.Warn("couldn't read what the ledger holds, so a log line a replay reads again may make its record twice", "err", err)
 		}
@@ -716,6 +717,13 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 			h.count(func() { st.Repeats++ })
 			continue
 		}
+		if held.wasDropped(r.Event.EventID) {
+			// The ledger dropped this record earlier in this run, as made in
+			// a local-only stretch (ledger.ErrLateLocal), and would drop it
+			// again: a replay of it is neither a repeat of a record the
+			// ledger holds nor a second drop.
+			continue
+		}
 		if start, ok := r.Event.Data.(*event.SessionStart); ok && !ll.Replay {
 			r = h.tiedStart(r, start)
 		}
@@ -724,12 +732,15 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		// those reads the lines again, to the same event_ids. A log line has
 		// no sender's stamp of its own (ledger.Input.Sent).
 		r.Late = line.Lookback > 0
-		wrote := h.write(st, r, clock.Stamp{})
-		if !wrote && h.writerDown() {
-			return false
-		}
-		if wrote {
+		switch h.write(st, r, clock.Stamp{}) {
+		case writeTaken:
 			held.add(r.Event.EventID, wallNow())
+		case writeDropped:
+			held.drop(r.Event.EventID, wallNow())
+		case writeRefused:
+			if h.writerDown() {
+				return false
+			}
 		}
 		switch r.Event.Kind() {
 		case event.KindSessionStart, event.KindPromptSubmit, event.KindAgentStop:

@@ -344,7 +344,9 @@ type harnessStats struct {
 	WriteFailures uint64 `json:"write_failures,omitempty"`
 	// LateLocal counts records the ledger writer dropped: made while
 	// config.toml said local-only, they reached it only after it sealed a
-	// batch online since, so they never upload (ledger.ErrLateLocal).
+	// batch online since, so they never upload (ledger.ErrLateLocal). A log
+	// line's replay in the same run counts once (heldLogs.dropped), and one
+	// after a restart counts again.
 	LateLocal uint64 `json:"late_local,omitempty"`
 	// Ignored counts calls and log lines from a folder out of pairtime,
 	// which make no record (DESIGN 8.8).
@@ -361,8 +363,8 @@ type harnessStats struct {
 	Lines        uint64 `json:"lines,omitempty"`
 	LineFailures uint64 `json:"line_failures,omitempty"`
 	// Repeats counts the records of log lines a replay read again that the
-	// ledger already holds, which the adapter dropped, so none counts twice
-	// (heldLogs).
+	// ledger already holds, which the adapter left out, so none counts twice
+	// (heldLogs). A record the ledger dropped is no repeat.
 	Repeats uint64 `json:"repeats,omitempty"`
 }
 
@@ -1607,7 +1609,7 @@ func (h *adapterHost) parse(c hostCall) {
 	h.hint(c)
 	due, refused := false, false
 	for _, r := range recs {
-		if !h.write(c.st, r, sentOf(c.d)) {
+		if h.write(c.st, r, sentOf(c.d)) == writeRefused {
 			refused = true
 		}
 		switch r.Event.Kind() {
@@ -1688,10 +1690,25 @@ func (h *adapterHost) holdBackNow() {
 	h.holding = nil
 }
 
+// writeResult is what the ledger did with a record write handed it.
+type writeResult int
+
+const (
+	// writeRefused is a record the ledger refused, as a writer that stopped
+	// after a failure refuses every one.
+	writeRefused writeResult = iota
+	// writeTaken is a record the ledger holds.
+	writeTaken
+	// writeDropped is a record the ledger left out as made in a local-only
+	// stretch that came after a batch was sealed online since
+	// (ledger.ErrLateLocal), whose work is done.
+	writeDropped
+)
+
 // write writes one record to the ledger, with its content and its call's
 // own stamp (sentOf) beside the event, tells focus and the git watcher what
-// it says, and reports whether the ledger took it.
-func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stamp) bool {
+// it says, and reports what the ledger did with it.
+func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stamp) writeResult {
 	h.mu.Lock()
 	w := h.writer
 	h.mu.Unlock()
@@ -1713,7 +1730,7 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stam
 		h.count(func() { st.LateLocal++ })
 		h.a.log.Info("a record made while config.toml said local-only came after the computer uploaded again, so the ledger dropped it",
 			"kind", ev.Kind(), "made", time.UnixMilli(ev.T).UTC())
-		return true
+		return writeDropped
 	}
 	if err != nil {
 		h.count(func() {
@@ -1721,7 +1738,7 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stam
 			st.LastFailure = clip(fmt.Sprintf("the ledger refused a %s record: %v", ev.Kind(), err))
 		})
 		h.a.setProblem("adapters.ledger", fmt.Sprintf("the ledger refused a %s record of a hook call: %v", ev.Kind(), err))
-		return false
+		return writeRefused
 	}
 	h.count(func() {
 		st.Records++
@@ -1745,7 +1762,7 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stam
 			g.noteCommand(r, t)
 		}
 	}
-	return true
+	return writeTaken
 }
 
 // statsOf returns the counts of harness name, or the ones of calls no
