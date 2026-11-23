@@ -130,8 +130,11 @@ var installStdin io.Reader = os.Stdin
 // at its first start (internal/agent/config). pairtime login links the
 // computer and sets it online, and install leaves both as they are, so the
 // consent screen and install's last line say which the computer is in
-// (linkedServer). Lookback over old transcripts arrives with WP-AD3, and
-// the WakaTime line and Karim's AGENTS.md entry with their work packages.
+// (linkedServer). Once it runs, the agent reads the last 30 days of
+// transcripts by itself, at low priority (lookback, internal/agent/tailers),
+// and its status says how far it got; the progress bar and the welcome
+// recap come with the dashboard's work packages, and the WakaTime line and
+// Karim's AGENTS.md entry with theirs.
 func runInstall(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("install", flag.ContinueOnError)
 	flags.SetOutput(stderr)

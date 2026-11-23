@@ -3,6 +3,7 @@
 package claudecode
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -72,9 +73,16 @@ import (
 // Bounds on what the reader remembers.
 const (
 	// maxLogFiles and maxLogSessions bound the transcript files and the
-	// sessions it remembers: those it read from last.
+	// sessions it remembers: those it read from last, for files those it
+	// would forget last (older), and for sessions those a remembered file
+	// names first. There is room for more sessions than the files can name,
+	// so none a file names is the one forgotten (logSessionFor).
 	maxLogFiles    = 256
-	maxLogSessions = 256
+	maxLogSessions = maxLogFiles + 64
+	// recentFiles is how many of the files it read from last it keeps
+	// over the rest: lookback hands a history over a batch at a time, and
+	// other files' lines come between its batches.
+	recentFiles = 16
 	// maxPendingTools bounds the tool uses of one file that wait for their
 	// results.
 	maxPendingTools = 64
@@ -169,6 +177,17 @@ type txFile struct {
 	snap   txState
 	snapAt int64
 	seen   uint64
+	// newest is the time of the newest entry the reader took from the
+	// file, in Unix ms, which ranks it for eviction (older).
+	newest int64
+	// rewinding says the reader made its memory of the file with none to
+	// go on (fileFor), and only replays have come since: they are a
+	// Rewind's, which reads the file's old lines again. rewound is where
+	// the Rewind's lines end, as far as they have come, so a replay that
+	// ends by then is one of them, as after a restart whose memory a
+	// snapshot from the Rewind's middle gave. Both are saved with the file.
+	rewinding bool
+	rewound   int64
 }
 
 // txState is the part of what the reader knows of a file at a point in
@@ -264,6 +283,10 @@ type pendingStart struct {
 	// counted says the entry's folder counts (txState.Ignored), so the
 	// start stays whatever line resolves it (adapters.Record.Counted).
 	counted bool
+	// replay says a Rewind's replayed line stated it, as a Rewind reads
+	// the old lines of a file the reader has no memory of again: once the
+	// session's hooks come, it goes, however old its entry (resolveStart).
+	replay bool
 }
 
 // logLine is one transcript line while Parse reads it.
@@ -306,10 +329,22 @@ func (a *Adapter) parseLog(raw adapters.RawRecord) ([]adapters.Record, error) {
 			// here.
 			f.restart(ll.Offset)
 		}
+		switch {
+		case ll.Replay && f.rewinding:
+			f.rewound = max(f.rewound, ll.End)
+		case !ll.Replay:
+			// The Rewind's replays, if any, are over. A file read anew from
+			// its start has none of its old lines.
+			f.rewinding = false
+			if ll.Offset == 0 {
+				f.rewound = 0
+			}
+		}
 		if ll.TooLong {
 			perr.Problem("a line longer than the tailers read")
 		} else if e, ok := l.entryOf(); ok {
 			l.take(e)
+			f.newest = max(f.newest, e.t)
 		}
 		if !ll.Replay {
 			l.resolveStart()
@@ -482,6 +517,14 @@ func (a *Adapter) logSession(sid string) *txSession {
 	return ls
 }
 
+// hookedAt reports whether the session's via-hook calls, as s remembers
+// the first of them, describe a moment t: one no more than startGrace
+// before that call, as a session's first entries can be. An entry older
+// than that, as lookback reads from a session's history before its hooks
+// came, keeps the reader's session.start: the hook's own sorts after it,
+// so SM 2.2 rules 4 and 5 can't read that one for it.
+func (s *txSession) hookedAt(t int64) bool { return s.nativeAt > 0 && t >= s.nativeAt-startGrace }
+
 // noteNative copies the native cutoff of session s, which a hook call just
 // set, into the reader's memory of the session, so the reader keeps it
 // when the hook calls' memory of the session is gone, as after 256 others,
@@ -506,27 +549,43 @@ func (a *Adapter) native(sid string, t int64) bool {
 // (E-cc-transcript-labels). A session whose hooks only the spool delivered
 // gets it too, since pkg/score reads no side door's start in a session a
 // log reader covers, so its own would leave SM 2.2 rules 4 and 5 nothing
-// to read. A subagent's entries state the session's token too, and are no
-// start of it. It waits in pend until startGrace after the entry, unless
-// the entry is that old already (resolveStart).
+// to read. So does a hooked session's history from before its hooks came,
+// as lookback reads it (hookedAt), but not a Rewind's replay of it: a
+// Rewind reads the old lines of a file the reader has no memory of again,
+// as for a session's file taken up at its end, whose start the start of
+// its hooks gives, and the next line read live would write the replay's
+// dated at the session's first entry. The reader saves the Rewind's mark
+// with the file (txFile.rewinding, rewound), so a restart's replays of
+// those lines follow it too, while a restart's replays of lines read live
+// keep the rule by time, so a start that waited when the agent stopped
+// still comes. A subagent's entries state
+// the session's token too, and are no start of it. It waits in pend until
+// startGrace after the entry, unless the entry is that old already
+// (resolveStart).
 func (l *logLine) sessionStart(e *entry, sid string) {
 	if e.Entrypoint == nil || e.IsSidechain || sid == "" || e.t == 0 {
 		return
 	}
 	ls := l.a.logSession(sid)
-	if ls.nativeAt > 0 {
+	rewound := l.raw.Log.Replay && (l.f.rewinding || l.raw.Log.End <= l.f.rewound)
+	if ls.hookedAt(e.t) || rewound && ls.nativeAt > 0 {
 		return
 	}
 	// The session's token as of this entry: the last waiting start's, or
-	// the last one written.
+	// the last one written. A Rewind's start that resolveStart drops, now
+	// that the session's hooks came, is none of the session's.
 	tok := *e.Entrypoint
-	started, last := ls.started, ls.token
+	started, last, waiting := ls.started, ls.token, 0
 	for _, ps := range l.f.pend.starts {
+		if ps.session == sid && ps.replay && ls.nativeAt > 0 {
+			continue
+		}
+		waiting++
 		if ps.session == sid {
 			started, last = true, ps.token
 		}
 	}
-	if started && last == tok || len(l.f.pend.starts) >= maxPendingStarts {
+	if started && last == tok || waiting >= maxPendingStarts {
 		return
 	}
 	ep, known := tokenEntrypoint(tok)
@@ -537,7 +596,8 @@ func (l *logLine) sessionStart(e *entry, sid string) {
 	if started {
 		kind = event.StartResume
 	}
-	ps := &pendingStart{session: sid, at: l.raw.Log.Offset, env: l.env(e.t, sid), token: tok, counted: !l.f.st.Ignored,
+	ps := &pendingStart{session: sid, at: l.raw.Log.Offset, env: l.env(e.t, sid), token: tok,
+		counted: !l.f.st.Ignored, replay: rewound,
 		start: event.SessionStart{StartKind: kind, Entrypoint: ep, ParentClass: event.ParentUnknown}}
 	if isKey(e.PermissionMode) {
 		ps.start.PermissionMode = e.PermissionMode
@@ -550,17 +610,19 @@ func (l *logLine) sessionStart(e *entry, sid string) {
 	}
 }
 
-// resolveStart writes the pending session.start once startGrace has
-// passed since its entry with no via-hook call of its session, and drops it
-// when one came. One written after its entry's line is dated a millisecond
-// before the entry, so it sorts before the entry's other records (pkg/score
-// orders records by time, then by when they were written).
+// resolveStart writes the pending session.start once startGrace, and the
+// hold a procs tie asks for (LogHoldStart), have passed since its entry
+// with no via-hook call of its session, and drops it when one came that
+// the entry is no older than (hookedAt), or one came at all to a start a
+// replay made. One written after its entry's line is dated a millisecond
+// before the entry, so it sorts before the entry's other records
+// (pkg/score orders records by time, then by when they were written).
 func (l *logLine) resolveStart() {
 	for len(l.f.pend.starts) > 0 {
 		ps := l.f.pend.starts[0]
 		ls := l.a.logSession(ps.session)
 		switch {
-		case ls.nativeAt > 0:
+		case ls.hookedAt(ps.env.T), ps.replay && ls.nativeAt > 0:
 		case l.raw.Arrival.T-ps.env.T >= startGrace+ls.hold:
 			ls.started, ls.token, ls.hold = true, ps.token, 0
 			env := ps.env
@@ -1058,28 +1120,61 @@ func (l *logLine) badPatch(e *entry) {
 }
 
 // fileFor returns what the reader remembers of file key, making it, and
-// marks it read from now. Past maxLogFiles it forgets the file read from
-// least recently that holds nothing back, or else the one read from least
-// recently.
+// marks it read from now. Past maxLogFiles it forgets a file (older).
 func (a *Adapter) fileFor(key string) *txFile {
 	a.clock++
 	f := a.files[key]
 	if f == nil {
 		if len(a.files) >= maxLogFiles {
+			recent := recentSeen(a.files)
 			var oldest *txFile
 			for _, o := range a.files {
-				if oldest == nil || o.pend.empty() && !oldest.pend.empty() ||
-					o.pend.empty() == oldest.pend.empty() && o.seen < oldest.seen {
+				if oldest == nil || older(o, oldest, recent) {
 					oldest = o
 				}
 			}
 			delete(a.files, oldest.key)
 		}
-		f = &txFile{key: key}
+		f = &txFile{key: key, rewinding: true}
 		a.files[key] = f
 	}
 	f.seen = a.clock
 	return f
+}
+
+// older reports whether the reader's memory, when full, forgets file o
+// before p: a file that holds nothing back first, then one that isn't
+// among the recentFiles it read from last, those whose seen is recent or
+// later (recentSeen), so the history lookback reads now stays, then the
+// one whose newest entry is oldest, so the hundreds of histories lookback
+// reads go before a session being written now, and then the one read from
+// least recently. A file forgotten while it is written to again is read
+// again from its start.
+func older(o, p *txFile, recent uint64) bool {
+	if o.pend.empty() != p.pend.empty() {
+		return o.pend.empty()
+	}
+	if or, pr := o.seen >= recent, p.seen >= recent; or != pr {
+		return pr
+	}
+	if o.newest != p.newest {
+		return o.newest < p.newest
+	}
+	return o.seen < p.seen
+}
+
+// recentSeen returns the seen of the recentFiles-th of files read from
+// last, or 0 when there are no more files than that.
+func recentSeen(files map[string]*txFile) uint64 {
+	if len(files) <= recentFiles {
+		return 0
+	}
+	seen := make([]uint64, 0, len(files))
+	for _, f := range files {
+		seen = append(seen, f.seen)
+	}
+	slices.Sort(seen)
+	return seen[len(seen)-recentFiles]
 }
 
 // restart starts what the reader knows of a file afresh at offset at.
@@ -1088,17 +1183,29 @@ func (f *txFile) restart(at int64) {
 }
 
 // logSessionFor returns what the reader remembers of session sid, making
-// it. Past maxLogSessions it forgets the session read from least recently.
+// it. Past maxLogSessions it forgets the session read from least recently
+// of those no remembered file names, so a session that went quiet while
+// lookback read hundreds of others keeps what it knows, as its file does
+// (older), or of all of them when every one is named.
 func (a *Adapter) logSessionFor(sid string) *txSession {
 	a.clock++
 	s := a.logSessions[sid]
 	if s == nil {
 		if len(a.logSessions) >= maxLogSessions {
-			var oldest *txSession
+			named := a.namedSessions()
+			var oldest, oldestNamed *txSession
 			for _, o := range a.logSessions {
-				if oldest == nil || o.seen < oldest.seen {
+				switch {
+				case named[o.id]:
+					if oldestNamed == nil || o.seen < oldestNamed.seen {
+						oldestNamed = o
+					}
+				case oldest == nil || o.seen < oldest.seen:
 					oldest = o
 				}
+			}
+			if oldest == nil {
+				oldest = oldestNamed
 			}
 			delete(a.logSessions, oldest.id)
 		}
@@ -1107,6 +1214,18 @@ func (a *Adapter) logSessionFor(sid string) *txSession {
 	}
 	s.seen = a.clock
 	return s
+}
+
+// namedSessions returns the sessions the files the reader remembers name.
+// a.mu is held.
+func (a *Adapter) namedSessions() map[string]bool {
+	named := make(map[string]bool, len(a.files))
+	for _, f := range a.files {
+		if f.st.Session != "" {
+			named[f.st.Session] = true
+		}
+	}
+	return named
 }
 
 // LogPlace returns the folder a transcript line ran in and its session id

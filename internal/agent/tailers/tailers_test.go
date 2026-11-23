@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -60,6 +61,12 @@ type rig struct {
 	// end otherwise: what the adapter needs a restart to start from.
 	take   func(Line) bool
 	resume func(Line) int64
+	// lookback, when set, starts lookback's child (Options.Lookback), and
+	// until says when its records end (Options.LookbackUntil).
+	lookback func() (Child, error)
+	until    func() time.Time
+	// reported is the progress the tailer last reported (Options.Progress).
+	reported atomic.Pointer[Progress]
 }
 
 func newRig(t *testing.T) *rig {
@@ -91,11 +98,14 @@ func (r *rig) open() {
 	r.tl = New(Options{
 		Roots: []Root{{Harness: event.HarnessClaudeCode, LogRoot: adapters.LogRoot{Dir: r.dir, Depth: 2,
 			Match: func(rel string) bool { return strings.Count(rel, "/") == 1 && strings.HasSuffix(rel, ".jsonl") }}}},
-		Store:    r.store,
-		Deliver:  r.deliver,
-		Forget:   func(_ event.Harness, file string) { r.forgot = append(r.forgot, file) },
-		Now:      func() time.Time { return r.now },
-		NoNotify: true,
+		Store:         r.store,
+		Deliver:       r.deliver,
+		Forget:        func(_ event.Harness, file string) { r.forgot = append(r.forgot, file) },
+		Now:           func() time.Time { return r.now },
+		NoNotify:      true,
+		Lookback:      r.lookback,
+		LookbackUntil: r.until,
+		Progress:      func(p Progress) { r.reported.Store(&p) },
 	})
 }
 
@@ -695,6 +705,20 @@ func TestTailer(t *testing.T) {
 	}
 }
 
+// countedReader counts the reads made through it, and their bytes.
+type countedReader struct {
+	r     io.ReaderAt
+	calls int
+	read  int64
+}
+
+func (c *countedReader) ReadAt(p []byte, off int64) (int, error) {
+	n, err := c.r.ReadAt(p, off)
+	c.calls++
+	c.read += int64(n)
+	return n, err
+}
+
 // TestPollEvery checks the hot poll's pace (CP 3.2 item 3): every HotPoll
 // while a file grew in the last QuietAfter, every QuietPoll while one did in
 // the last HotWindow, and no poll once none did. The hottest file sets it.
@@ -734,21 +758,32 @@ func TestPollEvery(t *testing.T) {
 }
 
 // TestLastLine checks where a file's last complete line ends, which a
-// file taken up at its end goes on from.
+// file taken up at its end goes on from, read back with each byte read
+// once at most, a long line in a few reads, and no more of one too long
+// than tells it so.
 func TestLastLine(t *testing.T) {
 	cases := []struct {
 		name, text string
 		end        int64
 		hashOf     string
+		// calls bounds the reads and read the bytes they read, when set.
+		calls int
+		read  int64
 	}{
-		{"a file of whole lines ends after its last newline", "{\"a\":1}\n{\"b\":2}\n", 16, `{"b":2}`},
-		{"a last line without its newline isn't one", "{\"a\":1}\n{\"b\"", 8, `{"a":1}`},
-		{"a file of one line is that line", "{\"a\":1}\r\n", 9, `{"a":1}`},
-		{"an empty file has none", "", 0, ""},
-		{"a file with no newline has none", "{\"a\":1}", 0, ""},
-		{"a last line longer than the read buffer is read back whole", "{\"a\":1}\n" + strings.Repeat("y", 3*readBuffer) + "\n", 8 + 3*readBuffer + 1, strings.Repeat("y", 3*readBuffer)},
-		{"a line being written that is longer than MaxLine is passed over", "{\"a\":1}\n" + strings.Repeat("z", MaxLine+5), 8, `{"a":1}`},
-		{"a last line longer than MaxLine has its end and no hash", "{\"a\":1}\n" + strings.Repeat("y", MaxLine+5) + "\n", 8 + MaxLine + 6, ""},
+		{"a file of whole lines ends after its last newline", "{\"a\":1}\n{\"b\":2}\n", 16, `{"b":2}`, 0, 0},
+		{"a last line without its newline isn't one", "{\"a\":1}\n{\"b\"", 8, `{"a":1}`, 0, 0},
+		{"a file of one line is that line", "{\"a\":1}\r\n", 9, `{"a":1}`, 0, 0},
+		{"an empty file has none", "", 0, "", 0, 0},
+		{"a file with no newline has none", "{\"a\":1}", 0, "", 0, 0},
+		{"a last line longer than the read buffer is read back whole, in growing reads", "{\"a\":1}\n" + strings.Repeat("y", 3*readBuffer) + "\n", 8 + 3*readBuffer + 1, strings.Repeat("y", 3*readBuffer), 3, 0},
+		{"a line being written that is longer than MaxLine is passed over", "{\"a\":1}\n" + strings.Repeat("z", MaxLine+5), 8, `{"a":1}`, 0, 0},
+		{"a last line longer than MaxLine has its end and no hash", "{\"a\":1}\n" + strings.Repeat("y", MaxLine+5) + "\n", 8 + MaxLine + 6, "", 10, 0},
+		{"of a last line too long after more than MaxLine of lines, no more is read than tells it so", strings.Repeat("{\"a\":1}\n", MaxLine/8+1) + strings.Repeat("y", MaxLine+5) + "\n",
+			2*MaxLine + 14, "", 0, MaxLine + 3},
+		{"a last line of MaxLine bytes and a CRLF, which readLine reads whole, has its hash", "{\"a\":1}\n" + strings.Repeat("y", MaxLine) + "\r\n", 8 + MaxLine + 2, strings.Repeat("y", MaxLine), 0, 0},
+		{"blank lines after the last line are no lines, so the file ends at that line", "{\"a\":1}\n\n \r\n", 8, `{"a":1}`, 0, 0},
+		{"blank lines past the read buffer are passed over too", "{\"a\":1}\n" + strings.Repeat("\n", 2*readBuffer+5) + strings.Repeat(" \r\n", readBuffer), 8, `{"a":1}`, 0, 0},
+		{"a file of blank lines has none", "\n\n", 0, "", 0, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -761,9 +796,17 @@ func TestLastLine(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer fh.Close()
-			end, hash, err := lastLine(fh, int64(len(tc.text)))
+			cr := &countedReader{r: fh}
+			end, hash, err := lastLine(cr, int64(len(tc.text)))
 			if err != nil {
 				t.Fatal(err)
+			}
+			read := tc.read
+			if read == 0 {
+				read = int64(len(tc.text))
+			}
+			if cr.read > read || tc.calls > 0 && cr.calls > tc.calls {
+				t.Errorf("%d reads of %d bytes in all, of a file of %d; want %d bytes at most, in %d reads at most", cr.calls, cr.read, len(tc.text), read, tc.calls)
 			}
 			want := ""
 			if tc.hashOf != "" {
@@ -791,7 +834,7 @@ func TestLinesReadError(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tl := New(Options{NoNotify: true})
-			batch, next, more, failed := tl.lines(bufio.NewReader(tc.r), &file{key: "k", path: "/k"}, 0, 0)
+			batch, next, more, failed := tl.lines(bufio.NewReader(tc.r), &file{key: "k", path: "/k"}, 0, 0, 0, 0)
 			if len(batch) != 1 || next != 8 || more || failed != tc.failed {
 				t.Errorf("lines = %d lines, %d, more %v, failed %v; want 1, 8, false, %v", len(batch), next, more, failed, tc.failed)
 			}

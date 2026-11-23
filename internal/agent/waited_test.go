@@ -1549,9 +1549,10 @@ func sealNow(t *testing.T, w *ledger.Writer, dir string) ledger.Row {
 func TestLogRecordsByTheRunClock(t *testing.T) {
 	// shift is how far ahead the writer's clock runs, so this run's clock
 	// reads more than a suspend at its moment, as an agent's that has run
-	// for hours does.
+	// for hours does, and later moves it on by both clocks (stretch).
 	const shift = 2 * time.Hour
-	ahead := func() time.Time { return time.Now().Add(shift) } // with its monotonic reading
+	var later time.Duration
+	ahead := func() time.Time { return time.Now().Add(shift + later) } // with its monotonic reading
 	online := func(o *ledger.Options) {
 		o.Online = func() bool { return true }
 		o.Now = ahead
@@ -1587,8 +1588,12 @@ func TestLogRecordsByTheRunClock(t *testing.T) {
 			t.Fatal("takeLine didn't take the line")
 		}
 	}
-	// stretch notes a local-only stretch that ends now, by w's clock.
+	// stretch notes a local-only stretch that ends now, by w's clock, a
+	// minute after the chain began, so the lines it is about are dated
+	// after that: the writer holds a log record dated before the chain began
+	// to when it took it in (ledger.Writer.lookback).
 	stretch := func(w *ledger.Writer) time.Time {
+		later = time.Minute
 		w.NoteMode(false)
 		w.NoteMode(true)
 		return ahead()
@@ -1614,6 +1619,30 @@ func TestLogRecordsByTheRunClock(t *testing.T) {
 				w := optionsWriter(t, dirs, online)
 				read := ahead()
 				take(t, host(dirs, w), read.Add(-11*time.Second), read, read)
+				return w, 0
+			}, true},
+		{"a line made 3 s before a stretch's end and read 2 s after it is sealed local-only, with the read's reading less 5 s",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, int64) {
+				w := optionsWriter(t, dirs, online)
+				end := stretch(w)
+				read := end.Add(2 * time.Second) // by both clocks
+				take(t, host(dirs, w), end.Add(-3*time.Second), read, read)
+				mono, _ := ledger.RunClock(read)
+				return w, mono - 5000
+			}, false},
+		{"a line read exactly LATE_READ_S after it was made keeps the read's reading less those 10 s",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, int64) {
+				w := optionsWriter(t, dirs, online)
+				read := ahead()
+				take(t, host(dirs, w), read.Add(-10*time.Second), read, read)
+				mono, _ := ledger.RunClock(read)
+				return w, mono - 10_000
+			}, true},
+		{"a line read a millisecond later than that has none",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, int64) {
+				w := optionsWriter(t, dirs, online)
+				read := ahead()
+				take(t, host(dirs, w), read.Add(-10_001*time.Millisecond), read, read)
 				return w, 0
 			}, true},
 		{"a line made in a local-only stretch and read after a suspend is sealed local-only",
@@ -1669,6 +1698,7 @@ func TestLogRecordsByTheRunClock(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			later = 0
 			dir := t.TempDir()
 			dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
 			w, mono := tc.run(t, dirs)

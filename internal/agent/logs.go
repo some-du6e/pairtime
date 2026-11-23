@@ -77,7 +77,8 @@ func (a *agent) startTailers(opts Options) func() {
 		st = a.state
 	}
 	t := tailers.New(tailers.Options{Store: st, Sched: a.sched, Deliver: h.deliverLogs, Forget: h.forgetLog,
-		Ready: h.logReady, Log: a.log.With("component", "tailers")})
+		Ready: h.logReady, Log: a.log.With("component", "tailers"), Lookback: opts.Lookback, Progress: h.setLookback,
+		LookbackUntil: h.lookbackUntil})
 	h.mu.Lock()
 	h.logEnv = *env
 	h.mu.Unlock()
@@ -405,6 +406,96 @@ func tiedStartOf(walk event.SessionStart, log *event.SessionStart, token string)
 	return st
 }
 
+// setLookback keeps how far lookback has read, for the status
+// (tailers.Options.Progress).
+func (h *adapterHost) setLookback(p tailers.Progress) {
+	h.mu.Lock()
+	h.lookback = p
+	h.mu.Unlock()
+}
+
+// lookbackUntil is when lookback's records end, the ledger's start, and the
+// zero time before the ledger is open (tailers.Options.LookbackUntil).
+func (h *adapterHost) lookbackUntil() time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.ledgerBegan == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(h.ledgerBegan)
+}
+
+// lookbackWindow keeps the records of a line of a file's history that fall
+// in lookback's window: from its start, from, which is LookbackWindow
+// before the tailers took the file up, to when the ledger began. From then
+// on the agent was running, and its hooks wrote the session's records, if
+// any came; a session no hook reported then is the one lookback can't fill
+// in, and only an agent upgraded from a release without lookback has one.
+//
+// A log reader writes a session's session.start once, at its first entry,
+// which can lie before the window while the session's later records lie in
+// it. SM 2.2 rules 4 and 5 read that start, so the window carries it to the
+// session's first record inside it, dated at that record; the start of a
+// session wholly before the window, or of one the window ends before, waits
+// for nothing (maxCarried).
+func (h *adapterHost) lookbackWindow(recs []adapters.Record, from int64) []adapters.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	until := h.ledgerBegan
+	out := make([]adapters.Record, 0, len(recs)+1)
+	for _, r := range recs {
+		key := r.Event.SessionKey
+		_, start := r.Event.Data.(*event.SessionStart)
+		switch {
+		case r.Event.T >= until:
+		case r.Event.T < from:
+			if start && key != "" {
+				h.carry(carriedStart{Event: r.Event, LogKey: r.LogKey})
+			}
+		default:
+			if c, ok := h.carried[key]; ok && key != "" {
+				delete(h.carried, key)
+				if !start {
+					c.Event.T, c.Event.Mono, c.Event.BootID = r.Event.T, r.Event.Mono, r.Event.BootID
+					out = append(out, adapters.Record{Event: c.Event, LogKey: c.LogKey})
+				}
+			}
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// carriedStart is a session.start lookback's window left out, with the
+// key of the line's record it was, which waits for its session's first
+// record inside the window (lookbackWindow).
+type carriedStart struct {
+	Event  event.Event `json:"event"`
+	LogKey string      `json:"log_key"`
+}
+
+// maxCarried bounds the session.starts that wait: past it, the oldest go.
+const maxCarried = 256
+
+// carry keeps c until its session's first record inside lookback's window,
+// in place of one of its session that waits already, as a later start says
+// how the session went on. h.mu is held.
+func (h *adapterHost) carry(c carriedStart) {
+	if h.carried == nil {
+		h.carried = make(map[string]carriedStart)
+	}
+	h.carried[c.Event.SessionKey] = c
+	for len(h.carried) > maxCarried {
+		oldest := ""
+		for k, o := range h.carried {
+			if oldest == "" || o.Event.T < h.carried[oldest].Event.T {
+				oldest = k
+			}
+		}
+		delete(h.carried, oldest)
+	}
+}
+
 // drained reports whether the inbox's first drain has handed its calls to
 // the host.
 func (h *adapterHost) drained() bool {
@@ -531,11 +622,12 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 	}
 	wall, run := logRead()
 	raw := adapters.RawRecord{Source: adapters.SourceLog, Payload: line.Bytes, Log: &ll, Arrival: logArrival(wall, run)}
-	if _, ok := lr.LogResume(ll.File); !ok && ll.Offset > 0 && !ll.Idle {
+	if _, ok := lr.LogResume(ll.File); !ok && ll.Offset > 0 && !ll.Idle && !line.Fresh {
 		// The adapter has no memory of a file the tailers resume in its
 		// middle, as after a restore made it forget, or it forgot a file
 		// it read long ago: reading it from its start again, the lines it
-		// had as replays, gives the adapter what it knew of it.
+		// had as replays, gives the adapter what it knew of it. A fresh
+		// line, after a history lookback gave up on, starts it afresh.
 		t.Rewind(ll.File)
 		return false
 	}
@@ -580,6 +672,9 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 			recs = append([]adapters.Record{start}, recs...)
 		}
 	}
+	if line.Lookback > 0 {
+		recs = h.lookbackWindow(recs, line.Lookback)
+	}
 	if !ll.Idle && !ll.Replay {
 		h.count(func() { st.Lines++ })
 	}
@@ -593,13 +688,17 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		if start, ok := r.Event.Data.(*event.SessionStart); ok && !ll.Replay {
 			r = h.tiedStart(r, start)
 		}
-		// A log line has no sender's stamp of its own (ledger.Input.Sent).
+		// A history's records need no seal and no save of their own: the
+		// timed seal and the minute's save cover them, and a crash before
+		// those reads the lines again, to the same event_ids. A log line has
+		// no sender's stamp of its own (ledger.Input.Sent).
+		r.Late = line.Lookback > 0
 		if !h.write(st, r, clock.Stamp{}) && h.writerDown() {
 			return false
 		}
 		switch r.Event.Kind() {
 		case event.KindSessionStart, event.KindPromptSubmit, event.KindAgentStop:
-			due = true
+			due = due || !r.Late
 		}
 	}
 	resume, ok := lr.LogResume(ll.File)
@@ -644,12 +743,15 @@ var logRead = func() (wall, run time.Time) {
 
 // logArrival is a log line's arrival, read at wall by the wall clock and at
 // run by this run's clock (ledger.RunClock), as time.Now gives both: run
-// must keep Go's monotonic reading, which neither a suspend nor a step of
-// the wall clock moves, since the ledger holds a record of this run to the
-// moment config.toml said local-only by that reading (ledger.moment). A
-// record's mono comes from the arrival's, less how long before its read
-// its line says it happened (claudecode's env), so a line the agent read
-// after a switch back online, made before it, still counts as made before.
+// must keep Go's monotonic reading, which no step of the wall clock moves,
+// since the ledger holds a record of this run to the moment config.toml
+// said local-only by that reading (ledger.moment). A record's mono comes
+// from the arrival's, less how long before its read its line says it
+// happened (claudecode's env), so a line the agent read soon after a
+// switch back online, made before it, still counts as made before. A line
+// read more than LATE_READ_S after its time carries no reading and goes by
+// its t, since this run's clock leaves out a suspend the wall clock's gap
+// counts.
 func logArrival(wall, run time.Time) adapters.Arrival {
 	mono, boot := ledger.RunClock(run)
 	return adapters.Arrival{Via: event.ViaLog, T: wall.UnixMilli(), Mono: mono, BootID: boot}

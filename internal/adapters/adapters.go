@@ -215,7 +215,9 @@ type Arrival struct {
 	// a log line it is when the agent read the line: the line's own
 	// records carry the times the line states, and their mono is the
 	// agent's reading at T taken back by how much earlier they are, as
-	// git.change records are, and never below 0.
+	// git.change records are, and never below 0. A line read more than
+	// LATE_READ_S after its time carries none, 0, and goes by its time
+	// (internal/adapters/claudecode's env).
 	T      int64
 	Mono   int64
 	BootID string
@@ -270,6 +272,10 @@ type Record struct {
 	// waited for its session's hooks: the host keeps it though that line
 	// or marker is out of pairtime (LogReader.LogIgnored, DESIGN 8.8).
 	Counted bool
+	// Late, which the agent sets, says the record tells of a time long
+	// past, as lookback's do: the ledger seals it in its own time
+	// (ledger.Input.Late).
+	Late bool
 }
 
 // Stateful is an adapter whose memory of the sessions it parses can
