@@ -291,9 +291,9 @@ func TestHeadlessAgentDay(t *testing.T) {
 // TestFirstSampleDatesItsPrompt checks the typing of the prompt whose hook
 // starts the agent: only the agent's first sample, taken at the hook, dates
 // it, and it falls in a slot before that sample, a never-sampling device's.
-// A sample dates an input there for an act's evidence test only when it
-// came within SLEEP_GAP_S of the input (presence.dates), so whatever it
-// decides is still pending.
+// A sample dates an input there, for the slot's input and for an act's
+// evidence test, only when it came within SLEEP_GAP_S of the input
+// (presence.dates), so whatever it decides is still pending.
 func TestFirstSampleDatesItsPrompt(t *testing.T) {
 	cases := []struct {
 		name string

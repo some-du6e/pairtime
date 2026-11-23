@@ -218,13 +218,13 @@ func (p *presence) neverAt(t int64) bool {
 	return i < 0 || p.reaches[i].cut
 }
 
-// dates reports whether sample s's idle time dates an input at l for an
-// act's evidence test: wherever the device samples, and in a never-sampling
-// device's slot (neverAt) only when s came within SLEEP_GAP_S of l, as the
-// sample the agent takes as a hook starts it, or as its sampler starts
-// again, does, with the typing of that hook's prompt just before it.
-// Whatever such an input decides is still pending when its sample comes,
-// so no later sample changes a slot or an act already final.
+// dates reports whether sample s's idle time dates an input at l, for a
+// slot's input and an act's evidence test: wherever the device samples,
+// and in a never-sampling device's slot (neverAt) only when s came within
+// SLEEP_GAP_S of l, as the sample the agent takes as a hook starts it, or
+// as its sampler starts again, does, with the typing of that hook's prompt
+// just before it. Whatever such an input decides is still pending when its
+// sample comes, so no later sample changes a slot or an act already final.
 func (p *presence) dates(s sample, l int64) bool {
 	return s.t-l <= p.r.sleepGap || !p.neverAt(l)
 }
@@ -446,15 +446,18 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 	inputAt := make([]bool, n)
 	keyAt := make([]bool, n)
 	lastIn := make([]int64, n)
-	// A sample's idle time dates no input in a never-sampling device's slot,
-	// which only the sampler's earlier records decide (neverAt).
+	// A sample's idle time dates an input in a never-sampling device's slot
+	// only as dates allows, within SLEEP_GAP_S of the sample: the agent's
+	// first sample, taken at the hook that started it, dates the typing of
+	// that prompt, and no later sample changes a slot already final. Such a
+	// slot stays unknown and keeps no keyboard flag of its own.
 	for _, s := range p.samples {
-		if k, ok := p.index(s.lastAny); ok && !never[k] {
+		if k, ok := p.index(s.lastAny); ok && p.dates(s, s.lastAny) {
 			inputAt[k] = true
 			lastIn[k] = max(lastIn[k], s.lastAny)
 		}
 		if s.hasKeys {
-			if k, ok := p.index(s.lastKey); ok && !never[k] {
+			if k, ok := p.index(s.lastKey); ok && p.dates(s, s.lastKey) {
 				keyAt[k] = true
 			}
 		}
