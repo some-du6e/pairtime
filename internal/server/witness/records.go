@@ -136,11 +136,12 @@ func Records(tab *params.Table, batches []Batch, recs []Record) Result {
 // correct returns the corrected time of each record in held, by its index
 // in recs: the earliest of its wall time, its batch's receipt, and, for a
 // record with a monotonic reading, the receipt of any record of its boot
-// made at or after it by the monotonic clock, less the monotonic time
-// between them. Every record existed when its batch reached the server,
-// and a monotonic clock never runs ahead of real time, though it may stop
-// while the machine sleeps, so each of those is a time the record was made
-// by.
+// whose monotonic clock read later, less the monotonic time between them.
+// Every record existed when its batch reached the server, and a monotonic
+// clock never runs ahead of real time, though it may stop while the
+// machine sleeps, so each of those is a time the record was made by. Two
+// records whose readings are equal bound nothing: a clock that stopped
+// while the machine slept can read the same on both sides of the sleep.
 func correct(recs []Record, held []int, got map[uint64]int64) []int64 {
 	out := make([]int64, len(recs))
 	boots := make(map[string][]int)
@@ -153,17 +154,19 @@ func correct(recs []Record, held []int, got map[uint64]int64) []int64 {
 	}
 	for _, idx := range boots {
 		// Latest first by the monotonic clock, so least is the smallest
-		// receipt less mono of every record at or after the one at hand.
+		// receipt less mono of every record that read later than the ones
+		// at hand.
 		slices.SortFunc(idx, func(a, b int) int { return cmp.Compare(recs[b].Mono, recs[a].Mono) })
 		least := int64(math.MaxInt64)
 		for j := 0; j < len(idx); {
-			// Records with the same reading bound each other.
 			k := j
 			for ; k < len(idx) && recs[idx[k]].Mono == recs[idx[j]].Mono; k++ {
-				least = min(least, got[recs[idx[k]].B]-recs[idx[k]].Mono)
+				if least != math.MaxInt64 {
+					out[idx[k]] = min(out[idx[k]], recs[idx[k]].Mono+least)
+				}
 			}
 			for ; j < k; j++ {
-				out[idx[j]] = min(out[idx[j]], recs[idx[j]].Mono+least)
+				least = min(least, got[recs[idx[j]].B]-recs[idx[j]].Mono)
 			}
 		}
 	}
