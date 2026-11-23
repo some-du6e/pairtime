@@ -939,3 +939,87 @@ func TestSignedInElsewhere(t *testing.T) {
 		})
 	}
 }
+
+func TestNextNames(t *testing.T) {
+	c := Credentials{Server: "https://pairtime.example.org", DeviceID: "d_example"}
+	mine := func(confirmed map[string]string) *Names {
+		return &Names{V: namesVersion, Server: c.Server, Device: c.DeviceID, Confirmed: confirmed, Codes: map[string]string{nameKey: "7c41e9"}}
+	}
+	tests := []struct {
+		name    string
+		file    *Names
+		wanted  map[string]string
+		own     map[string]bool
+		linking bool
+		want    string // the body, "" for no request
+	}{
+		{
+			name:   "a name turned on that the server doesn't show is the next request, its body as the uploader encodes it",
+			file:   mine(nil),
+			wanted: map[string]string{nameKey: "chip8-emulator"},
+			want:   `{"set":[{"project":"` + nameKey + `","label":"chip8-emulator"}]}`,
+		},
+		{
+			name: "a name the server shows that config.toml has off is a delete",
+			file: mine(map[string]string{nameKey: "chip8-emulator"}),
+			want: `{"delete":["` + nameKey + `"]}`,
+		},
+		{
+			name:   "names the server shows as config.toml has them need no request, and a read never shows",
+			file:   mine(map[string]string{nameKey: "chip8-emulator"}),
+			wanted: map[string]string{nameKey: "chip8-emulator"},
+		},
+		{
+			name:    "nothing goes while the link's first batch isn't stored",
+			file:    mine(nil),
+			wanted:  map[string]string{nameKey: "chip8-emulator"},
+			linking: true,
+		},
+		{
+			name:   "a file of another sign-in sends nothing, since its names all go off when the agent loads it",
+			file:   &Names{V: namesVersion, Server: "https://other.example.org", Device: c.DeviceID},
+			wanted: map[string]string{nameKey: "chip8-emulator"},
+		},
+		{
+			name:   "a project this computer never worked in, with no code from the server, isn't in it",
+			file:   &Names{V: namesVersion, Server: c.Server, Device: c.DeviceID},
+			wanted: map[string]string{otherKey: "copied"},
+			own:    map[string]bool{nameKey: true},
+		},
+		{
+			name:   "a hidden name pairtime couldn't turn off stays out while its label is the one it had",
+			file:   &Names{V: namesVersion, Server: c.Server, Device: c.DeviceID, Hidden: map[string]HiddenName{nameKey: {Label: "chip8-emulator", At: 1, Pending: true}}},
+			wanted: map[string]string{nameKey: "chip8-emulator"},
+		},
+		{
+			name:   "with no file, as before a first link, a name turned on goes",
+			wanted: map[string]string{nameKey: "chip8-emulator"},
+			want:   `{"set":[{"project":"` + nameKey + `","label":"chip8-emulator"}]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tt.file != nil {
+				data, err := json.Marshal(tt.file)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, NamesFileName), data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pv, err := NextNames(dir, c, tt.wanted, tt.own, tt.linking)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got string
+			if pv != nil {
+				got = string(pv.JSON)
+			}
+			if got != tt.want {
+				t.Errorf("NextNames = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
