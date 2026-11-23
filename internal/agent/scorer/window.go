@@ -59,7 +59,7 @@ func (g runGaps) of(native bool) int64 {
 // it is dated before the window.
 func (w *window) add(ev event.Event, b uint64) {
 	if ev.T < w.from {
-		w.carry.fold(ev, w.gaps)
+		w.carry.fold(ev, w.gaps, w.ttl)
 		w.carry.prune(w.from)
 		return
 	}
@@ -84,7 +84,7 @@ func (w *window) slide(from int64) {
 	}
 	slices.SortFunc(out, func(a, b event.Event) int { return recordCmp(&a, &b) })
 	for _, e := range out {
-		w.carry.fold(e, w.gaps)
+		w.carry.fold(e, w.gaps, w.ttl)
 	}
 	w.recs = kept
 	w.from = from
@@ -211,10 +211,18 @@ type carry struct {
 	Sessions map[string]*sessionCarry `json:"sessions,omitempty"`
 	// Stamped is the t of the latest record folded in that the agent
 	// stamped itself and isn't the sampler's (stamps). Dated more than
-	// BUCKET_TTL_S after the sampler's records the carry holds, Power and
-	// Presence, it comes after them and before the window, so before the
-	// sampler's next record, and it ends their reach (window.cutBy).
+	// BUCKET_TTL_S after the later of the sampler's records the carry
+	// holds, Power and Presence, it comes after that one and before the
+	// window, so before the sampler's next record, and it ends that one's
+	// reach (window.cutBy).
 	Stamped int64 `json:"stamped,omitempty"`
+	// Restart says the sampler started again at the later of Power and
+	// Presence: a stamped record folded in before it had ended the reach
+	// of the sampler's record before it. The earlier of the two is then
+	// from before a never-sampling stretch, and pkg/score keeps none of
+	// its gap, lock or suspend past that restart (SM 2.1), so the window's
+	// Steps get none of it either (carry.records).
+	Restart bool `json:"restart,omitempty"`
 }
 
 // sessionCarry is what the carry keeps of one harness session.
@@ -260,6 +268,18 @@ func recordCmp(a, b *event.Event) int {
 	return strings.Compare(a.EventID, b.EventID)
 }
 
+// sampled returns the later of the carry's records of the sampler's, Power
+// and Presence, in record order, or nil for neither.
+func (c *carry) sampled() *event.Event {
+	switch {
+	case c.Power == nil:
+		return c.Presence
+	case c.Presence == nil || recordCmp(c.Presence, c.Power) < 0:
+		return c.Power
+	}
+	return c.Presence
+}
+
 // latest returns whichever of cur and ev comes later in record order.
 func latest(cur *event.Event, ev event.Event) *event.Event {
 	if cur != nil && recordCmp(cur, &ev) >= 0 {
@@ -277,8 +297,13 @@ func turnKey(e *event.Event) string {
 }
 
 // fold takes ev, a record before the window, into the carry. g are the
-// runs' gaps.
-func (c *carry) fold(ev event.Event, g runGaps) {
+// runs' gaps, and ttl is BUCKET_TTL_S.
+func (c *carry) fold(ev event.Event, g runGaps, ttl int64) {
+	if sampler(&ev) {
+		if prev := c.sampled(); prev == nil || recordCmp(prev, &ev) < 0 {
+			c.Restart = prev != nil && c.Stamped > prev.T+ttl
+		}
+	}
 	if stamps(&ev) {
 		c.Stamped = max(c.Stamped, ev.T)
 	}
@@ -414,13 +439,19 @@ func (c *carry) prune(from int64) {
 //     longer than any gap before from, so the window's first record of the
 //     turn ends the run before from, and no later record starts it again.
 //
-// A record of the sampler's, Power or Presence, whose reach ended goes
-// nowhere: stamped, the latest record the agent stamped itself between
-// the carry's records of the sampler's and the sampler's next record
+// The sampler's records, Power and Presence, go by the later of them.
+// When its reach ended, both go nowhere: stamped, the latest record the
+// agent stamped itself between it and the sampler's next record
 // (window.cutBy), is dated more than ttl, BUCKET_TTL_S, after its own time.
 // pkg/score takes the slots after such a record for a never-sampling
 // device's and lets it keep no clock (SM 2.1), and dated again at from
-// minus carryGraceMS it would look like a sample the agent took then. Only
+// minus carryGraceMS it would look like a sample the agent took then; the
+// sampler's next record then starts it again, keeping nothing from before.
+// The earlier of the two goes with it, and also when the sampler started
+// again at the later one (Restart); otherwise it stays, since its reach
+// ended at the later one, which no stamped record after that changes, and
+// a gap from the last sample to the sampler's next record still starts at
+// it. Only
 // a cut that has taken effect counts, as in pkg/score, which keeps
 // FinalBefore at the sampler's record until then, and also while the
 // sampler's next record, more than BUCKET_TTL_S later, is less than
@@ -430,8 +461,9 @@ func (c *carry) prune(from int64) {
 // than that allows.
 func (c *carry) records(out []event.Event, from int64, g runGaps, stamped, ttl int64) []event.Event {
 	grace := from - carryGraceMS
+	last := c.sampled()
 	for _, e := range []*event.Event{c.Focus, c.Power, c.Presence} {
-		if e == nil || e != c.Focus && stamped > e.T+ttl {
+		if e == nil || e != c.Focus && (stamped > last.T+ttl || e != last && c.Restart) {
 			continue
 		}
 		r := *e

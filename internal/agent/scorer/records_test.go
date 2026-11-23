@@ -248,7 +248,7 @@ func TestCarry(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var c carry
 			for _, e := range tt.fold {
-				c.fold(e, testGaps)
+				c.fold(e, testGaps, testGaps.native)
 			}
 			c.prune(tt.from)
 			tt.check(t, c)
@@ -425,7 +425,7 @@ func TestCarryRuns(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var c carry
 			for _, e := range tt.fold {
-				c.fold(e, testGaps)
+				c.fold(e, testGaps, testGaps.native)
 			}
 			s := c.Sessions["s_1"]
 			if s == nil {

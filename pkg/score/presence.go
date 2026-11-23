@@ -459,7 +459,13 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 	// the agent's first record: a state that holds nothing older, a fresh
 	// one or the agent's window after a quiet night, then derives the whole
 	// lead, as one holding every record does.
-	if p.neverAt(p.first) {
+	//
+	// Whether the slots begin with a whole minute is decided by whether a
+	// record of the sampler's is dated before the first slot ends, not by
+	// neverAt: a reach that ends later would add slots before the first
+	// sample's slot once FinalBefore had passed it, which no Step's Final
+	// would hold.
+	if p.live && p.reachAt(p.first) < 0 {
 		if from, ok := earliestLead(r, recs); ok {
 			p.first = max(floorSlot(ref-r.bucketTTL), min(p.first, from))
 		}

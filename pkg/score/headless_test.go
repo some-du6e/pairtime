@@ -230,6 +230,22 @@ func TestHeadlessScoring(t *testing.T) {
 			},
 		},
 		{
+			name: "a device whose first record is a sample in mid-minute, and whose agent then runs on hooks for over BUCKET_TTL_S, starts its slots at that sample's slot before and after the cut, so a Step a minute gives what one Step gives",
+			build: func(b *tl) {
+				b.sample(at(20))
+				b.prompt(at(30), event.ViaHook, "s_1", "p_1", "t_1", 40)
+				for s := int64(150); s <= 7590; s += 120 {
+					b.harness(at(s), event.ViaHook, "s_1", "p_1", &event.AgentTool{ToolClass: event.ToolBash,
+						TStart: at(s - 5), TEnd: at(s), VisibleOutputLines: 2})
+				}
+			},
+			check: func(t *testing.T, _ Derived, _ Output, _ int64, one Derived) {
+				if len(one.Slots) == 0 || one.Slots[0].Start != floorSlot(at(20)) {
+					t.Errorf("the slots start at %v, want at 15 s, the first sample's slot", one.Slots[:min(1, len(one.Slots))])
+				}
+			},
+		},
+		{
 			name: "on a device that samples, an os.focus after the last sample doesn't take FinalBefore past the samples",
 			build: func(b *tl) {
 				terminalSession(b)
