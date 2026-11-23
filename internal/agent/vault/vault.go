@@ -353,20 +353,18 @@ func ad(s uint64, what byte) []byte {
 	return append(binary.BigEndian.AppendUint64(nil, s), what)
 }
 
-// file is what reading a day file found.
+// file is what reading a day file found: its whole entries, in order, up
+// to the first frame that isn't one, where a crash's torn tail starts.
 type file struct {
 	day     string
 	headEnd int64
 	entries []entry
-	// stop is where the file stops holding whole entries, its size when it
-	// does throughout, and why names what is there instead.
-	stop int64
-	why  error
-	size int64
+	size    int64
 }
 
 // readFile reads the day file name, which has a head of keyID's. Reading
-// stops at the first frame that isn't a whole entry, which file.why says.
+// stops at the first frame that isn't a whole entry of a higher number
+// than the one before it.
 func readFile(name, day, keyID string) (file, error) {
 	f, err := os.Open(name)
 	if err != nil {
@@ -393,30 +391,23 @@ func readFile(name, day, keyID string) (file, error) {
 	if got != keyID {
 		return file{}, fmt.Errorf("vault: %s holds entries device key %s sealed", name, got)
 	}
-	out.headEnd, out.stop = first.end, first.end
+	out.headEnd = first.end
 	for {
 		fm, err := fr.next()
-		if errors.Is(err, io.EOF) {
+		switch {
+		case errors.Is(err, io.EOF), errors.Is(err, errTorn):
 			return out, nil
-		}
-		if err != nil {
-			if !errors.Is(err, errTorn) {
-				return file{}, err
-			}
-			out.why = err
-			return out, nil
+		case err != nil:
+			return file{}, err
 		}
 		e, err := parseEntry(fm)
 		if err != nil {
-			out.why = fmt.Errorf("%w: at offset %d, %v", errTorn, fm.off, err)
 			return out, nil
 		}
 		if n := len(out.entries); n > 0 && e.s <= out.entries[n-1].s {
-			out.why = fmt.Errorf("%w: at offset %d, an entry for s = %d after one for s = %d", errTorn, fm.off, e.s, out.entries[n-1].s)
 			return out, nil
 		}
 		out.entries = append(out.entries, e)
-		out.stop = e.end
 	}
 }
 
@@ -580,7 +571,7 @@ func (v *Vault) Keep(day string, s uint64, text []byte, paths []string) {
 		return
 	}
 	if s <= v.last {
-		v.report(fmt.Sprintf("the vault didn't keep the content of record %d, which came after record %d's", s, v.last))
+		v.report(fmt.Sprintf("the vault didn't keep the content of record %d, because it keeps records in order and already keeps record %d's", s, v.last))
 		return
 	}
 	var buf []byte
