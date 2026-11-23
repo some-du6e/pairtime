@@ -67,6 +67,7 @@ The fix-verify of #234 added two rulings (#241, comment 7110771624):
 
 6. A cut takes effect only once the stamped record that makes it is 300 s, `PENDING_WINDOW_S` - `READ_HORIZON_S`, behind the newest record. Until then the reach holds, now stays bounded by it, and a sampler record dated before the stamped one that arrives in that time still keeps the reach. This stays in `pkg/score`, with no change to the writer's sealing.
 7. The carry applies `pkg/score`'s rule: it drops its latest sampler record only when the carry's latest stamped record is more than `BUCKET_TTL_S` after it, or when a stamped window record dated after that comes before the window's earliest sampler record in record order.
+8. A record of the sampler's after a reach that ended starts its hard breaks afresh: no gap, suspend or lock from the never-sampling stretch before it reaches its slot. The carry drops a record whose reach ended, so the agent's window and one Step derive that slot alike. `TestCarryReach` found the difference in the round on #241 (comment 7112781238, item 5), and the orchestrator accepted the rule, which SM 2.1 states.
 
 ## Limits
 
