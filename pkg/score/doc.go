@@ -205,13 +205,14 @@
 //     derives whole minutes (presence.live), from its first record's
 //     minute or, when it is earlier, the minute of the earliest lead a
 //     relay record can open, COMPOSE_MAX_S before its stamp, since the app
-//     starts a message's run after the stamp. An uncredited second
-//     there takes SM 5.2's codes for a live slot whose presence is
-//     unknown: X.bucket_cap where only the 120 s cap kept a session from
-//     reading, else X.agent_only while a turn a person started runs, a
-//     relayed one included, or a no_input one, else X.automated while an
-//     automated turn runs, else X.no_anchor, turns of every project
-//     counting.
+//     starts a message's run after the stamp, but no more than
+//     BUCKET_TTL_S before its agent's first record (WP-HL1). An
+//     uncredited second there takes SM 5.2's codes for a live slot whose
+//     presence is unknown: X.bucket_cap where only the 120 s cap kept a
+//     session from reading, else X.agent_only while a turn a person
+//     started runs, a relayed one included, or a no_input one, else
+//     X.automated while an automated turn runs, else X.no_anchor, turns of
+//     every project counting.
 //
 // Readings of D-relayed:
 //
@@ -231,10 +232,14 @@
 //     one, low_effort by the record's go-ahead test or under
 //     SUBSTANTIVE_CHARS typed characters, else substantive. The record
 //     carries no error signature, so it is never error_paste.
-//   - A device counts as never sampling when it has no os.presence,
-//     os.focus or os.power record and some record came by a path other
-//     than a log reader's. Lookback's transcripts come only by a log reader,
-//     and lookback's own range is WP-SC7's.
+//   - A device counts as never sampling when it has no os.presence or
+//     os.power record, the presence sampler's, and some record came by a
+//     path other than a log reader's. Its agent's os.focus, which says
+//     focus is unknown each time the agent starts, doesn't count: WP-HL1
+//     changed this reading, which first counted os.focus too, after a
+//     server's agent stopped scoring 15 minutes after each start
+//     (docs/errata/2026-11-23-headless-scoring.md). Lookback's transcripts
+//     come only by a log reader, and lookback's own range is WP-SC7's.
 //   - The thread's next relayed anchor after a stop is the first one sent
 //     after the stop of those that pair by the deadline, PENDING_WINDOW_S -
 //     60 s after the stop. One that pairs later keeps its own lead but is
@@ -270,7 +275,11 @@
 // # Final and pending
 //
 // What Step derives for a time stays pending until now is PENDING_WINDOW_S
-// later, then becomes final and is output once (DESIGN 3.7, 6.2 D1). No
+// later, then becomes final and is output once (DESIGN 3.7, 6.2 D1). Now is
+// the latest record's time, but no more than PENDING_WINDOW_S past the
+// latest os.presence or os.power, the presence sampler's records, which
+// come every 15 to 60 s while a project context is live; on a device whose
+// agent never samples it is the latest record's time (SM 2.1, WP-HL1). No
 // record changes what was derived for a time more than READ_HORIZON_S before
 // its own t: a lead reaches back at most THINK_LEAD_S + COMPOSE_MAX_S,
 // reading needs a human act within READ_HORIZON_S, and the return rule an

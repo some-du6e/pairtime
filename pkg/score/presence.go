@@ -16,8 +16,8 @@ import (
 // derived, up to the last one the samples decide. On a device that never
 // samples, such as a server with no desktop, whole minutes are derived
 // instead, from the one holding the first record, or the earliest lead a
-// relay.message can open if that is earlier, to the one holding now
-// (presence.live).
+// relay.message can open if that is earlier, but no more than BUCKET_TTL_S
+// before the agent's first record, to the one holding now (presence.live).
 type Slot struct {
 	// Start is the slot's start in Unix milliseconds, on :00, :15, :30 or
 	// :45.
@@ -167,23 +167,26 @@ type presence struct {
 }
 
 // liveUnknown reports whether recs come from a device with no presence
-// sampler while its agent runs, such as a server with no desktop (SM 2.1):
-// no record the agent stamps itself, os.presence, os.focus or os.power,
-// and some record that came by a path only a running agent has, any but a
-// log reader's. Every record lookback backfills from transcripts comes by a
-// log reader (SM 2.8), and the range of lookback's own slots is WP-SC7's,
-// so such records alone aren't one.
-func liveUnknown(recs []event.Event) bool {
-	live := false
+// sampler while its agent runs, such as a server with no desktop or a
+// desktop that gives no idle time (SM 2.1): no record of the sampler's,
+// os.presence or os.power (samplerRecord), and some record that came by a
+// path only a running agent has, any but a log reader's. It returns the t
+// of the first such record, where the agent's records start. The os.focus
+// that such a device's agent writes each time it starts, saying focus is
+// unknown, is no sample, so it doesn't make the device one that samples.
+// Every record lookback backfills from transcripts comes by a log reader
+// (SM 2.8), and the range of lookback's own slots is WP-SC7's, so such
+// records alone aren't one.
+func liveUnknown(recs []event.Event) (first int64, live bool) {
 	for _, e := range recs {
-		if ownRecord(e) {
-			return false
+		if samplerRecord(e) {
+			return 0, false
 		}
-		if e.Via != event.ViaLog {
-			live = true
+		if e.Via != event.ViaLog && !live {
+			first, live = e.T, true
 		}
 	}
-	return live
+	return first, live
 }
 
 // earliestLead returns the earliest time a relayed lead can start for the
@@ -293,16 +296,29 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 
 	// Slots end with the slot holding now (Step), and the samples may end
 	// them earlier. They start with the first record, but no more than
-	// BUCKET_TTL_S before the sampler first ran, or before now when it
-	// never has.
+	// BUCKET_TTL_S before the sampler first ran; on a device whose agent
+	// never samples, before the agent's first record (liveUnknown), which is
+	// where its records start as a sampling device's start with its first
+	// sample; and before now when there is neither, as for records a log
+	// reader backfilled alone.
 	// Every slot before the first sample is unknown and credits nothing (SM
 	// 2.1), and what so old a record put in a bucket has expired by the time
 	// the sampler sees anything. A record dated years back, which a
 	// transcript or the bridge can carry, would otherwise derive a slot for
 	// every 15 s since. Lookback (SM 2.8, WP-SC7) will need its own range.
+	//
+	// A device that never samples counts from its agent's first record, not
+	// from now, so a Step after a silence longer than BUCKET_TTL_S still
+	// derives the minutes before the silence that were pending, as one Step
+	// over every record does, and a fresh State over the agent's window
+	// (internal/agent/scorer) derives every minute from the window's start.
 	ref := now
 	if len(p.samples) > 0 {
 		ref = p.samples[0].t
+	}
+	start, live := liveUnknown(recs)
+	if live {
+		ref = start
 	}
 	p.first = max(floorSlot(recs[0].T), floorSlot(ref-r.bucketTTL))
 	last := floorSlot(now)
@@ -318,10 +334,10 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 	// lead ends at the stamp, up to COMPOSE_MAX_S after it starts (SM 2.3).
 	// So the slots start no later than the minute holding the earliest lead
 	// a relay.message in recs can open, still within BUCKET_TTL_S before
-	// now: a state that holds nothing older, a fresh one or the agent's
-	// window after a quiet night, then derives the whole lead, as one
-	// holding every record does.
-	if p.live = liveUnknown(recs); p.live {
+	// the agent's first record: a state that holds nothing older, a fresh
+	// one or the agent's window after a quiet night, then derives the whole
+	// lead, as one holding every record does.
+	if p.live = live; p.live {
 		if from, ok := earliestLead(r, recs); ok {
 			p.first = max(floorSlot(ref-r.bucketTTL), min(p.first, from))
 		}

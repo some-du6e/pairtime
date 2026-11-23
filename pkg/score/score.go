@@ -37,33 +37,41 @@ type State struct {
 	recs []event.Event
 	// high is the largest t of any record, 0 before the first.
 	high int64
-	// own is the largest t of a record the agent stamps itself: an
-	// os.presence, os.focus or os.power, 0 before the first.
+	// own is the largest t of a record of the presence sampler's, an
+	// os.presence or os.power (samplerRecord), 0 before the first.
 	own int64
 	// done is the FinalBefore of the last Step: everything derived for a
 	// time before it has been emitted as final.
 	done int64
 }
 
-// ownRecord reports whether the agent stamps e's t itself, from the
-// device's clock (DESIGN 3.3), rather than taking it from a hook, a
-// transcript, a heartbeat or another program.
-func ownRecord(e event.Event) bool {
+// samplerRecord reports whether e is a record of the presence sampler's:
+// an os.presence sample, or an os.power, which the sampler records with a
+// sample after it (DESIGN 3.3). The agent stamps their t itself, from the
+// device's clock, and they come every 15 to 60 s while a project context
+// is live, so they are the scorer's clock (State.now), and a device with
+// none never samples (liveUnknown). An os.focus is neither, though the
+// agent stamps it too: the focus component writes one only when focus
+// changes, and where it can't see focus, as on a machine with no desktop,
+// once each time the agent starts (SM 1.2, 2.1), so it says nothing about
+// how far the present has come.
+func samplerRecord(e event.Event) bool {
 	switch e.Data.(type) {
-	case *event.OSPresence, *event.OSFocus, *event.OSPower:
+	case *event.OSPresence, *event.OSPower:
 		return true
 	}
 	return false
 }
 
 // now is the time the scorer takes as the present: the largest t of any
-// record, but no more than PENDING_WINDOW_S past the latest record the
-// agent stamps itself. Those arrive every 15 to 60 s while a project
-// context is live (DESIGN 3.3). A record dated further ahead, such as a
-// bridge prompt whose transcript timestamp is hours off, so stays pending
-// until the samples reach it, instead of making every real record after
-// it come too late to be output. With no record of the agent's own, now is
-// high.
+// record, but no more than PENDING_WINDOW_S past the latest record of the
+// presence sampler's (samplerRecord). A record dated further ahead, such as
+// a bridge prompt whose transcript timestamp is hours off, so stays pending
+// until the samples reach it, instead of making every real record after it
+// come too late to be output. With no record of the sampler's, as on a
+// device whose agent never samples, now is high: nothing else keeps time
+// there, and a minute is final PENDING_WINDOW_S after the latest record
+// passes its end (SM 2.1).
 func (s State) now(r rules) int64 {
 	if s.own == 0 {
 		return s.high
@@ -139,8 +147,8 @@ type Derived struct {
 // them in record order, by t, then seq, then event_id, and drops a record
 // whose event_id it already holds. It reads no clock and does no I/O;
 // "now" is the largest t it has seen, but no more than PENDING_WINDOW_S
-// past the latest sample, focus or power record, which the agent stamps
-// itself. Every record must pass event.Validate, as every record in the
+// past the latest sample or power record, which the presence sampler
+// writes. Every record must pass event.Validate, as every record in the
 // ledger does.
 //
 // A record whose t is before the state's FinalBefore still counts toward
@@ -154,7 +162,7 @@ func Step(s State, records []event.Event) (State, Output) {
 	for _, e := range records {
 		if e.Data != nil {
 			next.high = max(next.high, e.T)
-			if ownRecord(e) {
+			if samplerRecord(e) {
 				next.own = max(next.own, e.T)
 			}
 		}

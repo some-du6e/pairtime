@@ -67,9 +67,7 @@ var relayedScores = struct {
 
 // scoreRelayed scores a relayed case a Step a minute, as the agent does
 // (DESIGN 3.7) and as TestGolden does, and rebuilds the whole picture from
-// the Finals and the last Pending. One Step over the records of a device
-// that never samples derives only the BUCKET_TTL_S before now, which would
-// leave most of agent-day's day out. Callers must not change what it
+// the Finals and the last Pending. Callers must not change what it
 // returns.
 func scoreRelayed(t *testing.T, f *timelines.Fixture) Derived {
 	t.Helper()
