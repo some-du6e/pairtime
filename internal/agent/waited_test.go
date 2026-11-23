@@ -5,8 +5,10 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"hash/crc32"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -285,9 +287,9 @@ func TestAdaptersWaiting(t *testing.T) {
 			h := newHost()
 			leftHeld(t, h)
 			h.expectCount()
-			// The newest batch counts as local-only, and its seal frame keeps
-			// no moment, so the next seal asks Waiting by the writer's own
-			// moment, which holds nothing.
+			// The newest batch counts as local-only, and its row keeps no
+			// moment and no stretch, as an older version's, so the next seal
+			// asks Waiting by the writer's own stretches, which hold nothing.
 			first := optionsWriter(t, h.a.dirs, func(o *ledger.Options) { o.Online = func() bool { return false } })
 			if _, err := first.Write(presenceAt(time.Now())); err != nil {
 				t.Fatal(err)
@@ -295,6 +297,7 @@ func TestAdaptersWaiting(t *testing.T) {
 			if err := first.Close(); err != nil {
 				t.Fatal(err)
 			}
+			dropRowStretches(t, h.a.dirs.Ledger())
 			_, rows, err := ledger.ReadRows(h.a.dirs.Ledger(), 0)
 			if err != nil {
 				t.Fatal(err)
@@ -311,6 +314,34 @@ func TestAdaptersWaiting(t *testing.T) {
 			}
 			if b, ok, err := w.Seal(); !ok || err != nil || !b.Online {
 				t.Errorf("the batch after the local-only one was sealed %v, online %v (%v); want online, since a moment that holds nothing holds no call", ok, b.Online, err)
+			}
+		}},
+		{"a stretch the newest seal frame records as going on, which the next Open ends, holds the calls an earlier run held until the worker has counted them, as their times aren't known yet", func(t *testing.T) {
+			h := newHost()
+			leftHeld(t, h)
+			h.expectCount()
+			first := optionsWriter(t, h.a.dirs, func(o *ledger.Options) { o.Online = func() bool { return false } })
+			if _, err := first.Write(presenceAt(time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			if err := first.Close(); err != nil {
+				t.Fatal(err)
+			}
+			w := optionsWriter(t, h.a.dirs, func(o *ledger.Options) {
+				o.Online = func() bool { return true }
+				o.Waiting = h.waiting
+			})
+			if _, err := w.Write(presenceAt(time.Now().Add(time.Second))); err != nil {
+				t.Fatal(err)
+			}
+			b, ok, err := w.Seal()
+			h.countHeld()
+			if _, err := w.Write(presenceAt(time.Now().Add(2 * time.Second))); err != nil {
+				t.Fatal(err)
+			}
+			b2, ok2, err2 := w.Seal()
+			if !ok || err != nil || b.Online || !ok2 || err2 != nil || !b2.Online {
+				t.Errorf("the batches after the local-only one were sealed online %v, then %v (%v, %v); want local-only while the held calls are uncounted, then online", b.Online, b2.Online, err, err2)
 			}
 		}},
 		{"a parked call counts until it is parsed, by the time its records carry", func(t *testing.T) {
@@ -1476,6 +1507,50 @@ func presenceAt(at time.Time) ledger.Input {
 			Source: event.SourceOS, Via: event.ViaOS, Harness: event.HarnessNone, SessionKey: event.NoSession},
 		Data: &event.OSPresence{IdleAnyS: 1},
 	}}
+}
+
+// dropRowStretches rewrites the rows of the ledger's batches.seg in dir
+// without the local-only stretches they record, as an older pairtime
+// version's rows, which recorded none. The segments keep their seal frames
+// as they are: Open rebuilds no row here, so it reads none of theirs. A
+// frame is u8(kind) || u32(len) || payload || u32(CRC-32C), big-endian,
+// and a row's kind is 'b'.
+func dropRowStretches(t *testing.T, dir string) {
+	t.Helper()
+	name := filepath.Join(dir, "batches.seg")
+	data, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := crc32.MakeTable(crc32.Castagnoli)
+	var out []byte
+	for len(data) > 0 {
+		if len(data) < 9 {
+			t.Fatalf("batches.seg ends in %d bytes that aren't a frame", len(data))
+		}
+		kind, n := data[0], int(binary.BigEndian.Uint32(data[1:5]))
+		if len(data) < 9+n {
+			t.Fatalf("batches.seg has a frame of %d bytes with %d left", n, len(data)-9)
+		}
+		payload := data[5 : 5+n]
+		data = data[9+n:]
+		if kind == 'b' {
+			var row map[string]json.RawMessage
+			if err := json.Unmarshal(payload, &row); err != nil {
+				t.Fatal(err)
+			}
+			delete(row, "stretches")
+			if payload, err = json.Marshal(row); err != nil {
+				t.Fatal(err)
+			}
+		}
+		frame := binary.BigEndian.AppendUint32([]byte{kind}, uint32(len(payload)))
+		frame = append(frame, payload...)
+		out = append(out, binary.BigEndian.AppendUint32(frame, crc32.Checksum(frame, table))...)
+	}
+	if err := os.WriteFile(name, out, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // leftHeld leaves a line in h's held.jsonl, as an earlier run holds a

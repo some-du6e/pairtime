@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -1127,13 +1128,16 @@ func TestHeldRecord(t *testing.T) {
 		// firstSignIn makes the switch back the first pairtime login, after
 		// batches sealed while config.toml said local, with a record pending
 		// at the login, rather than a re-link after a noted stretch with
-		// nothing pending.
+		// nothing pending. The switch back then seals that record as a batch
+		// online, which passes the install's stretch, so the held record,
+		// which no Waiting counts here, comes after it and is dropped
+		// (ledger.ErrLateLocal; D-late-local).
 		firstSignIn bool
 	}{
 		{"after a re-link, a git change the watcher held past the note, sealed as a batch of its own", gitChange, true, false},
 		{"after a re-link, a hook call parked behind its folder's first Track, sealed with the first prompt", hookCall, false, false},
-		{"after a first sign-in with a record pending at it, a git change the watcher held past the note, sealed as a batch of its own", gitChange, true, true},
-		{"after a first sign-in with a record pending at it, a hook call parked behind its folder's first Track, sealed with the first prompt", hookCall, false, true},
+		{"after a first sign-in with a record pending at it, a git change the watcher held past the note, which comes after the online batch the switch back sealed, is dropped", gitChange, true, true},
+		{"after a first sign-in with a record pending at it, a hook call parked behind its folder's first Track, which comes after that batch, is dropped", hookCall, false, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1175,8 +1179,48 @@ func TestHeldRecord(t *testing.T) {
 			// The held record reaches the writer 3 s after the note: batch 4,
 			// alone or with the first prompt's record.
 			r.setClock(login.Add(3300 * time.Millisecond))
-			if _, err := r.w.Write(c.held(made)); err != nil {
+			_, err := r.w.Write(c.held(made))
+			switch {
+			case c.firstSignIn && !errors.Is(err, ledger.ErrLateLocal):
+				t.Fatalf("Write = %v; want the held record dropped, as batch 3 was sealed online since its stretch ended", err)
+			case !c.firstSignIn && err != nil:
 				t.Fatal(err)
+			}
+			if c.firstSignIn {
+				// Nothing of it is in the ledger, so the first prompt's batch is
+				// the first after the switch back, and takes the mark.
+				r.recordAt(t, login.Add(40*time.Second))
+				if _, _, err := r.w.Seal(); err != nil {
+					t.Fatal(err)
+				}
+				last := r.w.Status().Batches
+				_, rows, err := ledger.ReadRows(r.dirs.Ledger(), 4)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(rows) != 1 || !rows[0].Online || !rows[0].Back || r.w.Status().LateLocal != 1 {
+					t.Fatalf("the batches after the switch back's are %+v, and the writer counts %d dropped; want one online and marked, and one", rows, r.w.Status().LateLocal)
+				}
+				r.u.Wake()
+				r.wait(t, fmt.Sprintf("batch %d", last), func(f *fakeIngest) bool { return f.head != nil && f.head.b == last })
+				r.drain()
+				r.f.mu.Lock()
+				defer r.f.mu.Unlock()
+				named := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Contains(b, []byte(`"`+string(event.HarnessClaudeCode)+`"`)) })
+				for _, ch := range []struct {
+					name string
+					ok   bool
+				}{
+					{"the labels never named the harness the dropped record names", !named},
+					{"the server's chain starts at the batch that took the mark", r.f.start == 4 && r.f.head.b == last},
+				} {
+					t.Run(ch.name, func(t *testing.T) {
+						if !ch.ok {
+							t.Errorf("no: the server holds head %d from %d, after %d POSTs", r.f.head.b, r.f.start, r.f.posts)
+						}
+					})
+				}
+				return
 			}
 			if c.alone {
 				if _, _, err := r.w.Seal(); err != nil {
@@ -1216,11 +1260,7 @@ func TestHeldRecord(t *testing.T) {
 				{"the labels never named the harness its record names", !named},
 				{"the batch after it took the mark and went, and so did the rest", r.f.rows[5].b == 5 && r.f.head.b == last},
 			}
-			if c.firstSignIn {
-				checks = append(checks, check{"the server's chain starts at the batch that took the mark", r.f.start == 5})
-			} else {
-				checks = append(checks, check{"the server took the stretch's gap, the held record's batch in it", slices.Contains(r.f.gaps, [2]uint64{3, 4})})
-			}
+			checks = append(checks, check{"the server took the stretch's gap, the held record's batch in it", slices.Contains(r.f.gaps, [2]uint64{3, 4})})
 			for _, ch := range checks {
 				t.Run(ch.name, func(t *testing.T) {
 					if !ch.ok {

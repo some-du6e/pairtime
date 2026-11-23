@@ -483,8 +483,15 @@ func (w *Writer) waitForLocked() waitFor {
 	return out
 }
 
-// holds is Waiting's before: whether one of f's stretches holds e.
+// holds is Waiting's before: whether one of f's stretches holds e. An
+// envelope with no times stands for an event whose times the asker can't
+// read yet, as the hook calls an earlier run left that the adapters haven't
+// counted (agent's adapterHost.waiting): any stretch may hold it, so it is
+// held while f has one, and a writer that knows no stretch holds nothing.
 func (f waitFor) holds(e event.Envelope) bool {
+	if e.T == 0 && e.Mono == 0 {
+		return len(f) > 0
+	}
 	for _, s := range f {
 		if s.holds(e) {
 			return true
