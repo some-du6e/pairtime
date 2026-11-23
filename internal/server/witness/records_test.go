@@ -421,6 +421,62 @@ func TestOfflineConditions(t *testing.T) {
 				c.drop(181, 240)
 				return c, c.find(139.5)
 			}, event.Offline, at(180.5), 1},
+		{"records dated long before the batch before theirs closed read backfilled, whatever notes their batch holds",
+			func() (*chain, int) {
+				// The device got a batch through every minute to minute 120.
+				// Then, after 30 minutes of silence, a batch of records dated
+				// 10 to 24 and a note of 24.5, as if they had waited all along.
+				var c chain
+				for m := 1.0; m <= 120; m++ {
+					c.batch(m, ev(m-0.5, m+100, "run-a"))
+				}
+				var recs []Record
+				for m := 10.0; m <= 24; m++ {
+					recs = append(recs, Record{Type: presence, Timed: true, T: at(m)})
+				}
+				return &c, c.batch(150, append(recs, note(24.5))...)
+			}, event.Backfilled, 0, 0},
+		{"the last minutes of an outage that ends asleep are offline by the failures just before them",
+			func() (*chain, int) {
+				// The uploader failed every four minutes from minute 60 to
+				// 88.2, then waited, and the lid closed at 95 before its next
+				// try. Woken at minute 600, it caught up at once.
+				var c chain
+				for m := 1.0; m <= 95; m++ {
+					recs := []Record{ev(m-0.5, m+100, "run-a")}
+					if f := m - 0.8; f >= 60 && f <= 89 && int(f-60)%4 == 0 {
+						recs = append(recs, note(f))
+					}
+					got := m + 0.05
+					if m >= 60 {
+						got = 600.5
+					}
+					c.batch(got, recs...)
+				}
+				return &c, c.find(94.5)
+			}, event.Offline, at(600.5), 1},
+		{"a failure from an outage the device had caught up from doesn't make a later stretch offline",
+			func() (*chain, int) {
+				// Failures from minute 60 to 76.2 and a catch-up at 80.5, then
+				// live until minute 90, then batches held without a failure
+				// until minute 200.
+				var c chain
+				for m := 1.0; m <= 120; m++ {
+					recs := []Record{ev(m-0.5, m+100, "run-a")}
+					if f := m - 0.8; f >= 60 && f <= 77 && int(f-60)%4 == 0 {
+						recs = append(recs, note(f))
+					}
+					got := m + 0.05
+					switch {
+					case m >= 60 && m <= 80:
+						got = 80.5
+					case m >= 91:
+						got = 200
+					}
+					c.batch(got, recs...)
+				}
+				return &c, c.find(90.5)
+			}, event.Backfilled, 0, 1},
 		{"a batch that came more than the lag after the device got through again isn't part of the catch-up",
 			func() (*chain, int) {
 				c := outage(true)

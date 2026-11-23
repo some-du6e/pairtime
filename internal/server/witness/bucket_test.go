@@ -59,8 +59,10 @@ const minute = 100.0
 
 func TestBucket(t *testing.T) {
 	// cutOff is a device the server last heard from before the minute,
-	// and next two hours on, in the catch-up.
+	// and next two hours on, in the catch-up. after is one whose next
+	// batch after the minute arrived half a minute after it ended.
 	cutOff := map[uint64]float64{1: 99.5, 2: 220, 3: 220, 4: 220}
+	after := map[uint64]float64{1: 99.5, 2: 101.5}
 	final := func(b event.MinuteBucket) event.MinuteBucket {
 		b.State, b.Rev = event.StateFinal, b.Rev+1
 		return b
@@ -82,7 +84,11 @@ func TestBucket(t *testing.T) {
 		want     event.Witness
 	}{
 		{"a revision that reached the server within WITNESS_LAG_S of its minute's end is witnessed",
-			nil, witnessed, 116, nil, event.Witnessed},
+			after, witnessed, 116, nil, event.Witnessed},
+		{"a revision in time but sent ahead of every batch of its time is backfilled, since it rests on nothing the server holds",
+			map[uint64]float64{1: 95}, witnessed, 101, nil, event.Backfilled},
+		{"a batch received up to FutureMS before the minute's end counts, as a device clock that fast sends it",
+			map[uint64]float64{1: 96.5}, witnessed, 101, nil, event.Witnessed},
 		{"a revision that arrived later is backfilled",
 			nil, witnessed, 116.5, nil, event.Backfilled},
 		{"a late revision with the same credit as the one it replaces keeps that one's label",
@@ -108,9 +114,9 @@ func TestBucket(t *testing.T) {
 		{"the client's offline is backfilled when the batch before the catch-up came after the minute, as a server clock set back can leave it",
 			map[uint64]float64{1: 220.5, 2: 220}, offline, 220.1, nil, event.Backfilled},
 		{"a label is never better than the client's reading: on time and read offline is offline",
-			nil, offline, 101, nil, event.Offline},
+			after, offline, 101, nil, event.Offline},
 		{"a label is never better than the client's reading: on time and read backfilled is backfilled",
-			nil, minuteOf("d", minute, event.Backfilled, event.EvidenceC), 101, nil, event.Backfilled},
+			after, minuteOf("d", minute, event.Backfilled, event.EvidenceC), 101, nil, event.Backfilled},
 	}
 	for _, engine := range storetest.Engines() {
 		t.Run(string(engine), func(t *testing.T) {

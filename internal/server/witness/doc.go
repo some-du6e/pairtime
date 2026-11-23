@@ -15,38 +15,45 @@
 //
 // The corrected time is the record's own wall time, re-anchored from the
 // monotonic clock within one boot (SP 8.4). A record was made before every
-// later record of its boot, by the monotonic time between them, and each of
-// those existed when its batch reached the server. So the server's clock,
-// carried back along the boot's monotonic clock, bounds when a record can
-// have been made, whatever the device's wall clock said. The corrected time
-// is the earliest of the record's wall time and those bounds.
+// record of its boot whose monotonic clock read later, by the monotonic
+// time between them, and each of those existed when its batch reached the
+// server. So the server's clock, carried back along the boot's monotonic
+// clock, bounds when a record can have been made, whatever the device's
+// wall clock said. The corrected time is the earliest of the record's wall
+// time and those bounds.
 //
 // A record's credit lands at its wall time, which the client scored and a
 // submission re-scores, so no correction may make a record read later, and
 // fresher, than its wall time says. The corrected time is never after it.
-// The other direction is safe. A wall clock that runs fast, or jumped ahead
-// in the boot, reads by the server's clock instead, as does a record held
-// back and sent late when a later record of its boot reached the server on
-// time. A monotonic clock that stopped while the machine slept only makes
-// a bound looser, never wrong. A wall clock set back proves nothing about
-// the records before it and moves none of them. What no correction can fix
-// is a wall clock that runs slow: a minute it dates 20 minutes early reads
-// 20 minutes late, because a backdated record looks the same.
+// The other direction is safe. A wall clock that runs up to FutureMS fast,
+// or jumped ahead in the boot, reads by the server's clock instead, as
+// does a record held back and sent late when a later record of its boot
+// reached the server on time. A monotonic clock that stopped while the
+// machine slept only makes a bound looser, never wrong, and two equal
+// readings bound nothing, since such a clock can read the same on both
+// sides of a sleep. A wall clock set back proves nothing about the records
+// before it and moves none of them. What no correction can fix is a wall
+// clock that runs slow: a minute it dates 20 minutes early reads 20
+// minutes late, because a backdated record looks the same.
 //
 // A record dated more than FutureMS after its batch reached the server is
 // refused and gets no label (SP 8.4). The check reads the wall time, where
 // the record's credit lands. The corrected time can't run ahead of the
 // receipt, so checking it would let any later record of the boot pull a
-// record dated ahead back under the limit.
+// record dated ahead back under the limit. So on a device whose clock runs
+// more than FutureMS fast, every record sent live is refused.
 //
-// Then each record is witnessed when its lag is at most WITNESS_LAG_S.
-// It is offline when it is late but its batch waited out an outage: the
-// batch closed within the lag after the record, an upload-failure note
-// from later in the chain falls within the lag after the batch closed, the
-// batch arrived within the lag after the device got through again, and the
-// batch before that reconnect is on the server's chain, so the chain ran
-// on unbroken from a witnessed batch. Everything else late is backfilled,
-// and so is every record the client marks as lookback's.
+// Then each record is witnessed when its lag is at most WITNESS_LAG_S. It
+// is offline when it is late but its batch waited out an outage: the batch
+// closed within the lag after the record, an upload-failure note falls
+// within the lag of the batch's close, before or after it, in a batch of
+// the same catch-up or a later one, the batch arrived within the lag after
+// the device got through again, and the batch before that reconnect is on
+// the server's chain, so the chain ran on unbroken from a witnessed batch.
+// A batch closes no earlier than its latest record and no earlier than the
+// batch before it, since a chain seals its batches in order. Everything
+// else late is backfilled, and so is every record the client marks as
+// lookback's.
 //
 // The notes are the client's own claim (DESIGN 7.4), so the server can't
 // check them beyond their place in the chain. It needs their bodies for
@@ -63,23 +70,27 @@
 // Bucket labels each minute-bucket revision ingest stores. Ingest sees
 // batch roots and buckets, never records, so it reads the bucket itself:
 // the minute, on the device's clock, against when the revision arrived.
-// A revision that arrived within the lag of its minute's end is
-// witnessed. A later revision with the same credit as the one it replaces
-// keeps that one's label, since it adds nothing the server didn't already
-// hold: a pending minute turning final is the common case. A late
-// revision the client reads as offline is offline when the server saw the
-// device cut off and catch up around it: the device's first batch received
-// after the minute ended came more than the lag after it, the revision
-// came within the lag after that batch, and the batch before that one is
-// on the chain, received before the minute ended. Every other late
-// revision is backfilled. The label is never better than the client's
+// A revision that arrived within the lag of its minute's end is witnessed,
+// once the server holds a batch of the device received after the minute,
+// less FutureMS for a fast clock: the client sends a minute only after
+// such a batch has a receipt. A later revision with the same credit as the
+// one it replaces keeps that one's label, since it adds nothing the server
+// didn't already hold: a pending minute turning final is the common case.
+// A late revision the client reads as offline is offline when the server
+// saw the device cut off and catch up around it: the device's first batch
+// received after the minute ended came more than the lag after it, the
+// revision came within the lag after that batch, and the batch before
+// that one is on the chain, received before the minute ended. Every other
+// late revision is backfilled. The label is never better than the client's
 // reading, which knows what the server can't, such as which minutes are
 // lookback's.
 //
-// That reading is cautious where it can't see records. A late revision
+// Without records that reading can be wrong either way. A late revision
 // whose new credit rests on records the server had on time, as a restore
 // of half-weighted seconds does (SM 4.3), reads backfilled here, and so
 // does a minute whose bucket waited out an outage that began after its
-// batch got through. A submission labels the records themselves, and its
-// labels are the ones that count.
+// batch got through. And a client that writes a minute's records into
+// batches it sends late, while it sends the minute and other batches on
+// time, gets witnessed here and late labels for the records. A submission
+// labels the records themselves, and its labels are the ones that count.
 package witness

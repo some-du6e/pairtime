@@ -92,10 +92,13 @@ type Result struct {
 
 // Records labels one device's records (DESIGN 7.4; the package
 // documentation says how). batches are the server's witness rows of the
-// device. Records needs every row from the batch before each late
-// record's catch-up on, and reads a row it lacks as a batch the server
-// never held, which can only cost credit. tab is the parameter table the
-// labels go by, which a submission freezes (DESIGN 7.5 step 2).
+// device: the row of every batch whose records recs holds, and every row
+// from the batch before each late record's catch-up on. Records reads a
+// row it lacks as a batch the server never held. Its records get no label
+// and bound no other record's time, so leaving out a row the server holds
+// can make the other records of their boots read fresher than they are.
+// tab is the parameter table the labels go by, which a submission freezes
+// (DESIGN 7.5 step 2).
 func Records(tab *params.Table, batches []Batch, recs []Record) Result {
 	lag := tab.Int(params.WITNESS_LAG_S) * 1000
 	got := make(map[uint64]int64, len(batches))
@@ -213,12 +216,21 @@ func runs(got map[uint64]int64, lag int64) map[uint64]run {
 
 // offline gives the offline label to each late record whose batch waited
 // out an outage (DESIGN 7.4), and gathers them into stretches: the
-// record's batch closed within lag after it; a failure note from that
-// batch or a later one falls within lag after the batch closed; the batch
-// reached the server within lag after its run's first batch; and that run
-// began after a silence that followed a batch the server holds. A batch
-// closes, as far as the server can see, at the latest corrected time of
-// its timed records.
+// record's batch closed within lag after it; a failure note falls within
+// lag of the batch's close, before or after it, in a batch of the same
+// catch-up or a later one; the batch reached the server within lag after
+// its run's first batch; and that run began after a silence that followed
+// a batch the server holds.
+//
+// A batch closes, as far as the server can see, at the latest corrected
+// time of its timed records, and no earlier than the batch before it,
+// since a chain seals its batches in order. So a batch of backdated
+// records sent after the device got batches of the present through
+// closes late. A note may come before the close because the uploader
+// waits between tries: a session that ends asleep while the uploader
+// waits leaves its last batches with only the failures before them. A note
+// in a batch from before the catch-up was sealed before the device last
+// got through, so it belongs to a failure that had ended.
 func offline(out *Result, lag int64, got map[uint64]int64, recs []Record, held []int, corrected []int64) {
 	closes := make(map[uint64]int64)
 	type note struct {
@@ -234,6 +246,16 @@ func offline(out *Result, lag int64, got map[uint64]int64, recs []Record, held [
 		if r.Type == ledger.RTypeUploadFailure && !out.Readings[i].Refused {
 			notes = append(notes, note{corrected[i], r.B})
 		}
+	}
+	bs := make([]uint64, 0, len(closes))
+	for b := range closes {
+		bs = append(bs, b)
+	}
+	slices.Sort(bs)
+	latest := int64(math.MinInt64)
+	for _, b := range bs {
+		latest = max(latest, closes[b])
+		closes[b] = latest
 	}
 	slices.SortFunc(notes, func(a, b note) int { return cmp.Compare(a.at, b.at) })
 	noted := func(from, to int64, b uint64) bool {
@@ -253,8 +275,8 @@ func offline(out *Result, lag int64, got map[uint64]int64, recs []Record, held [
 			continue
 		}
 		closed, ru := closes[r.B], rs[r.B]
-		if closed-corrected[i] > lag || !noted(closed, closed+lag, r.B) ||
-			!ru.resumed || got[r.B]-got[ru.start] > lag {
+		if !ru.resumed || got[r.B]-got[ru.start] > lag || closed-corrected[i] > lag ||
+			!noted(closed-lag, closed+lag, ru.start) {
 			continue
 		}
 		rd.Label = event.Offline

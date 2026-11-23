@@ -83,7 +83,10 @@ func TestServerWitness(t *testing.T) {
 			revs  []string
 			taken event.Witness // the client's reading the bucket keeps
 		}{
-			{"a revision that arrives within the lag of its minute's end is stored witnessed", func(t *testing.T) {
+			{"a revision that arrives within the lag of its minute's end, after a batch of its time, is stored witnessed", func(t *testing.T) {
+				// The uploader sends a minute once a batch sealed after it has
+				// a receipt.
+				h.ok(t, upload{dev: live, body: batchesBody(chain(rand.New(rand.NewPCG(5, 5)), ledger.Hash{}, 1, 1)...)})
 				send(t, live, pending)
 			}, live, minute, "witnessed", []string{"witnessed"}, event.Witnessed},
 			{"the revision that turns it final after the lag keeps that label, since its credit is the same", func(t *testing.T) {

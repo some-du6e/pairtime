@@ -56,7 +56,17 @@ func bucket(ctx context.Context, q Queryer, lag int64, rev Revision, cur *Stored
 	own := event.Backfilled
 	switch {
 	case rev.ReceivedAt-end <= lag:
-		own = event.Witnessed
+		// The client sends a minute only once a batch sealed after it has a
+		// receipt, and that batch reached the server after the minute ended,
+		// give or take a device clock up to FutureMS fast. A minute sent
+		// ahead of every batch of its time rests on nothing the server has.
+		ok, err := reached(ctx, q, rev.Bucket.Device, end-FutureMS)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			own = event.Witnessed
+		}
 	case client == event.Offline:
 		ok, err := caughtUp(ctx, q, rev.Bucket.Device, end, rev.ReceivedAt, lag)
 		if err != nil {
@@ -70,6 +80,20 @@ func bucket(ctx context.Context, q Queryer, lag int64, rev Revision, cur *Stored
 		own = Better(own, cur.Label)
 	}
 	return Worse(client, own), nil
+}
+
+// reached reports whether the server holds a batch of device it received
+// after the time after.
+func reached(ctx context.Context, q Queryer, device string, after int64) (bool, error) {
+	var one int
+	err := q.QueryRowContext(ctx, `SELECT 1 FROM witness_rows WHERE device_id = $1 AND received_at_ms > $2 LIMIT 1`, device, after).Scan(&one)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("witness: reading a device's witness rows: %w", err)
+	}
+	return true, nil
 }
 
 // caughtUp reports whether the server saw device cut off around a minute
