@@ -24,14 +24,40 @@ import (
 
 // batchesFile is batches.seg as read back.
 type batchesFile struct {
-	chain    chainPayload
-	rows     []rowPayload // rows[i] is batch i + 1
+	chain chainPayload
+	// base is the first batch the file keeps: batch 1, whose first record
+	// is s = 1 and whose prev is zero(32), unless a base frame names a
+	// later one (Writer.Sweep).
+	base     basePayload
+	rows     []rowPayload // rows[i] is batch base.B + i
 	receipts map[uint64]ledger.Receipt
 	// good is where the file stops holding whole frames: its size, or the
 	// offset of a frame a crash or power cut tore.
 	good int64
 	torn bool
 }
+
+// basePayload is a base frame's payload: the first batch batches.seg keeps,
+// the number of its first record, and H_(b-1), which the chain from it
+// takes as given, as ledger-v1 9 step 1 takes a run that starts later
+// (docs/errata/2026-11-20-batches-retention.md).
+type basePayload struct {
+	B        uint64      `json:"b"`
+	FirstSeq uint64      `json:"first_seq"`
+	Prev     ledger.Hash `json:"prev"`
+}
+
+// row returns the row of batch b, when the file keeps it.
+func (bf *batchesFile) row(b uint64) (rowPayload, bool) {
+	if b < bf.base.B || b-bf.base.B >= uint64(len(bf.rows)) {
+		return rowPayload{}, false
+	}
+	return bf.rows[b-bf.base.B], true
+}
+
+// last returns the number of the last batch the file has a row for, and
+// base.B - 1 when it has none.
+func (bf *batchesFile) last() uint64 { return bf.base.B + uint64(len(bf.rows)) - 1 }
 
 // damaged returns an error wrapping ErrDamaged.
 func damaged(format string, args ...any) error {
@@ -53,7 +79,8 @@ func readBatchesFile(name string) (*batchesFile, error) {
 		return nil, err
 	}
 	defer f.Close()
-	bf := &batchesFile{receipts: map[uint64]ledger.Receipt{}}
+	bf := &batchesFile{base: basePayload{B: 1, FirstSeq: 1}, receipts: map[uint64]ledger.Receipt{}}
+	based := false // the file has a base frame
 	fr := newFrameReader(f, 0)
 	for i := 0; ; i++ {
 		fm, err := fr.next()
@@ -95,14 +122,28 @@ func readBatchesFile(name string) (*batchesFile, error) {
 			if bf.chain.V != chainVersion || !isKeyID(bf.chain.KeyID) || !isOpaqueKey(bf.chain.DeviceID) {
 				return nil, damaged("%s's chain frame isn't version %d's", batchesName, chainVersion)
 			}
+		case kindBase:
+			// Right after the chain frame, written with it and the rows
+			// after it in one atomic rename (Writer.Sweep).
+			if i != 1 {
+				return nil, damaged("%s has a base frame at offset %d, which isn't right after its chain frame", batchesName, fm.off)
+			}
+			var base basePayload
+			if err := json.Unmarshal(fm.payload, &base); err != nil {
+				return nil, damaged("%s's base frame: %v", batchesName, err)
+			}
+			if base.B == 0 || base.FirstSeq == 0 || (base.B == 1) != (base.FirstSeq == 1) || base.B == 1 && base.Prev != (ledger.Hash{}) {
+				return nil, damaged("%s's base frame names batch %d from record %d, which no chain has", batchesName, base.B, base.FirstSeq)
+			}
+			bf.base, based = base, true
 		case kindBatch:
 			var rp rowPayload
 			if err := json.Unmarshal(fm.payload, &rp); err != nil {
 				return nil, damaged("%s, offset %d: %v", batchesName, fm.off, err)
 			}
-			if want := uint64(len(bf.rows)) + 1; rp.B != want || rp.N == 0 || rp.LastSeq != rp.FirstSeq+rp.N-1 ||
+			if want := bf.last() + 1; rp.B != want || rp.N == 0 || rp.LastSeq != rp.FirstSeq+rp.N-1 ||
 				(len(bf.rows) > 0 && (rp.FirstSeq != bf.rows[len(bf.rows)-1].LastSeq+1 || rp.Prev != bf.rows[len(bf.rows)-1].Head)) ||
-				(len(bf.rows) == 0 && rp.FirstSeq != 1) {
+				(len(bf.rows) == 0 && (rp.FirstSeq != bf.base.FirstSeq || rp.Prev != bf.base.Prev)) {
 				return nil, damaged("%s, offset %d: the row of batch %d doesn't follow the one before", batchesName, fm.off, rp.B)
 			}
 			if ledger.BatchHead(rp.Prev, rp.Root, rp.N, rp.B) != rp.Head {
@@ -115,7 +156,7 @@ func readBatchesFile(name string) (*batchesFile, error) {
 				return nil, damaged("%s, offset %d: %v", batchesName, fm.off, err)
 			}
 			sig, err := hex.DecodeString(r.Signature)
-			if err != nil || len(sig) != ledger.SignatureSize || r.B == 0 || r.B > uint64(len(bf.rows)) {
+			if _, ok := bf.row(r.B); err != nil || len(sig) != ledger.SignatureSize || !ok {
 				return nil, damaged("%s, offset %d: a receipt that doesn't fit a batch", batchesName, fm.off)
 			}
 			rc := ledger.Receipt{ReceivedAt: r.ReceivedAt}
@@ -124,6 +165,11 @@ func readBatchesFile(name string) (*batchesFile, error) {
 		default:
 			return nil, damaged("%s has a %q frame at offset %d", batchesName, fm.kind, fm.off)
 		}
+	}
+	if based && len(bf.rows) == 0 {
+		// A sweep keeps the newest batch, and writes its row with the base
+		// frame, flushed, so no crash leaves one without the other.
+		return nil, damaged("%s keeps batches from %d and has no row", batchesName, bf.base.B)
 	}
 	return bf, nil
 }
