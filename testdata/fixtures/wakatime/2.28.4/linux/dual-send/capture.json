@@ -1,0 +1,201 @@
+{
+  "tool": "wakatime-cli",
+  "version": "v2.28.4",
+  "run": "dual-send",
+  "home": "/home/capture",
+  "servers": {
+    "pairtime": "http://127.0.0.1:7247/api/v1",
+    "hackatime": "http://127.0.0.2:7248/api/hackatime/v1"
+  },
+  "keys": {
+    "pairtime": "00000000-0000-4000-8000-00000000a9e7",
+    "hackatime": "00000000-0000-4000-8000-0000000048c1"
+  },
+  "wakatime_cfg": "[settings]\napi_url = http://127.0.0.2:7248/api/hackatime/v1\napi_key = 00000000-0000-4000-8000-0000000048c1\nheartbeat_rate_limit_seconds = 30\nhostname = capture-host\n\n[api_urls]\n.+ = http://127.0.0.1:7247/api/v1|00000000-0000-4000-8000-00000000a9e7\n",
+  "wakatime_internal_cfg": "[internal]\nai_logs_last_parsed_at = 2026-11-23T14:12:44Z\n",
+  "calls": [
+    {
+      "n": 1,
+      "started_utc": "2026-11-23T14:12:44.631031Z",
+      "args": [
+        "--entity",
+        "/home/capture/pairtime-capture/projects/dual-send/wordcount.py",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1",
+        "--lineno",
+        "1",
+        "--cursorpos",
+        "1",
+        "--lines-in-file",
+        "6"
+      ],
+      "exit": 0,
+      "requests": [
+        1,
+        2
+      ],
+      "note": "opened the file: no change, no save"
+    },
+    {
+      "n": 2,
+      "started_utc": "2026-11-23T14:12:46.993504Z",
+      "args": [
+        "--entity",
+        "/home/capture/pairtime-capture/projects/dual-send/wordcount.py",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1",
+        "--lineno",
+        "6",
+        "--cursorpos",
+        "31",
+        "--lines-in-file",
+        "6",
+        "--human-line-changes",
+        "1"
+      ],
+      "exit": 0,
+      "requests": [],
+      "note": "typed a line"
+    },
+    {
+      "n": 3,
+      "started_utc": "2026-11-23T14:12:49.321507Z",
+      "args": [
+        "--entity",
+        "/home/capture/pairtime-capture/projects/dual-send/wordcount.py",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1",
+        "--lineno",
+        "6",
+        "--cursorpos",
+        "31",
+        "--lines-in-file",
+        "6",
+        "--write"
+      ],
+      "exit": 0,
+      "requests": [],
+      "note": "saved"
+    },
+    {
+      "n": 4,
+      "started_utc": "2026-11-23T14:12:51.649373Z",
+      "args": [
+        "--entity",
+        "/home/capture/pairtime-capture/projects/dual-send/test_wordcount.py",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1",
+        "--lineno",
+        "9",
+        "--cursorpos",
+        "5",
+        "--human-line-changes",
+        "2"
+      ],
+      "exit": 0,
+      "requests": [],
+      "note": "typed in a test file"
+    },
+    {
+      "n": 5,
+      "started_utc": "2026-11-23T14:12:53.978659Z",
+      "args": [
+        "--entity",
+        "/home/capture/pairtime-capture/projects/dual-send/README.md",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1",
+        "--lineno",
+        "3"
+      ],
+      "exit": 0,
+      "requests": [],
+      "note": "moved to a doc"
+    },
+    {
+      "n": 6,
+      "started_utc": "2026-11-23T14:12:56.303198Z",
+      "args": [
+        "--entity",
+        "/home/capture/pairtime-capture/projects/dual-send/wordcount.py",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1",
+        "--category",
+        "debugging",
+        "--lineno",
+        "6"
+      ],
+      "exit": 0,
+      "requests": [],
+      "note": "a debug session"
+    },
+    {
+      "n": 7,
+      "started_utc": "2026-11-23T14:12:58.631080Z",
+      "args": [
+        "--entity",
+        "terminal",
+        "--entity-type",
+        "app",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1",
+        "--category",
+        "running tests"
+      ],
+      "exit": 0,
+      "requests": [],
+      "note": "a non-file entity"
+    },
+    {
+      "n": 8,
+      "started_utc": "2026-11-23T14:13:29.954225Z",
+      "args": [
+        "--entity",
+        "/home/capture/pairtime-capture/projects/dual-send/wordcount.py",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1",
+        "--lineno",
+        "2",
+        "--cursorpos",
+        "4",
+        "--lines-in-file",
+        "6",
+        "--extra-heartbeats"
+      ],
+      "exit": 0,
+      "requests": [
+        3,
+        4,
+        5,
+        6
+      ],
+      "stdin": [
+        {
+          "entity": "/home/capture/pairtime-capture/projects/dual-send/wordcount.py",
+          "type": "file",
+          "time": 1795443189.9539835,
+          "lineno": 2,
+          "cursorpos": 4,
+          "lines": 6,
+          "human_line_changes": 1
+        },
+        {
+          "entity": "/home/capture/pairtime-capture/projects/dual-send/wordcount.py",
+          "type": "file",
+          "time": 1795443199.9539835,
+          "lineno": 2,
+          "cursorpos": 4,
+          "lines": 6,
+          "is_write": true
+        },
+        {
+          "entity": "/home/capture/pairtime-capture/projects/dual-send/test_wordcount.py",
+          "type": "file",
+          "time": 1795443204.9539835,
+          "lineno": 12,
+          "cursorpos": 1
+        }
+      ],
+      "note": "past the rate limit, with a plugin's batch of three extra heartbeats"
+    }
+  ]
+}

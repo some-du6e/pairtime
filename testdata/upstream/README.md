@@ -6,7 +6,7 @@ These files are oracles (PLAN ground rule 5). Once merged, a PR that changes the
 
 | Directory | What it pins | How | Read by |
 |---|---|---|---|
-| `hackatime/` | hackclub/hackatime at `43bde10b02db` (MIT): the eight read endpoints programs call, `:uid` resolution, the duration SQL | Verbatim excerpts under the MIT notice, plus an endpoint list and response schemas we wrote from them | WP-PG3, WP-PG4, WP-PG5, WP-PG11, WP-AD16 |
+| `hackatime/` | hackclub/hackatime at `43bde10b02db` (MIT): the eight read endpoints programs call, `:uid` resolution, the duration SQL, and the heartbeat endpoints WakaTime clients use | Verbatim excerpts under the MIT notice, plus an endpoint list and response schemas we wrote from them | WP-PG3, WP-PG4, WP-PG5, WP-PG11, WP-AD16 |
 | `stardance/` | hackclub/stardance at `b1d3e0eac1ae` (no license): every request its `HackatimeService` makes | Described in our own words, no code | WP-PG3, WP-PG4, WP-PG5 |
 | `robert/` | Robert's API and webhook signature, from four public clients | Reconstructed. Robert's own docs sit behind Hack Club sign-in | WP-PG7, WP-PG8 |
 | `ari/` | Ari's documented ship ingest keys at `637233962a0f` (no license) | Described, as a JSON Schema for the ship payload | WP-PG8, WP-PG10 |

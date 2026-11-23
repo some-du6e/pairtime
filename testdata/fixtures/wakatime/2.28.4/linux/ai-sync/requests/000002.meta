@@ -1,0 +1,17 @@
+unix_ns=1795443242923822958
+utc=2026-11-23T14:14:02.923823Z
+server=hackatime
+method=POST
+path=/api/hackatime/v1/users/current/heartbeats.bulk
+query=
+content_type=application/json
+accept=application/json
+accept_encoding=gzip
+user_agent=wakatime/v2.28.4 (linux-7.0.0-1020-azure-unknown) go1.27.3 vscode/1.106.3 vscode-wakatime/25.5.1
+timezone=Etc/UTC
+x_machine_name=capture-host
+auth=basic
+key=hackatime
+header_names=accept,accept-encoding,authorization,content-length,content-type,host,timezone,user-agent,x-machine-name
+bytes=4547
+status=201
