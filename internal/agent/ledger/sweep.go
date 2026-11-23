@@ -44,9 +44,9 @@ func (w *Writer) Sweep(from string) (batches, segs int, err error) {
 	defer w.sealMu.Unlock()
 	w.mu.Lock()
 	err = w.usable()
-	open := map[string]bool{w.segDay: true}
+	inUse := map[string]bool{w.segDay: true} // the segments the writer has open
 	for _, r := range w.retired {
-		open[strings.TrimSuffix(filepath.Base(r.name), segSuffix)] = true
+		inUse[strings.TrimSuffix(filepath.Base(r.name), segSuffix)] = true
 	}
 	w.mu.Unlock()
 	if err != nil {
@@ -101,7 +101,7 @@ func (w *Writer) Sweep(from string) (batches, segs int, err error) {
 		if day >= first.Start.Seg {
 			break
 		}
-		if open[day] {
+		if inUse[day] {
 			continue
 		}
 		if err := os.Remove(segPath(w.dir, day)); err != nil {
