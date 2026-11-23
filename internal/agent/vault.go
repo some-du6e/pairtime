@@ -78,6 +78,8 @@ func (a *agent) applyPrivacy() {
 	}
 	p := a.privacy()
 	v.SetKeepText(p.KeepText())
+	// The periods may have changed (prompt_text_days, path_days).
+	a.kickSweep(true)
 	if p.TextOff {
 		// Each file of the vault is read and written again, which can take
 		// a moment, so not on the caller's goroutine, which may be the

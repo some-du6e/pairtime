@@ -203,6 +203,11 @@ type agent struct {
 	vault     *vault.Vault
 	vaultWork sync.WaitGroup
 	dropMu    sync.Mutex
+	// sweepKick wakes the retention sweeps' goroutine while it runs, and
+	// sweepForce makes its next look sweep whatever the day
+	// (startRetention).
+	sweepKick  atomic.Pointer[chan struct{}]
+	sweepForce atomic.Bool
 	// early are the batches the ledger writer sealed before upload was
 	// set, for handEarly; earlyMu orders them with it.
 	earlyMu sync.Mutex

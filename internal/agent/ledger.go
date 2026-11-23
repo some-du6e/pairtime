@@ -58,10 +58,11 @@ func (a *agent) startLedger() func() {
 	// on its way (waiting).
 	a.adaptersHost().expectCount()
 	var (
-		mu         sync.Mutex
-		w          *ledger.Writer
-		stopped    bool
-		stopUpload = func() {}
+		mu            sync.Mutex
+		w             *ledger.Writer
+		stopped       bool
+		stopUpload    = func() {}
+		stopRetention = func() {}
 	)
 	quit := make(chan struct{})
 	opened := make(chan struct{})
@@ -101,6 +102,7 @@ func (a *agent) startLedger() func() {
 			a.scorer.Start()
 		}
 		stopUpload = a.startUploader(lw)
+		stopRetention = a.startRetention(lw)
 	}()
 	return func() {
 		close(quit)
@@ -112,8 +114,10 @@ func (a *agent) startLedger() func() {
 		mu.Lock()
 		stopped = true
 		lw := w
-		stop := stopUpload
+		stop, stopSweeps := stopUpload, stopRetention
 		mu.Unlock()
+		// The sweeps first, which use the writer and the vault.
+		stopSweeps()
 		// The uploader stops first: it writes receipts and failure notes
 		// to the writer.
 		stop()
