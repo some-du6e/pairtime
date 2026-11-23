@@ -238,10 +238,13 @@
 //     presence sampler's records, dated before the slot ends keeps the
 //     device sampling there: there is none, or the latest one's reach
 //     ended, since a record the agent stamps itself came dated more than
-//     BUCKET_TTL_S after it and before the sampler's next record. The
-//     agent's os.focus, which says focus is unknown each time the agent
-//     starts, doesn't count. WP-HL1 changed this reading, which first read
-//     every record a State held, os.focus included, after a server's agent
+//     BUCKET_TTL_S after it and before the sampler's next record, and the
+//     newest record is PENDING_WINDOW_S - READ_HORIZON_S past that one. Till
+//     then a sample dated before it can still arrive, as a resume queued
+//     behind a later-dated stop hook does, and keep the reach. The agent's
+//     os.focus, which says focus is unknown each time the agent starts,
+//     doesn't count. WP-HL1 changed this reading, which first read every
+//     record a State held, os.focus included, after a server's agent
 //     stopped scoring 15 minutes after each start, and then bounded a
 //     sample's reach slot by slot (docs/errata/2026-11-23-headless-scoring.md).
 //     Lookback's transcripts come only by a log reader, and lookback's own
@@ -285,9 +288,12 @@
 // the latest record's time, but no more than PENDING_WINDOW_S past the
 // latest os.presence or os.power, the presence sampler's records, which
 // come every 15 to 60 s while a project context is live, until a record the
-// agent stamps itself is dated more than BUCKET_TTL_S after that one. On a
-// device whose agent never samples, and once the sampler's latest record
-// has no reach left, it is the latest record's time (SM 2.1, WP-HL1). No
+// agent stamps itself is dated more than BUCKET_TTL_S after that one and
+// the newest record is PENDING_WINDOW_S - READ_HORIZON_S past it. An
+// earlier sample holds now the same way while a record that would end its
+// reach waits like that. On a device whose agent never samples, and once
+// the sampler's records have no reach left, it is the latest record's time
+// (SM 2.1, WP-HL1). No
 // record changes what was derived for a time more than READ_HORIZON_S before
 // its own t: a lead reaches back at most THINK_LEAD_S + COMPOSE_MAX_S,
 // reading needs a human act within READ_HORIZON_S, and the return rule an

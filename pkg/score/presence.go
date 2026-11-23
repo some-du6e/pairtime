@@ -168,37 +168,48 @@ type presence struct {
 	// lookback's own slots is WP-SC7's.
 	live bool
 	// reaches are the sampler's records, each with whether its reach ended
-	// before the next (sampledReaches), and never marks each slot that is a
-	// never-sampling device's (neverAt): SM 2.1's unknown, with SM 5.2's
-	// codes for a live slot whose presence is unknown, and whole minutes
-	// where the derived slots begin and end with one.
+	// before the next (sampledReaches, as Step gives them), and never marks
+	// each slot that is a never-sampling device's (neverAt): SM 2.1's
+	// unknown, with SM 5.2's codes for a live slot whose presence is
+	// unknown, and whole minutes where the derived slots begin and end with
+	// one.
 	reaches []reach
 	never   []bool
 }
 
 // reach is a record of the presence sampler's, os.presence or os.power, at
-// t, and whether its reach ended before the sampler's next record (SM
-// 2.1): cut is set once a record the agent stamps itself that isn't the
-// sampler's (stampedRecord) is dated more than BUCKET_TTL_S after it and
-// before the next. That shows the agent running without its sampler, as
-// when a desktop session ends and the agent runs on, so the slots after t,
-// up to the next record of the sampler's, are a never-sampling device's.
+// t, and how far it keeps the device sampling (SM 2.1). cut is the t of the
+// first record the agent stamps itself that isn't the sampler's
+// (stampedRecord) dated more than BUCKET_TTL_S after t and before the
+// sampler's next record, or never for none. Such a record shows the agent
+// running without its sampler, as when a desktop session ends and the
+// agent runs on, so the slots after t, up to the sampler's next record,
+// are a never-sampling device's. ended says the cut has taken effect: the
+// newest record is rules.late past it. Until then a record of the
+// sampler's dated before the cut may still be on its way, as a resume
+// still queued behind a later-dated stop hook is, and it would keep the
+// reach, so the reach holds, and so does the clock it keeps (State.now).
 type reach struct {
-	t   int64
-	cut bool
+	t, cut int64
+	ended  bool
 }
 
 // sampledReaches returns the sampler's records in recs, which are in record
-// order, with their reaches.
-func sampledReaches(r rules, recs []event.Event) []reach {
+// order, with their reaches, as of high, the newest record's t.
+func sampledReaches(r rules, recs []event.Event, high int64) []reach {
 	var out []reach
 	for _, e := range recs {
 		switch {
 		case samplerRecord(e):
-			out = append(out, reach{t: e.T})
-		case stampedRecord(e) && len(out) > 0 && e.T > out[len(out)-1].t+r.bucketTTL:
-			out[len(out)-1].cut = true
+			out = append(out, reach{t: e.T, cut: never})
+		case stampedRecord(e) && len(out) > 0:
+			if c := &out[len(out)-1]; c.cut == never && e.T > c.t+r.bucketTTL {
+				c.cut = e.T
+			}
 		}
+	}
+	for i := range out {
+		out[i].ended = out[i].cut <= high-r.late
 	}
 	return out
 }
@@ -208,14 +219,15 @@ func sampledReaches(r rules, recs []event.Event) []reach {
 // before the slot ends keeps sampling there, because there is none, or the
 // latest one's reach ended. A sample dated after the slot never changes
 // that, so a device's first sample, or its sampler starting again, leaves
-// every slot before it as it was. Until a record shows the reach ended, the
-// slots after the sampler's latest record wait for its next one.
+// every slot before it as it was. Until a record ends the reach, and for
+// rules.late after it, the slots after the sampler's latest record wait
+// for its next one, and nothing after that record is final (State.now).
 func (p *presence) neverAt(t int64) bool {
 	if !p.live {
 		return false
 	}
 	i := p.reachAt(t)
-	return i < 0 || p.reaches[i].cut
+	return i < 0 || p.reaches[i].ended
 }
 
 // dates reports whether sample s's idle time dates an input at l, for a
@@ -273,7 +285,7 @@ func earliestLead(r rules, recs []event.Event) (int64, bool) {
 	return from, ok
 }
 
-func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *presence {
+func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *focusLine) *presence {
 	p := &presence{r: r}
 	if len(recs) == 0 {
 		return p
@@ -380,7 +392,7 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 	// does, and a fresh State over the agent's window (internal/agent/scorer)
 	// derives every minute from the window's start.
 	start, stamped, live := agentRecords(recs)
-	p.live, p.reaches = live, sampledReaches(r, recs)
+	p.live, p.reaches = live, reaches
 	ref := now
 	if stamped {
 		ref = start

@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/some-du6e/pairtime/internal/timelines"
@@ -53,19 +54,38 @@ func serverTurns(b *tl, sess string, from, to int64) {
 // Step's Output.
 func stepByMinute(t *testing.T, recs []event.Event) (Derived, Output) {
 	t.Helper()
-	s := NewState(testTable(t), Device{})
-	var finals Derived
-	var out Output
+	finals, outs := stepBatches(t, minuteBatches(recs))
+	return finals, outs[len(outs)-1]
+}
+
+// minuteBatches splits recs, which are in record order, into a batch for
+// each minute that holds one.
+func minuteBatches(recs []event.Event) [][]event.Event {
+	var out [][]event.Event
 	for i := 0; i < len(recs); {
 		j := i
 		for j < len(recs) && floorMinute(recs[j].T) == floorMinute(recs[i].T) {
 			j++
 		}
-		s, out = Step(s, recs[i:j])
-		finals.Append(out.Final)
+		out = append(out, recs[i:j:j])
 		i = j
 	}
-	return finals, out
+	return out
+}
+
+// stepBatches steps one State a batch at a time, as the agent does once
+// the ledger seals each, and returns what became final over all the Steps
+// and each Step's Output.
+func stepBatches(t *testing.T, batches [][]event.Event) (Derived, []Output) {
+	t.Helper()
+	s := NewState(testTable(t), Device{})
+	var finals Derived
+	outs := make([]Output, len(batches))
+	for i, b := range batches {
+		s, outs[i] = Step(s, b)
+		finals.Append(outs[i].Final)
+	}
+	return finals, outs
 }
 
 func TestHeadlessScoring(t *testing.T) {
@@ -241,6 +261,170 @@ func TestHeadlessScoring(t *testing.T) {
 			}
 			checkDerived(t, one)
 			c.check(t, finals, last, recs[len(recs)-1].T, one)
+		})
+	}
+}
+
+// TestCutWaits checks when a record that ends a sample's reach takes
+// effect (SM 2.1): once the newest record is rules.late past it. Until
+// then the reach holds, now stays bounded by it, and a record of the
+// sampler's dated before the cut that arrives in that time keeps the
+// reach, as a resume still on the presence queue does when a later-dated
+// stop hook seals its batch. So nothing goes final early, and a Step a
+// batch gives what one Step gives for any record up to rules.late late.
+func TestCutWaits(t *testing.T) {
+	r := newRules(testTable(t))
+	// hooked is a person's input until 595 s, a hooked turn of s_1 from
+	// 600 s with a tool call every two minutes until until, and a sample on
+	// every slot boundary until 1,800 s. The first tool call more than
+	// BUCKET_TTL_S after that last sample is the one at 9,060 s, and the
+	// newest record is rules.late past it from 9,360 s on.
+	hooked := func(b *tl, until int64) {
+		terminalSession(b)
+		b.mouse(every(at(1), at(595), 5000)...)
+		b.prompt(at(600), event.ViaHook, "s_1", "p_1", "t_1", 40)
+		for s := int64(660); s <= until; s += 120 {
+			b.harness(at(s), event.ViaHook, "s_1", "p_1", &event.AgentTool{ToolClass: event.ToolBash,
+				TStart: at(s - 5), TEnd: at(s), VisibleOutputLines: 2})
+		}
+		b.samples(at(0), at(1800))
+	}
+	const cut, takes = 9060, 9360
+	// waits checks that while the cut waits, FinalBefore stays on the last
+	// sample before it, and that some Step saw it wait.
+	waits := func(t *testing.T, batches [][]event.Event, outs []Output) {
+		t.Helper()
+		high, seen := int64(0), false
+		for i, b := range batches {
+			for _, e := range b {
+				high = max(high, e.T)
+			}
+			if high >= at(cut) && high < at(takes) {
+				seen = true
+				if outs[i].FinalBefore != at(1800) {
+					t.Errorf("with the newest record at %d s, FinalBefore %d s; want 1800 s, the last sample, while the cut waits",
+						(high-base)/1000, (outs[i].FinalBefore-base)/1000)
+				}
+			}
+		}
+		if !seen {
+			t.Fatal("no Step's newest record falls while the cut waits")
+		}
+	}
+	const suspend = 1805
+	const resume = suspend + 8*3600
+	cases := []struct {
+		name  string
+		build func(b *tl)
+		// batches splits the records into the batches the ledger seals; nil
+		// is a batch a minute.
+		batches func(t *testing.T, recs []event.Event) [][]event.Event
+		check   func(t *testing.T, batches [][]event.Event, outs []Output, finals, one Derived)
+	}{
+		{
+			name: "a resume sealed one batch after a later-dated stop hook keeps the suspend's reach, so the eight hours the machine slept stay asleep, as one Step reads them",
+			build: func(b *tl) {
+				hooked(b, 1790)
+				b.power(at(suspend), event.PowerSuspend)
+				b.power(at(resume), event.PowerResume)
+				stops(b, at(resume+2), "s_1", "p_1", "t_1")
+				b.samples(at(resume), at(resume+1800))
+			},
+			batches: func(t *testing.T, recs []event.Event) [][]event.Event {
+				// The resume and the samples after it are still on the
+				// presence queue when the stop hook seals the stop's minute,
+				// so they come in the batch after.
+				batches := minuteBatches(recs)
+				for i, b := range batches {
+					if i+1 == len(batches) || !slices.ContainsFunc(b, func(e event.Event) bool {
+						_, ok := e.Data.(*event.AgentStop)
+						return ok
+					}) {
+						continue
+					}
+					var kept, held []event.Event
+					for _, e := range b {
+						if samplerRecord(e) {
+							held = append(held, e)
+						} else {
+							kept = append(kept, e)
+						}
+					}
+					if len(held) == 0 || len(kept) == 0 {
+						t.Fatal("the stop's minute holds no record of the sampler's to hold back, or only those")
+					}
+					batches[i], batches[i+1] = kept, append(held, batches[i+1]...)
+					return batches
+				}
+				t.Fatal("no batch holds the stop with one after it")
+				return nil
+			},
+			check: func(t *testing.T, _ [][]event.Event, _ []Output, finals, _ Derived) {
+				from, to := floorSlot(at(suspend)), floorSlot(at(resume))
+				n := 0
+				for _, s := range finals.Slots {
+					if s.Start < from || s.Start >= to {
+						continue
+					}
+					n++
+					if !s.Asleep {
+						t.Fatalf("the slot at %d s is final and not asleep; want every slot the machine slept through asleep", (s.Start-base)/1000)
+					}
+				}
+				if want := int((to - from) / event.SlotMS); n != want {
+					t.Errorf("%d slots the machine slept through are final, want %d", n, want)
+				}
+			},
+		},
+		{
+			name: "a record more than BUCKET_TTL_S after the last sample ends its reach only once the newest record is rules.late past it, and then FinalBefore follows the newest record",
+			build: func(b *tl) {
+				hooked(b, 9500)
+			},
+			check: func(t *testing.T, batches [][]event.Event, outs []Output, _, _ Derived) {
+				waits(t, batches, outs)
+				last := outs[len(outs)-1]
+				if want := floorSlot(at(9420) - r.settle); last.FinalBefore != want {
+					t.Errorf("FinalBefore %d s once the cut took effect, want %d s, PENDING_WINDOW_S behind the newest record",
+						(last.FinalBefore-base)/1000, (want-base)/1000)
+				}
+			},
+		},
+		{
+			name: "a sampler that starts again while a cut waits keeps nothing after the last sample before the cut final until the cut takes effect, and the slots between are a never-sampling device's",
+			build: func(b *tl) {
+				hooked(b, 9500)
+				b.samples(at(9100), at(9100+1800))
+			},
+			check: func(t *testing.T, batches [][]event.Event, outs []Output, _, one Derived) {
+				waits(t, batches, outs)
+				for _, s := range one.Slots {
+					if s.Start >= at(1800) && s.Start < at(9105) && (s.Present != event.PresentUnknown || s.Asleep) {
+						t.Fatalf("the slot at %d s is %q, asleep %v; want unknown, as the cut made it", (s.Start-base)/1000, s.Present, s.Asleep)
+					}
+				}
+			},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			c.build(b)
+			recs := b.records()
+			batches := minuteBatches(recs)
+			if c.batches != nil {
+				batches = c.batches(t, recs)
+			}
+			finals, outs := stepBatches(t, batches)
+			one := scoreAll(t, Device{}, recs)
+			var all Derived
+			all.Append(finals)
+			all.Append(outs[len(outs)-1].Pending)
+			if got, want := marshal(t, all), marshal(t, one); !bytes.Equal(got, want) {
+				t.Errorf("a Step a batch differs from one Step %s", firstDiff(got, want))
+			}
+			checkDerived(t, one)
+			c.check(t, batches, outs, finals, one)
 		})
 	}
 }

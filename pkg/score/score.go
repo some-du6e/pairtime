@@ -37,12 +37,6 @@ type State struct {
 	recs []event.Event
 	// high is the largest t of any record, 0 before the first.
 	high int64
-	// own is the largest t of a record of the presence sampler's, an
-	// os.presence or os.power (samplerRecord), 0 before the first, and
-	// stamped the largest t of any other record the agent stamps itself
-	// (stampedRecord), which ends own's reach once it is more than
-	// BUCKET_TTL_S later (State.now).
-	own, stamped int64
 	// done is the FinalBefore of the last Step: everything derived for a
 	// time before it has been emitted as final.
 	done int64
@@ -73,8 +67,9 @@ func samplerRecord(e event.Event) bool {
 // which can be skewed, and so do the other paths' records. One that isn't
 // the sampler's, dated more than BUCKET_TTL_S after the sampler's latest
 // record, shows the agent running without its sampler, which ends that
-// record's reach (SM 2.1): it no longer keeps the clock (State.now), and
-// the slots after it are a never-sampling device's (presence.neverAt).
+// record's reach once the newest record is rules.late past it (SM 2.1,
+// sampledReaches): it no longer keeps the clock (State.now), and the slots
+// after it are a never-sampling device's (presence.neverAt).
 func stampedRecord(e event.Event) bool {
 	switch e.Via {
 	case event.ViaHook, event.ViaOS, event.ViaApp:
@@ -83,23 +78,31 @@ func stampedRecord(e event.Event) bool {
 	return false
 }
 
-// now is the time the scorer takes as the present: the largest t of any
-// record, but no more than PENDING_WINDOW_S past the latest record of the
-// presence sampler's (samplerRecord), while that record keeps the clock. A
-// record dated further ahead, such as a bridge prompt whose transcript
-// timestamp is hours off, so stays pending until the samples reach it,
-// instead of making every real record after it come too late to be output.
-// The sampler's latest record keeps the clock until another record the
-// agent stamps itself (stampedRecord) is dated more than BUCKET_TTL_S after
-// it, which shows the agent running without its sampler. Then, and with no
-// record of the sampler's at all, as on a device whose agent never samples,
-// now is high: nothing else keeps time there, and a minute is final once a
-// record is dated PENDING_WINDOW_S past its end (SM 2.1).
-func (s State) now(r rules) int64 {
-	if s.own == 0 || s.stamped > s.own+r.bucketTTL {
-		return s.high
+// now is the time the scorer takes as the present, given the sampler's
+// records and their reaches (sampledReaches): the largest t of any record,
+// but no more than PENDING_WINDOW_S past a record of the presence
+// sampler's (samplerRecord) that keeps the clock. A record dated further
+// ahead, such as a bridge prompt whose transcript timestamp is hours off,
+// so stays pending until the samples reach it, instead of making every
+// real record after it come too late to be output. The sampler's latest
+// record keeps the clock until its reach ends: another record the agent
+// stamps itself (stampedRecord) is dated more than BUCKET_TTL_S after it,
+// which shows the agent running without its sampler, and the newest record
+// is rules.late past that one. An earlier record of the sampler's keeps
+// the clock while a record that ends its reach waits like that, since a
+// sample dated before that record can still arrive and keep the reach.
+// Since settle is PENDING_WINDOW_S, nothing after a record that keeps the
+// clock is final. With no record of the sampler's keeping it, as on a
+// device whose agent never samples, now is high: nothing else keeps time
+// there, and a minute is final once a record is dated PENDING_WINDOW_S
+// past its end (SM 2.1).
+func (s State) now(r rules, reaches []reach) int64 {
+	for i, c := range reaches {
+		if !c.ended && (c.cut != never || i == len(reaches)-1) {
+			return min(s.high, c.t+r.pendingWindow)
+		}
 	}
-	return min(s.high, s.own+r.pendingWindow)
+	return s.high
 }
 
 // NewState returns the state of a scorer that has seen no records and
@@ -170,9 +173,9 @@ type Derived struct {
 // them in record order, by t, then seq, then event_id, and drops a record
 // whose event_id it already holds. It reads no clock and does no I/O;
 // "now" is the largest t it has seen, but no more than PENDING_WINDOW_S
-// past the latest sample or power record, which the presence sampler
-// writes, while that record keeps the clock (State.now). Every record must
-// pass event.Validate, as every record in the ledger does.
+// past a sample or power record, which the presence sampler writes, that
+// keeps the clock (State.now). Every record must pass event.Validate, as
+// every record in the ledger does.
 //
 // A record whose t is before the state's FinalBefore still counts toward
 // what is pending, but what is final stays final.
@@ -180,22 +183,17 @@ func Step(s State, records []event.Event) (State, Output) {
 	if s.table == nil {
 		panic("score: Step on a State not made by NewState")
 	}
-	next := State{table: s.table, device: s.device, high: s.high, own: s.own, stamped: s.stamped, done: s.done}
+	next := State{table: s.table, device: s.device, high: s.high, done: s.done}
 	next.recs = merge(s.recs, records)
 	for _, e := range records {
 		if e.Data != nil {
 			next.high = max(next.high, e.T)
-			switch {
-			case samplerRecord(e):
-				next.own = max(next.own, e.T)
-			case stampedRecord(e):
-				next.stamped = max(next.stamped, e.T)
-			}
 		}
 	}
 	r := newRules(s.table)
-	now := next.now(r)
-	all, lookups, relays := derive(r, s.device, next.recs, now)
+	reaches := sampledReaches(r, next.recs, next.high)
+	now := next.now(r, reaches)
+	all, lookups, relays := derive(r, s.device, next.recs, now, reaches)
 	fb := s.done
 	if len(next.recs) > 0 {
 		to := floorSlot(now - r.settle)
