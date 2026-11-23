@@ -1,0 +1,21 @@
+{
+  "fixture": "relayed/t3-phone",
+  "prompts": [
+    {
+      "turn_key": "t_47f313f74d69",
+      "t": 1795867381000,
+      "local": "13:03:01",
+      "text": null,
+      "len_chars": 90,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_779190c69507",
+      "t": 1795867801000,
+      "local": "13:10:01",
+      "text": null,
+      "len_chars": 48,
+      "source": "invented for this case; only its length matters"
+    }
+  ]
+}

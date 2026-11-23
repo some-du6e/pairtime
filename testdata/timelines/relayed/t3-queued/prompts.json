@@ -1,0 +1,37 @@
+{
+  "fixture": "relayed/t3-queued",
+  "prompts": [
+    {
+      "turn_key": "t_103dfc81a594",
+      "t": 1795572061000,
+      "local": "20:01:01",
+      "text": null,
+      "len_chars": 90,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_50983f829803",
+      "t": 1795572541000,
+      "local": "20:09:01",
+      "text": null,
+      "len_chars": 45,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_a9f8953b855d",
+      "t": 1795572841000,
+      "local": "20:14:01",
+      "text": null,
+      "len_chars": 90,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_9ef93bfc6512",
+      "t": 1795573621000,
+      "local": "20:27:01",
+      "text": null,
+      "len_chars": 60,
+      "source": "invented for this case; only its length matters"
+    }
+  ]
+}

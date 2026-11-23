@@ -91,6 +91,11 @@ type Input struct {
 	// such as a settings file that isn't JSON. A harness's line says why
 	// its hooks stay out, and the screen says why autostart does.
 	Left map[string]string
+	// Linked is the server pairtime login linked this computer to, while
+	// config.toml says online and reads, which install leaves as they are:
+	// the screen says so in place of local-only mode. It is empty for a
+	// computer that isn't linked, or whose config.toml keeps it local.
+	Linked string
 }
 
 // Screen is the consent screen.
@@ -200,7 +205,12 @@ func (s *Screen) Render(w io.Writer) error {
 	b.WriteString(wrap("This is everything pairtime install changes on this computer. Nothing changes until you say yes, and pairtime uninstall takes it all back out.", ""))
 	b.WriteString("\n")
 	fmt.Fprintf(b, "pairtime goes in %s.\n", install.Printable(s.in.Binary))
-	b.WriteString("It runs in local-only mode: what it records stays on this computer.\n\n")
+	if s.in.Linked != "" {
+		b.WriteString(wrap("This computer is linked to "+install.Printable(s.in.Linked)+", and config.toml lets pairtime upload your hours' numbers there.", ""))
+		b.WriteString("\n")
+	} else {
+		b.WriteString("It runs in local-only mode: what it records stays on this computer.\n\n")
+	}
 	s.renderHarnesses(b)
 	if why, ok := s.in.Left[install.ItemAutostart]; ok {
 		b.WriteString("\n")

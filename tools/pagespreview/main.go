@@ -5,8 +5,11 @@
 // a browser without building pairtimed: pages-preview.yml runs it and
 // uploads the directory.
 //
-// Each page is NAME.html, the owner's /dashboard drawn from the sample's
-// numbers as a signed-in account's. headers.json maps each file to the
+// Each page is NAME.html. The owner's /dashboard is drawn twice: from the
+// /demo sample's numbers as a signed-in account's, and from
+// dashboard.Unattended, a day of agents working in nine projects at once
+// on a computer nobody types on, for an account whose sign-in brought no
+// display name. headers.json maps each file to the
 // Content-Security-Policy the server sends with it, so a static server can
 // send the same one and show whether the page still works under it.
 //
@@ -45,11 +48,19 @@ func main() {
 	}
 }
 
-// signedIn is sign-in as pairtimed wires it, with the preview signed in.
-var signedIn = pages.SignIn{
-	Enabled: true, LoginPath: "/auth/hca/login", LogoutPath: "/auth/logout",
-	Visitor: func(*http.Request) (string, bool) { return "U0PREVIEW", true },
-}
+// signedIn is sign-in as pairtimed wires it, with the preview signed in
+// under a made-up display name, and signedInNoName signed in with a
+// sign-in that brought none.
+var (
+	signedIn = pages.SignIn{
+		Enabled: true, LoginPath: "/auth/hca/login", LogoutPath: "/auth/logout",
+		Visitor: func(*http.Request) (string, bool) { return "Sam", true },
+	}
+	signedInNoName = pages.SignIn{
+		Enabled: true, LoginPath: "/auth/hca/login", LogoutPath: "/auth/logout",
+		Visitor: func(*http.Request) (string, bool) { return "", true },
+	}
+)
 
 // previews are the pages written, each in the states a visitor can see
 // it in. owner, when set, is the signed-in account's view for /dashboard.
@@ -64,6 +75,7 @@ var previews = []struct {
 	{file: "demo.html", path: "/demo"},
 	{file: "demo-signups-open.html", path: "/demo", signIn: pages.SignIn{Enabled: true, LoginPath: "/auth/hca/login", LogoutPath: "/auth/logout"}, signupsOn: true},
 	{file: "dashboard.html", path: "/dashboard", signIn: signedIn, owner: ownerView},
+	{file: "dashboard-agents.html", path: "/dashboard", signIn: signedInNoName, owner: agentsView},
 	{file: "dashboard-empty.html", path: "/dashboard", signIn: signedIn, owner: emptyView},
 	{file: "dashboard-off.html", path: "/dashboard"},
 	{file: "privacy.html", path: "/privacy"},
@@ -123,18 +135,35 @@ func (s source) View(_ context.Context, _ string, now time.Time) (dashboard.View
 	return s(now)
 }
 
+// ownerKeys are made-up device keys, in the git adapter's form, for the
+// sample's three projects.
+var ownerKeys = []string{
+	"g7c41e9a2d05b8f63e1a94c7d2b6f0e85",
+	"gd2a8f61c94e07b35a8c1f6e29d4b7a03",
+	"g5be03d7f18a6c92e4b07d5a1c8f3e962",
+}
+
 // ownerView is the sample's numbers as a signed-in owner's own view, as
 // dashboard.Rollups makes it: the agent is "your agent", each project is
-// called by its key cut short, since the server never learns a project's
-// name, and each computer's projects count apart until project
-// registration (WP-SV10).
+// called by the short code of a made-up key, since the server never learns
+// a project's name, and each computer's projects count apart until
+// project registration (WP-SV10).
 func ownerView(now time.Time) (dashboard.View, error) {
 	v, err := dashboard.Demo{}.View(context.Background(), "", now)
 	v.Sample, v.Agent, v.TZ, v.SplitByDevice = false, dashboard.AgentName, "Europe/London", true
-	for i, p := range v.Projects {
-		v.Projects[i].Name = dashboard.ShortKey(p.Keys[0])
+	codes := dashboard.ShortCodes(ownerKeys)
+	for i := range v.Projects {
+		key := ownerKeys[i%len(ownerKeys)]
+		v.Projects[i].Keys, v.Projects[i].Code, v.Projects[i].Name = []string{key}, codes[key], dashboard.CodeName(codes[key])
 	}
 	return v, err
+}
+
+// agentsView is dashboard.Unattended's day, read at 18:00 UTC today, late
+// enough for its busiest project's 15h 5m.
+func agentsView(now time.Time) (dashboard.View, error) {
+	evening := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 18, 0, 0, 0, time.UTC)
+	return dashboard.Unattended{}.View(context.Background(), "", evening)
 }
 
 // emptyView is a new account's view.

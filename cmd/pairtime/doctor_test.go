@@ -124,6 +124,30 @@ func (h fakeHome) statusAgentAfter(d time.Duration, st doctor.Status) {
 	})
 }
 
+// startingAgent starts a fake agent that answers the status question that
+// it is still starting, the first n times or, with n below 0, every time,
+// and then with st.
+func (h fakeHome) startingAgent(n int, st doctor.Status) {
+	h.t.Helper()
+	b, err := json.Marshal(st)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	var mu sync.Mutex
+	h.agent(func(q string) (json.RawMessage, error) {
+		if q != ipc.AskStatus {
+			return nil, ipc.ErrUnknownQuestion
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if n != 0 {
+			n--
+			return nil, ipc.ErrStarting
+		}
+		return b, nil
+	})
+}
+
 // runningStatus is a running agent's status for the tests to change.
 func runningStatus() doctor.Status {
 	return doctor.Status{
@@ -345,6 +369,26 @@ func TestDoctorAgentLine(t *testing.T) {
 			},
 			want:     doctor.OK,
 			wantText: "running pairtime",
+		},
+		{
+			name: "an agent that answers it is still starting, as during its socket's self-test, and then its status, is running",
+			agent: func(h fakeHome) {
+				h.waitFor(10*time.Second, 20*time.Millisecond)
+				h.startingAgent(1, runningStatus())
+			},
+			want:     doctor.OK,
+			wantText: "running pairtime",
+		},
+		{
+			name: "an agent that answers it is still starting for as long as doctor waits fails with that",
+			agent: func(h fakeHome) {
+				h.waitFor(150*time.Millisecond, 20*time.Millisecond)
+				h.startingAgent(-1, runningStatus())
+			},
+			wantCode:  1,
+			want:      doctor.Fail,
+			wantText:  "still starting",
+			wantSkips: []string{"idle", "focus"},
 		},
 		{
 			name: "an agent stopping, which lets go of the data folder a moment after its socket, isn't running, not deaf",

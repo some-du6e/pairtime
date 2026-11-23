@@ -1,0 +1,283 @@
+{
+  "fixture": "relayed/t3-away",
+  "title": "T3 Code messages typed on another computer, scored on the server that runs the agent",
+  "sm": "docs/design/struggle-metric.md 2.2 rule 9, 2.3, 2.4, 2.8",
+  "date": "2026-11-23",
+  "timezone": "America/Chicago",
+  "utc_offset": "-06:00",
+  "os": "linux",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "witnessed",
+  "device": "d_f00d4925def3",
+  "projects": {"p_12b356f22578": "weather-cli"},
+  "window": {"start": "2026-11-24T02:00:00Z", "end": "2026-11-24T02:30:00Z", "local": "20:00-20:30"},
+  "rows": [
+    {
+      "start": "2026-11-24T02:00:00Z",
+      "minutes": 1,
+      "local": "20:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_12b356f22578": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3: a relayed message's lead is its typing time, ending at sent_at",
+      "note": "M1's 90 characters type in 90 / 1.5 = 60 s, from 20:00:00 to its stamp at 20:01:00. It is the thread's first message, so nothing else caps the lead.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:01:00Z",
+      "minutes": 1,
+      "local": "20:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 1, "X.agent_only": 59},
+      "agent_running_s": 59,
+      "sm": "2.2 rule 9: M1's prompt is relayed",
+      "note": "T3 hands M1 to the agent at 20:01:01, so 20:01:00 is in neither the lead nor a turn. T1 runs from 20:01:01.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:02:00Z",
+      "minutes": 1,
+      "local": "20:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.4: no relayed session reads while its agent runs",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:03:00Z",
+      "minutes": 1,
+      "local": "20:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_12b356f22578": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.4: a relayed session reads after a stop, until its next relayed message within 600 s, 120 s at most",
+      "note": "T1 stops at 20:03:30. M2 follows at 20:07:00, 210 s later, so the session reads from the stop. T1 filled 20 + 20 + 225 + 50 = 315 s, which the 120 s cap holds to 120.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:04:00Z",
+      "minutes": 1,
+      "local": "20:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_12b356f22578": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4: a relayed session reads after a stop, until its next relayed message within 600 s, 120 s at most",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:05:00Z",
+      "minutes": 1,
+      "local": "20:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_12b356f22578": {"READ": 30}
+      },
+      "uncredited": {"X.bucket_cap": 30},
+      "agent_running_s": 0,
+      "sm": "2.4: a relayed session reads after a stop, until its next relayed message within 600 s, 120 s at most",
+      "note": "The 120 s end at 20:05:30: 30 + 60 + 30. BUCKET_MAX_S's 600 s would have read on, so the rest is X.bucket_cap (5.2).",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:06:00Z",
+      "minutes": 1,
+      "local": "20:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_12b356f22578": {"P": 30}
+      },
+      "uncredited": {"X.bucket_cap": 30},
+      "agent_running_s": 0,
+      "sm": "2.3: a relayed message's lead is its typing time, ending at sent_at",
+      "note": "M2's 45 characters: 30 s, from 20:06:30. M1 came 360 s earlier, so the cap at the seconds since the thread's previous message doesn't bind.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:07:00Z",
+      "minutes": 1,
+      "local": "20:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 1, "X.agent_only": 59},
+      "agent_running_s": 59,
+      "sm": "2.2 rule 9: M2's prompt is relayed",
+      "note": "T3 hands M2 over at 20:07:01, and T2 runs from then. The prompt resets the bucket to its 20 s base.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:08:00Z",
+      "minutes": 1,
+      "local": "20:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.4: no relayed session reads while its agent runs",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:09:00Z",
+      "minutes": 1,
+      "local": "20:09",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running",
+      "note": "T2 stops at 20:09:00. The next relayed message is M3 at 20:26:00, 1,020 s later, so nothing reads T2's 45 s."
+    },
+    {
+      "start": "2026-11-24T02:10:00Z",
+      "minutes": 2,
+      "local": "20:10-20:11",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-24T02:12:00Z",
+      "minutes": 1,
+      "local": "20:12",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.automated": 60},
+      "agent_running_s": 60,
+      "sm": "2.2 rule 4: no relay record, so the agent's message is headless",
+      "note": "Another agent's message reaches the agent at 20:12:00. T3 stored it with createdBy agent, so no relay record witnesses it: no TTY and no host make it headless, and its turn T3 is automated.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:13:00Z",
+      "minutes": 1,
+      "local": "20:13",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.automated": 60},
+      "agent_running_s": 60,
+      "sm": "2.2 rule 4",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:14:00Z",
+      "minutes": 1,
+      "local": "20:14",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.automated": 60},
+      "agent_running_s": 60,
+      "sm": "2.2 rule 4",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:15:00Z",
+      "minutes": 10,
+      "local": "20:15-20:24",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running",
+      "note": "T3 stops at 20:15:00. Its output fills the bucket, which an automated turn doesn't reset, to the cap, but M3 comes 660 s after the stop, so nothing reads it."
+    },
+    {
+      "start": "2026-11-24T02:25:00Z",
+      "minutes": 1,
+      "local": "20:25",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 2,
+      "credit": {
+        "p_12b356f22578": {"GO": 2}
+      },
+      "uncredited": {"X.no_anchor": 58},
+      "agent_running_s": 0,
+      "sm": "2.3: a relayed message's lead is its typing time, ending at sent_at",
+      "note": "M3 is \"yes\": a go-ahead, whose relayed lead is its typing time alone, 3 / 1.5 = 2 s.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:26:00Z",
+      "minutes": 1,
+      "local": "20:26",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 1, "X.agent_only": 59},
+      "agent_running_s": 59,
+      "sm": "2.2 rule 9: M3's prompt is relayed",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:27:00Z",
+      "minutes": 1,
+      "local": "20:27",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 30, "X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.4",
+      "note": "T4 stops at 20:27:30. Nothing follows within the window.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-24T02:28:00Z",
+      "minutes": 2,
+      "local": "20:28-20:29",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    }
+  ],
+  "totals": {
+    "credited_s": 212,
+    "credited_by_project": {"p_12b356f22578": 212},
+    "credited_by_reason": {"P": 90, "GO": 2, "READ": 120},
+    "uncredited": {"X.no_anchor": 91, "X.agent_only": 357, "X.automated": 180, "X.bucket_cap": 60},
+    "agent_running_s": 537,
+    "level_c_s": 212,
+    "via_relay_s": 212,
+    "relayed_prompts": 3,
+    "headless_prompts": 1
+  },
+  "stated": [],
+  "approx": {},
+  "errata": ["2026-11-22-relayed-prompts"],
+  "notes": [
+    "No SM section describes this case. Every row comes from SM 2.2 rule 9, 2.3, 2.4 and 2.8 as docs/errata/2026-11-22-relayed-prompts.md applies them. Every credited second is level C with via_relay, and witnessed: the server uploads live.",
+    "The server has no desktop, so pairtime samples no presence and records no focus: every slot's presence is unknown.",
+    "relayed_prompts counts the prompts a relay record witnessed; headless_prompts the one rule 4 took.",
+    "Every slot's presence is unknown, so uncredited seconds take SM 5.2's codes for such a slot: X.bucket_cap where only the 120 s cap kept the session from reading, X.agent_only or X.automated while a turn runs, else X.no_anchor."
+  ]
+}

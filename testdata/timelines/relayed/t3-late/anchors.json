@@ -1,0 +1,101 @@
+{
+  "fixture": "relayed/t3-late",
+  "anchors": [
+    {
+      "event_id": "01a21596-2c48-7ccd-b171-199cfcff465a",
+      "kind": "substantive_prompt",
+      "t": 1795658490000,
+      "local": "19:01:30",
+      "project_key": "p_ce7d850107da",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "lead_s": 90,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "app",
+      "level": "C",
+      "sm": "2.3: typing time, 135 / 1.5 = 90 s, ending at sent_at",
+      "prompt": "01a21596-2478-7b3d-b1d4-6e53600d4610",
+      "labels": ["via_relay"]
+    },
+    {
+      "event_id": "01a215a3-4ba8-7126-9320-b5d6c14d1319",
+      "kind": "substantive_prompt",
+      "t": 1795659350000,
+      "local": "19:15:50",
+      "project_key": "p_ce7d850107da",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "lead_s": 70,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "app",
+      "level": "C",
+      "sm": "2.3: typing time, 105 / 1.5 = 70 s, ending at sent_at; it pairs 591 s after sent_at, inside RELAY_MATCH_S, but 1,181 s after T1's stop, too late to vouch for that stop's reading (2.4)",
+      "prompt": "01a215ac-4488-7c12-8e38-474160a56d03",
+      "labels": ["via_relay"]
+    },
+    {
+      "event_id": "01a215b6-ac98-78b8-bdcb-076ec34b3151",
+      "kind": "substantive_prompt",
+      "t": 1795660620000,
+      "local": "19:37:00",
+      "project_key": "p_ce7d850107da",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "lead_s": 60,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "app",
+      "level": "C",
+      "sm": "2.3: typing time, 90 / 1.5 = 60 s, ending at sent_at",
+      "prompt": "01a215b6-a4c8-7fe7-8706-93376c62763b",
+      "labels": ["via_relay"]
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_68addfcc53d2",
+      "turn_key": "t_80a0ae99c675",
+      "t_submit": 1795658491000,
+      "local_submit": "19:01:31",
+      "t_stop": 1795658760000,
+      "local_stop": "19:06:00",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 9"
+    },
+    {
+      "session_key": "s_68addfcc53d2",
+      "turn_key": "t_b0d559dedb3b",
+      "t_submit": 1795659000000,
+      "local_submit": "19:10:00",
+      "t_stop": 1795659940000,
+      "local_stop": "19:25:40",
+      "origin": "headless",
+      "sm": "2.2 rule 4: T3 stores the agent's message with createdBy agent, so no record witnesses it"
+    },
+    {
+      "session_key": "s_68addfcc53d2",
+      "turn_key": "t_54f6653ddf7d",
+      "t_submit": 1795659941000,
+      "local_submit": "19:25:41",
+      "t_stop": 1795660440000,
+      "local_stop": "19:34:00",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 9"
+    },
+    {
+      "session_key": "s_68addfcc53d2",
+      "turn_key": "t_63801674a1e7",
+      "t_submit": 1795660621000,
+      "local_submit": "19:37:01",
+      "t_stop": 1795660830000,
+      "local_stop": "19:40:30",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 9"
+    }
+  ]
+}

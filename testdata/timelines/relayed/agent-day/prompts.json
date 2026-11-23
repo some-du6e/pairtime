@@ -1,0 +1,1541 @@
+{
+  "fixture": "relayed/agent-day",
+  "prompts": [
+    {
+      "turn_key": "t_6bcb6199b2bc",
+      "t": 1795413630000,
+      "local": "00:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_39feeabf52d1",
+      "t": 1795413672000,
+      "local": "00:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_b94cd1ecd511",
+      "t": 1795413702000,
+      "local": "00:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_84100a9a7836",
+      "t": 1795414268000,
+      "local": "00:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_1b1b8f478c83",
+      "t": 1795414504000,
+      "local": "00:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_caf0d735acb8",
+      "t": 1795414860000,
+      "local": "00:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_56e67699533a",
+      "t": 1795414976000,
+      "local": "00:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_fa02fcabfc5a",
+      "t": 1795415032000,
+      "local": "00:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_931625cfe533",
+      "t": 1795417230000,
+      "local": "01:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_9d2fe938a11e",
+      "t": 1795417272000,
+      "local": "01:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_15b227047fc9",
+      "t": 1795417302000,
+      "local": "01:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_e21c867bcf19",
+      "t": 1795417868000,
+      "local": "01:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_2594465c9378",
+      "t": 1795418104000,
+      "local": "01:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_a6d47c074faf",
+      "t": 1795418460000,
+      "local": "01:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_85501b1a8122",
+      "t": 1795418576000,
+      "local": "01:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_e6d628e46716",
+      "t": 1795418632000,
+      "local": "01:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_592e0f86e4ff",
+      "t": 1795420830000,
+      "local": "02:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_792c129a9092",
+      "t": 1795420872000,
+      "local": "02:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_5963fc38ee60",
+      "t": 1795420902000,
+      "local": "02:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_f2fb0e6eb329",
+      "t": 1795421468000,
+      "local": "02:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_66cc620d28dc",
+      "t": 1795421704000,
+      "local": "02:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_ac5a78829938",
+      "t": 1795422060000,
+      "local": "02:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_b4acbad3799f",
+      "t": 1795422176000,
+      "local": "02:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_a39182e3036a",
+      "t": 1795422232000,
+      "local": "02:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_adb2ed4bc60e",
+      "t": 1795424430000,
+      "local": "03:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_3a050c25fe82",
+      "t": 1795424472000,
+      "local": "03:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_8b29715395b7",
+      "t": 1795424502000,
+      "local": "03:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_ca9d2d3b7057",
+      "t": 1795425068000,
+      "local": "03:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_00d91193b330",
+      "t": 1795425304000,
+      "local": "03:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_5cf7009cfa42",
+      "t": 1795425660000,
+      "local": "03:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_e802a0312516",
+      "t": 1795425776000,
+      "local": "03:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_d436c5946fcb",
+      "t": 1795425832000,
+      "local": "03:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_f304ec6ff210",
+      "t": 1795428030000,
+      "local": "04:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_16bd67847722",
+      "t": 1795428072000,
+      "local": "04:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_7ca01d1d8777",
+      "t": 1795428102000,
+      "local": "04:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_efca48e09913",
+      "t": 1795428668000,
+      "local": "04:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_f838a07224af",
+      "t": 1795428904000,
+      "local": "04:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_03bfb1d68c90",
+      "t": 1795429260000,
+      "local": "04:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_95fa122eef7b",
+      "t": 1795429376000,
+      "local": "04:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_d0f0aee8b2f8",
+      "t": 1795429432000,
+      "local": "04:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_7e3916683168",
+      "t": 1795431630000,
+      "local": "05:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_6e9c6ad4275c",
+      "t": 1795431672000,
+      "local": "05:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_8ac3c9258e1c",
+      "t": 1795431702000,
+      "local": "05:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_f147cf42372c",
+      "t": 1795432268000,
+      "local": "05:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_9dea4599945c",
+      "t": 1795432504000,
+      "local": "05:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_b8ec3b712907",
+      "t": 1795432860000,
+      "local": "05:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_debe8692c748",
+      "t": 1795432976000,
+      "local": "05:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_eb932ed35074",
+      "t": 1795433032000,
+      "local": "05:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_b79018ce3eb8",
+      "t": 1795435230000,
+      "local": "06:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_e7c930601401",
+      "t": 1795435272000,
+      "local": "06:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_e840dee9ffa7",
+      "t": 1795435302000,
+      "local": "06:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_0f5173ac3380",
+      "t": 1795435868000,
+      "local": "06:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_686751bf03df",
+      "t": 1795436104000,
+      "local": "06:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_f13193de7ea6",
+      "t": 1795436460000,
+      "local": "06:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_06666df7d958",
+      "t": 1795436576000,
+      "local": "06:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_7121af99c154",
+      "t": 1795436632000,
+      "local": "06:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_7806d80b15d5",
+      "t": 1795438830000,
+      "local": "07:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_d648177925cf",
+      "t": 1795438872000,
+      "local": "07:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_0e5a6b93db1a",
+      "t": 1795438902000,
+      "local": "07:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_d60cd9b6eb51",
+      "t": 1795439468000,
+      "local": "07:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_3e53b487c073",
+      "t": 1795439704000,
+      "local": "07:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_4b176a7d8a82",
+      "t": 1795440060000,
+      "local": "07:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_99d08d0da7d2",
+      "t": 1795440176000,
+      "local": "07:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_ef494becd3cf",
+      "t": 1795440232000,
+      "local": "07:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_b30f674cbaee",
+      "t": 1795442430000,
+      "local": "08:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_a5291587e9e6",
+      "t": 1795442472000,
+      "local": "08:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_a98d7ba357ee",
+      "t": 1795442502000,
+      "local": "08:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_9a690422802c",
+      "t": 1795443068000,
+      "local": "08:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_bcbc77b64e4e",
+      "t": 1795443304000,
+      "local": "08:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_57b0d7994764",
+      "t": 1795443660000,
+      "local": "08:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_c0c0feeecf30",
+      "t": 1795443776000,
+      "local": "08:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_f7d60d30ca6e",
+      "t": 1795443832000,
+      "local": "08:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_032c354fd5c5",
+      "t": 1795446030000,
+      "local": "09:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_693a2d48e792",
+      "t": 1795446072000,
+      "local": "09:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_9ef4f44e9144",
+      "t": 1795446102000,
+      "local": "09:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_6a8dc26c3290",
+      "t": 1795446668000,
+      "local": "09:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_bd8d0d123860",
+      "t": 1795446904000,
+      "local": "09:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_bca25f42e094",
+      "t": 1795447260000,
+      "local": "09:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_8739b5c18202",
+      "t": 1795447376000,
+      "local": "09:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_7ff8138e1625",
+      "t": 1795447432000,
+      "local": "09:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_6e870c726fad",
+      "t": 1795449630000,
+      "local": "10:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_6e9f21884174",
+      "t": 1795449672000,
+      "local": "10:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_6ce628bd81c1",
+      "t": 1795449702000,
+      "local": "10:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_851c3cd0e0c9",
+      "t": 1795450268000,
+      "local": "10:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_aa784033507b",
+      "t": 1795450504000,
+      "local": "10:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_c49ada54c36b",
+      "t": 1795450860000,
+      "local": "10:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_432798c1ca7f",
+      "t": 1795450976000,
+      "local": "10:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_f24a24481781",
+      "t": 1795451032000,
+      "local": "10:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_0840bb22c9a9",
+      "t": 1795453230000,
+      "local": "11:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_99d234e9bb93",
+      "t": 1795453272000,
+      "local": "11:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_255a8cfe246a",
+      "t": 1795453302000,
+      "local": "11:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_d5aed9c5cde5",
+      "t": 1795453868000,
+      "local": "11:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_998800fae619",
+      "t": 1795454104000,
+      "local": "11:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_0e8e05427ab2",
+      "t": 1795454460000,
+      "local": "11:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_bd32622adf55",
+      "t": 1795454576000,
+      "local": "11:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_53e7e6cced0a",
+      "t": 1795454632000,
+      "local": "11:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_605516a537b7",
+      "t": 1795456830000,
+      "local": "12:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_7fdc3d3a9999",
+      "t": 1795456872000,
+      "local": "12:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_8ea40514ae2d",
+      "t": 1795456902000,
+      "local": "12:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_e1624d8a933c",
+      "t": 1795457468000,
+      "local": "12:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_8b8304c32bcf",
+      "t": 1795457704000,
+      "local": "12:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_273e78b9c341",
+      "t": 1795458060000,
+      "local": "12:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_879e6aa96b31",
+      "t": 1795458176000,
+      "local": "12:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_af3249365bee",
+      "t": 1795458232000,
+      "local": "12:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_676c61da9cc1",
+      "t": 1795460430000,
+      "local": "13:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_6d867b5e4e02",
+      "t": 1795460472000,
+      "local": "13:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_03858f22f8bc",
+      "t": 1795460502000,
+      "local": "13:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_39636171f136",
+      "t": 1795461068000,
+      "local": "13:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_6a44c0724ae0",
+      "t": 1795461304000,
+      "local": "13:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_1445c4fea6db",
+      "t": 1795461660000,
+      "local": "13:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_c46db4efce9b",
+      "t": 1795461776000,
+      "local": "13:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_15d4ca6fe6aa",
+      "t": 1795461832000,
+      "local": "13:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_ccabf19bf0e1",
+      "t": 1795464030000,
+      "local": "14:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_829848176bda",
+      "t": 1795464072000,
+      "local": "14:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_ef00ab42be5b",
+      "t": 1795464102000,
+      "local": "14:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_df70ae2f579c",
+      "t": 1795464668000,
+      "local": "14:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_6377cc54abe1",
+      "t": 1795464904000,
+      "local": "14:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_1218d51112b5",
+      "t": 1795465260000,
+      "local": "14:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_38dc0075c3f6",
+      "t": 1795465376000,
+      "local": "14:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_289a1be68f77",
+      "t": 1795465432000,
+      "local": "14:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_3f40cb7d2f26",
+      "t": 1795467630000,
+      "local": "15:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_0a712699772a",
+      "t": 1795467672000,
+      "local": "15:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_6a5a83f21a32",
+      "t": 1795467702000,
+      "local": "15:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_a26145b06dea",
+      "t": 1795468268000,
+      "local": "15:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_73ddf81a88fc",
+      "t": 1795468504000,
+      "local": "15:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_7cbe810274b3",
+      "t": 1795468860000,
+      "local": "15:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_85751101c5da",
+      "t": 1795468976000,
+      "local": "15:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_aea986f1beb9",
+      "t": 1795469032000,
+      "local": "15:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_ce4ba1049702",
+      "t": 1795471230000,
+      "local": "16:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_1e0352debf57",
+      "t": 1795471272000,
+      "local": "16:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_5ea5becd8972",
+      "t": 1795471302000,
+      "local": "16:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_23dbb6ea2d28",
+      "t": 1795471868000,
+      "local": "16:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_0c6e6c735b3d",
+      "t": 1795472104000,
+      "local": "16:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_b8ffd73c3258",
+      "t": 1795472460000,
+      "local": "16:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_054b5443c611",
+      "t": 1795472576000,
+      "local": "16:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_047dda55ec5e",
+      "t": 1795472632000,
+      "local": "16:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_455a3273e352",
+      "t": 1795474830000,
+      "local": "17:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_30600b104dc9",
+      "t": 1795474872000,
+      "local": "17:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_0aa3fff6e1ed",
+      "t": 1795474902000,
+      "local": "17:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_fa0fcb4ee0fa",
+      "t": 1795475468000,
+      "local": "17:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_f4db8e27c54f",
+      "t": 1795475704000,
+      "local": "17:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_60c670a23305",
+      "t": 1795476060000,
+      "local": "17:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_00a1b45a4de1",
+      "t": 1795476176000,
+      "local": "17:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_54ebb1d87267",
+      "t": 1795476232000,
+      "local": "17:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_ae6de41705b1",
+      "t": 1795478430000,
+      "local": "18:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_1e88ae552357",
+      "t": 1795478472000,
+      "local": "18:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_343e218c4d02",
+      "t": 1795478502000,
+      "local": "18:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_afe3c349d562",
+      "t": 1795479068000,
+      "local": "18:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_7e3da61ad345",
+      "t": 1795479304000,
+      "local": "18:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_297efccdaeb7",
+      "t": 1795479660000,
+      "local": "18:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_52f8d6d833a9",
+      "t": 1795479776000,
+      "local": "18:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_31bc5394a0fc",
+      "t": 1795479832000,
+      "local": "18:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_093287462162",
+      "t": 1795482030000,
+      "local": "19:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_b58598b98cbb",
+      "t": 1795482072000,
+      "local": "19:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_59878eaae5e9",
+      "t": 1795482102000,
+      "local": "19:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_bfb5ed92e949",
+      "t": 1795482668000,
+      "local": "19:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_ffe0648cfa6f",
+      "t": 1795482904000,
+      "local": "19:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_745435cb0db5",
+      "t": 1795483260000,
+      "local": "19:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_c21f25d156cb",
+      "t": 1795483376000,
+      "local": "19:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_37d2cdf2b3c0",
+      "t": 1795483432000,
+      "local": "19:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_1b1739ebd6fc",
+      "t": 1795485630000,
+      "local": "20:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_1558e7e5afa7",
+      "t": 1795485672000,
+      "local": "20:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_f89fbc02ac5d",
+      "t": 1795485702000,
+      "local": "20:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_4613d70e9ebd",
+      "t": 1795486268000,
+      "local": "20:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_1e4434798193",
+      "t": 1795486504000,
+      "local": "20:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_6e1a6f25a3b5",
+      "t": 1795486860000,
+      "local": "20:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_0e2ab2296f15",
+      "t": 1795486976000,
+      "local": "20:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_6d3d0559d7e2",
+      "t": 1795487032000,
+      "local": "20:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_48fa37362860",
+      "t": 1795489230000,
+      "local": "21:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_d7751547a1c5",
+      "t": 1795489272000,
+      "local": "21:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_b15c3934aa0a",
+      "t": 1795489302000,
+      "local": "21:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_1b3344831112",
+      "t": 1795489868000,
+      "local": "21:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_64597cd8092a",
+      "t": 1795490104000,
+      "local": "21:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_2425dbd07bd7",
+      "t": 1795490460000,
+      "local": "21:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_a550c442e129",
+      "t": 1795490576000,
+      "local": "21:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_c387f1641f70",
+      "t": 1795490632000,
+      "local": "21:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_042695e15622",
+      "t": 1795492830000,
+      "local": "22:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_a30d9e1b3fe7",
+      "t": 1795492872000,
+      "local": "22:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_f57bba3dd1ca",
+      "t": 1795492902000,
+      "local": "22:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_d24c0926b2ca",
+      "t": 1795493468000,
+      "local": "22:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_dca4e0570983",
+      "t": 1795493704000,
+      "local": "22:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_50012bb3bfc8",
+      "t": 1795494060000,
+      "local": "22:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_cf98b53f9cf0",
+      "t": 1795494176000,
+      "local": "22:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_03e5a79f4048",
+      "t": 1795494232000,
+      "local": "22:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_fff30cff0178",
+      "t": 1795496430000,
+      "local": "23:00:30",
+      "text": null,
+      "len_chars": 420,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_de4c5b9618a8",
+      "t": 1795496472000,
+      "local": "23:01:12",
+      "text": null,
+      "len_chars": 1380,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_a353abaf8d36",
+      "t": 1795496502000,
+      "local": "23:01:42",
+      "text": null,
+      "len_chars": 640,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_afb22dec7052",
+      "t": 1795497068000,
+      "local": "23:11:08",
+      "text": null,
+      "len_chars": 510,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_455222a01137",
+      "t": 1795497304000,
+      "local": "23:15:04",
+      "text": null,
+      "len_chars": 780,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_4ad528e087c6",
+      "t": 1795497660000,
+      "local": "23:21:00",
+      "text": null,
+      "len_chars": 330,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_99e7a8a88cc6",
+      "t": 1795497776000,
+      "local": "23:22:56",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    },
+    {
+      "turn_key": "t_c1b380543f7e",
+      "t": 1795497832000,
+      "local": "23:23:52",
+      "text": null,
+      "len_chars": 450,
+      "source": "invented for this case: an agent's message, which no rule here reads"
+    }
+  ]
+}
