@@ -21,7 +21,8 @@
 //   - slots: 15-second presence slots with input_any and input_keys
 //     rebuilt from idle samples, SM 2.1's present values and its hard
 //     breaks (lock, suspend, a gap between samples over SLEEP_GAP_S);
-//   - turns, with SM 2.2's origin rules 1 to 8 and prompt classes;
+//   - turns, with SM 2.2's origin rules 1 to 8, rules 1 to 3 read from
+//     every hook and log copy of a prompt, and prompt classes;
 //   - anchors, SM 2.3's human acts with their think and typing parts,
 //     trails, evidence levels and labels (DESIGN 6.4), including the side
 //     doors of DESIGN 5.2 and 6.2 D2;

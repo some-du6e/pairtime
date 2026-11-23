@@ -24,10 +24,11 @@ import (
 // by reason where SM decides them, agent_running_s, and which minutes have a
 // bucket (SM 5.1).
 
-// creditFixtures are the SM fixtures WP-SC2 and WP-SC3 reproduce. WP-SC3's
-// are 6.3 and its two-tab variant, which need one timeline across projects
-// (SM 3). 6.5 and 4.2's alternation need dark flow (WP-SC6).
-var creditFixtures = []string{"6.1", "6.2", "6.3", "6.3-tabs", "6.4", "6.6"}
+// creditFixtures are the SM fixtures WP-SC2 and WP-SC3 reproduce, and
+// WP-AD3's copies of one act. WP-SC3's are 6.3 and its two-tab variant,
+// which need one timeline across projects (SM 3). 6.5 and 4.2's alternation
+// need dark flow (WP-SC6).
+var creditFixtures = []string{"6.1", "6.2", "6.3", "6.3-tabs", "6.4", "6.6", "copies"}
 
 // creditCases returns the fixtures WP-SC2 and WP-SC3 reproduce:
 // creditFixtures and every side-door case.

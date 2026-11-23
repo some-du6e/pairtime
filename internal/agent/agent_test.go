@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 	"github.com/some-du6e/pairtime/internal/agent/state"
+	"github.com/some-du6e/pairtime/internal/install"
 )
 
 // syncBuffer collects the agent's log for a failing test to print.
@@ -55,6 +57,11 @@ type running struct {
 // ready. The test's cleanup stops it.
 func startAgent(t *testing.T, opts Options) *running {
 	t.Helper()
+	if opts.Env == nil {
+		// Never this machine's harness logs: the tailers read a home folder
+		// of the test's own, which holds none.
+		opts.Env = &install.Env{GOOS: runtime.GOOS, Home: t.TempDir()}
+	}
 	ready := make(chan struct{})
 	opts.Ready = func() { close(ready) }
 	ctx, cancel := context.WithCancel(context.Background())

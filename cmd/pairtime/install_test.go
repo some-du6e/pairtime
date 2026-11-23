@@ -721,6 +721,10 @@ func TestInstallCycle(t *testing.T) {
 				if !strings.Contains(out, "Your daily totals and recaps can stay") || !strings.Contains(out, "Your daily totals and recaps stay in") {
 					t.Errorf("uninstall didn't ask about the daily totals and recaps, or didn't say where they stay:\n%s", out)
 				}
+				// What a backup or a synced folder holds, uninstall can't reach.
+				if !strings.Contains(out, "Copies a backup or a synced folder already holds stay as they are") || strings.Contains(out, "nobody can bring") {
+					t.Errorf("uninstall doesn't say backups keep their copies:\n%s", out)
+				}
 				h.waitGone(h.bin)
 				for rel, body := range kept {
 					if got, err := os.ReadFile(filepath.Join(h.dirs.Data, filepath.FromSlash(rel))); err != nil || string(got) != body {
@@ -1014,6 +1018,40 @@ func TestInstallCycle(t *testing.T) {
 			h := newTestHome(t, tt.hookMode)
 			tt.before(h)
 			tt.steps(t, h, h.snapshot())
+		})
+	}
+}
+
+// TestSetUpLine checks install's last word on where what pairtime records
+// goes: local-only mode, as every install starts in, unless pairtime login
+// linked the computer and config.toml says online, when config.toml lets
+// its hours' numbers go to the server it's linked to.
+func TestSetUpLine(t *testing.T) {
+	linked := `{"v":1,"server":"https://pairtime.example","device_id":"d_testdevice00000000000000a","linked_at":"2026-11-22T10:00:00Z"}`
+	cases := []struct {
+		name, account, config, want string
+	}{
+		{"a computer no login linked runs local-only, whatever config.toml says", "", "mode = \"online\"\n", "It runs in local-only mode"},
+		{"a linked computer whose config.toml says online names its server", linked, "mode = \"online\"\n",
+			"This computer is linked to https://pairtime.example, and config.toml lets it upload your hours' numbers there; pairtime doctor says if anything holds them back."},
+		{"a linked computer whose config.toml says local runs local-only", linked, "mode = \"local\"\n", "It runs in local-only mode"},
+		{"a linked computer whose config.toml has an error runs local-only", linked, "mode = [\n", "It runs in local-only mode"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+			if tc.account != "" {
+				if err := os.WriteFile(filepath.Join(dir, "account.json"), []byte(tc.account), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(dirs.ConfigFile(), []byte(tc.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := setUpLine(linkedServer(dirs)); !strings.Contains(got, tc.want) {
+				t.Errorf("install says %q, want %q", got, tc.want)
+			}
 		})
 	}
 }

@@ -259,6 +259,8 @@ func askFailure(ctx context.Context, err error) error {
 		return errAgentSlow
 	case errors.Is(err, ipc.ErrUnknownQuestion):
 		return errAgentOld
+	case errors.Is(err, ipc.ErrStarting):
+		return errAgentStarting
 	case errors.Is(err, ipc.ErrNotAgent):
 		return err
 	case errors.Is(err, fs.ErrNotExist), errors.As(err, &op) && op.Op == "dial":

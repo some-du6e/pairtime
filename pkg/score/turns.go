@@ -562,36 +562,54 @@ func (d *deriver) finishTurn(tb *turnBuild) {
 // wins. Rules 1 to 5 read what the harness declares, and what an agent
 // app declares for the message the prompt paired with; 6 to 8 read OS
 // evidence; and rule 9, before rule 8, reads the app's word that a person
-// sent the message. For a person's prompt it also returns the prompt's
-// class and the typed length its lead is computed from.
+// sent the message. Rules 1 to 3, and rule 4's guest mark, read every copy
+// of the prompt a hook or a log reader made, as well as the one the turn
+// goes by: a transcript can say a scheduler or a subagent sent a prompt
+// whose hook says nothing of it (E-cc-transcript-labels). For a person's
+// prompt it also returns the prompt's class and the typed length its lead
+// is computed from.
 func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.PromptClass, int64) {
 	p := e.Data.(*event.PromptSubmit)
 	st := tb.sess.startBefore(tb.primary)
-	var declared event.RelayDeclared
+	declared := func(says func(*event.PromptSubmit) bool) bool {
+		for _, i := range tb.prompts {
+			if r := d.recs[i]; i == tb.primary || nativeVia(r.Via) {
+				if q, ok := r.Data.(*event.PromptSubmit); ok && says(q) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	var appDeclared event.RelayDeclared
 	if tb.relay != nil {
-		declared = tb.relay.d.Declared
+		appDeclared = tb.relay.d.Declared
 	}
 	w := tb.witness
 	switch {
-	case p.MatchesPendingCron || p.OriginDeclared == event.DeclaredCron || p.OriginDeclared == event.DeclaredLoop ||
-		declared == event.RelayDeclaredCron:
+	case declared(func(q *event.PromptSubmit) bool {
+		return q.MatchesPendingCron || q.OriginDeclared == event.DeclaredCron || q.OriginDeclared == event.DeclaredLoop
+	}) || appDeclared == event.RelayDeclaredCron:
 		// Rule 1, and the app's scheduler or a webhook: T3 Code's
 		// scheduledTaskId (SM 2.2).
 		return event.OriginScheduled, "", 0
-	case p.OriginDeclared == event.DeclaredGoal || p.OriginDeclared == event.DeclaredFollowup:
+	case declared(func(q *event.PromptSubmit) bool {
+		return q.OriginDeclared == event.DeclaredGoal || q.OriginDeclared == event.DeclaredFollowup
+	}):
 		// SM 2.2 rule 2 for a prompt. A turn a stop hook continued has no
 		// prompt.submit (testdata/timelines/README.md, Turns), so it is
 		// self_continue as a continuation. A stop with stop_hook_active
 		// later in a prompted turn doesn't change the prompt's origin: it
 		// can come long after the anchor is final.
 		return event.OriginSelfContinue, "", 0
-	case p.OriginDeclared == event.DeclaredSubagent || p.OriginDeclared == event.DeclaredCrossSession ||
-		declared == event.RelayDeclaredCrossSession:
+	case declared(func(q *event.PromptSubmit) bool {
+		return q.OriginDeclared == event.DeclaredSubagent || q.OriginDeclared == event.DeclaredCrossSession
+	}) || appDeclared == event.RelayDeclaredCrossSession:
 		// SM 2.2 names no rule for a message another session sent; like a
 		// subagent's, it is one agent prompting another (TP DI 26). An agent
 		// app's message from another thread is one too (SM 2.2).
 		return event.OriginSubagent, "", 0
-	case p.Guest:
+	case declared(func(q *event.PromptSubmit) bool { return q.Guest }):
 		// Rule 4 takes a guest's prompt whatever its session, even when a
 		// message witnesses it (SM 2.2): another person's words don't
 		// credit the owner.

@@ -500,6 +500,7 @@ func (a *agent) publishWriter(w *ledger.Writer) {
 func (a *agent) reloadConfig() {
 	a.loadConfig(false)
 	a.noteMode()
+	a.applyPrivacy()
 }
 
 // uploadMode is config.toml's mode as uploads obey it, for GET /v1/status.
@@ -510,8 +511,10 @@ func (a *agent) uploadMode() config.Mode {
 
 // credentials is the uploader's Login: the sign-in, while config.toml, as
 // it reads now, says online, as SignedIn has it, from the agent's cache of
-// it (signInCache). Doctor hears why a linked computer uploads nothing
-// when config.toml has an error or its sign-in doesn't read.
+// it (signInCache). Doctor hears why a computer uploads nothing when
+// config.toml has an error on a linked one, or says online on one with no
+// sign-in: a linked computer whose sign-in doesn't read or whose keystore
+// has none for it, or one pairtime login never linked.
 func (a *agent) credentials() (uploader.Credentials, bool) {
 	cfg, broken := UploadConfig(a.dirs)
 	var (
@@ -527,6 +530,10 @@ func (a *agent) credentials() (uploader.Credentials, bool) {
 		a.setProblem("account", fmt.Sprintf("pairtime uploads nothing, because this computer is linked to a server but its sign-in doesn't read: %v", err))
 	case broken != "" && Linked(a.dirs):
 		a.setProblem("account", ConfigBroken+" ("+broken+"); "+ConfigFixed)
+	case string(cfg.Mode) == modeOnline && !ok && Linked(a.dirs):
+		a.setProblem("account", "pairtime uploads nothing, because this computer is linked to a server but the keystore has no sign-in for it; run pairtime logout, then pairtime login")
+	case string(cfg.Mode) == modeOnline && !ok:
+		a.setProblem("account", "pairtime uploads nothing, because config.toml says online but pairtime login hasn't linked this computer")
 	default:
 		a.setProblem("account", "")
 	}

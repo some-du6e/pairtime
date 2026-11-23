@@ -103,7 +103,7 @@ describe('Privacy', () => {
 			check: (html) => expect(text(html)).toContain('Some of these, and deleting each on time, come with a later version of pairtime.'),
 		},
 		{
-			name: "the prompt similarity sketches (MinHash) are on the list, as in DESIGN 4.4's 90-day row",
+			name: "the prompt similarity sketches (MinHash) are on the list, as in DESIGN 4.4's row for them",
 			check: (html) => expect(rows(html).filter((r) => r.data.includes('MinHash'))).toHaveLength(1),
 		},
 		{
@@ -125,24 +125,53 @@ describe('Privacy', () => {
 			},
 		},
 		{
-			name: 'it says prompts are encrypted only of a later version, never of this one',
+			name: 'it says only the vault is encrypted: every other sentence about encryption says not encrypted',
 			check: (html) => {
 				const said = sentences(html).filter((s) => /encrypt/i.test(s));
-				expect(said.length).toBeGreaterThan(0);
-				for (const s of said) {
-					expect(s).toMatch(/\b(?:not|isn't) encrypted\b|\blater version\b/i);
+				expect(said.filter((s) => /\bvault, which it encrypts\b/.test(s))).toHaveLength(1);
+				for (const s of said.filter((s) => !/\bvault, which it encrypts\b/.test(s))) {
+					expect(s).toMatch(/\b(?:not|isn't) encrypted\b/i);
 				}
 			},
 		},
 		{
-			name: 'Who can read it says the inbox and the hook calls the agent holds are the two places this version keeps prompt text, and that a program running as you can read them',
+			name: 'Who can read it says the vault keeps prompts, replies and recap paths encrypted, but not from a program running as you, and how to keep no prompt text: the command, then the edit by hand for either kind of config.toml',
 			check: (html) => {
 				const t = text(html);
 				expect(t).toContain(
-					'This version of pairtime keeps the text of your prompts, and what your AI tool sent with them, in two places only: the inbox, until the agent reads it, and the hook calls it holds, until it has read them',
+					"pairtime keeps the text of your prompts, the agent's final reply to each one and the file paths for your recaps in a vault, which it encrypts",
 				);
-				expect(t).toContain('so can any program running as you');
 				expect(t).toContain('but not from a program running as you');
+				// The command first, which edits either kind of config.toml
+				// (internal/agent/config's TestKeepTextEdits).
+				expect(t).toContain('To keep no prompt text at all, type pairtime privacy keep-text off in a terminal.');
+				expect(t).toContain(
+					"Or, by hand, set keep_prompt_text = false under [privacy] in pairtime's config.toml; if the file has no [privacy] line, as one written before this version has, add these two lines at the end",
+				);
+				expect(t).toContain('pairtime then deletes the text it kept');
+				// The table's header too: a config.toml from before [privacy]
+				// ends in [notifications], where the switch alone would land.
+				const block = /data-testid="keep-off"[^>]*>([\s\S]*?)<\/pre>/.exec(html)?.[1]?.replace(/<[^>]*>/g, '');
+				expect(block).toBe('[privacy]\nkeep_prompt_text = false');
+			},
+		},
+		{
+			name: 'Who can read it says the inbox and the hook calls the agent holds keep prompts as plain text until the agent has read them, which a program running as you can read',
+			check: (html) => {
+				const t = text(html);
+				expect(t).toContain('Until the agent has read them, the inbox and the hook calls the agent holds keep your prompts too');
+				expect(t).toContain('Those two are plain text, not encrypted.');
+				expect(t).toContain('so can any program running as you');
+			},
+		},
+		{
+			name: 'Delete everything says pairtime privacy delete deletes the key and everything kept, and that the button comes later',
+			check: (html) => {
+				const t = text(html);
+				expect(t).toContain("pairtime privacy delete , typed in a terminal, deletes pairtime's key and everything pairtime keeps on this computer");
+				expect(t).toContain('Copies a backup or a synced folder already holds stay as they are');
+				expect(t).not.toContain('Nobody can bring');
+				expect(t).toContain('A button here comes in a later version of pairtime.');
 			},
 		},
 		{

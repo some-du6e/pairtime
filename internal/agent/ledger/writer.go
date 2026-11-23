@@ -54,6 +54,32 @@ type ChainRecord interface {
 	RecordChain(deviceID string) error
 }
 
+// Vault keeps, on the device, the content of the records the writer
+// writes, by their numbers: the text each commits, which the ledger holds
+// only a commitment to, and the paths of an agent's edits, for recaps
+// (DESIGN 3.5; WP-LG6). *vault.Vault is one. Open it before the writer:
+// vault.Open flushes what a killed run kept, before the writer's Open
+// flushes the batches it restores.
+type Vault interface {
+	// Reconcile drops every entry from s = next on. Open calls it once,
+	// after it has cut what a crash left and before any record takes
+	// next: the records that held those numbers are gone, and an entry
+	// left for one would pass for the content of the next record to take
+	// its number. A vault whose Reconcile fails keeps nothing more.
+	Reconcile(next uint64) error
+	// Keep keeps the content of record s, which Write has just appended
+	// to the segment of the UTC day day: text, the bytes its c commits,
+	// nil when it has no c, and paths, the paths of its edits. Write calls
+	// it under the lock records take, in the order of their numbers, so it
+	// must be quick, must never call the Writer, and reports its own
+	// problems.
+	Keep(day string, s uint64, text []byte, paths []string)
+	// Sync flushes what Keep wrote. Each seal calls it before it flushes
+	// the batch, so the content of a sealed record is on disk once its
+	// batch is.
+	Sync()
+}
+
 // sealReads bounds how often a seal reads config.toml without the record
 // lock for the records written while it read it (Writer.seal). Notes
 // always make it read again. After that many, it reads the file once more
@@ -106,6 +132,11 @@ type Options struct {
 	// decided; spec wording pending).
 	// Batches sealed before Open are on disk for ReadBatches.
 	Sealed func(Batch)
+	// Vault, when set, keeps the content of the records Write writes
+	// (Vault): Open reconciles it before any record takes a number a crash
+	// freed, Write hands it each record's content, and each seal flushes it
+	// before the batch.
+	Vault Vault
 	// Online, when set, reports whether config.toml's mode lets the
 	// computer upload right now (DESIGN 4.2). Each seal asks it as it
 	// begins, before it takes the lock records take, so a slow read holds
@@ -117,7 +148,7 @@ type Options struct {
 	// in the batch came while the mode NoteMode last noted was local-only,
 	// and none is an event made before config.toml was last known to say
 	// local-only, by its own time, or for lookback's by when the writer took
-	// it in (Writer.Write, Input.Lookback). So a batch's mode is on
+	// it in (Writer.Write, Writer.lookback). So a batch's mode is on
 	// disk with the seal, in the same flush, before Sealed hears of it,
 	// and no crash can lose it. Every seal frame the writer writes records
 	// the mode, online or local-only; a batch whose seal frame records
@@ -181,7 +212,7 @@ type Batch struct {
 	// as part of it. A record came after the note when the writer got it
 	// after the note and, for an event, the event's own time is after it
 	// too, but for lookback's, which count by when the writer took them in
-	// alone (Input.Lookback). A git change the watcher held past the note,
+	// alone (Writer.lookback). A git change the watcher held past the note,
 	// or a hook call parked behind its folder's first Track, made before
 	// it, may have come in local-only mode, so its batch is sealed
 	// local-only, and the mark waits for the next batch whose records all
@@ -192,7 +223,7 @@ type Batch struct {
 	// local-only as the batch was sealed (sealPayload.LocalUntil), the
 	// zero time for never: an event made before it is in a local-only
 	// batch, but for lookback's, which count by when the writer took them
-	// in (Input.Lookback), and so is the part of a minute before it.
+	// in (Writer.lookback), and so is the part of a minute before it.
 	LocalUntil time.Time
 	Records    []ledger.Record
 }
@@ -218,6 +249,10 @@ type Input struct {
 	Edits []features.Edit
 	// Command is the command line an agent.tool or shell.command ran.
 	Command string
+	// Late says the record tells of a time long past, as lookback's do: a
+	// prompt or a stop that is Late asks for no seal of its own, and waits
+	// for BATCH_S's, since no one waits for it (WP-AD3).
+	Late bool
 	// Sent is when the event's sender says it made the event, by the
 	// wall clock and the OS's monotonic clock, where that may be earlier
 	// than the event's own times: a hook call's own stamp, which
@@ -228,19 +263,26 @@ type Input struct {
 	// too, so a sender's stamp can make a batch local-only and never
 	// online. It is never recorded. Zero for none.
 	Sent osclock.Stamp
-	// Lookback says the event is one the lookback reader read from a
-	// harness's logs (WP-AD3). Write honors it only for an event that came
-	// through a log reader (event.ViaLog) and is dated before the chain
-	// began (Created). By its own time, every stretch the agent saw would
-	// hold such a record local-only, so Write holds it to the moment
-	// config.toml was last known to say local-only by when the writer took
-	// it in instead, and leaves Sent unread. Its batch is then local-only
-	// when config.toml said local-only at any time from then to its seal,
-	// as Online and the notes tell the writer, which they also say until
-	// the computer is linked, and online otherwise. It is never recorded,
-	// so a record a crash left that is such an event counts by the earliest
-	// time it can have reached the writer (Open).
-	Lookback bool
+}
+
+// lookback reports whether e is lookback's: an event that came through a
+// log reader (event.ViaLog) and is dated before the chain began (Created).
+// The log readers start only once the ledger has opened, so such an event
+// describes time before pairtime ran on this computer, whatever read it:
+// the lookback reader (WP-AD3), or a tailer that read an old line again.
+// By its own time, every stretch the agent saw would hold it local-only,
+// so Write holds it to the moment config.toml was last known to say
+// local-only by when the writer took it in instead, and leaves Sent
+// unread. Its batch is then local-only when config.toml said local-only at
+// any time from then to its seal, as Online and the notes tell the writer,
+// which they also say until the computer is linked, and online otherwise.
+// A record a crash left that is lookback's counts by the earliest time it
+// can have reached the writer (Open). An event that carries a reading of
+// this run's clock is none, though a step back of the wall clock dates it
+// before the chain began: it was made in this run, which the moment holds
+// it to by that reading (moment.before).
+func (w *Writer) lookback(e event.Envelope) bool {
+	return e.Via == event.ViaLog && e.T < w.created && !(e.Mono > 0 && e.BootID == runBoot)
 }
 
 // Writer is a device's ledger writer. It appends each record to the day's
@@ -268,6 +310,7 @@ type Writer struct {
 	batchS   time.Duration
 	now      func() time.Time
 	sealedFn func(Batch)
+	vault    Vault
 	online   func() bool
 	waiting  func(func(event.Envelope) bool) bool
 	osNow    func() osclock.Stamp
@@ -337,7 +380,7 @@ type Writer struct {
 // pending is a record written since the last seal, with where its frame
 // starts. One Write wrote keeps the times Write held it to, with has set:
 // its event's times and its sender's stamp (Input.Sent), or for
-// lookback's when the writer took it in (Input.Lookback), so that a
+// lookback's when the writer took it in (Writer.lookback), so that a
 // stretch end the writer hears of later holds it to the moment again
 // (NoteSeen). One recovery read back gives its event's times from its body
 // (envelopeOf), or for lookback's the earliest time it can have come
@@ -445,6 +488,7 @@ func Open(opts Options) (*Writer, error) {
 		batchS:   time.Duration(table.Int(params.BATCH_S)) * time.Second,
 		now:      now,
 		sealedFn: opts.Sealed,
+		vault:    opts.Vault,
 		online:   opts.Online,
 		waiting:  opts.Waiting,
 		osNow:    osNow,
@@ -463,6 +507,12 @@ func Open(opts Options) (*Writer, error) {
 	if err := w.recover(); err != nil {
 		w.closeFiles()
 		return nil, err
+	}
+	if w.vault != nil {
+		// Before any record takes a number the crash freed. A vault that
+		// can't reconcile says so itself and keeps nothing more, so the
+		// ledger goes on without it.
+		w.vault.Reconcile(w.next)
 	}
 	var seen Seen
 	if opts.Seen != nil {
@@ -541,8 +591,8 @@ func (w *Writer) DeviceID() string { return w.device }
 // its key (ChainInfo.Created). A record dated before it is lookback's,
 // from a harness's logs (DESIGN 6.2 D11), or one that waited for that
 // Open, as presence's queue and the hook calls the adapters hold do while
-// a locked keyring keeps the ledger shut, so Write tells lookback's by
-// Input.Lookback and via = log, and not by the date alone.
+// a locked keyring keeps the ledger shut, so Write tells lookback's by via
+// = log as well as by the date (lookback).
 func (w *Writer) Created() time.Time { return time.UnixMilli(w.created) }
 
 // Write appends the record of in.Event and returns its sequence number s,
@@ -579,13 +629,18 @@ func (w *Writer) Write(in Input) (uint64, error) {
 	if err := w.append(rec); err != nil {
 		return 0, err
 	}
+	if w.vault != nil {
+		if text, paths := kept(ev, in, c); text != nil || len(paths) > 0 {
+			w.vault.Keep(w.segDay, rec.Header.Seq(), text, paths)
+		}
+	}
 	p := &w.pending[len(w.pending)-1]
 	p.env, p.sent, p.has = ev.Envelope, in.Sent, true
-	if in.Lookback && ev.Via == event.ViaLog && ev.T < w.created {
+	if w.lookback(ev.Envelope) {
 		// Lookback's record of a time before the chain began counts by when
 		// the writer took it in, now, and not by its event's own times
-		// (Input.Lookback): so do the stretch ends the writer hears of while
-		// it is pending.
+		// (lookback): so do the stretch ends the writer hears of while it is
+		// pending.
 		p.env, p.sent = arrival(w.now()), osclock.Stamp{}
 	}
 	if p.madeBefore(w.bounds().before) {
@@ -602,7 +657,7 @@ func (w *Writer) Write(in Input) (uint64, error) {
 		w.late = true
 	}
 	w.q.Observe(ev)
-	if k := ev.Kind(); k == event.KindPromptSubmit || k == event.KindAgentStop {
+	if k := ev.Kind(); (k == event.KindPromptSubmit || k == event.KindAgentStop) && !in.Late {
 		w.RequestSeal()
 	}
 	return rec.Header.Seq(), nil
@@ -649,6 +704,37 @@ func (w *Writer) prepare(in Input) (event.Event, ledger.Content) {
 		}
 	}
 	return ev, c
+}
+
+// kept returns what the vault keeps of the record EventRecord made of ev
+// with c: text, the bytes its c commits, which for a final agent message
+// is its first 16 KiB (ledger-v1 10.1), and nil when it has no c; and
+// paths, the paths of an agent.tool's edits.
+func kept(ev event.Event, in Input, c ledger.Content) (text []byte, paths []string) {
+	switch p := ev.Data.(type) {
+	case *event.PromptSubmit, *event.CLITrack:
+		if !c.NoText {
+			text = committed(in.Text)
+		}
+	case *event.AgentOutput:
+		if p != nil && p.IsFinal && !c.NoText {
+			text = committed(ledger.CommittedMessage(in.Text))
+		}
+	case *event.AgentTool:
+		for _, e := range in.Edits {
+			paths = append(paths, e.Path)
+		}
+	}
+	return text, paths
+}
+
+// committed is text as a record commits it: a record without text commits
+// the empty text, which the vault keeps as such.
+func committed(text []byte) []byte {
+	if text == nil {
+		return []byte{}
+	}
+	return text
 }
 
 // Checkpoint appends a scorer checkpoint (rtype 0x40): projectKey's
@@ -758,7 +844,7 @@ func (w *Writer) append(rec ledger.Record) error {
 // go. An event made before the note that the writer gets after it, as a
 // git change the watcher held, makes its batch local-only whenever it
 // comes (Write), where lookback's count by when the writer took them in
-// (Input.Lookback), and the mark goes on the next batch whose records all
+// (Writer.lookback), and the mark goes on the next batch whose records all
 // came after the note, sealed while no such event is still on its way
 // (Options.Waiting). A switch back the watch misses, as to a symlinked
 // config.toml's target, ends the stretch at the next seal that reads the
@@ -844,7 +930,7 @@ type Seen struct {
 // published the writer to its config watch: a local-only stretch it saw
 // end makes every event made before its end local-only, whenever it comes
 // (Write), those the writer took already included, and every lookback
-// record the writer took in before it (Input.Lookback); and the first
+// record the writer took in before it (Writer.lookback); and the first
 // batch after it that has none, sealed while no such event is still on
 // its way, is marked (Batch.Back), as after a noted switch back. A file
 // that says local-only now begins a stretch, as NoteMode(false) does.
@@ -1322,6 +1408,11 @@ func (w *Writer) seal() (Batch, bool, error) {
 	w.b, w.head, w.snap, w.sealed = row.B, row.Head, snap, sp.SealedAt
 	w.mu.Unlock()
 
+	if w.vault != nil {
+		// The content of the batch's records goes to disk before the batch
+		// does (Options.Vault).
+		w.vault.Sync()
+	}
 	// The one flush of the seal. Records written since the seal frame go
 	// to disk with it, which does no harm.
 	err = seg.syncTo(end.Off)
