@@ -1,6 +1,6 @@
 # Erratum: what wakatime-cli v2.28.4 sends, against DESIGN 5.6 and 5.7
 
-Date 2026-11-23. Raised by WP-AD16, from wakatime-cli v2.28.4's source at `9fee1b464bfb` (the release's tag, BSD-3-Clause, read and not copied) and the requests in `testdata/fixtures/wakatime/2.28.4/linux`. Status: item 2 decided 2026-11-23 by the orchestrator for Karim. Item 1 is waiting for Karim, and the bridge uses the rule below until he decides, which the orchestrator agreed to. Item 3 is a correction for WP-AD17 to confirm, and DESIGN 5.6 stays as it is until then. Item 4 is a case DESIGN 5.6 doesn't cover, for Karim.
+Date 2026-11-23. Raised by WP-AD16, from wakatime-cli v2.28.4's source at `9fee1b464bfb` (the release's tag, BSD-3-Clause, read and not copied) and the requests in `testdata/fixtures/wakatime/2.28.4/linux`. Status: items 1, 2 and 4 decided 2026-11-23 by the orchestrator for Karim, on #228 and #232. Item 3 is a correction for WP-AD17 to confirm, and DESIGN 5.6 stays as it is until then.
 
 ## 1. Which heartbeats are transcript-derived
 
@@ -14,7 +14,7 @@ The `ai-sync` run's requests to pairtime hold 21 heartbeats that wakatime-cli's 
 
 Read literally, DESIGN 5.7 makes those four editor heartbeats: an `editor.activity` `navigate` each, and no `prompt.submit`. The bridge would lose the four prompts and give their seconds to an editor nobody used.
 
-### The rule the bridge uses meanwhile
+### The rule
 
 A heartbeat is transcript-derived when it carries `ai_session`.
 
@@ -23,7 +23,7 @@ A heartbeat is transcript-derived when it carries `ai_session`.
 - The editor heartbeats wakatime-cli relabels `ai coding` keep the plugin's user agent and carry no `ai_session`, three of them in the same run. So they stay editor heartbeats, as DESIGN 5.7 wants, since it takes the category for untrusted input.
 - A process that posts straight to the agent's port can put `ai_session` on anything. The rule decides only which records a heartbeat makes. Its `via` comes from the peer-process check, which such a process fails, so its records are `editor_unverified` or `bridge_unverified` either way (DESIGN 5.7; docs/errata/2026-11-19-bridge-unverified.md).
 
-### Proposed DESIGN 5.7 text
+### DESIGN 5.7's new text
 
 The table's first column, in the first and third rows:
 
@@ -32,6 +32,10 @@ The table's first column, in the first and third rows:
 > Transcript-derived heartbeat (wakatime-cli's AI sync made it: it carries `ai_session`, and its user agent names the AI agent, such as `claude-code/2.1.327`, with a model token when the transcript line named a model) with `ai_prompt_length > 0`
 
 and the second and fourth rows read "Other editor heartbeats" and "Transcript-derived heartbeat with `ai_line_changes > 0`" as now. One heartbeat can match both transcript rows: wakatime-cli moves a session's prompts onto the file the session last edited, and three heartbeats in the capture carry `ai_prompt_length` and `ai_line_changes` together. Such a heartbeat becomes both records.
+
+### Decision
+
+Decided 2026-11-23 by the orchestrator for Karim, on #232. A heartbeat is transcript-derived when it carries `ai_session`, and DESIGN 5.7's rows read as above, so one heartbeat can make both transcript records. A process that posts straight to the port can set `ai_session`, but its `via` still comes from the peer-process check, so its records stay `editor_unverified` or `bridge_unverified`. The DESIGN 5.7 edit goes in the bridge's code PR, under the `oracle-change` label.
 
 ## 2. The status of a heartbeat the local endpoint refuses
 
@@ -83,17 +87,18 @@ The capture shows the first step only: in its first run, a call 2 s after the fa
 
 ### Why it matters
 
-A minute is final 900 s after it ends (DESIGN 3.7), and a record that arrives later doesn't change it. So editor time typed during the first hour of an outage, and bridge records from transcripts read then, can arrive too late to count, while hooks and transcripts that pairtime reads itself are unaffected. For a teen whose school network blocks Hackatime, that is most of each day's editor time.
+A minute is final 900 s after it ends (DESIGN 3.7), and a record that arrives later doesn't change it. So editor time typed during the first hour of an outage, and bridge records from transcripts read then, can arrive too late to count, while hooks and transcripts that pairtime reads itself are unaffected. For a teen whose school network blocks Hackatime, that can be the first hour of editor time at school each day.
 
-### For WP-AD17 and Karim
+### Decision
 
-WP-AD17 can measure it with the real binary: a stand-in Hackatime that refuses for an hour while heartbeats are sent every 30 s, and the time each one reaches pairtime. Ways out, none decided:
+Decided 2026-11-23 by the orchestrator for Karim, on #232: v1 accepts the gap, and says so.
 
-- Let late editor and bridge records re-score final minutes, which DESIGN 3.7's finality forbids today.
-- Make pairtime the `api_url` and forward to Hackatime from the agent, which puts Hackatime behind the agent DESIGN 5.6 keeps it independent of.
-- Accept the gap and say so in DESIGN 5.6, with doctor reporting a Hackatime that wakatime-cli can't reach.
+- Re-scoring final minutes is out, because it breaks DESIGN 3.7's finality.
+- Making pairtime the `api_url` and forwarding to Hackatime from the agent is out, because it puts Hackatime behind pairtime's agent, which DESIGN 5.6 keeps it independent of.
+- The gap is bounded. After about the first 64 minutes of an outage wakatime-cli stops waiting, and each call reaches pairtime first.
+- DESIGN 5.6 gets a known limit, after its "Agent down" item. It goes in with item 1's DESIGN 5.7 edit:
 
-## For Karim
+  > **Hackatime out of reach.** wakatime-cli backs off after a failed send, for every destination at once, and for about the first hour in which Hackatime can't be reached it holds back all its sends, pairtime's included. The editor and bridge records of that hour reach the agent only when Hackatime answers again, after their minutes are final (3.7), and don't count. `pairtime doctor` says when wakatime-cli is backing off (docs/errata/2026-11-23-wakatime-cli-2.28.4.md, item 4).
 
-1. Item 1: accept `ai_session` as what marks a transcript-derived heartbeat, with DESIGN 5.7's rows as proposed, or pick another rule.
-2. Item 4: pick a way out, after WP-AD17's measurement or before it.
+- `pairtime doctor` reads wakatime-cli's own backoff state from its internal config file (`~/.wakatime/wakatime-internal.cfg`, `backoff_at` and `backoff_retries`, a time and a count), and while wakatime-cli backs off says so, and that editor time won't count until it recovers.
+- WP-AD17 measures the real delay with the binary: a stand-in Hackatime that refuses for an hour while heartbeats go every 30 s, and when each one reaches pairtime. The orchestrator revisits this if the loss turns out large.
