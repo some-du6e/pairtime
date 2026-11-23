@@ -339,11 +339,23 @@ func (s *Store) RemoveAccount(ctx context.Context, tx writer.Tx, account string,
 // family, build and times. Its device id stays with the account until the
 // retention job deletes the row, once ingest holds nothing from it
 // (D-device-account-binding; docs/retention.json server.devices).
+//
+// The project names the device's owner turned on (D-owner-names) get the
+// removal time too, and the retention job deletes them 90 days after it,
+// as the device's own row goes 90 days after its removal (DESIGN 4.4's
+// device_id row, server.devices), unless the device is linked again first
+// (grant.go clears it). Its rollup_projects rows stay with the account
+// (D-project-map-lifetime).
 func unlink(ctx context.Context, tx writer.Tx, nowMs int64, where string, args ...any) error {
+	at := fmt.Sprintf("$%d", len(args)+1)
+	if _, err := tx.ExecContext(ctx, `UPDATE project_names SET device_removed_at_ms = `+at+`
+WHERE device_removed_at_ms IS NULL AND device_id IN (SELECT device_id FROM devices WHERE `+where+` AND removed_at_ms IS NULL)`,
+		append(args, nowMs)...); err != nil {
+		return fmt.Errorf("device: marking a removed device's project names: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM devices WHERE `+where+` AND removed_at_ms IS NULL AND ingest_req IS NULL`, args...); err != nil {
 		return fmt.Errorf("device: removing a device: %w", err)
 	}
-	at := fmt.Sprintf("$%d", len(args)+1)
 	if _, err := tx.ExecContext(ctx, `UPDATE devices SET removed_at_ms = `+at+`, token_hash = NULL, public_key = NULL, os_family = NULL,
 client_build = NULL, linked_at_ms = NULL, last_seen_at_ms = NULL WHERE `+where+` AND removed_at_ms IS NULL`,
 		append(args, nowMs)...); err != nil {

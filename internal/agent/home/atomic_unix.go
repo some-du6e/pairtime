@@ -16,6 +16,12 @@ func rename(from, to string) error {
 	return os.Rename(from, to)
 }
 
+// readFile reads name. A rename over it never makes the read fail on
+// Unix, where the reader keeps the file it opened.
+func readFile(name string) ([]byte, error) {
+	return os.ReadFile(name)
+}
+
 // syncDir flushes the directory, so the rename itself survives a power
 // cut. It is best effort: some file systems refuse to sync a directory, and
 // the rename is atomic either way.

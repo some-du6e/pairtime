@@ -158,6 +158,20 @@ type Options struct {
 	// Version is the client build for the User-Agent and the labels,
 	// version.Get().Version when "".
 	Version string
+	// Names returns the project names config.toml turns on now, each
+	// project's label by its key, and false when config.toml can't say,
+	// when no names request goes (D-owner-names;
+	// docs/spec/project-names-v1.md). Nil sends none.
+	Names func() (map[string]string, bool)
+	// HideName turns off in config.toml the name of the project key, which
+	// the owner hid on their dashboard (project-names-v1 2), so it isn't
+	// sent again until they turn it on on the computer.
+	HideName func(key string) error
+	// OwnKeys returns the keys of the projects the computer has seen,
+	// which a name may go for besides the keys the server gave a code
+	// (project-names-v1 2). The uploader asks only when a name it would
+	// send has no code. Nil lets every key config.toml turns on go.
+	OwnKeys func() map[string]bool
 	// Problem gets what doctor should hear about uploads, and "" once it
 	// is solved.
 	Problem func(msg string)
@@ -251,6 +265,31 @@ type Uploader struct {
 	splitRoots, splitBuckets, splitOK int
 	// pruned is when uploads.jsonl last let go of its old entries.
 	pruned time.Time
+
+	// names is project-names.json for the sign-in the loop uploads with,
+	// nil until the first cycle that needs it (loadNames), and namesToken
+	// the token it was read with, so each new sign-in reads the file
+	// again. namesStarted says the device knows what the server holds: an
+	// answer came since the start, the sign-in, and the last names request
+	// whose outcome it never learned or that the server didn't take, so a
+	// names request needn't read first; namesKey and namesHash are the last
+	// names body's Idempotency-Key and hash, which a retry of the same body
+	// keeps; namesHeld is the hash of what config.toml asked to send when
+	// the server refused it, which waits until namesAfter (names.go).
+	// namesBackoff and namesWait are the names' own backoff after a
+	// failure to reach the server (namesFailed).
+	names                          *Names
+	namesToken                     string
+	namesStarted                   bool
+	namesKey, namesHash, namesHeld string
+	namesAfter                     time.Time
+	// missingUntil is when a 404 to a names request stops counting, a day
+	// after it, and missingHash the hash of what config.toml asked to send
+	// then (namesMissing).
+	missingUntil time.Time
+	missingHash  string
+	namesBackoff *backoff
+	namesWait    time.Time
 }
 
 // sealedRow is what the uploader takes of a sealed batch: its row, when it
@@ -364,6 +403,9 @@ func New(opts Options) (*Uploader, error) {
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
 		problems:  map[string]string{},
+
+		// The names back off apart from the uploads (namesFailed).
+		namesBackoff: newBackoff(opts.Draw),
 	}
 	u.build = clientBuild(build)
 	return u, nil
@@ -609,6 +651,9 @@ func (u *Uploader) cycle() bool {
 		u.setProblem("login", "")
 		u.setProblem("local-only", "")
 		u.setProblem("swept", "")
+		// The next sign-in reads the names again, which finds those hidden
+		// on the dashboard meanwhile.
+		u.namesStarted = false
 		return false
 	}
 	if c.Token == u.blocked {
@@ -654,6 +699,14 @@ func (u *Uploader) cycle() bool {
 		return false
 	}
 	u.setProblem("swept", "")
+	if !u.urgent.Load() {
+		// The owner's project names go before an upload, a request of
+		// their own, when config.toml changed them or a read is due; on
+		// lock and suspend the batch roots go first.
+		if sent, more := u.syncNames(c); sent {
+			return more
+		}
+	}
 	if !u.urgent.Swap(false) && !u.flush() {
 		return false // stopping
 	}
@@ -1813,7 +1866,7 @@ func (u *Uploader) setProblem(source, msg string) {
 		return
 	}
 	var all []string
-	for _, s := range []string{"login", "local-only", "swept", "server", "chain", "receipts", "buckets", "local", "clock"} {
+	for _, s := range []string{"login", "local-only", "swept", "server", "chain", "receipts", "buckets", "names", "hidden", "names-elsewhere", "local", "clock"} {
 		if m := u.problems[s]; m != "" {
 			all = append(all, m)
 		}

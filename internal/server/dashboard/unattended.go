@@ -5,6 +5,8 @@ package dashboard
 import (
 	"context"
 	"time"
+
+	"github.com/some-du6e/pairtime/pkg/projectname"
 )
 
 // Unattended is a second fixed sample, which the pages' tests and their
@@ -64,14 +66,14 @@ var unattendedDays = []unattendedDay{
 func (Unattended) View(_ context.Context, _ string, now time.Time) (View, error) {
 	keys := make([]string, len(unattendedKeys))
 	copy(keys, unattendedKeys[:])
-	short := ShortCodes(keys)
+	short := projectname.ShortCodes(keys)
 	m := Meta{
 		AsOf: now, TZ: "UTC", Today: now.UTC().Format(DateLayout), Agent: AgentName,
 		Names: map[string]string{}, Codes: map[string]string{}, Keys: map[string][]string{},
 		SplitByDevice: true,
 	}
 	for _, k := range keys {
-		m.Names[k], m.Codes[k], m.Keys[k] = CodeName(short[k]), short[k], []string{k}
+		m.Names[k], m.Codes[k], m.Keys[k] = projectname.CodeName(short[k]), short[k], []string{k}
 	}
 	var rows []Row
 	for _, d := range unattendedDays {

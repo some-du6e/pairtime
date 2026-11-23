@@ -33,6 +33,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/dashboard"
 	"github.com/some-du6e/pairtime/internal/server/pages"
 	"github.com/some-du6e/pairtime/internal/server/retention"
+	"github.com/some-du6e/pairtime/pkg/projectname"
 )
 
 func main() {
@@ -109,6 +110,7 @@ func write(dir string) error {
 		if p.owner != nil {
 			d.Source = source(p.owner)
 			d.Account = func(*http.Request) (string, error) { return "u1", nil }
+			d.HideName = func(context.Context, string, string) error { return nil }
 		}
 		site.RegisterDashboard(mux, p.signIn, d)
 		rec := httptest.NewRecorder()
@@ -146,15 +148,19 @@ var ownerKeys = []string{
 // ownerView is the sample's numbers as a signed-in owner's own view, as
 // dashboard.Rollups makes it: the agent is "your agent", each project is
 // called by the short code of a made-up key, since the server never learns
-// a project's name, and each computer's projects count apart until
-// project registration (WP-SV10).
+// a project's name, but for the first, whose name its owner turned on on
+// their computer (D-owner-names), and each computer's projects count apart
+// until project registration (WP-SV10).
 func ownerView(now time.Time) (dashboard.View, error) {
 	v, err := dashboard.Demo{}.View(context.Background(), "", now)
 	v.Sample, v.Agent, v.TZ, v.SplitByDevice = false, dashboard.AgentName, "Europe/London", true
-	codes := dashboard.ShortCodes(ownerKeys)
+	codes := projectname.ShortCodes(ownerKeys)
 	for i := range v.Projects {
 		key := ownerKeys[i%len(ownerKeys)]
-		v.Projects[i].Keys, v.Projects[i].Code, v.Projects[i].Name = []string{key}, codes[key], dashboard.CodeName(codes[key])
+		v.Projects[i].Keys, v.Projects[i].Code, v.Projects[i].Name = []string{key}, codes[key], projectname.CodeName(codes[key])
+	}
+	if len(v.Projects) > 0 {
+		v.Projects[0].Name, v.Projects[0].Named = "chip8-emulator", true
 	}
 	return v, err
 }

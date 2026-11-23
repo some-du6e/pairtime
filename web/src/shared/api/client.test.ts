@@ -23,6 +23,11 @@ interface TestPaths {
 		get: { responses: { 200: { content: { 'application/json': { date: string } } } } };
 		post?: never;
 	};
+	'/v1/things/{key}/name': {
+		get?: never;
+		post?: never;
+		put: { responses: { 200: { content: { 'application/json': { state: string } } } } };
+	};
 }
 
 function json(status: number, body: string): Response {
@@ -119,6 +124,17 @@ describe('requests', () => {
 			name: 'a POST sends its body as JSON',
 			send: (api) => api.post('/v1/do', { body: { why: 'test' } }),
 			want: { url: '/v1/do', method: 'POST', body: '{"why":"test"}', contentType: 'application/json' },
+		},
+		{
+			name: "a PUT fills its path's segments and sends its body as JSON, with same-origin credentials",
+			send: (api) => api.put('/v1/things/{key}/name', { params: { key: 'g7c41e9' }, body: { online: true, label: 'chip8' } }),
+			want: {
+				url: '/v1/things/g7c41e9/name',
+				method: 'PUT',
+				body: '{"online":true,"label":"chip8"}',
+				contentType: 'application/json',
+				credentials: 'same-origin',
+			},
 		},
 	];
 	for (const c of cases) {

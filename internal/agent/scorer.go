@@ -209,8 +209,9 @@ func (a *agent) serveDay(w http.ResponseWriter, r *http.Request) {
 	shadow := a.config().Display.Shadow
 	reply := dayReply{Date: day.Date, Zone: day.Zone, Start: day.Start, End: day.End, Shadow: shadow,
 		Projects: []dayProjectReply{}}
+	local := a.localNames()
 	for _, p := range day.Projects {
-		reply.Projects = append(reply.Projects, dayProjectReply{Project: p.Project, Name: p.Name, tallyReply: tallyOf(p.Tally, shadow)})
+		reply.Projects = append(reply.Projects, dayProjectReply{Project: p.Project, Name: named(p.Name, local, p.Project), tallyReply: tallyOf(p.Tally, shadow)})
 	}
 	writeJSON(w, http.StatusOK, reply)
 }
@@ -286,7 +287,7 @@ func (a *agent) lastSession(now time.Time) (sessionReply, error) {
 	if a.scorer != nil {
 		lastBreak = a.scorer.Status().LastBreak
 	}
-	r := &sessionTallyReply{Project: s.Project, Name: s.Name, Date: store.DateOf(s.Start.UnixMilli(), a.zone()),
+	r := &sessionTallyReply{Project: s.Project, Name: named(s.Name, a.localNames(), s.Project), Date: store.DateOf(s.Start.UnixMilli(), a.zone()),
 		tallyReply: tallyOf(s.Tally, shadow)}
 	if !shadow {
 		start, end, open := s.Start, s.End, sessionOpen(s, now.UnixMilli(), gap, lastBreak)

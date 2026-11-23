@@ -16,6 +16,7 @@
 //	device.held_calls      held.jsonl and its logs    the agent's adapter host, as it runs (heldKeep)
 //	device.commits         commits/                   the agent's commit store (commitsKeep)
 //	device.uploads         uploads.jsonl              the uploader as it runs (uploadsKeep), and Sweep while it doesn't
+//	device.project_names   project-names.json         the uploader, as each names answer replaces it and its notes stay 1,000 at most (capNotes); "delete everything" and uninstall
 //	device.transcripts     not copied                 nothing
 //	device.key             K_dev                      "delete everything" and uninstall
 //

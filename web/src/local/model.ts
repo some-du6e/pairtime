@@ -13,7 +13,7 @@
 // "calibrating".
 
 import en from '../../../internal/coach/text/en.json';
-import type { Day, Harness, Kind, Level, Reason, Tally, WorkSession } from './api.ts';
+import type { Day, Harness, Kind, Level, NameState, ProjectEntry, Reason, Tally, WorkSession } from './api.ts';
 import * as text from './text.ts';
 
 /** A project's time over a span, as the views show it. */
@@ -251,6 +251,46 @@ export function projects(days: Day[], calibrating: boolean): ProjectView[] {
 			byCode(a.key, b.key),
 	);
 	return summed.map((p) => buildProject(p.key, p.name, p.t, calibrating));
+}
+
+/**
+ * Whether a project's name switch is on: while its name shows on the
+ * owner's dashboard, and while it is on its way there (GET /v1/projects).
+ */
+export function nameShown(state: NameState): boolean {
+	return state === 'on' || state === 'sending';
+}
+
+/**
+ * What the Projects page calls a project: its name from the day's answer,
+ * or, while the agent's days carry none, the local name GET /v1/projects
+ * gives it, or "Project <code>" as the owner's dashboard calls it, and its
+ * key when neither answer names it and the server gave it no code.
+ */
+export function projectTitle(view: ProjectView, entry: ProjectEntry | undefined): string {
+	if (entry === undefined || view.title !== text.printable(view.key)) {
+		return view.title;
+	}
+	return entryTitle(entry);
+}
+
+/**
+ * What the list of other projects calls one: its local name, or "Project
+ * <code>", or its key while the server has given it no code.
+ */
+export function entryTitle(entry: ProjectEntry): string {
+	if (entry.local_name !== '') {
+		return text.printable(entry.local_name);
+	}
+	return text.printable(entry.code !== '' ? `Project ${entry.code}` : entry.project);
+}
+
+/**
+ * What `pairtime projects show-name` takes for a project: the code the
+ * server gave it, or its key while it gave none.
+ */
+export function projectArg(entry: ProjectEntry): string {
+	return entry.code !== '' ? entry.code : entry.project;
 }
 
 /** All of the days' projects as one view: the day's or the week's whole clock. */

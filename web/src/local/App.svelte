@@ -2,7 +2,7 @@
 <script lang="ts">
 	import type { Result } from '$shared/api/client.ts';
 	import AppShell from '$shared/components/AppShell.svelte';
-	import { api, type Day, focusOf, type LastSession, type Status } from './api.ts';
+	import { api, type Day, focusOf, type LastSession, type ProjectEntry, type Projects as ProjectList, type Status } from './api.ts';
 	import SignedOut from './components/SignedOut.svelte';
 	import { addDays, dates, mayChange, monday } from './model.ts';
 	import Privacy from './pages/Privacy.svelte';
@@ -25,7 +25,10 @@
 	// PROGRESS_RESTORE_S, 86,400 s (SM 4.3), or while calibrating hides
 	// whether it has. A day whose answer never came back is asked again too,
 	// and the page names it as left out until it comes; one that came back
-	// before keeps those numbers meanwhile.
+	// before keeps those numbers meanwhile. The Projects page also asks for
+	// GET /v1/projects, whose switches show a project's name on the owner's
+	// own pairtime dashboard, and turns one with PUT /v1/projects/{key}/name
+	// (D-owner-names).
 	const refreshMs = 60_000;
 
 	// Each is replaced whole and never changed in place, so none needs a
@@ -35,6 +38,9 @@
 	let today: Result<Day> | undefined = $state.raw();
 	let session: Result<LastSession> | undefined = $state.raw();
 	let past: ReadonlyMap<string, Result<Day>> = $state.raw(new Map());
+	let names: Result<ProjectList> | undefined = $state.raw();
+	let nameBusy: ReadonlySet<string> = $state.raw(new Set());
+	let nameRefused: ReadonlyMap<string, string> = $state.raw(new Map());
 
 	// GET /signin sends a used or old link to /?signin=expired. The page says
 	// so once, and takes it out of the address bar.
@@ -79,12 +85,17 @@
 		if (!s.ok) {
 			return;
 		}
-		const [t, last] = await Promise.all([
+		const [t, last, list] = await Promise.all([
 			api.get('/v1/days/{date}', { params: { date: 'today' }, signal }),
 			api.get('/v1/sessions/last', { signal }),
+			r.page === 'projects' ? api.get('/v1/projects', { signal }) : Promise.resolve(undefined),
 		]);
 		today = t;
 		session = last;
+		// An answer that didn't come back keeps the switches as they were.
+		if (list && (list.ok || !names?.ok)) {
+			names = list;
+		}
 		if (!t.ok || (r.page !== 'today' && r.page !== 'projects')) {
 			return;
 		}
@@ -109,6 +120,31 @@
 			}
 		});
 		past = next;
+	}
+
+	/**
+	 * Asks the agent to turn entry's name on or off, with the label the
+	 * switch shows, so the dashboard shows the label the owner saw, and puts
+	 * its answer in the list, or why it said no beside the switch.
+	 */
+	async function setName(entry: ProjectEntry, online: boolean): Promise<void> {
+		nameBusy = new Set([...nameBusy, entry.project]);
+		const res = await api.put('/v1/projects/{key}/name', {
+			params: { key: entry.project },
+			body: { online, label: entry.label },
+		});
+		nameBusy = new Set([...nameBusy].filter((k) => k !== entry.project));
+		const refused = new Map(nameRefused);
+		if (res.ok) {
+			refused.delete(entry.project);
+			if (names?.ok) {
+				const projects = names.data.projects.map((p) => (p.project === res.data.project ? res.data : p));
+				names = { ...names, data: { ...names.data, projects } };
+			}
+		} else {
+			refused.set(entry.project, res.detail || `the agent said ${res.status}`);
+		}
+		nameRefused = refused;
 	}
 
 	$effect(() => {
@@ -204,7 +240,17 @@
 			</section>
 		{/if}
 	{:else if route.page === 'projects'}
-		<Projects days={shown.days} unread={shown.unread} range={route.range} {from} to={today.data.date} />
+		<Projects
+			days={shown.days}
+			unread={shown.unread}
+			range={route.range}
+			{from}
+			to={today.data.date}
+			names={names?.ok ? names.data : undefined}
+			busy={nameBusy}
+			refused={nameRefused}
+			onname={setName}
+		/>
 	{:else}
 		<Today
 			today={today.data}

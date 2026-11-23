@@ -51,6 +51,9 @@ type Meta struct {
 	Names map[string]string
 	// Codes are the projects' short codes, by id (Project.Code).
 	Codes map[string]string
+	// Labels are the names owners turned on for their projects, by id
+	// (D-owner-names). A project with one is called by it, and Named.
+	Labels map[string]string
 	// Keys are the device project keys of each project, by id
 	// (Project.Keys).
 	Keys map[string][]string
@@ -116,7 +119,11 @@ func Build(m Meta, rows []Row) (View, error) {
 		if keys == nil {
 			keys = []string{}
 		}
-		v.Projects = append(v.Projects, Project{ID: id, Keys: keys, Name: name, Code: m.Codes[id]})
+		p := Project{ID: id, Keys: keys, Name: name, Code: m.Codes[id]}
+		if label := m.Labels[id]; label != "" {
+			p.Name, p.Named = label, true
+		}
+		v.Projects = append(v.Projects, p)
 	}
 	slices.SortFunc(v.Projects, func(a, b Project) int {
 		pa, pb := month.projects[a.ID], month.projects[b.ID]

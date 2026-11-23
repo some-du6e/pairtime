@@ -9,7 +9,7 @@
 openapi: 3.1.0
 info:
   title: pairtime agent, local API
-  version: 0.2.0
+  version: 0.3.0
   license:
     name: AGPL-3.0-or-later
     identifier: AGPL-3.0-or-later
@@ -25,8 +25,11 @@ info:
     `/v1/` also need one of two credentials. Local tools send the bearer
     token from port.json, which only the user who runs the agent can read.
     The dashboard sends the `pairtime_session` cookie instead. The cookie
-    opens the routes the dashboard reads and none that changes anything:
-    POST /v1/agent/stop takes the bearer token alone.
+    opens the routes the dashboard reads, and the one change it makes,
+    PUT /v1/projects/{key}/name, which turns a project's name on or off on
+    the owner's own pairtime dashboard and, signed in by the cookie, must
+    carry the dashboard's Origin too. POST /v1/agent/stop takes the bearer
+    token alone.
 
     `pairtime dashboard` signs the teen's browser in (DESIGN 3.9;
     D-dashboard-link). It asks the running agent for a one-time URL over the
@@ -156,6 +159,98 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "500":
           $ref: "#/components/responses/StoreError"
+  /v1/projects:
+    get:
+      operationId: getProjects
+      summary: Every project this computer knows, and whether its name shows on its owner's dashboard
+      description: >
+        What `pairtime projects` lists, for the dashboard's Projects page:
+        the projects of the git adapter's project map, of the last 30 days'
+        rollups, of config.toml's `[projects.<key>]` tables and of the names
+        the server shows (D-owner-names; docs/spec/project-names-v1.md),
+        each with the name pairtime shows for it on this computer, the code
+        the owner's pairtime dashboard calls it by, as the server gave it,
+        and whether its name shows there. Like everything this API serves,
+        it stays on this computer: only the uploader sends a name, once
+        config.toml turns it on. The answer is never cached.
+      responses:
+        "200":
+          description: The projects, in the order `pairtime projects` lists them.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Projects"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/projects/{key}/name:
+    put:
+      operationId: putProjectName
+      summary: Show a project's name on its owner's dashboard, or stop
+      description: >
+        Turns the project's name on or off on the owner's own pairtime
+        dashboard, in config.toml's `[projects.<key>]` table, as `pairtime
+        projects show-name` and `hide-name` do. Turning it on shows `label`,
+        cleaned as the server cleans a sign-in's display name
+        (projectname.CleanLabel), or without one the label the project
+        showed before or its local name; the page shows the owner the label
+        before they turn it on. Turning it off keeps the label in the file.
+        The running agent's uploader then sends the change, and the answer
+        is the project as GET /v1/projects lists it now.
+      parameters:
+        - name: key
+          in: path
+          required: true
+          description: The project's key, as GET /v1/projects gives it.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NameChoice"
+      responses:
+        "200":
+          description: The project, with its name's new state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectEntry"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: No project on this computer has that key.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "409":
+          description: >
+            pairtime couldn't change config.toml, as when it doesn't parse or
+            holds the project as an inline table, or the name is one pairtime
+            keeps off the dashboard, hidden there, gone from the server or on
+            for another sign-in, that it couldn't turn off in config.toml,
+            which still has it on.
+            The text says what to write by hand, and the file stays as it was.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "422":
+          description: >
+            Turning the name on needs a label the project hasn't got, as a
+            plain folder has no name on this computer, or the label is empty
+            once cleaned.
+          content:
+            text/plain:
+              schema:
+                type: string
   /signin:
     get:
       operationId: signIn
@@ -811,6 +906,116 @@ components:
         loops with their seconds. A client reads a number that is left out
         as 0 and a map as empty. The files in `days/` and `buckets/` keep
         every number.
+    Projects:
+      type: object
+      additionalProperties: false
+      required: [date, linked, online, projects]
+      description: GET /v1/projects.
+      properties:
+        date:
+          type: string
+          format: date
+          description: Today, YYYY-MM-DD, the last of the 30 days whose projects are listed.
+        linked:
+          type: boolean
+          description: "`pairtime login` linked this computer to a server."
+        online:
+          type: boolean
+          description: >
+            The names config.toml turns on go to the server: the computer is
+            linked, and config.toml says `mode = "online"`. While it is false
+            a name turned on waits on this computer.
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProjectEntry"
+    ProjectEntry:
+      type: object
+      additionalProperties: false
+      required: [project, code, local_name, state, label]
+      description: >
+        One project, as `pairtime projects` lists it, and whether its name
+        shows on its owner's own pairtime dashboard.
+      properties:
+        project:
+          type: string
+          description: The project's opaque key (AGENTS.md).
+        code:
+          type: string
+          description: >
+            Its short code, as the server's last answer about this
+            computer's project names gave it (docs/spec/project-names-v1.md
+            1.6): the owner's dashboard calls it "Project <code>" while its
+            name is off. The server works codes out over every key the
+            owner's computers uploaded, so this computer never works one out
+            itself. Empty while the server has given none, as before the
+            project's first minutes reach it, or before the agent reads the
+            codes again, at its start and once a day; then `pairtime
+            projects` and the page call the project by its key, which
+            `pairtime projects show-name` takes too.
+        local_name:
+          type: string
+          description: >
+            The name pairtime shows for the project on this computer: the
+            folder of its repo's main checkout, never a worktree's, or a bare
+            repo's folder without `.git`. For a repo whose git directory
+            lives apart from its checkout (`git init --separate-git-dir`),
+            it is that directory's folder, since git doesn't record the
+            checkout there. Empty when it has none, as a plain folder has
+            none.
+        state:
+          type: string
+          enum: ["off", "on", sending, removing, hidden]
+          description: >
+            Whether its name shows on the dashboard. `off` doesn't; `on`
+            shows `label`, as the server's last answer said; `sending` is on
+            in config.toml and goes with the uploader's next request, once
+            the computer is online; `removing` is off in config.toml and
+            still shown until that request; `hidden` is one the dashboard
+            doesn't show, because the owner hid it there, the server no
+            longer has it, or this computer signed in elsewhere (`why`),
+            which pairtime then turned off here, or, when it couldn't change
+            config.toml, no longer sends, so it stays off until they turn it
+            on again on this computer.
+        label:
+          type: string
+          description: >
+            The label the name shows, or goes with, while it is on or being
+            sent, and the label turning it on would show otherwise: the one
+            config.toml kept, or the local name. Empty when there is none, so
+            turning the name on needs one.
+        hidden_at:
+          type: string
+          format: date-time
+          description: When pairtime found the name hidden on the dashboard, in UTC, for `hidden`.
+        why:
+          type: string
+          enum: [dropped, signed_in, unreadable]
+          description: >
+            For `hidden`, why the dashboard doesn't show the name when the
+            owner didn't hide it there: `dropped`, the server no longer has
+            it, as after this computer was signed out a long time or the
+            server's data was restored, which pairtime can't tell apart;
+            `signed_in`, this computer signed in to another server, or as
+            another device, which never showed it; `unreadable`, pairtime
+            couldn't read which sign-in its project names were for, so it
+            turned off the ones that were on. Absent for a name the owner
+            hid on the dashboard.
+    NameChoice:
+      type: object
+      additionalProperties: false
+      required: [online]
+      description: PUT /v1/projects/{key}/name's body.
+      properties:
+        online:
+          type: boolean
+          description: Show the project's name on the owner's dashboard, or stop.
+        label:
+          type: string
+          description: >
+            The label to show, which the agent cleans as the server cleans a
+            display name. Without one, turning the name on shows the label
+            the project has (ProjectEntry's `label`).
     ProjectName:
       type: string
       description: >

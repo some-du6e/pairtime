@@ -19,6 +19,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/server/dashboard"
 	"github.com/some-du6e/pairtime/internal/server/rollup"
+	"github.com/some-du6e/pairtime/pkg/projectname"
 )
 
 // The dashboard page draws a dashboard.View, a server-rendered first cut
@@ -134,8 +135,10 @@ type dashPage struct {
 	// Zone is the IANA time zone the account's days are counted in, and
 	// ZoneError says why the last change to it was refused.
 	Zone, ZoneError string
-	// ZonePath is where the time zone form posts.
-	ZonePath string
+	// ZonePath is where the time zone form posts, and HidePath where a
+	// project's "Hide this name" button does, "" on a page that offers
+	// none.
+	ZonePath, HidePath string
 	// Agent names the agent in a sentence, and AgentStart at its start or
 	// alone, as in "Your agent worked on its own for 2h".
 	Agent, AgentStart string
@@ -255,8 +258,12 @@ type weekRow struct {
 // projectRow is a row of the projects table: its color, "" for a project
 // past colorSlots, which the table shows with no key rather than Other's
 // gray, its name, and Title, the project's full key when the page calls it
-// by its short code, or "".
+// by its short code, its short code's name when the page calls it by the
+// owner's label, or "". Hide says the row offers its owner a button to
+// hide the project's name, which posts ID.
 type projectRow struct {
+	ID                 string
+	Hide               bool
 	Color, Name, Title string
 	Week, Month        windowCell
 }
@@ -390,17 +397,23 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 	for _, pr := range v.Projects {
 		give(pr.ID)
 	}
-	// A project the page calls by its short code has its full key in a
-	// title, so the owner can match it with what their computer says.
+	// A project the page calls by the name its owner turned on has its
+	// short code's name in a title, and one the page calls by its short
+	// code has its full key there, so the owner can match either with what
+	// pairtime projects says on their computer.
 	names := make(map[string]string, len(v.Projects))
 	titles := make(map[string]string, len(v.Projects))
+	named := make(map[string]bool, len(v.Projects))
 	for _, pr := range v.Projects {
-		names[pr.ID] = pr.Name
-		if pr.Code != "" {
+		names[pr.ID], named[pr.ID] = pr.Name, pr.Named
+		switch {
+		case pr.Code == "":
+		case pr.Named:
+			titles[pr.ID] = projectname.CodeName(pr.Code)
+		case len(pr.Keys) > 0:
+			titles[pr.ID] = pr.Keys[0]
+		default:
 			titles[pr.ID] = pr.ID
-			if len(pr.Keys) > 0 {
-				titles[pr.ID] = pr.Keys[0]
-			}
 		}
 	}
 
@@ -466,6 +479,7 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 			c = ""
 		}
 		p.Projects = append(p.Projects, projectRow{
+			ID: pt.Project, Hide: named[pt.Project] && !v.Sample,
 			Color: c, Name: names[pt.Project], Title: titles[pt.Project],
 			Week:  newCell("Last 7 days", p.AgentStart, w.You.Total(), w.Agent.Total()),
 			Month: newCell("Last 30 days", p.AgentStart, pt.You.Total(), pt.Agent.Total()),
@@ -957,6 +971,7 @@ func capitalize(s string) string {
 const (
 	DashboardPath = "/dashboard"
 	ZonePath      = "/dashboard/zone"
+	HidePath      = "/dashboard/projects/hide"
 )
 
 // Dashboard wires the signed-in owner's dashboard to its data.
@@ -971,6 +986,10 @@ type Dashboard struct {
 	// SetZone sets an account's time zone. It wraps rollup.ErrBadZone for
 	// a name that isn't one.
 	SetZone func(ctx context.Context, account, zone string) error
+	// HideName deletes the name the account's owner turned on for
+	// project, an account-level project id, from every device key of it
+	// (D-owner-names; projectnames.Hide). Nil offers no hide button.
+	HideName func(ctx context.Context, account, project string) error
 	// SameOrigin reports whether a POST comes from this server's own
 	// pages, as auth.Service.SameOrigin does.
 	SameOrigin func(r *http.Request) bool
@@ -984,7 +1003,10 @@ type Dashboard struct {
 const zoneFormMax = 4 << 10
 
 // RegisterDashboard adds GET /dashboard, the signed-in account's own
-// dashboard, and POST /dashboard/zone, which sets its time zone. With
+// dashboard, POST /dashboard/zone, which sets its time zone, and POST
+// /dashboard/projects/hide, which hides the name of one of its projects
+// the owner turned on (D-owner-names): the website can hide a name, never
+// set or change one. With
 // sign-in off the page says so and links /demo. A visitor who isn't signed
 // in goes to Hack Club sign-in, which brings them back. A session that
 // can't be read is a 500, since signing in again wouldn't help.
@@ -1032,6 +1054,42 @@ func (s *Site) RegisterDashboard(mux *http.ServeMux, in SignIn, d Dashboard) {
 		}
 		http.Redirect(w, r, DashboardPath, http.StatusSeeOther)
 	})
+	mux.HandleFunc("POST "+HidePath, func(w http.ResponseWriter, r *http.Request) {
+		if !in.Enabled || d.Account == nil || d.HideName == nil {
+			http.Redirect(w, r, DashboardPath, http.StatusSeeOther)
+			return
+		}
+		if d.SameOrigin == nil || !d.SameOrigin(r) {
+			http.Error(w, "Hiding a project's name has to start from your dashboard.", http.StatusForbidden)
+			return
+		}
+		id, err := d.Account(r)
+		switch {
+		case errors.Is(err, dashboard.ErrNotSignedIn):
+			http.Redirect(w, r, LoginURL(in.LoginPath, DashboardPath), http.StatusSeeOther)
+			return
+		case err != nil:
+			d.Logger.Error("reading a session for the dashboard", "err", err)
+			http.Error(w, "The name didn't hide. Try again in a minute.", http.StatusInternalServerError)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, zoneFormMax)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "That form didn't arrive whole.", http.StatusBadRequest)
+			return
+		}
+		project := r.PostForm.Get("project")
+		if project == "" || len(project) > 128 {
+			http.Error(w, "That form names no project.", http.StatusBadRequest)
+			return
+		}
+		if err := d.HideName(r.Context(), id, project); err != nil {
+			d.Logger.Error("hiding a project's name", "user", id, "err", err)
+			http.Error(w, "The name didn't hide. Try again in a minute.", http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, DashboardPath, http.StatusSeeOther)
+	})
 }
 
 // serveDashboard writes the dashboard page for r, with zoneError, if any,
@@ -1065,7 +1123,7 @@ func (s *Site) serveDashboard(w http.ResponseWriter, r *http.Request, in SignIn,
 		if in.Visitor != nil {
 			acct.Name, _ = in.Visitor(r)
 		}
-		page, err = s.ownerPage(v, in, acct, zoneError)
+		page, err = s.ownerPage(v, in, acct, zoneError, d.HideName != nil)
 	}
 	if err != nil {
 		d.Logger.Error("showing a dashboard", "user", id, "err", err)
@@ -1076,13 +1134,17 @@ func (s *Site) serveDashboard(w http.ResponseWriter, r *http.Request, in SignIn,
 }
 
 // ownerPage renders v as a signed-in account's own dashboard, with acct in
-// the header.
-func (s *Site) ownerPage(v dashboard.View, in SignIn, acct *account, zoneError string) ([]byte, error) {
+// the header, and a "Hide this name" button beside each name its owner
+// turned on when canHide says the server can hide one.
+func (s *Site) ownerPage(v dashboard.View, in SignIn, acct *account, zoneError string, canHide bool) ([]byte, error) {
 	d, err := newDashPage(v, in, s.signupsOpen)
 	if err != nil {
 		return nil, err
 	}
 	d.ZoneError = zoneError
+	if canHide {
+		d.HidePath = HidePath
+	}
 	var body bytes.Buffer
 	if err := s.dash.Execute(&body, d); err != nil {
 		return nil, fmt.Errorf("pages: %w", err)

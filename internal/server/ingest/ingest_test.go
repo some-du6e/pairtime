@@ -218,6 +218,9 @@ type upload struct {
 	time   int64
 	signer ed25519.PrivateKey
 	edit   func(r *http.Request)
+	// names sends it to POST /api/v1/projects/names, signed with
+	// M_names (project-names-v1).
+	names bool
 }
 
 func gz(t testing.TB, data []byte) []byte { return gzipped(t, data) }
@@ -252,13 +255,17 @@ func (h *harness) request(t testing.TB, u upload) *http.Request {
 		signer = u.dev.key
 	}
 	reqText, timeText := strconv.FormatInt(u.req, 10), strconv.FormatInt(u.time, 10)
+	msg, path := Message, BatchesPath
+	if u.names {
+		msg, path = NamesMessage, NamesPath
+	}
 	var sig []byte
 	if signer != nil {
-		sig = ed25519.Sign(signer, Message(u.dev.ID, reqText, timeText, bodySHA))
+		sig = ed25519.Sign(signer, msg(u.dev.ID, reqText, timeText, bodySHA))
 	} else {
 		sig = make([]byte, ed25519.SignatureSize)
 	}
-	r := httptest.NewRequest(http.MethodPost, BatchesPath, bytes.NewReader(raw))
+	r := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(raw))
 	r.Header.Set("Authorization", "Bearer "+u.dev.token)
 	r.Header.Set(HeaderIdempotencyKey, u.key)
 	r.Header.Set("Content-Type", "application/json")

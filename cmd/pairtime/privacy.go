@@ -7,12 +7,18 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"strings"
 
+	"github.com/some-du6e/pairtime/internal/adapters/git"
 	"github.com/some-du6e/pairtime/internal/agent"
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/projects"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
+	"github.com/some-du6e/pairtime/internal/coach/text"
 	"github.com/some-du6e/pairtime/pkg/params"
+	"github.com/some-du6e/pairtime/pkg/projectname"
 	"github.com/some-du6e/pairtime/pkg/score"
 )
 
@@ -38,8 +44,14 @@ keeps just the upload. pairtime prints nothing on standard output when
 nothing is waiting to go, and when this computer isn't signed in or
 config.toml keeps it local-only, which uploads nothing at all.
 
+A request that shows or stops showing a project's name on your own
+dashboard goes before the next upload: standard error prints all of its
+body, byte for byte, names and all, and says what it does. It carries
+nothing else about a project.
+
 The upload is what goes unless pairtime records or scores something new
-before it sends.
+before it sends, and the names request unless you change a name first or
+the server's next answer shows one hidden on your dashboard.
 `
 
 func init() {
@@ -95,16 +107,22 @@ func runPrivacy(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "Nothing: this computer is linked to a server, but its sign-in doesn't read, so it uploads nothing until it does, and what pairtime records meanwhile stays on this computer.\nThe error: %v\n", err)
 		return 0
 	}
-	return showUpload(stdout, stderr, dirs, creds, ok)
+	return showUpload(stdout, stderr, dirs, creds, ok, cfg.NamesOn())
 }
 
 // showUpload prints the next upload of the installation in dirs, which
-// goes with creds when ok is set.
-func showUpload(stdout, stderr io.Writer, dirs home.Dirs, creds uploader.Credentials, ok bool) int {
+// goes with creds when ok is set, and the project names request that goes
+// before it, for the names config.toml turns on.
+func showUpload(stdout, stderr io.Writer, dirs home.Dirs, creds uploader.Credentials, ok bool, names map[string]string) int {
 	if !ok {
 		fmt.Fprint(stderr, notSignedIn)
 		return 0
 	}
+	m, err := projects.ReadMap(dirs.StateFile())
+	if err != nil {
+		m = git.ProjectMap{}
+	}
+	own, _ := agent.OwnKeys(dirs, m, viewZone())
 	tables := params.Tables()
 	p, err := uploader.Next(uploader.PreviewOptions{
 		LedgerDir:   dirs.Ledger(),
@@ -114,6 +132,8 @@ func showUpload(stdout, stderr io.Writer, dirs home.Dirs, creds uploader.Credent
 		Params:      tables[len(tables)-1],
 		Device:      score.Device{},
 		Credentials: creds,
+		Names:       names,
+		OwnKeys:     own,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "pairtime privacy show: can't work out the next upload: %v\n", err)
@@ -133,8 +153,14 @@ func showUpload(stdout, stderr io.Writer, dirs home.Dirs, creds uploader.Credent
 	case p.Stopped > 0:
 		fmt.Fprint(stderr, uploadsStopped)
 	}
+	if p.Names != nil {
+		fmt.Fprint(stderr, describeNames(*p.Names, creds.Server))
+	}
 	if p.JSON == nil {
-		if p.Stopped == 0 {
+		switch {
+		case p.Stopped == 0 && p.Names != nil:
+			fmt.Fprintf(stderr, "No upload waits after it: %s has every batch root and minute this computer has recorded.\n", creds.Server)
+		case p.Stopped == 0:
 			fmt.Fprintf(stderr, "Nothing is waiting to go to %s: it has every batch root and minute this computer has recorded.\n", creds.Server)
 		}
 		return 0
@@ -205,7 +231,9 @@ func describeUpload(p uploader.Preview, server string) string {
 	b.WriteString("the compressed body, its content type and encoding, and pairtime-agent and its\n")
 	b.WriteString("version as the User-Agent. The server sees this computer's IP address, as\n")
 	b.WriteString("every website does. When the agent starts, it also asks the server where this\n")
-	b.WriteString("computer's uploads stand, with the same token, device id and User-Agent.\n\nIt holds:\n")
+	b.WriteString("computer's uploads stand, with the same token, device id and User-Agent, and,\n")
+	b.WriteString("then and once a day, which of your project names your dashboard shows, with a\n")
+	b.WriteString("signed request that carries no name.\n\nIt holds:\n")
 	if p.Batches > 0 {
 		fmt.Fprintf(&b, "  - %s: hashes of your ledger's records, which prove when they\n", countOf(p.Batches, "batch root", "batch roots"))
 		b.WriteString("    existed without saying what they are;\n")
@@ -232,6 +260,36 @@ func describeUpload(p uploader.Preview, server string) string {
 	}
 	b.WriteString("\n")
 	return b.String()
+}
+
+// describeNames says in plain words what the names request p does, with
+// its whole body, and where it goes.
+func describeNames(p uploader.NamesPreview, server string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Before its next upload, this computer sends a project names request to\n%s/api/v1/projects/names, signed with its device key like an upload.\n", strings.TrimSuffix(server, "/"))
+	b.WriteString("This is all of its body, before pairtime compresses it with gzip:\n\n")
+	b.WriteString(text.Printable(string(p.JSON)))
+	b.WriteString("\n\nIt ")
+	var parts []string
+	for _, key := range slices.Sorted(maps.Keys(p.Set)) {
+		parts = append(parts, fmt.Sprintf("shows the name \"%s\" for %s", text.Printable(p.Set[key]), codeOrKey(p.Codes, key)))
+	}
+	for _, key := range p.Delete {
+		parts = append(parts, "stops showing the name of "+codeOrKey(p.Codes, key))
+	}
+	b.WriteString(strings.Join(parts, ", and it "))
+	b.WriteString(" on your own pairtime dashboard. Only you see these names there, and\n")
+	b.WriteString("nothing else about these projects goes with them.\n\n")
+	return b.String()
+}
+
+// codeOrKey is what the dashboard calls the project key, "Project <code>"
+// with the code the server gave it, or else the project with its key.
+func codeOrKey(codes map[string]string, key string) string {
+	if c := codes[key]; c != "" {
+		return projectname.CodeName(c)
+	}
+	return "the project " + key
 }
 
 // countOf writes n with the noun's singular or plural.
