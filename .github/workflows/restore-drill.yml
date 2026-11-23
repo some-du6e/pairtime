@@ -204,8 +204,11 @@ jobs:
               image: pairtimed:drill
               pull_policy: never
               network_mode: host
+              environment:
+                PAIRTIME_WITNESS_REPO: some-du6e/pairtime-witness
             witness:
               environment:
+                PAIRTIME_WITNESS_REPO: some-du6e/pairtime-witness
                 PAIRTIME_WITNESS_REMOTE: /remote.git
                 PAIRTIME_WITNESS_EVERY: "5"
                 PAIRTIME_WITNESS_TRACE: "1"

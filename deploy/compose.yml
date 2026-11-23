@@ -24,8 +24,11 @@
 #                   each mode 0600: secrets.env, tunnel.env and
 #                   witness_deploy_key.
 #
-# PAIRTIME_WITNESS_REPO, in .env next to this file, names another witness
-# repository than some-du6e/pairtime-witness.
+# The day roots are off until .env, next to this file, names the witness
+# repository and starts the witness sidecar: PAIRTIME_WITNESS_REPO=<owner/name>
+# (some-du6e/pairtime-witness on the pilot) and COMPOSE_PROFILES=witness, then
+# docker compose up -d. With it unset, pairtimed publishes no day root and
+# the sidecar doesn't start.
 name: pairtime
 
 services:
@@ -59,7 +62,7 @@ services:
     # read their PAIRTIME_* variables from there.
     env_file: ./config/secrets.env
     environment:
-      PAIRTIME_WITNESS_REPO: ${PAIRTIME_WITNESS_REPO:-some-du6e/pairtime-witness}
+      PAIRTIME_WITNESS_REPO: ${PAIRTIME_WITNESS_REPO:-}
       # Runbook step 2 makes it, and so does pairtimed serve, mode 0700, in
       # the images built from #123 on. An older image doesn't, and SQLite
       # then uses /tmp, so a host set up before #123 makes it as the
@@ -103,6 +106,8 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   witness:
+    # Off until .env sets COMPOSE_PROFILES=witness (see the top of this file).
+    profiles: ["witness"]
     # git and OpenSSH on Alpine. v2.54.0, 2026-11-08.
     image: alpine/git:v2.54.0@sha256:6a1fdb962814ca11508ca8d1bab94375b5b7ac4e4a9a40981c29fc32c02f095d
     restart: unless-stopped
@@ -110,7 +115,7 @@ services:
     # push them with the deploy key (deploy/witness/push.sh).
     entrypoint: ["/bin/sh", "/etc/witness/push.sh"]
     environment:
-      PAIRTIME_WITNESS_REPO: ${PAIRTIME_WITNESS_REPO:-some-du6e/pairtime-witness}
+      PAIRTIME_WITNESS_REPO: ${PAIRTIME_WITNESS_REPO:-}
     volumes:
       - ./witness-roots:/witness:ro
       - ./witness/push.sh:/etc/witness/push.sh:ro
