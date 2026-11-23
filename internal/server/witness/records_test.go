@@ -79,6 +79,18 @@ func (c *chain) drop(first, last uint64) {
 	c.batches = kept
 }
 
+// only keeps the records of the batches keep names, as a reveal does, and
+// all of the server's rows.
+func (c *chain) only(keep func(b uint64) bool) {
+	kept := c.recs[:0]
+	for _, r := range c.recs {
+		if keep(r.B) {
+			kept = append(kept, r)
+		}
+	}
+	c.recs = kept
+}
+
 // find returns the index of the presence record whose wall clock reads
 // minute m, or -1.
 func (c *chain) find(m float64) int {
@@ -310,6 +322,19 @@ func outage(notes bool) *chain {
 	return &c
 }
 
+// twoCatchUps is the outage of outage(true) on a network that let the
+// device through at minute 180.5 for batches 60 to 120 only, then dropped
+// it again, its uploader failing every four minutes, until minute 200.5,
+// when the rest went.
+func twoCatchUps() *chain {
+	c := outage(true)
+	c.receive(121, 200, 200.5, 0)
+	for f := 184.2; f < 200; f += 4 {
+		c.add(uint64(f)+1, note(f))
+	}
+	return c
+}
+
 func TestOutage(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -404,13 +429,7 @@ func TestOfflineConditions(t *testing.T) {
 			}, event.Backfilled, 0, 1},
 		{"a backlog that reached the server in two catch-ups makes a stretch of each, from its own reconnect",
 			func() (*chain, int) {
-				c := outage(true)
-				// The device got batches 60 to 120 through at minute 180.5,
-				// dropped again, kept failing, and sent the rest at 200.5.
-				c.receive(121, 200, 200.5, 0)
-				for f := 184.2; f < 200; f += 4 {
-					c.add(uint64(f)+1, note(f))
-				}
+				c := twoCatchUps()
 				return c, c.find(125.5)
 			}, event.Offline, at(200.5), 2},
 		{"a batch of the catch-up that came within the lag after the reconnect is offline",
@@ -471,6 +490,41 @@ func TestOfflineConditions(t *testing.T) {
 				}
 				return &c, c.batch(150, append(recs, note(135.5))...)
 			}, event.Backfilled, 0, 0},
+		{"a backlog that reached the server in two catch-ups reads offline from what rule (g) reveals of a minute in the second",
+			func() (*chain, int) {
+				c := twoCatchUps()
+				// A submission of minutes 170 to 180 reveals batches 171 to
+				// 181, their notes, and the presence of batch 120 before the
+				// second catch-up and of batch 59 before the first. No
+				// revealed note is near batch 120's close, so its own record
+				// reads backfilled, and the second catch-up is the one
+				// stretch.
+				c.only(func(b uint64) bool { return b >= 171 && b <= 181 || b == 120 || b == 59 })
+				return c, c.find(170.5)
+			}, event.Offline, at(200.5), 1},
+		{"the same backlog reads backfilled throughout when the first catch-up's anchor reads backfilled",
+			func() (*chain, int) {
+				c := twoCatchUps()
+				c.only(func(b uint64) bool { return b >= 171 && b <= 181 || b == 120 || b == 59 })
+				// Batch 59's record is a late one, so nothing anchors the
+				// first catch-up, and so nothing anchors the second.
+				c.recs[c.find(58.5)].T = at(30)
+				return c, c.find(170.5)
+			}, event.Backfilled, 0, 0},
+		{"a backlog that reached the server in three catch-ups reads offline from what rule (g) reveals",
+			func() (*chain, int) {
+				c := outage(true)
+				c.receive(60, 100, 180.5, 0)
+				c.receive(101, 140, 200.5, 0)
+				c.receive(141, 200, 220.5, 0)
+				c.drop(201, 240)
+				// A submission of minutes 150 to 155 reveals batches 151 to
+				// 156 and the anchors before each catch-up: 140, 100 and 59.
+				// Batch 140's record reads offline too, by the note of 152.2
+				// in batch 153, so there are two stretches.
+				c.only(func(b uint64) bool { return b >= 151 && b <= 156 || b == 140 || b == 100 || b == 59 })
+				return c, c.find(150.5)
+			}, event.Offline, at(220.5), 2},
 		{"the last minutes of an outage that ends asleep are offline by the failures just before them",
 			func() (*chain, int) {
 				// The uploader failed every four minutes from minute 60 to
@@ -543,10 +597,12 @@ func TestOfflineConditions(t *testing.T) {
 	}
 }
 
-// TestOfflineCost holds offline's note lookups to the size of the input:
+// TestOfflineCost holds offline's note checks to the size of the input:
 // many notes from just before the device's last live receipt, then a
-// catch-up of as many records, each of which looks for a note in a window
-// the old notes fill, cost a step a note, not a step a note per record.
+// catch-up of as many batches of one record each, every one of which
+// looks for a note in a window the old notes fill. A check that scanned
+// the window for each record, or built it again for each batch, reads a
+// note per note per record, which the bound fails.
 func TestOfflineCost(t *testing.T) {
 	const n = 20_000
 	var c chain
@@ -555,17 +611,17 @@ func TestOfflineCost(t *testing.T) {
 		recs = append(recs, note(86+14*float64(k)/n))
 	}
 	c.batch(100.05, recs...)
-	late := make([]Record, 0, n)
+	first := len(c.recs)
 	for k := range n {
-		late = append(late, Record{Type: presence, Timed: true, T: at(100) + int64(k)})
+		c.batch(120, Record{Type: presence, Timed: true, T: at(100) + int64(k)})
 	}
-	first := c.batch(120, late...)
-	res, steps := records(table(t), c.batches, c.recs)
+	res, reads := records(table(t), c.batches, c.recs)
+	batches := len(c.batches)
 	tests := []struct {
 		name string
 		ok   bool
 	}{
-		{"the notes' window takes at most two steps a note", steps <= 2*n},
+		{"the notes' checks read a note at most six times the notes plus three times the batches", reads <= 6*n+3*batches},
 		{"the catch-up's records read backfilled, since every note in their window is from before the catch-up",
 			res.Readings[first].Label == event.Backfilled && res.Readings[len(res.Readings)-1].Label == event.Backfilled},
 		{"the notes before the silence read witnessed", res.Readings[1].Label == event.Witnessed},
@@ -573,7 +629,7 @@ func TestOfflineCost(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
-				t.Errorf("no: %d steps for %d notes", steps, n)
+				t.Errorf("no: %d reads for %d notes and %d batches", reads, n, batches)
 			}
 		})
 	}

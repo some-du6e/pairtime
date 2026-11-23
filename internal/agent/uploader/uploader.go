@@ -1759,13 +1759,25 @@ func (u *Uploader) noteClock() {
 // clock that runs slow makes live work read late, and one that runs more
 // than 5 minutes fast has its records refused at submission (WP-SV6).
 func clockProblem(off time.Duration, lag int64) string {
-	switch n := int64(off.Abs() / time.Minute); {
+	switch n := offBy(off); {
 	case off > clockSkew:
-		return fmt.Sprintf("this computer's clock is %d minutes behind the server's, and pairtime dates your work by it, so work counts as late, at level C, once that and the time an upload takes pass %d minutes. Set the clock right, or turn on setting the time automatically, to fix it", n, lag/60_000)
+		return fmt.Sprintf("this computer's clock is %s behind the server's, and pairtime dates your work by it, so work counts as late, at level C, once that and the time an upload takes pass %d minutes. Set the clock right, or turn on setting the time automatically, to fix it", n, lag/60_000)
 	case off < -clockSkew:
-		return fmt.Sprintf("this computer's clock is %d minutes ahead of the server's, and pairtime dates your work by it, so once it is more than %d minutes ahead, work counts at level C and a submission refuses it. Set the clock right, or turn on setting the time automatically, to fix it", n, refusedAhead/60_000)
+		return fmt.Sprintf("this computer's clock is %s ahead of the server's, and pairtime dates your work by it, so once it is more than %d minutes ahead, work counts at level C and a submission refuses it. Set the clock right, or turn on setting the time automatically, to fix it", n, refusedAhead/60_000)
 	}
 	return ""
+}
+
+// offBy says how far off is in whole minutes: "N minutes", or "more than
+// N minutes" when off isn't a whole number of them, so a clock past a
+// limit never reads as at or under it.
+func offBy(off time.Duration) string {
+	off = off.Abs()
+	n := int64(off / time.Minute)
+	if off%time.Minute != 0 {
+		return fmt.Sprintf("more than %d minutes", n)
+	}
+	return fmt.Sprintf("%d minutes", n)
 }
 
 // setProblem records a problem from one source, or clears it with "", and

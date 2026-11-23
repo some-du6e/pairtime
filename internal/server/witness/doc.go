@@ -51,21 +51,31 @@
 // closed within the lag after the record, an upload-failure note falls
 // within the lag of the batch's close, before or after it, in a batch of
 // the same catch-up or a later one, the batch arrived within the lag after
-// the device got through again, and the batch before that reconnect has a
-// record that reads witnessed or offline, so the chain ran on unbroken
-// from a batch that reached the server in time. A batch closes no earlier
-// than its latest record and no earlier than the batch before it, since a
-// chain seals its batches in order. So the catch-up's batches closed no
-// earlier than the lag before the batch before them reached the server,
-// and a batch of backdated records sent after the device got batches of
-// the present through can't read offline, whatever records the reveal
-// leaves out. Everything else late is backfilled, and so is every record
-// the caller marks as lookback's.
+// the device got through again, and the batch before that reconnect, the
+// catch-up's anchor, holds. An anchor holds when it has a record that
+// reads witnessed or offline, or when it came itself in an earlier
+// catch-up whose anchor holds, by the run rules a catch-up's records use:
+// its run began after a silence, and it arrived within the lag after the
+// run's first batch. So a backlog that reached the server in several
+// catch-ups ran on unbroken from a batch with a record that reads
+// witnessed. A batch closes no earlier than its latest record and no
+// earlier than the batch before it, since a chain seals its batches in
+// order. So every batch of a catch-up closed no earlier than the time of
+// the witnessed record its chain of anchors goes back to, and that time is
+// at most the lag before that record's batch reached the server, whatever
+// records a caller leaves out: a batch of backdated records sent after the
+// device got batches of the present through can't read offline. Which
+// records inside that bound read offline can still depend on what a caller
+// passes. A record no rule reveals, dated late in a batch of a first
+// catch-up, raises the close of every batch after it, so leaving it out
+// lets records of a second catch-up read offline that read backfilled with
+// it. Everything else late is backfilled, and so is every record the
+// caller marks as lookback's.
 //
 // The notes are the client's own claim (DESIGN 7.4), so the server can't
 // check them beyond their place in the chain. It reads their times from
 // their bodies, which DESIGN 6.5's rule (g) reveals with the presence,
-// focus and power records of the batch before each catch-up.
+// focus and power records of each catch-up's chain of anchors.
 //
 // D6 applies OFFLINE_CAP_S and OFFLINE_PUSH_S at submission, in WP-SB4,
 // not here. What it needs from here is which records are offline and the
@@ -93,11 +103,14 @@
 // lookback's.
 //
 // Without records that reading can be wrong either way. A late revision
-// whose new credit rests on records the server had on time, as a restore
-// of half-weighted seconds does (SM 4.3), reads backfilled here, and so
-// does a minute whose bucket waited out an outage that began after its
-// batch got through. And a client that writes a minute's records into
-// batches it sends late, while it sends the minute and other batches on
-// time, gets witnessed here and late labels for the records. A submission
-// labels the records themselves, and its labels are the ones that count.
+// whose new credit rests on records the server had on time, as a restore of
+// half-weighted seconds does (SM 4.3), reads backfilled here, and so does a
+// minute whose bucket waited out an outage that began after its batch got
+// through, or that ended before the first of two catch-ups and whose batch
+// went in the second, since the device's first batch received after the
+// minute is then the first catch-up's. And a client that writes a minute's
+// records into batches it sends late, while it sends the minute and other
+// batches on time, gets witnessed here and late labels for the records. A
+// submission labels the records themselves, and its labels are the ones
+// that count.
 package witness

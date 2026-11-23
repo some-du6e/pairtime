@@ -98,9 +98,11 @@ type Result struct {
 // can make the other records of their boots read fresher than they are.
 //
 // recs needs the timed records of the batch before each catch-up as well,
-// its os.presence, os.focus and os.power records at least (DESIGN 6.5's
-// rule (g)): a late record reads offline only when that batch has one that
-// reads witnessed or offline. Each record's Mono must be a reading of its
+// its os.presence, os.focus and os.power records at least, and, while that
+// batch itself came in a catch-up, those of the batch before that catch-up
+// too, and so on (DESIGN 6.5's rule (g)): a late record reads offline only
+// when its catch-up's chain of anchors goes back to a batch with a record
+// that reads witnessed. Each record's Mono must be a reading of its
 // boot's monotonic clock taken at the record's own time, or 0, because a
 // reading that runs ahead of its record's time pulls every earlier record
 // of its boot back. tab is the parameter table the labels go by, which a
@@ -110,8 +112,8 @@ func Records(tab *params.Table, batches []Batch, recs []Record) Result {
 	return res
 }
 
-// records is Records, and also says how many steps its notes' window took
-// (offline), so a test can hold the cost to the input's size.
+// records is Records, and also says how many times its notes' checks read
+// a note (offline), so a test can hold the cost to the input's size.
 func records(tab *params.Table, batches []Batch, recs []Record) (Result, int) {
 	lag := tab.Int(params.WITNESS_LAG_S) * 1000
 	got := make(map[uint64]int64, len(batches))
@@ -145,8 +147,8 @@ func records(tab *params.Table, batches []Batch, recs []Record) (Result, int) {
 			rd.Label = event.Witnessed
 		}
 	}
-	steps := offline(&out, lag, got, recs, held, corrected)
-	return out, steps
+	reads := offline(&out, lag, got, recs, held, corrected)
+	return out, reads
 }
 
 // correct returns the corrected time of each record in held, by its index
@@ -233,21 +235,30 @@ func runs(got map[uint64]int64, lag int64) map[uint64]run {
 // lag of the batch's close, before or after it, in a batch of the same
 // catch-up or a later one; the batch reached the server within lag after
 // its run's first batch; that run began after a silence that followed a
-// batch the server holds; and that batch, the one before the catch-up,
-// has a timed record that reads witnessed or offline. It returns how many
-// steps the notes' window took, which is at most twice the number of
-// notes.
+// batch the server holds; and that batch, the anchor before the catch-up,
+// holds. An anchor holds when it has a timed record that reads witnessed
+// or offline, or when it came itself in an earlier catch-up whose own
+// anchor holds, by the same run rules: its run resumed after a silence,
+// and it reached the server within lag after the run's first batch. So a
+// catch-up's chain of anchors always goes back to a batch with a record
+// that reads witnessed. It returns how many times the notes' checks read
+// a note, which is at most six times the notes plus three times the
+// batches.
 //
 // A batch closes, as far as the server can see, at the latest corrected
-// time of its timed records, and no earlier than the batch before it,
-// since a chain seals its batches in order. A batch before a catch-up
-// that reads witnessed or offline closed in time, so every batch of the
-// catch-up closed no earlier than lag before that batch reached the
-// server. That keeps a batch of backdated records sent after the device
-// got batches of the present through from reading offline, whatever
-// records a caller leaves out. The batches are decided in order, so a
-// batch before a catch-up has its labels when the catch-up needs them. A
-// note may come before the close because the uploader waits between
+// time of its timed records, and no earlier than any batch before it,
+// since a chain seals its batches in order. So every batch of a catch-up
+// closed no earlier than the time of the witnessed record its chain of
+// anchors goes back to, which is at most lag before that record's batch
+// reached the server, whatever records a caller leaves out. That keeps a
+// batch of backdated records sent after the device got batches of the
+// present through from reading offline. Which records inside that bound
+// read offline still depends on the records and notes a caller passes: a
+// record left out that was dated late in its batch would have raised the
+// close of every batch after it. The batches are decided in order, so an
+// anchor has its labels when the catch-up after it needs them.
+//
+// A note may come before the close because the uploader waits between
 // tries: a session that ends asleep while the uploader waits leaves its
 // last batches with only the failures before them. A note in a batch from
 // before the catch-up was sealed before the device last got through, so it
@@ -270,51 +281,61 @@ func offline(out *Result, lag int64, got map[uint64]int64, recs []Record, held [
 			notes = append(notes, note{corrected[i], r.B})
 		}
 	}
-	bs := make([]uint64, 0, len(closes))
-	for b := range closes {
-		bs = append(bs, b)
+	all := make([]uint64, 0, len(got))
+	for b := range got {
+		all = append(all, b)
 	}
-	slices.Sort(bs)
+	slices.Sort(all)
 	latest := int64(math.MinInt64)
-	for _, b := range bs {
-		latest = max(latest, closes[b])
-		closes[b] = latest
+	for _, b := range all {
+		if c, ok := closes[b]; ok {
+			latest = max(latest, c)
+			closes[b] = latest
+		}
 	}
 	slices.SortFunc(notes, func(a, b note) int { return cmp.Compare(a.at, b.at) })
+	reads := 0
+	noteAt := func(k int) note {
+		reads++
+		return notes[k]
+	}
 	// The notes' window, closes[b] less lag to closes[b] plus lag, only
 	// moves on in batch order. window holds the indices of its notes whose
 	// batch is later than every note after it in the window, from head on,
 	// so notes[window[head]] has the window's latest batch.
 	var window []int
-	head, lo, hi, steps := 0, 0, 0, 0
+	head, lo, hi := 0, 0, 0
 	rs := runs(got, lag)
-	anchors := make(map[uint64]bool)  // a batch with a record that reads witnessed or offline
+	anchors := make(map[uint64]bool)  // a batch whose anchoring holds
 	stretch := make(map[uint64][]int) // run start: offline records
-	for _, b := range bs {
-		closed, ru := closes[b], rs[b]
-		for ; hi < len(notes) && notes[hi].at <= closed+lag; hi++ {
-			for len(window) > head && notes[window[len(window)-1]].b <= notes[hi].b {
-				window = window[:len(window)-1]
+	for _, b := range all {
+		ru := rs[b]
+		caught := ru.resumed && got[b]-got[ru.start] <= lag && anchors[ru.start-1]
+		if closed, ok := closes[b]; ok {
+			for hi < len(notes) && noteAt(hi).at <= closed+lag {
+				for len(window) > head && noteAt(window[len(window)-1]).b <= noteAt(hi).b {
+					window = window[:len(window)-1]
+				}
+				window = append(window, hi)
+				hi++
 			}
-			window = append(window, hi)
-			steps++
-		}
-		for ; lo < hi && notes[lo].at < closed-lag; lo++ {
-			if len(window) > head && window[head] == lo {
-				head++
+			for lo < hi && noteAt(lo).at < closed-lag {
+				if len(window) > head && window[head] == lo {
+					head++
+				}
+				lo++
 			}
-			steps++
-		}
-		waited := ru.resumed && got[b]-got[ru.start] <= lag && anchors[ru.start-1] &&
-			len(window) > head && notes[window[head]].b >= ru.start
-		for _, i := range byBatch[b] {
-			rd := &out.Readings[i]
-			if !waited || rd.Label != event.Backfilled || recs[i].Lookback || rd.Lag <= lag || closed-corrected[i] > lag {
-				continue
+			waited := caught && len(window) > head && noteAt(window[head]).b >= ru.start
+			for _, i := range byBatch[b] {
+				rd := &out.Readings[i]
+				if !waited || rd.Label != event.Backfilled || recs[i].Lookback || rd.Lag <= lag || closed-corrected[i] > lag {
+					continue
+				}
+				rd.Label = event.Offline
+				stretch[ru.start] = append(stretch[ru.start], i)
 			}
-			rd.Label = event.Offline
-			stretch[ru.start] = append(stretch[ru.start], i)
 		}
+		anchors[b] = caught
 		for _, i := range byBatch[b] {
 			if l := out.Readings[i].Label; l == event.Witnessed || l == event.Offline {
 				anchors[b] = true
@@ -336,5 +357,5 @@ func offline(out *Result, lag int64, got map[uint64]int64, recs []Record, held [
 		}
 		out.Stretches = append(out.Stretches, st)
 	}
-	return steps
+	return reads
 }

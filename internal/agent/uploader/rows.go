@@ -206,8 +206,10 @@ type reading struct {
 
 // refusedAhead is how long after the server received a batch its records
 // may be dated before a submission refuses them: SP 8.4's 5 minutes,
-// internal/server/witness's FutureMS. A minute dated that far ahead of
-// its batch's receipt reads backfilled, as a submission would count it.
+// internal/server/witness's FutureMS. A minute that may hold a record
+// dated further ahead of its own batch's receipt reads backfilled, so the
+// dashboard never reads witnessed or offline a minute whose records a
+// submission refuses.
 const refusedAhead = 300_000
 
 // witnessOf reads the witness label of the minute that starts at minute,
@@ -220,9 +222,10 @@ const refusedAhead = 300_000
 // B*, because it takes a chain's batches in order. So the reading is B*'s
 // (DESIGN 7.4):
 //
-//   - backfilled when the minute ends more than refusedAhead after its
-//     receipt's received_at, as on a device clock that runs that far
-//     fast: a submission refuses its records (SP 8.4);
+//   - backfilled when a record of the minute may be dated more than
+//     refusedAhead after its own batch reached the server, as on a device
+//     clock that runs that far fast (refused): a submission checks each
+//     record against its own batch's receipt and refuses it (SP 8.4);
 //   - witnessed when the receipt's received_at, on the server's clock,
 //     is at most lag after the minute's end, on the device's clock. The
 //     server reads a minute by the device's clock too (WP-SV6), because
@@ -263,6 +266,9 @@ func witnessOf(ix *rowIndex, minute int64, batch uint64, r reading) (event.Witne
 		return "", false
 	}
 	w, ok := r.of(ix, b, end)
+	if ok && ix.refused(minute, end, b) {
+		w = event.Backfilled
+	}
 	if !ok || batch <= b || batch > ix.last() {
 		return w, ok
 	}
@@ -271,6 +277,29 @@ func witnessOf(ix *rowIndex, minute int64, batch uint64, r reading) (event.Witne
 		return "", false
 	}
 	return worse(w, wb), true
+}
+
+// refused reports whether a submission may refuse a record of the minute
+// from start to end, on the device's clock, whose last batch is b, B*: for
+// a batch from the first one sealed after start through b, the earlier of
+// end and the batch's seal, the latest a record of the minute in it can be
+// dated, is more than refusedAhead after the server received it. A
+// minute's earlier records sit in batches that reached the server up to a
+// seal interval before B*, and a submission checks each record against
+// its own batch's receipt (internal/server/witness). A clock less than
+// refusedAhead fast never seals a batch that far ahead of its receipt, so
+// it never reads backfilled by this.
+func (ix *rowIndex) refused(start, end int64, b uint64) bool {
+	first, ok := ix.sealedAfter(start)
+	if !ok {
+		return false
+	}
+	for k := first; k <= b; k++ {
+		if got, ok := ix.receivedAt(k); ok && min(end, ix.times[k-1].sealed)-got > refusedAhead {
+			return true
+		}
+	}
+	return false
 }
 
 // of reads batch b's witness label for records of the time due, on the

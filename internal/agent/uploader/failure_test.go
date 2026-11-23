@@ -294,8 +294,10 @@ func TestClockProblem(t *testing.T) {
 		off  time.Duration // the server's clock less this computer's
 		has  string        // what doctor hears, "" for nothing
 	}{
-		{"a clock 20 minutes slow makes live work late, doctor says", 20 * time.Minute, "20 minutes behind the server's"},
-		{"a clock 10 minutes fast has work refused, doctor says", -10 * time.Minute, "10 minutes ahead of the server's"},
+		{"a clock 20 minutes slow makes live work late, doctor says", 20 * time.Minute, "is 20 minutes behind the server's"},
+		{"a clock 10 minutes fast has work refused, doctor says", -10 * time.Minute, "is 10 minutes ahead of the server's"},
+		{"a clock 5 and a half minutes fast is more than 5 minutes ahead, past the limit, not at it", -(5*time.Minute + 30*time.Second), "is more than 5 minutes ahead of the server's"},
+		{"a clock 20 and a half minutes slow is more than 20 minutes behind", 20*time.Minute + 30*time.Second, "is more than 20 minutes behind the server's"},
 		{"a clock 2 minutes slow is nothing to say", 2 * time.Minute, ""},
 		{"nor is one 2 minutes fast", -2 * time.Minute, ""},
 	}
