@@ -1,6 +1,6 @@
 # Erratum: the ledger writer's files can't drop batches older than DESIGN 4.4's 180 days
 
-Date 2026-11-20. Raised by the fix-up for issue #99, from the spec review of #94 (WP-LG5). Status: waiting for a decision. Nothing changes in this PR; the question is which format change WP-LG6's retention sweep gets.
+Date 2026-11-20. Raised by the fix-up for issue #99, from the spec review of #94 (WP-LG5). Status: decided 2026-11-23 by the orchestrator for Karim: the base frame as proposed. WP-LG6's retention sweep builds it, so WP-LG6's Touches gain `internal/agent/ledger/`, and DESIGN 3.5's `batches.seg` row says a batch's row goes when its batch's segment goes. The Decision section below says what the sweep does.
 
 ## Input
 
@@ -36,3 +36,12 @@ The extension needs no spec change, because ledger-v1 4 leaves the files' layout
 ## For Karim
 
 Decide whether WP-LG6's sweep takes this format, or another. It isn't urgent for the format's sake, because a `batches.seg` without a base frame keeps meaning "from batch 1", but the sweep can't run before it lands, and WP-LG6's Touches line needs `internal/agent/ledger/` added.
+
+## Decision
+
+Decided 2026-11-23 by the orchestrator for Karim: the base frame as proposed above, in WP-LG6's second part.
+
+- The base frame goes right after the chain frame, and a `batches.seg` without one keeps meaning "from batch 1".
+- The sweep is a Writer method. It holds `sealMu` from before it reads the old `batches.seg` until the Writer's handle is on the new one, closes the old handle before the atomic rename, because Windows renames over no open file, and deletes the segments wholly before the first kept batch only after the rename.
+- `ReadBatches` starts at the larger of `from` and the base, and `ChainInfo` gives the base's batch number.
+- A kept chain verifies from its base with `prev` taken as given, as ledger-v1 9 step 1 takes a run that starts later.
