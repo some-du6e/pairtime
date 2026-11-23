@@ -84,16 +84,24 @@ var (
 	decimalForm = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
 	hashForm    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	scoringForm = regexp.MustCompile(`^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$`)
-	// releaseForm is a version in tier 1's form, for client_build and
-	// harness versions: D-version-grammar's, with each identifier of the
-	// suffix all digits, 7 or more lowercase hex digits, or one of ten
-	// words (ingest-v1 2.3.4).
+	// grammarForm is D-version-grammar's version, whose suffix after its
+	// sign has at most 41 characters, and releaseForm wants each identifier
+	// of the suffix all digits, 7 or more lowercase hex digits, or one of
+	// ten words. releaseVersion holds client_build and harness versions to
+	// both, tier 1's form (ingest-v1 2.3.4).
+	grammarForm = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+){0,3}([-+][0-9A-Za-z][0-9A-Za-z.-]{0,40})?$`)
 	releaseForm = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+){0,3}([-+]` + releaseID + `([.-]` + releaseID + `)*)?$`)
 	paramsForm  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
 // releaseID is one identifier of releaseForm's suffix.
 const releaseID = `([0-9]+|[0-9a-f]{7,}|alpha|beta|rc|pre|dev|preview|nightly|canary|next|build)`
+
+// releaseVersion reports whether v is a version in tier 1's form: at most
+// 64 characters in grammarForm's form and in releaseForm's.
+func releaseVersion(v string) bool {
+	return len(v) <= 64 && grammarForm.MatchString(v) && releaseForm.MatchString(v)
+}
 
 func (f *fakeIngest) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Pairtime-Time", strconv.FormatInt(f.now().UnixMilli(), 10))
@@ -535,12 +543,12 @@ func (f *fakeIngest) label(raw json.RawMessage) map[string]any {
 	if err := dec.Decode(&l); err != nil {
 		return map[string]any{"status": 422, "code": "unknown_field", "field": ""}
 	}
-	if !releaseForm.MatchString(l.ClientBuild) || len(l.ClientBuild) > 64 || !scoringForm.MatchString(l.ScoringVersion) || !paramsForm.MatchString(l.Params) ||
+	if !releaseVersion(l.ClientBuild) || !scoringForm.MatchString(l.ScoringVersion) || !paramsForm.MatchString(l.Params) ||
 		l.Harnesses == nil || len(*l.Harnesses) > 16 || l.TypingModule == nil || l.VM == nil {
 		return map[string]any{"status": 422, "code": "bad_string"}
 	}
 	for _, h := range *l.Harnesses {
-		if h.Version != "" && (!releaseForm.MatchString(h.Version) || len(h.Version) > 64) {
+		if h.Version != "" && !releaseVersion(h.Version) {
 			return map[string]any{"status": 422, "code": "bad_string", "field": "harnesses"}
 		}
 	}
