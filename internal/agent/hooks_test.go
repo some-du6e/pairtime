@@ -1056,14 +1056,23 @@ func (r *transcriptFocusRig) events(t *testing.T) []event.Event {
 // counts again ties it again. While tied, focus shows the project its
 // records carry, which no hook ties. No os.focus record names the session
 // while its lines are out of pairtime, so no minute of that stretch can
-// credit it, and the ledger holds none of those lines.
+// credit it, and the ledger holds none of those lines. The stretch is
+// bounded by the os.focus records focus writes, which the test counts
+// (focus.Status.Records), and not by the wall clock: a record carries its
+// time in whole milliseconds, so the one a line that counts again makes,
+// in the millisecond the stretch ended in, would read as made before its
+// end.
 func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 	const sid = "55555555-0000-4000-8000-000000000005"
 	r := newTranscriptFocusRig(t, sid)
 	kept, out := r.kept, r.out
 	write := func(t *testing.T, dir string, ahead time.Duration) { r.write(t, sid, dir, ahead, false) }
 	key := hookpath.SessionKey(r.a.sessionSecret(), sid)
-	var stretch [2]time.Time // the stretch the session's lines were out of pairtime
+	// from and to bound the stretch the session's lines were out of
+	// pairtime by focus's records, in the order it wrote them: from the
+	// one after the record that stopped naming the session, the from-th,
+	// up to the to-th, the last before a line of it counted again.
+	var from, to uint64
 	steps := []struct {
 		name    string
 		do      func(t *testing.T)
@@ -1078,13 +1087,17 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 				// table read ended in (procs.Scanner.Tie).
 				write(t, kept, time.Second)
 			}, 1, true},
-		{"a line of it in the ignored folder leaves the terminal hosting none, and no project", func(t *testing.T) { write(t, out, 0) }, 0, false},
-		{"a later line of it there ties nothing", func(t *testing.T) {
-			stretch[0] = time.Now()
+		{"a line of it in the ignored folder leaves the terminal hosting none, and no project", func(t *testing.T) {
 			write(t, out, 0)
+			// Focus's one worker wrote every record from before the change
+			// before it showed the change, so the stretch's records come
+			// from here on.
+			r.wait(t, key, 0, false)
+			from = r.a.focus.Status().Records
 		}, 0, false},
+		{"a later line of it there ties nothing", func(t *testing.T) { write(t, out, 0) }, 0, false},
 		{"a line of it that counts again ties it again", func(t *testing.T) {
-			stretch[1] = time.Now()
+			to = r.a.focus.Status().Records
 			write(t, kept, 0)
 		}, 1, true},
 	}
@@ -1098,12 +1111,17 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 	r.stopAll()
 	var named, namedIn int
 	prompts := 0
+	// focused counts the os.focus records read, which the ledger holds in
+	// the order focus wrote them, through presence's queue (ledger.Presence).
+	var focused uint64
 	for _, ev := range r.events(t) {
 		switch d := ev.Data.(type) {
 		case *event.OSFocus:
+			i := focused
+			focused++
 			if slices.Contains(d.HostedSessions, key) {
 				named++
-				if at := time.UnixMilli(ev.T); !at.Before(stretch[0]) && at.Before(stretch[1]) {
+				if i >= from && i < to {
 					namedIn++
 				}
 			}
@@ -1118,6 +1136,7 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 		ok   bool
 	}{
 		{"os.focus records name the session while it is tied", named > 0},
+		{"the ledger holds every os.focus record focus wrote up to the stretch's end", focused >= to},
 		{"no os.focus record names it while its lines are out of pairtime", namedIn == 0},
 		{"its two lines in the ignored folder count as ignored", st.Harnesses[event.HarnessClaudeCode].Ignored == 2},
 		{"the ledger holds the prompts of its three lines that counted, and none of the ignored folder's", prompts == 3},
@@ -1125,7 +1144,8 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 	for _, c := range checks {
 		t.Run(c.name, func(t *testing.T) {
 			if !c.ok {
-				t.Errorf("no: %d records name the session, %d in the stretch %v; %d prompts; adapters %+v", named, namedIn, stretch, prompts, st)
+				t.Errorf("no: %d records name the session, %d in the stretch, the os.focus records from the %dth to the %dth of the %d the ledger holds; %d prompts; adapters %+v",
+					named, namedIn, from, to, focused, prompts, st)
 			}
 		})
 	}
