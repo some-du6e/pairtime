@@ -1310,7 +1310,7 @@ func TestRelayedVouching(t *testing.T) {
 
 // TestRelayedLeadOnAFreshState checks where a device that never samples
 // starts its slots when a relayed message comes before every record of its
-// run (SM 2.3, presence.live): T3 Code starts the session after it takes
+// run (SM 2.3, presence.neverAt): T3 Code starts the session after it takes
 // the message, so session.start, the prompt and the relay record all come
 // after the stamp. The slots start no later than the minute of the
 // earliest lead a relay record can open, COMPOSE_MAX_S before its stamp,
