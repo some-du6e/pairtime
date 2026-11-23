@@ -242,6 +242,12 @@ func TestPublish(t *testing.T) {
 				if err := ledger.VerifyDay(public(keyA), h.D, h.Head, h.Signature); err != nil || h.KeyID != keyID(keyA) {
 					t.Errorf("the head's signature, by %s, doesn't verify under the key valid at the day's end: %v", h.KeyID, err)
 				}
+				leaves, err := publisher.Leaves(context.Background(), f.db.Read, h)
+				if err != nil || len(leaves) != 2 ||
+					leaves[0].String() != "dbb9530abac5f5e52ac7188e663999f5510b184196d22795ae6df086de8ae3de" ||
+					leaves[1].String() != "bf08bde260d74c54b160bf8345364601ae6afe57cfac850ecc3be3f054c6c850" {
+					t.Errorf("the stored leaves are %v (%v), not 12.5's LEAF(leaf 1) and LEAF(leaf 2)", leaves, err)
+				}
 			}},
 		{name: "a day is due 10 minutes after it ends and not a millisecond before",
 			rows: func(t *testing.T, f *fixture) { f.row(t, "d1", 1, "2026-11-19T12:00:00Z") },
@@ -271,6 +277,13 @@ func TestPublish(t *testing.T) {
 				empty := f.head(t, "2026-11-20")
 				if empty.Count != 0 || empty.Root.String() != "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" {
 					t.Errorf("the day with no rows has count %d and T_d %s", empty.Count, empty.Root)
+				}
+				if leaves, err := publisher.Leaves(context.Background(), f.db.Read, empty); err != nil || len(leaves) != 0 {
+					t.Errorf("the day with no rows has leaves %v (%v)", leaves, err)
+				}
+				var n int
+				if err := f.db.Read.QueryRow(`SELECT COUNT(*) FROM day_leaves`).Scan(&n); err != nil || n != 2 {
+					t.Errorf("day_leaves holds %d rows (%v), one for each of the two days with rows", n, err)
 				}
 				f.verifyChain(t, history())
 			}},

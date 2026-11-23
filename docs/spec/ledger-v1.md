@@ -337,7 +337,7 @@ The file has those nine members in that order and no others, indented by two spa
 
 A day is due 10 minutes after it ends. At each start and at 00:10 UTC, `pairtimed` publishes every due day that has no head yet, oldest first from `d_0`, the day of the first row it stored, so a day missed while it was down goes out on the next run. By then a day's last rows are in the database's replica (DESIGN 10.3), and a head follows from its rows and the key alone, since Ed25519 signatures are deterministic, so a server restored from the replica signs the same head again. `pairtimed` stores each head in its database before it writes the head's file, and it resumes the chain from the stored heads, never from the files. It writes each file under a name that starts with a dot in the file's own directory, then renames it, and the witness sidecar skips such names, so the repository never receives part of a file. A file, once written, never changes.
 
-Each bundle carries the index of each batch's leaf in its day tree and the leaf's inclusion proof (DESIGN 7.8), checked against `T_d` with `count_d` leaves.
+Each bundle carries the index of each batch's leaf in its day tree and the leaf's inclusion proof (DESIGN 7.8), checked against `T_d` with `count_d` leaves. So the server keeps each published day's leaves too: the `count_d` hashes `LEAF(leaf)` in leaf order, stored in the transaction that stores the head and kept as long, which is for good, like the day roots. It makes each proof from them and from the batch's own row, never from the day's other rows, so a proof outlives the rows that retention and an account's erasure delete. The leaves are hashes alone, and the server doesn't publish them.
 
 ## 9. Verification
 
@@ -960,3 +960,4 @@ WP-SV17 decided these, as section 8 said it would:
 
 35. The day file: its path by UTC date, its nine members in their order, and nothing in it from a device but hashes and a count (8).
 36. A day is due 10 minutes after it ends, once its last rows are in the replica. The server stores each head before it writes the head's file, and resumes the chain from its stored heads (8).
+37. The server keeps each published day's leaf hashes for good, beside its head, so a batch's inclusion proof outlives the day's witness rows (8).

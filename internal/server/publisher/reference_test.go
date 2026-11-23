@@ -201,30 +201,54 @@ func TestReferenceCheck(t *testing.T) {
 }
 
 func TestProof(t *testing.T) {
+	deleteRows := func(devices ...string) func(t *testing.T, f *fixture) {
+		return func(t *testing.T, f *fixture) {
+			for _, d := range devices {
+				f.exec(t, `DELETE FROM witness_rows WHERE device_id = $1`, d)
+			}
+		}
+	}
 	tests := []struct {
 		name string
 		// rows are stored, then the days due at 2026-11-20T00:10Z are
-		// published, then late rows are stored.
-		rows, late [][2]string
-		device     string
-		b          uint64
-		wantIndex  uint64
-		wantPath   int
-		wantIs     error
-		wantErr    string
+		// published, then after changes what the server holds.
+		rows      [][2]string
+		after     func(t *testing.T, f *fixture)
+		device    string
+		b         uint64
+		wantIndex uint64
+		wantPath  int
+		wantIs    error
+		wantErr   string
 	}{
 		{name: "the one batch of a day is leaf 0, with an empty proof", rows: [][2]string{{"d1", "2026-11-19T08:00:00Z"}}, device: "d1", b: 1},
 		{name: "a batch's leaf follows the day order, with a proof of one hash a level",
 			rows:   [][2]string{{"d1", "2026-11-19T08:00:00Z"}, {"d2", "2026-11-19T07:00:00Z"}, {"d3", "2026-11-19T09:00:00Z"}},
 			device: "d1", b: 1, wantIndex: 1, wantPath: 2},
+		{name: "a batch keeps its proof after the day's other witness rows are deleted, as retention or an account's erasure deletes them",
+			rows:   [][2]string{{"d1", "2026-11-19T08:00:00Z"}, {"d2", "2026-11-19T07:00:00Z"}, {"d3", "2026-11-19T09:00:00Z"}},
+			after:  deleteRows("d2", "d3"),
+			device: "d1", b: 1, wantIndex: 1, wantPath: 2},
 		{name: "a batch whose day has no head yet has no proof yet",
-			rows: [][2]string{{"d1", "2026-11-19T08:00:00Z"}}, late: [][2]string{{"d2", "2026-11-20T08:00:00Z"}},
+			rows:   [][2]string{{"d1", "2026-11-19T08:00:00Z"}},
+			after:  func(t *testing.T, f *fixture) { f.row(t, "d2", 1, "2026-11-20T08:00:00Z") },
 			device: "d2", b: 1, wantIs: publisher.ErrNotPublished},
 		{name: "a batch the server holds no row of has no proof",
 			rows: [][2]string{{"d1", "2026-11-19T08:00:00Z"}}, device: "d9", b: 1, wantIs: publisher.ErrNoBatch},
-		{name: "a day whose rows changed since it was published gives no proof the published root wouldn't take",
-			rows: [][2]string{{"d1", "2026-11-19T08:00:00Z"}}, late: [][2]string{{"d2", "2026-11-19T23:00:00Z"}},
-			device: "d1", b: 1, wantErr: "no longer give its published root"},
+		{name: "a batch stored on a day after that day was published isn't in its tree, so it has no proof",
+			rows:   [][2]string{{"d1", "2026-11-19T08:00:00Z"}},
+			after:  func(t *testing.T, f *fixture) { f.row(t, "d2", 1, "2026-11-19T23:00:00Z") },
+			device: "d2", b: 1, wantIs: publisher.ErrNotInTree},
+		{name: "a batch stored late on a published day leaves the day's other batches their proofs",
+			rows:   [][2]string{{"d1", "2026-11-19T08:00:00Z"}},
+			after:  func(t *testing.T, f *fixture) { f.row(t, "d2", 1, "2026-11-19T23:00:00Z") },
+			device: "d1", b: 1},
+		{name: "stored leaves that don't give the head's root give no proof",
+			rows: [][2]string{{"d1", "2026-11-19T08:00:00Z"}},
+			after: func(t *testing.T, f *fixture) {
+				f.exec(t, `UPDATE day_leaves SET leaves = $1 WHERE day = $2`, make([]byte, ledger.HashSize), int64(day("2026-11-19")))
+			},
+			device: "d1", b: 1, wantErr: "stored leaves give the root"},
 	}
 	for _, engine := range storetest.Engines() {
 		for _, tt := range tests {
@@ -236,8 +260,8 @@ func TestProof(t *testing.T) {
 				if _, err := publisher.Publish(context.Background(), f.options(), clock("2026-11-20T00:10:00Z")); err != nil {
 					t.Fatal(err)
 				}
-				for _, r := range tt.late {
-					f.row(t, r[0], 1, r[1])
+				if tt.after != nil {
+					tt.after(t, f)
 				}
 				in, err := publisher.Proof(context.Background(), f.db.Read, tt.device, tt.b)
 				switch {

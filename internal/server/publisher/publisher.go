@@ -40,8 +40,11 @@
 //
 // # Inclusion proofs
 //
-// Proof gives a stored batch's leaf in its day's tree and the leaf's
-// inclusion proof, which a bundle carries (DESIGN 7.8; WP-SB8).
+// Each head is stored with its day's leaves, the hashes T_d is the root of,
+// in day_leaves, and kept for good. Proof gives a stored batch's leaf in
+// its day's tree and the leaf's inclusion proof from them, which a bundle
+// carries (DESIGN 7.8; WP-SB8), so a batch's proof outlives the day's other
+// witness rows, which retention and an account's erasure delete.
 package publisher
 
 import (
@@ -284,11 +287,30 @@ func publishDay(ctx context.Context, o Options, d uint64, prev ledger.Hash, now 
 	if err != nil {
 		return ledger.Hash{}, fmt.Errorf("publisher: signing day %s: %w", Date(d), err)
 	}
+	leaves, err := leafHashes(day.Rows)
+	if err != nil {
+		return ledger.Hash{}, fmt.Errorf("publisher: day %s: %w", Date(d), err)
+	}
 	h := Day{PublishedDay: p, KeyID: id, WrittenAt: now.UnixMilli()}
-	if err := o.Writer.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error { return storeHead(ctx, tx, h) }); err != nil {
+	if err := o.Writer.Do(ctx, 2, func(ctx context.Context, tx writer.Tx) error { return storeHead(ctx, tx, h, leaves) }); err != nil {
 		return ledger.Hash{}, err
 	}
 	return p.Head, nil
+}
+
+// leafHashes returns LEAF of each row's leaf, in the rows' order, joined:
+// what day_leaves keeps of a day.
+func leafHashes(rows []ledger.DayRow) ([]byte, error) {
+	out := make([]byte, 0, ledger.HashSize*len(rows))
+	for _, r := range rows {
+		leaf, err := r.Leaf()
+		if err != nil {
+			return nil, err
+		}
+		h := ledger.LeafHash(leaf)
+		out = append(out, h[:]...)
+	}
+	return out, nil
 }
 
 // signer returns the private key that signs day d's head, the server key
@@ -316,11 +338,12 @@ func (o Options) signer(d uint64) (ed25519.PrivateKey, string, error) {
 	return priv, k.ID, nil
 }
 
-// storeHead stores h inside tx as the next head of the chain: the first,
-// with a zero prev, while day_heads is empty, and otherwise the day after
-// the newest, linked to its head. A head already stored for h's day must
-// be h, and stays as it was stored.
-func storeHead(ctx context.Context, tx writer.Tx, h Day) error {
+// storeHead stores h inside tx as the next head of the chain, with leaves,
+// its day's leaf hashes joined in leaf order: the first, with a zero prev,
+// while day_heads is empty, and otherwise the day after the newest, linked
+// to its head. A head already stored for h's day must be h, and stays as
+// it was stored. A day with no rows has no day_leaves row.
+func storeHead(ctx context.Context, tx writer.Tx, h Day, leaves []byte) error {
 	newest, ok, err := Newest(ctx, tx)
 	if err != nil {
 		return err
@@ -339,10 +362,19 @@ func storeHead(ctx context.Context, tx writer.Tx, h Day) error {
 	if h.D > math.MaxInt64 || h.Count > math.MaxInt64 {
 		return fmt.Errorf("publisher: day %d doesn't fit in the database", h.D)
 	}
+	if uint64(len(leaves)) != h.Count*ledger.HashSize {
+		return fmt.Errorf("publisher: day %s has %d rows and %d bytes of leaves", Date(h.D), h.Count, len(leaves))
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO day_heads (day, n, root, prev, head, signature, key_id, written_at_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		int64(h.D), int64(h.Count), h.Root.String(), h.Prev.String(), h.Head.String(), hex.EncodeToString(h.Signature[:]), h.KeyID, h.WrittenAt)
 	if err != nil {
 		return fmt.Errorf("publisher: storing day %s's head: %w", Date(h.D), err)
+	}
+	if h.Count == 0 {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO day_leaves (day, leaves) VALUES ($1, $2)`, int64(h.D), leaves); err != nil {
+		return fmt.Errorf("publisher: storing day %s's leaves: %w", Date(h.D), err)
 	}
 	return nil
 }
