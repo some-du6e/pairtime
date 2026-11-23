@@ -91,7 +91,7 @@ The scorer builds these from the events, in this order. Each is kept on the devi
 
 A turn runs from `t_submit` until its first `agent.stop` or `agent.interrupt`, and no later than its session's next prompt or `session.end`. Its agent records are the `agent.*` events with its `turn_key`, and those without one that its session records from its `t_submit` to the next prompt. In a session that the harness's own hooks or logs report, they will report how a turn ends, so the turn runs on until then. A turn in any other session runs only to its latest agent record, and one with none doesn't run. Either way a long gap in a turn's agent records, counted from `t_submit`, ends its run, and no later record starts it again, not even its stop. In a session the hooks or logs report, a gap of more than `BUCKET_TTL_S` ends the run `BUCKET_TTL_S` after the gap begins; in any other, a gap of more than `READ_HORIZON_S` ends it where the gap begins. Every scoring rule that asks whether a turn is running, or what came after it ended (2.4, 2.5, 2.6, 2.8, 4.2, 5.1, 5.2, 5.3, 5.4), reads this span.
 
-The 15-second slot is the atomic unit because that is the presence sample rate. Event times keep millisecond precision, and window edges are applied to the second inside a slot before the slot is summed.
+The 15-second slot is the atomic unit because that is the presence sample rate. Event times keep millisecond precision. Two lengths round to the nearest second, halves up: a lead's typing part, `typed_len_est / COMPOSE_CPS` (2.3, 2.8), and the reading part of `RETURN_CREDIT` (2.1). So 61 typed characters at 1.5 a second are 41 s of typing, and 35 are 23 s. Other lengths keep their milliseconds, such as a permission wait or a command's run, and reading-bucket fills keep their fractions (2.4). A second belongs to a span the rules define, such as an anchor's window, a turn's run, a tail or the reading horizon, when the second's start is at or after the span's start and before its end. So the scorer applies windows in whole seconds inside a slot before it sums the slot.
 
 ## 2. Engagement intervals
 
@@ -194,7 +194,7 @@ A relayed anchor waits for its pairing. The minutes its lead touches can't becom
 
 A relayed anchor credits only its own lead and its own session's reading (2.4). It is no human anchor for anything else: not for another session's reading or its level, not for a returned run (2.1), not for a lookup's brackets (2.5).
 
-How a lead is realized. A lead has two parts: the think part (the fixed allowance) comes first and needs only presence; the typing part (`typed_len_est / COMPOSE_CPS`) comes last, just before the anchor. Where `input_keys` exists, typing seconds are realized only in slots with keyboard input, except a relayed anchor's (above). Otherwise a jiggler plus one real 300-character prompt every few minutes would buy 200 s of "typing" that never happened. Where `input_keys` doesn't exist, the whole lead needs only presence, and the minutes are level B (5.1).
+How a lead is realized. A lead has two parts: the think part (the fixed allowance) comes first and needs only presence; the typing part (`typed_len_est / COMPOSE_CPS`, rounded to the nearest second as 1.3 says) comes last, just before the anchor. Where `input_keys` exists, typing seconds are realized only in slots with keyboard input, except a relayed anchor's (above). Otherwise a jiggler plus one real 300-character prompt every few minutes would buy 200 s of "typing" that never happened. Where `input_keys` doesn't exist, the whole lead needs only presence, and the minutes are level B (5.1).
 
 WSL needs one extra hop. A harness inside WSL2 runs its hooks as Linux processes, and WSL has no input devices, so pairtime runs a Linux agent inside WSL that hands records to the Windows agent through a spool directory on the Windows side, and the Windows agent supplies presence and focus (CP 6.4). The Windows terminal window hosting `wsl.exe` counts as hosting the WSL sessions.
 
@@ -728,7 +728,7 @@ Jordan, 16, runs Linux on X11 with the key counter on (evidence A). Claude Code 
 | Minute | What happens | Credited | Reasons |
 |---|---|---|---|
 | 23:37 | Sits down at 23:37:00 and looks at the repo; the lead of his prompt starts at 23:37:10 | 50 | `P` 50; `X.no_anchor` 10 |
-| 23:38 | Types `/goal all tests pass and lighthouse performance above 90 on the home page` (75 characters) | 60 | `P` |
+| 23:38 | Types `/goal all tests pass, and lighthouse performance above 90 on the home page.` (75 characters) | 60 | `P` |
 | 23:39 | Sends at 23:40:00. A typed `/goal` with an objective is a substantive prompt; lead 120 + 50 = 170 s | 60 | `P` |
 | 23:40 | Watches the plan (150 words) and the first edits come in; the bucket fills faster than he reads | 60 | `SUP` |
 | 23:41 | Same | 60 | `SUP` |
@@ -740,7 +740,7 @@ Jordan, 16, runs Linux on X11 with the key counter on (evidence A). Claude Code 
 | 07:32 | Same | 60 | `READ` |
 | 07:33 | Same | 60 | `READ` |
 | 07:34 | From 07:34:19, the lead of his next prompt | 60 | `READ` 19, `P` 41 |
-| 07:35 | From 07:35:30, types "nice. explain what you changed in the service worker and why" (61 characters) | 60 | `P` |
+| 07:35 | From 07:35:30, types "nice. explain what you changed in the service worker and why?" (61 characters) | 60 | `P` |
 | 07:36 | Sends at 07:37:00; lead 120 + 41 = 161 s | 60 | `P` |
 
 Credited: 810 s, 13.5 minutes, all of it AI-assisted. The agent ran 23,400 s (6 h 30 min), and 23,180 s of that is agent-only. Hackatime would log about 23,500 s of `ai coding` for the night, so the flat third would credit about 7,800 s (2 h 11 min) for eight hours of sleep. `ai_ratio` is about 0.03. This is Karim's point that agent activity can't be the measure, because anyone can set a `/goal` or a 20-minute check and walk away (BOUNTY.md).
