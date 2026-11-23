@@ -721,6 +721,10 @@ func TestInstallCycle(t *testing.T) {
 				if !strings.Contains(out, "Your daily totals and recaps can stay") || !strings.Contains(out, "Your daily totals and recaps stay in") {
 					t.Errorf("uninstall didn't ask about the daily totals and recaps, or didn't say where they stay:\n%s", out)
 				}
+				// What a backup or a synced folder holds, uninstall can't reach.
+				if !strings.Contains(out, "Copies a backup or a synced folder already holds stay as they are") || strings.Contains(out, "nobody can bring") {
+					t.Errorf("uninstall doesn't say backups keep their copies:\n%s", out)
+				}
 				h.waitGone(h.bin)
 				for rel, body := range kept {
 					if got, err := os.ReadFile(filepath.Join(h.dirs.Data, filepath.FromSlash(rel))); err != nil || string(got) != body {

@@ -73,7 +73,9 @@
 		a vault, which it encrypts with a key only this computer has. That keeps them from other people who use this
 		computer and from a quick look, but not from a program running as you. It keeps them from cloud backups of your
 		home folder too, unless pairtime has to keep its key in a file there, which pairtime doctor tells you. To
-		keep no prompt text at all, add these two lines at the end of pairtime's config.toml:
+		keep no prompt text at all, type <code>pairtime privacy keep-text off</code> in a terminal. Or, by hand, set
+		<code>keep_prompt_text = false</code> under <code>[privacy]</code> in pairtime's config.toml; if the file has no
+		<code>[privacy]</code> line, as one written before this version has, add these two lines at the end:
 	</p>
 	<pre data-testid="keep-off"><code>[privacy]
 keep_prompt_text = false</code></pre>

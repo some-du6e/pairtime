@@ -17,11 +17,14 @@ import (
 )
 
 const privacyUsage = `Usage: pairtime privacy show
+       pairtime privacy keep-text off|on
        pairtime privacy delete [--yes]
 
-pairtime privacy delete deletes pairtime's device key and everything
-pairtime recorded on this computer; pairtime privacy delete --help says
-what that covers.
+pairtime privacy keep-text off stops pairtime keeping the text of your
+prompts, and deletes the text it kept; pairtime privacy keep-text on
+keeps it again from then on. pairtime privacy delete deletes pairtime's
+device key and everything pairtime recorded on this computer. Each one's
+--help says more.
 
 pairtime privacy show prints the next upload this computer will send to
 the pairtime server, exactly as it will be sent (DESIGN 8.8). Standard
@@ -42,7 +45,7 @@ before it sends.
 func init() {
 	register(command{
 		name:    "privacy",
-		summary: "Show the next upload, byte for byte, before it leaves this computer, or delete everything pairtime recorded",
+		summary: "Show the next upload, byte for byte, before it leaves this computer, turn keeping your prompts' text off or on, or delete everything pairtime recorded",
 		run:     runPrivacy,
 	})
 }
@@ -50,6 +53,9 @@ func init() {
 func runPrivacy(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "delete" {
 		return runPrivacyDelete(args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "keep-text" {
+		return runKeepText(args[1:], stdout, stderr)
 	}
 	if len(args) == 0 || args[0] != "show" {
 		if len(args) > 0 && (args[0] == "-h" || args[0] == "-help" || args[0] == "--help") {

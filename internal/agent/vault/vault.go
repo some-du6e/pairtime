@@ -895,18 +895,28 @@ func (v *Vault) read(s uint64, what byte) ([]byte, error) {
 // again without its texts, by atomic rename, and a file left with no entry
 // is deleted. Paths stay, and so does a text kept while it runs, which
 // Keep keeps only once the switch is back on, so a quick off and on again
-// deletes nothing kept after the on. It returns how many texts it deleted.
+// deletes nothing kept after the on. It returns how many texts it deleted,
+// and ErrNotReady, deleting none, before Reconcile.
 func (v *Vault) DropText() (int, error) {
 	v.mu.Lock()
-	mark := v.last
-	if v.off != nil || !v.ready {
+	mark, ready, off := v.last, v.ready, v.off != nil
+	v.mu.Unlock()
+	switch {
+	case off:
 		// A vault that is off keeps nothing new, so every text in its
 		// files was kept before this began, whatever last says.
 		mark = math.MaxUint64
+	case !ready:
+		// last says nothing yet, and Reconcile may come while this runs,
+		// after which Keep keeps texts that must stay.
+		return 0, ErrNotReady
 	}
-	v.mu.Unlock()
 	return v.filter(func(e entry) bool { return e.what != whatText || e.s > mark })
 }
+
+// ErrNotReady is DropText on a Vault that Reconcile hasn't run on yet,
+// which the ledger writer runs at its Open (ledger.Options.Vault).
+var ErrNotReady = errors.New("vault: the ledger hasn't opened the vault yet")
 
 // filter writes each of the vault's files again with only the entries
 // keep keeps, and deletes a file left with none. The files of other
