@@ -1131,46 +1131,119 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 	}
 }
 
+// stays checks that focus keeps showing the terminal hosting hosted
+// sessions, with a project for session key when project is set, for a
+// second, as after a line that should tie nothing.
+func (r *transcriptFocusRig) stays(t *testing.T, key string, hosted int, project bool) {
+	t.Helper()
+	until := time.Now().Add(time.Second)
+	for time.Now().Before(until) {
+		st := r.a.focus.Status()
+		if st.Class != event.AppTerminal || st.Hosted != hosted || (r.a.projectOf(key) != "") != project {
+			t.Fatalf("focus status %+v, project %q; want a terminal hosting %d, with a project %v", st, r.a.projectOf(key), hosted, project)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // TestClearedTranscriptLeavesFocus checks that a tie ends where /clear or
 // /resume ends its session (procs.Scanner.UntieQuiet): the old session's
-// claude runs the new one now, which no tie passes to, so once a line of
-// the new one is read, the terminal hosts nothing. While the new session
-// works in a folder out of pairtime, no os.focus record names the old
-// session or its project, so the folder's time can't land in that project
-// (DESIGN 8.8).
+// claude runs another now, and it ties to no one again, so once a line of
+// the new one is read, the terminal hosts nothing, whether that line counts
+// or is out of pairtime, and a later try ties nothing either. From then on,
+// no os.focus record names the old session or its project, so a folder out
+// of pairtime can't lend its time to that project (DESIGN 8.8).
 func TestClearedTranscriptLeavesFocus(t *testing.T) {
 	const (
 		old  = "55555555-0000-4000-8000-000000000005"
 		next = "66666666-0000-4000-8000-000000000006"
+		back = "77777777-0000-4000-8000-000000000007"
 	)
+	// tie ties session sid to the claude, in the repo kept, and returns
+	// its project.
+	tie := func(t *testing.T, r *transcriptFocusRig, sid string) string {
+		t.Helper()
+		key := hookpath.SessionKey(r.a.sessionSecret(), sid)
+		r.write(t, sid, r.kept, 0, false)
+		// A second ahead, past the table read its first line's try made.
+		r.write(t, sid, r.kept, time.Second, false)
+		r.wait(t, key, 1, true)
+		project := r.a.projectOf(key)
+		// The next session's lines begin after this one's last.
+		time.Sleep(1100 * time.Millisecond)
+		return project
+	}
 	cases := []struct {
 		name string
-		// clear says the new session's log opens with /clear, which starts
-		// it; otherwise /resume switched to it, and it opens with a prompt.
-		clear bool
+		// run takes the case's steps, with the old session's key, and
+		// returns its project and when the stretch begins from which no
+		// os.focus record may name the old session or that project.
+		run func(t *testing.T, r *transcriptFocusRig, oldKey string) (string, time.Time)
 	}{
-		{"after /clear, a line that counts and then one in the ignored folder leave the old session and its project out of focus", true},
-		{"after /resume, the new session's second line, which finds no untied claude, does the same", false},
+		{"after /clear, a line that counts and then one in the ignored folder leave the old session and its project out of focus",
+			func(t *testing.T, r *transcriptFocusRig, oldKey string) (string, time.Time) {
+				project := tie(t, r, old)
+				r.write(t, next, r.kept, 0, true)
+				r.write(t, next, r.kept, time.Second, false)
+				r.wait(t, oldKey, 0, false)
+				stretch := time.Now()
+				r.write(t, next, r.out, 0, false)
+				r.stays(t, oldKey, 0, false)
+				return project, stretch
+			}},
+		{"after /resume, the new session's try that finds no untied claude does the same, and its try a retry later ties nothing",
+			func(t *testing.T, r *transcriptFocusRig, oldKey string) (string, time.Time) {
+				project := tie(t, r, old)
+				r.write(t, next, r.kept, 0, false)
+				r.write(t, next, r.kept, time.Second, false)
+				r.wait(t, oldKey, 0, false)
+				stretch := time.Now()
+				time.Sleep(tieRetry + time.Second)
+				r.write(t, next, r.kept, 0, false)
+				r.stays(t, oldKey, 0, false)
+				r.write(t, next, r.out, 0, false)
+				r.stays(t, oldKey, 0, false)
+				return project, stretch
+			}},
+		{"with a .pairtime-ignore in the repo first, /clear and a line there, all out of pairtime, leave them out of focus too",
+			func(t *testing.T, r *transcriptFocusRig, oldKey string) (string, time.Time) {
+				project := tie(t, r, old)
+				if err := os.WriteFile(filepath.Join(r.kept, ".pairtime-ignore"), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				r.write(t, next, r.kept, 0, true)
+				r.wait(t, oldKey, 0, false)
+				stretch := time.Now()
+				r.write(t, next, r.kept, 0, false)
+				r.stays(t, oldKey, 0, false)
+				return project, stretch
+			}},
+		{"after /resume back to a session read earlier, its first line after a gap ends the tie its claude took since",
+			func(t *testing.T, r *transcriptFocusRig, oldKey string) (string, time.Time) {
+				backKey := hookpath.SessionKey(r.a.sessionSecret(), back)
+				tie(t, r, back)
+				// A line of it in the ignored folder unties it, as hook ties'
+				// ignore does, so the claude is the old session's to take.
+				r.write(t, back, r.out, 0, false)
+				r.wait(t, backKey, 0, false)
+				project := tie(t, r, old)
+				// /resume brings it back to the claude, its lines coming again
+				// after a gap.
+				r.write(t, back, r.kept, procs.ResumeGap+5*time.Second, false)
+				r.wait(t, oldKey, 0, false)
+				stretch := time.Now()
+				r.write(t, back, r.out, 0, false)
+				r.stays(t, oldKey, 0, false)
+				return project, stretch
+			}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newTranscriptFocusRig(t, old, next)
+			r := newTranscriptFocusRig(t, old, next, back)
 			oldKey := hookpath.SessionKey(r.a.sessionSecret(), old)
 			r.front(focus.Change{At: time.Now(), PID: 100})
 			r.wait(t, oldKey, 0, false)
-			r.write(t, old, r.kept, 0, false)
-			// A second ahead, past the table read its first line's try made.
-			r.write(t, old, r.kept, time.Second, false)
-			r.wait(t, oldKey, 1, true)
-			project := r.a.projectOf(oldKey)
-			// The new session begins after the old one's last line.
-			time.Sleep(1100 * time.Millisecond)
-			r.write(t, next, r.kept, 0, tc.clear)
-			r.write(t, next, r.kept, time.Second, false)
-			r.wait(t, oldKey, 0, false)
-			stretch := time.Now()
-			r.write(t, next, r.out, 0, false)
-			r.wait(t, oldKey, 0, false)
+			project, stretch := tc.run(t, r, oldKey)
 			r.stopAll()
 			var named, namedIn int
 			for _, ev := range r.events(t) {
@@ -1186,7 +1259,7 @@ func TestClearedTranscriptLeavesFocus(t *testing.T) {
 				}
 			}
 			if named == 0 || namedIn != 0 {
-				t.Errorf("%d os.focus records name the old session, %d from the ignored stretch on name it or its project %q; want some, and none", named, namedIn, project)
+				t.Errorf("%d os.focus records name the old session, %d from the stretch on name it or its project %q; want some, and none", named, namedIn, project)
 			}
 		})
 	}

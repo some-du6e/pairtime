@@ -156,10 +156,12 @@ const maxTieTried = 256
 // nothing and holds the next line back from none. A session whose log
 // opened with /clear isn't tied (LogCleared): it runs in the process of the
 // session it cleared, which no tie passes on, and the scan can't tell
-// whether another process it could take is that one. Its lines, and a try
-// that finds no untied process, end the ties of the sessions that went
-// quiet before it began, in its folder (procs.Scanner.UntieQuiet), as
-// /clear and /resume end the session before them in the process.
+// whether another process it could take is that one. Its lines, a try
+// that finds no untied process or turns it away as lost, and its lines out
+// of pairtime too (untieQuiet), end the ties of the sessions that went
+// quiet before its lines began coming again, in its folder
+// (procs.Scanner.UntieQuiet), as /clear and /resume end the session before
+// them in the process, which then ties to no one.
 //
 // While the session's tie waits for a line read after the table read its
 // first try made, the session.start its log reader holds waits too, up to
@@ -268,6 +270,29 @@ func (h *adapterHost) scanStart(sess procs.Session, harness event.Harness, key s
 	h.mu.Unlock()
 	st := sess.Event
 	return adapters.Record{Event: event.Event{Envelope: env, Data: &st}, LogKey: "tie-start"}, true
+}
+
+// untieQuiet ends the quiet ties a fresh line of session sid, which no
+// hook reports, ends though the line is out of pairtime, in folder dir
+// (procs.Scanner.UntieQuiet): /clear or /resume in a folder a
+// .pairtime-ignore keeps out starts a session none of whose lines count,
+// in the process of the one before, whose tie would otherwise keep that
+// one's project in the window (DESIGN 8.8). Such a session can't be tied
+// while its lines are out of pairtime, so ending the quiet ties in its
+// folder fails closed.
+func (h *adapterHost) untieQuiet(lr adapters.LogReader, harness event.Harness, sid, dir string, at int64) {
+	p := h.a.procs
+	if p == nil || at == 0 || wallNow().UnixMilli()-at > tieFresh.Milliseconds() {
+		return
+	}
+	key := h.sessionKey(sid)
+	if key == "" || h.a.hooked.has(key) || lr.LogHooked(sid) {
+		return
+	}
+	p.Touch(key, time.UnixMilli(at), dir)
+	if p.UntieQuiet(harness, key) {
+		h.a.refreshFocus()
+	}
 }
 
 // untieIgnored keeps session sid out of focus from a line of it in a
@@ -544,6 +569,7 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 			h.count(func() { st.Ignored++ })
 			if session != "" {
 				h.untieIgnored(session)
+				h.untieQuiet(lr, line.Harness, session, dir, at)
 			}
 		}
 	} else if session != "" && !ll.Replay {

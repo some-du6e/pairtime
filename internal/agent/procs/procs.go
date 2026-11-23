@@ -174,12 +174,15 @@ type Scanner struct {
 	// seen the harness processes the table reads found and when last, and
 	// ended the ties whose process a scan saw gone, by session key, with
 	// when: all for Tie and TieOf, and none saved. lost is the sessions a
-	// tied process of theirs ended for, with when a scan saw it gone, which
-	// Tie ties no more, saved so a restart keeps them (Store).
+	// tied process of theirs ended for, with when a scan saw it gone, or
+	// whose tie UntieQuiet ended, with when, which Tie ties no more; freed
+	// the processes UntieQuiet freed, which Tie ties to no one, until a scan
+	// sees them gone. Both are saved, so a restart keeps them (Store).
 	touched  map[string]touch
 	seen     map[platform.ID]seenProc
 	ended    map[string]endedTie
 	lost     map[string]time.Time
+	freed    map[platform.ID]bool
 	reads    uint64 // table reads begun
 	lastKick time.Time
 	kick     *sched.Job
@@ -190,8 +193,9 @@ type saved struct {
 	Boot     string        `json:"boot"`
 	Claimed  []platform.ID `json:"claimed"`
 	Reported []savedReport `json:"reported"`
-	// Lost is Scanner.lost, oldest first.
-	Lost []savedLost `json:"lost,omitempty"`
+	// Lost is Scanner.lost, oldest first, and Freed Scanner.freed.
+	Lost  []savedLost   `json:"lost,omitempty"`
+	Freed []platform.ID `json:"freed,omitempty"`
 }
 
 // savedLost is a session a tied process of its ended for, and when a scan
@@ -237,6 +241,7 @@ func New(opts Options) *Scanner {
 		seen:     make(map[platform.ID]seenProc),
 		ended:    make(map[string]endedTie),
 		lost:     make(map[string]time.Time),
+		freed:    make(map[platform.ID]bool),
 	}
 	s.load()
 	return s
@@ -419,6 +424,12 @@ func (s *Scanner) Scan() ([]Session, error) {
 			delete(s.ended, key)
 		}
 	}
+	for id := range s.freed {
+		if !live[id] {
+			delete(s.freed, id)
+			changed = true
+		}
+	}
 	for _, sess := range found {
 		s.opts.Report(sess)
 	}
@@ -463,15 +474,21 @@ const TieSlack = 2 * time.Second
 // maxTouched bounds the sessions Touch remembers.
 const maxTouched = 512
 
-// touch is when a session's lines were read live, first and last, and the
+// touch is when a session's lines were read live, first and last, since
+// when they have come again, after a gap of more than ResumeGap, and the
 // folder they ran in (Touch); and read is when a table read that began
 // after its first line ended (noteSeen): a line of it written after that
 // shows its process ran at that read, and so was in its table (Tie).
 type touch struct {
-	first, last time.Time
-	folder      string
-	read        time.Time
+	first, last, since time.Time
+	folder             string
+	read               time.Time
 }
+
+// ResumeGap is how long a session's lines must stop for the next to count
+// as coming again, as after /resume brought the session back (touch.since,
+// UntieQuiet): internal/agent's tieRetry.
+const ResumeGap = 30 * time.Second
 
 // Touch records that a line of session key, which no hook reports, was
 // written at at, in folder ("" for a line that names none), and read as
@@ -501,6 +518,9 @@ func (s *Scanner) touchLocked(key string, at time.Time, folder string) {
 	}
 	if t.first.IsZero() || at.Before(t.first) {
 		t.first = at
+	}
+	if t.last.IsZero() || at.Sub(t.last) > ResumeGap {
+		t.since = at
 	}
 	if at.After(t.last) {
 		t.last = at
@@ -656,15 +676,19 @@ func (s *Scanner) TieOf(key string) (Session, bool) {
 //     key is tied to the one there is. With none, or two or more, nothing
 //     is.
 //
-// A process tied to a session never passes to another. A session that
-// /clear starts runs in the process of the one it cleared, and the agent
-// ties it to none (internal/agent's tieLive). One that /resume switches to
-// in the process of a tied one, or one resumed in a new process that
-// started after the first line of it this run remembers, has its own
-// process left out: it stays untied, unless exactly one other untied
-// process runs, which then takes it, a wrong tie this rule can't see. A
-// hook that claims a tied process undoes its tie, as a scan that sees it
-// gone and Untie do; a session tied already keeps its process until then.
+// A process tied to a session never passes to another, and one UntieQuiet
+// freed from a quiet session ties to no one, until a scan sees it gone. A
+// session that /clear starts runs in the process of the one it cleared,
+// and the agent ties it to none (internal/agent's tieLive). A session
+// whose tied process ended, or whose tie UntieQuiet ended, is lost: Tie
+// ties it no more, and its tries end the quiet ties a /resume back to it
+// may have left (UntieQuiet). One that /resume switches to in the process
+// of a tied one, or one resumed in a new process that started after the
+// first line of it this run remembers, has its own process left out: it
+// stays untied, unless exactly one other untied process runs, which then
+// takes it, a wrong tie this rule can't see. A hook that claims a tied
+// process undoes its tie, as a scan that sees it gone and Untie do; a
+// session tied already keeps its process until then.
 func (s *Scanner) Tie(h event.Harness, key string, at time.Time) (sess Session, tied, judged bool) {
 	if key == "" {
 		return Session{}, false, true
@@ -674,9 +698,18 @@ func (s *Scanner) Tie(h event.Harness, key string, at time.Time) (sess Session, 
 	}
 	s.mu.Lock()
 	if _, ok := s.lost[key]; ok {
-		// Its process ended: whatever it runs in now, as after a resume
-		// in another process, the scan can't tell from another session's.
+		// Its process ended, or another session took it: whatever it runs
+		// in now, as after a resume, the scan can't tell from another
+		// session's. Back, it may run in a process /resume took from a
+		// session that went quiet, whose tie ends (UntieQuiet).
+		freed := s.untieQuietLocked(h, key)
+		if freed {
+			s.putLocked()
+		}
 		s.mu.Unlock()
+		if freed {
+			s.save()
+		}
 		return Session{}, false, true
 	}
 	if _, ok := s.touched[key]; !ok {
@@ -746,7 +779,7 @@ func (s *Scanner) tieLocked(v tableView, h event.Harness, key string, at, read, 
 			continue
 		}
 		id := p.ID()
-		if _, claimed := s.claimed[id]; claimed || s.reported[id].Tied {
+		if _, claimed := s.claimed[id]; claimed || s.reported[id].Tied || s.freed[id] {
 			continue
 		}
 		if !p.Start.IsZero() && p.Start.After(first.Add(TieSlack)) {
@@ -776,17 +809,21 @@ func (s *Scanner) tieLocked(v tableView, h event.Harness, key string, at, read, 
 }
 
 // UntieQuiet undoes the ties of harness h's other sessions that wrote no
-// line read live after session key's first (Touch), of those that ran in
-// key's folder where Touch knows it, and of all otherwise: /clear and
-// /resume start a session in the process of the one before, which goes
-// quiet, so a session that can't be tied, as one whose log opened with
-// /clear (internal/agent's tieLive), or one Tie finds no untied process
-// for, may run in a process tied to that one. Its tie ends, and passes on
-// to nothing: otherwise focus would keep the old session, and its
-// project, in the window that now runs another, out of pairtime perhaps
-// (DESIGN 8.8). A tie undone wrongly only keeps its session out of focus
-// until it is tied again, so this fails closed. It reports whether a tie
-// went.
+// line read live since session key's lines began coming again (Touch,
+// touch.since), of those that ran in key's folder where Touch knows it,
+// and of all otherwise: /clear and /resume start or bring back a session
+// in the process of the one before, which goes quiet, so a session that
+// can't be tied, as one whose log opened with /clear, one whose lines are
+// out of pairtime (internal/agent's tieLive and takeLine), one Tie turns
+// away as lost, or one Tie finds no untied process for, may run in a
+// process tied to that one. Its tie ends, and passes on to nothing, ever:
+// the process ties to no one again until a scan sees it gone (freed), and
+// its session joins lost, since /clear or /resume ended it there.
+// Otherwise focus would keep the old session, and its project, in the
+// window that now runs another, out of pairtime perhaps (DESIGN 8.8), and
+// the next try would hand that process to whichever session came. A tie
+// undone wrongly only loses its session's credit, so this fails closed.
+// It reports whether a tie went.
 func (s *Scanner) UntieQuiet(h event.Harness, key string) bool {
 	s.mu.Lock()
 	gone := s.untieQuietLocked(h, key)
@@ -803,20 +840,23 @@ func (s *Scanner) UntieQuiet(h event.Harness, key string) bool {
 // untieQuietLocked is UntieQuiet with s.mu held.
 func (s *Scanner) untieQuietLocked(h event.Harness, key string) bool {
 	t, ok := s.touched[key]
-	if !ok || t.first.IsZero() {
+	if !ok || t.since.IsZero() {
 		return false
 	}
+	now := s.opts.Now()
 	gone := false
 	for id, sess := range s.reported {
 		if !sess.Tied || sess.Key == key || sess.Harness != h {
 			continue
 		}
 		o := s.touched[sess.Key]
-		if o.last.After(t.first) || t.folder != "" && o.folder != "" && o.folder != t.folder {
+		if o.last.After(t.since) || t.folder != "" && o.folder != "" && o.folder != t.folder {
 			// It writes still, or ran somewhere else.
 			continue
 		}
 		s.untieLocked(id, sess)
+		s.freed[id] = true
+		s.loseLocked(sess.Key, now)
 		gone = true
 	}
 	return gone
@@ -911,6 +951,9 @@ func (s *Scanner) load() {
 			s.loseLocked(l.Key, l.At)
 		}
 	}
+	for _, id := range st.Freed {
+		s.freed[id] = true
+	}
 }
 
 // putLocked hands what the scanner remembers to Store, in memory; save
@@ -933,6 +976,10 @@ func (s *Scanner) putLocked() {
 	for key, at := range s.lost {
 		st.Lost = append(st.Lost, savedLost{Key: key, At: at})
 	}
+	for id := range s.freed {
+		st.Freed = append(st.Freed, id)
+	}
+	slices.SortFunc(st.Freed, compareIDs)
 	slices.SortFunc(st.Lost, func(a, b savedLost) int { return cmp.Or(a.At.Compare(b.At), cmp.Compare(a.Key, b.Key)) })
 	slices.SortFunc(st.Claimed, compareIDs)
 	slices.SortFunc(st.Reported, func(a, b savedReport) int { return compareIDs(a.Proc, b.Proc) })

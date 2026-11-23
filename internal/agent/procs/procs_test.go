@@ -927,8 +927,8 @@ func TestTie(t *testing.T) {
 		{"nor once the scan has forgotten that claude, and the ended tie with it",
 			with(oneClaude(), tied("s_one", sec(-100)), []step{{now: sec(10), table: without(terminal(), 111), scan: true},
 				{now: sec(200), scan: true}, {now: sec(701), key: "s_one", at: sec(700)}}), 0},
-		{"a claude tied to a session that went quiet a minute before a new session's first line isn't tied to it",
-			with(oneClaude(), tied("s_one", sec(-100)), later("s_two", sec(60))), 0},
+		{"a claude tied to a session that went quiet a minute before a new session's first line isn't tied to it, nor at its try a retry later, since a claude UntieQuiet frees ties to no one",
+			with(oneClaude(), tied("s_one", sec(-100)), later("s_two", sec(60)), []step{{now: sec(101), key: "s_two", at: sec(100)}}), 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1060,6 +1060,134 @@ func TestUntieQuiet(t *testing.T) {
 			_, two := s.TiedTo("s_two")
 			if kept != tc.kept || two {
 				t.Errorf("s_one tied %v, s_two tied %v; want s_one tied %v, and s_two not", kept, two, tc.kept)
+			}
+			if tc.kept {
+				return
+			}
+			// The claude it freed ties to no one: not s_two at a try a retry
+			// later, nor s_one, which it lost, from a claude started since.
+			now = sec(101)
+			s.Touch("s_two", sec(100), tc.folder)
+			s.Tie(claude, "s_two", sec(100))
+			now = sec(103)
+			s.Touch("s_two", sec(102), tc.folder)
+			if _, ok, _ := s.Tie(claude, "s_two", sec(102)); ok {
+				t.Error("s_two was tied at a later try")
+			}
+			f.procs = append(oneClaude(), platform.Proc{PID: 141, PPID: 110, Name: "claude", PGID: 141, TTY: platform.TTYAttached,
+				Start: sec(90), Owner: me})
+			now = sec(121)
+			s.Touch("s_one", sec(120), "f")
+			s.Tie(claude, "s_one", sec(120))
+			now = sec(123)
+			s.Touch("s_one", sec(122), "f")
+			if _, ok, _ := s.Tie(claude, "s_one", sec(122)); ok {
+				t.Error("s_one, whose tie UntieQuiet ended, was tied again")
+			}
+		})
+	}
+}
+
+// TestUntieQuietOnReturn checks that a session Tie turns away as lost, as
+// one whose process ended, ends the quiet ties of the process /resume may
+// have brought it back to, judged from where its lines began coming again
+// after a gap of more than ResumeGap, not from its first line of the run.
+func TestUntieQuietOnReturn(t *testing.T) {
+	claude := event.HarnessClaudeCode
+	cases := []struct {
+		name string
+		// back is when the lost session's lines come again, and since the
+		// last line s_one, tied, wrote. kept says s_one keeps its tie.
+		back, since time.Time
+		kept        bool
+	}{
+		{"a lost session's lines coming again after a gap end a tie quiet since then, in its folder", sec(60), sec(-98), false},
+		{"a tie whose session wrote after they came again stays", sec(60), sec(61), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fake{procs: oneClaude()}
+			now := sec(-499)
+			var got []Session
+			s := newScanner(f, &now, &got)
+			// s_r wrote long ago, and the scan lost it, as when its claude ended.
+			s.Touch("s_r", sec(-500), "f")
+			s.mu.Lock()
+			s.loseLocked("s_r", sec(-400))
+			s.mu.Unlock()
+			now = sec(-99)
+			s.Touch("s_one", sec(-100), "f")
+			s.Tie(claude, "s_one", sec(-100))
+			now = sec(-97)
+			s.Touch("s_one", sec(-98), "f")
+			if _, ok, _ := s.Tie(claude, "s_one", sec(-98)); !ok {
+				t.Fatal("no tie of s_one")
+			}
+			now = tc.back.Add(time.Second)
+			s.Touch("s_r", tc.back, "f")
+			if tc.since.After(sec(-98)) {
+				s.Touch("s_one", tc.since, "f")
+			}
+			if _, ok, _ := s.Tie(claude, "s_r", tc.back); ok {
+				t.Fatal("the lost s_r was tied")
+			}
+			if _, kept := s.TiedTo("s_one"); kept != tc.kept {
+				t.Errorf("s_one tied %v, want %v", kept, tc.kept)
+			}
+		})
+	}
+}
+
+// TestFreedAcrossRestarts checks that a claude UntieQuiet freed ties to no
+// one after an agent restart either, as the scan's state keeps it, until a
+// scan sees it gone.
+func TestFreedAcrossRestarts(t *testing.T) {
+	claude := event.HarnessClaudeCode
+	name := filepath.Join(t.TempDir(), "state.json")
+	f := &fake{procs: oneClaude()}
+	now := sec(0)
+	start := func(t *testing.T) *Scanner {
+		t.Helper()
+		st, problem, err := state.Open(name)
+		if err != nil || problem != "" {
+			t.Fatalf("state.Open: %v %s", err, problem)
+		}
+		return New(Options{Read: f.read, OS: platform.Linux, Self: me, Boot: boot, Store: st, Now: func() time.Time { return now }})
+	}
+	s := start(t)
+	tieTwice(t, s, &now, "s_one", sec(1), sec(3))
+	now = sec(61)
+	s.Touch("s_two", sec(60), "")
+	if !s.UntieQuiet(claude, "s_two") {
+		t.Fatal("nothing was untied")
+	}
+	s = start(t)
+	now = sec(200)
+	s.Touch("s_three", sec(199), "")
+	s.Tie(claude, "s_three", sec(199))
+	now = sec(202)
+	s.Touch("s_three", sec(201), "")
+	_, tied, _ := s.Tie(claude, "s_three", sec(201))
+	// The claude ends, and a scan sees it gone: the next one to start can
+	// be tied.
+	f.procs = slices.DeleteFunc(oneClaude(), func(p platform.Proc) bool { return p.PID == 111 })
+	if _, err := s.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	kept := len(s.freed)
+	s.mu.Unlock()
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"the restarted scan ties no session to the claude UntieQuiet freed", !tied},
+		{"a scan that sees the claude gone forgets it", kept == 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("tied %v, %d freed claudes kept", tied, kept)
 			}
 		})
 	}
