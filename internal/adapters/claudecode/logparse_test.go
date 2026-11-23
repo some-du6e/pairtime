@@ -1286,6 +1286,58 @@ func TestLogStarted(t *testing.T) {
 	}
 }
 
+// TestLogCountedStart checks that a session.start whose entry counted is
+// marked so (adapters.Record.Counted) when an idle marker after an entry in
+// a folder out of pairtime resolves it (DESIGN 8.8), so the host keeps it,
+// while the start of an entry in such a folder isn't.
+func TestLogCountedStart(t *testing.T) {
+	const entry = 1_795_194_000_000 // 2026-11-20T17:00:00Z, the first entry's time
+	project := func(dir string) (adapters.Project, bool) {
+		if dir == "/home/capture/out" {
+			return adapters.Project{Ignored: true}, false
+		}
+		return adapters.Project{Key: "p_kept", Root: dir}, true
+	}
+	cases := []struct {
+		name string
+		// first is the folder of the entry that states the token; an entry
+		// in the folder out comes 50 s after it, and an idle marker at 95 s
+		// resolves its start. counted is how the start is marked.
+		first   string
+		counted bool
+	}{
+		{"an entry that counted, whose start a marker after an entry out of pairtime resolves, has its start marked counted", "/home/capture/p", true},
+		{"one in a folder out of pairtime has it unmarked", "/home/capture/out", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := New(adapters.Options{Keys: adapters.FixtureKeys(), Project: project})
+			lines := logLines(
+				userText("q1", "fix the failing test", map[string]any{"turnOrigin": "human", "promptSource": "typed",
+					"timestamp": "2026-11-20T17:00:00.000Z", "cwd": tc.first}),
+				userText("q2", "and this one", map[string]any{"turnOrigin": "human", "promptSource": "typed",
+					"timestamp": "2026-11-20T17:00:50.000Z", "cwd": "/home/capture/out"}),
+			)
+			for _, raw := range []adapters.RawRecord{logRawAt(lines[0], false, false, entry+1_000), logRawAt(lines[1], false, false, entry+51_000)} {
+				if _, err := a.Parse(raw); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !a.LogIgnored(lines[1].file) {
+				t.Fatal("the file isn't out of pairtime after its entry in the folder out")
+			}
+			recs, err := a.Parse(logRawAt(lines[1], true, false, entry+95_000))
+			if err != nil {
+				t.Fatal(err)
+			}
+			starts := ofKind[*event.SessionStart](recs)
+			if len(starts) != 1 || starts[0].Counted != tc.counted {
+				t.Errorf("the marker gives %d session.starts, %+v; want one, counted %v", len(starts), starts, tc.counted)
+			}
+		})
+	}
+}
+
 // TestLogHoldStart checks the hold the procs tie puts on a session.start
 // that waits (LogHoldStart): the start waits out its grace and the hold
 // past it, and goes once both have passed, or once its grace has, when

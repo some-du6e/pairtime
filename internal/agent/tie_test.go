@@ -110,7 +110,7 @@ func TestTieLive(t *testing.T) {
 	// worker does, and lines a first line now and a second written after
 	// the read the first made.
 	line := func(r *tieRig, lr adapters.LogReader, at time.Time) {
-		r.h.tieLive(lr, event.HarnessClaudeCode, sid, at.UnixMilli(), nil)
+		r.h.tieLive(lr, event.HarnessClaudeCode, sid, "/home/capture/p", at.UnixMilli(), nil)
 	}
 	lines := func(r *tieRig) {
 		line(r, r.lr, now)
@@ -208,7 +208,7 @@ func TestScanStartMono(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newTieRig(t, nil)
 			key := r.h.sessionKey("617e16a3-ddb4-44ca-af68-72cf58ed1a34")
-			r.a.procs.Touch(key, time.Now().Add(tc.first))
+			r.a.procs.Touch(key, time.Now().Add(tc.first), "")
 			rec, ok := r.h.scanStart(procs.Session{Event: event.SessionStart{StartKind: event.StartStartup}}, event.HarnessClaudeCode, key, nil)
 			after, _ := ledger.RunClock(time.Now())
 			want := max(after-tc.before.Milliseconds(), 0)

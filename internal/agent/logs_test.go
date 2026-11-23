@@ -306,7 +306,7 @@ func TestTranscriptTiedToItsProcess(t *testing.T) {
 		{"one claude, and a transcript that states no entrypoint: the scan's session.start, before its first line read live",
 			one, true, 65 * time.Second, after(0), event.ViaOS, event.ParentTerminalApp, true},
 		{"one claude, and the line that ties the session after its start's grace has passed: the start waits for the tie and is the scan's",
-			one, false, 85 * time.Second, after(12 * time.Second), event.ViaOS, event.ParentTerminalApp, true},
+			one, false, 85 * time.Second, after(20 * time.Second), event.ViaOS, event.ParentTerminalApp, true},
 		{"one claude, and no line after the first try: the transcript's session.start, once the hold has passed",
 			one, false, 85 * time.Second, nil, event.ViaLog, event.ParentUnknown, false},
 	}

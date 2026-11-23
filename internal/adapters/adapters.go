@@ -265,6 +265,11 @@ type Record struct {
 	// the agent needs to join the session to a process's walk
 	// (E-cc-transcript-labels). It never reaches the event.
 	Token string
+	// Counted says the record is of a log entry in a folder that counts,
+	// which a later line or idle marker resolved, as a session.start that
+	// waited for its session's hooks: the host keeps it though that line
+	// or marker is out of pairtime (LogReader.LogIgnored, DESIGN 8.8).
+	Counted bool
 }
 
 // Stateful is an adapter whose memory of the sessions it parses can

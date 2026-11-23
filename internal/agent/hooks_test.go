@@ -862,23 +862,33 @@ func TestIgnoredSessionLeavesFocus(t *testing.T) {
 	}
 }
 
-// TestIgnoredTranscriptLeavesFocus checks the focus side of a folder a
-// .pairtime-ignore keeps out (DESIGN 8.8) for a session no hook reports,
-// which the procs tie hosts (WP-AD3), with the real tailers, adapters,
-// focus, process scan and ledger over a process table the test supplies:
-// once a line of the tied session runs in such a folder, the terminal hosts
-// the session no more, a later line of it there ties nothing, and one that
-// counts again ties it again. While tied, focus shows the project its
-// records carry, which no hook ties. No os.focus record names the session
-// while its lines are out of pairtime, so no minute of that stretch can
-// credit it, and the ledger holds none of those lines.
-func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
+// transcriptFocusRig is an agent with the real tailers, adapters, focus,
+// process scan and ledger, over a process table the test supplies, with one
+// claude in a terminal: the rig of the tests of a session no hook reports,
+// which the procs tie hosts (WP-AD3), whose lines run in kept, a repo that
+// counts, or in out, a folder a .pairtime-ignore keeps out (DESIGN 8.8).
+// Each session's transcript is a file of its own in transcripts, a folder
+// of a projects folder listed already, so the tailers read it from its
+// start.
+type transcriptFocusRig struct {
+	a           *agent
+	dirs        home.Dirs
+	front       func(focus.Change)
+	kept, out   string
+	transcripts string
+	stopAll     func()
+	lines       int
+}
+
+func newTranscriptFocusRig(t *testing.T) *transcriptFocusRig {
+	t.Helper()
 	if runtime.GOOS != "linux" {
 		t.Skip("the process table and the transcript's folders are Linux's")
 	}
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git isn't installed")
 	}
+	r := &transcriptFocusRig{}
 	store, problem, err := state.Open(filepath.Join(t.TempDir(), "state.json"))
 	if err != nil || problem != "" {
 		t.Fatalf("state.Open: %v %q", err, problem)
@@ -905,6 +915,7 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 		})
 	}
 	t.Cleanup(stopAll)
+	r.a, r.dirs, r.stopAll = a, dirs, stopAll
 	stops = append(stops, a.startLedger(), a.startPresence(presence.OS{}))
 	deadline := time.Now().Add(20 * time.Second)
 	for a.sessionSecret() == nil {
@@ -924,13 +935,12 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 	}
 	read := func() ([]platform.Proc, error) { return slices.Clone(table), nil }
 	a.procs = procs.New(a.procsOptions(procs.Options{Read: read, OS: platform.Linux, Self: me, Boot: "test-boot"}))
-	var front func(focus.Change)
 	a.newFocus(focus.OS{
 		Via:  "fake",
 		GOOS: platform.Linux,
 		Read: read,
 		Watch: func(fn func(focus.Change)) (func(), error) {
-			front = fn
+			r.front = fn
 			return func() {}, nil
 		},
 	})
@@ -945,16 +955,10 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(out, ".pairtime-ignore"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// The transcript is there, empty, in a projects folder listed already,
-	// so the tailers read it from its start (listedHome).
-	const sid = "55555555-0000-4000-8000-000000000005"
 	teen := t.TempDir()
 	projects := filepath.Join(teen, ".claude", "projects")
-	file := filepath.Join(projects, "-p", sid+".jsonl")
-	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(file, nil, 0o600); err != nil {
+	r.kept, r.out, r.transcripts = kept, out, filepath.Join(projects, "-p")
+	if err := os.MkdirAll(r.transcripts, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Put("tailers", map[string]any{"v": 1, "files": []any{}, "roots": []string{projects}}); err != nil {
@@ -962,30 +966,97 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 	}
 	stops = append(stops, a.startFocus(), a.startAdapters(), a.startTailers(Options{Env: &install.Env{GOOS: runtime.GOOS, Home: teen}}))
 	a.markDrained()
-	lines := 0
-	// write appends a prompt of the session in dir, dated ahead of now, and
-	// waits until the adapters have read it.
-	write := func(t *testing.T, dir string, ahead time.Duration) {
-		t.Helper()
-		lines++
-		b, _ := json.Marshal(map[string]any{"type": "user", "sessionId": sid, "promptId": fmt.Sprintf("ffffffff-0000-4000-8000-%012d", lines),
-			"timestamp": time.Now().Add(ahead).UTC().Format(time.RFC3339Nano), "cwd": dir, "version": "2.1.327", "isSidechain": false,
-			"promptSource": "typed", "turnOrigin": "human", "message": map[string]any{"role": "user", "content": "What does this do?"}})
-		f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.Write(append(b, '\n'))
-		f.Close()
-		deadline := time.Now().Add(20 * time.Second)
-		for a.adaptersHost().status().Harnesses[event.HarnessClaudeCode].Lines < uint64(lines) {
-			if time.Now().After(deadline) {
-				t.Fatalf("the adapters read %d of %d lines", a.adaptersHost().status().Harnesses[event.HarnessClaudeCode].Lines, lines)
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
+	return r
+}
+
+// write appends an entry of session sid to its transcript, in folder dir,
+// dated ahead of now: the /clear command with clear, and a typed prompt
+// otherwise. It waits until the adapters have read it.
+func (r *transcriptFocusRig) write(t *testing.T, sid, dir string, ahead time.Duration, clear bool) {
+	t.Helper()
+	r.lines++
+	e := map[string]any{"type": "user", "sessionId": sid, "timestamp": time.Now().Add(ahead).UTC().Format(time.RFC3339Nano),
+		"cwd": dir, "version": "2.1.327", "isSidechain": false}
+	if clear {
+		e["message"] = map[string]any{"role": "user",
+			"content": "<command-name>/clear</command-name>\n<command-message>clear</command-message>\n<command-args></command-args>"}
+	} else {
+		e["promptId"] = fmt.Sprintf("ffffffff-0000-4000-8000-%012d", r.lines)
+		e["promptSource"], e["turnOrigin"] = "typed", "human"
+		e["message"] = map[string]any{"role": "user", "content": "What does this do?"}
 	}
-	key := hookpath.SessionKey(a.sessionSecret(), sid)
+	b, _ := json.Marshal(e)
+	f, err := os.OpenFile(filepath.Join(r.transcripts, sid+".jsonl"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Write(append(b, '\n'))
+	f.Close()
+	deadline := time.Now().Add(20 * time.Second)
+	for r.a.adaptersHost().status().Harnesses[event.HarnessClaudeCode].Lines < uint64(r.lines) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the adapters read %d of %d lines", r.a.adaptersHost().status().Harnesses[event.HarnessClaudeCode].Lines, r.lines)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// wait waits until focus shows the terminal hosting hosted sessions, with a
+// project for session key when project is set.
+func (r *transcriptFocusRig) wait(t *testing.T, key string, hosted int, project bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		st := r.a.focus.Status()
+		if st.Class == event.AppTerminal && st.Hosted == hosted && (r.a.projectOf(key) != "") == project {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("focus status %+v, project %q; want a terminal hosting %d, with a project %v", st, r.a.projectOf(key), hosted, project)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// events reads back the events of the stopped agent's ledger.
+func (r *transcriptFocusRig) events(t *testing.T) []event.Event {
+	t.Helper()
+	var out []event.Event
+	if err := ledger.ReadBatches(r.dirs.Ledger(), 1, func(b ledger.Batch) error {
+		for _, rec := range b.Records {
+			body, err := pkgledger.ParseBody(rec.Body)
+			if err != nil {
+				return err
+			}
+			ev, err := body.Event()
+			if err != nil {
+				return err
+			}
+			out = append(out, ev)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("reading the ledger back: %v", err)
+	}
+	return out
+}
+
+// TestIgnoredTranscriptLeavesFocus checks the focus side of a folder a
+// .pairtime-ignore keeps out (DESIGN 8.8) for a session no hook reports,
+// which the procs tie hosts (WP-AD3), with the real tailers, adapters,
+// focus, process scan and ledger over a process table the test supplies:
+// once a line of the tied session runs in such a folder, the terminal hosts
+// the session no more, a later line of it there ties nothing, and one that
+// counts again ties it again. While tied, focus shows the project its
+// records carry, which no hook ties. No os.focus record names the session
+// while its lines are out of pairtime, so no minute of that stretch can
+// credit it, and the ledger holds none of those lines.
+func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
+	r := newTranscriptFocusRig(t)
+	const sid = "55555555-0000-4000-8000-000000000005"
+	kept, out := r.kept, r.out
+	write := func(t *testing.T, dir string, ahead time.Duration) { r.write(t, sid, dir, ahead, false) }
+	key := hookpath.SessionKey(r.a.sessionSecret(), sid)
 	var stretch [2]time.Time // the stretch the session's lines were out of pairtime
 	steps := []struct {
 		name    string
@@ -993,7 +1064,7 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 		hosted  int
 		project bool // focus has a project for the session
 	}{
-		{"focus on the terminal hosts nothing yet", func(*testing.T) { front(focus.Change{At: time.Now(), PID: 100}) }, 0, false},
+		{"focus on the terminal hosts nothing yet", func(*testing.T) { r.front(focus.Change{At: time.Now(), PID: 100}) }, 0, false},
 		{"a line in a repo that counts, then one written after its try read the table, tie the session, which the terminal hosts, with its project",
 			func(t *testing.T) {
 				write(t, kept, 0)
@@ -1014,51 +1085,27 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 	for _, step := range steps {
 		t.Run(step.name, func(t *testing.T) {
 			step.do(t)
-			deadline := time.Now().Add(5 * time.Second)
-			for {
-				st := a.focus.Status()
-				if st.Class == event.AppTerminal && st.Hosted == step.hosted && (a.projectOf(key) != "") == step.project {
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatalf("focus status %+v, project %q; want a terminal hosting %d, with a project %v", st, a.projectOf(key),
-						step.hosted, step.project)
-				}
-				time.Sleep(5 * time.Millisecond)
-			}
+			r.wait(t, key, step.hosted, step.project)
 		})
 	}
-	st := a.adaptersHost().status()
-	stopAll()
+	st := r.a.adaptersHost().status()
+	r.stopAll()
 	var named, namedIn int
 	prompts := 0
-	if err := ledger.ReadBatches(dirs.Ledger(), 1, func(b ledger.Batch) error {
-		for _, r := range b.Records {
-			body, err := pkgledger.ParseBody(r.Body)
-			if err != nil {
-				return err
-			}
-			ev, err := body.Event()
-			if err != nil {
-				return err
-			}
-			switch d := ev.Data.(type) {
-			case *event.OSFocus:
-				if slices.Contains(d.HostedSessions, key) {
-					named++
-					if at := time.UnixMilli(ev.T); !at.Before(stretch[0]) && at.Before(stretch[1]) {
-						namedIn++
-					}
+	for _, ev := range r.events(t) {
+		switch d := ev.Data.(type) {
+		case *event.OSFocus:
+			if slices.Contains(d.HostedSessions, key) {
+				named++
+				if at := time.UnixMilli(ev.T); !at.Before(stretch[0]) && at.Before(stretch[1]) {
+					namedIn++
 				}
-			case *event.PromptSubmit:
-				if ev.SessionKey == key {
-					prompts++
-				}
+			}
+		case *event.PromptSubmit:
+			if ev.SessionKey == key {
+				prompts++
 			}
 		}
-		return nil
-	}); err != nil {
-		t.Fatalf("reading the ledger back: %v", err)
 	}
 	checks := []struct {
 		name string
@@ -1073,6 +1120,67 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if !c.ok {
 				t.Errorf("no: %d records name the session, %d in the stretch %v; %d prompts; adapters %+v", named, namedIn, stretch, prompts, st)
+			}
+		})
+	}
+}
+
+// TestClearedTranscriptLeavesFocus checks that a tie ends where /clear or
+// /resume ends its session (procs.Scanner.UntieQuiet): the old session's
+// claude runs the new one now, which no tie passes to, so once a line of
+// the new one is read, the terminal hosts nothing. While the new session
+// works in a folder out of pairtime, no os.focus record names the old
+// session or its project, so the folder's time can't land in that project
+// (DESIGN 8.8).
+func TestClearedTranscriptLeavesFocus(t *testing.T) {
+	const (
+		old  = "55555555-0000-4000-8000-000000000005"
+		next = "66666666-0000-4000-8000-000000000006"
+	)
+	cases := []struct {
+		name string
+		// clear says the new session's log opens with /clear, which starts
+		// it; otherwise /resume switched to it, and it opens with a prompt.
+		clear bool
+	}{
+		{"after /clear, a line that counts and then one in the ignored folder leave the old session and its project out of focus", true},
+		{"after /resume, the new session's second line, which finds no untied claude, does the same", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTranscriptFocusRig(t)
+			oldKey := hookpath.SessionKey(r.a.sessionSecret(), old)
+			r.front(focus.Change{At: time.Now(), PID: 100})
+			r.wait(t, oldKey, 0, false)
+			r.write(t, old, r.kept, 0, false)
+			// A second ahead, past the table read its first line's try made.
+			r.write(t, old, r.kept, time.Second, false)
+			r.wait(t, oldKey, 1, true)
+			project := r.a.projectOf(oldKey)
+			// The new session begins after the old one's last line.
+			time.Sleep(1100 * time.Millisecond)
+			r.write(t, next, r.kept, 0, tc.clear)
+			r.write(t, next, r.kept, time.Second, false)
+			r.wait(t, oldKey, 0, false)
+			stretch := time.Now()
+			r.write(t, next, r.out, 0, false)
+			r.wait(t, oldKey, 0, false)
+			r.stopAll()
+			var named, namedIn int
+			for _, ev := range r.events(t) {
+				d, ok := ev.Data.(*event.OSFocus)
+				if !ok {
+					continue
+				}
+				if slices.Contains(d.HostedSessions, oldKey) {
+					named++
+				}
+				if !time.UnixMilli(ev.T).Before(stretch) && (slices.Contains(d.HostedSessions, oldKey) || d.FocusProject == project) {
+					namedIn++
+				}
+			}
+			if named == 0 || namedIn != 0 {
+				t.Errorf("%d os.focus records name the old session, %d from the ignored stretch on name it or its project %q; want some, and none", named, namedIn, project)
 			}
 		})
 	}

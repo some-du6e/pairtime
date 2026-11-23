@@ -261,6 +261,9 @@ type pendingStart struct {
 	env     event.Envelope
 	start   event.SessionStart
 	token   string
+	// counted says the entry's folder counts (txState.Ignored), so the
+	// start stays whatever line resolves it (adapters.Record.Counted).
+	counted bool
 }
 
 // logLine is one transcript line while Parse reads it.
@@ -534,7 +537,7 @@ func (l *logLine) sessionStart(e *entry, sid string) {
 	if started {
 		kind = event.StartResume
 	}
-	ps := &pendingStart{session: sid, at: l.raw.Log.Offset, env: l.env(e.t, sid), token: tok,
+	ps := &pendingStart{session: sid, at: l.raw.Log.Offset, env: l.env(e.t, sid), token: tok, counted: !l.f.st.Ignored,
 		start: event.SessionStart{StartKind: kind, Entrypoint: ep, ParentClass: event.ParentUnknown}}
 	if isKey(e.PermissionMode) {
 		ps.start.PermissionMode = e.PermissionMode
@@ -566,7 +569,8 @@ func (l *logLine) resolveStart() {
 				env.Mono = max(env.Mono-1, 0)
 			}
 			st := ps.start
-			l.add(logKey(ps.at, "start"), env, &st, nil).Token = ps.token
+			r := l.add(logKey(ps.at, "start"), env, &st, nil)
+			r.Token, r.Counted = ps.token, ps.counted
 		default:
 			// It waits, and the ones after it, in their order.
 			return

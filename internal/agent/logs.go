@@ -142,8 +142,8 @@ const (
 // maxTieTried bounds the sessions tieLive remembers it tried.
 const maxTieTried = 256
 
-// tieLive ties the session of harness h, id sid, that a line written at at
-// is from to the process running it, when no hook reports the session, by
+// tieLive ties the session of harness h, id sid, that a line written at at,
+// in folder dir, is from to the process running it, when no hook reports the session, by
 // the memory of lr, the harness's log reader (LogHooked), or this run's
 // hook ties, none of its lines is out of pairtime since its last that
 // counts (hookTies.ignoring, untieIgnored), and the line was written in the
@@ -156,7 +156,10 @@ const maxTieTried = 256
 // nothing and holds the next line back from none. A session whose log
 // opened with /clear isn't tied (LogCleared): it runs in the process of the
 // session it cleared, which no tie passes on, and the scan can't tell
-// whether another process it could take is that one.
+// whether another process it could take is that one. Its lines, and a try
+// that finds no untied process, end the ties of the sessions that went
+// quiet before it began, in its folder (procs.Scanner.UntieQuiet), as
+// /clear and /resume end the session before them in the process.
 //
 // While the session's tie waits for a line read after the table read its
 // first try made, the session.start its log reader holds waits too, up to
@@ -166,7 +169,7 @@ const maxTieTried = 256
 // session.start for, nor holds one (LogStarted), as with a transcript that
 // states no entrypoint, it returns the scan's session.start, for the
 // line's records recs to follow (scanStart), so rule 4 reads the walk.
-func (h *adapterHost) tieLive(lr adapters.LogReader, harness event.Harness, sid string, at int64,
+func (h *adapterHost) tieLive(lr adapters.LogReader, harness event.Harness, sid, dir string, at int64,
 	recs []adapters.Record) (adapters.Record, bool) {
 	p := h.a.procs
 	now := wallNow()
@@ -174,10 +177,16 @@ func (h *adapterHost) tieLive(lr adapters.LogReader, harness event.Harness, sid 
 		return adapters.Record{}, false
 	}
 	key := h.sessionKey(sid)
-	if key == "" || h.a.hooked.has(key) || h.a.hooked.ignoring(key) || lr.LogHooked(sid) || lr.LogCleared(sid) {
+	if key == "" || h.a.hooked.has(key) || h.a.hooked.ignoring(key) || lr.LogHooked(sid) {
 		return adapters.Record{}, false
 	}
-	p.Touch(key, time.UnixMilli(at))
+	p.Touch(key, time.UnixMilli(at), dir)
+	if lr.LogCleared(sid) {
+		if p.UntieQuiet(harness, key) {
+			h.a.refreshFocus()
+		}
+		return adapters.Record{}, false
+	}
 	h.mu.Lock()
 	recent := now.Sub(h.tieTried[key]) < tieRetry
 	h.mu.Unlock()
@@ -202,6 +211,8 @@ func (h *adapterHost) tieLive(lr adapters.LogReader, harness event.Harness, sid 
 	h.tieTried[key] = now
 	h.mu.Unlock()
 	if !tied {
+		// The try may have ended a quiet session's tie (UntieQuiet).
+		h.a.refreshFocus()
 		return adapters.Record{}, false
 	}
 	h.a.refreshFocus()
@@ -518,8 +529,16 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 	if h.ignored || lr.LogIgnored(ll.File) {
 		// A folder out of pairtime (DESIGN 8.8): its lines make no record,
 		// nor do the file's lines and idle markers that name no folder,
-		// after one that named it.
-		recs = nil
+		// after one that named it. A record of an entry that counted, which
+		// such a line or marker resolved, as a session.start that waited,
+		// stays (adapters.Record.Counted).
+		kept := recs[:0]
+		for _, r := range recs {
+			if r.Counted {
+				kept = append(kept, r)
+			}
+		}
+		recs = kept
 		if !ll.Idle && !ll.Replay {
 			// A replay was counted when it was first read.
 			h.count(func() { st.Ignored++ })
@@ -531,7 +550,7 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		// A line that counts lets its session be tied again, as when it
 		// moved to a folder that isn't out of pairtime.
 		h.a.hooked.unignore(h.sessionKey(session))
-		if start, ok := h.tieLive(lr, line.Harness, session, at, recs); ok {
+		if start, ok := h.tieLive(lr, line.Harness, session, dir, at, recs); ok {
 			recs = append([]adapters.Record{start}, recs...)
 		}
 	}
