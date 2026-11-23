@@ -715,6 +715,7 @@ func TestInstallLines(t *testing.T) {
 		{name: "the empty dashboard gives the Windows install command", in: page, want: "<p>On Windows, in PowerShell:</p>\n" + `<pre class="install"><code>irm https://github.com/some-du6e/pairtime/releases/download/` + installRelease + `/install.ps1 | iex</code></pre>`},
 		{name: "README.md gives the same macOS and Linux command", in: string(readme), want: "```sh\n" + installLines[0].Command + "\n```"},
 		{name: "README.md gives the same Windows command", in: string(readme), want: "```powershell\n" + installLines[1].Command + "\n```"},
+		{name: "README.md names the release its install commands install", in: string(readme), want: "These commands install " + installRelease + "."},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
