@@ -56,9 +56,10 @@ CC = dict(harness="claude_code", version="2.1.328", session=S, project=P)
 # its failure block and the FAILED line pytest prints after it, and one is
 # that FAILED line alone. No line of the failure block above it matches E1
 # to E6, so the FAILED line, an E4 line, is each paste's error signature
-# (ledger-v1.md 10.4, 10.6). Every failing run of the agent's ends its
-# output with the same line, so every paste and every failing run carries
-# one error_sig.
+# (ledger-v1.md 10.4, 10.6). Every failing run of the agent's prints the
+# same failure block and then the same FAILED line in pytest's short
+# summary, so its first E1 to E6 line, and with it its signature, matches
+# the pastes', and every paste and every failing run carries one error_sig.
 FAILED_LINE = "FAILED tests/test_streaks.py::test_checkin_after_midnight - assert 3 == 4"
 SIG = ledger_ref.error_signature(FAILED_LINE)
 
