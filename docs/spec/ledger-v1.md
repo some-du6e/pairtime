@@ -637,7 +637,7 @@ C       = aa9bfca6f19928733e7a62d0bfad12c6251486f7085a01a297e110631d80ad8b
 
 A reveal that removes token 7 as `known` keeps tokens 1 to 6 and 8 to 15 with their salts, and puts `{"type": "known", "count": 1, "leaves": ["7aa84523..."]}` in place of token 7. It verifies `ok`.
 
-Normalizing it removes the second line, an error line by `E1`. The first line's words become `still`, `broken,`, `see` and `<path>`, and `still broken,` becomes `<retry>`, which leaves `<retry> see <path>`. That is three words, so the shingles are the 14 character 5-shingles of those 18 code points, in ascending order:
+Normalizing it removes the second line, an error line by `E1`. The first line's words become `still`, `broken`, `see` and `<path>`, because step 6 strips the comma, and `still broken` becomes `<retry>`, which leaves `<retry> see <path>`. That is three words, so the shingles are the 14 character 5-shingles of those 18 code points, in ascending order:
 
 ```text
 " <pat"  " see "  "<path"  "<retr"  "> see"  "e <pa"  "ee <p"
