@@ -185,8 +185,10 @@ func TestHeadlessScoring(t *testing.T) {
 			build: func(b *tl) {
 				b.unknownFocus(at(0))
 				serverTurns(b, "s_1", 0, 5*hour)
-				// A desktop session starts and its agent samples, with the
-				// last input an hour back, inside the minutes already final.
+				// A desktop session starts and its agent samples. Each sample
+				// dates the last input at 4 h 1 min 40 s, between two
+				// prompts, inside the minutes already final.
+				b.mouse(at(4*hour + 100))
 				b.focus(at(5*hour), event.AppTerminal, "p_1", "s_1")
 				b.samples(at(5*hour), at(6*hour))
 			},
