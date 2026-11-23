@@ -245,9 +245,12 @@ type Input struct {
 // any time from then to its seal, as Online and the notes tell the writer,
 // which they also say until the computer is linked, and online otherwise.
 // A record a crash left that is lookback's counts by the earliest time it
-// can have reached the writer (Open).
+// can have reached the writer (Open). An event that carries a reading of
+// this run's clock is none, though a step back of the wall clock dates it
+// before the chain began: it was made in this run, which the moment holds
+// it to by that reading (moment.before).
 func (w *Writer) lookback(e event.Envelope) bool {
-	return e.Via == event.ViaLog && e.T < w.created
+	return e.Via == event.ViaLog && e.T < w.created && !(e.Mono > 0 && e.BootID == runBoot)
 }
 
 // Writer is a device's ledger writer. It appends each record to the day's

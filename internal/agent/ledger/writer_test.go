@@ -752,8 +752,10 @@ func TestNoteMode(t *testing.T) {
 	// And it writes a record a log reader read, dated a day before the
 	// chain began, with this run's boot_id and mono 0, as the transcript
 	// reader dates one from before its run or read late, whatever read it
-	// ("write-lookback"), or one that came through a hook
-	// ("write-lookback-hook"), or one dated N ms after the
+	// ("write-lookback"), or one that carries a reading of this run's clock
+	// from before the switch back, as a line a step back of the wall clock
+	// dated before the chain began ("write-lookback-run"), or one that came
+	// through a hook ("write-lookback-hook"), or one dated N ms after the
 	// start ("write-lookback-at:N"); opens the writer again after a kill
 	// with a stretch end at N by the wall clock alone that state.json kept
 	// ("kill-seen-at:N"); has Options.Waiting say an event made before the
@@ -888,6 +890,9 @@ func TestNoteMode(t *testing.T) {
 		{"one taken in during a local-only stretch is sealed local-only",
 			[]string{"file-local", "local", "write", "sealed", "at:1000", "write-lookback", "seal"},
 			[]bool{false, false}, []bool{false, false}, []int{1, 1}},
+		{"a log reader's record dated before the chain began that carries this run's clock, made in a stretch, as after a step back of the wall clock, and taken in after the switch back, is sealed local-only",
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "at:1000", "write-lookback-run", "seal", "write", "seal"},
+			[]bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"a record of a time before the chain began that didn't come through a log reader goes by its own time",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "at:1000", "write-lookback-hook", "seal", "write", "seal"},
 			[]bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
@@ -1058,10 +1063,15 @@ func TestNoteMode(t *testing.T) {
 					continue
 				}
 				switch step {
-				case "write-lookback", "write-lookback-hook":
+				case "write-lookback", "write-lookback-hook", "write-lookback-run":
 					writeLookback(i, testT-86_400_000, func(in *Input) {
-						if step == "write-lookback-hook" {
+						switch step {
+						case "write-lookback-hook":
 							in.Event.Source, in.Event.Via = event.SourceHook, event.ViaHook
+						case "write-lookback-run":
+							// This run's clock at its first millisecond, before
+							// any note of the switch back.
+							in.Event.Mono, in.Event.BootID = 1, runBoot
 						}
 					})
 				case "on-its-way", "came":
