@@ -143,12 +143,20 @@ func TestUnitArgs(t *testing.T) {
 			},
 		},
 		{
-			name: "systemd-run runs the agent in that scope under the user's manager, quietly, unloaded even when it fails, described without the binary's path, at a tenth of a unit's CPU and IO weight",
+			name: "systemd-run runs the agent in that scope under the user's manager, quietly, unloaded even when it fails, described without the binary's path, at a tenth of a unit's CPU and IO weight, and not stopped by another process's OOM kill",
 			check: func(t *testing.T) {
 				want := []string{"--user", "--scope", "--quiet", "--collect", "--unit=" + unit, "--description=pairtime agent",
-					"--property=CPUWeight=10", "--property=IOWeight=10", "--", "/opt/pairtime/pairtime", "agent"}
-				if got := unitArgs(unit, "/opt/pairtime/pairtime"); !slices.Equal(got, want) {
+					"--property=CPUWeight=10", "--property=IOWeight=10", "--property=OOMPolicy=continue", "--", "/opt/pairtime/pairtime", "agent"}
+				if got := unitArgs(unit, "/opt/pairtime/pairtime", true); !slices.Equal(got, want) {
 					t.Errorf("unitArgs() = %q\nwant %q", got, want)
+				}
+			},
+		},
+		{
+			name: "the start for a systemd before 253, which refuses OOMPolicy for a scope, asks for no OOM policy",
+			check: func(t *testing.T) {
+				if got := unitArgs(unit, "/opt/pairtime/pairtime", false); slices.Contains(got, "--property=OOMPolicy=continue") {
+					t.Errorf("unitArgs() = %q, with OOMPolicy", got)
 				}
 			},
 		},
@@ -168,8 +176,10 @@ const (
 
 // fakeSystemdRun stands in for systemd-run in TestLaunchAgent. It writes
 // its process ID and then its arguments, a line each, to systemd-run in
-// $PAIRTIME_TEST_FAKE_DIR, and does as $PAIRTIME_TEST_FAKE_RUN says: fail
-// exits 1, as a start the manager refuses does, and hang waits. move
+// $PAIRTIME_TEST_FAKE_DIR, adds them on one line to runs there, and does as
+// $PAIRTIME_TEST_FAKE_RUN says: fail exits 1, as a start the manager
+// refuses does, old exits 1 when asked for an OOM policy, as systemd before
+// 253 does for a scope, and otherwise does what move does, and hang waits. move
 // writes its process ID and the unit its --unit names to moved, which
 // TestLaunchAgent's inUnit reads as the process having reached that unit,
 // and then, like any other mode, it runs what follows -- in its own
@@ -177,10 +187,13 @@ const (
 const fakeSystemdRun = `#!/bin/sh
 dir=$PAIRTIME_TEST_FAKE_DIR
 { echo "$$"; printf '%s\n' "$@"; } >"$dir/systemd-run"
+echo "$*" >>"$dir/runs"
 unit=
+oom=
 while [ "$#" -gt 0 ]; do
 	case $1 in
 	--unit=*) unit=${1#--unit=} ;;
+	--property=OOMPolicy=*) oom=yes ;;
 	--)
 		shift
 		break
@@ -189,6 +202,13 @@ while [ "$#" -gt 0 ]; do
 	shift
 done
 case $PAIRTIME_TEST_FAKE_RUN in
+old)
+	if [ -n "$oom" ]; then
+		echo "Unknown assignment: OOMPolicy=continue" >&2
+		exit 1
+	fi
+	echo "$$ $unit" >"$dir/moved"
+	;;
 fail)
 	echo "Failed to start transient scope unit: Unit $unit was already loaded or has a fragment file." >&2
 	exit 1
@@ -263,26 +283,35 @@ func TestLaunchAgent(t *testing.T) {
 		// says why it doesn't although a manager runs.
 		wantRun, wantUnit, wantUnitErr bool
 		wantExit                       int // the agent's exit status, or 0 for still running
+		// runs is how many times systemd-run ran, and oom whether the last
+		// asked for OOMPolicy=continue.
+		runs int
+		oom  bool
 	}{
 		{
 			name: "under a user manager, the agent runs in a scope of its own, in the very process systemd-run ran in",
 			run:  "move", exe: exe, runtimeDir: runtimeDir, units: true,
-			wantRun: true, wantUnit: true,
+			wantRun: true, wantUnit: true, runs: 1, oom: true,
 		},
 		{
-			name: "when systemd-run fails, the agent starts where its starter runs, and launchAgent says why",
+			name: "a systemd before 253, whose systemd-run refuses OOMPolicy for a scope, gets one more start without it, which runs the agent in its scope",
+			run:  "old", exe: exe, runtimeDir: runtimeDir, units: true,
+			wantRun: true, wantUnit: true, runs: 2,
+		},
+		{
+			name: "when systemd-run fails, with and without the OOM policy, the agent starts where its starter runs, and launchAgent says why",
 			run:  "fail", exe: exe, runtimeDir: runtimeDir, units: true,
-			wantRun: true, wantUnitErr: true,
+			wantRun: true, wantUnitErr: true, runs: 2,
 		},
 		{
 			name: "a systemd-run that hangs is killed after unitWait, and the agent starts where its starter runs",
 			run:  "hang", exe: exe, runtimeDir: runtimeDir, units: true,
-			wantRun: true, wantUnitErr: true,
+			wantRun: true, wantUnitErr: true, runs: 1, oom: true,
 		},
 		{
 			name: "an agent that exits with status 3 in its unit before it is seen there counts as started, and its status reaches the caller",
 			run:  "quiet", agent: "exit3", exe: exe, runtimeDir: runtimeDir, units: true,
-			wantRun: true, wantUnit: true, wantExit: exitAlreadyRunning,
+			wantRun: true, wantUnit: true, wantExit: exitAlreadyRunning, runs: 1, oom: true,
 		},
 		{
 			name: "a binary whose path holds a dollar sign, which a later systemd-run may expand, starts where its starter runs",
@@ -336,8 +365,12 @@ func TestLaunchAgent(t *testing.T) {
 						unit = u
 					}
 				}
-				if want := unitArgs(unit, tt.exe); !slices.Equal(lines[1:], want) {
+				if want := unitArgs(unit, tt.exe, tt.oom); !slices.Equal(lines[1:], want) {
 					t.Errorf("systemd-run's arguments were %q\nwant %q", lines[1:], want)
+				}
+				runs, _ := os.ReadFile(filepath.Join(dir, "runs"))
+				if n := strings.Count(string(runs), "\n"); n != tt.runs {
+					t.Errorf("systemd-run ran %d times, want %d:\n%s", n, tt.runs, runs)
 				}
 				if tt.wantUnit && (l.Unit != unit || l.PID != runPID) {
 					t.Errorf("launchAgent says the agent is process %d in unit %q; systemd-run ran as process %d for unit %q", l.PID, l.Unit, runPID, unit)

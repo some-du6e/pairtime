@@ -104,9 +104,19 @@ func newUnitName() string {
 // needs systemd 232, older than the 236 --collect needs, and a manager
 // that doesn't control a resource for the user's units leaves its weight
 // unset, as swiss's systemd 255 does IOWeight.
-func unitArgs(unit, exe string) []string {
-	return []string{"--user", "--scope", "--quiet", "--collect", "--unit=" + unit, "--description=pairtime agent",
-		"--property=CPUWeight=10", "--property=IOWeight=10", "--", exe, "agent"}
+//
+// oom adds OOMPolicy=continue, so the kernel's OOM kill of a process in the
+// scope, such as a git the agent runs, doesn't stop the agent too, which a
+// scope's default, the manager's DefaultOOMPolicy= of stop, does from
+// systemd 253 on. Before 253 systemd refuses the property for a scope, and
+// startInUnit starts again without it.
+func unitArgs(unit, exe string, oom bool) []string {
+	args := []string{"--user", "--scope", "--quiet", "--collect", "--unit=" + unit, "--description=pairtime agent",
+		"--property=CPUWeight=10", "--property=IOWeight=10"}
+	if oom {
+		args = append(args, "--property=OOMPolicy=continue")
+	}
+	return append(args, "--", exe, "agent")
 }
 
 // startInUnit starts `exe agent` in dir in a scope of its own under the
@@ -124,6 +134,12 @@ func unitArgs(unit, exe string) []string {
 // systemd-run's own stderr can't be read for why it failed, because the
 // agent it turns into would keep writing its log to that pipe, and die of
 // SIGPIPE once this process is gone; its exit status is all there is.
+//
+// The first start asks for OOMPolicy=continue (unitArgs). systemd before 253
+// refuses that property for a scope, and its systemd-run exits at once, so
+// a start that exits before the agent is seen in its unit is made once more
+// without it, which costs a fork on such a system alone, before launchAgent
+// falls back.
 func startInUnit(exe, dir string) (launched, error) {
 	run, ok := userManager(os.LookupEnv, os.Lstat, exec.LookPath, os.Geteuid())
 	if !ok {
@@ -135,8 +151,22 @@ func startInUnit(exe, dir string) (launched, error) {
 		// systemd-run before 254 doesn't take.
 		return launched{}, fmt.Errorf("the binary's path %q holds a $, which systemd-run may expand", exe)
 	}
+	l, err := tryUnit(run, exe, dir, true)
+	if errors.Is(err, errUnitExited) {
+		l, err = tryUnit(run, exe, dir, false)
+	}
+	return l, err
+}
+
+// errUnitExited means that systemd-run, or the agent it became, exited
+// before the agent was seen in its unit (tryUnit).
+var errUnitExited = errors.New("systemd-run, or the agent it became, exited before the agent was seen in its unit")
+
+// tryUnit is one of startInUnit's starts, with OOMPolicy=continue when oom
+// is set (unitArgs).
+func tryUnit(run, exe, dir string, oom bool) (launched, error) {
 	unit := newUnitName()
-	cmd := exec.Command(run, unitArgs(unit, exe)...)
+	cmd := exec.Command(run, unitArgs(unit, exe, oom)...)
 	cmd.Dir = dir
 	cmd.SysProcAttr = detachedAttr()
 	if err := cmd.Start(); err != nil {
@@ -164,8 +194,8 @@ func startInUnit(exe, dir string) (launched, error) {
 				err = errors.New("exit status 0")
 			}
 			// An agent that reached its unit and failed within one poll
-			// exits so too, and is started again in its starter's unit.
-			return launched{}, fmt.Errorf("systemd-run, or the agent it became, exited before the agent was seen in its unit: %w", err)
+			// exits so too, and is started again.
+			return launched{}, fmt.Errorf("%w: %w", errUnitExited, err)
 		case <-timeout.C:
 			// The tick and the timeout can come together, and select picks
 			// either: a process that reached its unit by now, which may be

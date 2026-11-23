@@ -1,6 +1,6 @@
 # Erratum: an agent that a hook starts on Linux stops with the session that started it
 
-Date 2026-11-23. Raised by WP-HL1, from a Linux server with no graphical session that runs Claude Code sessions under T3 Code. Status: waiting for a decision on the optional DESIGN 3.2 sentence at the end. The fix needs no oracle change: DESIGN 3.2's "starts the agent detached" still holds, and the fix makes it hold on Linux under systemd too.
+Date 2026-11-23. Raised by WP-HL1, from a Linux server with no graphical session that runs Claude Code sessions under T3 Code. Status: decided 2026-11-23 by the orchestrator for Karim, as the Decision section below records, and applied by the PR that adds this file, under `oracle-change`: DESIGN 3.2 gains the sentence that says what detached means, and the agent's scope asks for `OOMPolicy=continue`.
 
 ## Input
 
@@ -23,7 +23,7 @@ The same goes for any Linux agent that a hook starts inside a unit that stops wh
 **Linux.** When a systemd user manager runs for the user, the agent starts as
 
 ```
-systemd-run --user --scope --quiet --collect --unit=pairtime-agent-<16 hex digits>.scope --description="pairtime agent" --property=CPUWeight=10 --property=IOWeight=10 -- <binary> agent
+systemd-run --user --scope --quiet --collect --unit=pairtime-agent-<16 hex digits>.scope --description="pairtime agent" --property=CPUWeight=10 --property=IOWeight=10 --property=OOMPolicy=continue -- <binary> agent
 ```
 
 and runs in a scope of its own under the manager's `app.slice`. For a scope, systemd-run asks the manager to move systemd-run's own process into the new unit, waits until the unit has started, and then executes the agent in that process. So the agent keeps everything it had before: the starter's whole environment, with the variables that decide its data directory and socket (`PAIRTIME_HOME`, the `XDG_*` folders, `HOME`), so nothing is passed by name; its working directory; its `Setsid` session and null stdio; and the process ID and exit status the starter sees, which `install` reads to tell an agent that found another running (exit status 3).
@@ -45,13 +45,19 @@ and runs in a scope of its own under the manager's `app.slice`. For a scope, sys
 
 - An agent in a unit of the user manager stops when the manager does: at the user's last logout, unless lingering is on, as every user unit does. A `Setsid` agent left in a session's scope could outlive a logout where logind leaves a session's processes running (`KillUserProcesses=no`).
 - Presence: an agent started from an SSH or text-console session used to be in that logind session, and `internal/platform/linux/logind.go` followed that session's lock state, which never locks. In a unit of the user manager the agent is in no session. It now follows the session its environment names, `XDG_SESSION_ID`, which `systemd-run --scope` passes on, while that session lasts and isn't closing. Without one, or once it ends, it follows the user's graphical session and, with none, reports lock state as unknown, as an agent from XDG autostart under systemd, or from T3 Code, already did. So the locked desktop of a user who works over SSH stops counting their time only once that SSH session has ended.
-- Under systemd 253 and later, a scope takes the manager's `DefaultOOMPolicy=`, `stop` by default, so the kernel's OOM kill of any process in the agent's scope, such as a git it runs, stops the agent too. In T3's session scopes an OOM kill of any process of the session did. `-p OOMPolicy=continue` would stop that, but systemd before 253 refuses the property for a scope, so every start there would fall back.
+- Under systemd 253 and later, a scope takes the manager's `DefaultOOMPolicy=`, `stop` by default, so the kernel's OOM kill of any process in the agent's scope, such as a git it runs, would stop the agent too, as an OOM kill of any process of a T3 session did in its scope. The scope asks for `OOMPolicy=continue`. systemd before 253 refuses that property for a scope, and its systemd-run exits at once, so a start that exits before the agent is in its unit is made once more without it, which costs a fork on such a system alone, before the agent starts as it did before. There the OOM policy is the scope's default, which before 253 doesn't stop a scope.
 - A hook that starts the agent waits until the agent is in its scope, 14 to 19 ms on the server that found this, and a user manager that hangs holds it for up to 3 s, after the hook has already left its call in the inbox. `pairtime hook`'s help says so.
 - On Windows, a job that allows no breakaway, such as one an app makes with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` alone, still ends the agent with it. Leaving such a job takes a process that isn't the starter's child, such as one WMI's `Win32_Process.Create` or the Task Scheduler starts, which is too heavy for a hook.
 - A hook-started agent on macOS isn't a launchd job, so DESIGN 3.2's "leaves `ProcessType` at `Background`" holds only for the agent the LaunchAgent starts: one a hook starts runs at its parent's QoS. That was so before this change, which leaves macOS as it was.
 
-## For a decision
+## Decision
 
-Optional, since DESIGN 3.2's "starts the agent detached" holds as written. A sentence that would say what detached means, after the `pairtime hook` row's table or in it:
+Decided 2026-11-23 by the orchestrator for Karim, on #250:
+
+1. DESIGN 3.2 takes the sentence below, after its table, under `oracle-change`.
+2. The agent's scope asks for `OOMPolicy=continue`, and a start that systemd before 253 refuses for it is made again without it before the agent starts as before.
+3. The other limits above stand: the agent stops at the user's last logout without linger, and the hook's next start falls back once the manager is gone; an agent outside any session follows the session `XDG_SESSION_ID` names; a Windows job that allows no breakaway still ends the agent; and a hook-started agent on macOS runs at its parent's QoS.
+
+The sentence DESIGN 3.2 gains:
 
 > Detached means a process that the hook's session, terminal and job can't end: on Linux, a transient scope of the user's systemd manager when one runs; elsewhere, a session (Unix) or a process group with no console window (Windows) of its own, outside the caller's job when the job allows breakaway.
