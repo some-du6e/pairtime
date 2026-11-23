@@ -130,8 +130,10 @@ type Slot struct {
 	Kind string
 	// Level is ev: "A", "B" or "C" (DESIGN 6.4).
 	Level string
-	// Labels is lbl: the side-door labels of the anchors behind the
-	// credit, such as "via_track".
+	// Labels is lbl, pkg/event's slot labels (event.SlotLabels): the
+	// side-door labels of the anchors behind the credit, such as
+	// "via_track", then focus_unknown where some of it is level C because
+	// the window in front was unknown (SM 2.5).
 	Labels []string
 }
 

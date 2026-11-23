@@ -142,7 +142,7 @@ Each slot, `encoding/json`'s form of `event.BucketSlot`:
 | `why` | string | Optional. A credit reason code of SM 5.2, with `pkg/event`'s `~r` and `+restored` suffixes where they apply, such as `READ~r` (`Reason.Credited`) |
 | `kind` | string | Optional. An activity kind of SM 5.1 |
 | `ev` | string | Optional. The evidence level, `A`, `B` or `C` |
-| `lbl` | array | Optional. Side-door labels, each of `via_track`, `via_plugin`, `via_bridge` at most once and in that order |
+| `lbl` | array | Optional. Labels, each of `via_track`, `via_plugin`, `via_bridge` (the side doors) and `focus_unknown` (seconds that are level C because the client couldn't tell which window was in front, SM 2.5) at most once and in that order (`pkg/event`'s `SlotLabels`) |
 
 On top of the forms, a bucket must pass `event.MinuteBucket.Validate`: the slots' `cr` sum to `credited_s`, a credited slot has a project, a reason and its kind, credited and uncredited seconds fit in a minute, a backfilled minute's credit is level C, and the rest of that function's rules. A bucket that fails one is refused as `bad_rule`.
 
