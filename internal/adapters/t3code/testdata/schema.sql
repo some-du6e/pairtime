@@ -1,8 +1,11 @@
 -- The tables and indexes of T3 Code's statev2.sqlite that the T3 Code
--- reader reads, in the shape T3's migrations leave them at T3 d8f3feff
--- (pingdotgg/t3code, MIT): the CREATE statements of migration 55
--- (OrchestrationV2), with the columns and indexes later migrations add,
--- written out by hand from apps/server/src/persistence/Migrations:
+-- reader reads, in the shape T3's migrations leave them at T3 Code's commit
+-- d8f3feff0c1749ca020941427b153005755baca6 (pingdotgg/t3code). The CREATE
+-- statements are T3 Code's own, Copyright (c) 2026 T3 Tools Inc., under the
+-- MIT license in LICENSE beside this file, which is T3 Code's at that
+-- commit. They are those of migration 55 (OrchestrationV2), with the columns
+-- and indexes later migrations add, copied by hand from
+-- apps/server/src/persistence/Migrations:
 -- 005_Projections.ts, 016, 019, 039, 040, 045, 047 and 076 (projects),
 -- OrchestrationV2/Foundation.ts (provider_instance_id and driver),
 -- OrchestrationV2/ShellIndexes.ts and RecoveryIndexes.ts, 079, 081

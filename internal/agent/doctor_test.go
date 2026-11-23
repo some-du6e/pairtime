@@ -5,6 +5,8 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -36,7 +38,7 @@ func fullStatus() statusReply {
 		Adapters: adaptersReply{Harnesses: map[event.Harness]harnessStats{event.HarnessClaudeCode: stats}, Other: stats,
 			Waiting: 1, Dropped: 2, Git: gitReply{Watched: 1, Changes: 2}},
 		Apps: appsReply{T3Code: &t3Reply{Reading: true, Off: "schema", Problem: "T3 Code's table x has no column y", Newer: true,
-			Day: "2026-11-24", Witnessed: 1, Paired: 2, Aged: 3, SessionAt: at.UnixMilli()}},
+			Running: true, NoSQLite3: true, Day: "2026-11-24", Witnessed: 1, Paired: 2, Aged: 3, Ahead: 4, SessionAt: at.UnixMilli()}},
 		Footprint: footprintReply{RSSBytes: 1, PeakRSSBytes: 2, CPUS: 3},
 		Problems:  map[string]string{"ledger": "the ledger can't open"},
 	}
@@ -226,5 +228,46 @@ func TestFootprint(t *testing.T) {
 	f := footprintNow()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) { tt.check(t, f) })
+	}
+}
+
+// TestFootprintChildren checks that footprintNow counts the CPU time of the
+// processes the agent starts, as it starts sqlite3 for T3 Code's reader and
+// git for the git adapter (#225, F8): getrusage's children on Linux and
+// macOS, and the job object the agent joins at its start on Windows. The
+// child is this test binary, which burns CPU for a while.
+func TestFootprintChildren(t *testing.T) {
+	if os.Getenv("PAIRTIME_FOOTPRINT_CHILD") == "1" {
+		for deadline := time.Now().Add(300 * time.Millisecond); time.Now().Before(deadline); {
+		}
+		os.Exit(0)
+	}
+	tests := []struct {
+		name string
+		run  func(t *testing.T) *exec.Cmd
+	}{
+		{"a process the agent started and waited for adds its CPU time to the agent's", func(t *testing.T) *exec.Cmd {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestFootprintChildren$")
+			cmd.Env = append(os.Environ(), "PAIRTIME_FOOTPRINT_CHILD=1")
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("the child: %v", err)
+			}
+			return cmd
+		}},
+	}
+	joinJob()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := footprintNow().CPUS
+			cmd := tt.run(t)
+			child := (cmd.ProcessState.UserTime() + cmd.ProcessState.SystemTime()).Seconds()
+			after := footprintNow().CPUS
+			if child <= 0 {
+				t.Fatalf("the child used no CPU time: %v", cmd.ProcessState)
+			}
+			if after-before < 0.9*child {
+				t.Errorf("cpu_s went from %v to %v across a child that used %v s", before, after, child)
+			}
+		})
 	}
 }

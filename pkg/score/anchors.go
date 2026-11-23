@@ -285,7 +285,8 @@ type actKey struct {
 
 // eventAnchors makes anchors of the human acts other than prompts (SM 2.3):
 // queued messages, permission answers, interrupts, typed edits, editor
-// navigation, typed commands and human commits.
+// navigation, typed commands and human commits. The first three open
+// nothing in a session an agent app's server started (harnessAnchor).
 func (d *deriver) eventAnchors() {
 	// A harness act reported by several code paths is one act. It goes by
 	// its most trusted record, the first in record order on a tie.
@@ -384,9 +385,21 @@ func absDiff(a, b int64) int64 {
 // harnessAnchor makes the anchor of a harness act, if it passes its
 // evidence test (SM 2.3). best is the record it goes by and pos all of its
 // records.
+//
+// A session whose last session.start before the act names an agent app's
+// own server, parent_class agent_app, opens none of these anchors (SM 2.2,
+// What isn't a message; SM 2.3). An approval or a stop given in the app's
+// interface reaches the harness without a message, and so does a message
+// the app steers into the running turn, which Claude Code can report as a
+// queued one. The app's window hosts every session its server drives, so
+// input there would otherwise make any of these a person's act at this
+// computer, whoever gave it and wherever. A permission answered too fast
+// is still flagged there, since a script answered it either way.
 func (d *deriver) harnessAnchor(best int, pos []int) {
 	e := d.recs[best]
 	s := d.sessions[e.SessionKey]
+	st := s.startBefore(best)
+	app := st != nil && st.ParentClass == event.ParentAgentApp
 	host := d.sessionHost(s, best)
 	project := e.ProjectKey
 	if project == "" {
@@ -400,7 +413,7 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 		// Input in its slot and focus on the host window; then as a prompt
 		// of its class. Its record carries a length, not the derived
 		// low-effort test, so a short message is a go-ahead.
-		if !d.pres.slotInput(e.T, false) || !d.hostedBy(d.focus.before(best), s, best) {
+		if app || !d.pres.slotInput(e.T, false) || !d.hostedBy(d.focus.before(best), s, best) {
 			return
 		}
 		typed := count(p.LenChars)
@@ -436,7 +449,7 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 			d.flag(FlagPermissionTooFast, e)
 			return
 		}
-		if !d.pres.presentFor(p.AnsweredAt) {
+		if app || !d.pres.presentFor(p.AnsweredAt) {
 			return
 		}
 		a.Kind, a.Reason = event.AnchorPermissionAnswer, event.ReasonPermission
@@ -444,7 +457,7 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 		a.LeadMS, a.TrailMS = min(wait, d.r.paMax), d.r.paTrail
 		from, to = slotWindow(p.AnsweredAt)
 	case *event.AgentInterrupt:
-		if !d.pres.presentFor(e.T) {
+		if app || !d.pres.presentFor(e.T) {
 			return
 		}
 		a.Kind, a.Reason, a.TurnKey = event.AnchorInterrupt, event.ReasonInterrupt, p.TurnKey

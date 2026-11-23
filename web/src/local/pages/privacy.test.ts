@@ -180,6 +180,15 @@ describe('Privacy', () => {
 				expect(text(html)).toContain('The prompt similarity sketches (MinHash) in the table are not encrypted either.'),
 		},
 		{
+			name: "What pairtime never records says that while T3 Code runs it notes once a minute whether you're at the computer, and nothing about which app is in front (D-relayed-context, as #225 amended it)",
+			check: (html) => {
+				const t = text(html);
+				expect(t).toContain("Anything while you aren't working in a project");
+				expect(t).toContain("One exception: while T3 Code runs, pairtime notes once a minute whether you're at the computer");
+				expect(t).toContain('It notes nothing about which app is in front.');
+			},
+		},
+		{
 			name: 'Who can read it says the dashboard opens only in the browser pairtime dashboard signed in',
 			check: (html) =>
 				expect(text(html)).toContain('This dashboard opens only on this computer, in the browser that pairtime dashboard signed in.'),

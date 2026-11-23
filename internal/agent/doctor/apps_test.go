@@ -60,6 +60,19 @@ func TestT3Line(t *testing.T) {
 		{name: "one message the age test turned away reads as one",
 			edit: t3(func(c *T3Code, _ *Facts) { c.Aged = 1 }), want: OK,
 			wantHas: []string{"it turned away 1 message it first read too long after it was sent"}},
+		{name: "the messages turned away as stamped more than 2 s after the read that decided them are counted (SM 2.2)",
+			edit: t3(func(c *T3Code, _ *Facts) { c.Ahead = 2 }), want: OK,
+			wantHas: []string{"it turned away 2 messages stamped more than 2 seconds after it read them, as happens when the computer's clock is set back"}},
+		{name: "one message turned away as stamped after its read reads as one",
+			edit: t3(func(c *T3Code, _ *Facts) { c.Ahead = 1 }), want: OK,
+			wantHas: []string{"it turned away 1 message stamped more than 2 seconds after it read it"}},
+		{name: "T3 Code that isn't running still says what the reader turned away earlier today, though it read nothing",
+			edit: t3(func(c *T3Code, f *Facts) {
+				off("not_running", "")(c, f)
+				c.Witnessed, c.Paired, c.Ahead = 0, 0, 1
+			}), want: OK,
+			wantHas: []string{"T3 Code isn't running, and pairtime reads its store only while it runs; today it read no messages",
+				"it turned away 1 message stamped more than 2 seconds after it read it"}},
 		{name: "a schema newer than the one pairtime was tested with is read, and the line says so (DESIGN 5.1)",
 			edit: t3(func(c *T3Code, _ *Facts) { c.Newer = true }), want: OK,
 			wantHas: []string{"T3 Code's schema is newer than the one this pairtime was tested with, and pairtime reads it anyway"}},
@@ -75,6 +88,45 @@ func TestT3Line(t *testing.T) {
 			edit: noSQLite("windows"), want: Warn, wantHas: []string{"winget install SQLite.SQLite", "log out and back in"}},
 		{name: "no sqlite3 on macOS, which ships it, says to report a line that a new login doesn't clear",
 			edit: noSQLite("darwin"), want: Warn, wantHas: []string{"macOS ships it", "Report this line"}},
+		{name: "a reader off for want of sqlite3 names the install command once",
+			edit: t3(func(c *T3Code, f *Facts) {
+				off("no_sqlite3", "")(c, f)
+				c.NoSQLite3 = true
+				f.GOOS, f.Distro = "linux", []string{"debian"}
+			}), want: Warn, wantHas: []string{"sudo apt install sqlite3"}, wantNot: []string{"; but the agent finds no sqlite3 tool"}},
+		{name: "a missing sqlite3 while T3 Code isn't running warns with the install command, whatever else the line says (F2)",
+			edit: t3(func(c *T3Code, f *Facts) {
+				off("not_running", "")(c, f)
+				c.NoSQLite3 = true
+				f.GOOS, f.Distro = "linux", []string{"ubuntu", "debian"}
+			}), want: Warn,
+			wantHas: []string{"T3 Code isn't running, and pairtime reads its store only while it runs",
+				"but the agent finds no sqlite3 tool, so pairtime can't read the messages you send through T3 Code, and they count for nothing until it can. Install it with: sudo apt install sqlite3"}},
+		{name: "a missing sqlite3 warns with the install command when doctor finds a store the agent doesn't, too",
+			edit: t3(func(c *T3Code, f *Facts) {
+				off("no_store", "")(c, f)
+				c.NoSQLite3 = true
+				f.T3 = T3Facts{Found: true}
+				f.GOOS, f.Distro = "linux", []string{"fedora"}
+			}), want: Warn, wantHas: []string{"T3CODE_HOME", "the agent finds no sqlite3 tool", "sudo dnf install sqlite"}},
+		{name: "with neither the agent nor doctor finding T3 Code, a missing sqlite3 says nothing",
+			edit: t3(func(c *T3Code, f *Facts) {
+				off("no_store", "")(c, f)
+				c.NoSQLite3 = true
+			}), absent: true},
+		{name: "a sqlite3 with no JSON functions warns that T3 Code's messages count for nothing, with how to get one that has them",
+			edit: t3(func(c *T3Code, f *Facts) {
+				off("no_json", "this sqlite3 has no JSON functions")(c, f)
+				f.GOOS = "linux"
+			}), want: Warn,
+			wantHas: []string{"pairtime doesn't read T3 Code's store, because the agent's sqlite3 has no JSON functions, so the messages you send through T3 Code count for nothing until it does",
+				"Install a sqlite3 of version 3.38 or later"},
+			wantNot: []string{"It tries again every 10 seconds"}},
+		{name: "on Windows a sqlite3 with no JSON functions names winget and a new login",
+			edit: t3(func(c *T3Code, f *Facts) {
+				off("no_json", "this sqlite3 has no JSON functions")(c, f)
+				f.GOOS = "windows"
+			}), want: Warn, wantHas: []string{"winget install SQLite.SQLite", "log out and back in"}},
 		{name: "a schema the probe refuses warns with the reader's reason and where to report it",
 			edit: t3(off("schema", "T3 Code's table orchestration_v2_projection_messages has no column run_id")), want: Warn,
 			wantHas: []string{"pairtime doesn't read T3 Code's store, because T3 Code's table orchestration_v2_projection_messages has no column run_id. The messages you send through T3 Code count for nothing until it can", "Report this line"}},
@@ -93,24 +145,42 @@ func TestT3Line(t *testing.T) {
 		{name: "T3 Code's settings that don't read say doctor can't tell, and warn of nothing",
 			edit: t3(func(_ *T3Code, f *Facts) { f.T3 = T3Facts{Found: true, Unread: true} }), want: OK,
 			wantHas: []string{"doctor couldn't read T3 Code's settings, so it can't tell whether T3 Code gives Claude Code a home of its own"}},
+		{name: "a CLAUDE_CONFIG_DIR T3 Code's background service sets, to a home without pairtime's hooks, warns and says how to count it (Q13)",
+			edit: t3(func(_ *T3Code, f *Facts) { f.T3 = T3Facts{Found: true, ServiceHome: true} }), want: Warn,
+			wantHas: []string{"T3 Code's background service sets CLAUDE_CONFIG_DIR, in its systemd unit or launchd plist, to a Claude home whose settings hold none of pairtime's hooks",
+				"Take CLAUDE_CONFIG_DIR out of the service's environment, or run pairtime install again with CLAUDE_CONFIG_DIR set to that home"},
+			wantNot: []string{"doctor couldn't read"}},
 		{name: "messages today with no session of T3's reaching pairtime in a day warn that they count for nothing",
 			edit: t3(func(c *T3Code, _ *Facts) { c.Paired, c.SessionAt = 0, now.Add(-25*time.Hour).UnixMilli() }), want: Warn,
-			wantHas: []string{"but no session T3 Code started has reached pairtime in the last day, so the messages you sent through T3 Code today count for nothing"}},
+			wantHas: []string{"but none of the messages pairtime read from T3 Code today paired with a prompt Claude Code got, so they count for nothing",
+				"isn't running pairtime's hooks"}},
+		{name: "messages today that paired with no prompt warn whatever session_at says, since a claude typed into T3 Code's terminal is a session of T3's too (Q13)",
+			edit: t3(func(c *T3Code, _ *Facts) { c.Paired = 0 }), want: Warn,
+			wantHas: []string{"but none of the messages pairtime read from T3 Code today paired with a prompt Claude Code got"},
+			wantNot: []string{"last day"}},
 		{name: "a running T3 Code none of whose sessions ever reached pairtime warns (DESIGN 5.1)",
-			edit: t3(func(c *T3Code, _ *Facts) { c.Witnessed, c.Paired, c.SessionAt = 0, 0, 0 }), want: Warn,
+			edit: t3(func(c *T3Code, _ *Facts) { c.Witnessed, c.Paired, c.SessionAt, c.Running = 0, 0, 0, true }), want: Warn,
 			wantHas: []string{"no session T3 Code started has reached pairtime in the last day. If you used T3 Code since, the Claude Code it runs isn't running pairtime's hooks"}},
+		{name: "a store the agent reads with no T3 Code server running, as one a killed T3 Code left open, says nothing of quiet sessions (Q15)",
+			edit: t3(func(c *T3Code, _ *Facts) { c.Witnessed, c.Paired, c.SessionAt, c.Running = 0, 0, 0, false }), want: OK,
+			wantNot: []string{"last day"}},
 		{name: "a session of T3's in the last day warns of nothing",
-			edit: t3(func(*T3Code, *Facts) {}), want: OK, wantNot: []string{"last day"}},
+			edit: t3(func(c *T3Code, _ *Facts) { c.Running = true }), want: OK, wantNot: []string{"last day", "none of the messages"}},
 		{name: "a T3 Code that isn't running and sent nothing today says nothing of its quiet sessions",
 			edit: t3(func(c *T3Code, f *Facts) {
 				off("not_running", "")(c, f)
 				c.Witnessed, c.Paired, c.SessionAt = 0, 0, 0
 			}), want: OK, wantNot: []string{"last day"}},
-		{name: "a home of its own explains quiet sessions, so the line doesn't say both",
+		{name: "a home of its own explains quiet sessions and messages that paired with nothing, so the line doesn't say both",
 			edit: t3(func(c *T3Code, f *Facts) {
-				c.Paired, c.SessionAt = 0, 0
+				c.Paired, c.SessionAt, c.Running = 0, 0, true
 				f.T3 = T3Facts{Found: true, OwnHomes: 1}
-			}), want: Warn, wantHas: []string{"home of its own"}, wantNot: []string{"last day"}},
+			}), want: Warn, wantHas: []string{"home of its own"}, wantNot: []string{"last day", "none of the messages"}},
+		{name: "so does a home T3 Code's background service sets",
+			edit: t3(func(c *T3Code, f *Facts) {
+				c.Paired, c.SessionAt, c.Running = 0, 0, true
+				f.T3 = T3Facts{Found: true, ServiceHome: true}
+			}), want: Warn, wantHas: []string{"T3 Code's background service sets CLAUDE_CONFIG_DIR"}, wantNot: []string{"last day", "none of the messages"}},
 		{name: "with no agent, a T3 Code doctor finds is skipped, never read from the terminal",
 			edit: func(f *Facts) { f.Reach, f.Agent, f.T3 = Down, nil, T3Facts{Found: true} }, want: Skip,
 			wantHas: []string{"T3 Code is on this computer; the agent isn't running"}},

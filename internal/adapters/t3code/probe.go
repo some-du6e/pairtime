@@ -138,7 +138,7 @@ func checkProbe(rows []row) (schema, error) {
 		}
 	}
 	if !hasJSON {
-		return s, &refusal{"this sqlite3 has no JSON functions"}
+		return s, ErrNoJSON
 	}
 	if base != baseName {
 		return s, &refusal{fmt.Sprintf("T3 Code's store has no migration %d (%s), the base of the schema pairtime reads", baseMigration, baseName)}

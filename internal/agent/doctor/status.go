@@ -134,21 +134,32 @@ type Apps struct {
 // its last read left it. It names no path (DESIGN 5.9).
 type T3Code struct {
 	// Reading says the last read worked, and Off why it didn't: no_store,
-	// not_running, no_sqlite3, schema or failed. Problem says more of a
-	// schema the probe refused or a read that failed.
+	// not_running, no_sqlite3, no_json, schema or failed. Problem says more
+	// of a schema the probe refused or a read that failed.
 	Reading bool   `json:"reading"`
 	Off     string `json:"off,omitempty"`
 	Problem string `json:"problem,omitempty"`
 	// Newer says T3's schema is newer than the one the reader was tested
 	// against, which it reads anyway.
 	Newer bool `json:"newer,omitempty"`
+	// Running says T3 Code ran at the last read, by DESIGN 3.3's test: the
+	// agent's process scan found its server, and its store had the -wal
+	// and -shm files T3 holds open. Files a killed T3 left behind don't
+	// make it run, though the reader still reads them.
+	Running bool `json:"running,omitempty"`
+	// NoSQLite3 says the agent found no sqlite3 on its PATH at the last
+	// read, whether or not T3 ran then.
+	NoSQLite3 bool `json:"no_sqlite3,omitempty"`
 	// Witnessed counts today's messages that T3 says a person sent and the
-	// reader recorded, Paired its records that paired with a prompt, and
-	// Aged the messages its age test turned away, read too long after they
-	// were sent.
+	// reader recorded, Paired its records that paired with a prompt, Aged
+	// the messages its age test turned away, read too long after they were
+	// sent, and Ahead the messages it turned away as stamped more than 2 s
+	// after the read that decided them, which a clock T3 and the agent
+	// share doesn't give unless it was set back.
 	Witnessed int `json:"witnessed"`
 	Paired    int `json:"paired"`
 	Aged      int `json:"aged"`
+	Ahead     int `json:"ahead"`
 	// SessionAt is when a session that an agent app's server started last
 	// reached the agent, in Unix ms, 0 for never.
 	SessionAt int64 `json:"session_at,omitempty"`

@@ -1197,9 +1197,18 @@ func (h *adapterHost) prepare() bool {
 // as for a hook call's folder. A folder no Track has answered for yet
 // starts one and is pending, and the reader asks again on its next reads.
 // With no git adapter, no folder is one pairtime tracks.
+//
+// T3 keeps the folder as its client spelled it, which can run through a
+// symlink, while a hook's cwd can be the folder as it really is. So the
+// ignore test reads both spellings, T3's and the one filepath.EvalSymlinks
+// resolves it to (git.Resolver.Ignored), first and at every answer: a
+// .pairtime-ignore or an exclude pattern that reaches either keeps the
+// folder out at once, before any Track, and the reader reads nothing more
+// of its rows (DESIGN 5.1, 8.8). The project stays the one the git adapter
+// finds for T3's spelling, which keys a repo by its canonical common dir.
 func (h *adapterHost) appFolder(dir string) t3code.Folder {
 	g := h.git.Load()
-	if g == nil || dir == "" {
+	if g == nil || dir == "" || g.res.Ignored(dir) {
 		return t3code.Folder{State: t3code.FolderOut}
 	}
 	if !g.known(dir) {
@@ -1711,12 +1720,15 @@ func (h *adapterHost) holdBackNow() {
 
 // write writes one record to the ledger, with its content and its call's
 // own stamp (sentOf) beside the event, tells focus and the git watcher what
-// it says, and reports whether the ledger took it. A prompt.submit goes
-// through the apps component, which drops the relay and guest an adapter
-// put on it and, for a prompt of a session an agent app's server started,
-// asks the app's reader for them before the text reaches the writer
-// (apps.go). A session.start tells it whether such a server started the
-// session.
+// it says, and reports whether the ledger took it. Every record of every
+// path comes here: a hook call's, live or spooled, and a log line's, a
+// transcript's or lookback's. So a prompt.submit goes through the apps
+// component, which drops the relay and guest an adapter put on it, marks
+// guest one whose text opens as T3 Code opens a guest's message or that
+// falls in a running turn the owner steered a guest's message into, and,
+// for a prompt of a session an agent app's server started, asks the app's
+// reader for them before the text reaches the writer (apps.go). A
+// session.start tells it whether such a server started the session.
 func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stamp) bool {
 	ev := r.Event
 	if ev.EventID == "" {
@@ -1724,7 +1736,7 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stam
 	}
 	apps := h.a.appsHost()
 	if _, ok := ev.Data.(*event.PromptSubmit); ok {
-		return apps.prompt(ev, r.Late, func(ev event.Event) bool { return h.writeEvent(st, r, ev, sent) })
+		return apps.prompt(ev, r.Text, r.Late, func(ev event.Event) bool { return h.writeEvent(st, r, ev, sent) })
 	}
 	apps.noteRecord(ev)
 	return h.writeEvent(st, r, ev, sent)

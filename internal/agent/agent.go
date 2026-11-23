@@ -301,6 +301,10 @@ func Run(ctx context.Context, opts Options) error {
 	if err := optIntoEcoQoS(); err != nil {
 		log.Info("the agent runs without EcoQoS", "err", err)
 	}
+	// Before any part starts a process: on Windows footprintNow counts the
+	// CPU time of the processes the agent starts through a job object it
+	// joins now (footprint_windows.go).
+	joinJob()
 
 	// Each part that starts adds the step that stops it, and they stop in
 	// reverse order: the HTTP server, port.json, the socket and the inbox,

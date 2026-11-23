@@ -126,6 +126,15 @@ type Options struct {
 	// live (DESIGN 3.3). A scan that fails gives 0, so a reader that stops
 	// working can't hold a context live, and the sampling with it, for good.
 	Running func(n int)
+	// Listed, when set, gets each scan's read of the process table after
+	// Running, on the goroutine that ran the scan: its processes, named as
+	// on OS, and Self. A scan whose read failed, or that can't tell whose
+	// processes are this user's, gives none, so a reader that stops working
+	// can't hold T3 Code running for good. The agent's apps component looks
+	// there for T3 Code's server, which with the -wal and -shm files of its
+	// store is what makes T3 run (DESIGN 3.3). It must return quickly and
+	// must not call the Scanner.
+	Listed func(goos string, procs []platform.Proc, self string)
 	// Read reads the process table. Nil means this OS's reader.
 	Read func() ([]platform.Proc, error)
 	// OS is the GOOS whose names Read returns. Empty means runtime.GOOS.
@@ -354,6 +363,7 @@ func (s *Scanner) Scan() ([]Session, error) {
 	v, err := s.readTable()
 	if err != nil {
 		s.running(0)
+		s.listed(nil)
 		return nil, err
 	}
 	now := s.opts.Now()
@@ -448,6 +458,7 @@ func (s *Scanner) Scan() ([]Session, error) {
 		s.save()
 	}
 	s.running(mine)
+	s.listed(all)
 	return found, nil
 }
 
@@ -945,6 +956,14 @@ func (s *Scanner) Claimed(id platform.ID) bool {
 func (s *Scanner) running(n int) {
 	if s.opts.Running != nil {
 		s.opts.Running(n)
+	}
+}
+
+// listed hands a scan's processes to Options.Listed: nil after a scan that
+// failed.
+func (s *Scanner) listed(procs []platform.Proc) {
+	if s.opts.Listed != nil {
+		s.opts.Listed(s.opts.OS, procs, s.self)
 	}
 }
 

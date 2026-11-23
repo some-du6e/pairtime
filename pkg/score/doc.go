@@ -160,9 +160,9 @@
 //     relay, when the prompt came by a hook or a log reader, in the
 //     record's session or with the record's session none, no earlier than
 //     the stamp sent_at and at most RELAY_MATCH_S after it, and the record
-//     at most RELAY_SEEN_LAG_S after the stamp. A record that pairs with
-//     nothing opens nothing and raises no flag. Every relay.message and
-//     what became of it is in Derived.Relays.
+//     at most RELAY_SEEN_LAG_S after the stamp and at most 2 s before it. A
+//     record that pairs with nothing opens nothing and raises no flag.
+//     Every relay.message and what became of it is in Derived.Relays.
 //   - SM 2.2's rules with an app: a record of declared cron makes its
 //     prompt scheduled (rule 1), one of cross_session a subagent's (rule
 //     3). Rule 4 lists parent_class agent_app, an agent app's own server,
@@ -174,6 +174,11 @@
 //     pasted at its usual level, anchored at its own t with its lead ending
 //     at the stamp. Otherwise it is relayed (rule 9), with the length and
 //     class of the app's own text.
+//   - An approval, an answer or a stop given in the app's own interface
+//     isn't a message, and neither is one the app steers into a running
+//     turn, so in a session whose last session.start names parent_class
+//     agent_app no queued message, permission answer or interrupt opens an
+//     anchor (SM 2.2, What isn't a message; SM 2.3).
 //   - A relayed anchor is its relay.message, standing at the stamp: a lead
 //     of typing time only, cut to the time since the thread's previous
 //     relay.message of declared none, level C with via_relay. It is no
@@ -223,7 +228,7 @@
 //     no pairing reads a prompt by any other path: a plugin's prompt
 //     carrying relay pairs with nothing.
 //   - Only the record's own t is bounded, at most RELAY_SEEN_LAG_S after the
-//     stamp, as SM 2.2 states it.
+//     stamp and at most 2 s before it, as SM 2.2 states it.
 //   - Rule 6's focus test at the stamp takes the os.focus record at or
 //     before it, since the stamp has no record position.
 //   - A relayed prompt's class is SM 2.2's, over the app's text: answer

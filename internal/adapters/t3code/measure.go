@@ -20,6 +20,16 @@ import (
 // ATTACHMENT_ONLY_BOOTSTRAP_PROMPT).
 const attachmentOnly = "[User attached one or more files without additional text. Respond using the conversation context and the attached files.]"
 
+// ultrathink opens the line T3's web client puts before a message's text at
+// Claude's ultrathink effort (packages/shared/src/model.ts).
+const ultrathink = "Ultrathink:"
+
+// guestOpening is how T3 Code opens the text it sends on for a guest's
+// message, "Message from guest <name>, sent by the owner:" and then the
+// guest's words (T3 d8f3feff,
+// apps/server/src/orchestration-v2/GuestShareDecider.ts:217).
+const guestOpening = "Message from guest "
+
 // The limits T3 puts on a context reference's parts
 // (composerContextReferences.ts): a label of at most 512 characters and a
 // reference of at most 200 after its prefix.
@@ -61,18 +71,7 @@ var (
 // person's comment on it, since the quoted words were the agent's. The
 // result is trimmed. It is the caller's to measure and drop.
 func typed(text string) string {
-	text = strings.TrimSpace(text)
-	if len(text) >= len("Ultrathink:") && strings.EqualFold(text[:len("Ultrathink:")], "Ultrathink:") {
-		rest := text[len("Ultrathink:"):]
-		line, after, found := strings.Cut(rest, "\n")
-		if strings.TrimSpace(line) == "" {
-			if found {
-				text = strings.TrimSpace(after)
-			} else {
-				text = ""
-			}
-		}
-	}
+	text = unthink(text)
 	if text == attachmentOnly {
 		return ""
 	}
@@ -94,6 +93,32 @@ func typed(text string) string {
 	})
 	return strings.TrimSpace(text)
 }
+
+// unthink returns text trimmed, and without a leading Ultrathink: line, in
+// any case, with nothing else on it.
+func unthink(text string) string {
+	text = strings.TrimSpace(text)
+	if len(text) < len(ultrathink) || !strings.EqualFold(text[:len(ultrathink)], ultrathink) {
+		return text
+	}
+	line, after, found := strings.Cut(text[len(ultrathink):], "\n")
+	switch {
+	case strings.TrimSpace(line) != "":
+		return text
+	case !found:
+		return ""
+	}
+	return strings.TrimSpace(after)
+}
+
+// OpensAsGuest reports whether text opens as T3 Code opens a guest's
+// message when it sends it on: "Message from guest ", after any white space
+// and a leading Ultrathink: line, as the reader reads a message's text. The
+// reader's SQL makes the same test inside sqlite3 (sql.go's opensAsGuest),
+// and the agent makes it on every copy of a prompt from any harness, so a
+// prompt that carries a guest's words keeps none of them whatever path it
+// took (DESIGN 5.1).
+func OpensAsGuest(text string) bool { return strings.HasPrefix(unthink(text), guestOpening) }
 
 // isContextRef reports whether label and ref make a context reference T3
 // itself would read as one: a label within its limit, and a reference of a

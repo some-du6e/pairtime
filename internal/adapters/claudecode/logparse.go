@@ -122,15 +122,23 @@ var entrypointTokens = []string{
 // reports, as its matcher names them (toolMatcher; DESIGN 5.1).
 var hookedTools = []string{"Edit", "Write", "Bash"}
 
+// t3Entrypoint is the entrypoint token T3 Code sets, as
+// CLAUDE_CODE_ENTRYPOINT, for every Claude Code it runs through the Claude
+// Agent SDK, which its transcripts carry (WP-ADE1's capture of T3 Code
+// 0.1.10 and Claude Code 2.1.330; docs/errata/2026-11-23-t3-reader.md,
+// decision 10).
+const t3Entrypoint = "t3-code"
+
 // tokenEntrypoint maps an entrypoint token to the entrypoint a log
-// reader's session.start states: sdk for the SDK's, cloud for a session on
-// a vendor VM, and unknown for the rest, cli and claude-vscode included,
-// since only a walk of the process tree says ide or desktop
-// (E-cc-transcript-labels). It reports false for a token HS 3.3 doesn't
-// list.
+// reader's session.start states: sdk for the SDK's, T3 Code's t3-code
+// among them, so SM 2.2 rule 4 takes a T3 session that only its transcript
+// shows, as lookback reads one; cloud for a session on a vendor VM; and
+// unknown for the rest, cli and claude-vscode included, since only a walk
+// of the process tree says ide or desktop (E-cc-transcript-labels). It
+// reports false for a token neither HS 3.3 nor a capture lists.
 func tokenEntrypoint(tok string) (event.Entrypoint, bool) {
 	switch tok {
-	case "sdk-cli", "sdk-ts", "sdk-py":
+	case "sdk-cli", "sdk-ts", "sdk-py", t3Entrypoint:
 		return event.EntrypointSDK, true
 	case "remote", "remote_desktop", "remote_mobile", "claude-in-slack":
 		return event.EntrypointCloud, true

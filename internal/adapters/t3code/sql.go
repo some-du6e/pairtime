@@ -8,9 +8,11 @@ import (
 	"strings"
 )
 
-// The tables and the index the reader reads (T3 d8f3feff, migration 55 and
-// later; /tmp/ade1/t3-store-map.json in WP-ADE1's notes). It reads nothing
-// else: never orchestration_v2_message_search, the search table, nor
+// The tables and the index the reader reads, as T3 d8f3feff's migration 55
+// and the later ones leave them (testdata/schema.sql holds their CREATE
+// statements; DESIGN 5.1's T3 Code row and docs/errata/2026-11-23-t3-reader.md
+// say what the reader reads of them). It reads nothing else: never
+// orchestration_v2_message_search, the search table, nor
 // messages.search_text, threads.title, projects.title or a thread's whole
 // payload, which hold text.
 const (
@@ -71,6 +73,32 @@ func ints(ns []int64) string {
 
 func num(n int64) string { return strconv.FormatInt(n, 10) }
 
+// The opening of a message's text, as typed and OpensAsGuest read it, in
+// SQL: the text from its first character that isn't white space, past a
+// leading Ultrathink: line with nothing else on it. spaces are the
+// characters Go's strings.TrimSpace trims, Unicode's White_Space. The
+// expression is long, but sqlite3 works it out only for the user rows of a
+// window, and reads none of the text out.
+const (
+	textOf = "json_extract(m.payload_json, '$.text')"
+	spaces = "char(9, 10, 11, 12, 13, 32, 133, 160, 5760, 8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202," +
+		" 8232, 8233, 8239, 8287, 12288)"
+	// lead is the text from its first character that isn't white space.
+	lead = "ltrim(" + textOf + ", " + spaces + ")"
+	// thinkRest is what follows a leading Ultrathink:, thinkEOL where its
+	// line ends in it (0 when it doesn't), and thinkLine and thinkAfter the
+	// rest of that line and what follows the line.
+	thinkRest  = "substr(" + lead + ", 12)"
+	thinkEOL   = "instr(" + thinkRest + ", char(10))"
+	thinkLine  = "CASE " + thinkEOL + " WHEN 0 THEN " + thinkRest + " ELSE substr(" + thinkRest + ", 1, " + thinkEOL + " - 1) END"
+	thinkAfter = "CASE " + thinkEOL + " WHEN 0 THEN '' ELSE ltrim(substr(" + thinkRest + ", " + thinkEOL + " + 1), " + spaces + ") END"
+	opening    = "CASE WHEN lower(substr(" + lead + ", 1, 11)) = 'ultrathink:' AND trim(" + thinkLine + ", " + spaces + ") = ''" +
+		" THEN " + thinkAfter + " ELSE " + lead + " END"
+	// opensAsGuest is OpensAsGuest in SQL: 1 when the text opens as T3 opens
+	// a guest's message when it sends it on, NULL for a row with no text.
+	opensAsGuest = "substr(" + opening + ", 1, 19) = '" + guestOpening + "'"
+)
+
 // The tests every read of a message row makes, in its WHERE clause.
 const (
 	// isUser keeps user-role rows: a person's messages, and T3's and
@@ -78,15 +106,14 @@ const (
 	isUser = "m.role = 'user'"
 	// notGuest keeps a guest's message out: one T3 marked with
 	// context.guest, and one whose text opens as T3 opens a guest's when
-	// sending it on, which catches one that lost the mark (a promoted
-	// steer T3 dispatched again). The prefix test reads the text inside
-	// sqlite3 only, and only loses credit: an owner who types those words
-	// is taken for a guest.
-	notGuest = "json_type(m.payload_json, '$.context.guest') IS NULL" +
-		" AND substr(json_extract(m.payload_json, '$.text'), 1, 19) IS NOT 'Message from guest '"
+	// sending it on (opensAsGuest), which catches one that lost the mark, as
+	// a guest's message T3 sends again after a declined steer does. The
+	// opening is read inside sqlite3 only, and only loses credit: an owner
+	// who types those words is taken for a guest. A guest's row the reader
+	// already watches stays a guest's whatever T3 changes in it.
+	notGuest = "json_type(m.payload_json, '$.context.guest') IS NULL AND (" + opensAsGuest + ") IS NOT 1"
 	// isGuest is notGuest's opposite.
-	isGuest = "(json_type(m.payload_json, '$.context.guest') IS NOT NULL" +
-		" OR substr(json_extract(m.payload_json, '$.text'), 1, 19) = 'Message from guest ')"
+	isGuest = "(json_type(m.payload_json, '$.context.guest') IS NOT NULL OR (" + opensAsGuest + ") IS 1)"
 	// byPerson is the part of T3's own test for a message a person sent from
 	// a client that the store keeps: createdBy user, from the web client
 	// (the browser and the desktop app) or the phone app.
@@ -141,8 +168,10 @@ func startSQL() string {
 //     project's root, with its stamp, for the rows the decision may record
 //     (by a person, from a client, not a guest's), so that pairtime's own
 //     resolver can say which folders the decision may read;
-//   - guest: each new guest message, and whether it started a run of its
-//     own;
+//   - guest: each new guest message, by mark or by opening, with its
+//     message id, which the reader keys, and whether it started a run of
+//     its own (1), is a steer in another message's run (0), or has no run
+//     stored yet (NULL);
 //   - it: the rows and runs the reader still watches, by rowid (itemSQL).
 //
 // No text is read, and every lookup is a rowid range or a primary key.
@@ -162,7 +191,7 @@ func windowSQL(c int64, watched []int64) string {
 		" WHERE " + in + " AND " + isUser + " AND " + notGuest + " AND " + byPerson +
 		" ORDER BY m.rowid;\n")
 	b.WriteString("SELECT " + tag("guest") + ", " + hx("m.rowid") + ", " + hx("m.created_at") + ", " +
-		hx("json_extract(r.payload_json, '$.userMessageId') = m.message_id") +
+		hx("json_extract(r.payload_json, '$.userMessageId') = m.message_id") + ", " + hx("m.message_id") +
 		" FROM " + tMessages + " AS m LEFT JOIN " + tRuns + " AS r ON r.run_id = m.run_id" +
 		" WHERE " + in + " AND " + isUser + " AND " + isGuest +
 		" ORDER BY m.rowid;\n")

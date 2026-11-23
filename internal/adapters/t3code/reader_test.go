@@ -4,7 +4,10 @@ package t3code
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -103,6 +106,9 @@ func TestDecision(t *testing.T) {
 		want    []rec
 		counts  Counts
 		guests  []GuestRun
+		// noText says the reader reads no text of the rows, though it
+		// records them.
+		noText bool
 	}{
 		{name: "a message a person sent from the web client, with a run of its own, is recorded as declared none",
 			rows: func(s *store) { s.sent("m1", 0, text) },
@@ -112,28 +118,28 @@ func TestDecision(t *testing.T) {
 			want: []rec{{id: "m1", client: event.RelayClientMobile, declared: event.RelayDeclaredNone, lenChars: 32,
 				class: substantive, session: session("sess-1"), project: "p_alpha"}},
 			counts: Counts{Witnessed: 1}},
-		{name: "scheduledTaskId, a firing of T3's scheduler or a webhook, makes the record declared cron",
+		{name: "scheduledTaskId, a firing of T3's scheduler or a webhook, makes the record declared cron, of length 0 and no text read",
 			rows: func(s *store) {
 				s.sentWith(message{id: "m1", text: text, extra: map[string]any{"scheduledTaskId": "task-1"}})
 			},
-			want: []rec{{id: "m1", client: event.RelayClientWeb, declared: event.RelayDeclaredCron, lenChars: 32,
-				class: substantive, session: session("sess-1"), project: "p_alpha"}},
-			counts: Counts{Declared: 1}},
-		{name: "senderThreadId, another thread's agent, makes the record declared cross_session",
+			want: []rec{{id: "m1", client: event.RelayClientWeb, declared: event.RelayDeclaredCron,
+				class: event.ClassLowEffort, session: session("sess-1"), project: "p_alpha"}},
+			counts: Counts{Declared: 1}, noText: true},
+		{name: "senderThreadId, another thread's agent, makes the record declared cross_session, of length 0 and no text read",
 			rows: func(s *store) {
 				s.sentWith(message{id: "m1", text: text, extra: map[string]any{"senderThreadId": "thread-parent"}})
 			},
-			want: []rec{{id: "m1", client: event.RelayClientWeb, declared: event.RelayDeclaredCrossSession, lenChars: 32,
-				class: substantive, session: session("sess-1"), project: "p_alpha"}},
-			counts: Counts{Declared: 1}},
-		{name: "linkedSender, an agent in a linked environment, makes the record declared cross_session",
+			want: []rec{{id: "m1", client: event.RelayClientWeb, declared: event.RelayDeclaredCrossSession,
+				class: event.ClassLowEffort, session: session("sess-1"), project: "p_alpha"}},
+			counts: Counts{Declared: 1}, noText: true},
+		{name: "linkedSender, an agent in a linked environment, makes the record declared cross_session, of length 0 and no text read",
 			rows: func(s *store) {
 				s.sentWith(message{id: "m1", text: text, extra: map[string]any{"linkedSender": map[string]any{
 					"environmentId": "env-2", "threadId": "thread-far", "title": "invented title"}}})
 			},
-			want: []rec{{id: "m1", client: event.RelayClientWeb, declared: event.RelayDeclaredCrossSession, lenChars: 32,
-				class: substantive, session: session("sess-1"), project: "p_alpha"}},
-			counts: Counts{Declared: 1}},
+			want: []rec{{id: "m1", client: event.RelayClientWeb, declared: event.RelayDeclaredCrossSession,
+				class: event.ClassLowEffort, session: session("sess-1"), project: "p_alpha"}},
+			counts: Counts{Declared: 1}, noText: true},
 		{name: "idleCompaction, the /compact T3's composer sends on its own, gets no record",
 			rows: func(s *store) {
 				s.sentWith(message{id: "m1", text: "/compact", extra: map[string]any{"idleCompaction": "onReturn"}})
@@ -174,6 +180,15 @@ func TestDecision(t *testing.T) {
 				s.sentWith(message{id: "m1", text: "Message from guest Ada, sent by the owner:\n\ninvented words"})
 			},
 			counts: Counts{Guests: 1}, guests: []GuestRun{{SentAt: base.UnixMilli()}}},
+		{name: "the guest opening counts after white space and an Ultrathink: line, as the reader reads a message's text",
+			rows: func(s *store) {
+				s.sentWith(message{id: "m1", text: " \t\nUltrathink: \r\n\u3000Message from guest Ada, sent by the owner:\n\ninvented words"})
+			},
+			counts: Counts{Guests: 1}, guests: []GuestRun{{SentAt: base.UnixMilli()}}},
+		{name: "an Ultrathink: with words after it on its line was typed, so those words open no guest's message",
+			rows:   func(s *store) { s.sent("m1", 0, "Ultrathink: Message from guest Ada is how it starts") },
+			want:   []rec{web("m1", 0, len("Ultrathink: Message from guest Ada is how it starts"), false, substantive)},
+			counts: Counts{Witnessed: 1}},
 		{name: "a steer, whose run names another message, gets no record",
 			rows: func(s *store) {
 				s.sent("m0", 0, text)
@@ -192,12 +207,18 @@ func TestDecision(t *testing.T) {
 				s.run(run{id: "r-m1", thread: "th1", message: "m1", requested: time.Second, started: ptr(time.Second)})
 			},
 			counts: Counts{NoRun: 1}},
-		{name: "a message the reader first reads more than RELAY_SEEN_LAG_S after its stamp is turned away by the age test",
+		{name: "a message the reader decides more than RELAY_SEEN_LAG_S after its stamp is turned away by the age test",
 			rows: func(s *store) { s.sent("m1", 0, text) }, read: 60*time.Second + time.Millisecond,
 			counts: Counts{Aged: 1}},
-		{name: "a message the reader first reads RELAY_SEEN_LAG_S after its stamp is recorded",
+		{name: "a message the reader decides RELAY_SEEN_LAG_S after its stamp is recorded",
 			rows: func(s *store) { s.sent("m1", 0, text) }, read: 60 * time.Second,
 			want: []rec{web("m1", 0, 32, false, substantive)}, counts: Counts{Witnessed: 1}},
+		{name: "a message stamped more than 2 s after the read that decides it is refused, and counted for doctor",
+			rows:   func(s *store) { s.sent("m1", 7*time.Second+time.Millisecond, text) },
+			counts: Counts{Ahead: 1}},
+		{name: "a message stamped 2 s after the read that decides it is recorded",
+			rows: func(s *store) { s.sent("m1", 7*time.Second, text) },
+			want: []rec{web("m1", 7*time.Second, 32, false, substantive)}, counts: Counts{Witnessed: 1}},
 		{name: "a message edited before the reader first read it, its updated_at later than its stamp, witnesses nothing",
 			rows:   func(s *store) { s.sentWith(message{id: "m1", updated: ptr(2 * time.Second), text: text}) },
 			counts: Counts{Edited: 1}},
@@ -268,8 +289,8 @@ func TestDecision(t *testing.T) {
 			if !slices.Equal(b.Guests, tc.guests) {
 				t.Errorf("guests are %+v, want %+v", b.Guests, tc.guests)
 			}
-			if len(tc.want) == 0 && readsText(sp.runs(t)) {
-				t.Error("the reader read the text of a row it doesn't record")
+			if (len(tc.want) == 0 || tc.noText) && readsText(sp.runs(t)) {
+				t.Error("the reader read the text of a row whose text it doesn't measure")
 			}
 		})
 	}
@@ -509,6 +530,119 @@ func TestPairing(t *testing.T) {
 					t.Errorf("the pairing is %+v, want none", p)
 				}
 			}},
+		{"a run's window closes at its end with no slack: a prompt a millisecond after it pairs with nothing",
+			func(t *testing.T, e *env) {
+				e.s.message(message{id: "m1", thread: "th1", run: "r-m1", text: text})
+				e.s.run(run{id: "r-m1", thread: "th1", message: "m1", started: ptr(100 * time.Millisecond), completed: ptr(4 * time.Second)})
+				e.s.attempt("r-m1", 1, "sess-1", "")
+				e.poll(5 * time.Second)
+				if p, _ := e.pair(6*time.Second, "sess-1", 4*time.Second+time.Millisecond, "prompt-late"); p.Relay != "" {
+					t.Errorf("the pairing is %+v, want none", p)
+				}
+			}},
+		{"a prompt stamped up to 2 s before its run's start pairs, as the hook may stamp it before T3 stamps the start",
+			func(t *testing.T, e *env) {
+				e.s.message(message{id: "m1", thread: "th1", run: "r-m1", text: text})
+				e.s.run(run{id: "r-m1", thread: "th1", message: "m1"})
+				e.poll(time.Second)
+				e.s.run(run{id: "r-m1", thread: "th1", message: "m1", started: ptr(10 * time.Second)})
+				e.s.attempt("r-m1", 1, "sess-1", "")
+				if p, _ := e.pair(11*time.Second, "sess-1", 8*time.Second, "prompt-1"); p.Relay != eventID("m1", 0) {
+					t.Errorf("the pairing is %+v, want relay %s", p, eventID("m1", 0))
+				}
+			}},
+		{"a run whose own prompt never reached the reader doesn't take the prompt of the run T3 starts as it ends",
+			func(t *testing.T, e *env) {
+				// m1's prompt is never asked about: the agent never saw it.
+				e.s.sent("m1", 0, text)
+				e.s.message(message{id: "m2", thread: "th1", run: "r-m2", created: time.Second, text: "then run the whole suite"})
+				e.s.run(run{id: "r-m2", thread: "th1", message: "m2", requested: time.Second})
+				if b := e.poll(2 * time.Second); len(b.Messages) != 2 {
+					t.Fatalf("got %d records, want 2", len(b.Messages))
+				}
+				e.s.run(run{id: "r-m1", thread: "th1", message: "m1", started: ptr(100 * time.Millisecond), completed: ptr(30 * time.Second)})
+				e.s.run(run{id: "r-m2", thread: "th1", message: "m2", requested: time.Second, started: ptr(30*time.Second + 50*time.Millisecond)})
+				e.s.attempt("r-m2", 1, "sess-1", "")
+				if p, _ := e.pair(31*time.Second, "sess-1", 30300*time.Millisecond, "prompt-2"); p.Relay != eventID("m2", time.Second) {
+					t.Errorf("the second run's prompt's pairing is %+v, want relay %s", p, eventID("m2", time.Second))
+				}
+			}},
+		{"a run that delivered nothing doesn't take the prompt of a guest's run T3 starts within 2 s of its end",
+			func(t *testing.T, e *env) {
+				e.s.sent("m0", 0, text)
+				guest(e.s, "g1", time.Second)
+				e.poll(2 * time.Second)
+				e.s.run(run{id: "r-m0", thread: "th1", message: "m0", started: ptr(100 * time.Millisecond), completed: ptr(10 * time.Second),
+					status: "cancelled"})
+				e.s.run(run{id: "r-g1", thread: "th1", message: "g1", requested: time.Second, started: ptr(11 * time.Second)})
+				e.s.attempt("r-g1", 1, "sess-1", "")
+				if p, _ := e.pair(12*time.Second, "sess-1", 11300*time.Millisecond, "prompt-g"); !p.Guest || p.Relay != "" {
+					t.Errorf("the guest's prompt's pairing is %+v, want a guest's and no relay", p)
+				}
+			}},
+		{"a run T3 cancelled after it started doesn't take the prompt of the owner's next run",
+			func(t *testing.T, e *env) {
+				e.s.sent("m0", 0, text)
+				e.s.message(message{id: "m1", thread: "th1", run: "r-m1", created: time.Second, text: "then run the whole suite"})
+				e.s.run(run{id: "r-m1", thread: "th1", message: "m1", requested: time.Second})
+				e.poll(2 * time.Second)
+				e.s.run(run{id: "r-m0", thread: "th1", message: "m0", started: ptr(100 * time.Millisecond), completed: ptr(10 * time.Second),
+					status: "cancelled"})
+				e.s.run(run{id: "r-m1", thread: "th1", message: "m1", requested: time.Second, started: ptr(10500 * time.Millisecond)})
+				e.s.attempt("r-m1", 1, "sess-1", "")
+				if p, _ := e.pair(12*time.Second, "sess-1", 10800*time.Millisecond, "prompt-1"); p.Relay != eventID("m1", time.Second) {
+					t.Errorf("the next run's prompt's pairing is %+v, want relay %s", p, eventID("m1", time.Second))
+				}
+			}},
+		{"a recorded queued message pairs with its prompt though Pair's first read finds T3's store busy",
+			func(t *testing.T, e *env) {
+				sh := newShim(t, e.s.sqlite3, busyOnce)
+				e.r.sqlite = &Runner{Path: sh.path}
+				e.s.message(message{id: "m1", thread: "th1", run: "r-m1", text: text})
+				e.s.run(run{id: "r-m1", thread: "th1", message: "m1"})
+				e.s.attempt("r-m1", 1, "", "")
+				e.poll(2 * time.Second)
+				e.s.run(run{id: "r-m1", thread: "th1", message: "m1", started: ptr(30 * time.Second)})
+				e.s.attempt("r-m1", 1, "sess-1", "")
+				sh.arm(t)
+				p, b := e.pair(31*time.Second, "sess-1", 30500*time.Millisecond, "prompt-1")
+				if sh.armed() {
+					t.Fatal("no read found the store busy")
+				}
+				if !p.Known || p.Relay != eventID("m1", 0) || len(b.Messages) != 0 {
+					t.Errorf("the pairing is %+v with %d new records, want a known one with relay %s", p, len(b.Messages), eventID("m1", 0))
+				}
+				if got := e.r.Status().Paired; got != 1 {
+					t.Errorf("%d records paired, want 1", got)
+				}
+			}},
+		{"a pairing found once both records were written goes on neither, isn't counted, and takes the run",
+			func(t *testing.T, e *env) {
+				e.s.message(message{id: "m1", thread: "th1", run: "r-m1", text: text})
+				e.s.run(run{id: "r-m1", thread: "th1", message: "m1"})
+				e.s.attempt("r-m1", 1, "", "")
+				e.poll(2 * time.Second)
+				e.s.run(run{id: "r-m1", thread: "th1", message: "m1", started: ptr(30 * time.Second)})
+				e.s.attempt("r-m1", 1, "sess-1", "")
+				e.s.flush()
+				e.s.close()
+				e.c.set(31 * time.Second)
+				p, _, err := e.r.Pair(context.Background(), Prompt{SessionKey: session("sess-1"),
+					T: base.Add(30500 * time.Millisecond).UnixMilli(), EventID: "prompt-1"})
+				if !errors.Is(err, ErrNotRunning) || p.Known || p.Relay != "" {
+					t.Fatalf("Pair with T3 closed gave %+v, %v; want an unknown answer and ErrNotRunning", p, err)
+				}
+				e.s.open()
+				if b := e.poll(32 * time.Second); len(b.Messages) != 0 {
+					t.Fatalf("got %d records, want none", len(b.Messages))
+				}
+				if got := e.r.Status().Paired; got != 0 {
+					t.Errorf("%d records paired, want none", got)
+				}
+				if p, _ := e.pair(34*time.Second, "sess-1", 33*time.Second, "prompt-2"); p.Relay != "" {
+					t.Errorf("a later prompt's pairing is %+v, want none", p)
+				}
+			}},
 		{"a prompt the reader couldn't answer for pairs with the record of its message that a later read writes",
 			func(t *testing.T, e *env) {
 				e.s.sent("m1", 0, text)
@@ -550,19 +684,30 @@ func TestPairing(t *testing.T) {
 	}
 }
 
+// guestText is the text T3 sends on for an invented guest's message.
+const guestText = "Message from guest Ada, sent by the owner:\n\ninvented words"
+
+// guestMark is the context T3 marks the guest's message id with.
+func guestMark(id string) map[string]any {
+	return map[string]any{"context": map[string]any{"version": 1, "records": []any{},
+		"guest": map[string]any{"guestMessageId": "g-" + id, "name": "Ada", "text": "invented words"}}}
+}
+
+// runKey is the key the reader gives T3's run id.
+func runKey(id string) string { return adapters.FixtureKeys().App("t3_code", "run", id) }
+
 // guest writes a guest's message in thread th1 at created, sent on by the
 // owner, with a run of its own T3 queued for it.
 func guest(s *store, id string, created time.Duration) {
-	s.message(message{id: id, thread: "th1", run: "r-" + id, created: created,
-		text: "Message from guest Ada, sent by the owner:\n\ninvented words",
-		extra: map[string]any{"context": map[string]any{"version": 1, "records": []any{},
-			"guest": map[string]any{"guestMessageId": "g-" + id, "name": "Ada", "text": "invented words"}}}})
+	s.message(message{id: id, thread: "th1", run: "r-" + id, created: created, text: guestText, extra: guestMark(id)})
 	s.run(run{id: "r-" + id, thread: "th1", message: id, requested: created})
 }
 
 // TestGuests holds the reader to DESIGN 5.1's guest rule: it tells the agent
 // which runs a guest's message started, without reading the message, so the
-// prompt such a run delivers keeps no text.
+// prompt such a run delivers keeps no text, and which running turns the
+// owner steered a guest's message into (Steer), whose prompts the agent
+// marks (docs/errata/2026-11-23-t3-reader.md, decision 4).
 func TestGuests(t *testing.T) {
 	cases := []struct {
 		name string
@@ -596,7 +741,7 @@ func TestGuests(t *testing.T) {
 					t.Errorf("the guest's prompt's pairing is %+v, want a guest's", p)
 				}
 			}},
-		{"a guest's message steered into a running turn marks no prompt, and is reported as steered",
+		{"a guest's message steered into a running turn is reported as steered, and the turn as a Steer from the message's stamp while it runs, though the reader marks no prompt itself",
 			func(t *testing.T, e *env) {
 				e.s.sent("m0", 0, "please fix the flaky parser test")
 				e.s.message(message{id: "g1", thread: "th1", run: "r-m0", created: 2 * time.Second,
@@ -607,6 +752,95 @@ func TestGuests(t *testing.T) {
 				}
 				if want := []GuestRun{{SentAt: base.Add(2 * time.Second).UnixMilli(), Steered: true}}; !slices.Equal(b.Guests, want) {
 					t.Errorf("guests are %+v, want %+v", b.Guests, want)
+				}
+				want := []Steer{{Run: runKey("r-m0"), Sessions: []string{session("sess-1")}, From: base.Add(2 * time.Second).UnixMilli()}}
+				if got := e.r.Steers(); !reflect.DeepEqual(got, want) {
+					t.Errorf("steers are %+v, want %+v", got, want)
+				}
+			}},
+		{"a Steer starts at its turn's start when the guest's message is stamped before the turn started, and ends at the turn's end once a read sees it",
+			func(t *testing.T, e *env) {
+				e.s.message(message{id: "m0", thread: "th1", run: "r-m0", text: "please fix the flaky parser test"})
+				e.s.message(message{id: "g1", thread: "th1", run: "r-m0", created: time.Second, text: guestText, extra: guestMark("g1")})
+				e.s.run(run{id: "r-m0", thread: "th1", message: "m0", started: ptr(3 * time.Second)})
+				e.s.attempt("r-m0", 1, "sess-1", "")
+				e.poll(4 * time.Second)
+				e.s.run(run{id: "r-m0", thread: "th1", message: "m0", started: ptr(3 * time.Second), completed: ptr(9 * time.Second)})
+				e.poll(10 * time.Second)
+				want := []Steer{{Run: runKey("r-m0"), Sessions: []string{session("sess-1")},
+					From: base.Add(3 * time.Second).UnixMilli(), To: base.Add(9 * time.Second).UnixMilli()}}
+				if got := e.r.Steers(); !reflect.DeepEqual(got, want) {
+					t.Errorf("steers are %+v, want %+v", got, want)
+				}
+			}},
+		{"a guest's queued message the owner promotes into a running turn makes that turn a Steer from the promotion's stamp",
+			func(t *testing.T, e *env) {
+				e.s.sent("m0", 0, "please fix the flaky parser test")
+				guest(e.s, "g1", 2*time.Second)
+				e.poll(3 * time.Second)
+				if got := e.r.Steers(); len(got) != 0 {
+					t.Fatalf("steers are %+v before the promotion, want none", got)
+				}
+				e.s.message(message{id: "g1", thread: "th1", run: "r-m0", created: 5 * time.Second, text: guestText, extra: guestMark("g1")})
+				e.s.run(run{id: "r-g1", thread: "th1", message: "g1", requested: 2 * time.Second, status: "cancelled"})
+				e.poll(6 * time.Second)
+				want := []Steer{{Run: runKey("r-m0"), Sessions: []string{session("sess-1")}, From: base.Add(5 * time.Second).UnixMilli()}}
+				if got := e.r.Steers(); !reflect.DeepEqual(got, want) {
+					t.Errorf("steers are %+v, want %+v", got, want)
+				}
+			}},
+		{"a Steer whose turn the guest's message leaves for a run of its own, as T3's follow-up does, ends at the read that found it so when no read saw the turn end",
+			func(t *testing.T, e *env) {
+				e.s.sent("m0", 0, "please fix the flaky parser test")
+				e.s.message(message{id: "g1", thread: "th1", run: "r-m0", created: 2 * time.Second, text: guestText, extra: guestMark("g1")})
+				e.poll(3 * time.Second)
+				e.s.message(message{id: "g1", thread: "th1", run: "r-g1", created: 10 * time.Second, text: guestText})
+				e.s.run(run{id: "r-g1", thread: "th1", message: "g1", requested: 10 * time.Second})
+				e.poll(11 * time.Second)
+				want := []Steer{{Run: runKey("r-m0"), Sessions: []string{session("sess-1")},
+					From: base.Add(2 * time.Second).UnixMilli(), To: base.Add(11 * time.Second).UnixMilli()}}
+				if got := e.r.Steers(); !reflect.DeepEqual(got, want) {
+					t.Errorf("steers are %+v, want %+v", got, want)
+				}
+			}},
+		{"a Steer of a turn on another provider names that provider's session",
+			func(t *testing.T, e *env) {
+				e.s.providerThread("pt-codex", "th1", "codex", "codex-thread-1")
+				e.s.message(message{id: "m0", thread: "th1", run: "r-m0", text: "please fix the flaky parser test"})
+				e.s.run(run{id: "r-m0", thread: "th1", message: "m0", providerThread: "pt-codex", started: ptr(100 * time.Millisecond)})
+				e.s.attempt("r-m0", 1, "codex-session-1", "pt-codex")
+				e.s.message(message{id: "g1", thread: "th1", run: "r-m0", created: 2 * time.Second, text: guestText, extra: guestMark("g1")})
+				e.poll(3 * time.Second)
+				want := []Steer{{Run: runKey("r-m0"), Sessions: []string{session("codex-session-1")}, From: base.Add(2 * time.Second).UnixMilli()}}
+				if got := e.r.Steers(); !reflect.DeepEqual(got, want) {
+					t.Errorf("steers are %+v, want %+v", got, want)
+				}
+			}},
+		{"a Steer stays across a restart, in state.json",
+			func(t *testing.T, e *env) {
+				e.s.sent("m0", 0, "please fix the flaky parser test")
+				e.s.message(message{id: "g1", thread: "th1", run: "r-m0", created: 2 * time.Second, text: guestText, extra: guestMark("g1")})
+				e.poll(3 * time.Second)
+				raw, err := json.Marshal(e.r.State())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var saved State
+				if err := json.Unmarshal(raw, &saved); err != nil {
+					t.Fatal(err)
+				}
+				want := []Steer{{Run: runKey("r-m0"), Sessions: []string{session("sess-1")}, From: base.Add(2 * time.Second).UnixMilli()}}
+				if got := e.s.reader(e.c, tracked(), saved).Steers(); !reflect.DeepEqual(got, want) {
+					t.Errorf("the restarted reader's steers are %+v, want %+v", got, want)
+				}
+			}},
+		{"an owner's message steered into a running turn is no Steer",
+			func(t *testing.T, e *env) {
+				e.s.sent("m0", 0, "please fix the flaky parser test")
+				e.s.message(message{id: "m1", thread: "th1", run: "r-m0", created: 2 * time.Second, text: "and the lexer test too"})
+				e.poll(3 * time.Second)
+				if got := e.r.Steers(); len(got) != 0 {
+					t.Errorf("steers are %+v, want none", got)
 				}
 			}},
 		{"a guest's run an earlier read saw still marks its prompt when T3's store can't be read",
@@ -621,6 +855,94 @@ func TestGuests(t *testing.T) {
 					T: base.Add(500 * time.Millisecond).UnixMilli(), EventID: "prompt-1"})
 				if err == nil || p.Known || !p.Guest {
 					t.Errorf("the pairing is %+v (err %v), want an unknown one that is still a guest's", p, err)
+				}
+			}},
+		{"a guest's queued message the owner promotes to a steer, which T3 sends again as a run of its own after Claude Code declines it, marks that run's prompt",
+			func(t *testing.T, e *env) {
+				e.s.sent("m0", 0, "please fix the flaky parser test")
+				guest(e.s, "g1", 2*time.Second)
+				e.poll(3 * time.Second)
+				// The promotion: the row joins m0's running run, stamped anew,
+				// and its own run is cancelled before it started.
+				e.s.message(message{id: "g1", thread: "th1", run: "r-m0", created: 5 * time.Second, text: guestText, extra: guestMark("g1")})
+				e.s.run(run{id: "r-g1", thread: "th1", message: "g1", requested: 2 * time.Second, status: "cancelled"})
+				e.poll(6 * time.Second)
+				// The decline: T3 sends the message again, without its guest
+				// mark, as a run of its own, in the same row.
+				e.s.message(message{id: "g1", thread: "th1", run: "r-g1-again", created: 20 * time.Second, text: guestText})
+				e.s.run(run{id: "r-g1-again", thread: "th1", message: "g1", requested: 20 * time.Second})
+				e.poll(21 * time.Second)
+				e.s.run(run{id: "r-m0", thread: "th1", message: "m0", started: ptr(100 * time.Millisecond), completed: ptr(29 * time.Second)})
+				e.s.run(run{id: "r-g1-again", thread: "th1", message: "g1", requested: 20 * time.Second, started: ptr(30 * time.Second)})
+				e.s.attempt("r-g1-again", 1, "sess-1", "")
+				if p, _ := e.pair(31*time.Second, "sess-1", 30500*time.Millisecond, "prompt-g"); !p.Guest || p.Relay != "" {
+					t.Errorf("the resent guest's prompt's pairing is %+v, want a guest's", p)
+				}
+			}},
+		{"a guest's message first read as a steer, which T3 sends again as a run of its own, marks that run's prompt",
+			func(t *testing.T, e *env) {
+				e.s.sent("m0", 0, "please fix the flaky parser test")
+				e.s.message(message{id: "g1", thread: "th1", run: "r-m0", created: 2 * time.Second, text: guestText, extra: guestMark("g1")})
+				if b := e.poll(3 * time.Second); !slices.Equal(b.Guests, []GuestRun{{SentAt: base.Add(2 * time.Second).UnixMilli(), Steered: true}}) {
+					t.Fatalf("guests are %+v, want the steered one", b.Guests)
+				}
+				e.s.message(message{id: "g1", thread: "th1", run: "r-g1", created: 10 * time.Second, text: guestText})
+				e.s.run(run{id: "r-g1", thread: "th1", message: "g1", requested: 10 * time.Second})
+				e.poll(11 * time.Second)
+				e.s.run(run{id: "r-m0", thread: "th1", message: "m0", started: ptr(100 * time.Millisecond), completed: ptr(19 * time.Second)})
+				e.s.run(run{id: "r-g1", thread: "th1", message: "g1", requested: 10 * time.Second, started: ptr(20 * time.Second)})
+				e.s.attempt("r-g1", 1, "sess-1", "")
+				if p, _ := e.pair(21*time.Second, "sess-1", 20500*time.Millisecond, "prompt-g"); !p.Guest || p.Relay != "" {
+					t.Errorf("the guest's prompt's pairing is %+v, want a guest's", p)
+				}
+			}},
+		{"a guest's message read before its run is in the store marks the run's prompt once it is",
+			func(t *testing.T, e *env) {
+				e.s.message(message{id: "g1", thread: "th1", run: "r-g1", text: guestText, extra: guestMark("g1")})
+				if b := e.poll(time.Second); !slices.Equal(b.Guests, []GuestRun{{SentAt: base.UnixMilli()}}) {
+					t.Fatalf("guests are %+v, want one not steered", b.Guests)
+				}
+				e.s.run(run{id: "r-g1", thread: "th1", message: "g1", started: ptr(2 * time.Second)})
+				e.s.attempt("r-g1", 1, "sess-1", "")
+				if p, _ := e.pair(3*time.Second, "sess-1", 2500*time.Millisecond, "prompt-g"); !p.Guest {
+					t.Errorf("the guest's prompt's pairing is %+v, want a guest's", p)
+				}
+			}},
+		{"a guest's message stays watched across a restart, by its message's key in state.json",
+			func(t *testing.T, e *env) {
+				guest(e.s, "g1", 0)
+				e.poll(time.Second)
+				raw, err := json.Marshal(e.r.State())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var saved State
+				if err := json.Unmarshal(raw, &saved); err != nil {
+					t.Fatal(err)
+				}
+				key := adapters.FixtureKeys().App("t3_code", "message", "g1")
+				if !slices.ContainsFunc(saved.Watched, func(w WatchState) bool { return w.Guest && w.Message == key }) {
+					t.Fatalf("state.json keeps %+v, with no guest's watch of g1's key", saved.Watched)
+				}
+				again := e.s.reader(e.c, tracked(), saved)
+				e.s.run(run{id: "r-g1", thread: "th1", message: "g1", started: ptr(2 * time.Second)})
+				e.s.attempt("r-g1", 1, "sess-1", "")
+				e.s.flush()
+				e.c.set(3 * time.Second)
+				p, _, err := again.Pair(context.Background(), Prompt{SessionKey: session("sess-1"),
+					T: base.Add(2500 * time.Millisecond).UnixMilli(), EventID: "prompt-g"})
+				if err != nil || !p.Guest {
+					t.Errorf("the restarted reader's pairing is %+v (err %v), want a guest's", p, err)
+				}
+			}},
+		{"a guest's run in a thread T3 runs on another provider marks the prompt it delivers",
+			func(t *testing.T, e *env) {
+				e.s.providerThread("pt-codex", "th1", "codex", "codex-thread-1")
+				e.s.message(message{id: "g1", thread: "th1", run: "r-g1", text: guestText, extra: guestMark("g1")})
+				e.s.run(run{id: "r-g1", thread: "th1", message: "g1", providerThread: "pt-codex", started: ptr(100 * time.Millisecond)})
+				e.s.attempt("r-g1", 1, "codex-session-1", "pt-codex")
+				if p, _ := e.pair(time.Second, "codex-session-1", 500*time.Millisecond, "prompt-g"); !p.Guest {
+					t.Errorf("the pairing is %+v, want a guest's", p)
 				}
 			}},
 		{"with no sqlite3, nothing marks a prompt, which keeps its text like any prompt's",
@@ -709,6 +1031,56 @@ func TestCursor(t *testing.T) {
 				checkMessages(t, mustPoll(t, r).Messages, c.t, []rec{web("m2", 10*time.Second, 32, false, event.ClassSubstantive)})
 				if b := mustPoll(t, r); len(b.Messages) != 0 {
 					t.Errorf("a read after the resync recorded %d messages, want none", len(b.Messages))
+				}
+			}},
+		{"after a resync by stamp, a renumbered message still waiting for its run pairs, and a queued guest's prompt is still a guest's",
+			func(t *testing.T, s *store, c *clock) {
+				r := s.reader(c, tracked(), State{})
+				mustPoll(t, r)
+				// m1 waits for its run, and g1, a guest's, waits behind it. The
+				// assistant's row comes after them in rowid order but is
+				// stamped before them, as provider items are.
+				s.message(message{id: "m1", thread: "th1", run: "r-m1", created: 5 * time.Second, text: text})
+				s.run(run{id: "r-m1", thread: "th1", message: "m1", requested: 5 * time.Second})
+				guest(s, "g1", 6*time.Second)
+				s.assistant("a1", 2*time.Second)
+				s.flush()
+				c.set(7 * time.Second)
+				if b := mustPoll(t, r); len(b.Messages) != 1 {
+					t.Fatalf("got %d records, want 1", len(b.Messages))
+				}
+				s.add("UPDATE orchestration_v2_projection_messages SET rowid = rowid + 100;")
+				s.message(message{id: "m2", thread: "th1", run: "r-m2", created: 10 * time.Second, text: text})
+				s.run(run{id: "r-m2", thread: "th1", message: "m2", requested: 10 * time.Second})
+				s.flush()
+				c.set(11 * time.Second)
+				checkMessages(t, mustPoll(t, r).Messages, c.t, []rec{{id: "m2", created: 10 * time.Second, client: event.RelayClientWeb,
+					declared: event.RelayDeclaredNone, lenChars: 32, class: event.ClassSubstantive, project: "p_alpha"}})
+				if b := mustPoll(t, r); len(b.Messages) != 0 || len(b.Guests) != 0 {
+					t.Errorf("a read after the resync found %d records and %d guests, want none", len(b.Messages), len(b.Guests))
+				}
+				s.run(run{id: "r-m1", thread: "th1", message: "m1", requested: 5 * time.Second, started: ptr(20 * time.Second)})
+				s.attempt("r-m1", 1, "sess-1", "")
+				s.flush()
+				c.set(21 * time.Second)
+				p, _, err := r.Pair(context.Background(), Prompt{SessionKey: session("sess-1"),
+					T: base.Add(20500 * time.Millisecond).UnixMilli(), EventID: "prompt-1"})
+				if err != nil || p.Relay != eventID("m1", 5*time.Second) {
+					t.Errorf("m1's prompt's pairing is %+v (err %v), want relay %s", p, err, eventID("m1", 5*time.Second))
+				}
+				s.run(run{id: "r-m1", thread: "th1", message: "m1", requested: 5 * time.Second, started: ptr(20 * time.Second),
+					completed: ptr(29 * time.Second)})
+				s.run(run{id: "r-g1", thread: "th1", message: "g1", requested: 6 * time.Second, started: ptr(30 * time.Second)})
+				s.attempt("r-g1", 1, "sess-1", "")
+				s.flush()
+				c.set(31 * time.Second)
+				p, _, err = r.Pair(context.Background(), Prompt{SessionKey: session("sess-1"),
+					T: base.Add(30500 * time.Millisecond).UnixMilli(), EventID: "prompt-g"})
+				if err != nil || !p.Guest {
+					t.Errorf("g1's prompt's pairing is %+v (err %v), want a guest's", p, err)
+				}
+				if st := r.Status(); st.Edited != 0 || st.Guests != 1 || st.Aged != 0 {
+					t.Errorf("the counts are %+v, want 1 guest and no row aged or changed", st.Counts)
 				}
 			}},
 		{"an older store copied over the live one, its newest rowid below the cursor, resyncs",
@@ -805,7 +1177,14 @@ func TestProbe(t *testing.T) {
 			edit: "DELETE FROM effect_sql_migrations; INSERT INTO effect_sql_migrations (migration_id, name) VALUES (54, 'ProjectionThreadsAutoSettleDisabledAt');",
 			why:  "no migration 55"},
 		{name: "a table without a column the reader names is turned down",
-			edit: "ALTER TABLE orchestration_v2_projection_provider_threads DROP COLUMN driver;", why: "has no column driver"},
+			// The table again without driver, as Ubuntu 20.04's sqlite3 3.31 can
+			// make it: DROP COLUMN came in 3.35.
+			edit: "CREATE TABLE pt_without_driver AS SELECT provider_thread_id, thread_id, owner_node_id, provider, provider_session_id," +
+				" status, first_run_ordinal, last_run_ordinal, updated_at, payload_json, provider_instance_id" +
+				" FROM orchestration_v2_projection_provider_threads;" +
+				" DROP TABLE orchestration_v2_projection_provider_threads;" +
+				" ALTER TABLE pt_without_driver RENAME TO orchestration_v2_projection_provider_threads;",
+			why: "has no column driver"},
 		{name: "a stamp index on other columns is turned down",
 			edit: "DROP INDEX orchestration_v2_projection_messages_thread_created_idx;" +
 				" CREATE INDEX orchestration_v2_projection_messages_thread_created_idx ON orchestration_v2_projection_messages(thread_id, updated_at);",
@@ -881,6 +1260,282 @@ func TestNoStore(t *testing.T) {
 			}
 			if st := r.Status(); st.Off != OffNoStore {
 				t.Errorf("the status is %+v, want off for no store", st)
+			}
+		})
+	}
+}
+
+// TestQuiet holds the reader to the cost DESIGN 3.3 allows it while T3
+// runs: a read starts no sqlite3 while a stat of the -wal and -shm files
+// says T3 has written nothing since the last read, unless a row waits for
+// its folder or a prompt asks. The last read's word is the stat once its
+// runs are done, while the -wal is as it was when the read began: the
+// reader's own mark stamps the -shm (TestOwnReads), and T3 commits nothing
+// without writing the -wal.
+func TestQuiet(t *testing.T) {
+	const text = "please fix the flaky parser test"
+	cases := []struct {
+		name    string
+		folders folders // tracked() when nil
+		// wrote says T3 wrote after the read before the one under test, and
+		// ask that the read under test is Pair's. during is what changed in
+		// the stat while the read before ran.
+		wrote, ask bool
+		during     func(f *walFiles)
+		runs       bool
+	}{
+		{name: "a read when T3 wrote nothing since the last one starts no sqlite3"},
+		{name: "a read after T3 wrote starts sqlite3", wrote: true, runs: true},
+		{name: "a read while a row waits for its folder starts sqlite3, though T3 wrote nothing",
+			folders: folders{"/work/alpha": {State: FolderPending}}, runs: true},
+		{name: "a read for a prompt the agent asks about starts sqlite3, though T3 wrote nothing", ask: true, runs: true},
+		{name: "a read after one whose own runs stamped the -shm alone, as setting a reader's mark does, starts no sqlite3",
+			during: func(f *walFiles) { f.shmTime++ }},
+		{name: "a read after one during which T3 wrote, changing the -wal, starts sqlite3",
+			during: func(f *walFiles) { f.walSize, f.walTime = f.walSize+1, f.walTime+1 }, runs: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			sp := newSpy(t, s.sqlite3)
+			c := &clock{}
+			c.set(0)
+			f := tc.folders
+			if f == nil {
+				f = tracked()
+			}
+			r := s.reader(c, f, State{})
+			r.sqlite = &Runner{Path: sp.path}
+			files := walFiles{walSize: 1, walTime: 1, shmSize: 1, shmTime: 1}
+			// next, when set, changes what the stat says from its next call
+			// on: the call that settles a read, once its runs are done.
+			var next func(*walFiles)
+			r.stat = func(string) (walFiles, bool) {
+				said := files
+				if next != nil {
+					next(&files)
+					next = nil
+				}
+				return said, true
+			}
+			mustPoll(t, r)
+			s.sent("m1", 0, text)
+			s.flush()
+			files.walSize, files.walTime = 2, 2
+			next = tc.during
+			c.set(time.Second)
+			mustPoll(t, r)
+			if tc.wrote {
+				files.walSize, files.walTime = 3, 3
+			}
+			before := len(sp.runs(t))
+			c.set(2 * time.Second)
+			if tc.ask {
+				if _, _, err := r.Pair(context.Background(), Prompt{SessionKey: session("sess-1"),
+					T: base.Add(1500 * time.Millisecond).UnixMilli(), EventID: "prompt-1"}); err != nil {
+					t.Fatalf("Pair: %v", err)
+				}
+			} else {
+				mustPoll(t, r)
+			}
+			if runs := len(sp.runs(t)) > before; runs != tc.runs {
+				t.Errorf("the read started sqlite3: %v, want %v", runs, tc.runs)
+			}
+			if st := r.Status(); !st.Reading {
+				t.Errorf("the status is %+v, want reading", st)
+			}
+		})
+	}
+}
+
+// TestWALFiles holds walOf to what TestQuiet's stat stands in for: a row T3
+// writes changes what a stat of the store's -wal and -shm files says.
+func TestWALFiles(t *testing.T) {
+	cases := []struct {
+		name  string
+		write func(s *store)
+		same  bool
+	}{
+		{"a row T3 writes changes what the stat says", func(s *store) { s.sent("m1", 0, "please fix the flaky parser test") }, false},
+		{"with nothing written the stat says the same", func(*store) {}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			before, ok := walOf(s.path)
+			if !ok {
+				t.Fatal("no -wal or -shm file to stat")
+			}
+			tc.write(s)
+			s.flush()
+			after, ok := walOf(s.path)
+			if !ok {
+				t.Fatal("no -wal or -shm file to stat")
+			}
+			if same := before == after; same != tc.same {
+				t.Errorf("the stats %+v and %+v are the same: %v, want %v", before, after, same, tc.same)
+			}
+		})
+	}
+}
+
+// TestOwnReads holds the reader's own sqlite3 runs to what its skip rests
+// on, on Linux, with a store's real -wal and -shm files, for which TestQuiet
+// stands a stat in: once a read has read what T3 wrote, each of the
+// reader's kinds of run leaves both files as a stat before it found them,
+// size and time alike, and the read after that one starts no sqlite3. The
+// first run after T3 writes sets a reader's mark in the -shm for T3's
+// newest commit, as any SQLite reader of a store in WAL mode does, and the
+// kernel stamps the -shm's time at that write; it never writes the -wal,
+// so the read settles on the stat its runs leave (settled). Every case
+// reads once first, as the reader does the moment T3 writes.
+func TestOwnReads(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the times Linux gives a store's -wal and -shm files are the ones this test reads")
+	}
+	const text = "please fix the flaky parser test"
+	poll := func(t *testing.T, r *Reader) { mustPoll(t, r) }
+	cases := []struct {
+		name string
+		// ready readies the reader for the read under test, once it has read
+		// what T3 wrote: nil for none.
+		ready func(r *Reader)
+		read  func(t *testing.T, r *Reader)
+		// runs says the read under test starts sqlite3.
+		runs bool
+	}{
+		{name: "the read after the one that read what T3 wrote starts no sqlite3, as the stat that read left still holds",
+			read: poll},
+		{name: "a Poll's runs leave the -wal and -shm files as a stat before them found them",
+			ready: func(r *Reader) { r.quiet = nil }, read: poll, runs: true},
+		{name: "a Pair's runs, which read the watched rows and their runs, leave the files as they were",
+			read: func(t *testing.T, r *Reader) {
+				if _, _, err := r.Pair(context.Background(), Prompt{SessionKey: session("sess-1"),
+					T: base.Add(500 * time.Millisecond).UnixMilli(), EventID: "prompt-1"}); err != nil {
+					t.Fatalf("Pair: %v", err)
+				}
+			}, runs: true},
+		{name: "the schema probe's runs leave the files as they were",
+			ready: func(r *Reader) { r.quiet, r.probed = nil, time.Time{} }, read: poll, runs: true},
+		{name: "a resync's runs, which walk T3's stamp index, leave the files as they were",
+			ready: func(r *Reader) {
+				c := *r.cursor
+				c.Message = "the key of a message the row at the cursor doesn't hold"
+				r.quiet, r.cursor = nil, &c
+			}, read: poll, runs: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			sp := newSpy(t, s.sqlite3)
+			c := &clock{}
+			c.set(0)
+			r := s.reader(c, tracked(), State{})
+			r.sqlite = &Runner{Path: sp.path}
+			mustPoll(t, r)
+			s.sent("m1", 0, text)
+			s.flush()
+			c.set(time.Second)
+			if b := mustPoll(t, r); len(b.Messages) != 1 {
+				t.Fatalf("the read of what T3 wrote got %d records, want 1", len(b.Messages))
+			}
+			if tc.ready != nil {
+				tc.ready(r)
+			}
+			before, ok := walOf(s.path)
+			if !ok {
+				t.Fatal("no -wal or -shm file to stat")
+			}
+			n := len(sp.runs(t))
+			c.set(2 * time.Second)
+			tc.read(t, r)
+			if runs := len(sp.runs(t)) > n; runs != tc.runs {
+				t.Errorf("the read started sqlite3: %v, want %v", runs, tc.runs)
+			}
+			after, ok := walOf(s.path)
+			if !ok {
+				t.Fatal("no -wal or -shm file to stat")
+			}
+			if after != before {
+				t.Errorf("the reader's runs changed the stat of the -wal and -shm files from %+v to %+v", before, after)
+			}
+		})
+	}
+}
+
+// TestNoSQLite3 holds the reader to DESIGN 5.9's doctor line for a missing
+// sqlite3: the reader looks for one at every read, whether or not T3 runs,
+// and says it is missing whatever else keeps it from reading.
+func TestNoSQLite3(t *testing.T) {
+	cases := []struct {
+		name    string
+		store   bool // T3's store is there
+		open    bool // T3 holds it open
+		missing bool // there is no sqlite3
+		off     string
+	}{
+		{"with T3 running, no sqlite3 turns the reader off, and the status says so", true, true, true, OffNoSQLite3},
+		{"with T3 stopped, the reader is off for that, and the status still says sqlite3 is missing", true, false, true, OffNotRunning},
+		{"with no store, the status still says sqlite3 is missing", false, false, true, OffNoStore},
+		{"with sqlite3 there, the status doesn't say it is missing", true, false, false, OffNotRunning},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			if !tc.open {
+				s.close()
+			}
+			path := s.path
+			if !tc.store {
+				path = t.TempDir() + "/userdata/statev2.sqlite"
+			}
+			tool := s.sqlite3
+			if tc.missing {
+				tool = "sqlite3-that-isnt-there"
+			}
+			c := &clock{}
+			c.set(0)
+			r, err := New(Options{Stores: []Store{{Path: path, From: FromDefault}}, SQLite: &Runner{Path: tool},
+				Keys: adapters.FixtureKeys(), Folder: tracked().resolve, Now: c.now, Zone: time.UTC})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Poll(context.Background()); err == nil {
+				t.Error("Poll worked, want an error")
+			}
+			if st := r.Status(); st.Reading || st.Off != tc.off || st.NoSQLite3 != tc.missing {
+				t.Errorf("the status is %+v, want off %s and NoSQLite3 %v", st, tc.off, tc.missing)
+			}
+		})
+	}
+}
+
+// TestNoJSON holds the reader to DESIGN 5.9's doctor line for a sqlite3
+// built without JSON functions, which no query of the reader works without:
+// the reader is off for that reason alone, so doctor can say how to get a
+// sqlite3 that has them.
+func TestNoJSON(t *testing.T) {
+	cases := []struct {
+		name string
+		body string // the shim's sh
+	}{
+		{"a sqlite3 that knows no JSON function turns the reader off for no JSON", noJSON},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStore(t)
+			sh := newShim(t, s.sqlite3, tc.body)
+			c := &clock{}
+			c.set(0)
+			r := s.reader(c, tracked(), State{})
+			r.sqlite = &Runner{Path: sh.path}
+			_, err := r.Poll(context.Background())
+			var se *SchemaError
+			if !errors.Is(err, ErrNoJSON) || !errors.As(err, &se) {
+				t.Errorf("Poll gave %v, want a SchemaError for ErrNoJSON", err)
+			}
+			if st := r.Status(); st.Reading || st.Off != OffNoJSON || st.Problem != ErrNoJSON.Error() {
+				t.Errorf("the status is %+v, want off for no JSON", st)
 			}
 		})
 	}

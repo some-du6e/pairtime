@@ -481,18 +481,55 @@ func TestSampler(t *testing.T) {
 			want: []string{"1s presence idle=0.5", "15s presence idle=14.5"},
 		},
 		{
-			name:   "a running agent app makes a context, sampled at once, until the apps component finds none, as a harness process does (D-relayed-context)",
-			inputs: []time.Duration{s(2)},
+			name:   "a running agent app alone makes a context sampled on every minute boundary from the next one, whatever the input, until the apps component finds none (D-relayed-context)",
+			inputs: every(0, s(200), s(5)),
 			acts: []act{
 				at(s(3), func(e *env) { e.s.AgentApps(1) }),
-				at(s(31), func(e *env) { e.s.AgentApps(0) }),
+				at(s(150), func(e *env) { e.s.AgentApps(0) }),
 			},
-			end:     s(61),
-			want:    []string{"3s presence idle=1", "15s presence idle=13", "30s presence idle=28"},
+			end:     s(200),
+			want:    []string{"1m0s presence idle=0", "2m0s presence idle=0"},
 			noTimer: true,
 		},
 		{
-			name:   "a running agent app keeps sampling past the 600 s a terminal's focus keeps a context live, so a phone message then finds its minutes sampled",
+			name:   "a context live only through T3 Code takes one sample a minute and lets no focus change record, whatever the input (D-relayed-context, as #225 amended it)",
+			inputs: every(0, s(200), s(3)),
+			acts: []act{
+				at(s(3), func(e *env) { e.s.AgentApps(1) }),
+				at(s(20), focusSeen(0, event.AppBrowser)),
+				at(s(70), focusSeen(0, event.AppOther)),
+				at(s(100), focusSeen(0, event.AppChatApp)),
+				at(s(130), focusSeen(0, event.AppUnknown)),
+			},
+			end: s(181),
+			want: []string{
+				"20s focus browser live=false",
+				"1m0s presence idle=0",
+				"1m10s focus other live=false",
+				"1m40s focus chat_app live=false",
+				"2m0s presence idle=0",
+				"2m10s focus unknown live=false",
+				"3m0s presence idle=0",
+			},
+		},
+		{
+			name:   "T3 Code's own window in front of a context only T3 Code keeps live is a sign of work: its change is recorded and sampled, and the usual 15 s comes back",
+			inputs: every(0, s(200), s(3)),
+			acts: []act{
+				at(s(3), func(e *env) { e.s.AgentApps(1) }),
+				at(s(61), focusSeen(0, event.AppAgentApp)),
+			},
+			end: s(91),
+			want: []string{
+				"1m0s presence idle=0",
+				"1m1s focus agent_app live=true",
+				"1m1s presence idle=1",
+				"1m15s presence idle=0",
+				"1m30s presence idle=0",
+			},
+		},
+		{
+			name:   "a running agent app keeps sampling past the 600 s a terminal's focus keeps a context live, once a minute from the first tick after it whatever the input, so a phone message then finds its minutes sampled",
 			inputs: every(0, s(900), s(100)),
 			acts: []act{
 				at(s(1), focusOn(event.AppTerminal)),
@@ -500,7 +537,22 @@ func TestSampler(t *testing.T) {
 				at(s(5), focusOn(event.AppBrowser)),
 			},
 			end:         s(700),
-			wantSamples: slices.Concat([]time.Duration{s(1), s(5)}, every(s(15), s(690), s(15))),
+			wantSamples: slices.Concat([]time.Duration{s(1), s(5)}, every(s(15), s(615), s(15)), []time.Duration{s(660)}),
+		},
+		{
+			name:   "a hook while only an agent app keeps the context live is a sign of work, which brings the usual sampling back, a sample at once included",
+			inputs: every(0, s(200), s(3)),
+			acts: []act{
+				at(s(3), func(e *env) { e.s.AgentApps(1) }),
+				at(s(70), hookOf("s_a", event.KindPromptSubmit)),
+			},
+			end: s(91),
+			want: []string{
+				"1m0s presence idle=0",
+				"1m10s presence idle=1",
+				"1m15s presence idle=0",
+				"1m30s presence idle=0",
+			},
 		},
 		{
 			name:   "with none, that context ends 600 s after the terminal lost focus, and sampling with it",
@@ -801,6 +853,18 @@ func TestStatus(t *testing.T) {
 			at:   s(3),
 			want: Status{Live: true, Every: 15 * time.Second, Locked: true, Samples: 2},
 		},
+		{
+			name: "a context only a running agent app keeps live says so, and samples every minute (D-relayed-context)",
+			acts: []act{at(s(1), func(e *env) { e.s.AgentApps(1) })},
+			at:   s(61),
+			want: Status{Live: true, AppOnly: true, Every: time.Minute, Samples: 1},
+		},
+		{
+			name: "a terminal in front of a running agent app's context is a sign of work, so the context isn't the app's alone",
+			acts: []act{at(s(1), func(e *env) { e.s.AgentApps(1) }), at(s(2), focusOn(event.AppTerminal))},
+			at:   s(3),
+			want: Status{Live: true, Every: 15 * time.Second, Samples: 1},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -826,8 +890,8 @@ func TestStatus(t *testing.T) {
 				e.s.Stop()
 				cancel()
 				<-done
-				if got.Live != tt.want.Live || got.Every != tt.want.Every || got.Locked != tt.want.Locked ||
-					got.Samples != tt.want.Samples || len(got.Problems) != 0 {
+				if got.Live != tt.want.Live || got.AppOnly != tt.want.AppOnly || got.Every != tt.want.Every ||
+					got.Locked != tt.want.Locked || got.Samples != tt.want.Samples || len(got.Problems) != 0 {
 					t.Errorf("Status() = %+v, want %+v", got, tt.want)
 				}
 			})

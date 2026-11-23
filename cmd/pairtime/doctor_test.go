@@ -1188,7 +1188,9 @@ func TestDoctorHookLine(t *testing.T) {
 // TestDoctorT3Facts runs readDoctorT3 on a home folder of the test's own:
 // it finds T3 Code's store where the agent looks for it, and counts the
 // Claude instances T3 runs Claude Code in with a Claude home of their own
-// whose settings hold none of pairtime's hooks (DESIGN 5.1, 5.9).
+// whose settings hold none of pairtime's hooks (DESIGN 5.1, 5.9), and checks
+// the home T3's background service sets with CLAUDE_CONFIG_DIR the same way
+// (Q13 of #225), on Linux and macOS, where the service has an environment.
 func TestDoctorT3Facts(t *testing.T) {
 	const hook = `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"/opt/pairtime/pairtime",` +
 		`"args":["hook","--harness","claude_code","--event","UserPromptSubmit"]}]}]}}`
@@ -1196,6 +1198,19 @@ func TestDoctorT3Facts(t *testing.T) {
 		`"own":{"driver":"claudeAgent","config":{"homePath":"~/claude-own"}},` +
 		`"hooked":{"driver":"claudeAgent","config":{"homePath":"~/claude-hooked"}},` +
 		`"default":{"driver":"claudeAgent","config":{"homePath":"~/.claude"}}}}`
+	// T3's background service as a person edited it to set CLAUDE_CONFIG_DIR
+	// to ~/claude-service: its systemd unit on Linux, its launchd plist on
+	// macOS (T3 d8f3feff, bootService.ts), and an instance with that home.
+	const (
+		serviceUnit  = ".config/systemd/user/t3code.service"
+		servicePlist = "Library/LaunchAgents/com.t3tools.t3code.service.plist"
+		editedUnit   = "[Service]\nEnvironment=T3CODE_HOME=%h/.t3\nEnvironment=CLAUDE_CONFIG_DIR=%h/claude-service\nExecStart=/opt/t3/bin/t3 serve\n"
+		editedPlist  = `<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<plist version="1.0"><dict><key>EnvironmentVariables</key><dict>` +
+			`<key>T3CODE_HOME</key><string>~/.t3</string><key>CLAUDE_CONFIG_DIR</key><string>~/claude-service</string>` +
+			`</dict></dict></plist>` + "\n"
+		serviceInstance = `{"providerInstances":{"own":{"driver":"claudeAgent","config":{"homePath":"~/claude-service"}}}}`
+	)
+	serviceEnv := runtime.GOOS == "linux" || runtime.GOOS == "darwin"
 	tests := []struct {
 		name string
 		// files are by slash path under the home folder.
@@ -1212,6 +1227,17 @@ func TestDoctorT3Facts(t *testing.T) {
 		{"settings that don't read leave doctor unable to tell",
 			map[string]string{".t3/userdata/statev2.sqlite": "", ".t3/userdata/settings.json": "{"},
 			doctor.T3Facts{Found: true, Unread: true}},
+		{"a CLAUDE_CONFIG_DIR T3's background service sets, to a home without pairtime's hooks, is the service's home of its own",
+			map[string]string{".t3/userdata/statev2.sqlite": "", serviceUnit: editedUnit, servicePlist: editedPlist},
+			doctor.T3Facts{Found: true, ServiceHome: serviceEnv}},
+		{"one whose settings hold pairtime's hooks isn't",
+			map[string]string{".t3/userdata/statev2.sqlite": "", serviceUnit: editedUnit, servicePlist: editedPlist, "claude-service/settings.json": hook},
+			doctor.T3Facts{Found: true}},
+		{"a home an instance has already counted counts once",
+			map[string]string{".t3/userdata/statev2.sqlite": "", ".t3/userdata/settings.json": serviceInstance, serviceUnit: editedUnit, servicePlist: editedPlist},
+			doctor.T3Facts{Found: true, OwnHomes: 1}},
+		{"with no T3 Code store, the service's home says nothing",
+			map[string]string{serviceUnit: editedUnit, servicePlist: editedPlist}, doctor.T3Facts{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

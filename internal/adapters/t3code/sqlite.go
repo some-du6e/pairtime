@@ -21,7 +21,9 @@ import (
 // DefaultTimeout caps one sqlite3 run. Every read is a rowid range or an
 // index lookup and takes milliseconds, so one that takes this long is
 // stuck, or waits on t3 doctor's compaction, which holds the store
-// exclusively, and the reader gives up on it.
+// exclusively, and the reader gives up on it. A run gets it even under a
+// context with a later deadline, so a read the agent waits for, Pair's, has
+// time left to try again.
 const DefaultTimeout = 5 * time.Second
 
 // maxOutput caps what one run may print. The biggest read is a message's
@@ -34,6 +36,12 @@ const maxStderr = 2 << 10
 // ErrNoSQLite3 means no sqlite3 executable was found on PATH. The reader is
 // off until one is: DESIGN 5.9's doctor line says how to install it.
 var ErrNoSQLite3 = errors.New("sqlite3 isn't installed or isn't on PATH")
+
+// ErrNoJSON means the sqlite3 on PATH was built without JSON functions,
+// which every query of the reader needs. The schema probe finds it, and its
+// SchemaError wraps it: Status.Off is then OffNoJSON, for which doctor's
+// line says how to get a sqlite3 that has them (DESIGN 5.9).
+var ErrNoJSON = errors.New("this sqlite3 has no JSON functions")
 
 // ErrBusy means T3 Code held its store exclusively for longer than the
 // read waits, as t3 doctor's compaction does. The read can't answer, and the
@@ -76,7 +84,7 @@ type Runner struct {
 	// Path is the sqlite3 executable. Empty means "sqlite3", looked up in
 	// PATH.
 	Path string
-	// Timeout caps one run whose context has no deadline. Zero means
+	// Timeout caps one run, within its context's own deadline. Zero means
 	// DefaultTimeout.
 	Timeout time.Duration
 
@@ -128,15 +136,12 @@ func (r *Runner) Query(ctx context.Context, db, sql string) ([]row, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, ok := ctx.Deadline(); !ok {
-		timeout := r.Timeout
-		if timeout <= 0 {
-			timeout = DefaultTimeout
-		}
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = DefaultTimeout
 	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	// The store's path is absolute (Locate), and nothing else in the run
 	// names a file, so sqlite3's working directory doesn't matter.
 	cmd := exec.CommandContext(ctx, exe, "-readonly", "-batch", "-bail", "-init", os.DevNull, db)

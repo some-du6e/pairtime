@@ -64,6 +64,11 @@
 		<li>Your screen</li>
 		<li>Anything while you aren't working in a project</li>
 	</ul>
+	<p data-testid="t3-code">
+		One exception: while T3 Code runs, pairtime notes once a minute whether you're at the computer, so that the
+		messages you send through T3 Code from your phone or a browser can count. It notes nothing about which app is in
+		front.
+	</p>
 </section>
 
 <section class="pt-card" aria-labelledby="who-title" data-testid="who">

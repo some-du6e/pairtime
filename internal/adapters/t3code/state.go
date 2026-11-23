@@ -27,11 +27,15 @@ type Cursor struct {
 }
 
 // WatchState is a watched row: a message the reader recorded, until it
-// pairs or RELAY_MATCH_S passes, or a guest's message whose run hasn't
-// delivered its prompt yet.
+// pairs or RELAY_MATCH_S passes, or a guest's message, for a day whatever T3
+// does to its row, so that every run of its own T3 gives it delivers a
+// guest's prompt across a restart of the agent too. The reader finds the
+// row by RowID, and by Message once a resync reads it again.
 type WatchState struct {
 	RowID int64 `json:"rowid"`
-	// Message and Run are the keys of the row's message and run ids.
+	// Message and Run are the keys of the row's message and run ids. A
+	// guest's Run is the run of its own the row last named, empty while it
+	// named none, as when the owner steered it into a running turn.
 	Message string `json:"message"`
 	Run     string `json:"run"`
 	// CreatedAt and UpdatedAt are the row's stamps as the reader first read
@@ -48,6 +52,9 @@ type WatchState struct {
 	Done     int64    `json:"done,omitempty"`
 	// Claimed is the event id of the prompt the run delivered.
 	Claimed string `json:"claimed,omitempty"`
+	// Steers are the running turns of other messages that the owner
+	// steered a guest's message into (Steer).
+	Steers []Steer `json:"steers,omitempty"`
 }
 
 // PromptState is a prompt the agent asked about.
@@ -75,7 +82,7 @@ func (r *Reader) State() State {
 		s.Watched = append(s.Watched, WatchState{
 			RowID: w.rowid, Message: w.msg, Run: w.run, CreatedAt: w.created, UpdatedAt: w.updated,
 			Guest: w.guest, Record: w.record, Sessions: append([]string(nil), w.sessions...),
-			Start: w.start, Done: w.done, Claimed: w.claimed,
+			Start: w.start, Done: w.done, Claimed: w.claimed, Steers: cloneSteers(w.steers),
 		})
 	}
 	for _, p := range r.prompts {
@@ -85,20 +92,21 @@ func (r *Reader) State() State {
 }
 
 // load takes up a saved State. A watched message's record went out before
-// the save, so a prompt that pairs with it names it.
+// the save, so a prompt that pairs with it names it, once a read has found
+// its row as the reader first read it.
 func (r *Reader) load(s State) {
 	if s.Cursor != nil {
 		c := *s.Cursor
 		r.cursor = &c
 	}
 	for _, w := range s.Watched {
-		if w.Message == "" || w.Run == "" {
+		if w.Message == "" || w.Run == "" && !w.Guest {
 			continue
 		}
 		r.watched = append(r.watched, &watch{
 			rowid: w.RowID, msg: w.Message, run: w.Run, created: w.CreatedAt, updated: w.UpdatedAt,
-			guest: w.Guest, record: w.Record, out: w.Record != "", sessions: append([]string(nil), w.Sessions...),
-			start: w.Start, done: w.Done, claimed: w.Claimed,
+			guest: w.Guest, record: w.Record, sessions: append([]string(nil), w.Sessions...),
+			start: w.Start, done: w.Done, claimed: w.Claimed, steers: cloneSteers(w.Steers),
 		})
 	}
 	for _, p := range s.Prompts {

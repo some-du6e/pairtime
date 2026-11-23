@@ -61,7 +61,8 @@ type gate struct {
 	procs int
 	// apps is how many agent apps that drive harness sessions, such as T3
 	// Code's server, the apps component found running last
-	// (D-relayed-context).
+	// (D-relayed-context). One keeps a context live alone at the slow
+	// cadence (appOnly).
 	apps int
 	// focused is set while a terminal, editor or agent app has focus.
 	focused bool
@@ -166,10 +167,20 @@ func (g *gate) sampled(now time.Time, idle time.Duration) {
 // interval returns how often to sample at now: SAMPLE_S, or SLOW_SAMPLE_S
 // once CONTEXT_IDLE_S has passed with no input and no running turn, or 0
 // when no project context is live, which means nothing may be sampled or
-// recorded.
+// recorded. A project context is live while a sign of work on this
+// computer is there (atWork) or an agent app that drives harness sessions
+// is running (DESIGN 3.3). An agent app counts for as long as it runs,
+// since a message can come from its phone app at any moment, and a
+// stretch the message's lead or its reading reaches that went unsampled
+// would read as slept through (D-relayed-context); a context only it keeps
+// live is sampled every SLOW_SAMPLE_S whatever the input (appOnly).
 func (g *gate) interval(now time.Time) time.Duration {
 	g.settle(now)
-	if !g.live(now) {
+	switch {
+	case g.atWork(now):
+	case g.apps > 0:
+		return g.cadence.slow
+	default:
 		return 0
 	}
 	if g.turnRunning(now) || g.input.IsZero() {
@@ -185,17 +196,14 @@ func (g *gate) interval(now time.Time) time.Duration {
 	return g.cadence.slow
 }
 
-// live reports whether a project context is live at now: a harness session
-// process is running, an agent app that drives harness sessions is running,
-// or a terminal, editor or agent app has focus or had it in the last
-// ContextWindow (DESIGN 3.3). A session heard from through hooks counts as
-// running for ContextWindow after its last hook, and for as long as its
-// turn runs. An agent app counts for as long as it runs, since a message
-// can come from its phone app at any moment, and a stretch the message's
-// lead or its reading reaches that went unsampled would read as slept
-// through (D-relayed-context).
-func (g *gate) live(now time.Time) bool {
-	if g.procs > 0 || g.apps > 0 || g.focused || recent(now, g.unfocused, ContextWindow) {
+// atWork reports whether a project context is live at now by a sign of
+// work on this computer, which is any sign but a running agent app: a
+// harness session process is running, or a terminal, editor or agent app
+// has focus or had it in the last ContextWindow (DESIGN 3.3). A session
+// heard from through hooks counts as running for ContextWindow after its
+// last hook, and for as long as its turn runs.
+func (g *gate) atWork(now time.Time) bool {
+	if g.procs > 0 || g.focused || recent(now, g.unfocused, ContextWindow) {
 		return true
 	}
 	for _, s := range g.sessions {
@@ -204,6 +212,16 @@ func (g *gate) live(now time.Time) bool {
 		}
 	}
 	return false
+}
+
+// appOnly reports whether a running agent app alone keeps the context live
+// at now, with no sign of work on this computer (atWork): D-relayed-context
+// as #225 amended it. Presence then samples once a minute whatever the
+// input, and the focus component records nothing about the window in
+// front. With T3 Code's own window in front, focus on an agent app is a
+// sign of work, and the usual rules apply.
+func (g *gate) appOnly(now time.Time) bool {
+	return g.apps > 0 && !g.atWork(now)
 }
 
 func (g *gate) turnRunning(now time.Time) bool {

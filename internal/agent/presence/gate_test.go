@@ -141,14 +141,25 @@ func TestGate(t *testing.T) {
 			},
 		},
 		{
-			name: "a running agent app that drives sessions is a project context for as long as it runs, as a harness process is (D-relayed-context)",
+			name: "a running agent app that drives sessions keeps a project context live for as long as it runs, as a harness process does, sampled every 60 s with no other sign of one (D-relayed-context)",
 			steps: []step{
-				{at: 0, do: apps(1)}, want(s(5000), fast),
+				{at: 0, do: apps(1)}, want(0, slow), want(s(5000), slow),
 				{at: s(5000), do: apps(0)}, want(s(5000), 0),
 			},
 		},
 		{
-			name: "a running agent app keeps the context live after a terminal's 600 s, so a phone message's lead is sampled",
+			name: "a context only a running agent app keeps live is sampled every 60 s whatever the input (D-relayed-context, as #225 amended it)",
+			steps: []step{
+				{at: 0, do: apps(1)},
+				{at: 0, do: sampled(0)},
+				want(0, slow),
+				want(s(599), slow),
+				{at: s(700), do: sampled(s(5))},
+				want(s(700), slow),
+			},
+		},
+		{
+			name: "a running agent app keeps the context live after a terminal's 600 s, every 60 s whatever the input, so a phone message's lead is sampled",
 			steps: []step{
 				{at: 0, do: focus(event.AppTerminal)},
 				{at: s(5), do: apps(1)},
@@ -156,20 +167,42 @@ func TestGate(t *testing.T) {
 				{at: s(10), do: sampled(0)},
 				want(s(609), fast),
 				want(s(610), slow),
+				{at: s(2000), do: sampled(0)},
+				want(s(2000), slow),
 				want(s(3600), slow),
 				{at: s(3600), do: apps(0)},
 				want(s(3600), 0),
 			},
 		},
 		{
-			name: "an agent app's context slows to every 60 s after 600 s with no input, as any context does",
+			name: "T3 Code's own window in front is a sign of work, so its agent app's context takes the usual 15 s, for 600 s after it loses focus",
+			steps: []step{
+				{at: 0, do: apps(1)},
+				{at: s(10), do: focus(event.AppAgentApp)},
+				{at: s(10), do: sampled(0)},
+				want(s(10), fast),
+				{at: s(20), do: focus(event.AppBrowser)},
+				{at: s(500), do: sampled(0)},
+				want(s(619), fast),
+				want(s(620), slow),
+			},
+		},
+		{
+			name: "a hook or a harness process while an agent app runs is a sign of work, which brings the usual cadence back",
 			steps: []step{
 				{at: 0, do: apps(1)},
 				{at: 0, do: sampled(0)},
-				want(s(599), fast),
-				want(s(600), slow),
+				want(s(5), slow),
+				{at: s(10), do: hook("s_a", event.KindSessionStart)},
+				want(s(10), fast),
+				{at: s(300), do: sampled(0)},
+				want(s(609), fast),
+				want(s(610), slow),
+				{at: s(700), do: procs(1)},
 				{at: s(700), do: sampled(s(5))},
 				want(s(700), fast),
+				{at: s(800), do: procs(0)},
+				want(s(800), slow),
 			},
 		},
 		{
@@ -387,6 +420,46 @@ func TestGate(t *testing.T) {
 				if got := g.interval(now); got != st.want {
 					t.Errorf("step %d, at %v: interval %v, want %v", i, st.at, got, st.want)
 				}
+			}
+		})
+	}
+}
+
+// TestAppOnly checks when a running agent app alone keeps the context live
+// (D-relayed-context, as #225 amended it), which slows sampling to once a
+// minute whatever the input and keeps focus from recording: never while
+// another sign of a project context is there.
+func TestAppOnly(t *testing.T) {
+	origin := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name  string
+		steps []step // their checks are ignored: only do runs
+		at    time.Duration
+		want  bool
+	}{
+		{"a running agent app with nothing else is the context's only sign", []step{{at: 0, do: apps(1)}}, s(1), true},
+		{"with no agent app running there is no app's context", []step{{at: 0, do: focus(event.AppBrowser)}}, s(1), false},
+		{"a terminal in front is a sign of work", []step{{at: 0, do: apps(1)}, {at: 0, do: focus(event.AppTerminal)}}, s(1), false},
+		{"T3 Code's own window in front, an agent app's, is a sign of work", []step{{at: 0, do: apps(1)}, {at: 0, do: focus(event.AppAgentApp)}}, s(1), false},
+		{"an editor that lost focus less than 600 s ago is still a sign of work",
+			[]step{{at: 0, do: apps(1)}, {at: 0, do: focus(event.AppEditor)}, {at: s(10), do: focus(event.AppBrowser)}}, s(609), false},
+		{"once its 600 s have passed the agent app is the only sign left",
+			[]step{{at: 0, do: apps(1)}, {at: 0, do: focus(event.AppEditor)}, {at: s(10), do: focus(event.AppBrowser)}}, s(610), true},
+		{"a hook in the last 600 s is a sign of work", []step{{at: 0, do: apps(1)}, {at: s(5), do: hook("s_a", event.KindSessionStart)}}, s(604), false},
+		{"a running harness process is a sign of work", []step{{at: 0, do: apps(1)}, {at: 0, do: procs(1)}}, s(1), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := gate{cadence: cadenceOf(table010(t))}
+			for _, st := range tt.steps {
+				if st.do != nil {
+					st.do(&g, origin.Add(st.at))
+				}
+			}
+			now := origin.Add(tt.at)
+			g.settle(now)
+			if got := g.appOnly(now); got != tt.want {
+				t.Errorf("appOnly = %v, want %v", got, tt.want)
 			}
 		})
 	}

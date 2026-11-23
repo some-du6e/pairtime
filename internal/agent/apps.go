@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
@@ -24,15 +26,22 @@ import (
 // drive harnesses for clients elsewhere: T3 Code's, through its reader
 // (internal/adapters/t3code; DESIGN 5.1), for the relay.message records SM
 // 2.2 rule 9 reads, and for the runs a guest's message started, whose
-// prompts keep no text. It reads every appsEvery while T3 runs, which the
-// reader tells by the -wal file T3 holds open, every appsIdle while it
-// doesn't, and at once when the adapter host is about to write a prompt
-// of a session T3's server started, before the prompt's text reaches the
-// ledger writer and the vault (prompt):
+// prompts keep no text. It reads every appsEvery while T3 runs, every
+// appsIdle while it doesn't, and at once when the adapter host is about to
+// write a prompt of a session T3's server started, before the prompt's
+// text reaches the ledger writer and the vault (prompt). T3 runs, by DESIGN
+// 3.3's test, when the agent's last process scan found T3's server
+// (t3code.ServerIn, noteServer) and the store a read picked has the -wal
+// and -shm files T3 holds open (t3code.Status.Running); the files alone
+// don't say so, since a T3 killed while it held them leaves them behind.
 //
 //   - A prompt.submit's relay and guest are the reader's word alone (DESIGN
-//     4.1 E-13). The host drops whatever an adapter or a sender put there,
-//     and the component sets them from the reader's answer.
+//     4.1 E-13), with one exception: every copy of a prompt, from any
+//     harness and on any path, a hook's, a spooled call's, a transcript's or
+//     lookback's, whose text opens as T3 Code opens a guest's message when
+//     it sends it on is marked guest (t3code.OpensAsGuest), since that text
+//     carries another person's words. The host drops whatever an adapter or
+//     a sender put there, and the component sets them.
 //   - It asks about a prompt a hook or a log reader saw, the only kinds a
 //     relay record can witness (DESIGN 5.2), of a session whose nearest
 //     non-shell ancestor is an agent app's server, parent_class agent_app,
@@ -41,26 +50,36 @@ import (
 //     mark from the answer and no link, so one run claims one record of
 //     the turn.
 //   - A prompt a guest's run delivered is marked guest, and the ledger
-//     writer keeps none of its text. When the reader can't answer, with no
-//     sqlite3, a schema it refuses or a read that timed out, nothing is
-//     marked, and the prompt keeps its text as any prompt does.
+//     writer keeps none of its text. So is every copy of a prompt, asked
+//     about or not and past the turn cache, that falls in a running turn
+//     the owner steered a guest's message into, from the later of the
+//     message's stamp and the turn's start to the turn's end, unless a run
+//     claimed it: Claude Code takes the steer as a prompt of its own in the
+//     turn's session, which no run of the guest's delivers (t3code.Steer;
+//     docs/errata/2026-11-23-t3-reader.md, decision 4). When the reader
+//     can't answer, with no sqlite3, a schema it refuses or a read that
+//     timed out, the reader's word marks nothing new, and the prompt keeps
+//     its text as any prompt does unless it opens as a guest's.
 //   - The pairing goes on whichever of the two records comes second. A
 //     prompt that pairs with a record already written takes it as its
 //     relay; a record the same read found names the prompt, and is written
 //     after it. One lock holds each read and the writes of what it found
 //     together, so no other read's records come between a prompt and its
-//     record.
+//     record. A prompt marked guest takes no relay.
 //   - Each record goes through the ledger writer with source log and via
 //     app, at the moment the reader read its row, with this run's clock as
 //     the agent's own records carry it (ledger.RunClock), and is sealed at
 //     once, as a git.change is.
-//   - While its reads find T3 running, presence counts T3 as a project
-//     context, as it counts a running harness process, so the minutes a
-//     phone message's lead and its reading reach are sampled rather than
-//     read as slept through (D-relayed-context).
+//   - While its reads find T3 running with a store the reader can read
+//     (appRuns), presence counts T3 as a project context, as it counts a
+//     running harness process, so the minutes a phone message's lead and
+//     its reading reach are sampled rather than read as slept through
+//     (D-relayed-context). With no other sign of a context, that is a
+//     sample a minute, and no os.focus record (presence.Status.AppOnly).
 //
 // What the reader keeps between runs, its cursor and the rows, runs and
-// prompts it watches, all by key, goes to state.json under appsKey.
+// prompts it watches, all by key, goes to state.json under appsKey: a
+// guest's message among them, by its message's key, for a day.
 
 // appsKey is the apps component's key in state.json.
 const appsKey = "apps"
@@ -76,7 +95,10 @@ const (
 
 // Bounds on one read: one the apps job starts, and one for a prompt, which
 // the adapter host's worker waits for. The reader puts each of its sqlite3
-// runs under a timeout of its own too (t3code.DefaultTimeout).
+// runs under a timeout of its own too (t3code.DefaultTimeout), shorter than
+// appsPairWait, so Pair can try a read that failed for a reason that passes,
+// a busy store or a slow run, again within it, and the prompt can still
+// carry its pairing (t3code.Reader.Pair).
 const (
 	appsPollWait = 30 * time.Second
 	appsPairWait = 10 * time.Second
@@ -105,6 +127,7 @@ const (
 type appReader interface {
 	Poll(ctx context.Context) (t3code.Batch, error)
 	Pair(ctx context.Context, p t3code.Prompt) (t3code.Pairing, t3code.Batch, error)
+	Steers() []t3code.Steer
 	State() t3code.State
 	Status() t3code.Status
 }
@@ -126,10 +149,13 @@ type appsState struct {
 type appTurn struct{ session, turn string }
 
 // appAsked is what the component remembers of a turn it asked the reader
-// about: when, and whether a guest's run delivered it.
+// about: when; whether a guest's words reached it, from a guest's run or a
+// running turn the owner steered a guest's message into; and whether a run
+// claimed it, which no steered guest's message takes back.
 type appAsked struct {
-	at    time.Time
-	guest bool
+	at      time.Time
+	guest   bool
+	claimed bool
 }
 
 // appsHost is the apps component.
@@ -153,13 +179,11 @@ type appsHost struct {
 	// alone calls it: the status reads what the last read left (t3Status).
 	reader appReader
 	writer *ledger.Writer
-	// job is the reads' timer, which runs every appsEvery while fast says
-	// the last read read T3's store (appReading), and every appsIdle
-	// otherwise.
-	job  *sched.Job
-	fast bool
-	// running says the last read found T3 running, as presence last heard
-	// (appRunning).
+	// job is the reads' timer, which runs every appsEvery while running
+	// says the last read found T3 running with a store the reader can read
+	// (appRuns), and every appsIdle otherwise. presence last heard the same
+	// word.
+	job     *sched.Job
 	running bool
 	// off is why the reader didn't read at the last read, for the log.
 	off string
@@ -176,15 +200,25 @@ type appsHost struct {
 	// it asked about. heard is when it last heard of any such session,
 	// which state.json keeps (appsState.SessionAt). t3 is the reader's
 	// Status as the last read left it, once t3ok, which GET /v1/status
-	// reads without waiting for a read (t3Status).
+	// reads without waiting for a read (t3Status). steers are the running
+	// turns the reader's last read knew the owner steered a guest's message
+	// into (noteSteers), which mark the prompts that fall in them, those
+	// the host writes without asking included (steered).
 	smu      sync.Mutex
 	sessions map[string]time.Time
 	turns    map[appTurn]appAsked
 	heard    time.Time
 	t3       t3code.Status
 	t3ok     bool
+	steers   []t3code.Steer
 	started  bool
 	closed   bool
+
+	// server says the agent's last process scan found T3 Code's server
+	// running (noteServer), which the reader asks at every read
+	// (t3code.Options.Server). It is false until a scan has found one, and
+	// after a scan that failed.
+	server atomic.Bool
 
 	kick chan struct{}
 	stop chan struct{}
@@ -270,7 +304,7 @@ func (p *appsHost) attach(w *ledger.Writer, secret []byte, folder func(string) t
 	}
 	kept := p.load()
 	r, err := p.newReader(t3code.Options{Stores: p.stores, Keys: adapters.NewKeys(secret), Folder: folder,
-		Table: p.a.table, Zone: p.a.zone(), State: kept.T3Code})
+		Server: p.server.Load, Table: p.a.table, Zone: p.a.zone(), State: kept.T3Code})
 	if err != nil {
 		p.a.log.Warn("T3 Code's messages aren't read, because its reader couldn't start", "err", err)
 		p.a.setProblem("apps", fmt.Sprintf("T3 Code's messages aren't read, because its reader couldn't start: %v", err))
@@ -282,6 +316,9 @@ func (p *appsHost) attach(w *ledger.Writer, secret []byte, folder func(string) t
 		p.heard = at
 	}
 	p.smu.Unlock()
+	// What state.json kept marks the prompts that come before the first
+	// read, as a spooled copy drained at the start does.
+	p.noteSteers()
 	p.poke()
 }
 
@@ -289,6 +326,21 @@ func (p *appsHost) poke() {
 	select {
 	case p.kick <- struct{}{}:
 	default:
+	}
+}
+
+// noteServer notes what the agent's process scan found of T3 Code's server
+// (procs.Options.Listed): procs, its read of the process table on goos, nil
+// after a read that failed, and self, the owner whose processes the scan
+// reports. T3's server is a process of the app table's app_server role of
+// self's, or of any session on Windows, where T3's scheduled service can
+// run outside the user's (t3code.ServerIn); a failed scan finds none. When
+// the word changes the reader reads at once, so the cadence and presence's
+// context follow T3 within a scan.
+func (p *appsHost) noteServer(goos string, procs []platform.Proc, self string) {
+	found := t3code.ServerIn(goos, procs, self)
+	if p.server.Swap(found) != found {
+		p.poke()
 	}
 }
 
@@ -345,19 +397,27 @@ func (p *appsHost) poll() {
 	ctx, cancel := context.WithTimeout(p.ctx, appsPollWait)
 	b, err := p.reader.Poll(ctx)
 	cancel()
+	p.noteSteers()
 	p.record(b)
 	p.after(err, len(b.Messages) > 0)
 }
 
-// prompt writes prompt.submit ev with write, the adapter host's, and
-// reports what write did. It first drops the relay and guest an adapter or
-// a sender put on the prompt. Then, for a prompt the reader may know of
-// (wants), it asks the reader whether the prompt pairs with a message and
-// whether a guest's run delivered it, before the prompt's text reaches the
-// ledger writer, and sets them from the answer (DESIGN 5.1). late says the
-// record is lookback's, of a time long past. The records the read found go
-// to the ledger after the prompt, so a record that names it comes second.
-func (p *appsHost) prompt(ev event.Event, late bool, write func(event.Event) bool) bool {
+// prompt writes prompt.submit ev, with text, the prompt as the harness
+// delivered it, with write, the adapter host's, and reports what write did.
+// It first drops the relay and guest an adapter or a sender put on the
+// prompt, and marks guest a prompt whose text opens as T3 Code opens a
+// guest's message when it sends it on (t3code.OpensAsGuest), whatever its
+// harness, its session or the path it came by. Then, for a prompt the
+// reader may know of (wants), it asks the reader whether the prompt pairs
+// with a message and whether a guest's run delivered it, before the
+// prompt's text reaches the ledger writer, and sets them from the answer
+// (DESIGN 5.1). Every copy, asked about or not, is also marked guest when
+// it falls in a running turn the owner steered a guest's message into
+// (steered) and no run claimed it. A prompt marked guest takes no relay.
+// late says the record is lookback's, of a time long past. The records the
+// read found go to the ledger after the prompt, so a record that names it
+// comes second.
+func (p *appsHost) prompt(ev event.Event, text []byte, late bool, write func(event.Event) bool) bool {
 	ps, ok := ev.Data.(*event.PromptSubmit)
 	if !ok || ps == nil {
 		return write(ev)
@@ -366,10 +426,20 @@ func (p *appsHost) prompt(ev event.Event, late bool, write func(event.Event) boo
 	cp := *ps
 	cp.Relay, cp.Guest = "", false
 	ev.Data = &cp
+	// A guest's words that reach a harness through T3 Code open this way,
+	// on whichever path a copy of them comes: one the reader never read,
+	// such as one sent while the agent was down, keeps none of them all the
+	// same (DESIGN 5.1). An owner who opens a prompt with those words loses
+	// that prompt's credit and its text.
+	opens := t3code.OpensAsGuest(string(text))
 	turn := appTurn{session: ev.SessionKey, turn: cp.TurnKey}
-	ask, guest := p.wants(ev, late, turn)
-	cp.Guest = guest
+	ask, was := p.wants(ev, late, turn)
+	cp.Guest = was.guest || opens
 	if !ask {
+		// The turn's other copies, and those the reader is never asked
+		// about, take a steered guest's mark past the turn's cache, unless
+		// a run claimed the turn.
+		cp.Guest = cp.Guest || !was.claimed && p.steered(ev)
 		return write(ev)
 	}
 	p.mu.Lock()
@@ -380,51 +450,64 @@ func (p *appsHost) prompt(ev event.Event, late bool, write func(event.Event) boo
 	ctx, cancel := context.WithTimeout(p.ctx, appsPairWait)
 	pr, b, err := p.reader.Pair(ctx, t3code.Prompt{SessionKey: ev.SessionKey, T: ev.T, EventID: ev.EventID})
 	cancel()
+	p.noteSteers()
+	// A run claimed the prompt when a guest's run delivered it, or a
+	// message's run did: the reader names that message's earlier record, or
+	// a record of this read names the prompt.
+	claimed := pr.Guest || pr.Relay != "" ||
+		slices.ContainsFunc(b.Messages, func(m t3code.Message) bool { return m.Data.Prompt == ev.EventID })
+	inSteer := !claimed && p.steered(ev)
 	switch {
-	case pr.Guest:
+	case pr.Guest, inSteer:
 		// A guest's run delivered it, which the reader may know from an
-		// earlier read even when this one failed: the mark only costs the
-		// prompt credit, and keeps the guest's words off the device.
+		// earlier read even when this one failed, or the guest's words
+		// reached it as a steer: the mark only costs the prompt credit, and
+		// keeps the guest's words off the device.
 		cp.Guest = true
-		p.guestTurn(turn)
+	case cp.Guest:
+		// Opened as a guest's: no message of the owner's witnesses it.
 	case pr.Relay != "":
 		cp.Relay = pr.Relay
 	}
+	p.noteTurn(turn, pr.Guest || inSteer, claimed)
 	ok = write(ev)
 	p.record(b)
-	p.after(err, len(b.Messages) > 0 || pr.Relay != "")
+	p.after(err, len(b.Messages) > 0 || cp.Relay != "")
 	return ok
 }
 
 // wants reports whether to ask the reader about prompt ev, of turn turn,
-// and whether a guest's run delivered another copy of the turn, as the
-// reader said when it was asked. A prompt is asked about once per turn,
-// when a hook or a log reader saw it, it isn't lookback's, which no read
-// answers for, and an agent app's server started its session.
-func (p *appsHost) wants(ev event.Event, late bool, turn appTurn) (ask, guest bool) {
+// and what the component noted of the turn when it asked about another of
+// its copies: whether a guest's words reached it, and whether a run claimed
+// it. A prompt is asked about once per turn, when a hook or a log reader
+// saw it, it isn't lookback's, which no read answers for, and an agent
+// app's server started its session.
+func (p *appsHost) wants(ev event.Event, late bool, turn appTurn) (ask bool, was appAsked) {
 	p.smu.Lock()
 	defer p.smu.Unlock()
 	now := p.now()
 	p.forgetTurns(now)
 	if a, ok := p.turns[turn]; ok && turn.turn != "" {
-		return false, a.guest
+		return false, a
 	}
 	if late || ev.Via != event.ViaHook && ev.Via != event.ViaLog {
-		return false, false
+		return false, appAsked{}
 	}
 	if _, ok := p.sessions[ev.SessionKey]; !ok {
-		return false, false
+		return false, appAsked{}
 	}
 	if turn.turn != "" {
 		p.turns[turn] = appAsked{at: now}
 	}
-	return true, false
+	return true, appAsked{}
 }
 
-// guestTurn notes that a guest's run delivered turn, so the turn's other
-// copies are marked guest too.
-func (p *appsHost) guestTurn(turn appTurn) {
-	if turn.turn == "" {
+// noteTurn notes what the reader's answer about a copy of turn said: that
+// a guest's words reached it (guest), so the turn's other copies are marked
+// guest too, or that a run claimed it (claimed), so no steered guest's
+// message marks them.
+func (p *appsHost) noteTurn(turn appTurn, guest, claimed bool) {
+	if turn.turn == "" || !guest && !claimed {
 		return
 	}
 	p.smu.Lock()
@@ -433,8 +516,41 @@ func (p *appsHost) guestTurn(turn appTurn) {
 	if a.at.IsZero() {
 		a.at = p.now()
 	}
-	a.guest = true
+	a.guest = a.guest || guest
+	a.claimed = a.claimed || claimed
 	p.turns[turn] = a
+}
+
+// noteSteers takes up the running turns the reader knows the owner steered
+// a guest's message into (t3code.Reader.Steers), after a read, or at the
+// start from what state.json kept. p.mu is held.
+func (p *appsHost) noteSteers() {
+	if p.reader == nil {
+		return
+	}
+	steers := p.reader.Steers()
+	p.smu.Lock()
+	p.steers = steers
+	p.smu.Unlock()
+}
+
+// steered reports whether prompt ev falls in a running turn the owner
+// steered a guest's message into, as the reader's last read said: a prompt
+// of one of the turn's sessions, stamped from the later of the message's
+// stamp and the turn's start to the turn's end, or after that start while
+// the turn runs. Claude Code takes a steer as a prompt of its own in the
+// turn's session, which no run of the guest's delivers, so that prompt can
+// carry the guest's words though its text doesn't open as a guest's
+// (docs/errata/2026-11-23-t3-reader.md, decision 4).
+func (p *appsHost) steered(ev event.Event) bool {
+	p.smu.Lock()
+	defer p.smu.Unlock()
+	for _, s := range p.steers {
+		if slices.Contains(s.Sessions, ev.SessionKey) && ev.T >= s.From && (s.To == 0 || ev.T <= s.To) {
+			return true
+		}
+	}
+	return false
 }
 
 // forgetTurns forgets the turns asked about more than appTurnKeep before
@@ -556,28 +672,26 @@ func relayEvent(m t3code.Message) event.Event {
 	}
 }
 
-// after notes how a read went: the job reads every appsEvery while the
-// reader reads T3's store (appReading) and every appsIdle while it can't;
-// presence hears whether T3 runs, which keeps a project context live
-// (appRunning); the reader's status is kept for GET /v1/status (t3Status);
+// after notes how a read went: while T3 runs with a store the reader can
+// read (appRuns) the job reads every appsEvery and presence counts T3 as a
+// project context, and otherwise the job reads every appsIdle and presence
+// counts none; the reader's status is kept for GET /v1/status (t3Status);
 // the log hears once when the reader stops reading for a reason other than
 // T3 not running; and what the reader keeps goes to state.json, at once
 // when wrote says the read wrote records or paired a prompt. A read the
 // agent's stop cut short changes neither cadence, context nor the status.
 // p.mu is held.
 func (p *appsHost) after(err error, wrote bool) {
-	if fast := appReading(err); p.ctx.Err() == nil && fast != p.fast {
-		p.fast = fast
+	st := p.reader.Status()
+	if running := appRuns(err, st); p.ctx.Err() == nil && running != p.running {
+		p.running = running
 		if p.job != nil {
 			every := appsIdle
-			if fast {
+			if running {
 				every = appsEvery
 			}
 			p.job.Reset(every)
 		}
-	}
-	if running := appRunning(err); p.ctx.Err() == nil && running != p.running {
-		p.running = running
 		if p.a.presence != nil {
 			n := 0
 			if running {
@@ -586,7 +700,6 @@ func (p *appsHost) after(err error, wrote bool) {
 			p.a.presence.AgentApps(n)
 		}
 	}
-	st := p.reader.Status()
 	if p.ctx.Err() == nil {
 		p.smu.Lock()
 		p.t3, p.t3ok = st, true
@@ -604,32 +717,35 @@ func (p *appsHost) after(err error, wrote bool) {
 	p.save(wrote)
 }
 
-// appReading reports whether a read that ended with err found T3 running
-// with a store the reader reads, or was kept from it by what can pass at
-// any moment, a store busy with t3 doctor's compaction or a slow read: the
-// job then reads every appsEvery, as DESIGN 3.3 has it while an agent app
-// runs, since a row first read more than RELAY_SEEN_LAG_S after its stamp
-// witnesses nothing. No store, T3 not running, no sqlite3 on PATH and a
-// schema the probe refused wait for appsIdle, which is soon enough to see
-// any of them change, and spares a probe of a refused schema every 10 s.
-func appReading(err error) bool {
+// appRuns reports whether a read that ended with err and left the reader's
+// status st found T3 Code running with a store the reader can read. T3
+// runs, by DESIGN 3.3's test, when the agent's last process scan found its
+// server and the store the read picked had its -wal and -shm files
+// (st.Running), and the reader can read the store when sqlite3 is on PATH
+// and the probe passed its schema, with JSON functions to read it with. A
+// read kept from the store by what can pass at any moment, a store busy
+// with t3 doctor's compaction or a slow read, counts as one that read it.
+//
+// While T3 runs the job reads every appsEvery, since a row first read more
+// than RELAY_SEEN_LAG_S after its stamp witnesses nothing, and presence
+// counts T3 as a project context, as a running harness process, so it
+// samples the minutes a message from T3's phone or web client reaches back
+// into (D-relayed-context). Otherwise the job waits appsIdle, soon enough
+// to see any of these change, and sparing a probe of a refused schema every
+// 10 s, and T3 makes no context: with no sqlite3 or a schema the reader
+// refuses, no relayed credit is possible, and leftover -wal and -shm files
+// with no server, which a T3 killed while it held them leaves, are no T3
+// running. A T3 run from its source, as node, isn't named in the app table,
+// so it gets no project context, though its messages are still read when a
+// prompt's hook asks and at the idle cadence.
+func appRuns(err error, st t3code.Status) bool {
 	var se *t3code.SchemaError
 	switch {
-	case errors.Is(err, t3code.ErrNotRunning), errors.Is(err, t3code.ErrNoStore),
-		errors.Is(err, t3code.ErrNoSQLite3), errors.As(err, &se):
+	case !st.Running, errors.Is(err, t3code.ErrNotRunning), errors.Is(err, t3code.ErrNoStore),
+		errors.Is(err, t3code.ErrNoSQLite3), errors.Is(err, t3code.ErrNoJSON), errors.As(err, &se):
 		return false
 	}
 	return true
-}
-
-// appRunning reports whether a read that ended with err found T3 running:
-// its store held open, which for T3 Code is while its -wal file exists
-// (DESIGN 3.3), whether or not the reader could read it. A running agent
-// app makes a project context live, as a running harness process does, so
-// presence samples the minutes a message from T3's phone or web client
-// reaches back into (D-relayed-context).
-func appRunning(err error) bool {
-	return !errors.Is(err, t3code.ErrNotRunning) && !errors.Is(err, t3code.ErrNoStore)
 }
 
 // load reads what state.json kept of the apps component, or nothing.
@@ -710,22 +826,34 @@ type appsReply struct {
 // what it read today. It names no path.
 type t3Reply struct {
 	// Reading says the last read worked, and Off why it didn't:
-	// t3code.OffNoStore, OffNotRunning, OffNoSQLite3, OffSchema or
-	// OffFailed. Problem says more of a refused schema or a failed read.
+	// t3code.OffNoStore, OffNotRunning, OffNoSQLite3, OffNoJSON, OffSchema
+	// or OffFailed. Problem says more of a refused schema or a failed read.
 	Reading bool   `json:"reading"`
 	Off     string `json:"off,omitempty"`
 	Problem string `json:"problem,omitempty"`
 	// Newer says T3's schema is newer than the one the reader was tested
 	// against, which it reads anyway.
 	Newer bool `json:"newer,omitempty"`
+	// Running says T3 Code ran at the last read, by DESIGN 3.3's test: the
+	// agent's process scan found its server, and the store had the -wal
+	// and -shm files T3 holds open (t3code.Status.Running). Doctor's
+	// warning that no session T3 started reached pairtime in a day needs it.
+	Running bool `json:"running,omitempty"`
+	// NoSQLite3 says the last read found no sqlite3 on the agent's PATH,
+	// whether or not T3 ran, so doctor can say how to install it before
+	// T3's messages count for nothing.
+	NoSQLite3 bool `json:"no_sqlite3,omitempty"`
 	// Day is the day the counts are for, YYYY-MM-DD in the agent's zone:
 	// Witnessed counts the messages T3 says a person sent that the reader
-	// recorded, Paired its records that paired with a prompt, and Aged the
-	// rows the age test turned away (t3code.Counts).
+	// recorded, Paired its records that paired with a prompt, Aged the rows
+	// the age test turned away, and Ahead the rows it turned away as
+	// stamped more than 2 s after the read that decided them
+	// (t3code.Counts).
 	Day       string `json:"day"`
 	Witnessed int    `json:"witnessed"`
 	Paired    int    `json:"paired"`
 	Aged      int    `json:"aged"`
+	Ahead     int    `json:"ahead"`
 	// SessionAt is when a session an agent app's server started last
 	// reached the agent, in Unix ms, absent when none has.
 	SessionAt int64 `json:"session_at,omitempty"`
@@ -739,10 +867,10 @@ func (p *appsHost) reply() appsReply {
 	if !ok {
 		return appsReply{}
 	}
-	r := &t3Reply{Reading: st.Reading, Off: st.Off, Problem: st.Problem, Newer: st.Newer,
-		Day: st.Day, Witnessed: st.Witnessed, Paired: st.Paired, Aged: st.Aged}
+	r := &t3Reply{Reading: st.Reading, Off: st.Off, Problem: st.Problem, Newer: st.Newer, Running: st.Running,
+		NoSQLite3: st.NoSQLite3, Day: st.Day, Witnessed: st.Witnessed, Paired: st.Paired, Aged: st.Aged, Ahead: st.Ahead}
 	if today := p.now().In(p.a.zone()).Format(time.DateOnly); r.Day != today {
-		r.Day, r.Witnessed, r.Paired, r.Aged = today, 0, 0, 0
+		r.Day, r.Witnessed, r.Paired, r.Aged, r.Ahead = today, 0, 0, 0, 0
 	}
 	if !heard.IsZero() {
 		r.SessionAt = heard.UnixMilli()

@@ -3,6 +3,7 @@
 package t3code
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -65,4 +66,54 @@ func TestSQL(t *testing.T) {
 			t.Errorf("lit = %s, want %s", got, want)
 		}
 	})
+}
+
+// TestGuestOpening holds the reader's two tests of a guest's opening to one
+// reading (DESIGN 5.1): OpensAsGuest, which the agent applies to every copy
+// of a prompt, and the SQL the reader's WHERE clauses apply inside sqlite3.
+// Both skip white space, as Go's strings.TrimSpace reads it, and a leading
+// Ultrathink: line with nothing else on it, as typed does. The texts are
+// invented.
+func TestGuestOpening(t *testing.T) {
+	s := newStore(t)
+	cases := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"T3's opening of a guest's message is a guest's", "Message from guest Ada, sent by the owner:\n\nwhy not?", true},
+		{"the opening after white space is a guest's", " \t\r\n Message from guest Ada, sent by the owner:", true},
+		{"the opening after white space beyond ASCII that Go trims is a guest's", "\u00a0\u3000\u2028\u0085Message from guest Ada", true},
+		{"the opening after an Ultrathink: line is a guest's", "Ultrathink:\nMessage from guest Ada, sent by the owner:", true},
+		{"the opening after an Ultrathink: line in another case, with a space and a CRLF, is a guest's",
+			"ULTRAthink: \r\n\tMessage from guest Ada", true},
+		{"an Ultrathink: with words after it on its line opens no guest's message", "Ultrathink: Message from guest Ada", false},
+		{"a second Ultrathink: line is text, so what follows it opens no guest's message",
+			"Ultrathink:\nUltrathink:\nMessage from guest Ada", false},
+		{"the words later in the text open nothing", "about the Message from guest Ada", false},
+		{"the words in another case open nothing", "message from guest Ada", false},
+		{"the words without their space open nothing", "Message from guestAda", false},
+		{"a zero-width space isn't white space, so the words after it open nothing", "\u200bMessage from guest Ada", false},
+		{"an Ultrathink: line alone opens nothing", "Ultrathink:", false},
+		{"an empty text opens nothing", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := OpensAsGuest(tc.text); got != tc.want {
+				t.Errorf("OpensAsGuest(%q) = %v, want %v", tc.text, got, tc.want)
+			}
+			sql := "SELECT " + tag("g") + ", " + hx("("+opensAsGuest+") IS 1") +
+				" FROM (SELECT json_object('text', " + lit(tc.text) + ") AS payload_json) AS m;\n"
+			rows, err := (&Runner{Path: s.sqlite3}).Query(context.Background(), s.path, sql)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 1 || len(rows[0]) != 2 {
+				t.Fatalf("sqlite3 gave %+v", rows)
+			}
+			if got := rows[0][1].s == "1"; got != tc.want {
+				t.Errorf("the SQL test of %q gives %v, want %v", tc.text, got, tc.want)
+			}
+		})
+	}
 }

@@ -147,6 +147,84 @@ func TestLocate(t *testing.T) {
 	}
 }
 
+// TestServiceClaudeHome holds ServiceClaudeHome to where T3 Code's
+// background service can set CLAUDE_CONFIG_DIR, which doctor checks as it
+// checks a Claude instance's home of its own (DESIGN 5.1, 5.9; Q13 of #225):
+// its systemd unit and the drop-ins systemctl --user edit writes beside it,
+// later ones winning, or its launchd plist on macOS.
+func TestServiceClaudeHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the cases use Unix paths")
+	}
+	const unitFile = ".config/systemd/user/t3code.service"
+	withHome := func(extra string) string {
+		return strings.Replace(unit("%h/.t3"), "Environment=T3CODE_SERVICE_UNIT", extra+"\nEnvironment=T3CODE_SERVICE_UNIT", 1)
+	}
+	plistWith := func(key, value string) string {
+		return strings.Replace(plist("/Users/someone/.t3"), "  </dict>\n  <key>RunAtLoad</key>",
+			"    <key>"+key+"</key>\n    <string>"+value+"</string>\n  </dict>\n  <key>RunAtLoad</key>", 1)
+	}
+	cases := []struct {
+		name  string
+		goos  string
+		files map[string]string // by path under home
+		// want is the home, under the test's home when it starts with ~/,
+		// or "" for none.
+		want string
+	}{
+		{name: "T3's own unit sets no CLAUDE_CONFIG_DIR", goos: "linux", files: map[string]string{unitFile: unit("%h/.t3")}},
+		{name: "a unit a person edited to set it gives its home", goos: "linux",
+			files: map[string]string{unitFile: withHome("Environment=CLAUDE_CONFIG_DIR=/srv/claude-service")}, want: "/srv/claude-service"},
+		{name: "its %h is home", goos: "linux",
+			files: map[string]string{unitFile: withHome("Environment=CLAUDE_CONFIG_DIR=%h/claude-service")}, want: "~/claude-service"},
+		{name: "a drop-in systemctl --user edit wrote sets it too",
+			goos: "linux", files: map[string]string{unitFile: unit("%h/.t3"),
+				".config/systemd/user/t3code.service.d/override.conf": "[Service]\nEnvironment=CLAUDE_CONFIG_DIR=/srv/from-drop-in\n"},
+			want: "/srv/from-drop-in"},
+		{name: "a drop-in comes after the unit, and a later drop-in after an earlier one",
+			goos: "linux", files: map[string]string{unitFile: withHome("Environment=CLAUDE_CONFIG_DIR=/srv/unit"),
+				".config/systemd/user/t3code.service.d/10-a.conf": "[Service]\nEnvironment=CLAUDE_CONFIG_DIR=/srv/a\n",
+				".config/systemd/user/t3code.service.d/20-b.conf": "[Service]\nEnvironment=CLAUDE_CONFIG_DIR=/srv/b\n"},
+			want: "/srv/b"},
+		{name: "a file in the drop-in folder that isn't a .conf isn't read",
+			goos: "linux", files: map[string]string{unitFile: unit("%h/.t3"),
+				".config/systemd/user/t3code.service.d/override.conf.bak": "[Service]\nEnvironment=CLAUDE_CONFIG_DIR=/srv/backup\n"}},
+		{name: "a drop-in with no unit beside it is no service", goos: "linux",
+			files: map[string]string{".config/systemd/user/t3code.service.d/override.conf": "[Service]\nEnvironment=CLAUDE_CONFIG_DIR=/srv/x\n"}},
+		{name: "an empty value sets no home", goos: "linux",
+			files: map[string]string{unitFile: withHome("Environment=CLAUDE_CONFIG_DIR=")}},
+		{name: "a plist a person edited to set it gives its home on macOS", goos: "darwin",
+			files: map[string]string{"Library/LaunchAgents/com.t3tools.t3code.service.plist": plistWith("CLAUDE_CONFIG_DIR", "~/claude-service")},
+			want:  "~/claude-service"},
+		{name: "T3's own plist sets none", goos: "darwin",
+			files: map[string]string{"Library/LaunchAgents/com.t3tools.t3code.service.plist": plist("/Users/someone/.t3")}},
+		{name: "Windows' task sets no environment", goos: "windows",
+			files: map[string]string{unitFile: withHome("Environment=CLAUDE_CONFIG_DIR=/srv/claude-service")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			for name, data := range tc.files {
+				p := filepath.Join(home, filepath.FromSlash(name))
+				if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte(data), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := tc.want
+			if rest, ok := strings.CutPrefix(want, "~/"); ok {
+				want = filepath.Join(home, rest)
+			}
+			got, ok := ServiceClaudeHome(adapters.Env{GOOS: tc.goos, Home: home, Getenv: func(string) string { return "" }})
+			if got != want || ok != (want != "") {
+				t.Errorf("ServiceClaudeHome = %q, %v; want %q, %v", got, ok, want, want != "")
+			}
+		})
+	}
+}
+
 // TestWSLShare holds onWSLShare to the forms a WSL distro's share takes.
 func TestWSLShare(t *testing.T) {
 	cases := []struct {

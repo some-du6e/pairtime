@@ -18,8 +18,14 @@
 // sqlite3 tool (Runner): read-only, with no .sqliterc, its SQL on stdin and
 // every field hex-encoded, one short process per read at low priority
 // under a timeout, and only while the store's -wal and -shm files exist,
-// since a read-only open makes them when they don't. Every query is a rowid
-// range or an index lookup, and none touches T3's search table.
+// since a read-only open makes them when they don't. A read starts no
+// sqlite3 while those files' sizes and times say T3 has written nothing
+// since the last one, unless a row waits for its folder or a prompt asks.
+// Every query is a rowid range or an index lookup, and none touches T3's
+// search table. T3 runs, for the agent's cadence, presence and doctor, when
+// the agent's process scan finds its server (ServerIn) and the files are
+// there (Status.Running); the files alone don't say so, since a T3 killed
+// while it held them leaves them behind.
 //
 // # A read
 //
@@ -34,31 +40,45 @@
 //  1. Each new user row's folder, which pairtime's own resolver sorts into
 //     tracked, out, or not known yet, whose rows wait for it up to
 //     RELAY_SEEN_LAG_S; and each new guest message, without its text.
-//  2. The decision, with the guest test, T3's own test for a message a
-//     person sent from a client (createdBy user, creationSource web or
-//     mobile) and the folder test in its WHERE clause, reading no text. In
-//     Go it then needs none of T3's marks of a message nobody typed, a run
-//     of its own, a first read at most RELAY_SEEN_LAG_S after the stamp,
-//     and an updated_at no later than the stamp. scheduledTaskId makes the
-//     record declared cron, senderThreadId or linkedSender cross_session.
-//  3. The text of each row left, by primary key, which is measured (its
-//     typed length and the go-ahead test, without T3's machine strings) and
-//     dropped; and the Claude Code sessions each run went to.
+//  2. The decision, with the guest test (T3's mark, or a text that opens as
+//     T3 opens a guest's, past white space and an Ultrathink: line), T3's
+//     own test for a message a person sent from a client (createdBy user,
+//     creationSource web or mobile) and the folder test in its WHERE
+//     clause, reading no text. In Go it then needs none of T3's marks of a
+//     message nobody typed, a run of its own, a deciding read at most
+//     RELAY_SEEN_LAG_S after the stamp and at most 2 s before it, an
+//     updated_at no later than the stamp, and Claude Code as the thread's
+//     provider. scheduledTaskId makes the record declared cron,
+//     senderThreadId or linkedSender cross_session.
+//  3. The text of each row left that declares none, by primary key, which
+//     is measured (its typed length and the go-ahead test, without T3's
+//     machine strings) and dropped; a cron or cross_session record reads no
+//     text and gets length 0. And the Claude Code sessions each run went
+//     to.
 //
 // # Pairing
 //
 // The reader watches each recorded message's row until its run delivers a
-// prompt or RELAY_MATCH_S passes, and each guest's run until it delivers
-// one, reading the row again on every read: a row that changed after the
-// first read witnesses nothing. The agent asks about each prompt of a
-// session T3's server started that a hook or a log reader saw, once per
-// turn (Pair), before it keeps the prompt's text (internal/agent's
-// apps.go). A run pairs with the first prompt it was asked about of a
-// session the run went to, at or after the run's start and before its end;
-// a message's, within RELAY_MATCH_S of its stamp too. The record that
-// comes second names the other: a record in Pair's own batch names the
-// prompt, and a prompt pairing with an earlier record names it
-// (Pairing.Relay). A prompt a guest's run delivered is a guest's
+// prompt or RELAY_MATCH_S passes, reading the row again on every read: a
+// row that changed after the first read witnesses nothing. It watches each
+// guest's message, by mark or by opening, for a day whatever T3 does to
+// it, in state.json too: every run of its own T3 gives the row, the first
+// and each one after a declined steer, delivers a guest's prompt. Claude
+// Code takes a steer as a prompt of its own in the running turn's session,
+// so a running turn of another message that the owner steers the row into
+// is a Steer, and the agent marks guest every prompt of its sessions from
+// the later of the row's stamp and the turn's start to its end that no run
+// claimed (Reader.Steers). A resync reads again from the oldest watched
+// row's stamp, and finds each watched row by its message's key. The agent
+// asks about each prompt of a session T3's server started that a hook or a
+// log reader saw, once per turn (Pair), before it keeps the prompt's text
+// (internal/agent's apps.go). A run pairs with the first prompt it was
+// asked about of a session the run went to, from 2 s before the run's start
+// to its end; a message's, within RELAY_MATCH_S of its stamp too. Guests'
+// runs pair first. The record that comes second names the other: a record
+// in Pair's own batch names the prompt, and a prompt pairing with an
+// earlier record names it (Pairing.Relay); a pairing found once both are
+// written names nothing. A prompt a guest's run delivered is a guest's
 // (Pairing.Guest).
 //
 // # Privacy

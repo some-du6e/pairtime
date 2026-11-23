@@ -646,6 +646,60 @@ func TestIntervalMatchesTheParameterTable(t *testing.T) {
 	})
 }
 
+// TestScanListed checks what each scan hands Options.Listed, where the
+// agent looks for T3 Code's server (DESIGN 3.3): the table it read, named
+// as on its OS, with the owner it reports for, and nothing from a scan
+// that failed, so a reader that stops working can't hold T3 running.
+func TestScanListed(t *testing.T) {
+	type listing struct {
+		goos, self string
+		pids       []int
+	}
+	tests := []struct {
+		name   string
+		procs  []platform.Proc
+		err    error
+		noSelf bool
+		want   listing
+	}{
+		{"a scan hands over every process it read, whoever owns it", familyPC(), nil, false,
+			listing{platform.Linux, me, pidsOfProcs(platform.NewTable(platform.Linux, familyPC()).Procs())}},
+		{"a scan that can't read the table hands over none", terminal(), errors.New("no /proc"), false, listing{platform.Linux, me, nil}},
+		{"a scan that can't tell whose processes are whose hands over none", terminal(), nil, true, listing{platform.Linux, "", nil}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []listing
+			s := New(Options{
+				Read: (&fake{procs: tt.procs, err: tt.err}).read,
+				OS:   platform.Linux,
+				Self: me,
+				Boot: boot,
+				Now:  func() time.Time { return sec(0) },
+				Listed: func(goos string, procs []platform.Proc, self string) {
+					got = append(got, listing{goos, self, pidsOfProcs(procs)})
+				},
+			})
+			if tt.noSelf {
+				s.self = ""
+			}
+			s.Scan()
+			if len(got) != 1 || got[0].goos != tt.want.goos || got[0].self != tt.want.self || !slices.Equal(got[0].pids, tt.want.pids) {
+				t.Errorf("Listed got %+v, want %+v once", got, tt.want)
+			}
+		})
+	}
+}
+
+// pidsOfProcs returns the pids of procs, in order, nil for none.
+func pidsOfProcs(procs []platform.Proc) []int {
+	var out []int
+	for _, p := range procs {
+		out = append(out, p.PID)
+	}
+	return out
+}
+
 func TestScanError(t *testing.T) {
 	f := &fake{err: errors.New("no /proc")}
 	var scanned []error

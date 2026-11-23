@@ -476,3 +476,46 @@ func (s *spy) runs(t *testing.T) []string {
 	}
 	return out
 }
+
+// shim is a sqlite3 a test writes, which runs some sh of its own before the
+// real one: it fails a run when the test armed it, say. It needs sh.
+type shim struct {
+	path string // the shim, as Runner.Path
+	mark string // the file arm makes, which the sh can test as $mark
+}
+
+// The shims' sh. busyOnce answers as a store that t3 doctor's compaction
+// holds, once per arm. noJSON answers as a sqlite3 built without JSON
+// functions does, to the probe's first statement.
+const (
+	busyOnce = `if [ -e "$mark" ]; then rm -f "$mark"; cat >/dev/null; echo 'Error: database is locked' >&2; exit 5; fi`
+	noJSON   = `cat >/dev/null; echo 'Error: in prepare, no such function: json_type' >&2; exit 1`
+)
+
+func newShim(t *testing.T, sqlite3, body string) *shim {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the sqlite3 shim is a shell script")
+	}
+	dir := t.TempDir()
+	s := &shim{path: filepath.Join(dir, "sqlite3"), mark: filepath.Join(dir, "mark")}
+	script := "#!/bin/sh\n" +
+		"mark=" + shellQuote(s.mark) + "\n" +
+		body + "\n" +
+		"exec " + shellQuote(sqlite3) + " \"$@\"\n"
+	if err := os.WriteFile(s.path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// arm makes the shim's mark.
+func (s *shim) arm(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile(s.mark, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// armed reports whether the mark is still there.
+func (s *shim) armed() bool { return exists(s.mark) }

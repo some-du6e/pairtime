@@ -300,10 +300,13 @@ func readDoctorHooks() []doctor.Hooks {
 // (t3code.Locate), and reads T3's settings beside each store that is
 // there for the Claude instances T3 runs Claude Code in with a Claude home
 // of their own, counting those whose settings.json holds none of
-// pairtime's hooks: their sessions never reach pairtime (DESIGN 5.1). A
-// home that is Claude Code's own default, whose settings install wrote,
-// is no home of its own, and two stores that name one home count it once.
-// It never opens the store, and what it returns names no path.
+// pairtime's hooks: their sessions never reach pairtime (DESIGN 5.1). It
+// checks the same way the home T3's background service gives Claude Code
+// when its systemd unit or launchd plist sets CLAUDE_CONFIG_DIR
+// (t3code.ServiceClaudeHome), which every instance with no home of its own
+// runs in. A home that is Claude Code's own default, whose settings
+// install wrote, is no home of its own, and a home named twice counts
+// once. It never opens the store, and what it returns names no path.
 func readDoctorT3() doctor.T3Facts {
 	env, err := install.DefaultEnv("")
 	if err != nil {
@@ -312,6 +315,28 @@ func readDoctorT3() doctor.T3Facts {
 	var out doctor.T3Facts
 	def := install.ClaudeSettings(env)
 	seen := map[string]bool{}
+	// unhooked reports whether the Claude Code settings in home h, which
+	// T3 gives Claude Code as CLAUDE_CONFIG_DIR, hold none of pairtime's
+	// hooks, for a home not counted yet that isn't Claude Code's default.
+	unhooked := func(h string) bool {
+		own := env
+		own.Getenv = func(k string) string {
+			switch {
+			case k == "CLAUDE_CONFIG_DIR":
+				return h
+			case env.Getenv == nil:
+				return ""
+			}
+			return env.Getenv(k)
+		}
+		settings := install.ClaudeSettings(own)
+		if seen[settings] || samePath(settings, def) {
+			return false
+		}
+		seen[settings] = true
+		hooks, err := install.ReadClaudeHooks(own)
+		return err != nil || len(hooks.Events) == 0
+	}
 	for _, s := range t3code.Locate(env) {
 		if _, err := os.Stat(s.Path); err != nil {
 			continue
@@ -323,25 +348,13 @@ func readDoctorT3() doctor.T3Facts {
 			continue
 		}
 		for _, h := range homes {
-			own := env
-			own.Getenv = func(k string) string {
-				switch {
-				case k == "CLAUDE_CONFIG_DIR":
-					return h
-				case env.Getenv == nil:
-					return ""
-				}
-				return env.Getenv(k)
-			}
-			settings := install.ClaudeSettings(own)
-			if seen[settings] || samePath(settings, def) {
-				continue
-			}
-			seen[settings] = true
-			if hooks, err := install.ReadClaudeHooks(own); err != nil || len(hooks.Events) == 0 {
+			if unhooked(h) {
 				out.OwnHomes++
 			}
 		}
+	}
+	if h, ok := t3code.ServiceClaudeHome(env); out.Found && ok && unhooked(h) {
+		out.ServiceHome = true
 	}
 	return out
 }

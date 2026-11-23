@@ -228,3 +228,42 @@ func TestFocusWiring(t *testing.T) {
 		})
 	}
 }
+
+// TestFocusLive checks the agent's word to the focus component on whether
+// it may record the window in front (focus.Options.Live): in a live
+// project context, but never while a running agent app alone keeps it live
+// (D-relayed-context, as #225 amended it), when pairtime records nothing
+// about which app is in front.
+func TestFocusLive(t *testing.T) {
+	cases := []struct {
+		name string
+		do   func(s *presence.Sampler)
+		want bool
+	}{
+		{"with no project context nothing is recorded", func(*presence.Sampler) {}, false},
+		{"a context only T3 Code's server keeps live records nothing about the window in front",
+			func(s *presence.Sampler) { s.AgentApps(1) }, false},
+		{"with a browser in front of T3 Code's context nothing is recorded either", func(s *presence.Sampler) {
+			s.AgentApps(1)
+			s.Focus(event.AppBrowser)
+		}, false},
+		{"T3 Code's own window in front is a sign of work, and the usual rules record it", func(s *presence.Sampler) {
+			s.AgentApps(1)
+			s.Focus(event.AppAgentApp)
+		}, true},
+		{"a terminal's context records as before", func(s *presence.Sampler) { s.Focus(event.AppTerminal) }, true},
+		{"a harness process's context records too, with T3 Code running or not", func(s *presence.Sampler) {
+			s.AgentApps(1)
+			s.HarnessProcesses(1)
+		}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a := &agent{presence: presence.New(presence.Options{Sched: sched.New(), Params: newestTable()})}
+			c.do(a.presence)
+			if got := a.focusLive(); got != c.want {
+				t.Errorf("focusLive = %v, want %v (presence %+v)", got, c.want, a.presence.Status())
+			}
+		})
+	}
+}

@@ -138,6 +138,18 @@ func TestRelayPairing(t *testing.T) {
 			func(b *tl) (string, []string) {
 				return "", []string{naming(b, 121, "s_1", promptAt(b, 61, event.ViaHook)).EventID}
 			}, event.OriginHeadless},
+		{"a record written 2 s before the stamp pairs: the reader may decide a message up to 2 s before the app stamped it (SM 2.2)",
+			func(b *tl) (string, []string) {
+				r := naming(b, 58, "s_1", event.Event{})
+				linkTo(promptAt(b, 61, event.ViaHook), r.EventID)
+				return r.EventID, nil
+			}, event.OriginRelayed},
+		{"a record written more than 2 s before the stamp pairs with nothing: the app and the agent share a clock, so that stamp comes from a row written by hand or a clock stepped back",
+			func(b *tl) (string, []string) {
+				r := b.relayMsg(atMS(57_999), "s_1", appMessage(at(60), 90))
+				linkTo(promptAt(b, 61, event.ViaHook), r.EventID)
+				return "", []string{r.EventID}
+			}, event.OriginHeadless},
 		{"a record bound to no session pairs with the prompt it names",
 			func(b *tl) (string, []string) {
 				return naming(b, 63, event.NoSession, promptAt(b, 61, event.ViaHook)).EventID, nil
@@ -764,6 +776,16 @@ func TestRelayHold(t *testing.T) {
 		}
 		if n := sumIn(one, at(180), at(600))[rP]; n != 420 {
 			t.Errorf("the lead credits %d s, want 420", n)
+		}
+	})
+	t.Run("a record written more than 2 s before its stamp can pair with nothing, so it holds nothing: FinalBefore stays PENDING_WINDOW_S behind now", func(t *testing.T) {
+		b := newTL(false)
+		appWindow(b)
+		b.mouse(every(at(1), at(1136), 5000)...)
+		b.relayMsg(at(597), "s_1", appMessage(at(600), 450))
+		b.samples(at(0), at(1140))
+		if _, out := Step(NewState(testTable(t), Device{}), b.records()); out.FinalBefore != at(240) {
+			t.Errorf("FinalBefore at %d s, want 240 s: the record held it", (out.FinalBefore-base)/1000)
 		}
 	})
 	s := NewState(testTable(t), Device{})

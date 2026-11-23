@@ -132,11 +132,7 @@ func serviceHome(env adapters.Env, getenv func(string) string) (string, bool) {
 	}
 	switch env.GOOS {
 	case "linux":
-		dir := getenv("XDG_CONFIG_HOME")
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(env.Home, ".config")
-		}
-		data, ok := readSmall(filepath.Join(dir, "systemd", "user", systemdUnit))
+		data, ok := readSmall(systemdUnitPath(env.Home, getenv))
 		if !ok {
 			return "", false
 		}
@@ -149,6 +145,79 @@ func serviceHome(env adapters.Env, getenv func(string) string) (string, bool) {
 		return plistHome(data)
 	}
 	return "", false
+}
+
+// systemdUnitPath is where T3's background service's systemd unit is:
+// under XDG_CONFIG_HOME, or ~/.config while that names no absolute folder.
+func systemdUnitPath(home string, getenv func(string) string) string {
+	dir := getenv("XDG_CONFIG_HOME")
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(dir, "systemd", "user", systemdUnit)
+}
+
+// maxDropIns bounds how many drop-ins of T3's unit ServiceClaudeHome reads.
+const maxDropIns = 32
+
+// ServiceClaudeHome returns the Claude home T3 Code's background service
+// sets with CLAUDE_CONFIG_DIR in its own environment, resolved as T3
+// resolves a home (resolveHome), when it sets one: in its systemd unit or
+// the drop-ins beside it, in the order systemd reads them, which is where
+// systemctl --user edit puts an Environment= line, on Linux, and in its
+// launchd plist on macOS. T3's own unit and plist set none, but one a
+// person edited can, and then every Claude Code that T3's server runs for
+// an instance with no home of its own reads its settings, pairtime's hooks
+// among them, from that home (DESIGN 5.1, 5.9). Doctor checks that home as
+// it checks an instance's (ClaudeHomes). Windows' Task Scheduler task sets
+// no environment. It reads those files alone, and returns a path that,
+// like every path, is local.
+func ServiceClaudeHome(env adapters.Env) (string, bool) {
+	if env.Home == "" {
+		return "", false
+	}
+	getenv := func(k string) string {
+		if env.Getenv == nil {
+			return ""
+		}
+		return env.Getenv(k)
+	}
+	var raw string
+	found := false
+	switch env.GOOS {
+	case "linux":
+		unit := systemdUnitPath(env.Home, getenv)
+		data, ok := readSmall(unit)
+		if !ok {
+			return "", false
+		}
+		// A drop-in's assignments come after the unit's, and systemd reads
+		// the drop-ins in the order of their names; a later one wins.
+		if entries, err := os.ReadDir(unit + ".d"); err == nil {
+			n := 0
+			for _, e := range entries {
+				if e.IsDir() || !strings.HasSuffix(e.Name(), ".conf") || n == maxDropIns {
+					continue
+				}
+				n++
+				if d, ok := readSmall(filepath.Join(unit+".d", e.Name())); ok {
+					data = append(append(data, '\n'), d...)
+				}
+			}
+		}
+		raw, found = unitVar(data, env.Home, claudeHomeVar)
+	case "darwin":
+		data, ok := readSmall(filepath.Join(env.Home, "Library", "LaunchAgents", launchdPlist))
+		if !ok {
+			return "", false
+		}
+		raw, found = plistVar(data, claudeHomeVar)
+	}
+	if !found {
+		return "", false
+	}
+	h := resolveHome(raw, env.Home)
+	return h, h != ""
 }
 
 // maxUnit bounds how much of a unit file Locate reads. T3's are under 2 KiB.
@@ -168,12 +237,17 @@ func readSmall(name string) ([]byte, bool) {
 	return data, true
 }
 
-// unitHome reads T3CODE_HOME from a systemd unit's Environment= lines, as
-// systemd reads them: each line a list of assignments split at whitespace,
-// with double and single quotes and backslash escapes, and specifiers, of
-// which T3 writes only %% (bootService.ts quoteSystemdValue). %h is home;
-// any other specifier makes the value unreadable. A later assignment wins.
-func unitHome(data []byte, home string) (string, bool) {
+// unitHome reads T3CODE_HOME from a systemd unit's Environment= lines
+// (unitVar).
+func unitHome(data []byte, home string) (string, bool) { return unitVar(data, home, "T3CODE_HOME") }
+
+// unitVar reads the variable name from a systemd unit's Environment= lines,
+// as systemd reads them: each line a list of assignments split at
+// whitespace, with double and single quotes and backslash escapes, and
+// specifiers, of which T3 writes only %% (bootService.ts
+// quoteSystemdValue). %h is home; any other specifier makes the value
+// unreadable. A later assignment wins.
+func unitVar(data []byte, home, name string) (string, bool) {
 	var val string
 	found := false
 	for _, line := range strings.Split(string(data), "\n") {
@@ -183,7 +257,7 @@ func unitHome(data []byte, home string) (string, bool) {
 			continue
 		}
 		for _, word := range systemdWords(rest) {
-			v, ok := strings.CutPrefix(word, "T3CODE_HOME=")
+			v, ok := strings.CutPrefix(word, name+"=")
 			if !ok {
 				continue
 			}
@@ -262,9 +336,12 @@ func specifiers(v, home string) (string, bool) {
 	return b.String(), true
 }
 
-// plistHome reads T3CODE_HOME from a launchd plist: the string that follows
-// the key T3CODE_HOME, which T3 writes in its EnvironmentVariables dict.
-func plistHome(data []byte) (string, bool) {
+// plistHome reads T3CODE_HOME from a launchd plist (plistVar).
+func plistHome(data []byte) (string, bool) { return plistVar(data, "T3CODE_HOME") }
+
+// plistVar reads the variable name from a launchd plist: the string that
+// follows the key name, which T3 writes in its EnvironmentVariables dict.
+func plistVar(data []byte, name string) (string, bool) {
 	d := xml.NewDecoder(bytes.NewReader(data))
 	var key string
 	var text strings.Builder
@@ -287,7 +364,7 @@ func plistHome(data []byte) (string, bool) {
 				key = text.String()
 				continue
 			case "string":
-				if key == "T3CODE_HOME" {
+				if key == name {
 					return text.String(), true
 				}
 			}
@@ -305,7 +382,30 @@ func exists(name string) bool {
 // running reports whether T3 holds the store at path open: its -wal and
 // -shm files exist, as they do while T3 runs. A read-only open of a store
 // without them would make both in T3's folder (DESIGN 5.1), so the reader
-// reads only while they are there.
+// reads only while they are there. Whether T3 runs takes its server's
+// process as well (Status.Running), since a T3 killed while it held the
+// store leaves both files behind.
 func running(path string) bool {
 	return exists(path+"-wal") && exists(path+"-shm")
+}
+
+// walFiles is what a stat of a store's -wal and -shm files says: their
+// sizes and modification times, Unix ns. T3 writes the -wal for every
+// change it commits, so while both say the same T3 has written nothing.
+type walFiles struct {
+	walSize, walTime int64
+	shmSize, shmTime int64
+}
+
+// walOf stats the -wal and -shm files of the store at path.
+func walOf(path string) (walFiles, bool) {
+	wal, err := os.Stat(path + "-wal")
+	if err != nil {
+		return walFiles{}, false
+	}
+	shm, err := os.Stat(path + "-shm")
+	if err != nil {
+		return walFiles{}, false
+	}
+	return walFiles{walSize: wal.Size(), walTime: wal.ModTime().UnixNano(), shmSize: shm.Size(), shmTime: shm.ModTime().UnixNano()}, true
 }

@@ -410,9 +410,11 @@ components:
       required: [cpu_s]
       description: >
         What the agent costs the computer since it started, as the OS reports
-        it for the agent's own process: the R8 numbers `pairtime doctor
-        --report` shares (DESIGN 5.9, 9.7). footprint.yml measures the same
-        working set from outside the process, on Windows.
+        it for the agent's own process and, for CPU time, the processes it
+        ran and waited for, such as T3 Code's reader's `sqlite3` runs: the R8
+        numbers `pairtime doctor --report` shares (DESIGN 5.9, 9.7).
+        footprint.yml measures the same working set from outside the
+        process, on Windows.
       properties:
         rss_bytes:
           type: integer
@@ -427,7 +429,12 @@ components:
         cpu_s:
           type: number
           minimum: 0
-          description: The CPU time the agent has used, user and system, in seconds.
+          description: >
+            The CPU time the agent has used, user and system, in seconds,
+            with that of the processes it started and waited for: on Linux
+            and macOS those it waited for, on Windows those it started since
+            it joined a job object of its own, as it does at its start.
+            Where it couldn't join one, the agent's own time alone.
     Version:
       type: object
       additionalProperties: false
@@ -629,7 +636,7 @@ components:
     T3Code:
       type: object
       additionalProperties: false
-      required: [reading, day, witnessed, paired, aged]
+      required: [reading, day, witnessed, paired, aged, ahead]
       description: >
         How the reader of T3 Code's message store is doing, as its last
         read left it, and what it read today. It names no path. Absent
@@ -640,11 +647,12 @@ components:
           description: The last read worked.
         "off":
           type: string
-          enum: [no_store, not_running, no_sqlite3, schema, failed]
+          enum: [no_store, not_running, no_sqlite3, no_json, schema, failed]
           description: >
             Why the last read didn't work: no store where T3 Code keeps it,
-            T3 Code not running (no `-wal` file), no `sqlite3` on the
-            agent's PATH, a schema the probe refused, or a read that failed.
+            no store with the `-wal` and `-shm` files T3 Code holds open, no
+            `sqlite3` on the agent's PATH, a `sqlite3` without JSON
+            functions, a schema the probe refused, or a read that failed.
             Absent while it reads.
         problem:
           type: string
@@ -656,6 +664,20 @@ components:
           description: >
             T3 Code's schema is newer than the one the reader was tested
             against, and the reader reads it anyway. Absent when it isn't.
+        running:
+          type: boolean
+          description: >
+            T3 Code ran at the last read (DESIGN 3.3): the agent's process
+            scan found T3 Code's server, and its store had the `-wal` and
+            `-shm` files T3 Code holds open. The files alone, which a T3
+            Code killed while it held them leaves behind, don't make it run.
+            Absent when it didn't.
+        no_sqlite3:
+          type: boolean
+          description: >
+            The last read found no `sqlite3` on the agent's PATH, whether or
+            not T3 Code ran, so doctor can say how to install it. Absent
+            when there is one.
         day:
           type: string
           format: date
@@ -674,8 +696,16 @@ components:
           type: integer
           minimum: 0
           description: >
-            The messages the age test turned away that day: first read more
-            than `RELAY_SEEN_LAG_S` after T3 Code stamped them.
+            The messages the age test turned away that day: decided more
+            than `RELAY_SEEN_LAG_S` after T3 Code stamped them, as one first
+            read that late is.
+        ahead:
+          type: integer
+          minimum: 0
+          description: >
+            The messages the reader turned away that day as stamped more than
+            2 s after the read that decided them, which a clock T3 Code and
+            the agent share doesn't give unless it was set back (SM 2.2).
         session_at:
           type: integer
           description: >
