@@ -290,7 +290,9 @@ func (h *adapterHost) untieQuiet(lr adapters.LogReader, harness event.Harness, s
 	if key == "" || h.a.hooked.has(key) || lr.LogHooked(sid) {
 		return
 	}
-	p.Touch(key, time.UnixMilli(at), dir)
+	// Never the session's first line, which only a line that counts is
+	// (procs.Scanner.TouchIgnored).
+	p.TouchIgnored(key, time.UnixMilli(at), dir)
 	if p.UntieQuiet(harness, key) {
 		h.a.refreshFocus()
 	}
@@ -659,12 +661,15 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		if !ll.Idle && !ll.Replay {
 			// A replay was counted when it was first read.
 			h.count(func() { st.Ignored++ })
-			if session != "" {
+			if session != "" && line.Lookback == 0 {
+				// A line of a history lookback read tells of a time before
+				// the agent ran, not of what runs now, so it neither unties
+				// its session nor ties it (below).
 				h.untieIgnored(session)
 				h.untieQuiet(lr, line.Harness, session, dir, at)
 			}
 		}
-	} else if session != "" && !ll.Replay {
+	} else if session != "" && !ll.Replay && line.Lookback == 0 {
 		// A line that counts lets its session be tied again, as when it
 		// moved to a folder that isn't out of pairtime.
 		h.a.hooked.unignore(h.sessionKey(session))
@@ -685,7 +690,9 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 			key = fmt.Sprintf("%d.%d", ll.Offset, i)
 		}
 		r.Event.EventID = h.logEventID(r.Event.T, ll.File, key)
-		if start, ok := r.Event.Data.(*event.SessionStart); ok && !ll.Replay {
+		if start, ok := r.Event.Data.(*event.SessionStart); ok && !ll.Replay && line.Lookback == 0 {
+			// A history's session.start stays the transcript's: the process
+			// its session runs in now may not be the one that started it.
 			r = h.tiedStart(r, start)
 		}
 		// A history's records need no seal and no save of their own: the

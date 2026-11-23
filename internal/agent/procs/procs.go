@@ -474,11 +474,12 @@ const TieSlack = 2 * time.Second
 // maxTouched bounds the sessions Touch remembers.
 const maxTouched = 512
 
-// touch is when a session's lines were read live, first and last, since
-// when they have come again, after a gap of more than ResumeGap, and the
-// folder they ran in (Touch); and read is when a table read that began
-// after its first line ended (noteSeen): a line of it written after that
-// shows its process ran at that read, and so was in its table (Tie).
+// touch is when a session's lines were read live: first, of those that
+// count, and last, of any; since when they have come again, after a gap of
+// more than ResumeGap; and the folder they ran in (Touch, TouchIgnored).
+// read is when a table read that began after its first line ended
+// (noteSeen): a line of it written after that shows its process ran at
+// that read, and so was in its table (Tie).
 type touch struct {
 	first, last, since time.Time
 	folder             string
@@ -498,11 +499,24 @@ const ResumeGap = 30 * time.Second
 func (s *Scanner) Touch(key string, at time.Time, folder string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.touchLocked(key, at, folder)
+	s.touchLocked(key, at, folder, true)
 }
 
-// touchLocked is Touch with s.mu held.
-func (s *Scanner) touchLocked(key string, at time.Time, folder string) {
+// TouchIgnored is Touch for a line of session key out of pairtime (DESIGN
+// 8.8), as internal/agent's untieQuiet has: it tells UntieQuiet when the
+// session last wrote, since when, and where, but it is never the session's
+// first line, which Tie holds the session's process to (FirstTouch). A
+// session's lines out of pairtime may come from a process that ended
+// before the one it runs in now started, as across a resume.
+func (s *Scanner) TouchIgnored(key string, at time.Time, folder string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.touchLocked(key, at, folder, false)
+}
+
+// touchLocked is Touch with s.mu held, and TouchIgnored when counts is
+// false.
+func (s *Scanner) touchLocked(key string, at time.Time, folder string, counts bool) {
 	t, ok := s.touched[key]
 	if !ok && len(s.touched) >= maxTouched {
 		// The session written to longest ago goes, and with it what the
@@ -516,7 +530,7 @@ func (s *Scanner) touchLocked(key string, at time.Time, folder string) {
 		delete(s.touched, oldest)
 		delete(s.lost, oldest)
 	}
-	if t.first.IsZero() || at.Before(t.first) {
+	if counts && (t.first.IsZero() || at.Before(t.first)) {
 		t.first = at
 	}
 	if t.last.IsZero() || at.Sub(t.last) > ResumeGap {
@@ -547,13 +561,14 @@ func (s *Scanner) loseLocked(key string, at time.Time) {
 	s.lost[key] = at
 }
 
-// FirstTouch returns when the first line of session key read live was
-// written (Touch), and false when none is remembered.
+// FirstTouch returns when the first line of session key that counts, read
+// live, was written (Touch), and false when none is remembered, as for a
+// session whose lines were all out of pairtime (TouchIgnored).
 func (s *Scanner) FirstTouch(key string) (time.Time, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t, ok := s.touched[key]
-	return t.first, ok
+	t := s.touched[key]
+	return t.first, !t.first.IsZero()
 }
 
 // TiedTo returns the process session key is tied to (Tie), while the scan
@@ -628,7 +643,7 @@ func (s *Scanner) noteSeen(v tableView, began, now time.Time) {
 		}
 	}
 	for key, t := range s.touched {
-		if t.read.IsZero() && !t.first.After(began) {
+		if t.read.IsZero() && !t.first.IsZero() && !t.first.After(began) {
 			t.read = now
 			s.touched[key] = t
 		}
@@ -672,9 +687,11 @@ func (s *Scanner) TieOf(key string) (Session, bool) {
 //     (TieSlack).
 //   - Of the processes of harness h that run now, that no hook claimed and
 //     no session is tied to, and that started by the session's first line
-//     (TieSlack), the young ones Grace keeps from a scan's report included,
-//     key is tied to the one there is. With none, or two or more, nothing
-//     is.
+//     that counts (TieSlack), the young ones Grace keeps from a scan's
+//     report included, key is tied to the one there is. With none, or two
+//     or more, nothing is. One UntieQuiet freed counts among them, since
+//     the session may run in it, but is never the one: with it there,
+//     nothing is tied.
 //
 // A process tied to a session never passes to another, and one UntieQuiet
 // freed from a quiet session ties to no one, until a scan sees it gone. A
@@ -684,11 +701,11 @@ func (s *Scanner) TieOf(key string) (Session, bool) {
 // ties it no more, and its tries end the quiet ties a /resume back to it
 // may have left (UntieQuiet). One that /resume switches to in the process
 // of a tied one, or one resumed in a new process that started after the
-// first line of it this run remembers, has its own process left out: it
-// stays untied, unless exactly one other untied process runs, which then
-// takes it, a wrong tie this rule can't see. A hook that claims a tied
-// process undoes its tie, as a scan that sees it gone and Untie do; a
-// session tied already keeps its process until then.
+// first line of it that counts this run remembers, has its own process
+// left out: it stays untied, unless exactly one other untied process runs,
+// which then takes it, a wrong tie this rule can't see. A hook that claims
+// a tied process undoes its tie, as a scan that sees it gone and Untie do;
+// a session tied already keeps its process until then.
 func (s *Scanner) Tie(h event.Harness, key string, at time.Time) (sess Session, tied, judged bool) {
 	if key == "" {
 		return Session{}, false, true
@@ -712,8 +729,8 @@ func (s *Scanner) Tie(h event.Harness, key string, at time.Time) (sess Session, 
 		}
 		return Session{}, false, true
 	}
-	if _, ok := s.touched[key]; !ok {
-		s.touchLocked(key, at, "")
+	if t := s.touched[key]; t.first.IsZero() {
+		s.touchLocked(key, at, "", true)
 	}
 	read := s.touched[key].read
 	s.mu.Unlock()
@@ -772,28 +789,37 @@ func (s *Scanner) tieLocked(v tableView, h event.Harness, key string, at, read, 
 			return Session{}, false, true, false
 		}
 	}
+	// untied are the processes the session could run in that may be tied
+	// to it. A process UntieQuiet freed could run it too, as when /clear
+	// or /resume left it there, but ties to no one, so one of those among
+	// them leaves the session untied (blocked).
 	var untied []platform.Proc
+	blocked := false
 	for _, p := range v.all {
 		ph, ok := v.own(p, s.self)
 		if !ok || ph != h {
 			continue
 		}
 		id := p.ID()
-		if _, claimed := s.claimed[id]; claimed || s.reported[id].Tied || s.freed[id] {
+		if _, claimed := s.claimed[id]; claimed || s.reported[id].Tied {
 			continue
 		}
 		if !p.Start.IsZero() && p.Start.After(first.Add(TieSlack)) {
 			continue
 		}
+		if s.freed[id] {
+			blocked = true
+			continue
+		}
 		untied = append(untied, p)
 	}
-	switch len(untied) {
-	case 0:
-		// None it could run in is untied: it may run in one tied to a
-		// session /clear or /resume ended there, whose tie ends now.
+	switch {
+	case len(untied) == 0:
+		// None it could run in can be tied: it may run in one tied to a
+		// session /clear or /resume ended there, whose tie ends now, or in
+		// one such an end freed.
 		return Session{}, false, true, s.untieQuietLocked(h, key)
-	case 1:
-	default:
+	case len(untied) > 1, blocked:
 		return Session{}, false, true, false
 	}
 	pick := untied[0]
@@ -815,7 +841,7 @@ func (s *Scanner) tieLocked(v tableView, h event.Harness, key string, at, read, 
 // in the process of the one before, which goes quiet, so a session that
 // can't be tied, as one whose log opened with /clear, one whose lines are
 // out of pairtime (internal/agent's tieLive and takeLine), one Tie turns
-// away as lost, or one Tie finds no untied process for, may run in a
+// away as lost, or one Tie finds no process it may tie to, may run in a
 // process tied to that one. Its tie ends, and passes on to nothing, ever:
 // the process ties to no one again until a scan sees it gone (freed), and
 // its session joins lost, since /clear or /resume ended it there.
