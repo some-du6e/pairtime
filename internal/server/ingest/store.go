@@ -146,35 +146,47 @@ type storedBucket struct {
 	receivedAt int64
 	bucket     string
 	revisions  int64
+	// label is the server's witness label for the revision (package
+	// witness), "" for one stored without a label.
+	label string
 }
 
+// loadBucket reads a minute's current revision. Its label comes from the
+// revision's own minute_bucket_revisions row, never from minute_buckets:
+// a release from before migration 0009, run on its database after a
+// rollback, rewrites the minute's row and leaves the replaced revision's
+// label on it, while it stores the new revision's row without one.
 func loadBucket(ctx context.Context, q queryer, deviceID string, minuteMS int64) (storedBucket, bool, error) {
 	var s storedBucket
-	err := q.QueryRowContext(ctx, `SELECT rev, received_at_ms, bucket, revisions FROM minute_buckets WHERE device_id = $1 AND minute_ms = $2`,
-		deviceID, minuteMS).Scan(&s.rev, &s.receivedAt, &s.bucket, &s.revisions)
+	var label sql.NullString
+	err := q.QueryRowContext(ctx, `SELECT b.rev, b.received_at_ms, b.bucket, b.revisions, r.server_witness FROM minute_buckets b
+LEFT JOIN minute_bucket_revisions r ON r.device_id = b.device_id AND r.minute_ms = b.minute_ms AND r.rev = b.rev
+WHERE b.device_id = $1 AND b.minute_ms = $2`,
+		deviceID, minuteMS).Scan(&s.rev, &s.receivedAt, &s.bucket, &s.revisions, &label)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return s, false, nil
 	case err != nil:
 		return s, false, fmt.Errorf("ingest: reading a minute bucket: %w", err)
 	}
+	s.label = label.String
 	return s, true, nil
 }
 
 // putBucket stores bucket as the minute's current revision, the
-// revisions-th, and adds it to minute_bucket_revisions, which keeps every
-// revision ingest stored.
-func putBucket(ctx context.Context, tx writer.Tx, deviceID, account string, minuteMS, rev int64, state string, bucket []byte, receivedAt, revisions int64) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO minute_buckets (device_id, minute_ms, account_id, rev, state, received_at_ms, bucket, revisions)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+// revisions-th, with the server's witness label, and adds it to
+// minute_bucket_revisions, which keeps every revision ingest stored.
+func putBucket(ctx context.Context, tx writer.Tx, deviceID, account string, minuteMS, rev int64, state string, bucket []byte, receivedAt, revisions int64, label string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO minute_buckets (device_id, minute_ms, account_id, rev, state, received_at_ms, bucket, revisions, server_witness)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (device_id, minute_ms) DO UPDATE SET rev = excluded.rev, state = excluded.state,
-received_at_ms = excluded.received_at_ms, bucket = excluded.bucket, revisions = excluded.revisions`,
-		deviceID, minuteMS, account, rev, state, receivedAt, string(bucket), revisions)
+received_at_ms = excluded.received_at_ms, bucket = excluded.bucket, revisions = excluded.revisions, server_witness = excluded.server_witness`,
+		deviceID, minuteMS, account, rev, state, receivedAt, string(bucket), revisions, label)
 	if err != nil {
 		return fmt.Errorf("ingest: storing a minute bucket: %w", err)
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO minute_bucket_revisions (device_id, minute_ms, rev, account_id, received_at_ms, bucket)
-VALUES ($1, $2, $3, $4, $5, $6)`, deviceID, minuteMS, rev, account, receivedAt, string(bucket))
+	_, err = tx.ExecContext(ctx, `INSERT INTO minute_bucket_revisions (device_id, minute_ms, rev, account_id, received_at_ms, bucket, server_witness)
+VALUES ($1, $2, $3, $4, $5, $6, $7)`, deviceID, minuteMS, rev, account, receivedAt, string(bucket), label)
 	if err != nil {
 		return fmt.Errorf("ingest: storing a minute bucket's revision: %w", err)
 	}

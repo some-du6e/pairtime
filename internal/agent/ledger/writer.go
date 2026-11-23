@@ -336,6 +336,7 @@ type Writer struct {
 	retired []*appendFile // segments rolled over that a seal may still flush
 	next    uint64        // s of the next record
 	b       uint64        // the last sealed batch, 0 before the first
+	base    uint64        // the first batch batches.seg keeps (Sweep), 1 before a sweep drops any
 	head    ledger.Hash   // its H_b, zero(32) before the first
 	sealed  int64         // its sealed_at, in Unix ms, 0 before the first
 	pending []pending     // the records since the last seal
@@ -1210,8 +1211,17 @@ type chainPayload struct {
 	Created  int64  `json:"created"`
 }
 
-// chainVersion is the layout of the writer's files, chainPayload.V.
-const chainVersion = 1
+// chainVersion is the layout of the writer's files, chainPayload.V, and
+// chainVersionBase the layout of a batches.seg that a retention sweep wrote
+// with a base frame after its chain frame (Writer.Sweep). A pairtime that
+// reads only chainVersion refuses such a file at its chain frame, before it
+// reads on to the base frame, which it doesn't know, so it never takes the
+// frame for a crash's torn tail and cuts the rows after it off
+// (docs/errata/2026-11-23-unsent-batches-retention.md).
+const (
+	chainVersion     = 1
+	chainVersionBase = 2
+)
 
 // Seal seals the records written since the last batch into the next batch
 // and returns it with ok set, once the batch is on disk and its row is in
@@ -1488,13 +1498,17 @@ func (w *Writer) StoreReceipt(b uint64, r ledger.Receipt) error {
 	w.sealMu.Lock()
 	defer w.sealMu.Unlock()
 	w.mu.Lock()
-	err, last := w.usable(), w.b
+	err, last, base := w.usable(), w.b, w.base
 	w.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	if b == 0 || b > last {
 		return fmt.Errorf("ledger: batch %d isn't sealed; the last one is %d", b, last)
+	}
+	if b < base {
+		// A sweep dropped the batch, and its receipt has no row to go with.
+		return nil
 	}
 	payload, err := json.Marshal(receiptPayload{B: b, ReceivedAt: r.ReceivedAt, Signature: hex.EncodeToString(r.Signature[:])})
 	if err != nil {

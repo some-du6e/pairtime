@@ -4,6 +4,7 @@ package agent
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -19,10 +20,14 @@ const configDebounce = 300 * time.Millisecond
 // watchConfig reloads config.toml soon after it changes, so that, for one,
 // switching an opt-in off takes effect at once. It watches the directory,
 // not the file, because many editors save by renaming a new file over the
-// old one. If the watch can't start, edits apply at the next start, and the
-// status says so; uploads follow config.toml's mode at once either way,
-// since they read the file itself (UploadConfig). It returns the step that
-// stops the watch.
+// old one. A config.toml that is a link, as into a dotfiles folder, changes
+// where it points, as pairtime privacy keep-text and pairtime login change
+// it (config.SetKeepText), so the folder of the file it points to is
+// watched too, and the link followed again at each change of config.toml.
+// If the watch can't start, edits apply at the next start, and the status
+// says so; uploads follow config.toml's mode at once either way, since they
+// read the file itself (UploadConfig). It returns the step that stops the
+// watch.
 func (a *agent) watchConfig() func() {
 	w, err := fsnotify.NewWatcher()
 	if err == nil {
@@ -35,6 +40,30 @@ func (a *agent) watchConfig() func() {
 		return func() {}
 	}
 	name := filepath.Base(a.dirs.ConfigFile())
+	// target is the file config.toml links to, "" while it isn't a link
+	// whose folder the watch has. Only the watch's goroutine touches it.
+	target := ""
+	follow := func() {
+		t := linkTarget(a.dirs.ConfigFile())
+		if t == target {
+			return
+		}
+		if target != "" && filepath.Dir(target) != filepath.Clean(a.dirs.Config) {
+			w.Remove(filepath.Dir(target))
+		}
+		target = ""
+		if t == "" {
+			return
+		}
+		if dir := filepath.Dir(t); dir != filepath.Clean(a.dirs.Config) {
+			if err := w.Add(dir); err != nil {
+				a.log.Warn("watching the folder config.toml links to, so its changes apply at the next start", "err", err)
+				return
+			}
+		}
+		target = t
+	}
+	follow()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -45,7 +74,13 @@ func (a *agent) watchConfig() func() {
 				if !ok {
 					return
 				}
-				if filepath.Base(ev.Name) != name {
+				switch {
+				case filepath.Base(ev.Name) == name && filepath.Dir(ev.Name) == filepath.Clean(a.dirs.Config):
+					// config.toml itself, or the link, which may point
+					// elsewhere now.
+					follow()
+				case target != "" && filepath.Clean(ev.Name) == target:
+				default:
 					continue
 				}
 				// A switch back online is noted at the first look, so the
@@ -69,4 +104,18 @@ func (a *agent) watchConfig() func() {
 		w.Close()
 		<-done
 	}
+}
+
+// linkTarget returns the file the link name points to, after every link
+// on the way, and "" when name isn't a link or its target can't be found.
+func linkTarget(name string) string {
+	fi, err := os.Lstat(name)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return ""
+	}
+	t, err := filepath.EvalSymlinks(name)
+	if err != nil {
+		return ""
+	}
+	return filepath.Clean(t)
 }
