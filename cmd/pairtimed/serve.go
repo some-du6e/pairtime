@@ -20,6 +20,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/config"
 	"github.com/some-du6e/pairtime/internal/server/dashboard"
 	"github.com/some-du6e/pairtime/internal/server/device"
+	serverkeys "github.com/some-du6e/pairtime/internal/server/keys"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/ops"
 	"github.com/some-du6e/pairtime/internal/server/pages"
@@ -174,6 +175,17 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	if err := checkServerKeys(ctx, cfg.DataDir, db, w, logger); err != nil {
 		return err
 	}
+	// Which server key was valid when, which /.well-known/pairtime-keys.json
+	// publishes (WP-SV17; DESIGN 10.2). It changes only at a start, so the
+	// document is written once.
+	history, err := recordServerKey(ctx, cfg.DataDir, db, w, logger)
+	if err != nil {
+		return err
+	}
+	keysDoc, err := history.Document()
+	if err != nil {
+		return err
+	}
 
 	// The retention jobs that are on sweep through the writer, so their
 	// deletes queue with every other write (DESIGN 4.4). A job, hold or
@@ -319,6 +331,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 
 	public := http.NewServeMux()
 	public.HandleFunc("GET /healthz", ops.Healthz)
+	public.Handle("GET "+serverkeys.DocumentPath, serverkeys.Handler(keysDoc))
 	site.Register(public)
 	signIn.Register(public)
 	linking.Register(public)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/backup"
+	serverkeys "github.com/some-du6e/pairtime/internal/server/keys"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 )
@@ -60,4 +61,36 @@ func checkServerKeys(ctx context.Context, dataDir string, db *store.DB, w *write
 			ErrOtherKeys, recordedID, recordedPepper, dir, id, pepper)
 	}
 	return nil
+}
+
+// recordServerKey makes the key history hold the server key in data_dir
+// as the current one (WP-SV17; serverkeys.RecordServer) and returns the
+// history, which /.well-known/pairtime-keys.json publishes. It runs after
+// checkServerKeys, so the key is the one the database was written with. A
+// data directory without keys records nothing, and the document lists the
+// keys the history holds from before.
+func recordServerKey(ctx context.Context, dataDir string, db *store.DB, w *writer.Writer, logger *slog.Logger) (*serverkeys.History, error) {
+	keys, err := backup.Load(backup.KeysDir(dataDir))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// checkServerKeys has said so.
+	case err != nil:
+		return nil, err
+	default:
+		pub := keys.Public().Server
+		err := w.Do(ctx, 2, func(ctx context.Context, tx writer.Tx) error {
+			return serverkeys.RecordServer(ctx, tx, pub, time.Now().UnixMilli())
+		})
+		if err != nil {
+			return nil, fmt.Errorf("recording the server key's validity: %w", err)
+		}
+	}
+	h, err := serverkeys.Load(ctx, db.Read)
+	if err != nil {
+		return nil, err
+	}
+	if k, ok := h.At(time.Now().UnixMilli()); ok {
+		logger.Info("the keys document lists the server key", "server_key", k.ID, "valid_from", time.UnixMilli(k.ValidFrom).UTC().Format(time.RFC3339), "keys", len(h.Server))
+	}
+	return h, nil
 }
