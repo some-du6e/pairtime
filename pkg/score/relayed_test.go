@@ -930,9 +930,12 @@ func checkRelayedCredit(t *testing.T, d Derived) {
 // samples nothing: a relayed prompt resets its session's bucket at pickup,
 // relayed reading draws on at most UNKNOWN_BUCKET_MAX_S of the bucket, and
 // it drains, as READ and never SUP, from one of the session's stops until
-// the thread's next relayed message is sent or the session's next turn
-// starts, when that message is sent within READ_HORIZON_S of the stop and
-// pairs within PENDING_WINDOW_S - 60 s of it. What only the 120 s cap kept
+// the relayed anchor that vouches for that stop is sent or the session's
+// next turn starts. That anchor is the first relayed anchor sent after the
+// stop among those that pair within PENDING_WINDOW_S - 60 s of it, and it
+// vouches only when it is sent within READ_HORIZON_S of the stop; one that
+// pairs later keeps its own lead but neither vouches for that stop's
+// reading nor ends it (SM 2.4). What only the 120 s cap kept
 // from being read is X.bucket_cap, which comes before the codes of running
 // turns (SM 5.2). TestRelayedReadingCap checks the cap after resets that
 // aren't relayed.

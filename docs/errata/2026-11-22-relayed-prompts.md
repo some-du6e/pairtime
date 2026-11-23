@@ -81,7 +81,7 @@ The lookback erratum ([2026-11-19-sm-2.8-lookback](2026-11-19-sm-2.8-lookback.md
 2. An answer's relayed lead has no 60 s think part.
 3. Codes. In a live slot whose presence is unknown, as on a server with no desktop, an uncredited second is `X.bucket_cap` where only the 120 s cap kept a session from reading, else `X.agent_only` while a turn a person started runs, or a `no_input` one, else `X.automated` while an automated turn runs, else `X.no_anchor` (SM 5.2). That is E-6.6-codes' order with its presence and focus steps skipped, and the code-placement erratum's order among running turns. Backfilled slots aren't this erratum's: the orchestrator's decision on E-2.8-lookback gives a backfilled second a discount's code first, then `X.bucket_cap` where only the 120 s cap kept a session from reading, then `X.agent_only` or `X.automated` while any turn runs, then `X.no_anchor`, and WP-SC7 applies it with its fixture.
 4. An automated turn between a stop and the next relayed message fills the same capped bucket, and its own stop opens reading the same way.
-5. A message sent before a stop, as a queued one is, doesn't vouch for that stop's reading, and reading ends when the thread's next relayed message is sent or the session's next turn starts.
+5. A message sent before a stop, as a queued one is, doesn't vouch for that stop's reading, and, as amended 2026-11-23 by the ruling in #221, reading ends when the relayed anchor that vouches for that stop is sent or the session's next turn starts.
 
 ## Red team: how a script on the machine could farm the rule, and what bounds it
 
