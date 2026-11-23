@@ -278,6 +278,6 @@
       "why": "DESIGN 5.4: a track anchor's reading fill is R_TURN_BASE_S, because no record shows the agent's output."
     }
   ],
-  "errata": ["2026-11-19-turns-without-a-stop"],
+  "errata": [],
   "notes": ["Each call opens an anchor and starts a turn whose fill is the 20 s base and nothing more."]
 }

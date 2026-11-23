@@ -54,7 +54,7 @@
       "flags": ["track_without_prompt"],
       "logged_s": 0,
       "ai_logged_s": 0,
-      "why": "DESIGN 5.4: pairtime sees the session through hooks and a log reader, and no hook or log prompt of the session is within TRACK_LOG_MATCH_S = 10 s of the call; the nearest is 170 s back. It opens nothing and raises the tier-2 flag track_without_prompt. Never counts toward logged_s (D19)."
+      "why": "DESIGN 5.4: pairtime sees the session through hooks and a log reader, and no hook or log prompt of the session is within TRACK_DEDUPE_S = 30 s of the call; the nearest is 170 s back. It opens nothing and raises the tier-2 flag track_without_prompt. Never counts toward logged_s (D19)."
     }
   ],
   "turns": [
