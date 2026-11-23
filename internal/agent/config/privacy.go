@@ -3,6 +3,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -26,6 +27,11 @@ type Privacy struct {
 	// file may as well say to keep it, and a typo mustn't delete what a
 	// spot check could need.
 	TextHeld bool
+	// TextDays and PathDays are prompt_text_days and path_days, how many
+	// days the vault keeps the text and the paths for recaps, when the
+	// teen shortened them (DESIGN 3.5), and 0 for DESIGN 4.4's periods. A
+	// longer period than DESIGN's is DESIGN's (retention.Periods.Shorten).
+	TextDays, PathDays int
 }
 
 // KeepText reports whether the vault keeps the text of new records.
@@ -36,21 +42,52 @@ func (p Privacy) KeepText() bool { return !p.TextOff && !p.TextHeld }
 // however the file spells it, as notificationsFile does.
 type privacyFile struct {
 	KeepPromptText *bool `toml:"keep_prompt_text"`
+	PromptTextDays *int  `toml:"prompt_text_days"`
+	PathDays       *int  `toml:"path_days"`
 }
 
 // parsePrivacy checks the [privacy] table and puts it in cfg. keys are
 // every key in the file.
 func parsePrivacy(cfg *Config, file privacyFile, keys []toml.Key) (problems []string) {
-	if spellings(keys, "privacy", "keep_prompt_text") > 1 {
+	switch {
+	case spellings(keys, "privacy", "keep_prompt_text") > 1:
 		// The decoder put one of the spellings in file, and which one
 		// depends on map order.
 		cfg.Privacy.TextHeld = true
-		return []string{"config.toml: privacy.keep_prompt_text is set more than once, in different upper and lower case, so pairtime keeps no new prompt text, and deletes none, until it's fixed"}
-	}
-	if file.KeepPromptText != nil && !*file.KeepPromptText {
+		problems = append(problems, "config.toml: privacy.keep_prompt_text is set more than once, in different upper and lower case, so pairtime keeps no new prompt text, and deletes none, until it's fixed")
+	case file.KeepPromptText != nil && !*file.KeepPromptText:
 		cfg.Privacy.TextOff = true
 	}
-	return nil
+	for _, d := range []struct {
+		key  string
+		in   *int
+		into *int
+		// text is set for the text's days: a value pairtime can't read
+		// keeps no new text, as when the switch is off, and deletes nothing
+		// on a guess. A path_days it can't read keeps paths for DESIGN 4.4's
+		// 30 days, the most they are kept.
+		text bool
+	}{
+		{"prompt_text_days", file.PromptTextDays, &cfg.Privacy.TextDays, true},
+		{"path_days", file.PathDays, &cfg.Privacy.PathDays, false},
+	} {
+		then := "pairtime keeps the paths for your recaps for the longest time until it's fixed"
+		if d.text {
+			then = "pairtime keeps no new prompt text until it's fixed, and keeps what it has for the longest time"
+		}
+		switch {
+		case spellings(keys, "privacy", d.key) > 1:
+			cfg.Privacy.TextHeld = cfg.Privacy.TextHeld || d.text
+			problems = append(problems, fmt.Sprintf("config.toml: privacy.%s is set more than once, in different upper and lower case, so %s", d.key, then))
+		case d.in == nil:
+		case *d.in < 1:
+			cfg.Privacy.TextHeld = cfg.Privacy.TextHeld || d.text
+			problems = append(problems, fmt.Sprintf("config.toml: privacy.%s is %d, which isn't a number of days from 1 up, so %s", d.key, *d.in, then))
+		default:
+			*d.into = *d.in
+		}
+	}
+	return problems
 }
 
 // inPrivacy reports whether key is in the [privacy] table, however the

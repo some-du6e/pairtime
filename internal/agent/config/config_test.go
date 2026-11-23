@@ -206,6 +206,29 @@ func TestParse(t *testing.T) {
 			wantProblem: "privacy.keep_prompt_text is set more than once",
 		},
 		{
+			name: "prompt_text_days and path_days shorten how long the vault keeps text and paths",
+			file: "[privacy]\nprompt_text_days = 30\npath_days = 7\n",
+			want: Config{Mode: Local, Privacy: Privacy{TextDays: 30, PathDays: 7}},
+		},
+		{
+			name:        "prompt_text_days below 1 keeps no new prompt text, shortens nothing, and is reported",
+			file:        "[privacy]\nprompt_text_days = 0\n",
+			want:        Config{Mode: Local, Privacy: Privacy{TextHeld: true}},
+			wantProblem: "privacy.prompt_text_days is 0, which isn't a number of days from 1 up, so pairtime keeps no new prompt text",
+		},
+		{
+			name:        "path_days below 1 keeps paths for the longest time and text as before, and is reported",
+			file:        "[privacy]\npath_days = -3\n",
+			want:        Default(),
+			wantProblem: "privacy.path_days is -3, which isn't a number of days from 1 up, so pairtime keeps the paths for your recaps for the longest time",
+		},
+		{
+			name:        "prompt_text_days written twice in different case keeps no new prompt text and is reported",
+			file:        "[privacy]\nprompt_text_days = 30\nPrompt_Text_Days = 7\n",
+			want:        Config{Mode: Local, Privacy: Privacy{TextHeld: true}},
+			wantProblem: "privacy.prompt_text_days is set more than once",
+		},
+		{
 			name:        "a switch that isn't true or false makes the whole file ignored, which keeps no new prompt text and deletes none",
 			file:        "[privacy]\nkeep_prompt_text = \"no\"\n",
 			want:        ignored(),
