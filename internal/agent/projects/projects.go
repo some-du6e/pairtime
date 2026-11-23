@@ -341,9 +341,10 @@ func Find(list []Project, arg string) (Project, bool) {
 	return Project{}, false
 }
 
-// ErrHidePending is turning on a name hidden on the dashboard that
-// pairtime couldn't turn off in config.toml (Project.Pending).
-var ErrHidePending = errors.New("your dashboard stopped showing this name, and pairtime couldn't turn it off in config.toml then, so it doesn't send it while config.toml has it on; set online = false under its [projects.<key>] table there by hand, then turn it on again")
+// ErrHidePending is turning on a name pairtime keeps off the dashboard,
+// hidden there or on for another sign-in, that it couldn't turn off in
+// config.toml (Project.Pending).
+var ErrHidePending = errors.New("pairtime keeps this name off your dashboard, but couldn't turn it off in config.toml, so it doesn't send it while config.toml has it on; set online = false under its [projects.<key>] table there by hand, then turn it on again")
 
 // The labels Label refuses.
 var (

@@ -233,6 +233,17 @@ func (f *fakeIngest) projectNames(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		io.WriteString(w, "{not json")
 		return
+	case "stored-502":
+		// A proxy's 502 after pairtimed stored the request, as when its
+		// connection to the origin drops before the answer: no
+		// X-Pairtime-Time, and no resend by the transport, since an answer
+		// came.
+		runThen()
+		w.Header().Del("X-Pairtime-Time")
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(502)
+		io.WriteString(w, "<html>bad gateway</html>")
+		return
 	}
 	out := []map[string]string{}
 	for _, k := range slices.Sorted(maps.Keys(f.names)) {

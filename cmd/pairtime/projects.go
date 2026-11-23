@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"strings"
+	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/account"
 	"github.com/some-du6e/pairtime/internal/agent/config"
@@ -100,8 +101,11 @@ type projectsView struct {
 	// linked, and config.toml says mode = "online". broken says config.toml
 	// has an error, which keeps the computer local-only until it's fixed.
 	online, linked, broken bool
-	// server and device are the sign-in account.json holds, while linked.
-	server, device string
+	// server and device are the sign-in account.json holds, while linked,
+	// and namesServer the one project-names.json names.
+	server, device, namesServer string
+	// namesOn are the names config.toml has on, when it parses.
+	namesOn map[string]string
 	// notes say what couldn't be read, so the list may lack something.
 	notes []string
 }
@@ -137,6 +141,10 @@ func readProjects(stderr io.Writer) (projectsView, bool) {
 	names, err := uploader.ReadNames(dirs.Data)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		v.notes = append(v.notes, fmt.Sprintf("pairtime couldn't read which names your dashboard shows: %v", err))
+	}
+	v.namesServer = names.Server
+	if parsed {
+		v.namesOn = cfg.NamesOn()
 	}
 	in := projects.Input{Map: m, Days: keys, Config: cfg, Names: names}
 	if l, err := account.Load(dirs.Data); err == nil {
@@ -281,6 +289,8 @@ func showLabel(p projects.Project) (string, bool) {
 // notOnline says why no name goes to the dashboard from this computer now.
 func notOnline(v projectsView) string {
 	switch {
+	case !v.linked && v.namesServer != "":
+		return fmt.Sprintf("This computer isn't linked to a pairtime server, so no name goes to your dashboard until pairtime login links it to %s again; a link to another server turns off the names that are on.", v.namesServer)
 	case !v.linked:
 		return "This computer isn't linked to a pairtime server, so no name goes to your dashboard until pairtime login links it."
 	case v.broken:
@@ -289,17 +299,28 @@ func notOnline(v projectsView) string {
 	return "This computer is local-only, as config.toml says, so no name goes to your dashboard until it's online again."
 }
 
-// recordSignIn writes the sign-in of a linked computer into a
-// project-names.json that names none, so the names it turned on or off are
-// this sign-in's: a sign-in to another server later turns them off there
-// (uploader.RecordSignIn; project-names-v1 2).
-func recordSignIn(v projectsView, stderr io.Writer) {
-	if !v.linked {
-		return
+// signInFirst does, on a linked computer, what pairtime login does when
+// project-names.json names another sign-in or doesn't read, as after a
+// login while config.toml didn't parse, before the owner's change: the
+// names on for that sign-in go off, each with a note, listed as login
+// lists them, and the file names this sign-in, so the name the owner turns
+// on now is this one's and goes (uploader.SignedInElsewhere). A file that
+// names no sign-in gets this one. It reports whether it turned a name off.
+func signInFirst(v projectsView, stdout, stderr io.Writer) bool {
+	if !v.linked || v.broken {
+		return false
 	}
-	if err := uploader.RecordSignIn(v.dirs.Data, v.server, v.device); err != nil {
-		fmt.Fprintf(stderr, "pairtime projects: project-names.json couldn't be written (%v); the agent writes which sign-in the names are for when it next uploads\n", err)
+	hide := func(key string) error { return config.HideName(v.dirs.ConfigFile(), key) }
+	e, err := uploader.SignedInElsewhere(v.dirs.Data, v.server, v.device, v.namesOn, hide, time.Now())
+	if err != nil {
+		fmt.Fprintf(stderr, "pairtime projects: project-names.json couldn't be written (%v); the agent turns off the project names that were on for another sign-in before it sends any\n", err)
+		return false
 	}
+	printNamesOff(stdout, v.server, e)
+	if len(e.Off) > 0 {
+		fmt.Fprintln(stdout)
+	}
+	return len(e.Off) > 0
 }
 
 // helpArg reports whether arg asks for the usage, as pairtime projects
@@ -346,6 +367,11 @@ func runShowName(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 1
 	}
+	if signInFirst(v, stdout, stderr) {
+		if v, ok = readProjects(stderr); !ok {
+			return 1
+		}
+	}
 	p, ok := findProject(v, code, stderr)
 	if !ok {
 		return 1
@@ -363,11 +389,17 @@ func runShowName(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pairtime projects: %v\n", err)
 		return 1
 	}
+	if p.State == projects.On && p.Label == label {
+		// Nothing changes, so nothing goes: the dashboard showed it at the
+		// server's last answer, and a hide there since turns it off here
+		// once pairtime reads it.
+		fmt.Fprintf(stdout, "Its name is on already, as \"%s\", so nothing changed.\n", text.Printable(label))
+		return 0
+	}
 	if err := projects.Show(v.dirs.ConfigFile(), p, label); err != nil {
 		fmt.Fprintf(stderr, "pairtime projects: %v\n", err)
 		return 1
 	}
-	recordSignIn(v, stderr)
 	fmt.Fprintf(stdout, "Your pairtime dashboard will show %s as \"%s\". Only you see it there, on your own dashboard while you're signed in, and nothing else about the project leaves this computer with it.\n",
 		called, text.Printable(label))
 	if v.online {
@@ -392,6 +424,11 @@ func runHideName(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return 1
 	}
+	if signInFirst(v, stdout, stderr) {
+		if v, ok = readProjects(stderr); !ok {
+			return 1
+		}
+	}
 	p, ok := findProject(v, code, stderr)
 	if !ok {
 		return 1
@@ -400,7 +437,6 @@ func runHideName(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pairtime projects: %v\n", err)
 		return 1
 	}
-	recordSignIn(v, stderr)
 	called := dashboardName(p, "by its code")
 	switch {
 	case p.State == projects.Off || p.State == projects.Hidden:

@@ -8,6 +8,9 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/some-du6e/pairtime/internal/agent/home"
 )
 
 // Made-up project keys in the git adapter's form.
@@ -295,6 +298,79 @@ func TestNameEdits(t *testing.T) {
 				if _, problems := Parse(got); len(problems) != 0 {
 					t.Errorf("the edit left problems: %q", problems)
 				}
+			}
+		})
+	}
+}
+
+func TestEditWaitsForLock(t *testing.T) {
+	chip8On := "[projects." + chip8Key + "]\nname = \"chip8-emulator\"\nonline = true\n"
+	plantOn := "\n[projects." + plantKey + "]\nname = \"plant-watering\"\nonline = true\n"
+	tests := []struct {
+		name string
+		// other is what the process holding config.lock writes before it
+		// lets go, and keep says it never lets go while the edit waits.
+		other   string
+		keep    bool
+		want    string
+		wantErr string
+	}{
+		{
+			name:  "an edit waits while another process holds config.lock, as show-name beside the agent, then lands on top of what that process wrote",
+			other: chip8On + plantOn,
+			want:  strings.Replace(chip8On, "online = true", "online = false", 1) + plantOn,
+		},
+		{
+			name:    "an edit whose lock another process keeps changes nothing and says so",
+			keep:    true,
+			want:    chip8On,
+			wantErr: "couldn't lock config.toml",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			name := filepath.Join(dir, "config.toml")
+			if err := os.WriteFile(name, []byte(chip8On), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			wait := lockWait
+			lockWait = 300 * time.Millisecond
+			t.Cleanup(func() { lockWait = wait })
+			release, err := home.LockFile(filepath.Join(dir, LockName), time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- HideName(name, chip8Key) }()
+			select {
+			case err := <-done:
+				release()
+				t.Fatalf("the edit ended (%v) while another process held config.lock", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+			if !tt.keep {
+				if err := os.WriteFile(name, []byte(tt.other), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				release()
+			}
+			err = <-done
+			if tt.keep {
+				release()
+			}
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Fatalf("error %v", err)
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Fatalf("error %v, want one containing %q", err, tt.wantErr)
+			}
+			got, err := os.ReadFile(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tt.want {
+				t.Errorf("config.toml is\n%q\nwant\n%q", got, tt.want)
 			}
 		})
 	}

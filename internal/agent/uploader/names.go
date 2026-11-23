@@ -347,10 +347,11 @@ func (u *Uploader) syncNames(c Credentials) (sent, more bool) {
 		return false, false
 	}
 	// For a day after a 404 the server is taken to have no names endpoint
-	// (namesMissing): nothing goes until config.toml asks for something
-	// new, and then a read first while the device doesn't know what the
-	// server holds.
-	if u.now().Before(u.missingUntil) && cb.hash == u.missingHash {
+	// (namesMissing), and for an hour after a refusal the same request
+	// would be refused again (namesRefused): nothing goes until config.toml
+	// asks for something new, and then a read first, since the device
+	// doesn't know what the server holds meanwhile.
+	if (u.now().Before(u.missingUntil) && cb.hash == u.missingHash) || u.held(cb.hash) {
 		return false, false
 	}
 	body, b := change, cb
@@ -372,10 +373,7 @@ func (u *Uploader) syncNames(c Credentials) (sent, more bool) {
 	default:
 		return false, false
 	}
-	if u.held(b.hash) {
-		return false, false
-	}
-	return u.sendNames(c, body, b, cb.hash)
+	return u.sendNames(c, body, b, cb.hash, wanted)
 }
 
 // builtNames is a names request's body as it goes: its JSON before gzip,
@@ -398,14 +396,15 @@ func buildNames(body namesBody) (builtNames, error) {
 	return builtNames{js: js, raw: raw, hash: bodyHash(raw)}, nil
 }
 
-// held reports whether the body with hash waits, held after a refusal,
-// until namesAfter.
+// held reports whether what config.toml asks to send, whose body has
+// hash, waits, held after a refusal, until namesAfter.
 func (u *Uploader) held(hash string) bool {
 	return hash == u.namesHeld && u.now().Before(u.namesAfter)
 }
 
 // loadNames reads project-names.json for the sign-in c, the first time and
-// after a sign-in to another server or as another device. When the file
+// after each new sign-in, which brings a new token, so it finds what
+// pairtime login wrote there meanwhile. When the file
 // names another sign-in, that server showed the names, and this one never
 // did: every name config.toml has on, and every name the old server
 // showed, goes off in config.toml with a NoteSignedIn note, out of
@@ -416,7 +415,7 @@ func (u *Uploader) held(hash string) bool {
 // turned on before it go. The notes the file had stay, since they describe
 // config.toml.
 func (u *Uploader) loadNames(c Credentials, wanted map[string]string) {
-	if u.names != nil && u.names.Server == c.Server && u.names.Device == c.DeviceID {
+	if u.names != nil && u.names.Server == c.Server && u.names.Device == c.DeviceID && u.namesToken == c.Token {
 		return
 	}
 	n, err := ReadNames(u.opts.DataDir)
@@ -433,7 +432,7 @@ func (u *Uploader) loadNames(c Credentials, wanted map[string]string) {
 		n = Names{Hidden: n.Hidden}
 	}
 	n.V, n.Server, n.Device = namesVersion, c.Server, c.DeviceID
-	u.names = &n
+	u.names, u.namesToken = &n, c.Token
 	u.namesStarted = false
 	u.namesKey, u.namesHash, u.namesHeld = "", "", ""
 	u.missingUntil, u.missingHash = time.Time{}, ""
@@ -452,7 +451,11 @@ func (u *Uploader) loadNames(c Credentials, wanted map[string]string) {
 			if keyForm(key) {
 				u.hidden(key, off[key], reason, now)
 			}
-			delete(wanted, key)
+			// A name pairtime couldn't turn off stays in wanted for
+			// hidePending, which tries again and keeps it out of what goes.
+			if h, ok := u.names.Hidden[key]; !ok || !h.Pending {
+				delete(wanted, key)
+			}
 		}
 		if len(off) > 0 {
 			u.log.Info("the project names that were on are off until you turn them on again here, since they were for another sign-in, or pairtime couldn't tell", "reason", reason, "names", len(off))
@@ -467,11 +470,13 @@ func (u *Uploader) loadNames(c Credentials, wanted map[string]string) {
 
 // noteSending writes down, before the request goes, the names body sets
 // and the keys it deletes, so a crash or a lost answer leaves them known
-// (Names.Sent).
-func (u *Uploader) noteSending(body namesBody) {
+// (Names.Sent). When project-names.json can't be written, it changes
+// nothing and returns the error, and the request doesn't go.
+func (u *Uploader) noteSending(body namesBody) error {
 	if len(body.Set)+len(body.Delete) == 0 {
-		return
+		return nil
 	}
+	sent, deleting := maps.Clone(u.names.Sent), slices.Clone(u.names.Deleting)
 	if u.names.Sent == nil {
 		u.names.Sent = make(map[string]string)
 	}
@@ -483,7 +488,11 @@ func (u *Uploader) noteSending(body namesBody) {
 			u.names.Deleting = append(u.names.Deleting, key)
 		}
 	}
-	u.saveNames()
+	if err := u.saveNames(); err != nil {
+		u.names.Sent, u.names.Deleting = sent, deleting
+		return err
+	}
+	return nil
 }
 
 // forgetSending takes back what noteSending wrote down for body, which
@@ -554,7 +563,7 @@ func (u *Uploader) ownNames(set []nameItem) []nameItem {
 }
 
 // saveNames writes project-names.json.
-func (u *Uploader) saveNames() {
+func (u *Uploader) saveNames() error {
 	data, err := json.Marshal(u.names)
 	if err == nil {
 		err = home.WritePrivate(filepath.Join(u.opts.DataDir, NamesFileName), append(data, '\n'))
@@ -562,6 +571,7 @@ func (u *Uploader) saveNames() {
 	if err != nil {
 		u.log.Warn("couldn't save project-names.json", "err", err)
 	}
+	return err
 }
 
 // hidePending turns off in config.toml the names pairtime couldn't turn
@@ -605,11 +615,13 @@ func (u *Uploader) hidePending(wanted map[string]string) {
 // sendNames sends a names request, its body raw with hash, signed again
 // for each try that a clock skew or a changed body asks for, and handles
 // its answer. change is the hash of what config.toml asked to send then,
-// which a 404 holds back for a day (namesMissing). It reports whether a
+// which a 404 holds back for a day (namesMissing) and a refusal for an
+// hour (namesRefused), and wanted the names config.toml had on, for the
+// answer's notes (namesAnswered). It reports whether a
 // request reached the server, which is then the cycle's, and whether more
 // goes at once, as the upload after a 200. A failure to reach the server
 // reports none, so the cycle goes on to the upload (namesFailed).
-func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames, change string) (sent, more bool) {
+func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames, change string, wanted map[string]string) (sent, more bool) {
 	raw, hash := b.raw, b.hash
 	if u.namesKey == "" || u.namesHash != hash {
 		// A new body, a new key; a retry of the same one keeps it, as an
@@ -646,7 +658,13 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames, change
 			return true, false
 		}
 		setHeaders(hr.Header, c, u.namesKey, hash, sg, u.userAgent)
-		u.noteSending(body)
+		if err := u.noteSending(body); err != nil {
+			// Unrecorded, a set whose answer was lost could bring back a
+			// name hidden meanwhile: nothing goes until the file is written.
+			u.setProblem("names", fmt.Sprintf("pairtime can't write project-names.json, so it sends no project name until it can: %v", err))
+			u.namesWait = u.now().Add(Every)
+			return false, false
+		}
 		// The tries the transport wrote in full: it sends a request again
 		// itself when a reused connection drops before the answer, so with
 		// more than one the answer may be the second's.
@@ -683,7 +701,7 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames, change
 		}
 		switch {
 		case a.status == http.StatusOK:
-			return true, u.namesAnswered(body, hash, a)
+			return true, u.namesAnswered(body, change, wanted, a)
 		case a.refusal.Error == refusalClockSkew:
 			continue // the answer set the clock's offset
 		case a.refusal.Error == refusalCounter:
@@ -703,9 +721,9 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames, change
 		case a.refusal.Error == refusalBodyUnreadable:
 			return u.namesFailed(errBodyUnreadable, a)
 		}
-		return true, u.namesRefused(c, hash, a)
+		return true, u.namesRefused(c, change, a)
 	}
-	return true, u.namesRefused(c, hash, answer{refusal: Refusal{Error: "retries"}})
+	return true, u.namesRefused(c, change, answer{refusal: Refusal{Error: "retries"}})
 }
 
 // storedNothing reports whether answer a, to a request the transport
@@ -730,6 +748,8 @@ func storedNothing(a answer) bool {
 // change, and a set whose answer was lost never goes again unread.
 func (u *Uploader) namesMissing(change string, a answer) (sent, more bool) {
 	u.missingUntil, u.missingHash = u.now().Add(namesReadEvery), change
+	// The owner may hide a name meanwhile, so what waited goes after a read.
+	u.namesStarted = false
 	u.log.Info("the server has no project names endpoint, so pairtime asks again in a day or when the names change", "status", a.status)
 	return false, false
 }
@@ -766,24 +786,27 @@ func (u *Uploader) namesFailed(err error, a answer) (sent, more bool) {
 
 // namesAnswered handles a names request's 200: its names are what the
 // owner's dashboard shows now, and its codes what it calls the device's
-// projects by, which replace the ones kept before. A key it lists as
-// hidden, the owner hid on the dashboard: its name goes off in config.toml
-// (project-names-v1 2), and the next request's delete tells the server so.
-// A name the server showed before that it neither shows nor lists as
-// hidden, and that this request didn't delete, the server dropped, as
-// after the device's purge or a restore of its database: it goes off in
-// config.toml too, with a NoteDropped note, and is never sent again until
-// the owner turns it on.
-func (u *Uploader) namesAnswered(sent namesBody, hash string, a answer) bool {
+// projects by, which replace the ones kept before. wanted is what
+// config.toml had on as the request went. A key it lists as hidden, the
+// owner hid on the dashboard: its name goes off in config.toml
+// (project-names-v1 2), and the next request's delete tells the server
+// so. A name config.toml still has on that the server showed before, or
+// that a set carried (Names.Sent), and that the answer neither shows nor
+// lists as hidden, the server doesn't have, as after the device's purge,
+// a restore of its database, or a lost answer whose hide was purged: it
+// goes off in config.toml too, with a NoteDropped note, and is never sent
+// again until the owner turns it on.
+func (u *Uploader) namesAnswered(sent namesBody, change string, wanted map[string]string, a answer) bool {
+	// The endpoint answered, so a 404's day ends.
+	u.missingUntil, u.missingHash = time.Time{}, ""
 	var reply namesReply
 	if err := json.Unmarshal(a.body, &reply); err != nil || reply.Names == nil {
-		u.namesHeld, u.namesAfter = hash, u.now().Add(namesHold)
+		u.namesHeld, u.namesAfter = change, u.now().Add(namesHold)
 		u.namesStarted = false
 		u.setProblem("names", "the server's answer about this computer's project names doesn't read")
 		return false
 	}
 	u.namesBackoff.ok()
-	u.missingUntil, u.missingHash = time.Time{}, ""
 	got := make(map[string]string, len(reply.Names))
 	for _, n := range reply.Names {
 		if keyForm(n.Project) && projectname.ValidLabel(n.Label) {
@@ -809,20 +832,35 @@ func (u *Uploader) namesAnswered(sent namesBody, hash string, a answer) bool {
 			mismatch = true
 		}
 	}
+	// A set that may have reached the server since the last answer: what
+	// noteSending wrote down, this request's sets included.
+	setSince := make(map[string]bool, len(u.names.Sent))
+	for key, label := range u.names.Sent {
+		setSince[key] = true
+		if _, ok := showed[key]; !ok {
+			showed[key] = label
+		}
+	}
+	// A note keeps the label config.toml has on, which show-name shows
+	// again and a pending note compares with (hidePending), or else the
+	// one the server showed or was sent.
+	noteLabel := func(key string) string { return cmp.Or(wanted[key], showed[key]) }
 	var dropped []string
 	for key := range u.names.Confirmed {
-		// A key a delete carried, this request's or one whose answer was
-		// lost, went as the owner asked: no note.
-		if _, ok := got[key]; !ok && !hid[key] && !slices.Contains(sent.Delete, key) && !slices.Contains(u.names.Deleting, key) {
+		// Only a name config.toml still has on: one turned off, whose
+		// delete may not have gone yet, went as the owner asked.
+		_, on := wanted[key]
+		if _, ok := got[key]; on && !ok && !hid[key] && !slices.Contains(sent.Delete, key) && !slices.Contains(u.names.Deleting, key) {
 			dropped = append(dropped, key)
 		}
 	}
-	for key, label := range u.names.Sent {
+	for key := range u.names.Sent {
 		// A name a set carried that the server neither shows nor lists as
 		// hidden: it doesn't have it, as after a lost answer and the hide's
-		// 30 days, or a removed device's hide. Off, not out again.
-		if _, ok := got[key]; !ok && !hid[key] && !slices.Contains(dropped, key) {
-			showed[key] = label
+		// 30 days, or a removed device's hide. Off, not out again, unless
+		// the owner turned it off since.
+		_, on := wanted[key]
+		if _, ok := got[key]; on && !ok && !hid[key] && !slices.Contains(dropped, key) {
 			dropped = append(dropped, key)
 		}
 	}
@@ -836,20 +874,29 @@ func (u *Uploader) namesAnswered(sent namesBody, hash string, a answer) bool {
 	if len(hid) == 0 {
 		u.names.Hides = nil
 	}
-	for key := range got {
-		// Shown again: the owner turned it on on the computer.
-		delete(u.names.Hidden, key)
+	for key, label := range got {
+		// Shown again, since the owner turned it on on the computer: a note
+		// of a name config.toml has off stays, as one pairtime turned off
+		// for another sign-in, while its delete goes.
+		if wanted[key] == label {
+			delete(u.names.Hidden, key)
+		}
 	}
 	for _, key := range u.names.Hides {
-		if _, noted := u.names.Hidden[key]; !noted {
-			u.hidden(key, showed[key], "", now)
+		// A note pairtime turned the name off with is out of date once a
+		// set may have reached the server since, as after show-name and a
+		// lost answer, which deleted that hide: this one is new, and turns
+		// it off again. Without such a set, it is the hide the note is of,
+		// which the owner turned on again over.
+		if h, noted := u.names.Hidden[key]; !noted || (setSince[key] && !h.Pending) {
+			u.hidden(key, noteLabel(key), "", now)
 		}
 	}
 	slices.Sort(dropped)
 	for _, key := range dropped {
 		// The server no longer has it, and pairtime can't tell a purge from
 		// a restore: off here too, never sent again on its own.
-		u.hidden(key, showed[key], NoteDropped, now)
+		u.hidden(key, noteLabel(key), NoteDropped, now)
 	}
 	if len(dropped) > 0 {
 		u.log.Info("the server no longer shows project names it showed, as after the device's purge or a restore, so pairtime turned them off here until you turn them on again", "names", len(dropped))
@@ -860,7 +907,7 @@ func (u *Uploader) namesAnswered(sent namesBody, hash string, a answer) bool {
 		// The server shows another label than the one it was sent, which
 		// sending it again wouldn't change: wait, rather than send it at
 		// every wake.
-		u.namesHeld, u.namesAfter = hash, u.now().Add(namesHold)
+		u.namesHeld, u.namesAfter = change, u.now().Add(namesHold)
 		u.setProblem("names", "the server answered with other project names than pairtime sent it")
 		return true
 	}
@@ -902,7 +949,9 @@ func capNotes(hidden map[string]HiddenName) {
 }
 
 // SignedInElsewhere is what `pairtime login` does as it links this
-// computer to server as device (project-names-v1 2). When the data
+// computer to server as device, and what `pairtime projects show-name`,
+// hide-name and the local app's switch do before the owner's change on a
+// linked computer, when login couldn't (project-names-v1 2). When the data
 // directory dataDir's project-names.json names another sign-in, that
 // server showed the names and this one never did: every name on, which
 // config.toml has on by project key with its label, and every name the old
@@ -911,25 +960,25 @@ func capNotes(hidden map[string]HiddenName) {
 // the uploader's own load leaves it. A file that exists but doesn't read
 // counts as another sign-in's, since pairtime can't tell (NoteUnreadable).
 // A name hide can't turn off gets a pending note, so the uploader never
-// sends it. It returns the names it turned off, each project key's label,
-// and why, for login to list. A file that names no sign-in, or none at
-// all, as before the computer's first link, gets this sign-in written into
-// it, its notes kept, and nothing goes off: the names turned on before it
-// go, as show-name said they would.
-func SignedInElsewhere(dataDir, server, device string, on map[string]string, hide func(key string) error, now time.Time) (off map[string]string, reason string, err error) {
+// sends it. It returns what it turned off, for the caller to list. A file
+// that names no sign-in, or none at all, as before the computer's first
+// link, gets this sign-in written into it, its notes kept, and nothing
+// goes off: the names turned on before it go, as show-name said they
+// would.
+func SignedInElsewhere(dataDir, server, device string, on map[string]string, hide func(key string) error, now time.Time) (Elsewhere, error) {
 	n, err := ReadNames(dataDir)
 	unreadable := err != nil && !errors.Is(err, fs.ErrNotExist)
 	switch {
 	case !unreadable && n.Server == server && n.Device == device:
-		return nil, "", nil
+		return Elsewhere{}, nil
 	case !unreadable && n.Server == "":
-		return nil, "", writeNames(dataDir, Names{V: namesVersion, Server: server, Device: device, Hidden: n.Hidden})
+		return Elsewhere{}, writeNames(dataDir, Names{V: namesVersion, Server: server, Device: device, Hidden: n.Hidden})
 	}
-	reason = NoteSignedIn
+	reason := NoteSignedIn
 	if unreadable {
 		reason, n = NoteUnreadable, Names{}
 	}
-	off = maps.Clone(n.Confirmed)
+	off := maps.Clone(n.Confirmed)
 	if off == nil {
 		off = make(map[string]string)
 	}
@@ -940,10 +989,12 @@ func SignedInElsewhere(dataDir, server, device string, on map[string]string, hid
 		hidden = make(map[string]HiddenName)
 	}
 	at := now.UnixMilli()
+	e := Elsewhere{Off: off, Reason: reason}
 	for _, key := range slices.Sorted(maps.Keys(off)) {
 		note := HiddenName{Label: off[key], At: at, Reason: reason}
 		if hide(key) != nil {
 			note.Pending = true
+			e.Stuck = append(e.Stuck, key)
 		}
 		hidden[key] = note
 	}
@@ -953,9 +1004,20 @@ func SignedInElsewhere(dataDir, server, device string, on map[string]string, hid
 		next.Hidden = nil
 	}
 	if err := writeNames(dataDir, next); err != nil {
-		return nil, "", err
+		return Elsewhere{}, err
 	}
-	return off, reason, nil
+	return e, nil
+}
+
+// Elsewhere is what SignedInElsewhere turned off for a sign-in: each
+// name's label by project key, the keys of those config.toml still has on
+// in a form pairtime couldn't change, which go nowhere all the same (a
+// pending HiddenName), in key order, and why, NoteSignedIn or
+// NoteUnreadable.
+type Elsewhere struct {
+	Off    map[string]string
+	Stuck  []string
+	Reason string
 }
 
 // RecordSignIn writes the sign-in server and device into the data
@@ -985,9 +1047,11 @@ func writeNames(dataDir string, n Names) error {
 // same body doesn't fix: a refused sign-in stops every request, as for an
 // upload, and anything else holds the body for namesHold, while a change
 // to the names in config.toml goes at once.
-func (u *Uploader) namesRefused(c Credentials, hash string, a answer) (more bool) {
-	// The endpoint answered, so a 404's day ends.
+func (u *Uploader) namesRefused(c Credentials, change string, a answer) (more bool) {
+	// The endpoint answered, so a 404's day ends. The owner may hide a name
+	// while the request waits, so it goes again after a read.
 	u.missingUntil, u.missingHash = time.Time{}, ""
+	u.namesStarted = false
 	code := a.refusal.Error
 	if code == "" {
 		code = fmt.Sprintf("status %d", a.status)
@@ -1006,7 +1070,7 @@ func (u *Uploader) namesRefused(c Credentials, hash string, a answer) (more bool
 	default:
 		u.setProblem("names", fmt.Sprintf("the server refused this computer's project names as %s, so pairtime sends them again in an hour, or when you change them", code))
 	}
-	u.namesHeld, u.namesAfter = hash, u.now().Add(namesHold)
+	u.namesHeld, u.namesAfter = change, u.now().Add(namesHold)
 	// The upload goes on, at the pacer's pace.
 	return true
 }

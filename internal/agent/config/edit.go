@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -179,16 +180,27 @@ var editMu sync.Mutex
 // before it reads the file again: a test's other writer.
 var beforeReplace func(name string)
 
+// LockName is the file whose lock every pairtime process holds while it
+// changes config.toml (rewrite). It sits beside config.toml, in pairtime's
+// config directory, and stays there.
+const LockName = "config.lock"
+
+// lockWait is how long an edit waits for another process's edit to end.
+var lockWait = 5 * time.Second
+
 // rewrite changes the config.toml at name with change, the text edit, and
 // checks that the file then parses to what it parsed to before with apply
 // done to it, and to nothing else. byHand says what the teen can write
-// instead, when it refuses. It holds editMu, and reads the file again
-// just before it replaces it: when another process changed it meanwhile,
-// as `pairtime projects show-name` beside the running agent, it starts
-// over from the new text, so neither change undoes the other.
+// instead, when it refuses. It holds editMu, for this process's edits, and
+// config.lock's lock, for every other pairtime process's, as `pairtime
+// projects show-name` beside the running agent, from its read to its
+// rename, so neither change undoes the other. It also reads the file
+// again just before it replaces it, and starts over from the new text when
+// it changed meanwhile, as an editor's save does, which takes no lock.
 func rewrite(name, byHand string, change func(text string) string, apply func(*Config)) error {
 	editMu.Lock()
 	defer editMu.Unlock()
+	lock := filepath.Join(filepath.Dir(name), LockName)
 	if fi, err := os.Lstat(name); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
 		target, err := filepath.EvalSymlinks(name)
 		if err != nil {
@@ -197,6 +209,11 @@ func rewrite(name, byHand string, change func(text string) string, apply func(*C
 		name = target
 	}
 	byHand += " in " + name + " by hand"
+	release, err := home.LockFile(lock, lockWait)
+	if err != nil {
+		return fmt.Errorf("config: pairtime couldn't lock config.toml to change it (%v), so it didn't; try again, or %s", err, byHand)
+	}
+	defer release()
 	for try := 0; ; try++ {
 		data, err := readEdited(name)
 		if err != nil {

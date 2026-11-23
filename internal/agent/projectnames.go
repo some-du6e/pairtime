@@ -132,6 +132,7 @@ func (a *agent) serveProjectName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := r.PathValue("key")
+	a.signInFirst()
 	_, list := a.projectList()
 	var p projects.Project
 	found := false
@@ -167,12 +168,6 @@ func (a *agent) serveProjectName(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("pairtime couldn't change config.toml: %v", err), http.StatusConflict)
 		return
 	}
-	if l, err := account.Load(a.dirs.Data); err == nil {
-		// The names are this sign-in's from now on (uploader.RecordSignIn).
-		if err := uploader.RecordSignIn(a.dirs.Data, l.Server, l.DeviceID); err != nil {
-			a.log.Warn("project-names.json couldn't be written", "err", err)
-		}
-	}
 	if u := a.upload.Load(); u != nil {
 		u.Wake()
 	}
@@ -184,6 +179,32 @@ func (a *agent) serveProjectName(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, replyOf(p))
+}
+
+// signInFirst does, on a linked computer, what pairtime login does when
+// project-names.json names another sign-in or doesn't read, as after a
+// login while config.toml didn't parse, before the owner's change through
+// the switch: the names on for that sign-in go off, each with a note, and
+// the file names this sign-in, so the name the owner turns on now is this
+// one's and goes (uploader.SignedInElsewhere). A file that names no
+// sign-in gets this one.
+func (a *agent) signInFirst() {
+	l, err := account.Load(a.dirs.Data)
+	if err != nil {
+		return
+	}
+	cfg, broken := UploadConfig(a.dirs)
+	if broken != "" {
+		return
+	}
+	e, err := uploader.SignedInElsewhere(a.dirs.Data, l.Server, l.DeviceID, cfg.NamesOn(), a.hideName, time.Now())
+	if err != nil {
+		a.log.Warn("project-names.json couldn't be written", "err", err)
+		return
+	}
+	if len(e.Off) > 0 {
+		a.log.Info("the project names that were on for another sign-in are off until you turn them on again here", "reason", e.Reason, "names", len(e.Off))
+	}
 }
 
 // localNames is the name pairtime shows on this computer for each project

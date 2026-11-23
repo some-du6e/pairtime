@@ -16,21 +16,25 @@ import (
 func TestLoginNamesOff(t *testing.T) {
 	const newServer = "https://new.example.org"
 	tests := []struct {
-		name     string
-		home     projectsHome
-		raw      string // project-names.json's bytes, when set, for one that doesn't read
-		server   string // the server login links to
-		wantOut  []string
-		wantErr  string // what stderr says; then nothing changes
-		wantOn   bool   // chip8-emulator's name is still on in config.toml
-		wantNote string
+		name    string
+		home    projectsHome
+		raw     string // project-names.json's bytes, when set, for one that doesn't read
+		server  string // the server login links to
+		wantOut []string
+		wantErr string // what stderr says; then config.toml stays as it was
+		// wantFile, with wantErr, says project-names.json then names the
+		// new sign-in; else it stays as it was.
+		wantFile    bool
+		wantOn      bool // chip8-emulator's name is still on in config.toml
+		wantNote    string
+		wantPending bool // the note says pairtime couldn't turn it off
 	}{
 		{
 			name:   "a sign-in to another server turns off the names that were on, and lists each with the command that shows it there",
 			home:   projectsHome{config: online + chip8Table("chip8-emulator", true), shown: map[string]string{chip8Key: "chip8-emulator"}, codes: serverCodes},
 			server: newServer,
 			wantOut: []string{
-				"\nThis computer showed project names on your dashboard on another sign-in. " + newServer + " never showed them, so pairtime turned them off here, and nothing about them goes there. To show one on your dashboard there:\n",
+				"\nThe project names this computer had on were for another sign-in. " + newServer + " never showed them, so pairtime turned them off here, and nothing about them goes there. To show one on your dashboard there:\n",
 				"  pairtime projects show-name " + chip8Key + "    shows \"chip8-emulator\"\n",
 			},
 			wantNote: uploader.NoteSignedIn,
@@ -51,6 +55,25 @@ func TestLoginNamesOff(t *testing.T) {
 			home:    projectsHome{config: online + chip8Table("chip8-emulator", true) + "[unclosed\n", shown: map[string]string{chip8Key: "chip8-emulator"}},
 			server:  newServer,
 			wantErr: "so pairtime left the project names as they are; once it's fixed, the agent turns off the ones that were on for another sign-in before it sends any\n",
+		},
+		{
+			name:     "while config.toml doesn't parse, login still writes the sign-in into a computer's first project-names.json, so a later sign-in elsewhere finds the names were this one's",
+			home:     projectsHome{config: online + chip8Table("chip8-emulator", true) + "[unclosed\n"},
+			server:   newServer,
+			wantErr:  "so pairtime left the project names as they are",
+			wantFile: true,
+		},
+		{
+			name:   "a name config.toml has in a form pairtime can't change is listed apart, with what to write there by hand, and isn't sent",
+			home:   projectsHome{config: online + "[projects]\n" + chip8Key + " = { name = \"chip8-emulator\", online = true }\n", shown: map[string]string{chip8Key: "chip8-emulator"}},
+			server: newServer,
+			wantOut: []string{
+				"\nThe project names this computer had on were for another sign-in. " + newServer + " never showed them, so pairtime turned them off here, and nothing about them goes there.\n",
+				"pairtime couldn't turn these off in config.toml, which has them in a form it can't change, so it sends none of them while config.toml has them on. To show one there, set online = false under its [projects.<key>] table by hand, then run pairtime projects show-name with its key:\n  " + chip8Key + "    \"chip8-emulator\"\n",
+			},
+			wantOn:      true,
+			wantNote:    uploader.NoteSignedIn,
+			wantPending: true,
 		},
 		{
 			name:   "a sign-in again to the same server, as the same device, changes nothing",
@@ -76,12 +99,20 @@ func TestLoginNamesOff(t *testing.T) {
 			}
 			before, _ := os.ReadFile(names)
 			var stdout, stderr bytes.Buffer
+			cfgBefore, _ := os.ReadFile(h.cfg)
 			namesOff(&stdout, &stderr, h.dirs(), tt.server, namesDevice)
 			if tt.wantErr != "" {
 				if !strings.Contains(stderr.String(), tt.wantErr) || stdout.Len() != 0 {
 					t.Errorf("login printed %q and %q, want only %q on stderr", stdout.String(), stderr.String(), tt.wantErr)
 				}
-				if after, _ := os.ReadFile(names); string(after) != string(before) {
+				if after, _ := os.ReadFile(h.cfg); string(after) != string(cfgBefore) {
+					t.Errorf("config.toml changed to %s", after)
+				}
+				n, err := uploader.ReadNames(h.dirs().Data)
+				switch after, _ := os.ReadFile(names); {
+				case tt.wantFile && (err != nil || n.Server != tt.server || n.Device != namesDevice):
+					t.Errorf("project-names.json = %+v, %v; want it to name the sign-in login made", n, err)
+				case !tt.wantFile && string(after) != string(before):
 					t.Errorf("project-names.json changed to %s", after)
 				}
 				return
@@ -108,8 +139,8 @@ func TestLoginNamesOff(t *testing.T) {
 			if err != nil || n.Server != tt.server || n.Device != namesDevice {
 				t.Errorf("project-names.json = %+v, %v; want it to name the sign-in login made", n, err)
 			}
-			if note := n.Hidden[chip8Key]; tt.wantNote != "" && (note.Reason != tt.wantNote || len(n.Confirmed) != 0) {
-				t.Errorf("project-names.json = %+v; want the new sign-in's, with a %q note of the name turned off", n, tt.wantNote)
+			if note := n.Hidden[chip8Key]; tt.wantNote != "" && (note.Reason != tt.wantNote || note.Pending != tt.wantPending || len(n.Confirmed) != 0) {
+				t.Errorf("project-names.json = %+v; want the new sign-in's, with a %q note of the name turned off, pending %v", n, tt.wantNote, tt.wantPending)
 			}
 		})
 	}

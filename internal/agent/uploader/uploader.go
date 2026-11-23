@@ -267,16 +267,19 @@ type Uploader struct {
 	pruned time.Time
 
 	// names is project-names.json for the sign-in the loop uploads with,
-	// nil until the first cycle that needs it (loadNames). namesStarted
-	// says the device knows what the server holds: an answer came since
-	// the start, the sign-in, and the last names request whose outcome it
-	// never learned, so a names request needn't read first; namesKey and
-	// namesHash are the last names body's Idempotency-Key and hash, which a
-	// retry of the same body keeps; namesHeld is the hash of a body the
-	// server refused, which waits until namesAfter (names.go).
+	// nil until the first cycle that needs it (loadNames), and namesToken
+	// the token it was read with, so each new sign-in reads the file
+	// again. namesStarted says the device knows what the server holds: an
+	// answer came since the start, the sign-in, and the last names request
+	// whose outcome it never learned or that the server didn't take, so a
+	// names request needn't read first; namesKey and namesHash are the last
+	// names body's Idempotency-Key and hash, which a retry of the same body
+	// keeps; namesHeld is the hash of what config.toml asked to send when
+	// the server refused it, which waits until namesAfter (names.go).
 	// namesBackoff and namesWait are the names' own backoff after a
 	// failure to reach the server (namesFailed).
 	names                          *Names
+	namesToken                     string
 	namesStarted                   bool
 	namesKey, namesHash, namesHeld string
 	namesAfter                     time.Time
