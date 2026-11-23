@@ -553,13 +553,15 @@ func edited(text, hand string, change func(text string) string, apply func(*Conf
 		}
 		return "", u
 	}
-	if strings.Contains(text, `"""`) || strings.Contains(text, `'''`) {
-		// A multi-line string could hold a line that looks like a key.
-		return "", fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", hand)
-	}
 	before, _, _ := parseAsWritten([]byte(text))
 	body, found := strings.CutPrefix(text, bom)
 	out := change(body)
+	if out != body && (strings.Contains(text, `"""`) || strings.Contains(text, `'''`)) {
+		// A multi-line string could hold a line that looks like a key, so
+		// such a file is changed only when the change rewrites nothing, as
+		// in one that says so already: then nothing in it is mis-edited.
+		return "", fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", hand)
+	}
 	if found {
 		out = bom + out
 	}

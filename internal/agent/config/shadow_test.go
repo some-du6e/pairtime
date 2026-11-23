@@ -249,6 +249,13 @@ func TestSetShadow(t *testing.T) {
 			want:    "[display]\nshadow = false\n[notifications]\nquiet_hours = \"\"\"\n22:00-07:00\"\"\"\n",
 			wantErr: "multi-line string",
 		},
+		{
+			name: "a file with a multi-line string that says shadow = true already is left alone, since nothing in it is rewritten",
+			file: "[display]\nshadow = true\n[notifications]\nquiet_hours = \"\"\"22:00-07:00\"\"\"\n",
+			on:   true,
+			want: "[display]\nshadow = true\n[notifications]\nquiet_hours = \"\"\"22:00-07:00\"\"\"\n",
+			same: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
