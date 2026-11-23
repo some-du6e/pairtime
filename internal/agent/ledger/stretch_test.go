@@ -1492,8 +1492,9 @@ func TestSweepKeepsWhatOpenFound(t *testing.T) {
 				if err := r.w.Close(); err != nil {
 					t.Fatal(err)
 				}
-				// The agent saw config.toml back online at 40 s, and Open ends
-				// the stretch there; the sweep drops every batch.
+				// config.toml is back online, as the agent saw at 40 s, and Open
+				// ends the stretch there; the sweep drops every batch.
+				r.file.Store(true)
 				r.seen = seenAt(40_000)
 				r.at(2 * sweepDayMS)
 				r.open()
@@ -1528,9 +1529,10 @@ func TestSweepKeepsWhatOpenFound(t *testing.T) {
 				if err := r.w.Close(); err != nil {
 					t.Fatal(err)
 				}
-				// The agent saw config.toml back online 30 s into that day, and
-				// Open ends the stretch there; the sweep drops the first day's
-				// batches and keeps the rest.
+				// config.toml is back online, as the agent saw 30 s into that
+				// day, and Open ends the stretch there; the sweep drops the first
+				// day's batches and keeps the rest.
+				r.file.Store(true)
 				r.seen = seenAt(3*sweepDayMS + 30_000)
 				r.at(4 * sweepDayMS)
 				r.open()
