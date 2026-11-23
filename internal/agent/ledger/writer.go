@@ -54,6 +54,30 @@ type ChainRecord interface {
 	RecordChain(deviceID string) error
 }
 
+// Vault keeps, on the device, the content of the records the writer
+// writes, by their numbers: the text each commits, which the ledger holds
+// only a commitment to, and the paths of an agent's edits, for recaps
+// (DESIGN 3.5; WP-LG6). *vault.Vault is one.
+type Vault interface {
+	// Reconcile drops every entry from s = next on. Open calls it once,
+	// after it has cut what a crash left and before any record takes
+	// next: the records that held those numbers are gone, and an entry
+	// left for one would pass for the content of the next record to take
+	// its number. A vault whose Reconcile fails keeps nothing more.
+	Reconcile(next uint64) error
+	// Keep keeps the content of record s, which Write has just appended
+	// to the segment of the UTC day day: text, the bytes its c commits,
+	// nil when it has no c, and paths, the paths of its edits. Write calls
+	// it under the lock records take, in the order of their numbers, so it
+	// must be quick, must never call the Writer, and reports its own
+	// problems.
+	Keep(day string, s uint64, text []byte, paths []string)
+	// Sync flushes what Keep wrote. Each seal calls it before it flushes
+	// the batch, so the content of a sealed record is on disk once its
+	// batch is.
+	Sync()
+}
+
 // sealReads bounds how often a seal reads config.toml without the record
 // lock for the records written while it read it (Writer.seal). Notes
 // always make it read again. After that many, it reads the file once more
@@ -106,6 +130,11 @@ type Options struct {
 	// decided; spec wording pending).
 	// Batches sealed before Open are on disk for ReadBatches.
 	Sealed func(Batch)
+	// Vault, when set, keeps the content of the records Write writes
+	// (Vault): Open reconciles it before any record takes a number a crash
+	// freed, Write hands it each record's content, and each seal flushes it
+	// before the batch.
+	Vault Vault
 	// Online, when set, reports whether config.toml's mode lets the
 	// computer upload right now (DESIGN 4.2). Each seal asks it as it
 	// begins, before it takes the lock records take, so a slow read holds
@@ -267,6 +296,7 @@ type Writer struct {
 	batchS   time.Duration
 	now      func() time.Time
 	sealedFn func(Batch)
+	vault    Vault
 	online   func() bool
 	waiting  func(func(event.Envelope) bool) bool
 	osNow    func() osclock.Stamp
@@ -444,6 +474,7 @@ func Open(opts Options) (*Writer, error) {
 		batchS:   time.Duration(table.Int(params.BATCH_S)) * time.Second,
 		now:      now,
 		sealedFn: opts.Sealed,
+		vault:    opts.Vault,
 		online:   opts.Online,
 		waiting:  opts.Waiting,
 		osNow:    osNow,
@@ -462,6 +493,12 @@ func Open(opts Options) (*Writer, error) {
 	if err := w.recover(); err != nil {
 		w.closeFiles()
 		return nil, err
+	}
+	if w.vault != nil {
+		// Before any record takes a number the crash freed. A vault that
+		// can't reconcile says so itself and keeps nothing more, so the
+		// ledger goes on without it.
+		w.vault.Reconcile(w.next)
 	}
 	var seen Seen
 	if opts.Seen != nil {
@@ -578,6 +615,11 @@ func (w *Writer) Write(in Input) (uint64, error) {
 	if err := w.append(rec); err != nil {
 		return 0, err
 	}
+	if w.vault != nil {
+		if text, paths := kept(ev, in, c); text != nil || len(paths) > 0 {
+			w.vault.Keep(w.segDay, rec.Header.Seq(), text, paths)
+		}
+	}
 	p := &w.pending[len(w.pending)-1]
 	p.env, p.sent, p.has = ev.Envelope, in.Sent, true
 	if in.Lookback && ev.Via == event.ViaLog && ev.T < w.created {
@@ -643,6 +685,37 @@ func (w *Writer) prepare(in Input) (event.Event, ledger.Content) {
 		}
 	}
 	return ev, c
+}
+
+// kept returns what the vault keeps of the record EventRecord made of ev
+// with c: text, the bytes its c commits, which for a final agent message
+// is its first 16 KiB (ledger-v1 10.1), and nil when it has no c; and
+// paths, the paths of an agent.tool's edits.
+func kept(ev event.Event, in Input, c ledger.Content) (text []byte, paths []string) {
+	switch p := ev.Data.(type) {
+	case *event.PromptSubmit, *event.CLITrack:
+		if !c.NoText {
+			text = committed(in.Text)
+		}
+	case *event.AgentOutput:
+		if p != nil && p.IsFinal && !c.NoText {
+			text = committed(ledger.CommittedMessage(in.Text))
+		}
+	case *event.AgentTool:
+		for _, e := range in.Edits {
+			paths = append(paths, e.Path)
+		}
+	}
+	return text, paths
+}
+
+// committed is text as a record commits it: a record without text commits
+// the empty text, which the vault keeps as such.
+func committed(text []byte) []byte {
+	if text == nil {
+		return []byte{}
+	}
+	return text
 }
 
 // Checkpoint appends a scorer checkpoint (rtype 0x40): projectKey's
@@ -1316,6 +1389,11 @@ func (w *Writer) seal() (Batch, bool, error) {
 	w.b, w.head, w.snap, w.sealed = row.B, row.Head, snap, sp.SealedAt
 	w.mu.Unlock()
 
+	if w.vault != nil {
+		// The content of the batch's records goes to disk before the batch
+		// does (Options.Vault).
+		w.vault.Sync()
+	}
 	// The one flush of the seal. Records written since the seal frame go
 	// to disk with it, which does no harm.
 	err = seg.syncTo(end.Off)

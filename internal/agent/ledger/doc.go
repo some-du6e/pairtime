@@ -79,4 +79,13 @@
 // and seals the records that survived without a batch. Batches leave the
 // device, through Options.Sealed, only once they are on disk, and the mode
 // each was sealed in is on disk with it, in its seal frame.
+//
+// # The vault
+//
+// The ledger holds no text (DESIGN 3.6). With Options.Vault, each record's
+// content, the text its c commits and the paths of its edits, goes to the
+// vault right after the record, under the same lock, so the vault's
+// entries are in the order of their numbers (internal/agent/vault). Each
+// seal flushes the vault before the batch, and Open reconciles the vault
+// with what survived a crash before any record takes a number again.
 package ledger
