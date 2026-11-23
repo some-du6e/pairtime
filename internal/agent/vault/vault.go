@@ -637,12 +637,15 @@ func (v *Vault) appendEntry(dst []byte, s uint64, what byte, content []byte) ([]
 	if len(content)+entryMin > maxPayload {
 		return dst, fmt.Errorf("%d bytes is more than an entry holds", len(content))
 	}
-	p := make([]byte, 0, entryMin+len(content))
-	p = append(p, ad(s, what)...)
+	a := ad(s, what)
 	nonce := make([]byte, nonceSize)
 	rand.Read(nonce)
+	p := make([]byte, 0, entryMin+len(content))
+	p = append(p, a...)
 	p = append(p, nonce...)
-	p, err := v.gcm.seal(p, nonce, content, p[:9])
+	// a is its own slice: cipher.AEAD's Seal takes no dst that overlaps
+	// the associated data.
+	p, err := v.gcm.seal(p, nonce, content, a)
 	if err != nil {
 		return dst, err
 	}
