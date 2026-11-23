@@ -363,8 +363,9 @@ type file struct {
 }
 
 // readFile reads the day file name, which has a head of keyID's. Reading
-// stops at the first frame that isn't a whole entry of a higher number
-// than the one before it.
+// stops at the first frame that isn't a whole entry in order: of a higher
+// number than the one before it, or of the same number and the other kind,
+// since a record can have both a text and paths (Keep).
 func readFile(name, day, keyID string) (file, error) {
 	f, err := os.Open(name)
 	if err != nil {
@@ -404,7 +405,7 @@ func readFile(name, day, keyID string) (file, error) {
 		if err != nil {
 			return out, nil
 		}
-		if n := len(out.entries); n > 0 && e.s <= out.entries[n-1].s {
+		if n := len(out.entries); n > 0 && (e.s < out.entries[n-1].s || e.s == out.entries[n-1].s && e.what == out.entries[n-1].what) {
 			return out, nil
 		}
 		out.entries = append(out.entries, e)

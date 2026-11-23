@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/vault"
@@ -20,7 +21,7 @@ func (a *agent) openVault(ks *keys.Keystore, keyID string) *vault.Vault {
 		Dir:      a.dirs.Vault(),
 		Keys:     ks.Keys(),
 		KeyID:    keyID,
-		KeepText: a.config().Privacy.KeepText(),
+		KeepText: a.privacy().KeepText(),
 		Problem:  func(msg string) { a.setProblem("vault", msg) },
 	})
 	if err != nil {
@@ -30,6 +31,15 @@ func (a *agent) openVault(ks *keys.Keystore, keyID string) *vault.Vault {
 	}
 	a.setProblem("vault", "")
 	return v
+}
+
+// privacy is config.toml's [privacy] in force, or its default before the
+// agent has read config.toml, as in an agent a test makes without Run.
+func (a *agent) privacy() config.Privacy {
+	if cfg := a.cfg.Load(); cfg != nil {
+		return cfg.Privacy
+	}
+	return config.Default().Privacy
 }
 
 // writerVault is v as ledger.Options.Vault takes it: no vault at all when
@@ -66,7 +76,7 @@ func (a *agent) applyPrivacy() {
 	if v == nil {
 		return
 	}
-	p := a.config().Privacy
+	p := a.privacy()
 	v.SetKeepText(p.KeepText())
 	if p.TextOff {
 		// Each file of the vault is read and written again, which can take

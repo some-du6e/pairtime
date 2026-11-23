@@ -162,6 +162,23 @@ func TestKeep(t *testing.T) {
 			},
 		},
 		{
+			name: "a record with both a text and paths keeps both, and the records after it read back too",
+			run: func(t *testing.T, v *Vault, p *problems) {
+				v.Keep(day1, 1, []byte("fix the nav bar"), []string{"src/nav.js"})
+				v.Keep(day1, 2, []byte("two"), []string{"src/app.css"})
+				for s, want := range map[uint64]string{1: "fix the nav bar", 2: "two"} {
+					if got, err := text(t, v, s, want); err != nil || got != want {
+						t.Errorf("Text(%d) = %q, %v", s, got, err)
+					}
+				}
+				for s, want := range map[uint64]string{1: "src/nav.js", 2: "src/app.css"} {
+					if got, err := v.Paths(s); err != nil || !slices.Equal(got, []string{want}) {
+						t.Errorf("Paths(%d) = %q, %v", s, got, err)
+					}
+				}
+			},
+		},
+		{
 			name: "paths read back in order, without repeats or empty ones",
 			run: func(t *testing.T, v *Vault, p *problems) {
 				v.Keep(day1, 1, nil, []string{"src/nav.js", "", "src/app.css", "src/nav.js"})
