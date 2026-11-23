@@ -58,6 +58,24 @@ type basePayload struct {
 	// the sweep wrote the frame, so dropping that row loses none of them
 	// (sealPayload.Stretches).
 	Stretches []stretchPayload `json:"stretches,omitempty"`
+	// LocalUntil and LocalUntilOS are the moment the row that recorded
+	// Stretches recorded (sealPayload.LocalUntil), which Open holds the rows
+	// after the frame to, as it holds those after the newest row that
+	// records stretches: this version moves the moment only with a seal
+	// frame that records them, so a row whose moment rose past it is an
+	// older version's (restoreStretches).
+	LocalUntil   int64    `json:"local_until,omitempty"`
+	LocalUntilOS *untilOS `json:"local_until_os,omitempty"`
+}
+
+// listUntil is the moment the row that recorded bf.stretches recorded, or
+// the base frame's for a list the base frame holds (basePayload.LocalUntil).
+// It means nothing while bf.stretches is nil.
+func (bf *batchesFile) listUntil() (int64, *untilOS) {
+	if i := bf.stretchesRow; i >= 0 && i < len(bf.rows) {
+		return bf.rows[i].LocalUntil, bf.rows[i].LocalUntilOS
+	}
+	return bf.base.LocalUntil, bf.base.LocalUntilOS
 }
 
 // row returns the row of batch b, when the file keeps it.

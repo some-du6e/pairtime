@@ -772,19 +772,25 @@ func TestStretchesKept(t *testing.T) {
 // TestUntilMovesRecordStretches checks that a seal frame records the
 // stretches whenever the moment it records (Writer.until) moved, though
 // they didn't change, as when the agent's Seen gives an end the stretch
-// going on holds: a row whose moment rose with no stretches of its own is
-// then an older version's (restoreStretches), and the next Open doesn't
-// end the stretch going on at that moment. A record made in it after that
-// moment, which reaches the writer late after the restart, is held by it
-// and sealed local-only, whatever config.toml says at the restart.
+// going on holds: a row whose moment rose past the one the list's row
+// recorded, with no stretches of its own, is then an older version's
+// (restoreStretches), and the next Open doesn't end the stretch going on at
+// a row this version sealed later with that moment. A sweep that drops the
+// list's row keeps that moment in its base frame. A record made in the
+// stretch after that moment, which reaches the writer late after the
+// restart, is held by it and sealed local-only, whatever config.toml says at
+// the restart.
 func TestUntilMovesRecordStretches(t *testing.T) {
 	cases := []struct {
 		name string
-		// online is whether config.toml says online at the restart.
-		online bool
+		// online is whether config.toml says online at the restart, and
+		// sweep whether a sweep that keeps the two newest rows, and drops
+		// the rest, comes before it.
+		online, sweep bool
 	}{
-		{"config.toml online at the restart: the stretch goes on until the first read ends it", true},
-		{"config.toml still local-only at the restart: the stretch goes on", false},
+		{"config.toml online at the restart: the stretch goes on until the first read ends it", true, false},
+		{"config.toml still local-only at the restart: the stretch goes on", false, false},
+		{"a sweep before the restart keeps in its base frame the moment the list's row recorded, so the stretch still goes on", true, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -811,6 +817,11 @@ func TestUntilMovesRecordStretches(t *testing.T) {
 			r.at(40_000)
 			r.write(r.presence(40_000))
 			r.seal()
+			// A batch after it with nothing changed records no stretches, and
+			// the moment the 40 s one recorded.
+			r.at(45_000)
+			r.write(r.presence(45_000))
+			r.seal()
 			if err := r.w.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -818,20 +829,40 @@ func TestUntilMovesRecordStretches(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			recorded := bf.stretchesRow == len(bf.rows)-1
+			recorded := bf.stretchesRow == len(bf.rows)-2
+			reopen, based := int64(50_000), true
+			if c.sweep {
+				// The two newest batches stay, for the uploads (floor), as the
+				// rest go, with every segment, and the stretches fold.
+				r.open()
+				after := dayOf(time.UnixMilli(testT + 2*sweepDayMS))
+				if dropped, _, err := r.w.Sweep(after, r.batches[len(r.batches)-2].Row.B); err != nil || dropped != len(r.batches)-2 {
+					t.Fatalf("Sweep dropped %d batches, %v; want %d", dropped, err, len(r.batches)-2)
+				}
+				if err := r.w.Close(); err != nil {
+					t.Fatal(err)
+				}
+				swept, err := readBatchesFile(filepath.Join(r.dir, batchesName))
+				if err != nil {
+					t.Fatal(err)
+				}
+				based = swept.stretchesRow == -1 && swept.base.LocalUntil == testT+25_000 && len(swept.rows) == 2
+				reopen = 3 * sweepDayMS
+			}
 			r.file.Store(c.online)
-			r.at(50_000)
+			r.at(reopen)
 			r.open()
 			// A transcript line made at 35 s, while config.toml said
 			// local-only, read late.
 			r.write(r.logged("agent.output", 35_000))
-			r.write(r.presence(51_000))
+			r.write(r.presence(reopen + 1000))
 			b := r.seal()
 			checks := []struct {
 				name string
 				ok   bool
 			}{
 				{"the seal frame sealed after the moment moved records the stretches", recorded},
+				{"a sweep's base frame keeps them with the moment the list's row recorded", based},
 				{"the record made in the stretch after that moment is sealed local-only after the restart", !b.Online},
 			}
 			for _, ch := range checks {

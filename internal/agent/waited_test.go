@@ -241,6 +241,14 @@ func TestAdaptersWaiting(t *testing.T) {
 		{"held calls count while before holds a stretch, though the earliest was made after the moment: the earliest alone can't tell whether one was made in a stretch",
 			func(h *adapterHost) { h.held = 3; h.heldFrom.add(at(moment + 1)) }, true},
 		{"held calls none of which the agent could read don't count", func(h *adapterHost) { h.held = 2 }, false},
+		{"held calls a .replay file this run can't delete keeps don't count, as they wait for the next start",
+			func(h *adapterHost) {
+				h.held = 1
+				h.heldFrom.add(at(moment - 1))
+				h.replayStuck = true
+				h.replayStopped()
+			}, false},
+		{"nor do those a writer that stopped after a failure leaves", func(h *adapterHost) { h.held = 1; h.heldFrom.add(at(moment - 1)); h.down = true; h.replayStopped() }, false},
 		{"a call whose records carry the agent's stamp counts by the hook's own when that is before the moment",
 			func(h *adapterHost) { h.queue = []inbox.Delivery{resent(moment-1, moment+5)} }, true},
 		{"a parked call counts by the hook's own stamp too", func(h *adapterHost) { h.parkedAt[stampOf(resent(moment-1, moment+5))] = 1 }, true},
@@ -380,6 +388,37 @@ func TestAdaptersWaiting(t *testing.T) {
 			h.heldFrom.add(at(moment - 5000))   // in it
 			if !h.waiting(inStretch) {
 				t.Error("waiting = false while a call made in the stretch is held behind one made before it; want true")
+			}
+		}},
+		{"a stuck replay's held calls, made in a stretch, wait for the next start, so after a switch back the seal due the mark goes online", func(t *testing.T) {
+			h := newHost()
+			var local atomic.Bool
+			local.Store(true)
+			w := optionsWriter(t, h.a.dirs, func(o *ledger.Options) {
+				o.Online = func() bool { return !local.Load() }
+				o.Waiting = h.waiting
+			})
+			if _, err := w.Write(presenceAt(time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			if b, ok, err := w.Seal(); !ok || err != nil || b.Online {
+				t.Fatalf("the stretch's batch was sealed %v, online %v (%v); want local-only", ok, b.Online, err)
+			}
+			// A call made in the stretch is held behind a .replay file this run
+			// couldn't delete.
+			h.held = 1
+			h.heldFrom.add(callStamp{t: time.Now().UnixMilli()})
+			h.replayStuck = true
+			h.replayStopped()
+			time.Sleep(5 * time.Millisecond)
+			local.Store(false)
+			w.NoteMode(true)
+			time.Sleep(5 * time.Millisecond)
+			if _, err := w.Write(presenceAt(time.Now())); err != nil {
+				t.Fatal(err)
+			}
+			if b, ok, err := w.Seal(); !ok || err != nil || !b.Online || !b.Back {
+				t.Errorf("the first batch after the switch back was sealed %v, online %v, marked %v (%v); want online and marked", ok, b.Online, b.Back, err)
 			}
 		}},
 		{"a parked call counts until it is parsed, by the time its records carry", func(t *testing.T) {

@@ -288,8 +288,13 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 		// stretch of its own (stretchesFromRows).
 		end := listEnd(list)
 		var recorded moment
-		if at >= 0 && at < len(rows) {
+		switch {
+		case at >= 0 && at < len(rows):
 			recorded = rows[at].until()
+		case at < 0:
+			// The base frame a sweep wrote holds the list, and the moment its
+			// row recorded (basePayload.LocalUntil).
+			recorded = sealPayload{LocalUntil: bf.base.LocalUntil, LocalUntilOS: bf.base.LocalUntilOS}.until()
 		}
 		k := at + 1
 		for k < len(rows) && !(laterEnd(rows[k].until(), end) && laterEnd(rows[k].until(), recorded)) {

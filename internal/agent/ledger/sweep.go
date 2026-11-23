@@ -25,8 +25,9 @@ import (
 //
 // It also folds the local-only stretches, in the writer and in the base
 // frame, at the start of from: every stretch that began before it becomes
-// part of one from the beginning of time to it, or to the end of the one
-// that goes on past it (foldPayloads). That only makes more of the past
+// part of one from the beginning of time to it or to the latest end among
+// them, whichever is later, or one going on while one of them does
+// (foldPayloads). That only makes more of the past
 // count as local-only, and the stretches keep no time config.toml changed
 // mode before the ledger's 180 days
 // (docs/errata/2026-11-23-late-local-records.md).
@@ -222,8 +223,12 @@ func keptFile(bf *batchesFile, k int, stretches []stretchPayload) ([]byte, error
 	}
 	// The local-only stretches go in the base frame, since the rows kept
 	// keep none of their own once read (readBatchesFile): Open takes them
-	// back from there until a later row records them again.
-	bp.Stretches = stretches
+	// back from there until a later row records them again, with the moment
+	// the row that recorded them recorded, which it holds the kept rows to.
+	if stretches != nil {
+		bp.Stretches = stretches
+		bp.LocalUntil, bp.LocalUntilOS = bf.listUntil()
+	}
 	base, err := json.Marshal(bp)
 	if err != nil {
 		return nil, err

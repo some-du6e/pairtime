@@ -210,6 +210,10 @@ type adapterHost struct {
 	// what held.jsonl and a .replay file hold (countHeld), which the ledger
 	// writer may open before: until then any of them may be on its way.
 	uncounted bool
+	// heldStuck is set once the calls held can't reach the ledger writer in
+	// this run, as the worker's down or replayStuck says (replayStopped):
+	// they wait for the next start, so they hold no mark (waiting).
+	heldStuck bool
 	// expireDue says the minute job has run since the worker last looked
 	// for held calls to drop (expireRun). heldDue is when the oldest call in
 	// held.jsonl or an unread .replay file will have waited heldKeep, zero
@@ -2276,12 +2280,16 @@ func (h *adapterHost) expireFiles(now time.Time, replay bool, from int64) (int, 
 }
 
 // replayStopped notes that this run reads the .replay file no more, as once
-// the ledger writer is down or the file is stuck. expireRun then cuts it
+// the ledger writer is down or the file is stuck, so the calls held reach no
+// writer in this run (heldStuck). expireRun then cuts it
 // like held.jsonl, so it has the next minute job look at it, and a call in
 // it that came due while its replay was under way goes then, rather than
 // at the look heldRetry later.
 func (h *adapterHost) replayStopped() {
-	h.dueBy(wallNow())
+	h.mu.Lock()
+	h.heldStuck = true
+	h.dueByLocked(wallNow())
+	h.mu.Unlock()
 }
 
 // dueBy has expireRun look at the held files at t, or sooner.
@@ -2429,8 +2437,12 @@ func (h *adapterHost) waiting(before func(event.Envelope) bool) bool {
 	// held, they count whenever before holds any stretch at all, as calls
 	// not yet counted do, at the cost of credit while they drain after a
 	// switch back (D-late-local point 2).
-	read := h.held > 0 && (h.heldFrom.set || len(h.heldFrom.mono) > 0)
-	if (h.uncounted || read) && before(event.Envelope{}) || h.held > 0 && h.heldFrom.waits(before) {
+	// Held calls that can't reach the writer in this run, behind a .replay
+	// file this run can't delete or a writer that stopped, are on their way
+	// to the next start's writer only (heldStuck).
+	drains := h.held > 0 && !h.heldStuck
+	read := drains && (h.heldFrom.set || len(h.heldFrom.mono) > 0)
+	if (h.uncounted || read) && before(event.Envelope{}) || drains && h.heldFrom.waits(before) {
 		return true
 	}
 	for _, s := range h.stepping {
