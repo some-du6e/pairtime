@@ -468,6 +468,8 @@ components:
           description: Calls lost because held.jsonl was full. Absent when none.
         git:
           $ref: "#/components/schemas/Git"
+        lookback:
+          $ref: "#/components/schemas/Lookback"
     HarnessCounts:
       type: object
       additionalProperties: false
@@ -479,7 +481,7 @@ components:
         records:
           type: integer
           minimum: 0
-          description: The ledger records the calls made.
+          description: The ledger records the calls and log lines made.
         parse_failures:
           type: integer
           minimum: 0
@@ -494,13 +496,28 @@ components:
         ignored:
           type: integer
           minimum: 0
-          description: Calls from a folder a .pairtime-ignore keeps out, which make no record. Absent when none.
+          description: Calls and log lines from a folder a .pairtime-ignore keeps out, which make no record. Absent when none.
         last_record:
           type: integer
           description: The time of the newest record, in Unix milliseconds. Absent before the first.
         last_failure:
           type: string
           description: What the last failure was, naming events and fields but never their values.
+        lines:
+          type: integer
+          minimum: 0
+          description: >
+            Lines of the harness's log files, such as Claude Code's
+            transcripts, that the adapter read since the agent started.
+            Absent when none.
+        line_failures:
+          type: integer
+          minimum: 0
+          description: >
+            Log lines the adapter couldn't fully read: a line that isn't JSON,
+            an entry of a type or with a value its harness's version doesn't
+            write, a line too long to read. Their other records are still
+            written. Absent when none.
     Git:
       type: object
       additionalProperties: false
@@ -514,6 +531,53 @@ components:
           type: integer
           minimum: 0
           description: The git.change records written since the agent started.
+    Lookback:
+      type: object
+      additionalProperties: false
+      required: [files, files_done, bytes, bytes_done, running]
+      description: >
+        How far lookback has read what the harnesses logged before pairtime
+        did: the last 30 days of each log file a root's first listing found,
+        read at low priority by a process of its own (DESIGN 5.9 step 9).
+        It counts what earlier runs of the agent read too. Absent when
+        there was nothing to read.
+      properties:
+        files:
+          type: integer
+          minimum: 0
+          description: >
+            The files with lines from before pairtime. A file that goes away
+            leaves this count and files_done alike.
+        files_done:
+          type: integer
+          minimum: 0
+          description: >
+            The files lookback is done with: read, or left unread for good,
+            as after its reader failed three times.
+        bytes:
+          type: integer
+          minimum: 0
+          description: The bytes of those lines, in all the files.
+        bytes_done:
+          type: integer
+          minimum: 0
+          description: >
+            The bytes lookback is done with: all of the files it is done
+            with, as files_done counts them, and what it has read of the
+            others.
+        running:
+          type: boolean
+          description: Whether lookback's reader runs now.
+        failures:
+          type: integer
+          minimum: 0
+          description: >
+            The reader's processes that failed since the agent started.
+            After the third, the rest of each file's lines from before
+            pairtime stay unread. Absent when none failed.
+        error:
+          type: string
+          description: Why the last one failed. Absent when none did.
     Signals:
       type: object
       additionalProperties: false

@@ -79,7 +79,8 @@ type Options struct {
 	// Answer, when set, answers the questions the CLI asks (Ask), such as
 	// AskLastSession, with one JSON value of at most about 1 MiB once
 	// encoded. It returns ErrUnknownQuestion for a question it has no
-	// answer for. It runs on the connection's goroutine, so it should
+	// answer for, and ErrStarting while it can't answer yet. It runs on
+	// the connection's goroutine, so it should
 	// answer from what the agent already holds, and never before Listen
 	// returns: a question that comes during the socket's self-test is
 	// turned away. Without it the agent answers no question.
@@ -428,7 +429,7 @@ func (s *Server) handle(c net.Conn, sink inbox.Sink, until time.Time, walk func(
 func (s *Server) take(body []byte, sink inbox.Sink, pid int, chain []platform.Proc, asks bool) (reply, bool) {
 	if q, ok := asQuestion(body); ok {
 		if !asks {
-			return reply{ID: q.ID, Error: "the agent is still starting"}, false
+			return reply{ID: q.ID, Error: startingAnswer}, false
 		}
 		return s.answer(q)
 	}

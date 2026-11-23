@@ -1,0 +1,13 @@
+{
+  "fixture": "relayed/t3-here",
+  "prompts": [
+    {
+      "turn_key": "t_4da94bbcb2a9",
+      "t": 1795485661000,
+      "local": "20:01:01",
+      "text": null,
+      "len_chars": 90,
+      "source": "invented for this case; only its length matters"
+    }
+  ]
+}

@@ -33,6 +33,8 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
+	"github.com/some-du6e/pairtime/internal/agent/tailers"
+	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -273,6 +275,38 @@ type adapterHost struct {
 	// git is the git adapter, which prepare makes; nil before, and when it
 	// couldn't start. The status reads it too.
 	git atomic.Pointer[gitHost]
+
+	// tail is the tailers, which read the harnesses' log files and hand
+	// their lines to the worker (logs.go; WP-AD3), once startTailers made
+	// them. logReady lets them start, once the worker has given them the
+	// adapters' log roots.
+	tail     atomic.Pointer[tailers.Tailer]
+	logReady chan struct{}
+	// Under mu: logEnv is the machine the log roots are on, logReqs the
+	// batches of lines the tailers hand over, and forgets the files they
+	// found gone, oldest first; logsDone says the tailers stopped.
+	logEnv   install.Env
+	logReqs  []*logReq
+	forgets  []forgetReq
+	logsDone bool
+	// The worker's: rooted says the tailers have their roots, and logWait
+	// that a line had to wait, when the Tracks ended numbered logTracks and
+	// logParked calls were parked: the tailers get a poke once either moves.
+	rooted    bool
+	logWait   bool
+	logTracks uint64
+	logParked int
+	// logRefused says a step that couldn't write to the ledger answered
+	// batches with none taken (refuseLogs).
+	logRefused bool
+	// Under mu: lookback is how far the tailers' lookback has read, and
+	// ledgerBegan when the ledger's chain began, in Unix ms, which ends
+	// the window of lookback's records (lookbackWindow). carried holds,
+	// by session key, the session.starts the window left out that wait for
+	// the session's first record inside it.
+	lookback    tailers.Progress
+	ledgerBegan int64
+	carried     map[string]carriedStart
 }
 
 // adapterKeys are the keys the adapters make records with, derived from
@@ -294,14 +328,20 @@ type harnessStats struct {
 	ParseFailures uint64 `json:"parse_failures"`
 	// WriteFailures counts records the ledger writer refused.
 	WriteFailures uint64 `json:"write_failures,omitempty"`
-	// Ignored counts calls that ran in a folder out of pairtime, which
-	// make no record (DESIGN 8.8).
+	// Ignored counts calls and log lines from a folder out of pairtime,
+	// which make no record (DESIGN 8.8).
 	Ignored uint64 `json:"ignored,omitempty"`
 	// LastRecord is the t of the newest record written, in Unix ms.
 	LastRecord int64 `json:"last_record,omitempty"`
 	// LastFailure says what the last failure was. It names events and
 	// fields, never their values (adapters.ParseError).
 	LastFailure string `json:"last_failure,omitempty"`
+	// Lines counts the lines of the harness's log files the adapter read,
+	// and LineFailures those it couldn't fully read: lines that aren't
+	// JSON, entries of a type or with a value its harness's version doesn't
+	// write, lines too long to read (DESIGN 5.3; WP-AD3).
+	Lines        uint64 `json:"lines,omitempty"`
+	LineFailures uint64 `json:"line_failures,omitempty"`
 }
 
 // adaptersReply is the adapters' part of GET /v1/status.
@@ -317,6 +357,23 @@ type adaptersReply struct {
 	Dropped uint64 `json:"dropped,omitempty"`
 	// Git says what the git adapter watches.
 	Git gitReply `json:"git"`
+	// Lookback says how far lookback has read what the harnesses logged
+	// before pairtime did (WP-AD3), absent when there was nothing to read.
+	Lookback *lookbackReply `json:"lookback,omitempty"`
+}
+
+// lookbackReply is tailers.Progress in the status: the files with a
+// history and their bytes, all and read, whether lookback's reader runs
+// now, and the failures of its child processes, with the last one's
+// error.
+type lookbackReply struct {
+	Files     int    `json:"files"`
+	FilesDone int    `json:"files_done"`
+	Bytes     int64  `json:"bytes"`
+	BytesDone int64  `json:"bytes_done"`
+	Running   bool   `json:"running"`
+	Failures  int    `json:"failures,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // adaptersState is what state.json keeps of the adapters: the memory of
@@ -327,6 +384,10 @@ type adaptersReply struct {
 type adaptersState struct {
 	Keyed    string                            `json:"keyed"`
 	Adapters map[event.Harness]json.RawMessage `json:"adapters,omitempty"`
+	// Carried are the session.starts lookback's window left out that wait
+	// for their session's first record inside it (lookbackWindow), which
+	// go with the adapters' memory that wrote them.
+	Carried []carriedStart `json:"carried,omitempty"`
 }
 
 // memoryKey names the K_session a memory was saved under, as an opaque key
@@ -355,6 +416,7 @@ func newAdapterHost(a *agent) *adapterHost {
 		kick:      make(chan struct{}, 1),
 		stop:      make(chan struct{}),
 		done:      make(chan struct{}),
+		logReady:  make(chan struct{}),
 	}
 }
 
@@ -419,14 +481,16 @@ func deriveAdapterKeys(ks *keys.Keystore) (*adapterKeys, error) {
 	return k, nil
 }
 
-// attach gives the host the ledger writer, once it is open (startLedger).
+// attach gives the host the ledger writer, once it is open (startLedger),
+// and the moment its chain began, which ends lookback's window.
 func (h *adapterHost) attach(w *ledger.Writer) {
+	began := w.Created().UnixMilli()
 	h.mu.Lock()
 	if h.closed {
 		h.mu.Unlock()
 		return
 	}
-	h.writer = w
+	h.writer, h.ledgerBegan = w, began
 	h.mu.Unlock()
 	h.poke()
 }
@@ -973,6 +1037,7 @@ func (h *adapterHost) run() {
 // watcher, whose held changes go to the ledger first, and saves state.json.
 func (h *adapterHost) finish() {
 	h.step(true)
+	h.refuseLogs()
 	if g := h.git.Load(); g != nil {
 		g.close()
 	}
@@ -1016,9 +1081,11 @@ func (h *adapterHost) step(last bool) {
 	if !ready {
 		h.keep(h.hold(batch))
 		h.donePending(false)
+		h.refuseLogs()
 		return
 	}
 	if h.writerDown() {
+		h.refuseLogs()
 		// Nothing goes to the ledger until the next start's Open recovers
 		// it: the calls that wait for their folders, then these, wait for
 		// that start in held.jsonl, in the order they came.
@@ -1043,6 +1110,14 @@ func (h *adapterHost) step(last bool) {
 		h.admit(d, false, last)
 	}
 	h.holdBackNow() // the calls the writer stopped under, if it did
+	switch {
+	case h.replayed && !last:
+		// After the hook calls before them, so a session's hooks reach its
+		// adapter before its log lines (logs.go).
+		h.takeLogs()
+	case !last:
+		h.refuseLogs()
+	}
 	// Read again: the calls parsed above can have made a save due.
 	h.mu.Lock()
 	saveDue = saveDue || h.saveDue
@@ -1093,6 +1168,14 @@ func (h *adapterHost) prepare() bool {
 		h.git.Store(g)
 	}
 	h.memory = h.loadMemory()
+	h.mu.Lock()
+	h.carried = make(map[string]carriedStart, len(h.memory.Carried))
+	for _, c := range h.memory.Carried {
+		if c.Event.SessionKey != "" {
+			h.carried[c.Event.SessionKey] = c
+		}
+	}
+	h.mu.Unlock()
 	h.ready = true
 	return true
 }
@@ -1248,7 +1331,7 @@ func (h *adapterHost) project(dir string) (adapters.Project, bool) {
 	}
 	p, ok, ignored := g.project(dir)
 	if ignored {
-		h.ignored = true
+		h.ignored, p.Ignored = true, true
 	}
 	return p, ok
 }
@@ -1499,6 +1582,7 @@ func (h *adapterHost) parse(c hostCall) {
 	// A call that does count lets its session back in, as when it moved to
 	// a folder that isn't out of pairtime.
 	h.a.hooked.unignore(session)
+	h.hint(c)
 	due, refused := false, false
 	for _, r := range recs {
 		if !h.write(c.st, r, sentOf(c.d)) {
@@ -1593,7 +1677,12 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stam
 	if ev.EventID == "" {
 		ev.EventID = event.NewEventID(time.UnixMilli(ev.T))
 	}
-	if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command, Sent: sent}); err != nil {
+	// A late record is one the lookback reader read (takeLine): the ledger
+	// seals it in its own time (ledger.Input.Late). Every log record dated
+	// before the ledger began, whatever read it, the ledger judges by when
+	// the writer took it in, for whether it stays on the device.
+	if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command, Sent: sent,
+		Late: r.Late}); err != nil {
 		h.count(func() {
 			st.WriteFailures++
 			st.LastFailure = clip(fmt.Sprintf("the ledger refused a %s record: %v", ev.Kind(), err))
@@ -1667,6 +1756,10 @@ func (h *adapterHost) status() adaptersReply {
 	for name, st := range h.stats {
 		r.Harnesses[name] = *st
 	}
+	if p := h.lookback; p.Files > 0 || p.Failures > 0 {
+		r.Lookback = &lookbackReply{Files: p.Files, FilesDone: p.FilesDone, Bytes: p.Bytes, BytesDone: p.BytesDone,
+			Running: p.Running, Failures: p.Failures, Error: clip(p.Err)}
+	}
 	h.mu.Unlock()
 	if g := h.git.Load(); g != nil {
 		r.Git = g.status()
@@ -1686,6 +1779,12 @@ func (h *adapterHost) save(force bool) {
 	if st.Adapters == nil {
 		st.Adapters = make(map[event.Harness]json.RawMessage)
 	}
+	h.mu.Lock()
+	for _, c := range h.carried {
+		st.Carried = append(st.Carried, c)
+	}
+	h.mu.Unlock()
+	slices.SortFunc(st.Carried, func(a, b carriedStart) int { return strings.Compare(a.Event.SessionKey, b.Event.SessionKey) })
 	for name, ad := range h.built {
 		s, ok := ad.(adapters.Stateful)
 		if !ok {
@@ -1712,6 +1811,15 @@ func (h *adapterHost) save(force bool) {
 	}
 	if g := h.git.Load(); g != nil && g.put() {
 		changed = true
+	}
+	if t := h.tail.Load(); t != nil {
+		// The tailers' cursors, with the memory of the adapters whose lines
+		// they are (logs.go).
+		if moved, err := t.Put(); err != nil {
+			h.a.log.Warn("the tailers' cursors couldn't be saved", "err", err)
+		} else if moved {
+			changed = true
+		}
 	}
 	if !changed && !force {
 		return

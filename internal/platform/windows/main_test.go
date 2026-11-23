@@ -10,15 +10,18 @@ import (
 	"testing"
 )
 
-// childEnvs are the variables that make this test binary a child process
-// whose only GUI threads are the windows a test makes, each on a thread
-// that ends (balloonsAlone, lockWatchesAlone), and what each child runs.
+// childEnvs are the variables that make this test binary a child process,
+// and what each child runs: one whose only GUI threads are the windows a
+// test makes, each on a thread that ends (balloonsAlone, lockWatchesAlone),
+// or one in background mode, which only the process can leave
+// (backgroundChild).
 var childEnvs = []struct {
 	name string
 	run  func(n string) int
 }{
 	{balloonsAloneEnv, balloonsAlone},
 	{lockWatchesAloneEnv, lockWatchesAlone},
+	{backgroundEnv, backgroundChild},
 }
 
 func init() {

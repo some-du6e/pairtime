@@ -25,6 +25,23 @@ type post struct {
 	toolUseID string
 	tool      string
 	agent     string
+	// native says the call came via hook, so it counts in a session the
+	// hooks or a log reader cover, where the scorer leaves a spooled one
+	// out (DESIGN 5.2).
+	native bool
+}
+
+// postedNative reports whether a via hook PostToolUse or PostToolUseFailure
+// of the session named tool call id: a transcript's copy of the call would
+// be a second agent.tool of it, which the scorer would count twice
+// (logLine.toolResult).
+func (s *session) postedNative(id string) bool {
+	for i := len(s.posts) - 1; i >= 0; i-- {
+		if s.posts[i].toolUseID == id {
+			return s.posts[i].native
+		}
+	}
+	return false
 }
 
 // permissionRequest holds the request for Decide. A hook alone can't say

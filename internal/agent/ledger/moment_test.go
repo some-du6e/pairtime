@@ -172,7 +172,7 @@ func TestMoment(t *testing.T) {
 }
 
 // TestArrival checks the times Write holds a lookback record to in place of
-// its event's (Input.Lookback): when the writer took it in, by this run's
+// its event's (Writer.lookback): when the writer took it in, by this run's
 // clock where that time has Go's monotonic reading, and by the wall clock
 // alone otherwise, as momentAt reads a time.
 func TestArrival(t *testing.T) {

@@ -196,6 +196,9 @@ type RawRecord struct {
 	// it at 1 MiB, or it wasn't one JSON value, or it didn't fit a message.
 	Incomplete bool
 	Arrival    Arrival
+	// Log says where in a log file a record of SourceLog was read, and is
+	// nil for every other source.
+	Log *LogLine
 }
 
 // Arrival is what the agent, not the adapter or the sender, says about how
@@ -205,9 +208,16 @@ type Arrival struct {
 	// when it came over the socket or the pipe and the agent's own walk of
 	// its parent chain reached one of the adapter's Hosts, and plugin for
 	// every other one, spooled calls included (D-spool-via; DESIGN 5.2).
+	// For a line of a log file the tailers read, it is log.
 	Via event.Via
 	// T is when the call was made, in Unix milliseconds, never later than
-	// when the agent took it in; Mono and BootID go with it (SM 1.1).
+	// when the agent took it in; Mono and BootID go with it (SM 1.1). For
+	// a log line it is when the agent read the line: the line's own
+	// records carry the times the line states, and their mono is the
+	// agent's reading at T taken back by how much earlier they are, as
+	// git.change records are, and never below 0. A line read more than
+	// LATE_READ_S after its time carries none, 0, and goes by its time
+	// (internal/adapters/claudecode's env).
 	T      int64
 	Mono   int64
 	BootID string
@@ -245,6 +255,17 @@ type Record struct {
 	// (git.Watcher.NoteAgentCommand). Both stay on the device, like the
 	// command: Dir is a path, and neither goes in the event.
 	Dir, Call string
+	// LogKey names a log line's record among the records that line, read
+	// again, makes again: where in its file the line that holds the
+	// record's content starts, and which record of that line it is, such as
+	// "1234.prompt". The agent derives the record's event_id from it, so a
+	// line read again after a crash makes records pkg/score takes for the
+	// ones the ledger has. It is "" for a record of anything but a log.
+	LogKey string
+	// Late, which the agent sets, says the record tells of a time long
+	// past, as lookback's do: the ledger seals it in its own time
+	// (ledger.Input.Late).
+	Late bool
 }
 
 // Stateful is an adapter whose memory of the sessions it parses can
@@ -297,6 +318,11 @@ type Project struct {
 	// Root is the project's folder, which file paths are keyed relative
 	// to (ledger-v1 10.6).
 	Root string
+	// Ignored says the folder is out of pairtime (DESIGN 8.8), which the
+	// resolver says with false: the host drops the records of the call or
+	// line being parsed, and a log reader keeps the file out with it until
+	// a line names a folder that counts (LogReader.LogIgnored).
+	Ignored bool
 }
 
 // ErrOtherHarness is what Parse returns for a hook call that another
