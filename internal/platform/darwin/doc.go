@@ -85,8 +85,10 @@
 // user's processes with libproc's proc_pidinfo (PROC_PIDLISTFDS) and
 // proc_pidfdinfo (PROC_PIDFDSOCKETINFO), bound through purego from
 // libSystem as proc_pidpath is (WP-OS6). That needs no permission. Of
-// each socket it reads only the kind, addresses, ports and state, and it
-// reads no other descriptor.
+// each socket it parses only the kind, the kernel's handle, the addresses,
+// ports and state. The rest of the socket_fdinfo that libproc fills in,
+// which for a Unix-domain socket holds its paths, is dropped unread and
+// never kept, and no descriptor that isn't a socket is read.
 //
 // # What stays on the device
 //

@@ -48,14 +48,22 @@ var errNoConn = errors.New("no TCP connection")
 // sees it, which is the client's own local address, and server is the
 // server's local address.
 //
-// GetExtendedTcpTable lists every TCP connection with the pid of the
-// process that owns it, which any user may read. The client end is the
-// row whose local address is client and whose remote address is server,
-// in the IPv4 table or, for a dual-stack socket, the IPv6 one, and only an
-// established connection counts. Then the process table is read
-// (Processes) and the row read again, and both reads must name the same
-// owner. The row names a process of any user; the peer check compares its
-// Owner with this user's (internal/agent/peer).
+// GetExtendedTcpTable lists every TCP connection, which any user may read,
+// with its dwOwningPid: the pid of the process that bound the socket. The
+// client end is the row whose local address is client and whose remote
+// address is server, in the IPv4 table or, for a dual-stack socket, the
+// IPv6 one, and only an established connection counts. Then the process
+// table is read (Processes) and the row read again, and both reads must
+// name the same pid.
+//
+// A socket that the binder hands to another process, by inheritance or a
+// duplicated handle, keeps the binder's pid in the table. So the lookup
+// names the binder, and unlike the Linux and macOS lookups, which see
+// every process that holds a socket, it can't refuse a socket that several
+// processes hold. Checking the binder's start against the bind time that
+// TCP_TABLE_OWNER_MODULE_CONNECTIONS records is issue #213. The row names
+// a process of any user; the peer check compares its Owner with this
+// user's (internal/agent/peer).
 func LoopbackOwner(client, server netip.AddrPort) (int, []platform.Proc, error) {
 	client, server, err := loopbackPair(client, server)
 	if err != nil {

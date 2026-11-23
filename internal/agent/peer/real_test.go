@@ -30,6 +30,11 @@ const (
 	// it: that puts the child above the program in its parent chain, as an
 	// editor's plugin is above the wakatime-cli it runs.
 	spawnEnv = "PAIRTIME_PEER_SPAWN"
+	// titleEnv, beside spawnEnv, holds a title the child gives itself
+	// before it runs the program, by writing its comm on Linux
+	// (/proc/self/comm), as a script that names itself after an editor
+	// would.
+	titleEnv = "PAIRTIME_PEER_TITLE"
 )
 
 func TestMain(m *testing.M) {
@@ -43,9 +48,15 @@ func TestMain(m *testing.M) {
 }
 
 func spawnChild(exe string) int {
+	if title := os.Getenv(titleEnv); title != "" {
+		if err := os.WriteFile("/proc/self/comm", []byte(title), 0); err != nil {
+			fmt.Fprintln(os.Stderr, "peer spawn child:", err)
+			return 1
+		}
+	}
 	cmd := exec.Command(exe)
 	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, spawnEnv+"=") {
+		if !strings.HasPrefix(kv, spawnEnv+"=") && !strings.HasPrefix(kv, titleEnv+"=") {
 			cmd.Env = append(cmd.Env, kv)
 		}
 	}
@@ -135,15 +146,19 @@ func dialSelf(t *testing.T, ln *net.TCPListener) *net.TCPConn {
 }
 
 // runChild runs exe, which connects to ln, or with under set runs under,
-// which runs exe. It returns the command it started, the connection ln
-// accepted and the pid the connecting process wrote.
-func runChild(t *testing.T, ln *net.TCPListener, exe, under string) (*exec.Cmd, *net.TCPConn, int) {
+// which titles itself title, unless that is "", and runs exe. It returns
+// the command it started, the connection ln accepted and the pid the
+// connecting process wrote.
+func runChild(t *testing.T, ln *net.TCPListener, exe, under, title string) (*exec.Cmd, *net.TCPConn, int) {
 	t.Helper()
 	env := append(os.Environ(), connectEnv+"="+ln.Addr().String())
 	cmd := exec.Command(exe)
 	if under != "" {
 		cmd = exec.Command(under)
 		env = append(env, spawnEnv+"="+exe)
+		if title != "" {
+			env = append(env, titleEnv+"="+title)
+		}
 	}
 	cmd.Env = env
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
@@ -180,10 +195,16 @@ func runChild(t *testing.T, ln *net.TCPListener, exe, under string) (*exec.Cmd, 
 func TestRealConnections(t *testing.T) {
 	dir := t.TempDir()
 	waka := "wakatime-cli-" + runtime.GOOS + "-" + runtime.GOARCH
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	exes := map[string]string{
 		"code":   copyExe(t, dir, "code"),
 		waka:     copyExe(t, dir, waka),
 		"claude": copyExe(t, dir, "claude"),
+		// This test binary under its own name, which names no editor.
+		"self": self,
 	}
 	c := New(Options{})
 
@@ -195,7 +216,7 @@ func TestRealConnections(t *testing.T) {
 	}
 	editorAbove := false
 	for _, p := range c.Heartbeat(selfClient, selfServer).Chain {
-		if e, ok := platform.Identify(runtime.GOOS, p); ok && e.Role == platform.RoleIDE {
+		if e, ok := platform.Lookup(runtime.GOOS, p.Name); ok && e.Role == platform.RoleIDE {
 			editorAbove = true
 		}
 	}
@@ -204,8 +225,9 @@ func TestRealConnections(t *testing.T) {
 		name string
 		// client is the copy that connects, by name; "" means this process.
 		client string
-		// under is the copy that runs client, "" for none.
-		under string
+		// under is the copy that runs client, "" for none, and title the
+		// title it gives itself first, which only Linux lets a test set.
+		under, title string
 		// gone kills the client before the check.
 		gone bool
 		// otlp runs the OTLP check, with named answering names, instead of
@@ -237,6 +259,10 @@ func TestRealConnections(t *testing.T) {
 			client: waka, needsNoEditor: true, want: NoEditor,
 		},
 		{
+			name:   "a wakatime-cli that a process titled code runs fails, since its executable names no editor",
+			client: waka, under: "self", title: "code", needsNoEditor: true, want: NoEditor,
+		},
+		{
 			name:   "a connection whose wakatime-cli has exited has no owner",
 			client: waka, under: "code", gone: true, want: NoOwner,
 		},
@@ -258,6 +284,9 @@ func TestRealConnections(t *testing.T) {
 			if tt.needsNoEditor && editorAbove {
 				t.Skip("an editor runs this test, so a wakatime-cli it starts has an editor above it")
 			}
+			if tt.title != "" && runtime.GOOS != platform.Linux {
+				t.Skip("only Linux lets a process set the title the reader records (/proc/self/comm)")
+			}
 			ln := listenLoopback(t)
 			var conn *net.TCPConn
 			want := os.Getpid()
@@ -269,7 +298,7 @@ func TestRealConnections(t *testing.T) {
 				if tt.under != "" {
 					under = exes[tt.under]
 				}
-				cmd, conn, want = runChild(t, ln, exes[tt.client], under)
+				cmd, conn, want = runChild(t, ln, exes[tt.client], under, tt.title)
 			}
 			if tt.gone {
 				// The client is the grandchild; its parent waits for it, so
@@ -309,6 +338,10 @@ func TestRealConnections(t *testing.T) {
 			}
 			if tt.under != "" && (len(r.Chain) < 2 || r.Chain[1].PID != cmd.Process.Pid) {
 				t.Errorf("Chain %v, want the client's parent to be %d", r.Chain, cmd.Process.Pid)
+			}
+			// The reader has to have seen the title, or the case shows nothing.
+			if tt.title != "" && (len(r.Chain) < 2 || r.Chain[1].Alias != tt.title) {
+				t.Errorf("Chain %v, want the client's parent titled %q", r.Chain, tt.title)
 			}
 			if tt.want == Passed && !tt.otlp && r.Editor != 1 {
 				t.Errorf("Editor = %d, want 1, the process named code", r.Editor)

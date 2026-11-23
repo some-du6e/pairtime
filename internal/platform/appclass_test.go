@@ -223,6 +223,9 @@ func TestAppClassOf(t *testing.T) {
 		{"the console window of Git Bash's bash.exe is a terminal", Windows, "bash.exe", event.AppTerminal},
 		{"File Explorer is other", Windows, "explorer.exe", event.AppOther},
 		{"Neovim is an editor", Linux, "nvim", event.AppEditor},
+		{"Debian's vim.basic, which vim runs as, is an editor", Linux, "vim.basic", event.AppEditor},
+		{"Debian's vim.tiny, which vi runs as, is an editor", Linux, "vim.tiny", event.AppEditor},
+		{"Debian's gvim, vim.gtk3, is an editor", Linux, "vim.gtk3", event.AppEditor},
 		{"Helix is an editor", Darwin, "hx", event.AppEditor},
 		{"Devin Desktop is an editor", Linux, "devin-desktop", event.AppEditor},
 	}

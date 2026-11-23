@@ -149,9 +149,11 @@ type connSource interface {
 // table's entry for that pid is the process that held the socket all
 // along.
 //
-// Only socket descriptors are read, and of those only the socket's kind,
-// addresses, ports and state. Another user's descriptors can't be read, so
-// the owner is always this user's process.
+// Only socket descriptors are read. Of each, the lookup parses only the
+// socket's kind, the kernel's handle, the addresses, ports and state. The
+// rest of the socket_fdinfo that libproc fills in, which for a Unix-domain
+// socket holds its paths, is dropped unread and never kept. Another user's
+// descriptors can't be read, so the owner is always this user's process.
 func LoopbackOwner(client, server netip.AddrPort) (int, []platform.Proc, error) {
 	src, err := osConnSource()
 	if err != nil {

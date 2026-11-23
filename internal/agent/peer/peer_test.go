@@ -77,9 +77,15 @@ func TestHeartbeat(t *testing.T) {
 			want:  Passed, editor: 2,
 		},
 		{
-			name: "wakatime-cli that Vim started in a terminal passes, Debian's vim.basic going by its comm",
+			name: "wakatime-cli that Vim started in a terminal passes, by vim.basic, the executable Debian runs vim as",
 			procs: line(me, proc("systemd"), proc("gnome-terminal-server"), proc("bash"),
 				platform.Proc{Name: "vim.basic", Alias: "vim"}, proc("wakatime-cli-linux-amd64")),
+			want: Passed, editor: 1,
+		},
+		{
+			name: "wakatime-cli that gvim started passes, by vim.gtk3, the executable Debian runs it as",
+			procs: line(me, proc("systemd"), platform.Proc{Name: "vim.gtk3", Alias: "gvim"},
+				proc("wakatime-cli-linux-amd64")),
 			want: Passed, editor: 1,
 		},
 		{
@@ -104,6 +110,25 @@ func TestHeartbeat(t *testing.T) {
 			name:  "a wakatime-cli that a script in a terminal started fails, since no editor started it",
 			procs: line(me, proc("systemd"), proc("gnome-terminal-server"), proc("bash"), proc("python3"), proc("wakatime-cli-linux-amd64")),
 			want:  NoEditor,
+		},
+		{
+			name: "a bash that titled itself code is no editor, so the wakatime-cli it runs fails",
+			procs: line(me, proc("systemd"), proc("gnome-terminal-server"),
+				platform.Proc{Name: "bash", Alias: "code"}, proc("wakatime-cli-linux-amd64")),
+			want: NoEditor,
+		},
+		{
+			name: "a python3 script that titled itself nvim is no editor, so the wakatime-cli it runs fails",
+			procs: line(me, proc("systemd"), proc("gnome-terminal-server"), proc("bash"),
+				platform.Proc{Name: "python3", Alias: "nvim"}, proc("wakatime-cli-linux-amd64")),
+			want: NoEditor,
+		},
+		{
+			name: "on macOS, a script whose p_comm says Code is no editor, so the wakatime-cli it runs fails",
+			goos: platform.Darwin,
+			procs: line(me, proc("launchd"), proc("Terminal"), proc("zsh"),
+				platform.Proc{Name: "bash", Alias: "Code"}, proc("wakatime-cli-darwin-arm64")),
+			want: NoEditor,
 		},
 		{
 			name:  "a wakatime-cli that Claude Code started in a terminal fails, since no editor started it",
@@ -232,8 +257,13 @@ func TestOTLP(t *testing.T) {
 	}{
 		{name: "a harness process that a hook or the scan named passes", procs: claude, names: ptr(true), want: Passed},
 		{
-			name:  "a Node app that titled itself claude passes, as the app-class table goes by its title",
+			name:  "node titled claude passes, as Claude Code installed with npm runs",
 			procs: line(me, proc("systemd"), proc("kitty"), proc("zsh"), platform.Proc{Name: "node", Alias: "claude"}),
+			names: ptr(true), want: Passed,
+		},
+		{
+			name:  "a python3 script titled claude that the scan reports passes too, the residual WP-AD4 builds on",
+			procs: line(me, proc("systemd"), proc("kitty"), proc("zsh"), platform.Proc{Name: "python3", Alias: "claude"}),
 			names: ptr(true), want: Passed,
 		},
 		{name: "a harness process that nothing named fails", procs: claude, names: ptr(false), want: NotNamed},

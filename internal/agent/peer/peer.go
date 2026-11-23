@@ -41,10 +41,24 @@
 // http.Server's ConnContext has it; in a handler, the request's RemoteAddr
 // and its context's http.LocalAddrContextKey give the same two.
 //
-// A process goes by its executable's name, as everywhere the app-class
-// table is read, so the check stops a script that posts to the agent's
-// port itself. A copy of a program renamed wakatime-cli, run under a
-// process named like an editor, passes it.
+// The rules go by names, and not by the same ones:
+//
+//   - The heartbeat rule takes the client and its editor by their
+//     executables' own names (Proc.Name), never by a title a process gives
+//     itself (Proc.Alias: its comm, its process.title, a #! script's file
+//     name). So it stops a script that posts to the agent's port, and one
+//     that titles itself after an editor and runs the real wakatime-cli. A
+//     copy of a program renamed wakatime-cli, run under a program renamed
+//     like an editor, passes it. On Linux so does a process that made
+//     itself undumpable, because the reader can't read its exe link and
+//     names it by its comm (internal/platform/linux).
+//   - The OTLP rule takes the client as the app-class table identifies it
+//     (platform.HarnessOf), by its title where the table knows it, as the
+//     process scan and the hook path do, because Claude Code installed
+//     with npm runs as node titled claude. So a process titled like a
+//     harness that the process scan reports passes OTLP, and so does one
+//     that a hook's parent chain names. That is the residual WP-AD4 builds
+//     on.
 //
 // What the check reads stays on the device: pids, executable names and
 // parent chains are local (AGENTS.md), and only Reason and the via it
@@ -205,12 +219,15 @@ func (c *Checker) OTLP(client, server netip.AddrPort, named func(platform.ID) bo
 }
 
 // Heartbeat applies the rule for WakaTime heartbeats to the client r's
-// lookup found: it passes when the client is wakatime-cli and an editor in
-// the app-class table, a process whose role there is ide, is among its
-// ancestors (DESIGN 5.7). A wakatime-cli that a script, a terminal or a
-// harness started without an editor above it fails, as does one whose
-// editor has exited, since its chain then stops short of the editor. A
-// Result whose lookup found no client of this user's comes back as it is.
+// lookup found: it passes when the client's executable is wakatime-cli and
+// one of its ancestors runs an editor's executable, a name the app-class
+// table gives the role ide (DESIGN 5.7). Both go by Proc.Name alone, never
+// by the title a process gave itself (Proc.Alias), so a shell or a script
+// that titles itself code or vim is no editor. A wakatime-cli that a
+// script, a terminal or a harness started without an editor above it
+// fails, as does one whose editor has exited, since its chain then stops
+// short of the editor. A Result whose lookup found no client of this
+// user's comes back as it is.
 func (r Result) Heartbeat() Result {
 	if !r.found() {
 		return r
@@ -221,7 +238,7 @@ func (r Result) Heartbeat() Result {
 		return r
 	}
 	for i, a := range r.Chain[1:] {
-		if e, ok := platform.Identify(r.goos, a); ok && e.Role == platform.RoleIDE {
+		if e, ok := platform.Lookup(r.goos, a.Name); ok && e.Role == platform.RoleIDE {
 			r.Reason, r.Editor = Passed, i+1
 			return r
 		}
@@ -235,9 +252,12 @@ func (r Result) Heartbeat() Result {
 // (platform.HarnessOf) and named reports that a hook's parent chain
 // claimed that process or the process scan reported it (DESIGN 5.2), which
 // the agent knows by the process's ID (procs.Scanner.Claimed and
-// Sessions). named is asked anew each time the rule is applied, and a nil
-// named names nothing. A Result whose lookup found no client of this
-// user's comes back as it is.
+// Sessions). HarnessOf goes by the process's title where the table knows
+// it, as the scan and the hook path do, because Claude Code installed with
+// npm runs as node titled claude, so a process titled like a harness that
+// the scan reports passes. named is asked anew each time the rule is
+// applied, and a nil named names nothing. A Result whose lookup found no
+// client of this user's comes back as it is.
 func (r Result) OTLP(named func(platform.ID) bool) Result {
 	if !r.found() {
 		return r

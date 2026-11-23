@@ -431,17 +431,19 @@ func TestLoopbackOwnerFakeProc(t *testing.T) {
 			client: clientAddr, server: agentAddr,
 		},
 		{
-			name: "a link that only starts like the socket's doesn't match",
+			// readlink cuts a link to its buffer's length, so with a buffer
+			// no longer than the socket's link this one would read as it.
+			name: "a link that is the socket's with a byte more doesn't match",
 			proc: fakeConnProc{
 				tcp: tcpHeader + tcpLine(0, client, agent, tcpEstablished, me, 400) + agentEnd,
-				fds: map[string][]string{"300": {"socket:[4001]"}},
+				fds: map[string][]string{"300": {"socket:[400]0"}},
 			},
 			client: clientAddr, server: agentAddr,
 		},
 		{
-			name: "an orphaned socket, inode 0, has no owner",
+			name: "an established row with inode 0, an orphaned socket, has no owner",
 			proc: fakeConnProc{
-				tcp: tcpHeader + tcpLine(0, client, agent, 0x05, 0, 0) + agentEnd,
+				tcp: tcpHeader + tcpLine(0, client, agent, tcpEstablished, me, 0) + agentEnd,
 				fds: map[string][]string{"300": {"socket:[0]"}},
 			},
 			client: clientAddr, server: agentAddr,
