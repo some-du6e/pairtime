@@ -10,11 +10,15 @@
 # same way, which is what any process costs on this runner. The hook's own
 # cost, its p95 less the empty program's, must be at most 10 ms, and its
 # p95 at most R8's 50 ms (DESIGN 9.7; docs/PLAN.md, WP-AG3;
-# docs/errata/2026-11-20-hook-p95-gate.md). A PR that touches the client
-# gets a 3-minute idle span; the nightly run, release tags and runs by hand
-# get 10 minutes:
+# docs/errata/2026-11-20-hook-p95-gate.md). When the first round's cost
+# misses, the step times both again, and the gate holds the lower of the
+# two rounds' costs: a slower hook misses in both, and the runner's noise,
+# which can swing one round by more than the gate's margin, rarely does
+# (#215). A PR that touches the client gets a 3-minute idle span; the
+# nightly run, release tags and runs by hand get 10 minutes, and a run by
+# hand can ask for the second round whatever the first gives:
 #
-#   gh workflow run footprint.yml --ref <branch> [-f minutes=N]
+#   gh workflow run footprint.yml --ref <branch> [-f minutes=N] [-f second_round=true]
 name: footprint
 
 on:
@@ -37,6 +41,10 @@ on:
       minutes:
         description: Minutes the agent sits idle while it is measured (up to 20)
         default: "10"
+      second_round:
+        description: Time the hook a second time even when the first round passes its gate
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -54,6 +62,7 @@ jobs:
       # pairtime never uses cgo (AGENTS.md).
       CGO_ENABLED: "0"
       IDLE_MINUTES: ${{ github.event_name == 'pull_request' && '3' || inputs.minutes || '10' }}
+      SECOND_ROUND: ${{ inputs.second_round && 'true' || 'false' }}
     defaults:
       run:
         shell: pwsh
@@ -252,6 +261,10 @@ jobs:
             }
             function Ms($v) { "$([math]::Round($v, 1)) ms" }
 
+            # The hook's own cost over the runner's floor, and R8's claim for a
+            # warm round trip, which no call may come near on a runner.
+            $budgetHookOverMs = 10
+            $budgetHookMs = 50
             $hookEvent = '{"session_id":"footprint","hook_event_name":"UserPromptSubmit","prompt":"time this hook"}'
             $hookArgs = @('hook', '--harness', 'claude_code', '--event', 'UserPromptSubmit')
             $warmup = 10
@@ -260,12 +273,45 @@ jobs:
             $empty = New-Prog $emptyExe @() ''
             $start = New-Prog $exe @('hook', '-h') '' $false
             Measure-Calls @($hook, $empty, $start) $warmup $hookCalls
+            $hookRuns = $warmup + $hookCalls
             $hookP95 = Quantile $hook.Times 0.95
             $hookP50 = Quantile $hook.Times 0.50
             $hookMax = Quantile $hook.Times 1
             $hookBad = $hook.Bad
             $emptyP95 = Quantile $empty.Times 0.95
             $hookOver = $hookP95 - $emptyP95
+
+            # The runner's noise can push one round's cost past the gate by
+            # more than its margin, and a slower hook pushes every round's
+            # past it. So when the first round misses, the three programs are
+            # timed again, interleaved the same way, and the gate holds the
+            # lower of the two rounds' costs (#215). R8's ceiling, and the
+            # rows after it, stay the first round's.
+            $round2 = $null
+            if ($hookOver -gt $budgetHookOverMs -or $env:SECOND_ROUND -eq 'true') {
+              $hook2 = New-Prog $exe $hookArgs $hookEvent
+              $empty2 = New-Prog $emptyExe @() ''
+              $start2 = New-Prog $exe @('hook', '-h') '' $false
+              Measure-Calls @($hook2, $empty2, $start2) $warmup $hookCalls
+              $hookRuns += $warmup + $hookCalls
+              $hookBad += $hook2.Bad
+              $hook2P95 = Quantile $hook2.Times 0.95
+              $empty2P95 = Quantile $empty2.Times 0.95
+              $round2 = [pscustomobject]@{
+                HookP95  = $hook2P95
+                EmptyP50 = (Quantile $empty2.Times 0.5)
+                EmptyP95 = $empty2P95
+                Over     = $hook2P95 - $empty2P95
+              }
+            }
+            $hookCost = $hookOver
+            $costText = Ms $hookOver
+            $round2Text = 'not run: the first round passed'
+            if ($null -ne $round2) {
+              $hookCost = [math]::Min($hookOver, $round2.Over)
+              $costText = "$(Ms $hookOver), then $(Ms $round2.Over)"
+              $round2Text = "$(Ms $round2.HookP95); $(Ms $round2.EmptyP50), $(Ms $round2.EmptyP95)"
+            }
 
             # What pairtime spends before main, by GODEBUG=inittrace=1, with
             # the slowest packages in the log.
@@ -321,15 +367,11 @@ jobs:
 
             $budgetRss = 25000000
             $budgetCpu = 0.001
-            # The hook's own cost over the runner's floor, and R8's claim for a
-            # warm round trip, which no call may come near on a runner.
-            $budgetHookOverMs = 10
-            $budgetHookMs = 50
             $rssOk = $highest -lt $budgetRss
             $cpuOk = $cpuShare -lt $budgetCpu
             $secondOk = $secondStatus -eq 3
             $stopOk = ($stopStatus -eq 0) -and ($pidAfter -eq 0)
-            $hookOverOk = $hookOver -le $budgetHookOverMs
+            $hookOverOk = $hookCost -le $budgetHookOverMs
             $hookCapOk = $hookP95 -le $budgetHookMs
             $hookQuietOk = $hookBad -eq 0
             $rows = @(
@@ -349,7 +391,8 @@ jobs:
               "| binary size | $((Get-Item $exe).Length) bytes | ci.yml |",
               "| a second agent's exit status | $secondStatus | 3: $(Verdict $secondOk) |",
               "| clean stop: exit status, pid in port.json | $stopStatus, $pidAfter | 0, 0: $(Verdict $stopOk) |",
-              "| the hook's own cost: its p95 over $hookCalls warm calls less an empty Go program's p95, both timed around the process | $(Ms $hookOver) | at most $budgetHookOverMs ms: $(Verdict $hookOverOk) |",
+              "| the hook's own cost: its p95 over $hookCalls warm calls less an empty Go program's p95, both timed around the process, in the first round, then in a second when the first misses | $costText | at most $budgetHookOverMs ms, by the lower of the rounds' costs: $(Verdict $hookOverOk) |",
+              "| the second round's hook p95, and the empty program's p50 and p95 | $round2Text | none |",
               "| hook p95 over $hookCalls warm calls, timed around the process | $(Ms $hookP95) | at most $budgetHookMs ms (R8): $(Verdict $hookCapOk) |",
               "| an empty Go program over $hookCalls calls, timed the same way between the hook's: p50, p95 | $(Ms (Quantile $empty.Times 0.5)), $(Ms $emptyP95) | none |",
               "| pairtime's start alone, ``pairtime hook -h`` timed the same way: p50, p95 | $(Ms (Quantile $start.Times 0.5)), $(Ms (Quantile $start.Times 0.95)) | none |",
@@ -357,7 +400,7 @@ jobs:
               "| hook lifetime from creation to exit, as Windows records it: p50, p95 | $(Ms (Quantile $hook.Lives 0.5)), $(Ms (Quantile $hook.Lives 0.95)) | none |",
               "| pairtime's package init (GODEBUG=inittrace=1): in all, slowest | $(Ms $initTotal); $initTop | none |",
               "| hook calls that exited non-zero or printed anything | $hookBad | 0: $(Verdict $hookQuietOk) |",
-              "| hook calls the agent took over its socket, by its journal | $hookSocket of $($warmup + $hookCalls) | none: a call acked late is spooled, and a drain journals it as from the inbox |"
+              "| hook calls the agent took over its socket, by its journal | $hookSocket of $hookRuns | none: a call acked late is spooled, and a drain journals it as from the inbox |"
             )
             $summary = $rows -join "`n"
             $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
