@@ -148,7 +148,7 @@ type Options struct {
 	// in the batch came while the mode NoteMode last noted was local-only,
 	// and none is an event made before config.toml was last known to say
 	// local-only, by its own time, or for lookback's by when the writer took
-	// it in (Writer.Write, Input.Lookback). So a batch's mode is on
+	// it in (Writer.Write, Writer.lookback). So a batch's mode is on
 	// disk with the seal, in the same flush, before Sealed hears of it,
 	// and no crash can lose it. Every seal frame the writer writes records
 	// the mode, online or local-only; a batch whose seal frame records
@@ -212,7 +212,7 @@ type Batch struct {
 	// as part of it. A record came after the note when the writer got it
 	// after the note and, for an event, the event's own time is after it
 	// too, but for lookback's, which count by when the writer took them in
-	// alone (Input.Lookback). A git change the watcher held past the note,
+	// alone (Writer.lookback). A git change the watcher held past the note,
 	// or a hook call parked behind its folder's first Track, made before
 	// it, may have come in local-only mode, so its batch is sealed
 	// local-only, and the mark waits for the next batch whose records all
@@ -223,7 +223,7 @@ type Batch struct {
 	// local-only as the batch was sealed (sealPayload.LocalUntil), the
 	// zero time for never: an event made before it is in a local-only
 	// batch, but for lookback's, which count by when the writer took them
-	// in (Input.Lookback), and so is the part of a minute before it.
+	// in (Writer.lookback), and so is the part of a minute before it.
 	LocalUntil time.Time
 	Records    []ledger.Record
 }
@@ -248,6 +248,10 @@ type Input struct {
 	Edits []features.Edit
 	// Command is the command line an agent.tool or shell.command ran.
 	Command string
+	// Late says the record tells of a time long past, as lookback's do: a
+	// prompt or a stop that is Late asks for no seal of its own, and waits
+	// for BATCH_S's, since no one waits for it (WP-AD3).
+	Late bool
 	// Sent is when the event's sender says it made the event, by the
 	// wall clock and the OS's monotonic clock, where that may be earlier
 	// than the event's own times: a hook call's own stamp, which
@@ -258,19 +262,26 @@ type Input struct {
 	// too, so a sender's stamp can make a batch local-only and never
 	// online. It is never recorded. Zero for none.
 	Sent osclock.Stamp
-	// Lookback says the event is one the lookback reader read from a
-	// harness's logs (WP-AD3). Write honors it only for an event that came
-	// through a log reader (event.ViaLog) and is dated before the chain
-	// began (Created). By its own time, every stretch the agent saw would
-	// hold such a record local-only, so Write holds it to the moment
-	// config.toml was last known to say local-only by when the writer took
-	// it in instead, and leaves Sent unread. Its batch is then local-only
-	// when config.toml said local-only at any time from then to its seal,
-	// as Online and the notes tell the writer, which they also say until
-	// the computer is linked, and online otherwise. It is never recorded,
-	// so a record a crash left that is such an event counts by the earliest
-	// time it can have reached the writer (Open).
-	Lookback bool
+}
+
+// lookback reports whether e is lookback's: an event that came through a
+// log reader (event.ViaLog) and is dated before the chain began (Created).
+// The log readers start only once the ledger has opened, so such an event
+// describes time before pairtime ran on this computer, whatever read it:
+// the lookback reader (WP-AD3), or a tailer that read an old line again.
+// By its own time, every stretch the agent saw would hold it local-only,
+// so Write holds it to the moment config.toml was last known to say
+// local-only by when the writer took it in instead, and leaves Sent
+// unread. Its batch is then local-only when config.toml said local-only at
+// any time from then to its seal, as Online and the notes tell the writer,
+// which they also say until the computer is linked, and online otherwise.
+// A record a crash left that is lookback's counts by the earliest time it
+// can have reached the writer (Open). An event that carries a reading of
+// this run's clock is none, though a step back of the wall clock dates it
+// before the chain began: it was made in this run, which the moment holds
+// it to by that reading (moment.before).
+func (w *Writer) lookback(e event.Envelope) bool {
+	return e.Via == event.ViaLog && e.T < w.created && !(e.Mono > 0 && e.BootID == runBoot)
 }
 
 // Writer is a device's ledger writer. It appends each record to the day's
@@ -369,7 +380,7 @@ type Writer struct {
 // pending is a record written since the last seal, with where its frame
 // starts. One Write wrote keeps the times Write held it to, with has set:
 // its event's times and its sender's stamp (Input.Sent), or for
-// lookback's when the writer took it in (Input.Lookback), so that a
+// lookback's when the writer took it in (Writer.lookback), so that a
 // stretch end the writer hears of later holds it to the moment again
 // (NoteSeen). One recovery read back gives its event's times from its body
 // (envelopeOf), or for lookback's the earliest time it can have come
@@ -580,8 +591,8 @@ func (w *Writer) DeviceID() string { return w.device }
 // its key (ChainInfo.Created). A record dated before it is lookback's,
 // from a harness's logs (DESIGN 6.2 D11), or one that waited for that
 // Open, as presence's queue and the hook calls the adapters hold do while
-// a locked keyring keeps the ledger shut, so Write tells lookback's by
-// Input.Lookback and via = log, and not by the date alone.
+// a locked keyring keeps the ledger shut, so Write tells lookback's by via
+// = log as well as by the date (lookback).
 func (w *Writer) Created() time.Time { return time.UnixMilli(w.created) }
 
 // Write appends the record of in.Event and returns its sequence number s,
@@ -625,11 +636,11 @@ func (w *Writer) Write(in Input) (uint64, error) {
 	}
 	p := &w.pending[len(w.pending)-1]
 	p.env, p.sent, p.has = ev.Envelope, in.Sent, true
-	if in.Lookback && ev.Via == event.ViaLog && ev.T < w.created {
+	if w.lookback(ev.Envelope) {
 		// Lookback's record of a time before the chain began counts by when
 		// the writer took it in, now, and not by its event's own times
-		// (Input.Lookback): so do the stretch ends the writer hears of while
-		// it is pending.
+		// (lookback): so do the stretch ends the writer hears of while it is
+		// pending.
 		p.env, p.sent = arrival(w.now()), osclock.Stamp{}
 	}
 	if p.madeBefore(w.bounds().before) {
@@ -646,7 +657,7 @@ func (w *Writer) Write(in Input) (uint64, error) {
 		w.late = true
 	}
 	w.q.Observe(ev)
-	if k := ev.Kind(); k == event.KindPromptSubmit || k == event.KindAgentStop {
+	if k := ev.Kind(); (k == event.KindPromptSubmit || k == event.KindAgentStop) && !in.Late {
 		w.RequestSeal()
 	}
 	return rec.Header.Seq(), nil
@@ -828,7 +839,7 @@ func (w *Writer) append(rec ledger.Record) error {
 // go. An event made before the note that the writer gets after it, as a
 // git change the watcher held, makes its batch local-only whenever it
 // comes (Write), where lookback's count by when the writer took them in
-// (Input.Lookback), and the mark goes on the next batch whose records all
+// (Writer.lookback), and the mark goes on the next batch whose records all
 // came after the note, sealed while no such event is still on its way
 // (Options.Waiting). A switch back the watch misses, as to a symlinked
 // config.toml's target, ends the stretch at the next seal that reads the
@@ -914,7 +925,7 @@ type Seen struct {
 // published the writer to its config watch: a local-only stretch it saw
 // end makes every event made before its end local-only, whenever it comes
 // (Write), those the writer took already included, and every lookback
-// record the writer took in before it (Input.Lookback); and the first
+// record the writer took in before it (Writer.lookback); and the first
 // batch after it that has none, sealed while no such event is still on
 // its way, is marked (Batch.Back), as after a noted switch back. A file
 // that says local-only now begins a stretch, as NoteMode(false) does.

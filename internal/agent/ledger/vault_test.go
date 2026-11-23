@@ -182,17 +182,20 @@ func TestVaultOrder(t *testing.T) {
 			name: "after a crash cut unsealed records, Reconcile gets the number after the last record that survived",
 			run: func(t *testing.T, dir string, v *fakeVault) {
 				w := open(t, dir, newClock(testT))
-				for i := range 3 {
-					if _, err := w.Write(prompt(fmt.Sprintf("prompt %d", i), 0)); err != nil {
+				// Presence samples, which don't seal at once as a prompt does
+				// on the writer's own goroutine: no seal can land after the
+				// one below and seal the records the cut takes.
+				rng := rand.New(rand.NewPCG(9, 10))
+				for range 3 {
+					if _, err := w.Write(sampleInput(rng, "os.presence", testT, "", "")); err != nil {
 						t.Fatal(err)
 					}
 				}
-				if _, _, err := w.Seal(); err != nil {
-					t.Fatal(err)
+				if _, ok, err := w.Seal(); err != nil || !ok {
+					t.Fatalf("Seal: %v, %v", ok, err)
 				}
 				seg := segPath(dir, dayOf(time.UnixMilli(testT)))
 				sealed := fileSize(t, seg)
-				rng := rand.New(rand.NewPCG(9, 10))
 				for range 2 {
 					if _, err := w.Write(sampleInput(rng, "os.presence", testT, "", "")); err != nil {
 						t.Fatal(err)

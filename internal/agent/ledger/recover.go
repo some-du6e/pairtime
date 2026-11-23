@@ -771,20 +771,18 @@ func (w *Writer) observe(rec ledger.Record) {
 	w.q.Observe(body.E)
 }
 
-// arrivedLocked gives each record a crash left that lookback took in the
-// earliest time it can have reached the writer, which a moment then holds
-// it to, as Write held it to when it did (Input.Lookback): when the newest
-// batch was sealed, or the chain began, since it came after both. Lookback
-// isn't on disk, so here a record counts as lookback's when it is one the
-// rule is for: an event that came through a log reader, dated before the
-// chain began. w.mu is held.
+// arrivedLocked gives each record a crash left that is lookback's
+// (Writer.lookback), an event a log reader read, dated before the chain
+// began, the earliest time it can have reached the writer, which a moment
+// then holds it to, as Write held it to when it did: when the newest batch
+// was sealed, or the chain began, since it came after both. w.mu is held.
 func (w *Writer) arrivedLocked() {
 	for i := range w.pending {
 		p := &w.pending[i]
 		if p.has {
 			continue
 		}
-		if e, ok := envelopeOf(p.rec); ok && e.Via == event.ViaLog && e.T < w.created {
+		if e, ok := envelopeOf(p.rec); ok && w.lookback(e) {
 			p.env, p.has = event.Envelope{T: max(w.sealed, w.created)}, true
 		}
 	}
