@@ -199,11 +199,12 @@ func TestPlantedContent(t *testing.T) {
 			r := newHookReplay(t)
 			writeConfig(t, r, c.keep[0])
 			replay(t, r, calls)
-			for _, keep := range c.keep[1:] {
+			for i, keep := range c.keep[1:] {
 				writeConfig(t, r, keep)
-				// One call, so the ledger and its vault have opened and the
-				// switch is in force before the stop.
-				replay(t, r, calls[:1])
+				// One call the agent hasn't had, since its journal drops one
+				// it took before, so the ledger and its vault have opened and
+				// the switch is in force before the stop.
+				replay(t, r, readCapture(t)[len(calls)+i:][:1])
 			}
 			t.Run("no file in the data directory holds the planted bytes", func(t *testing.T) {
 				for _, h := range rawHolders(t, r.dirs.Data, plantedPrompt, plantedReply, plantedFile) {
