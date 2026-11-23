@@ -555,6 +555,49 @@ func TestBridgeKeys(t *testing.T) {
 	}
 }
 
+func TestBridgeTurns(t *testing.T) {
+	const session = "617e16a3-ddb4-44ca-af68-72cf58ed1a34"
+	// prompt is an app prompt of the session at sec, n characters long.
+	prompt := func(t *testing.T, sec float64, n int) wakacompat.Heartbeat {
+		ts, _ := at(sec)
+		return hb(t, fmt.Sprintf(`{"entity":"Claude x","type":"app","time":%v,"user_agent":%q,"ai_session":%q,"ai_prompt_length":%d}`, ts, promptUA, session, n))
+	}
+	cases := []struct {
+		name    string
+		batches func(t *testing.T) [][]wakacompat.Heartbeat
+		// same says the two prompts must share a turn key.
+		same bool
+	}{
+		{"two prompts of one session in one millisecond are two turns",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{prompt(t, 0, 30), prompt(t, 0, 42)}}
+			}, false},
+		{"a prompt heartbeat sent again keeps its turn",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{prompt(t, 0, 30)}, {prompt(t, 0, 30)}}
+			}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			br := NewBridge(BridgeOptions{Options: adapters.FixtureOptions()})
+			var turns []string
+			for _, b := range c.batches(t) {
+				for _, r := range br.Records(Batch{Heartbeats: b, Peer: passed}, testClock) {
+					if p, ok := r.Event.Data.(*event.PromptSubmit); ok {
+						turns = append(turns, p.TurnKey)
+					}
+				}
+			}
+			if len(turns) != 2 {
+				t.Fatalf("%d prompts, want 2", len(turns))
+			}
+			if got := turns[0] == turns[1]; got != c.same {
+				t.Errorf("turn keys %s and %s: same %v, want %v", turns[0], turns[1], got, c.same)
+			}
+		})
+	}
+}
+
 func TestBridgeProjects(t *testing.T) {
 	ignored := adapters.FixtureOptions()
 	inner := ignored.Project
@@ -771,6 +814,14 @@ func TestBridgeExclusions(t *testing.T) {
 		{"a file on a Windows share in a folder out of pairtime marks its session and its name", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, privateShare, "shared", 0)}, {prompt(t, session, "", 10), prompt(t, "other-session", "shared", 11)}}
+			}, "", "", nil},
+		{"a Linux file whose name holds a backslash, in a folder out of pairtime, makes no record and marks its name", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				ts, _ := at(0)
+				return [][]wakacompat.Heartbeat{{
+					hb(t, fmt.Sprintf(`{"entity":%q,"type":"file","time":%v,"user_agent":%q,"project":"secret","human_line_changes":2}`, privateDir+`/draft\notes.md`, ts, pluginUA)),
+					prompt(t, "other-session", "secret", 10),
+				}}
 			}, "", "", nil},
 		{"a tracked edit stamped an hour ahead of the agent's clock counts as at the clock, so a later file out of pairtime still marks its session out", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
@@ -1014,6 +1065,11 @@ func TestBridgeFolders(t *testing.T) {
 				return []wakacompat.Heartbeat{file(t, `\\server/share/repo/src/x.go`), file(t, `\\server\share\repo\y.go`)}
 			},
 			[]string{`\\server/share/repo/src`, `\\server\share\repo`}},
+		{"a Linux file whose name holds a backslash is asked by its folder, though the ledger can't key it",
+			func(t *testing.T) []wakacompat.Heartbeat {
+				return []wakacompat.Heartbeat{file(t, `/p/b/draft\notes.md`)}
+			},
+			[]string{"/p/b"}},
 		{"a Windows device path, or a share with no file, asks about no folder",
 			func(t *testing.T) []wakacompat.Heartbeat {
 				return []wakacompat.Heartbeat{file(t, `\\?\C:\p\x.py`), file(t, `\\.\pipe\x`), file(t, `\\server\share`), file(t, `\\server\share\`), file(t, `\\server/share/../x.py`)}

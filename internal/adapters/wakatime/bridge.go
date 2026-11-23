@@ -7,7 +7,6 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -56,9 +55,11 @@ type mark struct {
 // note returns m with a file heartbeat at t, out of pairtime or in the
 // project with key key, from a batch whose clock bound is now (remember).
 // At equal times a heartbeat out of pairtime wins, and of two tracked ones
-// the smaller key, so the order heartbeats come in never decides. A time
-// later than now, left from before the agent's clock stepped back, gives
-// way to any heartbeat.
+// the smaller key, so the order of a batch never decides. A heartbeat
+// stamped later than now counts as at now: for heartbeats stamped ahead of
+// the agent's clock, arrival is all the bridge has to go by, so of two of
+// them the one in the later batch wins. A time later than now, left from
+// before the agent's clock stepped back, gives way to any heartbeat.
 func (m mark) note(t float64, out bool, key string, now float64) mark {
 	if t > m.t || (t == m.t && out) || m.t > now {
 		m.t, m.out = t, out
@@ -312,14 +313,15 @@ func isFile(h wakacompat.Heartbeat) bool {
 
 // folder returns the folder of the file h names, for the project resolver,
 // when h is a file heartbeat with an absolute path: one slashPath takes,
-// or a file on a Windows share, which wakatime-cli v2.28.4 sends as
+// one this OS takes, such as a Linux file whose name holds a backslash, or
+// a file on a Windows share, which wakatime-cli v2.28.4 sends as
 // \\server/share/dir/file (FormatFilePath in its pkg/windows). The ledger
-// can't key a file on a share, so it is placed by its folder alone.
+// can't key the last two, so they are placed by their folder alone.
 func folder(h wakacompat.Heartbeat) (string, bool) {
 	if h.Type != "file" {
 		return "", false
 	}
-	if _, ok := slashPath(h.Entity); ok {
+	if _, ok := slashPath(h.Entity); ok || filepath.IsAbs(h.Entity) {
 		return filepath.Dir(h.Entity), true
 	}
 	return shareDir(h.Entity)
@@ -539,8 +541,11 @@ func (br *Bridge) bridgeRecords(h wakacompat.Heartbeat, p place, verified bool, 
 	}
 	if h.AIPromptLength > 0 {
 		n := count(h.AIPromptLength)
+		// The turn is the heartbeat's own. Its time alone could give two
+		// prompts of one session one turn, and the scorer starts a turn
+		// for each session and turn key. A replay keeps its key.
 		prompt := &event.PromptSubmit{
-			TurnKey:  br.opts.Keys.Turn(h.AISession, strconv.FormatInt(t, 10)),
+			TurnKey:  br.opts.Keys.Turn(h.AISession, key),
 			LenChars: n, TypedLenEst: n, OriginDeclared: event.DeclaredNone,
 		}
 		out = append(out, adapters.Record{Event: event.Event{Envelope: env, Data: prompt}, LogKey: key + ".prompt"})
