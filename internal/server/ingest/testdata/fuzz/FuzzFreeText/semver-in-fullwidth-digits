@@ -1,0 +1,2 @@
+go test fuzz v1
+string("\uff11.\uff10.\uff10")
