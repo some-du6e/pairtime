@@ -132,6 +132,8 @@ func verdict(source, decision string) (event.Decision, event.DecidedBy, bool) {
 //     requested_at.
 //   - The record has t = answered_at, and the request hook's source and
 //     via, so a spooled request takes a side door's level (D-spool-via).
+//     Its mono is the request's moved on by the wait, or 0, no reading,
+//     when the wait is more than LATE_READ_S.
 //
 // A request Decide pairs is no longer held. A request that no report
 // answers is never recorded; the adapter forgets it once it holds
@@ -188,8 +190,17 @@ func (a *Adapter) Decide(d ToolDecision) (adapters.Record, bool) {
 		answered = requested
 	}
 	env := r.env
-	if env.Mono > 0 {
-		env.Mono += answered - requested
+	// The request's mono is a reading taken at requested_at, and the wait
+	// is measured by the wall clock, which may have stepped since. So a
+	// record answered more than lateRead after its request carries no
+	// reading, as a line read late does (env): a derived one could run
+	// ahead of the boot's clock, and the server's re-anchoring would pull
+	// every earlier record of the boot back with it (WP-SV6).
+	switch wait := answered - requested; {
+	case wait > lateRead:
+		env.Mono = 0
+	case env.Mono > 0:
+		env.Mono += wait
 	}
 	env.T = answered
 	return adapters.Record{Event: event.Event{Envelope: env, Data: &event.AgentPermission{

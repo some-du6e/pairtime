@@ -114,6 +114,49 @@ func TestWorkSessions(t *testing.T) {
 	})
 }
 
+// TestRollupRelayedMessages checks that every rollup counts relayed
+// anchors as relayed messages, apart from its anchor counts by kind, which
+// count none of them (SM 5.4: "relayed messages, counted apart from typed
+// prompts"). The minute holds a typed prompt and two relayed messages, a
+// substantive one and a go-ahead.
+func TestRollupRelayedMessages(t *testing.T) {
+	r := Rollups{Table: testTable(t)}
+	d := creditMinutes("p_1", at(0))
+	d.Anchors = []Anchor{
+		{ID: idA, Kind: event.AnchorSubstantivePrompt, T: at(10), ProjectKey: "p_1", Origin: event.OriginHumanTyped},
+		{ID: idB, Kind: event.AnchorSubstantivePrompt, T: at(20), ProjectKey: "p_1", Origin: event.OriginRelayed},
+		{ID: "019a0000-0000-7000-8000-0000000000c3", Kind: event.AnchorGoAhead, T: at(30), ProjectKey: "p_1",
+			Origin: event.OriginRelayed},
+	}
+	sessions, days, projects := r.WorkSessions(d), r.Days(d), r.Projects(d, nil)
+	if len(sessions) != 1 || len(days) != 1 || len(days[0].Projects) != 1 || len(projects) != 1 {
+		t.Fatalf("%d work sessions, %d days, %d projects, want one each", len(sessions), len(days), len(projects))
+	}
+	typed := map[event.AnchorKind]int{event.AnchorSubstantivePrompt: 1}
+	cases := []struct {
+		name    string
+		counts  map[event.AnchorKind]int
+		relayed int
+		valid   error
+	}{
+		{"a work session counts the typed prompt under its kind and the two relayed messages apart",
+			sessions[0].AnchorCounts, sessions[0].RelayedMessages, sessions[0].Validate()},
+		{"so does a day", days[0].AnchorCounts, days[0].RelayedMessages, days[0].Validate()},
+		{"and the day's part of the project", days[0].Projects[0].AnchorCounts, days[0].Projects[0].RelayedMessages, nil},
+		{"and the project's rollup", projects[0].AnchorCounts, projects[0].RelayedMessages, projects[0].Validate()},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if !reflect.DeepEqual(c.counts, typed) || c.relayed != 2 {
+				t.Errorf("anchor counts %v and %d relayed messages, want %v and 2", c.counts, c.relayed, typed)
+			}
+			if c.valid != nil {
+				t.Errorf("the rollup isn't valid: %v", c.valid)
+			}
+		})
+	}
+}
+
 func TestDays(t *testing.T) {
 	tab := testTable(t)
 	zone := time.FixedZone("UTC-6", -6*3600)

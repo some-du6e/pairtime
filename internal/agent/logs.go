@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
+	"github.com/some-du6e/pairtime/internal/agent/hookpath"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/internal/agent/procs"
 	"github.com/some-du6e/pairtime/internal/agent/tailers"
 	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/platform/clock"
@@ -125,6 +127,285 @@ func (h *adapterHost) forgetLog(harness event.Harness, file string) {
 	h.forgets = append(h.forgets, forgetReq{harness: harness, file: file})
 	h.mu.Unlock()
 	h.poke()
+}
+
+// tieFresh is how recently a log line must have been written for the
+// session it is from to be tied to a process that runs now (tieLive): a
+// line read later, as one the tailers found at a rescan or after the agent
+// was down, may be from a session whose process has ended. It is twice
+// the hot files' poll. tieRetry is how often a session no hook reports is
+// tied again at most, each try a read of the process table.
+const (
+	tieFresh = 10 * time.Second
+	tieRetry = 30 * time.Second
+)
+
+// maxTieTried bounds the sessions tieLive remembers it tried.
+const maxTieTried = 256
+
+// tieLive ties the session of harness h, id sid, that a line written at at,
+// in folder dir, is from to the process running it, when no hook reports the session, by
+// the memory of lr, the harness's log reader (LogHooked), or this run's
+// hook ties, none of its lines is out of pairtime since its last that
+// counts (hookTies.ignoring, untieIgnored), and the line was written in the
+// last tieFresh (procs.Scanner.Tie): focus then finds the session in the
+// window that hosts it, which SM 2.2 rule 6 reads, and the session.start
+// its log reader writes, once its hooks had their grace, is the scan's
+// (tiedStart). Each line keeps the session's touch fresh
+// (procs.Scanner.Touch); a session is weighed again at most every
+// tieRetry, though a try that only waited for a read of the table weighs
+// nothing and holds the next line back from none. A session whose log
+// opened with /clear isn't tied (LogCleared): it runs in the process of the
+// session it cleared, which no tie passes on, and the scan can't tell
+// whether another process it could take is that one. Its lines, a try
+// that finds no process it may tie to or turns it away as lost, and its
+// lines out of pairtime too (untieQuiet), end the ties of the sessions
+// that went quiet before its lines began coming again, in its folder
+// (procs.Scanner.UntieQuiet), as /clear and /resume end the session before
+// them in the process, which then ties to no one.
+//
+// While the session's tie waits for a line read after the table read its
+// first try made, the session.start its log reader holds waits too, up to
+// tieRetry past its grace (LogHoldStart): when the tie comes, the start is
+// the scan's, and when the try finds no process, or the hold runs out, it
+// is the transcript's. For a session it ties that its log reader wrote no
+// session.start for, nor holds one (LogStarted), as with a transcript that
+// states no entrypoint, it returns the scan's session.start, for the
+// line's records recs to follow (scanStart), so rule 4 reads the walk.
+func (h *adapterHost) tieLive(lr adapters.LogReader, harness event.Harness, sid, dir string, at int64,
+	recs []adapters.Record) (adapters.Record, bool) {
+	p := h.a.procs
+	now := wallNow()
+	if p == nil || at == 0 || now.UnixMilli()-at > tieFresh.Milliseconds() {
+		return adapters.Record{}, false
+	}
+	key := h.sessionKey(sid)
+	if key == "" || h.a.hooked.has(key) || h.a.hooked.ignoring(key) || lr.LogHooked(sid) {
+		return adapters.Record{}, false
+	}
+	p.Touch(key, time.UnixMilli(at), dir)
+	if lr.LogCleared(sid) {
+		if p.UntieQuiet(harness, key) {
+			h.a.refreshFocus()
+		}
+		return adapters.Record{}, false
+	}
+	h.mu.Lock()
+	recent := now.Sub(h.tieTried[key]) < tieRetry
+	h.mu.Unlock()
+	if recent {
+		return adapters.Record{}, false
+	}
+	if _, tied := p.TiedTo(key); tied {
+		// As after a restart whose saved hold outlived its tie's release.
+		lr.LogHoldStart(sid, 0)
+		return adapters.Record{}, false
+	}
+	sess, tied, judged := p.Tie(harness, key, time.UnixMilli(at))
+	if !judged {
+		lr.LogHoldStart(sid, tieRetry.Milliseconds())
+		return adapters.Record{}, false
+	}
+	lr.LogHoldStart(sid, 0)
+	h.mu.Lock()
+	if h.tieTried == nil || len(h.tieTried) >= maxTieTried {
+		h.tieTried = make(map[string]time.Time)
+	}
+	h.tieTried[key] = now
+	h.mu.Unlock()
+	if !tied {
+		// The try may have ended a quiet session's tie (UntieQuiet).
+		h.a.refreshFocus()
+		return adapters.Record{}, false
+	}
+	h.a.refreshFocus()
+	if lr.LogStarted(sid) {
+		return adapters.Record{}, false
+	}
+	return h.scanStart(sess, harness, key, recs)
+}
+
+// scanLate is LATE_READ_S, in ms, as claudecode's lateRead: the scan's
+// session.start of a session whose first line read live is older than this
+// carries no reading of this run's clock (scanStart).
+const scanLate = 10_000
+
+// scanStart returns the process scan's session.start for session key,
+// which sess tied to its process and its log reader has none of: dated a
+// millisecond before the session's first line read live
+// (procs.Scanner.FirstTouch), with the harness version and project of the
+// session's first record in recs. Its later starts, at a change of token,
+// are the scan's too (tiedStart).
+func (h *adapterHost) scanStart(sess procs.Session, harness event.Harness, key string, recs []adapters.Record) (adapters.Record, bool) {
+	first, ok := h.a.procs.FirstTouch(key)
+	if !ok {
+		return adapters.Record{}, false
+	}
+	t := first.UnixMilli() - 1
+	now := time.Now() // with its monotonic reading, which this run's clock needs
+	mono, boot := ledger.RunClock(now)
+	if now.UnixMilli()-t > scanLate {
+		// Dated longer before now than LATE_READ_S: no reading of this
+		// run's clock, which leaves out a suspend since, so the ledger
+		// holds it to its t, as claudecode's env does a line read late.
+		mono = 0
+	}
+	env := event.Envelope{T: t, Mono: max(mono-max(now.UnixMilli()-t, 0), 0), BootID: boot, Source: event.SourceOS,
+		Via: event.ViaOS, Harness: harness, SessionKey: key}
+	for _, r := range recs {
+		if r.Event.SessionKey == key {
+			env.HarnessVersion, env.ProjectKey = r.Event.HarnessVersion, r.Event.ProjectKey
+			break
+		}
+	}
+	h.mu.Lock()
+	if _, had := h.firstStarts[key]; had {
+		// Its first start is written already, as when it was tied before.
+		h.mu.Unlock()
+		return adapters.Record{}, false
+	}
+	if h.firstStarts == nil || len(h.firstStarts) >= maxFirstStarts {
+		h.firstStarts = make(map[string]firstStart)
+	}
+	h.firstStarts[key] = firstStart{tied: true, walk: sess.Event}
+	h.mu.Unlock()
+	st := sess.Event
+	return adapters.Record{Event: event.Event{Envelope: env, Data: &st}, LogKey: "tie-start"}, true
+}
+
+// untieQuiet ends the quiet ties a fresh line of session sid, which no
+// hook reports, ends though the line is out of pairtime, in folder dir
+// (procs.Scanner.UntieQuiet): /clear or /resume in a folder a
+// .pairtime-ignore keeps out starts a session none of whose lines count,
+// in the process of the one before, whose tie would otherwise keep that
+// one's project in the window (DESIGN 8.8). Such a session can't be tied
+// while its lines are out of pairtime, so ending the quiet ties in its
+// folder fails closed.
+func (h *adapterHost) untieQuiet(lr adapters.LogReader, harness event.Harness, sid, dir string, at int64) {
+	p := h.a.procs
+	if p == nil || at == 0 || wallNow().UnixMilli()-at > tieFresh.Milliseconds() {
+		return
+	}
+	key := h.sessionKey(sid)
+	if key == "" || h.a.hooked.has(key) || lr.LogHooked(sid) {
+		return
+	}
+	// Never the session's first line, which only a line that counts is
+	// (procs.Scanner.TouchIgnored).
+	p.TouchIgnored(key, time.UnixMilli(at), dir)
+	if p.UntieQuiet(harness, key) {
+		h.a.refreshFocus()
+	}
+}
+
+// untieIgnored keeps session sid out of focus from a line of it in a
+// folder out of pairtime on (DESIGN 8.8), as a hook call there does
+// (hookTies.ignore): it undoes the session's procs tie
+// (procs.Scanner.Untie), and tieLive ties it again only after a line of it
+// that counts.
+func (h *adapterHost) untieIgnored(sid string) {
+	key := h.sessionKey(sid)
+	if key == "" {
+		return
+	}
+	// Its next line that counts may tie it again at once.
+	h.mu.Lock()
+	delete(h.tieTried, key)
+	h.mu.Unlock()
+	news := h.a.hooked.ignore(key)
+	if p := h.a.procs; p != nil && p.Untie(key) {
+		news = true
+	}
+	if news {
+		h.a.refreshFocus()
+	}
+}
+
+// sessionKey returns the key of session sid under this installation's
+// K_session, as the adapters key it (adapters.Keys.Session), or "" while
+// the agent has none.
+func (h *adapterHost) sessionKey(sid string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.sessKeys == nil {
+		secret := h.a.sessionSecret()
+		if len(secret) != hookpath.SessionSecretLen {
+			return ""
+		}
+		h.sessKeys = adapters.NewKeys(secret)
+	}
+	return h.sessKeys.Session(sid)
+}
+
+// tiedStart returns r, a session.start a log reader wrote for a session no
+// hook reported, as the process scan's when tieLive tied the session to its
+// process (procs.Scanner.TieOf, which keeps a tie a while after its process
+// ended, for a short session's start): one record, with the walk's parent
+// and TTY. A session's later starts, at a change of token, have the parent
+// and TTY its first had, so its parent class never changes mid-session
+// (DESIGN 7.3, CC9): a session whose first start was the transcript's,
+// untied, keeps the transcript's for the rest.
+func (h *adapterHost) tiedStart(r adapters.Record, start *event.SessionStart) adapters.Record {
+	p := h.a.procs
+	if p == nil || r.Event.Source != event.SourceLog {
+		return r
+	}
+	key := r.Event.SessionKey
+	h.mu.Lock()
+	first, seen := h.firstStarts[key]
+	h.mu.Unlock()
+	walk := first.walk
+	if !seen {
+		sess, ok := p.TieOf(key)
+		first = firstStart{tied: ok, walk: sess.Event}
+		walk = sess.Event
+		h.mu.Lock()
+		if h.firstStarts == nil || len(h.firstStarts) >= maxFirstStarts {
+			h.firstStarts = make(map[string]firstStart)
+		}
+		h.firstStarts[key] = first
+		h.mu.Unlock()
+	}
+	if !first.tied {
+		return r
+	}
+	st := tiedStartOf(walk, start, r.Token)
+	r.Event.Source, r.Event.Via, r.Event.Data = event.SourceOS, event.ViaOS, &st
+	return r
+}
+
+// firstStart is how a session's first session.start went: the scan's, with
+// its process's walk, or the transcript's.
+type firstStart struct {
+	tied bool
+	walk event.SessionStart
+}
+
+// maxFirstStarts bounds the sessions tiedStart remembers.
+const maxFirstStarts = 256
+
+// tiedStartOf is the session.start of a session tied to its process: the
+// walk's parent and TTY, the log's start kind and permission mode, and the
+// entrypoint E-cc-transcript-labels gives a walk joined to a token, whose
+// labels only ever withhold credit. The walk's sdk or exec stands. sdk-cli
+// is sdk under any host, and sdk-ts and sdk-py are unless an IDE or an
+// agent desktop app hosts the session, which then decides. The log's
+// cloud stands. Otherwise the walk's entrypoint stands.
+func tiedStartOf(walk event.SessionStart, log *event.SessionStart, token string) event.SessionStart {
+	st := walk
+	st.StartKind, st.PermissionMode = log.StartKind, log.PermissionMode
+	switch {
+	case walk.Entrypoint == event.EntrypointSDK || walk.Entrypoint == event.EntrypointExec:
+	case token == "sdk-cli":
+		st.Entrypoint = event.EntrypointSDK
+	case token == "sdk-ts" || token == "sdk-py":
+		if walk.Entrypoint != event.EntrypointIDE && walk.Entrypoint != event.EntrypointDesktop {
+			st.Entrypoint = event.EntrypointSDK
+		}
+	case log.Entrypoint == event.EntrypointCloud:
+		st.Entrypoint = event.EntrypointCloud
+	}
+	return st
 }
 
 // setLookback keeps how far lookback has read, for the status
@@ -352,7 +633,7 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		t.Rewind(ll.File)
 		return false
 	}
-	dir, session := lr.LogPlace(raw)
+	dir, session, at := lr.LogPlace(raw)
 	if session != "" && h.parkedBy[session] > 0 || h.waits(dir) {
 		return false
 	}
@@ -367,11 +648,34 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 	if h.ignored || lr.LogIgnored(ll.File) {
 		// A folder out of pairtime (DESIGN 8.8): its lines make no record,
 		// nor do the file's lines and idle markers that name no folder,
-		// after one that named it.
-		recs = nil
+		// after one that named it. A record of an entry that counted, which
+		// such a line or marker resolved, as a session.start that waited,
+		// stays (adapters.Record.Counted).
+		kept := recs[:0]
+		for _, r := range recs {
+			if r.Counted {
+				kept = append(kept, r)
+			}
+		}
+		recs = kept
 		if !ll.Idle && !ll.Replay {
 			// A replay was counted when it was first read.
 			h.count(func() { st.Ignored++ })
+			if session != "" && line.Lookback == 0 {
+				// A line of a history lookback read tells of a time before
+				// the agent ran, not of what runs now, so it neither unties
+				// its session nor ties it, nor touches it (below): its time
+				// is no first line its process must have started by.
+				h.untieIgnored(session)
+				h.untieQuiet(lr, line.Harness, session, dir, at)
+			}
+		}
+	} else if session != "" && !ll.Replay && line.Lookback == 0 {
+		// A line that counts lets its session be tied again, as when it
+		// moved to a folder that isn't out of pairtime.
+		h.a.hooked.unignore(h.sessionKey(session))
+		if start, ok := h.tieLive(lr, line.Harness, session, dir, at, recs); ok {
+			recs = append([]adapters.Record{start}, recs...)
 		}
 	}
 	if line.Lookback > 0 {
@@ -387,6 +691,9 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 			key = fmt.Sprintf("%d.%d", ll.Offset, i)
 		}
 		r.Event.EventID = h.logEventID(r.Event.T, ll.File, key)
+		if start, ok := r.Event.Data.(*event.SessionStart); ok && !ll.Replay {
+			r = h.tiedStart(r, start)
+		}
 		// A history's records need no seal and no save of their own: the
 		// timed seal and the minute's save cover them, and a crash before
 		// those reads the lines again, to the same event_ids. A log line has

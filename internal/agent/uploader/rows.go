@@ -37,9 +37,13 @@ type rowIndex struct {
 	device string // the chain's device id
 	// created is when the chain began, in Unix ms, 0 when unknown.
 	created int64
-	times   []rowTime // times[i] is batch i + 1
-	first   uint64    // queue[0]'s batch, when queue isn't empty
-	queue   []ledger.Row
+	// base is the batch times[0] is: the first batch the ledger keeps,
+	// which is batch 1 until a retention sweep drops the oldest
+	// (ledger.ChainInfo.Base), and 0 also means 1 (start).
+	base  uint64
+	times []rowTime // times[i] is batch start() + i
+	first uint64    // queue[0]'s batch, when queue isn't empty
+	queue []ledger.Row
 	// lastHead is the newest batch's H_b, the prev of the next one.
 	lastHead pkgledger.Hash
 }
@@ -51,7 +55,9 @@ func loadRows(dir string, keep uint64) (*rowIndex, error) {
 	if err != nil {
 		return nil, err
 	}
-	ix := &rowIndex{device: info.DeviceID, created: info.Created.UnixMilli()}
+	// With no row, as after a sweep that dropped every one, the batch
+	// sealed next links to the head before the base.
+	ix := &rowIndex{device: info.DeviceID, created: info.Created.UnixMilli(), base: info.Base, lastHead: info.Prev}
 	for _, r := range rows {
 		if err := ix.add(r); err != nil {
 			return nil, err
@@ -61,8 +67,15 @@ func loadRows(dir string, keep uint64) (*rowIndex, error) {
 	return ix, nil
 }
 
-// last returns the number of the newest batch the index holds.
-func (ix *rowIndex) last() uint64 { return uint64(len(ix.times)) }
+// start returns the number of the first batch the index holds times for.
+func (ix *rowIndex) start() uint64 { return max(ix.base, 1) }
+
+// last returns the number of the newest batch the index holds, start() - 1
+// when it holds none.
+func (ix *rowIndex) last() uint64 { return ix.start() + uint64(len(ix.times)) - 1 }
+
+// at returns batch b's times. The caller checks holdsRow(b).
+func (ix *rowIndex) at(b uint64) *rowTime { return &ix.times[b-ix.start()] }
 
 // add takes the row of the batch after the newest one the index holds.
 func (ix *rowIndex) add(r ledger.Row) error {
@@ -120,7 +133,7 @@ func (ix *rowIndex) sealedAt(b uint64) (int64, bool) {
 	if !ix.holdsRow(b) {
 		return 0, false
 	}
-	return ix.times[b-1].sealed, true
+	return ix.at(b).sealed, true
 }
 
 // localUntil returns when config.toml was last known to say local-only
@@ -130,12 +143,12 @@ func (ix *rowIndex) localUntil(b uint64) (int64, bool) {
 	if !ix.holdsRow(b) {
 		return 0, false
 	}
-	return ix.times[b-1].localUntil, true
+	return ix.at(b).localUntil, true
 }
 
 // holdsRow reports whether the device has a batch b, whether or not the
 // index still holds its row.
-func (ix *rowIndex) holdsRow(b uint64) bool { return b >= 1 && b <= ix.last() }
+func (ix *rowIndex) holdsRow(b uint64) bool { return b >= ix.start() && b <= ix.last() }
 
 // row returns batch b's row while the index holds it.
 func (ix *rowIndex) row(b uint64) (ledger.Row, bool) {
@@ -147,8 +160,15 @@ func (ix *rowIndex) row(b uint64) (ledger.Row, bool) {
 
 // received records batch b's receipt time, in Unix ms.
 func (ix *rowIndex) received(b uint64, at int64) {
-	if b >= 1 && b <= ix.last() {
-		ix.times[b-1].received, ix.times[b-1].unchecked = at, false
+	if ix.holdsRow(b) {
+		ix.at(b).received, ix.at(b).unchecked = at, false
+	}
+}
+
+// forgetReceipt forgets batch b's receipt time.
+func (ix *rowIndex) forgetReceipt(b uint64) {
+	if ix.holdsRow(b) {
+		ix.at(b).received, ix.at(b).unchecked = 0, false
 	}
 }
 
@@ -156,15 +176,15 @@ func (ix *rowIndex) received(b uint64, at int64) {
 // uploader couldn't check, which reads its minutes until a checked one
 // comes.
 func (ix *rowIndex) receivedUnchecked(b uint64, at int64) {
-	if b >= 1 && b <= ix.last() && ix.times[b-1].received == 0 {
-		ix.times[b-1].received, ix.times[b-1].unchecked = at, true
+	if ix.holdsRow(b) && ix.at(b).received == 0 {
+		ix.at(b).received, ix.at(b).unchecked = at, true
 	}
 }
 
 // unchecked reports whether batch b's receipt time is from a receipt the
 // uploader couldn't check.
 func (ix *rowIndex) unchecked(b uint64) bool {
-	return b >= 1 && b <= ix.last() && ix.times[b-1].unchecked
+	return ix.holdsRow(b) && ix.at(b).unchecked
 }
 
 // forgetReceipts forgets every receipt time: they came from another
@@ -178,10 +198,10 @@ func (ix *rowIndex) forgetReceipts() {
 // receivedAt returns when the server received batch b, by its receipt, and
 // false while the device holds none.
 func (ix *rowIndex) receivedAt(b uint64) (int64, bool) {
-	if b < 1 || b > ix.last() || ix.times[b-1].received == 0 {
+	if !ix.holdsRow(b) || ix.at(b).received == 0 {
 		return 0, false
 	}
-	return ix.times[b-1].received, true
+	return ix.at(b).received, true
 }
 
 // sealedAfter returns the first batch sealed at or after t, in Unix ms,
@@ -191,20 +211,26 @@ func (ix *rowIndex) sealedAfter(t int64) (uint64, bool) {
 	if i == len(ix.times) {
 		return 0, false
 	}
-	return uint64(i) + 1, true
+	return uint64(i) + ix.start(), true
 }
 
 // reading is what a minute's witness reading rests on besides the rows:
 // where the server's chain starts and where it forked from the device's,
-// the server's clock less the device's, and the stretches the uploader
-// couldn't reach the server.
+// and the stretches the uploader couldn't reach the server.
 type reading struct {
 	lag        int64  // WITNESS_LAG_S, in ms
 	chainStart uint64 // the server's first batch, 0 when unknown
 	fork       uint64 // the batch the chains part at, 0 for none
-	offset     int64  // server clock less device clock, in ms
 	offline    []span
 }
+
+// refusedAhead is how long after the server received a batch its records
+// may be dated before a submission refuses them: SP 8.4's 5 minutes,
+// internal/server/witness's FutureMS. A minute that may hold a record
+// dated further ahead of its own batch's receipt reads backfilled, so the
+// dashboard never reads witnessed or offline a minute whose records a
+// submission refuses.
+const refusedAhead = 300_000
 
 // witnessOf reads the witness label of the minute that starts at minute,
 // in Unix ms on the device's clock, as the device sees it, and false when
@@ -216,9 +242,17 @@ type reading struct {
 // B*, because it takes a chain's batches in order. So the reading is B*'s
 // (DESIGN 7.4):
 //
-//   - witnessed when its receipt's received_at, on the server's clock,
-//     is at most lag after the minute's end, put on the server's clock
-//     by the offset the answers measured;
+//   - backfilled when a record of the minute may be dated more than
+//     refusedAhead after its own batch reached the server, as on a device
+//     clock that runs that far fast (refused): a submission checks each
+//     record against its own batch's receipt and refuses it (SP 8.4);
+//   - witnessed when the receipt's received_at, on the server's clock,
+//     is at most lag after the minute's end, on the device's clock. The
+//     server reads a minute by the device's clock too (WP-SV6), because
+//     nothing it trusts tells a slow clock from a late upload, so the
+//     reading never corrects the device's clock: the offset the answers
+//     measured corrects X-Pairtime-Time alone, and a device clock that
+//     runs slow reads its minutes late, by as much as it is slow;
 //   - offline when it was late, but B* was sealed within lag of the end
 //     and the uploader's failure notes fall within lag after that seal:
 //     it tried to send B* in time and couldn't reach the server;
@@ -252,21 +286,48 @@ func witnessOf(ix *rowIndex, minute int64, batch uint64, r reading) (event.Witne
 		return "", false
 	}
 	w, ok := r.of(ix, b, end)
+	if ok && ix.refused(minute, end, b) {
+		w = event.Backfilled
+	}
 	if !ok || batch <= b || batch > ix.last() {
 		return w, ok
 	}
-	wb, ok := r.of(ix, batch, ix.times[batch-1].sealed)
+	wb, ok := r.of(ix, batch, ix.at(batch).sealed)
 	if !ok {
 		return "", false
 	}
 	return worse(w, wb), true
 }
 
+// refused reports whether a submission may refuse a record of the minute
+// from start to end, on the device's clock, whose last batch is b, B*: for
+// a batch from the first one sealed after start through b, the earlier of
+// end and the batch's seal, the latest a record of the minute in it can be
+// dated, is more than refusedAhead after the server received it. A
+// minute's earlier records sit in batches that reached the server up to a
+// seal interval before B*, and a submission checks each record against
+// its own batch's receipt (internal/server/witness). A clock less than
+// refusedAhead fast never seals a batch that far ahead of its receipt, so
+// it never reads backfilled by this.
+func (ix *rowIndex) refused(start, end int64, b uint64) bool {
+	first, ok := ix.sealedAfter(start)
+	if !ok {
+		return false
+	}
+	for k := first; k <= b; k++ {
+		if got, ok := ix.receivedAt(k); ok && min(end, ix.at(k).sealed)-got > refusedAhead {
+			return true
+		}
+	}
+	return false
+}
+
 // of reads batch b's witness label for records of the time due, on the
-// device's clock: witnessed when the server received it within lag after
-// due, offline when it was sealed within lag of due and waited out an
-// outage, backfilled otherwise, and backfilled for a batch the server can
-// never receive. It waits while b has no receipt.
+// device's clock: backfilled when due is more than refusedAhead after the
+// server received it, witnessed when the server received it within lag
+// after due, offline when it was sealed within lag of due and waited out
+// an outage, backfilled otherwise, and backfilled for a batch the server
+// can never receive. It waits while b has no receipt.
 func (r reading) of(ix *rowIndex, b uint64, due int64) (event.Witness, bool) {
 	if (r.chainStart > 0 && b < r.chainStart) || (r.fork > 0 && b >= r.fork) {
 		return event.Backfilled, true
@@ -279,9 +340,11 @@ func (r reading) of(ix *rowIndex, b uint64, due int64) (event.Witness, bool) {
 		}
 		return "", false
 	}
-	sealed := ix.times[b-1].sealed
+	sealed := ix.at(b).sealed
 	switch {
-	case got-(due+r.offset) <= r.lag:
+	case due-got > refusedAhead:
+		return event.Backfilled, true
+	case got-due <= r.lag:
 		return event.Witnessed, true
 	case sealed-due <= r.lag && waitedOut(r.offline, sealed, r.lag):
 		return event.Offline, true

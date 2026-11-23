@@ -262,6 +262,16 @@ type Record struct {
 	// line read again after a crash makes records pkg/score takes for the
 	// ones the ledger has. It is "" for a record of anything but a log.
 	LogKey string
+	// Token is, for a session.start a log reader wrote, the entrypoint
+	// token the harness's log stated, such as Claude Code's sdk-ts, which
+	// the agent needs to join the session to a process's walk
+	// (E-cc-transcript-labels). It never reaches the event.
+	Token string
+	// Counted says the record is of a log entry in a folder that counts,
+	// which a later line or idle marker resolved, as a session.start that
+	// waited for its session's hooks: the host keeps it though that line
+	// or marker is out of pairtime (LogReader.LogIgnored, DESIGN 8.8).
+	Counted bool
 	// Late, which the agent sets, says the record tells of a time long
 	// past, as lookback's do: the ledger seals it in its own time
 	// (ledger.Input.Late).

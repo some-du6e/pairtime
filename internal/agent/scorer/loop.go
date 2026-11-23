@@ -136,6 +136,9 @@ type BucketStore interface {
 	Pending(from int64) ([]store.Bucket, error)
 	Sync() error
 	Forget(before int64) error
+	// KeptFrom is the first UTC day whose minutes the store keeps, "" for
+	// all (store.Buckets.KeptFrom).
+	KeptFrom() string
 }
 
 // Options configure New.
@@ -936,11 +939,18 @@ func (l *Loop) save() {
 	}
 }
 
-// writeDay rewrites the rollup of the local day date.
+// writeDay rewrites the rollup of the local day date, unless the day
+// starts before the first UTC day whose minutes the bucket store keeps:
+// retention dropped some of them (DESIGN 4.4), so the rollup written while
+// all were there stays as it is, as DESIGN 4.4 keeps rollups until the
+// teen deletes them.
 func (l *Loop) writeDay(date string, loc *time.Location) error {
 	start, end, err := store.DayBounds(date, loc)
 	if err != nil {
 		return err
+	}
+	if kept := l.opts.Buckets.KeptFrom(); kept != "" && store.DayOf(start.UnixMilli()) < kept {
+		return nil
 	}
 	bs, err := l.opts.Buckets.Range(start.UnixMilli(), end.UnixMilli())
 	if err != nil {

@@ -228,12 +228,13 @@ jobs:
         # call internal/platform's balloon, osascript and D-Bus code (WP-OS8),
         # the focus component's per-OS sources and their tests (WP-OS2), and
         # the T3 Code reader, which starts sqlite3 at low priority per OS
-        # (WP-ADE1). The desktop tests, which build with -tags desktop on
-        # Linux alone, are vetted in the Desktop test files step. The Windows
-        # and macOS tests themselves run in platform.yml.
+        # (WP-ADE1), and the peer-process check, which calls each OS's
+        # connection lookup (WP-OS13). The desktop tests, which build with
+        # -tags desktop on Linux alone, are vetted in the Desktop test files
+        # step. The Windows and macOS tests themselves run in platform.yml.
         if: ${{ !cancelled() }}
         run: |
-          pkgs="./internal/platform/... ./internal/agent/procs/... ./internal/agent/keys/... ./internal/agent/notifier/... ./internal/agent/focus/... ./internal/adapters/t3code/..."
+          pkgs="./internal/platform/... ./internal/agent/procs/... ./internal/agent/keys/... ./internal/agent/notifier/... ./internal/agent/focus/... ./internal/agent/peer/... ./internal/adapters/t3code/..."
           for target in windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
             echo "go vet $pkgs for $target"
             GOOS=${target%/*} GOARCH=${target#*/} go vet $pkgs

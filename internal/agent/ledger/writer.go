@@ -278,11 +278,13 @@ type Input struct {
 // which they also say until the computer is linked, and online otherwise.
 // A record a crash left that is lookback's counts by the earliest time it
 // can have reached the writer (Open). An event that carries a reading of
-// this run's clock is none, though a step back of the wall clock dates it
-// before the chain began: it was made in this run, which the moment holds
-// it to by that reading (moment.before).
+// a run's clock is none, though a step back of the wall clock dates it
+// before the chain began: it was made while an agent ran, this one or one
+// a kill ended, whose record recovery takes in, and the moment holds it
+// to that reading for this run's and to its t for another's
+// (moment.before).
 func (w *Writer) lookback(e event.Envelope) bool {
-	return e.Via == event.ViaLog && e.T < w.created && !(e.Mono > 0 && e.BootID == runBoot)
+	return e.Via == event.ViaLog && e.T < w.created && !(e.Mono > 0 && strings.HasPrefix(e.BootID, runPrefix))
 }
 
 // Writer is a device's ledger writer. It appends each record to the day's
@@ -334,6 +336,7 @@ type Writer struct {
 	retired []*appendFile // segments rolled over that a seal may still flush
 	next    uint64        // s of the next record
 	b       uint64        // the last sealed batch, 0 before the first
+	base    uint64        // the first batch batches.seg keeps (Sweep), 1 before a sweep drops any
 	head    ledger.Hash   // its H_b, zero(32) before the first
 	sealed  int64         // its sealed_at, in Unix ms, 0 before the first
 	pending []pending     // the records since the last seal
@@ -1215,8 +1218,17 @@ type chainPayload struct {
 	Created  int64  `json:"created"`
 }
 
-// chainVersion is the layout of the writer's files, chainPayload.V.
-const chainVersion = 1
+// chainVersion is the layout of the writer's files, chainPayload.V, and
+// chainVersionBase the layout of a batches.seg that a retention sweep wrote
+// with a base frame after its chain frame (Writer.Sweep). A pairtime that
+// reads only chainVersion refuses such a file at its chain frame, before it
+// reads on to the base frame, which it doesn't know, so it never takes the
+// frame for a crash's torn tail and cuts the rows after it off
+// (docs/errata/2026-11-23-unsent-batches-retention.md).
+const (
+	chainVersion     = 1
+	chainVersionBase = 2
+)
 
 // Seal seals the records written since the last batch into the next batch
 // and returns it with ok set, once the batch is on disk and its row is in
@@ -1493,13 +1505,17 @@ func (w *Writer) StoreReceipt(b uint64, r ledger.Receipt) error {
 	w.sealMu.Lock()
 	defer w.sealMu.Unlock()
 	w.mu.Lock()
-	err, last := w.usable(), w.b
+	err, last, base := w.usable(), w.b, w.base
 	w.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	if b == 0 || b > last {
 		return fmt.Errorf("ledger: batch %d isn't sealed; the last one is %d", b, last)
+	}
+	if b < base {
+		// A sweep dropped the batch, and its receipt has no row to go with.
+		return nil
 	}
 	payload, err := json.Marshal(receiptPayload{B: b, ReceivedAt: r.ReceivedAt, Signature: hex.EncodeToString(r.Signature[:])})
 	if err != nil {

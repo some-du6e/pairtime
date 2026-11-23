@@ -67,8 +67,9 @@ type rules struct {
 	lookupBracket int64
 	lookupMax     int64
 	unitsPerS     int64
-	// unknownBucketMax is UNKNOWN_BUCKET_MAX_S, the most a relayed
-	// session's bucket holds from the relayed prompt's reset (SM 2.4, 8.6).
+	// unknownBucketMax is UNKNOWN_BUCKET_MAX_S, the most of its bucket a
+	// session's relayed reading draws on, in a session an agent app's
+	// server runs, whatever reset came last (SM 2.4, 8.6).
 	unknownBucketMax int64 // ms
 
 	// SM 8.4, attribution.

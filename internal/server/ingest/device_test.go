@@ -221,7 +221,7 @@ func TestUpsertsKeepTheAccount(t *testing.T) {
 			put         func(ctx context.Context, tx writer.Tx, account string, n int64) error
 		}{
 			{"a minute bucket keeps its account", "minute_buckets", func(ctx context.Context, tx writer.Tx, account string, n int64) error {
-				return putBucket(ctx, tx, id, account, minute, n, "final", []byte(`{"rev":`+strconv.FormatInt(n, 10)+`}`), now, n)
+				return putBucket(ctx, tx, id, account, minute, n, "final", []byte(`{"rev":`+strconv.FormatInt(n, 10)+`}`), now, n, "witnessed")
 			}},
 			{"a commit record keeps its account", "commit_records", func(ctx context.Context, tx writer.Tx, account string, n int64) error {
 				return putCommit(ctx, tx, id, account, commit, []byte(`{"n":`+strconv.FormatInt(n, 10)+`}`), now)

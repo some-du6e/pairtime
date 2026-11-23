@@ -770,6 +770,11 @@ type Rollup struct {
 	CreditedByProject map[string]float64 `json:"credited_by_project,omitempty"`
 	AgentRunningS     float64            `json:"agent_running_s"`
 	AnchorCounts      map[AnchorKind]int `json:"anchor_counts,omitempty"`
+	// RelayedMessages counts the relayed anchors (SM 2.2 rule 9): messages
+	// a person sent through an agent app that witnessed their prompts. SM
+	// 5.4 counts them apart from typed prompts, so AnchorCounts counts none
+	// of them under its kind.
+	RelayedMessages int `json:"relayed_messages,omitempty"`
 	// Totals is set at the submission level, and only there.
 	Totals *SubmissionTotals `json:"totals,omitempty"`
 }
@@ -833,6 +838,7 @@ func (r Rollup) Validate() error {
 			c.addf("anchor_counts", "has a negative count for %q: %d", k, n)
 		}
 	}
+	c.count("relayed_messages", r.RelayedMessages)
 	switch {
 	case r.Level == LevelSubmission && r.Totals == nil:
 		c.addf("totals", "missing; a submission rollup carries its totals")

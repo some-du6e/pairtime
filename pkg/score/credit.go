@@ -133,7 +133,7 @@ type second struct {
 	label event.Label
 	// capped marks a present second of a lookup run past LOOKUP_MAX_S, and
 	// bucketCap one the bucket would have credited but for BUCKET_MAX_S, or
-	// for UNKNOWN_BUCKET_MAX_S from a relayed prompt's reset.
+	// one of relayed reading but for UNKNOWN_BUCKET_MAX_S.
 	capped, bucketCap bool
 	// relayed marks a second relayed credit took, a relayed anchor's lead
 	// or its session's relayed reading (relaycredit.go). It rests on no
@@ -604,9 +604,9 @@ func (c *creditor) localSecond(k int, t int64, s *Slot, at *attribution, ws []wi
 	}
 	if pick == nil {
 		// The buckets are empty. If one of them is only because
-		// BUCKET_MAX_S evicted output that would still be there, or
-		// UNKNOWN_BUCKET_MAX_S held it back after a relayed prompt, the
-		// cap is why the second isn't credited (SM 5.2).
+		// BUCKET_MAX_S evicted output that would still be there, the cap is
+		// why the second isn't credited (SM 5.2). UNKNOWN_BUCKET_MAX_S caps
+		// relayed reading alone, so it keeps nothing from this one.
 		if !proseOnly {
 			for _, b := range c.buckets[proj] {
 				if b.takeCapped(oneSecond, false) {
@@ -796,7 +796,7 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 // X.no_input for a turn whose prompt came with no input (SM 2.2 rule 8);
 // and last X.no_anchor. at is the slot's resolution (attribute). A turn a
 // person started includes a relayed one (SM 2.2), and X.bucket_cap covers
-// the reading UNKNOWN_BUCKET_MAX_S held back after a relayed prompt too.
+// the relayed reading that UNKNOWN_BUCKET_MAX_S held back too.
 //
 // On a device that never samples (presence.live), such as a server with no
 // desktop, every slot is a live slot whose presence is unknown, and the

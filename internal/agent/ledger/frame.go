@@ -28,7 +28,8 @@ const (
 )
 
 // The kinds of frame. A segment holds record and seal frames; batches.seg
-// a chain frame, then batch and receipt frames.
+// a chain frame, a base frame once a retention sweep has dropped the oldest
+// batches, then batch and receipt frames.
 const (
 	// kindRecord is a record: its 33-byte header, then its body.
 	kindRecord byte = 'r'
@@ -37,6 +38,11 @@ const (
 	// kindChain names the chain batches.seg belongs to. It is that file's
 	// first frame.
 	kindChain byte = 'h'
+	// kindBase names the first batch batches.seg keeps, its first record
+	// and the head before it, once a retention sweep has dropped the
+	// batches before it (Writer.Sweep). It comes right after the chain
+	// frame. Without one, the file keeps every batch from batch 1.
+	kindBase byte = 'f'
 	// kindBatch is a sealed batch's row.
 	kindBatch byte = 'b'
 	// kindReceipt is the server's receipt for a batch.
@@ -119,7 +125,7 @@ func (fr *frameReader) next() (frame, error) {
 	}
 	kind := head[0]
 	switch kind {
-	case kindRecord, kindSeal, kindChain, kindBatch, kindReceipt:
+	case kindRecord, kindSeal, kindChain, kindBase, kindBatch, kindReceipt:
 	default:
 		return frame{}, &tornError{off, fmt.Sprintf("0x%02x isn't a kind of frame", kind)}
 	}

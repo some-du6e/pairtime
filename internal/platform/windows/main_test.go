@@ -39,6 +39,11 @@ func init() {
 }
 
 func TestMain(m *testing.M) {
+	// A child that only opens a loopback connection (conn_windows_test.go)
+	// needs no locked main thread, so it isn't among childEnvs.
+	if addr := os.Getenv(connChildEnv); addr != "" {
+		os.Exit(connChild(addr))
+	}
 	for _, c := range childEnvs {
 		if n := os.Getenv(c.name); n != "" {
 			os.Exit(c.run(n))

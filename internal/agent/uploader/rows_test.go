@@ -41,7 +41,6 @@ func indexOf(t *testing.T, sealed []float64, got []float64) *rowIndex {
 
 func TestWitness(t *testing.T) {
 	const lag = 900_000
-	mins := func(m float64) int64 { return int64(m * 60_000) }
 	tests := []struct {
 		name    string
 		sealed  []float64 // minutes of day0
@@ -73,10 +72,20 @@ func TestWitness(t *testing.T) {
 			[]float64{1, 2}, []float64{1.1, -1}, reading{fork: 2}, 0, 0, 1, event.Backfilled, true},
 		{"a minute whose batch is before the fork reads by its batch",
 			[]float64{1, 2}, []float64{1.1, -1}, reading{fork: 2}, 0, 0, 0, event.Witnessed, true},
-		{"a device clock 20 minutes slow still reads its live minutes witnessed",
-			[]float64{1}, []float64{21.1}, reading{offset: mins(20)}, 0, 0, 0, event.Witnessed, true},
-		{"a device clock 20 minutes fast reads a batch 30 minutes late as late",
-			[]float64{1}, []float64{11}, reading{offset: -mins(20)}, 0, 0, 0, event.Backfilled, true},
+		{"a device clock 20 minutes slow reads its live minutes late, as the server reads them by the device's clock",
+			[]float64{1}, []float64{21.1}, reading{}, 0, 0, 0, event.Backfilled, true},
+		{"a minute that ends more than 5 minutes after the server had its batch is backfilled, since a submission refuses its records",
+			[]float64{10}, []float64{3}, reading{}, 0, 0, 9, event.Backfilled, true},
+		{"a minute that ends up to 5 minutes after the server had its batch is witnessed",
+			[]float64{10}, []float64{6}, reading{}, 0, 0, 9, event.Witnessed, true},
+		// A clock 6 minutes fast that seals at :50, each root received 15 s
+		// after its seal: B* reached the server 4 min 55 s before the
+		// minute's end, but the batch sealed at 10:50 did 5 min 45 s before
+		// its seal, which holds most of the minute's records.
+		{"a minute is backfilled when an earlier batch of it reached the server more than 5 minutes before its seal, though B* didn't",
+			[]float64{9 + 50.0/60, 10 + 50.0/60, 11 + 50.0/60}, []float64{4 + 5.0/60, 5 + 5.0/60, 6 + 5.0/60}, reading{}, 0, 0, 10, event.Backfilled, true},
+		{"the same minute on a clock 4.5 minutes fast is witnessed",
+			[]float64{9 + 50.0/60, 10 + 50.0/60, 11 + 50.0/60}, []float64{5 + 35.0/60, 6 + 35.0/60, 7 + 35.0/60}, reading{}, 0, 0, 10, event.Witnessed, true},
 		{"a minute no batch was sealed after waits",
 			[]float64{1}, []float64{1.1}, reading{}, 0, 0, 5, "", false},
 		{"a minute whose batch has no receipt yet waits",
@@ -154,6 +163,93 @@ func TestOutage(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			w, ok := witnessOf(ix, at(tc.minute), 0, reading{lag: lag, offline: spans})
+			if !ok || w != tc.want {
+				t.Errorf("witnessOf = %q, %v; want %q", w, ok, tc.want)
+			}
+		})
+	}
+}
+
+// TestRefusedFromBase holds the per-batch 5-minute check to the ledger's
+// base: after a retention sweep the index's rows start at a later batch
+// (WP-LG6), and the check still reads each batch's own seal. The batches
+// are TestWitness's clock that seals at :50, numbered 5 to 7.
+func TestRefusedFromBase(t *testing.T) {
+	const lag = 900_000
+	sealed := []float64{9 + 50.0/60, 10 + 50.0/60, 11 + 50.0/60}
+	tests := []struct {
+		name string
+		got  []float64 // when the server received batches 5 to 7, minutes of day0
+		want event.Witness
+	}{
+		{"a clock 6 minutes fast reads backfilled", []float64{4 + 5.0/60, 5 + 5.0/60, 6 + 5.0/60}, event.Backfilled},
+		{"a clock 4.5 minutes fast reads witnessed", []float64{5 + 35.0/60, 6 + 35.0/60, 7 + 35.0/60}, event.Witnessed},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ix := &rowIndex{device: "d_test", base: 5}
+			for i, s := range sealed {
+				b := uint64(5 + i)
+				r := ledger.Row{
+					BatchRow: pkgledger.BatchRow{B: b, FirstSeq: b, N: 1,
+						Receipt: &pkgledger.Receipt{ReceivedAt: uint64(day0.Add(time.Duration(tc.got[i] * float64(time.Minute))).UnixMilli())}},
+					SealedAt: day0.Add(time.Duration(s * float64(time.Minute))),
+				}
+				if err := ix.add(r); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if w, ok := witnessOf(ix, at(10), 0, reading{lag: lag}); !ok || w != tc.want {
+				t.Errorf("witnessOf = %q, %v; want %q", w, ok, tc.want)
+			}
+		})
+	}
+}
+
+// TestTwoCatchUps is TestOutage's outage on a network that let the device
+// through at minute 180.5 for batches 60 to 120 only, then dropped it
+// again, the uploader failing every four minutes, until minute 200.5, when
+// the rest went: the device reads both catch-ups offline, as the server
+// does from what DESIGN 6.5's rule (g) reveals (internal/server/witness).
+func TestTwoCatchUps(t *testing.T) {
+	const lag = 900_000
+	var sealed, got []float64
+	for m := 1; m <= 240; m++ {
+		sealed = append(sealed, float64(m))
+		switch {
+		case m >= 60 && m <= 120:
+			got = append(got, 180.5)
+		case m >= 121 && m <= 200:
+			got = append(got, 200.5)
+		default:
+			got = append(got, float64(m)+0.05)
+		}
+	}
+	ix := indexOf(t, sealed, got)
+	s := saved{}
+	for m := 60.0; m <= 200; m += 4 {
+		ms := at(0) + int64(m*60_000)
+		// The catch-up at 180.5 got through, so the failure after it opens
+		// a span of its own.
+		s.noteFailure(ms, ms, len(s.Offline) > 0 && m != 184)
+	}
+	if len(s.Offline) != 2 {
+		t.Fatalf("the failures make %d spans, not two", len(s.Offline))
+	}
+	tests := []struct {
+		name   string
+		minute int
+		want   event.Witness
+	}{
+		{"a minute of the first catch-up is offline", 119, event.Offline},
+		{"a minute of the second catch-up is offline", 125, event.Offline},
+		{"a minute of the second catch-up that a submission of minutes 170 to 180 holds is offline", 170, event.Offline},
+		{"a minute whose batch reached the server within the lag of its end is witnessed", 190, event.Witnessed},
+		{"a minute after the server came back is witnessed", 210, event.Witnessed},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w, ok := witnessOf(ix, at(tc.minute), 0, reading{lag: lag, offline: s.Offline})
 			if !ok || w != tc.want {
 				t.Errorf("witnessOf = %q, %v; want %q", w, ok, tc.want)
 			}

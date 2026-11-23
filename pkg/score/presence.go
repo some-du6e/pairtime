@@ -15,7 +15,8 @@ import (
 // presence. Every slot from the one holding the first record on is
 // derived, up to the last one the samples decide. On a device that never
 // samples, such as a server with no desktop, whole minutes are derived
-// instead, from the one holding the first record to the one holding now
+// instead, from the one holding the first record, or the earliest lead a
+// relay.message can open if that is earlier, to the one holding now
 // (presence.live).
 type Slot struct {
 	// Start is the slot's start in Unix milliseconds, on :00, :15, :30 or
@@ -185,6 +186,23 @@ func liveUnknown(recs []event.Event) bool {
 	return live
 }
 
+// earliestLead returns the earliest time a relayed lead can start for the
+// relay.message records in recs, COMPOSE_MAX_S before the earliest stamp
+// of those that can open one, and whether there is one. Those are the
+// records of declared none written at most RELAY_SEEN_LAG_S after their
+// stamps: any other pairs with nothing, or gives its prompt the app's
+// declaration, and opens no lead (SM 2.2 rule 9, 2.3).
+func earliestLead(r rules, recs []event.Event) (int64, bool) {
+	from, ok := int64(math.MaxInt64), false
+	for _, e := range recs {
+		m, isRelay := e.Data.(*event.RelayMessage)
+		if isRelay && m.Declared == event.RelayDeclaredNone && e.T-m.SentAt <= r.relaySeenLag {
+			from, ok = min(from, m.SentAt-r.composeMax), true
+		}
+	}
+	return from, ok
+}
+
 func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *presence {
 	p := &presence{r: r}
 	if len(recs) == 0 {
@@ -294,7 +312,19 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 	// included: relayed anchors credit them, and SM 5.2's codes for a live
 	// slot whose presence is unknown fill the rest
 	// (testdata/timelines/relayed). What it derives past now is pending.
+	//
+	// The app starts the run that takes a message, its session.start
+	// included, only after the message's stamp, and the message's relayed
+	// lead ends at the stamp, up to COMPOSE_MAX_S after it starts (SM 2.3).
+	// So the slots start no later than the minute holding the earliest lead
+	// a relay.message in recs can open, still within BUCKET_TTL_S before
+	// now: a state that holds nothing older, a fresh one or the agent's
+	// window after a quiet night, then derives the whole lead, as one
+	// holding every record does.
 	if p.live = liveUnknown(recs); p.live {
+		if from, ok := earliestLead(r, recs); ok {
+			p.first = max(floorSlot(ref-r.bucketTTL), min(p.first, from))
+		}
 		p.first = floorMinute(p.first)
 		last = floorMinute(now) + MinuteMS - event.SlotMS
 	}

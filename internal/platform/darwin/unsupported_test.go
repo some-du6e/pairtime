@@ -7,6 +7,7 @@ package darwin
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -36,6 +37,13 @@ func TestUnsupported(t *testing.T) {
 				l := NewLoop(nopHandler{})
 				err := l.Run(context.Background())
 				<-l.Ready()
+				return err
+			},
+		},
+		{
+			name: "LoopbackOwner off macOS is unsupported",
+			call: func() error {
+				_, _, err := LoopbackOwner(netip.MustParseAddrPort("127.0.0.1:54321"), netip.MustParseAddrPort("127.0.0.1:7247"))
 				return err
 			},
 		},

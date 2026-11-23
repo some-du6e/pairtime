@@ -181,13 +181,18 @@
 //     reading: it resolves no slot, qualifies no other reading, ends no
 //     returned run and brackets no lookup.
 //   - Relayed reading (SM 2.4): a relayed prompt resets its session's
-//     bucket at pickup, and from that reset the bucket holds at most
-//     UNKNOWN_BUCKET_MAX_S. Output fills it, an automated turn's included.
-//     It drains, as READ and never SUP, from one of the session's stops
-//     until the thread's next relayed anchor is sent or the session's next
-//     turn starts, when that anchor is sent within READ_HORIZON_S after the
-//     stop and pairs within PENDING_WINDOW_S - 60 s of it. That anchor
-//     vouches for the reading and gives it its labels.
+//     bucket to its base at pickup, as any person's prompt does. In a
+//     session an agent app's server runs, relayed reading draws on at most
+//     UNKNOWN_BUCKET_MAX_S of the bucket from the session's first fill on,
+//     whatever reset came last, while local reading there keeps
+//     BUCKET_MAX_S (bucket.capped). Output fills it, an automated turn's
+//     included. It drains, as READ and never SUP, from one of the session's
+//     stops until the relayed anchor that vouches for the stop is sent or
+//     the session's next turn starts. That anchor is the first of the
+//     thread's relayed anchors sent after the stop among those that pair
+//     within PENDING_WINDOW_S - 60 s of it, and it vouches only when it is
+//     sent within READ_HORIZON_S after the stop. It gives the reading its
+//     labels.
 //   - Relayed credit comes after every other candidate, in a slot of any
 //     presence but one the machine slept through, with no focus or
 //     keyboard test (SM 2.3, 2.7). Between two relayed sessions SM 2.7's
@@ -197,7 +202,10 @@
 //     credits is level C with via_relay, and Submission.Totals counts them
 //     in via_relay_s.
 //   - A device that never samples while its agent runs, such as a server,
-//     derives whole minutes (presence.live), and an uncredited second
+//     derives whole minutes (presence.live), from its first record's
+//     minute or, when it is earlier, the minute of the earliest lead a
+//     relay record can open, COMPOSE_MAX_S before its stamp, since the app
+//     starts a message's run after the stamp. An uncredited second
 //     there takes SM 5.2's codes for a live slot whose presence is
 //     unknown: X.bucket_cap where only the 120 s cap kept a session from
 //     reading, else X.agent_only while a turn a person started runs, a
@@ -233,11 +241,8 @@
 //     no next relayed anchor for that stop: it neither vouches for the
 //     reading nor ends it. So a pairing that comes when the stop's minute
 //     may already be final changes nothing about the reading after the
-//     stop. Replay in testdata/timelines/relayed/relayed.py takes the
-//     first relayed anchor sent after the stop however late it pairs, and
-//     leaves the stop no reading when it pairs past the deadline. The two
-//     differ only when a thread's earlier message pairs after a later one,
-//     which T3 Code's queue, run in order, doesn't do.
+//     stop. SM 2.4 says so, and Replay in
+//     testdata/timelines/relayed/relayed.py follows it.
 //   - The rule between two relayed sessions reads "latest relayed message"
 //     as the latest relayed anchor sent at or before the second, and
 //     "next relayed anchor's lead" as the lead of the session's anchor sent
@@ -257,6 +262,10 @@
 //   - X.bucket_cap for relayed reading counts what UNKNOWN_BUCKET_MAX_S held
 //     back while it and the bucket stay within BUCKET_MAX_S, one second for
 //     each session reading in a second nothing credited, as Replay does.
+//     For local reading it counts, as anywhere else, what BUCKET_MAX_S
+//     evicted.
+//   - A rollup counts each relayed anchor as a relayed message, apart from
+//     the anchor counts by kind (SM 5.4).
 //
 // # Final and pending
 //
