@@ -104,13 +104,13 @@ func TestHeadlessLoop(t *testing.T) {
 		// In the next two, the first turn's run ends BUCKET_TTL_S after its
 		// last tool call, before the window's start once the agent records
 		// again, so the window slides past the sampler's last records while
-		// the minutes before them are still pending. In those minutes falls
-		// the lead of a message sent from T3 Code's web client while the
-		// machine was away, which its server runs once it is back (relayedAt):
-		// a slot the machine slept through refuses the lead, and a
-		// never-sampling device's slot would realize it, so the minute has
-		// credit only if the carry wrongly drops the sampler's last record.
-		{"a sampler silence longer than Lookback that ends with a sample before any record the agent stamps, as when the agent starts again ten hours later, keeps the carried sample's reach: the hours between are asleep, as one Step reads them, and refuse a relayed lead",
+		// the minutes before them are still pending. A turn a log reader
+		// reports runs through those minutes (logTurn), with no record the
+		// agent stamps itself, so its agent time gives them buckets: asleep,
+		// their seconds are X.absent, and as a never-sampling device's they
+		// would take SM 5.2's codes, which they do only if the carry wrongly
+		// drops the sampler's last record.
+		{"a sampler silence longer than Lookback that ends with a sample before any record the agent stamps, as when the agent starts again ten hours later, keeps the carried sample's reach: the hours between are asleep, as one Step reads them, a log reader's turn running in them included",
 			func(t *testing.T) [][]event.Event {
 				first := hookTurn(t, hookAt, hourTools())
 				again := hookAt + 10*hourMS
@@ -118,10 +118,10 @@ func TestHeadlessLoop(t *testing.T) {
 				idle := 585.0
 				woke := sampleAt(first, again, "01a1fb1e-5318-78a1-a7f0-000000000001",
 					&event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle})
-				run := append([]event.Event{woke}, relayedAt(t, again-30_000, woke)...)
+				run := append(logTurn(t, again-40*minuteMS, woke), woke)
 				return [][]event.Event{first, append(run, second...)}
 			}},
-		{"a suspend longer than Lookback keeps the carried suspend's reach once the window slides past it: the ten hours the machine slept are asleep, as one Step reads them, and refuse a relayed lead",
+		{"a suspend longer than Lookback keeps the carried suspend's reach once the window slides past it: the ten hours the machine slept are asleep, as one Step reads them, a log reader's turn dated in them included",
 			func(t *testing.T) [][]event.Event {
 				first := hookTurn(t, hookAt, hourTools())
 				last := first[len(first)-1].T
@@ -131,8 +131,8 @@ func TestHeadlessLoop(t *testing.T) {
 				woke := sampleAt(first, resume, "01a1fb1e-5318-78a1-a7f0-000000000003",
 					&event.OSPower{Op: event.PowerResume})
 				second := rekeyed(hookTurn(t, resume+70_000, hourTools()), 2)
-				run := append(append(first, asleep, woke), relayedAt(t, resume-30_000, woke)...)
-				return [][]event.Event{append(run, second...)}
+				run := append(append(first, asleep), logTurn(t, resume-40*minuteMS, woke)...)
+				return [][]event.Event{append(append(run, woke), second...)}
 			}},
 	}
 	for _, c := range cases {
@@ -237,55 +237,44 @@ func sampleAt(evs []event.Event, ts int64, id string, d event.Payload) event.Eve
 	panic("no presence sample to copy")
 }
 
-// relayedAt returns testdata/timelines/relayed/t3-away's first message as
-// records of a session T3 Code's server starts here: the session's start,
-// its prompt and the relay.message that pairs with it, written a second,
-// three and five seconds after at, the time of ref, with the message
-// stamped at sent. They take ref's boot and monotonic clock, as records of
-// the same run. So a message sent before at, while the machine was away,
-// gets its relayed lead before at, which a slot the machine slept through
-// refuses (SM 2.3).
-func relayedAt(t *testing.T, sent int64, ref event.Event) []event.Event {
+// logTurn returns a turn of a session a log reader reports, with nothing
+// the agent stamps itself: 6.4's prompt and an agent output five minutes
+// later, both read from a transcript, the prompt at at, in a session and
+// turn of their own. Its run goes on BUCKET_TTL_S past that output, so it
+// has agent time in the minutes after whatever their presence, and no
+// record of it cuts a sample's reach. The records take ref's boot and
+// monotonic clock, as records of the same run.
+func logTurn(t *testing.T, at int64, ref event.Event) []event.Event {
 	t.Helper()
-	root, err := timelines.Root()
-	if err != nil {
-		t.Fatal(err)
-	}
-	f, err := timelines.Load(root, "relayed/t3-away")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var start, prompt, relay *event.Event
-	for i := range f.Events {
-		e := &f.Events[i]
+	var prompt, output *event.Event
+	evs := fixture(t, "6.4").Events
+	for i := range evs {
+		e := &evs[i]
 		switch d := e.Data.(type) {
-		case *event.SessionStart:
-			start = cmpOr(start, e)
-		case *event.RelayMessage:
-			if relay == nil && d.Prompt != "" {
-				relay = e
+		case *event.PromptSubmit:
+			prompt = cmpOr(prompt, e)
+		case *event.AgentOutput:
+			if e.Via == event.ViaLog && !d.IsFinal {
+				output = cmpOr(output, e)
 			}
 		}
 	}
-	for i := range f.Events {
-		if relay != nil && f.Events[i].EventID == relay.Data.(*event.RelayMessage).Prompt {
-			prompt = &f.Events[i]
-		}
-	}
-	if start == nil || prompt == nil || relay == nil {
-		t.Fatal("t3-away has no session start, or no message that names its prompt")
+	if prompt == nil || output == nil {
+		t.Fatal("6.4 has no prompt, or no agent output a log reader read")
 	}
 	clone := func(tmpl *event.Event, ts int64, n int) event.Event {
 		e := *tmpl
-		e.EventID = fmt.Sprintf("01a1fb1e-5318-78a1-a7f2-%012x", n)
+		e.EventID = fmt.Sprintf("01a1fb1e-5318-78a1-a7f3-%012x", n)
 		e.BootID, e.Mono, e.T = ref.BootID, ref.Mono+ts-ref.T, ts
+		e.Source, e.Via, e.SessionKey = event.SourceLog, event.ViaLog, e.SessionKey+"l"
 		return e
 	}
-	s, p, r := clone(start, ref.T+1000, 1), clone(prompt, ref.T+3000, 2), clone(relay, ref.T+5000, 3)
-	m := *relay.Data.(*event.RelayMessage)
-	m.SentAt, m.Prompt = sent, p.EventID
-	r.Data = &m
-	return []event.Event{s, p, r}
+	p, o := clone(prompt, at, 1), clone(output, at+5*minuteMS, 2)
+	pd, od := *prompt.Data.(*event.PromptSubmit), *output.Data.(*event.AgentOutput)
+	pd.TurnKey += "l"
+	od.TurnKey += "l"
+	p.Data, o.Data = &pd, &od
+	return []event.Event{p, o}
 }
 
 // TestCarryReach checks the carry against pkg/score's reach rule (SM 2.1):
@@ -302,7 +291,7 @@ func relayedAt(t *testing.T, sent int64, ref event.Event) []event.Event {
 // that starts the sampler again, an unlock and the sample at its time
 // included. TestHeadlessLoop compares minute buckets, and a minute with no
 // credit and no agent time has none, which is why its carry cases need a
-// relayed lead to tell those slots apart.
+// turn running in the minutes in question to tell those slots apart.
 func TestCarryReach(t *testing.T) {
 	table := testTable()
 	turn := hookTurn(t, hookAt, hourTools())
