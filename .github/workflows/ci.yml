@@ -292,6 +292,51 @@ jobs:
             exit 1
           fi
 
+      - name: The agent outlives the scope that started it, under a systemd user manager
+        if: ${{ !cancelled() }}
+        # WP-HL1: on Linux an agent that a hook or agent --detach starts runs
+        # in a systemd scope of its own (cmd/pairtime/detach_linux.go), so
+        # stopping the scope of the session that started it, as T3 Code does
+        # at a session's end, leaves it running. TestAgentOutlivesScope needs
+        # the runner user's own systemd manager, which lingering keeps running
+        # whether or not a session holds it, and go test above skips it
+        # without PAIRTIME_TEST_USER_MANAGER, so this step fails unless it ran
+        # and passed. When the runner leaves XDG_RUNTIME_DIR unset, the step
+        # sets it in its own shell only: set for every step, it would move
+        # where the other tests' agents put their sockets and look for the
+        # session bus.
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+          for _ in $(seq 1 100); do
+            if [ -S "$XDG_RUNTIME_DIR/systemd/private" ]; then break; fi
+            sleep 0.1
+          done
+          systemd-run --version
+          echo "user manager: $(timeout 30 systemctl --user is-system-running --wait 2>&1 || true)"
+          # On a runner image whose user manager doesn't work, this fails
+          # with systemd's own words, and a manager that hangs fails it after
+          # a minute rather than the job's whole budget.
+          timeout 60 systemd-run --user --scope --quiet true
+          set +e
+          out=$(PAIRTIME_TEST_USER_MANAGER=1 go test -count=1 -v -run '^TestAgentOutlivesScope$' ./cmd/pairtime 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          if [ "$code" -ne 0 ] || ! grep -q -- '--- PASS: TestAgentOutlivesScope ' <<<"$out" || grep -q -- '--- SKIP' <<<"$out"; then
+            echo "::error::TestAgentOutlivesScope didn't run and pass under the runner user's systemd manager"
+            exit 1
+          fi
+
+      - name: cmd/pairtime's Windows tests compile
+        if: ${{ !cancelled() }}
+        # go vet and go test above build for Linux, so they never compile a
+        # *_windows_test.go file, and platform.yml, which runs those tests,
+        # waits for a scarce Windows runner. This compiles the command's
+        # tests for Windows without running them, so a type error in them
+        # fails here first.
+        run: GOOS=windows GOARCH=amd64 go test -c -o "$RUNNER_TEMP/pairtime-windows.test.exe" ./cmd/pairtime
+
       - name: Module licenses
         if: ${{ !cancelled() }}
         run: |
