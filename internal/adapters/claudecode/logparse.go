@@ -93,7 +93,8 @@ const (
 // walk's start instead: Claude Code can write a session's first entries
 // before its first hook call reaches the agent, as while the agent starts,
 // with room for a slow one. A call the spool delivered cancels nothing
-// (sessionStart).
+// (sessionStart). A session's first start waits longer while the host
+// holds it for a procs tie (LogHoldStart).
 const startGrace = 90_000
 
 // maxToolWait is how long after its use a tool use waits for its result
@@ -148,7 +149,16 @@ type txSession struct {
 	// (session.nativeAt), 0 for never: a call the spool delivered doesn't
 	// count. It stays when the adapter forgets the session's calls.
 	nativeAt int64
-	seen     uint64
+	// opened says a user entry of the session's main conversation came
+	// that isn't one Claude Code wrote for the model (isMeta), and cleared
+	// that the first such was the /clear command, which starts the new
+	// session in the process of the one it clears (LogCleared).
+	opened, cleared bool
+	// hold is how long past startGrace the host holds the session's first
+	// session.start while its procs tie waits, in ms (LogHoldStart), saved
+	// with the rest, so the start a restart's replay makes waits as long.
+	hold int64
+	seen uint64
 }
 
 // txFile is what the reader remembers of one transcript file.
@@ -270,6 +280,9 @@ type pendingStart struct {
 	env     event.Envelope
 	start   event.SessionStart
 	token   string
+	// counted says the entry's folder counts (txState.Ignored), so the
+	// start stays whatever line resolves it (adapters.Record.Counted).
+	counted bool
 	// replay says a Rewind's replayed line stated it, as a Rewind reads
 	// the old lines of a file the reader has no memory of again: once the
 	// session's hooks come, it goes, however old its entry (resolveStart).
@@ -583,7 +596,8 @@ func (l *logLine) sessionStart(e *entry, sid string) {
 	if started {
 		kind = event.StartResume
 	}
-	ps := &pendingStart{session: sid, at: l.raw.Log.Offset, env: l.env(e.t, sid), token: tok, replay: rewound,
+	ps := &pendingStart{session: sid, at: l.raw.Log.Offset, env: l.env(e.t, sid), token: tok,
+		counted: !l.f.st.Ignored, replay: rewound,
 		start: event.SessionStart{StartKind: kind, Entrypoint: ep, ParentClass: event.ParentUnknown}}
 	if isKey(e.PermissionMode) {
 		ps.start.PermissionMode = e.PermissionMode
@@ -596,28 +610,29 @@ func (l *logLine) sessionStart(e *entry, sid string) {
 	}
 }
 
-// resolveStart writes the pending session.start once startGrace has
-// passed since its entry with no via-hook call of its session, and drops it
-// when one came that the entry is no older than (hookedAt), or one came at
-// all to a start a replay made. One written after its entry's line is
-// dated a millisecond before the entry, so it sorts before the entry's
-// other records (pkg/score orders records by time, then by when they were
-// written).
+// resolveStart writes the pending session.start once startGrace, and the
+// hold a procs tie asks for (LogHoldStart), have passed since its entry
+// with no via-hook call of its session, and drops it when one came that
+// the entry is no older than (hookedAt), or one came at all to a start a
+// replay made. One written after its entry's line is dated a millisecond
+// before the entry, so it sorts before the entry's other records
+// (pkg/score orders records by time, then by when they were written).
 func (l *logLine) resolveStart() {
 	for len(l.f.pend.starts) > 0 {
 		ps := l.f.pend.starts[0]
 		ls := l.a.logSession(ps.session)
 		switch {
 		case ls.hookedAt(ps.env.T), ps.replay && ls.nativeAt > 0:
-		case l.raw.Arrival.T-ps.env.T >= startGrace:
-			ls.started, ls.token = true, ps.token
+		case l.raw.Arrival.T-ps.env.T >= startGrace+ls.hold:
+			ls.started, ls.token, ls.hold = true, ps.token, 0
 			env := ps.env
 			if l.raw.Log.Offset != ps.at || l.raw.Log.Idle {
 				env.T--
 				env.Mono = max(env.Mono-1, 0)
 			}
 			st := ps.start
-			l.add(logKey(ps.at, "start"), env, &st, nil)
+			r := l.add(logKey(ps.at, "start"), env, &st, nil)
+			r.Token, r.Counted = ps.token, ps.counted
 		default:
 			// It waits, and the ones after it, in their order.
 			return
@@ -653,6 +668,13 @@ func (l *logLine) user(e *entry, sid string) {
 		return
 	}
 	text := m.Content.text()
+	if sid != "" && !e.IsMeta {
+		if ls := l.a.logSession(sid); !ls.opened {
+			ls.opened = true
+			cmd, ok := commandText(text)
+			ls.cleared = ok && (cmd == "/clear" || strings.HasPrefix(cmd, "/clear "))
+		}
+	}
 	switch {
 	case e.TurnOrigin != nil || e.PromptSource != nil:
 		// A prompt, whatever its text says: Claude Code labels no
@@ -1208,18 +1230,74 @@ func (a *Adapter) namedSessions() map[string]bool {
 
 // LogPlace returns the folder a transcript line ran in and its session id
 // (adapters.LogReader).
-func (a *Adapter) LogPlace(raw adapters.RawRecord) (dir, session string) {
+func (a *Adapter) LogPlace(raw adapters.RawRecord) (dir, session string, at int64) {
 	if raw.Source != adapters.SourceLog || raw.Log == nil || raw.Log.Idle || raw.Log.TooLong || raw.Log.DecodeErr != nil {
-		return "", ""
+		return "", "", 0
 	}
 	e, ok := raw.Log.Entry.(*entry)
 	if !ok || e == nil {
 		var err error
 		if e, err = decodeEntry(raw.Payload); err != nil {
-			return "", ""
+			return "", "", 0
 		}
 	}
-	return e.CWD, e.SessionID
+	return e.CWD, e.SessionID, e.t
+}
+
+// LogHooked reports whether a hook call of session sid came through the
+// walk, as the reader remembers it (adapters.LogReader): from that call's
+// session.start on, the hooks report the session, as nativeAt says. Calls
+// that all came through the spool don't make a session one, as they don't
+// keep out the reader's session.start (sessionStart).
+func (a *Adapter) LogHooked(sid string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if s := a.sessions[sid]; s != nil && s.hookStart {
+		return true
+	}
+	ls := a.logSessions[sid]
+	return ls != nil && ls.nativeAt > 0
+}
+
+// LogCleared reports whether the log of session sid opened with the /clear
+// command, as Claude Code starts the session it clears to, in the process
+// of the one it clears (adapters.LogReader).
+func (a *Adapter) LogCleared(sid string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ls := a.logSessions[sid]
+	return ls != nil && ls.cleared
+}
+
+// LogStarted reports whether the reader wrote a session.start for session
+// sid, or holds one that waits (adapters.LogReader).
+func (a *Adapter) LogStarted(sid string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if ls := a.logSessions[sid]; ls != nil && ls.started {
+		return true
+	}
+	for _, f := range a.files {
+		for _, ps := range f.pend.starts {
+			if ps.session == sid {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// LogHoldStart holds the first session.start of session sid, while it
+// waits, for up to past ms beyond startGrace, and lets it go then with 0
+// (adapters.LogReader). A session whose first start is written gets no
+// hold, so a start at a change of its token waits startGrace alone, and
+// nor does one the reader has no memory of, which has no start waiting.
+func (a *Adapter) LogHoldStart(sid string, past int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if ls := a.logSessions[sid]; ls != nil && !ls.started {
+		ls.hold = max(past, 0)
+	}
 }
 
 // LogIgnored reports whether the last entry of file that named a folder

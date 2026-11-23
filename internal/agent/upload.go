@@ -504,6 +504,7 @@ func (a *agent) publishWriter(w *ledger.Writer) {
 func (a *agent) reloadConfig() {
 	a.loadConfig(false)
 	a.noteMode()
+	a.applyPrivacy()
 	if u := a.upload.Load(); u != nil {
 		u.Wake()
 	}

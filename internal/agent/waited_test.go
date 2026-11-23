@@ -1591,7 +1591,8 @@ func TestLogRecordsByTheRunClock(t *testing.T) {
 	// stretch notes a local-only stretch that ends now, by w's clock, a
 	// minute after the chain began, so the lines it is about are dated
 	// after that: the writer holds a log record dated before the chain began
-	// to when it took it in (ledger.Writer.lookback).
+	// that carries no reading of a run's clock, as a line read after a
+	// suspend, to when it took it in (ledger.Writer.lookback).
 	stretch := func(w *ledger.Writer) time.Time {
 		later = time.Minute
 		w.NoteMode(false)

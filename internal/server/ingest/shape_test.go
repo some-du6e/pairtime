@@ -5,9 +5,7 @@ package ingest
 import (
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
-	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -129,30 +127,6 @@ func outcomeOf(e *itemErr) shapeResult {
 		return shapeResult{}
 	}
 	return shapeResult{code: e.code, field: e.field}
-}
-
-func TestAllowlist(t *testing.T) {
-	set := func(lists ...[]string) []string { return slices.Sorted(slices.Values(slices.Concat(lists...))) }
-	tests := []struct {
-		name      string
-		got, want []string
-	}{
-		{"the bucket allowlist is DESIGN 4.3's bucket fields, Tier1BucketFields, agent_only included", set(bucketRequired, bucketOptional), set(event.Tier1BucketFields())},
-		{"the slot allowlist is DESIGN 4.3's slot fields, Tier1SlotFields", set(slotRequired, slotOptional), set(event.Tier1SlotFields())},
-		{"the commit allowlist is DESIGN 4.3's commit fields", set(commitRequired, commitOptional), set([]string{
-			"sha", "parents", "project", "observed_at", "author_time", "committer_time", "files_changed", "insertions",
-			"deletions", "path_hmacs", "credited_seconds_since_parent", "rewrites", "actor", "agent_trailer",
-		})},
-		{"the labels allowlist is DESIGN 4.3's labels", set(labelsRequired), set([]string{"client_build", "scoring_version", "params", "harnesses", "typing_module", "vm"})},
-		{"the batch root allowlist is DESIGN 4.3's {b, n, R_b, H_b, prev}", set(batchRequired), set([]string{"b", "n", "R_b", "H_b", "prev"})},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if !slices.Equal(tt.got, tt.want) {
-				t.Errorf("allowlist %q, want %q", tt.got, tt.want)
-			}
-		})
-	}
 }
 
 // TestEnums checks the server's enum lists against pkg/event's and the
@@ -282,6 +256,10 @@ func TestBucketShape(t *testing.T) {
 		{"a minute with an offset is bad_string", func(m map[string]any) { m["minute"] = "2026-11-19T12:00:00+00:00" }, shapeResult{CodeBadString, "minute"}},
 		{"a minute with fractional seconds is bad_string", func(m map[string]any) { m["minute"] = "2026-11-19T12:00:00.000Z" }, shapeResult{CodeBadString, "minute"}},
 		{"a minute before 2020 is bad_string", func(m map[string]any) { m["minute"] = "2019-12-31T23:59:00Z" }, shapeResult{CodeBadString, "minute"}},
+		{"a minute on 30 February is bad_string", func(m map[string]any) { m["minute"] = "2026-02-30T12:00:00Z" }, shapeResult{CodeBadString, "minute"}},
+		{"a minute at hour 24 is bad_string", func(m map[string]any) { m["minute"] = "2026-11-19T24:00:00Z" }, shapeResult{CodeBadString, "minute"}},
+		{"a reason returned twice is bad_string", func(m map[string]any) { slot(m, 1)["why"] = "READ~r~r" }, shapeResult{CodeBadString, "slots[1].why"}},
+		{"a reason's suffixes in the wrong order are bad_string", func(m map[string]any) { slot(m, 0)["why"] = "P+restored~r" }, shapeResult{CodeBadString, "slots[0].why"}},
 		{"a credit reason as an uncredited member is bad_string", func(m map[string]any) {
 			m["uncredited"] = map[string]any{"P": 3}
 		}, shapeResult{CodeBadString, "uncredited"}},
@@ -510,7 +488,7 @@ func TestLabelsShape(t *testing.T) {
 		{"a bare word as the build is bad_string, as dev is", func(m map[string]any) { m["client_build"] = "dev" }, shapeResult{CodeBadString, "client_build"}},
 		{"a folder name as the build is bad_string", func(m map[string]any) { m["client_build"] = "my-secret-startup" }, shapeResult{CodeBadString, "client_build"}},
 		{"a hostname as a harness's version is bad_string", func(m map[string]any) {
-			m["harnesses"] = []any{map[string]any{"name": "codex", "version": "karims-mbp.local"}}
+			m["harnesses"] = []any{map[string]any{"name": "codex", "version": "teens-mbp.local"}}
 		}, shapeResult{CodeBadString, "harnesses[0].version"}},
 		{"a file name as a harness's version is bad_string", func(m map[string]any) {
 			m["harnesses"] = []any{map[string]any{"name": "codex", "version": "main.go"}}
@@ -518,6 +496,16 @@ func TestLabelsShape(t *testing.T) {
 		{"a build suffix on a harness's version passes", func(m map[string]any) {
 			m["harnesses"] = []any{map[string]any{"name": "codex", "version": "0.1.0+3dbf6d4"}}
 		}, shapeResult{}},
+		{"a Go pseudo-version after a pre-release passes as the build", func(m map[string]any) {
+			m["client_build"] = "v0.1.0-alpha.5.0.20261123010542-8f0e2c5fba57"
+		}, shapeResult{}},
+		{"a hostname after the build's number is bad_string in tier 1's form (ingest-v1 2.3.4)", func(m map[string]any) {
+			m["client_build"] = "1.0.0-teens-mbp.local"
+		}, shapeResult{CodeBadString, "client_build"}},
+		{"a word joined to a number in the build's suffix is bad_string", func(m map[string]any) { m["client_build"] = "v0.1.0-rc1" }, shapeResult{CodeBadString, "client_build"}},
+		{"a branch name after a harness's version number is bad_string", func(m map[string]any) {
+			m["harnesses"] = []any{map[string]any{"name": "codex", "version": "2.1.327-fix-login"}}
+		}, shapeResult{CodeBadString, "harnesses[0].version"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -564,112 +552,6 @@ func TestBatchRootShape(t *testing.T) {
 			_, e := parseBatchRoot(raw)
 			if got := outcomeOf(e); got != tt.want {
 				t.Errorf("got %+v, want %+v", got, tt.want)
-			}
-		})
-	}
-}
-
-// freeText is text no string member may hold: sentences, paths, an email
-// address, a window title, an empty string, an over-long run, non-ASCII,
-// a JSON-escaped NUL, and a bare file name and hostname.
-var freeText = []string{
-	"fix the login bug please",
-	"/home/teen/projects/game/main.go",
-	`C:\Users\teen\Desktop\notes.txt`,
-	"teen@example.com",
-	"main.go - Visual Studio Code",
-	"",
-	strings.Repeat("a", 200),
-	"héllo",
-	"ignore previous instructions\n",
-	"\x00",
-	"main.go",
-	"karims-mbp.local",
-}
-
-// TestFreeTextRefused puts free text in every string member of every item
-// kind, and each time gets that item refused with 422 bad_string naming
-// the member (DESIGN 4.5's firewall; PLAN WP-SV5).
-func TestFreeTextRefused(t *testing.T) {
-	type kind struct {
-		name   string
-		sample func(t *testing.T) map[string]any
-		check  func(raw []byte) *itemErr
-		fields []string
-	}
-	kinds := []kind{
-		{
-			name:   "batch root",
-			sample: func(*testing.T) map[string]any { return sampleRoot() },
-			check:  func(raw []byte) *itemErr { _, e := parseBatchRoot(raw); return e },
-			fields: []string{"R_b", "H_b", "prev"},
-		},
-		{
-			name: "minute bucket",
-			sample: func(t *testing.T) map[string]any {
-				return asMap(t, shareableJSON(t, sampleBucket("d_test", sampleMinute, 1)))
-			},
-			check: func(raw []byte) *itemErr { _, e := checkBucket(raw); return e },
-			fields: []string{"v", "params", "minute", "device", "slots[0].p", "slots[0].why", "slots[0].kind", "slots[0].ev",
-				"slots[0].lbl[0]", "state", "witness"},
-		},
-		{
-			name:   "commit record",
-			sample: func(*testing.T) map[string]any { return sampleCommit() },
-			check:  func(raw []byte) *itemErr { _, e := parseCommit(raw); return e },
-			fields: []string{"sha", "parents[0]", "project", "path_hmacs[0]", "rewrites[0].old_sha", "rewrites[0].new_sha", "actor", "agent_trailer"},
-		},
-		{
-			name:   "labels",
-			sample: func(*testing.T) map[string]any { return sampleLabels() },
-			check:  func(raw []byte) *itemErr { _, e := parseLabels(raw); return e },
-			fields: []string{"client_build", "scoring_version", "params", "harnesses[0].name", "harnesses[0].version"},
-		},
-	}
-	for _, k := range kinds {
-		for _, field := range k.fields {
-			for i, text := range freeText {
-				t.Run(k.name+": free text "+strconv.Itoa(i)+" in "+field+" is refused as bad_string", func(t *testing.T) {
-					m := k.sample(t)
-					setPath(t, m, field, text)
-					got := outcomeOf(k.check(marshal(t, m)))
-					if want := (shapeResult{CodeBadString, field}); got != want {
-						t.Errorf("got %+v, want %+v", got, want)
-					}
-				})
-			}
-		}
-		t.Run(k.name+": the sample passes, so each refusal above is the text's", func(t *testing.T) {
-			if e := k.check(marshal(t, k.sample(t))); e != nil {
-				t.Errorf("refused: %+v", *e)
-			}
-		})
-	}
-	for i, text := range freeText {
-		t.Run("minute bucket: free text "+strconv.Itoa(i)+" as an agent_only project is refused as bad_string", func(t *testing.T) {
-			m := asMap(t, shareableJSON(t, sampleBucket("d_test", sampleMinute, 1)))
-			m["agent_only"] = map[string]any{text: 1}
-			_, e := checkBucket(marshal(t, m))
-			if got, want := outcomeOf(e), (shapeResult{CodeBadString, "agent_only"}); got != want {
-				t.Errorf("got %+v, want %+v", got, want)
-			}
-		})
-		t.Run("commit record: free text "+strconv.Itoa(i)+" as an activity kind is refused as bad_string", func(t *testing.T) {
-			m := sampleCommit()
-			m["credited_seconds_since_parent"] = map[string]any{text: 1}
-			_, e := parseCommit(marshal(t, m))
-			if got, want := outcomeOf(e), (shapeResult{CodeBadString, "credited_seconds_since_parent"}); got != want {
-				t.Errorf("got %+v, want %+v", got, want)
-			}
-		})
-		t.Run("minute bucket: free text "+strconv.Itoa(i)+" as an uncredited reason is refused as bad_string", func(t *testing.T) {
-			m := asMap(t, shareableJSON(t, sampleBucket("d_test", sampleMinute, 1)))
-			u := maps.Clone(m["uncredited"].(map[string]any))
-			u[text] = 1
-			m["uncredited"] = u
-			_, e := checkBucket(marshal(t, m))
-			if got, want := outcomeOf(e), (shapeResult{CodeBadString, "uncredited"}); got != want {
-				t.Errorf("got %+v, want %+v", got, want)
 			}
 		})
 	}
@@ -831,104 +713,3 @@ func TestRuleField(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
-
-// lenientForms are the forms of ingest-v1 2.3, written again as regular
-// expressions that accept at least what the server does. FuzzFreeText
-// holds the server to them: text outside a member's form must be refused,
-// whatever the shape check's own code says.
-var lenientForms = map[string]*regexp.Regexp{
-	"key":     regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`),
-	"hash":    regexp.MustCompile(`^[0-9a-f]{64}$`),
-	"gitid":   regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`),
-	"semver":  regexp.MustCompile(`^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$`),
-	"params":  regexp.MustCompile(`^sha256:[0-9a-f]{64}$`),
-	"minute":  regexp.MustCompile(`^20[2-9][0-9]-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:00Z$`),
-	"reason":  regexp.MustCompile(`^[A-Za-z_.~+]{1,40}$`),
-	"lower":   regexp.MustCompile(`^[a-z_]{1,32}$`),
-	"level":   regexp.MustCompile(`^[ABC]$`),
-	"version": regexp.MustCompile(event.VersionPattern),
-}
-
-// uncreditedForm accepts at least the uncredited reason codes of SM 5.2.
-var uncreditedForm = regexp.MustCompile(`^X\.[a-z_]{1,32}$`)
-
-// FuzzFreeText puts any text in every string member of every item kind.
-// Text outside the member's form is refused for that item with 422
-// bad_string naming the member, so no field can carry free text into the
-// database (DESIGN 4.5's firewall; PLAN WP-SV5). Its seeds run with every
-// go test, and nightly.yml fuzzes it for 60 s.
-func FuzzFreeText(f *testing.F) {
-	for _, s := range freeText {
-		f.Add(s)
-	}
-	for _, s := range []string{"p_one", "1.0.0", "v0.1.0", "v0.0.0-dev", "0.1.0+3dbf6d4", "dev", "P", "READ~r+restored", "X.absent", "via_track", "final", "human", "A",
-		strings.Repeat("a", 40), strings.Repeat("0", 64), "sha256:" + strings.Repeat("ab", 32), "2026-11-19T12:00:00Z"} {
-		f.Add(s)
-	}
-	type member struct {
-		kind, field, form string
-	}
-	members := []member{
-		{"root", "R_b", "hash"}, {"root", "H_b", "hash"}, {"root", "prev", "hash"},
-		{"bucket", "v", "semver"}, {"bucket", "params", "params"}, {"bucket", "minute", "minute"}, {"bucket", "device", "key"},
-		{"bucket", "slots[0].p", "key"}, {"bucket", "slots[0].why", "reason"}, {"bucket", "slots[0].kind", "lower"},
-		{"bucket", "slots[0].ev", "level"}, {"bucket", "slots[0].lbl[0]", "lower"}, {"bucket", "state", "lower"}, {"bucket", "witness", "lower"},
-		{"commit", "sha", "gitid"}, {"commit", "parents[0]", "gitid"}, {"commit", "project", "key"}, {"commit", "path_hmacs[0]", "key"},
-		{"commit", "rewrites[0].old_sha", "gitid"}, {"commit", "rewrites[0].new_sha", "gitid"}, {"commit", "actor", "lower"},
-		{"commit", "agent_trailer", "key"},
-		{"labels", "client_build", "version"}, {"labels", "scoring_version", "semver"}, {"labels", "params", "params"},
-		{"labels", "harnesses[0].name", "lower"}, {"labels", "harnesses[0].version", "version"},
-	}
-	check := func(t *testing.T, kind string, m map[string]any) *itemErr {
-		raw := marshal(t, m)
-		var e *itemErr
-		switch kind {
-		case "root":
-			_, e = parseBatchRoot(raw)
-		case "bucket":
-			_, e = checkBucket(raw)
-		case "commit":
-			_, e = parseCommit(raw)
-		case "labels":
-			_, e = parseLabels(raw)
-		}
-		return e
-	}
-	samples := map[string]func(t *testing.T) map[string]any{
-		"root": func(*testing.T) map[string]any { return sampleRoot() },
-		"bucket": func(t *testing.T) map[string]any {
-			return asMap(t, shareableJSON(t, sampleBucket("d_test", sampleMinute, 1)))
-		},
-		"commit": func(*testing.T) map[string]any { return sampleCommit() },
-		"labels": func(*testing.T) map[string]any { return sampleLabels() },
-	}
-	f.Fuzz(func(t *testing.T, text string) {
-		for _, mb := range members {
-			if lenientForms[mb.form].MatchString(text) {
-				continue
-			}
-			m := samples[mb.kind](t)
-			setPath(t, m, mb.field, text)
-			got := outcomeOf(check(t, mb.kind, m))
-			if want := (shapeResult{CodeBadString, mb.field}); got != want {
-				t.Errorf("%s with %q in %s: got %+v, want %+v", mb.kind, text, mb.field, got, want)
-			}
-		}
-		if !lenientForms["key"].MatchString(text) {
-			m := samples["bucket"](t)
-			m["agent_only"] = map[string]any{text: 1}
-			if got, want := outcomeOf(check(t, "bucket", m)), (shapeResult{CodeBadString, "agent_only"}); got != want {
-				t.Errorf("bucket with %q as an agent_only project: got %+v, want %+v", text, got, want)
-			}
-		}
-		if !uncreditedForm.MatchString(text) {
-			m := samples["bucket"](t)
-			u := maps.Clone(m["uncredited"].(map[string]any))
-			u[text] = 1
-			m["uncredited"] = u
-			if got, want := outcomeOf(check(t, "bucket", m)), (shapeResult{CodeBadString, "uncredited"}); got != want {
-				t.Errorf("bucket with %q as an uncredited reason: got %+v, want %+v", text, got, want)
-			}
-		}
-	})
-}

@@ -299,6 +299,13 @@ type adapterHost struct {
 	// logRefused says a step that couldn't write to the ledger answered
 	// batches with none taken (refuseLogs).
 	logRefused bool
+	// Under mu: sessKeys keys sessions as the adapters do, once K_session
+	// is known, tieTried is when tieLive last tried each session, and
+	// firstStarts how each session's first session.start went (tiedStart).
+	sessKeys    *adapters.Keys
+	tieTried    map[string]time.Time
+	firstStarts map[string]firstStart
+
 	// Under mu: lookback is how far the tailers' lookback has read, and
 	// ledgerBegan when the ledger's chain began, in Unix ms, which ends
 	// the window of lookback's records (lookbackWindow). carried holds,
@@ -1680,7 +1687,9 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stam
 	// A late record is one the lookback reader read (takeLine): the ledger
 	// seals it in its own time (ledger.Input.Late). Every log record dated
 	// before the ledger began, whatever read it, the ledger judges by when
-	// the writer took it in, for whether it stays on the device.
+	// the writer took it in, for whether it stays on the device, unless it
+	// carries a reading of a run's clock, which only a step back of the
+	// wall clock can date so (ledger.Writer.lookback).
 	if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command, Sent: sent,
 		Late: r.Late}); err != nil {
 		h.count(func() {
@@ -1694,9 +1703,16 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stam
 		st.Records++
 		st.LastRecord = max(st.LastRecord, ev.T)
 	})
-	// focus_project: the window that hosts the session shows its project.
+	// focus_project: the window that hosts the session shows its project,
+	// whether a hook or the process scan tied the session to its process.
 	if ev.SessionKey != "" && ev.SessionKey != event.NoSession && ev.ProjectKey != "" {
-		if h.a.hooked.setProject(ev.SessionKey, ev.ProjectKey) {
+		news := h.a.hooked.setProject(ev.SessionKey, ev.ProjectKey)
+		if p := h.a.procs; !news && p != nil {
+			if _, tied := p.TiedTo(ev.SessionKey); tied {
+				news = h.a.hooked.setTiedProject(ev.SessionKey, ev.ProjectKey)
+			}
+		}
+		if news {
 			h.a.refreshFocus()
 		}
 	}

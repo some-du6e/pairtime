@@ -460,9 +460,9 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 	}
 }
 
-// harnessOf reads the harness and its version from a record's body, with
-// "" for a version that isn't one (versionForm), and false when the body
-// names no harness the labels can carry.
+// harnessOf reads the harness and its version from a record's body, the
+// version as harnessVersion gives it, and false when the body names no
+// harness the labels can carry.
 func harnessOf(body []byte) (event.Harness, string, bool) {
 	var b struct {
 		E struct {
@@ -473,11 +473,7 @@ func harnessOf(body []byte) (event.Harness, string, bool) {
 	if json.Unmarshal(body, &b) != nil || !knownHarness(b.E.Harness) {
 		return "", "", false
 	}
-	v := b.E.HarnessVersion
-	if !versionForm(v) {
-		v = ""
-	}
-	return b.E.Harness, v, true
+	return b.E.Harness, harnessVersion(b.E.HarnessVersion), true
 }
 
 // Soon makes the uploader send within SoonDelay, as after a prompt or a

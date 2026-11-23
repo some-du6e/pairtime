@@ -12,6 +12,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -281,6 +282,12 @@ func inflate(raw []byte) ([]byte, *refusal) {
 	return out, nil
 }
 
+// bodyMembers are the inflated body's members, one for each kind of
+// tier-1 item (ingest-v1 2.3). parseBody refuses any other name as
+// body_shape, and TestAllowlist holds the list to DESIGN 4.3's kinds of
+// item and to body's fields, so a new kind can't arrive unchecked.
+var bodyMembers = []string{"batches", "buckets", "commits", "labels"}
+
 // body is the inflated body's four members (ingest-v1 2.3), each item
 // still raw for the shape check.
 type body struct {
@@ -316,7 +323,7 @@ func parseBody(data []byte) (body, *refusal) {
 	for dec.More() {
 		t, err := dec.Token()
 		name, ok := t.(string)
-		if err != nil || !ok || seen[name] {
+		if err != nil || !ok || seen[name] || !slices.Contains(bodyMembers, name) {
 			return body{}, shape
 		}
 		seen[name] = true

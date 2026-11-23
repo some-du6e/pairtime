@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -111,9 +112,12 @@ func SetLocal(name string) error {
 
 // edit sets mode, and [server] url when serverURL isn't "", in the file.
 func edit(name string, mode Mode, serverURL string) error {
-	byHand := fmt.Sprintf("set mode = %q", string(mode))
-	if serverURL != "" {
-		byHand += fmt.Sprintf(" and, under [server], url = %q", serverURL)
+	byHand := func(name string) string {
+		s := fmt.Sprintf("set mode = %q", string(mode))
+		if serverURL != "" {
+			s += fmt.Sprintf(" and, under [server], url = %q", serverURL)
+		}
+		return s + " in " + name + " by hand"
 	}
 	return rewrite(name, byHand, func(text string) string { return patch(text, mode, serverURL) }, func(c *Config) {
 		c.Mode = mode
@@ -121,6 +125,18 @@ func edit(name string, mode Mode, serverURL string) error {
 			c.Server.URL = serverURL
 		}
 	})
+}
+
+// SetKeepText sets keep_prompt_text under [privacy] in the config.toml at
+// name, the "keep prompt text" switch (DESIGN 4.4): what `pairtime privacy
+// keep-text off` and `pairtime privacy keep-text on` do. A file with no
+// [privacy] table, as an older pairtime wrote, gets one at its end; any
+// other change, and a file it refuses, are as SetOnline says.
+func SetKeepText(name string, keep bool) error {
+	byHand := func(name string) string {
+		return fmt.Sprintf("set keep_prompt_text = %t under [privacy] in %s by hand, or, if the file has no [privacy] line, add the lines [privacy] and keep_prompt_text = %t at its end", keep, name, keep)
+	}
+	return rewrite(name, byHand, func(text string) string { return patchPrivacy(text, keep) }, func(c *Config) { c.Privacy.TextOff = !keep })
 }
 
 // ShowName turns on the name of the project key in the config.toml at
@@ -146,7 +162,9 @@ func ShowName(name, key, label string) error {
 	case !projectname.ValidLabel(label):
 		return fmt.Errorf("config: %q isn't a name pairtime can show", label)
 	}
-	byHand := fmt.Sprintf("set name = %s and online = true under [projects.%s]", tomlString(label), key)
+	byHand := func(name string) string {
+		return fmt.Sprintf("set name = %s and online = true under [projects.%s] in %s by hand", tomlString(label), key, name)
+	}
 	return rewrite(name, byHand, func(text string) string {
 		return patchProject(text, key, []projectLine{{"name", tomlString(label)}, {"online", "true"}})
 	}, func(c *Config) {
@@ -160,7 +178,9 @@ func HideName(name, key string) error {
 	if !IsProjectKey(key) {
 		return fmt.Errorf("config: %q isn't a project's key", key)
 	}
-	byHand := fmt.Sprintf("set online = false under [projects.%s]", key)
+	byHand := func(name string) string {
+		return fmt.Sprintf("set online = false under [projects.%s] in %s by hand", key, name)
+	}
 	return rewrite(name, byHand, func(text string) string {
 		return patchProject(text, key, []projectLine{{"online", "false"}})
 	}, func(c *Config) {
@@ -190,14 +210,15 @@ var lockWait = 5 * time.Second
 
 // rewrite changes the config.toml at name with change, the text edit, and
 // checks that the file then parses to what it parsed to before with apply
-// done to it, and to nothing else. byHand says what the teen can write
-// instead, when it refuses. It holds editMu, for this process's edits, and
+// done to it, and to nothing else. byHand says what to write by hand in
+// the file it names, for an error. It holds editMu, for this process's
+// edits, and
 // config.lock's lock, for every other pairtime process's, as `pairtime
 // projects show-name` beside the running agent, from its read to its
 // rename, so neither change undoes the other. It also reads the file
 // again just before it replaces it, and starts over from the new text when
 // it changed meanwhile, as an editor's save does, which takes no lock.
-func rewrite(name, byHand string, change func(text string) string, apply func(*Config)) error {
+func rewrite(name string, byHand func(name string) string, change func(text string) string, apply func(*Config)) error {
 	editMu.Lock()
 	defer editMu.Unlock()
 	lock := filepath.Join(filepath.Dir(name), LockName)
@@ -208,7 +229,7 @@ func rewrite(name, byHand string, change func(text string) string, apply func(*C
 		}
 		name = target
 	}
-	byHand += " in " + name + " by hand"
+	hand := byHand(name)
 	release, err := home.LockFile(lock, lockWait)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -216,7 +237,7 @@ func rewrite(name, byHand string, change func(text string) string, apply func(*C
 		// it: the edit goes on, and changes nothing or fails as it would.
 		release = func() error { return nil }
 	case err != nil:
-		return fmt.Errorf("config: pairtime couldn't lock config.toml to change it (%v), so it didn't; try again, or %s", err, byHand)
+		return fmt.Errorf("config: pairtime couldn't lock config.toml to change it (%v), so it didn't; try again, or %s", err, hand)
 	}
 	defer release()
 	for try := 0; ; try++ {
@@ -224,7 +245,7 @@ func rewrite(name, byHand string, change func(text string) string, apply func(*C
 		if err != nil {
 			return err
 		}
-		out, err := edited(string(data), byHand, change, apply)
+		out, err := edited(string(data), hand, change, apply)
 		if err != nil || out == string(data) {
 			return err
 		}
@@ -239,7 +260,7 @@ func rewrite(name, byHand string, change func(text string) string, apply func(*C
 			return home.WriteFile(name, []byte(out))
 		}
 		if try == 2 {
-			return fmt.Errorf("config: config.toml kept changing while pairtime changed it, so it didn't; try again, or %s", byHand)
+			return fmt.Errorf("config: config.toml kept changing while pairtime changed it, so it didn't; try again, or %s", hand)
 		}
 	}
 }
@@ -533,6 +554,71 @@ func tomlString(s string) string {
 	return b.String()
 }
 
+// patchPrivacy rewrites the keep_prompt_text line of [privacy], and adds it
+// where it is missing: just under the [privacy] header, or with a [privacy]
+// table at the end of the file. It finds the table and the switch whatever
+// their upper and lower case, as Parse reads them.
+func patchPrivacy(text string, keep bool) string {
+	nl := "\n"
+	if strings.Contains(text, "\r\n") {
+		nl = "\r\n"
+	}
+	lines := strings.SplitAfter(text, "\n")
+	value := strconv.FormatBool(keep)
+	keyLine := "keep_prompt_text = " + value
+	table := ""
+	done := false
+	header := -1
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(t, "["):
+			table = tableName(t)
+			if strings.EqualFold(table, "privacy") && header < 0 {
+				header = i
+			}
+		case strings.EqualFold(table, "privacy") && !done && isKeyFold(t, "keep_prompt_text"):
+			lines[i] = setBool(line, value, keyLine)
+			done = true
+		}
+	}
+	if !done && header >= 0 {
+		lines = append(lines[:header+1], append([]string{keyLine + nl}, lines[header+1:]...)...)
+		done = true
+	}
+	out := strings.Join(lines, "")
+	if !done {
+		if out != "" && !strings.HasSuffix(out, "\n") {
+			out += nl
+		}
+		out += nl + "[privacy]" + nl + keyLine + nl
+	}
+	return out
+}
+
+// setBool rewrites the value of a key = true or key = false line as
+// setValue does a string's, and writes whole when the old value is
+// anything else.
+func setBool(line, value, whole string) string {
+	body := strings.TrimRight(line, "\r\n")
+	ending := line[len(body):]
+	eq := strings.IndexByte(body, '=')
+	if eq < 0 {
+		return indentOf(line) + whole + ending
+	}
+	start := eq + 1
+	for start < len(body) && (body[start] == ' ' || body[start] == '\t') {
+		start++
+	}
+	for _, old := range []string{"true", "false"} {
+		rest, ok := strings.CutPrefix(body[start:], old)
+		if ok && (rest == "" || rest[0] == ' ' || rest[0] == '\t' || rest[0] == '#') {
+			return body[:start] + value + rest + ending
+		}
+	}
+	return indentOf(line) + whole + ending
+}
+
 // tableName returns the name a [table] header line opens, as written, or
 // "[[...]]" for an array of tables, which never matches a name.
 func tableName(header string) string {
@@ -547,6 +633,14 @@ func tableName(header string) string {
 func isKey(t, key string) bool {
 	rest, ok := strings.CutPrefix(t, key)
 	return ok && strings.HasPrefix(strings.TrimLeft(rest, " \t"), "=")
+}
+
+// isKeyFold is isKey, whatever the upper and lower case of key in t.
+func isKeyFold(t, key string) bool {
+	if len(t) < len(key) || !strings.EqualFold(t[:len(key)], key) {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimLeft(t[len(key):], " \t"), "=")
 }
 
 // indentOf is a line's leading spaces and tabs.

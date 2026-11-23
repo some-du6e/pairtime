@@ -25,10 +25,12 @@
 // times for a child process that had no Input Monitoring. Posting needs a
 // permission of its own, which CGPreflightPostEventAccess reports and the
 // test process had. So a small idle_keys_s shows that a key event reached
-// the session, not that a person pressed a key; DESIGN 6.4 decides what
-// that is worth as keyboard evidence.
+// the session, not that a person pressed a key, and it can only withhold
+// credit: typing seconds, SM 2.2 rules 6 and 7 and typed edits need it,
+// but it never makes an anchor level A, corroborates a side door or lets a
+// headless prompt count (DESIGN 6.4, SM 2.2 rule 4).
 //
-// The same run settles the question SM 1.2 and DESIGN 5.7 left open:
+// The same run settles the question SM 1.2 left open:
 // reading key-down idle needs no Input Monitoring permission, since the
 // child read it without one. The package never asks for a permission. The
 // macOS job in platform.yml records both answers on every run, in the
@@ -73,6 +75,20 @@
 // two tabs of the same app, such as two iTerm2 windows, activates no app,
 // so it produces no event: on macOS, focus is known per app, not per
 // window (WP-FX2's finding). Window titles are never read.
+//
+// # Loopback connections
+//
+// LoopbackOwner finds the process at the client end of a loopback TCP
+// connection to the agent, for the peer-process check (DESIGN 5.2, 5.7;
+// internal/agent/peer; WP-OS13). macOS keeps no table of connections with
+// their processes, so it goes through the socket descriptors of this
+// user's processes with libproc's proc_pidinfo (PROC_PIDLISTFDS) and
+// proc_pidfdinfo (PROC_PIDFDSOCKETINFO), bound through purego from
+// libSystem as proc_pidpath is (WP-OS6). That needs no permission. Of
+// each socket it parses only the kind, the kernel's handle, the addresses,
+// ports and state. The rest of the socket_fdinfo that libproc fills in,
+// which for a Unix-domain socket holds its paths, is dropped unread and
+// never kept, and no descriptor that isn't a socket is read.
 //
 // # What stays on the device
 //
