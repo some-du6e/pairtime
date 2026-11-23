@@ -148,11 +148,22 @@ func (a *agent) sweep(s *sweeps, force bool) {
 			ran = append(ran, store)
 		}
 	}
-	if due(retention.StoreVault) {
-		// While no vault is open, as while the ledger can't open, its
-		// directory is swept without the key, and openLedger waits to open
-		// it until the sweep is done.
-		a.vaultFiles.Lock()
+	// stopping reports whether the agent is stopping, which waits for this.
+	stopping := func() bool {
+		select {
+		case <-s.stop:
+			return true
+		default:
+			return false
+		}
+	}
+	// While no vault is open, as while the ledger can't open, its
+	// directory is swept without the key, and openLedger waits to open it
+	// until the sweep is done. While openLedger is opening it, this waits
+	// for nothing, so an agent that stops meanwhile doesn't wait here for
+	// the ledger's open: the vault stays due, for the look startLedger asks
+	// for once the ledger is open, or the next hourly one.
+	if due(retention.StoreVault) && a.vaultFiles.TryLock() {
 		a.vaultMu.Lock()
 		v := a.vault
 		a.vaultMu.Unlock()
@@ -164,7 +175,7 @@ func (a *agent) sweep(s *sweeps, force bool) {
 			a.vaultFiles.Unlock()
 		}
 	}
-	if w := a.writer.Load(); w != nil && due(retention.StoreLedger) {
+	if w := a.writer.Load(); w != nil && due(retention.StoreLedger) && !stopping() {
 		stores := retention.Stores{Ledger: w, Floor: a.ledgerFloor()}
 		for try := 1; ; try++ {
 			run(retention.StoreLedger, stores)
@@ -180,10 +191,10 @@ func (a *agent) sweep(s *sweeps, force bool) {
 			}
 		}
 	}
-	if a.buckets != nil && due(retention.StoreBuckets) {
+	if a.buckets != nil && due(retention.StoreBuckets) && !stopping() {
 		run(retention.StoreBuckets, retention.Stores{Buckets: a.buckets})
 	}
-	if due(retention.StoreUploads) {
+	if due(retention.StoreUploads) && !stopping() {
 		// The uploader prunes uploads.jsonl while it runs, and appends to
 		// it: none starts while this prunes (startUploader).
 		a.uploadsMu.Lock()
@@ -229,6 +240,9 @@ func (a *agent) sweep(s *sweeps, force bool) {
 func (a *agent) ledgerFloor() uint64 {
 	if !Linked(a.dirs) {
 		return 0
+	}
+	if a.state == nil {
+		return 1 // no place to read, as in an agent a test builds
 	}
 	floor, err := uploader.HeldFrom(a.state, a.dirs.Ledger())
 	if err != nil {

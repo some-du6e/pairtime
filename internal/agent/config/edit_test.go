@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -410,6 +411,38 @@ func TestSetKeepText(t *testing.T) {
 			}
 			if tt.same && !os.SameFile(before, after) {
 				t.Error("config.toml was written again")
+			}
+		})
+	}
+}
+
+// TestSetKeepTextReadOnly runs keep-text on a config.toml in a folder this
+// user can't write, as a link into a read-only dotfiles tree is.
+func TestSetKeepTextReadOnly(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a folder this user can't write")
+	}
+	tests := []struct {
+		name    string
+		keep    bool
+		wantErr bool
+	}{
+		{name: "off in a file that already says so succeeds, since the file says it, though writing it again fails", keep: false},
+		{name: "on in a file that says off fails, since the file can't change", keep: true, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			name := filepath.Join(dir, "config.toml")
+			if err := os.WriteFile(name, []byte("[privacy]\nkeep_prompt_text = false\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dir, 0o500); err != nil {
+				t.Fatal(err)
+			}
+			defer os.Chmod(dir, 0o700)
+			if err := SetKeepText(name, tt.keep); (err != nil) != tt.wantErr {
+				t.Errorf("SetKeepText = %v, want an error: %v", err, tt.wantErr)
 			}
 		})
 	}

@@ -1165,7 +1165,7 @@ func (u *Uploader) sync(c Credentials) bool {
 
 // sweptProblem is what doctor hears while the root that goes next is of a
 // batch the ledger no longer keeps (Uploader.cycle).
-const sweptProblem = `pairtime has stopped uploading, because the server needs a batch this computer's ledger no longer keeps, as after more than 180 days without reaching the server; to upload again, run pairtime logout, then pairtime login`
+const sweptProblem = `pairtime has stopped uploading, because the server needs a batch this computer's ledger no longer keeps, as after the server lost batches it had stored, which a restore from a backup can do; to upload again, run pairtime logout, then pairtime login`
 
 // newDevice ends what doctor hears once this computer can't upload under
 // its device ID any more: after a fork, or the server's device_mismatch.
@@ -1774,7 +1774,7 @@ func (u *Uploader) setProblem(source, msg string) {
 		return
 	}
 	var all []string
-	for _, s := range []string{"login", "local-only", "server", "chain", "receipts", "buckets", "local"} {
+	for _, s := range []string{"login", "local-only", "swept", "server", "chain", "receipts", "buckets", "local"} {
 		if m := u.problems[s]; m != "" {
 			all = append(all, m)
 		}

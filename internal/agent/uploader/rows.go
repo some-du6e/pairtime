@@ -55,7 +55,9 @@ func loadRows(dir string, keep uint64) (*rowIndex, error) {
 	if err != nil {
 		return nil, err
 	}
-	ix := &rowIndex{device: info.DeviceID, created: info.Created.UnixMilli(), base: info.Base}
+	// With no row, as after a sweep that dropped every one, the batch
+	// sealed next links to the head before the base.
+	ix := &rowIndex{device: info.DeviceID, created: info.Created.UnixMilli(), base: info.Base, lastHead: info.Prev}
 	for _, r := range rows {
 		if err := ix.add(r); err != nil {
 			return nil, err

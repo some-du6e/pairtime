@@ -150,7 +150,8 @@ const bom = "\ufeff"
 
 // rewrite changes the config.toml at name with change, and writes it only
 // when it then parses to what it did before with set's change and nothing
-// else, as SetOnline says, and when that changed it or always is set.
+// else, as SetOnline says, and when that changed it, or, as best it can,
+// when always is set.
 // change gets the text without its byte order mark, which the file keeps.
 // byHand says what to write by hand in the file it names, which holds
 // text, for an error.
@@ -189,7 +190,13 @@ func rewrite(name string, always bool, byHand func(name, text string) string, ch
 	if !reflect.DeepEqual(after, want) {
 		return fmt.Errorf("config: pairtime couldn't change config.toml without changing other settings, so it didn't; %s", byHand(name, text))
 	}
-	if out == text && !always {
+	if out == text {
+		if always {
+			// The file says it already, so a write that fails, as in a
+			// folder that can't be written, changes nothing that matters:
+			// a running agent reads it again at its next start.
+			_ = home.WriteFile(name, []byte(out))
+		}
 		return nil
 	}
 	return home.WriteFile(name, []byte(out))

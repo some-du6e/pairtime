@@ -27,8 +27,11 @@ type ChainInfo struct {
 	Created time.Time
 	// Base is the number of the first batch the ledger keeps: 1 until a
 	// retention sweep has dropped the oldest batches (Writer.Sweep). The
-	// chain the device keeps starts there, with that batch's prev as given.
+	// chain the device keeps starts there, with Prev, H_(Base-1), zero(32)
+	// for batch 1, as given: the prev of the batch to be sealed next when
+	// the sweep dropped every row.
 	Base uint64
+	Prev ledger.Hash
 }
 
 // ReadChain reads which chain the ledger in dir holds, from batches.seg.
@@ -42,7 +45,7 @@ func ReadChain(dir string) (ChainInfo, error) {
 
 // info returns the chain the file names.
 func (bf *batchesFile) info() ChainInfo {
-	return ChainInfo{DeviceID: bf.chain.DeviceID, KeyID: bf.chain.KeyID, Created: time.UnixMilli(bf.chain.Created), Base: bf.base.B}
+	return ChainInfo{DeviceID: bf.chain.DeviceID, KeyID: bf.chain.KeyID, Created: time.UnixMilli(bf.chain.Created), Base: bf.base.B, Prev: bf.base.Prev}
 }
 
 // ReadBatches calls fn with each sealed batch of the ledger in dir whose

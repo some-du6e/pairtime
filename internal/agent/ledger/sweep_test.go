@@ -5,6 +5,7 @@ package ledger
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -501,6 +502,68 @@ func TestSweep(t *testing.T) {
 				}
 				if got, _ := segments(chain.dir); !slices.Equal(got, chain.days[1:]) {
 					t.Errorf("the old chain keeps segments %v, want %v", got, chain.days[1:])
+				}
+			},
+		},
+		{
+			name: "a record written while a sweep runs keeps the segment it opened, which the sweep doesn't delete",
+			run: func(t *testing.T, dir string) {
+				c := newClock(testT)
+				w := open(t, dir, c)
+				writeDays(t, w, c, 3)
+				later := testT + 40*sweepDayMS
+				c.set(later)
+				var s uint64
+				// The record opens the segment of its own day, after the
+				// sweep read batches.seg and before it deletes.
+				sweepWrites = func() {
+					var err error
+					if s, err = w.Write(sampleInput(rand.New(rand.NewPCG(13, 14)), "os.presence", later, "", "")); err != nil {
+						t.Error(err)
+					}
+				}
+				defer func() { sweepWrites = nil }()
+				if _, _, err := w.Sweep(dayOf(time.UnixMilli(testT+50*sweepDayMS)), 0); err != nil {
+					t.Fatal(err)
+				}
+				if got, _ := segments(dir); !slices.Contains(got, dayOf(time.UnixMilli(later))) {
+					t.Fatalf("segments %v, want the new record's", got)
+				}
+				if _, ok, err := w.Seal(); err != nil || !ok {
+					t.Fatalf("sealing the new record: %v, %v", ok, err)
+				}
+				w.Close()
+				open(t, dir, c)
+				if kept := verifyFrom(t, dir); len(kept) != 1 || kept[0].Row.FirstSeq != s {
+					t.Errorf("%d batches, want the new record's alone", len(kept))
+				}
+			},
+		},
+		{
+			name: "a segment that can't be deleted stops the deletes after it, so the segments left are the newest, and the ledger opens",
+			run: func(t *testing.T, dir string) {
+				c := newClock(testT)
+				w := open(t, dir, c)
+				days, batches := writeDays(t, w, c, 4)
+				removeFile = func(name string) error {
+					if filepath.Base(name) == days[0]+segSuffix {
+						return errors.New("injected: the file is in use")
+					}
+					return os.Remove(name)
+				}
+				defer func() { removeFile = os.Remove }()
+				// The floor keeps every row, and every segment is due.
+				if _, segs, err := w.Sweep(after, batches[0]); err == nil || segs != 0 {
+					t.Fatalf("Sweep deleted %d segments, %v; want none, and the error", segs, err)
+				}
+				if got, _ := segments(dir); !slices.Equal(got, days) {
+					t.Errorf("segments %v, want all %v", got, days)
+				}
+				w.Close()
+				removeFile = os.Remove
+				w = open(t, dir, c)
+				if _, segs, err := w.Sweep(after, batches[0]); err != nil || segs != 4 {
+					t.Errorf("the next Sweep deleted %d segments, %v; want 4", segs, err)
 				}
 			},
 		},

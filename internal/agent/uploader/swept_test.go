@@ -67,6 +67,41 @@ func TestSweptLedger(t *testing.T) {
 			},
 		},
 		{
+			name: "after a sweep that dropped every row, the batch sealed next goes, linked to the dropped head",
+			// The server holds every batch, so the sweep kept no row.
+			floor: 7, held: 6,
+			check: func(t *testing.T, r *rig) {
+				r.u.Start()
+				waitFor(t, "the uploader's state read", func() bool {
+					r.u.Wake()
+					r.f.mu.Lock()
+					defer r.f.mu.Unlock()
+					return r.f.gets > 0
+				})
+				// Sealed after the uploader read the rows, so it comes through
+				// Sealed, and its row takes the prev the index knows.
+				at := uint64(time.Now().UnixMilli()) / pkgledger.CheckpointMS * pkgledger.CheckpointMS
+				if _, err := r.w.Checkpoint("p_test", at, json.RawMessage(`{}`)); err != nil {
+					t.Fatal(err)
+				}
+				b, ok, err := r.w.Seal()
+				if err != nil || !ok {
+					t.Fatalf("sealing batch 7: %v, %v", ok, err)
+				}
+				r.u.Sealed(b)
+				waitFor(t, "the root of batch 7", func() bool {
+					r.u.Wake()
+					r.f.mu.Lock()
+					defer r.f.mu.Unlock()
+					return r.f.head != nil && r.f.head.b == 7
+				})
+				r.u.Close()
+				if p := r.doctor(); p != "" {
+					t.Errorf("doctor heard %q", p)
+				}
+			},
+		},
+		{
 			name: "a root the ledger no longer keeps stops the uploads, and doctor asks for pairtime logout, then pairtime login",
 			// The server holds batches 1 to 3, and the sweep dropped 4,
 			// whose root the server needs next.

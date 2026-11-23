@@ -37,9 +37,11 @@ import (
 // old handle before the rename, since Windows renames over no open file. A
 // crash leaves the old batches.seg or the new one, and maybe segments the
 // new one doesn't need, which nothing reads and the next Sweep deletes. It
-// never deletes a segment that holds a record no batch holds yet, nor one
-// a seal may still flush; the one records go to it closes first, when
-// nothing is pending.
+// deletes the segments oldest first, and stops at one it can't delete, so
+// those left are always the newest, as Open and the readers take them to
+// be. It never deletes a segment that holds a record no batch holds yet,
+// or one after it, nor one a seal may still flush; the one records go to
+// it closes first, when nothing is pending.
 //
 // The chains of device keys this installation no longer writes with, in
 // old/, are swept by the same day, the rows of their batches with the
@@ -56,14 +58,6 @@ func (w *Writer) Sweep(from string, floor uint64) (batches, segs int, err error)
 	oldBatches, oldSegs, oldErr := sweepOld(filepath.Join(w.dir, oldDir), from)
 	w.mu.Lock()
 	err = w.usable()
-	retired := map[string]bool{} // the segments a seal may still flush
-	for _, r := range w.retired {
-		retired[strings.TrimSuffix(filepath.Base(r.name), segSuffix)] = true
-	}
-	segDay, pendingSeg := w.segDay, ""
-	if len(w.pending) > 0 {
-		pendingSeg = w.pending[0].pos.Seg
-	}
 	w.mu.Unlock()
 	if err != nil {
 		return oldBatches, oldSegs, errors.Join(err, oldErr)
@@ -104,56 +98,78 @@ func (w *Writer) Sweep(from string, floor uint64) (batches, segs int, err error)
 	}
 	// Each segment before need goes: those of the days before from, and
 	// those before the first record that is kept, as the rest of a dropped
-	// batch's records in the next day's segment.
+	// batch's records in the next day's segment. They go oldest first, and
+	// the first that can't go stops the rest, so the segments left are
+	// always the newest, as Open and the readers take them to be.
 	need := ""
 	if k < len(bf.rows) {
 		need = max(from, bf.rows[k].Start.Seg)
 	}
-	if pendingSeg != "" && (need == "" || pendingSeg < need) {
-		need = pendingSeg
+	if sweepWrites != nil {
+		sweepWrites()
 	}
 	days, err := segments(w.dir)
 	if err != nil {
 		return oldBatches + batches, oldSegs, errors.Join(err, oldErr)
 	}
-	var errs []error
 	for _, day := range days {
 		if need != "" && day >= need {
 			break
 		}
-		if retired[day] {
-			continue
+		removed, rerr := w.removeSegment(day)
+		if rerr != nil {
+			err = rerr
 		}
-		if day == segDay && !w.closeSegment(day) {
-			continue
-		}
-		if err := os.Remove(segPath(w.dir, day)); err != nil {
-			errs = append(errs, err)
-			continue
+		if !removed {
+			break
 		}
 		segs++
 	}
 	if segs > 0 {
 		syncDir(w.dir)
 	}
-	return oldBatches + batches, oldSegs + segs, errors.Join(append(errs, oldErr)...)
+	return oldBatches + batches, oldSegs + segs, errors.Join(err, oldErr)
 }
 
-// closeSegment closes the segment records go to, which is day's, so a
-// sweep can delete it, and reports whether it did: only while no record
-// waits for a batch, since then the seal that flushed the last one has
-// closed every segment before it, and the next record opens a segment of
-// its own day (toSegment). w.sealMu is held.
-func (w *Writer) closeSegment(day string) bool {
+// removeSegment deletes day's segment for Sweep, by the writer's state as
+// it is now, since records go on being written while Sweep runs, and
+// reports whether it did. It never deletes one that holds a record no
+// batch holds yet, or comes after one, nor one a seal may still flush, and
+// the one records go to only while nothing is pending, after closing it:
+// the next record then opens a segment of its own day (toSegment). w.mu
+// is held while it deletes, so no record opens the day's file meanwhile.
+// w.sealMu is held.
+func (w *Writer) removeSegment(day string) (bool, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if len(w.pending) > 0 || len(w.retired) > 0 || w.seg == nil || w.segDay != day {
-		return false
+	if len(w.pending) > 0 && day >= w.pending[0].pos.Seg {
+		return false, nil
 	}
-	w.seg.close()
-	w.seg, w.segDay = nil, ""
-	return true
+	for _, r := range w.retired {
+		if strings.TrimSuffix(filepath.Base(r.name), segSuffix) == day {
+			return false, nil
+		}
+	}
+	if w.seg != nil && w.segDay == day {
+		if len(w.pending) > 0 || len(w.retired) > 0 {
+			return false, nil
+		}
+		w.seg.close()
+		w.seg, w.segDay = nil, ""
+	}
+	if err := removeFile(segPath(w.dir, day)); err != nil {
+		return false, err
+	}
+	return true, nil
 }
+
+// What tests set to step into a sweep: sweepWrites runs between the
+// rewrite of batches.seg and the deletes, as a record written meanwhile
+// would, and removeFile deletes a segment of the live chain.
+var (
+	sweepWrites func()
+	removeFile  = os.Remove
+)
 
 // keptFrom returns the index in bf.rows of the first row a sweep by from
 // and floor keeps: the first whose batch's first record is in the segment
@@ -284,15 +300,17 @@ func sweepChain(dir, from string) (batches, segs int, err error) {
 	if rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
 		errs = append(errs, rerr)
 	}
-	left := 0
+	// Oldest first, and none after one that can't go, so the segments left
+	// are always the newest, as the live chain's are (Writer.Sweep).
+	left, stopped := 0, false
 	for _, day := range days {
-		if day >= need {
+		if day >= need || stopped {
 			left++
 			continue
 		}
 		if err := os.Remove(segPath(dir, day)); err != nil {
 			errs = append(errs, err)
-			left++
+			left, stopped = left+1, true
 			continue
 		}
 		segs++
