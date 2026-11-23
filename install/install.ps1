@@ -447,14 +447,16 @@ $installPairtime = {
 
   # Puts New at Target. Windows can't replace or delete a pairtime.exe that
   # is running, such as the agent, but it can rename it, so an old one
-  # moves aside first and goes once nothing runs it.
+  # moves aside first and goes once nothing runs it. It moves aside under
+  # this run's own name, so that two installs at once never delete each
+  # other's copy and leave no pairtime.exe. pairtime deletes old copies
+  # under that name or pairtime.old.exe once nothing runs them (isOldName
+  # in cmd/pairtime).
   function Move-IntoPlace([string]$New, [string]$Target) {
     $old = $null
     if (Test-Path -LiteralPath $Target) {
-      $dir = Split-Path -Parent $Target
-      $old = Join-Path $dir 'pairtime.old.exe'
+      $old = Join-Path (Split-Path -Parent $Target) "pairtime.old.$PID.exe"
       Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
-      if (Test-Path -LiteralPath $old) { $old = Join-Path $dir "pairtime.old.$PID.exe" }
       Move-Item -LiteralPath $Target -Destination $old
     }
     try {

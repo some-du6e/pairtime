@@ -63,9 +63,12 @@ function New-Case {
 
 # Every path under Dir, relative and sorted, on one line. PowerShell keeps
 # caches under LOCALAPPDATA\Microsoft, which aren't the installer's doing.
+# A pairtime.exe that install.ps1 moved aside under its own process id
+# shows as pairtime.old.<pid>.exe, since the id changes every run.
 function Get-Tree([string]$Dir) {
   $paths = @(Get-ChildItem -LiteralPath $Dir -Recurse -Force | ForEach-Object { $_.FullName.Substring($Dir.Length + 1) } |
-    Where-Object { $_ -ne 'Microsoft' -and -not $_.StartsWith('Microsoft\') } | Sort-Object)
+    Where-Object { $_ -ne 'Microsoft' -and -not $_.StartsWith('Microsoft\') } |
+    ForEach-Object { $_ -replace '^(pairtime\\bin\\pairtime\.old\.)\d+(\.exe)$', '$1<pid>$2' } | Sort-Object)
   $paths -join ' '
 }
 
@@ -300,9 +303,25 @@ try {
 }
 $running = Start-Process -FilePath (Join-Path $script:appData 'pairtime\bin\pairtime.exe') -ArgumentList 'wait' -PassThru -WindowStyle Hidden
 Test-Case 'a pairtime.exe that is running, as the agent would be, is moved aside and replaced' `
-  ok 'Installed pairtime' "$installed pairtime\bin\pairtime.old.exe" (Invoke-File $stamped (Real real real.pub @('-NoInstall')))
+  ok 'Installed pairtime' "$installed pairtime\bin\pairtime.old.<pid>.exe" (Invoke-File $stamped (Real real real.pub @('-NoInstall')))
 Test-Binary real
 Stop-Process -Id $running.Id -Force
+
+# Two installs at once must not delete each other's moved-aside copy, or
+# both can end with no pairtime.exe, so each moves the old one aside under
+# its own name.
+foreach ($shell in $shells) {
+  New-Case
+  $binDir = Join-Path $script:appData 'pairtime\bin'
+  New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+  Set-Content -LiteralPath (Join-Path $binDir 'pairtime.exe') -Value 'an old pairtime'
+  $other = Join-Path $binDir 'pairtime.old.exe'
+  Set-Content -LiteralPath $other -Value "another install's copy"
+  Test-Case "in $shell, an install moves the old pairtime.exe aside under its own name, and leaves the copy another install moved aside" `
+    ok 'Installed pairtime' "$installed pairtime\bin\pairtime.old.exe" (Invoke-File $stamped (Real real real.pub @('-NoInstall')) @{} $shell)
+  if (-not (Test-Path -LiteralPath $other) -or (Get-Content -LiteralPath $other) -ne "another install's copy") { Add-Failure "in ${shell}, the other install's pairtime.old.exe is gone or changed" }
+  Test-Binary real
+}
 
 New-Case
 Test-Case 'by default a script that trusts no key refuses the release, before anything is downloaded' fails 'trusts no release key' '' `
