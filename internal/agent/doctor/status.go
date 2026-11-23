@@ -115,4 +115,8 @@ type HarnessCounts struct {
 	// LastFailure names the events and fields of the last failure, never
 	// their values.
 	LastFailure string `json:"last_failure,omitempty"`
+	// Lines counts the log lines the adapter read, and LineFailures those
+	// it couldn't fully read (WP-AD3).
+	Lines        uint64 `json:"lines,omitempty"`
+	LineFailures uint64 `json:"line_failures,omitempty"`
 }

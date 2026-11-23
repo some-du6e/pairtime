@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/some-du6e/pairtime/internal/adapters"
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/ledger/features"
 )
@@ -73,12 +74,12 @@ func (c *call) tool(failed bool) {
 	case "Edit", "MultiEdit", "NotebookEdit":
 		t.ToolClass = event.ToolEdit
 		if !failed {
-			r = c.edit(t, in, resp)
+			r = c.kit().edit(t, in, resp)
 		}
 	case "Write":
 		t.ToolClass = event.ToolWrite
 		if !failed {
-			r = c.edit(t, in, resp)
+			r = c.kit().edit(t, in, resp)
 		}
 	case "Bash":
 		if failed {
@@ -90,7 +91,7 @@ func (c *call) tool(failed bool) {
 				t.ExitCode, resp.Stdout = &code, out
 			}
 		}
-		r = c.bash(t, in, resp)
+		r = c.kit().bash(t, in, resp)
 	}
 	if agent, _ := c.f.str("agent_id"); agent != "" {
 		// A subagent's tool output never reaches the conversation the
@@ -111,8 +112,23 @@ func (c *call) tool(failed bool) {
 	}
 	if id != "" {
 		agent, _ := c.f.str("agent_id")
-		c.s.post(post{t: c.env.T, toolUseID: id, tool: name, agent: agent})
+		// native says the call is via hook, so a transcript's copy of it
+		// would count it twice (logLine.toolResult).
+		c.s.post(post{t: c.env.T, toolUseID: id, tool: name, agent: agent, native: c.raw.Arrival.Via == event.ViaHook})
 	}
+}
+
+// toolKit is what turning a tool call into its agent.tool needs, whether
+// a hook or a transcript reported the call: K_feat, the project root the
+// call's paths are keyed relative to, and where problems go.
+type toolKit struct {
+	feat *features.Key
+	root string
+	perr *adapters.ParseError
+}
+
+func (c *call) kit() toolKit {
+	return toolKit{feat: c.a.opts.Features, root: c.proj.Root, perr: c.perr}
 }
 
 // minUnixMS is pkg/event's earliest time, 2020-01-01.
@@ -127,20 +143,20 @@ type recordContent struct {
 // edit fills an Edit or Write call's file and lines from its
 // structuredPatch, or for a Write that created the file, which has none,
 // from the content it wrote.
-func (c *call) edit(t *event.AgentTool, in toolInput, resp toolResponse) *recordContent {
+func (k toolKit) edit(t *event.AgentTool, in toolInput, resp toolResponse) *recordContent {
 	file := resp.FilePath
 	if file == "" {
 		file = in.FilePath
 	}
-	lp, ok := c.ledgerPath(file)
+	lp, ok := ledgerPathUnder(k.root, file)
 	if !ok {
 		if file != "" {
-			c.perr.Problem("the edited file's path isn't one the ledger can key")
+			k.perr.Problem("the edited file's path isn't one the ledger can key")
 		}
 		lp = ""
 	}
-	if lp != "" && c.a.opts.Features != nil {
-		if v, err := c.a.opts.Features.Path(lp); err == nil {
+	if lp != "" && k.feat != nil {
+		if v, err := k.feat.Path(lp); err == nil {
 			t.Files = []string{v.String()}
 		}
 	}
@@ -148,7 +164,7 @@ func (c *call) edit(t *event.AgentTool, in toolInput, resp toolResponse) *record
 	for _, h := range resp.StructuredPatch {
 		es, err := features.EditsFromPatch(lp, h.OldStart, h.OldLines, h.NewStart, h.NewLines, h.Lines)
 		if err != nil {
-			c.perr.Problem("a structuredPatch hunk is malformed")
+			k.perr.Problem("a structuredPatch hunk is malformed")
 			continue
 		}
 		edits = append(edits, es...)
@@ -177,12 +193,16 @@ func (c *call) edit(t *event.AgentTool, in toolInput, resp toolResponse) *record
 // ledgerPath returns file in the ledger's form (ledger-v1 10.6): relative
 // to the call's project root when it is inside it, else absolute, with '/'
 // between components and a Windows drive letter upper case.
-func (c *call) ledgerPath(file string) (string, bool) {
+func (c *call) ledgerPath(file string) (string, bool) { return ledgerPathUnder(c.proj.Root, file) }
+
+// ledgerPathUnder is ledgerPath for a call whose project root is projRoot,
+// "" for none.
+func ledgerPathUnder(projRoot, file string) (string, bool) {
 	p, ok := slashPath(file)
 	if !ok {
 		return "", false
 	}
-	if root, ok := slashPath(c.proj.Root); ok && c.proj.Root != "" {
+	if root, ok := slashPath(projRoot); ok && projRoot != "" {
 		if rel, ok := under(root, p); ok {
 			p = rel
 		}
@@ -235,10 +255,10 @@ func under(root, p string) (string, bool) {
 // and fires for a background command as it starts, so exit_code is left
 // out; a command that exited non-zero gives PostToolUseFailure instead,
 // whose error states its exit code (exitLine).
-func (c *call) bash(t *event.AgentTool, in toolInput, resp toolResponse) *recordContent {
+func (kit toolKit) bash(t *event.AgentTool, in toolInput, resp toolResponse) *recordContent {
 	t.ToolClass = commandClass(in.Command)
 	t.VisibleOutputLines = countLines(resp.Stdout) + countLines(resp.Stderr)
-	if k := c.a.opts.Features; k != nil {
+	if k := kit.feat; k != nil {
 		if v, ok := k.Command(in.Command); ok {
 			t.CmdHash = v.String()
 		}

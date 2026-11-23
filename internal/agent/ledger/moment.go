@@ -103,10 +103,13 @@ func (m moment) earlierThan(n moment) bool {
 // m holds the clock it counts, this run's for the agent's own events and
 // the OS's of m's boot for a hook call, since a monotonic clock is the one
 // no step of the wall clock moves either way; and by its t otherwise, as
-// for an event of an earlier run or boot.
+// for an event of an earlier run or boot. An event of this run whose mono
+// is 0 has no reading of its clock, as a log record of a line written
+// before the run began, or a git change dated before it (gitHost.sink):
+// it goes by its t too.
 func (m moment) before(e event.Envelope) bool {
 	switch {
-	case m.run > 0 && e.BootID == runBoot:
+	case m.run > 0 && e.Mono > 0 && e.BootID == runBoot:
 		return e.Mono <= m.run
 	case m.os > 0 && e.Mono > 0 && e.BootID == m.boot:
 		return e.Mono <= m.os

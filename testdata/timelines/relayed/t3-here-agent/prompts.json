@@ -1,0 +1,13 @@
+{
+  "fixture": "relayed/t3-here-agent",
+  "prompts": [
+    {
+      "turn_key": "t_5c6e5812b0e7",
+      "t": 1795575880000,
+      "local": "21:04:40",
+      "text": null,
+      "len_chars": 240,
+      "source": "invented for this case: an agent's message; only its length matters, and only to the counterfactual"
+    }
+  ]
+}
