@@ -1109,10 +1109,15 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 	}
 	st := r.a.adaptersHost().status()
 	r.stopAll()
+	// Focus stopped before presence and the ledger, so wrote is every
+	// record it wrote.
+	wrote := r.a.focus.Status().Records
 	var named, namedIn int
 	prompts := 0
 	// focused counts the os.focus records read, which the ledger holds in
-	// the order focus wrote them, through presence's queue (ledger.Presence).
+	// the order focus wrote them, through presence's queue (ledger.Presence),
+	// so the i-th read is the i-th focus wrote while the ledger holds them
+	// all.
 	var focused uint64
 	for _, ev := range r.events(t) {
 		switch d := ev.Data.(type) {
@@ -1136,7 +1141,7 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 		ok   bool
 	}{
 		{"os.focus records name the session while it is tied", named > 0},
-		{"the ledger holds every os.focus record focus wrote up to the stretch's end", focused >= to},
+		{"the ledger holds every os.focus record focus wrote", focused == wrote},
 		{"no os.focus record names it while its lines are out of pairtime", namedIn == 0},
 		{"its two lines in the ignored folder count as ignored", st.Harnesses[event.HarnessClaudeCode].Ignored == 2},
 		{"the ledger holds the prompts of its three lines that counted, and none of the ignored folder's", prompts == 3},
@@ -1144,8 +1149,8 @@ func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
 	for _, c := range checks {
 		t.Run(c.name, func(t *testing.T) {
 			if !c.ok {
-				t.Errorf("no: %d records name the session, %d in the stretch, the os.focus records from the %dth to the %dth of the %d the ledger holds; %d prompts; adapters %+v",
-					named, namedIn, from, to, focused, prompts, st)
+				t.Errorf("no: %d records name the session, %d in the stretch, which is os.focus records [%d, %d) in the order focus wrote them; focus wrote %d and the ledger holds %d; %d prompts; adapters %+v",
+					named, namedIn, from, to, wrote, focused, prompts, st)
 			}
 		})
 	}
