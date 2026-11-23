@@ -277,6 +277,95 @@
       "notes": [
         "Both bounds are inclusive and the list has no cap, so callers keep the window short themselves (stardance app/services/hackatime_service.rb lines 280-285)."
       ]
+    },
+    {
+      "id": "heartbeats",
+      "method": "POST",
+      "path": "/api/hackatime/v1/users/:id/heartbeats",
+      "route": {"file": "config/routes.rb", "lines": "349-351, 356", "excerpt": "excerpts/config/routes.rb"},
+      "action": {
+        "name": "Api::Hackatime::V1::HackatimeController#push_heartbeats",
+        "source": {"file": "app/controllers/api/hackatime/v1/hackatime_controller.rb", "lines": "58-76", "excerpt": "excerpts/app/controllers/api/hackatime/v1/hackatime_controller.rb"}
+      },
+      "auth": [
+        {
+          "kind": "api_key",
+          "how": "The user's API key as Authorization: Bearer <key>, as Authorization: Basic <base64 of the bare key>, which is what wakatime-cli sends, or as the api_key query parameter, tried in that order. A Basic credential is decoded whole, so base64 of <key>:<anything> names no key. An account whose API access is restricted still gets an answer (allow_restricted, hackatime_controller.rb lines 244-250).",
+          "source": {"file": "app/controllers/concerns/user_api_authentication.rb", "lines": "8-38", "excerpt": "excerpts/app/controllers/concerns/user_api_authentication.rb"}
+        }
+      ],
+      "params": [
+        {"name": "id", "in": "path", "required": true, "forms": ["current"], "meaning": "Not read: the credential names the user (set_user, hackatime_controller.rb lines 244-250). wakatime-cli sends current."},
+        {"name": "heartbeat", "in": "body", "required": true, "forms": ["a JSON object", "a JSON array, whose first element is the heartbeat", "either of those as text/plain", "an object under the key hackatime"], "meaning": "One heartbeat. Only the fields in HEARTBEAT_KEYS and dependencies are kept (hackatime_controller.rb lines 7-12, 264-299)."}
+      ],
+      "responses": [
+        {"status": 202, "when": "HeartbeatIngest took the heartbeat, a new one or one a row already had. The body is the row.", "schema": "responses/heartbeat.schema.json", "source": {"file": "app/controllers/api/hackatime/v1/hackatime_controller.rb", "lines": "73-74", "excerpt": "excerpts/app/controllers/api/hackatime/v1/hackatime_controller.rb"}},
+        {"status": 422, "when": "HeartbeatIngest refused it, as it refuses a time that isn't epoch seconds or a scaled form of them.", "schema": "responses/heartbeat_error.schema.json", "source": {"file": "app/services/heartbeat_ingest.rb", "lines": "364-395", "excerpt": "excerpts/app/services/heartbeat_ingest.rb"}},
+        {"status": 400, "when": "The body holds no heartbeat. Body {\"error\": \"No data provided...\"}.", "schema": "responses/error.schema.json", "source": {"file": "app/controllers/api/hackatime/v1/hackatime_controller.rb", "lines": "71", "excerpt": "excerpts/app/controllers/api/hackatime/v1/hackatime_controller.rb"}},
+        {"status": 401, "when": "No credential, or a key Hackatime doesn't know. Body {\"error\": \"Unauthorized\"}.", "schema": "responses/error.schema.json", "source": {"file": "app/controllers/api/hackatime/v1/hackatime_controller.rb", "lines": "244-250", "excerpt": "excerpts/app/controllers/api/hackatime/v1/hackatime_controller.rb"}},
+        {"status": 403, "when": "The account is pending deletion. Body {\"error\": \"Account pending deletion\"}. check_lockout (line 242) runs before push_heartbeats only (line 5, not quoted).", "schema": "responses/error.schema.json", "source": {"file": "app/controllers/api/hackatime/v1/hackatime_controller.rb", "lines": "242", "excerpt": "excerpts/app/controllers/api/hackatime/v1/hackatime_controller.rb"}}
+      ],
+      "notes": [
+        "wakatime-cli v2.28.4 never calls it: it posts every batch to heartbeats.bulk (testdata/fixtures/wakatime/2.28.4/linux). Installers' test heartbeats do, such as hackatime-setup's, which Hackatime stores as a test_entry because its entity is test.txt (heartbeat_ingest.rb line 105; HC 1.5)."
+      ]
+    },
+    {
+      "id": "heartbeats_bulk",
+      "method": "POST",
+      "path": "/api/hackatime/v1/users/:id/heartbeats.bulk",
+      "route": {"file": "config/routes.rb", "lines": "349-351, 356", "excerpt": "excerpts/config/routes.rb"},
+      "action": {
+        "name": "Api::Hackatime::V1::HackatimeController#push_heartbeats, with the format bulk",
+        "source": {"file": "app/controllers/api/hackatime/v1/hackatime_controller.rb", "lines": "58-67", "excerpt": "excerpts/app/controllers/api/hackatime/v1/hackatime_controller.rb"}
+      },
+      "auth": [
+        {
+          "kind": "api_key",
+          "how": "The user's API key as Authorization: Bearer <key>, as Authorization: Basic <base64 of the bare key>, which is what wakatime-cli sends, or as the api_key query parameter, tried in that order. A Basic credential is decoded whole, so base64 of <key>:<anything> names no key. An account whose API access is restricted still gets an answer (allow_restricted, hackatime_controller.rb lines 244-250).",
+          "source": {"file": "app/controllers/concerns/user_api_authentication.rb", "lines": "8-38", "excerpt": "excerpts/app/controllers/concerns/user_api_authentication.rb"}
+        }
+      ],
+      "params": [
+        {"name": "id", "in": "path", "required": true, "forms": ["current"], "meaning": "Not read: the credential names the user (set_user, hackatime_controller.rb lines 244-250). wakatime-cli sends current."},
+        {"name": "heartbeats", "in": "body", "required": true, "forms": ["a JSON array", "a JSON array as text/plain", "an object whose hackatime key holds an object with the array under heartbeats"], "meaning": "1 to MAX_BULK_HEARTBEATS = 100 heartbeats, each kept to HEARTBEAT_KEYS and dependencies. Each keeps its place, so an entry that isn't a heartbeat object gets a refusal of its own and the rest are still taken (hackatime_controller.rb lines 7-14, 252-262, 284-299)."}
+      ],
+      "responses": [
+        {"status": 201, "when": "One entry per heartbeat, in the order sent: the row and 201, or the refusal and 422.", "schema": "responses/heartbeats_bulk.schema.json", "source": {"file": "app/controllers/api/hackatime/v1/hackatime_controller.rb", "lines": "67, 227-239", "excerpt": "excerpts/app/controllers/api/hackatime/v1/hackatime_controller.rb"}},
+        {"status": 400, "when": "An empty array or more than 100 heartbeats. Body {\"error\": \"No data provided...\"} or {\"error\": \"Too many heartbeats in a single request (max 100)\"}.", "schema": "responses/error.schema.json", "source": {"file": "app/controllers/api/hackatime/v1/hackatime_controller.rb", "lines": "61-65", "excerpt": "excerpts/app/controllers/api/hackatime/v1/hackatime_controller.rb"}},
+        {"status": 401, "when": "No credential, or a key Hackatime doesn't know. Body {\"error\": \"Unauthorized\"}.", "schema": "responses/error.schema.json", "source": {"file": "app/controllers/api/hackatime/v1/hackatime_controller.rb", "lines": "244-250", "excerpt": "excerpts/app/controllers/api/hackatime/v1/hackatime_controller.rb"}},
+        {"status": 403, "when": "The account is pending deletion. Body {\"error\": \"Account pending deletion\"}. check_lockout (line 242) runs before push_heartbeats only (line 5, not quoted).", "schema": "responses/error.schema.json", "source": {"file": "app/controllers/api/hackatime/v1/hackatime_controller.rb", "lines": "242", "excerpt": "excerpts/app/controllers/api/hackatime/v1/hackatime_controller.rb"}}
+      ],
+      "notes": [
+        "wakatime-cli v2.28.4 posts every batch here, at most 10 heartbeats a request (testdata/fixtures/wakatime/2.28.4/linux). Reading the entries, it takes a 2xx as sent, drops a heartbeat that got 400, and queues one that got any other status, or got no entry, to send again to every destination (its pkg/offline/offline.go, handleResults). So a heartbeat Hackatime refuses with 422 goes back into the client's queue.",
+        "A heartbeat whose fields_hash, an MD5 over the fields heartbeat.rb lines 50-56 list, matches a row Hackatime has gets that row and 201, so a client's replay of its offline queue stores nothing twice (heartbeat_ingest.rb lines 70-82)."
+      ]
+    },
+    {
+      "id": "statusbar_today",
+      "method": "GET",
+      "path": "/api/hackatime/v1/users/:id/statusbar/today",
+      "route": {"file": "config/routes.rb", "lines": "349-351, 355", "excerpt": "excerpts/config/routes.rb"},
+      "action": {
+        "name": "Api::Hackatime::V1::HackatimeController#status_bar_today",
+        "source": {"file": "app/controllers/api/hackatime/v1/hackatime_controller.rb", "lines": "78-108", "excerpt": "excerpts/app/controllers/api/hackatime/v1/hackatime_controller.rb"}
+      },
+      "auth": [
+        {
+          "kind": "api_key",
+          "how": "The user's API key as Authorization: Bearer <key>, as Authorization: Basic <base64 of the bare key>, which is what wakatime-cli sends, or as the api_key query parameter, tried in that order. A Basic credential is decoded whole, so base64 of <key>:<anything> names no key. An account whose API access is restricted still gets an answer (allow_restricted, hackatime_controller.rb lines 244-250).",
+          "source": {"file": "app/controllers/concerns/user_api_authentication.rb", "lines": "8-38", "excerpt": "excerpts/app/controllers/concerns/user_api_authentication.rb"}
+        }
+      ],
+      "params": [
+        {"name": "id", "in": "path", "required": true, "forms": ["current"], "meaning": "Not read: the credential names the user (set_user, hackatime_controller.rb lines 244-250). wakatime-cli sends current."}
+      ],
+      "responses": [
+        {"status": 200, "when": "Today's seconds and the status bar's text, with the daily goal's progress when the user has one.", "schema": "responses/statusbar_today.schema.json"},
+        {"status": 401, "when": "No credential, or a key Hackatime doesn't know. Body {\"error\": \"Unauthorized\"}.", "schema": "responses/error.schema.json", "source": {"file": "app/controllers/api/hackatime/v1/hackatime_controller.rb", "lines": "244-250", "excerpt": "excerpts/app/controllers/api/hackatime/v1/hackatime_controller.rb"}}
+      ],
+      "notes": [
+        "wakatime-cli's --today asks its api_url only, never an [api_urls] destination, with the same Basic credential (its pkg/api/statusbar.go; testdata/fixtures/wakatime/2.28.4/linux/local-only)."
+      ]
     }
   ]
 }

@@ -37,3 +37,19 @@
     lookup_order.each { |matcher| match = candidates.find(&matcher); return match if match }
     nil
   end
+
+# ---- app/models/user.rb lines 354-367 ----
+  def format_extension_text(duration)
+    case hackatime_extension_text_type
+    when "simple_text"
+      return "Start coding!" if duration.zero?
+      ::ApplicationController.helpers.short_time_simple(duration)
+    when "clock_emoji"
+      ::ApplicationController.helpers.time_in_emoji(duration)
+    when "compliment_text"
+      compliments = FlavorText.compliment
+      bucket = Time.now.to_i / (7 * 60)
+      seed = Digest::MD5.hexdigest("#{id}-#{bucket}").to_i(16)
+      compliments[Random.new(seed).rand(compliments.length)]
+    end
+  end
