@@ -695,12 +695,12 @@ func (s *Scanner) Tie(h event.Harness, key string, at time.Time) (sess Session, 
 	}
 	now := s.opts.Now()
 	s.mu.Lock()
-	sess, tied, judged, untied := s.tieLocked(v, h, key, at, read, began, now)
-	if tied || untied {
+	sess, tied, judged, freed := s.tieLocked(v, h, key, at, read, began, now)
+	if tied || freed {
 		s.putLocked()
 	}
 	s.mu.Unlock()
-	if tied || untied {
+	if tied || freed {
 		s.save()
 	}
 	return sess, tied, judged
@@ -709,7 +709,7 @@ func (s *Scanner) Tie(h event.Harness, key string, at time.Time) (sess Session, 
 // tieLocked is Tie's weighing of the read v, which began at began and
 // ended at now, for a line of key written at at, with read the moment the
 // tie waited for. s.mu is held.
-func (s *Scanner) tieLocked(v tableView, h event.Harness, key string, at, read, began, now time.Time) (sess Session, tied, judged, untied bool) {
+func (s *Scanner) tieLocked(v tableView, h event.Harness, key string, at, read, began, now time.Time) (sess Session, tied, judged, freed bool) {
 	s.noteSeen(v, began, now)
 	if read.IsZero() {
 		return Session{}, false, false, false
