@@ -20,8 +20,10 @@ import (
 // it comes. Lookback's records keep their own rule (Writer.lookback).
 
 // maxStretches bounds the stretches the writer keeps (Writer.stretches).
-// Past it the two oldest become one, which only makes the time between
-// them count as local-only too.
+// Past it the oldest adjacent pair alike passed or not becomes one, or the
+// two oldest when no pair agrees, passed when either is
+// (Writer.mergeStretches). The list is in time order (Writer.learned), so
+// that only makes the time between them count as local-only too.
 const maxStretches = 64
 
 // lateKept bounds the late records a seal frame names (whyPayload.Late).
@@ -318,6 +320,16 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 			w.mergeStretches()
 		}
 	}
+	base := sealPayload{LocalUntil: bf.base.LocalUntil, LocalUntilOS: bf.base.LocalUntilOS}.until()
+	if at < 0 && len(rows) > 0 && laterEnd(base, rows[len(rows)-1].until()) && !laterEnd(base, listEnd(list)) {
+		// The base frame a sweep wrote holds a stretch end later than every
+		// batch's moment, one the writer took after its newest seal, as from
+		// the agent's Seen at its Open (Sweep): no batch was sealed after it,
+		// so the first one after it that may takes the mark, as in the run
+		// that took the end (seenLocked), though the agent's Seen of it now
+		// moves nothing.
+		w.back = w.next
+	}
 	if end, ok := w.newestEnd(); ok {
 		w.onlineAt = end
 	}
@@ -407,14 +419,23 @@ func (w *Writer) sawOnline(end edge) bool {
 // made in it. It is passed when a batch was sealed online since end, as far as
 // the writer can tell (sealedSince), unless cross is set: end is of a boot
 // no clock the writer's batches were sealed by can be ordered with, so
-// none counts as sealed after it. w.mu is held.
+// none counts as sealed after it. It goes in time order, right after that
+// newest one, or first when none ended before it: after a step back of the
+// wall clock, an end the writer missed can be later than the newest end it
+// has by the wall clock alone, and mergeStretches, which joins a stretch to
+// the one after it, would otherwise end their join where the earlier of
+// the two ended by the other clocks. w.mu is held.
 func (w *Writer) learned(end edge, cross bool) {
 	n := len(w.stretches)
 	from := w.onlineAt
+	at := w.endBefore(end)
 	if before, shared := clockOrder(from.m, end.m); n == 0 {
 		from = edge{}
 	} else if shared && !before {
-		from = w.endBefore(end)
+		from = edge{}
+		if at >= 0 {
+			from = w.stretches[at].to
+		}
 	}
 	if b := end.other.boot; end.other.os > 0 && b != from.osOf().Boot {
 		// The end is of a boot the start holds no reading of, one that came
@@ -424,31 +445,31 @@ func (w *Writer) learned(end edge, cross bool) {
 		from.other = moment{os: 1, boot: b}
 	}
 	s := stretch{from: from, to: end, passed: !cross && w.sealedSince(end)}
-	if n > 0 && w.stretches[n-1].open {
-		// The stretch going on began after this one ended.
-		s.widen(prevEnd(w.stretches, n-1))
-		w.stretches = slices.Insert(w.stretches, n-1, s)
-	} else {
-		s.widen(prevEnd(w.stretches, n))
-		w.stretches = append(w.stretches, s)
+	// The stretch going on, which endBefore passes over, began after this
+	// one ended, so this one goes before it.
+	i := at + 1
+	s.widen(prevEnd(w.stretches, i))
+	w.stretches = slices.Insert(w.stretches, i, s)
+	if i == n {
+		// No stretch the writer has ended after this one, nor goes on.
 		w.raiseOnline(end)
 	}
 	w.mergeStretches()
 	w.dirty = true
 }
 
-// endBefore is the end of the newest stretch that ended before end, by the
-// clocks the two share (clockOrder), and the beginning of time when none
-// did. w.mu is held.
-func (w *Writer) endBefore(end edge) edge {
+// endBefore is the index of the newest stretch that ended before end, by
+// the clocks the two share (clockOrder), and -1 when none did. w.mu is
+// held.
+func (w *Writer) endBefore(end edge) int {
 	for i := len(w.stretches) - 1; i >= 0; i-- {
 		if s := w.stretches[i]; !s.open {
 			if before, _ := clockOrder(s.to.m, end.m); before {
-				return s.to
+				return i
 			}
 		}
 	}
-	return edge{}
+	return -1
 }
 
 // clockOrder reports whether a came before b by a monotonic clock both hold
@@ -541,7 +562,10 @@ func (w *Writer) passAll() {
 // them can put the second's end before the first's. When no pair agrees,
 // the two oldest become one that is passed when either is, which can only
 // drop a record of them, never seal one local-only after an online batch.
-// Either way only more of the past counts as local-only. w.mu is held.
+// The one they become keeps the first's start and the second's end by the
+// monotonic clocks, which the list's time order (learned) makes the
+// earlier start and the later end. Either way only more of the past counts
+// as local-only. w.mu is held.
 func (w *Writer) mergeStretches() {
 	for len(w.stretches) > maxStretches {
 		i := 0
