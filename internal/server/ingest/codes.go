@@ -39,6 +39,7 @@ const (
 	CodeCounterStale            = "counter_stale"
 	CodeRateLimited             = "rate_limited"
 	CodeUnavailable             = "unavailable"
+	CodeDayClosed               = "day_closed"
 
 	// project-names-v1 1.5's codes for a names request.
 	CodeTooManyNames    = "too_many_names"
@@ -78,6 +79,7 @@ var refusals = map[string]int{
 	CodeCounterStale:            http.StatusConflict,
 	CodeRateLimited:             http.StatusTooManyRequests,
 	CodeUnavailable:             http.StatusServiceUnavailable,
+	CodeDayClosed:               http.StatusServiceUnavailable,
 	CodeTooManyNames:            http.StatusRequestEntityTooLarge,
 	CodeProjectInvalid:          http.StatusUnprocessableEntity,
 	CodeProjectRepeated:         http.StatusUnprocessableEntity,
