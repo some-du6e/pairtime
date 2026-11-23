@@ -38,7 +38,8 @@ const maxMarks = 10_000
 // heartbeats' own times, was in a folder out of pairtime (DESIGN 8.8), and
 // the project of the latest one that resolved to a project. The times
 // decide, not the order heartbeats come in, since wakatime-cli sends the
-// newest first.
+// newest first, and no time counts as later than the agent's clock when
+// its batch came in, plus lateRead (remember).
 type mark struct {
 	// t is the latest file heartbeat's time, and out says it was in a
 	// folder out of pairtime.
@@ -53,14 +54,16 @@ type mark struct {
 }
 
 // note returns m with a file heartbeat at t, out of pairtime or in the
-// project with key key. At equal times a heartbeat out of pairtime wins,
-// and of two tracked ones the smaller key, so the order heartbeats come in
-// never decides.
-func (m mark) note(t float64, out bool, key string) mark {
-	if t > m.t || (t == m.t && out) {
+// project with key key, from a batch whose clock bound is now (remember).
+// At equal times a heartbeat out of pairtime wins, and of two tracked ones
+// the smaller key, so the order heartbeats come in never decides. A time
+// later than now, left from before the agent's clock stepped back, gives
+// way to any heartbeat.
+func (m mark) note(t float64, out bool, key string, now float64) mark {
+	if t > m.t || (t == m.t && out) || m.t > now {
 		m.t, m.out = t, out
 	}
-	if !out && (t > m.keyT || (t == m.keyT && key < m.key)) {
+	if !out && (t > m.keyT || (t == m.keyT && key < m.key) || m.keyT > now) {
 		m.key, m.keyT = key, t
 	}
 	return m
@@ -127,7 +130,8 @@ type Clock struct {
 // has seen no file of, whose WakaTime project name's was. The session goes
 // first because its own latest file heartbeat is the better witness: a
 // tracked repo and an excluded subfolder of it can share a name. "Latest"
-// is by the heartbeats' own times. A session the agent keeps out still has
+// is by the heartbeats' own times, none counted later than the agent's
+// clock when its batch came in. A session the agent keeps out still has
 // its file heartbeats placed, so an excluded folder marks their names and
 // their agent edits count for the 120 s rule; they make no record.
 //
@@ -208,9 +212,10 @@ func (br *Bridge) Records(b Batch, at Clock) []adapters.Record {
 	br.mu.Lock()
 	defer br.mu.Unlock()
 	places := make([]place, len(b.Heartbeats))
+	now := float64(at.T+lateRead) / 1000
 	for i, h := range b.Heartbeats {
 		if isFile(h) {
-			places[i] = br.placeFile(h)
+			places[i] = br.placeFile(h, now)
 		}
 	}
 	for i, h := range b.Heartbeats {
@@ -345,7 +350,9 @@ func aiLines(h wakacompat.Heartbeat) int64 {
 	return *h.AILineChanges
 }
 
-func (br *Bridge) placeFile(h wakacompat.Heartbeat) place {
+// placeFile places file heartbeat h by its folder and notes it on its
+// marks, bounded by now (remember).
+func (br *Bridge) placeFile(h wakacompat.Heartbeat, now float64) place {
 	var p place
 	var root string
 	if br.opts.Project != nil {
@@ -354,7 +361,7 @@ func (br *Bridge) placeFile(h wakacompat.Heartbeat) place {
 		dir, _ := folder(h)
 		proj, ok := br.opts.Project(dir)
 		if proj.Ignored {
-			br.remember(h, true, "")
+			br.remember(h, true, "", now)
 			return place{ignored: true}
 		}
 		if ok {
@@ -367,19 +374,25 @@ func (br *Bridge) placeFile(h wakacompat.Heartbeat) place {
 		}
 	}
 	if p.project != "" {
-		br.remember(h, false, p.project)
+		br.remember(h, false, p.project, now)
 	}
 	return p
 }
 
 // remember notes file heartbeat h on the marks of its WakaTime project
 // name and its AI session: out of pairtime, or in the project with key key.
-func (br *Bridge) remember(h wakacompat.Heartbeat, out bool, key string) {
+//
+// now bounds the time the marks take: the agent's clock when h's batch
+// came in, plus lateRead, in seconds. A heartbeat stamped later counts as
+// at now, so one stamped an hour ahead can't hold its marks for that hour
+// against the file heartbeats that follow it.
+func (br *Bridge) remember(h wakacompat.Heartbeat, out bool, key string, now float64) {
+	t := min(h.Time, now)
 	if h.Project != nil && *h.Project != "" {
-		br.keep(br.names, *h.Project, br.names[*h.Project].note(h.Time, out, key))
+		br.keep(br.names, *h.Project, br.names[*h.Project].note(t, out, key, now))
 	}
 	if h.AISession != "" {
-		br.keep(br.sessions, h.AISession, br.sessions[h.AISession].note(h.Time, out, key))
+		br.keep(br.sessions, h.AISession, br.sessions[h.AISession].note(t, out, key, now))
 	}
 }
 

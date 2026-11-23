@@ -665,6 +665,14 @@ func TestBridgeExclusions(t *testing.T) {
 		return inner(dir)
 	}
 	tracked, _ := inner(projectDir)
+	const otherDir = "/home/capture/other"
+	other, _ := inner(otherDir)
+	// clockAt is the agent's clock sec seconds after 14:00, as at gives
+	// the heartbeats' times, with its run clock moving along.
+	clockAt := func(sec float64) Clock {
+		_, ms := at(sec)
+		return Clock{T: ms, Mono: testClock.Mono + ms - testClock.T, BootID: testClock.BootID}
+	}
 	// fileIn is the session's agent edit of a file in dir, named project.
 	fileIn := func(t *testing.T, dir, project string, sec float64) wakacompat.Heartbeat {
 		ts, _ := at(sec)
@@ -693,86 +701,109 @@ func TestBridgeExclusions(t *testing.T) {
 		// project they must be in, or "" for none.
 		want    string
 		project string
+		// clocks are the agent's clock for each batch, in seconds as at
+		// takes them. Without them every batch comes in at testClock.
+		clocks []float64
 	}{
 		{"an app prompt after its session's file heartbeat in a folder out of pairtime makes no record", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "private", 0)}, {prompt(t, session, "", 10)}}
-			}, "", ""},
+			}, "", "", nil},
 		{"an app prompt in the same batch as its session's excluded file heartbeat makes no record", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{prompt(t, session, "", 0), fileIn(t, privateDir, "private", 1)}}
-			}, "", ""},
+			}, "", "", nil},
 		{"a session whose latest file heartbeat moved into a folder out of pairtime loses its project", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 0)}, {fileIn(t, privateDir, "private", 10)}, {prompt(t, session, "", 20)}}
-			}, "", ""},
+			}, "", "", nil},
 		{"a session whose latest file heartbeat is in a tracked folder again takes that project", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "private", 0)}, {fileIn(t, projectDir, "cli", 10)}, {prompt(t, session, "", 20)}}
-			}, "prompt.submit bridge", tracked.Key},
+			}, "prompt.submit bridge", tracked.Key, nil},
 		{"a name seen in a folder out of pairtime makes a prompt of another session that carries it no record", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "shared", 0)}, {prompt(t, "other-session", "shared", 10)}}
-			}, "", ""},
+			}, "", "", nil},
 		{"a name seen in a folder out of pairtime and then in a tracked one maps to the tracked project", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "shared", 0)}, {fileIn(t, projectDir, "shared", 5)}, {prompt(t, "other-session", "shared", 10)}}
-			}, "prompt.submit bridge", tracked.Key},
+			}, "prompt.submit bridge", tracked.Key, nil},
 		{"the session test drops an app prompt that has no file heartbeat, by the session's key",
 			func(key string) bool { return key == opts.Keys.Session("kept-out") },
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{prompt(t, "kept-out", "cli", 0)}}
-			}, "", ""},
+			}, "", "", nil},
 		{"the session test drops the session's file heartbeats too",
 			func(key string) bool { return key == opts.Keys.Session(session) },
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 0), editorHB(t, "a.py", 1, "")}}
-			}, "editor.activity editor navigate unknown", tracked.Key},
+			}, "editor.activity editor navigate unknown", tracked.Key, nil},
 		{"a file of a session the agent keeps out still marks its excluded folder on its WakaTime name",
 			func(key string) bool { return key == opts.Keys.Session(session) },
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "shared", 0)}, {prompt(t, "other-session", "shared", 10)}}
-			}, "", ""},
+			}, "", "", nil},
 		{"the latest file heartbeat by its own time places a session, though wakatime-cli sends the newest first", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 20), fileIn(t, privateDir, "private", 10), prompt(t, session, "", 30)}}
-			}, "agent.tool bridge, prompt.submit bridge", tracked.Key},
+			}, "agent.tool bridge, prompt.submit bridge", tracked.Key, nil},
 		{"an older tracked file heartbeat after a newer excluded one doesn't bring the session back", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "private", 20), fileIn(t, projectDir, "cli", 10), prompt(t, session, "", 30)}}
-			}, "agent.tool bridge", tracked.Key},
+			}, "agent.tool bridge", tracked.Key, nil},
 		{"a tracked session's prompt that carries a name last seen outside is placed by its session", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 0)}, {editorIn(t, privateDir, "shared", 5)}, {prompt(t, session, "shared", 10)}}
-			}, "prompt.submit bridge", tracked.Key},
+			}, "prompt.submit bridge", tracked.Key, nil},
 		{"of a session's file heartbeats at one time, the one out of pairtime wins when it comes second", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 10), fileIn(t, privateDir, "private", 10), prompt(t, session, "", 20)}}
-			}, "agent.tool bridge", tracked.Key},
+			}, "agent.tool bridge", tracked.Key, nil},
 		{"of a session's file heartbeats at one time, the one out of pairtime wins when it comes first", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "private", 10), fileIn(t, projectDir, "cli", 10), prompt(t, session, "", 20)}}
-			}, "agent.tool bridge", tracked.Key},
+			}, "agent.tool bridge", tracked.Key, nil},
 		{"a file on a Windows share in a folder out of pairtime makes no record", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{editorIn(t, privateShare, "shared", 0), fileIn(t, privateShare, "shared", 1)}}
-			}, "", ""},
+			}, "", "", nil},
 		{"a file on a Windows share in a folder out of pairtime marks its session and its name", nil,
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, privateShare, "shared", 0)}, {prompt(t, session, "", 10), prompt(t, "other-session", "shared", 11)}}
-			}, "", ""},
+			}, "", "", nil},
+		{"a tracked edit stamped an hour ahead of the agent's clock counts as at the clock, so a later file out of pairtime still marks its session out", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 3600)}, {fileIn(t, privateDir, "private", 59)}, {prompt(t, session, "", 69)}}
+			}, "", "", []float64{0, 60, 70}},
+		{"a tracked edit stamped an hour ahead counts as at the clock, so a later tracked file in another project takes its session", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 3600)}, {fileIn(t, otherDir, "cli", 59)}, {prompt(t, session, "", 69)}}
+			}, "prompt.submit bridge", other.Key, []float64{0, 60, 70}},
+		{"after the agent's clock steps back, a file out of pairtime still marks its session out", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 3599)}, {fileIn(t, privateDir, "private", -1)}, {prompt(t, session, "", 4)}}
+			}, "", "", []float64{3600, 0, 5}},
+		{"after the agent's clock steps back, a tracked file in another project takes its session", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 3599)}, {fileIn(t, otherDir, "cli", -1)}, {prompt(t, session, "", 4)}}
+			}, "prompt.submit bridge", other.Key, []float64{3600, 0, 5}},
 		{"the session test keeps the other sessions' prompts",
 			func(key string) bool { return key == opts.Keys.Session("kept-out") },
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{editorHB(t, "a.py", 0, "")}, {prompt(t, "another", "cli", 10)}}
-			}, "prompt.submit bridge", tracked.Key},
+			}, "prompt.submit bridge", tracked.Key, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			br := NewBridge(BridgeOptions{Options: opts, SessionIgnored: c.ignored})
 			var last []adapters.Record
-			for _, b := range c.batches(t) {
-				last = br.Records(Batch{Heartbeats: b, Peer: passed}, testClock)
+			for i, b := range c.batches(t) {
+				clock := testClock
+				if c.clocks != nil {
+					clock = clockAt(c.clocks[i])
+				}
+				last = br.Records(Batch{Heartbeats: b, Peer: passed}, clock)
 			}
 			if got := kinds(last); got != c.want {
 				t.Fatalf("records %q, want %q", got, c.want)
