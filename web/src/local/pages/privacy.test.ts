@@ -99,8 +99,8 @@ describe('Privacy', () => {
 			},
 		},
 		{
-			name: "the table says deleting each kind on time comes with a later version too, since this one has no retention sweep yet (WP-LG6)",
-			check: (html) => expect(text(html)).toContain('Some of these, and deleting each on time, come with a later version of pairtime.'),
+			name: "the table says pairtime deletes each kind once its time is up, which the agent's retention sweeps do (WP-LG6)",
+			check: (html) => expect(text(html)).toContain('pairtime deletes each of these once it has been kept as long as the table says.'),
 		},
 		{
 			name: "the prompt similarity sketches (MinHash) are on the list, as in DESIGN 4.4's row for them",
