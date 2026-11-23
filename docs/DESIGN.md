@@ -434,7 +434,7 @@ Everything that leaves a teen's machine is in this table. There is no telemetry 
 | Client to evidence store, tier 2 | Only during a submission | A fetch of `/.well-known/pairtime-keys.json` before each upload, then the metadata reveal, then the content reveal, each sealed to the evidence key the document lists (7.5, 7.6) | Anything outside the reveal set; unchallenged content |
 | Client to `pairtimed`, backup | Only if the teen opted in | A wrapped `K_dev` and encrypted ledger and vault segments; the server holds ciphertext only (7.11) | The recovery code; `K_dev` itself |
 | Client to GitHub Releases | Once a day | A request for the signed update manifest (CP 4.6) | Any user data |
-| `pairtimed` to HCA, forges, programs, public git, Healthchecks.io | Sign-in; public-repo commit checks; webhooks; once a day; every 5 minutes | OIDC; `GET` of a commit by SHA; signed submission events; the day root; liveness pings | Per-user data in pings or the day root, which carries only hashes and a count |
+| `pairtimed` to HCA, forges, programs, public git, Healthchecks.io | Sign-in; public-repo commit checks; webhooks; once a day; every 5 minutes | OIDC; `GET` of a commit by SHA; signed submission events; the day root; liveness pings | Per-user data in pings or the day root, which carries only hashes and a daily count. On a server with few uploaders, that count shows how many batches they uploaded that day; an instance can keep the day roots off by leaving `PAIRTIME_WITNESS_REPO` unset |
 
 Cloudflare terminates TLS in front of `pairtimed`, as it does for Hackatime (SP OQ 3). Tier 1 carries numbers only, so that is accepted. Tier-2 content is sealed end to end past Cloudflare in both directions (7.6; JT must-fix 5).
 
@@ -460,7 +460,7 @@ Every field has a finite retention period, published at `https://<host>/privacy`
 | Server | `device_id`, OS family, client build, harness names and versions | Device lifetime plus 90 days |
 | Server | Uploading IP address and JA4 | 30 days, then deleted, not truncated (JT must-fix 13; differs from EV 7.2) |
 | Server | Minute buckets | Per-minute detail for 180 days, the submission horizon, then daily totals per project; minutes a submission uses stay until its spot-check window closes (JT must-fix 13; differs from TP B8's 13 months) |
-| Server | Witness rows and batch roots | 180 days; rows a submission uses stay until its spot-check window closes |
+| Server | Witness rows and batch roots, and each day's leaf hashes, which stay as long as any witness row of their day | 180 days; rows a submission uses stay until its spot-check window closes |
 | Server | Drawn challenge items, keyed `(device_id, seq)`, with each one's status | 180 days after the batch that holds the record, while it can still be submitted (7.5 step 5); never deleted with a submission's evidence |
 | Server | Commit records, project fingerprints | Account lifetime |
 | Server | Project names the teen turned on: the label and the project key it names, shown only on the teen's own signed-in dashboard and its JSON, never on a public page, a program read, an export for anyone else or /demo | Until the teen turns the name off on the computer or hides it on the dashboard, either of which deletes the label at once; after a hide, the project key and the time of the hide stay until the device turns the name off too, 30 days after the hide at most, so the device can tell a hide from a name the server no longer holds; the device's purge 90 days after the device is removed, as its `device_id` row goes; or account deletion |
@@ -471,7 +471,7 @@ Every field has a finite retention period, published at `https://<host>/privacy`
 | Server | Evidence access log | 2 years, visible to the teen |
 | Server | Interview notes, never recordings | With the decision |
 | Server | Minimal fraud record after account deletion: `hca_sub`, verdict, date, reason category | A period HQ sets (13.2), reported as retained by the eraser (TP B3) |
-| Public repo | Day roots | Permanent; only hashes and a daily count |
+| Public repo | Day roots | Permanent; only hashes and a daily count, which on a server with few uploaders shows how many batches they uploaded that day. An instance can keep them off by leaving `PAIRTIME_WITNESS_REPO` unset |
 
 A submission's spot-check window opens at its latest decision, and a revocation doesn't move it. A submission withdrawn before any decision opens its window at the withdrawal, and one that is neither decided nor withdrawn opens it at its freeze, so nothing kept for a submission's window is kept for ever. Withdrawing deletes nothing. The purge (7.11) is how the teen deletes a revealed item at once.
 

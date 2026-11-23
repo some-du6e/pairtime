@@ -119,12 +119,22 @@ func TestRetentionTable(t *testing.T) {
 					t.Errorf("%s: the notice has no row for %q", j.ID, e.Data)
 					continue
 				}
-				if j.WindowMonths > 0 {
+				switch {
+				case j.Kept:
+					// A job with no period of its own keeps its rows as long
+					// as the rows that keep them, which the notice says in
+					// words.
+					if !strings.Contains(text, "as long as") {
+						t.Errorf("%s keeps its rows while its kept_by tables hold anything for them, but the notice says %q", j.ID, text)
+					}
+				case j.WindowMonths > 0:
 					if want := fmt.Sprintf("%d months after the decision", j.WindowMonths); !strings.Contains(text, want) {
 						t.Errorf("%s deletes %d months after the decision, but the notice says %q", j.ID, j.WindowMonths, text)
 					}
-				} else if want := retention.Days(int(j.MaxAge / (24 * time.Hour))); !strings.Contains(text, want) {
-					t.Errorf("%s deletes after %v, but the notice says %q", j.ID, j.MaxAge, text)
+				default:
+					if want := retention.Days(int(j.MaxAge / (24 * time.Hour))); !strings.Contains(text, want) {
+						t.Errorf("%s deletes after %v, but the notice says %q", j.ID, j.MaxAge, text)
+					}
 				}
 				if j.Hold != nil {
 					if want := fmt.Sprintf("%d months after the decision", j.Hold.WindowMonths); !strings.Contains(text, want) {
@@ -316,6 +326,12 @@ func TestPrivacyNotice(t *testing.T) {
 				"withdraw any consent you gave, which stops that use from then on",
 				"In the UK that&#39;s the Information Commission, and in the EU it&#39;s the data protection authority of the country you live in.",
 			},
+		},
+		{
+			name: "the notice says a day root's count shows how many batches a server's few users uploaded that day, and that a server can leave day roots off (#249)",
+			want: []string{"A day root is one hash over that day&#39;s uploads and a count of the batches in them, with no name, account or device in it.",
+				"On a server few people use, that count still shows how many batches they uploaded that day.", "The people who run a server can leave day roots off."},
+			notWant: []string{"with a count and nothing about you"},
 		},
 		{
 			name: "the notice says Cloudflare runs bot detection on requests to this server, and that pairtime's pages block the script it adds for that",

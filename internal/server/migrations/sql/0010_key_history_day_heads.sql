@@ -50,8 +50,10 @@ CREATE TABLE day_heads (
 -- them in the transaction that stores the head, and a batch's inclusion
 -- proof reads them, so a proof outlives the day's other witness rows,
 -- which retention and an account's erasure delete. Each is a hash, which
--- names a batch only to someone who holds the batch's head already, and
--- they stay as long as the day roots, for good.
+-- names a batch only to someone who holds the batch's device id, number,
+-- head and receipt time. A day's row stays as long as any witness row of
+-- that UTC day does: retention's server.witness entry deletes it once the
+-- day's last one has gone (docs/errata/2026-11-23-day-leaves-retention.md).
 CREATE TABLE day_leaves (
     day BIGINT PRIMARY KEY,
     leaves BYTEA NOT NULL
