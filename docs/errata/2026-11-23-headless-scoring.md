@@ -1,6 +1,6 @@
 # Erratum: on a computer whose agent can't sample, the scorer stopped finalizing 15 minutes after each agent start
 
-Date 2026-11-23. Raised by WP-HL1, from a linked alpha device's counts and times. Status: waiting for a decision. The pull request that adds this erratum applies the proposal below to SM 2.1, `pkg/score` and the agent's scorer loop, as scoring 0.5.0, under `oracle-change`.
+Date 2026-11-23. Raised by WP-HL1, from a linked alpha device's counts and times. Status: decided 2026-11-23 by the orchestrator for Karim, as the Decision section below records: the proposal, which #234 applies to SM 2.1, `pkg/score` and the agent's scorer loop as scoring 0.5.0, under `oracle-change`.
 
 ## Input
 
@@ -52,9 +52,17 @@ After the paragraph on hard breaks:
 
 DESIGN doesn't change: the agent records what it recorded before, and DESIGN 3.7's "a minute stays `pending` for `PENDING_WINDOW_S` = 900 s after it ends" holds with SM 2.1's clock.
 
+## Decision
+
+Decided 2026-11-23 by the orchestrator for Karim, on #234:
+
+1. The scorer-side rule is taken over repeating a timed `os.focus`. The scorer's clock reads only the presence sampler's records, `os.presence` and `os.power`, and with neither, now is the newest record. The same records decide whether a device never samples. This rescues ledgers already written, records nothing new, and needs no change to DESIGN 3.3.
+2. On a device that never samples, a record dated ahead of the clock moves now, as the first limit below says. Submission already refuses a record dated more than 5 minutes after its batch reached the server (DESIGN 7.4), so the window this opens is bounded.
+3. A minute no Step derived stays pending and is never made final from a stale revision. Only a minute a Step derived with nothing in it gets an empty revision.
+
 ## Limits
 
-- On a device that never samples, a record dated ahead of the device's clock, such as a bridge prompt with a skewed transcript timestamp, moves the present with it, so the minutes before its time become final early and the records that come after them can't change them. That was already so for a device with no OS record. Bounding the present by the records pairtime stamps itself, a hook's, an app reader's or an OS watcher's, would guard against it, but it would stall a device whose only harness records come by a log reader, such as Codex with untrusted hooks, Claude Code with its folder trust pending or a `--bare` run, which is the failure this erratum fixes.
+- On a device that never samples, a record dated ahead of the device's clock, such as a bridge prompt with a skewed transcript timestamp, moves the present with it, so the minutes before its time become final early and the records that come after them can't change them. That was already so for a device with no OS record, and a submission refuses a record dated more than 5 minutes after its batch reached the server (DESIGN 7.4), which bounds how far ahead such a record can be. Bounding the present by the records pairtime stamps itself, a hook's, an app reader's or an OS watcher's, would guard against it, but it would stall a device whose only harness records come by a log reader, such as Codex with untrusted hooks, Claude Code with its folder trust pending or a `--bare` run, which is the failure this erratum fixes.
 - A machine that samples at some times and not at others, as a desktop reached over SSH while its graphical session is logged out, still waits for its next sample: its slots after the last sample stay undecided until one comes, and `FinalBefore` waits with them, as before.
 - After a long silence, the first Step on a device that never samples derives every slot of the silence once, as a sampling device's first Step after a long suspend already does.
 - A minute that the old code gave an empty final revision stays as it is, since a final revision never changes. On a device that ran the old code, the first Step after the upgrade derives every minute from where the scorer stopped, up to the window's records.
