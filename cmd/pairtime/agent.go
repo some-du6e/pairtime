@@ -44,6 +44,9 @@ file there instead of in the usual places.
   --detach  Start the agent in a process of its own, with no console
             window, print its process ID and return at once. The login
             item runs this on Windows, so logging in leaves no window open.
+            On Linux with a systemd user manager, the agent gets a scope
+            unit of its own, pairtime-agent-<id>.scope, so it keeps running
+            when the terminal or app it was started from stops.
 
 Exit status:
   0  the agent stopped cleanly, or --detach started it
@@ -108,7 +111,7 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 }
 
 // detachAgent starts `pairtime agent` in a new process that outlives this
-// one and has no console window (detachedAttr), and returns without
+// one and has no console window (launchAgent), and returns without
 // waiting for it.
 //
 // pairtime.exe is a console program, so when the Run value starts it at
@@ -119,17 +122,25 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 // new agent has this process's environment, so it finds the same data
 // directory, and it exits by itself when an agent already runs there.
 func detachAgent(stdout, stderr io.Writer) int {
-	pid, err := startAgent("")
+	exe, err := os.Executable()
+	var l launched
+	if err == nil {
+		l, err = launchAgent(exe, "")
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "pairtime agent: starting the agent: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "pairtime agent: started the agent, process %d\n", pid)
+	if l.unitErr != nil {
+		// Before the line that names the process, which is the last one.
+		fmt.Fprintf(stderr, "pairtime agent: the agent got no systemd unit of its own (%v), so it stops when the unit this command runs in stops\n", l.unitErr)
+	}
+	fmt.Fprintf(stdout, "pairtime agent: started the agent, process %d\n", l.PID)
 	return 0
 }
 
 // startAgent starts `pairtime agent` in a new process that outlives this
-// one and has no console window (detachedAttr), and returns its process ID
+// one and has no console window (launchAgent), and returns its process ID
 // without waiting for it. `agent --detach` starts the agent this way, and
 // so does a hook that finds it down (DESIGN 3.2). dir, when not "", is the
 // agent's working directory: a hook runs in the harness's project folder,
@@ -139,16 +150,75 @@ func startAgent(dir string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	cmd := exec.Command(exe, "agent")
-	cmd.SysProcAttr = detachedAttr()
-	cmd.Dir = dir
-	// With no Stdin, Stdout or Stderr the agent gets the null device for
-	// all three, so it holds on to nothing of this process's console or
-	// pipes.
-	if err := cmd.Start(); err != nil {
+	l, err := launchAgent(exe, dir)
+	if err != nil {
 		return 0, err
 	}
-	pid := cmd.Process.Pid
-	cmd.Process.Release()
-	return pid, nil
+	return l.PID, nil
+}
+
+// launched is an agent process that launchAgent started.
+type launched struct {
+	// PID is the agent's process ID.
+	PID int
+	// Unit is the systemd unit the agent runs in when it got one of its
+	// own (startInUnit), and "" when it runs where its starter runs.
+	Unit string
+	// unitErr says why the agent runs where its starter runs although a
+	// unit of its own was tried: systemd-run failed, or wasn't used for
+	// this binary. It is nil when there was no user manager to try.
+	unitErr error
+	// exited receives what waiting for the process returns once it has
+	// exited, as cmd.Wait gives it.
+	exited <-chan error
+}
+
+// launchUnits lets launchAgent start the agent in a systemd unit of its
+// own. The command's tests turn it off in TestMain, unless unitsEnv is
+// set, so the agents they start stay out of the user manager of the
+// machine they run on.
+var launchUnits = true
+
+// errNoUserManager means that no systemd user manager runs for this
+// process's user, which is so on every OS but Linux (startInUnit).
+var errNoUserManager = errors.New("no systemd user manager runs for this user")
+
+// launchAgent starts `exe agent` in dir in a process of its own that
+// outlives this one, with no console window, and returns without waiting
+// for it to answer. Its stdin, stdout and stderr are the null device, so it
+// holds on to nothing of this process's console or pipes, and it inherits
+// this process's whole environment, so it finds the same data directory
+// and socket.
+//
+// A session of its own (Setsid) keeps a terminal's hangup from the agent,
+// but not a cgroup: a terminal or an app such as T3 Code that runs each
+// session in a systemd scope stops every process in the scope when the
+// session ends, and an agent that a hook started there would stop with
+// it. So on Linux with a systemd user manager the agent runs in a scope of
+// its own (startInUnit). Without one, or when that start fails, it starts
+// as it does on every other OS (startDetached).
+func launchAgent(exe, dir string) (launched, error) {
+	unitErr := errNoUserManager
+	if launchUnits {
+		l, err := startInUnit(exe, dir)
+		if err == nil {
+			return l, nil
+		}
+		unitErr = err
+	}
+	cmd, err := startDetached(func() *exec.Cmd {
+		c := exec.Command(exe, "agent")
+		c.Dir = dir
+		return c
+	})
+	if err != nil {
+		return launched{}, err
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	l := launched{PID: cmd.Process.Pid, exited: exited}
+	if !errors.Is(unitErr, errNoUserManager) {
+		l.unitErr = unitErr
+	}
+	return l, nil
 }

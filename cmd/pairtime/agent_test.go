@@ -29,6 +29,13 @@ const runEnv = "PAIRTIME_TEST_RUN"
 // runs pairtime too.
 const ownArgs = "@args"
 
+// unitsEnv, when set, lets the test binary, and the processes it starts in
+// turn, start agents in a systemd unit of their own (launchUnits), as the
+// real binary does. Without it they start every agent where they run
+// themselves, so go test leaves nothing in the user manager of the machine
+// it runs on.
+const unitsEnv = "PAIRTIME_TEST_UNITS"
+
 // helpers are other jobs a test can give the test binary in a process of
 // its own: when the environment variable a helper is filed under is set,
 // the binary runs the helper with its value and exits with what it
@@ -39,6 +46,7 @@ func TestMain(m *testing.M) {
 	// Every agent a test starts, in this process or one it starts, keeps
 	// K_dev in a key file in its data directory, off the OS's store.
 	agentKeyStores = []keys.Store{}
+	launchUnits = os.Getenv(unitsEnv) != ""
 	for env, helper := range helpers {
 		if v := os.Getenv(env); v != "" {
 			os.Exit(helper(v))
