@@ -845,3 +845,76 @@ func TestPermissions(t *testing.T) {
 		})
 	}
 }
+
+func TestSweep(t *testing.T) {
+	cases := []struct {
+		name string
+		run  func(t *testing.T, dir string, v *Vault)
+	}{
+		{
+			name: "texts of the days before textFrom and paths of the days before pathsFrom go, and the rest stays",
+			run: func(t *testing.T, dir string, v *Vault) {
+				v.Keep(day1, 1, []byte("one"), []string{"a.go"})
+				v.Keep(day2, 2, []byte("two"), []string{"b.go"})
+				v.Keep(day3, 3, []byte("three"), []string{"c.go"})
+				n, err := v.Sweep(day2, day3)
+				if err != nil || n != 3 {
+					t.Fatalf("Sweep = %d, %v; want 3: day 1's text and both days' paths before day 3", n, err)
+				}
+				for s, want := range map[uint64]bool{1: false, 2: true, 3: true} {
+					_, err := text(t, v, s, map[uint64]string{1: "one", 2: "two", 3: "three"}[s])
+					if got := err == nil; got != want {
+						t.Errorf("Text(%d) kept %v (%v), want %v", s, got, err, want)
+					}
+				}
+				for s, p := range map[uint64]string{1: "a.go", 2: "b.go", 3: "c.go"} {
+					_, err := v.Paths(s, hunks(t, p))
+					if got := err == nil; got != (s == 3) {
+						t.Errorf("Paths(%d) kept %v (%v), want %v", s, got, err, s == 3)
+					}
+				}
+				if days, _ := segments(dir); !slices.Equal(days, []string{day2, day3}) {
+					t.Errorf("files %q, want day 1's gone", days)
+				}
+			},
+		},
+		{
+			name: "the files of another key in old/ lose theirs by the same days, and its directory goes once empty",
+			run: func(t *testing.T, dir string, v *Vault) {
+				v.Close()
+				other, _ := open(t, dir, 2, keyB, 1, true)
+				other.Keep(day1, 1, []byte("old one"), nil)
+				other.Keep(day3, 2, []byte("old three"), nil)
+				other.Close()
+				v, _ = open(t, dir, 1, keyA, 1, true)
+				if _, err := v.Sweep(day2, day2); err != nil {
+					t.Fatal(err)
+				}
+				if days, _ := segments(filepath.Join(dir, oldDir, keyB)); !slices.Equal(days, []string{day3}) {
+					t.Errorf("old/%s keeps %q, want %q", keyB, days, day3)
+				}
+				if _, err := v.Sweep("2026-12-01", "2026-12-01"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(filepath.Join(dir, oldDir, keyB)); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("old/%s is still there: %v", keyB, err)
+				}
+			},
+		},
+		{
+			name: "a sweep refuses a day that isn't one",
+			run: func(t *testing.T, dir string, v *Vault) {
+				if _, err := v.Sweep("today", day1); err == nil {
+					t.Error("Sweep took today")
+				}
+			},
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			v, _ := open(t, dir, 1, keyA, 1, true)
+			tt.run(t, dir, v)
+		})
+	}
+}
