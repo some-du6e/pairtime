@@ -54,11 +54,14 @@
 //     names it by its comm (internal/platform/linux).
 //   - The OTLP rule takes the client as the app-class table identifies it
 //     (platform.HarnessOf), by its title where the table knows it, as the
-//     process scan and the hook path do, because Claude Code installed
-//     with npm runs as node titled claude. So a process titled like a
-//     harness that the process scan reports passes OTLP, and so does one
-//     that a hook's parent chain names. That is the residual WP-AD4 builds
-//     on.
+//     process scan and the hook path do, so that a Node harness started
+//     through a #! script, or one that sets process.title, still counts.
+//     So a process titled like a harness that the process scan reports
+//     passes OTLP, and so does one that a hook's parent chain names. A
+//     renamed copy that either names passes too: on Windows, where the
+//     reader records no title, a program copied to claude.exe, and
+//     elsewhere a python3 renamed claude. That is the residual WP-AD4
+//     builds on.
 //
 // What the check reads stays on the device: pids, executable names and
 // parent chains are local (AGENTS.md), and only Reason and the via it
@@ -88,7 +91,8 @@ const (
 	Found Reason = "found"
 	// NoOwner is a connection whose client end the lookup couldn't trace
 	// to one process of this user: it isn't an established loopback
-	// connection, no process this user can see holds it, or several do.
+	// connection, no process this user can see holds it, or several do,
+	// which only the Linux and macOS lookups can tell.
 	// The Linux and macOS lookups see only this user's processes, so there
 	// another user's connection is NoOwner too. Result.Err says which.
 	NoOwner Reason = "no_owner"
@@ -253,11 +257,12 @@ func (r Result) Heartbeat() Result {
 // claimed that process or the process scan reported it (DESIGN 5.2), which
 // the agent knows by the process's ID (procs.Scanner.Claimed and
 // Sessions). HarnessOf goes by the process's title where the table knows
-// it, as the scan and the hook path do, because Claude Code installed with
-// npm runs as node titled claude, so a process titled like a harness that
-// the scan reports passes. named is asked anew each time the rule is
-// applied, and a nil named names nothing. A Result whose lookup found no
-// client of this user's comes back as it is.
+// it, as the scan and the hook path do, so that a Node harness started
+// through a #! script, or one that sets process.title, counts. So a
+// process titled like a harness, or a renamed copy, that the scan reports
+// passes. named is asked anew each time the rule is applied, and a nil
+// named names nothing. A Result whose lookup found no client of this
+// user's comes back as it is.
 func (r Result) OTLP(named func(platform.ID) bool) Result {
 	if !r.found() {
 		return r

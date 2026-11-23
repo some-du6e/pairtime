@@ -226,6 +226,10 @@ func TestAppClassOf(t *testing.T) {
 		{"Debian's vim.basic, which vim runs as, is an editor", Linux, "vim.basic", event.AppEditor},
 		{"Debian's vim.tiny, which vi runs as, is an editor", Linux, "vim.tiny", event.AppEditor},
 		{"Debian's gvim, vim.gtk3, is an editor", Linux, "vim.gtk3", event.AppEditor},
+		{"openSUSE's vim-nox11, which vim runs as, is an editor", Linux, "vim-nox11", event.AppEditor},
+		{"Debian's emacs-gtk, which emacs runs as, is an editor", Linux, "emacs-gtk", event.AppEditor},
+		{"upstream's emacs-31.1, which the emacs link names, is an editor", Linux, "emacs-31.1", event.AppEditor},
+		{"emacsclient, which only asks a running Emacs to open a file, is other", Linux, "emacsclient", event.AppOther},
 		{"Helix is an editor", Darwin, "hx", event.AppEditor},
 		{"Devin Desktop is an editor", Linux, "devin-desktop", event.AppEditor},
 	}

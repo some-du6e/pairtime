@@ -70,16 +70,16 @@
       "cite": "CP 3.3 (foreground app on Linux, X11 _NET_ACTIVE_WINDOW); SM 6.4 (an X11 laptop)"
     },
     {
-      "names": ["code", "code - insiders", "code-insiders", "codium", "cursor", "windsurf", "devin-desktop", "devin desktop", "zed", "zed-editor", "kiro", "trae", "antigravity", "sublime_text", "emacs", "gvim", "neovide", "nvim-qt"],
+      "names": ["code", "code - insiders", "code-insiders", "codium", "cursor", "windsurf", "devin-desktop", "devin desktop", "zed", "zed-editor", "kiro", "trae", "antigravity", "sublime_text", "emacs", "emacs-*", "gvim", "neovide", "nvim-qt"],
       "app_class": "editor",
       "role": "ide",
-      "cite": "HS 13.1 (editor activity); HS 4 (Cursor); HS 8 (Windsurf, now Devin Desktop, whose Linux package is devin-desktop); HS 9 (Zed, Kiro, Trae, Antigravity). emacs -nw runs the same emacs"
+      "cite": "HS 13.1 (editor activity); HS 4 (Cursor); HS 8 (Windsurf, now Devin Desktop, whose Linux package is devin-desktop); HS 9 (Zed, Kiro, Trae, Antigravity). emacs -nw runs the same emacs. Debian and Ubuntu run Emacs as emacs-gtk, emacs-nox, emacs-lucid or emacs-pgtk behind the emacs alternative, and upstream's make install, which Arch and Homebrew use, as emacs-<version> behind an emacs link, so emacs-* names the executable those run, which the peer check goes by"
     },
     {
-      "names": ["vi", "vim", "vim.basic", "vim.tiny", "vim.nox", "vim.gtk", "vim.gtk3", "vim.athena", "nvim", "hx", "helix", "kak", "nano", "micro"],
+      "names": ["vi", "vim", "vim.basic", "vim.tiny", "vim.nox", "vim.gtk", "vim.gtk3", "vim.athena", "vim-nox11", "vim-small", "nvim", "hx", "helix", "kak", "nano", "micro"],
       "app_class": "editor",
       "role": "ide",
-      "cite": "HS 13.1 (editor activity through WakaTime's editor plugins, Vim's among them); TE 4.3 (editor time from the WakaTime dual-send). Terminal editors: DESIGN 5.7's peer check passes a heartbeat whose wakatime-cli has one of these above it, and a harness started from nvim's :terminal is an editor session. Helix is hx, or helix on Arch. Debian and Ubuntu install Vim's builds as vim.basic, vim.tiny, vim.nox, vim.gtk, vim.gtk3 and vim.athena behind the vi and vim alternatives, so those are the executables' own names, which the peer check goes by"
+      "cite": "HS 13.1 (editor activity through WakaTime's editor plugins, Vim's among them); TE 4.3 (editor time from the WakaTime dual-send). Terminal editors: DESIGN 5.7's peer check passes a heartbeat whose wakatime-cli has one of these above it, and a harness started from nvim's :terminal is an editor session. Helix is hx, or helix on Arch. Debian and Ubuntu install Vim's builds as vim.basic, vim.tiny, vim.nox, vim.gtk, vim.gtk3 and vim.athena behind the vi and vim alternatives, and openSUSE as vim-nox11 and vim-small, so those are the executables' own names, which the peer check goes by"
     },
     {
       "names": ["idea", "idea64", "pycharm", "pycharm64", "webstorm", "webstorm64", "goland", "goland64", "clion", "clion64", "rider", "rider64", "phpstorm", "phpstorm64", "rubymine", "rubymine64", "studio", "studio64"],

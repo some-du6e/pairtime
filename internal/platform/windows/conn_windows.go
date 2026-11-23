@@ -58,9 +58,10 @@ var errNoConn = errors.New("no TCP connection")
 //
 // A socket that the binder hands to another process, by inheritance or a
 // duplicated handle, keeps the binder's pid in the table. So the lookup
-// names the binder, and unlike the Linux and macOS lookups, which see
-// every process that holds a socket, it can't refuse a socket that several
-// processes hold. Checking the binder's start against the bind time that
+// names the binder, and it can't refuse a socket that several processes
+// hold. The Linux and macOS lookups can, among the processes they can
+// read: every one of this user's, except on Linux one that made itself
+// undumpable. Checking the binder's start against the bind time that
 // TCP_TABLE_OWNER_MODULE_CONNECTIONS records is issue #213. The row names
 // a process of any user; the peer check compares its Owner with this
 // user's (internal/agent/peer).

@@ -3,6 +3,7 @@
 package peer
 
 import (
+	"cmp"
 	"errors"
 	"net/netip"
 	"testing"
@@ -85,6 +86,18 @@ func TestHeartbeat(t *testing.T) {
 		{
 			name: "wakatime-cli that gvim started passes, by vim.gtk3, the executable Debian runs it as",
 			procs: line(me, proc("systemd"), platform.Proc{Name: "vim.gtk3", Alias: "gvim"},
+				proc("wakatime-cli-linux-amd64")),
+			want: Passed, editor: 1,
+		},
+		{
+			name: "wakatime-cli that Emacs started passes, by emacs-gtk, the executable Debian runs emacs as",
+			procs: line(me, proc("systemd"), platform.Proc{Name: "emacs-gtk", Alias: "emacs"},
+				proc("wakatime-cli-linux-amd64")),
+			want: Passed, editor: 1,
+		},
+		{
+			name: "wakatime-cli that Emacs started passes, by emacs-31.1, the executable upstream's install links emacs to",
+			procs: line(me, proc("systemd"), platform.Proc{Name: "emacs-31.1", Alias: "emacs"},
 				proc("wakatime-cli-linux-amd64")),
 			want: Passed, editor: 1,
 		},
@@ -247,23 +260,31 @@ func TestHeartbeat(t *testing.T) {
 func TestOTLP(t *testing.T) {
 	claude := line(me, proc("systemd"), proc("kitty"), proc("zsh"), platform.Proc{Name: "claude", Ticks: 4242})
 	tests := []struct {
-		name  string
-		self  string
-		procs []platform.Proc
-		err   error
+		name string
+		// goos and self default to Linux and this test's uid.
+		goos, self string
+		procs      []platform.Proc
+		err        error
 		// names is what named answers; nil passes a nil named.
 		names *bool
 		want  Reason
 	}{
 		{name: "a harness process that a hook or the scan named passes", procs: claude, names: ptr(true), want: Passed},
 		{
-			name:  "node titled claude passes, as Claude Code installed with npm runs",
+			name:  "node titled claude passes, as a Node harness started through a #! script or one that sets process.title is titled",
 			procs: line(me, proc("systemd"), proc("kitty"), proc("zsh"), platform.Proc{Name: "node", Alias: "claude"}),
 			names: ptr(true), want: Passed,
 		},
 		{
 			name:  "a python3 script titled claude that the scan reports passes too, the residual WP-AD4 builds on",
 			procs: line(me, proc("systemd"), proc("kitty"), proc("zsh"), platform.Proc{Name: "python3", Alias: "claude"}),
+			names: ptr(true), want: Passed,
+		},
+		{
+			name:  "on Windows, a program copied to claude.exe that the scan reports passes, as the reader names it by its image alone",
+			goos:  platform.Windows,
+			self:  session,
+			procs: line(session, proc("explorer"), proc("WindowsTerminal"), proc("cmd"), proc("claude")),
 			names: ptr(true), want: Passed,
 		},
 		{name: "a harness process that nothing named fails", procs: claude, names: ptr(false), want: NotNamed},
@@ -287,7 +308,8 @@ func TestOTLP(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := New(Options{OS: platform.Linux, Self: me, Owner: func(netip.AddrPort, netip.AddrPort) (int, []platform.Proc, error) {
+			goos, self := cmp.Or(tt.goos, platform.Linux), cmp.Or(tt.self, me)
+			c := New(Options{OS: goos, Self: self, Owner: func(netip.AddrPort, netip.AddrPort) (int, []platform.Proc, error) {
 				if tt.err != nil {
 					return 0, nil, tt.err
 				}
