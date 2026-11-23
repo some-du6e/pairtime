@@ -12,7 +12,6 @@ sys.path.insert(0, os.path.dirname(HERE))
 import sidedoor as sd  # noqa: E402
 
 tl = sd.tl
-ERRATUM = "2026-11-19-turns-without-a-stop"
 
 fx = tl.Fixture(
     "sidedoor/e-bridge-lines",
@@ -105,8 +104,8 @@ for t in TURNS:
     sweep.anchor(t, lead_s=lead, typing_part_s=lead, reason="P", level="C")
     sweep.reset(t, sd.R_TURN_BASE_S)
     sweep.fill(t + EDIT_AFTER, 0)
-    # The erratum: a turn with no agent.stop runs until the latest agent
-    # record received for it, here the edit, 3 s after the prompt.
+    # SM 1.3: a turn in a session only the bridge reports runs to its latest
+    # agent record, here the edit, 3 s after the prompt.
     sweep.run(t, t + EDIT_AFTER)
 
 exp = tl.Expected(fx, sm="docs/PLAN.md WP-FX4 (e); DESIGN 5.2, 5.7, 6.2 D2, D4 and D19, 6.4", evidence="C",
@@ -117,14 +116,13 @@ exp.row("14:02", credit={P: {"P": 57}}, uncredited={"X.no_anchor": 3}, agent=0,
         note="The first prompt's 60 s typing lead starts at 14:02:03.")
 for m in ("14:03", "14:05", "14:07"):
     exp.row(m, credit={P: {"P": 3, "SUP": 3, "READ": 17}}, uncredited={"X.no_anchor": 37}, agent=3,
-            erratum=ERRATUM,
             note="The prompt at :03, then the turn's 20 s base until :23: SUP until the edit at :06, READ after. "
                  "The 5,000 lines add nothing to the bucket.")
     if m != "14:07":
         nxt = {"14:03": "14:04", "14:05": "14:06"}[m]
-        exp.row(nxt, credit={P: {"P": 57}}, uncredited={"X.no_anchor": 3}, agent=0, erratum=ERRATUM,
+        exp.row(nxt, credit={P: {"P": 57}}, uncredited={"X.no_anchor": 3}, agent=0,
                 note="The next prompt's lead starts at :03.")
-exp.row("14:08", bucket=False, codes=["X.no_anchor"], erratum=ERRATUM)
+exp.row("14:08", bucket=False, codes=["X.no_anchor"])
 sd.check_rows(exp, sweep, P)
 
 side = sd.SideDoor(fx, exp, case="e", wp="docs/PLAN.md WP-FX4 (e)",
@@ -169,7 +167,7 @@ expected = exp.doc(
     },
     stated=["level_a_s", "level_b_s"],
     approx={},
-    errata=[ERRATUM],
+    errata=[],
     notes=[
         "Every credited second rests on a bridge anchor: level C, labeled via_bridge.",
         "Unlike (a), (c) and (d), these records count toward logged_s and ai_logged_s: they come from "
@@ -180,8 +178,9 @@ expected = exp.doc(
         "commit, so it is 0 submittable as recorded.",
         "Uncapped, each 5,000-line edit would refill the bucket to its 600 s cap and turn the 40 s from :23 to "
         "the next lead, and everything after 14:07:23, into READ.",
-        "The SUP and READ split, agent_running_s and the X.no_anchor seconds after each edit depend on the "
-        "erratum: no agent.stop says when a bridge turn ends.",
+        "No agent.stop says when a bridge turn ends, so it runs from its prompt to its latest agent record, "
+        "the edit (SM 1.3, DESIGN 5.7). That gives the SUP and READ split, agent_running_s and the X.no_anchor "
+        "seconds after each edit.",
     ],
 )
 
@@ -210,7 +209,7 @@ prompts = {
     ],
 }
 
-sidedoor = side.doc(errata=[ERRATUM], notes=[
+sidedoor = side.doc(errata=[], notes=[
     "fill_s is each turn's whole fill, the 20 s base included; output_fill_s is what the 5,000 diff lines "
     "alone would add without the side-door cap.",
 ])

@@ -278,7 +278,7 @@
       "why": "DESIGN 5.4: a track anchor's reading fill is R_TURN_BASE_S."
     }
   ],
-  "errata": ["2026-11-19-turns-without-a-stop"],
+  "errata": [],
   "notes": [
     "The records are (a)'s; only the keyboard evidence before each call differs, and with it the level."
   ]

@@ -1,6 +1,6 @@
 # Erratum: how long a turn runs before its stop comes
 
-Date 2026-11-20. Raised by WP-SC2's review fix-up. Status: waiting for a decision. It follows on from [the turns-without-a-stop erratum](2026-11-19-turns-without-a-stop.md), whose rule `pkg/score` keeps for the turns that erratum is about, and it was raised by the #52 review (#80).
+Date 2026-11-20. Raised by WP-SC2's review fix-up. Status: decided 2026-11-20 by the orchestrator for Karim, with the turns-without-a-stop erratum: both additions stand and SM 1.3 states them, an `agent.interrupt` ends a turn as a stop does, and a gap of more than `READ_HORIZON_S`, the bound DESIGN 3.7 sets for every rule, ends the run of a turn no hook or log reader sees (Decision, below). It follows on from [the turns-without-a-stop erratum](2026-11-19-turns-without-a-stop.md), and it was raised by the #52 review (#80).
 
 ## Input
 
@@ -24,7 +24,7 @@ The erratum's "received so far" leaves the same gap for any turn, as its last pa
 It keeps the last-record rule for turns that no hook or log reader sees: the track, plugin and bridge turns that erratum is about. It adds two things.
 
 1. A turn in a session that hooks or a log reader see runs up to "now" until its stop comes, since its hooks will report the stop. It runs no further than `BUCKET_TTL_S` after its last agent record, or after its prompt while it has none.
-2. A record changes nothing derived more than `RETURN_GAP_MAX_S` + `READ_HORIZON_S` = 1,200 s before its own time, the return rule's reach, which the 2,100 s already allow for. So a silence of a turn's agent records longer than 1,200 s ends the run of a turn no hook or log reader sees at the last record before the silence. In a hooked session, a silence longer than `BUCKET_TTL_S` ends the run `BUCKET_TTL_S` after the last record. A later record of the turn doesn't start it again. A continuation whose first record comes more than 1,200 s after the session's previous stop starts at that record, not at the stop.
+2. A record changes nothing derived more than `READ_HORIZON_S` = 600 s before its own time, the bound DESIGN 3.7 sets for every rule (docs/errata/2026-11-19-return-rule-lookahead.md). So a silence of a turn's agent records longer than `READ_HORIZON_S` ends the run of a turn no hook or log reader sees at the last record before the silence. In a hooked session, a silence longer than `BUCKET_TTL_S` ends the run `BUCKET_TTL_S` after the last record. A later record of the turn doesn't start it again. A continuation whose first record comes more than `READ_HORIZON_S` after the session's previous stop starts at that record, not at the stop.
 
 The live scorer and a re-score of the same records then agree. `turnBuild.runUntil` in `pkg/score/turns.go` is the code. No fixture row changes: every turn in the side-door cases (a), (b) and (e) keeps its run.
 
@@ -32,3 +32,7 @@ The live scorer and a re-score of the same records then agree. `turnBuild.runUnt
 
 1. Accept the two additions, or pick another bound for a hooked turn without its stop. `BUCKET_TTL_S` keeps a turn whose session crashed before its Stop hook running for up to two hours after its last record, with agent time and `X.agent_only` on every idle second, until a later prompt or a `session.end` ends it. A shorter bound, such as the 2,100 s that stay pending, would end a 40-minute build's turn before its stop.
 2. Whatever is chosen belongs in SM 1.3, beside the turns-without-a-stop rule.
+
+## Decision
+
+Both additions stand, and SM 1.3 states them (the turns-without-a-stop erratum's Decision), with an `agent.interrupt` ending a turn as a stop does. `BUCKET_TTL_S` stays the bound for a turn whose hooks or logs will report how it ends. A shorter one, such as what stays pending, would end a 40-minute build's turn before its stop. The cost, up to two hours of agent time after a crash that leaves no `session.end`, credits nothing. It only withholds that project's lookups in the meantime.
