@@ -1,6 +1,6 @@
 # Erratum: DESIGN 7.3's CC8 detection figure doesn't hold against a client that plans ahead
 
-Date 2026-11-19. Raised by the ledger fix-up for issue #19, from the review of #12 (WP-LG3). Status: waiting for Karim, who decides CC8's role in issue #15. Until then DESIGN 7.3 keeps its figure, and `docs/spec/ledger-v1.md` 10.8 says what CC8 can and can't check.
+Date 2026-11-19. Raised by the ledger fix-up for issue #19, from the review of #12 (WP-LG3). Status: decided 2026-11-20 by the orchestrator for Karim (#15): accept the weaker guarantee. CC8 reveals no keyed value and keeps only the checks that need no key. DESIGN 7.3 restates what it catches, and binding the key is rejected.
 
 ## Input
 
@@ -24,6 +24,12 @@ DESIGN 7.3's figure is a design number, which ground rule 6 (PLAN.md) says goes 
 2. **Bind the key.** Commit to the MinHash key, or an input to its derivation, early and verifiably, so that the server can recompute the shingle values of revealed turns.
 3. **Drop CC8's dark-flow role.** Rely on other checks, and say so.
 
-## For Karim
+## Decision
 
-Pick one of the three in issue #15. If it is the second, the ledger spec needs a new committed value. No device has witnessed data yet, so version 1 can still take it, but only until the first device uploads; WP-TR2 waits for that spec change.
+Decided 2026-11-20 for Karim in issue #15: accept the weaker guarantee and reveal no keyed value.
+
+- CC8 checks only what needs no key (DESIGN 7.3, spec 10.8): `es` against every line a reveal shows whole; on a reveal that removed nothing, `len_chars`, `low_effort`, `es` and `pc` against the text; and equal `th`, `mh` and `es` between one submission's revealed turns of one chain whose normalized texts or error signatures are equal.
+- DESIGN 7.3 keeps 0.65 only for those per-turn fields, on a turn that isn't withheld and whose reveal kept the text the check needs. Features a client keys itself are caught only through a same-text turn: under 0.07 for one loop of five identical prompts with three such turns in a pool of 100, and never for reworded repeats.
+- The per-shingle reveal is dropped. A hidden value undid its redaction, and a shown one let the server probe every committed sketch for that phrase, while it caught only a client that falsified a sketch and then revealed true values.
+- Binding the key is rejected. A verifiable random function such as RFC 9381's RSA-FDH-VRF would let the server check revealed values, but only on drawn turns whose reveals remove nothing. Withholding, removal by hand, reworded repeats and the never-revealed `agent.tool` and `shell.command` features would stay open, and shown values would keep the probe leak.
+- DESIGN 7.12 accepts what remains, a modified client that forges its dark-flow inputs, as T9 residue.
