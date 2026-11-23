@@ -92,8 +92,21 @@ func newUnitName() string {
 // unloads the unit even when the agent fails, so a failed unit neither
 // stays in `systemctl --user --failed` nor keeps its name, and
 // --description keeps the binary's path out of unit lists and the journal.
+//
+// CPUWeight and IOWeight give the scope a tenth of a unit's default share
+// when the CPU or the disk is contended, the weight T3 Code gives its own
+// agents' slice: in its starter's scope the agent shared that scope's
+// share, and in app.slice at the default weight it would take ten times
+// what every session of an app like T3 Code gets together. A background
+// tracker gives way, as the agent's EcoQoS on Windows and Background
+// process type on macOS do (DESIGN 3.2), and the lookback reader's idle
+// priority ranks it only against the agent's own threads. A numeric weight
+// needs systemd 232, older than the 236 --collect needs, and a manager
+// that doesn't control a resource for the user's units leaves its weight
+// unset, as swiss's systemd 255 does IOWeight.
 func unitArgs(unit, exe string) []string {
-	return []string{"--user", "--scope", "--quiet", "--collect", "--unit=" + unit, "--description=pairtime agent", "--", exe, "agent"}
+	return []string{"--user", "--scope", "--quiet", "--collect", "--unit=" + unit, "--description=pairtime agent",
+		"--property=CPUWeight=10", "--property=IOWeight=10", "--", exe, "agent"}
 }
 
 // startInUnit starts `exe agent` in dir in a scope of its own under the
@@ -150,8 +163,16 @@ func startInUnit(exe, dir string) (launched, error) {
 			if err == nil {
 				err = errors.New("exit status 0")
 			}
-			return launched{}, fmt.Errorf("systemd-run exited before the agent was in its unit: %w", err)
+			// An agent that reached its unit and failed within one poll
+			// exits so too, and is started again in its starter's unit.
+			return launched{}, fmt.Errorf("systemd-run, or the agent it became, exited before the agent was seen in its unit: %w", err)
 		case <-timeout.C:
+			// The tick and the timeout can come together, and select picks
+			// either: a process that reached its unit by now, which may be
+			// the agent already, is left running.
+			if inUnit(pid, unit) {
+				return launched{PID: pid, Unit: unit, exited: exited}, nil
+			}
 			cmd.Process.Kill()
 			<-exited
 			return launched{}, fmt.Errorf("systemd-run didn't start the agent's unit within %v", unitWait)

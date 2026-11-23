@@ -298,11 +298,13 @@ jobs:
         # in a systemd scope of its own (cmd/pairtime/detach_linux.go), so
         # stopping the scope of the session that started it, as T3 Code does
         # at a session's end, leaves it running. TestAgentOutlivesScope needs
-        # the runner user's own systemd manager, which runs once lingering is
-        # on, and go test above skips it without PAIRTIME_TEST_USER_MANAGER,
-        # so this step fails unless it ran and passed. XDG_RUNTIME_DIR is set
-        # for this step alone: elsewhere it would move the agents' sockets
-        # and the session bus the other tests look for.
+        # the runner user's own systemd manager, which lingering keeps running
+        # whether or not a session holds it, and go test above skips it
+        # without PAIRTIME_TEST_USER_MANAGER, so this step fails unless it ran
+        # and passed. When the runner leaves XDG_RUNTIME_DIR unset, the step
+        # sets it in its own shell only: set for every step, it would move
+        # where the other tests' agents put their sockets and look for the
+        # session bus.
         run: |
           sudo loginctl enable-linger "$(id -un)"
           export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
@@ -313,8 +315,9 @@ jobs:
           systemd-run --version
           echo "user manager: $(timeout 30 systemctl --user is-system-running --wait 2>&1 || true)"
           # On a runner image whose user manager doesn't work, this fails
-          # with systemd's own words.
-          systemd-run --user --scope --quiet true
+          # with systemd's own words, and a manager that hangs fails it after
+          # a minute rather than the job's whole budget.
+          timeout 60 systemd-run --user --scope --quiet true
           set +e
           out=$(PAIRTIME_TEST_USER_MANAGER=1 go test -count=1 -v -run '^TestAgentOutlivesScope$' ./cmd/pairtime 2>&1)
           code=$?

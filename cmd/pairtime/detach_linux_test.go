@@ -143,9 +143,10 @@ func TestUnitArgs(t *testing.T) {
 			},
 		},
 		{
-			name: "systemd-run runs the agent in that scope under the user's manager, quietly, unloaded even when it fails, described without the binary's path",
+			name: "systemd-run runs the agent in that scope under the user's manager, quietly, unloaded even when it fails, described without the binary's path, at a tenth of a unit's CPU and IO weight",
 			check: func(t *testing.T) {
-				want := []string{"--user", "--scope", "--quiet", "--collect", "--unit=" + unit, "--description=pairtime agent", "--", "/opt/pairtime/pairtime", "agent"}
+				want := []string{"--user", "--scope", "--quiet", "--collect", "--unit=" + unit, "--description=pairtime agent",
+					"--property=CPUWeight=10", "--property=IOWeight=10", "--", "/opt/pairtime/pairtime", "agent"}
 				if got := unitArgs(unit, "/opt/pairtime/pairtime"); !slices.Equal(got, want) {
 					t.Errorf("unitArgs() = %q\nwant %q", got, want)
 				}
