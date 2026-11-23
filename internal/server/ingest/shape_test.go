@@ -256,6 +256,10 @@ func TestBucketShape(t *testing.T) {
 		{"a minute with an offset is bad_string", func(m map[string]any) { m["minute"] = "2026-11-19T12:00:00+00:00" }, shapeResult{CodeBadString, "minute"}},
 		{"a minute with fractional seconds is bad_string", func(m map[string]any) { m["minute"] = "2026-11-19T12:00:00.000Z" }, shapeResult{CodeBadString, "minute"}},
 		{"a minute before 2020 is bad_string", func(m map[string]any) { m["minute"] = "2019-12-31T23:59:00Z" }, shapeResult{CodeBadString, "minute"}},
+		{"a minute on 30 February is bad_string", func(m map[string]any) { m["minute"] = "2026-02-30T12:00:00Z" }, shapeResult{CodeBadString, "minute"}},
+		{"a minute at hour 24 is bad_string", func(m map[string]any) { m["minute"] = "2026-11-19T24:00:00Z" }, shapeResult{CodeBadString, "minute"}},
+		{"a reason returned twice is bad_string", func(m map[string]any) { slot(m, 1)["why"] = "READ~r~r" }, shapeResult{CodeBadString, "slots[1].why"}},
+		{"a reason's suffixes in the wrong order are bad_string", func(m map[string]any) { slot(m, 0)["why"] = "P+restored~r" }, shapeResult{CodeBadString, "slots[0].why"}},
 		{"a credit reason as an uncredited member is bad_string", func(m map[string]any) {
 			m["uncredited"] = map[string]any{"P": 3}
 		}, shapeResult{CodeBadString, "uncredited"}},

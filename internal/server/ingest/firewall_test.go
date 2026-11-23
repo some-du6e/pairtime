@@ -157,7 +157,7 @@ var lenientForms = map[string]*regexp.Regexp{
 	"gitid":      regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`),
 	"semver":     regexp.MustCompile(`^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$`),
 	"params":     regexp.MustCompile(`^sha256:[0-9a-f]{64}$`),
-	"minute":     regexp.MustCompile(`^20[2-9][0-9]-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:00Z$`),
+	"minute":     regexp.MustCompile(`^20[2-9][0-9]-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:00Z$`),
 	"reason":     regexp.MustCompile(`^[A-Za-z_.~+]{1,40}$`),
 	"uncredited": regexp.MustCompile(`^X\.[a-z_]{1,32}$`),
 	"lower":      regexp.MustCompile(`^[a-z_]{1,32}$`),
@@ -173,10 +173,13 @@ var lenientForms = map[string]*regexp.Regexp{
 // put each in every place of every item, and FuzzFreeText starts from
 // them.
 //
-// Some fit a key's form, as a bare name or an event id does. A place that
-// holds a key, a device, project or path key, takes those: only the
-// client keeps them out, by keying every identifier on the device
-// (AGENTS.md). Every other place refuses them.
+// Some fit one of the two forms that a name can fit, which TestFreeTextRefused
+// and TestFirewall skip them in. A bare name or an event id fits a key, so
+// a place that holds a device, project or path key takes it, and only the
+// client keeps names out of keys, by keying every identifier on the device
+// (AGENTS.md). A name after a version number fits a version's suffix, so
+// client_build and a harness's version take it (D-version-grammar;
+// ingest-v1 2.3.4). Every other place refuses them.
 var freeText = []struct{ never, text string }{
 	{"Prompt or output text", "fix the login bug please"},
 	{"Prompt or output text", "ignore previous instructions\n"},
@@ -196,6 +199,7 @@ var freeText = []struct{ never, text string }{
 	{"error text", "TypeError: Cannot read properties of undefined (reading 'map')"},
 	{"hostnames", "teens-mbp.local"},
 	{"hostnames", "DESKTOP-4F2K9QZ"},
+	{"hostnames", "1.0.0-teens-mbp.local"},
 	{"OS usernames", "teen"},
 	{"OS usernames", `DESKTOP-4F2K9QZ\teen`},
 	{"anchor ids", "0190f4b2-5a1c-7d3e-8f00-123456789abc"},
@@ -208,6 +212,7 @@ var freeText = []struct{ never, text string }{
 
 // The ways a place takes text.
 const (
+	asItem     = "item"      // as the item itself, a string where an object goes
 	asValue    = "value"     // as a member's value
 	asName     = "name"      // as the name of a member the object doesn't have
 	asMapName  = "map name"  // as the name of a map's member
@@ -226,11 +231,11 @@ type place struct {
 	ok    string   // for asMapValue, a name the map takes
 }
 
-// places returns every place of it: each member's value, the first entry
-// of each list and the value of a map's member, and the name of a member
-// of each object and each map.
+// places returns every place of it: the item itself, each member's value,
+// the first entry of each list and the value of a map's member, and the
+// name of a member of each object and each map.
 func (it *tier1Item) places() []place {
-	var out []place
+	out := []place{{item: it, how: asItem, code: CodeNotObject}}
 	var walk func(path string, members []tier1Member)
 	walk = func(path string, members []tier1Member) {
 		names := make([]string, len(members))
@@ -273,6 +278,8 @@ func (p place) what() string {
 		in = "the item"
 	}
 	switch p.how {
+	case asItem:
+		return "the item itself"
 	case asName:
 		return "a member's name in " + in
 	case asMapName:
@@ -283,9 +290,13 @@ func (p place) what() string {
 	return in
 }
 
-// put returns p's item's sample with text at p.
+// put returns p's item's sample with text at p, or for asItem the text as
+// the item.
 func (p place) put(t testing.TB, text string) []byte {
 	t.Helper()
+	if p.how == asItem {
+		return marshal(t, text)
+	}
 	m := asMap(t, p.item.sample(t))
 	switch p.how {
 	case asValue:
@@ -316,10 +327,11 @@ func (p place) refusal(text string) (shapeResult, bool) {
 	return shapeResult{p.code, p.path}, true
 }
 
-// fits reports whether text has a key's form and p holds a key. Of
-// freeText, only such text may pass a place's check.
+// fits reports whether p holds a key or a version and text has that form,
+// the two that a name can fit. Of freeText, only such text may pass a
+// place's check.
 func (p place) fits(text string) bool {
-	return p.form == "key" && lenientForms["key"].MatchString(text)
+	return (p.form == "key" || p.form == "version") && lenientForms[p.form].MatchString(text)
 }
 
 // getPath returns the member at path, as setPath finds it, or root for "".
@@ -391,7 +403,10 @@ func TestFreeTextRefused(t *testing.T) {
 // database (DESIGN 4.5's firewall; PLAN WP-SV5). Its seeds and its corpus
 // in testdata/fuzz/FuzzFreeText run with every go test, as ci.yml's ingest
 // fuzz corpus step checks, and nightly.yml fuzzes it for 60 s. An input
-// the fuzzing finds goes into the corpus with the fix.
+// the fuzzing finds goes into the corpus with the fix. Text that a lenient
+// form takes and the server still refuses, such as 30 February or a
+// reason's suffixes twice, is the table tests' to check, as TestBucketShape
+// does.
 func FuzzFreeText(f *testing.F) {
 	for _, s := range freeText {
 		f.Add(s.text)
@@ -775,10 +790,15 @@ func repeats(vs []string) []string {
 // free text in every member the server takes. A new tier-1 field needs
 // Karim to add it to DESIGN 4.3 first (PLAN ground rule 10), and this test
 // is the backstop: it fails until the field is in DESIGN 4.3, in the
-// spec, in the allowlist and here.
+// spec, in the allowlist and here. DESIGN 4.3 writes rewrites[] without
+// its objects' members, so those are pinned here to ingest-v1 2.3.3's, and
+// a third fails too.
 func TestAllowlist(t *testing.T) {
 	design, _ := design43(t)
 	lists := allowlists()
+	// pinned are the members of the objects of a list that DESIGN 4.3
+	// writes without them, by the item and the list.
+	pinned := map[string][]string{"Commit records rewrites": {"old_sha", "new_sha"}}
 	type setCase struct {
 		name      string
 		got, want []string
@@ -790,10 +810,22 @@ func TestAllowlist(t *testing.T) {
 		allowed := allowedPaths(lists[it.design])
 		listed, open, designMapped := designPaths("", design[it.design])
 		// DESIGN 4.3 writes rewrites[] without its objects' members, which
-		// ingest-v1 2.3.3 spells, and which the spec's cases below check.
+		// ingest-v1 2.3.3 spells. The pinned case and the spec's cases below
+		// check them.
 		inDesign := slices.DeleteFunc(slices.Clone(allowed), func(p string) bool {
 			return slices.ContainsFunc(open, func(o string) bool { return strings.HasPrefix(p, o+"[].") })
 		})
+		for _, o := range open {
+			var unspelled []string
+			for _, p := range allowed {
+				if name, ok := strings.CutPrefix(p, o+"[]."); ok {
+					unspelled = append(unspelled, name)
+				}
+			}
+			if unspelled != nil {
+				tests = append(tests, setCase{it.design + " " + o + ": DESIGN 4.3 doesn't spell its objects' members, so they stay those pinned here", unspelled, pinned[it.design+" "+o]})
+			}
+		}
 		members, memberMapped := memberPaths("", it.members)
 		notMaps, _ := setDiff(memberMapped, designMapped)
 		tests = append(tests,
@@ -1023,6 +1055,22 @@ func TestFirewall(t *testing.T) {
 					}
 				}
 				want := shapeResult{p.code, p.path}
+				if it.body == "labels" && p.how == asItem {
+					t.Run("Labels: free text as the labels themselves refuses the whole request as body_shape, since labels must be an object", func(t *testing.T) {
+						for _, text := range texts {
+							rec := h.send(t, upload{dev: dev, body: map[string]any{"labels": json.RawMessage(p.put(t, text))}})
+							if status, code := refusalOf(t, rec); status != http.StatusUnprocessableEntity || code != CodeBodyShape {
+								t.Errorf("%q: got %d %s, want 422 %s", text, status, code, CodeBodyShape)
+							}
+							for _, tr := range traces(text) {
+								if strings.Contains(rec.Body.String(), tr) {
+									t.Errorf("the refusal repeats %q: %s", tr, rec.Body)
+								}
+							}
+						}
+					})
+					continue
+				}
 				t.Run(fmt.Sprintf("%s: free text as %s gets that item alone refused as %s", it.design, p.what(), p.code), func(t *testing.T) {
 					if it.body == "labels" {
 						for _, text := range texts {
