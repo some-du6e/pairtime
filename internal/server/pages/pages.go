@@ -5,7 +5,8 @@
 // evidence levels and bands at /docs/evidence (DESIGN 6.4), and the
 // dashboard page, which /demo draws from a fixed sample (dashboard.go). It
 // also holds the sign-up gate that Hack Club Auth sign-in asks before it
-// creates an account (DESIGN 8.6, 10.2).
+// creates an account (DESIGN 8.6, 10.2), and serves a release's install
+// scripts at /install.sh and /install.ps1 (install.go).
 //
 // Each page is a Markdown template in this directory: home.md, privacy.md
 // and evidence/<version>.md. New renders all of them once, from the
@@ -205,6 +206,9 @@ type Site struct {
 	// and signupsOpen what its sample's banner says about sign-ups.
 	dash        *template.Template
 	signupsOpen bool
+	// scripts are the install scripts /install.sh and /install.ps1 serve,
+	// by file name, stamped for scriptsRelease (install.go).
+	scripts map[string][]byte
 }
 
 type evidencePage struct {
@@ -214,8 +218,9 @@ type evidencePage struct {
 
 // New renders every page. It fails on a mistake in a template or in its
 // Markdown, on a controller contact that can't be a link, on a commit that
-// isn't a full hash, and on a scoring version that no evidence definition
-// covers.
+// isn't a full hash, on a scoring version that no evidence definition
+// covers, and on an install script that isn't byte for byte the one its
+// release lists (stampScripts).
 func New(o Options) (*Site, error) {
 	if o.Retention == nil {
 		return nil, errors.New("pages: no retention schedule")
@@ -275,6 +280,9 @@ func New(o Options) (*Site, error) {
 	if err := s.checkDashboard(); err != nil {
 		return nil, err
 	}
+	if s.scripts, err = servedScripts(); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -295,6 +303,7 @@ func (s *Site) Register(mux *http.ServeMux) {
 		}
 		http.NotFound(w, r)
 	})
+	s.registerScripts(mux)
 }
 
 // evidenceFor returns the definition in force at scoring version v: the
