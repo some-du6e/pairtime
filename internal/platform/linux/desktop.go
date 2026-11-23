@@ -304,7 +304,7 @@ func Open(ctx context.Context, cfg Config) *Desktop {
 	default:
 		d.status.Focus = unknown("no graphical session")
 	}
-	d.startPower(ctx, systemBus, readyTimeout, log)
+	d.startPower(ctx, systemBus, readyTimeout, log, getenv("XDG_SESSION_ID"))
 	return d
 }
 
@@ -438,7 +438,7 @@ func (d *Desktop) reconnectFocus(ctx context.Context, open func() (*x11Focus, er
 
 // startPower subscribes to logind. The focus goroutine may be running, so
 // it sets the status through setStatus.
-func (d *Desktop) startPower(ctx context.Context, systemBus func(context.Context) (*dbus.Conn, error), readyTimeout time.Duration, log *slog.Logger) {
+func (d *Desktop) startPower(ctx context.Context, systemBus func(context.Context) (*dbus.Conn, error), readyTimeout time.Duration, log *slog.Logger, sessionID string) {
 	connectCtx, cancel := context.WithTimeout(ctx, openTimeout)
 	conn, err := systemBus(connectCtx)
 	cancel()
@@ -447,7 +447,7 @@ func (d *Desktop) startPower(ctx context.Context, systemBus func(context.Context
 		d.setStatus(func(s *Status) { s.Power, s.Lock = reason, reason })
 		return
 	}
-	l, err := openLogind(ctx, conn, readyTimeout, log, d.setLock)
+	l, err := openLogind(ctx, conn, readyTimeout, log, d.setLock, sessionID)
 	if err != nil {
 		conn.Close()
 		reason := unknown(err.Error() + ": suspends show only as gaps between samples")
