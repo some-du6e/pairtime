@@ -307,15 +307,31 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		haveSample          bool
 		lastSample          int64
 		lastIdle            int64 // the idle time the last sample showed
+		sampled             int   // how many of the sampler's records came before e
 	)
 	for _, e := range recs {
+		// A record of the sampler's after one whose reach ended starts the
+		// device sampling again (SM 2.1). The stretch between was a
+		// never-sampling device's, which has no hard break, so no gap,
+		// suspend or lock from before it reaches this record's slot either.
+		// The agent's carry drops a record whose reach ended
+		// (internal/agent/scorer), so a Step over its window has none of
+		// them, and derives that slot as one Step over every record does.
+		restart := false
+		if samplerRecord(e) {
+			restart = sampled > 0 && reaches[sampled-1].ended
+			sampled++
+		}
+		if restart {
+			asleep, locked = false, false
+		}
 		switch d := e.Data.(type) {
 		case *event.OSPresence:
 			s := sample{t: e.T, lastAny: e.T - msOf(d.IdleAnyS), locked: d.Locked, atEvent: eventAt[e.T]}
 			if d.IdleKeysS != nil {
 				s.hasKeys, s.lastKey = true, e.T-msOf(*d.IdleKeysS)
 			}
-			if gap := e.T - lastSample; haveSample && gap > r.sleepGap && !(lastIdle >= r.contextIdle && gap <= r.slowGap) {
+			if gap := e.T - lastSample; haveSample && !restart && gap > r.sleepGap && !(lastIdle >= r.contextIdle && gap <= r.slowGap) {
 				// SM 2.1: gaps come from wall-clock sample times. The open
 				// interval between the two samples is the gap. After
 				// CONTEXT_IDLE_S without input the agent samples once a
