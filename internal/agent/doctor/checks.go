@@ -302,6 +302,11 @@ func adapterChecks(f Facts) []Check {
 			c.Text = fmt.Sprintf("found; since the agent started, %s and %s of its logs made %s", count(n.Calls, "call", "calls"),
 				count(n.Lines, "line", "lines"), count(n.Records, "record", "records"))
 		}
+		if n.Repeats > 0 {
+			// Not a fault: a replay read lines again, and the ledger had their
+			// records already, so none counts twice.
+			c.Text += fmt.Sprintf(", and left out %s the ledger already had, of lines it read again", count(n.Repeats, "record", "records"))
+		}
 		// The agent keeps one last failure for both kinds, so it is named
 		// for neither.
 		var trouble []string

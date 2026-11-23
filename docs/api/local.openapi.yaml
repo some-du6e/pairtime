@@ -613,6 +613,13 @@ components:
             an entry of a type or with a value its harness's version doesn't
             write, a line too long to read. Their other records are still
             written. Absent when none.
+        repeats:
+          type: integer
+          minimum: 0
+          description: >
+            Records of log lines a replay read again, as after a crash or a
+            restart, that the ledger already held, which the adapter left out
+            so none counts twice (D-late-local). Absent when none.
     Git:
       type: object
       additionalProperties: false

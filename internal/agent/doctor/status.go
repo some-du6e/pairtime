@@ -119,4 +119,7 @@ type HarnessCounts struct {
 	// it couldn't fully read (WP-AD3).
 	Lines        uint64 `json:"lines,omitempty"`
 	LineFailures uint64 `json:"line_failures,omitempty"`
+	// Repeats counts the records of log lines a replay read again that the
+	// ledger already held, which the adapter dropped.
+	Repeats uint64 `json:"repeats,omitempty"`
 }

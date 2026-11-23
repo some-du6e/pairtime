@@ -226,6 +226,12 @@ func TestChecks(t *testing.T) {
 		{name: "settings that don't read warn that doctor can't tell",
 			edit:  claude(func(h *Hooks) { h.ReadError = "settings.json isn't valid JSON" }),
 			check: "hook.claude_code", want: Warn, wantHas: []string{"can't tell", "isn't valid JSON"}},
+		{name: "records of lines a replay read again, which the ledger had already, are counted, and aren't a warning",
+			edit: func(f *Facts) {
+				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, Lines: 30, Records: 28, Repeats: 2}
+			},
+			check: "adapter.claude_code", want: OK,
+			wantHas: []string{"5 calls and 30 lines of its logs made 28 records, and left out 2 records the ledger already had, of lines it read again, with no parse failures"}},
 		{name: "an adapter's parse failures warn, with the last failure and where to report them",
 			edit: func(f *Facts) {
 				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, ParseFailures: 2, LastFailure: "Stop: unknown field"}

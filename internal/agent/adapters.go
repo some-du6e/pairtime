@@ -297,8 +297,11 @@ type adapterHost struct {
 	logTracks uint64
 	logParked int
 	// logRefused says a step that couldn't write to the ledger answered
-	// batches with none taken (refuseLogs).
+	// batches with none taken (refuseLogs), and logHeld is what the ledger
+	// holds for the log records takeLine writes, nil until the first line
+	// (logsHeld).
 	logRefused bool
+	logHeld    *heldLogs
 	// Under mu: sessKeys keys sessions as the adapters do, once K_session
 	// is known, tieTried is when tieLive last tried each session, and
 	// firstStarts how each session's first session.start went (tiedStart).
@@ -349,6 +352,10 @@ type harnessStats struct {
 	// write, lines too long to read (DESIGN 5.3; WP-AD3).
 	Lines        uint64 `json:"lines,omitempty"`
 	LineFailures uint64 `json:"line_failures,omitempty"`
+	// Repeats counts the records of log lines a replay read again that the
+	// ledger already holds, which the adapter dropped, so none counts twice
+	// (heldLogs).
+	Repeats uint64 `json:"repeats,omitempty"`
 }
 
 // adaptersReply is the adapters' part of GET /v1/status.
