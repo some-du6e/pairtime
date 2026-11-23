@@ -609,6 +609,8 @@ def selftest():
     check(not es_fault(es, text_reveal(com)), "an es beside an error line shown whole passes")
     check(es_fault(es, text_reveal(commitment(sha256(b"selftest"), 2, "still failing"))),
           "an es on a text with no error signature fails")
+    check(not es_fault(es, text_reveal(com, (3,))),
+          "an es on a reveal that removed a word passes, since the no-signature rule needs the whole text")
     check(whole_lines(text_reveal(com)) == text.split("\n"), "a reveal that removes nothing shows every line whole")
     shown = whole_lines(text_reveal(com, (1,)))
     check(shown == [text.split("\n")[1]] and error_line(shown[0]), "a removed word hides only its own line, and the "
