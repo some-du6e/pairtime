@@ -459,7 +459,7 @@ func (v *Vault) Reconcile(next uint64) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.closed {
-		return errClosed
+		return ErrClosed
 	}
 	if v.ready {
 		return errors.New("vault: Reconcile runs once, at the ledger writer's Open")
@@ -473,7 +473,8 @@ func (v *Vault) Reconcile(next uint64) error {
 	return err
 }
 
-var errClosed = errors.New("vault: the vault is closed")
+// ErrClosed is a call on a Vault after Close.
+var ErrClosed = errors.New("vault: the vault is closed")
 
 // reconcile is Reconcile. Both locks are held.
 func (v *Vault) reconcile(next uint64) error {
@@ -842,6 +843,9 @@ func (v *Vault) filter(keep func(entry) bool) (int, error) {
 	defer v.files.Unlock()
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	if v.closed {
+		return 0, ErrClosed
+	}
 	days, err := segments(v.dir)
 	if err != nil {
 		return 0, err

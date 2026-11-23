@@ -175,6 +175,42 @@ func TestParse(t *testing.T) {
 			want:        Config{Mode: Local, Notifications: Notifications{Off: true}},
 			wantProblem: "notifications.quiet_hours is set more than once",
 		},
+		{name: "prompt text is kept by default", file: "[privacy]\n", want: Default()},
+		{name: "keep_prompt_text = true keeps prompt text", file: "[privacy]\nkeep_prompt_text = true\n", want: Default()},
+		{
+			name: "keep_prompt_text = false turns the switch off, which deletes the text kept",
+			file: "[privacy]\nkeep_prompt_text = false\n",
+			want: Config{Mode: Local, Privacy: Privacy{TextOff: true}},
+		},
+		{
+			name: "the switch is read whatever the case of its table",
+			file: "[Privacy]\nkeep_prompt_text = false\n",
+			want: Config{Mode: Local, Privacy: Privacy{TextOff: true}},
+		},
+		{
+			name:        "an unknown setting in [privacy] keeps no new prompt text and deletes none, and is reported",
+			file:        "[privacy]\nkeep_prompt_txt = false\n",
+			want:        Config{Mode: Local, Privacy: Privacy{TextHeld: true}},
+			wantProblem: `unknown setting "privacy.keep_prompt_txt" was ignored, so pairtime keeps no new prompt text, and deletes none`,
+		},
+		{
+			name:        "an unknown setting next to keep_prompt_text = true still keeps no new prompt text",
+			file:        "[privacy]\nkeep_prompt_text = true\nprompt_days = 7\n",
+			want:        Config{Mode: Local, Privacy: Privacy{TextHeld: true}},
+			wantProblem: `unknown setting "privacy.prompt_days" was ignored, so pairtime keeps no new prompt text`,
+		},
+		{
+			name:        "the switch written twice in different case keeps no new prompt text, deletes none, and is reported",
+			file:        "[privacy]\nkeep_prompt_text = false\nKeep_Prompt_Text = true\n",
+			want:        Config{Mode: Local, Privacy: Privacy{TextHeld: true}},
+			wantProblem: "privacy.keep_prompt_text is set more than once",
+		},
+		{
+			name:        "a switch that isn't true or false makes the whole file ignored, which keeps no new prompt text and deletes none",
+			file:        "[privacy]\nkeep_prompt_text = \"no\"\n",
+			want:        ignored(),
+			wantProblem: "pairtime keeps no new prompt text",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

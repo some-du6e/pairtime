@@ -75,6 +75,7 @@ func (a *agent) startLedger() func() {
 		defer mu.Unlock()
 		if stopped {
 			lw.Close()
+			a.closeVault()
 			return
 		}
 		w = lw
@@ -124,6 +125,8 @@ func (a *agent) startLedger() func() {
 				a.log.Warn("closing the ledger", "err", err)
 			}
 		}
+		// After the writer, whose last seal flushes it.
+		a.closeVault()
 	}
 }
 
@@ -173,10 +176,11 @@ func ledgerGivesUp(err error) bool {
 }
 
 // openLedger opens the keystore, making K_dev at an installation's first
-// run, and the ledger writer with the keys derived from it. It also gives
-// the adapters K_feat and K_project (keyAdapters), the focus component
-// K_app (keyFocus), and the hook sink K_session, which keys the hooked
-// sessions focus lists and the adapters' records (keySessions).
+// run, and the ledger writer with the keys derived from it, which keeps
+// each record's content in the vault (openVault, publishVault). It also
+// gives the adapters K_feat and K_project (keyAdapters), the focus
+// component K_app (keyFocus), and the hook sink K_session, which keys the
+// hooked sessions focus lists and the adapters' records (keySessions).
 func (a *agent) openLedger() (*ledger.Writer, error) {
 	ks, err := keys.Open(keys.Options{Dir: a.dirs.Data, Stores: a.keyStores})
 	if err != nil {
@@ -188,7 +192,8 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 	a.keyAdapters(ks)
 	a.keyFocus(ks)
 	a.keySessions(ks)
-	return ledger.Open(ledger.Options{
+	v := a.openVault(ks, st.KeyID)
+	w, err := ledger.Open(ledger.Options{
 		Dir:   a.dirs.Ledger(),
 		Keys:  ks.Keys(),
 		KeyID: st.KeyID,
@@ -198,11 +203,20 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 		Params:  a.table,
 		Sched:   a.sched,
 		Sealed:  a.sealed,
+		Vault:   writerVault(v),
 		Online:  a.writerOnline,
 		Seen:    a.seen,
 		Waiting: a.waiting,
 		Problem: func(msg string) { a.setProblem("ledger", msg) },
 	})
+	if err != nil {
+		if v != nil {
+			v.Close()
+		}
+		return nil, err
+	}
+	a.publishVault(v)
+	return w, nil
 }
 
 // waiting is the ledger writer's Waiting: whether a record that before

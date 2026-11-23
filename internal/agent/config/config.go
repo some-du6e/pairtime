@@ -53,6 +53,8 @@ type Config struct {
 	// Notifications is [notifications], which Parse reads through
 	// notificationsFile.
 	Notifications Notifications `toml:"-"`
+	// Privacy is [privacy], which Parse reads through privacyFile.
+	Privacy Privacy `toml:"-"`
 }
 
 // fileConfig is config.toml as written. Parse checks each value before it
@@ -63,6 +65,7 @@ type fileConfig struct {
 	Server        Server            `toml:"server"`
 	Display       Display           `toml:"display"`
 	Notifications notificationsFile `toml:"notifications"`
+	Privacy       privacyFile       `toml:"privacy"`
 }
 
 // Server is config.toml's [server] table.
@@ -115,7 +118,7 @@ func parse(data []byte) (cfg Config, problems []string, used bool) {
 	var file fileConfig
 	md, err := toml.Decode(string(data), &file)
 	if err != nil {
-		return ignored(), []string{fmt.Sprintf("config.toml was ignored, so every setting has its default and notifications are off: %v", err)}, false
+		return ignored(), []string{fmt.Sprintf("config.toml was ignored, so every setting has its default and notifications are off, and pairtime keeps no new prompt text: %v", err)}, false
 	}
 	// Probably a typo, or a setting from a newer release.
 	for _, key := range md.Undecoded() {
@@ -124,6 +127,13 @@ func parse(data []byte) (cfg Config, problems []string, used bool) {
 			// notifications off, so they stay off.
 			cfg.Notifications.Off = true
 			problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored, so notifications are off until it's fixed", key.String()))
+			continue
+		}
+		if inPrivacy(key) {
+			// Such as keep_prompt_txt = false: it may be how the teen
+			// turned "keep prompt text" off, so no new text is kept.
+			cfg.Privacy.TextHeld = true
+			problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored, so pairtime keeps no new prompt text, and deletes none, until it's fixed", key.String()))
 			continue
 		}
 		problems = append(problems, fmt.Sprintf("config.toml: the unknown setting %q was ignored", key.String()))
@@ -153,6 +163,7 @@ func parse(data []byte) (cfg Config, problems []string, used bool) {
 		cfg.Display.Shadow = file.Display.Shadow
 	}
 	problems = append(problems, parseNotifications(&cfg, file.Notifications, md.Keys())...)
+	problems = append(problems, parsePrivacy(&cfg, file.Privacy, md.Keys())...)
 	return cfg, problems, true
 }
 
@@ -212,4 +223,12 @@ enabled = true
 # A time of day with no notifications, in this computer's local time, such
 # as "22:00-07:00". "" means none.
 quiet_hours = ""
+
+[privacy]
+# true keeps the text of your prompts, the agent's final replies and your
+# pairtime track labels on this computer, encrypted, so you can show them
+# if your hours are spot-checked. false keeps none and deletes what was
+# kept: a spot check then can't see those prompts, and judges their hours
+# on the rest of the evidence.
+keep_prompt_text = true
 `
