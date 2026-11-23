@@ -873,7 +873,7 @@ func (v *Vault) DropText() (int, error) {
 	v.mu.Lock()
 	mark := v.last
 	v.mu.Unlock()
-	return v.filter(func(_ string, e entry) bool { return e.what != whatText || e.s > mark })
+	return v.filter(nil, func(_ string, e entry) bool { return e.what != whatText || e.s > mark })
 }
 
 // Sweep deletes the texts the vault keeps in its files of the UTC days
@@ -898,16 +898,19 @@ func (v *Vault) Sweep(textFrom, pathsFrom string) (int, error) {
 		}
 		return true
 	}
-	n, err := v.filter(keep)
+	// A file of a day on or after both has nothing past its time, and
+	// isn't read.
+	due := func(day string) bool { return day < textFrom || day < pathsFrom }
+	n, err := v.filter(due, keep)
 	if errors.Is(err, ErrClosed) {
 		return n, err
 	}
-	m, oerr := v.sweepOld(keep)
+	m, oerr := v.sweepOld(due, keep)
 	return n + m, errors.Join(err, oerr)
 }
 
 // sweepOld is filter for the files old/ keeps, which nothing appends to.
-func (v *Vault) sweepOld(keep func(string, entry) bool) (int, error) {
+func (v *Vault) sweepOld(due func(string) bool, keep func(string, entry) bool) (int, error) {
 	v.files.Lock()
 	defer v.files.Unlock()
 	dir := filepath.Join(v.dir, oldDir)
@@ -932,6 +935,9 @@ func (v *Vault) sweepOld(keep func(string, entry) bool) (int, error) {
 			continue
 		}
 		for _, day := range days {
+			if !due(day) {
+				continue
+			}
 			n, err := filterAt(kdir, keyID, day, func(e entry) bool { return keep(day, e) })
 			dropped += n
 			if err != nil {
@@ -948,11 +954,13 @@ func (v *Vault) sweepOld(keep func(string, entry) bool) (int, error) {
 }
 
 // filter writes each of the vault's files again with only the entries
-// keep keeps, given the file's day, and deletes a file left with none.
+// keep keeps, given the file's day, and deletes a file left with none. It
+// reads only the files of the days due says may hold one to drop, and
+// every file when due is nil.
 // The files of other device keys, in old/, are left alone. Only the newest
 // file, which Keep may append to, is written again under the lock Keep
 // takes, so the ledger writer waits for that one file at most.
-func (v *Vault) filter(keep func(day string, e entry) bool) (int, error) {
+func (v *Vault) filter(due func(day string) bool, keep func(day string, e entry) bool) (int, error) {
 	v.files.Lock()
 	defer v.files.Unlock()
 	v.mu.Lock()
@@ -970,6 +978,9 @@ func (v *Vault) filter(keep func(day string, e entry) bool) (int, error) {
 	dropped := 0
 	var errs []error
 	for _, day := range days {
+		if due != nil && !due(day) {
+			continue
+		}
 		var n int
 		k := func(e entry) bool { return keep(day, e) }
 		if day < newest {
