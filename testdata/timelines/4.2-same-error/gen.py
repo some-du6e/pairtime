@@ -21,7 +21,6 @@ import neardup  # noqa: E402
 import sidedoor as sd  # noqa: E402
 import timeline as tl  # noqa: E402
 
-LOOP_ERRATUM = "2026-11-19-sm-6.5-loop-codes"
 # SM 8's values this case uses.
 THINK_LEAD_S, COMPOSE_CPS, LOW_LEAD_S, COMMIT_LEAD_S = 120, Fraction(3, 2), 20, 60
 SUBSTANTIVE_CHARS, ERROR_PASTE_TEXT_MAX, SAME_ERROR_LIMIT, NOREAD_MIN_WORDS = 20, 40, 3, 100
@@ -400,13 +399,7 @@ for minute, credit, unc, agent, sm in ROWS:
     got = minutes[at(minute)]
     tl.check(got == {"credit": credit, "uncredited": unc, "agent": agent},
              f"{minute}: the row says {credit} {unc} {agent}, the scorings give {got}")
-    # Every row whose seconds carry a discount code rests on the loop-codes
-    # erratum: the turn's agent runs, or nothing is on screen to credit,
-    # and SM 5.2's wording gives X.agent_only or X.no_anchor where SM 4.2's
-    # "reported under their discount code" gives X.same_error.
-    erratum = LOOP_ERRATUM if any(c in LOOP_CODES for c in unc) else None
-    exp.row(minute, credit={P: credit} if credit else {}, uncredited=unc, agent=agent, sm=sm, derived=DERIVED,
-            erratum=erratum)
+    exp.row(minute, credit={P: credit} if credit else {}, uncredited=unc, agent=agent, sm=sm, derived=DERIVED)
 tl.check(len(ROWS) == (WINDOW[1] - WINDOW[0]) // tl.MINUTE_MS, "a row a minute")
 
 excluded = sum(n for r in exp.rows for c, n in (r["uncredited"] or {}).items() if c in LOOP_CODES)
@@ -415,7 +408,7 @@ expected = exp.doc(
     extra_totals={"credited_s": 1284, "excluded_loops_s": excluded},
     stated=[],
     approx={},
-    errata=[LOOP_ERRATUM],
+    errata=[],
     notes=[
         "SM 4.2 states the rule, not minute rows. Every row here follows from SM's rules applied to this timeline "
         "(README.md), as the decision on docs/errata/2026-11-19-sm-6.1-same-error.md states them.",
@@ -428,9 +421,9 @@ expected = exp.doc(
         "at 16:15:36, P5's stop.",
         "excluded_loops_s is the X.same_error seconds (SM 5.3): the seconds that scoring the same records with no "
         "turn discounted credits and this scoring doesn't, 16:11:00 to 16:15:36.",
-        "Rows 16:11 to 16:15 name 6.5's loop-codes erratum: where a discounted turn's agent runs, or nothing is "
-        "on screen to credit, SM 5.2's wording gives X.agent_only or X.no_anchor, and SM 4.2's \"reported under "
-        "their discount code\" gives X.same_error. The rows give X.same_error.",
+        "Rows 16:11 to 16:15 are X.same_error by SM 4.2: scoring the same records with no turn discounted credits "
+        "every second of them, so they are what the loop cost, and each takes the code of the latest discounted "
+        "turn at or before it, P4's or P5's.",
     ],
 )
 

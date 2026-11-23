@@ -10,7 +10,6 @@ SM 4.2's fix-it rule discounts a human turn whose prompt is an error paste or a 
 | Window | 16:00:00 to 16:26:00. Records from 15:58:20 start the session |
 | Project | An invented `habits` command-line app with a pytest suite |
 | Files | gen.py uses `../6.5/neardup.py` for SM 4.2's normalization and attempt count, and `Sweep` from `../sidedoor/sidedoor.py` for SM 2.7 second by second |
-| Erratum | [Loop codes](../../../docs/errata/2026-11-19-sm-6.5-loop-codes.md): rows 16:11 to 16:15 give the loop's seconds `X.same_error`, inside the discounted turns too |
 
 ## Events
 
@@ -48,6 +47,6 @@ The count is the error's appearances since the later of the last human change ev
 - P4 and P5 reset the bucket to zero and add nothing to it (SM 2.4), and they count as no human anchor for reading. Nothing else covers 16:11:00 to 16:15:36, P5's stop. Those 276 s are what the loop cost: scoring the same records with no turn discounted credits every one of them, as `SUP` while P4's and P5's turns run, `READ` and P5's `GO` lead.
 - The commit's 60 s lead starts at P5's stop, so it doesn't reach back past the discounted turn's stop (SM 4.2), and P6's 144 s lead starts at the commit.
 - P6's turn fills 405 s, which drain as `SUP` while it runs until 16:21:00 and as `READ` until P7's lead at 16:23:40. P7's turn drains as `SUP` until 16:25:00 and as `READ` to the end of the window.
-- Rows 16:11 to 16:15 rest on [6.5's loop-codes erratum](../../../docs/errata/2026-11-19-sm-6.5-loop-codes.md). Inside P4's and P5's turns, where the agent runs and nothing credits a second, SM 5.2's wording makes those seconds `X.agent_only`, and from 16:13:40 to 16:14:00, with no agent running, `X.no_anchor`. SM 4.2's "seconds that would have been credited are reported under their discount code" makes all of them `X.same_error`. The rows give `X.same_error` and name the erratum.
+- Rows 16:11 to 16:15 are `X.same_error` by SM 4.2. Scored with no turn discounted, every second of them would be credited, so they are what the loop cost, and each takes the code of the latest discounted turn at or before it, P4's or P5's. Without that rule SM 5.2 would make the seconds inside P4's and P5's turns `X.agent_only`, and 16:13:40 to 16:14:00, with no agent running, `X.no_anchor`.
 - Every minute has credit or a running agent, so each has a bucket (SM 5.1).
 - `excluded_loops_s` is the rows' loop-code seconds, which gen.py adds up: 276 s.

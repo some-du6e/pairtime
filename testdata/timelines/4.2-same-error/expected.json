@@ -181,8 +181,7 @@
       "uncredited": {"X.same_error": 60},
       "agent_running_s": 60,
       "sm": "4.2, Fix-it loop: P4 is an error paste with the count at 5",
-      "derived": ["credit", "uncredited", "agent_running_s"],
-      "erratum": "2026-11-19-sm-6.5-loop-codes"
+      "derived": ["credit", "uncredited", "agent_running_s"]
     },
     {
       "start": "2026-11-26T15:12:00Z",
@@ -195,8 +194,7 @@
       "uncredited": {"X.same_error": 60},
       "agent_running_s": 60,
       "sm": "4.2, Fix-it loop",
-      "derived": ["credit", "uncredited", "agent_running_s"],
-      "erratum": "2026-11-19-sm-6.5-loop-codes"
+      "derived": ["credit", "uncredited", "agent_running_s"]
     },
     {
       "start": "2026-11-26T15:13:00Z",
@@ -209,8 +207,7 @@
       "uncredited": {"X.same_error": 60},
       "agent_running_s": 40,
       "sm": "4.2, Fix-it loop: P5 is a go-ahead with the count at 8",
-      "derived": ["credit", "uncredited", "agent_running_s"],
-      "erratum": "2026-11-19-sm-6.5-loop-codes"
+      "derived": ["credit", "uncredited", "agent_running_s"]
     },
     {
       "start": "2026-11-26T15:14:00Z",
@@ -223,8 +220,7 @@
       "uncredited": {"X.same_error": 60},
       "agent_running_s": 60,
       "sm": "4.2, Fix-it loop",
-      "derived": ["credit", "uncredited", "agent_running_s"],
-      "erratum": "2026-11-19-sm-6.5-loop-codes"
+      "derived": ["credit", "uncredited", "agent_running_s"]
     },
     {
       "start": "2026-11-26T15:15:00Z",
@@ -239,8 +235,7 @@
       "uncredited": {"X.same_error": 36},
       "agent_running_s": 36,
       "sm": "4.2, Fix-it loop; the commit is a human change event",
-      "derived": ["credit", "uncredited", "agent_running_s"],
-      "erratum": "2026-11-19-sm-6.5-loop-codes"
+      "derived": ["credit", "uncredited", "agent_running_s"]
     },
     {
       "start": "2026-11-26T15:16:00Z",
@@ -395,12 +390,12 @@
   },
   "stated": [],
   "approx": {},
-  "errata": ["2026-11-19-sm-6.5-loop-codes"],
+  "errata": [],
   "notes": [
     "SM 4.2 states the rule, not minute rows. Every row here follows from SM's rules applied to this timeline (README.md), as the decision on docs/errata/2026-11-19-sm-6.1-same-error.md states them.",
     "The count of the AssertionError before each prompt is 0, 2, 4, 5, 8, 0 and 1. P4, an error paste, and P5, a go-ahead, come at SAME_ERROR_LIMIT or above and are X.same_error. P2 brings the count to the limit and is credited, P3 is substantive and never discounted, the commit at 16:16:36 sets the count to 0 before P6, and the passing run at 16:20:05 clears the error before it comes back once ahead of P7.",
     "P4's lead opens no window, so P3's bucket is read from 16:08:00 to 16:11:00 instead. P4 and P5 reset the bucket to zero and add nothing to it, so nothing is credited from 16:11:00 until the commit's lead at 16:15:36, P5's stop.",
     "excluded_loops_s is the X.same_error seconds (SM 5.3): the seconds that scoring the same records with no turn discounted credits and this scoring doesn't, 16:11:00 to 16:15:36.",
-    "Rows 16:11 to 16:15 name 6.5's loop-codes erratum: where a discounted turn's agent runs, or nothing is on screen to credit, SM 5.2's wording gives X.agent_only or X.no_anchor, and SM 4.2's \"reported under their discount code\" gives X.same_error. The rows give X.same_error."
+    "Rows 16:11 to 16:15 are X.same_error by SM 4.2: scoring the same records with no turn discounted credits every second of them, so they are what the loop cost, and each takes the code of the latest discounted turn at or before it, P4's or P5's."
   ]
 }
