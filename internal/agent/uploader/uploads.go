@@ -21,7 +21,10 @@ import (
 // answered, which the dashboard's Privacy page lists in plain words
 // (DESIGN 8.8). It holds no body, only what went and the SHA-256 of the
 // body `pairtime privacy show` printed, and never leaves the device
-// (docs/errata/2026-11-21-upload-log.md).
+// (docs/errata/2026-11-21-upload-log.md). A project names request gets a
+// line of its own kind the same way, answered or not, with how many names
+// it showed and stopped showing and never a name or a key (PastNames;
+// DESIGN 3.5).
 const UploadsName = "uploads.jsonl"
 
 // uploadsKeep is how long a past upload is kept, and uploadsMax how many
@@ -36,6 +39,9 @@ type PastUpload struct {
 	// At is when the answer came, and Server where the request went.
 	At     time.Time `json:"at"`
 	Server string    `json:"server"`
+	// Kind is "" for an upload and KindNames for a names request's line
+	// (PastNames), which PastUploads leaves out.
+	Kind string `json:"kind,omitempty"`
 	// Roots and Minutes count the batch roots and the minute bucket
 	// revisions the request carried, and Labels says whether it carried
 	// the labels.
@@ -58,6 +64,65 @@ type PastUpload struct {
 	// BodySHA256 is the SHA-256 of the request's body before gzip, in
 	// hex: of the bytes `pairtime privacy show` printed for it.
 	BodySHA256 string `json:"body_sha256"`
+}
+
+// KindNames is a names request's line in uploads.jsonl (PastNames).
+const KindNames = "names"
+
+// PastNames is a project names request the uploader sent, answered or not,
+// as uploads.jsonl keeps it beside the uploads: how many names it showed
+// and stopped showing, and never a name or a project key (DESIGN 3.5; the
+// names a request carries are in `pairtime privacy show` before it goes).
+// A request whose answer never came may have reached the server all the
+// same, so it gets a line too.
+type PastNames struct {
+	// At is when the answer or the failure came, and Server where the
+	// request went.
+	At     time.Time `json:"at"`
+	Kind   string    `json:"kind"`
+	Server string    `json:"server"`
+	// Set and Delete count the names the request showed and stopped
+	// showing; both 0 is a read.
+	Set    int `json:"set"`
+	Delete int `json:"delete"`
+	// Status is the answer's HTTP status, 0 when none came. Refused is the
+	// error code of an answer of pairtimed's that refused it, and Failed
+	// why no answer came.
+	Status  int    `json:"status"`
+	Refused string `json:"refused,omitempty"`
+	Failed  Reason `json:"failed,omitempty"`
+	// BodySHA256 is the SHA-256 of the request's body before gzip, in
+	// hex: of the bytes `pairtime privacy show` printed for it.
+	BodySHA256 string `json:"body_sha256"`
+}
+
+// pastNames describes the names request body, whose JSON before gzip is
+// js, which went to server and got the answer a, or err, at at.
+func pastNames(at time.Time, server string, body namesBody, js []byte, a answer, err error) PastNames {
+	sum := sha256.Sum256(js)
+	e := PastNames{
+		At: at, Kind: KindNames, Server: server,
+		Set: len(body.Set), Delete: len(body.Delete),
+		BodySHA256: hex.EncodeToString(sum[:]),
+	}
+	if err != nil {
+		e.Failed, _ = reasonOf(err, 0)
+		return e
+	}
+	e.Status = a.status
+	if fromPairtimed(a) {
+		e.Refused = a.refusal.Error
+	}
+	return e
+}
+
+// recordNames appends a names request's line to uploads.jsonl. A line that
+// doesn't write is logged, without what it holds, and changes nothing
+// else.
+func (u *Uploader) recordNames(e PastNames) {
+	if err := appendLine(u.opts.DataDir, e); err != nil {
+		u.log.Warn("couldn't record a project names request in "+UploadsName, "err", err)
+	}
 }
 
 // Results are the result codes of an answer, by kind of item.
@@ -103,7 +168,7 @@ func resultsOf(resp Response) *Results {
 // doesn't write is logged and changes nothing else: the upload went all
 // the same.
 func (u *Uploader) recordUpload(e PastUpload) {
-	if err := appendUpload(u.opts.DataDir, e); err != nil {
+	if err := appendLine(u.opts.DataDir, e); err != nil {
 		u.log.Warn("couldn't record a past upload in "+UploadsName, "err", err)
 	}
 }
@@ -121,9 +186,9 @@ func (u *Uploader) prunePast() {
 	}
 }
 
-// appendUpload appends e to dir's uploads.jsonl, readable by this user
-// only.
-func appendUpload(dir string, e PastUpload) error {
+// appendLine appends e, a PastUpload or a PastNames, to dir's
+// uploads.jsonl, readable by this user only.
+func appendLine(dir string, e any) error {
 	line, err := json.Marshal(e)
 	if err != nil {
 		return err
@@ -181,7 +246,7 @@ func pruneUploads(dir string, now time.Time) error {
 
 // PastUploads returns the past uploads the data directory dataDir's
 // uploads.jsonl keeps, oldest first, passing over a line that doesn't
-// read.
+// read and the names requests' lines (PastNames).
 func PastUploads(dataDir string) ([]PastUpload, error) {
 	data, err := os.ReadFile(filepath.Join(dataDir, UploadsName))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -193,7 +258,7 @@ func PastUploads(dataDir string) ([]PastUpload, error) {
 	var out []PastUpload
 	for _, line := range bytes.Split(data, []byte("\n")) {
 		var e PastUpload
-		if len(line) > 0 && json.Unmarshal(line, &e) == nil {
+		if len(line) > 0 && json.Unmarshal(line, &e) == nil && e.Kind == "" {
 			out = append(out, e)
 		}
 	}

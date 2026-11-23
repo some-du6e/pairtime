@@ -28,6 +28,17 @@ DESIGN 4.4, a new device row:
 
 A follow-up, after the decision: `pairtime privacy show`, `uploads.jsonl` and the local Privacy page list each names request, with the labels it carried.
 
+## Decision
+
+Decided 2026-11-22 by the orchestrator for Karim, in #196's review (#200), and applied in #196 under `oracle-change`:
+
+- DESIGN 3.5 gets the row for `project-names.json` in its own columns (Path, Format, Holds, Kept), with what the file holds: the sign-in it answers, the labels, the codes, the hidden keys, and each note's label, time, reason and whether pairtime could turn the name off. DESIGN 4.4 gets the device row with the file's limits: a note until the server shows the name again, 1,000 notes at most, oldest first, and only the notes kept across a sign-in to another server or device. docs/retention.json gets `device.project_names`, with no days.
+- A names request's line in `uploads.jsonl` holds what an upload's does, never a label: when, which server, how many names it set and deleted, the result code, and the body's SHA-256, for every request the client sent, answered or not. DESIGN 3.5 and 4.4's rows for `uploads.jsonl` say so. `pairtime privacy show` prints the next names request byte for byte, labels included, and DESIGN 8.8 says so. This replaces the follow-up above, whose "with the labels it carried" would put a second, 90-day copy of labels in `uploads.jsonl`.
+- DESIGN 4.3's names row says when a request goes: a set only when the owner turns a name on or changes its label, a delete when they turn it off or after the computer turned off a name the server lists as hidden, and a read with no name in it when the agent starts, once a day, and first whenever the computer doesn't know what the server holds.
+- DESIGN 4.4's server row for project names is amended: hiding a name deletes the label at once and keeps the project key and the time of the hide until the device turns the name off too, 30 days after the hide at most (`server.project_name_hides`), and the device's purge follows the 90-day rule for a removed device's own row.
+
+The decided erratum docs/errata/2026-11-22-owner-project-names.md keeps its text, but its line 23 cites the wrong rule for the purge: D-project-map-lifetime keeps a device's `rollup_projects` rows for the account's lifetime, so nothing else of the device's projects goes at 90 days. The purge follows the 90-day rule for the removed device's own row (DESIGN 4.4's `device_id` row, `server.devices`), as the spec, migration 0008 and DESIGN 4.4's names row now say.
+
 ## For Karim
 
-This waits for the orchestrator or Karim. The file holds nothing that isn't already on the computer: the labels are in `config.toml`, and the codes are the dashboard's.
+The orchestrator decided this for Karim; Karim can overrule it. The file holds nothing that isn't already on the computer: the labels are in `config.toml`, and the codes are the dashboard's.

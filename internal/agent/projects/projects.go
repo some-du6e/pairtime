@@ -55,9 +55,10 @@ const (
 	// Removing is a name config.toml has off that the server's last
 	// answer still showed: the delete goes with the next request.
 	Removing State = "removing"
-	// Hidden is a name the owner hid on their dashboard, which pairtime
-	// turned off in config.toml, so it stays hidden until they turn it on
-	// again here.
+	// Hidden is a name the owner's dashboard doesn't show, which pairtime
+	// turned off in config.toml, so it stays off until they turn it on again
+	// here: they hid it there, the server no longer has it, or the computer
+	// signed in to another server (Project.Why).
 	Hidden State = "hidden"
 )
 
@@ -91,6 +92,15 @@ type Project struct {
 	// config.toml still has it on, and pairtime doesn't send it, so showing
 	// it again takes setting online = false there first, by hand.
 	Pending bool
+	// Why says, for Hidden, why the dashboard doesn't show the name: ""
+	// when the owner hid it there, uploader.NoteDropped when the server no
+	// longer has it, uploader.NoteSignedIn after a sign-in to another
+	// server or as another device.
+	Why string
+	// Shown is the label the server's last answer shows for the project,
+	// "" for none: a name being sent can still show an older label, and one
+	// being turned off shows until the request goes.
+	Shown string
 }
 
 // Title is what the list calls p: its local name, or "Project <code>",
@@ -263,7 +273,10 @@ func List(in Input) []Project {
 	for key := range listed {
 		p := Project{Key: key, Code: codes[key], LocalName: local[key]}
 		p.State, p.Label, p.HiddenAt = state(key, local[key], in.Config.Projects[key], confirmed, in.Names.Hidden)
-		p.Pending = p.State == Hidden && in.Names.Hidden[key].Pending
+		p.Shown = confirmed[key]
+		if p.State == Hidden {
+			p.Pending, p.Why = in.Names.Hidden[key].Pending, in.Names.Hidden[key].Reason
+		}
 		out = append(out, p)
 	}
 	slices.SortFunc(out, func(a, b Project) int {
@@ -330,7 +343,7 @@ func Find(list []Project, arg string) (Project, bool) {
 
 // ErrHidePending is turning on a name hidden on the dashboard that
 // pairtime couldn't turn off in config.toml (Project.Pending).
-var ErrHidePending = errors.New("you hid this name on your dashboard, and pairtime couldn't turn it off in config.toml then, so it doesn't send it while config.toml has it on; set online = false under its [projects.<key>] table there by hand, then turn it on again")
+var ErrHidePending = errors.New("your dashboard stopped showing this name, and pairtime couldn't turn it off in config.toml then, so it doesn't send it while config.toml has it on; set online = false under its [projects.<key>] table there by hand, then turn it on again")
 
 // The labels Label refuses.
 var (

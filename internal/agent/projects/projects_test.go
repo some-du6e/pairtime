@@ -319,13 +319,13 @@ func TestList(t *testing.T) {
 		{
 			name:      "a name on that the server shows with its label is on",
 			in:        Input{Map: repos, Config: on("Chip-8"), Names: shows(map[string]string{chip8Key: "Chip-8"}), Server: server, Device: device},
-			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: On, Label: "Chip-8"},
+			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: On, Label: "Chip-8", Shown: "Chip-8"},
 			wantFound: true,
 		},
 		{
-			name:      "a name on that the server shows with another label is still being sent",
+			name:      "a name on that the server shows with another label is still being sent, and the older label shows meanwhile",
 			in:        Input{Map: repos, Config: on("Chip-8"), Names: shows(map[string]string{chip8Key: "chip8-emulator"}), Server: server, Device: device},
-			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Sending, Label: "Chip-8"},
+			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Sending, Label: "Chip-8", Shown: "chip8-emulator"},
 			wantFound: true,
 		},
 		{
@@ -343,7 +343,7 @@ func TestList(t *testing.T) {
 		{
 			name:      "a name off that the server still shows is being removed",
 			in:        Input{Map: repos, Config: off("Chip-8"), Names: shows(map[string]string{chip8Key: "Chip-8"}), Server: server, Device: device},
-			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Removing, Label: "Chip-8"},
+			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Removing, Label: "Chip-8", Shown: "Chip-8"},
 			wantFound: true,
 		},
 		{
@@ -365,6 +365,12 @@ func TestList(t *testing.T) {
 			wantFound: true,
 		},
 		{
+			name:      "a name the server no longer has is hidden too, and says why",
+			in:        Input{Map: repos, Config: off("Chip-8"), Server: server, Device: device, Names: hid(uploader.HiddenName{Label: "Chip-8", At: hiddenAt.UnixMilli(), Reason: uploader.NoteDropped})},
+			want:      Project{Key: chip8Key, Code: "7c41e9", LocalName: "chip8-emulator", State: Hidden, Label: "Chip-8", HiddenAt: hiddenAt, Why: uploader.NoteDropped},
+			wantFound: true,
+		},
+		{
 			name:      "a project of the last 30 days that the map doesn't keep, as a plain folder, is listed without a local name or a label",
 			in:        Input{Days: []string{folderKey}, Names: shows(nil), Server: server, Device: device},
 			want:      Project{Key: folderKey, Code: "d2a8f6", State: Off},
@@ -379,7 +385,7 @@ func TestList(t *testing.T) {
 		{
 			name:      "a project only the server's names have is listed, so its name can go",
 			in:        Input{Names: shows(map[string]string{plantKey: "plant-sensor"}), Server: server, Device: device},
-			want:      Project{Key: plantKey, Code: "5be03d", State: Removing},
+			want:      Project{Key: plantKey, Code: "5be03d", State: Removing, Shown: "plant-sensor"},
 			wantFound: true,
 		},
 		{

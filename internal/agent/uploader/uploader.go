@@ -268,7 +268,9 @@ type Uploader struct {
 
 	// names is project-names.json for the sign-in the loop uploads with,
 	// nil until the first cycle that needs it (loadNames). namesStarted
-	// says the start's names request got its answer; namesKey and
+	// says the device knows what the server holds: an answer came since
+	// the start, the sign-in, and the last names request whose outcome it
+	// never learned, so a names request needn't read first; namesKey and
 	// namesHash are the last names body's Idempotency-Key and hash, which a
 	// retry of the same body keeps; namesHeld is the hash of a body the
 	// server refused, which waits until namesAfter (names.go).
@@ -278,8 +280,12 @@ type Uploader struct {
 	namesStarted                   bool
 	namesKey, namesHash, namesHeld string
 	namesAfter                     time.Time
-	namesBackoff                   *backoff
-	namesWait                      time.Time
+	// missingUntil is when a 404 to a names request stops counting, a day
+	// after it, and missingHash the body that got it (namesMissing).
+	missingUntil time.Time
+	missingHash  string
+	namesBackoff *backoff
+	namesWait    time.Time
 }
 
 // sealedRow is what the uploader takes of a sealed batch: its row, when it

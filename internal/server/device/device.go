@@ -342,8 +342,10 @@ func (s *Store) RemoveAccount(ctx context.Context, tx writer.Tx, account string,
 //
 // The project names the device's owner turned on (D-owner-names) get the
 // removal time too, and the retention job deletes them 90 days after it,
-// with the device's other project rows (D-project-map-lifetime), unless
-// the device is linked again first (grant.go clears it).
+// as the device's own row goes 90 days after its removal (DESIGN 4.4's
+// device_id row, server.devices), unless the device is linked again first
+// (grant.go clears it). Its rollup_projects rows stay with the account
+// (D-project-map-lifetime).
 func unlink(ctx context.Context, tx writer.Tx, nowMs int64, where string, args ...any) error {
 	at := fmt.Sprintf("$%d", len(args)+1)
 	if _, err := tx.ExecContext(ctx, `UPDATE project_names SET device_removed_at_ms = `+at+`

@@ -19,7 +19,7 @@ import (
 )
 
 const projectsUsage = `Usage: pairtime projects
-       pairtime projects show-name <code> <label>
+       pairtime projects show-name <code> [label]
        pairtime projects hide-name <code>
 
 Lists every project pairtime knows on this computer: the name it shows for
@@ -35,12 +35,12 @@ from the server when the agent starts, and again once a day. A project
 gets its code once its first minutes reach the server, and until pairtime
 has read it, the list shows the project's whole key instead.
 
-  show-name <code> <label>  Shows the project's name on your dashboard as
-                            the label you give, cleaned of extra spaces
-                            and invisible characters. Without a label,
-                            pairtime says the one it would suggest, the
-                            one the project showed before or the name it
-                            has here, and changes nothing.
+  show-name <code> [label]  Shows the project's name on your dashboard:
+                            the label, cleaned of extra spaces and
+                            invisible characters, or else the one the
+                            listing shows, the one it showed before or the
+                            name pairtime shows for it here. pairtime
+                            prints the name it saved.
   hide-name <code>          Takes the name off your dashboard again.
 
 <code> is a code pairtime projects lists, "Project <code>" as your dashboard
@@ -48,7 +48,8 @@ shows it, or the project's whole key, as pairtime projects lists a project
 with no code yet. Both write the project's table in config.toml, which the
 running agent reads again at once, and it sends the change with its next
 upload. Hiding a name on your dashboard turns it off here too, until you
-show it again.
+show it again, and so does the server dropping a name, or this computer
+signing in to another server, which never showed it.
 
 Exit status:
   0  done
@@ -225,14 +226,27 @@ func nameWords(p projects.Project) string {
 	case projects.On:
 		return "shows the name " + label
 	case projects.Sending:
+		if p.Shown != "" {
+			return `shows the name "` + text.Printable(p.Shown) + `" until pairtime uploads ` + label
+		}
 		return "shows the name " + label + " once pairtime uploads it"
 	case projects.Removing:
 		return "shows its name until pairtime uploads the change, then " + dashboardName(p, "its code")
 	case projects.Hidden:
-		if p.Pending {
-			return fmt.Sprintf("%s, since you hid its name there on %s; pairtime couldn't turn it off in config.toml, so it doesn't send it, and to show it again set online = false under its table there, then run show-name", dashboardName(p, "its code"), text.Day(p.HiddenAt.In(viewZone())))
+		day := text.Day(p.HiddenAt.In(viewZone()))
+		var why string
+		switch p.Why {
+		case uploader.NoteDropped:
+			why = fmt.Sprintf("%s, since the server stopped showing its name on %s, as after a long time signed out or a restore of its data", dashboardName(p, "its code"), day)
+		case uploader.NoteSignedIn:
+			why = fmt.Sprintf("%s, since this computer signed in to this server on %s, and only the server before it showed the name", dashboardName(p, "its code"), day)
+		default:
+			why = fmt.Sprintf("%s, since you hid its name there on %s", dashboardName(p, "its code"), day)
 		}
-		return fmt.Sprintf("%s, since you hid its name there on %s; pairtime turned it off here, and show-name shows it again", dashboardName(p, "its code"), text.Day(p.HiddenAt.In(viewZone())))
+		if p.Pending {
+			return why + "; pairtime couldn't turn it off in config.toml, so it doesn't send it, and to show it again set online = false under its table there, then run show-name"
+		}
+		return why + "; pairtime turned it off here, and show-name shows it again"
 	}
 	if p.Label == "" {
 		return dashboardName(p, "no code yet") + "; it has no name on this computer, so show-name needs one"
@@ -300,18 +314,11 @@ func runShowName(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	called := dashboardName(p, "the project "+p.Key)
-	if len(rest) == 0 {
-		// The owner approves the label their dashboard shows by giving it
-		// (D-owner-names): pairtime suggests one and saves nothing.
-		if p.Label == "" {
-			fmt.Fprintf(stderr, "pairtime projects: %s has no name on this computer, so say what your dashboard shows: pairtime projects show-name %s \"a name\"\n", called, projectArg(p))
-		} else {
-			fmt.Fprintf(stderr, "pairtime projects: say what your dashboard shows for %s, such as the name it has here, and nothing changes until you do: pairtime projects show-name %s \"%s\"\n", called, projectArg(p), text.Printable(p.Label))
-		}
-		return 2
-	}
-	label, err := projects.Label(p, strings.Join(rest, " "), true)
+	label, err := projects.Label(p, strings.Join(rest, " "), len(rest) > 0)
 	switch {
+	case errors.Is(err, projects.ErrNoLabel):
+		fmt.Fprintf(stderr, "pairtime projects: %s has no name on this computer, so say what your dashboard shows: pairtime projects show-name %s \"a name\"\n", called, projectArg(p))
+		return 1
 	case errors.Is(err, projects.ErrEmptyLabel):
 		fmt.Fprintln(stderr, "pairtime projects: that name is empty once its spaces and invisible characters are taken out, so it can't show")
 		return 1
@@ -364,7 +371,7 @@ func runHideName(args []string, stdout, stderr io.Writer) int {
 		// (projects.Input), and a removed computer's names stay on the
 		// server until its purge, which this computer can't change now.
 		fmt.Fprintln(stdout, "Turned off in config.toml. This computer isn't linked to a pairtime server, so it can't change your dashboard: if your dashboard still shows the name, its Hide this name button takes it off at once.")
-	case p.State == projects.Sending:
+	case p.State == projects.Sending && p.Shown == "":
 		fmt.Fprintf(stdout, "Turned off in config.toml before it was sent. Your pairtime dashboard calls it %s.\n", called)
 	case !v.online:
 		fmt.Fprintf(stdout, "Turned off in config.toml. Your pairtime dashboard shows the name until this computer uploads the change, then calls it %s; its Hide this name button takes it off at once meanwhile.\n%s\n", called, notOnline(v))

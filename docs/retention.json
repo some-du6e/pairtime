@@ -73,8 +73,8 @@
     {
       "id": "device.project_names",
       "where": "device",
-      "data": "What the server last told this computer about your project names: the name your dashboard shows for each project you turned a name on for, the short code your dashboard calls each project by, when the server answered, which names you hid on your dashboard, and a note of each name your dashboard stopped showing, with when pairtime found it",
-      "kept": "A name until you turn it off and the server next answers. The codes until the server's next answer replaces them. A note until you turn that name on again. All of it until you delete everything or uninstall pairtime"
+      "data": "What the server last told this computer about your project names: the name your dashboard shows for each project you turned a name on for, the short code your dashboard calls each project by, when the server answered, which names you hid on your dashboard, and a note of each name pairtime turned off because your dashboard doesn't show it, with the name it showed and when pairtime found it",
+      "kept": "The server's last answer until its next one replaces it. A note until your dashboard shows that name again, the oldest notes going first when there are very many. Only the notes stay when this computer signs in to another server. All of it until you uninstall pairtime or delete everything"
     },
     {
       "id": "device.key",
@@ -213,8 +213,8 @@
     {
       "id": "server.project_names",
       "where": "server",
-      "data": "The names of your projects you chose to show on your own dashboard: for each one, the label you approved on your computer, the device and project key it names, and when the server got it. Only your own dashboard shows them",
-      "kept": "Until you turn the name off on your computer or hide it on your dashboard, either of which deletes it at once. A removed device's names go {days} after you remove it, unless you link it again first, and all of them go when your account is deleted",
+      "data": "The names of your projects you chose to show on your own dashboard: for each one, the label you approved on your computer, the device and project key it names, when the server got it, and when you removed that device, if you did. Only your own dashboard shows them",
+      "kept": "Until you turn the name off on your computer or hide it on your dashboard, either of which deletes it at once. After a hide, only the project key and when you hid it stay, without the name, as the record of hidden names says. A removed device's names go {days} after you remove it, unless you link it again first, and all of them go when your account is deleted",
       "days": 90,
       "jobs": [{
         "table": "project_names",

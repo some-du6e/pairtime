@@ -69,7 +69,7 @@ The endpoint never answers 404. A 404 comes from a server without it, as an olde
 
 ### 1.6 Processing and the response
 
-In one writer transaction, the server deletes each `delete` key's name, then stores each `set` item under the token's account, the device and the key, with the time it stored it, and moves the counter. A request is idempotent by its content: sending the same body again, signed again with a new counter, stores the same names. So the server keeps no reply for it, and the device's most recent ingest reply stays as it was (ingest-v1 2.10).
+In one writer transaction, the server deletes each `delete` key's name and hide, then stores each `set` item under the token's account, the device and the key, with the time it stored it, dropping the key's hide, and moves the counter. A request is idempotent by its content: sending the same body again, signed again with a new counter, stores the same names. So the server keeps no reply for it, and the device's most recent ingest reply stays as it was (ingest-v1 2.10).
 
 The response is 200:
 
@@ -77,7 +77,7 @@ The response is 200:
 {"names": [{"project": "<key>", "label": "<label>"}, ...], "hidden": ["<key>", ...], "codes": {"<key>": "<code>", ...}}
 ```
 
-`names` is every name the server holds for the device after the request, in key order, `[]` for none. `hidden` is the keys of the device's names the owner hid on the dashboard since, whose labels the server deleted, in key order, `[]` for none: the server keeps each key until the device sends it in `delete` (2). The client reads both to learn what the owner's dashboard shows.
+`names` is every name the server holds for the device after the request, in key order, `[]` for none. `hidden` is the keys of the device's names the owner hid on the dashboard, whose labels the server deleted, in key order, `[]` for none: the server keeps each key until the device sends it in `delete`, 30 days at most (2). The client reads both to learn what the owner's dashboard shows.
 
 `codes` gives each project key the device uploaded minutes of the short code the owner's dashboard calls its project by, such as `"7c41e9"`, `{}` for none. Codes are worked out over every key the account's devices uploaded (`pkg/projectname.ProjectCodes`), and a code gets longer when another device's key starts the same way, so a device can't work one out from its own keys. It shows the codes this answer gives, and none for a key the server has no minutes of yet. A `{}` read every day keeps them current.
 
@@ -88,13 +88,24 @@ A name shows only to its owner: on their own signed-in `/dashboard`, in place of
 It goes when:
 
 - the device sends its key in `delete`, when the owner turns the name off on the computer;
-- the owner presses "Hide this name" on the dashboard, a form that posts the project's id to `POST /dashboard/projects/hide` from the dashboard itself (the zone form's same-origin rule). The server deletes the label of the name on every device key of that project for the account at once, and keeps each key, with the time, as `hidden` in its device's answers until the device sends it in `delete`. The website can hide a name but never set or change one;
-- the device is removed and 90 days pass: the retention job deletes the names of a device removed 90 days ago, hidden ones too, as D-project-map-lifetime deletes its other project rows. A device linked again before then keeps them (`server.project_names`, docs/retention.json);
-- the account is deleted.
+- the owner presses "Hide this name" on the dashboard, a form that posts the project's id to `POST /dashboard/projects/hide` from the dashboard itself (the zone form's same-origin rule). The server deletes the name on every device key of that project for the account at once, label and all. For a linked device it keeps a hide, the device and project key and the time, which its answers list in `hidden` until the device sends the key in `delete`, or 30 days after the hide, whichever comes first (`server.project_name_hides`, docs/retention.json). A removed device's name leaves no hide, since that device can't ask until it is linked again. The website can hide a name but never set or change one;
+- the device is removed and 90 days pass: the retention job deletes the names of a device removed 90 days ago, as the server's rule for a removed device's own row has it (DESIGN 4.4's `device_id` row, `server.devices`). A device linked again before then keeps them (`server.project_names`, docs/retention.json);
+- the account is deleted, names and hides alike.
 
-The client sends a name when the owner turns it on or changes its label, and a delete when the owner turns it off, and nothing on its own after that. It sends a name only for a key of its own projects, never one it didn't produce, such as a key in a `config.toml` copied from another computer. When an answer lists a key in `hidden`, the owner hid that name on the dashboard: the client turns the name off in `config.toml`, so it stays hidden until the owner turns it on again on the computer, then sends the key in `delete`. When a name the server showed before is in neither `names` nor `hidden`, the server no longer holds it, as after the device's purge or a restore of the server's database, and the client sends it again while `config.toml` has it on.
+The computer never sends a name on its own (D-owner-names). It sends a set only when the owner turns a name on or changes its label, and a delete only when they turn it off, or once it turned off a name the server lists as hidden. It sends a name only for a key of its own projects, never one it didn't produce, such as a key in a `config.toml` copied from another computer. A read, `{}`, which carries no name, goes when the agent starts and once a day, so the computer learns its codes and the names the owner hid.
+
+Whenever the computer doesn't know what the server holds, it reads first and works out what to send from the read's answer: at the agent's start, after a sign-in, after a request whose outcome it never learned (a timeout, a 5xx, or `counter_stale` after the transport sent a lost request again), and when `project-names.json` is missing or names another sign-in. So no retry undoes a hide made in between.
+
+What the client does with an answer:
+
+- A key in `hidden`: the owner hid that name on the dashboard. The client turns the name off in `config.toml` with a note, so it stays hidden until the owner turns it on again on the computer, then sends the key in `delete`.
+- A name the server showed before that the answer lists in neither `names` nor `hidden`: the server no longer has it, as after the device's purge, a restore of its database, or a hide whose 30 days passed before the device asked again, and the client can't tell which. It turns the name off in `config.toml` with a note saying the server stopped showing it, and doesn't send it again until the owner turns it on.
+
+A sign-in to a server, or as a device, other than the one `project-names.json` names, never shows that server the names the other showed: `pairtime login` turns off in `config.toml` every name that's on, and every name the old server showed, each with a note, and lists them with the `pairtime projects show-name` command that turns each on again there. The agent does the same when it first loads the file after such a sign-in. Only a computer whose `project-names.json` names no sign-in at all, as before its first link, sends the names turned on before it, as `pairtime projects show-name` told the owner it would.
 
 The client sends no names request, a read included, until the server holds a batch the device sealed since its link. A names request stores the device's ingest state, its counter, as an upload does, and from then on the server holds something from the device (device-auth-v1 9), so `pairtime logout` after a sign-in the wrong account approved would no longer free the device's id (device-auth-v1 1). Before that batch the server has no minutes of the link's projects, so it would show no name anyway.
+
+`uploads.jsonl` keeps a line for each names request the client sent, answered or not: when, to which server, how many names it set and deleted, the answer's status and code or why none came, and the SHA-256 of its body, never a name or a key. `pairtime privacy show` prints the next names request byte for byte, names and all, before it goes.
 
 ## 3. Storage
 
@@ -104,7 +115,14 @@ For reviewers; the client never sees it. Migration `0008_project_names.sql` crea
 |---|---|
 | `device_id`, `project_key` | The key, the primary key |
 | `user_id` | The token's account |
-| `label` | The label, as 1.3 says; `NULL` once the owner hid the name on the dashboard |
+| `label` | The label, as 1.3 says |
 | `set_at_ms` | When the server stored the label |
-| `hidden_at_ms` | When the owner hid the name, `NULL` while it shows |
 | `device_removed_at_ms` | When the device was removed, `NULL` while it is linked; the retention job deletes a row 90 days after it |
+
+and `project_name_hides`, a hidden name without its label:
+
+| Column | What it holds |
+|---|---|
+| `device_id`, `project_key` | The key, the primary key |
+| `user_id` | The account the name was the device's under |
+| `hidden_at_ms` | When the owner hid the name; the retention job deletes a hide 30 days after it |

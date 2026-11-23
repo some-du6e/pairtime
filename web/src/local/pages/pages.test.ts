@@ -455,6 +455,31 @@ describe("Projects' switches for a project's name on the owner's dashboard", () 
 				expect(text(switchOf(html, 'p_bot'))).toContain("You hid it on your dashboard, so it's off here too. Turn it on to show it again."),
 		},
 		{
+			name: 'a name the server no longer has says so, never that the owner hid it, and how to show it again',
+			html: () => {
+				const names = projectsReply();
+				names.projects = names.projects.map((p) => (p.project === 'p_bot' ? { ...p, why: 'dropped' as const } : p));
+				return page({ names });
+			},
+			check: (html) => {
+				const words = text(switchOf(html, 'p_bot'));
+				expect(words).toContain('The server no longer has it, as after this computer was signed out a long time or its data was restored, so pairtime turned it off here too. Turn it on to show it again.');
+				expect(words).not.toContain('You hid it');
+			},
+		},
+		{
+			name: 'a name that was on before a sign-in to another server says that server never showed it',
+			html: () => {
+				const names = projectsReply();
+				names.projects = names.projects.map((p) => (p.project === 'p_bot' ? { ...p, why: 'signed_in' as const } : p));
+				return page({ names });
+			},
+			check: (html) =>
+				expect(text(switchOf(html, 'p_bot'))).toContain(
+					"This computer signed in to a server that never showed it, so pairtime turned it off here. Turn it on to show it on this server's dashboard.",
+				),
+		},
+		{
 			name: 'a project of this computer the span holds no time of is listed after the rest, and one with no name here says how to give it one',
 			html: () => page({ names: projectsReply() }),
 			check: (html) => {

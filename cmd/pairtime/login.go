@@ -9,9 +9,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -19,6 +22,8 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
+	"github.com/some-du6e/pairtime/internal/agent/uploader"
+	"github.com/some-du6e/pairtime/internal/coach/text"
 	"github.com/some-du6e/pairtime/internal/version"
 )
 
@@ -202,7 +207,34 @@ func runLogin(args []string, stdout, stderr io.Writer) int {
 	if r.ConfigErr != nil {
 		fmt.Fprintf(stderr, "pairtime login: %v\n", r.ConfigErr)
 	}
+	namesOff(stdout, stderr, dirs, r.Linked.Server, r.Linked.DeviceID)
 	return 0
+}
+
+// namesOff turns off in config.toml, as login links this computer to
+// server as device, the project names that were on for another sign-in,
+// since this server never showed them, and lists each with the command
+// that shows it here (uploader.SignedInElsewhere; project-names-v1 2). A
+// computer linking for the first time keeps the names turned on before,
+// which go once the server holds its first upload.
+func namesOff(stdout, stderr io.Writer, dirs home.Dirs, server, device string) {
+	cfg, _, err := config.Load(dirs.ConfigFile())
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintf(stderr, "pairtime login: config.toml doesn't read (%v), so no project name goes to %s until it does\n", err, server)
+	}
+	hide := func(key string) error { return config.HideName(dirs.ConfigFile(), key) }
+	off, err := uploader.SignedInElsewhere(dirs.Data, server, device, cfg.NamesOn(), hide, time.Now())
+	if err != nil {
+		fmt.Fprintf(stderr, "pairtime login: project-names.json doesn't read (%v); the agent turns off the names that were on for another sign-in before it sends any\n", err)
+		return
+	}
+	if len(off) == 0 {
+		return
+	}
+	fmt.Fprintf(stdout, "\nThis computer showed project names on your dashboard on another sign-in. %s never showed them, so pairtime turned them off here, and nothing about them goes there. To show one on your dashboard there:\n", server)
+	for _, key := range slices.Sorted(maps.Keys(off)) {
+		fmt.Fprintf(stdout, "  pairtime projects show-name %s    shows \"%s\"\n", key, text.Printable(off[key]))
+	}
 }
 
 func runLogout(args []string, stdout, stderr io.Writer) int {

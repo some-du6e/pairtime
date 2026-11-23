@@ -906,10 +906,12 @@ components:
             shows `label`, as the server's last answer said; `sending` is on
             in config.toml and goes with the uploader's next request, once
             the computer is online; `removing` is off in config.toml and
-            still shown until that request; `hidden` is one the owner hid on
-            the dashboard, which pairtime then turned off here, or, when it
-            couldn't change config.toml, no longer sends, so it stays hidden
-            until they turn it on again on this computer.
+            still shown until that request; `hidden` is one the dashboard
+            doesn't show, because the owner hid it there, the server no
+            longer has it, or this computer signed in elsewhere (`why`),
+            which pairtime then turned off here, or, when it couldn't change
+            config.toml, no longer sends, so it stays off until they turn it
+            on again on this computer.
         label:
           type: string
           description: >
@@ -921,6 +923,17 @@ components:
           type: string
           format: date-time
           description: When pairtime found the name hidden on the dashboard, in UTC, for `hidden`.
+        why:
+          type: string
+          enum: [dropped, signed_in]
+          description: >
+            For `hidden`, why the dashboard doesn't show the name when the
+            owner didn't hide it there: `dropped`, the server no longer has
+            it, as after this computer was signed out a long time or the
+            server's data was restored, which pairtime can't tell apart;
+            `signed_in`, this computer signed in to another server, or as
+            another device, which never showed it. Absent for a name the
+            owner hid on the dashboard.
     NameChoice:
       type: object
       additionalProperties: false

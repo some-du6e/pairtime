@@ -15,8 +15,8 @@ import (
 // TestProjectNamesFollowTheDevice checks what removing a device and linking
 // it again do to the project names its owner turned on (D-owner-names):
 // removal marks them with its time, for the retention job to delete them
-// 90 days later with the device's other project rows
-// (D-project-map-lifetime), and a link again before then keeps them.
+// 90 days later, as the device's own row goes 90 days after its removal
+// (DESIGN 4.4's device_id row), and a link again before then keeps them.
 func TestProjectNamesFollowTheDevice(t *testing.T) {
 	for _, engine := range storetest.Engines() {
 		t.Run(string(engine), func(t *testing.T) {

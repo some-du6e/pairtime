@@ -171,6 +171,17 @@ func TestNameEdits(t *testing.T) {
 		wantErr string
 	}{
 		{
+			name: "a label with three apostrophes in a row goes in escaped, so the next edit of the file still works",
+			file: "mode = \"online\"\n",
+			edit: func(name string) error {
+				if err := ShowName(name, chip8Key, "it'''s"); err != nil {
+					return err
+				}
+				return HideName(name, chip8Key)
+			},
+			want: "mode = \"online\"\n\n" + table + "name = \"it\\u0027\\u0027\\u0027s\"\nonline = false\n",
+		},
+		{
 			name: "showing a name adds the project's table at the end, and changes nothing else",
 			file: "mode = \"online\"\n# mine\n[http]\nport = 8123\n",
 			edit: show(chip8Key, "chip8-emulator"),

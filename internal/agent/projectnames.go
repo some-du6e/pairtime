@@ -48,6 +48,10 @@ type projectReply struct {
 	State     projects.State `json:"state"`
 	Label     string         `json:"label"`
 	HiddenAt  *time.Time     `json:"hidden_at,omitempty"`
+	// Why says, for hidden, why the dashboard doesn't show the name, when
+	// the owner didn't hide it there: uploader.NoteDropped or
+	// uploader.NoteSignedIn.
+	Why string `json:"why,omitempty"`
 }
 
 // replyOf is p as the local API gives it.
@@ -56,6 +60,9 @@ func replyOf(p projects.Project) projectReply {
 	if p.State == projects.Hidden && !p.HiddenAt.IsZero() {
 		at := p.HiddenAt.UTC()
 		r.HiddenAt = &at
+	}
+	if p.State == projects.Hidden {
+		r.Why = p.Why
 	}
 	return r
 }

@@ -104,10 +104,11 @@ export const nameWho =
 /**
  * Where a project's name stands on the owner's dashboard, by its state in
  * GET /v1/projects. code is the project's short code, as the server gave
- * it, "" while it gave none, and online says the names turned on go to the
- * server now.
+ * it, "" while it gave none, online says the names turned on go to the
+ * server now, and why says, for a hidden name, why the dashboard doesn't
+ * show it when the owner didn't hide it there.
  */
-export function nameWords(state: NameState, code: string, online: boolean): string {
+export function nameWords(state: NameState, code: string, online: boolean, why?: string): string {
 	const called = code !== '' ? `Project ${code}` : 'by its code';
 	switch (state) {
 		case 'on':
@@ -121,6 +122,12 @@ export function nameWords(state: NameState, code: string, online: boolean): stri
 				? `Your dashboard shows it until pairtime's next upload, then calls the project ${called}.`
 				: `Your dashboard shows it until this computer is online again, then calls the project ${called}.`;
 		case 'hidden':
+			switch (why) {
+				case 'dropped':
+					return 'The server no longer has it, as after this computer was signed out a long time or its data was restored, so pairtime turned it off here too. Turn it on to show it again.';
+				case 'signed_in':
+					return "This computer signed in to a server that never showed it, so pairtime turned it off here. Turn it on to show it on this server's dashboard.";
+			}
 			return "You hid it on your dashboard, so it's off here too. Turn it on to show it again.";
 		default:
 			return code !== ''
@@ -173,6 +180,8 @@ export function allSentences(): string[] {
 				nameWords(state, '', true),
 				nameWords(state, '', false),
 			]),
+			nameWords('hidden', '7c41e9', true, 'dropped'),
+			nameWords('hidden', '7c41e9', true, 'signed_in'),
 			noNameWords('d2a8f6'),
 			noNameWords('dd2a8f61c94e07b35a8c1f6e29d4b7a03'),
 			nameRefused('config.toml has an error'),

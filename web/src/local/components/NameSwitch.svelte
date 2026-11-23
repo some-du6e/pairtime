@@ -44,7 +44,7 @@
 			<input id="{uid}-show" type="checkbox" checked={on} disabled={busy} onchange={change} />
 			<label for="{uid}-show">Show this name on my dashboard: <span data-testid="name-label">"{text.printable(entry.label)}"</span></label>
 		</p>
-		<p class="pt-note" data-testid="name-state">{nameWords(entry.state, entry.code, online)} {nameWho}</p>
+		<p class="pt-note" data-testid="name-state">{nameWords(entry.state, entry.code, online, entry.why)} {nameWho}</p>
 	{/if}
 	{#if problem !== ''}
 		<p class="problem" role="alert" data-testid="name-problem">{nameRefused(problem)}</p>

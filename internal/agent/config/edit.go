@@ -489,7 +489,9 @@ func tablePath(name string) ([]string, bool) {
 // tomlString returns s as a TOML basic string: in double quotes, with the
 // quote, the backslash and the control characters TOML doesn't take in one
 // escaped. A label has no control characters (projectname.CleanLabel), so
-// they are escaped only to be safe.
+// they are escaped only to be safe. Every apostrophe is escaped too, so
+// pairtime never writes three apostrophes in a row itself, which rewrite
+// takes for the start of a multi-line string and refuses to edit after.
 func tomlString(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')
@@ -499,7 +501,7 @@ func tomlString(s string) string {
 			b.WriteString(`\"`)
 		case r == '\\':
 			b.WriteString(`\\`)
-		case r < 0x20 || r == 0x7f:
+		case r == '\'' || r < 0x20 || r == 0x7f:
 			fmt.Fprintf(&b, "%cu%04X", '\\', r)
 		default:
 			b.WriteRune(r)

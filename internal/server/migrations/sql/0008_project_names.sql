@@ -11,8 +11,10 @@
 -- the owner approved, at most 64 characters, and when the server stored it.
 -- device_removed_at_ms is NULL while the device is linked: removing the
 -- device sets it, linking it again clears it, and the retention job
--- (server.project_names) deletes a row 90 days after it, as
--- D-project-map-lifetime deletes the device's other project rows.
+-- (server.project_names) deletes a row 90 days after it, as the removed
+-- device's own row goes 90 days after its removal (DESIGN 4.4's device_id
+-- row, server.devices). The device's rollup_projects rows stay with the
+-- account (D-project-map-lifetime).
 CREATE TABLE project_names (
     device_id TEXT NOT NULL,
     project_key TEXT NOT NULL,

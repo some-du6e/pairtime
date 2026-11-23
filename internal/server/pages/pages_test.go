@@ -240,6 +240,8 @@ func TestPrivacyNotice(t *testing.T) {
 				"A project&#39;s name stays on your computer unless you turn it on for that project",
 				"the server keeps the project&#39;s key and when you hid it until your computer turns the name off as well, 30 days at most.",
 				"with a request that carries no name.",
+				"<code>pairtime privacy show</code> prints every field of the next upload, and all of the next project names request, exactly as they will be sent.",
+				"including the project names request your computer makes when the agent starts and once a day, which carries no name unless you turned one on or off,",
 			},
 		},
 		{
