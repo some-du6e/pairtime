@@ -147,6 +147,10 @@ func TestPrivacyDelete(t *testing.T) {
 				if !strings.Contains(out, "Type y to delete everything") || exists(t, dir, "ledger") {
 					t.Errorf("printed %q, and the ledger is there: %v", out, exists(t, dir, "ledger"))
 				}
+				// What a backup or a synced folder holds, the deletion can't reach.
+				if !strings.Contains(out, "Copies a backup or a synced folder already holds stay as they are") {
+					t.Errorf("the question doesn't say backups keep their copies: %q", out)
+				}
 			},
 		},
 		{

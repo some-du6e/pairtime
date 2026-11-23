@@ -71,6 +71,7 @@ import (
 	"io"
 	"io/fs"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -168,8 +169,10 @@ type Vault struct {
 
 // Open opens the vault in opts.Dir. Files another device key sealed go to
 // old/<its key id>, and a file whose first frame isn't a whole head holds
-// no entry anyone can open, so it is deleted. The vault keeps nothing
-// until Reconcile has run.
+// no entry anyone can open, so it is deleted. It flushes the newest file
+// this key sealed, which a killed run may have left in the page cache, so
+// open the vault before the ledger writer, whose Open flushes the batches
+// it restores. The vault keeps nothing until Reconcile has run.
 func Open(opts Options) (*Vault, error) {
 	if !filepath.IsAbs(opts.Dir) {
 		return nil, fmt.Errorf("vault: the vault directory must be an absolute path, not %q", opts.Dir)
@@ -242,11 +245,13 @@ func (v *Vault) setAside() error {
 	if err != nil {
 		return err
 	}
+	newest := "" // the newest file of this key's
 	for _, day := range days {
 		name := segPath(v.dir, day)
 		keyID, err := readHead(name)
 		switch {
 		case err == nil && keyID == v.keyID:
+			newest = day
 			continue
 		case err == nil:
 			dst := filepath.Join(v.dir, oldDir, keyID)
@@ -275,6 +280,16 @@ func (v *Vault) setAside() error {
 			}
 		default:
 			return err
+		}
+	}
+	if newest != "" {
+		// A run that was killed left its last entries in the page cache.
+		// They go to disk now, before the ledger writer's Open flushes the
+		// batches it restores, so no restored batch is on disk without its
+		// records' content. Only the newest file can hold such entries: an
+		// older one was flushed as its day ended (toDay).
+		if err := settle(segPath(v.dir, newest), 0, false); err != nil {
+			v.report(fmt.Sprintf("the vault couldn't flush %s as it opened: %v", newest+segSuffix, err))
 		}
 	}
 	return nil
@@ -536,8 +551,15 @@ func (v *Vault) reconcile(next uint64) error {
 	return nil
 }
 
+// flushHook, when set, hears of each file settle flushes. It is nil outside
+// tests.
+var flushHook func(name string)
+
 // settle flushes the file name, first cutting it to size when cut is set.
 func settle(name string, size int64, cut bool) error {
+	if flushHook != nil {
+		flushHook(name)
+	}
 	f, err := os.OpenFile(name, os.O_RDWR, 0)
 	if err != nil {
 		return err
@@ -847,6 +869,11 @@ func (v *Vault) read(s uint64, what byte) ([]byte, error) {
 	}
 	for i := len(days) - 1; i >= 0; i-- {
 		f, err := readFile(segPath(v.dir, days[i]), days[i], v.keyID)
+		if errors.Is(err, errTorn) || errors.Is(err, errHead) {
+			// No whole entry, as in a file Keep has just made or a write
+			// that failed left empty: the entry may be in an older one.
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -872,6 +899,11 @@ func (v *Vault) read(s uint64, what byte) ([]byte, error) {
 func (v *Vault) DropText() (int, error) {
 	v.mu.Lock()
 	mark := v.last
+	if v.off != nil || !v.ready {
+		// A vault that is off keeps nothing new, so every text in its
+		// files was kept before this began, whatever last says.
+		mark = math.MaxUint64
+	}
 	v.mu.Unlock()
 	return v.filter(func(e entry) bool { return e.what != whatText || e.s > mark })
 }
@@ -934,6 +966,9 @@ func (v *Vault) filterNewest(day string, keep func(entry) bool) (int, error) {
 func (v *Vault) filterFile(day string, keep func(entry) bool) (int, error) {
 	name := segPath(v.dir, day)
 	f, err := readFile(name, day, v.keyID)
+	if errors.Is(err, errTorn) || errors.Is(err, errHead) {
+		return 0, nil // no whole entry to drop (read)
+	}
 	if err != nil {
 		return 0, err
 	}

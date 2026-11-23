@@ -192,6 +192,8 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 	a.keyAdapters(ks)
 	a.keyFocus(ks)
 	a.keySessions(ks)
+	// Before the writer: the vault flushes what a killed run kept before
+	// ledger.Open flushes the batches it restores (ledger.Vault).
 	v := a.openVault(ks, st.KeyID)
 	w, err := ledger.Open(ledger.Options{
 		Dir:   a.dirs.Ledger(),

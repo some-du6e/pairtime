@@ -142,8 +142,12 @@ describe('Privacy', () => {
 					"pairtime keeps the text of your prompts, the agent's final reply to each one and the file paths for your recaps in a vault, which it encrypts",
 				);
 				expect(t).toContain('but not from a program running as you');
-				expect(t).toContain('set keep_prompt_text = false under [privacy]');
+				expect(t).toContain("To keep no prompt text at all, add these two lines at the end of pairtime's config.toml");
 				expect(t).toContain('pairtime then deletes the text it kept');
+				// The table's header too: a config.toml from before [privacy]
+				// ends in [notifications], where the switch alone would land.
+				const block = /data-testid="keep-off"[^>]*>([\s\S]*?)<\/pre>/.exec(html)?.[1]?.replace(/<[^>]*>/g, '');
+				expect(block).toBe('[privacy]\nkeep_prompt_text = false');
 			},
 		},
 		{
@@ -160,6 +164,8 @@ describe('Privacy', () => {
 			check: (html) => {
 				const t = text(html);
 				expect(t).toContain("pairtime privacy delete , typed in a terminal, deletes pairtime's key and everything pairtime keeps on this computer");
+				expect(t).toContain('Copies a backup or a synced folder already holds stay as they are');
+				expect(t).not.toContain('Nobody can bring');
 				expect(t).toContain('A button here comes in a later version of pairtime.');
 			},
 		},

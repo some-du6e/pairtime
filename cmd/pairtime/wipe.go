@@ -28,7 +28,9 @@ prompts, the minute buckets, your daily totals and recaps, the commit
 records, the hook calls waiting to be read, the record of past uploads, and
 this computer's sign-in to the pairtime server. Without the key, what
 pairtime recorded before can't be opened or checked, so those hours can't
-be submitted any more.
+be submitted any more. Copies that a backup or a synced folder already
+holds stay as they are, the key's file too when pairtime doctor says
+pairtime keeps its key in a file.
 
 pairtime itself and your settings in config.toml stay. pairtime starts
 again from nothing, under a new device key, and signed out: pairtime login
@@ -96,7 +98,7 @@ func runPrivacyDelete(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if !*yes {
-		fmt.Fprintf(stdout, "This deletes pairtime's device key and everything pairtime recorded in %s: the text of your prompts it kept, your time, your daily totals and recaps, and this computer's sign-in. Nobody can bring them back, and the hours pairtime recorded so far can't be submitted any more. pairtime and your settings stay, and it starts again from nothing.\n\n", install.Printable(dirs.Data))
+		fmt.Fprintf(stdout, "This deletes pairtime's device key and everything pairtime recorded in %s: the text of your prompts it kept, your time, your daily totals and recaps, and this computer's sign-in. The hours pairtime recorded so far can't be submitted any more. Copies a backup or a synced folder already holds stay as they are, the key's file too when pairtime doctor says pairtime keeps its key in a file. pairtime and your settings stay, and it starts again from nothing.\n\n", install.Printable(dirs.Data))
 		if !askYes(bufio.NewScanner(installStdin), stdout, "Type y to delete everything, or n to stop without changing anything: ") {
 			fmt.Fprintln(stdout, "Nothing changed.")
 			return exitDeclined

@@ -709,6 +709,56 @@ func TestReconcileRules(t *testing.T) {
 			},
 		},
 		{
+			name: "after a Reconcile that failed, DropText still deletes every text the files hold",
+			run: func(t *testing.T, dir string) {
+				if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+					t.Skip("needs a file this user can read and not write")
+				}
+				v, _ := open(t, dir, 1, keyA, 1, true)
+				keepAll(v, day1, 1, 2)
+				v.Close()
+				name := segPath(dir, day1)
+				if err := os.Chmod(name, 0o400); err != nil {
+					t.Fatal(err)
+				}
+				defer os.Chmod(name, 0o600)
+				v, err := Open(Options{Dir: dir, Keys: testKeys(t, 1), KeyID: keyA, KeepText: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer v.Close()
+				if err := v.Reconcile(3); err == nil {
+					t.Fatal("Reconcile flushed a file it can't write")
+				}
+				if n, err := v.DropText(); err != nil || n != 2 {
+					t.Errorf("DropText = %d, %v; want 2", n, err)
+				}
+				if days, _ := segments(dir); len(days) != 0 {
+					t.Errorf("files %q left", days)
+				}
+			},
+		},
+		{
+			name: "Open flushes the newest file of its key, which a killed run may have left in the page cache",
+			run: func(t *testing.T, dir string) {
+				v, _ := open(t, dir, 1, keyA, 1, true)
+				v.Keep(day1, 1, []byte("one"), nil)
+				v.Keep(day2, 2, []byte("two"), nil)
+				// Not closed, as by a kill.
+				var flushed []string
+				flushHook = func(name string) { flushed = append(flushed, filepath.Base(name)) }
+				defer func() { flushHook = nil }()
+				w, err := Open(Options{Dir: dir, Keys: testKeys(t, 1), KeyID: keyA})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer w.Close()
+				if !slices.Equal(flushed, []string{day2 + segSuffix}) {
+					t.Errorf("Open flushed %q, want %s", flushed, day2+segSuffix)
+				}
+			},
+		},
+		{
 			name: "a rewrite a crash cut short leaves no temporary file behind",
 			run: func(t *testing.T, dir string) {
 				tmp := filepath.Join(dir, "."+day1+segSuffix+".tmp-123")
@@ -786,6 +836,24 @@ func TestDropText(t *testing.T) {
 					if bytes.Contains(b, sealed) {
 						t.Errorf("%s still holds the deleted text's ciphertext", name)
 					}
+				}
+			},
+		},
+		{
+			name: "an empty newest file, as Keep leaves while it makes one, hides no older entry from reads or DropText",
+			run: func(t *testing.T, dir string, v *Vault) {
+				v.Keep(day1, 1, []byte("one"), []string{"a.go"})
+				if err := os.WriteFile(segPath(dir, day2), nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if got, err := text(t, v, 1, "one"); err != nil || got != "one" {
+					t.Errorf("Text(1) past an empty newest file = %q, %v", got, err)
+				}
+				if got, err := v.Paths(1, hunks(t, "a.go")); err != nil || !slices.Equal(got, []string{"a.go"}) {
+					t.Errorf("Paths(1) past an empty newest file = %q, %v", got, err)
+				}
+				if n, err := v.DropText(); err != nil || n != 1 {
+					t.Errorf("DropText past an empty newest file = %d, %v; want 1", n, err)
 				}
 			},
 		},
