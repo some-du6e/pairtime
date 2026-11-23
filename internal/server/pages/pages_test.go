@@ -229,9 +229,18 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"It doesn&#39;t protect them from malware running as you."},
 		},
 		{
-			name:    "the notice limits never receiving prompts to outside a submission and backups",
-			want:    []string{"Apart from a submission, and the encrypted backups if you turn them on, this server never receives your prompts"},
+			name:    "the notice limits never receiving prompts to outside a submission, backups and the project names you choose to show",
+			want:    []string{"Apart from a submission, the encrypted backups if you turn them on, and the project names you choose to show, this server never receives your prompts"},
 			notWant: []string{"<p>This server never receives"},
+		},
+		{
+			name: "the notice says a project's name reaches the server only when you choose to show it, and how a hide keeps the key 30 days at most (D-owner-names)",
+			want: []string{
+				"to which project (as a key, not its name, unless you choose to show that name on your own dashboard)",
+				"A project&#39;s name stays on your computer unless you turn it on for that project",
+				"the server keeps the project&#39;s key and when you hid it until your computer turns the name off as well, 30 days at most.",
+				"with a request that carries no name.",
+			},
 		},
 		{
 			name: "the notice says what a connected program can read, until you unlink it (DESIGN 3.10, 5.10)",

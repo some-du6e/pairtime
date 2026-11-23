@@ -9,28 +9,46 @@
 -- and only for a key its own device uploaded minutes of. A row names the
 -- device and its project key, as rollup_projects does, and holds the label
 -- the owner approved, at most 64 characters, and when the server stored it.
--- "Hide this name" on the dashboard sets label to NULL at once and
--- hidden_at_ms to when, and the row stays without its label so the
--- device's next answer says the name was hidden there, until the device's
--- delete says it turned the name off too. device_removed_at_ms is NULL
--- while the device is linked: removing the device sets it, linking it
--- again clears it, and the retention job (server.project_names) deletes a
--- row 90 days after it, as D-project-map-lifetime deletes the device's
--- other project rows.
+-- device_removed_at_ms is NULL while the device is linked: removing the
+-- device sets it, linking it again clears it, and the retention job
+-- (server.project_names) deletes a row 90 days after it, as
+-- D-project-map-lifetime deletes the device's other project rows.
 CREATE TABLE project_names (
     device_id TEXT NOT NULL,
     project_key TEXT NOT NULL,
     user_id TEXT NOT NULL REFERENCES users (id),
-    label TEXT,
+    label TEXT NOT NULL,
     set_at_ms BIGINT NOT NULL,
-    hidden_at_ms BIGINT,
     device_removed_at_ms BIGINT,
     PRIMARY KEY (device_id, project_key)
 );
 
 -- The dashboard reads an account's names, and the hide button and account
--- deletion change them.
+-- deletion delete them.
 CREATE INDEX project_names_user ON project_names (user_id);
 
 -- The retention job finds the rows of devices removed long enough ago.
 CREATE INDEX project_names_removed ON project_names (device_removed_at_ms);
+
+-- A name the owner hid on the dashboard, after "Hide this name" deleted
+-- its project_names row and with it the label: the device and project key
+-- it named, and when, so the device's next names answer lists the key as
+-- hidden and the device turns the name off too, telling a hide from a name
+-- the server no longer holds. The device's delete of the key removes the
+-- row, and the retention job (server.project_name_hides) deletes it 30 days
+-- after the hide if no delete came, as from a device that stopped asking.
+-- Account deletion deletes it too. A removed device's name gets no row: it
+-- can't ask until it is linked again.
+CREATE TABLE project_name_hides (
+    device_id TEXT NOT NULL,
+    project_key TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users (id),
+    hidden_at_ms BIGINT NOT NULL,
+    PRIMARY KEY (device_id, project_key)
+);
+
+-- Account deletion deletes an account's hides.
+CREATE INDEX project_name_hides_user ON project_name_hides (user_id);
+
+-- The retention job finds the hides 30 days old.
+CREATE INDEX project_name_hides_hidden ON project_name_hides (hidden_at_ms);

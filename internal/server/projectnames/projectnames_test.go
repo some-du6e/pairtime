@@ -190,6 +190,13 @@ func TestNames(t *testing.T) {
 						t.Errorf("OfAccount(u2) = %v, want none", got)
 					}
 				}},
+				{name: "Foreign finds a device's hide under another account too", run: func(t *testing.T, f *fixture) {
+					f.apply(t, "u1", "d1", []projectnames.Name{{Project: "k1", Label: "chip8"}}, nil)
+					f.hide(t, "u1", "P1")
+					if got, err := projectnames.Foreign(context.Background(), f.db.Read, "d1", "u2"); err != nil || !got {
+						t.Errorf("Foreign(d1, u2) = %v, %v; want true from the hide alone", got, err)
+					}
+				}},
 				{name: "Foreign finds a device's rows under another account, and none under its own", run: func(t *testing.T, f *fixture) {
 					f.apply(t, "u1", "d1", []projectnames.Name{{Project: "k1", Label: "chip8"}}, nil)
 					ctx := context.Background()
@@ -213,14 +220,14 @@ func TestNames(t *testing.T) {
 					if got, want := f.ofDevice(t, "d2"), (device{names: none, hidden: []string{"k2"}}); !reflect.DeepEqual(got, want) {
 						t.Errorf("OfDevice(d2) = %v, want %v", got, want)
 					}
-					if n := f.count(t, `SELECT COUNT(*) FROM project_names WHERE label IS NOT NULL AND project_key IN ('k1', 'k2')`); n != 0 {
-						t.Errorf("%d of P1's labels stayed, want none", n)
+					if n := f.count(t, `SELECT COUNT(*) FROM project_names WHERE project_key IN ('k1', 'k2')`); n != 0 {
+						t.Errorf("%d of P1's names stayed, labels and all, want none", n)
 					}
-					if n := f.count(t, `SELECT COUNT(*) FROM project_names WHERE hidden_at_ms = 2000`); n != 2 {
-						t.Errorf("%d rows say when they were hidden, want 2", n)
+					if n := f.count(t, `SELECT COUNT(*) FROM project_name_hides WHERE hidden_at_ms = 2000 AND user_id = 'u1'`); n != 2 {
+						t.Errorf("%d hides say when they were hidden, want 2", n)
 					}
 				}},
-				{name: "a hidden name stays a row, counted toward the device's limit, until the device's delete removes it", run: func(t *testing.T, f *fixture) {
+				{name: "a hide stays, counted toward the device's limit, until the device's delete removes it", run: func(t *testing.T, f *fixture) {
 					f.apply(t, "u1", "d1", []projectnames.Name{{Project: "k1", Label: "chip8"}, {Project: "k3", Label: "portfolio"}}, nil)
 					f.hide(t, "u1", "P1")
 					if n := f.apply(t, "u1", "d1", nil, nil); n != 2 {
@@ -240,11 +247,34 @@ func TestNames(t *testing.T) {
 					if got, want := f.ofDevice(t, "d1"), (device{names: []projectnames.Name{{Project: "k1", Label: "chip8 again"}}, hidden: []string{}}); !reflect.DeepEqual(got, want) {
 						t.Errorf("OfDevice(d1) = %v, want %v", got, want)
 					}
-					if n := f.count(t, `SELECT COUNT(*) FROM project_names WHERE hidden_at_ms IS NOT NULL`); n != 0 {
-						t.Errorf("%d rows still say when they were hidden, want none", n)
+					if n := f.count(t, `SELECT COUNT(*) FROM project_name_hides`); n != 0 {
+						t.Errorf("%d hides stayed, want none", n)
 					}
 					if got := f.ofAccount(t, "u1"); !reflect.DeepEqual(got, map[string]string{"P1": "chip8 again"}) {
 						t.Errorf("OfAccount(u1) = %v", got)
+					}
+				}},
+				{name: "hiding a removed device's name deletes it and leaves no hide, since that device can't ask until it is linked again", run: func(t *testing.T, f *fixture) {
+					f.apply(t, "u1", "d1", []projectnames.Name{{Project: "k1", Label: "chip8"}}, nil)
+					f.apply(t, "u1", "d2", []projectnames.Name{{Project: "k2", Label: "chip8 on the desktop"}}, nil)
+					f.exec(t, `UPDATE project_names SET device_removed_at_ms = 1500 WHERE device_id = 'd2'`)
+					f.hide(t, "u1", "P1")
+					if got, want := f.ofDevice(t, "d2"), (device{names: none, hidden: []string{}}); !reflect.DeepEqual(got, want) {
+						t.Errorf("OfDevice(d2) = %v, want %v", got, want)
+					}
+					if got, want := f.ofDevice(t, "d1"), (device{names: none, hidden: []string{"k1"}}); !reflect.DeepEqual(got, want) {
+						t.Errorf("OfDevice(d1) = %v, want %v", got, want)
+					}
+				}},
+				{name: "a hide made twice keeps one row with the later time", run: func(t *testing.T, f *fixture) {
+					f.apply(t, "u1", "d1", []projectnames.Name{{Project: "k1", Label: "chip8"}}, nil)
+					f.hide(t, "u1", "P1")
+					f.apply(t, "u1", "d1", []projectnames.Name{{Project: "k1", Label: "chip8 again"}}, nil)
+					f.do(t, func(ctx context.Context, tx writer.Tx) error {
+						return projectnames.Hide(ctx, tx, "u1", "P1", 3000)
+					})
+					if n := f.count(t, `SELECT COUNT(*) FROM project_name_hides WHERE device_id = 'd1' AND project_key = 'k1' AND hidden_at_ms = 3000`); n != 1 {
+						t.Errorf("%d hides of k1 at 3000, want 1", n)
 					}
 				}},
 				{name: "hiding another account's project changes nothing", run: func(t *testing.T, f *fixture) {
@@ -262,8 +292,8 @@ func TestNames(t *testing.T) {
 					f.hide(t, "u1", "P1")
 					f.apply(t, "u2", "d7", []projectnames.Name{{Project: "k7", Label: "theirs"}}, nil)
 					f.do(t, func(ctx context.Context, tx writer.Tx) error { return projectnames.DeleteAccount(ctx, tx, "u1") })
-					if n := f.count(t, `SELECT COUNT(*) FROM project_names WHERE user_id = 'u1'`); n != 0 {
-						t.Errorf("u1 has %d rows left, want none", n)
+					if n := f.count(t, `SELECT COUNT(*) FROM project_names WHERE user_id = 'u1'`) + f.count(t, `SELECT COUNT(*) FROM project_name_hides WHERE user_id = 'u1'`); n != 0 {
+						t.Errorf("u1 has %d names and hides left, want none", n)
 					}
 					if got := f.ofAccount(t, "u2"); !reflect.DeepEqual(got, map[string]string{"P7": "theirs"}) {
 						t.Errorf("OfAccount(u2) = %v, want theirs kept", got)
