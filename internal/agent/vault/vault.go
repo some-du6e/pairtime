@@ -70,6 +70,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -80,6 +81,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/pkg/ledger"
+	"github.com/some-du6e/pairtime/pkg/ledger/features"
 )
 
 // What an entry holds.
@@ -278,8 +280,13 @@ func (v *Vault) setAside() error {
 	return nil
 }
 
-// errHead is a file whose first whole frame isn't a head of this version.
+// errHead is a file whose first whole frame isn't a head.
 var errHead = errors.New("vault: the file doesn't start with a head")
+
+// errVersion is a file whose head is of a version this one doesn't read,
+// as a later pairtime's would be. Open stops rather than delete or append
+// to it, as the ledger stops at a chain frame of another version.
+var errVersion = errors.New("vault: a file of a vault version this pairtime doesn't read")
 
 // errEmpty is a file with nothing in it, which a crash leaves when it
 // comes between the file's creation and its first write.
@@ -311,8 +318,11 @@ func parseHead(fr frame) (string, error) {
 	if err := json.Unmarshal(fr.payload, &h); err != nil {
 		return "", fmt.Errorf("%w: %v", errHead, err)
 	}
-	if h.V != headVersion || !isKeyID(h.KeyID) {
-		return "", fmt.Errorf("%w: version %d, key id %q", errHead, h.V, h.KeyID)
+	if h.V != headVersion {
+		return "", fmt.Errorf("%w: version %d", errVersion, h.V)
+	}
+	if !isKeyID(h.KeyID) {
+		return "", fmt.Errorf("%w: key id %q", errHead, h.KeyID)
 	}
 	return h.KeyID, nil
 }
@@ -512,10 +522,11 @@ func (v *Vault) reconcile(next uint64) error {
 			days = days[:len(days)-1]
 			continue
 		}
-		if cut < f.size {
-			if err := truncate(name, cut); err != nil {
-				return err
-			}
+		// Flushed whether or not anything is cut: a run that was killed
+		// left its entries in the page cache, and Open is about to seal
+		// their records again, after which their batch is on disk.
+		if err := settle(name, cut, cut < f.size); err != nil {
+			return err
 		}
 		v.last = f.entries[keep-1].s
 		v.newest = day
@@ -525,15 +536,17 @@ func (v *Vault) reconcile(next uint64) error {
 	return nil
 }
 
-// truncate cuts the file name to size and flushes it.
-func truncate(name string, size int64) error {
+// settle flushes the file name, first cutting it to size when cut is set.
+func settle(name string, size int64, cut bool) error {
 	f, err := os.OpenFile(name, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
-	if err := f.Truncate(size); err != nil {
-		f.Close()
-		return err
+	if cut {
+		if err := f.Truncate(size); err != nil {
+			f.Close()
+			return err
+		}
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
@@ -788,9 +801,13 @@ func (v *Vault) Text(s uint64, c ledger.Commitment) ([]byte, error) {
 	return text, nil
 }
 
-// Paths returns the paths of record s's edits, if the vault keeps them.
-// ErrNotKept means it doesn't.
-func (v *Vault) Paths(s uint64) ([]string, error) {
+// Paths returns the paths of record s's edits, if the vault keeps them,
+// checked against hunks, the record's keyed edit hunks (its f.h, ledger-v1
+// 10.6): the kept paths' keys under K_feat must be the hunks' path keys,
+// no more and no fewer. Paths kept for a number another record took since,
+// as after a Reconcile that failed, aren't returned. ErrNotKept means the
+// vault keeps no paths for the record.
+func (v *Vault) Paths(s uint64, hunks []features.Hunk) ([]string, error) {
 	raw, err := v.read(s, whatPaths)
 	if err != nil {
 		return nil, err
@@ -798,6 +815,22 @@ func (v *Vault) Paths(s uint64) ([]string, error) {
 	var paths []string
 	if err := json.Unmarshal(raw, &paths); err != nil {
 		return nil, fmt.Errorf("vault: the paths kept for record %d don't read: %w", s, err)
+	}
+	fk := v.keys.Features()
+	got := map[features.Value]bool{}
+	for _, p := range paths {
+		key, err := fk.Path(p)
+		if err != nil {
+			return nil, fmt.Errorf("%w: a path kept for record %d isn't in the ledger's form", ErrNotKept, s)
+		}
+		got[key] = true
+	}
+	want := map[features.Value]bool{}
+	for _, h := range hunks {
+		want[h.P] = true
+	}
+	if !maps.Equal(got, want) {
+		return nil, fmt.Errorf("%w: the paths kept for record %d aren't its edits'", ErrNotKept, s)
 	}
 	return paths, nil
 }
@@ -830,12 +863,17 @@ func (v *Vault) read(s uint64, what byte) ([]byte, error) {
 	return nil, ErrNotKept
 }
 
-// DropText deletes every text the vault keeps, as when the teen turns
-// "keep prompt text" off (DESIGN 4.4): each file is written again without
-// its texts, by atomic rename, and a file left with no entry is deleted.
-// Paths stay. It returns how many texts it deleted.
+// DropText deletes every text the vault kept before it began, as when the
+// teen turns "keep prompt text" off (DESIGN 4.4): each file is written
+// again without its texts, by atomic rename, and a file left with no entry
+// is deleted. Paths stay, and so does a text kept while it runs, which
+// Keep keeps only once the switch is back on, so a quick off and on again
+// deletes nothing kept after the on. It returns how many texts it deleted.
 func (v *Vault) DropText() (int, error) {
-	return v.filter(func(_ string, e entry) bool { return e.what != whatText })
+	v.mu.Lock()
+	mark := v.last
+	v.mu.Unlock()
+	return v.filter(func(_ string, e entry) bool { return e.what != whatText || e.s > mark })
 }
 
 // Sweep deletes the texts the vault keeps in its files of the UTC days

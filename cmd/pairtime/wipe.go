@@ -26,9 +26,9 @@ Deletes pairtime's device key and everything pairtime recorded on this
 computer ("delete everything"): the ledger, the vault with the text of your
 prompts, the minute buckets, your daily totals and recaps, the commit
 records, the hook calls waiting to be read, the record of past uploads, and
-this computer's sign-in to the pairtime server. Without the key, nobody can
-open or check what pairtime recorded before, not even from a backup, so
-those hours can't be submitted any more.
+this computer's sign-in to the pairtime server. Without the key, what
+pairtime recorded before can't be opened or checked, so those hours can't
+be submitted any more.
 
 pairtime itself and your settings in config.toml stay. pairtime starts
 again from nothing, under a new device key, and signed out: pairtime login
@@ -39,7 +39,8 @@ there until you remove this computer on your dashboard.
 
 Exit status:
   0  deleted, or there was nothing to delete
-  1  something went wrong; the message says what, and what stays
+  1  something went wrong, or some of the device key had to stay where
+     pairtime can't reach it; the message says what, and what stays
   2  usage error
   3  you said no, so nothing changed
 `
@@ -129,14 +130,16 @@ func runPrivacyDelete(args []string, stdout, stderr io.Writer) int {
 	// The key first: without it, what is left can't be opened or checked
 	// by anyone (crypto-shredding, DESIGN 3.5), and with it still there,
 	// the data has to stay too.
+	var keyStays error // why some of the key stays where pairtime can't reach it
 	if err := keys.Destroy(keys.Options{Dir: dirs.Data, Stores: agentKeyStores}); err != nil {
 		if _, ierr := keys.Inspect(dirs.Data); !errors.Is(ierr, fs.ErrNotExist) {
 			release()
 			return fail(fmt.Errorf("couldn't delete pairtime's device key (%v), so nothing was deleted; unlock your keychain or keyring, then run pairtime privacy delete again", err))
 		}
-		// keystore.json is gone, so what is left of the key is in a store
-		// this system doesn't have, which err names.
-		fmt.Fprintf(stdout, "Left alone: %s\n", install.Printable(err.Error()))
+		// keystore.json is gone, so trying again would find nothing: what is
+		// left of the key is in a store this system doesn't have, or one a
+		// damaged keystore.json can't name, which err says.
+		keyStays = err
 	}
 	if err := clearData(dirs.Data, wipeKeeps, nil); err != nil {
 		release()
@@ -149,8 +152,16 @@ func runPrivacyDelete(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "Left alone: config.toml still says mode = \"online\" (%v). Nothing uploads without a sign-in, and pairtime login links this computer again.\n", err)
 		}
 	}
-	fmt.Fprintf(stdout, "Deleted pairtime's device key and everything pairtime recorded in %s. Your settings in config.toml stay.\n", install.Printable(dirs.Data))
+	if keyStays != nil {
+		fmt.Fprintf(stdout, "Deleted everything pairtime recorded in %s. Your settings in config.toml stay.\nLeft alone: %s\n", install.Printable(dirs.Data), install.Printable(keyStays.Error()))
+	} else {
+		fmt.Fprintf(stdout, "Deleted pairtime's device key and everything pairtime recorded in %s. Your settings in config.toml stay.\n", install.Printable(dirs.Data))
+	}
 	release()
+	code := 0
+	if keyStays != nil {
+		code = 1
+	}
 
 	if running {
 		exe, err := os.Executable()
@@ -159,11 +170,11 @@ func runPrivacyDelete(args []string, stdout, stderr io.Writer) int {
 		}
 		if err != nil {
 			fmt.Fprintf(stdout, "pairtime's agent starts again with your next prompt; starting it now failed: %v\n", err)
-			return 0
+			return code
 		}
 		fmt.Fprintln(stdout, "pairtime's agent started again, under a new device key.")
 	}
-	return 0
+	return code
 }
 
 // wipeEntries returns the entries of the data directory dir that "delete

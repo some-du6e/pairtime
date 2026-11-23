@@ -71,7 +71,8 @@
 	<p data-testid="vault">
 		pairtime keeps the text of your prompts, the agent's final reply to each one and the file paths for your recaps in
 		a vault, which it encrypts with a key only this computer has. That keeps them from other people who use this
-		computer, from cloud backups of your home folder, and from a quick look, but not from a program running as you. To
+		computer and from a quick look, but not from a program running as you. It keeps them from cloud backups of your
+		home folder too, unless pairtime has to keep its key in a file there, which pairtime doctor tells you. To
 		keep no prompt text at all, set <code>keep_prompt_text = false</code> under <code>[privacy]</code> in pairtime's
 		config.toml: pairtime then deletes the text it kept, and a spot check of your hours goes on the rest of what it
 		recorded.
