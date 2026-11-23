@@ -285,7 +285,7 @@ if slot(τ) is in a qualifying lookup run for project p:
 choose one candidate by the attribution order in 3.3; credit τ to it (draining b_σ if READ/SUP)
 level = C, label focus_unknown, if focus_class(slot(τ)) == unknown or the anchor passed its focus test only through unknown focus (2.5)
 weight = 0.5 under the no-progress cap (4.3), else 1
-with no candidate, τ is uncredited under one code (5.2), a loop's code if scoring with no turn discounted would credit it (4.2)
+with no candidate, τ is uncredited under one code (5.2); if scoring with no turn discounted would credit it, under a loop's code at that scoring's weight, the rest X.noprog (4.2)
 ```
 
 Relayed candidates (2.3, 2.4) come after all of these. They credit a second only when no other candidate wants it, whatever the slot's presence and focus, and 3.3 rule 1's focus test doesn't apply to them: this device's own evidence beats the app's word. A second two relayed sessions want goes to the session whose next relayed anchor's lead holds it. When both sessions' next leads hold it, it goes to the session whose anchor is sent soonest after it, and when neither does, to the session whose latest relayed message is the most recent. A session with none yet counts as the oldest, ties go to the lower `project_key` and then the lower `session_key`, and 3.3's rules 2 to 6 then choose among the winner's candidates.

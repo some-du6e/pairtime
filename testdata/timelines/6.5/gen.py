@@ -524,6 +524,17 @@ for codes in LABEL.values():
         if c != "X.agent_only":
             loop_totals[c] = loop_totals.get(c, 0) + n
 tl.check(loop_totals == {"X.reroll": 460, "X.rewrite_loop": 1550}, f"the loop's seconds by code {loop_totals}")
+# E-6.5-loop-codes's table of the loop minutes, written out here rather than
+# taken from LABEL, so a change to the label rule that moves seconds between
+# minutes fails: X.reroll 60 at 20:07, 20:08, 20:14, 20:23-:24 and 20:31-:32,
+# X.reroll 40 and X.agent_only 20 at 20:13, and X.rewrite_loop 60 in every
+# other minute from 20:05 to 20:37.
+REROLL_MINUTES = {"20:07", "20:08", "20:14", "20:23", "20:24", "20:31", "20:32"}
+for m in range(at("20:05"), at("20:38"), tl.MINUTE_MS):
+    hm = fx.hhmm(m)
+    want = ({"X.reroll": 40, "X.agent_only": 20} if hm == "20:13"
+            else {("X.reroll" if hm in REROLL_MINUTES else "X.rewrite_loop"): 60})
+    tl.check(LABEL[hm] == want, f"{hm}: E-6.5-loop-codes gives {want}, SM 4.2's label {LABEL[hm]}")
 
 # He opens Hero.css at 20:39:20 and saves his fix in it at 20:41:00. The file
 # in front doesn't change and the save comes 100 s later, under WakaTime's
