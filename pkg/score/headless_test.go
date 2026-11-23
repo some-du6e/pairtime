@@ -270,16 +270,20 @@ func TestHeadlessScoring(t *testing.T) {
 // then the reach holds, now stays bounded by it, and a record of the
 // sampler's dated before the cut that arrives in that time keeps the
 // reach, as a resume still on the presence queue does when a later-dated
-// stop hook seals its batch. So nothing goes final early, and a Step a
-// batch gives what one Step gives for any record up to rules.late late.
+// stop hook seals its batch. The other order waits the same way: a
+// sampler's record more than BUCKET_TTL_S after the one before it holds
+// the clock at that one until the newest record is rules.late past it, so
+// a stamped record dated inside the gap and sealed after it still ends
+// the reach before anything in the gap is final, and when none comes,
+// FinalBefore moves on then. So nothing goes final early, and a Step a
+// batch gives what one Step gives for any record up to rules.late late,
+// in either order. A lock open across a never-sampling stretch stays on
+// the slots before it when the sampler starts again.
 func TestCutWaits(t *testing.T) {
 	r := newRules(testTable(t))
-	// hooked is a person's input until 595 s, a hooked turn of s_1 from
-	// 600 s with a tool call every two minutes until until, and a sample on
-	// every slot boundary until 1,800 s. The first tool call more than
-	// BUCKET_TTL_S after that last sample is the one at 9,060 s, and the
-	// newest record is rules.late past it from 9,360 s on.
-	hooked := func(b *tl, until int64) {
+	// turn is a person's input until 595 s and a hooked turn of s_1 from
+	// 600 s with a tool call every two minutes until until.
+	turn := func(b *tl, until int64) {
 		terminalSession(b)
 		b.mouse(every(at(1), at(595), 5000)...)
 		b.prompt(at(600), event.ViaHook, "s_1", "p_1", "t_1", 40)
@@ -287,28 +291,104 @@ func TestCutWaits(t *testing.T) {
 			b.harness(at(s), event.ViaHook, "s_1", "p_1", &event.AgentTool{ToolClass: event.ToolBash,
 				TStart: at(s - 5), TEnd: at(s), VisibleOutputLines: 2})
 		}
+	}
+	// hooked is turn with a sample on every slot boundary until 1,800 s.
+	// The first tool call more than BUCKET_TTL_S after that last sample is
+	// the one at 9,060 s, and the newest record is rules.late past it from
+	// 9,360 s on.
+	hooked := func(b *tl, until int64) {
+		turn(b, until)
 		b.samples(at(0), at(1800))
 	}
 	const cut, takes = 9060, 9360
-	// waits checks that while the cut waits, FinalBefore stays on the last
-	// sample before it, and that some Step saw it wait.
-	waits := func(t *testing.T, batches [][]event.Event, outs []Output) {
+	// heldFrom checks that while the newest record is in [from, to),
+	// FinalBefore stays at 1,800 s, the last sample before the gap or the
+	// cut that holds it, and that some Step's newest record falls there.
+	heldFrom := func(t *testing.T, batches [][]event.Event, outs []Output, from, to int64) {
 		t.Helper()
 		high, seen := int64(0), false
 		for i, b := range batches {
 			for _, e := range b {
 				high = max(high, e.T)
 			}
-			if high >= at(cut) && high < at(takes) {
+			if high >= from && high < to {
 				seen = true
 				if outs[i].FinalBefore != at(1800) {
-					t.Errorf("with the newest record at %d s, FinalBefore %d s; want 1800 s, the last sample, while the cut waits",
+					t.Errorf("with the newest record at %d s, FinalBefore %d s; want 1800 s, the last sample, while the clock is held",
 						(high-base)/1000, (outs[i].FinalBefore-base)/1000)
 				}
 			}
 		}
 		if !seen {
-			t.Fatal("no Step's newest record falls while the cut waits")
+			t.Fatal("no Step's newest record falls while the clock is held")
+		}
+	}
+	// waits checks that while the cut at 9,060 s waits, FinalBefore stays on
+	// the last sample before it.
+	waits := func(t *testing.T, batches [][]event.Event, outs []Output) {
+		t.Helper()
+		heldFrom(t, batches, outs, at(cut), at(takes))
+	}
+	// sealedAfter returns a batch a minute, but with the records pick
+	// selects sealed at the start of the batch after the first one that
+	// holds a record after selects, as when they wait on a queue the other
+	// passed.
+	sealedAfter := func(pick, after func(event.Event) bool) func(*testing.T, []event.Event) [][]event.Event {
+		return func(t *testing.T, recs []event.Event) [][]event.Event {
+			var moved []event.Event
+			var batches [][]event.Event
+			for _, b := range minuteBatches(recs) {
+				var kept []event.Event
+				for _, e := range b {
+					if pick(e) {
+						moved = append(moved, e)
+					} else {
+						kept = append(kept, e)
+					}
+				}
+				if len(kept) > 0 {
+					batches = append(batches, kept)
+				}
+			}
+			for i, b := range batches {
+				if slices.ContainsFunc(b, after) {
+					if len(moved) == 0 || i+1 == len(batches) {
+						t.Fatal("nothing to seal late, or no batch after the one it waits for")
+					}
+					batches[i+1] = append(moved, batches[i+1]...)
+					return batches
+				}
+			}
+			t.Fatal("no batch holds the record the others wait for")
+			return nil
+		}
+	}
+	isStop := func(e event.Event) bool {
+		_, ok := e.Data.(*event.AgentStop)
+		return ok
+	}
+	isPower := func(op event.PowerOp) func(event.Event) bool {
+		return func(e event.Event) bool {
+			p, ok := e.Data.(*event.OSPower)
+			return ok && p.Op == op
+		}
+	}
+	// unknownFrom checks that one Step reads the slots in [from, to) as a
+	// never-sampling device's: unknown, with no hard break.
+	unknownFrom := func(t *testing.T, one Derived, from, to int64) {
+		t.Helper()
+		n := 0
+		for _, s := range one.Slots {
+			if s.Start >= from && s.Start < to {
+				n++
+				if s.Present != event.PresentUnknown || s.Asleep || s.Locked {
+					t.Fatalf("the slot at %d s is %q, asleep %v, locked %v; want unknown with no hard break, as the cut made it",
+						(s.Start-base)/1000, s.Present, s.Asleep, s.Locked)
+				}
+			}
+		}
+		if n == 0 {
+			t.Fatal("no slot derived between the last sample and the next")
 		}
 	}
 	const suspend = 1805
@@ -403,6 +483,101 @@ func TestCutWaits(t *testing.T) {
 						t.Fatalf("the slot at %d s is %q, asleep %v; want unknown, as the cut made it", (s.Start-base)/1000, s.Present, s.Asleep)
 					}
 				}
+			},
+		},
+		{
+			name: "a stop hook stamped a second before the resume but sealed one batch after it ends the suspend's reach as one Step reads it: the gap holds the clock until the newest record is rules.late past its end, so nothing in it goes final asleep first",
+			build: func(b *tl) {
+				hooked(b, 1790)
+				b.power(at(suspend), event.PowerSuspend)
+				b.power(at(resume), event.PowerResume)
+				stops(b, at(resume-1), "s_1", "p_1", "t_1")
+				b.samples(at(resume), at(resume+1800))
+			},
+			batches: sealedAfter(isStop, isPower(event.PowerResume)),
+			check: func(t *testing.T, batches [][]event.Event, outs []Output, _, one Derived) {
+				heldFrom(t, batches, outs, at(resume), at(resume-1)+r.late)
+				unknownFrom(t, one, at(1800), floorSlot(at(resume)))
+			},
+		},
+		{
+			name: "a tool call stamped a second before the sample that ends a gap longer than BUCKET_TTL_S, but sealed one batch after it, ends the reach before the gap as one Step reads it",
+			build: func(b *tl) {
+				hooked(b, 1790)
+				b.harness(at(9059), event.ViaHook, "s_1", "p_1", &event.AgentTool{ToolClass: event.ToolBash,
+					TStart: at(9054), TEnd: at(9059), VisibleOutputLines: 2})
+				b.samples(at(9060), at(9060+1800))
+			},
+			batches: sealedAfter(func(e event.Event) bool {
+				_, ok := e.Data.(*event.AgentTool)
+				return ok && e.T == at(9059)
+			}, func(e event.Event) bool {
+				_, ok := e.Data.(*event.OSPresence)
+				return ok && e.T == at(9060)
+			}),
+			check: func(t *testing.T, batches [][]event.Event, outs []Output, _, one Derived) {
+				heldFrom(t, batches, outs, at(9060), at(9059)+r.late)
+				unknownFrom(t, one, at(1800), at(9060))
+			},
+		},
+		{
+			name: "a gap longer than BUCKET_TTL_S with no record the agent stamps in it holds the clock only until the newest record is rules.late past its end: then FinalBefore follows the newest record, and the gap stays asleep",
+			build: func(b *tl) {
+				hooked(b, 1790)
+				b.power(at(suspend), event.PowerSuspend)
+				b.power(at(resume), event.PowerResume)
+				b.samples(at(resume), at(resume+1800))
+			},
+			check: func(t *testing.T, batches [][]event.Event, outs []Output, _, one Derived) {
+				heldFrom(t, batches, outs, at(resume), at(resume)+r.late)
+				high, moved := int64(0), false
+				for i, b := range batches {
+					for _, e := range b {
+						high = max(high, e.T)
+					}
+					if high >= at(resume)+r.late {
+						if want := floorSlot(high - r.settle); outs[i].FinalBefore != want {
+							t.Fatalf("with the newest record at %d s, FinalBefore %d s; want %d s, PENDING_WINDOW_S behind it, once the hold ends",
+								(high-base)/1000, (outs[i].FinalBefore-base)/1000, (want-base)/1000)
+						}
+						moved = true
+					}
+				}
+				if !moved {
+					t.Fatal("no Step's newest record is rules.late past the resume")
+				}
+				for _, s := range one.Slots {
+					if s.Start >= at(1800) && s.Start < floorSlot(at(resume)) && !s.Asleep {
+						t.Fatalf("the slot at %d s isn't asleep; want every slot the machine slept through asleep", (s.Start-base)/1000)
+					}
+				}
+			},
+		},
+		{
+			name: "a lock open across the never-sampling stretch stays on the slots before it when an unlock starts the sampler again",
+			build: func(b *tl) {
+				turn(b, 9500)
+				b.samples(at(0), at(990))
+				b.power(at(1000), event.PowerLock)
+				b.samples(at(1005), at(1800))
+				b.power(at(9100), event.PowerUnlock)
+				b.samples(at(9100), at(9100+1800))
+			},
+			check: func(t *testing.T, batches [][]event.Event, outs []Output, _, one Derived) {
+				waits(t, batches, outs)
+				n := 0
+				for _, s := range one.Slots {
+					if s.Start >= at(1005) && s.Start < at(1800) {
+						n++
+						if !s.Locked {
+							t.Fatalf("the slot at %d s isn't locked; want the lock from 1,000 s on every slot before the stretch", (s.Start-base)/1000)
+						}
+					}
+				}
+				if n == 0 {
+					t.Fatal("no slot derived while the screen was locked")
+				}
+				unknownFrom(t, one, at(1800), floorSlot(at(9100)))
 			},
 		},
 	}
