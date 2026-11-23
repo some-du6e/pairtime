@@ -35,7 +35,7 @@ AI tools pairtime looked for:
     +TryExec=/home/teen/.local/bin/pairtime
     +Terminal=false
 
-[x] 2. Show your time as "calibrating" until pairtime's scoring is final
+[x] 2. Show your time as "calibrating" until pairtime's scoring is frozen
 
     You volunteered to help calibrate pairtime, so until its scoring reaches
     version 1.0.0, when its rules are frozen, pairtime today, recap,

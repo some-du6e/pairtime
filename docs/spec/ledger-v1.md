@@ -504,7 +504,7 @@ So `still broken, see src/nav.js:12` normalizes to `<retry> see <path>`. Punctua
 
 ### 10.5 Shingles and the keyed MinHash
 
-The shingles of a prompt follow SM 8.5. When the prompt has six or more normalized words, they are its word 3-shingles: each run of three consecutive words, joined by single spaces. When it has fewer, they are the character 5-shingles of the normalized text: each run of five consecutive code points. A normalized text of one to four code points is its own single shingle, and the empty text has none. The shingles form a set, so a repeated shingle counts once.
+The shingles of a prompt follow SM 8.5. When the prompt has six or more normalized words, they are its word 3-shingles: each run of three consecutive words, joined by single spaces. When it has fewer, they are the character 5-shingles of the normalized text: each run of five consecutive code points. A normalized text of one to four code points is its own single shingle, and the empty text has none. The shingles form a set, so a repeated shingle counts once. The six, three and five are SM 8.5's `SHINGLE_MIN_WORDS`, `SHINGLE_WORDS` and `SHINGLE_CHARS`, and the 64 below is its `MINHASH_PERMS`. Version 1 of the feature map fixes all four, so a new value takes `f.v = 2` (10, 10.7).
 
 Each shingle `x` gets a per-shingle value under `K_feat`, with a tag byte for its kind:
 
@@ -620,12 +620,12 @@ DESIGN 7.5 step 4, to the byte:
 seed  = SHA-256(r || SHA-256(M))
 score = HMAC-SHA256(seed, u8(len(device_id)) || ascii(device_id) || u64(s))      a turn
 score = HMAC-SHA256(seed, 0x00 || commit id)                                      a commit
-K     = min(30, max(10, ceil(P / 10)))                                            CHALLENGE_K, P turns in the pool
+K     = min(CHALLENGE_K_MAX, max(CHALLENGE_K_MIN, ceil(CHALLENGE_K_FRAC * P)))    CHALLENGE_K, P turns in the pool
 ```
 
 `r` is the server's 32 random bytes from the freeze. `M` is the metadata reveal as the client sent it, before sealing (DESIGN 7.6). DESIGN 7.8's bundle carries `r` and the seed, and it also has to carry `SHA-256(M)` for an auditor to recompute the seed (WP-SB8). `device_id` carries the one-byte length of part 1 (7, 8).
 
-The draw ranks the pool, every `(device_id, s)` that WP-SB5 admits under DESIGN 7.5 step 4, by score, comparing scores as 32-byte strings, smallest first. It takes the first `min(K, P)`. A pool lists each item once, so two items can tie only through an HMAC collision. 10% of the pool rounds up, so `K` is 10 for pools of up to 100, 11 for 101 to 110, and 30 from 291 on.
+The draw ranks the pool, every `(device_id, s)` that WP-SB5 admits under DESIGN 7.5 step 4, by score, comparing scores as 32-byte strings, smallest first. It takes the first `min(K, P)`. A pool lists each item once, so two items can tie only through an HMAC collision. The three parameters come from the parameter table frozen with `r` (DESIGN 6.3, 7.5 step 4), and the bundle carries that table's hash with the pool (DESIGN 7.8). `CHALLENGE_K_FRAC × P` is an exact rational and rounds up. Table 0.1.0, which the vectors use, gives `K = min(30, max(10, ceil(P / 10)))`, so `K` is 10 for pools of up to 100, 11 for 101 to 110, and 30 from 291 on.
 
 The two interview commits are the two with the smallest commit scores, or every commit when there are fewer than two. A commit id is the commit's raw hash: 20 bytes for SHA-1 and 32 for SHA-256. Its `0x00` first byte can never start a turn's input, which starts with a length from 1 to 128. Which commits are eligible is WP-SB5's to decide.
 

@@ -547,3 +547,5 @@ jobs:
           # publishes, once every file is there, so nobody sees a release
           # with files missing (tools/ci/publish_release.sh).
           bash tools/ci/publish_release.sh "$VERSION" "$notes" "$stage"/dist/*
+          # A deployed pairtimed serves the release it pins, not the newest.
+          echo "Next: a PR moves the install scripts pairtimed serves at /install.sh and /install.ps1 to $VERSION, as internal/server/pages/install/README.md says, and a deploy pins it (deploy/runbook.md, Upgrades)." >> "$GITHUB_STEP_SUMMARY"
