@@ -200,6 +200,8 @@ func TestHarnesses(t *testing.T) {
 		{"a harness whose version isn't a version goes without it", map[event.Harness]string{event.HarnessCursor: "1.2 (beta)"},
 			[]Harness{{Name: event.HarnessCursor}}},
 		{"a harness that named no version goes without one", map[event.Harness]string{event.HarnessOther: ""}, []Harness{{Name: event.HarnessOther}}},
+		{"a harness whose version has a name after the number goes up with the number alone", map[event.Harness]string{event.HarnessCodex: "1.4.0-teens-mbp.local"},
+			[]Harness{{event.HarnessCodex, "1.4.0"}}},
 		{"none, the OS's harness, stays out", map[event.Harness]string{event.HarnessNone: "1"}, []Harness{}},
 	}
 	for _, tc := range tests {
@@ -233,6 +235,11 @@ func TestHarnesses(t *testing.T) {
 		{"a dot ends no part", "1.", false},
 		{"a version has at most 64 characters", "1.0+" + string(bytes.Repeat([]byte("a"), 61)), false},
 		{"an empty version isn't one", "", false},
+		{"pairtime's releases are tier-1 versions", "v0.1.0-alpha.5", true},
+		{"a dev build's v0.0.0-dev is one", "v0.0.0-dev", true},
+		{"a Go pseudo-version is one", "v0.0.0-20261123010542-8f0e2c5fba57", true},
+		{"a hostname after the number isn't, in tier 1's form (ingest-v1 2.3.4)", "2.1.327-teens-mbp.local", false},
+		{"a word joined to a number isn't", "1.0.0-rc1", false},
 	}
 	for _, tc := range builds {
 		t.Run(tc.name, func(t *testing.T) {
@@ -241,11 +248,28 @@ func TestHarnesses(t *testing.T) {
 			}
 		})
 	}
+	versions := []struct {
+		name, v, want string
+	}{
+		{"a version in tier 1's form goes up as it is", "2.1.327", "2.1.327"},
+		{"a version with a name after the number goes up as the number", "2.1.327-teens-mbp.local", "2.1.327"},
+		{"a version with a word joined to a number goes up as the number", "v1.0.0-rc1", "v1.0.0"},
+		{"a word goes up as no version", "dev", ""},
+		{"no version stays none", "", ""},
+	}
+	for _, tc := range versions {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := harnessVersion(tc.v); got != tc.want || got != "" && !versionForm(got) {
+				t.Errorf("harnessVersion(%q) = %q, want %q", tc.v, got, tc.want)
+			}
+		})
+	}
 	clients := []struct {
 		name, build, want string
 	}{
 		{"a release sends its version", "v0.1.0", "v0.1.0"},
 		{"a build from a checkout sends v0.0.0-dev, as ingest-v1 2.3.4 has it", "dev", "v0.0.0-dev"},
+		{"a build whose suffix isn't in tier 1's form sends v0.0.0-dev", "v0.1.0-rehearsal", "v0.0.0-dev"},
 	}
 	for _, tc := range clients {
 		t.Run(tc.name, func(t *testing.T) {

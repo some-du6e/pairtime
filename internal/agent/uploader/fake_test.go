@@ -84,11 +84,16 @@ var (
 	decimalForm = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
 	hashForm    = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	scoringForm = regexp.MustCompile(`^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$`)
-	// releaseForm is D-version-grammar's version, for client_build and
-	// harness versions.
-	releaseForm = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+){0,3}([-+][0-9A-Za-z][0-9A-Za-z.-]{0,40})?$`)
+	// releaseForm is a version in tier 1's form, for client_build and
+	// harness versions: D-version-grammar's, with each identifier of the
+	// suffix all digits, 7 or more lowercase hex digits, or one of ten
+	// words (ingest-v1 2.3.4).
+	releaseForm = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+){0,3}([-+]` + releaseID + `([.-]` + releaseID + `)*)?$`)
 	paramsForm  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
+
+// releaseID is one identifier of releaseForm's suffix.
+const releaseID = `([0-9]+|[0-9a-f]{7,}|alpha|beta|rc|pre|dev|preview|nightly|canary|next|build)`
 
 func (f *fakeIngest) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Pairtime-Time", strconv.FormatInt(f.now().UnixMilli(), 10))

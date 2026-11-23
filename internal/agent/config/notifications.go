@@ -116,12 +116,15 @@ type notificationsFile struct {
 }
 
 // ignored is the configuration in force when config.toml exists but can't
-// be read or parsed: the defaults, except that notifications are off. The
-// teen may have turned them off in that file, and a notification puts a
-// project's name on the screen, so they stay off until the file is fixed.
+// be read or parsed: the defaults, except that notifications are off and
+// no new prompt text is kept. The teen may have turned either off in that
+// file, and a notification puts a project's name on the screen, so they
+// stay off until the file is fixed. The text already kept stays, as the
+// file may say to keep it (Privacy.TextHeld).
 func ignored() Config {
 	cfg := Default()
 	cfg.Notifications.Off = true
+	cfg.Privacy.TextHeld = true
 	return cfg
 }
 
