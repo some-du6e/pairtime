@@ -16,10 +16,6 @@ sys.path.insert(0, HERE)
 import neardup  # noqa: E402
 import timeline as tl  # noqa: E402
 
-LOOKUP_ERRATUM = "2026-11-19-sm-6.5-lookup-slots"
-LOOP_ERRATUM = "2026-11-19-sm-6.5-loop-codes"
-LENGTH_ERRATUM = "2026-11-19-sm-6.5-prompt-length"
-SWITCH_ERRATUM = "2026-11-19-sm-6.5-file-switch"
 THINK_LEAD_S, COMPOSE_CPS, LOW_LEAD_S, EDIT_LEAD_S, COMMIT_LEAD_S = 120, Fraction(3, 2), 20, 120, 60
 
 fx = tl.Fixture(
@@ -49,11 +45,10 @@ LOOP_TEXT = "still overlapping on mobile. fix it"
 INVENTED = "invented: SM says the prompts from 20:09 to 20:37 are mostly in new words and quotes three"
 REPEAT = "invented: one of the prompts in that range whose wording repeats, here T2's text again"
 QUOTED = "quoted in SM 6.5's 20:08 to 20:37 row"
-# (turn, sent, text, source). SM gives T1's length as 95 characters; the
-# quote has 87 (erratum). The event carries SM's 95.
+# (turn, sent, text, source).
 PROMPTS = [
-    (1, "20:01:00", "the navbar overlaps the hero on mobile, fix the css so the hero starts below the navbar",
-     "quoted in SM 6.5's 20:00 row, which gives its length as 95 characters"),
+    (1, "20:01:00", "the navbar overlaps the hero on mobile, can you fix the css so the hero starts below the navbar",
+     "quoted in SM 6.5's 20:00 row"),
     (2, "20:03:00", LOOP_TEXT, "quoted in SM 6.5's 20:02 row"),
     (3, "20:05:00", LOOP_TEXT, "SM 6.5's 20:05 row: the identical prompt"),
     (4, "20:07:00", "still overlapping on mobile, fix it!!", "quoted in SM 6.5's 20:07 row"),
@@ -81,7 +76,7 @@ PROMPTS = [
 ]
 SENT = {k: at(t) for k, t, _, _ in PROMPTS}
 TEXT = {k: text for k, _, text, _ in PROMPTS}
-LEN = {k: (95 if k == 1 else len(text)) for k, _, text, _ in PROMPTS}
+LEN = {k: len(text) for k, _, text, _ in PROMPTS}
 LOOP = range(3, 20)  # T3 to T19, the discounted turns
 
 # Each turn's agent run: (stop, [(time, what, ...)]). T1 stops at 20:02:00
@@ -140,9 +135,8 @@ fx.pointer_every("20:37:05.300", "20:37:55.300", 10_000)  # watches T19
 fx.pointer("20:38:00.200", "20:38:09.700", "20:38:21.400", "20:38:30.200")  # the phone view, and back
 fx.pointer("20:38:41.600", "20:38:58.300", "20:39:07.900")  # sits in the terminal
 fx.pointer("20:39:15.100")                         # clicks VS Code
-fx.keys_at("20:39:17.000", "20:39:17.600", "20:39:18.200", "20:39:19.600")  # Ctrl+P, Navbar.css
-fx.pointer_every("20:39:26.500", "20:40:46.500", 10_000)  # reads the rules, scrolling
-fx.keys_at("20:40:51.000", "20:40:51.200", "20:40:51.400", "20:40:51.600")  # Ctrl+P, Hero.css
+fx.keys_at("20:39:17.000", "20:39:17.600", "20:39:18.200", "20:39:19.600")  # Ctrl+P, Hero.css
+fx.pointer_every("20:39:26.500", "20:40:46.500", 10_000)  # reads Hero.css, scrolling
 fx.typing("20:40:52.600", "20:40:59.900", 300)     # types the margin-top, saves
 fx.pointer("20:41:04.300", "20:41:09.900")         # waits for the reload, clicks the browser
 fx.pointer("20:41:18.400", "20:41:29.000", "20:41:36.600", "20:41:39.900")  # the phone view: fixed
@@ -261,10 +255,9 @@ browser("20:38:00.300")
 terminal("20:38:30.300")
 vscode("20:39:15.300")
 # WakaTime sends a heartbeat when the file in front changes and at a save
-# (HC 1.5): opening Navbar.css, switching to Hero.css, saving the fix.
-# DESIGN 5.7 makes the first two navigate, so both are NAV anchors.
-heartbeat("20:39:20.000", "navigate", NAVBAR, 0)
-heartbeat("20:40:52.000", "navigate", HERO, 0)
+# (HC 1.5): opening Hero.css and saving the fix in it. DESIGN 5.7 makes the
+# first a navigate, so it is a NAV anchor.
+heartbeat("20:39:20.000", "navigate", HERO, 0)
 heartbeat("20:41:00.000", "save", HERO, 1)
 browser("20:41:10.000")
 terminal("20:41:40.000")
@@ -326,7 +319,7 @@ for s in ("20:02:30", "20:04:00", "20:04:15", "20:38:00", "20:38:15", "20:41:15"
     tl.check(at(s) in browser_slots, f"slot {s} is the browser's")
 for s in ("20:02:45", "20:04:30", "20:38:30", "20:41:00", "20:41:45", "20:47:00", "20:54:00"):
     tl.check(at(s) not in browser_slots, f"slot {s} is the project's")
-# The 20:02 browser check covers 20 s but holds only one slot (erratum).
+# The 20:02 browser check covers 20 s but holds only the slot 20:02:30 (SM 2.5).
 tl.check(at("20:02:15") not in browser_slots and at("20:02:45") not in browser_slots, "20:02's check is one slot")
 
 
@@ -352,7 +345,7 @@ tl.check(SENT[22] - lead(22) * 1000 <= at("20:58:00"), "T22's lead covers 20:58:
 tl.check(at("20:39:20") - EDIT_LEAD_S * 1000 < RUNS[19][0], "the NAV lead would reach back past T19's stop")
 tl.check(at("20:41:00") - EDIT_LEAD_S * 1000 == at("20:39:00"), "the 20:41:00 edit's lead starts at 20:39:00")
 tl.check(at("20:58:00") - COMMIT_LEAD_S * 1000 == at("20:57:00"), "the commit's lead starts at 20:57:00")
-for name in [("editor", "20:39:20.000"), ("editor", "20:40:52.000"), ("editor", "20:41:00.000"),
+for name in [("editor", "20:39:20.000"), ("editor", "20:41:00.000"),
              ("editor", "20:55:00.000"), ("editor", "20:57:00.000"), "commit"]:
     e = ev[name]
     tl.check(slot_inputs(e["t"] - e["t"] % tl.SLOT_MS), f"input in the slot of the {e['kind']} at {fx.hhmmss(e['t'])}")
@@ -400,11 +393,9 @@ attempt = dict(zip(order, neardup.attempts([(SENT[k], TEXT[k]) for k in order], 
 tl.check([attempt[k] for k in order] == [1, 1, 2, 3, 1, 1, 4, 1, 1, 1, 1, 5, 1, 1, 1, 6, 1, 1, 1, 1, 1, 1],
          f"re-roll attempts {attempt}")
 tl.check(not neardup.far_apart(list(dict.fromkeys(TEXT.values()))), f"close pairs {neardup.far_apart(list(TEXT.values()))}")
-# With punctuation kept, as SM 4.2's list reads, T4 isn't a near-duplicate
-# of T2 and SM's 20:07 row fails (erratum).
-kept = neardup.jaccard(TEXT[2], TEXT[4], keep_punctuation=True)
-tl.check(neardup.normalize(TEXT[2]) == neardup.normalize(TEXT[4]) and round(kept, 2) == 0.69,
-         f"T2 and T4 normalize the same only without punctuation: {kept}")
+# Edge punctuation goes (SM 4.2, ledger-v1.md 10.4 step 6), so T4's "fix it!!" and T16's comma repeat T2.
+tl.check({neardup.normalize(TEXT[k]) for k in (2, 3, 4, 7, 12, 16)} == {"still overlapping on mobile <retry>"},
+         "T2, T3, T4, T7, T12 and T16 normalize to one text")
 
 
 def changed_lines(k):
@@ -424,6 +415,7 @@ for k in range(1, 22):
         repeat[k] = repeat[pk] + 1 if overlap >= Fraction(1, 2) else 0
     prev = (k, f, new)
 tl.check([repeat[k] for k in range(1, 22)] == [0] + list(range(1, 19)) + [0, 0], f"rewrite repeats {repeat}")
+# Where both rules fire, X.reroll comes first (SM 4.2: X.reroll, X.same_error, X.autopilot, X.rewrite_loop).
 code = {}
 for k in range(1, 23):
     if attempt[k] >= 3:
@@ -441,29 +433,6 @@ for k in range(1, 22):
     tl.check(words < 100 or gap >= Fraction(1, 4) * 60_000 * words / 238, f"T{k}'s answer is read")
 tl.check(Fraction(1, 4) * 60 * 110 / 238 < 7, "a 110-word answer is unread under 7 s")
 
-# The loop's discount codes per minute, read as SM's rows read: each second
-# from a discounted prompt's submit to the next human prompt, or to the
-# first credited second after the loop (20:38:30), carries that turn's code.
-spans = [(SENT[k], SENT[k + 1] if k < 19 else at("20:38:30"), code[k]) for k in LOOP]
-by_minute = []
-for m in range(at("20:05"), at("20:39"), tl.MINUTE_MS):
-    codes = {}
-    for a, b, c in spans:
-        n = max(0, min(b, m + tl.MINUTE_MS) - max(a, m)) // 1000
-        if n:
-            codes[c] = codes.get(c, 0) + n
-    by_minute.append((fx.hhmm(m), codes))
-span_totals = {}
-for _, codes in by_minute:
-    for c, n in codes.items():
-        span_totals[c] = span_totals.get(c, 0) + n
-tl.check(sum(span_totals.values()) == 2010 and span_totals == {"X.reroll": 480, "X.rewrite_loop": 1530},
-         f"discounted seconds {span_totals}")
-reading = "; ".join(f"{m} {', '.join(f'{c} {n}' for c, n in codes.items())}" for m, codes in by_minute)
-tl.check(by_minute[0][1] == {"X.rewrite_loop": 60} and by_minute[1][1] == {"X.rewrite_loop": 60}
-         and by_minute[2][1] == {"X.reroll": 60} and by_minute[-1][1] == {"X.rewrite_loop": 30},
-         "the reading gives SM's 20:05, 20:06, 20:07 and 20:38 codes")
-
 runs = [(SENT[k], RUNS[k][0]) for k in range(1, 22)] + [(SENT[22], at("21:01:00"))]
 
 
@@ -475,13 +444,11 @@ for a, b in [("20:04:00", "20:04:30"), ("20:38:00", "20:38:30"), ("20:41:15", "2
              ("20:53:00", "20:54:00"), ("20:02:30", "20:02:45")]:
     tl.check(agent_seconds(at(a), at(b)) == 0, f"no agent runs during the lookup {a}-{b}")
 
-# The loop-codes erratum's other reading: SM 4.2's "seconds that would have
-# been credited are reported under their discount code", taken literally.
-# For each second the rows leave uncredited, 20:03:20-:40 and 20:05:00 to
-# 20:38:30, what would have credited it had no turn been discounted: the lead
-# of the next anchor (SM 3.3 rule 3), else the session's bucket, else a
-# bracketed lookup (SM 2.5). The second then carries the code of the turn
-# behind that lead or bucket, or behind the second before the lookup.
+# SM 4.2's second scoring, with every discount removed: for each second the
+# rows leave uncredited, 20:03:20-:40 and 20:05:00 to 20:38:30, what would
+# have credited it had no turn been discounted: the lead of the next anchor
+# (SM 3.3 rule 3), else the session's bucket, else a bracketed lookup (SM
+# 2.5).
 # Without T19's discount the 20:39:20 NAV lead isn't cut at T19's stop.
 UNCREDITED = [(at("20:03:20"), at("20:03:40")), (at("20:05:00"), at("20:38:30"))]
 leads = [(SENT[k] - lead(k) * 1000, SENT[k], k) for k in range(2, 20)] + [(at("20:37:20"), at("20:39:20"), 19)]
@@ -531,30 +498,59 @@ tl.check(nothing == list(range(at("20:13:20"), at("20:13:40"), 1000))
          f"only 20:13:20-:40 would have had no credit: {[fx.hhmmss(t) for t in nothing]}")
 
 
-def would_codes(minute):
-    """A minute's uncredited seconds by code under the literal reading."""
+def loop_codes(minute):
+    """A minute's uncredited seconds by code (SM 4.2). A second the second
+    scoring credits takes the code of the latest loop prompt at or before it,
+    or T3's before T3; any other uncredited second is X.agent_only."""
     m = at(minute)
     got = {}
     for tau in range(m, m + tl.MINUTE_MS, 1000):
         if any(a <= tau < b for a, b in UNCREDITED):
-            c = code[would[tau]] if tau in would else "X.agent_only"
+            if tau in would:
+                before = [k for k in LOOP if SENT[k] <= tau]
+                c = code[before[-1]] if before else code[3]
+            else:
+                c = "X.agent_only"
             got[c] = got.get(c, 0) + 1
     return got
 
 
-tl.check(would_codes("20:03") == {"X.rewrite_loop": 20} and would_codes("20:05") == {"X.reroll": 60}
-         and would_codes("20:06") == {"X.reroll": 60} and would_codes("20:07") == {"X.rewrite_loop": 60}
-         and would_codes("20:13")["X.agent_only"] == 20,
-         "the literal reading gives the erratum's codes for 20:03, 20:05, 20:06, 20:07 and 20:13")
+LABEL = {fx.hhmm(m): loop_codes(fx.hhmm(m)) for m in range(at("20:03"), at("20:39"), tl.MINUTE_MS)}
+tl.check(LABEL["20:03"] == {"X.rewrite_loop": 20} and LABEL["20:05"] == {"X.rewrite_loop": 60}
+         and LABEL["20:06"] == {"X.rewrite_loop": 60} and LABEL["20:07"] == {"X.reroll": 60}
+         and LABEL["20:13"] == {"X.reroll": 40, "X.agent_only": 20} and LABEL["20:38"] == {"X.rewrite_loop": 30},
+         f"SM 4.2's label gives the codes of SM's 20:03, 20:05, 20:06, 20:07 and 20:38 rows: {LABEL}")
+loop_totals = {}
+for codes in LABEL.values():
+    for c, n in codes.items():
+        if c != "X.agent_only":
+            loop_totals[c] = loop_totals.get(c, 0) + n
+tl.check(loop_totals == {"X.reroll": 460, "X.rewrite_loop": 1550}, f"the loop's seconds by code {loop_totals}")
+# E-6.5-loop-codes's table of the loop minutes, written out here rather than
+# taken from LABEL, so a change to the label rule that moves seconds between
+# minutes fails: X.reroll 60 at 20:07, 20:08, 20:14, 20:23-:24 and 20:31-:32,
+# X.reroll 40 and X.agent_only 20 at 20:13, and X.rewrite_loop 60 in every
+# other minute from 20:05 to 20:37.
+REROLL_MINUTES = {"20:07", "20:08", "20:14", "20:23", "20:24", "20:31", "20:32"}
+for m in range(at("20:05"), at("20:38"), tl.MINUTE_MS):
+    hm = fx.hhmm(m)
+    want = ({"X.reroll": 40, "X.agent_only": 20} if hm == "20:13"
+            else {("X.reroll" if hm in REROLL_MINUTES else "X.rewrite_loop"): 60})
+    tl.check(LABEL[hm] == want, f"{hm}: E-6.5-loop-codes gives {want}, SM 4.2's label {LABEL[hm]}")
 
-# The file-switch erratum. Switching to Hero.css at 20:40:52 sends a WakaTime
-# heartbeat (HC 1.5), a navigate and so a NAV anchor (DESIGN 5.7, SM 2.3),
-# and the lead of the next anchor wins (SM 3.3 rule 3). From 20:38:30, when
-# he is back from the browser and T19 has stopped, to the 20:41:00 save:
-EDITOR_ANCHORS = {"20:39:20.000": "NAV", "20:40:52.000": "NAV", "20:41:00.000": "E"}
+# He opens Hero.css at 20:39:20 and saves his fix in it at 20:41:00. The file
+# in front doesn't change and the save comes 100 s later, under WakaTime's
+# 120 s (HC 1.5), so no heartbeat comes between them. From 20:38:30, when he
+# is back from the browser and T19 has stopped, to the 20:41:00 save, the
+# lead of the next anchor wins (SM 3.3 rule 3):
+EDITOR_ANCHORS = {"20:39:20.000": "NAV", "20:41:00.000": "E"}
 tl.check({b: ev[("editor", b)]["data"]["act"] for b in EDITOR_ANCHORS}
-         == {"20:39:20.000": "navigate", "20:40:52.000": "navigate", "20:41:00.000": "save"},
-         "two navigations and a save")
+         == {"20:39:20.000": "navigate", "20:41:00.000": "save"}, "a navigation and a save")
+hero_beats = [e for e in events if e["kind"] == "editor.activity" and at("20:39:20") <= e["t"] <= at("20:41:00")]
+tl.check([e["t"] for e in hero_beats] == [at("20:39:20"), at("20:41:00")]
+         and all(e["data"]["file_hash"] == HERO for e in hero_beats)
+         and at("20:41:00") - at("20:39:20") < 120_000,
+         "the only heartbeats from 20:39:20 to 20:41:00 open and save Hero.css, under 120 s apart")
 
 
 def editor_minutes(beats):
@@ -570,12 +566,9 @@ def editor_minutes(beats):
     return got
 
 
-sm_editor = editor_minutes(["20:39:20.000", "20:41:00.000"])
-with_switch = editor_minutes(list(EDITOR_ANCHORS))
+sm_editor = editor_minutes(list(EDITOR_ANCHORS))
 tl.check(sm_editor == {"20:38": {"NAV": 30}, "20:39": {"NAV": 20, "E": 40}, "20:40": {"E": 60}},
-         f"without the 20:40:52 heartbeat the leads give SM's rows: {sm_editor}")
-tl.check(with_switch == {"20:38": {"NAV": 30}, "20:39": {"NAV": 60}, "20:40": {"NAV": 52, "E": 8}},
-         f"with it they give 20:39 NAV 60 and 20:40 NAV 52, E 8: {with_switch}")
+         f"the leads give SM's rows: {sm_editor}")
 
 # What Hackatime would log for the hour (SM 6.5's last paragraph): agent
 # events as ai coding, editor heartbeats as coding, each replayed with
@@ -603,18 +596,22 @@ def row(minute, credit=None, unc=None, codes=None, **kw):
 
 row("20:00", {"P": 60}, {})
 row("20:01", {"P": 60}, {})
-row("20:02", {"P": 40, "LOOKUP": 20}, {}, erratum=LOOKUP_ERRATUM)
-row("20:03", {"SUP": 40}, {"X.agent_only": 20}, erratum=LOOP_ERRATUM)
+row("20:02", {"P": 45, "LOOKUP": 15}, {})
+row("20:03", {"SUP": 40}, {"X.rewrite_loop": 20})
 row("20:04", {"LOOKUP": 30, "READ": 30}, {})
-row("20:05", None, {"X.rewrite_loop": 60}, erratum=LOOP_ERRATUM)
-row("20:06", None, {"X.rewrite_loop": 60}, erratum=LOOP_ERRATUM)
-row("20:07", None, {"X.reroll": 60}, erratum=LOOP_ERRATUM)
+row("20:05", None, {"X.rewrite_loop": 60})
+row("20:06", None, {"X.rewrite_loop": 60})
+row("20:07", None, {"X.reroll": 60})
 for m in range(at("20:08"), at("20:38"), tl.MINUTE_MS):
-    row(fx.hhmm(m), None, None, codes=["X.reroll", "X.rewrite_loop"], sm="20:08 to 20:37", erratum=LOOP_ERRATUM,
-        note="SM gives the range's codes, not each minute's seconds.")
+    row(fx.hhmm(m), None, LABEL[fx.hhmm(m)], sm="20:08 to 20:37", derived=["uncredited"],
+        note="SM gives the range's codes and its 20 s of X.agent_only. Each minute's seconds follow from this fixture's "
+             "prompts and SM 4.2.")
 row("20:38", {"NAV": 30}, {"X.rewrite_loop": 30})
-row("20:39", {"NAV": 20, "E": 40}, {}, erratum=SWITCH_ERRATUM)
-row("20:40", {"E": 60}, {}, erratum=SWITCH_ERRATUM)
+for r in exp.rows:
+    if r["local"] in LABEL:
+        tl.check(r["uncredited"] == LABEL[r["local"]], f"row {r['local']} has the codes SM 4.2's label gives")
+row("20:39", {"NAV": 20, "E": 40}, {})
+row("20:40", {"E": 60}, {})
 row("20:41", {"P": 30, "LOOKUP": 30}, {})
 row("20:42", {"P": 60}, {})
 exp.row("20:43", "21:00", credit={P: {"P": 240, "E": 180, "G": 60, "SUP": 160, "READ": 180, "LOOKUP": 120}},
@@ -627,32 +624,25 @@ exp.row("20:43", "21:00", credit={P: {"P": 240, "E": 180, "G": 60, "SUP": 160, "
 
 # SM's stated numbers, tied to the rows so that an edited row can't move
 # them silently: excluded_loops_s 2,010 from the rows' loop codes, X.agent_only
-# 100 from the stretches with an agent running and nothing on screen, and
-# the 20:43 to 20:59 row's 940 s credited and 80 s X.agent_only.
+# 100 from the stretches where a turn runs and nothing credits a second the
+# loop didn't cost, and the 20:43 to 20:59 row's 940 s credited and 80 s
+# X.agent_only.
 LOOP_CODES = ("X.reroll", "X.rewrite_loop", "X.same_error", "X.autopilot")  # excluded_loops_s (SM 5.3)
 
 
 def loop_seconds(r):
-    """A row's loop seconds. Rows 20:08 to 20:37 give SM's codes without
-    seconds; they credit nothing and both codes are loop codes, so every
-    second of them counts."""
-    if r["uncredited"] is None:
-        tl.check(r["credited_s"] == 0 and set(r["codes"]) <= set(LOOP_CODES), f"row {r['local']}: loop codes only")
-        return 60 * r["bucket_minutes"]
+    """A row's loop seconds."""
     return sum(n for c, n in r["uncredited"].items() if c in LOOP_CODES)
 
 
 excluded = sum(loop_seconds(r) for r in exp.rows)
-tl.check(excluded == 2010 == sum(span_totals.values()), f"excluded_loops_s: the rows give {excluded}")
+tl.check(excluded == 2010 == sum(loop_totals.values()), f"excluded_loops_s: the rows give {excluded}")
 agent_only = exp.totals()["uncredited"]["X.agent_only"]
-tl.check(agent_only == 100 == sum(b - a for a, b in empty) // 1000, f"X.agent_only: the rows give {agent_only}")
+# 20:13:20-:40 is no loop cost: nothing would have credited it (above).
+AGENT_ONLY = [(at("20:13:20"), at("20:13:40")), (at("20:43:20"), at("20:44:00")), (at("20:49:20"), at("20:50:00"))]
+tl.check(agent_only == 100 == sum(b - a for a, b in AGENT_ONLY) // 1000, f"X.agent_only: the rows give {agent_only}")
 for a, b in empty:
     tl.check(agent_seconds(a, b) == (b - a) // 1000, f"an agent runs while nothing is on screen at {fx.hhmmss(a)}")
-# The literal reading makes 20:03:20-:40 X.rewrite_loop and leaves
-# 20:13:20-:40 X.agent_only, so its totals come out the same.
-at_2003 = next(r for r in exp.rows if r["local"] == "20:03")["uncredited"]["X.agent_only"]
-literal = (len(unc_seconds) - len(nothing), agent_only - at_2003 + len(nothing))
-tl.check(literal == (excluded, agent_only), f"the literal reading gives excluded_loops_s and X.agent_only {literal}")
 rest = exp.rows[-1]
 split = rest["credit"][P]
 tl.check(rest["local"] == "20:43-20:59" and rest["credited_s"] == 940 and rest["uncredited"] == {"X.agent_only": 80}
@@ -661,14 +651,19 @@ tl.check(rest["local"] == "20:43-20:59" and rest["credited_s"] == 940 and rest["
 tl.check(split["SUP"] + split["READ"] == sum(b - a for a, b in drain if a >= at("20:43")) // 1000
          and split["LOOKUP"] == 15 * sum(at("20:43") <= s < at("21:00") for s in browser_slots),
          f"20:43 to 20:59: SUP and READ are the bucket's seconds and LOOKUP the browser's: {split}")
-# Rows 20:38 to 20:40 are what the editor anchors' leads give without the
-# 20:40:52 heartbeat. With it, 20:38 is the same and 20:39 and 20:40 aren't.
+# A lookup is a whole number of slots (SM 2.5), so every row that credits
+# LOOKUP credits 15 s per browser slot in it.
+for r in exp.rows:
+    looked = r.get("credit", {}).get(P, {}).get("LOOKUP")
+    if looked:
+        m0 = at(r["local"][:5])
+        tl.check(looked == 15 * sum(m0 <= s < m0 + r["minutes"] * tl.MINUTE_MS for s in browser_slots),
+                 f"row {r['local']}: LOOKUP is 15 s per browser slot, not {looked}")
+# Rows 20:38 to 20:40 are what the editor anchors' leads give.
 for r in exp.rows:
     m = r["local"]
     if m in sm_editor:
-        moved = sm_editor[m] != with_switch[m]
-        tl.check(r["credit"][P] == sm_editor[m] and (r.get("erratum") == SWITCH_ERRATUM) == moved,
-                 f"row {m} is SM's and names the file-switch erratum only if the heartbeat moves it")
+        tl.check(r["credit"][P] == sm_editor[m] and "erratum" not in r, f"row {m} is SM's and names no erratum")
 
 expected = exp.doc(
     extra_totals={"credited_s": 1490, "excluded_loops_s": excluded},
@@ -678,30 +673,19 @@ expected = exp.doc(
         "coding_logged_s": {"about": 300, "sm": "and 5 of coding for this hour"},
         "handbook_s": {"about": 1320, "sm": "the handbook's third would allow about 22 minutes"},
     },
-    errata=[SWITCH_ERRATUM, LOOKUP_ERRATUM, LOOP_ERRATUM, LENGTH_ERRATUM],
+    errata=[],
     notes=[
-        "excluded_loops_s is X.reroll + X.rewrite_loop from 20:05:00 to 20:38:30 (SM 5.3). The rows 20:08 to "
-        "20:37 give SM's codes without seconds, so totals.uncredited holds only the loop seconds of 20:05, 20:06, "
-        "20:07 and 20:38.",
-        "Read as SM's 20:05, 20:06, 20:07 and 20:38 rows read (each second from a discounted prompt's submit to "
-        "the next prompt carries that turn's code), this fixture's prompts give, by minute: " + reading +
-        f". That is X.reroll {span_totals['X.reroll']} and X.rewrite_loop {span_totals['X.rewrite_loop']}; see "
-        "the loop-codes erratum.",
-        "Read literally (SM 4.2: seconds that would have been credited carry their discount code), with every "
-        "loop turn's discount taken away at once, 20:03:20-:40 would be X.rewrite_loop, because T3's lead would have covered it, and 20:13:20-:40 X.agent_only, because "
-        "nothing would have: T7's bucket holds only its 20 s base until its edit at 20:13:40, and T8 is a "
-        "go-ahead with a 20 s lead. 20:05 and 20:06 would be X.reroll and 20:07 X.rewrite_loop. excluded_loops_s "
-        "and X.agent_only stay 2,010 and 100; see the loop-codes erratum.",
-        "SM's X.agent_only total of 100 s is totals.uncredited: 20 s at 20:03 and 80 s in 20:43-20:59.",
-        "Rows 20:39 and 20:40 are SM's, which have no anchor between the 20:39:20 heartbeat and the 20:41:00 save. "
-        "Switching to Hero.css sends a WakaTime heartbeat at 20:40:52, a navigate and so a NAV anchor, and with "
-        "it the next anchor's lead (SM 3.3 rule 3) gives 20:39 " + ", ".join(
-            f"{c} {n}" for c, n in with_switch["20:39"].items()) + " and 20:40 " + ", ".join(
-            f"{c} {n}" for c, n in with_switch["20:40"].items()) + ". The minutes credit 60 s either way; see the "
-        "file-switch erratum.",
+        "excluded_loops_s is X.reroll + X.rewrite_loop (SM 5.3): the seconds a scoring with no turn discounted "
+        "credits and this one doesn't (SM 4.2), which are 20:03:20-:40 and 20:05:00 to 20:38:30 apart from "
+        "20:13:20-:40. Each takes the code of the latest loop prompt at or before it, and 20:03:20-:40 takes T3's, "
+        "so X.reroll 460 and X.rewrite_loop 1550.",
+        "20:13:20-:40 is X.agent_only. T7's bucket holds only its 20 s base until its edit at 20:13:40, and T8, "
+        "\"pls fix the overlap\", is a go-ahead with a 20 s lead, so nothing would have credited it even with no turn "
+        "discounted.",
+        "SM's X.agent_only total of 100 s is totals.uncredited: 20 s at 20:13 and 80 s in 20:43-20:59.",
         "T3 to T19 are discounted: T3 as rewrite repeat 2 (attempt 2), T4 as attempt 3, and from T5 on the "
         "paraphrases as rewrite repeats and the exact repeats (T7, T12, T16) as attempts 4, 5 and 6. Where both "
-        "rules fire, the code is X.reroll, as in SM's 20:07 row.",
+        "rules fire, the code is X.reroll, first in SM 4.2's order.",
         f"This fixture's events replay to {ai_logged:g} s of ai coding and {coding_logged:g} s of coding inside "
         "the hour under min(gap, 120 s); SM says about 50 and 5 minutes.",
         "agent_running_s follows from the runs in README.md: T3 to T18 run 75 s, into the minute after their "
@@ -719,7 +703,7 @@ def seconds(v):
     return int(v) if v.denominator == 1 else float(v)
 
 
-ROW_OF = {1: "20:00: sends at 20:01:00, 95 characters by SM's count", 2: "20:01: the lead of his next prompt (143 s)",
+ROW_OF = {1: "20:00: sends at 20:01:00, 95 characters", 2: "20:01: the lead of his next prompt (143 s)",
           3: "20:05: sends the identical prompt at 20:05:00", 4: "20:07: normalizes to the same text, attempt 3",
           19: "20:08 to 20:37: the prompt at 20:37; 20:38: T19 stops at 20:38:00", 20: "20:42: sends at 20:43:00",
           21: "20:43 to 20:59: the second of two more turns", 22: "after the window; its lead covers 20:58 to 21:00"}
@@ -744,10 +728,7 @@ for k in sorted(SENT):
                                origin="human_typed", cls="substantive"))
 anchor_list += [
     anc(ev[("editor", "20:39:20.000")], "editor_navigation", EDIT_LEAD_S, "params",
-        "20:38-20:39: opens Navbar.css (heartbeat at 20:39:20); its lead can't reach back past T19's stop"),
-    anc(ev[("editor", "20:40:52.000")], "editor_navigation", EDIT_LEAD_S, "params",
-        "20:40: switches to Hero.css to type the fix (heartbeat at 20:40:52), an anchor SM's rows don't have; "
-        "see the file-switch erratum"),
+        "20:38-20:39: opens Hero.css (heartbeat at 20:39:20); its lead can't reach back past T19's stop"),
     anc(ev[("editor", "20:41:00.000")], "typed_edit", EDIT_LEAD_S, "params",
         "20:40: edits Hero.css by hand at 20:41:00, a change event"),
     anc(ev[("editor", "20:55:00.000")], "typed_edit", EDIT_LEAD_S, "params", "20:43 to 20:59: E"),
@@ -767,8 +748,6 @@ prompts_doc = {"fixture": "6.5", "prompts": []}
 for k, t, text, source in PROMPTS:
     p = {"turn_key": TURN[k], "t": SENT[k], "local": fx.hhmmss(SENT[k]), "text": text, "len_chars": LEN[k],
          "source": source}
-    if LEN[k] != len(text):
-        p["erratum"] = LENGTH_ERRATUM
     prompts_doc["prompts"].append(p)
 
 # hunks.json: what agent.tool's missing hunks field would hold for each edit,
