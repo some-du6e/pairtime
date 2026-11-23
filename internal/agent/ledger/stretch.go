@@ -90,6 +90,32 @@ func (s stretch) holds(e event.Envelope) bool {
 	return s.from.reached(e) && (s.open || s.to.before(e))
 }
 
+// widen moves s's edges apart, by the wall clock, by as far as the wall
+// clock stepped back between them, as a monotonic clock both edges hold
+// tells: this run's, or the OS's of one boot. An event of the stretch that
+// the writer judges by its t alone, as a log record read late, can carry
+// any time the wall clock showed in the stretch, and a step back puts some
+// of those before its start, or after its end, by the wall clock. When the
+// step came isn't known, so the stretch takes in both sides. A step forward
+// only spreads those times between the edges.
+func (s *stretch) widen() {
+	var span int64
+	switch {
+	case s.from.m.run > 1 && s.to.m.run > 1:
+		span = s.to.m.run - s.from.m.run
+	case s.from.m.os > 1 && s.to.m.os > 1 && s.from.m.boot == s.to.m.boot:
+		// An edge an earlier run recorded holds this boot's start, 1, by
+		// its clock (Writer.earlier), which measures nothing.
+		span = s.to.m.os - s.from.m.os
+	default:
+		return
+	}
+	if back := span - (s.to.m.wall - s.from.m.wall); back > 0 {
+		s.from.m.wall -= back
+		s.to.m.wall += back
+	}
+}
+
 // stretchPayload is a stretch as a seal frame records it
 // (sealPayload.Stretches): its edges in Unix ms, each with the OS's
 // monotonic reading and its boot when the writer read that clock then, and
@@ -167,21 +193,23 @@ func (w *Writer) earlierEdge(m moment) edge {
 	return d
 }
 
-// stretchesFromRows rebuilds the stretches of a ledger whose seal frames
-// recorded none, as an older version's don't, from the moment each row
-// recorded (sealPayload.LocalUntil): each rise of it ends a stretch. The
-// first began at the beginning of time, and each later one where the
-// writer last knew config.toml said online before it ended: after the
-// end before it, and after the seal of the batch before the newest one
-// sealed online before that end, since that online batch's read of the
-// file came after that seal. A stretch is passed once a batch was sealed
-// online from the row that first recorded its end on.
-func (w *Writer) stretchesFromRows(rows []rowPayload) []stretch {
-	var out []stretch
-	var firstRow []int // the row each stretch's end was first recorded in
-	var last moment
+// stretchesFromRows rebuilds stretches from the moment each row recorded
+// (sealPayload.LocalUntil), for rows whose seal frames recorded none, as an
+// older version's: each rise of it, from rows[start] on, past last, ends a
+// stretch, which it adds to seed. The chain's first begins at the beginning
+// of time, and each later one where the writer last knew config.toml said
+// online before it ended: after the end before it, and after the seal of
+// the batch before the newest one sealed online before that end, since that
+// online batch's read of the file came after that seal. A stretch is
+// passed once a batch was sealed online from the row that first recorded
+// its end on.
+func (w *Writer) stretchesFromRows(rows []rowPayload, start int, seed []stretch, last moment) []stretch {
+	out := slices.Clone(seed)
+	added := len(out)
+	var firstRow []int // the row each added stretch's end was first recorded in
 	lastOnline := -1
-	for k, r := range rows {
+	for k := start; k < len(rows); k++ {
+		r := rows[k]
 		if r.online() {
 			lastOnline = k
 		}
@@ -205,8 +233,8 @@ func (w *Writer) stretchesFromRows(rows []rowPayload) []stretch {
 		firstRow = append(firstRow, k)
 		last = u
 	}
-	for i := range out {
-		out[i].passed = lastOnline >= firstRow[i]
+	for i := range firstRow {
+		out[added+i].passed = lastOnline >= firstRow[i]
 	}
 	return out
 }
@@ -225,17 +253,28 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 	if len(restored) > 0 {
 		rows = append(slices.Clip(bf.rows), restored...)
 	}
-	list := bf.stretches
-	for _, rp := range restored {
+	// at is the row that recorded list, -1 for the base frame.
+	list, at := bf.stretches, bf.stretchesRow
+	for j, rp := range restored {
 		if rp.Stretches != nil {
-			list = rp.Stretches
+			list, at = rp.Stretches, len(bf.rows)+j
 		}
 	}
-	if list != nil {
-		w.stretches = w.stretchesOf(list)
-	} else {
-		w.stretches = w.stretchesFromRows(rows)
+	switch n := len(list); {
+	case list == nil:
+		w.stretches = w.stretchesFromRows(rows, 0, nil, moment{})
 		w.dirty = len(w.stretches) > 0
+	case !list[n-1].Open:
+		// Rows sealed after the one that recorded them, with none of their
+		// own, record ends only an older version sealed without the list, as
+		// after a downgrade: this one records the list whenever such an end
+		// comes after the newest it ended. The stretches those ends close
+		// are added.
+		w.stretches = w.stretchesFromRows(rows, at+1, w.stretchesOf(list), payloadEnd(list[n-1]))
+		w.dirty = len(w.stretches) != n
+		w.mergeStretches()
+	default:
+		w.stretches = w.stretchesOf(list)
 	}
 	if end, ok := w.newestEnd(); ok {
 		w.onlineAt = end
@@ -250,6 +289,16 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 		}
 		break
 	}
+}
+
+// payloadEnd is the end p records, as a row records its moment, with no
+// reading of a run's clock.
+func payloadEnd(p stretchPayload) moment {
+	m := moment{wall: p.To}
+	if o := p.ToOS; o != nil && o.Mono > 0 && o.Boot != "" {
+		m.os, m.boot = o.Mono, o.Boot
+	}
+	return m
 }
 
 // laterEnd reports whether u, a moment a row recorded, is a later stretch
@@ -289,6 +338,7 @@ func (w *Writer) sawOnline(end edge) bool {
 	}
 	s := &w.stretches[n-1]
 	s.to, s.open = end, false
+	s.widen()
 	w.raiseOnline(end)
 	w.dirty = true
 	return true
@@ -307,7 +357,15 @@ func (w *Writer) learned(end edge, cross bool) {
 	if n == 0 {
 		from = edge{}
 	}
+	if b := end.other.boot; end.other.os > 0 && b != from.osOf().Boot {
+		// The end is of a boot the start holds no reading of, one that came
+		// after the writer last knew config.toml said online: its hook calls
+		// were all made after the stretch began, whatever that boot's wall
+		// clock said, so its own reading alone bounds them.
+		from.other = moment{os: 1, boot: b}
+	}
 	s := stretch{from: from, to: end, passed: !cross && w.sealedSince(end)}
+	s.widen()
 	if n > 0 && w.stretches[n-1].open {
 		// The stretch going on began after this one ended.
 		w.stretches = slices.Insert(w.stretches, n-1, s)

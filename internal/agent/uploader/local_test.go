@@ -722,6 +722,9 @@ func TestLocalMode(t *testing.T) {
 		{"no root from the first batch sealed in local-only mode on went", r.f.head.b == 2 && r.f.rows[3].b == 0 && r.f.rows[4].b == 0 && r.f.rows[5].b == 0},
 		{"no minute of a batch sealed in local-only mode went", r.minutesIn(r.f, 30, 89) == 0},
 		{"the uploader says where the roots stop", r.u.Status().Stopped == 3},
+		{"doctor names the batch they stop at and why it was sealed local-only, from the batch as Sealed handed it over",
+			strings.Contains(r.doctor(), "stopped uploading at batch 3, which it sealed in local-only mode at ") &&
+				strings.Contains(r.doctor(), `because config.toml said mode = "local", had an error`)},
 	}
 	r.f.mu.Unlock()
 	for _, tc := range stopped {

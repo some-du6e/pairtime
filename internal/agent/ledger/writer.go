@@ -1319,6 +1319,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 			ended = w.momentNow()
 			if going.open {
 				going.to, going.open = edgeAt(ended), false
+				going.widen()
 				wait = append(wait, going)
 			}
 		}

@@ -91,6 +91,47 @@ func TestStretchHolds(t *testing.T) {
 	}
 }
 
+// TestWiden checks that a stretch whose edges span less by the wall clock
+// than by a monotonic clock both hold, as after a step back of the wall
+// clock in it, takes in, by the wall clock, as much before its start and
+// after its end as the step, and that one with no such step, or whose
+// edges share no monotonic clock, stays as it is.
+func TestWiden(t *testing.T) {
+	const boot = "b_os"
+	cases := []struct {
+		name     string
+		from, to moment
+		// wantFrom and wantTo are the edges' wall times once widened.
+		wantFrom, wantTo int64
+	}{
+		{"a step back by this run's clock widens both edges by the step",
+			moment{wall: 10_000, run: 5_000}, moment{wall: 15_000, run: 20_000}, 0, 25_000},
+		{"and so does one by the OS's clock of one boot",
+			moment{wall: 10_000, os: 5_000, boot: boot}, moment{wall: 15_000, os: 20_000, boot: boot}, 0, 25_000},
+		{"a step forward changes nothing", moment{wall: 10_000, run: 5_000}, moment{wall: 40_000, run: 20_000}, 10_000, 40_000},
+		{"nor does an edge an earlier run recorded, whose run reading is this run's start",
+			moment{wall: 10_000, run: 1}, moment{wall: 15_000, run: 20_000}, 10_000, 15_000},
+		{"nor do edges of two boots", moment{wall: 10_000, os: 5_000, boot: boot}, moment{wall: 15_000, os: 20_000, boot: "b_other"}, 10_000, 15_000},
+		{"nor does the chain's first stretch, from the beginning of time", moment{}, moment{wall: 15_000, run: 20_000}, 0, 15_000},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := stretch{from: edgeAt(c.from), to: edgeAt(c.to)}
+			s.widen()
+			if s.from.m.wall != c.wantFrom || s.to.m.wall != c.wantTo {
+				t.Errorf("widened to %d..%d, want %d..%d", s.from.m.wall, s.to.m.wall, c.wantFrom, c.wantTo)
+			}
+		})
+	}
+	t.Run("a widened stretch holds a record its t alone dates before its start by up to the step", func(t *testing.T) {
+		s := stretch{from: edgeAt(moment{wall: 10_000, run: 5_000}), to: edgeAt(moment{wall: 15_000, run: 20_000})}
+		s.widen()
+		if !s.holds(event.Envelope{T: 1000}) || !s.holds(event.Envelope{T: 24_000}) || s.holds(event.Envelope{T: 25_001}) {
+			t.Errorf("the widened stretch %+v doesn't hold what the step put outside it", s)
+		}
+	})
+}
+
 // TestStretchesFromRows checks the stretches Open rebuilds for a ledger
 // whose seal frames recorded none, as an older version's, from the moment
 // each row recorded: each rise of it ends a stretch, the first begins at
@@ -136,7 +177,7 @@ func TestStretchesFromRows(t *testing.T) {
 				rows = append(rows, rowPayload{sealPayload: sealPayload{SealedAt: r.sealed, Online: &on, LocalUntil: r.until}})
 			}
 			var got []want
-			for _, s := range w.stretchesFromRows(rows) {
+			for _, s := range w.stretchesFromRows(rows, 0, nil, moment{}) {
 				got = append(got, want{s.from.m.wall, s.to.m.wall, s.passed})
 			}
 			if !slices.Equal(got, c.want) {
@@ -438,6 +479,18 @@ func TestLocalWhy(t *testing.T) {
 		}, &LocalWhy{Late: []LateRecord{{Kind: event.KindOSPresence, T: time.UnixMilli(testT + 2000).UTC()},
 			{Kind: event.KindOSPresence, T: time.UnixMilli(testT + 2001).UTC()}, {Kind: event.KindOSPresence, T: time.UnixMilli(testT + 2002).UTC()},
 			{Kind: event.KindOSPresence, T: time.UnixMilli(testT + 2003).UTC()}}, LateN: lateKept + 2}},
+		{"one holding a lookback record a kill left, which Open judges by when it can have come, names it by its own time", func(r *lateRig) {
+			r.note(false)
+			r.write(r.presence(1000))
+			r.take()
+			r.at(5000)
+			r.note(true)
+			r.pause()
+			r.write(r.logged("agent.output", -24*3600*1000))
+			abandon(r.w)
+			r.open()
+			r.take()
+		}, &LocalWhy{Late: []LateRecord{{Kind: event.KindAgentOutput, T: time.UnixMilli(testT - 24*3600*1000).UTC()}}, LateN: 1}},
 		{"a batch sealed online says nothing", func(r *lateRig) {
 			r.write(r.presence(1000))
 			r.seal()
@@ -487,7 +540,9 @@ func TestStretchesKept(t *testing.T) {
 		lose func(t *testing.T, r *lateRig)
 	}{
 		{"a ledger whose seal frames recorded no stretches, as an older version's, rebuilds them from its rows",
-			func(t *testing.T, r *lateRig) { dropStretches(t, r.dir) }},
+			func(t *testing.T, r *lateRig) { dropStretches(t, r.dir, 1) }},
+		{"rows an older version sealed after the newest row that records stretches, as after a downgrade, add the stretches their moments end",
+			func(t *testing.T, r *lateRig) { dropStretches(t, r.dir, 3) }},
 		{"a sweep that drops every row, the one that recorded the stretches with them, keeps them in its base frame",
 			func(t *testing.T, r *lateRig) {
 				r.open()
@@ -534,6 +589,8 @@ func TestStretchesKept(t *testing.T) {
 			r.open()
 			_, err := r.w.Write(r.logged("agent.output", 5000))
 			droppedFirst := errors.Is(err, ErrLateLocal)
+			_, err2 := r.w.Write(r.logged("agent.output", 45_000))
+			droppedSecond := errors.Is(err2, ErrLateLocal)
 			r.write(r.logged("agent.output", 22_000))
 			b := r.seal()
 			checks := []struct {
@@ -541,12 +598,13 @@ func TestStretchesKept(t *testing.T) {
 				ok   bool
 			}{
 				{"a late record made in the first stretch, which batches sealed online passed, is dropped", droppedFirst},
+				{"so is one made in the second", droppedSecond},
 				{"one made between the stretches is sealed online", b.Online && len(b.Records) == 1},
 			}
 			for _, ch := range checks {
 				t.Run(ch.name, func(t *testing.T) {
 					if !ch.ok {
-						t.Errorf("no: the first Write's error %v; the batch online %v with %d records", err, b.Online, len(b.Records))
+						t.Errorf("no: the first Writes' errors %v and %v; the batch online %v with %d records", err, err2, b.Online, len(b.Records))
 					}
 				})
 			}
@@ -554,11 +612,11 @@ func TestStretchesKept(t *testing.T) {
 	}
 }
 
-// dropStretches rewrites the rows of dir's batches.seg without the
-// stretches they record, as an older version's rows, which recorded none.
-// The segments keep their seal frames as they are: Open rebuilds no row
-// here, so it reads no seal frame's stretches.
-func dropStretches(t *testing.T, dir string) {
+// dropStretches rewrites the rows of dir's batches.seg from batch from on
+// without the stretches they record, as an older version's rows, which
+// recorded none. The segments keep their seal frames as they are: Open
+// rebuilds no row here, so it reads no seal frame's stretches.
+func dropStretches(t *testing.T, dir string, from uint64) {
 	t.Helper()
 	name := filepath.Join(dir, batchesName)
 	var out []byte
@@ -569,7 +627,15 @@ func dropStretches(t *testing.T, dir string) {
 			if err := json.Unmarshal(payload, &m); err != nil {
 				t.Fatal(err)
 			}
-			delete(m, "stretches")
+			var rp struct {
+				B uint64 `json:"b"`
+			}
+			if err := json.Unmarshal(payload, &rp); err != nil {
+				t.Fatal(err)
+			}
+			if rp.B >= from {
+				delete(m, "stretches")
+			}
 			var err error
 			if payload, err = json.Marshal(m); err != nil {
 				t.Fatal(err)

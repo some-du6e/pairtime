@@ -34,9 +34,12 @@ type batchesFile struct {
 	rows     []rowPayload // rows[i] is batch base.B + i
 	receipts map[uint64]ledger.Receipt
 	// stretches are the local-only stretches the newest row, or the base
-	// frame, recorded (sealPayload.Stretches), nil for none. The rows keep
-	// none of their own once read, so a long chain holds one list.
-	stretches []stretchPayload
+	// frame, recorded (sealPayload.Stretches), nil for none, and
+	// stretchesRow the index in rows of the row that recorded them, -1 for
+	// the base frame. The rows keep none of their own once read, so a long
+	// chain holds one list.
+	stretches    []stretchPayload
+	stretchesRow int
 	// good is where the file stops holding whole frames: its size, or the
 	// offset of a frame a crash or power cut tore.
 	good int64
@@ -147,7 +150,7 @@ func readBatchesFile(name string) (*batchesFile, error) {
 			}
 			bf.base, bf.based = base, true
 			if base.Stretches != nil {
-				bf.stretches, bf.base.Stretches = base.Stretches, nil
+				bf.stretches, bf.stretchesRow, bf.base.Stretches = base.Stretches, -1, nil
 			}
 		case kindBatch:
 			var rp rowPayload
@@ -163,7 +166,7 @@ func readBatchesFile(name string) (*batchesFile, error) {
 				return nil, damaged("%s: batch %d's head doesn't follow from its row", batchesName, rp.B)
 			}
 			if rp.Stretches != nil {
-				bf.stretches, rp.Stretches = rp.Stretches, nil
+				bf.stretches, bf.stretchesRow, rp.Stretches = rp.Stretches, len(bf.rows), nil
 			}
 			bf.rows = append(bf.rows, rp)
 		case kindReceipt:
@@ -799,7 +802,8 @@ func (w *Writer) arrivedLocked() {
 			continue
 		}
 		if e, ok := envelopeOf(p.rec); ok && w.lookback(e) {
-			p.env, p.has = event.Envelope{T: max(w.sealed, w.created)}, true
+			// t keeps the event's own time, which a batch's why names.
+			p.env, p.has, p.t = event.Envelope{T: max(w.sealed, w.created)}, true, e.T
 		}
 	}
 }

@@ -993,6 +993,14 @@ func TestNoteMode(t *testing.T) {
 				"now:30000", "file-local", "local", "write-at:30000", "sealed", "now:40000", "file-online", "online", "now:45000",
 				"write-at:46000", "seal", "asked-holds:35000", "asked-skips:15000", "asked-skips:5000"},
 			[]bool{false, true, false, true}, []bool{false, true, false, true}, []int{1, 1, 1, 1}},
+		{"a step back of the wall clock in a stretch, which the OS's clock shows, widens it by the step, so a late record dated before its start by its t alone is dropped once a batch sealed online passed it",
+			[]string{"file-local", "local", "write", "sealed", "now:10000", "file-online", "online", "now:20000", "write-at:20000", "seal",
+				"now:30000", "file-local", "local", "write-at:30000", "sealed", "now:40000", "at:35000", "file-online", "online", "now:50000",
+				"write-at:50000", "seal", "write-dropped-at:17000", "write-at:60000", "seal"},
+			[]bool{false, true, false, true, true}, []bool{false, true, false, true, false}, []int{1, 1, 1, 1, 1}},
+		{"a hook call of a boot between the newest seal frame's and the writer's, held to the stretch end state.json kept from that boot by its clock, is sealed local-only though that boot's wall clock dates it before every stretch the writer has",
+			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reboot-seen-other", "write-other-boot-early", "seal"},
+			[]bool{false, true, false}, []bool{false, true, false}, []int{1, 1, 1}},
 		{"a stretch the newest seal frame records as going on holds what a kill left and what comes after, until a seal's read that finds config.toml online ends it, marking no batch",
 			[]string{"file-local", "local", "write", "sealed", "write", "kill", "sealed", "file-online", "now:5000", "write-at:4000", "seal", "write-at:6000", "seal"},
 			[]bool{false, false, false, true}, []bool{false, false, false, false}, []int{1, 1, 1, 1}},
@@ -1268,6 +1276,8 @@ func TestNoteMode(t *testing.T) {
 					seen = Seen{}
 				case "write-other-boot":
 					writeAt(i, testT+60_000, func(in *Input) { in.Event.BootID, in.Event.Mono = "b_os2", 15_000 })
+				case "write-other-boot-early":
+					writeAt(i, testT-6000, func(in *Input) { in.Event.BootID, in.Event.Mono = "b_os2", 15_000 })
 				case "reopen-seen-os":
 					if err := w.Close(); err != nil {
 						t.Fatalf("step %d: %v", i, err)

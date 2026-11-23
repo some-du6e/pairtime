@@ -302,7 +302,10 @@ type sealedRow struct {
 	sealedAt     time.Time
 	online, back bool
 	localUntil   time.Time
-	harnesses    map[event.Harness]string
+	// why says why a batch sealed local-only is (ledger.Batch.Why), for
+	// doctor's line when the batch roots stop at it (stopProblem).
+	why       *ledger.LocalWhy
+	harnesses map[event.Harness]string
 }
 
 // sealedQueueMax bounds the sealed batches waiting for the loop, as while the
@@ -517,7 +520,7 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 	u.mu.Lock()
 	if len(u.sealed) < sealedQueueMax {
 		u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt, online: b.Online, back: b.Back,
-			localUntil: b.LocalUntil, harnesses: learned})
+			localUntil: b.LocalUntil, why: b.Why, harnesses: learned})
 	} else {
 		u.sealed, u.lost = nil, true
 	}
@@ -1018,7 +1021,7 @@ func (u *Uploader) takeSealed() {
 			// Read from batches.seg already.
 		case sb.row.B == u.rows.last()+1:
 			r := ledger.Row{BatchRow: sb.row, Prev: u.rows.lastHead, SealedAt: sb.sealedAt, Online: sb.online, Back: sb.back,
-				LocalUntil: sb.localUntil}
+				LocalUntil: sb.localUntil, Why: sb.why}
 			if err := u.rows.add(r); err != nil {
 				u.log.Warn("a sealed batch doesn't follow the rows", "err", err)
 			}
