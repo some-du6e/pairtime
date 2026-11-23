@@ -151,7 +151,7 @@ func TestWiden(t *testing.T) {
 		{"but not one dated before the stretch before it ended, which that stretch holds if anything does",
 			stretch{from: edge{m: moment{wall: 10_000, run: 1, os: 1, boot: boot}, other: moment{os: 17_000, boot: old}},
 				to: edgeAt(moment{wall: 15_000, run: 20_000, os: 9_000, boot: boot})}, 4_000, event.Envelope{T: 3_999, BootID: runBoot}, false},
-		{"while a hook call of this boot still goes by its mono, which its boot's clock dates after the stretch's start",
+		{"while a hook call of this boot still goes by its mono: one its boot's clock dates after the stretch's end isn't in it, though its t is",
 			stretch{from: edge{m: moment{wall: 10_000, run: 1, os: 1, boot: boot}, other: moment{os: 17_000, boot: old}},
 				to: edgeAt(moment{wall: 15_000, run: 20_000, os: 9_000, boot: boot})}, 4_000, event.Envelope{T: 5_000, BootID: boot, Mono: 9_001}, false},
 	}

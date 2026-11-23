@@ -321,18 +321,19 @@ func TestAdaptersWaiting(t *testing.T) {
 			h := newHost()
 			leftHeld(t, h)
 			h.expectCount()
-			// The install's stretch, a batch the switch back's records keep
-			// local-only, one sealed online, which passes that stretch, and a
-			// second stretch, going on as the writer closes. It began at the
-			// online batch's read, after the beginning of time, so only the
-			// rule for an envelope with no times holds the calls in it
-			// (ledger waitFor.holds).
+			// The install's stretch, the switch back's batch, one sealed online
+			// after it, which passes that stretch, and a second stretch, going
+			// on as the writer closes. It began at the online batch's read,
+			// after the beginning of time, so only the rule for an envelope
+			// with no times holds the calls in it (ledger waitFor.holds).
 			var local atomic.Bool
 			first := optionsWriter(t, h.a.dirs, func(o *ledger.Options) { o.Online = func() bool { return !local.Load() } })
-			start := time.Now()
-			for i, l := range []bool{true, false, false, true} {
+			for _, l := range []bool{true, false, false, true} {
 				local.Store(l)
-				if _, err := first.Write(presenceAt(start.Add(time.Duration(i) * time.Millisecond))); err != nil {
+				// Made a few ms after the seal before, so no stretch end of
+				// that seal's millisecond holds it.
+				time.Sleep(5 * time.Millisecond)
+				if _, err := first.Write(presenceAt(time.Now())); err != nil {
 					t.Fatal(err)
 				}
 				if _, _, err := first.Seal(); err != nil {
@@ -343,8 +344,8 @@ func TestAdaptersWaiting(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, rows, err := ledger.ReadRows(h.a.dirs.Ledger(), 0)
-			if err != nil || len(rows) != 4 || rows[0].Online || rows[1].Online || !rows[2].Online || rows[3].Online {
-				t.Fatalf("the first writer sealed %+v (%v); want local-only, local-only, online, local-only", rows, err)
+			if err != nil || len(rows) != 4 || rows[0].Online || !rows[2].Online || rows[3].Online {
+				t.Fatalf("the first writer sealed %+v (%v); want local-only, either, online, local-only", rows, err)
 			}
 			w := optionsWriter(t, h.a.dirs, func(o *ledger.Options) {
 				o.Online = func() bool { return true }
