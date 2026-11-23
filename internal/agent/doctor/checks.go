@@ -182,10 +182,10 @@ func idleCheck(s Signals) Check {
 
 // focusCheck is DESIGN 5.9's focus line: focus detection working with its
 // source, or "focus unknown on this desktop". With focus unknown the agent
-// records no os.focus, so every slot has no focus and the scorer credits
-// none of it (pkg/score): the line fails, and says what to do. WP-SC8,
-// which credits such time at level C, makes it a warning with 5.9's ", so
-// time here counts at level C".
+// records an os.focus with app_class unknown (SM 2.5), whose slots the
+// scorer credits nothing until WP-SC8: the line fails, and says what to
+// do. WP-SC8, which credits such time at level C, makes it a warning with
+// 5.9's ", so time here counts at level C".
 func focusCheck(s Signals) Check {
 	if s.Focus.Via != "" {
 		return Check{Name: "focus", Result: OK, Text: "focus detection working, from " + text.Printable(s.Focus.Via)}

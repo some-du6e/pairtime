@@ -30,11 +30,13 @@ type bucketMeta struct {
 // no state; the loop sets it.
 //
 // This is the seam for WP-SC4, which builds SM 5.1's buckets in pkg/score.
-// Until then a slot's summary names its largest credit entry's project,
-// reason and level, the first of them on a tie, with the side-door labels
-// of every entry, and Bucket.Projects keeps the exact split that every
-// total the agent shows is summed from: credit by reason and level,
-// agent-only seconds by harness, and uncredited seconds by reason.
+// Until then a slot's summary (slotSummary) names its largest credit
+// entry's project and reason, the first of them on a tie, takes the
+// weakest level among its credited entries, as pkg/score's Minute.Bucket
+// does, and lists the labels of pkg/event's slot list (event.SlotLabels)
+// that any credited entry carries; Bucket.Projects keeps the exact split
+// that every total the agent shows is summed from: credit by reason and
+// level, agent-only seconds by harness, and uncredited seconds by reason.
 func minuteBuckets(meta bucketMeta, d score.Derived, recs []event.Event) map[int64]store.Bucket {
 	// Which harness runs each session, from its records and its turns.
 	harnessOf := map[string]event.Harness{}
