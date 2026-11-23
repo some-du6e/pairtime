@@ -189,17 +189,20 @@ func TestTieLive(t *testing.T) {
 // TestScanStartMono checks the run clock of the scan's session.start
 // (scanStart): its mono is this run's clock less how long before now the
 // start is dated, and never later than now, as for a first line dated
-// ahead of its read.
+// ahead of its read. A start dated more than LATE_READ_S before now has
+// none, as a line read that late has none.
 func TestScanStartMono(t *testing.T) {
 	cases := []struct {
 		name string
 		// first is when the session's first line read live was written,
 		// from now, and before how far before now the start's mono is, at
-		// least, while the run is that old.
+		// least, while the run is that old. none says it has no mono.
 		first, before time.Duration
+		none          bool
 	}{
-		{"a first line five seconds old gives a mono five seconds before now", -5 * time.Second, 4 * time.Second},
-		{"a first line dated ahead of its read gives a mono no later than now", 5 * time.Second, 0},
+		{"a first line five seconds old gives a mono five seconds before now", -5 * time.Second, 4 * time.Second, false},
+		{"a first line dated ahead of its read gives a mono no later than now", 5 * time.Second, 0, false},
+		{"a first line 11 s old gives no mono", -11 * time.Second, 0, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -208,7 +211,11 @@ func TestScanStartMono(t *testing.T) {
 			r.a.procs.Touch(key, time.Now().Add(tc.first))
 			rec, ok := r.h.scanStart(procs.Session{Event: event.SessionStart{StartKind: event.StartStartup}}, event.HarnessClaudeCode, key, nil)
 			after, _ := ledger.RunClock(time.Now())
-			if want := max(after-tc.before.Milliseconds(), 0); !ok || rec.Event.Mono > want {
+			want := max(after-tc.before.Milliseconds(), 0)
+			if tc.none {
+				want = 0
+			}
+			if !ok || rec.Event.Mono > want || tc.none && rec.Event.Mono != 0 {
 				t.Errorf("the scan's start has mono %d (%v); want at most %d", rec.Event.Mono, ok, want)
 			}
 		})

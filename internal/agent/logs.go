@@ -211,6 +211,11 @@ func (h *adapterHost) tieLive(lr adapters.LogReader, harness event.Harness, sid 
 	return h.scanStart(sess, harness, key, recs)
 }
 
+// scanLate is LATE_READ_S, in ms, as claudecode's lateRead: the scan's
+// session.start of a session whose first line read live is older than this
+// carries no reading of this run's clock (scanStart).
+const scanLate = 10_000
+
 // scanStart returns the process scan's session.start for session key,
 // which sess tied to its process and its log reader has none of: dated a
 // millisecond before the session's first line read live
@@ -225,6 +230,12 @@ func (h *adapterHost) scanStart(sess procs.Session, harness event.Harness, key s
 	t := first.UnixMilli() - 1
 	now := time.Now() // with its monotonic reading, which this run's clock needs
 	mono, boot := ledger.RunClock(now)
+	if now.UnixMilli()-t > scanLate {
+		// Dated longer before now than LATE_READ_S: no reading of this
+		// run's clock, which leaves out a suspend since, so the ledger
+		// holds it to its t, as claudecode's env does a line read late.
+		mono = 0
+	}
 	env := event.Envelope{T: t, Mono: max(mono-max(now.UnixMilli()-t, 0), 0), BootID: boot, Source: event.SourceOS,
 		Via: event.ViaOS, Harness: harness, SessionKey: key}
 	for _, r := range recs {
