@@ -559,7 +559,7 @@ func TestAgentOutlivesScope(t *testing.T) {
 			select {
 			case <-gone:
 			case <-time.After(30 * time.Second):
-				t.Fatalf("the session's scope was stopped, but its process still ran after 30 s")
+				t.Fatal("the session's scope was stopped, but its process still ran after 30 s")
 			}
 
 			if !tt.units {
