@@ -26,10 +26,8 @@ ATTRIB_STICKY_S, READ_HORIZON_S = 120, 600
 
 def typing_s(n):
     """The typing part of a lead for n typed characters, n / COMPOSE_CPS
-    rounded to a whole second. SM states its leads in whole seconds and
-    rounds this part to the nearest one: 61 characters give 41 s in 6.4 and
-    35 give 23 s in 6.5 (SM 1.3 applies window edges to the second; the 6.4
-    prompt-lengths erratum asks which way they round)."""
+    rounded to the nearest second, halves up (SM 1.3): 61 characters give
+    41 s in 6.4 and 35 give 23 s in 6.5."""
     return Fraction(int(Fraction(n) / COMPOSE_CPS + Fraction(1, 2)))
 
 

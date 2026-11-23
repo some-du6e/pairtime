@@ -24,8 +24,10 @@ Harnesses run this as a hook, and pairtime install sets those hooks up. It
 reads the event the harness writes to stdin, up to 1 MiB, and hands it to
 the pairtime agent within 100 ms, or leaves it in the agent's inbox when
 the agent doesn't take it in time, and starts the agent when nothing
-answers. It always exits 0 and prints nothing, so that it can never block
-or slow down the harness, whatever goes wrong.
+answers. Starting the agent waits, on Linux with a systemd user manager,
+until the agent is in a scope of its own, some tens of milliseconds and 3 s
+at most. It always exits 0 and prints nothing, so that whatever goes wrong
+it never blocks the harness or fails its hook.
 
   --harness  the harness running the hook, such as claude_code
   --event    the harness's own name for the event, such as UserPromptSubmit;

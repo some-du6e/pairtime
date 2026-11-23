@@ -23,7 +23,7 @@ import (
 func fullStatus() statusReply {
 	at := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
 	both := signalReply{Via: "a source", Unknown: "a reason"}
-	stats := harnessStats{Calls: 1, Records: 2, ParseFailures: 3, WriteFailures: 4, Ignored: 5, LastRecord: 6, LastFailure: "Stop: unknown field",
+	stats := harnessStats{Calls: 1, Records: 2, ParseFailures: 3, WriteFailures: 4, LateLocal: 9, Ignored: 5, LastRecord: 6, LastFailure: "Stop: unknown field",
 		Lines: 7, LineFailures: 8}
 	stats.Repeats = 10
 	return statusReply{
@@ -36,6 +36,7 @@ func fullStatus() statusReply {
 			Loop: &loopReply{MainThread: true, Dropped: 1}},
 		Adapters: adaptersReply{Harnesses: map[event.Harness]harnessStats{event.HarnessClaudeCode: stats}, Other: stats,
 			Waiting: 1, Dropped: 2, Git: gitReply{Watched: 1, Changes: 2}},
+		Ledger:    &ledgerReply{LateLocal: 10},
 		Footprint: footprintReply{RSSBytes: 1, PeakRSSBytes: 2, CPUS: 3},
 		Problems:  map[string]string{"ledger": "the ledger can't open"},
 	}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GET /api/hackatime/v1/users/:id/statusbar/today, 200",
+  "description": "HackatimeController#status_bar_today (hackatime_controller.rb lines 78-108): the seconds of today's heartbeats in the user's time zone, as duration_seconds counts them, and the text an editor's status bar shows for them. The text follows the user's status bar setting: for simple_text it is 'Start coding!' at 0 and short_time_simple otherwise, such as '1h 5m', with ' / <target> goal' after it when the user shows a daily goal there (user.rb lines 354-367; application_helper.rb lines 44-49). goal is there only when the user has a daily goal, with the progress ProgrammingGoalsProgressService gives (programming_goals_progress_service.rb lines 20-36). wakatime-cli's --today prints grand_total.text, or the categories' texts when there are two or more (pkg/summary/summary.go), and Hackatime sends no categories.",
+  "type": "object",
+  "required": ["data"],
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": ["grand_total"],
+      "properties": {
+        "grand_total": {
+          "type": "object",
+          "required": ["text", "total_seconds"],
+          "properties": {
+            "text": {"type": "string", "minLength": 1},
+            "total_seconds": {"type": "integer", "minimum": 0}
+          }
+        },
+        "goal": {
+          "type": "object",
+          "required": ["target_seconds", "tracked_seconds", "completion_percent", "complete"],
+          "properties": {
+            "target_seconds": {"type": "integer", "minimum": 1},
+            "tracked_seconds": {"type": "integer", "minimum": 0},
+            "completion_percent": {"type": "integer", "minimum": 0, "maximum": 100},
+            "complete": {"type": "boolean"}
+          }
+        }
+      }
+    }
+  }
+}

@@ -33,6 +33,13 @@ type batchesFile struct {
 	based    bool         // the file has a base frame
 	rows     []rowPayload // rows[i] is batch base.B + i
 	receipts map[uint64]ledger.Receipt
+	// stretches are the local-only stretches the newest row, or the base
+	// frame, recorded (sealPayload.Stretches), nil for none, and
+	// stretchesRow the index in rows of the row that recorded them, -1 for
+	// the base frame. The rows keep none of their own once read, so a long
+	// chain holds one list.
+	stretches    []stretchPayload
+	stretchesRow int
 	// good is where the file stops holding whole frames: its size, or the
 	// offset of a frame a crash or power cut tore.
 	good int64
@@ -47,6 +54,28 @@ type basePayload struct {
 	B        uint64      `json:"b"`
 	FirstSeq uint64      `json:"first_seq"`
 	Prev     ledger.Hash `json:"prev"`
+	// Stretches are the local-only stretches the newest row recorded when
+	// the sweep wrote the frame, so dropping that row loses none of them
+	// (sealPayload.Stretches).
+	Stretches []stretchPayload `json:"stretches,omitempty"`
+	// LocalUntil and LocalUntilOS are the moment the row that recorded
+	// Stretches recorded (sealPayload.LocalUntil), which Open holds the rows
+	// after the frame to, as it holds those after the newest row that
+	// records stretches: this version moves the moment only with a seal
+	// frame that records them, so a row whose moment rose past it is an
+	// older version's (restoreStretches).
+	LocalUntil   int64    `json:"local_until,omitempty"`
+	LocalUntilOS *untilOS `json:"local_until_os,omitempty"`
+}
+
+// listUntil is the moment the row that recorded bf.stretches recorded, or
+// the base frame's for a list the base frame holds (basePayload.LocalUntil).
+// It means nothing while bf.stretches is nil.
+func (bf *batchesFile) listUntil() (int64, *untilOS) {
+	if i := bf.stretchesRow; i >= 0 && i < len(bf.rows) {
+		return bf.rows[i].LocalUntil, bf.rows[i].LocalUntilOS
+	}
+	return bf.base.LocalUntil, bf.base.LocalUntilOS
 }
 
 // row returns the row of batch b, when the file keeps it.
@@ -138,6 +167,9 @@ func readBatchesFile(name string) (*batchesFile, error) {
 				return nil, damaged("%s's base frame names batch %d from record %d, which no chain has", batchesName, base.B, base.FirstSeq)
 			}
 			bf.base, bf.based = base, true
+			if base.Stretches != nil {
+				bf.stretches, bf.stretchesRow, bf.base.Stretches = base.Stretches, -1, nil
+			}
 		case kindBatch:
 			var rp rowPayload
 			if err := json.Unmarshal(fm.payload, &rp); err != nil {
@@ -150,6 +182,9 @@ func readBatchesFile(name string) (*batchesFile, error) {
 			}
 			if ledger.BatchHead(rp.Prev, rp.Root, rp.N, rp.B) != rp.Head {
 				return nil, damaged("%s: batch %d's head doesn't follow from its row", batchesName, rp.B)
+			}
+			if rp.Stretches != nil {
+				bf.stretches, bf.stretchesRow, rp.Stretches = rp.Stretches, len(bf.rows), nil
 			}
 			bf.rows = append(bf.rows, rp)
 		case kindReceipt:
@@ -292,6 +327,7 @@ func (w *Writer) recover() error {
 	if err != nil {
 		return err
 	}
+	w.restoreStretches(bf, restored)
 	if len(restored) > 0 {
 		// A crash between a seal frame and its flush leaves the frame, and
 		// the batch's records, in the page cache only. A row must never
@@ -773,9 +809,10 @@ func (w *Writer) observe(rec ledger.Record) {
 
 // arrivedLocked gives each record a crash left that is lookback's
 // (Writer.lookback), an event a log reader read, dated before the chain
-// began, the earliest time it can have reached the writer, which a moment
-// then holds it to, as Write held it to when it did: when the newest batch
-// was sealed, or the chain began, since it came after both. w.mu is held.
+// began, the earliest time it can have reached the writer, which the
+// stretches then hold it to, as Write held it to when it did: when the
+// newest batch was sealed, or the chain began, since it came after both.
+// w.mu is held.
 func (w *Writer) arrivedLocked() {
 	for i := range w.pending {
 		p := &w.pending[i]
@@ -783,24 +820,14 @@ func (w *Writer) arrivedLocked() {
 			continue
 		}
 		if e, ok := envelopeOf(p.rec); ok && w.lookback(e) {
-			p.env, p.has = event.Envelope{T: max(w.sealed, w.created)}, true
+			// t keeps the event's own time, which a batch's why names.
+			p.env, p.has, p.t = event.Envelope{T: max(w.sealed, w.created)}, true, e.T
 		}
 	}
-}
-
-// madeBefore reports whether before says a record in recs is an event made
-// before a moment, as Write would have found it (pending.madeBefore).
-func madeBefore(before func(event.Envelope) bool, recs []pending) bool {
-	for _, p := range recs {
-		if p.madeBefore(before) {
-			return true
-		}
-	}
-	return false
 }
 
 // envelopeOf returns the times of an event record's event, which are all
-// a moment holds it to, with its via, which tells lookback's records
+// a stretch holds it to, with its via, which tells lookback's records
 // (arrivedLocked), or false for a record that holds no event, as a
 // checkpoint or an upload-failure note doesn't.
 func envelopeOf(rec ledger.Record) (event.Envelope, bool) {

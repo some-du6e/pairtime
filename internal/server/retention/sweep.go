@@ -30,10 +30,25 @@ type Job struct {
 	// time is when its submission's spot-check window opened (DESIGN 4.4),
 	// and NULL until WP-SV18 writes it.
 	WindowMonths int
+	// Kept says the job has no period of its own (PeriodKept): it
+	// deletes a row once no kept_by table holds anything for it. It has no
+	// TimeColumn.
+	Kept bool
 	// Hold, when set, keeps the rows a submission uses.
 	Hold *Hold
 	// KeptBy lists the tables whose rows keep the rows they name by Key.
 	KeptBy []string
+	// KeptByDay lists the tables whose rows keep the row of the UTC day
+	// they fall on, by a time column. Key is then one column, the day's
+	// number.
+	KeptByDay []DayKeep
+}
+
+// DayKeep is a kept_by table matched by day: each of its rows keeps the
+// job's row whose key is the UTC day its Column, in epoch milliseconds,
+// falls on.
+type DayKeep struct {
+	Table, Column string
 }
 
 // Hold is the hold table a job consults.
@@ -74,13 +89,16 @@ func (p *Policy) Jobs() (jobs []Job, off []string) {
 				off = append(off, job.ID+" hold awaits "+h.Awaits)
 				job.Hold = nil
 			}
-			job.KeptBy = nil
+			job.KeptBy, job.KeptByDay = nil, nil
 			for _, k := range spec.KeptBy {
-				if k.Awaits != "" {
+				switch {
+				case k.Awaits != "":
 					off = append(off, job.ID+" kept_by "+k.Table+" awaits "+k.Awaits)
-					continue
+				case k.DayOf != "":
+					job.KeptByDay = append(job.KeptByDay, DayKeep{Table: k.Table, Column: k.DayOf})
+				default:
+					job.KeptBy = append(job.KeptBy, k.Table)
 				}
-				job.KeptBy = append(job.KeptBy, k.Table)
 			}
 			jobs = append(jobs, job)
 		}
@@ -108,16 +126,23 @@ func (p *Policy) job(e Entry, spec JobSpec) Job {
 		Key:        spec.Key,
 		TimeColumn: spec.TimeColumn,
 	}
-	if spec.Period == PeriodWindow {
+	switch spec.Period {
+	case PeriodWindow:
 		j.WindowMonths = p.SpotCheckWindow.Months
-	} else {
+	case PeriodKept:
+		j.Kept = true
+	default:
 		j.MaxAge = time.Duration(e.Days) * 24 * time.Hour
 	}
 	if h := spec.Hold; h != nil {
 		j.Hold = &Hold{Table: h.Table, DecidedColumn: h.DecidedColumn, WindowMonths: p.SpotCheckWindow.Months}
 	}
 	for _, k := range spec.KeptBy {
-		j.KeptBy = append(j.KeptBy, k.Table)
+		if k.DayOf != "" {
+			j.KeptByDay = append(j.KeptByDay, DayKeep{Table: k.Table, Column: k.DayOf})
+		} else {
+			j.KeptBy = append(j.KeptBy, k.Table)
+		}
 	}
 	return j
 }
@@ -181,12 +206,15 @@ func Sweep(ctx context.Context, d Doer, jobs []Job, now time.Time, batch int) []
 
 // deleteSQL is one batch's DELETE and its arguments, in the portable SQL of
 // package store. A row whose time is at or before now minus MaxAge, or for
-// a job by the window at or before lastClosed, is past its period. A hold
-// keeps its row while the hold's time, when its submission's spot-check
-// window opened (DESIGN 4.4), is NULL, because the window hasn't opened or
+// a job by the window at or before lastClosed, is past its period, and a
+// row of a job with no period of its own (Kept) always is. A hold keeps
+// its row while the hold's time, when its submission's spot-check window
+// opened (DESIGN 4.4), is NULL, because the window hasn't opened or
 // WP-SV18 hasn't written it yet, or later than lastClosed, because the
 // window is still open (Window.Closes). A kept_by table keeps every row one
-// of its rows names.
+// of its rows names, and a day-matched one every row of a day one of its
+// rows falls on, read as a range of its time column so the column's index
+// serves it.
 func (j Job) deleteSQL(now time.Time, batch int) (string, []any) {
 	col := func(alias string, cols []string) []string {
 		out := make([]string, len(cols))
@@ -201,6 +229,12 @@ func (j Job) deleteSQL(now time.Time, batch int) (string, []any) {
 		b.WriteString(j.Key[0])
 	} else {
 		b.WriteString("(" + strings.Join(j.Key, ", ") + ")")
+	}
+	if j.Kept {
+		b.WriteString(" IN (SELECT " + strings.Join(col("t", j.Key), ", ") + " FROM " + j.Table + " t WHERE ")
+		guards := append(j.keyGuards(), j.dayGuards()...)
+		b.WriteString(strings.Join(guards, " AND ") + " LIMIT $1)")
+		return b.String(), []any{batch}
 	}
 	b.WriteString(" IN (SELECT " + strings.Join(col("t", j.Key), ", ") + " FROM " + j.Table + " t WHERE t." + j.TimeColumn + " <= $1")
 	cut := now.Add(-j.MaxAge)
@@ -218,17 +252,45 @@ func (j Job) deleteSQL(now time.Time, batch int) (string, []any) {
 			" AND (" + decided + " IS NULL OR " + decided + " > $3))")
 		args = append(args, lastClosed(now, h.WindowMonths).UnixMilli())
 	}
+	for _, g := range append(j.keyGuards(), j.dayGuards()...) {
+		b.WriteString(" AND " + g)
+	}
+	b.WriteString(" LIMIT $2)")
+	return b.String(), args
+}
+
+// keyGuards are the conditions that keep the rows a kept_by table names by
+// the job's key, one per table, against the candidate row t.
+func (j Job) keyGuards() []string {
+	var out []string
 	for n, table := range j.KeptBy {
 		alias := fmt.Sprintf("k%d", n)
 		match := make([]string, len(j.Key))
 		for i, k := range j.Key {
 			match[i] = alias + "." + k + " = t." + k
 		}
-		b.WriteString(" AND NOT EXISTS (SELECT 1 FROM " + table + " " + alias + " WHERE " + strings.Join(match, " AND ") + ")")
+		out = append(out, "NOT EXISTS (SELECT 1 FROM "+table+" "+alias+" WHERE "+strings.Join(match, " AND ")+")")
 	}
-	b.WriteString(" LIMIT $2)")
-	return b.String(), args
+	return out
 }
+
+// dayGuards are the conditions that keep the row of each day a
+// day-matched kept_by table has a row on: its time column from the start
+// of the row's day, t's key times a day in milliseconds, to the start of
+// the next.
+func (j Job) dayGuards() []string {
+	var out []string
+	for n, g := range j.KeptByDay {
+		alias := fmt.Sprintf("d%d", n)
+		start := "t." + j.Key[0] + " * " + dayMS
+		c := alias + "." + g.Column
+		out = append(out, "NOT EXISTS (SELECT 1 FROM "+g.Table+" "+alias+" WHERE "+c+" >= "+start+" AND "+c+" < "+start+" + "+dayMS+")")
+	}
+	return out
+}
+
+// dayMS is a UTC day in milliseconds, as SQL.
+const dayMS = "86400000"
 
 // Run sweeps at once, then every interval, until ctx ends. report, when
 // set, gets every job's result from every sweep.

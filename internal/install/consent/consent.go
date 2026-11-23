@@ -59,6 +59,12 @@ type Card struct {
 	Ticked bool
 }
 
+// ItemCalibration is the card of pairtime install --calibration-volunteer:
+// shadow = true under [display] in config.toml (DESIGN 6.7 step 2), which
+// install makes through config's own edit, as pairtime login changes the
+// file, not through the installer, so it isn't an install.Item.
+const ItemCalibration = "calibration"
+
 // HookTest is how the self-test of `pairtime hook` went, which decides
 // whether install offers any hooks.
 type HookTest struct {
@@ -89,7 +95,8 @@ type Input struct {
 	// words that follow "found at <folder>; " on a harness's line: the
 	// teen left it out with --skip, or its planner won't edit the file,
 	// such as a settings file that isn't JSON. A harness's line says why
-	// its hooks stay out, and the screen says why autostart does.
+	// its hooks stay out, and the screen says why autostart and the
+	// calibration card do.
 	Left map[string]string
 	// Linked is the server pairtime login linked this computer to, while
 	// config.toml says online and reads, which install leaves as they are:
@@ -106,8 +113,10 @@ type Screen struct {
 
 // order is the order the cards come in, which is the order install makes
 // the changes: the login item and the agent first, so that the first hook
-// call finds the agent up (DESIGN 5.9 steps 3 and 4).
-var order = []string{install.ItemAutostart, install.ItemClaudeCode}
+// call finds the agent up (DESIGN 5.9 steps 3 and 4), and config.toml's
+// shadow line before the agent starts, so that it starts with shadow on
+// and finds the file there, which its first start would otherwise write.
+var order = []string{install.ItemAutostart, ItemCalibration, install.ItemClaudeCode}
 
 // New makes the screen for in, with every card ticked.
 func New(in Input) *Screen {
@@ -121,6 +130,8 @@ func New(in Input) *Screen {
 		switch id {
 		case install.ItemAutostart:
 			c = autostartCard(in.GOOS)
+		case ItemCalibration:
+			c = calibrationCard()
 		case install.ItemClaudeCode:
 			c = claudeCard(in)
 		}
@@ -170,6 +181,22 @@ func autostartCard(goos string) Card {
 	return c
 }
 
+// calibrationCard is the card of --calibration-volunteer, which turns on
+// display.shadow in config.toml (decision D-shadow-scope). Its diff names
+// the file's path, which the sentences leave out, since the screen wraps
+// them.
+func calibrationCard() Card {
+	return Card{
+		Title: `Show your time as "calibrating" until pairtime's scoring is frozen`,
+		What: `You volunteered to help calibrate pairtime, so until its scoring reaches version 1.0.0, when its rules are frozen, ` +
+			`pairtime today, recap, statusline and the local dashboard show your time as "calibrating". ` +
+			`They keep the agent's time, your moments and the loops pairtime caught, and leave out everything your time could be worked out from, ` +
+			`so nobody learns to steer the rules while they are being calibrated. pairtime still counts all of your time, and its files on this computer keep every number.`,
+		Declining: "Without it, pairtime shows your time as its rules count it now, while they are being calibrated.",
+		TurnOff:   "You can turn it off any time with shadow = false under [display] in config.toml. It turns off by itself once pairtime's scoring reaches 1.0.0.",
+	}
+}
+
 func claudeCard(in Input) Card {
 	c := Card{
 		Title: "Add pairtime's hooks to Claude Code",
@@ -215,6 +242,10 @@ func (s *Screen) Render(w io.Writer) error {
 	if why, ok := s.in.Left[install.ItemAutostart]; ok {
 		b.WriteString("\n")
 		b.WriteString(wrap("pairtime won't start when you log in: "+install.Printable(why)+".", ""))
+	}
+	if why, ok := s.in.Left[ItemCalibration]; ok {
+		b.WriteString("\n")
+		b.WriteString(wrap(`Your time won't show as "calibrating": `+install.Printable(why)+".", ""))
 	}
 	for i, c := range s.Cards {
 		b.WriteString("\n")

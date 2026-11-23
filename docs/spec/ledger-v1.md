@@ -317,7 +317,29 @@ signature_d = Ed25519(server key, D_d)
 
 The server key that signs `D_d` is the one valid at the last millisecond of day `d`, `(d + 1) × 86,400,000 − 1`, by DESIGN 10.2's validity dates, even when the head is signed or published later. WP-SV17 signs a day at 00:10 UTC the next day and publishes a missed day on a later run, so the key valid at signing time could be a newer one. Fixing the key by `d` lets a verifier find it from the day alone, as step 7 of section 9 finds a receipt's from `received_at`. After a rotation, the server keeps the old key until it has signed every day that ended before the rotation.
 
-It commits `d`, `G_(d-1)`, `T_d`, `count_d`, `G_d` and `signature_d` to the public `pairtime-witness` repository. WP-SV17 specifies that file. Each bundle carries the index of each batch's leaf in its day tree and the leaf's inclusion proof (DESIGN 7.8), checked against `T_d` with `count_d` leaves.
+It commits `d`, `G_(d-1)`, `T_d`, `count_d`, `G_d` and `signature_d` to the public `pairtime-witness` repository, one file a day at `<YYYY>/<YYYY-MM-DD>.json`, named by the day's UTC date, such as `2026/2026-11-19.json` for 12.5's day:
+
+```json
+{
+  "format": "pairtime-day-root-v1",
+  "day": 20776,
+  "date": "2026-11-19",
+  "prev": "<G_(d-1), 64 hex digits>",
+  "count": 2,
+  "root": "<T_d>",
+  "head": "<G_d>",
+  "key_id": "<16 hex digits>",
+  "signature": "<signature_d, 128 hex digits>"
+}
+```
+
+The file has those nine members in that order and no others, indented by two spaces, with a newline at the end. `key_id` names the server key that signed, the one valid at the end of the day, as `/.well-known/pairtime-keys.json` lists it (docs/spec/keys-v1.md). The file holds hashes, a count and a signature, and never a device id or a time within the day.
+
+A day is due 10 minutes after it ends. At each start and at 00:10 UTC, `pairtimed` publishes every due day that has no head yet, oldest first from `d_0`, the day of the first row it stored, so a day missed while it was down goes out on the next run. The server signs a due day only while the database's replica is within 60 s of it (DESIGN 10.3, 10.4), so the replica holds the day's last rows, and a head follows from its rows and the key alone, since Ed25519 signatures are deterministic. So a server restored from the replica signs the same head again. `pairtimed` stores each head in its database before it writes the head's file, and it resumes the chain from the stored heads, never from the files. It writes each file under a name that starts with a dot in the file's own directory, then renames it, and the witness sidecar skips such names, so the repository never receives part of a file. A file, once written, never changes.
+
+Each bundle carries the index of each batch's leaf in its day tree and the leaf's inclusion proof (DESIGN 7.8), checked against `T_d` with `count_d` leaves. So the server keeps each published day's leaves too: the `count_d` hashes `LEAF(leaf)` in leaf order, stored in the transaction that stores the head and kept as long as any of the day's witness rows (docs/errata/2026-11-23-day-leaves-retention.md). It makes each proof from them and from the batch's own row, never from the day's other rows, so a batch's proof outlives the day's other rows, which retention and an account's erasure delete. The leaves are hashes alone, and the server doesn't publish them.
+
+A published day holds every row on it, because the server never stores a row on a day it has published. While its clock reads a time at or before the end of the newest day it has published, as after the clock was set back across a published midnight, ingest refuses every upload with 503 `day_closed` and stores and receipts nothing (ingest-v1 2.5 step 13, 2.6). Otherwise a batch could hold a receipt and be in no day's tree. And the transaction that stores a day's head counts the day's rows again: when a row came or went after the tree was built, it stores nothing, and the next run builds the tree again, so a head is stored over exactly the rows it commits to.
 
 ## 9. Verification
 
@@ -333,13 +355,13 @@ A verifier that holds a run of a device's batches, with headers and body hashes 
 8. Each inclusion proof verifies (5.2), with `n` taken from a verified head.
 9. Each day tree has its rows in order and on its own day, its `count_d`, `T_d` and `G_d` follow from them, its signature verifies over `D_d` under the server key that was valid at the end of day `d` (8), and the day chain has no gaps.
 10. Each revealed text verifies `ok` against its record's `c` (10.3).
-11. Each CC8 reveal verifies `ok` against its record's `f.mh`, given whether the text's reveal removed a span (10.8), and the draw follows from `r`, `SHA-256(M)` and the pool (10.9).
+11. The draw follows from `r`, `SHA-256(M)` and the pool (10.9).
 
 `pkg/ledger` reports a gap in `b` or `s`, a root mismatch and a head mismatch as distinct errors (WP-LG2). Each one points at a different fault: a batch that was hidden or dropped, a record that was changed or moved, a chain that was rewritten.
 
 ## 10. Content
 
-Part 2 specifies what DESIGN 3.6 commits about content. That covers the token commitment of each prompt, final agent message and `track` label; the redacted reveal that opens one; the keyed features in `f`, which let the server recompute dark-flow discounts without text (DESIGN 6.2 D18); what CC8 reveals to check them (DESIGN 7.3); and the challenge draw of DESIGN 7.5 step 4. It uses `K_tok` and `K_feat` (3) and defines version 1 of the feature map, `f.v = 1`.
+Part 2 specifies what DESIGN 3.6 commits about content. That covers the token commitment of each prompt, final agent message and `track` label; the redacted reveal that opens one; the keyed features in `f`, which let the server recompute dark-flow discounts without text (DESIGN 6.2 D18); what CC8 can check of them without a key (DESIGN 7.3); and the challenge draw of DESIGN 7.5 step 4. It uses `K_tok` and `K_feat` (3) and defines version 1 of the feature map, `f.v = 1`.
 
 SM describes several of these rules in words, such as "replaces numbers with `<n>`". This section turns each into steps, because the client that commits and the server or auditor that checks are different programs, and they must agree on every byte. A later version can improve a heuristic only as `f.v = 2`, with new keys. Records written under version 1 keep meaning what this section says (DESIGN 3.6, 6.6).
 
@@ -376,7 +398,7 @@ U+0009 to U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000 to U+200A,
 U+2028, U+2029, U+202F, U+205F, U+3000
 ```
 
-Implementations test these 25 code points directly, as 10.4 pins its lowercase table, and not through a library's `White_Space` table, which follows the library's Unicode version: U+180E left the set in Unicode 6.3. A server whose table gained a code point would read an honest kept token holding it as mixing kinds, `bad_item` (10.3), and its CC8 shingles would stop matching the client's. Go's `unicode.IsSpace` tests the same set today, which makes it a useful cross-check in tests. Python's `str.isspace` doesn't, because it adds U+001C to U+001F.
+Implementations test these 25 code points directly, as 10.4 pins its lowercase table, and not through a library's `White_Space` table, which follows the library's Unicode version: U+180E left the set in Unicode 6.3. A server whose table gained a code point would read an honest kept token holding it as mixing kinds, `bad_item` (10.3), and would strip and normalize texts (10.4) unlike the client, so CC8 could fail an honest turn (10.8). Go's `unicode.IsSpace` tests the same set today, which makes it a useful cross-check in tests. Python's `str.isspace` doesn't, because it adds U+001C to U+001F.
 
 The tokens of a text are its maximal runs of whitespace and its maximal runs of other code points, in order. So neighbouring tokens are of different kinds, no token is empty, and the tokens concatenate to the text. The empty text has no tokens. CRLF is a whitespace token, or part of one. Tokens are numbered from `j = 1` to `n`.
 
@@ -482,7 +504,7 @@ So `still broken, see src/nav.js:12` normalizes to `<retry> see <path>`. Punctua
 
 ### 10.5 Shingles and the keyed MinHash
 
-The shingles of a prompt follow SM 8.5. When the prompt has six or more normalized words, they are its word 3-shingles: each run of three consecutive words, joined by single spaces. When it has fewer, they are the character 5-shingles of the normalized text: each run of five consecutive code points. A normalized text of one to four code points is its own single shingle, and the empty text has none. The shingles form a set, so a repeated shingle counts once.
+The shingles of a prompt follow SM 8.5. When the prompt has six or more normalized words, they are its word 3-shingles: each run of three consecutive words, joined by single spaces. When it has fewer, they are the character 5-shingles of the normalized text: each run of five consecutive code points. A normalized text of one to four code points is its own single shingle, and the empty text has none. The shingles form a set, so a repeated shingle counts once. The six, three and five are SM 8.5's `SHINGLE_MIN_WORDS`, `SHINGLE_WORDS` and `SHINGLE_CHARS`, and the 64 below is its `MINHASH_PERMS`. Version 1 of the feature map fixes all four, so a new value takes `f.v = 2` (10, 10.7).
 
 Each shingle `x` gets a per-shingle value under `K_feat`, with a tag byte for its kind:
 
@@ -491,7 +513,7 @@ v(x) = HMAC-SHA256(K_feat, 0x05 || x)        a word 3-shingle
 v(x) = HMAC-SHA256(K_feat, 0x06 || x)        a character 5-shingle
 ```
 
-`x` is the shingle's UTF-8 bytes. A shingle's 64 MinHash values come from `v(x)` through SHA-256, so CC8 can recompute them from revealed values (10.8):
+`x` is the shingle's UTF-8 bytes. A shingle's 64 MinHash values come from `v(x)` through SHA-256:
 
 ```text
 B_k(x)      = SHA-256(0x05 || v(x) || u8(k))     for k = 0 to 7
@@ -516,7 +538,7 @@ es = K16(0x01, error signature)      th = K16(0x02, template)
 ch = K16(0x03, command)              p  = K16(0x04, path)
 ```
 
-`x` is UTF-8 bytes. The tags keep kinds apart. A command and an error signature with the same text get different values, and a per-shingle value revealed for CC8 (10.8) can't be matched against a command or an error value. In JSON each value is 32 lowercase hex digits, which also makes it a valid `pkg/event` opaque key.
+`x` is UTF-8 bytes. The tags keep kinds apart, so a command and an error signature with the same text get different values. In JSON each value is 32 lowercase hex digits, which also makes it a valid `pkg/event` opaque key.
 
 **Error signature.** The signature of a text is its first line, in the lines of 10.4 step 1, searching from the top and inside fenced and pasted blocks too, whose stripped form matches one of `E1` to `E6`. Split that stripped line into words, pass each word through the substitutions of 10.4 step 5, and join the words with single spaces. The signature isn't lowercased and gets neither step 6 nor step 7, because an error line's punctuation is the program's, the same each time the error recurs. A text with no such line has no signature. A traceback's signature is its exception line, because no frame line matches `E1`. `es` is the one way pairtime keys an error signature. A prompt's goes in `f.es`. An `agent.tool` record takes its signature from the tool's output, and a `shell.command` record from the command's output where pairtime reads it, which SM 4.2 doesn't for human terminals in v1. Either way the keyed value goes in the event's own `error_sig` field as hex (DESIGN 3.6). Using one function for both lets the fix-it rule count a pasted error and the agent's test failure as one error (SM 4.2).
 
@@ -553,7 +575,7 @@ DESIGN 3.6 writes a hunk as `(HMAC(K_feat, path), start line, end line)`. This s
 
 The writer puts `f` in the body of every `prompt.submit`, `agent.tool`, `shell.command`, `cli.track` and `relay.message` record, even when it holds only `v`, and in no other record (4.5). A prompt whose text the device never had, and so has no `c` (10.1), has an `f` of only `v` and `pc`, and so does every `relay.message`. So an `f` fits its kind when it holds `v` and, for `prompt.submit` and `cli.track`, either `mh`, `th` and `pc` and maybe `es`, on a record with `c`, or `pc` alone, on one without; for `relay.message`, `pc` alone; for `agent.tool`, maybe `h` and `ch`; for `shell.command`, maybe `ch`. Each hunk in `h` has exactly the five members of 10.6.
 
-`pc` is SM 2.2's class of the text, as the writer computed it when it wrote the record, whatever origin the prompt later turns out to have (DESIGN 3.6 calls it "prompt_class as computed"). SM 2.2 and `pkg/score` own that rule, and CC8 recomputes it for challenged turns. `cli.track` carries the prompt features because DESIGN 5.4 classes a `track` anchor "like a prompt from its text length and content", while the server re-scores from bodies, never from text (DESIGN 6.5 and D18). `relay.message` carries `pc` because a relayed anchor takes its class from the app's own text, not from the prompt the hook saw (SM 2.2 rule 9), and the server re-scores without either text.
+`pc` is SM 2.2's class of the text, as the writer computed it when it wrote the record, whatever origin the prompt later turns out to have (DESIGN 3.6 calls it "prompt_class as computed"). SM 2.2 and `pkg/score` own that rule, and CC8 checks it on challenged turns whose reveal removed nothing (10.8). `cli.track` carries the prompt features because DESIGN 5.4 classes a `track` anchor "like a prompt from its text length and content", while the server re-scores from bodies, never from text (DESIGN 6.5 and D18). `relay.message` carries `pc` because a relayed anchor takes its class from the app's own text, not from the prompt the hook saw (SM 2.2 rule 9), and the server re-scores without either text.
 
 The writer emits `f` and `c` the way `encoding/json` writes `pkg/ledger`'s types, as for the rest of the body (4.5): members in the order of the table, absent where it says, and no insignificant whitespace. For the prompt in 10.10, `f` is
 
@@ -569,31 +591,26 @@ with `mh` shortened here. An `agent.tool` record that ran `npm test` and changed
 
 A later version adds keys and raises `v`, and its rules apply only to records that carry the new keys (DESIGN 3.6, 6.6). A refit of SM's parameters never changes `f`. So `v` is an integer from 1 up, and a version 1 map holds only this table's members. An `f` whose `v` is missing, isn't an integer or is below 1, that holds a member the table doesn't list under `v = 1`, or whose `v`, `mh`, `th`, `es`, `pc`, `h` or `ch` is `null`, is malformed, and its body fails verification. A reader that meets a `v` above its own reports the record's features as unknown and doesn't guess at them. For a server that is still a fault: a server is never older than the clients that write to it, so it refuses or holds a record whose `f.v` is newer than its own, and a modified client can't switch off the re-score of D18 by writing `{"v":2}`.
 
-### 10.8 What CC8 reveals
+### 10.8 What CC8 can check
 
-For each challenged prompt or `track` call, the client reveals the per-shingle value of every distinct shingle that touches no removed span, with the shingle's text, in ascending order of `v` compared byte by byte, and names the kind of its shingles:
+CC8 (DESIGN 7.3, WP-TR2) checks each challenged prompt or `track` call against what its record committed, using only checks that need no key. No per-shingle value or other keyed value leaves the device for it: the server has the text's reveal (10.3) and the record's body from the metadata reveal.
 
-```json
-{"kind": "char5", "entries": [{"v": "8bb3f386a2bdedcd87146997843e177a9fd5e405272bdf1005f3eb37b499a41e", "x": "203c706174"}, ...]}
-```
+On every reveal, `f` must hold `es` when a line that the reveal shows whole matches one of `E1` to `E6` once stripped (10.4 step 2), because the text then has an error signature (10.6). A line is shown whole when the reveal keeps every token that holds one of its code points or one of the line feeds around it.
 
-`x` is the shingle's UTF-8 bytes in hex, and `kind` is `word3` or `char5` (10.5). A shingle that touches a removed span gets no entry at all, value included. `v(x)` is the same in every text the device writes, so a value sent without its text would undo the removal: the server could match it against the same shingle shown in another reveal of the device, or test it against the minima of every committed sketch it holds, and learn the removed words. 10.2 salts each token separately so that a removed token's leaf can't be matched; a hidden shingle's value would give that back.
+When the reveal removed nothing, the server has the whole text and also checks:
 
-**Touching.** Each normalized word comes from tokens of the text (10.2): a word of step 3 from the one token it is, since LF and CR are whitespace and no token crosses a line, and a `<retry>` of step 7 from every token of the words it replaced. A character shingle touches a removed span when every place it occurs in the normalized text holds a code point of a word that comes from a token in the span; the single spaces between words come from no token. A word shingle touches one when every run of three words that makes it holds such a word. So a shingle is shown exactly when it occurs somewhere built from kept tokens alone, and its text then reveals nothing the kept text doesn't. A token that step 2 removed, with its whole line, makes no word, and nothing touches it. For `fix it for bob` with `bob` removed, the normalized text is `<retry> for bob`, and the shingles `for b`, `or bo` and `r bob` touch the span and go, while `<retr`, `retry`, `etry>`, `try> `, `ry> f`, `y> fo`, `> for` and ` for ` stay.
+1. For a `prompt.submit`, `len_chars` is the number of code points in the text, and `typed_len_est` is at most `len_chars`.
+2. For a `prompt.submit`, `low_effort` is what `pkg/score`'s `LowEffort`, SM 2.2's go-ahead test, gives the text.
+3. `f` holds no `es` when the text has no error signature.
+4. `f.pc` is the class `pkg/score` gives the record (SM 2.2; DESIGN 5.4 for a `track` call, from its revealed label).
 
-Against the record's committed `mh`, and knowing from the text's reveal whether it removed any span, the server checks:
+CC8 also compares the challenged turns one submission reveals, sticky re-reveals included (DESIGN 7.5 step 5), that are of one chain, and so written under one `K_dev` (3), have the same `f.v`, and whose reveals removed nothing. Two whose normalized texts (10.4) are equal must carry the same `th` and the same `mh`, and two whose error signatures are equal must carry the same `es`. Every turn of a pair that breaks this fails, because the server can't tell which value is honest. Turns of other submissions aren't compared, so DESIGN 4.4's retention and 7.11's purges never leave CC8 holding text they removed, and `pairtime verify --fetch-reveals`, which fetches only the submission's own reveals, has everything a verdict rests on (DESIGN 7.8).
 
-1. `bad_entry`: a value isn't 32 bytes or isn't greater than the value before it, or its `x` is empty or isn't valid UTF-8.
-2. `sketch`: with nothing removed, the sketch computed from the values as in 10.5 isn't `mh`. With spans removed, some value's hash is below `mh` at a place `i`, which no shingle of the text could give, because `mh[i]` is the least of them.
-3. `ok`: neither of the above. With spans removed, the places at which no shown value reaches `mh` are the ones hidden shingles set, and the server reports how many there are.
+A withheld, expired, purged or unavailable (DESIGN 7.5 step 8) turn has nothing to check. A turn whose reveal removed a span gets only the `es` rule above.
 
-CC8 (WP-TR2) then checks the shown shingles against the revealed text. When nothing was removed, the server normalizes the text itself, and `kind` and the `x` values must be exactly the text's kind and shingles. When spans were removed, the kept tokens alone don't fix the normalization, because a removed token can change which lines step 2 removes, which words step 7 merges and which shingles neighbour, so CC8 relies on the verdict above and the count it reports.
+**What these checks can't prove.** The server can't check a keyed value against `K_feat`, which only the device holds. A client that keys a turn's `mh`, `th` or `es` under a key of its own is caught only when another turn the submission reveals has the same normalized text or error signature: for one loop of five identical prompts, three of them keyed that way, in a pool of 100, a draw of 10 holds such a pair with probability under 0.07. A client that keeps honest sketches but writes a fresh made-up `es` with each pasted error keeps its pastes out of SM 4.2's error count and makes each paste a new error signature, which ends re-roll, rewrite and autopilot counts, and CC8 sees it only when two revealed prompts share a signature. Prompts that differ by a word are never compared. Withholding a drawn turn costs its minutes (DESIGN 7.5 step 7). A removed span of any type takes the turn out of every rule but the `es` rule, and out of that rule for each line it touches. A span's type is the client's own claim (10.3), so a modified client can remove one token of each drawn turn as `known` or `pii`, which looks like routine redaction. The figure above, and DESIGN 7.3's 0.65, hold only against a client that removes nothing from the turns it reveals. Nothing checks the `h`, `ch` and `error_sig` of `agent.tool` and `shell.command`, which come from output that is never revealed, and a made-up `error_sig` on an agent's test run is a new error signature, which SM 4.2 counts as a change event. The flags behind SM 2.2's `answer` class, a prompt's `answers_question`, an earlier `agent.output`'s `asks_question` and an `agent.stop` on a question, have no rule a text can be checked against. DESIGN 7.12 accepts all of these as T9 residue.
 
-Across a device's reveals, CC8 checks what needs no key. The same `(kind, x)` must come with the same `v` in every reveal; the kind is part of the key, because `0x05` and `0x06` give one text two honest values. Two revealed prompts whose normalized texts are equal must carry the same `th`, and two whose error signatures are equal must carry the same `es`; a revealed prompt with no signature carries no `es`, and one with a signature carries one. These comparisons use only reveals the evidence store still holds, so DESIGN 4.4's retention and 7.11's purge apply to them as to the reveals: a purged or expired reveal leaves nothing behind for CC8 to match later texts against.
-
-These checks are weaker than DESIGN 7.3 assumes, and nothing checks the `es` of `agent.tool` and `shell.command`, which comes from output that is never revealed. The server can't check a value against `K_feat`. A client that commits each prompt's sketch under a different made-up key can reveal values under that key, and they reproduce its sketch. CC8 catches that client only when two revealed turns share a shingle and show different values for it, and a span removed by hand over the shared words hides even that. A value that sets no minimum can also change without changing the sketch. A client that keeps honest sketches but writes a fresh made-up `es` with each pasted error resets SM 4.2's error count and makes each paste a change event, and CC8 sees it only when two revealed prompts share a signature. DESIGN 7.3 says a draw of 10 turns catches a client that falsifies 10% of prompts with probability 0.65. That figure assumes each falsified turn fails on its own, which holds only for a client that falsifies sketches and then reveals true values; `docs/errata/2026-11-19-cc8-detection.md` records the difference for Karim, who decides in issue #15 what CC8 is for.
-
-A shown value still lets the server test which other committed sketches have `x` as a minimum somewhere, and so learn that other prompts probably contain a shingle it saw in a challenged one. That shingle's text was shown, so what the server learns is only that it recurs.
+**What the server learns.** CC8 shows the server nothing beyond the text the teen kept. Comparing committed values is part of re-scoring anyway: the server holds the `th` and `mh` of every prompt in the reveal set (DESIGN 6.5), so an equal `th` or a close `mh` already tells it that an unrevealed prompt repeats a revealed one.
 
 ### 10.9 The challenge draw
 
@@ -603,12 +620,12 @@ DESIGN 7.5 step 4, to the byte:
 seed  = SHA-256(r || SHA-256(M))
 score = HMAC-SHA256(seed, u8(len(device_id)) || ascii(device_id) || u64(s))      a turn
 score = HMAC-SHA256(seed, 0x00 || commit id)                                      a commit
-K     = min(30, max(10, ceil(P / 10)))                                            CHALLENGE_K, P turns in the pool
+K     = min(CHALLENGE_K_MAX, max(CHALLENGE_K_MIN, ceil(CHALLENGE_K_FRAC * P)))    CHALLENGE_K, P turns in the pool
 ```
 
 `r` is the server's 32 random bytes from the freeze. `M` is the metadata reveal as the client sent it, before sealing (DESIGN 7.6). DESIGN 7.8's bundle carries `r` and the seed, and it also has to carry `SHA-256(M)` for an auditor to recompute the seed (WP-SB8). `device_id` carries the one-byte length of part 1 (7, 8).
 
-The draw ranks the pool, every `(device_id, s)` that WP-SB5 admits under DESIGN 7.5 step 4, by score, comparing scores as 32-byte strings, smallest first. It takes the first `min(K, P)`. A pool lists each item once, so two items can tie only through an HMAC collision. 10% of the pool rounds up, so `K` is 10 for pools of up to 100, 11 for 101 to 110, and 30 from 291 on.
+The draw ranks the pool, every `(device_id, s)` that WP-SB5 admits under DESIGN 7.5 step 4, by score, comparing scores as 32-byte strings, smallest first. It takes the first `min(K, P)`. A pool lists each item once, so two items can tie only through an HMAC collision. The three parameters come from the parameter table frozen with `r` (DESIGN 6.3, 7.5 step 4), and the bundle carries that table's hash with the pool (DESIGN 7.8). `CHALLENGE_K_FRAC × P` is an exact rational and rounds up. Table 0.1.0, which the vectors use, gives `K = min(30, max(10, ceil(P / 10)))`, so `K` is 10 for pools of up to 100, 11 for 101 to 110, and 30 from 291 on.
 
 The two interview commits are the two with the smallest commit scores, or every commit when there are fewer than two. A commit id is the commit's raw hash: 20 bytes for SHA-1 and 32 for SHA-256. Its `0x00` first byte can never start a turn's input, which starts with a length from 1 to 128. Which commits are eligible is WP-SB5's to decide.
 
@@ -637,7 +654,7 @@ C       = aa9bfca6f19928733e7a62d0bfad12c6251486f7085a01a297e110631d80ad8b
 
 A reveal that removes token 7 as `known` keeps tokens 1 to 6 and 8 to 15 with their salts, and puts `{"type": "known", "count": 1, "leaves": ["7aa84523..."]}` in place of token 7. It verifies `ok`.
 
-Normalizing it removes the second line, an error line by `E1`. The first line's words become `still`, `broken,`, `see` and `<path>`, and `still broken,` becomes `<retry>`, which leaves `<retry> see <path>`. That is three words, so the shingles are the 14 character 5-shingles of those 18 code points, in ascending order:
+Normalizing it removes the second line, an error line by `E1`. The first line's words become `still`, `broken`, `see` and `<path>`, because step 6 strips the comma, and `still broken` becomes `<retry>`, which leaves `<retry> see <path>`. That is three words, so the shingles are the 14 character 5-shingles of those 18 code points, in ascending order:
 
 ```text
 " <pat"  " see "  "<path"  "<retr"  "> see"  "e <pa"  "ee <p"
@@ -704,7 +721,7 @@ python3 -I tools/ledger_ref.py vectors-content [--out PATH]
 python3 -I tools/ledger_ref.py check FILE
 ```
 
-`selftest` checks the RFC 5869, RFC 4231 and Certificate Transparency vectors, the rtype table against `pkg/event`'s `kindTable`, and the worked example in section 12 against this file: each of its code blocks, byte for byte, against the same block rendered from the reference's values. Then it checks that `vectors.json` is byte for byte what `vectors` writes, that it passes `check`, and that `check` reports each of 35 kinds of tampering with it under the rule the change breaks. 19 of those changes come with every value derived from them recomputed, so that their rule is the only one that can catch them. For part 2 it checks the whitespace set of 10.2 against Python's `str.isspace`, the lowercase table of 10.4 against Python's `unicodedata`, the tokenizer, the 16 KiB cut, reveals with random removals and every single-item change to them, the MinHash estimate's error and bias on random sets, hunks from patches with context against hunks from the text before and after, and the draw. Then it checks the worked example in 10.10 against this file and that its reveal verifies `ok`, that `vectors-content.json` is byte for byte what `vectors-content` writes, that it passes `check`, that `check` catches 38 kinds of change to it, and that a `note` on a part 2 object changes nothing. `ci.yml` runs it on every PR.
+`selftest` checks the RFC 5869, RFC 4231 and Certificate Transparency vectors, the rtype table against `pkg/event`'s `kindTable`, and the worked example in section 12 against this file: each of its code blocks, byte for byte, against the same block rendered from the reference's values. Then it checks that `vectors.json` is byte for byte what `vectors` writes, that it passes `check`, and that `check` reports each of 35 kinds of tampering with it under the rule the change breaks. 19 of those changes come with every value derived from them recomputed, so that their rule is the only one that can catch them. For part 2 it checks the whitespace set of 10.2 against Python's `str.isspace`, the lowercase table of 10.4 against Python's `unicodedata`, the tokenizer, the 16 KiB cut, reveals with random removals and every single-item change to them, the MinHash estimate's error and bias on random sets, hunks from patches with context against hunks from the text before and after, and the draw. Then it checks the worked example in 10.10 against this file and that its reveal verifies `ok`, that `vectors-content.json` is byte for byte what `vectors-content` writes, that it passes `check`, that `check` catches 34 kinds of change to it, and that a `note` on a part 2 object changes nothing. `ci.yml` runs it on every PR.
 
 `check FILE` recomputes every value in a file in the format of 11.3 and prints each mismatch with its JSON path. `pkg/ledger`'s tests write such files and run `check` on them (WP-LG2, WP-LG4).
 
@@ -731,11 +748,10 @@ Each command exits 0 when everything matches, 1 when a value doesn't, and 2 for 
 | `features[]` | `k_dev`, `rtype`, `f`, and by kind: for `prompt.submit` and `cli.track`, `prompt_class`, and `text` and `shingle_values` (in the order of the shingles) unless the record is a `prompt.submit` whose text the device never had (10.1), which has neither; for `relay.message`, `prompt_class` alone, since it commits no text; for `agent.tool`, `hunks[]`, each `path`, `old_start`, `old_lines`, `new_start`, `new_lines`, and optional `command`; for `shell.command`, optional `command` (10.5 to 10.7) |
 | `diffs[]` | `hunks[]`, each `old_start`, `old_lines`, `new_start`, `new_lines`, and either `patch`, an object of `old_start`, `old_lines`, `new_start`, `new_lines` and `lines[]`, each the hex of one line with its leading ` `, `-`, `+` or `\`, or `before` and `after`, the file's text before and after one edit (10.6) |
 | `jaccard[]` | `a`, `b` (sketches), `matches` (`m` of 10.5) |
-| `shingle_reveals[]` | `mh`, `kind` (`word3` or `char5`), `removed` (whether the text's reveal removed a span), `entries[]`, each `v` and `x`, `verdict`: `ok`, `bad_entry` or `sketch`, and with `ok`, `unexplained`, the number of places no shown value reaches (10.8) |
 | `draws[]` | `r`, `metadata` (`M`), `seed`, `pool[]`, each `device_id`, `seq`, `score`, `drawn[]`, each `device_id`, `seq`, smallest score first, and optional `commits[]`, each `commit`, `score`, with `drawn_commits[]`, each `commit` (10.9) |
 | `challenge_k[]` | `pool` (`P`), `k` (`CHALLENGE_K`), `drawn` (`min(K, P)`) |
 
-Texts, tokens, commands and shingles are hex of their UTF-8 bytes, like every other byte string here. The texts of commitments, normalizations and features, a commitment's tokens and commands must be valid UTF-8: `check` reports a commitment text that isn't as a mismatch, because no writer can commit it (10.1), and any other such bytes as a format error. A reveal's tokens and a CC8 reveal's `x` values are the exception. A failing case may hold bytes that aren't UTF-8 there, because a verifier has to give them a verdict: `bad_item` for a token (10.3) and `bad_entry` for an `x` (10.8). Every object of the part 2 sections may carry a `note` string, which `check` ignores. A reveal or shingle reveal states the verdict it should get, so a file can hold failing cases as well as passing ones.
+Texts, tokens, commands and shingles are hex of their UTF-8 bytes, like every other byte string here. The texts of commitments, normalizations and features, a commitment's tokens and commands must be valid UTF-8: `check` reports a commitment text that isn't as a mismatch, because no writer can commit it (10.1), and any other such bytes as a format error. A reveal's tokens are the exception. A failing case may hold bytes that aren't UTF-8 there, because a verifier has to give them a verdict, `bad_item` (10.3). Every object of the part 2 sections may carry a `note` string, which `check` ignores. A reveal states the verdict it should get, so a file can hold failing cases as well as passing ones.
 
 Besides recomputing each value from the file's own inputs, `check` applies these rules:
 
@@ -767,8 +783,7 @@ The bodies are stand-ins: the real envelope with the record's real nonce, and `"
 - `normalizations`: each rule of 10.4 and each pattern `F1` to `G`, rustc's, `go run`'s and the JVM's output as they print it, the cases where a rule doesn't apply, pastes in the wrapper Claude Code 2.1.327 writes with typed text after them, SM 6.5's 20:02 and 20:07 prompts, which normalize to one text, edge punctuation around placeholders, and 10 random texts.
 - `features`: prompts with and without an error signature, three versions of one re-roll, an empty prompt, a prompt of nothing but a paste, a paste in Claude Code's wrapper followed by a question, a bridge prompt with no text, SM 6.5's 20:02 and 20:07 prompts, a `track` label, `agent.tool` records with hunks across two files, an insertion, a deletion, a file outside the project and a Windows path, a command, and a read with neither, and `shell.command` records with and without a command.
 - `diffs`: patch hunks with three lines of context, among them the two appends of 10.6, a run with removed and added lines, two runs in one patch hunk, a new file, a deleted file, a line without its LF, and a patch whose counts don't add up; and edits given as text before and after, among them one inside a line, an insertion between two equal lines, and an edit that changes nothing.
-- `shingle_reveals`: whole CC8 reveals, and reveals of texts with spans removed as the client builds them, among them `fix it for bob`, a shingle that occurs both beside a removed token and among kept ones, a word shingle beside a removed token, a removed token on a line step 2 removes, and everything removed; then each failing verdict, among them an empty `x`, an `x` that isn't UTF-8, a value below a committed minimum with spans removed, and entries out of order with a shingle missing, which is `bad_entry` before it is `sketch`.
-- `jaccard`, `shingle_reveals` and `draws`: the pairs, CC8 reveals and draws built from those, including each failing verdict, a pool smaller than `CHALLENGE_K`, a pool of 300 where the cap applies, and an empty pool.
+- `jaccard` and `draws`: the pairs and draws built from those, including a pool smaller than `CHALLENGE_K`, a pool of 300 where the cap applies, and an empty pool.
 
 ## 12. Worked example
 
@@ -920,7 +935,7 @@ Part 2 decides these, for DESIGN 3.6, 5.4, 7.3 and 7.5 and SM 4.2 and 8.5:
 20. Each 16-byte keyed value has a tag for its kind. The template is the normalized text. The error signature is the first line matching `E1` to `E6`, substituted but not lowercased, and the same function fills `agent.tool` and `shell.command` `error_sig`. Commands collapse whitespace; paths are relative to the project root with `/` (10.6).
 21. A hunk carries the four numbers of a `diff -U0` hunk, changed lines only, taken from a patch's lines without its context or from the file's lines before and after an edit. DESIGN 3.6 gives a start and an end line, but SM 4.2's rewrite rule shifts ranges by later diffs, which needs both extents (10.6).
 22. `f`'s members, their order, their encodings, and `f` on every record of the four kinds from version 1 on, even when it holds only `v` (10.7).
-23. CC8 reveals one value per distinct shingle that touches no removed span, ascending, always with its text, and names the shingles' kind; a shingle that touches a removed span sends nothing, because its value would undo the removal. 10.8 defines touching, says what CC8 checks with and without removed spans and across reveals, and states what that can't prove, which is less than DESIGN 7.3 assumes.
+23. CC8 reveals no keyed value. Without the key it checks `es` against each line a reveal shows whole; on a reveal that removed nothing, the lengths, `low_effort`, `es` and `pc` against the text; and equal `th`, `mh` and `es` between a submission's revealed turns of one chain with equal normalized texts or error signatures. 10.8 states what that can't prove, which is less than DESIGN 7.3 first claimed (issue #15).
 24. The draw: the seed hashes the metadata reveal as sent, before sealing; `device_id` carries part 1's length byte; commits are scored with a `0x00` first byte; `CHALLENGE_K` rounds 10% up (10.9).
 
 The review of parts 1 and 2 (issue #19) decided these, before any device witnessed data:
@@ -935,3 +950,10 @@ The review of parts 1 and 2 (issue #19) decided these, before any device witness
 32. One `K_dev` writes one chain, so no `s` repeats under it. An install restored with `pairtime restore` writes a new chain under a new `K_dev` and keeps the old key only to verify and open the old chain. DESIGN 7.11 unwraps the old key onto the new install, and a second chain from `s = 1` under it would repeat every nonce and token salt (3, 4.1).
 33. A day head is signed with the server key that was valid at the end of its day, whenever it is signed or published, so a verifier knows the key from `d` alone. Section 9 gave a receipt's key and not a day head's (8, 9).
 34. A verifier fails a record of rtype `0x00` or `0x42` to `0xff`. One from `0x14` to `0x3f` that it doesn't know is an event kind added later, as `0x13` is to a verifier built before `relay.message` took it: it reports the kind as unknown, leaves the body unchecked and still verifies the batch, and a server, never older than its clients, refuses or holds it. 4.2 said such a batch still verifies, while section 9 required every rtype to be in the table (4.2, 9).
+
+WP-SV17 decided these, as section 8 said it would:
+
+35. The day file: its path by UTC date, its nine members in their order, and nothing in it from a device but hashes and a count (8).
+36. A day is due 10 minutes after it ends, once its last rows are in the replica. The server stores each head before it writes the head's file, and resumes the chain from its stored heads (8).
+37. The server keeps each published day's leaf hashes as long as any of the day's witness rows, so a batch's inclusion proof outlives the day's other rows (8; docs/errata/2026-11-23-day-leaves-retention.md).
+38. While the server's clock reads a time at or before the end of the newest day it has published, ingest refuses every upload with 503 `day_closed`, and the transaction that stores a day's head recounts the day's rows, so no batch is ever stored on a published day and every receipted batch is in its day's tree (8; ingest-v1 2.5 step 13).

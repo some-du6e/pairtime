@@ -633,7 +633,7 @@
               "rtype": 3,
               "project_key": "p_b2738424d7c2",
               "session_key": "s_45dccad56214",
-              "body": "{\"n\":\"c5033a81794f2b9d126fe987132c805309c7fe7dcbaac05e7663992c96b60887\",\"e\":{\"event_id\":\"01a20791-b7c0-75a2-ae7c-ce5d7be0d08b\",\"device_id\":\"d_61e266631200\",\"seq\":9087,\"t\":1795423320000,\"mono\":41989000,\"boot_id\":\"b_5098bf9ab743\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_45dccad56214\",\"project_key\":\"p_b2738424d7c2\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_a433d069cb4d\",\"len_chars\":10,\"pasted_chars\":0,\"typed_len_est\":10,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":false}},\"f\":{\"v\":1,\"mh\":\"3cac33b0144c9c8404549d0e07eb5af139ef20de2c0efab50305217463ab8cdf639abf6c50173823020645c05e9cece717ca560b5164260f0342baf001144ead0c45d75c374907dd24993f870b65886242d2bfc711134adc4b7fa9a71ecbd7185e104b5b2b53010508506c7e139fc58b23bb68e8169e882518b5fc8973e0664997b6304918bff758126951cf0af22cc856213122255c875647d4fdc31041a6f8223e0d203b41568a1b0ab6e50e6655291e6b52c53a203a0d510d44423930270b3c7b4d16384fde8f0c6f3c4d34bdfc3c494e7a330c14e743183ee3c16584d73c2d18507800ec2d9ec47201297911f70a3402c3d7392127661fba409018dda552\",\"th\":\"2f1d889d9e5c6e5c92c7914b1511bb0b\",\"pc\":\"substantive\"},\"c\":{\"n\":3,\"r\":\"9e2538f583be0141ca1c815f04fe3726953b66811233dfa3a45cbde0a6f6a036\"}}"
+              "body": "{\"n\":\"c5033a81794f2b9d126fe987132c805309c7fe7dcbaac05e7663992c96b60887\",\"e\":{\"event_id\":\"01a20791-b7c0-75a2-ae7c-ce5d7be0d08b\",\"device_id\":\"d_61e266631200\",\"seq\":9087,\"t\":1795423320000,\"mono\":41989000,\"boot_id\":\"b_5098bf9ab743\",\"source\":\"hook\",\"via\":\"hook\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_45dccad56214\",\"project_key\":\"p_b2738424d7c2\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_a433d069cb4d\",\"len_chars\":10,\"pasted_chars\":0,\"typed_len_est\":10,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":true}},\"f\":{\"v\":1,\"mh\":\"3cac33b0144c9c8404549d0e07eb5af139ef20de2c0efab50305217463ab8cdf639abf6c50173823020645c05e9cece717ca560b5164260f0342baf001144ead0c45d75c374907dd24993f870b65886242d2bfc711134adc4b7fa9a71ecbd7185e104b5b2b53010508506c7e139fc58b23bb68e8169e882518b5fc8973e0664997b6304918bff758126951cf0af22cc856213122255c875647d4fdc31041a6f8223e0d203b41568a1b0ab6e50e6655291e6b52c53a203a0d510d44423930270b3c7b4d16384fde8f0c6f3c4d34bdfc3c494e7a330c14e743183ee3c16584d73c2d18507800ec2d9ec47201297911f70a3402c3d7392127661fba409018dda552\",\"th\":\"2f1d889d9e5c6e5c92c7914b1511bb0b\",\"pc\":\"substantive\"},\"c\":{\"n\":3,\"r\":\"9e2538f583be0141ca1c815f04fe3726953b66811233dfa3a45cbde0a6f6a036\"}}"
             },
             {
               "seq": 9088,
@@ -652,7 +652,7 @@
               "rtype": 3,
               "project_key": "p_b2738424d7c2",
               "session_key": "s_45dccad56214",
-              "body": "{\"n\":\"e47b42dbfebcd2181bfe9c5082f98dfa5f3c6c1e5b6f1e942a9ddd3c23aab2ef\",\"e\":{\"event_id\":\"01a20791-c954-769b-82d8-e210f8e5391d\",\"device_id\":\"d_61e266631200\",\"seq\":9089,\"t\":1795423324500,\"mono\":41993500,\"boot_id\":\"b_5098bf9ab743\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_45dccad56214\",\"project_key\":\"p_b2738424d7c2\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_a433d069cb4d\",\"len_chars\":10,\"pasted_chars\":0,\"typed_len_est\":10,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":false}},\"f\":{\"v\":1,\"mh\":\"3cac33b0144c9c8404549d0e07eb5af139ef20de2c0efab50305217463ab8cdf639abf6c50173823020645c05e9cece717ca560b5164260f0342baf001144ead0c45d75c374907dd24993f870b65886242d2bfc711134adc4b7fa9a71ecbd7185e104b5b2b53010508506c7e139fc58b23bb68e8169e882518b5fc8973e0664997b6304918bff758126951cf0af22cc856213122255c875647d4fdc31041a6f8223e0d203b41568a1b0ab6e50e6655291e6b52c53a203a0d510d44423930270b3c7b4d16384fde8f0c6f3c4d34bdfc3c494e7a330c14e743183ee3c16584d73c2d18507800ec2d9ec47201297911f70a3402c3d7392127661fba409018dda552\",\"th\":\"2f1d889d9e5c6e5c92c7914b1511bb0b\",\"pc\":\"substantive\"},\"c\":{\"n\":3,\"r\":\"65df027a7538905bd53eba5848c655dfe5770eabc251e9d872f1952cca180eb6\"}}"
+              "body": "{\"n\":\"e47b42dbfebcd2181bfe9c5082f98dfa5f3c6c1e5b6f1e942a9ddd3c23aab2ef\",\"e\":{\"event_id\":\"01a20791-c954-769b-82d8-e210f8e5391d\",\"device_id\":\"d_61e266631200\",\"seq\":9089,\"t\":1795423324500,\"mono\":41993500,\"boot_id\":\"b_5098bf9ab743\",\"source\":\"log\",\"via\":\"log\",\"harness\":\"claude_code\",\"harness_version\":\"2.1.328\",\"session_key\":\"s_45dccad56214\",\"project_key\":\"p_b2738424d7c2\",\"kind\":\"prompt.submit\",\"data\":{\"turn_key\":\"t_a433d069cb4d\",\"len_chars\":10,\"pasted_chars\":0,\"typed_len_est\":10,\"origin_declared\":\"none\",\"matches_pending_cron\":false,\"answers_question\":false,\"low_effort\":true}},\"f\":{\"v\":1,\"mh\":\"3cac33b0144c9c8404549d0e07eb5af139ef20de2c0efab50305217463ab8cdf639abf6c50173823020645c05e9cece717ca560b5164260f0342baf001144ead0c45d75c374907dd24993f870b65886242d2bfc711134adc4b7fa9a71ecbd7185e104b5b2b53010508506c7e139fc58b23bb68e8169e882518b5fc8973e0664997b6304918bff758126951cf0af22cc856213122255c875647d4fdc31041a6f8223e0d203b41568a1b0ab6e50e6655291e6b52c53a203a0d510d44423930270b3c7b4d16384fde8f0c6f3c4d34bdfc3c494e7a330c14e743183ee3c16584d73c2d18507800ec2d9ec47201297911f70a3402c3d7392127661fba409018dda552\",\"th\":\"2f1d889d9e5c6e5c92c7914b1511bb0b\",\"pc\":\"substantive\"},\"c\":{\"n\":3,\"r\":\"65df027a7538905bd53eba5848c655dfe5770eabc251e9d872f1952cca180eb6\"}}"
             },
             {
               "seq": 9090,
@@ -1040,64 +1040,64 @@
           "b": 3023,
           "n": 2,
           "prev": "db655cc11dfac6a39ffbb9ee7f8d37122b496f352ee43fa5ffa6b773ce950f41",
-          "root": "22e49dc23198201fefd4e9dd0fbbde1048a0cc44721f62fbd24c161f1e889502",
-          "head": "34037f682e1d4384fa61f5e238003904c2051d0924278d5daf354717d09ca728",
+          "root": "6253131eaf9e8d89dee937d41e517f067a7730d032d2ed3ce6fb13af8ef067fa",
+          "head": "135e4cf2d8cb56cabcb6fceeb99de875fe7452efa27e43cd4189fd9b62c9582b",
           "received_at": 1795423321214
         },
         {
           "b": 3024,
           "n": 8,
-          "prev": "34037f682e1d4384fa61f5e238003904c2051d0924278d5daf354717d09ca728",
-          "root": "c29ec69c65e8fffe27094ae5264242f109cf6ad19f472cdf40fbd43da5efa2b5",
-          "head": "648b91e7031771ed465a9f624d08de3d70cf1b2374b089f5cd839119af32ec44",
+          "prev": "135e4cf2d8cb56cabcb6fceeb99de875fe7452efa27e43cd4189fd9b62c9582b",
+          "root": "e1ea841866b6333dfea947b52d1ce5db59e083bd535f71d2a281480b86da57a2",
+          "head": "2619d85353358906f3aa0f079d8b9b467975eb2d47c744d98a83823dded074c5",
           "received_at": 1795423380694
         },
         {
           "b": 3025,
           "n": 2,
-          "prev": "648b91e7031771ed465a9f624d08de3d70cf1b2374b089f5cd839119af32ec44",
+          "prev": "2619d85353358906f3aa0f079d8b9b467975eb2d47c744d98a83823dded074c5",
           "root": "a5379927e18ccb458576c961fb2c3d8d6ec7c70e0c9e6379601ef63b18588cfe",
-          "head": "bea91db5f51a90ee0f6a3ef5ae68a46e4cab8c1e208f501349738f8b9192f87c",
+          "head": "c514892458c1439ee3e36adc828168423c777fb7ce83a4bb8dc9e3486393f5be",
           "received_at": 1795423380749
         },
         {
           "b": 3026,
           "n": 3,
-          "prev": "bea91db5f51a90ee0f6a3ef5ae68a46e4cab8c1e208f501349738f8b9192f87c",
+          "prev": "c514892458c1439ee3e36adc828168423c777fb7ce83a4bb8dc9e3486393f5be",
           "root": "1cab4d62fc8eb41fdb6ccdbb42df043957a49dda0e383e7d9537a8e57a2d83bf",
-          "head": "8fafe6f40da0f97741dac4a26229e57ba8cc600c3279652f973fbd13e4071732",
+          "head": "0fb0682abfbf4935ef518b5e9121d4073460ec152c754b17faa1429528c0ce67",
           "received_at": 1795423440937
         },
         {
           "b": 3027,
           "n": 4,
-          "prev": "8fafe6f40da0f97741dac4a26229e57ba8cc600c3279652f973fbd13e4071732",
+          "prev": "0fb0682abfbf4935ef518b5e9121d4073460ec152c754b17faa1429528c0ce67",
           "root": "621047dc3e1760d20c1a2c2f009c04819fbb88981d31b7aa60947127789e9d72",
-          "head": "2146fa2bf40a60f351c360ace5ec1af393578f757aeb2d92e01a114e10adf989",
+          "head": "34c3fd56ed10d951696e1d150c54b9d60d121ef0fd375100a658d65612ad1cf4",
           "received_at": 1795423500660
         },
         {
           "b": 3028,
           "n": 2,
-          "prev": "2146fa2bf40a60f351c360ace5ec1af393578f757aeb2d92e01a114e10adf989",
+          "prev": "34c3fd56ed10d951696e1d150c54b9d60d121ef0fd375100a658d65612ad1cf4",
           "root": "046e37d10af42232e14667bda08742e9608b9061b0e5d50a8b57667ef87a0486",
-          "head": "1c5d75dcb6d33c47df6d974e20a7f813431249d647bb9fa3615dc56fd290f945",
+          "head": "04c42d40f9ee9ff779940f696bac067eca2fc3cc5df33c473623e83a5c55271f",
           "received_at": 1795423501492
         },
         {
           "b": 3029,
           "n": 8,
-          "prev": "1c5d75dcb6d33c47df6d974e20a7f813431249d647bb9fa3615dc56fd290f945",
+          "prev": "04c42d40f9ee9ff779940f696bac067eca2fc3cc5df33c473623e83a5c55271f",
           "root": "14069f43bd6387008f2638d8a1341f8495248122b94792c4a4ed541b96d75111",
-          "head": "a4d283abafc9e73a176d93dbc2470835ca17b99fcedb73bda314a10cc906c6e7",
+          "head": "2ba06f5709518ee839a26ec7aa7482c91fbf3bcd667757112d7a74f41187d294",
           "received_at": 1795423560274
         },
         {
           "b": 3030,
           "n": 2,
-          "prev": "a4d283abafc9e73a176d93dbc2470835ca17b99fcedb73bda314a10cc906c6e7",
+          "prev": "2ba06f5709518ee839a26ec7aa7482c91fbf3bcd667757112d7a74f41187d294",
           "root": "1fcf367fd06e0578e620c5ea9802dc263121d38170c1024befb0f80434cac749",
-          "head": "c79e145b9613cbdffad9edbc439c055db1ab16a73dc23aa25b568934ce3e3a89",
+          "head": "98d331917226156decd011a05370f28a878075e255d14aece5c610f84e894ab8",
           "received_at": 1795423561161
         }
       ]

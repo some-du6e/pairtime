@@ -83,14 +83,11 @@
       "result": "pass",
       "counts": {
         "challenged": 4,
-        "sketch_ok": 4,
-        "bad_entry": 0,
-        "sketch_mismatch": 0,
-        "shingle_mismatch": 0,
         "length_mismatch": 0,
+        "low_effort_mismatch": 0,
+        "es_mismatch": 0,
         "class_mismatch": 0,
-        "shingle_conflicts": 0,
-        "hidden_shingles": 0
+        "feature_conflicts": 0
       }
     },
     "CC9": {

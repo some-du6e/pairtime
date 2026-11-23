@@ -9,7 +9,6 @@ Jordan, 16, on Linux with X11 and the key counter on, types a `/goal` prompt int
 | OS and evidence | Linux, X11 with the opt-in key counter, so `idle_keys_s` is set and every credited second is level A. Witnessed |
 | Window | 23:37:00 to 07:37:00. Records from 23:29:50 set up the session and aren't checked |
 | Project | `pixel-forge` |
-| Erratum | [2026-11-19-sm-6.4-prompt-lengths](../../../docs/errata/2026-11-19-sm-6.4-prompt-lengths.md): the quoted prompts have 73 and 60 characters, SM counts 75 and 61. The events use SM's counts, so the rows are SM's |
 
 ## Events
 
@@ -30,5 +29,5 @@ Jordan, 16, on Linux with X11 and the key counter on, types a `/goal` prompt int
 ## What the rows rely on
 
 - 23:43:40 to 07:30:00 is `X.absent` even while the agent runs: SM's 23:43 row puts the 20 s after the tail under `X.absent`, not `X.agent_only`. The seconds still count as agent-only time, so `agent_only_s` is 23,400 − 220.
-- 06:10 to 07:29 has no minute buckets. Nothing is credited and no agent runs, and SM 5.1 writes a bucket only when one of the two happens.
-- The lead of the 07:37:00 prompt starts at 07:34:19. That is 120 + 61 / 1.5 = 160.67 s rounded to 161, as SM rounds it. Without the rounding it would start at 07:34:19.33.
+- 06:10 to 07:29 has no minute buckets. Nothing is credited, no agent runs and no loop cost a second, so SM 5.1 writes no bucket.
+- The lead of the 07:37:00 prompt starts at 07:34:19. Its typing part, 61 / 1.5 = 40.67 s, rounds to the nearest second, 41 (SM 1.3), so the lead is 120 + 41 = 161 s.

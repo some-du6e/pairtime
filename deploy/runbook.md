@@ -219,7 +219,7 @@ docker compose exec pairtimed pairtimed doctor
 
 Every line should say `ok`, except these, which may say `skip`:
 
-- `witness`, until WP-SV17's publisher writes day roots to `witness-roots/`. Before then the sidecar runs and finds nothing to push.
+- `witness`, while `PAIRTIME_WITNESS_REPO` is unset, which leaves the day roots off. With it set, the line is `ok` or `FAIL`. It names the newest day head and counts the witness rows, and it fails when a due day has no head an hour after the publisher's 00:10 UTC run, when the newest head's file isn't in `witness-roots/` as stored, when the server's clock reads a day already published, or when the repository's latest commit is older than the newest head.
 - `hca`, while there is no client id.
 
 doctor checks the configuration, the keys and their modes, the database and its migrations, the room the database has on its disk, that `litestream.yml` and `pairtime.toml` name the same database and bucket, `/readyz` with the replica's lag, that neither bucket keeps versions, the lifecycle rules of both (none that deletes in `pairtime-data`, and one in `pairtime-snapshots` that deletes snapshots within 30 days), that both refuse a second write-once put, that an upload of about 11 MiB in parts reaches the snapshot bucket whole, as each nightly snapshot past 64 MiB goes up, the newest snapshot, that the newest key backup holds these keys, HCA's discovery document, the witness repository through GitHub's public API, each push monitor, and `https://<host>/healthz` through the tunnel. It pings a monitor only when that monitor's owner would, and checks the HCA client id and secret with one client_credentials grant. HCA refuses that grant with `invalid_scope` once the id and secret check out, and with `invalid_client` when they don't, so `invalid_scope` in the `hca` line is ok. An image from before #123 prints the same answer as `FAIL`, `the token endpoint answered 400 invalid_scope`, which is ok too. A `warn` line means doctor couldn't tell, and doesn't fail the run. An R2 key scoped to the two buckets may get 403 for GetBucketVersioning and GetBucketLifecycleConfiguration. R2 has no versioning, and the lifecycle rules show in the dashboard under each bucket's settings, so check them there, note it in the deploy log, and leave the two checks out with `-skip versioning,lifecycle`. Paste the output into the deploy log, issue #103.
@@ -230,7 +230,7 @@ doctor checks the configuration, the keys and their modes, the database and its 
 gh workflow run probe.yml --repo some-du6e/pairtime -f host=pairtime.karimeltaib.com
 ```
 
-The probe checks TLS, `/healthz` and `/.well-known/pairtime-keys.json` from GitHub's network. The keys document arrives with WP-SV17, so until then the probe's last step fails with a message saying so, and the others pass.
+The probe checks TLS, `/healthz` and `/.well-known/pairtime-keys.json` from GitHub's network. The keys document lists the server key with the dates it is valid (docs/spec/keys-v1.md). An image from before WP-SV17 answers 404 there, and the probe's last step says so.
 
 ### 14. The restore drill against the real buckets
 
@@ -266,6 +266,19 @@ docker compose exec pairtimed pairtimed doctor
 ```
 
 Keep the copy of `pairtime.toml`: a rollback can need it. Migrations only add in v1 and run when pairtimed starts. The `install -d` line makes `data/tmp` on a host set up before #123, whose step 2 didn't, and only sets the owner and mode again where it is there: images from before #123 don't make it, and without it SQLite's temporary files go to the 256 MiB `/tmp`.
+
+**After each release.** The host's `/install.sh` and `/install.ps1` serve the release that `ScriptsRelease` pins in `internal/server/pages/install.go`, not the newest one. After each release, a PR moves that copy and sets `ScriptsRelease`, as `internal/server/pages/install/README.md` says. Then a bump pins an image built from that commit or a later one. Once the bump is up, check that the host serves the pinned release's scripts. Each pair of lines must print the same SHA-256: the first reads the pinned manifest's `install_scripts` from the commit the image was built from (it needs `jq`), and the second hashes what the host serves.
+
+```sh
+cd /srv/pairtime/deploy
+commit=$(sed -n 's/.*pairtimed:sha-\([0-9a-f]\{12\}\).*/\1/p' compose.yml)
+for f in install.sh install.ps1; do
+  git -C /srv/pairtime show "$commit:internal/server/pages/install/manifest.json" | jq -r .payload | base64 -d | jq -r --arg f "$f" '.install_scripts[$f]'
+  curl -fsS -A "$UA" "https://pairtime.karimeltaib.com/$f" | sha256sum | cut -d' ' -f1
+done
+```
+
+A PR that drops a release key can turn the pin off (`ScriptsRelease = ""`), and then both paths answer 404 until a later PR pins a release the new key signed (docs/spec/update-manifest.md, Replacing a key).
 
 ## Rolling back
 
@@ -343,9 +356,9 @@ Before the native program pays out, the server moves to a Hetzner CCX13, or an A
 
 1. On the new host, do steps 1 to 6. Copy `config/` from the old host with `scp -p`, which keeps the modes, instead of filling it in again.
 2. Restore the keys onto the new host ("Restoring the keys").
-3. On the old host, note the newest file in the witness repository and, once WP-SV17 reports it, the witness row count. Then stop the server, so Litestream makes its last sync: `docker compose stop pairtimed`.
+3. On the old host, run doctor and note the newest day head and the witness row count that its `witness` line prints, and the newest file in the witness repository. Uploads keep arriving until the old host stops, so the count is a floor for step 5, while the newest day head and file don't change before the next 00:10 UTC. Then stop the server, so Litestream makes its last sync: `docker compose stop pairtimed`.
 4. On the new host: `docker compose up -d`. `data/` holds no database, so Litestream restores it from the replica. Wait until `docker compose ps` shows `healthy`.
-5. Run doctor on the new host, and check that the witness repository's newest file and the row count match step 3.
+5. Run doctor on the new host, and check that its `witness` line names exactly the newest day head of step 3, and that the witness repository's newest file is the same. The witness row count may be higher than step 3's, by the uploads that arrived after you noted it, but never lower: a lower count means the restore lost rows. The new host writes the day files again into its empty `witness-roots/`; the sidecar finds them all in the repository and pushes nothing, which is right.
 6. The tunnel follows the token, so the new host's cloudflared now serves `<host>`. Run `probe.yml` against it, then `docker compose down` on the old host and remove its `data/` with `shred`.
 
 ## When something fails
@@ -389,4 +402,8 @@ Before the native program pays out, the server moves to a Hetzner CCX13, or an A
 
 pairtimed listens on 8080, which only cloudflared reaches, and on 127.0.0.1:9091 inside its container for `/healthz`, `/readyz` and `/metrics`. compose publishes no port on the host. Never route the tunnel to 9091.
 
-Not deployed yet: `/.well-known/pairtime-keys.json` and the day roots (WP-SV17), and `install.sh` and `install.ps1` at `https://<host>/`, which WP-RL2 serves from pairtimed; until then the scripts are release assets.
+Not deployed yet: the day roots (WP-SV17).
+
+The day roots are off by default: compose.yml leaves `PAIRTIME_WITNESS_REPO` empty and puts the witness sidecar behind the `witness` profile. To turn them on, add `PAIRTIME_WITNESS_REPO=some-du6e/pairtime-witness` and `COMPOSE_PROFILES=witness` to `.env` and run `docker compose up -d`. pairtimed then publishes every day since the first receipt, and the sidecar pushes them within 5 minutes, permanently, so do it only once the operator has agreed to publish the daily counts.
+
+`install.sh` and `install.ps1` at `https://<host>/` go live with the first image pinned after #240, which serves the release `ScriptsRelease` pins (Upgrades); until then the scripts are release assets. While the zone's bot protection is on (Two things to know first), the host's install lines can be challenged from data-center and VPN addresses, since curl and PowerShell send their own User-Agent, so give those users the release-asset lines. The first deploy that serves these paths runs `curl -fsSL https://<host>/install.sh` once from a data-center address, with curl's own User-Agent, and writes down here what Cloudflare answered.

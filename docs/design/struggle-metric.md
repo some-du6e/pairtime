@@ -23,7 +23,7 @@ Research docs are cited by short name and section:
 - A second counts only when three things hold. A human act opened a window that covers it (a typed prompt, a permission answer, an interrupt, a typed edit, a typed command, a commit). The OS saw input recently enough to call the person present. Focus was on that project's terminal, editor or agent window, or on a short, bracketed lookup in between. Where the desktop doesn't say which window is in front, a second can still count, at evidence level C (2.5).
 - One exception has no OS evidence behind it. A message a person sends through an agent app such as T3 Code, often from another device, counts on the app's own word that a person sent it, once a prompt the agent received confirms it (2.2 rule 9). It earns its typing time and at most 120 s of reading per turn, at evidence level C, which never reaches anything public.
 - Reading the agent's output is credited from a per-session reading bucket. The agent's visible output fills it at 180 words a minute of prose and 8 lines a minute of diff. Present, focused seconds drain it. Watching a spinner adds nothing, and an hour of unread output can't be banked past 10 minutes.
-- Dark flow is handled by four deterministic rules that zero out credit: re-rolls (a third near-identical prompt with nothing changed in between), the agent rewriting the same lines a third time, the same error coming back a third time to a person who adds no reasoning, and runs of go-aheads sent faster than the output could be read. A separate progress rule halves credit after two hours with no progress of any kind, and gives it back when a commit, a passing test or a fixed error arrives.
+- Dark flow is handled by four deterministic rules that zero out credit: re-rolls (a third near-identical prompt with nothing changed in between), the agent rewriting the same lines a third time, the same error coming back a third time while the person neither steps in nor adds reasoning, and runs of go-aheads sent faster than the output could be read. A separate progress rule halves credit after two hours with no progress of any kind, and gives it back when a commit, a passing test or a fixed error arrives.
 - Agent-only time is reported next to credited time and never credited. For agent-assisted windows the output also reports what Hackatime would have logged as `ai coding`, so a reviewer can see in one line whether pairtime credits more or less than the handbook's one third, and which minutes justify it.
 - Everything here is a v1 guess until the pilot in section 7 fits it to reviewer decisions. Every credited minute records the `scoring_version` that produced it.
 
@@ -89,7 +89,9 @@ The scorer builds these from the events, in this order. Each is kept on the devi
 | `minute_bucket` | section 5 | Four `credit_slot`s |
 | `rollup` | section 5 | Buckets |
 
-The 15-second slot is the atomic unit because that is the presence sample rate. Event times keep millisecond precision, and window edges are applied to the second inside a slot before the slot is summed.
+A turn runs from `t_submit` until its first `agent.stop` or `agent.interrupt`, and no later than its session's next prompt or `session.end`. Its agent records are the `agent.*` events with its `turn_key`, and those without one that its session records from its `t_submit` to the next prompt. In a session that the harness's own hooks or logs report, they will report how a turn ends, so the turn runs on until then. A turn in any other session runs only to its latest agent record, and one with none doesn't run. Either way a long gap in a turn's agent records, counted from `t_submit`, ends its run, and no later record starts it again, not even its stop. In a session the hooks or logs report, a gap of more than `BUCKET_TTL_S` ends the run `BUCKET_TTL_S` after the gap begins; in any other, a gap of more than `READ_HORIZON_S` ends it where the gap begins. Every scoring rule that asks whether a turn is running, or what came after it ended (2.4, 2.5, 2.6, 2.8, 4.2, 5.1, 5.2, 5.3, 5.4), reads this span.
+
+The 15-second slot is the atomic unit because that is the presence sample rate. Event times keep millisecond precision. Two lengths round to the nearest second, halves up: a lead's typing part, `typed_len_est / COMPOSE_CPS` (2.3, 2.8), and the reading part of `RETURN_CREDIT` (2.1). So 61 typed characters at 1.5 a second are 41 s of typing, and 35 are 23 s. Other lengths keep their milliseconds, such as a permission wait or a command's run, and reading-bucket fills keep their fractions (2.4). A second belongs to a span the rules define, such as an anchor's window, a turn's run, a tail or the reading horizon, when the second's start is at or after the span's start and before its end. So the scorer applies windows in whole seconds inside a slot before it sums the slot.
 
 ## 2. Engagement intervals
 
@@ -104,7 +106,7 @@ The client samples OS idle time every 15 s (`SAMPLE_S`; CP 3.3). Each 15-second 
 | `yes` | Input during the slot | any window |
 | `bridged` | No input, but the no-input run containing the slot is at most `PRESENCE_GAP_S` = 120 s long and has input on both sides | any window |
 | `tail` | Within `PRESENCE_TAIL_S` = 30 s after the last input before a longer gap | any window |
-| `returned` | Inside a longer no-input run (up to `RETURN_GAP_MAX_S` = 600 s) whose first following anchor is substantive, in the same project and within 600 s of the run's end, with no lock, sleep or focus change in between. At most `RETURN_CREDIT` seconds of the run qualify (below) | prose reading (2.4) at the start of the run and that anchor's think lead at the end |
+| `returned` | Inside a longer no-input run (up to `RETURN_GAP_MAX_S` = 600 s) whose first following anchor on record within 600 s of the run's start is substantive and in the same project, with no lock, sleep or focus change in between. At most `RETURN_CREDIT` seconds of the run qualify (below) | prose reading (2.4) at the start of the run and that anchor's think lead at the end |
 | `no` | Anything else, including any no-input run longer than 600 s | nothing |
 | `unknown` | The sampler wasn't running: no daemon yet (lookback), or a machine with no desktop to sample, such as a server | the lookback rules (2.8), for records the lookback reader backfilled. A live prompt in such a slot goes through 2.2's rules as anywhere. A prompt no app message witnesses falls to one of rules 1 to 5, such as rule 4 in a session with no TTY, or to rule 8. Only a relayed anchor (2.2 rule 9) credits a live second with no presence |
 
@@ -116,7 +118,7 @@ The return rule. Someone who reads a long answer without touching anything, thin
 RETURN_CREDIT = 60 * unread_prose_words / READ_WPM  +  THINK_LEAD_S
 ```
 
-`unread_prose_words` counts only the prose of agent output that arrived since the person last had the session in focus with input. Diffs and tool output are left out, because nobody reviews a diff without scrolling. The reading part is placed at the start of the run, right after the tail (`READ~r`). The think part is the anchor's own think lead, where it reaches back into the run (`P~r`, `E~r`, ...). Anything between the two is `X.absent`. The anchor must come within `READ_HORIZON_S` (600 s) of the run's end. "Substantive" here means a substantive prompt, answer or queued message, a typed edit, a typed command or a human commit; editor navigation, go-aheads and relayed messages don't qualify. So a 6-minute silence after a 160-word answer, followed straight away by a typed prompt, earns at most 53 + 120 = 173 s, which is close to the 120 s Hackatime would give any long gap. The same silence followed by a click in the editor earns only the 30-second tail.
+`unread_prose_words` counts only the prose of agent output that arrived since the person last had the session in focus with input. Diffs and tool output are left out, because nobody reviews a diff without scrolling. The reading part is placed at the start of the run, right after the tail (`READ~r`). The think part is the anchor's own think lead, where it reaches back into the run (`P~r`, `E~r`, ...). Anything between the two is `X.absent`. The anchor must be on record within `READ_HORIZON_S` (600 s) of the run's start, so the silence and the act that ends it fit in ten minutes, grit's limit from an answer to the reply (PA 1.14), and the rule never looks further ahead than reading does (2.4). An act is on record at the later of its own time and its event's `t` (1.1), so a typed command, whose `shell.command` is written when it ends, counts from its end. An act on record later doesn't count for the run, and the first one on record in time decides. "Substantive" here means a substantive prompt, answer or queued message, a typed edit, a typed command or a human commit; editor navigation, go-aheads and relayed messages don't qualify. So a 6-minute silence after a 160-word answer, followed straight away by a typed prompt, earns at most 53 + 120 = 173 s, which is close to the 120 s Hackatime would give any long gap. The same silence followed by a click in the editor earns only the 30-second tail.
 
 Mouse-only presence never opens a window. It can only keep a window that a human act opened. That is the main defense against jigglers (TP A3 T7): a jiggler can hold `input_any` forever, but it can't submit a prompt, answer a permission request or type in the editor.
 
@@ -192,7 +194,7 @@ A relayed anchor waits for its pairing. The minutes its lead touches can't becom
 
 A relayed anchor credits only its own lead and its own session's reading (2.4). It is no human anchor for anything else: not for another session's reading or its level, not for a returned run (2.1), not for a lookup's brackets (2.5).
 
-How a lead is realized. A lead has two parts: the think part (the fixed allowance) comes first and needs only presence; the typing part (`typed_len_est / COMPOSE_CPS`) comes last, just before the anchor. Where `input_keys` exists, typing seconds are realized only in slots with keyboard input, except a relayed anchor's (above). Otherwise a jiggler plus one real 300-character prompt every few minutes would buy 200 s of "typing" that never happened. Where `input_keys` doesn't exist, the whole lead needs only presence, and the minutes are level B (5.1).
+How a lead is realized. A lead has two parts: the think part (the fixed allowance) comes first and needs only presence; the typing part (`typed_len_est / COMPOSE_CPS`, rounded to the nearest second as 1.3 says) comes last, just before the anchor. Where `input_keys` exists, typing seconds are realized only in slots with keyboard input, except a relayed anchor's (above). Otherwise a jiggler plus one real 300-character prompt every few minutes would buy 200 s of "typing" that never happened. Where `input_keys` doesn't exist, the whole lead needs only presence, and the minutes are level B (5.1).
 
 WSL needs one extra hop. A harness inside WSL2 runs its hooks as Linux processes, and WSL has no input devices, so pairtime runs a Linux agent inside WSL that hands records to the Windows agent through a spool directory on the Windows side, and the Windows agent supplies presence and focus (CP 6.4). The Windows terminal window hosting `wsl.exe` counts as hosting the WSL sessions.
 
@@ -234,11 +236,12 @@ Why a bucket instead of a window after each stop. It credits reading whenever it
 
 ### 2.5 Focus and lookups
 
-Each slot gets `focus_class` and `focus_project`: the app that held focus longest in the slot and the project it resolves to (3.2). Windows are realized only when the focus is a terminal, editor or agent app resolved to the window's project. Slots with input in an `other` app (a game, a video, a chat client) are `X.other_focus` and credit nothing, even inside a window.
+Each slot gets `focus_class` and `focus_project`: the foreground window that held focus for the most time in the slot, all its stretches there added up, and the project it resolves to (3.2). A tie goes to the one in front first. The whole slot counts as that window's, so a lookup is a whole number of slots and a few seconds in another app inside the slot count as the window's too. This slot focus decides where leads and trails are realized, where a bucket drains, which slots form a lookup and which project's candidates survive (3.3). Windows are realized only when the focus is a terminal, editor or agent app resolved to the window's project. Slots with input in an `other` app (a game, a video, a chat client) are `X.other_focus` and credit nothing, even inside a window.
 
 Browsers and desktop chat apps are ambiguous: they might hold documentation or a video. Without titles or URLs, v1 credits them only as short lookups between project work:
 
 - A run of browser or chat-app slots counts as `LOOKUP` (activity `lookup`) for project `p` when it starts within `LOOKUP_BRACKET_S` = 30 s after a credited slot of `p`, ends within 30 s before a credited slot of `p`, and no agent turn in `p` is running during it. Since every credited slot traces back to an anchor, this means there was a human act on both sides. Relayed credit (2.2 rule 9) is never a bracket.
+- Nothing the harness reports shows when an agent stops in a session that its hooks or logs don't report (1.3). So in such a session, nothing the session credits, by a window of one of its anchors or by reading drained from its bucket, can be the credited slot a run starts after. Other credit of `p` in the 30 s before the run can, such as a typed edit's lead, and the slot the run ends before can be credited by anything in `p`.
 - The run is credited up to `LOOKUP_MAX_S` = 180 s; the rest is `X.lookup_cap`.
 - During an agent run, browser time is waiting, not lookup, unless the browser extension (v2) marks the tab as documentation.
 
@@ -266,13 +269,13 @@ For each second `τ` in the user's global timeline, on each device:
 ```text
 candidates = []
 # on(s, p): focus_project(s) == p, or focus_class(s) == unknown (2.5)
-for each anchor A whose lead or trail window contains τ:
+for each anchor A that isn't discounted (4.2) and whose lead or trail window contains τ:
     if τ is in the typing part of A's lead and input_keys(slot(τ)) == false:
         continue                                   # keyboard known, and silent (2.3)
     if present(slot(τ)) in {yes, bridged, tail}            and on(slot(τ), A.project)
        or present(slot(τ)) == returned and τ is in A's think part, inside the return credit (2.1):
         candidates += (A.project, A.reason, priority 1)
-for each session σ with b_σ > 0 and a human anchor in σ.project within READ_HORIZON_S of τ:
+for each session σ with b_σ > 0 and an undiscounted human anchor in σ.project within READ_HORIZON_S of τ:
     if (present(slot(τ)) in {yes, bridged, tail}
         or present(slot(τ)) == returned and τ is in the reading part of the return credit)
        and on(slot(τ), σ.project):
@@ -281,7 +284,8 @@ if slot(τ) is in a qualifying lookup run for project p:
         candidates += (p, LOOKUP, priority 3)
 choose one candidate by the attribution order in 3.3; credit τ to it (draining b_σ if READ/SUP)
 level = C, label focus_unknown, if focus_class(slot(τ)) == unknown or the anchor passed its focus test only through unknown focus (2.5)
-weight = 0 if the anchor or turn is discounted (4.2), 0.5 under the no-progress cap (4.3), else 1
+weight = 0.5 under the no-progress cap (4.3), else 1
+with no candidate, τ is uncredited under one code (5.2); if scoring with no turn discounted would credit it, under a loop's code at that scoring's weight, the rest X.noprog (4.2)
 ```
 
 Relayed candidates (2.3, 2.4) come after all of these. They credit a second only when no other candidate wants it, whatever the slot's presence and focus, and 3.3 rule 1's focus test doesn't apply to them: this device's own evidence beats the app's word. A second two relayed sessions want goes to the session whose next relayed anchor's lead holds it. When both sessions' next leads hold it, it goes to the session whose anchor is sent soonest after it, and when neither does, to the session whose latest relayed message is the most recent. A session with none yet counts as the oldest, ties go to the lower `project_key` and then the lower `session_key`, and 3.3's rules 2 to 6 then choose among the winner's candidates.
@@ -367,9 +371,9 @@ Kapur's four quadrants (PA 2.1) set the policy for each case:
 
 All four detectors run on the device, on prompt and diff data that never leaves it. Only their outcomes (reason codes, counts, similarity scores) are uploaded.
 
-**Normalization and similarity.** Before comparing prompts, the client lowercases the text, removes pasted blocks and error text (kept separately as an error signature), replaces numbers with `<n>`, paths with `<path>`, URLs with `<url>`, hex strings with `<hex>` and backticked identifiers with `<id>`, and collapses whitespace. Retry-type go-aheads (`try again`, `again`, `retry`, `fix it`, `still broken`, `doesn't work`, `still not working`) all become the single token `<retry>`. Then it computes a MinHash signature with 64 permutations over word 3-shingles, or character 5-shingles for prompts under 6 words (256 bytes per prompt, microseconds to compute; TP A4, Broder 1997). Two prompts are near-duplicates when the estimated Jaccard similarity is at least `SIM_JACCARD` = 0.8 or the normalized texts are identical. The signatures are tier 0 and never leave the device.
+**Normalization and similarity.** Before comparing prompts, the client lowercases the text, removes pasted blocks and error text (kept separately as an error signature), replaces numbers with `<n>`, paths with `<path>`, URLs with `<url>`, hex strings with `<hex>` and backticked identifiers with `<id>`, strips the punctuation from both ends of each word except those placeholders, drops apostrophes, and collapses whitespace. So `mobile.`, `mobile,` and `mobile!!` are one word, and `doesn't` is `doesnt`. Retry-type go-aheads (`try again`, `again`, `retry`, `fix it`, `still broken`, `doesn't work`, `still not working`) all become the single token `<retry>`. docs/spec/ledger-v1.md 10.4 gives every step exactly. Then it computes a MinHash signature with `MINHASH_PERMS` = 64 permutations over word 3-shingles, or character 5-shingles for prompts under 6 words (`SHINGLE_WORDS`, `SHINGLE_CHARS`, `SHINGLE_MIN_WORDS`; 256 bytes per prompt, microseconds to compute; TP A4, Broder 1997). Two prompts are near-duplicates when the estimated Jaccard similarity is at least `SIM_JACCARD` = 0.8 or the normalized texts are identical. The signatures are tier 0 and never leave the device.
 
-**Change events.** A loop is broken by anything that changes what the agent will see next: a typed edit (`E`), a typed command (`CMD`, `TEST`), a human commit (`G`), a rejected or edited permission request, an interrupt, a new error signature, or a test or build command whose outcome changed. Undo, rewind and `git checkout -- .` are not change events: they put the code back where it was, so the next identical prompt is a re-spin of the same wheel. A different prompt is not a change event either; the re-roll count just doesn't grow for it.
+**Change events.** A loop is broken by anything that changes what the agent will see next: a typed edit (`E`), a typed command (`CMD`, `TEST`), a human commit (`G`), a rejected or edited permission request, an interrupt, a new error signature, or a test or build command whose outcome changed. Undo, rewind and `git checkout -- .` are not change events: they put the code back where it was, so the next identical prompt is a re-spin of the same wheel. A different prompt is not a change event either; the re-roll count just doesn't grow for it. A change event counts from when it is on record: the later of its own time and its event's `t` (2.1). Each of the four counts below reads only the change events, error signatures, outputs and prompts on record before the prompt it tests, so the re-roll, fix-it and autopilot discounts are decided at the prompt. A typed command still running when a prompt is sent doesn't free that prompt; it frees the prompts sent after its record. A `run_green` or `error_resolved` counts from the end of its command, and a rejected or edited permission from the record that pairs it with the next tool event. If shell integration later records a command's start (OSC 133/633), a typed command counts from that start record.
 
 **Re-roll.** For each human prompt `P`:
 
@@ -384,11 +388,12 @@ Attempts 1 and 2 are credited normally. From attempt 3 on, the turn is discounte
 **Fix-it loop (the same error recurring).** An error signature is the first error line of a failure, normalized: Python's final `XError: message` line of a traceback, `Error:` and `TypeError:` lines in JavaScript, `error[E0xxx]` in Rust, `file:line:col: error:` from compilers, `FAILED <test>` and `--- FAIL:` from test runners, `panic:` in Go, each with numbers, paths, line and column numbers, addresses and timestamps replaced as above, then hashed. Signatures are read from agent tool output (test and build runs) and from pasted errors in prompts. Human terminal output is not read in v1. Then:
 
 ```text
-occurrences(e) = times signature e appeared in this project since the last human change event
+occurrences(e) = times signature e appeared in this project since the later of the last
+                 human change event in the project and the last time e was cleared
                  (agent edits don't reset it: they are the attempted fixes)
 ```
 
-Once `occurrences(e) >= SAME_ERROR_LIMIT` (3), every following human turn whose prompt is `error_paste` or `low_effort` is discounted with reason `X.same_error`, until `e` stops appearing or a human change event happens. Substantive prompts are never discounted by this rule, even while the error recurs. "Maybe it's the lock order, check whether `drop` runs before `await`" is the person debugging, the pattern the skill study links to higher quiz scores; "still broken" plus the same traceback is "iterative AI debugging", the pattern that scored 24% (PA 2.2).
+Once `occurrences(e) >= SAME_ERROR_LIMIT` (3), every following human turn whose prompt is `error_paste` or `low_effort` is discounted with reason `X.same_error`, until a human change event happens or `e` is cleared. The human change events are the change events the person makes, each an anchor that passes its evidence test in 2.3: a typed edit (`E`), a typed command (`CMD`, `TEST`), a human commit (`G`), a permission answer (`PA`) that rejects or edits, and an interrupt (`INT`). Each sets every count in its project back to 0. A `run_green` of the command that produced `e`, or `e`'s `error_resolved` (4.3), clears `e` and sets its count back to 0, so an error that comes back later starts over. Nothing else resets a count: not agent edits or agent commits, not a new error signature or another command's outcome, and not an answer given by a config rule or a hook. A turn is judged by the count before its prompt, so an error pasted in a prompt counts toward the turns after it, not its own. Substantive prompts are never discounted by this rule, even while the error recurs. "Maybe it's the lock order, check whether `drop` runs before `await`" is the person debugging, the pattern the skill study links to higher quiz scores; "still broken" plus the same traceback is "iterative AI debugging", the pattern that scored 24% (PA 2.2).
 
 **Autopilot.** A human turn is `unread` when the agent's final message had at least `NOREAD_MIN_WORDS` (100) words and the next human prompt arrived less than `NOREAD_FRAC` (0.25) times the time needed to read it at 238 wpm:
 
@@ -405,9 +410,15 @@ overlap(k) = lines the agent changed in turn k that it also changed in turn k-1
              / lines the agent changed in turn k
 ```
 
-Lines are matched by file and hunk range from the edit tools' patches (Claude's `structuredPatch`, Codex `patch_apply_end`, Cursor `afterFileEdit`; HS 3.2, 4.1, 6.2), with turn `k-1`'s ranges shifted by any diffs applied in between. Turn `k` is a rewrite repeat when `overlap(k) >= REWRITE_OVERLAP` (0.5) and no change event happened since turn `k-1`. From the second consecutive repeat (the third turn on the same lines), turns are discounted with reason `X.rewrite_loop`. Generate, undo, regenerate is caught the same way, because undo is not a change event and the regenerated edit lands on the same lines. Building a feature over several prompts mostly adds lines rather than rewriting the last turn's, and a hand edit, a test run or a new error between turns resets the count. Asking the agent three times in a row to nudge one value ("a bit smaller", "smaller", "no, bigger") does get discounted; changing the number by hand would have been the struggle. A small on-device sentence-embedding model (all-MiniLM-L6-v2 class, about 23 MB as int8; TP A4) could catch paraphrases directly, and is a v1.1 candidate once its cost is measured on an old laptop.
+Lines are matched by file and hunk range from the edit tools' patches (Claude's `structuredPatch`, Codex `patch_apply_end`, Cursor `afterFileEdit`; HS 3.2, 4.1, 6.2), with turn `k-1`'s ranges shifted by any diffs applied in between. Turn `k` is a rewrite repeat when `overlap(k) >= REWRITE_OVERLAP` (0.5) and no change event happened since turn `k-1`. The rule reads turn `k`'s agent edits on record within `READ_HORIZON_S` - `THINK_LEAD_S` - `COMPOSE_MAX_S` after prompt `k` (180 s with the values in 8), and turn `k-1`'s edits on record before prompt `k`. A later edit doesn't count toward `overlap(k)`. So a turn's repeat status is decided at most 180 s after its prompt, and every second of its lead within `READ_HORIZON_S`. From the second consecutive repeat (the third turn on the same lines), turns are discounted with reason `X.rewrite_loop`. Generate, undo, regenerate is caught the same way, because undo is not a change event and the regenerated edit lands on the same lines. Building a feature over several prompts mostly adds lines rather than rewriting the last turn's, and a hand edit, a test run or a new error between turns resets the count. Asking the agent three times in a row to nudge one value ("a bit smaller", "smaller", "no, bigger") does get discounted; changing the number by hand would have been the struggle. A small on-device sentence-embedding model (all-MiniLM-L6-v2 class, about 23 MB as int8; TP A4) could catch paraphrases directly, and is a v1.1 candidate once its cost is measured on an old laptop.
 
-**What a discount does.** A discounted turn opens no anchor windows and adds nothing to the reading bucket, so the minutes spent on it earn 0 unless something else covers them. A permission answer inside a discounted turn counts only if it is a rejection, which is a change event and ends the loop anyway. The lead of a later, credited anchor never reaches back past the stop of the most recent discounted turn in the same project, so the first good act after a loop can't buy back the loop's minutes. Seconds that would have been credited are reported under their discount code, so the reviewer and the user see exactly how much each loop cost. The user's recap shows it too: "you re-rolled the same prompt 7 times between 21:10 and 21:40", which is the self-improvement feedback R3 asks for (HS 17.5).
+**What a discount does.** A discounted turn opens no anchor windows and adds nothing to the reading bucket, so the minutes spent on it earn 0 unless something else covers them. A permission answer inside a discounted turn counts only if it is a rejection, which is a change event and ends the loop anyway. The lead of a later, credited anchor never reaches back past the stop of the most recent discounted turn in the same project, so the first good act after a loop can't buy back the loop's minutes. A loop is a run of discounted turns in one project with no undiscounted human prompt between them. The seconds each loop cost carry its discount codes, so the reviewer and the user see exactly how much it cost:
+
+- **Which seconds.** The scorer scores the same records again with no turn discounted, keeping each slot's focus as it resolved it the first time. A second that this scoring credits to a project and the first scoring leaves uncredited is a second that project's loops cost. It counts at the weight the second scoring gives it (4.3), and the rest of a half-weighted second is `X.noprog`. Every other uncredited second keeps its usual code (5.2), inside a discounted turn too. A second when the person was away, or when nothing was on screen and no window would have covered it, is no part of the cost.
+- **Which code.** Such a second takes the code of the latest discounted turn in the project that started at or before it, unless an undiscounted human prompt in the project came between them. Otherwise it takes the code of the next discounted turn in the project, or of the latest one if none follows. So each second belongs to one loop.
+- **Two detectors on one turn.** The turn takes the first of `X.reroll`, `X.same_error`, `X.autopilot` and `X.rewrite_loop`. The first three are decided when the prompt is sent, and the rewrite rule only once the turn's edits land, so a code set at the prompt never changes.
+
+The user's recap shows it too: "you re-rolled the same prompt 7 times between 21:10 and 21:40", which is the self-improvement feedback R3 asks for (HS 17.5).
 
 **Repetition across sessions.** The same template sent in several sessions (a daily "run the tests and fix what fails") is often a legitimate habit, so it never changes credit. grit's `repeated_prompts` rule (the same prompt or template 3 or more times and in at least 30% of a session's prompts) becomes a reviewer flag (PA 1.14).
 
@@ -425,7 +436,7 @@ Progress events, per project:
 
 How progress changes credit:
 
-1. **It breaks loops.** `run_green` and `error_resolved` are change events, so they end re-roll, rewrite, fix-it and autopilot discounts (4.2).
+1. **It breaks loops.** `run_green` and `error_resolved` are change events, so they end re-roll, rewrite and autopilot discounts. They end a fix-it discount only for the error they clear: a `run_green` of the command that produced `e`, or `e`'s own `error_resolved`, clears `e` and sets its count back to 0 (4.2).
 2. **The no-progress half rate.** Each project tracks `since_progress`, the credited seconds since its last progress event. Past `NO_PROGRESS_LIMIT_S` (7,200 s, two hours of credited time), further seconds are credited at weight 0.5 with reason `X.noprog`. When a progress event arrives within `PROGRESS_RESTORE_S` (86,400 s) of a half-weighted second, that second goes back to weight 1 and its reason gets the suffix `+restored`. Until then the minute shows as `provisional`. Bjork's caveat is the reason: difficulty without progress is not desirable difficulty, and a tracker that ignores progress "rewards being lost" (PA 2.1). Half rather than zero because Kapur's productive failure is real even when the fix never comes. Two hours because a hard bug can take that long with nothing to commit, and the restore means a person who finally fixes it loses nothing.
 3. **Commits anchor submissions.** At submission time, credited time after the last commit in the window counts only up to `UNCOMMITTED_CAP_S` (3,600 s) (TP A7 E4; SP 4.4).
 
@@ -460,7 +471,7 @@ Also kept out, because the research says they measure the agent: token counts, l
 
 ### 5.1 The minute bucket
 
-The scorer's output is one record per user, device and UTC minute in which anything was credited or an agent was running. This is the tier-1 upload (TP B6): numbers, codes and event ids, no content.
+The scorer's output is one record per user, device and UTC minute in which anything was credited, an agent was running or a loop cost a second (4.2). This is the tier-1 upload (TP B6): numbers, codes and event ids, no content.
 
 ```json
 {
@@ -471,12 +482,12 @@ The scorer's output is one record per user, device and UTC minute in which anyth
   "slots": [
     {"p": "p_9f2c", "cr": 5,  "why": "READ", "kind": "reading_output", "ev": "A"},
     {"p": "p_9f2c", "cr": 15, "why": "READ", "kind": "reading_output", "ev": "A"},
-    {"p": "p_9f2c", "cr": 15, "why": "P",    "kind": "prompting",      "ev": "A"},
-    {"p": "p_9f2c", "cr": 15, "why": "P",    "kind": "prompting",      "ev": "A"}
+    {"p": "p_9f2c", "cr": 15, "why": "GO",   "kind": "prompting",      "ev": "A"},
+    {"p": "p_9f2c", "cr": 15, "why": "GO",   "kind": "prompting",      "ev": "A"}
   ],
   "credited_s": 50,
-  "uncredited": {"X.other_focus": 10},
-  "agent_running_s": 6,
+  "uncredited": {"X.agent_only": 10},
+  "agent_running_s": 16,
   "anchors": ["e_01JDQ4…41", "e_01JDQ4…57"],
   "state": "final",
   "witness": "witnessed"
@@ -486,7 +497,7 @@ The scorer's output is one record per user, device and UTC minute in which anyth
 | Field | Meaning |
 |---|---|
 | `v`, `params` | `scoring_version` and the SHA-256 of the parameter table (8) that produced this record |
-| `minute`, `device` | UTC minute start and the device that scored it. Here: ten seconds in a chat app, then reading, then a prompt sent at 16:42:54 whose turn's 20 s base covers the last 6 s |
+| `minute`, `device` | UTC minute start and the device that scored it. Here: 10 s of the agent running with nothing new on screen until it stops at 16:42:10, then reading its answer, then from 16:42:34 the 20 s lead of a go-ahead sent at 16:42:54, whose turn's 20 s base covers the last 6 s |
 | `slots[4]` | One entry per 15-second slot: project, credited seconds (0-15, one decimal for half-weight seconds), the dominant credited reason code, the activity kind, and the evidence level |
 | `credited_s` | Sum of `cr` over the four slots, at most 60 |
 | `uncredited` | Seconds in this minute that were looked at and not credited, by reason code |
@@ -539,7 +550,7 @@ Uncredited reasons:
 | `X.agent_only` | An agent turn ran and nothing credited the second |
 | `X.automated` | The turn's origin was `scheduled`, `self_continue`, `subagent`, `headless` or `cloud` |
 | `X.no_input` | A prompt arrived with no input before it (origin 8) |
-| `X.reroll`, `X.rewrite_loop`, `X.same_error`, `X.autopilot` | Dark-flow discounts (4.2) |
+| `X.reroll`, `X.rewrite_loop`, `X.same_error`, `X.autopilot` | Dark-flow discounts, on the seconds a loop cost (4.2), which also gives the code when two detectors fire |
 | `X.noprog` | The half not credited under the no-progress rule (4.3) |
 | `X.lookup_cap`, `X.bucket_cap`, `X.day_cap` | Caps (2.4, 2.5, 5.3) |
 
@@ -619,7 +630,7 @@ That cycle credits 695 of its 720 seconds. The other fourteen are the same shape
 
 - In cycles 3, 6, 9, 12 and 15 minute 11 is a commit, as above. In the others it is a small hand edit in VS Code, which credits the same 60 s as `E` and `NAV`. Five commits in three hours keep `since_progress` far below the 2-hour limit.
 - In cycle 6 Rowan gets a drink. He leaves at 15:06:40, ten seconds after the agent stops, and is back at 15:12:40, where the first thing he does is click in VS Code. The 30 s tail credits reading until 15:07:10. The silent run is 6 minutes long and its first anchor is `NAV`, which doesn't qualify for the return rule, so 15:07:10 to 15:12:40 is `X.absent`: 290 s lost in cycle 6 and 40 s in cycle 7. Had he sat down and typed a prompt straight away, the return rule would have credited at most 53 + 120 = 173 s of the silence (2.1).
-- In cycles 9 and 10 the agent's test run fails three times in a row with the same `AssertionError`. Rowan answers each failure with a new hypothesis ("the hitbox updates before the position in `tick()`, swap them"). The fix-it rule only discounts error pastes and go-aheads (4.2), so nothing is discounted. His own edit fixes it, and the next run is a `run_green`.
+- In cycles 9 and 10 the agent's test run fails three times in a row with the same `AssertionError`, twice in cycle 9 and once in cycle 10. Cycle 10's prompt is a new hypothesis ("the hitbox updates before the position in `tick()`, swap them"); the agent tries it and the test still fails. His own edit at the end of cycle 10 fixes it, and the next run is a `run_green`. Nothing is discounted: cycle 9's commit and that edit are human change events, so the error's count is back at 0 before each of his next prompts and never reaches `SAME_ERROR_LIMIT` (4.2). Had it reached the limit, his hypothesis would still count, since the fix-it rule only discounts error pastes and go-aheads.
 
 | Total | Seconds | Notes |
 |---|---|---|
@@ -717,7 +728,7 @@ Jordan, 16, runs Linux on X11 with the key counter on (evidence A). Claude Code 
 | Minute | What happens | Credited | Reasons |
 |---|---|---|---|
 | 23:37 | Sits down at 23:37:00 and looks at the repo; the lead of his prompt starts at 23:37:10 | 50 | `P` 50; `X.no_anchor` 10 |
-| 23:38 | Types `/goal all tests pass and lighthouse performance above 90 on the home page` (75 characters) | 60 | `P` |
+| 23:38 | Types `/goal all tests pass, and lighthouse performance above 90 on the home page.` (75 characters) | 60 | `P` |
 | 23:39 | Sends at 23:40:00. A typed `/goal` with an objective is a substantive prompt; lead 120 + 50 = 170 s | 60 | `P` |
 | 23:40 | Watches the plan (150 words) and the first edits come in; the bucket fills faster than he reads | 60 | `SUP` |
 | 23:41 | Same | 60 | `SUP` |
@@ -729,7 +740,7 @@ Jordan, 16, runs Linux on X11 with the key counter on (evidence A). Claude Code 
 | 07:32 | Same | 60 | `READ` |
 | 07:33 | Same | 60 | `READ` |
 | 07:34 | From 07:34:19, the lead of his next prompt | 60 | `READ` 19, `P` 41 |
-| 07:35 | From 07:35:30, types "nice. explain what you changed in the service worker and why" (61 characters) | 60 | `P` |
+| 07:35 | From 07:35:30, types "nice. explain what you changed in the service worker and why?" (61 characters) | 60 | `P` |
 | 07:36 | Sends at 07:37:00; lead 120 + 41 = 161 s | 60 | `P` |
 
 Credited: 810 s, 13.5 minutes, all of it AI-assisted. The agent ran 23,400 s (6 h 30 min), and 23,180 s of that is agent-only. Hackatime would log about 23,500 s of `ai coding` for the night, so the flat third would credit about 7,800 s (2 h 11 min) for eight hours of sleep. `ai_ratio` is about 0.03. This is Karim's point that agent activity can't be the measure, because anyone can set a `/goal` or a 20-minute check and walk away (BOUNTY.md).
@@ -742,17 +753,17 @@ Alex, 15, on Windows 10 without the key counter (evidence B), Claude Code in Win
 
 | Minute | What happens | Credited | Reasons |
 |---|---|---|---|
-| 20:00 | Types "the navbar overlaps the hero on mobile, fix the css so the hero starts below the navbar" (95 characters); sends at 20:01:00 | 60 | `P` |
+| 20:00 | Types "the navbar overlaps the hero on mobile, can you fix the css so the hero starts below the navbar" (95 characters); sends at 20:01:00 | 60 | `P` |
 | 20:01 | T1 rewrites lines 10-21 of `Navbar.css` and stops at 20:02:00. He is already inside the lead of his next prompt (143 s) | 60 | `P` |
-| 20:02 | Reads, checks the phone view in the browser (20:02:30-:50, a bracketed lookup), types "still overlapping on mobile. fix it" | 60 | `P` 40, `LOOKUP` 20 |
-| 20:03 | Sends at 20:03:00; a new text, so attempt 1. T2 rewrites lines 12-19, all inside T1's lines: rewrite repeat 1, which is free. Nothing new on screen 20:03:20-:40 | 40 | `SUP` 40; `X.agent_only` 20 |
+| 20:02 | Reads, checks the phone view in the browser (20:02:30-:50, a bracketed lookup of one slot, since the terminal has most of the slot from 20:02:45; 2.5), types "still overlapping on mobile. fix it" | 60 | `P` 45, `LOOKUP` 15 |
+| 20:03 | Sends at 20:03:00; a new text, so attempt 1. T2 rewrites lines 12-19, all inside T1's lines: rewrite repeat 1, which is free. Nothing new on screen 20:03:20-:40, which the lead of his next prompt would have covered had the loop not discounted it (4.2) | 40 | `SUP` 40; `X.rewrite_loop` 20 |
 | 20:04 | Browser check (lookup), then reads T2's answer | 60 | `LOOKUP` 30, `READ` 30 |
 | 20:05 | Sends the identical prompt at 20:05:00 (attempt 2, still free as a re-roll). T3 rewrites lines 12-19 again: rewrite repeat 2, so the turn is discounted and the bucket goes to 0 | 0 | `X.rewrite_loop` |
 | 20:06 | Browser check, retypes | 0 | `X.rewrite_loop` |
-| 20:07 | "still overlapping on mobile, fix it!!" normalizes to the same text: attempt 3. The rewrite loop continues too | 0 | `X.reroll` |
-| 20:08 to 20:37 | The same two minutes 15 more times, with prompts at 20:09, 20:11 ... 20:37, mostly in new words: "the navbar STILL covers the hero", "pls fix the overlap", "it's not working, try again". Every turn rewrites the same eight lines, and there's no hand edit, command, test or new error in between | 0 | `X.rewrite_loop`, `X.reroll` |
+| 20:07 | "still overlapping on mobile, fix it!!" normalizes to the same text, since normalization strips the punctuation at the ends of words: attempt 3. The rewrite loop continues too, and `X.reroll` comes first (4.2) | 0 | `X.reroll` |
+| 20:08 to 20:37 | The same two minutes 15 more times, with prompts at 20:09, 20:11 ... 20:37, mostly in new words: "the navbar STILL covers the hero", "pls fix the overlap", "it's not working, try again". Every turn rewrites the same eight lines, and there's no hand edit, command, test or new error in between. "pls fix the overlap" has 19 characters, so it is a go-ahead with a 20 s lead, and the 20 s with nothing on screen in the turn before it would not have been credited even without the loop | 0 | `X.rewrite_loop`, `X.reroll`; `X.agent_only` 20 |
 | 20:38 | T19 stops at 20:38:00. Browser check until 20:38:30, then he sits in the terminal. From 20:38:30, the lead of his coming editor click, which can't reach back past T19's stop | 30 | `NAV` 30; `X.rewrite_loop` 30 |
-| 20:39 | Opens `Navbar.css` in VS Code (heartbeat at 20:39:20) and reads the rules | 60 | `NAV` 20, `E` 40 |
+| 20:39 | Opens `Hero.css` in VS Code (heartbeat at 20:39:20) and works out the margin the hero needs | 60 | `NAV` 20, `E` 40 |
 | 20:40 | Edits `Hero.css` by hand at 20:41:00 (`margin-top: var(--nav-h)`). A change event: the loop is over | 60 | `E` |
 | 20:41 | Checks the phone view (20:41:10-:40): fixed | 60 | `P` 30, `LOOKUP` 30 |
 | 20:42 | Types a new request: "now the hero is right on mobile but there's a big gap on desktop. only apply the margin under 768px" | 60 | `P` |
@@ -761,7 +772,7 @@ Alex, 15, on Windows 10 without the key counter (evidence B), Claude Code in Win
 | Total | Seconds |
 |---|---|
 | Credited | 1,490 (24 min 50 s) |
-| `excluded_loops_s` | 2,010 (33 min 30 s), from 20:05:00 to 20:38:30 |
+| `excluded_loops_s` | 2,010 (33 min 30 s), in 20:03:20-:40 and in 20:05:00 to 20:38:30 apart from the loop's 20 s of `X.agent_only` |
 | `X.agent_only` | 100 |
 
 The lexical re-roll rule alone would have caught only the turns whose wording repeated exactly. The autopilot rule didn't fire either: Alex took about a minute to reply each time, far more than the 7 s that would mark a 110-word answer unread. What caught the paraphrases was the code: the agent rewrote the same eight lines seventeen times while nothing else changed (4.2).
@@ -863,12 +874,12 @@ It is never a target. Tuning the rules until pairtime credits 22% of logged time
 1. **Recruit.** 40 to 60 Hack Clubbers aged 13 to 18, through a pairtime-native YSWS, which Zach allows (BOUNTY.md), or as an opt-in inside an existing program that already has to apply the one-third rule (HC 6). Quotas as in 7.2.
 2. **Week 0, shadow mode.** Install, back-fill with lookback, score everything, show the user nothing but the recap. Numbers stay hidden until the rules are calibrated, so nobody learns to steer them first (PA 4.4, Goodhart).
 3. **Weeks 1-2, labeled sessions.** Each participant volunteers at least five sessions for labeling with the timelapse on. Reviewers label as in 7.2. The red team runs its scripts on test accounts in parallel.
-4. **Week 3, fit and freeze.** Sensitivity analysis first: perturb each parameter by ±25% and measure the change in session error, then fit only the roughly ten parameters that move it most (expected: `THINK_LEAD_S`, `PRESENCE_GAP_S`, `READ_WPM`, `DIFF_LPM`, `BUCKET_MAX_S`, `LOOKUP_MAX_S`, `NO_PROGRESS_LIMIT_S`, `REWRITE_OVERLAP`, `SIM_JACCARD`, `COMPOSE_CPS`). Coordinate descent on a grid, each parameter kept inside the range its source supports (for example `READ_WPM` between 150 and 240), minimizing the asymmetric loss subject to the κ target, with leave-one-participant-out cross-validation so the fit can't learn one person's habits. Publish the parameter table, the sensitivity table and the evaluation against the four baselines, then tag `1.0.0`.
+4. **Week 3, fit and freeze.** Sensitivity analysis first: perturb each parameter by ±25%, apart from the values 8.5 marks fixed, and measure the change in session error, then fit only the roughly ten parameters that move it most (expected: `THINK_LEAD_S`, `PRESENCE_GAP_S`, `READ_WPM`, `DIFF_LPM`, `BUCKET_MAX_S`, `LOOKUP_MAX_S`, `NO_PROGRESS_LIMIT_S`, `REWRITE_OVERLAP`, `SIM_JACCARD`, `COMPOSE_CPS`). Coordinate descent on a grid, each parameter kept inside the range its source supports (for example `READ_WPM` between 150 and 240), minimizing the asymmetric loss subject to the κ target, with leave-one-participant-out cross-validation so the fit can't learn one person's habits. Publish the parameter table, the sensitivity table and the evaluation against the four baselines, then tag `1.0.0`.
 5. **Weeks 4-8, live.** Participants submit to the pilot program. Program reviewers review as usual, seeing pairtime's rows and reasons, and the approved/credited ratio per submission is the R9 result. Every reviewer cut, with its reason, becomes a new label for the next version, as Overwatch verdicts became VACnet's training labels (TP A5).
 
 ### 7.6 Versioning
 
-- `scoring_version` is `MAJOR.MINOR.PATCH`. MAJOR changes a rule (a new detector, a new priority order). MINOR changes a parameter value. PATCH fixes a bug without changing any output on the regression corpus. The server doc's example `2026.11.2` (SP 10.2) is a placeholder for this.
+- `scoring_version` is `MAJOR.MINOR.PATCH`. MAJOR changes a rule (a new detector, a new priority order). MINOR changes a parameter value, apart from the values 8.5 marks fixed. PATCH fixes a bug without changing any output on the regression corpus. The server doc's example `2026.11.2` (SP 10.2) is a placeholder for this.
 - Every minute bucket carries `v` and `params`, the SHA-256 of the canonical parameter table (JSON, sorted keys). Every submission freezes both (SP 10.2).
 - The regression corpus is the six timelines in section 6, encoded as event fixtures, plus pilot timelines with all tier-0 content stripped. CI runs the scorer on it in GitHub Actions; any change in output fails the build until the version is bumped and the expected files are updated in the same PR.
 - Client and server run the same Go scoring package (SP 1). For a submitted window, the server re-scores from the revealed event metadata and must reproduce the client's buckets exactly; a mismatch flags the submission as a possible modified client (TP A3 T9).
@@ -925,7 +936,7 @@ Every tunable value in the credit rule, with its v1 setting and the reason for i
 | `TOOL_LINES_MAX` | 4 lines | Tool output a harness shows by default per call; the rest is collapsed |
 | `BUCKET_MAX_S` (fit) | 600 s | Most reading one turn can bank. Bounds what a jiggler can collect after a huge diff; equal to grit's 10-minute think limit |
 | `BUCKET_TTL_S` | 7,200 s | Output older than two hours is no longer "the answer you are reading" |
-| `READ_HORIZON_S` | 600 s | Reading counts only within ten minutes of a human act in the project, before or after. Same bound as the return rule |
+| `READ_HORIZON_S` | 600 s | Reading counts only within ten minutes of a human act in the project, before or after. The return rule uses the same bound, counted from the start of the silence (2.1) |
 | `LOOKUP_BRACKET_S` | 30 s | How close project work must be on each side of a browser run |
 | `LOOKUP_MAX_S` (fit) | 180 s | Longest credited browser or chat-app run. A documentation lookup, not an evening of video |
 
@@ -940,8 +951,8 @@ Every tunable value in the credit rule, with its v1 setting and the reason for i
 
 | Parameter | v1 | Reason |
 |---|---|---|
-| `MINHASH_PERMS` | 64 | 256 bytes per prompt, microseconds per comparison (TP A4) |
-| `SHINGLE` | word 3-shingles; character 5-shingles under 6 words | Short prompts have too few word shingles for a stable estimate (TP A4) |
+| `MINHASH_PERMS` (fixed) | 64 | 256 bytes per prompt, microseconds per comparison (TP A4) |
+| `SHINGLE_WORDS`, `SHINGLE_CHARS`, `SHINGLE_MIN_WORDS` (fixed) | 3 words, 5 chars, 6 words | Word 3-shingles, or character 5-shingles for prompts under 6 words, because short prompts have too few word shingles for a stable estimate (TP A4) |
 | `SIM_JACCARD` (fit) | 0.8 | Near-duplicate threshold from TP A4 |
 | `REROLL_WINDOW_S` | 1,800 s | Re-rolls are counted within 30 minutes |
 | `REROLL_FREE_ATTEMPTS` | 2 | The original and one retry are credited; Barke's exploration mode compares alternatives (PA 2.2), "over and over" starts at three |
@@ -955,6 +966,8 @@ Every tunable value in the credit rule, with its v1 setting and the reason for i
 | `NO_PROGRESS_WEIGHT` | 0.5 | Productive failure is real (Kapur), difficulty without progress isn't desirable (Bjork): half, not zero (PA 2.1) |
 | `PROGRESS_RESTORE_S` | 86,400 s | A progress event within a day restores half-weighted seconds |
 | `ERROR_RESOLVED_RUNS` | 2 | Runs without the signature before an error counts as resolved |
+
+Values marked "fixed" define the sketch itself. Sketches compare only when all of them are cut and hashed the same way, and each prompt's ledger record commits its keyed sketch (DESIGN 6.2 D18; docs/spec/ledger-v1.md 10.5). So no refit (7.5) and no MINOR version (7.6) changes them. A new value takes a MAJOR version with a new feature map, `f.v = 2` (ledger-v1.md 10.7).
 
 ### 8.6 Rollups, submissions, lookback, witnessing
 

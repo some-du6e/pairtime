@@ -19,27 +19,39 @@
 //     upload, none of its records came while the agent's config watch said
 //     local-only, none is an event made, by its own times or by its
 //     sender's stamp (Input.Sent), or for lookback's by when the writer
-//     took it in (Writer.lookback), before config.toml was last known to
-//     say local-only, and no such event was still on its way to the writer
-//     as it was sealed (Options.Waiting), false otherwise (Options.Online,
-//     Writer.NoteMode, Writer.NoteSeen, Writer.Write), and missing only
-//     from an older version's seal frames, which recorded no mode; back on
-//     the first batch sealed online whose records all came after the watch
-//     noted a switch back online, or after a stretch end the agent saw, as
-//     at a start after a switch back no batch was sealed since or at a
-//     pairtime login the watch didn't hear (Options.Seen, Writer.NoteSeen),
-//     events by their own times too, or for lookback's by when the writer
-//     took them in (Writer.lookback), with no seal since that read
-//     config.toml as local-only (Batch.Back); and
+//     took it in (Writer.lookback), in a local-only stretch that had ended
+//     (stretches below), and no such event was still on its way to the
+//     writer as it was sealed (Options.Waiting), false otherwise
+//     (Options.Online, Writer.NoteMode, Writer.NoteSeen, Writer.Write), and
+//     missing only from an older version's seal frames, which recorded no
+//     mode; why, for a batch sealed local-only, which of those it was, with
+//     the kinds and own times of the first few late records, and no content
+//     (Batch.Why); back on the first batch sealed online whose records all
+//     came after the watch noted a switch back online, or after a stretch
+//     end the agent saw, as at a start after a switch back no batch was
+//     sealed since or at a pairtime login the watch didn't hear
+//     (Options.Seen, Writer.NoteSeen), events by their own times too, or
+//     for lookback's by when the writer took them in (Writer.lookback),
+//     with no seal since that read config.toml as local-only (Batch.Back);
 //     local_until, when config.toml was last known, or taken, to say
 //     local-only as the batch was sealed, with local_until_os, the same
 //     moment by the OS's monotonic clock and its boot, which Open takes
-//     back from the newest batch (Batch.LocalUntil).
+//     back from the newest batch (Batch.LocalUntil); and stretches, in the
+//     seal frame of each batch sealed after they changed, every local-only
+//     stretch the writer knows: from where it last knew config.toml said
+//     online, or the beginning of time for the chain's first, to where it
+//     saw the file online again, with whether a batch was sealed online
+//     since it ended and how many late records of it Write dropped since
+//     (D-late-local). A record of a stretch that reaches the writer before a
+//     batch is sealed online after the stretch makes its batch local-only,
+//     and one that reaches it after is dropped (ErrLateLocal).
 //   - batches.seg: a chain frame naming the device id and the device
-//     key's id, then a row per batch, {b, first_seq, last_seq, n, prev,
-//     R_b, H_b, sealed_at, online, back, local_until, local_until_os} and
-//     where its frames are, and the server's receipts with their
-//     received_at (DESIGN 3.5; ledger-v1 7).
+//     key's id, after a retention sweep a base frame naming the first
+//     batch it keeps, with the newest stretches, then a row per batch, {b,
+//     first_seq, last_seq, n, prev, R_b, H_b, sealed_at, online, back,
+//     local_until, local_until_os, why, stretches} and where its frames
+//     are, and the server's receipts with their received_at (DESIGN 3.5;
+//     ledger-v1 7).
 //   - old/<key id>/: the chain of a device key this installation no
 //     longer writes with, kept for reading.
 //

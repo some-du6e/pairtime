@@ -40,6 +40,4 @@ Each call also resets the session's reading bucket to the 20 s base and adds not
 
 That is 78 s of `READ`, and 309 + 78 = 387 s. No record counts toward `logged_s` or `ai_logged_s`: the `cli.track` records never do (D19), and there is nothing else. So `level_c_cap_s` is min(387, 0 / 3) = 0, and the loop has 0 submittable seconds under any program policy, as DESIGN 5.2 requires.
 
-## Errata
-
-[Turns without a stop](../../../../docs/errata/2026-11-19-turns-without-a-stop.md). A track turn has no agent record, so nothing says whether it is running. The fixture takes the proposed rule: it isn't. That makes the 78 s `READ` rather than `SUP`, the idle seconds after 14:06:09 `X.no_anchor` rather than `X.agent_only`, and `agent_running_s` 0, and it leaves 14:08 without a bucket. Read literally, the turn the 14:04:00 call opens would run from then on, with 60 s of `agent_running_s` in every minute to the end of the window. So rows 14:04 to 14:08 name it, and the `agent_running_s` total depends on it too. The 387 s and their level don't.
+No track turn runs, because it has no agent record and no hook or log reader sees the session (SM 1.3, DESIGN 5.4). So the 78 s are `READ`, the idle seconds after 14:06:09 are `X.no_anchor`, `agent_running_s` is 0, and 14:08 has no bucket.

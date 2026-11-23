@@ -12,42 +12,60 @@ import re
 
 SIM_JACCARD = 0.8
 REROLL_WINDOW_MS = 1_800_000
-# SM 4.2's retry-type go-aheads, which all become the token <retry>.
-RETRY = ["still not working", "still broken", "doesn't work", "try again", "fix it", "retry", "again"]
-# One pass, longest phrase first, so a <retry> already written isn't
-# matched again.
-RETRY_RE = re.compile(r"(?<![\w'<])(?:" + "|".join(re.escape(p) for p in sorted(RETRY, key=len, reverse=True))
-                      + r")(?![\w'>])")
+NUMBER = "<n>"
+# The 32 printable ASCII characters that are neither letters, digits nor
+# space, and the curly quotes (ledger-v1.md 10.4 step 6).
+PUNCTUATION = set("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~") | {chr(0x2018), chr(0x2019), chr(0x201C), chr(0x201D)}
+APOSTROPHES = ("'", chr(0x2019))
+# SM 4.2's retry-type go-aheads, as bare words, longest first (ledger-v1.md
+# 10.4 step 7). Each match becomes the one word <retry>.
+RETRY = [["still", "not", "working"], ["try", "again"], ["fix", "it"], ["still", "broken"], ["doesnt", "work"],
+         ["again"], ["retry"]]
 
 
-def normalize(text, keep_punctuation=False):
-    """SM 4.2's normalization: lowercase, numbers to <n>, retry phrases to
-    <retry>, whitespace collapsed. SM's list doesn't mention punctuation,
-    but its 20:07 row needs "fix it!!" and "fix it" to normalize the same,
-    so punctuation goes too, as in SM 2.2's prompt-class rule (erratum
-    2026-11-19-sm-6.5-loop-codes). keep_punctuation gives SM's list as
-    written. Pasted blocks, paths, URLs, hex and backticked identifiers
-    would be replaced as well; no fixture prompt has any."""
-    s = text.lower()
-    s = re.sub(r"\d+(?:\.\d+)?", "<n>", s)
-    s = RETRY_RE.sub("<retry>", s)
-    if keep_punctuation:
-        return " ".join(s.split())
-    s = re.sub(r"[^\w\s<>]", " ", s)
-    return " ".join(s.split())
+def normalize(text):
+    """SM 4.2's normalization, as docs/spec/ledger-v1.md 10.4 gives its
+    steps for these texts: lowercase, each run of ASCII digits to <n>, each
+    word stripped of the punctuation at its ends, placeholders kept whole,
+    and of its apostrophes, empty words dropped, and retry phrases matched
+    on the bare words, longest first. Pasted blocks, paths, URLs, hex and
+    backticked identifiers would be replaced as well; no fixture prompt has
+    any."""
+    s = re.sub(r"[0-9]+", NUMBER, text.lower())
+    words = []
+    for w in s.split():
+        while w and w[0] in PUNCTUATION and not w.startswith(NUMBER):
+            w = w[1:]
+        while w and w[-1] in PUNCTUATION and not w.endswith(NUMBER):
+            w = w[:-1]
+        for a in APOSTROPHES:
+            w = w.replace(a, "")
+        if w:
+            words.append(w)
+    out, i = [], 0
+    while i < len(words):
+        for phrase in RETRY:
+            if words[i:i + len(phrase)] == phrase:
+                out.append("<retry>")
+                i += len(phrase)
+                break
+        else:
+            out.append(words[i])
+            i += 1
+    return " ".join(out)
 
 
-def shingles(text, keep_punctuation=False):
+def shingles(text):
     """Word 3-shingles, or character 5-shingles under 6 words (SM 8.5)."""
-    norm = normalize(text, keep_punctuation)
+    norm = normalize(text)
     words = norm.split()
     if len(words) >= 6:
         return {tuple(words[i:i + 3]) for i in range(len(words) - 2)}
     return {norm[i:i + 5] for i in range(max(1, len(norm) - 4))}
 
 
-def jaccard(a, b, keep_punctuation=False):
-    x, y = shingles(a, keep_punctuation), shingles(b, keep_punctuation)
+def jaccard(a, b):
+    x, y = shingles(a), shingles(b)
     return len(x & y) / len(x | y)
 
 

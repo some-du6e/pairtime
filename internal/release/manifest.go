@@ -34,10 +34,10 @@ type Manifest struct {
 	// carries, in lowercase hex, by file name: install.sh and install.ps1
 	// (docs/PLAN.md, WP-RL2). `curl | sh` runs the script before anything
 	// else and trusts the release keys written into it, so whatever serves
-	// or checks a copy, such as pairtimed (WP-OP2) and
-	// tools/release/check.sh, compares it with this. A release without the
-	// scripts leaves it out, and readers that don't use it ignore it, as
-	// they ignore any field they don't know.
+	// or checks a copy compares it with this: pairtimed, which serves a
+	// release's scripts (internal/server/pages), and tools/release/check.sh.
+	// A release without the scripts leaves it out, and readers that don't
+	// use it ignore it, as they ignore any field they don't know.
 	InstallScripts map[string]string `json:"install_scripts,omitempty"`
 }
 
