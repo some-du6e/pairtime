@@ -373,10 +373,14 @@ check_url() {
   esac
 }
 
-# fetch URL FILE downloads URL into FILE.
+# fetch URL FILE downloads URL into FILE. A download that stops moving, or
+# never starts, fails within a minute, slower than 1 KiB/s, and --retry
+# tries it again, all within five minutes, so a stalled server can't hang
+# the install. A slow download that keeps moving isn't cut off.
 fetch() {
   curl --fail --silent --show-error --location --proto "$proto" --proto-redir "$proto" \
-    --tlsv1.2 --retry 2 --connect-timeout 30 --user-agent "$agent" --output "$2" "$1"
+    --tlsv1.2 --retry 2 --retry-max-time 300 --connect-timeout 30 --speed-limit 1024 --speed-time 60 \
+    --user-agent "$agent" --output "$2" "$1"
 }
 
 # run_with_timeout SECONDS OUTPUT COMMAND... runs COMMAND with its output in

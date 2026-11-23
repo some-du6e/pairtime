@@ -583,6 +583,31 @@ v0.2.0' "v1.0.0'"; do
 done
 EOF
 
+# A real stalled download would take this test three minutes, so it checks
+# what fetch asks curl for, with a curl that only writes its arguments
+# down.
+unit "fetch has curl give up on a download that stops moving within a minute, and retry it for at most five minutes" << 'EOF'
+dir=$(mktemp -d)
+cat > "$dir/curl" << 'CURL'
+#!/bin/sh
+printf '%s\n' "$@" > "$CURL_ARGS"
+CURL
+chmod +x "$dir/curl"
+CURL_ARGS=$dir/args
+export CURL_ARGS
+PATH=$dir:$PATH
+proto='=https'
+agent=pairtime-e2e
+fetch https://example.com/manifest.json "$dir/out"
+args=" $(tr '\n' ' ' < "$dir/args")"
+for want in '--speed-limit 1024 ' '--speed-time 60 ' '--retry 2 ' '--retry-max-time 300 ' '--connect-timeout 30 '; do
+  case $args in
+    *" $want"*) ;;
+    *) echo "fetch ran curl without $want:$args"; exit 1 ;;
+  esac
+done
+EOF
+
 unit "a command that outlasts its time is killed, with status 137, and one that doesn't keeps its status" << 'EOF'
 out=$(mktemp)
 start=$(date +%s)
