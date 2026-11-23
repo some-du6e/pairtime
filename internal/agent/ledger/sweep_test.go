@@ -340,7 +340,7 @@ func TestSweep(t *testing.T) {
 					t.Fatal(err)
 				}
 				// What Sweep writes before it deletes a segment.
-				data, err := keptFile(bf, 2, bf.stretches)
+				data, err := keptFile(bf, 2, 0, bf.stretches, 0, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -647,14 +647,14 @@ func TestBaseFrame(t *testing.T) {
 	}
 	// o: the chain frame of version 1, then the rows of batches 1 to 3.
 	o := frames(orig)
-	kept, err := keptFile(bf, 1, bf.stretches)
+	kept, err := keptFile(bf, 1, 0, bf.stretches, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// k: the chain frame of version 2, a base frame naming batch 2, then
 	// the rows of batches 2 and 3.
 	k := frames(kept)
-	none, err := keptFile(bf, len(bf.rows), bf.stretches)
+	none, err := keptFile(bf, len(bf.rows), 0, bf.stretches, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

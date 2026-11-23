@@ -37,10 +37,11 @@ type Preview struct {
 	// pairtime version sealed it, which recorded no mode, so it counts as
 	// local-only (ledger.Row.NoMode). Cause says why it was sealed
 	// local-only, as its seal frame records it (StopCause), "" when it
-	// doesn't say.
-	Stopped uint64
-	NoMode  bool
-	Cause   string
+	// doesn't say, and StoppedAt when it was sealed, zero then.
+	Stopped   uint64
+	NoMode    bool
+	Cause     string
+	StoppedAt time.Time
 	// Fork is the batch the server's record of this computer's chain parts
 	// from its ledger at, after which nothing more goes under its device ID
 	// (#150 R5). 0 for none.
@@ -155,9 +156,9 @@ func Next(o PreviewOptions) (Preview, error) {
 	relink(&st, rows, c)
 	stop := st.localStop(rows.last())
 	noMode := stoppedNoMode(rows, stop)
-	cause := ""
+	cause, stoppedAt := "", time.Time{}
 	if r, ok := rows.row(stop); ok && stop > 0 && !noMode && r.Why != nil {
-		cause = StopCause(r.Why)
+		cause, stoppedAt = StopCause(r.Why), r.SealedAt
 	}
 	names, err := NextNames(o.DataDir, c, o.Names, o.OwnKeys, st.Linking)
 	if err != nil {
@@ -165,7 +166,7 @@ func Next(o PreviewOptions) (Preview, error) {
 	}
 	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil && !fresh && !older {
 		pv := previewOf(p.plan, true)
-		pv.Stopped, pv.NoMode, pv.Cause, pv.Names = stop, noMode, cause, names
+		pv.Stopped, pv.NoMode, pv.Cause, pv.StoppedAt, pv.Names = stop, noMode, cause, stoppedAt, names
 		return pv, nil
 	}
 	if fresh {
@@ -194,7 +195,7 @@ func Next(o PreviewOptions) (Preview, error) {
 		return Preview{}, err
 	}
 	pv := previewOf(p, false)
-	pv.Stopped, pv.NoMode, pv.Cause, pv.Names = stop, noMode, cause, names
+	pv.Stopped, pv.NoMode, pv.Cause, pv.StoppedAt, pv.Names = stop, noMode, cause, stoppedAt, names
 	return pv, nil
 }
 

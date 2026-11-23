@@ -563,6 +563,11 @@ func (w *Writer) scan(bf *batchesFile) ([]rowPayload, error) {
 	var start, from, snap position
 	next, b, head := bf.base.FirstSeq, bf.base.B-1, bf.base.Prev
 	lastLocal := false
+	// With no row kept, as after a sweep that dropped them all, the base
+	// frame keeps the moment the newest one recorded (basePayload.LocalUntil),
+	// so a stretch end the agent kept from before it isn't taken for one the
+	// writer never had. The newest row's, or seal frame's, takes over below.
+	w.until = sealPayload{LocalUntil: bf.base.LocalUntil, LocalUntilOS: bf.base.LocalUntilOS}.until()
 	// skip is set while what comes first in the segments may be a batch a
 	// sweep dropped with every row.
 	skip := false

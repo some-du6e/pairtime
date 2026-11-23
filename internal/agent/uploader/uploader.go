@@ -340,11 +340,12 @@ func stopProblem(rows *rowIndex, b uint64) string {
 	if !ok || r.Why == nil {
 		return localOnlyProblem
 	}
-	return fmt.Sprintf(stoppedProblem, b, stopTime(r.SealedAt), StopCause(r.Why))
+	return fmt.Sprintf(stoppedProblem, b, StopTime(r.SealedAt), StopCause(r.Why))
 }
 
-// stopTime is when a batch was sealed, as doctor's lines give it, in UTC.
-func stopTime(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
+// StopTime is when a batch was sealed, as doctor's lines and `pairtime
+// privacy show` give it, in UTC.
+func StopTime(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
 
 // StopCause says in words why a batch was sealed local-only, from what its
 // seal frame records (ledger.LocalWhy), for doctor and `pairtime privacy
@@ -355,7 +356,7 @@ func StopCause(why *ledger.LocalWhy) string {
 	if why.LateN > 0 {
 		var recs []string
 		for _, r := range why.Late {
-			recs = append(recs, article(string(r.Kind))+" "+string(r.Kind)+" of "+stopTime(r.T))
+			recs = append(recs, article(string(r.Kind))+" "+string(r.Kind)+" of "+StopTime(r.T))
 		}
 		if more := why.LateN - len(why.Late); more > 0 {
 			recs = append(recs, fmt.Sprintf("%d more", more))

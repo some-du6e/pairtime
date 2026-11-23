@@ -85,11 +85,24 @@ func (w *Writer) Sweep(from string, floor uint64) (batches, segs int, err error)
 	k := keptFrom(bf, from, floor)
 	cut := cutOf(from)
 	stretches, folded := foldPayloads(bf.stretches, cut)
+	var uWall int64
+	var uOS *untilOS
+	if bf.stretches != nil {
+		uWall, uOS = bf.listUntil()
+	}
 	w.mu.Lock()
 	w.foldStretches(cut)
+	w.foldMoment(cut)
+	if bf.stretches == nil && k > 0 {
+		// An older version's rows record no stretches, and Open rebuilt the
+		// writer's from their moments (restoreStretches), which the rows
+		// this drops take with them: the base frame keeps the writer's own,
+		// and its moment, as the next seal frame would have.
+		stretches, uWall, uOS = w.stretchPayloads(false), w.until.wall, osPayload(untilOS{Mono: w.until.os, Boot: w.until.boot})
+	}
 	w.mu.Unlock()
 	if k > 0 || folded {
-		data, kerr := keptFile(bf, k, stretches)
+		data, kerr := keptFile(bf, k, cut, stretches, uWall, uOS)
 		if kerr != nil {
 			return oldBatches, oldSegs, errors.Join(kerr, oldErr)
 		}
@@ -205,7 +218,7 @@ func keptFrom(bf *batchesFile, from string, floor uint64) int {
 // the sweep folded them, the rows, then the receipts of the rows kept, in
 // the order of their batches. The rows go before every receipt, so each
 // receipt follows its row.
-func keptFile(bf *batchesFile, k int, stretches []stretchPayload) ([]byte, error) {
+func keptFile(bf *batchesFile, k int, cut int64, stretches []stretchPayload, uWall int64, uOS *untilOS) ([]byte, error) {
 	cp := bf.chain
 	cp.V = chainVersionBase
 	chain, err := json.Marshal(cp)
@@ -224,10 +237,12 @@ func keptFile(bf *batchesFile, k int, stretches []stretchPayload) ([]byte, error
 	// The local-only stretches go in the base frame, since the rows kept
 	// keep none of their own once read (readBatchesFile): Open takes them
 	// back from there until a later row records them again, with the moment
-	// the row that recorded them recorded, which it holds the kept rows to.
+	// the row that recorded them recorded, which it holds the kept rows to,
+	// and which it keeps as the writer's own moment once no row is kept
+	// (scan). The moment folds at cut as the kept rows' do.
 	if stretches != nil {
 		bp.Stretches = stretches
-		bp.LocalUntil, bp.LocalUntilOS = bf.listUntil()
+		bp.LocalUntil, bp.LocalUntilOS = foldUntil(uWall, uOS, cut)
 	}
 	base, err := json.Marshal(bp)
 	if err != nil {
@@ -236,6 +251,7 @@ func keptFile(bf *batchesFile, k int, stretches []stretchPayload) ([]byte, error
 	data := appendFrame(appendFrame(nil, kindChain, chain), kindBase, base)
 	kept := bf.rows[min(k, len(bf.rows)):]
 	for _, rp := range kept {
+		rp.LocalUntil, rp.LocalUntilOS = foldUntil(rp.LocalUntil, rp.LocalUntilOS, cut)
 		p, err := json.Marshal(rp)
 		if err != nil {
 			return nil, err
@@ -309,9 +325,15 @@ func sweepChain(dir, from string) (batches, segs int, err error) {
 			return k, len(days), nil
 		}
 		need = bf.rows[k].Start.Seg
-		stretches, folded := foldPayloads(bf.stretches, cutOf(from))
+		cut := cutOf(from)
+		stretches, folded := foldPayloads(bf.stretches, cut)
+		var uWall int64
+		var uOS *untilOS
+		if bf.stretches != nil {
+			uWall, uOS = bf.listUntil()
+		}
 		if k > 0 || folded {
-			data, err := keptFile(bf, k, stretches)
+			data, err := keptFile(bf, k, cut, stretches, uWall, uOS)
 			if err != nil {
 				return 0, 0, err
 			}
@@ -358,6 +380,19 @@ func cutOf(day string) int64 {
 		return 0
 	}
 	return t.UnixMilli()
+}
+
+// foldUntil is a moment a row or a base frame records, in Unix ms with the
+// OS's reading o (sealPayload.LocalUntil), as a sweep by cut, in Unix ms,
+// keeps it: one before cut, and not the zero moment, becomes cut by the wall
+// clock alone, as the stretches fold there (foldPayloads), so the rows and
+// the base frame keep no time config.toml changed mode before the ledger's
+// 180 days. Only more of the past counts as local-only then.
+func foldUntil(wall int64, o *untilOS, cut int64) (int64, *untilOS) {
+	if wall > 0 && wall < cut {
+		return cut, nil
+	}
+	return wall, o
 }
 
 // foldPayloads is the stretches ps as a sweep by cut, in Unix ms, keeps

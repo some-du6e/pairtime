@@ -406,11 +406,15 @@ func TestFoldStretches(t *testing.T) {
 // lateRig is a writer whose config.toml mode, clocks and Waiting a test
 // sets, with every batch it seals, for the tests of late records below.
 type lateRig struct {
-	t       *testing.T
-	dir     string
-	clk     *clock
-	file    atomic.Bool // config.toml says online
-	waits   atomic.Bool
+	t     *testing.T
+	dir   string
+	clk   *clock
+	file  atomic.Bool // config.toml says online
+	waits atomic.Bool
+	// held has Waiting say yes while any stretch no batch sealed online has
+	// passed is on the list, as for a hook call held whose times the
+	// adapters can't read yet (agent's adapterHost.waiting).
+	held    atomic.Bool
 	sealed  chan Batch
 	w       *Writer
 	rng     *rand.Rand
@@ -443,7 +447,9 @@ func (r *lateRig) open() {
 		o.Online = r.file.Load
 		o.Seen = func() Seen { return r.seen }
 		o.Sealed = func(b Batch) { r.sealed <- b }
-		o.Waiting = func(func(event.Envelope) bool) bool { return r.waits.Load() }
+		o.Waiting = func(before func(event.Envelope) bool) bool {
+			return r.waits.Load() || r.held.Load() && before(event.Envelope{})
+		}
 		o.Clock = func() osclock.Stamp {
 			now := r.clk.now()
 			return osclock.Stamp{Wall: now, Mono: now.UnixMilli() - testT + 1000, BootID: lateBoot}
@@ -576,18 +582,33 @@ func TestAlpha5Replay(t *testing.T) {
 			}
 			r.at(60_000)
 			drops := 0
+			var seqs []uint64 // the sequence numbers the replayed records took
 			for _, kind := range []string{"agent.final", "agent.stop"} {
-				_, err := r.w.Write(r.logged(kind, c.made))
+				seq, err := r.w.Write(r.logged(kind, c.made))
 				switch {
 				case errors.Is(err, ErrLateLocal):
 					drops++
 				case err != nil:
 					t.Fatal(err)
+				default:
+					seqs = append(seqs, seq)
 				}
 			}
 			r.write(sampleInput(r.rng, "agent.tool", testT+60_000, "s_2", "p_web"))
 			r.write(sampleInput(r.rng, "agent.stop", testT+61_000, "s_2", "p_web"))
+			// The first batch sealed after the replay holds what of it Write
+			// took, as nothing else was pending: its own stop asks for that
+			// seal, which may come before the live records are written.
 			last := r.take()
+			held := len(seqs) == 2-c.dropped
+			for _, seq := range seqs {
+				held = held && seq >= last.Row.FirstSeq && seq < last.Row.FirstSeq+last.Row.N
+			}
+			if c.dropped > 0 {
+				// The live agent.tool and agent.stop alone, as the stop asks for
+				// the seal.
+				held = held && len(last.Records) == 2
+			}
 			checks := []struct {
 				name string
 				ok   bool
@@ -595,11 +616,12 @@ func TestAlpha5Replay(t *testing.T) {
 				{"the replay's batch is sealed online", last.Online && last.Why == nil},
 				{"no batch is sealed local-only after one sealed online but in a logout's stretch", !r.localAfterOnline() || c.relink && !r.batches[2].Online && r.batches[3].Online && last.Online},
 				{"Write drops what the stretch holds", drops == c.dropped && r.w.Status().LateLocal == uint64(c.dropped)},
+				{"and the batch sealed after the replay holds the rest of it, and nothing it dropped", held},
 			}
 			for _, ch := range checks {
 				t.Run(ch.name, func(t *testing.T) {
 					if !ch.ok {
-						t.Errorf("no: %d dropped; batches online %v", drops, onlines(r.batches))
+						t.Errorf("no: %d dropped; batches online %v; the replay took seqs %v, the batch after it %+v with %d records", drops, onlines(r.batches), seqs, last.Row, len(last.Records))
 					}
 				})
 			}
@@ -869,7 +891,7 @@ func TestUntilMovesRecordStretches(t *testing.T) {
 	}{
 		{"config.toml online at the restart: the stretch goes on until the first read ends it", true, false},
 		{"config.toml still local-only at the restart: the stretch goes on", false, false},
-		{"a sweep before the restart keeps in its base frame the moment the list's row recorded, so the stretch still goes on", true, true},
+		{"a sweep before the restart keeps in its base frame the moment the list's row recorded, folded at its day, so the stretch still goes on", true, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -925,7 +947,7 @@ func TestUntilMovesRecordStretches(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				based = swept.stretchesRow == -1 && swept.base.LocalUntil == testT+25_000 && len(swept.rows) == 2
+				based = swept.stretchesRow == -1 && swept.base.LocalUntil == cutOf(after) && len(swept.rows) == 2
 				reopen = 3 * sweepDayMS
 			}
 			r.file.Store(c.online)
@@ -941,7 +963,7 @@ func TestUntilMovesRecordStretches(t *testing.T) {
 				ok   bool
 			}{
 				{"the seal frame sealed after the moment moved records the stretches", recorded},
-				{"a sweep's base frame keeps them with the moment the list's row recorded", based},
+				{"a sweep's base frame keeps them with the moment the list's row recorded, folded at its day", based},
 				{"the record made in the stretch after that moment is sealed local-only after the restart", !b.Online},
 			}
 			for _, ch := range checks {
@@ -1006,6 +1028,170 @@ func TestLearnedStretch(t *testing.T) {
 			}
 			if dropped := err != nil; dropped != c.dropped {
 				t.Errorf("Write dropped the record made at %d ms: %v, want %v", c.madeAt, dropped, c.dropped)
+			}
+		})
+	}
+}
+
+// TestFullSweepKeepsStretches checks what a retention sweep that drops every
+// row keeps for the next Open: the stretches, the writer's own when an older
+// version's rows recorded none and Open rebuilt them from their moments,
+// and the moment the newest row recorded, folded at the sweep's day. With
+// them, a stretch end the agent kept from before the sweep ends nothing
+// new, so a hook call held at the first seal after a restart keeps no mark,
+// and that batch is sealed online after the server's head.
+func TestFullSweepKeepsStretches(t *testing.T) {
+	cases := []struct {
+		name string
+		// older has the rows be an older version's, with no stretches.
+		older bool
+	}{
+		{"an older version's chain keeps the stretches Open rebuilt from its rows, and the moment", true},
+		{"this version's chain keeps the moment with its stretches", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLateRig(t)
+			// The install's stretch, and a batch sealed online after it.
+			r.note(false)
+			r.write(r.presence(1000))
+			r.take()
+			r.at(10_000)
+			r.note(true)
+			r.pause()
+			r.at(20_000)
+			r.write(r.presence(20_000))
+			r.seal()
+			if err := r.w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if c.older {
+				dropStretches(t, r.dir, 1)
+			}
+			// Open, which rebuilds an older version's stretches, seals
+			// nothing before the sweep drops every row.
+			r.open()
+			after := dayOf(time.UnixMilli(testT + 2*sweepDayMS))
+			if dropped, _, err := r.w.Sweep(after, 0); err != nil || dropped != len(r.batches) {
+				t.Fatalf("Sweep dropped %d batches, %v; want %d", dropped, err, len(r.batches))
+			}
+			if err := r.w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			bf, err := readBatchesFile(filepath.Join(r.dir, batchesName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cut := cutOf(after)
+			kept := len(bf.rows) == 0 && len(bf.stretches) == 1 && bf.stretches[0].Passed && bf.base.LocalUntil == cut
+			// The agent kept the stretch's end from before the sweep, and a
+			// hook call held while the keys weren't there is on its way.
+			end := time.UnixMilli(testT + 10_000)
+			r.seen = Seen{Ended: end, OS: osclock.Stamp{Wall: end, Mono: 11_000, BootID: lateBoot}, Earlier: true}
+			r.held.Store(true)
+			r.at(3 * sweepDayMS)
+			r.open()
+			r.write(r.presence(3*sweepDayMS + 1000))
+			b := r.seal()
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"the base frame keeps the stretches, folded, and the moment, folded at the cut", kept},
+				{"the first batch after the restart is sealed online, the held call keeping no mark", b.Online},
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: the base frame keeps %d rows, the stretches %+v and the moment %d (cut %d); the batch online %v, why %+v",
+							len(bf.rows), bf.stretches, bf.base.LocalUntil, cut, b.Online, b.Why)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestSweepFoldsMoments checks that a sweep folds the moment each kept row
+// and its base frame record (sealPayload.LocalUntil) at its day, as it folds
+// the stretches, so the rows keep no time config.toml changed mode before
+// the ledger's 180 days, and the writer's own, so the next seal frame
+// records the cut too; and that the next Open, holding the kept rows to the
+// base frame's moment, ends no stretch at them.
+func TestSweepFoldsMoments(t *testing.T) {
+	cases := []struct {
+		name string
+		// open leaves a second stretch going on as the sweep comes.
+		open bool
+	}{
+		{"with every stretch ended, the rows' moments fold to the cut and the fold stays as the sweep left it", false},
+		{"with a stretch going on, the next Open keeps it going on, as no kept row rose past the base frame's moment", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLateRig(t)
+			// The install's stretch, two batches sealed online after it, and
+			// maybe a second stretch, going on.
+			r.note(false)
+			r.write(r.presence(1000))
+			r.take()
+			r.at(10_000)
+			r.note(true)
+			r.pause()
+			for _, ms := range []int64{20_000, 25_000} {
+				r.at(ms)
+				r.write(r.presence(ms))
+				r.seal()
+			}
+			if c.open {
+				r.at(30_000)
+				r.note(false)
+				r.write(r.presence(31_000))
+				r.take()
+			}
+			// The rows from batch 2 on stay, as unsent (floor), while their
+			// moment, 10 s, is days before the sweep's.
+			after := dayOf(time.UnixMilli(testT + 2*sweepDayMS))
+			if _, _, err := r.w.Sweep(after, 2); err != nil {
+				t.Fatal(err)
+			}
+			cut := cutOf(after)
+			r.w.mu.Lock()
+			own := r.w.until
+			r.w.mu.Unlock()
+			if err := r.w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			bf, err := readBatchesFile(filepath.Join(r.dir, batchesName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			folded := len(bf.rows) > 1
+			for _, rp := range bf.rows {
+				folded = folded && rp.LocalUntil == cut && rp.LocalUntilOS == nil
+			}
+			r.at(3 * sweepDayMS)
+			r.open()
+			r.w.mu.Lock()
+			restored := slices.Clone(r.w.stretches)
+			r.w.mu.Unlock()
+			again := len(restored) == 1 && restored[0].from == (edge{}) && restored[0].open == c.open
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"every kept row's moment is the cut", folded},
+				{"so is the base frame's", bf.base.LocalUntil == cut},
+				{"and the writer's own, which its next seal frame records", own.wall == cut && own.os == 0},
+				{"the next Open keeps the one stretch the fold made, ended or going on as it was", again},
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: the rows %+v, the base frame's moment %d, the writer's %+v (cut %d); the restored stretches %+v",
+							bf.rows, bf.base.LocalUntil, own, cut, restored)
+					}
+				})
 			}
 		})
 	}

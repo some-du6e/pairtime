@@ -605,6 +605,19 @@ func (w *Writer) foldStretches(cut int64) {
 	w.dirty = true
 }
 
+// foldMoment folds until at cut, in Unix ms, as a sweep by that day folds
+// the rows' moments (foldUntil): before cut, and not the zero moment, it
+// becomes cut by the wall clock, with no OS reading, so the next seal frame
+// records no time config.toml changed mode before the ledger's 180 days. It
+// keeps its reading of this run's clock, by which no end the writer had
+// comes after it. w.mu is held.
+func (w *Writer) foldMoment(cut int64) {
+	if w.until.wall > 0 && w.until.wall < cut {
+		w.until.wall, w.until.os, w.until.boot = cut, 0, ""
+		w.dirty = true
+	}
+}
+
 // lateDropped is how many records Write dropped over the chain's life, as
 // the stretches count them. w.mu is held.
 func (w *Writer) lateDropped() uint64 {

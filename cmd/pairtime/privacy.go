@@ -147,15 +147,7 @@ func showUpload(stdout, stderr io.Writer, dirs home.Dirs, creds uploader.Credent
 		fmt.Fprint(stderr, uploadsMismatch)
 		return 0
 	}
-	switch {
-	case p.Stopped > 0 && p.NoMode:
-		fmt.Fprint(stderr, uploadsStoppedNoMode)
-	case p.Stopped > 0 && p.Cause != "":
-		fmt.Fprintf(stderr, uploadsStoppedAt, p.Stopped, p.Cause)
-		fmt.Fprint(stderr, uploadsStopped)
-	case p.Stopped > 0:
-		fmt.Fprint(stderr, uploadsStopped)
-	}
+	fmt.Fprint(stderr, stopLines(p))
 	if p.Names != nil {
 		fmt.Fprint(stderr, describeNames(*p.Names, creds.Server))
 	}
@@ -176,6 +168,22 @@ func showUpload(stdout, stderr io.Writer, dirs home.Dirs, creds uploader.Credent
 	return 0
 }
 
+// stopLines is what privacy show says while the batch roots stop at a batch
+// sealed in local-only mode (uploader.Preview.Stopped), "" while they
+// don't: the batch, when it was sealed and why, as doctor gives them, when
+// its seal frame says why.
+func stopLines(p uploader.Preview) string {
+	switch {
+	case p.Stopped > 0 && p.NoMode:
+		return uploadsStoppedNoMode
+	case p.Stopped > 0 && p.Cause != "":
+		return fmt.Sprintf(uploadsStoppedAt, p.Stopped, uploader.StopTime(p.StoppedAt), p.Cause) + uploadsStopped
+	case p.Stopped > 0:
+		return uploadsStopped
+	}
+	return ""
+}
+
 // notSignedIn is what privacy show says when nothing is uploaded at all.
 const notSignedIn = `Nothing: this computer uploads nothing. It isn't signed in to a pairtime
 server, or config.toml says mode = "local", so everything pairtime records
@@ -186,10 +194,11 @@ upload before it goes.
 // uploadsStopped is what privacy show says while the batch roots stop at a
 // batch sealed in local-only mode (uploader.Preview.Stopped), with both of
 // its causes, as doctor gives them (uploader's localOnlyProblem), and
-// uploadsStoppedAt the line before it that names the batch and why it was
-// sealed so, when its seal frame says (uploader.Preview.Cause).
+// uploadsStoppedAt the line before it that names the batch, when it was
+// sealed and why it was sealed so, when its seal frame says
+// (uploader.Preview.Cause), as doctor's line does.
 const (
-	uploadsStoppedAt = "Uploads stop at batch %d, sealed in local-only mode because %s.\n"
+	uploadsStoppedAt = "Uploads stop at batch %d, sealed in local-only mode at %s because %s.\n"
 	uploadsStopped   = `Uploads are stopped. After this computer was linked, pairtime sealed a
 batch in local-only mode: config.toml said mode = "local", or had an
 error, for a while, or a record made while it did reached pairtime late.
