@@ -76,6 +76,10 @@
 // reading, which knows what the server can't, such as which minutes are
 // lookback's.
 //
-// A submission's labels come from the records, and can only settle what a
-// bucket's label could not.
+// That reading is cautious where it can't see records. A late revision
+// whose new credit rests on records the server had on time, as a restore
+// of half-weighted seconds does (SM 4.3), reads backfilled here, and so
+// does a minute whose bucket waited out an outage that began after its
+// batch got through. A submission labels the records themselves, and its
+// labels are the ones that count.
 package witness

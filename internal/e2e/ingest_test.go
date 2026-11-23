@@ -496,6 +496,14 @@ func TestUploadToIngest(t *testing.T) {
 			if readings[event.Backfilled] != 24*60 || len(readings) != 1 {
 				t.Errorf("the server holds the readings %v, not %d backfilled", readings, 24*60)
 			}
+			// The server's own label agrees, for every minute and every
+			// revision it stored (WP-SV6).
+			if n := count(`SELECT COUNT(*) FROM minute_buckets WHERE device_id = $1 AND server_witness = 'backfilled'`); n != 24*60 {
+				t.Errorf("the server labeled %d of its %d minutes backfilled", n, 24*60)
+			}
+			if n := count(`SELECT COUNT(*) FROM minute_bucket_revisions WHERE device_id = $1 AND server_witness = 'backfilled'`); n != int64(lines) {
+				t.Errorf("the server labeled %d of its %d revisions backfilled", n, lines)
+			}
 			ft.mu.Lock()
 			rateLimited, lost, replayed := ft.rateLimited, ft.lost, slices.Clone(ft.replayed)
 			ft.mu.Unlock()
