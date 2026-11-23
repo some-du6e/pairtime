@@ -148,6 +148,11 @@ func (f *fakeIngest) projectNames(w http.ResponseWriter, r *http.Request) {
 	case "label_invalid":
 		f.refuse(w, 422, "label_invalid")
 		return
+	case "bodyhash":
+		// The body changed on the way, as the server sees it: refused
+		// before anything is stored.
+		f.refuse(w, 400, "body_hash_mismatch")
+		return
 	}
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(js, &top); err != nil {

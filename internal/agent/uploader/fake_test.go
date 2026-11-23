@@ -68,7 +68,8 @@ type fakeIngest struct {
 	// endpoint, as an older pairtimed's ServeMux answers),
 	// "label_invalid", "lost" (the server stores the request, then its
 	// answer is lost), "garbled" (it stores it, and its 200 doesn't read)
-	// and "stored-502" (it stores it, and a proxy answers 502). namesThen
+	// "stored-502" (it stores it, and a proxy answers 502) and "bodyhash"
+	// (it refuses it as a changed body). namesThen
 	// runs after an attempt, by its number.
 	names       map[string]string
 	namesHidden map[string]bool

@@ -289,23 +289,25 @@ func TestNames(t *testing.T) {
 		}
 	}
 	tests := []struct {
-		name    string
-		config  string                // config.toml
-		held    map[string]string     // the names the server holds at the start
-		codes   map[string]string     // the codes the server gives the device's keys
-		hidden  []string              // the keys the server lists as hidden on the dashboard at the start
-		known   map[string]string     // project-names.json's names, as the server confirmed them
-		notes   map[string]HiddenName // project-names.json's notes of names pairtime turned off
-		server  string                // the server project-names.json is for, the rig's when ""
-		faults  map[int]string        // the names requests' faults, by attempt
-		then    map[int]string        // config.toml as the owner leaves it after an attempt, by its number
-		hideAt  int                   // the attempt after which the owner presses Hide this name for nameKey
-		dropAt  int                   // the attempt after which the server loses nameKey's name, with no hide
-		rawFile string                // project-names.json as it is on disk at the start, when set
-		own     []string              // the keys of the projects the computer has seen (Options.OwnKeys), every key when nil
-		local   bool                  // the computer is local-only: no sign-in to upload with
-		until   func(f *fakeIngest, cfgPath string) bool
-		checks  []rigCheck
+		name   string
+		config string                // config.toml
+		held   map[string]string     // the names the server holds at the start
+		codes  map[string]string     // the codes the server gives the device's keys
+		hidden []string              // the keys the server lists as hidden on the dashboard at the start
+		known  map[string]string     // project-names.json's names, as the server confirmed them
+		notes  map[string]HiddenName // project-names.json's notes of names pairtime turned off
+		server string                // the server project-names.json is for, the rig's when ""
+		faults map[int]string        // the names requests' faults, by attempt
+		// uploadFaults are the uploads' faults, by attempt (fakeIngest.faults).
+		uploadFaults map[int]string
+		then         map[int]string // config.toml as the owner leaves it after an attempt, by its number
+		hideAt       int            // the attempt after which the owner presses Hide this name for nameKey
+		dropAt       int            // the attempt after which the server loses nameKey's name, with no hide
+		rawFile      string         // project-names.json as it is on disk at the start, when set
+		own          []string       // the keys of the projects the computer has seen (Options.OwnKeys), every key when nil
+		local        bool           // the computer is local-only: no sign-in to upload with
+		until        func(f *fakeIngest, cfgPath string) bool
+		checks       []rigCheck
 	}{
 		{
 			name:   "a name turned on in config.toml goes in a names request, and the server's answer is kept in project-names.json for its owner alone",
@@ -626,7 +628,7 @@ func TestNames(t *testing.T) {
 					if err != nil || !n.Hidden[nameKey].Pending {
 						t.Errorf("project-names.json = %+v, %v; want a pending note", n, err)
 					}
-					if p := r.doctor(); !strings.Contains(p, "set online = false under [projects.<key>] in config.toml for "+nameKey) {
+					if p := r.doctor(); !strings.Contains(p, "write each in config.toml as a table of its own, [projects.<key>] with its name and online = false: "+nameKey) {
 						t.Errorf("doctor heard %q", p)
 					}
 				},
@@ -824,7 +826,7 @@ func TestNames(t *testing.T) {
 					if h := n.Hidden[nameKey]; err != nil || !h.Pending || h.Label != "chip8-emulator" {
 						t.Errorf("project-names.json = %+v, %v; want a pending note with config.toml's label", n, err)
 					}
-					if p := r.doctor(); !strings.Contains(p, "set online = false under [projects.<key>] in config.toml for "+nameKey) {
+					if p := r.doctor(); !strings.Contains(p, "write each in config.toml as a table of its own, [projects.<key>] with its name and online = false: "+nameKey) {
 						t.Errorf("doctor heard %q", p)
 					}
 				},
@@ -887,6 +889,51 @@ func TestNames(t *testing.T) {
 					}
 					if p := r.doctor(); strings.Contains(p, nameKey) {
 						t.Errorf("doctor heard %q", p)
+					}
+				},
+			},
+		},
+		{
+			name:   "a set the server refused as a changed body goes again only after a read, so a hide made meanwhile stays",
+			config: projectTable(nameKey, "Chip-8", true),
+			held:   map[string]string{nameKey: "chip8-emulator"},
+			known:  map[string]string{nameKey: "chip8-emulator"},
+			faults: map[int]string{2: "bodyhash"},
+			hideAt: 2,
+			until: func(f *fakeIngest, cfgPath string) bool {
+				cfg, _, _ := config.Load(cfgPath)
+				return f.namesPosts >= 4 && len(f.namesHidden) == 0 && !cfg.Projects[nameKey].Online
+			},
+			checks: []rigCheck{hiddenStays},
+		},
+		{
+			name:         "while the link's first batch waits, a pending note of a name the owner turned off in config.toml by hand stops being pending, and nothing goes",
+			config:       projectTable(nameKey, "chip8-emulator", false),
+			notes:        map[string]HiddenName{nameKey: {Label: "chip8-emulator", At: 1, Reason: NoteSignedIn, Pending: true}},
+			uploadFaults: allFaults("503"),
+			until:        func(f *fakeIngest, _ string) bool { return f.posts >= 2 },
+			checks: []rigCheck{
+				bodies(),
+				func(t *testing.T, r *rig, _ string) {
+					n, err := ReadNames(r.dirs.Data)
+					if h, ok := n.Hidden[nameKey]; err != nil || !ok || h.Pending {
+						t.Errorf("project-names.json = %+v, %v; want the note kept, no longer pending", n, err)
+					}
+				},
+			},
+		},
+		{
+			name:   "a name pairtime couldn't turn off for a hide, which the owner turned on again under a new label, goes, though the read before it still lists the old hide",
+			config: "[projects]\n" + nameKey + " = { name = \"Chip-8\", online = true }\n",
+			notes:  map[string]HiddenName{nameKey: {Label: "chip8-emulator", At: 1, Pending: true}},
+			hidden: []string{nameKey},
+			until:  func(f *fakeIngest, _ string) bool { return f.names[nameKey] == "Chip-8" && len(f.namesHidden) == 0 },
+			checks: []rigCheck{
+				bodies(`{}`, `{"set":[{"project":"`+nameKey+`","label":"Chip-8"}]}`),
+				func(t *testing.T, r *rig, _ string) {
+					n, err := ReadNames(r.dirs.Data)
+					if _, noted := n.Hidden[nameKey]; err != nil || noted {
+						t.Errorf("project-names.json = %+v, %v; want the note gone once the dashboard shows the name", n, err)
 					}
 				},
 			},
@@ -979,6 +1026,7 @@ func TestNames(t *testing.T) {
 			maps.Copy(r.f.names, tt.held)
 			maps.Copy(r.f.codes, tt.codes)
 			maps.Copy(r.f.namesFaults, tt.faults)
+			maps.Copy(r.f.faults, tt.uploadFaults)
 			for _, key := range tt.hidden {
 				r.f.namesHidden[key] = true
 			}

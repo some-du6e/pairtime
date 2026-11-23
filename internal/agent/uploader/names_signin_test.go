@@ -96,7 +96,7 @@ func TestNamesSignIns(t *testing.T) {
 				if h := n.Hidden[nameKey]; err != nil || !h.Pending || h.Reason != NoteUnreadable {
 					t.Errorf("project-names.json = %+v, %v; want a pending note that the file didn't read", n, err)
 				}
-				if p := r.doctor(); !strings.Contains(p, "set online = false under [projects.<key>] in config.toml for "+nameKey) {
+				if p := r.doctor(); !strings.Contains(p, "write each in config.toml as a table of its own, [projects.<key>] with its name and online = false: "+nameKey) {
 					t.Errorf("doctor heard %q", p)
 				}
 			},

@@ -234,8 +234,9 @@ paths:
           description: >
             pairtime couldn't change config.toml, as when it doesn't parse or
             holds the project as an inline table, or the name is one pairtime
-            keeps off the dashboard, hidden there or on for another sign-in,
-            that it couldn't turn off in config.toml, which still has it on.
+            keeps off the dashboard, hidden there, gone from the server or on
+            for another sign-in, that it couldn't turn off in config.toml,
+            which still has it on.
             The text says what to write by hand, and the file stays as it was.
           content:
             text/plain:

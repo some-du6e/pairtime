@@ -376,6 +376,35 @@ func TestEditWaitsForLock(t *testing.T) {
 	}
 }
 
+func TestEditWithoutConfigDir(t *testing.T) {
+	tests := []struct {
+		name    string
+		edit    func(name string) error
+		wantErr bool
+	}{
+		{
+			name: "turning off a name where the config directory doesn't exist changes nothing, and takes no lock it can't make",
+			edit: func(name string) error { return HideName(name, chip8Key) },
+		},
+		{
+			name:    "turning a name on there fails as the write does, and makes no directory",
+			edit:    func(name string) error { return ShowName(name, chip8Key, "chip8-emulator") },
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "missing")
+			if err := tt.edit(filepath.Join(dir, "config.toml")); (err != nil) != tt.wantErr {
+				t.Fatalf("error %v, want one %v", err, tt.wantErr)
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Errorf("the config directory is there now (%v), want none", err)
+			}
+		})
+	}
+}
+
 func TestEditStartsOver(t *testing.T) {
 	chip8On := "[projects." + chip8Key + "]\nname = \"chip8-emulator\"\nonline = true\n"
 	plantOn := "\n[projects." + plantKey + "]\nname = \"plant-watering\"\nonline = true\n"

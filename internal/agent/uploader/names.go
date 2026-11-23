@@ -584,7 +584,9 @@ func (u *Uploader) saveNames() error {
 // off there when it found that the dashboard doesn't show them (a pending
 // HiddenName), and takes out of wanted those still on, which aren't sent.
 // A name whose label config.toml changed since is one the owner turned on
-// again, which goes.
+// again, which goes: its note stays, no longer pending, so an answer that
+// still lists the hide it is of, before the set goes, doesn't turn the
+// name off again (namesAnswered).
 func (u *Uploader) hidePending(wanted map[string]string) {
 	changed := false
 	var stuck []string
@@ -596,7 +598,8 @@ func (u *Uploader) hidePending(wanted map[string]string) {
 		label, on := wanted[key]
 		switch {
 		case on && label != h.Label:
-			delete(u.names.Hidden, key)
+			h.Pending = false
+			u.names.Hidden[key] = h
 		case on && (u.opts.HideName == nil || u.opts.HideName(key) != nil):
 			delete(wanted, key)
 			stuck = append(stuck, key)
@@ -615,7 +618,7 @@ func (u *Uploader) hidePending(wanted map[string]string) {
 		u.setProblem("hidden", "")
 		return
 	}
-	u.setProblem("hidden", fmt.Sprintf("your pairtime dashboard doesn't show project names that pairtime couldn't turn off in config.toml, so it doesn't send them again; to keep them off, set online = false under [projects.<key>] in config.toml for %s", strings.Join(stuck, ", ")))
+	u.setProblem("hidden", fmt.Sprintf("your pairtime dashboard doesn't show project names that pairtime couldn't turn off in config.toml, so it doesn't send them again; to keep them off, write each in config.toml as a table of its own, [projects.<key>] with its name and online = false: %s", strings.Join(stuck, ", ")))
 }
 
 // sendNames sends a names request, its body raw with hash, signed again
@@ -983,8 +986,9 @@ func capNotes(hidden map[string]HiddenName) {
 // why, and the file is the new sign-in's from then on, with its notes, as
 // the uploader's own load leaves it. A file that exists but doesn't read
 // counts as another sign-in's, since pairtime can't tell (NoteUnreadable).
-// A name hide can't turn off gets a pending note, so the uploader never
-// sends it. It returns what it turned off, for the caller to list. A file
+// A name config.toml has on that hide can't turn off gets a pending note,
+// so the uploader never sends it. It returns what it turned off, for the
+// caller to list. A file
 // that names no sign-in, or none at all, as before the computer's first
 // link, gets this sign-in written into it, its notes kept, and nothing
 // goes off: the names turned on before it go, as show-name said they
