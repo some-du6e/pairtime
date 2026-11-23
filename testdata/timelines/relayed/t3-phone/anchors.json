@@ -1,0 +1,63 @@
+{
+  "fixture": "relayed/t3-phone",
+  "anchors": [
+    {
+      "event_id": "01a22209-94d8-7339-834a-ef69c7c40b00",
+      "kind": "substantive_prompt",
+      "t": 1795867380000,
+      "local": "13:03:00",
+      "project_key": "p_b2f0f3df8a79",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "lead_s": 60,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "app",
+      "level": "C",
+      "sm": "2.2 rule 9: client mobile skips rules 6 and 7; 2.3: a relayed message's lead is its typing time, 90 / 1.5 = 60 s, ending at sent_at",
+      "prompt": "01a22209-8d08-721d-a476-b80a3ee1d89c",
+      "labels": ["via_relay"]
+    },
+    {
+      "event_id": "01a2220f-fd78-7fce-96c8-6742586457d2",
+      "kind": "substantive_prompt",
+      "t": 1795867800000,
+      "local": "13:10:00",
+      "project_key": "p_b2f0f3df8a79",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "lead_s": 32,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "app",
+      "level": "C",
+      "sm": "2.2 rule 9: client mobile skips rules 6 and 7; 2.3: a relayed message's lead is its typing time, 48 / 1.5 = 32 s, ending at sent_at",
+      "prompt": "01a2220f-f5a8-7ee1-b9b9-2b3df09cf1e4",
+      "labels": ["via_relay"]
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_90a269a23494",
+      "turn_key": "t_47f313f74d69",
+      "t_submit": 1795867381000,
+      "local_submit": "13:03:01",
+      "t_stop": 1795867560000,
+      "local_stop": "13:06:00",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 9: client mobile skips rules 6 and 7"
+    },
+    {
+      "session_key": "s_90a269a23494",
+      "turn_key": "t_779190c69507",
+      "t_submit": 1795867801000,
+      "local_submit": "13:10:01",
+      "t_stop": 1795867920000,
+      "local_stop": "13:12:00",
+      "origin": "relayed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 9: client mobile skips rules 6 and 7"
+    }
+  ]
+}

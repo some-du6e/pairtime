@@ -203,7 +203,7 @@ func TestDeliveries(t *testing.T) {
 		}
 	})
 
-	t.Run("every session a hook reported, through the spool too, is one a log reader must write no session.start for", func(t *testing.T) {
+	t.Run("every session a hook reported, through the spool too, is one HookReported names", func(t *testing.T) {
 		for _, way := range []adapters.Delivery{adapters.Walked, adapters.Spooled} {
 			a := newTest()
 			adapters.Replay(a, calls, adapters.ReplayOptions{GOOS: "linux", Way: way})

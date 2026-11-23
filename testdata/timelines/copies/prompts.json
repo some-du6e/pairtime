@@ -1,0 +1,21 @@
+{
+  "fixture": "copies",
+  "prompts": [
+    {
+      "turn_key": "t_73de6f449270",
+      "t": 1795645360000,
+      "local": "16:22:40",
+      "text": "make the search box ignore case and trim spaces in the query",
+      "len_chars": 60,
+      "source": "invented: a derived fixture, which no SM example quotes"
+    },
+    {
+      "turn_key": "t_0bb653ef7a8b",
+      "t": 1795645680000,
+      "local": "16:28:00",
+      "text": "check the CI run for main and fix any failing tests",
+      "len_chars": 51,
+      "source": "invented: a derived fixture, which no SM example quotes"
+    }
+  ]
+}

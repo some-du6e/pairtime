@@ -49,6 +49,15 @@ type DashboardLink struct {
 // no answer for it, or it predates questions and refused the frame.
 var ErrUnknownQuestion = errors.New("ipc: the agent doesn't answer that question")
 
+// ErrStarting means the agent took the question before it answers any, as
+// while its socket tests itself just after Listen: ask again in a moment.
+// An Options.Answer that can't answer yet returns it too.
+var ErrStarting = errors.New("ipc: the agent is still starting")
+
+// startingAnswer is the error of the reply to a question the agent can't
+// answer yet (ErrStarting), as every agent that answers questions sends it.
+const startingAnswer = "the agent is still starting"
+
 const (
 	// maxQuestion bounds a question frame. A longer frame is never taken
 	// for a question, so the agent doesn't parse a hook's message twice.
@@ -122,6 +131,8 @@ func (c *Conn) Ask(ctx context.Context, q string) (json.RawMessage, error) {
 		return nil, errors.New("ipc: the agent answered another question")
 	case rep.Unknown:
 		return nil, fmt.Errorf("%w: %s", ErrUnknownQuestion, rep.Error)
+	case !rep.OK && rep.Error == startingAnswer:
+		return nil, ErrStarting
 	case !rep.OK:
 		return nil, fmt.Errorf("ipc: the agent couldn't answer %s: %s", q, rep.Error)
 	case len(rep.Answer) == 0:
@@ -160,6 +171,8 @@ func (s *Server) answer(q question) (reply, bool) {
 	switch {
 	case errors.Is(err, ErrUnknownQuestion):
 		return unknown, true
+	case errors.Is(err, ErrStarting):
+		return reply{ID: q.ID, Error: startingAnswer}, true
 	case err != nil:
 		s.log.Warn("ipc: couldn't answer a question", "question", q.Ask, "err", err)
 		return reply{ID: q.ID, Error: "the agent's log says why"}, true

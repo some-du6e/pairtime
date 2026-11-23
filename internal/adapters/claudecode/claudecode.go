@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// Package claudecode is Claude Code's adapter, part 1: its hooks (DESIGN
-// 5.1; docs/PLAN.md, WP-AD2). The transcript reader and the lookback
-// reader are part 2 (WP-AD3), and the OTLP receiver is WP-AD4's.
+// Package claudecode is Claude Code's adapter: its hooks (DESIGN 5.1;
+// docs/PLAN.md, WP-AD2) and its transcripts, which the agent's tailers
+// deliver line by line (WP-AD3; transcript.go and logparse.go say what
+// they become). The OTLP receiver is WP-AD4's.
 //
 // Each hook call `pairtime hook --harness claude_code --event <e>` hands
 // the agent becomes SM 1.2 events:
@@ -68,6 +69,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 
@@ -117,6 +119,13 @@ type Adapter struct {
 	mu       sync.Mutex
 	sessions map[string]*session
 	clock    uint64
+	// files and logSessions are what the transcript reader remembers of
+	// each transcript file and of each session it read entries of
+	// (logparse.go). They are apart from sessions, which only hook calls
+	// fill, so a session only a transcript shows never counts as one a
+	// hook reported (HookReported).
+	files       map[string]*txFile
+	logSessions map[string]*txSession
 }
 
 // New returns an adapter that keys ids and resolves projects with opts. It
@@ -126,7 +135,8 @@ func New(opts adapters.Options) *Adapter {
 	if opts.Keys == nil {
 		panic("claudecode: New needs Options.Keys, the device's K_session")
 	}
-	return &Adapter{opts: opts, keys: opts.Keys, sessions: map[string]*session{}}
+	return &Adapter{opts: opts, keys: opts.Keys, sessions: map[string]*session{},
+		files: map[string]*txFile{}, logSessions: map[string]*txSession{}}
 }
 
 // Name is claude_code.
@@ -162,16 +172,21 @@ var Events = []string{
 	EventSessionEnd,
 }
 
-// Sources lists the hook events Parse reads. The transcripts are WP-AD3's.
+// Sources lists the hook events Parse reads, then the transcripts under
+// Claude Code's projects folder, ~/.claude/projects unless
+// CLAUDE_CONFIG_DIR moves it (HS 3.2; LogRoots): each session's own and
+// its subagents'.
 func (*Adapter) Sources() []adapters.Source {
-	out := make([]adapters.Source, len(Events))
+	out := make([]adapters.Source, len(Events), len(Events)+2)
 	for i, e := range Events {
 		out[i] = adapters.Source{Kind: adapters.SourceHook, Event: e}
 		if e == EventPostToolUse || e == EventPostToolUseFailure {
 			out[i].Matcher = toolMatcher
 		}
 	}
-	return out
+	return append(out,
+		adapters.Source{Kind: adapters.SourceLog, Root: "~/.claude/projects", Glob: "*/*.jsonl"},
+		adapters.Source{Kind: adapters.SourceLog, Root: "~/.claude/projects", Glob: "*/*/subagents/*.jsonl"})
 }
 
 // Hosts returns the executables the platform's app-class table lists as
@@ -241,7 +256,46 @@ type session struct {
 	// the PostToolUse calls that may answer one, oldest first (Decide).
 	requests []*request
 	posts    []post
+	// hookStops are the turns whose Stop or StopFailure came via hook,
+	// oldest first, at most maxTurns: the hook reported the turn's final
+	// output and stop, so the transcript's copies of them would count the
+	// turn twice, a turn the session turned native at its Stop included
+	// (logparse.go resolveFinal).
+	hookStops []string
+	// nativeAt is the hook stamp of the session's first session.start
+	// with via hook, in Unix ms, set with hookStart: from then on its hooks
+	// report its stops and tool calls, and a transcript's copies of those
+	// would count them twice (logparse.go). Memory saved before it existed
+	// has 0, the session's start.
+	nativeAt int64
 	seen     uint64
+}
+
+// noteHookStop records that the Stop or StopFailure of turn came via hook.
+func (s *session) noteHookStop(turn string) {
+	if slices.Contains(s.hookStops, turn) {
+		return
+	}
+	if len(s.hookStops) >= maxTurns {
+		s.hookStops = slices.Delete(s.hookStops, 0, len(s.hookStops)-maxTurns+1)
+	}
+	s.hookStops = append(s.hookStops, turn)
+}
+
+// hookStopped reports whether the Stop or StopFailure of session sid's turn
+// came via hook. a.mu is held.
+func (a *Adapter) hookStopped(sid, turn string) bool {
+	s := a.sessions[sid]
+	return s != nil && slices.Contains(s.hookStops, turn)
+}
+
+// markNative records that a session.start with via hook was made for the
+// session, by a call made at t.
+func (s *session) markNative(t int64) {
+	if !s.hookStart || t < s.nativeAt {
+		s.nativeAt = t
+	}
+	s.hookStart = true
 }
 
 // sessionFor returns the session with Claude Code's id, making it, and
@@ -268,13 +322,13 @@ func (a *Adapter) sessionFor(id string) *session {
 }
 
 // HookReported reports whether a hook call of Claude Code's session id has
-// reached the adapter, over the socket, the pipe or the spool. A log reader
-// writes session.start only for a session no hook reported, so that its
-// placeholder, with parent_class unknown and has_tty false, never stands in
-// for a hooked session's own (E-2.8-lookback; SM 1.2). That holds for a
-// session whose hooks only the spool delivered too: its records are side
-// doors, and a log reader's session.start would be the one SM 2.2 rule 4
-// read, making it headless.
+// reached the adapter, over the socket, the pipe or the spool. The
+// transcript reader writes session.start only for a session no via-hook
+// call reported, so that its placeholder, with parent_class unknown and
+// has_tty false, never stands in for a hooked session's own
+// (E-2.8-lookback; SM 1.2). A session whose hooks only the spool delivered
+// gets it: pkg/score reads no side door's session.start in a session a log
+// reader covers, so SM 2.2 rules 4 and 5 would have nothing to read.
 func (a *Adapter) HookReported(sessionID string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()

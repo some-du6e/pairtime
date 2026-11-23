@@ -210,22 +210,28 @@ func gatherFacts(dirs home.Dirs, wait io.Writer) doctor.Facts {
 }
 
 // askAgent asks the agent for its status, as askStatus does, and tells an
-// agent that is starting or stopping from a deaf one: while nothing
+// agent that is starting or stopping from a deaf one: while it answers
+// that it is still starting, as during its socket's self-test, or nothing
 // answers but an agent holds the data folder's lock, it asks again every
 // doctorPoll for up to doctorStartWait, saying once on wait that it does.
 // An agent that answers meanwhile is reached, one that lets go of its
-// lock is errAgentDown, and one that holds it all that time without
-// answering is errAgentDeaf. took is how long the last ask took.
+// lock is errAgentDown, one that holds it all that time without
+// answering is errAgentDeaf, and one still starting by then is
+// errAgentStarting. took is how long the last ask took.
 func askAgent(dirs home.Dirs, wait io.Writer) (st doctor.Status, took time.Duration, err error) {
 	deadline := time.Now().Add(doctorStartWait)
 	for said := false; ; {
 		start := time.Now()
 		st, err = askStatus(dirs)
 		took = time.Since(start)
-		if !errors.Is(err, errAgentDown) || !agentLocked(dirs) {
+		starting := errors.Is(err, errAgentStarting)
+		if !starting && (!errors.Is(err, errAgentDown) || !agentLocked(dirs)) {
 			return st, took, err
 		}
 		if !time.Now().Before(deadline) {
+			if starting {
+				return st, took, err
+			}
 			return st, took, errAgentDeaf
 		}
 		if !said {
