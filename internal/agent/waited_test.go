@@ -1616,6 +1616,30 @@ func TestLogRecordsByTheRunClock(t *testing.T) {
 				take(t, host(dirs, w), read.Add(-11*time.Second), read, read)
 				return w, 0
 			}, true},
+		{"a line made 3 s before a stretch's end and read 2 s after it is sealed local-only, with the read's reading less 5 s",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, int64) {
+				w := optionsWriter(t, dirs, online)
+				end := stretch(w)
+				read := end.Add(2 * time.Second) // by both clocks
+				take(t, host(dirs, w), end.Add(-3*time.Second), read, read)
+				mono, _ := ledger.RunClock(read)
+				return w, mono - 5000
+			}, false},
+		{"a line read exactly LATE_READ_S after it was made keeps the read's reading less those 10 s",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, int64) {
+				w := optionsWriter(t, dirs, online)
+				read := ahead()
+				take(t, host(dirs, w), read.Add(-10*time.Second), read, read)
+				mono, _ := ledger.RunClock(read)
+				return w, mono - 10_000
+			}, true},
+		{"a line read a millisecond later than that has none",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, int64) {
+				w := optionsWriter(t, dirs, online)
+				read := ahead()
+				take(t, host(dirs, w), read.Add(-10_001*time.Millisecond), read, read)
+				return w, 0
+			}, true},
 		{"a line made in a local-only stretch and read after a suspend is sealed local-only",
 			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, int64) {
 				w := optionsWriter(t, dirs, online)

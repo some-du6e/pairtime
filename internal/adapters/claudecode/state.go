@@ -52,6 +52,10 @@ type savedFile struct {
 	State  txState `json:"state"`
 	Seen   uint64  `json:"seen"`
 	Newest int64   `json:"newest,omitempty"`
+	// Rewinding and Rewound are the Rewind's mark (txFile.rewinding,
+	// rewound).
+	Rewinding bool  `json:"rewinding,omitempty"`
+	Rewound   int64 `json:"rewound,omitempty"`
 }
 
 type savedLogSession struct {
@@ -195,7 +199,8 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 		if i >= maxSavedFiles && f.snapAt >= f.at {
 			break
 		}
-		st.Files = append(st.Files, savedFile{Key: f.key, At: f.snapAt, State: f.snap, Seen: f.seen, Newest: f.newest})
+		st.Files = append(st.Files, savedFile{Key: f.key, At: f.snapAt, State: f.snap, Seen: f.seen, Newest: f.newest,
+			Rewinding: f.rewinding, Rewound: f.rewound})
 	}
 	// The sessions the saved files name always go, past the bound, so a
 	// restart neither writes a second session.start for one nor forgets
@@ -282,7 +287,8 @@ func (a *Adapter) LoadState(raw json.RawMessage) error {
 		if sf.Key == "" || files[sf.Key] != nil || len(files) >= maxLogFiles || sf.At < 0 {
 			continue
 		}
-		files[sf.Key] = &txFile{key: sf.Key, at: sf.At, st: sf.State, snap: sf.State, snapAt: sf.At, seen: sf.Seen, newest: sf.Newest}
+		files[sf.Key] = &txFile{key: sf.Key, at: sf.At, st: sf.State, snap: sf.State, snapAt: sf.At, seen: sf.Seen, newest: sf.Newest,
+			rewinding: sf.Rewinding, rewound: max(sf.Rewound, 0)}
 		clock = max(clock, sf.Seen)
 	}
 	logs := make(map[string]*txSession, len(st.LogSessions))

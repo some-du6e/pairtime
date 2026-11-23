@@ -170,11 +170,14 @@ type txFile struct {
 	// newest is the time of the newest entry the reader took from the
 	// file, in Unix ms, which ranks it for eviction (older).
 	newest int64
-	// afresh says the reader made its memory of the file in this run, with
-	// none to go on (fileFor): its replays are a Rewind's, which read old
-	// lines again, not a restart's, which continue the memory saved. It
-	// isn't saved.
-	afresh bool
+	// rewinding says the reader made its memory of the file with none to
+	// go on (fileFor), and only replays have come since: they are a
+	// Rewind's, which reads the file's old lines again. rewound is where
+	// the Rewind's lines end, as far as they have come, so a replay that
+	// ends by then is one of them, as after a restart whose memory a
+	// snapshot from the Rewind's middle gave. Both are saved with the file.
+	rewinding bool
+	rewound   int64
 }
 
 // txState is the part of what the reader knows of a file at a point in
@@ -312,6 +315,17 @@ func (a *Adapter) parseLog(raw adapters.RawRecord) ([]adapters.Record, error) {
 			// the reader took: what it remembers of the file doesn't lead
 			// here.
 			f.restart(ll.Offset)
+		}
+		switch {
+		case ll.Replay && f.rewinding:
+			f.rewound = max(f.rewound, ll.End)
+		case !ll.Replay:
+			// The Rewind's replays, if any, are over. A file read anew from
+			// its start has none of its old lines.
+			f.rewinding = false
+			if ll.Offset == 0 {
+				f.rewound = 0
+			}
 		}
 		if ll.TooLong {
 			perr.Problem("a line longer than the tailers read")
@@ -527,9 +541,11 @@ func (a *Adapter) native(sid string, t int64) bool {
 // Rewind reads the old lines of a file the reader has no memory of again,
 // as for a session's file taken up at its end, whose start the start of
 // its hooks gives, and the next line read live would write the replay's
-// dated at the session's first entry. A restart's replays, which continue
-// the memory it saved (LogResume), keep the rule by time, so a start that
-// waited when the agent stopped still comes. A subagent's entries state
+// dated at the session's first entry. The reader saves the Rewind's mark
+// with the file (txFile.rewinding, rewound), so a restart's replays of
+// those lines follow it too, while a restart's replays of lines read live
+// keep the rule by time, so a start that waited when the agent stopped
+// still comes. A subagent's entries state
 // the session's token too, and are no start of it. It waits in pend until
 // startGrace after the entry, unless the entry is that old already
 // (resolveStart).
@@ -538,7 +554,7 @@ func (l *logLine) sessionStart(e *entry, sid string) {
 		return
 	}
 	ls := l.a.logSession(sid)
-	rewound := l.raw.Log.Replay && l.f.afresh
+	rewound := l.raw.Log.Replay && (l.f.rewinding || l.raw.Log.End <= l.f.rewound)
 	if ls.hookedAt(e.t) || rewound && ls.nativeAt > 0 {
 		return
 	}
@@ -1097,7 +1113,7 @@ func (a *Adapter) fileFor(key string) *txFile {
 			}
 			delete(a.files, oldest.key)
 		}
-		f = &txFile{key: key, afresh: true}
+		f = &txFile{key: key, rewinding: true}
 		a.files[key] = f
 	}
 	f.seen = a.clock

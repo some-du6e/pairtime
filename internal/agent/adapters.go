@@ -1678,10 +1678,11 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stam
 		ev.EventID = event.NewEventID(time.UnixMilli(ev.T))
 	}
 	// A late record is one the lookback reader read (takeLine): the ledger
-	// seals it in its own time, and judges whether it stays on the device
-	// by when the writer took it in (ledger.Input.Late, Lookback).
+	// seals it in its own time (ledger.Input.Late). Every log record dated
+	// before the ledger began, whatever read it, the ledger judges by when
+	// the writer took it in, for whether it stays on the device.
 	if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command, Sent: sent,
-		Late: r.Late, Lookback: r.Late}); err != nil {
+		Late: r.Late}); err != nil {
 		h.count(func() {
 			st.WriteFailures++
 			st.LastFailure = clip(fmt.Sprintf("the ledger refused a %s record: %v", ev.Kind(), err))

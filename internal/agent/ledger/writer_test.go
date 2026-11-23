@@ -749,11 +749,11 @@ func TestNoteMode(t *testing.T) {
 	// the start ("now:N"), has the agent give a stretch end at N by both
 	// ("seen-at:N"), or writes a hook call made then by both ("write-hook-at:N").
 	//
-	// And it writes a record lookback read, dated a day before the chain
-	// began, through a log reader, with this run's boot_id and mono 0, as
-	// the transcript reader dates one from before its run, and Lookback set
-	// ("write-lookback"), or not ("write-lookback-unset"), or one that came
-	// through a hook ("write-lookback-hook"), or one dated N ms after the
+	// And it writes a record a log reader read, dated a day before the
+	// chain began, with this run's boot_id and mono 0, as the transcript
+	// reader dates one from before its run or read late, whatever read it
+	// ("write-lookback"), or one that came through a hook
+	// ("write-lookback-hook"), or one dated N ms after the
 	// start ("write-lookback-at:N"); opens the writer again after a kill
 	// with a stretch end at N by the wall clock alone that state.json kept
 	// ("kill-seen-at:N"); has Options.Waiting say an event made before the
@@ -882,16 +882,16 @@ func TestNoteMode(t *testing.T) {
 		{"a stretch end an earlier run saw after the newest seal, later by the OS's clock of the same boot though earlier by the wall clock, is newer, and marks the first batch after it",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reopen-seen-os", "write-run", "seal"},
 			[]bool{false, true, true}, []bool{false, true, true}, []int{1, 1, 1}},
-		{"lookback's record of a time before the chain began, taken in after the switch back, counts by when the writer took it in, so its batch is online and marked",
+		{"a log reader's record of a time before the chain began, whatever read it, taken in after the switch back that linked the computer, counts by when the writer took it in, so its batch is online and marked",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "at:1000", "write-lookback", "seal"},
 			[]bool{false, true}, []bool{false, true}, []int{1, 1}},
-		{"lookback's record without Lookback goes by its own time, before the switch back, so its batch is local-only and the mark waits for the next",
-			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "at:1000", "write-lookback-unset", "seal", "write", "seal"},
-			[]bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
-		{"a record Lookback names that didn't come through a log reader goes by its own time",
+		{"one taken in during a local-only stretch is sealed local-only",
+			[]string{"file-local", "local", "write", "sealed", "at:1000", "write-lookback", "seal"},
+			[]bool{false, false}, []bool{false, false}, []int{1, 1}},
+		{"a record of a time before the chain began that didn't come through a log reader goes by its own time",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "at:1000", "write-lookback-hook", "seal", "write", "seal"},
 			[]bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
-		{"a record Lookback names that is dated after the chain began goes by its own time",
+		{"a log reader's record dated after the chain began goes by its own time",
 			[]string{"file-local", "local", "write", "sealed", "now:5000", "file-online", "online", "at:6000", "write-lookback-at:1000", "seal", "write", "seal"},
 			[]bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"lookback's record a kill left counts as taken in when the newest batch was sealed, so with no stretch end since, the next Open seals it online",
@@ -992,7 +992,6 @@ func TestNoteMode(t *testing.T) {
 				in := sampleInput(rng, "agent.output", ms, "s_1", "p_web")
 				in.Event.Source, in.Event.Via = event.SourceLog, event.ViaLog
 				in.Event.Mono, in.Event.BootID = RunClock(time.UnixMilli(ms))
-				in.Lookback = true
 				if edit != nil {
 					edit(&in)
 				}
@@ -1059,12 +1058,9 @@ func TestNoteMode(t *testing.T) {
 					continue
 				}
 				switch step {
-				case "write-lookback", "write-lookback-unset", "write-lookback-hook":
+				case "write-lookback", "write-lookback-hook":
 					writeLookback(i, testT-86_400_000, func(in *Input) {
-						switch step {
-						case "write-lookback-unset":
-							in.Lookback = false
-						case "write-lookback-hook":
+						if step == "write-lookback-hook" {
 							in.Event.Source, in.Event.Via = event.SourceHook, event.ViaHook
 						}
 					})

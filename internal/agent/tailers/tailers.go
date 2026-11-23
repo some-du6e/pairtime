@@ -187,11 +187,13 @@ type Options struct {
 	// root's first listing takes its files up at their end, and that is
 	// all.
 	Lookback func() (Child, error)
-	// Progress, when set, hears how far lookback has read: at Start, after
-	// each batch lookback's child read, and when a file with a history
-	// goes. Calls come from the tailer's goroutine and from lookback's,
-	// one at a time, each with the progress as it was when it began, so
-	// the last call has the newest.
+	// Progress, when set, hears how far lookback has read: at Start, on the
+	// goroutine that calls Start; when lookback's child starts, with
+	// Running set, after each batch it read, and when it ends, with Running
+	// clear and its Failures and Err, on lookback's goroutine; and when a
+	// file with a history goes, on the tailer's goroutine. Calls come one at
+	// a time, each with the progress as it was when it began, so the last
+	// call has the newest.
 	Progress func(Progress)
 	// LookbackUntil, when set, says when lookback's records end, at the
 	// start of the agent's ledger, or the zero time while that isn't

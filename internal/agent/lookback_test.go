@@ -255,8 +255,8 @@ func TestLookbackReachesTheLedger(t *testing.T) {
 // reads after pairtime login switched config.toml online, in a real agent
 // that started local, as every install does (#182): its records are dated
 // before the ledger began, while config.toml said local, but the writer
-// judges a lookback record by when it took it in (ledger.Input.Lookback),
-// so its batch is sealed online.
+// judges a log reader's record dated before the chain began by when it
+// took it in, so its batch is sealed online.
 func TestLookbackAfterLoginSealsOnline(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the replay's folders are Linux paths")

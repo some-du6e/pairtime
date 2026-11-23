@@ -442,12 +442,15 @@ var logRead = func() (wall, run time.Time) {
 
 // logArrival is a log line's arrival, read at wall by the wall clock and at
 // run by this run's clock (ledger.RunClock), as time.Now gives both: run
-// must keep Go's monotonic reading, which neither a suspend nor a step of
-// the wall clock moves, since the ledger holds a record of this run to the
-// moment config.toml said local-only by that reading (ledger.moment). A
-// record's mono comes from the arrival's, less how long before its read
-// its line says it happened (claudecode's env), so a line the agent read
-// after a switch back online, made before it, still counts as made before.
+// must keep Go's monotonic reading, which no step of the wall clock moves,
+// since the ledger holds a record of this run to the moment config.toml
+// said local-only by that reading (ledger.moment). A record's mono comes
+// from the arrival's, less how long before its read its line says it
+// happened (claudecode's env), so a line the agent read soon after a
+// switch back online, made before it, still counts as made before. A line
+// read more than LATE_READ_S after its time carries no reading and goes by
+// its t, since this run's clock leaves out a suspend the wall clock's gap
+// counts.
 func logArrival(wall, run time.Time) adapters.Arrival {
 	mono, boot := ledger.RunClock(run)
 	return adapters.Arrival{Via: event.ViaLog, T: wall.UnixMilli(), Mono: mono, BootID: boot}

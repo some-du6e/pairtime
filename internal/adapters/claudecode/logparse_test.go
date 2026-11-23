@@ -1191,7 +1191,8 @@ func TestTranscriptHistoryOfAHookedSession(t *testing.T) {
 // entry, before any stretch the ledger knows of. Nor does such a replay's
 // start count as the session's token once its hooks came, so an old line
 // read live after them, as lookback reads the history before a session's
-// hooks, gets the start of its own. An unhooked session's replays still
+// hooks, gets the start of its own. The Rewind's mark survives a restart,
+// in the Rewind's middle or after it. An unhooked session's replays still
 // give the reader's start, its only one.
 func TestTranscriptReplayOfAHookedSession(t *testing.T) {
 	const hooked = 1_795_194_000_000 // 2026-11-20T17:00:00Z, the session's first via-hook call
@@ -1201,21 +1202,28 @@ func TestTranscriptReplayOfAHookedSession(t *testing.T) {
 		name string
 		// hook is when the session's first via-hook call comes: "first",
 		// before the replays; "after", between them and the line read live;
-		// "" for never. live is that line's time. starts is how many
-		// session.starts the transcript gives, and at, when set, the time of
-		// the one it gives.
-		hook, live string
-		starts     int
-		at         int64
+		// "" for never. live is that line's time. restart is when the
+		// reader's memory goes to another reader: "mid", between the two
+		// replays; "late", after the line read live, which then reads the
+		// old lines again as replays and that line again; "" for never.
+		// starts is how many session.starts the transcript gives, and at,
+		// when set, the time of the one it gives.
+		hook, live, restart string
+		starts              int
+		at                  int64
 	}{
 		{"a hooked session's old lines read again as replays, then a line read live, give no session.start",
-			"first", "2026-11-21T17:33:00.000Z", 0, 0},
+			"first", "2026-11-21T17:33:00.000Z", "", 0, 0},
 		{"replays from before the session's first via-hook call, which comes before the next line read live, give no session.start",
-			"after", "2026-11-21T17:33:00.000Z", 0, 0},
+			"after", "2026-11-21T17:33:00.000Z", "", 0, 0},
 		{"an old line read live after them and after that call, older than its grace, gets one session.start, dated at it",
-			"after", "2026-11-19T18:00:00.000Z", 1, 1_795_111_200_000},
+			"after", "2026-11-19T18:00:00.000Z", "", 1, 1_795_111_200_000},
+		{"a restart between a hooked session's replays leaves the rest of the Rewind's without a session.start",
+			"first", "2026-11-21T17:33:00.000Z", "mid", 0, 0},
+		{"and the Rewind's lines read again as a restart's replays after it ended give none either",
+			"first", "2026-11-21T17:33:00.000Z", "late", 0, 0},
 		{"an unhooked session's old lines read again as replays give the reader's session.start at the next line read live",
-			"", "2026-11-21T17:33:00.000Z", 1, 0},
+			"", "2026-11-21T17:33:00.000Z", "", 1, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1232,24 +1240,48 @@ func TestTranscriptReplayOfAHookedSession(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if tc.hook == "first" {
-				hook()
-			}
-			for _, l := range lines[:2] {
-				if _, err := a.Parse(logRaw(l, false, true)); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if tc.hook == "after" {
-				hook()
-			}
-			var recs []adapters.Record
-			for _, raw := range []adapters.RawRecord{logRaw(lines[2], false, false), logRaw(lines[2], true, false)} {
-				got, err := a.Parse(raw)
+			restart := func() {
+				mem, err := a.SaveState()
 				if err != nil {
 					t.Fatal(err)
 				}
-				recs = append(recs, got...)
+				a = newTest()
+				if err := a.LoadState(mem); err != nil {
+					t.Fatal(err)
+				}
+			}
+			replay := func() {
+				for i, l := range lines[:2] {
+					if tc.restart == "mid" && i == 1 {
+						restart()
+					}
+					if _, err := a.Parse(logRaw(l, false, true)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			var recs []adapters.Record
+			live := func() {
+				for _, raw := range []adapters.RawRecord{logRaw(lines[2], false, false), logRaw(lines[2], true, false)} {
+					got, err := a.Parse(raw)
+					if err != nil {
+						t.Fatal(err)
+					}
+					recs = append(recs, got...)
+				}
+			}
+			if tc.hook == "first" {
+				hook()
+			}
+			replay()
+			if tc.hook == "after" {
+				hook()
+			}
+			live()
+			if tc.restart == "late" {
+				restart()
+				replay()
+				live()
 			}
 			starts := ofKind[*event.SessionStart](recs)
 			if len(starts) != tc.starts || tc.at != 0 && starts[0].Event.T != tc.at {
