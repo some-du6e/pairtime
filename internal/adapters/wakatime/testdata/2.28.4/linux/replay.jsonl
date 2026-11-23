@@ -1,0 +1,2 @@
+{"event":{"data":{"act":"edit","edit_source":"unknown","editor":"vscode","file_hash":"file-1","lines_changed":1},"harness":"none","kind":"editor.activity","project_key":"project-1","session_key":"none","source":"editor","t":1795443210370,"via":"editor"},"from":"000001.json#0"}
+{"event":{"data":{"act":"save","edit_source":"unknown","editor":"vscode","file_hash":"file-1","lines_changed":0},"harness":"none","kind":"editor.activity","project_key":"project-1","session_key":"none","source":"editor","t":1795443242042,"via":"editor"},"from":"000003.json#0"}
