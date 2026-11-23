@@ -1,0 +1,6 @@
+{
+  "data": {
+    "grand_total": {"text": "1h 5m / 2h goal", "total_seconds": 3900},
+    "goal": {"target_seconds": 7200, "tracked_seconds": 3900, "completion_percent": 54, "complete": false}
+  }
+}
