@@ -50,9 +50,25 @@
 # PAIRTIME_ALLOW_UNSIGNED from the session once it has read it, so it
 # lasts for one install.
 
-# Everything runs inside this script block, so that pasting the script with
-# irm | iex leaves no functions or variables behind in the session.
-$installPairtime = {
+# Everything runs in scopes of its own: the first script block below runs
+# the second, the installer, which it gets as an argument rather than
+# through a variable. irm | iex runs this text in the session's own scope,
+# where a variable set here would replace one of the session's with the
+# same name, and removing it afterwards would take the session's away. So
+# pasting the script leaves no functions or variables behind, and touches
+# none of the session's own.
+#
+# Tests dot-source this file with PAIRTIME_INSTALL_PS1_TEST=functions, then
+# dot-source the installer it returns, to call its functions
+# (install/e2e/test.ps1).
+& {
+  param([scriptblock]$Installer)
+  if ($env:PAIRTIME_INSTALL_PS1_TEST -eq 'functions') {
+    $Installer
+  } else {
+    & $Installer @args
+  }
+} {
   param(
     [string]$Version = $env:PAIRTIME_VERSION,
     [string]$BaseUrl = $env:PAIRTIME_BASE_URL,
@@ -657,16 +673,4 @@ $installPairtime = {
   if ($env:PAIRTIME_INSTALL_PS1_TEST -ne 'functions') {
     Install-Pairtime
   }
-}
-
-# Tests dot-source this file with PAIRTIME_INSTALL_PS1_TEST=functions to call
-# its functions (install/e2e/test.ps1).
-try {
-  if ($env:PAIRTIME_INSTALL_PS1_TEST -eq 'functions') {
-    . $installPairtime
-  } else {
-    & $installPairtime @args
-  }
-} finally {
-  Remove-Variable -Name installPairtime -ErrorAction SilentlyContinue
-}
+} @args

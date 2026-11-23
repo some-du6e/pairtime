@@ -339,6 +339,18 @@ Test-Case 'PAIRTIME_ALLOW_UNSIGNED has irm | iex of a script that trusts no key 
   ok 'no key this script trusts signed manifest\.json[\s\S]*PAIRTIME_ALLOW_UNSIGNED is gone' $installed `
   (Invoke-Child @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', $command) @{ PAIRTIME_VERSION = $version; PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_NO_INSTALL = '1' })
 
+# irm | iex runs the script in the session's own scope, so the script must
+# leave the session's variables as they were, one called installPairtime,
+# the name it once kept itself in, included.
+foreach ($shell in $shells) {
+  New-Case
+  $command = "`$installPairtime = 'the session''s own'; irm $server/real/install.ps1 | iex; " +
+    "if (`$installPairtime -ceq 'the session''s own') { 'installPairtime is as it was' } else { 'installPairtime changed'; exit 9 }"
+  Test-Case "in $shell, irm | iex leaves the session's own variable called installPairtime as it was" `
+    ok 'Installed pairtime[\s\S]*installPairtime is as it was' $installed `
+    (Invoke-Child @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', $command) @{ PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_RELEASE_KEYS = (Join-Path $keys 'real.pub'); PAIRTIME_NO_INSTALL = '1' } $shell)
+}
+
 New-Case
 Test-Case 'PAIRTIME_ALLOW_UNSIGNED does not apply once the script trusts a key: a release no trusted key signed is refused' `
   fails "isn't signed by a key this script trusts.*Allowing unsigned installs doesn't change that" '' `
@@ -505,7 +517,9 @@ Set-Content -LiteralPath $vectorFile -Value ($vectors | ForEach-Object { $f = $_
 # loaded. It must print ok.
 function Test-Functions([string]$Name, [string]$Body, [string]$Shell = 'powershell.exe') {
   $file = Join-Path $scratch ('unit-' + [guid]::NewGuid().ToString('N') + '.ps1')
-  $text = "`$ErrorActionPreference = 'Stop'`n`$env:PAIRTIME_INSTALL_PS1_TEST = 'functions'`n. '$repoScript'`n$Body"
+  # The file returns its installer in this mode, and dot-sourcing that
+  # puts the installer's functions here.
+  $text = "`$ErrorActionPreference = 'Stop'`n`$env:PAIRTIME_INSTALL_PS1_TEST = 'functions'`n. (. '$repoScript')`n$Body"
   Set-Content -LiteralPath $file -Value $text
   New-Case
   $result = Invoke-File $file @() @{ VECTORS = $vectorFile } $Shell
