@@ -579,7 +579,16 @@ $installPairtime = {
       # work. So the staged copy runs it and is what it copies into place.
       # Without pairtime install there's no consent screen to wait for, so
       # the script puts the binary in place itself.
-      $handOver = -not $placeOnly -and (@(& $new help) -cmatch '^  install ')
+      # Whether this build has pairtime install comes from its help. A help
+      # that fails, or is killed, says nothing about that, and a native
+      # command's status never throws, so the install stops on it here
+      # rather than put the binary in place with no consent screen.
+      if (-not $placeOnly) {
+        $help = Invoke-WithTimeout $new 'help' $VersionTimeout
+        if ($help.TimedOut) { Fail "the new pairtime didn't finish 'pairtime help' within $VersionTimeout seconds, so it wasn't installed. Any pairtime you had is still there." }
+        if (-not $help.Ok) { Fail "the new pairtime's 'pairtime help' failed ($(Get-Start $help.Output 300)), so it wasn't installed. Any pairtime you had is still there." }
+        $handOver = @(($help.Output -split "`r?`n") -cmatch '^  install ').Count -gt 0
+      }
       if (-not $handOver) {
         Move-IntoPlace $new $target
         $new = $null

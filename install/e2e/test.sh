@@ -309,6 +309,23 @@ check "--no-install stops once the binary is in place" ok 'To finish setting it 
   run sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub" --no-install
 check_record ''
 
+# A help that fails says nothing about pairtime install, and without it
+# the binary would go in place with no consent screen.
+fresh
+check "a build whose help fails is never put in place, and the folders made for it go again" \
+  fails "the new pairtime's .pairtime help. exited with status 5, so it wasn't installed" '' \
+  run PAIRTIME_FAKE_HELP_EXIT=5 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
+check_record ''
+
+fresh
+mkdir -p "$home/.local/bin"
+echo 'an old pairtime' > "$home/.local/bin/pairtime"
+check "a build whose help fails leaves the pairtime that was there as it was" \
+  fails 'Any pairtime you had is still there' "$installed" \
+  run PAIRTIME_FAKE_HELP_EXIT=5 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
+if [ "$(cat "$home/.local/bin/pairtime")" != 'an old pairtime' ]; then fail "the old pairtime was changed"; fi
+check_record ''
+
 fresh
 check "a pairtime install that stops before it puts pairtime in place leaves nothing, the folders made for it included" \
   fails 'pairtime install. stopped with status 4 before it put pairtime in place, so nothing was installed' '' \

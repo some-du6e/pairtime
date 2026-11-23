@@ -696,7 +696,22 @@ main() {
   if [ -n "$made_local" ]; then finish="$finish --made $(shell_quote "$HOME/.local")"; fi
   if [ -n "$made_bin" ]; then finish="$finish --made $(shell_quote "$bin_dir")"; fi
 
-  if [ "$no_install" != 1 ] && "$new" help < /dev/null 2> /dev/null | grep -q '^  install '; then
+  # Whether this build has pairtime install, from its help. A help that
+  # fails, or is killed, says nothing about that, and without pairtime
+  # install the binary would go in place with no consent screen, so the
+  # install stops there instead.
+  has_install=''
+  if [ "$no_install" != 1 ]; then
+    step='asking the new binary for its commands'
+    if ! run_with_timeout "$version_timeout" "$work/help.out" "$new" help; then
+      if [ "$status" = 137 ]; then
+        die "the new pairtime didn't finish \`pairtime help\` within $version_timeout seconds, so it wasn't installed. Any pairtime you had is still there."
+      fi
+      die "the new pairtime's \`pairtime help\` exited with status $status, so it wasn't installed. Any pairtime you had is still there."
+    fi
+    if grep -q '^  install ' "$work/help.out"; then has_install=1; fi
+  fi
+  if [ -n "$has_install" ]; then
     # pairtime install puts the binary in place itself, after the yes on
     # its consent screen, so nothing stays on the computer before the teen
     # agrees (docs/errata/2026-11-20-install-binary-after-consent.md). It

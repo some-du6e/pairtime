@@ -110,6 +110,11 @@ function Invoke-OneLiner([hashtable]$Environment, [string]$Shell = 'powershell.e
 
 $installed = 'pairtime pairtime\bin pairtime\bin\pairtime.exe'
 
+# The shells the cases that check how PowerShell itself behaves run in:
+# Windows PowerShell 5.1, and PowerShell 7 where the runner has it.
+$shells = @('powershell.exe')
+if (Get-Command pwsh -ErrorAction SilentlyContinue) { $shells += 'pwsh.exe' }
+
 # The real binary's cases stop before pairtime install with -NoInstall,
 # except the one just below, which runs the real pairtime install and
 # uninstall (WP-IN2).
@@ -382,6 +387,25 @@ Test-Record 'install'
 New-Case
 Test-Case '-NoInstall stops once the binary is in place' ok 'To finish setting it up, run' $installed (Invoke-File $stamped (Real fake fake.pub @('-NoInstall')))
 Test-Record ''
+
+# A help that fails says nothing about pairtime install, and without it
+# the binary would go in place with no consent screen. A native command's
+# status throws in neither Windows PowerShell 5.1 nor PowerShell 7.
+foreach ($shell in $shells) {
+  New-Case
+  Test-Case "in $shell, a build whose help fails is never put in place, and the folders made for it go again" `
+    fails "the new pairtime's 'pairtime help' failed.*so it wasn't installed" '' `
+    (Invoke-File $stamped (Real fake fake.pub) @{ PAIRTIME_FAKE_HELP_EXIT = '5' } $shell)
+  Test-Record ''
+
+  New-Case
+  New-Item -ItemType Directory -Force -Path (Join-Path $script:appData 'pairtime\bin') | Out-Null
+  Set-Content -LiteralPath (Join-Path $script:appData 'pairtime\bin\pairtime.exe') -Value 'an old pairtime'
+  Test-Case "in $shell, a build whose help fails leaves the pairtime.exe that was there as it was" fails 'Any pairtime you had is still there' $installed `
+    (Invoke-File $stamped (Real fake fake.pub) @{ PAIRTIME_FAKE_HELP_EXIT = '5' } $shell)
+  if ((Get-Content -LiteralPath (Join-Path $script:appData 'pairtime\bin\pairtime.exe')) -ne 'an old pairtime') { Add-Failure "in ${shell}, the old pairtime.exe was changed" }
+  Test-Record ''
+}
 
 New-Case
 Test-Case 'a pairtime install that stops before it puts pairtime in place leaves nothing, the folders made for it included' `
