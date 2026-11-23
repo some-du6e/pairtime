@@ -868,8 +868,9 @@ func TestIgnoredSessionLeavesFocus(t *testing.T) {
 // which the procs tie hosts (WP-AD3), whose lines run in kept, a repo that
 // counts, or in out, a folder a .pairtime-ignore keeps out (DESIGN 8.8).
 // Each session's transcript is a file of its own in transcripts, a folder
-// of a projects folder listed already, so the tailers read it from its
-// start.
+// of a projects folder listed already, there and empty for each of the
+// sessions newTranscriptFocusRig names before the tailers start, so they
+// read it from its start (listedHome).
 type transcriptFocusRig struct {
 	a           *agent
 	dirs        home.Dirs
@@ -880,7 +881,7 @@ type transcriptFocusRig struct {
 	lines       int
 }
 
-func newTranscriptFocusRig(t *testing.T) *transcriptFocusRig {
+func newTranscriptFocusRig(t *testing.T, sessions ...string) *transcriptFocusRig {
 	t.Helper()
 	if runtime.GOOS != "linux" {
 		t.Skip("the process table and the transcript's folders are Linux's")
@@ -960,6 +961,11 @@ func newTranscriptFocusRig(t *testing.T) *transcriptFocusRig {
 	r.kept, r.out, r.transcripts = kept, out, filepath.Join(projects, "-p")
 	if err := os.MkdirAll(r.transcripts, 0o700); err != nil {
 		t.Fatal(err)
+	}
+	for _, sid := range sessions {
+		if err := os.WriteFile(filepath.Join(r.transcripts, sid+".jsonl"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := store.Put("tailers", map[string]any{"v": 1, "files": []any{}, "roots": []string{projects}}); err != nil {
 		t.Fatal(err)
@@ -1052,8 +1058,8 @@ func (r *transcriptFocusRig) events(t *testing.T) []event.Event {
 // while its lines are out of pairtime, so no minute of that stretch can
 // credit it, and the ledger holds none of those lines.
 func TestIgnoredTranscriptLeavesFocus(t *testing.T) {
-	r := newTranscriptFocusRig(t)
 	const sid = "55555555-0000-4000-8000-000000000005"
+	r := newTranscriptFocusRig(t, sid)
 	kept, out := r.kept, r.out
 	write := func(t *testing.T, dir string, ahead time.Duration) { r.write(t, sid, dir, ahead, false) }
 	key := hookpath.SessionKey(r.a.sessionSecret(), sid)
@@ -1148,7 +1154,7 @@ func TestClearedTranscriptLeavesFocus(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newTranscriptFocusRig(t)
+			r := newTranscriptFocusRig(t, old, next)
 			oldKey := hookpath.SessionKey(r.a.sessionSecret(), old)
 			r.front(focus.Change{At: time.Now(), PID: 100})
 			r.wait(t, oldKey, 0, false)
