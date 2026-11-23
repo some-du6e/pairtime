@@ -142,10 +142,14 @@ type Vault struct {
 
 	keepText atomic.Bool
 
-	// files is held for writing while a file is replaced or deleted, and
-	// for reading while one is flushed or read: Windows can neither rename
-	// over a file nor delete one that a handle has open.
-	files sync.RWMutex
+	// files is held for writing while Reconcile, a rewrite or Close
+	// replaces or deletes files, and for reading while Text or Paths reads
+	// one: Windows can neither rename over a file nor delete one that a
+	// handle has open. syncMu is held while Sync flushes cur, and while the
+	// newest file, which Keep appends to, is replaced or deleted. Both are
+	// taken before mu, files before syncMu, and Keep takes neither.
+	files  sync.RWMutex
+	syncMu sync.Mutex
 
 	mu     sync.Mutex
 	ready  bool   // Reconcile has run
@@ -456,6 +460,8 @@ func segments(dir string) ([]string, error) {
 func (v *Vault) Reconcile(next uint64) error {
 	v.files.Lock()
 	defer v.files.Unlock()
+	v.syncMu.Lock()
+	defer v.syncMu.Unlock()
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.closed {
@@ -695,8 +701,8 @@ func (v *Vault) toDay(day string) error {
 // in the batch is on disk first. It holds no lock Keep takes while it
 // waits for the disk.
 func (v *Vault) Sync() {
-	v.files.RLock()
-	defer v.files.RUnlock()
+	v.syncMu.Lock()
+	defer v.syncMu.Unlock()
 	v.mu.Lock()
 	f, dirty := v.cur, v.dirty
 	v.dirty = false
@@ -721,6 +727,8 @@ func (v *Vault) Sync() {
 func (v *Vault) Close() error {
 	v.files.Lock()
 	defer v.files.Unlock()
+	v.syncMu.Lock()
+	defer v.syncMu.Unlock()
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.closed {
@@ -837,13 +845,18 @@ func (v *Vault) DropText() (int, error) {
 
 // filter writes each of the vault's files again with only the entries
 // keep keeps, and deletes a file left with none. The files of other
-// device keys, in old/, are left alone.
+// device keys, in old/, are left alone. Only the newest file, which Keep
+// may append to, is written again under the lock Keep takes, so the
+// ledger writer waits for that one file at most.
 func (v *Vault) filter(keep func(entry) bool) (int, error) {
 	v.files.Lock()
 	defer v.files.Unlock()
 	v.mu.Lock()
-	defer v.mu.Unlock()
-	if v.closed {
+	closed := v.closed
+	// Keep never goes back to a day before this one (toDay).
+	newest := max(v.newest, v.curDay)
+	v.mu.Unlock()
+	if closed {
 		return 0, ErrClosed
 	}
 	days, err := segments(v.dir)
@@ -853,7 +866,12 @@ func (v *Vault) filter(keep func(entry) bool) (int, error) {
 	dropped := 0
 	var errs []error
 	for _, day := range days {
-		n, err := v.filterFile(day, keep)
+		var n int
+		if day < newest {
+			n, err = v.filterFile(day, keep)
+		} else {
+			n, err = v.filterNewest(day, keep)
+		}
 		dropped += n
 		if err != nil {
 			errs = append(errs, err)
@@ -862,8 +880,24 @@ func (v *Vault) filter(keep func(entry) bool) (int, error) {
 	return dropped, errors.Join(errs...)
 }
 
+// filterNewest is filterFile for a file Keep may append to, which it
+// closes first: Windows renames over no open file, and deletes none.
+func (v *Vault) filterNewest(day string, keep func(entry) bool) (int, error) {
+	v.syncMu.Lock()
+	defer v.syncMu.Unlock()
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.cur != nil && v.curDay == day {
+		if err := v.closeCur(); err != nil {
+			return 0, err
+		}
+	}
+	return v.filterFile(day, keep)
+}
+
 // filterFile writes day's file again with only the entries keep keeps, or
-// deletes it when none is left. Both locks are held.
+// deletes it when none is left. v.files is held for writing, and when the
+// file is the newest, syncMu and mu too, with the file closed.
 func (v *Vault) filterFile(day string, keep func(entry) bool) (int, error) {
 	name := segPath(v.dir, day)
 	f, err := readFile(name, day, v.keyID)
@@ -879,12 +913,6 @@ func (v *Vault) filterFile(day string, keep func(entry) bool) (int, error) {
 	dropped := len(f.entries) - len(kept)
 	if dropped == 0 {
 		return 0, nil
-	}
-	if v.cur != nil && v.curDay == day {
-		// Windows renames over no open file, and deletes none.
-		if err := v.closeCur(); err != nil {
-			return 0, err
-		}
 	}
 	if len(kept) == 0 {
 		if err := os.Remove(name); err != nil {
