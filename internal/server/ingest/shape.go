@@ -33,11 +33,13 @@ func shapeErr(code, field string) *itemErr {
 func refused(status int, code string) *itemErr { return &itemErr{status: status, code: code} }
 
 // The members each item may have, required and optional (ingest-v1 2.3).
-// TestAllowlist checks the bucket's and the slot's against
-// event.Tier1BucketFields and event.Tier1SlotFields, agent_only
+// TestAllowlist checks each against DESIGN 4.3's tier-1 list and ingest-v1
+// 2.3's tables, and the bucket's and the slot's against
+// event.Tier1BucketFields and event.Tier1SlotFields too, agent_only
 // (D-bucket-agent-only) included.
 var (
 	batchRequired   = []string{"b", "n", "R_b", "H_b", "prev"}
+	batchOptional   = []string{}
 	bucketRequired  = []string{"v", "params", "minute", "device", "slots", "credited_s", "agent_running_s", "state", "witness", "rev"}
 	bucketOptional  = []string{"uncredited", "agent_only"}
 	slotRequired    = []string{"cr"}
@@ -45,7 +47,9 @@ var (
 	commitRequired  = []string{"sha", "parents", "project", "observed_at", "author_time", "committer_time", "actor"}
 	commitOptional  = []string{"files_changed", "insertions", "deletions", "path_hmacs", "credited_seconds_since_parent", "rewrites", "agent_trailer"}
 	rewriteRequired = []string{"old_sha", "new_sha"}
+	rewriteOptional = []string{}
 	labelsRequired  = []string{"client_build", "scoring_version", "params", "harnesses", "typing_module", "vm"}
+	labelsOptional  = []string{}
 	harnessRequired = []string{"name"}
 	harnessOptional = []string{"version"}
 )
@@ -359,11 +363,14 @@ func isParams(s string) bool {
 	return ok && isHex(h, 64)
 }
 
-// isVersion reports whether s is a version such as 2.1.327, v0.1.0-alpha.1
-// or 0.1.0+3dbf6d4, in D-version-grammar's form, which pkg/event checks
-// for a harness_version too. A bare word isn't one, so no file, folder or
-// host name reaches the labels.
-func isVersion(s string) bool { return event.IsVersion(s) }
+// isVersion reports whether s is a version in tier 1's form
+// (event.IsTier1Version; ingest-v1 2.3.4), such as 2.1.327, v0.1.0-alpha.1
+// or 0.1.0+3dbf6d4: D-version-grammar's form, which pkg/event checks for a
+// harness_version on the device, with each identifier of the suffix all
+// digits, at least 7 lowercase hex digits, or one of a few words such as
+// alpha and dev. A bare word isn't one, and neither is a name after the
+// number, so no file, folder or host name reaches the labels this way.
+func isVersion(s string) bool { return event.IsTier1Version(s) }
 
 // minuteLayout is a bucket's minute, as encoding/json writes a whole UTC
 // minute of a time.Time.
@@ -403,7 +410,7 @@ func hash(raw json.RawMessage, field string) (ledger.Hash, *itemErr) {
 // has passed its form, br.b holds it, even when another member fails.
 func parseBatchRoot(raw json.RawMessage) (batchRoot, *itemErr) {
 	var br batchRoot
-	m, e := object(raw, "", batchRequired, nil)
+	m, e := object(raw, "", batchRequired, batchOptional)
 	if e != nil {
 		if raw, ok := objectMember(raw, "b"); ok {
 			if b, e := integer(raw, "b", 1, math.MaxInt64); e == nil {
@@ -856,7 +863,7 @@ func parseCommit(raw json.RawMessage) (commitRecord, *itemErr) {
 		}
 		for i, raw := range a {
 			path := index("rewrites", i)
-			rm, e := object(raw, path, rewriteRequired, nil)
+			rm, e := object(raw, path, rewriteRequired, rewriteOptional)
 			if e != nil {
 				return c, e
 			}
@@ -907,7 +914,7 @@ type harnessLabel struct {
 // parseLabels checks labels' forms (ingest-v1 2.3.4).
 func parseLabels(raw json.RawMessage) (labels, *itemErr) {
 	var l labels
-	m, e := object(raw, "", labelsRequired, nil)
+	m, e := object(raw, "", labelsRequired, labelsOptional)
 	if e != nil {
 		return l, e
 	}
