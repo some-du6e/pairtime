@@ -208,7 +208,7 @@ Paths follow CP 7: `%LOCALAPPDATA%\pairtime\`, `~/Library/Application Support/pa
 | Path | Format | Holds | Kept |
 |---|---|---|---|
 | `ledger/YYYY-MM-DD.seg` | Length-prefixed records `{hdr, body}` (3.6) | Every event's shareable fields, keyed scorer features and content commitments; scorer checkpoints; upload-failure notes. No text | 180 days, the submission horizon (TP B8) |
-| `ledger/batches.seg` | `{b, first_seq, last_seq, n, R_b, H_b, sealed_at, receipt}` | Batch roots, the chain, the server's signed receipt per batch | 180 days, or until every submission using them is past its spot-check window |
+| `ledger/batches.seg` | `{b, first_seq, last_seq, n, R_b, H_b, sealed_at, receipt}` | Batch roots, the chain, the server's signed receipt per batch | 180 days, or until every submission using them is past its spot-check window. A batch's row goes when its batch's segment goes, and a base frame then names the first batch the file keeps |
 | `vault/YYYY-MM-DD.seg` | Per-record AES-256-GCM under `K_vault` | Prompt text and each turn's final agent message (first 16 KiB); the teen's choices for each drawn item of a content reveal, until the server has stored it (7.6); file paths for local recaps | Text and reveal choices: 90 days, or until a submission covering them is decided, whichever is later (TP B8). Paths: 30 days. The teen can shorten both |
 | `buckets/YYYY-MM-DD.jsonl` | Minute buckets with revisions | The scorer's output (SM 5.1) | 180 days |
 | `commits/YYYY-MM-DD.jsonl` | JSONL, a file per UTC day of `observed_at` | 4.3's commit records, which the git adapter's sink appends before the watcher's cursor moves past the change: tier-1 fields only, with no commit message and no path | 180 days, like the minute buckets. The uploader sends them from here |
@@ -447,7 +447,7 @@ Every field has a finite retention period, published at `https://<host>/privacy`
 | Device | Prompt text, final agent messages | 90 days, or until a submission covering them is decided, whichever is later. The teen can shorten it or turn "keep prompt text" off (TP B8) |
 | Device | Transcripts and agent output | Not copied; the harness's own retention applies (Claude Code: 30 days by default; TP B8) |
 | Device | File paths in the vault; tool commands | 30 days |
-| Device | Presence and focus slots, opt-in typing aggregates, MinHash sketches | 90 days |
+| Device | Presence and focus slots, opt-in typing aggregates, MinHash sketches, which the device keeps only inside ledger records | With the ledger records that hold them: 180 days, or longer while a submission using them is inside its spot-check window |
 | Device | Ledger records and batch roots | 180 days, or longer while a submission using them is inside its spot-check window |
 | Device | Minute buckets | 180 days; day rollups and coach records until the teen deletes them |
 | Device | Hook calls the agent hasn't parsed yet, in `held.jsonl`, its pending log and its replay file: whole payloads, prompts included, unencrypted, in a folder only the teen can read | Until parsed; kept 7 days at most, and no new call is kept once the ledger can't open until `pairtime restore` runs |

@@ -1,0 +1,58 @@
+{
+  "fixture": "copies",
+  "anchors": [
+    {
+      "event_id": "01a214cd-c780-7533-8c9c-e56a3a8957f4",
+      "kind": "substantive_prompt",
+      "t": 1795645360000,
+      "local": "16:22:40",
+      "project_key": "p_dc19a7d5b709",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 160,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "A",
+      "sm": "P1's hook copy. The transcript's copy, 25 ms later, declares nothing either, so rules 1 to 3 leave P1 the person's (SM 2.2). One anchor, corroborated"
+    },
+    {
+      "event_id": "01a214ce-2928-72e3-8f13-85a0daab439b",
+      "kind": "queued_message",
+      "t": 1795645385000,
+      "local": "16:23:05",
+      "project_key": "p_dc19a7d5b709",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 140,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "A",
+      "sm": "The hook's agent.queue of the queued message. The transcript's, 25 ms later in the same turn, is the same message (E-cc-queued-turn), so there is one Q anchor, corroborated. It has key presses in its slot with Terminal, which hosts the session, in focus, and its 30 characters make it substantive, so its lead is 120 + 30 / 1.5 (SM 2.3)"
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_6d363b94d6e1",
+      "turn_key": "t_73de6f449270",
+      "t_submit": 1795645360000,
+      "local_submit": "16:22:40",
+      "t_stop": 1795645420000,
+      "local_stop": "16:23:40",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "P1, whose copies both declare nothing. The agent takes the queued message up inside it"
+    },
+    {
+      "session_key": "s_6d363b94d6e1",
+      "turn_key": "t_0bb653ef7a8b",
+      "t_submit": 1795645680000,
+      "local_submit": "16:28:00",
+      "t_stop": 1795645740000,
+      "local_stop": "16:29:00",
+      "origin": "scheduled",
+      "sm": "P2, scheduled by SM 2.2 rule 1 read from the transcript's copy, whose turnOrigin scheduled the reader writes as origin_declared cron"
+    }
+  ]
+}

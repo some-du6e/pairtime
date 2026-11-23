@@ -31,9 +31,9 @@
     {
       "id": "device.activity",
       "where": "device",
-      "data": "Presence and focus samples, typing counts if you turned on the typing module, and prompt similarity sketches (MinHash)",
-      "kept": "{days}",
-      "days": 90
+      "data": "Presence and focus samples, typing counts if you turned on the typing module, and prompt similarity sketches (MinHash), which pairtime keeps inside the ledger's records",
+      "kept": "With the ledger records that hold them: {days}, or longer while a submission that uses them is inside its spot-check window ({window})",
+      "days": 180
     },
     {
       "id": "device.ledger",
