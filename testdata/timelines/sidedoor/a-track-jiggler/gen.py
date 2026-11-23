@@ -12,7 +12,6 @@ sys.path.insert(0, os.path.dirname(HERE))
 import sidedoor as sd  # noqa: E402
 
 tl = sd.tl
-ERRATUM = "2026-11-19-turns-without-a-stop"
 
 fx = tl.Fixture(
     "sidedoor/a-track-jiggler",
@@ -93,7 +92,7 @@ for t in CALLS:
     sweep.anchor(t, lead_s=lead, typing_part_s=typing, reason="P", level="C", typing_ok=lambda slot: False)
     # Each anchor starts a human-owned turn, whose fill is the base alone.
     sweep.reset(t, sd.R_TURN_BASE_S)
-# The track turns have no agent records, so none runs (the erratum).
+# A track turn has no agent records, so it never runs (SM 1.3, DESIGN 5.4).
 
 exp = tl.Expected(fx, sm="docs/PLAN.md WP-FX4 (a); DESIGN 5.2, 5.4, 6.2 D2, D3 and D19, 6.4", evidence="C",
                   witness="witnessed", projects={P: "the project the Goose session runs in"},
@@ -103,19 +102,17 @@ exp.row("14:00", bucket=False, codes=["X.no_anchor"],
 for m in ("14:01", "14:02", "14:03"):
     exp.row(m, credit={P: {"P": 60}}, uncredited={}, agent=0,
             note="Inside the think parts of the track anchors, which need presence only.")
-# From the first call on, agent_running_s 0 rests on the erratum too: read
-# literally, the turn the 14:04:00 call opens would run from then on.
 for m in ("14:04", "14:05"):
-    exp.row(m, credit={P: {"P": 60}}, uncredited={}, agent=0, erratum=ERRATUM,
-            note="Inside the think parts of the track anchors, which need presence only. No track turn runs, so "
-                 "agent_running_s is 0; read literally, the turn the 14:04:00 call opens would run all minute.")
-exp.row("14:06", credit={P: {"P": 9, "READ": 50}}, uncredited={"X.no_anchor": 1}, agent=0, erratum=ERRATUM,
+    exp.row(m, credit={P: {"P": 60}}, uncredited={}, agent=0,
+            note="Inside the think parts of the track anchors, which need presence only. No track turn runs "
+                 "(SM 1.3), so agent_running_s is 0.")
+exp.row("14:06", credit={P: {"P": 9, "READ": 50}}, uncredited={"X.no_anchor": 1}, agent=0,
         note="The last think part ends at 14:06:09, 60 s before the last call. Then each call's 20 s base "
              "drains: 18 s left of the 14:06:06 call's, 20 s of the 14:06:27 call's, and 12 s of the 14:06:48 "
              "call's; 14:06:47 has nothing left to drain.")
-exp.row("14:07", credit={P: {"READ": 28}}, uncredited={"X.no_anchor": 32}, agent=0, erratum=ERRATUM,
+exp.row("14:07", credit={P: {"READ": 28}}, uncredited={"X.no_anchor": 32}, agent=0,
         note="The rest of the 14:06:48 base until 14:07:08, then the 14:07:09 call's 20 s until 14:07:29.")
-exp.row("14:08", bucket=False, codes=["X.no_anchor"], erratum=ERRATUM,
+exp.row("14:08", bucket=False, codes=["X.no_anchor"],
         note="Nothing credits the jiggler; no bucket, since no agent turn runs.")
 sd.check_rows(exp, sweep, P)
 
@@ -153,7 +150,7 @@ expected = exp.doc(
     },
     stated=["level_a_s", "level_b_s", "logged_s", "ai_logged_s", "level_c_cap_s"],
     approx={},
-    errata=[ERRATUM],
+    errata=[],
     notes=[
         "Every credited second rests on a track anchor, so all 387 s are level C and labeled via_track.",
         "logged_s and ai_logged_s are 0: cli.track records never count (DESIGN 6.2 D19), and nothing else of "
@@ -161,10 +158,9 @@ expected = exp.doc(
         "level_c_cap_s is min(level_c_s, ai_logged_s / 3), the most a program that opts in to level C could "
         "take inside forge-verified commit intervals (DESIGN 5.2, 6.2 D5; SM 5.4). It is 0, so the loop earns "
         "0 submittable seconds whatever the program's policy, as DESIGN 5.2 requires.",
-        "The READ seconds, the X.no_anchor seconds after 14:06:09 and agent_running_s from 14:04 on, its total "
-        "included, depend on the erratum: a track turn has no agent record, so the rules don't say whether it is "
-        "running. Read literally, the turn the 14:04:00 call opens would run to the end of the window, making "
-        "them SUP, X.agent_only and 300 s, and 14:08 would get a bucket.",
+        "No track turn runs: it has no agent record, and only a session the harness's own hooks or logs report "
+        "runs a turn past its latest one (SM 1.3; DESIGN 5.2, 5.4). So the drains are READ, the idle seconds "
+        "after 14:06:09 are X.no_anchor, agent_running_s is 0, and 14:08 has no bucket.",
     ],
 )
 
@@ -192,7 +188,7 @@ prompts = {
 }
 
 sidedoor = side.doc(
-    errata=[ERRATUM],
+    errata=[],
     notes=[
         "Each call opens an anchor and starts a turn whose fill is the 20 s base and nothing more.",
     ],
