@@ -43,10 +43,12 @@
 // # Inclusion proofs
 //
 // Each head is stored with its day's leaves, the hashes T_d is the root of,
-// in day_leaves, and kept for good. Proof gives a stored batch's leaf in
-// its day's tree and the leaf's inclusion proof from them, which a bundle
-// carries (DESIGN 7.8; WP-SB8), so a batch's proof outlives the day's other
-// witness rows, which retention and an account's erasure delete.
+// in day_leaves, which keeps them as long as any witness row of their day
+// (docs/errata/2026-11-23-day-leaves-retention.md). Proof gives a stored
+// batch's leaf in its day's tree and the leaf's inclusion proof from them,
+// which a bundle carries (DESIGN 7.8; WP-SB8), so a batch's proof outlives
+// the day's other witness rows, which retention and an account's erasure
+// delete.
 package publisher
 
 import (
@@ -367,6 +369,14 @@ func (o Options) signer(d uint64) (ed25519.PrivateKey, string, error) {
 // while day_heads is empty, and otherwise the day after the newest, linked
 // to its head. A head already stored for h's day must be h, and stays as
 // it was stored. A day with no rows has no day_leaves row.
+//
+// It counts the day's witness rows again first, in the writer's
+// transaction, which ingest stores rows through too. The tree was built
+// from a read before it, and an upload the writer took in between, with a
+// clock set back across the day's end, would have landed outside the tree
+// (ledger-v1 decision 38). So a count other than the tree's stores
+// nothing, and the day waits for the next run, which builds the tree
+// again: a head is stored over exactly the rows it commits to.
 func storeHead(ctx context.Context, tx writer.Tx, h Day, leaves []byte) error {
 	newest, ok, err := Newest(ctx, tx)
 	if err != nil {
@@ -388,6 +398,15 @@ func storeHead(ctx context.Context, tx writer.Tx, h Day, leaves []byte) error {
 	}
 	if uint64(len(leaves)) != h.Count*ledger.HashSize {
 		return fmt.Errorf("publisher: day %s has %d rows and %d bytes of leaves", Date(h.D), h.Count, len(leaves))
+	}
+	end, _ := ledger.DayEnd(h.D)
+	var rows int64
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM witness_rows WHERE received_at_ms >= $1 AND received_at_ms <= $2`,
+		int64(h.D*ledger.DayMS), int64(end)).Scan(&rows); err != nil {
+		return fmt.Errorf("publisher: counting day %s's witness rows: %w", Date(h.D), err)
+	}
+	if rows < 0 || uint64(rows) != h.Count {
+		return fmt.Errorf("publisher: day %s has %d witness rows now and %d when its tree was built, so its head waits for the next run", Date(h.D), rows, h.Count)
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO day_heads (day, n, root, prev, head, signature, key_id, written_at_ms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		int64(h.D), int64(h.Count), h.Root.String(), h.Prev.String(), h.Head.String(), hex.EncodeToString(h.Signature[:]), h.KeyID, h.WrittenAt)

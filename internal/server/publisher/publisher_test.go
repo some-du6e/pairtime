@@ -644,3 +644,62 @@ func TestPending(t *testing.T) {
 		})
 	}
 }
+
+// racingWriter is the writer with one change slipped in before the first
+// op it runs: what the writer could take between the publisher's read of
+// a day's rows and the op that stores the day's head.
+type racingWriter struct {
+	publisher.Doer
+	slip func()
+}
+
+func (r *racingWriter) Do(ctx context.Context, rows int, op writer.Op) error {
+	if slip := r.slip; slip != nil {
+		r.slip = nil
+		slip()
+	}
+	return r.Doer.Do(ctx, rows, op)
+}
+
+// TestStoreHeadRecount checks that a head is stored over exactly the rows
+// its tree was built from (ledger-v1 decision 38). When the writer takes an
+// upload or a deletion between the read of a day's rows and the op that
+// stores its head, the op counts the rows again, stores nothing, and the
+// next run publishes the day over the rows it has then.
+func TestStoreHeadRecount(t *testing.T) {
+	tests := []struct {
+		name      string
+		slip      func(t *testing.T, f *fixture)
+		wantCount uint64
+	}{
+		{name: "an upload the writer takes in between makes the head wait, and the next run's tree holds it",
+			slip: func(t *testing.T, f *fixture) { f.row(t, "d3", 1, "2026-11-19T23:59:59.999Z") }, wantCount: 3},
+		{name: "a deletion in between makes the head wait too, and the next run's tree leaves the row out",
+			slip: func(t *testing.T, f *fixture) { f.exec(t, `DELETE FROM witness_rows WHERE device_id = $1`, "d2") }, wantCount: 1},
+	}
+	for _, engine := range storetest.Engines() {
+		for _, tt := range tests {
+			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) {
+				f := newFixture(t, engine)
+				f.row(t, "d1", 1, "2026-11-19T08:00:00Z")
+				f.row(t, "d2", 1, "2026-11-19T09:00:00Z")
+				o := f.options()
+				o.Writer = &racingWriter{Doer: f.w, slip: func() { tt.slip(t, f) }}
+				res, err := publisher.Publish(context.Background(), o, clock("2026-11-20T00:10:00Z"))
+				if err == nil || !strings.Contains(err.Error(), "so its head waits for the next run") || len(res.Stored) != 0 {
+					t.Fatalf("Publish stored %v with error %v, want nothing stored and the head waiting", dates(res.Stored), err)
+				}
+				if _, ok, err := publisher.Newest(context.Background(), f.db.Read); err != nil || ok {
+					t.Fatalf("a head was stored: %v, %v", ok, err)
+				}
+				if _, err := publisher.Publish(context.Background(), f.options(), clock("2026-11-20T01:10:00Z")); err != nil {
+					t.Fatal(err)
+				}
+				if h := f.head(t, "2026-11-19"); h.Count != tt.wantCount {
+					t.Errorf("the next run's head counts %d rows, want %d", h.Count, tt.wantCount)
+				}
+				f.verifyChain(t, history())
+			})
+		}
+	}
+}

@@ -980,7 +980,7 @@ func (d *doctor) dayHeads(ctx context.Context) (dayHeadState, error) {
 		return st, err
 	}
 	if open := publisher.DueAt(head.D).Add(-publisher.Delay); ok && now.Before(open) {
-		problems = append(problems, fmt.Sprintf("the server's clock reads %s, before the end of %s, whose day root is published, so ingest refuses every upload with day_closed until %s: set the clock right", now.UTC().Format(time.RFC3339), publisher.Date(head.D), open.Format(time.RFC3339)))
+		problems = append(problems, fmt.Sprintf("the server's clock reads %s, before the end of %s, whose day root is published, so ingest refuses every upload with day_closed. Either the clock was set back, and setting it right ends that, or it reads right and the head was published while the clock ran ahead, and ingest takes uploads again at %s", now.UTC().Format(time.RFC3339), publisher.Date(head.D), open.Format(time.RFC3339)))
 	}
 	first, last, behind, err := publisher.Pending(ctx, db.Read, now.Add(-dayRootGrace))
 	if err != nil {

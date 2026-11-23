@@ -343,9 +343,9 @@ Before the native program pays out, the server moves to a Hetzner CCX13, or an A
 
 1. On the new host, do steps 1 to 6. Copy `config/` from the old host with `scp -p`, which keeps the modes, instead of filling it in again.
 2. Restore the keys onto the new host ("Restoring the keys").
-3. On the old host, run doctor and note the newest day head and the witness row count that its `witness` line prints, and the newest file in the witness repository. Then stop the server, so Litestream makes its last sync: `docker compose stop pairtimed`.
+3. On the old host, run doctor and note the newest day head and the witness row count that its `witness` line prints, and the newest file in the witness repository. Uploads keep arriving until the old host stops, so the count is a floor for step 5, while the newest day head and file don't change before the next 00:10 UTC. Then stop the server, so Litestream makes its last sync: `docker compose stop pairtimed`.
 4. On the new host: `docker compose up -d`. `data/` holds no database, so Litestream restores it from the replica. Wait until `docker compose ps` shows `healthy`.
-5. Run doctor on the new host, and check that its `witness` line names the same newest day head and witness row count as step 3, and that the witness repository's newest file is the same. The new host writes the day files again into its empty `witness-roots/`; the sidecar finds them all in the repository and pushes nothing, which is right.
+5. Run doctor on the new host, and check that its `witness` line names exactly the newest day head of step 3, and that the witness repository's newest file is the same. The witness row count may be higher than step 3's, by the uploads that arrived after you noted it, but never lower: a lower count means the restore lost rows. The new host writes the day files again into its empty `witness-roots/`; the sidecar finds them all in the repository and pushes nothing, which is right.
 6. The tunnel follows the token, so the new host's cloudflared now serves `<host>`. Run `probe.yml` against it, then `docker compose down` on the old host and remove its `data/` with `shred`.
 
 ## When something fails

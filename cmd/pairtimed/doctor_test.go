@@ -583,7 +583,21 @@ func TestDoctor(t *testing.T) {
 				d.witnessRows(t, time.Now().Add(-72*time.Hour))
 				d.publish(t, d.witness, time.Now().Add(48*time.Hour))
 			},
-			want: map[string][2]string{"witness": {statusFail, "refuses every upload with day_closed"}}, wantCode: 1},
+			want: map[string][2]string{"witness": {statusFail, "Either the clock was set back, and setting it right ends that, or it reads right and the head was published while the clock ran ahead, and ingest takes uploads again at"}}, wantCode: 1},
+		{name: "a stored head that no commit followed within 15 minutes fails as unpushed, judged by the head's own time",
+			setup: func(t *testing.T, d *deployed) {
+				now := time.Now()
+				d.witnessRows(t, now.Add(-72*time.Hour))
+				d.publish(t, d.witness, now)
+				d.write(t, func(ctx context.Context, _ *store.DB, w *writer.Writer) error {
+					return w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+						_, err := tx.ExecContext(ctx, `UPDATE day_heads SET written_at_ms = $1`, now.Add(-time.Hour).UnixMilli())
+						return err
+					})
+				})
+				d.commitAt = now.Add(-3 * time.Hour)
+			},
+			want: map[string][2]string{"witness": {statusFail, "stored 1h0m0s ago, isn't in some-du6e/pairtime-witness"}}, wantCode: 1},
 		{name: "doctor's witness line counts the witness rows, which a move to another host compares",
 			setup: func(t *testing.T, d *deployed) {
 				now := time.Now()
