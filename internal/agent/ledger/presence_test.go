@@ -36,7 +36,7 @@ func TestPresenceWaiting(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			p := NewPresence(nil)
+			p := NewPresence(nil, nil)
 			for _, ms := range c.times {
 				p.Record(presence.Record{At: time.UnixMilli(ms), Data: &event.OSPresence{IdleAnyS: 1}})
 			}
@@ -73,7 +73,7 @@ func TestPresence(t *testing.T) {
 
 	t.Run("records taken before the writer opens are written once it does, as OS events with no project or session", func(t *testing.T) {
 		dir := t.TempDir()
-		p := NewPresence(nil)
+		p := NewPresence(nil, nil)
 		p.Record(sample)
 		p.Record(suspend)
 		w := open(t, dir, newClock(testT))
@@ -109,7 +109,7 @@ func TestPresence(t *testing.T) {
 		for round := range 16 {
 			dir := t.TempDir()
 			w := open(t, dir, newClock(testT))
-			p := newPresence(nil)
+			p := newPresence(nil, nil)
 			p.Record(sample)
 			p.Attach(w)
 			p.once.Do(func() { close(p.stop) }) // Close, short of its wait for the goroutine
@@ -125,7 +125,7 @@ func TestPresence(t *testing.T) {
 
 	t.Run("an os.focus record the agent passes on is written in the order queued, as an OS event, with its local app_hash left out", func(t *testing.T) {
 		dir := t.TempDir()
-		p := NewPresence(nil)
+		p := NewPresence(nil, nil)
 		w := open(t, dir, newClock(testT))
 		p.Attach(w)
 		p.Focus(at, &event.OSFocus{AppClass: event.AppTerminal, AppHash: "a18ecfcc1abf15c0fce0859c46e557fa6", HostedSessions: []string{"s_tab1"}, FocusProject: "p_9f2c"})
@@ -162,7 +162,7 @@ func TestPresence(t *testing.T) {
 		// The writer and its directory stay outside, so that on Windows
 		// their file retries still sleep in real time.
 		synctest.Test(t, func(t *testing.T) {
-			p := NewPresence(nil)
+			p := NewPresence(nil, nil)
 			defer p.Close()
 			p.Attach(w)
 			p.Record(sample)
@@ -183,7 +183,7 @@ func TestPresence(t *testing.T) {
 		// The bubble's clock moves only when every goroutine in it waits,
 		// so Seal waits exactly sealWait, however busy the machine is.
 		synctest.Test(t, func(t *testing.T) {
-			p := NewPresence(nil)
+			p := NewPresence(nil, nil)
 			defer p.Close()
 			start := time.Now()
 			p.Seal(event.PowerLock)
@@ -200,7 +200,7 @@ func TestPresence(t *testing.T) {
 			mu.Lock()
 			problems = append(problems, msg)
 			mu.Unlock()
-		})
+		}, nil)
 		for range presenceQueue + 3 {
 			p.Record(sample)
 		}
@@ -218,7 +218,7 @@ func TestPresence(t *testing.T) {
 
 	t.Run("records past the queue are dropped and counted, never blocking presence", func(t *testing.T) {
 		var problems []string
-		p := NewPresence(func(msg string) { problems = append(problems, msg) })
+		p := NewPresence(func(msg string) { problems = append(problems, msg) }, nil)
 		defer p.Close()
 		for range presenceQueue + 3 {
 			p.Record(sample)

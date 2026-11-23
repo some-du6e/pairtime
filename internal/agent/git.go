@@ -379,7 +379,15 @@ func (g *gitHost) sink(c git.Change) {
 		// local-only meanwhile (ledger.Writer.Write).
 		ev.Mono, ev.BootID = ledger.RunClock(c.Found)
 	}
-	if _, err := g.writer.Write(ledger.Input{Event: ev}); err != nil {
+	_, err := g.writer.Write(ledger.Input{Event: ev})
+	if errors.Is(err, ledger.ErrLateLocal) {
+		// Found in a local-only stretch, it came after the writer sealed a
+		// batch online since, so it stays off the ledger, as it should.
+		g.a.log.Info("a git change found while config.toml said local-only came after the computer uploaded again, so the ledger dropped it",
+			"op", c.Op(), "made", time.UnixMilli(ev.T).UTC())
+		return
+	}
+	if err != nil {
 		g.a.log.Warn("the ledger refused a git.change record", "op", c.Op(), "err", err)
 		g.a.setProblem("git.ledger", fmt.Sprintf("the ledger refused a git.change record: %v", err))
 		return
