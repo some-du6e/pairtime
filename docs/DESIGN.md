@@ -1085,7 +1085,7 @@ Redaction will sometimes fail; recall on names is the weak part of any pipeline 
 
 ### 8.8 What the teen can see and do
 
-- `pairtime privacy show` prints the next tier-1 upload exactly as it will be sent, and the next project names request (4.3) before it goes, and the Privacy page lists every past upload in plain words (TP B1, B8). Any new uploaded field goes through a public change process (TP DI 15).
+- `pairtime privacy show` prints the next tier-1 upload exactly as it will be sent, and the next project names request that carries a name (4.3) before it goes, and the Privacy page lists every past upload in plain words (TP B1, B8). Any new uploaded field goes through a public change process (TP DI 15).
 - `pairtime ledger show --day <date>` prints every recorded record in plain JSON.
 - `pairtime submit --dry-run` shows the exact reveal before anything leaves.
 - A `.pairtime-ignore` file or an exclude pattern keeps a folder out entirely; the tray has "Pause for 1 hour".

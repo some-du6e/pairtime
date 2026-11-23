@@ -132,9 +132,7 @@ type Names struct {
 // project-names.json didn't read.
 type HiddenName struct {
 	// Label is the label config.toml had on when pairtime found it, or
-	// else the one the dashboard showed or a set carried: a pending note's
-	// label is what config.toml must change from before the name counts
-	// as turned on again (hidePending).
+	// else the one the dashboard showed or a set carried.
 	Label string `json:"label"`
 	// At is when the uploader found it, in Unix ms.
 	At int64 `json:"at"`
@@ -143,7 +141,8 @@ type HiddenName struct {
 	Reason string `json:"reason,omitempty"`
 	// Pending is set while config.toml still has the name on, because
 	// pairtime couldn't turn it off there: the uploader doesn't send it,
-	// and tries again at each wake.
+	// under any label, and tries again at each wake, until config.toml has
+	// it off (hidePending).
 	Pending bool `json:"pending,omitempty"`
 }
 
@@ -582,11 +581,13 @@ func (u *Uploader) saveNames() error {
 
 // hidePending turns off in config.toml the names pairtime couldn't turn
 // off there when it found that the dashboard doesn't show them (a pending
-// HiddenName), and takes out of wanted those still on, which aren't sent.
-// A name whose label config.toml changed since is one the owner turned on
-// again, which goes: its note stays, no longer pending, so an answer that
-// still lists the hide it is of, before the set goes, doesn't turn the
-// name off again (namesAnswered).
+// HiddenName), and takes out of wanted those still on, which aren't sent,
+// under any label: a label changed by hand is no turning on. A note stops
+// being pending only once config.toml has the name off, by hand or
+// because HideName could do it now, and the name goes again only when the
+// owner turns it on after that, as every message about it says. The note
+// stays, so an answer that still lists the hide it is of, before that set
+// goes, doesn't turn the name off again (namesAnswered).
 func (u *Uploader) hidePending(wanted map[string]string) {
 	changed := false
 	var stuck []string
@@ -595,11 +596,8 @@ func (u *Uploader) hidePending(wanted map[string]string) {
 		if !h.Pending {
 			continue
 		}
-		label, on := wanted[key]
+		_, on := wanted[key]
 		switch {
-		case on && label != h.Label:
-			h.Pending = false
-			u.names.Hidden[key] = h
 		case on && (u.opts.HideName == nil || u.opts.HideName(key) != nil):
 			delete(wanted, key)
 			stuck = append(stuck, key)

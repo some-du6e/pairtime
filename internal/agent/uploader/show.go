@@ -224,8 +224,9 @@ func NextNames(dataDir string, c Credentials, wanted map[string]string, own map[
 	}
 	for key, h := range n.Hidden {
 		// As hidePending does, without the config.toml edit: a name pairtime
-		// couldn't turn off stays out while its label is the one it had.
-		if label, on := wanted[key]; h.Pending && on && label == h.Label {
+		// couldn't turn off stays out while config.toml has it on, under any
+		// label.
+		if _, on := wanted[key]; h.Pending && on {
 			delete(wanted, key)
 		}
 	}

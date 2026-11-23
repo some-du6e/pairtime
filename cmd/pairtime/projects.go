@@ -237,8 +237,12 @@ func nameWords(p projects.Project) string {
 	case projects.On:
 		return "shows the name " + label
 	case projects.Sending:
-		if p.Shown != "" {
+		switch {
+		case p.Shown != "":
 			return `shows the name "` + text.Printable(p.Shown) + `" until pairtime uploads ` + label
+		case p.Sent:
+			// Its set went, and no answer came for it.
+			return "may show the name " + label + " already, and does once pairtime uploads it"
 		}
 		return "shows the name " + label + " once pairtime uploads it"
 	case projects.Removing:
@@ -446,8 +450,13 @@ func runHideName(args []string, stdout, stderr io.Writer) int {
 		// (projects.Input), and a removed computer's names stay on the
 		// server until its purge, which this computer can't change now.
 		fmt.Fprintln(stdout, "Turned off in config.toml. This computer isn't linked to a pairtime server, so it can't change your dashboard: if your dashboard still shows the name, its Hide this name button takes it off at once.")
-	case p.State == projects.Sending && p.Shown == "":
+	case p.State == projects.Sending && p.Shown == "" && !p.Sent:
 		fmt.Fprintf(stdout, "Turned off in config.toml before it was sent. Your pairtime dashboard calls it %s.\n", called)
+	case p.State == projects.Sending && p.Shown == "" && !v.online:
+		// Its set went, and no answer came for it.
+		fmt.Fprintf(stdout, "Turned off in config.toml. Your pairtime dashboard may show the name until this computer uploads the change, then calls it %s; its Hide this name button takes it off at once meanwhile.\n%s\n", called, notOnline(v))
+	case p.State == projects.Sending && p.Shown == "":
+		fmt.Fprintf(stdout, "Turned off in config.toml. Your pairtime dashboard may show the name until pairtime uploads the change, then calls it %s.\n", called)
 	case !v.online:
 		fmt.Fprintf(stdout, "Turned off in config.toml. Your pairtime dashboard shows the name until this computer uploads the change, then calls it %s; its Hide this name button takes it off at once meanwhile.\n%s\n", called, notOnline(v))
 	default:

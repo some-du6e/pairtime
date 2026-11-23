@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -231,6 +232,112 @@ func TestNoteSending(t *testing.T) {
 				if err != nil || n.Sent[nameKey] != "chip8-emulator" || len(n.Deleting) != 1 || n.Deleting[0] != otherKey {
 					t.Errorf("project-names.json = %+v, %v; want the set's name and the delete's key", n, err)
 				}
+			}
+		})
+	}
+}
+
+func TestNamesPendingRelabel(t *testing.T) {
+	inline := func(label string, on bool) string {
+		return "[projects]\n" + nameKey + " = { name = \"" + label + "\", online = " + strconv.FormatBool(on) + " }\n"
+	}
+	// sets counts the names requests that set nameKey.
+	sets := func(r *rig) int {
+		n := 0
+		for _, b := range r.f.namesBodies {
+			if strings.Contains(string(b), `{"project":"`+nameKey+`","label"`) {
+				n++
+			}
+		}
+		return n
+	}
+	tests := []struct {
+		name   string
+		reason string
+		// hidden says the server lists the name as hidden, as after a hide
+		// on the dashboard.
+		hidden bool
+	}{
+		{
+			name:   "a name turned off at a sign-in to another server, in a form of config.toml pairtime can't change, isn't sent when only its label changes there, and goes once config.toml has had it off and on again",
+			reason: NoteSignedIn,
+		},
+		{
+			name:   "a name turned off for a project-names.json that didn't read, in a form of config.toml pairtime can't change, isn't sent when only its label changes there, and goes once config.toml has had it off and on again",
+			reason: NoteUnreadable,
+		},
+		{
+			name:   "a name hidden on the dashboard, in a form of config.toml pairtime can't change, isn't sent when only its label changes there, and goes once config.toml has had it off and on again",
+			hidden: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newRig(t, 3, nil, -time.Minute)
+			cfgPath := filepath.Join(r.dirs.Config, "config.toml")
+			write := func(text string) {
+				t.Helper()
+				if err := os.WriteFile(cfgPath, []byte(text), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The owner changed the label by hand, in an inline table, after
+			// pairtime noted the name off under the old one.
+			write(inline("Chip-8", true))
+			raw, err := json.Marshal(Names{V: namesVersion, Server: r.creds.Server, Device: r.creds.DeviceID, Hidden: map[string]HiddenName{
+				nameKey: {Label: "chip8-emulator", At: time.Now().UnixMilli(), Reason: tt.reason, Pending: true},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(r.dirs.Data, NamesFileName), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tt.hidden {
+				r.f.namesHidden[nameKey] = true
+			}
+			r.u.Close()
+			r.u = r.namesUploader(t, cfgPath, func() (Credentials, bool) { return r.creds, true })
+			r.u.Start()
+			wake := func(what string, cond func() bool) {
+				t.Helper()
+				waitFor(t, what, func() bool {
+					r.u.Wake()
+					r.f.mu.Lock()
+					defer r.f.mu.Unlock()
+					return cond()
+				})
+			}
+			noSet := func(when string) {
+				t.Helper()
+				r.f.mu.Lock()
+				defer r.f.mu.Unlock()
+				if n := sets(r); n != 0 {
+					t.Errorf("%s, %d requests set the name: %q", when, n, r.f.namesBodies)
+				}
+			}
+			wake("a names request with the name relabelled", func() bool { return r.f.namesPosts >= 1 && r.f.head != nil && r.f.head.b == 3 })
+			for range 3 {
+				r.u.Wake()
+				time.Sleep(100 * time.Millisecond)
+			}
+			noSet("with only the label changed")
+			if n, err := ReadNames(r.dirs.Data); err != nil || !n.Hidden[nameKey].Pending {
+				t.Errorf("project-names.json = %+v, %v; want the note still pending", n, err)
+			}
+			write(inline("Chip-8", false))
+			wake("the note no longer pending once config.toml has the name off", func() bool {
+				n, err := ReadNames(r.dirs.Data)
+				return err == nil && !n.Hidden[nameKey].Pending
+			})
+			noSet("with the name off")
+			write(inline("Chip-8", true))
+			wake("the name's set once it is on again", func() bool { return r.f.names[nameKey] == "Chip-8" })
+			r.u.Close()
+			r.f.mu.Lock()
+			defer r.f.mu.Unlock()
+			if n := sets(r); n != 1 || r.f.namesHidden[nameKey] {
+				t.Errorf("%d requests set the name and the server hides it %v; want one set, after the name was off, and no hide", n, r.f.namesHidden[nameKey])
 			}
 		})
 	}

@@ -40,6 +40,9 @@ type projectsHome struct {
 	shown  map[string]string // the names the server last confirmed
 	codes  map[string]string // the codes the server last gave
 	hidden map[string]uploader.HiddenName
+	// sent are the names a set carried whose answer didn't come
+	// (uploader.Names.Sent).
+	sent map[string]string
 	// folder adds a project of today's that the project map doesn't keep.
 	folder bool
 }
@@ -90,8 +93,8 @@ func (p projectsHome) write(t *testing.T) projectsDir {
 			t.Fatal(err)
 		}
 	}
-	if p.shown != nil || p.codes != nil || p.hidden != nil {
-		n, err := json.Marshal(uploader.Names{V: 1, Server: namesServer, Device: namesDevice, Confirmed: p.shown, Codes: p.codes, AnsweredAt: 1, Hidden: p.hidden})
+	if p.shown != nil || p.codes != nil || p.hidden != nil || p.sent != nil {
+		n, err := json.Marshal(uploader.Names{V: 1, Server: namesServer, Device: namesDevice, Confirmed: p.shown, Codes: p.codes, AnsweredAt: 1, Hidden: p.hidden, Sent: p.sent})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -172,6 +175,11 @@ func TestProjectsList(t *testing.T) {
 			name: "a name on that the server hasn't shown yet waits for the next upload",
 			home: projectsHome{config: online + chip8Table("Chip-8", true), linked: true},
 			want: []string{"  On your dashboard: shows the name \"Chip-8\" once pairtime uploads it\n"},
+		},
+		{
+			name: "a name whose set went with no answer since says the dashboard may show it already, never that it waits for the next upload alone",
+			home: projectsHome{config: online + chip8Table("Chip-8", true), linked: true, sent: map[string]string{chip8Key: "Chip-8"}},
+			want: []string{"  On your dashboard: may show the name \"Chip-8\" already, and does once pairtime uploads it\n"},
 		},
 		{
 			name: "a renamed name says which label the dashboard shows until the next upload",
@@ -487,6 +495,14 @@ func TestProjectsNames(t *testing.T) {
 			home:    projectsHome{config: online + chip8Table("chip8-emulator", true), linked: true, shown: map[string]string{chip8Key: "chip8-emulator"}, codes: serverCodes},
 			args:    []string{"projects", "hide-name", "7c41e9"},
 			wantOut: "Turned off in config.toml. Your pairtime dashboard calls it Project 7c41e9 again once pairtime uploads the change.\n",
+			want:    map[string]config.Project{chip8Key: {Name: "chip8-emulator"}},
+		},
+		{
+			name:    "hide-name on a name whose set went with no answer since says the dashboard may show it until the change goes, never that it was turned off before it was sent",
+			home:    projectsHome{config: online + chip8Table("chip8-emulator", true), linked: true, sent: map[string]string{chip8Key: "chip8-emulator"}},
+			args:    []string{"projects", "hide-name", chip8Key},
+			wantOut: "Turned off in config.toml. Your pairtime dashboard may show the name until pairtime uploads the change, then calls it by its code.\n",
+			notOut:  "before it was sent",
 			want:    map[string]config.Project{chip8Key: {Name: "chip8-emulator"}},
 		},
 		{

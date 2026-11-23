@@ -923,22 +923,6 @@ func TestNames(t *testing.T) {
 			},
 		},
 		{
-			name:   "a name pairtime couldn't turn off for a hide, which the owner turned on again under a new label, goes, though the read before it still lists the old hide",
-			config: "[projects]\n" + nameKey + " = { name = \"Chip-8\", online = true }\n",
-			notes:  map[string]HiddenName{nameKey: {Label: "chip8-emulator", At: 1, Pending: true}},
-			hidden: []string{nameKey},
-			until:  func(f *fakeIngest, _ string) bool { return f.names[nameKey] == "Chip-8" && len(f.namesHidden) == 0 },
-			checks: []rigCheck{
-				bodies(`{}`, `{"set":[{"project":"`+nameKey+`","label":"Chip-8"}]}`),
-				func(t *testing.T, r *rig, _ string) {
-					n, err := ReadNames(r.dirs.Data)
-					if _, noted := n.Hidden[nameKey]; err != nil || noted {
-						t.Errorf("project-names.json = %+v, %v; want the note gone once the dashboard shows the name", n, err)
-					}
-				},
-			},
-		},
-		{
 			name:   "a set the server answered with a 429 stored nothing: it goes again after a read, and the name stays on",
 			config: projectTable(nameKey, "chip8-emulator", true),
 			faults: map[int]string{2: "429"},
@@ -1438,9 +1422,14 @@ func TestNextNames(t *testing.T) {
 			own:    map[string]bool{nameKey: true},
 		},
 		{
-			name:   "a hidden name pairtime couldn't turn off stays out while its label is the one it had",
+			name:   "a hidden name pairtime couldn't turn off stays out while config.toml has it on",
 			file:   &Names{V: namesVersion, Server: c.Server, Device: c.DeviceID, Hidden: map[string]HiddenName{nameKey: {Label: "chip8-emulator", At: 1, Pending: true}}},
 			wanted: map[string]string{nameKey: "chip8-emulator"},
+		},
+		{
+			name:   "a hidden name pairtime couldn't turn off stays out under a label changed by hand too, since only turning it off and on again shows it",
+			file:   &Names{V: namesVersion, Server: c.Server, Device: c.DeviceID, Hidden: map[string]HiddenName{nameKey: {Label: "chip8-emulator", At: 1, Pending: true}}},
+			wanted: map[string]string{nameKey: "Chip-8"},
 		},
 		{
 			name:   "with no file, as before a first link, a name turned on goes",

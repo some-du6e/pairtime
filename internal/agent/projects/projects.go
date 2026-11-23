@@ -95,12 +95,18 @@ type Project struct {
 	// Why says, for Hidden, why the dashboard doesn't show the name: ""
 	// when the owner hid it there, uploader.NoteDropped when the server no
 	// longer has it, uploader.NoteSignedIn after a sign-in to another
-	// server or as another device.
+	// server or as another device, uploader.NoteUnreadable when
+	// project-names.json didn't read.
 	Why string
 	// Shown is the label the server's last answer shows for the project,
 	// "" for none: a name being sent can still show an older label, and one
 	// being turned off shows until the request goes.
 	Shown string
+	// Sent says a set of the name may have reached the server since its
+	// last answer: project-names.json records that one went, and no answer
+	// came for it (uploader.Names.Sent), so the dashboard may show the name
+	// though Shown says it doesn't.
+	Sent bool
 }
 
 // Title is what the list calls p: its local name, or "Project <code>",
@@ -251,9 +257,9 @@ type Input struct {
 // name, and its name's state.
 func List(in Input) []Project {
 	local := LocalNames(in.Map)
-	var confirmed, codes map[string]string
+	var confirmed, codes, sent map[string]string
 	if in.Server != "" && in.Names.Server == in.Server && in.Names.Device == in.Device {
-		confirmed, codes = in.Names.Confirmed, in.Names.Codes
+		confirmed, codes, sent = in.Names.Confirmed, in.Names.Codes, in.Names.Sent
 	}
 	listed := make(map[string]bool)
 	for _, r := range in.Map.Repos {
@@ -274,6 +280,7 @@ func List(in Input) []Project {
 		p := Project{Key: key, Code: codes[key], LocalName: local[key]}
 		p.State, p.Label, p.HiddenAt = state(key, local[key], in.Config.Projects[key], confirmed, in.Names.Hidden)
 		p.Shown = confirmed[key]
+		_, p.Sent = sent[key]
 		if p.State == Hidden {
 			p.Pending, p.Why = in.Names.Hidden[key].Pending, in.Names.Hidden[key].Reason
 		}

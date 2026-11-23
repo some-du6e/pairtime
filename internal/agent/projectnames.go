@@ -49,8 +49,8 @@ type projectReply struct {
 	Label     string         `json:"label"`
 	HiddenAt  *time.Time     `json:"hidden_at,omitempty"`
 	// Why says, for hidden, why the dashboard doesn't show the name, when
-	// the owner didn't hide it there: uploader.NoteDropped or
-	// uploader.NoteSignedIn.
+	// the owner didn't hide it there: uploader.NoteDropped,
+	// uploader.NoteSignedIn or uploader.NoteUnreadable.
 	Why string `json:"why,omitempty"`
 }
 
