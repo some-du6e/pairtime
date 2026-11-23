@@ -1,0 +1,583 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package ledger
+
+import (
+	"encoding/json"
+	"errors"
+	"math/rand/v2"
+	"os"
+	"path/filepath"
+	"slices"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	osclock "github.com/some-du6e/pairtime/internal/platform/clock"
+	"github.com/some-du6e/pairtime/pkg/event"
+)
+
+// TestReached checks how an event is held to a stretch's start: at or after
+// it by the monotonic clock it carries when the start holds that clock too,
+// and by its t otherwise, each edge holding its own millisecond, with the
+// beginning of time before every event.
+func TestReached(t *testing.T) {
+	const boot = "b_os"
+	m := moment{wall: 10_000, run: 5_000, os: 7_000, boot: boot}
+	cases := []struct {
+		name string
+		at   moment
+		e    event.Envelope
+		want bool
+	}{
+		{"an event of another boot whose t is after the start reached it", m, event.Envelope{T: 10_001, BootID: "b_other", Mono: 1}, true},
+		{"one whose t is the start's own millisecond counts as in the stretch", m, event.Envelope{T: 10_000, BootID: "b_other", Mono: 1}, true},
+		{"one whose t is before the start didn't reach it", m, event.Envelope{T: 9_999, BootID: "b_other", Mono: 1}, false},
+		{"an event of this run goes by this run's clock, though a step of the wall clock put its t before", m, event.Envelope{T: 1, BootID: runBoot, Mono: 5_000}, true},
+		{"and didn't reach it when its mono is before, though its t is after", m, event.Envelope{T: 20_000, BootID: runBoot, Mono: 4_999}, false},
+		{"a hook call of the start's boot goes by its mono", m, event.Envelope{T: 1, BootID: boot, Mono: 7_000}, true},
+		{"and didn't reach it when its mono is before, though its t is after", m, event.Envelope{T: 20_000, BootID: boot, Mono: 6_999}, false},
+		{"an event with no mono goes by its t", m, event.Envelope{T: 10_000, BootID: boot}, true},
+		{"every event reached the beginning of time", moment{}, event.Envelope{T: 1}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.at.reached(c.e); got != c.want {
+				t.Errorf("reached(%+v) of %+v = %v, want %v", c.e, c.at, got, c.want)
+			}
+		})
+	}
+}
+
+// TestStretchHolds checks which events a stretch holds: those at or after
+// its start and at or before its end, by the clocks each edge holds, every
+// one after the start while it goes on, every one before the end for the
+// chain's first, and a hook call of a boot an edge was recorded in by that
+// boot's reading too.
+func TestStretchHolds(t *testing.T) {
+	const boot, old = "b_os", "b_old"
+	from := edge{m: moment{wall: 10_000, os: 7_000, boot: boot}}
+	to := edge{m: moment{wall: 20_000, os: 17_000, boot: boot}}
+	// An end an earlier run recorded in the boot before, read back in this
+	// one (Writer.earlierEdge): this boot's start by its clock, and the old
+	// boot's reading beside it.
+	traded := edge{m: moment{wall: 20_000, run: 1, os: 1, boot: boot}, other: moment{os: 17_000, boot: old}}
+	cases := []struct {
+		name string
+		s    stretch
+		e    event.Envelope
+		want bool
+	}{
+		{"an event between its edges by its t is in it", stretch{from: from, to: to}, event.Envelope{T: 15_000}, true},
+		{"so is one at either edge's own millisecond", stretch{from: from, to: to}, event.Envelope{T: 20_000}, true},
+		{"an event after its end is not", stretch{from: from, to: to}, event.Envelope{T: 20_001}, false},
+		{"nor is one before its start, made while config.toml said online", stretch{from: from, to: to}, event.Envelope{T: 9_999}, false},
+		{"a hook call of the edges' boot goes by its mono, though a step of the wall clock put its t after the end",
+			stretch{from: from, to: to}, event.Envelope{T: 90_000, BootID: boot, Mono: 16_000}, true},
+		{"and isn't in it when its mono is after the end, though its t is before",
+			stretch{from: from, to: to}, event.Envelope{T: 15_000, BootID: boot, Mono: 17_001}, false},
+		{"one going on holds every event after its start", stretch{from: from, open: true}, event.Envelope{T: 1 << 50}, true},
+		{"the chain's first holds every event before its end", stretch{to: to}, event.Envelope{T: 1}, true},
+		{"an end an earlier run recorded in another boot holds a hook call of that boot by that boot's clock",
+			stretch{to: traded}, event.Envelope{T: 90_000, BootID: old, Mono: 16_000}, true},
+		{"and none of this boot's, all made after it", stretch{to: traded}, event.Envelope{T: 15_000, BootID: boot, Mono: 2}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.s.holds(c.e); got != c.want {
+				t.Errorf("holds(%+v) = %v, want %v", c.e, got, c.want)
+			}
+		})
+	}
+}
+
+// TestStretchesFromRows checks the stretches Open rebuilds for a ledger
+// whose seal frames recorded none, as an older version's, from the moment
+// each row recorded: each rise of it ends a stretch, the first begins at
+// the beginning of time, each later one at the seal of the batch before
+// the newest one sealed online before its end, or at the end before it
+// when that is later, and a stretch is passed once a batch from the row
+// that first recorded its end on was sealed online.
+func TestStretchesFromRows(t *testing.T) {
+	type row struct {
+		sealed, until int64
+		online        bool
+	}
+	type want struct {
+		from, to int64
+		passed   bool
+	}
+	cases := []struct {
+		name string
+		rows []row
+		want []want
+	}{
+		{"rows that recorded no moment rebuild no stretch",
+			[]row{{100, 0, true}, {200, 0, true}}, nil},
+		{"the first stretch begins at the beginning of time, and is passed by the online batch that first records its end",
+			[]row{{100, 0, false}, {200, 150, true}}, []want{{0, 150, true}}},
+		{"a stretch whose end only local-only batches record isn't passed",
+			[]row{{100, 0, false}, {200, 150, false}}, []want{{0, 150, false}}},
+		{"a later stretch begins at the seal of the batch before the newest one sealed online before its end",
+			[]row{{100, 0, false}, {200, 150, true}, {300, 150, true}, {400, 150, true}, {600, 550, false}, {700, 550, true}},
+			[]want{{0, 150, true}, {300, 550, true}}},
+		{"or at the end before it, when no batch sealed online came between",
+			[]row{{100, 0, false}, {200, 150, false}, {600, 550, true}}, []want{{0, 150, true}, {150, 550, true}}},
+		{"an online batch sealed after the end it is first recorded with doesn't begin the stretch",
+			[]row{{100, 0, false}, {200, 150, true}, {300, 150, true}, {650, 150, true}, {700, 600, true}},
+			[]want{{0, 150, true}, {200, 600, true}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := &Writer{}
+			var rows []rowPayload
+			for _, r := range c.rows {
+				on := r.online
+				rows = append(rows, rowPayload{sealPayload: sealPayload{SealedAt: r.sealed, Online: &on, LocalUntil: r.until}})
+			}
+			var got []want
+			for _, s := range w.stretchesFromRows(rows) {
+				got = append(got, want{s.from.m.wall, s.to.m.wall, s.passed})
+			}
+			if !slices.Equal(got, c.want) {
+				t.Errorf("stretches %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestMergeStretches checks that past maxStretches the two oldest become
+// one, from the first's start to the second's end, with both's drops, so
+// the list stays bounded and only more of the past counts as local-only.
+func TestMergeStretches(t *testing.T) {
+	w := &Writer{}
+	for i := range maxStretches + 1 {
+		at := int64(i) * 100
+		w.stretches = append(w.stretches, stretch{from: edgeAt(moment{wall: at}), to: edgeAt(moment{wall: at + 50}), passed: true, dropped: 1})
+	}
+	w.mergeStretches()
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"the list holds maxStretches stretches", len(w.stretches) == maxStretches},
+		{"the oldest runs from the first's start to the second's end", w.stretches[0].from.m.wall == 0 && w.stretches[0].to.m.wall == 150},
+		{"and holds both's drops", w.stretches[0].dropped == 2},
+		{"no drop is lost", w.lateDropped() == maxStretches+1},
+	}
+	for _, ch := range checks {
+		t.Run(ch.name, func(t *testing.T) {
+			if !ch.ok {
+				t.Errorf("no: %d stretches, the first %+v", len(w.stretches), w.stretches[0])
+			}
+		})
+	}
+}
+
+// lateRig is a writer whose config.toml mode, clocks and Waiting a test
+// sets, with every batch it seals, for the tests of late records below.
+type lateRig struct {
+	t       *testing.T
+	dir     string
+	clk     *clock
+	file    atomic.Bool // config.toml says online
+	waits   atomic.Bool
+	sealed  chan Batch
+	w       *Writer
+	rng     *rand.Rand
+	seen    Seen
+	batches []Batch
+}
+
+// newLateRig opens a rig's writer, config.toml saying online.
+func newLateRig(t *testing.T) *lateRig {
+	r := &lateRig{t: t, dir: t.TempDir(), clk: newClock(testT), sealed: make(chan Batch, 64), rng: rand.New(rand.NewPCG(41, 42))}
+	r.file.Store(true)
+	r.open()
+	return r
+}
+
+// pause gives a seal the writer asked for of its own, as a note's, time to
+// run first, as TestNoteMode's "pause" does.
+func (r *lateRig) pause() { time.Sleep(200 * time.Millisecond) }
+
+// open opens the writer, with what the agent saw as Seen.
+func (r *lateRig) open() {
+	r.w = open(r.t, r.dir, r.clk, func(o *Options) {
+		o.Online = r.file.Load
+		o.Seen = func() Seen { return r.seen }
+		o.Sealed = func(b Batch) { r.sealed <- b }
+		o.Waiting = func(func(event.Envelope) bool) bool { return r.waits.Load() }
+		o.Clock = func() osclock.Stamp { return osclock.Stamp{Wall: r.clk.now()} }
+	})
+}
+
+// at sets the clock to ms after the start.
+func (r *lateRig) at(ms int64) { r.clk.set(testT + ms) }
+
+// note has config.toml say online or local-only, and the watch note it.
+func (r *lateRig) note(online bool) {
+	r.file.Store(online)
+	r.w.NoteMode(online)
+}
+
+// write writes in, and fails the test on any error.
+func (r *lateRig) write(in Input) {
+	r.t.Helper()
+	if _, err := r.w.Write(in); err != nil {
+		r.t.Fatalf("Write: %v", err)
+	}
+}
+
+// presence is an event made ms after the start, judged by its t alone.
+func (r *lateRig) presence(ms int64) Input {
+	return sampleInput(r.rng, "os.presence", testT+ms, "", "")
+}
+
+// logged is an event of kind that a log reader read made ms after the
+// start, with this run's boot_id and mono 0, as the transcript reader
+// dates a line it reads late.
+func (r *lateRig) logged(kind string, ms int64) Input {
+	in := sampleInput(r.rng, kind, testT+ms, "s_1", "p_web")
+	in.Event.Source, in.Event.Via = event.SourceLog, event.ViaLog
+	in.Event.Mono, in.Event.BootID = 0, runBoot
+	return in
+}
+
+// seal seals, and keeps the batch sealed, which may be one a seal the
+// writer owed sealed first.
+func (r *lateRig) seal() Batch {
+	r.t.Helper()
+	if _, _, err := r.w.Seal(); err != nil {
+		r.t.Fatalf("Seal: %v", err)
+	}
+	return r.take()
+}
+
+// take waits for the next batch sealed.
+func (r *lateRig) take() Batch {
+	r.t.Helper()
+	select {
+	case b := <-r.sealed:
+		r.batches = append(r.batches, b)
+		return b
+	case <-time.After(10 * time.Second):
+		r.t.Fatalf("no batch %d was sealed", len(r.batches)+1)
+	}
+	return Batch{}
+}
+
+// localAfterOnline reports whether any batch r sealed is local-only after
+// one sealed online, which would stop the batch roots until the next
+// sign-in (ingest-v1 5.3), unless a re-link came between.
+func (r *lateRig) localAfterOnline() bool {
+	seenOnline := false
+	for _, b := range r.batches {
+		if b.Online {
+			seenOnline = true
+		} else if seenOnline {
+			return true
+		}
+	}
+	return false
+}
+
+// TestAlpha5Replay replays what stopped a linked test computer's uploads on
+// 2026-11-23 (docs/errata/2026-11-23-late-local-records.md): an install that starts
+// local-only, a link, and a minute after it a Rewind of a transcript the
+// tailers took up at its end, which hands the writer that file's last old
+// turn's final message and stop again, dated days before the chain began,
+// with this run's boot_id and mono 0, beside the live hook records of the
+// minute. Lookback's records count by when the writer took them in
+// (Writer.lookback), so their batch is online, as after a logout and a
+// login too; and the same records dated after the chain began, in the
+// install's stretch, are dropped rather than seal a local-only batch after
+// the online ones.
+func TestAlpha5Replay(t *testing.T) {
+	const day = int64(24 * 3600 * 1000)
+	cases := []struct {
+		name string
+		// relink has the computer log out and in again before the replay.
+		relink bool
+		// made is when the replayed records were made, in ms after the
+		// chain began.
+		made int64
+		// dropped is how many of them Write drops.
+		dropped int
+	}{
+		{"an old turn's final message and stop that a Rewind hands the writer after the link, dated before the chain began, are sealed online with the minute's live records", false, -4 * day, 0},
+		{"so are they after a logout and a login", true, -4 * day, 0},
+		{"dated in the install's stretch, after the chain began, they are dropped, and the minute's live records are sealed online", false, 5000, 2},
+		{"so are they after a logout and a login, as a batch sealed online passed that stretch", true, 5000, 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLateRig(t)
+			// Every install starts local-only.
+			r.note(false)
+			r.write(sampleInput(r.rng, "prompt.submit", testT+1000, "s_1", "p_web"))
+			r.take()
+			// pairtime login, and the minute's prompts after it.
+			r.at(10_000)
+			r.note(true)
+			r.pause()
+			r.at(20_000)
+			r.write(sampleInput(r.rng, "prompt.submit", testT+20_000, "s_2", "p_web"))
+			r.take()
+			if c.relink {
+				r.at(30_000)
+				r.note(false)
+				r.write(r.presence(31_000))
+				r.take()
+				r.at(40_000)
+				r.note(true)
+				r.pause()
+				r.write(sampleInput(r.rng, "prompt.submit", testT+41_000, "s_2", "p_web"))
+				r.take()
+			}
+			r.at(60_000)
+			drops := 0
+			for _, kind := range []string{"agent.final", "agent.stop"} {
+				_, err := r.w.Write(r.logged(kind, c.made))
+				switch {
+				case errors.Is(err, ErrLateLocal):
+					drops++
+				case err != nil:
+					t.Fatal(err)
+				}
+			}
+			r.write(sampleInput(r.rng, "agent.tool", testT+60_000, "s_2", "p_web"))
+			r.write(sampleInput(r.rng, "agent.stop", testT+61_000, "s_2", "p_web"))
+			last := r.take()
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"the replay's batch is sealed online", last.Online && last.Why == nil},
+				{"no batch is sealed local-only after one sealed online but in a logout's stretch", !r.localAfterOnline() || c.relink && !r.batches[2].Online && r.batches[3].Online && last.Online},
+				{"Write drops what the stretch holds", drops == c.dropped && r.w.Status().LateLocal == uint64(c.dropped)},
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: %d dropped; batches online %v", drops, onlines(r.batches))
+					}
+				})
+			}
+		})
+	}
+}
+
+// onlines lists whether each batch was sealed online.
+func onlines(batches []Batch) []bool {
+	var out []bool
+	for _, b := range batches {
+		out = append(out, b.Online)
+	}
+	return out
+}
+
+// TestLocalWhy checks why a batch sealed local-only says it is, in what
+// Sealed gets, in its row and in its seal frame: config.toml said
+// local-only as it was sealed, a record came while the writer took the file
+// as local-only, something of a stretch was still on its way, or records
+// of a stretch came late, named by their kinds and their own times; and a
+// batch sealed online says nothing.
+func TestLocalWhy(t *testing.T) {
+	cases := []struct {
+		name string
+		run  func(r *lateRig)
+		want *LocalWhy
+	}{
+		{"a batch sealed while config.toml says local-only says so", func(r *lateRig) {
+			r.pause()
+			r.file.Store(false)
+			r.write(r.presence(1000))
+			r.seal()
+		}, &LocalWhy{Config: true}},
+		{"one holding a record written while the watch's note said local-only, sealed once the file says online again, says the record came then",
+			func(r *lateRig) {
+				r.w.NoteMode(false)
+				r.write(r.presence(1000))
+				r.take()
+			}, &LocalWhy{Noted: true}},
+		{"one sealed while something of the stretch was on its way says so", func(r *lateRig) {
+			r.note(false)
+			r.write(r.presence(1000))
+			r.take()
+			r.at(5000)
+			r.note(true)
+			r.pause()
+			r.waits.Store(true)
+			r.write(r.presence(6000))
+			r.seal()
+		}, &LocalWhy{Waiting: true}},
+		{"one holding records of a stretch that came late names them by their kinds and their own times", func(r *lateRig) {
+			r.note(false)
+			r.write(r.presence(1000))
+			r.take()
+			r.at(5000)
+			r.note(true)
+			r.pause()
+			r.write(r.logged("agent.final", 2000))
+			r.write(r.logged("agent.stop", 3000))
+			r.seal()
+		}, &LocalWhy{Late: []LateRecord{{Kind: event.KindAgentOutput, T: time.UnixMilli(testT + 2000).UTC()},
+			{Kind: event.KindAgentStop, T: time.UnixMilli(testT + 3000).UTC()}}, LateN: 2}},
+		{"one holding more than the seal frame names counts them all", func(r *lateRig) {
+			r.note(false)
+			r.write(r.presence(1000))
+			r.take()
+			r.at(9000)
+			r.note(true)
+			r.pause()
+			for i := range lateKept + 2 {
+				r.write(r.presence(int64(2000 + i)))
+			}
+			r.seal()
+		}, &LocalWhy{Late: []LateRecord{{Kind: event.KindOSPresence, T: time.UnixMilli(testT + 2000).UTC()},
+			{Kind: event.KindOSPresence, T: time.UnixMilli(testT + 2001).UTC()}, {Kind: event.KindOSPresence, T: time.UnixMilli(testT + 2002).UTC()},
+			{Kind: event.KindOSPresence, T: time.UnixMilli(testT + 2003).UTC()}}, LateN: lateKept + 2}},
+		{"a batch sealed online says nothing", func(r *lateRig) {
+			r.write(r.presence(1000))
+			r.seal()
+		}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLateRig(t)
+			c.run(r)
+			last := r.batches[len(r.batches)-1]
+			_, rows, err := ReadRows(r.dir, last.Row.B)
+			if err != nil || len(rows) != 1 {
+				t.Fatalf("ReadRows: %d rows, %v", len(rows), err)
+			}
+			read := readAll(t, r.dir)
+			for _, got := range []struct {
+				from string
+				why  *LocalWhy
+			}{{"Sealed", last.Why}, {"the row", rows[0].Why}, {"the seal frame", read[len(read)-1].Why}} {
+				if !sameWhy(got.why, c.want) {
+					t.Errorf("%s says %+v, want %+v", got.from, got.why, c.want)
+				}
+			}
+		})
+	}
+}
+
+// sameWhy reports whether a and b say the same.
+func sameWhy(a, b *LocalWhy) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Config == b.Config && a.Noted == b.Noted && a.Waiting == b.Waiting && a.LateN == b.LateN &&
+		slices.EqualFunc(a.Late, b.Late, func(x, y LateRecord) bool { return x.Kind == y.Kind && x.T.Equal(y.T) })
+}
+
+// TestStretchesKept checks that the stretches outlast what drops the seal
+// frame that recorded them: a ledger an older version wrote, whose seal
+// frames recorded none, gets them back from its rows' moments, and a
+// retention sweep that drops the row that recorded them keeps them in its
+// base frame. A late record made between the stretches is sealed online,
+// and one made in a passed stretch is dropped, after either.
+func TestStretchesKept(t *testing.T) {
+	cases := []struct {
+		name string
+		// lose leaves the ledger in dir as the case says, the writer closed.
+		lose func(t *testing.T, r *lateRig)
+	}{
+		{"a ledger whose seal frames recorded no stretches, as an older version's, rebuilds them from its rows",
+			func(t *testing.T, r *lateRig) { dropStretches(t, r.dir) }},
+		{"a sweep that drops every row, the one that recorded the stretches with them, keeps them in its base frame",
+			func(t *testing.T, r *lateRig) {
+				r.open()
+				after := dayOf(time.UnixMilli(testT + 2*sweepDayMS))
+				if dropped, _, err := r.w.Sweep(after, 0); err != nil || dropped != len(r.batches) {
+					t.Fatalf("Sweep dropped %d batches, %v; want %d", dropped, err, len(r.batches))
+				}
+				if err := r.w.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLateRig(t)
+			// The install's stretch, two online batches, a second stretch, and
+			// an online batch after it.
+			r.note(false)
+			r.write(r.presence(1000))
+			r.take()
+			r.at(10_000)
+			r.note(true)
+			r.pause()
+			for _, ms := range []int64{20_000, 25_000, 30_000} {
+				r.at(ms)
+				r.write(r.presence(ms))
+				r.seal()
+			}
+			r.at(40_000)
+			r.note(false)
+			r.write(r.presence(41_000))
+			r.take()
+			r.at(50_000)
+			r.note(true)
+			r.pause()
+			r.at(60_000)
+			r.write(r.presence(60_000))
+			r.seal()
+			if err := r.w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			c.lose(t, r)
+			r.at(70_000)
+			r.open()
+			_, err := r.w.Write(r.logged("agent.output", 5000))
+			droppedFirst := errors.Is(err, ErrLateLocal)
+			r.write(r.logged("agent.output", 22_000))
+			b := r.seal()
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"a late record made in the first stretch, which batches sealed online passed, is dropped", droppedFirst},
+				{"one made between the stretches is sealed online", b.Online && len(b.Records) == 1},
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: the first Write's error %v; the batch online %v with %d records", err, b.Online, len(b.Records))
+					}
+				})
+			}
+		})
+	}
+}
+
+// dropStretches rewrites the rows of dir's batches.seg without the
+// stretches they record, as an older version's rows, which recorded none.
+// The segments keep their seal frames as they are: Open rebuilds no row
+// here, so it reads no seal frame's stretches.
+func dropStretches(t *testing.T, dir string) {
+	t.Helper()
+	name := filepath.Join(dir, batchesName)
+	var out []byte
+	for _, fm := range framesOf(t, name) {
+		payload := fm.payload
+		if fm.kind == kindBatch {
+			var m map[string]json.RawMessage
+			if err := json.Unmarshal(payload, &m); err != nil {
+				t.Fatal(err)
+			}
+			delete(m, "stretches")
+			var err error
+			if payload, err = json.Marshal(m); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out = appendFrame(out, fm.kind, payload)
+	}
+	if err := os.WriteFile(name, out, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

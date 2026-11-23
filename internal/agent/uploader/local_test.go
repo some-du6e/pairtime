@@ -117,18 +117,45 @@ func TestLocalRuns(t *testing.T) {
 		})
 	}
 
+	sealed := time.Date(2026, 11, 23, 4, 22, 0, 0, time.UTC)
+	made := time.Date(2026, 11, 18, 21, 4, 0, 0, time.UTC)
+	stoppedAt := "pairtime has stopped uploading at batch 3, which it sealed in local-only mode at 2026-11-23 04:22 UTC, after this computer was linked, because "
 	causes := []struct {
 		name  string
 		modes string
 		stop  uint64
-		want  string
+		// why is what batch stop's seal frame says of why it was sealed
+		// local-only, nil for nothing.
+		why  *ledger.LocalWhy
+		want string
 	}{
-		{"a stop at a batch sealed in local-only mode names both causes, config.toml and a record from before the link that came late", "oollo", 3, localOnlyProblem},
-		{"a stop at a batch an older version sealed, which recorded no mode, says so", "oonno", 3, noModeProblem},
+		{"a stop at a batch whose seal frame doesn't say why, as an older version's, names both causes, config.toml and a record made while it said local-only that came late",
+			"oollo", 3, nil, localOnlyProblem},
+		{"a stop at a batch an older version sealed, which recorded no mode, says so", "oonno", 3, nil, noModeProblem},
+		{"a stop at a batch sealed local-only for records that came late names the batch, when it was sealed, and the records by their kinds and their own times",
+			"oollo", 3, &ledger.LocalWhy{Late: []ledger.LateRecord{{Kind: event.KindAgentOutput, T: made}, {Kind: event.KindAgentStop, T: made}}, LateN: 2},
+			stoppedAt + "it holds records made while config.toml said local-only that reached pairtime only after that ended: an agent.output of 2026-11-18 21:04 UTC and an agent.stop of 2026-11-18 21:04 UTC. " + stopFix},
+		{"one holding more such records than its seal frame names counts the rest",
+			"oollo", 3, &ledger.LocalWhy{Late: []ledger.LateRecord{{Kind: event.KindPromptSubmit, T: made}}, LateN: 3},
+			stoppedAt + "it holds records made while config.toml said local-only that reached pairtime only after that ended: a prompt.submit of 2026-11-18 21:04 UTC and 2 more. " + stopFix},
+		{"one sealed while config.toml said local-only says so",
+			"oollo", 3, &ledger.LocalWhy{Config: true},
+			stoppedAt + `config.toml said mode = "local", had an error, or named a pairtime login the agent hadn't taken in yet, as it was sealed. ` + stopFix},
+		{"one holding records that came while the watch's note said local-only, sealed while something was still on its way, names both",
+			"oollo", 3, &ledger.LocalWhy{Noted: true, Waiting: true},
+			stoppedAt + `records came while config.toml said mode = "local"; and something made while config.toml said local-only, such as a hook call or a git change, was still on its way to the ledger. ` + stopFix},
+		{"no cause of a stop names a hook call that waited unless the seal frame says something was on its way",
+			"oollo", 3, &ledger.LocalWhy{Late: []ledger.LateRecord{{Kind: event.KindAgentOutput, T: made}}, LateN: 1},
+			stoppedAt + "it holds a record made while config.toml said local-only that reached pairtime only after that ended: an agent.output of 2026-11-18 21:04 UTC. " + stopFix},
 	}
 	for _, tc := range causes {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := stopProblem(modeRows(tc.modes), tc.stop); got != tc.want {
+			rows := modeRows(tc.modes)
+			if tc.why != nil {
+				r := &rows.queue[tc.stop-rows.first]
+				r.Why, r.SealedAt = tc.why, sealed
+			}
+			if got := stopProblem(rows, tc.stop); got != tc.want {
 				t.Errorf("doctor hears %q", got)
 			}
 		})

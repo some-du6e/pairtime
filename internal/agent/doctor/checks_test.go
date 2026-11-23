@@ -237,6 +237,19 @@ func TestChecks(t *testing.T) {
 			},
 			check: "adapter.claude_code", want: Warn, wantHas: []string{"but the ledger refused 1 record; the last failure: the ledger refused a prompt.submit record"},
 			wantNot: []string{"parse", "Report this line"}},
+		{name: "records the ledger dropped as made while config.toml said local-only are counted, and aren't a warning, since they were never to upload",
+			edit: func(f *Facts) {
+				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, Records: 4, LateLocal: 2}
+			},
+			check: "adapter.claude_code", want: OK,
+			wantHas: []string{"5 calls made 4 records, with no parse failures; 2 records made while config.toml said local-only came only after pairtime had uploaded again, so the ledger dropped them"},
+			wantNot: []string{"refused"}},
+		{name: "one such record is it",
+			edit: func(f *Facts) {
+				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, Records: 4, LateLocal: 1}
+			},
+			check: "adapter.claude_code", want: OK,
+			wantHas: []string{"1 record made while config.toml said local-only came only after pairtime had uploaded again, so the ledger dropped it,"}},
 		{name: "an unsigned release is ok, and says releases aren't signed yet",
 			edit: func(*Facts) {}, check: "signing", want: OK,
 			wantHas: []string{"release v0.1.0 from commit 0123456789ab, not code-signed", "aren't code-signed yet"}},
