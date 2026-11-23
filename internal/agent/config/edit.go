@@ -207,8 +207,8 @@ func shadowByHand(on bool) func(name, text string) string {
 		switch md, err := toml.Decode(body, &fileConfig{}); {
 		case displayVariant(body):
 			// Parse reads [display] and shadow only as written in lower
-			// case, and the decoder would put either spelling in.
-			return fmt.Sprintf("write the table as [display] and the setting as shadow, in lower case, with shadow = %t, in %s by hand", on, name)
+			// case, and a setting written twice as off.
+			return fmt.Sprintf("write the table as [display] and the setting once, as shadow, in lower case, with shadow = %t, in %s by hand", on, name)
 		case err == nil && md.IsDefined("display", "shadow"):
 			// Where the setting is, as in an inline table: adding it again
 			// would set it twice.
@@ -296,11 +296,22 @@ func patchDisplay(text string, on bool) string {
 
 // displayVariant reports whether text spells the [display] table, or the
 // shadow setting in it, in another upper and lower case than Parse reads,
-// as a header, at the top of the file, or under [display]: [Display], a
-// top-level Display.shadow, or Shadow under [display]. The decoder takes
-// any case, and with two spellings it is chance which value wins.
+// wherever it writes it: [Display], a top-level Display.shadow, Shadow
+// under [display] or in an inline table. Parse reads only the lower-case
+// spelling, and two spellings as off, so no edit of the one line can make
+// such a file say what it is asked. A file that parses is read through the
+// decoder's keys, which name each setting wherever the file writes it, and
+// one that doesn't through its lines.
 func displayVariant(text string) bool {
 	variant := func(got, want string) bool { return got != want && strings.EqualFold(got, want) }
+	if md, err := toml.Decode(text, &fileConfig{}); err == nil {
+		for _, k := range md.Keys() {
+			if len(k) > 0 && variant(k[0], "display") || len(k) == 2 && k[0] == "display" && variant(k[1], "shadow") {
+				return true
+			}
+		}
+		return false
+	}
 	table := ""
 	for _, line := range strings.Split(text, "\n") {
 		t := strings.TrimSpace(line)
@@ -525,8 +536,8 @@ func readEdited(name string) ([]byte, error) {
 // read. A screen the teen may share, as pairtime install's consent screen,
 // shows only Line and Hand instead.
 type UnparsedError struct {
-	// Line is the line the file stops parsing at, or 0 when the decoder
-	// doesn't say, as for a value of the wrong type.
+	// Line is the line the file stops parsing at, or the line of a value
+	// of the wrong type, or 0 when the decoder names no line.
 	Line int
 	// Hand says what to write in the file by hand instead.
 	Hand string
@@ -550,16 +561,24 @@ func edited(text, hand string, change func(text string) string, apply func(*Conf
 		var pe toml.ParseError
 		if errors.As(err, &pe) {
 			u.Line = pe.Position.Line
+		} else {
+			// A value of the wrong type fails as the decoder fills
+			// fileConfig, with a plain error that starts "toml: line N"
+			// when the decoder knows the key's line. That prefix holds
+			// nothing from the file.
+			fmt.Sscanf(err.Error(), "toml: line %d", &u.Line)
 		}
 		return "", u
-	}
-	if strings.Contains(text, `"""`) || strings.Contains(text, `'''`) {
-		// A multi-line string could hold a line that looks like a key.
-		return "", fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", hand)
 	}
 	before, _, _ := parseAsWritten([]byte(text))
 	body, found := strings.CutPrefix(text, bom)
 	out := change(body)
+	if out != body && (strings.Contains(text, `"""`) || strings.Contains(text, `'''`)) {
+		// A multi-line string could hold a line that looks like a key, so
+		// such a file is changed only when the change rewrites nothing, as
+		// in one that says so already: then nothing in it is mis-edited.
+		return "", fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", hand)
+	}
 	if found {
 		out = bom + out
 	}

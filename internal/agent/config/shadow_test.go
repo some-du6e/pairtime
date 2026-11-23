@@ -80,11 +80,16 @@ func TestScoringFreeze(t *testing.T) {
 	}
 	for _, tt := range twice {
 		t.Run(tt.name, func(t *testing.T) {
-			atScoring(t, "0.4.0")
-			for range 50 {
-				cfg, problems := Parse([]byte(tt.file))
-				if cfg.Display.Shadow || len(problems) != 1 || !strings.Contains(problems[0], "display.shadow is set more than once") {
-					t.Fatalf("Parse(%q) has shadow %v and problems %q, want it off and the setting reported", tt.file, cfg.Display.Shadow, problems)
+			// The problem says what pairtime does, which holds before the
+			// freeze and after it.
+			for _, version := range []string{"0.4.0", "1.0.0"} {
+				atScoring(t, version)
+				for range 50 {
+					cfg, problems := Parse([]byte(tt.file))
+					if cfg.Display.Shadow || len(problems) != 1 || !strings.Contains(problems[0], "display.shadow is set more than once, in different upper and lower case, so pairtime reads it as off") ||
+						strings.Contains(problems[0], "calibrating") {
+						t.Fatalf("Parse(%q) at %s has shadow %v and problems %q, want it off and the setting reported as read off", tt.file, version, cfg.Display.Shadow, problems)
+					}
 				}
 			}
 		})
@@ -208,6 +213,21 @@ func TestSetShadow(t *testing.T) {
 			notErr:  "add the lines",
 		},
 		{
+			name:    "two spellings of the setting in an inline table aren't changed, and the error says to write it once, in lower case",
+			file:    "display = { shadow = true, Shadow = true }\n",
+			on:      true,
+			want:    "display = { shadow = true, Shadow = true }\n",
+			wantErr: "the setting once, as shadow, in lower case",
+		},
+		{
+			name:    "a setting spelled Shadow in an inline table isn't changed, and the error says to write it in lower case, not to add lines",
+			file:    "display = { Shadow = true }\n",
+			on:      true,
+			want:    "display = { Shadow = true }\n",
+			wantErr: "in lower case",
+			notErr:  "add the lines",
+		},
+		{
 			name:    "a table spelled [Display], which Parse doesn't read, isn't changed, and the error says to write it in lower case",
 			file:    "[Display]\nshadow = false\n",
 			on:      true,
@@ -248,6 +268,13 @@ func TestSetShadow(t *testing.T) {
 			on:      true,
 			want:    "[display]\nshadow = false\n[notifications]\nquiet_hours = \"\"\"\n22:00-07:00\"\"\"\n",
 			wantErr: "multi-line string",
+		},
+		{
+			name: "a file with a multi-line string that says shadow = true already is left alone, since nothing in it is rewritten",
+			file: "[display]\nshadow = true\n[notifications]\nquiet_hours = \"\"\"22:00-07:00\"\"\"\n",
+			on:   true,
+			want: "[display]\nshadow = true\n[notifications]\nquiet_hours = \"\"\"22:00-07:00\"\"\"\n",
+			same: true,
 		},
 	}
 	for _, tt := range tests {
@@ -303,7 +330,9 @@ func TestSetShadow(t *testing.T) {
 	}
 
 	t.Run("a file with both spellings of the setting is refused every time, and never changed", func(t *testing.T) {
-		const file = "[display]\nshadow = false\n[Display]\nshadow = false\n"
+		// The spellings say different things, so a decode that picked one
+		// of them by map order would let some of the tries through.
+		const file = "[display]\nshadow = false\n[Display]\nshadow = true\n"
 		name := filepath.Join(t.TempDir(), "config.toml")
 		if err := os.WriteFile(name, []byte(file), 0o600); err != nil {
 			t.Fatal(err)
@@ -422,7 +451,7 @@ func TestUnparsedError(t *testing.T) {
 		line bool // Line is set
 	}{
 		{"a value that isn't TOML gives the line the file breaks at", "[display]\nshadow = mysecretword\n", true},
-		{"a value of the wrong type gives no line, since the decoder names none", "[display]\nshadow = \"yes\"\n", false},
+		{"a value of the wrong type gives the line of the value, which the decoder names", "[display]\nshadow = \"yes\"\n", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -231,7 +231,7 @@ func parseAsWritten(data []byte) (cfg Config, problems []string, used bool) {
 		// The decoder put one of the spellings in file, and which one
 		// depends on map order, so a setting written twice counts as one
 		// it can't read, as in [notifications], and shadow stays off.
-		problems = append(problems, "config.toml: display.shadow is set more than once, in different upper and lower case, so your time doesn't show as calibrating until it's fixed")
+		problems = append(problems, "config.toml: display.shadow is set more than once, in different upper and lower case, so pairtime reads it as off")
 	case md.IsDefined("display", "shadow"):
 		cfg.Display.Shadow = file.Display.Shadow
 	}
