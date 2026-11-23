@@ -17,11 +17,17 @@ import (
 )
 
 const privacyUsage = `Usage: pairtime privacy show
+       pairtime privacy delete [--yes]
 
-Prints the next upload this computer will send to the pairtime server,
-exactly as it will be sent (DESIGN 8.8). Standard output gets the upload's
-JSON byte for byte, as it is before pairtime compresses it with gzip and
-signs it; standard error says what it holds and where it goes. So
+pairtime privacy delete deletes pairtime's device key and everything
+pairtime recorded on this computer; pairtime privacy delete --help says
+what that covers.
+
+pairtime privacy show prints the next upload this computer will send to
+the pairtime server, exactly as it will be sent (DESIGN 8.8). Standard
+output gets the upload's JSON byte for byte, as it is before pairtime
+compresses it with gzip and signs it; standard error says what it holds
+and where it goes. So
 
   pairtime privacy show > next-upload.json
 
@@ -36,12 +42,15 @@ before it sends.
 func init() {
 	register(command{
 		name:    "privacy",
-		summary: "Show the next upload, byte for byte, before it leaves this computer",
+		summary: "Show the next upload, byte for byte, before it leaves this computer, or delete everything pairtime recorded",
 		run:     runPrivacy,
 	})
 }
 
 func runPrivacy(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "delete" {
+		return runPrivacyDelete(args[1:], stdout, stderr)
+	}
 	if len(args) == 0 || args[0] != "show" {
 		if len(args) > 0 && (args[0] == "-h" || args[0] == "-help" || args[0] == "--help") {
 			fmt.Fprint(stdout, privacyUsage)
