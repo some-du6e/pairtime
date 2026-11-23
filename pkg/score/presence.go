@@ -218,16 +218,15 @@ func (p *presence) neverAt(t int64) bool {
 	return i < 0 || p.reaches[i].cut
 }
 
-// stopped reports whether the slot holding t comes after a record of the
-// sampler's whose reach ended (neverAt): the sampler stopped then. The
-// samples taken after it starts again don't reach back into those slots, so
-// a later sample's idle time dates no input there. Before the sampler's
-// first record nothing stopped, and the first sample's idle time still
-// dates the input just before it, such as the typing of the prompt whose
-// hook started the agent.
-func (p *presence) stopped(t int64) bool {
-	i := p.reachAt(t)
-	return p.live && i >= 0 && p.reaches[i].cut
+// dates reports whether sample s's idle time dates an input at l for an
+// act's evidence test: wherever the device samples, and in a never-sampling
+// device's slot (neverAt) only when s came within SLEEP_GAP_S of l, as the
+// sample the agent takes as a hook starts it, or as its sampler starts
+// again, does, with the typing of that hook's prompt just before it.
+// Whatever such an input decides is still pending when its sample comes,
+// so no later sample changes a slot or an act already final.
+func (p *presence) dates(s sample, l int64) bool {
+	return s.t-l <= p.r.sleepGap || !p.neverAt(l)
 }
 
 // reachAt returns the index of the sampler's latest record dated before the
@@ -675,17 +674,17 @@ func (p *presence) classifyRuns(lastIn []int64) {
 // inputIn reports whether a sample shows input, or a key press if keys is
 // set, at a time in [from, to]. Each sample says when the last input before
 // it came, so only samples from from on can show one, and the first sample
-// at or after to is the last that can. An input it dates after the sampler
-// stopped counts for nothing (stopped).
+// at or after to is the last that can. In a never-sampling device's slot an
+// input counts only as dates allows.
 func (p *presence) inputIn(from, to int64, keys bool) bool {
 	i := sort.Search(len(p.samples), func(i int) bool { return p.samples[i].t >= from })
 	for ; i < len(p.samples); i++ {
 		s := p.samples[i]
 		if !keys {
-			if s.lastAny >= from && s.lastAny <= to && !p.stopped(s.lastAny) {
+			if s.lastAny >= from && s.lastAny <= to && p.dates(s, s.lastAny) {
 				return true
 			}
-		} else if s.hasKeys && s.lastKey >= from && s.lastKey <= to && !p.stopped(s.lastKey) {
+		} else if s.hasKeys && s.lastKey >= from && s.lastKey <= to && p.dates(s, s.lastKey) {
 			return true
 		}
 		if s.t >= to {
@@ -705,7 +704,7 @@ func (p *presence) inputWhere(from, to int64, keys bool, ok func(t int64) bool) 
 		if keys {
 			l, has = s.lastKey, s.hasKeys
 		}
-		if has && l >= from && l <= to && !p.stopped(l) && ok(l) {
+		if has && l >= from && l <= to && p.dates(s, l) && ok(l) {
 			return true
 		}
 		if s.t >= to {

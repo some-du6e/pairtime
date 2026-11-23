@@ -287,3 +287,39 @@ func TestHeadlessAgentDay(t *testing.T) {
 		t.Errorf("agent-day with its agent's os.focus records differs from its golden.jsonl, %s", lineDiff(got, want))
 	}
 }
+
+// TestFirstSampleDatesItsPrompt checks the typing of the prompt whose hook
+// starts the agent: only the agent's first sample, taken at the hook, dates
+// it, and it falls in a slot before that sample, a never-sampling device's.
+// A sample dates an input there for an act's evidence test only when it
+// came within SLEEP_GAP_S of the input (presence.dates), so whatever it
+// decides is still pending.
+func TestFirstSampleDatesItsPrompt(t *testing.T) {
+	cases := []struct {
+		name string
+		// after is how long after the prompt the first sample comes, in ms.
+		after int64
+		want  event.Origin
+	}{
+		{"the first sample half a second after the prompt dates its typing across a slot boundary, so the prompt is typed",
+			500, event.OriginHumanTyped},
+		{"a first sample a minute after the prompt dates nothing in the slot before it, so the prompt came with no input",
+			60_000, event.OriginNoInput},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(true)
+			terminalSession(b)
+			// Keys until 59.9 s, in the slot before the one at 60 s, and the
+			// prompt at 59.95 s.
+			b.press(every(atMS(55_000), atMS(59_900), 100)...)
+			b.prompt(atMS(59_950), event.ViaHook, "s_1", "p_1", "t_1", 40)
+			b.sample(atMS(59_950 + c.after))
+			b.samples(atMS(59_950+c.after+event.SlotMS), at(300))
+			d := b.run(t, Device{})
+			if tu, ok := turnByKey(d, "t_1"); !ok || tu.Origin != c.want {
+				t.Errorf("turn %+v, want origin %s", tu, c.want)
+			}
+		})
+	}
+}
