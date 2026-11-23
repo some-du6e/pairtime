@@ -189,9 +189,19 @@ type presence struct {
 // sampler's dated before the cut may still be on its way, as a resume
 // still queued behind a later-dated stop hook is, and it would keep the
 // reach, so the reach holds, and so does the clock it keeps (State.now).
+//
+// held says the record keeps the clock whatever records of the sampler's
+// come after it, because its fate is still open: its cut waits, or the sampler's
+// next record came more than BUCKET_TTL_S after it, so a record the agent
+// stamps itself dated inside that gap would cut the reach, and the newest
+// record isn't rules.late past the gap's end yet. That is the wait a cut
+// gets, from the other side, so nothing in such a gap is final until a
+// stamped record dated inside it has had rules.late to arrive, in
+// whichever order the two come (SM 2.1). A reach whose cut has taken
+// effect is held by nothing: a record that arrives later can't keep it.
 type reach struct {
-	t, cut int64
-	ended  bool
+	t, cut      int64
+	ended, held bool
 }
 
 // sampledReaches returns the sampler's records in recs, which are in record
@@ -209,7 +219,10 @@ func sampledReaches(r rules, recs []event.Event, high int64) []reach {
 		}
 	}
 	for i := range out {
-		out[i].ended = out[i].cut <= high-r.late
+		c := &out[i]
+		c.ended = c.cut <= high-r.late
+		gap := i+1 < len(out) && out[i+1].t-c.t > r.bucketTTL && out[i+1].t > high-r.late
+		c.held = !c.ended && (c.cut != never || gap)
 	}
 	return out
 }
@@ -308,22 +321,35 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		lastSample          int64
 		lastIdle            int64 // the idle time the last sample showed
 		sampled             int   // how many of the sampler's records came before e
+		// restarting is set from a record of the sampler's that starts the
+		// device sampling again until the next sample.
+		restarting bool
 	)
 	for _, e := range recs {
 		// A record of the sampler's after one whose reach ended starts the
 		// device sampling again (SM 2.1). The stretch between was a
 		// never-sampling device's, which has no hard break, so no gap,
 		// suspend or lock from before it reaches this record's slot either.
-		// The agent's carry drops a record whose reach ended
+		// What was open closes at the start of that slot: a lock or a
+		// suspend that began before the stretch stays on the slots before
+		// it, and the stretch's own slots clear the flags (never). The
+		// agent's carry drops a record whose reach ended
 		// (internal/agent/scorer), so a Step over its window has none of
 		// them, and derives that slot as one Step over every record does.
-		restart := false
+		// The agent writes an os.power and then a sample at the same t
+		// (DESIGN 3.3), so when an os.power starts the sampler again, the
+		// sample after it opens no gap from before the stretch either.
 		if samplerRecord(e) {
-			restart = sampled > 0 && reaches[sampled-1].ended
+			if sampled > 0 && reaches[sampled-1].ended {
+				if asleep {
+					sleeps = append(sleeps, span{sleepFrom, floorSlot(e.T)})
+				}
+				if locked {
+					locks = append(locks, span{lockFrom, floorSlot(e.T)})
+				}
+				asleep, locked, restarting = false, false, true
+			}
 			sampled++
-		}
-		if restart {
-			asleep, locked = false, false
 		}
 		switch d := e.Data.(type) {
 		case *event.OSPresence:
@@ -331,6 +357,8 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 			if d.IdleKeysS != nil {
 				s.hasKeys, s.lastKey = true, e.T-msOf(*d.IdleKeysS)
 			}
+			restart := restarting
+			restarting = false
 			if gap := e.T - lastSample; haveSample && !restart && gap > r.sleepGap && !(lastIdle >= r.contextIdle && gap <= r.slowGap) {
 				// SM 2.1: gaps come from wall-clock sample times. The open
 				// interval between the two samples is the gap. After

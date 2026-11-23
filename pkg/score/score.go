@@ -89,16 +89,20 @@ func stampedRecord(e event.Event) bool {
 // stamps itself (stampedRecord) is dated more than BUCKET_TTL_S after it,
 // which shows the agent running without its sampler, and the newest record
 // is rules.late past that one. An earlier record of the sampler's keeps
-// the clock while a record that ends its reach waits like that, since a
-// sample dated before that record can still arrive and keep the reach.
-// Since settle is PENDING_WINDOW_S, nothing after a record that keeps the
-// clock is final. With no record of the sampler's keeping it, as on a
+// the clock while its fate is open (reach.held): while a record that ends
+// its reach waits like that, since a sample dated before that record can
+// still arrive and keep the reach; and while the sampler's next record,
+// more than BUCKET_TTL_S after it, is less than rules.late behind the
+// newest record, since a stamped record dated inside that gap can still
+// arrive and end the reach. Since settle is PENDING_WINDOW_S, nothing after
+// a record that keeps the clock is final. With no record of the sampler's
+// keeping it, as on a
 // device whose agent never samples, now is high: nothing else keeps time
 // there, and a minute is final once a record is dated PENDING_WINDOW_S
 // past its end (SM 2.1).
 func (s State) now(r rules, reaches []reach) int64 {
 	for i, c := range reaches {
-		if !c.ended && (c.cut != never || i == len(reaches)-1) {
+		if c.held || !c.ended && i == len(reaches)-1 {
 			return min(s.high, c.t+r.pendingWindow)
 		}
 	}

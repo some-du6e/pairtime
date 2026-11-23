@@ -241,7 +241,15 @@
 //     BUCKET_TTL_S after it and before the sampler's next record, and the
 //     newest record is PENDING_WINDOW_S - READ_HORIZON_S past that one. Till
 //     then a sample dated before it can still arrive, as a resume queued
-//     behind a later-dated stop hook does, and keep the reach. The agent's
+//     behind a later-dated stop hook does, and keep the reach. The other
+//     order waits too: while the sampler's next record, more than
+//     BUCKET_TTL_S after one whose reach hasn't ended, is less than that
+//     wait behind the newest record, a stamped record dated inside the gap
+//     can still arrive and end the reach, so the earlier record keeps the
+//     clock (State.now). Such a slot has no hard break, and none from
+//     before the stretch reaches the slot of the sampler's record that ends
+//     it: an open lock or suspend closes at that slot's start, and the
+//     sample after an os.power that ends it opens no gap. The agent's
 //     os.focus, which says focus is unknown each time the agent starts,
 //     doesn't count. WP-HL1 changed this reading, which first read every
 //     record a State held, os.focus included, after a server's agent
@@ -291,13 +299,15 @@
 // agent stamps itself is dated more than BUCKET_TTL_S after that one and
 // the newest record is PENDING_WINDOW_S - READ_HORIZON_S past it. An
 // earlier sample holds now the same way while a record that would end its
-// reach waits like that. On a device whose agent never samples, and once
-// the sampler's records have no reach left, it is the latest record's time
-// (SM 2.1, WP-HL1). No
-// record changes what was derived for a time more than READ_HORIZON_S before
-// its own t: a lead reaches back at most THINK_LEAD_S + COMPOSE_MAX_S,
-// reading needs a human act within READ_HORIZON_S, and the return rule an
-// act on record within READ_HORIZON_S of the silence's start. So a record
+// reach waits like that, and while the sampler's next record, more than
+// BUCKET_TTL_S after it, is less than that wait behind the newest record,
+// in case a record that ends its reach is still on its way. On a device
+// whose agent never samples, and once the sampler's records have no reach
+// left, it is the latest record's time (SM 2.1, WP-HL1). No record changes
+// what was derived for a time more than READ_HORIZON_S before its own t: a
+// lead reaches back at most THINK_LEAD_S + COMPOSE_MAX_S, reading needs a
+// human act within READ_HORIZON_S, and the return rule an act on record
+// within READ_HORIZON_S of the silence's start. So a record
 // that arrives up to PENDING_WINDOW_S - READ_HORIZON_S late changes only
 // what is still pending. That bound and the return rule's horizon are the
 // code half of E-return-lookahead
