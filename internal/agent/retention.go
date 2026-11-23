@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -159,20 +160,34 @@ func (a *agent) sweep(s *sweeps, force bool) {
 	}
 	// While no vault is open, as while the ledger can't open, its
 	// directory is swept without the key, and openLedger waits to open it
-	// until the sweep is done. While openLedger is opening it, this waits
-	// for nothing, so an agent that stops meanwhile doesn't wait here for
-	// the ledger's open: the vault stays due, for the look startLedger asks
-	// for once the ledger is open, or the next hourly one.
-	if due(retention.StoreVault) && a.vaultFiles.TryLock() {
-		a.vaultMu.Lock()
-		v := a.vault
-		a.vaultMu.Unlock()
-		if v != nil {
-			a.vaultFiles.Unlock()
-			run(retention.StoreVault, retention.Stores{Vault: v})
+	// until the sweep is done. With "keep prompt text" off and no hold, that
+	// sweep deletes every text the files hold too, as DropText does once a
+	// vault is open (applyPrivacy). While openLedger is opening the vault,
+	// this waits for nothing, so an agent that stops meanwhile doesn't wait
+	// here for the ledger's open, and the vault stays due whatever the day,
+	// as for a forced look after a change of [privacy]: the look startLedger
+	// asks for once the ledger is open, or the next hourly one, sweeps it.
+	if due(retention.StoreVault) {
+		if !a.vaultFiles.TryLock() {
+			delete(s.swept, retention.StoreVault)
 		} else {
-			run(retention.StoreVault, retention.Stores{Vault: vaultDir(a.dirs.Vault())})
-			a.vaultFiles.Unlock()
+			a.vaultMu.Lock()
+			v := a.vault
+			a.vaultMu.Unlock()
+			if v != nil {
+				a.vaultFiles.Unlock()
+				run(retention.StoreVault, retention.Stores{Vault: v})
+			} else {
+				run(retention.StoreVault, retention.Stores{Vault: vaultDir(a.dirs.Vault())})
+				if p := a.privacy(); p.TextOff && !p.TextHeld {
+					n, err := vault.DropTextDir(a.dirs.Vault())
+					swept.Entries += n
+					if err != nil {
+						failed[retention.StoreVault] = errors.Join(failed[retention.StoreVault], err)
+					}
+				}
+				a.vaultFiles.Unlock()
+			}
 		}
 	}
 	if w := a.writer.Load(); w != nil && due(retention.StoreLedger) && !stopping() {

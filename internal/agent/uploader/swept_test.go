@@ -174,9 +174,12 @@ func TestHeldFrom(t *testing.T) {
 		{name: "with no place in state.json, every row stays", place: func(string) *saved { return nil }, want: 1},
 		{name: "the rows from the next root's batch stay", place: func(c string) *saved { return &saved{Chain: c, Next: 4, Modes: 6} }, want: 4},
 		{name: "the batches before the link's first one, which never go, don't stay", place: func(c string) *saved { return &saved{Chain: c, Next: 2, From: 5, Modes: 6} }, want: 5},
-		{name: "a run sealed in local-only mode is passed over", place: func(c string) *saved {
-			return &saved{Chain: c, Next: 2, Modes: 6, Gaps: []gap{{From: 2, To: 3}}}
+		{name: "while the link's first batch isn't stored, a run sealed in local-only mode is passed over", place: func(c string) *saved {
+			return &saved{Chain: c, Next: 2, Modes: 6, Linking: true, Gaps: []gap{{From: 2, To: 3}}}
 		}, want: 4},
+		{name: "a closed run sealed in local-only mode at the next root's batch stops the roots until a re-link, so none stays", place: func(c string) *saved {
+			return &saved{Chain: c, Next: 4, From: 1, Modes: 6, Gaps: []gap{{From: 4, To: 5}}}
+		}, want: 0},
 		{name: "batches the place hasn't taken the modes of are passed over when their rows say local-only", older: func(k int) bool { return k <= 2 },
 			place: func(string) *saved { return nil }, want: 4},
 		{name: "with every batch from the next root on sealed in local-only mode, none stays", place: func(c string) *saved {

@@ -31,13 +31,13 @@ With that, a computer that comes back after a long time away sends its kept root
 
 DESIGN 3.5's `batches.seg` row, in its Retention column, becomes:
 
-> 180 days, or until every submission using them is past its spot-check window. A batch's row goes when its batch's segment goes, and a base frame then names the first batch the file keeps, or the next one to be sealed when it keeps none. While account.json links the computer, the rows of the online batches the server hasn't stored stay until it stores them, without their segments, which go at 180 days all the same (docs/errata/2026-11-23-unsent-batches-retention.md)
+> 180 days, or until every submission using them is past its spot-check window. A batch's row goes when its batch's segment goes, and a base frame then names the first batch the file keeps, or the next one to be sealed when it keeps none. While account.json links the computer, the rows of the online batches the server hasn't stored stay until it stores them, unless a fork or the server's device_mismatch has ended the chain, without their segments, which go at 180 days all the same (docs/errata/2026-11-23-unsent-batches-retention.md)
 
 DESIGN 4.4's device row for ledger records and batch roots, in its Kept column, becomes:
 
-> 180 days, or longer while a submission using them is inside its spot-check window; while the computer is linked, the batch roots of online batches the server hasn't stored stay, without their records, until it stores them
+> 180 days, or longer while a submission using them is inside its spot-check window; while the computer is linked, the batch roots of online batches the server hasn't stored stay, without their records, until it stores them, unless a fork or the server's device_mismatch has ended the chain
 
-docs/retention.json's `device.ledger` entry says the same, for the privacy notice.
+docs/retention.json's `device.ledger` entry says the same, for the privacy notice: "While this computer is linked, the batch roots of online batches that haven't reached the server yet stay, without their records, until the server has them, unless a fork or the server's device_mismatch has ended the chain".
 
 ## Also in this PR
 

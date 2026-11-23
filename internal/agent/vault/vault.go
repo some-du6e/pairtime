@@ -945,9 +945,36 @@ func SweepDir(dir, textFrom, pathsFrom string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := removeTemps(dir); errors.Is(err, fs.ErrNotExist) {
+	n, err := filterDir(dir, due, keep)
+	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil // no vault yet
-	} else if err != nil {
+	}
+	m, oerr := sweepOld(dir, due, keep)
+	return n + m, errors.Join(err, oerr)
+}
+
+// DropTextDir is DropText for the vault in dir while no Vault has it open,
+// as SweepDir is Sweep: it deletes every text its files hold, as when the
+// teen turns "keep prompt text" off while the ledger can't open, and keeps
+// the paths and the files of other device keys in old/, as DropText does.
+// It needs no key, and nothing else may change the directory's files while
+// it runs. It returns how many texts it deleted.
+func DropTextDir(dir string) (int, error) {
+	n, err := filterDir(dir, nil, func(_ string, e entry) bool { return e.what != whatText })
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil // no vault yet
+	}
+	return n, err
+}
+
+// filterDir writes each of the files directly in the vault directory dir,
+// of the days due says may hold an entry to drop, every day when due is
+// nil, again with only the entries keep keeps, under the key the file's
+// head names, and deletes a file left with none. It deletes the temporary
+// file of a rewrite a crash cut short first, and fails with
+// fs.ErrNotExist when dir isn't there.
+func filterDir(dir string, due func(day string) bool, keep func(day string, e entry) bool) (int, error) {
+	if err := removeTemps(dir); err != nil {
 		return 0, err
 	}
 	days, err := segments(dir)
@@ -957,7 +984,7 @@ func SweepDir(dir, textFrom, pathsFrom string) (int, error) {
 	n := 0
 	var errs []error
 	for _, day := range days {
-		if !due(day) {
+		if due != nil && !due(day) {
 			continue
 		}
 		keyID, err := readHead(segPath(dir, day))
@@ -975,8 +1002,7 @@ func SweepDir(dir, textFrom, pathsFrom string) (int, error) {
 			errs = append(errs, err)
 		}
 	}
-	m, err := sweepOld(dir, due, keep)
-	return n + m, errors.Join(append(errs, err)...)
+	return n, errors.Join(errs...)
 }
 
 // sweepRule returns which files of a sweep by textFrom and pathsFrom may

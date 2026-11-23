@@ -1064,6 +1064,47 @@ func TestSweep(t *testing.T) {
 			},
 		},
 		{
+			name: "with no Vault open, DropTextDir deletes every text in the vault's own files, and keeps the paths and old/'s files",
+			run: func(t *testing.T, dir string, v *Vault) {
+				v.Keep(day1, 1, []byte("old one"), nil)
+				v.Close()
+				// This key's Open sets the other key's file aside in old/.
+				other, _ := open(t, dir, 2, keyB, 1, true)
+				other.Keep(day2, 1, []byte("two"), []string{"b.go"})
+				other.Keep(day3, 2, []byte("three"), nil)
+				other.Close()
+				n, err := DropTextDir(dir)
+				if err != nil || n != 2 {
+					t.Fatalf("DropTextDir = %d, %v; want the 2 texts of the vault's own files", n, err)
+				}
+				if days, _ := segments(filepath.Join(dir, oldDir, keyA)); !slices.Equal(days, []string{day1}) {
+					t.Errorf("old/%s keeps %q, want %q", keyA, days, day1)
+				}
+				if days, _ := segments(dir); !slices.Equal(days, []string{day2}) {
+					t.Errorf("files %q, want %s's, which keeps its paths", days, day2)
+				}
+				other, _ = open(t, dir, 2, keyB, 3, true)
+				if _, err := other.Text(1, commit(t, 2, 1, "two")); !errors.Is(err, ErrNotKept) {
+					t.Errorf("Text(1): %v, want ErrNotKept", err)
+				}
+				key, err := testKeys(t, 2).Features().Path("b.go")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got, err := other.Paths(1, []features.Hunk{{P: key, OS: 1, OL: 1, NS: 1, NL: 2}}); err != nil || !slices.Equal(got, []string{"b.go"}) {
+					t.Errorf("Paths(1) = %q, %v", got, err)
+				}
+			},
+		},
+		{
+			name: "DropTextDir with no vault directory yet deletes nothing",
+			run: func(t *testing.T, dir string, v *Vault) {
+				if n, err := DropTextDir(filepath.Join(dir, "none")); err != nil || n != 0 {
+					t.Errorf("DropTextDir = %d, %v", n, err)
+				}
+			},
+		},
+		{
 			name: "SweepDir with no vault directory yet deletes nothing",
 			run: func(t *testing.T, dir string, v *Vault) {
 				if n, err := SweepDir(filepath.Join(dir, "none"), day1, day1); err != nil || n != 0 {

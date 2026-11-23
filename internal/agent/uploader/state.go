@@ -475,16 +475,19 @@ func (st saved) prepare(rows *rowIndex) {
 // HeldFrom returns the first batch whose row the ledger in ledgerDir keeps
 // for the uploads while this computer is linked, whatever its age, by the
 // uploader's place in st (Writer.Sweep's floor;
-// docs/errata/2026-11-23-unsent-batches-retention.md): the first batch,
-// from where the roots go next on, that isn't sealed in local-only mode,
-// as the place and the rows' modes say, since such a batch never goes. A
-// sweep keeps the rows from it on, so the server can still link the next
-// root to its head. It is 0, nothing to keep, once nothing more goes under
-// the chain: after a fork or the server's device_mismatch, or with every
-// batch from there on sealed in local-only mode, none of which goes
-// without a new link, after which only batches sealed later go. A place
-// that doesn't read, or is another chain's, counts as none: what the
-// server holds isn't known, so every row the modes don't pass over stays.
+// docs/errata/2026-11-23-unsent-batches-retention.md): the batch the roots
+// go on from, as the place and the rows' modes say. A sweep keeps the rows
+// from it on, so the server can still link the next root to its head.
+// While the link's first batch isn't stored (Linking), the server takes
+// any batch above its head, so the runs of batches sealed in local-only
+// mode there, which never go, are passed over (settle). It is 0, nothing to
+// keep, once no root of these rows can be stored: after a fork or the
+// server's device_mismatch, which end the chain, and when the roots stop
+// at a batch sealed in local-only mode while not linking (localStop), as
+// they do until a re-link, after which they go on from the first batch
+// sealed then (relink). A place that doesn't read, or is another chain's,
+// counts as a new link's, as load takes it: what the server holds isn't
+// known, so every row from the first one the modes don't pass over stays.
 func HeldFrom(st *state.Store, ledgerDir string) (uint64, error) {
 	rows, err := loadRows(ledgerDir, 0)
 	if err != nil {
@@ -492,7 +495,7 @@ func HeldFrom(st *state.Store, ledgerDir string) (uint64, error) {
 	}
 	var s saved
 	if ok, err := st.Get(StateKey, &s); err != nil || !ok || s.Chain != rows.device {
-		s = saved{Chain: rows.device}
+		s = saved{Chain: rows.device, Linking: true}
 	}
 	if s.Fork != 0 || s.Mismatch {
 		return 0, nil
@@ -505,14 +508,17 @@ func HeldFrom(st *state.Store, ledgerDir string) (uint64, error) {
 		if s.LocalFrom > 0 && b >= s.LocalFrom {
 			return 0, nil
 		}
-		moved := false
+		in := false
 		for _, g := range s.Gaps {
 			if g.From <= b && b <= g.To {
-				b, moved = g.To+1, true
+				b, in = g.To+1, true
 			}
 		}
-		if !moved {
+		switch {
+		case !in:
 			return b, nil
+		case !s.Linking:
+			return 0, nil
 		}
 	}
 }
