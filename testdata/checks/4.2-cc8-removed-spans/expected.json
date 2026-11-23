@@ -97,7 +97,7 @@
     }
   },
   "not_exercised": {},
-  "known_limit": "DESIGN 7.3 and ledger-v1.md 10.8: a client that keys a turn's features under a key of its own is caught only through another revealed turn with the same normalized text, and a span removed by hand hides the turn from every CC8 rule but es. Issue #15's decision accepted this.",
+  "known_limit": "DESIGN 7.3 and ledger-v1.md 10.8: a client that keys a turn's features under a key of its own is caught only through another revealed turn with the same normalized text, and a removed span hides the turn from every CC8 rule but es. Issue #15's decision accepted this.",
   "errata": ["2026-11-19-check-readings"],
   "notes": [
     "A reviewer reading A3's kept text, `make the ... collapse into ... icon rail ... small screens`, can still see the re-roll. CC8, the automatic check, can't."

@@ -22,7 +22,7 @@ Each failing scenario fails one check. Every other check passes on the same data
 | CC10 editor vs focus | `6.2-clean`, `6.3-clean` | `6.3-cc10-injected-heartbeats`: no editor has focus; `6.3-cc10-wrong-project`: the focused editor is on another project | the `4.2-*` scenarios: no editor |
 | CC11 typing, module on | `4.2-clean` | `4.2-cc11-pasted` | the `6.2-*` and `6.3-*` scenarios and `4.2-cc8-inflated-length`: module off; `4.2-cc2-send-keys`: no human prompt |
 
-`4.2-cc8-removed-spans` passes every check although its client lied. It is the limit DESIGN 7.3 and ledger-v1.md 10.8 state and [issue #15](https://github.com/some-du6e/pairtime/issues/15) accepted: a span removed by hand hides a self-keyed turn from every CC8 rule but `es`. Its `known_limit` says so.
+`4.2-cc8-removed-spans` passes every check although its client lied. It is the limit DESIGN 7.3 and ledger-v1.md 10.8 state and [issue #15](https://github.com/some-du6e/pairtime/issues/15) accepted: a removed span hides a self-keyed turn from every CC8 rule but `es`. Its `known_limit` says so.
 
 ## The scenarios
 
@@ -105,7 +105,7 @@ Bodies follow ledger-v1.md 4.5: `{"n": nonce, "e": the event after Event.Shareab
 
 ### `challenge.json`
 
-`device_id`, the `pool` of `seq`s (DESIGN 7.5 step 4: human prompts in `P` and `W` that opened a credited anchor), `k`, and `drawn[]`. Every pool here is smaller than `CHALLENGE_K` = 10, so the draw takes all of it, and the seed doesn't matter. Each drawn prompt has its `seq`, its `turn_key`, `text` and its redacted reveal as ledger-v1.md 10.3 gives it. No keyed value is revealed (DESIGN 7.3). The committed `f` and `c` are in the prompt's body in `ledger.json`. The scenarios have no agent text, so the reveal of the agent message each prompt answered isn't here. CC8 doesn't read it.
+`device_id`, the `pool` of `seq`s (DESIGN 7.5 step 4: human prompts in `P` and `W` that opened a credited anchor), `k`, and `drawn[]`. Every pool here is smaller than `CHALLENGE_K` = 10, so the draw takes all of it, and the seed doesn't matter. Each drawn prompt has its `seq`, its `turn_key` and `text`, its redacted reveal as ledger-v1.md 10.3 gives it. No keyed value is revealed (DESIGN 7.3). The committed `f` and `c` are in the prompt's body in `ledger.json`. The scenarios have no agent text, so the reveal of the agent message each prompt answered isn't here. CC8 doesn't read it.
 
 ### `typing.json`
 

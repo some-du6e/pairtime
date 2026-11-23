@@ -585,11 +585,30 @@ def whole_lines(items):
     return lines
 
 
+def es_fault(f, items):
+    """Whether a challenged turn breaks CC8's es rule (ledger-v1.md 10.8): its
+    f holds no es although a line its reveal shows whole is an error line, or,
+    on a reveal that removed nothing, an es although the text has no error
+    signature."""
+    if "es" not in f:
+        return any(error_line(x) for x in whole_lines(items))
+    if any("type" in it for it in items):
+        return False
+    text = "".join(bytes.fromhex(it["token"]).decode() for it in items)
+    return not any(error_line(x) for x in text.split("\n"))
+
+
 def selftest():
     """Checks what no scenario reaches: CC8's es rule, since no text here
     has an error line (ledger-v1.md 10.8)."""
     text = "still failing\nFAILED tests/test_nav.py::test_bar - assert 1 == 2"
     com = commitment(sha256(b"selftest"), 1, text)
+    es = {"es": "00" * 16}
+    check(es_fault({}, text_reveal(com)), "an error line the reveal shows whole needs an es")
+    check(not es_fault({}, text_reveal(com, (3,))), "an error line whose path word was removed needs none")
+    check(not es_fault(es, text_reveal(com)), "an es beside an error line shown whole passes")
+    check(es_fault(es, text_reveal(commitment(sha256(b"selftest"), 2, "still failing"))),
+          "an es on a text with no error signature fails")
     check(whole_lines(text_reveal(com)) == text.split("\n"), "a reveal that removes nothing shows every line whole")
     shown = whole_lines(text_reveal(com, (1,)))
     check(shown == [text.split("\n")[1]] and error_line(shown[0]), "a removed word hides only its own line, and the "
@@ -974,7 +993,7 @@ def cc8(challenge, led):
         bd = bodies[(challenge["device_id"], d["seq"])]
         f, ev = bd["f"], bd["e"]["data"]
         bad = faults.setdefault(d["seq"], [])
-        if "es" not in f and any(error_line(x) for x in whole_lines(d["text"])):
+        if es_fault(f, d["text"]):
             bad.append("es")
         if not any("type" in it for it in d["text"]):
             text = "".join(bytes.fromhex(it["token"]).decode() for it in d["text"])
@@ -982,8 +1001,6 @@ def cc8(challenge, led):
                 bad.append("lengths")
             if ev["low_effort"] != go_ahead(text):
                 bad.append("low_effort")
-            if "es" in f and not any(error_line(x) for x in text.split("\n")):
-                bad.append("es")
             if prompt_class(text, min(ev["typed_len_est"], len(text)), ev["answers_question"]) != f["pc"]:
                 bad.append("class")
             norm = " ".join(plain_words(text))
