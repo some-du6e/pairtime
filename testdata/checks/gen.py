@@ -135,8 +135,8 @@ class Scenario:
         if self.challenge is not None and self.challenge["drawn"]:
             # CC8 again over every rotation of the draw and of its reverse,
             # so each reveal is walked first and last. A count or a failed
-            # item that hangs on which value of a shingle came first can't
-            # agree with all of them.
+            # item that hangs on which of a text's prompts was walked first
+            # can't agree with all of them.
             def verdict(r):
                 return r["result"], r["counts"], sorted(map(str, r.get("items", [])))
 
@@ -723,7 +723,7 @@ def s_42_cc8_limit(out):
     dev = alt(sc)
     dev.finish()
     keys = alt_features(sc, dev, a3=ck.features(FAKE_KEY, TEXT_A, "substantive"))
-    sc.edit("A3's f is computed under a made-up key. In A3's reveals, words 3, 6 and 9 (`sidebar`, `an`, `on`) "
+    sc.edit("A3's f is computed under a made-up key. In A3's reveal, words 3, 6 and 9 (`sidebar`, `an`, `on`) "
             "are removed as type teen, so CC8 can compare A3 with nothing.")
     sc.typing = alt_typing(dev)
     alt_challenge(sc, dev, keys, (A1, B1, A2, B2, A3), a3_hidden=(2, 5, 8))

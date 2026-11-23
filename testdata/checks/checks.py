@@ -515,13 +515,13 @@ def keyed16(key, tag, x):
 
 
 def go_ahead(text):
-    """SM 2.2's go-ahead test, which a prompt.submit's low_effort states:
-    the text lowercased, without punctuation and with its whitespace
-    collapsed, is under 4 characters or on the go-ahead list. The texts
-    here are plain lowercase words, so none is a pick."""
-    bare = re.sub(r"[^\w\s]", "", text.lower())
-    norm = " ".join(bare.split())
-    return len(norm.replace(" ", "")) < 4 or norm in GO_AHEADS
+    """SM 2.2's go-ahead test, which a prompt.submit's low_effort states
+    and pkg/score's LowEffort computes: the text lowercased, with its
+    punctuation and whitespace stripped, is under 4 characters or on the
+    go-ahead list, each entry stripped the same way. The texts here are
+    plain lowercase words, so none is a pick."""
+    bare = "".join(re.sub(r"[^\w\s]", "", text.lower()).split())
+    return len(bare) < 4 or bare in {g.replace(" ", "") for g in GO_AHEADS}
 
 
 def prompt_class(text, typed_len, answers_question=False):
@@ -596,7 +596,8 @@ def selftest():
                                                                     "other is an E4 error line")
     check(not any(error_line(x) for x in whole_lines(text_reveal(com, (3,)))),
           "a removed word in the error line leaves no error line shown whole")
-    check(go_ahead("looks good") and not go_ahead("make the sidebar collapse"), "SM 2.2's go-ahead test")
+    check(go_ahead("looks good") and go_ahead("looksgood") and go_ahead("go a head")
+          and not go_ahead("make the sidebar collapse"), "SM 2.2's go-ahead test, with whitespace stripped")
 
 
 def text_reveal(com, removed_words=(), kind="teen"):
