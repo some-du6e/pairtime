@@ -10,7 +10,7 @@ These files are oracle paths (docs/PLAN.md, ground rule 5). A PR that changes a 
 | [6.4](6.4/) | 6.4 | A `/goal` agent running unattended overnight: Claude Code on Linux X11 with the key counter, level A | 810 s; agent 23,400 s, 23,180 s of it agent-only | [prompt lengths](../../docs/errata/2026-11-19-sm-6.4-prompt-lengths.md) |
 | [6.6](6.6/) | 6.6 | A scripted `claude -p` loop with a mouse jiggler on Windows 10 | 0 s | [uncredited codes](../../docs/errata/2026-11-19-sm-6.6-uncredited-codes.md) |
 
-WP-FX2 adds 6.3, its two-tab variant, 6.5 and SM 4.2's alternation case; WP-FX3 adds 6.1; WP-FX4 adds `sidedoor/`.
+WP-FX2 adds 6.3, its two-tab variant, 6.5 and SM 4.2's alternation case; WP-FX3 adds 6.1; WP-FX4 adds `sidedoor/`; WP-FX8 adds `focus-unknown/`.
 
 ## A fixture directory
 
@@ -32,7 +32,7 @@ Records before the window (below) set up state the window needs, such as a sessi
 Conventions the scorer relies on:
 
 - **Presence.** `os.presence` every 15 s on :00, :15, :30 and :45 UTC while a project context is live, once a minute on :00 after 600 s with no input and no running turn, and one more at each hook, focus and power event (DESIGN 3.3, 6.2 D14). A sample taken at an event comes after it, at the same millisecond. A sample at time `s` with `idle_any_s` x says the last input was at `s − x`, and `idle_keys_s` the same for key presses; it is null on machines that can't tell keys apart. No input falls on a slot boundary, so the sample at a slot's end says whether the slot had input.
-- **Focus.** `os.focus` when the foreground app changes, at a resume, and whenever the focused window's `hosted_sessions` change because a harness session starts or ends under it. Without the last case, a session started in an already focused terminal would never be in `hosted_sessions`, and SM 2.2 rule 6 couldn't find it at submit. `focus_project` is set when the window resolves to one project (SM 3.2): an editor or a terminal hosting one session.
+- **Focus.** `os.focus` when the foreground app changes, at a resume, and whenever the focused window's `hosted_sessions` change because a harness session starts or ends under it. Without the last case, a session started in an already focused terminal would never be in `hosted_sessions`, and SM 2.2 rule 6 couldn't find it at submit. `focus_project` is set when the window resolves to one project (SM 3.2): an editor or a terminal hosting one session. Where the client can't tell which window is in front, one `os.focus` with `app_class` `unknown` and no other field, written when focus turns unknown and ended by the next window report (SM 2.5).
 - **Turns.** A prompt's turn has the `turn_key` of its `prompt.submit`. A turn a stop hook continues has no `prompt.submit` (HS 3.5); it gets its own `turn_key`, starts when the turn before it stops, and ends with an `agent.stop` whose `stop_hook_active` is true.
 - **Local fields.** Hashes the scorer reads (`app_hash`, `cmd_hash`) are present. Prompt text and its sketches (`text`, `minhash`, `template_hash`, a pasted error's `error_sig`) are not: SM quotes some texts and none of their sketches, so content-derived features come from `prompts.json`.
 - **Keys** are `<letter>_` and 12 hex digits of a SHA-256 over a label, standing in for the per-device keys a real client derives. They mean nothing outside the fixture.

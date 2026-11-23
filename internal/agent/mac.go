@@ -27,13 +27,21 @@ import (
 // It builds on every OS, so ci.yml tests the agent's use of it with fakes;
 // its Run works on macOS only.
 type MacLoop struct {
-	loop  *darwin.Loop
+	loop  notifyLoop
 	power presence.MacPower
 	focus focus.MacFocus
 
 	mu      sync.Mutex
 	stopped bool  // Run has returned
 	err     error // what it returned
+}
+
+// notifyLoop is what a MacLoop uses of its darwin.Loop. The Loop's Status
+// comes from macOS, so ci.yml's tests give a MacLoop a fake one.
+type notifyLoop interface {
+	Run(ctx context.Context) error
+	Ready() <-chan struct{}
+	Status() darwin.Status
 }
 
 // NewMacLoop returns a MacLoop that delivers nothing until Run.
@@ -50,17 +58,39 @@ func NewMacLoop() *MacLoop {
 // source registers, or anywhere but macOS; the agent goes on without them,
 // and GET /v1/status says why.
 //
-// TODO(WP-OS15): MacFocus.Watch always starts, so the focus component can't
-// tell that macOS reports no activations. Once WP-EV2 adds app_class
-// unknown, pass m.focus an unknown change when the Loop's Status says the
-// activation observer didn't register, or when Run fails, so those slots
-// credit at level C (SM 2.5, D-focus-unknown).
+// MacFocus.Watch starts whether or not activations will come, so Run tells
+// focus when they won't: once the Loop's Status says the activation
+// observer didn't register, or when the Loop's Run fails. Focus is unknown
+// from then on, and the focus component records it (SM 2.5).
 func (m *MacLoop) Run(ctx context.Context) error {
+	observed := make(chan struct{})
+	go func() {
+		defer close(observed)
+		// Ready closes once the Loop has registered its sources, or once
+		// its Run has returned without getting that far.
+		<-m.loop.Ready()
+		if err := m.loop.Status().Focus; err != nil {
+			m.focus.Unknown(time.Now(), err.Error())
+		}
+	}()
 	err := m.loop.Run(ctx)
+	<-observed
+	if err != nil {
+		m.focus.Unknown(time.Now(), loopFailed(err))
+	}
 	m.mu.Lock()
 	m.stopped, m.err = true, err
 	m.mu.Unlock()
 	return err
+}
+
+// loopFailed says why the notification loop's Run returned err, for
+// GET /v1/status and the focus component.
+func loopFailed(err error) string {
+	if errors.Is(err, errors.ErrUnsupported) {
+		return "the macOS notification loop runs on macOS only"
+	}
+	return "the macOS notification loop didn't start: " + err.Error()
 }
 
 // macHandler is the Loop's darwin.Handler.
@@ -103,11 +133,8 @@ func (m *MacLoop) signals() signalsReply {
 	stopped, err := m.stopped, m.err
 	m.mu.Unlock()
 	if stopped {
-		switch {
-		case errors.Is(err, errors.ErrUnsupported):
-			return unknownAll("the macOS notification loop runs on macOS only")
-		case err != nil:
-			return unknownAll("the macOS notification loop didn't start: " + err.Error())
+		if err != nil {
+			return unknownAll(loopFailed(err))
 		}
 		return unknownAll("the macOS notification loop has stopped")
 	}

@@ -400,6 +400,19 @@ func TestCredit(t *testing.T) {
 			},
 		},
 		{
+			name: "WP-OS15's stopgap until WP-SC8: a slot whose focus the client recorded as unknown is X.ambiguous, as before it recorded that, not X.other_focus",
+			build: func(b *tl) {
+				b.os(at(0), &event.OSFocus{AppClass: event.AppUnknown})
+				b.mouse(every(at(1), at(56), 5000)...)
+				b.focus(at(30), event.AppOther, "")
+				b.samples(at(0), at(60))
+			},
+			want: []secondsWant{
+				{0, 30, map[event.Reason]int64{xAmbig: 30}},
+				{30, 45, map[event.Reason]int64{xOther: 15}},
+			},
+		},
+		{
 			name: "SM 5.2: while a person's turn and an automated turn of the project both run, the seconds nothing credits are X.agent_only",
 			build: func(b *tl) {
 				b.focus(at(0), event.AppTerminal, "p_1", "s_1", "s_2")

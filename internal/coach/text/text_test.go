@@ -7,6 +7,8 @@ import (
 	_ "embed"
 	"encoding/json"
 	"maps"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -32,6 +34,7 @@ var (
 		KeyCalibratingNote, KeyLevelCNote, KeyPendingNote, KeyNothingToday, KeyNothingOn,
 		KeySessionLast, KeySessionOpen, KeySessionSpan, KeySessionSince, KeyNoSession,
 		KeyLevelsHead, KeyLevelLine, KeyAgentDown, KeyAgentOld, KeyAgentSlow, KeyAgentError, KeyStoreError,
+		KeyFocusUnknown, KeyFocusUnknownLevelC, KeyGnomeNeedsLogin, KeyGnomeUnticked,
 	}
 )
 
@@ -274,6 +277,24 @@ func TestScolds(t *testing.T) {
 		t.Run(tc.Name, func(t *testing.T) {
 			if got := c.scolds(tc.S); !slices.Equal(got, tc.Want) {
 				t.Errorf("scolds(%q) = %q, want %q", tc.S, got, tc.Want)
+			}
+		})
+	}
+}
+
+// TestFocusWordsAreTheDashboards holds DESIGN 5.9's focus-unknown words,
+// which pairtime today takes from en.json, to the dashboard's Today page,
+// whose words are its own literals in web/src/local/copy.ts (focusWords):
+// each phrase must stand there word for word, so the two can't drift.
+func TestFocusWordsAreTheDashboards(t *testing.T) {
+	copyTS, err := os.ReadFile(filepath.Join("..", "..", "..", "web", "src", "local", "copy.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []Key{KeyFocusUnknown, KeyFocusUnknownLevelC, KeyGnomeNeedsLogin, KeyGnomeUnticked} {
+		t.Run("phrase "+string(k)+" is the Today page's, word for word", func(t *testing.T) {
+			if p := Phrase(k); !strings.Contains(string(copyTS), `"`+p+`"`) {
+				t.Errorf("web/src/local/copy.ts has no %q", p)
 			}
 		})
 	}

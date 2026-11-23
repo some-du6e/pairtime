@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// testSlot is a slot boundary: 2026-11-19T00:41:45Z.
+// testSlot is a slot boundary: 2026-11-19T00:01:45Z.
 const testSlot = 1795046505000
 
 func testParams() string { return "sha256:" + strings.Repeat("9c", 32) }
@@ -179,6 +179,9 @@ func TestSlotValidate(t *testing.T) {
 		{"unknown presence", func(s *Slot) { s.Present = "maybe" }, "present:"},
 		{"focus class is required", func(s *Slot) { s.FocusClass = "" }, "focus_class:"},
 		{"focus project isn't a path", func(s *Slot) { s.FocusProject = "/home/teen/game" }, "focus_project:"},
+		{"a slot of unknown focus has no project (SM 2.5)", func(s *Slot) { s.FocusClass, s.FocusProject = AppUnknown, "" }, ""},
+		{"a slot of unknown focus with a project breaks SM 2.5", func(s *Slot) { s.FocusClass = AppUnknown },
+			`focus_project: is set, but focus_class is "unknown"`},
 	})
 }
 
@@ -254,6 +257,20 @@ func TestAnchorValidate(t *testing.T) {
 		}, `corroborated: is true, but an anchor that arrived via "shell" can't be`},
 		{"labels are listed once, in order", func(a *Anchor) { a.Labels = []Label{LabelVM, LabelTypingModule} }, "labels: must list each label once"},
 		{"editor_typing isn't a v1 label", func(a *Anchor) { a.Labels = []Label{"editor_typing"} }, `labels[0]: "editor_typing" is not one of`},
+		// SM 2.5: an anchor whose focus test passed only through unknown
+		// focus carries focus_unknown, whatever its via.
+		{"a hook anchor may be labeled focus_unknown, which isn't a side door", func(a *Anchor) {
+			a.Labels = []Label{LabelTypingModule, LabelFocusUnknown}
+		}, ""},
+		{"a track anchor carries via_track and may carry focus_unknown after it", func(a *Anchor) {
+			a.Via, a.Labels, a.Corroborated = ViaTrack, []Label{LabelViaTrack, LabelFocusUnknown}, false
+		}, ""},
+		{"focus_unknown comes last among an anchor's labels", func(a *Anchor) {
+			a.Labels = []Label{LabelFocusUnknown, LabelVM}
+		}, "labels: must list each label once, in the order"},
+		{"focus_unknown is listed once", func(a *Anchor) {
+			a.Labels = []Label{LabelFocusUnknown, LabelFocusUnknown}
+		}, "labels: must list each label once"},
 	})
 }
 
@@ -337,7 +354,7 @@ func TestMinuteBucketValidate(t *testing.T) {
 			}
 		}, ""},
 		{"side-door labels on a slot", func(m *MinuteBucket) { m.Slots[2].Lbl = []Label{LabelViaTrack, LabelViaBridge} }, ""},
-		{"slot labels name side doors only", func(m *MinuteBucket) { m.Slots[0].Lbl = []Label{LabelTypingModule} }, `slots[0].lbl[0]: "typing_module" is not one of`},
+		{"typing_module is an anchor's label, never a slot's", func(m *MinuteBucket) { m.Slots[0].Lbl = []Label{LabelTypingModule} }, `slots[0].lbl[0]: "typing_module" is not one of`},
 		{"slot labels are listed once, in order", func(m *MinuteBucket) {
 			m.Slots[0].Lbl = []Label{LabelViaBridge, LabelViaTrack}
 		}, "slots[0].lbl: must list each label once"},
@@ -345,6 +362,26 @@ func TestMinuteBucketValidate(t *testing.T) {
 			m.Slots[0] = BucketSlot{Lbl: []Label{LabelViaTrack}}
 			m.CreditedS = 45
 		}, "slots[0].lbl: a slot with no credit"},
+		// focus_unknown is a new value of the existing lbl field (SM 2.5).
+		{"a slot credited where focus was unknown is labeled focus_unknown", func(m *MinuteBucket) {
+			m.Slots[1].Ev, m.Slots[1].Lbl = EvidenceC, []Label{LabelFocusUnknown}
+		}, ""},
+		{"focus_unknown follows a slot's side-door labels", func(m *MinuteBucket) {
+			m.Slots[1].Ev, m.Slots[1].Lbl = EvidenceC, []Label{LabelViaPlugin, LabelFocusUnknown}
+		}, ""},
+		{"focus_unknown before a side-door label is out of order", func(m *MinuteBucket) {
+			m.Slots[1].Ev, m.Slots[1].Lbl = EvidenceC, []Label{LabelFocusUnknown, LabelViaTrack}
+		}, "slots[1].lbl: must list each label once, in the order"},
+		{"a slot with focus-unknown credit is level C, its weakest second's, whatever else it holds (SM 2.5, DESIGN 6.4)", func(m *MinuteBucket) {
+			m.Slots[1].Lbl = []Label{LabelFocusUnknown}
+		}, `slots[1].ev: must be "C" in a slot labeled "focus_unknown"`},
+		{"a backfilled minute's focus-unknown slot is level C on both counts", func(m *MinuteBucket) {
+			m.Witness = Backfilled
+			for i := range m.Slots {
+				m.Slots[i].Ev = EvidenceC
+			}
+			m.Slots[1].Lbl = []Label{LabelFocusUnknown}
+		}, ""},
 	})
 }
 
