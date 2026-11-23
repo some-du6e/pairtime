@@ -524,7 +524,7 @@ func Open(opts Options) (*Writer, error) {
 		// No seal reads config.toml to end it, and the noted mode doesn't
 		// outlast a run, as the writer's notes start over: it ends here.
 		now := w.momentNow()
-		w.until.raise(now, w.boot)
+		w.raiseUntil(now)
 		w.sawOnline(edgeAt(now))
 		w.seen = false
 	}
@@ -629,12 +629,14 @@ func (w *Writer) Write(in Input) (uint64, error) {
 	// Made in a local-only stretch, as a git change the watcher held, a
 	// hook call parked behind its folder's first Track or held while the
 	// keys or the writer weren't there, presence's records queued
-	// meanwhile, or a transcript line a log reader read late: it was made,
-	// or it waited, while nothing could upload it (DESIGN 4.2). By the
-	// monotonic clock where the event carries one a stretch's edge holds
-	// too, so a step of the wall clock while it waited can't hide it, and
-	// by its sender's own stamp too, which a step can have put after the
-	// agent's (Input.Sent).
+	// meanwhile, or a transcript line a log reader read late: it was made
+	// while nothing could upload it (DESIGN 4.2). A record counts by the
+	// stretch it was made in, not by whether it waited through one, which
+	// is the rule D-late-local put in place of #174's. By the monotonic
+	// clock where the event carries one a stretch's edge holds too, so a
+	// step of the wall clock while it waited can't hide it, and by its
+	// sender's own stamp too, which a step can have put after the agent's
+	// (Input.Sent).
 	late, drop := w.judge(held, sent)
 	if drop != nil {
 		// A batch was sealed online since the stretch ended, so a batch
@@ -887,12 +889,12 @@ func (w *Writer) noteLocked(online bool, at edge) bool {
 	}
 	if online && (w.local || w.seen) {
 		// The stretch ends as the note comes, which is the first the
-		// writer knows of config.toml back online: an event made in it may
-		// have been made, or waited, while it said local-only. A note that
+		// writer knows of config.toml back online: an event made before the
+		// note may have been made while it said local-only. A note that
 		// only repeats online moves nothing, so the watch's reload after the
 		// note its first event made takes no credit. What pending holds of
 		// the stretch is held to it too, as Write holds what comes after.
-		w.until.raise(at.m, w.boot)
+		w.raiseUntil(at.m)
 		w.sawOnline(at)
 		w.lateLocked()
 	}
@@ -1042,7 +1044,7 @@ func (w *Writer) seenLocked(s Seen, at moment, sure bool) bool {
 			// nothing.
 			seal = w.noteLocked(true, end)
 		}
-		w.until.raise(ended, w.boot)
+		w.raiseUntil(ended)
 		if moved, cross := w.until != was, w.crossBoot(end); !ends && !w.openHolds(ended) && (moved || cross) {
 			// A stretch the writer didn't know of: later than every end it
 			// had, or of a boot it has no end of, as one a run whose ledger
@@ -1102,6 +1104,18 @@ func (w *Writer) earlier(m moment) moment {
 		m.os, m.boot = 1, w.boot
 	}
 	return m
+}
+
+// raiseUntil moves until on to m, by each clock, as moment.raise does.
+// When it moves, the next seal frame records the stretches too, so that a
+// row whose moment rose past the newest list's, with no list of its own,
+// is an older version's (restoreStretches). w.mu is held.
+func (w *Writer) raiseUntil(m moment) {
+	was := w.until
+	w.until.raise(m, w.boot)
+	if w.until != was {
+		w.dirty = true
+	}
 }
 
 // writeFailed passes on a failed write. A write that couldn't be undone
@@ -1302,8 +1316,9 @@ func (w *Writer) seal() (Batch, bool, error) {
 		due := w.waiting != nil && (w.back > 0 || w.lastLocal) && len(w.pending) > 0
 		wait := w.waitForLocked()
 		var going stretch
+		var goingPrev int64 // the end of the stretch before it (stretch.widen)
 		if n := len(w.stretches); n > 0 && w.stretches[n-1].open {
-			going = w.stretches[n-1]
+			going, goingPrev = w.stretches[n-1], prevEnd(w.stretches, n-1)
 		}
 		ends := w.online != nil && (w.local || w.seen)
 		w.mu.Unlock()
@@ -1319,7 +1334,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 			ended = w.momentNow()
 			if going.open {
 				going.to, going.open = edgeAt(ended), false
-				going.widen()
+				going.widen(goingPrev)
 				wait = append(wait, going)
 			}
 		}
@@ -1369,7 +1384,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 			if ended == (moment{}) {
 				ended = w.momentNow()
 			}
-			w.until.raise(ended, w.boot)
+			w.raiseUntil(ended)
 			w.sawOnline(edgeAt(ended))
 			w.lateLocked()
 			w.local, w.seen = false, false

@@ -94,51 +94,85 @@ func TestStretchHolds(t *testing.T) {
 // TestWiden checks that a stretch whose edges span less by the wall clock
 // than by a monotonic clock both hold, as after a step back of the wall
 // clock in it, takes in, by the wall clock, as much before its start and
-// after its end as the step, and that one with no such step, or whose
-// edges share no monotonic clock, stays as it is.
+// after its end as the step, and that one with no such step stays as it
+// is. One whose edges share no monotonic clock, as one left open across a
+// reboot, can't tell a step, so it holds what the wall clock alone dates
+// from the end of the stretch before it on, or from the beginning of time.
 func TestWiden(t *testing.T) {
-	const boot = "b_os"
+	const boot, old = "b_os", "b_old"
 	cases := []struct {
 		name     string
-		from, to moment
+		from, to edge
+		// prev is the end of the stretch before it, in Unix ms, 0 for none.
+		prev int64
 		// wantFrom and wantTo are the edges' wall times once widened.
 		wantFrom, wantTo int64
 	}{
 		{"a step back by this run's clock widens both edges by the step",
-			moment{wall: 10_000, run: 5_000}, moment{wall: 15_000, run: 20_000}, 0, 25_000},
+			edgeAt(moment{wall: 10_000, run: 5_000}), edgeAt(moment{wall: 15_000, run: 20_000}), 4_000, 0, 25_000},
 		{"and so does one by the OS's clock of one boot",
-			moment{wall: 10_000, os: 5_000, boot: boot}, moment{wall: 15_000, os: 20_000, boot: boot}, 0, 25_000},
-		{"a step forward changes nothing", moment{wall: 10_000, run: 5_000}, moment{wall: 40_000, run: 20_000}, 10_000, 40_000},
-		{"nor does an edge an earlier run recorded, whose run reading is this run's start",
-			moment{wall: 10_000, run: 1}, moment{wall: 15_000, run: 20_000}, 10_000, 15_000},
-		{"nor do edges of two boots", moment{wall: 10_000, os: 5_000, boot: boot}, moment{wall: 15_000, os: 20_000, boot: "b_other"}, 10_000, 15_000},
-		{"nor does the chain's first stretch, from the beginning of time", moment{}, moment{wall: 15_000, run: 20_000}, 0, 15_000},
+			edgeAt(moment{wall: 10_000, os: 5_000, boot: boot}), edgeAt(moment{wall: 15_000, os: 20_000, boot: boot}), 4_000, 0, 25_000},
+		{"a step forward changes nothing", edgeAt(moment{wall: 10_000, run: 5_000}), edgeAt(moment{wall: 40_000, run: 20_000}), 4_000, 10_000, 40_000},
+		{"a start an earlier run recorded, whose run reading is this run's start, holds what the wall clock dates from the stretch before's end",
+			edgeAt(moment{wall: 10_000, run: 1}), edgeAt(moment{wall: 15_000, run: 20_000}), 4_000, 4_000, 15_000},
+		{"so do edges of two boots", edgeAt(moment{wall: 10_000, os: 5_000, boot: boot}), edgeAt(moment{wall: 15_000, os: 20_000, boot: "b_other"}), 4_000, 4_000, 15_000},
+		{"and a start recorded in the boot before, read back in this one, as a stretch left open across a reboot has",
+			edge{m: moment{wall: 10_000, run: 1, os: 1, boot: boot}, other: moment{os: 17_000, boot: old}}, edgeAt(moment{wall: 15_000, run: 20_000, os: 9_000, boot: boot}), 4_000, 4_000, 15_000},
+		{"the first stretch takes in what the wall clock dates from the beginning of time",
+			edgeAt(moment{wall: 10_000, run: 1}), edgeAt(moment{wall: 15_000, run: 20_000}), 0, 0, 15_000},
+		{"a stretch before's end after the start moves nothing", edgeAt(moment{wall: 10_000, run: 1}), edgeAt(moment{wall: 15_000, run: 20_000}), 12_000, 10_000, 15_000},
+		{"the chain's first stretch, from the beginning of time, stays there", edge{}, edgeAt(moment{wall: 15_000, run: 20_000}), 0, 0, 15_000},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			s := stretch{from: edgeAt(c.from), to: edgeAt(c.to)}
-			s.widen()
+			s := stretch{from: c.from, to: c.to}
+			s.widen(c.prev)
 			if s.from.m.wall != c.wantFrom || s.to.m.wall != c.wantTo {
 				t.Errorf("widened to %d..%d, want %d..%d", s.from.m.wall, s.to.m.wall, c.wantFrom, c.wantTo)
 			}
 		})
 	}
-	t.Run("a widened stretch holds a record its t alone dates before its start by up to the step", func(t *testing.T) {
-		s := stretch{from: edgeAt(moment{wall: 10_000, run: 5_000}), to: edgeAt(moment{wall: 15_000, run: 20_000})}
-		s.widen()
-		if !s.holds(event.Envelope{T: 1000}) || !s.holds(event.Envelope{T: 24_000}) || s.holds(event.Envelope{T: 25_001}) {
-			t.Errorf("the widened stretch %+v doesn't hold what the step put outside it", s)
-		}
-	})
+	holds := []struct {
+		name string
+		s    stretch
+		prev int64
+		e    event.Envelope
+		want bool
+	}{
+		{"a widened stretch holds a record its t alone dates before its start by up to the step",
+			stretch{from: edgeAt(moment{wall: 10_000, run: 5_000}), to: edgeAt(moment{wall: 15_000, run: 20_000})}, 4_000, event.Envelope{T: 1000}, true},
+		{"and one dated after its end by up to the step",
+			stretch{from: edgeAt(moment{wall: 10_000, run: 5_000}), to: edgeAt(moment{wall: 15_000, run: 20_000})}, 4_000, event.Envelope{T: 24_000}, true},
+		{"but not one dated past that",
+			stretch{from: edgeAt(moment{wall: 10_000, run: 5_000}), to: edgeAt(moment{wall: 15_000, run: 20_000})}, 4_000, event.Envelope{T: 25_001}, false},
+		{"a stretch left open across a reboot holds a transcript line the clock, skewed back after the reboot, dated before its start",
+			stretch{from: edge{m: moment{wall: 10_000, run: 1, os: 1, boot: boot}, other: moment{os: 17_000, boot: old}},
+				to: edgeAt(moment{wall: 15_000, run: 20_000, os: 9_000, boot: boot})}, 4_000, event.Envelope{T: 5_000, BootID: runBoot}, true},
+		{"but not one dated before the stretch before it ended, which that stretch holds if anything does",
+			stretch{from: edge{m: moment{wall: 10_000, run: 1, os: 1, boot: boot}, other: moment{os: 17_000, boot: old}},
+				to: edgeAt(moment{wall: 15_000, run: 20_000, os: 9_000, boot: boot})}, 4_000, event.Envelope{T: 3_999, BootID: runBoot}, false},
+		{"while a hook call of this boot still goes by its mono, which its boot's clock dates after the stretch's start",
+			stretch{from: edge{m: moment{wall: 10_000, run: 1, os: 1, boot: boot}, other: moment{os: 17_000, boot: old}},
+				to: edgeAt(moment{wall: 15_000, run: 20_000, os: 9_000, boot: boot})}, 4_000, event.Envelope{T: 5_000, BootID: boot, Mono: 9_001}, false},
+	}
+	for _, c := range holds {
+		t.Run(c.name, func(t *testing.T) {
+			s := c.s
+			s.widen(c.prev)
+			if got := s.holds(c.e); got != c.want {
+				t.Errorf("the widened stretch %+v holds %+v: %v, want %v", s, c.e, got, c.want)
+			}
+		})
+	}
 }
 
 // TestStretchesFromRows checks the stretches Open rebuilds for a ledger
 // whose seal frames recorded none, as an older version's, from the moment
 // each row recorded: each rise of it ends a stretch, the first begins at
-// the beginning of time, each later one at the seal of the batch before
-// the newest one sealed online before its end, or at the end before it
-// when that is later, and a stretch is passed once a batch from the row
-// that first recorded its end on was sealed online.
+// the beginning of time, and each later one where the one before it ended,
+// as a row records no moment by a monotonic clock where config.toml was
+// seen local-only (stretch.widen); and a stretch is passed once a batch
+// from the row that first recorded its end on was sealed online.
 func TestStretchesFromRows(t *testing.T) {
 	type row struct {
 		sealed, until int64
@@ -159,14 +193,13 @@ func TestStretchesFromRows(t *testing.T) {
 			[]row{{100, 0, false}, {200, 150, true}}, []want{{0, 150, true}}},
 		{"a stretch whose end only local-only batches record isn't passed",
 			[]row{{100, 0, false}, {200, 150, false}}, []want{{0, 150, false}}},
-		{"a later stretch begins at the seal of the batch before the newest one sealed online before its end",
+		{"a later stretch begins where the one before it ended, though batches were sealed online between them",
 			[]row{{100, 0, false}, {200, 150, true}, {300, 150, true}, {400, 150, true}, {600, 550, false}, {700, 550, true}},
-			[]want{{0, 150, true}, {300, 550, true}}},
-		{"or at the end before it, when no batch sealed online came between",
+			[]want{{0, 150, true}, {150, 550, true}}},
+		{"and so does one with no batch sealed online between",
 			[]row{{100, 0, false}, {200, 150, false}, {600, 550, true}}, []want{{0, 150, true}, {150, 550, true}}},
-		{"an online batch sealed after the end it is first recorded with doesn't begin the stretch",
-			[]row{{100, 0, false}, {200, 150, true}, {300, 150, true}, {650, 150, true}, {700, 600, true}},
-			[]want{{0, 150, true}, {200, 600, true}}},
+		{"a stretch whose end only local-only batches record is passed once a later batch is sealed online",
+			[]row{{100, 0, false}, {200, 150, false}, {300, 150, false}, {700, 150, true}}, []want{{0, 150, true}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -215,6 +248,82 @@ func TestMergeStretches(t *testing.T) {
 	}
 }
 
+// TestFoldStretches checks the fold a sweep makes at the start of its day,
+// cut (Sweep), as the writer's own stretches and a seal frame's take it
+// alike: every stretch that began before cut becomes part of one from the
+// beginning of time to cut, or to the latest end of those that ended after
+// it, or one that goes on when one of them does, passed when all of them
+// are, with all their drops, so no time config.toml changed mode before
+// cut stays; those that began from cut on stay as they are; and a fold
+// that already reaches cut, as the chain's first stretch ending after it
+// does, changes nothing.
+func TestFoldStretches(t *testing.T) {
+	const cut = int64(100_000)
+	type st struct {
+		from, to     int64
+		open, passed bool
+		dropped      uint64
+	}
+	cases := []struct {
+		name    string
+		in      []st
+		want    []st
+		changed bool
+	}{
+		{"stretches that ended before the cut become one from the beginning of time to the cut, passed, with their drops",
+			[]st{{0, 10_000, false, true, 1}, {20_000, 30_000, false, true, 2}, {150_000, 160_000, false, true, 3}},
+			[]st{{0, cut, false, true, 3}, {150_000, 160_000, false, true, 3}}, true},
+		{"one that began before the cut and ended after it ends the fold, which begins at the beginning of time",
+			[]st{{0, 10_000, false, true, 0}, {90_000, 120_000, false, true, 1}}, []st{{0, 120_000, false, true, 1}}, true},
+		{"one going on that began before the cut goes on from the beginning of time",
+			[]st{{0, 10_000, false, true, 1}, {90_000, 0, true, false, 0}}, []st{{0, 0, true, false, 1}}, true},
+		{"one that no batch sealed online passed leaves the fold unpassed",
+			[]st{{0, 10_000, false, true, 0}, {20_000, 30_000, false, false, 0}}, []st{{0, cut, false, false, 0}}, true},
+		{"a fold the cut has moved past ends at the new cut", []st{{0, 50_000, false, true, 4}}, []st{{0, cut, false, true, 4}}, true},
+		{"stretches that began from the cut on stay as they are",
+			[]st{{0, 120_000, false, true, 0}, {cut, 130_000, false, true, 0}, {140_000, 0, true, false, 0}},
+			[]st{{0, 120_000, false, true, 0}, {cut, 130_000, false, true, 0}, {140_000, 0, true, false, 0}}, false},
+		{"a fold that already reaches the cut changes nothing", []st{{0, cut, false, true, 4}}, []st{{0, cut, false, true, 4}}, false},
+		{"nor does the chain's first stretch going on", []st{{0, 0, true, false, 0}}, []st{{0, 0, true, false, 0}}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var ps []stretchPayload
+			w := &Writer{}
+			for _, x := range c.in {
+				ps = append(ps, stretchPayload{From: x.from, To: x.to, Open: x.open, Passed: x.passed, Dropped: x.dropped})
+				s := stretch{open: x.open, passed: x.passed, dropped: x.dropped}
+				if x.from != 0 {
+					s.from = edgeAt(moment{wall: x.from})
+				}
+				if !x.open {
+					s.to = edgeAt(moment{wall: x.to})
+				}
+				w.stretches = append(w.stretches, s)
+			}
+			folded, changed := foldPayloads(ps, cut)
+			var gotPayloads []st
+			for _, p := range folded {
+				if p.FromOS != nil || p.ToOS != nil {
+					t.Errorf("the folded payload %+v keeps a reading of the OS's clock", p)
+				}
+				gotPayloads = append(gotPayloads, st{p.From, p.To, p.Open, p.Passed, p.Dropped})
+			}
+			w.foldStretches(cut)
+			var gotStretches []st
+			for _, s := range w.stretches {
+				gotStretches = append(gotStretches, st{s.from.m.wall, s.to.m.wall, s.open, s.passed, s.dropped})
+			}
+			if !slices.Equal(gotPayloads, c.want) || changed != c.changed {
+				t.Errorf("a seal frame's stretches fold to %+v, changed %v; want %+v, %v", gotPayloads, changed, c.want, c.changed)
+			}
+			if !slices.Equal(gotStretches, c.want) || w.dirty != c.changed {
+				t.Errorf("the writer's fold to %+v, to be recorded %v; want %+v, %v", gotStretches, w.dirty, c.want, c.changed)
+			}
+		})
+	}
+}
+
 // lateRig is a writer whose config.toml mode, clocks and Waiting a test
 // sets, with every batch it seals, for the tests of late records below.
 type lateRig struct {
@@ -242,14 +351,24 @@ func newLateRig(t *testing.T) *lateRig {
 // run first, as TestNoteMode's "pause" does.
 func (r *lateRig) pause() { time.Sleep(200 * time.Millisecond) }
 
-// open opens the writer, with what the agent saw as Seen.
+// lateBoot is the boot the rig's OS clock counts in.
+const lateBoot = "b_late"
+
+// open opens the writer, with what the agent saw as Seen. The OS's clock
+// reads the ms since the rig's start, plus 1000, in one boot, as a real
+// one goes on across a restart, so the moments the writer takes share it,
+// as they share a run's clock outside the tests (stretch.widen). The
+// rig's tests only move the clock on.
 func (r *lateRig) open() {
 	r.w = open(r.t, r.dir, r.clk, func(o *Options) {
 		o.Online = r.file.Load
 		o.Seen = func() Seen { return r.seen }
 		o.Sealed = func(b Batch) { r.sealed <- b }
 		o.Waiting = func(func(event.Envelope) bool) bool { return r.waits.Load() }
-		o.Clock = func() osclock.Stamp { return osclock.Stamp{Wall: r.clk.now()} }
+		o.Clock = func() osclock.Stamp {
+			now := r.clk.now()
+			return osclock.Stamp{Wall: now, Mono: now.UnixMilli() - testT + 1000, BootID: lateBoot}
+		}
 	})
 }
 
@@ -529,21 +648,34 @@ func sameWhy(a, b *LocalWhy) bool {
 
 // TestStretchesKept checks that the stretches outlast what drops the seal
 // frame that recorded them: a ledger an older version wrote, whose seal
-// frames recorded none, gets them back from its rows' moments, and a
-// retention sweep that drops the row that recorded them keeps them in its
-// base frame. A late record made between the stretches is sealed online,
-// and one made in a passed stretch is dropped, after either.
+// frames recorded none, gets them back from its rows' moments; rows an
+// older version sealed after the newest that records them, as after a
+// downgrade, add the stretches their moments end, and end the stretch that
+// list has going on, as a sign-in there does; and a retention sweep that
+// drops the row that recorded them keeps them in its base frame, folded at
+// its day (Sweep). A late record made in a passed stretch is dropped after
+// each, and one made after the second ended is sealed online but where the
+// sweep folded it. One made between the stretches is sealed online where
+// the writer knows where the second began, and dropped where that was
+// rebuilt from rows, which hold no moment where it began, or folded.
 func TestStretchesKept(t *testing.T) {
 	cases := []struct {
 		name string
 		// lose leaves the ledger in dir as the case says, the writer closed.
 		lose func(t *testing.T, r *lateRig)
+		// reopen is when the writer opens again, in ms after the start.
+		reopen int64
+		// between is whether a record made between the stretches is sealed
+		// online, and after whether one made after the second ended is.
+		between, after bool
 	}{
 		{"a ledger whose seal frames recorded no stretches, as an older version's, rebuilds them from its rows",
-			func(t *testing.T, r *lateRig) { dropStretches(t, r.dir, 1) }},
+			func(t *testing.T, r *lateRig) { dropStretches(t, r.dir, 1) }, 70_000, false, true},
 		{"rows an older version sealed after the newest row that records stretches, as after a downgrade, add the stretches their moments end",
-			func(t *testing.T, r *lateRig) { dropStretches(t, r.dir, 3) }},
-		{"a sweep that drops every row, the one that recorded the stretches with them, keeps them in its base frame",
+			func(t *testing.T, r *lateRig) { dropStretches(t, r.dir, 3) }, 70_000, false, true},
+		{"rows an older version sealed after a list whose last stretch goes on, as after a downgrade and a sign-in there, end it where they say, and passed it",
+			func(t *testing.T, r *lateRig) { dropStretches(t, r.dir, 6) }, 70_000, true, true},
+		{"a sweep that drops every row, the one that recorded the stretches with them, keeps them in its base frame, folded into one from the beginning of time to its day",
 			func(t *testing.T, r *lateRig) {
 				r.open()
 				after := dayOf(time.UnixMilli(testT + 2*sweepDayMS))
@@ -553,13 +685,22 @@ func TestStretchesKept(t *testing.T) {
 				if err := r.w.Close(); err != nil {
 					t.Fatal(err)
 				}
-			}},
+				bf, err := readBatchesFile(filepath.Join(r.dir, batchesName))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if cut := cutOf(after); len(bf.stretches) != 1 || bf.stretches[0].From != 0 || bf.stretches[0].FromOS != nil ||
+					bf.stretches[0].To != cut || bf.stretches[0].ToOS != nil || !bf.stretches[0].Passed {
+					t.Fatalf("the base frame keeps the stretches %+v; want one from the beginning of time to the sweep's day, %d, passed", bf.stretches, cut)
+				}
+			}, 2*sweepDayMS + 70_000, false, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := newLateRig(t)
-			// The install's stretch, two online batches, a second stretch, and
-			// an online batch after it.
+			// The install's stretch, three online batches, a second stretch,
+			// whose first batch, 5, records it going on, and an online batch
+			// after it, 6.
 			r.note(false)
 			r.write(r.presence(1000))
 			r.take()
@@ -585,26 +726,119 @@ func TestStretchesKept(t *testing.T) {
 				t.Fatal(err)
 			}
 			c.lose(t, r)
-			r.at(70_000)
+			r.at(c.reopen)
 			r.open()
-			_, err := r.w.Write(r.logged("agent.output", 5000))
-			droppedFirst := errors.Is(err, ErrLateLocal)
-			_, err2 := r.w.Write(r.logged("agent.output", 45_000))
-			droppedSecond := errors.Is(err2, ErrLateLocal)
-			r.write(r.logged("agent.output", 22_000))
+			// late writes a log reader's record made ms after the start, and
+			// reports whether Write dropped it as made in a passed stretch.
+			late := func(ms int64) bool {
+				t.Helper()
+				_, err := r.w.Write(r.logged("agent.output", ms))
+				if err != nil && !errors.Is(err, ErrLateLocal) {
+					t.Fatal(err)
+				}
+				return err != nil
+			}
+			first, second, between, after := late(5000), late(45_000), late(22_000), late(55_000)
+			r.write(r.presence(c.reopen + 1000))
+			b := r.seal()
+			kept := 1
+			for _, online := range []bool{c.between, c.after} {
+				if online {
+					kept++
+				}
+			}
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"a late record made in the first stretch, which batches sealed online passed, is dropped", first},
+				{"so is one made in the second", second},
+				{"one made between the stretches is sealed online where the writer knows where the second began, and dropped where it doesn't", between != c.between},
+				{"one made after the second ended, as while an older version uploaded, is sealed online, unless the sweep folded it", after != c.after},
+				{"the batch sealed after the reopen is online, with the records Write kept", b.Online && len(b.Records) == kept},
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: dropped first %v, second %v, between %v, after %v; the batch online %v with %d records, want %d",
+							first, second, between, after, b.Online, len(b.Records), kept)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestUntilMovesRecordStretches checks that a seal frame records the
+// stretches whenever the moment it records (Writer.until) moved, though
+// they didn't change, as when the agent's Seen gives an end the stretch
+// going on holds: a row whose moment rose with no stretches of its own is
+// then an older version's (restoreStretches), and the next Open doesn't
+// end the stretch going on at that moment. A record made in it after that
+// moment, which reaches the writer late after the restart, is held by it
+// and sealed local-only, whatever config.toml says at the restart.
+func TestUntilMovesRecordStretches(t *testing.T) {
+	cases := []struct {
+		name string
+		// online is whether config.toml says online at the restart.
+		online bool
+	}{
+		{"config.toml online at the restart: the stretch goes on until the first read ends it", true},
+		{"config.toml still local-only at the restart: the stretch goes on", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLateRig(t)
+			// The install's stretch, an online batch, and a second stretch,
+			// whose first batch records it going on.
+			r.note(false)
+			r.write(r.presence(1000))
+			r.take()
+			r.at(10_000)
+			r.note(true)
+			r.pause()
+			r.at(20_000)
+			r.write(r.presence(20_000))
+			r.seal()
+			r.at(30_000)
+			r.note(false)
+			r.write(r.presence(31_000))
+			r.take()
+			// The agent saw a stretch end at 25 s, which the writer can't tell
+			// from one before its own local-only take at 30 s, so it ends
+			// nothing, though it moves the moment.
+			r.w.NoteSeen(Seen{Ended: time.UnixMilli(testT + 25_000)})
+			r.at(40_000)
+			r.write(r.presence(40_000))
+			r.seal()
+			if err := r.w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			bf, err := readBatchesFile(filepath.Join(r.dir, batchesName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			recorded := bf.stretchesRow == len(bf.rows)-1
+			r.file.Store(c.online)
+			r.at(50_000)
+			r.open()
+			// A transcript line made at 35 s, while config.toml said
+			// local-only, read late.
+			r.write(r.logged("agent.output", 35_000))
+			r.write(r.presence(51_000))
 			b := r.seal()
 			checks := []struct {
 				name string
 				ok   bool
 			}{
-				{"a late record made in the first stretch, which batches sealed online passed, is dropped", droppedFirst},
-				{"so is one made in the second", droppedSecond},
-				{"one made between the stretches is sealed online", b.Online && len(b.Records) == 1},
+				{"the seal frame sealed after the moment moved records the stretches", recorded},
+				{"the record made in the stretch after that moment is sealed local-only after the restart", !b.Online},
 			}
 			for _, ch := range checks {
 				t.Run(ch.name, func(t *testing.T) {
 					if !ch.ok {
-						t.Errorf("no: the first Writes' errors %v and %v; the batch online %v with %d records", err, err2, b.Online, len(b.Records))
+						t.Errorf("no: the newest row to record the stretches is %d of %d; the batch after the restart online %v, why %+v",
+							bf.stretchesRow, len(bf.rows), b.Online, b.Why)
 					}
 				})
 			}

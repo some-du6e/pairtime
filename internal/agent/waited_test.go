@@ -238,7 +238,8 @@ func TestAdaptersWaiting(t *testing.T) {
 		{"a held call made before the moment counts while calls are held", func(h *adapterHost) { h.held = 1; h.heldFrom.add(at(moment - 1)) }, true},
 		{"a held call made before the moment by its boot's monotonic clock counts, though its t is after",
 			func(h *adapterHost) { h.held = 1; h.heldFrom.add(callStamp{t: moment + 1, mono: 49_000, boot: boot}) }, true},
-		{"held calls that were all made after it don't count", func(h *adapterHost) { h.held = 3; h.heldFrom.add(at(moment + 1)) }, false},
+		{"held calls count while before holds a stretch, though the earliest was made after the moment: the earliest alone can't tell whether one was made in a stretch",
+			func(h *adapterHost) { h.held = 3; h.heldFrom.add(at(moment + 1)) }, true},
 		{"held calls none of which the agent could read don't count", func(h *adapterHost) { h.held = 2 }, false},
 		{"a call whose records carry the agent's stamp counts by the hook's own when that is before the moment",
 			func(h *adapterHost) { h.queue = []inbox.Delivery{resent(moment-1, moment+5)} }, true},
@@ -316,16 +317,34 @@ func TestAdaptersWaiting(t *testing.T) {
 				t.Errorf("the batch after the local-only one was sealed %v, online %v (%v); want online, since a moment that holds nothing holds no call", ok, b.Online, err)
 			}
 		}},
-		{"a stretch the newest seal frame records as going on, which the next Open ends, holds the calls an earlier run held until the worker has counted them, as their times aren't known yet", func(t *testing.T) {
+		{"a stretch the newest seal frame records as going on, which the next Open ends, holds the calls an earlier run held until the worker has counted them, as their times aren't known yet, though it began after the chain's first", func(t *testing.T) {
 			h := newHost()
 			leftHeld(t, h)
 			h.expectCount()
-			first := optionsWriter(t, h.a.dirs, func(o *ledger.Options) { o.Online = func() bool { return false } })
-			if _, err := first.Write(presenceAt(time.Now())); err != nil {
-				t.Fatal(err)
+			// The install's stretch, a batch the switch back's records keep
+			// local-only, one sealed online, which passes that stretch, and a
+			// second stretch, going on as the writer closes. It began at the
+			// online batch's read, after the beginning of time, so only the
+			// rule for an envelope with no times holds the calls in it
+			// (ledger waitFor.holds).
+			var local atomic.Bool
+			first := optionsWriter(t, h.a.dirs, func(o *ledger.Options) { o.Online = func() bool { return !local.Load() } })
+			start := time.Now()
+			for i, l := range []bool{true, false, false, true} {
+				local.Store(l)
+				if _, err := first.Write(presenceAt(start.Add(time.Duration(i) * time.Millisecond))); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := first.Seal(); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if err := first.Close(); err != nil {
 				t.Fatal(err)
+			}
+			_, rows, err := ledger.ReadRows(h.a.dirs.Ledger(), 0)
+			if err != nil || len(rows) != 4 || rows[0].Online || rows[1].Online || !rows[2].Online || rows[3].Online {
+				t.Fatalf("the first writer sealed %+v (%v); want local-only, local-only, online, local-only", rows, err)
 			}
 			w := optionsWriter(t, h.a.dirs, func(o *ledger.Options) {
 				o.Online = func() bool { return true }
@@ -342,6 +361,24 @@ func TestAdaptersWaiting(t *testing.T) {
 			b2, ok2, err2 := w.Seal()
 			if !ok || err != nil || b.Online || !ok2 || err2 != nil || !b2.Online {
 				t.Errorf("the batches after the local-only one were sealed online %v, then %v (%v, %v); want local-only while the held calls are uncounted, then online", b.Online, b2.Online, err, err2)
+			}
+		}},
+		{"held calls count while a stretch no batch sealed online has passed holds anything, as one made in it can be held behind one made before it began, which is all the earliest stamp tells of", func(t *testing.T) {
+			h := newHost()
+			// The writer's Waiting asks about a stretch from moment-10,000 to the
+			// moment, and holds an envelope with no times while it has one
+			// (ledger waitFor.holds).
+			inStretch := func(e event.Envelope) bool {
+				if e.T == 0 && e.Mono == 0 {
+					return true
+				}
+				return e.T >= moment-10_000 && e.T <= moment
+			}
+			h.held = 2
+			h.heldFrom.add(at(moment - 20_000)) // before the stretch began
+			h.heldFrom.add(at(moment - 5000))   // in it
+			if !h.waiting(inStretch) {
+				t.Error("waiting = false while a call made in the stretch is held behind one made before it; want true")
 			}
 		}},
 		{"a parked call counts until it is parsed, by the time its records carry", func(t *testing.T) {
@@ -1236,7 +1273,7 @@ func TestAgentWaiting(t *testing.T) {
 	}{
 		{"a record of presence's queued before the moment holds the mark", func(t *testing.T) {
 			a, _ := modesAgent(t, "online")
-			a.ledgerIn = ledger.NewPresence(nil)
+			a.ledgerIn = ledger.NewPresence(nil, nil)
 			t.Cleanup(a.ledgerIn.Close)
 			made := time.Now()
 			a.ledgerIn.Record(presence.Record{At: made, Data: &event.OSPresence{IdleAnyS: 1}})

@@ -48,7 +48,7 @@ const (
 // "ledger.presence" what the queue of presence's and focus's records had
 // to drop; "keystore" where the device key is kept.
 func (a *agent) startLedger() func() {
-	a.ledgerIn = ledger.NewPresence(func(msg string) { a.setProblem("ledger.presence", msg) })
+	a.ledgerIn = ledger.NewPresence(func(msg string) { a.setProblem("ledger.presence", msg) }, a.log)
 	// Every record made from here on counts by what the agent sees of
 	// config.toml's mode, whenever the writer opens (modes).
 	a.startModes()

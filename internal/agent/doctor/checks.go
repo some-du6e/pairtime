@@ -86,6 +86,9 @@ func Checks(f Facts) []Check {
 		out = append(out, hookChecks(h)...)
 	}
 	out = append(out, adapterChecks(f)...)
+	if c, ok := ledgerCheck(f); ok {
+		out = append(out, c)
+	}
 	out = append(out, signingCheck(f.Signing), keystoreCheck(f.Keystore), spoolCheck(f))
 	out = append(out, problemChecks(f)...)
 	for i := range out {
@@ -346,6 +349,28 @@ func adapterChecks(f Facts) []Check {
 			Text: fmt.Sprintf("%s came from harnesses pairtime has no adapter for, so they count for nothing yet", count(a.Other.Calls, "hook call", "hook calls"))})
 	}
 	return out
+}
+
+// ledgerCheck is the line for the records the ledger dropped over the
+// chain's life, when it dropped any (D-late-local): made while config.toml
+// said local-only, they came only after pairtime had uploaded again, so
+// they were never to upload, and leaving them out keeps the batch roots
+// going. It counts the adapters', presence's and the git watcher's, and
+// the adapter lines give each harness's part since the agent started.
+func ledgerCheck(f Facts) (Check, bool) {
+	if f.Reach != Reached || f.Agent == nil || f.Agent.Ledger == nil || f.Agent.Ledger.LateLocal == 0 {
+		return Check{}, false
+	}
+	n := f.Agent.Ledger.LateLocal
+	c := Check{Name: "ledger", Result: OK, Text: fmt.Sprintf("has dropped %s made while config.toml said local-only that came only after pairtime had uploaded again, as nothing recorded in local-only mode may upload",
+		count(n, "record", "records"))}
+	for _, h := range f.Agent.Adapters.Harnesses {
+		if h.LateLocal > 0 {
+			c.Text += "; the adapter lines count each harness's since the agent started"
+			break
+		}
+	}
+	return c, true
 }
 
 // itOrThem is the pronoun for n records.

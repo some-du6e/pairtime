@@ -11,13 +11,13 @@ import (
 
 // moment is when config.toml was last known, or taken, to say local-only
 // (Options.Online, NoteMode), or a local-only stretch's start or end
-// (stretch): an event made in a stretch may have been made, or may have
-// waited, while nothing could upload it, so it counts as made in
-// local-only mode (DESIGN 4.2). It holds that time by each clock an
-// event's time can be held to: the wall clock, and the monotonic clocks of
-// this run, which presence's, focus's and the git watcher's events carry
-// (RunClock), and of the OS's boot, which `pairtime hook` stamps each hook
-// call with (internal/platform/clock). A step of the wall clock moves
+// (stretch): an event made in a stretch was made while nothing could
+// upload it, so it counts as made in local-only mode (DESIGN 4.2). It
+// holds that time by each clock an event's time can be held to: the wall
+// clock, and the monotonic clocks of this run, which presence's, focus's
+// and the git watcher's events carry (RunClock), and of the OS's boot,
+// which `pairtime hook` stamps each hook call with
+// (internal/platform/clock). A step of the wall clock moves
 // neither monotonic clock, so an event that carries a reading of one the
 // moment holds too is held to it by that reading alone (before): a step
 // while it waited can neither hide it, nor make an event made after the

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,6 +43,7 @@ type Presence struct {
 	once    sync.Once
 	dropped atomic.Uint64
 	problem func(string)
+	log     *slog.Logger
 
 	// mu orders what Record and the goroutine say about dropped records,
 	// so the last word is right: being dropped before the writer opens,
@@ -71,21 +73,24 @@ type presenceItem struct {
 // NewPresence starts a Presence. problem, when set, hears about records it
 // had to drop and writes that failed. Its messages are about presence's
 // queue only, so the agent files them apart from why the ledger isn't open.
-func NewPresence(problem func(msg string)) *Presence {
-	p := newPresence(problem)
+// log, when set, hears of each record the writer dropped as made in a
+// local-only stretch (ErrLateLocal), which is no problem.
+func NewPresence(problem func(msg string), log *slog.Logger) *Presence {
+	p := newPresence(problem, log)
 	go p.run()
 	return p
 }
 
 // newPresence is NewPresence without the goroutine, so a test can start
 // run as late as a busy machine might.
-func newPresence(problem func(msg string)) *Presence {
+func newPresence(problem func(msg string), log *slog.Logger) *Presence {
 	return &Presence{
 		items:   make(chan presenceItem, presenceQueue),
 		attach:  make(chan *Writer, 1),
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 		problem: problem,
+		log:     log,
 		queued:  make(map[queuedAt]int),
 	}
 }
@@ -250,10 +255,16 @@ func (p *Presence) handle(w *Writer, it presenceItem) {
 	}
 	_, err := w.Write(Input{Event: presenceEvent(it.rec)})
 	p.count(queuedOf(it.rec), -1)
-	// One made in a local-only stretch that came after a batch was sealed
-	// online since stays off the ledger, as it should, and the writer counts
-	// it (ErrLateLocal).
-	if err != nil && !errors.Is(err, ErrLateLocal) && p.problem != nil {
+	switch {
+	case errors.Is(err, ErrLateLocal):
+		// Made in a local-only stretch, it came after a batch was sealed
+		// online since, so it stays off the ledger, as it should, and the
+		// writer counts it.
+		if p.log != nil {
+			p.log.Info("a presence or focus record made while config.toml said local-only came after the computer uploaded again, so the ledger dropped it",
+				"kind", it.rec.Data.Kind(), "made", it.rec.At.UTC())
+		}
+	case err != nil && p.problem != nil:
 		p.problem(fmt.Sprintf("the ledger couldn't write an %s record: %v", it.rec.Data.Kind(), err))
 	}
 }

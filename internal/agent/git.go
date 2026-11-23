@@ -383,7 +383,8 @@ func (g *gitHost) sink(c git.Change) {
 	if errors.Is(err, ledger.ErrLateLocal) {
 		// Found in a local-only stretch, it came after the writer sealed a
 		// batch online since, so it stays off the ledger, as it should.
-		g.a.log.Info("a git change found while config.toml said local-only came after the computer uploaded again, so the ledger dropped it", "op", c.Op())
+		g.a.log.Info("a git change found while config.toml said local-only came after the computer uploaded again, so the ledger dropped it",
+			"op", c.Op(), "made", time.UnixMilli(ev.T).UTC())
 		return
 	}
 	if err != nil {

@@ -16,14 +16,27 @@ type Status struct {
 	// Mode is local or online (DESIGN 4.2).
 	Mode string `json:"mode"`
 	// Wakeups counts the scheduler's timer firings since the start.
-	Wakeups   uint64    `json:"wakeups"`
-	IPC       IPC       `json:"ipc"`
-	Signals   Signals   `json:"signals"`
-	Adapters  Adapters  `json:"adapters"`
+	Wakeups  uint64   `json:"wakeups"`
+	IPC      IPC      `json:"ipc"`
+	Signals  Signals  `json:"signals"`
+	Adapters Adapters `json:"adapters"`
+	// Ledger is what the ledger writer says of its chain, nil while the
+	// ledger isn't open.
+	Ledger    *Ledger   `json:"ledger,omitempty"`
 	Footprint Footprint `json:"footprint"`
 	// Problems is what isn't working, by where it comes from, in words for
 	// the teen.
 	Problems map[string]string `json:"problems,omitempty"`
+}
+
+// Ledger is what the ledger writer says of its chain.
+type Ledger struct {
+	// LateLocal counts the records the writer dropped over the chain's
+	// life: made while config.toml said local-only, they reached it only
+	// after it had sealed a batch online since, so they never upload
+	// (D-late-local). HarnessCounts.LateLocal is each harness's part of it
+	// since the agent started.
+	LateLocal uint64 `json:"late_local"`
 }
 
 // Footprint is what the agent costs the computer since it started, as the

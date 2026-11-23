@@ -2422,7 +2422,15 @@ func (h *adapterHost) waiting(before func(event.Envelope) bool) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	// A moment that holds nothing, as at a first start, holds no call.
-	if h.uncounted && before(event.Envelope{}) || h.held > 0 && h.heldFrom.waits(before) {
+	// Calls held in held.jsonl count by the earliest of them alone
+	// (heldFrom), which tells whether one came before a moment, not whether
+	// one came inside a stretch: one made in it can be held behind one made
+	// before it began. So while one whose times the agent could read is
+	// held, they count whenever before holds any stretch at all, as calls
+	// not yet counted do, at the cost of credit while they drain after a
+	// switch back (D-late-local point 2).
+	read := h.held > 0 && (h.heldFrom.set || len(h.heldFrom.mono) > 0)
+	if (h.uncounted || read) && before(event.Envelope{}) || h.held > 0 && h.heldFrom.waits(before) {
 		return true
 	}
 	for _, s := range h.stepping {
