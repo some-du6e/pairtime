@@ -220,29 +220,108 @@ func TestStretchesFromRows(t *testing.T) {
 	}
 }
 
-// TestMergeStretches checks that past maxStretches the two oldest become
-// one, from the first's start to the second's end, with both's drops, so
-// the list stays bounded and only more of the past counts as local-only.
+// TestMergeStretches checks that past maxStretches two stretches become one
+// with both's drops, so the list stays bounded and only more of the past
+// counts as local-only: of the oldest adjacent pair alike passed or not,
+// from the earlier start to the later end by the wall clock, as after a step
+// back of the wall clock between them, and, when no pair agrees, the two
+// oldest, passed when either is.
 func TestMergeStretches(t *testing.T) {
-	w := &Writer{}
-	for i := range maxStretches + 1 {
-		at := int64(i) * 100
-		w.stretches = append(w.stretches, stretch{from: edgeAt(moment{wall: at}), to: edgeAt(moment{wall: at + 50}), passed: true, dropped: 1})
+	// list is maxStretches+1 stretches, the i-th from 1000*i to 1000*i+500 by
+	// the wall clock and the chain's first from the beginning of time,
+	// passed as passed says, each with one drop.
+	list := func(passed func(i int) bool) []stretch {
+		var out []stretch
+		for i := range maxStretches + 1 {
+			at := int64(i) * 1000
+			s := stretch{from: edgeAt(moment{wall: at}), to: edgeAt(moment{wall: at + 500}), passed: passed(i), dropped: 1}
+			if i == 0 {
+				s.from = edge{}
+			}
+			out = append(out, s)
+		}
+		return out
 	}
-	w.mergeStretches()
-	checks := []struct {
+	all := func(int) bool { return true }
+	// stepped is list(all) with the second stretch moved back by the wall
+	// clock to 300 to 400, before the first's end at 500, as after a step
+	// back between the two oldest.
+	stepped := func() []stretch {
+		l := list(all)
+		l[1].from, l[1].to = edgeAt(moment{wall: 300}), edgeAt(moment{wall: 400})
+		return l
+	}
+	cases := []struct {
 		name string
-		ok   bool
+		in   []stretch
+		// merged is the index of the stretch the merge makes, from and to its
+		// edges' wall times, and passed its state.
+		merged   int
+		from, to int64
+		passed   bool
 	}{
-		{"the list holds maxStretches stretches", len(w.stretches) == maxStretches},
-		{"the oldest runs from the first's start to the second's end", w.stretches[0].from.m.wall == 0 && w.stretches[0].to.m.wall == 150},
-		{"and holds both's drops", w.stretches[0].dropped == 2},
-		{"no drop is lost", w.lateDropped() == maxStretches+1},
+		{"the two oldest, both passed, become one from the first's start to the second's end", list(all), 0, 0, 1500, true},
+		{"after a step back of the wall clock between them, the one they become ends where the later end is by the wall clock", stepped(), 0, 0, 500, true},
+		{"a passed stretch before unpassed ones stays as it is, and the oldest unpassed pair merges", list(func(i int) bool { return i == 0 }), 1, 1000, 2500, false},
+		{"with no adjacent pair alike passed or not, the two oldest merge, passed as either is", list(func(i int) bool { return i%2 == 0 }), 0, 0, 1500, true},
 	}
-	for _, ch := range checks {
-		t.Run(ch.name, func(t *testing.T) {
-			if !ch.ok {
-				t.Errorf("no: %d stretches, the first %+v", len(w.stretches), w.stretches[0])
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a, b := c.in[c.merged], c.in[c.merged+1]
+			before := slices.Clone(c.in[:c.merged])
+			w := &Writer{stretches: slices.Clone(c.in)}
+			w.mergeStretches()
+			m := w.stretches[c.merged]
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"the list holds maxStretches stretches", len(w.stretches) == maxStretches},
+				{"the stretch the merge makes has the edges and state it should", m.from.m.wall == c.from && m.to.m.wall == c.to && m.passed == c.passed},
+				{"it holds what either held by the wall clock", m.holds(event.Envelope{T: a.to.m.wall}) && m.holds(event.Envelope{T: b.to.m.wall}) && m.holds(event.Envelope{T: b.from.m.wall})},
+				{"and both's drops, so no drop is lost", m.dropped == 2 && w.lateDropped() == maxStretches+1},
+				{"the stretches before it stay as they were", slices.Equal(w.stretches[:c.merged], before)},
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: %d stretches, the merged one %+v", len(w.stretches), m)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestRebuiltStretchesKeepTheCap checks that the stretches Open rebuilds
+// from an older version's rows, which recorded none, keep to maxStretches
+// too, with the newest end where the newest row put it.
+func TestRebuiltStretchesKeepTheCap(t *testing.T) {
+	cases := []struct {
+		name  string
+		rises int
+	}{
+		{"rows whose moment rose maxStretches times rebuild a stretch for each", maxStretches},
+		{"rows whose moment rose more times rebuild maxStretches, the oldest merged", maxStretches + 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// Each rise is a batch sealed local-only, then one sealed online
+			// that records the stretch's end.
+			var rows []rowPayload
+			local, online := false, true
+			for i := range c.rises {
+				at := int64(i+1) * 10_000
+				rows = append(rows,
+					rowPayload{sealPayload: sealPayload{SealedAt: at - 5000, Online: &local, LocalUntil: at - 10_000}},
+					rowPayload{sealPayload: sealPayload{SealedAt: at + 1000, Online: &online, LocalUntil: at}})
+			}
+			w := &Writer{}
+			w.restoreStretches(&batchesFile{base: basePayload{B: 1, FirstSeq: 1}, rows: rows}, nil)
+			n := len(w.stretches)
+			if want := min(c.rises, maxStretches); n != want || w.stretches[n-1].to.m.wall != int64(c.rises)*10_000 || w.stretches[0].from != (edge{}) {
+				t.Errorf("rebuilt %d stretches, the newest ending at %d and the first from %+v; want %d, ending at %d, from the beginning of time",
+					n, w.stretches[n-1].to.m.wall, w.stretches[0].from, want, int64(c.rises)*10_000)
 			}
 		})
 	}
@@ -872,6 +951,61 @@ func TestUntilMovesRecordStretches(t *testing.T) {
 							bf.stretchesRow, len(bf.rows), b.Online, b.Why)
 					}
 				})
+			}
+		})
+	}
+}
+
+// TestLearnedStretch checks where a stretch begins that the agent saw end
+// and the writer didn't know of (learned): where the writer last knew
+// config.toml said online, and, when the writer knew that only after the
+// end, as from a seal's read between the switch back and the agent's note
+// of it, at the end of the newest stretch that ended before it. Either way
+// a record made in it that comes late is dropped once a batch sealed online
+// passed it, and one made outside it is sealed online.
+func TestLearnedStretch(t *testing.T) {
+	cases := []struct {
+		name string
+		// sealAt is when a batch is sealed online after the install's
+		// stretch, endAt when the stretch the agent saw ended, and madeAt
+		// when the late record was made, in ms after the start.
+		sealAt, endAt, madeAt int64
+		// dropped is whether Write drops the late record, or else seals it
+		// online.
+		dropped bool
+	}{
+		{"an end before the writer's last online read begins its stretch where the stretch before ended, so a record made in it is dropped", 60_000, 40_000, 35_000, true},
+		{"and a record made after that end is sealed online", 60_000, 40_000, 50_000, false},
+		{"an end after the writer's last online read begins its stretch at that read, so a record made in it is dropped", 20_000, 40_000, 30_000, true},
+		{"and a record made before that read is sealed online", 20_000, 40_000, 15_000, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLateRig(t)
+			// The install's stretch, from the beginning of time to 10 s, and a
+			// batch sealed online after it.
+			r.note(false)
+			r.write(r.presence(1000))
+			r.take()
+			r.at(10_000)
+			r.note(true)
+			r.pause()
+			r.at(c.sealAt)
+			r.write(r.presence(c.sealAt - 1000))
+			r.seal()
+			// The agent saw a stretch end, by both clocks, which the writer
+			// didn't know of; a batch sealed online after it passes it.
+			end := time.UnixMilli(testT + c.endAt)
+			r.w.NoteSeen(Seen{Ended: end, OS: osclock.Stamp{Wall: end, Mono: c.endAt + 1000, BootID: lateBoot}})
+			r.at(70_000)
+			r.write(r.presence(70_000))
+			r.seal()
+			_, err := r.w.Write(r.presence(c.madeAt))
+			if err != nil && !errors.Is(err, ErrLateLocal) {
+				t.Fatal(err)
+			}
+			if dropped := err != nil; dropped != c.dropped {
+				t.Errorf("Write dropped the record made at %d ms: %v, want %v", c.madeAt, dropped, c.dropped)
 			}
 		})
 	}

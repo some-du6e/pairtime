@@ -275,6 +275,7 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 	if list == nil {
 		w.stretches = w.stretchesFromRows(rows, 0, nil, moment{})
 		w.dirty = len(w.stretches) > 0
+		w.mergeStretches()
 	} else {
 		w.stretches = w.stretchesOf(list)
 		// Rows sealed after the one that recorded the list, with none of
@@ -399,15 +400,21 @@ func (w *Writer) sawOnline(end edge) bool {
 // learned records a stretch the writer didn't know of that ended at end, as
 // the agent saw it end (NoteSeen): from where the writer last knew
 // config.toml said online, or from the beginning of time for the chain's
-// first. It is passed when a batch was sealed online since end, as far as
+// first. When the writer knew that only after end, by a clock the two
+// share, as from a seal's read that came between the switch back and the
+// agent's note of it, the stretch begins at the end of the newest one that
+// ended before it, or at the beginning of time, so that it holds what was
+// made in it. It is passed when a batch was sealed online since end, as far as
 // the writer can tell (sealedSince), unless cross is set: end is of a boot
 // no clock the writer's batches were sealed by can be ordered with, so
 // none counts as sealed after it. w.mu is held.
 func (w *Writer) learned(end edge, cross bool) {
 	n := len(w.stretches)
 	from := w.onlineAt
-	if n == 0 {
+	if before, shared := clockOrder(from.m, end.m); n == 0 {
 		from = edge{}
+	} else if shared && !before {
+		from = w.endBefore(end)
 	}
 	if b := end.other.boot; end.other.os > 0 && b != from.osOf().Boot {
 		// The end is of a boot the start holds no reading of, one that came
@@ -428,6 +435,36 @@ func (w *Writer) learned(end edge, cross bool) {
 	}
 	w.mergeStretches()
 	w.dirty = true
+}
+
+// endBefore is the end of the newest stretch that ended before end, by the
+// clocks the two share (clockOrder), and the beginning of time when none
+// did. w.mu is held.
+func (w *Writer) endBefore(end edge) edge {
+	for i := len(w.stretches) - 1; i >= 0; i-- {
+		if s := w.stretches[i]; !s.open {
+			if before, _ := clockOrder(s.to.m, end.m); before {
+				return s.to
+			}
+		}
+	}
+	return edge{}
+}
+
+// clockOrder reports whether a came before b by a monotonic clock both hold
+// a reading of that measures something, this run's or the OS's of one boot,
+// or else by the wall clock, and whether they share such a monotonic clock.
+// A moment an earlier run recorded holds this run's start, 1, by the run's
+// clock, and one of another boot that boot's start, 1, by the OS's
+// (Writer.earlier), which order nothing.
+func clockOrder(a, b moment) (before, shared bool) {
+	switch {
+	case a.run > 1 && b.run > 1:
+		return a.run < b.run, true
+	case a.os > 1 && b.os > 1 && a.boot == b.boot:
+		return a.os < b.os, true
+	}
+	return a.wall < b.wall, false
 }
 
 // sealedSince reports whether a batch was sealed online after end: in this
@@ -497,15 +534,32 @@ func (w *Writer) passAll() {
 	}
 }
 
-// mergeStretches keeps the stretches to maxStretches: the two oldest become
-// one, from the first's start to the second's end, with both's drops. w.mu
-// is held.
+// mergeStretches keeps the stretches to maxStretches. Of the oldest
+// adjacent pair that ended alike passed or not, as passAll leaves the older
+// ones, the two become one with both's drops, from the earlier start to the
+// later end by the wall clock, as a step back of the wall clock between
+// them can put the second's end before the first's. When no pair agrees,
+// the two oldest become one that is passed when either is, which can only
+// drop a record of them, never seal one local-only after an online batch.
+// Either way only more of the past counts as local-only. w.mu is held.
 func (w *Writer) mergeStretches() {
 	for len(w.stretches) > maxStretches {
-		a, b := w.stretches[0], w.stretches[1]
-		b.from, b.dropped = a.from, a.dropped+b.dropped
-		w.stretches[1] = b
-		w.stretches = slices.Delete(w.stretches, 0, 1)
+		i := 0
+		for j := 0; j+1 < len(w.stretches); j++ {
+			if a, b := w.stretches[j], w.stretches[j+1]; !a.open && !b.open && a.passed == b.passed {
+				i = j
+				break
+			}
+		}
+		a, b := w.stretches[i], w.stretches[i+1]
+		m := b
+		m.from = a.from
+		m.from.m.wall = min(a.from.m.wall, b.from.m.wall)
+		m.to.m.wall = max(a.to.m.wall, b.to.m.wall)
+		m.passed = a.passed || b.passed
+		m.dropped = a.dropped + b.dropped
+		w.stretches[i+1] = m
+		w.stretches = slices.Delete(w.stretches, i, i+1)
 	}
 }
 
