@@ -30,9 +30,11 @@ testdata/fixtures/<harness>/<version>/<os>/
     connections         Claude Code only: the pid and executable name of each process holding one of the sink's connections at step 23, as lsof's p and c lines, or on Windows as Get-Process's Id and ProcessName
 ```
 
-- `<harness>` is the id `pkg/event` uses: `claude_code`, `codex`, `cursor`, `copilot`, `gemini`, `devin`, `cline` or `opencode`.
+- `<harness>` is the id `pkg/event` uses: `claude_code`, `codex`, `cursor`, `copilot`, `gemini`, `devin`, `cline` or `opencode`. The one other name is `wakatime`, below.
 - `<version>` is the version number the harness reports, without its name: `2.1.328`, not `2.1.328 (Claude Code)`.
 - `<os>` is `windows`, `macos` or `linux`. The exact build goes in `PROVENANCE.md`.
+
+`wakatime/<version>/<os>/` holds what wakatime-cli, the program WakaTime's editor plugins run, sent to the servers it reports to, for the WakaTime bridge (DESIGN 5.6, 5.7). It isn't a harness, and nobody types in it: `e2e-wakatime.yml`'s capture job runs `tools/capture/wakatime/capture.py` in CI, and each run folder holds `capture.json` and `requests/NNNNNN.json` and `.meta` in place of hook calls, as [its README](../../tools/capture/wakatime/README.md) describes. `<version>` is wakatime-cli's without the `v`, such as `2.28.4`.
 
 ## Rules
 

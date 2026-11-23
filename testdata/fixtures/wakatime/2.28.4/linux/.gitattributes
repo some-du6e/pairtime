@@ -1,0 +1,3 @@
+# The request bodies are byte-for-byte what wakatime-cli sent. Keep git from
+# changing their line endings or anything else on checkout.
+* -text

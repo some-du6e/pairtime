@@ -1,0 +1,104 @@
+# Erratum: what wakatime-cli v2.28.4 sends, against DESIGN 5.6 and 5.7
+
+Date 2026-11-23. Raised by WP-AD16, from wakatime-cli v2.28.4's source at `9fee1b464bfb` (the release's tag, BSD-3-Clause, read and not copied) and the requests in `testdata/fixtures/wakatime/2.28.4/linux`. Status: items 1, 2 and 4 decided 2026-11-23 by the orchestrator for Karim, on #228 and #232. Item 3 is a correction for WP-AD17 to confirm, and DESIGN 5.6 stays as it is until then.
+
+## 1. Which heartbeats are transcript-derived
+
+### Input
+
+DESIGN 5.7's table tells an editor heartbeat from a transcript-derived one by the user agent: "Editor heartbeat (plugin user agent, no AI model token)" against "Transcript-derived heartbeat (user agent carries an AI model token)". HC 1.5 says the same of wakatime-cli: "with an AI model token inserted for transcript-derived heartbeats".
+
+### What the capture shows
+
+The `ai-sync` run's requests to pairtime hold 21 heartbeats that wakatime-cli's AI sync made from WP-AD1's Claude Code transcripts. 18 of them carry `ai_prompt_length`, and four of those have no model token: their user agent ends `go1.27.3 claude-code/2.1.327`, where the others end `go1.27.3 opus/5-5 claude-code/2.1.327`. Three are `app` heartbeats on the entity `Claude <session id>` and one is a file heartbeat. wakatime-cli builds the token from the model a transcript line names (its `pkg/ai/claude.go`, `userAgent`, and `pkg/ai/ai.go`, `aiModelUserAgentToken`), and a person's prompt line names none.
+
+Read literally, DESIGN 5.7 makes those four editor heartbeats: an `editor.activity` `navigate` each, and no `prompt.submit`. The bridge would lose the four prompts and give their seconds to an editor nobody used.
+
+### The rule
+
+A heartbeat is transcript-derived when it carries `ai_session`.
+
+- Every heartbeat wakatime-cli's AI sync makes carries it. All 21 in the capture do, and every parser in v2.28.4's `pkg/ai` sets it, the Claude parser from the transcript's file name.
+- A plugin can't set it through wakatime-cli. It is no command-line flag, and `--extra-heartbeats` reads no such field (`pkg/params/params.go`, `ExtraHeartbeat`).
+- The editor heartbeats wakatime-cli relabels `ai coding` keep the plugin's user agent and carry no `ai_session`, three of them in the same run. So they stay editor heartbeats, as DESIGN 5.7 wants, since it takes the category for untrusted input.
+- A process that posts straight to the agent's port can put `ai_session` on anything. The rule decides only which records a heartbeat makes. Its `via` comes from the peer-process check, which such a process fails, so its records are `editor_unverified` or `bridge_unverified` either way (DESIGN 5.7; docs/errata/2026-11-19-bridge-unverified.md).
+
+### DESIGN 5.7's new text
+
+The table's first column, in the first and third rows:
+
+> Editor heartbeat (no `ai_session`) with `human_line_changes > 0` or `is_write`
+
+> Transcript-derived heartbeat (wakatime-cli's AI sync made it: it carries `ai_session`, and its user agent names the AI agent, such as `claude-code/2.1.327`, with a model token when the transcript line named a model) with `ai_prompt_length > 0`
+
+and the second and fourth rows read "Other editor heartbeats" and "Transcript-derived heartbeat with `ai_line_changes > 0`" as now. One heartbeat can match both transcript rows: wakatime-cli moves a session's prompts onto the file the session last edited, and three heartbeats in the capture carry `ai_prompt_length` and `ai_line_changes` together. Such a heartbeat becomes both records.
+
+### Decision
+
+Decided 2026-11-23 by the orchestrator for Karim, on #232. A heartbeat is transcript-derived when it carries `ai_session`, and DESIGN 5.7's rows read as above, so one heartbeat can make both transcript records. A process that posts straight to the port can set `ai_session`, but its `via` still comes from the peer-process check, so its records stay `editor_unverified` or `bridge_unverified`. The DESIGN 5.7 edit goes in the bridge's code PR, under the `oracle-change` label.
+
+## 2. The status of a heartbeat the local endpoint refuses
+
+### Input
+
+DESIGN 5.6: the local endpoint answers `heartbeats.bulk` with "per-item responses in Hackatime's shape". Hackatime answers a heartbeat it refuses with `[{"error": ..., "type": ...}, 422]` (`testdata/upstream/hackatime/responses/heartbeats_bulk.schema.json`).
+
+### What wakatime-cli does with a refusal
+
+`pkg/offline/offline.go`, `handleResults`: an entry with status 400 drops its heartbeat. Any other status outside 2xx, and a heartbeat the response has no entry for, go back into the offline queue, and the sync stops there, so the heartbeats queued behind them wait for the next one. The queue stores a heartbeat as its JSON, in which the destination's URL and key are left out (`pkg/heartbeat`, `APIURL` and `APIKey` are `json:"-"`), so a queued heartbeat goes to every destination when it is sent again. A heartbeat pairtime refused with 422 would go back to Hackatime too, at every sync, for as long as it waits (item 3).
+
+### Decision
+
+Decided 2026-11-23 by the orchestrator for Karim. The local endpoint answers a heartbeat it refuses with Hackatime's body, `{"error": ..., "type": ...}`, and status 400 instead of 422. This is a deliberate departure from Hackatime's status code, so that nothing pairtime refuses goes back into wakatime-cli's queue, where it would reach Hackatime again (DESIGN 5.6, 11 risk 1). A heartbeat the endpoint takes, a duplicate of one it took included, gets Hackatime's row shape and 201, as Hackatime gives both.
+
+## 3. How long wakatime-cli keeps a heartbeat it couldn't send
+
+### Input
+
+DESIGN 5.6, Agent down: "wakatime-cli requeues a heartbeat at most 3 times (HC 1.5), and what it does with a refusing destination isn't documented." HC 1.5 says "with up to 3 requeue attempts per heartbeat (`maxRequeueAttempts`)".
+
+### What the source says
+
+In `pkg/offline/offline.go`, `maxRequeueAttempts = 3` is how many times `pushHeartbeatsWithRetry` tries to write heartbeats to the queue file, waiting longer between tries, before it gives up on writing them. It counts writes, not sends. Nothing in that file drops a queued heartbeat for its age or for how often it was sent. The capture's `replay` run shows a heartbeat queued after one destination failed and sent again 31 s later, once the backoff ended, to both destinations. So a heartbeat waits in the queue until a send succeeds, and a refusing destination makes it go out again to every destination at each sync.
+
+### For WP-AD17
+
+Confirm it against the real binary in `e2e-wakatime.yml`'s end-to-end job: a heartbeat sent while one destination refuses for longer than three syncs still reaches both once that destination answers. If it does, DESIGN 5.6's sentence becomes:
+
+> A heartbeat wakatime-cli couldn't send waits in its offline queue until a send succeeds, and goes out again to every destination at each sync (wakatime-cli's `pkg/offline/offline.go`).
+
+HC 1.5's sentence is in docs/research, an oracle, and gets the same correction in the same PR.
+
+## 4. While Hackatime can't be reached, heartbeats reach pairtime late
+
+### Input
+
+DESIGN 5.6 covers the agent being down ("Agent down"), when Hackatime still gets every heartbeat. It doesn't cover Hackatime being out of reach: an outage, a network that blocks it, or a laptop with no connection, where pairtime's endpoint on 127.0.0.1 still answers.
+
+### What the source says
+
+wakatime-cli backs off after a failed send, for every destination at once. Its send path is `WithQueue` around `WithBackoff` around the sender (`cmd/heartbeat/heartbeat.go`, `buildHandle`), and after the n-th failure in a row `WithBackoff` sends nothing for 15 s times 2 to the n (`pkg/backoff/backoff.go`), so a call in that time queues its heartbeats without trying any destination. After the seventh failure the next wait would pass 3,600 s, and from then on it doesn't wait at all until a send succeeds. A failed call also skips the queue sync it runs after a successful one (`cmd/run.go`, `RunCmdWithOfflineSync`). So, with pairtime's destination sent first:
+
+- For about the first 64 minutes of an outage (30 s, 60 s and so on up to 1,920 s, between calls), pairtime gets only the heartbeats of the calls that come as each wait ends. The rest wait in wakatime-cli's queue.
+- After that, each call sends its own heartbeats to pairtime, then fails at Hackatime and queues them, and the queue still waits.
+- When Hackatime answers again, the queue goes to both destinations: the held heartbeats reach pairtime for the first time, possibly hours after their time, and the ones it took already come again, which its deduplication answers.
+
+The capture shows the first step only: in its first run, a call 2 s after the failed one exited 112, wakatime-cli's backoff error, and sent nothing. The committed `replay` run waits the backoff out.
+
+### Why it matters
+
+A minute is final 900 s after it ends (DESIGN 3.7), and a record that arrives later doesn't change it. So editor time typed during the first hour of an outage, and bridge records from transcripts read then, can arrive too late to count, while hooks and transcripts that pairtime reads itself are unaffected. For a teen whose school network blocks Hackatime, that can be the first hour of editor time at school each day.
+
+### Decision
+
+Decided 2026-11-23 by the orchestrator for Karim, on #232: v1 accepts the gap, and says so.
+
+- Re-scoring final minutes is out, because it breaks DESIGN 3.7's finality.
+- Making pairtime the `api_url` and forwarding to Hackatime from the agent is out, because it puts Hackatime behind pairtime's agent, which DESIGN 5.6 keeps it independent of.
+- The gap is bounded. After about the first 64 minutes of an outage wakatime-cli stops waiting, and each call reaches pairtime first.
+- DESIGN 5.6 gets a known limit, after its "Agent down" item. It goes in with item 1's DESIGN 5.7 edit:
+
+  > **Hackatime out of reach.** wakatime-cli backs off after a failed send, for every destination at once, and for about the first hour in which Hackatime can't be reached it holds back all its sends, pairtime's included. The editor and bridge records of that hour reach the agent only when Hackatime answers again, after their minutes are final (3.7), and don't count. `pairtime doctor` says when wakatime-cli is backing off (docs/errata/2026-11-23-wakatime-cli-2.28.4.md, item 4).
+
+- `pairtime doctor` reads wakatime-cli's own backoff state from its internal config file (`~/.wakatime/wakatime-internal.cfg`, `backoff_at` and `backoff_retries`, a time and a count), and while wakatime-cli backs off says so, and that editor time won't count until it recovers.
+- WP-AD17 measures the real delay with the binary: a stand-in Hackatime that refuses for an hour while heartbeats go every 30 s, and when each one reaches pairtime. The orchestrator revisits this if the loss turns out large.

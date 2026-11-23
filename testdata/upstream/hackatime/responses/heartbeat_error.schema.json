@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A heartbeat Hackatime refused",
+  "description": "The body HackatimeController#handle_heartbeat gives a heartbeat HeartbeatIngest couldn't take: error is the exception's message and type its class (hackatime_controller.rb lines 229-238). A bulk POST answers [this body, 422] in that heartbeat's place, and a single POST answers this body with 422. A time that isn't epoch seconds, or a scaled form of them, gets an InvalidHeartbeatTime (heartbeat_ingest.rb lines 364-395), and so does an entry of a bulk array that isn't an object, which reaches HeartbeatIngest as nothing (hackatime_controller.rb lines 284-299).",
+  "type": "object",
+  "required": ["error", "type"],
+  "properties": {
+    "error": {"type": "string", "minLength": 1},
+    "type": {"type": "string", "minLength": 1, "description": "The Ruby class of the exception."}
+  },
+  "examples": [
+    {"error": "time must be a Unix epoch timestamp", "type": "HeartbeatIngest::InvalidHeartbeatTime"},
+    {"error": "time must be Unix epoch seconds between 1000000000 and 1999999999", "type": "HeartbeatIngest::InvalidHeartbeatTime"}
+  ]
+}

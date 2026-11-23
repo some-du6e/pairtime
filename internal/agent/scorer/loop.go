@@ -224,6 +224,10 @@ type Loop struct {
 	lookback int64
 	dayCap   int64
 	gaps     runGaps
+	// pendingMS is PENDING_WINDOW_S, how long a minute stays pending
+	// after it ends (DESIGN 3.7), which watch measures FinalBefore's lag
+	// against.
+	pendingMS int64
 	// writeDayFile writes a day's rollup, store.WriteDay but in tests.
 	writeDayFile func(dir string, d store.Day) error
 
@@ -268,9 +272,10 @@ type Loop struct {
 	// end, rather than at every Step.
 	batching bool
 	// What doctor hears: why the loop stopped, the last batch that failed,
-	// why the ledger's files didn't read, until a read works, and the last
-	// write that failed, until a save stores everything.
-	stuckMsg, gapMsg, readMsg, faultMsg string
+	// why the ledger's files didn't read, until a read works, the last
+	// write that failed, until a save stores everything, and how far
+	// FinalBefore lags the newest record, while it does (watch).
+	stuckMsg, gapMsg, readMsg, faultMsg, stallMsg string
 }
 
 // New returns a loop that hasn't started.
@@ -296,6 +301,7 @@ func New(opts Options) (*Loop, error) {
 		log:          log,
 		lookback:     lookback.Milliseconds(),
 		dayCap:       opts.Params.Int(params.DAY_CAP_S),
+		pendingMS:    opts.Params.Int(params.PENDING_WINDOW_S) * 1000,
 		gaps:         gapsOf(opts.Params),
 		writeDayFile: store.WriteDay,
 		kick:         make(chan struct{}, 1),
@@ -701,6 +707,7 @@ func (l *Loop) apply(b ledger.Batch) {
 	l.cur.Batch, l.cur.Seq = b.Row.B, b.Row.FirstSeq+b.Row.N-1
 	if added > 0 {
 		l.step(b.Row.B)
+		l.watch(b)
 	} else if !l.batching {
 		l.save()
 	}
@@ -1004,7 +1011,7 @@ func (l *Loop) fault(msg string) {
 // publish tells doctor what is wrong with the loop, "" when nothing is.
 func (l *Loop) publish() {
 	var msgs []string
-	for _, m := range []string{l.stuckMsg, l.gapMsg, l.readMsg, l.faultMsg} {
+	for _, m := range []string{l.stuckMsg, l.gapMsg, l.readMsg, l.faultMsg, l.stallMsg} {
 		if m != "" {
 			msgs = append(msgs, m)
 		}
