@@ -14,7 +14,7 @@ DESIGN 7.3's CC8 row: "a 10-turn sample catches one that falsifies 10% of prompt
 
 A drawn turn whose values come from the made-up key reproduces its committed sketch exactly, so it passes spec 10.8's `sketch` check. The server can't check a value against `K_feat`, which only the device holds. CC8 catches the client only through its checks across reveals (spec 10.8): when two revealed turns share a shingle and show different values for it, or two revealed prompts with equal normalized texts or equal error signatures carry different `th` or `es`. So the chance of catching it depends on how often two drawn turns share a shingle, not on 10% of turns failing one by one, and a span removed by hand over the shared words hides even that. Against a client that falsifies sketches and then reveals the true values, which don't reproduce the falsified sketch, the figure holds.
 
-The same holds for `es`. A client that keeps honest sketches but writes a fresh made-up `es` on each pasted error resets SM 4.2's count of the error and turns each paste into a change event. CC8 sees it only when two revealed prompts share a signature.
+The same holds for `es`. A client that keeps honest sketches but writes a fresh made-up `es` on each pasted error keeps its pastes out of SM 4.2's count of that error and makes each paste a new error signature, a change event that ends re-roll, rewrite and autopilot counts. A paste never resets the error's count, which only the person's own change events and the error's clearing do (SM 4.2). CC8 sees it only when two revealed prompts share a signature.
 
 ## Reasoning
 

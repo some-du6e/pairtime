@@ -87,7 +87,8 @@ tl.check(sd.input_in_every_slot(fx, at("13:58:00"), at("14:09:00")), "input in e
 tl.check(SUBMIT - fx.last_input_before(SUBMIT) <= sd.KEYS_PRE_S * 1000, "input in the 10 s before submit")
 prompt_times = [e["t"] for e in events if e["kind"] == "prompt.submit" and e["session_key"] == S]
 tl.check(all(abs(CALL - t) > sd.TRACK_DEDUPE_S * 1000 for t in prompt_times),
-         "no prompt of the session within TRACK_DEDUPE_S of the call, so it isn't track_matched either")
+         "no prompt of the session within TRACK_DEDUPE_S of the call, so it isn't track_matched and raises "
+         "track_without_prompt")
 
 typing = sd.typing_s(150)
 lead = sd.THINK_LEAD_S + typing
@@ -121,7 +122,7 @@ side.record(output, why="The answer from the transcript: 120 words fill 40 s. No
 side.record(stop, why="The Stop hook: an agent event, counted in both series.")
 side.record(track, track="without_prompt", flags=["track_without_prompt"],
             why="DESIGN 5.4: pairtime sees the session through hooks and a log reader, and no hook or log prompt "
-                "of the session is within TRACK_LOG_MATCH_S = 10 s of the call; the nearest is 170 s back. It "
+                "of the session is within TRACK_DEDUPE_S = 30 s of the call; the nearest is 170 s back. It "
                 "opens nothing and raises the tier-2 flag track_without_prompt. Never counts toward logged_s "
                 "(D19).")
 side.turn(prompt, turn_key=T1, backed=True, output_fill_s=fill, fill_s=sd.R_TURN_BASE_S + fill,

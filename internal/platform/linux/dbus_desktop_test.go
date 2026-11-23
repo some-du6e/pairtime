@@ -170,6 +170,17 @@ func (f *fakeLogind) GetUser(uid uint32) (dbus.ObjectPath, *dbus.Error) {
 	return fakeUserPath, nil
 }
 
+// GetSession answers for the sessions the fake exports, by their one-digit
+// ids (fakeSession).
+func (f *fakeLogind) GetSession(id string) (dbus.ObjectPath, *dbus.Error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if path := fakeSession(id); len(id) == 1 && f.sessions[path] != nil {
+		return path, nil
+	}
+	return "", dbus.NewError("org.freedesktop.login1.NoSuchSession", []any{"No session '" + id + "' known"})
+}
+
 // Inhibit hands out a pipe's write end as the lock; the read end sees EOF
 // once every copy of it is closed, which is the release.
 func (f *fakeLogind) Inhibit(what, who, why, mode string) (dbus.UnixFD, *dbus.Error) {
@@ -306,8 +317,15 @@ func startFakeLogind(t *testing.T, locked, noSession bool) *fakeLogind {
 // openWithLogind opens a desktop whose system bus is the test bus.
 func openWithLogind(t *testing.T, readyTimeout time.Duration) *Desktop {
 	t.Helper()
+	return openWithLogindEnv(t, readyTimeout, func(string) string { return "" })
+}
+
+// openWithLogindEnv is openWithLogind with getenv as the session's
+// environment.
+func openWithLogindEnv(t *testing.T, readyTimeout time.Duration, getenv func(string) string) *Desktop {
+	t.Helper()
 	d := Open(context.Background(), Config{
-		Getenv: func(string) string { return "" },
+		Getenv: getenv,
 		SystemBus: func(ctx context.Context) (*dbus.Conn, error) {
 			return connectBus(ctx, os.Getenv("DBUS_SESSION_BUS_ADDRESS"))
 		},
@@ -451,6 +469,62 @@ func TestDesktopLogindLock(t *testing.T) {
 				t.Errorf("events %q, want %q", got, tc.want)
 			}
 			noPower(t, d.Power())
+		})
+	}
+}
+
+// TestDesktopLogindSessionEnv checks an agent in a systemd unit of its own,
+// as a hook that starts it over SSH puts it in (cmd/pairtime, startInUnit):
+// logind knows no session for its process, so it follows the session its
+// XDG_SESSION_ID names while that one lasts and isn't closing, and the
+// user's display session, "2", otherwise.
+func TestDesktopLogindSessionEnv(t *testing.T) {
+	ssh := fakeSession("3")
+	cases := []struct {
+		name    string
+		env     string
+		closing bool
+		// lock is the session whose LockedHint goes true, and want whether
+		// that is a lock for the agent.
+		lock dbus.ObjectPath
+		want bool
+	}{
+		{name: "an agent whose environment names an SSH session follows it, so the desktop's lock is no lock for it",
+			env: "3", lock: fakeSessionPath},
+		{name: "and that session's own lock is one", env: "3", lock: ssh, want: true},
+		{name: "a session it names that is closing gives way to the display session",
+			env: "3", closing: true, lock: fakeSessionPath, want: true},
+		{name: "a session it names that logind doesn't know gives way to the display session",
+			env: "9", lock: fakeSessionPath, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := startFakeLogind(t, false, true)
+			f.addSession(t, ssh, false)
+			if tc.closing {
+				f.setSession(ssh, "State", "closing")
+			}
+			d := openWithLogindEnv(t, time.Minute, func(name string) string {
+				if name == "XDG_SESSION_ID" {
+					return tc.env
+				}
+				return ""
+			})
+			f.dropSent()
+			if s := d.Status(); s.Lock.Via == "" {
+				t.Fatalf("lock is %+v, want logind's LockedHint", s.Lock)
+			}
+			f.setSession(tc.lock, "LockedHint", true)
+			if tc.want {
+				if p := nextPower(t, d.Power()); p.Op != event.PowerLock {
+					t.Errorf("event %q, want a lock", p.Op)
+				}
+			} else {
+				noPower(t, d.Power())
+			}
+			if got, err := d.Locked(); err != nil || got != tc.want {
+				t.Errorf("Locked says %v, %v; want %v", got, err, tc.want)
+			}
 		})
 	}
 }

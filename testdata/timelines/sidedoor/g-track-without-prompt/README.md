@@ -1,6 +1,6 @@
 # Side door (g): a track call on a hooked session with no prompt near it
 
-Case (f)'s session without the compliant call. The person sends a prompt at 14:04:40, Claude answers in text with no tool call, and stops at 14:05:30. Two minutes later a process started inside the session runs `pairtime track` with no turn behind it. pairtime sees the session through hooks and its transcript, and no prompt of the session is within 10 s of the call. DESIGN 5.4 says the call opens nothing and raises the tier-2 flag `track_without_prompt`, because "something outside the agent's turn called the CLI". The credit is the session's own 280 s at level B.
+Case (f)'s session without the compliant call. The person sends a prompt at 14:04:40, Claude answers in text with no tool call, and stops at 14:05:30. Two minutes later a process started inside the session runs `pairtime track` with no turn behind it. pairtime sees the session through hooks and its transcript, and no prompt of the session is within `TRACK_DEDUPE_S` = 30 s of the call. DESIGN 5.4 says the call opens nothing and raises the tier-2 flag `track_without_prompt`, since it "likely came from outside the agent's turn". The credit is the session's own 280 s at level B.
 
 | | |
 |---|---|
@@ -20,7 +20,7 @@ Case (f)'s session without the compliant call. The person sends a prompt at 14:0
 ## Timing choices
 
 - The call's process descends from the session's `claude` process and inherited `CLAUDE_CODE_SESSION_ID`, as a loop left running in the background would. The transcript tailer covers the session and holds no user entry for it.
-- The call is 170 s after the prompt, outside `TRACK_DEDUPE_S` as well as `TRACK_LOG_MATCH_S`, so it isn't `track_matched` either. Between 10 and 30 s the two rules disagree; see [track match windows](../../../../docs/errata/2026-11-19-track-match-windows.md).
+- The call is 170 s after the prompt, outside `TRACK_DEDUPE_S` = 30 s, so it isn't `track_matched` and it raises `track_without_prompt`.
 
 ## How the numbers follow
 

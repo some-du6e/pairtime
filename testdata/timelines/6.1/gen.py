@@ -12,7 +12,6 @@ sys.path.insert(0, os.path.dirname(HERE))
 import timeline as tl  # noqa: E402
 
 EDGES = "2026-11-19-sm-6.1-presence-edges"
-SAME_ERROR = "2026-11-19-sm-6.1-same-error"
 REPLAY = "2026-11-19-sm-6.1-hackatime-replay"
 PERMISSION = "2026-11-19-sm-6.1-permission-answer"
 
@@ -435,6 +434,14 @@ tl.check([fx.hhmmss(t) for t in commits] == ["14:11:40", "14:35:40", "15:47:40",
          "five commits")
 tl.check(len(failing) == 3 and len(green) == 1, "three failing test runs, then a green one")
 tl.check(all(e[2]["session_key"] == S for e in failing + green), "the agent runs the tests")
+# SM 4.2: a human commit or typed edit comes between each failing run and
+# the next prompt, which sets the error's count back to 0, so it never
+# reaches SAME_ERROR_LIMIT before a prompt.
+resets = commits + [e["t"] for e in events if e["kind"] == "editor.activity" and e["data"]["act"] == "edit"]
+for f in failing:
+    nxt = min(e["t"] for e in typed if e["t"] > f[0])
+    tl.check(any(f[0] < r < nxt for r in resets),
+             f"a human commit or typed edit between the failing run at {fx.hhmmss(f[0])} and the next prompt")
 
 # The reading bucket, per turn: reset to its 20 s base at the submit, no
 # drain while the permission answer's window covers the second (14:05:10 to
@@ -603,7 +610,7 @@ expected = exp.doc(
         "handbook_s": {"about": 5600, "sm": "handbook_s: about 5,600, 1 h 33 min"},
         "ai_ratio": {"about": 1.47, "sm": "ai_ratio is 5,965 / 4,050 = 1.47"},
     },
-    errata=[EDGES, SAME_ERROR, REPLAY, PERMISSION],
+    errata=[EDGES, REPLAY, PERMISSION],
     notes=[
         "ai_credited_s is P + PA + SUP + READ and hand_credited_s is NAV + E + G + LOOKUP, as SM's table "
         "splits them; no credited second inside an agent turn has a hand-work reason (SM 5.4).",
@@ -616,7 +623,8 @@ expected = exp.doc(
         "15:11:40, during the drink.",
         "Cycles 9 and 10: the agent's test run fails at 15:41:50, 15:42:20 and 15:54:20 with one "
         "AssertionError signature, and passes at 16:06:20, after his hand edit, saved at 15:59:40. Nothing is "
-        "discounted. See the same-error erratum for why SM's reason doesn't apply.",
+        "discounted: cycle 9's commit at 15:47:40 and his hand edit from 15:59:02 are human change events, so "
+        "the count is 0 at the 15:52:00 and 16:04:00 prompts (SM 4.2, 6.1).",
         f"This fixture's events replay to logged_s {logged:g}, ai_logged_s {ai_logged:g} and handbook_s "
         f"{handbook:g} under min(gap, 120 s) over the window; SM says about 8,300, 4,050 and 5,600. The "
         "first prompt has no agent event within 120 s before it in the window, which is the 120 s off SM's "
