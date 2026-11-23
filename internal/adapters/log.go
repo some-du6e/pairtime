@@ -78,10 +78,35 @@ type LogReader interface {
 	// priority (WP-AD3).
 	TrimLog(line []byte) ([]byte, error)
 	// LogPlace returns the folder a log record's line ran in, which Parse
-	// resolves to a project (Options.Project), and the harness's id of
-	// the session it belongs to, which orders it after the session's hook
-	// calls: "" for either that the line doesn't name.
-	LogPlace(raw RawRecord) (dir, session string)
+	// resolves to a project (Options.Project), the harness's id of the
+	// session it belongs to, which orders it after the session's hook
+	// calls, and the moment the line states, in Unix ms: "" or 0 for what
+	// the line doesn't say.
+	LogPlace(raw RawRecord) (dir, session string, at int64)
+	// LogHooked reports whether a hook call of the harness's session
+	// session came through the walk, as the adapter remembers it across
+	// the agent's restarts: a session the hooks report, whose
+	// session.start is theirs. Calls that all came through the spool
+	// don't make it one.
+	LogHooked(session string) bool
+	// LogCleared reports whether the log of the harness's session session
+	// opened with the command that clears the conversation, as Claude
+	// Code's /clear, which starts the new session in the process of the
+	// one it clears: no procs tie passes that one's process on, so the
+	// session is tied to none.
+	LogCleared(session string) bool
+	// LogStarted reports whether the adapter wrote a session.start for the
+	// harness's session session from its log, or holds one that waits, for
+	// the session's hooks or for a procs tie (LogHoldStart): a procs tie
+	// writes the scan's for a session it has none of, so SM 2.2 rule 4
+	// reads the walk.
+	LogStarted(session string) bool
+	// LogHoldStart holds the session.start of the harness's session
+	// session that waits (LogStarted) for up to past ms beyond the grace it
+	// waits for the session's hooks, and with 0 lets it go then: the host
+	// holds it while a procs tie of the session waits for a line read after
+	// a table read, so the start is the scan's once the tie comes.
+	LogHoldStart(session string, past int64)
 	// LogResume returns where in file the adapter's memory of it starts:
 	// the offset a restart must deliver the file again from, so that the
 	// memory SaveState returned is rebuilt, and false for a file it

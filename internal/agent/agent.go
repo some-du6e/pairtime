@@ -106,6 +106,10 @@ type Options struct {
 	// home folder and environment the agent runs with. Tests point it at
 	// a folder of their own.
 	Env *install.Env
+	// Procs, when set, replaces the process table the harness process scan
+	// reads (procs.Options.Read), which is this machine's otherwise. Tests
+	// give one of their own.
+	Procs func() ([]platform.Proc, error)
 	// Lookback starts lookback's reader, a child process that reads the
 	// harnesses' logs from before pairtime at low priority
 	// (tailers.ServeLookback), as `pairtime agent` has it run `pairtime
@@ -327,7 +331,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	closers = append(closers, a.watchConfig())
 	a.newFocus(src.focus)
-	closers = append(closers, a.startProcs())
+	closers = append(closers, a.startProcs(opts))
 	closers = append(closers, a.startFocus())
 	closers = append(closers, a.startAdapters())
 	closers = append(closers, a.startIPC(opts))

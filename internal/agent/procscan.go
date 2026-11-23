@@ -9,8 +9,8 @@ import (
 // startProcs starts the harness process scan (DESIGN 3.3, WP-OS6) and
 // returns the step that stops it. startPresence must have run, because
 // every scan tells presence how many harness session processes run.
-func (a *agent) startProcs() func() {
-	a.procs = procs.New(a.procsOptions(procs.Options{}))
+func (a *agent) startProcs(opts Options) func() {
+	a.procs = procs.New(a.procsOptions(procs.Options{Read: opts.Procs}))
 	return a.procs.Start(a.sched)
 }
 
