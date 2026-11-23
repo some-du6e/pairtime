@@ -28,7 +28,7 @@ type window struct {
 	gaps  runGaps
 	// ttl is BUCKET_TTL_S, how long after a record of the presence
 	// sampler's another record the agent stamps itself may come before the
-	// sampler's record has no reach left (stamps).
+	// sampler's record has no reach left (stamps, cutBy).
 	ttl int64
 }
 
@@ -101,28 +101,58 @@ const carryGraceMS = 3600 * 1000
 // records returns what a Step scores: the carry's records, then the
 // window's.
 func (w *window) records() []event.Event {
-	stamped := w.carry.Stamped
-	for i := range w.recs {
-		if stamps(&w.recs[i].ev) {
-			stamped = max(stamped, w.recs[i].ev.T)
-		}
-	}
-	out := w.carry.records(make([]event.Event, 0, len(w.recs)+16), w.from, w.gaps, stamped, w.ttl)
+	out := w.carry.records(make([]event.Event, 0, len(w.recs)+16), w.from, w.gaps, w.cutBy(), w.ttl)
 	for _, h := range w.recs {
 		out = append(out, h.ev)
 	}
 	return out
 }
 
-// stamps reports whether the agent stamped e's t itself, by a hook, its own
-// watchers or an agent app's reader, and e isn't a record of the presence
-// sampler's, os.presence or os.power: the records that, dated more than
-// BUCKET_TTL_S after the sampler's latest one, end that record's reach, as
-// pkg/score reads them (stampedRecord, samplerRecord; SM 2.1). A log
-// reader's or the bridge's times come from transcripts and heartbeats.
-func stamps(e *event.Event) bool {
+// cutBy returns the t of the latest record the agent stamped itself
+// (stamps) that comes after the carry's records of the presence sampler's
+// and before the sampler's next record: the carry's (carry.Stamped), and
+// the window's that come before the window's first record of the
+// sampler's in record order. pkg/score ends a record's reach only for such
+// a record dated more than BUCKET_TTL_S after it (sampledReaches), so a
+// silence of the sampler's longer than Lookback that ends with a sample,
+// or a suspend that long, keeps the carried record's reach, as one Step
+// over every record does. A stamped record after the window's first
+// record of the sampler's can end only that one's reach or a later one's,
+// which the window holds itself.
+func (w *window) cutBy() int64 {
+	var first *event.Event
+	for i := range w.recs {
+		if e := &w.recs[i].ev; sampler(e) && (first == nil || recordCmp(e, first) < 0) {
+			first = e
+		}
+	}
+	at := w.carry.Stamped
+	for i := range w.recs {
+		if e := &w.recs[i].ev; stamps(e) && (first == nil || recordCmp(e, first) < 0) {
+			at = max(at, e.T)
+		}
+	}
+	return at
+}
+
+// sampler reports whether e is a record of the presence sampler's, an
+// os.presence or an os.power, as pkg/score's samplerRecord does.
+func sampler(e *event.Event) bool {
 	switch e.Data.(type) {
 	case *event.OSPresence, *event.OSPower:
+		return true
+	}
+	return false
+}
+
+// stamps reports whether the agent stamped e's t itself, by a hook, its own
+// watchers or an agent app's reader, and e isn't a record of the presence
+// sampler's (sampler): the records that, dated more than BUCKET_TTL_S
+// after one of the sampler's and before its next, end that record's reach,
+// as pkg/score reads them (stampedRecord, sampledReaches; SM 2.1). A log
+// reader's or the bridge's times come from transcripts and heartbeats.
+func stamps(e *event.Event) bool {
+	if sampler(e) {
 		return false
 	}
 	switch e.Via {
@@ -166,9 +196,10 @@ type carry struct {
 	Presence *event.Event             `json:"presence,omitempty"`
 	Sessions map[string]*sessionCarry `json:"sessions,omitempty"`
 	// Stamped is the t of the latest record folded in that the agent
-	// stamped itself and isn't the sampler's (stamps): what ends the reach
-	// of the sampler's records, Power and Presence, once it is dated more
-	// than BUCKET_TTL_S after them.
+	// stamped itself and isn't the sampler's (stamps). Dated more than
+	// BUCKET_TTL_S after the sampler's records the carry holds, Power and
+	// Presence, it comes after them and before the window, so before the
+	// sampler's next record, and it ends their reach (window.cutBy).
 	Stamped int64 `json:"stamped,omitempty"`
 }
 
@@ -370,12 +401,16 @@ func (c *carry) prune(from int64) {
 //     turn ends the run before from, and no later record starts it again.
 //
 // A record of the sampler's, Power or Presence, whose reach ended goes
-// nowhere: stamped, the latest record the agent stamped itself that isn't
-// the sampler's, of the carry's and the window's, is dated more than ttl,
-// BUCKET_TTL_S, after its own time. pkg/score takes the slots after such a
-// record for a never-sampling device's and lets it keep no clock (SM 2.1),
-// and dated again at from minus carryGraceMS it would look like a sample
-// the agent took then.
+// nowhere: stamped, the latest record the agent stamped itself between
+// the carry's records of the sampler's and the sampler's next record
+// (window.cutBy), is dated more than ttl, BUCKET_TTL_S, after its own time.
+// pkg/score takes the slots after such a record for a never-sampling
+// device's and lets it keep no clock (SM 2.1), and dated again at from
+// minus carryGraceMS it would look like a sample the agent took then. That
+// cut has taken effect: pkg/score waits PENDING_WINDOW_S - READ_HORIZON_S
+// after it before it does, keeping FinalBefore at the sampler's record
+// meanwhile, and a record is carried only once FinalBefore is Lookback
+// past it.
 func (c *carry) records(out []event.Event, from int64, g runGaps, stamped, ttl int64) []event.Event {
 	grace := from - carryGraceMS
 	for _, e := range []*event.Event{c.Focus, c.Power, c.Presence} {

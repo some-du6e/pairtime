@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -99,6 +100,33 @@ func TestHeadlessLoop(t *testing.T) {
 				}
 				return [][]event.Event{hookTurn(t, day[0].T-4*hourMS, tools), day}
 			}},
+		// In the next two, the first turn's run ends BUCKET_TTL_S after its
+		// last tool call, before the window's start once the agent records
+		// again, so the window slides past the sampler's last records at
+		// once, while the minutes before it are still pending.
+		{"a sampler silence longer than Lookback that ends with a sample before any record the agent stamps, as when the agent starts again ten hours later, keeps the carried sample's reach: the hours between are asleep, as one Step reads them",
+			func(t *testing.T) [][]event.Event {
+				first := hookTurn(t, hookAt, hourTools())
+				again := hookAt + 10*hourMS
+				second := rekeyed(hookTurn(t, again+70_000, hourTools()), 1)
+				idle := 585.0
+				woke := sampleAt(first, again, "01a1fb1e-5318-78a1-a7f0-000000000001",
+					&event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle})
+				return [][]event.Event{first, append([]event.Event{woke}, second...)}
+			}},
+		{"a suspend longer than Lookback keeps the carried suspend's reach once the window slides past it: the ten hours the machine slept are asleep, as one Step reads them",
+			func(t *testing.T) [][]event.Event {
+				first := hookTurn(t, hookAt, hourTools())
+				last := first[len(first)-1].T
+				asleep := sampleAt(first, last+15_000, "01a1fb1e-5318-78a1-a7f0-000000000002",
+					&event.OSPower{Op: event.PowerSuspend})
+				resume := last + 15_000 + 10*hourMS
+				woke := sampleAt(first, resume, "01a1fb1e-5318-78a1-a7f0-000000000003",
+					&event.OSPower{Op: event.PowerResume})
+				second := rekeyed(hookTurn(t, resume+70_000, hourTools()), 2)
+				run := append(append(append(first, asleep), woke), second...)
+				return [][]event.Event{run}
+			}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -151,6 +179,55 @@ func TestHeadlessLoop(t *testing.T) {
 			}
 		})
 	}
+}
+
+// hookAt is when the turns of TestHeadlessLoop's sampled cases start, in
+// Unix ms: 6.4's day, as hookTurn's records are.
+const hookAt = int64(1_795_214_400_000)
+
+// hourTools returns the times of a tool call every five minutes for an
+// hour after a hookTurn's prompt, in ms after it.
+func hourTools() []int64 {
+	var tools []int64
+	for m := int64(5); m <= 60; m += 5 {
+		tools = append(tools, m*minuteMS)
+	}
+	return tools
+}
+
+// rekeyed returns evs, a hookTurn's records, as a turn of a session of its
+// own: event ids of their own, numbered by n, and session and turn keys
+// that differ from the ones hookTurn gives.
+func rekeyed(evs []event.Event, n int) []event.Event {
+	out := slices.Clone(evs)
+	for i := range out {
+		e := &out[i]
+		e.EventID = fmt.Sprintf("01a1fb1e-5318-78a1-a7%02x-%012x", 0x81+n, i+1)
+		if e.SessionKey != event.NoSession {
+			e.SessionKey += "x"
+		}
+		if p, ok := e.Data.(*event.PromptSubmit); ok {
+			q := *p
+			q.TurnKey += "x"
+			e.Data = &q
+		}
+	}
+	return out
+}
+
+// sampleAt returns another record of the presence sampler's like the first
+// sample in evs, dated ts, with event id id and payload d.
+func sampleAt(evs []event.Event, ts int64, id string, d event.Payload) event.Event {
+	for _, e := range evs {
+		if _, ok := e.Data.(*event.OSPresence); ok {
+			e.EventID = id
+			e.Mono += ts - e.T
+			e.T = ts
+			e.Data = d
+			return e
+		}
+	}
+	panic("no presence sample to copy")
 }
 
 // savedCursor returns the place state.json holds.
