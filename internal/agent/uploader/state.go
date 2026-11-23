@@ -462,8 +462,8 @@ func waitedOut(spans []span, sealed, lag int64) bool {
 // after reading the rows, so they read the same minutes.
 func (st saved) prepare(rows *rowIndex) {
 	if st.Foreign > 0 {
-		for b := max(st.Next, 1); b <= min(st.Foreign, rows.last()); b++ {
-			rows.times[b-1].received, rows.times[b-1].unchecked = 0, false
+		for b := max(st.Next, rows.start()); b <= min(st.Foreign, rows.last()); b++ {
+			rows.forgetReceipt(b)
 		}
 	}
 	for b, wr := range st.Unchecked {

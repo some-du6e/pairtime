@@ -1076,8 +1076,8 @@ func (u *Uploader) sync(c Credentials) bool {
 		// first receipts stay (receipt). A link's gap, which Next goes past
 		// by design, says nothing of the kind.
 		cutoff := int64(0)
-		if head >= 1 && head <= u.rows.last() {
-			cutoff = u.rows.times[head-1].sealedMax - time.Hour.Milliseconds()
+		if u.rows.holdsRow(head) {
+			cutoff = u.rows.at(head).sealedMax - time.Hour.Milliseconds()
 		}
 		from := store.DayOf(cutoff)
 		maps.DeleteFunc(u.st.Marks, func(day string, _ store.Mark) bool { return day >= from })
