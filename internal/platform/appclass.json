@@ -101,6 +101,18 @@
       "cite": "SM 3.2 (agent desktop app: Claude desktop's Code tab); HS 3.2 (desktop app transcripts); HS 6.5 (originator codex_desktop)"
     },
     {
+      "names": ["t3"],
+      "app_class": "other",
+      "role": "app_server",
+      "cite": "SM 1.2 (agent_app: an agent app's own server process, such as T3 Code's t3 serve); SM 2.2 rules 4 and 9; DESIGN 5.1. T3 Code (pingdotgg/t3code, read at d8f3feff on 2026-11-23) runs its server as the t3 executable it installs in <T3 home>/runtime/versions/<version>, which its npm launcher and its background service start (scripts/npm-launcher/t3.mjs; apps/server/src/serviceLauncher.ts). It owns no window"
+    },
+    {
+      "names": ["t3code", "t3 code", "t3 code (beta)", "t3 code (nightly)"],
+      "app_class": "agent_app",
+      "role": "app_server",
+      "cite": "SM 3.2 rule 3 (T3 Code's window hosts every session its own server drives); SM 1.2 (agent_app); DESIGN 5.1. T3 Code's desktop app is t3code on Linux and its product name, T3 Code (Beta) or T3 Code (Nightly), on macOS and Windows (scripts/build-desktop-artifact.ts at d8f3feff). It runs its server as its own executable with ELECTRON_RUN_AS_NODE=1, and so does the t3 command it installs (apps/desktop/src/backend/DesktopBackendConfiguration.ts; apps/desktop/src/app/DesktopCliShim.ts), so a session under it is its server's"
+    },
+    {
       "names": ["chatgpt"],
       "app_class": "chat_app",
       "role": "none",

@@ -447,3 +447,14 @@ func (k *Keys) Cron(session, prefix string) string { return k.key("c", "cron", s
 // session, turn, subagent or scheduled prompt key equals it, and it never
 // leaves the device.
 func (k *Keys) Memory() string { return k.key("m", "memory") }
+
+// App returns the key of one of an agent app's own ids: r and the HMAC over
+// its domain, the app (as pkg/event names it, such as "t3_code"), the kind
+// of id and the id's parts (DESIGN 4.1 E-12). An app's thread, run and
+// message ids enter pairtime only so: a relay.message's thread_key is the
+// app's thread key, and the app's reader keeps its cursor and the rows and
+// runs it watches by key alone (internal/adapters/t3code). The kind keeps
+// a thread and a message with the same id apart.
+func (k *Keys) App(app, kind string, id ...string) string {
+	return k.key("r", "app", append([]string{app, kind}, id...)...)
+}

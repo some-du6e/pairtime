@@ -20,6 +20,7 @@ type Status struct {
 	IPC       IPC       `json:"ipc"`
 	Signals   Signals   `json:"signals"`
 	Adapters  Adapters  `json:"adapters"`
+	Apps      Apps      `json:"apps"`
 	Footprint Footprint `json:"footprint"`
 	// Problems is what isn't working, by where it comes from, in words for
 	// the teen.
@@ -119,4 +120,36 @@ type HarnessCounts struct {
 	// it couldn't fully read (WP-AD3).
 	Lines        uint64 `json:"lines,omitempty"`
 	LineFailures uint64 `json:"line_failures,omitempty"`
+}
+
+// Apps is what the agent reads of the agent apps whose own stores it reads
+// (DESIGN 3.3, 5.1).
+type Apps struct {
+	// T3Code is how the agent's reader of T3 Code's store is doing: nil
+	// before its first read, and from an agent older than the reader.
+	T3Code *T3Code `json:"t3_code,omitempty"`
+}
+
+// T3Code is how the agent's reader of T3 Code's message store is doing, as
+// its last read left it. It names no path (DESIGN 5.9).
+type T3Code struct {
+	// Reading says the last read worked, and Off why it didn't: no_store,
+	// not_running, no_sqlite3, schema or failed. Problem says more of a
+	// schema the probe refused or a read that failed.
+	Reading bool   `json:"reading"`
+	Off     string `json:"off,omitempty"`
+	Problem string `json:"problem,omitempty"`
+	// Newer says T3's schema is newer than the one the reader was tested
+	// against, which it reads anyway.
+	Newer bool `json:"newer,omitempty"`
+	// Witnessed counts today's messages that T3 says a person sent and the
+	// reader recorded, Paired its records that paired with a prompt, and
+	// Aged the messages its age test turned away, read too long after they
+	// were sent.
+	Witnessed int `json:"witnessed"`
+	Paired    int `json:"paired"`
+	Aged      int `json:"aged"`
+	// SessionAt is when a session that an agent app's server started last
+	// reached the agent, in Unix ms, 0 for never.
+	SessionAt int64 `json:"session_at,omitempty"`
 }

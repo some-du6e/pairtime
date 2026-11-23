@@ -10,8 +10,9 @@
 // when the agent is down (packages ipc and inbox), WP-AG3 what the agent
 // makes of each hook call (hooks.go, package hookpath), WP-OS8 the
 // notifier that shows the coach's notification, WP-AG4 the scorer loop
-// and the stores it writes (packages scorer and store), and WP-AG5 the
-// uploader (package uploader). The other
+// and the stores it writes (packages scorer and store), WP-AG5 the
+// uploader (package uploader), and WP-ADE1 the apps component, which reads
+// T3 Code's store (apps.go, package internal/adapters/t3code). The other
 // components of DESIGN 3.3 arrive in later work packages, each as a
 // package under internal/agent that Run starts.
 package agent
@@ -102,9 +103,10 @@ type Options struct {
 	// under the processes the capture recorded.
 	Walk func(pid int) []platform.Proc
 	// Env, when set, replaces the machine whose harness logs the tailers
-	// read (adapters.LogReader.LogRoots), which is this one otherwise: the
-	// home folder and environment the agent runs with. Tests point it at
-	// a folder of their own.
+	// read (adapters.LogReader.LogRoots), and whose agent apps' stores the
+	// apps component reads (t3code.Locate), which is this one otherwise:
+	// the home folder and environment the agent runs with. Tests point it
+	// at a folder of their own.
 	Env *install.Env
 	// Lookback starts lookback's reader, a child process that reads the
 	// harnesses' logs from before pairtime at low priority
@@ -177,6 +179,11 @@ type agent struct {
 	// adaptersHost makes it on first use.
 	adapt     *adapterHost
 	adaptOnce sync.Once
+	// apps reads the agent apps' own stores, T3 Code's, for the
+	// relay.message records SM 2.2 rule 9 reads and the prompts a guest's
+	// message started (apps.go; WP-ADE1). appsHost makes it on first use.
+	apps     *appsHost
+	appsOnce sync.Once
 	// ledgerIn takes presence's and focus's records, and presence's
 	// seals, to the ledger writer once it opens (WP-LG5).
 	ledgerIn *ledger.Presence
@@ -279,9 +286,9 @@ func Run(ctx context.Context, opts Options) error {
 
 	// Each part that starts adds the step that stops it, and they stop in
 	// reverse order: the HTTP server, port.json, the socket and the inbox,
-	// focus, the process scan, the config watch, presence, the OS's
-	// sources, the ledger, the scorer, which scores the ledger's last seal,
-	// the scheduler, the notifier, state.json.
+	// the adapters, the apps, focus, the process scan, the config watch,
+	// presence, the OS's sources, the ledger, the scorer, which scores the
+	// ledger's last seal, the scheduler, the notifier, state.json.
 	var closers []func()
 	defer func() {
 		for i := len(closers) - 1; i >= 0; i-- {
@@ -329,6 +336,9 @@ func Run(ctx context.Context, opts Options) error {
 	a.newFocus(src.focus)
 	closers = append(closers, a.startProcs())
 	closers = append(closers, a.startFocus())
+	// Before the adapters, and stopped after them: their last step can
+	// still ask T3 Code's reader about a prompt.
+	closers = append(closers, a.startApps(opts))
 	closers = append(closers, a.startAdapters())
 	closers = append(closers, a.startIPC(opts))
 	// After the socket, and stopped before it: the tailers' lines go to

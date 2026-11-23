@@ -35,6 +35,8 @@ func fullStatus() statusReply {
 			Loop: &loopReply{MainThread: true, Dropped: 1}},
 		Adapters: adaptersReply{Harnesses: map[event.Harness]harnessStats{event.HarnessClaudeCode: stats}, Other: stats,
 			Waiting: 1, Dropped: 2, Git: gitReply{Watched: 1, Changes: 2}},
+		Apps: appsReply{T3Code: &t3Reply{Reading: true, Off: "schema", Problem: "T3 Code's table x has no column y", Newer: true,
+			Day: "2026-11-24", Witnessed: 1, Paired: 2, Aged: 3, SessionAt: at.UnixMilli()}},
 		Footprint: footprintReply{RSSBytes: 1, PeakRSSBytes: 2, CPUS: 3},
 		Problems:  map[string]string{"ledger": "the ledger can't open"},
 	}

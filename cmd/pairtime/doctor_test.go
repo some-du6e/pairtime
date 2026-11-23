@@ -39,12 +39,13 @@ func swap[T any](t *testing.T, p *T, v T) {
 	t.Cleanup(func() { *p = old })
 }
 
-// newDoctorHome is newHome on a computer where doctor finds no harness, so
-// the tests of the agent's lines never read the settings or run the hooks
-// of the machine they run on.
+// newDoctorHome is newHome on a computer where doctor finds no harness and
+// no T3 Code, so the tests of the agent's lines never read the settings or
+// run the hooks of the machine they run on.
 func newDoctorHome(t *testing.T) fakeHome {
 	t.Helper()
 	swap(t, &doctorHooks, func() []doctor.Hooks { return nil })
+	swap(t, &doctorT3, func() doctor.T3Facts { return doctor.T3Facts{} })
 	swap(t, &doctorRoundTrips, func(string, string, int) ([]time.Duration, error) {
 		t.Error("doctor timed a hook with none installed")
 		return nil, errors.New("no hook")
@@ -1080,6 +1081,7 @@ func TestDoctorOfARealAgent(t *testing.T) {
 	})
 	waitForAgent(t, ptHome)
 	swap(t, &doctorHooks, func() []doctor.Hooks { return nil })
+	swap(t, &doctorT3, func() doctor.T3Facts { return doctor.T3Facts{} })
 	swap(t, &doctorReportSpan, 2*time.Second)
 	// The report times this binary's start as pairtime's. Set only now:
 	// the agent's process took its own runEnv, and the first one in an
@@ -1178,6 +1180,57 @@ func TestDoctorHookLine(t *testing.T) {
 			}
 			if code != tt.wantCode {
 				t.Errorf("doctor exits %d, want %d", code, tt.wantCode)
+			}
+		})
+	}
+}
+
+// TestDoctorT3Facts runs readDoctorT3 on a home folder of the test's own:
+// it finds T3 Code's store where the agent looks for it, and counts the
+// Claude instances T3 runs Claude Code in with a Claude home of their own
+// whose settings hold none of pairtime's hooks (DESIGN 5.1, 5.9).
+func TestDoctorT3Facts(t *testing.T) {
+	const hook = `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"/opt/pairtime/pairtime",` +
+		`"args":["hook","--harness","claude_code","--event","UserPromptSubmit"]}]}]}}`
+	const instances = `{"providerInstances":{` +
+		`"own":{"driver":"claudeAgent","config":{"homePath":"~/claude-own"}},` +
+		`"hooked":{"driver":"claudeAgent","config":{"homePath":"~/claude-hooked"}},` +
+		`"default":{"driver":"claudeAgent","config":{"homePath":"~/.claude"}}}}`
+	tests := []struct {
+		name string
+		// files are by slash path under the home folder.
+		files map[string]string
+		want  doctor.T3Facts
+	}{
+		{"a home folder with no T3 Code store has no T3 Code", nil, doctor.T3Facts{}},
+		{"a store with no settings beside it is T3 Code with no Claude home of its own",
+			map[string]string{".t3/userdata/statev2.sqlite": ""}, doctor.T3Facts{Found: true}},
+		{"a home of its own without pairtime's hooks counts, and one with them or Claude Code's own default doesn't",
+			map[string]string{".t3/userdata/statev2.sqlite": "", ".t3/userdata/settings.json": instances,
+				"claude-hooked/settings.json": hook, ".claude/settings.json": "{}"},
+			doctor.T3Facts{Found: true, OwnHomes: 1}},
+		{"settings that don't read leave doctor unable to tell",
+			map[string]string{".t3/userdata/statev2.sqlite": "", ".t3/userdata/settings.json": "{"},
+			doctor.T3Facts{Found: true, Unread: true}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			for k, v := range map[string]string{"HOME": homeDir, "USERPROFILE": homeDir, "T3CODE_HOME": "", "CLAUDE_CONFIG_DIR": "",
+				"XDG_CONFIG_HOME": filepath.Join(homeDir, ".config")} {
+				t.Setenv(k, v)
+			}
+			for name, content := range tt.files {
+				p := filepath.Join(homeDir, filepath.FromSlash(name))
+				if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := readDoctorT3(); got != tt.want {
+				t.Errorf("readDoctorT3() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}

@@ -106,6 +106,14 @@ part(x)   = u32be(len(utf8(x))) || utf8(x)
 
 `session` is the harness's own session id, `id` a turn's id (Claude Code's `prompt_id`, which its transcripts and OTel share) or a subagent's (`agent_id`), and `prefix` a scheduled prompt as a `Stop` hook lists it in `session_crons`, without the `… [+N chars]` marker Claude Code puts after a prompt it cut and, in a cut prompt, without any U+FFFD left at the end, which is what a cut through a UTF-16 surrogate pair leaves, and at most its first 1,000 code points. Claude Code cuts at 1,000 UTF-16 units, so a cut prompt with characters outside the Basic Multilingual Plane keeps fewer code points. The keys go in `turn_key`, `agent_key` and `pending_crons[].prefix_hash`. None depends on the harness, so, as with the session key, the copies of one turn that two harnesses make have one key. `TestKeys` in `internal/adapters` pins a vector for each, the memory key's too, and `TestPendingCrons` in `internal/adapters/claudecode` pins `prefix` for cut prompts, all computed apart from the code.
 
+An agent app's reader keys the app's own ids under `K_session` too, over a domain of its own (`internal/adapters`, WP-ADE1; DESIGN 4.1 E-12):
+
+```text
+app key   = "r" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/app") || 0x00 || part(app) || part(kind) || part(id_1) || ... || part(id_n))[0:16])
+```
+
+`app` is the app as `relay.message` names it (`t3_code`), `kind` says which of its ids it is, and `id_1` to `id_n` are the id's parts. A `relay.message`'s `thread_key` is the app key of kind `thread` over the app's thread id. The T3 Code reader also keys, under kinds of their own, the message id its cursor rests on and the messages and runs it watches, which it keeps in `state.json` by key alone, and derives each record's `event_id` from the key of kind `record` over the message id and its stamp, so a row read again after a crash makes the same record; none of those leaves the device as a key. `TestKeys` pins a vector for one part and for two.
+
 The agent saves the adapters' memory of their sessions in `state.json` beside the key of the `K_session` it was made under, so memory from under another device key, as after a restore, is left behind. That key is over a domain of its own, so no session, turn, subagent or scheduled prompt has it, and it never leaves the device (`internal/agent`, WP-AG7):
 
 ```text

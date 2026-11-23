@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/some-du6e/pairtime/main/docs/schema/cli-doctor.schema.json",
   "title": "pairtime doctor --json",
-  "description": "The checks `pairtime doctor` prints, one per line of its text, as `pairtime doctor --json` prints them (docs/PLAN.md WP-AG6; DESIGN 5.9). Each check has a name, a result and the text its line shows: what doctor found and, when something is wrong, the one thing to do about it. The idle, focus, adapter and spool checks read the running agent's status (GET /v1/status, which doctor asks over the agent's socket), never the terminal doctor runs in; with no agent to ask they are skipped. The other checks read this computer: each installed harness's hooks and a test call of them, the keystore, the binary's signature. Then comes one check for each problem the agent reports, in its words. doctor exits 1 when a check failed. cmd/pairtime's tests check `pairtime doctor --json` against this file.",
+  "description": "The checks `pairtime doctor` prints, one per line of its text, as `pairtime doctor --json` prints them (docs/PLAN.md WP-AG6; DESIGN 5.9). Each check has a name, a result and the text its line shows: what doctor found and, when something is wrong, the one thing to do about it. The idle, focus, adapter and spool checks read the running agent's status (GET /v1/status, which doctor asks over the agent's socket), never the terminal doctor runs in; with no agent to ask they are skipped. The other checks read this computer: each installed harness's hooks and a test call of them, the keystore, the binary's signature. The app.t3_code check reads both, the agent's reader of T3 Code's store and T3 Code's settings on this computer, and names no path. Then comes one check for each problem the agent reports, in its words. doctor exits 1 when a check failed. cmd/pairtime's tests check `pairtime doctor --json` against this file.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -38,10 +38,11 @@
         "name": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z0-9_-]+)*$",
-          "description": "What was checked: agent, idle, focus, macos-loop, hook.<harness>, trust.<harness>, adapter.<harness>, adapter.other, signing, keystore, spool, or problem.<source> for a problem the agent reports, such as problem.uploader.",
+          "description": "What was checked: agent, idle, focus, macos-loop, hook.<harness>, trust.<harness>, adapter.<harness>, adapter.other, app.<app> for an agent app whose store the agent reads, such as app.t3_code, signing, keystore, spool, or problem.<source> for a problem the agent reports, such as problem.uploader.",
           "examples": [
             "agent",
             "hook.claude_code",
+            "app.t3_code",
             "problem.adapters.held"
           ]
         },

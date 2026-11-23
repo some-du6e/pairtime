@@ -193,6 +193,11 @@ func TestLookup(t *testing.T) {
 		{"conhost isn't listed, since it never owns a console window or starts a process", Windows, "conhost.exe", false, "", ""},
 		{"claude is Claude Code", Linux, "claude", true, RoleHarness, event.AppTerminal},
 		{"the desktop app is not Claude Code", Darwin, "claude-desktop", true, RoleDesktop, event.AppAgentApp},
+		{"T3 Code's t3 is an agent app's server, which owns no window (SM 1.2, agent_app)", Linux, "t3", true, RoleAppServer, event.AppOther},
+		{"t3.exe is T3 Code's server on Windows too", Windows, "t3.exe", true, RoleAppServer, event.AppOther},
+		{"T3 Code's desktop app on Linux is an agent app's window and runs its server too", Linux, "t3code", true, RoleAppServer, event.AppAgentApp},
+		{"T3 Code's desktop app goes by its product name on macOS", Darwin, "T3 Code (Beta)", true, RoleAppServer, event.AppAgentApp},
+		{"T3 Code's nightly desktop app goes by its product name on Windows", Windows, "T3 Code (Nightly).exe", true, RoleAppServer, event.AppAgentApp},
 		{"an unknown name isn't found", Linux, "gen_prompt.py", false, "", ""},
 		{"an empty name isn't found", Linux, "", false, "", ""},
 	}
@@ -225,6 +230,8 @@ func TestAppClassOf(t *testing.T) {
 		{"Neovim is an editor", Linux, "nvim", event.AppEditor},
 		{"Helix is an editor", Darwin, "hx", event.AppEditor},
 		{"Devin Desktop is an editor", Linux, "devin-desktop", event.AppEditor},
+		{"T3 Code's desktop window is an agent app's (SM 3.2 rule 3)", Windows, "T3 Code (Beta).exe", event.AppAgentApp},
+		{"T3 Code's server owns no window, so a console that shows its log is other", Windows, "t3.exe", event.AppOther},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -267,6 +274,10 @@ func TestExeName(t *testing.T) {
 		{"a macOS app's main executable called Devin is Devin Desktop", Darwin, "/Applications/Devin.app/Contents/MacOS/Devin", "devin-desktop"},
 		{"the Devin CLI inside the app bundle is devin", Darwin, "/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin", "devin"},
 		{"the Devin CLI on Linux is devin", Linux, "/home/u/.local/bin/devin", "devin"},
+		{"the t3 that T3 Code installs in a version directory of its own is t3", Linux, "/home/u/.t3/runtime/versions/0.1.9/t3", "t3"},
+		{"T3 Code's t3.exe is t3", Windows, `C:\Users\u\.t3\runtime\versions\0.1.9\t3.exe`, "t3"},
+		{"T3 Code's desktop app on macOS is its bundle's executable, its product name", Darwin, "/Applications/T3 Code (Beta).app/Contents/MacOS/T3 Code (Beta)", "T3 Code (Beta)"},
+		{"T3 Code's desktop app on Linux is t3code, in an AppImage's mount too", Linux, "/tmp/.mount_T3-CodXYZ/t3code", "t3code"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

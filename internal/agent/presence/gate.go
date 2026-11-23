@@ -59,6 +59,10 @@ type gate struct {
 	// procs is how many harness session processes the process scanner
 	// counted last (WP-OS6).
 	procs int
+	// apps is how many agent apps that drive harness sessions, such as T3
+	// Code's server, the apps component found running last
+	// (D-relayed-context).
+	apps int
 	// focused is set while a terminal, editor or agent app has focus.
 	focused bool
 	// unfocused is when one last lost focus; zero if none has.
@@ -145,6 +149,12 @@ func (g *gate) setProcs(n int) {
 	g.procs = max(n, 0)
 }
 
+// setApps records the apps component's count of running agent apps that
+// drive harness sessions.
+func (g *gate) setApps(n int) {
+	g.apps = max(n, 0)
+}
+
 // sampled records a sample taken at now that showed idle since the last
 // input. The OS's latest reading wins, even when it moves the input back,
 // because the OS is the authority on its own input queue.
@@ -176,12 +186,16 @@ func (g *gate) interval(now time.Time) time.Duration {
 }
 
 // live reports whether a project context is live at now: a harness session
-// process is running, or a terminal, editor or agent app has focus or had
-// it in the last ContextWindow (DESIGN 3.3). A session heard from through
-// hooks counts as running for ContextWindow after its last hook, and for
-// as long as its turn runs.
+// process is running, an agent app that drives harness sessions is running,
+// or a terminal, editor or agent app has focus or had it in the last
+// ContextWindow (DESIGN 3.3). A session heard from through hooks counts as
+// running for ContextWindow after its last hook, and for as long as its
+// turn runs. An agent app counts for as long as it runs, since a message
+// can come from its phone app at any moment, and a stretch the message's
+// lead or its reading reaches that went unsampled would read as slept
+// through (D-relayed-context).
 func (g *gate) live(now time.Time) bool {
-	if g.procs > 0 || g.focused || recent(now, g.unfocused, ContextWindow) {
+	if g.procs > 0 || g.apps > 0 || g.focused || recent(now, g.unfocused, ContextWindow) {
 		return true
 	}
 	for _, s := range g.sessions {

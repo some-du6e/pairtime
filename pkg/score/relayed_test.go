@@ -1450,6 +1450,24 @@ func TestRelayedPresence(t *testing.T) {
 				{15, 45, map[event.Reason]int64{xAbsent: 30}},
 				{45, 60, map[event.Reason]int64{rP: 15}},
 			}},
+		{"a phone message's lead is realized in minutes sampled once a minute with no input, as the agent samples them while an agent app's server runs (D-relayed-context)",
+			func(b *tl) {
+				appWindow(b)
+				phone(b)
+				for _, s := range []int64{0, 60, 120, 180} {
+					b.sample(at(s))
+				}
+			},
+			[]secondsWant{{0, 60, map[event.Reason]int64{rP: 60}}}},
+		{"but in minutes nothing sampled, as when the desktop's context had ended, it reads as slept through and stays X.absent",
+			func(b *tl) {
+				appWindow(b)
+				phone(b)
+				b.sample(at(-600))
+				b.sample(at(61))
+				b.samples(at(75), at(180))
+			},
+			[]secondsWant{{0, 60, map[event.Reason]int64{xAbsent: 60}}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

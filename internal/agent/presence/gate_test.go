@@ -38,6 +38,12 @@ func procs(n int) func(*gate, time.Time) {
 	return func(g *gate, _ time.Time) { g.setProcs(n) }
 }
 
+// apps is the apps component's count of running agent apps that drive
+// harness sessions (Sampler.AgentApps).
+func apps(n int) func(*gate, time.Time) {
+	return func(g *gate, _ time.Time) { g.setApps(n) }
+}
+
 // sampled is a sample at the step's moment that shows idle since the last
 // input.
 func sampled(idle time.Duration) func(*gate, time.Time) {
@@ -132,6 +138,38 @@ func TestGate(t *testing.T) {
 			steps: []step{
 				{at: 0, do: procs(1)}, want(s(5000), fast),
 				{at: s(5000), do: procs(0)}, want(s(5000), 0),
+			},
+		},
+		{
+			name: "a running agent app that drives sessions is a project context for as long as it runs, as a harness process is (D-relayed-context)",
+			steps: []step{
+				{at: 0, do: apps(1)}, want(s(5000), fast),
+				{at: s(5000), do: apps(0)}, want(s(5000), 0),
+			},
+		},
+		{
+			name: "a running agent app keeps the context live after a terminal's 600 s, so a phone message's lead is sampled",
+			steps: []step{
+				{at: 0, do: focus(event.AppTerminal)},
+				{at: s(5), do: apps(1)},
+				{at: s(10), do: focus(event.AppBrowser)},
+				{at: s(10), do: sampled(0)},
+				want(s(609), fast),
+				want(s(610), slow),
+				want(s(3600), slow),
+				{at: s(3600), do: apps(0)},
+				want(s(3600), 0),
+			},
+		},
+		{
+			name: "an agent app's context slows to every 60 s after 600 s with no input, as any context does",
+			steps: []step{
+				{at: 0, do: apps(1)},
+				{at: 0, do: sampled(0)},
+				want(s(599), fast),
+				want(s(600), slow),
+				{at: s(700), do: sampled(s(5))},
+				want(s(700), fast),
 			},
 		},
 		{

@@ -4,9 +4,10 @@
 // 3.3). It samples the OS's input idle time into os.presence records and
 // turns suspend, resume, lock and unlock into os.power records, but only
 // while a project context is live: a harness session process is running,
-// or a terminal, editor or agent app had focus in the last 600 s. Outside
-// one, nothing is sampled or recorded, so pairtime never records general
-// computer use (D14).
+// an agent app that drives harness sessions is running, or a terminal,
+// editor or agent app had focus in the last 600 s. Outside one, nothing is
+// sampled or recorded, so pairtime never records general computer use
+// (D14).
 //
 // In a context it samples on every 15-second slot boundary of the wall
 // clock (:00, :15, :30, :45), because SM 2.1 decides each slot's input
@@ -23,8 +24,9 @@
 // Windows. On macOS and Linux presence shares one connection to the OS
 // with the focus component, so the agent opens it and builds the sources
 // with MacOS or LinuxOS (WP-OS9). The focus watcher (WP-OS2), the process
-// scanner (WP-OS6) and the hook path (WP-AG3) report to a Sampler through
-// FocusAt, HarnessProcesses and Hook.
+// scanner (WP-OS6), the hook path (WP-AG3) and the apps component (WP-ADE1)
+// report to a Sampler through FocusAt, HarnessProcesses, Hook and
+// AgentApps.
 package presence
 
 import (
@@ -181,9 +183,9 @@ func New(opts Options) *Sampler {
 
 // Start starts the power watches, reads the session's lock state and
 // starts sampling. A source that fails is reported through
-// Options.Problem, and the sampler carries on without it. Focus, Hook and
-// HarnessProcesses may come before Start: the gate keeps what they report,
-// and sampling starts with Start.
+// Options.Problem, and the sampler carries on without it. Focus, Hook,
+// HarnessProcesses and AgentApps may come before Start: the gate keeps
+// what they report, and sampling starts with Start.
 //
 // With no idle source, presence is unknown (SM 2.1), so Start starts the
 // power watches and nothing else: nothing is sampled or recorded, but every
@@ -351,6 +353,17 @@ func (s *Sampler) Forget(session string) {
 // context live.
 func (s *Sampler) HarnessProcesses(n int) {
 	s.update(func(time.Time) { s.g.setProcs(n) }, false)
+}
+
+// AgentApps reports how many agent apps that drive harness sessions are
+// running, as the apps component found them: for T3 Code, its server, which
+// runs while it holds its store's -wal file open (DESIGN 3.3). Any makes a
+// project context live, as a harness session process does. A message from
+// the app's phone or web client credits minutes before it and after it,
+// and without samples there the scorer would read them as slept through
+// (D-relayed-context).
+func (s *Sampler) AgentApps(n int) {
+	s.update(func(time.Time) { s.g.setApps(n) }, false)
 }
 
 // Power reports a suspend, resume, lock or unlock. The OS's watcher calls

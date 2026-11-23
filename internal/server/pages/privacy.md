@@ -49,6 +49,8 @@ None of it is uploaded, except in two cases you control. When you submit hours, 
 
 If you also use Hackatime, your editor keeps sending Hackatime what it sent before. pairtime adds nothing to it and removes nothing from it.
 
+If you use T3 Code, pairtime also reads the messages T3 Code keeps on your computer, so it can credit the ones you send from T3 Code's desktop app, a browser or your phone. It reads a message's text only to measure its length and what kind of prompt it is, and keeps none of it. A message from a guest you shared a T3 Code thread with reaches your agent as a prompt with the guest's name and words in it. While pairtime can read T3 Code's messages, it keeps none of that prompt's text either. When it can't read them, as on a computer without the `sqlite3` tool, or can't tell that a prompt came from T3 Code, as with one sent while pairtime's agent wasn't running, it keeps that prompt as it keeps any other.
+
 ## What this server receives
 
 About once a minute while you work, your computer uploads these:

@@ -249,7 +249,7 @@ components:
     Status:
       type: object
       additionalProperties: false
-      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs, ipc, signals, adapters, footprint]
+      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs, ipc, signals, adapters, apps, footprint]
       properties:
         version:
           $ref: "#/components/schemas/Version"
@@ -288,6 +288,8 @@ components:
           $ref: "#/components/schemas/Signals"
         adapters:
           $ref: "#/components/schemas/Adapters"
+        apps:
+          $ref: "#/components/schemas/Apps"
         footprint:
           $ref: "#/components/schemas/Footprint"
         problems:
@@ -296,10 +298,11 @@ components:
             What isn't working, keyed by where it comes from (`account`,
             `adapters.dropped`, `adapters.held`, `adapters.keys`,
             `adapters.ledger`, `adapters.pending`, `adapters.recover`,
-            `adapters.replay`, `config`, `config-watch`, `focus`, `git`,
-            `git.commits`, `git.ledger`, `ipc`, `keystore`, `ledger`,
-            `ledger.presence`, `notifications`, `port`, `presence`, `procs`,
-            `scorer`, `state`, `uploader`), in words for the teen. A value
+            `adapters.replay`, `apps`, `apps.ledger`, `config`,
+            `config-watch`, `focus`, `git`, `git.commits`, `git.ledger`,
+            `ipc`, `keystore`, `ledger`, `ledger.presence`, `notifications`,
+            `port`, `presence`, `procs`, `scorer`, `state`, `uploader`), in
+            words for the teen. A value
             can join several problems of one source with "; ", so it is
             shown whole. `pairtime doctor` prints each as a line of its own,
             but for `keystore`, whose warning its keystore line gives.
@@ -518,6 +521,72 @@ components:
             an entry of a type or with a value its harness's version doesn't
             write, a line too long to read. Their other records are still
             written. Absent when none.
+    Apps:
+      type: object
+      additionalProperties: false
+      description: >
+        The agent apps whose own stores the agent reads, which drive
+        harnesses for clients on other devices (DESIGN 3.3, 5.1). `pairtime
+        doctor` prints its T3 Code line from this (DESIGN 5.9).
+      properties:
+        t3_code:
+          $ref: "#/components/schemas/T3Code"
+    T3Code:
+      type: object
+      additionalProperties: false
+      required: [reading, day, witnessed, paired, aged]
+      description: >
+        How the reader of T3 Code's message store is doing, as its last
+        read left it, and what it read today. It names no path. Absent
+        until the reader's first read, which comes once the ledger is open.
+      properties:
+        reading:
+          type: boolean
+          description: The last read worked.
+        "off":
+          type: string
+          enum: [no_store, not_running, no_sqlite3, schema, failed]
+          description: >
+            Why the last read didn't work: no store where T3 Code keeps it,
+            T3 Code not running (no `-wal` file), no `sqlite3` on the
+            agent's PATH, a schema the probe refused, or a read that failed.
+            Absent while it reads.
+        problem:
+          type: string
+          description: >
+            More of a refused schema or a failed read, in words for doctor.
+            Absent when there is nothing more to say.
+        newer:
+          type: boolean
+          description: >
+            T3 Code's schema is newer than the one the reader was tested
+            against, and the reader reads it anyway. Absent when it isn't.
+        day:
+          type: string
+          format: date
+          description: The day the counts are for, in the agent's time zone.
+        witnessed:
+          type: integer
+          minimum: 0
+          description: >
+            The messages T3 Code says a person sent that the reader recorded
+            as `relay.message` records, declared `none`, that day.
+        paired:
+          type: integer
+          minimum: 0
+          description: The reader's records that paired with a prompt that day.
+        aged:
+          type: integer
+          minimum: 0
+          description: >
+            The messages the age test turned away that day: first read more
+            than `RELAY_SEEN_LAG_S` after T3 Code stamped them.
+        session_at:
+          type: integer
+          description: >
+            When a session that an agent app's server started last reached
+            the agent, in Unix milliseconds, kept across restarts. Absent
+            when none has.
     Git:
       type: object
       additionalProperties: false

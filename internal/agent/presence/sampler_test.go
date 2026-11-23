@@ -481,6 +481,39 @@ func TestSampler(t *testing.T) {
 			want: []string{"1s presence idle=0.5", "15s presence idle=14.5"},
 		},
 		{
+			name:   "a running agent app makes a context, sampled at once, until the apps component finds none, as a harness process does (D-relayed-context)",
+			inputs: []time.Duration{s(2)},
+			acts: []act{
+				at(s(3), func(e *env) { e.s.AgentApps(1) }),
+				at(s(31), func(e *env) { e.s.AgentApps(0) }),
+			},
+			end:     s(61),
+			want:    []string{"3s presence idle=1", "15s presence idle=13", "30s presence idle=28"},
+			noTimer: true,
+		},
+		{
+			name:   "a running agent app keeps sampling past the 600 s a terminal's focus keeps a context live, so a phone message then finds its minutes sampled",
+			inputs: every(0, s(900), s(100)),
+			acts: []act{
+				at(s(1), focusOn(event.AppTerminal)),
+				at(s(2), func(e *env) { e.s.AgentApps(1) }),
+				at(s(5), focusOn(event.AppBrowser)),
+			},
+			end:         s(700),
+			wantSamples: slices.Concat([]time.Duration{s(1), s(5)}, every(s(15), s(690), s(15))),
+		},
+		{
+			name:   "with none, that context ends 600 s after the terminal lost focus, and sampling with it",
+			inputs: every(0, s(900), s(100)),
+			acts: []act{
+				at(s(1), focusOn(event.AppTerminal)),
+				at(s(5), focusOn(event.AppBrowser)),
+			},
+			end:         s(700),
+			wantSamples: slices.Concat([]time.Duration{s(1), s(5)}, every(s(15), s(600), s(15))),
+			noTimer:     true,
+		},
+		{
 			name:   "Stop ends sampling, and later events record nothing",
 			inputs: []time.Duration{s(0.5)},
 			acts: []act{

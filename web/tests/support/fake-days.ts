@@ -367,6 +367,7 @@ export function status(overrides: Partial<Schemas['Status']> = {}): Schemas['Sta
 			waiting: 0,
 			git: { watched: 1, changes: 3 },
 		},
+		apps: {},
 		footprint: { rss_bytes: 18200000, peak_rss_bytes: 21400000, cpu_s: 12.5 },
 		...overrides,
 	};
