@@ -928,13 +928,14 @@ func checkRelayedCredit(t *testing.T, d Derived) {
 
 // TestRelayedReading checks SM 2.4's relayed reading on a server that
 // samples nothing: a relayed prompt resets its session's bucket at pickup,
-// the bucket holds at most UNKNOWN_BUCKET_MAX_S from that reset, and it
-// drains, as READ and never SUP, from one of the session's stops until the
-// thread's next relayed message is sent or the session's next turn starts,
-// when that message is sent within READ_HORIZON_S of the stop and pairs
-// within PENDING_WINDOW_S - 60 s of it. What only the 120 s cap kept from
-// being read is X.bucket_cap, which comes before the codes of running turns
-// (SM 5.2).
+// relayed reading draws on at most UNKNOWN_BUCKET_MAX_S of the bucket, and
+// it drains, as READ and never SUP, from one of the session's stops until
+// the thread's next relayed message is sent or the session's next turn
+// starts, when that message is sent within READ_HORIZON_S of the stop and
+// pairs within PENDING_WINDOW_S - 60 s of it. What only the 120 s cap kept
+// from being read is X.bucket_cap, which comes before the codes of running
+// turns (SM 5.2). TestRelayedReadingCap checks the cap after resets that
+// aren't relayed.
 func TestRelayedReading(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1002,7 +1003,7 @@ func TestRelayedReading(t *testing.T) {
 				return relayedMsg(b, 300, "s_1", "p_1", "r_1", "t_2", 30)
 			},
 			exact: []secondsWant{{120, 165, map[event.Reason]int64{rREAD: 20, xAuto: 25}}}},
-		{name: "the bucket holds UNKNOWN_BUCKET_MAX_S from the relayed prompt's reset, and the reading the cap alone kept back is X.bucket_cap",
+		{name: "relayed reading draws on at most UNKNOWN_BUCKET_MAX_S of the bucket, and the reading the cap alone kept back is X.bucket_cap",
 			build: func(b *tl) event.Event {
 				// 600 words are 200 s, and with the 20 s base 220 s, of
 				// which the cap keeps 120.
@@ -1056,6 +1057,419 @@ func TestRelayedReading(t *testing.T) {
 				}
 			}
 			checkRelayedCredit(t, d)
+			checkDerived(t, d)
+			checkSteps(t, recs, d)
+		})
+	}
+}
+
+// TestRelayedReadingCap checks the cap on relayed reading after resets
+// that aren't relayed (SM 2.4, D-relayed's decision 2 as amended): in a
+// session an agent app's server runs, relayed reading draws on at most
+// UNKNOWN_BUCKET_MAX_S of the bucket from the session's first fill on,
+// whatever reset came last, as Replay in
+// testdata/timelines/relayed/relayed.py has it, and what else the bucket
+// holds is X.bucket_cap. After a turn no relayed prompt started, whether
+// an agent's, a scheduled task's or one a person typed here, relayed
+// reading still draws on at most 120 s. Local reading in that session
+// drains the whole BUCKET_MAX_S bucket, as in any other.
+func TestRelayedReadingCap(t *testing.T) {
+	// phoneMsg adds a message from the app's phone app in thread r_1, n
+	// characters long and stamped sent seconds after base, whose run's
+	// prompt, with turn key turn, reaches s_1 a second later; the reader's
+	// record comes two seconds after that and names the prompt. The phone
+	// app skips rules 6 and 7, so the prompt is relayed whatever this
+	// device saw (SM 2.2).
+	phoneMsg := func(b *tl, sent int64, turn string, n int) {
+		m := appMessage(at(sent), n)
+		m.Client = event.RelayClientMobile
+		p := b.prompt(at(sent+1), event.ViaHook, "s_1", "p_1", turn, n)
+		m.Prompt = p.EventID
+		b.relayMsg(at(sent+3), "s_1", m)
+	}
+	// typedHere adds a 90-character message typed into the app's window
+	// here, its keys pressed in the minute before its stamp at sent
+	// seconds, whose prompt, with turn key turn, reaches s_1 a second later,
+	// and whose record names the prompt two seconds after that. Rules 6
+	// and 7 hold at the stamp, so the prompt is typed, with a substantive
+	// prompt's lead of 120 + 60 s ending at the stamp, and its turn resets
+	// the bucket as any typed prompt's does (t3-here).
+	typedHere := func(b *tl, sent int64, turn string) {
+		b.press(every(atMS(sent*1000-59_500), atMS(sent*1000-500), 1000)...)
+		m := appMessage(at(sent), 90)
+		p := b.prompt(at(sent+1), event.ViaHook, "s_1", "p_1", turn, 90)
+		m.Prompt = p.EventID
+		b.relayMsg(at(sent+3), "s_1", m)
+	}
+	cases := []struct {
+		name string
+		// keys says the OS reports key presses, as on a Mac running the
+		// app's desktop app.
+		keys  bool
+		build func(b *tl)
+		exact []secondsWant
+		want  []reasonIn
+		// relayed says every credited second rests on a relayed anchor.
+		relayed bool
+	}{
+		{name: "after an agent's message through the app's MCP tools, a headless turn that resets nothing and fills BUCKET_MAX_S, the owner's message 540 s after the stop vouches for 120 s of READ, and the rest is X.bucket_cap",
+			build: func(b *tl) {
+				appServer(b)
+				// T3 marks an agent's message createdBy agent, so the reader
+				// writes no record of it, and rule 4 makes the prompt
+				// headless. 1,800 words fill the bucket to BUCKET_MAX_S.
+				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 150)
+				says(b, at(90), "s_1", "p_1", "t_1", 1800)
+				stops(b, at(120), "s_1", "p_1", "t_1")
+				// It pairs 543 s after the stop, within the 840 s.
+				relayedMsg(b, 660, "s_1", "p_1", "r_1", "t_2", 90)
+			},
+			exact: []secondsWant{
+				{0, 60, map[event.Reason]int64{xNoAnch: 60}},
+				{60, 120, map[event.Reason]int64{xAuto: 60}},
+				{120, 240, map[event.Reason]int64{rREAD: 120}},
+				{240, 600, map[event.Reason]int64{xBucketCap: 360}},
+				{600, 660, map[event.Reason]int64{rP: 60}},
+			},
+			relayed: true},
+		{name: "after a scheduled task's message, which the app declares cron and rule 1 makes scheduled, the owner's message vouches for 120 s of READ too, and the rest is X.bucket_cap",
+			build: func(b *tl) {
+				appServer(b)
+				cron := appMessage(at(60), 150)
+				cron.Declared = event.RelayDeclaredCron
+				p := b.prompt(at(61), event.ViaHook, "s_1", "p_1", "t_1", 150)
+				cron.Prompt = p.EventID
+				b.relayMsg(at(63), "s_1", cron)
+				says(b, at(90), "s_1", "p_1", "t_1", 1800)
+				stops(b, at(120), "s_1", "p_1", "t_1")
+				// In the task's own thread. A record of declared cron caps
+				// no lead, so the owner's keeps its 60 s.
+				relayedMsg(b, 660, "s_1", "p_1", "r_1", "t_2", 90)
+			},
+			exact: []secondsWant{
+				{60, 120, map[event.Reason]int64{xNoAnch: 1, xAuto: 59}},
+				{120, 240, map[event.Reason]int64{rREAD: 120}},
+				{240, 600, map[event.Reason]int64{xBucketCap: 360}},
+				{600, 660, map[event.Reason]int64{rP: 60}},
+			},
+			relayed: true},
+		{name: "on a desktop, a message typed into the app's window resets the bucket as a typed prompt, and the person's own reading of its turn drains past 120 s; a phone message after the stop still vouches for only 120 s of READ",
+			keys: true,
+			build: func(b *tl) {
+				appWindow(b)
+				b.mouse(every(at(1), at(596), 5000)...)
+				typedHere(b, 300, "t_1")
+				says(b, at(330), "s_1", "p_1", "t_1", 1800)
+				stops(b, at(700), "s_1", "p_1", "t_1")
+				// The person left the desk after 596 s, and sends a message
+				// from the phone 300 s after the stop.
+				phoneMsg(b, 1000, "t_2", 90)
+				b.samples(at(0), at(1080))
+			},
+			want: []reasonIn{
+				{120, 300, rP, 180},
+				// The 20 s base, then 296 s of the 600 s of output while the
+				// person is present: 304 s are left at the stop.
+				{300, 630, rSUP, 316},
+				{630, 1005, rREAD, 120},
+				{630, 1005, xBucketCap, 120},
+				{630, 1005, rP, 60},
+			}},
+		{name: "on a desktop, after a phone message's turn fills BUCKET_MAX_S, the person's own reading of it ahead of a message typed here drains past 120 s, as in a bucket without the cap",
+			keys: true,
+			build: func(b *tl) {
+				appWindow(b)
+				b.mouse(every(at(1), at(996), 5000)...)
+				phoneMsg(b, 60, "t_1", 90)
+				says(b, at(90), "s_1", "p_1", "t_1", 1800)
+				stops(b, at(120), "s_1", "p_1", "t_1")
+				// READ_HORIZON_S before the typed prompt, which comes at 701
+				// s, qualifies the reading from 101 s on.
+				typedHere(b, 700, "t_2")
+				b.samples(at(0), at(780))
+			},
+			exact: []secondsWant{
+				{0, 60, map[event.Reason]int64{rP: 60}},
+				{60, 105, map[event.Reason]int64{xNoAnch: 1, xAgent: 40, rSUP: 4}},
+				{105, 120, map[event.Reason]int64{rSUP: 15}},
+				{120, 510, map[event.Reason]int64{rREAD: 390}},
+				{510, 525, map[event.Reason]int64{rREAD: 10, rP: 5}},
+				{525, 690, map[event.Reason]int64{rP: 165}},
+			}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(c.keys)
+			c.build(b)
+			recs := b.records()
+			d := scoreAll(t, Device{}, recs)
+			for _, w := range c.exact {
+				if got := sumIn(d, at(w.from), at(w.to)); !sameCounts(got, w.want) {
+					t.Errorf("seconds %d to %d: %v, want %v", w.from, w.to, got, w.want)
+				}
+			}
+			for _, w := range c.want {
+				if got := sumIn(d, at(w.from), at(w.to))[w.reason]; got != w.n {
+					t.Errorf("seconds %d to %d hold %d s of %s, want %d", w.from, w.to, got, w.reason, w.n)
+				}
+			}
+			if c.relayed {
+				checkRelayedCredit(t, d)
+			}
+			checkDerived(t, d)
+			checkSteps(t, recs, d)
+		})
+	}
+}
+
+// TestRelayedVouching checks which relayed anchor vouches for the reading
+// after a stop, as SM 2.4 and D-relayed's amended decision 2 word it: the
+// first sent after the stop of those that pair within
+// PENDING_WINDOW_S - 60 s of it. One that pairs later keeps its own lead,
+// but it neither vouches for the stop's reading nor ends it, however soon
+// after the stop it was sent, so a pairing that comes when the stop's
+// minute may be final changes nothing. Under the other reading, the first
+// message sent after the stop whenever it pairs, the stop of the first
+// case would get no reading at all. Each case's bucket holds 600 s at the
+// stop.
+func TestRelayedVouching(t *testing.T) {
+	// late is a 30-character message stamped at 420 s, 300 s after the
+	// stop, that T3 queues and hands to the agent at 1,020 s, so it pairs
+	// 900 s after the stop. Its lead is 20 s of P.
+	late := func(b *tl) { queuedMsg(b, 420, 1020, "s_1", "p_1", "r_1", "t_3", 30) }
+	// both adds late, and a 3-character message stamped at 430 s that pairs
+	// at once, a go-ahead whose lead is 2 s, and returns its record.
+	both := func(b *tl) event.Event {
+		late(b)
+		return relayedMsg(b, 430, "s_1", "p_1", "r_1", "t_2", 3)
+	}
+	cases := []struct {
+		name string
+		// build adds the case's messages and returns the relay record that
+		// vouches for the reading, or the zero Event for none.
+		build func(b *tl) event.Event
+		exact []secondsWant
+		want  []reasonIn
+	}{
+		{name: "of the messages sent after the stop, the first that pairs within 840 s of it vouches, though one sent before it pairs later",
+			build: both,
+			exact: []secondsWant{
+				{120, 240, map[event.Reason]int64{rREAD: 120}},
+				{240, 390, map[event.Reason]int64{xBucketCap: 150}},
+				// The late message's own lead, from 400 s.
+				{390, 405, map[event.Reason]int64{xBucketCap: 10, rP: 5}},
+				{405, 420, map[event.Reason]int64{rP: 15}},
+				// The go-ahead's lead is [428, 430), and its turn starts at
+				// 431 s.
+				{420, 435, map[event.Reason]int64{xBucketCap: 8, event.ReasonGoAhead: 2, xNoAnch: 1, xAgent: 4}},
+			}},
+		{name: "the message that pairs late ends none of the reading: what the cap kept back runs on past its stamp to the stamp of the one that vouches",
+			build: both,
+			want:  []reasonIn{{420, 435, xBucketCap, 8}}},
+		{name: "on its own, the message that pairs late vouches for none of the reading, and keeps its own lead (t3-late)",
+			build: func(b *tl) event.Event {
+				late(b)
+				return event.Event{}
+			},
+			want: []reasonIn{{120, 420, rREAD, 0}, {120, 420, xBucketCap, 0}, {390, 420, rP, 20}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			readAfter(b, 1800)
+			vouch := c.build(b)
+			recs := b.records()
+			d := scoreAll(t, Device{}, recs)
+			for _, w := range c.exact {
+				if got := sumIn(d, at(w.from), at(w.to)); !sameCounts(got, w.want) {
+					t.Errorf("seconds %d to %d: %v, want %v", w.from, w.to, got, w.want)
+				}
+			}
+			for _, w := range c.want {
+				if got := sumIn(d, at(w.from), at(w.to))[w.reason]; got != w.n {
+					t.Errorf("seconds %d to %d hold %d s of %s, want %d", w.from, w.to, got, w.reason, w.n)
+				}
+			}
+			for _, cr := range d.Credits {
+				for _, e := range cr.Credited {
+					if e.Reason == rREAD && (vouch.EventID == "" || !slices.Equal(e.AnchorIDs, []string{vouch.EventID})) {
+						t.Errorf("READ at %d s names %v, want the relay record that vouches for it, %q", (cr.Slot-base)/1000,
+							e.AnchorIDs, vouch.EventID)
+					}
+				}
+			}
+			checkRelayedCredit(t, d)
+			checkDerived(t, d)
+			checkSteps(t, recs, d)
+		})
+	}
+}
+
+// TestRelayedLeadOnAFreshState checks where a device that never samples
+// starts its slots when a relayed message comes before every record of its
+// run (SM 2.3, presence.live): T3 Code starts the session after it takes
+// the message, so session.start, the prompt and the relay record all come
+// after the stamp. The slots start no later than the minute of the
+// earliest lead a relay record can open, COMPOSE_MAX_S before its stamp,
+// so a state that holds nothing older derives and credits the whole lead,
+// in one Step or a Step a minute. A record that can open no lead moves
+// nothing.
+func TestRelayedLeadOnAFreshState(t *testing.T) {
+	cases := []struct {
+		name string
+		// seen is when the reader writes its record, in seconds after base,
+		// and edit, when set, changes the record.
+		seen int64
+		edit func(m *event.RelayMessage)
+		// first is the first slot's start, in seconds after base, and lead
+		// the seconds of P credited.
+		first, lead int64
+		exact       []secondsWant
+	}{
+		{name: "a 450-character message stamped before every record of its run has its whole 300 s lead credited: the slots start at the minute 300 s before its stamp",
+			seen: 345, first: 0, lead: 300,
+			exact: []secondsWant{
+				{0, 45, map[event.Reason]int64{xNoAnch: 40, rP: 5}},
+				{45, 330, map[event.Reason]int64{rP: 285}},
+				{330, 345, map[event.Reason]int64{rP: 10, xNoAnch: 2, xAgent: 3}},
+			}},
+		{name: "so does one whose record comes in a later Step than the run's first records, as after a quiet night",
+			seen: 361, first: 0, lead: 300},
+		{name: "a record written more than RELAY_SEEN_LAG_S after its stamp pairs with nothing and opens no lead, so the slots start at the first record's minute",
+			seen: 401, first: 300, lead: 0},
+		{name: "so does a record of declared cron, which makes its prompt scheduled",
+			seen: 345, edit: func(m *event.RelayMessage) { m.Declared = event.RelayDeclaredCron }, first: 300, lead: 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			// A 450-character message stamped at 340 s, whose run's session
+			// starts at 341 s and whose prompt reaches it at 342 s.
+			appStart(b, 341, "s_1", "p_1")
+			p := b.prompt(at(342), event.ViaHook, "s_1", "p_1", "t_1", 450)
+			m := appMessage(at(340), 450)
+			m.Prompt = p.EventID
+			if c.edit != nil {
+				c.edit(m)
+			}
+			b.relayMsg(at(c.seen), "s_1", m)
+			recs := b.records()
+			d := scoreAll(t, Device{}, recs)
+			if len(d.Slots) == 0 {
+				t.Fatal("no slots")
+			}
+			if got := (d.Slots[0].Start - base) / 1000; got != c.first {
+				t.Fatalf("the slots start at %d s, want %d s", got, c.first)
+			}
+			if got := sumIn(d, at(0), at(360))[rP]; got != c.lead {
+				t.Errorf("the lead credits %d s, want %d", got, c.lead)
+			}
+			for _, w := range c.exact {
+				if got := sumIn(d, at(w.from), at(w.to)); !sameCounts(got, w.want) {
+					t.Errorf("seconds %d to %d: %v, want %v", w.from, w.to, got, w.want)
+				}
+			}
+			checkRelayedCredit(t, d)
+			checkDerived(t, d)
+			checkSteps(t, recs, d)
+		})
+	}
+}
+
+// TestLookAheadLeadEnd checks SM 3.2 rule 1's lead clause for a prompt that
+// rules 6 and 7 make typed at an agent app's stamp, whose lead ends at the
+// stamp, before the prompt's own t (Anchor.leadEnd). On a Mac, the app's
+// window hosts s_1 of p_1 and s_2 of p_2. The person types a message for
+// s_2, stamped at 542 s, then, while an agent's turn runs in s_1, a short
+// one for s_1, stamped at 600 s, which the app queues and hands to the
+// agent at 840 s: its lead is [580, 600). A slot that starts inside that
+// lead is s_1's; one that starts at the stamp or after isn't, by the lead
+// clause, and goes by the bucket clause, ATTRIB_STICKY_S or neither, as SM
+// 3.2 says.
+func TestLookAheadLeadEnd(t *testing.T) {
+	// build adds the case's records. fill gives s_1's running turn 60 words,
+	// 20 s of reading, at 590 s.
+	build := func(b *tl, fill bool) {
+		b.focus(at(0), event.AppAgentApp, "", "s_1", "s_2")
+		appStart(b, 0, "s_1", "p_1")
+		appStart(b, 0, "s_2", "p_2")
+		b.mouse(every(at(1), at(896), 5000)...)
+		// An agent's message to s_1 through the app's MCP tools: a headless
+		// turn, which resets nothing, running until the queued message's
+		// hand-over.
+		b.prompt(at(300), event.ViaHook, "s_1", "p_1", "t_a", 30)
+		if fill {
+			says(b, at(590), "s_1", "p_1", "t_a", 60)
+		}
+		stops(b, at(839), "s_1", "p_1", "t_a")
+		// The message for s_2, 90 characters typed in the minute before its
+		// stamp: a typed prompt at 543 s, with a lead of 120 + 60 s.
+		b.press(every(atMS(482_500), atMS(541_500), 1000)...)
+		relayedMsg(b, 542, "s_2", "p_2", "r_2", "t_b", 90)
+		says(b, at(560), "s_2", "p_2", "t_b", 300)
+		stops(b, at(570), "s_2", "p_2", "t_b")
+		// The message for s_1: three characters, a go-ahead whose lead is
+		// LOW_LEAD_S, typed at 590 to 600 s.
+		b.press(every(atMS(590_500), atMS(599_500), 1000)...)
+		queuedMsg(b, 600, 840, "s_1", "p_1", "r_1", "t_a2", 3)
+		b.samples(at(0), at(960))
+	}
+	cases := []struct {
+		name string
+		fill bool
+		// from and to are slot boundaries, in seconds after base; proj is
+		// the project every slot in [from, to) goes to, "" for an ambiguous
+		// one, and by names whose anchor resolved them: "a" for the message
+		// for s_1, "b" for the one for s_2, "" for none.
+		from, to int64
+		proj, by string
+		want     map[event.Reason]int64
+	}{
+		{name: "a slot that starts inside the lead of the message for s_1, before its stamp, is s_1's by the lead clause",
+			from: 585, to: 600, proj: "p_1", by: "a", want: map[event.Reason]int64{event.ReasonGoAhead: 15}},
+		{name: "the slot that starts at the stamp is outside the lead, though the prompt comes 240 s later; with s_1's bucket empty, ATTRIB_STICKY_S gives it to s_2, whose prompt came 57 s before",
+			from: 600, to: 615, proj: "p_2", by: "b", want: map[event.Reason]int64{rREAD: 15}},
+		{name: "so the reading of s_2's answer goes on in the slots after it while s_2's prompt is within ATTRIB_STICKY_S",
+			from: 615, to: 675, proj: "p_2", by: "b", want: map[event.Reason]int64{rREAD: 60}},
+		{name: "past ATTRIB_STICKY_S the slots are ambiguous until the hand-over, not s_1's",
+			from: 675, to: 840, proj: "", by: "", want: map[event.Reason]int64{xAmbig: 165}},
+		{name: "with output in s_1's bucket when the slot at the stamp begins, the bucket clause gives the slot to s_1, whose reading drains it",
+			fill: true, from: 600, to: 615, proj: "p_1", by: "a", want: map[event.Reason]int64{rSUP: 15}},
+		{name: "and the next slot, which begins with 5 s left in it",
+			fill: true, from: 615, to: 630, proj: "p_1", by: "a", want: map[event.Reason]int64{rSUP: 5, xAuto: 10}},
+		{name: "and once s_1's bucket is empty when a slot begins, ATTRIB_STICKY_S gives the slot to s_2 again",
+			fill: true, from: 630, to: 645, proj: "p_2", by: "b", want: map[event.Reason]int64{rREAD: 15}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(true)
+			build(b, c.fill)
+			recs := b.records()
+			d := scoreAll(t, Device{}, recs)
+			ids := map[string]string{}
+			for _, a := range d.Anchors {
+				switch a.TurnKey {
+				case "t_a2":
+					ids["a"] = a.ID
+				case "t_b":
+					ids["b"] = a.ID
+				}
+			}
+			if ids["a"] == "" || ids["b"] == "" {
+				t.Fatalf("anchors %+v, want the two typed messages' prompts", d.Anchors)
+			}
+			for _, cr := range d.Credits {
+				if cr.Slot < at(c.from) || cr.Slot >= at(c.to) {
+					continue
+				}
+				if cr.ProjectKey != c.proj || cr.ResolvedBy != ids[c.by] {
+					t.Errorf("slot at %d s goes to %q, resolved by %q; want %q, resolved by %q", (cr.Slot-base)/1000,
+						cr.ProjectKey, cr.ResolvedBy, c.proj, ids[c.by])
+				}
+			}
+			if got := sumIn(d, at(c.from), at(c.to)); !sameCounts(got, c.want) {
+				t.Errorf("seconds %d to %d: %v, want %v", c.from, c.to, got, c.want)
+			}
 			checkDerived(t, d)
 			checkSteps(t, recs, d)
 		})

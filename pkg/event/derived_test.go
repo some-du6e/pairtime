@@ -78,6 +78,7 @@ func validRollup() Rollup {
 		CreditedByEvidence: map[Evidence]float64{EvidenceA: 100, EvidenceB: 20},
 		AgentRunningS:      400,
 		AnchorCounts:       map[AnchorKind]int{AnchorSubstantivePrompt: 3, AnchorPermissionAnswer: 2},
+		RelayedMessages:    2,
 	}
 }
 
@@ -647,6 +648,7 @@ func TestRollupValidate(t *testing.T) {
 		{"by project is for days and submissions", func(r *Rollup) { r.CreditedByProject = map[string]float64{"p_9f2c": 120} }, "credited_by_project: is for day and submission rollups only"},
 		{"by project sums to credited", func(r *Rollup) { *r = validDayRollup(); r.CreditedByProject["p_77aa"] = 0 }, "credited_by_project: sums to 100"},
 		{"anchor counts aren't negative", func(r *Rollup) { r.AnchorCounts[AnchorInterrupt] = -1 }, "anchor_counts: has a negative count"},
+		{"the count of relayed messages, kept apart from the anchor counts (SM 5.4), isn't negative", func(r *Rollup) { r.RelayedMessages = -1 }, "relayed_messages: must not be negative, got -1"},
 		{"submissions carry totals", func(r *Rollup) { *r = validSubmission(); r.Totals = nil }, "totals: missing"},
 		{"totals are for submissions", func(r *Rollup) { tot := handbookTotals(); r.Totals = &tot }, "totals: is for submission rollups only"},
 		{"totals are checked", func(r *Rollup) { *r = validSubmission(); r.Totals.HandbookS = 18000 }, "totals.handbook_s: is 18000"},

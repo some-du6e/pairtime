@@ -304,9 +304,14 @@ func (c *creditor) hostedProject(s *Slot) (string, int, bool) {
 // READ_HORIZON_S and its session's bucket isn't empty when the slot begins,
 // and -1 otherwise (SM 3.2 rule 1). After is strict: an anchor at the
 // slot's very start is the last one before it, which ATTRIB_STICKY_S reads
-// (E-6.3-two-tabs). "Inside the lead" means the slot starts inside it.
-// Within READ_HORIZON_S counts as SM 2.4's horizon before an act does: the
-// slot that starts READ_HORIZON_S before the anchor is inside.
+// (E-6.3-two-tabs). "Inside the lead" means the slot starts inside it. A
+// lead ends at the anchor's T, after the slot begins, except for a prompt
+// that rules 6 and 7 made typed at an agent app's stamp, whose lead ends
+// at the stamp, up to RELAY_MATCH_S before its T (Anchor.leadEnd): a slot
+// that starts between the two is outside the lead, and the bucket test
+// decides it. Within READ_HORIZON_S counts as SM 2.4's horizon before an
+// act does: the slot that starts READ_HORIZON_S before the anchor is
+// inside.
 //
 // An anchor counts only for slots it can credit (Anchor.from), so a record
 // that comes later than the scorer's reach changes nothing further back. A
@@ -335,7 +340,7 @@ func (c *creditor) lookAhead(s *Slot) int {
 		return -1
 	}
 	a := &c.d.anchors[first]
-	if a.leadEnd()-a.LeadMS <= s.Start {
+	if s.Start >= a.leadEnd()-a.LeadMS && s.Start < a.leadEnd() {
 		return first
 	}
 	if a.T-s.Start <= c.r.readHorizon {

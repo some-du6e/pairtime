@@ -764,6 +764,8 @@ This is the one published definition, used in the first Quality and Integrity co
 
 A side-door event that a pairtime log reader matches gets no level of its own: the log record's anchor counts instead, at that record's level, and the side-door event is a cross-check (5.2).
 
+A relayed anchor is a message the person sent through an agent app, read from the app's own store with `via` `app`. Its typing time and its session's reading count whatever this device saw of the person, unless the machine was asleep, and always at level C (SM 2.2 rule 9, 2.4).
+
 Labels ride along with levels and never change them: `via_track`, `via_plugin`, `via_bridge`, `typing_module`, `vm`, `editor_typing` (v1.5 at the earliest), and `via_relay`, an origin label that every relayed anchor carries.
 
 **Bands, per credited minute of a submission**, computed from public inputs only, so the teen's copy of the review page shows them too (EV 6.7, D9):

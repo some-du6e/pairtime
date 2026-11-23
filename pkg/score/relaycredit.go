@@ -248,8 +248,10 @@ type relayCand struct {
 // anchors' leads that hold t, the one whose anchor is sent soonest after
 // it, since a lead beats reading and the next anchor's lead beats a later
 // one's (SM 3.3 rules 2 and 3); else, in one of its reading spans, its
-// bucket's reading, when the bucket holds anything at t. A candidate of a
-// project the slot doesn't admit wants nothing (attribution.relayAdmits).
+// bucket's reading, when the part of the bucket relayed reading draws on,
+// at most UNKNOWN_BUCKET_MAX_S, holds anything at t (bucket.relayTotal). A
+// candidate of a project the slot doesn't admit wants nothing
+// (attribution.relayAdmits).
 func (c *creditor) relayWant(rs *relaySession, t int64, at *attribution, now bool) (relayCand, bool) {
 	x := relayCand{rs: rs, lead: -1}
 	for _, li := range c.leadsOpen {
@@ -276,7 +278,7 @@ func (c *creditor) relayWant(rs *relaySession, t int64, at *attribution, now boo
 		return x, false
 	}
 	rs.b.advance(c.r, t)
-	if rs.b.total(false) == 0 {
+	if rs.b.relayTotal() == 0 {
 		return x, false
 	}
 	x.span, x.proj = sp, rs.project
@@ -313,13 +315,15 @@ func (c *creditor) relayBefore(x, y relayCand, t int64) bool {
 // nothing else credited, in a slot resolved as at and in the pass now
 // names (attribution.relayNow), and credits the winner (relayBefore): its
 // anchor's lead, under its anchor's reason, or its session's relayed
-// reading, as READ, never SUP, draining up to a second from the bucket
-// (SM 2.4). Either is level C, and the anchor behind it, the lead's own or
-// the one that vouches for the reading, gives its labels, via_relay among
-// them. With no winner, the second is X.bucket_cap if it is in the reading
-// of a session whose bucket only UNKNOWN_BUCKET_MAX_S emptied, and it
-// takes a second of what that cap held back from each such session, as
-// relayed.py's Replay does (SM 5.2, D-relayed's reading 3).
+// reading, as READ, never SUP, draining up to a second from the part of
+// the bucket relayed reading draws on (SM 2.4, bucket.relayDrain). Either
+// is level C, and the anchor behind it, the lead's own or the one that
+// vouches for the reading, gives its labels, via_relay among them. With no
+// winner, the second is X.bucket_cap if it is in the reading of a session
+// whose bucket holds more than UNKNOWN_BUCKET_MAX_S let relayed reading
+// draw on, and it takes a second of what that cap held back from each
+// such session, as relayed.py's Replay does (SM 5.2, D-relayed's reading
+// 3).
 func (c *creditor) relayedSecond(k int, t int64, at *attribution, now bool) {
 	var best relayCand
 	found := false
@@ -334,7 +338,7 @@ func (c *creditor) relayedSecond(k int, t int64, at *attribution, now bool) {
 			if rs.b == nil || !at.relayAdmits(rs.project, now) {
 				continue
 			}
-			if _, ok := rs.spanAt(t); ok && rs.b.total(false) == 0 && rs.b.takeCapped(c.r.unitsPerS, true) {
+			if _, ok := rs.spanAt(t); ok && rs.b.relayTotal() == 0 && rs.b.takeCapped(c.r.unitsPerS, true) {
 				sec.bucketCap = true
 			}
 		}
@@ -344,7 +348,7 @@ func (c *creditor) relayedSecond(k int, t int64, at *attribution, now bool) {
 		a := &c.d.anchors[best.lead]
 		sec.reason, sec.proj, sec.level, sec.anchor = a.Reason, a.ProjectKey, a.Level, int32(best.lead)
 	} else {
-		src := best.rs.b.drain(c.r.unitsPerS, false)
+		src := best.rs.b.relayDrain(c.r.unitsPerS)
 		sec.reason, sec.proj, sec.level, sec.anchor, sec.label = event.ReasonRead, best.proj, event.EvidenceC,
 			int32(best.span.anchor), src.label
 	}
