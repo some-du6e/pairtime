@@ -394,7 +394,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		// unless something changed it since, and in a changed file it
 		// changes the same line, which is what the teen said yes to.
 		if err := config.SetShadow(dirs.ConfigFile(), true); err != nil {
-			return fail(err)
+			return fail(errors.New(calibrationWhy(err)))
 		}
 		if diffs[consent.ItemCalibration] != "" {
 			fmt.Fprintln(stdout, `pairtime shows your time as "calibrating" until its scoring reaches version 1.0.0.`)
@@ -465,17 +465,35 @@ func leftOut(w io.Writer, prefix string, hook consent.HookTest, left map[string]
 // config.toml at name: the diff the consent screen and --dry-run show, ""
 // when the file says shadow = true already, with what the teen wrote in it
 // masked (config.Masked), or else why install leaves the change out:
-// pairtime's scoring is final, as calibrating false says, or config's
-// edit refuses the file, as one that doesn't parse.
+// pairtime's scoring is frozen, as calibrating false says, or config's
+// edit refuses the file, as one that doesn't parse (calibrationWhy).
 func planCalibration(name string, calibrating bool) (diff, why string) {
 	if !calibrating {
-		return "", "pairtime's scoring has reached version 1.0.0, so its rules are fitted and there is nothing left to calibrate"
+		return "", "pairtime's scoring has reached version 1.0.0, so its rules are frozen and your time shows as they count it"
 	}
 	before, after, err := config.PlanShadow(name, true)
 	if err != nil {
-		return "", strings.TrimPrefix(err.Error(), "config: ")
+		return "", calibrationWhy(err)
 	}
 	return install.FileDiff(name, config.Masked(before), config.Masked(after)), ""
+}
+
+// calibrationWhy says why config's edit refused config.toml, for the
+// consent screen and the lines install prints with --yes and --dry-run:
+// err's words without "config: ", but for a file that doesn't parse only
+// the line it breaks at and what to write by hand, since the decoder's
+// message can quote what the teen wrote there, and teens share that
+// screen when they ask for help.
+func calibrationWhy(err error) string {
+	var u *config.UnparsedError
+	if !errors.As(err, &u) {
+		return strings.TrimPrefix(err.Error(), "config: ")
+	}
+	at := ""
+	if u.Line > 0 {
+		at = fmt.Sprintf(" at line %d", u.Line)
+	}
+	return "config.toml doesn't parse" + at + ", so pairtime leaves it alone; " + u.Hand
 }
 
 // hasClaudeHooks reports whether Claude Code's settings hold hooks of

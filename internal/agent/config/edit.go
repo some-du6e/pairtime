@@ -170,6 +170,9 @@ func SetShadow(name string, on bool) error {
 // refuses what SetShadow refuses, with the same error. The file can still
 // change before SetShadow runs, which then makes the same change to it.
 func PlanShadow(name string, on bool) (now, then []byte, err error) {
+	if name, err = editTarget(name); err != nil {
+		return nil, nil, err
+	}
 	data, err := os.ReadFile(name)
 	text := string(data)
 	switch {
@@ -225,6 +228,12 @@ func shadowByHand(on bool) func(name, text string) string {
 // which edited then refuses.
 func patchDisplay(text string, on bool) string {
 	if displayVariant(text) {
+		return text
+	}
+	if cfg, _, _ := parseAsWritten([]byte(text)); cfg.Display.Shadow == on {
+		// The file says so already, wherever it says it, such as in an
+		// inline table, which a [display] header added after it would
+		// define twice.
 		return text
 	}
 	nl := "\n"
@@ -427,13 +436,11 @@ func rewrite(name string, always bool, byHand func(name, text string) string, ch
 	editMu.Lock()
 	defer editMu.Unlock()
 	lock := filepath.Join(filepath.Dir(name), LockName)
-	if fi, err := os.Lstat(name); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
-		target, err := filepath.EvalSymlinks(name)
-		if err != nil {
-			return fmt.Errorf("config: config.toml is a link pairtime can't follow (%v), so it didn't change it", err)
-		}
-		name = target
+	target, err := editTarget(name)
+	if err != nil {
+		return err
 	}
+	name = target
 	release, lockErr := home.LockFile(lock, lockWait)
 	if errors.Is(lockErr, home.ErrBusy) {
 		return fmt.Errorf("config: pairtime couldn't lock config.toml to change it (%v), so it didn't; try again, or %s", lockErr, byHand(name, ""))
@@ -486,6 +493,22 @@ func rewrite(name string, always bool, byHand func(name, text string) string, ch
 	}
 }
 
+// editTarget returns the file an edit of the config.toml at name changes:
+// the file a symlink there points to, so the link stays a link, or name
+// itself. A link that points nowhere, or that can't be followed, is an
+// error, since writing a new file in its place would undo the link.
+func editTarget(name string) (string, error) {
+	fi, err := os.Lstat(name)
+	if err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+		return name, nil
+	}
+	target, err := filepath.EvalSymlinks(name)
+	if err != nil {
+		return "", fmt.Errorf("config: config.toml is a link pairtime can't follow (%v), so it didn't change it", err)
+	}
+	return target, nil
+}
+
 // readEdited reads the config.toml at name for an edit: defaultFile when
 // there is none.
 func readEdited(name string) ([]byte, error) {
@@ -496,13 +519,39 @@ func readEdited(name string) ([]byte, error) {
 	return data, err
 }
 
+// UnparsedError is the error an edit returns for a config.toml that
+// doesn't parse. Its Error quotes the decoder's message, which can hold
+// what the teen wrote in the file, such as a key or a value it couldn't
+// read. A screen the teen may share, as pairtime install's consent screen,
+// shows only Line and Hand instead.
+type UnparsedError struct {
+	// Line is the line the file stops parsing at, or 0 when the decoder
+	// doesn't say, as for a value of the wrong type.
+	Line int
+	// Hand says what to write in the file by hand instead.
+	Hand string
+	err  error
+}
+
+func (e *UnparsedError) Error() string {
+	return fmt.Sprintf("config: config.toml doesn't parse, so pairtime didn't change it (%v); %s", e.err, e.Hand)
+}
+
+// Unwrap returns the decoder's error.
+func (e *UnparsedError) Unwrap() error { return e.err }
+
 // edited returns text with change made to it without its byte order mark,
 // which it keeps, once it checked that the result parses to what text
 // parsed to with apply done to it, and to nothing else. hand says what to
 // write by hand instead, for an error.
 func edited(text, hand string, change func(text string) string, apply func(*Config)) (string, error) {
 	if _, err := toml.Decode(text, &fileConfig{}); err != nil {
-		return "", fmt.Errorf("config: config.toml doesn't parse, so pairtime didn't change it (%v); %s", err, hand)
+		u := &UnparsedError{Hand: hand, err: err}
+		var pe toml.ParseError
+		if errors.As(err, &pe) {
+			u.Line = pe.Position.Line
+		}
+		return "", u
 	}
 	if strings.Contains(text, `"""`) || strings.Contains(text, `'''`) {
 		// A multi-line string could hold a line that looks like a key.

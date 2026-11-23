@@ -188,11 +188,11 @@ func autostartCard(goos string) Card {
 func calibrationCard() Card {
 	return Card{
 		Title: `Show your time as "calibrating" until pairtime's scoring is final`,
-		What: `You volunteered to help calibrate pairtime, so until its scoring reaches version 1.0.0, when its rules are fitted and frozen, ` +
+		What: `You volunteered to help calibrate pairtime, so until its scoring reaches version 1.0.0, when its rules are frozen, ` +
 			`pairtime today, recap, statusline and the local dashboard show your time as "calibrating". ` +
 			`They keep the agent's time, your moments and the loops pairtime caught, and leave out everything your time could be worked out from, ` +
-			`so nobody learns to steer the rules before they are fitted. pairtime still counts all of your time, and its files on this computer keep every number.`,
-		Declining: "Without it, pairtime shows your time as its rules count it now, before they are fitted.",
+			`so nobody learns to steer the rules while they are being calibrated. pairtime still counts all of your time, and its files on this computer keep every number.`,
+		Declining: "Without it, pairtime shows your time as its rules count it now, while they are being calibrated.",
 		TurnOff:   "You can turn it off any time with shadow = false under [display] in config.toml. It turns off by itself once pairtime's scoring reaches 1.0.0.",
 	}
 }

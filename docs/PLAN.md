@@ -1351,6 +1351,7 @@ Exit check: scoring 1.0.0 tagged and deployed; `POST .../outcome` stops returnin
 - CI checks: `score-regression` passes with the version bump; the report's numbers come from the fit run's artifact.
 - Oracle: the raters' labels.
 - Human: 40 to 60 volunteers aged 13 to 18, at least 40% on Windows (DESIGN 6.7 step 1), raters, an adjudicator, and Karim's approval. The deploy agent then sets `scoring_version = 1.0.0` on the instance.
+- Left by WP-IN2: once `pkg/score/VERSION` is 1.0.0, `config.Parse` reads `display.shadow` as off whatever config.toml says, so the shadow cases of `cmd/pairtime/views_test.go` (its `shadow` helper) and `internal/agent/days_test.go` (`skipShadowAfterFreeze`) skip, since nobody sees those views any more. This WP can delete them. `pairtime install --calibration-volunteer` then offers no change and says the scoring is frozen.
 
 ### WP-TR5. Typing module, signed builds only
 

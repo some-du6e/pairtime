@@ -37,9 +37,9 @@ func TestPlanCalibration(t *testing.T) {
 		calibrating bool
 		check       func(t *testing.T, diff, why string)
 	}{
-		{"once pairtime's scoring is final, install offers nothing and says it has reached 1.0.0", agentsFile, false,
+		{"once pairtime's scoring is frozen, install offers nothing and says it has reached 1.0.0, without promising the rules were fitted", agentsFile, false,
 			func(t *testing.T, diff, why string) {
-				if diff != "" || !strings.Contains(why, "reached version 1.0.0") {
+				if diff != "" || !strings.Contains(why, "reached version 1.0.0, so its rules are frozen") || strings.Contains(why, "fitted") {
 					t.Errorf("diff %q, why %q", diff, why)
 				}
 			}},
@@ -73,6 +73,13 @@ func TestPlanCalibration(t *testing.T) {
 		{"a config.toml that doesn't parse is left out, and why says what to write by hand", "[display\n", true,
 			func(t *testing.T, diff, why string) {
 				if diff != "" || !strings.Contains(why, "doesn't parse") || !strings.Contains(why, "by hand") || strings.HasPrefix(why, "config:") {
+					t.Errorf("diff %q, why %q", diff, why)
+				}
+			}},
+		{"for a config.toml that doesn't parse, why gives the line it breaks at and never the decoder's words, which quote what the teen wrote", "[display]\nshadow = mysecretword\n", true,
+			func(t *testing.T, diff, why string) {
+				if diff != "" || !strings.Contains(why, "config.toml doesn't parse at line ") || !strings.Contains(why, "so pairtime leaves it alone; set shadow = true under [display]") ||
+					strings.Contains(why, "mysecretword") || strings.Contains(why, "toml:") || strings.Contains(why, "expected value") {
 					t.Errorf("diff %q, why %q", diff, why)
 				}
 			}},

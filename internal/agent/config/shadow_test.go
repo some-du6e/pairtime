@@ -3,6 +3,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -64,6 +65,27 @@ func TestScoringFreeze(t *testing.T) {
 			}
 			if cfg, _, parsed, err := LoadParsed(name); err != nil || !parsed || cfg.Display.Shadow != tt.shadow {
 				t.Errorf("LoadParsed at %s has shadow %v, parsed %v, %v, want %v", tt.version, cfg.Display.Shadow, parsed, err, tt.shadow)
+			}
+		})
+	}
+
+	// Two spellings of the setting: the decoder puts one of them in the
+	// file's struct, by map order, so Parse must not read either.
+	twice := []struct {
+		name string
+		file string
+	}{
+		{"display.shadow in two spellings under [display] is read as off every time, and reported", "[display]\nshadow = true\nShadow = true\n"},
+		{"display.shadow in a [display] and a [Display] table is read as off every time, and reported", "[display]\nshadow = true\n[Display]\nshadow = true\n"},
+	}
+	for _, tt := range twice {
+		t.Run(tt.name, func(t *testing.T) {
+			atScoring(t, "0.4.0")
+			for range 50 {
+				cfg, problems := Parse([]byte(tt.file))
+				if cfg.Display.Shadow || len(problems) != 1 || !strings.Contains(problems[0], "display.shadow is set more than once") {
+					t.Fatalf("Parse(%q) has shadow %v and problems %q, want it off and the setting reported", tt.file, cfg.Display.Shadow, problems)
+				}
 			}
 		})
 	}
@@ -175,6 +197,8 @@ func TestSetShadow(t *testing.T) {
 			on:   true,
 			want: "[notifications]\nshadow = true\n\n[display]\nshadow = true\n",
 		},
+		{name: "an inline table that says shadow = true already is left alone", file: "display = { shadow = true }\n", on: true, want: "display = { shadow = true }\n", same: true},
+		{name: "off in a file without the setting, which is off already, adds nothing", file: "mode = \"local\"\n", on: false, want: "mode = \"local\"\n", same: true},
 		{
 			name:    "a setting in an inline table isn't changed, and the error says to change it where it is, not to add lines",
 			file:    "display = { shadow = false }\n",
@@ -195,6 +219,13 @@ func TestSetShadow(t *testing.T) {
 			file:    "[display]\nShadow = false\n",
 			on:      true,
 			want:    "[display]\nShadow = false\n",
+			wantErr: "in lower case",
+		},
+		{
+			name:    "a file with the setting in two spellings, one of them in lower case, isn't changed, and the error says to write it in lower case",
+			file:    "[display]\nshadow = false\nShadow = true\n",
+			on:      true,
+			want:    "[display]\nshadow = false\nShadow = true\n",
 			wantErr: "in lower case",
 		},
 		{
@@ -271,6 +302,22 @@ func TestSetShadow(t *testing.T) {
 		})
 	}
 
+	t.Run("a file with both spellings of the setting is refused every time, and never changed", func(t *testing.T) {
+		const file = "[display]\nshadow = false\n[Display]\nshadow = false\n"
+		name := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(name, []byte(file), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for range 30 {
+			if err := SetShadow(name, true); err == nil || !strings.Contains(err.Error(), "in lower case") {
+				t.Fatalf("SetShadow = %v, want the error that says to write it in lower case", err)
+			}
+		}
+		if got, err := os.ReadFile(name); err != nil || string(got) != file {
+			t.Errorf("config.toml is %q, %v, want it as it was", got, err)
+		}
+	})
+
 	t.Run("running it twice changes nothing the second time, and doesn't write the file again", func(t *testing.T) {
 		name := filepath.Join(t.TempDir(), "config.toml")
 		if err := WriteDefault(name); err != nil {
@@ -308,10 +355,14 @@ func TestPlanShadow(t *testing.T) {
 		name    string
 		file    string
 		missing bool
+		// link is set when config.toml is a symlink to a file that isn't
+		// there.
+		link    bool
 		on      bool
 		wantErr string
 	}{
 		{name: "on in the default file plans the shadow line's change", file: defaultFile, on: true},
+		{name: "a config.toml that is a link to nothing is refused, with the edit's error, and nothing is planned", link: true, on: true, wantErr: "a link pairtime can't follow"},
 		{name: "on with no config.toml plans the default file with shadow on, from no file", missing: true, on: true},
 		{name: "off with no config.toml plans no file at all", missing: true, on: false},
 		{name: "on in a file that says so already plans no change", file: "[display]\nshadow = true\n", on: true},
@@ -321,7 +372,12 @@ func TestPlanShadow(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			name := filepath.Join(dir, "config.toml")
-			if !tt.missing {
+			switch {
+			case tt.link:
+				if err := os.Symlink(filepath.Join(dir, "gone.toml"), name); err != nil {
+					t.Skipf("this system can't make a symlink here: %v", err)
+				}
+			case !tt.missing:
 				if err := os.WriteFile(name, []byte(tt.file), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -349,6 +405,49 @@ func TestPlanShadow(t *testing.T) {
 				t.Errorf("PlanShadow planned no file, and SetShadow wrote %q", wrote)
 			case then != nil && (rerr != nil || string(wrote) != string(then)):
 				t.Errorf("PlanShadow planned %q, and SetShadow wrote %q, %v", then, wrote, rerr)
+			}
+		})
+	}
+}
+
+// TestUnparsedError checks the error an edit returns for a config.toml
+// that doesn't parse. Its Error says what the decoder said, as the
+// commands print it, and Line and Hand say where the file breaks and what
+// to write by hand, for a screen that shows neither the decoder's words
+// nor the teen's.
+func TestUnparsedError(t *testing.T) {
+	tests := []struct {
+		name string
+		file string
+		line bool // Line is set
+	}{
+		{"a value that isn't TOML gives the line the file breaks at", "[display]\nshadow = mysecretword\n", true},
+		{"a value of the wrong type gives no line, since the decoder names none", "[display]\nshadow = \"yes\"\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name := filepath.Join(t.TempDir(), "config.toml")
+			if err := os.WriteFile(name, []byte(tt.file), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for _, edit := range []struct {
+				what string
+				err  error
+			}{
+				{"PlanShadow", func() error { _, _, err := PlanShadow(name, true); return err }()},
+				{"SetShadow", SetShadow(name, true)},
+			} {
+				var u *UnparsedError
+				switch {
+				case !errors.As(edit.err, &u):
+					t.Errorf("%s: %v, want an UnparsedError", edit.what, edit.err)
+				case (u.Line > 0) != tt.line:
+					t.Errorf("%s: Line %d, want one set: %v", edit.what, u.Line, tt.line)
+				case !strings.Contains(u.Hand, "set shadow = true under [display] in "+name) || strings.Contains(u.Hand, "mysecretword"):
+					t.Errorf("%s: Hand %q, want what to write by hand and none of the file's words", edit.what, u.Hand)
+				case !strings.HasPrefix(u.Error(), "config: config.toml doesn't parse, so pairtime didn't change it (toml: "):
+					t.Errorf("%s: Error %q, want the decoder's words, as before", edit.what, u.Error())
+				}
 			}
 		})
 	}

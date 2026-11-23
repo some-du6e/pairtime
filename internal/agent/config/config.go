@@ -226,7 +226,13 @@ func parseAsWritten(data []byte) (cfg Config, problems []string, used bool) {
 			problems = append(problems, fmt.Sprintf("config.toml: http.port %d isn't 0 or from 1024 to 65535, so the default port is used", p))
 		}
 	}
-	if md.IsDefined("display", "shadow") {
+	switch {
+	case spellings(md.Keys(), "display", "shadow") > 1:
+		// The decoder put one of the spellings in file, and which one
+		// depends on map order, so a setting written twice counts as one
+		// it can't read, as in [notifications], and shadow stays off.
+		problems = append(problems, "config.toml: display.shadow is set more than once, in different upper and lower case, so your time doesn't show as calibrating until it's fixed")
+	case md.IsDefined("display", "shadow"):
 		cfg.Display.Shadow = file.Display.Shadow
 	}
 	problems = append(problems, parseNotifications(&cfg, file.Notifications, md.Keys())...)

@@ -38,17 +38,17 @@ AI tools pairtime looked for:
 [x] 2. Show your time as "calibrating" until pairtime's scoring is final
 
     You volunteered to help calibrate pairtime, so until its scoring reaches
-    version 1.0.0, when its rules are fitted and frozen, pairtime today,
-    recap, statusline and the local dashboard show your time as
-    "calibrating". They keep the agent's time, your moments and the loops
-    pairtime caught, and leave out everything your time could be worked out
-    from, so nobody learns to steer the rules before they are fitted.
-    pairtime still counts all of your time, and its files on this computer
-    keep every number.
+    version 1.0.0, when its rules are frozen, pairtime today, recap,
+    statusline and the local dashboard show your time as "calibrating". They
+    keep the agent's time, your moments and the loops pairtime caught, and
+    leave out everything your time could be worked out from, so nobody
+    learns to steer the rules while they are being calibrated. pairtime
+    still counts all of your time, and its files on this computer keep every
+    number.
 
     Saying no doesn't stop you from using pairtime.
-    Without it, pairtime shows your time as its rules count it now, before
-    they are fitted.
+    Without it, pairtime shows your time as its rules count it now, while
+    they are being calibrated.
     You can turn it off any time with shadow = false under [display] in
     config.toml. It turns off by itself once pairtime's scoring reaches
     1.0.0.
