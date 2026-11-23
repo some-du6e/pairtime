@@ -103,7 +103,7 @@ describe('Privacy', () => {
 			check: (html) => expect(text(html)).toContain('Some of these, and deleting each on time, come with a later version of pairtime.'),
 		},
 		{
-			name: "the prompt similarity sketches (MinHash) are on the list, as in DESIGN 4.4's 90-day row",
+			name: "the prompt similarity sketches (MinHash) are on the list, as in DESIGN 4.4's row for them",
 			check: (html) => expect(rows(html).filter((r) => r.data.includes('MinHash'))).toHaveLength(1),
 		},
 		{

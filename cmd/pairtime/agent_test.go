@@ -44,6 +44,11 @@ func TestMain(m *testing.M) {
 			os.Exit(helper(v))
 		}
 	}
+	if len(os.Args) == 2 && os.Args[1] == "lookback" {
+		// An agent a test runs in this process starts lookback's reader
+		// as os.Executable() lookback, which is this binary.
+		os.Exit(start(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	}
 	switch args := os.Getenv(runEnv); args {
 	case "":
 	case ownArgs:

@@ -71,6 +71,12 @@ type LogReader interface {
 	// run it at their own priority, apart from the agent's worker, and
 	// hand Parse the result in LogLine.Entry.
 	DecodeLog(line []byte) (any, error)
+	// TrimLog returns line with only what Parse reads of it, which Parse
+	// reads as it reads line, or DecodeLog's error. It keeps nothing. The
+	// lookback reader's child process sends the agent trimmed lines, so
+	// the agent decodes a small part of 30 days of logs at its own
+	// priority (WP-AD3).
+	TrimLog(line []byte) ([]byte, error)
 	// LogPlace returns the folder a log record's line ran in, which Parse
 	// resolves to a project (Options.Project), and the harness's id of
 	// the session it belongs to, which orders it after the session's hook

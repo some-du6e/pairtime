@@ -23,9 +23,10 @@ const (
 	maxSavedSessions = 64
 	maxSavedTurns    = 16
 	// maxSavedFiles and maxSavedLogSessions bound the transcript files and
-	// sessions whose memory the transcript reader saves: those read from
-	// last. A file whose memory isn't saved starts afresh where the
-	// tailers resume it.
+	// sessions whose memory the transcript reader saves: the files its
+	// memory would forget last (older), and the sessions those name, then
+	// those read from last. A file whose memory isn't saved starts afresh
+	// where the tailers resume it.
 	maxSavedFiles       = 64
 	maxSavedLogSessions = 64
 )
@@ -46,10 +47,15 @@ type savedState struct {
 }
 
 type savedFile struct {
-	Key   string  `json:"key"`
-	At    int64   `json:"at"`
-	State txState `json:"state"`
-	Seen  uint64  `json:"seen"`
+	Key    string  `json:"key"`
+	At     int64   `json:"at"`
+	State  txState `json:"state"`
+	Seen   uint64  `json:"seen"`
+	Newest int64   `json:"newest,omitempty"`
+	// Rewinding and Rewound are the Rewind's mark (txFile.rewinding,
+	// rewound).
+	Rewinding bool  `json:"rewinding,omitempty"`
+	Rewound   int64 `json:"rewound,omitempty"`
 }
 
 type savedLogSession struct {
@@ -170,7 +176,10 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 	}
 	// A file whose state holds something back always goes, past the
 	// bound: without it a restart would start the file afresh in the
-	// middle of a turn. The rest go newest first.
+	// middle of a turn. The rest go in the order the memory keeps them,
+	// so a session written to now goes before the histories lookback read
+	// since.
+	recent := recentSeen(a.files)
 	slices.SortFunc(files, func(x, y *txFile) int {
 		if px, py := x.snapAt < x.at, y.snapAt < y.at; px != py {
 			if px {
@@ -178,20 +187,47 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 			}
 			return 1
 		}
-		return cmp.Compare(y.seen, x.seen)
+		switch {
+		case older(y, x, recent):
+			return -1
+		case older(x, y, recent):
+			return 1
+		}
+		return 0
 	})
 	for i, f := range files {
 		if i >= maxSavedFiles && f.snapAt >= f.at {
 			break
 		}
-		st.Files = append(st.Files, savedFile{Key: f.key, At: f.snapAt, State: f.snap, Seen: f.seen})
+		st.Files = append(st.Files, savedFile{Key: f.key, At: f.snapAt, State: f.snap, Seen: f.seen, Newest: f.newest,
+			Rewinding: f.rewinding, Rewound: f.rewound})
+	}
+	// The sessions the saved files name always go, past the bound, so a
+	// restart neither writes a second session.start for one nor forgets
+	// its hooks came; the rest go read from last first.
+	named := make(map[string]bool, len(st.Files))
+	for _, sf := range st.Files {
+		if sf.State.Session != "" {
+			named[sf.State.Session] = true
+		}
 	}
 	logs := make([]*txSession, 0, len(a.logSessions))
 	for _, s := range a.logSessions {
 		logs = append(logs, s)
 	}
-	slices.SortFunc(logs, func(x, y *txSession) int { return cmp.Compare(y.seen, x.seen) })
-	for _, s := range logs[:min(len(logs), maxSavedLogSessions)] {
+	slices.SortFunc(logs, func(x, y *txSession) int {
+		if nx, ny := named[x.id], named[y.id]; nx != ny {
+			if nx {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Compare(y.seen, x.seen)
+	})
+	for i, s := range logs {
+		if i >= maxSavedLogSessions && !named[s.id] {
+			break
+		}
 		st.LogSessions = append(st.LogSessions, savedLogSession{ID: s.id, Token: s.token, Started: s.started,
 			NativeAt: s.nativeAt, Seen: s.seen})
 	}
@@ -251,7 +287,8 @@ func (a *Adapter) LoadState(raw json.RawMessage) error {
 		if sf.Key == "" || files[sf.Key] != nil || len(files) >= maxLogFiles || sf.At < 0 {
 			continue
 		}
-		files[sf.Key] = &txFile{key: sf.Key, at: sf.At, st: sf.State, snap: sf.State, snapAt: sf.At, seen: sf.Seen}
+		files[sf.Key] = &txFile{key: sf.Key, at: sf.At, st: sf.State, snap: sf.State, snapAt: sf.At, seen: sf.Seen, newest: sf.Newest,
+			rewinding: sf.Rewinding, rewound: max(sf.Rewound, 0)}
 		clock = max(clock, sf.Seen)
 	}
 	logs := make(map[string]*txSession, len(st.LogSessions))
