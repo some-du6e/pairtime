@@ -35,8 +35,8 @@
 <section class="pt-card wide" aria-labelledby="kept-title" data-testid="kept">
 	<h2 id="kept-title">What pairtime keeps on this computer</h2>
 	<p>
-		Some of these, and deleting each on time, come with a later version of pairtime. Who can read it, below, says what
-		this one keeps of your prompts.
+		pairtime deletes each of these once it has been kept as long as the table says. Who can read it, below, says how it
+		keeps your prompts.
 	</p>
 	<table>
 		<thead>

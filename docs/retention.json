@@ -39,7 +39,7 @@
       "id": "device.ledger",
       "where": "device",
       "data": "Ledger records and batch roots: the sealed log of what pairtime recorded",
-      "kept": "{days}, or longer while a submission that uses them is inside its spot-check window ({window})",
+      "kept": "{days}, or longer while a submission that uses them is inside its spot-check window ({window}). While this computer is linked, the batch roots of online batches that haven't reached the server yet stay, without their records, until the server has them, unless a fork or the server's device_mismatch has ended the chain",
       "days": 180
     },
     {

@@ -608,6 +608,7 @@ func (u *Uploader) cycle() bool {
 		u.backoff.ok()
 		u.setProblem("login", "")
 		u.setProblem("local-only", "")
+		u.setProblem("swept", "")
 		return false
 	}
 	if c.Token == u.blocked {
@@ -642,6 +643,17 @@ func (u *Uploader) cycle() bool {
 		u.setProblem("chain", forkProblem(u.st.Fork))
 		return false
 	}
+	if u.st.Next < u.rows.start() {
+		// The root that goes next is of a batch the ledger dropped, which
+		// can't go again, and a root after it links only once the device
+		// signs in again (ingest-v1 2.7 step 5): nothing goes until pairtime
+		// logout and pairtime login link it again, after which the chain
+		// goes on from the first batch sealed then (relink).
+		u.takeSealed()
+		u.setProblem("swept", sweptProblem)
+		return false
+	}
+	u.setProblem("swept", "")
 	if !u.urgent.Swap(false) && !u.flush() {
 		return false // stopping
 	}
@@ -1072,8 +1084,8 @@ func (u *Uploader) sync(c Credentials) bool {
 		// first receipts stay (receipt). A link's gap, which Next goes past
 		// by design, says nothing of the kind.
 		cutoff := int64(0)
-		if head >= 1 && head <= u.rows.last() {
-			cutoff = u.rows.times[head-1].sealedMax - time.Hour.Milliseconds()
+		if u.rows.holdsRow(head) {
+			cutoff = u.rows.at(head).sealedMax - time.Hour.Milliseconds()
 		}
 		from := store.DayOf(cutoff)
 		maps.DeleteFunc(u.st.Marks, func(day string, _ store.Mark) bool { return day >= from })
@@ -1116,8 +1128,10 @@ func (u *Uploader) sync(c Credentials) bool {
 		// From too, as after a re-link that dropped a request whose answer
 		// was lost: a duplicate stores nothing, so the server still takes
 		// the link's gap after it. Batches the server said it no longer
-		// holds (Gone), and those in a local-only gap, are passed over.
-		for b := max(u.st.ChainStart, u.st.Gone+1, 1); b <= head && b <= u.rows.last(); b++ {
+		// holds (Gone), and those in a local-only gap, are passed over, and
+		// so are those a retention sweep dropped, which can't go again and
+		// whose receipts went with their rows (ledger.ChainInfo.Base).
+		for b := max(u.st.ChainStart, u.st.Gone+1, u.rows.start()); b <= head && b <= u.rows.last(); b++ {
 			if u.st.localOnly(b) {
 				continue
 			}
@@ -1144,6 +1158,10 @@ func (u *Uploader) sync(c Credentials) bool {
 	u.setStatus(func(s *Status) { s.Next, s.Fork = next, u.st.Fork })
 	return true
 }
+
+// sweptProblem is what doctor hears while the root that goes next is of a
+// batch the ledger no longer keeps (Uploader.cycle).
+const sweptProblem = `pairtime has stopped uploading, because the server needs a batch this computer's ledger no longer keeps, as after the server lost batches it had stored, which a restore from a backup can do; to upload again, run pairtime logout, then pairtime login`
 
 // newDevice ends what doctor hears once this computer can't upload under
 // its device ID any more: after a fork, or the server's device_mismatch.
@@ -1752,7 +1770,7 @@ func (u *Uploader) setProblem(source, msg string) {
 		return
 	}
 	var all []string
-	for _, s := range []string{"login", "local-only", "server", "chain", "receipts", "buckets", "local"} {
+	for _, s := range []string{"login", "local-only", "swept", "server", "chain", "receipts", "buckets", "local"} {
 		if m := u.problems[s]; m != "" {
 			all = append(all, m)
 		}

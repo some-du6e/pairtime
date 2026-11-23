@@ -73,6 +73,10 @@ func (a *agent) publishVault(v *vault.Vault) {
 // keeps no new text and deletes none, even beside the switch turned off
 // (config.Privacy.TextHeld).
 func (a *agent) applyPrivacy() {
+	// The periods may have changed (prompt_text_days, path_days), and the
+	// sweep takes them whether or not a vault is open, which it sweeps
+	// without the key while none is.
+	a.kickSweep(true)
 	a.vaultMu.Lock()
 	defer a.vaultMu.Unlock()
 	v := a.vault

@@ -213,6 +213,20 @@ type agent struct {
 	vault     *vault.Vault
 	vaultWork sync.WaitGroup
 	dropMu    sync.Mutex
+	// vaultFiles is held while the vault's files may change with no vault
+	// published: by openLedger from before the vault opens until it is
+	// published or closed again, and by a retention sweep of the vault's
+	// directory while none is open (sweep).
+	vaultFiles sync.Mutex
+	// uploadsMu orders a retention sweep's pruning of uploads.jsonl, which
+	// runs only while no uploader does, with the uploader's start
+	// (startUploader).
+	uploadsMu sync.Mutex
+	// sweepKick wakes the retention sweeps' goroutine while it runs, and
+	// sweepForce makes its next look sweep whatever the day
+	// (startRetention).
+	sweepKick  atomic.Pointer[chan struct{}]
+	sweepForce atomic.Bool
 	// early are the batches the ledger writer sealed before upload was
 	// set, for handEarly; earlyMu orders them with it.
 	earlyMu sync.Mutex
@@ -322,6 +336,8 @@ func Run(ctx context.Context, opts Options) error {
 	})
 	closers = append(closers, a.startScorer())
 	closers = append(closers, a.startLedger())
+	// Stopped before the ledger, the vault and the bucket store close.
+	closers = append(closers, a.startRetention())
 	src := a.openOS(opts)
 	a.signals = src.signals
 	if src.close != nil {
