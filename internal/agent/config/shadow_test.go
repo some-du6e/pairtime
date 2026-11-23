@@ -80,11 +80,16 @@ func TestScoringFreeze(t *testing.T) {
 	}
 	for _, tt := range twice {
 		t.Run(tt.name, func(t *testing.T) {
-			atScoring(t, "0.4.0")
-			for range 50 {
-				cfg, problems := Parse([]byte(tt.file))
-				if cfg.Display.Shadow || len(problems) != 1 || !strings.Contains(problems[0], "display.shadow is set more than once") {
-					t.Fatalf("Parse(%q) has shadow %v and problems %q, want it off and the setting reported", tt.file, cfg.Display.Shadow, problems)
+			// The problem says what pairtime does, which holds before the
+			// freeze and after it.
+			for _, version := range []string{"0.4.0", "1.0.0"} {
+				atScoring(t, version)
+				for range 50 {
+					cfg, problems := Parse([]byte(tt.file))
+					if cfg.Display.Shadow || len(problems) != 1 || !strings.Contains(problems[0], "display.shadow is set more than once, in different upper and lower case, so pairtime reads it as off") ||
+						strings.Contains(problems[0], "calibrating") {
+						t.Fatalf("Parse(%q) at %s has shadow %v and problems %q, want it off and the setting reported as read off", tt.file, version, cfg.Display.Shadow, problems)
+					}
 				}
 			}
 		})
