@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -228,6 +229,100 @@ func sampleAt(evs []event.Event, ts int64, id string, d event.Payload) event.Eve
 		}
 	}
 	panic("no presence sample to copy")
+}
+
+// TestCarryReach checks the carry against pkg/score's reach rule (SM 2.1):
+// the window drops a carried record of the presence sampler's only when a
+// record the agent stamps itself, dated more than BUCKET_TTL_S after it,
+// comes before the sampler's next record, whether the carry folded that
+// record or the window holds it (window.cutBy). A Step over the carry and
+// the window then derives every slot from the window's start as one Step
+// over every record does: asleep through a silence or a suspend longer
+// than Lookback that ends with a record of the sampler's, a never-sampling
+// device's after a stamped record cut the reach. TestHeadlessLoop compares
+// minute buckets, and a minute with no credit and no agent time has none,
+// so it can't tell those slots apart.
+func TestCarryReach(t *testing.T) {
+	table := testTable()
+	turn := hookTurn(t, hookAt, hourTools())
+	last := turn[len(turn)-1].T
+	n := 0
+	rec := func(ts int64, d event.Payload) event.Event {
+		n++
+		return sampleAt(turn, ts, fmt.Sprintf("01a1fb1e-5318-78a1-a7f1-%012x", n), d)
+	}
+	// woken is the sampler starting again at ts, with a sample every 15 s
+	// for five minutes, the last input ten minutes before ts, and an
+	// os.focus a minute in, a record the agent stamps itself.
+	woken := func(ts int64) []event.Event {
+		var out []event.Event
+		for k := int64(0); k <= 20; k++ {
+			idle := float64(600 + 15*k)
+			out = append(out, rec(ts+k*15_000, &event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle}))
+		}
+		return append(out, rec(ts+61_000, &event.OSFocus{AppClass: event.AppUnknown}))
+	}
+	again := last + 10*hourMS
+	resume := last + 15_000 + 10*hourMS
+	cut := rec(last+3*hourMS, &event.OSFocus{AppClass: event.AppUnknown})
+	cases := []struct {
+		name  string
+		after []event.Event
+		from  int64
+		// kept says the carry keeps a record of the sampler's.
+		kept bool
+	}{
+		{"a sample after a silence longer than Lookback, before any record the agent stamps, keeps the carried sample's reach: the silence is asleep",
+			woken(again), again - 15*minuteMS, true},
+		{"a resume after a ten-hour suspend, before any record the agent stamps, keeps the carried suspend's reach: the machine slept",
+			append([]event.Event{rec(last+15_000, &event.OSPower{Op: event.PowerSuspend}),
+				rec(resume, &event.OSPower{Op: event.PowerResume})}, woken(resume+15_000)...),
+			resume - 15*minuteMS, true},
+		{"a record the agent stamps BUCKET_TTL_S after the last sample, in the window before the sampler's next record, ends the carried sample's reach",
+			append([]event.Event{cut}, woken(again)...), last + 2*hourMS, false},
+		{"the same record folded into the carry ends the carried sample's reach too",
+			append([]event.Event{cut}, woken(again)...), last + 4*hourMS, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			all := append(slices.Clone(turn), c.after...)
+			w := &window{gaps: gapsOf(table), ttl: table.Int(params.BUCKET_TTL_S) * 1000}
+			for i, e := range all {
+				w.add(e, uint64(i+1))
+			}
+			w.slide(c.from)
+			recs := w.records()
+			if kept := slices.ContainsFunc(recs, func(e event.Event) bool { return e.T < c.from && sampler(&e) }); kept != c.kept {
+				t.Errorf("the carry keeps a record of the sampler's: %v, want %v", kept, c.kept)
+			}
+			got, want := slotsFrom(table, recs, c.from), slotsFrom(table, all, c.from)
+			if len(got) != len(want) {
+				t.Fatalf("a Step over the carry and the window derives %d slots from the window's start, one Step over every record %d",
+					len(got), len(want))
+			}
+			for i := range got {
+				if !reflect.DeepEqual(got[i], want[i]) {
+					t.Fatalf("the slot at %s is %+v over the carry and the window, and %+v in one Step over every record",
+						time.UnixMilli(want[i].Start).UTC(), got[i], want[i])
+				}
+			}
+		})
+	}
+}
+
+// slotsFrom returns the slots one Step over recs derives from from on.
+func slotsFrom(table *params.Table, recs []event.Event, from int64) []score.Slot {
+	_, out := score.Step(score.NewState(table, score.Device{}), recs)
+	var all score.Derived
+	all.Append(out.Final)
+	all.Append(out.Pending)
+	var slots []score.Slot
+	for _, s := range all.Slots {
+		if s.Start >= from {
+			slots = append(slots, s)
+		}
+	}
+	return slots
 }
 
 // savedCursor returns the place state.json holds.
