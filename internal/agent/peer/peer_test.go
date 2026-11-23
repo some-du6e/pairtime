@@ -155,7 +155,7 @@ func TestHeartbeat(t *testing.T) {
 			want:  NoOwner,
 		},
 		{
-			name:  "another user's wakatime-cli fails",
+			name:  "a wakatime-cli the table gives another user fails, a backstop where the lookup sees only this user's processes",
 			procs: line("uid:1001", proc("systemd"), proc("code"), proc("wakatime-cli-linux-amd64")),
 			want:  OtherUser,
 		},
@@ -249,7 +249,7 @@ func TestOTLP(t *testing.T) {
 			names: ptr(true), want: NotHarness,
 		},
 		{
-			name:  "another user's harness process fails",
+			name:  "a harness process the table gives another user fails",
 			procs: line("uid:1001", proc("systemd"), proc("kitty"), proc("zsh"), proc("claude")),
 			names: ptr(true), want: OtherUser,
 		},
@@ -319,6 +319,104 @@ func TestNoSelf(t *testing.T) {
 			}
 			if looked {
 				t.Error("the check looked the connection up without knowing who this user is")
+			}
+		})
+	}
+}
+
+// TestKeptLookup applies rules, in turn, to one Result a lookup gave, as a
+// caller does to each request on a connection it looked up once.
+func TestKeptLookup(t *testing.T) {
+	claude := line(me, proc("systemd"), proc("kitty"), proc("zsh"), proc("claude"))
+	never := func(platform.ID) bool { return false }
+	always := func(platform.ID) bool { return true }
+	heartbeat := func(r Result) Result { return r.Heartbeat() }
+	otlp := func(named func(platform.ID) bool) func(Result) Result {
+		return func(r Result) Result { return r.OTLP(named) }
+	}
+	tests := []struct {
+		name  string
+		procs []platform.Proc
+		err   error
+		// lookup is the Reason Lookup gives, and want the Reason each of
+		// rules gives, applied in turn to the Result before it.
+		lookup Reason
+		rules  []func(Result) Result
+		want   []Reason
+	}{
+		{
+			name:   "a lookup alone finds the client and neither passes nor fails a rule",
+			procs:  claude,
+			lookup: Found,
+		},
+		{
+			name:   "a kept lookup gives the OTLP rule's answer anew once a hook or a scan names the client",
+			procs:  claude,
+			lookup: Found,
+			rules:  []func(Result) Result{otlp(never), otlp(always)},
+			want:   []Reason{NotNamed, Passed},
+		},
+		{
+			name:   "a heartbeat's result gives the OTLP rule its own answer, and the OTLP rule's the heartbeat rule its own",
+			procs:  claude,
+			lookup: Found,
+			rules:  []func(Result) Result{heartbeat, otlp(always), heartbeat},
+			want:   []Reason{NotWakaTime, Passed, NotWakaTime},
+		},
+		{
+			name:   "a lookup that found no owner stays no_owner under either rule",
+			err:    errors.New("not established"),
+			lookup: NoOwner,
+			rules:  []func(Result) Result{heartbeat, otlp(always)},
+			want:   []Reason{NoOwner, NoOwner},
+		},
+		{
+			name:   "another user's client stays other_user under either rule",
+			procs:  line("uid:1001", proc("systemd"), proc("code"), proc("wakatime-cli-linux-amd64")),
+			lookup: OtherUser,
+			rules:  []func(Result) Result{heartbeat, otlp(always)},
+			want:   []Reason{OtherUser, OtherUser},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lookups := 0
+			c := New(Options{OS: platform.Linux, Self: me, Owner: func(netip.AddrPort, netip.AddrPort) (int, []platform.Proc, error) {
+				lookups++
+				if tt.err != nil {
+					return 0, nil, tt.err
+				}
+				return last(tt.procs), tt.procs, nil
+			}})
+			r := c.Lookup(clientAddr, agentAddr)
+			if r.Reason != tt.lookup || r.Pass() {
+				t.Fatalf("Lookup = %s, Pass %v; want %s, false", r.Reason, r.Pass(), tt.lookup)
+			}
+			for i, rule := range tt.rules {
+				r = rule(r)
+				if r.Reason != tt.want[i] {
+					t.Errorf("rule %d gave %s, want %s", i, r.Reason, tt.want[i])
+				}
+			}
+			if lookups != 1 {
+				t.Errorf("the connection was looked up %d times, want once", lookups)
+			}
+		})
+	}
+}
+
+func TestZeroResult(t *testing.T) {
+	tests := []struct {
+		name string
+		r    Result
+	}{
+		{"a zero Result passes the heartbeat rule never", Result{}.Heartbeat()},
+		{"a zero Result passes the OTLP rule never, however named", Result{}.OTLP(func(platform.ID) bool { return true })},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.r.Pass() {
+				t.Errorf("= %s, a pass", tt.r.Reason)
 			}
 		})
 	}

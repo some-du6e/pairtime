@@ -106,7 +106,7 @@ func tcpOwner(client, server netip.AddrPort) (int, error) {
 	}
 	rows6, err6 := tcpRows(win.AF_INET6)
 	if err6 != nil {
-		return 0, err
+		return 0, fmt.Errorf("%w, and the IPv6 table can't be read: %w", err, err6)
 	}
 	return ownerOf(rows6, client, server)
 }

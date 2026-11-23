@@ -111,11 +111,12 @@ func socketFDsIn(b []byte) []int32 {
 }
 
 // socketInfo reads descriptor fd's socket_fdinfo. The kernel refuses a
-// buffer smaller than the struct and fills exactly the struct, so a size
-// other than socketFDInfoSize shows a layout parseSocketFDInfo doesn't
-// know, and parseSocketFDInfo refuses it.
+// buffer smaller than its struct, and fills and counts exactly the struct
+// in a bigger one. So the buffer has room for a struct grown in a later
+// macOS, whose size, other than socketFDInfoSize, then shows a layout that
+// parseSocketFDInfo doesn't know, and parseSocketFDInfo refuses it.
 func (s libprocSource) socketInfo(pid int, fd int32) ([]byte, error) {
-	buf := make([]byte, socketFDInfoSize)
+	buf := make([]byte, 2*socketFDInfoSize)
 	n := s.c.pidFDInfo(int32(pid), fd, procPIDFDSocketInfo, &buf[0], int32(len(buf)))
 	if n <= 0 {
 		return nil, fmt.Errorf("proc_pidfdinfo(%d, %d, PROC_PIDFDSOCKETINFO) failed", pid, fd)

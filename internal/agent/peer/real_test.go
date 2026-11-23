@@ -173,8 +173,10 @@ func runChild(t *testing.T, ln *net.TCPListener, exe, under string) (*exec.Cmd, 
 
 // TestRealConnections runs both checks over real loopback connections,
 // from this process and from copies of this test binary named as the
-// checks name processes (PLAN, WP-OS13). ci.yml runs it on Linux; the
-// lookups' own tests run on Windows and macOS under internal/platform.
+// checks name processes (PLAN, WP-OS13). ci.yml runs it on Linux. On
+// Windows and macOS, platform.yml runs the lookups' tests and both checks
+// over a child's connection (internal/platform/windows and darwin,
+// peer_*_test.go), since its path filter doesn't cover this package.
 func TestRealConnections(t *testing.T) {
 	dir := t.TempDir()
 	waka := "wakatime-cli-" + runtime.GOOS + "-" + runtime.GOARCH
