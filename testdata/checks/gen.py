@@ -24,8 +24,8 @@ check = ck.check
 
 # Every scenario rests on at least one reading DESIGN 7.3 leaves open.
 READINGS = "2026-11-19-check-readings"
-CC8_SPEC = ("ledger-v1.md 10.8 (WP-LG3, #12). Issue #15: CC8 is weaker than DESIGN 7.3 "
-            "claims, and these cases follow the spec's stated limit")
+CC8_SPEC = ("DESIGN 7.3 and ledger-v1.md 10.8, as issue #15's decision rewrote them: CC8 reveals no keyed value "
+            "and checks only what needs no key")
 
 # 4.2-alternation: Claude Code on macOS, one project, five prompts.
 ALT = "4.2-alternation"
@@ -323,23 +323,18 @@ def alt_features(sc, dev, *, a3=None, texts=None):
     return keys
 
 
-def alt_challenge(sc, dev, keys, drawn, *, a3_key=None, a3_hidden=(), a3_bare=False, texts=None):
+def alt_challenge(sc, dev, keys, drawn, *, a3_hidden=(), texts=None):
     """The draw and the reveals: every pool item is drawn, because the
-    pool is under CHALLENGE_K = 10. a3_bare leaves the text off every one
-    of A3's per-shingle values."""
+    pool is under CHALLENGE_K = 10. a3_hidden holds the indexes, from 0, of
+    the words A3's reveal removes. No keyed value is revealed (DESIGN 7.3)."""
     hooks = {h["t"]: h for h in dev.turn_prompts("hook")}
     text_at = {**TEXTS, **(texts or {})}
     items = []
     for t in drawn:
         h = hooks[t]
         com = ck.commitment(keys["k_tok"], h["seq"], text_at[t])
-        key = a3_key if t == A3 and a3_key is not None else keys["k_feat"]
         hidden = a3_hidden if t == A3 else ()
-        cc8 = ck.shingle_reveal(key, text_at[t], hidden)
-        if t == A3 and a3_bare:
-            cc8 = [{"v": x["v"]} for x in cc8]
-        items.append({"seq": h["seq"], "turn_key": h["data"]["turn_key"],
-                      "text": ck.text_reveal(com, hidden), "cc8": cc8})
+        items.append({"seq": h["seq"], "turn_key": h["data"]["turn_key"], "text": ck.text_reveal(com, hidden)})
     pool = [hooks[t]["seq"] for t in drawn]
     sc.challenge = {"device_id": dev.id, "pool": pool, "k": ck.CHALLENGE_K_MIN, "drawn": items,
                     "note": CHALLENGE_NOTE}
@@ -347,8 +342,8 @@ def alt_challenge(sc, dev, keys, drawn, *, a3_key=None, a3_hidden=(), a3_bare=Fa
 
 CHALLENGE_NOTE = ("The pool is every human prompt in the submission that opened a credited anchor (DESIGN 7.5 step "
                   "4). It is under CHALLENGE_K, so the draw takes all of it and the seed doesn't matter here. For "
-                  "each drawn prompt: text is its redacted reveal (ledger-v1.md 10.3), cc8 its per-shingle values "
-                  "(10.8). The committed f and c are in the prompt's body in ledger.json. The reveal of the agent "
+                  "each drawn prompt: text is its redacted reveal (ledger-v1.md 10.3). No keyed value is revealed "
+                  "(DESIGN 7.3). The committed f and c are in the prompt's body in ledger.json. The reveal of the agent "
                   "message each prompt answered isn't here: the fixtures have no agent text, and CC8 doesn't read it.")
 
 
@@ -362,7 +357,7 @@ def alt_clean_state(sc, *, cc1=None, cc5=True):
     sc.state("CC4", "not_computable", commits=0)
     sc.state("CC6", "pass", minutes_mismatched=0, held_s=0)
     sc.state("CC7", "pass", root_mismatches=0, head_mismatches=0, seq_gaps=0)
-    sc.state("CC8", "pass", challenged=4, sketch_ok=4)
+    sc.state("CC8", "pass", challenged=4, feature_conflicts=0)
     sc.state("CC9", "pass", sessions=1)
     sc.state("CC10", "not_computable", editor_acts=0)
     sc.state("CC11", "pass", prompts=5, typed_chars=300, key_downs=330, too_few_keys=0)
@@ -588,9 +583,10 @@ def s_42_cc7_batch(out):
 
 
 def s_42_cc8_false(out):
-    sc = Scenario("4.2-cc8-false-sketch", "A falsified sketch, true values revealed",
+    sc = Scenario("4.2-cc8-false-sketch", "A falsified sketch, caught by a same-text turn",
                   "A modified client commits A3's features as if A3 were an unrelated request, so the re-roll rule "
-                  "misses it and A3 is credited. A3 is drawn, and the client reveals A3's true per-shingle values.",
+                  "misses it and A3 is credited. A3 is drawn, and so are A1 and A2, which carry A3's text with its "
+                  "true values.",
                   base=ALT, projects=[DASH], window=ALT_W)
     dev = alt(sc)
     dev.finish()
@@ -604,79 +600,57 @@ def s_42_cc8_false(out):
     sc.fails = ["CC8"]
     alt_clean_state(sc, cc5=False)
     sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
-    sc.state("CC8", "fail", challenged=5, sketch_ok=4, sketch_mismatch=1, shingle_conflicts=0)
+    sc.state("CC8", "fail", challenged=5, length_mismatch=0, low_effort_mismatch=0, es_mismatch=0,
+             class_mismatch=0, feature_conflicts=1)
     sc.notes.append("The server re-scores from the bodies' f (DESIGN 6.2 D18), which say A3 isn't a re-roll, so "
-                    "the re-score credits A3 as the live buckets do and CC6 passes. Only CC8 sees the lie: the "
-                    "sketch from A3's revealed values is A1's, not the committed one (ledger-v1.md 10.8 `sketch`).")
+                    "the re-score credits A3 as the live buckets do and CC6 passes. Only CC8 sees the lie: A3's "
+                    "revealed text is A1's and A2's, and its committed th and mh aren't theirs (ledger-v1.md 10.8). "
+                    "The server can't tell which values are honest, so A1, A2 and A3 all fail.")
     sc.notes.append(CC8_SPEC)
     sc.build(out)
 
 
 def s_42_cc8_key(out):
-    sc = Scenario("4.2-cc8-made-up-key", "A sketch under a made-up key, caught by a shared shingle",
-                  "The client commits A3's sketch under a key of its own and reveals values under that key, so "
-                  "A3's sketch reproduces. A1 and A2 are drawn too, honestly, and show the same shingles with "
-                  "other values.",
+    sc = Scenario("4.2-cc8-made-up-key", "A sketch under a made-up key, caught by a same-text turn",
+                  "The client commits A3's sketch and template under a key of its own, which the server has no key "
+                  "to check. A1 and A2 are drawn too, honestly, and carry the same text with other values.",
                   base=ALT, projects=[DASH], window=ALT_W)
     dev = alt(sc)
     dev.finish()
     keys = alt_features(sc, dev, a3=ck.features(FAKE_KEY, TEXT_A, "substantive"))
     sc.edit("A3's f is computed under a made-up key instead of K_feat. Its c is honest.")
     sc.typing = alt_typing(dev)
-    alt_challenge(sc, dev, keys, (A1, B1, A2, B2, A3), a3_key=FAKE_KEY)
+    alt_challenge(sc, dev, keys, (A1, B1, A2, B2, A3))
     sc.fails = ["CC8"]
     alt_clean_state(sc, cc5=False)
     sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
-    sc.state("CC8", "fail", challenged=5, sketch_ok=5, sketch_mismatch=0, shingle_mismatch=0, shingle_conflicts=9)
-    sc.notes.append("Each reveal verifies on its own (ledger-v1.md 10.8 `ok`). The failure is the cross-reveal "
-                    "rule: A3's nine shingles are A1's, shown with other values.")
-    sc.notes.append(CC8_SPEC)
-    sc.build(out)
-
-
-def s_42_cc8_bare(out):
-    sc = Scenario("4.2-cc8-hidden-shingles", "A made-up key with every shingle's text left off",
-                  "As 4.2-cc8-made-up-key, but the client leaves the text off every one of A3's per-shingle values "
-                  "and removes nothing from A3's text. No shingle of A3 can then be compared with A1's or A2's, "
-                  "and A3's sketch reproduces under the client's key. The reviewer still sees all of A3's text.",
-                  base=ALT, projects=[DASH], window=ALT_W)
-    dev = alt(sc)
-    dev.finish()
-    keys = alt_features(sc, dev, a3=ck.features(FAKE_KEY, TEXT_A, "substantive"))
-    sc.edit("A3's f is computed under a made-up key instead of K_feat. Its c is honest, and its content reveal "
-            "removes nothing.")
-    sc.edit("A3's shingle reveal gives each of its nine values under the made-up key, and none with its x.")
-    sc.typing = alt_typing(dev)
-    alt_challenge(sc, dev, keys, (A1, B1, A2, B2, A3), a3_key=FAKE_KEY, a3_bare=True)
-    sc.fails = ["CC8"]
-    alt_clean_state(sc, cc5=False)
-    sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
-    sc.state("CC8", "fail", challenged=5, sketch_ok=5, shingle_mismatch=1, length_mismatch=0, class_mismatch=0,
-             shingle_conflicts=0, hidden_shingles=9)
-    sc.notes.append("Nothing was removed from A3, so every value must show its shingle, and the shown shingles must "
-                    "be exactly A3's (ledger-v1.md 10.8). A3's show none, so CC8 fails it (`shingles`). That rule "
-                    "is what keeps the cross-reveal rule working: without it, leaving x off is a cheaper way to "
-                    "hide a made-up key than removing words, as 4.2-cc8-removed-spans does, and it hides nothing "
-                    "from the reviewer.")
+    sc.state("CC8", "fail", challenged=5, length_mismatch=0, low_effort_mismatch=0, es_mismatch=0,
+             class_mismatch=0, feature_conflicts=1)
+    sc.notes.append("No rule checks A3's values on their own, because only the device holds K_feat (ledger-v1.md "
+                    "10.8). The failure is the same-text rule: A3's normalized text is A1's and A2's, and its th "
+                    "and mh aren't theirs, so A1, A2 and A3 all fail.")
     sc.notes.append(CC8_SPEC)
     sc.build(out)
 
 
 def s_42_cc8_class(out):
     sc = Scenario("4.2-cc8-false-class", "A go-ahead committed as a substantive prompt",
-                  "B2 was a go-ahead: she typed `looks good`. A modified client commits its class as substantive, "
-                  "which buys a 120 s think lead where a go-ahead gets 20 s with presence only (SM 2.3). Its "
-                  "sketch, template, lengths and commitment are honest. B2 is drawn, and the class recomputed from "
-                  "its revealed text is low_effort.",
+                  "B2 was a go-ahead: she typed `looks good`. A modified client commits its f.pc as substantive. "
+                  "Its low_effort, lengths, sketch, template and commitment are honest. pkg/score derives a "
+                  "prompt's class from the body's low_effort, answers_question and typed_len_est, never from f.pc, "
+                  "so the forged class alone changes no credit. B2 is drawn, and the class SM 2.2 gives its "
+                  "revealed text is low_effort.",
                   base=ALT, projects=[DASH], window=ALT_W)
     dev = alt(sc)
     b2 = dev.one("prompt.submit", B2, via="hook")["data"]["turn_key"]
     for p in dev.find("prompt.submit", turn_key=b2):
-        p["data"].update(len_chars=len(GO_AHEAD), typed_len_est=len(GO_AHEAD))
+        p["data"].update(len_chars=len(GO_AHEAD), typed_len_est=len(GO_AHEAD), low_effort=True)
+    # The class pkg/score gives B2 from its body: low_effort.
+    sc.classes[b2] = "low_effort"
     gone = dev.drop_keys(B2 - 45_000, B2 - 15_001)
     check(len(gone) == 2, "two of B2's three typing samples' key presses go; the last slot's stays")
     sc.edit(f"B2's text is {GO_AHEAD!r}: its hook record and the transcript's copy have len_chars and "
-            f"typed_len_est {len(GO_AHEAD)}.")
+            f"typed_len_est {len(GO_AHEAD)}, and low_effort true, SM 2.2's go-ahead test of the text.")
     sc.edit("She types it in the slot before B2: the key presses from 19:41:15 to 19:41:44 are gone, and the "
             "typing module counts 11 key-downs, the ten characters and Enter, in the slot from 19:41:45.")
     dev.finish()
@@ -688,13 +662,16 @@ def s_42_cc8_class(out):
     sc.fails = ["CC8"]
     alt_clean_state(sc, cc5=False)
     sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
-    sc.state("CC8", "fail", challenged=4, sketch_ok=4, shingle_mismatch=0, length_mismatch=0, class_mismatch=1,
-             shingle_conflicts=0)
-    sc.state("CC11", "pass", prompts=5, typed_chars=250, key_downs=275, too_few_keys=0)
+    sc.state("CC8", "fail", challenged=4, length_mismatch=0, low_effort_mismatch=0, es_mismatch=0,
+             class_mismatch=1, feature_conflicts=0)
+    sc.state("CC11", "pass", prompts=4, typed_chars=240, key_downs=264, too_few_keys=0)
     sc.notes.append("`looks good` is on SM 2.2's go-ahead list, and no agent output before B2 asks a question, so "
-                    "its class is low_effort whatever its length. The server re-scores from the bodies' f (DESIGN "
-                    "6.2 D18), which say substantive, so the re-score credits B2's lead as the live buckets do and "
-                    "CC6 passes. Only CC8 sees the class.")
+                    "its class is low_effort whatever its length. pkg/score derives that class from the body's "
+                    "low_effort, answers_question and typed_len_est (classify in pkg/score/turns.go) and never reads "
+                    "f.pc, so the live client and the re-score both credit B2 as a go-ahead and CC6 passes. Only "
+                    "CC8 sees the forged f.pc (`class`).")
+    sc.notes.append("A go-ahead's lead has no typing part (SM 2.3), so CC11 counts the other four prompts and not "
+                    "B2.")
     sc.notes.append("B2 is still human_typed (SM 2.2 rule 6): a key press in the 10 s before it, focus on the "
                     "terminal, and 10 characters in one input slot. It isn't a re-roll of B1, and A3 is still the "
                     "third A.")
@@ -722,8 +699,8 @@ def s_42_cc8_length(out):
     sc.fails = ["CC8"]
     alt_clean_state(sc, cc5=False)
     sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
-    sc.state("CC8", "fail", challenged=4, sketch_ok=4, shingle_mismatch=0, length_mismatch=1, class_mismatch=0,
-             shingle_conflicts=0)
+    sc.state("CC8", "fail", challenged=4, length_mismatch=1, low_effort_mismatch=0, es_mismatch=0,
+             class_mismatch=0, feature_conflicts=0)
     sc.state("CC11", "not_computable", prompts=0)
     sc.notes.append("Nothing was removed from B2, so its body's len_chars must be its text's 60 characters "
                     "(`lengths`). The class recomputed with the typed length bounded by the text's is substantive, "
@@ -739,24 +716,24 @@ def s_42_cc8_length(out):
 
 def s_42_cc8_limit(out):
     sc = Scenario("4.2-cc8-removed-spans", "A made-up key that CC8 can't catch",
-                  "As 4.2-cc8-made-up-key, but the teen removes three words of A3 by hand in its content reveal, so "
-                  "every shingle of A3 touches a removed span and is shown without its text. Nothing is left to "
-                  "compare across reveals, and CC8 passes. This is the limit ledger-v1.md 10.8 states.",
+                  "As 4.2-cc8-made-up-key, but the teen removes three words of A3 by hand in its content reveal. A "
+                  "turn whose reveal removed a span gets only the es rule, so CC8 can compare A3 with nothing, and "
+                  "it passes. This is the limit DESIGN 7.3 and ledger-v1.md 10.8 state.",
                   base=ALT, projects=[DASH], window=ALT_W)
     dev = alt(sc)
     dev.finish()
     keys = alt_features(sc, dev, a3=ck.features(FAKE_KEY, TEXT_A, "substantive"))
     sc.edit("A3's f is computed under a made-up key. In A3's reveals, words 3, 6 and 9 (`sidebar`, `an`, `on`) "
-            "are removed as type teen, which hides all nine shingles' texts.")
+            "are removed as type teen, so CC8 can compare A3 with nothing.")
     sc.typing = alt_typing(dev)
-    alt_challenge(sc, dev, keys, (A1, B1, A2, B2, A3), a3_key=FAKE_KEY, a3_hidden=(2, 5, 8))
-    sc.known_limit = ("ledger-v1.md 10.8: a client that commits a sketch under a made-up key is caught only "
-                      "when two revealed turns share a shingle and show different values, and a span removed by hand "
-                      "over the shared words hides even that. Issue #15 asks Karim to accept, bind the key or drop "
-                      "CC8's dark-flow role. DESIGN 7.3's 0.65 for a 10-turn draw doesn't hold here.")
+    alt_challenge(sc, dev, keys, (A1, B1, A2, B2, A3), a3_hidden=(2, 5, 8))
+    sc.known_limit = ("DESIGN 7.3 and ledger-v1.md 10.8: a client that keys a turn's features under a key of its own "
+                      "is caught only through another revealed turn with the same normalized text, and a span "
+                      "removed by hand hides the turn from every CC8 rule but es. Issue #15's decision accepted "
+                      "this.")
     alt_clean_state(sc, cc5=False)
     sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
-    sc.state("CC8", "pass", challenged=5, sketch_ok=5, shingle_conflicts=0, hidden_shingles=9)
+    sc.state("CC8", "pass", challenged=5, feature_conflicts=0)
     sc.notes.append("A reviewer reading A3's kept text, `make the ... collapse into ... icon rail ... small "
                     "screens`, can still see the re-roll. CC8, the automatic check, can't.")
     sc.build(out)
@@ -1203,7 +1180,7 @@ def s_63_cc9_orphan(out):
     sc.build(out)
 
 
-SCENARIOS = [s_42_clean, s_42_cc1, s_42_cc2, s_42_cc5, s_42_cc7, s_42_cc7_batch, s_42_cc8_false, s_42_cc8_key, s_42_cc8_bare, s_42_cc8_class, s_42_cc8_length,
+SCENARIOS = [s_42_clean, s_42_cc1, s_42_cc2, s_42_cc5, s_42_cc7, s_42_cc7_batch, s_42_cc8_false, s_42_cc8_key, s_42_cc8_class, s_42_cc8_length,
              s_42_cc8_limit,
              s_42_cc9, s_42_cc11, s_62_clean, s_62_cc3, s_62_cc3_plugin, s_62_cc4_late, s_62_cc4_diffstat, s_63_clean, s_63_cc4_pushed,
              s_63_cc6, s_63_cc9, s_63_cc9_orphan, s_63_cc10, s_63_cc10_project]

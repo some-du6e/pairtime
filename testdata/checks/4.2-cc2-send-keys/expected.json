@@ -83,14 +83,11 @@
       "result": "not_computable",
       "counts": {
         "challenged": 0,
-        "sketch_ok": 0,
-        "bad_entry": 0,
-        "sketch_mismatch": 0,
-        "shingle_mismatch": 0,
         "length_mismatch": 0,
+        "low_effort_mismatch": 0,
+        "es_mismatch": 0,
         "class_mismatch": 0,
-        "shingle_conflicts": 0,
-        "hidden_shingles": 0
+        "feature_conflicts": 0
       },
       "reason": "nothing drawn: no human prompt opened a credited anchor"
     },

@@ -514,13 +514,21 @@ def keyed16(key, tag, x):
     return hmac256(key, bytes([tag]) + x.encode())[:16].hex()
 
 
-def prompt_class(text, typed_len, answers_question=False):
-    """SM 2.2's class for a text with no error signature."""
+def go_ahead(text):
+    """SM 2.2's go-ahead test, which a prompt.submit's low_effort states:
+    the text lowercased, without punctuation and with its whitespace
+    collapsed, is under 4 characters or on the go-ahead list. The texts
+    here are plain lowercase words, so none is a pick."""
     bare = re.sub(r"[^\w\s]", "", text.lower())
     norm = " ".join(bare.split())
+    return len(norm.replace(" ", "")) < 4 or norm in GO_AHEADS
+
+
+def prompt_class(text, typed_len, answers_question=False):
+    """SM 2.2's class for a text with no error signature."""
     if answers_question:
         return "answer"
-    if len(norm.replace(" ", "")) < 4 or norm in GO_AHEADS:
+    if go_ahead(text):
         return "low_effort"
     return "substantive" if typed_len >= SUBSTANTIVE_CHARS else "low_effort"
 
@@ -534,52 +542,61 @@ def features(key, text, pc):
     return {"v": 1, "mh": mh, "th": keyed16(key, 0x02, " ".join(words)), "pc": pc}
 
 
-def touched_shingles(words, hidden):
-    """The shingles of words that touch a removed word (10.8): a word
-    3-shingle that holds one, or a character 5-shingle that overlaps one's
-    characters. A shingle text that occurs twice is touched if either
-    occurrence is. hidden holds the indexes, from 0, of the removed words."""
-    if not hidden:
-        return set()
-    if len(words) >= 6:
-        return {" ".join(words[i:i + 3]) for i in range(len(words) - 2) if any(i <= h <= i + 2 for h in hidden)}
-    norm = " ".join(words)
-    if len(norm) <= 4:
-        return {norm}
-    spans, pos = [], 0
-    for j, w in enumerate(words):
-        if j in hidden:
-            spans.append((pos, pos + len(w)))
-        pos += len(w) + 1
-    return {norm[i:i + 5] for i in range(len(norm) - 4) if any(i < b and a < i + 5 for a, b in spans)}
+# ledger-v1.md 10.4 step 2's error lines, E1 to E6, each matched against a
+# whole line with its whitespace (10.2) stripped from both ends.
+ERROR_LINES = [re.compile(p) for p in (
+    r"(?:Uncaught (?:\(in promise\) )?|Exception in thread \"[^\"]*\" |Caused by: )?"
+    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\.)*[A-Za-z0-9_$]*(?:Error|Exception)(?::.*)?",
+    r"error\[E[0-9]{4}\](?::.*)?",
+    r"[^ \t]+:[0-9]+:[0-9]+: (?:fatal )?error:.*",
+    r"FAILED .+",
+    r"--- FAIL: .+",
+    r"panic: .+",
+)]
+
+
+def error_line(line):
+    i, j = 0, len(line)
+    while i < j and line[i] in WHITESPACE:
+        i += 1
+    while j > i and line[j - 1] in WHITESPACE:
+        j -= 1
+    return any(r.fullmatch(line[i:j]) for r in ERROR_LINES)
+
+
+def whole_lines(items):
+    """The lines a text reveal shows whole (ledger-v1.md 10.8): lines whose
+    every token, and the line feeds around them, the reveal keeps. A
+    removed span may hold a line feed, so the text on both sides of it
+    counts as one line, and that line isn't whole."""
+    lines, cur, whole = [], "", True
+    for it in items:
+        if "salt" not in it:
+            whole = False
+            continue
+        for k, part in enumerate(bytes.fromhex(it["token"]).decode().split("\n")):
+            if k:
+                if whole:
+                    lines.append(cur)
+                cur, whole = "", True
+            cur += part
+    if whole:
+        lines.append(cur)
+    return lines
 
 
 def selftest():
-    """Checks what no scenario reaches: a short text's character shingles
-    beside a removed word (ledger-v1.md 10.8), so a future scenario can't
-    publish a removed word through them."""
-    words = "move the nav bar".split()
-    hidden = {"the n", "he na", "e nav", " nav ", "nav b", "av ba", "v bar"}
-    check(touched_shingles(words, (2,)) == hidden, "a removed word hides every character shingle over it")
-    shown = [x for x in shingle_reveal(sha256(b"selftest"), "move the nav bar", (2,)) if "x" in x]
-    check(sorted(bytes.fromhex(x["x"]).decode() for x in shown) == [" the ", "e the", "move ", "ove t", "ve th"],
-          "only the shingles clear of the removed word show their text")
-    check(touched_shingles(["ok"], (0,)) == {"ok"}, "a text of four characters or fewer is one shingle")
-
-
-def shingle_reveal(key, text, hidden=()):
-    """What CC8 reveals for a text (10.8): each distinct shingle's value
-    under key, ascending, with its text unless it touches a removed word.
-    hidden holds the indexes, from 0, of the removed words."""
-    words = plain_words(text)
-    xs, tag = shingles(words)
-    touched = touched_shingles(words, hidden)
-    out = []
-    for x in xs:
-        v = shingle_value(key, tag, x)
-        out.append((v, None if x in touched else x))
-    out.sort(key=lambda p: p[0])
-    return [{"v": v.hex(), "x": x.encode().hex()} if x is not None else {"v": v.hex()} for v, x in out]
+    """Checks what no scenario reaches: CC8's es rule, since no text here
+    has an error line (ledger-v1.md 10.8)."""
+    text = "still failing\nFAILED tests/test_nav.py::test_bar - assert 1 == 2"
+    com = commitment(sha256(b"selftest"), 1, text)
+    check(whole_lines(text_reveal(com)) == text.split("\n"), "a reveal that removes nothing shows every line whole")
+    shown = whole_lines(text_reveal(com, (1,)))
+    check(shown == [text.split("\n")[1]] and error_line(shown[0]), "a removed word hides only its own line, and the "
+                                                                    "other is an E4 error line")
+    check(not any(error_line(x) for x in whole_lines(text_reveal(com, (3,)))),
+          "a removed word in the error line leaves no error line shown whole")
+    check(go_ahead("looks good") and not go_ahead("make the sidebar collapse"), "SM 2.2's go-ahead test")
 
 
 def text_reveal(com, removed_words=(), kind="teen"):
@@ -923,38 +940,26 @@ def cc7(led, sub):
     return outcome("fail" if items else "pass", counts, items)
 
 
-def reveal_word_count(items):
-    """The number of words a text reveal covers, or None when it keeps no
-    token. Tokens alternate between whitespace and other code points
-    (10.2), so one kept token fixes the kind of every token, removed ones
-    included. For the plain lowercase words these fixtures commit, 10.4
-    leaves every word as it is, so this is the normalized word count that
-    picks the shingle kind (10.5)."""
-    kinds = []
-    for it in items:
-        if "salt" in it:
-            kinds.append(bytes.fromhex(it["token"]).decode()[0] not in WHITESPACE)
-        else:
-            kinds.extend([None] * it["count"])
-    anchor = next((i for i, k in enumerate(kinds) if k is not None), None)
-    if anchor is None:
-        return None
-    return sum(1 for i in range(len(kinds)) if kinds[anchor] == ((i - anchor) % 2 == 0))
+CC8_CODES = {"lengths": "length_mismatch", "low_effort": "low_effort_mismatch", "es": "es_mismatch",
+             "class": "class_mismatch"}
 
 
 def cc8(challenge, led):
-    """Content-derived inputs (ledger-v1.md 10.8): for each
-    challenged turn, the revealed values are well formed and reproduce the
-    committed sketch. When nothing was removed, the shown shingles are
-    exactly the revealed text's and every value shows one, the body's
-    len_chars is the text's length and its typed_len_est no more than that,
-    and the class recomputed from the text, with the typed length bounded
-    by the text's, is the committed one. Across the device's reveals, a
-    shingle that shows two values fails every reveal that shows one of
-    them, and shingle_conflicts counts such shingles, so the count doesn't
-    depend on the order of the reveals."""
-    counts = {"challenged": 0, "sketch_ok": 0, "bad_entry": 0, "sketch_mismatch": 0, "shingle_mismatch": 0,
-              "length_mismatch": 0, "class_mismatch": 0, "shingle_conflicts": 0, "hidden_shingles": 0}
+    """Content-derived inputs, with no keyed value revealed (DESIGN 7.3,
+    ledger-v1.md 10.8). For each challenged turn, every line its reveal
+    shows whole that matches E1 to E6 needs an es in the body's f. When the
+    reveal removed nothing, the body's len_chars is the text's length in
+    code points and its typed_len_est no more than that, its low_effort is
+    SM 2.2's go-ahead test of the text, its f holds no es unless the text
+    has an error signature, and the class SM 2.2 gives the text, with the
+    body's answers_question and the typed length bounded by the text's, is
+    f.pc. Between the challenged turns whose reveals removed nothing, two
+    with the same normalized text must carry the same th and mh. Every turn
+    of a text that breaks this fails, and feature_conflicts counts such
+    texts, so neither depends on the order of the reveals. A turn whose
+    reveal removed a word gets only the es rule."""
+    counts = {"challenged": 0, "length_mismatch": 0, "low_effort_mismatch": 0, "es_mismatch": 0,
+              "class_mismatch": 0, "feature_conflicts": 0}
     if challenge is None or not challenge["drawn"]:
         return outcome("not_computable", counts, reason="nothing drawn: no human prompt opened a credited anchor")
     bodies = {}
@@ -962,51 +967,35 @@ def cc8(challenge, led):
         for bt in dev["batches"]:
             for r in bt["records"]:
                 bodies[(dev["device_id"], r["seq"])] = json.loads(r["body"])
-    faults, shown_by = {}, {}
+    faults, by_text = {}, {}
     for d in challenge["drawn"]:
         counts["challenged"] += 1
         bd = bodies[(challenge["device_id"], d["seq"])]
-        f = bd["f"]
+        f, ev = bd["f"], bd["e"]["data"]
         bad = faults.setdefault(d["seq"], [])
-        vs = [bytes.fromhex(x["v"]) for x in d["cc8"]]
-        if any(len(v) != 32 for v in vs) or any(b <= a for a, b in zip(vs, vs[1:])):
-            counts["bad_entry"] += 1
-            bad.append("bad_entry")
-        elif sketch(vs) != f["mh"]:
-            counts["sketch_mismatch"] += 1
-            bad.append("sketch")
-        else:
-            counts["sketch_ok"] += 1
-        removed = any("type" in it for it in d["text"])
-        shown = [bytes.fromhex(x["x"]).decode() for x in d["cc8"] if "x" in x]
-        counts["hidden_shingles"] += sum(1 for x in d["cc8"] if "x" not in x)
-        if not removed:
+        if "es" not in f and any(error_line(x) for x in whole_lines(d["text"])):
+            bad.append("es")
+        if not any("type" in it for it in d["text"]):
             text = "".join(bytes.fromhex(it["token"]).decode() for it in d["text"])
-            xs, _ = shingles(plain_words(text))
-            if sorted(shown) != xs or len(shown) != len(d["cc8"]):
-                counts["shingle_mismatch"] += 1
-                bad.append("shingles")
-            ev = bd["e"]["data"]
             if ev["len_chars"] != len(text) or ev["typed_len_est"] > ev["len_chars"]:
-                counts["length_mismatch"] += 1
                 bad.append("lengths")
-            typed = min(ev["typed_len_est"], len(text))
-            if prompt_class(text, typed, ev["answers_question"]) != f["pc"]:
-                counts["class_mismatch"] += 1
+            if ev["low_effort"] != go_ahead(text):
+                bad.append("low_effort")
+            if "es" in f and not any(error_line(x) for x in text.split("\n")):
+                bad.append("es")
+            if prompt_class(text, min(ev["typed_len_est"], len(text)), ev["answers_question"]) != f["pc"]:
                 bad.append("class")
-        words = reveal_word_count(d["text"])
-        tag = 0x05 if words is not None and words >= 6 else 0x06
-        for x in d["cc8"]:
-            if "x" in x:
-                shown_by.setdefault((tag, x["x"]), {}).setdefault(x["v"], set()).add(d["seq"])
-    conflicting = {k: by_value for k, by_value in shown_by.items() if len(by_value) > 1}
-    counts["shingle_conflicts"] = len(conflicting)
+            norm = " ".join(plain_words(text))
+            by_text.setdefault(norm, {}).setdefault((f["th"], f["mh"]), set()).add(d["seq"])
+        for code in set(bad):
+            counts[CC8_CODES[code]] += 1
+    conflicting = [by_values for by_values in by_text.values() if len(by_values) > 1]
+    counts["feature_conflicts"] = len(conflicting)
     others = {}
-    for by_value in conflicting.values():
-        for v, seqs in by_value.items():
-            elsewhere = set().union(*(o for w, o in by_value.items() if w != v))
-            for seq in seqs:
-                others.setdefault(seq, set()).update(elsewhere)
+    for by_values in conflicting:
+        seqs = set().union(*by_values.values())
+        for seq in seqs:
+            others[seq] = seqs - {seq}
     items = []
     for d in challenge["drawn"]:
         bad = faults[d["seq"]]
@@ -1018,8 +1007,7 @@ def cc8(challenge, led):
             if d["seq"] in others:
                 item["conflicts_with"] = sorted(others[d["seq"]])
             items.append(item)
-    failed = (counts["bad_entry"] or counts["sketch_mismatch"] or counts["shingle_mismatch"]
-              or counts["length_mismatch"] or counts["class_mismatch"] or counts["shingle_conflicts"])
+    failed = any(counts[k] for k in (*CC8_CODES.values(), "feature_conflicts"))
     return outcome("fail" if failed else "pass", counts, items)
 
 

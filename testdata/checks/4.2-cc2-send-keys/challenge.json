@@ -3,5 +3,5 @@
   "pool": [],
   "k": 10,
   "drawn": [],
-  "note": "The pool is every human prompt in the submission that opened a credited anchor (DESIGN 7.5 step 4). It is under CHALLENGE_K, so the draw takes all of it and the seed doesn't matter here. For each drawn prompt: text is its redacted reveal (ledger-v1.md 10.3), cc8 its per-shingle values (10.8). The committed f and c are in the prompt's body in ledger.json. The reveal of the agent message each prompt answered isn't here: the fixtures have no agent text, and CC8 doesn't read it."
+  "note": "The pool is every human prompt in the submission that opened a credited anchor (DESIGN 7.5 step 4). It is under CHALLENGE_K, so the draw takes all of it and the seed doesn't matter here. For each drawn prompt: text is its redacted reveal (ledger-v1.md 10.3). No keyed value is revealed (DESIGN 7.3). The committed f and c are in the prompt's body in ledger.json. The reveal of the agent message each prompt answered isn't here: the fixtures have no agent text, and CC8 doesn't read it."
 }
