@@ -390,3 +390,5 @@ Before the native program pays out, the server moves to a Hetzner CCX13, or an A
 pairtimed listens on 8080, which only cloudflared reaches, and on 127.0.0.1:9091 inside its container for `/healthz`, `/readyz` and `/metrics`. compose publishes no port on the host. Never route the tunnel to 9091.
 
 Not deployed yet: the day roots (WP-SV17), and `install.sh` and `install.ps1` at `https://<host>/`, which WP-RL2 serves from pairtimed; until then the scripts are release assets.
+
+The day roots are off by default: compose.yml leaves `PAIRTIME_WITNESS_REPO` empty and puts the witness sidecar behind the `witness` profile. To turn them on, add `PAIRTIME_WITNESS_REPO=some-du6e/pairtime-witness` and `COMPOSE_PROFILES=witness` to `.env` and run `docker compose up -d`. pairtimed then publishes every day since the first receipt, and the sidecar pushes them within 5 minutes, permanently, so do it only once the operator has agreed to publish the daily counts.
