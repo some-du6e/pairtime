@@ -9,7 +9,7 @@ Jordan's night (SM 6.4) as lookback would read it from the Claude Code transcrip
 | Date and zone | Friday 2026-11-20 into Saturday, Europe/Berlin, UTC+01:00, as in 6.4 |
 | Evidence | Level C, witness `backfilled`, presence `unknown` in every slot |
 | Window | 23:37:00 to 07:37:00. The session starts at 23:29:58 and isn't checked |
-| Errata | [lookback](../../../../docs/errata/2026-11-19-sm-2.8-lookback.md), point 2; WP-FX1's [6.6 codes](../../../../docs/errata/2026-11-19-sm-6.6-uncredited-codes.md), point 1 |
+| Errata | [lookback](../../../../docs/errata/2026-11-19-sm-2.8-lookback.md): point 4 covers the session's fields |
 
 ## What the transcript holds
 
@@ -22,11 +22,11 @@ Gone with the OS and git records: the lock at 23:53:10, the unlock at 07:30:00, 
 | Minute | Credited | Reasons | Arithmetic |
 |---|---|---|---|
 | 23:37-23:38 | 0 | none | No lead reaches back this far and no agent runs, so there is no bucket. The live fixture credits these minutes from the think lead, which lookback drops |
-| 23:39 | 50 | `P` 50 | The `/goal` prompt has 75 typed characters. SM 2.8 keeps its typing time, 75 / 1.5 = 50 s, from 23:39:10. SM decides no code for 23:39:00 to 23:39:10 |
+| 23:39 | 50 | `P` 50 | The `/goal` prompt has 75 typed characters. SM 2.8 keeps its typing time, 75 / 1.5 = 50 s, from 23:39:10. 23:39:00 to 23:39:10 is `X.no_anchor` (SM 5.2) |
 | 23:40-00:22 | 0 | none | T1 runs to 00:23:20, and lookback credits no reading while an agent runs. `X.agent_only` 43 × 60 = 2,580 |
-| 00:23-06:09 | 0 | none | T1's last 20 s, then T2 to T9 to 06:10:00: 347 × 60 = 20,820 s of agent time, none credited. Whether the continuations' seconds are `X.automated` or `X.agent_only` is open |
+| 00:23-06:09 | 0 | none | T1's last 20 s, then T2 to T9 to 06:10:00: 347 × 60 = 20,820 s of agent time, none credited. T1's 20 s are `X.agent_only` and the continuations' 20,800 s `X.automated` (SM 5.2) |
 | 06:10-07:35 | 0 | none | No agent runs and nothing is credited, so there is no bucket. The night's output would count as reading only if a prompt came within 600 s of a stop. The last stop is at 06:10:00 and the next prompt at 07:37:00, 5,220 s later |
-| 07:36 | 41 | `P` 41 | The follow-up has 61 typed characters: 61 / 1.5 = 40.67 s, which SM 1.3 rounds to the nearest second, 41, so it starts at 07:36:19. SM decides no code for the 19 s before it |
+| 07:36 | 41 | `P` 41 | The follow-up has 61 typed characters: 61 / 1.5 = 40.67 s, which SM 1.3 rounds to the nearest second, 41, so it starts at 07:36:19. the 19 s before it are `X.no_anchor` (SM 5.2) |
 
 ## Totals
 
@@ -36,9 +36,11 @@ Gone with the OS and git records: the lock at 23:53:10, the unlock at 07:30:00, 
 | `P` | 91 | 50 + 41 |
 | `agent_running_s` | 23,400 | 2,580 + 20,820 |
 | `agent_only_s` | 23,400 | 23,400 − 0 |
-| `X.agent_only` | 2,580 | 43 × 60 |
+| `X.agent_only` | 2,600 | 43 × 60 + 20 |
+| `X.automated` | 20,800 | 20,820 − 20 |
+| `X.no_anchor` | 29 | 10 + 19 |
 
-`agent_only_s` is the agent's running time less what was credited inside it, which is nothing. `X.agent_only` counts only T1's seconds to 00:23:00, the rows whose codes SM decides.
+`agent_only_s` is the agent's running time less what was credited inside it, which is nothing. `X.agent_only` is T1's seconds, to 00:23:20, and the continuations' are `X.automated`.
 
 | | Live 6.4 | Lookback |
 |---|---|---|
@@ -53,6 +55,6 @@ The live fixture's reading needs presence. Its `SUP` from 23:40 to 23:43:40 happ
 ## Readings the rows rely on
 
 - **Rounding.** 61 / 1.5 is 40.67 s. SM 1.3 rounds a typing time to the nearest second, halves up, so the lead is 41 s.
-- **Codes.** Seconds outside every window with no agent running have no SM 5.2 code in lookback (the lookback erratum's point 2). A stop-hook turn's uncredited seconds could be `X.automated` or `X.agent_only` (WP-FX1's 6.6 erratum, point 1). Those rows have `uncredited` null and list the candidate codes.
+- **Codes.** Uncredited seconds follow SM 5.2's order for unknown presence (SM 2.8). No stop has a prompt within 600 s after it, so the cap cuts nothing. T1's uncredited seconds are `X.agent_only`, the stop-hook continuations' `X.automated`, and the 29 s outside every window, with no agent running, `X.no_anchor`.
 
 DESIGN 6.2 D5's cap for level C, min(credited, ai_logged / 3), is the 91 s credited: the agent events replay to `ai_logged_s` 23,520.

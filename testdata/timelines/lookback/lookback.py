@@ -21,10 +21,9 @@ import timeline as tl
 HERE = os.path.dirname(os.path.abspath(__file__))
 TIMELINES = os.path.dirname(HERE)
 
-# The erratum for what SM 2.8 leaves open. Rows that depend on it name it.
+# The erratum for what SM 2.8 leaves open. Rows whose numbers depend on its
+# points 3 to 5 name it; its point 2, the codes, is decided (SM 5.2).
 ERRATUM = "2026-11-19-sm-2.8-lookback"
-# WP-FX1's erratum on which seconds are X.automated (its point 1).
-CODES_ERRATUM = "2026-11-19-sm-6.6-uncredited-codes"
 
 # The SM 8 parameters the lookback rules read.
 COMPOSE_CPS = Fraction(3, 2)   # characters a second (SM 8.2)
@@ -292,26 +291,21 @@ class Replay:
         self.left = bucket
 
 
-# The codes a row lists for each kind of uncredited second SM decides no
-# code for (README.md): a stop-hook turn's (WP-FX1's 6.6 erratum, point 1),
-# one the lookback cap cut and one nothing covers (the lookback erratum's
-# point 2, whose proposal for the last is X.no_anchor).
-OPEN_CODES = {"automated": {"X.agent_only", "X.automated"}, "capped": {"X.bucket_cap"},
-              "uncovered": {"X.no_anchor"}}
-
-
-def second_kind(rp, t):
-    """The kind of an uncredited second t: agent when an agent turn a person
-    started runs, automated when only automated turns run, else capped when
-    the lookback cap cut a session's reading there, else uncovered."""
+def second_code(rp, t):
+    """The code of an uncredited second t, in SM 5.2's order for unknown
+    presence (SM 2.8): X.bucket_cap where only the 120 s cap kept a session
+    from reading t, else X.agent_only while a turn a person started runs,
+    else X.automated while only automated turns run, else X.no_anchor."""
+    if t in rp.capped:
+        return "X.bucket_cap"
     if t in rp.running:
-        return "automated" if t in rp.automated else "agent"
-    return "capped" if t in rp.capped else "uncovered"
+        return "X.automated" if t in rp.automated else "X.agent_only"
+    return "X.no_anchor"
 
 
-def uncredited_kinds(rp, start, end):
+def uncredited_codes(rp, start, end):
     """Counts the uncredited seconds of the minutes in [start, end) that have
-    a bucket, by second_kind."""
+    a bucket, by second_code."""
     counts = {}
     for m in range(start, end, tl.MINUTE_MS):
         secs = range(m, m + tl.MINUTE_MS, 1000)
@@ -319,22 +313,20 @@ def uncredited_kinds(rp, start, end):
             continue
         for t in secs:
             if t not in rp.credited:
-                k = second_kind(rp, t)
-                counts[k] = counts.get(k, 0) + 1
+                c = second_code(rp, t)
+                counts[c] = counts.get(c, 0) + 1
     return counts
 
 
 def check_rows(exp, rp, project_of_session):
     """Checks every row of exp (a timeline.Expected) against the replay:
     credit by project and reason, the agent's running seconds, which minutes
-    have a bucket, and the uncredited seconds. Uncredited seconds are
-    X.agent_only when an agent turn a person started ran and nothing
-    credited the second. A row with any other uncredited second has
-    uncredited None, because SM decides no code for it (README.md), and its
-    codes are OPEN_CODES' for the kinds of second it holds."""
+    have a bucket, and every bucket row's uncredited seconds by second_code.
+    A row names no erratum but this one, for its points 3 to 5."""
     for r in exp.rows:
+        tl.check(r.get("erratum") in (None, ERRATUM), f"row {r['local']}: names {r.get('erratum')}")
         a = r["_end"] - r["minutes"] * tl.MINUTE_MS
-        credit, agent, with_bucket, idle, kinds = {}, 0, 0, 0, set()
+        credit, agent, with_bucket, unc = {}, 0, 0, {}
         for m in range(a, r["_end"], tl.MINUTE_MS):
             secs = range(m, m + tl.MINUTE_MS, 1000)
             got = [rp.credited[t] for t in secs if t in rp.credited]
@@ -347,13 +339,9 @@ def check_rows(exp, rp, project_of_session):
                 p = credit.setdefault(project_of_session[k], {})
                 p[reason] = p.get(reason, 0) + 1
             for t in secs:
-                if t in rp.credited:
-                    continue
-                k = second_kind(rp, t)
-                if k == "agent":
-                    idle += 1
-                else:
-                    kinds.add(k)
+                if t not in rp.credited:
+                    c = second_code(rp, t)
+                    unc[c] = unc.get(c, 0) + 1
         credit = {p: tl.ordered(c, tl.CREDIT_REASONS) for p, c in credit.items()}
         want = r["credit"] if r["bucket"] else {}
         tl.check(credit == want, f"row {r['local']}: the replay credits {credit}, the row {want}")
@@ -367,17 +355,7 @@ def check_rows(exp, rp, project_of_session):
         for p, reasons in r["credit"].items():
             for k in reasons:
                 tl.check(k in LOOKBACK_REASONS, f"row {r['local']}: {k} is a reason lookback can credit")
-        if kinds:
-            tl.check(r["uncredited"] is None and r.get("erratum"),
-                     f"row {r['local']}: {sorted(kinds)} seconds have no code SM decides, so uncredited is null "
-                     f"and the row names an erratum")
-            want_codes = set().union(*(OPEN_CODES[k] for k in kinds)) | ({"X.agent_only"} if idle else set())
-            tl.check(set(r["codes"]) == want_codes and len(r["codes"]) == len(want_codes),
-                     f"row {r['local']}: codes {r['codes']}, but its seconds are {sorted(want_codes)}")
-        else:
-            want_unc = {"X.agent_only": idle} if idle else {}
-            tl.check(r["uncredited"] == want_unc,
-                     f"row {r['local']}: uncredited {r['uncredited']}, the replay {want_unc}")
+        tl.check(r["uncredited"] == unc, f"row {r['local']}: uncredited {r['uncredited']}, the replay {unc}")
 
 
 def readme_minute_rows(path):

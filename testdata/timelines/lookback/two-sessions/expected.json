@@ -168,9 +168,10 @@
       "credit": {
         "p_339d54a04dbb": {"P": 40}
       },
-      "uncredited": {"X.agent_only": 20},
+      "uncredited": {"X.bucket_cap": 20},
       "agent_running_s": 20,
       "sm": "2.8: leads are typing time only",
+      "note": "A2 is sent at 16:09:40 and runs. B's reading would go on, but only the 120 s cap stops it while A's agent runs: X.bucket_cap, ahead of the running turn's code (SM 5.2).",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
     },
     {
@@ -312,10 +313,10 @@
         "p_339d54a04dbb": {"P": 20},
         "p_0e6a8e0b849e": {"P": 30}
       },
-      "uncredited": {"X.agent_only": 10},
+      "uncredited": {"X.bucket_cap": 10},
       "agent_running_s": 40,
       "sm": "2.8: leads are typing time only",
-      "note": "A3 is sent at 16:18:20 and runs. B3's 45 characters: 30 s, from 16:18:30, while A3 runs.",
+      "note": "A3 is sent at 16:18:20 and runs. Only the 120 s cap stops B's reading while A's agent runs: X.bucket_cap (SM 5.2). B3's 45 characters: 30 s, from 16:18:30, while A3 runs.",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
     },
     {
@@ -337,7 +338,7 @@
     "credited_s": 915,
     "credited_by_project": {"p_0e6a8e0b849e": 395, "p_339d54a04dbb": 520},
     "credited_by_reason": {"P": 310, "PA": 125, "READ": 480},
-    "uncredited": {"X.agent_only": 285},
+    "uncredited": {"X.agent_only": 255, "X.bucket_cap": 30},
     "agent_running_s": 570,
     "ai_credited_s": 915,
     "hand_credited_s": 0,
@@ -357,6 +358,6 @@
     "Every row is computed from SM 2.8; no SM section describes this case. Every credited second is level C and backfilled.",
     "The six turns are in two Claude Code sessions in two projects, three in each, so a second both sessions want is wanted by two projects, and SM 3.3's FIFO rule for buckets of one project never applies.",
     "contested_s counts the seconds both sessions wanted: 70 of A's PA against B's reading, and 210 of reading against reading. The session with the most recent human prompt takes each (SM 2.8). In the last 90, from 16:13:30, A has the later stop and the later human act, so only the prompt rule gives them to B.",
-    "Every uncredited second here is X.agent_only: an agent turn ran and nothing credited it. Every turn a prompt follows within 600 s fills its bucket past the 120 s cap and reads exactly 120 s."
+    "Every uncredited second here is in an agent turn. They are X.agent_only, except the 30 s where only the 120 s cap stops B's reading while A's agent runs, which are X.bucket_cap (SM 5.2); agent_only_s counts all 285. Every turn a prompt follows within 600 s fills its bucket past the 120 s cap and reads exactly 120 s."
   ]
 }
