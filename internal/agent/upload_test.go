@@ -97,6 +97,57 @@ func TestUploadMode(t *testing.T) {
 	}
 }
 
+// TestSignInProblem checks what doctor hears from the uploader's Login
+// (credentials) of a computer config.toml says is online but that has no
+// sign-in, under problem.account, since it uploads nothing: one linked to a
+// server whose keystore has no sign-in for it, and one pairtime login never
+// linked. One signed in, or in local mode, has no account problem.
+func TestSignInProblem(t *testing.T) {
+	cases := []struct {
+		name string
+		mode string
+		// linked says account.json reads, and signed that the keystore
+		// has the sign-in. want is in problem.account, "" for none.
+		linked, signed bool
+		want           string
+	}{
+		{"a linked computer whose keystore has no sign-in uploads nothing, and doctor hears to log out and in again", modeOnline, true, false,
+			"the keystore has no sign-in for it; run pairtime logout, then pairtime login"},
+		{"an online computer pairtime login never linked uploads nothing, and doctor hears it isn't linked", modeOnline, false, false,
+			"config.toml says online but pairtime login hasn't linked this computer"},
+		{"a signed-in computer has no account problem", modeOnline, true, true, ""},
+		{"a computer in local mode has none either", "local", false, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+			if err := os.WriteFile(dirs.ConfigFile(), []byte("mode = \""+tc.mode+"\"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.linked {
+				if err := os.WriteFile(filepath.Join(dir, "account.json"), []byte(`{"v":1,"server":"https://pairtime.example","device_id":"d_testdevice00000000000000a","linked_at":"2026-11-21T09:30:00Z"}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			saved := accountCredentials
+			t.Cleanup(func() { accountCredentials = saved })
+			accountCredentials = func(home.Dirs, []keys.Store) (uploader.Credentials, bool, error) {
+				if !tc.signed {
+					return uploader.Credentials{}, false, nil
+				}
+				return uploader.Credentials{Server: "https://pairtime.example", Token: "ptd_test"}, true, nil
+			}
+			a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}}
+			_, ok := a.credentials()
+			got := a.currentProblems()["account"]
+			if ok != tc.signed || tc.want == "" && got != "" || tc.want != "" && !strings.Contains(got, tc.want) {
+				t.Errorf("uploads go %v, problem.account %q; want uploads %v and a problem with %q", ok, got, tc.signed, tc.want)
+			}
+		})
+	}
+}
+
 func TestSignedIn(t *testing.T) {
 	const (
 		server = "https://pairtime.example"

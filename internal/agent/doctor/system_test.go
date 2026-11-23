@@ -41,7 +41,7 @@ func TestSystem(t *testing.T) {
 				t.Errorf("DiskKind = %q on macOS, which pairtime doesn't ask yet", got)
 			}
 		}},
-		{"the home folder's spellings start with itself, and on Windows add its 8.3 short form when it has one", func(t *testing.T) {
+		{"the home folder's spellings start with itself, and on Windows add its short alias, another name of the same folder, when it has one", func(t *testing.T) {
 			home, err := os.UserHomeDir()
 			if err != nil {
 				t.Skip(err)
@@ -51,8 +51,16 @@ func TestSystem(t *testing.T) {
 				t.Fatalf("HomeSpellings(%q) = %q", home, got)
 			}
 			for _, short := range got[1:] {
-				if runtime.GOOS != "windows" || !strings.Contains(short, "~") {
+				if runtime.GOOS != "windows" {
 					t.Errorf("HomeSpellings(%q) adds %q on %s", home, short, runtime.GOOS)
+					continue
+				}
+				// NTFS promises no form for a short name, such as a ~, only
+				// that it names the same folder.
+				a, errA := os.Stat(home)
+				b, errB := os.Stat(short)
+				if short == home || errA != nil || errB != nil || !os.SameFile(a, b) {
+					t.Errorf("HomeSpellings(%q) adds %q, which isn't another name of the same folder", home, short)
 				}
 			}
 		}},

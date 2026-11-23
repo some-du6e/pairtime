@@ -158,6 +158,16 @@ func TestAsk(t *testing.T) {
 			},
 		},
 		{
+			name: "an answer that says the agent can't answer yet is ErrStarting, for the asker to ask again",
+			run: func(t *testing.T, ep Endpoint) {
+				a := &answers{err: ErrStarting}
+				serve(t, ep, Options{Answer: a.answer}, nil)
+				if _, err := askOne(t, ep, AskLastSession); !errors.Is(err, ErrStarting) || errors.Is(err, ErrUnknownQuestion) {
+					t.Errorf("Ask = %v, want ErrStarting", err)
+				}
+			},
+		},
+		{
 			name: "an answer that isn't JSON is an error",
 			run: func(t *testing.T, ep Endpoint) {
 				a := &answers{by: map[string]json.RawMessage{AskLastSession: json.RawMessage(`{"shadow":`)}}
@@ -326,8 +336,14 @@ func TestAsk(t *testing.T) {
 			t.Fatal(err)
 		}
 		rep, keep := s.take(b, nil, 0, nil, false)
-		if rep.OK || rep.ID != qn.ID || rep.Error == "" || len(rep.Answer) != 0 || keep {
-			t.Errorf("take = %+v, keep %v; want an error reply that ends the connection", rep, keep)
+		// Its error is the one Conn.Ask gives as ErrStarting, so doctor waits
+		// for the agent rather than failing at once, and it is the text
+		// agents of earlier builds send too, which Ask knows theirs by.
+		if rep.OK || rep.ID != qn.ID || rep.Error != startingAnswer || len(rep.Answer) != 0 || keep {
+			t.Errorf("take = %+v, keep %v; want the still-starting reply, which ends the connection", rep, keep)
+		}
+		if startingAnswer != "the agent is still starting" {
+			t.Errorf("the still-starting reply is %q, which agents of earlier builds don't send", startingAnswer)
 		}
 		if q := a.questions(); len(q) != 0 {
 			t.Errorf("Answer was asked %q", q)
