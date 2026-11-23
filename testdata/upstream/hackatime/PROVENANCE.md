@@ -39,7 +39,7 @@ Fetched with `gh api -H "Accept: application/vnd.github.raw" "repos/hackclub/hac
 | `lib/wakatime_service.rb` | `69d87c81dd6e` | 7-32, 34-38, 72-110, 119-137, 275-292 |
 | `app/helpers/application_helper.rb` | `cf630cc550ba` | 40-56 |
 | `app/controllers/api/hackatime/v1/hackatime_controller.rb` | `08c640df347b` | 7-14, 58-108, 214-299 |
-| `app/services/heartbeat_ingest.rb` | `fe4d313f3213` | 17-18, 42-100, 364-395, 412-417 |
+| `app/services/heartbeat_ingest.rb` | `fe4d313f3213` | 8-13, 17-18, 42-100, 364-395, 412-417 |
 | `app/models/heartbeat.rb` | `5bcd4412a8e8` | 41-56 |
 | `app/controllers/concerns/user_api_authentication.rb` | `18e6b2ff889b` | 8-38 |
 

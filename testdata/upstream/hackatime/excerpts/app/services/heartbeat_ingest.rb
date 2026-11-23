@@ -4,6 +4,14 @@
 # testdata/upstream/hackatime/LICENSE. Each block is copied verbatim from
 # the lines its marker names. Lines between blocks are left out.
 
+# ---- app/services/heartbeat_ingest.rb lines 8-13 ----
+  # Sane epoch-seconds window: 2001-09-09 .. 2033-05-18. Values outside are
+  # client bugs (uptime-like numbers, literal years, ms/µs/ns-scaled epochs).
+  EPOCH_SANE_MIN = 1_000_000_000
+  EPOCH_SANE_MAX = 2_000_000_000
+  # Seconds between 1601-01-01 (the Windows FILETIME / WebKit epoch) and 1970-01-01.
+  WINDOWS_EPOCH_OFFSET = 11_644_473_600
+
 # ---- app/services/heartbeat_ingest.rb lines 17-18 ----
   Result = Data.define(:total_count, :persisted_count, :duplicate_count, :failed_count, :errors, :items)
   Item = Data.define(:heartbeat, :status, :error)
