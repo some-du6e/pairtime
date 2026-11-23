@@ -320,6 +320,7 @@ type Writer struct {
 	retired []*appendFile // segments rolled over that a seal may still flush
 	next    uint64        // s of the next record
 	b       uint64        // the last sealed batch, 0 before the first
+	base    uint64        // the first batch batches.seg keeps (Sweep), 1 before a sweep drops any
 	head    ledger.Hash   // its H_b, zero(32) before the first
 	sealed  int64         // its sealed_at, in Unix ms, 0 before the first
 	pending []pending     // the records since the last seal
@@ -1467,13 +1468,17 @@ func (w *Writer) StoreReceipt(b uint64, r ledger.Receipt) error {
 	w.sealMu.Lock()
 	defer w.sealMu.Unlock()
 	w.mu.Lock()
-	err, last := w.usable(), w.b
+	err, last, base := w.usable(), w.b, w.base
 	w.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	if b == 0 || b > last {
 		return fmt.Errorf("ledger: batch %d isn't sealed; the last one is %d", b, last)
+	}
+	if b < base {
+		// A sweep dropped the batch, and its receipt has no row to go with.
+		return nil
 	}
 	payload, err := json.Marshal(receiptPayload{B: b, ReceivedAt: r.ReceivedAt, Signature: hex.EncodeToString(r.Signature[:])})
 	if err != nil {

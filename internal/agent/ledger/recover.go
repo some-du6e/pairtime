@@ -270,7 +270,7 @@ func (w *Writer) recover() error {
 	if err := w.ownChain(bf.chain.DeviceID); err != nil {
 		return err
 	}
-	w.device, w.created = bf.chain.DeviceID, bf.chain.Created
+	w.device, w.created, w.base = bf.chain.DeviceID, bf.chain.Created, bf.base.B
 	if w.batches, err = openAppend(name, false); err != nil {
 		return err
 	}
@@ -349,7 +349,7 @@ func (w *Writer) newChain() error {
 	if err := w.keyUnused(); err != nil {
 		return err
 	}
-	w.device, w.created = newDeviceID(), w.now().UnixMilli()
+	w.device, w.created, w.base = newDeviceID(), w.now().UnixMilli(), 1
 	payload, err := json.Marshal(chainPayload{V: chainVersion, DeviceID: w.device, KeyID: w.keyID, Created: w.created})
 	if err != nil {
 		return err
