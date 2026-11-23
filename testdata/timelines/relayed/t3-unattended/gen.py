@@ -202,8 +202,15 @@ task(8)
 # reader's query, whose WHERE clause holds the guest test, never selects
 # it: no record. The query does return the run it started, so the agent
 # marks the prompt guest and keeps no text for it, and rule 4 takes it.
+# The pin: no honest reader writes a record for a guest's message, but a
+# modified client could, so the case also gives the prompt a relay naming a
+# record of declared none stamped 17:14:00. Rule 4 takes a guest prompt even
+# when a message witnesses it, and rule 9 needs one that isn't marked guest,
+# so the prompt still earns 0 s (SM 2.2).
 start("review", "17:14:00")
+rg_pin = relay("review", "17:14:00", "17:14:00", LEN["G"], "none")
 g = prompt("review", "17:14:01", "G", LEN["G"], guest=True)
+pairs.append((rg_pin, g))
 output("review", "17:14:56", "G", 50, final=True)
 stop("review", "17:14:56", "G")
 
@@ -247,7 +254,10 @@ E = {name: fx.event_at("prompt.submit", raw[0], turn_key=raw[4]["turn_key"])
 R1 = fx.event_at("relay.message", r1[0], sent_at=r1[4]["sent_at"])
 tl.check(E["M1"]["data"].get("relay") == R1["event_id"] and "prompt" not in R1["data"],
          "M1's record came before its prompt, so the prompt names the record")
-tl.check(sum(1 for e in events if "relay" in e["data"]) == 1, "only M1's prompt carries relay")
+RG = fx.event_at("relay.message", rg_pin[0], sent_at=rg_pin[4]["sent_at"], thread_key=rg_pin[4]["thread_key"])
+tl.check(E["G"]["data"].get("guest") is True and E["G"]["data"].get("relay") == RG["event_id"],
+         "the guest's prompt carries both guest and relay, the pin of SM 2.2's order")
+tl.check(sum(1 for e in events if "relay" in e["data"]) == 2, "only M1's prompt and the pinned guest prompt carry relay")
 main = [e for e in events if e["kind"] == "prompt.submit" and e["session_key"] == S["main"]
         and e["t"] >= R1["data"]["sent_at"]]
 tl.check(main[0] is E["K"] and E["K"]["t"] < R1["t"] < E["M1"]["t"],
@@ -332,9 +342,10 @@ task_row(7)
 idle("17:01", "17:10")
 task_row(8)
 idle("17:11", "17:14")
-row("17:14", {}, {"X.no_anchor": 5, "X.automated": 55}, 55, sm="2.2 rule 4: the guest's message has no relay record",
-    note="The guest's message reaches the agent at 17:14:01. The reader never selected its row, so nothing "
-         "witnesses the prompt, and rule 4 makes it headless. Its turn runs until 17:14:56.")
+row("17:14", {}, {"X.no_anchor": 5, "X.automated": 55}, 55, sm="2.2 rule 4: the prompt is marked guest, which beats the witness",
+    note="The guest's prompt reaches the agent at 17:14:01, marked guest, with a relay naming the pinned record "
+         "stamped 17:14:00. Rule 4 takes a guest prompt even when a message witnesses it, so it is headless. Its "
+         "turn runs until 17:14:56.")
 idle("17:15", "17:20")
 task_row(9)
 idle("17:21", "17:25")
@@ -408,7 +419,7 @@ for name, rec in (("M1", R1), ("M2", fx.event_at("relay.message", at("16:55:03")
                                    sm=f"2.3: a relayed message's lead is its typing time, "
                                       f"{rec['data']['len_chars']} / 1.5 = {lead} s, ending at sent_at"))
 ORIGIN = {"K": ("headless", "2.2 rule 4: no relay record, the /compact carries idleCompaction"),
-          "G": ("headless", "2.2 rule 4: the prompt is marked guest, and no relay record witnesses it"),
+          "G": ("headless", "2.2 rule 4: the prompt is marked guest, which beats the pinned record that witnesses it"),
           "M1": ("relayed", "2.2 rule 9"), "M2": ("relayed", "2.2 rule 9"),
           "L": ("subagent", "2.2 rule 3: the relay record declares cross_session (linkedSender)")}
 turns = []

@@ -39,7 +39,7 @@ No SM section describes this case. Every number below comes from SM 2.2 rules 1,
 | K, the `/compact` | 16:44:00 | 8 | `idleCompaction` `onReturn` | none | 16:44:01 | to 16:44:40 | `headless`, rule 4 |
 | M1, Mateo's | 16:44:00 | 135 | none | 16:44:03, `none`, before its prompt | 16:44:41, which names the record | to 16:48:15 | `relayed`, rule 9 |
 | M2, Mateo's | 16:55:00 | 90 | none | 16:55:03, `none`, names the prompt | 16:55:01 | to 16:57:30 | `relayed`, rule 9 |
-| G, Ines's | 17:14:00 | 133 | `context.guest` | none: the reader's query never selects it | 17:14:01 | to 17:14:56 | `headless`, rule 4 |
+| G, Ines's | 17:14:00 | 133 | `context.guest` | none from an honest reader, whose query never selects it; the case pins one stamped 17:14:00, which the prompt names in `relay` | 17:14:01, marked `guest` | to 17:14:56 | `headless`, rule 4 |
 | L, the laptop thread's | 17:25:00 | 174 | `linkedSender` | 17:25:03, `cross_session`, names the prompt | 17:25:01 | to 17:26:31 | `subagent`, rule 3 |
 | W2, the webhook | 17:30:20 | 231 | `scheduledTaskId` | 17:30:23, `cron`, names the prompt | 17:30:21 | to 17:31:51 | `scheduled`, rule 1 |
 
@@ -90,7 +90,7 @@ Every slot's presence is unknown, so an uncredited second is `X.bucket_cap` wher
 | 17:01-17:09 | 0 | none | No credit and no agent |
 | 17:10 | 0 | none | C8: `X.no_anchor` 10, `X.automated` 50 |
 | 17:11-17:13 | 0 | none | No credit and no agent |
-| 17:14 | 0 | none | Ines's message reaches the agent at 17:14:01 with no relay record, so rule 4 makes it `headless`. Its turn runs until 17:14:56: `X.no_anchor` 1 + 4, `X.automated` 55 |
+| 17:14 | 0 | none | Ines's prompt reaches the agent at 17:14:01 marked `guest`, with `relay` naming the pinned record. Rule 4 takes a `guest` prompt even when a message witnesses it, so it is `headless`. Its turn runs until 17:14:56: `X.no_anchor` 1 + 4, `X.automated` 55 |
 | 17:15-17:19 | 0 | none | No credit and no agent |
 | 17:20 | 0 | none | C9: `X.no_anchor` 10, `X.automated` 50 |
 | 17:21-17:24 | 0 | none | No credit and no agent |
@@ -130,8 +130,9 @@ Every slot's presence is unknown, so an uncredited second is `X.bucket_cap` wher
 
 - **`createdBy` `user` decides nothing.** Every message here has it. The rest of T3's record decides: `scheduledTaskId` on the task's and the webhook's firings, `linkedSender` on the laptop thread's message, `idleCompaction` on the `/compact`, `context.guest` on Ines's message (SM 2.2, "What witnesses a prompt").
 - **The app's declarations work as the harness's do.** The hook's own record of each firing has `origin_declared` `none` and no pending cron, since Claude Code can't know that T3's scheduler fired it. The relay record's `cron` is what brings in rule 1, and `cross_session` what brings in rule 3 (SM 2.2, "The app's own declarations").
-- **No record, no witness.** The reader turns the `/compact`'s row away for its `idleCompaction`, and its query's guest test never selects Ines's message (DESIGN 5.1). Rule 4 takes both prompts, as it takes any prompt of a session T3's server starts that nothing witnesses.
+- **No record, no witness.** The reader turns the `/compact`'s row away for its `idleCompaction`, and its query's guest test never selects Ines's message (DESIGN 5.1). Rule 4 takes the `/compact`'s prompt, as it takes any prompt of a session T3's server starts that nothing witnesses.
 - **A guest's prompt keeps no text.** The reader's query returns the run Ines's message started without reading the message, so the agent marks the prompt T3 makes of it `guest` and keeps none of its text, the guest's name and words included. Rule 4 takes a `guest` prompt whatever its session, so it would earn nothing even in a session T3 didn't start (SM 2.2, "What witnesses a prompt").
+- **A guest mark beats a witness.** No honest reader writes a record for a guest's message, but a modified client could, so the case pins SM 2.2's order: Ines's prompt carries both `guest` and `relay`, naming a record of `declared` `none` stamped 17:14:00 that passes every pairing check. Rule 4 takes a prompt marked `guest` even when a message witnesses it, and rule 9 needs a prompt that isn't, so the prompt is `headless` and earns 0 s, as it would with no record. Its record vouches for no reading either, since its prompt isn't relayed (SM 2.4).
 - **Pairing follows T3's runs, not the clock.** The `/compact`'s prompt at 16:44:01 is the main session's first after M1's stamp, but it belongs to the compaction's run. M1 pairs with its own run's prompt at 16:44:41 (SM 2.2, "Pairing"). That is why the case assumes Claude Code fires `UserPromptSubmit` for the `/compact`: it is the stricter reading. Whether it does is unverified, and the case credits the same either way. The case records the compaction as a prompt and a stop and nothing else.
 - **M1 is `P`.** SM 2.3 gives a relayed anchor its class's code (`P`, `ANS` or `GO`); `Q` is only for an `agent.queue` with input in its slot. T3 holds M1 until the compaction's run ends, but M1 reaches the agent as its own run's prompt, not as a message the harness queued (SM 1.2's `agent.queue`). So it takes its class's code, as [t3-queued](../t3-queued/)'s M2 does.
 - **A message sent before a stop doesn't vouch for its reading.** M1 was sent before the compaction's stop, so only M2 could open reading after that stop, and M2 comes 620 s later (SM 2.4).

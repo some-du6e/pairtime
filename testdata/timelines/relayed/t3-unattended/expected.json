@@ -382,8 +382,8 @@
       "credit": {},
       "uncredited": {"X.no_anchor": 5, "X.automated": 55},
       "agent_running_s": 55,
-      "sm": "2.2 rule 4: the guest's message has no relay record",
-      "note": "The guest's message reaches the agent at 17:14:01. The reader never selected its row, so nothing witnesses the prompt, and rule 4 makes it headless. Its turn runs until 17:14:56.",
+      "sm": "2.2 rule 4: the prompt is marked guest, which beats the witness",
+      "note": "The guest's prompt reaches the agent at 17:14:01, marked guest, with a relay naming the pinned record stamped 17:14:00. Rule 4 takes a guest prompt even when a message witnesses it, so it is headless. Its turn runs until 17:14:56.",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
     },
     {
