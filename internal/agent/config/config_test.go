@@ -227,6 +227,8 @@ func TestParse(t *testing.T) {
 			file:        "[privacy]\nprompt_text_days = 30\nPrompt_Text_Days = 7\n",
 			want:        Config{Mode: Local, Privacy: Privacy{TextHeld: true}},
 			wantProblem: "privacy.prompt_text_days is set more than once",
+		},
+		{
 			name:        "the switch written at the top of the file instead of under [privacy] keeps no new prompt text, deletes none, and is reported",
 			file:        "mode = \"local\"\nkeep_prompt_text = false\n",
 			want:        Config{Mode: Local, Privacy: Privacy{TextHeld: true}},
