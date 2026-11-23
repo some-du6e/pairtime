@@ -100,6 +100,7 @@ class Scenario:
         self.errata = [READINGS]
         self.known_limit = None
         self.fails = []
+        self.items = {}
 
     def device(self, dev, meta, reveals=True):
         self.devices.append((dev, meta, reveals))
@@ -110,6 +111,11 @@ class Scenario:
 
     def state(self, cc, result, **counts):
         self.stated[cc] = (result, counts)
+
+    def fail_items(self, cc, items):
+        """The items a failing check must name, by seq: the codes each fails,
+        and for a conflict the seqs it conflicts with."""
+        self.items[cc] = items
 
     def not_exercised(self, cc, why):
         self.stated[cc] = ("not_exercised", why)
@@ -158,6 +164,10 @@ class Scenario:
             check(got["result"] == result, f"{self.name}: {cc} is {got['result']}, stated {result}: {got}")
             for k, v in counts.items():
                 check(got["counts"].get(k) == v, f"{self.name}: {cc} {k} is {got['counts'].get(k)}, stated {v}")
+            if cc in self.items:
+                named = {it["seq"]: {k: it[k] for k in ("failed", "conflicts_with") if k in it}
+                         for it in got.get("items", [])}
+                check(named == self.items[cc], f"{self.name}: {cc} names {named}, stated {self.items[cc]}")
             results[cc] = got
         fails = [cc for cc, r in results.items() if r["result"] == "fail"]
         check(fails == self.fails, f"{self.name}: fails {fails}, stated {self.fails}")
@@ -321,6 +331,18 @@ def alt_features(sc, dev, *, a3=None, texts=None):
             f = a3
         sc.extras[p["seq"]] = {"f": f, "c": ck.commitment(keys["k_tok"], p["seq"], text)["c"]}
     return keys
+
+
+def hook_seq(dev, t):
+    """The seq of the hook's prompt.submit at t, which the draw holds."""
+    return dev.one("prompt.submit", t, via="hook")["seq"]
+
+
+def conflict_items(dev, times):
+    """CC8's items for prompts of one text whose th and mh conflict: every one
+    fails, naming the others (ledger-v1.md 10.8)."""
+    seqs = sorted(hook_seq(dev, t) for t in times)
+    return {q: {"failed": ["conflict"], "conflicts_with": [o for o in seqs if o != q]} for q in seqs}
 
 
 def alt_challenge(sc, dev, keys, drawn, *, a3_hidden=(), texts=None):
@@ -602,6 +624,7 @@ def s_42_cc8_false(out):
     sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
     sc.state("CC8", "fail", challenged=5, length_mismatch=0, low_effort_mismatch=0, es_mismatch=0,
              class_mismatch=0, feature_conflicts=1)
+    sc.fail_items("CC8", conflict_items(dev, (A1, A2, A3)))
     sc.notes.append("The server re-scores from the bodies' f (DESIGN 6.2 D18), which say A3 isn't a re-roll, so "
                     "the re-score credits A3 as the live buckets do and CC6 passes. Only CC8 sees the lie: A3's "
                     "revealed text is A1's and A2's, and its committed th and mh aren't theirs (ledger-v1.md 10.8). "
@@ -626,6 +649,7 @@ def s_42_cc8_key(out):
     sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
     sc.state("CC8", "fail", challenged=5, length_mismatch=0, low_effort_mismatch=0, es_mismatch=0,
              class_mismatch=0, feature_conflicts=1)
+    sc.fail_items("CC8", conflict_items(dev, (A1, A2, A3)))
     sc.notes.append("No rule checks A3's values on their own, because only the device holds K_feat (ledger-v1.md "
                     "10.8). The failure is the same-text rule: A3's normalized text is A1's and A2's, and its th "
                     "and mh aren't theirs, so A1, A2 and A3 all fail.")
@@ -664,6 +688,7 @@ def s_42_cc8_class(out):
     sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
     sc.state("CC8", "fail", challenged=4, length_mismatch=0, low_effort_mismatch=0, es_mismatch=0,
              class_mismatch=1, feature_conflicts=0)
+    sc.fail_items("CC8", {hook_seq(dev, B2): {"failed": ["class"]}})
     sc.state("CC11", "pass", prompts=4, typed_chars=240, key_downs=264, too_few_keys=0)
     sc.notes.append("`looks good` is on SM 2.2's go-ahead list, and no agent output before B2 asks a question, so "
                     "its class is low_effort whatever its length. pkg/score derives that class from the body's "
@@ -701,6 +726,7 @@ def s_42_cc8_length(out):
     sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
     sc.state("CC8", "fail", challenged=4, length_mismatch=1, low_effort_mismatch=0, es_mismatch=0,
              class_mismatch=0, feature_conflicts=0)
+    sc.fail_items("CC8", {hook_seq(dev, B2): {"failed": ["lengths"]}})
     sc.state("CC11", "not_computable", prompts=0)
     sc.notes.append("Nothing was removed from B2, so its body's len_chars must be its text's 60 characters "
                     "(`lengths`). The class recomputed with the typed length bounded by the text's is substantive, "
@@ -728,9 +754,8 @@ def s_42_cc8_limit(out):
     sc.typing = alt_typing(dev)
     alt_challenge(sc, dev, keys, (A1, B1, A2, B2, A3), a3_hidden=(2, 5, 8))
     sc.known_limit = ("DESIGN 7.3 and ledger-v1.md 10.8: a client that keys a turn's features under a key of its own "
-                      "is caught only through another revealed turn with the same normalized text, and a span "
-                      "removed by hand hides the turn from every CC8 rule but es. Issue #15's decision accepted "
-                      "this.")
+                      "is caught only through another revealed turn with the same normalized text, and a removed "
+                      "span hides the turn from every CC8 rule but es. Issue #15's decision accepted this.")
     alt_clean_state(sc, cc5=False)
     sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
     sc.state("CC8", "pass", challenged=5, feature_conflicts=0)
