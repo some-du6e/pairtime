@@ -12,3 +12,5 @@ import "errors"
 func newBackend() (backend, error) { return nil, errors.ErrUnsupported }
 
 func osPresenceSource() (presenceSource, error) { return nil, errors.ErrUnsupported }
+
+func osConnSource() (connSource, error) { return nil, errors.ErrUnsupported }

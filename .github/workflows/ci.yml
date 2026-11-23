@@ -215,15 +215,17 @@ jobs:
         # the procs scan's per-OS readers (WP-OS6), the device keystore,
         # which picks its store by OS (WP-OS7), the notifier, whose backends
         # call internal/platform's balloon, osascript and D-Bus code (WP-OS8),
-        # and the focus component's per-OS sources and their tests (WP-OS2).
+        # the focus component's per-OS sources and their tests (WP-OS2), and
+        # the peer-process check, which calls each OS's connection lookup
+        # (WP-OS13).
         # The desktop tests, which build with -tags desktop on Linux alone,
         # are vetted in the Desktop test files step. The Windows and macOS
         # tests themselves run in platform.yml.
         if: ${{ !cancelled() }}
         run: |
           for target in windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
-            echo "go vet ./internal/platform/... ./internal/agent/procs/... ./internal/agent/keys/... ./internal/agent/notifier/... ./internal/agent/focus/... for $target"
-            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/... ./internal/agent/procs/... ./internal/agent/keys/... ./internal/agent/notifier/... ./internal/agent/focus/...
+            echo "go vet ./internal/platform/... ./internal/agent/procs/... ./internal/agent/keys/... ./internal/agent/notifier/... ./internal/agent/focus/... ./internal/agent/peer/... for $target"
+            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/... ./internal/agent/procs/... ./internal/agent/keys/... ./internal/agent/notifier/... ./internal/agent/focus/... ./internal/agent/peer/...
           done
 
       - name: HCA sign-in against an independent OIDC server

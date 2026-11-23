@@ -18,6 +18,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/tailers"
 	"github.com/some-du6e/pairtime/internal/install"
+	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -49,33 +50,7 @@ func TestTranscriptLinesReachTheLedger(t *testing.T) {
 	if len(lines[len(lines)-1]) == 0 {
 		lines = lines[:len(lines)-1]
 	}
-	home := filepath.Join(filepath.Dir(r.home), "teen")
-	file := filepath.Join(home, ".claude", "projects", "-cli", captureSession+".jsonl")
-	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	// There before the agent's first look, empty. The projects folder
-	// counts as listed already, as after a run that found it empty, so
-	// whenever that first look comes, which can be after the first lines
-	// are written, the file is a new one, read from its start: a root's
-	// first listing would take its files up at their end.
-	if err := os.WriteFile(file, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(r.dirs.Data, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	store, _, err := state.Open(r.dirs.StateFile())
-	if err != nil {
-		t.Fatal(err)
-	}
-	listed := map[string]any{"v": 1, "files": []any{}, "roots": []string{filepath.Join(home, ".claude", "projects")}}
-	if err := store.Put("tailers", listed); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Save(); err != nil {
-		t.Fatal(err)
-	}
+	home, file := listedHome(t, r)
 	opts := r.options([]keys.Store{})
 	opts.Env = &install.Env{GOOS: runtime.GOOS, Home: home}
 	a := startAgent(t, opts)
@@ -260,6 +235,196 @@ func listedProjects(t *testing.T, r *hookReplay) (home, projects string) {
 		t.Fatal(err)
 	}
 	return home, projects
+}
+
+// listedHome is listedProjects with an empty transcript of the capture's
+// main session in the projects folder, which the agent reads from its
+// start, and returns the home folder with the transcript.
+func listedHome(t *testing.T, r *hookReplay) (home, file string) {
+	t.Helper()
+	home, projects := listedProjects(t, r)
+	file = filepath.Join(projects, "-cli", captureSession+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return home, file
+}
+
+// TestTranscriptTiedToItsProcess checks the procs tie (WP-AD3): a session
+// no hook reports, whose transcript a real agent reads as it is written,
+// is tied to the one claude that can be running it, by a line written
+// after the read its first fresh line made, and its session.start is then
+// the process scan's, one record, with the parent and the TTY SM 2.2 rule
+// 4 reads, which no transcript states. The start waits for that line past
+// its grace, by up to tieRetry, and goes as the transcript's once that has
+// passed too with no line. With two claudes that could be it, nothing is
+// tied, and the transcript's session.start stands. A transcript that
+// states no entrypoint, of which the reader writes no session.start, gets
+// the scan's, dated before the session's first line read live.
+func TestTranscriptTiedToItsProcess(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the capture's paths are Linux's")
+	}
+	now := time.Now().UTC()
+	me := platform.UIDOwner(uint32(os.Geteuid()))
+	claudeIn := func(pid, shell int) []platform.Proc {
+		return []platform.Proc{
+			{PID: shell, PPID: 100, Name: "bash", PGID: shell, TTY: platform.TTYAttached, Start: now.Add(-30 * time.Minute), Owner: me},
+			{PID: pid, PPID: shell, Name: "claude", PGID: pid, TTY: platform.TTYAttached, Start: now.Add(-5 * time.Minute), Owner: me},
+		}
+	}
+	desktop := []platform.Proc{
+		{PID: 1, Name: "systemd", PGID: 1, TTY: platform.TTYNone, Start: now.Add(-time.Hour), Owner: "uid:0"},
+		{PID: 100, PPID: 1, Name: "gnome-terminal-server", PGID: 100, TTY: platform.TTYNone, Start: now.Add(-40 * time.Minute), Owner: me},
+	}
+	one := append(slices.Clone(desktop), claudeIn(111, 110)...)
+	after := func(d time.Duration) *time.Duration { return &d }
+	cases := []struct {
+		name  string
+		table []platform.Proc
+		// silent says the transcript's lines state no entrypoint.
+		silent bool
+		// first is how long before the session's first fresh line its first
+		// prompt states the token, and third, when set, is how long after
+		// that fresh line a third line comes, written after the read the
+		// fresh line's try made. The start waits out the 90 s hook grace
+		// from the first prompt.
+		first time.Duration
+		third *time.Duration
+		// via and parent are the session.start the ledger gets.
+		via    event.Via
+		parent event.ParentClass
+		tty    bool
+	}{
+		{"one claude: the scan's session.start, with the terminal as its parent and a TTY",
+			one, false, 65 * time.Second, after(0), event.ViaOS, event.ParentTerminalApp, true},
+		{"two claudes: nothing is tied, and the transcript's session.start stands",
+			append(slices.Clone(one), claudeIn(121, 120)...), false, 65 * time.Second, after(0), event.ViaLog, event.ParentUnknown, false},
+		{"one claude, and a transcript that states no entrypoint: the scan's session.start, before its first line read live",
+			one, true, 65 * time.Second, after(0), event.ViaOS, event.ParentTerminalApp, true},
+		{"one claude, and the line that ties the session after its start's grace has passed: the start waits for the tie and is the scan's",
+			one, false, 85 * time.Second, after(20 * time.Second), event.ViaOS, event.ParentTerminalApp, true},
+		{"one claude, and no line after the first try: the transcript's session.start, once the hold has passed",
+			one, false, 85 * time.Second, nil, event.ViaLog, event.ParentUnknown, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newHookReplay(t)
+			home, file := listedHome(t, r)
+			opts := r.options([]keys.Store{})
+			opts.Env = &install.Env{GOOS: runtime.GOOS, Home: home}
+			opts.Procs = func() ([]platform.Proc, error) { return slices.Clone(tc.table), nil }
+			a := startAgent(t, opts)
+			// The first prompt states the token 65 s ago, so its
+			// session.start waits out the 90 s hook grace, with room for a
+			// slow read; the second, just written, is the session's first
+			// fresh line, whose try reads the table; the third, written once
+			// the agent read the second, is the one the tie needs. The
+			// tailers' idle markers after it let the start go.
+			line := func(prompt, text string, at time.Time) []byte {
+				e := map[string]any{"type": "user", "sessionId": captureSession, "promptId": prompt,
+					"timestamp": at.Format(time.RFC3339Nano), "cwd": r.folder(), "version": "2.1.327", "entrypoint": "cli",
+					"isSidechain": false, "promptSource": "typed", "turnOrigin": "human",
+					"message": map[string]any{"role": "user", "content": text}}
+				if tc.silent {
+					delete(e, "entrypoint")
+				}
+				b, _ := json.Marshal(e)
+				return append(b, '\n')
+			}
+			fresh := time.Now()
+			body := append(line("ffffffff-0000-4000-8000-000000000001", "What does this do?", fresh.Add(-tc.first)),
+				line("ffffffff-0000-4000-8000-000000000002", "And this one?", fresh)...)
+			if err := os.WriteFile(file, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			waitStatusFor(t, a, 30*time.Second, func(s statusReply) bool {
+				return s.Adapters.Harnesses[event.HarnessClaudeCode].Lines >= 2
+			})
+			// The prompts and the session.start.
+			records := uint64(3)
+			if tc.third != nil {
+				time.Sleep(time.Until(fresh.Add(*tc.third)))
+				f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND, 0o600)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.Write(line("ffffffff-0000-4000-8000-000000000003", "And that?", time.Now().Add(time.Second)))
+				f.Close()
+				records++
+			}
+			waitStatusFor(t, a, 60*time.Second, func(s statusReply) bool {
+				return s.Adapters.Harnesses[event.HarnessClaudeCode].Records >= records
+			})
+			a.cancel()
+			if err := a.waitExit(t); err != nil {
+				t.Fatalf("stopping the agent: %v", err)
+			}
+			_, kSession := deviceKeys(t, r.dirs, []keys.Store{})
+			key := adapters.NewKeys(kSession).Session(captureSession)
+			var starts []ledgerRecord
+			for _, src := range []event.Source{event.SourceLog, event.SourceOS} {
+				for _, rec := range readLedger(t, r.dirs, src) {
+					if _, ok := rec.ev.Data.(*event.SessionStart); ok && rec.ev.SessionKey == key {
+						starts = append(starts, rec)
+					}
+				}
+			}
+			if len(starts) != 1 {
+				t.Fatalf("%d session.starts for the session, want one", len(starts))
+			}
+			got := starts[0].ev
+			s := got.Data.(*event.SessionStart)
+			if got.Via != tc.via || s.ParentClass != tc.parent || s.HasTTY != tc.tty {
+				t.Errorf("the session.start is via %s, %+v; want via %s, parent %s, TTY %v", got.Via, s, tc.via, tc.parent, tc.tty)
+			}
+			if tc.silent && got.T >= fresh.UnixMilli() {
+				t.Errorf("the scan's session.start is dated %d, not before the session's first line read live, %d", got.T, fresh.UnixMilli())
+			}
+		})
+	}
+}
+
+// TestTiedStartOf checks the session.start of a session tied to its
+// process: the walk's parent and TTY, the log's start kind and permission
+// mode, and the entrypoint E-cc-transcript-labels gives a walk joined to a
+// token, whose labels only ever withhold credit.
+func TestTiedStartOf(t *testing.T) {
+	walk := func(ep event.Entrypoint, parent event.ParentClass) event.SessionStart {
+		return event.SessionStart{StartKind: event.StartStartup, Entrypoint: ep, ParentClass: parent, HasTTY: true}
+	}
+	log := func(ep event.Entrypoint) *event.SessionStart {
+		return &event.SessionStart{StartKind: event.StartResume, Entrypoint: ep, ParentClass: event.ParentUnknown, PermissionMode: "plan"}
+	}
+	ide, desktop, term := walk(event.EntrypointIDE, event.ParentIDE), walk(event.EntrypointDesktop, event.ParentUnknown),
+		walk(event.EntrypointUnknown, event.ParentTerminalApp)
+	cases := []struct {
+		name  string
+		walk  event.SessionStart
+		log   *event.SessionStart
+		token string
+		want  event.Entrypoint
+	}{
+		{"sdk-cli is sdk under an IDE", ide, log(event.EntrypointSDK), "sdk-cli", event.EntrypointSDK},
+		{"sdk-ts under an IDE is the IDE's", ide, log(event.EntrypointSDK), "sdk-ts", event.EntrypointIDE},
+		{"sdk-py under a desktop app is the app's", desktop, log(event.EntrypointSDK), "sdk-py", event.EntrypointDesktop},
+		{"sdk-ts under a terminal is sdk", term, log(event.EntrypointSDK), "sdk-ts", event.EntrypointSDK},
+		{"a cloud token stands over a terminal", term, log(event.EntrypointCloud), "remote", event.EntrypointCloud},
+		{"a walk's exec stands over sdk-cli", walk(event.EntrypointExec, event.ParentScriptRuntime), log(event.EntrypointSDK), "sdk-cli", event.EntrypointExec},
+		{"cli leaves the walk's ide", ide, log(event.EntrypointUnknown), "cli", event.EntrypointIDE},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tiedStartOf(tc.walk, tc.log, tc.token)
+			if got.Entrypoint != tc.want || got.ParentClass != tc.walk.ParentClass || !got.HasTTY ||
+				got.StartKind != event.StartResume || got.PermissionMode != "plan" {
+				t.Errorf("tiedStartOf = %+v; want entrypoint %s with the walk's parent and TTY and the log's kind and mode", got, tc.want)
+			}
+		})
+	}
 }
 
 // TestTranscriptOfAnIgnoredFolder checks that the transcript of a session in
