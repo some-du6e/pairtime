@@ -210,6 +210,10 @@ type adapterHost struct {
 	// what held.jsonl and a .replay file hold (countHeld), which the ledger
 	// writer may open before: until then any of them may be on its way.
 	uncounted bool
+	// heldStuck is set once the calls held can't reach the ledger writer in
+	// this run, as the worker's down or replayStuck says (replayStopped):
+	// they wait for the next start, so they hold no mark (waiting).
+	heldStuck bool
 	// expireDue says the minute job has run since the worker last looked
 	// for held calls to drop (expireRun). heldDue is when the oldest call in
 	// held.jsonl or an unread .replay file will have waited heldKeep, zero
@@ -335,6 +339,10 @@ type harnessStats struct {
 	ParseFailures uint64 `json:"parse_failures"`
 	// WriteFailures counts records the ledger writer refused.
 	WriteFailures uint64 `json:"write_failures,omitempty"`
+	// LateLocal counts records the ledger writer dropped: made while
+	// config.toml said local-only, they reached it only after it sealed a
+	// batch online since, so they never upload (ledger.ErrLateLocal).
+	LateLocal uint64 `json:"late_local,omitempty"`
 	// Ignored counts calls and log lines from a folder out of pairtime,
 	// which make no record (DESIGN 8.8).
 	Ignored uint64 `json:"ignored,omitempty"`
@@ -1690,8 +1698,17 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stam
 	// the writer took it in, for whether it stays on the device, unless it
 	// carries a reading of a run's clock, which only a step back of the
 	// wall clock can date so (ledger.Writer.lookback).
-	if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command, Sent: sent,
-		Late: r.Late}); err != nil {
+	_, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command, Sent: sent, Late: r.Late})
+	if errors.Is(err, ledger.ErrLateLocal) {
+		// Made in a local-only stretch, it came after the writer sealed a
+		// batch online since: it stays off the ledger, as it should, and the
+		// record's work is done.
+		h.count(func() { st.LateLocal++ })
+		h.a.log.Info("a record made while config.toml said local-only came after the computer uploaded again, so the ledger dropped it",
+			"kind", ev.Kind(), "made", time.UnixMilli(ev.T).UTC())
+		return true
+	}
+	if err != nil {
 		h.count(func() {
 			st.WriteFailures++
 			st.LastFailure = clip(fmt.Sprintf("the ledger refused a %s record: %v", ev.Kind(), err))
@@ -2263,12 +2280,16 @@ func (h *adapterHost) expireFiles(now time.Time, replay bool, from int64) (int, 
 }
 
 // replayStopped notes that this run reads the .replay file no more, as once
-// the ledger writer is down or the file is stuck. expireRun then cuts it
+// the ledger writer is down or the file is stuck, so the calls held reach no
+// writer in this run (heldStuck). expireRun then cuts it
 // like held.jsonl, so it has the next minute job look at it, and a call in
 // it that came due while its replay was under way goes then, rather than
 // at the look heldRetry later.
 func (h *adapterHost) replayStopped() {
-	h.dueBy(wallNow())
+	h.mu.Lock()
+	h.heldStuck = true
+	h.dueByLocked(wallNow())
+	h.mu.Unlock()
 }
 
 // dueBy has expireRun look at the held files at t, or sooner.
@@ -2409,7 +2430,19 @@ func (h *adapterHost) waiting(before func(event.Envelope) bool) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	// A moment that holds nothing, as at a first start, holds no call.
-	if h.uncounted && before(event.Envelope{}) || h.held > 0 && h.heldFrom.waits(before) {
+	// Calls held in held.jsonl count by the earliest of them alone
+	// (heldFrom), which tells whether one came before a moment, not whether
+	// one came inside a stretch: one made in it can be held behind one made
+	// before it began. So while one whose times the agent could read is
+	// held, they count whenever before holds any stretch at all, as calls
+	// not yet counted do, at the cost of credit while they drain after a
+	// switch back (D-late-local point 2).
+	// Held calls that can't reach the writer in this run, behind a .replay
+	// file this run can't delete or a writer that stopped, are on their way
+	// to the next start's writer only (heldStuck).
+	drains := h.held > 0 && !h.heldStuck
+	read := drains && (h.heldFrom.set || len(h.heldFrom.mono) > 0)
+	if (h.uncounted || read) && before(event.Envelope{}) || drains && h.heldFrom.waits(before) {
 		return true
 	}
 	for _, s := range h.stepping {

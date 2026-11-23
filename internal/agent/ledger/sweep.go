@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
 )
@@ -21,6 +22,15 @@ import (
 // record is in the segment of a UTC day before from, with the segments of
 // those days. When every batch goes, the base frame names the one to be
 // sealed next, so the chain goes on from its head.
+//
+// It also folds the local-only stretches, in the writer and in the base
+// frame, at the start of from: every stretch that began before it becomes
+// part of one from the beginning of time to it or to the latest end among
+// them, whichever is later, or one going on while one of them does
+// (foldPayloads). That only makes more of the past
+// count as local-only, and the stretches keep no time config.toml changed
+// mode before the ledger's 180 days
+// (docs/errata/2026-11-23-late-local-records.md).
 //
 // floor, when it isn't 0, is the first batch whose row stays whatever its
 // age: the uploads' first batch the server hasn't stored, while this
@@ -73,8 +83,13 @@ func (w *Writer) Sweep(from string, floor uint64) (batches, segs int, err error)
 		return oldBatches, oldSegs, errors.Join(damaged("%s ends in a frame that isn't whole while its Writer is open", batchesName), oldErr)
 	}
 	k := keptFrom(bf, from, floor)
-	if k > 0 {
-		data, kerr := keptFile(bf, k)
+	cut := cutOf(from)
+	stretches, folded := foldPayloads(bf.stretches, cut)
+	w.mu.Lock()
+	w.foldStretches(cut)
+	w.mu.Unlock()
+	if k > 0 || folded {
+		data, kerr := keptFile(bf, k, stretches)
 		if kerr != nil {
 			return oldBatches, oldSegs, errors.Join(kerr, oldErr)
 		}
@@ -186,10 +201,11 @@ func keptFrom(bf *batchesFile, from string, floor uint64) int {
 // keptFile returns batches.seg as Sweep writes it, keeping the rows from
 // bf.rows[k] on: the chain frame, of the version with a base frame, a base
 // frame naming that batch, or the batch after the last when k is past
-// them, the rows, then the receipts of the rows kept, in the order of
-// their batches. The rows go before every receipt, so each receipt follows
-// its row.
-func keptFile(bf *batchesFile, k int) ([]byte, error) {
+// them, with stretches, the local-only stretches the newest row recorded as
+// the sweep folded them, the rows, then the receipts of the rows kept, in
+// the order of their batches. The rows go before every receipt, so each
+// receipt follows its row.
+func keptFile(bf *batchesFile, k int, stretches []stretchPayload) ([]byte, error) {
 	cp := bf.chain
 	cp.V = chainVersionBase
 	chain, err := json.Marshal(cp)
@@ -204,6 +220,14 @@ func keptFile(bf *batchesFile, k int) ([]byte, error) {
 	case len(bf.rows) > 0:
 		last := bf.rows[len(bf.rows)-1]
 		bp = basePayload{B: last.B + 1, FirstSeq: last.LastSeq + 1, Prev: last.Head}
+	}
+	// The local-only stretches go in the base frame, since the rows kept
+	// keep none of their own once read (readBatchesFile): Open takes them
+	// back from there until a later row records them again, with the moment
+	// the row that recorded them recorded, which it holds the kept rows to.
+	if stretches != nil {
+		bp.Stretches = stretches
+		bp.LocalUntil, bp.LocalUntilOS = bf.listUntil()
 	}
 	base, err := json.Marshal(bp)
 	if err != nil {
@@ -285,8 +309,9 @@ func sweepChain(dir, from string) (batches, segs int, err error) {
 			return k, len(days), nil
 		}
 		need = bf.rows[k].Start.Seg
-		if k > 0 {
-			data, err := keptFile(bf, k)
+		stretches, folded := foldPayloads(bf.stretches, cutOf(from))
+		if k > 0 || folded {
+			data, err := keptFile(bf, k, stretches)
 			if err != nil {
 				return 0, 0, err
 			}
@@ -324,6 +349,59 @@ func sweepChain(dir, from string) (batches, segs int, err error) {
 		}
 	}
 	return batches, segs, errors.Join(errs...)
+}
+
+// cutOf is the start of day, a UTC day as segments name them, in Unix ms.
+func cutOf(day string) int64 {
+	t, err := time.Parse(time.DateOnly, day)
+	if err != nil {
+		return 0
+	}
+	return t.UnixMilli()
+}
+
+// foldPayloads is the stretches ps as a sweep by cut, in Unix ms, keeps
+// them, and whether that changed any: every stretch that began before cut
+// becomes part of one that begins at the beginning of time and ends at
+// cut, or at the latest end of those that ended after it, or goes on when
+// one of them does. It is passed when all of them are, and holds all their
+// drops; the stretches that began from cut on follow it as they are. Only
+// more of the past counts as local-only then, and no time config.toml
+// changed mode before cut stays. A fold that already ends at or after cut
+// stays as it is. Writer.foldStretches folds the writer's own the same way.
+func foldPayloads(ps []stretchPayload, cut int64) ([]stretchPayload, bool) {
+	fold := stretchPayload{Passed: true}
+	var rest []stretchPayload
+	n, first := 0, -1
+	for i, p := range ps {
+		if p.From >= cut {
+			rest = append(rest, p)
+			continue
+		}
+		if n == 0 {
+			first = i
+		}
+		n++
+		fold.Open = fold.Open || p.Open
+		fold.Passed = fold.Passed && p.Passed
+		fold.Dropped += p.Dropped
+		if !p.Open && p.To > fold.To {
+			fold.To, fold.ToOS = p.To, p.ToOS
+		}
+	}
+	if n == 0 {
+		return ps, false
+	}
+	if p := ps[first]; n == 1 && first == 0 && p.From == 0 && p.FromOS == nil && (p.Open || p.To >= cut) {
+		return ps, false
+	}
+	switch {
+	case fold.Open:
+		fold.To, fold.ToOS, fold.Passed = 0, nil, false
+	case fold.To < cut:
+		fold.To, fold.ToOS = cut, nil
+	}
+	return append([]stretchPayload{fold}, rest...), true
 }
 
 // removeTemps deletes the temporary file of a rewrite of batches.seg that

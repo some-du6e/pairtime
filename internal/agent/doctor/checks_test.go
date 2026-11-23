@@ -237,6 +237,34 @@ func TestChecks(t *testing.T) {
 			},
 			check: "adapter.claude_code", want: Warn, wantHas: []string{"but the ledger refused 1 record; the last failure: the ledger refused a prompt.submit record"},
 			wantNot: []string{"parse", "Report this line"}},
+		{name: "records the ledger dropped as made while config.toml said local-only are counted, and aren't a warning, since they were never to upload",
+			edit: func(f *Facts) {
+				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, Records: 4, LateLocal: 2}
+			},
+			check: "adapter.claude_code", want: OK,
+			wantHas: []string{"5 calls made 4 records, with no parse failures; 2 records made while config.toml said local-only came only after pairtime had uploaded again, so the ledger dropped them"},
+			wantNot: []string{"refused"}},
+		{name: "one such record is it",
+			edit: func(f *Facts) {
+				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, Records: 4, LateLocal: 1}
+			},
+			check: "adapter.claude_code", want: OK,
+			wantHas: []string{"1 record made while config.toml said local-only came only after pairtime had uploaded again, so the ledger dropped it,"}},
+		{name: "the records the ledger dropped over the chain's life are a line of their own, which points to the adapter lines for each harness's since the start",
+			edit: func(f *Facts) {
+				f.Agent.Ledger = &Ledger{LateLocal: 12}
+				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, Records: 4, LateLocal: 2}
+			},
+			check: "ledger", want: OK,
+			wantHas: []string{"has dropped 12 records made while config.toml said local-only that came only after pairtime had uploaded again",
+				"the adapter lines count each harness's since the agent started"}},
+		{name: "drops no adapter made since the start, as presence's or the git watcher's, don't point to the adapter lines",
+			edit: func(f *Facts) { f.Agent.Ledger = &Ledger{LateLocal: 1} }, check: "ledger", want: OK,
+			wantHas: []string{"has dropped 1 record made while"}, wantNot: []string{"adapter lines"}},
+		{name: "a ledger that has dropped nothing has no line",
+			edit: func(f *Facts) { f.Agent.Ledger = &Ledger{} }, check: "ledger", absent: true},
+		{name: "nor has one that isn't open",
+			edit: func(*Facts) {}, check: "ledger", absent: true},
 		{name: "an unsigned release is ok, and says releases aren't signed yet",
 			edit: func(*Facts) {}, check: "signing", want: OK,
 			wantHas: []string{"release v0.1.0 from commit 0123456789ab, not code-signed", "aren't code-signed yet"}},

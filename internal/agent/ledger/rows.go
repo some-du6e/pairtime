@@ -38,6 +38,9 @@ type Row struct {
 	// local-only as the batch was sealed (Batch.LocalUntil), the zero time
 	// for never and for a row an older version wrote.
 	LocalUntil time.Time
+	// Why says why a batch sealed local-only is (Batch.Why), nil for one
+	// sealed online and for one an older version sealed.
+	Why *LocalWhy
 }
 
 // ReadRows reads which chain the ledger in dir holds and the rows of its
@@ -72,6 +75,7 @@ func ReadRows(dir string, from uint64) (ChainInfo, []Row, error) {
 			Back:       rp.Back,
 			NoMode:     rp.Online == nil,
 			LocalUntil: msTime(rp.LocalUntil),
+			Why:        localWhy(rp.Why),
 		}
 		if rc, ok := bf.receipts[rp.B]; ok {
 			r.Receipt = &rc
@@ -85,5 +89,5 @@ func ReadRows(dir string, from uint64) (ChainInfo, []Row, error) {
 // read it, given prev, the head of the batch before it: Batch doesn't
 // carry it, and its holder knows it from that batch.
 func RowOf(b Batch, prev ledger.Hash) Row {
-	return Row{BatchRow: b.Row, Prev: prev, SealedAt: b.SealedAt, Online: b.Online, Back: b.Back, LocalUntil: b.LocalUntil}
+	return Row{BatchRow: b.Row, Prev: prev, SealedAt: b.SealedAt, Online: b.Online, Back: b.Back, LocalUntil: b.LocalUntil, Why: b.Why}
 }
