@@ -801,7 +801,10 @@ func (u *Uploader) namesAnswered(sent namesBody, change string, wanted map[strin
 	u.missingUntil, u.missingHash = time.Time{}, ""
 	var reply namesReply
 	if err := json.Unmarshal(a.body, &reply); err != nil || reply.Names == nil {
-		u.namesHeld, u.namesAfter = change, u.now().Add(namesHold)
+		// The request may have been stored, and the answer says nothing:
+		// as after a failure to reach the server, the next request reads
+		// first, once the names' backoff ends.
+		u.namesWait = u.now().Add(u.namesBackoff.fail(retryAfter(a.header, u.now())))
 		u.namesStarted = false
 		u.setProblem("names", "the server's answer about this computer's project names doesn't read")
 		return false
@@ -906,8 +909,10 @@ func (u *Uploader) namesAnswered(sent namesBody, change string, wanted map[strin
 	if mismatch {
 		// The server shows another label than the one it was sent, which
 		// sending it again wouldn't change: wait, rather than send it at
-		// every wake.
+		// every wake, and read first once the hour ends, since the owner
+		// may hide the name meanwhile.
 		u.namesHeld, u.namesAfter = change, u.now().Add(namesHold)
+		u.namesStarted = false
 		u.setProblem("names", "the server answered with other project names than pairtime sent it")
 		return true
 	}
