@@ -19,7 +19,7 @@ import (
 
 // TestFindingKeyDownIdle answers WP-OS3's open question: does
 // CGEventSourceSecondsSinceLastEventType with kCGEventKeyDown need the
-// Input Monitoring permission (SM 1.2, DESIGN 5.7)? Readings on an idle
+// Input Monitoring permission (SM 1.2)? Readings on an idle
 // runner can't tell, since nobody has pressed a key, so the test posts one
 // key-down and key-up of F20, a key with no default action, and reads
 // again. It does that twice:
@@ -59,7 +59,7 @@ func TestFindingKeyDownIdle(t *testing.T) {
 	}
 
 	f := keyFinding{
-		Question: "Does CGEventSourceSecondsSinceLastEventType with kCGEventKeyDown need the Input Monitoring permission? (SM 1.2, DESIGN 5.7, WP-OS3)",
+		Question: "Does CGEventSourceSecondsSinceLastEventType with kCGEventKeyDown need the Input Monitoring permission? (SM 1.2, WP-OS3)",
 		MacOS:    sysctl("kern.osproductversion"),
 		Build:    sysctl("kern.osversion"),
 		Model:    sysctl("hw.model"),

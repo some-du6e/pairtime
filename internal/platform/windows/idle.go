@@ -15,6 +15,10 @@
 // dpapi.go is the device keystore's half (internal/agent/keys; DESIGN 3.6;
 // CP 5.2): DPAPI, which encrypts a secret under the user's logon
 // credentials.
+//
+// conn_windows.go finds the process at the client end of a loopback TCP
+// connection, for the agent's peer-process check (internal/agent/peer;
+// DESIGN 5.7; WP-OS13).
 package windows
 
 import (
