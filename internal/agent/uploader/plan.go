@@ -9,6 +9,7 @@ import (
 	"errors"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -405,23 +406,32 @@ func sameMarks(a, b map[string]store.Mark) bool {
 }
 
 // sortedHarnesses returns the labels' harnesses: every harness the ledger
-// named, once and by name, with the version it last named when that is a
-// version (versionForm) and with none otherwise, at most harnessesMax, and
-// an empty list, never null, when there are none (ingest-v1 2.3.4;
-// D-version-grammar).
+// named, once and by name, with the version it last named as harnessVersion
+// gives it, at most harnessesMax, and an empty list, never null, when there
+// are none (ingest-v1 2.3.4; D-version-grammar).
 func sortedHarnesses(seen map[event.Harness]string) []Harness {
 	out := []Harness{}
 	for _, name := range slices.Sorted(maps.Keys(seen)) {
 		if !knownHarness(name) || len(out) >= harnessesMax {
 			continue
 		}
-		h := Harness{Name: name}
-		if v := seen[name]; versionForm(v) {
-			h.Version = v
-		}
-		out = append(out, h)
+		out = append(out, Harness{Name: name, Version: harnessVersion(seen[name])})
 	}
 	return out
+}
+
+// harnessVersion returns the version the labels carry for a harness that
+// named v: v when it is in tier 1's form (versionForm), the number it
+// starts with when only its suffix isn't, as 2.1.327 for
+// 2.1.327-teens-mbp.local, and none otherwise (ingest-v1 2.3.4).
+func harnessVersion(v string) string {
+	if versionForm(v) {
+		return v
+	}
+	if i := strings.IndexAny(v, "-+"); i > 0 && event.IsVersion(v) && versionForm(v[:i]) {
+		return v[:i]
+	}
+	return ""
 }
 
 // knownHarness reports whether h may be named in the labels: one of
@@ -435,62 +445,20 @@ func knownHarness(h event.Harness) bool {
 	return false
 }
 
-// versionForm reports whether s is a version as D-version-grammar has it:
-// 1 to 64 characters of ^v?[0-9]+(\.[0-9]+){0,3}([-+][0-9A-Za-z][0-9A-Za-z.-]{0,40})?$,
-// such as 2.1.327, v0.1.0-alpha.1 or 0.1.0+3dbf6d4. Ingest refuses any
-// other client_build or harness version, because a free word could be a
-// file, folder or host name (DESIGN 4.3). It is written out rather than a
-// regexp so that nothing is compiled when a hook process starts.
-func versionForm(s string) bool {
-	if len(s) == 0 || len(s) > 64 {
-		return false
-	}
-	i := 0
-	if s[0] == 'v' {
-		i++
-	}
-	digits := func() bool {
-		j := i
-		for i < len(s) && '0' <= s[i] && s[i] <= '9' {
-			i++
-		}
-		return i > j
-	}
-	if !digits() {
-		return false
-	}
-	for parts := 1; parts < 4 && i < len(s) && s[i] == '.'; parts++ {
-		i++
-		if !digits() {
-			return false
-		}
-	}
-	if i == len(s) {
-		return true
-	}
-	if s[i] != '-' && s[i] != '+' {
-		return false
-	}
-	i++
-	alnum := func(c byte) bool { return '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' }
-	if i >= len(s) || !alnum(s[i]) {
-		return false
-	}
-	rest := s[i+1:]
-	if len(rest) > 40 {
-		return false
-	}
-	for j := 0; j < len(rest); j++ {
-		if c := rest[j]; !alnum(c) && c != '.' && c != '-' {
-			return false
-		}
-	}
-	return true
-}
+// versionForm reports whether s is a version in tier 1's form,
+// event.IsTier1Version's: D-version-grammar's, such as 2.1.327,
+// v0.1.0-alpha.1 or 0.1.0+3dbf6d4, with each identifier of its suffix all
+// digits, at least 7 lowercase hex digits, or one of a few words such as
+// alpha and dev. Ingest refuses any other client_build or harness version,
+// because a free word could be a file, folder or host name (DESIGN 4.3;
+// ingest-v1 2.3.4). IsTier1Version is written out rather than a regexp, so
+// nothing is compiled when a hook process starts.
+func versionForm(s string) bool { return event.IsTier1Version(s) }
 
 // clientBuild returns the client_build the labels carry: the running
-// build when it is a version, and v0.0.0-dev for a build from a checkout,
-// whose version is a word such as dev (ingest-v1 2.3.4).
+// build when it is a version in tier 1's form (versionForm), and
+// v0.0.0-dev otherwise, as for a build from a checkout, whose version is a
+// word such as dev or can carry a name after the number (ingest-v1 2.3.4).
 func clientBuild(v string) string {
 	if versionForm(v) {
 		return v

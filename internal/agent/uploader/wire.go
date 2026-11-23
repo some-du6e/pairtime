@@ -48,8 +48,10 @@ type Labels struct {
 	VM             bool      `json:"vm"`
 }
 
-// Harness is a harness the device records and the version it last saw,
-// which is left out when the harness named none in client_build's form
+// Harness is a harness the device records, with the version harnessVersion
+// gives for the one it last named: that version when it is in tier 1's
+// form, the number it starts with when only its suffix isn't, and none when
+// the harness named no version, or none in D-version-grammar's form
 // (ingest-v1 2.3.4).
 type Harness struct {
 	Name    event.Harness `json:"name"`

@@ -104,10 +104,10 @@ const VersionPattern = `^v?[0-9]+(\.[0-9]+){0,3}([-+][0-9A-Za-z][0-9A-Za-z.-]{0,
 // MaxVersionLen bytes in VersionPattern's form, which is an optional v,
 // one to four dot-separated numbers, and an optional - or + suffix of
 // letters, digits, dots and hyphens, such as 2.1.327, v0.1.0-alpha.1,
-// 0.1.0+3dbf6d4 or a Go pseudo-version. A bare word isn't one, so a file,
-// folder or host name can't pass. Tier 1 carries versions as they are,
-// unkeyed (DESIGN 4.3), so this form is all that keeps a name out of a
-// harness version or a client build.
+// 0.1.0+3dbf6d4 or a Go pseudo-version. A bare word isn't one, so a bare
+// file, folder or host name can't pass, but the suffix can hold one after
+// the number, as in 1.0.0-teens-mbp.local. Events on the device keep this
+// form; what goes up in tier 1 has IsTier1Version's narrower one.
 func IsVersion(s string) bool {
 	if len(s) == 0 || len(s) > MaxVersionLen {
 		return false
@@ -145,6 +145,62 @@ func IsVersion(s string) bool {
 		}
 	}
 	return true
+}
+
+// IsTier1Version reports whether s is a version tier 1 takes, as a
+// client_build or a harness's version (ingest-v1 2.3.4): a version, as
+// IsVersion has it, whose suffix, if it has one, is identifiers separated
+// by dots and hyphens, each all digits, at least 7 lowercase hex digits, or
+// one of the words alpha, beta, rc, pre, dev, preview, nightly, canary,
+// next and build. So 2.1.327, v0.1.0-alpha.1, 0.1.0+3dbf6d4, v0.0.0-dev and
+// Go's pseudo-versions pass, and a suffix with an identifier that has a
+// letter outside a-f and isn't one of the words fails, as
+// 1.0.0-teens-mbp.local's does. A name whose every identifier is digits, 7
+// or more hex digits or one of the words still passes, as in
+// 1.0.0-deadbeef. Tier 1 carries versions as they are, unkeyed (DESIGN
+// 4.3), so this form is all that keeps a name out of them.
+func IsTier1Version(s string) bool {
+	if !IsVersion(s) {
+		return false
+	}
+	i := strings.IndexAny(s, "-+")
+	if i < 0 {
+		return true
+	}
+	rest := s[i+1:]
+	for {
+		j := strings.IndexAny(rest, ".-")
+		if j < 0 {
+			return tier1Identifier(rest)
+		}
+		if !tier1Identifier(rest[:j]) {
+			return false
+		}
+		rest = rest[j+1:]
+	}
+}
+
+// tier1Identifier reports whether id may be one of a tier-1 version's
+// suffix identifiers: all digits, at least 7 lowercase hex digits, or one
+// of IsTier1Version's words.
+func tier1Identifier(id string) bool {
+	switch id {
+	case "":
+		return false
+	case "alpha", "beta", "rc", "pre", "dev", "preview", "nightly", "canary", "next", "build":
+		return true
+	}
+	digits, hex := true, len(id) >= 7
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !isDigit(c) {
+			digits = false
+			if c < 'a' || c > 'f' {
+				hex = false
+			}
+		}
+	}
+	return digits || hex
 }
 
 func isDigit(b byte) bool { return '0' <= b && b <= '9' }

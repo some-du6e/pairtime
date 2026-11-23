@@ -63,7 +63,13 @@ type savedLogSession struct {
 	Token    string `json:"token,omitempty"`
 	Started  bool   `json:"started,omitempty"`
 	NativeAt int64  `json:"native_at,omitempty"`
-	Seen     uint64 `json:"seen"`
+	Opened   bool   `json:"opened,omitempty"`
+	Cleared  bool   `json:"cleared,omitempty"`
+	// Hold is how long past startGrace the host holds the session's first
+	// session.start, in ms (LogHoldStart), so a restart while a procs tie
+	// waits holds the start its replay makes again.
+	Hold int64  `json:"hold,omitempty"`
+	Seen uint64 `json:"seen"`
 }
 
 type savedSession struct {
@@ -229,7 +235,7 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 			break
 		}
 		st.LogSessions = append(st.LogSessions, savedLogSession{ID: s.id, Token: s.token, Started: s.started,
-			NativeAt: s.nativeAt, Seen: s.seen})
+			NativeAt: s.nativeAt, Opened: s.opened, Cleared: s.cleared, Hold: s.hold, Seen: s.seen})
 	}
 	return json.Marshal(st)
 }
@@ -297,7 +303,7 @@ func (a *Adapter) LoadState(raw json.RawMessage) error {
 			continue
 		}
 		logs[sl.ID] = &txSession{id: sl.ID, token: sl.Token, started: sl.Started, nativeAt: max(sl.NativeAt, 0),
-			seen: sl.Seen}
+			opened: sl.Opened, cleared: sl.Cleared, hold: max(sl.Hold, 0), seen: sl.Seen}
 		clock = max(clock, sl.Seen)
 	}
 	a.mu.Lock()
