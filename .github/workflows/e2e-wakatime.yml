@@ -1,0 +1,81 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The real wakatime-cli against pairtime (DESIGN 5.6, 5.7). For now it holds
+# one job, capture, which records every request wakatime-cli v2.28.4 sends
+# to a stand-in Hackatime and a stand-in pairtime agent, for the fixtures in
+# testdata/fixtures/wakatime/2.28.4/linux/ (docs/PLAN.md, WP-AD16). WP-AD17
+# adds the end-to-end job on three runners that DESIGN 5.6 describes. By hand:
+#
+#   gh workflow run e2e-wakatime.yml
+#
+# The capture's artifact holds one folder per run, laid out as the fixture
+# is. tools/capture/wakatime/README.md says how it becomes one.
+name: e2e-wakatime
+
+on:
+  workflow_dispatch:
+  pull_request:
+    # Only to try out changes to this workflow and its capture on their own PR.
+    paths:
+      - .github/workflows/e2e-wakatime.yml
+      - tools/capture/wakatime/**
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: capture wakatime-cli's requests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      WAKATIME_CLI_VERSION: v2.28.4
+      # The SHA-256 of the release's wakatime-cli-linux-amd64.zip, which the
+      # release's checksums_sha256.txt and GitHub's asset digest both give.
+      # It is pinned here so a changed asset fails the job.
+      WAKATIME_CLI_SHA256: e1dfa9fc4960cb0ebed90ee978c921b8ded9c61ffa63e750ddabd2fedb570345
+    steps:
+      # Actions are pinned to commit SHAs; tags can be moved. Dependabot bumps them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download wakatime-cli and check its checksum
+        run: |
+          dir="$RUNNER_TEMP/wakatime-cli"
+          mkdir -p "$dir"
+          curl -fsSL --retry 3 -o "$dir/cli.zip" \
+            "https://github.com/wakatime/wakatime-cli/releases/download/$WAKATIME_CLI_VERSION/wakatime-cli-linux-amd64.zip"
+          echo "$WAKATIME_CLI_SHA256  $dir/cli.zip" | sha256sum -c -
+          unzip -q "$dir/cli.zip" -d "$dir"
+          chmod +x "$dir/wakatime-cli-linux-amd64"
+          "$dir/wakatime-cli-linux-amd64" --version
+          echo "WAKATIME_CLI=$dir/wakatime-cli-linux-amd64" >> "$GITHUB_ENV"
+
+      - name: Make the capture's home folder
+        # /home/capture is the home folder testdata/fixtures/README.md gives
+        # captures, and the one WP-AD1's transcripts name.
+        run: |
+          sudo mkdir -p /home/capture
+          sudo chown "$(id -u):$(id -g)" /home/capture
+
+      - name: Capture
+        env:
+          HOME: /home/capture
+        run: |
+          python3 -I tools/capture/wakatime/capture.py "$WAKATIME_CLI" "$RUNNER_TEMP/capture" \
+            --ad1 testdata/fixtures/claude_code/2.1.327/linux/cli
+
+      - name: Save the capture
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wakatime-capture
+          path: ${{ runner.temp }}/capture
+          if-no-files-found: error
+          retention-days: 90

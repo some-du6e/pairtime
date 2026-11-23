@@ -29,6 +29,4 @@ The typing part of a track lead is realized only in slots with key input. From 1
 
 `logged_s` and `ai_logged_s` are still 0. D19 drops `cli.track` records whatever their level, so a keyboard-backed loop still can't raise the ceiling on level-C credit. It has no level-C credit anyway.
 
-## Errata
-
-[Turns without a stop](../../../../docs/errata/2026-11-19-turns-without-a-stop.md), as in (a). Under the proposed rule the 20 s after the last call are `READ`, the rest of 14:07 is `X.no_anchor`, `agent_running_s` is 0, and 14:08 has no bucket. Read literally, the turn the 14:04:00 call opens would run from then on, so rows 14:04 to 14:08 name it, and the `agent_running_s` total depends on it too. The 389 s and their level don't.
+As in (a), no track turn runs (SM 1.3, DESIGN 5.4): the 20 s after the last call are `READ`, the rest of 14:07 is `X.no_anchor`, `agent_running_s` is 0, and 14:08 has no bucket.
