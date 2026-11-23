@@ -1017,3 +1017,37 @@ func TestInstallCycle(t *testing.T) {
 		})
 	}
 }
+
+// TestSetUpLine checks install's last word on where what pairtime records
+// goes: local-only mode, as every install starts in, unless pairtime login
+// linked the computer and config.toml says online, when config.toml lets
+// its hours' numbers go to the server it's linked to.
+func TestSetUpLine(t *testing.T) {
+	linked := `{"v":1,"server":"https://pairtime.example","device_id":"d_testdevice00000000000000a","linked_at":"2026-11-22T10:00:00Z"}`
+	cases := []struct {
+		name, account, config, want string
+	}{
+		{"a computer no login linked runs local-only, whatever config.toml says", "", "mode = \"online\"\n", "It runs in local-only mode"},
+		{"a linked computer whose config.toml says online names its server", linked, "mode = \"online\"\n",
+			"This computer is linked to https://pairtime.example, and config.toml lets it upload your hours' numbers there; pairtime doctor says if anything holds them back."},
+		{"a linked computer whose config.toml says local runs local-only", linked, "mode = \"local\"\n", "It runs in local-only mode"},
+		{"a linked computer whose config.toml has an error runs local-only", linked, "mode = [\n", "It runs in local-only mode"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+			if tc.account != "" {
+				if err := os.WriteFile(filepath.Join(dir, "account.json"), []byte(tc.account), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(dirs.ConfigFile(), []byte(tc.config), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := setUpLine(linkedServer(dirs)); !strings.Contains(got, tc.want) {
+				t.Errorf("install says %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

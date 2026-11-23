@@ -684,8 +684,9 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 // X.bucket_cap for reading that BUCKET_MAX_S evicted. (The dark-flow
 // discounts, X.day_cap and X.noprog are WP-SC6's.) Every other second takes
 // the first that applies of X.absent; X.other_focus; X.ambiguous, for focus
-// that resolves to no project (SM 3.2) or that the client hasn't recorded
-// yet; then, while a turn of the slot's project runs, X.agent_only if a
+// that resolves to no project (SM 3.2), that the client hasn't recorded
+// yet, or, until WP-SC8, that it recorded as unknown (SM 2.5); then, while
+// a turn of the slot's project runs, X.agent_only if a
 // person started one of the running turns, else X.automated, else
 // X.no_input for a turn whose prompt came with no input (SM 2.2 rule 8);
 // and last X.no_anchor. at is the slot's resolution (attribute).
@@ -702,6 +703,13 @@ func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
 		return event.ReasonAbsent
 	}
 	if at.unrecorded {
+		return event.ReasonAmbiguous
+	}
+	if s.FocusClass == event.AppUnknown {
+		// A stopgap until WP-SC8 brings in SM 2.5's rule for unknown
+		// focus: a slot whose os.focus says pairtime can't tell which
+		// window is in front files its seconds as they were before the
+		// agent recorded that (WP-OS15), not as input to another app.
 		return event.ReasonAmbiguous
 	}
 	switch s.FocusClass {

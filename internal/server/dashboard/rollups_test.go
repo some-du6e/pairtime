@@ -159,6 +159,13 @@ func TestRollupsSumOfBuckets(t *testing.T) {
 	}
 }
 
+// laptopKey and desktopKey are made-up project keys in the git adapter's
+// form whose first six hex digits are the same.
+const (
+	laptopKey  = "g7c41e9a2d05b8f63e1a94c7d2b6f0e85"
+	desktopKey = "g7c41e9b6c18a2f05d3e7b94a1c6d0f28"
+)
+
 func TestRollupsView(t *testing.T) {
 	// 2027-09-06 03:30 UTC is 2027-09-06 00:30 in Santiago, the day after
 	// its midnight that doesn't exist.
@@ -214,23 +221,41 @@ func TestRollupsView(t *testing.T) {
 			},
 		},
 		{
-			name: "a project is called by its device's key, cut short, since the server never learns its name",
+			name: "a project is called by the short code of its device's key, since the server never learns its name",
 			zone: "UTC",
 			now:  time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC),
 			buckets: []rollup.Bucket{
-				{Account: "u1", Device: "d1", Minute: time.Date(2026, 11, 20, 17, 0, 0, 0, time.UTC).Unix(), State: "final", AgentOnly: map[string]float64{"p_0123456789abcdef": 30},
-					Slots: []rollup.Slot{{Project: "p_0123456789abcdef", CreditedS: 15, Kind: "prompting", Level: "A"}}},
+				{Account: "u1", Device: "d1", Minute: time.Date(2026, 11, 20, 17, 0, 0, 0, time.UTC).Unix(), State: "final", AgentOnly: map[string]float64{laptopKey: 30},
+					Slots: []rollup.Slot{{Project: laptopKey, CreditedS: 15, Kind: "prompting", Level: "A"}}},
 			},
 			check: func(t *testing.T, v View) {
-				if len(v.Projects) != 1 || v.Projects[0].Name != "p_0123456789…" || v.Agent != AgentName {
+				if len(v.Projects) != 1 || v.Projects[0].Name != "Project 7c41e9" || v.Projects[0].Code != "7c41e9" || v.Agent != AgentName {
 					t.Fatalf("projects %+v and agent %q", v.Projects, v.Agent)
 				}
 				// The project's id is the account's, not the device's key.
-				if p := v.Projects[0]; p.ID == "p_0123456789abcdef" || !reflect.DeepEqual(p.Keys, []string{"p_0123456789abcdef"}) {
+				if p := v.Projects[0]; p.ID == laptopKey || !reflect.DeepEqual(p.Keys, []string{laptopKey}) {
 					t.Errorf("project %+v, want an id of its own and the device's key", p)
 				}
 				if v.Week.Agent.FinalS != 30 {
 					t.Errorf("agent %+v, want 30 s", v.Week.Agent)
+				}
+			},
+		},
+		{
+			name: "a project's code is unique among all the account's projects, so it is longer when one with no time this month shares its start",
+			zone: "UTC",
+			now:  time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC),
+			buckets: []rollup.Bucket{
+				// Months ago, on the desktop, in a project whose key starts
+				// as the laptop's does.
+				{Account: "u1", Device: "d2", Minute: time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC).Unix(), State: "final",
+					Slots: []rollup.Slot{{Project: desktopKey, CreditedS: 15, Kind: "prompting", Level: "A"}}},
+				{Account: "u1", Device: "d1", Minute: time.Date(2026, 11, 20, 17, 0, 0, 0, time.UTC).Unix(), State: "final",
+					Slots: []rollup.Slot{{Project: laptopKey, CreditedS: 15, Kind: "prompting", Level: "A"}}},
+			},
+			check: func(t *testing.T, v View) {
+				if len(v.Projects) != 1 || v.Projects[0].Code != "7c41e9a" || v.Projects[0].Name != "Project 7c41e9a" {
+					t.Errorf("projects %+v, want the month's one project called Project 7c41e9a", v.Projects)
 				}
 			},
 		},

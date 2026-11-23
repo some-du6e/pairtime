@@ -1,0 +1,553 @@
+{
+  "fixture": "relayed/t3-unattended",
+  "title": "T3 Code messages marked createdBy user that nobody typed, and a person's two messages among them",
+  "sm": "docs/design/struggle-metric.md 2.2 rules 1, 3, 4 and 9, 2.3, 2.4, 5.2",
+  "date": "2026-11-28",
+  "timezone": "America/New_York",
+  "utc_offset": "-05:00",
+  "os": "linux",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "witnessed",
+  "device": "d_6c1439e2efa0",
+  "projects": {"p_7fe5f5541eb2": "bus-times"},
+  "window": {"start": "2026-11-28T21:00:00Z", "end": "2026-11-28T23:00:00Z", "local": "16:00-18:00"},
+  "rows": [
+    {
+      "start": "2026-11-28T21:00:00Z",
+      "minutes": 1,
+      "local": "16:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 10, "X.automated": 50},
+      "agent_running_s": 50,
+      "sm": "2.2 rule 1: the relay record declares cron, so the task's prompt is scheduled",
+      "note": "The task fires at 16:00:00, and T3 starts the checks thread's session for it. C1's prompt reaches the agent at 16:00:01 and its relay record, declared cron, follows at 16:00:03, so rule 1 makes it scheduled. C1 runs until 16:00:51.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:01:00Z",
+      "minutes": 9,
+      "local": "16:01-16:09",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T21:10:00Z",
+      "minutes": 1,
+      "local": "16:10",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 10, "X.automated": 50},
+      "agent_running_s": 50,
+      "sm": "2.2 rule 1: the relay record declares cron, so the task's prompt is scheduled",
+      "note": "C2's prompt reaches the agent at 16:10:01 and its turn runs until 16:10:51.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:11:00Z",
+      "minutes": 9,
+      "local": "16:11-16:19",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T21:20:00Z",
+      "minutes": 1,
+      "local": "16:20",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 10, "X.automated": 50},
+      "agent_running_s": 50,
+      "sm": "2.2 rule 1: the relay record declares cron, so the task's prompt is scheduled",
+      "note": "C3's prompt reaches the agent at 16:20:01 and its turn runs until 16:20:51.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:21:00Z",
+      "minutes": 6,
+      "local": "16:21-16:26",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T21:27:00Z",
+      "minutes": 1,
+      "local": "16:27",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 1, "X.automated": 59},
+      "agent_running_s": 59,
+      "sm": "2.2 rule 1: a webhook task's message has a scheduledTaskId too, so its record declares cron",
+      "note": "The webhook fires at 16:27:00 and T3 starts the deploys thread's session. W1's prompt, scheduled by its cron record, runs from 16:27:01.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:28:00Z",
+      "minutes": 1,
+      "local": "16:28",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 29, "X.automated": 31},
+      "agent_running_s": 31,
+      "sm": "2.2 rule 1: a webhook task's message has a scheduledTaskId too, so its record declares cron",
+      "note": "W1 runs until 16:28:31.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:29:00Z",
+      "minutes": 1,
+      "local": "16:29",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T21:30:00Z",
+      "minutes": 1,
+      "local": "16:30",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 10, "X.automated": 50},
+      "agent_running_s": 50,
+      "sm": "2.2 rule 1: the relay record declares cron, so the task's prompt is scheduled",
+      "note": "C4's prompt reaches the agent at 16:30:01 and its turn runs until 16:30:51.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:31:00Z",
+      "minutes": 9,
+      "local": "16:31-16:39",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T21:40:00Z",
+      "minutes": 1,
+      "local": "16:40",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 10, "X.automated": 50},
+      "agent_running_s": 50,
+      "sm": "2.2 rule 1: the relay record declares cron, so the task's prompt is scheduled",
+      "note": "C5's prompt reaches the agent at 16:40:01 and its turn runs until 16:40:51.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:41:00Z",
+      "minutes": 1,
+      "local": "16:41",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T21:42:00Z",
+      "minutes": 1,
+      "local": "16:42",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_7fe5f5541eb2": {"P": 30}
+      },
+      "uncredited": {"X.no_anchor": 30},
+      "agent_running_s": 0,
+      "sm": "2.3: a relayed message's lead is its typing time, ending at sent_at",
+      "note": "M1's 135 characters type in 135 / 1.5 = 90 s, from 16:42:30 to its stamp at 16:44:00. It is the main thread's first message in the case, so nothing caps the lead.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:43:00Z",
+      "minutes": 1,
+      "local": "16:43",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_7fe5f5541eb2": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3: a relayed message's lead is its typing time, ending at sent_at",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:44:00Z",
+      "minutes": 1,
+      "local": "16:44",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 2, "X.agent_only": 19, "X.automated": 39},
+      "agent_running_s": 58,
+      "sm": "2.2 rule 4: the /compact has no relay record; 2.2 rule 9: M1's prompt is relayed",
+      "note": "16:44:00 is in neither the lead nor a turn. The /compact's prompt at 16:44:01 has no witness, so rule 4 makes it headless, and its turn runs until 16:44:40. 16:44:40 is between the turns. M1's prompt comes at 16:44:41, 41 s after M1's stamp, and names M1's record; M1's turn runs from then.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:45:00Z",
+      "minutes": 3,
+      "local": "16:45-16:47",
+      "bucket": true,
+      "bucket_minutes": 3,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 180},
+      "agent_running_s": 180,
+      "sm": "2.4: no relayed session reads while its agent runs",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:48:00Z",
+      "minutes": 1,
+      "local": "16:48",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 45,
+      "credit": {
+        "p_7fe5f5541eb2": {"READ": 45}
+      },
+      "uncredited": {"X.agent_only": 15},
+      "agent_running_s": 15,
+      "sm": "2.4: a relayed session reads after a stop, until its next relayed message within 600 s, 120 s at most",
+      "note": "M1's turn stops at 16:48:15. M2 follows at 16:55:00, 405 s later, so the session reads from the stop. M1's turn filled 20 + 15 + 60 + 45 + 25 = 165 s, which the 120 s cap holds to 120.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:49:00Z",
+      "minutes": 1,
+      "local": "16:49",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_7fe5f5541eb2": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4: a relayed session reads after a stop, until its next relayed message within 600 s, 120 s at most",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:50:00Z",
+      "minutes": 1,
+      "local": "16:50",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 15,
+      "credit": {
+        "p_7fe5f5541eb2": {"READ": 15}
+      },
+      "uncredited": {"X.bucket_cap": 45},
+      "agent_running_s": 50,
+      "sm": "2.4: a relayed session reads after a stop, until its next relayed message within 600 s, 120 s at most",
+      "note": "The 120 s end at 16:50:15: 45 + 60 + 15. BUCKET_MAX_S's 600 s would have read the other 45 s of the 165, so they are X.bucket_cap (5.2), which comes before X.automated though C6 runs in the checks session from 16:50:01 to 16:50:51. C6 is no turn of the main session, so the reading goes on through it.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:51:00Z",
+      "minutes": 3,
+      "local": "16:51-16:53",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running",
+      "note": "The main session's reading span runs until M2 is sent, but nothing is left to read and no agent runs."
+    },
+    {
+      "start": "2026-11-28T21:54:00Z",
+      "minutes": 1,
+      "local": "16:54",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_7fe5f5541eb2": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3: a relayed message's lead is its typing time, ending at sent_at",
+      "note": "M2's 90 characters type in 90 / 1.5 = 60 s, from 16:54:00 to its stamp at 16:55:00. M1 came 660 s earlier, so the cap at the seconds since the thread's previous message doesn't bind.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:55:00Z",
+      "minutes": 1,
+      "local": "16:55",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 1, "X.agent_only": 59},
+      "agent_running_s": 59,
+      "sm": "2.2 rule 9: M2's prompt is relayed",
+      "note": "T3 hands M2 over at 16:55:01, and M2's turn runs from then. The prompt resets the bucket to its 20 s base.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:56:00Z",
+      "minutes": 1,
+      "local": "16:56",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.4: no relayed session reads while its agent runs",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:57:00Z",
+      "minutes": 1,
+      "local": "16:57",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 30, "X.agent_only": 30},
+      "agent_running_s": 30,
+      "sm": "2.4",
+      "note": "M2's turn stops at 16:57:30, and no relayed message follows it in the window, so nothing reads its 80 s.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T21:58:00Z",
+      "minutes": 2,
+      "local": "16:58-16:59",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T22:00:00Z",
+      "minutes": 1,
+      "local": "17:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 10, "X.automated": 50},
+      "agent_running_s": 50,
+      "sm": "2.2 rule 1: the relay record declares cron, so the task's prompt is scheduled",
+      "note": "C7's prompt reaches the agent at 17:00:01 and its turn runs until 17:00:51.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T22:01:00Z",
+      "minutes": 9,
+      "local": "17:01-17:09",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T22:10:00Z",
+      "minutes": 1,
+      "local": "17:10",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 10, "X.automated": 50},
+      "agent_running_s": 50,
+      "sm": "2.2 rule 1: the relay record declares cron, so the task's prompt is scheduled",
+      "note": "C8's prompt reaches the agent at 17:10:01 and its turn runs until 17:10:51.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T22:11:00Z",
+      "minutes": 3,
+      "local": "17:11-17:13",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T22:14:00Z",
+      "minutes": 1,
+      "local": "17:14",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 5, "X.automated": 55},
+      "agent_running_s": 55,
+      "sm": "2.2 rule 4: the prompt is marked guest, which beats the witness",
+      "note": "The guest's prompt reaches the agent at 17:14:01, marked guest, with a relay naming the pinned record stamped 17:14:00. Rule 4 takes a guest prompt even when a message witnesses it, so it is headless. Its turn runs until 17:14:56.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T22:15:00Z",
+      "minutes": 5,
+      "local": "17:15-17:19",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T22:20:00Z",
+      "minutes": 1,
+      "local": "17:20",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 10, "X.automated": 50},
+      "agent_running_s": 50,
+      "sm": "2.2 rule 1: the relay record declares cron, so the task's prompt is scheduled",
+      "note": "C9's prompt reaches the agent at 17:20:01 and its turn runs until 17:20:51.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T22:21:00Z",
+      "minutes": 4,
+      "local": "17:21-17:24",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T22:25:00Z",
+      "minutes": 1,
+      "local": "17:25",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 1, "X.automated": 59},
+      "agent_running_s": 59,
+      "sm": "2.2 rule 3: the relay record declares cross_session, so the prompt is a cross-session subagent",
+      "note": "The laptop thread's message reaches the agent at 17:25:01, and its record follows at 17:25:03.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T22:26:00Z",
+      "minutes": 1,
+      "local": "17:26",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 29, "X.automated": 31},
+      "agent_running_s": 31,
+      "sm": "2.2 rule 3",
+      "note": "Its turn runs until 17:26:31.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T22:27:00Z",
+      "minutes": 3,
+      "local": "17:27-17:29",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T22:30:00Z",
+      "minutes": 1,
+      "local": "17:30",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 1, "X.automated": 59},
+      "agent_running_s": 59,
+      "sm": "2.2 rule 1: the relay record declares cron, so the task's prompt is scheduled; 2.2 rule 1: a webhook task's message has a scheduledTaskId too, so its record declares cron",
+      "note": "C10 runs from 17:30:01 to 17:30:51 and W2 from 17:30:21, so an agent runs from 17:30:01 to the end of the minute. A second two turns share counts once.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T22:31:00Z",
+      "minutes": 1,
+      "local": "17:31",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 9, "X.automated": 51},
+      "agent_running_s": 51,
+      "sm": "2.2 rule 1: a webhook task's message has a scheduledTaskId too, so its record declares cron",
+      "note": "W2 runs until 17:31:51.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T22:32:00Z",
+      "minutes": 8,
+      "local": "17:32-17:39",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T22:40:00Z",
+      "minutes": 1,
+      "local": "17:40",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 10, "X.automated": 50},
+      "agent_running_s": 50,
+      "sm": "2.2 rule 1: the relay record declares cron, so the task's prompt is scheduled",
+      "note": "C11's prompt reaches the agent at 17:40:01 and its turn runs until 17:40:51.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T22:41:00Z",
+      "minutes": 9,
+      "local": "17:41-17:49",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T22:50:00Z",
+      "minutes": 1,
+      "local": "17:50",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 10, "X.automated": 50},
+      "agent_running_s": 50,
+      "sm": "2.2 rule 1: the relay record declares cron, so the task's prompt is scheduled",
+      "note": "C12's prompt reaches the agent at 17:50:01 and its turn runs until 17:50:51.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T22:51:00Z",
+      "minutes": 9,
+      "local": "17:51-17:59",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    }
+  ],
+  "totals": {
+    "credited_s": 270,
+    "credited_by_project": {"p_7fe5f5541eb2": 270},
+    "credited_by_reason": {"P": 150, "READ": 120},
+    "uncredited": {"X.no_anchor": 238, "X.agent_only": 363, "X.automated": 884, "X.bucket_cap": 45},
+    "agent_running_s": 1297,
+    "level_c_s": 270,
+    "via_relay_s": 270,
+    "relayed_prompts": 2,
+    "scheduled_prompts": 14,
+    "headless_prompts": 2,
+    "cross_session_prompts": 1
+  },
+  "stated": [],
+  "approx": {},
+  "errata": ["2026-11-22-relayed-prompts"],
+  "notes": [
+    "No SM section describes this case. Every row comes from SM 2.2 rules 1, 3, 4 and 9, 2.3, 2.4 and 5.2 as docs/errata/2026-11-22-relayed-prompts.md applies them. Every credited second is level C with via_relay, and witnessed: the server uploads live.",
+    "The server has no desktop, so pairtime samples no presence and records no focus: every slot's presence is unknown.",
+    "T3 stores every message here with createdBy user. relayed_prompts counts the prompts a relay record of declared none witnessed; scheduled_prompts the task's twelve firings and the webhook's two, whose records declare cron; cross_session_prompts the laptop thread's message, whose record declares cross_session; headless_prompts the /compact and the guest's message, which have no record.",
+    "Every slot's presence is unknown, so uncredited seconds take SM 5.2's codes for such a slot: X.bucket_cap where only the 120 s cap kept the session from reading, X.agent_only or X.automated while a turn runs, else X.no_anchor.",
+    "The /compact's prompt assumes Claude Code fires UserPromptSubmit for the command T3's composer sends. That is unverified, and the case credits the same either way."
+  ]
+}

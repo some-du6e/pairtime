@@ -207,13 +207,22 @@ func TestWatcherSequences(t *testing.T) {
 			},
 		},
 		{
-			name: "focus pairtime can't name writes no os.focus and Status says why (decision 2)",
+			name: "focus pairtime can't name writes one os.focus unknown, which the next window report ends, and Status says why (SM 2.5)",
 			steps: []step{
 				{"Windows Terminal comes to the front", front(0, 6100), []Record{focusRec(at(0), event.AppTerminal, "s_tab1", "s_tab2")}, 1, []event.AppClass{event.AppTerminal}, "", ""},
-				{"a UAC prompt's secure desktop takes the input", func(r *rig) { r.os.send(Change{At: at(5), Unknown: "the secure desktop"}) }, nil, 0, []event.AppClass{event.AppNone}, "the secure desktop", ""},
-				{"the terminal is back in front, which is what the record before says", front(9, 6100), nil, 1, []event.AppClass{event.AppTerminal}, "", ""},
+				{"a UAC prompt's secure desktop takes the input", func(r *rig) { r.os.send(Change{At: at(5), Unknown: "the secure desktop"}) }, []Record{focusRec(at(5), event.AppUnknown)}, 0, []event.AppClass{event.AppUnknown}, "the secure desktop", ""},
+				{"the terminal is back in front, which ends the unknown with a record of its own", front(9, 6100), []Record{focusRec(at(9), event.AppTerminal, "s_tab1", "s_tab2")}, 1, []event.AppClass{event.AppTerminal}, "", ""},
 				{"Chrome comes to the front", front(12, 9600), []Record{focusRec(at(12), event.AppBrowser)}, 1, []event.AppClass{event.AppBrowser}, "", ""},
-				{"a window whose process exited at once comes to the front", front(15, 31337), nil, 0, []event.AppClass{event.AppNone}, "the process of the window in front exited before pairtime read the process table", ""},
+				{"a window whose process exited at once comes to the front", front(15, 31337), []Record{focusRec(at(15), event.AppUnknown)}, 0, []event.AppClass{event.AppUnknown}, "the process of the window in front exited before pairtime read the process table", ""},
+				{"focus that stays unknown, for another reason, writes nothing new", func(r *rig) { r.os.send(Change{At: at(18), Unknown: "the secure desktop"}) }, nil, 0, []event.AppClass{event.AppUnknown}, "the secure desktop", ""},
+			},
+		},
+		{
+			name: "focus that turns unknown with no context live is recorded when one goes live, dated then, and only once (D14)",
+			steps: []step{
+				{"with no context live, the secure desktop takes the input", func(r *rig) { r.setLive(false); r.os.send(Change{At: at(0), Unknown: "the secure desktop"}) }, nil, 0, []event.AppClass{event.AppUnknown}, "the secure desktop", ""},
+				{"a hook makes a context live and the agent refreshes", func(r *rig) { r.setLive(true); r.w.Refresh() }, []Record{focusRec(t0.Add(time.Hour), event.AppUnknown)}, 0, nil, "the secure desktop", ""},
+				{"another refresh finds nothing new", func(r *rig) { r.w.Refresh() }, nil, 0, nil, "the secure desktop", ""},
 			},
 		},
 		{
@@ -335,14 +344,14 @@ func TestWatcherSequences(t *testing.T) {
 			},
 		},
 		{
-			name: "a process table that can't be read writes no record and is a problem until it can",
+			name: "a process table that can't be read leaves the window in front unknown, writes one os.focus unknown, and is a problem until it can",
 			steps: []step{
 				{"the read fails as Windows Terminal comes to the front", func(r *rig) {
 					r.os.mu.Lock()
 					r.os.readErr = errors.New("access denied")
 					r.os.mu.Unlock()
 					r.os.front(at(0), 6100)
-				}, nil, 0, []event.AppClass{event.AppNone}, "couldn't read the process table: access denied", "couldn't read the process table, so focus changes go unrecorded: access denied"},
+				}, []Record{focusRec(at(0), event.AppUnknown)}, 0, []event.AppClass{event.AppUnknown}, "couldn't read the process table: access denied", "couldn't read the process table, so pairtime can't tell which window is in front: access denied"},
 				{"the read works again as Chrome comes to the front", func(r *rig) {
 					r.os.mu.Lock()
 					r.os.readErr = nil
@@ -426,31 +435,86 @@ func show(recs []Record) string {
 	return "{" + strings.Join(parts, "; ") + "}"
 }
 
+// collect returns a Record callback and what it has collected so far.
+func collect() (func(Record), func() []Record) {
+	var mu sync.Mutex
+	var recs []Record
+	return func(r Record) {
+			mu.Lock()
+			defer mu.Unlock()
+			recs = append(recs, r)
+		}, func() []Record {
+			mu.Lock()
+			defer mu.Unlock()
+			return slices.Clone(recs)
+		}
+}
+
 func TestWatcherLifecycle(t *testing.T) {
-	t.Run("a source that fails to start records nothing and is a problem", func(t *testing.T) {
+	t.Run("a source whose Watch fails, as Windows' does when SetWinEventHook can't be set, gives one os.focus unknown and is a problem", func(t *testing.T) {
 		f := &fakeOS{procs: desktop(), startErr: errors.New("no desktop")}
+		var mu sync.Mutex
 		var problems []string
-		w := New(Options{OS: f.os(), Problem: func(m string) { problems = append(problems, m) }})
+		record, recs := collect()
+		w := New(Options{OS: f.os(), Record: record, Now: func() time.Time { return t0 },
+			Problem: func(m string) { mu.Lock(); problems = append(problems, m); mu.Unlock() }})
 		w.Start()
 		w.Refresh()
+		w.sync()
 		w.Stop()
-		if st := w.Status(); !strings.HasPrefix(st.Unknown, "the focus source didn't start") {
-			t.Errorf("Status.Unknown %q, want why there is no source", st.Unknown)
+		if st := w.Status(); st.Unknown != "the focus source didn't start: no desktop" || st.NoSource != st.Unknown {
+			t.Errorf("Status %+v, want why there is no source", st)
 		}
+		if got, want := recs(), []Record{focusRec(t0, event.AppUnknown)}; !sameRecords(got, want) {
+			t.Errorf("records %s, want %s", show(got), show(want))
+		}
+		mu.Lock()
+		defer mu.Unlock()
 		if len(problems) == 0 || !strings.Contains(problems[len(problems)-1], "no desktop") {
 			t.Errorf("problems %q, want the source's error", problems)
 		}
 	})
-	t.Run("with no focus source on the OS, Status says so and Stop returns", func(t *testing.T) {
-		w := New(Options{})
+	t.Run("with no focus source on the OS, Status says so, focus is unknown from Start with one os.focus, and Stop returns", func(t *testing.T) {
+		record, recs := collect()
+		w := New(Options{Record: record, Now: func() time.Time { return t0 }})
 		w.Start()
 		w.Refresh()
 		w.sync()
-		if st := w.Status(); st.Unknown != "pairtime has no focus source on this OS yet" || st.Via != "" {
-			t.Errorf("Status %+v, want no source", st)
+		if st := w.Status(); st.Unknown != "pairtime has no focus source on this OS yet" || st.NoSource != st.Unknown || st.Via != "" || st.Changes != 0 {
+			t.Errorf("Status %+v, want no source, and no change the OS reported", st)
+		}
+		if got, want := recs(), []Record{focusRec(t0, event.AppUnknown)}; !sameRecords(got, want) {
+			t.Errorf("records %s, want %s", show(got), show(want))
 		}
 		w.Stop()
 		w.Stop()
+	})
+	t.Run("with no focus source and no project context live at Start, the unknown waits for a refresh in one, which records it as of then (D14)", func(t *testing.T) {
+		var live atomic.Bool
+		now := t0
+		var mu sync.Mutex
+		record, recs := collect()
+		w := New(Options{OS: OS{Unknown: "Wayland gives other programs no focus signal"}, Record: record,
+			Live: live.Load,
+			Now:  func() time.Time { mu.Lock(); defer mu.Unlock(); return now }})
+		w.Start()
+		defer w.Stop()
+		w.Refresh()
+		w.sync()
+		if got := recs(); len(got) != 0 {
+			t.Fatalf("records %s before a context is live, want none", show(got))
+		}
+		mu.Lock()
+		now = t0.Add(time.Minute)
+		mu.Unlock()
+		live.Store(true)
+		for range 2 {
+			w.Refresh()
+			w.sync()
+		}
+		if got, want := recs(), []Record{focusRec(t0.Add(time.Minute), event.AppUnknown)}; !sameRecords(got, want) {
+			t.Errorf("records %s, want %s", show(got), show(want))
+		}
 	})
 	t.Run("Stop stops the source and nothing is recorded after it", func(t *testing.T) {
 		r := newRig(t)

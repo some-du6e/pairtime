@@ -82,8 +82,14 @@ type Project struct {
 	// itself, so until project registration (WP-SV10) links the keys of
 	// one repo, a project has one key.
 	Keys []string `json:"keys"`
-	// Name is what the page calls the project.
+	// Name is what the page calls the project: CodeName of its Code on a
+	// real dashboard, since the server never learns a project's name.
 	Name string `json:"name"`
+	// Code is the project's short code (ShortCodes), such as "7c41e9":
+	// unique among the account's projects, so the owner can tell two
+	// projects without names apart. The samples' made-up projects have
+	// names and no code.
+	Code string `json:"code,omitempty"`
 }
 
 // Time is seconds, with pending minutes kept apart from final ones.
