@@ -742,9 +742,14 @@ main() {
     new=''
     if placed; then installed=1; fi
     if [ "$status" != 0 ]; then
+      # 3 is pairtime install's status for a no, which changes nothing, so
+      # a pairtime this script checked that is at the target was there
+      # before this run, as after an earlier --no-install.
+      if [ "$status" = 3 ]; then
+        [ -z "$installed" ] || die "you said no, so nothing changed. The pairtime $version at $target stays as it was; to set it up later, run: $finish"
+        die "you said no, so nothing was installed. To set pairtime up later, run this install again."
+      fi
       [ -z "$installed" ] || die "\`pairtime install\` stopped with status $status. pairtime is at $target; run \`$finish\` to finish setting it up."
-      # 3 is pairtime install's status for a no.
-      [ "$status" != 3 ] || die "you said no, so nothing was installed. To set pairtime up later, run this install again."
       die "\`pairtime install\` stopped with status $status before it put pairtime in place, so nothing was installed."
     fi
     [ -n "$installed" ] || die "\`pairtime install\` finished, but $target isn't the pairtime $version this script checked, so something else is there. Nothing was installed."

@@ -419,6 +419,18 @@ Test-Case "a no at pairtime install's screen leaves the pairtime.exe that was th
   (Invoke-File $stamped (Real fake fake.pub) @{ PAIRTIME_FAKE_INSTALL_EXIT = '3' })
 if ((Get-Content -LiteralPath (Join-Path $script:appData 'pairtime\bin\pairtime.exe')) -ne 'an old pairtime') { Add-Failure 'the old pairtime.exe was changed' }
 
+# A no changes nothing, so the same release already in place, from an
+# earlier -NoInstall, was there before the rerun.
+foreach ($shell in $shells) {
+  New-Case
+  $before = Invoke-File $stamped (Real fake fake.pub @('-NoInstall')) @{} $shell
+  if ($before.Code -ne 0) { Add-Failure "in ${shell}, the -NoInstall run before the next case failed: $($before.Output)" }
+  Test-Case "in $shell, a no on a rerun of the release already in place says nothing changed and how to set it up, not that install stopped" `
+    fails "you said no, so nothing changed. The pairtime $([regex]::Escape($version)) at $([regex]::Escape((Join-Path $script:appData 'pairtime\bin\pairtime.exe'))) stays as it was; to set it up later, run: &" $installed `
+    (Invoke-File $stamped (Real fake fake.pub) @{ PAIRTIME_FAKE_INSTALL_EXIT = '3' } $shell)
+  Test-Binary fake
+}
+
 New-Case
 Test-Case 'a pairtime install that fails after putting pairtime in place says where it is and how to finish, with the folders made' `
   fails "'pairtime install' stopped with status 4. pairtime is at $([regex]::Escape((Join-Path $script:appData 'pairtime\bin\pairtime.exe'))); run & .*install --made" $installed `

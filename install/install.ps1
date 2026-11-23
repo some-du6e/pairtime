@@ -629,9 +629,14 @@ $installPairtime = {
         if (-not $installed) { Remove-EmptyFolders $made }
       }
       if ($code -ne 0) {
+        # 3 is pairtime install's status for a no, which changes nothing, so
+        # a pairtime this script checked that is at the target was there
+        # before this run, as after an earlier -NoInstall.
+        if ($code -eq 3) {
+          if ($installed) { Fail "you said no, so nothing changed. The pairtime $Version at $target stays as it was; to set it up later, run: $finish" }
+          Fail 'you said no, so nothing was installed. To set pairtime up later, run this install again.'
+        }
         if ($installed) { Fail "'pairtime install' stopped with status $code. pairtime is at $target; run $finish to finish setting it up." }
-        # 3 is pairtime install's status for a no.
-        if ($code -eq 3) { Fail 'you said no, so nothing was installed. To set pairtime up later, run this install again.' }
         Fail "'pairtime install' stopped with status $code before it put pairtime in place, so nothing was installed."
       }
       if (-not $installed) { Fail "'pairtime install' finished, but $target isn't the pairtime $Version this script checked, so something else is there. Nothing was installed." }

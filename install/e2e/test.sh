@@ -339,6 +339,17 @@ check "a no at pairtime install's screen leaves the pairtime that was there as i
   run PAIRTIME_FAKE_INSTALL_EXIT=3 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
 if [ "$(cat "$home/.local/bin/pairtime")" != 'an old pairtime' ]; then fail "the old pairtime was changed"; fi
 
+# A no changes nothing, so the same release already in place, from an
+# earlier --no-install, was there before the rerun.
+fresh
+run sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub" --no-install > /dev/null 2>&1 ||
+  fail "the --no-install run before the next case failed"
+check "a no on a rerun of the release already in place says nothing changed and how to set it up, not that install stopped" \
+  fails "you said no, so nothing changed. The pairtime $version at $home/.local/bin/pairtime stays as it was; to set it up later, run: .*pairtime install" "$installed" \
+  run PAIRTIME_FAKE_INSTALL_EXIT=3 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
+not_in_output 'stopped with status 3'
+check_binary fake
+
 fresh
 check "a pairtime install that fails after putting pairtime in place says where it is and how to finish, with the folders made" \
   fails "stopped with status 4. pairtime is at $home/.local/bin/pairtime; run .*install --made $home/.local --made $home/.local/bin" "$installed" \
