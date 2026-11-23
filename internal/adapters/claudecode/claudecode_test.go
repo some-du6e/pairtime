@@ -585,11 +585,16 @@ func TestAnsweredAt(t *testing.T) {
 		// or 0 for none; stamped and arrival are the report's.
 		post, stamped, arrival int64
 		want                   int64
+		// noMono is set where the record carries no mono reading.
+		noMono bool
 	}{
 		{name: "the report's timestamp, when Claude Code stamped it first", post: 400, stamped: 300, arrival: 5300, want: 300},
 		{name: "the PostToolUse's arrival, when it came before the report's timestamp", post: 200, stamped: 300, arrival: 5300, want: 200},
 		{name: "the report's arrival, when it came before the report's own timestamp", stamped: 5300, arrival: 900, want: 900},
 		{name: "never before requested_at, even when the report seems to arrive first", stamped: 300, arrival: -50, want: 0},
+		{name: "an answer LATE_READ_S after the request keeps the request's reading moved on by the wait", stamped: 10_000, arrival: 12_000, want: 10_000},
+		{name: "an answer more than LATE_READ_S after the request carries no mono, since the wall clock may have stepped while it waited",
+			stamped: 10_001, arrival: 12_000, want: 10_001, noMono: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -611,9 +616,13 @@ func TestAnsweredAt(t *testing.T) {
 				t.Fatal("no record")
 			}
 			p := rec.Event.Data.(*event.AgentPermission)
-			if p.RequestedAt != t0 || p.AnsweredAt != t0+tc.want || rec.Event.T != p.AnsweredAt || rec.Event.Mono != 5000+tc.want {
-				t.Errorf("requested_at %d, answered_at %d, t %d, mono %d; want answered_at %d", p.RequestedAt-t0, p.AnsweredAt-t0,
-					rec.Event.T-t0, rec.Event.Mono, tc.want)
+			mono := 5000 + tc.want
+			if tc.noMono {
+				mono = 0
+			}
+			if p.RequestedAt != t0 || p.AnsweredAt != t0+tc.want || rec.Event.T != p.AnsweredAt || rec.Event.Mono != mono {
+				t.Errorf("requested_at %d, answered_at %d, t %d, mono %d; want answered_at %d and mono %d", p.RequestedAt-t0, p.AnsweredAt-t0,
+					rec.Event.T-t0, rec.Event.Mono, tc.want, mono)
 			}
 		})
 	}

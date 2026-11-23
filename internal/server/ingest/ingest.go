@@ -22,6 +22,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/server/backup"
 	"github.com/some-du6e/pairtime/internal/server/device"
+	"github.com/some-du6e/pairtime/internal/server/witness"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/ledger"
@@ -788,11 +789,9 @@ func (s *Service) bucket(ctx context.Context, tx writer.Tx, dev device.Device, p
 		return storedRev(http.StatusConflict, CodeTooManyRevisions, cur.rev), nil
 	case rev > cur.rev:
 		revisions = cur.revisions + 1
-		if s.o.Rollup != nil {
-			prev = new(event.MinuteBucket)
-			if err := json.Unmarshal([]byte(cur.bucket), prev); err != nil {
-				return itemResult{}, err
-			}
+		prev = new(event.MinuteBucket)
+		if err := json.Unmarshal([]byte(cur.bucket), prev); err != nil {
+			return itemResult{}, err
 		}
 	case rev == cur.rev && same:
 		return accepted(CodeDuplicate), nil
@@ -801,7 +800,17 @@ func (s *Service) bucket(ctx context.Context, tx writer.Tx, dev device.Device, p
 	default:
 		return storedRev(http.StatusOK, CodeSuperseded, cur.rev), nil
 	}
-	if err := putBucket(ctx, tx, dev.ID, dev.Account, minute, rev, string(rv.State), pb.data, now, revisions); err != nil {
+	// The server's own label goes beside the client's reading, which the
+	// bucket keeps as sent (WP-SV6; ingest-v1 7 item 13).
+	var replaced *witness.Stored
+	if prev != nil {
+		replaced = &witness.Stored{Bucket: *prev, Label: event.Witness(cur.label)}
+	}
+	label, err := witness.Bucket(ctx, tx, witness.Revision{Bucket: rv, ReceivedAt: now}, replaced)
+	if err != nil {
+		return itemResult{}, err
+	}
+	if err := putBucket(ctx, tx, dev.ID, dev.Account, minute, rev, string(rv.State), pb.data, now, revisions, string(label)); err != nil {
 		return itemResult{}, err
 	}
 	if s.o.Rollup != nil {
