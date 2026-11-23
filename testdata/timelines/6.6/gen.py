@@ -200,11 +200,12 @@ bucket_minutes = sum(1 for m in minutes if running_in(m, m + tl.MINUTE_MS) > 0)
 
 # SM 5.2's codes, second by second. Nothing is credited and no loop or cap
 # withholds credit, and the jiggler moves in every slot, so no second is
-# X.absent. A slot's focus is the app that held focus longest in it, and for
-# a terminal the hosted set it held longest, the earliest on a tie (SM 2.5).
-# The terminal holds focus all night, so a slot is the project's when it
-# hosted a run's session for most of the slot, and no project's, X.ambiguous
-# (SM 3.2), when it hosted nothing. In the project's slots a second is
+# X.absent. A slot's focus is the window that held focus longest in it, a
+# window being an app class and a project, since app_hash stays on the device,
+# and for a terminal the hosted set it held longest, the earliest on a tie
+# (SM 2.5). The terminal holds focus all night, so a slot is the project's when
+# it hosted a run's session for most of the slot, and no project's,
+# X.ambiguous (SM 3.2), when it hosted nothing. In the project's slots a second is
 # X.automated while a run's headless turn goes and X.no_anchor otherwise.
 focus = sorted((e["t"], e["data"]) for e in events if e["kind"] == "os.focus")
 tl.check(all(d["app_class"] == "terminal" and d["app_hash"] == APP for _, d in focus),
@@ -213,16 +214,15 @@ tl.check(all(t["origin"] == "headless" for t in turns), "every turn is headless,
 
 
 def slot_project(s):
-    """The slot's focus project: the hosted set held longest, the earliest
-    on a tie, and its project, or None for a terminal hosting nothing."""
+    """The slot's focus project: the window, an app class and a project, held
+    longest, the earliest on a tie, or None for a terminal hosting nothing."""
     edges = [(s, [d for t, d in focus if t <= s][-1])] + [(t, d) for t, d in focus if s < t < s + tl.SLOT_MS]
-    held, project = {}, {}
+    held = {}
     for (t0, d), (t1, _) in zip(edges, edges[1:] + [(s + tl.SLOT_MS, None)]):
-        key = tuple(d.get("hosted_sessions", []))
+        key = (d["app_class"], d.get("focus_project"))
         held[key] = held.get(key, 0) + t1 - t0
-        project[key] = d.get("focus_project")
     best = max(held.values())
-    return project[next(k for k in held if held[k] == best)]
+    return next(k for k in held if held[k] == best)[1]
 
 
 def code_at(t):

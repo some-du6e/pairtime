@@ -26,7 +26,7 @@ Gone with the OS and git records: the lock at 23:53:10, the unlock at 07:30:00, 
 | 23:40-00:22 | 0 | none | T1 runs to 00:23:20, and lookback credits no reading while an agent runs. `X.agent_only` 43 × 60 = 2,580 |
 | 00:23-06:09 | 0 | none | T1's last 20 s, then T2 to T9 to 06:10:00: 347 × 60 = 20,820 s of agent time, none credited. T1's 20 s are `X.agent_only` and the continuations' 20,800 s `X.automated` (SM 5.2) |
 | 06:10-07:35 | 0 | none | No agent runs and nothing is credited, so there is no bucket. The night's output would count as reading only if a prompt came within 600 s of a stop. The last stop is at 06:10:00 and the next prompt at 07:37:00, 5,220 s later |
-| 07:36 | 41 | `P` 41 | The follow-up has 61 typed characters: 61 / 1.5 = 40.67 s, which SM 1.3 rounds to the nearest second, 41, so it starts at 07:36:19. the 19 s before it are `X.no_anchor` (SM 5.2) |
+| 07:36 | 41 | `P` 41 | The follow-up has 61 typed characters: 61 / 1.5 = 40.67 s, which SM 1.3 rounds to the nearest second, 41, so it starts at 07:36:19. The 19 s before it are `X.no_anchor` (SM 5.2) |
 
 ## Totals
 
