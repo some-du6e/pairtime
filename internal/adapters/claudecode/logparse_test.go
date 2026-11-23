@@ -1188,34 +1188,43 @@ func TestTranscriptHistoryOfAHookedSession(t *testing.T) {
 // lines, read again as replays, as a Rewind reads a file taken up at its
 // end, give no session.start: the hook's start is the session's, and the
 // next line read live would write the replay's dated at the session's first
-// entry, before any stretch the ledger knows of. An unhooked session's
-// replays still give the reader's start, its only one.
+// entry, before any stretch the ledger knows of. Nor does such a replay's
+// start count as the session's token once its hooks came, so an old line
+// read live after them, as lookback reads the history before a session's
+// hooks, gets the start of its own. An unhooked session's replays still
+// give the reader's start, its only one.
 func TestTranscriptReplayOfAHookedSession(t *testing.T) {
 	const hooked = 1_795_194_000_000 // 2026-11-20T17:00:00Z, the session's first via-hook call
 	walked := &adapters.Arrival{Via: event.ViaHook, T: hooked, Mono: 5000, BootID: "boot", Harness: event.HarnessClaudeCode,
 		Walk: &platform.Lineage{ParentClass: event.ParentTerminalApp, Entrypoint: event.EntrypointUnknown, HasTTY: true}}
-	lines := logLines(
-		userText("q1", "fix the failing test", map[string]any{"turnOrigin": "human", "promptSource": "typed",
-			"timestamp": "2026-11-19T17:00:00.000Z"}),
-		assistantText("m1", "end_turn", "Done.", "2026-11-19T17:00:09.000Z"),
-		userText("q2", "now the docs", map[string]any{"turnOrigin": "human", "promptSource": "typed",
-			"timestamp": "2026-11-21T17:33:00.000Z"}),
-	)
 	cases := []struct {
 		name string
 		// hook is when the session's first via-hook call comes: "first",
 		// before the replays; "after", between them and the line read live;
-		// "" for never. starts is how many session.starts the transcript
-		// gives.
-		hook   string
-		starts int
+		// "" for never. live is that line's time. starts is how many
+		// session.starts the transcript gives, and at, when set, the time of
+		// the one it gives.
+		hook, live string
+		starts     int
+		at         int64
 	}{
-		{"a hooked session's old lines read again as replays, then a line read live, give no session.start", "first", 0},
-		{"replays from before the session's first via-hook call, which comes before the next line read live, give no session.start", "after", 0},
-		{"an unhooked session's old lines read again as replays give the reader's session.start at the next line read live", "", 1},
+		{"a hooked session's old lines read again as replays, then a line read live, give no session.start",
+			"first", "2026-11-21T17:33:00.000Z", 0, 0},
+		{"replays from before the session's first via-hook call, which comes before the next line read live, give no session.start",
+			"after", "2026-11-21T17:33:00.000Z", 0, 0},
+		{"an old line read live after them and after that call, older than its grace, gets one session.start, dated at it",
+			"after", "2026-11-19T18:00:00.000Z", 1, 1_795_111_200_000},
+		{"an unhooked session's old lines read again as replays give the reader's session.start at the next line read live",
+			"", "2026-11-21T17:33:00.000Z", 1, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			lines := logLines(
+				userText("q1", "fix the failing test", map[string]any{"turnOrigin": "human", "promptSource": "typed",
+					"timestamp": "2026-11-19T17:00:00.000Z"}),
+				assistantText("m1", "end_turn", "Done.", "2026-11-19T17:00:09.000Z"),
+				userText("q2", "now the docs", map[string]any{"turnOrigin": "human", "promptSource": "typed", "timestamp": tc.live}),
+			)
 			a := newTest()
 			hook := func() {
 				if _, err := a.Parse(hookRaw(EventSessionStart, map[string]any{"session_id": "s1", "cwd": "/home/capture/p",
@@ -1242,8 +1251,68 @@ func TestTranscriptReplayOfAHookedSession(t *testing.T) {
 				}
 				recs = append(recs, got...)
 			}
-			if got := len(ofKind[*event.SessionStart](recs)); got != tc.starts {
-				t.Errorf("%d session.starts from the transcript, want %d", got, tc.starts)
+			starts := ofKind[*event.SessionStart](recs)
+			if len(starts) != tc.starts || tc.at != 0 && starts[0].Event.T != tc.at {
+				t.Errorf("%d session.starts from the transcript, %v; want %d, at %d", len(starts), starts, tc.starts, tc.at)
+			}
+		})
+	}
+}
+
+// TestTranscriptRestartOfAHookedSession checks that a restart's replays,
+// which continue the memory the reader saved (LogResume), keep the rule by
+// time for a hooked session: the start of a line from before its hooks
+// came, by more than the grace, still waiting when the agent stopped,
+// comes after the restart, as without one. Only a Rewind's replays, of a
+// file the reader had no memory of, give none
+// (TestTranscriptReplayOfAHookedSession).
+func TestTranscriptRestartOfAHookedSession(t *testing.T) {
+	const hooked = 1_795_194_000_000 // 2026-11-20T17:00:00Z, the session's first via-hook call
+	walked := &adapters.Arrival{Via: event.ViaHook, T: hooked, Mono: 5000, BootID: "boot", Harness: event.HarnessClaudeCode,
+		Walk: &platform.Lineage{ParentClass: event.ParentTerminalApp, Entrypoint: event.EntrypointUnknown, HasTTY: true}}
+	// The line is from 200 s before that call, and the agent reads it 10 s
+	// after it was written, so its start waits.
+	const entry = hooked - 200_000
+	l := logLines(userText("q1", "fix the failing test", map[string]any{"turnOrigin": "human", "promptSource": "typed",
+		"timestamp": "2026-11-20T16:56:40.000Z"}))[0]
+	cases := []struct {
+		name string
+		// restart says the agent stops while the start waits, and the
+		// restarted reader reads the line again as a replay.
+		restart bool
+	}{
+		{"a start still waiting when the agent stopped comes after the restart", true},
+		{"as it comes without one", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTest()
+			if _, err := a.Parse(hookRaw(EventSessionStart, map[string]any{"session_id": "s1", "cwd": "/home/capture/p",
+				"source": "startup"}, walked)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := a.Parse(logRawAt(l, false, false, entry+10_000)); err != nil {
+				t.Fatal(err)
+			}
+			if tc.restart {
+				mem, err := a.SaveState()
+				if err != nil {
+					t.Fatal(err)
+				}
+				a = newTest()
+				if err := a.LoadState(mem); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := a.Parse(logRawAt(l, false, true, entry+20_000)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			recs, err := a.Parse(logRawAt(l, true, false, entry+95_000))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := len(ofKind[*event.SessionStart](recs)); got != 1 {
+				t.Errorf("%d session.starts at the line's grace, want 1", got)
 			}
 		})
 	}

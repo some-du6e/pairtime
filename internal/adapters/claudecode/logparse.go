@@ -170,6 +170,11 @@ type txFile struct {
 	// newest is the time of the newest entry the reader took from the
 	// file, in Unix ms, which ranks it for eviction (older).
 	newest int64
+	// afresh says the reader made its memory of the file in this run, with
+	// none to go on (fileFor): its replays are a Rewind's, which read old
+	// lines again, not a restart's, which continue the memory saved. It
+	// isn't saved.
+	afresh bool
 }
 
 // txState is the part of what the reader knows of a file at a point in
@@ -262,9 +267,9 @@ type pendingStart struct {
 	env     event.Envelope
 	start   event.SessionStart
 	token   string
-	// replay says a replayed line stated it, as a Rewind reads a file's
-	// old lines again: once the session's hooks come, it goes, however old
-	// its entry (resolveStart).
+	// replay says a Rewind's replayed line stated it, as a Rewind reads
+	// the old lines of a file the reader has no memory of again: once the
+	// session's hooks come, it goes, however old its entry (resolveStart).
 	replay bool
 }
 
@@ -518,31 +523,40 @@ func (a *Adapter) native(sid string, t int64) bool {
 // gets it too, since pkg/score reads no side door's start in a session a
 // log reader covers, so its own would leave SM 2.2 rules 4 and 5 nothing
 // to read. So does a hooked session's history from before its hooks came,
-// as lookback reads it (hookedAt), but not a replay of it: a Rewind reads
-// a file's old lines again as replays, as for a session's file taken up at
-// its end, whose start the start of its hooks gives, and the next line
-// read live would write the replay's dated at the session's first entry. A
-// subagent's entries state the session's token too, and are no start of
-// it. It waits in pend until startGrace after the entry, unless the entry
-// is that old already (resolveStart).
+// as lookback reads it (hookedAt), but not a Rewind's replay of it: a
+// Rewind reads the old lines of a file the reader has no memory of again,
+// as for a session's file taken up at its end, whose start the start of
+// its hooks gives, and the next line read live would write the replay's
+// dated at the session's first entry. A restart's replays, which continue
+// the memory it saved (LogResume), keep the rule by time, so a start that
+// waited when the agent stopped still comes. A subagent's entries state
+// the session's token too, and are no start of it. It waits in pend until
+// startGrace after the entry, unless the entry is that old already
+// (resolveStart).
 func (l *logLine) sessionStart(e *entry, sid string) {
 	if e.Entrypoint == nil || e.IsSidechain || sid == "" || e.t == 0 {
 		return
 	}
 	ls := l.a.logSession(sid)
-	if ls.hookedAt(e.t) || l.raw.Log.Replay && ls.nativeAt > 0 {
+	rewound := l.raw.Log.Replay && l.f.afresh
+	if ls.hookedAt(e.t) || rewound && ls.nativeAt > 0 {
 		return
 	}
 	// The session's token as of this entry: the last waiting start's, or
-	// the last one written.
+	// the last one written. A Rewind's start that resolveStart drops, now
+	// that the session's hooks came, is none of the session's.
 	tok := *e.Entrypoint
-	started, last := ls.started, ls.token
+	started, last, waiting := ls.started, ls.token, 0
 	for _, ps := range l.f.pend.starts {
+		if ps.session == sid && ps.replay && ls.nativeAt > 0 {
+			continue
+		}
+		waiting++
 		if ps.session == sid {
 			started, last = true, ps.token
 		}
 	}
-	if started && last == tok || len(l.f.pend.starts) >= maxPendingStarts {
+	if started && last == tok || waiting >= maxPendingStarts {
 		return
 	}
 	ep, known := tokenEntrypoint(tok)
@@ -553,7 +567,7 @@ func (l *logLine) sessionStart(e *entry, sid string) {
 	if started {
 		kind = event.StartResume
 	}
-	ps := &pendingStart{session: sid, at: l.raw.Log.Offset, env: l.env(e.t, sid), token: tok, replay: l.raw.Log.Replay,
+	ps := &pendingStart{session: sid, at: l.raw.Log.Offset, env: l.env(e.t, sid), token: tok, replay: rewound,
 		start: event.SessionStart{StartKind: kind, Entrypoint: ep, ParentClass: event.ParentUnknown}}
 	if isKey(e.PermissionMode) {
 		ps.start.PermissionMode = e.PermissionMode
@@ -1083,7 +1097,7 @@ func (a *Adapter) fileFor(key string) *txFile {
 			}
 			delete(a.files, oldest.key)
 		}
-		f = &txFile{key: key}
+		f = &txFile{key: key, afresh: true}
 		a.files[key] = f
 	}
 	f.seen = a.clock

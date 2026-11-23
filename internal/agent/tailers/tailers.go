@@ -187,8 +187,11 @@ type Options struct {
 	// root's first listing takes its files up at their end, and that is
 	// all.
 	Lookback func() (Child, error)
-	// Progress, when set, hears how far lookback has read, on the
-	// goroutine that reads.
+	// Progress, when set, hears how far lookback has read: at Start, after
+	// each batch lookback's child read, and when a file with a history
+	// goes. Calls come from the tailer's goroutine and from lookback's,
+	// one at a time, each with the progress as it was when it began, so
+	// the last call has the newest.
 	Progress func(Progress)
 	// LookbackUntil, when set, says when lookback's records end, at the
 	// start of the agent's ledger, or the zero time while that isn't
@@ -201,6 +204,10 @@ type Options struct {
 // Tailer watches log roots and hands new lines of their files over.
 type Tailer struct {
 	opts Options
+	// reporting is held across working out the progress and handing it to
+	// Options.Progress (report), so an older one can't land after a newer
+	// one. It isn't mu: Progress takes the agent's locks.
+	reporting sync.Mutex
 
 	mu    sync.Mutex
 	roots []Root

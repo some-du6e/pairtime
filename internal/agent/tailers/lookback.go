@@ -312,11 +312,14 @@ func (t *Tailer) Progress() Progress {
 	return t.progress()
 }
 
-// report hands the progress to Options.Progress.
+// report hands the progress to Options.Progress, one report at a time
+// (Tailer.reporting). t.mu isn't held.
 func (t *Tailer) report() {
 	if t.opts.Progress == nil {
 		return
 	}
+	t.reporting.Lock()
+	defer t.reporting.Unlock()
 	t.mu.Lock()
 	p := t.progress()
 	t.mu.Unlock()
