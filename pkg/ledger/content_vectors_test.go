@@ -34,7 +34,6 @@ type contentVectorsFile struct {
 	Features       []featureVec       `json:"features,omitempty"`
 	Diffs          []diffVec          `json:"diffs,omitempty"`
 	Jaccard        []jaccardVec       `json:"jaccard,omitempty"`
-	ShingleReveals []shingleRevealVec `json:"shingle_reveals,omitempty"`
 	Draws          []drawVec          `json:"draws,omitempty"`
 	ChallengeK     []challengeKVec    `json:"challenge_k,omitempty"`
 }
@@ -152,22 +151,6 @@ type jaccardVec struct {
 	Matches int      `json:"matches"`
 }
 
-// shingleRevealVec is one CC8 reveal (spec 10.8) and its verdict. KDev,
-// Text and RemovedTokens come together, on a reveal that is what the
-// client sends for that text with those tokens removed.
-type shingleRevealVec struct {
-	Note          string                  `json:"note,omitempty"`
-	MH            hexBytes                `json:"mh"`
-	Kind          features.ShingleKind    `json:"kind"`
-	Removed       bool                    `json:"removed"`
-	KDev          hexBytes                `json:"k_dev,omitempty"`
-	Text          *hexBytes               `json:"text,omitempty"`
-	RemovedTokens *[]int                  `json:"removed_tokens,omitempty"`
-	Entries       []features.ShingleEntry `json:"entries"`
-	Verdict       features.ShingleVerdict `json:"verdict"`
-	Unexplained   *int                    `json:"unexplained,omitempty"`
-}
-
 type drawVec struct {
 	Note         string       `json:"note,omitempty"`
 	R            hexBytes     `json:"r"`
@@ -235,10 +218,6 @@ func TestContentVectorsHaveWhatSpec11Lists(t *testing.T) {
 	for _, r := range f.Reveals {
 		verdicts[r.Verdict]++
 	}
-	shingleVerdicts := map[features.ShingleVerdict]int{}
-	for _, r := range f.ShingleReveals {
-		shingleVerdicts[r.Verdict]++
-	}
 	// The counts come from testdata/ledger/README.md and PR #12. If they
 	// stop matching, a vectors file with less in it would pass the tests
 	// below without notice.
@@ -254,7 +233,6 @@ func TestContentVectorsHaveWhatSpec11Lists(t *testing.T) {
 		{"the vectors hold 21 feature maps", len(f.Features), 21},
 		{"the vectors hold 17 hunk derivations", len(f.Diffs), 17},
 		{"the vectors hold 6 Jaccard pairs", len(f.Jaccard), 6},
-		{"the vectors hold 22 CC8 reveals", len(f.ShingleReveals), 22},
 		{"the vectors hold 5 draws", len(f.Draws), 5},
 		{"the vectors hold 18 CHALLENGE_K sizes", len(f.ChallengeK), 18},
 	}
@@ -263,12 +241,6 @@ func TestContentVectorsHaveWhatSpec11Lists(t *testing.T) {
 			name      string
 			got, want int
 		}{fmt.Sprintf("some reveal has the verdict %s", v), min(verdicts[v], 1), 1})
-	}
-	for _, v := range []features.ShingleVerdict{features.ShingleOK, features.ShingleBadEntry, features.ShingleSketch} {
-		cases = append(cases, struct {
-			name      string
-			got, want int
-		}{fmt.Sprintf("some CC8 reveal has the verdict %s", v), min(shingleVerdicts[v], 1), 1})
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -595,54 +567,6 @@ func TestVectorJaccard(t *testing.T) {
 			}
 			if a.Matches(b) != b.Matches(a) {
 				t.Error("Matches isn't symmetric")
-			}
-		})
-	}
-}
-
-func TestVectorShingleReveals(t *testing.T) {
-	for i, sv := range readContentVectors(t).ShingleReveals {
-		t.Run(fmt.Sprintf("shingle_reveals[%d] %s: VerifyShingleReveal gives %s", i, sv.Note, sv.Verdict), func(t *testing.T) {
-			mh, err := features.SketchFrom(sv.MH)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, at, unexplained := features.VerifyShingleReveal(mh, sv.Entries, sv.Removed)
-			if got != sv.Verdict {
-				t.Errorf("VerifyShingleReveal gives %s (entry %d), the vectors %s", got, at, sv.Verdict)
-			}
-			switch {
-			case (sv.Unexplained != nil) != (got == features.ShingleOK):
-				t.Errorf("the vectors give a count of unexplained places with %s", sv.Verdict)
-			case got == features.ShingleOK && *sv.Unexplained != unexplained:
-				t.Errorf("VerifyShingleReveal counts %d unexplained places, the vectors %d", unexplained, *sv.Unexplained)
-			}
-		})
-		if sv.Text == nil {
-			continue
-		}
-		t.Run(fmt.Sprintf("shingle_reveals[%d] %s: ShingleReveal sends these entries for the text with its tokens removed", i, sv.Note), func(t *testing.T) {
-			k, err := DeriveKeys(sv.KDev)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if sv.RemovedTokens == nil {
-				t.Fatal("the vectors give a text without removed_tokens")
-			}
-			kind, entries := k.Features().ShingleReveal(string(*sv.Text), *sv.RemovedTokens)
-			if kind != sv.Kind {
-				t.Errorf("kind %s, the vectors %s", kind, sv.Kind)
-			}
-			if sv.Removed != (len(*sv.RemovedTokens) > 0) {
-				t.Errorf("removed is %v with %d tokens removed", sv.Removed, len(*sv.RemovedTokens))
-			}
-			if len(entries) != len(sv.Entries) {
-				t.Fatalf("%d entries, the vectors %d", len(entries), len(sv.Entries))
-			}
-			for j, e := range entries {
-				if !bytes.Equal(e.V, sv.Entries[j].V) || !bytes.Equal(e.X, sv.Entries[j].X) {
-					t.Errorf("entries[%d] is %x %q, the vectors %x %q", j, e.V, e.X, sv.Entries[j].V, sv.Entries[j].X)
-				}
 			}
 		})
 	}

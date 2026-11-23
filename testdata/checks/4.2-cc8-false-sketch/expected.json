@@ -1,7 +1,7 @@
 {
   "scenario": "4.2-cc8-false-sketch",
-  "title": "A falsified sketch, true values revealed",
-  "story": "A modified client commits A3's features as if A3 were an unrelated request, so the re-roll rule misses it and A3 is credited. A3 is drawn, and the client reveals A3's true per-shingle values.",
+  "title": "A falsified sketch, caught by a same-text turn",
+  "story": "A modified client commits A3's features as if A3 were an unrelated request, so the re-roll rule misses it and A3 is credited. A3 is drawn, and so are A1 and A2, which carry A3's text with its true values.",
   "base": "4.2-alternation",
   "edits": [
     "The transcript's user entry for each prompt, read by the log reader 0.7 to 4.5 s after the hook (via log, same turn_key and lengths), as a real Claude Code client records it.",
@@ -75,20 +75,30 @@
       "result": "fail",
       "counts": {
         "challenged": 5,
-        "sketch_ok": 4,
-        "bad_entry": 0,
-        "sketch_mismatch": 1,
-        "shingle_mismatch": 0,
         "length_mismatch": 0,
+        "low_effort_mismatch": 0,
+        "es_mismatch": 0,
         "class_mismatch": 0,
-        "shingle_conflicts": 0,
-        "hidden_shingles": 0
+        "feature_conflicts": 1
       },
       "items": [
         {
+          "seq": 9030,
+          "turn_key": "t_a3b5a765ea66",
+          "failed": ["conflict"],
+          "conflicts_with": [9068, 9106]
+        },
+        {
+          "seq": 9068,
+          "turn_key": "t_1db5ec5bbe29",
+          "failed": ["conflict"],
+          "conflicts_with": [9030, 9106]
+        },
+        {
           "seq": 9106,
           "turn_key": "t_9e975cfb61c8",
-          "failed": ["sketch"]
+          "failed": ["conflict"],
+          "conflicts_with": [9030, 9068]
         }
       ]
     },
@@ -110,7 +120,7 @@
   "known_limit": null,
   "errata": ["2026-11-19-check-readings"],
   "notes": [
-    "The server re-scores from the bodies' f (DESIGN 6.2 D18), which say A3 isn't a re-roll, so the re-score credits A3 as the live buckets do and CC6 passes. Only CC8 sees the lie: the sketch from A3's revealed values is A1's, not the committed one (ledger-v1.md 10.8 `sketch`).",
-    "ledger-v1.md 10.8 (WP-LG3, #12). Issue #15: CC8 is weaker than DESIGN 7.3 claims, and these cases follow the spec's stated limit"
+    "The server re-scores from the bodies' f (DESIGN 6.2 D18), which say A3 isn't a re-roll, so the re-score credits A3 as the live buckets do and CC6 passes. Only CC8 sees the lie: A3's revealed text is A1's and A2's, and its committed th and mh aren't theirs (ledger-v1.md 10.8). The server can't tell which values are honest, so A1, A2 and A3 all fail.",
+    "DESIGN 7.3 and ledger-v1.md 10.8, as issue #15's decision rewrote them: CC8 reveals no keyed value and checks only what needs no key"
   ]
 }

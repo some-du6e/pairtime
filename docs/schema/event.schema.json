@@ -131,7 +131,7 @@
       "required": ["turn_key", "len_chars", "pasted_chars", "typed_len_est", "origin_declared", "matches_pending_cron", "answers_question", "low_effort"],
       "properties": {
         "turn_key": {"$ref": "#/$defs/key"},
-        "len_chars": {"$ref": "#/$defs/count"},
+        "len_chars": {"$ref": "#/$defs/count", "description": "Code points of the prompt as the harness delivered it, pasted blocks expanded."},
         "pasted_chars": {"$ref": "#/$defs/count", "description": "At most len_chars."},
         "typed_len_est": {"$ref": "#/$defs/count", "description": "len_chars - pasted_chars."},
         "minhash": {"type": "array", "minItems": 64, "maxItems": 64, "items": {"type": "integer", "minimum": 0, "maximum": 4294967295}, "x-local": true, "description": "MinHash sketch of the normalized prompt, for re-roll detection."},
