@@ -118,6 +118,23 @@ func (p *Plan) Diff() string {
 	return escapeControls(b.String())
 }
 
+// FileDiff returns the diff that turns before into after in the file at
+// path, written as Diff writes each change: a side that is nil, for no
+// file, is /dev/null, and what a terminal acts on is written out. It masks
+// nothing, so before and after are already what the screen may show, as
+// for the config.toml change of pairtime install --calibration-volunteer,
+// which config's own edit makes, outside any Plan.
+func FileDiff(path string, before, after []byte) string {
+	from, to := path, path
+	if before == nil {
+		from = "/dev/null"
+	}
+	if after == nil {
+		to = "/dev/null"
+	}
+	return escapeControls(udiff.Unified(from, to, before, after))
+}
+
 // kindsOf returns the kinds of recs, each once.
 func kindsOf(recs []editRecord) []string {
 	var kinds []string

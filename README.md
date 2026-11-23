@@ -39,6 +39,8 @@ irm https://github.com/some-du6e/pairtime/releases/download/v0.1.0-alpha.3/insta
 
 Then `pairtime login` links the computer to your account on a pairtime server. The empty dashboard on the server gives the same two commands.
 
+Calibration volunteers then run `pairtime install --calibration-volunteer`. It sets `shadow = true` under `[display]` in config.toml, so pairtime shows your time as "calibrating" until its scoring reaches version 1.0.0, when the setting stops counting by itself.
+
 ## Layout
 
 One Go module holds the client, the server and the code they share.

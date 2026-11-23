@@ -29,6 +29,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/doctor"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
@@ -63,9 +64,15 @@ func (h fakeHome) running() fakeHome {
 	return h
 }
 
-// shadow writes a config.toml that turns display.shadow on.
+// shadow writes a config.toml that turns display.shadow on. Once
+// pairtime's scoring reaches 1.0.0, Parse reads that line as off
+// (config.Calibrating), so a test that needs it skips: nobody sees the
+// views it checks any more, and WP-CA3 can delete those cases.
 func (h fakeHome) shadow() fakeHome {
 	h.t.Helper()
+	if !config.Calibrating() {
+		h.t.Skip("pairtime's scoring has reached 1.0.0, so display.shadow is off whatever config.toml says")
+	}
 	return h.writeFile("config.toml", []byte("[display]\nshadow = true\n"))
 }
 

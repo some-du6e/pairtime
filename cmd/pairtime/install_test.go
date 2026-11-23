@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/install"
@@ -1010,6 +1011,69 @@ func TestInstallCycle(t *testing.T) {
 				if !strings.Contains(out, "nothing to take out") {
 					t.Errorf("uninstall with nothing installed said:\n%s", out)
 				}
+			},
+		},
+		{
+			name:     "a calibration volunteer's install turns shadow on in config.toml and changes no other byte, a second one changes nothing, and uninstall takes the line out with config.toml",
+			hookMode: "real",
+			before:   func(h *testHome) { h.write(".claude/settings.json", gitAISettings) },
+			steps: func(t *testing.T, h *testHome, before map[string]string) {
+				if !config.Calibrating() {
+					t.Skip("pairtime's scoring has reached 1.0.0, so --calibration-volunteer offers nothing (TestPlanCalibration)")
+				}
+				name := h.dirs.ConfigFile()
+				read := func() string {
+					t.Helper()
+					data, err := os.ReadFile(name)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return string(data)
+				}
+				// A fresh install writes config.toml before the agent's first
+				// start, which then finds it there and leaves it alone.
+				out := h.mustRun("", "", 0, "install", "--yes", "--calibration-volunteer")
+				pid := h.installed(true)
+				if !strings.Contains(out, `pairtime shows your time as "calibrating" until its scoring reaches version 1.0.0.`) {
+					t.Errorf("install didn't say your time shows as calibrating:\n%s", out)
+				}
+				if cfg, problems, err := config.Load(name); err != nil || !cfg.Display.Shadow || len(problems) > 0 {
+					t.Errorf("after a volunteer's install, config.toml has shadow %v, problems %q, %v; want shadow on and no problems", cfg.Display.Shadow, problems, err)
+				}
+				h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
+				h.uninstalled(before, pid)
+
+				// On a computer pairtime is installed on, where the agent
+				// wrote config.toml at its first start.
+				h.mustRun("", "", 0, "install", "--yes")
+				pid = h.installed(true)
+				h.waitFor(name)
+				written := read()
+				out = h.mustRun("", "", 0, "install", "--dry-run", "--calibration-volunteer")
+				if !strings.Contains(out, "\n-shadow = false\n+shadow = true\n") {
+					t.Errorf("the dry run didn't print config.toml's change:\n%s", out)
+				}
+				if read() != written {
+					t.Error("the dry run changed config.toml")
+				}
+				h.mustRun("", "", 0, "install", "--yes", "--calibration-volunteer")
+				want := strings.Replace(written, "\nshadow = false\n", "\nshadow = true\n", 1)
+				if got := read(); got != want || want == written {
+					t.Errorf("after a volunteer's install config.toml is\n%s\nwant\n%s", got, want)
+				}
+				info, err := os.Stat(name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				out = h.mustRun("", "", 0, "install", "--yes", "--calibration-volunteer")
+				if after, err := os.Stat(name); err != nil || read() != want || !os.SameFile(info, after) {
+					t.Errorf("a second volunteer's install changed config.toml or wrote it again (%v):\n%s", err, read())
+				}
+				if strings.Contains(out, `shows your time as "calibrating"`) {
+					t.Errorf("a second volunteer's install said it changed something:\n%s", out)
+				}
+				h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
+				h.uninstalled(before, pid)
 			},
 		},
 	}
