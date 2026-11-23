@@ -1,7 +1,8 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 --
--- What the day roots need (WP-SV17): which server key was valid when, and
--- the day heads the publisher signs. Neither holds personal data.
+-- What the day roots need (WP-SV17): which server key was valid when, the
+-- day heads the publisher signs, and the leaves under them. None of these
+-- holds personal data.
 --
 -- key_history is every server key this database was written with and the
 -- times it was valid, which /.well-known/pairtime-keys.json publishes
@@ -41,4 +42,17 @@ CREATE TABLE day_heads (
     signature TEXT NOT NULL,
     key_id TEXT NOT NULL,
     written_at_ms BIGINT NOT NULL
+);
+
+-- day_leaves is each published day's leaves: LEAF of each witness row's
+-- leaf, the 32-byte hashes T_d is the root of, joined in leaf order, so
+-- n of them for the day's head (ledger-v1 5.1, 8). The publisher stores
+-- them in the transaction that stores the head, and a batch's inclusion
+-- proof reads them, so a proof outlives the day's other witness rows,
+-- which retention and an account's erasure delete. Each is a hash, which
+-- names a batch only to someone who holds the batch's head already, and
+-- they stay as long as the day roots, for good.
+CREATE TABLE day_leaves (
+    day BIGINT PRIMARY KEY,
+    leaves BYTEA NOT NULL
 );
