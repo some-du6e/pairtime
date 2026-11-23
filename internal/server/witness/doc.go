@@ -20,7 +20,10 @@
 // server. So the server's clock, carried back along the boot's monotonic
 // clock, bounds when a record can have been made, whatever the device's
 // wall clock said. The corrected time is the earliest of the record's wall
-// time and those bounds.
+// time and those bounds. That needs every mono to be a reading of the
+// boot's clock taken at its record's own time, or none: one derived from
+// the wall clock could run ahead of the boot's clock and pull every
+// earlier record of the boot back with it.
 //
 // A record's credit lands at its wall time, which the client scored and a
 // submission re-scores, so no correction may make a record read later, and
@@ -48,17 +51,21 @@
 // closed within the lag after the record, an upload-failure note falls
 // within the lag of the batch's close, before or after it, in a batch of
 // the same catch-up or a later one, the batch arrived within the lag after
-// the device got through again, and the batch before that reconnect is on
-// the server's chain, so the chain ran on unbroken from a witnessed batch.
-// A batch closes no earlier than its latest record and no earlier than the
-// batch before it, since a chain seals its batches in order. Everything
-// else late is backfilled, and so is every record the client marks as
-// lookback's.
+// the device got through again, and the batch before that reconnect has a
+// record that reads witnessed or offline, so the chain ran on unbroken
+// from a batch that reached the server in time. A batch closes no earlier
+// than its latest record and no earlier than the batch before it, since a
+// chain seals its batches in order. So the catch-up's batches closed no
+// earlier than the lag before the batch before them reached the server,
+// and a batch of backdated records sent after the device got batches of
+// the present through can't read offline, whatever records the reveal
+// leaves out. Everything else late is backfilled, and so is every record
+// the caller marks as lookback's.
 //
 // The notes are the client's own claim (DESIGN 7.4), so the server can't
-// check them beyond their place in the chain. It needs their bodies for
-// their times, which DESIGN 6.5's reveal set doesn't name; without them no
-// record reads offline.
+// check them beyond their place in the chain. It reads their times from
+// their bodies, which DESIGN 6.5's rule (g) reveals with the presence,
+// focus and power records of the batch before each catch-up.
 //
 // D6 applies OFFLINE_CAP_S and OFFLINE_PUSH_S at submission, in WP-SB4,
 // not here. What it needs from here is which records are offline and the

@@ -41,7 +41,6 @@ func indexOf(t *testing.T, sealed []float64, got []float64) *rowIndex {
 
 func TestWitness(t *testing.T) {
 	const lag = 900_000
-	mins := func(m float64) int64 { return int64(m * 60_000) }
 	tests := []struct {
 		name    string
 		sealed  []float64 // minutes of day0
@@ -73,10 +72,12 @@ func TestWitness(t *testing.T) {
 			[]float64{1, 2}, []float64{1.1, -1}, reading{fork: 2}, 0, 0, 1, event.Backfilled, true},
 		{"a minute whose batch is before the fork reads by its batch",
 			[]float64{1, 2}, []float64{1.1, -1}, reading{fork: 2}, 0, 0, 0, event.Witnessed, true},
-		{"a device clock 20 minutes slow still reads its live minutes witnessed",
-			[]float64{1}, []float64{21.1}, reading{offset: mins(20)}, 0, 0, 0, event.Witnessed, true},
-		{"a device clock 20 minutes fast reads a batch 30 minutes late as late",
-			[]float64{1}, []float64{11}, reading{offset: -mins(20)}, 0, 0, 0, event.Backfilled, true},
+		{"a device clock 20 minutes slow reads its live minutes late, as the server reads them by the device's clock",
+			[]float64{1}, []float64{21.1}, reading{}, 0, 0, 0, event.Backfilled, true},
+		{"a minute that ends more than 5 minutes after the server had its batch is backfilled, since a submission refuses its records",
+			[]float64{10}, []float64{3}, reading{}, 0, 0, 9, event.Backfilled, true},
+		{"a minute that ends up to 5 minutes after the server had its batch is witnessed",
+			[]float64{10}, []float64{6}, reading{}, 0, 0, 9, event.Witnessed, true},
 		{"a minute no batch was sealed after waits",
 			[]float64{1}, []float64{1.1}, reading{}, 0, 0, 5, "", false},
 		{"a minute whose batch has no receipt yet waits",

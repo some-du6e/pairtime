@@ -399,10 +399,15 @@ func TestFastClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	creds := Credentials{Server: srv.URL, Token: testToken, DeviceID: w.DeviceID(), Sign: KeySigner(devKey), LinkedAt: end.Add(-30 * time.Minute)}
+	var (
+		pmu     sync.Mutex
+		problem string
+	)
 	u, err := New(Options{
 		Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
 		Login:  LoginFunc(func() (Credentials, bool) { return creds, true }),
 		Params: table, Client: srv.Client(), Draw: func(int64) int64 { return 0 },
+		Problem: func(msg string) { pmu.Lock(); problem = msg; pmu.Unlock() },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -444,6 +449,13 @@ func TestFastClock(t *testing.T) {
 			}
 			if d := time.Duration(sv.Offset) * time.Millisecond; d > -9*time.Minute || d < -11*time.Minute {
 				t.Errorf("offset %v", d)
+			}
+		}},
+		{"doctor hears that this computer's clock runs ahead of the server's", func(t *testing.T) {
+			pmu.Lock()
+			defer pmu.Unlock()
+			if !strings.Contains(problem, "minutes ahead of the server's") {
+				t.Errorf("doctor hears %q", problem)
 			}
 		}},
 	}

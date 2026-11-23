@@ -436,6 +436,41 @@ func TestOfflineConditions(t *testing.T) {
 				}
 				return &c, c.batch(150, append(recs, note(24.5))...)
 			}, event.Backfilled, 0, 0},
+		{"a catch-up whose batch before it comes without its records reads backfilled, so leaving records out can't help",
+			func() (*chain, int) {
+				// As above, but the caller gives the records of batch 121
+				// alone, and the rows of batches 120 and 121, as a reveal of
+				// the window the records claim would hold.
+				var c chain
+				for m := 1.0; m <= 120; m++ {
+					c.batch(m, ev(m-0.5, m+100, "run-a"))
+				}
+				var recs []Record
+				for m := 10.0; m <= 24; m++ {
+					recs = append(recs, Record{Type: presence, Timed: true, T: at(m)})
+				}
+				first := c.batch(150, append(recs, note(24.5))...)
+				c.recs = c.recs[first:]
+				c.drop(1, 119)
+				return &c, 0
+			}, event.Backfilled, 0, 0},
+		{"a catch-up whose batch before it reads only backfilled doesn't wait out an outage",
+			func() (*chain, int) {
+				// Batch 120 holds only a record of minute 100, 20 minutes
+				// late, so nothing shows it closed in time. The catch-up at
+				// minute 150 holds records of 121 to 135 and a note of 135.5,
+				// which pass every other condition.
+				var c chain
+				for m := 1.0; m <= 119; m++ {
+					c.batch(m, ev(m-0.5, m+100, "run-a"))
+				}
+				c.batch(120, Record{Type: presence, Timed: true, T: at(100)})
+				var recs []Record
+				for m := 121.0; m <= 135; m++ {
+					recs = append(recs, Record{Type: presence, Timed: true, T: at(m)})
+				}
+				return &c, c.batch(150, append(recs, note(135.5))...)
+			}, event.Backfilled, 0, 0},
 		{"the last minutes of an outage that ends asleep are offline by the failures just before them",
 			func() (*chain, int) {
 				// The uploader failed every four minutes from minute 60 to
@@ -503,6 +538,42 @@ func TestOfflineConditions(t *testing.T) {
 			}
 			if len(res.Stretches) != tc.stretches {
 				t.Errorf("%d stretches, want %d: %+v", len(res.Stretches), tc.stretches, res.Stretches)
+			}
+		})
+	}
+}
+
+// TestOfflineCost holds offline's note lookups to the size of the input:
+// many notes from just before the device's last live receipt, then a
+// catch-up of as many records, each of which looks for a note in a window
+// the old notes fill, cost a step a note, not a step a note per record.
+func TestOfflineCost(t *testing.T) {
+	const n = 20_000
+	var c chain
+	recs := []Record{ev(100, 200, "run-a")}
+	for k := range n {
+		recs = append(recs, note(86+14*float64(k)/n))
+	}
+	c.batch(100.05, recs...)
+	late := make([]Record, 0, n)
+	for k := range n {
+		late = append(late, Record{Type: presence, Timed: true, T: at(100) + int64(k)})
+	}
+	first := c.batch(120, late...)
+	res, steps := records(table(t), c.batches, c.recs)
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"the notes' window takes at most two steps a note", steps <= 2*n},
+		{"the catch-up's records read backfilled, since every note in their window is from before the catch-up",
+			res.Readings[first].Label == event.Backfilled && res.Readings[len(res.Readings)-1].Label == event.Backfilled},
+		{"the notes before the silence read witnessed", res.Readings[1].Label == event.Witnessed},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: %d steps for %d notes", steps, n)
 			}
 		})
 	}

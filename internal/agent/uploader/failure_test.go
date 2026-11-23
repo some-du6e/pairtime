@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -281,4 +282,29 @@ func TestFlushBound(t *testing.T) {
 			t.Errorf("hookBound %v, SoonDelay %v", hookBound, SoonDelay)
 		}
 	})
+}
+
+// TestClockProblem checks what doctor hears of a clock off the server's:
+// the server dates a minute by this computer's clock, so a slow one makes
+// live work late, and one more than 5 minutes fast has it refused at
+// submission (WP-SV6).
+func TestClockProblem(t *testing.T) {
+	tests := []struct {
+		name string
+		off  time.Duration // the server's clock less this computer's
+		has  string        // what doctor hears, "" for nothing
+	}{
+		{"a clock 20 minutes slow makes live work late, doctor says", 20 * time.Minute, "20 minutes behind the server's"},
+		{"a clock 10 minutes fast has work refused, doctor says", -10 * time.Minute, "10 minutes ahead of the server's"},
+		{"a clock 2 minutes slow is nothing to say", 2 * time.Minute, ""},
+		{"nor is one 2 minutes fast", -2 * time.Minute, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := clockProblem(tc.off, 900_000)
+			if tc.has == "" && got != "" || !strings.Contains(got, tc.has) {
+				t.Errorf("doctor hears %q, want %q in it", got, tc.has)
+			}
+		})
+	}
 }

@@ -1741,6 +1741,37 @@ func (u *Uploader) saveErr() error {
 	return u.opts.State.Save()
 }
 
+// clockSkew is how far this computer's clock may be from the server's
+// before doctor hears of it.
+const clockSkew = 2 * time.Minute
+
+// noteClock tells doctor when the offset the last answer measured puts
+// this computer's clock more than clockSkew from the server's, and stops
+// once it doesn't.
+func (u *Uploader) noteClock() {
+	msg := ""
+	if off, ok := u.clock.Offset(); ok {
+		msg = clockProblem(off, u.lag)
+	}
+	u.setProblem("clock", msg)
+}
+
+// clockProblem is what doctor hears of a clock off the server's by off,
+// the server's clock less this computer's, and "" within clockSkew. lag
+// is WITNESS_LAG_S, in ms. The server reads the time of a minute by this
+// computer's clock, and so does the uploader's reading (witnessOf): a
+// clock that runs slow makes live work read late, and one that runs more
+// than 5 minutes fast has its records refused at submission (WP-SV6).
+func clockProblem(off time.Duration, lag int64) string {
+	switch n := int64(off.Abs() / time.Minute); {
+	case off > clockSkew:
+		return fmt.Sprintf("this computer's clock is %d minutes behind the server's, and pairtime dates your work by it, so work counts as late, at level C, once that and the time an upload takes pass %d minutes. Set the clock right, or turn on setting the time automatically, to fix it", n, lag/60_000)
+	case off < -clockSkew:
+		return fmt.Sprintf("this computer's clock is %d minutes ahead of the server's, and pairtime dates your work by it, so once it is more than %d minutes ahead, work counts at level C and a submission refuses it. Set the clock right, or turn on setting the time automatically, to fix it", n, refusedAhead/60_000)
+	}
+	return ""
+}
+
 // setProblem records a problem from one source, or clears it with "", and
 // passes the sum to Options.Problem when it changes.
 func (u *Uploader) setProblem(source, msg string) {
@@ -1756,7 +1787,7 @@ func (u *Uploader) setProblem(source, msg string) {
 		return
 	}
 	var all []string
-	for _, s := range []string{"login", "local-only", "server", "chain", "receipts", "buckets", "local"} {
+	for _, s := range []string{"login", "local-only", "server", "chain", "receipts", "buckets", "local", "clock"} {
 		if m := u.problems[s]; m != "" {
 			all = append(all, m)
 		}

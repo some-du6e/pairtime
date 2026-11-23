@@ -96,6 +96,28 @@ func TestServerWitness(t *testing.T) {
 			{"a late revision with more credit is stored backfilled, and the client's own reading stays as sent", func(t *testing.T) {
 				send(t, live, more)
 			}, live, minute, "backfilled", []string{"witnessed", "witnessed", "backfilled"}, event.Witnessed},
+			{"after a rollback, a revision that a release from before migration 0009 stored passes no label on", func(t *testing.T) {
+				m := minute.Add(2 * time.Minute)
+				h.clock = m.Add(30 * time.Second)
+				send(t, live, sampleBucket(live.ID, m, 0))
+				// The release before 0009 stores rev 1, with more credit, 40
+				// minutes on. It rewrites the minute's row without its
+				// server_witness, which keeps rev 0's, and stores rev 1's
+				// revision row without one.
+				rolled := sampleBucket(live.ID, m, 1)
+				rolled.Slots[2] = event.BucketSlot{Project: "p_one", Credited: 10, Why: event.ReasonRead, Kind: event.ActivityReadingOutput, Ev: event.EvidenceB}
+				rolled.CreditedS += 10
+				js, at := string(marshal(t, rolled.Shareable())), m.Add(40*time.Minute).UnixMilli()
+				h.exec(t, `UPDATE minute_buckets SET rev = 1, received_at_ms = $3, bucket = $4, revisions = 2 WHERE device_id = $1 AND minute_ms = $2`,
+					live.ID, m.UnixMilli(), at, js)
+				h.exec(t, `INSERT INTO minute_bucket_revisions (device_id, minute_ms, rev, account_id, received_at_ms, bucket) VALUES ($1, $2, 1, $3, $4, $5)`,
+					live.ID, m.UnixMilli(), live.Account, at, js)
+				// Back on this release, rev 2 has rev 1's credit and comes late.
+				h.clock = m.Add(41 * time.Minute)
+				again := rolled
+				again.Rev = 2
+				send(t, live, again)
+			}, live, minute.Add(2 * time.Minute), "backfilled", []string{"witnessed", "", "backfilled"}, event.Witnessed},
 			{"a minute the client reads offline, sent in the catch-up after the server lost the device for two hours, is stored offline", func(t *testing.T) {
 				h.clock = start
 				roots := chain(rand.New(rand.NewPCG(6, 6)), ledger.Hash{}, 1, 4)

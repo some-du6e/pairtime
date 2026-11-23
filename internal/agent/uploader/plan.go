@@ -204,7 +204,7 @@ func bucketsOf(in planInput, n int) ([]entry, map[string]bool, []string, error) 
 	days := make(map[string]bool, len(files))
 	// Batches before the start never get a receipt: the server's chain
 	// starts after them, or it no longer holds them.
-	rd := reading{lag: in.lag, chainStart: in.st.ChainStart, fork: in.st.Fork, offset: in.st.Offset, offline: in.st.Offline}
+	rd := reading{lag: in.lag, chainStart: in.st.ChainStart, fork: in.st.Fork, offline: in.st.Offline}
 	if g := in.st.Gone; g > 0 && g+1 > rd.chainStart {
 		rd.chainStart = g + 1
 	}
