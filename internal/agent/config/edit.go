@@ -570,14 +570,18 @@ func edited(text, hand string, change func(text string) string, apply func(*Conf
 		}
 		return "", u
 	}
+	// A multi-line string can hold a line that looks like a key, which the
+	// line-based changes would take for the setting. So a file with one is
+	// changed only when the change rewrites nothing, as in one that says so
+	// already, and the result reads as asked: then nothing in it was
+	// mis-edited. Otherwise the multi-line string is why it is refused.
+	multiLine := strings.Contains(text, `"""`) || strings.Contains(text, `'''`)
+	multiLineErr := fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", hand)
 	before, _, _ := parseAsWritten([]byte(text))
 	body, found := strings.CutPrefix(text, bom)
 	out := change(body)
-	if out != body && (strings.Contains(text, `"""`) || strings.Contains(text, `'''`)) {
-		// A multi-line string could hold a line that looks like a key, so
-		// such a file is changed only when the change rewrites nothing, as
-		// in one that says so already: then nothing in it is mis-edited.
-		return "", fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", hand)
+	if multiLine && out != body {
+		return "", multiLineErr
 	}
 	if found {
 		out = bom + out
@@ -592,7 +596,12 @@ func edited(text, hand string, change func(text string) string, apply func(*Conf
 	if len(want.Projects) == 0 {
 		want.Projects = nil
 	}
-	if !reflect.DeepEqual(after, want) {
+	switch {
+	case reflect.DeepEqual(after, want):
+	case multiLine:
+		// The change took a line inside the string for the setting.
+		return "", multiLineErr
+	default:
 		return "", fmt.Errorf("config: pairtime couldn't change config.toml without changing other settings, so it didn't; %s", hand)
 	}
 	return out, nil
