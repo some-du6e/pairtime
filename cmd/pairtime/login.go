@@ -276,7 +276,7 @@ func printNamesOff(w io.Writer, server string, e uploader.Elsewhere) {
 		fmt.Fprintln(w)
 	}
 	if len(e.Stuck) > 0 {
-		fmt.Fprint(w, "pairtime couldn't turn these off in config.toml, which has them in a form it can't change, such as an inline table, so it sends none of them while config.toml has them on. To show one there, write it in config.toml as a table of its own, [projects.<key>] with its name and online = false, and once pairtime projects says pairtime turned it off here, run pairtime projects show-name with its key:\n")
+		fmt.Fprint(w, "pairtime couldn't turn these off in config.toml, which has them in a form it can't change, such as an inline table, so it sends none of them while config.toml has them on. To show one there, write it in config.toml as a table of its own, [projects.<key>] with its name and online = false, and once pairtime projects stops saying pairtime couldn't turn it off, run pairtime projects show-name with its key:\n")
 		for _, key := range e.Stuck {
 			fmt.Fprintf(w, "  %s    \"%s\"\n", key, text.Printable(e.Off[key]))
 		}

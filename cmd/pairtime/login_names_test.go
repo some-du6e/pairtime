@@ -69,7 +69,7 @@ func TestLoginNamesOff(t *testing.T) {
 			server: newServer,
 			wantOut: []string{
 				"\nThe project names this computer had on were for another sign-in. " + newServer + " never showed them, and nothing about them goes there.\n",
-				"pairtime couldn't turn these off in config.toml, which has them in a form it can't change, such as an inline table, so it sends none of them while config.toml has them on. To show one there, write it in config.toml as a table of its own, [projects.<key>] with its name and online = false, and once pairtime projects says pairtime turned it off here, run pairtime projects show-name with its key:\n  " + chip8Key + "    \"chip8-emulator\"\n",
+				"pairtime couldn't turn these off in config.toml, which has them in a form it can't change, such as an inline table, so it sends none of them while config.toml has them on. To show one there, write it in config.toml as a table of its own, [projects.<key>] with its name and online = false, and once pairtime projects stops saying pairtime couldn't turn it off, run pairtime projects show-name with its key:\n  " + chip8Key + "    \"chip8-emulator\"\n",
 			},
 			wantOn:      true,
 			wantNote:    uploader.NoteSignedIn,

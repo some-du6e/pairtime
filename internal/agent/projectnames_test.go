@@ -292,7 +292,7 @@ func TestProjectsAPI(t *testing.T) {
 			codes:  map[string]string{chip8Key: "7c41e9"},
 			hidden: map[string]uploader.HiddenName{chip8Key: {Label: "Chip-8", At: 1, Pending: true}},
 			steps: []step{{method: "PUT", path: name, body: `{"online":true}`, code: 409, check: func(t *testing.T, body string, names map[string]config.Project) {
-				if !strings.Contains(body, "write it there by hand as a table of its own, [projects.<key>] with its name and online = false, and once pairtime projects says pairtime turned it off here, turn it on again") {
+				if !strings.Contains(body, "write it there by hand as a table of its own, [projects.<key>] with its name and online = false, and once pairtime projects stops saying pairtime couldn't turn it off, turn it on again") {
 					t.Errorf("PUT answered %s", body)
 				}
 				if names[chip8Key] != (config.Project{Name: "Chip-8", Online: true}) {
