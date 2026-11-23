@@ -50,6 +50,7 @@ func runServe(ctx context.Context, e *env, args []string) int {
 	fs := newFlagSet("serve", serveSummary, e)
 	load := configFlags(fs, e)
 	replica := fs.String("litestream-replica", "", "the path in the main bucket that Litestream replicates the database to, as litestream.yml's replica path; /readyz then checks the replica's lag (DESIGN 10.4)")
+	witnessDir := fs.String("witness-dir", "/witness", "where the day roots go for the witness sidecar to push, which compose mounts; serve publishes them while PAIRTIME_WITNESS_REPO names the witness repository and the server key loads (WP-SV17)")
 	if code, done := parse(fs, args); done {
 		return code
 	}
@@ -62,7 +63,7 @@ func runServe(ctx context.Context, e *env, args []string) int {
 	for _, w := range cfg.Warnings {
 		logger.Warn(w)
 	}
-	if err := serve(ctx, cfg, logger, e, serveOptions{replica: *replica}); err != nil {
+	if err := serve(ctx, cfg, logger, e, serveOptions{replica: *replica, witnessDir: *witnessDir}); err != nil {
 		logger.Error("pairtimed stopped", "err", err)
 		return 1
 	}
@@ -74,6 +75,8 @@ type serveOptions struct {
 	// replica is the replica's path in the main bucket when Litestream
 	// runs serve, or "".
 	replica string
+	// witnessDir is where the day roots go for the witness sidecar.
+	witnessDir string
 }
 
 // serve runs the server until ctx ends or a listener fails. The order
@@ -89,8 +92,10 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		return err
 	}
 	// Ingest takes uploads once the server key loads (newIngest), and the
-	// privacy notice says whether it does.
+	// privacy notice says whether it does, and whether the day roots go
+	// out.
 	_, keyErr := backup.Load(backup.KeysDir(cfg.DataDir))
+	dayRoots := dayRootsOn(cfg, keyErr)
 	site, err := pages.New(pages.Options{
 		BaseURL: cfg.BaseURL,
 		Controller: pages.Controller{
@@ -107,10 +112,11 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		Commit:         sourceCommit(version.Get()),
 		Retention:      policy,
 		// What the privacy notice describes that this server runs. Sign-in
-		// runs once hca.client_id is set (newSignIn), and uploads (WP-SV4)
-		// once the server key loads. The work package that adds
-		// submissions (WP-SB1) or day roots (WP-SV17) sets its own here.
-		Running: pages.Running{SignIn: cfg.HCA.ClientID != "", Uploads: keyErr == nil},
+		// runs once hca.client_id is set (newSignIn), uploads (WP-SV4) once
+		// the server key loads, and the day roots (WP-SV17) once it does
+		// and PAIRTIME_WITNESS_REPO names the witness repository. The work
+		// package that adds submissions (WP-SB1) sets its own here.
+		Running: pages.Running{SignIn: cfg.HCA.ClientID != "", Uploads: keyErr == nil, DayRoots: dayRoots},
 	})
 	if err != nil {
 		return err
@@ -265,6 +271,35 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		logger.Info("under Litestream: /readyz checks the replica's lag", "replica", objs.main.Name()+"/"+so.replica, "max_lag", backup.MaxLag.String())
 	case objs != nil:
 		logger.Warn("serve runs without -litestream-replica, so /readyz doesn't check replication; litestream.yml's exec passes it (deploy/litestream.yml)")
+	}
+
+	// The day roots (WP-SV17): at start and at 00:10 UTC, the publisher
+	// stores each due day's signed head through the writer, then writes
+	// its file under -witness-dir for the witness sidecar to push. Under
+	// Litestream it signs only while the replica is within MaxLag of the
+	// database, so a host restored from the replica signs each day's head
+	// over the same rows again. It too stops before the writer does.
+	if dayRoots {
+		o, err := dayRootsOptions(cfg, db, w, history, so.witnessDir)
+		if err != nil {
+			return err
+		}
+		if r := repl.Load(); r != nil {
+			o.Ready = r.Check
+		}
+		failed := reg.Counter("pairtime_day_roots_failures_total", "Runs of the day-root publisher that failed (WP-SV17).")
+		dayRootsCtx, stopDayRoots := context.WithCancel(ctx)
+		dayRootsDone := make(chan struct{})
+		go func() {
+			defer close(dayRootsDone)
+			runDayRoots(dayRootsCtx, o, logger, failed)
+		}()
+		defer func() {
+			stopDayRoots()
+			<-dayRootsDone
+		}()
+	} else {
+		logger.Info("day roots are off: they need the server key and " + envWitnessRepo + ", which compose sets")
 	}
 
 	// The jobs below stop before the database closes: each is deferred
