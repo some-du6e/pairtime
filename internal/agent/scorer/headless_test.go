@@ -118,7 +118,7 @@ func TestHeadlessLoop(t *testing.T) {
 				idle := 585.0
 				woke := sampleAt(first, again, "01a1fb1e-5318-78a1-a7f0-000000000001",
 					&event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle})
-				run := append([]event.Event{woke}, relayedAt(t, again-30_000, again)...)
+				run := append([]event.Event{woke}, relayedAt(t, again-30_000, woke)...)
 				return [][]event.Event{first, append(run, second...)}
 			}},
 		{"a suspend longer than Lookback keeps the carried suspend's reach once the window slides past it: the ten hours the machine slept are asleep, as one Step reads them, and refuse a relayed lead",
@@ -131,7 +131,7 @@ func TestHeadlessLoop(t *testing.T) {
 				woke := sampleAt(first, resume, "01a1fb1e-5318-78a1-a7f0-000000000003",
 					&event.OSPower{Op: event.PowerResume})
 				second := rekeyed(hookTurn(t, resume+70_000, hourTools()), 2)
-				run := append(append(first, asleep, woke), relayedAt(t, resume-30_000, resume)...)
+				run := append(append(first, asleep, woke), relayedAt(t, resume-30_000, woke)...)
 				return [][]event.Event{append(run, second...)}
 			}},
 	}
@@ -240,10 +240,12 @@ func sampleAt(evs []event.Event, ts int64, id string, d event.Payload) event.Eve
 // relayedAt returns testdata/timelines/relayed/t3-away's first message as
 // records of a session T3 Code's server starts here: the session's start,
 // its prompt and the relay.message that pairs with it, written a second,
-// three and five seconds after at, with the message stamped at sent. So a
-// message sent before at, while the machine was away, gets its relayed lead
-// before at, which a slot the machine slept through refuses (SM 2.3).
-func relayedAt(t *testing.T, sent, at int64) []event.Event {
+// three and five seconds after at, the time of ref, with the message
+// stamped at sent. They take ref's boot and monotonic clock, as records of
+// the same run. So a message sent before at, while the machine was away,
+// gets its relayed lead before at, which a slot the machine slept through
+// refuses (SM 2.3).
+func relayedAt(t *testing.T, sent int64, ref event.Event) []event.Event {
 	t.Helper()
 	root, err := timelines.Root()
 	if err != nil {
@@ -276,11 +278,10 @@ func relayedAt(t *testing.T, sent, at int64) []event.Event {
 	clone := func(tmpl *event.Event, ts int64, n int) event.Event {
 		e := *tmpl
 		e.EventID = fmt.Sprintf("01a1fb1e-5318-78a1-a7f2-%012x", n)
-		e.Mono += ts - e.T
-		e.T = ts
+		e.BootID, e.Mono, e.T = ref.BootID, ref.Mono+ts-ref.T, ts
 		return e
 	}
-	s, p, r := clone(start, at+1000, 1), clone(prompt, at+3000, 2), clone(relay, at+5000, 3)
+	s, p, r := clone(start, ref.T+1000, 1), clone(prompt, ref.T+3000, 2), clone(relay, ref.T+5000, 3)
 	m := *relay.Data.(*event.RelayMessage)
 	m.SentAt, m.Prompt = sent, p.EventID
 	r.Data = &m
@@ -332,23 +333,30 @@ func TestCarryReach(t *testing.T) {
 		from  int64
 		// kept says the carry keeps a record of the sampler's.
 		kept bool
+		// waits says the case holds a cut that still waits. No loop carries
+		// a record then, since FinalBefore stays at it while the cut waits,
+		// and one Step holds its clock there, deriving no slot after it,
+		// while the carried copy is dated again. So only the carry's
+		// decision is checked: it keeps the record, as pkg/score keeps the
+		// reach until the cut takes effect.
+		waits bool
 	}{
 		{"a sample after a silence longer than Lookback, before any record the agent stamps, keeps the carried sample's reach: the silence is asleep",
-			woken(again), again - 15*minuteMS, true},
+			woken(again), again - 15*minuteMS, true, false},
 		{"a resume after a ten-hour suspend, before any record the agent stamps, keeps the carried suspend's reach: the machine slept",
 			append([]event.Event{rec(last+15_000, &event.OSPower{Op: event.PowerSuspend}),
 				rec(resume, &event.OSPower{Op: event.PowerResume})}, woken(resume+15_000)...),
-			resume - 15*minuteMS, true},
+			resume - 15*minuteMS, true, false},
 		{"a record the agent stamps BUCKET_TTL_S after the last sample, in the window before the sampler's next record, ends the carried sample's reach",
-			append([]event.Event{cut}, woken(again)...), last + 2*hourMS, false},
+			append([]event.Event{cut}, woken(again)...), last + 2*hourMS, false, false},
 		{"the same record folded into the carry ends the carried sample's reach too",
-			append([]event.Event{cut}, woken(again)...), last + 4*hourMS, false},
+			append([]event.Event{cut}, woken(again)...), last + 4*hourMS, false, false},
 		{"an unlock that starts the sampler again after the cut, with the sample the agent takes at its time, keeps the gap from before the stretch out of that slot",
-			append([]event.Event{cut, rec(again, &event.OSPower{Op: event.PowerUnlock})}, woken(again)...), last + 2*hourMS, false},
-		{"a stamped record before the window's first sample that the newest record isn't yet rules.late past leaves the carried sample's reach to wait",
+			append([]event.Event{cut, rec(again, &event.OSPower{Op: event.PowerUnlock})}, woken(again)...), last + 2*hourMS, false, false},
+		{"a stamped record before the window's first sample that the newest record isn't yet rules.late past doesn't end the carried sample's reach yet",
 			[]event.Event{rec(again-60_000, &event.OSFocus{AppClass: event.AppUnknown}),
 				rec(again, idle(600))},
-			again - 15*minuteMS, true},
+			again - 15*minuteMS, true, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -362,6 +370,9 @@ func TestCarryReach(t *testing.T) {
 			recs := w.records()
 			if kept := slices.ContainsFunc(recs, func(e event.Event) bool { return e.T < c.from && sampler(&e) }); kept != c.kept {
 				t.Errorf("the carry keeps a record of the sampler's: %v, want %v", kept, c.kept)
+			}
+			if c.waits {
+				return
 			}
 			got, want := slotsFrom(table, recs, c.from), slotsFrom(table, all, c.from)
 			if len(got) != len(want) {
