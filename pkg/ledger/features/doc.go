@@ -15,8 +15,8 @@
 // signatures, templates, commands and file paths, and the edit hunks of
 // agent.tool records. [F] is the feature map a record body carries as "f".
 //
-// CC8 checks a challenged prompt's sketch against per-shingle values the
-// client reveals: [VerifyShingleReveal] is the server's half.
+// CC8 (WP-TR2) checks a challenged prompt's features against its revealed
+// text without the key (spec 10.8), with [Normalize] and [ErrorSignature].
 //
 // Only the device holds K_feat, so no one else can compute a feature
 // value, and a reader who holds a body can't test a guess at its prompt.

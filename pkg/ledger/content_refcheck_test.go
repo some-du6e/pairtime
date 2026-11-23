@@ -19,9 +19,9 @@ import (
 
 // TestReferenceCheckContent writes 1,000 random texts with random span
 // removals, as commitments and reveals, together with their
-// normalizations, feature maps and CC8 reveals and a set of random draws,
-// in the vectors format, and has tools/ledger_ref.py, which shares no code
-// with this package, recompute every value and verdict in them (WP-LG4).
+// normalizations and feature maps and a set of random draws, in the
+// vectors format, and has tools/ledger_ref.py, which shares no code with
+// this package, recompute every value and verdict in them (WP-LG4).
 // It needs python3 and fails without it.
 func TestReferenceCheckContent(t *testing.T) {
 	python, err := exec.LookPath("python3")
@@ -45,7 +45,7 @@ func TestReferenceCheckContent(t *testing.T) {
 	small := func() contentVectorsFile {
 		s := contentVectorsFile{Format: vectorsFormat,
 			Commitments: doc.Commitments[:5], Reveals: doc.Reveals[:5], Normalizations: doc.Normalizations[:5],
-			Features: doc.Features[:5], Jaccard: doc.Jaccard[:5], ShingleReveals: doc.ShingleReveals[:5],
+			Features: doc.Features[:5], Jaccard: doc.Jaccard[:5],
 			Draws: doc.Draws[:3], ChallengeK: doc.ChallengeK[:5]}
 		return deepCopyContent(t, s)
 	}
@@ -71,11 +71,6 @@ func TestReferenceCheckContent(t *testing.T) {
 	}
 	jaccardChanged := small()
 	jaccardChanged.Jaccard[1].Matches = (jaccardChanged.Jaccard[1].Matches + 1) % (features.SketchSize + 1)
-	shingleChanged := small()
-	if shingleChanged.ShingleReveals[0].Verdict != features.ShingleOK {
-		t.Fatal("the first CC8 reveal written isn't ok")
-	}
-	shingleChanged.ShingleReveals[0].Verdict = features.ShingleSketch
 	kChanged := small()
 	kChanged.ChallengeK[3].K++
 
@@ -85,14 +80,13 @@ func TestReferenceCheckContent(t *testing.T) {
 		want int
 		path string // the JSON path check must name, for a changed file
 	}{
-		{"1,000 random texts with random removals, and their features, CC8 reveals and draws, pass tools/ledger_ref.py check", doc, 0, ""},
+		{"1,000 random texts with random removals, and their features and draws, pass tools/ledger_ref.py check", doc, 0, ""},
 		{"tools/ledger_ref.py check fails the same commitments with one root byte changed", rootChanged, 1, "commitments[1].root"},
 		{"tools/ledger_ref.py check fails an ok reveal written down as failing on its root", verdictChanged, 1, "reveals[2].verdict"},
 		{"tools/ledger_ref.py check fails a normalized text with a byte added", normalizedChanged, 1, "normalizations[3].normalized"},
 		{"tools/ledger_ref.py check fails a feature map whose prompt class was changed", fChanged, 1, "features[0].f"},
 		{"tools/ledger_ref.py check fails a draw with two drawn turns swapped", drawChanged, 1, fmt.Sprintf("draws[%d].drawn", drawn)},
 		{"tools/ledger_ref.py check fails a Jaccard pair with its match count changed", jaccardChanged, 1, "jaccard[1].matches"},
-		{"tools/ledger_ref.py check fails an ok CC8 reveal written down as failing on its sketch", shingleChanged, 1, "shingle_reveals[0].verdict"},
 		{"tools/ledger_ref.py check fails a CHALLENGE_K size changed", kChanged, 1, "challenge_k[3].k"},
 	}
 	for _, c := range cases {
@@ -526,38 +520,6 @@ func randomContent(t *testing.T) contentVectorsFile {
 			doc.Features = append(doc.Features, featureVec{KDev: kDev, RType: 0x13, PromptClass: &class, F: rfJSON})
 		}
 
-		if i%3 == 1 {
-			// The CC8 reveal the client sends with the text's reveal,
-			// which removed the tokens of spans.
-			removed := []int{}
-			for _, sp := range spans {
-				for j := sp.First; j < sp.First+sp.Count; j++ {
-					removed = append(removed, j)
-				}
-			}
-			kind, entries := fk.ShingleReveal(text, removed)
-			v, at, unexplained := features.VerifyShingleReveal(*f.MH, entries, len(removed) > 0)
-			if v != features.ShingleOK || len(removed) == 0 && unexplained != 0 {
-				t.Fatalf("text %d: pkg/ledger's own CC8 reveal gets %s at entry %d, %d places unexplained", i, v, at, unexplained)
-			}
-			doc.ShingleReveals = append(doc.ShingleReveals, shingleRevealVec{MH: f.MH.Bytes(), Kind: kind,
-				Removed: len(removed) > 0, KDev: kDev, Text: &textHex, RemovedTokens: &removed, Entries: entries,
-				Verdict: v, Unexplained: &unexplained})
-			if len(entries) > 0 {
-				// One entry dropped: a sketch error unless its value set
-				// no minimum, or spans were removed. Whatever pkg/ledger
-				// says, the reference must say too.
-				j := rng.IntN(len(entries))
-				dropped := append(append([]features.ShingleEntry{}, entries[:j]...), entries[j+1:]...)
-				sv := shingleRevealVec{Note: "one entry dropped", MH: f.MH.Bytes(), Kind: kind, Removed: len(removed) > 0, Entries: dropped}
-				var u int
-				sv.Verdict, _, u = features.VerifyShingleReveal(*f.MH, dropped, sv.Removed)
-				if sv.Verdict == features.ShingleOK {
-					sv.Unexplained = &u
-				}
-				doc.ShingleReveals = append(doc.ShingleReveals, sv)
-			}
-		}
 	}
 	for i := 0; i < 8; i++ {
 		commit("long agent message", 0x04, longMessage(rng), false)

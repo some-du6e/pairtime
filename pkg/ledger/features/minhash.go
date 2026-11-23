@@ -37,28 +37,6 @@ func (k ShingleKind) String() string {
 	return fmt.Sprintf("shingle kind 0x%02x", byte(k))
 }
 
-// MarshalText returns "word3" or "char5", the names a CC8 reveal gives its
-// shingles' kind (spec 10.8).
-func (k ShingleKind) MarshalText() ([]byte, error) {
-	if k != Word3 && k != Char5 {
-		return nil, fmt.Errorf("features: %s has no name", k)
-	}
-	return []byte(k.String()), nil
-}
-
-// UnmarshalText reads "word3" or "char5".
-func (k *ShingleKind) UnmarshalText(text []byte) error {
-	switch string(text) {
-	case "word3":
-		*k = Word3
-	case "char5":
-		*k = Char5
-	default:
-		return fmt.Errorf("features: %q isn't word3 or char5", text)
-	}
-	return nil
-}
-
 // Shingles returns the shingles of normalized words (spec 10.5, SM 8.5):
 // the word 3-shingles when there are six or more words, and otherwise the
 // character 5-shingles of the normalized text. A normalized text of one to
@@ -121,7 +99,7 @@ func EmptySketch() Sketch {
 
 // MinHashValues returns the 64 MinHash values of one shingle: value 8k + r
 // is bytes 4r to 4r+3 of SHA-256(0x05 || v || u8(k)), big-endian, for k
-// and r from 0 to 7 (spec 10.5). CC8 recomputes them from revealed values.
+// and r from 0 to 7 (spec 10.5).
 func MinHashValues(v ShingleValue) Sketch {
 	var out Sketch
 	var in [1 + 32 + 1]byte
