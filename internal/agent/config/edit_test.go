@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -142,6 +143,12 @@ func TestSetMode(t *testing.T) {
 			want: "mode = \"online\"\n# mine\n[http]\nport = 8123\n\n[server]\nurl = \"" + server + "\"\n",
 		},
 		{
+			name: "a [server] header on the file's last line, with no line break after it, gets the url under it",
+			file: "mode = \"local\"\n[server]",
+			set:  online,
+			want: "mode = \"online\"\n[server]\nurl = \"" + server + "\"\n",
+		},
+		{
 			name: "a [server] table without url gets one under its header",
 			file: "mode = \"local\"\n\n[server]\n# where to link\n",
 			set:  online,
@@ -275,6 +282,11 @@ func TestSetKeepText(t *testing.T) {
 		set     func(name string) error
 		want    string
 		wantErr string
+		notErr  string // what the error mustn't say
+		// rewritten is set when the file must be written again, as a new
+		// file a watch sees, though its bytes stay the same, and same when
+		// it must be left alone.
+		rewritten, same bool
 	}{
 		{name: "off in the default file changes only the switch's line", file: defaultFile, set: off, want: offDefault},
 		{name: "on after off changes the line back", file: offDefault, set: on, want: defaultFile},
@@ -309,7 +321,37 @@ func TestSetKeepText(t *testing.T) {
 			set:  off,
 			want: "[notifications]\nkeep_prompt_text = true\n\n[privacy]\nkeep_prompt_text = false\n",
 		},
-		{name: "a file that already says so is left alone", file: "[privacy]\nkeep_prompt_text = false\n", set: off, want: "[privacy]\nkeep_prompt_text = false\n"},
+		{name: "on in a file that already says so leaves it alone", file: "[privacy]\nkeep_prompt_text = true\n", set: on, want: "[privacy]\nkeep_prompt_text = true\n", same: true},
+		{
+			name: "off in a file that already says so writes it again, so a running agent reads it and tries again to delete the text",
+			file: "[privacy]\nkeep_prompt_text = false\n", set: off, want: "[privacy]\nkeep_prompt_text = false\n", rewritten: true,
+		},
+		{
+			name: "a [privacy] header on the file's last line, with no line break after it, gets the switch under it",
+			file: "mode = \"local\"\n[privacy]",
+			set:  off,
+			want: "mode = \"local\"\n[privacy]\nkeep_prompt_text = false\n",
+		},
+		{
+			name: "a file that starts with a byte order mark keeps it, and the [privacy] on its first line is found",
+			file: "\ufeff[privacy]\nkeep_prompt_text = true\n",
+			set:  off,
+			want: "\ufeff[privacy]\nkeep_prompt_text = false\n",
+		},
+		{
+			name: "a [privacy] made of dotted keys at the top of the file gets the switch beside them, and no header",
+			file: "mode = \"local\"\nprivacy.prompt_text_days = 30\n[http]\nport = 0\n",
+			set:  off,
+			want: "mode = \"local\"\nprivacy.prompt_text_days = 30\nprivacy.keep_prompt_text = false\n[http]\nport = 0\n",
+		},
+		{
+			name:    "a switch in an inline table isn't changed, and the error says to change it where it is, not to add lines",
+			file:    "privacy = { keep_prompt_text = true }\n",
+			set:     off,
+			want:    "privacy = { keep_prompt_text = true }\n",
+			wantErr: "change keep_prompt_text to false where",
+			notErr:  "add the lines",
+		},
 		{
 			name:    "a file with [privacy] twice, as the two lines added to this version's file give, isn't changed, and the error says what to write",
 			file:    defaultFile + "[privacy]\nkeep_prompt_text = false\n",
@@ -318,11 +360,10 @@ func TestSetKeepText(t *testing.T) {
 			wantErr: "set keep_prompt_text = false under [privacy]",
 		},
 		{
-			name:    "a switch set as a dotted key isn't rewritten into a second table",
-			file:    "privacy.keep_prompt_text = true\n",
-			set:     off,
-			want:    "privacy.keep_prompt_text = true\n",
-			wantErr: "by hand",
+			name: "a switch set as a dotted key at the top of the file is changed where it is",
+			file: "privacy.keep_prompt_text = true # mine\n",
+			set:  off,
+			want: "privacy.keep_prompt_text = false # mine\n",
 		},
 		{
 			name:    "a switch written twice in different case isn't changed, since pairtime can't tell which one counts",
@@ -335,8 +376,13 @@ func TestSetKeepText(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			name := filepath.Join(t.TempDir(), "config.toml")
+			var before os.FileInfo
 			if tt.file != "" {
 				if err := os.WriteFile(name, []byte(tt.file), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				if before, err = os.Stat(name); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -346,6 +392,8 @@ func TestSetKeepText(t *testing.T) {
 				t.Fatalf("error %v", err)
 			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
 				t.Fatalf("error %v, want one containing %q", err, tt.wantErr)
+			case tt.notErr != "" && strings.Contains(err.Error(), tt.notErr):
+				t.Errorf("error %v says %q", err, tt.notErr)
 			}
 			got, err := os.ReadFile(name)
 			if err != nil {
@@ -353,6 +401,48 @@ func TestSetKeepText(t *testing.T) {
 			}
 			if string(got) != tt.want {
 				t.Errorf("config.toml is\n%q\nwant\n%q", got, tt.want)
+			}
+			after, err := os.Stat(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.rewritten && os.SameFile(before, after) {
+				t.Error("config.toml wasn't written again")
+			}
+			if tt.same && !os.SameFile(before, after) {
+				t.Error("config.toml was written again")
+			}
+		})
+	}
+}
+
+// TestSetKeepTextReadOnly runs keep-text on a config.toml in a folder this
+// user can't write, as a link into a read-only dotfiles tree is.
+func TestSetKeepTextReadOnly(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a folder this user can't write")
+	}
+	tests := []struct {
+		name    string
+		keep    bool
+		wantErr bool
+	}{
+		{name: "off in a file that already says so succeeds, since the file says it, though writing it again fails", keep: false},
+		{name: "on in a file that says off fails, since the file can't change", keep: true, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			name := filepath.Join(dir, "config.toml")
+			if err := os.WriteFile(name, []byte("[privacy]\nkeep_prompt_text = false\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dir, 0o500); err != nil {
+				t.Fatal(err)
+			}
+			defer os.Chmod(dir, 0o700)
+			if err := SetKeepText(name, tt.keep); (err != nil) != tt.wantErr {
+				t.Errorf("SetKeepText = %v, want an error: %v", err, tt.wantErr)
 			}
 		})
 	}

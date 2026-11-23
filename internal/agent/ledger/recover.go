@@ -24,14 +24,42 @@ import (
 
 // batchesFile is batches.seg as read back.
 type batchesFile struct {
-	chain    chainPayload
-	rows     []rowPayload // rows[i] is batch i + 1
+	chain chainPayload
+	// base is the first batch the file keeps: batch 1, whose first record
+	// is s = 1 and whose prev is zero(32), unless a base frame names a
+	// later one (Writer.Sweep). A sweep that drops every row names the
+	// batch to be sealed next, which then has no row yet.
+	base     basePayload
+	based    bool         // the file has a base frame
+	rows     []rowPayload // rows[i] is batch base.B + i
 	receipts map[uint64]ledger.Receipt
 	// good is where the file stops holding whole frames: its size, or the
 	// offset of a frame a crash or power cut tore.
 	good int64
 	torn bool
 }
+
+// basePayload is a base frame's payload: the first batch batches.seg keeps,
+// the number of its first record, and H_(b-1), which the chain from it
+// takes as given, as ledger-v1 9 step 1 takes a run that starts later
+// (docs/errata/2026-11-20-batches-retention.md).
+type basePayload struct {
+	B        uint64      `json:"b"`
+	FirstSeq uint64      `json:"first_seq"`
+	Prev     ledger.Hash `json:"prev"`
+}
+
+// row returns the row of batch b, when the file keeps it.
+func (bf *batchesFile) row(b uint64) (rowPayload, bool) {
+	if b < bf.base.B || b-bf.base.B >= uint64(len(bf.rows)) {
+		return rowPayload{}, false
+	}
+	return bf.rows[b-bf.base.B], true
+}
+
+// last returns the number of the last batch the file has a row for, and
+// base.B - 1 when it has none.
+func (bf *batchesFile) last() uint64 { return bf.base.B + uint64(len(bf.rows)) - 1 }
 
 // damaged returns an error wrapping ErrDamaged.
 func damaged(format string, args ...any) error {
@@ -53,7 +81,7 @@ func readBatchesFile(name string) (*batchesFile, error) {
 		return nil, err
 	}
 	defer f.Close()
-	bf := &batchesFile{receipts: map[uint64]ledger.Receipt{}}
+	bf := &batchesFile{base: basePayload{B: 1, FirstSeq: 1}, receipts: map[uint64]ledger.Receipt{}}
 	fr := newFrameReader(f, 0)
 	for i := 0; ; i++ {
 		fm, err := fr.next()
@@ -92,17 +120,32 @@ func readBatchesFile(name string) (*batchesFile, error) {
 			if err := json.Unmarshal(fm.payload, &bf.chain); err != nil {
 				return nil, damaged("%s's chain frame: %v", batchesName, err)
 			}
-			if bf.chain.V != chainVersion || !isKeyID(bf.chain.KeyID) || !isOpaqueKey(bf.chain.DeviceID) {
-				return nil, damaged("%s's chain frame isn't version %d's", batchesName, chainVersion)
+			if v := bf.chain.V; v != chainVersion && v != chainVersionBase || !isKeyID(bf.chain.KeyID) || !isOpaqueKey(bf.chain.DeviceID) {
+				return nil, damaged("%s's chain frame is of version %d, which this pairtime doesn't read", batchesName, bf.chain.V)
 			}
+		case kindBase:
+			// Right after a chain frame of the version that has one,
+			// written with it and the rows after it in one atomic rename
+			// (Writer.Sweep).
+			if i != 1 || bf.chain.V != chainVersionBase {
+				return nil, damaged("%s has a base frame at offset %d, which isn't right after a chain frame of version %d", batchesName, fm.off, chainVersionBase)
+			}
+			var base basePayload
+			if err := json.Unmarshal(fm.payload, &base); err != nil {
+				return nil, damaged("%s's base frame: %v", batchesName, err)
+			}
+			if base.B == 0 || base.FirstSeq == 0 || (base.B == 1) != (base.FirstSeq == 1) || (base.B == 1) != (base.Prev == ledger.Hash{}) {
+				return nil, damaged("%s's base frame names batch %d from record %d, which no chain has", batchesName, base.B, base.FirstSeq)
+			}
+			bf.base, bf.based = base, true
 		case kindBatch:
 			var rp rowPayload
 			if err := json.Unmarshal(fm.payload, &rp); err != nil {
 				return nil, damaged("%s, offset %d: %v", batchesName, fm.off, err)
 			}
-			if want := uint64(len(bf.rows)) + 1; rp.B != want || rp.N == 0 || rp.LastSeq != rp.FirstSeq+rp.N-1 ||
+			if want := bf.last() + 1; rp.B != want || rp.N == 0 || rp.LastSeq != rp.FirstSeq+rp.N-1 ||
 				(len(bf.rows) > 0 && (rp.FirstSeq != bf.rows[len(bf.rows)-1].LastSeq+1 || rp.Prev != bf.rows[len(bf.rows)-1].Head)) ||
-				(len(bf.rows) == 0 && rp.FirstSeq != 1) {
+				(len(bf.rows) == 0 && (rp.FirstSeq != bf.base.FirstSeq || rp.Prev != bf.base.Prev)) {
 				return nil, damaged("%s, offset %d: the row of batch %d doesn't follow the one before", batchesName, fm.off, rp.B)
 			}
 			if ledger.BatchHead(rp.Prev, rp.Root, rp.N, rp.B) != rp.Head {
@@ -115,7 +158,7 @@ func readBatchesFile(name string) (*batchesFile, error) {
 				return nil, damaged("%s, offset %d: %v", batchesName, fm.off, err)
 			}
 			sig, err := hex.DecodeString(r.Signature)
-			if err != nil || len(sig) != ledger.SignatureSize || r.B == 0 || r.B > uint64(len(bf.rows)) {
+			if _, ok := bf.row(r.B); err != nil || len(sig) != ledger.SignatureSize || !ok {
 				return nil, damaged("%s, offset %d: a receipt that doesn't fit a batch", batchesName, fm.off)
 			}
 			rc := ledger.Receipt{ReceivedAt: r.ReceivedAt}
@@ -124,6 +167,11 @@ func readBatchesFile(name string) (*batchesFile, error) {
 		default:
 			return nil, damaged("%s has a %q frame at offset %d", batchesName, fm.kind, fm.off)
 		}
+	}
+	if bf.chain.V == chainVersionBase && !bf.based {
+		// The sweep writes the base frame in the same atomic rename as the
+		// chain frame.
+		return nil, damaged("%s's chain frame is of version %d and no base frame follows it", batchesName, chainVersionBase)
 	}
 	return bf, nil
 }
@@ -187,6 +235,11 @@ func (w *Writer) recover() error {
 	if err := w.finishArchives(); err != nil {
 		return err
 	}
+	// A rewrite of batches.seg that a crash cut short leaves its temporary
+	// file, with rows and receipts nothing reads (Writer.Sweep).
+	if err := removeTemps(w.dir); err != nil {
+		return err
+	}
 	name := filepath.Join(w.dir, batchesName)
 	bf, err := readBatchesFile(name)
 	switch {
@@ -224,7 +277,7 @@ func (w *Writer) recover() error {
 	if err := w.ownChain(bf.chain.DeviceID); err != nil {
 		return err
 	}
-	w.device, w.created = bf.chain.DeviceID, bf.chain.Created
+	w.device, w.created, w.base = bf.chain.DeviceID, bf.chain.Created, bf.base.B
 	if w.batches, err = openAppend(name, false); err != nil {
 		return err
 	}
@@ -235,7 +288,7 @@ func (w *Writer) recover() error {
 			return err
 		}
 	}
-	restored, err := w.scan(bf.rows)
+	restored, err := w.scan(bf)
 	if err != nil {
 		return err
 	}
@@ -303,7 +356,7 @@ func (w *Writer) newChain() error {
 	if err := w.keyUnused(); err != nil {
 		return err
 	}
-	w.device, w.created = newDeviceID(), w.now().UnixMilli()
+	w.device, w.created, w.base = newDeviceID(), w.now().UnixMilli(), 1
 	payload, err := json.Marshal(chainPayload{V: chainVersion, DeviceID: w.device, KeyID: w.keyID, Created: w.created})
 	if err != nil {
 		return err
@@ -457,20 +510,33 @@ func (p position) before(q position) bool {
 // Anywhere else, the files are damaged. Reading starts at the newest seal
 // frame that holds the prompt classes' questions (questionRows); the
 // records before the last row's end are read only to rebuild those.
-func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
+//
+// A retention sweep deletes the oldest segments, those of rows it keeps
+// for the uploads too (Writer.Sweep), so the segment where the last row's
+// batch ends may be gone, with every one before it: reading then starts at
+// the first segment after it. With no row, as after a sweep that dropped
+// every batch, the base frame names the next batch, and the records and
+// seals of the dropped batches the kept segments still hold come before
+// its records and are passed over.
+func (w *Writer) scan(bf *batchesFile) ([]rowPayload, error) {
 	days, err := segments(w.dir)
 	if err != nil {
 		return nil, err
 	}
+	rows := bf.rows
 	var start, from, snap position
-	next, b, head := uint64(1), uint64(0), ledger.Hash{}
+	next, b, head := bf.base.FirstSeq, bf.base.B-1, bf.base.Prev
 	lastLocal := false
+	// skip is set while what comes first in the segments may be a batch a
+	// sweep dropped with every row.
+	skip := false
 	if n := len(rows); n > 0 {
 		last := rows[n-1]
 		start, next, b, head, snap = last.End, last.LastSeq+1, last.B, last.Head, last.Snap
 		lastLocal = !last.online()
 		w.until, w.sealed = last.until(), last.SealedAt
-		if !slices.Contains(days, start.Seg) {
+		if !slices.Contains(days, start.Seg) && len(days) > 0 && days[0] < start.Seg {
+			// A sweep deletes the oldest segments only.
 			return nil, damaged("batch %d ends in the segment of %s, which isn't there", last.B, start.Seg)
 		}
 		from = rows[max(0, n-questionRows)].Start
@@ -491,12 +557,23 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 	} else if len(days) > 0 {
 		start = position{Seg: days[0]}
 		from = start
-	} else {
+		skip = bf.based
+		// The row that said in which mode the batch before the base was
+		// sealed is gone, so it counts as local-only: the next batch sealed
+		// online then takes the mark, unless something of a local-only
+		// stretch is still on its way (Batch.Back).
+		lastLocal = bf.based
+	}
+	// The first segment from from's on: one a sweep deleted holds nothing
+	// to read.
+	first, _ := slices.BinarySearch(days, from.Seg)
+	if first == len(days) {
+		w.next, w.b, w.head, w.snap, w.lastLocal = next, b, head, snap, lastLocal || len(rows) == 0 && bf.based
 		return nil, nil
 	}
 	var restored []rowPayload
 	keyChecked := false
-	for i := slices.Index(days, from.Seg); i < len(days); i++ {
+	for i := first; i < len(days); i++ {
 		day, newest := days[i], i == len(days)-1
 		f, err := openAppend(segPath(w.dir, day), false)
 		if err != nil {
@@ -562,6 +639,10 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 				if sealed {
 					continue
 				}
+				if skip && rec.Header.Seq() < next {
+					continue // a record of a batch the sweep dropped
+				}
+				skip = false
 				if s := rec.Header.Seq(); s != next {
 					f.close()
 					return nil, damaged("the segment of %s has record %d where record %d belongs", day, s, next)
@@ -577,6 +658,14 @@ func (w *Writer) scan(rows []rowPayload) ([]rowPayload, error) {
 				}
 				if sealed {
 					continue
+				}
+				if skip {
+					var sp struct {
+						B uint64 `json:"b"`
+					}
+					if json.Unmarshal(fm.payload, &sp) == nil && sp.B <= b {
+						continue // the seal of a batch the sweep dropped
+					}
 				}
 				rp, err := w.sealFrame(fm.payload, b, head, end)
 				if err != nil {

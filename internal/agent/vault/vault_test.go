@@ -939,3 +939,193 @@ func TestPermissions(t *testing.T) {
 		})
 	}
 }
+
+func TestSweep(t *testing.T) {
+	cases := []struct {
+		name string
+		run  func(t *testing.T, dir string, v *Vault)
+	}{
+		{
+			name: "texts of the days before textFrom and paths of the days before pathsFrom go, and the rest stays",
+			run: func(t *testing.T, dir string, v *Vault) {
+				v.Keep(day1, 1, []byte("one"), []string{"a.go"})
+				v.Keep(day2, 2, []byte("two"), []string{"b.go"})
+				v.Keep(day3, 3, []byte("three"), []string{"c.go"})
+				n, err := v.Sweep(day2, day3)
+				if err != nil || n != 3 {
+					t.Fatalf("Sweep = %d, %v; want 3: day 1's text and both days' paths before day 3", n, err)
+				}
+				for s, want := range map[uint64]bool{1: false, 2: true, 3: true} {
+					_, err := text(t, v, s, map[uint64]string{1: "one", 2: "two", 3: "three"}[s])
+					if got := err == nil; got != want {
+						t.Errorf("Text(%d) kept %v (%v), want %v", s, got, err, want)
+					}
+				}
+				for s, p := range map[uint64]string{1: "a.go", 2: "b.go", 3: "c.go"} {
+					_, err := v.Paths(s, hunks(t, p))
+					if got := err == nil; got != (s == 3) {
+						t.Errorf("Paths(%d) kept %v (%v), want %v", s, got, err, s == 3)
+					}
+				}
+				if days, _ := segments(dir); !slices.Equal(days, []string{day2, day3}) {
+					t.Errorf("files %q, want day 1's gone", days)
+				}
+			},
+		},
+		{
+			name: "the files of another key in old/ lose theirs by the same days, and its directory goes once empty",
+			run: func(t *testing.T, dir string, v *Vault) {
+				v.Close()
+				other, _ := open(t, dir, 2, keyB, 1, true)
+				other.Keep(day1, 1, []byte("old one"), nil)
+				other.Keep(day3, 2, []byte("old three"), nil)
+				other.Close()
+				v, _ = open(t, dir, 1, keyA, 1, true)
+				if _, err := v.Sweep(day2, day2); err != nil {
+					t.Fatal(err)
+				}
+				if days, _ := segments(filepath.Join(dir, oldDir, keyB)); !slices.Equal(days, []string{day3}) {
+					t.Errorf("old/%s keeps %q, want %q", keyB, days, day3)
+				}
+				if _, err := v.Sweep("2026-12-01", "2026-12-01"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(filepath.Join(dir, oldDir, keyB)); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("old/%s is still there: %v", keyB, err)
+				}
+			},
+		},
+		{
+			name: "with no Vault open, SweepDir deletes what Sweep would, without the key",
+			run: func(t *testing.T, dir string, v *Vault) {
+				v.Keep(day1, 1, []byte("one"), []string{"a.go"})
+				v.Keep(day2, 2, []byte("two"), []string{"b.go"})
+				v.Keep(day3, 3, []byte("three"), []string{"c.go"})
+				v.Close()
+				n, err := SweepDir(dir, day2, day3)
+				if err != nil || n != 3 {
+					t.Fatalf("SweepDir = %d, %v; want 3: day 1's text and both days' paths before day 3", n, err)
+				}
+				v, _ = open(t, dir, 1, keyA, 4, true)
+				for s, want := range map[uint64]bool{1: false, 2: true, 3: true} {
+					_, err := text(t, v, s, map[uint64]string{1: "one", 2: "two", 3: "three"}[s])
+					if got := err == nil; got != want {
+						t.Errorf("Text(%d) kept %v (%v), want %v", s, got, err, want)
+					}
+				}
+				if _, err := v.Paths(3, hunks(t, "c.go")); err != nil {
+					t.Errorf("Paths(3): %v", err)
+				}
+			},
+		},
+		{
+			name: "SweepDir sweeps another key's files by the key their heads name, those in old/ too",
+			run: func(t *testing.T, dir string, v *Vault) {
+				v.Close()
+				other, _ := open(t, dir, 2, keyB, 1, true)
+				other.Keep(day1, 1, []byte("old one"), nil)
+				other.Keep(day3, 2, []byte("old three"), nil)
+				other.Close()
+				if _, err := SweepDir(dir, day2, day2); err != nil {
+					t.Fatal(err)
+				}
+				if days, _ := segments(dir); !slices.Equal(days, []string{day3}) {
+					t.Errorf("files %q, want %q", days, day3)
+				}
+				// Set aside to old/ by an Open of this key, then swept there.
+				v, _ = open(t, dir, 1, keyA, 1, true)
+				v.Close()
+				if _, err := SweepDir(dir, "2026-12-01", "2026-12-01"); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(filepath.Join(dir, oldDir, keyB)); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("old/%s is still there: %v", keyB, err)
+				}
+			},
+		},
+		{
+			name: "a rewrite's temporary file a crash left in old/ goes with the next sweep",
+			run: func(t *testing.T, dir string, v *Vault) {
+				v.Close()
+				other, _ := open(t, dir, 2, keyB, 1, true)
+				other.Keep(day3, 1, []byte("old three"), nil)
+				other.Close()
+				v, _ = open(t, dir, 1, keyA, 1, true)
+				tmp := filepath.Join(dir, oldDir, keyB, "."+day3+segSuffix+".tmp-5")
+				if err := os.WriteFile(tmp, []byte("sealed entries"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := v.Sweep(day1, day1); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(tmp); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("the temporary file is still there: %v", err)
+				}
+			},
+		},
+		{
+			name: "with no Vault open, DropTextDir deletes every text in the vault's own files, and keeps the paths and old/'s files",
+			run: func(t *testing.T, dir string, v *Vault) {
+				v.Keep(day1, 1, []byte("old one"), nil)
+				v.Close()
+				// This key's Open sets the other key's file aside in old/.
+				other, _ := open(t, dir, 2, keyB, 1, true)
+				other.Keep(day2, 1, []byte("two"), []string{"b.go"})
+				other.Keep(day3, 2, []byte("three"), nil)
+				other.Close()
+				n, err := DropTextDir(dir)
+				if err != nil || n != 2 {
+					t.Fatalf("DropTextDir = %d, %v; want the 2 texts of the vault's own files", n, err)
+				}
+				if days, _ := segments(filepath.Join(dir, oldDir, keyA)); !slices.Equal(days, []string{day1}) {
+					t.Errorf("old/%s keeps %q, want %q", keyA, days, day1)
+				}
+				if days, _ := segments(dir); !slices.Equal(days, []string{day2}) {
+					t.Errorf("files %q, want %s's, which keeps its paths", days, day2)
+				}
+				other, _ = open(t, dir, 2, keyB, 3, true)
+				if _, err := other.Text(1, commit(t, 2, 1, "two")); !errors.Is(err, ErrNotKept) {
+					t.Errorf("Text(1): %v, want ErrNotKept", err)
+				}
+				key, err := testKeys(t, 2).Features().Path("b.go")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got, err := other.Paths(1, []features.Hunk{{P: key, OS: 1, OL: 1, NS: 1, NL: 2}}); err != nil || !slices.Equal(got, []string{"b.go"}) {
+					t.Errorf("Paths(1) = %q, %v", got, err)
+				}
+			},
+		},
+		{
+			name: "DropTextDir with no vault directory yet deletes nothing",
+			run: func(t *testing.T, dir string, v *Vault) {
+				if n, err := DropTextDir(filepath.Join(dir, "none")); err != nil || n != 0 {
+					t.Errorf("DropTextDir = %d, %v", n, err)
+				}
+			},
+		},
+		{
+			name: "SweepDir with no vault directory yet deletes nothing",
+			run: func(t *testing.T, dir string, v *Vault) {
+				if n, err := SweepDir(filepath.Join(dir, "none"), day1, day1); err != nil || n != 0 {
+					t.Errorf("SweepDir = %d, %v", n, err)
+				}
+			},
+		},
+		{
+			name: "a sweep refuses a day that isn't one",
+			run: func(t *testing.T, dir string, v *Vault) {
+				if _, err := v.Sweep("today", day1); err == nil {
+					t.Error("Sweep took today")
+				}
+			},
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			v, _ := open(t, dir, 1, keyA, 1, true)
+			tt.run(t, dir, v)
+		})
+	}
+}

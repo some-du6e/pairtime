@@ -37,9 +37,13 @@ type rowIndex struct {
 	device string // the chain's device id
 	// created is when the chain began, in Unix ms, 0 when unknown.
 	created int64
-	times   []rowTime // times[i] is batch i + 1
-	first   uint64    // queue[0]'s batch, when queue isn't empty
-	queue   []ledger.Row
+	// base is the batch times[0] is: the first batch the ledger keeps,
+	// which is batch 1 until a retention sweep drops the oldest
+	// (ledger.ChainInfo.Base), and 0 also means 1 (start).
+	base  uint64
+	times []rowTime // times[i] is batch start() + i
+	first uint64    // queue[0]'s batch, when queue isn't empty
+	queue []ledger.Row
 	// lastHead is the newest batch's H_b, the prev of the next one.
 	lastHead pkgledger.Hash
 }
@@ -51,7 +55,9 @@ func loadRows(dir string, keep uint64) (*rowIndex, error) {
 	if err != nil {
 		return nil, err
 	}
-	ix := &rowIndex{device: info.DeviceID, created: info.Created.UnixMilli()}
+	// With no row, as after a sweep that dropped every one, the batch
+	// sealed next links to the head before the base.
+	ix := &rowIndex{device: info.DeviceID, created: info.Created.UnixMilli(), base: info.Base, lastHead: info.Prev}
 	for _, r := range rows {
 		if err := ix.add(r); err != nil {
 			return nil, err
@@ -61,8 +67,15 @@ func loadRows(dir string, keep uint64) (*rowIndex, error) {
 	return ix, nil
 }
 
-// last returns the number of the newest batch the index holds.
-func (ix *rowIndex) last() uint64 { return uint64(len(ix.times)) }
+// start returns the number of the first batch the index holds times for.
+func (ix *rowIndex) start() uint64 { return max(ix.base, 1) }
+
+// last returns the number of the newest batch the index holds, start() - 1
+// when it holds none.
+func (ix *rowIndex) last() uint64 { return ix.start() + uint64(len(ix.times)) - 1 }
+
+// at returns batch b's times. The caller checks holdsRow(b).
+func (ix *rowIndex) at(b uint64) *rowTime { return &ix.times[b-ix.start()] }
 
 // add takes the row of the batch after the newest one the index holds.
 func (ix *rowIndex) add(r ledger.Row) error {
@@ -120,7 +133,7 @@ func (ix *rowIndex) sealedAt(b uint64) (int64, bool) {
 	if !ix.holdsRow(b) {
 		return 0, false
 	}
-	return ix.times[b-1].sealed, true
+	return ix.at(b).sealed, true
 }
 
 // localUntil returns when config.toml was last known to say local-only
@@ -130,12 +143,12 @@ func (ix *rowIndex) localUntil(b uint64) (int64, bool) {
 	if !ix.holdsRow(b) {
 		return 0, false
 	}
-	return ix.times[b-1].localUntil, true
+	return ix.at(b).localUntil, true
 }
 
 // holdsRow reports whether the device has a batch b, whether or not the
 // index still holds its row.
-func (ix *rowIndex) holdsRow(b uint64) bool { return b >= 1 && b <= ix.last() }
+func (ix *rowIndex) holdsRow(b uint64) bool { return b >= ix.start() && b <= ix.last() }
 
 // row returns batch b's row while the index holds it.
 func (ix *rowIndex) row(b uint64) (ledger.Row, bool) {
@@ -147,8 +160,15 @@ func (ix *rowIndex) row(b uint64) (ledger.Row, bool) {
 
 // received records batch b's receipt time, in Unix ms.
 func (ix *rowIndex) received(b uint64, at int64) {
-	if b >= 1 && b <= ix.last() {
-		ix.times[b-1].received, ix.times[b-1].unchecked = at, false
+	if ix.holdsRow(b) {
+		ix.at(b).received, ix.at(b).unchecked = at, false
+	}
+}
+
+// forgetReceipt forgets batch b's receipt time.
+func (ix *rowIndex) forgetReceipt(b uint64) {
+	if ix.holdsRow(b) {
+		ix.at(b).received, ix.at(b).unchecked = 0, false
 	}
 }
 
@@ -156,15 +176,15 @@ func (ix *rowIndex) received(b uint64, at int64) {
 // uploader couldn't check, which reads its minutes until a checked one
 // comes.
 func (ix *rowIndex) receivedUnchecked(b uint64, at int64) {
-	if b >= 1 && b <= ix.last() && ix.times[b-1].received == 0 {
-		ix.times[b-1].received, ix.times[b-1].unchecked = at, true
+	if ix.holdsRow(b) && ix.at(b).received == 0 {
+		ix.at(b).received, ix.at(b).unchecked = at, true
 	}
 }
 
 // unchecked reports whether batch b's receipt time is from a receipt the
 // uploader couldn't check.
 func (ix *rowIndex) unchecked(b uint64) bool {
-	return b >= 1 && b <= ix.last() && ix.times[b-1].unchecked
+	return ix.holdsRow(b) && ix.at(b).unchecked
 }
 
 // forgetReceipts forgets every receipt time: they came from another
@@ -178,10 +198,10 @@ func (ix *rowIndex) forgetReceipts() {
 // receivedAt returns when the server received batch b, by its receipt, and
 // false while the device holds none.
 func (ix *rowIndex) receivedAt(b uint64) (int64, bool) {
-	if b < 1 || b > ix.last() || ix.times[b-1].received == 0 {
+	if !ix.holdsRow(b) || ix.at(b).received == 0 {
 		return 0, false
 	}
-	return ix.times[b-1].received, true
+	return ix.at(b).received, true
 }
 
 // sealedAfter returns the first batch sealed at or after t, in Unix ms,
@@ -191,7 +211,7 @@ func (ix *rowIndex) sealedAfter(t int64) (uint64, bool) {
 	if i == len(ix.times) {
 		return 0, false
 	}
-	return uint64(i) + 1, true
+	return uint64(i) + ix.start(), true
 }
 
 // reading is what a minute's witness reading rests on besides the rows:
@@ -272,7 +292,7 @@ func witnessOf(ix *rowIndex, minute int64, batch uint64, r reading) (event.Witne
 	if !ok || batch <= b || batch > ix.last() {
 		return w, ok
 	}
-	wb, ok := r.of(ix, batch, ix.times[batch-1].sealed)
+	wb, ok := r.of(ix, batch, ix.at(batch).sealed)
 	if !ok {
 		return "", false
 	}
@@ -295,7 +315,7 @@ func (ix *rowIndex) refused(start, end int64, b uint64) bool {
 		return false
 	}
 	for k := first; k <= b; k++ {
-		if got, ok := ix.receivedAt(k); ok && min(end, ix.times[k-1].sealed)-got > refusedAhead {
+		if got, ok := ix.receivedAt(k); ok && min(end, ix.at(k).sealed)-got > refusedAhead {
 			return true
 		}
 	}
@@ -320,7 +340,7 @@ func (r reading) of(ix *rowIndex, b uint64, due int64) (event.Witness, bool) {
 		}
 		return "", false
 	}
-	sealed := ix.times[b-1].sealed
+	sealed := ix.at(b).sealed
 	switch {
 	case due-got > refusedAhead:
 		return event.Backfilled, true

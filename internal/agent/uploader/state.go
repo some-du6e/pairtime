@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
@@ -462,11 +463,62 @@ func waitedOut(spans []span, sealed, lag int64) bool {
 // after reading the rows, so they read the same minutes.
 func (st saved) prepare(rows *rowIndex) {
 	if st.Foreign > 0 {
-		for b := max(st.Next, 1); b <= min(st.Foreign, rows.last()); b++ {
-			rows.times[b-1].received, rows.times[b-1].unchecked = 0, false
+		for b := max(st.Next, rows.start()); b <= min(st.Foreign, rows.last()); b++ {
+			rows.forgetReceipt(b)
 		}
 	}
 	for b, wr := range st.Unchecked {
 		rows.receivedUnchecked(b, int64(wr.ReceivedAt))
+	}
+}
+
+// HeldFrom returns the first batch whose row the ledger in ledgerDir keeps
+// for the uploads while this computer is linked, whatever its age, by the
+// uploader's place in st (Writer.Sweep's floor;
+// docs/errata/2026-11-23-unsent-batches-retention.md): the batch the roots
+// go on from, as the place and the rows' modes say. A sweep keeps the rows
+// from it on, so the server can still link the next root to its head.
+// While the link's first batch isn't stored (Linking), the server takes
+// any batch above its head, so the runs of batches sealed in local-only
+// mode there, which never go, are passed over (settle). It is 0, nothing to
+// keep, once no root of these rows can be stored: after a fork or the
+// server's device_mismatch, which end the chain, and when the roots stop
+// at a batch sealed in local-only mode while not linking (localStop), as
+// they do until a re-link, after which they go on from the first batch
+// sealed then (relink). A place that doesn't read, or is another chain's,
+// counts as a new link's, as load takes it: what the server holds isn't
+// known, so every row from the first one the modes don't pass over stays.
+func HeldFrom(st *state.Store, ledgerDir string) (uint64, error) {
+	rows, err := loadRows(ledgerDir, 0)
+	if err != nil {
+		return 1, err
+	}
+	var s saved
+	if ok, err := st.Get(StateKey, &s); err != nil || !ok || s.Chain != rows.device {
+		s = saved{Chain: rows.device, Linking: true}
+	}
+	if s.Fork != 0 || s.Mismatch {
+		return 0, nil
+	}
+	// The modes of the batches sealed since the place last took one, as
+	// load takes them in before anything of theirs is planned.
+	s.foldModes(rows)
+	b := max(s.Next, s.From, rows.start())
+	for {
+		if s.LocalFrom > 0 && b >= s.LocalFrom {
+			return 0, nil
+		}
+		in := false
+		for _, g := range s.Gaps {
+			if g.From <= b && b <= g.To {
+				b, in = g.To+1, true
+			}
+		}
+		switch {
+		case !in:
+			return b, nil
+		case !s.Linking:
+			return 0, nil
+		}
 	}
 }

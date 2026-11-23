@@ -57,6 +57,9 @@ type Buckets struct {
 
 	mu   sync.Mutex
 	days map[string]*dayFile // the UTC days read so far, by YYYY-MM-DD
+	// kept is the first UTC day a Drop kept, "" before the first: the
+	// files of the days before it are gone.
+	kept string
 }
 
 // dayFile is one day's file, read into memory.
@@ -468,6 +471,60 @@ func (s *Buckets) Forget(before int64) error {
 		delete(s.days, day)
 	}
 	return first
+}
+
+// Drop deletes the files of the UTC days before from, as DESIGN 4.4 keeps
+// the device's minute buckets 180 days (WP-LG6), closing first any it
+// holds open, since Windows deletes no open file, and forgetting what it
+// read of them. The day rollups in days/ stay, which DESIGN 4.4 keeps
+// until the teen deletes them: a local day can span two UTC days' files,
+// so the scorer doesn't write one again that starts before the first day
+// Drop kept (KeptFrom). It returns how many files it deleted.
+func (s *Buckets) Drop(from string) (int, error) {
+	if _, err := time.Parse(time.DateOnly, from); err != nil {
+		return 0, fmt.Errorf("store: %q isn't a UTC day", from)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Set first: a file that doesn't go now is past its period all the
+	// same, and goes at the next Drop.
+	s.kept = max(s.kept, from)
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	var errs []error
+	for _, e := range entries {
+		day, ok := strings.CutSuffix(e.Name(), ".jsonl")
+		if !ok || !e.Type().IsRegular() || day >= from {
+			continue
+		}
+		if _, err := time.Parse(time.DateOnly, day); err != nil {
+			continue
+		}
+		if d, ok := s.days[day]; ok {
+			if d.f != nil {
+				d.f.Close()
+			}
+			delete(s.days, day)
+		}
+		if err := os.Remove(s.path(day)); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		n++
+	}
+	return n, errors.Join(errs...)
+}
+
+// KeptFrom returns the first UTC day the store keeps the minutes of, as
+// the last Drop left it, and "" before any Drop: the minutes of the days
+// before it are gone.
+func (s *Buckets) KeptFrom() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.kept
 }
 
 // Close flushes and closes every open file.
