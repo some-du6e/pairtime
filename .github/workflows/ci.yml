@@ -449,3 +449,42 @@ jobs:
           NEW_VERSION=$(git show HEAD:pkg/score/VERSION 2>/dev/null || true)
           export OLD_VERSION NEW_VERSION SCORE_BASE=HEAD^1 SCORE_HEAD=HEAD
           git -c core.quotePath=false diff --name-status -M HEAD^1 HEAD | bash tools/ci/score_regression.sh
+
+      - name: Ingest fuzz corpus
+        # WP-SV5: FuzzFreeText puts text in every place of every tier-1 item
+        # and wants each item refused that the text doesn't fit. Its seeds
+        # and its checked-in corpus run in go test above too; this runs
+        # them alone and fails unless every corpus file ran and passed, so a
+        # fuzz target that is renamed or moved can't leave its corpus unread.
+        # nightly.yml fuzzes it for 60 s, and an input that fuzzing finds
+        # goes into the corpus with its fix.
+        if: ${{ !cancelled() }}
+        env:
+          CORPUS: internal/server/ingest/testdata/fuzz/FuzzFreeText
+        run: |
+          set +e
+          out=$(go test -count=1 -v -run '^FuzzFreeText$' ./internal/server/ingest 2>&1)
+          code=$?
+          set -e
+          fail=0
+          if [ "$code" -ne 0 ]; then
+            echo "$out"
+            echo "::error::FuzzFreeText failed on its seeds or its corpus"
+            fail=1
+          fi
+          files=0
+          for f in "$CORPUS"/*; do
+            [ -f "$f" ] || continue
+            files=$((files + 1))
+            if ! grep -qF -- "--- PASS: FuzzFreeText/${f##*/} (" <<<"$out"; then
+              echo "::error file=$f::FuzzFreeText didn't run this corpus file, or it failed"
+              fail=1
+            fi
+          done
+          if [ "$files" -eq 0 ]; then
+            echo "::error::$CORPUS holds no corpus files"
+            fail=1
+          fi
+          seeds=$(grep -cF -- "--- PASS: FuzzFreeText/seed#" <<<"$out" || true)
+          echo "FuzzFreeText passed $seeds seeds and ran $files corpus files"
+          exit "$fail"
