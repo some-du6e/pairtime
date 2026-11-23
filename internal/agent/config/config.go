@@ -17,10 +17,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/pkg/score"
 )
 
 // Mode says whether anything leaves the device (DESIGN 4.2).
@@ -99,9 +101,42 @@ type Display struct {
 	// end and whether it goes on (decision D-shadow-scope). So nobody
 	// learns to steer the rules before they are fitted (SM 7.5). The files
 	// in days/ and buckets/ keep every number. Calibration volunteers have
-	// it on from 12-01 until the scoring freeze; it is off for everyone
-	// else.
+	// it on from 12-01 until the scoring freeze, through pairtime install
+	// --calibration-volunteer (SetShadow); it is off for everyone else.
+	// The freeze ends it without a hand edit: once this build's scoring
+	// version is 1.0.0 or later, Parse reads it as off whatever the file
+	// says (Calibrating; DESIGN 6.7 step 4).
 	Shadow bool `toml:"shadow"`
+}
+
+// scoringVersion is the scoring version this build runs, pkg/score's
+// Version. Tests replace it to see what the scoring freeze changes.
+var scoringVersion = score.Version
+
+// Calibrating reports whether pairtime's scoring is still being
+// calibrated: whether the scoring version this build runs, pkg/score's
+// VERSION, is below 1.0.0, which the scoring freeze tags (DESIGN 6.7 step
+// 4). Once it isn't, Parse reads display.shadow as off, and pairtime
+// install --calibration-volunteer has nothing to turn on.
+func Calibrating() bool { return !frozen(scoringVersion()) }
+
+// frozen reports whether the scoring version v is 1.0.0 or later. A
+// scoring version is MAJOR.MINOR.PATCH (SM 7.6), so a MAJOR that isn't 0
+// decides, whatever its length. A v that isn't one, which pkg/score's
+// tests keep out of its VERSION, isn't frozen: display.shadow then stays
+// as the file says, since a freeze nobody tagged must not show a volunteer
+// their time early.
+func frozen(v string) bool {
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" || strings.Trim(p, "0123456789") != "" {
+			return false
+		}
+	}
+	return strings.TrimLeft(parts[0], "0") != ""
 }
 
 // Default is the configuration of a config.toml with nothing in it.
@@ -120,6 +155,20 @@ func Parse(data []byte) (cfg Config, problems []string) {
 // the file isn't TOML or has a value of the wrong type, and Parse ignores
 // it as a whole.
 func parse(data []byte) (cfg Config, problems []string, used bool) {
+	cfg, problems, used = parseAsWritten(data)
+	if !Calibrating() {
+		// The scoring freeze ends shadow mode on every computer at once,
+		// without a hand edit (docs/PLAN.md, WP-IN2). The file keeps its
+		// line, which edited still reads.
+		cfg.Display.Shadow = false
+	}
+	return cfg, problems, used
+}
+
+// parseAsWritten is parse without the scoring freeze: display.shadow is
+// what the file says. edited compares files with it, so that an edit of
+// the line still checks after the freeze.
+func parseAsWritten(data []byte) (cfg Config, problems []string, used bool) {
 	cfg = Default()
 	var file fileConfig
 	md, err := toml.Decode(string(data), &file)

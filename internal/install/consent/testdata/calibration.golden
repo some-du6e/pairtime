@@ -1,0 +1,257 @@
+pairtime install
+
+This is everything pairtime install changes on this computer. Nothing
+changes until you say yes, and pairtime uninstall takes it all back out.
+
+pairtime goes in /home/teen/.local/bin/pairtime.
+It runs in local-only mode: what it records stays on this computer.
+
+AI tools pairtime looked for:
+  Claude Code         found at /home/teen/.claude
+  Cursor              not found
+  GitHub Copilot CLI  not found
+  OpenAI Codex        not found
+  Gemini CLI          not found
+
+[x] 1. Start pairtime when you log in
+
+    pairtime's agent starts in the background each time you log in, so it
+    notices when you build without you starting it.
+
+    Saying no doesn't stop you from using pairtime.
+    Without it, pairtime starts again after you log in only when a hook
+    starts it or you run pairtime agent, so it misses what comes before.
+    You can turn it off any time in your desktop's Startup Applications, or
+    with pairtime uninstall.
+
+    --- /dev/null
+    +++ /home/teen/.config/autostart/pairtime.desktop
+    @@ -0,0 +1,7 @@
+    +[Desktop Entry]
+    +Type=Application
+    +Name=pairtime
+    +Comment=Counts the time you spend building with AI
+    +Exec=/home/teen/.local/bin/pairtime agent
+    +TryExec=/home/teen/.local/bin/pairtime
+    +Terminal=false
+
+[x] 2. Show your time as "calibrating" until pairtime's scoring is final
+
+    You volunteered to help calibrate pairtime, so until its scoring reaches
+    version 1.0.0, when its rules are fitted and frozen, pairtime today,
+    recap, statusline and the local dashboard show your time as
+    "calibrating". They keep the agent's time, your moments and the loops
+    pairtime caught, and leave out everything your time could be worked out
+    from, so nobody learns to steer the rules before they are fitted.
+    pairtime still counts all of your time, and its files on this computer
+    keep every number.
+
+    Saying no doesn't stop you from using pairtime.
+    Without it, pairtime shows your time as its rules count it now, before
+    they are fitted.
+    You can turn it off any time with shadow = false under [display] in
+    config.toml. It turns off by itself once pairtime's scoring reaches
+    1.0.0.
+
+    --- /home/teen/.config/pairtime/config.toml
+    +++ /home/teen/.config/pairtime/config.toml
+    @@ -2,4 +2,4 @@
+     
+     [display]
+     # ***
+    -shadow = false
+    +shadow = true
+
+[x] 3. Add pairtime's hooks to Claude Code
+
+    Claude Code runs pairtime hook when a session starts or ends, when you
+    send a prompt, and when its agent stops, asks you something, edits a
+    file, runs a command or starts a subagent, so pairtime knows when you
+    prompt and when the agent works. pairtime's hooks go after the hooks
+    already there, which stay as they are.
+    Each hook call adds a moment to Claude Code's turn: a test call just now
+    took 12 ms.
+
+    Saying no doesn't stop you from using pairtime.
+    Without them, pairtime doesn't see your Claude Code prompts, and time it
+    can't see isn't credited.
+    You can take them out any time with pairtime uninstall.
+
+    --- /dev/null
+    +++ /home/teen/.claude/settings.json
+    @@ -0,0 +1,175 @@
+    +{
+    +  "hooks": {
+    +    "SessionStart": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "SessionStart"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "UserPromptSubmit": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "UserPromptSubmit"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "Stop": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "Stop"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "StopFailure": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "StopFailure"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "Notification": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "Notification"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "PermissionRequest": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "PermissionRequest"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "PostToolUse": [
+    +      {
+    +        "matcher": "Edit|Write|Bash",
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "PostToolUse"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "SubagentStart": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "SubagentStart"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "SubagentStop": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "SubagentStop"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "SessionEnd": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "SessionEnd"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ]
+    +  }
+    +}
