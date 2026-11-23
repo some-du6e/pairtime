@@ -3,8 +3,7 @@
 // Package ingest is pairtimed's signed ingest: POST /api/v1/ingest/batches,
 // GET /api/v1/ingest/state and GET /api/v1/time, as
 // docs/spec/ingest-v1.md specifies them, whose section numbers the comments
-// cite (WP-SV4, and the shape half of WP-SV5's firewall; DESIGN 3.6, 3.10,
-// 4.3 and 4.5).
+// cite (WP-SV4 and WP-SV5; DESIGN 3.6, 3.10, 4.3 and 4.5).
 //
 // A request is checked in the spec's order, 2.5: the device token, the
 // device, the signed headers' forms, the clock, the raw body's size and
@@ -24,7 +23,10 @@
 // else is refused for that item with a 422 code naming the field, never
 // the value, so free text can't reach the database through a field
 // (DESIGN 4.3's "never in it" column; SP 8.2). The server stores what it
-// parsed, encoded again, and never the bytes a client sent.
+// parsed, encoded again, and never the bytes a client sent. The tests hold
+// the allowlist to DESIGN 4.3's tier-1 list and put free text in every
+// place of every item, the request path and the stored rows included
+// (firewall_test.go).
 //
 // A device's counter and chain head live on WP-SV3's devices row, which
 // ingest reads and writes only through device.Store inside its own writer

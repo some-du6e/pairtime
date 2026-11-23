@@ -33,8 +33,9 @@ func shapeErr(code, field string) *itemErr {
 func refused(status int, code string) *itemErr { return &itemErr{status: status, code: code} }
 
 // The members each item may have, required and optional (ingest-v1 2.3).
-// TestAllowlist checks the bucket's and the slot's against
-// event.Tier1BucketFields and event.Tier1SlotFields, agent_only
+// TestAllowlist checks each against DESIGN 4.3's tier-1 list and ingest-v1
+// 2.3's tables, and the bucket's and the slot's against
+// event.Tier1BucketFields and event.Tier1SlotFields too, agent_only
 // (D-bucket-agent-only) included.
 var (
 	batchRequired   = []string{"b", "n", "R_b", "H_b", "prev"}

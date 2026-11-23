@@ -1,6 +1,6 @@
 # Ingest wire format, version 1
 
-Status: the contract between `pairtimed`'s ingest (WP-SV4, and the shape half of WP-SV5's firewall) and the client's uploader (WP-AG5). Changing it needs both sides; an uploader that needs a change says so in its PR, and the orchestrator settles it.
+Status: the contract between `pairtimed`'s ingest (WP-SV4 and WP-SV5) and the client's uploader (WP-AG5). Changing it needs both sides; an uploader that needs a change says so in its PR, and the orchestrator settles it.
 
 This is how a pairtime client sends tier-1 data to `pairtimed`: `POST /api/v1/ingest/batches`, `GET /api/v1/ingest/state` and `GET /api/v1/time`. DESIGN 4.3 says what tier 1 holds and what never crosses the network, DESIGN 4.5 how a request is signed and what the firewall refuses, and DESIGN 3.6 with docs/spec/ledger-v1.md sections 6 and 7 what a batch root and a receipt are. This file fixes the bytes: every header, the signed message, the JSON of the body and of each response, the order of the checks, and a machine-readable code for each refusal. Section 7 lists what it decides that DESIGN leaves open.
 
@@ -101,6 +101,8 @@ The gzip member holds one JSON object with up to four members, each optional. An
 `batches`, `buckets` and `commits` are arrays, and `labels` is an object. Any other member, a member of another JSON type, or a member that appears twice refuses the whole request with `body_shape` (2.6). An empty object is a valid body: it moves the counter and stores nothing.
 
 Inside an item, every member is in the allowlist below with its JSON type and, for a string, the one form it may take. A member the allowlist doesn't have, a missing required member, a string of any other form and a number out of range each refuse that item, with the item codes of 2.9; the rest of the request goes on. No string anywhere can hold free text: each is a key, an enum value, a hash or HMAC, a version, or a time of fixed form (DESIGN 4.5; SP 8.2). An item must not repeat a member name in any of its objects, maps included: one that does is refused as `bad_rule`, naming the object (2.9), where `encoding/json` alone would keep the last value. The server stores what it parsed, re-encoded, never the bytes it received.
+
+The tables of 2.3.1 to 2.3.4, with the objects their rows spell inline, are the allowlist, and a member an item may go without is marked optional. `internal/server/ingest`'s `TestAllowlist` fails when they, the server's allowlist and DESIGN 4.3's tier-1 list don't name the same members, and its firewall tests put free text in every member they list, so a change here comes with the server's in one PR.
 
 #### 2.3.1 Batch roots
 
