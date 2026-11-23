@@ -234,8 +234,8 @@ func TestClearData(t *testing.T) {
 			want:  []string{"notes.txt"},
 		},
 		{
-			name:  "through a link, only what pairtime puts in its directories goes, and what else the folder holds stays",
-			files: []string{"ledger/2026-11-20.seg", "state.json", "state.json.bad", ".state.json.tmp-123", "keys/keystore.json", "commits/2026-11-21.jsonl", "account.json", "account/agent.lock", "outbox.json", "uploads.jsonl", "notes.txt", "photos/cat.jpg"},
+			name:  "through a link, only what pairtime puts in its directories goes, the project names the server showed included, and what else the folder holds stays",
+			files: []string{"ledger/2026-11-20.seg", "state.json", "state.json.bad", ".state.json.tmp-123", "keys/keystore.json", "commits/2026-11-21.jsonl", "account.json", "account/agent.lock", "outbox.json", "uploads.jsonl", "project-names.json", ".project-names.json.tmp-7", "notes.txt", "photos/cat.jpg"},
 			link:  true,
 			want:  []string{"notes.txt", "photos", "photos/cat.jpg"},
 		},

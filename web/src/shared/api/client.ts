@@ -66,6 +66,10 @@ export interface Client<Paths> {
 		path: P,
 		init?: { body?: unknown; signal?: AbortSignal },
 	): Promise<Result<SuccessBody<Operation<Paths, P, 'post'>>>>;
+	put<P extends PathsFor<Paths, 'put'>>(
+		path: P,
+		init?: { params?: PathParams; body?: unknown; signal?: AbortSignal },
+	): Promise<Result<SuccessBody<Operation<Paths, P, 'put'>>>>;
 }
 
 export interface ClientOptions {
@@ -166,6 +170,9 @@ export function createClient<Paths>(options: ClientOptions = {}): Client<Paths> 
 		},
 		post<P extends PathsFor<Paths, 'post'>>(path: P, init?: { body?: unknown; signal?: AbortSignal }) {
 			return call<SuccessBody<Operation<Paths, P, 'post'>>>('POST', path, undefined, undefined, init?.body, init?.signal);
+		},
+		put<P extends PathsFor<Paths, 'put'>>(path: P, init?: { params?: PathParams; body?: unknown; signal?: AbortSignal }) {
+			return call<SuccessBody<Operation<Paths, P, 'put'>>>('PUT', path, init?.params, undefined, init?.body, init?.signal);
 		},
 	};
 	return client;

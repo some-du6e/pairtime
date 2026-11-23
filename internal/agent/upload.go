@@ -12,11 +12,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/adapters/git"
 	"github.com/some-du6e/pairtime/internal/agent/account"
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/internal/agent/projects"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -496,11 +498,76 @@ func (a *agent) publishWriter(w *ledger.Writer) {
 }
 
 // reloadConfig is the config watch's reload: config.toml as the agent's
-// settings, and its mode for the ledger writer.
+// settings, and its mode for the ledger writer. The uploader wakes, so a
+// project name turned on or off there goes to the server at once
+// (D-owner-names).
 func (a *agent) reloadConfig() {
 	a.loadConfig(false)
 	a.noteMode()
 	a.applyPrivacy()
+	if u := a.upload.Load(); u != nil {
+		u.Wake()
+	}
+}
+
+// namesOn is the uploader's Names: the project names config.toml turns on,
+// read from the file itself at each call, as uploads read it
+// (UploadConfig). A config.toml with an error says nothing, so no name
+// changes on the server until it's fixed; it keeps the computer local-only
+// meanwhile anyway.
+func (a *agent) namesOn() (map[string]string, bool) {
+	cfg, broken := UploadConfig(a.dirs)
+	if broken != "" {
+		return nil, false
+	}
+	return cfg.NamesOn(), true
+}
+
+// hideName is the uploader's HideName: it turns off in config.toml the
+// name of a project the owner hid on their dashboard.
+func (a *agent) hideName(key string) error {
+	return config.HideName(a.dirs.ConfigFile(), key)
+}
+
+// ownKeys is the uploader's OwnKeys: the keys of the projects this
+// computer has seen, from the git adapter's project map in memory
+// (OwnKeys).
+func (a *agent) ownKeys() map[string]bool {
+	var m git.ProjectMap
+	if a.state != nil {
+		if _, err := a.state.Get(projectsKey, &m); err != nil {
+			a.log.Warn("the project map in state.json doesn't read, so names go only for the projects of the last two days' rollups", "err", err)
+		}
+	}
+	own, err := OwnKeys(a.dirs, m, a.zone())
+	if err != nil {
+		a.log.Warn("a day's rollup doesn't read, so a name for one of its projects may wait", "err", err)
+	}
+	return own
+}
+
+// OwnKeys returns the keys of the projects this computer has seen, which a
+// project name may go for (project-names-v1 2): the git adapter's project
+// map m's keys, and each key one of its repos had before, and the keys in
+// today's and yesterday's rollups in dirs, today being in zone, which hold
+// a folder without git too. An older project the server holds minutes of
+// has a code from the server, which the uploader takes as well, so it
+// reads no more days. The error is a rollup that doesn't read, whose keys
+// are then left out.
+func OwnKeys(dirs home.Dirs, m git.ProjectMap, zone *time.Location) (map[string]bool, error) {
+	own := make(map[string]bool)
+	for _, r := range m.Repos {
+		own[r.Key] = true
+		for _, key := range r.Aliases {
+			own[key] = true
+		}
+	}
+	today := time.Now().In(zone).Format(time.DateOnly)
+	keys, err := projects.DayKeys(dirs.Days(), projects.Dates(today, 2))
+	for _, key := range keys {
+		own[key] = true
+	}
+	return own, err
 }
 
 // uploadMode is config.toml's mode as uploads obey it, for GET /v1/status.
@@ -651,6 +718,9 @@ func (a *agent) startUploader(w *ledger.Writer) func() {
 		Started:   a.started,
 		Sched:     a.sched,
 		Flush:     flush,
+		Names:     a.namesOn,
+		HideName:  a.hideName,
+		OwnKeys:   a.ownKeys,
 		Problem:   func(msg string) { a.setProblem("uploader", msg) },
 		Log:       a.log.With("component", "uploader"),
 	})

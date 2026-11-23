@@ -49,8 +49,20 @@ func KeySigner(key ed25519.PrivateKey) Signer {
 // || "\n" || time || "\n" || hex(SHA-256(raw body)), with req and time in
 // decimal ASCII and the hex lowercase (ingest-v1 2.2).
 func message(deviceID string, req uint64, unixMS int64, bodyHash string) []byte {
-	m := make([]byte, 0, len(signContext)+len(deviceID)+1+20+1+20+1+len(bodyHash))
-	m = append(m, signContext...)
+	return signedMessage(signContext, deviceID, req, unixMS, bodyHash)
+}
+
+// namesMessage returns M_names = "pairtime-project-names-v1\n" ||
+// device_id || "\n" || req || "\n" || time || "\n" || hex(SHA-256(raw
+// body)): M with the names context (project-names-v1 1.2).
+func namesMessage(deviceID string, req uint64, unixMS int64, bodyHash string) []byte {
+	return signedMessage(namesContext, deviceID, req, unixMS, bodyHash)
+}
+
+// signedMessage is M, and M_names, for the context string that starts it.
+func signedMessage(context, deviceID string, req uint64, unixMS int64, bodyHash string) []byte {
+	m := make([]byte, 0, len(context)+len(deviceID)+1+20+1+20+1+len(bodyHash))
+	m = append(m, context...)
 	m = append(m, deviceID...)
 	m = append(m, '\n')
 	m = strconv.AppendUint(m, req, 10)
@@ -122,10 +134,21 @@ type signed struct {
 // sign signs the raw body whose hash is bodyHash as request req at
 // unixMS.
 func sign(s Signer, deviceID string, req uint64, unixMS int64, hash string) (signed, error) {
+	return signMessage(s, message(deviceID, req, unixMS, hash), req, unixMS)
+}
+
+// signNames signs a names request's raw body whose hash is hash as request
+// req at unixMS, over M_names.
+func signNames(s Signer, deviceID string, req uint64, unixMS int64, hash string) (signed, error) {
+	return signMessage(s, namesMessage(deviceID, req, unixMS, hash), req, unixMS)
+}
+
+// signMessage signs m, the message of request req at unixMS.
+func signMessage(s Signer, m []byte, req uint64, unixMS int64) (signed, error) {
 	if s == nil {
 		return signed{}, errors.New("uploader: no device key to sign with")
 	}
-	sig, err := s(message(deviceID, req, unixMS, hash))
+	sig, err := s(m)
 	if err != nil {
 		return signed{}, fmt.Errorf("uploader: signing the request: %w", err)
 	}

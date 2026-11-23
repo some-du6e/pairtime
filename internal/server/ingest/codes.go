@@ -39,6 +39,12 @@ const (
 	CodeCounterStale            = "counter_stale"
 	CodeRateLimited             = "rate_limited"
 	CodeUnavailable             = "unavailable"
+
+	// project-names-v1 1.5's codes for a names request.
+	CodeTooManyNames    = "too_many_names"
+	CodeProjectInvalid  = "project_invalid"
+	CodeProjectRepeated = "project_repeated"
+	CodeLabelInvalid    = "label_invalid"
 )
 
 // refusals gives each request code its status.
@@ -72,6 +78,10 @@ var refusals = map[string]int{
 	CodeCounterStale:            http.StatusConflict,
 	CodeRateLimited:             http.StatusTooManyRequests,
 	CodeUnavailable:             http.StatusServiceUnavailable,
+	CodeTooManyNames:            http.StatusRequestEntityTooLarge,
+	CodeProjectInvalid:          http.StatusUnprocessableEntity,
+	CodeProjectRepeated:         http.StatusUnprocessableEntity,
+	CodeLabelInvalid:            http.StatusUnprocessableEntity,
 }
 
 // The codes of one item's result, ingest-v1 2.9. The shape codes come

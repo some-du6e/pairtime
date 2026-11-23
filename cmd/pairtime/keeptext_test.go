@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -45,7 +46,7 @@ func TestPrivacyKeepText(t *testing.T) {
 				if file != older+"\n[privacy]\nkeep_prompt_text = false\n" {
 					t.Errorf("config.toml is %q", file)
 				}
-				if want := (config.Config{Mode: config.Local, Privacy: config.Privacy{TextOff: true}}); cfg != want {
+				if want := (config.Config{Mode: config.Local, Privacy: config.Privacy{TextOff: true}}); !reflect.DeepEqual(cfg, want) {
 					t.Errorf("config.toml gives %+v, want %+v", cfg, want)
 				}
 			},
@@ -78,7 +79,7 @@ func TestPrivacyKeepText(t *testing.T) {
 			name: "with no config.toml yet, it writes the default with the switch off",
 			args: []string{"off"},
 			check: func(t *testing.T, cfg config.Config, file, out, errOut string) {
-				if want := (config.Config{Mode: config.Local, Privacy: config.Privacy{TextOff: true}}); cfg != want {
+				if want := (config.Config{Mode: config.Local, Privacy: config.Privacy{TextOff: true}}); !reflect.DeepEqual(cfg, want) {
 					t.Errorf("config.toml gives %+v, want %+v", cfg, want)
 				}
 			},

@@ -57,6 +57,33 @@ type fakeIngest struct {
 	lastKey, lastHash string
 	lastResp          []byte
 	replays           int
+
+	// The owner's project names (docs/spec/project-names-v1.md): the
+	// device's names by key, the keys of those the owner hid on the
+	// dashboard, the short code the server gives each of the device's
+	// project keys, which a test sets, and every names request's attempt,
+	// from 1, with its faults: "503", "429", "down", "stale" (another
+	// computer took higher counters), "html" (an answer that isn't
+	// pairtimed's: a proxy's 403 page), "404" (a server without the
+	// endpoint, as an older pairtimed's ServeMux answers),
+	// "label_invalid", "lost" (the server stores the request, then its
+	// answer is lost), "garbled" (it stores it, and its 200 doesn't read)
+	// "stored-502" (it stores it, and a proxy answers 502) and "bodyhash"
+	// (it refuses it as a changed body). namesThen
+	// runs after an attempt, by its number.
+	names       map[string]string
+	namesHidden map[string]bool
+	codes       map[string]string
+	namesPosts  int
+	namesFaults map[int]string
+	namesBodies [][]byte // the inflated body of every signed names attempt
+	namesThen   map[int]func()
+	// namesEarly counts the names requests that came before the server
+	// held any batch of the device's.
+	namesEarly int
+	// counters are the X-Pairtime-Req of every signed POST, uploads and
+	// names alike, in the order they came.
+	counters []uint64
 }
 
 type fakeRow struct {
@@ -75,7 +102,7 @@ func newFakeIngest(device, token string, devKey ed25519.PublicKey) *fakeIngest {
 	return &fakeIngest{
 		device: device, token: token, devKey: devKey, key: key, keyID: hex.EncodeToString(sum[:8]),
 		now: time.Now, faults: map[int]string{}, rows: map[uint64]fakeRow{}, buckets: map[int64]event.MinuteBucket{},
-		witness: map[event.Witness]int{},
+		witness: map[event.Witness]int{}, names: map[string]string{}, namesHidden: map[string]bool{}, codes: map[string]string{}, namesFaults: map[int]string{},
 	}
 }
 
@@ -113,6 +140,8 @@ func (f *fakeIngest) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.state(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/ingest/batches":
 		f.batches(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/projects/names":
+		f.projectNames(w, r)
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -260,6 +289,9 @@ func (f *fakeIngest) batches(w http.ResponseWriter, r *http.Request) {
 	if !ed25519.Verify(f.devKey, []byte(m), sig) {
 		f.refuse(w, 401, "signature_invalid")
 		return
+	}
+	if req, err := strconv.ParseUint(reqS, 10, 64); err == nil {
+		f.counters = append(f.counters, req)
 	}
 	br := bytes.NewReader(raw)
 	zr, err := gzip.NewReader(br)

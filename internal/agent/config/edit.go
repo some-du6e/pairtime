@@ -3,9 +3,11 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net"
 	"net/url"
 	"os"
@@ -14,10 +16,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/pkg/projectname"
 )
 
 // CheckServerURL checks the base URL of a pairtime server and returns it
@@ -144,18 +149,96 @@ func SetKeepText(name string, keep bool) error {
 	return rewrite(name, !keep, byHand, func(text string) string { return patchPrivacy(text, keep) }, func(c *Config) { c.Privacy.TextOff = !keep })
 }
 
+// ShowName turns on the name of the project key in the config.toml at
+// name, with label, which projectname.ValidLabel must take: its
+// [projects.<key>] table gets name = label and online = true, and is added
+// at the end of the file when there is none. HideName turns it off: online
+// = false, with the name kept, so turning it on again can show the same
+// label; a project with no table has no name on, and HideName leaves the
+// file as it is. pairtime projects show-name and hide-name, the local
+// dashboard's Projects page and the uploader, when the owner hid a name on
+// their dashboard, call them (D-owner-names).
+//
+// Both change only those lines, the way SetOnline does: comments, order,
+// line endings and every other setting stay byte for byte, a symlinked
+// config.toml stays one, a missing file is written from the default
+// first, and a file they can't change that way, such as one that doesn't
+// parse or one whose project is an inline table, is left alone with an
+// error that says what to write.
+func ShowName(name, key, label string) error {
+	switch {
+	case !IsProjectKey(key):
+		return fmt.Errorf("config: %q isn't a project's key", key)
+	case !projectname.ValidLabel(label):
+		return fmt.Errorf("config: %q isn't a name pairtime can show", label)
+	}
+	byHand := func(name, _ string) string {
+		return fmt.Sprintf("set name = %s and online = true under [projects.%s] in %s by hand", tomlString(label), key, name)
+	}
+	return rewrite(name, false, byHand, func(text string) string {
+		return patchProject(text, key, []projectLine{{"name", tomlString(label)}, {"online", "true"}})
+	}, func(c *Config) {
+		c.Projects[key] = Project{Name: label, Online: true}
+	})
+}
+
+// HideName turns off the name of the project key in the config.toml at
+// name (ShowName).
+func HideName(name, key string) error {
+	if !IsProjectKey(key) {
+		return fmt.Errorf("config: %q isn't a project's key", key)
+	}
+	byHand := func(name, _ string) string {
+		return fmt.Sprintf("set online = false under [projects.%s] in %s by hand", key, name)
+	}
+	return rewrite(name, false, byHand, func(text string) string {
+		return patchProject(text, key, []projectLine{{"online", "false"}})
+	}, func(c *Config) {
+		if p, ok := c.Projects[key]; ok {
+			p.Online = false
+			c.Projects[key] = p
+		}
+	})
+}
+
 // bom is the byte order mark some editors start a UTF-8 file with, which
 // TOML allows.
 const bom = "\ufeff"
 
+// editMu serializes this process's edits of config.toml, as the
+// uploader turning off a name hidden on the dashboard while the local API
+// turns another on (rewrite).
+var editMu sync.Mutex
+
+// beforeReplace runs, when set, after rewrite has made its new text and
+// before it reads the file again: a test's other writer.
+var beforeReplace func(name string)
+
+// LockName is the file whose lock every pairtime process holds while it
+// changes config.toml (rewrite). It sits beside config.toml, in pairtime's
+// config directory, and stays there.
+const LockName = "config.lock"
+
+// lockWait is how long an edit waits for another process's edit to end.
+var lockWait = 5 * time.Second
+
 // rewrite changes the config.toml at name with change, and writes it only
-// when it then parses to what it did before with set's change and nothing
-// else, as SetOnline says, and when that changed it, or, as best it can,
-// when always is set.
-// change gets the text without its byte order mark, which the file keeps.
-// byHand says what to write by hand in the file it names, which holds
-// text, for an error.
-func rewrite(name string, always bool, byHand func(name, text string) string, change func(text string) string, set func(*Config)) error {
+// when it then parses to what it did before with apply's change and
+// nothing else, as SetOnline says, and when that changed it, or, as best
+// it can, when always is set. change gets the text without its byte order
+// mark, which the file keeps. byHand says what to write by hand in the
+// file it names, which holds text, for an error.
+//
+// It holds editMu, for this process's edits, and config.lock's lock, for
+// every other pairtime process's, as `pairtime projects show-name` beside
+// the running agent, from its read to its rename, so neither change undoes
+// the other. It also reads the file again just before it replaces it, and
+// starts over from the new text when it changed meanwhile, as an editor's
+// save does, which takes no lock.
+func rewrite(name string, always bool, byHand func(name, text string) string, change func(text string) string, apply func(*Config)) error {
+	editMu.Lock()
+	defer editMu.Unlock()
+	lock := filepath.Join(filepath.Dir(name), LockName)
 	if fi, err := os.Lstat(name); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
 		target, err := filepath.EvalSymlinks(name)
 		if err != nil {
@@ -163,22 +246,81 @@ func rewrite(name string, always bool, byHand func(name, text string) string, ch
 		}
 		name = target
 	}
+	release, lockErr := home.LockFile(lock, lockWait)
+	if errors.Is(lockErr, home.ErrBusy) {
+		return fmt.Errorf("config: pairtime couldn't lock config.toml to change it (%v), so it didn't; try again, or %s", lockErr, byHand(name, ""))
+	}
+	if lockErr != nil {
+		// The lock file can't be made, as in a config directory that
+		// doesn't exist or can't be written, where no other process changes
+		// config.toml either: an edit that changes nothing goes on, and one
+		// that would change it fails.
+		release = func() error { return nil }
+	}
+	defer release()
+	for try := 0; ; try++ {
+		data, err := readEdited(name)
+		if err != nil {
+			return err
+		}
+		hand := byHand(name, string(data))
+		out, err := edited(string(data), hand, change, apply)
+		if err != nil {
+			return err
+		}
+		same := out == string(data)
+		if same && !always {
+			return nil
+		}
+		if lockErr != nil && !same {
+			return fmt.Errorf("config: pairtime couldn't lock config.toml to change it (%v), so it didn't; %s", lockErr, hand)
+		}
+		if beforeReplace != nil {
+			beforeReplace(name)
+		}
+		now, err := readEdited(name)
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(now, data) {
+			err := home.WriteFile(name, []byte(out))
+			if same {
+				// The file says it already, so a write that fails, as in a
+				// folder that can't be written, changes nothing that
+				// matters: a running agent reads it again at its next start.
+				return nil
+			}
+			return err
+		}
+		if try == 2 {
+			return fmt.Errorf("config: config.toml kept changing while pairtime changed it, so it didn't; try again, or %s", hand)
+		}
+	}
+}
+
+// readEdited reads the config.toml at name for an edit: defaultFile when
+// there is none.
+func readEdited(name string) ([]byte, error) {
 	data, err := os.ReadFile(name)
 	if errors.Is(err, fs.ErrNotExist) {
-		data, err = []byte(defaultFile), nil
+		return []byte(defaultFile), nil
 	}
-	if err != nil {
-		return err
-	}
-	text := string(data)
+	return data, err
+}
+
+// edited returns text with change made to it without its byte order mark,
+// which it keeps, once it checked that the result parses to what text
+// parsed to with apply done to it, and to nothing else. hand says what to
+// write by hand instead, for an error.
+func edited(text, hand string, change func(text string) string, apply func(*Config)) (string, error) {
 	if _, err := toml.Decode(text, &fileConfig{}); err != nil {
-		return fmt.Errorf("config: config.toml doesn't parse, so pairtime didn't change it (%v); %s", err, byHand(name, text))
+		return "", fmt.Errorf("config: config.toml doesn't parse, so pairtime didn't change it (%v); %s", err, hand)
 	}
 	if strings.Contains(text, `"""`) || strings.Contains(text, `'''`) {
 		// A multi-line string could hold a line that looks like a key.
-		return fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", byHand(name, text))
+		return "", fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", hand)
 	}
-	before, _ := Parse(data)
+	before, _ := Parse([]byte(text))
 	body, found := strings.CutPrefix(text, bom)
 	out := change(body)
 	if found {
@@ -186,20 +328,18 @@ func rewrite(name string, always bool, byHand func(name, text string) string, ch
 	}
 	after, _ := Parse([]byte(out))
 	want := before
-	set(&want)
+	want.Projects = maps.Clone(before.Projects)
+	if want.Projects == nil {
+		want.Projects = make(map[string]Project)
+	}
+	apply(&want)
+	if len(want.Projects) == 0 {
+		want.Projects = nil
+	}
 	if !reflect.DeepEqual(after, want) {
-		return fmt.Errorf("config: pairtime couldn't change config.toml without changing other settings, so it didn't; %s", byHand(name, text))
+		return "", fmt.Errorf("config: pairtime couldn't change config.toml without changing other settings, so it didn't; %s", hand)
 	}
-	if out == text {
-		if always {
-			// The file says it already, so a write that fails, as in a
-			// folder that can't be written, changes nothing that matters:
-			// a running agent reads it again at its next start.
-			_ = home.WriteFile(name, []byte(out))
-		}
-		return nil
-	}
-	return home.WriteFile(name, []byte(out))
+	return out, nil
 }
 
 // patch rewrites the top-level mode line and the url line of [server],
@@ -258,6 +398,13 @@ func patch(text string, mode Mode, serverURL string) string {
 // one line, it writes whole instead, and edit's check catches anything
 // that changes.
 func setValue(line, value, whole string) string {
+	return setRaw(line, `"`+value+`"`, whole)
+}
+
+// setRaw is setValue for a value already written as TOML, raw, such as a
+// quoted string or true. The old value may be a string on one line, true
+// or false; another one is written whole.
+func setRaw(line, raw, whole string) string {
 	body := strings.TrimRight(line, "\r\n")
 	ending := line[len(body):]
 	eq := strings.IndexByte(body, '=')
@@ -268,28 +415,185 @@ func setValue(line, value, whole string) string {
 	for start < len(body) && (body[start] == ' ' || body[start] == '\t') {
 		start++
 	}
-	end := -1
-	switch {
-	case start < len(body) && body[start] == '"':
+	end := valueEnd(body, start)
+	if end < 0 {
+		return indentOf(line) + whole + ending
+	}
+	return body[:start] + raw + body[end:] + ending
+}
+
+// valueEnd returns where the value that starts at start in a line's body
+// ends, for a string on one line, true or false, or -1 for any other.
+func valueEnd(body string, start int) int {
+	if start >= len(body) {
+		return -1
+	}
+	switch rest := body[start:]; {
+	case rest[0] == '"':
 		for j := start + 1; j < len(body); j++ {
 			if body[j] == '\\' {
 				j++
 				continue
 			}
 			if body[j] == '"' {
-				end = j + 1
-				break
+				return j + 1
 			}
 		}
-	case start < len(body) && body[start] == '\'':
+	case rest[0] == '\'':
 		if j := strings.IndexByte(body[start+1:], '\''); j >= 0 {
-			end = start + 1 + j + 1
+			return start + 1 + j + 1
+		}
+	case strings.HasPrefix(rest, "true"), strings.HasPrefix(rest, "false"):
+		end := start + 4
+		if rest[0] == 'f' {
+			end++
+		}
+		if end == len(body) || body[end] == ' ' || body[end] == '\t' || body[end] == '#' {
+			return end
 		}
 	}
-	if end < 0 {
-		return indentOf(line) + whole + ending
+	return -1
+}
+
+// projectLine is a setting of a project's table and its value, written as
+// TOML.
+type projectLine struct{ key, raw string }
+
+// patchProject sets each of lines in the [projects.<key>] table: it
+// rewrites a setting's line where the table has it, and adds the others
+// just under the table's header. A file with no such table gets one at its
+// end, unless every line turns something off, which a project without a
+// table has off already.
+func patchProject(text, key string, lines []projectLine) string {
+	nl := "\n"
+	if strings.Contains(text, "\r\n") {
+		nl = "\r\n"
 	}
-	return body[:start] + `"` + value + `"` + body[end:] + ending
+	all := strings.SplitAfter(text, "\n")
+	header := -1
+	done := make([]bool, len(lines))
+	in := false
+	for i, line := range all {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "[") {
+			path, ok := tablePath(tableName(t))
+			in = ok && header < 0 && slices.Equal(path, []string{projectsTable, key})
+			if in {
+				header = i
+			}
+			continue
+		}
+		if !in {
+			continue
+		}
+		for j, l := range lines {
+			if !done[j] && isKey(t, l.key) {
+				all[i] = setRaw(line, l.raw, l.key+" = "+l.raw)
+				done[j] = true
+			}
+		}
+	}
+	var add []string
+	for j, l := range lines {
+		if !done[j] {
+			add = append(add, l.key+" = "+l.raw+nl)
+		}
+	}
+	if header >= 0 {
+		if len(add) == 0 {
+			return strings.Join(all, "")
+		}
+		if !strings.HasSuffix(all[header], "\n") {
+			all[header] += nl
+		}
+		all = append(all[:header+1], append(add, all[header+1:]...)...)
+		return strings.Join(all, "")
+	}
+	turnsOn := false
+	for _, l := range lines {
+		turnsOn = turnsOn || l.raw != "false"
+	}
+	if !turnsOn {
+		return text
+	}
+	out := text
+	if out != "" && !strings.HasSuffix(out, "\n") {
+		out += nl
+	}
+	if out != "" {
+		out += nl
+	}
+	out += "[" + projectsTable + "." + key + "]" + nl
+	for _, l := range lines {
+		out += l.key + " = " + l.raw + nl
+	}
+	return out
+}
+
+// tablePath splits a table's name, as tableName returns it, into its keys:
+// bare ones, and quoted ones without escapes, with blanks around the dots.
+// It reports false for a name it can't split that way, which then matches
+// no table pairtime looks for.
+func tablePath(name string) ([]string, bool) {
+	var path []string
+	rest := strings.TrimSpace(name)
+	for {
+		var part string
+		switch {
+		case rest == "":
+			return nil, false
+		case rest[0] == '"' || rest[0] == '\'':
+			end := strings.IndexByte(rest[1:], rest[0])
+			if end < 0 {
+				return nil, false
+			}
+			part = rest[1 : 1+end]
+			if rest[0] == '"' && strings.ContainsRune(part, '\\') {
+				return nil, false
+			}
+			rest = rest[2+end:]
+		default:
+			end := strings.IndexAny(rest, ". \t")
+			if end < 0 {
+				end = len(rest)
+			}
+			part, rest = rest[:end], rest[end:]
+		}
+		path = append(path, part)
+		rest = strings.TrimLeft(rest, " \t")
+		if rest == "" {
+			return path, true
+		}
+		if rest[0] != '.' {
+			return nil, false
+		}
+		rest = strings.TrimLeft(rest[1:], " \t")
+	}
+}
+
+// tomlString returns s as a TOML basic string: in double quotes, with the
+// quote, the backslash and the control characters TOML doesn't take in one
+// escaped. A label has no control characters (projectname.CleanLabel), so
+// they are escaped only to be safe. Every apostrophe is escaped too, so
+// pairtime never writes three apostrophes in a row itself, which rewrite
+// takes for the start of a multi-line string and refuses to edit after.
+func tomlString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch {
+		case r == '"':
+			b.WriteString(`\"`)
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '\'' || r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, "%cu%04X", '\\', r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 // patchPrivacy rewrites the keep_prompt_text line of [privacy], or the
