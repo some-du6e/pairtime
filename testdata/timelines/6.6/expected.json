@@ -21,12 +21,10 @@
       "bucket_minutes": 1,
       "credited_s": 0,
       "credit": {},
-      "uncredited": null,
-      "codes": ["X.automated"],
+      "uncredited": {"X.no_anchor": 5, "X.automated": 55},
       "agent_running_s": 55,
       "sm": "22:00",
-      "derived": ["agent_running_s"],
-      "erratum": "2026-11-19-sm-6.6-uncredited-codes"
+      "derived": ["agent_running_s"]
     },
     {
       "start": "2026-11-21T16:31:00Z",
@@ -36,12 +34,10 @@
       "bucket_minutes": 1,
       "credited_s": 0,
       "credit": {},
-      "uncredited": null,
-      "codes": ["X.agent_only"],
+      "uncredited": {"X.automated": 60},
       "agent_running_s": 60,
       "sm": "22:01",
-      "derived": ["agent_running_s"],
-      "erratum": "2026-11-19-sm-6.6-uncredited-codes"
+      "derived": ["agent_running_s"]
     },
     {
       "start": "2026-11-21T16:32:00Z",
@@ -51,23 +47,20 @@
       "bucket_minutes": 1,
       "credited_s": 0,
       "credit": {},
-      "uncredited": null,
-      "codes": ["X.agent_only", "X.no_anchor"],
+      "uncredited": {"X.ambiguous": 45, "X.no_anchor": 5, "X.automated": 10},
       "agent_running_s": 10,
       "sm": "22:02",
-      "derived": ["agent_running_s"],
-      "erratum": "2026-11-19-sm-6.6-uncredited-codes"
+      "derived": ["agent_running_s"]
     },
     {
       "start": "2026-11-21T16:33:00Z",
       "minutes": 2,
       "local": "22:03-22:04",
       "bucket": false,
-      "codes": ["X.no_anchor"],
+      "codes": ["X.ambiguous"],
       "sm": "22:03 to 22:04",
       "note": "Nothing is credited and no agent runs while the script sleeps, so these minutes have no bucket (SM 5.1).",
-      "derived": ["bucket"],
-      "erratum": "2026-11-19-sm-6.6-uncredited-codes"
+      "derived": ["bucket"]
     },
     {
       "start": "2026-11-21T16:35:00Z",
@@ -77,12 +70,10 @@
       "bucket_minutes": 1,
       "credited_s": 0,
       "credit": {},
-      "uncredited": null,
-      "codes": ["X.automated"],
+      "uncredited": {"X.no_anchor": 2, "X.automated": 58},
       "agent_running_s": 58,
       "sm": "22:05",
-      "derived": ["agent_running_s"],
-      "erratum": "2026-11-19-sm-6.6-uncredited-codes"
+      "derived": ["agent_running_s"]
     },
     {
       "start": "2026-11-21T16:36:00Z",
@@ -92,20 +83,18 @@
       "bucket_minutes": 135,
       "credited_s": 0,
       "credit": {},
-      "uncredited": null,
-      "codes": ["X.automated", "X.agent_only", "X.no_anchor"],
+      "uncredited": {"X.ambiguous": 2550, "X.no_anchor": 158, "X.automated": 5392},
       "agent_running_s": 5548,
       "sm": "22:06 to 01:59",
       "note": "47 more iterations. Minutes in which the script only sleeps have no bucket.",
-      "derived": ["agent_running_s", "bucket_minutes"],
-      "erratum": "2026-11-19-sm-6.6-uncredited-codes"
+      "derived": ["agent_running_s", "bucket_minutes", "uncredited"]
     }
   ],
   "totals": {
     "credited_s": 0,
     "credited_by_project": {},
     "credited_by_reason": {},
-    "uncredited": {},
+    "uncredited": {"X.ambiguous": 2595, "X.no_anchor": 170, "X.automated": 5575},
     "agent_running_s": 5731,
     "agent_only_s": 5731
   },
@@ -117,11 +106,11 @@
     "prompt_spacing_sd_s": {"about": 75, "sm": "and a standard deviation near 75 s"},
     "burstiness": {"about": -0.6, "sm": "so burstiness B is about -0.6, past the -0.5 line"}
   },
-  "errata": ["2026-11-19-sm-6.6-uncredited-codes"],
+  "errata": [],
   "notes": [
-    "SM gives each minute's codes but not their seconds, and its rules don't decide the split; see the erratum. The rows pin what SM does decide: nothing is credited, which minutes have a bucket and how long the agent runs in each.",
+    "Each uncredited second takes SM 5.2's first code with SM 2.5's slot focus. A slot the terminal spent mostly hosting the run's session is the project's: X.automated while claude runs, X.no_anchor before it starts or after it exits. Every other slot hosts no harness and is X.ambiguous (SM 3.2), 156 s of the runs included.",
     "evidence is the machine's level, B: Windows without the key counter. Nothing is credited, because headless prompts never count on such a machine (SM 2.2 rule 4).",
-    "agent_only_s is all 5731 s the agent ran, since nothing is credited.",
+    "agent_only_s is all 5731 s the agent ran, whatever code its seconds carry (SM 5.3), since nothing is credited.",
     "This fixture's 49 prompts are spaced 297.5 s apart on average with a standard deviation of 78.0 s, so B is -0.58; its agent events replay to 11073 s under min(gap, 120 s)."
   ]
 }
