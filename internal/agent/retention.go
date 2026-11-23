@@ -8,6 +8,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/retention"
+	"github.com/some-du6e/pairtime/internal/agent/sched"
 )
 
 // sweepEvery is how often the agent looks whether a retention sweep is due:
@@ -34,7 +35,12 @@ func (a *agent) startRetention(lw *ledger.Writer) func() {
 	kick := make(chan struct{}, 1)
 	a.sweepKick.Store(&kick)
 	stop, done := make(chan struct{}), make(chan struct{})
-	job := a.sched.Every("retention.sweep", sweepEvery, func(time.Time) { a.kickSweep(false) })
+	// An agent a test builds may have no scheduler: it sweeps at the start
+	// and when [privacy] changes.
+	var job *sched.Job
+	if a.sched != nil {
+		job = a.sched.Every("retention.sweep", sweepEvery, func(time.Time) { a.kickSweep(false) })
+	}
 	go func() {
 		defer close(done)
 		last := "" // the UTC day of the last sweep
@@ -54,7 +60,9 @@ func (a *agent) startRetention(lw *ledger.Writer) func() {
 	}()
 	return func() {
 		a.sweepKick.Store(nil)
-		job.Stop()
+		if job != nil {
+			job.Stop()
+		}
 		close(stop)
 		<-done
 	}

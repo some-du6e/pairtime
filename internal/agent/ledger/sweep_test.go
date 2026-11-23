@@ -4,7 +4,7 @@ package ledger
 
 import (
 	"bytes"
-	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,14 +18,17 @@ import (
 // sweepDayMS is a day in Unix milliseconds.
 const sweepDayMS = 24 * 3600 * 1000
 
-// writeDays writes a prompt a day on each of n UTC days from testT on,
-// sealing each day's batch, and returns the days and the batches.
+// writeDays writes a presence sample a day on each of n UTC days from
+// testT on, sealing each day's batch, and returns the days and the
+// batches. A presence sample, unlike a prompt, doesn't seal at once, so
+// each Seal here seals it.
 func writeDays(t *testing.T, w *Writer, c *clock, n int) (days []string, batches []uint64) {
 	t.Helper()
+	rng := rand.New(rand.NewPCG(uint64(n), 11))
 	for i := range n {
 		at := testT + int64(i)*sweepDayMS
 		c.set(at)
-		if _, err := w.Write(prompt(fmt.Sprintf("prompt %d", i), 0)); err != nil {
+		if _, err := w.Write(sampleInput(rng, "os.presence", at, "", "")); err != nil {
 			t.Fatal(err)
 		}
 		b, ok, err := w.Seal()
@@ -205,20 +208,22 @@ func TestSweep(t *testing.T) {
 				days, _ := writeDays(t, w, c, 1)
 				// Batch 2's record is written on the second day and sealed on
 				// the third, so its seal frame starts the third day's segment.
+				// A presence sample doesn't seal at once, as a prompt would.
 				c.set(testT + sweepDayMS)
-				if _, err := w.Write(prompt("late at night", 0)); err != nil {
+				rng := rand.New(rand.NewPCG(5, 6))
+				if _, err := w.Write(sampleInput(rng, "os.presence", testT+sweepDayMS, "", "")); err != nil {
 					t.Fatal(err)
 				}
 				c.set(testT + 2*sweepDayMS)
 				if _, _, err := w.Seal(); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := w.Write(prompt("the next morning", 0)); err != nil {
+				if _, err := w.Write(sampleInput(rng, "os.presence", testT+2*sweepDayMS, "", "")); err != nil {
 					t.Fatal(err)
 				}
-				b3, _, err := w.Seal()
-				if err != nil {
-					t.Fatal(err)
+				b3, ok, err := w.Seal()
+				if err != nil || !ok {
+					t.Fatalf("sealing the third day: %v, %v", ok, err)
 				}
 				third := dayOf(time.UnixMilli(testT + 2*sweepDayMS))
 				days = append(days, dayOf(time.UnixMilli(testT+sweepDayMS)), third)

@@ -122,7 +122,7 @@ type fixture struct {
 	v     *vault.Vault
 	b     *store.Buckets
 	// per day: the prompt's number and text, the edit's number and path,
-	// and the day's batch
+	// and the day's first batch
 	prompt, edit, batch map[string]uint64
 	text, path          map[string]string
 	// others are files no sweep of this package touches, by path.
@@ -151,6 +151,10 @@ func newFixture(t *testing.T, now time.Time, days int) *fixture {
 		hook := func() event.Envelope {
 			return envOf(at, "s_1", "p_web", event.SourceHook, event.ViaHook, event.HarnessClaudeCode, "2.1.327")
 		}
+		// A prompt seals at once on the writer's own goroutine, so the day's
+		// records can take more than one batch: the day's first batch is
+		// the next one sealed.
+		f.batch[day] = f.w.Status().Batches + 1
 		if _, err := f.w.Write(ledger.Input{Event: event.Event{Envelope: envOf(at, event.NoSession, "", event.SourceOS, event.ViaOS, event.HarnessNone, ""),
 			Data: &event.OSPresence{IdleAnyS: 1}}}); err != nil {
 			t.Fatal(err)
@@ -170,11 +174,9 @@ func newFixture(t *testing.T, now time.Time, days int) *fixture {
 			t.Fatal(err)
 		}
 		f.edit[day], f.path[day] = s, path
-		b, ok, err := f.w.Seal()
-		if err != nil || !ok {
-			t.Fatalf("sealing %s: %v, %v", day, ok, err)
+		if _, _, err := f.w.Seal(); err != nil {
+			t.Fatalf("sealing %s: %v", day, err)
 		}
-		f.batch[day] = b.Row.B
 		f.put(t, filepath.Join("buckets", day+".jsonl"), "{}\n")
 	}
 	// What the sweeps of this package leave alone: the day rollups and
@@ -387,8 +389,8 @@ func TestSweep(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if _, ok, err := f.w.Seal(); err != nil || !ok {
-					t.Fatalf("sealing after the sweep: %v, %v", ok, err)
+				if _, _, err := f.w.Seal(); err != nil {
+					t.Fatalf("sealing after the sweep: %v", err)
 				}
 				f.close()
 				f.open(t)
