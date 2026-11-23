@@ -162,6 +162,8 @@ One signed binary with subcommands, so there is one thing to ship, sign and upda
 | `pairtime dashboard`, `recap`, `story`, `devlog`, `statusline` | The user, or the teen's own agent through the coach skill | Open the local UI with a one-time token; print recaps, stories and devlog drafts as text or `--json`; print a one-line total for terminal status lines |
 | `pairtime submit [--dry-run]`, `privacy show`, `ledger show`, `backup`, `verify` | The user, or anyone for `verify` | Submission (7.5); the next upload byte for byte (TP B8); every recorded record in plain JSON; backups (7.11); offline verification (7.8) |
 
+Detached means a process that the hook's session, terminal and job can't end: on Linux, a transient scope of the user's systemd manager when one runs; elsewhere, a session (Unix) or a process group with no console window (Windows) of its own, outside the caller's job when the job allows breakaway.
+
 ### 3.3 Inside the agent
 
 | Component | Trigger | Output |
