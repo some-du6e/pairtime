@@ -16,7 +16,7 @@ import (
 
 // contentMembers returns the "f" and "c" members, each with its leading
 // comma, that the body of ev's record carries after "e" with content c:
-// f on the four kinds of spec 10.7, c on the three of spec 10.1.
+// f on the five kinds of spec 10.7, c on the three of spec 10.1.
 func contentMembers(t *testing.T, k *Keys, ev event.Event, c Content) string {
 	t.Helper()
 	fk := k.Features()
@@ -31,6 +31,12 @@ func contentMembers(t *testing.T, k *Keys, ev event.Event, c Content) string {
 			t.Fatal(err)
 		}
 		f = &p
+	case event.KindRelayMessage:
+		rf, err := features.Relay(c.Class)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f = &rf
 	case event.KindAgentTool:
 		tf, err := fk.Tool(c.Edits, c.Command)
 		if err != nil {
@@ -103,6 +109,16 @@ func TestEventRecordContent(t *testing.T) {
 			e.Via = event.ViaPlugin
 			*c = Content{NoText: true}
 		}, false, false},
+		{"a guest's prompt, whose text the agent drops, carries an f of v and pc and no c (spec 10.1)", event.KindPromptSubmit, func(e *event.Event, c *Content) {
+			p := e.Data.(*event.PromptSubmit)
+			p.Guest, p.SealedText = true, nil
+			*c = Content{NoText: true, Class: features.Substantive}
+		}, true, false},
+		{"an app's message carries an f of v and pc and never c (spec 10.7)", event.KindRelayMessage, nil, true, false},
+		{"an app's go-ahead carries its class", event.KindRelayMessage, func(e *event.Event, c *Content) {
+			e.Data.(*event.RelayMessage).LowEffort = true
+			c.Class = features.LowEffort
+		}, true, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -235,6 +251,21 @@ func TestEventRecordRefusesContent(t *testing.T) {
 			*c = Content{NoText: true}
 		})},
 		{"an agent.tool record marked NoText is refused", write(event.KindAgentTool, func(_ *event.Event, c *Content) { c.NoText = true })},
+		{"a guest's prompt with text is refused; a guest's words never stay on the device", write(event.KindPromptSubmit, func(e *event.Event, _ *Content) {
+			p := e.Data.(*event.PromptSubmit)
+			p.Guest, p.SealedText = true, nil
+		})},
+		{"a guest's prompt with no text but not marked NoText is refused", write(event.KindPromptSubmit, func(e *event.Event, c *Content) {
+			p := e.Data.(*event.PromptSubmit)
+			p.Guest, p.SealedText = true, nil
+			c.Text = nil
+		})},
+		{"an app's message with text is refused; the reader drops the app's text", write(event.KindRelayMessage, func(_ *event.Event, c *Content) {
+			c.Text = []byte("make the navbar sticky")
+		})},
+		{"an app's message with no class is refused", write(event.KindRelayMessage, func(_ *event.Event, c *Content) { c.Class = "" })},
+		{"an app's message marked NoText is refused; it never has a text to lack", write(event.KindRelayMessage, func(_ *event.Event, c *Content) { c.NoText = true })},
+		{"an app's message with a command is refused", write(event.KindRelayMessage, func(_ *event.Event, c *Content) { c.Command = "ls" })},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -287,6 +318,11 @@ func TestCheckBodyContent(t *testing.T) {
 	pluginOutput, pluginOutputE := record(event.KindAgentOutput, func(e *event.Event) { e.Via = event.ViaPlugin })
 	notFinal, notFinalE := record(event.KindAgentOutput, func(e *event.Event) { e.Data.(*event.AgentOutput).IsFinal = false })
 	start, startE := record(event.KindSessionStart, nil)
+	relay, relayE := record(event.KindRelayMessage, nil)
+	guest, guestE := record(event.KindPromptSubmit, func(e *event.Event) {
+		p := e.Data.(*event.PromptSubmit)
+		p.Guest, p.SealedText = true, nil
+	})
 	checkpoint, err := NewHeader(7, RTypeCheckpoint, "p_x", event.NoSession)
 	if err != nil {
 		t.Fatal(err)
@@ -320,6 +356,13 @@ func TestCheckBodyContent(t *testing.T) {
 		{"a plugin prompt's body that came with its text agrees with f and c", pluginPrompt, body(pluginPromptE, `,"f":`+pf+`,"c":`+c), nil},
 		{"a bridge prompt without c whose f has a sketch disagrees", bridge, body(bridgeE, `,"f":`+pf), ErrBodyHeader},
 		{"a bridge prompt without f disagrees", bridge, body(bridgeE, ""), ErrBodyHeader},
+		{"a guest's prompt body with an f of v and pc and no c agrees (spec 10.1)", guest, body(guestE, `,"f":`+textless), nil},
+		{"a guest's prompt without c whose f has a sketch disagrees", guest, body(guestE, `,"f":`+pf), ErrBodyHeader},
+		{"an app message's body with an f of v and pc agrees (spec 10.7)", relay, body(relayE, `,"f":`+textless), nil},
+		{"an app message's body without f disagrees", relay, body(relayE, ""), ErrBodyHeader},
+		{"an app message's body with c disagrees; it commits nothing (spec 10.1)", relay, body(relayE, `,"f":`+textless+`,"c":`+c), ErrBodyHeader},
+		{"an app message's f with a sketch disagrees with its kind", relay, body(relayE, `,"f":`+pf), ErrBodyHeader},
+		{"an app message's f without its class disagrees with its kind", relay, body(relayE, `,"f":{"v":1}`), ErrBodyHeader},
 		{"a track label's body without c disagrees; a label always has its text", track, body(trackE, `,"f":`+pf), ErrBodyHeader},
 		{"a track label's body with an f of v and pc disagrees", track, body(trackE, `,"f":`+textless+`,"c":`+c), ErrBodyHeader},
 		{"a final agent message's body with c agrees", output, body(outputE, `,"c":`+c), nil},

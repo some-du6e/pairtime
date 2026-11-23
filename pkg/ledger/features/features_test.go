@@ -430,6 +430,9 @@ func TestPromptAndToolFeatures(t *testing.T) {
 		{"a hunk whose new range has lines but starts at 0 is refused", write(k.Tool([]Edit{{Path: "a.go", OldStart: 1, OldLines: 1, NewLines: 1}}, "")), "error"},
 		{"a hunk number past 2^31 - 1 is refused", write(k.Tool([]Edit{{Path: "a.go", NewStart: 1 << 31}}, "")), "error"},
 		{"a shell.command with no command has an f that holds only v", write(k.Shell(""), nil), `{"v":1}`},
+		{"an app's message has an f of v and the class of the app's text alone (spec 10.7)", write(Relay(Answer)), `{"v":1,"pc":"answer"}`},
+		{"an app's message with no class SM 2.2 knows is refused", write(Relay("great")), "error"},
+		{"a guest's prompt, like any whose text the device never had, has an f of v and pc", write(Textless(Substantive)), `{"v":1,"pc":"substantive"}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -438,12 +441,34 @@ func TestPromptAndToolFeatures(t *testing.T) {
 			}
 		})
 	}
-	t.Run("Carries names prompt.submit, agent.tool, shell.command and cli.track, and no other kind", func(t *testing.T) {
+	t.Run("Carries names prompt.submit, agent.tool, shell.command, cli.track and relay.message, and no other kind", func(t *testing.T) {
 		for _, kind := range event.Kinds() {
-			want := kind == event.KindPromptSubmit || kind == event.KindAgentTool || kind == event.KindShellCommand || kind == event.KindCLITrack
+			want := kind == event.KindPromptSubmit || kind == event.KindAgentTool || kind == event.KindShellCommand ||
+				kind == event.KindCLITrack || kind == event.KindRelayMessage
 			if Carries(kind) != want {
 				t.Errorf("Carries(%s) = %v", kind, !want)
 			}
+		}
+	})
+	t.Run("an app message's f fits its kind only as v and pc", func(t *testing.T) {
+		mh := EmptySketch()
+		for _, c := range []struct {
+			name string
+			f    string
+			want error
+		}{
+			{"v and pc fit", `{"v":1,"pc":"low_effort"}`, nil},
+			{"v alone doesn't", `{"v":1}`, ErrKind},
+			{"a sketch doesn't", `{"v":1,"mh":"` + mh.String() + `","th":"` + th.String() + `","pc":"substantive"}`, ErrKind},
+			{"a command value doesn't", `{"v":1,"pc":"answer","ch":"` + ch.String() + `"}`, ErrKind},
+			{"a class SM 2.2 doesn't have is malformed", `{"v":1,"pc":"great"}`, ErrMalformed},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				_, err := Parse(event.KindRelayMessage, []byte(c.f))
+				if c.want == nil && err != nil || c.want != nil && !errors.Is(err, c.want) {
+					t.Errorf("Parse = %v, want %v", err, c.want)
+				}
+			})
 		}
 	})
 }

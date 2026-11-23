@@ -380,7 +380,7 @@ func TestLedgerShowUnknownKinds(t *testing.T) {
 	later := func(seq uint64) ledger.Header {
 		var h ledger.Header
 		binenc.BigEndian.PutUint64(h[:8], seq)
-		h[8] = 0x13 // a kind added after this version (ledger-v1 4.2)
+		h[8] = 0x14 // a kind added after this version (ledger-v1 4.2)
 		return h
 	}
 	day := at("2026-11-24", "10:00").UTC().Format(time.DateOnly)
@@ -394,11 +394,11 @@ func TestLedgerShowUnknownKinds(t *testing.T) {
 		check func(t *testing.T)
 	}{
 		{"a record of a later kind with a time is shown on its day, with its rtype and no batch", func(t *testing.T) {
-			if len(recs) != 2 || recs[1].Header.Seq() != known+1 || recs[1].Header.RType() != 0x13 || batches[1] != 0 {
+			if len(recs) != 2 || recs[1].Header.Seq() != known+1 || recs[1].Header.RType() != 0x14 || batches[1] != 0 {
 				t.Errorf("ledger show printed %d records, batches %v:\n%s", len(recs), batches, stdout)
 			}
-			if !strings.Contains(stdout, `"type":"rtype 0x13"`) {
-				t.Errorf("the later kind's type isn't rtype 0x13:\n%s", stdout)
+			if !strings.Contains(stdout, `"type":"rtype 0x14"`) {
+				t.Errorf("the later kind's type isn't rtype 0x14:\n%s", stdout)
 			}
 		}},
 		{"a record of a later kind with no time is on no day, said on stderr, and stops nothing", func(t *testing.T) {

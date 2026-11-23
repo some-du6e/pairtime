@@ -10,7 +10,7 @@ import (
 // The errors that the typed errors below wrap, and that the functions
 // checking one value return. Test for them with errors.Is.
 var (
-	// ErrUnknownRType is a record type from 0x13 to 0x3f that this package
+	// ErrUnknownRType is a record type from 0x14 to 0x3f that this package
 	// doesn't know: an event kind added after it was built (spec 4.2).
 	// Roots and heads never read rtype, so the rest of the record's batch
 	// can still be checked, and an auditor reports the record's kind as

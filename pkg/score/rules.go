@@ -24,6 +24,18 @@ type rules struct {
 	substantive    int64 // characters
 	errorPasteMax  int64 // characters
 	paMinLatencyMS int64
+	// relayMatch and relaySeenLag bound a pairing of an agent app's message
+	// with the prompt its run delivered (SM 2.2 rule 9): the prompt comes no
+	// earlier than the message's stamp and at most RELAY_MATCH_S after it,
+	// and the relay record at most RELAY_SEEN_LAG_S after the stamp.
+	relayMatch   int64
+	relaySeenLag int64
+	// relayVouch is how soon after one of a session's stops the thread's
+	// next relayed anchor must pair, the later of its two records, to vouch
+	// for the reading after the stop: PENDING_WINDOW_S - 60 s, so that the
+	// stop's own minute is still pending when the pairing comes (SM 2.4,
+	// D-relayed's decision 3). It isn't a parameter of its own.
+	relayVouch int64
 
 	// SM 8.2, anchor windows.
 	thinkLead   int64
@@ -55,6 +67,9 @@ type rules struct {
 	lookupBracket int64
 	lookupMax     int64
 	unitsPerS     int64
+	// unknownBucketMax is UNKNOWN_BUCKET_MAX_S, the most a relayed
+	// session's bucket holds from the relayed prompt's reset (SM 2.4, 8.6).
+	unknownBucketMax int64 // ms
 
 	// SM 8.4, attribution.
 	attribSticky int64
@@ -91,6 +106,14 @@ type rules struct {
 	// longer silence of its agent's records outside hooked sessions
 	// (turnBuild.runUntil); and a queued message's reset when no agent
 	// record follows within it.
+	//
+	// A pairing of an agent app's message with its prompt reaches back from
+	// the message's stamp, sent_at, not from the later of its two records,
+	// which can come up to RELAY_MATCH_S after the stamp (SM 2.3): the lead
+	// it opens lies within THINK_LEAD_S + COMPOSE_MAX_S before the stamp, so
+	// reach counted from the stamp never cuts it (Anchor.from). Step keeps
+	// what such a lead could touch pending until the pairing or
+	// RELAY_MATCH_S after the stamp (deriver.relayHolds).
 	reach int64
 	// settle is how long after a time the scorer may still change what it
 	// derived for that time: PENDING_WINDOW_S, after which DESIGN 6.2 D1
@@ -116,6 +139,8 @@ func newRules(t *params.Table) rules {
 		substantive:    t.Int(params.SUBSTANTIVE_CHARS),
 		errorPasteMax:  t.Int(params.ERROR_PASTE_TEXT_MAX),
 		paMinLatencyMS: t.Int(params.PA_MIN_LATENCY_MS),
+		relayMatch:     ms(params.RELAY_MATCH_S),
+		relaySeenLag:   ms(params.RELAY_SEEN_LAG_S),
 
 		thinkLead:   ms(params.THINK_LEAD_S),
 		compose:     t.Rat(params.COMPOSE_CPS),
@@ -142,6 +167,8 @@ func newRules(t *params.Table) rules {
 		lookupBracket: ms(params.LOOKUP_BRACKET_S),
 		lookupMax:     ms(params.LOOKUP_MAX_S),
 
+		unknownBucketMax: ms(params.UNKNOWN_BUCKET_MAX_S),
+
 		attribSticky: ms(params.ATTRIB_STICKY_S),
 
 		pendingWindow: ms(params.PENDING_WINDOW_S),
@@ -164,8 +191,14 @@ func newRules(t *params.Table) rules {
 	// comments then cite SM.
 	r.reach = r.readHorizon
 	r.settle = r.pendingWindow
+	r.relayVouch = r.pendingWindow - relayVouchMarginMS
 	return r
 }
+
+// relayVouchMarginMS is the minute SM 2.4 leaves between the deadline for
+// the pairing that vouches for a stop's relayed reading and the end of
+// PENDING_WINDOW_S: "within PENDING_WINDOW_S - 60 s" (rules.relayVouch).
+const relayVouchMarginMS = 60_000
 
 // countMax bounds every count the scorer reads from a record: words, lines
 // and characters. event.Validate only asks that a count not be negative, so

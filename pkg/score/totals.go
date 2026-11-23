@@ -74,11 +74,17 @@ const echoMS = 5_000
 //     records of one series: the submitted projects' editor heartbeats and
 //     agent events (prompt submits, tool calls and stops) in the window, in
 //     t order (SM 5.3), ties by seq, then event_id. Only records via
-//     hook, log, otel, editor or bridge count; track, plugin,
+//     hook, log, otel, editor or bridge count; track, plugin, app,
 //     editor_unverified and bridge_unverified records never do (DESIGN 6.2
-//     D19). ai_logged_s is the same rule over the agent events alone (SM
+//     D19). An agent app's relay.message is no agent event either, but the
+//     harness's own records of a relayed turn count as any turn's do (SM
+//     5.4). ai_logged_s is the same rule over the agent events alone (SM
 //     5.4). hackatimeDecided switches both to E-6.1-hackatime's rule once
 //     SM states it.
+//   - via_track_s and via_relay_s are the credited seconds whose anchors
+//     carry via_track and via_relay: the credit that rests on `pairtime
+//     track` calls and on relayed anchors (SM 2.2 rule 9), which is level
+//     C, so it is part of level_c_s.
 //   - ai_credited_s is credit under P, ANS, GO, Q, PA, INT, SUP and READ,
 //     and any credited second inside a turn of its project (SM 5.4).
 //   - agent_only_s, excluded_loops_s and idle_s count the submitted
@@ -101,7 +107,7 @@ func (s Submission) Totals(d Derived, records []event.Event) event.SubmissionTot
 		credited, witnessed, offline, backfilled int64
 		levelA, levelB, levelC                   int64
 		bandCorroborated, bandWitnessed, bandOff int64
-		viaTrack, ai                             int64
+		viaTrack, viaRelay, ai                   int64
 		agentOnly, loops, idle                   int64
 	)
 	for _, m := range Minutes(d) {
@@ -163,6 +169,9 @@ func (s Submission) Totals(d Derived, records []event.Event) event.SubmissionTot
 				if slices.Contains(e.Labels, event.LabelViaTrack) {
 					viaTrack += h
 				}
+				if slices.Contains(e.Labels, event.LabelViaRelay) {
+					viaRelay += h
+				}
 				if e.InTurn || slices.Contains(aiCreditReasons, e.Reason.Base()) {
 					ai += h
 				}
@@ -185,6 +194,7 @@ func (s Submission) Totals(d Derived, records []event.Event) event.SubmissionTot
 		BandOfflineS:      float64(bandOff) / 2,
 		BandBackfilledS:   float64(levelC) / 2,
 		ViaTrackS:         float64(viaTrack) / 2,
+		ViaRelayS:         float64(viaRelay) / 2,
 		AgentOnlyS:        float64(agentOnly),
 		ExcludedLoopsS:    float64(loops),
 		IdleS:             float64(idle),

@@ -27,9 +27,11 @@ type Credit struct {
 	// none takes the project of its first credited second, which for a
 	// browser or chat-app slot in a lookup run is the lookup's (SM 2.5) and
 	// for a slot SM 3.2 rule 1 leaves ambiguous the project of the anchor
-	// window that credits it (D-ambiguous-anchors). It is "" when the slot
-	// resolves to no project and nothing in it is credited. Every entry of
-	// Credited has this project.
+	// window that credits it (D-ambiguous-anchors). Relayed credit skips SM
+	// 3.3 rule 1's focus test, so a slot that resolves to a project but
+	// that only another project's relayed credit credits is that project's
+	// (relayedRest). It is "" when the slot resolves to no project and
+	// nothing in it is credited. Every entry of Credited has this project.
 	ProjectKey string `json:"project_key,omitempty"`
 	// ResolvedBy is the event_id of the anchor that gave the slot of a
 	// window hosting several sessions of different projects to one of them,
@@ -130,8 +132,14 @@ type second struct {
 	// bucket, or "" (DESIGN 6.4).
 	label event.Label
 	// capped marks a present second of a lookup run past LOOKUP_MAX_S, and
-	// bucketCap one the bucket would have credited but for BUCKET_MAX_S.
+	// bucketCap one the bucket would have credited but for BUCKET_MAX_S, or
+	// for UNKNOWN_BUCKET_MAX_S from a relayed prompt's reset.
 	capped, bucketCap bool
+	// relayed marks a second relayed credit took, a relayed anchor's lead
+	// or its session's relayed reading (relaycredit.go). It rests on no
+	// evidence of this device's, so no slot resolution steers it and no
+	// lookup takes it for a bracket (SM 2.3, 2.5).
+	relayed bool
 }
 
 // secSpan is the half-open interval [from, to) of second indexes.
@@ -187,9 +195,11 @@ type creditor struct {
 	n     int   // seconds, a second's index counting from first
 	// secs holds the state of the seconds of live slots only, and base,
 	// per slot, the index in secs of its first second, or -1 for a dead
-	// slot (deadSlot). Every second of a dead slot is X.absent, so it needs
-	// no state, and the memory follows the samples rather than the span
-	// the records cover.
+	// slot (deadSlot) that no relayed credit reaches. Every second of a
+	// dead slot takes its code from the slot and the running turns alone
+	// (uncredited), so it needs no state, and the memory follows the
+	// samples and the relayed anchors rather than the span the records
+	// cover.
 	secs []second
 	base []int32
 	// byProject holds, per project, the indexes of its anchors in time
@@ -198,6 +208,18 @@ type creditor struct {
 	// buckets holds, per project, its sessions' buckets in key order.
 	buckets map[string][]*bucket
 	runs    map[string]*running
+	// all holds the turns of every project, which SM 5.2's codes for a live
+	// slot whose presence is unknown read, on a device that never samples
+	// (presence.live).
+	all running
+	// relays are the sessions with relayed anchors, by key, and leads the
+	// leads of those anchors, by start: the candidates of the relayed
+	// stage, which leadNext and leadsOpen sweep along the slots
+	// (relaycredit.go).
+	relays    []*relaySession
+	leads     []relayLead
+	leadNext  int
+	leadsOpen []int
 	// bySession holds, per harness session, the indexes of its anchors in
 	// time order, which SM 3.2 rule 1 resolves a slot by, as the editor
 	// heartbeats in deriver.beats do for rule 2 (attrib.go). attr holds each
@@ -217,27 +239,34 @@ func ceilSecond(t int64) int64 { return -floorSecond(-t) }
 // perSlot is the number of seconds in a slot.
 const perSlot = int(event.SlotMS / 1000)
 
-// deadSlot reports whether nothing can credit any second of slot s: it is a
-// hard break, or the presence sampler wasn't running yet (SM 2.1). Every
-// second there is X.absent.
+// deadSlot reports whether nothing but relayed credit can credit any
+// second of slot s: it is a hard break, or the presence sampler wasn't
+// running (SM 2.1). Every second there is X.absent, or on a device that
+// never samples one of SM 5.2's codes for a live slot whose presence is
+// unknown (uncredited). A relayed anchor's lead and its session's relayed
+// reading are realized in a slot of any presence but one the machine slept
+// through (SM 2.1, 2.3), so the credit pass keeps the state of a locked or
+// unknown slot they reach (creditor.relayLive).
 func deadSlot(s *Slot) bool {
 	return s.Asleep || s.Locked || s.Present == event.PresentUnknown
 }
 
 // credit runs SM 2.7 over the derived slots: anchor windows, then the
-// reading bucket, then lookups (SM 2.5), then a reason for every second
-// nothing credited (SM 5.2).
+// reading bucket, then relayed credit, then lookups (SM 2.5), then a
+// reason for every second nothing credited (SM 5.2).
 func (d *deriver) credit() {
 	slots := d.pres.slots
 	if len(slots) == 0 {
 		return
 	}
 	c := &creditor{d: d, r: d.r, slots: slots, first: slots[0].Start, n: len(slots) * perSlot}
+	c.indexRelayed()
+	reached := c.relayLive()
 	c.base = make([]int32, len(slots))
 	live := 0
 	for i := range slots {
 		c.base[i] = -1
-		if !deadSlot(&slots[i]) {
+		if !deadSlot(&slots[i]) || (reached != nil && reached[i]) {
 			c.base[i] = int32(live * perSlot)
 			live++
 		}
@@ -277,6 +306,11 @@ func (c *creditor) index() {
 	d := c.d
 	c.byProject = map[string][]int{}
 	for i, a := range d.anchors {
+		// A relayed anchor qualifies no reading but its own session's
+		// relayed reading, and lends no level (SM 2.3, 2.4).
+		if a.relayed() {
+			continue
+		}
 		c.byProject[a.ProjectKey] = append(c.byProject[a.ProjectKey], i)
 	}
 	c.buckets = map[string][]*bucket{}
@@ -297,19 +331,25 @@ func (c *creditor) index() {
 			c.runs[t.ProjectKey] = r
 		}
 		sp := secSpan{from, to}
-		switch {
-		case t.Origin.Human():
-			r.human = append(r.human, sp)
-		case t.Origin == event.OriginNoInput:
-			r.noInput = append(r.noInput, sp)
-		default:
-			r.auto = append(r.auto, sp)
+		// A relayed turn is a person's, so its running seconds are
+		// X.agent_only (SM 2.2).
+		for _, run := range []*running{r, &c.all} {
+			switch {
+			case t.Origin.ByPerson():
+				run.human = append(run.human, sp)
+			case t.Origin == event.OriginNoInput:
+				run.noInput = append(run.noInput, sp)
+			default:
+				run.auto = append(run.auto, sp)
+			}
+			run.any = append(run.any, sp)
 		}
-		r.any = append(r.any, sp)
 	}
 	for _, r := range c.runs {
 		r.human, r.auto, r.noInput, r.any = merged(r.human), merged(r.auto), merged(r.noInput), merged(r.any)
 	}
+	c.all.human, c.all.auto, c.all.noInput, c.all.any = merged(c.all.human), merged(c.all.auto), merged(c.all.noInput),
+		merged(c.all.any)
 	c.indexAttribution()
 	ids := map[string]int{}
 	for i, a := range d.anchors {
@@ -337,20 +377,27 @@ func (c *creditor) returnAt(t int64) *returned {
 }
 
 // windows returns every anchor's windows as whole seconds, by start. A
-// window starts no earlier than the anchor can credit (Anchor.from).
+// window starts no earlier than the anchor can credit (Anchor.from), and a
+// lead ends where the anchor's does (Anchor.leadEnd). A relayed anchor's
+// lead isn't among them: it is realized after every other candidate, with
+// no presence, focus or keyboard test but sleep (SM 2.3, 2.7).
 func (c *creditor) windows() []window {
 	var ws []window
 	for i := range c.d.anchors {
 		a := &c.d.anchors[i]
+		if a.relayed() {
+			continue
+		}
 		lo := a.from(c.r)
 		add := func(from, to int64, part int) {
 			if from, to = ceilSecond(max(from, lo)), ceilSecond(to); from < to {
 				ws = append(ws, window{from: from, to: to, anchor: i, part: part})
 			}
 		}
-		typing := a.T - a.TypingMS
-		add(a.T-a.LeadMS, typing, partThink)
-		add(typing, a.T, partTyping)
+		end := a.leadEnd()
+		typing := end - a.TypingMS
+		add(end-a.LeadMS, typing, partThink)
+		add(typing, end, partTyping)
 		add(a.T, a.T+a.WatchMS, partAfter)
 		add(a.TrailFrom, a.TrailFrom+a.TrailMS, partAfter)
 	}
@@ -421,12 +468,12 @@ func (c *creditor) nearest(p string, t int64) int {
 }
 
 // anchorsAndBuckets is pass one of SM 2.7: for each second, the anchor
-// windows that cover it, then the reading bucket. An anchor's window is
-// realized where the person is present (yes, bridged, tail) and the slot
-// resolves to the anchor's project (SM 3.2, 3.3 rule 1), or, for the anchor
-// that ended a returned run, in its think part inside the run (SM 2.1).
-// Anchor windows beat the bucket (SM 3.3 rule 2), and the bucket drains
-// only where none is realized.
+// windows that cover it, then the reading bucket, then relayed credit. An
+// anchor's window is realized where the person is present (yes, bridged,
+// tail) and the slot resolves to the anchor's project (SM 3.2, 3.3 rule 1),
+// or, for the anchor that ended a returned run, in its think part inside
+// the run (SM 2.1). Anchor windows beat the bucket (SM 3.3 rule 2), and the
+// bucket drains only where none is realized.
 //
 // In a slot SM 3.2 rule 1 leaves ambiguous, anchors still count and the
 // bucket doesn't drain: every window that covers a present second competes,
@@ -443,11 +490,15 @@ func (c *creditor) nearest(p string, t int64) int {
 // project, by a heartbeat after the input that ends the run
 // (D-editor-heartbeat-first), and then the run's think part credits nothing
 // in it, so that the slot keeps one project (SM 5.1, attribution.holds).
+//
+// Relayed candidates come after all of those, a second at a time where
+// they share a session's bucket with this device's reading, and once the
+// slot's other seconds are decided where they can't (relayedSecond,
+// relayedRest).
 func (c *creditor) anchorsAndBuckets() {
 	ws := c.windows()
 	var active []int
 	next := 0
-	oneSecond := c.r.unitsPerS
 	for k := 0; k < c.n; k++ {
 		i := k / perSlot
 		s := &c.slots[i]
@@ -462,6 +513,7 @@ func (c *creditor) anchorsAndBuckets() {
 			// SM 3.2 rule 1 reads a session's bucket when the slot begins,
 			// before its first second drains anything.
 			c.attr[i] = c.attribute(s)
+			c.enterRelaySlot(s)
 		}
 		at := &c.attr[i]
 		for ; next < len(ws) && ws[next].from <= t; next++ {
@@ -474,102 +526,121 @@ func (c *creditor) anchorsAndBuckets() {
 			}
 		}
 		active = kept
-		pres := s.At(t)
-		var rt *returned
-		if pres == event.PresentReturned {
-			rt = c.returnAt(t)
+		if !c.localSecond(k, t, s, at, ws, active) && len(c.relays) > 0 {
+			c.relayedSecond(k, t, at, true)
 		}
-		proj := at.proj
-		best, suffix := -1, event.Reason("")
-		for _, wi := range active {
-			w := ws[wi]
-			a := &c.d.anchors[w.anchor]
-			if w.part == partTyping && !c.typingOK(a, s) {
-				continue
-			}
-			sfx := event.Reason("")
-			switch {
-			case present(pres) && at.admits(a.ProjectKey):
-			case rt != nil && rt.anchor == w.anchor && w.part == partThink && t >= a.T-a.TypingMS-c.r.thinkLead &&
-				at.holds(a.ProjectKey):
-				sfx = event.ReturnedSuffix
-			default:
-				continue
-			}
-			if best < 0 || c.better(w, ws[best]) {
-				best, suffix = wi, sfx
-			}
+		if k%perSlot == perSlot-1 {
+			c.relayedRest(i, at)
 		}
-		sec := c.state(k)
-		if best >= 0 {
-			a := &c.d.anchors[ws[best].anchor]
-			sec.reason, sec.proj, sec.level, sec.anchor = a.Reason+suffix, a.ProjectKey, a.Level, int32(ws[best].anchor)
-			if proj == "" && at.won == "" {
-				at.won = a.ProjectKey
-			}
-			c.steer(at, sec)
+	}
+}
+
+// localSecond applies SM 2.7's candidates from this device's evidence to
+// second k, at t, of slot s: the windows active holds, of those ws lists,
+// then the reading bucket. It reports whether one of them credited the
+// second.
+func (c *creditor) localSecond(k int, t int64, s *Slot, at *attribution, ws []window, active []int) bool {
+	oneSecond := c.r.unitsPerS
+	pres := s.At(t)
+	var rt *returned
+	if pres == event.PresentReturned {
+		rt = c.returnAt(t)
+	}
+	proj := at.proj
+	best, suffix := -1, event.Reason("")
+	for _, wi := range active {
+		w := ws[wi]
+		a := &c.d.anchors[w.anchor]
+		if w.part == partTyping && !c.typingOK(a, s) {
 			continue
 		}
-		if proj == "" {
-			// No project, or an ambiguous slot: the bucket doesn't drain
-			// (SM 3.2 rule 1).
-			continue
-		}
-		proseOnly := false
+		sfx := event.Reason("")
 		switch {
-		case present(pres):
-		case rt != nil && t >= rt.TailEnd && t < rt.ReadUntil:
-			// The reading part of the return credit: only prose drains.
-			proseOnly = true
+		case present(pres) && at.admits(a.ProjectKey):
+		case rt != nil && rt.anchor == w.anchor && w.part == partThink && t >= a.leadEnd()-a.TypingMS-c.r.thinkLead &&
+			at.holds(a.ProjectKey):
+			sfx = event.ReturnedSuffix
 		default:
 			continue
 		}
-		near := c.nearest(proj, t)
-		if near < 0 {
-			continue
+		if best < 0 || c.better(w, ws[best]) {
+			best, suffix = wi, sfx
 		}
-		var pick *bucket
-		for _, b := range c.buckets[proj] {
-			b.advance(c.r, t)
-			if b.total(proseOnly) > 0 && (pick == nil || b.oldest(proseOnly) < pick.oldest(proseOnly)) {
-				pick = b
-			}
+	}
+	sec := c.state(k)
+	if best >= 0 {
+		a := &c.d.anchors[ws[best].anchor]
+		sec.reason, sec.proj, sec.level, sec.anchor = a.Reason+suffix, a.ProjectKey, a.Level, int32(ws[best].anchor)
+		if at.won == "" {
+			at.won = a.ProjectKey
 		}
-		if pick == nil {
-			// The buckets are empty. If one of them is only because
-			// BUCKET_MAX_S evicted output that would still be there, the
-			// cap is why the second isn't credited (SM 5.2).
-			if !proseOnly {
-				for _, b := range c.buckets[proj] {
-					if b.takeEvicted(oneSecond) {
-						sec.bucketCap = true
-						break
-					}
+		c.steer(at, sec)
+		return true
+	}
+	if proj == "" {
+		// No project, or an ambiguous slot: the bucket doesn't drain
+		// (SM 3.2 rule 1).
+		return false
+	}
+	proseOnly := false
+	switch {
+	case present(pres):
+	case rt != nil && t >= rt.TailEnd && t < rt.ReadUntil:
+		// The reading part of the return credit: only prose drains.
+		proseOnly = true
+	default:
+		return false
+	}
+	near := c.nearest(proj, t)
+	if near < 0 {
+		return false
+	}
+	var pick *bucket
+	for _, b := range c.buckets[proj] {
+		b.advance(c.r, t)
+		if b.total(proseOnly) > 0 && (pick == nil || b.oldest(proseOnly) < pick.oldest(proseOnly)) {
+			pick = b
+		}
+	}
+	if pick == nil {
+		// The buckets are empty. If one of them is only because
+		// BUCKET_MAX_S evicted output that would still be there, or
+		// UNKNOWN_BUCKET_MAX_S held it back after a relayed prompt, the
+		// cap is why the second isn't credited (SM 5.2).
+		if !proseOnly {
+			for _, b := range c.buckets[proj] {
+				if b.takeCapped(oneSecond, false) {
+					sec.bucketCap = true
+					break
 				}
 			}
-			continue
 		}
-		// SM 2.7 credits the second when the bucket holds anything and
-		// drains up to a second from it.
-		src := pick.drain(oneSecond, proseOnly)
-		reason := event.ReasonRead
-		if pick.runningAt(t) {
-			reason = event.ReasonSupervise
-		}
-		if proseOnly {
-			reason += event.ReturnedSuffix
-		}
-		// The second takes the level of the anchor that qualifies the drain
-		// (DESIGN 6.4), but no better than the evidence behind what it
-		// drained (docs/errata/2026-11-20-design-6.4-side-door-reading.md).
-		a := &c.d.anchors[near]
-		level := a.Level
-		if src.level != "" {
-			level = lowerLevel(level, src.level)
-		}
-		sec.reason, sec.proj, sec.level, sec.anchor, sec.label = reason, proj, level, int32(near), src.label
-		c.steer(at, sec)
+		return false
 	}
+	// SM 2.7 credits the second when the bucket holds anything and
+	// drains up to a second from it.
+	src := pick.drain(oneSecond, proseOnly)
+	reason := event.ReasonRead
+	if pick.runningAt(t) {
+		reason = event.ReasonSupervise
+	}
+	if proseOnly {
+		reason += event.ReturnedSuffix
+	}
+	// The second takes the level of the anchor that qualifies the drain
+	// (DESIGN 6.4), but no better than the evidence behind what it
+	// drained (docs/errata/2026-11-20-design-6.4-side-door-reading.md).
+	a := &c.d.anchors[near]
+	level := a.Level
+	if src.level != "" {
+		level = lowerLevel(level, src.level)
+	}
+	sec.reason, sec.proj, sec.level, sec.anchor, sec.label = reason, proj, level, int32(near), src.label
+	if at.won == "" {
+		at.won = proj
+	}
+	c.steer(at, sec)
+	return true
 }
 
 // lookupRuns applies SM 2.5's lookup rule. A run of browser or chat-app
@@ -633,10 +704,32 @@ func (c *creditor) lookupRuns() {
 				continue
 			}
 			left--
+			// A lookup beats relayed credit, which comes after every other
+			// candidate (SM 2.7), and its slot keeps one project.
+			c.claimForLookup(k/perSlot, proj)
 			sec.reason, sec.proj, sec.level, sec.anchor, sec.other, sec.label = event.ReasonLookup, proj, level, b1.anchor,
 				b2.anchor, label
+			sec.relayed = false
 		}
 	}
+}
+
+// claimForLookup gives slot i to a lookup of project p. Pass one credits a
+// browser or chat-app slot only with relayed credit, and a lookup, which
+// beats it (SM 2.7), takes its present seconds. The slot keeps one project,
+// so relayed credit of another project leaves the slot's other seconds
+// uncredited. What a relayed second drained from its session's bucket
+// stays drained.
+func (c *creditor) claimForLookup(i int, p string) {
+	at := &c.attr[i]
+	if at.won != "" && at.won != p {
+		for k := i * perSlot; k < (i+1)*perSlot; k++ {
+			if sec := c.state(k); sec != nil && sec.relayed {
+				*sec = second{anchor: -1, other: -1, capped: sec.capped, bucketCap: sec.bucketCap}
+			}
+		}
+	}
+	at.won = p
 }
 
 // lookupSlot reports whether a slot can be part of a lookup run: a browser
@@ -647,12 +740,13 @@ func lookupSlot(s *Slot) bool {
 
 // brackets returns, for each project credited in seconds [from, to), its
 // credited second nearest the run: the last one when last is set, for the
-// range before the run, else the first. Lookups don't bracket lookups.
+// range before the run, else the first. Lookups don't bracket lookups, and
+// relayed credit is never a bracket (SM 2.5).
 func (c *creditor) brackets(from, to int, last bool) map[string]second {
 	out := map[string]second{}
 	for k := max(from, 0); k < min(to, c.n); k++ {
 		s := c.state(k)
-		if s == nil || s.reason == "" || s.reason == event.ReasonLookup {
+		if s == nil || s.reason == "" || s.reason == event.ReasonLookup || s.relayed {
 			continue
 		}
 		if _, ok := out[s.proj]; !ok || last {
@@ -667,6 +761,17 @@ func (c *creditor) brackets(from, to int, last bool) map[string]second {
 func (c *creditor) runsDuring(p string, from, to int) bool {
 	r := c.runs[p]
 	return r != nil && overlaps(r.any, from, to)
+}
+
+// cmpBool orders false before true.
+func cmpBool(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case a:
+		return 1
+	}
+	return -1
 }
 
 // lowerLevel returns the weaker of two evidence levels.
@@ -689,7 +794,14 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 // a turn of the slot's project runs, X.agent_only if a
 // person started one of the running turns, else X.automated, else
 // X.no_input for a turn whose prompt came with no input (SM 2.2 rule 8);
-// and last X.no_anchor. at is the slot's resolution (attribute).
+// and last X.no_anchor. at is the slot's resolution (attribute). A turn a
+// person started includes a relayed one (SM 2.2), and X.bucket_cap covers
+// the reading UNKNOWN_BUCKET_MAX_S held back after a relayed prompt too.
+//
+// On a device that never samples (presence.live), such as a server with no
+// desktop, every slot is a live slot whose presence is unknown, and the
+// presence and focus codes don't apply: after the codes for withheld credit
+// comes unknownCode (SM 5.2).
 func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
 	if sec := c.state(k); sec != nil {
 		switch {
@@ -698,6 +810,9 @@ func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
 		case sec.bucketCap:
 			return event.ReasonBucketCap
 		}
+	}
+	if c.d.pres.live && !s.Asleep && !s.Locked && s.At(c.at(k)) == event.PresentUnknown {
+		return c.unknownCode(k)
 	}
 	if s.Asleep || s.Locked || !present(s.At(c.at(k))) {
 		return event.ReasonAbsent
@@ -733,12 +848,32 @@ func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
 	return event.ReasonNoAnchor
 }
 
-// creditKey groups a slot's credited seconds.
+// unknownCode is SM 5.2's code for an uncredited second k of a live slot
+// whose presence is unknown, past the codes for withheld credit: X.agent_only
+// while a turn a person started runs, a relayed one included, or a no_input
+// one; else X.automated while an automated turn runs; else X.no_anchor.
+// That is E-6.6-codes' order with its presence and focus steps skipped
+// (D-relayed's reading 3). Such a slot has no focus and no project of its
+// own, so the turns of every project count.
+func (c *creditor) unknownCode(k int) event.Reason {
+	switch {
+	case covers(c.all.human, k), covers(c.all.noInput, k):
+		return event.ReasonAgentOnly
+	case covers(c.all.auto, k):
+		return event.ReasonAutomated
+	}
+	return event.ReasonNoAnchor
+}
+
+// creditKey groups a slot's credited seconds. Relayed seconds group apart
+// from the rest, so that an entry's labels are its own seconds' and
+// via_relay_s counts relayed seconds alone (Submission.Totals).
 type creditKey struct {
-	proj   string
-	reason event.Reason
-	level  event.Evidence
-	inTurn bool
+	proj    string
+	reason  event.Reason
+	level   event.Evidence
+	inTurn  bool
+	relayed bool
 }
 
 // projSpan is a span of seconds in which a turn of a project ran.
@@ -780,6 +915,13 @@ func (c *creditor) slotCredits() []Credit {
 		if at.resolver >= 0 {
 			cr.ResolvedBy = c.d.anchors[at.resolver].ID
 		}
+		if at.won != "" && at.won != at.proj {
+			// Relayed credit took a slot that resolves to another project,
+			// where this device's evidence credited nothing (relayedRest):
+			// the slot's seconds go to its project, and no resolution of
+			// the slot's window is behind them.
+			cr.ProjectKey, cr.ResolvedBy = at.won, ""
+		}
 		group := map[creditKey]*Credited{}
 		var keys []creditKey
 		for k := lo; k < hi; k++ {
@@ -820,7 +962,7 @@ func (c *creditor) slotCredits() []Credit {
 			if cr.ProjectKey == "" {
 				cr.ProjectKey = sec.proj
 			}
-			key := creditKey{proj: sec.proj, reason: sec.reason, level: sec.level, inTurn: inTurn}
+			key := creditKey{proj: sec.proj, reason: sec.reason, level: sec.level, inTurn: inTurn, relayed: sec.relayed}
 			e := group[key]
 			if e == nil {
 				e = &Credited{ProjectKey: key.proj, Reason: key.reason, Level: key.level, InTurn: key.inTurn}
@@ -829,7 +971,13 @@ func (c *creditor) slotCredits() []Credit {
 			}
 			e.Seconds++
 			e.Halves += 2
-			for _, ai := range []int32{sec.anchor, sec.other, at.resolver} {
+			// Relayed credit rests on its anchor alone: no resolution of the
+			// slot's window steers it (SM 2.7).
+			ids, labels := []int32{sec.anchor, sec.other, at.resolver}, []event.Label{sec.label, sideDoorLabel(at.sideDoor)}
+			if sec.relayed {
+				ids, labels = ids[:2], labels[:1]
+			}
+			for _, ai := range ids {
 				if ai < 0 {
 					continue
 				}
@@ -846,7 +994,7 @@ func (c *creditor) slotCredits() []Credit {
 			// The side-door heartbeat that resolved an editor slot labels all
 			// of it, as the anchor that resolved a shared terminal's slot does
 			// through its labels above (D-rule2-sidedoor).
-			for _, l := range []event.Label{sec.label, sideDoorLabel(at.sideDoor)} {
+			for _, l := range labels {
 				if l != "" && !slices.Contains(e.Labels, l) {
 					e.Labels = append(e.Labels, l)
 				}
@@ -862,13 +1010,10 @@ func (c *creditor) slotCredits() []Credit {
 			if c := strings.Compare(string(x.level), string(y.level)); c != 0 {
 				return c
 			}
-			switch {
-			case x.inTurn == y.inTurn:
-				return 0
-			case x.inTurn:
-				return 1
+			if c := cmpBool(x.inTurn, y.inTurn); c != 0 {
+				return c
 			}
-			return -1
+			return cmpBool(x.relayed, y.relayed)
 		})
 		for _, key := range keys {
 			e := group[key]

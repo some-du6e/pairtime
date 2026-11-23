@@ -145,6 +145,118 @@
 // 5.3, 5.4). Each timeline under testdata/timelines has a golden.jsonl with
 // its buckets, and TestGolden holds the output to it (DESIGN 6.6).
 //
+// # What WP-ADE1 builds
+//
+// Relayed prompts, SM 2.2 rule 9 as D-relayed decides it
+// (docs/errata/2026-11-22-relayed-prompts.md), with
+// testdata/timelines/relayed as the oracle. An agent app such as T3 Code
+// runs agents here for messages a person types on another device, and its
+// reader writes a relay.message for each message the app says a person
+// sent. Step reads them with the rest (relay.go):
+//
+//   - Pairing is the app's structure, never text: a record pairs with the
+//     prompt.submit its link names, the record's prompt or the prompt's
+//     relay, when the prompt came by a hook or a log reader, in the
+//     record's session or with the record's session none, no earlier than
+//     the stamp sent_at and at most RELAY_MATCH_S after it, and the record
+//     at most RELAY_SEEN_LAG_S after the stamp. A record that pairs with
+//     nothing opens nothing and raises no flag. Every relay.message and
+//     what became of it is in Derived.Relays.
+//   - SM 2.2's rules with an app: a record of declared cron makes its
+//     prompt scheduled (rule 1), one of cross_session a subagent's (rule
+//     3). Rule 4 lists parent_class agent_app, an agent app's own server,
+//     and takes a prompt marked guest whatever its session. A record of
+//     declared none in a session of parent_class agent_app witnesses its
+//     prompt, which then skips rule 4 unless it is marked guest. Rules 6
+//     and 7 read a witnessed prompt at the stamp, and skip it for a message
+//     from the app's phone app; when they hold, the prompt is typed or
+//     pasted at its usual level, anchored at its own t with its lead ending
+//     at the stamp. Otherwise it is relayed (rule 9), with the length and
+//     class of the app's own text.
+//   - A relayed anchor is its relay.message, standing at the stamp: a lead
+//     of typing time only, cut to the time since the thread's previous
+//     relay.message of declared none, level C with via_relay. It is no
+//     human anchor for anything but its own lead and its own session's
+//     reading: it resolves no slot, qualifies no other reading, ends no
+//     returned run and brackets no lookup.
+//   - Relayed reading (SM 2.4): a relayed prompt resets its session's
+//     bucket at pickup, and from that reset the bucket holds at most
+//     UNKNOWN_BUCKET_MAX_S. Output fills it, an automated turn's included.
+//     It drains, as READ and never SUP, from one of the session's stops
+//     until the thread's next relayed anchor is sent or the session's next
+//     turn starts, when that anchor is sent within READ_HORIZON_S after the
+//     stop and pairs within PENDING_WINDOW_S - 60 s of it. That anchor
+//     vouches for the reading and gives it its labels.
+//   - Relayed credit comes after every other candidate, in a slot of any
+//     presence but one the machine slept through, with no focus or
+//     keyboard test (SM 2.3, 2.7). Between two relayed sessions SM 2.7's
+//     rule decides: the next relayed lead that holds the second, then the
+//     anchor sent soonest, then the latest relayed anchor, then the lower
+//     project_key and session_key (relaycredit.go). Every second it
+//     credits is level C with via_relay, and Submission.Totals counts them
+//     in via_relay_s.
+//   - A device that never samples while its agent runs, such as a server,
+//     derives whole minutes (presence.live), and an uncredited second
+//     there takes SM 5.2's codes for a live slot whose presence is
+//     unknown: X.bucket_cap where only the 120 s cap kept a session from
+//     reading, else X.agent_only while a turn a person started runs, a
+//     relayed one included, or a no_input one, else X.automated while an
+//     automated turn runs, else X.no_anchor, turns of every project
+//     counting.
+//
+// Readings of D-relayed:
+//
+//   - The order of links is record order, by t and then seq, the order the
+//     agent wrote them in. The first link claims both records it names,
+//     whether or not it passes the checks, and a later link naming either
+//     is void.
+//   - DESIGN 5.2 lets a relay record witness only a hook or log prompt, and
+//     no pairing reads a prompt by any other path: a plugin's prompt
+//     carrying relay pairs with nothing.
+//   - Only the record's own t is bounded, at most RELAY_SEEN_LAG_S after the
+//     stamp, as SM 2.2 states it.
+//   - Rule 6's focus test at the stamp takes the os.focus record at or
+//     before it, since the stamp has no record position.
+//   - A relayed prompt's class is SM 2.2's, over the app's text: answer
+//     when the prompt answers a question or the session's last output asked
+//     one, low_effort by the record's go-ahead test or under
+//     SUBSTANTIVE_CHARS typed characters, else substantive. The record
+//     carries no error signature, so it is never error_paste.
+//   - A device counts as never sampling when it has no os.presence,
+//     os.focus or os.power record and some record came by a path other
+//     than a log reader's. Lookback's transcripts come only by a log reader,
+//     and lookback's own range is WP-SC7's.
+//   - The thread's next relayed anchor after a stop is the first one sent
+//     after the stop of those that pair by the deadline, PENDING_WINDOW_S -
+//     60 s after the stop. One that pairs later keeps its own lead but is
+//     no next relayed anchor for that stop: it neither vouches for the
+//     reading nor ends it. So a pairing that comes when the stop's minute
+//     may already be final changes nothing about the reading after the
+//     stop. Replay in testdata/timelines/relayed/relayed.py takes the
+//     first relayed anchor sent after the stop however late it pairs, and
+//     leaves the stop no reading when it pairs past the deadline. The two
+//     differ only when a thread's earlier message pairs after a later one,
+//     which T3 Code's queue, run in order, doesn't do.
+//   - The rule between two relayed sessions reads "latest relayed message"
+//     as the latest relayed anchor sent at or before the second, and
+//     "next relayed anchor's lead" as the lead of the session's anchor sent
+//     soonest after the second of those whose leads hold it.
+//   - A slot holds one project (SM 5.1), and relayed candidates skip SM 3.3
+//     rule 1's focus test. In a slot that resolves to a project they are
+//     weighed a second at a time after this device's own candidates when
+//     they are of that project, and a relayed candidate of another project
+//     credits the slot only if nothing else credited any second of it,
+//     once the slot is done; then the slot is that project's. In a slot
+//     that resolves to none they are weighed at once, and in an ambiguous
+//     one once the slot is done (attribution.relayNow).
+//   - A lookup beats relayed credit, and takes the present seconds of its
+//     run though relayed credit took them first, since a lookup's brackets
+//     come after the run. What a relayed reading second drained from its
+//     bucket stays drained.
+//   - X.bucket_cap for relayed reading counts what UNKNOWN_BUCKET_MAX_S held
+//     back while it and the bucket stay within BUCKET_MAX_S, one second for
+//     each session reading in a second nothing credited, as Replay does.
+//
 // # Final and pending
 //
 // What Step derives for a time stays pending until now is PENDING_WINDOW_S
@@ -166,8 +278,17 @@
 // it may be a lookup, whose credit waits for the run's end, so nothing from
 // such a run on is final until its end bracket is. SM 2.5 sets no bound on
 // that (docs/errata/2026-11-19-return-rule-lookahead.md,
-// docs/errata/2026-11-20-lookup-lookahead.md). Until WP-SC5 adds
-// checkpoints, a State holds every record it was given.
+// docs/errata/2026-11-20-lookup-lookahead.md). A pairing of an agent app's
+// message with its prompt reaches back from the message's stamp instead of
+// from either record's t (SM 2.3): the prompt can come up to RELAY_MATCH_S
+// after the stamp, and the lead it opens ends at the stamp. Step holds
+// FinalBefore at the start of the longest lead an unpaired message could
+// open until it pairs or RELAY_MATCH_S after its stamp passes, and a
+// pairing changes nothing in a minute that is already final. The reading
+// a relayed anchor vouches for needs no hold: the anchor must pair within
+// PENDING_WINDOW_S - 60 s of the stop the reading starts at, while that
+// stop's minute is still pending. Until WP-SC5
+// adds checkpoints, a State holds every record it was given.
 //
 // # Readings of the spec
 //
@@ -278,5 +399,6 @@
 //     turns, else X.automated, else X.no_input. X.no_anchor comes last.
 //     That settles docs/errata/2026-11-20-uncredited-code-placement.md.
 //     Seconds before the presence sampler ran are X.absent until lookback
-//     (WP-SC7).
+//     (WP-SC7), but on a device that never samples, where SM 5.2's codes
+//     for a live slot whose presence is unknown apply (WP-ADE1 above).
 package score

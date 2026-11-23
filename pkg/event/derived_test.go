@@ -194,7 +194,15 @@ func TestTurnValidate(t *testing.T) {
 		{"stop isn't before submit", func(tu *Turn) { tu.TStop = tu.TSubmit - 1 }, "t_stop:"},
 		{"human turns have a class", func(tu *Turn) { tu.PromptClass = "" }, "prompt_class:"},
 		{"human attempts count from 1", func(tu *Turn) { tu.Attempt = 0 }, "attempt: must be at least 1"},
-		{"automated turns have no class", func(tu *Turn) { tu.Origin, tu.Attempt = OriginSelfContinue, 0 }, "prompt_class: only human turns"},
+		// SM 2.2 rule 9: a relayed prompt is a person's prompt for its own
+		// turn.
+		{"a relayed turn is a person's, with a class and an attempt", func(tu *Turn) {
+			tu.Origin, tu.PromptClass = OriginRelayed, ClassLowEffort
+		}, ""},
+		{"a relayed turn has a class", func(tu *Turn) { tu.Origin, tu.PromptClass = OriginRelayed, "" }, "prompt_class:"},
+		{"relayed attempts count from 1", func(tu *Turn) { tu.Origin, tu.Attempt = OriginRelayed, 0 }, "attempt: must be at least 1"},
+		{"automated turns have no class", func(tu *Turn) { tu.Origin, tu.Attempt = OriginSelfContinue, 0 },
+			"prompt_class: only the turns a person started, human or relayed, have one"},
 		{"automated turns have no attempt", func(tu *Turn) { tu.Origin, tu.PromptClass = OriginHeadless, "" }, "attempt: must be 0"},
 		{"unknown origin", func(tu *Turn) { tu.Origin = "alien" }, "origin:"},
 		{"word counts aren't negative", func(tu *Turn) { tu.WordsOut = -1 }, "words_out:"},
@@ -271,6 +279,28 @@ func TestAnchorValidate(t *testing.T) {
 		{"focus_unknown is listed once", func(a *Anchor) {
 			a.Labels = []Label{LabelFocusUnknown, LabelFocusUnknown}
 		}, "labels: must list each label once"},
+		// SM 2.2 rule 9, DESIGN 4.1 E-14: a relayed anchor stands on its
+		// app message and carries via_relay, an origin label.
+		{"a relayed anchor stands on its app message and carries via_relay", func(a *Anchor) {
+			a.Kind, a.Via, a.Labels, a.Corroborated, a.TrailS = AnchorGoAhead, ViaApp, []Label{LabelViaRelay}, false, 0
+		}, ""},
+		{"an anchor on an app message always carries via_relay", func(a *Anchor) {
+			a.Via, a.Labels, a.Corroborated = ViaApp, nil, false
+		}, `labels: missing "via_relay"; an anchor on an agent app's message is relayed and always carries it`},
+		{"via_relay needs an app message", func(a *Anchor) { a.Labels = []Label{LabelViaRelay} },
+			`labels: has "via_relay", but the anchor arrived via "hook"`},
+		{"a prompt typed here at the app's stamp is the hook's anchor, with no via_relay", func(a *Anchor) {
+			a.Labels = nil
+		}, ""},
+		{"an app anchor carries no side-door label", func(a *Anchor) {
+			a.Via, a.Labels, a.Corroborated = ViaApp, []Label{LabelViaPlugin, LabelViaRelay}, false
+		}, `labels: has "via_plugin", but the anchor arrived via "app"`},
+		{"an app anchor can't be corroborated", func(a *Anchor) {
+			a.Via, a.Labels = ViaApp, []Label{LabelViaRelay}
+		}, `corroborated: is true, but an anchor that arrived via "app" can't be`},
+		{"via_relay comes last among an anchor's labels", func(a *Anchor) {
+			a.Via, a.Labels, a.Corroborated = ViaApp, []Label{LabelViaRelay, LabelFocusUnknown}, false
+		}, "labels: must list each label once, in the order"},
 	})
 }
 
@@ -382,6 +412,20 @@ func TestMinuteBucketValidate(t *testing.T) {
 			}
 			m.Slots[1].Lbl = []Label{LabelFocusUnknown}
 		}, ""},
+		// via_relay is a new value of the existing lbl field (DESIGN 4.1
+		// E-14).
+		{"a slot of relayed credit is labeled via_relay, at level C in a live minute", func(m *MinuteBucket) {
+			m.Slots[1].Ev, m.Slots[1].Lbl = EvidenceC, []Label{LabelViaRelay}
+		}, ""},
+		{"via_relay comes last, after focus_unknown", func(m *MinuteBucket) {
+			m.Slots[1].Ev, m.Slots[1].Lbl = EvidenceC, []Label{LabelViaTrack, LabelFocusUnknown, LabelViaRelay}
+		}, ""},
+		{"via_relay before focus_unknown is out of order", func(m *MinuteBucket) {
+			m.Slots[1].Ev, m.Slots[1].Lbl = EvidenceC, []Label{LabelViaRelay, LabelFocusUnknown}
+		}, "slots[1].lbl: must list each label once, in the order"},
+		{"a slot with relayed credit is level C, its weakest second's, whatever else it holds (SM 2.3, DESIGN 6.4)", func(m *MinuteBucket) {
+			m.Slots[1].Lbl = []Label{LabelViaRelay}
+		}, `slots[1].ev: must be "C" in a slot labeled "via_relay"`},
 	})
 }
 
@@ -632,6 +676,10 @@ func TestSubmissionTotalsValidate(t *testing.T) {
 		{"held seconds sit outside credited", func(s *SubmissionTotals) { s.HeldS = 600 }, ""},
 		{"a track loop's level-C credit", func(s *SubmissionTotals) { s.ViaTrackS = 360 }, ""},
 		{"track seconds fit in credited", func(s *SubmissionTotals) { s.ViaTrackS = 30000 }, "via_track_s: is 30000, more than credited_s = 21240"},
+		{"relayed credit, all of it level C", func(s *SubmissionTotals) { s.ViaRelayS = 360 }, ""},
+		{"relayed seconds fit in level C, since every one is level C (SM 2.3)", func(s *SubmissionTotals) { s.ViaRelayS = 361 },
+			"via_relay_s: is 361, more than level_c_s = 360"},
+		{"no negative relayed seconds", func(s *SubmissionTotals) { s.ViaRelayS = -1 }, "via_relay_s:"},
 		{"no negative held time", func(s *SubmissionTotals) { s.HeldS = -1 }, "held_s:"},
 		{"coding = logged - AI", func(s *SubmissionTotals) { s.CodingLoggedS = 7000 }, "coding_logged_s: is 7000"},
 		{"handbook = coding + AI/3", func(s *SubmissionTotals) { s.HandbookS = 4.2 * 3600 }, "handbook_s: is 15120"},

@@ -35,12 +35,12 @@ var logReaders = []string{"claude_code", "codex", "copilot", "gemini", "devin", 
 // checkNames are DESIGN 7.3's checks, in order.
 var checkNames = []string{"CC1", "CC2", "CC3", "CC4", "CC5", "CC6", "CC7", "CC8", "CC9", "CC10", "CC11"}
 
-// ledgerKinds are ledger-v1.md 4.2's record types 0x01 to 0x12, a table
+// ledgerKinds are ledger-v1.md 4.2's record types 0x01 to 0x13, a table
 // fixed for good whatever order kindTable takes later.
 var ledgerKinds = []event.Kind{
 	"session.start", "session.end", "prompt.submit", "agent.output", "agent.tool", "agent.permission",
 	"agent.interrupt", "agent.queue", "agent.stop", "agent.subagent", "editor.activity", "shell.command",
-	"git.change", "os.presence", "os.focus", "os.power", "otel.active_time", "cli.track",
+	"git.change", "os.presence", "os.focus", "os.power", "otel.active_time", "cli.track", "relay.message",
 }
 
 // checkScenario is a scenario's expected.json.

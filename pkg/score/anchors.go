@@ -19,6 +19,11 @@ import (
 // where the OS reports them (SM 2.3). A typed command also credits its own
 // run, [T, T+WatchMS). Its trail is [TrailFrom, TrailFrom+TrailMS).
 // Realizing the windows in present, focused seconds is WP-SC2's.
+//
+// An anchor that rests on an agent app's message (SM 2.2 rule 9) has its
+// lead end at the app's stamp, SentAt, instead (leadEnd). A relayed
+// anchor stands there, so its T is SentAt; a prompt that rules 6 and 7
+// made typed at the stamp keeps its own T, a second or two later.
 type Anchor struct {
 	// ID is the event_id of the record behind the act.
 	ID         string           `json:"anchor_id"`
@@ -52,17 +57,57 @@ type Anchor struct {
 	// 6.4).
 	Corroborated bool          `json:"corroborated,omitempty"`
 	Labels       []event.Label `json:"labels,omitempty"`
+	// SentAt is the stamp of the agent app's message an anchor rests on
+	// (SM 2.2 rule 9), when a relay.message witnessed its prompt: when the
+	// app took the message from the person, and where the lead ends. A
+	// relayed anchor's T is SentAt.
+	SentAt int64 `json:"sent_at,omitempty"`
+	// Prompt is the event_id of the prompt.submit a relayed anchor's
+	// message paired with, whose turn it opened; the anchor's own ID is
+	// the relay.message's. Relay is the event_id of the relay.message that
+	// witnessed a prompt rules 6 and 7 made typed at its stamp.
+	Prompt string `json:"prompt,omitempty"`
+	Relay  string `json:"relay,omitempty"`
 	// decided is when the anchor is decided: the latest t of the records it
 	// goes by, and no earlier than T. A typed command's record is written
 	// when the command ends, and a permission's when the request pairs with
 	// the next tool event, both after T. The anchor is final, and can
 	// change what was derived, from there (rules.reach).
 	decided int64
+	// thread is a relayed anchor's thread key, and paired when its message
+	// paired: the later of its relay record's t and its prompt's (SM 2.4,
+	// the reading a relayed anchor vouches for).
+	thread string
+	paired int64
 }
 
 // from returns the earliest time the anchor can credit, qualify a drain or
-// end a returned run: rules.reach before it is decided.
-func (a *Anchor) from(r rules) int64 { return a.decided - r.reach }
+// end a returned run: rules.reach before it is decided. A pairing reaches
+// back from the app's stamp, not from the later of its two records (SM
+// 2.3), so an anchor that rests on one counts reach from SentAt, which is
+// never later than when it is decided.
+func (a *Anchor) from(r rules) int64 {
+	if a.SentAt != 0 {
+		return a.SentAt - r.reach
+	}
+	return a.decided - r.reach
+}
+
+// leadEnd returns where the anchor's lead ends: at the app's stamp for an
+// anchor that rests on an agent app's message, else at T (SM 2.2, 2.3).
+func (a *Anchor) leadEnd() int64 {
+	if a.SentAt != 0 {
+		return a.SentAt
+	}
+	return a.T
+}
+
+// relayed reports whether the anchor is a relayed message's (SM 2.2 rule
+// 9). It credits its own lead and its own session's reading, and is no
+// human anchor for anything else: not for another session's reading or
+// its level, not for a returned run, not for a lookup's brackets (SM
+// 2.3).
+func (a *Anchor) relayed() bool { return a.Origin == event.OriginRelayed }
 
 // Event returns the anchor as pkg/event's derived record.
 func (a Anchor) Event() event.Anchor {
@@ -112,14 +157,26 @@ func promptKind(c event.PromptClass) (event.AnchorKind, event.Reason) {
 }
 
 // promptAnchors makes an anchor of every prompt a person submitted: SM 2.2
-// origins human_typed and human_pasted. A prompt with no input before it
-// opens nothing (SM 2.2 rule 8); while its turn runs and no other turn of
-// its project does, the project's uncredited seconds are X.no_input (SM
-// 5.2, credit.go).
+// origins human_typed and human_pasted, and relayed (relayedAnchor). A
+// prompt with no input before it opens nothing (SM 2.2 rule 8); while its
+// turn runs and no other turn of its project does, the project's
+// uncredited seconds are X.no_input (SM 5.2, credit.go).
+//
+// A prompt an agent app's message witnesses and rules 6 and 7 made typed at
+// the app's stamp is anchored as any typed prompt, at its usual level, at
+// its own t (SM 2.2): its lead and its evidence window end at the stamp,
+// and it is decided once the relay record is in too.
 func (d *deriver) promptAnchors() {
 	for _, tb := range d.turns {
 		t := tb.turn
-		if tb.primary < 0 || !t.Origin.Human() {
+		if tb.primary < 0 {
+			continue
+		}
+		if t.Origin == event.OriginRelayed {
+			d.relayedAnchor(tb)
+			continue
+		}
+		if !t.Origin.Human() {
 			continue
 		}
 		e := d.recs[tb.primary]
@@ -128,9 +185,48 @@ func (d *deriver) promptAnchors() {
 			Origin: t.Origin, PromptClass: t.PromptClass, LeadMS: think + typing, TypingMS: typing,
 			TrailFrom: e.T, Via: e.Via, Corroborated: d.corroborated(tb.prompts)}
 		a.Kind, a.Reason = promptKind(t.PromptClass)
-		d.level(&a, e.T-d.r.keysPre, e.T, d.sessionHost(tb.sess, tb.primary))
-		d.add(a, d.latest(tb.prompts))
+		end, decided := e.T, d.latest(tb.prompts)
+		if w := tb.witness; w != nil {
+			a.SentAt, a.Relay = w.d.SentAt, d.recs[w.pos].EventID
+			end, decided = w.d.SentAt, max(decided, d.recs[w.pos].T)
+		}
+		d.level(&a, end-d.r.keysPre, end, d.sessionHost(tb.sess, tb.primary))
+		d.add(a, decided)
 	}
+}
+
+// relayedAnchor makes the anchor of a relayed prompt (SM 2.2 rule 9, 2.3):
+// the relay.message that witnessed it, standing at the app's stamp. Its
+// lead is typing time only, whatever its class: the typed length origin
+// took from the app's own text, over COMPOSE_CPS and at most
+// COMPOSE_MAX_S, cut to the time since the thread's previous relay.message
+// of declared none, paired or not, and ending at the stamp. It has no think
+// part and no trail, and its class gives its kind and reason: P, ANS or GO.
+// It is level C with via_relay, and vm on a VM, whatever backs it, and is
+// never corroborated (DESIGN 6.4). It is decided once both its records are
+// in, but reaches back from the stamp (Anchor.from).
+//
+// Realizing its lead, in a slot of any presence but one the machine slept
+// through and with no focus or keyboard test, after every other candidate
+// (SM 2.3, 2.7), is the relayed stage of the credit pass, which windows
+// leaves it to.
+func (d *deriver) relayedAnchor(tb *turnBuild) {
+	t, w := tb.turn, tb.witness
+	re, pe := d.recs[w.pos], d.recs[w.prompt]
+	sent := w.d.SentAt
+	typing := d.r.typingMS(t.TypedChars)
+	if prev, ok := d.prevMessage(w); ok {
+		typing = min(typing, sent-prev)
+	}
+	a := Anchor{ID: re.EventID, T: sent, ProjectKey: t.ProjectKey, SessionKey: t.SessionKey, TurnKey: t.TurnKey,
+		Origin: t.Origin, PromptClass: t.PromptClass, LeadMS: typing, TypingMS: typing, TrailFrom: sent, Via: re.Via,
+		Level: event.EvidenceC, SentAt: sent, Prompt: pe.EventID, thread: w.d.ThreadKey, paired: max(re.T, pe.T)}
+	a.Kind, a.Reason = promptKind(t.PromptClass)
+	if d.dev.VM {
+		a.Labels = append(a.Labels, event.LabelVM)
+	}
+	a.Labels = append(a.Labels, event.LabelViaRelay)
+	d.add(a, max(re.T, d.latest(tb.prompts)))
 }
 
 // corroborated reports whether the records at the given indexes, all of one

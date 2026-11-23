@@ -359,6 +359,10 @@ func TestStateConstructors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	preRelay, err := params.ByVersion("0.2.0")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct {
 		name string
 		call func()
@@ -366,6 +370,8 @@ func TestStateConstructors(t *testing.T) {
 		{"NewState needs a parameter table", func() { NewState(nil, Device{}) }},
 		{"NewState refuses table 0.1.0, which predates INPUT_RELEASE_GRACE_MS, a parameter the scorer reads",
 			func() { NewState(old, Device{}) }},
+		{"NewState refuses table 0.2.0, which predates RELAY_MATCH_S and RELAY_SEEN_LAG_S, parameters the scorer reads",
+			func() { NewState(preRelay, Device{}) }},
 		{"Step refuses the zero State", func() { Step(State{}, nil) }},
 	} {
 		t.Run(c.name, func(t *testing.T) {

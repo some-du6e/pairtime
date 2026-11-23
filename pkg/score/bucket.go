@@ -13,9 +13,11 @@ import (
 // The reading bucket (SM 2.4). Each harness session has one: a FIFO queue
 // of what the agent showed, in seconds of reading. Output fills it, a
 // person's prompt resets it to R_TURN_BASE_S, and present, focused seconds
-// near a human act drain it as SUP or READ (credit.go). Amounts are exact:
-// a bucket counts in units of 1 / (READ_WPM * DIFF_LPM) of a second
-// (rules.units).
+// near a human act drain it as SUP or READ (credit.go). A relayed prompt's
+// reset caps it at UNKNOWN_BUCKET_MAX_S until the next reset, and its
+// session's relayed reading drains it after a stop (relaycredit.go).
+// Amounts are exact: a bucket counts in units of 1 / (READ_WPM * DIFF_LPM)
+// of a second (rules.units).
 
 // Fill is what one turn put in its session's reading bucket (SM 2.4), for
 // review and for WP-FX4's side-door checks.
@@ -88,10 +90,12 @@ func (s source) weaker(o source) source {
 }
 
 // bucketOp is one change to a session's bucket, in record order: a reset
-// to a base, or a fill.
+// to a base, or a fill. capped marks the reset of a relayed prompt, from
+// which the bucket holds at most UNKNOWN_BUCKET_MAX_S (SM 2.4).
 type bucketOp struct {
 	t, pos int64
 	reset  bool
+	capped bool
 	units  int64
 	prose  bool
 	src    source
@@ -103,6 +107,14 @@ type bucket struct {
 	ops     []bucketOp
 	next    int
 	entries []entry
+	// capped is set from a relayed prompt's reset to the next reset: the
+	// bucket then holds at most UNKNOWN_BUCKET_MAX_S, and new output past
+	// that evicts the oldest entries into held, where they wait as long as
+	// BUCKET_MAX_S would have kept them in the bucket (SM 2.4). A second
+	// that would have read them takes from held instead, as X.bucket_cap,
+	// the code for reading that only the 120 s cap kept back (SM 5.2).
+	capped bool
+	held   []entry
 	// evicted is what BUCKET_MAX_S evicted that would still be in the
 	// bucket without the cap: it expires and resets as the entries do, and
 	// a second that finds the bucket empty takes from it instead, as
@@ -122,52 +134,89 @@ func (b *bucket) advance(r rules, t int64) {
 		op := b.ops[b.next]
 		b.expire(r, op.t)
 		if op.reset {
-			b.entries, b.evicted = b.entries[:0], b.evicted[:0]
+			b.entries, b.held, b.evicted = b.entries[:0], b.held[:0], b.evicted[:0]
+			b.capped = op.capped
 		}
 		if op.units > 0 {
 			b.entries = append(b.entries, entry{t: op.t, units: op.units, prose: op.prose, src: op.src})
 		}
 		// New output past BUCKET_MAX_S evicts the oldest entries, so the
-		// bucket holds the most recent output.
-		over := b.total(false) - r.units(r.bucketMax)
-		for over > 0 && len(b.entries) > 0 {
-			take := min(over, b.entries[0].units)
-			b.entries[0].units -= take
-			over -= take
-			b.evicted = append(b.evicted, entry{t: b.entries[0].t, units: take})
-			if b.entries[0].units == 0 {
-				b.entries = b.entries[1:]
-			}
+		// bucket holds the most recent output. From a relayed prompt's
+		// reset the bucket holds at most UNKNOWN_BUCKET_MAX_S, and what
+		// that cap evicts waits in held while it and the bucket together
+		// stay within BUCKET_MAX_S (SM 2.4).
+		if b.capped {
+			b.held = evict(&b.entries, b.held, b.total(false)-r.units(r.unknownBucketMax))
+			b.evicted = evict(&b.held, b.evicted, unitsIn(b.entries)+unitsIn(b.held)-r.units(r.bucketMax))
+		} else {
+			b.evicted = evict(&b.entries, b.evicted, b.total(false)-r.units(r.bucketMax))
 		}
 	}
 	b.expire(r, t)
 }
 
-func (b *bucket) expire(r rules, t int64) {
-	i := 0
-	for i < len(b.entries) && t-b.entries[i].t > r.bucketTTL {
-		i++
+// evict moves the oldest over units of *from to the end of to, and returns
+// to. An over that isn't positive moves nothing.
+func evict(from *[]entry, to []entry, over int64) []entry {
+	es := *from
+	for over > 0 && len(es) > 0 {
+		take := min(over, es[0].units)
+		es[0].units -= take
+		over -= take
+		to = append(to, entry{t: es[0].t, units: take})
+		if es[0].units == 0 {
+			es = es[1:]
+		}
 	}
-	b.entries = b.entries[i:]
-	i = 0
-	for i < len(b.evicted) && t-b.evicted[i].t > r.bucketTTL {
-		i++
-	}
-	b.evicted = b.evicted[i:]
+	*from = es
+	return to
 }
 
-// takeEvicted takes up to u units of what BUCKET_MAX_S evicted, oldest
-// first, and reports whether there was any.
-func (b *bucket) takeEvicted(u int64) bool {
-	if len(b.evicted) == 0 {
+// unitsIn sums the units of es.
+func unitsIn(es []entry) int64 {
+	var n int64
+	for _, e := range es {
+		n = addUnits(n, e.units)
+	}
+	return n
+}
+
+func (b *bucket) expire(r rules, t int64) {
+	for _, es := range []*[]entry{&b.entries, &b.held, &b.evicted} {
+		i := 0
+		for i < len(*es) && t-(*es)[i].t > r.bucketTTL {
+			i++
+		}
+		*es = (*es)[i:]
+	}
+}
+
+// takeCapped takes up to u units of what a cap kept out of the bucket,
+// oldest first, and reports whether there was any: what
+// UNKNOWN_BUCKET_MAX_S held back, else, unless held is set, what
+// BUCKET_MAX_S evicted. A second the bucket would have credited but for a
+// cap takes from them, as X.bucket_cap (SM 5.2). Relayed reading sets held:
+// its X.bucket_cap is for reading that only the 120 s cap kept back, which
+// BUCKET_MAX_S would still have let through.
+func (b *bucket) takeCapped(u int64, held bool) bool {
+	if takeFrom(&b.held, u) {
+		return true
+	}
+	return !held && takeFrom(&b.evicted, u)
+}
+
+// takeFrom takes up to u units from *es, oldest first, and reports whether
+// it held any.
+func takeFrom(es *[]entry, u int64) bool {
+	if len(*es) == 0 {
 		return false
 	}
-	for u > 0 && len(b.evicted) > 0 {
-		take := min(u, b.evicted[0].units)
-		b.evicted[0].units -= take
+	for u > 0 && len(*es) > 0 {
+		take := min(u, (*es)[0].units)
+		(*es)[0].units -= take
 		u -= take
-		if b.evicted[0].units == 0 {
-			b.evicted = b.evicted[1:]
+		if (*es)[0].units == 0 {
+			*es = (*es)[1:]
 		}
 	}
 	return true
@@ -277,12 +326,14 @@ func (f *turnFill) add(r rules, u int64, sideDoor bool) int64 {
 }
 
 // buildBuckets collects every session's bucket ops (SM 2.4): a reset to
-// R_TURN_BASE_S at each prompt a person submitted, at each `pairtime track`
-// anchor (DESIGN 5.4) and when the agent picks up a queued message; and a
-// fill at each agent.output and agent.tool. Output from automated turns
-// fills the bucket and resets nothing. What a plugin or the bridge reports
-// fills a turn only up to R_TURN_BASE_S, base included, unless a hook or a
-// transcript record backs the session (DESIGN 5.2).
+// R_TURN_BASE_S at each prompt a person submitted, a relayed one included,
+// whose reset caps the bucket at UNKNOWN_BUCKET_MAX_S until the next one;
+// at each `pairtime track` anchor (DESIGN 5.4) and when the agent picks up
+// a queued message; and a fill at each agent.output and agent.tool. Output
+// from automated turns fills the bucket and resets nothing. What a plugin
+// or the bridge reports fills a turn only up to R_TURN_BASE_S, base
+// included, unless a hook or a transcript record backs the session (DESIGN
+// 5.2).
 func (d *deriver) buildBuckets() {
 	d.buckets = map[string]*bucket{}
 	get := func(s *session) *bucket {
@@ -327,15 +378,20 @@ func (d *deriver) buildBuckets() {
 		if tb.turn.RunUntil > tb.turn.TSubmit {
 			b.spans = append(b.spans, span{tb.turn.TSubmit, tb.turn.RunUntil})
 		}
-		if tb.primary < 0 || !tb.turn.Origin.Human() {
+		if tb.primary < 0 || !tb.turn.Origin.ByPerson() {
 			continue
 		}
 		// Each human prompt resets the bucket to its own base when its turn
-		// starts: the person has moved on from older output.
+		// starts: the person has moved on from older output. A relayed
+		// prompt is a person's prompt for its own turn, so it resets the
+		// bucket when the agent picks it up, and from then on the bucket
+		// holds at most UNKNOWN_BUCKET_MAX_S (SM 2.2, 2.4). Its anchor is
+		// its relay.message, not the prompt, so its base has the zero
+		// source, the harness's own records.
 		f := fillOf(tb)
 		f.base = base
-		b.ops = append(b.ops, bucketOp{t: tb.turn.TSubmit, pos: int64(tb.primary), reset: true, units: base,
-			src: opener(anchorOf[tb.turn.Prompt])})
+		b.ops = append(b.ops, bucketOp{t: tb.turn.TSubmit, pos: int64(tb.primary), reset: true,
+			capped: tb.turn.Origin == event.OriginRelayed, units: base, src: opener(anchorOf[tb.turn.Prompt])})
 	}
 	for _, a := range d.anchors {
 		s := d.sessions[a.SessionKey]

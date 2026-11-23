@@ -81,7 +81,7 @@ func TestSlotSummary(t *testing.T) {
 }
 
 // everyFixture is every timeline under testdata/timelines: the top-level
-// fixtures, then the side-door and lookback cases in their own
+// fixtures, then the side-door, lookback and relayed cases in their own
 // directories, as pkg/score's golden tests read them (goldenCases).
 func everyFixture(t *testing.T) []*timelines.Fixture {
 	t.Helper()
@@ -90,7 +90,7 @@ func everyFixture(t *testing.T) []*timelines.Fixture {
 		t.Fatal(err)
 	}
 	out := loadFixtures(t)
-	for _, dir := range []string{"sidedoor", "lookback"} {
+	for _, dir := range []string{"sidedoor", "lookback", "relayed"} {
 		names, err := timelines.List(filepath.Join(root, dir))
 		if err != nil {
 			t.Fatal(err)
@@ -111,14 +111,15 @@ func everyFixture(t *testing.T) []*timelines.Fixture {
 
 // TestSlotSummaryMatchesPkgScore holds the agent's slot summary to
 // pkg/score's Minute.Bucket, the summary SM 5.1 uploads, on every timeline
-// under testdata/timelines, the side-door and lookback cases included:
-// each slot pkg/score derives gets the same project, credited seconds,
-// level and labels from both. The reason may differ: slotSummary takes the
-// largest entry's, Bucket the reason with the most credit. The side-door
-// timelines hold slots with labels, so a summary that dropped one fails
-// here. Where a timeline has a slot whose largest entry isn't at its
-// weakest level, a summary that took the largest entry's level fails too;
-// TestSlotSummary's mixed slot holds that rule either way.
+// under testdata/timelines, the side-door, lookback and relayed cases
+// included: each slot pkg/score derives gets the same project, credited
+// seconds, level and labels from both. The reason may differ: slotSummary
+// takes the largest entry's, Bucket the reason with the most credit. The
+// side-door and relayed timelines hold slots with labels, so a summary
+// that dropped one fails here. Where a timeline has a slot whose largest
+// entry isn't at its weakest level, a summary that took the largest
+// entry's level fails too; TestSlotSummary's mixed slot holds that rule
+// either way.
 func TestSlotSummaryMatchesPkgScore(t *testing.T) {
 	table := testTable()
 	var disagree, labeled int

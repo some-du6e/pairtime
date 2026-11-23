@@ -13,7 +13,10 @@ import (
 
 // Slot is one 15-second slot of the timeline (SM 1.3, 2.1, 2.5), with its
 // presence. Every slot from the one holding the first record on is
-// derived, up to the last one the samples decide.
+// derived, up to the last one the samples decide. On a device that never
+// samples, such as a server with no desktop, whole minutes are derived
+// instead, from the one holding the first record to the one holding now
+// (presence.live).
 type Slot struct {
 	// Start is the slot's start in Unix milliseconds, on :00, :15, :30 or
 	// :45.
@@ -155,6 +158,31 @@ type presence struct {
 	// lastIn holds, for each slot, the latest input a sample shows in it.
 	lastIn []int64
 	runs   []silentRun
+	// live is set on a device that never samples while its agent runs
+	// (liveUnknown), whose every slot is SM 2.1's unknown: whole minutes
+	// are derived, and SM 5.2's codes for a live slot whose presence is
+	// unknown apply to its seconds.
+	live bool
+}
+
+// liveUnknown reports whether recs come from a device with no presence
+// sampler while its agent runs, such as a server with no desktop (SM 2.1):
+// no record the agent stamps itself, os.presence, os.focus or os.power,
+// and some record that came by a path only a running agent has, any but a
+// log reader's. Every record lookback backfills from transcripts comes by a
+// log reader (SM 2.8), and the range of lookback's own slots is WP-SC7's,
+// so such records alone aren't one.
+func liveUnknown(recs []event.Event) bool {
+	live := false
+	for _, e := range recs {
+		if ownRecord(e) {
+			return false
+		}
+		if e.Via != event.ViaLog {
+			live = true
+		}
+	}
+	return live
 }
 
 func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *presence {
@@ -260,6 +288,16 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 	}
 	p.first = max(floorSlot(recs[0].T), floorSlot(ref-r.bucketTTL))
 	last := floorSlot(now)
+	// A device that never samples has nothing left to decide a slot once
+	// its minute holds a record, so every second of each minute that does
+	// is derived, the ones before its first record and after its last
+	// included: relayed anchors credit them, and SM 5.2's codes for a live
+	// slot whose presence is unknown fill the rest
+	// (testdata/timelines/relayed). What it derives past now is pending.
+	if p.live = liveUnknown(recs); p.live {
+		p.first = floorMinute(p.first)
+		last = floorMinute(now) + MinuteMS - event.SlotMS
+	}
 	n := int((last-p.first)/event.SlotMS) + 1
 	asleepAt := p.mark(n, sleeps, gaps)
 	lockedAt := p.mark(n, locks)

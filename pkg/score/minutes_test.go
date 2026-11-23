@@ -127,48 +127,57 @@ func sameSeconds[K comparable](a, b map[K]float64) bool {
 
 func TestFixtureMinutes(t *testing.T) {
 	for _, f := range creditCases(t) {
-		got := byMinute(scoreAll(t, fixtureDevice(f), f.Events))
-		for _, row := range f.Expected.Rows {
-			name := fmt.Sprintf("%s %s has the credit, uncredited seconds and agent time of its row", f.Name, row.Local)
-			if !row.Bucket {
-				name = fmt.Sprintf("%s %s credits nothing and runs no agent, so it has no bucket", f.Name, row.Local)
-			}
-			t.Run(name, func(t *testing.T) {
-				sum := newMinuteSum()
-				buckets := 0
-				for m := row.Start.UnixMilli(); m < row.End().UnixMilli(); m += 60_000 {
-					if g := got[m]; g != nil && g.bucket() {
-						buckets++
-						sum.add(g)
-					}
-				}
-				if !row.Bucket {
-					if buckets > 0 {
-						t.Fatalf("%d minutes have credit or a running agent: credit %v, agent %v s", buckets, sum.credit, sum.agent)
-					}
-					return
-				}
-				if buckets != row.BucketMinutes {
-					t.Errorf("%d minutes with a bucket, want %d", buckets, row.BucketMinutes)
-				}
-				for _, p := range slices.Sorted(maps.Keys(sum.credit)) {
-					if _, ok := row.Credit[p]; !ok && len(sum.credit[p]) > 0 {
-						t.Errorf("credits project %s %v, which the row doesn't", p, sum.credit[p])
-					}
-				}
-				for p, want := range row.Credit {
-					if !sameSeconds(sum.credit[p], want) {
-						t.Errorf("credit for %s is %v, want %v (%s)", p, sum.credit[p], want, row.SM)
-					}
-				}
-				if row.Uncredited != nil && !sameSeconds(sum.uncredited, row.Uncredited) {
-					t.Errorf("uncredited %v, want %v (%s)", sum.uncredited, row.Uncredited, row.SM)
-				}
-				if sum.agent != row.AgentRunningS {
-					t.Errorf("agent_running_s %v, want %v", sum.agent, row.AgentRunningS)
-				}
-			})
+		checkMinutes(t, f, scoreAll(t, fixtureDevice(f), f.Events))
+	}
+}
+
+// checkMinutes compares the credit d holds for a fixture's minutes with
+// its expected.json's rows: credited seconds by project and reason,
+// uncredited seconds by reason where the row decides them, agent time, and
+// which minutes have a bucket.
+func checkMinutes(t *testing.T, f *timelines.Fixture, d Derived) {
+	t.Helper()
+	got := byMinute(d)
+	for _, row := range f.Expected.Rows {
+		name := fmt.Sprintf("%s %s has the credit, uncredited seconds and agent time of its row", f.Name, row.Local)
+		if !row.Bucket {
+			name = fmt.Sprintf("%s %s credits nothing and runs no agent, so it has no bucket", f.Name, row.Local)
 		}
+		t.Run(name, func(t *testing.T) {
+			sum := newMinuteSum()
+			buckets := 0
+			for m := row.Start.UnixMilli(); m < row.End().UnixMilli(); m += 60_000 {
+				if g := got[m]; g != nil && g.bucket() {
+					buckets++
+					sum.add(g)
+				}
+			}
+			if !row.Bucket {
+				if buckets > 0 {
+					t.Fatalf("%d minutes have credit or a running agent: credit %v, agent %v s", buckets, sum.credit, sum.agent)
+				}
+				return
+			}
+			if buckets != row.BucketMinutes {
+				t.Errorf("%d minutes with a bucket, want %d", buckets, row.BucketMinutes)
+			}
+			for _, p := range slices.Sorted(maps.Keys(sum.credit)) {
+				if _, ok := row.Credit[p]; !ok && len(sum.credit[p]) > 0 {
+					t.Errorf("credits project %s %v, which the row doesn't", p, sum.credit[p])
+				}
+			}
+			for p, want := range row.Credit {
+				if !sameSeconds(sum.credit[p], want) {
+					t.Errorf("credit for %s is %v, want %v (%s)", p, sum.credit[p], want, row.SM)
+				}
+			}
+			if row.Uncredited != nil && !sameSeconds(sum.uncredited, row.Uncredited) {
+				t.Errorf("uncredited %v, want %v (%s)", sum.uncredited, row.Uncredited, row.SM)
+			}
+			if sum.agent != row.AgentRunningS {
+				t.Errorf("agent_running_s %v, want %v", sum.agent, row.AgentRunningS)
+			}
+		})
 	}
 }
 
@@ -229,86 +238,105 @@ func totalsOf(d Derived, from, to int64) totals {
 
 func TestFixtureTotals(t *testing.T) {
 	for _, f := range creditCases(t) {
-		from, to := f.Expected.Window.Start.UnixMilli(), f.Expected.Window.End.UnixMilli()
-		d := scoreAll(t, fixtureDevice(f), f.Events)
-		tot := totalsOf(d, from, to)
-		want := f.Expected.Totals
-		t.Run(f.Name+" credits its total, by reason, and runs its agents for as long as SM says", func(t *testing.T) {
-			if tot.credited != want.CreditedS {
-				t.Errorf("credited_s %v, want %v", tot.credited, want.CreditedS)
-			}
-			if !sameSeconds(tot.byReason, want.CreditedByReason) {
-				t.Errorf("credited by reason %v, want %v", tot.byReason, want.CreditedByReason)
-			}
-			if tot.agentRunning != want.AgentRunningS {
-				t.Errorf("agent_running_s %v, want %v", tot.agentRunning, want.AgentRunningS)
-			}
-		})
-		// Summing tot.byProject would check nothing, since every entry adds
-		// the same seconds to it and to tot.credited. internal/timelines
-		// checks that an expected.json's rows add up to its totals and each
-		// row's reasons to its credited_s, so its projects add up to
-		// credited_s, which the test above compares with the scorer's: this
-		// test then says the scorer's projects add up to its total too.
-		t.Run(f.Name+" credits each project what SM says, so its projects add up to its total (SM 3.1)", func(t *testing.T) {
-			if want.CreditedByProject == nil {
-				t.Fatal("expected.json has no credited_by_project")
-			}
-			if !sameSeconds(tot.byProject, want.CreditedByProject) {
-				t.Errorf("credited by project %v, want %v", tot.byProject, want.CreditedByProject)
-			}
-		})
-		if f.Name == "6.3" || f.Name == "6.3-tabs" {
-			// Every anchor that resolves a slot of 6.3-tabs's iTerm is a
-			// level-A hook prompt, so DESIGN 6.4's cap moves nothing there.
-			t.Run(f.Name+": every credited second is level "+string(f.Expected.Evidence)+", as its expected.json says", func(t *testing.T) {
-				if !sameSeconds(tot.byLevel, map[event.Evidence]float64{f.Expected.Evidence: tot.credited}) {
-					t.Errorf("credited by level %v, want all %v s at %s", tot.byLevel, tot.credited, f.Expected.Evidence)
-				}
-			})
-		}
-		for _, k := range slices.Sorted(maps.Keys(want.Other)) {
-			var got float64
-			if p, ok := strings.CutPrefix(k, "agent_running_s."); ok {
-				got = tot.agentBy[p]
-			} else if p, ok := strings.CutPrefix(k, "agent_only_s."); ok {
-				got = tot.agentOnlyBy[p]
-			} else {
-				switch k {
-				case "wall_s":
-					got = float64(to-from) / 1000
-				case "agent_only_s":
-					got = tot.agentOnly
-				case "absent_s":
-					got = tot.uncredited[event.ReasonAbsent]
-				case "ai_credited_s":
-					got = tot.ai
-				case "hand_credited_s":
-					got = tot.credited - tot.ai
-				case "first_cycle_credited_s":
-					got = totalsOf(d, from, from+12*60_000).credited
-				case "level_a_s":
-					got = tot.byLevel[event.EvidenceA]
-				case "level_b_s":
-					got = tot.byLevel[event.EvidenceB]
-				case "level_c_s":
-					got = tot.byLevel[event.EvidenceC]
-				case "via_track_s":
-					got = tot.labels[event.LabelViaTrack]
-				default:
-					// logged_s, ai_logged_s and level_c_cap_s are submission
-					// totals (SM 5.3, 5.4; WP-SC4); lid_open_s and bucket_left_s
-					// describe the timeline rather than any output.
-					continue
-				}
-			}
-			t.Run(fmt.Sprintf("%s's %s is %v, as its expected.json says", f.Name, k, want.Other[k]), func(t *testing.T) {
-				if got != want.Other[k] {
-					t.Errorf("%s = %v, want %v", k, got, want.Other[k])
-				}
-			})
-		}
+		checkTotals(t, f, scoreAll(t, fixtureDevice(f), f.Events))
 	}
+}
+
+// checkTotals compares d's totals over a fixture's window with its
+// expected.json's: credited_s by reason and by project, agent_running_s,
+// and each of its other totals that an output of the scorer gives
+// (fixtureTotal).
+func checkTotals(t *testing.T, f *timelines.Fixture, d Derived) {
+	t.Helper()
+	from, to := f.Expected.Window.Start.UnixMilli(), f.Expected.Window.End.UnixMilli()
+	tot := totalsOf(d, from, to)
+	want := f.Expected.Totals
+	t.Run(f.Name+" credits its total, by reason, and runs its agents for as long as SM says", func(t *testing.T) {
+		if tot.credited != want.CreditedS {
+			t.Errorf("credited_s %v, want %v", tot.credited, want.CreditedS)
+		}
+		if !sameSeconds(tot.byReason, want.CreditedByReason) {
+			t.Errorf("credited by reason %v, want %v", tot.byReason, want.CreditedByReason)
+		}
+		if tot.agentRunning != want.AgentRunningS {
+			t.Errorf("agent_running_s %v, want %v", tot.agentRunning, want.AgentRunningS)
+		}
+	})
+	// Summing tot.byProject would check nothing, since every entry adds
+	// the same seconds to it and to tot.credited. internal/timelines
+	// checks that an expected.json's rows add up to its totals and each
+	// row's reasons to its credited_s, so its projects add up to
+	// credited_s, which the test above compares with the scorer's: this
+	// test then says the scorer's projects add up to its total too.
+	t.Run(f.Name+" credits each project what SM says, so its projects add up to its total (SM 3.1)", func(t *testing.T) {
+		if want.CreditedByProject == nil {
+			t.Fatal("expected.json has no credited_by_project")
+		}
+		if !sameSeconds(tot.byProject, want.CreditedByProject) {
+			t.Errorf("credited by project %v, want %v", tot.byProject, want.CreditedByProject)
+		}
+	})
+	if f.Name == "6.3" || f.Name == "6.3-tabs" {
+		// Every anchor that resolves a slot of 6.3-tabs's iTerm is a
+		// level-A hook prompt, so DESIGN 6.4's cap moves nothing there.
+		t.Run(f.Name+": every credited second is level "+string(f.Expected.Evidence)+", as its expected.json says", func(t *testing.T) {
+			if !sameSeconds(tot.byLevel, map[event.Evidence]float64{f.Expected.Evidence: tot.credited}) {
+				t.Errorf("credited by level %v, want all %v s at %s", tot.byLevel, tot.credited, f.Expected.Evidence)
+			}
+		})
+	}
+	for _, k := range slices.Sorted(maps.Keys(want.Other)) {
+		got, ok := fixtureTotal(d, f, tot, k)
+		if !ok {
+			continue
+		}
+		t.Run(fmt.Sprintf("%s's %s is %v, as its expected.json says", f.Name, k, want.Other[k]), func(t *testing.T) {
+			if got != want.Other[k] {
+				t.Errorf("%s = %v, want %v", k, got, want.Other[k])
+			}
+		})
+	}
+}
+
+// fixtureTotal returns the total named k of the scorer's output d over a
+// fixture's window, tot being d's sums there, or false for a total no
+// output of the scorer gives: logged_s, ai_logged_s and level_c_cap_s are
+// submission totals (SM 5.3, 5.4; WP-SC4), and lid_open_s and
+// bucket_left_s describe the timeline rather than any output.
+func fixtureTotal(d Derived, f *timelines.Fixture, tot totals, k string) (float64, bool) {
+	from, to := f.Expected.Window.Start.UnixMilli(), f.Expected.Window.End.UnixMilli()
+	if p, ok := strings.CutPrefix(k, "agent_running_s."); ok {
+		return tot.agentBy[p], true
+	}
+	if p, ok := strings.CutPrefix(k, "agent_only_s."); ok {
+		return tot.agentOnlyBy[p], true
+	}
+	switch k {
+	case "wall_s":
+		return float64(to-from) / 1000, true
+	case "agent_only_s":
+		return tot.agentOnly, true
+	case "absent_s":
+		return tot.uncredited[event.ReasonAbsent], true
+	case "ai_credited_s":
+		return tot.ai, true
+	case "hand_credited_s":
+		return tot.credited - tot.ai, true
+	case "first_cycle_credited_s":
+		return totalsOf(d, from, from+12*60_000).credited, true
+	case "level_a_s":
+		return tot.byLevel[event.EvidenceA], true
+	case "level_b_s":
+		return tot.byLevel[event.EvidenceB], true
+	case "level_c_s":
+		return tot.byLevel[event.EvidenceC], true
+	case "via_track_s":
+		return tot.labels[event.LabelViaTrack], true
+	case "via_relay_s":
+		return tot.labels[event.LabelViaRelay], true
+	}
+	// The relayed cases count prompts and relay records too.
+	return relayedCount(d, from, to, k)
 }
 
 // TestCreditSlots checks the shape of every fixture's credit: one Credit per
@@ -316,70 +344,78 @@ func TestFixtureTotals(t *testing.T) {
 // event.CreditSlot whose seconds trace back to anchors (SM 2.7).
 func TestCreditSlots(t *testing.T) {
 	for _, f := range append(loadFixtures(t), sideDoorCases(t)...) {
-		d := scoreAll(t, fixtureDevice(f), f.Events)
-		t.Run(f.Name+": one credit slot per presence slot, each accounting for its 15 seconds", func(t *testing.T) {
-			if len(d.Credits) != len(d.Slots) {
-				t.Fatalf("%d credit slots for %d slots", len(d.Credits), len(d.Slots))
-			}
-			for i, c := range d.Credits {
-				if c.Slot != d.Slots[i].Start {
-					t.Fatalf("credit slot %d starts at %d, its slot at %d", i, c.Slot, d.Slots[i].Start)
-				}
-				var n int64
-				for _, e := range c.Credited {
-					n += e.Seconds
-				}
-				for _, s := range c.Uncredited {
-					n += s
-				}
-				if n != event.SlotMS/1000 || c.AgentS > n {
-					t.Fatalf("slot %d accounts for %d seconds and %d agent seconds", c.Slot, n, c.AgentS)
-				}
-			}
-		})
-		t.Run(f.Name+": every credited entry is a valid event.CreditSlot naming its anchors", func(t *testing.T) {
-			ids := map[string]bool{}
-			for _, a := range d.Anchors {
-				ids[a.ID] = true
-			}
-			for _, c := range d.Credits {
-				for _, e := range c.Credited {
-					if err := e.Event(c.Slot).Validate(); err != nil {
-						t.Fatalf("slot %d, %s: %v", c.Slot, e.Reason, err)
-					}
-					for _, id := range e.AnchorIDs {
-						if !ids[id] {
-							t.Fatalf("slot %d, %s names %s, which is no anchor", c.Slot, e.Reason, id)
-						}
-					}
-				}
-				for r := range c.Uncredited {
-					if !r.Uncredited() {
-						t.Fatalf("slot %d has uncredited seconds under %q", c.Slot, r)
-					}
-				}
-			}
-		})
-		// A slot's ProjectKey is the project SM 3.2 resolves it to, and only
-		// a slot that resolves to none takes its first credited second's, so
-		// this compares what each slot credits with its resolution.
-		t.Run(f.Name+": a slot's credited seconds all go to the project it resolves to, and what resolved it is an anchor (SM 3.1, 3.2)", func(t *testing.T) {
-			ids := map[string]bool{}
-			for _, a := range d.Anchors {
-				ids[a.ID] = true
-			}
-			for _, c := range d.Credits {
-				for _, e := range c.Credited {
-					if e.ProjectKey == "" || e.ProjectKey != c.ProjectKey {
-						t.Fatalf("slot %d of project %q credits %q", c.Slot, c.ProjectKey, e.ProjectKey)
-					}
-				}
-				if c.ResolvedBy != "" && !ids[c.ResolvedBy] {
-					t.Fatalf("slot %d is resolved by %s, which is no anchor", c.Slot, c.ResolvedBy)
-				}
-			}
-		})
+		checkCreditSlots(t, f, scoreAll(t, fixtureDevice(f), f.Events))
 	}
+}
+
+// checkCreditSlots checks the shape of the credit d holds for a fixture:
+// one Credit per slot, accounting for its 15 seconds, each entry a valid
+// event.CreditSlot naming anchors, and every credited second of a slot
+// going to the project it resolves to.
+func checkCreditSlots(t *testing.T, f *timelines.Fixture, d Derived) {
+	t.Helper()
+	t.Run(f.Name+": one credit slot per presence slot, each accounting for its 15 seconds", func(t *testing.T) {
+		if len(d.Credits) != len(d.Slots) {
+			t.Fatalf("%d credit slots for %d slots", len(d.Credits), len(d.Slots))
+		}
+		for i, c := range d.Credits {
+			if c.Slot != d.Slots[i].Start {
+				t.Fatalf("credit slot %d starts at %d, its slot at %d", i, c.Slot, d.Slots[i].Start)
+			}
+			var n int64
+			for _, e := range c.Credited {
+				n += e.Seconds
+			}
+			for _, s := range c.Uncredited {
+				n += s
+			}
+			if n != event.SlotMS/1000 || c.AgentS > n {
+				t.Fatalf("slot %d accounts for %d seconds and %d agent seconds", c.Slot, n, c.AgentS)
+			}
+		}
+	})
+	t.Run(f.Name+": every credited entry is a valid event.CreditSlot naming its anchors", func(t *testing.T) {
+		ids := map[string]bool{}
+		for _, a := range d.Anchors {
+			ids[a.ID] = true
+		}
+		for _, c := range d.Credits {
+			for _, e := range c.Credited {
+				if err := e.Event(c.Slot).Validate(); err != nil {
+					t.Fatalf("slot %d, %s: %v", c.Slot, e.Reason, err)
+				}
+				for _, id := range e.AnchorIDs {
+					if !ids[id] {
+						t.Fatalf("slot %d, %s names %s, which is no anchor", c.Slot, e.Reason, id)
+					}
+				}
+			}
+			for r := range c.Uncredited {
+				if !r.Uncredited() {
+					t.Fatalf("slot %d has uncredited seconds under %q", c.Slot, r)
+				}
+			}
+		}
+	})
+	// A slot's ProjectKey is the project SM 3.2 resolves it to, and only
+	// a slot that resolves to none takes its first credited second's, so
+	// this compares what each slot credits with its resolution.
+	t.Run(f.Name+": a slot's credited seconds all go to the project it resolves to, and what resolved it is an anchor (SM 3.1, 3.2)", func(t *testing.T) {
+		ids := map[string]bool{}
+		for _, a := range d.Anchors {
+			ids[a.ID] = true
+		}
+		for _, c := range d.Credits {
+			for _, e := range c.Credited {
+				if e.ProjectKey == "" || e.ProjectKey != c.ProjectKey {
+					t.Fatalf("slot %d of project %q credits %q", c.Slot, c.ProjectKey, e.ProjectKey)
+				}
+			}
+			if c.ResolvedBy != "" && !ids[c.ResolvedBy] {
+				t.Fatalf("slot %d is resolved by %s, which is no anchor", c.Slot, c.ResolvedBy)
+			}
+		}
+	})
 }
 
 // sideDoorTurns is the part of sidedoor.json that pins each turn's reading

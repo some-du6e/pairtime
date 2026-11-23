@@ -274,8 +274,23 @@ func TestBucketShape(t *testing.T) {
 		{"a slot labeled focus_unknown above level C breaks MinuteBucket.Validate's rule, since its weakest second is level C", func(m map[string]any) {
 			slot(m, 0)["lbl"] = []any{"focus_unknown"}
 		}, shapeResult{CodeBadRule, "slots[0].ev"}},
-		{"five labels on a slot are too_many", func(m map[string]any) {
-			slot(m, 0)["lbl"] = []any{"via_track", "via_plugin", "via_bridge", "focus_unknown", "via_track"}
+		{"via_relay at level C passes: a value of lbl and not a field (DESIGN 4.1 E-14)", func(m map[string]any) {
+			slot(m, 0)["ev"] = "C"
+			slot(m, 0)["lbl"] = []any{"via_relay"}
+		}, shapeResult{}},
+		{"via_relay after focus_unknown, the last of the five labels, passes", func(m map[string]any) {
+			slot(m, 0)["ev"] = "C"
+			slot(m, 0)["lbl"] = []any{"via_track", "via_plugin", "via_bridge", "focus_unknown", "via_relay"}
+		}, shapeResult{}},
+		{"via_relay before focus_unknown breaks a rule", func(m map[string]any) {
+			slot(m, 0)["ev"] = "C"
+			slot(m, 0)["lbl"] = []any{"via_relay", "focus_unknown"}
+		}, shapeResult{CodeBadRule, "slots[0].lbl"}},
+		{"a slot labeled via_relay above level C breaks MinuteBucket.Validate's rule, since every relayed second is level C", func(m map[string]any) {
+			slot(m, 0)["lbl"] = []any{"via_relay"}
+		}, shapeResult{CodeBadRule, "slots[0].ev"}},
+		{"six labels on a slot are too_many", func(m map[string]any) {
+			slot(m, 0)["lbl"] = []any{"via_track", "via_plugin", "via_bridge", "focus_unknown", "via_relay", "via_track"}
 		}, shapeResult{CodeTooMany, "slots[0].lbl"}},
 		{"a backfilled minute credited above level C breaks a rule", func(m map[string]any) { m["witness"] = "backfilled" }, shapeResult{CodeBadRule, "slots[0].ev"}},
 		{"a minute with seconds is bad_string", func(m map[string]any) { m["minute"] = "2026-11-19T12:00:05Z" }, shapeResult{CodeBadString, "minute"}},
