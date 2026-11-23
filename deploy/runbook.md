@@ -389,4 +389,4 @@ Before the native program pays out, the server moves to a Hetzner CCX13, or an A
 
 pairtimed listens on 8080, which only cloudflared reaches, and on 127.0.0.1:9091 inside its container for `/healthz`, `/readyz` and `/metrics`. compose publishes no port on the host. Never route the tunnel to 9091.
 
-Not deployed yet: `/.well-known/pairtime-keys.json` and the day roots (WP-SV17), and `install.sh` and `install.ps1` at `https://<host>/`, which WP-RL2 serves from pairtimed; until then the scripts are release assets.
+Not deployed yet: the day roots (WP-SV17), and `install.sh` and `install.ps1` at `https://<host>/`, which WP-RL2 serves from pairtimed; until then the scripts are release assets.
