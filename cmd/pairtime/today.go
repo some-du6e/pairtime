@@ -3,6 +3,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,7 +12,9 @@ import (
 	"slices"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/doctor"
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/projects"
 	"github.com/some-du6e/pairtime/internal/coach/text"
 )
@@ -21,6 +25,8 @@ Shows today's time for each project you worked on: your time, and what
 you spent it on; each agent's time working on its own; and the other time
 pairtime saw, described for what it was. It reads the day the agent has
 stored, so it shows what was tracked even while the agent is stopped.
+For today it also asks the running agent whether it can see which window
+is in front, and says so when it can't.
 
   --date  Show another day, such as 2026-11-24.
   --json  Print the same numbers as JSON, as described in
@@ -106,8 +112,65 @@ func runToday(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
-	writeToday(stdout, out, *date == "")
+	var focus []string
+	if *date == "" && !agentStopped(dirs) {
+		focus = focusLines(dirs)
+	}
+	writeToday(stdout, out, *date == "", focus)
 	return 0
+}
+
+// focusAskWait bounds how long today waits for the agent to say whether
+// it can see which window is in front. The answer only adds a sentence,
+// so a slow agent doesn't hold the day up long. Tests shorten it.
+var focusAskWait = time.Second
+
+// focusLines is what today says about a desktop that hides which window is
+// in front: DESIGN 5.9's teen-facing sentence while the running agent's GET
+// /v1/status says focus is unknown, the signal doctor's focus line reads
+// too, and nothing otherwise. As on the dashboard's Today page
+// (web/src/local/copy.ts), the sentence stops at "in front" until the
+// status says such time counts at level C (focus_level_c, which WP-SC8
+// sets), and on GNOME the line the status's gnome_extension calls for
+// follows. today asks over the per-user socket, as recap does, so no token
+// goes anywhere. An agent that doesn't answer in time, or is older than the
+// question, says nothing, and today prints none of it.
+func focusLines(dirs home.Dirs) []string {
+	ep, err := ipc.EndpointFor(dirs)
+	if err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), focusAskWait)
+	defer cancel()
+	ans, err := ipc.Ask(ctx, ep, ipc.AskStatus)
+	if err != nil {
+		return nil
+	}
+	var st struct {
+		Signals struct {
+			Focus          doctor.Signal `json:"focus"`
+			FocusLevelC    bool          `json:"focus_level_c"`
+			GnomeExtension string        `json:"gnome_extension"`
+		} `json:"signals"`
+	}
+	if err := json.Unmarshal(ans, &st); err != nil {
+		return nil
+	}
+	sig := st.Signals
+	if sig.Focus.Via != "" || sig.Focus.Unknown == "" {
+		return nil
+	}
+	lines := []string{text.Phrase(text.KeyFocusUnknown)}
+	if sig.FocusLevelC {
+		lines[0] = text.Phrase(text.KeyFocusUnknownLevelC)
+	}
+	switch sig.GnomeExtension {
+	case "needs_login":
+		lines = append(lines, text.Phrase(text.KeyGnomeNeedsLogin))
+	case "unticked":
+		lines = append(lines, text.Phrase(text.KeyGnomeUnticked))
+	}
+	return lines
 }
 
 // buildToday turns the agent's day into the view, projects with the most
@@ -136,8 +199,10 @@ func buildToday(d dayFile, shadow bool) todayJSON {
 
 // writeToday prints the day: its date, then each project's chess clock
 // and rows. today says whether the day was asked for as today, which
-// changes what an empty day says.
-func writeToday(w io.Writer, d todayJSON, today bool) {
+// changes what an empty day says. focus, the lines focusLines gives, end
+// the view: they explain time pairtime doesn't count on a desktop that
+// hides which window is in front.
+func writeToday(w io.Writer, d todayJSON, today bool, focus []string) {
 	fmt.Fprintln(w, dayTitle(d.Date))
 	if len(d.Projects) == 0 {
 		fmt.Fprintln(w)
@@ -146,16 +211,21 @@ func writeToday(w io.Writer, d todayJSON, today bool) {
 		} else {
 			fmt.Fprintln(w, text.Phrase(text.KeyNothingOn))
 		}
-		return
 	}
 	for _, p := range d.Projects {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, p.title()+": "+p.clock())
 		writeRows(w, p.rows())
 	}
-	if d.Calibrating {
+	if d.Calibrating && len(d.Projects) > 0 {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, text.Phrase(text.KeyCalibratingNote))
+	}
+	if len(focus) > 0 {
+		fmt.Fprintln(w)
+		for _, l := range focus {
+			fmt.Fprintln(w, l)
+		}
 	}
 }
 

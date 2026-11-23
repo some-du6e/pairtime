@@ -29,17 +29,15 @@ const linuxVia = "_NET_ACTIVE_WINDOW"
 // WP-OS9): the focus changes d reports, which on X11 follow the window
 // manager's _NET_ACTIVE_WINDOW, and the process table from /proc.
 //
-// d reports no changes where focus can't be read: on Wayland, which tells
-// other programs nothing about focus without pairtime's GNOME Shell
-// extension (WP-OS14), with no graphical session, and on X11 while no
+// Where focus can't be read, the component records an os.focus with
+// app_class unknown, whose slots SM 2.5 credits at level C (pkg/score does
+// from WP-SC8; until then it credits them nothing). On Wayland,
+// which tells other programs nothing about focus without pairtime's GNOME
+// Shell extension (WP-OS14), and with no graphical session, d has no Focus
+// channel, so focus is unknown from the start and d's Status says why. On
+// X11, d reports on its channel each time focus turns unknown, while no
 // window manager keeps _NET_ACTIVE_WINDOW or while a lost X connection is
-// re-made. Then nothing is recorded, d's Status says why, and the window
-// last recorded stays in front for the scorer.
-//
-// TODO(WP-OS15): record an os.focus with app_class unknown when focus is
-// unknown from the start and whenever it turns unknown, once WP-EV2 adds
-// the value and d reports each change between known and unknown focus, so
-// those slots credit at level C (SM 2.5, D-focus-unknown).
+// re-made, and its next window report ends it.
 func LinuxOS(d Desktop) OS {
 	o := OS{Read: linux.Processes, GOOS: platform.Linux}
 	st := d.Status().Focus
@@ -81,12 +79,14 @@ func LinuxOS(d Desktop) OS {
 }
 
 // linuxChange turns one of the desktop's focus reports into a Change. A
-// window whose process isn't known, because the window doesn't say or
-// belongs to another host, is other, and no window at all is none, as
-// linux.Focus.Payload has them: neither hosts a session, and neither is a
-// guess.
+// report that focus is unknown is unknown. A window whose process isn't
+// known, because the window doesn't say or belongs to another host, is
+// other, and no window at all is none, as linux.Focus.Payload has them:
+// neither hosts a session, and neither is a guess.
 func linuxChange(f linux.Focus) Change {
 	switch {
+	case f.Unknown != "":
+		return Change{At: f.At, Unknown: f.Unknown}
 	case f.Window == 0:
 		return Change{At: f.At, Class: event.AppNone}
 	case f.PID <= 0:

@@ -84,6 +84,13 @@ func TestPayloads(t *testing.T) {
 			want: &event.OSFocus{AppClass: event.AppOther},
 		},
 		{
+			name: "a report that focus is unknown is app class unknown with no other field, which the classifier never sees (SM 2.5)",
+			got: Focus{Unknown: "lost the X connection; reconnecting"}.Payload(func(int) event.AppClass {
+				panic("classified a report that names no window")
+			}),
+			want: &event.OSFocus{AppClass: event.AppUnknown},
+		},
+		{
 			name: "a suspend is os.power suspend",
 			got:  Power{Op: event.PowerSuspend}.Payload(),
 			want: &event.OSPower{Op: event.PowerSuspend},
@@ -367,6 +374,11 @@ func TestDesktopFocusOnFakeX(t *testing.T) {
 				nextReport(t, focus)
 				f.down()
 				eventually(t, "focus is unknown", func() bool { return !d.Status().Focus.Known() })
+				// The channel says so too, before the new connection's first
+				// report, so the agent records it (SM 2.5).
+				if r := nextReport(t, focus); r.Unknown != focusReconnecting || r.Window != 0 || r.PID != 0 || r.At.IsZero() {
+					t.Fatalf("report after the drop %+v, want focus unknown while the agent reconnects", r)
+				}
 				f.setCardinal(testRoot, "_NET_ACTIVE_WINDOW", atomWindow, winB)
 				f.up(t)
 				if r := nextReport(t, focus); r.Window != winB || r.PID != 777 {
@@ -401,6 +413,50 @@ func TestDesktopFocusOnFakeX(t *testing.T) {
 			defer cancel()
 			d, f := openOnFakeX(t, ctx)
 			tc.run(t, d, f, cancel)
+		})
+	}
+}
+
+// TestDesktopFocusUnknownAtStart opens a desktop on a fake X display whose
+// window manager doesn't keep _NET_ACTIVE_WINDOW, and checks that the
+// Focus channel says focus is unknown before anything else, and that the
+// first report once a window manager sets the property names the window.
+func TestDesktopFocusUnknownAtStart(t *testing.T) {
+	cases := []struct {
+		name string
+		wm   string // as setWM has it
+	}{
+		{"with no window manager, focus is unknown from the start until one sets _NET_ACTIVE_WINDOW (SM 2.5)", "none"},
+		{"a window manager that doesn't list _NET_ACTIVE_WINDOW leaves focus unknown the same way", "unlisted"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, display := newFakeDisplay(t, fakeXConfig{roots: []uint32{testRoot}})
+			addTestWindows(f)
+			setWM(f, tc.wm, winA)
+			noBus := func(context.Context) (*dbus.Conn, error) { return nil, errors.New("no bus here") }
+			env := map[string]string{"XDG_SESSION_TYPE": "x11", "DISPLAY": display}
+			d := Open(context.Background(), Config{
+				Getenv:     func(k string) string { return env[k] },
+				SessionBus: noBus,
+				SystemBus:  noBus,
+				Hostname:   testHost,
+			})
+			t.Cleanup(func() { d.Close() })
+			if s := d.Status(); s.Focus.Known() || s.Focus.Unknown != focusNoEWMH {
+				t.Fatalf("focus %+v at the start, want unknown because no window manager keeps _NET_ACTIVE_WINDOW", s.Focus)
+			}
+			focus := d.Focus()
+			if r := nextReport(t, focus); r.Unknown != focusNoEWMH || r.Window != 0 || r.PID != 0 || r.At.IsZero() {
+				t.Fatalf("first report %+v, want focus unknown", r)
+			}
+			f.setActive(testRoot, winB)
+			if r := nextReport(t, focus); r.Unknown != "" || r.Window != winB || r.PID != 777 {
+				t.Fatalf("report once _NET_ACTIVE_WINDOW is set %+v, want winB with pid 777", r)
+			}
+			if s := d.Status(); !s.Focus.Known() {
+				t.Errorf("focus %+v once a window manager keeps _NET_ACTIVE_WINDOW, want known", s.Focus)
+			}
 		})
 	}
 }
