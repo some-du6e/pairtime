@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/some-du6e/pairtime/pkg/ledger"
+	"github.com/some-du6e/pairtime/pkg/ledger/features"
 )
 
 // The device keys the tests seal under, and their ids.
@@ -76,6 +77,22 @@ func commit(t *testing.T, b byte, s uint64, text string) ledger.Commitment {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// hunks returns the keyed hunks of a record whose edits touched paths,
+// one hunk each, as its f.h has them under K_dev byte 1.
+func hunks(t *testing.T, paths ...string) []features.Hunk {
+	t.Helper()
+	fk := testKeys(t, 1).Features()
+	var out []features.Hunk
+	for _, p := range paths {
+		key, err := fk.Path(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, features.Hunk{P: key, OS: 1, OL: 1, NS: 1, NL: 2})
+	}
+	return out
 }
 
 // text reads record s's text, checked against its commitment to want.
@@ -156,7 +173,7 @@ func TestKeep(t *testing.T) {
 				if _, err := text(t, v, 2, "two"); !errors.Is(err, ErrNotKept) {
 					t.Errorf("Text(2): %v, want ErrNotKept", err)
 				}
-				if _, err := v.Paths(1); !errors.Is(err, ErrNotKept) {
+				if _, err := v.Paths(1, nil); !errors.Is(err, ErrNotKept) {
 					t.Errorf("Paths(1): %v, want ErrNotKept", err)
 				}
 			},
@@ -172,7 +189,7 @@ func TestKeep(t *testing.T) {
 					}
 				}
 				for s, want := range map[uint64]string{1: "src/nav.js", 2: "src/app.css"} {
-					if got, err := v.Paths(s); err != nil || !slices.Equal(got, []string{want}) {
+					if got, err := v.Paths(s, hunks(t, want)); err != nil || !slices.Equal(got, []string{want}) {
 						t.Errorf("Paths(%d) = %q, %v", s, got, err)
 					}
 				}
@@ -182,9 +199,20 @@ func TestKeep(t *testing.T) {
 			name: "paths read back in order, without repeats or empty ones",
 			run: func(t *testing.T, v *Vault, p *problems) {
 				v.Keep(day1, 1, nil, []string{"src/nav.js", "", "src/app.css", "src/nav.js"})
-				got, err := v.Paths(1)
+				got, err := v.Paths(1, hunks(t, "src/nav.js", "src/app.css", "src/nav.js"))
 				if want := []string{"src/nav.js", "src/app.css"}; err != nil || !slices.Equal(got, want) {
 					t.Errorf("Paths(1) = %q, %v; want %q", got, err, want)
+				}
+			},
+		},
+		{
+			name: "paths don't read back against the edits of another record",
+			run: func(t *testing.T, v *Vault, p *problems) {
+				v.Keep(day1, 1, nil, []string{"src/nav.js"})
+				for _, other := range [][]features.Hunk{hunks(t, "src/app.css"), hunks(t, "src/nav.js", "src/app.css"), nil} {
+					if got, err := v.Paths(1, other); !errors.Is(err, ErrNotKept) {
+						t.Errorf("Paths(1) against %d other hunks = %q, %v; want ErrNotKept", len(other), got, err)
+					}
 				}
 			},
 		},
@@ -196,7 +224,7 @@ func TestKeep(t *testing.T) {
 				if _, err := text(t, v, 1, "fix the nav bar"); !errors.Is(err, ErrNotKept) {
 					t.Errorf("Text(1): %v, want ErrNotKept", err)
 				}
-				if got, err := v.Paths(1); err != nil || !slices.Equal(got, []string{"src/nav.js"}) {
+				if got, err := v.Paths(1, hunks(t, "src/nav.js")); err != nil || !slices.Equal(got, []string{"src/nav.js"}) {
 					t.Errorf("Paths(1) = %q, %v", got, err)
 				}
 			},
@@ -361,7 +389,7 @@ func TestSealed(t *testing.T) {
 				v.Close()
 				tamper(t, dir, func(p []byte) { p[8] = whatPaths })
 				v, _ = open(t, dir, 1, keyA, 2, true)
-				if got, err := v.Paths(1); err == nil {
+				if got, err := v.read(1, whatPaths); err == nil {
 					t.Errorf("a text opened as paths %q", got)
 				}
 			},
@@ -661,6 +689,26 @@ func TestReconcileRules(t *testing.T) {
 			},
 		},
 		{
+			name: "a file of a vault version this one doesn't read stops Open, and nothing is deleted",
+			run: func(t *testing.T, dir string) {
+				v, _ := open(t, dir, 1, keyA, 1, true)
+				keepAll(v, day1, 1, 2)
+				v.Close()
+				hp := appendFrame(nil, kindHead, []byte(`{"v":2,"key_id":"`+keyA+`"}`))
+				if err := os.WriteFile(segPath(dir, day2), hp, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				before := rawFiles(t, dir)
+				if _, err := Open(Options{Dir: dir, Keys: testKeys(t, 1), KeyID: keyA}); !errors.Is(err, errVersion) {
+					t.Errorf("Open: %v, want errVersion", err)
+				}
+				after := rawFiles(t, dir)
+				if len(after) != len(before) {
+					t.Errorf("files %v, want %v", keysOf(after), keysOf(before))
+				}
+			},
+		},
+		{
 			name: "a rewrite a crash cut short leaves no temporary file behind",
 			run: func(t *testing.T, dir string) {
 				tmp := filepath.Join(dir, "."+day1+segSuffix+".tmp-123")
@@ -698,7 +746,7 @@ func TestDropText(t *testing.T) {
 						t.Errorf("Text(%d): %v, want ErrNotKept", s, err)
 					}
 				}
-				if got, err := v.Paths(2); err != nil || !slices.Equal(got, []string{"src/nav.js"}) {
+				if got, err := v.Paths(2, hunks(t, "src/nav.js")); err != nil || !slices.Equal(got, []string{"src/nav.js"}) {
 					t.Errorf("Paths(2) = %q, %v", got, err)
 				}
 				if days, _ := segments(dir); !slices.Equal(days, []string{day2}) {
@@ -717,7 +765,7 @@ func TestDropText(t *testing.T) {
 				if got, err := text(t, v, 2, "two"); err != nil || got != "two" {
 					t.Errorf("Text(2) = %q, %v", got, err)
 				}
-				if got, err := v.Paths(1); err != nil || !slices.Equal(got, []string{"a.go"}) {
+				if got, err := v.Paths(1, hunks(t, "a.go")); err != nil || !slices.Equal(got, []string{"a.go"}) {
 					t.Errorf("Paths(1) = %q, %v", got, err)
 				}
 			},

@@ -54,7 +54,15 @@ func parsePrivacy(cfg *Config, file privacyFile, keys []toml.Key) (problems []st
 }
 
 // inPrivacy reports whether key is in the [privacy] table, however the
-// file spells the table's name.
+// file spells the table's name, or is its switch written in the wrong
+// place, such as keep_prompt_text = false at the top of the file: either
+// may be where the teen turned "keep prompt text" off.
 func inPrivacy(key toml.Key) bool {
-	return len(key) > 1 && strings.EqualFold(key[0], "privacy")
+	switch {
+	case len(key) == 0:
+		return false
+	case len(key) > 1 && strings.EqualFold(key[0], "privacy"):
+		return true
+	}
+	return strings.EqualFold(key[len(key)-1], "keep_prompt_text")
 }

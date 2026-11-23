@@ -206,6 +206,18 @@ func TestParse(t *testing.T) {
 			wantProblem: "privacy.keep_prompt_text is set more than once",
 		},
 		{
+			name:        "the switch written at the top of the file instead of under [privacy] keeps no new prompt text, deletes none, and is reported",
+			file:        "mode = \"local\"\nkeep_prompt_text = false\n",
+			want:        Config{Mode: Local, Privacy: Privacy{TextHeld: true}},
+			wantProblem: `unknown setting "keep_prompt_text" was ignored, so pairtime keeps no new prompt text, and deletes none`,
+		},
+		{
+			name:        "keep_prompt_text = false beside a setting pairtime doesn't know holds the text, so nothing is deleted on a file it can't read",
+			file:        "[privacy]\nkeep_prompt_text = false\nprompt_days = 7\n",
+			want:        Config{Mode: Local, Privacy: Privacy{TextOff: true, TextHeld: true}},
+			wantProblem: `unknown setting "privacy.prompt_days" was ignored, so pairtime keeps no new prompt text, and deletes none`,
+		},
+		{
 			name:        "a switch that isn't true or false makes the whole file ignored, which keeps no new prompt text and deletes none",
 			file:        "[privacy]\nkeep_prompt_text = \"no\"\n",
 			want:        ignored(),

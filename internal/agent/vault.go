@@ -25,11 +25,13 @@ func (a *agent) openVault(ks *keys.Keystore, keyID string) *vault.Vault {
 		Problem:  func(msg string) { a.setProblem("vault", msg) },
 	})
 	if err != nil {
-		a.setProblem("vault", fmt.Sprintf("pairtime keeps none of your prompt text in this run, because its vault didn't open: %v", err))
+		a.setProblem("vault.open", fmt.Sprintf("pairtime keeps none of your prompt text in this run, because its vault didn't open: %v", err))
 		a.log.Warn("the vault didn't open", "err", err)
 		return nil
 	}
-	a.setProblem("vault", "")
+	// Under a source of its own, so this clears no problem the vault
+	// reported as it opened, such as a file it couldn't read.
+	a.setProblem("vault.open", "")
 	return v
 }
 
@@ -67,7 +69,8 @@ func (a *agent) publishVault(v *vault.Vault) {
 // applyPrivacy puts config.toml's [privacy] in force on the vault, once it
 // is open: "keep prompt text" for the records from now on, and with the
 // switch turned off, the text already kept goes too (DESIGN 4.4). A
-// config.toml that was ignored keeps no new text and deletes none
+// config.toml that was ignored, or whose [privacy] pairtime can't read,
+// keeps no new text and deletes none, even beside the switch turned off
 // (config.Privacy.TextHeld).
 func (a *agent) applyPrivacy() {
 	a.vaultMu.Lock()
@@ -78,7 +81,11 @@ func (a *agent) applyPrivacy() {
 	}
 	p := a.privacy()
 	v.SetKeepText(p.KeepText())
-	if p.TextOff {
+	if !p.TextOff || p.TextHeld {
+		// Nothing to delete, so a failure of an earlier run of dropText no
+		// longer stands.
+		a.setProblem("vault.text", "")
+	} else {
 		// Each file of the vault is read and written again, which can take
 		// a moment, so not on the caller's goroutine, which may be the
 		// scheduler's. The run is counted under vaultMu while the vault is
@@ -91,10 +98,15 @@ func (a *agent) applyPrivacy() {
 	}
 }
 
-// dropText deletes the text v keeps, one run at a time.
+// dropText deletes the text v keeps, one run at a time, while the switch
+// is still off: a run that waited behind another may find it turned back
+// on.
 func (a *agent) dropText(v *vault.Vault) {
 	a.dropMu.Lock()
 	defer a.dropMu.Unlock()
+	if p := a.privacy(); !p.TextOff || p.TextHeld {
+		return
+	}
 	n, err := v.DropText()
 	switch {
 	case errors.Is(err, vault.ErrClosed):

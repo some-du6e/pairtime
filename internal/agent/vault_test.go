@@ -17,6 +17,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/vault"
 	"github.com/some-du6e/pairtime/pkg/event"
+	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 )
 
 // What the planted calls carry, each a string that nothing else on the
@@ -132,7 +133,12 @@ func keptOf(t *testing.T, r *hookReplay) (texts []string, paths []string) {
 				t.Errorf("record %d's text: %v", s, err)
 			}
 		case rec.ev.Kind() == event.KindAgentTool:
-			p, err := v.Paths(s)
+			rt, _ := pkgledger.RTypeOf(event.KindAgentTool)
+			f, _, err := rec.body.Features(rt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := v.Paths(s, f.H)
 			switch {
 			case err == nil:
 				paths = append(paths, p...)
