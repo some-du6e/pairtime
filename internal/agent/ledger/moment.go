@@ -103,10 +103,13 @@ func (m moment) earlierThan(n moment) bool {
 // m holds the clock it counts, this run's for the agent's own events and
 // the OS's of m's boot for a hook call, since a monotonic clock is the one
 // no step of the wall clock moves either way; and by its t otherwise, as
-// for an event of an earlier run or boot.
+// for an event of an earlier run or boot. An event of this run whose mono
+// is 0 has no reading of its clock, as a log record of a line written
+// before the run began or read more than LATE_READ_S after its time, or a
+// git change dated before the run (gitHost.sink): it goes by its t too.
 func (m moment) before(e event.Envelope) bool {
 	switch {
-	case m.run > 0 && e.BootID == runBoot:
+	case m.run > 0 && e.Mono > 0 && e.BootID == runBoot:
 		return e.Mono <= m.run
 	case m.os > 0 && e.Mono > 0 && e.BootID == m.boot:
 		return e.Mono <= m.os
@@ -116,7 +119,7 @@ func (m moment) before(e event.Envelope) bool {
 
 // arrival is at, when the writer took a record in, as an event's times by
 // this run's clock: what Write holds a lookback record to in place of its
-// event's (Input.Lookback). A time with no monotonic reading gives the
+// event's (Writer.lookback). A time with no monotonic reading gives the
 // wall clock's alone, as momentAt does.
 func arrival(at time.Time) event.Envelope {
 	e := event.Envelope{T: at.UnixMilli()}

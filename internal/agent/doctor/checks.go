@@ -141,7 +141,7 @@ func agentCheck(f Facts) Check {
 		}
 		c.Result = OK
 		c.Text = fmt.Sprintf("running pairtime %s for %s, %s; it answered in %s", text.Printable(a.Version.Version),
-			text.Duration(float64(a.UptimeS)), modeWords(a.Mode), Millis(f.AskTook))
+			text.Duration(float64(a.UptimeS)), modeWords(a), Millis(f.AskTook))
 		// The agent answered over the socket or pipe that hooks use, so
 		// they reach it too.
 		if a.IPC.Via == "pipe" {
@@ -157,15 +157,29 @@ func agentCheck(f Facts) Check {
 	return c
 }
 
-// modeWords says what the agent's mode uploads (DESIGN 4.2).
-func modeWords(mode string) string {
-	switch mode {
+// modeWords says what the agent's mode uploads (DESIGN 4.2). A signed-in
+// computer whose sign-in doesn't read uploads nothing, as problem.account
+// says, and one whose uploader reports a problem, as problem.uploader
+// does, may have its uploads stopped, or some of them, or none: its line
+// names the problem's line rather than saying it uploads.
+func modeWords(a *Status) string {
+	switch a.Mode {
 	case "local":
 		return "in local mode, which uploads nothing"
 	case "online":
+		switch {
+		case strings.TrimSpace(a.Problems["account"]) != "":
+			return "in online mode, but it uploads nothing (problem.account says why)"
+		case strings.TrimSpace(a.Problems["uploader"]) != "":
+			return "signed in, but its uploader reports a problem, which problem.uploader names"
+		case strings.TrimSpace(a.Problems["ledger"]) != "":
+			// The uploader starts once the ledger opens, so until then
+			// nothing says whether the computer is signed in.
+			return "in online mode, but its ledger reports a problem, which problem.ledger names"
+		}
 		return "signed in, so it uploads your hours' numbers"
 	}
-	return "in mode " + strconv.Quote(mode)
+	return "in mode " + strconv.Quote(a.Mode)
 }
 
 // idleCheck is DESIGN 5.9's idle line: idle detection working with its
@@ -199,9 +213,10 @@ func focusCheck(s Signals) Check {
 // on Wayland, whose desktops tell other programs neither signal, an X11
 // session; on X11, a window manager that keeps _NET_ACTIVE_WINDOW for
 // focus and the X server's MIT-SCREEN-SAVER extension for idle time,
-// unless the agent is only reconnecting to the X server; and with no
-// desktop session, or a macOS or Windows source that didn't start, a new
-// login, which starts the agent in the desktop's session.
+// unless the agent is only reconnecting to the X server, or couldn't reach
+// it at its start (xConnection); and with no desktop session, or a macOS
+// or Windows source that didn't start, a new login, which starts the agent
+// in the desktop's session.
 func unknownCost(s Signals, why string, focus bool) string {
 	const cost = ". pairtime counts none of your time here yet; "
 	sees := "when you're at the keyboard"
@@ -213,12 +228,32 @@ func unknownCost(s Signals, why string, focus bool) string {
 		return cost + "an X11 session, where your login screen offers one, lets it see " + sees
 	case s.Session == "x11" && strings.Contains(why, "reconnecting"):
 		return cost + "the agent is reconnecting to the X server, so run pairtime doctor again in a minute"
+	case s.Session == "x11" && xConnection(why):
+		return cost + "the agent couldn't reach the X server, as with a DISPLAY or an X authority that isn't your desktop's; " +
+			"logging out and back in starts the agent in your desktop's session, where it can see " + sees
 	case s.Session == "x11" && focus:
 		return cost + "a window manager that keeps _NET_ACTIVE_WINDOW, as most do, lets it see " + sees
 	case s.Session == "x11":
 		return cost + "an X server with the MIT-SCREEN-SAVER extension, as most have, lets it see " + sees
 	}
 	return cost + "logging out and back in starts the agent in your desktop's session, where it can see " + sees
+}
+
+// xConnects open the reasons the Linux sources give when they couldn't
+// reach the X server at the agent's start: a DISPLAY they can't use, a
+// connection that failed, or one the X server refused, as without its X
+// authority (internal/platform/linux's parseDisplay and openX11).
+var xConnects = []string{"DISPLAY ", "can't connect to the X display", "X connection setup", "the X server refused the connection",
+	"the X server wants more authentication", "the X display has no screen"}
+
+// xConnection reports whether why is a reason of xConnects'.
+func xConnection(why string) bool {
+	for _, p := range xConnects {
+		if strings.HasPrefix(why, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // loopCheck warns when the macOS notification loop runs off the main
@@ -263,17 +298,24 @@ func adapterChecks(f Facts) []Check {
 		n := a.Harnesses[h]
 		c.Result = OK
 		c.Text = fmt.Sprintf("found; since the agent started, %s made %s", count(n.Calls, "call", "calls"), count(n.Records, "record", "records"))
+		if n.Lines > 0 {
+			c.Text = fmt.Sprintf("found; since the agent started, %s and %s of its logs made %s", count(n.Calls, "call", "calls"),
+				count(n.Lines, "line", "lines"), count(n.Records, "record", "records"))
+		}
 		// The agent keeps one last failure for both kinds, so it is named
 		// for neither.
 		var trouble []string
 		if n.ParseFailures > 0 {
 			trouble = append(trouble, count(n.ParseFailures, "call", "calls")+" didn't fully parse")
 		}
+		if n.LineFailures > 0 {
+			trouble = append(trouble, count(n.LineFailures, "log line", "log lines")+" didn't fully parse")
+		}
 		if n.WriteFailures > 0 {
 			trouble = append(trouble, "the ledger refused "+count(n.WriteFailures, "record", "records"))
 		}
 		switch {
-		case n.Calls == 0 && len(trouble) == 0:
+		case n.Calls == 0 && n.Lines == 0 && len(trouble) == 0:
 			c.Text = "found; no hook call has come in since the agent started"
 		case len(trouble) == 0:
 			c.Text += ", with no parse failures"
@@ -283,7 +325,7 @@ func adapterChecks(f Facts) []Check {
 			if n.LastFailure != "" {
 				c.Text += "; the last failure: " + reason(n.LastFailure)
 			}
-			if n.ParseFailures > 0 {
+			if n.ParseFailures > 0 || n.LineFailures > 0 {
 				c.Text += ". pairtime may count less of this harness until it reads them. " + reportIt
 			}
 		}

@@ -1,0 +1,205 @@
+{
+  "fixture": "relayed/t3-phone",
+  "title": "T3 Code messages sent from its phone app to a PC with a jiggler and T3's window in front",
+  "sm": "docs/design/struggle-metric.md 2.2 rules 6, 7 and 9, 2.3, 2.4, 5.2",
+  "date": "2026-11-28",
+  "timezone": "Europe/Madrid",
+  "utc_offset": "+01:00",
+  "os": "windows",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "witnessed",
+  "device": "d_cac636c03fad",
+  "projects": {"p_b2f0f3df8a79": "tide-tables"},
+  "window": {"start": "2026-11-28T12:00:00Z", "end": "2026-11-28T12:15:00Z", "local": "13:00-13:15"},
+  "rows": [
+    {
+      "start": "2026-11-28T12:00:00Z",
+      "minutes": 1,
+      "local": "13:00",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running",
+      "note": "The jiggler's input and T3's window in front open no window: mouse-only presence never does (2.1), and a relayed lead is typing time only (2.3). With client web, M1's think part would credit this minute."
+    },
+    {
+      "start": "2026-11-28T12:01:00Z",
+      "minutes": 1,
+      "local": "13:01",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T12:02:00Z",
+      "minutes": 1,
+      "local": "13:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2f0f3df8a79": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3: a relayed message's lead is its typing time, ending at sent_at",
+      "note": "M1's 90 characters type in 90 / 1.5 = 60 s, from 13:02:00 to its stamp at 13:03:00. It is the thread's first message, so nothing else caps the lead.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T12:03:00Z",
+      "minutes": 1,
+      "local": "13:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 1, "X.agent_only": 59},
+      "agent_running_s": 59,
+      "sm": "2.2 rule 9: M1's record says client mobile, so rules 6 and 7 are skipped and the prompt is relayed",
+      "note": "Rules 6 and 7 at the stamp would see the jiggler's input at 13:02:56.9 and T3's window, hosting the session, in front. T3 hands M1 to the agent at 13:03:01, so 13:03:00 is in neither the lead nor a turn. T1 runs from 13:03:01.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T12:04:00Z",
+      "minutes": 1,
+      "local": "13:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.4: no relayed session reads while its agent runs",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T12:05:00Z",
+      "minutes": 1,
+      "local": "13:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.4: no relayed session reads while its agent runs",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T12:06:00Z",
+      "minutes": 1,
+      "local": "13:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_b2f0f3df8a79": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4: a relayed session reads after a stop, until its next relayed message within 600 s, 120 s at most",
+      "note": "T1 stops at 13:06:00. M2 is sent at 13:10:00, 240 s later, and pairs at 13:10:03, 243 s after the stop, inside PENDING_WINDOW_S - 60 s = 840 s, so the session reads from the stop. T1 filled 20 + 15 + 60 + 10 = 105 s, under the 120 s cap.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T12:07:00Z",
+      "minutes": 1,
+      "local": "13:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 45,
+      "credit": {
+        "p_b2f0f3df8a79": {"READ": 45}
+      },
+      "uncredited": {"X.no_anchor": 15},
+      "agent_running_s": 0,
+      "sm": "2.4: a relayed session reads after a stop, until its next relayed message within 600 s, 120 s at most",
+      "note": "The bucket empties at 13:07:45, before the reading would end at M2's stamp, so no second is X.bucket_cap.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T12:08:00Z",
+      "minutes": 1,
+      "local": "13:08",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    },
+    {
+      "start": "2026-11-28T12:09:00Z",
+      "minutes": 1,
+      "local": "13:09",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 32,
+      "credit": {
+        "p_b2f0f3df8a79": {"P": 32}
+      },
+      "uncredited": {"X.no_anchor": 28},
+      "agent_running_s": 0,
+      "sm": "2.3: a relayed message's lead is its typing time, ending at sent_at",
+      "note": "M2's 48 characters: 32 s, from 13:09:28. M1 was sent 420 s earlier, so the cap at the seconds since the thread's previous message doesn't bind.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T12:10:00Z",
+      "minutes": 1,
+      "local": "13:10",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 1, "X.agent_only": 59},
+      "agent_running_s": 59,
+      "sm": "2.2 rule 9: M2's record says client mobile too",
+      "note": "Rule 6 at the stamp would again hold, with the jiggler's input at 13:09:56.9. T2 runs from 13:10:01, and its prompt resets the bucket to the 20 s base.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T12:11:00Z",
+      "minutes": 1,
+      "local": "13:11",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.agent_only": 60},
+      "agent_running_s": 60,
+      "sm": "2.4: no relayed session reads while its agent runs",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T12:12:00Z",
+      "minutes": 1,
+      "local": "13:12",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running",
+      "note": "T2 stops at 13:12:00 and no relayed message follows, so nothing reads its 20 + 10 + 20 = 50 s."
+    },
+    {
+      "start": "2026-11-28T12:13:00Z",
+      "minutes": 2,
+      "local": "13:13-13:14",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running"
+    }
+  ],
+  "totals": {
+    "credited_s": 197,
+    "credited_by_project": {"p_b2f0f3df8a79": 197},
+    "credited_by_reason": {"P": 92, "READ": 105},
+    "uncredited": {"X.no_anchor": 45, "X.agent_only": 298},
+    "agent_running_s": 298,
+    "level_c_s": 197,
+    "via_relay_s": 197,
+    "relayed_prompts": 2,
+    "typed_prompts": 0
+  },
+  "stated": [],
+  "approx": {},
+  "errata": ["2026-11-22-relayed-prompts"],
+  "notes": [
+    "No SM section describes this case. Every row comes from SM 2.2 rules 4, 6, 7 and 9, 2.3, 2.4 and 5.2 as docs/errata/2026-11-22-relayed-prompts.md applies them. Every credited second is level C with via_relay, and witnessed.",
+    "A mouse jiggler gives input in every slot, so every slot is present by input_any; the PC has no key counter and idle_keys_s is null. T3 Code's window, which hosts the session and resolves to tide-tables, is in front throughout. No presence or focus code applies, so an uncredited second is X.agent_only while a turn runs and X.no_anchor otherwise. T1 fills 105 s, under the 120 s cap, so none is X.bucket_cap.",
+    "Rules 6 and 7, tested at each stamp, would hold: the jiggler's input 3.1 s before it, T3's window hosting the session in front at it, and a plausible length. Both records say client mobile, T3's phone app, so both prompts skip rules 6 and 7 and are relayed (SM 2.2). relayed_prompts counts them; typed_prompts counts the human_typed prompts, of which there are none.",
+    "With client web in both records, both prompts would be human_typed at level B, and the case would credit 487 s, P 332, SUP 125 and READ 30, where it credits 197 s at level C. README.md works it out minute by minute."
+  ]
+}

@@ -22,6 +22,13 @@ const stateVersion = 1
 const (
 	maxSavedSessions = 64
 	maxSavedTurns    = 16
+	// maxSavedFiles and maxSavedLogSessions bound the transcript files and
+	// sessions whose memory the transcript reader saves: the files its
+	// memory would forget last (older), and the sessions those name, then
+	// those read from last. A file whose memory isn't saved starts afresh
+	// where the tailers resume it.
+	maxSavedFiles       = 64
+	maxSavedLogSessions = 64
 )
 
 // savedState is the adapter's memory as SaveState writes it. Like the
@@ -32,6 +39,31 @@ type savedState struct {
 	V        int            `json:"v"`
 	Clock    uint64         `json:"clock"`
 	Sessions []savedSession `json:"sessions,omitempty"`
+	// Files and LogSessions are the transcript reader's (logparse.go):
+	// each file's content-free state at the point a restart delivers it
+	// from again (txFile.snap), and what it wrote for each session.
+	Files       []savedFile       `json:"files,omitempty"`
+	LogSessions []savedLogSession `json:"log_sessions,omitempty"`
+}
+
+type savedFile struct {
+	Key    string  `json:"key"`
+	At     int64   `json:"at"`
+	State  txState `json:"state"`
+	Seen   uint64  `json:"seen"`
+	Newest int64   `json:"newest,omitempty"`
+	// Rewinding and Rewound are the Rewind's mark (txFile.rewinding,
+	// rewound).
+	Rewinding bool  `json:"rewinding,omitempty"`
+	Rewound   int64 `json:"rewound,omitempty"`
+}
+
+type savedLogSession struct {
+	ID       string `json:"id"`
+	Token    string `json:"token,omitempty"`
+	Started  bool   `json:"started,omitempty"`
+	NativeAt int64  `json:"native_at,omitempty"`
+	Seen     uint64 `json:"seen"`
 }
 
 type savedSession struct {
@@ -47,7 +79,12 @@ type savedSession struct {
 	Crons    []savedCron      `json:"crons,omitempty"`
 	Requests []savedRequest   `json:"requests,omitempty"`
 	Posts    []savedPost      `json:"posts,omitempty"`
-	Seen     uint64           `json:"seen"`
+	// HookStops are session.hookStops' last maxSavedTurns.
+	HookStops []string `json:"hook_stops,omitempty"`
+	// NativeAt is session.nativeAt; memory saved before it existed has
+	// none, and a session with HookStart is then native from its start.
+	NativeAt int64  `json:"native_at,omitempty"`
+	Seen     uint64 `json:"seen"`
 }
 
 type savedCron struct {
@@ -77,16 +114,21 @@ type savedPost struct {
 	ToolUseID string `json:"tool_use_id"`
 	Tool      string `json:"tool,omitempty"`
 	Agent     string `json:"agent,omitempty"`
+	Native    bool   `json:"native,omitempty"`
 }
 
 // SaveState returns what the adapter remembers of the sessions it parsed,
 // for the agent to keep in state.json across a restart (adapters.Stateful):
 // which sessions have a session.start from the walk, the turn ids the
 // session's calls named and when each was first named, the scheduled
-// prompts each session's last stop listed, and the permission requests held
-// for Decide. It keeps the
+// prompts each session's last stop listed, the permission requests held
+// for Decide, which tool calls came via hook, and since when the session's
+// hooks are via hook. It keeps the
 // maxSavedSessions sessions heard from last, and of each the maxSavedTurns
-// turn ids named last. The same memory gives the same bytes.
+// turn ids named last. Of the transcript reader it keeps each file's state
+// where a restart delivers the file from again, which holds no content,
+// and the session.start it wrote for each session (logparse.go). The same
+// memory gives the same bytes.
 func (a *Adapter) SaveState() (json.RawMessage, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -103,6 +145,7 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 	for _, s := range all {
 		ss := savedSession{ID: s.id, HookStart: s.hookStart, Turn: s.turn, Unnamed: s.unnamed, Seen: s.seen}
 		ss.Started = slices.Clone(s.started[max(0, len(s.started)-maxSavedTurns):])
+		ss.HookStops = slices.Clone(s.hookStops[max(0, len(s.hookStops)-maxSavedTurns):])
 		for _, id := range ss.Started {
 			if t, ok := s.named[id]; ok {
 				if ss.Named == nil {
@@ -122,9 +165,71 @@ func (a *Adapter) SaveState() (json.RawMessage, error) {
 			})
 		}
 		for _, p := range s.posts {
-			ss.Posts = append(ss.Posts, savedPost{T: p.t, ToolUseID: p.toolUseID, Tool: p.tool, Agent: p.agent})
+			ss.Posts = append(ss.Posts, savedPost{T: p.t, ToolUseID: p.toolUseID, Tool: p.tool, Agent: p.agent, Native: p.native})
 		}
+		ss.NativeAt = s.nativeAt
 		st.Sessions = append(st.Sessions, ss)
+	}
+	files := make([]*txFile, 0, len(a.files))
+	for _, f := range a.files {
+		files = append(files, f)
+	}
+	// A file whose state holds something back always goes, past the
+	// bound: without it a restart would start the file afresh in the
+	// middle of a turn. The rest go in the order the memory keeps them,
+	// so a session written to now goes before the histories lookback read
+	// since.
+	recent := recentSeen(a.files)
+	slices.SortFunc(files, func(x, y *txFile) int {
+		if px, py := x.snapAt < x.at, y.snapAt < y.at; px != py {
+			if px {
+				return -1
+			}
+			return 1
+		}
+		switch {
+		case older(y, x, recent):
+			return -1
+		case older(x, y, recent):
+			return 1
+		}
+		return 0
+	})
+	for i, f := range files {
+		if i >= maxSavedFiles && f.snapAt >= f.at {
+			break
+		}
+		st.Files = append(st.Files, savedFile{Key: f.key, At: f.snapAt, State: f.snap, Seen: f.seen, Newest: f.newest,
+			Rewinding: f.rewinding, Rewound: f.rewound})
+	}
+	// The sessions the saved files name always go, past the bound, so a
+	// restart neither writes a second session.start for one nor forgets
+	// its hooks came; the rest go read from last first.
+	named := make(map[string]bool, len(st.Files))
+	for _, sf := range st.Files {
+		if sf.State.Session != "" {
+			named[sf.State.Session] = true
+		}
+	}
+	logs := make([]*txSession, 0, len(a.logSessions))
+	for _, s := range a.logSessions {
+		logs = append(logs, s)
+	}
+	slices.SortFunc(logs, func(x, y *txSession) int {
+		if nx, ny := named[x.id], named[y.id]; nx != ny {
+			if nx {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Compare(y.seen, x.seen)
+	})
+	for i, s := range logs {
+		if i >= maxSavedLogSessions && !named[s.id] {
+			break
+		}
+		st.LogSessions = append(st.LogSessions, savedLogSession{ID: s.id, Token: s.token, Started: s.started,
+			NativeAt: s.nativeAt, Seen: s.seen})
 	}
 	return json.Marshal(st)
 }
@@ -149,6 +254,7 @@ func (a *Adapter) LoadState(raw json.RawMessage) error {
 		}
 		s := &session{id: ss.ID, hookStart: ss.HookStart, turn: ss.Turn, unnamed: max(ss.Unnamed, 0), seen: ss.Seen}
 		s.started = slices.Clone(ss.Started[max(0, len(ss.Started)-maxTurns):])
+		s.hookStops = slices.Clone(ss.HookStops[max(0, len(ss.HookStops)-maxTurns):])
 		for _, id := range s.started {
 			if t, ok := ss.Named[id]; ok {
 				if s.named == nil {
@@ -168,13 +274,35 @@ func (a *Adapter) LoadState(raw json.RawMessage) error {
 			})
 		}
 		for _, p := range ss.Posts[max(0, len(ss.Posts)-maxHeld):] {
-			s.posts = append(s.posts, post{t: p.T, toolUseID: p.ToolUseID, tool: p.Tool, agent: p.Agent})
+			s.posts = append(s.posts, post{t: p.T, toolUseID: p.ToolUseID, tool: p.Tool, agent: p.Agent, native: p.Native})
+		}
+		if ss.HookStart {
+			s.nativeAt = max(ss.NativeAt, 0)
 		}
 		sessions[ss.ID] = s
 		clock = max(clock, ss.Seen)
 	}
+	files := make(map[string]*txFile, len(st.Files))
+	for _, sf := range st.Files {
+		if sf.Key == "" || files[sf.Key] != nil || len(files) >= maxLogFiles || sf.At < 0 {
+			continue
+		}
+		files[sf.Key] = &txFile{key: sf.Key, at: sf.At, st: sf.State, snap: sf.State, snapAt: sf.At, seen: sf.Seen, newest: sf.Newest,
+			rewinding: sf.Rewinding, rewound: max(sf.Rewound, 0)}
+		clock = max(clock, sf.Seen)
+	}
+	logs := make(map[string]*txSession, len(st.LogSessions))
+	for _, sl := range st.LogSessions {
+		if sl.ID == "" || logs[sl.ID] != nil || len(logs) >= maxLogSessions {
+			continue
+		}
+		logs[sl.ID] = &txSession{id: sl.ID, token: sl.Token, started: sl.Started, nativeAt: max(sl.NativeAt, 0),
+			seen: sl.Seen}
+		clock = max(clock, sl.Seen)
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.sessions, a.clock = sessions, clock
+	a.files, a.logSessions = files, logs
 	return nil
 }

@@ -1,0 +1,117 @@
+{
+  "fixture": "relayed/t3-here-agent",
+  "title": "A message an agent sends through T3 Code while the person types in T3's window on this computer",
+  "sm": "docs/design/struggle-metric.md 2.2 rules 4, 6 and 9, 2.3, 2.4, 5.1, 5.2",
+  "date": "2026-11-24",
+  "timezone": "America/Chicago",
+  "utc_offset": "-06:00",
+  "os": "macos",
+  "input_keys": true,
+  "evidence": "C",
+  "witness": "witnessed",
+  "device": "d_1241f3554ad9",
+  "projects": {"p_8480974b6054": "weather-cli"},
+  "window": {"start": "2026-11-25T03:00:00Z", "end": "2026-11-25T03:10:00Z", "local": "21:00-21:10"},
+  "rows": [
+    {
+      "start": "2026-11-25T03:00:00Z",
+      "minutes": 4,
+      "local": "21:00-21:03",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running; 2.3: key presses are no act and open no window",
+      "note": "Lena types her draft into T3's composer, a key a second, with T3's window, which hosts the session, in front. Without agent_app on rule 4's list, the agent's prompt at 21:04:40 would be human_typed and its 280 s lead would fill these minutes."
+    },
+    {
+      "start": "2026-11-25T03:04:00Z",
+      "minutes": 1,
+      "local": "21:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.no_anchor": 40, "X.automated": 20},
+      "agent_running_s": 20,
+      "sm": "2.2 rule 4: nothing witnesses the agent's prompt, and rule 4 lists parent_class agent_app, so the prompt is headless whatever window hosts the session",
+      "note": "Lena types with no window open until 21:04:40: X.no_anchor. Then the agent's message reaches the agent, with no relay record: T3 stores it with createdBy agent. Rule 6 at 21:04:40 would see a key press 0.7 s before it and T3's window, hosting the session, in front, but rule 4 comes first. A1 runs, automated.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T03:05:00Z",
+      "minutes": 1,
+      "local": "21:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.automated": 60},
+      "agent_running_s": 60,
+      "sm": "5.2: X.automated while a headless turn runs",
+      "note": "A1's 45 words at 21:05:10 put 15 s in the bucket, with no base, since an automated turn doesn't reset it (2.4). Nothing drains it: no human anchor in the project within READ_HORIZON_S.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T03:06:00Z",
+      "minutes": 1,
+      "local": "21:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.automated": 60},
+      "agent_running_s": 60,
+      "sm": "5.2: X.automated while a headless turn runs",
+      "note": "The 8-line edit at 21:06:30 adds 60 s.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T03:07:00Z",
+      "minutes": 1,
+      "local": "21:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.automated": 60},
+      "agent_running_s": 60,
+      "sm": "5.2: X.automated while a headless turn runs",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T03:08:00Z",
+      "minutes": 1,
+      "local": "21:08",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running; 2.4: no human anchor, so nothing reads the bucket",
+      "note": "A1 stops at 21:08:00 with 60 words, 20 s more, so 15 + 60 + 20 = 95 s sit in the bucket and nothing reads them. A1 ran until 21:08:00, so no agent runs in 21:08."
+    },
+    {
+      "start": "2026-11-25T03:09:00Z",
+      "minutes": 1,
+      "local": "21:09",
+      "bucket": false,
+      "sm": "5.1: no credit and no agent running",
+      "note": "Lena types on to the end of the window and sends nothing."
+    }
+  ],
+  "totals": {
+    "credited_s": 0,
+    "credited_by_project": {},
+    "credited_by_reason": {},
+    "uncredited": {"X.no_anchor": 40, "X.automated": 200},
+    "agent_running_s": 200,
+    "level_c_s": 0,
+    "via_relay_s": 0,
+    "relayed_prompts": 0,
+    "headless_prompts": 1,
+    "typed_prompts": 0
+  },
+  "stated": [],
+  "approx": {},
+  "errata": ["2026-11-22-relayed-prompts"],
+  "notes": [
+    "No SM section describes this case. Every row comes from SM 2.2 rules 4, 6 and 9, 2.3, 2.4, 5.1 and 5.2 as docs/errata/2026-11-22-relayed-prompts.md applies them. Nothing is credited, so no second has a level; evidence C is agent-day's, the other case that credits nothing.",
+    "An agent in another T3 thread sends this thread its message through T3's MCP tools, and T3 stores it with createdBy agent, so the T3 reader writes no relay record. Nothing witnesses the prompt, and rule 4, which lists parent_class agent_app, makes it headless whatever window hosts the session. headless_prompts counts it; relayed_prompts and typed_prompts count none.",
+    "Lena types in T3's window with key presses in every slot, and the window, which hosts the session and resolves to weather-cli, is in front throughout. No presence or focus code applies, so an uncredited second is X.automated while the headless turn runs and X.no_anchor otherwise. No human anchor exists, so nothing reads the bucket and no second is X.bucket_cap.",
+    "Rule 6 at the prompt's t would hold: a key press 0.7 s before it, T3's window hosting the session in front, and 240 characters, plausible over 285 s of input. Without agent_app on rule 4's list, with T3's window as the session's desktop-app host, the prompt would be human_typed at level A, and the case would credit 395 s: P 280, SUP 95 and READ 20. README.md works it out minute by minute."
+  ]
+}
