@@ -1,0 +1,17 @@
+unix_ns=1795443244279834892
+utc=2026-11-23T14:14:04.279835Z
+server=pairtime
+method=GET
+path=/api/v1/users/current/statusbar/today
+query=
+content_type=application/json
+accept=application/json
+accept_encoding=gzip
+user_agent=wakatime/v2.28.4 (linux-7.0.0-1020-azure-unknown) go1.27.3 vscode/1.106.3 vscode-wakatime/25.5.1
+timezone=Etc/UTC
+x_machine_name=capture-host
+auth=basic
+key=pairtime
+header_names=accept,accept-encoding,authorization,content-type,host,timezone,user-agent,x-machine-name
+bytes=0
+status=200

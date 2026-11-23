@@ -1,0 +1,73 @@
+{
+  "tool": "wakatime-cli",
+  "version": "v2.28.4",
+  "run": "local-only",
+  "home": "/home/capture",
+  "servers": {
+    "pairtime": "http://127.0.0.1:7247/api/v1",
+    "hackatime": "http://127.0.0.2:7248/api/hackatime/v1"
+  },
+  "keys": {
+    "pairtime": "00000000-0000-4000-8000-00000000a9e7",
+    "hackatime": "00000000-0000-4000-8000-0000000048c1"
+  },
+  "wakatime_cfg": "[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = 00000000-0000-4000-8000-00000000a9e7\nhostname = capture-host\n",
+  "wakatime_internal_cfg": "[internal]\nai_logs_last_parsed_at = 2026-11-23T14:14:03Z\n",
+  "calls": [
+    {
+      "n": 1,
+      "started_utc": "2026-11-23T14:14:03.572412Z",
+      "args": [
+        "--entity",
+        "/home/capture/pairtime-capture/projects/local-only/wordcount.py",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1",
+        "--lineno",
+        "4",
+        "--cursorpos",
+        "2",
+        "--lines-in-file",
+        "6",
+        "--human-line-changes",
+        "1"
+      ],
+      "exit": 0,
+      "requests": [
+        1
+      ],
+      "note": "a heartbeat to pairtime alone"
+    },
+    {
+      "n": 2,
+      "started_utc": "2026-11-23T14:14:03.920307Z",
+      "args": [
+        "--today",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1"
+      ],
+      "exit": 0,
+      "requests": [
+        2
+      ],
+      "note": "the status bar's text for today",
+      "stdout": "1 min"
+    },
+    {
+      "n": 3,
+      "started_utc": "2026-11-23T14:14:04.250801Z",
+      "args": [
+        "--today",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1",
+        "--output",
+        "json"
+      ],
+      "exit": 0,
+      "requests": [
+        3
+      ],
+      "note": "the same as JSON",
+      "stdout": "{\"text\":\"1 min\",\"has_team_features\":false}"
+    }
+  ]
+}
