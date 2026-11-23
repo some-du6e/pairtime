@@ -409,40 +409,49 @@ func TestAgentEdits(t *testing.T) {
 		batches func(t *testing.T) [][]wakacompat.Heartbeat
 		note    bool // NoteAgentEdit the agent's edit instead of sending it
 		want    event.EditSource
+		// ignored is the agent's session test, by session key.
+		ignored func(key string) bool
 	}{
 		{"an editor edit 120 s after the agent's edit of the same file is the agent's",
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{agentHB(t, "a.py", 0, `,"ai_line_changes":5`), editorHB(t, "a.py", window, `,"human_line_changes":5`)}}
-			}, false, event.EditSourceAgent},
+			}, false, event.EditSourceAgent, nil},
 		{"an editor edit 121 s after it isn't",
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{agentHB(t, "a.py", 0, `,"ai_line_changes":5`), editorHB(t, "a.py", window+1, `,"human_line_changes":5`)}}
-			}, false, event.EditSourceUnknown},
+			}, false, event.EditSourceUnknown, nil},
 		{"an editor edit just before the agent's edit, in the same batch, is the agent's too",
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{editorHB(t, "a.py", -30, `,"human_line_changes":5`), agentHB(t, "a.py", 0, `,"ai_line_changes":5`)}}
-			}, false, event.EditSourceAgent},
+			}, false, event.EditSourceAgent, nil},
 		{"an agent edit from an earlier batch counts",
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{agentHB(t, "a.py", 0, `,"ai_line_changes":5`)}, {editorHB(t, "a.py", 30, `,"is_write":true`)}}
-			}, false, event.EditSourceAgent},
+			}, false, event.EditSourceAgent, nil},
 		{"an agent edit of another file doesn't count",
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{agentHB(t, "b.py", 0, `,"ai_line_changes":5`), editorHB(t, "a.py", 30, `,"human_line_changes":5`)}}
-			}, false, event.EditSourceUnknown},
+			}, false, event.EditSourceUnknown, nil},
 		{"a navigation near the agent's edit is no edit, so it stays unknown",
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{agentHB(t, "a.py", 0, `,"ai_line_changes":5`), editorHB(t, "a.py", 30, "")}}
-			}, false, event.EditSourceUnknown},
+			}, false, event.EditSourceUnknown, nil},
 		{"an agent edit NoteAgentEdit was told of counts",
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{editorHB(t, "a.py", 30, `,"human_line_changes":5`)}}
-			}, true, event.EditSourceAgent},
+			}, true, event.EditSourceAgent, nil},
+		{"an agent edit of a session the agent keeps out still makes the editor's echo of it the agent's",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{agentHB(t, "a.py", 0, `,"ai_line_changes":5`), editorHB(t, "a.py", 30, `,"human_line_changes":5`)}}
+			}, false, event.EditSourceAgent,
+			func(key string) bool {
+				return key == adapters.FixtureKeys().Session("617e16a3-ddb4-44ca-af68-72cf58ed1a34")
+			}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			opts := adapters.FixtureOptions()
-			br := NewBridge(BridgeOptions{Options: opts})
+			br := NewBridge(BridgeOptions{Options: opts, SessionIgnored: c.ignored})
 			if c.note {
 				proj, _ := opts.Project(projectDir)
 				key, err := opts.Features.Path("a.py")
@@ -639,6 +648,11 @@ func TestBridgeExclusions(t *testing.T) {
 		ts, _ := at(sec)
 		return hb(t, fmt.Sprintf(`{"entity":%q,"type":"file","time":%v,"user_agent":%q,"project":%q,"ai_session":%q,"ai_line_changes":2}`, dir+"/notes.md", ts, claudeUA, project, session))
 	}
+	// editorIn is an editor heartbeat of a file in dir, named project.
+	editorIn := func(t *testing.T, dir, project string, sec float64) wakacompat.Heartbeat {
+		ts, _ := at(sec)
+		return hb(t, fmt.Sprintf(`{"entity":%q,"type":"file","time":%v,"user_agent":%q,"project":%q}`, dir+"/x.md", ts, pluginUA, project))
+	}
 	// prompt is an app heartbeat of sess, named project when it isn't "".
 	prompt := func(t *testing.T, sess, project string, sec float64) wakacompat.Heartbeat {
 		ts, _ := at(sec)
@@ -692,6 +706,23 @@ func TestBridgeExclusions(t *testing.T) {
 			func(t *testing.T) [][]wakacompat.Heartbeat {
 				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 0), editorHB(t, "a.py", 1, "")}}
 			}, "editor.activity editor navigate unknown", tracked.Key},
+		{"a file of a session the agent keeps out still marks its excluded folder on its WakaTime name",
+			func(key string) bool { return key == opts.Keys.Session(session) },
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "shared", 0)}, {prompt(t, "other-session", "shared", 10)}}
+			}, "", ""},
+		{"the latest file heartbeat by its own time places a session, though wakatime-cli sends the newest first", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 20), fileIn(t, privateDir, "private", 10), prompt(t, session, "", 30)}}
+			}, "agent.tool bridge, prompt.submit bridge", tracked.Key},
+		{"an older tracked file heartbeat after a newer excluded one doesn't bring the session back", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, privateDir, "private", 20), fileIn(t, projectDir, "cli", 10), prompt(t, session, "", 30)}}
+			}, "agent.tool bridge", tracked.Key},
+		{"a tracked session's prompt that carries a name last seen outside is placed by its session", nil,
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{fileIn(t, projectDir, "cli", 0)}, {editorIn(t, privateDir, "shared", 5)}, {prompt(t, session, "shared", 10)}}
+			}, "prompt.submit bridge", tracked.Key},
 		{"the session test keeps the other sessions' prompts",
 			func(key string) bool { return key == opts.Keys.Session("kept-out") },
 			func(t *testing.T) [][]wakacompat.Heartbeat {
@@ -715,6 +746,65 @@ func TestBridgeExclusions(t *testing.T) {
 			}
 			if _, ok := br.ProjectNames()["private"]; ok {
 				t.Error("a name seen only in a folder out of pairtime is in ProjectNames")
+			}
+		})
+	}
+}
+
+func TestProjectNames(t *testing.T) {
+	opts := adapters.FixtureOptions()
+	inner := opts.Project
+	opts.Project = func(dir string) (adapters.Project, bool) {
+		if strings.HasSuffix(dir, "/private") {
+			return adapters.Project{Ignored: true}, false
+		}
+		return inner(dir)
+	}
+	tracked, _ := inner(projectDir)
+	editorIn := func(t *testing.T, dir, project string, sec float64) wakacompat.Heartbeat {
+		ts, _ := at(sec)
+		return hb(t, fmt.Sprintf(`{"entity":%q,"type":"file","time":%v,"user_agent":%q,"project":%q}`, dir+"/x.md", ts, pluginUA, project))
+	}
+	nameless := func(t *testing.T, project string, sec float64) wakacompat.Heartbeat {
+		ts, _ := at(sec)
+		return hb(t, fmt.Sprintf(`{"entity":"Claude x","type":"app","time":%v,"user_agent":%q,"ai_session":"unseen","ai_prompt_length":20,"project":%q}`, ts, promptUA, project))
+	}
+	cases := []struct {
+		name    string
+		batches func(t *testing.T) [][]wakacompat.Heartbeat
+		// want is ProjectNames after the batches, and last the kinds of the
+		// last batch's records.
+		want map[string]string
+		last string
+	}{
+		{"a name whose latest file heartbeat was in an excluded subfolder of its repo keeps the repo's project, and places nothing there",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{editorIn(t, projectDir, "cli", 0)}, {editorIn(t, projectDir+"/private", "cli", 10)}, {nameless(t, "cli", 20)}}
+			},
+			map[string]string{"cli": tracked.Key}, ""},
+		{"a name seen only in folders out of pairtime isn't listed",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{editorIn(t, "/home/capture/private", "secret", 0)}}
+			},
+			map[string]string{}, ""},
+		{"a name two projects share keeps the project of its latest tracked file heartbeat by time",
+			func(t *testing.T) [][]wakacompat.Heartbeat {
+				return [][]wakacompat.Heartbeat{{editorIn(t, projectDir, "app", 10)}, {editorIn(t, "/home/capture/other", "app", 5)}}
+			},
+			map[string]string{"app": tracked.Key}, "editor.activity editor navigate unknown"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			br := NewBridge(BridgeOptions{Options: opts})
+			var last []adapters.Record
+			for _, b := range c.batches(t) {
+				last = br.Records(Batch{Heartbeats: b, Peer: passed}, testClock)
+			}
+			if got := br.ProjectNames(); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("ProjectNames = %v, want %v", got, c.want)
+			}
+			if got := kinds(last); got != c.last {
+				t.Errorf("last batch's records %q, want %q", got, c.last)
 			}
 		})
 	}
