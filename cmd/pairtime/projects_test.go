@@ -313,7 +313,7 @@ func TestProjectsNames(t *testing.T) {
 			name:    "hide-name on a linked computer writes its sign-in into a project-names.json that names none, as show-name does",
 			home:    projectsHome{config: online + chip8Table("chip8-emulator", true), linked: true},
 			args:    []string{"projects", "hide-name", chip8Key},
-			wantOut: "Turned off in config.toml.",
+			wantOut: "Turned off in config.toml before it was sent.",
 			want:    map[string]config.Project{chip8Key: {Name: "chip8-emulator"}},
 			file:    "sign-in",
 		},
