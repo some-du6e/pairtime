@@ -324,11 +324,9 @@ tl.check(at("20:02:15") not in browser_slots and at("20:02:45") not in browser_s
 
 
 def typing_s(n):
-    """The typing part of a lead, n / COMPOSE_CPS rounded to a whole second.
-    SM states its leads in whole seconds and rounds this part to the
-    nearest one: 35 characters give 23 s in SM's 143 s for T2, and 61 give
-    41 s in 6.4 (SM 1.3 applies window edges to the second; the 6.4
-    prompt-lengths erratum asks which way they round)."""
+    """The typing part of a lead, n / COMPOSE_CPS rounded to the nearest
+    second, halves up (SM 1.3): 35 characters give 23 s in SM's 143 s for
+    T2, and 61 give 41 s in 6.4."""
     return Fraction(int(Fraction(n) / COMPOSE_CPS + Fraction(1, 2)))
 
 
