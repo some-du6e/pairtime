@@ -1,0 +1,59 @@
+{
+  "responses": [
+    [
+      {
+        "id": 90312,
+        "user_id": 4821,
+        "branch": "master",
+        "category": "coding",
+        "editor": "vscode",
+        "entity": "/home/capture/pairtime-capture/projects/dual-send/wordcount.py",
+        "language": "Python",
+        "machine": "capture-host",
+        "operating_system": "linux",
+        "project": "dual-send",
+        "type": "file",
+        "user_agent": "wakatime/v2.28.4 (linux-7.0.0-1020-azure-unknown) go1.27.3 vscode/1.106.3 vscode-wakatime/25.5.1",
+        "lineno": 6,
+        "lines": 6,
+        "cursorpos": 31,
+        "project_root_count": 6,
+        "time": 1795442781.980706,
+        "is_write": false,
+        "human_line_changes": 1,
+        "source_type": "direct_entry",
+        "created_at": "2026-11-23T14:07:05.102Z",
+        "updated_at": "2026-11-23T14:07:05.102Z"
+      },
+      201
+    ],
+    [
+      {
+        "id": 90311,
+        "user_id": 4821,
+        "branch": "master",
+        "category": "coding",
+        "editor": "vscode",
+        "entity": "/home/capture/pairtime-capture/projects/dual-send/wordcount.py",
+        "language": "Python",
+        "machine": "capture-host",
+        "operating_system": "linux",
+        "project": "dual-send",
+        "type": "file",
+        "user_agent": "wakatime/v2.28.4 (linux-7.0.0-1020-azure-unknown) go1.27.3 vscode/1.106.3 vscode-wakatime/25.5.1",
+        "lineno": 1,
+        "lines": 6,
+        "cursorpos": 1,
+        "project_root_count": 6,
+        "time": 1795442779.6428218,
+        "is_write": false,
+        "human_line_changes": null,
+        "source_type": "direct_entry",
+        "created_at": "2026-11-23T14:06:19.913Z",
+        "updated_at": "2026-11-23T14:06:19.913Z"
+      },
+      201
+    ],
+    [{"error": "time must be a Unix epoch timestamp", "type": "HeartbeatIngest::InvalidHeartbeatTime"}, 422]
+  ]
+}

@@ -1,0 +1,1 @@
+{"error": "time must be a Unix epoch timestamp", "type": "HeartbeatIngest::InvalidHeartbeatTime"}

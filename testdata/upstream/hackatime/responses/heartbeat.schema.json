@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A heartbeat Hackatime stored, as its heartbeat endpoints answer with it",
+  "description": "HackatimeController#push_heartbeats answers a single POST with this body and 202, and each heartbeat of a bulk POST it took with [this body, 201] (hackatime_controller.rb lines 67-75, 227-228). It is the stored row's attributes, every column of the heartbeats table (HC 1.2), for a heartbeat inserted now and for one whose fields_hash a row already has, which gets that earlier row (heartbeat_ingest.rb lines 70-82; heartbeat.rb lines 41-56). Only the fields below are pinned: the four WakaTime gives in its own answer (HC 2.1). No client WP-AD16's capture saw reads this body. wakatime-cli v2.28.4 looks for data.id in it, which a row doesn't have, so it reads nothing (pkg/api/heartbeat.go).",
+  "type": "object",
+  "required": ["id", "time", "entity", "type"],
+  "properties": {
+    "id": {"type": "integer", "minimum": 1},
+    "time": {
+      "type": "number",
+      "description": "Epoch seconds with fractions, after HeartbeatIngest moved a millisecond, microsecond, nanosecond or Windows-epoch time into seconds (heartbeat_ingest.rb lines 364-383)."
+    },
+    "entity": {"type": ["string", "null"]},
+    "type": {"type": ["string", "null"]}
+  }
+}

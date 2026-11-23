@@ -42,3 +42,16 @@
 
 # ---- config/routes.rb lines 300-300 ----
         post "user/get_user_by_email", to: "admin#get_user_by_email"
+
+# ---- config/routes.rb lines 349-359 ----
+    # Everything in this namespace conforms to wakatime.com's API.
+    namespace :hackatime do
+      namespace :v1 do
+        get "/", to: redirect("/", status: 302) # some clients seem to link this as the user's dashboard instead of /api/v1/hackatime
+        get "/users/:id", to: "hackatime#show_user"
+        get "/users/:id/summaries", to: "hackatime#summaries"
+        get "/users/:id/statusbar/today", to: "hackatime#status_bar_today"
+        post "/users/:id/heartbeats", to: "hackatime#push_heartbeats"
+        get "/users/current/stats/last_7_days", to: "hackatime#stats_last_7_days"
+      end
+    end

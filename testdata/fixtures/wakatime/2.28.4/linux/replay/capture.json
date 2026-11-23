@@ -1,0 +1,89 @@
+{
+  "tool": "wakatime-cli",
+  "version": "v2.28.4",
+  "run": "replay",
+  "home": "/home/capture",
+  "servers": {
+    "pairtime": "http://127.0.0.1:7247/api/v1",
+    "hackatime": "http://127.0.0.2:7248/api/hackatime/v1"
+  },
+  "keys": {
+    "pairtime": "00000000-0000-4000-8000-00000000a9e7",
+    "hackatime": "00000000-0000-4000-8000-0000000048c1"
+  },
+  "wakatime_cfg": "[settings]\napi_url = http://127.0.0.2:7248/api/hackatime/v1\napi_key = 00000000-0000-4000-8000-0000000048c1\nheartbeat_rate_limit_seconds = 0\nhostname = capture-host\n\n[api_urls]\n.+ = http://127.0.0.1:7247/api/v1|00000000-0000-4000-8000-00000000a9e7\n",
+  "wakatime_internal_cfg": "[internal]\nai_logs_last_parsed_at = 2026-11-23T14:13:30Z\n",
+  "calls": [
+    {
+      "n": 1,
+      "started_utc": "2026-11-23T14:13:30.355260Z",
+      "args": [
+        "--entity",
+        "/home/capture/pairtime-capture/projects/replay/wordcount.py",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1",
+        "--lineno",
+        "3",
+        "--cursorpos",
+        "8",
+        "--lines-in-file",
+        "6",
+        "--human-line-changes",
+        "1"
+      ],
+      "exit": 102,
+      "requests": [
+        1,
+        2
+      ],
+      "note": "pairtime takes the batch, then Hackatime answers 500, so wakatime-cli queues the whole batch and, because the call failed, skips the queue sync it runs after a call"
+    },
+    {
+      "n": 2,
+      "started_utc": "2026-11-23T14:13:30.708085Z",
+      "args": [
+        "--offline-count"
+      ],
+      "exit": 0,
+      "requests": [],
+      "note": "the failed batch waits in the queue",
+      "stdout": "1"
+    },
+    {
+      "n": 3,
+      "started_utc": "2026-11-23T14:14:02.026469Z",
+      "args": [
+        "--entity",
+        "/home/capture/pairtime-capture/projects/replay/wordcount.py",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1",
+        "--lineno",
+        "3",
+        "--cursorpos",
+        "9",
+        "--lines-in-file",
+        "6",
+        "--write"
+      ],
+      "exit": 0,
+      "requests": [
+        3,
+        4,
+        5,
+        6
+      ],
+      "note": "past the backoff: both take this heartbeat, then the queue sync sends the failed batch to both again"
+    },
+    {
+      "n": 4,
+      "started_utc": "2026-11-23T14:14:02.385776Z",
+      "args": [
+        "--offline-count"
+      ],
+      "exit": 0,
+      "requests": [],
+      "note": "the queue is empty again",
+      "stdout": "0"
+    }
+  ]
+}

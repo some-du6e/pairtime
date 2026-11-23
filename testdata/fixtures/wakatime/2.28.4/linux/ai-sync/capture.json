@@ -1,0 +1,108 @@
+{
+  "tool": "wakatime-cli",
+  "version": "v2.28.4",
+  "run": "ai-sync",
+  "home": "/home/capture",
+  "servers": {
+    "pairtime": "http://127.0.0.1:7247/api/v1",
+    "hackatime": "http://127.0.0.2:7248/api/hackatime/v1"
+  },
+  "keys": {
+    "pairtime": "00000000-0000-4000-8000-00000000a9e7",
+    "hackatime": "00000000-0000-4000-8000-0000000048c1"
+  },
+  "wakatime_cfg": "[settings]\napi_url = http://127.0.0.2:7248/api/hackatime/v1\napi_key = 00000000-0000-4000-8000-0000000048c1\nheartbeat_rate_limit_seconds = 0\nhostname = capture-host\n\n[api_urls]\n.+ = http://127.0.0.1:7247/api/v1|00000000-0000-4000-8000-00000000a9e7\n",
+  "wakatime_internal_cfg": "",
+  "calls": [
+    {
+      "n": 1,
+      "started_utc": "2026-11-23T14:14:02.728697Z",
+      "args": [
+        "--entity",
+        "/home/capture/pairtime-capture/projects/cli/wordcount.py",
+        "--plugin",
+        "vscode/1.106.3 vscode-wakatime/25.5.1",
+        "--lineno",
+        "7",
+        "--cursorpos",
+        "2",
+        "--lines-in-file",
+        "7",
+        "--extra-heartbeats"
+      ],
+      "exit": 0,
+      "requests": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "stdin": [
+        {
+          "entity": "/home/capture/pairtime-capture/projects/cli/wordcount.py",
+          "type": "file",
+          "time": 1795193392.401,
+          "lineno": 6,
+          "cursorpos": 3,
+          "lines": 6,
+          "human_line_changes": 1
+        },
+        {
+          "entity": "/home/capture/pairtime-capture/projects/cli/wordcount.py",
+          "type": "file",
+          "time": 1795193420.401,
+          "lineno": 6,
+          "cursorpos": 9,
+          "lines": 6,
+          "human_line_changes": 2
+        },
+        {
+          "entity": "/home/capture/pairtime-capture/projects/cli/test_wordcount.py",
+          "type": "file",
+          "time": 1795193435.401,
+          "lineno": 4,
+          "cursorpos": 1
+        },
+        {
+          "entity": "/home/capture/pairtime-capture/projects/cli/wordcount.py",
+          "type": "file",
+          "time": 1795193590.401,
+          "lineno": 7,
+          "cursorpos": 2,
+          "lines": 7,
+          "human_line_changes": 1
+        },
+        {
+          "entity": "/home/capture/pairtime-capture/projects/cli/wordcount.py",
+          "type": "file",
+          "time": 1795196286.417,
+          "lineno": 7,
+          "cursorpos": 2,
+          "lines": 7,
+          "human_line_changes": 3,
+          "is_write": true
+        }
+      ],
+      "env": {
+        "CLAUDE_CONFIG_DIR": "/home/capture/pairtime-capture/claude-home"
+      },
+      "note": "extra heartbeats at the agent's first edit of wordcount.py +2 s, +30 s, +45 s (another file), +200 s, and 31 minutes after its last edit"
+    },
+    {
+      "n": 2,
+      "started_utc": "2026-11-23T14:14:03.237572Z",
+      "args": [
+        "--offline-count"
+      ],
+      "exit": 0,
+      "requests": [],
+      "env": {
+        "CLAUDE_CONFIG_DIR": "/home/capture/pairtime-capture/claude-home"
+      },
+      "note": "what is left in the queue",
+      "stdout": "0"
+    }
+  ]
+}
