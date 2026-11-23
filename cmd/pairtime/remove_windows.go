@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,31 +100,64 @@ func removeAfterExit(files, dirs, links []string) error {
 // commitBinary puts tmp, the new binary, at dst. Windows doesn't let anyone
 // replace a program's file while it runs, and a hook Claude Code started,
 // or an agent that a hook started again, may run dst. It does let one
-// rename the file, so dst moves aside to pairtime.old.exe first, as CP 4.6
-// says and install.ps1 does, and goes at once if nothing runs it. If
-// something does, the next install, uninstall or agent start deletes it
-// (removeOldBinaries).
+// rename the file, so dst moves aside first, as CP 4.6 says and install.ps1
+// does, and goes at once if nothing runs it. The copy is named for this
+// process, pairtime.old.<pid>.exe, so that two installs at once never
+// delete each other's: an install whose new copy can't go in puts its old
+// one back. If something runs the copy, the next install, uninstall or
+// agent start deletes it once this process has ended (removeOldBinaries,
+// strayBinaries). A copy that a process with this id left there and that
+// something still runs makes this one take a random id.
 func commitBinary(tmp, dst string) error {
-	if _, err := os.Lstat(dst); errors.Is(err, fs.ErrNotExist) {
+	dir := filepath.Dir(dst)
+	old := filepath.Join(dir, "pairtime.old."+strconv.Itoa(os.Getpid())+".exe")
+	// One that a process with this id left before, which no install needs.
+	if err := os.Remove(old); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		// Something still runs it, so this copy takes a random id that no
+		// copy there has, which the cleanups still read as an id.
+		for {
+			old = filepath.Join(dir, "pairtime.old."+strconv.FormatUint(uint64(rand.Uint32()), 10)+".exe")
+			if _, err := os.Lstat(old); err != nil {
+				break
+			}
+		}
+	}
+	if err := renameRetry(dst, old); errors.Is(err, fs.ErrNotExist) {
+		// Nothing is there, or another install moved it aside meanwhile
+		// and puts its own copy in.
 		return renameRetry(tmp, dst)
 	} else if err != nil {
-		return err
-	}
-	dir := filepath.Dir(dst)
-	old := filepath.Join(dir, "pairtime.old.exe")
-	if err := os.Remove(old); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		// An older copy that something still runs.
-		old = filepath.Join(dir, "pairtime.old."+strconv.Itoa(os.Getpid())+".exe")
-	}
-	if err := renameRetry(dst, old); err != nil {
 		return err
 	}
 	if err := renameRetry(tmp, dst); err != nil {
 		// The old one goes back, so that the hooks and the login item
 		// still find a pairtime there.
-		return errors.Join(err, os.Rename(old, dst))
+		return errors.Join(err, putBack(old, dst))
 	}
 	os.Remove(old)
+	return nil
+}
+
+// putBack moves old, the copy commitBinary moved aside, back to dst. If
+// another install has put its new copy at dst meanwhile, that copy stays,
+// and old goes instead.
+func putBack(old, dst string) error {
+	from, err := windows.UTF16PtrFromString(old)
+	if err != nil {
+		return err
+	}
+	to, err := windows.UTF16PtrFromString(dst)
+	if err != nil {
+		return err
+	}
+	// Without MOVEFILE_REPLACE_EXISTING, which os.Rename passes, a file at
+	// dst stays.
+	switch err := windows.MoveFileEx(from, to, 0); {
+	case errors.Is(err, fs.ErrExist):
+		os.Remove(old)
+	case err != nil:
+		return &os.LinkError{Op: "rename", Old: old, New: dst, Err: err}
+	}
 	return nil
 }
 
@@ -160,29 +194,63 @@ func oldBinaries(dir string) []string {
 }
 
 // isOldName reports whether name is one that commitBinary, or install.ps1,
-// gives a copy it moves aside: pairtime.old.exe, or pairtime.old.<pid>.exe
-// when an older one is still in use, in any case.
+// gives a copy it moves aside, in any case: pairtime.old.<pid>.exe, named
+// for the process that moved it, or pairtime.old.exe, the name earlier
+// versions tried first.
 func isOldName(name string) bool {
-	name = strings.ToLower(name)
-	if name == "pairtime.old.exe" {
-		return true
-	}
-	pid, ok := strings.CutPrefix(name, "pairtime.old.")
+	_, ok := oldPID(name)
+	return ok || strings.ToLower(name) == "pairtime.old.exe"
+}
+
+// oldPID returns the id of the process that name, pairtime.old.<pid>.exe
+// in any case, is named for.
+func oldPID(name string) (uint32, bool) {
+	pid, ok := strings.CutPrefix(strings.ToLower(name), "pairtime.old.")
 	if !ok {
-		return false
+		return 0, false
 	}
 	pid, ok = strings.CutSuffix(pid, ".exe")
 	if !ok || pid == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(pid, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(n), true
+}
+
+// stillActive is the exit code GetExitCodeProcess gives a process that
+// hasn't ended (STILL_ACTIVE).
+const stillActive = 259
+
+// placing reports whether an install that still runs may need p, a copy
+// oldBinaries found, to put back (commitBinary): whether p is named for a
+// process that hasn't ended. A process that Windows won't let this user
+// open counts as one that hasn't. pairtime.old.exe names no process, so
+// the cleanups delete it as they always have.
+func placing(p string) bool {
+	pid, ok := oldPID(filepath.Base(p))
+	if !ok {
 		return false
 	}
-	_, err := strconv.ParseUint(pid, 10, 32)
-	return err == nil
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
+		return false // no process has that id
+	} else if err != nil {
+		return true
+	}
+	defer windows.CloseHandle(h)
+	var code uint32
+	return windows.GetExitCodeProcess(h, &code) != nil || code == stillActive
 }
 
 // removeOldBinaries deletes each copy oldBinaries finds in dir that nothing
-// runs any more.
+// runs any more and that no install still running may put back (placing).
 func removeOldBinaries(dir string) {
 	for _, p := range oldBinaries(dir) {
-		os.Remove(p)
+		if !placing(p) {
+			os.Remove(p)
+		}
 	}
 }

@@ -34,10 +34,6 @@ func deleteRunValue() {
 	k.DeleteValue(install.RunValue)
 }
 
-// stillActive is the exit code GetExitCodeProcess gives a process that
-// hasn't ended (STILL_ACTIVE).
-const stillActive = 259
-
 // processAlive reports whether the process pid is running.
 func processAlive(pid int) bool {
 	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))

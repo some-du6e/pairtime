@@ -155,11 +155,18 @@ const stagedPrefix = ".pairtime.new-"
 // strayBinaries returns the copies of pairtime that an install left in dir,
 // the binary's folder: one it staged and didn't get to put in place, as
 // when the teen stopped it with Ctrl+C, and on Windows one it moved aside
-// (oldBinaries). A staged copy counts only once it is at least age old, so
-// that an install running meanwhile keeps the one it is about to put in
-// place.
+// (oldBinaries). So that an install running meanwhile keeps the copy it is
+// about to put in place, and the one it may still put back, a staged copy
+// counts only once it is at least age old, and a copy moved aside only
+// once the process it is named for has ended (placing). With age 0, as for
+// uninstall, every copy counts.
 func strayBinaries(dir string, age time.Duration) []string {
-	out := oldBinaries(dir)
+	var out []string
+	for _, p := range oldBinaries(dir) {
+		if age == 0 || !placing(p) {
+			out = append(out, p)
+		}
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return out
