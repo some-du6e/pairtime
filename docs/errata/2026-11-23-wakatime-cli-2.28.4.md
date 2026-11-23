@@ -1,6 +1,6 @@
 # Erratum: what wakatime-cli v2.28.4 sends, against DESIGN 5.6 and 5.7
 
-Date 2026-11-23. Raised by WP-AD16, from wakatime-cli v2.28.4's source at `9fee1b464bfb` (the release's tag, BSD-3-Clause, read and not copied) and the requests in `testdata/fixtures/wakatime/2.28.4/linux`. Status: item 2 decided 2026-11-23 by the orchestrator for Karim. Item 1 is waiting for Karim, and the bridge uses the rule below until he decides, which the orchestrator agreed to. Item 3 is a correction for WP-AD17 to confirm, and DESIGN 5.6 stays as it is until then.
+Date 2026-11-23. Raised by WP-AD16, from wakatime-cli v2.28.4's source at `9fee1b464bfb` (the release's tag, BSD-3-Clause, read and not copied) and the requests in `testdata/fixtures/wakatime/2.28.4/linux`. Status: item 2 decided 2026-11-23 by the orchestrator for Karim. Item 1 is waiting for Karim, and the bridge uses the rule below until he decides, which the orchestrator agreed to. Item 3 is a correction for WP-AD17 to confirm, and DESIGN 5.6 stays as it is until then. Item 4 is a case DESIGN 5.6 doesn't cover, for Karim.
 
 ## 1. Which heartbeats are transcript-derived
 
@@ -65,6 +65,35 @@ Confirm it against the real binary in `e2e-wakatime.yml`'s end-to-end job: a hea
 
 HC 1.5's sentence is in docs/research, an oracle, and gets the same correction in the same PR.
 
+## 4. While Hackatime can't be reached, heartbeats reach pairtime late
+
+### Input
+
+DESIGN 5.6 covers the agent being down ("Agent down"), when Hackatime still gets every heartbeat. It doesn't cover Hackatime being out of reach: an outage, a network that blocks it, or a laptop with no connection, where pairtime's endpoint on 127.0.0.1 still answers.
+
+### What the source says
+
+wakatime-cli backs off after a failed send, for every destination at once. Its send path is `WithQueue` around `WithBackoff` around the sender (`cmd/heartbeat/heartbeat.go`, `buildHandle`), and after the n-th failure in a row `WithBackoff` sends nothing for 15 s times 2 to the n (`pkg/backoff/backoff.go`), so a call in that time queues its heartbeats without trying any destination. After the seventh failure the next wait would pass 3,600 s, and from then on it doesn't wait at all until a send succeeds. A failed call also skips the queue sync it runs after a successful one (`cmd/run.go`, `RunCmdWithOfflineSync`). So, with pairtime's destination sent first:
+
+- For about the first 64 minutes of an outage (30 s, 60 s and so on up to 1,920 s, between calls), pairtime gets only the heartbeats of the calls that come as each wait ends. The rest wait in wakatime-cli's queue.
+- After that, each call sends its own heartbeats to pairtime, then fails at Hackatime and queues them, and the queue still waits.
+- When Hackatime answers again, the queue goes to both destinations: the held heartbeats reach pairtime for the first time, possibly hours after their time, and the ones it took already come again, which its deduplication answers.
+
+The capture shows the first step only: in its first run, a call 2 s after the failed one exited 112, wakatime-cli's backoff error, and sent nothing. The committed `replay` run waits the backoff out.
+
+### Why it matters
+
+A minute is final 900 s after it ends (DESIGN 3.7), and a record that arrives later doesn't change it. So editor time typed during the first hour of an outage, and bridge records from transcripts read then, can arrive too late to count, while hooks and transcripts that pairtime reads itself are unaffected. For a teen whose school network blocks Hackatime, that is most of each day's editor time.
+
+### For WP-AD17 and Karim
+
+WP-AD17 can measure it with the real binary: a stand-in Hackatime that refuses for an hour while heartbeats are sent every 30 s, and the time each one reaches pairtime. Ways out, none decided:
+
+- Let late editor and bridge records re-score final minutes, which DESIGN 3.7's finality forbids today.
+- Make pairtime the `api_url` and forward to Hackatime from the agent, which puts Hackatime behind the agent DESIGN 5.6 keeps it independent of.
+- Accept the gap and say so in DESIGN 5.6, with doctor reporting a Hackatime that wakatime-cli can't reach.
+
 ## For Karim
 
 1. Item 1: accept `ai_session` as what marks a transcript-derived heartbeat, with DESIGN 5.7's rows as proposed, or pick another rule.
+2. Item 4: pick a way out, after WP-AD17's measurement or before it.
