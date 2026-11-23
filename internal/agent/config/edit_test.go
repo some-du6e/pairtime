@@ -5,6 +5,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -409,7 +410,7 @@ func TestKeepTextEdits(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, problems := Parse(data)
-			if want := (Config{Mode: Local, Privacy: Privacy{TextOff: true}}); got != want || len(problems) != 0 {
+			if want := (Config{Mode: Local, Privacy: Privacy{TextOff: true}}); !reflect.DeepEqual(got, want) || len(problems) != 0 {
 				t.Errorf("Parse() = %+v with problems %q, want %+v and none", got, problems, want)
 			}
 		})
