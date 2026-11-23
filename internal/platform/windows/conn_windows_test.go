@@ -171,6 +171,13 @@ func TestLoopbackOwner(t *testing.T) {
 			server := conn.LocalAddr().(*net.TCPAddr).AddrPort()
 			pid, procs, err := LoopbackOwner(client, server)
 			if want == 0 {
+				// Windows closes a process's sockets before its exit can be
+				// waited for, but the TCP stack may move the connection out of
+				// ESTABLISHED a moment later, so a no-owner case waits a little.
+				for deadline := time.Now().Add(5 * time.Second); err == nil && time.Now().Before(deadline); {
+					time.Sleep(50 * time.Millisecond)
+					pid, _, err = LoopbackOwner(client, server)
+				}
 				if err == nil {
 					t.Fatalf("LoopbackOwner(%v, %v) = %d, want an error", client, server, pid)
 				}
