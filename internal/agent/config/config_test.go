@@ -175,6 +175,60 @@ func TestParse(t *testing.T) {
 			want:        Config{Mode: Local, Notifications: Notifications{Off: true}},
 			wantProblem: "notifications.quiet_hours is set more than once",
 		},
+		{name: "prompt text is kept by default", file: "[privacy]\n", want: Default()},
+		{name: "keep_prompt_text = true keeps prompt text", file: "[privacy]\nkeep_prompt_text = true\n", want: Default()},
+		{
+			name: "keep_prompt_text = false turns the switch off, which deletes the text kept",
+			file: "[privacy]\nkeep_prompt_text = false\n",
+			want: Config{Mode: Local, Privacy: Privacy{TextOff: true}},
+		},
+		{
+			name: "the switch is read whatever the case of its table",
+			file: "[Privacy]\nkeep_prompt_text = false\n",
+			want: Config{Mode: Local, Privacy: Privacy{TextOff: true}},
+		},
+		{
+			name:        "an unknown setting in [privacy] keeps no new prompt text and deletes none, and is reported",
+			file:        "[privacy]\nkeep_prompt_txt = false\n",
+			want:        Config{Mode: Local, Privacy: Privacy{TextHeld: true}},
+			wantProblem: `unknown setting "privacy.keep_prompt_txt" was ignored, so pairtime keeps no new prompt text, and deletes none`,
+		},
+		{
+			name:        "an unknown setting next to keep_prompt_text = true still keeps no new prompt text",
+			file:        "[privacy]\nkeep_prompt_text = true\nprompt_days = 7\n",
+			want:        Config{Mode: Local, Privacy: Privacy{TextHeld: true}},
+			wantProblem: `unknown setting "privacy.prompt_days" was ignored, so pairtime keeps no new prompt text`,
+		},
+		{
+			name:        "the switch written twice in different case keeps no new prompt text, deletes none, and is reported",
+			file:        "[privacy]\nkeep_prompt_text = false\nKeep_Prompt_Text = true\n",
+			want:        Config{Mode: Local, Privacy: Privacy{TextHeld: true}},
+			wantProblem: "privacy.keep_prompt_text is set more than once",
+		},
+		{
+			name:        "the switch written at the top of the file instead of under [privacy] keeps no new prompt text, deletes none, and is reported",
+			file:        "mode = \"local\"\nkeep_prompt_text = false\n",
+			want:        Config{Mode: Local, Privacy: Privacy{TextHeld: true}},
+			wantProblem: `unknown setting "keep_prompt_text" was ignored, so pairtime keeps no new prompt text, and deletes none`,
+		},
+		{
+			name:        "keep_prompt_text = false added after an older file's [notifications] table keeps no new prompt text, deletes none, and turns notifications off",
+			file:        "[notifications]\nenabled = true\nkeep_prompt_text = false\n",
+			want:        Config{Mode: Local, Notifications: Notifications{Off: true}, Privacy: Privacy{TextHeld: true}},
+			wantProblem: `unknown setting "notifications.keep_prompt_text" was ignored, so notifications are off, and pairtime keeps no new prompt text and deletes none`,
+		},
+		{
+			name:        "keep_prompt_text = false beside a setting pairtime doesn't know holds the text, so nothing is deleted on a file it can't read",
+			file:        "[privacy]\nkeep_prompt_text = false\nprompt_days = 7\n",
+			want:        Config{Mode: Local, Privacy: Privacy{TextOff: true, TextHeld: true}},
+			wantProblem: `unknown setting "privacy.prompt_days" was ignored, so pairtime keeps no new prompt text, and deletes none`,
+		},
+		{
+			name:        "a switch that isn't true or false makes the whole file ignored, which keeps no new prompt text and deletes none",
+			file:        "[privacy]\nkeep_prompt_text = \"no\"\n",
+			want:        ignored(),
+			wantProblem: "pairtime keeps no new prompt text",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

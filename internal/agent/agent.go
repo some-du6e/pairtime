@@ -47,6 +47,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/internal/agent/tailers"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
+	"github.com/some-du6e/pairtime/internal/agent/vault"
 	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/internal/version"
@@ -204,6 +205,14 @@ type agent struct {
 	// (noteMode, publishWriter).
 	writer atomic.Pointer[ledger.Writer]
 	modes  modes
+	// vault keeps the content the ledger commits to, from when the writer
+	// that keeps content in it opens until closeVault (WP-LG6). vaultMu
+	// guards it, and vaultWork counts the runs of dropText applyPrivacy
+	// starts, which dropMu orders.
+	vaultMu   sync.Mutex
+	vault     *vault.Vault
+	vaultWork sync.WaitGroup
+	dropMu    sync.Mutex
 	// early are the batches the ledger writer sealed before upload was
 	// set, for handEarly; earlyMu orders them with it.
 	earlyMu sync.Mutex
@@ -422,7 +431,7 @@ func (a *agent) loadConfig(first bool) {
 		}
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
-		problems = append(problems, fmt.Sprintf("couldn't read config.toml, so every setting has its default and notifications are off: %v", err))
+		problems = append(problems, fmt.Sprintf("couldn't read config.toml, so every setting has its default and notifications are off, and pairtime keeps no new prompt text: %v", err))
 	}
 	a.cfg.Store(&cfg)
 	a.setProblem("config", strings.Join(problems, "; "))
