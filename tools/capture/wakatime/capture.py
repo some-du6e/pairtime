@@ -434,10 +434,14 @@ def run_replay(out, cli, recorder, log, version):
     f = os.path.join(p, "wordcount.py")
     recorder.fail_hackatime_bulk = 1
     r.call(plugin_args(f, "--lineno", "3", "--cursorpos", "8", "--lines-in-file", "6", "--human-line-changes", "1"),
-           note="pairtime takes the batch, then Hackatime answers 500, so wakatime-cli queues the whole batch")
-    time.sleep(2)
+           note="pairtime takes the batch, then Hackatime answers 500, so wakatime-cli queues the whole batch "
+                "and, because the call failed, skips the queue sync it runs after a call")
+    r.call(["--offline-count"], note="the failed batch waits in the queue")
+    # The failure starts wakatime-cli's backoff, 15 s times 2 to the number
+    # of failures, so a call in the next 30 s would queue its heartbeat too.
+    time.sleep(31)
     r.call(plugin_args(f, "--lineno", "3", "--cursorpos", "9", "--lines-in-file", "6", "--write"),
-           note="both take this heartbeat, then the queued one goes to both again")
+           note="past the backoff: both take this heartbeat, then the queue sync sends the failed batch to both again")
     r.call(["--offline-count"], note="the queue is empty again")
     r.finish(version)
 

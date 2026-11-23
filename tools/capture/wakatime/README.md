@@ -11,7 +11,7 @@ The capture then calls wakatime-cli the way an editor plugin does, with a made-u
 | Run | What it records |
 |---|---|
 | `dual-send` | The Hackatime installer's settings plus pairtime's line: navigation, typed edits, a save, a test file, a doc, the `debugging` category, a non-file entity and a plugin's batch of extra heartbeats, with `heartbeat_rate_limit_seconds = 30`, so wakatime-cli queues and batches as it does for a person |
-| `replay` | The stand-in Hackatime fails one batch after the stand-in pairtime took it. wakatime-cli queues the whole batch, and the next call sends it to both again, which is what pairtime's deduplication is for |
+| `replay` | The stand-in Hackatime fails one batch after the stand-in pairtime took it. wakatime-cli queues the whole batch, and the next call after its 30 s backoff sends it to both again, which is what pairtime's deduplication is for |
 | `ai-sync` | WP-AD1's Claude Code 2.1.327 transcripts in `CLAUDE_CONFIG_DIR`, with no `ai_logs_last_parsed_at`, and one plugin call with extra heartbeats around the agent's edits. The requests hold the transcript-derived heartbeats, editor heartbeats wakatime-cli relabels `ai coding`, and the one it drops as a duplicate of the agent's |
 | `local-only` | No other server: `api_url` is pairtime's, as the installer writes it when there is no `~/.wakatime.cfg`, with a heartbeat and the status bar's `GET` of today |
 
