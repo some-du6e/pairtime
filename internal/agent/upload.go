@@ -728,7 +728,11 @@ func (a *agent) startUploader(w *ledger.Writer) func() {
 		a.setProblem("uploader", fmt.Sprintf("the agent uploads nothing, because its uploader can't start: %v", err))
 		return func() {}
 	}
+	// Not while a retention sweep prunes uploads.jsonl, which the uploader
+	// appends to and prunes itself from now on (sweep).
+	a.uploadsMu.Lock()
 	a.handEarly(u)
+	a.uploadsMu.Unlock()
 	u.Start()
 	return u.Close
 }

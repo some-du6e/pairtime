@@ -259,6 +259,10 @@ quiet_hours = ""
 # kept: a spot check then can't see those prompts, and judges their hours
 # on the rest of the evidence.
 keep_prompt_text = true
+# How many days pairtime keeps that text, up to 90, and the file paths for
+# your recaps, up to 30. Leave them out for the longest time.
+# prompt_text_days = 30
+# path_days = 7
 
 # A [projects.<key>] table can show a project's name on your own pairtime
 # dashboard, where nobody else sees it, in place of its code. Every name is

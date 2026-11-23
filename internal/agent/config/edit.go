@@ -112,14 +112,14 @@ func SetLocal(name string) error {
 
 // edit sets mode, and [server] url when serverURL isn't "", in the file.
 func edit(name string, mode Mode, serverURL string) error {
-	byHand := func(name string) string {
+	byHand := func(name, _ string) string {
 		s := fmt.Sprintf("set mode = %q", string(mode))
 		if serverURL != "" {
 			s += fmt.Sprintf(" and, under [server], url = %q", serverURL)
 		}
 		return s + " in " + name + " by hand"
 	}
-	return rewrite(name, byHand, func(text string) string { return patch(text, mode, serverURL) }, func(c *Config) {
+	return rewrite(name, false, byHand, func(text string) string { return patch(text, mode, serverURL) }, func(c *Config) {
 		c.Mode = mode
 		if serverURL != "" {
 			c.Server.URL = serverURL
@@ -130,13 +130,23 @@ func edit(name string, mode Mode, serverURL string) error {
 // SetKeepText sets keep_prompt_text under [privacy] in the config.toml at
 // name, the "keep prompt text" switch (DESIGN 4.4): what `pairtime privacy
 // keep-text off` and `pairtime privacy keep-text on` do. A file with no
-// [privacy] table, as an older pairtime wrote, gets one at its end; any
-// other change, and a file it refuses, are as SetOnline says.
+// [privacy] table, as an older pairtime wrote, gets one at its end, and a
+// switch written as a dotted key at the top of the file is changed where
+// it is; any other change, and a file it refuses, are as SetOnline says.
+// Turning the switch off writes the file even when it says so already, so
+// a running agent reads it again and tries again to delete the text it
+// kept, as after a try that failed.
 func SetKeepText(name string, keep bool) error {
-	byHand := func(name string) string {
+	byHand := func(name, text string) string {
+		var file fileConfig
+		if _, err := toml.Decode(strings.TrimPrefix(text, bom), &file); err == nil && file.Privacy.KeepPromptText != nil {
+			// Where the switch is, as in an inline table: adding it again
+			// would set it twice.
+			return fmt.Sprintf("change keep_prompt_text to %t where %s sets it, by hand", keep, name)
+		}
 		return fmt.Sprintf("set keep_prompt_text = %t under [privacy] in %s by hand, or, if the file has no [privacy] line, add the lines [privacy] and keep_prompt_text = %t at its end", keep, name, keep)
 	}
-	return rewrite(name, byHand, func(text string) string { return patchPrivacy(text, keep) }, func(c *Config) { c.Privacy.TextOff = !keep })
+	return rewrite(name, !keep, byHand, func(text string) string { return patchPrivacy(text, keep) }, func(c *Config) { c.Privacy.TextOff = !keep })
 }
 
 // ShowName turns on the name of the project key in the config.toml at
@@ -162,10 +172,10 @@ func ShowName(name, key, label string) error {
 	case !projectname.ValidLabel(label):
 		return fmt.Errorf("config: %q isn't a name pairtime can show", label)
 	}
-	byHand := func(name string) string {
+	byHand := func(name, _ string) string {
 		return fmt.Sprintf("set name = %s and online = true under [projects.%s] in %s by hand", tomlString(label), key, name)
 	}
-	return rewrite(name, byHand, func(text string) string {
+	return rewrite(name, false, byHand, func(text string) string {
 		return patchProject(text, key, []projectLine{{"name", tomlString(label)}, {"online", "true"}})
 	}, func(c *Config) {
 		c.Projects[key] = Project{Name: label, Online: true}
@@ -178,10 +188,10 @@ func HideName(name, key string) error {
 	if !IsProjectKey(key) {
 		return fmt.Errorf("config: %q isn't a project's key", key)
 	}
-	byHand := func(name string) string {
+	byHand := func(name, _ string) string {
 		return fmt.Sprintf("set online = false under [projects.%s] in %s by hand", key, name)
 	}
-	return rewrite(name, byHand, func(text string) string {
+	return rewrite(name, false, byHand, func(text string) string {
 		return patchProject(text, key, []projectLine{{"online", "false"}})
 	}, func(c *Config) {
 		if p, ok := c.Projects[key]; ok {
@@ -190,6 +200,10 @@ func HideName(name, key string) error {
 		}
 	})
 }
+
+// bom is the byte order mark some editors start a UTF-8 file with, which
+// TOML allows.
+const bom = "\ufeff"
 
 // editMu serializes this process's edits of config.toml, as the
 // uploader turning off a name hidden on the dashboard while the local API
@@ -208,17 +222,20 @@ const LockName = "config.lock"
 // lockWait is how long an edit waits for another process's edit to end.
 var lockWait = 5 * time.Second
 
-// rewrite changes the config.toml at name with change, the text edit, and
-// checks that the file then parses to what it parsed to before with apply
-// done to it, and to nothing else. byHand says what to write by hand in
-// the file it names, for an error. It holds editMu, for this process's
-// edits, and
-// config.lock's lock, for every other pairtime process's, as `pairtime
-// projects show-name` beside the running agent, from its read to its
-// rename, so neither change undoes the other. It also reads the file
-// again just before it replaces it, and starts over from the new text when
-// it changed meanwhile, as an editor's save does, which takes no lock.
-func rewrite(name string, byHand func(name string) string, change func(text string) string, apply func(*Config)) error {
+// rewrite changes the config.toml at name with change, and writes it only
+// when it then parses to what it did before with apply's change and
+// nothing else, as SetOnline says, and when that changed it, or, as best
+// it can, when always is set. change gets the text without its byte order
+// mark, which the file keeps. byHand says what to write by hand in the
+// file it names, which holds text, for an error.
+//
+// It holds editMu, for this process's edits, and config.lock's lock, for
+// every other pairtime process's, as `pairtime projects show-name` beside
+// the running agent, from its read to its rename, so neither change undoes
+// the other. It also reads the file again just before it replaces it, and
+// starts over from the new text when it changed meanwhile, as an editor's
+// save does, which takes no lock.
+func rewrite(name string, always bool, byHand func(name, text string) string, change func(text string) string, apply func(*Config)) error {
 	editMu.Lock()
 	defer editMu.Unlock()
 	lock := filepath.Join(filepath.Dir(name), LockName)
@@ -229,7 +246,6 @@ func rewrite(name string, byHand func(name string) string, change func(text stri
 		}
 		name = target
 	}
-	hand := byHand(name)
 	release, err := home.LockFile(lock, lockWait)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -237,7 +253,7 @@ func rewrite(name string, byHand func(name string) string, change func(text stri
 		// it: the edit goes on, and changes nothing or fails as it would.
 		release = func() error { return nil }
 	case err != nil:
-		return fmt.Errorf("config: pairtime couldn't lock config.toml to change it (%v), so it didn't; try again, or %s", err, hand)
+		return fmt.Errorf("config: pairtime couldn't lock config.toml to change it (%v), so it didn't; try again, or %s", err, byHand(name, ""))
 	}
 	defer release()
 	for try := 0; ; try++ {
@@ -245,9 +261,14 @@ func rewrite(name string, byHand func(name string) string, change func(text stri
 		if err != nil {
 			return err
 		}
+		hand := byHand(name, string(data))
 		out, err := edited(string(data), hand, change, apply)
-		if err != nil || out == string(data) {
+		if err != nil {
 			return err
+		}
+		same := out == string(data)
+		if same && !always {
+			return nil
 		}
 		if beforeReplace != nil {
 			beforeReplace(name)
@@ -257,7 +278,14 @@ func rewrite(name string, byHand func(name string) string, change func(text stri
 			return err
 		}
 		if bytes.Equal(now, data) {
-			return home.WriteFile(name, []byte(out))
+			err := home.WriteFile(name, []byte(out))
+			if same {
+				// The file says it already, so a write that fails, as in a
+				// folder that can't be written, changes nothing that
+				// matters: a running agent reads it again at its next start.
+				return nil
+			}
+			return err
 		}
 		if try == 2 {
 			return fmt.Errorf("config: config.toml kept changing while pairtime changed it, so it didn't; try again, or %s", hand)
@@ -275,18 +303,24 @@ func readEdited(name string) ([]byte, error) {
 	return data, err
 }
 
-// edited returns text with change made, once it checked that it parses
-// to what text parsed to with apply done to it, and to nothing else.
-func edited(text, byHand string, change func(text string) string, apply func(*Config)) (string, error) {
+// edited returns text with change made to it without its byte order mark,
+// which it keeps, once it checked that the result parses to what text
+// parsed to with apply done to it, and to nothing else. hand says what to
+// write by hand instead, for an error.
+func edited(text, hand string, change func(text string) string, apply func(*Config)) (string, error) {
 	if _, err := toml.Decode(text, &fileConfig{}); err != nil {
-		return "", fmt.Errorf("config: config.toml doesn't parse, so pairtime didn't change it (%v); %s", err, byHand)
+		return "", fmt.Errorf("config: config.toml doesn't parse, so pairtime didn't change it (%v); %s", err, hand)
 	}
 	if strings.Contains(text, `"""`) || strings.Contains(text, `'''`) {
 		// A multi-line string could hold a line that looks like a key.
-		return "", fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", byHand)
+		return "", fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", hand)
 	}
 	before, _ := Parse([]byte(text))
-	out := change(text)
+	body, found := strings.CutPrefix(text, bom)
+	out := change(body)
+	if found {
+		out = bom + out
+	}
 	after, _ := Parse([]byte(out))
 	want := before
 	want.Projects = maps.Clone(before.Projects)
@@ -298,7 +332,7 @@ func edited(text, byHand string, change func(text string) string, apply func(*Co
 		want.Projects = nil
 	}
 	if !reflect.DeepEqual(after, want) {
-		return "", fmt.Errorf("config: pairtime couldn't change config.toml without changing other settings, so it didn't; %s", byHand)
+		return "", fmt.Errorf("config: pairtime couldn't change config.toml without changing other settings, so it didn't; %s", hand)
 	}
 	return out, nil
 }
@@ -334,7 +368,10 @@ func patch(text string, mode Mode, serverURL string) string {
 		}
 	}
 	if !urlDone && serverHeader >= 0 {
-		lines = append(lines[:serverHeader+1], append([]string{urlLine + nl}, lines[serverHeader+1:]...)...)
+		if !strings.HasSuffix(lines[serverHeader], "\n") {
+			lines[serverHeader] += nl // the file's last line
+		}
+		lines = slices.Insert(lines, serverHeader+1, urlLine+nl)
 		urlDone = true
 	}
 	out := strings.Join(lines, "")
@@ -554,8 +591,10 @@ func tomlString(s string) string {
 	return b.String()
 }
 
-// patchPrivacy rewrites the keep_prompt_text line of [privacy], and adds it
-// where it is missing: just under the [privacy] header, or with a [privacy]
+// patchPrivacy rewrites the keep_prompt_text line of [privacy], or the
+// privacy.keep_prompt_text line at the top of the file, and adds it where
+// it is missing: just under the [privacy] header, beside the privacy.
+// lines at the top that make the table without one, or with a [privacy]
 // table at the end of the file. It finds the table and the switch whatever
 // their upper and lower case, as Parse reads them.
 func patchPrivacy(text string, keep bool) string {
@@ -568,7 +607,7 @@ func patchPrivacy(text string, keep bool) string {
 	keyLine := "keep_prompt_text = " + value
 	table := ""
 	done := false
-	header := -1
+	header, dotted := -1, -1
 	for i, line := range lines {
 		t := strings.TrimSpace(line)
 		switch {
@@ -580,10 +619,27 @@ func patchPrivacy(text string, keep bool) string {
 		case strings.EqualFold(table, "privacy") && !done && isKeyFold(t, "keep_prompt_text"):
 			lines[i] = setBool(line, value, keyLine)
 			done = true
+		case table == "" && inPrivacyDotted(t):
+			dotted = i
+			if !done && dottedKey(t, "keep_prompt_text") {
+				lines[i] = setBool(line, value, "privacy."+keyLine)
+				done = true
+			}
 		}
 	}
+	if !done && header < 0 && dotted >= 0 {
+		// The table is made of dotted keys, and a header would make it twice.
+		if !strings.HasSuffix(lines[dotted], "\n") {
+			lines[dotted] += nl // the file's last line
+		}
+		lines = slices.Insert(lines, dotted+1, "privacy."+keyLine+nl)
+		done = true
+	}
 	if !done && header >= 0 {
-		lines = append(lines[:header+1], append([]string{keyLine + nl}, lines[header+1:]...)...)
+		if !strings.HasSuffix(lines[header], "\n") {
+			lines[header] += nl // the file's last line
+		}
+		lines = slices.Insert(lines, header+1, keyLine+nl)
 		done = true
 	}
 	out := strings.Join(lines, "")
@@ -594,6 +650,35 @@ func patchPrivacy(text string, keep bool) string {
 		out += nl + "[privacy]" + nl + keyLine + nl
 	}
 	return out
+}
+
+// inPrivacyDotted reports whether the trimmed line t, at the top of the
+// file, sets a key of [privacy] as a dotted key, such as
+// privacy.keep_prompt_text = false.
+func inPrivacyDotted(t string) bool {
+	key, _, ok := strings.Cut(t, "=")
+	if !ok {
+		return false
+	}
+	first, _, ok := strings.Cut(key, ".")
+	return ok && strings.EqualFold(unquote(strings.TrimSpace(first)), "privacy")
+}
+
+// dottedKey reports whether the trimmed line t sets privacy.<key>, with
+// key as its whole second part, whatever their upper and lower case.
+func dottedKey(t, key string) bool {
+	k, _, _ := strings.Cut(t, "=")
+	parts := strings.Split(k, ".")
+	return len(parts) == 2 && strings.EqualFold(unquote(strings.TrimSpace(parts[0])), "privacy") &&
+		strings.EqualFold(unquote(strings.TrimSpace(parts[1])), key)
+}
+
+// unquote takes the quotes off a quoted key part.
+func unquote(part string) string {
+	if len(part) >= 2 && (part[0] == '"' && part[len(part)-1] == '"' || part[0] == '\'' && part[len(part)-1] == '\'') {
+		return part[1 : len(part)-1]
+	}
+	return part
 }
 
 // setBool rewrites the value of a key = true or key = false line as

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
+	"github.com/some-du6e/pairtime/internal/agent/retention"
 	"github.com/some-du6e/pairtime/internal/agent/scorer"
 	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -46,6 +47,15 @@ func (a *agent) startScorer() func() {
 	if err != nil {
 		a.setProblem("scorer", fmt.Sprintf("the agent shows no time, because it can't open its bucket store: %v", err))
 		return func() {}
+	}
+	// The bucket store's sweep goes first, so the scorer writes no day's
+	// rollup again from minutes retention is about to drop
+	// (store.Buckets.KeptFrom). The retention sweeps go on with it every
+	// day (startRetention).
+	if p, err := retention.Device(); err == nil {
+		if _, err := bs.Drop(retention.From(time.Now(), p.Buckets)); err != nil {
+			a.log.Warn("the minute buckets' first sweep", "err", err)
+		}
 	}
 	l, err := scorer.New(scorer.Options{
 		Ledger:  a.dirs.Ledger(),

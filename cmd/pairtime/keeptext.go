@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -74,7 +75,13 @@ func runKeepText(args []string, stdout, stderr io.Writer) int {
 		return fail(err)
 	}
 	cfg, problems, err := config.Load(name)
-	if err != nil {
+	switch {
+	case errors.Is(err, fs.ErrNotExist) && keep:
+		// Nothing to change: with no config.toml, every setting has its
+		// default, which keeps prompt text.
+		fmt.Fprintln(stdout, "There's no config.toml, so pairtime keeps the text of your prompts, as it does by default.")
+		return 0
+	case err != nil:
 		return fail(err)
 	}
 	switch {

@@ -264,3 +264,10 @@ func PastUploads(dataDir string) ([]PastUpload, error) {
 	}
 	return out, nil
 }
+
+// PruneUploads lets go of the past uploads in the data directory dataDir's
+// uploads.jsonl that are older than device.uploads keeps them at now, as
+// the uploader does once a day while it runs: for the agent's retention
+// sweep while no uploader runs, as while the ledger can't open. Nothing
+// may append to the file meanwhile.
+func PruneUploads(dataDir string, now time.Time) error { return pruneUploads(dataDir, now) }

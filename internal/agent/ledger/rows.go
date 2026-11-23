@@ -42,7 +42,9 @@ type Row struct {
 
 // ReadRows reads which chain the ledger in dir holds and the rows of its
 // sealed batches whose number is from or more, in order, each with its
-// receipt when batches.seg holds one. A from of 0 reads from batch 1.
+// receipt when batches.seg holds one. A from of 0 reads from batch 1, and
+// one before the first batch the ledger keeps from that batch
+// (ChainInfo.Base).
 //
 // It reads batches.seg alone, as it is, without Open's repairs and
 // without the batches' records. A row that a crash lost, which the next
@@ -55,13 +57,13 @@ func ReadRows(dir string, from uint64) (ChainInfo, []Row, error) {
 	if err != nil {
 		return ChainInfo{}, nil, err
 	}
-	info := ChainInfo{DeviceID: bf.chain.DeviceID, KeyID: bf.chain.KeyID, Created: time.UnixMilli(bf.chain.Created)}
-	from = max(from, 1)
-	if from > uint64(len(bf.rows)) {
+	info := bf.info()
+	from = max(from, bf.base.B)
+	if from > bf.last() {
 		return info, nil, nil
 	}
-	rows := make([]Row, 0, uint64(len(bf.rows))-from+1)
-	for _, rp := range bf.rows[from-1:] {
+	rows := make([]Row, 0, bf.last()-from+1)
+	for _, rp := range bf.rows[from-bf.base.B:] {
 		r := Row{
 			BatchRow:   ledger.BatchRow{B: rp.B, FirstSeq: rp.FirstSeq, N: rp.N, Root: rp.Root, Head: rp.Head},
 			Prev:       rp.Prev,
