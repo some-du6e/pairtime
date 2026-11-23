@@ -844,11 +844,14 @@ func token(v string) string {
 var witnessRepo = regexp.MustCompile(`^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$`)
 
 // checkWitness checks the day roots from end to end (WP-SV17): the
-// publisher has stored a head for every day that is due, the newest head's
-// file is in the witness directory as stored, the sidecar's deploy key is
-// where compose mounts it from, and the newest file there is older than
-// the witness repository's latest commit, which GitHub's public API
-// reports without a credential.
+// publisher has stored a head for every day that is due, the server's
+// clock is past the newest published day, so ingest takes uploads, the
+// newest head's file is in the witness directory as stored, the sidecar's
+// deploy key is where compose mounts it from, and the witness repository's
+// latest commit, which GitHub's public API reports without a credential,
+// came after the newest head was stored, or, before the first head, after
+// the newest file was written. It names the newest head and counts the
+// witness rows, which a move to another host compares (deploy/runbook.md).
 func (d *doctor) checkWitness(ctx context.Context) result {
 	repo := d.cfg.Secrets.Get(envWitnessRepo)
 	if repo == "" {
@@ -906,17 +909,31 @@ func (d *doctor) checkWitness(ctx context.Context) result {
 	if !committed.IsZero() {
 		latest = "latest commit " + committed.UTC().Format(time.RFC3339)
 	}
+	count := fmt.Sprintf("; the server holds %d witness rows", heads.rows)
 	switch {
 	case len(problems) > 0:
-		return bad("%s; %s has %s", strings.Join(problems, "; "), repo, latest)
+		return bad("%s; %s has %s%s", strings.Join(problems, "; "), repo, latest, count)
+	case !heads.written.IsZero():
+		// The publisher writes the file of every stored head that has none
+		// again, as on a new host, with a fresh time, and the sidecar has
+		// nothing new to push for those, so the head's own time decides,
+		// which a restore keeps (#249).
+		switch {
+		case !committed.Before(heads.written):
+			return ok("%s, stored %s, is older than %s's %s%s", heads.newest, heads.written.UTC().Format(time.RFC3339), repo, latest, count)
+		case time.Since(heads.written) < witnessPushLag:
+			return ok("%s was stored %s ago and the sidecar pushes every 5 minutes; %s has %s%s", heads.newest, time.Since(heads.written).Round(time.Second), repo, latest, count)
+		default:
+			return bad("%s, stored %s ago, isn't in %s, which has %s: the witness sidecar isn't pushing (docker compose logs witness)%s", heads.newest, time.Since(heads.written).Round(time.Minute), repo, latest, count)
+		}
 	case newest == "":
-		return ok("%s, so there is no day root to push yet. The sidecar and the deploy key are in place, and %s has %s", heads.none, repo, latest)
+		return ok("%s, so there is no day root to push yet. The sidecar and the deploy key are in place, and %s has %s%s", heads.none, repo, latest, count)
 	case !committed.Before(newestAt):
-		return ok("%s, the newest root, is older than %s's %s%s", newest, repo, latest, heads.note)
+		return ok("%s, the newest root, is older than %s's %s%s", newest, repo, latest, count)
 	case time.Since(newestAt) < witnessPushLag:
-		return ok("%s is %s old and the sidecar pushes every 5 minutes; %s has %s%s", newest, time.Since(newestAt).Round(time.Second), repo, latest, heads.note)
+		return ok("%s is %s old and the sidecar pushes every 5 minutes; %s has %s%s", newest, time.Since(newestAt).Round(time.Second), repo, latest, count)
 	default:
-		return bad("%s, written %s ago, isn't in %s, which has %s: the witness sidecar isn't pushing (docker compose logs witness)", newest, time.Since(newestAt).Round(time.Minute), repo, latest)
+		return bad("%s, written %s ago, isn't in %s, which has %s: the witness sidecar isn't pushing (docker compose logs witness)%s", newest, time.Since(newestAt).Round(time.Minute), repo, latest, count)
 	}
 }
 
@@ -927,13 +944,18 @@ const dayRootGrace = time.Hour
 
 // dayHeadState is what checkWitness reads of the day heads.
 type dayHeadState struct {
-	// problem says what is wrong: days due without a head, or a newest
-	// head whose file isn't in the witness directory as stored.
+	// problem says what is wrong: a clock on a published day, days due
+	// without a head, or a newest head whose file isn't in the witness
+	// directory as stored.
 	problem string
-	// note names the newest head and its file, for an ok.
-	note string
+	// newest names the newest head and its file, and written is when it
+	// was stored; written is zero before the first head.
+	newest  string
+	written time.Time
 	// none says why there is no root yet, for an ok with no file.
 	none string
+	// rows is how many witness rows the server holds.
+	rows int64
 }
 
 // dayHeads compares the database's day heads with what is due and with the
@@ -948,17 +970,24 @@ func (d *doctor) dayHeads(ctx context.Context) (dayHeadState, error) {
 		return st, fmt.Errorf("reading the day heads: %w", err)
 	}
 	defer db.Close()
+	if err := db.Read.QueryRowContext(ctx, `SELECT COUNT(*) FROM witness_rows`).Scan(&st.rows); err != nil {
+		return st, fmt.Errorf("counting the witness rows: %w", err)
+	}
 	now := time.Now()
+	var problems []string
+	head, ok, err := publisher.Newest(ctx, db.Read)
+	if err != nil {
+		return st, err
+	}
+	if open := publisher.DueAt(head.D).Add(-publisher.Delay); ok && now.Before(open) {
+		problems = append(problems, fmt.Sprintf("the server's clock reads %s, before the end of %s, whose day root is published, so ingest refuses every upload with day_closed until %s: set the clock right", now.UTC().Format(time.RFC3339), publisher.Date(head.D), open.Format(time.RFC3339)))
+	}
 	first, last, behind, err := publisher.Pending(ctx, db.Read, now.Add(-dayRootGrace))
 	if err != nil {
 		return st, err
 	}
 	if behind {
-		st.problem = fmt.Sprintf("the days from %s to %s are due and have no day head: the publisher isn't publishing (pairtimed's log, \"day roots\")", publisher.Date(first), publisher.Date(last))
-	}
-	head, ok, err := publisher.Newest(ctx, db.Read)
-	if err != nil {
-		return st, err
+		problems = append(problems, fmt.Sprintf("the days from %s to %s are due and have no day head: the publisher isn't publishing (pairtimed's log, \"day roots\")", publisher.Date(first), publisher.Date(last)))
 	}
 	if !ok {
 		first, rows, err := publisher.FirstDay(ctx, db.Read)
@@ -970,6 +999,7 @@ func (d *doctor) dayHeads(ctx context.Context) (dayHeadState, error) {
 		default:
 			st.none = fmt.Sprintf("the first day root, %s's, is due at %s", publisher.Date(first), publisher.DueAt(first).Format(time.RFC3339))
 		}
+		st.problem = strings.Join(problems, "; ")
 		return st, nil
 	}
 	want, err := head.File()
@@ -979,14 +1009,16 @@ func (d *doctor) dayHeads(ctx context.Context) (dayHeadState, error) {
 	path := filepath.Join(d.witnessDir, filepath.FromSlash(publisher.FileName(head.D)))
 	have, err := os.ReadFile(path)
 	switch {
-	case errors.Is(err, fs.ErrNotExist) && st.problem == "":
-		st.problem = fmt.Sprintf("the newest day head, %s's, has no file at %s, which the publisher writes after it stores the head: is -witness-dir compose's /witness mount?", publisher.Date(head.D), path)
-	case err != nil && st.problem == "":
-		st.problem = err.Error()
-	case err == nil && !bytes.Equal(have, want) && st.problem == "":
-		st.problem = fmt.Sprintf("%s doesn't hold the stored head of %s, and a published root never changes: compare it with the witness repository's copy", path, publisher.Date(head.D))
+	case errors.Is(err, fs.ErrNotExist):
+		problems = append(problems, fmt.Sprintf("the newest day head, %s's, has no file at %s, which the publisher writes after it stores the head: is -witness-dir compose's /witness mount?", publisher.Date(head.D), path))
+	case err != nil:
+		problems = append(problems, err.Error())
+	case !bytes.Equal(have, want):
+		problems = append(problems, fmt.Sprintf("%s doesn't hold the stored head of %s, and a published root never changes: compare it with the witness repository's copy", path, publisher.Date(head.D)))
 	}
-	st.note = fmt.Sprintf("; the newest day head, %s's, is in %s", publisher.Date(head.D), path)
+	st.newest = fmt.Sprintf("the newest day head, %s's, at %s", publisher.Date(head.D), path)
+	st.written = time.UnixMilli(head.WrittenAt)
+	st.problem = strings.Join(problems, "; ")
 	return st, nil
 }
 

@@ -24,9 +24,11 @@
 // file is written, so no file names a head the database lacks. A head
 // follows from its day's rows and the key alone, and Ed25519 signatures
 // are deterministic, so a database restored from a replica that lost the
-// newest head stores the same head again. Delay is what makes that hold:
-// when a day is published, its last rows are minutes old, and the replica
-// has them.
+// newest head stores the same head again. Two things make that hold: a day
+// is published only once it has been over for Delay, and under Litestream
+// only while the replica is within backup.MaxLag of the database
+// (Options.Ready), so the replica has the day's last rows before its head
+// is signed.
 //
 // # The files
 //
@@ -69,6 +71,14 @@ const Delay = 10 * time.Minute
 // RetryEvery is how soon Run tries again after a run that failed.
 const RetryEvery = time.Hour
 
+// ReadyRetryEvery is how soon Run tries again after Options.Ready held a
+// run back, which is most often a replica catching up after a start.
+const ReadyRetryEvery = 5 * time.Minute
+
+// ErrNotReady is what Publish returns, wrapped, while Options.Ready says a
+// due day may not be signed yet.
+var ErrNotReady = errors.New("publisher: not ready to sign")
+
 // Doer runs an op through the writer, as *writer.Writer does.
 type Doer interface {
 	Do(ctx context.Context, rows int, op writer.Op) error
@@ -95,6 +105,11 @@ type Options struct {
 	// Dir is where the files go. With none, the heads are stored and no
 	// file is written.
 	Dir string
+	// Ready, when set, says whether a due day may be signed now. serve sets
+	// it to the replica's lag check under Litestream (backup.Replication),
+	// so a head is signed only over rows the replica has. While it fails,
+	// Publish signs nothing and Run tries again within ReadyRetryEvery.
+	Ready func(ctx context.Context) error
 
 	// create opens a file's temporary name for writing; tests stand in
 	// for os.OpenFile.
@@ -141,8 +156,9 @@ func NextRun(now time.Time) time.Time {
 }
 
 // Run publishes at once, then at Delay past each UTC midnight until ctx
-// ends, and RetryEvery after a run that failed. report, when set, hears
-// each run's result and error.
+// ends, RetryEvery after a run that failed, and ReadyRetryEvery after one
+// Options.Ready held back. report, when set, hears each run's result and
+// error.
 func Run(ctx context.Context, o Options, now func() time.Time, report func(Result, error)) {
 	for {
 		res, err := Publish(ctx, o, now())
@@ -153,7 +169,10 @@ func Run(ctx context.Context, o Options, now func() time.Time, report func(Resul
 			report(res, err)
 		}
 		wait := NextRun(now()).Sub(now())
-		if err != nil {
+		switch {
+		case errors.Is(err, ErrNotReady):
+			wait = min(wait, ReadyRetryEvery)
+		case err != nil:
 			wait = min(wait, RetryEvery)
 		}
 		t := time.NewTimer(wait)
@@ -195,8 +214,13 @@ func publishDue(ctx context.Context, o Options, now time.Time, res *Result) erro
 		return nil
 	}
 	d, prev, ok, err := next(ctx, o.Read)
-	if err != nil || !ok {
+	if err != nil || !ok || d > last {
 		return err
+	}
+	if o.Ready != nil {
+		if err := o.Ready(ctx); err != nil {
+			return fmt.Errorf("%w: day %s is due, and %w", ErrNotReady, Date(d), err)
+		}
 	}
 	for ; d <= last; d++ {
 		if err := ctx.Err(); err != nil {

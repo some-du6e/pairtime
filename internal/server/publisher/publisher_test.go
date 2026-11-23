@@ -211,6 +211,9 @@ func TestPublish(t *testing.T) {
 		before func(t *testing.T, f *fixture)
 		// at is when the run happens, RFC 3339.
 		at string
+		// notReady makes Options.Ready fail for this run, as a replica
+		// more than MaxLag behind does.
+		notReady bool
 		// wantStored and wantWritten are the dates whose heads the run
 		// stores and whose files it writes; wantErr is part of its error.
 		wantStored, wantWritten []string
@@ -378,6 +381,15 @@ func TestPublish(t *testing.T) {
 			rows:    func(t *testing.T, f *fixture) { f.row(t, "d1", 1, "2026-11-19T12:00:00Z") },
 			options: func(o *publisher.Options) { o.History = &keys.History{} },
 			runs:    []run{{at: "2026-11-20T00:10:00Z", wantErr: "no server key was valid at the end of day 2026-11-19"}}},
+		{name: "a due day isn't signed while the readiness check fails, as while the replica lags, and is once it passes",
+			rows: func(t *testing.T, f *fixture) { f.row(t, "d1", 1, "2026-11-19T12:00:00Z") },
+			runs: []run{
+				{at: "2026-11-20T00:10:00Z", notReady: true, wantErr: "day 2026-11-19 is due, and the replica is 2m0s behind"},
+				{at: "2026-11-20T00:15:00Z", wantStored: []string{"2026-11-19"}, wantWritten: []string{"2026-11-19"}},
+			}},
+		{name: "a failing readiness check holds nothing back while no day is due",
+			rows: func(t *testing.T, f *fixture) { f.row(t, "d1", 1, "2026-11-19T12:00:00Z") },
+			runs: []run{{at: "2026-11-19T23:00:00Z", notReady: true}}},
 		{name: "without a directory the heads are stored and no file is written",
 			rows:    func(t *testing.T, f *fixture) { f.row(t, "d1", 1, "2026-11-19T12:00:00Z") },
 			options: func(o *publisher.Options) { o.Dir = "" },
@@ -415,12 +427,18 @@ func TestPublish(t *testing.T) {
 					if r.before != nil {
 						r.before(t, f)
 					}
-					res, err := publisher.Publish(context.Background(), o, clock(r.at))
+					ro := o
+					if r.notReady {
+						ro.Ready = func(context.Context) error { return errors.New("the replica is 2m0s behind") }
+					}
+					res, err := publisher.Publish(context.Background(), ro, clock(r.at))
 					switch {
 					case r.wantErr == "" && err != nil:
 						t.Fatalf("run %d: %v", i+1, err)
 					case r.wantErr != "" && (err == nil || !strings.Contains(err.Error(), r.wantErr)):
 						t.Fatalf("run %d: error %v, want one saying %q", i+1, err, r.wantErr)
+					case r.notReady && r.wantErr != "" && !errors.Is(err, publisher.ErrNotReady):
+						t.Fatalf("run %d: error %v doesn't wrap ErrNotReady, which Run retries sooner", i+1, err)
 					}
 					if got := dates(res.Stored); !slices.Equal(got, nonNil(r.wantStored)) {
 						t.Errorf("run %d stored the heads of %v, want %v", i+1, got, r.wantStored)

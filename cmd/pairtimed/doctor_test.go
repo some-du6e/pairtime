@@ -553,6 +553,43 @@ func TestDoctor(t *testing.T) {
 				}
 			},
 			want: map[string][2]string{"witness": {statusOK, "the newest day head"}}},
+		{name: "after a move to another host, the files the publisher writes again for heads the repository holds don't read as unpushed, since the newest head's own time decides (#249)",
+			setup: func(t *testing.T, d *deployed) {
+				now := time.Now()
+				d.witnessRows(t, now.Add(-72*time.Hour))
+				d.publish(t, d.witness, now)
+				// The heads came from the old host, stored three hours ago and
+				// pushed two hours ago; this host wrote the files an hour ago.
+				d.write(t, func(ctx context.Context, _ *store.DB, w *writer.Writer) error {
+					return w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+						_, err := tx.ExecContext(ctx, `UPDATE day_heads SET written_at_ms = $1`, now.Add(-3*time.Hour).UnixMilli())
+						return err
+					})
+				})
+				rewritten := now.Add(-time.Hour)
+				if err := filepath.WalkDir(d.witness, func(p string, e fs.DirEntry, err error) error {
+					if err != nil || e.IsDir() {
+						return err
+					}
+					return os.Chtimes(p, rewritten, rewritten)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				d.commitAt = now.Add(-2 * time.Hour)
+			},
+			want: map[string][2]string{"witness": {statusOK, "is older than some-du6e/pairtime-witness's latest commit"}}},
+		{name: "a server clock on a day whose root is published fails, since ingest refuses every upload with day_closed until the day ends",
+			setup: func(t *testing.T, d *deployed) {
+				d.witnessRows(t, time.Now().Add(-72*time.Hour))
+				d.publish(t, d.witness, time.Now().Add(48*time.Hour))
+			},
+			want: map[string][2]string{"witness": {statusFail, "refuses every upload with day_closed"}}, wantCode: 1},
+		{name: "doctor's witness line counts the witness rows, which a move to another host compares",
+			setup: func(t *testing.T, d *deployed) {
+				now := time.Now()
+				d.witnessRows(t, now, now, now)
+			},
+			want: map[string][2]string{"witness": {statusOK, "the server holds 3 witness rows"}}},
 		{name: "a root pairtimed is still writing, under a dot name, isn't a root the sidecar failed to push, since the sidecar never publishes one",
 			setup: func(t *testing.T, d *deployed) {
 				d.commitAt = time.Now().Add(-30 * time.Minute)

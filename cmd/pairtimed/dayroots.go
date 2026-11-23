@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -47,15 +48,20 @@ func dayRootsOptions(cfg *config.Config, db *store.DB, w *writer.Writer, history
 }
 
 // runDayRoots runs the publisher until ctx ends: at once, then at 00:10
-// UTC each day, and within the hour after a run that failed. It logs what
-// each run stored and wrote, and counts and logs each failure.
+// UTC each day, within the hour after a run that failed, and within five
+// minutes after one the replica's lag held back. It logs what each run
+// stored and wrote, and counts and logs each failure.
 func runDayRoots(ctx context.Context, o publisher.Options, logger *slog.Logger, failed *ops.Counter) {
 	logger.Info("day roots are on: the publisher runs now and at 00:10 UTC", "dir", o.Dir)
 	publisher.Run(ctx, o, time.Now, func(r publisher.Result, err error) {
 		if len(r.Stored) > 0 || len(r.Written) > 0 {
 			logger.Info("published day roots", "heads", dayList(r.Stored), "files", dayList(r.Written))
 		}
-		if err != nil {
+		switch {
+		case errors.Is(err, publisher.ErrNotReady):
+			failed.Inc()
+			logger.Warn("the day roots wait for the database's replica to catch up; the publisher tries again within 5 minutes", "err", err)
+		case err != nil:
 			failed.Inc()
 			logger.Error("publishing the day roots failed; the publisher tries again within the hour", "err", err)
 		}

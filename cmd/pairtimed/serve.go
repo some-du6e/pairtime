@@ -240,30 +240,6 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		<-settleDone
 	}()
 
-	// The day roots (WP-SV17): at start and at 00:10 UTC, the publisher
-	// stores each due day's signed head through the writer, then writes
-	// its file under -witness-dir for the witness sidecar to push. It too
-	// stops before the writer does.
-	if dayRoots {
-		o, err := dayRootsOptions(cfg, db, w, history, so.witnessDir)
-		if err != nil {
-			return err
-		}
-		failed := reg.Counter("pairtime_day_roots_failures_total", "Runs of the day-root publisher that failed (WP-SV17).")
-		dayRootsCtx, stopDayRoots := context.WithCancel(ctx)
-		dayRootsDone := make(chan struct{})
-		go func() {
-			defer close(dayRootsDone)
-			runDayRoots(dayRootsCtx, o, logger, failed)
-		}()
-		defer func() {
-			stopDayRoots()
-			<-dayRootsDone
-		}()
-	} else {
-		logger.Info("day roots are off: they need the server key and " + envWitnessRepo + ", which compose sets")
-	}
-
 	checks := []ops.Check{{
 		Name: "database",
 		Run: func(ctx context.Context) error {
@@ -295,6 +271,35 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		logger.Info("under Litestream: /readyz checks the replica's lag", "replica", objs.main.Name()+"/"+so.replica, "max_lag", backup.MaxLag.String())
 	case objs != nil:
 		logger.Warn("serve runs without -litestream-replica, so /readyz doesn't check replication; litestream.yml's exec passes it (deploy/litestream.yml)")
+	}
+
+	// The day roots (WP-SV17): at start and at 00:10 UTC, the publisher
+	// stores each due day's signed head through the writer, then writes
+	// its file under -witness-dir for the witness sidecar to push. Under
+	// Litestream it signs only while the replica is within MaxLag of the
+	// database, so a host restored from the replica signs each day's head
+	// over the same rows again. It too stops before the writer does.
+	if dayRoots {
+		o, err := dayRootsOptions(cfg, db, w, history, so.witnessDir)
+		if err != nil {
+			return err
+		}
+		if r := repl.Load(); r != nil {
+			o.Ready = r.Check
+		}
+		failed := reg.Counter("pairtime_day_roots_failures_total", "Runs of the day-root publisher that failed (WP-SV17).")
+		dayRootsCtx, stopDayRoots := context.WithCancel(ctx)
+		dayRootsDone := make(chan struct{})
+		go func() {
+			defer close(dayRootsDone)
+			runDayRoots(dayRootsCtx, o, logger, failed)
+		}()
+		defer func() {
+			stopDayRoots()
+			<-dayRootsDone
+		}()
+	} else {
+		logger.Info("day roots are off: they need the server key and " + envWitnessRepo + ", which compose sets")
 	}
 
 	// The jobs below stop before the database closes: each is deferred

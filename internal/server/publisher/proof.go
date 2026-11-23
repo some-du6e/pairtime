@@ -18,13 +18,17 @@ import (
 var ErrNoBatch = errors.New("publisher: the server holds no witness row of that batch")
 
 // ErrNotPublished is what Proof returns, wrapped, for a batch whose day
-// has no stored head yet.
+// has no stored head yet, which it gets once the day is due: a day after
+// the newest published one.
 var ErrNotPublished = errors.New("publisher: the batch's day has no head yet")
 
-// ErrNotInTree is what Proof returns, wrapped, for a batch the server
-// stored on a day after it published the day, which only a clock set back
-// can do. The day's tree stays as published, without it.
-var ErrNotInTree = errors.New("publisher: the batch isn't in its day's published tree")
+// ErrNotInTree is what Proof returns, wrapped, for a batch that is in no
+// published day's tree and never will be: one stored on a day after the
+// day was published, or on a day before the first published one, which
+// the chain never goes back to. Only a clock set back can store such a
+// batch, and ingest refuses uploads while that is so (day_closed). The
+// day's tree stays as published, without it.
+var ErrNotInTree = errors.New("publisher: the batch is in no published day's tree")
 
 // Inclusion is a stored batch's leaf in its day's published tree, which a
 // bundle carries (DESIGN 7.8; WP-SB8).
@@ -73,6 +77,15 @@ func Proof(ctx context.Context, q Querier, device string, b uint64) (Inclusion, 
 		return Inclusion{}, err
 	}
 	if !ok {
+		// The chain has no gaps and only goes forward, so a day without a
+		// head before the newest head's day comes before the first.
+		newest, published, err := Newest(ctx, q)
+		switch {
+		case err != nil:
+			return Inclusion{}, err
+		case published && d < newest.D:
+			return Inclusion{}, fmt.Errorf("%w: batch %d of %s came on %s, before the first published day", ErrNotInTree, b, device, Date(d))
+		}
 		return Inclusion{}, fmt.Errorf("%w: batch %d of %s came on %s", ErrNotPublished, b, device, Date(d))
 	}
 	leaves, err := Leaves(ctx, q, dh)
