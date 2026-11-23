@@ -19,7 +19,7 @@
 //     upload, none of its records came while the agent's config watch said
 //     local-only, none is an event made, by its own times or by its
 //     sender's stamp (Input.Sent), or for lookback's by when the writer
-//     took it in (Input.Lookback), before config.toml was last known to
+//     took it in (Writer.lookback), before config.toml was last known to
 //     say local-only, and no such event was still on its way to the writer
 //     as it was sealed (Options.Waiting), false otherwise (Options.Online,
 //     Writer.NoteMode, Writer.NoteSeen, Writer.Write), and missing only
@@ -29,7 +29,7 @@
 //     at a start after a switch back no batch was sealed since or at a
 //     pairtime login the watch didn't hear (Options.Seen, Writer.NoteSeen),
 //     events by their own times too, or for lookback's by when the writer
-//     took them in (Input.Lookback), with no seal since that read
+//     took them in (Writer.lookback), with no seal since that read
 //     config.toml as local-only (Batch.Back); and
 //     local_until, when config.toml was last known, or taken, to say
 //     local-only as the batch was sealed, with local_until_os, the same

@@ -45,6 +45,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/scorer"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/store"
+	"github.com/some-du6e/pairtime/internal/agent/tailers"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/platform"
@@ -104,6 +105,11 @@ type Options struct {
 	// home folder and environment the agent runs with. Tests point it at
 	// a folder of their own.
 	Env *install.Env
+	// Lookback starts lookback's reader, a child process that reads the
+	// harnesses' logs from before pairtime at low priority
+	// (tailers.ServeLookback), as `pairtime agent` has it run `pairtime
+	// lookback`. Nil reads none of them.
+	Lookback func() (tailers.Child, error)
 }
 
 // linked keeps heavyModules' entry points reachable (see heavy_linux.go).
