@@ -500,6 +500,7 @@ func (a *agent) publishWriter(w *ledger.Writer) {
 func (a *agent) reloadConfig() {
 	a.loadConfig(false)
 	a.noteMode()
+	a.applyPrivacy()
 }
 
 // uploadMode is config.toml's mode as uploads obey it, for GET /v1/status.
