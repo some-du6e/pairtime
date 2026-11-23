@@ -525,8 +525,8 @@ func readEdited(name string) ([]byte, error) {
 // read. A screen the teen may share, as pairtime install's consent screen,
 // shows only Line and Hand instead.
 type UnparsedError struct {
-	// Line is the line the file stops parsing at, or 0 when the decoder
-	// doesn't say, as for a value of the wrong type.
+	// Line is the line the file stops parsing at, or the line of a value
+	// of the wrong type, or 0 when the decoder names no line.
 	Line int
 	// Hand says what to write in the file by hand instead.
 	Hand string
@@ -550,6 +550,12 @@ func edited(text, hand string, change func(text string) string, apply func(*Conf
 		var pe toml.ParseError
 		if errors.As(err, &pe) {
 			u.Line = pe.Position.Line
+		} else {
+			// A value of the wrong type fails as the decoder fills
+			// fileConfig, with a plain error that starts "toml: line N"
+			// when the decoder knows the key's line. That prefix holds
+			// nothing from the file.
+			fmt.Sscanf(err.Error(), "toml: line %d", &u.Line)
 		}
 		return "", u
 	}

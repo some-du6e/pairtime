@@ -429,7 +429,7 @@ func TestUnparsedError(t *testing.T) {
 		line bool // Line is set
 	}{
 		{"a value that isn't TOML gives the line the file breaks at", "[display]\nshadow = mysecretword\n", true},
-		{"a value of the wrong type gives no line, since the decoder names none", "[display]\nshadow = \"yes\"\n", false},
+		{"a value of the wrong type gives the line of the value, which the decoder names", "[display]\nshadow = \"yes\"\n", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
