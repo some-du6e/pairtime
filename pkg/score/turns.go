@@ -539,22 +539,41 @@ func (d *deriver) finishTurn(tb *turnBuild) {
 
 // origin applies SM 2.2's origin rules to a turn's prompt, first match
 // wins. Rules 1 to 5 read what the harness declares; 6 to 8 read OS
-// evidence. For a person's prompt it also returns the prompt's class and
-// the typed length its lead is computed from.
+// evidence. Rules 1 to 3 read every copy of the prompt a hook or a log
+// reader made, as well as the one the turn goes by: a transcript can say a
+// scheduler or a subagent sent a prompt whose hook says nothing of it
+// (E-cc-transcript-labels). For a person's prompt it also returns the
+// prompt's class and the typed length its lead is computed from.
 func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.PromptClass, int64) {
 	p := e.Data.(*event.PromptSubmit)
 	st := tb.sess.startBefore(tb.primary)
+	declared := func(says func(*event.PromptSubmit) bool) bool {
+		for _, i := range tb.prompts {
+			if r := d.recs[i]; i == tb.primary || nativeVia(r.Via) {
+				if q, ok := r.Data.(*event.PromptSubmit); ok && says(q) {
+					return true
+				}
+			}
+		}
+		return false
+	}
 	switch {
-	case p.MatchesPendingCron || p.OriginDeclared == event.DeclaredCron || p.OriginDeclared == event.DeclaredLoop:
+	case declared(func(q *event.PromptSubmit) bool {
+		return q.MatchesPendingCron || q.OriginDeclared == event.DeclaredCron || q.OriginDeclared == event.DeclaredLoop
+	}):
 		return event.OriginScheduled, "", 0
-	case p.OriginDeclared == event.DeclaredGoal || p.OriginDeclared == event.DeclaredFollowup:
+	case declared(func(q *event.PromptSubmit) bool {
+		return q.OriginDeclared == event.DeclaredGoal || q.OriginDeclared == event.DeclaredFollowup
+	}):
 		// SM 2.2 rule 2 for a prompt. A turn a stop hook continued has no
 		// prompt.submit (testdata/timelines/README.md, Turns), so it is
 		// self_continue as a continuation. A stop with stop_hook_active
 		// later in a prompted turn doesn't change the prompt's origin: it
 		// can come long after the anchor is final.
 		return event.OriginSelfContinue, "", 0
-	case p.OriginDeclared == event.DeclaredSubagent || p.OriginDeclared == event.DeclaredCrossSession:
+	case declared(func(q *event.PromptSubmit) bool {
+		return q.OriginDeclared == event.DeclaredSubagent || q.OriginDeclared == event.DeclaredCrossSession
+	}):
 		// SM 2.2 names no rule for a message another session sent; like a
 		// subagent's, it is one agent prompting another (TP DI 26).
 		return event.OriginSubagent, "", 0
