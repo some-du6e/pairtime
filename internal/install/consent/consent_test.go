@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/install"
 )
 
@@ -26,8 +27,10 @@ const teenExe = "/home/teen/.local/bin/pairtime"
 // same everywhere once the home directory's path is written as /home/teen.
 // With readOnly, Claude Code's settings.json is there and read-only, so
 // its planner refuses it, and the item is left out with the planner's
-// reason, as runInstall leaves it.
-func screenFor(t *testing.T, found []string, hook HookTest, readOnly bool) (*Screen, string) {
+// reason, as runInstall leaves it. With a calibration other than "", which
+// config.toml then holds, the screen also offers --calibration-volunteer's
+// change, planned and masked as runInstall plans it.
+func screenFor(t *testing.T, found []string, hook HookTest, readOnly bool, calibration string) (*Screen, string) {
 	t.Helper()
 	root := t.TempDir()
 	for _, f := range found {
@@ -62,6 +65,20 @@ func screenFor(t *testing.T, found []string, hook HookTest, readOnly bool) (*Scr
 	if harnesses[0].Found() && hook.OK {
 		plan(install.ClaudeCode(env))
 	}
+	if calibration != "" {
+		name := filepath.Join(root, ".config", "pairtime", "config.toml")
+		if err := os.MkdirAll(filepath.Dir(name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte(calibration), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		before, after, err := config.PlanShadow(name, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		diffs[ItemCalibration] = install.FileDiff(name, config.Masked(before), config.Masked(after))
+	}
 	return New(Input{GOOS: "linux", Binary: teenExe, Harnesses: harnesses, Hook: hook, Diffs: diffs, Left: left}), root
 }
 
@@ -74,9 +91,9 @@ func teenPaths(s, root string) string {
 
 // TestScreenSnapshots checks the whole consent screen for three sets of
 // detected harnesses, for a hook command that fails its self-test, for a
-// settings file Claude Code's planner refuses, and for a computer pairtime
-// login linked, which config.toml lets upload, against testdata/*.golden
-// (docs/PLAN.md, WP-IN2). A screen that differs is printed in base64, so a
+// settings file Claude Code's planner refuses, for a computer pairtime
+// login linked, which config.toml lets upload, and for a calibration
+// volunteer, against testdata/*.golden (docs/PLAN.md, WP-IN2). A screen that differs is printed in base64, so a
 // new snapshot can be read out of the CI log byte for byte, looked over
 // and committed.
 func TestScreenSnapshots(t *testing.T) {
@@ -89,23 +106,28 @@ func TestScreenSnapshots(t *testing.T) {
 		readOnly bool
 		// linked is the server the computer is linked to (Input.Linked).
 		linked string
+		// calibration is config.toml for --calibration-volunteer, "" when
+		// install runs without it.
+		calibration string
 	}{
 		{"with no AI tool found, only autostart is offered, and each tool says it wasn't found",
-			"none.golden", nil, HookTest{}, false, ""},
+			"none.golden", nil, HookTest{}, false, "", ""},
 		{"with Claude Code found, autostart and Claude Code's hooks are offered, each with its diff",
-			"claude.golden", []string{".claude"}, passed, false, ""},
+			"claude.golden", []string{".claude"}, passed, false, "", ""},
 		{"with Claude Code, Cursor and Codex found, the hooks card says Cursor runs them too, and Codex has no hooks yet",
-			"claude-cursor-codex.golden", []string{".claude", ".cursor", ".codex"}, passed, false, ""},
+			"claude-cursor-codex.golden", []string{".claude", ".cursor", ".codex"}, passed, false, "", ""},
 		{"with a hook command that fails its self-test, no hooks are offered and the screen says why",
-			"hook-failed.golden", []string{".claude"}, HookTest{Why: "pairtime hook failed its self-test (it exited with status 2), so pairtime leaves Claude Code's settings alone"}, false, ""},
+			"hook-failed.golden", []string{".claude"}, HookTest{Why: "pairtime hook failed its self-test (it exited with status 2), so pairtime leaves Claude Code's settings alone"}, false, "", ""},
 		{"with a Claude Code settings file its planner won't edit, the hooks are left out and Claude Code's line says why, and autostart is still offered",
-			"planner-refused.golden", []string{".claude"}, passed, true, ""},
+			"planner-refused.golden", []string{".claude"}, passed, true, "", ""},
 		{"on a computer pairtime login linked, which config.toml lets upload, the screen names the server in place of local-only mode",
-			"linked.golden", []string{".claude"}, passed, false, "https://pairtime.example"},
+			"linked.golden", []string{".claude"}, passed, false, "https://pairtime.example", ""},
+		{"for a calibration volunteer, a card between autostart and the hooks says the time reads calibrating until scoring 1.0.0, with config.toml's diff masked",
+			"calibration.golden", []string{".claude"}, passed, false, "", "mode = \"local\"\n\n[display]\n# my calibration week\nshadow = false\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s, root := screenFor(t, tt.found, tt.hook, tt.readOnly)
+			s, root := screenFor(t, tt.found, tt.hook, tt.readOnly, tt.calibration)
 			s.in.Linked = tt.linked
 			var b strings.Builder
 			s.Render(&b)
@@ -191,6 +213,55 @@ func TestCards(t *testing.T) {
 				p.Close()
 			}
 			s := New(Input{GOOS: "linux", Binary: teenExe, Harnesses: install.Detect(env), Hook: HookTest{OK: true, Took: 12 * time.Millisecond}, Diffs: diffs})
+			var b strings.Builder
+			s.Render(&b)
+			tt.check(t, s, b.String())
+		})
+	}
+}
+
+// TestCalibrationCard checks the card of pairtime install
+// --calibration-volunteer and the line that says why it isn't there.
+func TestCalibrationCard(t *testing.T) {
+	diffs := map[string]string{install.ItemAutostart: "--- /dev/null\n+++ a\n", ItemCalibration: "--- c\n+++ c\n", install.ItemClaudeCode: "--- b\n+++ b\n"}
+	tests := []struct {
+		name  string
+		in    Input
+		check func(t *testing.T, s *Screen, shown string)
+	}{
+		{"the card comes between autostart and the hooks, the order install makes the changes in", Input{Diffs: diffs},
+			func(t *testing.T, s *Screen, _ string) {
+				if got := s.Ticked(); !slices.Equal(got, []string{install.ItemAutostart, ItemCalibration, install.ItemClaudeCode}) {
+					t.Errorf("the cards are %q", got)
+				}
+			}},
+		{"the card says your time reads calibrating until scoring 1.0.0, and how to turn it off", Input{Diffs: map[string]string{ItemCalibration: diffs[ItemCalibration]}},
+			func(t *testing.T, s *Screen, shown string) {
+				said := strings.Join(strings.Fields(shown), " ")
+				for _, want := range []string{`show your time as "calibrating"`, "until its scoring reaches version 1.0.0", Declined, "shadow = false under [display] in config.toml"} {
+					if !strings.Contains(said, want) {
+						t.Errorf("the screen doesn't say %q:\n%s", want, shown)
+					}
+				}
+			}},
+		{"a card whose change is made already says nothing changes", Input{Diffs: map[string]string{ItemCalibration: ""}},
+			func(t *testing.T, s *Screen, shown string) {
+				if !strings.Contains(shown, "It is set up already, so nothing changes.") {
+					t.Errorf("the screen doesn't say the change is made already:\n%s", shown)
+				}
+			}},
+		{"when install leaves the change out, there is no card and the screen says why", Input{Left: map[string]string{ItemCalibration: "pairtime's scoring has reached version 1.0.0"}},
+			func(t *testing.T, s *Screen, shown string) {
+				said := strings.Join(strings.Fields(shown), " ")
+				if len(s.Cards) != 0 || !strings.Contains(said, `Your time won't show as "calibrating": pairtime's scoring has reached version 1.0.0.`) {
+					t.Errorf("the screen has %d cards and says:\n%s", len(s.Cards), shown)
+				}
+			}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.in.GOOS, tt.in.Binary, tt.in.Hook = "linux", teenExe, HookTest{OK: true}
+			s := New(tt.in)
 			var b strings.Builder
 			s.Render(&b)
 			tt.check(t, s, b.String())

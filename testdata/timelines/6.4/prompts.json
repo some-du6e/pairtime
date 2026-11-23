@@ -5,19 +5,17 @@
       "turn_key": "t_5ad1469cc115",
       "t": 1795214400000,
       "local": "23:40:00",
-      "text": "/goal all tests pass and lighthouse performance above 90 on the home page",
+      "text": "/goal all tests pass, and lighthouse performance above 90 on the home page.",
       "len_chars": 75,
-      "source": "quoted in SM 6.4's 23:38 row, which gives its length as 75 characters",
-      "erratum": "2026-11-19-sm-6.4-prompt-lengths"
+      "source": "quoted in SM 6.4's 23:38 row"
     },
     {
       "turn_key": "t_3fd9c736e165",
       "t": 1795243020000,
       "local": "07:37:00",
-      "text": "nice. explain what you changed in the service worker and why",
+      "text": "nice. explain what you changed in the service worker and why?",
       "len_chars": 61,
-      "source": "quoted in SM 6.4's 07:35 row, which gives its length as 61 characters",
-      "erratum": "2026-11-19-sm-6.4-prompt-lengths"
+      "source": "quoted in SM 6.4's 07:35 row"
     }
   ]
 }

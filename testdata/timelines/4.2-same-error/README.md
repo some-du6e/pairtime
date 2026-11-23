@@ -10,7 +10,6 @@ SM 4.2's fix-it rule discounts a human turn whose prompt is an error paste or a 
 | Window | 16:00:00 to 16:26:00. Records from 15:58:20 start the session |
 | Project | An invented `habits` command-line app with a pytest suite |
 | Files | gen.py uses `../6.5/neardup.py` for SM 4.2's normalization and attempt count, `Sweep` from `../sidedoor/sidedoor.py` for SM 2.7 second by second, and `../../../tools/ledger_ref.py` for each prompt's error signature (ledger-v1.md 10.4, 10.6) |
-| Erratum | [Loop codes](../../../docs/errata/2026-11-19-sm-6.5-loop-codes.md): rows 16:11 to 16:13 and 16:20 to 16:23 give the loops' seconds, all inside the discounted turns, `X.same_error` |
 
 ## Events
 
@@ -52,6 +51,6 @@ P4 and P6 are judged at exactly `SAME_ERROR_LIMIT`, so a scorer that compared th
 - P6 opens no window either, so its lead from 16:17:36 credits nothing and P5's bucket is read instead: `SUP` while P5's turn runs until 16:18:00, then `READ` until 16:20:00. P5's turn filled 225 s, enough for those 180 s.
 - P6 resets the bucket to zero in turn. Nothing covers 16:20:00 to 16:23:40, P6's stop, and those 220 s are what the second loop cost: scored with no turn discounted, they are `SUP` while P6's turn runs. P7's 20 s lead starts at P6's stop.
 - P7's turn drains as `SUP` until 16:25:00 and as `READ` to the end of the window.
-- Rows 16:11 to 16:13 and 16:20 to 16:23 rest on [6.5's loop-codes erratum](../../../docs/errata/2026-11-19-sm-6.5-loop-codes.md). Inside P4's and P6's turns, where the agent runs and nothing credits a second, SM 5.2's wording makes those seconds `X.agent_only`. SM 4.2's "seconds that would have been credited are reported under their discount code" makes them `X.same_error`. The rows give `X.same_error` and name the erratum.
+- Rows 16:11 to 16:13 and 16:20 to 16:23 are `X.same_error` by SM 4.2. Scored with no turn discounted, every second of them would be credited, so they are what the loops cost, and each takes the code of the latest discounted turn at or before it, P4's or P6's. Without that rule SM 5.2 would make those seconds, all inside P4's and P6's turns, `X.agent_only`.
 - Every minute has credit or a running agent, so each has a bucket (SM 5.1), and every second the loops cost is in one.
 - `excluded_loops_s` is the rows' loop-code seconds, which gen.py adds up: 376 s.

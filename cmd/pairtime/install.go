@@ -26,7 +26,7 @@ import (
 // says no, or gives no answer, so nothing changed.
 const exitDeclined = 3
 
-const installUsage = `Usage: pairtime install [--yes] [--skip <item>]... [--dry-run]
+const installUsage = `Usage: pairtime install [--yes] [--skip <item>]... [--calibration-volunteer] [--dry-run]
 
 Sets pairtime up on this computer, without admin rights. It puts the
 pairtime binary in your own programs folder, finds the AI tools you use,
@@ -38,6 +38,10 @@ pairtime uninstall takes everything back out.
 
   --yes        make every change without asking, for scripts
   --skip item  leave one change out: autostart, or hooks/claude_code
+  --calibration-volunteer
+               for calibration volunteers: also set shadow = true under
+               [display] in config.toml, so that pairtime shows your time
+               as "calibrating" until its scoring reaches version 1.0.0
   --dry-run    print the changes as diffs, and make none
 
 Exit status:
@@ -115,6 +119,14 @@ var installStdin io.Reader = os.Stdin
 //     call that finds it down is spooled, and a spooled call earns only a
 //     side door's credit (DESIGN 5.2).
 //
+// With --calibration-volunteer, the screen also offers shadow = true under
+// [display] in config.toml (planCalibration), so that a calibration
+// volunteer's views show their time as "calibrating" until pairtime's
+// scoring reaches 1.0.0, when config.Parse ends it (DESIGN 6.7 steps 2
+// and 4; decision D-shadow-scope). Step 4 makes that change, through
+// config's own edit, before the agent starts. Uninstall deletes config.toml
+// with the rest of pairtime's data, and the line goes with it.
+//
 // Nothing changes before the teen's yes, so the binary goes in place after
 // it, in step 3, not first as DESIGN 5.9 step 1 has it. An install script
 // that put the binary in place itself names the folders it made with
@@ -141,6 +153,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	flags.Usage = func() { fmt.Fprint(flags.Output(), installUsage) }
 	yes := flags.Bool("yes", false, "make every change without asking")
 	dryRun := flags.Bool("dry-run", false, "print the changes and make none")
+	volunteer := flags.Bool("calibration-volunteer", false, `show your time as "calibrating" until scoring 1.0.0`)
 	var skip skipFlag
 	flags.Var(&skip, "skip", "leave one change out")
 	var made madeFlag
@@ -260,6 +273,13 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+	if *volunteer {
+		if diff, why := planCalibration(dirs.ConfigFile(), config.Calibrating()); why != "" {
+			left[consent.ItemCalibration] = why
+		} else {
+			diffs[consent.ItemCalibration] = diff
+		}
+	}
 	linked := linkedServer(dirs)
 	screen := consent.New(consent.Input{
 		GOOS:      env.GOOS,
@@ -366,6 +386,20 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, "pairtime will start when you log in.")
 		}
 	}
+	if slices.Contains(chosen, consent.ItemCalibration) {
+		// config's own edit, under config.lock as every edit of config.toml
+		// is, before the agent starts, so that the agent finds the file:
+		// its first start writes the default only where there is none. It
+		// changes the file as it is now, which is what the screen showed
+		// unless something changed it since, and in a changed file it
+		// changes the same line, which is what the teen said yes to.
+		if err := config.SetShadow(dirs.ConfigFile(), true); err != nil {
+			return fail(errors.New(calibrationWhy(err)))
+		}
+		if diffs[consent.ItemCalibration] != "" {
+			fmt.Fprintln(stdout, `pairtime shows your time as "calibrating" until its scoring reaches version 1.0.0.`)
+		}
+	}
 	st, err := queryAgent(dirs)
 	if err != nil || restart || st.Version.Version != version.Get().Version {
 		if err == nil {
@@ -411,17 +445,55 @@ func leftOut(w io.Writer, prefix string, hook consent.HookTest, left map[string]
 	if hook.Why != "" {
 		fmt.Fprintf(w, "%sClaude Code's hooks stay out: %s.\n", prefix, hook.Why)
 	}
-	for _, id := range []string{install.ItemAutostart, install.ItemClaudeCode} {
+	for _, id := range []string{install.ItemAutostart, consent.ItemCalibration, install.ItemClaudeCode} {
 		why, ok := left[id]
 		if !ok || slices.Contains(skip, id) {
 			continue
 		}
-		if id == install.ItemAutostart {
+		switch id {
+		case install.ItemAutostart:
 			fmt.Fprintf(w, "%spairtime won't start when you log in: %s.\n", prefix, install.Printable(why))
-		} else {
+		case consent.ItemCalibration:
+			fmt.Fprintf(w, "%sYour time won't show as \"calibrating\": %s.\n", prefix, install.Printable(why))
+		default:
 			fmt.Fprintf(w, "%sClaude Code's hooks stay out: %s.\n", prefix, install.Printable(why))
 		}
 	}
+}
+
+// planCalibration plans what --calibration-volunteer changes in the
+// config.toml at name: the diff the consent screen and --dry-run show, ""
+// when the file says shadow = true already, with what the teen wrote in it
+// masked (config.Masked), or else why install leaves the change out:
+// pairtime's scoring is frozen, as calibrating false says, or config's
+// edit refuses the file, as one that doesn't parse (calibrationWhy).
+func planCalibration(name string, calibrating bool) (diff, why string) {
+	if !calibrating {
+		return "", "pairtime's scoring has reached version 1.0.0, so its rules are frozen and your time shows as they count it"
+	}
+	before, after, err := config.PlanShadow(name, true)
+	if err != nil {
+		return "", calibrationWhy(err)
+	}
+	return install.FileDiff(name, config.Masked(before), config.Masked(after)), ""
+}
+
+// calibrationWhy says why config's edit refused config.toml, for the
+// consent screen and the lines install prints with --yes and --dry-run:
+// err's words without "config: ", but for a file that doesn't parse only
+// the line it breaks at and what to write by hand, since the decoder's
+// message can quote what the teen wrote there, and teens share that
+// screen when they ask for help.
+func calibrationWhy(err error) string {
+	var u *config.UnparsedError
+	if !errors.As(err, &u) {
+		return strings.TrimPrefix(err.Error(), "config: ")
+	}
+	at := ""
+	if u.Line > 0 {
+		at = fmt.Sprintf(" at line %d", u.Line)
+	}
+	return "config.toml doesn't parse" + at + ", so pairtime leaves it alone; " + u.Hand
 }
 
 // hasClaudeHooks reports whether Claude Code's settings hold hooks of

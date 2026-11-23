@@ -7,7 +7,7 @@ These files are oracle paths (docs/PLAN.md, ground rule 5). A PR that changes a 
 | Fixture | SM | What it is | Credited | Errata |
 |---|---|---|---|---|
 | [6.2](6.2/) | 6.2 | Five minutes before school: Cursor on a Windows 10 laptop without the key counter, level B | 265 s | none |
-| [6.4](6.4/) | 6.4 | A `/goal` agent running unattended overnight: Claude Code on Linux X11 with the key counter, level A | 810 s; agent 23,400 s, 23,180 s of it agent-only | [prompt lengths](../../docs/errata/2026-11-19-sm-6.4-prompt-lengths.md) |
+| [6.4](6.4/) | 6.4 | A `/goal` agent running unattended overnight: Claude Code on Linux X11 with the key counter, level A | 810 s; agent 23,400 s, 23,180 s of it agent-only | none |
 | [6.6](6.6/) | 6.6 | A scripted `claude -p` loop with a mouse jiggler on Windows 10 | 0 s | [uncredited codes](../../docs/errata/2026-11-19-sm-6.6-uncredited-codes.md) |
 
 WP-FX2 adds 6.3, its two-tab variant, 6.5 and SM 4.2's alternation case; WP-FX3 adds 6.1; WP-FX4 adds `sidedoor/`; WP-FX8 adds `focus-unknown/`; the decision on the [same-error erratum](../../docs/errata/2026-11-19-sm-6.1-same-error.md) adds SM 4.2's same-error case, `4.2-same-error`. `lookback/` holds WP-FX5's cases for SM 2.8, and `relayed/` D-relayed's cases for SM 2.2 rule 9, prompts a person sent through an agent app (docs/errata/2026-11-22-relayed-prompts.md). WP-AD3 adds [`copies`](copies/): a prompt and a queued message that a hook and the transcript reader both recorded, which pins SM 2.2's rules 1 to 3 over every copy of a prompt and SM 2.3's one Q anchor for a queued message's two copies.
@@ -55,7 +55,7 @@ Conventions the scorer relies on:
 
 - `window` is the span the rows cover, in UTC, from the first minute SM describes to the end of the last. The other top-level fields name the SM section, date, time zone, UTC offset, OS, whether `input_keys` exists, the evidence level and witness label of every credited second, the device and the projects by key.
 - `rows` tile the window in order. A row is one minute, or a run of minutes where SM gives only a range (`minutes` > 1, `local` "23:44-06:09").
-  - `bucket` says whether the scorer writes a minute bucket for the row, which it does only for a minute with credit or a running agent (SM 5.1). `bucket_minutes` says how many of a run's minutes have one; credited and uncredited seconds cover those minutes and no others.
+  - `bucket` says whether the scorer writes a minute bucket for the row, which it does only for a minute with credit, a running agent or seconds a loop cost (SM 5.1). `bucket_minutes` says how many of a run's minutes have one; credited and uncredited seconds cover those minutes and no others.
   - `credit` holds credited seconds by project, then by reason code (SM 5.2). `uncredited` holds uncredited seconds by code, and with `credited_s` adds up to 60 for every bucket minute. When SM lists a minute's codes without their seconds, `uncredited` is null and `codes` lists them.
   - `agent_running_s` is the seconds an agent turn ran in the row. SM rarely states it; it follows from the times SM gives.
   - `sm` names the SM row transcribed, `derived` the fields worked out from SM's times rather than stated in its row, `erratum` the erratum that questions the row, and `note` anything else.

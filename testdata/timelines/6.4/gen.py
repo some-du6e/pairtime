@@ -11,8 +11,6 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 import timeline as tl  # noqa: E402
 
-ERRATUM = "2026-11-19-sm-6.4-prompt-lengths"
-
 fx = tl.Fixture(
     "6.4",
     title="A /goal agent running unattended overnight",
@@ -133,7 +131,7 @@ def test_run(t_end):
     return tool(t_end, "test", start_ms=18_000, cmd=CMD_TEST, exit_code=0, visible=4)
 
 
-# 23:40:00, the /goal prompt (75 characters by SM's count; see the erratum).
+# 23:40:00, the /goal prompt, 75 characters.
 prompt(at("23:40:00"), TURN[1], 75, slash="/goal")
 # The first four minutes, which he watches: the plan, a read, two edits and
 # two failing test runs fill the bucket faster than he reads.
@@ -209,8 +207,7 @@ for t_fixed, what in fixed:
     prev = t_fixed
 tl.check(green_seen and turn_no == 10, "nine stops and a green run")
 
-# 07:30:00, he unlocks and reads; 07:37:00, the follow-up (61 characters by
-# SM's count; see the erratum).
+# 07:30:00, he unlocks and reads; 07:37:00, the follow-up, 61 characters.
 fx.emit(at("+1 07:30:00"), "os.power", {"op": "unlock"}, source="os", via="os", sample=True)
 prompt(at("+1 07:37:00"), TURN[10], 61)
 
@@ -273,7 +270,7 @@ morning = fx.event_at("prompt.submit", at("+1 07:37:00"))
 
 exp = tl.Expected(fx, sm="docs/design/struggle-metric.md 6.4", evidence="A", witness="witnessed",
                   projects={P: "pixel-forge"}, start="23:37:00", end="+1 07:37:00")
-exp.row("23:37", credit={P: {"P": 50}}, uncredited={"X.no_anchor": 10}, sm="23:37", erratum=ERRATUM)
+exp.row("23:37", credit={P: {"P": 50}}, uncredited={"X.no_anchor": 10}, sm="23:37")
 exp.row("23:38", credit={P: {"P": 60}}, uncredited={}, sm="23:38")
 exp.row("23:39", credit={P: {"P": 60}}, uncredited={}, sm="23:39")
 exp.row("23:40", credit={P: {"SUP": 60}}, uncredited={}, agent=60, sm="23:40")
@@ -290,7 +287,7 @@ exp.row("+1 07:30", credit={P: {"READ": 60}}, uncredited={}, sm="07:30")
 exp.row("+1 07:31", credit={P: {"READ": 60}}, uncredited={}, sm="07:31")
 exp.row("+1 07:32", credit={P: {"READ": 60}}, uncredited={}, sm="07:32")
 exp.row("+1 07:33", credit={P: {"READ": 60}}, uncredited={}, sm="07:33")
-exp.row("+1 07:34", credit={P: {"READ": 19, "P": 41}}, uncredited={}, sm="07:34", erratum=ERRATUM)
+exp.row("+1 07:34", credit={P: {"READ": 19, "P": 41}}, uncredited={}, sm="07:34")
 exp.row("+1 07:35", credit={P: {"P": 60}}, uncredited={}, sm="07:35")
 exp.row("+1 07:36", credit={P: {"P": 60}}, uncredited={}, sm="07:36")
 
@@ -308,11 +305,10 @@ expected = exp.doc(
         "handbook_s": {"about": 7800, "sm": "the flat third would credit about 7,800 s (2 h 11 min)"},
         "ai_ratio": {"about": 0.03, "sm": "ai_ratio is about 0.03"},
     },
-    errata=[ERRATUM],
+    errata=[],
     notes=[
         "The lead of the 23:40:00 prompt is 120 + 75 / 1.5 = 170 s and that of the 07:37:00 prompt 120 + 61 / 1.5 "
-        "= 161 s, with 40.67 s of typing rounded as SM rounds it. The quoted prompts have 73 and 60 characters; "
-        "see the erratum.",
+        "= 161 s, with 40.67 s of typing rounded to the nearest second (SM 1.3).",
         "From 23:43:40 every second is X.absent although the agent runs: no presence wins over an agent with "
         "nothing to show (SM's 23:43 row). Those seconds are agent-only time all the same, so agent_only_s is "
         "23,400 - 220 credited during the run.",
@@ -345,11 +341,11 @@ prompts = {
     "fixture": "6.4",
     "prompts": [
         {"turn_key": TURN[1], "t": RUN_START, "local": "23:40:00",
-         "text": "/goal all tests pass and lighthouse performance above 90 on the home page", "len_chars": 75,
-         "source": "quoted in SM 6.4's 23:38 row, which gives its length as 75 characters", "erratum": ERRATUM},
+         "text": "/goal all tests pass, and lighthouse performance above 90 on the home page.", "len_chars": 75,
+         "source": "quoted in SM 6.4's 23:38 row"},
         {"turn_key": TURN[10], "t": at("+1 07:37:00"), "local": "07:37:00",
-         "text": "nice. explain what you changed in the service worker and why", "len_chars": 61,
-         "source": "quoted in SM 6.4's 07:35 row, which gives its length as 61 characters", "erratum": ERRATUM},
+         "text": "nice. explain what you changed in the service worker and why?", "len_chars": 61,
+         "source": "quoted in SM 6.4's 07:35 row"},
     ],
 }
 

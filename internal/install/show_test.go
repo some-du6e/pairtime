@@ -130,3 +130,26 @@ func TestPlanDiffHidesWhatIsntPairtimes(t *testing.T) {
 		})
 	}
 }
+
+func TestFileDiff(t *testing.T) {
+	tests := []struct {
+		name          string
+		before, after []byte
+		want          string
+	}{
+		{"a file that isn't there yet is /dev/null on the left", nil, []byte("a\n"),
+			"--- /dev/null\n+++ /home/teen/f\n@@ -0,0 +1 @@\n+a\n"},
+		{"a change in a file names it on both sides", []byte("a\nb\n"), []byte("a\nc\n"),
+			"--- /home/teen/f\n+++ /home/teen/f\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n"},
+		{"a file that doesn't change has no diff", []byte("a\n"), []byte("a\n"), ""},
+		{"what a terminal acts on is written out, and CRLF endings stay", []byte("a\r\n"), []byte("a\x1b[2J\r\n"),
+			"--- /home/teen/f\n+++ /home/teen/f\n@@ -1 +1 @@\n-a\r\n+a<U+001B>[2J\r\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := FileDiff("/home/teen/f", tt.before, tt.after); got != tt.want {
+				t.Errorf("FileDiff = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

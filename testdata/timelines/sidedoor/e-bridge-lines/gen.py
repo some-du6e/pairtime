@@ -58,8 +58,10 @@ for t, k, f in zip(TURNS, turn_keys, FILES):
     # plugin's own heartbeat follows. wakatime-cli is the editor's child, so
     # the peer-process check passes: via bridge for the transcript-derived
     # heartbeats, via editor for the plugin's (DESIGN 5.7). The bridge keeps
-    # the transcript's timestamps; nothing else is recorded between the
-    # prompt and the sync.
+    # each heartbeat's time, here the prompt's own: wakatime-cli can also
+    # stamp a prompt with an earlier transcript entry's time, which this case
+    # leaves out (docs/errata/2026-11-23-bridge-prompt-times.md). Nothing else
+    # is recorded between the prompt and the sync.
     fx.emit(t, "prompt.submit",
             {"turn_key": k, "len_chars": PROMPT_LEN, "pasted_chars": 0, "typed_len_est": PROMPT_LEN,
              "origin_declared": "none", "matches_pending_cron": False, "answers_question": False,

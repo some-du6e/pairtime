@@ -78,12 +78,10 @@ def transcript_only(fx, live):
 
 def typing_ms(typed_len_est):
     """SM 2.8: a prompt's lead is its typing time only, typed_len_est /
-    COMPOSE_CPS capped at COMPOSE_MAX_S, with no think lead. Rounded up to
-    a whole second, so a lead ending on a whole second starts on one: SM
-    rounds 6.4's 160.67 s lead to 161 s the same way (WP-FX1's 6.4
-    prompt-lengths erratum asks Karim which way edges round)."""
+    COMPOSE_CPS capped at COMPOSE_MAX_S, with no think lead, rounded to the
+    nearest second, halves up (SM 1.3)."""
     s = min(Fraction(typed_len_est) / COMPOSE_CPS, COMPOSE_MAX_S)
-    return -((-s.numerator) // s.denominator) * 1000
+    return int(s + Fraction(1, 2)) * 1000
 
 
 def fill_s(kind, data):

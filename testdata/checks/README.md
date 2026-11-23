@@ -17,12 +17,12 @@ Each failing scenario fails one check. Every other check passes on the same data
 | CC5 one attention stream | `4.2-clean`, `6.2-clean`, `6.3-clean` | `4.2-cc5-second-device` | `4.2-cc2-send-keys`: nothing credited |
 | CC6 live vs re-scored | every scenario but one | `6.3-cc6-moved-minute` | |
 | CC7 chain integrity | every scenario but two | `4.2-cc7-dropped-record`, `4.2-cc7-dropped-batch` | |
-| CC8 content-derived inputs | `4.2-clean`, `4.2-cc8-removed-spans` | `4.2-cc8-false-sketch`, `4.2-cc8-made-up-key`, `4.2-cc8-hidden-shingles`, `4.2-cc8-false-class`, `4.2-cc8-inflated-length` | `4.2-cc2-send-keys`: nothing drawn |
+| CC8 content-derived inputs | `4.2-clean`, `4.2-cc8-removed-spans` | `4.2-cc8-false-sketch`, `4.2-cc8-made-up-key`, `4.2-cc8-false-class`, `4.2-cc8-inflated-length` | `4.2-cc2-send-keys`: nothing drawn |
 | CC9 session integrity | `4.2-clean`, `6.2-clean`, `6.3-clean` | `6.3-cc9-moved-turn`, `6.3-cc9-orphan-turn`, `4.2-cc9-parent-class` | |
 | CC10 editor vs focus | `6.2-clean`, `6.3-clean` | `6.3-cc10-injected-heartbeats`: no editor has focus; `6.3-cc10-wrong-project`: the focused editor is on another project | the `4.2-*` scenarios: no editor |
 | CC11 typing, module on | `4.2-clean` | `4.2-cc11-pasted` | the `6.2-*` and `6.3-*` scenarios and `4.2-cc8-inflated-length`: module off; `4.2-cc2-send-keys`: no human prompt |
 
-`4.2-cc8-removed-spans` passes every check although its client lied. It is the limit ledger-v1.md 10.8 states and [issue #15](https://github.com/some-du6e/pairtime/issues/15) asks Karim to decide on. Its `known_limit` says so.
+`4.2-cc8-removed-spans` passes every check although its client lied. It is the limit DESIGN 7.3 and ledger-v1.md 10.8 state and [issue #15](https://github.com/some-du6e/pairtime/issues/15) accepted: a removed span hides a self-keyed turn from every CC8 rule but `es`. Its `known_limit` says so.
 
 ## The scenarios
 
@@ -34,12 +34,11 @@ Each failing scenario fails one check. Every other check passes on the same data
 | `4.2-cc5-second-device` | 4.2-alternation and [6.2](../timelines/6.2/) | A second device on the account runs 6.2's five minutes at the same time |
 | `4.2-cc7-dropped-record` | 4.2-alternation | The reveal leaves out one record of a witnessed batch |
 | `4.2-cc7-dropped-batch` | 4.2-alternation | The reveal leaves out the last batch of the re-score range, A3's stop and its sample |
-| `4.2-cc8-false-sketch` | 4.2-alternation | A3's committed sketch is another request's, so the re-roll rule misses it; the client reveals A3's true values |
-| `4.2-cc8-made-up-key` | 4.2-alternation | A3's sketch and values are under a key of the client's own; A1 and A2 show the same shingles with other values |
-| `4.2-cc8-hidden-shingles` | 4.2-alternation | As the made-up key, with no `x` on any of A3's values and nothing removed |
+| `4.2-cc8-false-sketch` | 4.2-alternation | A3's committed sketch and template are another request's, so the re-roll rule misses it; A1 and A2 carry A3's text with its true values |
+| `4.2-cc8-made-up-key` | 4.2-alternation | A3's sketch and template are under a key of the client's own; A1 and A2 carry the same text with other values |
 | `4.2-cc8-false-class` | 4.2-alternation | B2 is the go-ahead `looks good`, committed with class substantive |
 | `4.2-cc8-inflated-length` | 4.2-alternation | B2's `len_chars` and `typed_len_est` say 450 for its 60 characters; the typing module is off |
-| `4.2-cc8-removed-spans` | 4.2-alternation | As the made-up key, with three words of A3 removed by hand so no shingle of A3 shows its text |
+| `4.2-cc8-removed-spans` | 4.2-alternation | As the made-up key, with three words of A3 removed by hand, so CC8 can compare A3 with nothing |
 | `4.2-cc9-parent-class` | 4.2-alternation | A second process files a startup under the live session's key and names a multiplexer parent; the first named Terminal |
 | `4.2-cc11-pasted` | 4.2-alternation | B2 was pasted with Cmd-V and the paste wasn't marked: three key-downs for 60 typed characters |
 | `6.2-clean` | 6.2 | Nothing the checks object to: the base with its commit's server clocks and forge lookup |
@@ -65,7 +64,7 @@ Each scenario's `expected.json` tells its story, lists its edits and notes what 
 | `events.jsonl` | Every device's events, in arrival order | every scenario |
 | `ledger.json` | The client's metadata reveal, and the rows the server stored for each batch | every scenario |
 | `commits.json` | What the server holds for each commit: its clocks and the forge's answer | the `6.2-*` and `6.3-*` scenarios |
-| `challenge.json` | The draw, and each drawn prompt's text reveal and shingle reveal | the `4.2-*` scenarios |
+| `challenge.json` | The draw, and each drawn prompt's text reveal | the `4.2-*` scenarios |
 | `typing.json` | The typing module's per-slot key-down counts | the `4.2-*` scenarios but `4.2-cc8-inflated-length`, whose Mac has the module off |
 
 ### `expected.json`
@@ -106,7 +105,7 @@ Bodies follow ledger-v1.md 4.5: `{"n": nonce, "e": the event after Event.Shareab
 
 ### `challenge.json`
 
-`device_id`, the `pool` of `seq`s (DESIGN 7.5 step 4: human prompts in `P` and `W` that opened a credited anchor), `k`, and `drawn[]`. Every pool here is smaller than `CHALLENGE_K` = 10, so the draw takes all of it, and the seed doesn't matter. Each drawn prompt has its `seq`, its `turn_key`, `text`, its redacted reveal as ledger-v1.md 10.3 gives it, and `cc8`, the per-shingle values of 10.8, ascending, each with its shingle's text unless the shingle touches a removed span. The committed `f` and `c` are in the prompt's body in `ledger.json`. The scenarios have no agent text, so the reveal of the agent message each prompt answered isn't here. CC8 doesn't read it.
+`device_id`, the `pool` of `seq`s (DESIGN 7.5 step 4: human prompts in `P` and `W` that opened a credited anchor), `k`, and `drawn[]`. Every pool here is smaller than `CHALLENGE_K` = 10, so the draw takes all of it, and the seed doesn't matter. Each drawn prompt has its `seq`, its `turn_key` and `text`, its redacted reveal as ledger-v1.md 10.3 gives it. No keyed value is revealed (DESIGN 7.3). The committed `f` and `c` are in the prompt's body in `ledger.json`. The scenarios have no agent text, so the reveal of the agent message each prompt answered isn't here. CC8 doesn't read it.
 
 ### `typing.json`
 
@@ -114,7 +113,7 @@ Bodies follow ledger-v1.md 4.5: `{"n": nonce, "e": the event after Event.Shareab
 
 ### The live buckets
 
-CC5 and CC6 read the minute buckets the server received live, which a scenario doesn't list. Each device's live buckets are its own re-score: `pkg/score` over its events at the parameter table the scorer runs with (0.3.0 since D-relayed). It takes content-derived features from the bodies' `f` where they exist, as the server does (DESIGN 6.2 D18), and from the base fixture's `prompts.json` otherwise. Then `live.mutations` apply. The one mutation, `move_project`, gives every credited slot of one minute the `to` project instead of `from`, and states the seconds that minute holds.
+CC5 and CC6 read the minute buckets the server received live, which a scenario doesn't list. Each device's live buckets are its own re-score: `pkg/score` over its events at the parameter table the scorer runs with (0.3.0 since D-relayed). It takes content-derived features from the bodies' `f` where they exist, as the server does (DESIGN 6.2 D18), and from the base fixture's `prompts.json` otherwise. It derives each prompt's class from the body's fields, as `pkg/score` does, and never reads `f.pc`. Then `live.mutations` apply. The one mutation, `move_project`, gives every credited slot of one minute the `to` project instead of `from`, and states the seconds that minute holds.
 
 ## How each check is read
 
@@ -127,7 +126,7 @@ CC5 and CC6 read the minute buckets the server received live, which a scenario d
 - **CC5.** Every device's live buckets in `W`, in every project. A slot is credited twice when two devices, or two projects of one device, credit it. The slot tables `gen.py` states hold each device's credited seconds, not its projects, because SM 3.1 gives each slot of a device one project; so in these scenarios only two devices can credit a slot twice, and the two-project case waits for `pkg/score`. `merge_dropped_s` is what SM 3.4's merge drops, which is WP-SV7's job; CC5 changes no credit.
 - **CC6.** Each device's live buckets against its re-score, minute by minute and slot by slot, in the minutes of W that CC7 doesn't hold: a held minute's records didn't verify, so there is nothing to reproduce it from. A minute that differs is held (DESIGN 6.2 D7).
 - **CC7.** For each device, every batch the server stored between `rescore_range`'s `first_b` and `last_b` is revealed (`missing_batches`), and batch numbers and `seq` rise by 1 with no gap. Each revealed batch's entries give the `n`, `R_b` and `H_b` the server stored, with `H_b` computed from the head the server stored before it, and each body agrees with its header (ledger-v1.md 4.5, 9). A batch that is missing or fails holds every minute its records could fall in: from the minute of the last verified record before it to the minute of the first verified record after it, or of the batch's `received_at` when no verified record follows. Its own revealed records can't narrow that, because they are what failed to verify. `held_minutes` counts the held minutes in W, and each item gives the span as `between`.
-- **CC8.** For each drawn prompt (ledger-v1.md 10.8), the shingle reveal is well formed and its values give the body's `f.mh` (`bad_entry`, `sketch`). When nothing was removed, the shown shingles are exactly the text's and every value shows one (`shingles`); the body's `len_chars` is the revealed text's length in code points and its `typed_len_est` is no more than that (`lengths`); and the class SM 2.2 gives the text, with the typed length bounded by the text's, is `f.pc` (`class`). Across the device's reveals, a shingle, a kind and a text, that shows two values fails every reveal showing one of them (`conflict`, with `conflicts_with` naming the reveals that show another value), and `shingle_conflicts` counts such shingles, so neither depends on the order of the reveals. The kind, word or character shingles, follows from the number of words the text reveal covers, removed ones included.
+- **CC8.** For each drawn prompt, with no keyed value revealed (DESIGN 7.3, ledger-v1.md 10.8). On any reveal, a line the reveal shows whole that matches `E1` to `E6` needs an `es` in the body's `f` (`es`); no text here has one. When nothing was removed, the body's `len_chars` is the revealed text's length in code points and its `typed_len_est` is no more than that (`lengths`), its `low_effort` is SM 2.2's go-ahead test of the text (`low_effort`), its `f` has no `es`, since the text has no error signature (`es`), and the class SM 2.2 gives the text, with the body's `answers_question` and the typed length bounded by the text's, is `f.pc` (`class`). Between the drawn prompts whose reveals removed nothing, two with the same normalized text must carry the same `th` and `mh`, and every prompt of a text that breaks this fails (`conflict`, with `conflicts_with` naming the others); `feature_conflicts` counts such texts, so neither depends on the order of the reveals. A prompt whose reveal removed a word gets only the `es` rule.
 - **CC9.** For each harness session of `P` with records in `W`, every record names one project. Every turn an `agent.output`, `agent.interrupt`, `agent.queue` or `agent.stop` names has a `prompt.submit` in the session, or ends with a stop hook's continuation. Every `session.start` of the session has one `parent_class`.
 - **CC10.** For each `editor.activity` of `P` in `W` of an anchor's kind (SM 2.3: an edit or save with `edit_source` `human`, `tab` or `unknown`, or a navigate, open, debug or task), the last `os.focus` of the same device at or before it is an editor whose `focus_project` is the record's project. Both halves count: `6.3-cc10-injected-heartbeats` fails the first, `6.3-cc10-wrong-project` the second alone.
 - **CC11.** Only with the typing module on. For each human prompt with typed characters and a typing part in its lead (`substantive`, `error_paste` or `answer`), count the key-downs, minus the injected ones, in the slots its lead window overlaps whose focus, the last `os.focus` at or before the slot's end, is the window hosting the prompt's session (the editor, for an IDE session), leaving out slots an earlier prompt already counted. The count is compared with the characters the lead's typing part credits, `min(typed_len_est, 450)`, since SM 2.3 credits at most `COMPOSE_MAX_S` = 300 s of typing at 1.5 characters a second. DESIGN says no more than "too low", so the threshold `pkg/check` will use is pending Karim's decision (erratum, For Karim item 2). No verdict here rests on it: each prompt's count is at least its credited characters or under a quarter of them, which the erratum's proposal, a quarter, and every stricter reading up to all of them agree on, and the generator refuses a count in between. A prompt with an injected key-down in its lead fails too; no scenario has one.

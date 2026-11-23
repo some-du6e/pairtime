@@ -149,6 +149,203 @@ func SetKeepText(name string, keep bool) error {
 	return rewrite(name, !keep, byHand, func(text string) string { return patchPrivacy(text, keep) }, func(c *Config) { c.Privacy.TextOff = !keep })
 }
 
+// SetShadow sets shadow under [display] in the config.toml at name to on,
+// display.shadow (DESIGN 6.7 step 2): what pairtime install
+// --calibration-volunteer does. A [display] table without the setting
+// gets it just under its header, a file with no [display] table gets one
+// at its end, and a display.shadow written as a dotted key at the top of
+// the file is changed where it is. Any other change, a file that says so
+// already, which it leaves alone, and a file it refuses are as SetOnline
+// says. It edits what the file says, also after the scoring freeze, when
+// Parse reads the setting as off.
+func SetShadow(name string, on bool) error {
+	change, apply := shadowEdit(on)
+	return rewrite(name, false, shadowByHand(on), change, apply)
+}
+
+// PlanShadow returns what SetShadow(name, on) would do to the config.toml
+// at name, and writes nothing: the file as it is, nil when there is none,
+// and the file as SetShadow would write it, nil when it would write none.
+// The two are the same when SetShadow would leave the file alone. It
+// refuses what SetShadow refuses, with the same error. The file can still
+// change before SetShadow runs, which then makes the same change to it.
+func PlanShadow(name string, on bool) (now, then []byte, err error) {
+	if name, err = editTarget(name); err != nil {
+		return nil, nil, err
+	}
+	data, err := os.ReadFile(name)
+	text := string(data)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		data, text = nil, defaultFile
+	case err != nil:
+		return nil, nil, err
+	}
+	change, apply := shadowEdit(on)
+	out, err := edited(text, shadowByHand(on)(name, text), change, apply)
+	switch {
+	case err != nil:
+		return nil, nil, err
+	case data == nil && out == text:
+		// No file, and the default says so already: SetShadow writes none.
+		return nil, nil, nil
+	}
+	return data, []byte(out), nil
+}
+
+// shadowEdit is SetShadow's change to a config.toml's text, and what it
+// changes in the file's Config.
+func shadowEdit(on bool) (change func(text string) string, apply func(*Config)) {
+	return func(text string) string { return patchDisplay(text, on) }, func(c *Config) { c.Display.Shadow = on }
+}
+
+// shadowByHand says what to write by hand when SetShadow can't, for the
+// file name, which holds text.
+func shadowByHand(on bool) func(name, text string) string {
+	return func(name, text string) string {
+		body := strings.TrimPrefix(text, bom)
+		switch md, err := toml.Decode(body, &fileConfig{}); {
+		case displayVariant(body):
+			// Parse reads [display] and shadow only as written in lower
+			// case, and the decoder would put either spelling in.
+			return fmt.Sprintf("write the table as [display] and the setting as shadow, in lower case, with shadow = %t, in %s by hand", on, name)
+		case err == nil && md.IsDefined("display", "shadow"):
+			// Where the setting is, as in an inline table: adding it again
+			// would set it twice.
+			return fmt.Sprintf("change shadow to %t where %s sets it, by hand", on, name)
+		}
+		return fmt.Sprintf("set shadow = %t under [display] in %s by hand, or, if the file has no [display] line, add the lines [display] and shadow = %t at its end", on, name, on)
+	}
+}
+
+// patchDisplay rewrites the shadow line of [display], or the
+// display.shadow line at the top of the file, and adds it where it is
+// missing: just under the [display] header, beside the display. lines at
+// the top that make the table without one, or with a [display] table at
+// the end of the file. Parse reads the table and the setting only as
+// written in lower case, so those are the ones it looks for, and a file
+// that spells either in another case comes back as it is (displayVariant),
+// which edited then refuses.
+func patchDisplay(text string, on bool) string {
+	if displayVariant(text) {
+		return text
+	}
+	if cfg, _, _ := parseAsWritten([]byte(text)); cfg.Display.Shadow == on {
+		// The file says so already, wherever it says it, such as in an
+		// inline table, which a [display] header added after it would
+		// define twice.
+		return text
+	}
+	nl := "\n"
+	if strings.Contains(text, "\r\n") {
+		nl = "\r\n"
+	}
+	lines := strings.SplitAfter(text, "\n")
+	value := strconv.FormatBool(on)
+	keyLine := "shadow = " + value
+	table := ""
+	done := false
+	header, dotted := -1, -1
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(t, "["):
+			table = tableName(t)
+			if table == "display" && header < 0 {
+				header = i
+			}
+		case table == "display" && !done && isKey(t, "shadow"):
+			lines[i] = setBool(line, value, keyLine)
+			done = true
+		case table == "" && isComment(t):
+		case table == "" && len(keyParts(t)) > 1 && keyParts(t)[0] == "display":
+			dotted = i
+			if !done && slices.Equal(keyParts(t), []string{"display", "shadow"}) {
+				lines[i] = setBool(line, value, "display."+keyLine)
+				done = true
+			}
+		}
+	}
+	if !done && header < 0 && dotted >= 0 {
+		// The table is made of dotted keys, and a header would make it twice.
+		if !strings.HasSuffix(lines[dotted], "\n") {
+			lines[dotted] += nl // the file's last line
+		}
+		lines = slices.Insert(lines, dotted+1, "display."+keyLine+nl)
+		done = true
+	}
+	if !done && header >= 0 {
+		if !strings.HasSuffix(lines[header], "\n") {
+			lines[header] += nl // the file's last line
+		}
+		lines = slices.Insert(lines, header+1, keyLine+nl)
+		done = true
+	}
+	out := strings.Join(lines, "")
+	if !done {
+		if out != "" && !strings.HasSuffix(out, "\n") {
+			out += nl
+		}
+		if out != "" {
+			out += nl
+		}
+		out += "[display]" + nl + keyLine + nl
+	}
+	return out
+}
+
+// displayVariant reports whether text spells the [display] table, or the
+// shadow setting in it, in another upper and lower case than Parse reads,
+// as a header, at the top of the file, or under [display]: [Display], a
+// top-level Display.shadow, or Shadow under [display]. The decoder takes
+// any case, and with two spellings it is chance which value wins.
+func displayVariant(text string) bool {
+	variant := func(got, want string) bool { return got != want && strings.EqualFold(got, want) }
+	table := ""
+	for _, line := range strings.Split(text, "\n") {
+		t := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(t, "["):
+			table = tableName(t)
+			if path, ok := tablePath(table); ok && variant(path[0], "display") {
+				return true
+			}
+		case isComment(t):
+		case table == "":
+			parts := keyParts(t)
+			if len(parts) > 0 && variant(parts[0], "display") {
+				return true
+			}
+			if len(parts) == 2 && parts[0] == "display" && variant(parts[1], "shadow") {
+				return true
+			}
+		case table == "display":
+			if parts := keyParts(t); len(parts) > 0 && variant(parts[0], "shadow") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// keyParts returns the parts of the key the trimmed line t sets, without
+// their quotes, such as display and shadow for display.shadow = true, or
+// nil for a line that sets none.
+func keyParts(t string) []string {
+	key, _, ok := strings.Cut(t, "=")
+	if !ok {
+		return nil
+	}
+	var parts []string
+	for _, p := range strings.Split(key, ".") {
+		parts = append(parts, unquote(strings.TrimSpace(p)))
+	}
+	return parts
+}
+
+// isComment reports whether the trimmed line t is a comment or empty.
+func isComment(t string) bool { return t == "" || strings.HasPrefix(t, "#") }
+
 // ShowName turns on the name of the project key in the config.toml at
 // name, with label, which projectname.ValidLabel must take: its
 // [projects.<key>] table gets name = label and online = true, and is added
@@ -239,13 +436,11 @@ func rewrite(name string, always bool, byHand func(name, text string) string, ch
 	editMu.Lock()
 	defer editMu.Unlock()
 	lock := filepath.Join(filepath.Dir(name), LockName)
-	if fi, err := os.Lstat(name); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
-		target, err := filepath.EvalSymlinks(name)
-		if err != nil {
-			return fmt.Errorf("config: config.toml is a link pairtime can't follow (%v), so it didn't change it", err)
-		}
-		name = target
+	target, err := editTarget(name)
+	if err != nil {
+		return err
 	}
+	name = target
 	release, lockErr := home.LockFile(lock, lockWait)
 	if errors.Is(lockErr, home.ErrBusy) {
 		return fmt.Errorf("config: pairtime couldn't lock config.toml to change it (%v), so it didn't; try again, or %s", lockErr, byHand(name, ""))
@@ -298,6 +493,22 @@ func rewrite(name string, always bool, byHand func(name, text string) string, ch
 	}
 }
 
+// editTarget returns the file an edit of the config.toml at name changes:
+// the file a symlink there points to, so the link stays a link, or name
+// itself. A link that points nowhere, or that can't be followed, is an
+// error, since writing a new file in its place would undo the link.
+func editTarget(name string) (string, error) {
+	fi, err := os.Lstat(name)
+	if err != nil || fi.Mode()&fs.ModeSymlink == 0 {
+		return name, nil
+	}
+	target, err := filepath.EvalSymlinks(name)
+	if err != nil {
+		return "", fmt.Errorf("config: config.toml is a link pairtime can't follow (%v), so it didn't change it", err)
+	}
+	return target, nil
+}
+
 // readEdited reads the config.toml at name for an edit: defaultFile when
 // there is none.
 func readEdited(name string) ([]byte, error) {
@@ -308,25 +519,51 @@ func readEdited(name string) ([]byte, error) {
 	return data, err
 }
 
+// UnparsedError is the error an edit returns for a config.toml that
+// doesn't parse. Its Error quotes the decoder's message, which can hold
+// what the teen wrote in the file, such as a key or a value it couldn't
+// read. A screen the teen may share, as pairtime install's consent screen,
+// shows only Line and Hand instead.
+type UnparsedError struct {
+	// Line is the line the file stops parsing at, or 0 when the decoder
+	// doesn't say, as for a value of the wrong type.
+	Line int
+	// Hand says what to write in the file by hand instead.
+	Hand string
+	err  error
+}
+
+func (e *UnparsedError) Error() string {
+	return fmt.Sprintf("config: config.toml doesn't parse, so pairtime didn't change it (%v); %s", e.err, e.Hand)
+}
+
+// Unwrap returns the decoder's error.
+func (e *UnparsedError) Unwrap() error { return e.err }
+
 // edited returns text with change made to it without its byte order mark,
 // which it keeps, once it checked that the result parses to what text
 // parsed to with apply done to it, and to nothing else. hand says what to
 // write by hand instead, for an error.
 func edited(text, hand string, change func(text string) string, apply func(*Config)) (string, error) {
 	if _, err := toml.Decode(text, &fileConfig{}); err != nil {
-		return "", fmt.Errorf("config: config.toml doesn't parse, so pairtime didn't change it (%v); %s", err, hand)
+		u := &UnparsedError{Hand: hand, err: err}
+		var pe toml.ParseError
+		if errors.As(err, &pe) {
+			u.Line = pe.Position.Line
+		}
+		return "", u
 	}
 	if strings.Contains(text, `"""`) || strings.Contains(text, `'''`) {
 		// A multi-line string could hold a line that looks like a key.
 		return "", fmt.Errorf("config: config.toml has a multi-line string, so pairtime didn't change it; %s", hand)
 	}
-	before, _ := Parse([]byte(text))
+	before, _, _ := parseAsWritten([]byte(text))
 	body, found := strings.CutPrefix(text, bom)
 	out := change(body)
 	if found {
 		out = bom + out
 	}
-	after, _ := Parse([]byte(out))
+	after, _, _ := parseAsWritten([]byte(out))
 	want := before
 	want.Projects = maps.Clone(before.Projects)
 	if want.Projects == nil {
