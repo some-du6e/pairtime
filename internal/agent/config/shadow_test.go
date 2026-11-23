@@ -310,7 +310,9 @@ func TestSetShadow(t *testing.T) {
 	}
 
 	t.Run("a file with both spellings of the setting is refused every time, and never changed", func(t *testing.T) {
-		const file = "[display]\nshadow = false\n[Display]\nshadow = false\n"
+		// The spellings say different things, so a decode that picked one
+		// of them by map order would let some of the tries through.
+		const file = "[display]\nshadow = false\n[Display]\nshadow = true\n"
 		name := filepath.Join(t.TempDir(), "config.toml")
 		if err := os.WriteFile(name, []byte(file), 0o600); err != nil {
 			t.Fatal(err)
