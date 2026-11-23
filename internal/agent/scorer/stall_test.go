@@ -37,7 +37,7 @@ func TestStallNote(t *testing.T) {
 		{name: "with samples that stopped while records came, the note says how long none has come",
 			fb: at - 90*minute, sampled: at - 90*minute,
 			want: []string{"ends 1 h 30 min before", "no presence sample has come for 1 h 30 min",
-				"or for 2 h of records the agent stamps itself (hooks, its own watchers, an agent app's reader) without one"}},
+				"or for 2 h of records the agent stamps itself (hooks, its own watchers, an agent app's reader) without one, and then any record 5 min later"}},
 		{name: "with samples coming and a browser in front for two hours, a lookup's hold under SM 2.5, there is no note",
 			fb: at - 2*60*minute, sampled: at - minute, focus: event.AppBrowser},
 		{name: "with samples coming and a chat app in front, a lookup's hold under SM 2.5, there is no note",
@@ -51,7 +51,7 @@ func TestStallNote(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := stallNote(at, c.fb, pending, 2*60*minute, c.sampled, c.focus)
+			got := stallNote(at, c.fb, pending, 2*60*minute, 5*minute, c.sampled, c.focus)
 			if len(c.want) == 0 {
 				if got != "" {
 					t.Errorf("note %q, want none", got)

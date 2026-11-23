@@ -28,8 +28,11 @@ type window struct {
 	gaps  runGaps
 	// ttl is BUCKET_TTL_S, how long after a record of the presence
 	// sampler's another record the agent stamps itself may come before the
-	// sampler's record has no reach left (stamps, cutBy).
-	ttl int64
+	// sampler's record has no reach left (stamps, cutBy), and late is
+	// PENDING_WINDOW_S - READ_HORIZON_S, pkg/score's rules.late, how long
+	// after such a record the newest record must be before the cut takes
+	// effect.
+	ttl, late int64
 }
 
 // runGaps are the longest silences of its agent's records that pkg/score
@@ -110,25 +113,36 @@ func (w *window) records() []event.Event {
 
 // cutBy returns the t of the latest record the agent stamped itself
 // (stamps) that comes after the carry's records of the presence sampler's
-// and before the sampler's next record: the carry's (carry.Stamped), and
-// the window's that come before the window's first record of the
-// sampler's in record order. pkg/score ends a record's reach only for such
-// a record dated more than BUCKET_TTL_S after it (sampledReaches), so a
-// silence of the sampler's longer than Lookback that ends with a sample,
-// or a suspend that long, keeps the carried record's reach, as one Step
-// over every record does. A stamped record after the window's first
-// record of the sampler's can end only that one's reach or a later one's,
-// which the window holds itself.
+// and before the sampler's next record, and whose cut has taken effect:
+// the carry's (carry.Stamped), and the window's that come before the
+// window's first record of the sampler's in record order and are late,
+// PENDING_WINDOW_S - READ_HORIZON_S, before the newest. pkg/score ends a
+// record's reach only for such a record dated more than BUCKET_TTL_S after
+// it, and only once the newest record is late past it (sampledReaches),
+// so a silence of the sampler's longer than Lookback that ends with a
+// sample, or a suspend that long, keeps the carried record's reach, and so
+// does a cut still waiting, as in one Step over every record. A stamped
+// record after the window's first record of the sampler's can end only
+// that one's reach or a later one's, which the window holds itself.
 func (w *window) cutBy() int64 {
+	if len(w.recs) == 0 {
+		return w.carry.Stamped
+	}
 	var first *event.Event
+	high := w.recs[0].ev.T
 	for i := range w.recs {
-		if e := &w.recs[i].ev; sampler(e) && (first == nil || recordCmp(e, first) < 0) {
+		e := &w.recs[i].ev
+		high = max(high, e.T)
+		if sampler(e) && (first == nil || recordCmp(e, first) < 0) {
 			first = e
 		}
 	}
-	at := w.carry.Stamped
+	var at int64
+	if w.carry.Stamped <= high-w.late {
+		at = w.carry.Stamped
+	}
 	for i := range w.recs {
-		if e := &w.recs[i].ev; stamps(e) && (first == nil || recordCmp(e, first) < 0) {
+		if e := &w.recs[i].ev; stamps(e) && e.T <= high-w.late && (first == nil || recordCmp(e, first) < 0) {
 			at = max(at, e.T)
 		}
 	}
@@ -406,11 +420,14 @@ func (c *carry) prune(from int64) {
 // (window.cutBy), is dated more than ttl, BUCKET_TTL_S, after its own time.
 // pkg/score takes the slots after such a record for a never-sampling
 // device's and lets it keep no clock (SM 2.1), and dated again at from
-// minus carryGraceMS it would look like a sample the agent took then. That
-// cut has taken effect: pkg/score waits PENDING_WINDOW_S - READ_HORIZON_S
-// after it before it does, keeping FinalBefore at the sampler's record
-// meanwhile, and a record is carried only once FinalBefore is Lookback
-// past it.
+// minus carryGraceMS it would look like a sample the agent took then. Only
+// a cut that has taken effect counts, as in pkg/score, which keeps
+// FinalBefore at the sampler's record until then, and also while the
+// sampler's next record, more than BUCKET_TTL_S later, is less than
+// PENDING_WINDOW_S - READ_HORIZON_S behind the newest (reach.held). A
+// record is carried only once FinalBefore is Lookback past it, so the
+// carry sees a cut still waiting only from a record that arrives later
+// than that allows.
 func (c *carry) records(out []event.Event, from int64, g runGaps, stamped, ttl int64) []event.Event {
 	grace := from - carryGraceMS
 	for _, e := range []*event.Event{c.Focus, c.Power, c.Presence} {

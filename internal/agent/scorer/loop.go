@@ -453,7 +453,8 @@ func (l *Loop) open() error {
 	c.Device = chain.DeviceID
 	l.cur = c
 	l.base = c.Batch
-	l.win = window{from: c.From, carry: c.Carry, gaps: l.gaps, ttl: l.opts.Params.Int(params.BUCKET_TTL_S) * 1000}
+	l.win = window{from: c.From, carry: c.Carry, gaps: l.gaps, ttl: l.opts.Params.Int(params.BUCKET_TTL_S) * 1000,
+		late: (l.opts.Params.Int(params.PENDING_WINDOW_S) - l.opts.Params.Int(params.READ_HORIZON_S)) * 1000}
 	for _, date := range c.Days {
 		l.days[date] = true
 	}

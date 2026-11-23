@@ -54,7 +54,7 @@ func (l *Loop) watch(b ledger.Batch) {
 	msg := ""
 	if high > 0 {
 		at := min(high, b.SealedAt.UnixMilli())
-		msg = stallNote(at, l.cur.FinalBefore, l.pendingMS, l.win.ttl, sampled, focus)
+		msg = stallNote(at, l.cur.FinalBefore, l.pendingMS, l.win.ttl, l.win.late, sampled, focus)
 	}
 	if msg != l.stallMsg {
 		if msg != "" {
@@ -72,15 +72,16 @@ func (l *Loop) watch(b ledger.Batch) {
 // allows, which is the samples having stopped while records came: then
 // the minutes wait for the next sample, or for ttl, BUCKET_TTL_S, of the
 // records the agent stamps itself without one (hooks, its own watchers, an
-// agent app's reader; never a log reader's or the bridge's), after which
-// pkg/score takes them for a never-sampling device's (SM 2.1). It returns
-// "" for no lag, and for a lag while samples come and a browser or chat
-// app is in front: SM 2.5 holds the minutes after credit until such a run
-// ends, since it may be a lookup, which is the rule working, not a fault,
-// and doctor's agent line would call it one. sampled is the newest
-// presence sample or power record, 0 for none, and focus the app class of
-// the newest os.focus.
-func stallNote(at, fb, pending, ttl, sampled int64, focus event.AppClass) string {
+// agent app's reader; never a log reader's or the bridge's) and then any
+// record late, PENDING_WINDOW_S - READ_HORIZON_S, after the one that ended
+// those, after which pkg/score takes them for a never-sampling device's
+// (SM 2.1). It returns "" for no lag, and for a lag while samples come and
+// a browser or chat app is in front: SM 2.5 holds the minutes after credit
+// until such a run ends, since it may be a lookup, which is the rule
+// working, not a fault, and doctor's agent line would call it one. sampled
+// is the newest presence sample or power record, 0 for none, and focus the
+// app class of the newest os.focus.
+func stallNote(at, fb, pending, ttl, late, sampled int64, focus event.AppClass) string {
 	lag := at - fb
 	if lag <= pending+stallMS {
 		return ""
@@ -91,8 +92,8 @@ func stallNote(at, fb, pending, ttl, sampled int64, focus event.AppClass) string
 	case sampled == 0:
 		msg += ": presence is unknown on this computer, so the scorer has no presence sample to keep time by"
 	case at-sampled > pending+stallMS:
-		msg += fmt.Sprintf(": no presence sample has come for %s, so they wait for the next one, or for %s of records the agent stamps itself (hooks, its own watchers, an agent app's reader) without one",
-			lasting(at-sampled), lasting(ttl))
+		msg += fmt.Sprintf(": no presence sample has come for %s, so they wait for the next one, or for %s of records the agent stamps itself (hooks, its own watchers, an agent app's reader) without one, and then any record %s later",
+			lasting(at-sampled), lasting(ttl), lasting(late))
 	case focus == event.AppBrowser || focus == event.AppChatApp:
 		return ""
 	}
