@@ -312,58 +312,66 @@ func tamper(t *testing.T, dir string, fn func(payload []byte)) {
 }
 
 func TestSealed(t *testing.T) {
-	tests := []struct {
-		name   string
-		change func(payload []byte)
-	}{
-		{"an entry whose ciphertext changed doesn't open", func(p []byte) { p[len(p)-tagSize-1] ^= 1 }},
-		{"an entry whose tag changed doesn't open", func(p []byte) { p[len(p)-1] ^= 1 }},
-		{"an entry moved to another record's number doesn't open", func(p []byte) { binary.BigEndian.PutUint64(p, 2) }},
-		{"an entry whose nonce changed doesn't open", func(p []byte) { p[9] ^= 1 }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
+	// changed keeps an entry, changes it on disk with change, and opens
+	// the vault again: neither its number nor the next one reads back.
+	changed := func(change func(payload []byte)) func(t *testing.T, dir string) {
+		return func(t *testing.T, dir string) {
 			v, _ := open(t, dir, 1, keyA, 1, true)
 			v.Keep(day1, 1, []byte("fix the nav bar"), nil)
 			v.Close()
-			tamper(t, dir, tt.change)
+			tamper(t, dir, change)
 			v, _ = open(t, dir, 1, keyA, 3, true)
 			for s := uint64(1); s <= 2; s++ {
 				if got, err := v.read(s, whatText); err == nil {
 					t.Errorf("record %d's text opened to %q", s, got)
 				}
 			}
-		})
+		}
 	}
-	t.Run("an entry whose kind changed doesn't open as the other kind", func(t *testing.T) {
-		dir := t.TempDir()
-		v, _ := open(t, dir, 1, keyA, 1, true)
-		v.Keep(day1, 1, []byte(`["src/nav.js"]`), nil)
-		v.Close()
-		tamper(t, dir, func(p []byte) { p[8] = whatPaths })
-		v, _ = open(t, dir, 1, keyA, 2, true)
-		if got, err := v.Paths(1); err == nil {
-			t.Errorf("a text opened as paths %q", got)
-		}
-	})
-	t.Run("another device key's entries don't open with this key", func(t *testing.T) {
-		dir := t.TempDir()
-		v, _ := open(t, dir, 1, keyA, 1, true)
-		v.Keep(day1, 1, []byte("fix the nav bar"), nil)
-		v.Close()
-		other, err := Open(Options{Dir: dir, Keys: testKeys(t, 2), KeyID: keyA})
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer other.Close()
-		if err := other.Reconcile(2); err != nil {
-			t.Fatal(err)
-		}
-		if got, err := other.read(1, whatText); !errors.Is(err, errSealed) {
-			t.Errorf("read under another K_vault = %q, %v; want errSealed", got, err)
-		}
-	})
+	tests := []struct {
+		name string
+		run  func(t *testing.T, dir string)
+	}{
+		{"an entry whose ciphertext changed doesn't open", changed(func(p []byte) { p[len(p)-tagSize-1] ^= 1 })},
+		{"an entry whose tag changed doesn't open", changed(func(p []byte) { p[len(p)-1] ^= 1 })},
+		{"an entry moved to another record's number doesn't open", changed(func(p []byte) { binary.BigEndian.PutUint64(p, 2) })},
+		{"an entry whose nonce changed doesn't open", changed(func(p []byte) { p[9] ^= 1 })},
+		{
+			name: "an entry whose kind changed doesn't open as the other kind",
+			run: func(t *testing.T, dir string) {
+				v, _ := open(t, dir, 1, keyA, 1, true)
+				v.Keep(day1, 1, []byte(`["src/nav.js"]`), nil)
+				v.Close()
+				tamper(t, dir, func(p []byte) { p[8] = whatPaths })
+				v, _ = open(t, dir, 1, keyA, 2, true)
+				if got, err := v.Paths(1); err == nil {
+					t.Errorf("a text opened as paths %q", got)
+				}
+			},
+		},
+		{
+			name: "another device key's entries don't open with this key",
+			run: func(t *testing.T, dir string) {
+				v, _ := open(t, dir, 1, keyA, 1, true)
+				v.Keep(day1, 1, []byte("fix the nav bar"), nil)
+				v.Close()
+				other, err := Open(Options{Dir: dir, Keys: testKeys(t, 2), KeyID: keyA})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer other.Close()
+				if err := other.Reconcile(2); err != nil {
+					t.Fatal(err)
+				}
+				if got, err := other.read(1, whatText); !errors.Is(err, errSealed) {
+					t.Errorf("read under another K_vault = %q, %v; want errSealed", got, err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) { tt.run(t, t.TempDir()) })
+	}
 }
 
 // keepAll keeps texts for records from..to in day's file.
