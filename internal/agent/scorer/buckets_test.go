@@ -3,10 +3,12 @@
 package scorer
 
 import (
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/timelines"
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/score"
 )
@@ -19,7 +21,7 @@ func creditEntry(p string, r event.Reason, ev event.Evidence, halves int64, labe
 }
 
 func TestSlotSummary(t *testing.T) {
-	const slot = 1795046505000 // 2026-11-19T00:41:45Z, a slot boundary
+	const slot = 1795046505000 // 2026-11-19T00:01:45Z, a slot boundary
 	cases := []struct {
 		name    string
 		credits []score.Credited
@@ -78,14 +80,49 @@ func TestSlotSummary(t *testing.T) {
 	}
 }
 
+// everyFixture is every timeline under testdata/timelines: the top-level
+// fixtures, then the side-door and lookback cases in their own
+// directories, as pkg/score's golden tests read them (goldenCases).
+func everyFixture(t *testing.T) []*timelines.Fixture {
+	t.Helper()
+	root, err := timelines.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := loadFixtures(t)
+	for _, dir := range []string{"sidedoor", "lookback"} {
+		names, err := timelines.List(filepath.Join(root, dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(names) == 0 {
+			t.Fatalf("no timelines under testdata/timelines/%s", dir)
+		}
+		for _, n := range names {
+			f, err := timelines.Load(root, dir+"/"+n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // TestSlotSummaryMatchesPkgScore holds the agent's slot summary to
 // pkg/score's Minute.Bucket, the summary SM 5.1 uploads, on every timeline
-// fixture: each slot pkg/score derives gets the same project, credited
-// seconds, level and labels from both. The reason may differ: slotSummary
-// takes the largest entry's, Bucket the reason with the most credit.
+// under testdata/timelines, the side-door and lookback cases included:
+// each slot pkg/score derives gets the same project, credited seconds,
+// level and labels from both. The reason may differ: slotSummary takes the
+// largest entry's, Bucket the reason with the most credit. The side-door
+// timelines hold slots with labels, so a summary that dropped one fails
+// here. Where a timeline has a slot whose largest entry isn't at its
+// weakest level, a summary that took the largest entry's level fails too;
+// TestSlotSummary's mixed slot holds that rule either way.
 func TestSlotSummaryMatchesPkgScore(t *testing.T) {
 	table := testTable()
-	for _, f := range loadFixtures(t) {
+	var disagree, labeled int
+	for _, f := range everyFixture(t) {
 		t.Run(f.Name+": the agent's slots claim what pkg/score's do", func(t *testing.T) {
 			_, out := score.Step(score.NewState(table, fixtureDevice(f)), f.Events)
 			var all score.Derived
@@ -96,6 +133,12 @@ func TestSlotSummaryMatchesPkgScore(t *testing.T) {
 				b := m.Bucket(score.BucketInfo{Table: table, Device: "d_test", State: event.StateFinal, Witness: event.Witnessed})
 				for _, s := range m.Slots {
 					got, want := slotSummary(s.Credit), b.Slots[(s.Slot-m.Start)/event.SlotMS]
+					if largestLevel(s.Credit) != weakestLevel(s.Credit) {
+						disagree++
+					}
+					if len(want.Lbl) > 0 {
+						labeled++
+					}
 					if got.Project == want.Project && got.Credited == want.Credited && got.Ev == want.Ev && slices.Equal(got.Lbl, want.Lbl) {
 						continue
 					}
@@ -106,4 +149,43 @@ func TestSlotSummaryMatchesPkgScore(t *testing.T) {
 			}
 		})
 	}
+	t.Run("the side-door timelines hold slots with labels, so a summary that drops one fails above", func(t *testing.T) {
+		if labeled == 0 {
+			t.Error("no timeline's slot has a label")
+		}
+	})
+	t.Run("a slot whose largest entry isn't at its weakest level, where the two rules disagree, is compared above", func(t *testing.T) {
+		if disagree == 0 {
+			t.Skip("no timeline has a slot whose largest entry isn't at its weakest level yet; TestSlotSummary's mixed slot holds the rule")
+		}
+	})
+}
+
+// largestLevel is the level of a slot's largest credited entry, the first
+// of them on a tie, the entry slotSummary takes the project and reason
+// from; "" for a slot nothing credited.
+func largestLevel(c score.Credit) event.Evidence {
+	best := -1
+	for i, e := range c.Credited {
+		if e.Halves > 0 && (best < 0 || e.Halves > c.Credited[best].Halves) {
+			best = i
+		}
+	}
+	if best < 0 {
+		return ""
+	}
+	return c.Credited[best].Level
+}
+
+// weakestLevel is the weakest level among a slot's credited entries, the
+// level pkg/score's Minute.Bucket gives the slot; "" for a slot nothing
+// credited.
+func weakestLevel(c score.Credit) event.Evidence {
+	var level event.Evidence
+	for _, e := range c.Credited {
+		if e.Halves > 0 {
+			level = weakest(level, e.Level)
+		}
+	}
+	return level
 }

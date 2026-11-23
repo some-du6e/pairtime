@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// testSlot is a slot boundary: 2026-11-19T00:41:45Z.
+// testSlot is a slot boundary: 2026-11-19T00:01:45Z.
 const testSlot = 1795046505000
 
 func testParams() string { return "sha256:" + strings.Repeat("9c", 32) }

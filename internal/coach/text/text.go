@@ -123,6 +123,17 @@ const (
 	KeyAgentSlow       Key = "agent_slow"
 	KeyAgentError      Key = "agent_error"
 	KeyStoreError      Key = "store_error"
+	// KeyFocusUnknown and KeyFocusUnknownLevelC are DESIGN 5.9's
+	// teen-facing focus-unknown sentence, which pairtime today and the
+	// dashboard's Today page show while the running agent says focus is
+	// unknown: the first stops at "in front", and the second, for once the
+	// agent says that time counts at level C (WP-SC8), goes on to where it
+	// counts. On GNOME, KeyGnomeNeedsLogin or KeyGnomeUnticked follows,
+	// for why pairtime's GNOME extension doesn't report focus.
+	KeyFocusUnknown       Key = "focus_unknown"
+	KeyFocusUnknownLevelC Key = "focus_unknown_level_c"
+	KeyGnomeNeedsLogin    Key = "gnome_needs_login"
+	KeyGnomeUnticked      Key = "gnome_unticked"
 )
 
 // placeholders lists the placeholders each phrase may use. A phrase that

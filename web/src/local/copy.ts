@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 // The words only the dashboard says: what pairtime counts, why a minute
-// counts at level A, B or C, what pending means, D-focus-unknown's
-// sentence, and what a page says when the agent's answer didn't come back.
-// Everything the CLI views say too, a kind, a reason, a level's short
-// words, the chess clock, comes from internal/coach/text/en.json through
-// text.ts, so both say a minute the same way (DESIGN 3.8). copy.test.ts
-// holds every sentence here, allSentences(), to the same rules as en.json:
-// nothing scolds, sets a target or counts a streak (PA 4.3, 4.4).
+// counts at level A, B or C, what pending means, and what a page says when
+// the agent's answer didn't come back. Everything the CLI views say too, a
+// kind, a reason, a level's short words, the chess clock, comes from
+// internal/coach/text/en.json through text.ts, so both say a minute the
+// same way (DESIGN 3.8). D-focus-unknown's sentence, which pairtime today
+// says too, is the exception: focusWords below and en.json each hold it,
+// and text_test.go's TestFocusWordsAreTheDashboards keeps the two the same.
+// copy.test.ts holds every sentence here, allSentences(), to the same
+// rules as en.json: nothing scolds, sets a target or counts a streak (PA
+// 4.3, 4.4).
 
 import type { Focus, Level } from './api.ts';
 import * as text from './text.ts';
