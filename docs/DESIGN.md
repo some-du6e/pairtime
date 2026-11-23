@@ -606,6 +606,7 @@ Coexistence with Hackatime is the adoption bet, and one report of "pairtime brok
 - **The port** is a fixed default. If it is taken at startup, the agent picks another and rewrites only its own line, with the same validation.
 - **The local endpoint** answers `POST /api/v1/users/current/heartbeats` and `.bulk` (up to 100 per request, per-item responses in Hackatime's shape), `GET /api/v1/users/current/statusbar/today`, and Basic, Bearer and `?api_key=` auth (HC DI 1). It deduplicates on a hash of the canonical fields, so offline-queue replays are idempotent.
 - **Agent down.** The hook binary restarts the agent, so outages are short. wakatime-cli requeues a heartbeat at most 3 times (HC 1.5), and what it does with a refusing destination isn't documented. `e2e-wakatime.yml` settles it against the real wakatime-cli v2.28.4 binary on all three OS runners, with a fake Hackatime as `api_url` and the agent through `[api_urls]`: both receive a test heartbeat; with the agent stopped, the fake Hackatime still receives and wakatime-cli exits without an auth error; after restart, the offline queue reaches the agent; a malformed key is refused by the installer. The observed queue behaviour is saved as a report artifact. This job blocks every release that edits `~/.wakatime.cfg` (JE must-fix 5; JB must-fix 5).
+- **Hackatime out of reach.** wakatime-cli backs off after a failed send, for every destination at once, and for about the first hour in which Hackatime can't be reached it holds back all its sends, pairtime's included. The editor and bridge records of that hour reach the agent only when Hackatime answers again, after their minutes are final (3.7), and don't count. `pairtime doctor` says when wakatime-cli is backing off (docs/errata/2026-11-23-wakatime-cli-2.28.4.md, item 4).
 - **Uninstall** removes exactly the line pairtime added, identified by its key, and restores the original file byte for byte if pairtime created it.
 
 ### 5.7 The WakaTime bridge
@@ -614,9 +615,9 @@ The bridge turns what the dual-send delivers into events, and treats WakaTime's 
 
 | Heartbeat | Becomes |
 |---|---|
-| Editor heartbeat (plugin user agent, no AI model token) with `human_line_changes > 0` or `is_write` | `editor.activity` `edit` or `save`, `edit_source = unknown`. This is the hand-edit signal for every editor with a WakaTime plugin |
+| Editor heartbeat (no `ai_session`) with `human_line_changes > 0` or `is_write` | `editor.activity` `edit` or `save`, `edit_source = unknown`. This is the hand-edit signal for every editor with a WakaTime plugin |
 | Other editor heartbeats | `editor.activity` `navigate` |
-| Transcript-derived heartbeat (user agent carries an AI model token) with `ai_prompt_length > 0` | `prompt.submit` with `len_chars = ai_prompt_length`, no text, `via = bridge`, at the transcript's timestamp. Typing lead only, no think lead (AD D2) |
+| Transcript-derived heartbeat (wakatime-cli's AI sync made it: it carries `ai_session`, and its user agent names the AI agent, such as `claude-code/2.1.327`, with a model token when the transcript line named a model) with `ai_prompt_length > 0` | `prompt.submit` with `len_chars = ai_prompt_length`, no text, `via = bridge`, at the transcript's timestamp. Typing lead only, no think lead (AD D2) |
 | Transcript-derived heartbeat with `ai_line_changes > 0` | `agent.tool` `edit`, `via = bridge`; its lines fill the reading bucket only up to `R_TURN_BASE_S` (5.2) |
 
 Paths are replaced by per-device HMACs on arrival. An editor edit within 120 s of an `agent.tool` edit on the same file hash is `edit_source = agent` and opens no anchor.
