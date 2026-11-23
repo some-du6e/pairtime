@@ -368,8 +368,11 @@ func isParams(s string) bool {
 // or 0.1.0+3dbf6d4: D-version-grammar's form, which pkg/event checks for a
 // harness_version on the device, with each identifier of the suffix all
 // digits, at least 7 lowercase hex digits, or one of a few words such as
-// alpha and dev. A bare word isn't one, and neither is a name after the
-// number, so no file, folder or host name reaches the labels this way.
+// alpha and dev. A bare word isn't one, and neither is a version whose
+// suffix has an identifier with a letter outside a-f that isn't one of
+// those words, as 1.0.0-teens-mbp.local's does. A name whose every
+// identifier is digits, 7 or more hex digits or one of those words, such
+// as 1.0.0-deadbeef, still passes (ingest-v1 2.3.4).
 func isVersion(s string) bool { return event.IsTier1Version(s) }
 
 // minuteLayout is a bucket's minute, as encoding/json writes a whole UTC

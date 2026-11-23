@@ -278,11 +278,13 @@ type Input struct {
 // which they also say until the computer is linked, and online otherwise.
 // A record a crash left that is lookback's counts by the earliest time it
 // can have reached the writer (Open). An event that carries a reading of
-// this run's clock is none, though a step back of the wall clock dates it
-// before the chain began: it was made in this run, which the moment holds
-// it to by that reading (moment.before).
+// a run's clock is none, though a step back of the wall clock dates it
+// before the chain began: it was made while an agent ran, this one or one
+// a kill ended, whose record recovery takes in, and the moment holds it
+// to that reading for this run's and to its t for another's
+// (moment.before).
 func (w *Writer) lookback(e event.Envelope) bool {
-	return e.Via == event.ViaLog && e.T < w.created && !(e.Mono > 0 && e.BootID == runBoot)
+	return e.Via == event.ViaLog && e.T < w.created && !(e.Mono > 0 && strings.HasPrefix(e.BootID, runPrefix))
 }
 
 // Writer is a device's ledger writer. It appends each record to the day's

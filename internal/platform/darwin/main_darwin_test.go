@@ -14,12 +14,16 @@ import (
 // agent's will: runtime.LockOSThread in an init function keeps it there
 // (see the package doc). TestMain then runs the tests on other goroutines
 // and lends the main thread to onMain's callers, so a test can run a Loop
-// where macOS delivers screen lock and app switch notifications.
+// where macOS delivers screen lock and app switch notifications. A test
+// binary started as a connChild runs that instead (conn_darwin_test.go).
 func init() { runtime.LockOSThread() }
 
 var mainCalls = make(chan func())
 
 func TestMain(m *testing.M) {
+	if addr := os.Getenv(connChildEnv); addr != "" {
+		os.Exit(connChild(addr))
+	}
 	code := make(chan int, 1)
 	go func() { code <- m.Run() }()
 	for {

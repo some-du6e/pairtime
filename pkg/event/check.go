@@ -152,10 +152,13 @@ func IsVersion(s string) bool {
 // IsVersion has it, whose suffix, if it has one, is identifiers separated
 // by dots and hyphens, each all digits, at least 7 lowercase hex digits, or
 // one of the words alpha, beta, rc, pre, dev, preview, nightly, canary,
-// next and build. So 2.1.327, v0.1.0-alpha.1, 0.1.0+3dbf6d4, v0.0.0-dev
-// and Go's pseudo-versions pass, and a name after the number, as in
-// 1.0.0-teens-mbp.local, doesn't. Tier 1 carries versions as they are,
-// unkeyed (DESIGN 4.3), so this form is all that keeps a name out of them.
+// next and build. So 2.1.327, v0.1.0-alpha.1, 0.1.0+3dbf6d4, v0.0.0-dev and
+// Go's pseudo-versions pass, and a suffix with an identifier that has a
+// letter outside a-f and isn't one of the words fails, as
+// 1.0.0-teens-mbp.local's does. A name whose every identifier is digits, 7
+// or more hex digits or one of the words still passes, as in
+// 1.0.0-deadbeef. Tier 1 carries versions as they are, unkeyed (DESIGN
+// 4.3), so this form is all that keeps a name out of them.
 func IsTier1Version(s string) bool {
 	if !IsVersion(s) {
 		return false

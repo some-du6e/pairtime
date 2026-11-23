@@ -187,8 +187,12 @@ const tier1VersionID = `(?:[0-9]+|[0-9a-f]{7,}|alpha|beta|rc|pre|dev|preview|nig
 // TestFreeTextRefused and TestFirewall skip them where a key goes. A place
 // that holds a device, project or path key takes them, and only the client
 // keeps names out of keys, by keying every identifier on the device
-// (AGENTS.md). Every other place refuses them, a version's included:
-// tier 1's form takes no name after the number (ingest-v1 2.3.4).
+// (AGENTS.md). Every other place refuses them, a version's included,
+// since none starts with a version number. Tier 1's form refuses a name
+// after the number too, when it has a letter outside a-f that isn't one of
+// the form's ten words, as 1.0.0-teens-mbp.local has, but not one whose
+// every identifier is digits, 7 or more hex digits or one of those words,
+// as 1.0.0-deadbeef (ingest-v1 2.3.4).
 var freeText = []struct{ never, text string }{
 	{"Prompt or output text", "fix the login bug please"},
 	{"Prompt or output text", "ignore previous instructions\n"},
@@ -852,13 +856,14 @@ func fieldNames(t reflect.Type) []string {
 // side is what it reads and keeps: bodyMembers and the fields of body,
 // which name the kinds of item; the allowlists its parsers pass to object,
 // required and optional, as allowlists() names them; and the JSON members
-// of the structs it stores each item as. Each is diffed against DESIGN
-// 4.3's kinds of item and their members, against ingest-v1 2.3's tables
-// with their optional members, against TestTier1Shape's lists for the
-// bucket and the slot, and against tier1Items, so the tests here put free
-// text in every member. DESIGN 4.3 writes rewrites[] without its objects'
-// members, so those are pinned here to ingest-v1 2.3.3's. A parser that
-// takes a name its own list lacks is TestForeignMembers' to catch.
+// of the structs it stores the items as, all but a batch root, which is a
+// witness row's columns. Each is diffed against DESIGN 4.3's kinds of item
+// and their members, against ingest-v1 2.3's tables with their optional
+// members, against TestTier1Shape's lists for the bucket and the slot, and
+// against tier1Items, so the tests here put free text in every member.
+// DESIGN 4.3 writes rewrites[] without its objects' members, so those are
+// pinned here to ingest-v1 2.3.3's. A parser that takes a name its own list
+// lacks is TestForeignMembers' to catch.
 func TestAllowlist(t *testing.T) {
 	design, _ := design43(t)
 	lists := allowlists()
