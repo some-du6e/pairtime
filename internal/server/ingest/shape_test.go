@@ -496,6 +496,16 @@ func TestLabelsShape(t *testing.T) {
 		{"a build suffix on a harness's version passes", func(m map[string]any) {
 			m["harnesses"] = []any{map[string]any{"name": "codex", "version": "0.1.0+3dbf6d4"}}
 		}, shapeResult{}},
+		{"a Go pseudo-version after a pre-release passes as the build", func(m map[string]any) {
+			m["client_build"] = "v0.1.0-alpha.5.0.20261123010542-8f0e2c5fba57"
+		}, shapeResult{}},
+		{"a hostname after the build's number is bad_string in tier 1's form (ingest-v1 2.3.4)", func(m map[string]any) {
+			m["client_build"] = "1.0.0-teens-mbp.local"
+		}, shapeResult{CodeBadString, "client_build"}},
+		{"a word joined to a number in the build's suffix is bad_string", func(m map[string]any) { m["client_build"] = "v0.1.0-rc1" }, shapeResult{CodeBadString, "client_build"}},
+		{"a branch name after a harness's version number is bad_string", func(m map[string]any) {
+			m["harnesses"] = []any{map[string]any{"name": "codex", "version": "2.1.327-fix-login"}}
+		}, shapeResult{CodeBadString, "harnesses[0].version"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -55,11 +56,13 @@ type tier1Member struct {
 // tier1Item is a kind of tier-1 item: its name in DESIGN 4.3, which is its
 // heading in ingest-v1 2.3 too, that heading's number, the request body's
 // member that carries it, the server's check, an instance that passes,
-// and its members.
+// the struct the server stores it as, in JSON, and its members. A batch
+// root is stored as a witness row's columns, so it has no struct.
 type tier1Item struct {
 	design, spec, body string
 	check              func(raw []byte) *itemErr
 	sample             func(t testing.TB) []byte
+	stored             reflect.Type
 	members            []tier1Member
 }
 
@@ -82,6 +85,7 @@ var tier1Items = []tier1Item{
 		design: "Minute buckets", spec: "2.3.2", body: "buckets",
 		check:  func(raw []byte) *itemErr { _, e := checkBucket(raw); return e },
 		sample: func(t testing.TB) []byte { return shareableJSON(t, sampleBucket("d_test", sampleMinute, 1)) },
+		stored: reflect.TypeFor[event.MinuteBucket](),
 		members: []tier1Member{
 			{name: "v", typ: jsonString, form: "semver"},
 			{name: "params", typ: jsonString, form: "params"},
@@ -108,6 +112,7 @@ var tier1Items = []tier1Item{
 		design: "Commit records", spec: "2.3.3", body: "commits",
 		check:  func(raw []byte) *itemErr { _, e := parseCommit(raw); return e },
 		sample: func(t testing.TB) []byte { return marshal(t, sampleCommit()) },
+		stored: reflect.TypeFor[commitRecord](),
 		members: []tier1Member{
 			{name: "sha", typ: jsonString, form: "gitid"},
 			{name: "parents", typ: jsonStrings, form: "gitid"},
@@ -132,6 +137,7 @@ var tier1Items = []tier1Item{
 		design: "Labels", spec: "2.3.4", body: "labels",
 		check:  func(raw []byte) *itemErr { _, e := parseLabels(raw); return e },
 		sample: func(t testing.TB) []byte { return marshal(t, sampleLabels()) },
+		stored: reflect.TypeFor[labels](),
 		members: []tier1Member{
 			{name: "client_build", typ: jsonString, form: "version"},
 			{name: "scoring_version", typ: jsonString, form: "semver"},
@@ -162,8 +168,12 @@ var lenientForms = map[string]*regexp.Regexp{
 	"uncredited": regexp.MustCompile(`^X\.[a-z_]{1,32}$`),
 	"lower":      regexp.MustCompile(`^[a-z_]{1,32}$`),
 	"level":      regexp.MustCompile(`^[ABC]$`),
-	"version":    regexp.MustCompile(event.VersionPattern),
+	"version":    regexp.MustCompile(`^v?[0-9]+(?:\.[0-9]+){0,3}(?:[-+]` + tier1VersionID + `(?:[.-]` + tier1VersionID + `)*)?$`),
 }
+
+// tier1VersionID is an identifier of a tier-1 version's suffix: all digits,
+// at least 7 lowercase hex digits, or one of ten words (ingest-v1 2.3.4).
+const tier1VersionID = `(?:[0-9]+|[0-9a-f]{7,}|alpha|beta|rc|pre|dev|preview|nightly|canary|next|build)`
 
 // freeText is text no member of a tier-1 item may hold. For each item of
 // DESIGN 4.3's Never-in-it column for tier 1 it has text of that kind as a
@@ -173,13 +183,12 @@ var lenientForms = map[string]*regexp.Regexp{
 // put each in every place of every item, and FuzzFreeText starts from
 // them.
 //
-// Some fit one of the two forms that a name can fit, which TestFreeTextRefused
-// and TestFirewall skip them in. A bare name or an event id fits a key, so
-// a place that holds a device, project or path key takes it, and only the
-// client keeps names out of keys, by keying every identifier on the device
-// (AGENTS.md). A name after a version number fits a version's suffix, so
-// client_build and a harness's version take it (D-version-grammar;
-// ingest-v1 2.3.4). Every other place refuses them.
+// Some fit a key's form, as a bare name or an event id does, and
+// TestFreeTextRefused and TestFirewall skip them where a key goes. A place
+// that holds a device, project or path key takes them, and only the client
+// keeps names out of keys, by keying every identifier on the device
+// (AGENTS.md). Every other place refuses them, a version's included:
+// tier 1's form takes no name after the number (ingest-v1 2.3.4).
 var freeText = []struct{ never, text string }{
 	{"Prompt or output text", "fix the login bug please"},
 	{"Prompt or output text", "ignore previous instructions\n"},
@@ -327,11 +336,11 @@ func (p place) refusal(text string) (shapeResult, bool) {
 	return shapeResult{p.code, p.path}, true
 }
 
-// fits reports whether p holds a key or a version and text has that form,
-// the two that a name can fit. Of freeText, only such text may pass a
-// place's check.
+// fits reports whether p holds a key and text has a key's form, the one
+// form a name can fit. Of freeText, only such text may pass a place's
+// check.
 func (p place) fits(text string) bool {
-	return (p.form == "key" || p.form == "version") && lenientForms[p.form].MatchString(text)
+	return p.form == "key" && lenientForms["key"].MatchString(text)
 }
 
 // getPath returns the member at path, as setPath finds it, or root for "".
@@ -412,7 +421,8 @@ func FuzzFreeText(f *testing.F) {
 		f.Add(s.text)
 	}
 	for _, s := range []string{"p_one", "1.0.0", "v0.1.0", "v0.0.0-dev", "0.1.0+3dbf6d4", "dev", "P", "READ~r+restored", "X.absent", "via_track", "final", "human", "A",
-		"prompting", "claude", "claude_code", "rev", strings.Repeat("a", 40), strings.Repeat("0", 64), "sha256:" + strings.Repeat("ab", 32), "2026-11-19T12:00:00Z"} {
+		"prompting", "claude", "claude_code", "rev", strings.Repeat("a", 40), strings.Repeat("0", 64), "sha256:" + strings.Repeat("ab", 32), "2026-11-19T12:00:00Z",
+		"v0.1.0-alpha.5", "v0.0.0-20261123010542-8f0e2c5fba57", "1.0.0-rc1", "2.1.327-teens-mbp.local"} {
 		f.Add(s)
 	}
 	var places []place
@@ -464,6 +474,9 @@ func TestLenientForms(t *testing.T) {
 		{"actors are lowercase names", "lower", names(actors)},
 		{"agent trailers are lowercase names", "lower", agentTrailers},
 		{"label harnesses are lowercase names", "lower", names(labelHarnesses)},
+		{"the versions pairtime and Claude Code report today have the version form", "version", []string{
+			"v0.1.0-alpha.1", "v0.1.0-alpha.5", "v0.0.0-dev", "v0.0.0-20261123010542-8f0e2c5fba57",
+			"v0.1.1-0.20261123010542-8f0e2c5fba57", "v0.1.0-alpha.5.0.20261123010542-8f0e2c5fba57", "2.1.327", "0.1.0+3dbf6d4"}},
 	}
 	for i := range tier1Items {
 		it := &tier1Items[i]
@@ -529,21 +542,24 @@ func design43(t *testing.T) (map[string][]designField, []string) {
 	if len(cells) != 4 {
 		t.Fatalf("DESIGN 4.3's tier-1 row has %d cells, want 4: from and to, when, exactly what, and never in it", len(cells))
 	}
+	found := designItem.FindAllStringSubmatch(cells[2], -1)
+	if objects := strings.Count(cells[2], "`{"); len(found) != objects {
+		t.Fatalf("DESIGN 4.3's tier-1 row has %d objects in backquotes, and %d of them follow the name of a kind of item", objects, len(found))
+	}
 	items := map[string][]designField{}
-	for _, it := range tier1Items {
-		_, rest, ok := strings.Cut(cells[2], it.design+" `")
-		if !ok {
-			t.Fatalf("DESIGN 4.3's tier-1 row lists no %s", it.design)
-		}
-		obj, _, _ := strings.Cut(rest, "`")
-		fields, tail, err := parseDesignObject(obj)
+	for _, m := range found {
+		fields, tail, err := parseDesignObject(m[2])
 		if err != nil || tail != "" {
-			t.Fatalf("DESIGN 4.3's %s %q: %v, with %q after it", it.design, obj, err, tail)
+			t.Fatalf("DESIGN 4.3's %s %q: %v, with %q after it", m[1], m[2], err, tail)
 		}
-		items[it.design] = fields
+		items[m[1]] = fields
 	}
 	return items, strings.Split(cells[3], ", ")
 }
+
+// designItem matches a kind of item in DESIGN 4.3's tier-1 row: its name,
+// as "Batch roots", then its object in backquotes.
+var designItem = regexp.MustCompile("(?:^|\\. )([A-Z][a-z]*(?: [a-z]+)*) `(\\{[^`]*\\})`")
 
 // designName reports whether c can be in a member's name in DESIGN 4.3's
 // notation.
@@ -647,10 +663,10 @@ func memberPaths(prefix string, members []tier1Member) (paths, mapped []string) 
 // each of its objects.
 func allowlists() map[string]map[string][2][]string {
 	return map[string]map[string][2][]string{
-		"Batch roots":    {"": {batchRequired, nil}},
+		"Batch roots":    {"": {batchRequired, batchOptional}},
 		"Minute buckets": {"": {bucketRequired, bucketOptional}, "slots": {slotRequired, slotOptional}},
-		"Commit records": {"": {commitRequired, commitOptional}, "rewrites": {rewriteRequired, nil}},
-		"Labels":         {"": {labelsRequired, nil}, "harnesses": {harnessRequired, harnessOptional}},
+		"Commit records": {"": {commitRequired, commitOptional}, "rewrites": {rewriteRequired, rewriteOptional}},
+		"Labels":         {"": {labelsRequired, labelsOptional}, "harnesses": {harnessRequired, harnessOptional}},
 	}
 }
 
@@ -782,17 +798,67 @@ func repeats(vs []string) []string {
 	return out
 }
 
-// TestAllowlist diffs the server's allowlist of each kind of tier-1 item
-// against the oracle, DESIGN 4.3's tier-1 list, and against ingest-v1 2.3,
-// which the client builds to, its optional members included; the bucket's
-// and the slot's against TestTier1Shape's lists too, event.Tier1BucketFields
-// and event.Tier1SlotFields; and against tier1Items, so the tests here put
-// free text in every member the server takes. A new tier-1 field needs
-// Karim to add it to DESIGN 4.3 first (PLAN ground rule 10), and this test
-// is the backstop: it fails until the field is in DESIGN 4.3, in the
-// spec, in the allowlist and here. DESIGN 4.3 writes rewrites[] without
-// its objects' members, so those are pinned here to ingest-v1 2.3.3's, and
-// a third fails too.
+// jsonPaths returns the members encoding/json writes for struct type t,
+// as designPaths writes them: each field's tag name, the members of a
+// list's structs under "name[].", and an embedded struct's members as its
+// own. Fields tagged pairtime:"local", which Shareable clears, are left
+// out unless local is set. It goes eight structs deep at most, so a type
+// that holds itself ends.
+func jsonPaths(prefix string, t reflect.Type, local bool) []string {
+	var out []string
+	var walk func(prefix string, t reflect.Type, depth int)
+	walk = func(prefix string, t reflect.Type, depth int) {
+		if depth > 8 {
+			return
+		}
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			elem := f.Type
+			for elem.Kind() == reflect.Pointer || elem.Kind() == reflect.Slice {
+				elem = elem.Elem()
+			}
+			switch {
+			case f.Anonymous && name == "" && elem.Kind() == reflect.Struct:
+				walk(prefix, elem, depth+1)
+				continue
+			case !f.IsExported(), name == "-", !local && f.Tag.Get("pairtime") == "local":
+				continue
+			case name == "":
+				name = f.Name
+			}
+			out = append(out, prefix+name)
+			if elem.Kind() == reflect.Struct {
+				walk(prefix+name+"[].", elem, depth+1)
+			}
+		}
+	}
+	walk(prefix, t, 0)
+	return out
+}
+
+// fieldNames returns the names of struct type t's fields.
+func fieldNames(t reflect.Type) []string {
+	var out []string
+	for i := 0; i < t.NumField(); i++ {
+		out = append(out, t.Field(i).Name)
+	}
+	return out
+}
+
+// TestAllowlist holds the server's side of the firewall to the oracle,
+// DESIGN 4.3's tier-1 row, so that no kind of item and no member crosses
+// the network unless the row lists it (PLAN ground rule 10). The server's
+// side is what it reads and keeps: bodyMembers and the fields of body,
+// which name the kinds of item; the allowlists its parsers pass to object,
+// required and optional, as allowlists() names them; and the JSON members
+// of the structs it stores each item as. Each is diffed against DESIGN
+// 4.3's kinds of item and their members, against ingest-v1 2.3's tables
+// with their optional members, against TestTier1Shape's lists for the
+// bucket and the slot, and against tier1Items, so the tests here put free
+// text in every member. DESIGN 4.3 writes rewrites[] without its objects'
+// members, so those are pinned here to ingest-v1 2.3.3's. A parser that
+// takes a name its own list lacks is TestForeignMembers' to catch.
 func TestAllowlist(t *testing.T) {
 	design, _ := design43(t)
 	lists := allowlists()
@@ -803,7 +869,15 @@ func TestAllowlist(t *testing.T) {
 		name      string
 		got, want []string
 	}
-	var tests []setCase
+	var designs, bodies []string
+	for _, it := range tier1Items {
+		designs, bodies = append(designs, it.design), append(bodies, it.body)
+	}
+	tests := []setCase{
+		{"DESIGN 4.3's tier-1 row lists the kinds of item tier1Items has, and no other", slices.Collect(maps.Keys(design)), designs},
+		{"the request body takes a member for each kind of item, and no other", bodyMembers, bodies},
+		{"body, where parseBody keeps the items, has a field for each member it takes", fieldNames(reflect.TypeFor[body]()), bodyMembers},
+	}
 	var unknownForms []string
 	for i := range tier1Items {
 		it := &tier1Items[i]
@@ -833,6 +907,9 @@ func TestAllowlist(t *testing.T) {
 			setCase{it.design + ": a member DESIGN 4.3 writes as a map, as uncredited{code: s}, is a map here", notMaps, nil},
 			setCase{it.design + ": the tests here put free text in every member of the allowlist", members, allowed},
 		)
+		if it.stored != nil {
+			tests = append(tests, setCase{it.design + ": the allowlist names every member of " + it.stored.String() + ", which the server stores, but its local ones", allowed, jsonPaths("", it.stored, false)})
+		}
 		for _, object := range slices.Sorted(maps.Keys(lists[it.design])) {
 			l := lists[it.design][object]
 			all, optional := specMembers(t, *it, object)
@@ -863,6 +940,66 @@ func TestAllowlist(t *testing.T) {
 				t.Errorf("lacks %q and has %q beyond it", missing, extra)
 			}
 		})
+	}
+}
+
+// TestForeignMembers puts, as a member of each object of each kind of
+// tier-1 item, every name a member of any tier-1 object has and every JSON
+// name of pkg/event's records, local ones included: the envelope, each
+// kind's payload and the minute bucket. Each must be refused as
+// unknown_field, naming the object, unless the object's own allowlist has
+// it. TestAllowlist checks the lists the parsers name; this catches a
+// parser that takes a name from another list, such as a name pkg/event
+// keeps on the device.
+func TestForeignMembers(t *testing.T) {
+	var names []string
+	add := func(paths []string) {
+		for _, p := range paths {
+			if i := strings.LastIndexByte(p, '.'); i >= 0 {
+				p = p[i+1:]
+			}
+			if !slices.Contains(names, p) {
+				names = append(names, p)
+			}
+		}
+	}
+	for _, objects := range allowlists() {
+		add(allowedPaths(objects))
+	}
+	add(jsonPaths("", reflect.TypeFor[event.Envelope](), true))
+	add(jsonPaths("", reflect.TypeFor[event.MinuteBucket](), true))
+	for _, k := range event.Kinds() {
+		var e event.Event
+		if err := json.Unmarshal(marshal(t, map[string]any{"kind": k, "data": map[string]any{}}), &e); err != nil {
+			t.Fatalf("a %s event with empty data: %v", k, err)
+		}
+		pt := reflect.TypeOf(e.Data)
+		if pt.Kind() != reflect.Pointer || pt.Elem().Kind() != reflect.Struct {
+			t.Fatalf("a %s event's payload is a %s, not a pointer to a struct", k, pt)
+		}
+		add(jsonPaths("", pt.Elem(), true))
+	}
+	if !slices.Contains(names, "anchors") || !slices.Contains(names, "event_id") {
+		t.Fatalf("the names lack anchors or event_id, so they don't hold pkg/event's local and envelope names: %q", names)
+	}
+	for i := range tier1Items {
+		it := &tier1Items[i]
+		for _, p := range it.places() {
+			if p.how != asName {
+				continue
+			}
+			t.Run(fmt.Sprintf("%s: any other tier-1 or pkg/event name as %s is unknown_field", it.design, p.what()), func(t *testing.T) {
+				want := shapeResult{CodeUnknownField, p.path}
+				for _, name := range names {
+					if slices.Contains(p.names, name) {
+						continue
+					}
+					if got := outcomeOf(it.check(p.put(t, name))); got != want {
+						t.Errorf("%q: got %+v, want %+v", name, got, want)
+					}
+				}
+			})
+		}
 	}
 }
 
