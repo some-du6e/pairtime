@@ -179,7 +179,8 @@ const (
 // $PAIRTIME_TEST_FAKE_DIR, adds them on one line to runs there, and does as
 // $PAIRTIME_TEST_FAKE_RUN says: fail exits 1, as a start the manager
 // refuses does, old exits 1 when asked for an OOM policy, as systemd before
-// 253 does for a scope, and otherwise does what move does, and hang waits. move
+// 253 does for a scope, and otherwise does what move does, hang waits, and
+// late exits 1 after 0.6 s when asked for an OOM policy and otherwise waits. move
 // writes its process ID and the unit its --unit names to moved, which
 // TestLaunchAgent's inUnit reads as the process having reached that unit,
 // and then, like any other mode, it runs what follows -- in its own
@@ -208,6 +209,13 @@ old)
 		exit 1
 	fi
 	echo "$$ $unit" >"$dir/moved"
+	;;
+late)
+	if [ -n "$oom" ]; then
+		sleep 0.6
+		exit 1
+	fi
+	exec sleep 60
 	;;
 fail)
 	echo "Failed to start transient scope unit: Unit $unit was already loaded or has a fragment file." >&2
@@ -265,7 +273,7 @@ func TestLaunchAgent(t *testing.T) {
 
 	oldUnits, oldWait, oldInUnit := launchUnits, unitWait, inUnit
 	t.Cleanup(func() { launchUnits, unitWait, inUnit = oldUnits, oldWait, oldInUnit })
-	unitWait = 300 * time.Millisecond
+	unitWait = time.Second
 	inUnit = func(pid int, unit string) bool {
 		b, err := os.ReadFile(filepath.Join(os.Getenv(fakeDirEnv), "moved"))
 		return err == nil && string(b) == strconv.Itoa(pid)+" "+unit+"\n"
@@ -307,6 +315,11 @@ func TestLaunchAgent(t *testing.T) {
 			name: "a systemd-run that hangs is killed after unitWait, and the agent starts where its starter runs",
 			run:  "hang", exe: exe, runtimeDir: runtimeDir, units: true,
 			wantRun: true, wantUnitErr: true, runs: 1, oom: true,
+		},
+		{
+			name: "a first start that exits late and a second that hangs share unitWait, so the agent starts where its starter runs once unitWait is spent",
+			run:  "late", exe: exe, runtimeDir: runtimeDir, units: true,
+			wantRun: true, wantUnitErr: true, runs: 2,
 		},
 		{
 			name: "an agent that exits with status 3 in its unit before it is seen there counts as started, and its status reaches the caller",
@@ -378,9 +391,14 @@ func TestLaunchAgent(t *testing.T) {
 				if !tt.wantUnit && l.PID == runPID {
 					t.Errorf("the agent is process %d, the one systemd-run ran in, although systemd-run failed", l.PID)
 				}
-				if tt.run == "hang" {
+				if tt.run == "hang" || tt.run == "late" {
 					if took < unitWait {
 						t.Errorf("launchAgent gave up on systemd-run after %v, before unitWait's %v", took, unitWait)
+					}
+					// The late first start leaves the second 0.4 s of unitWait.
+					// Each with a unitWait of its own, the two would take 1.6 s.
+					if took > unitWait+300*time.Millisecond {
+						t.Errorf("launchAgent took %v, more than unitWait's %v", took, unitWait)
 					}
 					if err := syscall.Kill(runPID, 0); !errors.Is(err, syscall.ESRCH) {
 						t.Errorf("the systemd-run that hung, process %d, is still there: %v", runPID, err)
@@ -598,6 +616,17 @@ func TestAgentOutlivesScope(t *testing.T) {
 				if got := unitProperty(t, unit, "Description"); got != "pairtime agent" {
 					t.Errorf("the agent's unit is described as %q, want pairtime agent", got)
 				}
+				if got := unitProperty(t, unit, "CPUWeight"); got != "10" {
+					t.Errorf("the agent's unit has CPUWeight %q, want 10", got)
+				}
+				// The first start's OOMPolicy=continue holds from systemd 253,
+				// so on a manager that new a refused first start, which the
+				// second start without it would hide, shows here.
+				if v := systemdVersion(t); v >= 253 {
+					if got := unitProperty(t, unit, "OOMPolicy"); got != "continue" {
+						t.Errorf("the agent's unit has OOMPolicy %q under systemd %d, want continue", got, v)
+					}
+				}
 			}
 
 			if b, err := exec.Command("systemctl", "--user", "stop", session).CombinedOutput(); err != nil {
@@ -690,6 +719,25 @@ func environOf(t *testing.T, pid int) []string {
 		t.Fatalf("reading the environment of process %d: %v", pid, err)
 	}
 	return strings.Split(string(bytes.TrimSuffix(b, []byte{0})), "\x00")
+}
+
+// systemdVersion returns the version systemctl --version names on its
+// first line, "systemd 259 (259.1-1)", as a number.
+func systemdVersion(t *testing.T) int {
+	t.Helper()
+	b, err := exec.Command("systemctl", "--version").Output()
+	if err != nil {
+		t.Fatalf("systemctl --version: %v", err)
+	}
+	f := strings.Fields(string(b))
+	if len(f) < 2 || f[0] != "systemd" {
+		t.Fatalf("systemctl --version says %q", b)
+	}
+	v, err := strconv.Atoi(f[1])
+	if err != nil {
+		t.Fatalf("systemctl --version names version %q: %v", f[1], err)
+	}
+	return v
 }
 
 // unitProperty returns a property of the unit from the user's manager.

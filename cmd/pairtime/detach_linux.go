@@ -138,8 +138,10 @@ func unitArgs(unit, exe string, oom bool) []string {
 // The first start asks for OOMPolicy=continue (unitArgs). systemd before 253
 // refuses that property for a scope, and its systemd-run exits at once, so
 // a start that exits before the agent is seen in its unit is made once more
-// without it, which costs a fork on such a system alone, before launchAgent
-// falls back.
+// without it, which costs a fork on such a system alone. Both starts share
+// one deadline, unitWait from the first: the second gets what time is left,
+// and none when it has run out, so a hook waits unitWait at most before
+// launchAgent falls back.
 func startInUnit(exe, dir string) (launched, error) {
 	run, ok := userManager(os.LookupEnv, os.Lstat, exec.LookPath, os.Geteuid())
 	if !ok {
@@ -151,9 +153,10 @@ func startInUnit(exe, dir string) (launched, error) {
 		// systemd-run before 254 doesn't take.
 		return launched{}, fmt.Errorf("the binary's path %q holds a $, which systemd-run may expand", exe)
 	}
-	l, err := tryUnit(run, exe, dir, true)
-	if errors.Is(err, errUnitExited) {
-		l, err = tryUnit(run, exe, dir, false)
+	deadline := time.Now().Add(unitWait)
+	l, err := tryUnit(run, exe, dir, true, deadline)
+	if errors.Is(err, errUnitExited) && time.Now().Before(deadline) {
+		l, err = tryUnit(run, exe, dir, false, deadline)
 	}
 	return l, err
 }
@@ -163,8 +166,8 @@ func startInUnit(exe, dir string) (launched, error) {
 var errUnitExited = errors.New("systemd-run, or the agent it became, exited before the agent was seen in its unit")
 
 // tryUnit is one of startInUnit's starts, with OOMPolicy=continue when oom
-// is set (unitArgs).
-func tryUnit(run, exe, dir string, oom bool) (launched, error) {
+// is set (unitArgs), which gives up on systemd-run at deadline.
+func tryUnit(run, exe, dir string, oom bool, deadline time.Time) (launched, error) {
 	unit := newUnitName()
 	cmd := exec.Command(run, unitArgs(unit, exe, oom)...)
 	cmd.Dir = dir
@@ -175,7 +178,7 @@ func tryUnit(run, exe, dir string, oom bool) (launched, error) {
 	pid := cmd.Process.Pid
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
-	timeout := time.NewTimer(unitWait)
+	timeout := time.NewTimer(time.Until(deadline))
 	defer timeout.Stop()
 	poll := time.NewTicker(2 * time.Millisecond)
 	defer poll.Stop()
