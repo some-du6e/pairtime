@@ -844,18 +844,21 @@ func TestTie(t *testing.T) {
 		}
 		return ps
 	}
+	// second is a claude in a second terminal, started at sec(80).
+	second := platform.Proc{PID: 141, PPID: 110, Name: "claude", PGID: 141, TTY: platform.TTYAttached, Start: sec(80), Owner: me}
 	// step is one thing done to the scanner: a clock to read, a table to
-	// read from now on, a scan, a claim, a touch, or a line of a session
-	// that tieLive hands Tie, touched first, in that order of its fields'
-	// use.
+	// read from now on, a scan, a claim, a touch, a line out of pairtime
+	// (TouchIgnored), or a line of a session that tieLive hands Tie,
+	// touched first, in that order of its fields' use.
 	type step struct {
-		now   time.Time
-		table []platform.Proc
-		scan  bool
-		claim int
-		touch string
-		key   string
-		at    time.Time
+		now     time.Time
+		table   []platform.Proc
+		scan    bool
+		claim   int
+		touch   string
+		ignored string
+		key     string
+		at      time.Time
 	}
 	without := func(ps []platform.Proc, pid int) []platform.Proc {
 		return slices.DeleteFunc(slices.Clone(ps), func(p platform.Proc) bool { return p.PID == pid })
@@ -929,6 +932,15 @@ func TestTie(t *testing.T) {
 				{now: sec(200), scan: true}, {now: sec(701), key: "s_one", at: sec(700)}}), 0},
 		{"a claude tied to a session that went quiet a minute before a new session's first line isn't tied to it, nor at its try a retry later, since a claude UntieQuiet frees ties to no one",
 			with(oneClaude(), tied("s_one", sec(-100)), later("s_two", sec(60)), []step{{now: sec(101), key: "s_two", at: sec(100)}}), 0},
+		{"a claude UntieQuiet freed counts among those a session could run in, so with one other untied claude started since, nothing is tied",
+			with(oneClaude(), tied("s_one", sec(-100)), later("s_two", sec(60)), []step{{table: append(oneClaude(), second)}},
+				later("s_three", sec(100))), 0},
+		{"a line out of pairtime isn't the session's first line, which its claude must have started by: with the claude it runs in since started and another, nothing is tied",
+			with(without(terminal(), 111), []step{{now: sec(-149), ignored: "s_x", at: sec(-150)}},
+				[]step{{table: append(without(terminal(), 111), second)}}, later("s_x", sec(100))), 0},
+		{"nor does a scan's read after a line out of pairtime serve for the read the session's first line that counts makes",
+			with(oneClaude(), []step{{now: sec(-149), ignored: "s_one", at: sec(-150)}, {now: sec(-100), scan: true},
+				{now: sec(1), key: "s_one", at: sec(0)}}), 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -958,6 +970,9 @@ func TestTie(t *testing.T) {
 				if st.touch != "" {
 					s.Touch(st.touch, st.at, "")
 				}
+				if st.ignored != "" {
+					s.TouchIgnored(st.ignored, st.at, "")
+				}
 				if st.key != "" {
 					s.Touch(st.key, st.at, "")
 					sess, ok, _ = s.Tie(claude, st.key, st.at)
@@ -971,6 +986,46 @@ func TestTie(t *testing.T) {
 				t.Errorf("tie %+v, %v; want process %d", sess, ok, tc.want)
 			case tc.want != 0 && keyOf(s, tc.want) != last:
 				t.Errorf("Sessions gives %q for process %d, want the session's key", keyOf(s, tc.want), tc.want)
+			}
+		})
+	}
+}
+
+// TestFirstTouch checks which line of a session is its first touch, the
+// one Tie holds the session's process to and the scan's session.start is
+// dated before (FirstTouch): its first line that counts, and never one out
+// of pairtime (TouchIgnored), which may have come from a process that
+// ended before the one the session runs in now started.
+func TestFirstTouch(t *testing.T) {
+	cases := []struct {
+		name string
+		// ignored and counted are when lines of the session out of pairtime
+		// and that count came, 0 for none, in that order.
+		ignored, counted int
+		// want is the first touch, 0 for none.
+		want int
+	}{
+		{"a line that counts is the session's first touch", 0, -100, -100},
+		{"a line out of pairtime isn't, so a session whose lines all are has none", -100, 0, 0},
+		{"the first line that counts after lines out of pairtime is", -150, 100, 100},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			now := sec(200)
+			var got []Session
+			s := newScanner(&fake{}, &now, &got)
+			if tc.ignored != 0 {
+				s.TouchIgnored("s_one", sec(tc.ignored), "f")
+			}
+			if tc.counted != 0 {
+				s.Touch("s_one", sec(tc.counted), "f")
+			}
+			first, ok := s.FirstTouch("s_one")
+			switch {
+			case tc.want == 0 && ok:
+				t.Errorf("first touch %v, want none", first)
+			case tc.want != 0 && (!ok || !first.Equal(sec(tc.want))):
+				t.Errorf("first touch %v (%v), want %v", first, ok, sec(tc.want))
 			}
 		})
 	}

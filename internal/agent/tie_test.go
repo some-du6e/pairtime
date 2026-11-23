@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters"
+	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/hookpath"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/procs"
+	"github.com/some-du6e/pairtime/internal/agent/tailers"
 	"github.com/some-du6e/pairtime/internal/platform"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
@@ -287,6 +289,93 @@ func TestTiedStart(t *testing.T) {
 			if first.Event.Via != tc.first || second.Event.Via != tc.second || s.ParentClass != tc.parent {
 				t.Errorf("the starts are via %s and %s, the second %+v; want via %s and %s, the second's parent %s",
 					first.Event.Via, second.Event.Via, s, tc.first, tc.second, tc.parent)
+			}
+		})
+	}
+}
+
+// TestLookbackLeavesTies checks that a line a history lookback read
+// (tailers.Line.Lookback) neither ties its session nor makes its
+// session.start the scan's, though the session is tied now: it tells of a
+// time before the agent ran, and the process the session runs in now may
+// not be the one that started it then.
+func TestLookbackLeavesTies(t *testing.T) {
+	now := time.Now()
+	me := platform.UIDOwner(uint32(os.Geteuid()))
+	table := []platform.Proc{
+		{PID: 1, Name: "systemd", PGID: 1, TTY: platform.TTYNone, Start: now.Add(-time.Hour), Owner: "uid:0"},
+		{PID: 100, PPID: 1, Name: "gnome-terminal-server", PGID: 100, TTY: platform.TTYNone, Start: now.Add(-40 * time.Minute), Owner: me},
+		{PID: 110, PPID: 100, Name: "bash", PGID: 110, TTY: platform.TTYAttached, Start: now.Add(-30 * time.Minute), Owner: me},
+		{PID: 111, PPID: 110, Name: "claude", PGID: 111, TTY: platform.TTYAttached, Start: now.Add(-5 * time.Minute), Owner: me},
+	}
+	const sid = "617e16a3-ddb4-44ca-af68-72cf58ed1a34"
+	cases := []struct {
+		name string
+		// made is how long before the ledger began the history's prompt was
+		// made, which starts the session; tied says the session is tied
+		// before lookback reads it, with the two table reads that takes.
+		made time.Duration
+		tied bool
+		// reads is how many times the process table is read in all, and
+		// start says the transcript's session.start reaches the ledger.
+		reads int
+		start bool
+	}{
+		{"a line of a history made within tieFresh ties nothing and reads no table", 2 * time.Second, false, 0, false},
+		{"a history's session.start stays the transcript's, though its session is tied now", 2 * time.Minute, true, 2, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+			w := optionsWriter(t, dirs, func(o *ledger.Options) { o.Online = func() bool { return true } })
+			reads := 0
+			a := &agent{dirs: dirs, log: slog.New(slog.DiscardHandler), problems: map[string]string{}, hooked: newHookTies()}
+			secret := make([]byte, hookpath.SessionSecretLen)
+			a.kSession.Store(&secret)
+			a.procs = procs.New(procs.Options{OS: platform.Linux, Self: me, Boot: "test-boot",
+				Read: func() ([]platform.Proc, error) { reads++; return slices.Clone(table), nil }})
+			h := newAdapterHost(a)
+			h.keys = &adapterKeys{}
+			h.attach(w)
+			key := h.sessionKey(sid)
+			if tc.tied {
+				a.procs.Tie(event.HarnessClaudeCode, key, time.Now())
+				if _, ok, _ := a.procs.Tie(event.HarnessClaudeCode, key, time.Now().Add(time.Second)); !ok {
+					t.Fatal("no tie")
+				}
+			}
+			began := w.Created()
+			b, err := json.Marshal(map[string]any{"type": "user", "sessionId": sid, "promptId": "ffffffff-0000-4000-8000-000000000061",
+				"timestamp": began.Add(-tc.made).UTC().Format(time.RFC3339Nano), "cwd": "/home/teen/p", "version": "2.1.327",
+				"entrypoint": "cli", "isSidechain": false, "promptSource": "typed", "turnOrigin": "human",
+				"message": map[string]any{"role": "user", "content": "What does this do?"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := "/home/teen/.claude/projects/-p/" + sid + ".jsonl"
+			line := tailers.Line{Harness: event.HarnessClaudeCode, Bytes: b, Log: adapters.LogLine{File: file, Path: file, End: int64(len(b) + 1)},
+				Lookback: began.Add(-time.Hour).UnixMilli()}
+			if !h.takeLine(tailers.New(tailers.Options{NoNotify: true}), line) {
+				t.Fatal("takeLine didn't take the line")
+			}
+			if _, tied := a.procs.TiedTo(key); tied != tc.tied || reads != tc.reads {
+				t.Errorf("tied %v after %d table reads; want tied %v after %d", tied, reads, tc.tied, tc.reads)
+			}
+			sealNow(t, w, dirs.Ledger())
+			for _, rec := range readLedger(t, dirs, event.SourceOS) {
+				if _, ok := rec.ev.Data.(*event.SessionStart); ok {
+					t.Errorf("the history's session.start is the scan's: %+v", rec.ev.Envelope)
+				}
+			}
+			starts := 0
+			for _, rec := range readLedger(t, dirs, event.SourceLog) {
+				if _, ok := rec.ev.Data.(*event.SessionStart); ok {
+					starts++
+				}
+			}
+			if tc.start && starts != 1 {
+				t.Errorf("%d of the transcript's session.starts in the ledger, want 1", starts)
 			}
 		})
 	}

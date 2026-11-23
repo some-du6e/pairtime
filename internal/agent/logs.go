@@ -158,9 +158,9 @@ const maxTieTried = 256
 // opened with /clear isn't tied (LogCleared): it runs in the process of the
 // session it cleared, which no tie passes on, and the scan can't tell
 // whether another process it could take is that one. Its lines, a try
-// that finds no untied process or turns it away as lost, and its lines out
-// of pairtime too (untieQuiet), end the ties of the sessions that went
-// quiet before its lines began coming again, in its folder
+// that finds no process it may tie to or turns it away as lost, and its
+// lines out of pairtime too (untieQuiet), end the ties of the sessions
+// that went quiet before its lines began coming again, in its folder
 // (procs.Scanner.UntieQuiet), as /clear and /resume end the session before
 // them in the process, which then ties to no one.
 //

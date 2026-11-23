@@ -281,8 +281,12 @@ func presenceEvent(r presence.Record) event.Event {
 // that sound; it re-anchors across a run rather than a whole boot.
 var (
 	runStart = time.Now()
-	runBoot  = "run-" + strings.ToLower(rand.Text())
+	runBoot  = runPrefix + strings.ToLower(rand.Text())
 )
+
+// runPrefix starts every run's own boot_id (runBoot), which sets it apart
+// from the OS's boot ids that hook calls carry.
+const runPrefix = "run-"
 
 // runMono is at's reading of this run's monotonic clock, in ms.
 func runMono(at time.Time) int64 { return max(at.Sub(runStart).Milliseconds(), 0) }
