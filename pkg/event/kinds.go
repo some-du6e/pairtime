@@ -60,9 +60,13 @@ func (p *SessionEnd) check(c *checker) {
 // what the harness and the hook saw, and what an agent app's reader said
 // about the run that delivered it: guest and relay (DESIGN 4.1 E-13).
 type PromptSubmit struct {
-	TurnKey     string `json:"turn_key"`
-	LenChars    int    `json:"len_chars"`
-	PastedChars int    `json:"pasted_chars"`
+	TurnKey string `json:"turn_key"`
+	// LenChars counts the code points of the prompt as the harness delivered
+	// it, pasted blocks expanded: the text the ledger commits, which CC8
+	// checks it against (ledger-v1.md 10.1, 10.8). PastedChars counts code
+	// points too.
+	LenChars    int `json:"len_chars"`
+	PastedChars int `json:"pasted_chars"`
 	// TypedLenEst is LenChars - PastedChars.
 	TypedLenEst int `json:"typed_len_est"`
 	// MinHash is a MinHashSize-value sketch of the normalized prompt, for

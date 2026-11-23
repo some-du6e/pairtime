@@ -19,7 +19,7 @@ const Version = 1
 // Class is a prompt's class in SM 2.2's sense, as the writer computed it
 // when it wrote the record, whatever origin the prompt later turns out to
 // have (DESIGN 3.6's "prompt_class as computed"). SM 2.2 and pkg/score own
-// the rule; CC8 recomputes it for challenged turns.
+// the rule; CC8 checks it on challenged turns (spec 10.8).
 type Class string
 
 // The prompt classes of SM 2.2, in its order.
