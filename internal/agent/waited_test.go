@@ -417,8 +417,10 @@ func TestAdaptersWaiting(t *testing.T) {
 			if _, err := w.Write(presenceAt(time.Now())); err != nil {
 				t.Fatal(err)
 			}
-			if b, ok, err := w.Seal(); !ok || err != nil || !b.Online || !b.Back {
-				t.Errorf("the first batch after the switch back was sealed %v, online %v, marked %v (%v); want online and marked", ok, b.Online, b.Back, err)
+			// The note asked for a seal of its own, which the writer's loop may
+			// run before this one, so the newest row says how the batch went.
+			if r := sealNow(t, w, h.a.dirs.Ledger()); !r.Online || !r.Back {
+				t.Errorf("the first batch after the switch back was sealed online %v, marked %v; want online and marked", r.Online, r.Back)
 			}
 		}},
 		{"a parked call counts until it is parsed, by the time its records carry", func(t *testing.T) {

@@ -51,8 +51,8 @@ DESIGN 3.6 gets a rule after the upload-failure notes:
 
 Accepted by the orchestrator on 2026-11-23 in the fix-verify of #224 (#238):
 
-- A seal frame keeps the stretch list it was sealed with until its day's segment is deleted, so a time the mode changed can stay in the seal frames of the newest 180 days for up to 180 days after the sweep that folded it. A sealed frame is hashed into the chain, so rewriting it would break the chain, and DESIGN 4.4's ledger row covers the frame and what it holds.
-- `local_until`, the newest stretch end, stays in every row and seal frame however old it is (#174). Folding it touches the downgrade guard (`restoreStretches`), the uploader's straddle rule and the rebuild of state.json's modes, so it goes to a follow-up after #224.
+- A seal frame keeps the stretch list it was sealed with until its day's segment is deleted, so a time the mode changed can stay in the seal frames of the newest 180 days for up to 180 days after the sweep that folded it. The frame sits in its day's append-only segment, and `batches.seg`'s rows point into it by offset, so rewriting it would move every later frame. DESIGN 4.4's ledger row covers the frame and what it holds.
+- `local_until`, the newest stretch end, stays in every row and seal frame however old it is (#174), and in the base frame a sweep writes, as the moment the list's row recorded. Folding it touches the downgrade guard (`restoreStretches`), the uploader's straddle rule and the rebuild of state.json's modes, so it goes to a follow-up after #224, which folds the base frame's copy too.
 
 ## Still open
 
