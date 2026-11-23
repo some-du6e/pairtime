@@ -96,9 +96,11 @@ func TestInstallScripts(t *testing.T) {
 		sum := sha256.Sum256(body)
 		changed := changedLines(src, body)
 		installs := func(line string) bool { return strings.Contains(line, "'"+scriptsRelease+"'") }
+		// install.sh lists the keys in one quoted string, split by spaces,
+		// and install.ps1 quotes each one, so a key is found by its text.
 		trusts := func(line string) bool {
 			for _, k := range keys {
-				if !strings.Contains(line, "'"+k.String()) {
+				if !strings.Contains(line, k.String()) {
 					return false
 				}
 			}
