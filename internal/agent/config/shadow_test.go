@@ -208,6 +208,21 @@ func TestSetShadow(t *testing.T) {
 			notErr:  "add the lines",
 		},
 		{
+			name:    "two spellings of the setting in an inline table aren't changed, and the error says to write it once, in lower case",
+			file:    "display = { shadow = true, Shadow = true }\n",
+			on:      true,
+			want:    "display = { shadow = true, Shadow = true }\n",
+			wantErr: "the setting once, as shadow, in lower case",
+		},
+		{
+			name:    "a setting spelled Shadow in an inline table isn't changed, and the error says to write it in lower case, not to add lines",
+			file:    "display = { Shadow = true }\n",
+			on:      true,
+			want:    "display = { Shadow = true }\n",
+			wantErr: "in lower case",
+			notErr:  "add the lines",
+		},
+		{
 			name:    "a table spelled [Display], which Parse doesn't read, isn't changed, and the error says to write it in lower case",
 			file:    "[Display]\nshadow = false\n",
 			on:      true,

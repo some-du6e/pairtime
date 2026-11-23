@@ -207,8 +207,8 @@ func shadowByHand(on bool) func(name, text string) string {
 		switch md, err := toml.Decode(body, &fileConfig{}); {
 		case displayVariant(body):
 			// Parse reads [display] and shadow only as written in lower
-			// case, and the decoder would put either spelling in.
-			return fmt.Sprintf("write the table as [display] and the setting as shadow, in lower case, with shadow = %t, in %s by hand", on, name)
+			// case, and a setting written twice as off.
+			return fmt.Sprintf("write the table as [display] and the setting once, as shadow, in lower case, with shadow = %t, in %s by hand", on, name)
 		case err == nil && md.IsDefined("display", "shadow"):
 			// Where the setting is, as in an inline table: adding it again
 			// would set it twice.
@@ -296,11 +296,22 @@ func patchDisplay(text string, on bool) string {
 
 // displayVariant reports whether text spells the [display] table, or the
 // shadow setting in it, in another upper and lower case than Parse reads,
-// as a header, at the top of the file, or under [display]: [Display], a
-// top-level Display.shadow, or Shadow under [display]. The decoder takes
-// any case, and with two spellings it is chance which value wins.
+// wherever it writes it: [Display], a top-level Display.shadow, Shadow
+// under [display] or in an inline table. Parse reads only the lower-case
+// spelling, and two spellings as off, so no edit of the one line can make
+// such a file say what it is asked. A file that parses is read through the
+// decoder's keys, which name each setting wherever the file writes it, and
+// one that doesn't through its lines.
 func displayVariant(text string) bool {
 	variant := func(got, want string) bool { return got != want && strings.EqualFold(got, want) }
+	if md, err := toml.Decode(text, &fileConfig{}); err == nil {
+		for _, k := range md.Keys() {
+			if len(k) > 0 && variant(k[0], "display") || len(k) == 2 && k[0] == "display" && variant(k[1], "shadow") {
+				return true
+			}
+		}
+		return false
+	}
 	table := ""
 	for _, line := range strings.Split(text, "\n") {
 		t := strings.TrimSpace(line)
