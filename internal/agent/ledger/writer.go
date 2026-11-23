@@ -1032,8 +1032,9 @@ func (w *Writer) seenLocked(s Seen, at moment, sure bool) bool {
 		// for an end the writer read itself under the record lock, after
 		// every take it has (NoteSeenWhile).
 		after := sure || w.localAt == (moment{}) || w.localAt.earlierThan(ended)
-		newer := !sealedSince && after && (ended.run > w.until.run ||
-			ended.wall > w.until.wall || ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os)
+		later := ended.run > w.until.run || ended.wall > w.until.wall ||
+			ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os
+		newer := !sealedSince && after && later
 		was := w.until
 		ends := (w.local || w.seen) && newer
 		if ends {
@@ -1044,7 +1045,14 @@ func (w *Writer) seenLocked(s Seen, at moment, sure bool) bool {
 			// nothing.
 			seal = w.noteLocked(true, end)
 		}
-		w.raiseUntil(ended)
+		if later {
+			// Only an end later than the moment by a clock the two hold moves
+			// it. One earlier by each of them, as a stretch end the agent kept
+			// from before a sweep folded the moment to the wall clock alone,
+			// adds none of its readings: it is no stretch the writer didn't
+			// know of, and brings no old reading back (Sweep).
+			w.raiseUntil(ended)
+		}
 		if moved, cross := w.until != was, w.crossBoot(end); !ends && !w.openHolds(ended) && (moved || cross) {
 			// A stretch the writer didn't know of: later than every end it
 			// had, or of a boot it has no end of, as one a run whose ledger
