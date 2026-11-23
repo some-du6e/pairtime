@@ -317,7 +317,27 @@ signature_d = Ed25519(server key, D_d)
 
 The server key that signs `D_d` is the one valid at the last millisecond of day `d`, `(d + 1) × 86,400,000 − 1`, by DESIGN 10.2's validity dates, even when the head is signed or published later. WP-SV17 signs a day at 00:10 UTC the next day and publishes a missed day on a later run, so the key valid at signing time could be a newer one. Fixing the key by `d` lets a verifier find it from the day alone, as step 7 of section 9 finds a receipt's from `received_at`. After a rotation, the server keeps the old key until it has signed every day that ended before the rotation.
 
-It commits `d`, `G_(d-1)`, `T_d`, `count_d`, `G_d` and `signature_d` to the public `pairtime-witness` repository. WP-SV17 specifies that file. Each bundle carries the index of each batch's leaf in its day tree and the leaf's inclusion proof (DESIGN 7.8), checked against `T_d` with `count_d` leaves.
+It commits `d`, `G_(d-1)`, `T_d`, `count_d`, `G_d` and `signature_d` to the public `pairtime-witness` repository, one file a day at `<YYYY>/<YYYY-MM-DD>.json`, named by the day's UTC date, such as `2026/2026-11-19.json` for 12.5's day:
+
+```json
+{
+  "format": "pairtime-day-root-v1",
+  "day": 20776,
+  "date": "2026-11-19",
+  "prev": "<G_(d-1), 64 hex digits>",
+  "count": 2,
+  "root": "<T_d>",
+  "head": "<G_d>",
+  "key_id": "<16 hex digits>",
+  "signature": "<signature_d, 128 hex digits>"
+}
+```
+
+The file has those nine members in that order and no others, indented by two spaces, with a newline at the end. `key_id` names the server key that signed, the one valid at the end of the day, as `/.well-known/pairtime-keys.json` lists it (docs/spec/keys-v1.md). The file holds hashes, a count and a signature, and never a device id or a time within the day.
+
+A day is due 10 minutes after it ends. At each start and at 00:10 UTC, `pairtimed` publishes every due day that has no head yet, oldest first from `d_0`, the day of the first row it stored, so a day missed while it was down goes out on the next run. By then a day's last rows are in the database's replica (DESIGN 10.3), and a head follows from its rows and the key alone, since Ed25519 signatures are deterministic, so a server restored from the replica signs the same head again. `pairtimed` stores each head in its database before it writes the head's file, and it resumes the chain from the stored heads, never from the files. It writes each file under a name that starts with a dot in the file's own directory, then renames it, and the witness sidecar skips such names, so the repository never receives part of a file. A file, once written, never changes.
+
+Each bundle carries the index of each batch's leaf in its day tree and the leaf's inclusion proof (DESIGN 7.8), checked against `T_d` with `count_d` leaves.
 
 ## 9. Verification
 
@@ -935,3 +955,8 @@ The review of parts 1 and 2 (issue #19) decided these, before any device witness
 32. One `K_dev` writes one chain, so no `s` repeats under it. An install restored with `pairtime restore` writes a new chain under a new `K_dev` and keeps the old key only to verify and open the old chain. DESIGN 7.11 unwraps the old key onto the new install, and a second chain from `s = 1` under it would repeat every nonce and token salt (3, 4.1).
 33. A day head is signed with the server key that was valid at the end of its day, whenever it is signed or published, so a verifier knows the key from `d` alone. Section 9 gave a receipt's key and not a day head's (8, 9).
 34. A verifier fails a record of rtype `0x00` or `0x42` to `0xff`. One from `0x14` to `0x3f` that it doesn't know is an event kind added later, as `0x13` is to a verifier built before `relay.message` took it: it reports the kind as unknown, leaves the body unchecked and still verifies the batch, and a server, never older than its clients, refuses or holds it. 4.2 said such a batch still verifies, while section 9 required every rtype to be in the table (4.2, 9).
+
+WP-SV17 decided these, as section 8 said it would:
+
+35. The day file: its path by UTC date, its nine members in their order, and nothing in it from a device but hashes and a count (8).
+36. A day is due 10 minutes after it ends, once its last rows are in the replica. The server stores each head before it writes the head's file, and resumes the chain from its stored heads (8).

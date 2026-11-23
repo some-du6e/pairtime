@@ -5,8 +5,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,9 +19,13 @@ import (
 
 	"github.com/some-du6e/pairtime/deploy"
 	"github.com/some-du6e/pairtime/internal/server/backup"
+	serverkeys "github.com/some-du6e/pairtime/internal/server/keys"
 	"github.com/some-du6e/pairtime/internal/server/objstore"
 	"github.com/some-du6e/pairtime/internal/server/objstore/objstoretest"
 	"github.com/some-du6e/pairtime/internal/server/ops"
+	"github.com/some-du6e/pairtime/internal/server/publisher"
+	"github.com/some-du6e/pairtime/internal/server/store"
+	"github.com/some-du6e/pairtime/internal/server/writer"
 )
 
 // deployed is a server's surroundings, faked for doctor: the buckets,
@@ -171,6 +177,57 @@ snapshot_bucket = "pairtime-snapshots"
 		t.Fatal(err)
 	}
 	return d
+}
+
+// write runs op through a writer on the fake deploy's database, with the
+// database's read pool, and closes both.
+func (d *deployed) write(t *testing.T, op func(ctx context.Context, db *store.DB, w *writer.Writer) error) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := store.Open(ctx, store.Options{Engine: store.SQLite, Path: filepath.Join(d.dataDir, "pairtime.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	w := writer.Start(db.Write, writer.Options{Window: time.Millisecond})
+	defer w.Close()
+	if err := op(ctx, db, w); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// witnessRows stores a witness row of the fake deploy's server key at each
+// time, as ingest does, and records the key's validity, as serve does.
+func (d *deployed) witnessRows(t *testing.T, times ...time.Time) {
+	t.Helper()
+	pub := d.keys.Public()
+	d.write(t, func(ctx context.Context, _ *store.DB, w *writer.Writer) error {
+		return w.Do(ctx, len(times)+2, func(ctx context.Context, tx writer.Tx) error {
+			for i, at := range times {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO witness_rows (device_id, b, account_id, n, root, head, prev, received_at_ms, receipt_sig, receipt_key_id) VALUES ($1, $2, 'u1', 1, $3, $3, $3, $4, $5, $6)`,
+					"d_doctor", i+1, strings.Repeat("ab", 32), at.UnixMilli(), strings.Repeat("01", 64), pub.ServerKeyID()); err != nil {
+					return err
+				}
+			}
+			return serverkeys.RecordServer(ctx, tx, pub.Server, time.Now().UnixMilli())
+		})
+	})
+}
+
+// publish runs the day-root publisher at now, as serve does, with the
+// files going to dir.
+func (d *deployed) publish(t *testing.T, dir string, now time.Time) {
+	t.Helper()
+	pub := d.keys.Public()
+	d.write(t, func(ctx context.Context, db *store.DB, w *writer.Writer) error {
+		h, err := serverkeys.Load(ctx, db.Read)
+		if err != nil {
+			return err
+		}
+		_, err = publisher.Publish(ctx, publisher.Options{Writer: w, Read: db.Read, History: h,
+			Keys: map[string]ed25519.PrivateKey{pub.ServerKeyID(): d.keys.Server}, Dir: dir}, now)
+		return err
+	})
 }
 
 // doctorEmailKey is the fake deploy's PAIRTIME_EMAIL_KEY.
@@ -447,14 +504,55 @@ func TestDoctor(t *testing.T) {
 				d.commitAt = time.Now().Add(-3 * time.Hour)
 			},
 			want: map[string][2]string{"witness": {statusFail, "isn't pushing"}}, wantCode: 1},
-		{name: "a repository with no commits and no roots yet is a skip that names WP-SV17",
+		{name: "a server with no witness rows has no day root to push yet, which passes, though the repository has no commits",
 			setup: func(t *testing.T, d *deployed) {
 				d.commitAt = time.Time{}
 				if err := os.RemoveAll(filepath.Join(d.witness, "2026")); err != nil {
 					t.Fatal(err)
 				}
 			},
-			want: map[string][2]string{"witness": {statusSkip, "WP-SV17"}}},
+			want: map[string][2]string{"witness": {statusOK, "no witness rows yet"}}},
+		{name: "witness rows of a day that is due, with no day head stored, fail the witness check: the publisher isn't publishing",
+			setup: func(t *testing.T, d *deployed) { d.witnessRows(t, time.Now().Add(-72*time.Hour)) },
+			want:  map[string][2]string{"witness": {statusFail, "are due and have no day head"}}, wantCode: 1},
+		{name: "witness rows of today alone have no day head due yet, which passes and says when the first is due",
+			setup: func(t *testing.T, d *deployed) {
+				d.witnessRows(t, time.Now())
+				if err := os.RemoveAll(filepath.Join(d.witness, "2026")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: map[string][2]string{"witness": {statusOK, "the first day root"}}},
+		{name: "the newest day head with no file in the witness directory fails, since the sidecar can't push it",
+			setup: func(t *testing.T, d *deployed) {
+				d.witnessRows(t, time.Now().Add(-72*time.Hour))
+				d.publish(t, t.TempDir(), time.Now())
+			},
+			want: map[string][2]string{"witness": {statusFail, "has no file at"}}, wantCode: 1},
+		{name: "a day root's file that doesn't hold its stored head fails, since a published root never changes",
+			setup: func(t *testing.T, d *deployed) {
+				now := time.Now()
+				d.witnessRows(t, now.Add(-72*time.Hour))
+				d.publish(t, d.witness, now)
+				last, _ := publisher.LastDue(now)
+				writeFile(t, filepath.Join(d.witness, filepath.FromSlash(publisher.FileName(last))), "{}\n", 0o644)
+			},
+			want: map[string][2]string{"witness": {statusFail, "doesn't hold the stored head"}}, wantCode: 1},
+		{name: "day roots the publisher wrote and the sidecar pushed pass, naming the newest day head",
+			setup: func(t *testing.T, d *deployed) {
+				d.witnessRows(t, time.Now().Add(-72*time.Hour))
+				d.publish(t, d.witness, time.Now())
+				old := time.Now().Add(-time.Hour)
+				if err := filepath.WalkDir(d.witness, func(p string, e fs.DirEntry, err error) error {
+					if err != nil || e.IsDir() {
+						return err
+					}
+					return os.Chtimes(p, old, old)
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: map[string][2]string{"witness": {statusOK, "the newest day head"}}},
 		{name: "a root pairtimed is still writing, under a dot name, isn't a root the sidecar failed to push, since the sidecar never publishes one",
 			setup: func(t *testing.T, d *deployed) {
 				d.commitAt = time.Now().Add(-30 * time.Minute)

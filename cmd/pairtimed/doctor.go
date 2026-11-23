@@ -26,6 +26,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/objstore"
 	"github.com/some-du6e/pairtime/internal/server/ops"
+	"github.com/some-du6e/pairtime/internal/server/publisher"
 	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/store"
 )
@@ -842,10 +843,12 @@ func token(v string) string {
 // witnessRepo matches owner/name.
 var witnessRepo = regexp.MustCompile(`^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$`)
 
-// checkWitness checks that the witness sidecar publishes what pairtimed
-// writes: the deploy key is where compose mounts it from, and the newest
-// day root in the witness directory is older than the repository's latest
-// commit, which GitHub's public API reports without a credential.
+// checkWitness checks the day roots from end to end (WP-SV17): the
+// publisher has stored a head for every day that is due, the newest head's
+// file is in the witness directory as stored, the sidecar's deploy key is
+// where compose mounts it from, and the newest file there is older than
+// the witness repository's latest commit, which GitHub's public API
+// reports without a credential.
 func (d *doctor) checkWitness(ctx context.Context) result {
 	repo := d.cfg.Secrets.Get(envWitnessRepo)
 	if repo == "" {
@@ -860,6 +863,13 @@ func (d *doctor) checkWitness(ctx context.Context) result {
 		problems = append(problems, fmt.Sprintf("there is no deploy key at config/%s, so the sidecar can't push (deploy/runbook.md, step 5)", witnessKey))
 	} else if fi.Mode().Perm()&0o077 != 0 {
 		problems = append(problems, fmt.Sprintf("config/%s has mode %04o; ssh refuses a key others can read: chmod 600 it", witnessKey, fi.Mode().Perm()))
+	}
+	heads, err := d.dayHeads(ctx)
+	if err != nil {
+		return bad("%v", err)
+	}
+	if heads.problem != "" {
+		problems = append(problems, heads.problem)
 	}
 
 	newest, newestAt, err := newestFile(d.witnessDir)
@@ -900,14 +910,84 @@ func (d *doctor) checkWitness(ctx context.Context) result {
 	case len(problems) > 0:
 		return bad("%s; %s has %s", strings.Join(problems, "; "), repo, latest)
 	case newest == "":
-		return skip("pairtimed writes no day roots to %s yet; WP-SV17's publisher does. The sidecar and the deploy key are in place, and %s has %s", d.witnessDir, repo, latest)
+		return ok("%s, so there is no day root to push yet. The sidecar and the deploy key are in place, and %s has %s", heads.none, repo, latest)
 	case !committed.Before(newestAt):
-		return ok("%s, the newest root, is older than %s's %s", newest, repo, latest)
+		return ok("%s, the newest root, is older than %s's %s%s", newest, repo, latest, heads.note)
 	case time.Since(newestAt) < witnessPushLag:
-		return ok("%s is %s old and the sidecar pushes every 5 minutes; %s has %s", newest, time.Since(newestAt).Round(time.Second), repo, latest)
+		return ok("%s is %s old and the sidecar pushes every 5 minutes; %s has %s%s", newest, time.Since(newestAt).Round(time.Second), repo, latest, heads.note)
 	default:
 		return bad("%s, written %s ago, isn't in %s, which has %s: the witness sidecar isn't pushing (docker compose logs witness)", newest, time.Since(newestAt).Round(time.Minute), repo, latest)
 	}
+}
+
+// dayRootGrace is how long past a day's due time, 00:10 UTC the next day,
+// doctor waits for its head: the publisher tries again within the hour
+// after a run that failed.
+const dayRootGrace = time.Hour
+
+// dayHeadState is what checkWitness reads of the day heads.
+type dayHeadState struct {
+	// problem says what is wrong: days due without a head, or a newest
+	// head whose file isn't in the witness directory as stored.
+	problem string
+	// note names the newest head and its file, for an ok.
+	note string
+	// none says why there is no root yet, for an ok with no file.
+	none string
+}
+
+// dayHeads compares the database's day heads with what is due and with the
+// newest head's file under the witness directory.
+func (d *doctor) dayHeads(ctx context.Context) (dayHeadState, error) {
+	var st dayHeadState
+	o := storeOptions(d.cfg, d.e)
+	o.NoCreate = true
+	o.Logger = nil
+	db, err := store.Open(ctx, o)
+	if err != nil {
+		return st, fmt.Errorf("reading the day heads: %w", err)
+	}
+	defer db.Close()
+	now := time.Now()
+	first, last, behind, err := publisher.Pending(ctx, db.Read, now.Add(-dayRootGrace))
+	if err != nil {
+		return st, err
+	}
+	if behind {
+		st.problem = fmt.Sprintf("the days from %s to %s are due and have no day head: the publisher isn't publishing (pairtimed's log, \"day roots\")", publisher.Date(first), publisher.Date(last))
+	}
+	head, ok, err := publisher.Newest(ctx, db.Read)
+	if err != nil {
+		return st, err
+	}
+	if !ok {
+		first, rows, err := publisher.FirstDay(ctx, db.Read)
+		switch {
+		case err != nil:
+			return st, err
+		case !rows:
+			st.none = "the server has no witness rows yet"
+		default:
+			st.none = fmt.Sprintf("the first day root, %s's, is due at %s", publisher.Date(first), publisher.DueAt(first).Format(time.RFC3339))
+		}
+		return st, nil
+	}
+	want, err := head.File()
+	if err != nil {
+		return st, err
+	}
+	path := filepath.Join(d.witnessDir, filepath.FromSlash(publisher.FileName(head.D)))
+	have, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist) && st.problem == "":
+		st.problem = fmt.Sprintf("the newest day head, %s's, has no file at %s, which the publisher writes after it stores the head: is -witness-dir compose's /witness mount?", publisher.Date(head.D), path)
+	case err != nil && st.problem == "":
+		st.problem = err.Error()
+	case err == nil && !bytes.Equal(have, want) && st.problem == "":
+		st.problem = fmt.Sprintf("%s doesn't hold the stored head of %s, and a published root never changes: compare it with the witness repository's copy", path, publisher.Date(head.D))
+	}
+	st.note = fmt.Sprintf("; the newest day head, %s's, is in %s", publisher.Date(head.D), path)
+	return st, nil
 }
 
 // newestFile returns the newest regular file under dir, by modification
