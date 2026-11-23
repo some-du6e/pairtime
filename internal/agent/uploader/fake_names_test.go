@@ -221,9 +221,17 @@ func (f *fakeIngest) projectNames(w http.ResponseWriter, r *http.Request) {
 		delete(f.namesHidden, it.project)
 	}
 	f.counter = req
-	if fault == "lost" {
+	switch fault {
+	case "lost":
 		runThen()
 		drop(w)
+		return
+	case "garbled":
+		// pairtimed's 200, stored, whose body doesn't read.
+		runThen()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		io.WriteString(w, "{not json")
 		return
 	}
 	out := []map[string]string{}

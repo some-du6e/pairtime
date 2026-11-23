@@ -281,7 +281,8 @@ type Uploader struct {
 	namesKey, namesHash, namesHeld string
 	namesAfter                     time.Time
 	// missingUntil is when a 404 to a names request stops counting, a day
-	// after it, and missingHash the body that got it (namesMissing).
+	// after it, and missingHash the hash of what config.toml asked to send
+	// then (namesMissing).
 	missingUntil time.Time
 	missingHash  string
 	namesBackoff *backoff

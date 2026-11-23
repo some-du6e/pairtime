@@ -225,8 +225,8 @@ func TestNames(t *testing.T) {
 			t.Errorf("the names' backoff counts %d failures and the uploads' %d; want the names' alone", r.u.namesBackoff.failing(), r.u.backoff.failing())
 		}
 		n, err := ReadNames(r.dirs.Data)
-		if !errors.Is(err, fs.ErrNotExist) || len(n.Confirmed) != 0 || len(n.Codes) != 0 {
-			t.Errorf("project-names.json = %+v, %v; want none, since no answer was pairtimed's names", n, err)
+		if err != nil || n.Server != r.creds.Server || len(n.Confirmed) != 0 || len(n.Codes) != 0 {
+			t.Errorf("project-names.json = %+v, %v; want this sign-in's, with nothing of the server's, since no answer was pairtimed's names", n, err)
 		}
 	}
 	// missing checks that a 404, a server without the names endpoint, told
@@ -244,8 +244,8 @@ func TestNames(t *testing.T) {
 				t.Errorf("the 404 counts until %v, want a day from now", r.u.missingUntil)
 			}
 			n, err := ReadNames(r.dirs.Data)
-			if !errors.Is(err, fs.ErrNotExist) || len(n.Confirmed) != 0 || len(n.Codes) != 0 {
-				t.Errorf("project-names.json = %+v, %v; want none, since no answer was pairtimed's names", n, err)
+			if err != nil || n.Server != r.creds.Server || len(n.Confirmed) != 0 || len(n.Codes) != 0 {
+				t.Errorf("project-names.json = %+v, %v; want this sign-in's, with nothing of the server's, since no answer was pairtimed's names", n, err)
 			}
 		}
 	}
@@ -260,20 +260,22 @@ func TestNames(t *testing.T) {
 		}
 	}
 	tests := []struct {
-		name   string
-		config string            // config.toml
-		held   map[string]string // the names the server holds at the start
-		codes  map[string]string // the codes the server gives the device's keys
-		hidden []string          // the keys the server lists as hidden on the dashboard at the start
-		known  map[string]string // project-names.json's names, as the server confirmed them
-		server string            // the server project-names.json is for, the rig's when ""
-		faults map[int]string    // the names requests' faults, by attempt
-		then   map[int]string    // config.toml as the owner leaves it after an attempt, by its number
-		hideAt int               // the attempt after which the owner presses Hide this name for nameKey
-		own    []string          // the keys of the projects the computer has seen (Options.OwnKeys), every key when nil
-		local  bool              // the computer is local-only: no sign-in to upload with
-		until  func(f *fakeIngest, cfgPath string) bool
-		checks []rigCheck
+		name    string
+		config  string            // config.toml
+		held    map[string]string // the names the server holds at the start
+		codes   map[string]string // the codes the server gives the device's keys
+		hidden  []string          // the keys the server lists as hidden on the dashboard at the start
+		known   map[string]string // project-names.json's names, as the server confirmed them
+		server  string            // the server project-names.json is for, the rig's when ""
+		faults  map[int]string    // the names requests' faults, by attempt
+		then    map[int]string    // config.toml as the owner leaves it after an attempt, by its number
+		hideAt  int               // the attempt after which the owner presses Hide this name for nameKey
+		dropAt  int               // the attempt after which the server loses nameKey's name, with no hide
+		rawFile string            // project-names.json as it is on disk at the start, when set
+		own     []string          // the keys of the projects the computer has seen (Options.OwnKeys), every key when nil
+		local   bool              // the computer is local-only: no sign-in to upload with
+		until   func(f *fakeIngest, cfgPath string) bool
+		checks  []rigCheck
 	}{
 		{
 			name:   "a name turned on in config.toml goes in a names request, and the server's answer is kept in project-names.json for its owner alone",
@@ -449,6 +451,107 @@ func TestNames(t *testing.T) {
 			},
 		},
 		{
+			name:   "after a 404, a change to the names reads first, and once the endpoint answers, a set whose answer was lost and that the owner hid before the retry stays hidden",
+			config: projectTable(nameKey, "chip8-emulator", true),
+			faults: map[int]string{1: "404", 3: "lost"},
+			then:   map[int]string{1: projectTable(nameKey, "Chip-8", true)},
+			hideAt: 3,
+			until: func(f *fakeIngest, cfgPath string) bool {
+				cfg, _, _ := config.Load(cfgPath)
+				return f.namesPosts >= 5 && len(f.namesHidden) == 0 && !cfg.Projects[nameKey].Online
+			},
+			checks: []rigCheck{
+				func(t *testing.T, r *rig, _ string) {
+					if _, shown := r.f.names[nameKey]; shown {
+						t.Errorf("the server shows the hidden name again: %v", r.f.names)
+					}
+					n, err := ReadNames(r.dirs.Data)
+					if h, ok := n.Hidden[nameKey]; err != nil || !ok || h.Reason != "" {
+						t.Errorf("project-names.json = %+v, %v; want a note that the owner hid the name", n, err)
+					}
+					if got := string(r.f.namesBodies[len(r.f.namesBodies)-2]); got != `{}` {
+						t.Errorf("the request before the hide's delete carried %s, want a read", got)
+					}
+				},
+				func(t *testing.T, r *rig, _ string) {
+					if got := string(r.f.namesBodies[0]); got != `{}` {
+						t.Errorf("the first request the endpoint answered, after the 404 and the change, carried %s, want a read", got)
+					}
+				},
+			},
+		},
+		{
+			name:   "a 200 whose body doesn't read leaves the outcome unknown, so the next request is a read",
+			config: projectTable(nameKey, "chip8-emulator", true),
+			faults: map[int]string{2: "garbled"},
+			until:  func(f *fakeIngest, _ string) bool { return f.namesPosts >= 3 },
+			checks: []rigCheck{bodies(`{}`, `{"set":[{"project":"`+nameKey+`","label":"chip8-emulator"}]}`, `{}`)},
+		},
+		{
+			name:   "a set whose answer was lost and whose name the server no longer has, with no hide, goes off as dropped and isn't sent again",
+			config: projectTable(nameKey, "chip8-emulator", true),
+			faults: map[int]string{2: "lost"},
+			dropAt: 2,
+			until: func(f *fakeIngest, cfgPath string) bool {
+				cfg, _, _ := config.Load(cfgPath)
+				return f.namesPosts >= 3 && !cfg.Projects[nameKey].Online
+			},
+			checks: []rigCheck{
+				func(t *testing.T, r *rig, _ string) {
+					if _, shown := r.f.names[nameKey]; shown {
+						t.Errorf("the server shows the name again: %v", r.f.names)
+					}
+					if got := string(r.f.namesBodies[len(r.f.namesBodies)-1]); got != `{}` {
+						t.Errorf("the last request carried %s, want the read that found the name gone", got)
+					}
+					n, err := ReadNames(r.dirs.Data)
+					if h := n.Hidden[nameKey]; err != nil || h.Reason != NoteDropped || h.Label != "chip8-emulator" || len(n.Sent) != 0 {
+						t.Errorf("project-names.json = %+v, %v; want a dropped note, and nothing still waiting", n, err)
+					}
+				},
+			},
+		},
+		{
+			name:   "a delete whose answer was lost leaves no note: the name went as the owner asked",
+			config: projectTable(nameKey, "chip8-emulator", false),
+			held:   map[string]string{nameKey: "chip8-emulator"},
+			known:  map[string]string{nameKey: "chip8-emulator"},
+			faults: map[int]string{2: "lost"},
+			until: func(f *fakeIngest, _ string) bool {
+				// The read after the lost delete, which settles it.
+				return len(f.namesBodies) >= 3 && string(f.namesBodies[len(f.namesBodies)-1]) == `{}` && len(f.names) == 0
+			},
+			checks: []rigCheck{
+				func(t *testing.T, r *rig, _ string) {
+					n, err := ReadNames(r.dirs.Data)
+					if err != nil || len(n.Hidden) != 0 || len(n.Deleting) != 0 || len(n.Confirmed) != 0 {
+						t.Errorf("project-names.json = %+v, %v; want no note and nothing waiting", n, err)
+					}
+				},
+			},
+		},
+		{
+			name:    "a project-names.json that doesn't read counts as another sign-in's: every name on goes off with a note, and the file is this sign-in's",
+			config:  projectTable(nameKey, "chip8-emulator", true),
+			rawFile: `{"v":1,"server":`,
+			until: func(f *fakeIngest, cfgPath string) bool {
+				cfg, _, _ := config.Load(cfgPath)
+				return f.namesPosts == 1 && !cfg.Projects[nameKey].Online && f.head != nil && f.head.b == 3
+			},
+			checks: []rigCheck{
+				bodies(`{}`),
+				func(t *testing.T, r *rig, _ string) {
+					n, err := ReadNames(r.dirs.Data)
+					if h := n.Hidden[nameKey]; err != nil || h.Reason != NoteUnreadable || h.Label != "chip8-emulator" || n.Server != r.creds.Server {
+						t.Errorf("project-names.json = %+v, %v; want this sign-in's, with a note of the name turned off", n, err)
+					}
+					if len(r.f.names) != 0 {
+						t.Errorf("the server shows %v, want no name sent", r.f.names)
+					}
+				},
+			},
+		},
+		{
 			name:   "no names request goes before the server holds a batch from the link, even with a name on, so pairtime logout after a wrong approval still frees the device's id",
 			config: projectTable(nameKey, "chip8-emulator", true),
 			until:  func(f *fakeIngest, _ string) bool { return f.names[nameKey] == "chip8-emulator" },
@@ -575,6 +678,37 @@ func TestNames(t *testing.T) {
 			},
 		},
 		{
+			name:   "a set whose answer was lost, hidden before the read after it got a 404, waits for the endpoint's answer and never goes again unread, and a change to another name reads first",
+			config: projectTable(nameKey, "chip8-emulator", true),
+			faults: map[int]string{2: "lost", 3: "404"},
+			hideAt: 2,
+			then:   map[int]string{3: projectTable(nameKey, "chip8-emulator", true) + projectTable(otherKey, "plant-sensor", true)},
+			until: func(f *fakeIngest, cfgPath string) bool {
+				cfg, _, _ := config.Load(cfgPath)
+				return f.namesPosts >= 5 && len(f.namesHidden) == 0 && !cfg.Projects[nameKey].Online && f.names[otherKey] == "plant-sensor"
+			},
+			checks: []rigCheck{
+				func(t *testing.T, r *rig, _ string) {
+					if _, shown := r.f.names[nameKey]; shown {
+						t.Errorf("the server shows the hidden name again: %v", r.f.names)
+					}
+					sets := 0
+					for _, b := range r.f.namesBodies {
+						if strings.Contains(string(b), `{"project":"`+nameKey+`","label"`) {
+							sets++
+						}
+					}
+					if got := r.f.namesBodies; sets != 1 || len(got) < 3 || string(got[len(got)-2]) != `{}` {
+						t.Errorf("the names requests carried %q, want the hidden name's set once, and a read before the last", got)
+					}
+					n, err := ReadNames(r.dirs.Data)
+					if h, ok := n.Hidden[nameKey]; err != nil || !ok || h.Reason != "" || len(n.Sent) != 0 {
+						t.Errorf("project-names.json = %+v, %v; want a note that the owner hid the name, and nothing left unsettled", n, err)
+					}
+				},
+			},
+		},
+		{
 			name:   "an answer that isn't pairtimed's counts as a network error, is never acted on, tells doctor nothing, and holds back no upload",
 			config: projectTable(nameKey, "chip8-emulator", true),
 			faults: allFaults("html"),
@@ -590,11 +724,11 @@ func TestNames(t *testing.T) {
 			checks: []rigCheck{missing(1)},
 		},
 		{
-			name:   "a 404 to a name turned on is as quiet: the read and then the name go once, and wait a day for a server that has the endpoint",
+			name:   "a 404 to the read at the start with a name turned on is as quiet, and the name waits a day for the endpoint's answer, since the device doesn't know what the server holds",
 			config: projectTable(nameKey, "chip8-emulator", true),
 			faults: allFaults("404"),
-			until:  func(f *fakeIngest, _ string) bool { return f.namesPosts > 1 && f.head != nil && f.head.b == 3 },
-			checks: []rigCheck{missing(2)},
+			until:  func(f *fakeIngest, _ string) bool { return f.namesPosts > 0 && f.head != nil && f.head.b == 3 },
+			checks: []rigCheck{missing(1), bodies()},
 		},
 		{
 			name:   "a name config.toml turns on for a project this computer never worked in, as in a config.toml copied from another computer, never goes, and doctor says which",
@@ -651,6 +785,16 @@ func TestNames(t *testing.T) {
 						delete(r.f.names, nameKey)
 						r.f.namesHidden[nameKey] = true
 					}
+				}
+			}
+			if tt.dropAt > 0 {
+				// The server loses the name and keeps no hide, as after the
+				// hide's 30 days or for a removed device.
+				r.f.namesThen[tt.dropAt] = func() { delete(r.f.names, nameKey) }
+			}
+			if tt.rawFile != "" {
+				if err := os.WriteFile(filepath.Join(r.dirs.Data, NamesFileName), []byte(tt.rawFile), 0o600); err != nil {
+					t.Fatal(err)
 				}
 			}
 			for attempt, text := range tt.then {
@@ -842,27 +986,31 @@ func TestSignedInElsewhere(t *testing.T) {
 	)
 	at := time.Date(2026, 11, 22, 21, 0, 0, 0, time.UTC)
 	tests := []struct {
-		name     string
-		file     *Names            // project-names.json, none when nil
-		on       map[string]string // the names config.toml has on
-		stuck    string            // a key hide can't turn off
-		wantOff  map[string]string
-		wantFile *Names // project-names.json after it, unchanged when nil
+		name       string
+		file       *Names            // project-names.json, none when nil
+		raw        string            // project-names.json's bytes, when set, for one that doesn't read
+		on         map[string]string // the names config.toml has on
+		stuck      string            // a key hide can't turn off
+		wantOff    map[string]string
+		wantReason string
+		wantFile   *Names // project-names.json after it, unchanged when nil
 	}{
 		{
-			name:    "a file of another server turns every name on, and every name that server showed, off with a note, and is this sign-in's from then on",
-			file:    &Names{V: namesVersion, Server: "https://other.example.org", Device: device, Confirmed: map[string]string{nameKey: "chip8-emulator"}, Codes: map[string]string{nameKey: "7c41e9"}},
-			on:      map[string]string{otherKey: "plant-sensor"},
-			wantOff: map[string]string{nameKey: "chip8-emulator", otherKey: "plant-sensor"},
+			name:       "a file of another server turns every name on, and every name that server showed, off with a note, and is this sign-in's from then on",
+			file:       &Names{V: namesVersion, Server: "https://other.example.org", Device: device, Confirmed: map[string]string{nameKey: "chip8-emulator"}, Codes: map[string]string{nameKey: "7c41e9"}},
+			on:         map[string]string{otherKey: "plant-sensor"},
+			wantOff:    map[string]string{nameKey: "chip8-emulator", otherKey: "plant-sensor"},
+			wantReason: NoteSignedIn,
 			wantFile: &Names{V: namesVersion, Server: server, Device: device, Hidden: map[string]HiddenName{
 				nameKey:  {Label: "chip8-emulator", At: at.UnixMilli(), Reason: NoteSignedIn},
 				otherKey: {Label: "plant-sensor", At: at.UnixMilli(), Reason: NoteSignedIn},
 			}},
 		},
 		{
-			name:    "a file of another device on the same server does the same",
-			file:    &Names{V: namesVersion, Server: server, Device: "d_other", Confirmed: map[string]string{nameKey: "chip8-emulator"}},
-			wantOff: map[string]string{nameKey: "chip8-emulator"},
+			name:       "a file of another device on the same server does the same",
+			file:       &Names{V: namesVersion, Server: server, Device: "d_other", Confirmed: map[string]string{nameKey: "chip8-emulator"}},
+			wantOff:    map[string]string{nameKey: "chip8-emulator"},
+			wantReason: NoteSignedIn,
 			wantFile: &Names{V: namesVersion, Server: server, Device: device, Hidden: map[string]HiddenName{
 				nameKey: {Label: "chip8-emulator", At: at.UnixMilli(), Reason: NoteSignedIn},
 			}},
@@ -871,7 +1019,7 @@ func TestSignedInElsewhere(t *testing.T) {
 			name: "a name config.toml can't turn off gets a pending note, so the uploader never sends it",
 			file: &Names{V: namesVersion, Server: "https://other.example.org", Device: device},
 			on:   map[string]string{nameKey: "chip8-emulator"}, stuck: nameKey,
-			wantOff: map[string]string{nameKey: "chip8-emulator"},
+			wantOff: map[string]string{nameKey: "chip8-emulator"}, wantReason: NoteSignedIn,
 			wantFile: &Names{V: namesVersion, Server: server, Device: device, Hidden: map[string]HiddenName{
 				nameKey: {Label: "chip8-emulator", At: at.UnixMilli(), Reason: NoteSignedIn, Pending: true},
 			}},
@@ -882,8 +1030,25 @@ func TestSignedInElsewhere(t *testing.T) {
 			on:   map[string]string{nameKey: "chip8-emulator"},
 		},
 		{
-			name: "with no file, as before a computer's first link, nothing goes off: the names turned on before it go",
-			on:   map[string]string{nameKey: "chip8-emulator"},
+			name:     "with no file, as before a computer's first link, nothing goes off: the names turned on before it go, and the file names this sign-in from now on",
+			on:       map[string]string{nameKey: "chip8-emulator"},
+			wantFile: &Names{V: namesVersion, Server: server, Device: device},
+		},
+		{
+			name:     "a file that names no sign-in gets this one, its notes kept",
+			file:     &Names{V: namesVersion, Hidden: map[string]HiddenName{nameKey: {Label: "chip8-emulator", At: 1}}},
+			on:       map[string]string{otherKey: "plant-sensor"},
+			wantFile: &Names{V: namesVersion, Server: server, Device: device, Hidden: map[string]HiddenName{nameKey: {Label: "chip8-emulator", At: 1}}},
+		},
+		{
+			name:       "a file that doesn't read counts as another sign-in's, since pairtime can't tell: every name on goes off",
+			raw:        `{"v":1,"server":`,
+			on:         map[string]string{nameKey: "chip8-emulator"},
+			wantOff:    map[string]string{nameKey: "chip8-emulator"},
+			wantReason: NoteUnreadable,
+			wantFile: &Names{V: namesVersion, Server: server, Device: device, Hidden: map[string]HiddenName{
+				nameKey: {Label: "chip8-emulator", At: at.UnixMilli(), Reason: NoteUnreadable},
+			}},
 		},
 	}
 	for _, tt := range tests {
@@ -899,6 +1064,11 @@ func TestSignedInElsewhere(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if tt.raw != "" {
+				if err := os.WriteFile(name, []byte(tt.raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			before, _ := os.ReadFile(name)
 			var hid []string
 			hide := func(key string) error {
@@ -908,12 +1078,12 @@ func TestSignedInElsewhere(t *testing.T) {
 				hid = append(hid, key)
 				return nil
 			}
-			off, err := SignedInElsewhere(dir, server, device, tt.on, hide, at)
+			off, reason, err := SignedInElsewhere(dir, server, device, tt.on, hide, at)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !maps.Equal(off, tt.wantOff) {
-				t.Errorf("turned off %v, want %v", off, tt.wantOff)
+			if !maps.Equal(off, tt.wantOff) || reason != tt.wantReason {
+				t.Errorf("turned off %v for %q, want %v for %q", off, reason, tt.wantOff, tt.wantReason)
 			}
 			var want []string
 			for key := range tt.wantOff {
@@ -948,6 +1118,7 @@ func TestNextNames(t *testing.T) {
 	tests := []struct {
 		name    string
 		file    *Names
+		raw     string // the file's bytes, for one that doesn't read
 		wanted  map[string]string
 		own     map[string]bool
 		linking bool
@@ -981,6 +1152,11 @@ func TestNextNames(t *testing.T) {
 			wanted: map[string]string{nameKey: "chip8-emulator"},
 		},
 		{
+			name:   "a file that doesn't read sends nothing, since the agent counts it as another sign-in's and turns its names off",
+			raw:    `{"v":1,"server":`,
+			wanted: map[string]string{nameKey: "chip8-emulator"},
+		},
+		{
 			name:   "a project this computer never worked in, with no code from the server, isn't in it",
 			file:   &Names{V: namesVersion, Server: c.Server, Device: c.DeviceID},
 			wanted: map[string]string{otherKey: "copied"},
@@ -1006,6 +1182,11 @@ func TestNextNames(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(filepath.Join(dir, NamesFileName), data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.raw != "" {
+				if err := os.WriteFile(filepath.Join(dir, NamesFileName), []byte(tt.raw), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}

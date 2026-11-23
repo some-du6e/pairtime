@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -215,23 +216,36 @@ func runLogin(args []string, stdout, stderr io.Writer) int {
 // server as device, the project names that were on for another sign-in,
 // since this server never showed them, and lists each with the command
 // that shows it here (uploader.SignedInElsewhere; project-names-v1 2). A
-// computer linking for the first time keeps the names turned on before,
-// which go once the server holds its first upload.
+// project-names.json that doesn't read counts as another sign-in's, since
+// pairtime can't tell. A computer linking for the first time keeps the
+// names turned on before, which go once the server holds its first upload,
+// and its file names this sign-in from now on. While config.toml doesn't
+// read or parse, nothing changes here: the agent turns the names off
+// before it sends any, once config.toml parses.
 func namesOff(stdout, stderr io.Writer, dirs home.Dirs, server, device string) {
-	cfg, _, err := config.Load(dirs.ConfigFile())
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		fmt.Fprintf(stderr, "pairtime login: config.toml doesn't read (%v), so no project name goes to %s until it does\n", err, server)
+	cfg, problems, parsed, err := config.LoadParsed(dirs.ConfigFile())
+	switch {
+	case err != nil && !errors.Is(err, fs.ErrNotExist):
+		fmt.Fprintf(stderr, "pairtime login: config.toml doesn't read (%v), so pairtime left the project names as they are; once it reads, the agent turns off the ones that were on for another sign-in before it sends any\n", err)
+		return
+	case !parsed:
+		fmt.Fprintf(stderr, "pairtime login: config.toml has an error (%s), so pairtime left the project names as they are; once it's fixed, the agent turns off the ones that were on for another sign-in before it sends any\n", strings.Join(problems, "; "))
+		return
 	}
 	hide := func(key string) error { return config.HideName(dirs.ConfigFile(), key) }
-	off, err := uploader.SignedInElsewhere(dirs.Data, server, device, cfg.NamesOn(), hide, time.Now())
+	off, why, err := uploader.SignedInElsewhere(dirs.Data, server, device, cfg.NamesOn(), hide, time.Now())
 	if err != nil {
-		fmt.Fprintf(stderr, "pairtime login: project-names.json doesn't read (%v); the agent turns off the names that were on for another sign-in before it sends any\n", err)
+		fmt.Fprintf(stderr, "pairtime login: project-names.json couldn't be written (%v); the agent turns off the project names that were on for another sign-in before it sends any\n", err)
 		return
 	}
 	if len(off) == 0 {
 		return
 	}
-	fmt.Fprintf(stdout, "\nThis computer showed project names on your dashboard on another sign-in. %s never showed them, so pairtime turned them off here, and nothing about them goes there. To show one on your dashboard there:\n", server)
+	if why == uploader.NoteUnreadable {
+		fmt.Fprintf(stdout, "\npairtime couldn't read which sign-in this computer's project names were for, so it turned off the ones that were on, and nothing about them goes to %s. To show one on your dashboard there:\n", server)
+	} else {
+		fmt.Fprintf(stdout, "\nThis computer showed project names on your dashboard on another sign-in. %s never showed them, so pairtime turned them off here, and nothing about them goes there. To show one on your dashboard there:\n", server)
+	}
 	for _, key := range slices.Sorted(maps.Keys(off)) {
 		fmt.Fprintf(stdout, "  pairtime projects show-name %s    shows \"%s\"\n", key, text.Printable(off[key]))
 	}

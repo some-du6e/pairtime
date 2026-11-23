@@ -12,10 +12,12 @@ import (
 	"io/fs"
 	"maps"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
@@ -115,6 +117,14 @@ type Names struct {
 	// dashboard: the server keeps each, without its label, until a delete
 	// tells it the device turned the name off too (acks).
 	Hides []string `json:"hides,omitempty"`
+	// Sent are the names a set carried that may have reached the server,
+	// each key's label, and Deleting the keys a delete carried: the uploader
+	// writes them down before the request goes, and the next answer settles
+	// them. A sent name the answer lists neither as a name nor as hidden
+	// the server doesn't have, however it went, and goes off as dropped
+	// rather than out again on its own (project-names-v1 2).
+	Sent     map[string]string `json:"sent,omitempty"`
+	Deleting []string          `json:"deleting,omitempty"`
 }
 
 // HiddenName is a name pairtime turned off in config.toml because the
@@ -145,6 +155,9 @@ const (
 	// NoteSignedIn is a name that was on when the computer signed in to
 	// another server, or as another device, which never showed it.
 	NoteSignedIn = "signed_in"
+	// NoteUnreadable is a name that was on when project-names.json didn't
+	// read, so pairtime couldn't tell which sign-in the names were for.
+	NoteUnreadable = "unreadable"
 )
 
 // ReadNames reads project-names.json in the data directory dataDir. A
@@ -310,49 +323,59 @@ func readDue(at int64, now time.Time) bool {
 // frees the device's id (device-auth-v1 1), and before that batch the
 // server has no minutes to show a name on anyway.
 func (u *Uploader) syncNames(c Credentials) (sent, more bool) {
-	if u.opts.Names == nil || u.st.Linking {
+	if u.opts.Names == nil {
 		return false, false
 	}
 	wanted, ok := u.opts.Names()
 	if !ok {
 		return false, false
 	}
-	if u.now().Before(u.namesWait) {
-		return false, false
-	}
+	// The load records the sign-in, and turns off the names another
+	// sign-in's file had on, before anything goes or waits.
 	wanted = maps.Clone(wanted)
 	u.loadNames(c, wanted)
+	if u.st.Linking || u.now().Before(u.namesWait) {
+		return false, false
+	}
 	u.hidePending(wanted)
 	set, del := namesDiff(wanted, u.names.Confirmed, u.acks())
 	set = u.ownNames(set)
-	// A day after a 404 the server is taken to have no names endpoint
-	// (namesMissing): no read goes, since it holds no name to hide, and a
-	// change goes once.
-	missing := u.now().Before(u.missingUntil)
-	var body namesBody
+	change := takeNames(set, del)
+	cb, err := buildNames(change)
+	if err != nil {
+		u.setProblem("names", fmt.Sprintf("pairtime can't build its project names request: %v", err))
+		return false, false
+	}
+	// For a day after a 404 the server is taken to have no names endpoint
+	// (namesMissing): nothing goes until config.toml asks for something
+	// new, and then a read first while the device doesn't know what the
+	// server holds.
+	if u.now().Before(u.missingUntil) && cb.hash == u.missingHash {
+		return false, false
+	}
+	body, b := change, cb
 	switch {
-	case !u.namesStarted && !missing:
+	case !u.namesStarted:
 		// The device doesn't know what the server holds, as at the start,
 		// after a request whose outcome it never learned, or after a sign-in:
 		// a read first, so the diff after its answer can't undo a hide made
 		// meanwhile.
+		body = namesBody{}
+		if b, err = buildNames(body); err != nil {
+			u.setProblem("names", fmt.Sprintf("pairtime can't build its project names request: %v", err))
+			return false, false
+		}
 	case len(set)+len(del) > 0:
-		body = takeNames(set, del)
-	case readDue(u.names.AnsweredAt, u.now()) && !missing:
+	case readDue(u.names.AnsweredAt, u.now()):
 		// The day's read: its answer says which names the owner hid, and
 		// gives the codes.
 	default:
 		return false, false
 	}
-	b, err := buildNames(body)
-	if err != nil {
-		u.setProblem("names", fmt.Sprintf("pairtime can't build its project names request: %v", err))
+	if u.held(b.hash) {
 		return false, false
 	}
-	if u.held(b.hash) || (missing && b.hash == u.missingHash) {
-		return false, false
-	}
-	return u.sendNames(c, body, b)
+	return u.sendNames(c, body, b, cb.hash)
 }
 
 // builtNames is a names request's body as it goes: its JSON before gzip,
@@ -397,12 +420,16 @@ func (u *Uploader) loadNames(c Credentials, wanted map[string]string) {
 		return
 	}
 	n, err := ReadNames(u.opts.DataDir)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		u.log.Warn("project-names.json doesn't read, so the server's names are read again", "err", err)
+	unreadable := err != nil && !errors.Is(err, fs.ErrNotExist)
+	if unreadable {
+		u.log.Warn("project-names.json doesn't read, so pairtime can't tell which sign-in the names were for, and turns off the ones that are on", "err", err)
 	}
-	elsewhere := n.Server != "" && (n.Server != c.Server || n.Device != c.DeviceID)
+	named := n.Server != "" && n.Server == c.Server && n.Device == c.DeviceID
+	// A file that doesn't read counts as another sign-in's: pairtime
+	// can't tell, so it fails closed.
+	elsewhere := unreadable || (n.Server != "" && !named)
 	old := n.Confirmed
-	if n.Server != c.Server || n.Device != c.DeviceID {
+	if !named {
 		n = Names{Hidden: n.Hidden}
 	}
 	n.V, n.Server, n.Device = namesVersion, c.Server, c.DeviceID
@@ -410,25 +437,72 @@ func (u *Uploader) loadNames(c Credentials, wanted map[string]string) {
 	u.namesStarted = false
 	u.namesKey, u.namesHash, u.namesHeld = "", "", ""
 	u.missingUntil, u.missingHash = time.Time{}, ""
-	if !elsewhere {
+	if elsewhere {
+		reason := NoteSignedIn
+		if unreadable {
+			reason = NoteUnreadable
+		}
+		now := u.now().UnixMilli()
+		off := maps.Clone(old)
+		if off == nil {
+			off = make(map[string]string)
+		}
+		maps.Copy(off, wanted)
+		for _, key := range slices.Sorted(maps.Keys(off)) {
+			if keyForm(key) {
+				u.hidden(key, off[key], reason, now)
+			}
+			delete(wanted, key)
+		}
+		if len(off) > 0 {
+			u.log.Info("the project names that were on are off until you turn them on again here, since they were for another sign-in, or pairtime couldn't tell", "reason", reason, "names", len(off))
+		}
+	}
+	if !named {
+		// The file names this sign-in from now on, before any answer, so a
+		// sign-in to another server later finds the names were this one's.
+		u.saveNames()
+	}
+}
+
+// noteSending writes down, before the request goes, the names body sets
+// and the keys it deletes, so a crash or a lost answer leaves them known
+// (Names.Sent).
+func (u *Uploader) noteSending(body namesBody) {
+	if len(body.Set)+len(body.Delete) == 0 {
 		return
 	}
-	now := u.now().UnixMilli()
-	off := maps.Clone(old)
-	if off == nil {
-		off = make(map[string]string)
+	if u.names.Sent == nil {
+		u.names.Sent = make(map[string]string)
 	}
-	maps.Copy(off, wanted)
-	for _, key := range slices.Sorted(maps.Keys(off)) {
-		if keyForm(key) {
-			u.hidden(key, off[key], NoteSignedIn, now)
+	for _, it := range body.Set {
+		u.names.Sent[it.Project] = it.Label
+	}
+	for _, key := range body.Delete {
+		if !slices.Contains(u.names.Deleting, key) {
+			u.names.Deleting = append(u.names.Deleting, key)
 		}
-		delete(wanted, key)
 	}
 	u.saveNames()
-	if len(off) > 0 {
-		u.log.Info("this computer signed in to another server or as another device, so the project names that were on are off until you turn them on again there", "names", len(off))
+}
+
+// forgetSending takes back what noteSending wrote down for body, which
+// never reached the server.
+func (u *Uploader) forgetSending(body namesBody) {
+	if len(body.Set)+len(body.Delete) == 0 {
+		return
 	}
+	for _, it := range body.Set {
+		delete(u.names.Sent, it.Project)
+	}
+	u.names.Deleting = slices.DeleteFunc(u.names.Deleting, func(key string) bool { return slices.Contains(body.Delete, key) })
+	if len(u.names.Sent) == 0 {
+		u.names.Sent = nil
+	}
+	if len(u.names.Deleting) == 0 {
+		u.names.Deleting = nil
+	}
+	u.saveNames()
 }
 
 // acks returns the keys the server lists as hidden on the dashboard whose
@@ -530,11 +604,12 @@ func (u *Uploader) hidePending(wanted map[string]string) {
 
 // sendNames sends a names request, its body raw with hash, signed again
 // for each try that a clock skew or a changed body asks for, and handles
-// its answer. It reports whether a request reached the server, which is
-// then the cycle's, and whether more goes at once, as the upload after a
-// 200. A failure to reach the server reports none, so the cycle goes on to
-// the upload (namesFailed).
-func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames) (sent, more bool) {
+// its answer. change is the hash of what config.toml asked to send then,
+// which a 404 holds back for a day (namesMissing). It reports whether a
+// request reached the server, which is then the cycle's, and whether more
+// goes at once, as the upload after a 200. A failure to reach the server
+// reports none, so the cycle goes on to the upload (namesFailed).
+func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames, change string) (sent, more bool) {
 	raw, hash := b.raw, b.hash
 	if u.namesKey == "" || u.namesHash != hash {
 		// A new body, a new key; a retry of the same one keeps it, as an
@@ -542,6 +617,11 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames) (sent,
 		u.namesKey, u.namesHash = event.NewEventID(u.now()), hash
 	}
 	for try := 0; try < 3; try++ {
+		if try > 0 && !u.namesStarted && len(body.Set)+len(body.Delete) > 0 {
+			// The last try's answer may have been the transport's resend's,
+			// so the server's state is unknown: the next cycle reads first.
+			return true, false
+		}
 		// The sign-in may have gone since the cycle began: nothing goes then
 		// (device-auth-v1 8).
 		if now, ok := u.opts.Login.Credentials(); !ok || now.Token != c.Token || now.Server != c.Server || now.DeviceID != c.DeviceID {
@@ -566,14 +646,33 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames) (sent,
 			return true, false
 		}
 		setHeaders(hr.Header, c, u.namesKey, hash, sg, u.userAgent)
-		a, err := u.do(u.ctx, hr)
+		u.noteSending(body)
+		// The tries the transport wrote in full: it sends a request again
+		// itself when a reused connection drops before the answer, so with
+		// more than one the answer may be the second's.
+		var writes atomic.Int32
+		trace := &httptrace.ClientTrace{WroteRequest: func(w httptrace.WroteRequestInfo) {
+			if w.Err == nil {
+				writes.Add(1)
+			}
+		}}
+		a, err := u.do(httptrace.WithClientTrace(u.ctx, trace), hr)
 		if !errors.Is(err, context.Canceled) {
 			u.recordNames(pastNames(u.now(), c.Server, body, b.js, a, err))
+		}
+		switch n := writes.Load(); {
+		case n == 0 || (n == 1 && err == nil && storedNothing(a)):
+			// It never reached the server, or the server stored none of it.
+			u.forgetSending(body)
+		case n > 1 && (err != nil || a.status != http.StatusOK):
+			// The first try may have been stored, whatever this answer says,
+			// so the next request reads first.
+			u.namesStarted = false
 		}
 		switch {
 		case err != nil:
 		case a.status == http.StatusNotFound:
-			return u.namesMissing(hash, a)
+			return u.namesMissing(change, a)
 		case a.status != http.StatusTooManyRequests && a.status < 500 && !fromPairtimed(a):
 			// A proxy's answer, or Cloudflare's: a network error (ingest-v1
 			// 5.5), never acted on.
@@ -592,9 +691,9 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames) (sent,
 			// next cycle sends the names again (ingest-v1 5.1). The counter
 			// may be this request's own, taken by a try whose answer was
 			// lost, as when the transport sends a request again after a
-			// connection dropped: the next request, when config.toml has
-			// nothing new to send, is a read (namesFailed).
+			// connection dropped, so the next request is a read.
 			u.namesStarted = false
+			u.missingUntil, u.missingHash = time.Time{}, ""
 			return true, u.sync(c)
 		case a.refusal.Error == refusalBodyHash:
 			continue // the body changed on the way
@@ -609,17 +708,28 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames) (sent,
 	return true, u.namesRefused(c, hash, answer{refusal: Refusal{Error: "retries"}})
 }
 
+// storedNothing reports whether answer a, to a request the transport
+// wrote once, says the server stored none of it: a 404, from a server
+// without the endpoint or a proxy that doesn't route it; a 429, which
+// comes before anything is stored; or a refusal of pairtimed's, which
+// rolls back all of a request.
+func storedNothing(a answer) bool {
+	return a.status == http.StatusNotFound || a.status == http.StatusTooManyRequests || (fromPairtimed(a) && a.status/100 == 4)
+}
+
 // namesMissing handles a 404 to a names request, which pairtimed's names
 // endpoint never answers: a server without the endpoint, as an older one,
 // whose own ServeMux answers it without X-Pairtime-Time, or a proxy that
 // doesn't route it (project-names-v1 1.5). It is no refusal to act on:
 // doctor hears nothing, and the cycle goes on to the upload, which it
-// never holds back. For a day, the daily read's pace, no read goes and the
-// same body doesn't go again, while a change to the names in config.toml
-// goes at once, so a server that never gets the endpoint hears from the
-// names once a day and at each change.
-func (u *Uploader) namesMissing(hash string, a answer) (sent, more bool) {
-	u.missingUntil, u.missingHash = u.now().Add(namesReadEvery), hash
+// never holds back. For a day, the daily read's pace, nothing goes while
+// config.toml asks for what it asked for then, change, the hash of that
+// diff's body. A change to the names there goes at once, as a read first
+// while the device doesn't know what the server holds, so a server that
+// never gets the endpoint hears from the names once a day and at each
+// change, and a set whose answer was lost never goes again unread.
+func (u *Uploader) namesMissing(change string, a answer) (sent, more bool) {
+	u.missingUntil, u.missingHash = u.now().Add(namesReadEvery), change
 	u.log.Info("the server has no project names endpoint, so pairtime asks again in a day or when the names change", "status", a.status)
 	return false, false
 }
@@ -632,10 +742,9 @@ func (u *Uploader) namesMissing(hash string, a answer) (sent, more bool) {
 // notes alone: the cycle goes on to the upload, which tries the server
 // itself, so a server whose names endpoint fails never holds back an
 // upload. After a 429 the cycle ends instead, since the server's bucket
-// for the device ran dry. Any other failure may have come after the
-// server stored the request, as a timeout after it committed: the next
-// request, when config.toml has nothing new to send, is a read, so a name
-// turned off meanwhile still goes as a delete at once.
+// for the device ran dry. Any of them may have come after the server
+// stored the request, as a timeout after it committed: the next request is
+// a read, so the diff after it can't undo a hide made meanwhile.
 func (u *Uploader) namesFailed(err error, a answer) (sent, more bool) {
 	if errors.Is(err, context.Canceled) {
 		return true, false // the agent is stopping
@@ -643,11 +752,15 @@ func (u *Uploader) namesFailed(err error, a answer) (sent, more bool) {
 	wait := u.namesBackoff.fail(retryAfter(a.header, u.now()))
 	u.namesWait = u.now().Add(wait)
 	u.log.Info("the project names didn't reach the server", "status", a.status, "retry_in", wait, "err", err)
+	// The outcome is unknown, a 429 included, which may answer the
+	// transport's own resend: the next request reads first, and a 404's
+	// hold no longer counts.
+	u.namesStarted = false
+	u.missingUntil, u.missingHash = time.Time{}, ""
 	if a.status == http.StatusTooManyRequests {
 		u.pace.drain(time.Now())
 		return true, false
 	}
-	u.namesStarted = false
 	return false, false
 }
 
@@ -665,10 +778,12 @@ func (u *Uploader) namesAnswered(sent namesBody, hash string, a answer) bool {
 	var reply namesReply
 	if err := json.Unmarshal(a.body, &reply); err != nil || reply.Names == nil {
 		u.namesHeld, u.namesAfter = hash, u.now().Add(namesHold)
+		u.namesStarted = false
 		u.setProblem("names", "the server's answer about this computer's project names doesn't read")
 		return false
 	}
 	u.namesBackoff.ok()
+	u.missingUntil, u.missingHash = time.Time{}, ""
 	got := make(map[string]string, len(reply.Names))
 	for _, n := range reply.Names {
 		if keyForm(n.Project) && projectname.ValidLabel(n.Label) {
@@ -696,10 +811,22 @@ func (u *Uploader) namesAnswered(sent namesBody, hash string, a answer) bool {
 	}
 	var dropped []string
 	for key := range u.names.Confirmed {
-		if _, ok := got[key]; !ok && !hid[key] && !slices.Contains(sent.Delete, key) {
+		// A key a delete carried, this request's or one whose answer was
+		// lost, went as the owner asked: no note.
+		if _, ok := got[key]; !ok && !hid[key] && !slices.Contains(sent.Delete, key) && !slices.Contains(u.names.Deleting, key) {
 			dropped = append(dropped, key)
 		}
 	}
+	for key, label := range u.names.Sent {
+		// A name a set carried that the server neither shows nor lists as
+		// hidden: it doesn't have it, as after a lost answer and the hide's
+		// 30 days, or a removed device's hide. Off, not out again.
+		if _, ok := got[key]; !ok && !hid[key] && !slices.Contains(dropped, key) {
+			showed[key] = label
+			dropped = append(dropped, key)
+		}
+	}
+	u.names.Sent, u.names.Deleting = nil, nil
 	now := u.now().UnixMilli()
 	u.names.Confirmed, u.names.Codes, u.names.AnsweredAt = got, keptCodes(reply.Codes), now
 	if len(got) == 0 {
@@ -779,25 +906,30 @@ func capNotes(hidden map[string]HiddenName) {
 // directory dataDir's project-names.json names another sign-in, that
 // server showed the names and this one never did: every name on, which
 // config.toml has on by project key with its label, and every name the old
-// server showed goes off in config.toml through hide, each with a
-// NoteSignedIn note, and the file is the new sign-in's from then on, with
-// its notes, as the uploader's own load leaves it. A name hide can't turn
-// off gets a pending note, so the uploader never sends it. It returns the
-// names it turned off, each project key's label, for login to list. A file
-// that names no sign-in, or none at all, as before the computer's first
-// link, changes nothing: the names turned on before it go, as show-name
-// said they would.
-func SignedInElsewhere(dataDir, server, device string, on map[string]string, hide func(key string) error, now time.Time) (map[string]string, error) {
+// server showed goes off in config.toml through hide, each with a note of
+// why, and the file is the new sign-in's from then on, with its notes, as
+// the uploader's own load leaves it. A file that exists but doesn't read
+// counts as another sign-in's, since pairtime can't tell (NoteUnreadable).
+// A name hide can't turn off gets a pending note, so the uploader never
+// sends it. It returns the names it turned off, each project key's label,
+// and why, for login to list. A file that names no sign-in, or none at
+// all, as before the computer's first link, gets this sign-in written into
+// it, its notes kept, and nothing goes off: the names turned on before it
+// go, as show-name said they would.
+func SignedInElsewhere(dataDir, server, device string, on map[string]string, hide func(key string) error, now time.Time) (off map[string]string, reason string, err error) {
 	n, err := ReadNames(dataDir)
+	unreadable := err != nil && !errors.Is(err, fs.ErrNotExist)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return nil, nil
-	case err != nil:
-		return nil, err
-	case n.Server == "" || (n.Server == server && n.Device == device):
-		return nil, nil
+	case !unreadable && n.Server == server && n.Device == device:
+		return nil, "", nil
+	case !unreadable && n.Server == "":
+		return nil, "", writeNames(dataDir, Names{V: namesVersion, Server: server, Device: device, Hidden: n.Hidden})
 	}
-	off := maps.Clone(n.Confirmed)
+	reason = NoteSignedIn
+	if unreadable {
+		reason, n = NoteUnreadable, Names{}
+	}
+	off = maps.Clone(n.Confirmed)
 	if off == nil {
 		off = make(map[string]string)
 	}
@@ -809,7 +941,7 @@ func SignedInElsewhere(dataDir, server, device string, on map[string]string, hid
 	}
 	at := now.UnixMilli()
 	for _, key := range slices.Sorted(maps.Keys(off)) {
-		note := HiddenName{Label: off[key], At: at, Reason: NoteSignedIn}
+		note := HiddenName{Label: off[key], At: at, Reason: reason}
 		if hide(key) != nil {
 			note.Pending = true
 		}
@@ -820,14 +952,33 @@ func SignedInElsewhere(dataDir, server, device string, on map[string]string, hid
 	if len(hidden) == 0 {
 		next.Hidden = nil
 	}
-	data, err := json.Marshal(next)
+	if err := writeNames(dataDir, next); err != nil {
+		return nil, "", err
+	}
+	return off, reason, nil
+}
+
+// RecordSignIn writes the sign-in server and device into the data
+// directory dataDir's project-names.json when the file names no sign-in,
+// or there is none, keeping its notes, as `pairtime projects show-name`
+// and hide-name do on a linked computer: a sign-in to another server later
+// finds the names were this one's (SignedInElsewhere). A file that names a
+// sign-in, or doesn't read, stays as it is, for the uploader's load.
+func RecordSignIn(dataDir, server, device string) error {
+	n, err := ReadNames(dataDir)
+	if (err != nil && !errors.Is(err, fs.ErrNotExist)) || n.Server != "" {
+		return nil
+	}
+	return writeNames(dataDir, Names{V: namesVersion, Server: server, Device: device, Hidden: n.Hidden})
+}
+
+// writeNames writes n as dataDir's project-names.json, user-only.
+func writeNames(dataDir string, n Names) error {
+	data, err := json.Marshal(n)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := home.WritePrivate(filepath.Join(dataDir, NamesFileName), append(data, '\n')); err != nil {
-		return nil, err
-	}
-	return off, nil
+	return home.WritePrivate(filepath.Join(dataDir, NamesFileName), append(data, '\n'))
 }
 
 // namesRefused handles a names request the server refused for a reason the
@@ -835,6 +986,8 @@ func SignedInElsewhere(dataDir, server, device string, on map[string]string, hid
 // upload, and anything else holds the body for namesHold, while a change
 // to the names in config.toml goes at once.
 func (u *Uploader) namesRefused(c Credentials, hash string, a answer) (more bool) {
+	// The endpoint answered, so a 404's day ends.
+	u.missingUntil, u.missingHash = time.Time{}, ""
 	code := a.refusal.Error
 	if code == "" {
 		code = fmt.Sprintf("status %d", a.status)

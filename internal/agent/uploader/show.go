@@ -205,11 +205,11 @@ func NextNames(dataDir string, c Credentials, wanted map[string]string, own map[
 	if linking || (len(wanted) == 0 && !hasNames(dataDir)) {
 		return nil, nil
 	}
+	// A file of another sign-in, or one that doesn't read, which counts as
+	// another's, sends nothing: the agent turns its names off when it
+	// loads it.
 	n, err := ReadNames(dataDir)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		n = Names{}
-	}
-	if n.Server != "" && (n.Server != c.Server || n.Device != c.DeviceID) {
+	if (err != nil && !errors.Is(err, fs.ErrNotExist)) || (n.Server != "" && (n.Server != c.Server || n.Device != c.DeviceID)) {
 		return nil, nil
 	}
 	if n.Server == "" {

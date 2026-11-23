@@ -480,6 +480,21 @@ describe("Projects' switches for a project's name on the owner's dashboard", () 
 				),
 		},
 		{
+			name: "a name that was on when pairtime couldn't read which sign-in it was for says so, never that the owner hid it",
+			html: () => {
+				const names = projectsReply();
+				names.projects = names.projects.map((p) => (p.project === 'p_bot' ? { ...p, why: 'unreadable' as const } : p));
+				return page({ names });
+			},
+			check: (html) => {
+				const words = text(switchOf(html, 'p_bot'));
+				expect(words).toContain(
+					"pairtime couldn't read which sign-in this computer's names were for, so it turned this one off here. Turn it on to show it again.",
+				);
+				expect(words).not.toContain('You hid it');
+			},
+		},
+		{
 			name: 'a project of this computer the span holds no time of is listed after the rest, and one with no name here says how to give it one',
 			html: () => page({ names: projectsReply() }),
 			check: (html) => {

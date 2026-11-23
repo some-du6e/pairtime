@@ -127,6 +127,8 @@ export function nameWords(state: NameState, code: string, online: boolean, why?:
 					return 'The server no longer has it, as after this computer was signed out a long time or its data was restored, so pairtime turned it off here too. Turn it on to show it again.';
 				case 'signed_in':
 					return "This computer signed in to a server that never showed it, so pairtime turned it off here. Turn it on to show it on this server's dashboard.";
+				case 'unreadable':
+					return "pairtime couldn't read which sign-in this computer's names were for, so it turned this one off here. Turn it on to show it again.";
 			}
 			return "You hid it on your dashboard, so it's off here too. Turn it on to show it again.";
 		default:
@@ -182,6 +184,7 @@ export function allSentences(): string[] {
 			]),
 			nameWords('hidden', '7c41e9', true, 'dropped'),
 			nameWords('hidden', '7c41e9', true, 'signed_in'),
+			nameWords('hidden', '7c41e9', true, 'unreadable'),
 			noNameWords('d2a8f6'),
 			noNameWords('dd2a8f61c94e07b35a8c1f6e29d4b7a03'),
 			nameRefused('config.toml has an error'),

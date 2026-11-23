@@ -73,7 +73,7 @@
     {
       "id": "device.project_names",
       "where": "device",
-      "data": "What the server last told this computer about your project names: the name your dashboard shows for each project you turned a name on for, the short code your dashboard calls each project by, when the server answered, which names you hid on your dashboard, and a note of each name pairtime turned off because your dashboard doesn't show it, with the name it showed and when pairtime found it",
+      "data": "What the server last told this computer about your project names: the name your dashboard shows for each project you turned a name on for, the short code your dashboard calls each project by, when the server answered, which names you hid on your dashboard, the names the last request carried until its answer comes, and a note of each name pairtime turned off because your dashboard doesn't show it, with the name it showed and when pairtime found it",
       "kept": "The server's last answer until its next one replaces it. A note until your dashboard shows that name again, the oldest notes going first when there are very many. Only the notes stay when this computer signs in to another server. All of it until you uninstall pairtime or delete everything"
     },
     {

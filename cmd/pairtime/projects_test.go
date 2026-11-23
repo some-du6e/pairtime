@@ -166,7 +166,7 @@ func TestProjectsList(t *testing.T) {
 		{
 			name: "a name turned off without a code says the dashboard calls the project by its code after the next upload",
 			home: projectsHome{config: online + chip8Table("chip8-emulator", false), linked: true, shown: map[string]string{chip8Key: "chip8-emulator"}},
-			want: []string{"  On your dashboard: shows its name until pairtime uploads the change, then its code\n"},
+			want: []string{"  On your dashboard: shows its name until pairtime uploads the change, then its code, and show-name shows it again as \"chip8-emulator\"\n"},
 		},
 		{
 			name: "a name on that the server hasn't shown yet waits for the next upload",
@@ -181,26 +181,33 @@ func TestProjectsList(t *testing.T) {
 		{
 			name: "a name turned off that the server still shows says it goes with the next upload",
 			home: projectsHome{config: online + chip8Table("chip8-emulator", false), linked: true, shown: map[string]string{chip8Key: "chip8-emulator"}, codes: serverCodes},
-			want: []string{"  On your dashboard: shows its name until pairtime uploads the change, then Project 7c41e9\n"},
+			want: []string{"  On your dashboard: shows its name until pairtime uploads the change, then Project 7c41e9, and show-name shows it again as \"chip8-emulator\"\n"},
 		},
 		{
 			name: "a name hidden on the dashboard was turned off here, and says when",
 			home: projectsHome{config: online + chip8Table("chip8-emulator", false), linked: true, codes: serverCodes,
 				hidden: map[string]uploader.HiddenName{chip8Key: {Label: "chip8-emulator", At: time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC).UnixMilli()}}},
-			want: []string{"  On your dashboard: Project 7c41e9, since you hid its name there on Saturday, November 21; pairtime turned it off here, and show-name shows it again\n"},
+			want: []string{"  On your dashboard: Project 7c41e9, since you hid its name there on Saturday, November 21; pairtime turned it off here, and show-name shows it again as \"chip8-emulator\"\n"},
 		},
 		{
 			name: "a name the server no longer shows says so, and never that you hid it",
 			home: projectsHome{config: online + chip8Table("chip8-emulator", false), linked: true, codes: serverCodes,
 				hidden: map[string]uploader.HiddenName{chip8Key: {Label: "chip8-emulator", At: time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC).UnixMilli(), Reason: uploader.NoteDropped}}},
-			want:    []string{"  On your dashboard: Project 7c41e9, since the server stopped showing its name on Saturday, November 21, as after a long time signed out or a restore of its data; pairtime turned it off here, and show-name shows it again\n"},
+			want:    []string{"  On your dashboard: Project 7c41e9, since the server stopped showing its name on Saturday, November 21, as after a long time signed out or a restore of its data; pairtime turned it off here, and show-name shows it again as \"chip8-emulator\"\n"},
 			notWant: []string{"you hid"},
 		},
 		{
 			name: "a name that was on before a sign-in to this server says only the server before it showed the name",
 			home: projectsHome{config: online + chip8Table("chip8-emulator", false), linked: true, codes: serverCodes,
 				hidden: map[string]uploader.HiddenName{chip8Key: {Label: "chip8-emulator", At: time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC).UnixMilli(), Reason: uploader.NoteSignedIn}}},
-			want: []string{"  On your dashboard: Project 7c41e9, since this computer signed in to this server on Saturday, November 21, and only the server before it showed the name; pairtime turned it off here, and show-name shows it again\n"},
+			want: []string{"  On your dashboard: Project 7c41e9, since this computer signed in to this server on Saturday, November 21, and only the server before it showed the name; pairtime turned it off here, and show-name shows it again as \"chip8-emulator\"\n"},
+		},
+		{
+			name: "a name that was on when pairtime couldn't read which sign-in it was for says so",
+			home: projectsHome{config: online + chip8Table("chip8-emulator", false), linked: true, codes: serverCodes,
+				hidden: map[string]uploader.HiddenName{chip8Key: {Label: "chip8-emulator", At: time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC).UnixMilli(), Reason: uploader.NoteUnreadable}}},
+			want:    []string{"  On your dashboard: Project 7c41e9, since on Saturday, November 21 pairtime couldn't read which sign-in the name was for; pairtime turned it off here, and show-name shows it again as \"chip8-emulator\"\n"},
+			notWant: []string{"you hid"},
 		},
 		{
 			name: "a name hidden on the dashboard that pairtime couldn't turn off in config.toml says so, and what to write before it shows again",
@@ -287,7 +294,46 @@ func TestProjectsNames(t *testing.T) {
 		// want is config.toml's projects after it, checked when the
 		// command succeeds, or when it's set.
 		want map[string]config.Project
+		// rawNames is project-names.json's bytes before it, when set.
+		rawNames string
+		// file is what project-names.json is after it: "sign-in" naming
+		// this computer's, "none" for no file, "unchanged" for rawNames;
+		// "" isn't checked.
+		file string
 	}{
+		{
+			name:    "show-name on a linked computer whose project-names.json names no sign-in writes this one into it, so a later sign-in elsewhere turns the name off there",
+			home:    projectsHome{config: online, linked: true},
+			args:    []string{"projects", "show-name", plantKey, "plant-sensor"},
+			wantOut: "as \"plant-sensor\"",
+			want:    map[string]config.Project{plantKey: {Name: "plant-sensor", Online: true}},
+			file:    "sign-in",
+		},
+		{
+			name:    "hide-name on a linked computer writes its sign-in into a project-names.json that names none, as show-name does",
+			home:    projectsHome{config: online + chip8Table("chip8-emulator", true), linked: true},
+			args:    []string{"projects", "hide-name", chip8Key},
+			wantOut: "Turned off in config.toml.",
+			want:    map[string]config.Project{chip8Key: {Name: "chip8-emulator"}},
+			file:    "sign-in",
+		},
+		{
+			name:     "show-name leaves a project-names.json that names another sign-in as it is, so the agent turns that sign-in's names off before it sends any",
+			home:     projectsHome{config: online, linked: true},
+			rawNames: `{"v":1,"server":"https://old.example.org","device":"d_old","confirmed":{"` + chip8Key + `":"chip8-emulator"}}` + "\n",
+			args:     []string{"projects", "show-name", plantKey, "plant-sensor"},
+			wantOut:  "as \"plant-sensor\"",
+			want:     map[string]config.Project{plantKey: {Name: "plant-sensor", Online: true}},
+			file:     "unchanged",
+		},
+		{
+			name:    "show-name on a computer that isn't linked writes no sign-in",
+			home:    projectsHome{config: online},
+			args:    []string{"projects", "show-name", plantKey, "plant-sensor"},
+			wantOut: "as \"plant-sensor\"",
+			want:    map[string]config.Project{plantKey: {Name: "plant-sensor", Online: true}},
+			file:    "none",
+		},
 		{
 			name:     "show-name with the server's code and a label turns the name on in config.toml, then says what the dashboard shows and who sees it",
 			home:     projectsHome{config: online, linked: true, codes: serverCodes},
@@ -512,12 +558,36 @@ func TestProjectsNames(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := tt.home.write(t)
+			namesFile := filepath.Join(h.dirs().Data, uploader.NamesFileName)
+			if tt.rawNames != "" {
+				if err := os.WriteFile(namesFile, []byte(tt.rawNames), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			code, out, errOut := runCmd(tt.args...)
 			if code != tt.wantCode || !strings.Contains(out, tt.wantOut) || !strings.Contains(errOut, tt.wantErr) {
 				t.Fatalf("pairtime %s = %d\nstdout %q\nstderr %q\nwant %d, stdout with %q, stderr with %q", strings.Join(tt.args, " "), code, out, errOut, tt.wantCode, tt.wantOut, tt.wantErr)
 			}
 			if tt.notOut != "" && strings.Contains(out, tt.notOut) {
 				t.Errorf("stdout %q holds %q", out, tt.notOut)
+			}
+			switch data, err := os.ReadFile(namesFile); tt.file {
+			case "sign-in":
+				var n uploader.Names
+				if err == nil {
+					err = json.Unmarshal(data, &n)
+				}
+				if err != nil || n.Server != namesServer || n.Device != namesDevice {
+					t.Errorf("project-names.json = %s, %v; want it to name this computer's sign-in", data, err)
+				}
+			case "none":
+				if !os.IsNotExist(err) {
+					t.Errorf("project-names.json = %s, %v; want none", data, err)
+				}
+			case "unchanged":
+				if string(data) != tt.rawNames {
+					t.Errorf("project-names.json = %s, %v; want it as it was, %s", data, err, tt.rawNames)
+				}
 			}
 			if tt.wantCode != 0 && tt.want == nil {
 				return

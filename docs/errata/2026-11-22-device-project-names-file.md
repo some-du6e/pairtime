@@ -1,6 +1,6 @@
 # Erratum: DESIGN 3.5 and 4.4 don't list the device's record of its project names on the server
 
-Date 2026-11-22. Raised by the PR that builds D-owner-names (docs/errata/2026-11-22-owner-project-names.md). Status: decided 2026-11-22 by the orchestrator for Karim. Applied to DESIGN 3.5 and 4.4 in the same PR as this erratum, which also lists names requests in the privacy views.
+Date 2026-11-22. Raised by the PR that builds D-owner-names (docs/errata/2026-11-22-owner-project-names.md). Status: decided 2026-11-22 by the orchestrator for Karim. Applied to DESIGN 3.5, 4.3, 4.4 and 8.8 in the same PR as this erratum, which also lists names requests in the privacy views.
 
 ## Input
 

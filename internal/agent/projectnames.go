@@ -167,6 +167,12 @@ func (a *agent) serveProjectName(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("pairtime couldn't change config.toml: %v", err), http.StatusConflict)
 		return
 	}
+	if l, err := account.Load(a.dirs.Data); err == nil {
+		// The names are this sign-in's from now on (uploader.RecordSignIn).
+		if err := uploader.RecordSignIn(a.dirs.Data, l.Server, l.DeviceID); err != nil {
+			a.log.Warn("project-names.json couldn't be written", "err", err)
+		}
+	}
 	if u := a.upload.Load(); u != nil {
 		u.Wake()
 	}

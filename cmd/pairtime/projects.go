@@ -100,6 +100,8 @@ type projectsView struct {
 	// linked, and config.toml says mode = "online". broken says config.toml
 	// has an error, which keeps the computer local-only until it's fixed.
 	online, linked, broken bool
+	// server and device are the sign-in account.json holds, while linked.
+	server, device string
 	// notes say what couldn't be read, so the list may lack something.
 	notes []string
 }
@@ -139,6 +141,7 @@ func readProjects(stderr io.Writer) (projectsView, bool) {
 	in := projects.Input{Map: m, Days: keys, Config: cfg, Names: names}
 	if l, err := account.Load(dirs.Data); err == nil {
 		in.Server, in.Device, v.linked = l.Server, l.DeviceID, true
+		v.server, v.device = l.Server, l.DeviceID
 	}
 	v.online = v.linked && parsed && cfg.Mode == config.Online
 	v.list = projects.List(in)
@@ -231,7 +234,7 @@ func nameWords(p projects.Project) string {
 		}
 		return "shows the name " + label + " once pairtime uploads it"
 	case projects.Removing:
-		return "shows its name until pairtime uploads the change, then " + dashboardName(p, "its code")
+		return "shows its name until pairtime uploads the change, then " + dashboardName(p, "its code") + again(p)
 	case projects.Hidden:
 		day := text.Day(p.HiddenAt.In(viewZone()))
 		var why string
@@ -240,18 +243,39 @@ func nameWords(p projects.Project) string {
 			why = fmt.Sprintf("%s, since the server stopped showing its name on %s, as after a long time signed out or a restore of its data", dashboardName(p, "its code"), day)
 		case uploader.NoteSignedIn:
 			why = fmt.Sprintf("%s, since this computer signed in to this server on %s, and only the server before it showed the name", dashboardName(p, "its code"), day)
+		case uploader.NoteUnreadable:
+			why = fmt.Sprintf("%s, since on %s pairtime couldn't read which sign-in the name was for", dashboardName(p, "its code"), day)
 		default:
 			why = fmt.Sprintf("%s, since you hid its name there on %s", dashboardName(p, "its code"), day)
 		}
 		if p.Pending {
 			return why + "; pairtime couldn't turn it off in config.toml, so it doesn't send it, and to show it again set online = false under its table there, then run show-name"
 		}
-		return why + "; pairtime turned it off here, and show-name shows it again"
+		return why + "; pairtime turned it off here" + again(p)
 	}
-	if p.Label == "" {
-		return dashboardName(p, "no code yet") + "; it has no name on this computer, so show-name needs one"
+	if label, ok := showLabel(p); ok {
+		return dashboardName(p, "no code yet") + "; show-name shows it as " + label
 	}
-	return dashboardName(p, "no code yet") + "; show-name shows it as " + label
+	return dashboardName(p, "no code yet") + "; it has no name on this computer, so show-name needs one"
+}
+
+// again says what show-name does for p, whose name is off here: shows it
+// again with the label it would save, or needs one when there is none.
+func again(p projects.Project) string {
+	if label, ok := showLabel(p); ok {
+		return ", and show-name shows it again as " + label
+	}
+	return "; it has no name on this computer, so show-name needs one"
+}
+
+// showLabel is the label show-name saves for p when it's given none, in
+// quotes, and false when it would refuse for want of one (projects.Label).
+func showLabel(p projects.Project) (string, bool) {
+	label, err := projects.Label(p, "", false)
+	if err != nil {
+		return "", false
+	}
+	return `"` + text.Printable(label) + `"`, true
 }
 
 // notOnline says why no name goes to the dashboard from this computer now.
@@ -263,6 +287,19 @@ func notOnline(v projectsView) string {
 		return "config.toml has an error, so no name goes to your dashboard until it's fixed."
 	}
 	return "This computer is local-only, as config.toml says, so no name goes to your dashboard until it's online again."
+}
+
+// recordSignIn writes the sign-in of a linked computer into a
+// project-names.json that names none, so the names it turned on or off are
+// this sign-in's: a sign-in to another server later turns them off there
+// (uploader.RecordSignIn; project-names-v1 2).
+func recordSignIn(v projectsView, stderr io.Writer) {
+	if !v.linked {
+		return
+	}
+	if err := uploader.RecordSignIn(v.dirs.Data, v.server, v.device); err != nil {
+		fmt.Fprintf(stderr, "pairtime projects: project-names.json couldn't be written (%v); the agent writes which sign-in the names are for when it next uploads\n", err)
+	}
 }
 
 // helpArg reports whether arg asks for the usage, as pairtime projects
@@ -330,6 +367,7 @@ func runShowName(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pairtime projects: %v\n", err)
 		return 1
 	}
+	recordSignIn(v, stderr)
 	fmt.Fprintf(stdout, "Your pairtime dashboard will show %s as \"%s\". Only you see it there, on your own dashboard while you're signed in, and nothing else about the project leaves this computer with it.\n",
 		called, text.Printable(label))
 	if v.online {
@@ -362,6 +400,7 @@ func runHideName(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pairtime projects: %v\n", err)
 		return 1
 	}
+	recordSignIn(v, stderr)
 	called := dashboardName(p, "by its code")
 	switch {
 	case p.State == projects.Off || p.State == projects.Hidden:

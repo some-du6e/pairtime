@@ -925,15 +925,17 @@ components:
           description: When pairtime found the name hidden on the dashboard, in UTC, for `hidden`.
         why:
           type: string
-          enum: [dropped, signed_in]
+          enum: [dropped, signed_in, unreadable]
           description: >
             For `hidden`, why the dashboard doesn't show the name when the
             owner didn't hide it there: `dropped`, the server no longer has
             it, as after this computer was signed out a long time or the
             server's data was restored, which pairtime can't tell apart;
             `signed_in`, this computer signed in to another server, or as
-            another device, which never showed it. Absent for a name the
-            owner hid on the dashboard.
+            another device, which never showed it; `unreadable`, pairtime
+            couldn't read which sign-in its project names were for, so it
+            turned off the ones that were on. Absent for a name the owner
+            hid on the dashboard.
     NameChoice:
       type: object
       additionalProperties: false

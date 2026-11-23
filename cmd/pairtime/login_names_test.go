@@ -4,6 +4,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -16,9 +18,11 @@ func TestLoginNamesOff(t *testing.T) {
 	tests := []struct {
 		name     string
 		home     projectsHome
+		raw      string // project-names.json's bytes, when set, for one that doesn't read
 		server   string // the server login links to
 		wantOut  []string
-		wantOn   bool // chip8-emulator's name is still on in config.toml
+		wantErr  string // what stderr says; then nothing changes
+		wantOn   bool   // chip8-emulator's name is still on in config.toml
 		wantNote string
 	}{
 		{
@@ -32,13 +36,30 @@ func TestLoginNamesOff(t *testing.T) {
 			wantNote: uploader.NoteSignedIn,
 		},
 		{
+			name:   "a project-names.json that doesn't read counts as another sign-in's, since pairtime can't tell, and login says so",
+			home:   projectsHome{config: online + chip8Table("chip8-emulator", true)},
+			raw:    `{"v":1,"server":`,
+			server: newServer,
+			wantOut: []string{
+				"\npairtime couldn't read which sign-in this computer's project names were for, so it turned off the ones that were on, and nothing about them goes to " + newServer + ". To show one on your dashboard there:\n",
+				"  pairtime projects show-name " + chip8Key + "    shows \"chip8-emulator\"\n",
+			},
+			wantNote: uploader.NoteUnreadable,
+		},
+		{
+			name:    "while config.toml doesn't parse, login leaves project-names.json naming the old sign-in, for the agent, and says so",
+			home:    projectsHome{config: online + chip8Table("chip8-emulator", true) + "[unclosed\n", shown: map[string]string{chip8Key: "chip8-emulator"}},
+			server:  newServer,
+			wantErr: "so pairtime left the project names as they are; once it's fixed, the agent turns off the ones that were on for another sign-in before it sends any\n",
+		},
+		{
 			name:   "a sign-in again to the same server, as the same device, changes nothing",
 			home:   projectsHome{config: online + chip8Table("chip8-emulator", true), shown: map[string]string{chip8Key: "chip8-emulator"}},
 			server: namesServer,
 			wantOn: true,
 		},
 		{
-			name:   "a computer's first link keeps the names turned on before it, which go once the server holds its first upload",
+			name:   "a computer's first link keeps the names turned on before it, which go once the server holds its first upload, and its file names this sign-in from now on",
 			home:   projectsHome{config: online + chip8Table("chip8-emulator", true)},
 			server: newServer,
 			wantOn: true,
@@ -47,8 +68,24 @@ func TestLoginNamesOff(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := tt.home.write(t)
+			names := filepath.Join(h.dirs().Data, uploader.NamesFileName)
+			if tt.raw != "" {
+				if err := os.WriteFile(names, []byte(tt.raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, _ := os.ReadFile(names)
 			var stdout, stderr bytes.Buffer
 			namesOff(&stdout, &stderr, h.dirs(), tt.server, namesDevice)
+			if tt.wantErr != "" {
+				if !strings.Contains(stderr.String(), tt.wantErr) || stdout.Len() != 0 {
+					t.Errorf("login printed %q and %q, want only %q on stderr", stdout.String(), stderr.String(), tt.wantErr)
+				}
+				if after, _ := os.ReadFile(names); string(after) != string(before) {
+					t.Errorf("project-names.json changed to %s", after)
+				}
+				return
+			}
 			if stderr.Len() != 0 {
 				t.Errorf("stderr %q", stderr.String())
 			}
@@ -67,12 +104,12 @@ func TestLoginNamesOff(t *testing.T) {
 			if err != nil || cfg.Projects[chip8Key] != (config.Project{Name: "chip8-emulator", Online: tt.wantOn}) {
 				t.Errorf("config.toml has %+v, %v; want the name on %v with its label kept", cfg.Projects[chip8Key], err, tt.wantOn)
 			}
-			if tt.wantNote == "" {
-				return
-			}
 			n, err := uploader.ReadNames(h.dirs().Data)
-			if note := n.Hidden[chip8Key]; err != nil || note.Reason != tt.wantNote || n.Server != tt.server || len(n.Confirmed) != 0 {
-				t.Errorf("project-names.json = %+v, %v; want the new sign-in's, with a note of the name turned off", n, err)
+			if err != nil || n.Server != tt.server || n.Device != namesDevice {
+				t.Errorf("project-names.json = %+v, %v; want it to name the sign-in login made", n, err)
+			}
+			if note := n.Hidden[chip8Key]; tt.wantNote != "" && (note.Reason != tt.wantNote || len(n.Confirmed) != 0) {
+				t.Errorf("project-names.json = %+v; want the new sign-in's, with a %q note of the name turned off", n, tt.wantNote)
 			}
 		})
 	}

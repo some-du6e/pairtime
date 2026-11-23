@@ -66,8 +66,9 @@ type fakeIngest struct {
 	// computer took higher counters), "html" (an answer that isn't
 	// pairtimed's: a proxy's 403 page), "404" (a server without the
 	// endpoint, as an older pairtimed's ServeMux answers),
-	// "label_invalid", and "lost" (the server stores the request, then its
-	// answer is lost). namesThen runs after an attempt, by its number.
+	// "label_invalid", "lost" (the server stores the request, then its
+	// answer is lost) and "garbled" (it stores it, and its 200 doesn't
+	// read). namesThen runs after an attempt, by its number.
 	names       map[string]string
 	namesHidden map[string]bool
 	codes       map[string]string
