@@ -544,8 +544,21 @@ func TestAgentOutlivesScope(t *testing.T) {
 			case !tt.units && unit != session:
 				t.Fatalf("the agent, process %d, runs in %s, not in the session's %s", pid, unit, session)
 			}
+			t.Logf("the agent, process %d, runs in %s", pid, unit)
 			if !slices.Contains(environOf(t, pid), canaryEnv+"="+canary) {
 				t.Errorf("the agent, process %d, doesn't have the session's environment: %s isn't %s there", pid, canaryEnv, canary)
+			}
+			// A hook starts the agent in the data directory (startHookAgent),
+			// and agent --detach where it runs itself, which is where this
+			// test runs.
+			wantDir := ptHome
+			if tt.args[0] == "agent" {
+				if wantDir, err = os.Getwd(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got, want := workingDir(t, pid), realPath(t, wantDir); got != want {
+				t.Errorf("the agent, process %d, runs in the folder %s, want %s", pid, got, want)
 			}
 			if tt.units {
 				if got := unitProperty(t, unit, "Description"); got != "pairtime agent" {
@@ -566,11 +579,13 @@ func TestAgentOutlivesScope(t *testing.T) {
 				if !processGone(pid, 30*time.Second) {
 					t.Fatalf("the agent, process %d, still ran 30 s after the session's scope stopped, so this test can't tell", pid)
 				}
+				t.Logf("the agent, process %d, stopped with %s", pid, session)
 				return
 			}
 			if _, err := queryAgent(dirs); err != nil {
 				t.Fatalf("the agent didn't answer once the session's scope had stopped: %v", err)
 			}
+			t.Logf("%s stopped, and the agent, process %d, still answers", session, pid)
 			if got := cgroupUnit(t, pid); got != unit {
 				t.Errorf("the agent moved from %s to %s", unit, got)
 			}
@@ -582,6 +597,7 @@ func TestAgentOutlivesScope(t *testing.T) {
 			for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(100 * time.Millisecond) {
 				state := unitProperty(t, unit, "LoadState")
 				if state == "not-found" {
+					t.Logf("the agent stopped, and its unit %s was unloaded", unit)
 					break
 				}
 				if time.Now().After(deadline) {
@@ -609,6 +625,27 @@ func cgroupUnit(t *testing.T, pid int) string {
 	}
 	t.Fatalf("process %d is in no cgroup systemd manages:\n%s", pid, b)
 	return ""
+}
+
+// workingDir returns the working directory of the process pid.
+func workingDir(t *testing.T, pid int) string {
+	t.Helper()
+	dir, err := os.Readlink("/proc/" + strconv.Itoa(pid) + "/cwd")
+	if err != nil {
+		t.Fatalf("reading the working directory of process %d: %v", pid, err)
+	}
+	return dir
+}
+
+// realPath returns path with every link in it resolved, as the kernel
+// gives a process's working directory.
+func realPath(t *testing.T, path string) string {
+	t.Helper()
+	p, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 // environOf returns the environment of the process pid.
