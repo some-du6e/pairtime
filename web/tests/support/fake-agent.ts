@@ -9,7 +9,7 @@
 import type { Page } from '@playwright/test';
 import type { components } from '../../src/gen/local-api.ts';
 import type { Focus } from '../../src/local/api.ts';
-import { dayReply, lastSession, shadowDay, shadowSession, signalsFor, status } from './fake-days.ts';
+import { dayReply, lastSession, nameAnswer, projectsReply, shadowDay, shadowSession, signalsFor, status } from './fake-days.ts';
 
 type Schemas = components['schemas'];
 
@@ -34,18 +34,25 @@ export interface FakeOptions {
 	 * request, so a spec can mend it.
 	 */
 	unavailable?: (pathname: string) => boolean;
+	/** GET /v1/projects at the start; PUT /v1/projects/{key}/name changes it as the agent would. */
+	projects?: Schemas['Projects'];
+	/** A refusal PUT /v1/projects/{key}/name gets for key, as the agent's 409 when config.toml has an error. */
+	refuseName?: (key: string) => { status: number; text: string } | undefined;
 }
 
 export interface Fake {
 	/** Every request the page sent to /v1/, in order. */
 	requests: URL[];
+	/** The body of every PUT /v1/projects/{key}/name, with its key, in order. */
+	names: { key: string; body: unknown }[];
 }
 
 const text = 'text/plain; charset=utf-8';
 
 export async function fakeAgent(page: Page, options: FakeOptions = {}): Promise<Fake> {
-	const fake: Fake = { requests: [] };
+	const fake: Fake = { requests: [], names: [] };
 	const shadow = options.shadow ?? false;
+	const list = structuredClone(options.projects ?? projectsReply());
 	await page.route('**/v1/**', async (route) => {
 		const url = new URL(route.request().url());
 		fake.requests.push(url);
@@ -63,7 +70,30 @@ export async function fakeAgent(page: Page, options: FakeOptions = {}): Promise<
 			return;
 		}
 		const day = /^\/v1\/days\/([^/]+)$/.exec(url.pathname);
-		if (url.pathname === '/v1/status') {
+		const name = /^\/v1\/projects\/([^/]+)\/name$/.exec(url.pathname);
+		if (url.pathname === '/v1/projects' && route.request().method() === 'GET') {
+			await route.fulfill({ json: list });
+		} else if (name?.[1] && route.request().method() === 'PUT') {
+			const key = decodeURIComponent(name[1]);
+			const body: unknown = route.request().postDataJSON();
+			fake.names.push({ key, body });
+			const at = list.projects.findIndex((p) => p.project === key);
+			const entry = list.projects[at];
+			const refused = options.refuseName?.(key);
+			if (!entry) {
+				await route.fulfill({ status: 404, contentType: text, body: 'no project on this computer has that key' });
+			} else if (refused) {
+				await route.fulfill({ status: refused.status, contentType: text, body: refused.text });
+			} else {
+				const answer = nameAnswer(entry, body);
+				if ('entry' in answer) {
+					list.projects[at] = answer.entry;
+					await route.fulfill({ json: answer.entry });
+				} else {
+					await route.fulfill({ status: answer.status, contentType: text, body: answer.text });
+				}
+			}
+		} else if (url.pathname === '/v1/status') {
 			await route.fulfill({ json: options.focus ? status({ signals: signalsFor(options.focus) }) : status() });
 		} else if (day?.[1]) {
 			const date = decodeURIComponent(day[1]);

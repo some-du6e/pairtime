@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-package dashboard
+package projectname
 
 import (
-	"context"
 	"fmt"
 	"math/rand/v2"
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestShortCodes(t *testing.T) {
@@ -152,54 +150,73 @@ func TestCodeName(t *testing.T) {
 	}
 }
 
-// unattendedNow is a moment the second sample is viewed at: 18:00, late
-// enough for its busiest project's 15h 5m, since one project's agent clock
-// is wall time.
-var unattendedNow = time.Date(2026, 11, 22, 18, 0, 0, 0, time.UTC)
-
-func TestUnattended(t *testing.T) {
-	v, err := Unattended{}.View(context.Background(), "", unattendedNow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	today := v.Days[len(v.Days)-1]
+func TestProjectCodes(t *testing.T) {
+	const (
+		a1 = "g7c41e9a2d05b8f63e1a94c7d2b6f0e85"
+		a2 = "g7c41e9b6c18a2f05d3e7b94a1c6d0f28"
+		b1 = "g5be03d7f18a6c92e4b07d5a1c8f3e962"
+	)
 	tests := []struct {
 		name string
-		ok   bool
+		keys map[string][]string
+		want map[string]string
 	}{
-		{"it reads as an owner's own view: no sample label, the agent unnamed, each computer's projects apart", !v.Sample && v.Agent == AgentName && v.SplitByDevice && v.Today == "2026-11-22"},
-		{"none of the 30 days is the owner's time", v.Month.You.Total() == 0 && v.Week.You.Total() == 0 && today.You.Total() == 0},
-		{"today has nine projects with the agent's time", len(today.Projects) == 9},
-		{"the agents' time today adds up to more than a day: 31h 5m 40s", today.Agent.Total() == 31*3600+5*60+40},
-		{"two of today's projects have a few minutes still pending, 5 in all", today.Agent.PendingS == 300 && pendingProjects(today) == 2},
-		{"every project is called by its short code, and the codes differ", codesDiffer(v)},
+		{name: "each project is called by the code of its first key", keys: map[string][]string{"P1": {a1}, "P2": {b1}}, want: map[string]string{"P1": "7c41e9", "P2": "5be03d"}},
+		{name: "two projects whose first keys start alike both get longer codes", keys: map[string][]string{"P1": {a1}, "P2": {a2}}, want: map[string]string{"P1": "7c41e9a", "P2": "7c41e9b"}},
+		{name: "a project's other keys don't take part, so they can't lengthen another's code", keys: map[string][]string{"P1": {b1, a2}, "P2": {a1}}, want: map[string]string{"P1": "5be03d", "P2": "7c41e9"}},
+		{name: "a project with no key has no code", keys: map[string][]string{"P1": {a1}, "P2": nil}, want: map[string]string{"P1": "7c41e9"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if !tt.ok {
-				t.Errorf("the sample's view: today %+v, projects %+v", today, v.Projects)
+			if got := ProjectCodes(tt.keys); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ProjectCodes = %v, want %v", got, tt.want)
 			}
 		})
 	}
 }
 
-func pendingProjects(d Day) int {
-	n := 0
-	for _, p := range d.Projects {
-		if p.Agent.PendingS > 0 {
-			n++
-		}
+func TestCleanLabel(t *testing.T) {
+	tests := []struct{ name, in, want string }{
+		{name: "a plain name stays as it is", in: "chip8-emulator", want: "chip8-emulator"},
+		{name: "runs of spaces, tabs and line breaks become one space, and the ends are trimmed", in: "  chip8 \t\n emulator \r\n", want: "chip8 emulator"},
+		{name: "control characters count as a gap", in: "chip8\x00\x1bemulator", want: "chip8 emulator"},
+		{name: "a bidirectional override is dropped, so it can't reorder what follows", in: "chip8\u202eemulator", want: "chip8emulator"},
+		{name: "zero-width spaces and other invisible formatting are dropped", in: "chip\u200b8\u2060", want: "chip8"},
+		{name: "the zero-width joiner and non-joiner stay, for scripts and emoji that need them", in: "a\u200db\u200cc", want: "a\u200db\u200cc"},
+		{name: "line and paragraph separators count as a gap", in: "a\u2028b\u2029c", want: "a b c"},
+		{name: "at most 64 characters stay, counted as code points", in: strings.Repeat("é", 70), want: strings.Repeat("é", 64)},
+		{name: "a cut that ends in a gap leaves no space at the end", in: strings.Repeat("a", 63) + " b", want: strings.Repeat("a", 63)},
+		{name: "nothing but spaces cleans to nothing", in: " \t ", want: ""},
 	}
-	return n
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := CleanLabel(tt.in); got != tt.want {
+				t.Errorf("CleanLabel(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
 }
 
-func codesDiffer(v View) bool {
-	seen := make(map[string]bool)
-	for _, p := range v.Projects {
-		if p.Code == "" || p.Name != CodeName(p.Code) || seen[p.Code] || len(p.Keys) != 1 || ShortCodes(p.Keys)[p.Keys[0]] != p.Code {
-			return false
-		}
-		seen[p.Code] = true
+func TestValidLabel(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{name: "a clean name is valid", in: "chip8-emulator", want: true},
+		{name: "64 characters is valid", in: strings.Repeat("é", 64), want: true},
+		{name: "an empty label isn't", in: "", want: false},
+		{name: "65 characters isn't, though cleaning would cut it", in: strings.Repeat("a", 65), want: false},
+		{name: "a label with a space at its end isn't, though cleaning would trim it", in: "chip8 ", want: false},
+		{name: "a label with two spaces in a row isn't", in: "chip8  emulator", want: false},
+		{name: "a label with a bidirectional override isn't", in: "chip8\u202e", want: false},
+		{name: "a label that isn't valid UTF-8 isn't", in: "chip8\xff", want: false},
 	}
-	return len(seen) == 9
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ValidLabel(tt.in); got != tt.want {
+				t.Errorf("ValidLabel(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
 }

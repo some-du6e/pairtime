@@ -53,6 +53,12 @@ type Config struct {
 	// Notifications is [notifications], which Parse reads through
 	// notificationsFile.
 	Notifications Notifications `toml:"-"`
+	// Projects are the [projects.<key>] tables, by project key: which
+	// projects' names show on their owner's own dashboard, and with what
+	// label (D-owner-names). Parse reads them from the file's TOML as
+	// written, so a value of the wrong type there turns only its project's
+	// name off. Nil when no project has a table.
+	Projects map[string]Project `toml:"-"`
 	// Privacy is [privacy], which Parse reads through privacyFile.
 	Privacy Privacy `toml:"-"`
 }
@@ -130,6 +136,9 @@ func parse(data []byte) (cfg Config, problems []string, used bool) {
 		// false added at the end of a config.toml from before [privacy]
 		// existed lands in [notifications], the table those files end with.
 		notif, priv := inNotifications(key), inPrivacy(key)
+		if key[0] == projectsTable && !priv {
+			continue // parseProjects reads these, and says what it ignores
+		}
 		if notif {
 			cfg.Notifications.Off = true
 		}
@@ -173,6 +182,16 @@ func parse(data []byte) (cfg Config, problems []string, used bool) {
 	}
 	problems = append(problems, parseNotifications(&cfg, file.Notifications, md.Keys())...)
 	problems = append(problems, parsePrivacy(&cfg, file.Privacy, md.Keys())...)
+	// The project tables, untyped: the decoder refuses a whole file whose
+	// value has the wrong type for its field, and here one project's
+	// mistake turns off that project's name alone. The file decoded once
+	// already, so it decodes again.
+	var raw map[string]any
+	if _, err := toml.Decode(string(data), &raw); err == nil {
+		var ps []string
+		cfg.Projects, ps = parseProjects(raw[projectsTable])
+		problems = append(problems, ps...)
+	}
 	return cfg, problems, true
 }
 
@@ -244,4 +263,14 @@ keep_prompt_text = true
 # your recaps, up to 30. Leave them out for the longest time.
 # prompt_text_days = 30
 # path_days = 7
+
+# A [projects.<key>] table can show a project's name on your own pairtime
+# dashboard, where nobody else sees it, in place of its code. Every name is
+# off unless its table says online = true. pairtime projects lists your
+# projects with their codes, and its show-name and hide-name write these
+# tables, such as:
+#
+# [projects.g7c41e9a2d05b8f63e1a94c7d2b6f0e85]
+# name = "chip8-emulator"
+# online = true
 `

@@ -176,6 +176,10 @@ const (
 	refusalDecompressed   = "decompressed_too_large"
 	refusalTooManyBatches = "too_many_batches"
 	refusalTooManyBuckets = "too_many_buckets"
+
+	// refusalTooManyNames is a names request past the server's limits
+	// (project-names-v1 1.5).
+	refusalTooManyNames = "too_many_names"
 )
 
 // encodeBody returns b's JSON exactly as the uploader sends it: what

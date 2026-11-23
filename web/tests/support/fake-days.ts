@@ -375,3 +375,68 @@ export function status(overrides: Partial<Schemas['Status']> = {}): Schemas['Sta
 
 /** The dates the fixture has, for the tests that check every answer. */
 export const fixtureDates = Object.keys(days);
+
+/** A plain folder Sam worked in, which the project map doesn't keep, so it has no name on the computer. */
+export const scratchKey = 'dd2a8f61c94e07b35a8c1f6e29d4b7a03';
+
+/** A repo the project map keeps that holds no time yet, so the server has none of its minutes and gave it no code. */
+export const uncodedKey = 'p_pixel';
+
+/**
+ * GET /v1/projects (D-owner-names): Sam's five projects, each named by its
+ * folder and called by the short code the server gave its key, which for
+ * keys like these fake ones is their first six characters; the plain
+ * folder, with no name; and pixel-garden, a repo with no time yet, which
+ * the server gave no code. portfolio's name shows on Sam's dashboard and
+ * homework-helper's is on its way, as "Homework helper"; Sam hid
+ * discord-bot's there; the rest are off. They come in `pairtime projects`'
+ * order, by title. online false is a computer that is local-only.
+ */
+export function projectsReply(online = true): Schemas['Projects'] {
+	return {
+		date: today,
+		linked: true,
+		online,
+		projects: [
+			{ project: 'p_bot', code: 'p_bot', local_name: 'discord-bot', state: 'hidden', label: 'discord-bot', hidden_at: '2026-11-19T18:00:00Z' },
+			{ project: 'p_homework', code: 'p_home', local_name: 'homework-helper', state: 'sending', label: 'Homework helper' },
+			{ project: uncodedKey, code: '', local_name: 'pixel-garden', state: 'off', label: 'pixel-garden' },
+			{ project: 'p_plant', code: 'p_plan', local_name: 'plant-sensor', state: 'off', label: 'plant-sensor' },
+			{ project: 'p_portfolio', code: 'p_port', local_name: 'portfolio', state: 'on', label: 'portfolio' },
+			{ project: scratchKey, code: 'd2a8f6', local_name: '', state: 'off', label: '' },
+			{ project: 'p_rusty', code: 'p_rust', local_name: 'rusty-cli', state: 'off', label: 'rusty-cli' },
+		],
+	};
+}
+
+/**
+ * The agent's answer to PUT /v1/projects/{key}/name for entry, as the spec
+ * gives it: the entry, or the status and text of a refusal. A name turned
+ * on goes with the label the body names, cleaned of extra spaces, or else
+ * the entry's own, and waits to be sent; one turned off is off, or still
+ * shown until the next upload when it was on, and keeps its label.
+ */
+export function nameAnswer(
+	entry: Schemas['ProjectEntry'],
+	body: unknown,
+): { entry: Schemas['ProjectEntry'] } | { status: number; text: string } {
+	if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+		return { status: 400, text: 'the body must be {"online": true or false}' };
+	}
+	const choice = body as Record<string, unknown>;
+	const extra = Object.keys(choice).filter((k) => k !== 'online' && k !== 'label');
+	if (typeof choice.online !== 'boolean' || extra.length > 0 || (choice.label !== undefined && typeof choice.label !== 'string')) {
+		return { status: 400, text: 'the body must be {"online": true or false}' };
+	}
+	// A name changed here is no longer one hidden on the dashboard.
+	const base = { project: entry.project, code: entry.code, local_name: entry.local_name };
+	if (!choice.online) {
+		const shown = entry.state === 'on' || entry.state === 'removing';
+		return { entry: { ...base, state: shown ? 'removing' : 'off', label: entry.label } };
+	}
+	const label = (typeof choice.label === 'string' ? choice.label : entry.label).trim().replace(/\s+/g, ' ');
+	if (label === '') {
+		return { status: 422, text: 'the project has no name on this computer, so turning it on needs a label' };
+	}
+	return { entry: { ...base, state: entry.state === 'on' && entry.label === label ? 'on' : 'sending', label } };
+}

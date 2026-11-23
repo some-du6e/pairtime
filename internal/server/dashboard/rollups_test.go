@@ -175,7 +175,9 @@ func TestRollupsView(t *testing.T) {
 		zone    string
 		now     time.Time
 		buckets []rollup.Bucket
-		check   func(*testing.T, View)
+		// names are project_names rows of u1: device, key and label.
+		names [][3]string
+		check func(*testing.T, View)
 	}{
 		{
 			name: "every real dashboard says a repo used on two computers shows as two projects, and does show it so",
@@ -260,6 +262,44 @@ func TestRollupsView(t *testing.T) {
 			},
 		},
 		{
+			name: "a project whose name its owner turned on is called by it, keeps its code, and says it's named",
+			zone: "UTC",
+			now:  time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC),
+			buckets: []rollup.Bucket{
+				{Account: "u1", Device: "d1", Minute: time.Date(2026, 11, 20, 17, 0, 0, 0, time.UTC).Unix(), State: "final",
+					Slots: []rollup.Slot{{Project: laptopKey, CreditedS: 15, Kind: "prompting", Level: "A"}}},
+				{Account: "u1", Device: "d1", Minute: time.Date(2026, 11, 20, 17, 1, 0, 0, time.UTC).Unix(), State: "final",
+					Slots: []rollup.Slot{{Project: "g5be03d7f18a6c92e4b07d5a1c8f3e962", CreditedS: 10, Kind: "prompting", Level: "A"}}},
+			},
+			names: [][3]string{{"d1", laptopKey, "chip8-emulator"}},
+			check: func(t *testing.T, v View) {
+				if len(v.Projects) != 2 {
+					t.Fatalf("projects %+v, want two", v.Projects)
+				}
+				if p := v.Projects[0]; p.Name != "chip8-emulator" || !p.Named || p.Code != "7c41e9" {
+					t.Errorf("the named project is %+v, want chip8-emulator, named, with its code", p)
+				}
+				if p := v.Projects[1]; p.Name != "Project 5be03d" || p.Named {
+					t.Errorf("the other project is %+v, want its code's name, not named", p)
+				}
+			},
+		},
+		{
+			name: "a name another device stored for this device's key shows nowhere, as from a config.toml copied between computers",
+			zone: "UTC",
+			now:  time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC),
+			buckets: []rollup.Bucket{
+				{Account: "u1", Device: "d1", Minute: time.Date(2026, 11, 20, 17, 0, 0, 0, time.UTC).Unix(), State: "final",
+					Slots: []rollup.Slot{{Project: laptopKey, CreditedS: 15, Kind: "prompting", Level: "A"}}},
+			},
+			names: [][3]string{{"d2", laptopKey, "copied"}},
+			check: func(t *testing.T, v View) {
+				if len(v.Projects) != 1 || v.Projects[0].Named || v.Projects[0].Name != "Project 7c41e9" {
+					t.Errorf("projects %+v, want the project called by its code", v.Projects)
+				}
+			},
+		},
+		{
 			name: "pending minutes stay apart from final ones",
 			zone: "UTC",
 			now:  time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC),
@@ -278,6 +318,11 @@ func TestRollupsView(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			db := rollupsDB(t, store.SQLite, tt.zone)
 			applyAll(t, db, tt.buckets)
+			for _, n := range tt.names {
+				if _, err := db.Write.ExecContext(context.Background(), `INSERT INTO project_names (device_id, project_key, user_id, label, set_at_ms) VALUES ($1, $2, 'u1', $3, 0)`, n[0], n[1], n[2]); err != nil {
+					t.Fatal(err)
+				}
+			}
 			v, err := Rollups{DB: db.Read}.View(context.Background(), "u1", tt.now)
 			if err != nil {
 				t.Fatal(err)

@@ -125,9 +125,11 @@ func New(o Options) *Service {
 	return s
 }
 
-// Register adds the three endpoints to mux.
+// Register adds ingest-v1's three endpoints to mux, and project-names-v1's
+// one (names.go).
 func (s *Service) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+BatchesPath, s.batches)
+	mux.HandleFunc("POST "+NamesPath, s.names)
 	mux.HandleFunc("GET "+StatePath, s.state)
 	mux.HandleFunc("GET "+TimePath, s.time)
 }

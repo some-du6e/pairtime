@@ -27,6 +27,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
+	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/internal/server/accounts"
 	"github.com/some-du6e/pairtime/internal/server/auth"
 	"github.com/some-du6e/pairtime/internal/server/auth/hcafake"
@@ -109,6 +110,11 @@ func testLoginEndToEnd(t *testing.T, p oidcProvider) {
 	}
 	if !strings.Contains(out, "Linked. This computer is device "+deviceID) || !strings.Contains(out, "It's linked to the account U0") {
 		t.Errorf("pairtime login printed:\n%s", out)
+	}
+	// The account's ID shows beside the owner's name on the devices page,
+	// and the pages' header shows the name alone.
+	if !strings.Contains(out, ". "+srv.URL+"/account/devices shows that same ID beside the owner's name while that account is signed in.\n") || strings.Contains(out, "the top of") {
+		t.Errorf("pairtime login says where to check the account wrongly:\n%s", out)
 	}
 
 	l, err := account.Load(dir)
@@ -196,6 +202,12 @@ func TestLogoutWithoutKeystore(t *testing.T) {
 			}
 			if _, err := account.Load(dir); err != nil {
 				t.Errorf("account.json after the logout: %v; want it kept, so a later logout can tell the server", err)
+			}
+			// Before anything can fail, logout writes its sign-in into a
+			// project-names.json that names none, so the next login, to
+			// another server, turns the names on here off (runLogout).
+			if n, err := uploader.ReadNames(dir); err != nil || n.Server != "https://pairtime.example.org" || n.Device != "d_e2elogin4nhv5xgjw6ycpbz2r" {
+				t.Errorf("project-names.json = %+v, %v; want it to name the sign-in logout began with", n, err)
 			}
 		})
 	}

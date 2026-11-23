@@ -143,6 +143,57 @@ func TestSigning(t *testing.T) {
 				t.Errorf("the state signature %q doesn't verify", sig)
 			}
 		}},
+		{"a names request signs M_names, M with its own context string, byte for byte", func(t *testing.T) {
+			m := namesMessage("d_example", 42, 1795089660250, exampleHash)
+			want := "pairtime-project-names-v1\nd_example\n42\n1795089660250\n" + exampleHash
+			if string(m) != want || len(m) != 117 {
+				t.Errorf("M_names = %q (%d bytes), want %q", m, len(m), want)
+			}
+			if got := hex.EncodeToString(m[:26]); got != "7061697274696d652d70726f6a6563742d6e616d65732d76310a" {
+				t.Errorf("M_names starts %s", got)
+			}
+		}},
+		{"a names signature verifies over M_names and never passes for an upload's M, nor an upload's for M_names", func(t *testing.T) {
+			pub := exampleKey().Public().(ed25519.PublicKey)
+			names, err := signNames(KeySigner(exampleKey()), "d_example", 42, 1795089660250, exampleHash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			upload, err := sign(KeySigner(exampleKey()), "d_example", 42, 1795089660250, exampleHash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decode := func(s string) []byte {
+				b, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(s, "ed25519="))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return b
+			}
+			mNames := namesMessage("d_example", 42, 1795089660250, exampleHash)
+			mUpload := message("d_example", 42, 1795089660250, exampleHash)
+			if !ed25519.Verify(pub, mNames, decode(names.signature)) || names.req != 42 || names.unixMS != 1795089660250 {
+				t.Errorf("the names signature %+v doesn't verify over M_names", names)
+			}
+			if ed25519.Verify(pub, mUpload, decode(names.signature)) || ed25519.Verify(pub, mNames, decode(upload.signature)) {
+				t.Error("a names signature passes for an upload, or an upload's for a names request")
+			}
+		}},
+		{"a names body is the spec's JSON: set items with project and label, delete keys, and {} for a read", func(t *testing.T) {
+			for _, tc := range []struct {
+				body namesBody
+				want string
+			}{
+				{namesBody{}, `{}`},
+				{namesBody{Set: []nameItem{{Project: "g7c41e9a2d05b8f63e1a94c7d2b6f0e85", Label: "chip8 <emu> & co"}}}, `{"set":[{"project":"g7c41e9a2d05b8f63e1a94c7d2b6f0e85","label":"chip8 <emu> & co"}]}`},
+				{namesBody{Delete: []string{"g7c41e9a2d05b8f63e1a94c7d2b6f0e85"}}, `{"delete":["g7c41e9a2d05b8f63e1a94c7d2b6f0e85"]}`},
+			} {
+				js, err := encodeNames(tc.body)
+				if err != nil || string(js) != tc.want {
+					t.Errorf("encodeNames(%+v) = %s, %v; want %s", tc.body, js, err, tc.want)
+				}
+			}
+		}},
 		{"a signer that gives no 64-byte signature is refused", func(t *testing.T) {
 			bad := Signer(func([]byte) ([]byte, error) { return []byte{1, 2, 3}, nil })
 			if _, err := sign(bad, "d_example", 1, 1, "00"); err == nil {

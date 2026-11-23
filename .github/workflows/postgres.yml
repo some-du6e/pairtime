@@ -24,6 +24,7 @@ on:
       - internal/server/retention/**
       - internal/server/ingest/**
       - internal/server/rollup/**
+      - internal/server/projectnames/**
       - internal/server/witness/**
       - docs/retention.json
       - docs/embed.go

@@ -16,9 +16,12 @@ import (
 
 // handler is the agent's HTTP server: the UI at /, which needs no token
 // because it is the same static files for everyone, and the API under
-// /v1/. The routes the dashboard reads take the bearer token from
-// port.json or the dashboard's session cookie, and POST /v1/agent/stop
-// takes the token alone, so the cookie can't stop the agent. `pairtime
+// /v1/. The routes the dashboard reads, and the one change it makes,
+// turning a project's name on or off on the owner's dashboard
+// (projectnames.go), take the bearer token from port.json or the
+// dashboard's session cookie, which for a change also needs the
+// dashboard's Origin (localhttp.RequireAuth); POST /v1/agent/stop takes
+// the token alone, so the cookie can't stop the agent. `pairtime
 // dashboard` gets a one-time sign-in link over the socket (dashboard.go),
 // and GET /signin trades it for the cookie (DESIGN 3.9). Guard checks the
 // Host and Origin of everything (CP 6.3).
@@ -27,6 +30,8 @@ func (a *agent) handler(token string) http.Handler {
 	reads.HandleFunc("GET /v1/status", a.serveStatus)
 	reads.HandleFunc("GET /v1/days/{date}", a.serveDay)
 	reads.HandleFunc("GET /v1/sessions/last", a.serveLastSession)
+	reads.HandleFunc("GET /v1/projects", a.serveProjects)
+	reads.HandleFunc("PUT /v1/projects/{key}/name", a.serveProjectName)
 
 	stop := http.NewServeMux()
 	stop.HandleFunc("POST /v1/agent/stop", a.serveStop)

@@ -15,6 +15,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/doctor"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
+	"github.com/some-du6e/pairtime/internal/agent/projects"
 	"github.com/some-du6e/pairtime/internal/coach/text"
 )
 
@@ -102,6 +103,7 @@ func runToday(args []string, stdout, stderr io.Writer) int {
 		sayAgentFailure(stderr, errAgentDown)
 		return 1
 	}
+	nameProjects(dirs, d.Projects)
 	out := buildToday(d, shadow)
 	if *asJSON {
 		if err := writeJSON(stdout, out); err != nil {
@@ -223,6 +225,24 @@ func writeToday(w io.Writer, d todayJSON, today bool, focus []string) {
 		fmt.Fprintln(w)
 		for _, l := range focus {
 			fmt.Fprintln(w, l)
+		}
+	}
+}
+
+// nameProjects gives each project of a day that its rollup names no name
+// the one pairtime shows for it on this computer: its repo's folder, from
+// the git adapter's project map in state.json, which it reads without
+// changing (projects.LocalNames). A project the map doesn't keep stays
+// unnamed, and the views show its key.
+func nameProjects(dirs home.Dirs, ps []dayProject) {
+	m, err := projects.ReadMap(dirs.StateFile())
+	if err != nil {
+		return
+	}
+	local := projects.LocalNames(m)
+	for i := range ps {
+		if ps[i].Name == "" {
+			ps[i].Name = local[ps[i].Project]
 		}
 	}
 }
