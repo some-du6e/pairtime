@@ -1,8 +1,10 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 --
 -- What the day roots need (WP-SV17): which server key was valid when, the
--- day heads the publisher signs, and the leaves under them. None of these
--- holds personal data.
+-- day heads the publisher signs, and the leaves under them. key_history
+-- and day_heads hold no personal data. The leaf hashes are about the
+-- devices whose batches they commit to, and stay as long as any witness
+-- row of their day (docs/errata/2026-11-23-day-leaves-retention.md).
 --
 -- key_history is every server key this database was written with and the
 -- times it was valid, which /.well-known/pairtime-keys.json publishes

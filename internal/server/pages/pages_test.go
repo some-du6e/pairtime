@@ -334,6 +334,11 @@ func TestPrivacyNotice(t *testing.T) {
 			notWant: []string{"with a count and nothing about you"},
 		},
 		{
+			name:    "the notice says an account's deletion keeps the hashes behind the day roots of its batches beside the minimal fraud record (#249)",
+			want:    []string{"Deleting your account deletes everything this server holds about you, except the minimal fraud record and the hashes behind the day roots of your batches, both in the table above, which the deletion report lists as kept."},
+			notWant: []string{"except the minimal fraud record in the table above"},
+		},
+		{
 			name: "the notice says Cloudflare runs bot detection on requests to this server, and that pairtime's pages block the script it adds for that",
 			want: []string{"It also runs automated bot detection on requests to this server, and pairtime&#39;s pages block the script it adds to them for that."},
 		},

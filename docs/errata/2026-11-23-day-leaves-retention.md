@@ -17,7 +17,7 @@ Every kind of data the server keeps has a period in DESIGN 4.4, which the privac
 Decided 2026-11-23 by the orchestrator for Karim, in #249, correcting D-day-leaves, and applied in #229 under `oracle-change`:
 
 - A day's leaf hashes stay as long as any of that day's witness rows. The witness rows' retention entry, `server.witness`, deletes a day's `day_leaves` row at the first sweep after the day's last witness row has gone, whether through the entry's 180 days, a submission's spot-check window closing or an account's erasure. ledger-v1 8 and its decision 37 say so.
-- The limit: the leaf of an erased account's batch stays until the day's last witness row goes, because taking one leaf out would break the proofs of the day's other batches. Only someone holding that batch's device id, number, head and receipt time can match it.
+- The limit: the leaf of an erased account's batch stays until the day's last witness row goes, because taking one leaf out would break the proofs of the day's other batches. Only someone holding that batch's device id, number, head and receipt time can match it. So the eraser's report lists those leaf hashes as kept, with that reason, beside the minimal fraud record (DESIGN 8.9; WP-SV13), and the privacy notice says an account's deletion keeps them.
 - DESIGN 4.4's witness row names the leaves. docs/retention.json moves `day_leaves` from `no_personal_data` into `server.witness`, whose text in the privacy notice says how long the leaves stay.
 - On a server with few uploaders, a day root's count shows how many batches they uploaded that day. DESIGN 4.3 and 4.4, docs/retention.json's `public.day_roots` and the privacy notice say so, and that an instance can keep the day roots off by leaving `PAIRTIME_WITNESS_REPO` unset. The count stays, because the day head and every inclusion proof need it.
 
@@ -33,3 +33,9 @@ DESIGN 4.4, two rows:
 |---|---|---|
 | Server | Witness rows and batch roots, and each day's leaf hashes, which stay as long as any witness row of their day | 180 days; rows a submission uses stay until its spot-check window closes |
 | Public repo | Day roots | Permanent; only hashes and a daily count, which on a server with few uploaders shows how many batches they uploaded that day. An instance can keep them off by leaving `PAIRTIME_WITNESS_REPO` unset |
+
+DESIGN 8.9, the eraser's report:
+
+> The eraser deletes every server row in 4.4, the account's blobs in the evidence store and any backup segments in object storage, and reports what it retained and why: the minimal fraud record, and the leaf hashes of the account's batches, which stay until the last witness row of their day goes, because removing one would break the inclusion proofs of the day's other batches.
+
+docs/PLAN.md, WP-SV13's build line says the same of the eraser's report, and its CI check has the report list those leaf hashes beside DESIGN 4.4's retained row. The privacy notice's deletion paragraph excepts "the minimal fraud record and the hashes behind the day roots of your batches, both in the table above".
