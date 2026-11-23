@@ -326,6 +326,26 @@ foreach ($shell in $shells) {
   Test-Binary real
 }
 
+# Every run in one PowerShell window has the same $PID, so the name a run
+# moves the old pairtime.exe aside under may already hold a copy that an
+# earlier run moved aside and that something still runs.
+foreach ($shell in $shells) {
+  New-Case
+  New-Item -ItemType Directory -Force -Path (Join-Path $script:appData 'pairtime\bin') | Out-Null
+  $fakeZip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $Fixture "fake\pairtime_$($version.Substring(1))_windows_amd64.zip"))
+  try {
+    [System.IO.Compression.ZipFileExtensions]::ExtractToFile($fakeZip.GetEntry('pairtime.exe'), (Join-Path $script:appData 'pairtime\bin\pairtime.exe'))
+  } finally {
+    $fakeZip.Dispose()
+  }
+  $running = Start-Process -FilePath (Join-Path $script:appData 'pairtime\bin\pairtime.exe') -ArgumentList 'wait' -PassThru -WindowStyle Hidden
+  Test-Case "in $shell, a second irm | iex in the same session puts pairtime in place while the copy the first moved aside still runs" `
+    ok 'Installed pairtime[\s\S]*Installed pairtime' "$installed pairtime\bin\pairtime.old.<pid>.exe" `
+    (Invoke-Child @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', "irm $server/real/install.ps1 | iex; irm $server/real/install.ps1 | iex") @{ PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_RELEASE_KEYS = (Join-Path $keys 'real.pub'); PAIRTIME_NO_INSTALL = '1' } $shell)
+  Test-Binary real
+  Stop-Process -Id $running.Id -Force
+}
+
 New-Case
 Test-Case 'by default a script that trusts no key refuses the release, before anything is downloaded' fails 'trusts no release key' '' `
   (Invoke-File $repoScript @('-Version', $version, '-BaseUrl', "$server/real"))
