@@ -562,6 +562,8 @@ components:
           description: Calls lost because held.jsonl was full. Absent when none.
         git:
           $ref: "#/components/schemas/Git"
+        lookback:
+          $ref: "#/components/schemas/Lookback"
     HarnessCounts:
       type: object
       additionalProperties: false
@@ -623,6 +625,53 @@ components:
           type: integer
           minimum: 0
           description: The git.change records written since the agent started.
+    Lookback:
+      type: object
+      additionalProperties: false
+      required: [files, files_done, bytes, bytes_done, running]
+      description: >
+        How far lookback has read what the harnesses logged before pairtime
+        did: the last 30 days of each log file a root's first listing found,
+        read at low priority by a process of its own (DESIGN 5.9 step 9).
+        It counts what earlier runs of the agent read too. Absent when
+        there was nothing to read.
+      properties:
+        files:
+          type: integer
+          minimum: 0
+          description: >
+            The files with lines from before pairtime. A file that goes away
+            leaves this count and files_done alike.
+        files_done:
+          type: integer
+          minimum: 0
+          description: >
+            The files lookback is done with: read, or left unread for good,
+            as after its reader failed three times.
+        bytes:
+          type: integer
+          minimum: 0
+          description: The bytes of those lines, in all the files.
+        bytes_done:
+          type: integer
+          minimum: 0
+          description: >
+            The bytes lookback is done with: all of the files it is done
+            with, as files_done counts them, and what it has read of the
+            others.
+        running:
+          type: boolean
+          description: Whether lookback's reader runs now.
+        failures:
+          type: integer
+          minimum: 0
+          description: >
+            The reader's processes that failed since the agent started.
+            After the third, the rest of each file's lines from before
+            pairtime stay unread. Absent when none failed.
+        error:
+          type: string
+          description: Why the last one failed. Absent when none did.
     Signals:
       type: object
       additionalProperties: false
