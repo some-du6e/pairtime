@@ -180,12 +180,15 @@ function Test-PrintedCommand([string]$What, [string]$Line, [string]$Want) {
 # fails), that its output matches Pattern, that LOCALAPPDATA then holds
 # exactly Files, and that TEMP is empty. PowerShell wraps error and warning
 # text at 120 columns, sometimes in the middle of a word, so the output and
-# the pattern are compared with their whitespace taken out.
+# the pattern are compared with their whitespace taken out. PowerShell 7
+# also wraps an error at the console's width, colors it, and starts each of
+# its lines with a |, so the color codes and those |s go too.
 function Test-Case([string]$Name, [string]$Want, [string]$Pattern, [string]$Files, [hashtable]$Result) {
   $problems = @()
   if ($Want -eq 'ok' -and $Result.Code -ne 0) { $problems += "exited $($Result.Code), want 0" }
   if ($Want -eq 'fails' -and $Result.Code -eq 0) { $problems += 'exited 0, want a failure' }
-  if (($Result.Output -replace '\s+', '') -cnotmatch ($Pattern -replace ' ', '')) { $problems += "its output doesn't match /$Pattern/" }
+  $plain = @(($Result.Output -replace '\x1b\[[0-9;?]*[A-Za-z]', '') -split "`r?`n" | ForEach-Object { $_ -replace '^\s*\|', '' }) -join "`n"
+  if (($plain -replace '\s+', '') -cnotmatch ($Pattern -replace ' ', '')) { $problems += "its output doesn't match /$Pattern/" }
   $got = Get-Tree $script:appData
   if ($got -ne $Files) { $problems += "LOCALAPPDATA holds [$got], want [$Files]" }
   $left = Get-Tree $script:tmp
