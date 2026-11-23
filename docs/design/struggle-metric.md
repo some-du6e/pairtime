@@ -89,6 +89,8 @@ The scorer builds these from the events, in this order. Each is kept on the devi
 | `minute_bucket` | section 5 | Four `credit_slot`s |
 | `rollup` | section 5 | Buckets |
 
+A turn runs from `t_submit` until its first `agent.stop` or `agent.interrupt`, and no later than its session's next prompt or `session.end`. Its agent records are the `agent.*` events with its `turn_key`, and those without one that its session records from its `t_submit` to the next prompt. In a session that the harness's own hooks or logs report, they will report how a turn ends, so the turn runs on until then. A turn in any other session runs only to its latest agent record, and one with none doesn't run. Either way a long gap in a turn's agent records, counted from `t_submit`, ends its run, and no later record starts it again, not even its stop. In a session the hooks or logs report, a gap of more than `BUCKET_TTL_S` ends the run `BUCKET_TTL_S` after the gap begins; in any other, a gap of more than `READ_HORIZON_S` ends it where the gap begins. Every scoring rule that asks whether a turn is running, or what came after it ended (2.4, 2.5, 2.6, 2.8, 4.2, 5.1, 5.2, 5.3, 5.4), reads this span.
+
 The 15-second slot is the atomic unit because that is the presence sample rate. Event times keep millisecond precision, and window edges are applied to the second inside a slot before the slot is summed.
 
 ## 2. Engagement intervals
@@ -104,7 +106,7 @@ The client samples OS idle time every 15 s (`SAMPLE_S`; CP 3.3). Each 15-second 
 | `yes` | Input during the slot | any window |
 | `bridged` | No input, but the no-input run containing the slot is at most `PRESENCE_GAP_S` = 120 s long and has input on both sides | any window |
 | `tail` | Within `PRESENCE_TAIL_S` = 30 s after the last input before a longer gap | any window |
-| `returned` | Inside a longer no-input run (up to `RETURN_GAP_MAX_S` = 600 s) whose first following anchor is substantive, in the same project and within 600 s of the run's end, with no lock, sleep or focus change in between. At most `RETURN_CREDIT` seconds of the run qualify (below) | prose reading (2.4) at the start of the run and that anchor's think lead at the end |
+| `returned` | Inside a longer no-input run (up to `RETURN_GAP_MAX_S` = 600 s) whose first following anchor on record within 600 s of the run's start is substantive and in the same project, with no lock, sleep or focus change in between. At most `RETURN_CREDIT` seconds of the run qualify (below) | prose reading (2.4) at the start of the run and that anchor's think lead at the end |
 | `no` | Anything else, including any no-input run longer than 600 s | nothing |
 | `unknown` | The sampler wasn't running: no daemon yet (lookback), or a machine with no desktop to sample, such as a server | the lookback rules (2.8), for records the lookback reader backfilled. A live prompt in such a slot goes through 2.2's rules as anywhere. A prompt no app message witnesses falls to one of rules 1 to 5, such as rule 4 in a session with no TTY, or to rule 8. Only a relayed anchor (2.2 rule 9) credits a live second with no presence |
 
@@ -116,7 +118,7 @@ The return rule. Someone who reads a long answer without touching anything, thin
 RETURN_CREDIT = 60 * unread_prose_words / READ_WPM  +  THINK_LEAD_S
 ```
 
-`unread_prose_words` counts only the prose of agent output that arrived since the person last had the session in focus with input. Diffs and tool output are left out, because nobody reviews a diff without scrolling. The reading part is placed at the start of the run, right after the tail (`READ~r`). The think part is the anchor's own think lead, where it reaches back into the run (`P~r`, `E~r`, ...). Anything between the two is `X.absent`. The anchor must come within `READ_HORIZON_S` (600 s) of the run's end. "Substantive" here means a substantive prompt, answer or queued message, a typed edit, a typed command or a human commit; editor navigation, go-aheads and relayed messages don't qualify. So a 6-minute silence after a 160-word answer, followed straight away by a typed prompt, earns at most 53 + 120 = 173 s, which is close to the 120 s Hackatime would give any long gap. The same silence followed by a click in the editor earns only the 30-second tail.
+`unread_prose_words` counts only the prose of agent output that arrived since the person last had the session in focus with input. Diffs and tool output are left out, because nobody reviews a diff without scrolling. The reading part is placed at the start of the run, right after the tail (`READ~r`). The think part is the anchor's own think lead, where it reaches back into the run (`P~r`, `E~r`, ...). Anything between the two is `X.absent`. The anchor must be on record within `READ_HORIZON_S` (600 s) of the run's start, so the silence and the act that ends it fit in ten minutes, grit's limit from an answer to the reply (PA 1.14), and the rule never looks further ahead than reading does (2.4). An act is on record at the later of its own time and its event's `t` (1.1), so a typed command, whose `shell.command` is written when it ends, counts from its end. An act on record later doesn't count for the run, and the first one on record in time decides. "Substantive" here means a substantive prompt, answer or queued message, a typed edit, a typed command or a human commit; editor navigation, go-aheads and relayed messages don't qualify. So a 6-minute silence after a 160-word answer, followed straight away by a typed prompt, earns at most 53 + 120 = 173 s, which is close to the 120 s Hackatime would give any long gap. The same silence followed by a click in the editor earns only the 30-second tail.
 
 Mouse-only presence never opens a window. It can only keep a window that a human act opened. That is the main defense against jigglers (TP A3 T7): a jiggler can hold `input_any` forever, but it can't submit a prompt, answer a permission request or type in the editor.
 
@@ -239,6 +241,7 @@ Each slot gets `focus_class` and `focus_project`: the app that held focus longes
 Browsers and desktop chat apps are ambiguous: they might hold documentation or a video. Without titles or URLs, v1 credits them only as short lookups between project work:
 
 - A run of browser or chat-app slots counts as `LOOKUP` (activity `lookup`) for project `p` when it starts within `LOOKUP_BRACKET_S` = 30 s after a credited slot of `p`, ends within 30 s before a credited slot of `p`, and no agent turn in `p` is running during it. Since every credited slot traces back to an anchor, this means there was a human act on both sides. Relayed credit (2.2 rule 9) is never a bracket.
+- Nothing the harness reports shows when an agent stops in a session that its hooks or logs don't report (1.3). So in such a session, nothing the session credits, by a window of one of its anchors or by reading drained from its bucket, can be the credited slot a run starts after. Other credit of `p` in the 30 s before the run can, such as a typed edit's lead, and the slot the run ends before can be credited by anything in `p`.
 - The run is credited up to `LOOKUP_MAX_S` = 180 s; the rest is `X.lookup_cap`.
 - During an agent run, browser time is waiting, not lookup, unless the browser extension (v2) marks the tab as documentation.
 
@@ -925,7 +928,7 @@ Every tunable value in the credit rule, with its v1 setting and the reason for i
 | `TOOL_LINES_MAX` | 4 lines | Tool output a harness shows by default per call; the rest is collapsed |
 | `BUCKET_MAX_S` (fit) | 600 s | Most reading one turn can bank. Bounds what a jiggler can collect after a huge diff; equal to grit's 10-minute think limit |
 | `BUCKET_TTL_S` | 7,200 s | Output older than two hours is no longer "the answer you are reading" |
-| `READ_HORIZON_S` | 600 s | Reading counts only within ten minutes of a human act in the project, before or after. Same bound as the return rule |
+| `READ_HORIZON_S` | 600 s | Reading counts only within ten minutes of a human act in the project, before or after. The return rule uses the same bound, counted from the start of the silence (2.1) |
 | `LOOKUP_BRACKET_S` | 30 s | How close project work must be on each side of a browser run |
 | `LOOKUP_MAX_S` (fit) | 180 s | Longest credited browser or chat-app run. A documentation lookup, not an evening of video |
 
