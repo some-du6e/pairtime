@@ -88,6 +88,22 @@ func rename(from, to string) error {
 	return err
 }
 
+// readFile retries for a moment while another process replaces name: its
+// rename holds the file open with delete access, which makes the open
+// fail with access denied or a sharing violation, as rename does when a
+// reader has it open.
+func readFile(name string) ([]byte, error) {
+	var err error
+	for i := range 10 {
+		var data []byte
+		if data, err = os.ReadFile(name); err == nil || !retryable(err) {
+			return data, err
+		}
+		time.Sleep(time.Duration(i+1) * 10 * time.Millisecond)
+	}
+	return nil, err
+}
+
 func retryable(err error) bool {
 	return errors.Is(err, windows.ERROR_ACCESS_DENIED) || errors.Is(err, windows.ERROR_SHARING_VIOLATION)
 }

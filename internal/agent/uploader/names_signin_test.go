@@ -60,7 +60,7 @@ func TestNamesSignIns(t *testing.T) {
 		// config is config.toml for the first run, which ends once first
 		// holds.
 		config string
-		first  func(f *fakeIngest) bool
+		first  func(f *fakeIngest, r *rig) bool
 		// between changes the files, the fake server and the sign-in, under
 		// the fake's lock, before the second run. restart says a new agent
 		// makes it, as after a restart; else the same uploader goes on.
@@ -73,7 +73,7 @@ func TestNamesSignIns(t *testing.T) {
 		{
 			name:   "an agent that starts after its link's first batch, with a project-names.json that doesn't read, keeps a name config.toml has in a form pairtime can't change out of what goes, and doctor names it",
 			config: projectTable(nameKey, "chip8-emulator", true),
-			first: func(f *fakeIngest) bool {
+			first: func(f *fakeIngest, _ *rig) bool {
 				return f.names[nameKey] == "chip8-emulator" && f.head != nil && f.head.b == 3
 			},
 			between: func(t *testing.T, r *rig, cfgPath string, _ *signIn) {
@@ -104,7 +104,12 @@ func TestNamesSignIns(t *testing.T) {
 		{
 			name:   "a new sign-in to the same server, as the same device, reads project-names.json again, so a name pairtime login turned off with a note it couldn't write into config.toml isn't sent",
 			config: "",
-			first:  func(f *fakeIngest) bool { return f.namesPosts >= 1 && f.head != nil && f.head.b == 3 },
+			first: func(f *fakeIngest, r *rig) bool {
+				// The first run's answer is saved, so no save of the uploader's
+				// comes after the change.
+				n, err := ReadNames(r.dirs.Data)
+				return f.namesPosts >= 1 && f.head != nil && f.head.b == 3 && err == nil && n.AnsweredAt > 0
+			},
 			between: func(t *testing.T, r *rig, cfgPath string, s *signIn) {
 				// As pairtime logout and login do: a new token, a name turned
 				// on meanwhile in an inline table, and the file login wrote,
@@ -152,7 +157,7 @@ func TestNamesSignIns(t *testing.T) {
 				r.u.Wake()
 				r.f.mu.Lock()
 				defer r.f.mu.Unlock()
-				return tt.first(r.f)
+				return tt.first(r.f, r)
 			})
 			if tt.restart {
 				r.u.Close()

@@ -213,7 +213,7 @@ func TestProjectsList(t *testing.T) {
 			name: "a name hidden on the dashboard that pairtime couldn't turn off in config.toml says so, and what to write before it shows again",
 			home: projectsHome{config: online + chip8Table("chip8-emulator", true), linked: true, codes: serverCodes,
 				hidden: map[string]uploader.HiddenName{chip8Key: {Label: "chip8-emulator", At: time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC).UnixMilli(), Pending: true}}},
-			want:    []string{"  On your dashboard: Project 7c41e9, since you hid its name there on Saturday, November 21; pairtime couldn't turn it off in config.toml, so it doesn't send it, and to show it again set online = false under its table there, then run show-name\n"},
+			want:    []string{"  On your dashboard: Project 7c41e9, since you hid its name there on Saturday, November 21; pairtime couldn't turn it off in config.toml, so it doesn't send it, and to show it again write it there as a table of its own, [projects.<key>] with its name and online = false, and once pairtime projects says pairtime turned it off here, run show-name\n"},
 			notWant: []string{"pairtime turned it off here"},
 		},
 		{
@@ -478,7 +478,7 @@ func TestProjectsNames(t *testing.T) {
 				hidden: map[string]uploader.HiddenName{chip8Key: {Label: "chip8-emulator", At: 1, Pending: true}}},
 			args:     []string{"projects", "show-name", "7c41e9", "chip8-emulator"},
 			wantCode: 1,
-			wantErr:  "pairtime keeps this name off your dashboard, but couldn't turn it off in config.toml, so it doesn't send it while config.toml has it on; set online = false under its [projects.<key>] table there by hand, then turn it on again",
+			wantErr:  "pairtime keeps this name off your dashboard, but couldn't turn it off in config.toml, so it doesn't send it while config.toml has it on; write it there by hand as a table of its own, [projects.<key>] with its name and online = false, and once pairtime projects says pairtime turned it off here, turn it on again",
 			notOut:   "will show",
 			want:     map[string]config.Project{chip8Key: {Name: "chip8-emulator", Online: true}},
 		},

@@ -335,7 +335,7 @@ func TestEditWaitsForLock(t *testing.T) {
 				t.Fatal(err)
 			}
 			wait := lockWait
-			lockWait = 300 * time.Millisecond
+			lockWait = time.Second
 			t.Cleanup(func() { lockWait = wait })
 			release, err := home.LockFile(filepath.Join(dir, LockName), time.Second)
 			if err != nil {

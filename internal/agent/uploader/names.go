@@ -13,7 +13,6 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptrace"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -129,15 +128,18 @@ type Names struct {
 
 // HiddenName is a name pairtime turned off in config.toml because the
 // owner's dashboard doesn't show it: the owner hid it there, the server no
-// longer has it, or the computer signed in to another server or device.
+// longer has it, the computer signed in to another server or device, or
+// project-names.json didn't read.
 type HiddenName struct {
-	// Label is the label the dashboard showed, or for a sign-in elsewhere
-	// the one config.toml had on.
+	// Label is the label config.toml had on when pairtime found it, or
+	// else the one the dashboard showed or a set carried: a pending note's
+	// label is what config.toml must change from before the name counts
+	// as turned on again (hidePending).
 	Label string `json:"label"`
 	// At is when the uploader found it, in Unix ms.
 	At int64 `json:"at"`
 	// Reason says why: "" for a name the owner hid on the dashboard,
-	// NoteDropped and NoteSignedIn for the others.
+	// NoteDropped, NoteSignedIn and NoteUnreadable for the others.
 	Reason string `json:"reason,omitempty"`
 	// Pending is set while config.toml still has the name on, because
 	// pairtime couldn't turn it off there: the uploader doesn't send it,
@@ -160,13 +162,14 @@ const (
 	NoteUnreadable = "unreadable"
 )
 
-// ReadNames reads project-names.json in the data directory dataDir. A
-// missing file is an error that wraps fs.ErrNotExist, and the device then
-// knows of no names on the server, nor of any code. A code that isn't one
+// ReadNames reads project-names.json in the data directory dataDir, while
+// another process may replace it (home.ReadFile). A missing file is an
+// error that wraps fs.ErrNotExist, and the device then knows of no names
+// on the server, nor of any code. A code that isn't one
 // counts for nothing, so what the file says can't put anything else where
 // `pairtime projects` and the local dashboard show a code.
 func ReadNames(dataDir string) (Names, error) {
-	data, err := os.ReadFile(filepath.Join(dataDir, NamesFileName))
+	data, err := home.ReadFile(filepath.Join(dataDir, NamesFileName))
 	if err != nil {
 		return Names{}, err
 	}
@@ -334,10 +337,13 @@ func (u *Uploader) syncNames(c Credentials) (sent, more bool) {
 	// sign-in's file had on, before anything goes or waits.
 	wanted = maps.Clone(wanted)
 	u.loadNames(c, wanted)
+	// It sends nothing: a name pairtime couldn't turn off, which the owner
+	// turned off by hand, is no longer pending, so show-name takes it, even
+	// while the link's first batch waits.
+	u.hidePending(wanted)
 	if u.st.Linking || u.now().Before(u.namesWait) {
 		return false, false
 	}
-	u.hidePending(wanted)
 	set, del := namesDiff(wanted, u.names.Confirmed, u.acks())
 	set = u.ownNames(set)
 	change := takeNames(set, del)
@@ -630,8 +636,8 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames, change
 	}
 	for try := 0; try < 3; try++ {
 		if try > 0 && !u.namesStarted && len(body.Set)+len(body.Delete) > 0 {
-			// The last try's answer may have been the transport's resend's,
-			// so the server's state is unknown: the next cycle reads first.
+			// The last try was refused, or its answer may have been the
+			// transport's resend's: the next cycle reads first.
 			return true, false
 		}
 		// The sign-in may have gone since the cycle began: nothing goes then
@@ -703,7 +709,11 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames, change
 		case a.status == http.StatusOK:
 			return true, u.namesAnswered(body, change, wanted, a)
 		case a.refusal.Error == refusalClockSkew:
-			continue // the answer set the clock's offset
+			// The answer set the clock's offset. A read goes again at once;
+			// a set or a delete, after a read, so a hide made meanwhile
+			// stays (the guard above).
+			u.namesStarted = false
+			continue
 		case a.refusal.Error == refusalCounter:
 			// The state read sets the counter above the server's, and the
 			// next cycle sends the names again (ingest-v1 5.1). The counter
@@ -714,9 +724,12 @@ func (u *Uploader) sendNames(c Credentials, body namesBody, b builtNames, change
 			u.missingUntil, u.missingHash = time.Time{}, ""
 			return true, u.sync(c)
 		case a.refusal.Error == refusalBodyHash:
-			continue // the body changed on the way
+			// The body changed on the way: as for a clock skew.
+			u.namesStarted = false
+			continue
 		case a.refusal.Error == refusalKeyReused:
 			u.namesKey = event.NewEventID(u.now())
+			u.namesStarted = false
 			continue
 		case a.refusal.Error == refusalBodyUnreadable:
 			return u.namesFailed(errBodyUnreadable, a)
@@ -877,21 +890,27 @@ func (u *Uploader) namesAnswered(sent namesBody, change string, wanted map[strin
 	if len(hid) == 0 {
 		u.names.Hides = nil
 	}
-	for key, label := range got {
-		// Shown again, since the owner turned it on on the computer: a note
-		// of a name config.toml has off stays, as one pairtime turned off
-		// for another sign-in, while its delete goes.
-		if wanted[key] == label {
+	for key := range got {
+		// Shown, so a set of it reached the server after the note, and any
+		// hide of it is gone: a note of a name config.toml has on is out of
+		// date, whatever the label. A note of a name config.toml has off
+		// stays, as one pairtime turned off for another sign-in, while its
+		// delete goes, and a pending note's key is never in wanted
+		// (hidePending).
+		if _, on := wanted[key]; on {
 			delete(u.names.Hidden, key)
 		}
 	}
 	for _, key := range u.names.Hides {
-		// A note pairtime turned the name off with is out of date once a
-		// set may have reached the server since, as after show-name and a
-		// lost answer, which deleted that hide: this one is new, and turns
-		// it off again. Without such a set, it is the hide the note is of,
-		// which the owner turned on again over.
-		if h, noted := u.names.Hidden[key]; !noted || (setSince[key] && !h.Pending) {
+		// Only a hide's own note, with no set that may have reached the
+		// server since, is of this hide, which the owner may have turned
+		// the name on again over. After such a set, as after show-name and
+		// a lost answer, the set deleted that hide, so this one is new; and
+		// a note made without a hide, at a sign-in, for a file that didn't
+		// read or for a name the server dropped, is of no hide at all:
+		// either way the name goes off again.
+		h, noted := u.names.Hidden[key]
+		if !noted || (!h.Pending && (setSince[key] || h.Reason != "")) {
 			u.hidden(key, noteLabel(key), "", now)
 		}
 	}
@@ -997,7 +1016,9 @@ func SignedInElsewhere(dataDir, server, device string, on map[string]string, hid
 	e := Elsewhere{Off: off, Reason: reason}
 	for _, key := range slices.Sorted(maps.Keys(off)) {
 		note := HiddenName{Label: off[key], At: at, Reason: reason}
-		if hide(key) != nil {
+		// A failed hide of a name config.toml has off already changes
+		// nothing: only one it has on stays out pending.
+		if _, isOn := on[key]; hide(key) != nil && isOn {
 			note.Pending = true
 			e.Stuck = append(e.Stuck, key)
 		}

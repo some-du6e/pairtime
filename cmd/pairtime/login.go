@@ -254,12 +254,18 @@ func printNamesOff(w io.Writer, server string, e uploader.Elsewhere) {
 	if len(e.Off) == 0 {
 		return
 	}
-	if e.Reason == uploader.NoteUnreadable {
+	some := len(e.Stuck) < len(e.Off) // pairtime turned some off in config.toml
+	switch {
+	case e.Reason == uploader.NoteUnreadable && some:
 		fmt.Fprintf(w, "\npairtime couldn't read which sign-in this computer's project names were for, so it turned off the ones that were on, and nothing about them goes to %s.", server)
-	} else {
+	case e.Reason == uploader.NoteUnreadable:
+		fmt.Fprintf(w, "\npairtime couldn't read which sign-in this computer's project names were for, so nothing about the ones that were on goes to %s.", server)
+	case some:
 		fmt.Fprintf(w, "\nThe project names this computer had on were for another sign-in. %s never showed them, so pairtime turned them off here, and nothing about them goes there.", server)
+	default:
+		fmt.Fprintf(w, "\nThe project names this computer had on were for another sign-in. %s never showed them, and nothing about them goes there.", server)
 	}
-	if len(e.Stuck) < len(e.Off) {
+	if some {
 		fmt.Fprint(w, " To show one on your dashboard there:\n")
 		for _, key := range slices.Sorted(maps.Keys(e.Off)) {
 			if !slices.Contains(e.Stuck, key) {
@@ -270,7 +276,7 @@ func printNamesOff(w io.Writer, server string, e uploader.Elsewhere) {
 		fmt.Fprintln(w)
 	}
 	if len(e.Stuck) > 0 {
-		fmt.Fprint(w, "pairtime couldn't turn these off in config.toml, which has them in a form it can't change, so it sends none of them while config.toml has them on. To show one there, set online = false under its [projects.<key>] table by hand, then run pairtime projects show-name with its key:\n")
+		fmt.Fprint(w, "pairtime couldn't turn these off in config.toml, which has them in a form it can't change, such as an inline table, so it sends none of them while config.toml has them on. To show one there, write it in config.toml as a table of its own, [projects.<key>] with its name and online = false, and once pairtime projects says pairtime turned it off here, run pairtime projects show-name with its key:\n")
 		for _, key := range e.Stuck {
 			fmt.Fprintf(w, "  %s    \"%s\"\n", key, text.Printable(e.Off[key]))
 		}

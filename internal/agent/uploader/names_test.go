@@ -831,6 +831,67 @@ func TestNames(t *testing.T) {
 			},
 		},
 		{
+			name:   "a name pairtime turned off at a sign-in, which the owner turned on again and then hid on the dashboard, goes off again rather than out, since that note was of no hide",
+			config: projectTable(nameKey, "chip8-emulator", true),
+			notes:  map[string]HiddenName{nameKey: {Label: "chip8-emulator", At: 1, Reason: NoteSignedIn}},
+			hidden: []string{nameKey},
+			until: func(f *fakeIngest, cfgPath string) bool {
+				cfg, _, _ := config.Load(cfgPath)
+				return f.namesPosts >= 2 && len(f.namesHidden) == 0 && !cfg.Projects[nameKey].Online
+			},
+			checks: []rigCheck{hiddenStays, bodies(`{}`, `{"delete":["`+nameKey+`"]}`)},
+		},
+		{
+			name:   "an answer that shows a name config.toml has on ends its old note whatever the label, so a hide after a renamed set's 429 still turns the name off",
+			config: projectTable(nameKey, "chip8-emulator", true),
+			notes:  map[string]HiddenName{nameKey: {Label: "chip8-emulator", At: 1}},
+			faults: map[int]string{2: "stored-502", 4: "429"},
+			then:   map[int]string{2: projectTable(nameKey, "Chip-8", true)},
+			hideAt: 4,
+			until: func(f *fakeIngest, cfgPath string) bool {
+				cfg, _, _ := config.Load(cfgPath)
+				return f.namesPosts >= 6 && len(f.namesHidden) == 0 && !cfg.Projects[nameKey].Online
+			},
+			checks: []rigCheck{hiddenStays},
+		},
+		{
+			name:   "a hidden name config.toml has in a form pairtime can't change, under a label the dashboard never showed, stays out under config.toml's label, so that label never passes for the owner turning it on again",
+			config: "[projects]\n" + nameKey + " = { name = \"Chip-8\", online = true }\n",
+			known:  map[string]string{nameKey: "chip8-emulator"},
+			hidden: []string{nameKey},
+			until:  func(f *fakeIngest, _ string) bool { return f.namesPosts > 0 && f.head != nil && f.head.b == 3 },
+			checks: []rigCheck{
+				bodies(`{}`),
+				func(t *testing.T, r *rig, _ string) {
+					if _, shown := r.f.names[nameKey]; shown || !r.f.namesHidden[nameKey] {
+						t.Errorf("the server shows %v and hides %v, want the name hidden still", r.f.names, r.f.namesHidden)
+					}
+					n, err := ReadNames(r.dirs.Data)
+					if h := n.Hidden[nameKey]; err != nil || !h.Pending || h.Label != "Chip-8" {
+						t.Errorf("project-names.json = %+v, %v; want a pending note with config.toml's label", n, err)
+					}
+				},
+			},
+		},
+		{
+			name:   "a pending note of a name the owner turned off in config.toml by hand stops being pending, so show-name takes it again, and nothing about it goes",
+			config: projectTable(nameKey, "chip8-emulator", false),
+			notes:  map[string]HiddenName{nameKey: {Label: "chip8-emulator", At: 1, Reason: NoteSignedIn, Pending: true}},
+			until:  func(f *fakeIngest, _ string) bool { return f.namesPosts > 0 && f.head != nil && f.head.b == 3 },
+			checks: []rigCheck{
+				bodies(`{}`),
+				func(t *testing.T, r *rig, _ string) {
+					n, err := ReadNames(r.dirs.Data)
+					if h, ok := n.Hidden[nameKey]; err != nil || !ok || h.Pending || h.Reason != NoteSignedIn {
+						t.Errorf("project-names.json = %+v, %v; want the note kept, no longer pending", n, err)
+					}
+					if p := r.doctor(); strings.Contains(p, nameKey) {
+						t.Errorf("doctor heard %q", p)
+					}
+				},
+			},
+		},
+		{
 			name:   "a set the server answered with a 429 stored nothing: it goes again after a read, and the name stays on",
 			config: projectTable(nameKey, "chip8-emulator", true),
 			faults: map[int]string{2: "429"},
@@ -1178,6 +1239,15 @@ func TestSignedInElsewhere(t *testing.T) {
 			}},
 		},
 		{
+			name:    "a name config.toml has off already, which the old server showed, gets a note that isn't pending even when config.toml can't be changed, since nothing of it goes",
+			file:    &Names{V: namesVersion, Server: "https://other.example.org", Device: device, Confirmed: map[string]string{nameKey: "chip8-emulator"}},
+			stuck:   nameKey,
+			wantOff: map[string]string{nameKey: "chip8-emulator"}, wantReason: NoteSignedIn,
+			wantFile: &Names{V: namesVersion, Server: server, Device: device, Hidden: map[string]HiddenName{
+				nameKey: {Label: "chip8-emulator", At: at.UnixMilli(), Reason: NoteSignedIn},
+			}},
+		},
+		{
 			name: "a file of this sign-in changes nothing",
 			file: &Names{V: namesVersion, Server: server, Device: device, Confirmed: map[string]string{nameKey: "chip8-emulator"}},
 			on:   map[string]string{nameKey: "chip8-emulator"},
@@ -1236,7 +1306,7 @@ func TestSignedInElsewhere(t *testing.T) {
 				t.Fatal(err)
 			}
 			var wantStuck []string
-			if tt.stuck != "" {
+			if _, on := tt.on[tt.stuck]; on {
 				wantStuck = []string{tt.stuck}
 			}
 			if !maps.Equal(e.Off, tt.wantOff) || e.Reason != tt.wantReason || !slices.Equal(e.Stuck, wantStuck) {

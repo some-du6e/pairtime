@@ -257,7 +257,7 @@ func nameWords(p projects.Project) string {
 			why = fmt.Sprintf("%s, since you hid its name there on %s", dashboardName(p, "its code"), day)
 		}
 		if p.Pending {
-			return why + "; pairtime couldn't turn it off in config.toml, so it doesn't send it, and to show it again set online = false under its table there, then run show-name"
+			return why + "; pairtime couldn't turn it off in config.toml, so it doesn't send it, and to show it again write it there as a table of its own, [projects.<key>] with its name and online = false, and once pairtime projects says pairtime turned it off here, run show-name"
 		}
 		return why + "; pairtime turned it off here" + again(p)
 	}

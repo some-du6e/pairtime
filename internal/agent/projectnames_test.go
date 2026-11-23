@@ -114,7 +114,11 @@ func TestProjectsAPI(t *testing.T) {
 		shown  map[string]string
 		codes  map[string]string // the codes the server last gave
 		hidden map[string]uploader.HiddenName
-		steps  []step
+		// rawNames is project-names.json's bytes before the steps, when set.
+		rawNames string
+		steps    []step
+		// file checks project-names.json after the steps, when set.
+		file func(t *testing.T, n uploader.Names, err error)
 	}{
 		{
 			name: "GET /v1/projects lists a repo by its local name, with its name off and that name to show, and a plain folder with neither, and no code before a server gives one",
@@ -196,6 +200,41 @@ func TestProjectsAPI(t *testing.T) {
 			}}},
 		},
 		{
+			name:     "the switch on a computer whose project-names.json names another sign-in first does what login does: that sign-in's names go off with a note, the file names this one, and the name switched on goes",
+			config:   "mode = \"online\"\n[projects." + folderKey + "]\nname = \"scratch\"\nonline = true\n",
+			linked:   true,
+			rawNames: `{"v":1,"server":"https://old.example.org","device":"d_old","confirmed":{"` + folderKey + `":"scratch"}}`,
+			steps: []step{{method: "PUT", path: name, body: `{"online":true}`, code: 200, check: func(t *testing.T, body string, names map[string]config.Project) {
+				if r := entry(t, body); r.State != "sending" {
+					t.Errorf("PUT answered %s", body)
+				}
+				if names[chip8Key] != (config.Project{Name: "chip8-emulator", Online: true}) || names[folderKey] != (config.Project{Name: "scratch"}) {
+					t.Errorf("config.toml has %+v, want chip8-emulator on and the old sign-in's name off", names)
+				}
+			}}},
+			file: func(t *testing.T, n uploader.Names, err error) {
+				if h := n.Hidden[folderKey]; err != nil || n.Server != namesServer || n.Device != namesDevice || h.Reason != uploader.NoteSignedIn || h.Pending {
+					t.Errorf("project-names.json = %+v, %v; want this sign-in's, with a note of the old sign-in's name", n, err)
+				}
+			},
+		},
+		{
+			name:     "the switch on a linked computer whose project-names.json names no sign-in writes this one into it, and turns nothing else off",
+			config:   "mode = \"online\"\n[projects." + folderKey + "]\nname = \"scratch\"\nonline = true\n",
+			linked:   true,
+			rawNames: `{"v":1}`,
+			steps: []step{{method: "PUT", path: name, body: `{"online":true}`, code: 200, check: func(t *testing.T, _ string, names map[string]config.Project) {
+				if names[chip8Key] != (config.Project{Name: "chip8-emulator", Online: true}) || names[folderKey] != (config.Project{Name: "scratch", Online: true}) {
+					t.Errorf("config.toml has %+v, want both names on", names)
+				}
+			}}},
+			file: func(t *testing.T, n uploader.Names, err error) {
+				if err != nil || n.Server != namesServer || n.Device != namesDevice || len(n.Hidden) != 0 {
+					t.Errorf("project-names.json = %+v, %v; want this sign-in's, with no note", n, err)
+				}
+			},
+		},
+		{
 			name: "a label given is cleaned as the server cleans a display name before it is saved",
 			steps: []step{{method: "PUT", path: name, body: `{"online":true,"label":"  My \t chip  "}`, code: 200, check: func(t *testing.T, body string, names map[string]config.Project) {
 				if r := entry(t, body); r.Label != "My chip" || names[chip8Key].Name != "My chip" {
@@ -253,7 +292,7 @@ func TestProjectsAPI(t *testing.T) {
 			codes:  map[string]string{chip8Key: "7c41e9"},
 			hidden: map[string]uploader.HiddenName{chip8Key: {Label: "Chip-8", At: 1, Pending: true}},
 			steps: []step{{method: "PUT", path: name, body: `{"online":true}`, code: 409, check: func(t *testing.T, body string, names map[string]config.Project) {
-				if !strings.Contains(body, "set online = false under its [projects.<key>] table there by hand, then turn it on again") {
+				if !strings.Contains(body, "write it there by hand as a table of its own, [projects.<key>] with its name and online = false, and once pairtime projects says pairtime turned it off here, turn it on again") {
 					t.Errorf("PUT answered %s", body)
 				}
 				if names[chip8Key] != (config.Project{Name: "Chip-8", Online: true}) {
@@ -294,10 +333,15 @@ func TestProjectsAPI(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var cfgFile string
+			var cfgFile, dataDir string
 			a := startWith(t, tt.config, nil, func(dirs home.Dirs) {
 				projectsDir(t, dirs, tt.linked, tt.shown, tt.codes, tt.hidden)
-				cfgFile = dirs.ConfigFile()
+				if tt.rawNames != "" {
+					if err := os.WriteFile(filepath.Join(dirs.Data, uploader.NamesFileName), []byte(tt.rawNames), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				cfgFile, dataDir = dirs.ConfigFile(), dirs.Data
 			})
 			before, _ := os.ReadFile(cfgFile)
 			for _, s := range tt.steps {
@@ -314,6 +358,10 @@ func TestProjectsAPI(t *testing.T) {
 				if after, _ := os.ReadFile(cfgFile); string(after) != string(before) {
 					t.Errorf("config.toml changed to %q", after)
 				}
+			}
+			if tt.file != nil {
+				n, err := uploader.ReadNames(dataDir)
+				tt.file(t, n, err)
 			}
 		})
 	}

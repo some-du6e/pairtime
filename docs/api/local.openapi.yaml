@@ -233,10 +233,10 @@ paths:
         "409":
           description: >
             pairtime couldn't change config.toml, as when it doesn't parse or
-            holds the project as an inline table, or the name is one the
-            owner hid on the dashboard that pairtime couldn't turn off there
-            then, which config.toml still has on. The text says what to write
-            by hand, and the file stays as it was.
+            holds the project as an inline table, or the name is one pairtime
+            keeps off the dashboard, hidden there or on for another sign-in,
+            that it couldn't turn off in config.toml, which still has it on.
+            The text says what to write by hand, and the file stays as it was.
           content:
             text/plain:
               schema:

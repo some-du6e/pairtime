@@ -210,7 +210,12 @@ func rewrite(name, byHand string, change func(text string) string, apply func(*C
 	}
 	byHand += " in " + name + " by hand"
 	release, err := home.LockFile(lock, lockWait)
-	if err != nil {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		// No config directory, so no other process edits a config.toml in
+		// it: the edit goes on, and changes nothing or fails as it would.
+		release = func() error { return nil }
+	case err != nil:
 		return fmt.Errorf("config: pairtime couldn't lock config.toml to change it (%v), so it didn't; try again, or %s", err, byHand)
 	}
 	defer release()
