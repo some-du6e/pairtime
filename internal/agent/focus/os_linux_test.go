@@ -113,20 +113,47 @@ func TestLinuxOS(t *testing.T) {
 			via: x11.Via,
 		},
 		{
-			name:    "while no window manager keeps _NET_ACTIVE_WINDOW the watcher runs and the source is named by the property it waits for",
+			name:    "while no window manager keeps _NET_ACTIVE_WINDOW the watcher runs, the source is named by the property it waits for, and the desktop's first report makes focus unknown until a window manager sets it (SM 2.5)",
 			focus:   linux.Signal{Unknown: "the window manager doesn't keep _NET_ACTIVE_WINDOW"},
 			watcher: true,
-			via:     "_NET_ACTIVE_WINDOW",
+			reports: []linux.Focus{
+				{At: at(0), Unknown: "the window manager doesn't keep _NET_ACTIVE_WINDOW"},
+				{At: at(4), Window: 0x400001, PID: 900},
+			},
+			want: []Record{
+				focusRec(at(0), event.AppUnknown),
+				focusRec(at(4), event.AppTerminal, "s_xterm"),
+			},
+			via: "_NET_ACTIVE_WINDOW",
 		},
 		{
-			name:     "on Wayland there is no focus source, nothing is recorded, and Status gives the desktop's reason (D-focus-unknown)",
+			name:    "a dropped X connection gives one os.focus unknown, and then the focused window once it is re-made, though it is the window that was in front before (SM 2.5)",
+			focus:   x11,
+			watcher: true,
+			reports: []linux.Focus{
+				{At: at(0), Window: 0x400001, PID: 900},
+				{At: at(5), Unknown: "lost the X connection; reconnecting"},
+				{At: at(9), Unknown: "the window manager doesn't keep _NET_ACTIVE_WINDOW"},
+				{At: at(14), Window: 0x400001, PID: 900},
+			},
+			want: []Record{
+				focusRec(at(0), event.AppTerminal, "s_xterm"),
+				focusRec(at(5), event.AppUnknown),
+				focusRec(at(14), event.AppTerminal, "s_xterm"),
+			},
+			via: x11.Via,
+		},
+		{
+			name:     "on Wayland there is no focus source, so focus is unknown from the start: one os.focus unknown, and Status gives the desktop's reason (SM 2.5)",
 			focus:    linux.Signal{Unknown: "Wayland gives other programs no focus signal"},
+			want:     []Record{focusRec(at(0), event.AppUnknown)},
 			noSource: "Wayland gives other programs no focus signal",
 			unknown:  "Wayland gives other programs no focus signal",
 		},
 		{
-			name:     "with no graphical session there is no focus source either",
+			name:     "with no graphical session there is no focus source either, and focus is unknown from the start",
 			focus:    linux.Signal{Unknown: "no graphical session"},
+			want:     []Record{focusRec(at(0), event.AppUnknown)},
 			noSource: "no graphical session",
 			unknown:  "no graphical session",
 		},
@@ -154,6 +181,9 @@ func TestLinuxOS(t *testing.T) {
 					defer mu.Unlock()
 					got = append(got, r)
 				},
+				// When focus is unknown from the start, that record is dated
+				// by the clock.
+				Now: func() time.Time { return at(0) },
 			})
 			w.Start()
 			defer w.Stop()
@@ -169,6 +199,7 @@ func TestLinuxOS(t *testing.T) {
 				}
 				w.sync()
 			}
+			w.sync()
 			mu.Lock()
 			recs := slices.Clone(got)
 			mu.Unlock()

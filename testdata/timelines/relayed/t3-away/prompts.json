@@ -1,0 +1,37 @@
+{
+  "fixture": "relayed/t3-away",
+  "prompts": [
+    {
+      "turn_key": "t_6320cd9dbd67",
+      "t": 1795485661000,
+      "local": "20:01:01",
+      "text": null,
+      "len_chars": 90,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_a526b018a3a9",
+      "t": 1795486021000,
+      "local": "20:07:01",
+      "text": null,
+      "len_chars": 45,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_031c4204e4eb",
+      "t": 1795486320000,
+      "local": "20:12:00",
+      "text": null,
+      "len_chars": 240,
+      "source": "invented for this case; only its length matters"
+    },
+    {
+      "turn_key": "t_4d80e963ac0e",
+      "t": 1795487161000,
+      "local": "20:26:01",
+      "text": "yes",
+      "len_chars": 3,
+      "source": "invented for this case: a go-ahead on SM 2.2's list"
+    }
+  ]
+}

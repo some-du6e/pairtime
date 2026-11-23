@@ -51,8 +51,25 @@ func (f *MacFocus) Focus(at time.Time, app darwin.App) {
 	}
 }
 
-// Watch is MacOS's OS.Watch. It calls fn with the latest activation at
-// once, when there has been one, and then with each one until stop.
+// Unknown tells the Watcher that focus is unknown from at, a time from
+// time.Now, on, for reason. Watch starts whether or not activations will
+// come, so the agent's MacLoop calls this when they won't: the Loop's
+// activation observer didn't register, or the Loop didn't run. The Watcher
+// records it as one os.focus with app_class unknown (SM 2.5). Like an
+// activation, it is what a Watch that starts later gets first.
+func (f *MacFocus) Unknown(at time.Time, reason string) {
+	c := Change{At: at, Unknown: reason}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.last = &c
+	if f.fn != nil {
+		f.fn(c)
+	}
+}
+
+// Watch is MacOS's OS.Watch. It calls fn with the latest activation, or
+// the latest report that focus is unknown, at once, when there has been
+// one, and then with each one until stop.
 func (f *MacFocus) Watch(fn func(Change)) (func(), error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

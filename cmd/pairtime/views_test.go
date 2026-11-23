@@ -29,6 +29,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/some-du6e/pairtime/internal/agent/doctor"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
@@ -1469,6 +1470,116 @@ func TestTodayIsTheDayTheAgentWrites(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTodayFocusUnknown checks DESIGN 5.9's teen-facing focus-unknown
+// sentence in pairtime today: it ends today's view while the running
+// agent's status says focus is unknown, and only then, in the words the
+// dashboard's Today page uses.
+func TestTodayFocusUnknown(t *testing.T) {
+	// A slow runner still answers within this; one case shortens it.
+	old := focusAskWait
+	focusAskWait = 10 * time.Second
+	t.Cleanup(func() { focusAskWait = old })
+	stops := text.Phrase(text.KeyFocusUnknown)
+	counts := text.Phrase(text.KeyFocusUnknownLevelC)
+	login := text.Phrase(text.KeyGnomeNeedsLogin)
+	unticked := text.Phrase(text.KeyGnomeUnticked)
+	// status answers AskStatus with signals whose focus is focus, plus the
+	// extra members of GET /v1/status's signals in extra.
+	status := func(focus doctor.Signal, extra map[string]any) func(q string) (json.RawMessage, error) {
+		signals := map[string]any{"idle": doctor.Signal{Via: "org.gnome.Mutter.IdleMonitor"}, "focus": focus, "session": "wayland"}
+		maps.Copy(signals, extra)
+		b, err := json.Marshal(map[string]any{"signals": signals})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return func(q string) (json.RawMessage, error) {
+			if q != ipc.AskStatus {
+				return nil, ipc.ErrUnknownQuestion
+			}
+			return b, nil
+		}
+	}
+	unknown := doctor.Signal{Unknown: "Wayland gives other programs no focus signal"}
+	tracked := dayFile{Date: "2026-11-24", Zone: "UTC", Start: time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC),
+		End: time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC), Projects: mixedDay.Projects}
+	yesterday := tracked
+	yesterday.Date, yesterday.Start, yesterday.End = "2026-11-23", tracked.Start.AddDate(0, 0, -1), tracked.Start
+	cases := []struct {
+		name   string
+		answer func(q string) (json.RawMessage, error)
+		days   []dayFile
+		args   []string
+		want   string   // what ends the view after a blank line, "" for nothing about focus
+		asked  []string // the questions today asked
+	}{
+		{"while the agent says focus is unknown, today's view ends with the sentence, which stops at \"in front\" until WP-SC8 (DESIGN 5.9)",
+			status(unknown, nil), []dayFile{tracked}, []string{"today"}, stops, []string{ipc.AskStatus}},
+		{"a day with nothing tracked yet still says why, when focus is unknown",
+			status(unknown, nil), nil, []string{"today"}, stops, []string{ipc.AskStatus}},
+		{"once the agent says that time counts at level C, the sentence goes on to where it counts, as the Today page's does",
+			status(unknown, map[string]any{"focus_level_c": true}), []dayFile{tracked}, []string{"today"}, counts, []string{ipc.AskStatus}},
+		{"on GNOME before the next login, the line that turns the extension on follows",
+			status(unknown, map[string]any{"gnome_extension": "needs_login"}), []dayFile{tracked}, []string{"today"}, stops + "\n" + login, []string{ipc.AskStatus}},
+		{"on GNOME with the extension unticked at install, the line that brings it back follows",
+			status(unknown, map[string]any{"gnome_extension": "unticked"}), []dayFile{tracked}, []string{"today"}, stops + "\n" + unticked, []string{ipc.AskStatus}},
+		{"while the agent sees the window in front, today says nothing about focus",
+			status(doctor.Signal{Via: "_NET_ACTIVE_WINDOW"}, nil), []dayFile{tracked}, []string{"today"}, "", []string{ipc.AskStatus}},
+		{"an agent that can't answer status, as one older than it, leaves the sentence out and today still works",
+			func(string) (json.RawMessage, error) { return nil, ipc.ErrUnknownQuestion }, []dayFile{tracked}, []string{"today"}, "", []string{ipc.AskStatus}},
+		{"another day, asked for with --date, never asks the agent, since the sentence is about now",
+			status(unknown, nil), []dayFile{tracked, yesterday}, []string{"today", "--date", "2026-11-23"}, "", nil},
+		{"a day asked for by --date, even today's own, is shown by its date as its empty-day words are, and asks nothing",
+			status(unknown, nil), []dayFile{tracked}, []string{"today", "--date", "2026-11-24"}, "", nil},
+		{"--json keeps to its schema and asks nothing",
+			status(unknown, nil), []dayFile{tracked}, []string{"today", "--json"}, "", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			onDay(t, "2026-11-24", time.UTC)
+			h := newHome(t).running().writeDays(tc.days...)
+			asked := h.agent(tc.answer)
+			code, out, errOut := runCmd(tc.args...)
+			if code != 0 || errOut != "" {
+				t.Fatalf("exit %d, stderr %q", code, errOut)
+			}
+			if tc.want != "" && !strings.HasSuffix(out, "\n\n"+tc.want+"\n") {
+				t.Errorf("the view doesn't end with %q:\n%s", tc.want, out)
+			}
+			if tc.want == "" && strings.Contains(out, "doesn't tell pairtime which window") {
+				t.Errorf("the view speaks of focus:\n%s", out)
+			}
+			if got := asked(); !slices.Equal(got, tc.asked) {
+				t.Errorf("asked the agent %q, want %q", got, tc.asked)
+			}
+			if slices.Contains(tc.args, "--json") {
+				checkSchema(t, loadTodaySchema(t), out)
+			}
+		})
+	}
+	t.Run("an agent that doesn't answer within focusAskWait leaves the sentence out, and today prints the day all the same", func(t *testing.T) {
+		focusAskWait = 200 * time.Millisecond
+		t.Cleanup(func() { focusAskWait = 10 * time.Second })
+		onDay(t, "2026-11-24", time.UTC)
+		h := newHome(t).running().writeDays(tracked)
+		block := make(chan struct{})
+		h.agent(func(string) (json.RawMessage, error) {
+			<-block
+			return nil, ipc.ErrUnknownQuestion
+		})
+		t.Cleanup(func() { close(block) }) // before the agent's own cleanup, which waits for the answer
+		code, out, errOut := runCmd("today")
+		if code != 0 || errOut != "" || !strings.HasPrefix(out, dayTitle("2026-11-24")+"\n") || strings.Contains(out, "doesn't tell pairtime which window") {
+			t.Errorf("exit %d, stderr %q, stdout\n%s\nwant the day without the sentence", code, errOut, out)
+		}
+	})
+	t.Run("the words are DESIGN 5.9's teen-facing sentence, the first clause alone until WP-SC8 makes the rest true", func(t *testing.T) {
+		const whole = "This desktop doesn't tell pairtime which window is in front, so your time here counts only on your own dashboard, not on your profile, build days or most programs."
+		if stops != "This desktop doesn't tell pairtime which window is in front." || counts != whole {
+			t.Errorf("sentence %q, and with level C %q", stops, counts)
+		}
+	})
 }
 
 func TestTodayAndStatuslineWhenNothingCanBeShown(t *testing.T) {

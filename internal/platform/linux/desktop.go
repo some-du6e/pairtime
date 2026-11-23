@@ -96,27 +96,38 @@ func (i Idle) Payload() *event.OSPresence {
 	}
 }
 
-// Focus is a change of the focused window.
+// Focus is a change of the focused window, or a report that focus is
+// unknown from now on.
 type Focus struct {
 	// At is when focus moved to Window. The report comes focusSettle
 	// (50 ms) later, once _NET_ACTIVE_WINDOW has stopped changing. The
 	// first report after Open or a reconnect is dated when it was read,
-	// though focus may have been on the window for a while.
+	// though focus may have been on the window for a while. For a report
+	// with Unknown set, it is when focus turned unknown.
 	At time.Time
 	// Window is the X window that has focus, or 0 when none has.
 	Window uint32
 	// PID is the focused window's process, or 0 when the window doesn't
 	// say or belongs to another host.
 	PID int
+	// Unknown, when set, says why pairtime can't tell which window is in
+	// front from At on, as Status.Focus does: no window manager keeps
+	// _NET_ACTIVE_WINDOW, or the X connection is being re-made. Window and
+	// PID are 0 then. The next report that names a window, or none, ends
+	// it.
+	Unknown string
 }
 
 // Payload returns the os.focus payload for the change. classify maps the
 // focused process to its app class, from the shared app-class table
 // (WP-OS6), which also fills hosted_sessions; nil, or a window whose
 // process is unknown, gives "other", which is never credited, rather than a
-// guess.
+// guess. A report that focus is unknown gives "unknown", with no other
+// field (SM 2.5).
 func (f Focus) Payload(classify func(pid int) event.AppClass) *event.OSFocus {
 	switch {
+	case f.Unknown != "":
+		return &event.OSFocus{AppClass: event.AppUnknown}
 	case f.Window == 0:
 		return &event.OSFocus{AppClass: event.AppNone}
 	case f.PID == 0 || classify == nil:
@@ -285,10 +296,10 @@ func Open(ctx context.Context, cfg Config) *Desktop {
 	case SessionX11:
 		d.startFocus(ctx, disp, dispErr, getenv, hostname, log)
 	case SessionWayland:
-		// SM 3.2 wants these slots ambiguous, so that anchors still
-		// count. Recording that takes an os.focus that says focus is
-		// unknown, which the event model doesn't have yet, so for now
-		// focus is only unknown here.
+		// Where focus is unknown, the agent records an os.focus with
+		// app_class unknown, whose slots SM 2.5 credits at level C. With
+		// no watcher there is no Focus channel, so the agent learns it
+		// from Status when it starts watching.
 		d.status.Focus = unknown("Wayland gives other programs no focus signal")
 	default:
 		d.status.Focus = unknown("no graphical session")
@@ -327,6 +338,13 @@ func (d *Desktop) startFocus(ctx context.Context, disp xDisplay, dispErr error, 
 		defer close(d.focus)
 		attempt := 0
 		for w != nil {
+			// A watcher that found no window manager keeping
+			// _NET_ACTIVE_WINDOW reports nothing until one sets it, so the
+			// agent hears first that focus is unknown until then.
+			if !w.ewmh && !d.focusUnknown(ctx, focusNoEWMH) {
+				w.close()
+				break
+			}
 			started := time.Now()
 			// Ending ctx closes the connection, which ends run's blocked
 			// read.
@@ -341,11 +359,38 @@ func (d *Desktop) startFocus(ctx context.Context, disp xDisplay, dispErr error, 
 				attempt = 0 // it ran a while, so the waits start over
 			}
 			log.Warn("lost the X connection that follows focus; reconnecting", "err", err)
-			d.setStatus(func(s *Status) { s.Focus = unknown("lost the X connection; reconnecting") })
+			d.setStatus(func(s *Status) { s.Focus = unknown(focusReconnecting) })
+			// Until the new connection's first report names the window in
+			// front, nobody knows which it is.
+			if !d.focusUnknown(ctx, focusReconnecting) {
+				break
+			}
 			w, attempt = d.reconnectFocus(ctx, open, attempt)
 		}
 		d.setStatus(func(s *Status) { s.Focus = unknown("stopped watching") })
 	}()
+}
+
+// Why focus is unknown while an X11 watcher runs, as Status.Focus and the
+// Focus reports that say so give it. doctor looks for "reconnecting".
+const (
+	focusNoEWMH       = "the window manager doesn't keep _NET_ACTIVE_WINDOW"
+	focusReconnecting = "lost the X connection; reconnecting"
+)
+
+// focusUnknown reports on the Focus channel that focus is unknown from now
+// on, for why, so the agent records it (SM 2.5) without polling Status. It
+// returns false, sending nothing, once ctx has ended.
+func (d *Desktop) focusUnknown(ctx context.Context, why string) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	select {
+	case d.focus <- Focus{At: time.Now(), Unknown: why}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // watchingFocus sets Status.Focus for a new watcher. A watcher that found
@@ -356,7 +401,7 @@ func (d *Desktop) watchingFocus(w *x11Focus) {
 		d.setStatus(func(s *Status) { s.Focus = via(w.via()) })
 		return
 	}
-	d.setStatus(func(s *Status) { s.Focus = unknown("the window manager doesn't keep _NET_ACTIVE_WINDOW") })
+	d.setStatus(func(s *Status) { s.Focus = unknown(focusNoEWMH) })
 	w.onEWMH = func() { d.setStatus(func(s *Status) { s.Focus = via(w.via()) }) }
 }
 
@@ -491,9 +536,14 @@ func (d *Desktop) Locked() (bool, error) {
 //
 // A watcher can run while focus is unknown: until a window manager that
 // keeps _NET_ACTIVE_WINDOW appears, and while it reconnects after losing
-// the X connection. So Status().Focus.Known(), not a nil channel, is what
-// says whether focus is known. The first report once it is, and the first
-// after each reconnect, names the window focused then.
+// the X connection. So a nil channel isn't what says whether focus is
+// known. The channel says when focus turns unknown, with a report whose
+// Unknown is set: first thing when the watcher starts without such a
+// window manager, and when the X connection drops. The first report after
+// Open or a reconnect is a report that focus is unknown when no window
+// manager keeps _NET_ACTIVE_WINDOW, and otherwise names the window focused
+// then; the first report once focus is known again names that window.
+// Status().Focus says the same at any moment.
 func (d *Desktop) Focus() <-chan Focus { return d.focus }
 
 // Power returns suspends, resumes, locks and unlocks. It is nil when

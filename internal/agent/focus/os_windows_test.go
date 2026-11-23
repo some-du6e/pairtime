@@ -10,18 +10,20 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/platform/windows"
+	"github.com/some-du6e/pairtime/pkg/event"
 )
 
 // TestThisOSOnWindows runs the component on the real foreground hook and
 // process table of the runner, without moving focus (JE must-fix 11): the
 // hook reports the window in front as it starts, and the component either
-// records it, with a class from the shared table, or says in Status why it
-// can't name it.
+// records it, with a class from the shared table, or, when it can't name
+// it, records one os.focus with app_class unknown and says in Status why
+// (SM 2.5).
 func TestThisOSOnWindows(t *testing.T) {
 	tests := []struct {
 		name string
 	}{
-		{"on Windows the window in front at the start is recorded, or Status says why it isn't"},
+		{"on Windows the window in front at the start is recorded, or, when pairtime can't name it, one os.focus unknown is, and Status says why"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -53,8 +55,8 @@ func TestThisOSOnWindows(t *testing.T) {
 			switch {
 			case st.Unknown == "" && len(recs) != 1:
 				t.Errorf("a known window in front gave %d records, want 1", len(recs))
-			case st.Unknown != "" && len(recs) != 0:
-				t.Errorf("focus is unknown (%s), but %d records were written", st.Unknown, len(recs))
+			case st.Unknown != "" && (len(recs) != 1 || recs[0].Data.AppClass != event.AppUnknown):
+				t.Errorf("focus is unknown (%s), and %d records were written; want one os.focus unknown", st.Unknown, len(recs))
 			}
 			for _, r := range recs {
 				if err := r.Data.Validate(); err != nil {

@@ -29,12 +29,9 @@ func (a *agent) openOS(Options) osSources {
 }
 
 // linuxSignals is GET /v1/status's signals from the desktop's Status,
-// which names each signal's source or says why it is unknown.
-//
-// TODO(WP-OS15): while Focus is unknown nothing records that yet. WP-OS15
-// records an os.focus with app_class unknown there, and on each change
-// between known and unknown focus, once WP-EV2 adds the value
-// (D-focus-unknown).
+// which names each signal's source or says why it is unknown. While focus
+// is unknown, the focus component records an os.focus with app_class
+// unknown (focus.LinuxOS; SM 2.5), and doctor and pairtime today say so.
 func linuxSignals(st linux.Status) signalsReply {
 	return signalsReply{
 		Idle:    signalOf(st.Idle),

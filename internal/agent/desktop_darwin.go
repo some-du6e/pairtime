@@ -22,10 +22,9 @@ func (a *agent) openOS(opts Options) osSources {
 	m := opts.Mac
 	signals := func() signalsReply { return a.watched(m.signals()) }
 	if m == nil {
-		// TODO(WP-OS15): focus is unknown here, and nothing records that
-		// yet. WP-OS15 records an os.focus with app_class unknown when
-		// watching starts with no source, once WP-EV2 adds the value
-		// (D-focus-unknown).
+		// With no source, focus is unknown, and the focus component
+		// records an os.focus with app_class unknown when it starts
+		// (SM 2.5).
 		return osSources{
 			presence: presence.MacOS(darwin.Presence, nil),
 			focus:    focus.OS{Unknown: noMacLoop, Read: darwin.Processes, GOOS: platform.Darwin},

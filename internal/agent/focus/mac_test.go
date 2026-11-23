@@ -111,9 +111,27 @@ func TestMacFocus(t *testing.T) {
 			want:  []Record{focusRec(at(1), event.AppTerminal, "s_term")},
 		},
 		{
-			name:    "an activation that names no process records nothing, and Status says why",
+			name:    "an activation that names no process is focus pairtime can't see: one os.focus unknown, and Status says why (SM 2.5)",
 			after:   func(r *macRig) { r.activate(1, 0) },
+			want:    []Record{focusRec(at(1), event.AppUnknown)},
 			unknown: "NSWorkspace named no process for the app in front",
+		},
+		{
+			name: "the MacLoop's word that no activation will come, given before the Watcher starts, is the first change it gets: one os.focus unknown (SM 2.5)",
+			before: func(r *macRig) {
+				r.loop.Unknown(at(0), "NSWorkspace has no notification center")
+			},
+			want:    []Record{focusRec(at(0), event.AppUnknown)},
+			unknown: "NSWorkspace has no notification center",
+		},
+		{
+			name: "after the MacLoop's word that focus is unknown, an activation that comes all the same ends it",
+			after: func(r *macRig) {
+				r.loop.Unknown(at(1), "NSWorkspace has no notification center")
+				r.w.sync()
+				r.activate(2, 400)
+			},
+			want: []Record{focusRec(at(1), event.AppUnknown), focusRec(at(2), event.AppTerminal, "s_term")},
 		},
 	}
 	for _, tt := range tests {
