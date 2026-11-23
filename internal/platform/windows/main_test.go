@@ -36,6 +36,11 @@ func init() {
 }
 
 func TestMain(m *testing.M) {
+	// A child that opens a loopback connection makes no window, so it isn't
+	// among childEnvs (conn_windows_test.go).
+	if addr := os.Getenv(connChildEnv); addr != "" {
+		os.Exit(connChild(addr))
+	}
 	for _, c := range childEnvs {
 		if n := os.Getenv(c.name); n != "" {
 			os.Exit(c.run(n))
