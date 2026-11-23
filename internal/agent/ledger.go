@@ -58,11 +58,10 @@ func (a *agent) startLedger() func() {
 	// on its way (waiting).
 	a.adaptersHost().expectCount()
 	var (
-		mu            sync.Mutex
-		w             *ledger.Writer
-		stopped       bool
-		stopUpload    = func() {}
-		stopRetention = func() {}
+		mu         sync.Mutex
+		w          *ledger.Writer
+		stopped    bool
+		stopUpload = func() {}
 	)
 	quit := make(chan struct{})
 	opened := make(chan struct{})
@@ -102,7 +101,8 @@ func (a *agent) startLedger() func() {
 			a.scorer.Start()
 		}
 		stopUpload = a.startUploader(lw)
-		stopRetention = a.startRetention(lw)
+		// The ledger's own sweep was waiting for the writer.
+		a.kickSweep(false)
 	}()
 	return func() {
 		close(quit)
@@ -114,12 +114,11 @@ func (a *agent) startLedger() func() {
 		mu.Lock()
 		stopped = true
 		lw := w
-		stop, stopSweeps := stopUpload, stopRetention
+		stop := stopUpload
 		mu.Unlock()
-		// The sweeps first, which use the writer and the vault.
-		stopSweeps()
 		// The uploader stops first: it writes receipts and failure notes
-		// to the writer.
+		// to the writer. The retention sweeps, which use the writer and the
+		// vault too, stopped before this (startRetention).
 		stop()
 		// Presence and focus have stopped, so this writes the last of
 		// their records, and Close seals them.
@@ -197,7 +196,12 @@ func (a *agent) openLedger() (*ledger.Writer, error) {
 	a.keyFocus(ks)
 	a.keySessions(ks)
 	// Before the writer: the vault flushes what a killed run kept before
-	// ledger.Open flushes the batches it restores (ledger.Vault).
+	// ledger.Open flushes the batches it restores (ledger.Vault). A
+	// retention sweep of the vault's directory, which runs while no vault
+	// is open, is done first, and none starts until the vault is published
+	// or closed again.
+	a.vaultFiles.Lock()
+	defer a.vaultFiles.Unlock()
 	v := a.openVault(ks, st.KeyID)
 	w, err := ledger.Open(ledger.Options{
 		Dir:   a.dirs.Ledger(),

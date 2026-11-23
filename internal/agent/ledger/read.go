@@ -50,7 +50,11 @@ func (bf *batchesFile) info() ChainInfo {
 // returns. A from of 0 reads from batch 1, and one before the first batch
 // the ledger keeps (ChainInfo.Base) from that batch. Each batch has its
 // row, with the receipt when batches.seg holds one, when it was sealed,
-// and its records as stored. Records no batch holds yet are skipped.
+// and its records as stored. Records no batch holds yet are skipped, and
+// so are the batches whose records went with their segments while their
+// rows stay, as a retention sweep keeps the rows of batches whose roots
+// still have to be sent (Writer.Sweep): reading starts at the first batch
+// from from on whose first record is held (FirstHeld).
 //
 // It reads the files as they are, without Open's repairs, and stops
 // quietly at the first frame that isn't whole, so on a ledger a Writer has
@@ -68,8 +72,17 @@ func ReadBatches(dir string, from uint64, fn func(Batch) error) error {
 		return err
 	}
 	from = max(from, bf.base.B)
+	for from <= bf.last() {
+		if rp, _ := bf.row(from); slices.Contains(days, rp.Start.Seg) {
+			break
+		}
+		from++
+	}
 	var start position
 	next, prev := bf.base.B, bf.base.Prev
+	// skip is set while what comes first in the segments may be a batch a
+	// sweep dropped with every row, whose base frame names the next.
+	skip := false
 	rp, kept := bf.row(from)
 	switch n := len(bf.rows); {
 	case kept:
@@ -78,12 +91,18 @@ func ReadBatches(dir string, from uint64, fn func(Batch) error) error {
 		rp := bf.rows[n-1]
 		start, next, prev = rp.End, rp.B+1, rp.Head
 	case len(days) > 0:
-		start = position{Seg: days[0]}
+		start, skip = position{Seg: days[0]}, bf.based
 	default:
 		return nil
 	}
-	i := slices.Index(days, start.Seg)
-	if i < 0 {
+	i, found := slices.BinarySearch(days, start.Seg)
+	switch {
+	case i == len(days):
+		// The newest row's segment went with every one before it, and
+		// nothing came after.
+		return nil
+	case !found && i > 0:
+		// A sweep deletes the oldest segments only.
 		return damaged("the segment of %s, where batch %d is, isn't there", start.Seg, next)
 	}
 	var recs []ledger.Record
@@ -100,11 +119,18 @@ func ReadBatches(dir string, from uint64, fn func(Batch) error) error {
 				if err != nil {
 					return damaged("the segment of %s, offset %d: %v", day, fm.off, err)
 				}
+				if skip && rec.Header.Seq() < bf.base.FirstSeq {
+					return nil // a record of a batch the sweep dropped
+				}
+				skip = false
 				recs = append(recs, rec)
 			case kindSeal:
 				var sp sealPayload
 				if err := json.Unmarshal(fm.payload, &sp); err != nil {
 					return damaged("the segment of %s, offset %d: %v", day, fm.off, err)
+				}
+				if skip && sp.B < bf.base.B {
+					return nil // the seal of a batch the sweep dropped
 				}
 				if sp.B != next || sp.Prev != prev || sp.N != uint64(len(recs)) || len(recs) == 0 ||
 					sp.FirstSeq != recs[0].Header.Seq() {

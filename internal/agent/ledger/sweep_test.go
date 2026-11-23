@@ -4,6 +4,7 @@ package ledger
 
 import (
 	"bytes"
+	"encoding/json"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -41,19 +42,25 @@ func writeDays(t *testing.T, w *Writer, c *clock, n int) (days []string, batches
 	return days, batches
 }
 
-// verifyFrom checks the chain in dir from its base, with the head before
-// it taken as given, as pkg/ledger verifies a run that starts later.
+// verifyFrom checks the chain in dir from the first batch whose records
+// it holds, with the head before it taken as given, as pkg/ledger verifies
+// a run that starts later.
 func verifyFrom(t *testing.T, dir string) []Batch {
 	t.Helper()
 	info, rows, err := ReadRows(dir, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) == 0 {
-		t.Fatal("no row")
-	}
 	batches := readAll(t, dir)
-	chain := ledger.Chain{DeviceID: info.DeviceID, Prev: rows[0].Prev}
+	if len(batches) == 0 {
+		t.Fatal("no batch")
+	}
+	chain := ledger.Chain{DeviceID: info.DeviceID}
+	for _, r := range rows {
+		if r.B == batches[0].Row.B {
+			chain.Prev = r.Prev
+		}
+	}
 	for _, b := range batches {
 		chain.Batches = append(chain.Batches, ledger.BatchOf(b.Row, b.Records))
 	}
@@ -63,7 +70,19 @@ func verifyFrom(t *testing.T, dir string) []Batch {
 	return batches
 }
 
+// chainV returns the version batches.seg's chain frame in dir says.
+func chainV(t *testing.T, dir string) int {
+	t.Helper()
+	bf, err := readBatchesFile(filepath.Join(dir, batchesName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bf.chain.V
+}
+
 func TestSweep(t *testing.T) {
+	// after is a day after every day writeDays writes, up to 5.
+	after := dayOf(time.UnixMilli(testT + 30*sweepDayMS))
 	cases := []struct {
 		name string
 		run  func(t *testing.T, dir string)
@@ -74,7 +93,7 @@ func TestSweep(t *testing.T) {
 				c := newClock(testT)
 				w := open(t, dir, c)
 				days, batches := writeDays(t, w, c, 5)
-				dropped, segs, err := w.Sweep(days[2])
+				dropped, segs, err := w.Sweep(days[2], 0)
 				if err != nil || dropped != 2 || segs != 2 {
 					t.Fatalf("Sweep = %d batches, %d segments, %v; want 2 and 2", dropped, segs, err)
 				}
@@ -95,20 +114,114 @@ func TestSweep(t *testing.T) {
 			},
 		},
 		{
-			name: "the newest batch stays when every batch is older than from",
+			name: "when every batch is older than from, every row and segment goes, and the base names the next batch, which links to the head before it",
 			run: func(t *testing.T, dir string) {
 				c := newClock(testT)
 				w := open(t, dir, c)
-				days, batches := writeDays(t, w, c, 3)
-				if _, _, err := w.Sweep(dayOf(time.UnixMilli(testT + 30*sweepDayMS))); err != nil {
+				_, batches := writeDays(t, w, c, 3)
+				_, before, err := ReadRows(dir, 0)
+				if err != nil {
 					t.Fatal(err)
 				}
-				_, rows, err := ReadRows(dir, 0)
-				if err != nil || len(rows) != 1 || rows[0].B != batches[2] {
-					t.Errorf("ReadRows: %d rows, %v; want batch %d alone", len(rows), err, batches[2])
+				if dropped, segs, err := w.Sweep(after, 0); err != nil || dropped != 3 || segs != 3 {
+					t.Fatalf("Sweep = %d batches, %d segments, %v; want 3 and 3", dropped, segs, err)
 				}
-				if got, _ := segments(dir); !slices.Equal(got, days[2:]) {
-					t.Errorf("segments %v, want %v", got, days[2:])
+				info, rows, err := ReadRows(dir, 0)
+				if err != nil || len(rows) != 0 || info.Base != batches[2]+1 {
+					t.Fatalf("ReadRows: %d rows from base %d, %v; want none, and base %d", len(rows), info.Base, err, batches[2]+1)
+				}
+				if got, _ := segments(dir); len(got) != 0 {
+					t.Errorf("segments %v left", got)
+				}
+				c.set(testT + 40*sweepDayMS)
+				rng := rand.New(rand.NewPCG(3, 4))
+				if _, err := w.Write(sampleInput(rng, "os.presence", testT+40*sweepDayMS, "", "")); err != nil {
+					t.Fatal(err)
+				}
+				b, ok, err := w.Seal()
+				if err != nil || !ok || b.Row.B != batches[2]+1 {
+					t.Fatalf("the next seal: batch %d, %v, %v; want batch %d", b.Row.B, ok, err, batches[2]+1)
+				}
+				w.Close()
+				w = open(t, dir, c)
+				_, rows, err = ReadRows(dir, 0)
+				if err != nil || len(rows) != 1 || rows[0].Prev != before[len(before)-1].Head {
+					t.Errorf("ReadRows: %+v, %v; want the new batch alone, after the dropped head", rows, err)
+				}
+				if kept := verifyFrom(t, dir); len(kept) != 1 {
+					t.Errorf("%d batches, want the new one", len(kept))
+				}
+				if next := w.Status().Next; next != rows[0].FirstSeq+rows[0].N {
+					t.Errorf("the reopened writer's next record is %d, want %d", next, rows[0].FirstSeq+rows[0].N)
+				}
+			},
+		},
+		{
+			name: "the rows from floor on stay whatever their age, for the uploads, and their segments go all the same",
+			run: func(t *testing.T, dir string) {
+				c := newClock(testT)
+				w := open(t, dir, c)
+				_, batches := writeDays(t, w, c, 5)
+				_, before, err := ReadRows(dir, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if dropped, segs, err := w.Sweep(after, batches[2]); err != nil || dropped != 2 || segs != 5 {
+					t.Fatalf("Sweep = %d batches, %d segments, %v; want 2 and 5", dropped, segs, err)
+				}
+				_, rows, err := ReadRows(dir, 0)
+				if err != nil || len(rows) != 3 || rows[0].B != batches[2] || rows[2].Head != before[4].Head {
+					t.Fatalf("ReadRows: %d rows, %v; want the 3 from batch %d", len(rows), err, batches[2])
+				}
+				if got, _ := segments(dir); len(got) != 0 {
+					t.Errorf("segments %v left", got)
+				}
+				if got := readAll(t, dir); len(got) != 0 {
+					t.Errorf("ReadBatches gives %d batches, whose records went", len(got))
+				}
+				if b, err := FirstHeld(dir, 0); err != nil || b != 0 {
+					t.Errorf("FirstHeld(0) = %d, %v; want 0", b, err)
+				}
+				// The writer goes on after the kept rows, and so does one that
+				// opens without their segments.
+				c.set(testT + 40*sweepDayMS)
+				rng := rand.New(rand.NewPCG(7, 8))
+				if _, err := w.Write(sampleInput(rng, "os.presence", testT+40*sweepDayMS, "", "")); err != nil {
+					t.Fatal(err)
+				}
+				if b, ok, err := w.Seal(); err != nil || !ok || b.Row.B != batches[4]+1 {
+					t.Fatalf("the next seal: batch %d, %v, %v; want %d", b.Row.B, ok, err, batches[4]+1)
+				}
+				w.Close()
+				w = open(t, dir, c)
+				if kept := verifyFrom(t, dir); len(kept) != 1 || kept[0].Row.B != batches[4]+1 {
+					t.Errorf("ReadBatches gives %d batches, want batch %d alone", len(kept), batches[4]+1)
+				}
+				if _, rows, err := ReadRows(dir, 0); err != nil || len(rows) != 4 {
+					t.Errorf("ReadRows: %d rows, %v; want the 3 kept and the new one", len(rows), err)
+				}
+			},
+		},
+		{
+			name: "a floor before from keeps the rows from the floor, and the segments from from",
+			run: func(t *testing.T, dir string) {
+				c := newClock(testT)
+				w := open(t, dir, c)
+				days, batches := writeDays(t, w, c, 5)
+				if dropped, segs, err := w.Sweep(days[3], batches[1]); err != nil || dropped != 1 || segs != 3 {
+					t.Fatalf("Sweep = %d batches, %d segments, %v; want 1 and 3", dropped, segs, err)
+				}
+				if _, rows, err := ReadRows(dir, 0); err != nil || len(rows) != 4 || rows[0].B != batches[1] {
+					t.Errorf("ReadRows: %d rows, %v; want the 4 from batch %d", len(rows), err, batches[1])
+				}
+				if got, _ := segments(dir); !slices.Equal(got, days[3:]) {
+					t.Errorf("segments %v, want %v", got, days[3:])
+				}
+				if kept := verifyFrom(t, dir); len(kept) != 2 || kept[0].Row.B != batches[3] {
+					t.Errorf("ReadBatches gives %d batches from %d, want 2 from %d", len(kept), kept[0].Row.B, batches[3])
+				}
+				if b, err := FirstHeld(dir, 0); err != nil || b != batches[3] {
+					t.Errorf("FirstHeld(0) = %d, %v; want %d", b, err, batches[3])
 				}
 			},
 		},
@@ -118,7 +231,7 @@ func TestSweep(t *testing.T) {
 				c := newClock(testT)
 				w := open(t, dir, c)
 				days, _ := writeDays(t, w, c, 4)
-				if _, _, err := w.Sweep(days[2]); err != nil {
+				if _, _, err := w.Sweep(days[2], 0); err != nil {
 					t.Fatal(err)
 				}
 				c.set(testT + 4*sweepDayMS)
@@ -146,6 +259,48 @@ func TestSweep(t *testing.T) {
 			},
 		},
 		{
+			name: "records a crash left after a sweep that dropped every batch are sealed at the next Open, past the dropped batch's seal in the segment kept",
+			run: func(t *testing.T, dir string) {
+				c := newClock(testT)
+				w := open(t, dir, c)
+				rng := rand.New(rand.NewPCG(9, 10))
+				// Batch 1's record is on the first day and its seal on the
+				// second, where a record no batch holds yet follows it.
+				if _, err := w.Write(sampleInput(rng, "os.presence", testT, "", "")); err != nil {
+					t.Fatal(err)
+				}
+				second := testT + sweepDayMS
+				c.set(second)
+				if _, ok, err := w.Seal(); err != nil || !ok {
+					t.Fatalf("sealing batch 1: %v, %v", ok, err)
+				}
+				_, before, err := ReadRows(dir, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				s, err := w.Write(sampleInput(rng, "os.presence", second, "", ""))
+				if err != nil {
+					t.Fatal(err)
+				}
+				day2 := dayOf(time.UnixMilli(second))
+				if dropped, segs, err := w.Sweep(day2, 0); err != nil || dropped != 1 || segs != 1 {
+					t.Fatalf("Sweep = %d batches, %d segments, %v; want 1 and 1", dropped, segs, err)
+				}
+				if got, _ := segments(dir); !slices.Equal(got, []string{day2}) {
+					t.Errorf("segments %v, want %s's alone, which holds the record no batch holds yet", got, day2)
+				}
+				abandon(w)
+				w = open(t, dir, c)
+				_, rows, err := ReadRows(dir, 0)
+				if err != nil || len(rows) != 1 || rows[0].B != 2 || rows[0].FirstSeq != s || rows[0].Prev != before[0].Head {
+					t.Fatalf("ReadRows: %+v, %v; want batch 2 of record %d, after batch 1's head", rows, err, s)
+				}
+				if kept := verifyFrom(t, dir); len(kept) != 1 || len(kept[0].Records) != 1 {
+					t.Errorf("ReadBatches gives %d batches, want batch 2 with its one record", len(kept))
+				}
+			},
+		},
+		{
 			name: "a receipt for a batch the sweep dropped is ignored, and a kept batch's receipt stays",
 			run: func(t *testing.T, dir string) {
 				c := newClock(testT)
@@ -155,7 +310,7 @@ func TestSweep(t *testing.T) {
 				if err := w.StoreReceipt(batches[2], rc); err != nil {
 					t.Fatal(err)
 				}
-				if _, _, err := w.Sweep(days[1]); err != nil {
+				if _, _, err := w.Sweep(days[1], 0); err != nil {
 					t.Fatal(err)
 				}
 				if err := w.StoreReceipt(batches[0], rc); err != nil {
@@ -195,8 +350,25 @@ func TestSweep(t *testing.T) {
 				if kept := verifyFrom(t, dir); len(kept) != 2 || kept[0].Row.B != batches[2] {
 					t.Errorf("%d batches from %d, want 2 from %d", len(kept), kept[0].Row.B, batches[2])
 				}
-				if _, segs, err := w.Sweep(days[2]); err != nil || segs != 2 {
+				if _, segs, err := w.Sweep(days[2], 0); err != nil || segs != 2 {
 					t.Errorf("the next Sweep deleted %d segments, %v; want the 2 left", segs, err)
+				}
+			},
+		},
+		{
+			name: "the temporary file of a rewrite a crash cut short goes at the next Open",
+			run: func(t *testing.T, dir string) {
+				c := newClock(testT)
+				w := open(t, dir, c)
+				writeDays(t, w, c, 1)
+				w.Close()
+				tmp := filepath.Join(dir, "."+batchesName+".tmp-123")
+				if err := os.WriteFile(tmp, []byte("rows and receipts"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				open(t, dir, c)
+				if _, err := os.Stat(tmp); !os.IsNotExist(err) {
+					t.Errorf("the temporary file is still there: %v", err)
 				}
 			},
 		},
@@ -227,7 +399,7 @@ func TestSweep(t *testing.T) {
 				}
 				third := dayOf(time.UnixMilli(testT + 2*sweepDayMS))
 				days = append(days, dayOf(time.UnixMilli(testT+sweepDayMS)), third)
-				if dropped, segs, err := w.Sweep(third); err != nil || dropped != 2 || segs != 2 {
+				if dropped, segs, err := w.Sweep(third, 0); err != nil || dropped != 2 || segs != 2 {
 					t.Fatalf("Sweep = %d batches, %d segments, %v; want 2 and 2", dropped, segs, err)
 				}
 				if got, _ := segments(dir); !slices.Equal(got, days[2:]) {
@@ -237,6 +409,47 @@ func TestSweep(t *testing.T) {
 				open(t, dir, c)
 				if kept := verifyFrom(t, dir); len(kept) != 1 || kept[0].Row.B != b3.Row.B {
 					t.Errorf("%d batches, want batch %d alone", len(kept), b3.Row.B)
+				}
+			},
+		},
+		{
+			name: "a chain of another key in old/ keeps the rows of the batches whose segments it keeps, and loses its temporary file",
+			run: func(t *testing.T, dir string) {
+				c := newClock(testT)
+				chain := oldChain(t, dir, c, 4)
+				if err := os.WriteFile(filepath.Join(chain.dir, "."+batchesName+".tmp-9"), []byte("rows"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				w := open(t, dir, c, otherKey(t))
+				if dropped, segs, err := w.Sweep(chain.days[2], 0); err != nil || dropped != 2 || segs != 2 {
+					t.Fatalf("Sweep = %d batches, %d segments, %v; want 2 and 2", dropped, segs, err)
+				}
+				info, rows, err := ReadRows(chain.dir, 0)
+				if err != nil || info.Base != chain.batches[2] || len(rows) != 2 {
+					t.Errorf("the old chain: %d rows from base %d, %v; want 2 from %d", len(rows), info.Base, err, chain.batches[2])
+				}
+				if got, _ := segments(chain.dir); !slices.Equal(got, chain.days[2:]) {
+					t.Errorf("the old chain keeps segments %v, want %v", got, chain.days[2:])
+				}
+				if _, err := os.Stat(filepath.Join(chain.dir, "."+batchesName+".tmp-9")); !os.IsNotExist(err) {
+					t.Errorf("the temporary file is still there: %v", err)
+				}
+				if v := chainV(t, chain.dir); v != chainVersionBase {
+					t.Errorf("the old chain's chain frame is of version %d, want %d", v, chainVersionBase)
+				}
+			},
+		},
+		{
+			name: "a chain of another key in old/ whose batches are all older than from goes whole",
+			run: func(t *testing.T, dir string) {
+				c := newClock(testT)
+				chain := oldChain(t, dir, c, 3)
+				w := open(t, dir, c, otherKey(t))
+				if _, _, err := w.Sweep(after, 0); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(chain.dir); !os.IsNotExist(err) {
+					t.Errorf("the old chain is still there: %v", err)
 				}
 			},
 		},
@@ -263,7 +476,7 @@ func TestSweep(t *testing.T) {
 					t.Fatal(err)
 				}
 				w = open(t, dir, c)
-				if _, _, err := w.Sweep(days[2]); err != nil {
+				if _, _, err := w.Sweep(days[2], 0); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := os.Stat(filepath.Join(dir, oldDir, otherKeyID)); !os.IsNotExist(err) {
@@ -275,10 +488,27 @@ func TestSweep(t *testing.T) {
 			},
 		},
 		{
+			name: "old/ is swept while the live chain has no row yet",
+			run: func(t *testing.T, dir string) {
+				c := newClock(testT)
+				chain := oldChain(t, dir, c, 3)
+				w := open(t, dir, c, otherKey(t))
+				if _, rows, err := ReadRows(dir, 0); err != nil || len(rows) != 0 {
+					t.Fatalf("the live chain has %d rows, %v", len(rows), err)
+				}
+				if _, _, err := w.Sweep(chain.days[1], 0); err != nil {
+					t.Fatal(err)
+				}
+				if got, _ := segments(chain.dir); !slices.Equal(got, chain.days[1:]) {
+					t.Errorf("the old chain keeps segments %v, want %v", got, chain.days[1:])
+				}
+			},
+		},
+		{
 			name: "a sweep refuses a from that isn't a UTC day",
 			run: func(t *testing.T, dir string) {
 				w := open(t, dir, newClock(testT))
-				if _, _, err := w.Sweep("yesterday"); err == nil {
+				if _, _, err := w.Sweep("yesterday", 0); err == nil {
 					t.Error("Sweep took yesterday")
 				}
 			},
@@ -289,17 +519,45 @@ func TestSweep(t *testing.T) {
 	}
 }
 
-func TestBaseFrame(t *testing.T) {
-	cases := []struct {
-		name string
-		edit func(chain, base, row []byte) []byte // builds batches.seg from its frames
-		ok   bool
-	}{
-		{"a base frame right after the chain frame is read", func(c, b, r []byte) []byte { return cat(c, b, r) }, true},
-		{"a base frame anywhere else is damage", func(c, b, r []byte) []byte { return cat(c, r, b) }, false},
-		{"a base frame with no row after it is damage", func(c, b, r []byte) []byte { return cat(c, b) }, false},
-		{"a row that doesn't start at the base is damage", func(c, b, r []byte) []byte { return cat(c, b, r, r) }, false},
+// archived is a chain of testKDev's key moved into a ledger's old/.
+type archived struct {
+	dir     string
+	days    []string
+	batches []uint64
+}
+
+// oldChain writes n days of testKDev's chain and moves it to dir's
+// old/<testKeyID>, as a ledger that otherKey opens next archives it.
+func oldChain(t *testing.T, dir string, c *clock, n int) archived {
+	t.Helper()
+	src := t.TempDir()
+	w := open(t, src, c)
+	days, batches := writeDays(t, w, c, n)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
 	}
+	a := archived{dir: filepath.Join(dir, oldDir, testKeyID), days: days, batches: batches}
+	if err := os.MkdirAll(a.dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range append(slices.Clone(days), "") {
+		from, to := filepath.Join(src, batchesName), filepath.Join(a.dir, batchesName)
+		if name != "" {
+			from, to = segPath(src, name), segPath(a.dir, name)
+		}
+		if err := os.Rename(from, to); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return a
+}
+
+// otherKey opens a writer under otherKDev's key.
+func otherKey(t *testing.T) func(*Options) {
+	return func(o *Options) { o.Keys, o.KeyID = keysOf(t, otherKDev), otherKeyID }
+}
+
+func TestBaseFrame(t *testing.T) {
 	dir := t.TempDir()
 	c := newClock(testT)
 	w := open(t, dir, c)
@@ -309,26 +567,64 @@ func TestBaseFrame(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := keptFile(bf, 1)
+	frames := func(data []byte) [][]byte {
+		var out [][]byte
+		fr := newFrameReader(bytes.NewReader(data), 0)
+		for {
+			fm, err := fr.next()
+			if err != nil {
+				return out
+			}
+			out = append(out, data[fm.off:fm.end])
+		}
+	}
+	orig, err := os.ReadFile(filepath.Join(dir, batchesName))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var frames [][]byte
-	fr := newFrameReader(bytes.NewReader(data), 0)
-	for {
-		fm, err := fr.next()
-		if err != nil {
-			break
-		}
-		frames = append(frames, data[fm.off:fm.end])
+	// o: the chain frame of version 1, then the rows of batches 1 to 3.
+	o := frames(orig)
+	kept, err := keptFile(bf, 1)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(frames) < 3 {
-		t.Fatalf("keptFile wrote %d frames", len(frames))
+	// k: the chain frame of version 2, a base frame naming batch 2, then
+	// the rows of batches 2 and 3.
+	k := frames(kept)
+	none, err := keptFile(bf, len(bf.rows))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(o) != 4 || len(k) != 4 || len(frames(none)) != 2 {
+		t.Fatalf("batches.seg has %d frames, keptFile %d and %d", len(o), len(k), len(frames(none)))
+	}
+	base := func(b, firstSeq uint64, prev ledger.Hash) []byte {
+		p, err := json.Marshal(basePayload{B: b, FirstSeq: firstSeq, Prev: prev})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return appendFrame(nil, kindBase, p)
+	}
+	row2 := bf.rows[1]
+	cases := []struct {
+		name string
+		file []byte
+		ok   bool
+	}{
+		{"a base frame right after a chain frame of version 2 is read", cat(k...), true},
+		{"a base frame that names the batch after the last, with no row, is read", none, true},
+		{"a base frame after a row is damage", cat(k[0], o[1], k[1]), false},
+		{"a base frame after a chain frame of version 1 is damage", cat(o[0], k[1], k[2], k[3]), false},
+		{"a chain frame of version 2 with no base frame after it is damage", cat(k[0], o[1], o[2], o[3]), false},
+		{"a row that doesn't start at the base is damage", cat(k[0], k[1], k[3]), false},
+		{"a base frame whose first record isn't its batch's first is damage", cat(k[0], base(row2.B, row2.FirstSeq+1, row2.Prev), k[2], k[3]), false},
+		{"a base frame whose prev isn't its batch's is damage", cat(k[0], base(row2.B, row2.FirstSeq, ledger.Hash{1}), k[2], k[3]), false},
+		{"a base frame naming batch 1 with a prev is damage", cat(k[0], base(1, 1, ledger.Hash{1})), false},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			name := filepath.Join(t.TempDir(), batchesName)
-			if err := os.WriteFile(name, tt.edit(frames[0], frames[1], frames[2]), 0o600); err != nil {
+			if err := os.WriteFile(name, tt.file, 0o600); err != nil {
 				t.Fatal(err)
 			}
 			_, err := readBatchesFile(name)
@@ -337,6 +633,19 @@ func TestBaseFrame(t *testing.T) {
 			}
 		})
 	}
+	// pairtime 0.1.0-alpha.5's readBatchesFile takes only a chain frame of
+	// version 1, and refuses any other before it reads on, so it never
+	// meets the base frame it doesn't know, which it would take for a torn
+	// tail and cut off with every row after it.
+	t.Run("a swept file's chain frame is of a version pairtime 0.1.0-alpha.5 refuses", func(t *testing.T) {
+		var cp chainPayload
+		if err := json.Unmarshal(k[0][frameHeadSize:len(k[0])-frameTailSize], &cp); err != nil {
+			t.Fatal(err)
+		}
+		if cp.V == 1 || cp.V != chainVersionBase {
+			t.Errorf("the chain frame is of version %d", cp.V)
+		}
+	})
 }
 
 func cat(parts ...[]byte) []byte {

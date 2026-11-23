@@ -1192,8 +1192,17 @@ type chainPayload struct {
 	Created  int64  `json:"created"`
 }
 
-// chainVersion is the layout of the writer's files, chainPayload.V.
-const chainVersion = 1
+// chainVersion is the layout of the writer's files, chainPayload.V, and
+// chainVersionBase the layout of a batches.seg that a retention sweep wrote
+// with a base frame after its chain frame (Writer.Sweep). A pairtime that
+// reads only chainVersion refuses such a file at its chain frame, before it
+// reads on to the base frame, which it doesn't know, so it never takes the
+// frame for a crash's torn tail and cuts the rows after it off
+// (docs/errata/2026-11-23-unsent-batches-retention.md).
+const (
+	chainVersion     = 1
+	chainVersionBase = 2
+)
 
 // Seal seals the records written since the last batch into the next batch
 // and returns it with ok set, once the batch is on disk and its row is in

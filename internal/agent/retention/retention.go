@@ -8,26 +8,32 @@
 //
 // Each of DESIGN 4.4's device rows, where its data is, and what deletes it:
 //
-//	device.prompt_text     the vault's texts          Sweep, by the vault file's day
-//	device.paths_commands  the vault's paths          Sweep, by the vault file's day; no store keeps tool commands
+//	device.prompt_text     the vault's texts          Sweep, by the vault file's day (Within)
+//	device.paths_commands  the vault's paths          Sweep, by the vault file's day (Within); no store keeps tool commands
 //	device.activity        inside ledger records      Sweep, with the ledger (docs/errata/2026-11-23-device-activity-retention.md)
 //	device.ledger          ledger segments, batches   Sweep, by the segment of each batch's first record
 //	device.buckets         buckets/                   Sweep, by the minutes' UTC day
 //	device.held_calls      held.jsonl and its logs    the agent's adapter host, as it runs (heldKeep)
 //	device.commits         commits/                   the agent's commit store (commitsKeep)
-//	device.uploads         uploads.jsonl              the uploader (uploadsKeep)
+//	device.uploads         uploads.jsonl              the uploader as it runs (uploadsKeep), and Sweep while it doesn't
 //	device.transcripts     not copied                 nothing
 //	device.key             K_dev                      "delete everything" and uninstall
 //
 // A store whose files are named after UTC days keeps a file while its day
 // is on or after the day the period reaches back to (From), as the commit
 // store does, so a file goes within a day of its newest data reaching its
-// period.
+// period. The vault's texts and paths, whose periods the teen can shorten,
+// go once their day is as old as the period (Within), so none is kept
+// longer than the number of days the teen set, nor DESIGN 4.4's.
+//
+// The ledger keeps the rows of the online batches the server hasn't stored
+// while this computer is linked, whatever their age, and deletes their
+// segments all the same (Stores.Floor;
+// docs/errata/2026-11-23-unsent-batches-retention.md).
 package retention
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
@@ -115,27 +121,51 @@ func (p Periods) Shorten(text, paths int) Periods {
 }
 
 // From returns the first UTC day a store that keeps days days keeps at
-// now: a file of a day before it is past its period.
+// now: a file of a day before it is past its period, its newest data
+// included.
 func From(now time.Time, days int) string {
 	return now.UTC().AddDate(0, 0, -days).Format(time.DateOnly)
 }
 
+// Within returns the first UTC day a store keeps at now when it keeps
+// nothing longer than days days: a file goes once its day is days old, as
+// its oldest data reaches the period. With days 1, a text of yesterday goes
+// at midnight UTC, and one of today stays.
+func Within(now time.Time, days int) string { return From(now, days-1) }
+
 // Stores are the stores Sweep deletes from. A nil one is skipped, as the
-// vault is when it didn't open.
+// ledger is while it isn't open.
 type Stores struct {
-	// Vault is *vault.Vault.
+	// Vault is *vault.Vault, or the vault's directory while none is open
+	// (vault.SweepDir).
 	Vault interface {
 		Sweep(textFrom, pathsFrom string) (int, error)
 	}
-	// Ledger is *ledger.Writer.
+	// Ledger is *ledger.Writer, and Floor the first batch whose row it
+	// keeps whatever its age, 0 for none: while this computer is linked,
+	// the first online batch the server hasn't stored, whose root can only
+	// link after the server's head (uploader.HeldFrom).
 	Ledger interface {
-		Sweep(from string) (batches, segs int, err error)
+		Sweep(from string, floor uint64) (batches, segs int, err error)
 	}
+	Floor uint64
 	// Buckets is *store.Buckets.
 	Buckets interface {
 		Drop(from string) (int, error)
 	}
+	// Uploads lets go of the past uploads in uploads.jsonl older than
+	// device.uploads, as the uploader does while it runs
+	// (uploader.PruneUploads).
+	Uploads func(now time.Time) error
 }
+
+// The stores, as Sweep names those whose sweep failed.
+const (
+	StoreVault   = "the vault"
+	StoreLedger  = "the ledger"
+	StoreBuckets = "the minute buckets"
+	StoreUploads = "the record of past uploads"
+)
 
 // Swept says what one Sweep deleted.
 type Swept struct {
@@ -145,31 +175,37 @@ type Swept struct {
 }
 
 // Sweep deletes from each store what is past its period at now (DESIGN
-// 4.4). It goes on to the other stores when one fails, and returns every
-// error.
-func Sweep(now time.Time, p Periods, s Stores) (Swept, error) {
+// 4.4). It goes on to the other stores when one fails, and returns each
+// store's error that failed, by its name (StoreVault and the others), nil
+// when none did.
+func Sweep(now time.Time, p Periods, s Stores) (Swept, map[string]error) {
 	var out Swept
-	var errs []error
-	if s.Vault != nil {
-		n, err := s.Vault.Sweep(From(now, p.Text), From(now, p.Paths))
-		out.Entries = n
+	var failed map[string]error
+	note := func(store string, err error) {
 		if err != nil {
-			errs = append(errs, fmt.Errorf("the vault: %w", err))
+			if failed == nil {
+				failed = map[string]error{}
+			}
+			failed[store] = err
 		}
 	}
+	if s.Vault != nil {
+		n, err := s.Vault.Sweep(Within(now, p.Text), Within(now, p.Paths))
+		out.Entries = n
+		note(StoreVault, err)
+	}
 	if s.Ledger != nil {
-		b, n, err := s.Ledger.Sweep(From(now, p.Ledger))
+		b, n, err := s.Ledger.Sweep(From(now, p.Ledger), s.Floor)
 		out.Batches, out.Segments = b, n
-		if err != nil {
-			errs = append(errs, fmt.Errorf("the ledger: %w", err))
-		}
+		note(StoreLedger, err)
 	}
 	if s.Buckets != nil {
 		n, err := s.Buckets.Drop(From(now, p.Buckets))
 		out.Buckets = n
-		if err != nil {
-			errs = append(errs, fmt.Errorf("the minute buckets: %w", err))
-		}
+		note(StoreBuckets, err)
 	}
-	return out, errors.Join(errs...)
+	if s.Uploads != nil {
+		note(StoreUploads, s.Uploads(now))
+	}
+	return out, failed
 }

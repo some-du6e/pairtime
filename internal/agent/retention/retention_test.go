@@ -5,6 +5,7 @@ package retention
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -82,6 +83,47 @@ func TestFrom(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWithin(t *testing.T) {
+	cases := []struct {
+		name string
+		now  time.Time
+		days int
+		want string
+	}{
+		{"with 1 day, yesterday's file goes at midnight UTC", time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC), 1, "2026-11-23"},
+		{"with 1 day, today's file stays until midnight UTC", time.Date(2026, 11, 22, 23, 59, 59, 0, time.UTC), 1, "2026-11-22"},
+		{"90 days back from midday keeps the 90 days up to today", time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC), 90, "2026-08-26"},
+		{"a day's file goes as its first minute turns 90 days old", time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC), 90, "2026-08-27"},
+		{"a day's file stays while its first minute is younger than 90 days", time.Date(2026, 11, 23, 23, 59, 59, 0, time.UTC), 90, "2026-08-26"},
+		{"the day counts in UTC, whatever the clock's zone", time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC).In(time.FixedZone("UTC-8", -8*3600)), 1, "2026-11-23"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Within(c.now, c.days); got != c.want {
+				t.Errorf("Within = %s, want %s", got, c.want)
+			}
+		})
+	}
+	// What the edge means for a text: kept no longer than its days, however
+	// early or late in its day it was written, and not deleted as it's kept.
+	t.Run("a text is kept no longer than the days the teen set, at the first look after its day turns that old", func(t *testing.T) {
+		for _, days := range []int{1, 7, 30, 90} {
+			for _, written := range []time.Time{time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 1, 23, 59, 0, 0, time.UTC)} {
+				day := written.Format(time.DateOnly)
+				for _, after := range []time.Duration{time.Duration(days) * 24 * time.Hour, time.Duration(days)*24*time.Hour + time.Minute} {
+					at := written.Add(after)
+					if kept := day >= Within(at, days); kept {
+						t.Errorf("with %d days, a text written at %s is still kept %v later, at %s", days, written.Format(time.RFC3339), after, at.Format(time.RFC3339))
+					}
+				}
+				if day < Within(written, days) {
+					t.Errorf("with %d days, a text written at %s goes at once", days, written.Format(time.RFC3339))
+				}
+			}
+		}
+	})
 }
 
 func TestShorten(t *testing.T) {
@@ -278,11 +320,11 @@ func TestSweep(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixture(t, now, 200)
 			all := slices.Sorted(maps.Keys(f.prompt))
-			got, err := Sweep(now, c.periods, f.stores())
-			if err != nil {
-				t.Fatal(err)
+			got, failed := Sweep(now, c.periods, f.stores())
+			if failed != nil {
+				t.Fatal(failed)
 			}
-			textFrom, pathsFrom := From(now, c.periods.Text), From(now, c.periods.Paths)
+			textFrom, pathsFrom := Within(now, c.periods.Text), Within(now, c.periods.Paths)
 			ledgerFrom, bucketsFrom := From(now, c.periods.Ledger), From(now, c.periods.Buckets)
 			t.Run("the vault keeps the texts of the days of the text's period, and none older", func(t *testing.T) {
 				for _, day := range all {
@@ -373,9 +415,9 @@ func TestSweep(t *testing.T) {
 				}
 			})
 			t.Run("a second sweep the same day deletes nothing more", func(t *testing.T) {
-				again, err := Sweep(now, c.periods, f.stores())
-				if err != nil || again != (Swept{}) {
-					t.Errorf("the second sweep: %+v, %v", again, err)
+				again, failed := Sweep(now, c.periods, f.stores())
+				if failed != nil || again != (Swept{}) {
+					t.Errorf("the second sweep: %+v, %v", again, failed)
 				}
 			})
 			t.Run("the ledger goes on after the sweep, and opens again from its base", func(t *testing.T) {
@@ -405,6 +447,83 @@ func TestSweep(t *testing.T) {
 					t.Errorf("the vault after the sweep: %q, %v", got, err)
 				}
 			})
+		})
+	}
+}
+
+// TestSweepFloor checks that the ledger keeps the rows from the floor
+// Stores gives, as for the uploads of a linked computer, and deletes the
+// segments by its period all the same.
+func TestSweepFloor(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	device, err := Device()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFixture(t, now, 200)
+	floorDay := now.AddDate(0, 0, -190).Format(time.DateOnly)
+	s := f.stores()
+	s.Floor = f.batch[floorDay]
+	if _, failed := Sweep(now, device, s); failed != nil {
+		t.Fatal(failed)
+	}
+	ledgerFrom := From(now, device.Ledger)
+	cases := []struct {
+		name string
+		ok   func() (bool, string)
+	}{
+		{"the rows from the floor's batch stay, older than the ledger's period", func() (bool, string) {
+			info, rows, err := ledger.ReadRows(filepath.Join(f.dir, "ledger"), 0)
+			return err == nil && info.Base == s.Floor && len(rows) > 0 && rows[0].B == s.Floor, fmt.Sprintf("base %d, %v", info.Base, err)
+		}},
+		{"the segments go by the ledger's period, the floor's batches' too", func() (bool, string) {
+			segs := days(t, filepath.Join(f.dir, "ledger"), ".seg")
+			return len(segs) > 0 && segs[0] == ledgerFrom, fmt.Sprintf("segments from %v, want from %s", segs[:min(1, len(segs))], ledgerFrom)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if ok, why := c.ok(); !ok {
+				t.Error(why)
+			}
+		})
+	}
+}
+
+// failing is a store whose sweep fails, and records that it ran.
+type failing struct{ ran bool }
+
+func (f *failing) Sweep(string, string) (int, error) {
+	f.ran = true
+	return 0, errors.New("the disk is full")
+}
+func (f *failing) Drop(string) (int, error) { f.ran = true; return 0, errors.New("access denied") }
+
+// TestSweepFailures checks that a store whose sweep fails is named with its
+// error, and that the others are swept all the same.
+func TestSweepFailures(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	device, err := Device()
+	if err != nil {
+		t.Fatal(err)
+	}
+	vaultStore, bucketStore := &failing{}, &failing{}
+	var pruned time.Time
+	_, failed := Sweep(now, device, Stores{Vault: vaultStore, Buckets: bucketStore, Uploads: func(at time.Time) error { pruned = at; return nil }})
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"the vault's failure is named with its error", failed[StoreVault] != nil && strings.Contains(failed[StoreVault].Error(), "the disk is full")},
+		{"the bucket store's failure is named with its error", failed[StoreBuckets] != nil && strings.Contains(failed[StoreBuckets].Error(), "access denied")},
+		{"a store that didn't fail isn't named", len(failed) == 2 && failed[StoreUploads] == nil},
+		{"every store is swept, after a failure too", vaultStore.ran && bucketStore.ran && pruned.Equal(now)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if !c.ok {
+				t.Errorf("it isn't: %v", failed)
+			}
 		})
 	}
 }

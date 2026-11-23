@@ -230,16 +230,8 @@ type head struct {
 // deletes the files that hold nothing anyone can open, and the temporary
 // file of a rewrite a crash cut short (filterFile).
 func (v *Vault) setAside() error {
-	entries, err := os.ReadDir(v.dir)
-	if err != nil {
+	if err := removeTemps(v.dir); err != nil {
 		return err
-	}
-	for _, e := range entries {
-		if n := e.Name(); strings.HasPrefix(n, ".") && strings.Contains(n, segSuffix+".tmp-") && e.Type().IsRegular() {
-			if err := os.Remove(filepath.Join(v.dir, n)); err != nil {
-				return err
-			}
-		}
 	}
 	days, err := segments(v.dir)
 	if err != nil {
@@ -928,10 +920,72 @@ var ErrNotReady = errors.New("vault: the ledger hasn't opened the vault yet")
 // and a key's directory left with none goes. It returns how many entries
 // it deleted.
 func (v *Vault) Sweep(textFrom, pathsFrom string) (int, error) {
-	if !isDay(textFrom) || !isDay(pathsFrom) {
-		return 0, fmt.Errorf("vault: %q or %q isn't a UTC day", textFrom, pathsFrom)
+	due, keep, err := sweepRule(textFrom, pathsFrom)
+	if err != nil {
+		return 0, err
 	}
-	keep := func(day string, e entry) bool {
+	n, err := v.filter(due, keep)
+	if errors.Is(err, ErrClosed) {
+		return n, err
+	}
+	v.files.Lock()
+	defer v.files.Unlock()
+	m, oerr := sweepOld(v.dir, due, keep)
+	return n + m, errors.Join(err, oerr)
+}
+
+// SweepDir is Sweep for the vault in dir while no Vault has it open, as
+// while the ledger, which opens the vault, can't open: it needs no key,
+// since a file's day, and each entry's number and what it holds, are in
+// the clear. Each file is written again under the key its head names.
+// Nothing else may change the directory's files while it runs, and it
+// deletes the temporary file of a rewrite a crash cut short, as Open does.
+func SweepDir(dir, textFrom, pathsFrom string) (int, error) {
+	due, keep, err := sweepRule(textFrom, pathsFrom)
+	if err != nil {
+		return 0, err
+	}
+	if err := removeTemps(dir); errors.Is(err, fs.ErrNotExist) {
+		return 0, nil // no vault yet
+	} else if err != nil {
+		return 0, err
+	}
+	days, err := segments(dir)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	var errs []error
+	for _, day := range days {
+		if !due(day) {
+			continue
+		}
+		keyID, err := readHead(segPath(dir, day))
+		if err != nil {
+			// A file with no whole head holds no entry anyone can open, and
+			// Open deletes it.
+			if !errors.Is(err, errTorn) && !errors.Is(err, errHead) {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		dropped, err := filterAt(dir, keyID, day, func(e entry) bool { return keep(day, e) })
+		n += dropped
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	m, err := sweepOld(dir, due, keep)
+	return n + m, errors.Join(append(errs, err)...)
+}
+
+// sweepRule returns which files of a sweep by textFrom and pathsFrom may
+// hold an entry to drop, by their day, and which entries it keeps.
+func sweepRule(textFrom, pathsFrom string) (due func(day string) bool, keep func(day string, e entry) bool, err error) {
+	if !isDay(textFrom) || !isDay(pathsFrom) {
+		return nil, nil, fmt.Errorf("vault: %q or %q isn't a UTC day", textFrom, pathsFrom)
+	}
+	keep = func(day string, e entry) bool {
 		switch e.what {
 		case whatText:
 			return day >= textFrom
@@ -942,20 +996,16 @@ func (v *Vault) Sweep(textFrom, pathsFrom string) (int, error) {
 	}
 	// A file of a day on or after both has nothing past its time, and
 	// isn't read.
-	due := func(day string) bool { return day < textFrom || day < pathsFrom }
-	n, err := v.filter(due, keep)
-	if errors.Is(err, ErrClosed) {
-		return n, err
-	}
-	m, oerr := v.sweepOld(due, keep)
-	return n + m, errors.Join(err, oerr)
+	due = func(day string) bool { return day < textFrom || day < pathsFrom }
+	return due, keep, nil
 }
 
-// sweepOld is filter for the files old/ keeps, which nothing appends to.
-func (v *Vault) sweepOld(due func(string) bool, keep func(string, entry) bool) (int, error) {
-	v.files.Lock()
-	defer v.files.Unlock()
-	dir := filepath.Join(v.dir, oldDir)
+// sweepOld is filter for the files the vault in dir keeps in old/, which
+// nothing appends to. It deletes the temporary file of a rewrite a crash
+// cut short there too. The caller holds what keeps the files from
+// changing: v.files, or no Vault being open (SweepDir).
+func sweepOld(vaultDir string, due func(string) bool, keep func(string, entry) bool) (int, error) {
+	dir := filepath.Join(vaultDir, oldDir)
 	subs, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil
@@ -971,6 +1021,10 @@ func (v *Vault) sweepOld(due func(string) bool, keep func(string, entry) bool) (
 			continue
 		}
 		kdir := filepath.Join(dir, keyID)
+		if err := removeTemps(kdir); err != nil {
+			errs = append(errs, err)
+			continue
+		}
 		days, err := segments(kdir)
 		if err != nil {
 			errs = append(errs, err)
@@ -993,6 +1047,23 @@ func (v *Vault) sweepOld(due func(string) bool, keep func(string, entry) bool) (
 		}
 	}
 	return dropped, errors.Join(errs...)
+}
+
+// removeTemps deletes from dir the temporary files of rewrites a crash cut
+// short (filterAt), which hold entries nothing reads.
+func removeTemps(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if n := e.Name(); strings.HasPrefix(n, ".") && strings.Contains(n, segSuffix+".tmp-") && e.Type().IsRegular() {
+			if err := os.Remove(filepath.Join(dir, n)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // filter writes each of the vault's files again with only the entries

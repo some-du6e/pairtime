@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
@@ -468,5 +469,50 @@ func (st saved) prepare(rows *rowIndex) {
 	}
 	for b, wr := range st.Unchecked {
 		rows.receivedUnchecked(b, int64(wr.ReceivedAt))
+	}
+}
+
+// HeldFrom returns the first batch whose row the ledger in ledgerDir keeps
+// for the uploads while this computer is linked, whatever its age, by the
+// uploader's place in st (Writer.Sweep's floor;
+// docs/errata/2026-11-23-unsent-batches-retention.md): the first batch,
+// from where the roots go next on, that isn't sealed in local-only mode,
+// as the place and the rows' modes say, since such a batch never goes. A
+// sweep keeps the rows from it on, so the server can still link the next
+// root to its head. It is 0, nothing to keep, once nothing more goes under
+// the chain: after a fork or the server's device_mismatch, or with every
+// batch from there on sealed in local-only mode, none of which goes
+// without a new link, after which only batches sealed later go. A place
+// that doesn't read, or is another chain's, counts as none: what the
+// server holds isn't known, so every row the modes don't pass over stays.
+func HeldFrom(st *state.Store, ledgerDir string) (uint64, error) {
+	rows, err := loadRows(ledgerDir, 0)
+	if err != nil {
+		return 1, err
+	}
+	var s saved
+	if ok, err := st.Get(StateKey, &s); err != nil || !ok || s.Chain != rows.device {
+		s = saved{Chain: rows.device}
+	}
+	if s.Fork != 0 || s.Mismatch {
+		return 0, nil
+	}
+	// The modes of the batches sealed since the place last took one, as
+	// load takes them in before anything of theirs is planned.
+	s.foldModes(rows)
+	b := max(s.Next, s.From, rows.start())
+	for {
+		if s.LocalFrom > 0 && b >= s.LocalFrom {
+			return 0, nil
+		}
+		moved := false
+		for _, g := range s.Gaps {
+			if g.From <= b && b <= g.To {
+				b, moved = g.To+1, true
+			}
+		}
+		if !moved {
+			return b, nil
+		}
 	}
 }
