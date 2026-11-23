@@ -59,6 +59,15 @@ var (
 	// PA_MIN_LATENCY_MS is the fastest permission answer a person gives;
 	// faster ones come from a script.
 	PA_MIN_LATENCY_MS = IntParam{"PA_MIN_LATENCY_MS"}
+	// RELAY_MATCH_S is how long after an agent app's message's stamp the
+	// prompt it pairs with may reach the agent (SM 2.2 rule 9). The minutes
+	// of a relayed lead stay pending until the pairing or this deadline.
+	// Table 0.3.0 added it.
+	RELAY_MATCH_S = IntParam{"RELAY_MATCH_S"}
+	// RELAY_SEEN_LAG_S is the oldest an app message's stamp may be when
+	// pairtime first reads it (SM 2.2 rule 9), and the latest a relay
+	// record may be after its stamp. Table 0.3.0 added it.
+	RELAY_SEEN_LAG_S = IntParam{"RELAY_SEEN_LAG_S"}
 )
 
 // SM 8.2, anchor windows.
@@ -303,7 +312,7 @@ var (
 var all = []param{
 	SAMPLE_S, SLEEP_GAP_S, PRESENCE_GAP_S, PRESENCE_TAIL_S, RETURN_GAP_MAX_S, KEYS_PRE_S,
 	INPUT_RELEASE_GRACE_MS, TYPING_MAX_CPS, SUBSTANTIVE_CHARS, ERROR_PASTE_TEXT_MAX, CRON_PREFIX_CHARS,
-	PA_MIN_LATENCY_MS,
+	PA_MIN_LATENCY_MS, RELAY_MATCH_S, RELAY_SEEN_LAG_S,
 
 	THINK_LEAD_S, COMPOSE_CPS, COMPOSE_MAX_S, LOW_LEAD_S, ANSWER_LEAD_S, PA_MAX_S, PA_TRAIL_S,
 	INT_LEAD_S, INT_TRAIL_S, EDIT_LEAD_S, CMD_LEAD_S, CMD_TRAIL_S, CMD_WATCH_MAX_S, COMMIT_LEAD_S,
@@ -341,6 +350,8 @@ var added = []struct {
 	version string
 }{
 	{INPUT_RELEASE_GRACE_MS, "0.2.0"},
+	{RELAY_MATCH_S, "0.3.0"},
+	{RELAY_SEEN_LAG_S, "0.3.0"},
 }
 
 // since returns the version of the first table that has p, or "" when

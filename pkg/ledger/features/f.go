@@ -56,7 +56,8 @@ type F struct {
 	// cli.track records that commit their text, when the text has a
 	// signature.
 	ES *Value `json:"es,omitempty"`
-	// PC is the prompt class, on every prompt.submit and cli.track.
+	// PC is the prompt class, on every prompt.submit, cli.track and
+	// relay.message.
 	PC Class `json:"pc,omitempty"`
 	// H are the edit hunks (spec 10.6), in the order the patch lists
 	// them, on agent.tool when the tool edited a file.
@@ -72,6 +73,7 @@ const (
 	carriesPrompt
 	carriesTool
 	carriesShell
+	carriesRelay
 )
 
 func carries(kind event.Kind) int {
@@ -82,14 +84,16 @@ func carries(kind event.Kind) int {
 		return carriesTool
 	case event.KindShellCommand:
 		return carriesShell
+	case event.KindRelayMessage:
+		return carriesRelay
 	}
 	return carriesNone
 }
 
 // Carries reports whether the body of every record of kind k has f:
-// prompt.submit, agent.tool, shell.command and cli.track, even when f holds
-// only v, and no other kind (spec 4.5, 10.7). A body of one of those kinds
-// without f fails verification.
+// prompt.submit, agent.tool, shell.command, cli.track and relay.message,
+// even when f holds only v, and no other kind (spec 4.5, 10.7). A body of
+// one of those kinds without f fails verification.
 func Carries(k event.Kind) bool { return carries(k) != carriesNone }
 
 // Prompt returns the features of a prompt.submit or cli.track record whose
@@ -112,10 +116,21 @@ func (k *Key) Prompt(text string, class Class) (F, error) {
 }
 
 // Textless returns the features of a prompt.submit whose text the device
-// never had: one from the WakaTime bridge, or a plugin's that came without
-// its text (spec 10.1). It holds only v and the class, and the record
-// commits nothing.
+// never had: one from the WakaTime bridge, a plugin's that came without
+// its text, or one marked guest, whose text the agent drops (spec 10.1).
+// It holds only v and the class, and the record commits nothing.
 func Textless(class Class) (F, error) {
+	if !class.Valid() {
+		return F{}, fmt.Errorf("features: %q isn't a prompt class", class)
+	}
+	return F{V: Version, PC: class}, nil
+}
+
+// Relay returns the features of a relay.message record: v and the class of
+// the app's own text, which a relayed anchor takes its class from (SM 2.2
+// rule 9). The record commits nothing, so its f never has a sketch (spec
+// 10.7).
+func Relay(class Class) (F, error) {
 	if !class.Valid() {
 		return F{}, fmt.Errorf("features: %q isn't a prompt class", class)
 	}
@@ -280,6 +295,20 @@ func (f F) fits(kind event.Kind, obj map[string]json.RawMessage) error {
 			}
 		}
 		for _, name := range []string{"h", "ch"} {
+			if has(name) {
+				return fmt.Errorf("%w: %s f has %s", ErrKind, kind, name)
+			}
+		}
+		if !f.PC.Valid() {
+			return fmt.Errorf("%w: %q isn't a prompt class", ErrMalformed, f.PC)
+		}
+	case carriesRelay:
+		// An app's message commits no text, so its f is v and pc alone
+		// (spec 10.7).
+		if !has("pc") {
+			return fmt.Errorf("%w: %s f has no pc", ErrKind, kind)
+		}
+		for _, name := range []string{"mh", "th", "es", "h", "ch"} {
 			if has(name) {
 				return fmt.Errorf("%w: %s f has %s", ErrKind, kind, name)
 			}

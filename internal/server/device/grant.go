@@ -467,6 +467,12 @@ WHERE device_id = $1`,
 				deviceID, tokenHash(token), pub, osFamily, build, nowMs); err != nil {
 				return fmt.Errorf("device: linking the device again: %w", err)
 			}
+			// Linked again before the retention job came: its project
+			// names stay (D-owner-names).
+			if _, err := tx.ExecContext(ctx, `UPDATE project_names SET device_removed_at_ms = NULL WHERE device_id = $1 AND user_id = $2`,
+				deviceID, account.String); err != nil {
+				return fmt.Errorf("device: keeping the device's project names: %w", err)
+			}
 		default:
 			// The device id came to belong to another account between the
 			// approval and this poll.

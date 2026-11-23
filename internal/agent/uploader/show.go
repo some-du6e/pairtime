@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
+	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/some-du6e/pairtime/pkg/params"
@@ -45,6 +48,26 @@ type Preview struct {
 	// Mismatch is set once the server said the device ID is another
 	// account's, after which nothing more goes under it (#150 R5).
 	Mismatch bool
+	// Names is the project names request that goes before the upload, nil
+	// when none waits (project-names-v1; NextNames).
+	Names *NamesPreview
+}
+
+// NamesPreview is the next project names request, as the uploader would
+// send it: the names config.toml turns on that the server's last answer
+// doesn't show, and the ones it shows that config.toml has off.
+type NamesPreview struct {
+	// JSON is the request's body before gzip, byte for byte, labels and
+	// all.
+	JSON []byte
+	// Set are the names it shows, each project key's label, and Delete the
+	// keys whose names it stops showing, or which the owner hid on the
+	// dashboard and pairtime turned off here too.
+	Set    map[string]string
+	Delete []string
+	// Codes are the short codes the server's last answer gave, by key, for
+	// the words around it.
+	Codes map[string]string
 }
 
 // PreviewOptions say where an installation keeps its files, and what the
@@ -63,6 +86,12 @@ type PreviewOptions struct {
 	Credentials Credentials
 	// Now is the time to preview at, time.Now() when zero.
 	Now time.Time
+	// Names are the project names config.toml turns on, each project key's
+	// label, as the agent's uploader reads them, and OwnKeys the keys of the
+	// projects this computer has seen (Options.OwnKeys), every key when
+	// nil. With no names, no names request shows.
+	Names   map[string]string
+	OwnKeys map[string]bool
 
 	// maxRoots and maxBuckets are the Uploader's, for tests.
 	maxRoots, maxBuckets int
@@ -130,9 +159,13 @@ func Next(o PreviewOptions) (Preview, error) {
 	if r, ok := rows.row(stop); ok && stop > 0 && !noMode && r.Why != nil {
 		cause = StopCause(r.Why)
 	}
+	names, err := NextNames(o.DataDir, c, o.Names, o.OwnKeys, st.Linking)
+	if err != nil {
+		return Preview{}, err
+	}
 	if p, err := readOutbox(o.DataDir, st); err == nil && p != nil && !fresh && !older {
 		pv := previewOf(p.plan, true)
-		pv.Stopped, pv.NoMode, pv.Cause = stop, noMode, cause
+		pv.Stopped, pv.NoMode, pv.Cause, pv.Names = stop, noMode, cause, names
 		return pv, nil
 	}
 	if fresh {
@@ -161,8 +194,76 @@ func Next(o PreviewOptions) (Preview, error) {
 		return Preview{}, err
 	}
 	pv := previewOf(p, false)
-	pv.Stopped, pv.NoMode, pv.Cause = stop, noMode, cause
+	pv.Stopped, pv.NoMode, pv.Cause, pv.Names = stop, noMode, cause, names
 	return pv, nil
+}
+
+// NextNames returns the project names request the uploader sends next for
+// the sign-in c, before its next upload, from the same project-names.json
+// and the same code, and without changing any file: nil when nothing waits
+// to be shown or stopped, as while the link's first batch isn't stored
+// (linking), or when the file names another sign-in, whose names all go off
+// when the agent next loads it (loadNames). wanted are the names
+// config.toml turns on. A read, {}, which carries no name, never shows. The
+// agent reads first whenever it doesn't know what the server holds, and a
+// hide that read finds changes what goes, so this is what goes unless the
+// server's next answer changes it.
+func NextNames(dataDir string, c Credentials, wanted map[string]string, own map[string]bool, linking bool) (*NamesPreview, error) {
+	if linking || (len(wanted) == 0 && !hasNames(dataDir)) {
+		return nil, nil
+	}
+	// A file of another sign-in, or one that doesn't read, which counts as
+	// another's, sends nothing: the agent turns its names off when it
+	// loads it.
+	n, err := ReadNames(dataDir)
+	if (err != nil && !errors.Is(err, fs.ErrNotExist)) || (n.Server != "" && (n.Server != c.Server || n.Device != c.DeviceID)) {
+		return nil, nil
+	}
+	if n.Server == "" {
+		n = Names{Hidden: n.Hidden}
+	}
+	wanted = maps.Clone(wanted)
+	var acks []string
+	for _, key := range n.Hides {
+		if !n.Hidden[key].Pending {
+			acks = append(acks, key)
+		}
+	}
+	for key, h := range n.Hidden {
+		// As hidePending does, without the config.toml edit: a name pairtime
+		// couldn't turn off stays out while config.toml has it on, under any
+		// label.
+		if _, on := wanted[key]; h.Pending && on {
+			delete(wanted, key)
+		}
+	}
+	set, del := namesDiff(wanted, n.Confirmed, acks)
+	if own != nil {
+		set = slices.DeleteFunc(set, func(it nameItem) bool {
+			_, coded := n.Codes[it.Project]
+			return !coded && !own[it.Project]
+		})
+	}
+	if len(set)+len(del) == 0 {
+		return nil, nil
+	}
+	body := takeNames(set, del)
+	js, err := encodeNames(body)
+	if err != nil {
+		return nil, err
+	}
+	pv := &NamesPreview{JSON: js, Set: make(map[string]string, len(body.Set)), Delete: body.Delete, Codes: n.Codes}
+	for _, it := range body.Set {
+		pv.Set[it.Project] = it.Label
+	}
+	return pv, nil
+}
+
+// hasNames reports whether dataDir has a project-names.json, whose
+// confirmed names a request may delete with none turned on.
+func hasNames(dataDir string) bool {
+	_, err := os.Stat(filepath.Join(dataDir, NamesFileName))
+	return err == nil
 }
 
 // previewOf describes plan p.

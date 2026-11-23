@@ -34,15 +34,24 @@ type Turn struct {
 	// decides SUP against READ (SM 2.4) and agent_running_s (SM 5.1).
 	RunUntil int64        `json:"run_until"`
 	Origin   event.Origin `json:"origin"`
-	// PromptClass is set for turns a person started.
+	// PromptClass is set for turns a person started (Origin.ByPerson):
+	// typed, pasted or relayed.
 	PromptClass event.PromptClass `json:"prompt_class,omitempty"`
 	// Prompt is the event_id of the prompt.submit that started the turn,
 	// and Via how it arrived. A turn a stop hook continued has neither.
 	Prompt string    `json:"prompt,omitempty"`
 	Via    event.Via `json:"via,omitempty"`
+	// Relay is the event_id of the relay.message an agent app's reader
+	// wrote for the message whose run delivered the prompt, when the two
+	// paired (SM 2.2 rule 9, pairRelays). The pairing gives the turn the
+	// app's own declaration, scheduled or subagent, and in a session the
+	// app's server started a message a person sent witnesses the prompt,
+	// which is relayed unless rules 6 and 7 hold at the message's stamp.
+	Relay string `json:"relay,omitempty"`
 	// TypedChars is the typed length the lead's typing part is computed
 	// from: typed_len_est, cut for a human_pasted prompt to what its input
-	// slots could have typed (SM 2.2 rule 7).
+	// slots could have typed (SM 2.2 rule 7). For a relayed prompt it is
+	// the app's own length, len_chars, at most typed_len_est (SM 2.2).
 	TypedChars int64 `json:"typed_chars,omitempty"`
 	// WordsOut is the prose of the turn's agent.output records, and
 	// DiffLines the lines its edit tools added and removed.
@@ -51,11 +60,12 @@ type Turn struct {
 }
 
 // Event returns the turn as pkg/event's derived record. Re-roll chains are
-// WP-SC6's, so every human turn is attempt 1 until then.
+// WP-SC6's, so every turn a person started, a relayed one included, is
+// attempt 1 until then.
 func (t Turn) Event() event.Turn {
 	e := event.Turn{SessionKey: t.SessionKey, TurnKey: t.TurnKey, TSubmit: t.TSubmit, TStop: t.TStop,
 		Origin: t.Origin, PromptClass: t.PromptClass, WordsOut: t.WordsOut, DiffLines: t.DiffLines}
-	if t.Origin.Human() {
+	if t.Origin.ByPerson() {
 		e.Attempt = 1
 	}
 	return e
@@ -186,7 +196,11 @@ type turnBuild struct {
 	// agentTs are the times of the turn's agent.output, agent.tool and
 	// agent.stop records, in order once buildTurns is done.
 	agentTs []int64
-	turn    Turn
+	// relay is the relay.message its prompt paired with, or nil, and
+	// witness the same record when it witnesses the prompt (SM 2.2 rule 9):
+	// declared none, in a session an agent app's server started.
+	relay, witness *relayRec
+	turn           Turn
 }
 
 // running reports whether the agent was working on the turn at t.
@@ -534,16 +548,26 @@ func (d *deriver) finishTurn(tb *turnBuild) {
 	if e.ProjectKey != "" {
 		tb.turn.ProjectKey = e.ProjectKey
 	}
+	if tb.relay = d.turnRelay(tb); tb.relay != nil {
+		tb.relay.turn = tb
+		tb.turn.Relay = d.recs[tb.relay.pos].EventID
+		if witnesses(tb.relay, tb.sess.startBefore(tb.primary)) {
+			tb.witness = tb.relay
+		}
+	}
 	tb.turn.Origin, tb.turn.PromptClass, tb.turn.TypedChars = d.origin(tb, e)
 }
 
 // origin applies SM 2.2's origin rules to a turn's prompt, first match
-// wins. Rules 1 to 5 read what the harness declares; 6 to 8 read OS
-// evidence. Rules 1 to 3 read every copy of the prompt a hook or a log
-// reader made, as well as the one the turn goes by: a transcript can say a
-// scheduler or a subagent sent a prompt whose hook says nothing of it
-// (E-cc-transcript-labels). For a person's prompt it also returns the
-// prompt's class and the typed length its lead is computed from.
+// wins. Rules 1 to 5 read what the harness declares, and what an agent
+// app declares for the message the prompt paired with; 6 to 8 read OS
+// evidence; and rule 9, before rule 8, reads the app's word that a person
+// sent the message. Rules 1 to 3, and rule 4's guest mark, read every copy
+// of the prompt a hook or a log reader made, as well as the one the turn
+// goes by: a transcript can say a scheduler or a subagent sent a prompt
+// whose hook says nothing of it (E-cc-transcript-labels). For a person's
+// prompt it also returns the prompt's class and the typed length its lead
+// is computed from.
 func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.PromptClass, int64) {
 	p := e.Data.(*event.PromptSubmit)
 	st := tb.sess.startBefore(tb.primary)
@@ -557,10 +581,17 @@ func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.Prom
 		}
 		return false
 	}
+	var appDeclared event.RelayDeclared
+	if tb.relay != nil {
+		appDeclared = tb.relay.d.Declared
+	}
+	w := tb.witness
 	switch {
 	case declared(func(q *event.PromptSubmit) bool {
 		return q.MatchesPendingCron || q.OriginDeclared == event.DeclaredCron || q.OriginDeclared == event.DeclaredLoop
-	}):
+	}) || appDeclared == event.RelayDeclaredCron:
+		// Rule 1, and the app's scheduler or a webhook: T3 Code's
+		// scheduledTaskId (SM 2.2).
 		return event.OriginScheduled, "", 0
 	case declared(func(q *event.PromptSubmit) bool {
 		return q.OriginDeclared == event.DeclaredGoal || q.OriginDeclared == event.DeclaredFollowup
@@ -573,11 +604,18 @@ func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.Prom
 		return event.OriginSelfContinue, "", 0
 	case declared(func(q *event.PromptSubmit) bool {
 		return q.OriginDeclared == event.DeclaredSubagent || q.OriginDeclared == event.DeclaredCrossSession
-	}):
+	}) || appDeclared == event.RelayDeclaredCrossSession:
 		// SM 2.2 names no rule for a message another session sent; like a
-		// subagent's, it is one agent prompting another (TP DI 26).
+		// subagent's, it is one agent prompting another (TP DI 26). An agent
+		// app's message from another thread is one too (SM 2.2).
 		return event.OriginSubagent, "", 0
-	case st != nil && d.headless(st, tb.sess):
+	case declared(func(q *event.PromptSubmit) bool { return q.Guest }):
+		// Rule 4 takes a guest's prompt whatever its session, even when a
+		// message witnesses it (SM 2.2): another person's words don't
+		// credit the owner.
+		return event.OriginHeadless, "", 0
+	case w == nil && st != nil && d.headless(st, tb.sess):
+		// A prompt an app message witnesses skips rule 4 (SM 2.2 rule 9).
 		return event.OriginHeadless, "", 0
 	case st != nil && st.Entrypoint == event.EntrypointCloud:
 		return event.OriginCloud, "", 0
@@ -588,28 +626,49 @@ func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.Prom
 	// produced. Only the input test takes the grace: focus is the record
 	// before the prompt's, and the plausibility test counts input slots
 	// in the lead, which ends at the submit.
-	if !d.pres.inputAround(e.T, d.r.keysPre, d.r.releaseGrace) || !d.hostedBy(d.focus.before(tb.primary), tb.sess, tb.primary) {
-		return event.OriginNoInput, "", 0
+	//
+	// For a witnessed prompt the three tests read the app's stamp in place
+	// of the prompt's t, with focus the record at or before the stamp,
+	// which has no record position, and a message from the app's phone app
+	// skips them, since no input here typed it (SM 2.2).
+	at, focus := e.T, d.focus.before(tb.primary)
+	if w != nil {
+		at, focus = w.d.SentAt, d.focus.at(w.d.SentAt)
 	}
-	class := d.classify(tb.sess, tb.primary, p)
-	typed := count(p.TypedLenEst)
-	think, typing := d.leadParts(class, e.Via, typed)
-	active := d.pres.inputSlots(e.T-think-typing, e.T) * event.SlotMS / 1000
-	most := d.r.typingMaxCPS * active
-	if typed <= most && p.PastedChars == 0 {
-		return event.OriginHumanTyped, class, typed
+	if (w == nil || w.d.Client != event.RelayClientMobile) &&
+		d.pres.inputAround(at, d.r.keysPre, d.r.releaseGrace) && d.hostedBy(focus, tb.sess, tb.primary) {
+		class := d.classify(tb.sess, tb.primary, p)
+		typed := count(p.TypedLenEst)
+		think, typing := d.leadParts(class, e.Via, typed)
+		active := d.pres.inputSlots(at-think-typing, at) * event.SlotMS / 1000
+		most := d.r.typingMaxCPS * active
+		if typed <= most && p.PastedChars == 0 {
+			return event.OriginHumanTyped, class, typed
+		}
+		return event.OriginHumanPasted, class, min(typed, most)
 	}
-	return event.OriginHumanPasted, class, min(typed, most)
+	if w != nil {
+		// Rule 9: relayed, with the typed length and the class of the app's
+		// own text, the length never more than the hook's typed_len_est
+		// (SM 2.2).
+		typed := min(count(w.d.LenChars), count(p.TypedLenEst))
+		return event.OriginRelayed, d.relayClass(tb, w, p, typed), typed
+	}
+	return event.OriginNoInput, "", 0
 }
 
-// headless is SM 2.2 rule 4.
+// headless is SM 2.2 rule 4, as it reads a session's start. Rule 4's
+// other half, a prompt marked guest, origin reads from the prompt.
 func (d *deriver) headless(st *event.SessionStart, s *session) bool {
 	automated := false
 	switch {
 	case st.Entrypoint == event.EntrypointSDK || st.Entrypoint == event.EntrypointExec:
 		automated = true
 	case st.ParentClass == event.ParentScriptRuntime || st.ParentClass == event.ParentScheduler ||
-		st.ParentClass == event.ParentAgent:
+		st.ParentClass == event.ParentAgent || st.ParentClass == event.ParentAgentApp:
+		// An agent app's own server, such as T3 Code's, runs the harness for
+		// the app's clients: every prompt of its sessions is headless unless
+		// an app message witnesses it (SM 2.2 rule 9).
 		automated = true
 	case !st.HasTTY && st.Entrypoint != event.EntrypointIDE && st.Entrypoint != event.EntrypointDesktop &&
 		st.ParentClass != event.ParentIDE:

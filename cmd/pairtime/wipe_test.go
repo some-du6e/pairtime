@@ -30,7 +30,7 @@ var recordedEntries = []string{
 }
 
 // keptEntries are pairtime itself, its settings and its locks, which stay.
-var keptEntries = []string{"install/setup.json", "install.lock", "bin/pairtime", "account/agent.lock", "agent.lock"}
+var keptEntries = []string{"install/setup.json", "install.lock", "bin/pairtime", "account/agent.lock", "agent.lock", "config.lock"}
 
 // fillHome makes a data directory holding every recorded and kept entry,
 // a device key in a key file, and a config.toml that says mode.

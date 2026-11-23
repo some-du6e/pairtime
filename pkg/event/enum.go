@@ -106,11 +106,20 @@ const (
 	// 10 s before them makes them level A, and it never counts toward
 	// logged_s.
 	ViaPlugin Via = "plugin"
+	// ViaApp is an agent app's reader: pairtime reading the app's own
+	// store on the device, such as T3 Code's message store (DESIGN 3.4,
+	// 5.1). It writes relay.message records, and no other kind arrives by
+	// it (exclusiveVias). Like track and plugin records, its records never
+	// count toward logged_s, ai_logged_s or hackatime_logged_s (DESIGN 6.2
+	// D19). A relay record opens no anchor unless it pairs with a prompt,
+	// and the anchor of a prompt it witnesses that scores as relayed is the
+	// record itself, at level C whatever backs it (SM 2.2 rule 9, 2.3).
+	ViaApp Via = "app"
 )
 
 var vias = enum[Via]{name: "via", values: []Via{
 	ViaHook, ViaLog, ViaOTel, ViaOS, ViaGit, ViaShell, ViaEditor, ViaEditorUnverified,
-	ViaBridge, ViaBridgeUnverified, ViaTrack, ViaPlugin,
+	ViaBridge, ViaBridgeUnverified, ViaTrack, ViaPlugin, ViaApp,
 }}
 
 // Harness is the AI coding tool behind an event (SM 1.1).
@@ -192,13 +201,20 @@ const (
 	// ParentScheduler is cron, systemd, launchd or Task Scheduler.
 	ParentScheduler ParentClass = "scheduler"
 	// ParentAgent is another harness.
-	ParentAgent   ParentClass = "agent"
-	ParentUnknown ParentClass = "unknown"
+	ParentAgent ParentClass = "agent"
+	// ParentAgentApp is an agent app's own server process, which runs the
+	// harness for the app's clients, such as T3 Code's `t3 serve` (DESIGN
+	// 5.1). SM 2.2 rule 4 takes every prompt of its sessions unless an app
+	// message witnesses it (rule 9). The class comes from the process's
+	// name, which a script can set, so it sorts honest setups and bounds
+	// nothing on its own.
+	ParentAgentApp ParentClass = "agent_app"
+	ParentUnknown  ParentClass = "unknown"
 )
 
 var parentClasses = enum[ParentClass]{name: "parent_class", values: []ParentClass{
 	ParentTerminalApp, ParentIDE, ParentMultiplexer, ParentRemote,
-	ParentScriptRuntime, ParentScheduler, ParentAgent, ParentUnknown,
+	ParentScriptRuntime, ParentScheduler, ParentAgent, ParentAgentApp, ParentUnknown,
 }}
 
 // DeclaredOrigin is what the harness itself says started a prompt
@@ -477,4 +493,55 @@ const (
 
 var envHints = enum[EnvHint]{name: "env_hint", values: []EnvHint{
 	EnvClaudeCode, EnvClaudeCodeChildSession, EnvClaudeCodeSessionID,
+}}
+
+// RelayApp is the agent app whose own store a relay.message came from (SM
+// 1.2). An app's reader adds its constant here and in the schema.
+type RelayApp string
+
+const (
+	// RelayAppT3Code is T3 Code (pingdotgg/t3code), read from its message
+	// store (DESIGN 5.1).
+	RelayAppT3Code RelayApp = "t3_code"
+)
+
+var relayApps = enum[RelayApp]{name: "relay_app", values: []RelayApp{RelayAppT3Code}}
+
+// RelayClient is the app's own word for where a relayed message was typed
+// (relay.message): for T3 Code, the message's creationSource (SM 1.2,
+// 2.2).
+type RelayClient string
+
+const (
+	// RelayClientWeb is the app's web client, which can run on this
+	// computer or any other, so it says nothing about which device typed.
+	RelayClientWeb RelayClient = "web"
+	// RelayClientMobile is the app's phone app. A message typed there skips
+	// SM 2.2 rules 6 and 7, since no input on this device typed it.
+	RelayClientMobile RelayClient = "mobile"
+)
+
+var relayClients = enum[RelayClient]{name: "relay_client", values: []RelayClient{
+	RelayClientWeb, RelayClientMobile,
+}}
+
+// RelayDeclared is what the app says sent a relayed message
+// (relay.message, SM 1.2, 2.2). The scorer's verdict on the prompt it pairs
+// with is that prompt's [Origin].
+type RelayDeclared string
+
+const (
+	// RelayDeclaredNone is a message the app says a person sent. Only such a
+	// record witnesses a prompt (SM 2.2 rule 9).
+	RelayDeclaredNone RelayDeclared = "none"
+	// RelayDeclaredCron is the app's scheduler or a webhook. The prompt it
+	// pairs with is scheduled (SM 2.2 rule 1).
+	RelayDeclaredCron RelayDeclared = "cron"
+	// RelayDeclaredCrossSession is a message from another thread. The prompt
+	// it pairs with is a cross-session subagent's (SM 2.2 rule 3).
+	RelayDeclaredCrossSession RelayDeclared = "cross_session"
+)
+
+var relayDeclareds = enum[RelayDeclared]{name: "relay_declared", values: []RelayDeclared{
+	RelayDeclaredNone, RelayDeclaredCron, RelayDeclaredCrossSession,
 }}

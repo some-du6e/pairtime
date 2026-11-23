@@ -23,6 +23,7 @@ import (
 var golden = map[string]string{
 	"0.1.0": "sha256:ccb35125e1fe7a2f9f136d1fd4e25da5efadac2b12872d34a753f11aef9621b0",
 	"0.2.0": "sha256:2e531d6e1901be6fc0cd602817e7e8a28cdd8608e4c3da9330566ac68baae1b0",
+	"0.3.0": "sha256:ce6ed56bb12f08dc6090eb729a2a8cf73fca4435dd49182e350698170f9326c8",
 }
 
 func TestEmbeddedTables(t *testing.T) {
@@ -71,6 +72,7 @@ func TestByVersion(t *testing.T) {
 	}{
 		{"an embedded version is found", "0.1.0", true},
 		{"the version that added INPUT_RELEASE_GRACE_MS is found", "0.2.0", true},
+		{"the version that added RELAY_MATCH_S and RELAY_SEEN_LAG_S is found", "0.3.0", true},
 		{"two parts aren't a version", "0.1", false},
 		{"a v prefix isn't part of a version", "v0.1.0", false},
 		{"a version nobody published isn't found", "9.9.9", false},
@@ -211,6 +213,10 @@ func TestParseRejects(t *testing.T) {
 		{"a parameter a later version added is refused in an older table", doc("version", v, "params", with("INPUT_RELEASE_GRACE_MS", "250")), "params.INPUT_RELEASE_GRACE_MS: not a parameter before version 0.2.0, which added it"},
 		{"the version that added a parameter has it", doc("version", `"0.2.0"`, "params", ps), "params.INPUT_RELEASE_GRACE_MS: missing"},
 		{"a version after the one that added a parameter has it too", doc("version", `"0.10.0"`, "params", ps), "params.INPUT_RELEASE_GRACE_MS: missing"},
+		{"a relay parameter is refused in a table older than 0.3.0, which added it", doc("version", `"0.2.0"`, "params", with("RELAY_MATCH_S", "600")),
+			"params.RELAY_MATCH_S: not a parameter before version 0.3.0, which added it"},
+		{"table 0.3.0 has RELAY_MATCH_S", doc("version", `"0.3.0"`, "params", ps), "params.RELAY_MATCH_S: missing"},
+		{"table 0.3.0 has RELAY_SEEN_LAG_S", doc("version", `"0.3.0"`, "params", ps), "params.RELAY_SEEN_LAG_S: missing"},
 		{"the replaced STREAK_DAY_S is refused", doc("version", v, "params", with("STREAK_DAY_S", "900")), "params.STREAK_DAY_S: not a parameter"},
 		{"SM 8.7's tier-2 flags aren't parameters", doc("version", v, "params", with("regular_timing", "0.1")), "params.regular_timing: not a parameter"},
 		{"an integer parameter has no fraction", doc("version", v, "params", with("THINK_LEAD_S", "120.5")), "params.THINK_LEAD_S: must be an integer, got 120.5"},
@@ -262,8 +268,10 @@ func TestParseReportsEveryProblem(t *testing.T) {
 		})
 	}
 	t.Run("without a valid version, a parameter some versions lack isn't reported missing", func(t *testing.T) {
-		if err == nil || strings.Contains(err.Error(), "INPUT_RELEASE_GRACE_MS") {
-			t.Errorf("Parse error = %v, want one that doesn't name INPUT_RELEASE_GRACE_MS", err)
+		for _, name := range []string{"INPUT_RELEASE_GRACE_MS", "RELAY_MATCH_S", "RELAY_SEEN_LAG_S"} {
+			if err == nil || strings.Contains(err.Error(), name) {
+				t.Errorf("Parse error = %v, want one that doesn't name %s", err, name)
+			}
 		}
 	})
 }
@@ -379,6 +387,7 @@ func TestMadeUpNamesPanic(t *testing.T) {
 	}{
 		{"Int of a name no table has panics", func() { tab.Int(IntParam{"NOT_A_PARAM_S"}) }},
 		{"Int of a parameter a later table added panics", func() { tab.Int(INPUT_RELEASE_GRACE_MS) }},
+		{"Int of a relay parameter, which table 0.3.0 added, panics in an older table", func() { tab.Int(RELAY_SEEN_LAG_S) }},
 		{"Int of a rational parameter panics", func() { tab.Int(IntParam{COMPOSE_CPS.ratName}) }},
 		{"Rat of an integer parameter panics", func() { tab.Rat(RatParam{THINK_LEAD_S.intName}) }},
 		{"Bool of an integer parameter panics", func() { tab.Bool(BoolParam{THINK_LEAD_S.intName}) }},

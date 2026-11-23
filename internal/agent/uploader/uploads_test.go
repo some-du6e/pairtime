@@ -74,7 +74,7 @@ func TestPastUploads(t *testing.T) {
 	t.Run("past uploads older than 90 days go at a wake, whether answers come or not", func(t *testing.T) {
 		u := bareUploader(t, nil)
 		for _, at := range []time.Time{time.Now().Add(-91 * 24 * time.Hour), time.Now().Add(-time.Hour)} {
-			if err := appendUpload(u.opts.DataDir, PastUpload{At: at}); err != nil {
+			if err := appendLine(u.opts.DataDir, PastUpload{At: at}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -87,7 +87,7 @@ func TestPastUploads(t *testing.T) {
 		dir := t.TempDir()
 		now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
 		for _, at := range []time.Time{now.Add(-91 * 24 * time.Hour), now.Add(-24 * time.Hour)} {
-			if err := appendUpload(dir, PastUpload{At: at, Server: "https://pairtime.example"}); err != nil {
+			if err := appendLine(dir, PastUpload{At: at, Server: "https://pairtime.example"}); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -110,6 +110,37 @@ func TestPastUploads(t *testing.T) {
 		}
 		if len(past) != 1 || !past[0].At.Equal(now.Add(-24*time.Hour)) {
 			t.Errorf("past uploads %+v, want the one a day old", past)
+		}
+	})
+	t.Run("a names request's line isn't a past upload, and goes after 90 days like one", func(t *testing.T) {
+		dir := t.TempDir()
+		now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+		lines := []any{
+			PastNames{At: now.Add(-91 * 24 * time.Hour), Kind: KindNames, Server: "https://pairtime.example", Set: 1, Status: 200},
+			PastNames{At: now.Add(-time.Hour), Kind: KindNames, Server: "https://pairtime.example", Delete: 1, Status: 200},
+			PastUpload{At: now.Add(-time.Hour), Server: "https://pairtime.example"},
+		}
+		for _, e := range lines {
+			if err := appendLine(dir, e); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := pruneUploads(dir, now); err != nil {
+			t.Fatal(err)
+		}
+		past, err := PastUploads(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(past) != 1 || past[0].Kind != "" {
+			t.Errorf("past uploads %+v, want the one upload alone", past)
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, UploadsName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := bytes.Count(raw, []byte(`"kind":"names"`)); n != 1 {
+			t.Errorf("%d names lines stayed, want the one an hour old:\n%s", n, raw)
 		}
 	})
 }

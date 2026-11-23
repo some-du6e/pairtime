@@ -251,6 +251,29 @@ func Projects(ctx context.Context, q Querier, account string) (map[string][]stri
 	return out, nil
 }
 
+// DeviceProjects returns the project id of each project key device uploaded
+// under account, by key: the ones the names endpoint gives the device the
+// codes of (projectname.ProjectCodes over Projects).
+func DeviceProjects(ctx context.Context, q Querier, account, device string) (map[string]string, error) {
+	rows, err := q.QueryContext(ctx, `SELECT project_key, project_id FROM rollup_projects WHERE user_id = $1 AND device_id = $2`, account, device)
+	if err != nil {
+		return nil, fmt.Errorf("rollup: reading a device's projects: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]string)
+	for rows.Next() {
+		var key, id string
+		if err := rows.Scan(&key, &id); err != nil {
+			return nil, fmt.Errorf("rollup: reading a device's projects: %w", err)
+		}
+		out[key] = id
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rollup: reading a device's projects: %w", err)
+	}
+	return out, nil
+}
+
 // zones caches the zones accounts name, since ingest applies up to 2,000
 // buckets a request.
 var zones sync.Map // string to *time.Location

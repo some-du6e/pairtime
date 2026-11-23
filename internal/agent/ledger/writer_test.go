@@ -129,6 +129,16 @@ func TestContent(t *testing.T) {
 					t.Errorf("f %+v has features of a text the device never had", f)
 				}
 			}},
+		{name: "a guest's prompt keeps none of the text that came with it, commits nothing, and its f is v and pc alone (ledger-v1 10.1)",
+			in: guestPrompt("could the arrivals page show 24-hour times"), class: features.Substantive,
+			check: func(t *testing.T, f features.F, ev event.Event) {
+				if f.MH != nil || f.TH != nil || f.ES != nil {
+					t.Errorf("f %+v has features of a guest's text", f)
+				}
+				if p := ev.Data.(*event.PromptSubmit); !p.Guest {
+					t.Error("the stored prompt isn't marked guest")
+				}
+			}},
 		{name: "a final agent message commits its first 16 KiB, cut at a character boundary",
 			in:   harness(&event.AgentOutput{TurnKey: "t_1", Words: 8000, IsFinal: true}, []byte(long)),
 			text: ledger.CommittedMessage([]byte(long))},
@@ -272,6 +282,16 @@ func prompt(text string, pasted int) Input {
 	n := len([]rune(text))
 	return harness(&event.PromptSubmit{TurnKey: "t_1", LenChars: n, PastedChars: pasted, TypedLenEst: n - pasted,
 		OriginDeclared: event.DeclaredNone}, []byte(text))
+}
+
+// guestPrompt is a hook prompt of text that a guest's message started
+// (DESIGN 5.1), delivered with its text and sealed text as the hook saw
+// them.
+func guestPrompt(text string) Input {
+	in := prompt(text, 0)
+	p := in.Event.Data.(*event.PromptSubmit)
+	p.Guest, p.SealedText = true, []byte("sealed guest text")
+	return in
 }
 
 func bridgePrompt(n int) Input {

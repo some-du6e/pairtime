@@ -220,6 +220,8 @@ func TestDesignPeriods(t *testing.T) {
 		{name: "Claude Code keeps its transcripts 30 days by default", id: "device.transcripts", where: "Device", data: "Transcripts and agent output", re: `\(Claude Code: (\d+) days by default; TP B8\)`, kept: `\(Claude Code keeps them for (\d+) days unless you change it\)$`},
 		{name: "a web sign-in session ends 30 days after sign-in at the latest", id: "server.sessions", where: "Server", data: "Web sign-in sessions", re: `or (\d+) days after sign-in at the latest`, kept: `or (\d+) days after you sign in at the latest`},
 		{name: "a web sign-in session's row is deleted 1 day after the session ends", id: "server.sessions", where: "Server", data: "Web sign-in sessions", re: `deleted (\d+) days? after the session ends$`, kept: `deleted (\d+) days? after the session ends$`},
+		{name: "a removed device's project names go 90 days after the removal", id: "server.project_names", where: "Server", data: "Project names the teen turned on", re: `the device's purge (\d+) days after the device is removed`},
+		{name: "a name hidden on the dashboard keeps its project key 30 days after the hide at most", id: "server.project_name_hides", where: "Server", data: "Project names the teen turned on", re: `(\d+) days after the hide at most`},
 	}
 	checked := make(map[string]bool)
 	for _, tt := range tests {
@@ -325,7 +327,7 @@ func TestJobs(t *testing.T) {
 				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions",
 				"server.minute_buckets/rollup_minutes",
-				"server.witness/witness_rows", "server.witness/ingest_replies",
+				"server.witness/witness_rows", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
 			},
 			wantOff: []string{
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
@@ -346,7 +348,7 @@ func TestJobs(t *testing.T) {
 				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions", "server.minute_buckets/submission_minutes",
 				"server.minute_buckets/rollup_minutes",
-				"server.witness/witness_rows", "server.witness/submission_batches", "server.witness/ingest_replies",
+				"server.witness/witness_rows", "server.witness/submission_batches", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
 			},
 			wantOff: []string{
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
@@ -372,7 +374,7 @@ func TestJobs(t *testing.T) {
 				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/minute_bucket_revisions+hold", "server.minute_buckets/submission_minutes",
 				"server.minute_buckets/rollup_minutes",
-				"server.witness/witness_rows+hold", "server.witness/submission_batches", "server.witness/ingest_replies",
+				"server.witness/witness_rows+hold", "server.witness/submission_batches", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
 			},
 		},
 		{
@@ -398,7 +400,7 @@ func TestJobs(t *testing.T) {
 				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/minute_bucket_revisions+hold", "server.minute_buckets/submission_minutes",
 				"server.minute_buckets/rollup_minutes",
-				"server.witness/witness_rows+hold", "server.witness/submission_batches", "server.witness/ingest_replies",
+				"server.witness/witness_rows+hold", "server.witness/submission_batches", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
 			},
 			wantOff: []string{"evidence.revealed/evidence_index awaits WP-SV18"},
 		},
@@ -415,7 +417,7 @@ func TestJobs(t *testing.T) {
 				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions",
 				"server.minute_buckets/rollup_minutes",
-				"server.witness/witness_rows", "server.witness/ingest_replies",
+				"server.witness/witness_rows", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
 			},
 			wantOff: []string{
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
@@ -655,6 +657,11 @@ func TestSweep(t *testing.T) {
 				{name: "a device's last upload reply goes 180 days after that upload", job: "server.witness/ingest_replies", age: 180 * day},
 				{name: "a device's last upload reply stays 179 days after that upload", job: "server.witness/ingest_replies", age: 179 * day, kept: true},
 				{name: "a device's labels go 90 days after the server last received them", job: "server.devices/device_labels", age: 90 * day},
+				{name: "a removed device's project names go 90 days after the removal", job: "server.project_names/project_names", age: 90 * day},
+				{name: "a removed device's project names stay 89 days after the removal", job: "server.project_names/project_names", age: 89 * day, kept: true},
+				{name: "a linked device's project names stay, however old", job: "server.project_names/project_names", null: true, kept: true},
+				{name: "a hide no device turned off goes 30 days after it", job: "server.project_name_hides/project_name_hides", age: 30 * day},
+				{name: "a hide stays a minute less than 30 days after it, for its device to turn the name off", job: "server.project_name_hides/project_name_hides", age: 30*day - time.Minute, kept: true},
 				{name: "a device's labels stay 89 days after the server last received them", job: "server.devices/device_labels", age: 89 * day, kept: true},
 			},
 		},

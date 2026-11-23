@@ -74,7 +74,8 @@ func (s State) now(r rules) int64 {
 // NewState returns the state of a scorer that has seen no records and
 // scores with table t the records of the device d describes. t must hold
 // every parameter the scorer reads: NewState panics on a table older than
-// one of them, such as table 0.1.0, which predates INPUT_RELEASE_GRACE_MS
+// one of them, such as table 0.1.0, which predates INPUT_RELEASE_GRACE_MS,
+// or table 0.2.0, which predates RELAY_MATCH_S and RELAY_SEEN_LAG_S
 // (pkg/params, added). The agent scores with the newest table, and pkg/params
 // checks that it holds them all.
 func NewState(t *params.Table, d Device) State {
@@ -118,18 +119,19 @@ type Output struct {
 // Derived holds the records the scorer derives from events (SM 1.3), as
 // far as WP-SC1 and WP-SC2 build them: presence slots, turns, anchors, the
 // silent runs the return rule credits, the fate of each `pairtime track`
-// call, review flags, what each turn put in its reading bucket, and every
-// slot's credit. Each list is in time order, ties broken by ids, so equal
-// inputs give equal lists.
+// call and each agent app's relay.message, review flags, what each turn put
+// in its reading bucket, and every slot's credit. Each list is in time
+// order, ties broken by ids, so equal inputs give equal lists.
 type Derived struct {
-	Slots   []Slot      `json:"slots"`
-	Turns   []Turn      `json:"turns"`
-	Anchors []Anchor    `json:"anchors"`
-	Returns []Return    `json:"returns"`
-	Tracks  []TrackCall `json:"tracks"`
-	Flags   []Flag      `json:"flags"`
-	Fills   []Fill      `json:"fills"`
-	Credits []Credit    `json:"credits"`
+	Slots   []Slot        `json:"slots"`
+	Turns   []Turn        `json:"turns"`
+	Anchors []Anchor      `json:"anchors"`
+	Returns []Return      `json:"returns"`
+	Tracks  []TrackCall   `json:"tracks"`
+	Relays  []RelayRecord `json:"relays"`
+	Flags   []Flag        `json:"flags"`
+	Fills   []Fill        `json:"fills"`
+	Credits []Credit      `json:"credits"`
 }
 
 // Step scores records on top of state s and returns the new state and what
@@ -159,7 +161,7 @@ func Step(s State, records []event.Event) (State, Output) {
 	}
 	r := newRules(s.table)
 	now := next.now(r)
-	all, lookups := derive(r, s.device, next.recs, now)
+	all, lookups, relays := derive(r, s.device, next.recs, now)
 	fb := s.done
 	if len(next.recs) > 0 {
 		to := floorSlot(now - r.settle)
@@ -175,6 +177,16 @@ func Step(s State, records []event.Event) (State, Output) {
 			if sp.from < to && sp.to+r.lookupBracket > to {
 				to = min(to, sp.from)
 			}
+		}
+		// An agent app's message that hasn't paired yet holds the minutes a
+		// lead it could open can touch until it pairs or RELAY_MATCH_S after
+		// its stamp passes (SM 2.3, deriver.relayHolds). A relayed lead
+		// starts at most COMPOSE_MAX_S before the stamp, and RELAY_MATCH_S +
+		// COMPOSE_MAX_S is PENDING_WINDOW_S in table 0.3.0 (SM 8.1), so the
+		// hold binds only for the think part of a prompt that rules 6 and 7
+		// make typed at the stamp, and for a later table that widens either.
+		for _, h := range relays {
+			to = min(to, floorSlot(h))
 		}
 		fb = max(fb, to)
 	}
@@ -246,6 +258,7 @@ func (d Derived) split(from, to int64) (final, pending Derived) {
 	final.Anchors, pending.Anchors = splitBy(d.Anchors, from, to, func(a Anchor) int64 { return a.decided })
 	final.Returns, pending.Returns = splitBy(d.Returns, from, to, func(r Return) int64 { return r.RunStart })
 	final.Tracks, pending.Tracks = splitBy(d.Tracks, from, to, func(c TrackCall) int64 { return c.T })
+	final.Relays, pending.Relays = splitBy(d.Relays, from, to, func(r RelayRecord) int64 { return r.decided })
 	final.Flags, pending.Flags = splitBy(d.Flags, from, to, func(f Flag) int64 { return f.T })
 	final.Fills, pending.Fills = splitBy(d.Fills, from, to, func(f Fill) int64 { return f.decided })
 	final.Credits, pending.Credits = splitBy(d.Credits, from, to, func(c Credit) int64 { return c.Slot })
@@ -274,6 +287,7 @@ func (d *Derived) Append(o Derived) {
 	d.Anchors = append(d.Anchors, o.Anchors...)
 	d.Returns = append(d.Returns, o.Returns...)
 	d.Tracks = append(d.Tracks, o.Tracks...)
+	d.Relays = append(d.Relays, o.Relays...)
 	d.Flags = append(d.Flags, o.Flags...)
 	d.Fills = append(d.Fills, o.Fills...)
 	d.Credits = append(d.Credits, o.Credits...)
@@ -282,6 +296,7 @@ func (d *Derived) Append(o Derived) {
 	slices.SortStableFunc(d.Anchors, anchorCmp)
 	slices.SortStableFunc(d.Returns, func(a, b Return) int { return cmp.Compare(a.RunStart, b.RunStart) })
 	slices.SortStableFunc(d.Tracks, trackCmp)
+	slices.SortStableFunc(d.Relays, relayCmp)
 	slices.SortStableFunc(d.Flags, flagCmp)
 	slices.SortStableFunc(d.Fills, fillCmp)
 	slices.SortStableFunc(d.Credits, func(a, b Credit) int { return cmp.Compare(a.Slot, b.Slot) })

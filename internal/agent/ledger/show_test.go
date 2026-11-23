@@ -138,7 +138,7 @@ func TestReadRecords(t *testing.T) {
 				appendTo(t, seg, appendFrame(nil, kindSeal, []byte(`{"b":3,"first_seq":3,"n":2}`)))
 				var h ledger.Header
 				binary.BigEndian.PutUint64(h[:8], 3)
-				h[8] = 0x13
+				h[8] = 0x14
 				body := []byte(`{"n":"` + string(make64('0')) + `","e":{"t":1795089604000}}`)
 				appendTo(t, seg, appendFrame(nil, kindRecord, append(h[:], body...)))
 			},
@@ -155,7 +155,7 @@ func TestReadRecords(t *testing.T) {
 				for _, seq := range []uint64{2, 4} {
 					var h ledger.Header
 					binary.BigEndian.PutUint64(h[:8], seq)
-					h[8] = 0x13
+					h[8] = 0x14
 					body := []byte(`{"n":"` + string(make64('0')) + `","e":{"t":1795089602000}}`)
 					appendTo(t, seg, appendFrame(nil, kindRecord, append(h[:], body...)))
 				}
@@ -174,7 +174,7 @@ func TestReadRecords(t *testing.T) {
 				record := func(seq uint64) {
 					var h ledger.Header
 					binary.BigEndian.PutUint64(h[:8], seq)
-					h[8] = 0x13
+					h[8] = 0x14
 					body := []byte(`{"n":"` + string(make64('0')) + `","e":{"t":1795089602000}}`)
 					appendTo(t, seg, appendFrame(nil, kindRecord, append(h[:], body...)))
 				}
@@ -194,7 +194,7 @@ func TestReadRecords(t *testing.T) {
 				w.Close()
 				var h ledger.Header
 				binary.BigEndian.PutUint64(h[:8], 2)
-				h[8] = 0x13
+				h[8] = 0x14
 				body := []byte(`{"n":"` + string(make64('0')) + `","e":{"t":1795089602000}}`)
 				appendTo(t, segPath(dir, "2026-11-19"), appendFrame(nil, kindRecord, append(h[:], body...)))
 			},

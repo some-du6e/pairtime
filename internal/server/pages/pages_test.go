@@ -229,9 +229,20 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"It doesn&#39;t protect them from malware running as you."},
 		},
 		{
-			name:    "the notice limits never receiving prompts to outside a submission and backups",
-			want:    []string{"Apart from a submission, and the encrypted backups if you turn them on, this server never receives your prompts"},
+			name:    "the notice limits never receiving prompts to outside a submission, backups and the project names you choose to show",
+			want:    []string{"Apart from a submission, the encrypted backups if you turn them on, and the project names you choose to show, this server never receives your prompts"},
 			notWant: []string{"<p>This server never receives"},
+		},
+		{
+			name: "the notice says a project's name reaches the server only when you choose to show it, and how a hide keeps the key 30 days at most (D-owner-names)",
+			want: []string{
+				"to which project (as a key, not its name, unless you choose to show that name on your own dashboard)",
+				"A project&#39;s name stays on your computer unless you turn it on for that project",
+				"the server keeps the project&#39;s key and when you hid it until your computer turns the name off as well, 30 days at most.",
+				"with a request that carries no name.",
+				"<code>pairtime privacy show</code> prints every field of the next upload, and all of the next project names request that carries a name, exactly as they will be sent.",
+				"including the project names request your computer makes when the agent starts and once a day, which carries no name unless you turned one on or off,",
+			},
 		},
 		{
 			name: "the notice says what a connected program can read, until you unlink it (DESIGN 3.10, 5.10)",
@@ -249,6 +260,10 @@ func TestPrivacyNotice(t *testing.T) {
 				"how long an AI agent was running",
 				"<code>pairtime privacy show</code> prints every field of the next upload",
 			},
+		},
+		{
+			name: "the notice's list of what a slot's credit can rest on names a message you sent through an agent app, which the via_relay label marks (D-relayed)",
+			want: []string{"whether the credit rests on <code>pairtime track</code>, an editor plugin or the WakaTime bridge, or on a message you sent through an agent app."},
 		},
 		{
 			name: "the notice says what the optional GitHub App keeps of a private repository's pushes (DESIGN 3.10)",
@@ -463,8 +478,11 @@ func TestRoutes(t *testing.T) {
 		{name: "HEAD /privacy answers too", method: http.MethodHead, path: "/privacy", wantCode: 200},
 		{name: "POST /privacy is refused", method: http.MethodPost, path: "/privacy", wantCode: 405},
 		{name: "/docs/evidence serves the definition for the scoring version this server runs", path: "/docs/evidence", wantCode: 200, wantBody: "This server runs scoring 0.4.2."},
-		{name: "/docs/evidence says which versions its definition covers", path: "/docs/evidence", wantCode: 200, wantBody: "for scoring 0.1.0 and the later 0.x versions."},
+		{name: "/docs/evidence says which versions its definition covers", path: "/docs/evidence", wantCode: 200, wantBody: "for scoring 0.4.0 and the later 0.x versions."},
 		{name: "/docs/evidence/<version> serves the definition in force at that version", path: "/docs/evidence/0.1.0", wantCode: 200, wantBody: "Evidence levels and bands"},
+		{name: "a version between two definitions gets the older one, which covers the versions before the next", path: "/docs/evidence/0.2.0", wantCode: 200, wantBody: "for scoring 0.1.0 and the later versions before 0.4.0."},
+		{name: "an older definition says it is the design as it read for its version, which may differ from the design this server was built from", path: "/docs/evidence/0.2.0", wantCode: 200, wantBody: "design as it read for scoring 0.1.0, word for word. The design this server was built from may say something else."},
+		{name: "once there are two definitions, each links every version's definition", path: "/docs/evidence/0.1.0", wantCode: 200, wantBody: `Other versions: <a href="/docs/evidence/0.1.0">0.1.0</a>, <a href="/docs/evidence/0.4.0">0.4.0</a>`},
 		{name: "a version before the first definition has none", path: "/docs/evidence/0.0.9", wantCode: 404},
 		{name: "a MAJOR without a definition of its own has none", path: "/docs/evidence/1.0.0", wantCode: 404},
 		{name: "a malformed version is not found", path: "/docs/evidence/latest", wantCode: 404},

@@ -112,7 +112,7 @@
 <thead role="rowgroup"><tr role="row"><th role="columnheader">Project</th><th role="columnheader">Last 7 days</th><th role="columnheader">Last 30 days</th></tr></thead>
 <tbody role="rowgroup">
 {{- range .Projects}}
-<tr role="row"><td role="cell"{{with .Title}} title="{{.}}"{{end}}>{{template "key" .Color}}{{.Name}}</td>{{template "cell" .Week}}{{template "cell" .Month}}</tr>
+<tr role="row"><td role="cell"{{with .Title}} title="{{.}}"{{end}}>{{template "key" .Color}}{{.Name}}{{if and .Hide $.HidePath}}<form class="hide" method="post" action="{{$.HidePath}}"><input type="hidden" name="project" value="{{.ID}}"><button type="submit">Hide this name</button></form>{{end}}</td>{{template "cell" .Week}}{{template "cell" .Month}}</tr>
 {{- end}}
 </tbody>
 <tfoot role="rowgroup">

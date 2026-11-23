@@ -45,11 +45,12 @@ type attribution struct {
 	// (D-ambiguous-anchors, which the orchestrator extended to the plain
 	// terminal on 2026-11-20).
 	ambiguous bool
-	// won is the project of the first second the credit pass credits in a
-	// slot that resolves to no project, or "". For an ambiguous slot it is
-	// the project of the window that credits that second, which is the
-	// slot's p (SM 5.1), and only that project's windows credit the rest of
-	// the slot.
+	// won is the project of the first second the credit pass credits in the
+	// slot, or "". For a slot that resolves to a project it is that project,
+	// unless relayed credit took the slot where nothing else credited a
+	// second (relayedRest). For an ambiguous slot it is the project of the
+	// window that credits that second. Either way it is the slot's p (SM
+	// 5.1), and only that project's candidates credit the rest of the slot.
 	won string
 	// unrecorded is set when the slot comes before the client's first
 	// os.focus record for most of it, so its focus can't be seen
@@ -69,6 +70,35 @@ func (at *attribution) admits(p string) bool {
 		return at.won == "" || p == at.won
 	}
 	return false
+}
+
+// relayNow reports whether the relayed candidates of project p are weighed
+// at each second of the slot, right after this device's own (relayedSecond),
+// rather than once the slot's other seconds are decided (relayedRest).
+// Relayed candidates skip SM 3.3 rule 1's focus test, but a slot holds one
+// project (SM 5.1), and only the candidates of the project a slot resolves
+// to share its buckets with this device's reading, a second at a time. In a
+// slot that resolves to none, and isn't ambiguous, nothing of this
+// device's credits a second before the lookups, so relayed candidates of
+// every project are weighed at once. Those of any other project, and every
+// one in an ambiguous slot, where this device's anchors of any project may
+// credit a later second, wait for the slot's end, and credit it only if
+// nothing else did, or only in the project of what did.
+func (at *attribution) relayNow(p string) bool {
+	switch {
+	case at.proj != "":
+		return p == at.proj
+	case at.ambiguous:
+		return false
+	}
+	return true
+}
+
+// relayAdmits reports whether a relayed candidate of project p may credit
+// a second of the slot in the pass now names (relayNow): the slot holds one
+// project, so once a second of it is credited only that project's may.
+func (at *attribution) relayAdmits(p string, now bool) bool {
+	return at.relayNow(p) == now && (at.won == "" || at.won == p)
 }
 
 // holds reports whether a returned run's think part can credit a second of
@@ -159,12 +189,14 @@ func (d *deriver) editorProject(f *focusRec, pos int) string {
 }
 
 // indexAttribution builds what attribute looks up: each session's anchors
-// in time order.
+// in time order. A relayed anchor resolves no slot: it is no human anchor
+// for anything but its own lead and reading, and 3.3 rule 1's focus test
+// doesn't apply to it (SM 2.3, 2.7).
 func (c *creditor) indexAttribution() {
 	d := c.d
 	c.bySession = map[string][]int{}
 	for i, a := range d.anchors {
-		if a.SessionKey != "" {
+		if a.SessionKey != "" && !a.relayed() {
 			c.bySession[a.SessionKey] = append(c.bySession[a.SessionKey], i)
 		}
 	}
@@ -272,9 +304,14 @@ func (c *creditor) hostedProject(s *Slot) (string, int, bool) {
 // READ_HORIZON_S and its session's bucket isn't empty when the slot begins,
 // and -1 otherwise (SM 3.2 rule 1). After is strict: an anchor at the
 // slot's very start is the last one before it, which ATTRIB_STICKY_S reads
-// (E-6.3-two-tabs). "Inside the lead" means the slot starts inside it.
-// Within READ_HORIZON_S counts as SM 2.4's horizon before an act does: the
-// slot that starts READ_HORIZON_S before the anchor is inside.
+// (E-6.3-two-tabs). "Inside the lead" means the slot starts inside it. A
+// lead ends at the anchor's T, after the slot begins, except for a prompt
+// that rules 6 and 7 made typed at an agent app's stamp, whose lead ends
+// at the stamp, up to RELAY_MATCH_S before its T (Anchor.leadEnd): a slot
+// that starts between the two is outside the lead, and the bucket test
+// decides it. Within READ_HORIZON_S counts as SM 2.4's horizon before an
+// act does: the slot that starts READ_HORIZON_S before the anchor is
+// inside.
 //
 // An anchor counts only for slots it can credit (Anchor.from), so a record
 // that comes later than the scorer's reach changes nothing further back. A
@@ -303,7 +340,7 @@ func (c *creditor) lookAhead(s *Slot) int {
 		return -1
 	}
 	a := &c.d.anchors[first]
-	if a.T-a.LeadMS <= s.Start {
+	if s.Start >= a.leadEnd()-a.LeadMS && s.Start < a.leadEnd() {
 		return first
 	}
 	if a.T-s.Start <= c.r.readHorizon {

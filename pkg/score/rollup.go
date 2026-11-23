@@ -50,6 +50,9 @@ type tally struct {
 	agent      int64
 	agentOnly  int64
 	anchors    map[event.AnchorKind]int
+	// relayed counts the relayed anchors, which anchors counts under no
+	// kind (event.Rollup.RelayedMessages).
+	relayed int
 }
 
 func newTally() *tally {
@@ -104,10 +107,16 @@ func (t *tally) addSlot(s MinuteSlot, project string, backfilled bool) {
 }
 
 // addAnchors counts the anchors of project, or of every project for "",
-// whose acts fall in [from, to).
+// whose acts fall in [from, to). A relayed anchor counts as a relayed
+// message, not under its kind: SM 5.4 counts relayed messages apart from
+// typed prompts.
 func (t *tally) addAnchors(anchors []Anchor, project string, from, to int64) {
 	for _, a := range anchors {
-		if a.T >= from && a.T < to && (project == "" || a.ProjectKey == project) {
+		switch {
+		case a.T < from || a.T >= to || (project != "" && a.ProjectKey != project):
+		case a.relayed():
+			t.relayed++
+		default:
 			t.anchors[a.Kind]++
 		}
 	}
@@ -149,7 +158,7 @@ func (t *tally) rollup(tab *params.Table, level event.RollupLevel, project strin
 	r := event.Rollup{V: Version(), Params: tab.Hash(), Level: level, ProjectKey: project,
 		Start: time.UnixMilli(from).UTC(), End: time.UnixMilli(to).UTC(), CreditedS: float64(t.halves) / 2,
 		CreditedByReason: halvesOf(t.byReason), CreditedByKind: halvesOf(t.byKind), Uncredited: secondsOf(t.uncredited),
-		CreditedByEvidence: halvesOf(t.byLevel), AgentRunningS: float64(t.agent)}
+		CreditedByEvidence: halvesOf(t.byLevel), AgentRunningS: float64(t.agent), RelayedMessages: t.relayed}
 	if level == event.LevelDay || level == event.LevelSubmission {
 		r.CreditedByProject = halvesOf(t.byProject)
 	}
@@ -282,6 +291,7 @@ type DayProject struct {
 	AgentRunningS      float64                    `json:"agent_running_s"`
 	AgentOnlyS         float64                    `json:"agent_only_s"`
 	AnchorCounts       map[event.AnchorKind]int   `json:"anchor_counts,omitempty"`
+	RelayedMessages    int                        `json:"relayed_messages,omitempty"`
 }
 
 // Days returns a day rollup for each local day with a derived slot, in
@@ -389,7 +399,8 @@ func (r Rollups) dayProjects(d Derived, day []Minute, from, to int64) []DayProje
 		ro := t.rollup(r.Table, event.LevelProject, p, from, to)
 		out = append(out, DayProject{ProjectKey: p, CreditedS: ro.CreditedS, CreditedByReason: ro.CreditedByReason,
 			CreditedByKind: ro.CreditedByKind, CreditedByEvidence: ro.CreditedByEvidence, Uncredited: ro.Uncredited,
-			AgentRunningS: ro.AgentRunningS, AgentOnlyS: float64(t.agentOnly), AnchorCounts: ro.AnchorCounts})
+			AgentRunningS: ro.AgentRunningS, AgentOnlyS: float64(t.agentOnly), AnchorCounts: ro.AnchorCounts,
+			RelayedMessages: ro.RelayedMessages})
 	}
 	return out
 }

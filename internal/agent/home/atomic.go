@@ -25,6 +25,15 @@ func WritePrivate(name string, data []byte) error {
 	return writeFile(name, data, true)
 }
 
+// ReadFile reads the file name, as os.ReadFile does. On Windows it tries
+// again for a moment while another process replaces the file, as WriteFile
+// in another pairtime process does: its rename holds the file open with
+// delete access, which makes an open fail with access denied or a sharing
+// violation (readFile).
+func ReadFile(name string) ([]byte, error) {
+	return readFile(name)
+}
+
 // SyncDir flushes dir, so a file just made in it, or renamed into it, keeps
 // its name through a power cut. It is best effort, and does nothing on
 // Windows, which journals the names in a folder (syncDir).

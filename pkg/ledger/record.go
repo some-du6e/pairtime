@@ -21,7 +21,7 @@ import (
 // (spec 4.2).
 type RType uint8
 
-// The record types that hold no event (spec 4.2). Codes 0x01 to 0x12 hold
+// The record types that hold no event (spec 4.2). Codes 0x01 to 0x13 hold
 // events, and RTypeOf gives each kind's code.
 const (
 	// RTypeCheckpoint is a scorer checkpoint: one project's serialized
@@ -33,10 +33,11 @@ const (
 )
 
 // eventRTypes is spec 4.2's table of event records: rtype 0x01 + i holds
-// events of kind eventRTypes[i]. The 18 kinds took their codes in PR1's
-// kindTable order, once. The table is frozen: a code never changes
-// meaning, even if kindTable is reordered, and a kind added later takes
-// the next free code from 0x13 up, appended here.
+// events of kind eventRTypes[i]. PR1's 18 kinds took 0x01 to 0x12 in its
+// kindTable order, once, and relay.message, the first kind added later,
+// took 0x13. The table is frozen: a code never changes meaning, even if
+// kindTable is reordered, and a kind added later takes the next free code,
+// from 0x14 up, appended here.
 var eventRTypes = [...]event.Kind{
 	event.KindSessionStart,    // 0x01
 	event.KindSessionEnd,      // 0x02
@@ -56,6 +57,7 @@ var eventRTypes = [...]event.Kind{
 	event.KindOSPower,         // 0x10
 	event.KindOTelActiveTime,  // 0x11
 	event.KindCLITrack,        // 0x12
+	event.KindRelayMessage,    // 0x13
 }
 
 // RTypeOf returns the rtype of the records that hold events of kind k, or
@@ -85,7 +87,7 @@ func (r RType) Known() bool {
 	return ok || r == RTypeCheckpoint || r == RTypeUploadFailure
 }
 
-// Later reports whether r is one of the codes from 0x13 to 0x3f that spec
+// Later reports whether r is one of the codes from 0x14 to 0x3f that spec
 // 4.2 keeps for event kinds added later and that this package doesn't
 // know. A reader that meets one reports the record's kind as unknown and
 // still checks its batch, because roots and heads never read rtype. Every
@@ -96,11 +98,11 @@ func (r RType) Later() bool {
 }
 
 // firstLaterRType is the first code spec 4.2 keeps for event kinds added
-// later.
-const firstLaterRType RType = 0x13
+// later, the one after relay.message's.
+const firstLaterRType RType = 0x14
 
 // String returns the name of what r holds, such as "os.presence" or
-// "checkpoint", or "rtype 0x13" for a code not in the table.
+// "checkpoint", or "rtype 0x14" for a code not in the table.
 func (r RType) String() string {
 	if k, ok := r.EventKind(); ok {
 		return string(k)
@@ -251,7 +253,7 @@ func (h Header) hasSession() bool { return h.Session() != [SessionDigestSize]byt
 // Check reports whether h follows spec 4.3: s is at least 1, the rtype is
 // in the table, an os.* header has the zero project, a checkpoint has a
 // project and no session, and an upload-failure note has neither. An rtype
-// from 0x13 to 0x3f that this package doesn't know, a kind added later
+// from 0x14 to 0x3f that this package doesn't know, a kind added later
 // (spec 4.2), gives an error wrapping ErrUnknownRType; every other broken
 // rule, a code version 1 never assigns included, one wrapping ErrHeader.
 func (h Header) Check() error {
@@ -330,10 +332,10 @@ type Body struct {
 	// note, the object of spec 4.7. It holds no text (DESIGN 3.6).
 	E json.RawMessage `json:"e"`
 	// F is the record's keyed scorer features, versioned by f.v (spec
-	// 10.7): on every prompt.submit, agent.tool, shell.command and
-	// cli.track record, and on no other. It is kept as stored, because a
-	// reader that meets a version newer than its own reports the features
-	// as unknown and doesn't guess; Features reads it.
+	// 10.7): on every prompt.submit, agent.tool, shell.command, cli.track
+	// and relay.message record, and on no other. It is kept as stored,
+	// because a reader that meets a version newer than its own reports the
+	// features as unknown and doesn't guess; Features reads it.
 	F json.RawMessage `json:"f,omitempty"`
 	// C is the record's content commitment (spec 10.2), on every
 	// prompt.submit, final agent.output and cli.track apart from the ones
@@ -576,15 +578,18 @@ func (b Body) Event() (event.Event, error) {
 //     the command line the tool ran.
 //   - shell.command: Command, the command line as run.
 //   - cli.track: Text, the label after pkg/redact (DESIGN 5.4), and Class.
+//   - relay.message: Class, of the app's own text (SM 2.2 rule 9). It
+//     commits nothing, and its f holds only v and Class (spec 10.7).
 //
 // Every other kind takes none. Text must be valid UTF-8 (spec 10.1).
 //
 // NoText marks a record whose text the device never had (spec 10.1): a
 // prompt.submit from the WakaTime bridge, whose via is bridge or
-// bridge_unverified, or a prompt.submit or final agent.output from a
-// plugin, via plugin, whose event came without it. Such a record commits
-// nothing, and a prompt's f holds only v and Class. Every other record of
-// those kinds commits its text, even an empty one.
+// bridge_unverified; a prompt.submit or final agent.output from a plugin,
+// via plugin, whose event came without it; or a prompt.submit marked
+// guest, whose text the agent drops (DESIGN 5.1), which always has it.
+// Such a record commits nothing, and a prompt's f holds only v and Class.
+// Every other record of those kinds commits its text, even an empty one.
 type Content struct {
 	Text    []byte
 	NoText  bool
@@ -594,10 +599,14 @@ type Content struct {
 }
 
 // mayLackText reports whether ev is a record that may reach the device
-// without its text, and so without "c" (spec 10.1).
+// without its text, and so without "c" (spec 10.1). A guest's prompt
+// always does: the agent drops a guest's words.
 func mayLackText(ev event.Event) bool {
 	switch ev.Kind() {
 	case event.KindPromptSubmit:
+		if p, ok := ev.Data.(*event.PromptSubmit); ok && p.Guest {
+			return true
+		}
 		return ev.Via == event.ViaBridge || ev.Via == event.ViaBridgeUnverified || ev.Via == event.ViaPlugin
 	case event.KindAgentOutput:
 		return ev.Via == event.ViaPlugin
@@ -616,9 +625,10 @@ func mayLackText(ev event.Event) bool {
 // EventRecord refuses an event that fails Validate, an os.* event with a
 // project_key, which pkg/event doesn't refuse yet (spec 4.3, decision 6),
 // content ev's kind doesn't take, text that isn't valid UTF-8, a prompt
-// with no class, an empty text for a prompt whose len_chars, or a final
-// message whose words or code_lines, say it isn't empty, and NoText on a
-// record spec 10.1 doesn't let lack its text, or with text.
+// or an app message with no class, an empty text for a prompt whose
+// len_chars, or a final message whose words or code_lines, say it isn't
+// empty, NoText on a record spec 10.1 doesn't let lack its text, or with
+// text, and a guest's prompt without NoText, which never commits a text.
 func EventRecord(k *Keys, ev event.Event, c Content) (Record, error) {
 	kind := ev.Kind()
 	rtype, ok := RTypeOf(kind)
@@ -675,7 +685,7 @@ func (k *Keys) content(ev event.Event, c Content) (json.RawMessage, *Commitment,
 		case len(c.Text) > 0:
 			return nil, nil, errors.New("content marked NoText has text")
 		case !mayLackText(ev):
-			return nil, nil, fmt.Errorf("a %s record from via %s has its text; only bridge and plugin prompts and plugin agent messages may lack it", kind, ev.Via)
+			return nil, nil, fmt.Errorf("a %s record from via %s has its text; only bridge, plugin and guest prompts and plugin agent messages may lack it", kind, ev.Via)
 		}
 	}
 	fk := k.Features()
@@ -685,6 +695,11 @@ func (k *Keys) content(ev event.Event, c Content) (json.RawMessage, *Commitment,
 	case *event.PromptSubmit:
 		if err := takes(true, true, false, false); err != nil {
 			return nil, nil, err
+		}
+		if p.Guest && !c.NoText {
+			// A guest's words never stay on the device (SM 1.2), so the
+			// record commits none (spec 10.1).
+			return nil, nil, errors.New("a prompt.submit marked guest commits no text; its content is NoText")
 		}
 		if c.NoText {
 			var err error
@@ -750,6 +765,17 @@ func (k *Keys) content(ev event.Event, c Content) (json.RawMessage, *Commitment,
 			return nil, nil, err
 		}
 		f = fk.Shell(c.Command)
+	case *event.RelayMessage:
+		// The reader measures and classes the app's text and drops it, so
+		// the record commits nothing and its f is v and the class (spec
+		// 10.7).
+		if err := takes(false, true, false, false); err != nil {
+			return nil, nil, err
+		}
+		var err error
+		if f, err = features.Relay(c.Class); err != nil {
+			return nil, nil, err
+		}
 	default:
 		return nil, nil, takes(false, false, false, false)
 	}

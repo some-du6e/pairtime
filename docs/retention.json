@@ -66,9 +66,15 @@
     {
       "id": "device.uploads",
       "where": "device",
-      "data": "A record of each upload the server answered: when, to which server, how many batch roots, minute buckets and commit records it carried and whether it carried the labels, the codes in the server's answer, and a hash of what was sent, never what was sent itself",
+      "data": "A record of each upload the server answered: when, to which server, how many batch roots, minute buckets and commit records it carried and whether it carried the labels, the codes in the server's answer, and a hash of what was sent, never what was sent itself. The same for each request that turned a project's name on or off on your dashboard, answered or not: how many names it carried and a hash, never the names themselves",
       "kept": "{days}",
       "days": 90
+    },
+    {
+      "id": "device.project_names",
+      "where": "device",
+      "data": "What the server last told this computer about your project names: the name your dashboard shows for each project you turned a name on for, the short code your dashboard calls each project by, when the server answered, which names you hid on your dashboard, the names pairtime sent and the projects it asked the server to stop naming since the server last answered, until an answer settles them, and a note of each name pairtime turned off because your dashboard doesn't show it, with its name and when pairtime found it",
+      "kept": "The server's last answer until its next one replaces it. A note until your dashboard shows that name again after you turned it on, the oldest notes going first when there are very many. Only the notes stay when this computer signs in to another server. All of it until you uninstall pairtime or delete everything"
     },
     {
       "id": "device.key",
@@ -203,6 +209,30 @@
       "data": "Commit records (commit IDs, times and line counts, with file paths only as keyed hashes), project fingerprints, and the pushes pairtime's GitHub App reports if you install it",
       "kept": "While your account exists",
       "tables": ["commit_records"]
+    },
+    {
+      "id": "server.project_names",
+      "where": "server",
+      "data": "The names of your projects you chose to show on your own dashboard: for each one, the label you approved on your computer, the device and project key it names, when the server got it, and when you removed that device, if you did. Only your own dashboard shows them",
+      "kept": "Until you turn the name off on your computer or hide it on your dashboard, either of which deletes it at once. After a hide, only the project key and when you hid it stay, without the name, as the record of hidden names says. A removed device's names go {days} after you remove it, unless you link it again first, and all of them go when your account is deleted",
+      "days": 90,
+      "jobs": [{
+        "table": "project_names",
+        "key": ["device_id", "project_key"],
+        "time_column": "device_removed_at_ms"
+      }]
+    },
+    {
+      "id": "server.project_name_hides",
+      "where": "server",
+      "data": "The names you hid on your dashboard, without the names themselves: for each one, the device and project key it named and when you hid it, so that computer turns the name off too and doesn't send it again",
+      "kept": "Until that computer turns the name off too, and {days} after you hid it at most. All of them go when your account is deleted",
+      "days": 30,
+      "jobs": [{
+        "table": "project_name_hides",
+        "key": ["device_id", "project_key"],
+        "time_column": "hidden_at_ms"
+      }]
     },
     {
       "id": "server.program_links",

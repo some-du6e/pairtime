@@ -1,10 +1,11 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script lang="ts">
-	import type { Day } from '../api.ts';
+	import type { Day, ProjectEntry, Projects } from '../api.ts';
 	import Hands from '../components/Hands.svelte';
+	import NameSwitch from '../components/NameSwitch.svelte';
 	import Rows from '../components/Rows.svelte';
 	import { unreadDays } from '../copy.ts';
-	import { clockLine, otherRows, projects, scaleOf } from '../model.ts';
+	import { clockLine, entryTitle, otherRows, projects, projectTitle, scaleOf } from '../model.ts';
 	import { href, type Range } from '../route.ts';
 	import * as text from '../text.ts';
 
@@ -12,7 +13,10 @@
 	// the last 30 days, your time by kind, and the rest of the time by
 	// reason, in en.json's words, as `pairtime today` lists them for a day.
 	// While calibrating only the agents' time and SM 4.2's loops show
-	// (DESIGN 6.7; D-shadow-scope).
+	// (DESIGN 6.7; D-shadow-scope). Each project has the switch that shows
+	// its name on the owner's own pairtime dashboard, from GET /v1/projects
+	// (D-owner-names), as do the projects on this computer the span holds
+	// no time of, listed after the rest, as `pairtime projects` lists them.
 	interface Props {
 		/** The span's days that came back, in date order. */
 		days: Day[];
@@ -22,10 +26,29 @@
 		/** The span's first and last dates. */
 		from: string;
 		to: string;
+		/** GET /v1/projects, or undefined until it comes back, when no switch shows. */
+		names?: Projects | undefined;
+		/** The projects whose switch's change is on its way to the agent, by key. */
+		busy?: ReadonlySet<string>;
+		/** Why the agent didn't take a switch's last change, by key. */
+		refused?: ReadonlyMap<string, string>;
+		/** Asks the agent to turn a project's name on or off. */
+		onname?: (entry: ProjectEntry, online: boolean) => void;
 	}
 
-	let { days, unread = [], range, from, to }: Props = $props();
+	let {
+		days,
+		unread = [],
+		range,
+		from,
+		to,
+		names,
+		busy = new Set<string>(),
+		refused = new Map<string, string>(),
+		onname = () => {},
+	}: Props = $props();
 	const uid = $props.id();
+	const entries = $derived(new Map((names?.projects ?? []).map((e): [string, ProjectEntry] => [e.project, e])));
 
 	const calibrating = $derived(days.some((d) => d.shadow));
 	const list = $derived(
@@ -36,6 +59,8 @@
 		})),
 	);
 	const scale = $derived(scaleOf(list.map((p) => p.v)));
+	// The projects on this computer the span holds no time of.
+	const others = $derived((names?.projects ?? []).filter((e) => !list.some((p) => p.v.key === e.project)));
 	const spans: { range: Range; label: string }[] = [
 		{ range: 'week', label: 'This week' },
 		{ range: 'month', label: 'Last 30 days' },
@@ -62,10 +87,14 @@
 {/if}
 
 {#each list as { v, kinds, rest }, i (v.key)}
+	{@const entry = entries.get(v.key)}
 	<section class="pt-card project" aria-labelledby="{uid}-{i}" data-testid="project">
-		<h2 id="{uid}-{i}">{v.title}</h2>
+		<h2 id="{uid}-{i}">{projectTitle(v, entry)}</h2>
 		<p class="line" data-testid="clock-line">{clockLine(v)}</p>
 		<Hands view={v} {scale} />
+		{#if entry && names}
+			<NameSwitch {entry} online={names.online} busy={busy.has(entry.project)} problem={refused.get(entry.project) ?? ''} onchange={onname} />
+		{/if}
 		{#if kinds.length > 0}
 			<h3>What your time went on</h3>
 			<Rows rows={kinds} testid="kinds" />
@@ -82,6 +111,20 @@
 	</p>
 {/each}
 
+{#if names && others.length > 0}
+	<section class="pt-card others" aria-labelledby="{uid}-others" data-testid="other-projects">
+		<h2 id="{uid}-others">Other projects on this computer</h2>
+		<ul>
+			{#each others as entry (entry.project)}
+				<li data-testid="other-project">
+					<h3>{entryTitle(entry)}</h3>
+					<NameSwitch {entry} online={names.online} busy={busy.has(entry.project)} problem={refused.get(entry.project) ?? ''} onchange={onname} />
+				</li>
+			{/each}
+		</ul>
+	</section>
+{/if}
+
 <style>
 	.spans {
 		display: flex;
@@ -97,8 +140,29 @@
 	}
 
 	.note,
-	.project {
+	.project,
+	.others {
 		max-width: none;
+	}
+
+	.others ul {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.others li {
+		padding: 0.75rem 0;
+		border-top: 1px solid var(--pt-track);
+	}
+
+	.others li:first-child {
+		border-top: 0;
+	}
+
+	.others h3 {
+		margin: 0;
+		overflow-wrap: anywhere;
 	}
 
 	.note p:last-child {

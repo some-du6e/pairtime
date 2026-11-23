@@ -12,7 +12,7 @@
 // rules as en.json: nothing scolds, sets a target or counts a streak (PA
 // 4.3, 4.4).
 
-import type { Focus, Level } from './api.ts';
+import type { Focus, Level, NameState } from './api.ts';
 import * as text from './text.ts';
 
 /** What pairtime counts, for the explainer on Today. */
@@ -94,6 +94,65 @@ export function unreadSession(): string {
 }
 
 /**
+ * Who sees a project's name the owner shows on their dashboard, beside each
+ * switch (D-owner-names): them alone, and nothing else about the project
+ * goes with it.
+ */
+export const nameWho =
+	"Only you see it, on your own pairtime dashboard while you're signed in. Nothing else about the project leaves this computer.";
+
+/**
+ * Where a project's name stands on the owner's dashboard, by its state in
+ * GET /v1/projects. code is the project's short code, as the server gave
+ * it, "" while it gave none, online says the names turned on go to the
+ * server now, and why says, for a hidden name, why the dashboard doesn't
+ * show it when the owner didn't hide it there.
+ */
+export function nameWords(state: NameState, code: string, online: boolean, why?: string): string {
+	const called = code !== '' ? `Project ${code}` : 'by its code';
+	switch (state) {
+		case 'on':
+			return 'Your dashboard shows it.';
+		case 'sending':
+			return online
+				? "It goes to your dashboard with pairtime's next upload."
+				: 'It goes to your dashboard once this computer is linked and online.';
+		case 'removing':
+			return online
+				? `Your dashboard shows it until pairtime's next upload, then calls the project ${called}.`
+				: `Your dashboard shows it until this computer is online again, then calls the project ${called}.`;
+		case 'hidden':
+			switch (why) {
+				case 'dropped':
+					return 'The server no longer has it, as after this computer was signed out a long time or its data was restored, so pairtime turned it off here too. Turn it on to show it again.';
+				case 'signed_in':
+					return "This computer signed in to a server that never showed it, so pairtime turned it off here. Turn it on to show it on this server's dashboard.";
+				case 'unreadable':
+					return "pairtime couldn't read which sign-in this computer's names were for, so it turned this one off here. Turn it on to show it again.";
+			}
+			return "You hid it on your dashboard, so it's off here too. Turn it on to show it again.";
+		default:
+			return code !== ''
+				? `Your dashboard calls the project ${called}.`
+				: 'Your dashboard gives the project a code once its first minutes reach the server, and pairtime shows the code here within a day, or when the agent next starts.';
+	}
+}
+
+/**
+ * What a project with no name on this computer says in place of its
+ * switch. arg is what `pairtime projects show-name` takes for it: its
+ * code, or its key while it has none (model.ts's projectArg).
+ */
+export function noNameWords(arg: string): string {
+	return `This project has no name on this computer. To show one on your dashboard, run pairtime projects show-name ${arg} with the name.`;
+}
+
+/** What a switch says when the agent didn't take its change, with the agent's words. */
+export function nameRefused(detail: string): string {
+	return `pairtime couldn't change this: ${detail}`;
+}
+
+/**
  * Every sentence copy.ts can say, each once, with sample dates where a
  * sentence names some: copy.test.ts holds them all to en.json's rules.
  */
@@ -116,6 +175,19 @@ export function allSentences(): string[] {
 			unreadDays(['2026-11-17', '2026-11-18']),
 			unreadDays(['2026-11-16', '2026-11-17', '2026-11-18']),
 			unreadSession(),
+			nameWho,
+			...(['off', 'on', 'sending', 'removing', 'hidden'] as const).flatMap((state) => [
+				nameWords(state, '7c41e9', true),
+				nameWords(state, '7c41e9', false),
+				nameWords(state, '', true),
+				nameWords(state, '', false),
+			]),
+			nameWords('hidden', '7c41e9', true, 'dropped'),
+			nameWords('hidden', '7c41e9', true, 'signed_in'),
+			nameWords('hidden', '7c41e9', true, 'unreadable'),
+			noNameWords('d2a8f6'),
+			noNameWords('dd2a8f61c94e07b35a8c1f6e29d4b7a03'),
+			nameRefused('config.toml has an error'),
 		]),
 	];
 }

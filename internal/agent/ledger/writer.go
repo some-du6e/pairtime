@@ -255,7 +255,8 @@ type Input struct {
 	// pkg/redact (DESIGN 5.4). It is what the vault keeps. It is nil, not
 	// empty, for a bridge prompt and for a plugin's prompt or final
 	// message that came without its text, whose records commit nothing
-	// (ledger-v1 10.1). It must be valid UTF-8.
+	// (ledger-v1 10.1). A prompt marked guest commits nothing either:
+	// Write drops whatever text comes with it. It must be valid UTF-8.
 	Text []byte
 	// Edits are an agent.tool's edit hunks, in the order the patch lists
 	// them.
@@ -681,6 +682,11 @@ func (w *Writer) prepare(in Input) (event.Event, ledger.Content) {
 		// A copy, so the caller's event isn't changed.
 		cp := *p
 		switch {
+		case cp.Guest:
+			// A guest's words never stay on the device (SM 1.2, DESIGN 5.1):
+			// whatever text came with the prompt, its record commits none
+			// and its event keeps none (ledger-v1 10.1).
+			c.Text, c.NoText, cp.SealedText = nil, true, nil
 		case in.Text != nil:
 			text := string(in.Text)
 			cp.LowEffort = score.LowEffort(text)

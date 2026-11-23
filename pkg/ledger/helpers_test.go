@@ -166,6 +166,10 @@ func sampleEvent(k event.Kind) (event.Event, error) {
 		env.Source, env.Via = event.SourceCLI, event.ViaTrack
 		p = &event.CLITrack{Label: "fix the login redirect loop", TextLen: 27,
 			EnvHints: []event.EnvHint{"CLAUDECODE", "CLAUDE_CODE_SESSION_ID"}, LogMatch: event.LogMatched}
+	case event.KindRelayMessage:
+		env.Source, env.Via = event.SourceLog, event.ViaApp
+		p = &event.RelayMessage{App: event.RelayAppT3Code, Client: event.RelayClientWeb, SentAt: testT - 3000, ThreadKey: "r_6454f1",
+			Declared: event.RelayDeclaredNone, LenChars: 90, Prompt: "0193f6a1-4d5e-7f60-9a11-223344556677"}
 	default:
 		return event.Event{}, fmt.Errorf("no sample event for kind %q; add one", k)
 	}
@@ -190,6 +194,9 @@ func sampleContent(k event.Kind) Content {
 		return Content{Command: "pytest -k test_login"}
 	case event.KindCLITrack:
 		return Content{Text: []byte("fix the login redirect loop"), Class: features.Substantive}
+	case event.KindRelayMessage:
+		// The class of the app's own text; the record commits none of it.
+		return Content{Class: features.Substantive}
 	}
 	return Content{}
 }

@@ -50,10 +50,12 @@ Exit status:
 // wipeKeeps are the entries of the data directory that "delete everything"
 // leaves, because they are pairtime itself and its settings, not what it
 // recorded: config.toml, which is in the data directory on macOS and under
-// PAIRTIME_HOME; install's record of what it put in, which uninstall reads,
-// and its lock (internal/install); the binaries on Windows; the locks of
-// the agent and of pairtime login, and the agent's socket.
-var wipeKeeps = []string{"account", "agent.lock", "agent.sock", "bin", "config.toml", "install", "install.lock"}
+// PAIRTIME_HOME, and config.lock, which every edit of it locks
+// (internal/agent/config); install's record of what it put in, which
+// uninstall reads, and its lock (internal/install); the binaries on
+// Windows; the locks of the agent and of pairtime login, and the agent's
+// socket.
+var wipeKeeps = []string{"account", "agent.lock", "agent.sock", "bin", "config.lock", "config.toml", "install", "install.lock"}
 
 // runPrivacyDelete is `pairtime privacy delete`, DESIGN 8.8's "delete
 // everything" (docs/PLAN.md, WP-LG6): it wipes what pairtime recorded in
