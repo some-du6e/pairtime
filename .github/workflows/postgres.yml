@@ -6,8 +6,8 @@
 # well, so SQL that only SQLite accepts fails here. It runs nightly and on
 # PRs that touch the SQL: the store, the migrations, the writer, the
 # accounts, sign-in, device and ingest packages, the rollups, the witness
-# labels, and the retention jobs, including docs/retention.json, whose
-# bindings the jobs build their DELETEs from.
+# labels, the server key's history, and the retention jobs, including
+# docs/retention.json, whose bindings the jobs build their DELETEs from.
 #
 #   gh workflow run postgres.yml --ref <branch>
 name: postgres
@@ -26,6 +26,7 @@ on:
       - internal/server/rollup/**
       - internal/server/projectnames/**
       - internal/server/witness/**
+      - internal/server/keys/**
       - docs/retention.json
       - docs/embed.go
       - .github/workflows/postgres.yml

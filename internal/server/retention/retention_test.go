@@ -98,6 +98,20 @@ func TestLoad(t *testing.T) {
 		{name: "a kept_by table the schedule places loads", old: `"time_column": "seen_at_ms"}`, new: `"time_column": "seen_at_ms", "kept_by": [{"table": "schema_migrations"}]}`},
 		{name: "a kept_by table that awaits its work package needn't be in the schedule yet", old: `"time_column": "seen_at_ms"}`, new: `"time_column": "seen_at_ms", "kept_by": [{"table": "uploads", "awaits": "WP-SV4"}]}`},
 		{name: "a kept_by table in use must be in the schedule, so a misspelt one can't go unnoticed", old: `"time_column": "seen_at_ms"}`, new: `"time_column": "seen_at_ms", "kept_by": [{"table": "uploads"}]}`, wantErr: "kept_by table uploads isn't in the schedule"},
+		{name: "a job by its kept_by tables, matched by day, loads", old: `"time_column": "seen_at_ms"}]`,
+			new: `"time_column": "seen_at_ms"}, {"table": "origin_days", "key": ["day"], "period": "kept", "kept_by": [{"table": "request_origins", "day_of": "seen_at_ms"}]}]`},
+		{name: "a job by its kept_by tables has no time column", old: `"time_column": "seen_at_ms"}]`,
+			new: `"time_column": "seen_at_ms"}, {"table": "origin_days", "key": ["day"], "time_column": "day", "period": "kept", "kept_by": [{"table": "request_origins", "day_of": "seen_at_ms"}]}]`, wantErr: "has no time_column"},
+		{name: "a job by its kept_by tables needs one, or it would delete every row", old: `"time_column": "seen_at_ms"}]`,
+			new: `"time_column": "seen_at_ms"}, {"table": "origin_days", "key": ["day"], "period": "kept"}]`, wantErr: "or it would delete every row"},
+		{name: "a job by its kept_by tables can't run while a guard awaits its table", old: `"time_column": "seen_at_ms"}]`,
+			new: `"time_column": "seen_at_ms"}, {"table": "origin_days", "key": ["day"], "period": "kept", "kept_by": [{"table": "uploads", "day_of": "seen_at_ms", "awaits": "WP-SV4"}]}]`, wantErr: "would delete every row without it"},
+		{name: "a job by its kept_by tables has no hold", old: `"time_column": "seen_at_ms"}]`,
+			new: `"time_column": "seen_at_ms"}, {"table": "origin_days", "key": ["day"], "period": "kept", "hold": {"table": "holds", "decided_column": "decided_at_ms", "awaits": "WP-SB4"}, "kept_by": [{"table": "request_origins", "day_of": "seen_at_ms"}]}]`, wantErr: "has no hold"},
+		{name: "a guard matched by day needs a one-column key, the day's number", old: `"time_column": "seen_at_ms"}]`,
+			new: `"time_column": "seen_at_ms"}, {"table": "origin_days", "key": ["day", "region"], "period": "kept", "kept_by": [{"table": "request_origins", "day_of": "seen_at_ms"}]}]`, wantErr: "the job's key must be one column"},
+		{name: "a day_of column can't carry SQL", old: `"time_column": "seen_at_ms"}]`,
+			new: `"time_column": "seen_at_ms"}, {"table": "origin_days", "key": ["day"], "period": "kept", "kept_by": [{"table": "request_origins", "day_of": "seen_at_ms) OR (1"}]}]`, wantErr: "day_of \"seen_at_ms) OR (1\" isn't a lowercase SQL name"},
 		{name: "kept_by can't name the job's own table", old: `"time_column": "seen_at_ms"}`, new: `"time_column": "seen_at_ms", "kept_by": [{"table": "request_origins"}]}`, wantErr: "kept_by names the job's own table"},
 		{name: "kept_by names a table once", old: `"time_column": "seen_at_ms"}`, new: `"time_column": "seen_at_ms", "kept_by": [{"table": "uploads", "awaits": "WP-SV4"}, {"table": "uploads", "awaits": "WP-SV4"}]}`, wantErr: "kept_by names uploads twice"},
 		{name: "a kept_by table name can't carry SQL", old: `"time_column": "seen_at_ms"}`, new: `"time_column": "seen_at_ms", "kept_by": [{"table": "uploads u; DROP TABLE devices", "awaits": "WP-SV4"}]}`, wantErr: "isn't a lowercase SQL name"},
@@ -327,7 +341,7 @@ func TestJobs(t *testing.T) {
 				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions",
 				"server.minute_buckets/rollup_minutes",
-				"server.witness/witness_rows", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
+				"server.witness/witness_rows", "server.witness/day_leaves+kept", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
 			},
 			wantOff: []string{
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
@@ -348,7 +362,7 @@ func TestJobs(t *testing.T) {
 				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions", "server.minute_buckets/submission_minutes",
 				"server.minute_buckets/rollup_minutes",
-				"server.witness/witness_rows", "server.witness/submission_batches", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
+				"server.witness/witness_rows", "server.witness/day_leaves+kept", "server.witness/submission_batches", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
 			},
 			wantOff: []string{
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
@@ -374,7 +388,7 @@ func TestJobs(t *testing.T) {
 				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/minute_bucket_revisions+hold", "server.minute_buckets/submission_minutes",
 				"server.minute_buckets/rollup_minutes",
-				"server.witness/witness_rows+hold", "server.witness/submission_batches", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
+				"server.witness/witness_rows+hold", "server.witness/day_leaves+kept", "server.witness/submission_batches", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
 			},
 		},
 		{
@@ -400,7 +414,7 @@ func TestJobs(t *testing.T) {
 				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets+hold", "server.minute_buckets/minute_bucket_revisions+hold", "server.minute_buckets/submission_minutes",
 				"server.minute_buckets/rollup_minutes",
-				"server.witness/witness_rows+hold", "server.witness/submission_batches", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
+				"server.witness/witness_rows+hold", "server.witness/day_leaves+kept", "server.witness/submission_batches", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
 			},
 			wantOff: []string{"evidence.revealed/evidence_index awaits WP-SV18"},
 		},
@@ -417,7 +431,7 @@ func TestJobs(t *testing.T) {
 				"server.devices/devices+kept", "server.devices/device_labels", "server.ip_ja4/request_origins",
 				"server.minute_buckets/minute_buckets", "server.minute_buckets/minute_bucket_revisions",
 				"server.minute_buckets/rollup_minutes",
-				"server.witness/witness_rows", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
+				"server.witness/witness_rows", "server.witness/day_leaves+kept", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides",
 			},
 			wantOff: []string{
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
@@ -441,12 +455,16 @@ func TestJobs(t *testing.T) {
 				if j.Hold != nil {
 					id += "+hold"
 				}
-				if len(j.KeptBy) > 0 {
+				if len(j.KeptBy) > 0 || len(j.KeptByDay) > 0 {
 					id += "+kept"
 				}
 				got = append(got, id)
 				e, _ := p.Find(j.Entry)
 				switch {
+				case j.Kept:
+					if j.MaxAge != 0 || j.WindowMonths != 0 {
+						t.Errorf("%s keeps its rows by its kept_by tables alone, but has MaxAge %v and %d months", j.ID, j.MaxAge, j.WindowMonths)
+					}
 				case j.WindowMonths > 0:
 					if j.WindowMonths != p.SpotCheckWindow.Months || j.MaxAge != 0 {
 						t.Errorf("%s runs by %d months and MaxAge %v, want the spot-check window's %d months alone", j.ID, j.WindowMonths, j.MaxAge, p.SpotCheckWindow.Months)
@@ -505,6 +523,14 @@ func TestDeleteSQL(t *testing.T) {
 				" AND NOT EXISTS (SELECT 1 FROM witness_rows k0 WHERE k0.device_id = t.device_id)" +
 				" AND NOT EXISTS (SELECT 1 FROM commit_records k1 WHERE k1.device_id = t.device_id) LIMIT $2)",
 			wantArgs: []any{now.Add(-90 * day).UnixMilli(), 500},
+		},
+		{
+			name: "a job with no period of its own deletes the rows its day-matched kept_by table has no row for, by a range of that table's time column",
+			job: Job{ID: "server.witness/day_leaves", Table: "day_leaves", Key: []string{"day"}, Kept: true,
+				KeptByDay: []DayKeep{{Table: "witness_rows", Column: "received_at_ms"}}},
+			wantSQL: "DELETE FROM day_leaves WHERE day IN (SELECT t.day FROM day_leaves t WHERE" +
+				" NOT EXISTS (SELECT 1 FROM witness_rows d0 WHERE d0.received_at_ms >= t.day * 86400000 AND d0.received_at_ms < t.day * 86400000 + 86400000) LIMIT $1)",
+			wantArgs: []any{500},
 		},
 		{
 			name:     "a job by the window deletes rows whose decision's window has closed",
@@ -829,6 +855,110 @@ func TestSweep(t *testing.T) {
 	}
 }
 
+// TestDayLeaves runs server.witness's day_leaves job against the migrated
+// schema, on SQLite and, in postgres.yml, Postgres: a published day's leaf
+// hashes stay while any witness row of that UTC day remains, whatever its
+// age, and go at the first sweep after the last one has gone, with no
+// period of their own (#249).
+func TestDayLeaves(t *testing.T) {
+	p, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	on, _ := p.Jobs()
+	var leaves Job
+	for _, j := range on {
+		if j.ID == "server.witness/day_leaves" {
+			leaves = j
+		}
+	}
+	if !leaves.Kept || len(leaves.KeptByDay) != 1 || leaves.KeptByDay[0] != (DayKeep{Table: "witness_rows", Column: "received_at_ms"}) {
+		t.Fatalf("server.witness/day_leaves is %+v, want a job kept by the witness rows of its day", leaves)
+	}
+	const d = 20776 // 2026-11-19
+	start := int64(d) * 86_400_000
+	sweepAt := utc(2027, 7, 1, 12, 0)
+	tests := []struct {
+		name string
+		// rows are when the witness rows left were received; old ones are
+		// 180 days old or more, so the witness rows' own job deletes them.
+		rows, old []int64
+		// days have leaves stored, and want are those that stay.
+		days, want []int64
+		// all runs every job that is on, in the schedule's order, not just
+		// day_leaves'.
+		all bool
+	}{
+		{name: "a day's leaves stay while one witness row of the day remains, however old it is", rows: []int64{start + 3_600_000}, days: []int64{d}, want: []int64{d}},
+		{name: "a day's leaves go once no witness row of the day remains", days: []int64{d}},
+		{name: "of two days, only the one with no witness row left loses its leaves", rows: []int64{start + 86_400_000 + 5}, days: []int64{d, d + 1}, want: []int64{d + 1}},
+		{name: "a row in a day's last millisecond keeps that day's leaves", rows: []int64{start + 86_399_999}, days: []int64{d, d + 1}, want: []int64{d}},
+		{name: "a row in a day's first millisecond keeps that day's leaves and not the day before's", rows: []int64{start + 86_400_000}, days: []int64{d, d + 1}, want: []int64{d + 1}},
+		{name: "the sweep that deletes a day's last witness row deletes its leaves too", old: []int64{sweepAt.Add(-181 * day).UnixMilli()}, days: []int64{sweepAt.Add(-181*day).UnixMilli() / 86_400_000}, all: true},
+	}
+	for _, engine := range storetest.Engines() {
+		for _, tt := range tests {
+			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) {
+				ctx := context.Background()
+				db := storetest.Open(t, engine)
+				ms, err := migrations.Embedded()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := migrations.Apply(ctx, db, ms, time.Now); err != nil {
+					t.Fatal(err)
+				}
+				hash := strings.Repeat("ab", 32)
+				for i, at := range append(slices.Clone(tt.rows), tt.old...) {
+					if _, err := db.Write.ExecContext(ctx, `INSERT INTO witness_rows (device_id, b, account_id, n, root, head, prev, received_at_ms, receipt_sig, receipt_key_id) VALUES ($1, $2, 'u1', 1, $3, $3, $3, $4, $5, $6)`,
+						"d1", i+1, hash, at, strings.Repeat("01", 64), "0123456789abcdef"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for _, day := range tt.days {
+					if _, err := db.Write.ExecContext(ctx, `INSERT INTO day_leaves (day, leaves) VALUES ($1, $2)`, day, make([]byte, 32)); err != nil {
+						t.Fatal(err)
+					}
+				}
+				jobs := []Job{leaves}
+				if tt.all {
+					jobs = on
+				}
+				w := writer.Start(db.Write, writer.Options{})
+				for _, r := range Sweep(ctx, w, jobs, sweepAt, 2) {
+					if r.Err != nil {
+						t.Errorf("%s: %v", r.ID, r.Err)
+					}
+				}
+				w.Close()
+				rows, err := db.Read.QueryContext(ctx, `SELECT day FROM day_leaves ORDER BY day`)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer rows.Close()
+				got := []int64{}
+				for rows.Next() {
+					var day int64
+					if err := rows.Scan(&day); err != nil {
+						t.Fatal(err)
+					}
+					got = append(got, day)
+				}
+				if err := rows.Err(); err != nil {
+					t.Fatal(err)
+				}
+				want := tt.want
+				if want == nil {
+					want = []int64{}
+				}
+				if !slices.Equal(got, want) {
+					t.Errorf("the days with leaves left are %v, want %v", got, want)
+				}
+			})
+		}
+	}
+}
+
 // createTables creates each job's table, each hold table and each kept_by
 // table, with just the columns the bindings name. A column that some binding uses as a time, a
 // job's time column or a hold's decided column, is BIGINT, and any other
@@ -839,9 +969,17 @@ func createTables(t *testing.T, db *store.DB, jobs []Job) {
 	t.Helper()
 	times := make(map[string]bool)
 	for _, j := range jobs {
-		times[j.TimeColumn] = true
+		if j.TimeColumn != "" {
+			times[j.TimeColumn] = true
+		}
 		if j.Hold != nil {
 			times[j.Hold.DecidedColumn] = true
+		}
+		for _, g := range j.KeptByDay {
+			// The day's number, and the time that falls on it, are
+			// numbers on both engines.
+			times[j.Key[0]] = true
+			times[g.Column] = true
 		}
 	}
 	type table struct {
@@ -867,12 +1005,19 @@ func createTables(t *testing.T, db *store.DB, jobs []Job) {
 		}
 	}
 	for _, j := range jobs {
-		add(j.Table, append(slices.Clone(j.Key), j.TimeColumn), j.Key)
+		cols := slices.Clone(j.Key)
+		if j.TimeColumn != "" {
+			cols = append(cols, j.TimeColumn)
+		}
+		add(j.Table, cols, j.Key)
 		if h := j.Hold; h != nil {
 			add(h.Table, append(slices.Clone(j.Key), h.DecidedColumn), nil)
 		}
 		for _, k := range j.KeptBy {
 			add(k, slices.Clone(j.Key), nil)
+		}
+		for _, g := range j.KeptByDay {
+			add(g.Table, []string{g.Column}, nil)
 		}
 	}
 	for _, tb := range tables {
@@ -915,7 +1060,7 @@ func keyValues(j Job, i int, at any) ([]string, []any) {
 // rowValues returns every column of row i of j's table and their values.
 func rowValues(j Job, i int, at any) ([]string, []any) {
 	cols, vals := keyValues(j, i, at)
-	if !slices.Contains(j.Key, j.TimeColumn) {
+	if j.TimeColumn != "" && !slices.Contains(j.Key, j.TimeColumn) {
 		cols = append(cols, j.TimeColumn)
 		vals = append(vals, at)
 	}
@@ -1089,7 +1234,11 @@ func TestTables(t *testing.T) {
 			check: func(t *testing.T) {
 				for _, e := range p.Entries {
 					for _, j := range e.Jobs {
-						bound(t, e.ID, j.Table, j.Awaits, append(slices.Clone(j.Key), j.TimeColumn))
+						cols := slices.Clone(j.Key)
+						if j.TimeColumn != "" {
+							cols = append(cols, j.TimeColumn)
+						}
+						bound(t, e.ID, j.Table, j.Awaits, cols)
 					}
 				}
 			},
@@ -1107,12 +1256,16 @@ func TestTables(t *testing.T) {
 			},
 		},
 		{
-			name: "a kept_by guard is used only once its table exists, with the job's key columns",
+			name: "a kept_by guard is used only once its table exists, with the job's key columns, or the time column it matches by day",
 			check: func(t *testing.T) {
 				for _, e := range p.Entries {
 					for _, j := range e.Jobs {
 						for _, k := range j.KeptBy {
-							bound(t, e.ID+" kept_by", k.Table, k.Awaits, j.Key)
+							cols := j.Key
+							if k.DayOf != "" {
+								cols = []string{k.DayOf}
+							}
+							bound(t, e.ID+" kept_by", k.Table, k.Awaits, cols)
 						}
 					}
 				}

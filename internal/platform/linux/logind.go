@@ -68,6 +68,10 @@ type logind struct {
 	// report is told the lock state whenever it changes: Status.Lock, and
 	// LockedHint while that is known.
 	report func(lock Signal, locked bool)
+	// sessionID is XDG_SESSION_ID in the agent's environment: the id of
+	// the session the agent was started in, which it follows while it
+	// belongs to none (findSession).
+	sessionID string
 
 	// owner is logind's unique bus name: only its signals count. Anyone
 	// on the bus can send a signal addressed to this connection, but the
@@ -79,10 +83,10 @@ type logind struct {
 // lock state and takes the first delay lock. It fails only when logind
 // can't be reached; without a session it still reports suspend and
 // resume, and tells report why lock state is unknown.
-func openLogind(ctx context.Context, conn *dbus.Conn, readyTimeout time.Duration, log *slog.Logger, report func(Signal, bool)) (*logind, error) {
+func openLogind(ctx context.Context, conn *dbus.Conn, readyTimeout time.Duration, log *slog.Logger, report func(Signal, bool), sessionID string) (*logind, error) {
 	ctx, cancel := context.WithTimeout(ctx, callWait)
 	defer cancel()
-	l := &logind{conn: conn, log: log, report: report, sigs: make(chan *dbus.Signal, 16)}
+	l := &logind{conn: conn, log: log, report: report, sessionID: sessionID, sigs: make(chan *dbus.Signal, 16)}
 	if err := conn.BusObject().CallWithContext(ctx, busName+".GetNameOwner", 0, logindName).Store(&l.owner); err != nil {
 		return nil, errors.New("logind isn't on the system bus")
 	}
@@ -210,16 +214,28 @@ func (l *logind) refollow(now time.Time, ended bool) []Power {
 
 // findSession returns the object path of the session whose lock state
 // counts: the agent's own logind session, unless it is closing because its
-// user logged out. An agent started by systemd's user manager belongs to
-// no session, and one left in a closing session follows no screen any
-// more; for those, the user's display session, the graphical one, is the
-// one whose lock and idle state matter.
+// user logged out. An agent in a systemd unit of its own belongs to no
+// session, and one left in a closing session follows no screen any more.
+// Such an agent follows the session its environment names, XDG_SESSION_ID
+// (sessionID), while that one lasts and isn't closing: a hook that starts the agent over
+// SSH puts it in a scope of its own (cmd/pairtime, startInUnit), and the
+// SSH session it came from never locks, where the desktop's may. One
+// systemd's user manager started names none. For the rest, the user's
+// display session, the graphical one, is the one whose lock and idle state
+// matter.
 func (l *logind) findSession(ctx context.Context) (dbus.ObjectPath, error) {
 	mgr := l.conn.Object(logindName, logindPath)
 	var path dbus.ObjectPath
 	err := mgr.CallWithContext(ctx, managerIface+".GetSessionByPID", 0, uint32(os.Getpid())).Store(&path)
 	if err == nil && path.IsValid() && path != "/" && !l.closing(ctx, path) {
 		return path, nil
+	}
+	if l.sessionID != "" {
+		var named dbus.ObjectPath
+		err := mgr.CallWithContext(ctx, managerIface+".GetSession", 0, l.sessionID).Store(&named)
+		if err == nil && named.IsValid() && named != "/" && !l.closing(ctx, named) {
+			return named, nil
+		}
 	}
 	var user dbus.ObjectPath
 	if err := mgr.CallWithContext(ctx, managerIface+".GetUser", 0, uint32(os.Getuid())).Store(&user); err != nil {

@@ -645,6 +645,8 @@ func TestServeHeaders(t *testing.T) {
 			want: map[string]string{"WWW-Authenticate": `Session realm="pairtime"`, "Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
 		{name: "sign-in's error page is never stored", url: public + "/auth/hca/login", wantCode: 503,
 			want: map[string]string{"Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
+		{name: "the keys document is JSON that a cache must check with the server before each reuse (DESIGN 7.6)", url: public + "/.well-known/pairtime-keys.json", wantCode: 200,
+			want: map[string]string{"Cache-Control": "no-cache", "Content-Type": "application/json", "X-Content-Type-Options": nosniff}},
 		{name: "the ops listener's health check isn't sniffed either", url: private + "/healthz", wantCode: 200,
 			want: map[string]string{"X-Content-Type-Options": nosniff}},
 	}

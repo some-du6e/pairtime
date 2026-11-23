@@ -158,7 +158,7 @@
       "why": "DESIGN 5.2 and 5.7: bridge output fills the bucket only up to R_TURN_BASE_S = 20 s per turn when no hook or transcript record backs the turn, and no pairtime adapter reads this one."
     }
   ],
-  "errata": ["2026-11-19-turns-without-a-stop"],
+  "errata": [],
   "notes": [
     "fill_s is each turn's whole fill, the 20 s base included; output_fill_s is what the 5,000 diff lines alone would add without the side-door cap."
   ]
