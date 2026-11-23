@@ -272,24 +272,95 @@ type sealedRow struct {
 const sealedQueueMax = 1024
 
 // localOnlyProblem is what doctor hears while the batch roots stop at a
-// batch sealed in local-only mode (saved.localStop): config.toml said so
-// for a while after the link, or a record made or waiting while the
-// computer was local-only, before the link, reached the ledger after its
-// uploads began (ledger.Writer.Write). noModeProblem is what it hears
-// while they stop at one an older pairtime version sealed, which recorded
-// no mode, so it counts as local-only (ledger.Row.NoMode).
+// batch sealed in local-only mode (saved.localStop) whose seal frame doesn't
+// say why, as an older pairtime version's doesn't: config.toml said so for
+// a while after the link, or a record made while it did reached the ledger
+// late (ledger.Writer.Write). stoppedProblem is what it hears when the seal
+// frame says why (ledger.Row.Why), with the batch, when it was sealed and
+// the cause, and noModeProblem while the roots stop at a batch an older
+// version sealed, which recorded no mode, so it counts as local-only
+// (ledger.Row.NoMode). Each ends with how to upload again (stopFix).
 const (
-	localOnlyProblem = `pairtime has stopped uploading, because after this computer was linked it recorded something in local-only mode: config.toml said mode = "local", or had an error, for a while, or something made before the link, as a hook call that waited, reached pairtime only after it. Nothing recorded in local-only mode may leave this computer; to upload again, run pairtime logout, then pairtime login`
+	localOnlyProblem = `pairtime has stopped uploading, because after this computer was linked it sealed a batch in local-only mode: config.toml said mode = "local", or had an error, for a while, or a record made while it did reached pairtime late. ` + stopFix
+	stoppedProblem   = `pairtime has stopped uploading at batch %d, which it sealed in local-only mode at %s, after this computer was linked, because %s. ` + stopFix
 	noModeProblem    = `pairtime has stopped uploading, because an older pairtime version sealed batches on this computer without recording whether config.toml let them upload, so they count as local-only, and nothing recorded in local-only mode may leave it; to upload again, run pairtime logout, then pairtime login`
+	stopFix          = `Nothing recorded in local-only mode may leave this computer; to upload again, run pairtime logout, then pairtime login`
 )
 
-// stopProblem is what doctor hears while the batch roots stop at batch b,
-// by whether an older version sealed it (stoppedNoMode).
+// stopProblem is what doctor hears while the batch roots stop at batch b:
+// why its seal frame says it was sealed local-only (StopCause), or that an
+// older version sealed it (stoppedNoMode).
 func stopProblem(rows *rowIndex, b uint64) string {
 	if stoppedNoMode(rows, b) {
 		return noModeProblem
 	}
-	return localOnlyProblem
+	r, ok := rows.row(b)
+	if !ok || r.Why == nil {
+		return localOnlyProblem
+	}
+	return fmt.Sprintf(stoppedProblem, b, stopTime(r.SealedAt), StopCause(r.Why))
+}
+
+// stopTime is when a batch was sealed, as doctor's lines give it, in UTC.
+func stopTime(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") }
+
+// StopCause says in words why a batch was sealed local-only, from what its
+// seal frame records (ledger.LocalWhy), for doctor and `pairtime privacy
+// show`: each cause it records, the records that came late first, by
+// their kinds and their own times, which name no content.
+func StopCause(why *ledger.LocalWhy) string {
+	var parts []string
+	if why.LateN > 0 {
+		var recs []string
+		for _, r := range why.Late {
+			recs = append(recs, article(string(r.Kind))+" "+string(r.Kind)+" of "+stopTime(r.T))
+		}
+		if more := why.LateN - len(why.Late); more > 0 {
+			recs = append(recs, fmt.Sprintf("%d more", more))
+		}
+		rec := "a record"
+		if why.LateN > 1 {
+			rec = "records"
+		}
+		p := "it holds " + rec + " made while config.toml said local-only that reached pairtime only after that ended"
+		if len(recs) > 0 {
+			p += ": " + andList(recs)
+		}
+		parts = append(parts, p)
+	}
+	if why.Config {
+		parts = append(parts, `config.toml said mode = "local", had an error, or named a pairtime login the agent hadn't taken in yet, as it was sealed`)
+	}
+	if why.Noted {
+		parts = append(parts, `records came while config.toml said mode = "local"`)
+	}
+	if why.Waiting {
+		parts = append(parts, "something made while config.toml said local-only, such as a hook call or a git change, was still on its way to the ledger")
+	}
+	if len(parts) == 0 {
+		return "of something it recorded while config.toml said local-only"
+	}
+	return strings.Join(parts, "; and ")
+}
+
+// article is "an" before a word that starts with a vowel, and "a" before
+// any other.
+func article(word string) string {
+	if word != "" && strings.ContainsRune("aeiou", rune(word[0])) {
+		return "an"
+	}
+	return "a"
+}
+
+// andList joins items with commas and a last "and".
+func andList(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	}
+	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
 }
 
 // stoppedNoMode reports whether the roots stop at batch b because an older

@@ -10,9 +10,10 @@ import (
 )
 
 // moment is when config.toml was last known, or taken, to say local-only
-// (Options.Online, NoteMode): an event made before it may have been made,
-// or may have waited, while nothing could upload it, so it counts as made
-// in local-only mode (DESIGN 4.2). It holds that time by each clock an
+// (Options.Online, NoteMode), or a local-only stretch's start or end
+// (stretch): an event made in a stretch may have been made, or may have
+// waited, while nothing could upload it, so it counts as made in
+// local-only mode (DESIGN 4.2). It holds that time by each clock an
 // event's time can be held to: the wall clock, and the monotonic clocks of
 // this run, which presence's, focus's and the git watcher's events carry
 // (RunClock), and of the OS's boot, which `pairtime hook` stamps each hook
@@ -115,6 +116,20 @@ func (m moment) before(e event.Envelope) bool {
 		return e.Mono <= m.os
 	}
 	return m.wall > 0 && e.T <= m.wall
+}
+
+// reached reports whether the event e was made at or after m, by the clock
+// before holds it to: its mono where m holds the clock it counts, and its t
+// otherwise. A zero m is the beginning of time, which every event reached,
+// as the chain's first local-only stretch begins there (stretch).
+func (m moment) reached(e event.Envelope) bool {
+	switch {
+	case m.run > 0 && e.Mono > 0 && e.BootID == runBoot:
+		return e.Mono >= m.run
+	case m.os > 0 && e.Mono > 0 && e.BootID == m.boot:
+		return e.Mono >= m.os
+	}
+	return e.T >= m.wall
 }
 
 // arrival is at, when the writer took a record in, as an event's times by

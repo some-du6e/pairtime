@@ -335,6 +335,10 @@ type harnessStats struct {
 	ParseFailures uint64 `json:"parse_failures"`
 	// WriteFailures counts records the ledger writer refused.
 	WriteFailures uint64 `json:"write_failures,omitempty"`
+	// LateLocal counts records the ledger writer dropped: made while
+	// config.toml said local-only, they reached it only after it sealed a
+	// batch online since, so they never upload (ledger.ErrLateLocal).
+	LateLocal uint64 `json:"late_local,omitempty"`
 	// Ignored counts calls and log lines from a folder out of pairtime,
 	// which make no record (DESIGN 8.8).
 	Ignored uint64 `json:"ignored,omitempty"`
@@ -1690,8 +1694,17 @@ func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stam
 	// the writer took it in, for whether it stays on the device, unless it
 	// carries a reading of a run's clock, which only a step back of the
 	// wall clock can date so (ledger.Writer.lookback).
-	if _, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command, Sent: sent,
-		Late: r.Late}); err != nil {
+	_, err := w.Write(ledger.Input{Event: ev, Text: r.Text, Edits: r.Edits, Command: r.Command, Sent: sent, Late: r.Late})
+	if errors.Is(err, ledger.ErrLateLocal) {
+		// Made in a local-only stretch, it came after the writer sealed a
+		// batch online since: it stays off the ledger, as it should, and the
+		// record's work is done.
+		h.count(func() { st.LateLocal++ })
+		h.a.log.Info("a record made while config.toml said local-only came after the computer uploaded again, so the ledger dropped it",
+			"kind", ev.Kind(), "made", time.UnixMilli(ev.T).UTC())
+		return true
+	}
+	if err != nil {
 		h.count(func() {
 			st.WriteFailures++
 			st.LastFailure = clip(fmt.Sprintf("the ledger refused a %s record: %v", ev.Kind(), err))

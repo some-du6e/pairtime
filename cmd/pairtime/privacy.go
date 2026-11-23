@@ -130,6 +130,9 @@ func showUpload(stdout, stderr io.Writer, dirs home.Dirs, creds uploader.Credent
 	switch {
 	case p.Stopped > 0 && p.NoMode:
 		fmt.Fprint(stderr, uploadsStoppedNoMode)
+	case p.Stopped > 0 && p.Cause != "":
+		fmt.Fprintf(stderr, uploadsStoppedAt, p.Stopped, p.Cause)
+		fmt.Fprint(stderr, uploadsStopped)
 	case p.Stopped > 0:
 		fmt.Fprint(stderr, uploadsStopped)
 	}
@@ -156,16 +159,20 @@ upload before it goes.
 
 // uploadsStopped is what privacy show says while the batch roots stop at a
 // batch sealed in local-only mode (uploader.Preview.Stopped), with both of
-// its causes, as doctor gives them (uploader's localOnlyProblem).
-const uploadsStopped = `Uploads are stopped. After this computer was linked, pairtime recorded
-something in local-only mode: config.toml said mode = "local", or had an
-error, for a while, or something made before the link, as a hook call that
-waited, reached pairtime only after it. Nothing pairtime records in
-local-only mode leaves this computer, so nothing it recorded from then on
-goes. To upload again, run pairtime logout, then pairtime login; what it
-records after that goes as usual.
+// its causes, as doctor gives them (uploader's localOnlyProblem), and
+// uploadsStoppedAt the line before it that names the batch and why it was
+// sealed so, when its seal frame says (uploader.Preview.Cause).
+const (
+	uploadsStoppedAt = "Uploads stop at batch %d, sealed in local-only mode because %s.\n"
+	uploadsStopped   = `Uploads are stopped. After this computer was linked, pairtime sealed a
+batch in local-only mode: config.toml said mode = "local", or had an
+error, for a while, or a record made while it did reached pairtime late.
+Nothing pairtime records in local-only mode leaves this computer, so
+nothing it recorded from then on goes. To upload again, run pairtime
+logout, then pairtime login; what it records after that goes as usual.
 
 `
+)
 
 // uploadsStoppedNoMode is what privacy show says while the batch roots stop
 // at a batch an older pairtime version sealed, which recorded no mode, so

@@ -329,6 +329,13 @@ func adapterChecks(f Facts) []Check {
 				c.Text += ". pairtime may count less of this harness until it reads them. " + reportIt
 			}
 		}
+		if n.LateLocal > 0 {
+			// Not a fault: they were made while config.toml said local-only,
+			// so they were never to upload, and the ledger keeps the batch
+			// roots going by leaving them out (D-late-local).
+			c.Text += fmt.Sprintf("; %s made while config.toml said local-only came only after pairtime had uploaded again, so the ledger dropped %s, as nothing recorded in local-only mode may upload",
+				count(n.LateLocal, "record", "records"), itOrThem(n.LateLocal))
+		}
 		if !slices.Contains(f.Adapters, h) {
 			c.Text += "; this pairtime has no adapter for it, but the agent does"
 		}
@@ -339,6 +346,14 @@ func adapterChecks(f Facts) []Check {
 			Text: fmt.Sprintf("%s came from harnesses pairtime has no adapter for, so they count for nothing yet", count(a.Other.Calls, "hook call", "hook calls"))})
 	}
 	return out
+}
+
+// itOrThem is the pronoun for n records.
+func itOrThem(n uint64) string {
+	if n == 1 {
+		return "it"
+	}
+	return "them"
 }
 
 // spoolCheck is the line DESIGN 5.2's spool rule asks for: the hook calls

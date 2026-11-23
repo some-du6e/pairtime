@@ -23,7 +23,7 @@ import (
 func fullStatus() statusReply {
 	at := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
 	both := signalReply{Via: "a source", Unknown: "a reason"}
-	stats := harnessStats{Calls: 1, Records: 2, ParseFailures: 3, WriteFailures: 4, Ignored: 5, LastRecord: 6, LastFailure: "Stop: unknown field",
+	stats := harnessStats{Calls: 1, Records: 2, ParseFailures: 3, WriteFailures: 4, LateLocal: 9, Ignored: 5, LastRecord: 6, LastFailure: "Stop: unknown field",
 		Lines: 7, LineFailures: 8}
 	return statusReply{
 		Version: version.Info{Version: "v0.1.0", Commit: "0123", Date: "2026-11-24T09:00:00Z", Modified: true, GoVersion: "go1.26.0", Platform: "linux/amd64"},

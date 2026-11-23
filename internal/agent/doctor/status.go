@@ -109,7 +109,11 @@ type HarnessCounts struct {
 	Records       uint64 `json:"records"`
 	ParseFailures uint64 `json:"parse_failures"`
 	WriteFailures uint64 `json:"write_failures,omitempty"`
-	Ignored       uint64 `json:"ignored,omitempty"`
+	// LateLocal counts the records the ledger dropped: made while
+	// config.toml said local-only, they reached it only after it sealed a
+	// batch online since, so they never upload (D-late-local).
+	LateLocal uint64 `json:"late_local,omitempty"`
+	Ignored   uint64 `json:"ignored,omitempty"`
 	// LastRecord is the time of the newest record, in Unix ms.
 	LastRecord int64 `json:"last_record,omitempty"`
 	// LastFailure names the events and fields of the last failure, never

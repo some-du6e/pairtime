@@ -4,6 +4,7 @@ package ledger
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -121,8 +122,8 @@ func (p *Presence) count(q queuedAt, n int) {
 }
 
 // Waiting reports whether a record queued and not yet written is one that
-// before says may have been made before config.toml was last seen
-// local-only, as presence's records queued while a locked keyring kept the
+// before says may have been made in a local-only stretch, as presence's
+// records queued while a locked keyring kept the
 // ledger shut through pairtime login are: the writer's Waiting asks it
 // (agent.waiting), so the first batch after a switch back online takes its
 // mark only once they are written, though presence's own records come in
@@ -249,7 +250,10 @@ func (p *Presence) handle(w *Writer, it presenceItem) {
 	}
 	_, err := w.Write(Input{Event: presenceEvent(it.rec)})
 	p.count(queuedOf(it.rec), -1)
-	if err != nil && p.problem != nil {
+	// One made in a local-only stretch that came after a batch was sealed
+	// online since stays off the ledger, as it should, and the writer counts
+	// it (ErrLateLocal).
+	if err != nil && !errors.Is(err, ErrLateLocal) && p.problem != nil {
 		p.problem(fmt.Sprintf("the ledger couldn't write an %s record: %v", it.rec.Data.Kind(), err))
 	}
 }

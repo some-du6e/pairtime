@@ -186,9 +186,9 @@ func keptFrom(bf *batchesFile, from string, floor uint64) int {
 // keptFile returns batches.seg as Sweep writes it, keeping the rows from
 // bf.rows[k] on: the chain frame, of the version with a base frame, a base
 // frame naming that batch, or the batch after the last when k is past
-// them, the rows, then the receipts of the rows kept, in the order of
-// their batches. The rows go before every receipt, so each receipt follows
-// its row.
+// them, with the local-only stretches the newest row recorded, the rows,
+// then the receipts of the rows kept, in the order of their batches. The
+// rows go before every receipt, so each receipt follows its row.
 func keptFile(bf *batchesFile, k int) ([]byte, error) {
 	cp := bf.chain
 	cp.V = chainVersionBase
@@ -205,6 +205,10 @@ func keptFile(bf *batchesFile, k int) ([]byte, error) {
 		last := bf.rows[len(bf.rows)-1]
 		bp = basePayload{B: last.B + 1, FirstSeq: last.LastSeq + 1, Prev: last.Head}
 	}
+	// The local-only stretches go in the base frame, since the rows kept
+	// keep none of their own once read (readBatchesFile): Open takes them
+	// back from there until a later row records them again.
+	bp.Stretches = bf.stretches
 	base, err := json.Marshal(bp)
 	if err != nil {
 		return nil, err
