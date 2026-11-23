@@ -835,15 +835,86 @@ func (v *Vault) read(s uint64, what byte) ([]byte, error) {
 // its texts, by atomic rename, and a file left with no entry is deleted.
 // Paths stay. It returns how many texts it deleted.
 func (v *Vault) DropText() (int, error) {
-	return v.filter(func(e entry) bool { return e.what != whatText })
+	return v.filter(func(_ string, e entry) bool { return e.what != whatText })
+}
+
+// Sweep deletes the texts the vault keeps in its files of the UTC days
+// before textFrom, and the paths in those of the days before pathsFrom, as
+// DESIGN 4.4 keeps them 90 and 30 days on the device, or the shorter
+// periods the teen set (WP-LG6). A file's day is its ledger segment's, so
+// a text goes once the record that commits it is that old. Each file is
+// written again by atomic rename, and one left with no entry is deleted.
+// The files of other device keys, in old/, lose theirs by the same days,
+// and a key's directory left with none goes. It returns how many entries
+// it deleted.
+func (v *Vault) Sweep(textFrom, pathsFrom string) (int, error) {
+	if !isDay(textFrom) || !isDay(pathsFrom) {
+		return 0, fmt.Errorf("vault: %q or %q isn't a UTC day", textFrom, pathsFrom)
+	}
+	keep := func(day string, e entry) bool {
+		switch e.what {
+		case whatText:
+			return day >= textFrom
+		case whatPaths:
+			return day >= pathsFrom
+		}
+		return true
+	}
+	n, err := v.filter(keep)
+	if errors.Is(err, ErrClosed) {
+		return n, err
+	}
+	m, oerr := v.sweepOld(keep)
+	return n + m, errors.Join(err, oerr)
+}
+
+// sweepOld is filter for the files old/ keeps, which nothing appends to.
+func (v *Vault) sweepOld(keep func(string, entry) bool) (int, error) {
+	v.files.Lock()
+	defer v.files.Unlock()
+	dir := filepath.Join(v.dir, oldDir)
+	subs, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	dropped := 0
+	var errs []error
+	for _, sub := range subs {
+		keyID := sub.Name()
+		if !sub.IsDir() || !isKeyID(keyID) {
+			continue
+		}
+		kdir := filepath.Join(dir, keyID)
+		days, err := segments(kdir)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		for _, day := range days {
+			n, err := filterAt(kdir, keyID, day, func(e entry) bool { return keep(day, e) })
+			dropped += n
+			if err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if left, err := segments(kdir); err == nil && len(left) == 0 {
+			if err := os.RemoveAll(kdir); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return dropped, errors.Join(errs...)
 }
 
 // filter writes each of the vault's files again with only the entries
-// keep keeps, and deletes a file left with none. The files of other
-// device keys, in old/, are left alone. Only the newest file, which Keep
-// may append to, is written again under the lock Keep takes, so the
-// ledger writer waits for that one file at most.
-func (v *Vault) filter(keep func(entry) bool) (int, error) {
+// keep keeps, given the file's day, and deletes a file left with none.
+// The files of other device keys, in old/, are left alone. Only the newest
+// file, which Keep may append to, is written again under the lock Keep
+// takes, so the ledger writer waits for that one file at most.
+func (v *Vault) filter(keep func(day string, e entry) bool) (int, error) {
 	v.files.Lock()
 	defer v.files.Unlock()
 	v.mu.Lock()
@@ -862,10 +933,11 @@ func (v *Vault) filter(keep func(entry) bool) (int, error) {
 	var errs []error
 	for _, day := range days {
 		var n int
+		k := func(e entry) bool { return keep(day, e) }
 		if day < newest {
-			n, err = v.filterFile(day, keep)
+			n, err = v.filterFile(day, k)
 		} else {
-			n, err = v.filterNewest(day, keep)
+			n, err = v.filterNewest(day, k)
 		}
 		dropped += n
 		if err != nil {
@@ -894,8 +966,14 @@ func (v *Vault) filterNewest(day string, keep func(entry) bool) (int, error) {
 // deletes it when none is left. v.files is held for writing, and when the
 // file is the newest, syncMu and mu too, with the file closed.
 func (v *Vault) filterFile(day string, keep func(entry) bool) (int, error) {
-	name := segPath(v.dir, day)
-	f, err := readFile(name, day, v.keyID)
+	return filterAt(v.dir, v.keyID, day, keep)
+}
+
+// filterAt is filterFile for the file of day in dir, whose head names
+// keyID.
+func filterAt(dir, keyID, day string, keep func(entry) bool) (int, error) {
+	name := segPath(dir, day)
+	f, err := readFile(name, day, keyID)
 	if err != nil {
 		return 0, err
 	}
@@ -913,10 +991,10 @@ func (v *Vault) filterFile(day string, keep func(entry) bool) (int, error) {
 		if err := os.Remove(name); err != nil {
 			return 0, err
 		}
-		home.SyncDir(v.dir)
+		home.SyncDir(dir)
 		return dropped, nil
 	}
-	hp, err := json.Marshal(head{V: headVersion, KeyID: v.keyID})
+	hp, err := json.Marshal(head{V: headVersion, KeyID: keyID})
 	if err != nil {
 		return 0, err
 	}

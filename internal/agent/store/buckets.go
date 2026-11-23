@@ -470,6 +470,47 @@ func (s *Buckets) Forget(before int64) error {
 	return first
 }
 
+// Drop deletes the files of the UTC days before from, as DESIGN 4.4 keeps
+// the device's minute buckets 180 days (WP-LG6), closing first any it
+// holds open, since Windows deletes no open file, and forgetting what it
+// read of them. The day rollups in days/ stay: the scorer writes a day
+// again only from a re-score of its batches, which the ledger keeps no
+// longer than these. It returns how many files it deleted.
+func (s *Buckets) Drop(from string) (int, error) {
+	if _, err := time.Parse(time.DateOnly, from); err != nil {
+		return 0, fmt.Errorf("store: %q isn't a UTC day", from)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	var errs []error
+	for _, e := range entries {
+		day, ok := strings.CutSuffix(e.Name(), ".jsonl")
+		if !ok || !e.Type().IsRegular() || day >= from {
+			continue
+		}
+		if _, err := time.Parse(time.DateOnly, day); err != nil {
+			continue
+		}
+		if d, ok := s.days[day]; ok {
+			if d.f != nil {
+				d.f.Close()
+			}
+			delete(s.days, day)
+		}
+		if err := os.Remove(s.path(day)); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		n++
+	}
+	return n, errors.Join(errs...)
+}
+
 // Close flushes and closes every open file.
 func (s *Buckets) Close() error {
 	err := s.Sync()
