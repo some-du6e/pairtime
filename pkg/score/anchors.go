@@ -159,8 +159,9 @@ func promptKind(c event.PromptClass) (event.AnchorKind, event.Reason) {
 // promptAnchors makes an anchor of every prompt a person submitted: SM 2.2
 // origins human_typed and human_pasted, and relayed (relayedAnchor). A
 // prompt with no input before it opens nothing (SM 2.2 rule 8); while its
-// turn runs and no other turn of its project does, the project's
-// uncredited seconds are X.no_input (SM 5.2, credit.go).
+// turn runs, a second nothing credits that takes a turn's code is
+// X.no_input unless a turn a person or automation started runs too (SM
+// 5.2, turnCode in credit.go).
 //
 // A prompt an agent app's message witnesses and rules 6 and 7 made typed at
 // the app's stamp is anchored as any typed prompt, at its usual level, at

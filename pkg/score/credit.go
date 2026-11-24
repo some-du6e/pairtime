@@ -209,8 +209,9 @@ type creditor struct {
 	buckets map[string][]*bucket
 	runs    map[string]*running
 	// all holds the turns of every project, which SM 5.2's codes for a live
-	// slot whose presence is unknown read, in a never-sampling device's
-	// slots (presence.neverAt).
+	// slot whose presence is unknown read (unknownCode): a never-sampling
+	// device's slot (presence.neverAt), one before the device's first
+	// sample, or one where the sampler took no sample (presence.blindAt).
 	all running
 	// relays are the sessions with relayed anchors, by key, and leads the
 	// leads of those anchors, by start: the candidates of the relayed
@@ -787,19 +788,20 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 
 // uncredited gives a second nothing credited its one reason, in SM 5.2's
 // order as E-6.6-codes decides it. Codes for credit a rule withheld come
-// first, and only on seconds the rule would have credited: X.lookup_cap
-// for a qualifying lookup run's present seconds past LOOKUP_MAX_S, and
+// first, and only on seconds the rule would have credited: X.lookup_cap for
+// a qualifying lookup run's present seconds past LOOKUP_MAX_S, and
 // X.bucket_cap for reading that BUCKET_MAX_S evicted. (The dark-flow
 // discounts, X.day_cap and X.noprog are WP-SC6's.) Every other second takes
 // the first that applies of X.absent; X.other_focus; X.ambiguous, for focus
 // that resolves to no project (SM 3.2), that the client hasn't recorded
 // yet, or, until WP-SC8, that it recorded as unknown (SM 2.5); then, while
-// a turn of the slot's project runs, X.agent_only if a
-// person started one of the running turns, else X.automated, else
-// X.no_input for a turn whose prompt came with no input (SM 2.2 rule 8);
-// and last X.no_anchor. at is the slot's resolution (attribute). A turn a
-// person started includes a relayed one (SM 2.2), and X.bucket_cap covers
-// the relayed reading that UNKNOWN_BUCKET_MAX_S held back too.
+// a turn of the slot's project runs, X.agent_only if a person started one
+// of the running turns, else X.automated, else X.no_input for a turn whose
+// prompt came with no input (SM 2.2 rule 8); and last X.no_anchor. at is
+// the slot's resolution (attribute). A turn a person started includes a
+// relayed one (SM 2.2), and X.bucket_cap covers the relayed reading that
+// UNKNOWN_BUCKET_MAX_S held back too. The turn step is turnCode, which
+// unknownCode shares (docs/errata/2026-11-20-uncredited-code-placement.md).
 //
 // On a live device, every slot whose presence is unknown is a live slot
 // whose presence is unknown, and the presence and focus codes don't apply:
@@ -844,34 +846,43 @@ func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
 	if at.proj == "" {
 		return event.ReasonAmbiguous
 	}
-	if r := c.runs[at.proj]; r != nil {
-		switch {
-		case covers(r.human, k):
-			return event.ReasonAgentOnly
-		case covers(r.auto, k):
-			return event.ReasonAutomated
-		case covers(r.noInput, k):
-			return event.ReasonNoInput
-		}
+	if code, ok := turnCode(c.runs[at.proj], k); ok {
+		return code
 	}
 	return event.ReasonNoAnchor
 }
 
 // unknownCode is SM 5.2's code for an uncredited second k of a live slot
-// whose presence is unknown, past the codes for withheld credit: X.agent_only
-// while a turn a person started runs, a relayed one included, or a no_input
-// one; else X.automated while an automated turn runs; else X.no_anchor.
-// That is E-6.6-codes' order with its presence and focus steps skipped
-// (D-relayed's reading 3). Such a slot has no focus and no project of its
-// own, so the turns of every project count.
+// whose presence is unknown, past the codes for withheld credit: the turn
+// step (turnCode) over the turns of every project, since such a slot has no
+// focus and no project of its own, else X.no_anchor. So a no_input turn's run
+// is X.no_input there as in a sampled slot, and an automated turn beside it
+// gives X.automated (docs/errata/2026-11-20-uncredited-code-placement.md).
 func (c *creditor) unknownCode(k int) event.Reason {
-	switch {
-	case covers(c.all.human, k), covers(c.all.noInput, k):
-		return event.ReasonAgentOnly
-	case covers(c.all.auto, k):
-		return event.ReasonAutomated
+	if code, ok := turnCode(&c.all, k); ok {
+		return code
 	}
 	return event.ReasonNoAnchor
+}
+
+// turnCode is SM 5.2's turn step for an uncredited second k over the turns r
+// holds: X.agent_only if a person started one of the turns running at k, a
+// relayed one included, else X.automated if automation started one, else
+// X.no_input for a turn whose prompt came with no input (SM 2.2 rule 8). ok
+// is false when r is nil or none of its turns runs at k.
+func turnCode(r *running, k int) (code event.Reason, ok bool) {
+	if r == nil {
+		return "", false
+	}
+	switch {
+	case covers(r.human, k):
+		return event.ReasonAgentOnly, true
+	case covers(r.auto, k):
+		return event.ReasonAutomated, true
+	case covers(r.noInput, k):
+		return event.ReasonNoInput, true
+	}
+	return "", false
 }
 
 // creditKey groups a slot's credited seconds. Relayed seconds group apart

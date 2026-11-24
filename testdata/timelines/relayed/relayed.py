@@ -49,7 +49,8 @@ VOUCH_PAIR_S = PENDING_WINDOW_S - 60
 # go-ahead's typing lead, and reading after a stop. Never SUP: a relayed
 # session reads only after a stop (SM 2.4).
 RELAYED_REASONS = ("P", "ANS", "GO", "READ")
-# SM 5.2's codes for a slot whose presence is unknown, in their order.
+# SM 5.2's codes for a slot whose presence is unknown, in their order, but
+# X.no_input, which needs a no_input turn, and no case has one.
 UNKNOWN_CODES = ("X.bucket_cap", "X.agent_only", "X.automated", "X.no_anchor")
 
 
@@ -327,9 +328,11 @@ class Replay:
     def code(self, t):
         """SM 5.2's code for an uncredited second t of a live slot whose
         presence is unknown: X.bucket_cap where only the 120 s cap kept a
-        session from reading, else X.agent_only while a turn a person
-        started runs, else X.automated while an automated turn runs, else
-        X.no_anchor."""
+        session from reading, else X.agent_only while a turn a person started
+        runs, else X.automated while an automated turn runs, else X.no_anchor.
+        SM 5.2 puts X.no_input before X.no_anchor, for a no_input turn's run,
+        but no case has one: Replay refuses a prompt that rule 4 lets
+        through."""
         if t in self.capped:
             return "X.bucket_cap"
         if t in self.running:

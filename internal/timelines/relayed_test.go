@@ -70,9 +70,10 @@ const (
 var relayedReasons = []event.Reason{event.ReasonPrompt, event.ReasonAnswer, event.ReasonGoAhead, event.ReasonRead}
 
 // relayedCodes are SM 5.2's codes for a live slot whose presence is
-// unknown, in their order. On the desktop cases the person is present with
-// a window hosting the session in front throughout, so their codes are
-// these too.
+// unknown, in their order, but X.no_input, which needs a no_input turn,
+// and no relayed case has one (relayed.py refuses a prompt rule 4 lets
+// through). On the desktop cases the person is present with a window
+// hosting the session in front throughout, so their codes are these too.
 var relayedCodes = []event.Reason{event.ReasonBucketCap, event.ReasonAgentOnly, event.ReasonAutomated,
 	event.ReasonNoAnchor}
 
@@ -490,7 +491,7 @@ func TestRelayedRows(t *testing.T) {
 				for k, s := range r.Uncredited {
 					if !slices.Contains(relayedCodes, k) || s <= 0 {
 						t.Errorf("%s: uncredited %s with %v s; a relayed case's codes are SM 5.2's for a slot whose presence is "+
-							"unknown, %q", where, k, s, relayedCodes)
+							"unknown, but X.no_input, %q", where, k, s, relayedCodes)
 					}
 					unc += s
 				}
