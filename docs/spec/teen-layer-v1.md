@@ -101,7 +101,7 @@ Migration 0011 creates the tables. Their periods are DESIGN 4.4's rows, in docs/
 | `badges` | until the teen removes the badge (`server.badges`) |
 | `removed_items` | 30 days after the removal (`server.removed_items`) |
 
-`zone_changes` keeps every change of the profile's zone, its time and the zone it replaced, under `server.account` with `users`, so a minute takes its date in the zone in force at its own time. The eraser (WP-SV13) deletes an account's rows in these seven tables through `buildday.DeleteAccount` and `devlog.DeleteAccount`, inside its transaction, and the export holds them. Whichever of WP-SV12 and WP-SV13 lands second wires both calls in.
+`zone_changes` keeps every change of the profile's zone, its time and the zone it replaced, under `server.account` with `users`, so a minute takes its date in the zone in force at its own time. The eraser (WP-SV13) deletes an account's rows in these seven tables through `buildday.DeleteAccount` and `devlog.DeleteAccount`, inside its transaction, and the export counts them. Whichever of WP-SV12 and WP-SV13 lands second wires both calls in.
 
 ## 8. The client (WP-CO4)
 

@@ -536,13 +536,14 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 }
 
 // commitThenTell runs op through w and tells changed of account once op
-// has committed, or may have. Do answers with ctx's error when ctx ends
-// before op's result comes back, whether op ran or not, so a request whose
-// browser went may still have committed. A spare Changed costs only a
-// read, so that one tells it too.
+// has committed. Do answers with its context's error the moment that
+// context ends, even while op waits in the queue or before its batch
+// commits, so a Changed then could come before the commit and none after
+// it. op runs on ctx without its cancellation instead: a browser that goes
+// still gets its change made, and the stream hears of it only once it is.
 func commitThenTell(ctx context.Context, w rollup.Doer, account string, changed func(account string), op writer.Op) error {
-	err := w.Do(ctx, 1, op)
-	if err == nil || ctx.Err() != nil {
+	err := w.Do(context.WithoutCancel(ctx), 1, op)
+	if err == nil {
 		changed(account)
 	}
 	return err

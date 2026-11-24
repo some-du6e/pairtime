@@ -755,15 +755,14 @@ type doerFunc func(ctx context.Context, rows int, op writer.Op) error
 func (f doerFunc) Do(ctx context.Context, rows int, op writer.Op) error { return f(ctx, rows, op) }
 
 // TestCommitThenTell checks when a time zone change or a hidden name tells
-// the live stream: once its op committed, and whenever its request went
-// first, since the writer then answers with the request's error whether or
-// not the op committed.
+// the live stream: only once its op has committed, whether or not its
+// request is still there, since the writer answers a request that went
+// with its error before the op has committed.
 func TestCommitThenTell(t *testing.T) {
 	tests := []struct {
 		name string
 		// opErr is what the op returns. gone ends the request's context
-		// once the op has run, and Do answers with its error, as the
-		// writer's Do can.
+		// before the op runs.
 		opErr    error
 		gone     bool
 		wantErr  bool
@@ -771,21 +770,29 @@ func TestCommitThenTell(t *testing.T) {
 	}{
 		{name: "an op that committed tells its account", wantTold: true},
 		{name: "an op that failed tells nobody", opErr: errors.New("too soon"), wantErr: true},
-		{name: "a request that went once its op ran may have committed, so it tells its account all the same", gone: true, wantErr: true, wantTold: true},
+		{name: "a request that went before its op committed doesn't stop the op, and its account is told once the op commits", gone: true, wantTold: true},
+		{name: "a request that went before its op failed tells nobody", gone: true, opErr: errors.New("too soon"), wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			w := doerFunc(func(ctx context.Context, _ int, op writer.Op) error {
-				err := op(ctx, nil)
+			var told []string
+			// The writer answers with its context's error once that
+			// context ends, before the op has committed, as Writer.Do does.
+			w := doerFunc(func(dctx context.Context, _ int, op writer.Op) error {
 				if tt.gone {
 					cancel()
-					return ctx.Err()
+				}
+				if err := dctx.Err(); err != nil {
+					return err
+				}
+				err := op(dctx, nil)
+				if len(told) != 0 {
+					t.Error("changed heard the account before the op committed")
 				}
 				return err
 			})
-			var told []string
 			err := commitThenTell(ctx, w, "a1", func(account string) { told = append(told, account) }, func(context.Context, writer.Tx) error {
 				return tt.opErr
 			})
