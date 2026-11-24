@@ -463,6 +463,86 @@ func TestEvidence(t *testing.T) {
 	}
 }
 
+func TestEvidenceDelete(t *testing.T) {
+	blob := []byte("sealed: deleted by the delete pass")
+	sum := sha256.Sum256(blob)
+	tests := []struct {
+		name string
+		// versioning is the bucket's state, as SetVersioning takes it.
+		versioning string
+		stored     bool
+		wantErr    error
+	}{
+		{name: "delete removes a stored blob from a bucket that keeps no versions, and Has is false after", stored: true},
+		{name: "deleting a blob that's already gone succeeds, so a retried delete passes"},
+		{name: "a delete on a bucket with versioning on fails with ErrKeepsVersions, since the blob stays behind a delete marker",
+			versioning: "Enabled", stored: true, wantErr: ErrKeepsVersions},
+		{name: "a delete on a bucket with versioning suspended answers no marker, as MinIO's doesn't, so only doctor's versioning check finds that bucket",
+			versioning: "Suspended", stored: true},
+		{name: "a retried delete on a bucket with versioning on fails as well, since each delete adds another marker",
+			versioning: "Enabled", wantErr: ErrKeepsVersions},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := objstoretest.New(t, mainBucket)
+			srv.SetVersioning(mainBucket, tt.versioning)
+			if tt.stored {
+				srv.SetObject(mainBucket, EvidenceKey(sum), blob)
+			}
+			e := NewEvidence(bucket(t, newTestClient(t, srv), mainBucket))
+			ctx := context.Background()
+			err := e.Delete(ctx, sum)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Delete error = %v, want %v", err, tt.wantErr)
+			}
+			var oe *Error
+			if err != nil && (!errors.As(err, &oe) || oe.Op != "DeleteObject" || oe.Key != EvidenceKey(sum)) {
+				t.Errorf("Delete error = %#v, want an *Error naming DeleteObject and %s", err, EvidenceKey(sum))
+			}
+			if ok, err := e.Has(ctx, sum); ok || err != nil {
+				t.Errorf("Has after Delete = %v, %v; want false", ok, err)
+			}
+		})
+	}
+}
+
+func TestEvidenceList(t *testing.T) {
+	sum := func(s string) string { return objstoretest.SHA256([]byte(s)) }
+	tests := []struct {
+		name    string
+		objects []string
+		want    []string
+	}{
+		{name: "an empty store lists nothing"},
+		{name: "every blob under evidence/ is listed in key order, across pages, and nothing outside it",
+			objects: []string{"evidence/" + sum("b"), "notes/one", "evidence/" + sum("a"), "evidence/" + sum("c"), "snapshots/x"},
+			want:    slices.Sorted(slices.Values([]string{"evidence/" + sum("a"), "evidence/" + sum("b"), "evidence/" + sum("c")}))},
+		{name: "an object under evidence/ whose key isn't an evidence key is listed too, so a count of unnamed blobs sees it",
+			objects: []string{"evidence/" + sum("a"), "evidence/not-a-blob"},
+			want:    slices.Sorted(slices.Values([]string{"evidence/" + sum("a"), "evidence/not-a-blob"}))},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := objstoretest.New(t, mainBucket)
+			for _, k := range tt.objects {
+				srv.SetObject(mainBucket, k, []byte(k))
+			}
+			b := bucket(t, newTestClient(t, srv), mainBucket)
+			b.pageSize = 2
+			var got []string
+			for o, err := range NewEvidence(b).List(context.Background()) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				got = append(got, o.Key)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("List = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseEvidenceKey(t *testing.T) {
 	sum := sha256.Sum256([]byte("x"))
 	tests := []struct {

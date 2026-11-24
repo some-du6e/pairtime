@@ -178,16 +178,26 @@ func (b *Bucket) Head(ctx context.Context, key string) (ObjectInfo, error) {
 // Delete removes key. Deleting a missing key succeeds, as it does in S3.
 // pairtimed's buckets never keep versions (DESIGN 10.3), and pairtimed
 // doctor fails on one that does, so Delete removes the object for good.
+// Delete doesn't check that the store kept no version. Evidence.Delete,
+// which deletes sealed blobs, checks it and fails with ErrKeepsVersions.
 func (b *Bucket) Delete(ctx context.Context, key string) error {
+	_, err := b.deleteObject(ctx, key)
+	return err
+}
+
+// deleteObject sends one DeleteObject for key and returns its answer's
+// header, which on a bucket that keeps versions says whether the delete
+// only added a delete marker.
+func (b *Bucket) deleteObject(ctx context.Context, key string) (http.Header, error) {
 	if err := CheckKey(key); err != nil {
-		return err
+		return nil, err
 	}
 	resp, err := b.c.do(ctx, request{op: "DeleteObject", method: http.MethodDelete, bucket: b.name, key: key})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	drain(resp)
-	return nil
+	return resp.Header, nil
 }
 
 func info(key string, resp *http.Response) ObjectInfo {

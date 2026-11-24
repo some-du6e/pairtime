@@ -63,6 +63,13 @@ var (
 	// refuses a body over MaxPutSize before sending it, and a store's own
 	// EntityTooLarge answer wraps ErrTooLarge too.
 	ErrTooLarge = errors.New("objstore: too large for a single put")
+	// ErrKeepsVersions: a delete answered x-amz-delete-marker: true, which
+	// only a bucket that keeps versions sends. The delete only hid the
+	// object behind a delete marker, and its bytes are still in the bucket
+	// as an older version. Neither of pairtimed's buckets may keep versions
+	// (DESIGN 10.3; docs/errata/2026-11-20-evidence-versioning.md), and
+	// Evidence.Delete fails with it.
+	ErrKeepsVersions = errors.New("objstore: the bucket keeps versions, so the delete left the object's bytes behind a delete marker")
 )
 
 // MaxPutSize is the largest body one PutObject takes on every store

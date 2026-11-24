@@ -106,7 +106,7 @@
   "known_limit": null,
   "errata": ["2026-11-19-check-readings"],
   "notes": [
-    "No harness records this. A new process gets a new session, and a startup names a session no other process holds. A `claude --resume` in tmux would be start_kind resume, and the erratum leaves open whether a resume under another parent fails CC9; this scenario doesn't rest on it.",
+    "No harness records this. A new process gets a new session, and a startup names a session no other process holds. A `claude --resume` in tmux would be a resume between two interactive parents, which DESIGN 7.3 allows; this record is a startup, so CC9 fails.",
     "A multiplexer isn't one of SM 2.2 rule 4's headless parents, so every prompt keeps its origin and CC2 still counts all five."
   ]
 }
