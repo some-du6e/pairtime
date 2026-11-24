@@ -338,6 +338,25 @@ func (c *carry) sampled() *event.Event {
 	return c.Presence
 }
 
+// closedLock reports whether e is a lock that the carried sample closed
+// before grace: an os.power that locked the screen, and Presence a sample
+// dated after it, at grace or before, that says the screen is unlocked.
+// One Step over every record closes the lock at that sample, the first
+// unlocked one dated after it (SM 2.1). records dates both at grace, where
+// the sample no longer comes after the lock, so the window's Step would
+// keep the screen locked until its first unlocked sample instead, and
+// records leaves the lock out. Power can be the lock, as Lock can. A sample
+// dated after grace keeps its own time and closes the lock in the window's
+// Step too, so the lock stays, and with it the slots it locked before that
+// sample.
+func (c *carry) closedLock(e *event.Event, grace int64) bool {
+	if p, ok := e.Data.(*event.OSPower); !ok || p.Op != event.PowerLock || c.Presence == nil {
+		return false
+	}
+	s, ok := c.Presence.Data.(*event.OSPresence)
+	return ok && !s.Locked && e.T < c.Presence.T && c.Presence.T <= grace
+}
+
 // locks reports whether p locks or unlocks the screen.
 func locks(p *event.OSPower) bool {
 	return p != nil && (p.Op == event.PowerLock || p.Op == event.PowerUnlock)
@@ -525,7 +544,8 @@ func (c *carry) prune(from int64) {
 // PENDING_WINDOW_S - READ_HORIZON_S behind the newest (reach.held). A
 // record is carried only once FinalBefore is Lookback past it, so the
 // carry sees a cut still waiting only from a record that arrives later
-// than that allows.
+// than that allows. A lock that the carried sample closed goes too, when
+// both are dated at grace or before (carry.closedLock).
 func (c *carry) records(out []event.Event, from int64, g runGaps, stamped, ttl int64) []event.Event {
 	grace := from - carryGraceMS
 	last := c.sampled()
@@ -535,6 +555,9 @@ func (c *carry) records(out []event.Event, from int64, g runGaps, stamped, ttl i
 		}
 		if e == c.Lock && c.Power != nil && c.Power.EventID == e.EventID {
 			continue // the latest os.power is the lock itself
+		}
+		if c.closedLock(e, grace) {
+			continue
 		}
 		r := *e
 		r.T = max(r.T, grace)
