@@ -21,6 +21,16 @@
 // Each op runs inside a savepoint. An op that fails or panics is rolled
 // back alone, its caller gets its error, and the rest of the batch commits.
 // When the transaction itself fails, every op in it gets that error.
+//
+// An op handed to DoDurable is on disk before DoDurable answers, so a power
+// cut can't roll it back (DESIGN 8.9, 10.1). SQLite runs with
+// synchronous=NORMAL, which syncs the WAL only at checkpoints, so the writer
+// sets synchronous=FULL on its connection before a batch that holds a
+// durable op begins, and NORMAL again once the batch ends. Every op in that
+// batch then commits with the WAL synced. On Postgres the batch's
+// transaction sets synchronous_commit on, so its COMMIT waits for the WAL to
+// reach the disk whatever the server's default is. When the writer can't
+// make a batch durable, the batch fails and none of its ops run.
 package writer
 
 import (
@@ -31,6 +41,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/some-du6e/pairtime/internal/server/store"
 )
 
 // Defaults for Options.
@@ -72,6 +84,9 @@ type Commit struct {
 	// such as a DELETE that matched nothing, wrote no page, so Litestream
 	// has nothing of it to copy. It is 0 when Err is set.
 	Changed int64
+	// Durable is whether the transaction held an op handed to DoDurable.
+	// When Err is nil, its commit was on disk before any caller was told.
+	Durable bool
 	// Err is the error that failed the whole transaction, if one did.
 	Err error
 }
@@ -90,6 +105,10 @@ type Options struct {
 	// OnCommit, when set, is called from the writer goroutine after every
 	// transaction, before the ops' callers are told. It must not block.
 	OnCommit func(Commit)
+	// Engine is the database's engine, which decides how a batch that holds
+	// a durable op reaches the disk. Empty means SQLite, as in
+	// store.Options.
+	Engine store.Engine
 }
 
 // ErrClosed is what Do returns once Close has been called.
@@ -109,13 +128,19 @@ type Writer struct {
 	stop  chan struct{}
 	done  chan struct{}
 	depth atomic.Int64
+
+	// full is whether SQLite's connection may still be at
+	// synchronous=FULL, from a durable batch whose reset to NORMAL hasn't
+	// succeeded yet. Only the writer goroutine uses it.
+	full bool
 }
 
 type request struct {
-	ctx  context.Context
-	rows int
-	op   Op
-	res  chan error // buffered, so the writer never waits on a caller
+	ctx     context.Context
+	rows    int
+	op      Op
+	durable bool
+	res     chan error // buffered, so the writer never waits on a caller
 }
 
 // Start starts the writer goroutine on db, which is store.DB.Write: the one
@@ -155,13 +180,27 @@ func Start(db *sql.DB, o Options) *Writer {
 // idempotent op, as ingest does with its dedupe on (device_id, b)
 // (DESIGN 4.5).
 func (w *Writer) Do(ctx context.Context, rows int, op Op) error {
+	return w.do(ctx, rows, op, false)
+}
+
+// DoDurable is Do for an op whose commit must survive a power cut, because
+// nothing would send it again: an erasure the privacy hub hears is done
+// (DESIGN 8.9), and the evidence index rows that guard a blob's PUT or
+// delete (DESIGN 10.1). It returns nil only once op's batch has committed
+// and the commit is on disk. Its batch commits as the package doc says,
+// with every other op in it.
+func (w *Writer) DoDurable(ctx context.Context, rows int, op Op) error {
+	return w.do(ctx, rows, op, true)
+}
+
+func (w *Writer) do(ctx context.Context, rows int, op Op, durable bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if rows < 1 {
 		rows = 1
 	}
-	r := &request{ctx: ctx, rows: rows, op: op, res: make(chan error, 1)}
+	r := &request{ctx: ctx, rows: rows, op: op, durable: durable, res: make(chan error, 1)}
 	w.mu.RLock()
 	if w.closed {
 		w.mu.RUnlock()
@@ -287,6 +326,7 @@ func (w *Writer) loop() {
 func (w *Writer) run(batch []*request) {
 	var live []*request
 	rows := 0
+	durable := false
 	for _, r := range batch {
 		if err := r.ctx.Err(); err != nil {
 			// The caller gave up before the op ran.
@@ -295,14 +335,15 @@ func (w *Writer) run(batch []*request) {
 		}
 		live = append(live, r)
 		rows += r.rows
+		durable = durable || r.durable
 	}
 	if len(live) == 0 {
 		return
 	}
 
-	c := Commit{Start: time.Now(), Ops: len(live), Rows: rows}
+	c := Commit{Start: time.Now(), Ops: len(live), Rows: rows, Durable: durable}
 	ctx, cancel := context.WithTimeout(context.Background(), w.opts.BatchTimeout)
-	errs, changed, err := w.write(ctx, live)
+	errs, changed, err := w.write(ctx, live, durable)
 	cancel()
 	c.Changed = changed
 	c.Duration = time.Since(c.Start)
@@ -328,17 +369,39 @@ func (w *Writer) run(batch []*request) {
 // the next op starts, so the name never nests.
 const savepoint = "pairtime_op"
 
-// write runs ops in one transaction, each inside a savepoint, and commits.
-// It returns each op's error and how many rows the ops that succeeded
-// changed, or the error that failed the transaction.
-func (w *Writer) write(ctx context.Context, ops []*request) ([]error, int64, error) {
-	tx, err := w.db.BeginTx(ctx, nil)
+// write runs ops in one transaction, each inside a savepoint, and commits,
+// durably when durable is set (see the package doc). It returns each op's
+// error and how many rows the ops that succeeded changed, or the error
+// that failed the transaction.
+func (w *Writer) write(ctx context.Context, ops []*request, durable bool) ([]error, int64, error) {
+	// The batch holds the one connection from its sync setting to its
+	// reset, so both, and the transaction between them, run on it.
+	conn, err := w.db.Conn(ctx)
+	if err != nil {
+		return nil, 0, fmt.Errorf("writer: connection: %w", err)
+	}
+	defer conn.Close()
+	if err := w.setLevel(ctx, conn, durable); err != nil {
+		return nil, 0, fmt.Errorf("writer: making the batch durable: %w", err)
+	}
+	if durable {
+		// Runs before conn.Close, deferred above.
+		defer w.setLevel(ctx, conn, false)
+	}
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("writer: begin: %w", err)
 	}
 	abort := func(what string, err error) ([]error, int64, error) {
 		tx.Rollback()
 		return nil, 0, fmt.Errorf("writer: %s: %w", what, err)
+	}
+	if durable && w.opts.Engine == store.Postgres {
+		// Before the first op's savepoint, so no op's rollback undoes
+		// it. SET LOCAL lasts only until the transaction ends.
+		if _, err := tx.ExecContext(ctx, "SET LOCAL synchronous_commit TO on"); err != nil {
+			return abort("making the batch durable", err)
+		}
 	}
 	errs := make([]error, len(ops))
 	var changed int64
@@ -363,6 +426,31 @@ func (w *Writer) write(ctx context.Context, ops []*request) ([]error, int64, err
 		return nil, 0, fmt.Errorf("writer: commit: %w", err)
 	}
 	return errs, changed, nil
+}
+
+// setLevel sets SQLite's synchronous level on conn: FULL before a durable
+// batch, and NORMAL after one or, when that reset failed, before the next
+// plain batch. Only a failure to set FULL is an error, which fails the
+// durable batch. A failed reset isn't one: FULL is the stricter level, so
+// the batch runs at it, and the next batch tries again. On Postgres there
+// is nothing to set outside a transaction.
+func (w *Writer) setLevel(ctx context.Context, conn *sql.Conn, durable bool) error {
+	if w.opts.Engine == store.Postgres {
+		return nil
+	}
+	switch {
+	case durable:
+		// Set first: when the statement fails, the batch fails before
+		// its deferred reset, and the next batch resets the level instead.
+		w.full = true
+		_, err := conn.ExecContext(ctx, "PRAGMA synchronous = FULL")
+		return err
+	case w.full:
+		if _, err := conn.ExecContext(ctx, "PRAGMA synchronous = NORMAL"); err == nil {
+			w.full = false
+		}
+	}
+	return nil
 }
 
 // countingTx is the Tx an op gets: the batch's transaction, counting the
