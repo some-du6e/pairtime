@@ -148,7 +148,7 @@ On your computer:
 - `pairtime ledger show --day <date>` prints everything pairtime recorded that day.
 - A `.pairtime-ignore` file keeps a folder out of pairtime entirely, and the tray menu can pause tracking for an hour.
 - Local-only mode uploads nothing.
-- "Delete everything" wipes pairtime's data on your computer, including its device key, and the names you gave your projects. Your other settings stay, and so does install's record of what it changed, with its copies of the files it edited, so that uninstall can put them back.
+- "Delete everything" wipes pairtime's data on your computer, including its device key, and the names you gave the projects that computer tracked. Names that another computer sharing your config.toml wrote stay, and pairtime says how many. Your other settings stay, and so does install's record of what it changed, with its copies of the files it edited, so that uninstall can put them back. It sends nothing to this server, so a name your dashboard shows stays here until you hide it on your dashboard or remove that computer there.
 
 Through the controller, you can:
 

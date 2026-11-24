@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -177,49 +178,80 @@ func TestPrivacyDelete(t *testing.T) {
 				}
 			},
 			check: func(t *testing.T, dir, out string) {
-				const stays = ". Your settings in config.toml stay, all but the names you gave your projects, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back.\nLeft alone: "
-				if !strings.Contains(out, "Deleted everything pairtime recorded in ") || !strings.Contains(out, stays) {
+				const stays = " stay, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back. It sent nothing to the pairtime server"
+				if !strings.Contains(out, "Deleted everything pairtime recorded in ") || !strings.Contains(out, stays) || !strings.Contains(out, "\nLeft alone: ") {
 					t.Errorf("the result doesn't say what stays and what was left alone:\n%s", out)
 				}
 			},
 		},
 		{
-			name: "the names the teen gave their projects go from config.toml, and every other setting stays byte for byte",
+			name: "the names the teen gave the projects this computer tracked go from config.toml, mode goes back to local-only, and another computer's table stays, counted but never named",
 			fill: true, mode: config.Local, args: []string{"--yes"},
 			prepare: func(t *testing.T, dir string) {
-				cfg := "mode = \"local\"\n\n[display]\nshadow = false\n\n[projects." + wipeProjectKey + "]\nname = \"chip8-emulator\"\nonline = true\n"
+				knownProject(t, dir, wipeProjectKey)
+				cfg := "mode = \"online\"\n\n[display]\nshadow = false\n\n[projects." + wipeProjectKey + "]\nname = \"chip8-emulator\"\nonline = true\n\n[projects." + farProjectKey + "]\nname = \"far-away\"\n"
 				if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			},
 			check: func(t *testing.T, dir, out string) {
-				got, err := os.ReadFile(filepath.Join(dir, "config.toml"))
+				cfg := filepath.Join(dir, "config.toml")
+				got, err := os.ReadFile(cfg)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if want := "mode = \"local\"\n\n[display]\nshadow = false\n\n"; string(got) != want {
+				if want := "mode = \"local\"\n\n[display]\nshadow = false\n\n[projects." + farProjectKey + "]\nname = \"far-away\"\n"; string(got) != want {
 					t.Errorf("config.toml is\n%q\nwant\n%q", got, want)
 				}
-				if !strings.Contains(out, "Your settings in config.toml stay, all but the names you gave your projects, and so does install's record") {
-					t.Errorf("the result doesn't say the names went:\n%s", out)
+				if !strings.Contains(out, ", and from "+cfg+" the names you gave the projects this computer tracked. Your other settings stay") {
+					t.Errorf("the result doesn't say the names went from %s:\n%s", cfg, out)
+				}
+				if !strings.Contains(out, "Left alone: 1 table under projects in "+cfg+", for a project this computer never tracked") || strings.Contains(out, "far-away") {
+					t.Errorf("the result doesn't count the table it left, or names it:\n%s", out)
 				}
 			},
 		},
 		{
-			name: "a config.toml that spells projects in another case keeps its names, which the result names as left alone, and the exit status is 1",
+			name: "a table of this computer's that spells projects in another case stays, named under Left alone, the rest of the wipe runs, and the exit status is 1",
 			fill: true, mode: config.Local, args: []string{"--yes"}, wantCode: 1,
 			prepare: func(t *testing.T, dir string) {
+				knownProject(t, dir, wipeProjectKey)
 				cfg := "mode = \"local\"\n\n[Projects." + wipeProjectKey + "]\nname = \"chip8-emulator\"\n"
 				if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			},
 			check: func(t *testing.T, dir, out string) {
-				if got, err := os.ReadFile(filepath.Join(dir, "config.toml")); err != nil || !strings.Contains(string(got), "[Projects."+wipeProjectKey+"]") {
+				cfg := filepath.Join(dir, "config.toml")
+				if got, err := os.ReadFile(cfg); err != nil || !strings.Contains(string(got), "[Projects."+wipeProjectKey+"]") {
 					t.Errorf("config.toml is %q (%v), want it as it was", got, err)
 				}
-				if !strings.Contains(out, "Your settings in config.toml stay, and so does install's record") || !strings.Contains(out, "Left alone: config.toml still holds the names you gave your projects (") {
-					t.Errorf("the result doesn't say the names stayed:\n%s", out)
+				if !strings.Contains(out, "Left alone: the names you gave some of the projects this computer tracked (") || !strings.Contains(out, "; delete [Projects."+wipeProjectKey+"] in "+cfg+" by hand.") {
+					t.Errorf("the result doesn't name the table to delete by hand:\n%s", out)
+				}
+				for _, name := range recordedEntries {
+					if top := strings.Split(name, "/")[0]; exists(t, dir, top) {
+						t.Errorf("%s is still there, though only the names stayed", top)
+					}
+				}
+			},
+		},
+		{
+			name: "a data directory with nothing recorded and a table of a project this computer never tracked has nothing to delete, and says how many tables it left",
+			args: []string{"--yes"},
+			prepare: func(t *testing.T, dir string) {
+				cfg := "mode = \"local\"\n\n[projects." + farProjectKey + "]\nname = \"far-away\"\n"
+				if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, dir, out string) {
+				cfg := filepath.Join(dir, "config.toml")
+				if got, err := os.ReadFile(cfg); err != nil || !strings.Contains(string(got), "[projects."+farProjectKey+"]") {
+					t.Errorf("config.toml is %q (%v), want it as it was", got, err)
+				}
+				if !strings.Contains(out, "nothing to delete") || !strings.Contains(out, "Left alone: 1 table under projects in "+cfg) || strings.Contains(out, "far-away") {
+					t.Errorf("printed %q", out)
 				}
 			},
 		},
@@ -242,24 +274,6 @@ func TestPrivacyDelete(t *testing.T) {
 			args: []string{"--yes"},
 			check: func(t *testing.T, dir, out string) {
 				if !strings.Contains(out, "nothing to delete") {
-					t.Errorf("printed %q", out)
-				}
-			},
-		},
-		{
-			name: "a data directory with nothing recorded in it but names in config.toml still has the names taken out",
-			args: []string{"--yes"},
-			prepare: func(t *testing.T, dir string) {
-				cfg := "mode = \"local\"\n\n[projects." + wipeProjectKey + "]\nname = \"chip8-emulator\"\n"
-				if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			},
-			check: func(t *testing.T, dir, out string) {
-				if got, err := os.ReadFile(filepath.Join(dir, "config.toml")); err != nil || string(got) != "mode = \"local\"\n\n" {
-					t.Errorf("config.toml is %q (%v), want it without the project's table", got, err)
-				}
-				if strings.Contains(out, "nothing to delete") || !strings.Contains(out, "all but the names you gave your projects") {
 					t.Errorf("printed %q", out)
 				}
 			},
@@ -320,9 +334,14 @@ func TestPrivacyDeleteAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A name the teen gave a project, set while the agent runs. The default
-	// config.toml's comments show an example table, so this one's label is
-	// another.
+	// A name the teen gave a project this computer tracked, set while the
+	// agent runs: project-names.json, which only an online uploader writes,
+	// knows its key. The default config.toml's comments show an example
+	// table, so this one's label is another.
+	names := `{"v":1,"server":"","device":"","confirmed":{"` + wipeProjectKey + `":"robotics-club"}}`
+	if err := os.WriteFile(filepath.Join(dirs.Data, "project-names.json"), []byte(names), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := config.ShowName(dirs.ConfigFile(), wipeProjectKey, "robotics-club"); err != nil {
 		t.Fatal(err)
 	}
@@ -387,9 +406,77 @@ func TestPrivacyDeleteAgent(t *testing.T) {
 	}
 }
 
-// wipeProjectKey is the key of a project the tests above name, in the form
-// the git adapter's keys have.
-const wipeProjectKey = "g7c41e9a2d05b8f63e1a94c7d2b6f0e85"
+// wipeProjectKey is the key of a project this computer tracked in the tests
+// above, and farProjectKey one of another computer's sharing config.toml,
+// in the form the git adapter's keys have.
+const (
+	wipeProjectKey = "g7c41e9a2d05b8f63e1a94c7d2b6f0e85"
+	farProjectKey  = "g5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b"
+)
+
+// knownProject writes a state.json in the data directory dir whose
+// project map has a repo with key, so that this computer tracked it.
+func knownProject(t *testing.T, dir, key string) {
+	t.Helper()
+	st := `{"v":1,"projects":{"repos":[{"common_dir":"/home/teen/code/chip8-emulator/.git","key":"` + key + `","kind":"repo"}]}}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(st), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPrivacyDeleteXDG runs "delete everything" with pairtime's data and
+// config folders apart, as XDG_DATA_HOME and XDG_CONFIG_HOME put them on
+// Linux without PAIRTIME_HOME: the names go from the config folder's
+// config.toml, which the result names by its own path.
+func TestPrivacyDeleteXDG(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("XDG_DATA_HOME and XDG_CONFIG_HOME place pairtime's folders on Linux alone")
+	}
+	tests := []struct {
+		name string
+	}{
+		{"with the data and config folders apart, the names go from the config folder's config.toml, which the result names"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			t.Setenv(home.EnvHome, "")
+			t.Setenv("HOME", filepath.Join(root, "home"))
+			t.Setenv("XDG_DATA_HOME", filepath.Join(root, "data"))
+			t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+			dirs, err := home.Default()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if dirs.Data == filepath.Dir(dirs.ConfigFile()) {
+				t.Fatalf("the data folder %s holds config.toml", dirs.Data)
+			}
+			for _, d := range []string{dirs.Data, filepath.Dir(dirs.ConfigFile())} {
+				if err := os.MkdirAll(d, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			knownProject(t, dirs.Data, wipeProjectKey)
+			cfg := "mode = \"local\"\n\n[projects." + wipeProjectKey + "]\nname = \"chip8-emulator\"\n"
+			if err := os.WriteFile(dirs.ConfigFile(), []byte(cfg), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var out, errOut bytes.Buffer
+			if code := run([]string{"privacy", "delete", "--yes"}, &out, &errOut); code != 0 {
+				t.Fatalf("exit %d; stdout:\n%s\nstderr:\n%s", code, out.String(), errOut.String())
+			}
+			if got, err := os.ReadFile(dirs.ConfigFile()); err != nil || string(got) != "mode = \"local\"\n\n" {
+				t.Errorf("config.toml is %q (%v), want it without the project's table", got, err)
+			}
+			if !strings.Contains(out.String(), "from "+dirs.ConfigFile()+" the names you gave the projects this computer tracked") {
+				t.Errorf("the result doesn't name config.toml by its path, %s:\n%s", dirs.ConfigFile(), out.String())
+			}
+			if exists(t, dirs.Data, "state.json") {
+				t.Error("state.json is still there")
+			}
+		})
+	}
+}
 
 // waitForKey waits up to 30 s for the keystore in dir to hold a device key
 // whose id isn't not, and returns the id.

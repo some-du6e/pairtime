@@ -12,26 +12,44 @@ import (
 	"testing"
 )
 
-// notesKey is a second project's key, beside chip8Key.
-const notesKey = "g0b2d4f6a8c0e2a4c6e8a0b2d4f6a8c0e"
+// notesKey is a second project's key of this computer's, beside chip8Key,
+// and farKey one of another computer that shares config.toml.
+const (
+	notesKey = "g0b2d4f6a8c0e2a4c6e8a0b2d4f6a8c0e"
+	farKey   = "g5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b"
+)
+
+// mineKeys reports this computer's projects' keys in the tests: chip8Key
+// and notesKey.
+func mineKeys(key string) bool { return key == chip8Key || key == notesKey }
 
 func TestForgetNames(t *testing.T) {
 	chip8 := "[projects." + chip8Key + "]\nname = \"chip8-emulator\"\nonline = true\n"
+	far := "[projects." + farKey + "]\nname = \"far-away\"\n"
+	backslash := string(rune(92))
 	tests := []struct {
 		name string
 		file string // "" means no file
 		want string // "" means no file
+		left int    // Forgotten.Left
 		// wantErr is a part of the error, "" for none; the file then stays
-		// as it was.
+		// as it was, and byHand is Forgotten.ByHand.
 		wantErr string
+		byHand  []string
 	}{
 		{
-			name: "a project's table goes with every line under it, and the rest stays byte for byte",
+			name: "a table of this computer's goes with every line under it, and the rest stays byte for byte",
 			file: "mode = \"online\"\n\n[server]\nurl = \"https://pairtime.example\"\n\n" + chip8,
 			want: "mode = \"online\"\n\n[server]\nurl = \"https://pairtime.example\"\n\n",
 		},
 		{
-			name: "every project's table goes, and the other settings keep their comments and CRLF line endings",
+			name: "a table of a key this computer never had stays, and is counted",
+			file: "mode = \"local\"\n\n" + far + "\n" + chip8,
+			want: "mode = \"local\"\n\n" + far + "\n",
+			left: 1,
+		},
+		{
+			name: "every table of this computer's goes, and the other settings keep their comments and CRLF line endings",
 			file: "# pairtime settings\r\nmode = \"local\"\r\n\r\n[projects." + chip8Key + "]\r\nname = \"chip8-emulator\"\r\nonline = true\r\n\r\n[projects." + notesKey + "]\r\nname = \"notes\"\r\n\r\n[display]\r\nshadow = false\r\n",
 			want: "# pairtime settings\r\nmode = \"local\"\r\n\r\n[display]\r\nshadow = false\r\n",
 		},
@@ -46,22 +64,19 @@ func TestForgetNames(t *testing.T) {
 			want: "mode = \"local\"\n\n[display]\nshadow = false\n",
 		},
 		{
-			name: "an inline table of projects at the top of the file goes",
-			file: "projects = { " + chip8Key + " = { name = \"chip8-emulator\", online = true } }\nmode = \"local\"\n",
-			want: "mode = \"local\"\n",
+			name: "a dotted key of a key this computer never had stays, and is counted",
+			file: "projects." + farKey + ".name = \"far-away\"\nmode = \"local\"\n",
+			want: "projects." + farKey + ".name = \"far-away\"\nmode = \"local\"\n",
+			left: 1,
 		},
 		{
-			name: "a [projects] table of inline tables goes",
-			file: "mode = \"local\"\n\n[projects]\n" + chip8Key + " = { name = \"chip8-emulator\" }\n",
-			want: "mode = \"local\"\n\n",
+			name: "a [projects] table loses the lines of this computer's keys and keeps another's",
+			file: "[projects]\n" + chip8Key + " = { name = \"chip8-emulator\" }\n" + farKey + " = { name = \"far-away\" }\n",
+			want: "[projects]\n" + farKey + " = { name = \"far-away\" }\n",
+			left: 1,
 		},
 		{
-			name: "an array of [[projects]] tables goes, though Parse reads no project in it",
-			file: "mode = \"local\"\n\n[[projects]]\nname = \"chip8-emulator\"\n",
-			want: "mode = \"local\"\n\n",
-		},
-		{
-			name: "a table under a project's table goes with it",
+			name: "a table under one of this computer's tables goes with it",
 			file: chip8 + "\n[projects." + chip8Key + ".more]\nnote = \"mine\"\n\n[display]\nshadow = false\n",
 			want: "[display]\nshadow = false\n",
 		},
@@ -74,6 +89,11 @@ func TestForgetNames(t *testing.T) {
 			name: "the comment lines right above a dotted key that goes go with it",
 			file: "mode = \"local\"\n# my emulator\nprojects." + chip8Key + ".name = \"chip8-emulator\"\n",
 			want: "mode = \"local\"\n",
+		},
+		{
+			name: "an array of [[projects]] tables names no project's key, and stays",
+			file: "mode = \"local\"\n\n[[projects]]\nname = \"chip8-emulator\"\n",
+			want: "mode = \"local\"\n\n[[projects]]\nname = \"chip8-emulator\"\n",
 		},
 		{
 			name: "a projects key inside another table isn't the teen's projects, and stays",
@@ -94,44 +114,45 @@ func TestForgetNames(t *testing.T) {
 			name: "no file stays no file",
 		},
 		{
-			name: "a table under projects whose key isn't a project's key goes too, though Parse ignores it",
-			file: "mode = \"local\"\n\n[projects.\"chip 8\"]\nname = \"chip8-emulator\"\n",
-			want: "mode = \"local\"\n\n",
+			name: "a table of a key this computer never had that spells projects in another case stays, and is counted",
+			file: "[Projects." + farKey + "]\nname = \"far-away\"\n",
+			want: "[Projects." + farKey + "]\nname = \"far-away\"\n",
+			left: 1,
 		},
 		{
-			name: "projects that isn't a table at the top of the file goes",
-			file: "projects = 5\nmode = \"local\"\n",
-			want: "mode = \"local\"\n",
+			name:    "a table of this computer's that spells projects in another case is refused, naming its header as the file writes it, comment left out",
+			file:    "mode = \"local\"\n\n[Projects." + chip8Key + "] # robotics club\nname = \"chip8-emulator\"\n",
+			wantErr: "can't take out line by line",
+			byHand:  []string{"[Projects." + chip8Key + "]"},
+		},
+		{
+			name:    "projects in another case beside one in lower case is refused, and nothing goes: both headers are to delete by hand",
+			file:    chip8 + "\n[PROJECTS." + notesKey + "]\nname = \"notes\"\n",
+			wantErr: "can't take out line by line",
+			byHand:  []string{"[projects." + chip8Key + "]", "[PROJECTS." + notesKey + "]"},
+		},
+		{
+			name:    "an inline table at projects that holds one of this computer's keys is refused, as one line holds every key",
+			file:    "projects = { " + chip8Key + " = { name = \"chip8-emulator\" } }\nmode = \"local\"\n",
+			wantErr: "can't take out line by line",
+			byHand:  []string{"projects." + chip8Key},
 		},
 		{
 			name:    "a header that escapes a letter of projects, which the edit doesn't read line by line, is refused, as the decoder still reads it as projects",
-			file:    "[\"pro\\u006aects\"." + chip8Key + "]\nname = \"chip8-emulator\"\n",
+			file:    "[\"pro" + backslash + "u006aects\"." + chip8Key + "]\nname = \"chip8-emulator\"\n",
 			wantErr: "can't take out line by line",
+			byHand:  []string{"projects." + chip8Key},
 		},
 		{
-			name: "a multi-line string in a file with no project is no reason to refuse",
-			file: "[display]\nshadow = false\nnote = \"\"\"a\n[projects.x]\n\"\"\"\n",
-			want: "[display]\nshadow = false\nnote = \"\"\"a\n[projects.x]\n\"\"\"\n",
-		},
-		{
-			name:    "projects in another case is refused, as it can hold a name Parse doesn't read",
-			file:    "mode = \"local\"\n\n[Projects." + chip8Key + "]\nname = \"chip8-emulator\"\n",
-			wantErr: "can't take out line by line",
-		},
-		{
-			name:    "projects in another case beside one in lower case is refused, and nothing goes",
-			file:    chip8 + "\n[PROJECTS." + notesKey + "]\nname = \"notes\"\n",
-			wantErr: "can't take out line by line",
-		},
-		{
-			name:    "a dotted key that spells projects in another case is refused",
-			file:    "Projects." + chip8Key + ".name = \"chip8-emulator\"\nmode = \"local\"\n",
-			wantErr: "can't take out line by line",
-		},
-		{
-			name:    "a multi-line string in a project's table, whose lines look like a header, is refused",
+			name:    "a multi-line string in a file with a table of this computer's is refused, whose lines look like a header",
 			file:    "[projects." + chip8Key + "]\nname = \"\"\"chip8\n[server]\n\"\"\"\n",
 			wantErr: "multi-line string",
+			byHand:  []string{"[projects." + chip8Key + "]"},
+		},
+		{
+			name: "a multi-line string in a file with no table of this computer's is no reason to refuse",
+			file: "[display]\nshadow = false\nnote = \"\"\"a\n[projects." + chip8Key + "]\n\"\"\"\n",
+			want: "[display]\nshadow = false\nnote = \"\"\"a\n[projects." + chip8Key + "]\n\"\"\"\n",
 		},
 	}
 	for _, tt := range tests {
@@ -142,7 +163,7 @@ func TestForgetNames(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			err := ForgetNames(name)
+			f, err := ForgetNames(name, mineKeys)
 			want := tt.want
 			switch {
 			case tt.wantErr == "" && err != nil:
@@ -151,6 +172,9 @@ func TestForgetNames(t *testing.T) {
 				t.Fatalf("error %v, want one containing %q", err, tt.wantErr)
 			case tt.wantErr != "":
 				want = tt.file
+			}
+			if f.Left != tt.left || !slices.Equal(f.ByHand, tt.byHand) {
+				t.Errorf("Forgotten = %+v, want Left %d and ByHand %q", f, tt.left, tt.byHand)
 			}
 			got, rerr := os.ReadFile(name)
 			switch {
@@ -164,33 +188,47 @@ func TestForgetNames(t *testing.T) {
 			if string(got) != want {
 				t.Errorf("config.toml is\n%q\nwant\n%q", got, want)
 			}
-			if cfg, problems := Parse(got); tt.wantErr == "" && cfg.Projects != nil {
-				t.Errorf("projects are left: %v", cfg.Projects)
-			} else if _, before := Parse([]byte(tt.file)); tt.wantErr == "" {
-				for _, p := range problems {
-					if !slices.Contains(before, p) {
-						t.Errorf("the edit added the problem %q", p)
-					}
+			if tt.wantErr != "" {
+				return
+			}
+			if keys, ok := projectKeys(strings.TrimPrefix(string(got), bom)); !ok || keys.count(mineKeys) > 0 {
+				t.Errorf("tables of this computer's are left among the file's keys: %v (it parses: %v)", keys, ok)
+			}
+			_, before := Parse([]byte(tt.file))
+			_, after := Parse(got)
+			for _, p := range after {
+				if !slices.Contains(before, p) {
+					t.Errorf("the edit added the problem %q", p)
 				}
 			}
 		})
 	}
 }
 
-func TestHoldsNames(t *testing.T) {
+func TestProjectTables(t *testing.T) {
 	tests := []struct {
-		name string
-		file string // "" means no file
-		want bool
+		name           string
+		file           string // "" means no file
+		ofMine, others int
+		wantErr        bool
 	}{
-		{name: "a project's table is a name", file: "[projects." + chip8Key + "]\nname = \"chip8-emulator\"\n", want: true},
-		{name: "a dotted key under projects is one", file: "projects." + chip8Key + ".name = \"chip8-emulator\"\n", want: true},
-		{name: "projects in another case is one too", file: "[Projects." + chip8Key + "]\nname = \"chip8-emulator\"\n", want: true},
-		{name: "a projects key inside another table isn't one", file: "[display]\nprojects = \"kept\"\n"},
-		{name: "a file of other settings holds none", file: "mode = \"local\"\n\n[display]\nshadow = false\n"},
-		{name: "no file holds none"},
-		{name: "a file that doesn't parse is read line by line, and a project's header is one", file: "mode = [\n[projects." + chip8Key + "]\n", want: true},
-		{name: "a file that doesn't parse, with no project's header, holds none", file: "mode = [\n"},
+		{
+			name:   "this computer's tables and another's are counted apart, however projects is spelled",
+			file:   "[projects." + chip8Key + "]\nname = \"chip8-emulator\"\n\n[Projects." + notesKey + "]\nname = \"notes\"\n\n[projects." + farKey + "]\nname = \"far-away\"\n",
+			ofMine: 2, others: 1,
+		},
+		{
+			name: "a file with no project holds none",
+			file: "mode = \"local\"\n",
+		},
+		{
+			name: "no file holds none",
+		},
+		{
+			name:    "a file that doesn't parse is an error",
+			file:    "mode = [\n",
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -200,8 +238,9 @@ func TestHoldsNames(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if got := HoldsNames(name); got != tt.want {
-				t.Errorf("HoldsNames = %v, want %v", got, tt.want)
+			mine, others, err := ProjectTables(name, mineKeys)
+			if (err != nil) != tt.wantErr || mine != tt.ofMine || others != tt.others {
+				t.Errorf("ProjectTables = %d, %d, %v, want %d, %d and an error: %v", mine, others, err, tt.ofMine, tt.others, tt.wantErr)
 			}
 		})
 	}

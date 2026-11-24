@@ -7,135 +7,225 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 )
 
-// ForgetNames takes every table under projects out of the config.toml at
-// name: the label of each project the teen named for their own dashboard,
+// Forgotten is what ForgetNames found under projects in config.toml.
+type Forgotten struct {
+	// Removed is how many tables of mine's keys it took out.
+	Removed int
+	// Left is how many tables under projects it left, of keys mine doesn't
+	// report: another computer's, when computers share the file, as a
+	// roaming Windows profile or a symlinked dotfiles folder does. It never
+	// says whose, nor what they hold.
+	Left int
+	// ByHand, when the edit refused, holds what to delete by hand for each
+	// of mine's keys: the header of its table as the file writes it, up to
+	// its closing bracket, or its key, such as projects.<key>, where no
+	// header names it.
+	ByHand []string
+}
+
+// ForgetNames takes out of the config.toml at name the tables under
+// projects of the keys mine reports, the keys of the projects this computer
+// tracked: the label of each one the teen named for their own dashboard,
 // which "delete everything" deletes, since no project's key names it once
 // K_dev is gone (pairtime privacy delete; DESIGN 8.8;
-// D-wipe-project-labels). That is each [projects.<key>] table, or any other
-// table under projects, such as [projects] itself or an array of
-// [[projects]], with every line under its header; and each dotted key or
-// inline table under projects at the top of the file. A table or key goes
-// with the comment lines right above it, with no blank line between, which
-// often name the project, as toml_edit counts them with the table. Keys
-// match however they are quoted or spaced, since ["projects".p_x] and
-// [ projects . p_x ] name the same table. A projects key inside another
-// table, such as [display], isn't the teen's projects, and stays.
+// D-wipe-project-labels). That is each such [projects.<key>] table, with
+// the tables under it and every line under their headers; each such key's
+// line in a [projects] table; and each dotted key under projects at the
+// top of the file that names one. Each goes with the comment lines right
+// above it, with no blank line between, which often name the project, as
+// toml_edit counts them with the table. Keys match however a header quotes
+// or spaces them, since ["projects".p_x] and [ projects . p_x ] name the
+// same table.
 //
-// Every other line stays byte for byte, as SetOnline says. The result has
-// to parse, with nothing under projects left at its top in any upper and
-// lower case, as the decoder reads its keys (projectsLeft), and to what the
-// file did with the projects gone and nothing else (edited), so a spelling
-// this misses is a refusal, never a label left behind. That refuses a file
-// that spells projects in another case, such as [Projects.x], which Parse
-// doesn't read as projects but which can still hold a label, and one whose
-// header escapes a letter of projects, as well as one with a multi-line
-// string, a line of which could look like a table's. The error says what to
-// delete by hand.
-func ForgetNames(name string) error {
+// A table for any other key stays, since another computer sharing the
+// file keeps its own projects' tables there, and so does a projects key
+// inside another table, such as [display]. Forgotten.Left counts the
+// tables it left.
+//
+// Every other line stays byte for byte, as SetOnline says. What the edit
+// leaves has to parse, with no key of mine's left under projects in any
+// upper and lower case, as the decoder reads its keys, and to what the file
+// did with those projects gone and nothing else (edited). So a spelling it
+// misses is a refusal, never a label of mine's left behind: a table that
+// spells projects in another case, such as [Projects.x], which Parse
+// doesn't read as projects but which can still hold a label; a header
+// that escapes a letter; an inline table at projects; and a file with a
+// multi-line string, a line of which could look like a table's. Then
+// Forgotten.ByHand says what to delete by hand.
+func ForgetNames(name string, mine func(key string) bool) (Forgotten, error) {
 	byHand := func(name, _ string) string {
-		return "delete every table under projects, in any upper and lower case, such as [projects.<key>], with every line under it, in " + name + " by hand"
+		return "delete the tables of this computer's projects under projects, with every line under them, in " + name + " by hand"
 	}
-	why := "" // why the edit left the file as it is, though it holds projects
+	var (
+		f   Forgotten
+		why string // why the edit left the file as it is
+	)
 	err := rewrite(name, false, byHand, func(text string) string {
-		why = ""
-		if !projectsLeft(text) {
-			return text // nothing under projects, whatever a string's lines look like
+		f, why = Forgotten{}, ""
+		keys, ok := projectKeys(text)
+		if !ok {
+			return text // edited refuses a file that doesn't parse before it asks
 		}
-		out := withoutProjects(text)
+		f.Left = keys.count(func(key string) bool { return !mine(key) })
+		if keys.count(mine) == 0 {
+			return text
+		}
+		out := withoutProjects(text, mine)
+		after, ok := projectKeys(out)
 		switch {
 		case strings.Contains(text, `"""`) || strings.Contains(text, "'''"):
 			why = "has a multi-line string, a line of which could look like a table's"
-			return text
-		case projectsLeft(out):
-			why = "holds projects pairtime can't take out line by line, such as a table spelled in another upper and lower case"
-			return text
+		case !ok || after.count(mine) > 0:
+			why = "names this computer's projects in a way pairtime can't take out line by line, such as a table spelled in another upper and lower case"
+		default:
+			f.Removed = keys.count(mine)
+			return out
 		}
-		return out
-	}, func(c *Config) { c.Projects = nil })
+		f.ByHand = byHandOf(text, keys, mine)
+		return text
+	}, func(c *Config) {
+		for key := range c.Projects {
+			if mine(key) {
+				delete(c.Projects, key)
+			}
+		}
+	})
 	switch {
 	case why != "":
-		return fmt.Errorf("config: config.toml %s, so pairtime didn't change it; %s", why, byHand(name, ""))
+		return f, fmt.Errorf("config: config.toml %s, so pairtime didn't change it", why)
 	case err != nil:
-		return err
+		return f, err
 	}
-	return nil
+	return f, nil
 }
 
-// HoldsNames reports whether the config.toml at name holds anything under
-// projects at its top, in any upper and lower case, such as the names the
-// teen gave their projects: what ForgetNames takes out, or refuses. A file
-// that isn't there holds none, and one that doesn't parse is read line by
-// line.
-func HoldsNames(name string) bool {
+// ProjectTables reads the config.toml at name and returns how many tables
+// under projects it holds of the keys mine reports, and of other keys,
+// however it spells projects, as ForgetNames counts them. A file that isn't
+// there holds none; the error is one that doesn't read or parse.
+func ProjectTables(name string, mine func(key string) bool) (ofMine, others int, err error) {
 	data, err := os.ReadFile(name)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return false
+		return 0, 0, nil
 	case err != nil:
-		return true
+		return 0, 0, err
 	}
-	text := strings.TrimPrefix(string(data), bom)
-	if _, err := toml.Decode(text, &fileConfig{}); err == nil {
-		return projectsLeft(text)
+	keys, ok := projectKeys(strings.TrimPrefix(string(data), bom))
+	if !ok {
+		return 0, 0, errors.New("config: config.toml doesn't parse")
 	}
-	top := true
-	for _, line := range strings.Split(text, "\n") {
-		t := strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(t, "["):
-			top = false
-			if strings.HasPrefix(strings.ToLower(strings.TrimLeft(t, "[ ")), projectsTable) {
-				return true
-			}
-		case top && !isComment(t):
-			if parts := keyParts(t); len(parts) > 0 && strings.EqualFold(parts[0], projectsTable) {
-				return true
-			}
-		}
-	}
-	return false
+	return keys.count(mine), keys.count(func(key string) bool { return !mine(key) }), nil
 }
 
-// projectsLeft reports whether text holds anything under projects at its
-// top, in any upper and lower case, as the decoder reads its keys, or
-// doesn't parse: what ForgetNames left must hold nothing of the kind.
-func projectsLeft(text string) bool {
+// tableKey is a table under projects as the decoder reads its keys: the top
+// key as the file spells it, projects in some upper and lower case, and the
+// project's key.
+type tableKey struct{ top, key string }
+
+// tableKeys are the tables under projects a file holds, in the order the
+// decoder lists them.
+type tableKeys []tableKey
+
+// count returns how many of k are of keys that keep reports.
+func (k tableKeys) count(keep func(key string) bool) int {
+	n := 0
+	for _, t := range k {
+		if keep(t.key) {
+			n++
+		}
+	}
+	return n
+}
+
+// projectKeys returns the tables under projects in text, as the decoder
+// reads its keys: each key under a top-level table whose name is projects
+// in any upper and lower case, once. An array of [[projects]] tables names
+// no project's key, and holds none. ok is false for text that doesn't
+// parse.
+func projectKeys(text string) (tableKeys, bool) {
 	md, err := toml.Decode(text, &fileConfig{})
 	if err != nil {
-		return true
+		return nil, false
 	}
+	var out tableKeys
 	for _, k := range md.Keys() {
-		if len(k) > 0 && strings.EqualFold(k[0], projectsTable) {
-			return true
+		if len(k) < 2 || !strings.EqualFold(k[0], projectsTable) || md.Type(k[0]) != "Hash" {
+			continue
+		}
+		if t := (tableKey{k[0], k[1]}); !slices.Contains(out, t) {
+			out = append(out, t)
 		}
 	}
-	return false
+	return out, true
 }
 
-// withoutProjects returns text without its tables under projects, with the
-// lines under their headers, and without its dotted keys and inline tables
-// under projects at the top of the file, each with the comment lines right
-// above it (ForgetNames).
-func withoutProjects(text string) string {
+// byHandOf returns what to delete by hand of the tables in keys of mine's
+// keys, in text: the header of each, as the file writes it, up to its
+// closing bracket, so that a comment after it never shows, or, for one no
+// header names, its key.
+func byHandOf(text string, keys tableKeys, mine func(key string) bool) []string {
+	var out []string
+	named := make(map[tableKey]bool)
+	for _, line := range strings.Split(text, "\n") {
+		t := strings.TrimSpace(line)
+		if !strings.HasPrefix(t, "[") || strings.HasPrefix(t, "[[") {
+			continue
+		}
+		end := strings.IndexByte(t, ']')
+		if end < 0 {
+			continue
+		}
+		path, ok := tablePath(strings.TrimSpace(t[1:end]))
+		if !ok || len(path) < 2 || !strings.EqualFold(path[0], projectsTable) || !mine(path[1]) {
+			continue
+		}
+		named[tableKey{path[0], path[1]}] = true
+		if h := t[:end+1]; !slices.Contains(out, h) {
+			out = append(out, h)
+		}
+	}
+	for _, k := range keys {
+		if mine(k.key) && !named[k] {
+			out = append(out, k.top+"."+k.key)
+		}
+	}
+	return out
+}
+
+// withoutProjects returns text without what ForgetNames takes out for the
+// keys mine reports: each one's tables, with the lines under their
+// headers, its lines in a [projects] table, and its dotted keys under
+// projects at the top of the file, each with the comment lines right above
+// it.
+func withoutProjects(text string, mine func(key string) bool) string {
 	lines := strings.SplitAfter(text, "\n")
 	drop := make([]bool, len(lines))
 	var starts []int // the first line of each table or key that goes
-	top, in := true, false
+	top, in, members := true, false, false
 	for i, line := range lines {
 		t := strings.TrimSpace(line)
 		switch {
 		case strings.HasPrefix(t, "["):
-			top, in = false, underProjects(t)
+			top, in, members = false, false, false
+			path, ok := tablePath(tableName(t))
+			if ok && len(path) > 0 && path[0] == projectsTable {
+				in = len(path) > 1 && mine(path[1])
+				members = len(path) == 1
+			}
 			if in {
 				starts = append(starts, i)
 			}
-		case top:
-			if parts := keyParts(t); !isComment(t) && len(parts) > 0 && parts[0] == projectsTable {
+		case (top || members) && !isComment(t):
+			parts := keyParts(t)
+			if top && len(parts) > 1 && parts[0] == projectsTable && mine(parts[1]) ||
+				members && len(parts) > 0 && mine(parts[0]) {
 				drop[i] = true
 				starts = append(starts, i)
 			}
@@ -156,18 +246,4 @@ func withoutProjects(text string) string {
 		}
 	}
 	return b.String()
-}
-
-// underProjects reports whether the trimmed header line t opens a table
-// under projects, projects itself, or an array of either, however its keys
-// are quoted or spaced (tablePath).
-func underProjects(t string) bool {
-	inner := strings.TrimPrefix(t, "[")
-	inner = strings.TrimPrefix(inner, "[") // an array of tables
-	name, _, ok := strings.Cut(inner, "]")
-	if !ok {
-		return false
-	}
-	path, ok := tablePath(strings.TrimSpace(name))
-	return ok && len(path) > 0 && path[0] == projectsTable
 }

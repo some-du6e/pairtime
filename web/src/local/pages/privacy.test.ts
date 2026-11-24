@@ -170,7 +170,7 @@ describe('Privacy', () => {
 				const t = text(html);
 				expect(t).toContain("pairtime privacy delete , typed in a terminal, deletes pairtime's key and everything pairtime keeps on this computer");
 				expect(t).toContain(
-					"apart from pairtime itself, its settings without the names you gave your projects, and install's record of what it changed, with its copies of the files it edited, so that uninstall can put them back.",
+					"apart from pairtime itself, its settings without the names you gave the projects this computer tracked, and install's record of what it changed, with its copies of the files it edited, so that uninstall can put them back.",
 				);
 				expect(t).toContain('Copies a backup or a synced folder already holds stay as they are');
 				expect(t).not.toContain('Nobody can bring');
