@@ -132,6 +132,17 @@ type dashPage struct {
 	// it has no time in the last 30 days yet, which shows how to link the
 	// app instead of empty charts.
 	Owner, Empty bool
+	// ETag is the owner's view's dashboard.ETag, on #live, which the
+	// page's script polls the snapshot with (WP-SV8); "" on the sample.
+	ETag string
+	// NextDay is when the view's today ends in its time zone, in Unix
+	// milliseconds, on #live, and NextDayIn how long that was after the
+	// view was read, by the server's clock: the script fetches the page
+	// again once NextDayIn has passed since the page arrived, so a
+	// dashboard left open turns its day at the owner's midnight whatever
+	// the browser's clock says, and tells one midnight from the next by
+	// NextDay. Both 0 on the sample.
+	NextDay, NextDayIn int64
 	// SplitByDevice says a repo used on two computers shows as two
 	// projects (dashboard.View.SplitByDevice).
 	SplitByDevice bool
@@ -1147,7 +1158,23 @@ func (s *Site) serveDashboard(w http.ResponseWriter, r *http.Request, in SignIn,
 		http.Error(w, "Your dashboard didn't load. Try again in a minute.", http.StatusInternalServerError)
 		return
 	}
-	writePage(w, code, page, s.cspForm, "no-store", "same-origin")
+	writePage(w, code, page, s.cspLive, "no-store", "same-origin")
+}
+
+// nextLocalDay returns when v's today ends in its time zone, in Unix
+// milliseconds: the first instant of the next local date, which on a day
+// whose midnight the clocks skip is the first second after the jump
+// (firstInstant). It returns 0 for a view whose today isn't a date.
+func nextLocalDay(v dashboard.View) int64 {
+	today, err := time.Parse(dashboard.DateLayout, v.Today)
+	if err != nil {
+		return 0
+	}
+	loc, err := rollup.LoadZone(v.TZ)
+	if err != nil {
+		loc = time.UTC
+	}
+	return firstInstant(today.AddDate(0, 0, 1), loc).UnixMilli()
 }
 
 // ownerPage renders v as a signed-in account's own dashboard, with acct in
@@ -1162,10 +1189,21 @@ func (s *Site) ownerPage(v dashboard.View, in SignIn, acct *account, zoneError s
 	if canHide {
 		d.HidePath = HidePath
 	}
+	// The snapshot's ETag, which the page's script sends when it polls
+	// (WP-SV8): the View the page draws is the one the API answers with.
+	d.ETag = dashboard.ETag(v)
+	if d.NextDay = nextLocalDay(v); d.NextDay > 0 {
+		d.NextDayIn = max(d.NextDay-v.AsOf.UnixMilli(), 0)
+	}
 	var body bytes.Buffer
 	if err := s.dash.Execute(&body, d); err != nil {
 		return nil, fmt.Errorf("pages: %w", err)
 	}
+	// The script goes in as its bytes, outside the template, so the page
+	// carries exactly what cspLive's hash names.
+	body.WriteString("<script>")
+	body.Write(s.liveJS)
+	body.WriteString("</script>\n")
 	var out bytes.Buffer
 	if err := s.layout.wrap(&out, layoutData{Title: "Your dashboard", Class: "dash", Body: template.HTML(body.String()), Account: acct}); err != nil {
 		return nil, err

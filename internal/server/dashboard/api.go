@@ -3,10 +3,13 @@
 package dashboard
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -31,6 +34,10 @@ const sessionChallenge = `Session realm="pairtime"`
 // can't be read gets a 500 with dashboard_unavailable instead, so a client
 // isn't told to sign in again because the database failed. The view is
 // the owner's own and changes by the minute, so nothing may store it.
+//
+// It is also the snapshot the live dashboard polls while its stream is
+// quiet (SP 6.4; WP-SV8): each answer has the View's ETag, and a request
+// whose If-None-Match names it gets 304 with no body.
 func API(src Source, account func(*http.Request) (string, error), now func() time.Time, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -51,8 +58,49 @@ func API(src Source, account func(*http.Request) (string, error), now func() tim
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "dashboard_unavailable"})
 			return
 		}
+		tag := ETag(v)
+		w.Header().Set("ETag", tag)
+		if noneMatch(r.Header.Values("If-None-Match"), tag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 		writeJSON(w, http.StatusOK, v)
 	}
+}
+
+// ETag returns v's entity tag. It is weak, and leaves AsOf out: two Views
+// that differ only in when they were read are the same dashboard, so a
+// poll a minute after the last finds it unchanged (RFC 9110 8.8.1, 8.8.3).
+func ETag(v View) string {
+	v.AsOf = time.Time{}
+	b, err := json.Marshal(v)
+	if err != nil {
+		// A View always encodes; a tag that matches nothing still works.
+		return `W/"unencodable"`
+	}
+	sum := sha256.Sum256(b)
+	return `W/"` + hex.EncodeToString(sum[:16]) + `"`
+}
+
+// noneMatch reports whether If-None-Match, as values, is * or names tag,
+// comparing tags weakly, as RFC 9110 13.1.2 asks of it. * counts only as
+// the whole field value, as the grammar has it ("*" / #entity-tag), since
+// an entity-tag may hold a comma or a * between its quotes. Splitting such
+// a tag at its commas can't make a piece that is tag, since tag is quoted
+// and an opaque-tag holds no quote.
+func noneMatch(values []string, tag string) bool {
+	if len(values) == 1 && strings.TrimSpace(values[0]) == "*" {
+		return true
+	}
+	opaque := strings.TrimPrefix(tag, "W/")
+	for _, v := range values {
+		for _, t := range strings.Split(v, ",") {
+			if strings.TrimPrefix(strings.TrimSpace(t), "W/") == opaque {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

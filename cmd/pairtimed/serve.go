@@ -30,6 +30,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/rollup"
 	"github.com/some-du6e/pairtime/internal/server/store"
+	"github.com/some-du6e/pairtime/internal/server/stream"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 	"github.com/some-du6e/pairtime/internal/version"
 )
@@ -227,6 +228,16 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	// PENDING_WINDOW_S has passed since it ended (D-server-settles-pending).
 	// It too stops before the writer does.
 	settled := reg.Counter("pairtime_rollup_settled_minutes_total", "Minutes their devices left pending that the server settled as final (D-server-settles-pending).")
+	// The live stream (WP-SV8), which the hub below is, hears of each
+	// account whose rollups a committed write moved. The settle job starts
+	// before the hub is made, and nobody can be listening before the
+	// server is, so until then it hears nothing.
+	var live atomic.Pointer[stream.Hub]
+	changed := func(account string) {
+		if h := live.Load(); h != nil {
+			h.Changed(account)
+		}
+	}
 	settleCtx, stopSettle := context.WithCancel(ctx)
 	settleDone := make(chan struct{})
 	go func() {
@@ -236,7 +247,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 			if err != nil && settleCtx.Err() == nil {
 				logger.Error("settling pending minutes failed", "settled", n, "err", err)
 			}
-		})
+		}, changed)
 	}()
 	defer func() {
 		stopSettle()
@@ -392,10 +403,32 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	public := http.NewServeMux()
 	public.HandleFunc("GET /healthz", ops.Healthz)
 	public.Handle("GET "+serverkeys.DocumentPath, serverkeys.Handler(keysDoc))
+	// The privacy hub's deletion and export (WP-SV13; DESIGN 8.9), on
+	// once privacy_hub.aud names this server to the hub.
+	privacyHub, err := newPrivacyHub(cfg, db, w, logger)
+	if err != nil {
+		return err
+	}
+	if privacyHub != nil {
+		privacyHub.Register(public)
+	}
 	site.Register(public)
 	signIn.Register(public)
 	linking.Register(public)
-	newIngest(cfg, db, w, devices, series, logger).Register(public)
+	// The live dashboard's stream (WP-SV8; SP 6.4): each write that moved
+	// an account's rollups tells it once its transaction committed, from
+	// ingest, the settle job, a time zone change and "Hide this name", and
+	// it sends the account's open dashboards the View the page draws.
+	// profile: topics answer 404 until WP-SV9 gives it Profiles. Its
+	// streams end before the servers stop, below.
+	rollups := dashboard.Rollups{DB: db.Read}
+	owner := accountOf(signIn)
+	hub := stream.New(stream.Options{Source: rollups, Account: owner, Logger: logger})
+	defer hub.Close()
+	live.Store(hub)
+	reg.GaugeFunc("pairtime_streams_open", "Open live-dashboard streams (DESIGN 10.4; WP-SV8).", func() float64 { return float64(hub.Streams()) })
+	public.Handle("GET "+stream.Path, hub)
+	newIngest(cfg, db, w, devices, series, logger, changed).Register(public)
 	visit := pages.SignIn{
 		Enabled:    signIn.Enabled(),
 		LoginPath:  auth.LoginPath,
@@ -408,21 +441,21 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	site.RegisterDemo(public, visit, time.Now)
 	// The signed-in owner's dashboard, as a page and as JSON, from the
 	// rollups (WP-SV7). Ingest's bucket revisions reach them through
-	// rollup.ApplyEvent, which newIngest sets as ingest's Rollup.
-	rollups := dashboard.Rollups{DB: db.Read}
-	owner := accountOf(signIn)
+	// rollup.ApplyEvent, which newIngest sets as ingest's Rollup. Once a
+	// change of zone or name commits, the owner's other open dashboards
+	// redraw over the stream.
 	site.RegisterDashboard(public, visit, pages.Dashboard{
 		Source:  rollups,
 		Account: owner,
 		SetZone: func(ctx context.Context, account, zone string) error {
-			return w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+			return commitThenTell(ctx, w, account, changed, func(ctx context.Context, tx writer.Tx) error {
 				return rollup.SetZone(ctx, tx, account, zone, time.Now())
 			})
 		},
 		// "Hide this name": the website can hide a name the owner turned
 		// on, never set one (D-owner-names).
 		HideName: func(ctx context.Context, account, project string) error {
-			return w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+			return commitThenTell(ctx, w, account, changed, func(ctx context.Context, tx writer.Tx) error {
 				return projectnames.Hide(ctx, tx, account, project, time.Now().UnixMilli())
 			})
 		},
@@ -475,12 +508,30 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	}
 	sctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	// A stream never goes idle, so Shutdown would wait out shutdownTimeout
+	// for each: the hub ends them first, and each browser reconnects to the
+	// next server and resyncs.
+	hub.Close()
 	for _, s := range servers {
 		if err := s.Shutdown(sctx); err != nil {
 			logger.Warn("shutdown", "err", err)
 		}
 	}
 	return serveErr
+}
+
+// commitThenTell runs op through w and tells changed of account once op
+// has committed. Do answers with its context's error the moment that
+// context ends, even while op waits in the queue or before its batch
+// commits, so a Changed then could come before the commit and none after
+// it. op runs on ctx without its cancellation instead: a browser that goes
+// still gets its change made, and the stream hears of it only once it is.
+func commitThenTell(ctx context.Context, w rollup.Doer, account string, changed func(account string), op writer.Op) error {
+	err := w.Do(context.WithoutCancel(ctx), 1, op)
+	if err == nil {
+		changed(account)
+	}
+	return err
 }
 
 // sourceCommit is the commit the pages link the code and docs/ files at:
