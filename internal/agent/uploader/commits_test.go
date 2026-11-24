@@ -279,13 +279,35 @@ func TestCommitPlan(t *testing.T) {
 					t.Errorf("once the file reads, records %v went: want commit 1's first line and commit 2", p.body.Commits)
 				}
 			}},
-		{"a line after one that waits in its day keeps its sha from going in a later day's line", nil, saved{Next: 4},
+		{"a line after one that waits in its day keeps its sha from going in a later day's line, which waits with it", nil, saved{Next: 4},
 			func(t *testing.T, dir string, ix *rowIndex, in *planInput) []int64 {
 				ends := writeCommitLines(t, dir, day, commitRecord(1, atS(200)), commitRecord(2, atS(201)))
 				return append(ends, writeCommitLines(t, dir, nextDay, commitRecord(2, atS(24*3600+60)))...)
 			}, func(t *testing.T, p plan, ends []int64, in planInput) {
-				if len(p.body.Commits) != 0 || p.commitMarks[day].Off != 0 || p.commitMarks[nextDay].Off != ends[2] {
-					t.Errorf("records %v went, marks %+v: want the later day's line of commit 2 passed over", p.body.Commits, p.commitMarks)
+				if len(p.body.Commits) != 0 || p.commitMarks[day].Off != 0 || p.commitMarks[nextDay].Off != 0 {
+					t.Errorf("records %v went, marks %+v: want nothing decided, the later day's line of commit 2 waiting", p.body.Commits, p.commitMarks)
+				}
+			}},
+		{"a sha's first line that waited goes in a later plan, and its later line in a later day is then passed over", nil, saved{Next: 4},
+			func(t *testing.T, dir string, ix *rowIndex, in *planInput) []int64 {
+				ends := writeCommitLines(t, dir, day, commitRecord(1, atS(200)))
+				return append(ends, writeCommitLines(t, dir, nextDay, commitRecord(1, atS(24*3600+60), `"actor":"human"`, `"actor":"unknown"`))...)
+			}, func(t *testing.T, p plan, ends []int64, in planInput) {
+				if len(p.body.Commits) != 0 || len(p.commitMarks) != 0 {
+					t.Fatalf("records %v went, marks %+v, while the first line waits for a batch sealed after it", p.body.Commits, p.commitMarks)
+				}
+				// A batch sealed after both lines, whose root has been answered.
+				in.rows = indexOf(t, []float64{1, 2, 3, 24*60 + 2}, []float64{1.1, 2.1, 3.1, 24*60 + 2.1})
+				in.st.Next, in.st.CommitMarks = 5, p.commitMarks
+				p, err := makePlan(in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(p.body.Commits) != 1 || p.body.Commits[0].ObservedAt != atS(200) || p.body.Commits[0].Actor != "human" {
+					t.Errorf("the later plan sends %v: want the first line's record", p.body.Commits)
+				}
+				if p.commitMarks[day].Off != ends[0] || p.commitMarks[nextDay].Off != ends[1] {
+					t.Errorf("marks %+v: the later line isn't passed over", p.commitMarks)
 				}
 			}},
 		{"a line without counts goes without them, and a read 0 goes as 0", nil, saved{Next: 4},

@@ -67,11 +67,15 @@ const (
 // (D-ag5-D2). Each plan reads every kept day's file whole. The shas of the
 // lines before each day's mark were decided already. The new lines, read
 // oldest day first and then in file order, each add their sha, those after
-// a line that waits included, and a new line whose sha is already among
-// them is passed over, whether the line before it went, was withheld or
-// still waits. The first line of a sha is judged by judgeCommit. One that
-// waits holds back the rest of its day: their marks wait with it, as a
-// mark passes only decided lines, and they are read again next time. A day
+// a line that waits included. The first line of a sha is judged by
+// judgeCommit. One that waits holds back the rest of its day: their marks
+// wait with it, as a mark passes only decided lines, and they are read
+// again next time. A new line whose sha is already among them is passed
+// over when the sha's first line went or was withheld. When the first line
+// still waits, or was held back with its day, the new line waits too,
+// holding back its own day: no mark passes a line of a sha whose first
+// line is undecided, so the next plan judges the first line first, rather
+// than find its sha before a later line's mark and pass it over too. A day
 // whose file can't be read, for a reason other than being gone, stops every
 // line in the plan, whatever its day: none goes and no mark moves, since
 // the file may hold the first line of a sha that another day's line has
@@ -112,7 +116,9 @@ func commitsOf(in planInput, n int) (entries []commitEntry, days map[string]bool
 	if len(unread) > 0 {
 		return nil, nil, unread, false
 	}
-	seen := map[string]bool{}
+	// seen holds the shas of the lines read so far, and undecided those
+	// whose first line waits in this plan, or was held back with its day.
+	seen, undecided := map[string]bool{}, map[string]bool{}
 	for _, d := range read {
 		for _, l := range d.lines[:d.from] {
 			if c, ok := commitOf(l.line); ok {
@@ -129,16 +135,22 @@ func commitsOf(in planInput, n int) (entries []commitEntry, days map[string]bool
 			}
 			c, ok := commitOf(l.line)
 			if held {
-				if ok {
-					seen[c.SHA] = true
+				if ok && !seen[c.SHA] {
+					seen[c.SHA], undecided[c.SHA] = true, true
 				}
+				continue
+			}
+			if ok && undecided[c.SHA] {
+				// A later line of a sha whose first line waits waits with it.
+				held = true
 				continue
 			}
 			mark := store.Mark{Off: l.end, Line: commitDigest(l.line)}
 			if !ok || seen[c.SHA] {
 				// A line that doesn't read as a record, as one a power cut cut
-				// short, or a sha whose first line came before it, as after a
-				// crash's second scan or another clone's pull, is passed over.
+				// short, or a sha whose first line came before it and went or
+				// was withheld, as after a crash's second scan or another
+				// clone's pull, is passed over.
 				entries = append(entries, commitEntry{day: d.day, mark: mark})
 				took++
 				continue
@@ -146,6 +158,7 @@ func commitsOf(in planInput, n int) (entries []commitEntry, days map[string]bool
 			seen[c.SHA] = true
 			switch judgeCommit(in, c.ObservedAt) {
 			case commitWaits:
+				undecided[c.SHA] = true
 				held = true
 				continue
 			case commitWithheld:
