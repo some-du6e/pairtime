@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/params"
 	"github.com/some-du6e/pairtime/pkg/score"
@@ -150,7 +151,9 @@ func TestHeldGap(t *testing.T) {
 // out; over SM 6.1's morning up to its first browser run, a lookup, with
 // the browser then left in front for 40 minutes while samples come; and
 // over a night's suspend, after which pkg/score holds the minutes for
-// PENDING_WINDOW_S - READ_HORIZON_S past the morning's resume.
+// PENDING_WINDOW_S - READ_HORIZON_S past the morning's resume by the
+// computer's own clock, even when a bridge prompt dated ahead of that
+// clock comes.
 func TestStallWarning(t *testing.T) {
 	const minute = int64(60_000)
 	var tools []int64
@@ -232,6 +235,38 @@ func TestStallWarning(t *testing.T) {
 		}
 		return evs
 	}
+	// bridged is overnight with the sampler quiet for 20 minutes after the
+	// morning's first two samples, and a bridge prompt then, whose t comes
+	// from a transcript. Its batch is sealed at its t, but the newest record
+	// the computer's own clock dated is still the sample 15 s after the
+	// resume, so pkg/score still holds the night's minutes (#312), and the
+	// note must still say why.
+	bridged := func(t *testing.T) []event.Event {
+		evs := overnight(t)
+		i := slices.IndexFunc(evs, func(e event.Event) bool {
+			d, ok := e.Data.(*event.OSPower)
+			return ok && d.Op == event.PowerResume
+		})
+		k := slices.IndexFunc(evs, func(e event.Event) bool {
+			_, ok := e.Data.(*event.PromptSubmit)
+			return ok
+		})
+		ts := int64(0)
+		if i >= 0 {
+			ts = evs[i].T + 20*minute
+		}
+		j := slices.IndexFunc(evs, func(e event.Event) bool { return e.T > ts })
+		if i < 0 || k < 0 || j < 0 {
+			t.Fatal("the night has no resume, no prompt before it or no sample 20 min after it")
+		}
+		b := evs[k]
+		d := *b.Data.(*event.PromptSubmit)
+		d.TurnKey = "t_bridge"
+		b.EventID = "01a1fb1e-5318-78a1-a7f6-000000000001"
+		b.Mono += ts - b.T
+		b.T, b.Source, b.Via, b.Data = ts, event.SourceLog, event.ViaBridge, &d
+		return slices.Concat(evs[:i+3], []event.Event{b}, evs[j:])
+	}
 	cases := []struct {
 		name  string
 		build func(t *testing.T) []event.Event
@@ -261,6 +296,8 @@ func TestStallWarning(t *testing.T) {
 			build: browser, held: true},
 		{name: "a night's suspend, which holds the minutes for 5 min after the morning's resume, tells doctor why while it holds, and nothing once they catch up",
 			build: overnight, warned: true, each: "a presence sample came after 14 h without one"},
+		{name: "a bridge prompt dated 20 min after the morning's resume, its batch sealed then, leaves doctor hearing why the night's minutes wait while the newest record the computer's own clock dated is under 5 min past the resume",
+			build: bridged, warned: true, each: "a presence sample came after 14 h without one"},
 		{name: "a FinalBefore pkg/score holds at a slot nothing decides tells doctor that no sample came within BUCKET_TTL_S after the first of those minutes, and when the ones it left undecided count as unknown",
 			build: turn(func(int64) bool { return true }), warned: true, held: true,
 			last: "no presence sample came within 2 h after the first of those minutes, so they wait",
@@ -271,6 +308,14 @@ func TestStallWarning(t *testing.T) {
 			t.Parallel()
 			evs := c.build(t)
 			r := newRig(t, score.Device{})
+			// A prompt seals at once, without waiting for the seal to finish,
+			// so the rig settles after a bridge prompt: its batch is then
+			// sealed alone, at its own t.
+			r.each = func(i int, l *Loop, w *ledger.Writer) {
+				if evs[i].Via == event.ViaBridge {
+					r.settle(l, w)
+				}
+			}
 			if c.hold != nil {
 				at := c.hold(evs)
 				r.setup = func(l *Loop) {
