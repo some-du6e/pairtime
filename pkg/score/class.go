@@ -30,21 +30,31 @@ func PromptClass(t *params.Table, p *event.PromptSubmit, asked bool) event.Promp
 }
 
 // TrackClass returns the class of a `pairtime track` call, the one the
-// scorer gives the anchor the call opens (DESIGN 5.4): substantive from
-// SUBSTANTIVE_CHARS characters of text_len, and low_effort under that. The
-// label is local, so the server's exact re-score never sees it, and the
-// call is classed by its length alone (DESIGN 6.5). The ledger writer
-// records it as a track record's f.pc (ledger-v1 10.7).
+// scorer gives the anchor the call opens (DESIGN 5.4): low_effort when the
+// go-ahead test marked the label, error_paste for an error signature with
+// fewer than ERROR_PASTE_TEXT_MAX characters of text_len, substantive from
+// SUBSTANTIVE_CHARS characters of it, low_effort under that, and never
+// answer. p's low_effort and error_sig are what the ledger writer derived
+// from the label after pkg/redact, and error_sig is read back from the
+// record's f.es when the record is scored from the ledger. The writer
+// records the class as a track record's f.pc (ledger-v1 10.7).
 func TrackClass(t *params.Table, p *event.CLITrack) event.PromptClass {
-	return trackClass(p, t.Int(params.SUBSTANTIVE_CHARS))
+	return trackClass(p, t.Int(params.SUBSTANTIVE_CHARS), t.Int(params.ERROR_PASTE_TEXT_MAX))
 }
 
-// trackClass is TrackClass with SUBSTANTIVE_CHARS given.
-func trackClass(p *event.CLITrack, substantive int64) event.PromptClass {
-	if count(p.TextLen) < substantive {
+// trackClass is TrackClass with SUBSTANTIVE_CHARS and ERROR_PASTE_TEXT_MAX
+// given.
+func trackClass(p *event.CLITrack, substantive, errorPasteMax int64) event.PromptClass {
+	n := count(p.TextLen)
+	switch {
+	case p.LowEffort:
 		return event.ClassLowEffort
+	case p.ErrorSig != "" && n < errorPasteMax:
+		return event.ClassErrorPaste
+	case n >= substantive:
+		return event.ClassSubstantive
 	}
-	return event.ClassSubstantive
+	return event.ClassLowEffort
 }
 
 // questionSessions bounds how many sessions a Questions remembers. When it
