@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -482,9 +483,85 @@ func TestDrawRules(t *testing.T) {
 	})
 }
 
+// TestChallengeKTables runs ChallengeK and Draw under tables other than
+// 0.1.0, so K has to come from the table passed in, its share has to be
+// exact (spec 10.9), and a K that no draw can take is refused.
+func TestChallengeKTables(t *testing.T) {
+	small := challengeTable(t, "1", "0.15", "7")
+	third := challengeTable(t, "10", "0.3333333333333333", "30")
+	thirdWide := challengeTable(t, "1", "0.3333333333333333", "1000")
+	tenth := challengeTable(t, "10", "0.100000000000000001", "30")
+	tenthWide := challengeTable(t, "1", "0.100000000000000001", "1000")
+	huge := challengeTable(t, "1", "4611686018427387904", "30")
+	cases := []struct {
+		name      string
+		got, want int64
+	}{
+		{"under MIN 1, FRAC 0.15 and MAX 7, a pool of 0 draws CHALLENGE_K_MIN", ChallengeK(small, 0), 1},
+		{"under MIN 1, FRAC 0.15 and MAX 7, 6 turns give a share of 0.9, which rounds up to 1", ChallengeK(small, 6), 1},
+		{"under MIN 1, FRAC 0.15 and MAX 7, 7 turns give a share of 1.05, which rounds up to 2", ChallengeK(small, 7), 2},
+		{"under MIN 1, FRAC 0.15 and MAX 7, 40 turns give exactly 6", ChallengeK(small, 40), 6},
+		{"under MIN 1, FRAC 0.15 and MAX 7, 41 turns give 6.15, which rounds up to 7", ChallengeK(small, 41), 7},
+		{"under MIN 1, FRAC 0.15 and MAX 7, 1000 turns are capped at 7", ChallengeK(small, 1000), 7},
+		{"a FRAC of 0.3333333333333333 gives the cap of 30 at 2765 turns, where num*P + den - 1 passes 2^63", ChallengeK(third, 2765), 30},
+		{"a FRAC of 0.3333333333333333 gives exactly 922 at 2765 turns under a cap of 1000", ChallengeK(thirdWide, 2765), 922},
+		{"a FRAC of 0.100000000000000001 gives 11 at 100 turns, since 10.0000000000000001 rounds up", ChallengeK(tenth, 100), 11},
+		{"a FRAC of 0.100000000000000001 gives the cap of 30 at 300 turns", ChallengeK(tenth, 300), 30},
+		{"a FRAC of 0.100000000000000001 gives exactly 31 at 300 turns under a cap of 1000", ChallengeK(tenthWide, 300), 31},
+		{"a share past 2^64 is the cap", ChallengeK(huge, math.MaxInt32), 30},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.got != c.want {
+				t.Errorf("CHALLENGE_K = %d, want %d", c.got, c.want)
+			}
+		})
+	}
+	var seed Hash
+	copy(seed[:], "a fixed seed for the table tests")
+	pool := make([]Turn, 20)
+	for i := range pool {
+		pool[i] = Turn{DeviceID: "d_a", Seq: uint64(1 + i)}
+	}
+	draws := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{"a pool of 20 under MIN 1, FRAC 0.15 and MAX 7 draws 3 turns, the first 3 of table 0.1.0's ranking", func(t *testing.T) {
+			got, want := mustDrawUnder(t, seed, pool, small), mustDraw(t, seed, pool)
+			if len(got) != 3 || !slices.Equal(got, want[:3]) {
+				t.Errorf("drew %v, want the first 3 of %v", got, want)
+			}
+		}},
+		{"a K past 32 bits is cut to the pool before it becomes an int, so a pool of 20 is drawn whole", func(t *testing.T) {
+			if got := mustDrawUnder(t, seed, pool, challengeTable(t, "4294967301", "0.1", "4294967301")); len(got) != len(pool) {
+				t.Errorf("drew %d turns, want %d", len(got), len(pool))
+			}
+		}},
+		{"a negative CHALLENGE_K_MAX is refused with an error, not a panic", func(t *testing.T) {
+			if _, err := Draw(seed, pool, challengeTable(t, "1", "0.1", "-1")); err == nil {
+				t.Error("Draw took a table whose CHALLENGE_K is -1")
+			}
+		}},
+		{"a CHALLENGE_K of 0, for an empty pool under a CHALLENGE_K_MIN of 0, is refused", func(t *testing.T) {
+			if _, err := Draw(seed, nil, challengeTable(t, "0", "0.1", "30")); err == nil {
+				t.Error("Draw took a table whose CHALLENGE_K is 0")
+			}
+		}},
+	}
+	for _, c := range draws {
+		t.Run(c.name, c.check)
+	}
+}
+
 func mustDraw(t *testing.T, seed Hash, pool []Turn) []Turn {
 	t.Helper()
-	d, err := Draw(seed, pool, drawTable(t))
+	return mustDrawUnder(t, seed, pool, drawTable(t))
+}
+
+func mustDrawUnder(t *testing.T, seed Hash, pool []Turn, tb *params.Table) []Turn {
+	t.Helper()
+	d, err := Draw(seed, pool, tb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,6 +573,33 @@ func mustDraw(t *testing.T, seed Hash, pool []Turn) []Turn {
 func drawTable(t testing.TB) *params.Table {
 	t.Helper()
 	tb, err := params.ByVersion("0.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tb
+}
+
+// challengeTable is table 0.1.0 with its CHALLENGE_K_MIN, CHALLENGE_K_FRAC
+// and CHALLENGE_K_MAX set to lo, frac and hi, written as JSON writes them,
+// under a version of its own, as params.Parse reads a bundle's table.
+func challengeTable(t testing.TB, lo, frac, hi string) *params.Table {
+	t.Helper()
+	var doc struct {
+		Version string                     `json:"version"`
+		Params  map[string]json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(drawTable(t).Canonical(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc.Version = "0.1.9"
+	doc.Params[params.CHALLENGE_K_MIN.String()] = json.RawMessage(lo)
+	doc.Params[params.CHALLENGE_K_FRAC.String()] = json.RawMessage(frac)
+	doc.Params[params.CHALLENGE_K_MAX.String()] = json.RawMessage(hi)
+	data, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tb, err := params.Parse(data)
 	if err != nil {
 		t.Fatal(err)
 	}

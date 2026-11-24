@@ -639,7 +639,7 @@ func checkDrawVector(t *testing.T, dv drawVec) {
 func TestVectorChallengeK(t *testing.T) {
 	for _, cv := range readContentVectors(t).ChallengeK {
 		t.Run(fmt.Sprintf("a pool of %d draws %d of CHALLENGE_K %d", cv.Pool, cv.Drawn, cv.K), func(t *testing.T) {
-			if k := ChallengeK(drawTable(t), cv.Pool); k != cv.K || min(k, cv.Pool) != cv.Drawn {
+			if k := ChallengeK(drawTable(t), cv.Pool); k != int64(cv.K) || min(k, int64(cv.Pool)) != int64(cv.Drawn) {
 				t.Errorf("ChallengeK(%d) = %d", cv.Pool, k)
 			}
 		})

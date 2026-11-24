@@ -619,7 +619,7 @@ func randomContent(t *testing.T) contentVectorsFile {
 	}
 	tb := drawTable(t)
 	for p := 0; p <= 400; p++ {
-		doc.ChallengeK = append(doc.ChallengeK, challengeKVec{Pool: p, K: ChallengeK(tb, p), Drawn: min(ChallengeK(tb, p), p)})
+		doc.ChallengeK = append(doc.ChallengeK, challengeKVec{Pool: p, K: int(ChallengeK(tb, p)), Drawn: int(min(ChallengeK(tb, p), int64(p)))})
 	}
 	return doc
 }
