@@ -284,7 +284,8 @@ func (d *doctor) checkConfig(context.Context) result {
 	detail := fmt.Sprintf("%s, config_version %d, base_url %s, signups_open %v, profile_default %q", d.cfg.Path, d.cfg.ConfigVersion, d.cfg.BaseURL, d.cfg.SignupsOpen, d.cfg.ProfileDefault)
 	if len(d.cfg.Warnings) > 0 {
 		// A file for a newer release, as after a rollback (DESIGN 10.5
-		// step 6): it loads, so it isn't a failure.
+		// step 6), or a reviewer role for a program [[programs]] doesn't
+		// list: it loads, so it isn't a failure.
 		detail += "; " + strings.Join(d.cfg.Warnings, "; ")
 	}
 	return ok("%s", detail)

@@ -300,10 +300,23 @@
       "days": 30
     },
     {
+      "id": "server.submissions",
+      "where": "server",
+      "data": "Your submissions: which program each one went to, and that program's ID for it or the random ID your computer gave it; whether you made it on the web or from a computer, and which one; the projects it covers, and the keys those projects had on each of your computers when you submitted; the start and end of each stretch of time it covers; the scoring version and parameter table it was frozen with; a random number that fixes which prompts get drawn, and its hash; whether your Hack Club account still needs its eligibility confirmed; and each step it went through, with its time",
+      "kept": "While your account exists. Withdrawing a submission doesn't delete this record",
+      "tables": ["submissions", "submission_projects", "submission_keys", "submission_windows", "submission_events"]
+    },
+    {
       "id": "evidence.revealed",
       "where": "evidence",
       "data": "What you reveal when you submit hours: the records behind them, the prompts drawn for review, and any risk flags",
-      "kept": "Until the spot-check window closes ({window}). You can delete any revealed item yourself, at once"
+      "kept": "Until the spot-check window closes ({window}). You can delete any revealed item yourself, at once",
+      "jobs": [{
+        "table": "submission_flags",
+        "key": ["submission_id", "code"],
+        "time_column": "decided_at_ms",
+        "period": "window"
+      }]
     },
     {
       "id": "server.decisions",

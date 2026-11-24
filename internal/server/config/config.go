@@ -10,7 +10,7 @@
 //	signups_open    = false             # DESIGN 8.6; true needs [controller]
 //	operators       = []                # HCA subs that may sign in while signups_open is false (WP-SV14)
 //	profile_default = "public"          # or "ask" (DESIGN 8.3)
-//	scoring_version = ""                # X.Y.Z; empty means the built-in scorer's (DESIGN 6.7)
+//	scoring_version = ""                # X.Y.Z; empty means the built-in scorer's (DESIGN 6.7); pairtimed refuses one newer than the built-in, or before 1.0.0 one with another MINOR
 //	listen          = ":8080"           # the API, behind cloudflared (DESIGN 10.5)
 //	ops_listen      = "127.0.0.1:9091"  # /healthz, /readyz and /metrics; never tunneled (DESIGN 10.4)
 //	data_dir        = "/data"           # DESIGN 10.1
@@ -47,6 +47,11 @@
 //	sub   = "..."
 //	roles = ["qi", "program_reviewer:<program>"]
 //
+//	[[programs]]                        # one table per program this instance takes submissions for (DESIGN 10.2); none by default
+//	name         = "..."                # how program_reviewer:<program> and its submissions name it
+//	display_name = "..."                # the name teens see
+//	takes_hours  = true                 # false only for a program whose submissions claim no hours, as calibration's (DESIGN 6.7)
+//
 // With object storage on, the secrets PAIRTIME_S3_ACCESS_KEY_ID and
 // PAIRTIME_S3_SECRET_ACCESS_KEY hold the access key for both buckets.
 //
@@ -73,6 +78,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/BurntSushi/toml"
 
@@ -97,7 +104,7 @@ const DefaultPath = "/etc/pairtime/pairtime.toml"
 // rule, and its default publishes profiles, so Load refuses a file for a
 // newer release that has keys this release ignores and doesn't set
 // profile_default.
-const ConfigVersion = 1
+const ConfigVersion = 2
 
 // keyVersions maps every key pairtime.toml can hold to the config_version
 // that added it. Load refuses a file that uses a key from above its own
@@ -142,6 +149,10 @@ var keyVersions = map[string]int{
 	"database":                       1,
 	"database.engine":                1,
 	"database.path":                  1,
+	"programs":                       2,
+	"programs.name":                  2,
+	"programs.display_name":          2,
+	"programs.takes_hours":           2,
 }
 
 // Defaults for keys pairtime.toml leaves out.
@@ -186,6 +197,9 @@ type Config struct {
 	ProfileDefault string     `toml:"profile_default"`
 	ScoringVersion string     `toml:"scoring_version"`
 	Reviewers      []Reviewer `toml:"reviewers"`
+	// Programs are the programs this instance takes submissions for
+	// (DESIGN 10.2; D-sb1-submissions, Q3), in the file's order.
+	Programs []Program `toml:"programs"`
 	// Operators may sign in, and get an account, while sign-ups are
 	// closed, so an operator can smoke-test a deployed server. Karim
 	// decides who is on the list (DESIGN 8.6; WP-SV14).
@@ -208,7 +222,8 @@ type Config struct {
 	// Path is the file the configuration was loaded from.
 	Path string `toml:"-"`
 	// Warnings are for the caller to log: the keys Load ignored in a file
-	// for a newer release.
+	// for a newer release, and each program_reviewer:<program> role whose
+	// program [[programs]] doesn't list.
 	Warnings []string `toml:"-"`
 }
 
@@ -218,6 +233,27 @@ type Reviewer struct {
 	Sub   string   `toml:"sub"`
 	Roles []string `toml:"roles"`
 }
+
+// Program is one of the programs this instance takes submissions for
+// (DESIGN 10.2; D-sb1-submissions, Q3). Submissions name it by Name, so
+// taking it out of the list stops new submissions to it, and its
+// submissions keep its name.
+type Program struct {
+	// Name is how program_reviewer:<program> and its submissions name it:
+	// lowercase letters, digits, '-' and '_', at most 64.
+	Name string `toml:"name"`
+	// DisplayName is the name teens see: 1 to 64 characters, with no
+	// control characters.
+	DisplayName string `toml:"display_name"`
+	// TakesHours says whether the program's submissions claim hours. Load
+	// sets it true when the file leaves it out. Only a program whose
+	// submissions claim none, which today means calibration's (DESIGN
+	// 6.7), sets it false.
+	TakesHours *bool `toml:"takes_hours"`
+}
+
+// Hours reports whether p's submissions claim hours.
+func (p Program) Hours() bool { return p.TakesHours == nil || *p.TakesHours }
 
 // Controller names who is responsible for the data on this server, for
 // the privacy notice at /privacy (DESIGN 8.6). Until Name and Contact are
@@ -409,6 +445,10 @@ func (c *Config) finish(dir string) error {
 	for _, err := range checkReviewers(c.Reviewers) {
 		fail("reviewers: %v", err)
 	}
+	for _, err := range checkPrograms(c.Programs) {
+		fail("programs: %v", err)
+	}
+	c.Warnings = append(c.Warnings, unlistedPrograms(c.Reviewers, c.Programs)...)
 	operators := make(map[string]bool)
 	for _, sub := range c.Operators {
 		if !validSub(sub) {
@@ -676,6 +716,61 @@ func checkReviewers(rs []Reviewer) []error {
 		}
 	}
 	return errs
+}
+
+// checkPrograms checks [[programs]]: each name once and in programName's
+// form, and each display name 1 to 64 characters with no control
+// characters. It sets takes_hours true where the file leaves it out.
+func checkPrograms(ps []Program) []error {
+	var errs []error
+	seen := make(map[string]bool)
+	for i := range ps {
+		p := &ps[i]
+		where := fmt.Sprintf("entry %d", i+1)
+		switch {
+		case p.Name == "":
+			errs = append(errs, fmt.Errorf("%s has no name", where))
+		case !programName.MatchString(p.Name):
+			errs = append(errs, fmt.Errorf("%s: name %q must be 1 to 64 lowercase letters, digits, '-' and '_', starting with a letter or digit", where, p.Name))
+		case seen[p.Name]:
+			errs = append(errs, fmt.Errorf("%s: %q is listed twice", where, p.Name))
+		}
+		seen[p.Name] = true
+		if p.Name != "" {
+			where = fmt.Sprintf("program %q", p.Name)
+		}
+		if n := utf8.RuneCountInString(p.DisplayName); n == 0 || n > 64 || !utf8.ValidString(p.DisplayName) || strings.ContainsFunc(p.DisplayName, unicode.IsControl) {
+			errs = append(errs, fmt.Errorf("%s: display_name must be 1 to 64 characters, with no control characters", where))
+		}
+		if p.TakesHours == nil {
+			hours := true
+			p.TakesHours = &hours
+		}
+	}
+	return errs
+}
+
+// unlistedPrograms warns of each program_reviewer:<program> role whose
+// program [[programs]] doesn't list. pairtimed still starts, so reviewers
+// can finish a removed program's submissions (D-sb1-submissions, Q3).
+func unlistedPrograms(rs []Reviewer, ps []Program) []string {
+	listed := make(map[string]bool, len(ps))
+	for _, p := range ps {
+		listed[p.Name] = true
+	}
+	var out []string
+	warned := make(map[string]bool)
+	for _, r := range rs {
+		for _, role := range r.Roles {
+			program, ok := strings.CutPrefix(role, ProgramReviewerPrefix)
+			if !ok || listed[program] || warned[program] || !programName.MatchString(program) {
+				continue
+			}
+			warned[program] = true
+			out = append(out, fmt.Sprintf("reviewers: the role %s names a program that [[programs]] doesn't list, so this server takes no new submissions for it; its reviewers can still read its submissions", role))
+		}
+	}
+	return out
 }
 
 // validSub reports whether sub can be an HCA subject: 1 to 255 printable

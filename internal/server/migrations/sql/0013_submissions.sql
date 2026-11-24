@@ -1,24 +1,31 @@
 -- SPDX-License-Identifier: AGPL-3.0-or-later
 --
--- Submissions (WP-SB1; DESIGN 7.5 steps 1 and 2, SP 10.2), written by
--- package submission. Times are milliseconds and ids are UUIDv7s as TEXT.
+-- Submissions (WP-SB1; DESIGN 4.4, 7.5 steps 1 and 2, SP 10.2;
+-- D-sb1-submissions), written by package submission. Times are
+-- milliseconds and ids are UUIDv7s as TEXT. Every table but submission_flags
+-- stays as long as the account (server.submissions): no retention job
+-- deletes from submissions, so its child tables' foreign keys to it hold.
 --
--- submissions is each submission: the program it goes to and the
--- external_id the create is idempotent on, with the SHA-256 of the create
--- request it was made from, so a repeat is told from a reuse; who made it
--- (a signed-in session, a device or a program) and from which device; its
--- mode (one window, or a list of devlog windows, D13); its state and the
--- time of each change the spot-check window can open at (DESIGN 4.4); and,
--- from the freeze, the scoring version and parameter hash it froze, the
--- 32-byte r and its SHA-256, and whether the teen's eligibility was still
--- to confirm. No read selects r before the metadata reveal is stored.
--- device_id names its device with no foreign key, since a retention job
--- deletes devices.
+-- submissions is each submission: the account and the program it goes to,
+-- with whether that program takes hours (takes_hours, 1 or 0), copied from
+-- [[programs]] at the create, so a later change to the config moves no
+-- submission; the program's external_id when a program made it (WP-PG6),
+-- or the random request_id the teen's client made, with the SHA-256 of the
+-- canonical request, so a retry is told from another request under the
+-- same id; who made it (created_by: session or device) and from which
+-- device; its mode, one window or devlog windows (D13); its state and when
+-- it last reached each state a later step reads; and, from the freeze, the
+-- scoring version and parameter hash it froze, the 32-byte r and its
+-- SHA-256, and the eligibility note (DESIGN 8.2, 1 or 0). No read selects r
+-- before challenged_at_ms is set, when the draw is stored. device_id names
+-- its device with no foreign key, since a retention job deletes devices.
 CREATE TABLE submissions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users (id),
     program TEXT NOT NULL,
-    external_id TEXT NOT NULL,
+    takes_hours BIGINT NOT NULL,
+    external_id TEXT,
+    request_id TEXT,
     request_sha256 TEXT NOT NULL,
     created_by TEXT NOT NULL,
     device_id TEXT,
@@ -28,40 +35,51 @@ CREATE TABLE submissions (
     params TEXT,
     r BYTEA,
     r_sha256 TEXT,
-    eligibility_to_confirm BIGINT NOT NULL,
+    eligibility_to_confirm BIGINT,
     created_at_ms BIGINT NOT NULL,
     updated_at_ms BIGINT NOT NULL,
     frozen_at_ms BIGINT,
     metadata_revealed_at_ms BIGINT,
+    challenged_at_ms BIGINT,
     decided_at_ms BIGINT,
     withdrawn_at_ms BIGINT,
     revoked_at_ms BIGINT
 );
 
--- A create is idempotent on (program, external_id).
-CREATE UNIQUE INDEX submissions_program_external_id ON submissions (program, external_id);
+-- A program's create is idempotent on (program, external_id) (WP-PG6), and
+-- no teen-made submission has an external_id, so a teen can't take a
+-- program's id first.
+CREATE UNIQUE INDEX submissions_program_external_id ON submissions (program, external_id) WHERE external_id IS NOT NULL;
 
-CREATE INDEX submissions_user_created ON submissions (user_id, created_at_ms);
+-- A teen's create is idempotent on the account and its client's request_id.
+CREATE UNIQUE INDEX submissions_user_request_id ON submissions (user_id, request_id) WHERE request_id IS NOT NULL;
 
--- A program lists its submissions by when they last changed.
+-- The account's own list and a program's list, by when each submission last
+-- changed.
+CREATE INDEX submissions_user_updated ON submissions (user_id, updated_at_ms, id);
+
 CREATE INDEX submissions_program_updated ON submissions (program, updated_at_ms, id);
 
 -- submission_projects is the projects P the teen picked, by their
--- account-level project ids.
+-- account-level project ids, or the ids of the project keys a computer
+-- named.
 CREATE TABLE submission_projects (
     submission_id TEXT NOT NULL REFERENCES submissions (id),
     project_id TEXT NOT NULL,
     PRIMARY KEY (submission_id, project_id)
 );
 
--- submission_keys is the devices' project keys P named at the freeze,
--- through rollup_projects, kept as they were, since project registration
--- (WP-SV10) can link keys to another project id later.
+-- submission_keys is each (device id, project key) pair that P's projects
+-- mapped to through rollup_projects at the freeze, with the project it
+-- mapped to then, kept as it was: project registration (WP-SV10) may link
+-- keys to another project id later and changes no frozen key. The overlap
+-- refusal, D13's bound and the reveal set read it.
 CREATE TABLE submission_keys (
     submission_id TEXT NOT NULL REFERENCES submissions (id),
     user_id TEXT NOT NULL,
     device_id TEXT NOT NULL,
     project_key TEXT NOT NULL,
+    project_id TEXT NOT NULL,
     PRIMARY KEY (submission_id, device_id, project_key)
 );
 
@@ -76,8 +94,6 @@ CREATE TABLE submission_windows (
     PRIMARY KEY (submission_id, start_ms)
 );
 
-CREATE INDEX submission_windows_start ON submission_windows (start_ms);
-
 -- submission_events is each change of a submission's state, in order.
 CREATE TABLE submission_events (
     submission_id TEXT NOT NULL REFERENCES submissions (id),
@@ -88,13 +104,12 @@ CREATE TABLE submission_events (
     PRIMARY KEY (submission_id, seq)
 );
 
-CREATE INDEX submission_events_at ON submission_events (at_ms);
-
--- submission_flags is the risk flags the freeze raised for reviewers, such
--- as concurrent_devices, each with its detail as JSON. It names its
--- submission with no foreign key, as the evidence index does, and a
--- retention job deletes a flag once the spot-check window that opened at
--- decided_at_ms has closed.
+-- submission_flags is the risk flags of a submission for reviewers, such as
+-- the freeze's concurrent_devices and repo_overlap, each with its detail as
+-- JSON. It names its submission with no foreign key, as the evidence index
+-- does, and a retention job of evidence.revealed deletes a flag once the
+-- spot-check window that opened at decided_at_ms has closed, from WP-SV18,
+-- which writes decided_at_ms.
 CREATE TABLE submission_flags (
     submission_id TEXT NOT NULL,
     code TEXT NOT NULL,

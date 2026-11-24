@@ -348,6 +348,7 @@ func TestJobs(t *testing.T) {
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
 				"server.minute_buckets/submission_minutes awaits WP-SB4",
 				"server.witness/witness_rows hold awaits WP-SB4", "server.witness/submission_batches awaits WP-SB4",
+				"evidence.revealed/submission_flags awaits WP-SV18",
 			},
 		},
 		{
@@ -368,6 +369,7 @@ func TestJobs(t *testing.T) {
 			wantOff: []string{
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
 				"server.witness/witness_rows hold awaits WP-SB4",
+				"evidence.revealed/submission_flags awaits WP-SV18",
 			},
 		},
 		{
@@ -391,6 +393,7 @@ func TestJobs(t *testing.T) {
 				"server.minute_buckets/rollup_minutes",
 				"server.witness/witness_rows+hold", "server.witness/day_leaves+kept", "server.witness/submission_batches", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides", "server.removed_items/removed_items",
 			},
+			wantOff: []string{"evidence.revealed/submission_flags awaits WP-SV18"},
 		},
 		{
 			name: "a job of an evidence entry stays off until WP-SV18, even once its table exists",
@@ -417,7 +420,7 @@ func TestJobs(t *testing.T) {
 				"server.minute_buckets/rollup_minutes",
 				"server.witness/witness_rows+hold", "server.witness/day_leaves+kept", "server.witness/submission_batches", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides", "server.removed_items/removed_items",
 			},
-			wantOff: []string{"evidence.revealed/evidence_index awaits WP-SV18"},
+			wantOff: []string{"evidence.revealed/submission_flags awaits WP-SV18", "evidence.revealed/evidence_index awaits WP-SV18"},
 		},
 		{
 			name: "a job of an evidence entry whose table doesn't exist yet waits for the package that creates it",
@@ -438,7 +441,7 @@ func TestJobs(t *testing.T) {
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
 				"server.minute_buckets/submission_minutes awaits WP-SB4",
 				"server.witness/witness_rows hold awaits WP-SB4", "server.witness/submission_batches awaits WP-SB4",
-				"evidence.revealed/evidence_index awaits WP-SB4",
+				"evidence.revealed/submission_flags awaits WP-SV18", "evidence.revealed/evidence_index awaits WP-SB4",
 			},
 		},
 	}

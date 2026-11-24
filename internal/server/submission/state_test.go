@@ -9,12 +9,15 @@ import (
 
 // TestTransitions is WP-SB1's first check: every legal and illegal move
 // between the ten states, against the list of legal moves written out
-// here apart from the package's table.
+// here apart from the package's table (D-sb1-submissions, Q7 and Q15): one
+// linear chain with no step skipped, a withdrawal from created through
+// content_revealed and never once step 9's checks have run, a re-decision
+// and a revocation, and nothing out of withdrawn or revoked.
 func TestTransitions(t *testing.T) {
 	legal := map[[2]State]string{
 		{Created, Frozen}:              "the freeze",
 		{Frozen, MetadataRevealed}:     "the stored metadata reveal",
-		{MetadataRevealed, Challenged}: "the draw",
+		{MetadataRevealed, Challenged}: "the stored draw",
 		{Challenged, ContentRevealed}:  "the content reveal",
 		{ContentRevealed, Checked}:     "step 9's checks",
 		{Checked, InReview}:            "a reviewer's assignment",
@@ -26,8 +29,6 @@ func TestTransitions(t *testing.T) {
 		{MetadataRevealed, Withdrawn}:  "a withdrawal after the metadata reveal",
 		{Challenged, Withdrawn}:        "a withdrawal after the draw",
 		{ContentRevealed, Withdrawn}:   "a withdrawal after the content reveal",
-		{Checked, Withdrawn}:           "a withdrawal after the checks",
-		{InReview, Withdrawn}:          "a withdrawal in review",
 	}
 	if len(States) != 10 {
 		t.Fatalf("%d states, want the ten of DESIGN 7.5", len(States))

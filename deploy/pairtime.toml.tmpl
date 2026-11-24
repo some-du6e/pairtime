@@ -35,7 +35,9 @@ operators = []
 # "public". Karim alone decides when this changes.
 profile_default = "ask"
 
-# Empty: the scorer this release was built with (DESIGN 6.7).
+# Empty: the scorer this release was built with (DESIGN 6.7). Each
+# submission freezes this version, so pairtimed doesn't start on one newer
+# than its built-in scorer's, or, before 1.0.0, on one with another MINOR.
 scoring_version = ""
 
 # The API, which cloudflared's tunnel reaches as http://pairtimed:8080.
@@ -100,3 +102,14 @@ snapshot_bucket = {{toml .S3.SnapshotBucket}}
 # [[reviewers]]
 # sub = "..."
 # roles = ["qi"]
+
+# The programs this instance takes submissions for (DESIGN 10.2): one table
+# per program. name is how program_reviewer:<program> and the program's
+# submissions name it, and display_name the name teens see. takes_hours is
+# true unless the program's submissions claim no hours, which only the
+# calibration program's don't (DESIGN 6.7). Until one is listed, pairtimed
+# takes no submissions.
+#
+# [[programs]]
+# name = "..."
+# display_name = "..."

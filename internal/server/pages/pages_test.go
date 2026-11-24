@@ -378,14 +378,26 @@ func TestPrivacyNotice(t *testing.T) {
 			notWant: []string{"let anyone sign in"},
 		},
 		{
-			name:    "with only day roots left to come, the notice names that one",
+			name:    "with submissions taken and no evidence store yet, the notice names the evidence store alone of the two (D-sb1-submissions, Q16)",
 			opts:    Options{Running: Running{SignIn: true, Uploads: true, Submissions: true}},
+			want:    []string{"This server doesn&#39;t yet keep an evidence store or publish day roots."},
+			notWant: []string{"take hours you submit to programs"},
+		},
+		{
+			name:    "with an evidence store and no submissions, the notice names submissions alone of the two",
+			opts:    Options{Running: Running{SignIn: true, Uploads: true, EvidenceStore: true}},
+			want:    []string{"This server doesn&#39;t yet take hours you submit to programs or publish day roots."},
+			notWant: []string{"keep an evidence store"},
+		},
+		{
+			name:    "with only day roots left to come, the notice names that one",
+			opts:    Options{Running: Running{SignIn: true, Uploads: true, Submissions: true, EvidenceStore: true}},
 			want:    []string{"This server doesn&#39;t yet publish day roots."},
-			notWant: []string{"keep an evidence store", "let anyone sign in", "receive uploads from"},
+			notWant: []string{"keep an evidence store", "take hours you submit to programs", "let anyone sign in", "receive uploads from"},
 		},
 		{
 			name:    "once everything the notice describes runs, the line goes",
-			opts:    Options{Running: Running{SignIn: true, Uploads: true, Submissions: true, DayRoots: true}},
+			opts:    Options{Running: Running{SignIn: true, Uploads: true, Submissions: true, EvidenceStore: true, DayRoots: true}},
 			notWant: []string{"runs yet", "doesn&#39;t yet"},
 		},
 		{
