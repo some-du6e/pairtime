@@ -296,7 +296,9 @@ func (f *fixture) seed(t *testing.T, p person, witness ...time.Time) map[string]
 		table, q string
 		args     []any
 	}{
-		{"users", `INSERT INTO users (id, hca_sub, slack_id, email_ct, email_index, verification_status, ysws_eligible, created_at_ms, updated_at_ms, signed_in_at_ms) VALUES ($1, $2, $3, $4, $5, 'verified', 1, $6, $6, $6)`,
+		// The account is a calibration volunteer's, so its row holds the
+		// flag too (D-server-shadow), which goes with the row.
+		{"users", `INSERT INTO users (id, hca_sub, slack_id, email_ct, email_index, verification_status, ysws_eligible, created_at_ms, updated_at_ms, signed_in_at_ms, calibrating_since_ms) VALUES ($1, $2, $3, $4, $5, 'verified', 1, $6, $6, $6, $6)`,
 			[]any{p.id, p.sub, p.slack, []byte("sealed " + p.id), f.emails.Index(p.email), at}},
 		{"sessions", `INSERT INTO sessions (id_hash, user_id, created_at_ms, expires_at_ms) VALUES ($1, $2, $3, $4)`, []any{"s-" + p.id, p.id, at, at + 86_400_000}},
 		{"devices", `INSERT INTO devices (device_id, user_id, link_generation) VALUES ($1, $2, 1)`, []any{p.device, p.id}},
