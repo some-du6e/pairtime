@@ -46,6 +46,13 @@ type rowIndex struct {
 	queue []ledger.Row
 	// lastHead is the newest batch's H_b, the prev of the next one.
 	lastHead pkgledger.Hash
+	// stretches are the local-only stretches the newest seal frame that
+	// records them has, or batches.seg's base frame (ChainInfo.Stretches),
+	// and behind is set while the rows don't hold every stretch the writer
+	// has (ChainInfo.StretchesBehind), until a batch whose seal frame
+	// records the list is added. Commit records go by them (judgeCommit).
+	stretches []ledger.Stretch
+	behind    bool
 }
 
 // loadRows reads the chain in the ledger directory dir and keeps the rows
@@ -63,6 +70,7 @@ func loadRows(dir string, keep uint64) (*rowIndex, error) {
 			return nil, err
 		}
 	}
+	ix.stretches, ix.behind = info.Stretches, info.StretchesBehind
 	ix.trim(keep)
 	return ix, nil
 }
@@ -99,6 +107,11 @@ func (ix *rowIndex) add(r ledger.Row) error {
 	}
 	ix.queue = append(ix.queue, r)
 	ix.lastHead = r.Head
+	if r.Stretches != nil {
+		// A seal frame that records the list holds every stretch the writer
+		// has, those Open rebuilt from an older version's rows included.
+		ix.stretches, ix.behind = r.Stretches, false
+	}
 	return nil
 }
 

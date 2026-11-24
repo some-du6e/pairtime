@@ -11,7 +11,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 
+	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/store"
 )
 
@@ -116,6 +118,14 @@ func commitsOf(in planInput, n int) (entries []commitEntry, days map[string]bool
 	if len(unread) > 0 {
 		return nil, nil, unread, false
 	}
+	if in.rows.behind || slices.ContainsFunc(in.rows.stretches, func(s ledger.Stretch) bool { return s.Open }) {
+		// The rows don't hold every stretch the writer has: one goes on, so
+		// its end isn't recorded yet, or an older version's rows saw
+		// config.toml local-only past the list the rows hold. Every line
+		// waits, and no mark moves, until a seal frame records them
+		// (D-ag5-D1).
+		return nil, nil, nil, false
+	}
 	// seen holds the shas of the lines read so far, and undecided those
 	// whose first line waits in this plan, or was held back with its day.
 	seen, undecided := map[string]bool{}, map[string]bool{}
@@ -189,8 +199,11 @@ func commitsOf(in planInput, n int) (entries []commitEntry, days map[string]bool
 // one dropped; when B*, the first batch sealed at or after m, as
 // rowIndex.sealedAfter finds it, was sealed in local-only mode
 // (saved.localOnly), which takes in the batches before a link, a link's gap
-// and the runs; and when m falls where such a run ended (saved.endsRun). It
-// waits while the rows hold no B* yet, while the link's first batch isn't
+// and the runs; when m falls where such a run ended (saved.endsRun); and
+// when a local-only stretch the rows hold has m in it by the wall clock
+// alone, passed or not, both edges included (ledger.Stretch.Holds), as it
+// would a record of it with no monotonic reading. It waits while the rows
+// hold no B* yet, while the link's first batch isn't
 // stored (Linking), and until B*'s root has been answered, stored with its
 // receipt or passed as gone (B* < Next), so it never goes in the request
 // that carries B*'s own root. Otherwise it goes.
@@ -211,7 +224,7 @@ func judgeCommit(in planInput, m int64) commitVerdict {
 	if !ok {
 		return commitWaits
 	}
-	if in.st.localOnly(b) || in.st.endsRun(ix, m) {
+	if in.st.localOnly(b) || in.st.endsRun(ix, m) || slices.ContainsFunc(ix.stretches, func(s ledger.Stretch) bool { return s.Holds(m) }) {
 		return commitWithheld
 	}
 	if in.st.Linking || b >= in.st.Next {

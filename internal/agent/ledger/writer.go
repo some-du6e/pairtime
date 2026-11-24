@@ -238,8 +238,12 @@ type Batch struct {
 	LocalUntil time.Time
 	// Why says why a batch sealed local-only is (LocalWhy), as its seal
 	// frame records it, and is nil for one sealed online.
-	Why     *LocalWhy
-	Records []ledger.Record
+	Why *LocalWhy
+	// Stretches are the local-only stretches its seal frame recorded, every
+	// one the writer knew, nil when the frame recorded none, as it records
+	// them only after they change (sealPayload.Stretches).
+	Stretches []Stretch
+	Records   []ledger.Record
 }
 
 // Input is an event as the agent received it, and what its record commits
@@ -1632,7 +1636,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 		return Batch{}, false, err
 	}
 	batch := Batch{Row: row, SealedAt: time.UnixMilli(sp.SealedAt), Online: on, Back: sp.Back,
-		LocalUntil: msTime(sp.LocalUntil), Why: localWhy(sp.Why), Records: recs}
+		LocalUntil: msTime(sp.LocalUntil), Why: localWhy(sp.Why), Stretches: exported(sp.Stretches), Records: recs}
 	if w.sealedFn != nil {
 		w.sealedFn(batch)
 	}

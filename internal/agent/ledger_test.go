@@ -177,7 +177,8 @@ func TestLedgerRetry(t *testing.T) {
 		{"the agent asked the locked keyring more than once", refused >= 2},
 		{"once the keyring answers, the ledger opens and its problem clears", unlocked.Problems["ledger"] == ""},
 		{"the ledger it opened is the chain the first run started, under the same key",
-			chainErr == nil && after == before},
+			chainErr == nil && after.DeviceID == before.DeviceID && after.KeyID == before.KeyID && after.Created.Equal(before.Created) &&
+				after.Base == before.Base && after.Prev == before.Prev},
 		{"the agent stops cleanly", stopErr == nil},
 	}
 	for _, c := range cases {
