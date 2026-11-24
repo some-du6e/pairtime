@@ -771,6 +771,10 @@ func TestBreaksJSON(t *testing.T) {
 			[]edit{{redact.Span{Start: 2, End: 5}, "REDACTED"}}, 0, false},
 		{"a JSON line after an edit across a line break keeps its number", "foo\nbar\n{\"n\":4111111111111111}\n",
 			[]edit{{redact.Span{Start: 2, End: 5}, "REDACTED"}, card(13)}, 3, true},
+		{"a JSON line joined to the plain-text line before it is reported by its own number", "foo\n{\"a\":1}\n",
+			[]edit{{redact.Span{Start: 2, End: 5}, "REDACTED"}}, 2, true},
+		{"an edit at the start of the line after a JSON line leaves that line alone", "{\"a\":1}\n4111111111111111\n",
+			[]edit{card(8)}, 0, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

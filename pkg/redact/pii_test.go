@@ -411,10 +411,11 @@ func TestChecksumNearMisses(t *testing.T) {
 }
 
 // TestDecimalNumbers checks that a decimal's fraction is never a card, an
-// SSN or an Aadhaar number, and that a number before a '.' still is one,
-// whether the '.' ends a sentence or starts a float's fraction (issue
-// #104). The two asDouble values are the ones the scrub of the first Claude
-// Code capture took for cards: their fractions pass Luhn.
+// SSN or an Aadhaar number (issue #104), and that a number next to a '.'
+// still is one: before a '.' that ends a sentence or starts a float's
+// fraction, and after one when the number holds a separator or the '.'
+// doesn't follow a digit. The two asDouble values are the ones the scrub of
+// the first Claude Code capture took for cards: their fractions pass Luhn.
 func TestDecimalNumbers(t *testing.T) {
 	tests := []struct {
 		name string
@@ -444,6 +445,18 @@ func TestDecimalNumbers(t *testing.T) {
 		{"a 9-digit fraction after ssn is never an SSN", `{"ssn_ratio":0.219099999}`, []Span{}},
 		{"an SSN written as a float after ssn is still an SSN", `{"ssn":219099999.0}`,
 			[]Span{{Start: 7, End: 16, Type: TypeUSSSN}}},
+		{"a card number with separators after a list number with no space is still a card", "1.4111 1111 1111 1111",
+			[]Span{{Start: 2, End: 21, Type: TypeCard}}},
+		{"an SSN with dashes after a list number with no space is still an SSN", "3.219-09-9999",
+			[]Span{{Start: 2, End: 13, Type: TypeUSSSN}}},
+		{"an Aadhaar number with spaces after a list number with no space is still one", "1.2345 6789 0124",
+			[]Span{{Start: 2, End: 16, Type: TypeAadhaar}}},
+		{"a card number right after a '.' that follows a letter is still a card", "card no.4111111111111111",
+			[]Span{{Start: 8, End: 24, Type: TypeCard}}},
+		{"a card number after a '.' at the start of the text is still a card", ".4111111111111111",
+			[]Span{{Start: 1, End: 17, Type: TypeCard}}},
+		{"an SSN after a '.' at the start of the text is still an SSN", ".219-09-9999",
+			[]Span{{Start: 1, End: 12, Type: TypeUSSSN}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
