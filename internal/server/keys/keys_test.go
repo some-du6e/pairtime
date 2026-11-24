@@ -5,6 +5,7 @@ package keys_test
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
@@ -327,7 +328,9 @@ func TestDocument(t *testing.T) {
 	tests := []struct {
 		name string
 		h    keys.History
-		want string
+		// evidence are the private halves the ring holds.
+		evidence []*ecdh.PrivateKey
+		want     string
 	}{
 		{name: "with no keys the document lists none, and the evidence key's slot is null",
 			want: "{\n  \"format\": \"pairtime-keys-v1\",\n  \"server_keys\": [],\n  \"evidence_key\": null\n}\n"},
@@ -352,10 +355,38 @@ func TestDocument(t *testing.T) {
   "evidence_key": null
 }
 `, backup.KeyID(keyA), hex.EncodeToString(keyA), backup.KeyID(keyB), hex.EncodeToString(keyB))},
+		{name: "the current evidence key fills its slot with the same four members, its public key the uncompressed point, and a retired one isn't listed",
+			h: keys.History{
+				Server:   []keys.ServerKey{key(keyA, 1795046400000, keys.Current)},
+				Evidence: []keys.EvidenceKey{evidence(evA, 1795046400000, 1795600799999), evidence(evB, 1795600800000, keys.Current)},
+			},
+			evidence: []*ecdh.PrivateKey{evA, evB},
+			want: fmt.Sprintf(`{
+  "format": "pairtime-keys-v1",
+  "server_keys": [
+    {
+      "key_id": %q,
+      "public_key": %q,
+      "valid_from": 1795046400000,
+      "valid_to": null
+    }
+  ],
+  "evidence_key": {
+    "key_id": %q,
+    "public_key": %q,
+    "valid_from": 1795600800000,
+    "valid_to": null
+  }
+}
+`, backup.KeyID(keyA), hex.EncodeToString(keyA), backup.KeyID(evB.PublicKey().Bytes()), hex.EncodeToString(evB.PublicKey().Bytes()))},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := tt.h.Document()
+			ring, err := keys.NewRing(&tt.h, tt.evidence...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := keys.Document(&tt.h, ring)
 			if err != nil {
 				t.Fatal(err)
 			}

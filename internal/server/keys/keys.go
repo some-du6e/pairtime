@@ -23,6 +23,15 @@
 // being valid the millisecond before, which must come after everything
 // that key signed. At most one key is valid at any time, so a verifier
 // finds it from the time alone (History.At).
+//
+// The evidence keys, which seal tier-2 content, have a history of their
+// own in the same table under the kind "evidence" (WP-SB2; DESIGN 7.6;
+// docs/spec/seal-v1.md 7). pairtimed serve records the evidence key in
+// data_dir as current at every start (RecordEvidence), and refuses any
+// other until WP-SB9's rotation switches keys. A Ring holds the private
+// halves: it opens each blob with the key its key id names, says whether
+// an upload's key is the current one, and gives the keys document its
+// one evidence key.
 package keys
 
 import (
@@ -68,11 +77,14 @@ type ServerKey struct {
 // ValidAt reports whether k is valid at t, Unix ms.
 func (k ServerKey) ValidAt(t int64) bool { return k.ValidFrom <= t && t <= k.ValidTo }
 
-// History is the server keys a database was written with.
+// History is the keys a database was written with.
 type History struct {
 	// Server is every server key, oldest first. No two keys are valid at
 	// the same millisecond.
 	Server []ServerKey
+	// Evidence is every evidence key, oldest first, the same way
+	// (WP-SB2; docs/spec/seal-v1.md 7).
+	Evidence []EvidenceKey
 }
 
 // At returns the server key that was valid at t, Unix ms, and false when
@@ -94,53 +106,77 @@ type Querier interface {
 
 // Load reads the history. It refuses one that doesn't hold together: a key
 // whose stored public half isn't the key its id names, a validity that
-// ends before it starts, and two keys valid at once, which no history
-// RecordServer writes can have.
+// ends before it starts, and two keys of a kind valid at once, which no
+// history RecordServer and RecordEvidence write can have.
 func Load(ctx context.Context, q Querier) (*History, error) {
 	server, err := loadServer(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	return &History{Server: server}, nil
+	evidence, err := loadEvidence(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	return &History{Server: server, Evidence: evidence}, nil
+}
+
+// keyRow is one key_history row: a key's id, its public key in hex, and
+// the first and last millisecond it is valid, Current while it is.
+type keyRow struct {
+	id, public string
+	from, to   int64
+}
+
+// loadKind reads the rows of kind, oldest first, and refuses a validity
+// that ends before it starts and two keys of the kind valid at once. So at
+// most one key of a kind is current, and it is the newest.
+func loadKind(ctx context.Context, q Querier, kind string) ([]keyRow, error) {
+	rows, err := q.QueryContext(ctx, `SELECT key_id, public_key, valid_from_ms, valid_to_ms FROM key_history WHERE kind = $1 ORDER BY valid_from_ms, key_id`, kind)
+	if err != nil {
+		return nil, fmt.Errorf("keys: reading the key history: %w", err)
+	}
+	defer rows.Close()
+	var out []keyRow
+	for rows.Next() {
+		var (
+			r  keyRow
+			to sql.NullInt64
+		)
+		if err := rows.Scan(&r.id, &r.public, &r.from, &to); err != nil {
+			return nil, fmt.Errorf("keys: reading the key history: %w", err)
+		}
+		r.to = Current
+		if to.Valid {
+			r.to = to.Int64
+		}
+		if r.to < r.from {
+			return nil, fmt.Errorf("keys: the key history has %s key %s valid until %s, before it became valid at %s", kind, r.id, msTime(r.to), msTime(r.from))
+		}
+		if n := len(out); n > 0 && out[n-1].to >= r.from {
+			return nil, fmt.Errorf("keys: the key history has %s keys %s and %s both valid at %s", kind, out[n-1].id, r.id, msTime(r.from))
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("keys: reading the key history: %w", err)
+	}
+	return out, nil
 }
 
 // loadServer reads the server keys, oldest first, and checks them as Load
 // says.
 func loadServer(ctx context.Context, q Querier) ([]ServerKey, error) {
-	rows, err := q.QueryContext(ctx, `SELECT key_id, public_key, valid_from_ms, valid_to_ms FROM key_history WHERE kind = $1 ORDER BY valid_from_ms, key_id`, KindServer)
+	rows, err := loadKind(ctx, q, KindServer)
 	if err != nil {
-		return nil, fmt.Errorf("keys: reading the key history: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
 	var out []ServerKey
-	for rows.Next() {
-		var (
-			k   ServerKey
-			pub string
-			to  sql.NullInt64
-		)
-		if err := rows.Scan(&k.ID, &pub, &k.ValidFrom, &to); err != nil {
-			return nil, fmt.Errorf("keys: reading the key history: %w", err)
+	for _, r := range rows {
+		b, err := hex.DecodeString(r.public)
+		if err != nil || len(b) != ed25519.PublicKeySize || backup.KeyID(b) != r.id {
+			return nil, fmt.Errorf("keys: the key history's public key for server key %s isn't that key", r.id)
 		}
-		b, err := hex.DecodeString(pub)
-		if err != nil || len(b) != ed25519.PublicKeySize || backup.KeyID(b) != k.ID {
-			return nil, fmt.Errorf("keys: the key history's public key for server key %s isn't that key", k.ID)
-		}
-		k.Public = ed25519.PublicKey(b)
-		k.ValidTo = Current
-		if to.Valid {
-			k.ValidTo = to.Int64
-		}
-		if k.ValidTo < k.ValidFrom {
-			return nil, fmt.Errorf("keys: the key history has server key %s valid until %s, before it became valid at %s", k.ID, msTime(k.ValidTo), msTime(k.ValidFrom))
-		}
-		if n := len(out); n > 0 && out[n-1].ValidTo >= k.ValidFrom {
-			return nil, fmt.Errorf("keys: the key history has server keys %s and %s both valid at %s", out[n-1].ID, k.ID, msTime(k.ValidFrom))
-		}
-		out = append(out, k)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("keys: reading the key history: %w", err)
+		out = append(out, ServerKey{ID: r.id, Public: ed25519.PublicKey(b), ValidFrom: r.from, ValidTo: r.to})
 	}
 	return out, nil
 }

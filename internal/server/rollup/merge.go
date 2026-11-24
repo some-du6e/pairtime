@@ -216,13 +216,15 @@ type dayKey struct{ project, day, kind string }
 
 // columns are a rollups_daily row's values, in its column order:
 // final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms,
-// pending_c_ms, agent_only_final_ms, agent_only_pending_ms.
-type columns [8]int64
+// pending_c_ms, agent_only_final_ms, agent_only_pending_ms, day_cap_ms.
+type columns [9]int64
 
-// The index of the agent's final and pending columns.
+// The index of the agent's final and pending columns, and of the credit
+// the day cap withheld (SM 5.3's X.day_cap).
 const (
 	agentFinal   = 6
 	agentPending = 7
+	dayCap       = 8
 )
 
 // delta is a change to an account's rollups_daily rows.
@@ -255,6 +257,26 @@ func (m merged) contribution(day string) delta {
 		out[k] = c
 	}
 	return out
+}
+
+// add adds o to d.
+func (d delta) add(o delta) {
+	for k, oc := range o {
+		c := d[k]
+		for i := range c {
+			c[i] += oc[i]
+		}
+		d[k] = c
+	}
+}
+
+// credit is m's credited milliseconds, every slot's at every level.
+func (m merged) credit() int64 {
+	var n int64
+	for _, s := range m.slots {
+		n += s.MS
+	}
+	return n
 }
 
 // subtract takes o away from d.
