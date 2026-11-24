@@ -1255,16 +1255,26 @@ type sealPayload struct {
 	// it sealed this one, which neither took it nor ended it (Writer.back),
 	// 0 for none, so the mark outlasts a restart: Open keeps it due from the
 	// newest row until a batch sealed online takes it or ends it
-	// (restoreStretches).
+	// (restoreStretches). Mark records the same with its 0, and Open reads
+	// Due only in a frame without Mark, as an older version wrote, which
+	// reads Due and BackEnded in its turn.
 	Due uint64 `json:"due,omitempty"`
 	// BackEnded says the batch was sealed online without taking a mark Open
 	// restored, which ended the mark (Writer.backFrom). Its row records no
-	// mark due, and Open reads it as the end, though its records all came
-	// before the mark, as those of Open's own batch of what a crash left do:
-	// a row an older version sealed records no mark either, and one whose
-	// records end before the mark a sweep's base frame keeps leaves that
-	// mark due (restoreStretches).
+	// mark due, and an older version's Open reads it as the end, though its
+	// records all came before the mark, as those of Open's own batch of what
+	// a crash left do: a row an older version sealed records no mark either,
+	// and one whose records end before the mark a sweep's base frame keeps
+	// leaves that mark due (restoreStretches).
 	BackEnded bool `json:"back_ended,omitempty"`
+	// Mark is the writer's mark once the batch was sealed (Writer.back): the
+	// first record of the batch it is due for, or 0, for none, as when this
+	// batch took it (Back) or ended it (BackEnded). The writer records it in
+	// every seal frame, 0 as well, so a frame without it is one an older
+	// version wrote. Open takes the mark from the newest frame that records
+	// it: the newest row's, or the base frame's while no row of a batch
+	// sealed after the sweep is kept (basePayload.Mark, restoreStretches).
+	Mark *uint64 `json:"mark,omitempty"`
 	// LocalUntil is when config.toml was last known, or taken, to say
 	// local-only as the batch was sealed, in Unix ms (Writer.until), the
 	// newest stretch end: Open takes it back from the newest batch, and the
@@ -1563,6 +1573,8 @@ func (w *Writer) seal() (Batch, bool, error) {
 		sp.Due = w.back
 	}
 	sp.BackEnded = ends
+	mark := sp.Due
+	sp.Mark = &mark
 	if w.until.os > 0 {
 		sp.LocalUntilOS = &untilOS{Mono: w.until.os, Boot: w.until.boot}
 	}

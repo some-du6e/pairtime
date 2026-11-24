@@ -103,10 +103,14 @@ func (w *Writer) Sweep(from string, floor uint64) (batches, segs int, err error)
 	// Open found as it was, though the fold made the rows' moments alike.
 	stretches := w.stretchPayloads(false)
 	uWall, uOS := w.until.wall, osPayload(untilOS{Mono: w.until.os, Boot: w.until.boot})
-	back := w.back
+	// The seal lock this holds keeps any batch from being sealed meanwhile,
+	// so the mark stands as it did after batch w.b, the newest sealed,
+	// whose row batches.seg may lack, as after a row's write failed: Open
+	// rebuilds that row from its seal frame (basePayload.MarkAt).
+	mark := &sweptMark{due: w.back, after: w.b}
 	w.mu.Unlock()
 	if k > 0 || folded || foldsMoment(bf, k, cut) {
-		data, kerr := keptFile(bf, k, cut, stretches, uWall, uOS, back)
+		data, kerr := keptFile(bf, k, cut, stretches, uWall, uOS, mark)
 		if kerr != nil {
 			return oldBatches, oldSegs, errors.Join(kerr, oldErr)
 		}
@@ -215,16 +219,22 @@ func keptFrom(bf *batchesFile, from string, floor uint64) int {
 	return k
 }
 
+// sweptMark is the live chain's writer's mark as Sweep found it: due, the
+// first record of the batch it is due for, 0 for none, after batch after,
+// the newest sealed (basePayload.Mark, MarkAt).
+type sweptMark struct{ due, after uint64 }
+
 // keptFile returns batches.seg as Sweep writes it, keeping the rows from
 // bf.rows[k] on: the chain frame, of the version with a base frame, a base
 // frame naming that batch, or the batch after the last when k is past
 // them, with stretches and the moment uWall, uOS, the live chain's writer's
 // own (Writer.Sweep) or an old chain's newest list and the moment its row
-// recorded (sweepChain), as the sweep folds them, and back, the writer's
-// mark due (basePayload.Back), then the rows, then the receipts of the rows
+// recorded (sweepChain), as the sweep folds them, and mark, the live
+// writer's mark, nil for an old chain's, which no writer marks
+// (basePayload.Back, Mark), then the rows, then the receipts of the rows
 // kept, in the order of their batches. The rows go before every receipt, so
 // each receipt follows its row.
-func keptFile(bf *batchesFile, k int, cut int64, stretches []stretchPayload, uWall int64, uOS *untilOS, back uint64) ([]byte, error) {
+func keptFile(bf *batchesFile, k int, cut int64, stretches []stretchPayload, uWall int64, uOS *untilOS, mark *sweptMark) ([]byte, error) {
 	cp := bf.chain
 	cp.V = chainVersionBase
 	chain, err := json.Marshal(cp)
@@ -249,7 +259,13 @@ func keptFile(bf *batchesFile, k int, cut int64, stretches []stretchPayload, uWa
 	if stretches != nil {
 		bp.Stretches = stretches
 		bp.LocalUntil, bp.LocalUntilOS = foldUntil(uWall, uOS, cut)
-		bp.Back = back
+		if mark != nil {
+			bp.Back = mark.due
+		}
+	}
+	if mark != nil {
+		due := mark.due
+		bp.Mark, bp.MarkAt = &due, mark.after
 	}
 	base, err := json.Marshal(bp)
 	if err != nil {
@@ -340,7 +356,7 @@ func sweepChain(dir, from string) (batches, segs int, err error) {
 			uWall, uOS = bf.listUntil()
 		}
 		if k > 0 || folded || foldsMoment(bf, k, cut) {
-			data, err := keptFile(bf, k, cut, stretches, uWall, uOS, 0)
+			data, err := keptFile(bf, k, cut, stretches, uWall, uOS, nil)
 			if err != nil {
 				return 0, 0, err
 			}
