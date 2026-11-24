@@ -671,9 +671,10 @@ func TestRecutDays(t *testing.T) {
 }
 
 // TestRunSettleRecuts checks that the settle job's first run cuts again the
-// days stored over the cap before migration 0012 (RecutDays).
+// days stored over the cap before migration 0012 (RecutDays), and tells the
+// live stream whose day it cut.
 func TestRunSettleRecuts(t *testing.T) {
-	t.Run("the settle job's first run cuts a day stored over the cap before 0012", func(t *testing.T) {
+	t.Run("the settle job's first run cuts a day stored over the cap before 0012, and tells changed its account once the cut committed", func(t *testing.T) {
 		db := newDB(t, store.SQLite, "u1")
 		withCap(t, math.MaxInt64)
 		if err := run(t, db, "u1", creditFor("d1", "p1", "prompting", "A", base, 13, "final")); err != nil {
@@ -683,6 +684,7 @@ func TestRunSettleRecuts(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		clock := func() time.Time { return time.Unix(base, 0).Add(24 * time.Hour) }
+		var changed []string
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
@@ -691,6 +693,8 @@ func TestRunSettleRecuts(t *testing.T) {
 					t.Error(err)
 				}
 				cancel()
+			}, func(account string) {
+				changed = append(changed, account)
 			})
 		}()
 		select {
@@ -701,6 +705,10 @@ func TestRunSettleRecuts(t *testing.T) {
 		want := []Day{{ProjectID: "d1/p1", Day: "2026-11-20", Kind: "prompting", FinalMS: [3]int64{600_000}, DayCapMS: 180_000}}
 		if got := rows(t, db, "u1"); !reflect.DeepEqual(got, want) {
 			t.Errorf("rows:\n got %+v\nwant %+v", got, want)
+		}
+		// The minutes are final, so only the cut tells it.
+		if !slices.Equal(changed, []string{"u1"}) {
+			t.Errorf("changed heard %q, want the account whose day was cut, once", changed)
 		}
 	})
 }

@@ -12,9 +12,12 @@ import (
 	"time"
 )
 
-// Exported is every row this package keeps for an account, which the
-// privacy hub's export holds (DESIGN 8.9; WP-SV13): its stored days, its
-// decided weeks, its weekly goal and freezes, and its time zone changes.
+// Exported is every row this package keeps for an account: its stored
+// days, its decided weeks, its weekly goal and freezes, and its time zone
+// changes. The privacy hub's export only counts these tables, since the
+// hub's contract answers counts and never a person's data (WP-SV13), so
+// nothing reads Exported yet. It is kept for a later download the teen
+// asks for themselves.
 type Exported struct {
 	Days        []StoredDay  `json:"build_days"`
 	Weeks       []StoredWeek `json:"build_weeks"`
@@ -56,8 +59,10 @@ type ZoneChange struct {
 	Before string    `json:"before"`
 }
 
-// Export reads every row this package keeps for account, for the privacy
-// hub's export, and writes nothing. DeleteAccount deletes the same rows.
+// Export reads every row this package keeps for account, and writes
+// nothing: the rows a later download by the teen would hold, not the
+// privacy hub's export, which counts them. DeleteAccount deletes the same
+// rows.
 func Export(ctx context.Context, q Querier, account string) (Exported, error) {
 	var out Exported
 	err := each(ctx, q, `SELECT day, a_ms, b_ms, counted, decided_at_ms FROM build_days WHERE user_id = $1`, account, func(rows *sql.Rows) error {
