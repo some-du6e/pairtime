@@ -182,6 +182,9 @@ func TestProfileTopic(t *testing.T) {
 			time.Sleep(13 * time.Hour)
 			synctest.Wait()
 			c.read()
+			// c, which nobody reads from here, goes, or a day of its
+			// keepalives would fill its writer.
+			c.close()
 			// A stream opened after the day's publication has it as its
 			// place.
 			first := open(t, h, profileTopic, nil)
