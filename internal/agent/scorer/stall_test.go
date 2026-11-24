@@ -22,6 +22,9 @@ func TestStallNote(t *testing.T) {
 	cases := []struct {
 		name        string
 		fb, sampled int64
+		// gapEnd and gap are the latest gap longer than BUCKET_TTL_S
+		// between two of the sampler's records, 0 for none.
+		gapEnd, gap int64
 		focus       event.AppClass
 		// want are the parts the note must hold, none for no note; bare says
 		// the note names no cause.
@@ -45,13 +48,19 @@ func TestStallNote(t *testing.T) {
 		{name: "with samples that stopped and a browser in front, the note still says no sample has come",
 			fb: at - 90*minute, sampled: at - 90*minute, focus: event.AppBrowser,
 			want: []string{"no presence sample has come for 1 h 30 min"}},
+		{name: "with a sample that ended a gap longer than BUCKET_TTL_S under 5 min before the newest record, the note says the minutes wait for a record dated in that gap",
+			fb: at - 14*60*minute, sampled: at, gapEnd: at - 2*minute, gap: 13*60*minute + 50*minute, focus: event.AppTerminal,
+			want: []string{"a presence sample came after 13 h 50 min without one", "wait 5 min for a record dated in that gap"}},
+		{name: "with that gap ended more than 5 min before the newest record, the note doesn't name it",
+			fb: at - 2*60*minute, sampled: at, gapEnd: at - 6*minute, gap: 13 * 60 * minute, focus: event.AppTerminal,
+			want: []string{"ends 2 h before"}, bare: true},
 		{name: "with samples coming and a terminal in front, the note names no cause",
 			fb: at - 2*60*minute, sampled: at - minute, focus: event.AppTerminal,
 			want: []string{"ends 2 h before"}, bare: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := stallNote(at, c.fb, pending, 2*60*minute, 5*minute, c.sampled, c.focus)
+			got := stallNote(at, c.fb, pending, 2*60*minute, 5*minute, sampling{newest: c.sampled, gapEnd: c.gapEnd, gap: c.gap}, c.focus)
 			if len(c.want) == 0 {
 				if got != "" {
 					t.Errorf("note %q, want none", got)
@@ -73,8 +82,10 @@ func TestStallNote(t *testing.T) {
 // TestStallWarning checks what doctor hears from the loop: over a hooked
 // turn of two hours whose agent samples presence once a minute, as after
 // CONTEXT_IDLE_S without input (hookTurn), with some of those samples left
-// out; and over SM 6.1's morning up to its first browser run, a lookup,
-// with the browser then left in front for 40 minutes while samples come.
+// out; over SM 6.1's morning up to its first browser run, a lookup, with
+// the browser then left in front for 40 minutes while samples come; and
+// over a night's suspend, after which pkg/score holds the minutes for
+// PENDING_WINDOW_S - READ_HORIZON_S past the morning's resume.
 func TestStallWarning(t *testing.T) {
 	const minute = int64(60_000)
 	var tools []int64
@@ -132,6 +143,30 @@ func TestStallWarning(t *testing.T) {
 		}
 		return evs
 	}
+	// overnight is an evening's hooked turn, then an os.power suspend and
+	// the sample taken with it, and fourteen hours later the resume and a
+	// sample every 15 s for half an hour, as a laptop closed for the night
+	// and opened in the morning writes. The resume ends a gap longer than
+	// BUCKET_TTL_S, so pkg/score keeps the night's minutes at the sample
+	// before it until the newest record is PENDING_WINDOW_S -
+	// READ_HORIZON_S past the resume.
+	overnight := func(t *testing.T) []event.Event {
+		day := hookTurn(t, fixture(t, "6.4").Events[0].T, tools[:12])
+		last := day[len(day)-1].T
+		n := 0
+		rec := func(ts int64, d event.Payload) event.Event {
+			n++
+			return sampleAt(day, ts, fmt.Sprintf("01a1fb1e-5318-78a1-a7f4-%012x", n), d)
+		}
+		idle := func(s float64) *event.OSPresence { return &event.OSPresence{IdleAnyS: s, IdleKeysS: &s} }
+		evs := append(day, rec(last+minute, &event.OSPower{Op: event.PowerSuspend}), rec(last+minute, idle(660)))
+		morning := last + minute + 14*60*minute
+		evs = append(evs, rec(morning, &event.OSPower{Op: event.PowerResume}))
+		for k := int64(0); k <= 120; k++ {
+			evs = append(evs, rec(morning+k*15_000, idle(float64(1+k%4))))
+		}
+		return evs
+	}
 	cases := []struct {
 		name  string
 		build func(t *testing.T) []event.Event
@@ -139,6 +174,9 @@ func TestStallWarning(t *testing.T) {
 		// and last holds what it hears at the end, "" for nothing.
 		warned bool
 		last   string
+		// each, when set, is what every lag doctor hears must say: its
+		// cause.
+		each string
 		// held says the newest final minute ends up more than the
 		// warning's lag behind the newest record, so a case's silence
 		// isn't that of a short lag.
@@ -151,6 +189,8 @@ func TestStallWarning(t *testing.T) {
 			build: turn(func(m int64) bool { return m <= 30 || m >= 100 }), warned: true},
 		{name: "a browser in front for 40 minutes after credit, whose run SM 2.5 holds as a possible lookup, tells doctor nothing",
 			build: browser, held: true},
+		{name: "a night's suspend, which holds the minutes for 5 min after the morning's resume, tells doctor why while it holds, and nothing once they catch up",
+			build: overnight, warned: true, each: "a presence sample came after 14 h without one"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -165,6 +205,11 @@ func TestStallWarning(t *testing.T) {
 			warned := slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, "newest final minute") })
 			if warned != c.warned {
 				t.Errorf("doctor heard of a lag: %v, want %v (it heard %q)", warned, c.warned, problems)
+			}
+			for _, p := range problems {
+				if c.each != "" && strings.Contains(p, "newest final minute") && !strings.Contains(p, c.each) {
+					t.Errorf("doctor heard %q, want every lag it hears to say %q", p, c.each)
+				}
 			}
 			switch {
 			case c.last == "" && last != "":

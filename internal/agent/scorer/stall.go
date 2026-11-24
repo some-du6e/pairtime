@@ -4,6 +4,7 @@ package scorer
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -12,10 +13,21 @@ import (
 // stallMS is how much longer than PENDING_WINDOW_S FinalBefore may stay
 // behind the newest record before doctor hears of it. A minute is final
 // PENDING_WINDOW_S after it ends (DESIGN 3.7), and Step holds FinalBefore
-// back further only for a browser or chat-app run that may be a lookup (SM
-// 2.5), which stallNote leaves silent, or, for less than the think part of
-// a lead, for an agent app's message that hasn't paired yet (SM 2.3).
+// back further for a browser or chat-app run that may be a lookup (SM
+// 2.5), which stallNote leaves silent; for less than the think part of a
+// lead, for an agent app's message that hasn't paired yet (SM 2.3); and,
+// for PENDING_WINDOW_S - READ_HORIZON_S after the sampler's record that
+// ends a gap longer than BUCKET_TTL_S, such as the resume after a night's
+// suspend, at the sample before the gap, in case a record dated inside
+// the gap is still on its way (SM 2.1). That hold can keep FinalBefore
+// hours behind, so stallNote names it while it lasts.
 const stallMS = 10 * 60 * 1000
+
+// sampling is what watch knows of the presence sampler's records, as the
+// window and the carry hold them: the newest one's t, 0 for none, and the
+// end and length of the latest gap between two of them longer than
+// BUCKET_TTL_S, 0 for none.
+type sampling struct{ newest, gapEnd, gap int64 }
 
 // watch tells doctor when FinalBefore lags, after the Step that scored
 // batch b: when the newest final minute ends more than stallMS past
@@ -27,12 +39,13 @@ const stallMS = 10 * 60 * 1000
 // and is no stall. One dated long before it, as lookback's records are,
 // has a FinalBefore of its own time.
 func (l *Loop) watch(b ledger.Batch) {
-	var high, sampled, focusAt int64
+	var high, focusAt int64
 	var focus event.AppClass
+	var times []int64 // the sampler's records'
 	note := func(e *event.Event) {
 		switch d := e.Data.(type) {
 		case *event.OSPresence, *event.OSPower:
-			sampled = max(sampled, e.T)
+			times = append(times, e.T)
 		case *event.OSFocus:
 			if e.T >= focusAt {
 				focusAt, focus = e.T, d.AppClass
@@ -51,10 +64,22 @@ func (l *Loop) watch(b ledger.Batch) {
 		high = max(high, e.T)
 		note(e)
 	}
+	// The latest gap longer than BUCKET_TTL_S is in what the window and
+	// the carry hold while pkg/score's hold for it lasts, since FinalBefore
+	// stays at the sample before it, and the window starts Lookback before
+	// FinalBefore.
+	var s sampling
+	slices.Sort(times)
+	for i, t := range times {
+		s.newest = t
+		if i > 0 && t-times[i-1] > l.win.ttl {
+			s.gapEnd, s.gap = t, t-times[i-1]
+		}
+	}
 	msg := ""
 	if high > 0 {
 		at := min(high, b.SealedAt.UnixMilli())
-		msg = stallNote(at, l.cur.FinalBefore, l.pendingMS, l.win.ttl, l.win.late, sampled, focus)
+		msg = stallNote(at, l.cur.FinalBefore, l.pendingMS, l.win.ttl, l.win.late, s, focus)
 	}
 	if msg != l.stallMsg {
 		if msg != "" {
@@ -75,13 +100,16 @@ func (l *Loop) watch(b ledger.Batch) {
 // agent app's reader; never a log reader's or the bridge's) and then any
 // record late, PENDING_WINDOW_S - READ_HORIZON_S, after the one that ended
 // those, after which pkg/score takes them for a never-sampling device's
-// (SM 2.1). It returns "" for no lag, and for a lag while samples come and
-// a browser or chat app is in front: SM 2.5 holds the minutes after credit
-// until such a run ends, since it may be a lookup, which is the rule
-// working, not a fault, and doctor's agent line would call it one. sampled
-// is the newest presence sample or power record, 0 for none, and focus the
-// app class of the newest os.focus.
-func stallNote(at, fb, pending, ttl, late, sampled int64, focus event.AppClass) string {
+// (SM 2.1). A sample that ends a gap longer than ttl, as the morning's
+// first after a night's suspend, holds the minutes since the sample before
+// it until the newest record is late past it (SM 2.1's wait for a record
+// dated inside the gap), and the note says so while it does. It returns ""
+// for no lag, and for a lag while samples come and a browser or chat app
+// is in front: SM 2.5 holds the minutes after credit until such a run
+// ends, since it may be a lookup, which is the rule working, not a fault,
+// and doctor's agent line would call it one. s says what the sampler's
+// records show, and focus is the app class of the newest os.focus.
+func stallNote(at, fb, pending, ttl, late int64, s sampling, focus event.AppClass) string {
 	lag := at - fb
 	if lag <= pending+stallMS {
 		return ""
@@ -89,11 +117,14 @@ func stallNote(at, fb, pending, ttl, late, sampled int64, focus event.AppClass) 
 	msg := fmt.Sprintf("the scorer's newest final minute ends %s before its newest record, where %s is usual, so the minutes since stay pending",
 		lasting(lag), lasting(pending))
 	switch {
-	case sampled == 0:
+	case s.newest == 0:
 		msg += ": presence is unknown on this computer, so the scorer has no presence sample to keep time by"
-	case at-sampled > pending+stallMS:
+	case at-s.newest > pending+stallMS:
 		msg += fmt.Sprintf(": no presence sample has come for %s, so they wait for the next one, or for %s of records the agent stamps itself (hooks, its own watchers, an agent app's reader) without one, and then any record %s later",
-			lasting(at-sampled), lasting(ttl), lasting(late))
+			lasting(at-s.newest), lasting(ttl), lasting(late))
+	case s.gapEnd > 0 && at-s.gapEnd < late:
+		msg += fmt.Sprintf(": a presence sample came after %s without one, so the minutes since wait %s for a record dated in that gap",
+			lasting(s.gap), lasting(late))
 	case focus == event.AppBrowser || focus == event.AppChatApp:
 		return ""
 	}
