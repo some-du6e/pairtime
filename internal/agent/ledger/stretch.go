@@ -340,8 +340,9 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 	// stretch the writer knows, but it was made before Open: a stretch still
 	// going on at Open clears the mark at Open's own read of config.toml. So
 	// a batch holding one stays unmarked, and closes the run of local-only
-	// batches with itself inside. For the same reason the mark is due only
-	// from the next record on.
+	// batches with itself inside, which ends the mark when it is sealed
+	// online. For the same reason the mark is due only from the next record
+	// on.
 	due := bf.base.Back
 	if n := len(rows); n > 0 && (rows[n-1].Due > 0 || due <= rows[n-1].LastSeq) {
 		due = rows[n-1].Due

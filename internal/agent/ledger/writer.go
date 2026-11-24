@@ -388,10 +388,11 @@ type Writer struct {
 	// backFrom is when Open made the mark due again from a seal frame or
 	// the base frame (restoreStretches), zero for a mark a note or the
 	// agent's Seen armed: a batch takes that mark only when each of its
-	// records was made after it (madeAfter). A stretch the running writer
-	// began after its newest seal frame, as at a seal's local-only read
-	// with nothing pending, is in memory only, and a restart erases it with
-	// the mark it cleared, but each record of it was made before Open.
+	// records was made after it (madeAfter), and the first batch sealed
+	// online that it can't mark ends it. A stretch the running writer began
+	// after its newest seal frame, as at a seal's local-only read with
+	// nothing pending, is in memory only, and a restart erases it with the
+	// mark it cleared, but each record of it was made before Open.
 	backFrom moment
 	// localAt is when the writer last took config.toml as local-only: a
 	// seal's local-only read, a note of a switch to it, or a Seen that says
@@ -1129,24 +1130,33 @@ func (s Seen) moment() moment {
 // momentNow is now by each clock a moment holds.
 func (w *Writer) momentNow() moment { return momentAt(w.now(), w.osNow()) }
 
-// madeAfter reports whether each record pending was made after m, by every
-// time Write holds it to (pending): its event's times and its sender's own
-// stamp. A git change goes by the scan that found it, which can come after
-// m whenever its commit was made, so none counts as made after m. A record
-// that isn't an event, as a scorer checkpoint, was made as it was written.
-// A zero m holds nothing back. w.mu is held.
+// madeAfter reports whether each record pending was made after m, Open's
+// moment, by every time Write holds it to (pending): its event's times and
+// its sender's own stamp. A monotonic reading of another boot, when m holds
+// this boot's, or of another run, was taken before m whatever the wall
+// clock says, since Open runs in this boot and this run: the converse of
+// what Writer.earlier holds. A git change goes by the scan that found it,
+// which can come after m whenever its commit was made, so none counts as
+// made after m. A record that isn't an event, as a scorer checkpoint, was
+// made as it was written. A zero m holds nothing back. w.mu is held.
 func (w *Writer) madeAfter(m moment) bool {
 	if m == (moment{}) {
 		return true
+	}
+	before := func(e event.Envelope) bool {
+		if e.Mono > 0 && e.BootID != runBoot && (strings.HasPrefix(e.BootID, runPrefix) || m.os > 0 && e.BootID != m.boot) {
+			return true
+		}
+		return m.before(e)
 	}
 	for _, p := range w.pending {
 		if !p.has {
 			continue
 		}
-		if p.scan || m.before(p.env) {
+		if p.scan || before(p.env) {
 			return false
 		}
-		if !p.sent.Wall.IsZero() && m.before(event.Envelope{T: p.sent.Wall.UnixMilli(), Mono: p.sent.Mono, BootID: p.sent.BootID}) {
+		if !p.sent.Wall.IsZero() && before(event.Envelope{T: p.sent.Wall.UnixMilli(), Mono: p.sent.Mono, BootID: p.sent.BootID}) {
 			return false
 		}
 	}
@@ -1528,9 +1538,17 @@ func (w *Writer) seal() (Batch, bool, error) {
 	// lands before the marked batch. No batch sealed online has passed the
 	// stretch yet, or Write would have dropped the event (ErrLateLocal).
 	on := online && !w.taint && !w.late && !waiting
+	takes := on && w.back > 0 && row.FirstSeq >= w.back
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
-		SealedAt: at.UnixMilli(), Online: &on, Back: on && w.back > 0 && row.FirstSeq >= w.back && w.madeAfter(w.backFrom),
-		LocalUntil: w.until.wall}
+		SealedAt: at.UnixMilli(), Online: &on, Back: takes && w.madeAfter(w.backFrom), LocalUntil: w.until.wall}
+	if takes && !sp.Back {
+		// A batch sealed online that a mark Open restored can't mark, as one
+		// holding a record made before Open or a git change, closes the run of
+		// local-only batches with itself inside, so the mark has nothing left
+		// to mark: it ends here, its frame records none, and no later seal
+		// asks Waiting for it.
+		w.back, w.backFrom = 0, moment{}
+	}
 	if !sp.Back {
 		sp.Due = w.back
 	}

@@ -1318,9 +1318,9 @@ func TestNoteMode(t *testing.T) {
 				case "local", "online":
 					w.NoteMode(step == "online")
 				case "write":
-					if _, _, err := write(w, rng, "os.presence", testT+int64(i)*1000); err != nil {
-						t.Fatal(err)
-					}
+					// With no monotonic reading, so a mark Open restored doesn't
+					// take it for one of another boot (Writer.madeAfter).
+					writeAt(i, testT+int64(i)*1000, func(in *Input) { in.Event.Mono, in.Event.BootID = 0, "" })
 				case "write-old":
 					if _, _, err := write(w, rng, "os.presence", testT-60_000); err != nil {
 						t.Fatal(err)

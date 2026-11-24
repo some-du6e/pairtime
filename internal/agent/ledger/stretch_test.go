@@ -700,9 +700,13 @@ func (r *lateRig) write(in Input) {
 	}
 }
 
-// presence is an event made ms after the start, judged by its t alone.
+// presence is an event made ms after the start, judged by its t alone: it
+// carries no monotonic reading, so Writer.madeAfter doesn't take it for one
+// of another boot.
 func (r *lateRig) presence(ms int64) Input {
-	return sampleInput(r.rng, "os.presence", testT+ms, "", "")
+	in := sampleInput(r.rng, "os.presence", testT+ms, "", "")
+	in.Event.Mono, in.Event.BootID = 0, ""
+	return in
 }
 
 // logged is an event of kind that a log reader read made ms after the
@@ -1848,10 +1852,17 @@ func TestDueMarkOutlastsARestart(t *testing.T) {
 	}{
 		{"with no sweep before the restart, the local-only batch's seal frame keeps the mark, and the first batch sealed online after the restart takes it", false, nil, true},
 		{"with a sweep that drops every row before the restart, its base frame keeps the mark, and the first batch sealed online after the restart takes it", true, nil, true},
-		{"a hook call of a stretch the restart erased, made in it by the OS's clock, keeps the batch it reaches after Open unmarked",
+		{"a hook call of a stretch the restart erased, made in it by the OS's clock, keeps the batch it reaches after Open unmarked, though a step back of the wall clock dates it after Open",
 			false, func(r *lateRig) Input {
-				in := r.presence(40_000)
+				in := r.presence(70_000)
 				in.Event.Mono, in.Event.BootID = 41_000, lateBoot
+				return in
+			}, false},
+		{"so does one of an earlier boot, timed by the agent's own stamp after Open, whose sender's stamp the wall clock of a boot that reads behind dates after Open, as its boot was before Open's",
+			false, func(r *lateRig) Input {
+				in := r.presence(61_000)
+				in.Event.Mono, in.Event.BootID = 62_000, lateBoot
+				in.Sent = osclock.Stamp{Wall: time.UnixMilli(testT + 5*3600_000), Mono: 41_000, BootID: "b_before"}
 				return in
 			}, false},
 		{"so does a transcript line of that stretch read late, with mono 0, judged by its t alone",
@@ -1930,6 +1941,132 @@ func TestDueMarkOutlastsARestart(t *testing.T) {
 						t.Errorf("no: the first batch online %v, back %v, why %+v; after the restart online %v, back %v, want back %v", first.Online, first.Back, first.Why, b.Online, b.Back, c.back)
 					}
 				})
+			}
+		})
+	}
+}
+
+// TestRestoredMarkEnds checks that a mark Open restored ends with the first
+// batch sealed online that it can't mark, as one holding a git change the
+// startup scan found: that batch closes the run of local-only batches with
+// itself inside, so its seal frame records no mark due, and no later seal
+// asks Waiting for the mark. A spool file that can't be read, which Waiting
+// answers yes for whatever it is asked, then can't seal a batch local-only
+// after the online ones, which would stop the batch roots.
+func TestRestoredMarkEnds(t *testing.T) {
+	r := newLateRig(t)
+	// As in TestDueMarkOutlastsARestart: the install's stretch, the switch
+	// back, and the first batch after it sealed local-only for a call still
+	// on its way, which leaves the mark due in its seal frame.
+	r.note(false)
+	r.write(r.presence(1000))
+	r.take()
+	r.at(10_000)
+	r.note(true)
+	r.pause()
+	r.held.Store(true)
+	r.at(20_000)
+	r.write(r.presence(20_000))
+	first := r.seal()
+	r.held.Store(false)
+	if err := r.w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r.at(60_000)
+	r.open()
+	// Two git changes the startup scan found, each sealed at once, as the git
+	// host's sink seals them, neither of which a restored mark marks.
+	var scanned []Batch
+	for _, ms := range []int64{61_000, 62_000} {
+		r.at(ms)
+		r.write(sampleInput(r.rng, "git.change", testT+ms, "s_1", "p_web"))
+		scanned = append(scanned, r.seal())
+	}
+	// A seal while a spool file can't be read, which Waiting answers yes for.
+	r.waits.Store(true)
+	r.at(63_000)
+	r.write(r.presence(63_000))
+	b := r.seal()
+	r.waits.Store(false)
+	if err := r.w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bf, err := readBatchesFile(filepath.Join(r.dir, batchesName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var due []uint64
+	for _, row := range bf.rows {
+		due = append(due, row.Due)
+	}
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"the first batch after the switch back is sealed local-only and records the mark due", !first.Online && first.Back == false && len(due) > 1 && due[1] > 0},
+		{"the startup scan's git changes are sealed online, unmarked", len(scanned) == 2 && scanned[0].Online && !scanned[0].Back && scanned[1].Online && !scanned[1].Back},
+		{"the first of them ends the mark, so its frame and those after it record none due", len(due) == 5 && due[2] == 0 && due[3] == 0 && due[4] == 0},
+		{"a seal while Waiting says yes is sealed online, as the mark that would have asked it ended", b.Online},
+		{"no batch is sealed local-only after one sealed online", !r.localAfterOnline()},
+	}
+	for _, ch := range checks {
+		t.Run(ch.name, func(t *testing.T) {
+			if !ch.ok {
+				t.Errorf("no: the first batch online %v, back %v; the scanned %+v; the one after online %v; the rows' due marks %v",
+					first.Online, first.Back, scanned, b.Online, due)
+			}
+		})
+	}
+}
+
+// TestMadeAfter checks how a mark Open restored judges the records of a
+// batch (Writer.madeAfter): each must have been made after Open's moment by
+// every time it is held to, its event's and its sender's stamp, by the
+// clock it shares with that moment; a monotonic reading of another boot or
+// another run counts as made before it, whatever the wall clock says, as
+// Open runs in this boot and this run; and a git change, which goes by its
+// scan, never counts as made after it.
+func TestMadeAfter(t *testing.T) {
+	const boot = "b_made"
+	// open is Open's moment: wall 1,000,000, this run's clock at 5,000 and
+	// the OS's at 40,000 in boot.
+	open := moment{wall: 1_000_000, run: 5_000, os: 40_000, boot: boot}
+	// sent is a sender's own stamp.
+	sent := func(wall, mono int64, b string) osclock.Stamp {
+		return osclock.Stamp{Wall: time.UnixMilli(wall), Mono: mono, BootID: b}
+	}
+	cases := []struct {
+		name  string
+		m     moment
+		p     pending
+		after bool
+	}{
+		{"a record this run's clock dates after Open was made after it, though the wall clock dates it before",
+			open, pending{has: true, env: event.Envelope{T: 900_000, Mono: 6_000, BootID: runBoot}}, true},
+		{"one this run's clock dates before Open was made before it, though the wall clock dates it after",
+			open, pending{has: true, env: event.Envelope{T: 1_100_000, Mono: 4_000, BootID: runBoot}}, false},
+		{"a hook call this boot's clock dates before Open was made before it, though the wall clock dates it after",
+			open, pending{has: true, env: event.Envelope{T: 1_100_000, Mono: 39_000, BootID: boot}}, false},
+		{"a hook call of another boot was made before Open, though the wall clock of a boot that reads behind dates it after",
+			open, pending{has: true, env: event.Envelope{T: 1_100_000, Mono: 90_000, BootID: "b_before"}}, false},
+		{"so was one whose sender's stamp is of another boot, though the agent's own stamp after Open timed it",
+			open, pending{has: true, env: event.Envelope{T: 1_001_000, Mono: 41_000, BootID: boot}, sent: sent(1_100_000, 90_000, "b_before")}, false},
+		{"a record of another run's clock was made before Open, even where Open holds no reading of the OS's clock",
+			moment{wall: 1_000_000, run: 5_000}, pending{has: true, env: event.Envelope{T: 1_100_000, Mono: 9_000, BootID: runPrefix + "earlier"}}, false},
+		{"a record with no monotonic reading goes by its t",
+			open, pending{has: true, env: event.Envelope{T: 1_000_001}}, true},
+		{"a git change, which goes by its scan, never counts as made after Open",
+			open, pending{has: true, scan: true, env: event.Envelope{T: 1_100_000, Mono: 6_000, BootID: runBoot}}, false},
+		{"a record that isn't an event was made as it was written",
+			open, pending{}, true},
+		{"a mark that Open didn't restore, with no moment, holds nothing back",
+			moment{}, pending{has: true, env: event.Envelope{T: 1, Mono: 1, BootID: "b_before"}}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := &Writer{pending: []pending{c.p}}
+			if got := w.madeAfter(c.m); got != c.after {
+				t.Errorf("madeAfter = %v, want %v", got, c.after)
 			}
 		})
 	}
