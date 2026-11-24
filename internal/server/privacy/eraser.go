@@ -67,6 +67,10 @@ type step struct {
 // request origins go 30 days after they were seen, before its row, which
 // stays 90 days after its removal. Selecting by account_id alone would
 // scan these tables, the server's largest, inside the writer.
+//
+// Both are premises of the erasure. A change that lets a device be linked
+// to another account, or that deletes a device's row while rows of these
+// tables remain, leaves rows this selection misses, and must change it.
 const ofDevices = "account_id = $1 AND device_id IN (SELECT device_id FROM devices WHERE user_id = $1)"
 
 // steps are the eraser's deletes, in order: rows that point at users

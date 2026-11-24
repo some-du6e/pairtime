@@ -22,7 +22,8 @@ const PruneAfter = time.Hour
 
 // JTIKey is the key privacy_token_uses records a jti under: its hex
 // SHA-256. The hub's jti starts with the request_id and names the action,
-// and the hash keeps neither (0015).
+// and the hash keeps neither (0015). Verify has held the jti to 1 to
+// MaxIDSize bytes of printable ASCII before anything hashes or stores it.
 func JTIKey(jti string) string {
 	sum := sha256.Sum256([]byte(jti))
 	return hex.EncodeToString(sum[:])
