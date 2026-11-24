@@ -12,11 +12,15 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters/git"
+	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/pkg/event"
+	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 )
 
 // tierOneCommit lists the fields of DESIGN 4.3's tier-1 commit record that
@@ -177,6 +181,111 @@ func TestCommitStore(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			c.run(t, &commitStore{dir: filepath.Join(t.TempDir(), "commits")})
+		})
+	}
+}
+
+// TestGitSinkKeepsCommitLines checks when the git host's sink keeps a
+// change's commit records in commits/ (gitHost.sink): only once the ledger
+// has taken its git.change, as the uploader judges a commit by the batches
+// sealed after it was observed. A change the ledger drops as made in a
+// local-only stretch that a batch sealed online has passed
+// (ledger.ErrLateLocal) leaves none, and so does one the ledger refuses.
+func TestGitSinkKeepsCommitLines(t *testing.T) {
+	const sha = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"
+	// change is a commit's change made at made, which its scan found then,
+	// with no monotonic reading, so the writer judges it by its t.
+	change := func(made time.Time) git.Change {
+		ms := made.UnixMilli()
+		return git.Change{
+			Event: event.Event{Envelope: event.Envelope{T: ms, Source: event.SourceGit, Harness: event.HarnessNone, SessionKey: event.NoSession},
+				Data: &event.GitChange{Op: event.GitCommit, SHA: sha, FilesChanged: 1, Insertions: 1, Actor: event.ActorHuman}},
+			Found: time.UnixMilli(ms),
+			Commits: []git.Commit{{SHA: sha, Project: "d0123456789abcdef0123456789abcdef", ObservedAt: ms,
+				AuthorTime: ms / 1000, CommitterTime: ms / 1000, FilesChanged: 1, Insertions: 1, Actor: event.ActorHuman}},
+		}
+	}
+	cases := []struct {
+		name string
+		// writer opens dirs' ledger writer as the case has it, and returns
+		// when the change was made.
+		writer func(t *testing.T, dirs home.Dirs) (*ledger.Writer, time.Time)
+		// kept is whether commits/ holds the change's record and the ledger
+		// its git.change, and problem the source of the problem the sink
+		// sets, "" for none.
+		kept    bool
+		problem string
+	}{
+		{"a change the ledger takes keeps its commit record, after its git.change",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, time.Time) { return testWriter(t, dirs), time.Now() }, true, ""},
+		{"a change the ledger drops as made in a local-only stretch that a batch sealed online has passed keeps none",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, time.Time) {
+				// A stretch from the install to 60 s in, and a batch sealed
+				// online after it, which passes it, as in TestReplayHeld.
+				t0 := time.Now().Add(-10 * time.Minute)
+				var at atomic.Int64
+				var local atomic.Bool
+				at.Store(t0.UnixMilli())
+				local.Store(true)
+				w := optionsWriter(t, dirs, func(o *ledger.Options) {
+					o.Now = func() time.Time { return time.UnixMilli(at.Load()) }
+					o.Online = func() bool { return !local.Load() }
+				})
+				for _, step := range []struct {
+					ms    int64
+					local bool
+				}{{2000, true}, {60_000, false}, {120_000, false}} {
+					local.Store(step.local)
+					at.Store(t0.UnixMilli() + step.ms)
+					if _, err := w.Write(presenceAt(t0.Add(time.Duration(step.ms-1000) * time.Millisecond))); err != nil {
+						t.Fatal(err)
+					}
+					sealNow(t, w, dirs.Ledger())
+				}
+				return w, t0.Add(30 * time.Second)
+			}, false, ""},
+		{"a change the ledger refuses, as once the writer has closed, keeps none",
+			func(t *testing.T, dirs home.Dirs) (*ledger.Writer, time.Time) {
+				w := testWriter(t, dirs)
+				if err := w.Close(); err != nil {
+					t.Fatal(err)
+				}
+				return w, time.Now()
+			}, false, "git.ledger"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a, dirs := modesAgent(t, "online")
+			w, made := c.writer(t, dirs)
+			g := &gitHost{a: a, writer: w, commits: &commitStore{dir: dirs.Commits()}}
+			g.sink(change(made))
+			if err := w.Close(); err != nil && !errors.Is(err, ledger.ErrClosed) {
+				t.Fatal(err)
+			}
+			lines := readCommitLines(t, dirs.Commits(), made.UTC().Format(time.DateOnly))
+			changes := 0
+			if err := ledger.ReadBatches(dirs.Ledger(), 1, func(b ledger.Batch) error {
+				for _, rec := range b.Records {
+					body, err := pkgledger.ParseBody(rec.Body)
+					if err != nil {
+						return err
+					}
+					if e, err := body.Event(); err == nil && e.Kind() == event.KindGitChange {
+						changes++
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			kept := len(lines) == 1 && lines[0]["sha"] == sha && changes == 1
+			none := len(lines) == 0 && changes == 0
+			if c.kept && !kept || !c.kept && !none {
+				t.Errorf("commits/ holds %d records and the ledger %d git.change records; want the change's record kept %v", len(lines), changes, c.kept)
+			}
+			if got := a.currentProblems()[c.problem]; c.problem != "" && got == "" {
+				t.Errorf("no %s problem: %v", c.problem, a.currentProblems())
+			}
 		})
 	}
 }

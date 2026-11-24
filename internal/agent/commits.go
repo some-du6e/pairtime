@@ -23,13 +23,14 @@ const commitsKeep = 180 * 24 * time.Hour
 // commitStore is commits/ in the data directory, where the commit records
 // of DESIGN 4.3 wait for the uploader, which sends them from here (PLAN,
 // WP-AG5's follow-up; D-commit-records-local). The git host's sink appends
-// each change's records before the watcher's cursor can move past the
-// change, one line each, in the file of the UTC day the record's
-// observed_at falls on, YYYY-MM-DD.jsonl. A line is a git.Commit's JSON,
-// which holds only fields DESIGN 4.3 lets a client upload: no message, no
-// path, and nothing of git.CommitLocal. The reflog that a record's rewrites
-// come from expires, so a record dropped before the uploader takes it
-// can't be made again. A day's file goes once it is commitsKeep old.
+// each change's records once the ledger has taken its git.change, and
+// before the watcher's cursor can move past the change, one line each, in
+// the file of the UTC day the record's observed_at falls on,
+// YYYY-MM-DD.jsonl. A line is a git.Commit's JSON, which holds only fields
+// DESIGN 4.3 lets a client upload: no message, no path, and nothing of
+// git.CommitLocal. The reflog that a record's rewrites come from expires,
+// so a record dropped before the uploader takes it can't be made again. A
+// day's file goes once it is commitsKeep old.
 //
 // Each line has a newline before it as well as after it, as the inbox's
 // spool has, so a line a power cut left short can't take the next with it.

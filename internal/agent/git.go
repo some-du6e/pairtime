@@ -342,30 +342,27 @@ func (g *gitHost) noteCommand(r adapters.Record, t *event.AgentTool) {
 	g.w.NoteAgentCommand(c)
 }
 
-// sink keeps a change's commit records in commits/ and writes its
-// git.change record (git.WatcherOptions.Sink), both before it returns,
-// which is when the watcher moves the cursor past the change. The watcher
-// gives it the envelope's t, source, harness, session and project; the
-// agent adds the rest: the id, via git, and the run's mono and boot_id, as
-// its other own events have them (ledger.RunClock). The mono is the run's
-// clock when the scan that found the change began (git.Change.Found), which
-// t gives by the wall clock, so a step of the wall clock during the hold
-// moves neither. The writer adds the device and the sequence number. The record
-// is sealed at once, so a cursor saved after it never runs ahead of the
-// ledger. The commit records go first, so a ledger that refuses the
-// git.change still leaves them for the uploader.
+// sink writes a change's git.change record and keeps its commit records in
+// commits/ (git.WatcherOptions.Sink), both before it returns, which is when
+// the watcher moves the cursor past the change. The watcher gives it the
+// envelope's t, source, harness, session and project; the agent adds the
+// rest: the id, via git, and the run's mono and boot_id, as its other own
+// events have them (ledger.RunClock). The mono is the run's clock when the
+// scan that found the change began (git.Change.Found), which t gives by the
+// wall clock, so a step of the wall clock during the hold moves neither. The
+// writer adds the device and the sequence number. The record is sealed at
+// once, so a cursor saved after it never runs ahead of the ledger. The
+// commit records are kept only once the ledger has taken the git.change:
+// the uploader judges a commit by the batches sealed after it was observed,
+// and a change the ledger drops as made in a local-only stretch that a batch
+// sealed online has passed (ledger.ErrLateLocal), or refuses, has no batch
+// that shows the mode it was made in, so it leaves none. A crash between the
+// two loses nothing: the cursor moves only after sink returns, so the next
+// start's scan finds the change again.
 func (g *gitHost) sink(c git.Change) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	now := time.Now()
-	if err := g.commits.add(c.Commits, now); err != nil {
-		g.a.log.Warn("couldn't keep a change's commit records", "op", c.Op(), "commits", len(c.Commits), "err", err)
-		// In words of the agent's own, as the git adapter's other problems:
-		// the error names the data directory's folder.
-		g.a.setProblem("git.commits", "a change's commit records couldn't be kept in commits/ for the uploader; the agent's log says why")
-	} else if len(c.Commits) > 0 {
-		g.a.setProblem("git.commits", "")
-	}
 	ev := c.Event
 	ev.EventID = event.NewEventID(time.UnixMilli(ev.T))
 	ev.Via = event.ViaGit
@@ -382,15 +379,24 @@ func (g *gitHost) sink(c git.Change) {
 	_, err := g.writer.Write(ledger.Input{Event: ev})
 	if errors.Is(err, ledger.ErrLateLocal) {
 		// Found in a local-only stretch, it came after the writer sealed a
-		// batch online since, so it stays off the ledger, as it should.
-		g.a.log.Info("a git change found while config.toml said local-only came after the computer uploaded again, so the ledger dropped it",
-			"op", c.Op(), "made", time.UnixMilli(ev.T).UTC())
+		// batch online since, so it stays off the ledger, as it should, and
+		// so do its commit records.
+		g.a.log.Info("a git change found while config.toml said local-only came after the computer uploaded again, so the ledger dropped it, and its commit records with it",
+			"op", c.Op(), "made", time.UnixMilli(ev.T).UTC(), "commits", len(c.Commits))
 		return
 	}
 	if err != nil {
-		g.a.log.Warn("the ledger refused a git.change record", "op", c.Op(), "err", err)
+		g.a.log.Warn("the ledger refused a git.change record, so its commit records weren't kept", "op", c.Op(), "commits", len(c.Commits), "err", err)
 		g.a.setProblem("git.ledger", fmt.Sprintf("the ledger refused a git.change record: %v", err))
 		return
+	}
+	if err := g.commits.add(c.Commits, now); err != nil {
+		g.a.log.Warn("couldn't keep a change's commit records", "op", c.Op(), "commits", len(c.Commits), "err", err)
+		// In words of the agent's own, as the git adapter's other problems:
+		// the error names the data directory's folder.
+		g.a.setProblem("git.commits", "a change's commit records couldn't be kept in commits/ for the uploader; the agent's log says why")
+	} else if len(c.Commits) > 0 {
+		g.a.setProblem("git.commits", "")
 	}
 	g.changes++
 	if _, _, err := g.writer.Seal(); err != nil {
