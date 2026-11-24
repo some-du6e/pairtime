@@ -714,6 +714,13 @@ func TestLocalMode(t *testing.T) {
 	r.u.Wake()
 	waitFor(t, "doctor to hear that uploads stopped", func() bool { return strings.Contains(r.doctor(), "stopped uploading") })
 	r.drain()
+	pv, err := Next(PreviewOptions{
+		LedgerDir: r.dirs.Ledger(), BucketDir: r.dirs.Buckets(), DataDir: r.dirs.Data, StateFile: r.dirs.StateFile(),
+		Params: newestTable(), Credentials: r.creds,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	r.f.mu.Lock()
 	stopped := []struct {
 		name string
@@ -725,6 +732,8 @@ func TestLocalMode(t *testing.T) {
 		{"doctor names the batch they stop at and why it was sealed local-only, from the batch as Sealed handed it over",
 			strings.Contains(r.doctor(), "stopped uploading at batch 3, which it sealed in local-only mode at ") &&
 				strings.Contains(r.doctor(), `because config.toml said mode = "local", had an error`)},
+		{"privacy show's preview names the same batch, when it was sealed and why", pv.Stopped == 3 && pv.StoppedAt.Equal(r.sealedAt(3)) &&
+			strings.Contains(r.doctor(), StopTime(pv.StoppedAt)) && strings.Contains(pv.Cause, `config.toml said mode = "local", had an error`)},
 	}
 	r.f.mu.Unlock()
 	for _, tc := range stopped {
