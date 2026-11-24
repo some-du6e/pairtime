@@ -13,8 +13,8 @@
 // Tests use it to check what a command prints against the schema that
 // describes it, such as `pairtime today --json` against
 // docs/schema/cli-today.schema.json; the client binary doesn't link it.
-// It started as the validator in internal/timelines' tests, which check
-// fixture events against event.schema.json with their own copy.
+// It started as the validator in internal/timelines' tests, which now
+// check fixture events against event.schema.json with it too.
 package jsonschema
 
 import (
