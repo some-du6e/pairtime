@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
@@ -217,10 +218,11 @@ func TestEventRecordRefusesContent(t *testing.T) {
 		_, err = EventRecord(k, ev, c)
 		return err
 	}
-	cases := []struct {
+	type refusal struct {
 		name string
 		err  error
-	}{
+	}
+	cases := []refusal{
 		{"a prompt with no class is refused", write(event.KindPromptSubmit, func(_ *event.Event, c *Content) { c.Class = "" })},
 		{"a prompt with a class SM 2.2 doesn't have is refused", write(event.KindPromptSubmit, func(_ *event.Event, c *Content) { c.Class = "bogus" })},
 		{"a prompt whose text isn't valid UTF-8 is refused", write(event.KindPromptSubmit, func(_ *event.Event, c *Content) { c.Text = []byte("fix \xff it") })},
@@ -236,7 +238,6 @@ func TestEventRecordRefusesContent(t *testing.T) {
 		{"an agent.tool hunk with a backslash path is refused", write(event.KindAgentTool, func(_ *event.Event, c *Content) { c.Edits[0].Path = `src\nav.js` })},
 		{"an agent.tool hunk with a '..' component is refused", write(event.KindAgentTool, func(_ *event.Event, c *Content) { c.Edits[0].Path = "src/../nav.js" })},
 		{"an agent.tool hunk whose range has lines but starts at 0 is refused", write(event.KindAgentTool, func(_ *event.Event, c *Content) { c.Edits[0].NewStart = 0 })},
-		{"an agent.tool hunk number of 2^31 is refused", write(event.KindAgentTool, func(_ *event.Event, c *Content) { c.Edits[0].OldLines = 1 << 31 })},
 		{"a shell.command record with edit hunks is refused", write(event.KindShellCommand, func(_ *event.Event, c *Content) { c.Edits = sampleContent(event.KindAgentTool).Edits })},
 		{"a session.start record with a command is refused", write(event.KindSessionStart, func(_ *event.Event, c *Content) { c.Command = "claude" })},
 		{"an os.focus record with text is refused", write(event.KindOSFocus, func(_ *event.Event, c *Content) { c.Text = []byte("window title") })},
@@ -266,6 +267,12 @@ func TestEventRecordRefusesContent(t *testing.T) {
 		{"an app's message with no class is refused", write(event.KindRelayMessage, func(_ *event.Event, c *Content) { c.Class = "" })},
 		{"an app's message marked NoText is refused; it never has a text to lack", write(event.KindRelayMessage, func(_ *event.Event, c *Content) { c.NoText = true })},
 		{"an app's message with a command is refused", write(event.KindRelayMessage, func(_ *event.Event, c *Content) { c.Command = "ls" })},
+	}
+	if math.MaxInt > math.MaxInt32 {
+		// Only a 64-bit int holds a hunk number of 2^31: on a 32-bit
+		// target no int is past the largest one a record takes.
+		hunk := int64(1) << 31
+		cases = append(cases, refusal{"an agent.tool hunk number of 2^31 is refused", write(event.KindAgentTool, func(_ *event.Event, c *Content) { c.Edits[0].OldLines = int(hunk) })})
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -677,12 +677,14 @@ func slashPath(p string) (string, bool) {
 func isLetter(b byte) bool { return 'a' <= b && b <= 'z' || 'A' <= b && b <= 'Z' }
 
 // under returns p relative to root when p is inside root. Windows paths
-// compare without case, as Windows does.
+// compare without case, as Windows does. A root that already ends in '/',
+// a root of / or a drive root such as C:/, is its own prefix, so every
+// file on it is inside it (ledger-v1 10.6).
 func under(root, p string) (string, bool) {
-	if root == "/" || strings.HasSuffix(root, ":/") {
-		return "", false
+	prefix := root
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
 	}
-	prefix := root + "/"
 	if len(p) <= len(prefix) {
 		return "", false
 	}

@@ -120,10 +120,6 @@ type merged struct {
 	// agent is the agent's time on its own that counts, by project, in
 	// project id order.
 	agent []share
-	// concurrent says two devices credit the same slot: SM 3.4's
-	// concurrent_devices. Nothing stores it (D-no-ingest-flags);
-	// ConcurrentMinutes counts it for a submission's window.
-	concurrent bool
 }
 
 // share is the agent's milliseconds on its own in one project, and
@@ -137,8 +133,9 @@ type share struct {
 // merge merges devs' revisions of one minute. In each slot the device
 // with the most credited seconds wins, then the one whose credit is
 // keyboard-backed (level A, input_keys), then the lower device_id, and the
-// others are dropped; two devices crediting a slot set concurrent (SM
-// 3.4).
+// others are dropped (SM 3.4). Two devices crediting a slot is SM 3.4's
+// concurrent_devices, which nothing stores (D-no-ingest-flags):
+// ConcurrentMinutes counts it for a submission's windows (concurrentIn).
 //
 // The agent's time on its own is wall-clock time too. In each project the
 // device that reports the most of it counts, the lower device_id on a tie,
@@ -163,20 +160,15 @@ func mergeWon(devs []device) (merged, [slotsPerMinute]int) {
 	for i := range slotsPerMinute {
 		won[i] = -1
 		var win *device
-		crediting := 0
 		for j := range devs {
 			d := &devs[j]
 			if d.slots[i].MS == 0 {
 				continue
 			}
-			crediting++
 			if win == nil || beats(d, win, i) {
 				win = d
 				won[i] = j
 			}
-		}
-		if crediting > 1 {
-			m.concurrent = true
 		}
 		if win != nil {
 			m.slots[i].slot = win.slots[i]
@@ -209,6 +201,27 @@ func mergeWon(devs []device) (merged, [slotsPerMinute]int) {
 		}
 	}
 	return m, won
+}
+
+// concurrentIn reports whether two of devs, one minute's revisions, credit
+// one slot and at least one of them credits it to a project in projects:
+// a minute ConcurrentMinutes counts (D-sb1-submissions, Q8).
+func concurrentIn(devs []device, projects map[string]bool) bool {
+	for i := range slotsPerMinute {
+		crediting, ours := 0, false
+		for j := range devs {
+			s := devs[j].slots[i]
+			if s.MS == 0 {
+				continue
+			}
+			crediting++
+			ours = ours || projects[s.Project]
+		}
+		if crediting > 1 && ours {
+			return true
+		}
+	}
+	return false
 }
 
 // beats reports whether d's slot i wins over w's (SM 3.4).

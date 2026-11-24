@@ -327,6 +327,12 @@ func TestChecks(t *testing.T) {
 			edit: func(f *Facts) { f.Agent.Problems = map[string]string{"keystore": "the warning"} }, check: "problem.keystore", absent: true},
 		{name: "no spooled call in the week is ok",
 			edit: func(*Facts) {}, check: "spool", want: OK, wantHas: []string{"none only through the spool"}},
+		{name: "a spool the agent stopped, as its ledger can't open, warns that hooks spool nothing, and why",
+			edit: func(f *Facts) { f.SpoolStopped = true }, check: "spool", want: Warn,
+			wantHas: []string{"hooks spool nothing", "the ledger can't open until you run pairtime restore", "is lost"}},
+		{name: "so does it with no agent to ask, as doctor reads it from the data folder",
+			edit: func(f *Facts) { f.Reach, f.Agent, f.SpoolStopped = Down, nil, true }, check: "spool", want: Warn,
+			wantHas: []string{"hooks spool nothing"}},
 		{name: "spooled calls warn with how many were prompts, why they count for less and what keeps them off the spool",
 			edit: func(f *Facts) { f.Agent.IPC.Spooled = Spooled{Calls: 12, Prompts: 3} }, check: "spool", want: Warn,
 			wantHas: []string{"12 hook calls of the last 7 days reached the agent only through the spool, 3 of them prompts", "credits less", "logging in starts it"}},
@@ -336,6 +342,25 @@ func TestChecks(t *testing.T) {
 		{name: "spooled calls an older version recorded count apart from those whose kind is known",
 			edit: func(f *Facts) { f.Agent.IPC.Spooled = Spooled{Calls: 4, Prompts: 1, Unknown: 2} }, check: "spool", want: Warn,
 			wantHas: []string{"4 hook calls", "1 of the 2 it can tell was a prompt, and 2 from a pairtime too old to record whether they were"}},
+		{name: "where the data folder's access list decides who may open its files, as on Windows, the private files line is skipped",
+			edit: func(f *Facts) { f.GOOS = "windows" }, check: "private-files", want: Skip},
+		{name: "where file modes decide and nothing is open to other accounts, the private files line is ok",
+			edit: func(f *Facts) { f.GOOS = "linux" }, check: "private-files", want: OK},
+		{name: "a held file open to other accounts warns, naming it and the chmod that closes it",
+			edit: func(f *Facts) {
+				f.GOOS = "linux"
+				f.Exposed = []Exposed{{Path: "/srv/pairtime/held.jsonl", Fix: "chmod 600 /srv/pairtime/held.jsonl"}}
+			}, check: "private-files", want: Warn,
+			wantHas: []string{"/srv/pairtime/held.jsonl is open to other accounts on this computer", "could read the prompts", "Run: chmod 600 /srv/pairtime/held.jsonl"}},
+		{name: "a data folder and a spool file open to other accounts both warn, each with its chmod",
+			edit: func(f *Facts) {
+				f.GOOS = "linux"
+				f.Exposed = []Exposed{
+					{Path: "/srv/pairtime", Fix: "chmod go-w /srv/pairtime"},
+					{Path: "/srv/pairtime/inbox/spool.jsonl", Fix: "chmod 600 /srv/pairtime/inbox/spool.jsonl"},
+				}
+			}, check: "private-files", want: Warn,
+			wantHas: []string{"/srv/pairtime, /srv/pairtime/inbox/spool.jsonl are open", "Run: chmod go-w /srv/pairtime; chmod 600 /srv/pairtime/inbox/spool.jsonl"}},
 		{name: "when no spooled call's kind is known, the line counts no prompts at all",
 			edit: func(f *Facts) { f.Agent.IPC.Spooled = Spooled{Calls: 3, Unknown: 3} }, check: "spool", want: Warn,
 			wantHas: []string{"3 hook calls of the last 7 days reached the agent only through the spool, all from a pairtime too old to record whether they were prompts"},

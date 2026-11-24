@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -143,13 +144,25 @@ func (a *agent) openLedgerRetrying(quit <-chan struct{}) *ledger.Writer {
 		lw, err := a.openLedger()
 		if err == nil {
 			a.setProblem("ledger", "")
+			// Hooks may spool again, as drains take their calls to the
+			// ledger.
+			if err := inbox.ResumeSpooling(a.dirs.Inbox()); err != nil {
+				a.log.Warn("the inbox's spool stays stopped", "err", err)
+			}
 			return lw
 		}
 		if ledgerGivesUp(err) {
+			// Its hook calls would wait for it forever (adapters.go), and so
+			// would those hooks spool while the agent isn't running: no
+			// drain takes them anywhere, so nothing is spooled until the
+			// ledger opens (D-inbox-age-cap). Doctor's spool line says so.
+			// Both before the problem, which says the ledger gave up.
+			a.adaptersHost().giveUp()
+			if err := inbox.StopSpooling(a.dirs.Inbox()); err != nil {
+				a.log.Warn("the inbox's spool can't be stopped", "err", err)
+			}
 			a.setProblem("ledger", fmt.Sprintf("the agent records nothing in the ledger: %v", err))
 			a.log.Warn("the ledger can't open", "err", err)
-			// Its hook calls would wait for it forever (adapters.go).
-			a.adaptersHost().giveUp()
 			return nil
 		}
 		a.setProblem("ledger", fmt.Sprintf("the agent records nothing in the ledger until it opens, and tries again in %v: %v", wait, err))
