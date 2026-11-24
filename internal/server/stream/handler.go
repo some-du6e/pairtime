@@ -153,9 +153,10 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request, st *stream) {
 	hd := w.Header()
 	hd.Set("Content-Type", "text/event-stream")
 	// SP 6.4 asks for no-cache, which proxies read as a stream not to
-	// hold. EventSource fetches with no cache anyway, and Cloudflare
-	// stores no event stream.
-	hd.Set("Cache-Control", "no-cache")
+	// hold; EventSource fetches with no cache anyway, and Cloudflare
+	// stores no event stream. no-transform keeps an edge from compressing
+	// it, which would hold events back until a compressed block fills.
+	hd.Set("Cache-Control", "no-cache, no-transform")
 	// nginx, for a server someone runs behind one, passes the stream on
 	// as it comes rather than buffer it.
 	hd.Set("X-Accel-Buffering", "no")

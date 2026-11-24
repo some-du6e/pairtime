@@ -53,11 +53,11 @@ func TestStart(t *testing.T) {
 		name  string
 		check func(t *testing.T, c *client, text string)
 	}{
-		{name: "a stream answers 200 as text/event-stream with no-cache, so no proxy holds it", check: func(t *testing.T, c *client, _ string) {
+		{name: "a stream answers 200 as text/event-stream with no-cache and no-transform, so no proxy holds it", check: func(t *testing.T, c *client, _ string) {
 			if c.code != http.StatusOK {
 				t.Errorf("status %d, want 200", c.code)
 			}
-			for k, want := range map[string]string{"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff"} {
+			for k, want := range map[string]string{"Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff"} {
 				if got := c.header.Get(k); got != want {
 					t.Errorf("%s = %q, want %q", k, got, want)
 				}
