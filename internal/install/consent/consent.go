@@ -234,7 +234,7 @@ func wakatimeCard(in Input) Card {
 			Title: "Count the time you spend in an editor, through WakaTime's plugins",
 			What: "WakaTime's editor plugins run wakatime-cli, which sends a heartbeat each time you edit or move around in a file. " +
 				"You have no ~/.wakatime.cfg, so pairtime makes one that has wakatime-cli send them to pairtime's agent on this computer, and nowhere else. " +
-				"It also gives wakatime-cli today's date as the point to read your AI agents' transcripts from, so that it doesn't send the ones from before as new time.",
+				"It also tells wakatime-cli to read your AI agents' transcripts only from now on, so that it doesn't send the ones from before as new time.",
 			Notes: []string{
 				"For VS Code, Cursor, Windsurf and other editors built on VS Code, install WakaTime's extension from the editor's extensions view, or with code --install-extension WakaTime.vscode-wakatime.",
 				"Hack Club programs that review time through Robert read it from Hackatime, which this doesn't set up. If you join one, set up Hackatime too, and pairtime keeps working beside it.",
