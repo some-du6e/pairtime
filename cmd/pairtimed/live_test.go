@@ -268,8 +268,8 @@ func (d *liveDevice) upload(c *http.Client, base string, up liveUpload, now time
 	if up.Seconds < 0 || up.Seconds > 60 || float64(int(up.Seconds/15))*15 != up.Seconds {
 		return 0, nil, errors.New("seconds must be 0, 15, 30, 45 or 60")
 	}
-	if up.Minute < 0 || up.Minute > 3 {
-		return 0, nil, errors.New("minute must be 0 to 3")
+	if up.Minute < 0 || up.Minute > 4 {
+		return 0, nil, errors.New("minute must be 0 to 4")
 	}
 	// One upload at a time, from taking its counter to reading its answer:
 	// ingest refuses a counter at or below one it has already taken
@@ -278,7 +278,7 @@ func (d *liveDevice) upload(c *http.Client, base string, up liveUpload, now time
 	defer d.mu.Unlock()
 	if d.first.IsZero() {
 		d.first, d.step = now.UTC().Truncate(time.Minute), -time.Minute
-		if d.first.Add(-3*time.Minute).Day() != d.first.Day() {
+		if d.first.Add(-4*time.Minute).Day() != d.first.Day() {
 			// Near midnight, minutes after the first, which ingest takes
 			// up to 300 s ahead.
 			d.step = time.Minute

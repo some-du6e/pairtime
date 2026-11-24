@@ -230,7 +230,7 @@ func TestResume(t *testing.T) {
 				}
 				c := open(t, rc.hub, meTopic, header)
 				text := c.read()
-				var replay []string
+				var replay, ids []string
 				resync := false
 				for _, e := range events(text) {
 					switch e.event {
@@ -242,17 +242,19 @@ func TestResume(t *testing.T) {
 						}
 					case "credited":
 						replay = append(replay, e.data)
+						ids = append(ids, e.id)
 					}
 				}
 				if !reflect.DeepEqual(replay, tt.replay) || resync != tt.resync {
 					t.Errorf("the reconnect got replay %q and resync %v, want %q and %v:\n%s", replay, resync, tt.replay, tt.resync, text)
 				}
-				// The replayed events carry the ids the first stream saw.
-				if tt.replay != nil {
-					for i, e := range events(text) {
-						if want := s.ids[len(s.ids)-len(tt.replay)+i]; e.id != want {
-							t.Errorf("replayed event %d has id %q, want %q", i, e.id, want)
-						}
+				// The replayed events carry the ids the first stream saw,
+				// as many as it replayed.
+				if n := len(tt.replay); n > 0 {
+					if len(ids) != n || n > len(s.ids) {
+						t.Errorf("the reconnect replayed ids %q, want the last %d of %q", ids, n, s.ids)
+					} else if want := s.ids[len(s.ids)-n:]; !reflect.DeepEqual(ids, want) {
+						t.Errorf("replayed ids %q, want %q", ids, want)
 					}
 				}
 				// Whatever it got, the reconnect's place is the topic's

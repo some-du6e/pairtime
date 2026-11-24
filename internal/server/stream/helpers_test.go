@@ -158,10 +158,13 @@ type sse struct {
 
 // parseSSE splits a stream's text into its blocks, as EventSource reads
 // them: a field and a value after one optional space, a line starting with
-// a colon a comment.
+// a colon a comment. Only blocks a blank line ends count, since
+// EventSource dispatches nothing before it, so a half block after the last
+// is left out.
 func parseSSE(s string) []sse {
 	var out []sse
-	for _, block := range strings.Split(s, "\n\n") {
+	blocks := strings.Split(s, "\n\n")
+	for _, block := range blocks[:len(blocks)-1] {
 		if block == "" {
 			continue
 		}

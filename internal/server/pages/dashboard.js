@@ -36,9 +36,11 @@
 	// A stream the server refused, or that couldn't connect, as while a
 	// restarted server comes back behind its proxy, is tried again after a
 	// wait that starts at retryFirst and doubles up to retryMost, with as
-	// much again at random.
+	// much again at random. A refetch that failed is tried again the same
+	// way, from refetchFirst, until one works.
 	const retryFirst = 5000;
 	const retryMost = 150000;
+	const refetchFirst = 2000;
 
 	const live = () => document.getElementById('live');
 	const mark = (state) => {
@@ -144,10 +146,13 @@
 
 	// refresh fetches the dashboard again and puts its #live in place.
 	// Calls while one runs make one more run after it. A fetch that fails
-	// is tried again once, a few seconds later, by a call with retrying
-	// set; when that one fails too, the midnight refetch is armed again, so
-	// a page whose midnight refetch failed still turns its day.
-	const refresh = async (retrying) => {
+	// is tried again, refetchFirst later and then twice as long each time,
+	// up to retryMost, with as much again at random, until one works: a page
+	// that missed a change gets it once the server answers again, with no
+	// event or midnight to bring it. tries is how many fetches in a row
+	// failed before this one; each failure goes on its own chain, and an
+	// event's refetch, due sooner, takes the chain's place.
+	const refresh = async (tries = 0) => {
 		if (stopped) {
 			return;
 		}
@@ -189,18 +194,15 @@
 		if (ok || stopped) {
 			return;
 		}
-		if (retrying) {
-			atMidnight();
-		} else {
-			refreshSoon(2000 + Math.random() * 3000, true);
-		}
+		const wait = Math.min(refetchFirst * 2 ** tries, retryMost);
+		refreshSoon(wait + Math.random() * wait, tries + 1);
 	};
 	// refreshSoon runs refresh after wait, unless one is already due by
 	// then: a burst of events, or an open and the gap it replays, makes
 	// one fetch, and one more at most if events come while it runs.
 	let due = null;
 	let timer = null;
-	const refreshSoon = (wait, retrying) => {
+	const refreshSoon = (wait, tries = 0) => {
 		const at = Date.now() + wait;
 		if (timer !== null && due <= at) {
 			return;
@@ -209,7 +211,7 @@
 		due = at;
 		timer = setTimeout(() => {
 			timer = null;
-			refresh(retrying);
+			refresh(tries);
 		}, wait);
 	};
 

@@ -168,8 +168,8 @@ test("an open dashboard fetches itself again at its account's next local midnigh
 	const left = Number(await live.getAttribute('data-next-day-in'));
 	expect(left).toBeGreaterThan(0);
 	expect(left).toBeLessThanOrEqual(25 * 3600 * 1000);
-	// Short of midnight, nothing.
-	await page.clock.fastForward(left - 10_000);
+	// Short of midnight, nothing. Within 10 s of it, no move at all.
+	await page.clock.fastForward(Math.max(left - 10_000, 0));
 	expect(refetches).toHaveLength(1);
 	// Past midnight and the minute of spread the refetch may wait.
 	await page.clock.fastForward(10_000 + 60_000 + 1000);
@@ -214,4 +214,52 @@ test('a dashboard whose stream comes back while it polls asks the snapshot once 
 	await expect(hero).toHaveText('4m', { timeout: 40_000 });
 	await expect(live).toHaveAttribute('data-stream', 'open');
 	expect(polls).toEqual([304, 200]);
+});
+
+test('a refetch that keeps failing is tried again, further apart each time, until the server answers, with no event or midnight to bring it', async ({
+	page,
+	request,
+}) => {
+	// After the three failures the page waits 2-4, 4-8 and 8-16 s.
+	test.setTimeout(90_000);
+	const base = await site(request);
+	// The server's answers to the page's refetches of /dashboard, failing
+	// as many as failing says.
+	let failing = 0;
+	const refetches: number[] = [];
+	await page.route(`${base}/dashboard`, async (route) => {
+		if (route.request().resourceType() !== 'fetch') {
+			await route.continue();
+			return;
+		}
+		if (failing > 0) {
+			failing--;
+			refetches.push(503);
+			await route.fulfill({ status: 503, contentType: 'text/plain', body: 'unavailable' });
+			return;
+		}
+		refetches.push(200);
+		await route.continue();
+	});
+	let polls = 0;
+	page.on('request', (r) => {
+		if (new URL(r.url()).pathname === '/api/v1/users/me/dashboard') {
+			polls++;
+		}
+	});
+	await signIn(page, base);
+	const live = page.locator('#live');
+	const hero = live.locator('.hero strong');
+	await expect(live).toHaveAttribute('data-stream', 'open');
+	// The first open's refetch, which the server answers.
+	await expect.poll(() => refetches).toEqual([200]);
+	await expect(hero).toHaveText('4m');
+	// The upload's event makes one refetch. The server fails it and the
+	// next two, and answers the fourth, which only the retries ask for.
+	failing = 3;
+	await upload(request, { minute: 4, rev: 1, seconds: 60, state: 'final' });
+	await expect(hero).toHaveText('5m', { timeout: 60_000 });
+	expect(refetches).toEqual([200, 503, 503, 503, 200]);
+	// Nor did the page poll: its stream spoke all along.
+	expect(polls).toBe(0);
 });

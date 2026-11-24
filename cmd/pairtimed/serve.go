@@ -439,24 +439,16 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		Source:  rollups,
 		Account: owner,
 		SetZone: func(ctx context.Context, account, zone string) error {
-			err := w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+			return commitThenTell(ctx, w, account, changed, func(ctx context.Context, tx writer.Tx) error {
 				return rollup.SetZone(ctx, tx, account, zone, time.Now())
 			})
-			if err == nil {
-				changed(account)
-			}
-			return err
 		},
 		// "Hide this name": the website can hide a name the owner turned
 		// on, never set one (D-owner-names).
 		HideName: func(ctx context.Context, account, project string) error {
-			err := w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+			return commitThenTell(ctx, w, account, changed, func(ctx context.Context, tx writer.Tx) error {
 				return projectnames.Hide(ctx, tx, account, project, time.Now().UnixMilli())
 			})
-			if err == nil {
-				changed(account)
-			}
-			return err
 		},
 		SameOrigin: signIn.SameOrigin,
 		Now:        time.Now,
@@ -517,6 +509,19 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		}
 	}
 	return serveErr
+}
+
+// commitThenTell runs op through w and tells changed of account once op
+// has committed, or may have. Do answers with ctx's error when ctx ends
+// before op's result comes back, whether op ran or not, so a request whose
+// browser went may still have committed. A spare Changed costs only a
+// read, so that one tells it too.
+func commitThenTell(ctx context.Context, w rollup.Doer, account string, changed func(account string), op writer.Op) error {
+	err := w.Do(ctx, 1, op)
+	if err == nil || ctx.Err() != nil {
+		changed(account)
+	}
+	return err
 }
 
 // sourceCommit is the commit the pages link the code and docs/ files at:
