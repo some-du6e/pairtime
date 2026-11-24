@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/install"
+	"github.com/some-du6e/pairtime/internal/install/consent"
 	"github.com/some-du6e/pairtime/internal/version"
 )
 
@@ -42,11 +44,26 @@ const holdEnv = "PAIRTIME_TEST_HOLD"
 // gapAgentEnv, when set, makes install start an agent that says it is
 // gapAgentEnv's version just before it starts its own (agentStarting), as
 // a hook does that finds no agent while install puts the new binary in
-// place, from the old binary it still runs (#330).
+// place, from the old binary it still runs (#330), before each of the
+// first gapAgentsEnv of its starts, one when that is unset.
+// stoppedAgentEnv, when set, makes install start an agent from the binary
+// it is about to replace, once it has stopped the agent to update pairtime
+// (afterUpdateStop), as #330's hook did: one that says it is that version, or,
+// with asBuilt, the build it is. gapPIDsEnv names the file those agents
+// write their processes to, one a line (startGapAgent). runWithHookMode
+// applies them, in the pairtime processes a test starts, and newTestHome
+// keeps them out of those processes unless a test sets them.
 const (
-	versionEnv  = "PAIRTIME_TEST_VERSION"
-	gapAgentEnv = "PAIRTIME_TEST_GAP_AGENT"
+	versionEnv      = "PAIRTIME_TEST_VERSION"
+	gapAgentEnv     = "PAIRTIME_TEST_GAP_AGENT"
+	gapAgentsEnv    = "PAIRTIME_TEST_GAP_AGENTS"
+	stoppedAgentEnv = "PAIRTIME_TEST_STOPPED_AGENT"
+	gapPIDsEnv      = "PAIRTIME_TEST_GAP_PIDS"
 )
+
+// asBuilt is stoppedAgentEnv's value for an agent that says it is the
+// build it is.
+const asBuilt = "as-built"
 
 // gapOldVersion is the version the agent that gapAgentEnv starts says it
 // is.
@@ -101,36 +118,42 @@ func init() {
 		io.Copy(io.Discard, os.Stdin)
 		return 0
 	}
-	if v := os.Getenv(versionEnv); v != "" {
-		version.Version = v
-	}
-	if old := os.Getenv(gapAgentEnv); old != "" {
-		agentStarting = func(exe string, dirs home.Dirs) { startGapAgent(exe, dirs, old) }
-	}
 }
 
-// startGapAgent starts exe's agent saying it is version old, as a hook that
-// runs the old pairtime does, and waits until it answers, so that it holds
-// pairtime's folder when install's own start comes (gapAgentEnv).
-func startGapAgent(exe string, dirs home.Dirs, old string) {
+// startGapAgent starts exe's agent, saying it is version claim, or the
+// build it is when claim is "", as a hook that runs the old pairtime does,
+// writes its process to gapPIDsEnv's file, and waits until it answers, so
+// that it holds pairtime's folder when install looks next (gapAgentEnv,
+// stoppedAgentEnv).
+func startGapAgent(exe string, dirs home.Dirs, claim string) {
 	prev, had := os.LookupEnv(versionEnv)
-	os.Setenv(versionEnv, old)
-	_, err := launchAgent(exe, dirs.Data)
+	if claim != "" {
+		os.Setenv(versionEnv, claim)
+	} else {
+		os.Unsetenv(versionEnv)
+	}
+	l, err := launchAgent(exe, dirs.Data)
 	if had {
 		os.Setenv(versionEnv, prev)
 	} else {
 		os.Unsetenv(versionEnv)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "test: the agent of version %s didn't start: %v\n", old, err)
+		fmt.Fprintf(os.Stderr, "test: the gap agent didn't start: %v\n", err)
 		return
 	}
+	if name := os.Getenv(gapPIDsEnv); name != "" {
+		if f, err := os.OpenFile(name, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+			fmt.Fprintln(f, l.PID)
+			f.Close()
+		}
+	}
 	for deadline := time.Now().Add(startWait); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
-		if st, err := queryAgent(dirs); err == nil && st.Version.Version == old {
+		if st, err := queryAgent(dirs); err == nil && st.PID == l.PID {
 			return
 		}
 	}
-	fmt.Fprintf(os.Stderr, "test: the agent of version %s didn't answer within %v\n", old, startWait)
+	fmt.Fprintf(os.Stderr, "test: the gap agent, process %d, didn't answer within %v\n", l.PID, startWait)
 }
 
 // runWithHookMode runs pairtime with its own arguments after changing its
@@ -140,6 +163,28 @@ func startGapAgent(exe string, dirs home.Dirs, old string) {
 //   - none takes the hook command away;
 //   - broken makes it print an answer and exit 2, as a usage error would.
 func runWithHookMode(mode string) int {
+	if v := os.Getenv(versionEnv); v != "" {
+		version.Version = v
+	}
+	if old := os.Getenv(gapAgentEnv); old != "" {
+		n, err := strconv.Atoi(os.Getenv(gapAgentsEnv))
+		if err != nil {
+			n = 1
+		}
+		starts := 0
+		agentStarting = func(exe string, dirs home.Dirs) {
+			if starts++; starts <= n {
+				startGapAgent(exe, dirs, old)
+			}
+		}
+	}
+	if v := os.Getenv(stoppedAgentEnv); v != "" {
+		claim := v
+		if v == asBuilt {
+			claim = ""
+		}
+		afterUpdateStop = func(exe string, dirs home.Dirs) { startGapAgent(exe, dirs, claim) }
+	}
 	if dir := os.Getenv(keyringEnv); dir != "" {
 		agentKeyStores = []keys.Store{testKeyring{dir: dir, fail: os.Getenv(keyringFailEnv) != ""}}
 	}
@@ -184,7 +229,8 @@ func newTestHome(t *testing.T, hookMode string) *testHome {
 	}
 	drop := []string{"HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TMPDIR", "TEMP", "TMP", "PATH", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
 		"XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "WAKATIME_HOME", home.EnvHome, runEnv, hookModeEnv, holdEnv,
-		keyringEnv, keyringFailEnv, wakatimeEnv, "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "REQUEST_METHOD"}
+		keyringEnv, keyringFailEnv, wakatimeEnv, versionEnv, gapAgentEnv, gapAgentsEnv, stoppedAgentEnv, gapPIDsEnv,
+		"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "REQUEST_METHOD"}
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
 		if !slices.ContainsFunc(drop, func(d string) bool { return strings.EqualFold(d, k) }) {
@@ -221,9 +267,126 @@ func newTestHome(t *testing.T, hookMode string) *testHome {
 		h.dirs = home.Dirs{Data: filepath.Join(h.home, ".local", "share", "pairtime"), Config: filepath.Join(h.home, ".config", "pairtime"), Runtime: filepath.Join(run, "pairtime")}
 		h.bin = filepath.Join(h.home, ".local", "bin", "pairtime")
 	}
-	h.env = append(h.env, hookModeEnv+"="+hookMode, keyringEnv+"="+h.keyring())
+	h.env = append(h.env, hookModeEnv+"="+hookMode, keyringEnv+"="+h.keyring(), gapPIDsEnv+"="+h.gapPIDs())
 	t.Cleanup(h.cleanup)
 	return h
+}
+
+// gapPIDsName is the name of the file in the test's folder that the gap
+// agents its installs start write their processes to (gapPIDsEnv), which
+// the snapshot leaves out.
+const gapPIDsName = "gap-pids"
+
+// gapPIDs is the path of the file gapPIDsName names.
+func (h *testHome) gapPIDs() string { return filepath.Join(h.root, gapPIDsName) }
+
+// gapAgents returns the processes of the gap agents the test's installs
+// started (startGapAgent), in the order they started.
+func (h *testHome) gapAgents() []int {
+	data, _ := os.ReadFile(h.gapPIDs())
+	var pids []int
+	for _, f := range strings.Fields(string(data)) {
+		if pid, err := strconv.Atoi(f); err == nil {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// gapAgentsGone fails the test when a gap agent the test's installs started
+// still runs, after waiting up to 10 s for each to end, as uninstalled
+// waits for the agent.
+func (h *testHome) gapAgentsGone() {
+	h.t.Helper()
+	for _, pid := range h.gapAgents() {
+		deadline := time.Now().Add(10 * time.Second)
+		for processAlive(pid) {
+			if time.Now().After(deadline) {
+				h.t.Errorf("the gap agent, process %d, still runs", pid)
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+}
+
+// ownAgent checks that the agent that answers is of this pairtime's
+// version, and that install, which printed out, named it as the agent it
+// started, and returns its process, as installed does.
+func (h *testHome) ownAgent(out string) int {
+	h.t.Helper()
+	st, err := queryAgent(h.dirs)
+	switch {
+	case err != nil:
+		h.t.Fatalf("no agent answers after install: %v; it printed:\n%s", err, out)
+	case st.Version.Version != version.Get().Version:
+		h.t.Errorf("after install the agent that runs is pairtime %s, process %d, want this pairtime's %s; install printed:\n%s", st.Version.Version, st.PID, version.Get().Version, out)
+	}
+	if !strings.Contains(out, fmt.Sprintf("Started pairtime's agent, process %d.", st.PID)) {
+		h.t.Errorf("install didn't name the agent that runs, process %d, as the one it started:\n%s", st.PID, out)
+	}
+	return h.installed(false)
+}
+
+// download is where newerBuild puts a newer build of pairtime.
+func (h *testHome) download() string { return filepath.Join(h.root, "download", filepath.Base(h.bin)) }
+
+// newerBuild puts another build of pairtime at h.download(), for a test to
+// update pairtime with.
+func newerBuild(h *testHome) { h.copyBinary(h.download(), "\npairtime test: a newer build\n") }
+
+// updateWith installs pairtime, then the build at h.download() over it,
+// with each of env, KEY=value, set in the second install's environment,
+// which must exit with want, and returns what that install printed.
+func (h *testHome) updateWith(want int, env ...string) string {
+	h.t.Helper()
+	h.mustRun("", "", 0, "install", "--yes")
+	h.installed(false)
+	c := h
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		c = c.withEnv(k, v)
+	}
+	return c.mustRun(h.download(), "", want, "install", "--yes")
+}
+
+// writeAt writes data to the file at path, making its folder, for a test
+// that sets up pairtime's own files, such as config.toml, before install.
+func (h *testHome) writeAt(path, data string) {
+	h.t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		h.t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+// onlineSteps are the steps of a TestInstallCycle case whose computer's
+// config.toml says online: install's screen, which the teen declines, and
+// its last line with --yes, both say line in place of local-only mode, and
+// uninstall deletes config.toml and account.json, which the case put in
+// pairtime's folders, with the rest of pairtime's data.
+func onlineSteps(line string) func(t *testing.T, h *testHome, before map[string]string) {
+	return func(t *testing.T, h *testHome, before map[string]string) {
+		const local = "It runs in local-only mode: what it records stays on this computer."
+		screen := h.mustRun("", "n\n", exitDeclined, "install")
+		if flat := strings.Join(strings.Fields(screen), " "); !strings.Contains(flat, line) || strings.Contains(flat, local) {
+			t.Errorf("install's screen doesn't say %q in place of local-only mode:\n%s", line, screen)
+		}
+		out := h.mustRun("", "", 0, "install", "--yes")
+		if !strings.Contains(out, "pairtime is set up. "+line+"\n") {
+			t.Errorf("install's last line isn't %q:\n%s", "pairtime is set up. "+line, out)
+		}
+		pid := h.installed(false)
+		h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
+		for _, p := range []string{h.dirs.ConfigFile(), h.dirs.Config, filepath.Join(h.dirs.Data, "account.json"), h.dirs.Data} {
+			if rel, err := filepath.Rel(h.root, p); err == nil {
+				delete(before, rel)
+			}
+		}
+		h.uninstalled(before, pid)
+	}
 }
 
 // keyring is the folder the test's processes keep device keys in
@@ -254,6 +417,15 @@ func (h *testHome) cleanup() {
 		h.t.Errorf("cleaning up: %v", err)
 		if pf, err := readPID(h.dirs); err == nil && pf > 0 {
 			if p, err := os.FindProcess(pf); err == nil {
+				p.Kill()
+			}
+		}
+	}
+	// A gap agent that never wrote port.json, or that runs on after it let
+	// go of pairtime's folder, is one stopAgent doesn't reach.
+	for _, pid := range h.gapAgents() {
+		if processAlive(pid) {
+			if p, err := os.FindProcess(pid); err == nil {
 				p.Kill()
 			}
 		}
@@ -446,7 +618,7 @@ func (h *testHome) snapshot() map[string]string {
 			return err
 		}
 		rel, _ := filepath.Rel(h.root, p)
-		if isPSCache(rel) {
+		if isPSCache(rel) || rel == gapPIDsName {
 			return nil
 		}
 		info, err := d.Info()
@@ -1179,6 +1351,9 @@ func TestSetUpLine(t *testing.T) {
 			"This computer is linked to https://pairtime.example, and config.toml lets it upload your hours' numbers there; pairtime doctor says if anything holds them back."},
 		{"a linked computer whose config.toml says local runs local-only", linked, "mode = \"local\"\n", "It runs in local-only mode"},
 		{"a linked computer whose config.toml has an error runs local-only", linked, "mode = [\n", "It runs in local-only mode"},
+		{"a linked computer whose account.json doesn't read and whose config.toml says online says its sign-in doesn't read, as problem.account does", "{", "mode = \"online\"\n",
+			"pairtime is set up. " + consent.UnreadLine},
+		{"a computer whose account.json doesn't read and whose config.toml says local runs local-only", "{", "mode = \"local\"\n", "It runs in local-only mode"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1192,8 +1367,7 @@ func TestSetUpLine(t *testing.T) {
 			if err := os.WriteFile(dirs.ConfigFile(), []byte(tc.config), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			server := linkedServer(dirs)
-			if got := setUpLine(server, server == "" && unlinkedOnline(dirs)); !strings.Contains(got, tc.want) {
+			if got := setUpLine(linkOf(dirs)); !strings.Contains(got, tc.want) {
 				t.Errorf("install says %q, want %q", got, tc.want)
 			}
 		})

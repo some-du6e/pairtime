@@ -397,11 +397,14 @@ func samePath(a, b string) bool {
 	return err == nil && rel == "."
 }
 
-// agentStatus is the part of GET /v1/status that install reads.
+// agentStatus is the part of GET /v1/status that install reads: the
+// agent's process and its build (version.Info).
 type agentStatus struct {
 	PID     int `json:"pid"`
 	Version struct {
-		Version string `json:"version"`
+		Version  string `json:"version"`
+		Commit   string `json:"commit"`
+		Modified bool   `json:"modified"`
 	} `json:"version"`
 }
 
@@ -502,6 +505,16 @@ func stopAgent(dirs home.Dirs) error {
 // startWait is how long install waits for the agent it started to answer.
 const startWait = 30 * time.Second
 
+// errOtherAgentGone is startAgentFrom's error when the agent it started
+// found another holding pairtime's folder, and that one let go of the
+// folder before it answered, as one that crashed or was killed while it
+// started does: the folder is free, so a start now would take it.
+var errOtherAgentGone = errors.New("another pairtime agent held pairtime's folder and stopped before it answered")
+
+// otherGoneEvery is how often startAgentFrom looks whether the agent that
+// holds pairtime's folder in its place still does.
+const otherGoneEvery = time.Second
+
 // startAgentFrom starts exe's agent in a process of its own, with no
 // console window, as `agent --detach` does (launchAgent), and waits until
 // it answers. It runs in the data directory, so it doesn't keep the folder
@@ -513,7 +526,13 @@ const startWait = 30 * time.Second
 // directory, one whose port.json was written since. An older port.json is
 // an agent's that has stopped, and its port may be anyone's by now. Until
 // port.json names its agent, it doesn't touch the lock either (agentCall),
-// since an agent that found the lock taken at that moment would exit.
+// since an agent that found the lock taken at that moment would exit. The
+// one exception is the lock of another agent that held the data directory
+// when the one it started exited: once a second it looks whether that one
+// still holds it, and when it doesn't, that agent is gone without an
+// answer, and it returns errOtherAgentGone at once rather than wait out
+// startWait. Only an agent that starts at that very moment could then find
+// the lock taken.
 func startAgentFrom(exe string, dirs home.Dirs) (agentStatus, error) {
 	// Some file systems keep a file's time in whole seconds, or two.
 	since := time.Now().Add(-2 * time.Second)
@@ -522,7 +541,8 @@ func startAgentFrom(exe string, dirs home.Dirs) (agentStatus, error) {
 		return agentStatus{}, fmt.Errorf("starting pairtime's agent: %w", err)
 	}
 	pid, exited := l.PID, l.exited
-	other := false // the agent it started found another holding the data directory
+	other := false       // the agent it started found another holding the data directory
+	var looked time.Time // when it last looked whether that one still holds it
 	deadline := time.Now().Add(startWait)
 	for {
 		if startedSince(dirs, pid, other, since) {
@@ -543,6 +563,12 @@ func startAgentFrom(exe string, dirs home.Dirs) (agentStatus, error) {
 			}
 			return agentStatus{}, fmt.Errorf("pairtime's agent didn't start: %w; run pairtime agent to see why", err)
 		case <-time.After(100 * time.Millisecond):
+		}
+		if other && time.Since(looked) >= otherGoneEvery {
+			looked = time.Now()
+			if !agentLocked(dirs) {
+				return agentStatus{}, errOtherAgentGone
+			}
 		}
 		if time.Now().After(deadline) {
 			if other {

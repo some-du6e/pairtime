@@ -93,7 +93,8 @@ func teenPaths(s, root string) string {
 // detected harnesses, for a hook command that fails its self-test, for a
 // settings file Claude Code's planner refuses, for a computer pairtime
 // login linked, which config.toml lets upload, for one whose config.toml
-// says online though no login linked it, and for a calibration volunteer,
+// says online though no login linked it, for one a login linked whose
+// record of the link doesn't read, and for a calibration volunteer,
 // against testdata/*.golden (docs/PLAN.md, WP-IN2). A screen that differs
 // is printed in base64, so a new snapshot can be read out of the CI log
 // byte for byte, looked over and committed.
@@ -111,30 +112,33 @@ func TestScreenSnapshots(t *testing.T) {
 		// install runs without it.
 		calibration string
 		// unlinked says config.toml says online while no login linked the
-		// computer (Input.Unlinked).
-		unlinked bool
+		// computer (Input.Unlinked), and unread that a login linked it but
+		// its record doesn't read (Input.Unread).
+		unlinked, unread bool
 	}{
 		{"with no AI tool found, only autostart is offered, and each tool says it wasn't found",
-			"none.golden", nil, HookTest{}, false, "", "", false},
+			"none.golden", nil, HookTest{}, false, "", "", false, false},
 		{"with Claude Code found, autostart and Claude Code's hooks are offered, each with its diff",
-			"claude.golden", []string{".claude"}, passed, false, "", "", false},
+			"claude.golden", []string{".claude"}, passed, false, "", "", false, false},
 		{"with Claude Code, Cursor and Codex found, the hooks card says Cursor runs them too, and Codex has no hooks yet",
-			"claude-cursor-codex.golden", []string{".claude", ".cursor", ".codex"}, passed, false, "", "", false},
+			"claude-cursor-codex.golden", []string{".claude", ".cursor", ".codex"}, passed, false, "", "", false, false},
 		{"with a hook command that fails its self-test, no hooks are offered and the screen says why",
-			"hook-failed.golden", []string{".claude"}, HookTest{Why: "pairtime hook failed its self-test (it exited with status 2), so pairtime leaves Claude Code's settings alone"}, false, "", "", false},
+			"hook-failed.golden", []string{".claude"}, HookTest{Why: "pairtime hook failed its self-test (it exited with status 2), so pairtime leaves Claude Code's settings alone"}, false, "", "", false, false},
 		{"with a Claude Code settings file its planner won't edit, the hooks are left out and Claude Code's line says why, and autostart is still offered",
-			"planner-refused.golden", []string{".claude"}, passed, true, "", "", false},
+			"planner-refused.golden", []string{".claude"}, passed, true, "", "", false, false},
 		{"on a computer pairtime login linked, which config.toml lets upload, the screen names the server in place of local-only mode",
-			"linked.golden", []string{".claude"}, passed, false, "https://pairtime.example", "", false},
+			"linked.golden", []string{".claude"}, passed, false, "https://pairtime.example", "", false, false},
 		{"for a calibration volunteer, a card between autostart and the hooks says the time reads calibrating until scoring 1.0.0, with config.toml's diff masked",
-			"calibration.golden", []string{".claude"}, passed, false, "", "mode = \"local\"\n\n[display]\n# my calibration week\nshadow = false\n", false},
+			"calibration.golden", []string{".claude"}, passed, false, "", "mode = \"local\"\n\n[display]\n# my calibration week\nshadow = false\n", false, false},
 		{"on a computer whose config.toml says online but no login linked it, the screen says pairtime uploads nothing until a login, in place of local-only mode",
-			"unlinked.golden", []string{".claude"}, passed, false, "", "", true},
+			"unlinked.golden", []string{".claude"}, passed, false, "", "", true, false},
+		{"on a computer whose config.toml says online and that a login linked, but whose record of the link doesn't read, the screen says pairtime uploads nothing until it does, in place of local-only mode",
+			"unread.golden", []string{".claude"}, passed, false, "", "", false, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s, root := screenFor(t, tt.found, tt.hook, tt.readOnly, tt.calibration)
-			s.in.Linked, s.in.Unlinked = tt.linked, tt.unlinked
+			s.in.Linked, s.in.Unlinked, s.in.Unread = tt.linked, tt.unlinked, tt.unread
 			var b strings.Builder
 			s.Render(&b)
 			got := teenPaths(b.String(), root)

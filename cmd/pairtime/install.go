@@ -158,7 +158,8 @@ var installStdin io.Reader = os.Stdin
 // at its first start (internal/agent/config). pairtime login links the
 // computer and sets it online, and install leaves both as they are, so the
 // consent screen and install's last line say which the computer is in
-// (linkedServer). Once it runs, the agent reads the last 30 days of
+// (linkOf): local-only, linked to a server, or online with no link, or with
+// one whose record doesn't read. Once it runs, the agent reads the last 30 days of
 // transcripts by itself, at low priority (lookback, internal/agent/tailers),
 // and its status says how far it got; the progress bar and the welcome
 // recap come with the dashboard's work packages, and the WakaTime line and
@@ -320,8 +321,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 			diffs[consent.ItemCalibration] = diff
 		}
 	}
-	linked := linkedServer(dirs)
-	unlinked := linked == "" && unlinkedOnline(dirs)
+	link := linkOf(dirs)
 	screen := consent.New(consent.Input{
 		GOOS:        env.GOOS,
 		Binary:      env.Exe,
@@ -329,8 +329,9 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		Hook:        hook,
 		Diffs:       diffs,
 		Left:        left,
-		Linked:      linked,
-		Unlinked:    unlinked,
+		Linked:      link.server,
+		Unlinked:    link.unlinked,
+		Unread:      link.unread,
 		WakaTimeNew: wakaTimeNew,
 	})
 
@@ -397,6 +398,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 				return fail(err)
 			}
 			restart = true
+			afterUpdateStop(env.Exe, dirs)
 		}
 		if err := commitBinary(staged, env.Exe); err != nil {
 			return fail(fmt.Errorf("putting pairtime in %s: %w; close what runs it, then run pairtime install again", install.Printable(env.Exe), err))
@@ -444,23 +446,27 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	st, err := queryAgent(dirs)
-	if err != nil || restart || st.Version.Version != version.Get().Version {
+	if err != nil || restart || !sameBuild(st) {
+		stopped := 0
 		if err == nil {
-			// An agent of another version runs, perhaps from another copy
+			// An agent of another build runs, perhaps from another copy
 			// of pairtime, or, after install stopped the agent to update
 			// it (restart), one that started since, maybe from the old
 			// binary: the one that runs from now on is this one.
 			why := "which is another version"
-			if st.Version.Version == version.Get().Version {
+			switch {
+			case sameBuild(st):
 				why = "which started while install put this pairtime in place"
+			case st.Version.Version == version.Get().Version:
+				why = "which is another build"
 			}
 			fmt.Fprintf(stdout, "Stopping pairtime's agent (process %d), %s.\n", st.PID, why)
 			if err := stopAgent(dirs); err != nil {
 				return fail(err)
 			}
+			stopped++
 		}
-		agentStarting(env.Exe, dirs)
-		if st, err = startOwnAgent(env.Exe, dirs, stdout); err != nil {
+		if st, err = startOwnAgent(env.Exe, dirs, stdout, restart, stopped); err != nil {
 			return fail(err)
 		}
 		fmt.Fprintf(stdout, "Started pairtime's agent, process %d.\n", st.PID)
@@ -499,7 +505,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	fmt.Fprintln(stdout, setUpLine(linked, unlinked))
+	fmt.Fprintln(stdout, setUpLine(link))
 	if slices.Contains(chosen, install.ItemClaudeCode) {
 		// Claude Code's file watcher picks up a change to the hooks in its
 		// settings in sessions that are open, and a folder's trust dialog
@@ -676,84 +682,162 @@ func hasClaudeHooks(in *install.Installer, env install.Env) (bool, error) {
 	return slices.ContainsFunc(p.Problems, func(problem string) bool { return strings.Contains(problem, settings) }), nil
 }
 
-// agentStarting runs just before install starts its agent at step 5.
-// Tests set it to start an agent of another version there first, as a hook
-// does that finds no agent while install puts the new binary in place,
-// from the old binary that it still runs (#330).
-var agentStarting = func(exe string, dirs home.Dirs) {}
+// afterUpdateStop runs once install has stopped the agent to update
+// pairtime, before the new binary goes in place, and agentStarting before
+// each of install's starts of its agent in step 4 (startOwnAgent). Tests
+// set them to start an agent there first, as a hook does that finds no
+// agent while install puts the new binary in place, from the old binary
+// that it still runs (#330).
+var (
+	afterUpdateStop = func(exe string, dirs home.Dirs) {}
+	agentStarting   = func(exe string, dirs home.Dirs) {}
+)
 
 // ownAgentTries is how many times install starts its agent before it gives
-// up on an agent of another version taking its place (startOwnAgent).
+// up on another agent taking its place (startOwnAgent).
 const ownAgentTries = 3
 
 // startOwnAgent starts exe's agent (startAgentFrom) and returns its status
-// once an agent of this pairtime's version answers. An agent of another
-// version can answer instead: one that a hook started from the old binary
-// while install stopped the agent and put the new binary in place, which
+// once an agent of this pairtime's build answers (sameBuild). Another agent
+// can answer instead: one that a hook started while install stopped the
+// agent and put the new binary in place, maybe from the old binary, which
 // held the lock when install's own start came, and which startAgentFrom
 // then returns. That agent is stopped and exe's started again, and so on,
-// ownAgentTries times at most, saying so each time.
-func startOwnAgent(exe string, dirs home.Dirs, stdout io.Writer) (agentStatus, error) {
-	want := version.Get().Version
+// ownAgentTries times at most, saying so each time, as it does when the
+// agent that held the lock stopped before it answered (errOtherAgentGone).
+// restart says install stopped the agent to update pairtime, and stopped
+// counts the agents step 4 stopped before it, which the give-up counts.
+func startOwnAgent(exe string, dirs home.Dirs, stdout io.Writer, restart bool, stopped int) (agentStatus, error) {
 	for try := 1; ; try++ {
+		agentStarting(exe, dirs)
 		st, err := startAgentFrom(exe, dirs)
-		if err != nil {
+		switch {
+		case errors.Is(err, errOtherAgentGone) && try < ownAgentTries:
+			fmt.Fprintln(stdout, "Another pairtime agent held pairtime's folder and stopped before it answered, so install starts its own again.")
+			continue
+		case errors.Is(err, errOtherAgentGone):
+			return agentStatus{}, fmt.Errorf("%w, each of the %d times install started its own; stop whatever keeps starting pairtime's agent, such as another copy of pairtime or its hooks, then run pairtime install again", err, ownAgentTries)
+		case err != nil:
 			return agentStatus{}, err
-		}
-		if st.Version.Version == want {
+		case sameBuild(st):
 			return st, nil
 		}
+		theirs, ours := buildNames(st)
 		if try == ownAgentTries {
-			return agentStatus{}, fmt.Errorf("the agent that answers is pairtime %s, process %d, not this pairtime's %s, after install stopped it %d times; stop it (it's the process called pairtime), then run pairtime install again",
-				install.Printable(st.Version.Version), st.PID, want, ownAgentTries-1)
+			return agentStatus{}, fmt.Errorf("the agent that answers is pairtime %s, process %d, not this pairtime's %s, after install stopped %d agents that held its place; stop it (it's the process called pairtime) and whatever keeps starting it, such as another copy of pairtime or its hooks, then run pairtime install again",
+				theirs, st.PID, ours, stopped)
 		}
-		fmt.Fprintf(stdout, "Stopping pairtime's agent (process %d), which is pairtime %s, not this pairtime's %s, as a hook may have started it from the old pairtime while install put this one in place.\n",
-			st.PID, install.Printable(st.Version.Version), want)
+		guess := ""
+		if restart {
+			guess = ", as a hook may have started it from the old pairtime while install put this one in place"
+		}
+		fmt.Fprintf(stdout, "Stopping pairtime's agent (process %d), which is pairtime %s, not this pairtime's %s%s.\n", st.PID, theirs, ours, guess)
 		if err := stopAgent(dirs); err != nil {
 			return agentStatus{}, err
 		}
+		stopped++
 	}
 }
 
-// linkedServer is the server pairtime login linked this computer to,
-// while config.toml says online and reads (agent.UploadConfig), and ""
-// otherwise: where config.toml lets its hours' numbers go, as the consent
-// screen and setUpLine say. Install reads neither the sign-in nor the
-// uploader's state, so neither promises an upload.
-func linkedServer(dirs home.Dirs) string {
-	l, err := account.Load(dirs.Data)
-	if err != nil {
-		return ""
-	}
-	if cfg, broken := agent.UploadConfig(dirs); broken != "" || cfg.Mode != config.Online {
-		return ""
-	}
-	return l.Server
-}
-
-// unlinkedOnline reports whether config.toml reads and says online while no
-// pairtime login linked this computer (agent.Linked). pairtime then uploads
-// nothing, as the agent's problem.account says, and what it records before
-// a login stays on this computer, since nothing sealed before the link
-// uploads.
-func unlinkedOnline(dirs home.Dirs) bool {
-	cfg, broken := agent.UploadConfig(dirs)
-	return broken == "" && cfg.Mode == config.Online && !agent.Linked(dirs)
-}
-
-// setUpLine is install's last word on where what pairtime records goes:
-// it stays on this computer in local-only mode, as every install starts
-// in; on a computer linked to server (linkedServer), config.toml lets its
-// hours' numbers go there, while doctor says what holds them back; and on
-// one whose config.toml says online though no login linked it (unlinked,
-// unlinkedOnline), nothing goes until a login does.
-func setUpLine(server string, unlinked bool) string {
+// sameBuild reports whether st is the status of an agent of this
+// pairtime's build: of the same version and, where both know the commit
+// they were built from, of the same commit, with changes or without. A
+// build of another commit that shares the version, as each of ci.yml's
+// cross-compiles and each dev build does, is another build.
+func sameBuild(st agentStatus) bool {
+	v := version.Get()
 	switch {
-	case server != "":
+	case st.Version.Version != v.Version:
+		return false
+	case st.Version.Commit == "" || v.Commit == "":
+		return true
+	}
+	return st.Version.Commit == v.Commit && st.Version.Modified == v.Modified
+}
+
+// buildNames returns how install's lines name the build of the agent whose
+// status is st, and this pairtime's: by version, and by commit as well when
+// the two share a version.
+func buildNames(st agentStatus) (theirs, ours string) {
+	v := version.Get()
+	theirs, ours = install.Printable(st.Version.Version), v.Version
+	if st.Version.Version == v.Version {
+		theirs += commitName(install.Printable(st.Version.Commit), st.Version.Modified)
+		ours += commitName(v.Commit, v.Modified)
+	}
+	return theirs, ours
+}
+
+// commitName names the commit a build was built from, by its first 12
+// characters, and says when the build had changes beside it.
+func commitName(commit string, modified bool) string {
+	if commit == "" {
+		return ""
+	}
+	if len(commit) > 12 {
+		commit = commit[:12]
+	}
+	if modified {
+		return " built from " + commit + " with changes"
+	}
+	return " built from " + commit
+}
+
+// linkState is where install says what pairtime records goes, on the
+// consent screen and in its last line (setUpLine), from config.toml and
+// account.json, which install leaves as they are. It reads neither the
+// sign-in's secrets nor the uploader's state, so it promises no upload.
+type linkState struct {
+	// server is the server pairtime login linked this computer to, while
+	// config.toml reads and says online (agent.UploadConfig): config.toml
+	// lets the hours' numbers go there.
+	server string
+	// unlinked says config.toml reads and says online, though no pairtime
+	// login linked this computer: there is no account.json
+	// (account.ErrNotLinked). pairtime then uploads nothing, as the agent's
+	// problem.account says, and what it records before a login stays on
+	// this computer, since nothing sealed before the link uploads.
+	unlinked bool
+	// unread says config.toml reads and says online, and pairtime login
+	// linked this computer, but account.json, its record of the link,
+	// doesn't read, as after a disk error or a downgrade past the file's
+	// version: pairtime uploads nothing until it does, as the agent's
+	// problem.account says, which doctor shows.
+	unread bool
+}
+
+// linkOf returns the linkState of the computer whose pairtime folders are
+// dirs. A config.toml that says local, or that doesn't read, keeps the
+// computer local-only, whatever account.json says.
+func linkOf(dirs home.Dirs) linkState {
+	if cfg, broken := agent.UploadConfig(dirs); broken != "" || cfg.Mode != config.Online {
+		return linkState{}
+	}
+	l, err := account.Load(dirs.Data)
+	switch {
+	case err == nil:
+		return linkState{server: l.Server}
+	case errors.Is(err, account.ErrNotLinked):
+		return linkState{unlinked: true}
+	}
+	return linkState{unread: true}
+}
+
+// setUpLine is install's last word on where what pairtime records goes, as
+// l says (linkOf): it stays on this computer in local-only mode, as every
+// install starts in; on a computer linked to a server, config.toml lets its
+// hours' numbers go there, while doctor says what holds them back; and on
+// one whose config.toml says online, nothing goes while no login linked it,
+// or while the record of its link doesn't read.
+func setUpLine(l linkState) string {
+	switch {
+	case l.server != "":
 		return fmt.Sprintf("pairtime is set up. This computer is linked to %s, and config.toml lets it upload your hours' numbers there; pairtime doctor says if anything holds them back.",
-			install.Printable(server))
-	case unlinked:
+			install.Printable(l.server))
+	case l.unlinked:
 		return "pairtime is set up. " + consent.UnlinkedLine
+	case l.unread:
+		return "pairtime is set up. " + consent.UnreadLine
 	}
 	return "pairtime is set up. It runs in local-only mode, so what it records stays on this computer."
 }

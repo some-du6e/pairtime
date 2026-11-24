@@ -107,6 +107,11 @@ type Input struct {
 	// login linked the computer, so that the screen says UnlinkedLine in
 	// place of local-only mode. Linked is empty then.
 	Unlinked bool
+	// Unread says config.toml reads and says online, and pairtime login
+	// linked the computer, but account.json, its record of the link,
+	// doesn't read, so that the screen says UnreadLine in place of
+	// local-only mode. Linked is empty then, and Unlinked false.
+	Unread bool
 	// WakaTimeNew says install makes ~/.wakatime.cfg, since there is none,
 	// rather than adding pairtime's line to the teen's own (install.
 	// WakaTime): the WakaTime card then says that pairtime is where
@@ -119,6 +124,13 @@ type Input struct {
 // it: pairtime uploads nothing, as the agent's problem.account says, and
 // nothing it seals before a login ever uploads.
 const UnlinkedLine = "config.toml says online, but pairtime login hasn't linked this computer, so pairtime uploads nothing, and what it records before you run pairtime login stays on this computer."
+
+// UnreadLine is what the screen and install's last line say of a computer
+// whose config.toml says online, which pairtime login linked, but whose
+// record of the link doesn't read: pairtime uploads nothing until it does,
+// as the agent's problem.account says, in the words doctor and pairtime
+// privacy show use.
+const UnreadLine = "This computer is linked to a server, but its sign-in doesn't read, so pairtime uploads nothing until it does; pairtime doctor says why."
 
 // Screen is the consent screen.
 type Screen struct {
@@ -312,6 +324,9 @@ func (s *Screen) Render(w io.Writer) error {
 		b.WriteString("\n")
 	case s.in.Unlinked:
 		b.WriteString(wrap(UnlinkedLine, ""))
+		b.WriteString("\n")
+	case s.in.Unread:
+		b.WriteString(wrap(UnreadLine, ""))
 		b.WriteString("\n")
 	default:
 		b.WriteString("It runs in local-only mode: what it records stays on this computer.\n\n")
