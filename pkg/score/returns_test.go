@@ -124,14 +124,14 @@ func TestReturnRule(t *testing.T) {
 			t.Errorf("returned runs %+v, want none", got.Returns)
 		}
 	})
-	t.Run("SM 2.1: a 160-word answer after the last touch, a 6-minute silence, then a typed prompt, earns 53 + 120 = 173 s", func(t *testing.T) {
+	t.Run("SM 2.1: a 160-word answer just after the last touch, a 6-minute silence, then a typed prompt: the tail reads 28 s of the answer and the return rule the other 25 s, so the silence still earns 28 + 25 + 120 = 173 s", func(t *testing.T) {
 		got := silence(event.AppTerminal, 451, typedPrompt(451)).run(t, Device{})
 		if len(got.Returns) != 1 {
 			t.Fatalf("%d returned runs, want 1", len(got.Returns))
 		}
 		r := got.Returns[0]
-		want := Return{RunStart: at(105), RunEnd: at(450), LastInput: at(100), TailEnd: at(130), ReadUntil: at(183),
-			UnreadWords: 160, ProjectKey: "p_1", CreditMS: 173_000, Anchor: r.Anchor}
+		want := Return{RunStart: at(105), RunEnd: at(450), LastInput: at(100), TailEnd: at(130), ReadUntil: at(155),
+			UnreadWords: 76, ProjectKey: "p_1", CreditMS: 145_000, Anchor: r.Anchor}
 		if r != want {
 			t.Errorf("return %+v, want %+v", r, want)
 		}
@@ -160,8 +160,44 @@ func TestReturnRule(t *testing.T) {
 		b.editor(at(457), event.ViaEditor, "p_1", event.ActEdit, event.EditSourceHuman)
 		b.samples(at(0), at(511))
 		got := b.run(t, Device{})
-		if len(got.Returns) != 1 || got.Returns[0].UnreadWords != 160 || got.Returns[0].ReadUntil != at(130+53) {
-			t.Errorf("returned runs %+v, want one with the 160 hooked words read until 183 s", got.Returns)
+		if len(got.Returns) != 1 || got.Returns[0].UnreadWords != 76 || got.Returns[0].ReadUntil != at(155) {
+			t.Errorf("returned runs %+v, want one with the 76 hooked words read until 155 s", got.Returns)
+		}
+	})
+	t.Run("prose a side door puts in a counted bucket isn't unread prose: an automated plugin turn's fill adds no word (DESIGN 5.2)", func(t *testing.T) {
+		// VS Code on p_1 hosts no session, so s_1's bucket and s_9's count.
+		// An automated plugin turn fills R_TURN_BASE_S of its output into
+		// s_9's bucket, at a side door's level.
+		b := newTL(false)
+		b.focus(at(0), event.AppEditor, "p_1")
+		b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+		b.mouse(every(at(1), at(96), 5000)...)
+		b.mouse(at(100))
+		b.prompt(at(30), event.ViaHook, "s_1", "p_1", "t_1", 30)
+		b.harness(at(102), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 160, IsFinal: true})
+		b.harness(at(102), event.ViaHook, "s_1", "p_1", &event.AgentStop{TurnKey: "t_1", StopReason: event.StopEndTurn})
+		plugin := func(tm int64, p event.Payload) event.Event {
+			return b.emit(tm, event.Envelope{Source: event.SourceHook, Via: event.ViaPlugin, Harness: event.HarnessOther,
+				SessionKey: "s_9", ProjectKey: "p_1"}, p)
+		}
+		scheduled(plugin(at(199), &event.PromptSubmit{TurnKey: "t_9", LenChars: 30, TypedLenEst: 30,
+			OriginDeclared: event.DeclaredNone}))
+		plugin(at(200), &event.AgentOutput{TurnKey: "t_9", Words: 9000})
+		plugin(at(201), &event.AgentStop{TurnKey: "t_9", StopReason: event.StopEndTurn})
+		b.press(every(atMS(451_500), atMS(456_500), 1000)...)
+		b.editor(at(457), event.ViaEditor, "p_1", event.ActEdit, event.EditSourceHuman)
+		b.samples(at(0), at(511))
+		got := b.run(t, Device{})
+		filled := false
+		for _, f := range got.Fills {
+			filled = filled || f.SessionKey == "s_9" && f.TurnKey == "t_9" && f.FillMS == 20_000
+		}
+		if !filled {
+			t.Fatalf("fills %+v, want s_9's automated plugin turn to fill 20 s of its output", got.Fills)
+		}
+		if len(got.Returns) != 1 || got.Returns[0].UnreadWords != 76 || got.Returns[0].ReadUntil != at(155) ||
+			got.Returns[0].CreditMS != 145_000 {
+			t.Errorf("returned runs %+v, want one with only the 76 hooked words, read until 155 s", got.Returns)
 		}
 	})
 	t.Run("SM 2.1: the same silence followed by editor navigation earns only the tail", func(t *testing.T) {
@@ -201,34 +237,61 @@ func TestReturnRule(t *testing.T) {
 			t.Errorf("returned runs %+v, want none", got.Returns)
 		}
 	})
-	// SM 6.1 cycle 6 has the answer come 10 s before the last touch and
-	// says 173 s. By SM 2.1's definition the person had the session in
-	// focus with input after the answer came, so none of it is unread, and
-	// the scorer credits 120 s. docs/errata/2026-11-20-sm-6.1-return-unread-words.md
-	// asks Karim which is right; the code isn't fitted to 6.1's number.
-	t.Run("SM 6.1 cycle 6's timing: an answer 10 s before the last touch isn't unread under SM 2.1, so 120 s, not 6.1's 173 s (erratum)", func(t *testing.T) {
-		b := newTL(false)
-		b.focus(at(0), event.AppTerminal, "p_1", "s_1")
-		b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
-		b.mouse(every(at(1), at(96), 5000)...)
-		b.mouse(at(100))
-		b.prompt(at(30), event.ViaHook, "s_1", "p_1", "t_1", 30)
-		b.harness(at(90), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 160, IsFinal: true})
-		b.harness(at(90), event.ViaHook, "s_1", "p_1", &event.AgentStop{TurnKey: "t_1", StopReason: event.StopEndTurn})
-		b.press(every(atMS(451_500), atMS(469_500), 1000)...)
-		typedPrompt(451)(b)
-		b.samples(at(0), at(511))
-		got := b.run(t, Device{})
-		if len(got.Returns) != 1 || got.Returns[0].UnreadWords != 0 || got.Returns[0].CreditMS != 120_000 {
-			t.Errorf("returned runs %+v, want one with no unread words and THINK_LEAD_S of credit", got.Returns)
-		}
-	})
+	// SM 6.1 cycle 6's timing, an answer 10 s before the last touch: the
+	// tail drains the reading buckets oldest entry first, so what they hold
+	// when it ends, and what goes into them later in the run, is what
+	// nobody read (SM 2.1).
+	for _, c := range []struct {
+		name string
+		// edits puts two 30-line edits of t_1 before the answer, at 60 s and
+		// 75 s, and answer is when the answer and the stop come.
+		edits  bool
+		answer int64
+		// words, until and credit are the Return's UnreadWords, ReadUntil
+		// and CreditMS, and readR the seconds of READ~r it credits.
+		words, until, credit, readR int64
+	}{
+		{"SM 6.1 cycle 6: two 30-line edits and then the 160-word summary 10 s before the last touch; the tail drains the first edit, so all 160 words are left and the silence earns 53 + 120 = 173 s",
+			true, 90, 160, 183, 173_000, 53},
+		{"an answer alone in the bucket 10 s before the last touch: the tail reads 40 s of it, so 40 words are left and the silence earns 13 + 120 = 133 s",
+			false, 90, 40, 143, 133_000, 13},
+		{"an answer and a stop after the tail are prose that goes into the bucket later in the run: all 160 words count, and READ~r drains them from 140 s, since the bucket holds no prose before",
+			false, 140, 160, 183, 173_000, 43},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			b.focus(at(0), event.AppTerminal, "p_1", "s_1")
+			b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+			b.mouse(every(at(1), at(96), 5000)...)
+			b.mouse(at(100))
+			b.prompt(at(30), event.ViaHook, "s_1", "p_1", "t_1", 30)
+			if c.edits {
+				b.agentEdits(at(60), "s_1", 30)
+				b.agentEdits(at(75), "s_1", 30)
+			}
+			b.harness(at(c.answer), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 160, IsFinal: true})
+			b.harness(at(c.answer), event.ViaHook, "s_1", "p_1", &event.AgentStop{TurnKey: "t_1", StopReason: event.StopEndTurn})
+			b.press(every(atMS(451_500), atMS(469_500), 1000)...)
+			typedPrompt(451)(b)
+			b.samples(at(0), at(511))
+			got := b.run(t, Device{})
+			if len(got.Returns) != 1 {
+				t.Fatalf("%d returned runs, want 1", len(got.Returns))
+			}
+			r := got.Returns[0]
+			want := Return{RunStart: at(105), RunEnd: at(450), LastInput: at(100), TailEnd: at(130), ReadUntil: at(c.until),
+				UnreadWords: c.words, ProjectKey: "p_1", CreditMS: c.credit, Anchor: r.Anchor}
+			if r != want {
+				t.Errorf("return %+v, want %+v", r, want)
+			}
+			if got := sumIn(got, at(105), at(450))[rREAD+event.ReturnedSuffix]; got != c.readR {
+				t.Errorf("%d s of READ~r, want %d", got, c.readR)
+			}
+		})
+	}
 
-	// The return rule's horizon is READ_HORIZON_S from the run's start, and
-	// an act counts once it is on record (docs/errata/2026-11-19-return-rule-lookahead.md,
-	// decided 2026-11-20 as E-return-lookahead). These cases pin the code
-	// half of that rule change; main's SM 2.1 still counts 600 s from the
-	// run's end, and P10 lands its new text. silence's run starts at 105 s,
+	// The return rule's horizon is READ_HORIZON_S from the run's start, and an
+	// act counts once it is on record (SM 2.1). silence's run starts at 105 s,
 	// so its horizon is 705 s.
 	command := func(b *tl) event.Event {
 		return b.shell(at(762), "p_1", &event.ShellCommand{CmdClass: event.CmdRun, TStart: at(470), TEnd: at(760),

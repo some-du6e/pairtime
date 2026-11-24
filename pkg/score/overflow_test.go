@@ -203,8 +203,11 @@ func TestHugeCounts(t *testing.T) {
 				*b = *silence(event.AppTerminal, 451, func(b *tl) {
 					b.prompt(at(470), event.ViaHook, "s_1", "p_1", "t_2", 30)
 				})
-				b.agentSays(at(103), "s_1", "t_1", huge(61))
-				b.agentSays(at(104), "s_1", "t_1", huge(62))
+				// After the tail's end, so they are prose that goes into the
+				// bucket later in the run, which BUCKET_MAX_S doesn't cap
+				// (SM 2.1).
+				b.agentSays(at(131), "s_1", "t_1", huge(61))
+				b.agentSays(at(132), "s_1", "t_1", huge(62))
 			},
 			check: func(t *testing.T, d Derived) {
 				if len(d.Returns) != 1 {

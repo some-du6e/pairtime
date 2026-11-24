@@ -26,7 +26,9 @@
 //   - anchors, SM 2.3's human acts with their think and typing parts,
 //     trails, evidence levels and labels (DESIGN 6.4), including the side
 //     doors of DESIGN 5.2 and 6.2 D2;
-//   - the silent runs SM 2.1's return rule credits, with RETURN_CREDIT;
+//   - the silent runs SM 2.1's return rule credits, whose RETURN_CREDIT
+//     the credit pass fills in from the reading buckets at each tail's
+//     end;
 //   - what became of each `pairtime track` call (DESIGN 5.4, 6.2 D3);
 //   - review flags.
 //
@@ -324,29 +326,30 @@
 // human act within READ_HORIZON_S, and the return rule an act on record
 // within READ_HORIZON_S of the silence's start. So a record
 // that arrives up to PENDING_WINDOW_S - READ_HORIZON_S late changes only
-// what is still pending. That bound and the return rule's horizon are the
-// code half of E-return-lookahead
-// (docs/errata/2026-11-19-return-rule-lookahead.md, decided 2026-11-20),
-// which lets its code land before its text: SM 2.1, DESIGN 3.7 and D1 state
-// them once P10 lands, and main's SM 2.1 still counts the return rule's
-// horizon from the run's end. An anchor is decided at the latest t of its
-// records; where that is later than its windows allow, as a long typed
-// command's record is at its end, the windows it would open before then
-// credit nothing, in every Step alike. A browser run with credit just before
-// it may be a lookup, whose credit waits for the run's end, so nothing from
-// such a run on is final until its end bracket is. SM 2.5 sets no bound on
-// that (docs/errata/2026-11-19-return-rule-lookahead.md,
+// what is still pending. That bound and the return rule's horizon are
+// E-return-lookahead's (docs/errata/2026-11-19-return-rule-lookahead.md),
+// and SM 2.1, DESIGN 3.7 and D1 state them. A returned run is final from the
+// end of its tail, not from its start, because its reading part reads what
+// the tail's seconds left in the bucket
+// (docs/errata/2026-11-20-sm-6.1-return-unread-words.md). An anchor is
+// decided at the latest t of its records; where that is later than its
+// windows allow, as a long typed command's record is at its end, the windows
+// it would open before then credit nothing, in every Step alike. A browser
+// run with credit just before it may be a lookup, whose credit waits for the
+// run's end, so nothing from such a run on is final until its end bracket
+// is. SM 2.5 sets no bound on that
+// (docs/errata/2026-11-19-return-rule-lookahead.md,
 // docs/errata/2026-11-20-lookup-lookahead.md). A pairing of an agent app's
 // message with its prompt reaches back from the message's stamp instead of
 // from either record's t (SM 2.3): the prompt can come up to RELAY_MATCH_S
 // after the stamp, and the lead it opens ends at the stamp. Step holds
 // FinalBefore at the start of the longest lead an unpaired message could
-// open until it pairs or RELAY_MATCH_S after its stamp passes, and a
-// pairing changes nothing in a minute that is already final. The reading
-// a relayed anchor vouches for needs no hold: the anchor must pair within
+// open until it pairs or RELAY_MATCH_S after its stamp passes, and a pairing
+// changes nothing in a minute that is already final. The reading a relayed
+// anchor vouches for needs no hold: the anchor must pair within
 // PENDING_WINDOW_S - 60 s of the stop the reading starts at, while that
-// stop's minute is still pending. Until WP-SC5
-// adds checkpoints, a State holds every record it was given.
+// stop's minute is still pending. Until WP-SC5 adds checkpoints, a State
+// holds every record it was given.
 //
 // # Readings of the spec
 //
@@ -396,11 +399,6 @@
 //   - The editor in focus on a session's project hosts a session only the
 //     WakaTime bridge reports, as it does an IDE session, since the bridge
 //     reads it from the editor's wakatime-cli (DESIGN 5.7).
-//   - unread_prose_words is SM 2.1's definition: the prose that arrived
-//     after the person's last input in a slot whose focus held the
-//     session. SM 6.1 cycle 6, where the answer comes 10 s before that
-//     input, says 173 s, which the definition doesn't give
-//     (docs/errata/2026-11-20-sm-6.1-return-unread-words.md).
 //   - SM 2.2 rule 2 reads a prompt's declared origin. A turn a stop hook
 //     continued has no prompt.submit and is self_continue as a
 //     continuation; a later stop with stop_hook_active doesn't change a

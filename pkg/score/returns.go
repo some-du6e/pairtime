@@ -12,10 +12,9 @@ import (
 // Return is a silent run that SM 2.1's return rule credits: longer than
 // PRESENCE_GAP_S, at most RETURN_GAP_MAX_S, with input on both sides, and
 // ended by a substantive act in the project that held focus through it, on
-// record within READ_HORIZON_S of the run's start (E-return-lookahead; see
-// markReturns).
-// Its slots past the tail are returned. Of the run, at most CreditMS
-// qualifies:
+// record within READ_HORIZON_S of the run's start (SM 2.1; see
+// markReturns). Its slots past the tail are returned. Of the run, at most
+// CreditMS qualifies:
 //
 //	RETURN_CREDIT = 60 * unread_prose_words / READ_WPM + THINK_LEAD_S
 //
@@ -33,8 +32,12 @@ type Return struct {
 	// ReadUntil ends the reading part: TailEnd plus the reading time of
 	// the unread prose, at most RunEnd.
 	ReadUntil int64 `json:"read_until"`
-	// UnreadWords is the prose the agent showed in the sessions of the
-	// focused window since the person last had them in focus with input.
+	// UnreadWords is the prose, in words rounded to the nearest, that
+	// the harness's own hooks and logs reported into the reading buckets
+	// of the focused window's sessions, or of the project's sessions
+	// when it hosts none, and that the buckets still held when the tail
+	// ended or that went into them later in the run (SM 2.1). The credit
+	// pass sets it, ReadUntil and CreditMS.
 	UnreadWords int64  `json:"unread_words"`
 	Anchor      string `json:"anchor_id"`
 	ProjectKey  string `json:"project_key"`
@@ -94,13 +97,8 @@ func (d *deriver) markReturns() {
 		// the run's start to it. An anchor is on record when it is decided
 		// (Anchor.decided), so a typed command counts from its end; one
 		// decided later doesn't count for the run, in every Step alike
-		// (docs/errata/2026-11-19-return-rule-lookahead.md, decided
+		// (SM 2.1; docs/errata/2026-11-19-return-rule-lookahead.md, decided
 		// 2026-11-20 as E-return-lookahead).
-		// This is the code half of E-return-lookahead, which lets its code
-		// land before its text: main's SM 2.1 still asks for the anchor
-		// within 600 s of the run's end.
-		// TODO(P10): P10 lands SM 2.1's new returned row and return-rule
-		// paragraph, and this comment then cites SM 2.1.
 		horizon := start + d.r.readHorizon
 		k := sort.Search(len(d.anchors), func(k int) bool { return d.anchors[k].T >= end })
 		for k < len(d.anchors) && d.anchors[k].T <= horizon && d.anchors[k].decided > horizon {
@@ -118,11 +116,10 @@ func (d *deriver) markReturns() {
 			d.focus.changed(start, a.T) || d.breakIn(end, a.T) {
 			continue
 		}
-		words := d.unreadWords(focus, run, end)
-		read := d.r.readingMS(words)
+		// The credit pass fills in the reading part at the tail's end
+		// (creditor.readingPart).
 		d.returns = append(d.returns, Return{RunStart: start, RunEnd: end, LastInput: run.lastInput,
-			TailEnd: run.tailEnd, ReadUntil: min(run.tailEnd+read, end), UnreadWords: words, Anchor: a.ID,
-			ProjectKey: focus.project, CreditMS: read + d.r.thinkLead})
+			TailEnd: run.tailEnd, Anchor: a.ID, ProjectKey: focus.project})
 		for k := run.i; k < run.j; k++ {
 			s := &p.slots[k]
 			switch {
@@ -150,54 +147,20 @@ func (d *deriver) breakIn(from, to int64) bool {
 	return false
 }
 
-// unreadWords counts the prose the agent showed, up to the run's end, in
-// the sessions the focused window hosts, or in the focused project's
-// sessions if it hosts none, since the person last had each in focus with
-// input (SM 2.1's unread_prose_words). Only output that the harness's own
-// hooks or logs report counts: a plugin or the bridge can claim any word
-// count, and as many turns as it likes, so a cap per turn wouldn't bound it
-// (DESIGN 5.2).
-func (d *deriver) unreadWords(f *focusRec, run silentRun, end int64) int64 {
-	var keys []string
+// readSessions returns the sessions whose reading buckets SM 2.1's
+// unread_prose_words counts for a run whose focus record is f: the
+// sessions the focused window hosts, or the focused project's sessions in
+// key order when it hosts none (creditor.readingPart).
+func (d *deriver) readSessions(f *focusRec) []string {
 	if len(f.hosted) > 0 {
-		keys = f.hosted
-	} else {
-		for k, s := range d.sessions {
-			if s.project == f.project {
-				keys = append(keys, k)
-			}
-		}
-		slices.Sort(keys)
+		return f.hosted
 	}
-	var words int64
-	for _, k := range keys {
-		s := d.sessions[k]
-		if s == nil {
-			continue
-		}
-		seen := d.lastSeen(s, run.i)
-		for _, o := range s.outputs {
-			if o.t > seen && o.t <= end && !sideDoor(d.recs[o.pos].Via) {
-				words = addCount(words, count(o.d.Words))
-			}
+	var keys []string
+	for k, s := range d.sessions {
+		if s.project == f.project {
+			keys = append(keys, k)
 		}
 	}
-	return words
-}
-
-// lastSeen returns the latest input in a slot before slot i in which the
-// window in focus held session s, or its editor for an IDE session, or the
-// start of the timeline if there is none.
-func (d *deriver) lastSeen(s *session, i int) int64 {
-	p := d.pres
-	for k := i - 1; k >= 0; k-- {
-		sl := &p.slots[k]
-		if !sl.InputAny {
-			continue
-		}
-		if slices.Contains(sl.Hosted, s.key) || (len(sl.Hosted) == 0 && sl.FocusProject != "" && sl.FocusProject == s.project) {
-			return p.lastIn[k]
-		}
-	}
-	return p.first - 1
+	slices.Sort(keys)
+	return keys
 }

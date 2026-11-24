@@ -342,8 +342,8 @@ func TestCredit(t *testing.T) {
 			name:  "SM 2.1: a returned run credits the unread prose left in the bucket as READ~r and the prompt's think lead as P~r, and the rest is X.absent",
 			build: func(b *tl) { *b = *silence(event.AppTerminal, 451, typedPrompt(451)) },
 			want: []secondsWant{
-				{105, 450, map[event.Reason]int64{rREAD: 25, rREAD + event.ReturnedSuffix: 26, rP + event.ReturnedSuffix: 120,
-					xAbsent: 174}},
+				{105, 450, map[event.Reason]int64{rREAD: 25, rREAD + event.ReturnedSuffix: 25, rP + event.ReturnedSuffix: 120,
+					xAbsent: 175}},
 			},
 		},
 		{

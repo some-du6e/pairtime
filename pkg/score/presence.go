@@ -159,9 +159,7 @@ type presence struct {
 	// first is the start of slots[0].
 	first int64
 	slots []Slot
-	// lastIn holds, for each slot, the latest input a sample shows in it.
-	lastIn []int64
-	runs   []silentRun
+	runs  []silentRun
 	// live is set when some record came by a path only a running agent
 	// has, any but a log reader's: records lookback backfilled from
 	// transcripts come by a log reader alone (SM 2.8), and the range of
@@ -701,7 +699,6 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		}
 		s.Then = s.Present
 	}
-	p.lastIn = lastIn
 	p.classifyRuns(lastIn)
 	p.markStarts()
 	return p
