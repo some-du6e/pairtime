@@ -1,0 +1,195 @@
+{
+  "fixture": "focus-unknown/c-x11-reconnect",
+  "title": "X11 with 30 s of unknown focus inside a prompt's lead, while the X connection is re-made",
+  "sm": "docs/design/struggle-metric.md 2.5",
+  "date": "2026-11-26",
+  "timezone": "Australia/Sydney",
+  "utc_offset": "+11:00",
+  "os": "linux",
+  "input_keys": false,
+  "evidence": "B",
+  "witness": "witnessed",
+  "device": "d_9d5cbfd152cd",
+  "projects": {"p_0ef88a671bd3": "weather-cli"},
+  "window": {"start": "2026-11-25T23:00:00Z", "end": "2026-11-25T23:10:00Z", "local": "10:00-10:10"},
+  "rows": [
+    {
+      "start": "2026-11-25T23:00:00Z",
+      "minutes": 1,
+      "local": "10:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ef88a671bd3": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3: the think part of the prompt's lead",
+      "note": "120 + 180 / 1.5 = 240 s, from 10:00:00. Level B: the terminal hosting the session holds every slot.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T23:01:00Z",
+      "minutes": 1,
+      "local": "10:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ef88a671bd3": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T23:02:00Z",
+      "minutes": 1,
+      "local": "10:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ef88a671bd3": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.5: a slot that unknown focus holds longest is level C",
+      "note": "Focus is unknown from 10:02:20 to 10:02:50. It holds the slots from 10:02:15 and 10:02:30 longest, so their 30 s of the lead are level C with focus_unknown; the slot from 10:02:45 is the terminal's, 10 s to 5, and stays B.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T23:03:00Z",
+      "minutes": 1,
+      "local": "10:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ef88a671bd3": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3",
+      "note": "The prompt is sent at 10:04:00 with the terminal in front, so rule 6 passes on known focus and the anchor is level B, not focus_unknown.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T23:04:00Z",
+      "minutes": 1,
+      "local": "10:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_0ef88a671bd3": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "2.4",
+      "note": "Nothing new to read from 10:04:20 to 10:04:30 and from 10:04:45 to 10:05:00: X.agent_only.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T23:05:00Z",
+      "minutes": 1,
+      "local": "10:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ef88a671bd3": {"SUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "2.4",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T23:06:00Z",
+      "minutes": 1,
+      "local": "10:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ef88a671bd3": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4: reading takes the level of the anchor that qualifies it",
+      "note": "The prompt, level B.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T23:07:00Z",
+      "minutes": 1,
+      "local": "10:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ef88a671bd3": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T23:08:00Z",
+      "minutes": 1,
+      "local": "10:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ef88a671bd3": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T23:09:00Z",
+      "minutes": 1,
+      "local": "10:09",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_0ef88a671bd3": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    }
+  ],
+  "totals": {
+    "credited_s": 575,
+    "credited_by_project": {"p_0ef88a671bd3": 575},
+    "credited_by_reason": {"P": 240, "SUP": 95, "READ": 240},
+    "uncredited": {"X.agent_only": 25},
+    "agent_running_s": 120,
+    "level_a_s": 0,
+    "level_b_s": 545,
+    "level_c_s": 30,
+    "focus_unknown_s": 30,
+    "agent_only_s": 25,
+    "ai_credited_s": 575,
+    "hand_credited_s": 0,
+    "unknown_focus_s": 30
+  },
+  "stated": [],
+  "approx": {},
+  "errata": [],
+  "notes": [
+    "WP-FX8's (c): X11 without the key counter, so every credited second is level B, except where the agent couldn't tell which window was in front. Its X connection for focus drops at 10:02:20 and is re-made by 10:02:50, inside the prompt's lead.",
+    "Only the seconds of the two slots that unknown focus holds longest, 10:02:15 to 10:02:45, are level C with focus_unknown: 30 s, though the 30 s of unknown focus start and end mid-slot (SM 2.5). No act falls in them, so no anchor passed its focus test only through unknown focus, and the prompt, sent with the terminal in front, stays level B, as does the reading it qualifies.",
+    "evidence is the level of every credited second outside those two slots; slots.json gives each slot's."
+  ]
+}
