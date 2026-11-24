@@ -30,8 +30,10 @@ type entry struct {
 	start, end, lines int
 	// section is the section a key is in, or a header's section.
 	section string
-	// key and value are a key's name and value as the parser reads them.
+	// key and value are a key's name and value as the parser reads them,
+	// and delim where the = or : after the key is in the file.
 	key, value string
+	delim      int
 }
 
 // file is a config as wakatime-cli's parser reads it.
@@ -41,7 +43,17 @@ type file struct {
 	// eol is the line break the package writes: CRLF in a file that has
 	// one, and LF otherwise.
 	eol string
+	// peek is how far the parser looks past a key's line for the indented
+	// lines that go on with its value (continued).
+	peek int
 }
+
+// peekSize is the most go-ini looks past a key's line for the indented
+// lines of its value: File.parse peeks its 4096-byte reader
+// (minReaderBufferSize, as pkg/vipertools sets no ReaderBufferSize), and
+// readPythonMultilines reads only what that peek holds. A file shorter
+// than that after its byte order mark is peeked whole.
+const peekSize = 4096
 
 // ReadError says why the package won't change a config: at Line, counted
 // from 1, it holds something wakatime-cli's parser reads in a way the
@@ -59,9 +71,11 @@ var bom = []byte("\xef\xbb\xbf")
 // parse reads data as gopkg.in/ini.v1 v1.67.3 does with wakatime-cli's
 // options: only AllowPythonMultilineValues set (pkg/vipertools.New), so
 // = and : end a key, a # or ; ends a value, and an indented line after a
-// value is part of it. It refuses what the parser would fail on, and the
-// forms whose lines it doesn't follow here: a key in quotes, a value in
-// triple quotes or backticks, and one that goes on after a backslash.
+// value is part of it. A key may be in quotes, and a value in triple
+// quotes or backticks, over as many lines as it takes, as go-ini's own
+// SaveTo writes them, which wakatime-cli's --config-write rewrites the
+// whole file with (pkg/ini). It refuses what the parser would fail on, and
+// a value that goes on after a backslash, whose lines it doesn't follow.
 func parse(data []byte) (*file, error) {
 	f := &file{data: data, eol: "\n"}
 	if bytes.Contains(data, []byte("\r\n")) {
@@ -74,6 +88,7 @@ func parse(data []byte) (*file, error) {
 	case bytes.HasPrefix(data, []byte{0xfe, 0xff}), bytes.HasPrefix(data, []byte{0xff, 0xfe}):
 		return nil, &ReadError{Line: 1, Why: "starts the file as UTF-16 text"}
 	}
+	f.peek = min(peekSize, len(data)-off)
 	lines := splitLines(data, off)
 	for i, l := range lines {
 		text := data[l.start:l.end]
@@ -113,7 +128,7 @@ func parse(data []byte) (*file, error) {
 			if why != "" {
 				return nil, &ReadError{Line: i + 1, Why: why}
 			}
-			e.kind, e.key, e.value = pair, key, value
+			e.kind, e.key, e.value, e.delim = pair, key, value, l.end-len(rest)-1
 			e.lines += more
 			e.end = lines[i+more].end
 			i += more
@@ -143,10 +158,30 @@ func splitLines(data []byte, off int) []line {
 }
 
 // keyOf reads a key's name from t, a line without the space before it, as
-// the parser's readKeyName does, and returns what follows its = or :.
+// the parser's readKeyName does, and returns what follows its = or :. A
+// key in quotes, ", """ or `, ends at the first closing quote, and its = or
+// : is the first after that.
 func keyOf(t []byte) (key string, rest []byte, why string) {
-	if t[0] == '"' || t[0] == '`' {
-		return "", nil, "has a key in quotes"
+	q := ""
+	switch {
+	case len(t) > 6 && bytes.HasPrefix(t, []byte(`"""`)):
+		q = `"""`
+	case t[0] == '"':
+		q = `"`
+	case t[0] == '`':
+		q = "`"
+	}
+	if q != "" {
+		end := bytes.Index(t[len(q):], []byte(q))
+		if end < 0 {
+			return "", nil, "has a key in quotes that aren't closed"
+		}
+		end += len(q)
+		i := bytes.IndexAny(t[end+len(q):], "=:")
+		if i < 0 {
+			return "", nil, "is neither a section, a comment nor a key with = or : after it"
+		}
+		return strings.TrimSpace(string(t[len(q):end])), t[end+len(q)+i+1:], ""
 	}
 	i := bytes.IndexAny(t, "=:")
 	switch {
@@ -165,12 +200,19 @@ func (f *file) valueOf(in []byte, next []line) (value string, more int, why stri
 	v := bytes.TrimLeftFunc(in, unicode.IsSpace)
 	if len(v) == 0 {
 		if len(in) > 0 && in[len(in)-1] == '\n' {
-			value, more = f.continued("", next)
+			return f.continued("", next)
 		}
-		return value, more, ""
+		return "", 0, ""
 	}
-	if (len(v) > 3 && bytes.HasPrefix(v, []byte(`"""`))) || v[0] == '`' {
-		return "", 0, "has a value in triple quotes or backticks"
+	q := ""
+	switch {
+	case len(v) > 3 && bytes.HasPrefix(v, []byte(`"""`)):
+		q = `"""`
+	case v[0] == '`':
+		q = "`"
+	}
+	if q != "" {
+		return f.inQuotes(v[len(q):], q, next)
 	}
 	last := v[len(v)-1]
 	s := strings.TrimSpace(string(v))
@@ -184,26 +226,56 @@ func (f *file) valueOf(in []byte, next []line) (value string, more int, why stri
 		return s[1 : len(s)-1], 0, ""
 	}
 	if last == '\n' {
-		value, more = f.continued(s, next)
-		return value, more, ""
+		return f.continued(s, next)
 	}
 	return s, 0, ""
 }
 
+// inQuotes reads a value in quotes q from v, what follows its opening
+// quotes, as the parser's readValue and readMultilines do: up to the last
+// q on the line, or else on through the lines of next, line breaks
+// included, up to the last q on the first line that has one. What follows
+// the closing quotes is no part of it.
+func (f *file) inQuotes(v []byte, q string, next []line) (value string, more int, why string) {
+	if end := bytes.LastIndex(v, []byte(q)); end >= 0 {
+		return string(v[:end]), 0, ""
+	}
+	value = string(v)
+	for j, l := range next {
+		text := f.data[l.start:l.end]
+		end := bytes.LastIndex(text, []byte(q))
+		if end < 0 {
+			value += string(text)
+			continue
+		}
+		if bytes.HasSuffix(bytes.TrimSpace(text[end+len(q):]), []byte(`\`)) {
+			return "", 0, "has a value in quotes that goes on after a backslash"
+		}
+		return value + string(text[:end]), j + 1, ""
+	}
+	return "", 0, "has a value in quotes that aren't closed"
+}
+
 // continued adds to value the lines of next that go on with it, as the
 // parser's readPythonMultilines does: each line that starts with a space,
-// a tab or a form feed, without its LF.
-func (f *file) continued(value string, next []line) (string, int) {
-	n := 0
+// a tab or a form feed, without its LF. It refuses lines that go on past
+// f.peek bytes after the key's line, where the parser ends the value, in
+// the middle of a line if need be, and reads what is left of them as lines
+// of their own.
+func (f *file) continued(value string, next []line) (string, int, string) {
+	n, size := 0, 0
 	for _, l := range next {
 		text := f.data[l.start:l.end]
 		if !indented(text) {
 			break
 		}
+		if size += len(text); size > f.peek {
+			return "", 0, fmt.Sprintf("has indented lines after it that go on past the %d bytes wakatime-cli reads of them", f.peek)
+		}
 		value += "\n" + string(bytes.TrimSuffix(text, []byte("\n")))
 		n++
 	}
-	return value, n
+	return value, n, ""
 }
 
 // indented reports whether text starts as a line that goes on with the

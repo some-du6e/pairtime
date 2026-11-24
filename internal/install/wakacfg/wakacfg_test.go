@@ -122,6 +122,27 @@ func TestFind(t *testing.T) {
 	}
 }
 
+func TestProxyVar(t *testing.T) {
+	tests := []struct {
+		name string
+		vars map[string]string
+		want string
+	}{
+		{name: "with no proxy variable there is none", want: ""},
+		{name: "HTTPS_PROXY is one", vars: map[string]string{"HTTPS_PROXY": "http://proxy.example:3128"}, want: "HTTPS_PROXY"},
+		{name: "http_proxy in lower case is one, as Go reads it", vars: map[string]string{"http_proxy": "http://proxy.example:3128"}, want: "http_proxy"},
+		{name: "an empty variable sets no proxy", vars: map[string]string{"HTTPS_PROXY": "", "HTTP_PROXY": ""}, want: ""},
+		{name: "NO_PROXY sets none, and doesn't keep one from counting", vars: map[string]string{"NO_PROXY": "*", "HTTP_PROXY": "http://proxy.example:3128"}, want: "HTTP_PROXY"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ProxyVar(func(k string) string { return tt.vars[k] }); got != tt.want {
+				t.Errorf("ProxyVar = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSetup(t *testing.T) {
 	cfg := filepath.Join(t.TempDir(), ".wakatime.cfg")
 	tests := []struct {

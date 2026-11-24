@@ -14,22 +14,28 @@ const masked = "***"
 // value and comment masked but pairtime's own, since a config holds the
 // teen's API keys and the consent screen's diff shows the lines around
 // pairtime's, which teens screenshot for help and share. Sections and key
-// names stay, pairtime's line and a config pairtime made stay as they are,
-// and every line stays a line, so the diff of two masked files lines up as
-// the files do. A file the package can't read has every line masked.
-func Masked(data []byte) []byte {
+// names stay, pairtime's line for key and a config pairtime made for it
+// stay as they are, and every line stays a line, so the diff of two masked
+// files lines up as the files do. With key "", every line of pairtime's
+// stays, and a config pairtime made by its mark. A config pairtime made
+// whose api_key isn't key has it masked: it is the teen's own. A file the
+// package can't read has every line masked.
+func Masked(data []byte, key string) []byte {
 	f, err := parse(data)
 	if err != nil {
 		return maskLines(data, 0, len(data))
 	}
 	keep := map[int]bool{}
 	for i, e := range f.entries {
-		if _, _, ok := ownLine(e); ok {
+		if _, k, ok := ownLine(e); ok && (key == "" || k == key) {
 			keep[i] = true
 		}
 	}
-	if u, k, ok := f.ownConfig(""); ok {
+	if u, k, ok := f.ownConfig(key); ok {
 		keep[u], keep[k] = true, true
+		if m := f.mark(); m >= 0 {
+			keep[m] = true
+		}
 	}
 	if len(f.entries) == 0 {
 		return data // nothing but a byte order mark, if that
@@ -55,11 +61,8 @@ func Masked(data []byte) []byte {
 			// The key and its = or :, then the value masked, and each line
 			// that goes on with it masked whole.
 			s := splitLines(data[:e.end], e.start)
-			first := data[s[0].start:s[0].end]
-			n := len(first) - len(bytes.TrimLeftFunc(first, unicode.IsSpace))
-			d := n + bytes.IndexAny(first[n:], "=:")
-			b.Write(first[:d+1])
-			b.Write(maskRest(first[d+1:]))
+			b.Write(data[e.start : e.delim+1])
+			b.Write(maskRest(data[e.delim+1 : s[0].end]))
 			for _, l := range s[1:e.lines] {
 				b.Write(maskLines(data, l.start, l.end))
 			}

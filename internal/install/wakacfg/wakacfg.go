@@ -17,7 +17,8 @@
 // values on (its pkg/vipertools), changes nothing but pairtime's own line,
 // and reads the result again to check that every other key holds what it
 // held and pairtime's holds what was meant. It refuses a file it can't
-// follow that way, and ByHand says what to add by hand instead.
+// follow that way, and a config that sets a proxy, which wakatime-cli
+// would send pairtime's line through too (ErrProxy).
 package wakacfg
 
 import (
@@ -45,6 +46,12 @@ var Spellings = []string{".+", "^.*$", "(?s).*"}
 // at package init, which every pairtime hook call would pay for.
 var keyFormat = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^(waka_)?[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$`)
+})
+
+// agentURL matches the agent's endpoint anywhere in a config: the URL of
+// pairtime's line and of a config pairtime made, on any port (URL).
+var agentURL = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`http://127\.0\.0\.1:[1-9][0-9]{0,4}/api/v1`)
 })
 
 // lineFormat is the whole of pairtime's [api_urls] line, which the
@@ -90,7 +97,43 @@ var (
 	// ErrNoLine is a config without pairtime's line for the key, which
 	// SetPort has nothing to change in.
 	ErrNoLine = errors.New("the config has no line of pairtime's for this key")
+	// ErrProxy is a config that sets a proxy (Add). wakatime-cli would
+	// send pairtime's line through it too: the proxy would get the
+	// heartbeats in plain text, and unless it passes them on to the agent,
+	// each send that fails holds back what wakatime-cli sends the teen's
+	// own server.
+	// ErrNotOwn is a config pairtime made whose api_key isn't the key the
+	// line has now (Add): the teen gave it a key of their own, as WakaTime's
+	// extension writes one, and adding pairtime's line beside it would have
+	// wakatime-cli send with both, the one the agent refuses failing every
+	// send.
+	ErrNotOwn = errors.New("is the config pairtime made, with an api_key that isn't pairtime's any more")
+	// ErrImport is a config that imports another (Add): wakatime-cli reads
+	// the file [settings] import_cfg names over this one (cmd/run.go
+	// parseConfigFiles), so a line of the same pattern there takes
+	// pairtime's line's place, and pairtime edits only the one file.
+	ErrImport = errors.New("imports another config with import_cfg, which wakatime-cli reads over this one, so a line there can take the place of pairtime's")
+	ErrProxy  = errors.New("sets a proxy, and wakatime-cli would send pairtime's line through it too: the proxy would get your project and file names unencrypted, and while it doesn't pass them on to pairtime's agent, each send that fails holds back what wakatime-cli sends your own server")
 )
+
+// ProxyVars are the variables a proxy for wakatime-cli's requests comes
+// from in its environment: those Go's http.ProxyFromEnvironment reads,
+// which wakatime-cli's loadProxyURL reads through httpproxy.FromEnvironment
+// for its main api_url, and then sends every destination through. Their
+// values can hold a password, so only their names are ever shown.
+var ProxyVars = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"}
+
+// ProxyVar returns the first of ProxyVars that getenv gives a value, ""
+// when none has one. NO_PROXY is no help to pairtime's line: wakatime-cli
+// works out the proxy once, for the main api_url.
+func ProxyVar(getenv func(string) string) string {
+	for _, v := range ProxyVars {
+		if getenv(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
 
 // checkArgs refuses a key or a port the line can't hold.
 func checkArgs(key string, port int) error {
@@ -101,12 +144,6 @@ func checkArgs(key string, port int) error {
 		return ErrPort
 	}
 	return nil
-}
-
-// ByHand says what to add to the config by hand, for a file the package
-// refuses to change: pairtime's line under [api_urls].
-func ByHand(key string, port int) string {
-	return fmt.Sprintf("add this line under [api_urls] yourself, with a pattern no other line there has: %s = %s|%s", Spellings[0], URL(port), key)
 }
 
 // Paths are the two files of wakatime-cli's that pairtime writes to.

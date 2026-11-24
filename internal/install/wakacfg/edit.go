@@ -78,12 +78,34 @@ func (f *file) last(section, key string) int {
 	return at
 }
 
+// madeMark is the comment a config pairtime makes starts with (Make). It
+// tells uninstall and a second install that the config is pairtime's when
+// no record names its key: a [settings] api_url on 127.0.0.1 alone may be
+// the teen's own server, such as Wakapi.
+const madeMark = "made by pairtime install; pairtime uninstall takes it out"
+
+// mark returns the index of the comment that is madeMark, with either
+// comment character and any space around it, or -1.
+func (f *file) mark() int {
+	for i, e := range f.entries {
+		if e.kind != comment {
+			continue
+		}
+		t := strings.TrimSpace(string(f.data[e.start:e.end]))
+		if strings.TrimSpace(t[1:]) == madeMark {
+			return i
+		}
+	}
+	return -1
+}
+
 // ownConfig returns the entries of a config pairtime made (Make) for key:
 // the [settings] api_url that is the agent's endpoint, and the api_key
-// that is key, or that is in WakaTime's format when key is "".
+// that is key, or, when key is "", one in WakaTime's format in a config
+// with pairtime's mark.
 func (f *file) ownConfig(key string) (url, apiKey int, ok bool) {
 	url, apiKey = f.last(settings, "api_url"), f.last(settings, "api_key")
-	if url < 0 || apiKey < 0 {
+	if url < 0 || apiKey < 0 || (key == "" && f.mark() < 0) {
 		return -1, -1, false
 	}
 	if _, isAgent := agentPort(f.entries[url].value); !isAgent {
@@ -93,6 +115,47 @@ func (f *file) ownConfig(key string) (url, apiKey int, ok bool) {
 		return -1, -1, false
 	}
 	return url, apiKey, true
+}
+
+// proxy reports whether the config sets a proxy: a [settings] proxy with
+// a value, as wakatime-cli v2.28.4 reads it (pkg/params loadProxyURL),
+// quotes trimmed. wakatime-cli sends every destination's requests through
+// that one proxy, pairtime's at 127.0.0.1 too (pkg/api WithProxy, whose
+// http.ProxyURL makes no exception for loopback), so the proxy gets them
+// in plain text, and they reach the agent only if the proxy passes them
+// on to 127.0.0.1 on its own computer.
+func (f *file) proxy() bool {
+	i := f.last(settings, "proxy")
+	return i >= 0 && strings.Trim(f.entries[i].value, `"'`) != ""
+}
+
+// imports reports whether the config imports another, a [settings]
+// import_cfg with a value, which wakatime-cli reads over it (pkg/ini
+// ImportFilePath).
+func (f *file) imports() bool {
+	i := f.last(settings, "import_cfg")
+	return i >= 0 && strings.TrimSpace(f.entries[i].value) != ""
+}
+
+// Mentions reports whether data names the agent's endpoint anywhere, as
+// pairtime's line and a config pairtime made do, whether or not the
+// package can read the file. A file it can't read that doesn't is one
+// with nothing of pairtime's in it.
+func Mentions(data []byte) bool { return agentURL().Match(data) }
+
+// LineKey returns the key of the first line of pairtime's under
+// [api_urls] in data.
+func LineKey(data []byte) (string, bool) {
+	f, err := parse(data)
+	if err != nil {
+		return "", false
+	}
+	for _, e := range f.entries {
+		if _, k, ok := ownLine(e); ok {
+			return k, true
+		}
+	}
+	return "", false
 }
 
 // Key returns the key of the first line of pairtime's in data, under
@@ -117,12 +180,12 @@ func Key(data []byte) (string, bool) {
 
 // Make returns the config pairtime makes for someone who has none:
 // wakatime-cli's api_url is the agent's endpoint, with pairtime's key
-// (DESIGN 5.6, "No WakaTime config").
+// (DESIGN 5.6, "No WakaTime config"), after pairtime's mark (madeMark).
 func Make(key string, port int) ([]byte, error) {
 	if err := checkArgs(key, port); err != nil {
 		return nil, err
 	}
-	return []byte("[settings]\napi_url = " + URL(port) + "\napi_key = " + key + "\n"), nil
+	return []byte("; " + madeMark + "\n[settings]\napi_url = " + URL(port) + "\napi_key = " + key + "\n"), nil
 }
 
 // Add returns data, a config that is there, with pairtime's line for key
@@ -130,7 +193,8 @@ func Make(key string, port int) ([]byte, error) {
 // adds the line after the last key of the first [api_urls] section, with
 // the first of Spellings no key there has, or adds the section at the end
 // of the file. When the line is there already, or data is a config
-// pairtime made, it changes only the port, as SetPort does.
+// pairtime made, it changes only the port, as SetPort does. It refuses a
+// config that sets a proxy (ErrProxy).
 func Add(data []byte, key string, port int) ([]byte, error) {
 	if err := checkArgs(key, port); err != nil {
 		return nil, err
@@ -139,11 +203,20 @@ func Add(data []byte, key string, port int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if f.proxy() {
+		return nil, ErrProxy
+	}
+	if f.imports() {
+		return nil, ErrImport
+	}
 	if _, ok := f.line(key); ok {
 		return SetPort(data, key, port)
 	}
 	if _, _, ok := f.ownConfig(key); ok {
 		return SetPort(data, key, port)
+	}
+	if _, _, ok := f.ownConfig(""); ok {
+		return nil, ErrNotOwn
 	}
 	spelling, err := f.spelling()
 	if err != nil {
@@ -213,16 +286,49 @@ func SetPort(data []byte, key string, port int) ([]byte, error) {
 	return nil, ErrNoLine
 }
 
+// Section is what install put in a config around pairtime's line when the
+// config had no [api_urls] section, for Remove to take out with the line.
+// Add writes the blank line and the line break only where the file needs
+// them (Added).
+type Section struct {
+	// Header is the [api_urls] header, which goes once no key is left
+	// under it.
+	Header bool
+	// Blank is the blank line before the header, which goes with it, and
+	// Break the line break that ended the file's last line before them,
+	// which goes when what is left ends the file.
+	Blank, Break bool
+}
+
+// Added returns what Add puts around pairtime's line in base, a config
+// with no [api_urls] section: the section, a blank line before it unless
+// base ends with one or holds nothing but white space, and a line break
+// when base's last line has none.
+func Added(base []byte) Section {
+	s := Section{Header: true}
+	f, err := parse(base)
+	if err != nil {
+		s.Blank = true
+		return s
+	}
+	body := bytes.TrimPrefix(base, bom)
+	s.Blank = len(bytes.TrimSpace(body)) > 0 && f.entries[len(f.entries)-1].kind != blank
+	s.Break = len(body) > 0 && body[len(body)-1] != '\n'
+	return s
+}
+
 // Remove returns data, a config install changed and that changed since,
 // without pairtime's lines for key, as uninstall takes them out (DESIGN
 // 5.6, "Uninstall"). With key "", it takes out every line it recognizes
 // as pairtime's, for an uninstall with no record of the key. made says
 // install made the config, so its api_url and api_key are pairtime's too
-// (Make), and section that the config had no [api_urls] section before
-// install, so a section of that name that no key is left in goes too,
-// with the blank line install put before it. gone reports that nothing
-// else is left of a config install made, so uninstall deletes the file.
-func Remove(data []byte, key string, made, section bool) (out []byte, gone bool, err error) {
+// (Make), and sec what install put around the line in a config that had
+// no [api_urls] section, which goes with it. gone reports that data is a
+// config pairtime made, with the agent's api_url and the key's api_key,
+// and that nothing else is left of it, so uninstall deletes the file. A
+// file that only held pairtime's line stays, empty, since install doesn't
+// make one of that shape: the file was there before.
+func Remove(data []byte, key string, made bool, sec Section) (out []byte, gone bool, err error) {
 	f, err := parse(data)
 	if err != nil {
 		return nil, false, err
@@ -233,23 +339,32 @@ func Remove(data []byte, key string, made, section bool) (out []byte, gone bool,
 			drop[i] = true
 		}
 	}
+	own := false
 	if made {
 		if u, k, ok := f.ownConfig(key); ok {
 			drop[u], drop[k] = true, true
+			if m := f.mark(); m >= 0 {
+				drop[m] = true
+			}
+			own = true
 		}
 	}
-	if section {
+	dropped := false // an [api_urls] header went
+	if sec.Header {
 		for h, e := range f.entries {
 			if e.kind != header || !isSection(e.section, apiURLs) || !f.emptied(h, drop) {
 				continue
 			}
-			drop[h] = true
-			if h > 0 && f.entries[h-1].kind == blank {
+			drop[h], dropped = true, true
+			if sec.Blank && h > 0 && f.entries[h-1].kind == blank {
 				drop[h-1] = true
 			}
 		}
 	}
 	out = f.without(drop)
+	if sec.Break && dropped && f.endsDropped(drop) {
+		out = out[:len(out)-len(lineBreak(out))]
+	}
 	a, err := parse(out)
 	if err != nil {
 		return nil, false, fmt.Errorf("taking pairtime's line out would leave a file wakatime-cli reads differently (%w)", err)
@@ -263,7 +378,7 @@ func Remove(data []byte, key string, made, section bool) (out []byte, gone bool,
 	if !samePairs(a.pairs(), kept) {
 		return nil, false, errors.New("taking pairtime's line out would change how wakatime-cli reads another line")
 	}
-	if made {
+	if own {
 		gone = true
 		for _, e := range a.entries {
 			if e.kind == pair || e.kind == comment || (e.kind == header && !isSection(e.section, settings)) {
@@ -274,11 +389,27 @@ func Remove(data []byte, key string, made, section bool) (out []byte, gone bool,
 	return out, gone, nil
 }
 
+// endsDropped reports whether the entries in drop end the file, after an
+// entry that stays: what is left then ends with that entry's line break.
+func (f *file) endsDropped(drop map[int]bool) bool {
+	n := len(f.entries)
+	if n == 0 || !drop[n-1] {
+		return false
+	}
+	for i := n - 1; i >= 0; i-- {
+		if !drop[i] {
+			return true
+		}
+	}
+	return false
+}
+
 // emptied reports whether the section whose header is entry h holds no key
-// once the entries in drop are gone.
+// and no comment once the entries in drop are gone. pairtime writes no
+// comment there, so one is the teen's, and keeps the section.
 func (f *file) emptied(h int, drop map[int]bool) bool {
 	for j := h + 1; j < len(f.entries) && f.entries[j].kind != header; j++ {
-		if f.entries[j].kind == pair && !drop[j] {
+		if k := f.entries[j].kind; (k == pair || k == comment) && !drop[j] {
 			return false
 		}
 	}
@@ -562,9 +693,24 @@ type State struct {
 	// [settings]'s, or WakaTime's own when the config names none (DefaultURL).
 	// It is "" in a config pairtime made.
 	Server string
-	// ServerKey says [settings] has an api_key or an api_key_vault_cmd,
-	// without which wakatime-cli sends nothing to anyone.
+	// ServerKey says [settings] has a key for the server, as wakatime-cli's
+	// loadAPIKey finds one: the first of api_key and apikey that is there,
+	// though an empty one hides the other, then an api_key_vault_cmd.
+	// Without one, or WAKATIME_API_KEY, wakatime-cli sends nothing to anyone.
 	ServerKey bool
+	// BadKey names where the config has a key wakatime-cli refuses for its
+	// format, "" when it has none: [settings]'s api_key or apikey, or a
+	// key under [api_urls] or [project_api_key]. Any of them fails
+	// wakatime-cli's whole run, so it sends nothing to anyone.
+	BadKey string
+	// Proxy says the config sets a proxy, which wakatime-cli sends
+	// pairtime's line through too, so that the line reaches the agent only
+	// if the proxy passes it on (Add refuses such a config).
+	Proxy bool
+	// Import says the config imports another, which wakatime-cli reads
+	// over it, so that a line there can take pairtime's place (Add refuses
+	// such a config).
+	Import bool
 }
 
 // Inspect reads data, a config, for pairtime's line for key.
@@ -573,7 +719,7 @@ func Inspect(data []byte, key string) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	var s State
+	s := State{Proxy: f.proxy(), Import: f.imports()}
 	if u, _, ok := f.ownConfig(key); ok {
 		s.Line, s.Own = true, true
 		s.Port, _ = agentPort(f.entries[u].value)
@@ -587,10 +733,61 @@ func Inspect(data []byte, key string) (State, error) {
 	if i := f.last(settings, "api_url"); i >= 0 && f.entries[i].value != "" {
 		s.Server = f.entries[i].value
 	}
-	for _, k := range []string{"api_key", "api_key_vault_cmd"} {
-		if i := f.last(settings, k); i >= 0 && f.entries[i].value != "" {
-			s.ServerKey = true
+	for _, k := range []string{"api_key", "apikey"} {
+		i := f.last(settings, k)
+		if i < 0 {
+			continue
 		}
+		if v := strings.Trim(f.entries[i].value, `"'`); v != "" {
+			s.ServerKey = true
+			if !ValidKey(v) {
+				s.BadKey = "[settings] " + k
+			}
+		}
+		break
+	}
+	if i := f.last(settings, "api_key_vault_cmd"); !s.ServerKey && i >= 0 && f.entries[i].value != "" {
+		s.ServerKey = true
+	}
+	if s.BadKey == "" {
+		s.BadKey = f.badPatternKey()
 	}
 	return s, nil
+}
+
+// badPatternKey returns the section, [api_urls] or [project_api_key], in
+// which the config has a key wakatime-cli refuses for its format, and ""
+// when it has none. wakatime-cli reads each key's last value, as viper
+// keeps them, and an [api_urls] value's key is what follows its first |;
+// one without a | has [settings]'s, which Inspect checks
+// (loadAPIURLPatterns, loadAPIKeyPatterns).
+func (f *file) badPatternKey() string {
+	for _, sec := range []string{apiURLs, "project_api_key"} {
+		values := map[string]string{}
+		var keys []string
+		for _, e := range f.pairs() {
+			if !isSection(e.section, sec) {
+				continue
+			}
+			k := strings.ToLower(e.key)
+			if _, ok := values[k]; !ok {
+				keys = append(keys, k)
+			}
+			values[k] = e.value
+		}
+		for _, k := range keys {
+			v := values[k]
+			if sec == apiURLs {
+				_, key, found := strings.Cut(v, "|")
+				if !found {
+					continue
+				}
+				v = strings.TrimSpace(key)
+			}
+			if !ValidKey(v) {
+				return "[" + sec + "]"
+			}
+		}
+	}
+	return ""
 }
