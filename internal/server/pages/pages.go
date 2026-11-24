@@ -61,6 +61,26 @@ import (
 //go:embed layout.html style.css home.md privacy.md evidence/*.md dashboard.html dashboard.js
 var files embed.FS
 
+// Scripts returns the hand-written scripts a page may carry inline, the
+// .js files embedded here, by name: a page's CSP names each one it
+// carries by its hash (D-server-ui). Tests hold every page's inline
+// scripts to them (package pagestest).
+func Scripts() (map[string][]byte, error) {
+	names, err := fs.Glob(files, "*.js")
+	if err != nil {
+		return nil, fmt.Errorf("pages: %w", err)
+	}
+	out := make(map[string][]byte, len(names))
+	for _, name := range names {
+		b, err := fs.ReadFile(files, name)
+		if err != nil {
+			return nil, fmt.Errorf("pages: %w", err)
+		}
+		out[name] = b
+	}
+	return out, nil
+}
+
 // SourceURL is where the code this server runs is published, which AGPL-3.0
 // section 13 asks a network service to offer its users.
 const SourceURL = "https://github.com/some-du6e/pairtime"
