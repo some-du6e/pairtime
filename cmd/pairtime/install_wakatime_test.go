@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -178,8 +179,9 @@ func TestInstallWakaTime(t *testing.T) {
 }
 
 // TestWakaTimeTeensKeyNeverShown runs the real install and uninstall on a
-// config pairtime made whose api_key the teen replaced with their own, as
-// WakaTime's extension writes one, with no record of pairtime's key left:
+// config pairtime made on the agent's port whose api_key the teen replaced
+// with their own, as WakaTime's extension writes one, with no record of
+// pairtime's key left:
 // nothing install or uninstall prints, --dry-run included, and no setup
 // file holds the teen's key, and both leave the config to the teen, which
 // uninstall names as what has to stay, its dry run included.
@@ -189,7 +191,13 @@ func TestWakaTimeTeensKeyNeverShown(t *testing.T) {
 	}
 	tests := []struct {
 		name string
-		port int // the port the config's api_url names: not the one install plans, so a change would show its api_key beside it
+		// port is the agent's, set in config.toml, and the one the config's
+		// api_url names: install plans on it and the agent listens on it,
+		// and only a config on the agent's own port is taken over
+		// (wakacfg.Add). 7250 is none of the agent's defaults and in no
+		// system's range of the ports it hands out for port 0, so other
+		// tests leave it free.
+		port int
 	}{
 		{"install, --dry-run and uninstall show the teen's key in a config pairtime made nowhere, and leave it to the teen", 7250},
 	}
@@ -202,7 +210,23 @@ func TestWakaTimeTeensKeyNeverShown(t *testing.T) {
 			taken := strings.Replace(string(made), "api_key = 00000000-0000-4000-8000-00000000a9e7", "api_key = "+teenHackatimeKey, 1)
 			h := newTestHome(t, "real").withEnv(wakatimeEnv, "1")
 			h.write(".wakatime.cfg", taken)
+			conf := h.dirs.ConfigFile()
+			if err := os.MkdirAll(filepath.Dir(conf), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(conf, []byte("[http]\nport = "+strconv.Itoa(tt.port)+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
 			before := h.snapshot()
+			// uninstall --delete-data deletes config.toml and its folder
+			// with the rest of pairtime's data.
+			for _, p := range []string{conf, filepath.Dir(conf)} {
+				rel, err := filepath.Rel(h.root, p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				delete(before, rel)
+			}
 			shown := func(what, out string) {
 				t.Helper()
 				if strings.Contains(out, teenHackatimeKey) {
@@ -212,6 +236,9 @@ func TestWakaTimeTeensKeyNeverShown(t *testing.T) {
 			shown("install --dry-run", h.mustRun("", "", 0, "install", "--dry-run"))
 			out := h.mustRun("", "", 0, "install", "--yes")
 			shown("install --yes", out)
+			if pf, err := localhttp.ReadPortFile(h.dirs.PortFile()); err != nil || pf.Port != tt.port {
+				t.Errorf("the agent listens on port %d (%v), not on config.toml's %d, which another process may hold, so the config isn't on the agent's port", pf.Port, err, tt.port)
+			}
 			if !strings.Contains(out, "isn't pairtime's any more") || !strings.Contains(out, "keep your api_key, and run pairtime install again") {
 				t.Errorf("install didn't say why it left the config alone, and how to keep the teen's key:\n%s", out)
 			}

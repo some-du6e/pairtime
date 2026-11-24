@@ -104,6 +104,7 @@ func TestAdd(t *testing.T) {
 		wantIs   error
 	}{
 		{name: "a config pairtime made whose api_key the teen replaced is refused by its mark", before: testMark + taken, port: 7250, wantIs: ErrNotOwn},
+		{name: "without a record, a config with pairtime's mark whose api_url is on another port than the agent's gets pairtime's line, since nothing tells it from a server of the teen's own on 127.0.0.1", before: testMark + taken, after: testMark + taken + "\n[api_urls]\n" + ours(".+") + "\n"},
 		{name: "with install's record, a config pairtime made whose mark the teen deleted with pairtime's key is refused too", before: taken, port: 7250, recorded: true, wantIs: ErrNotOwn},
 		{name: "with install's record, a config whose api_url is on 127.0.0.1 on another port than the agent's, as Wakapi's setup writes it, is the teen's own server, and gets pairtime's line", before: "[settings]\napi_url = http://127.0.0.1:3000/api/v1\napi_key = " + otherKey + "\n", recorded: true, after: "[settings]\napi_url = http://127.0.0.1:3000/api/v1\napi_key = " + otherKey + "\n\n[api_urls]\n" + ours(".+") + "\n"},
 		{name: "without a record or a mark, a config on 127.0.0.1 with another key gets pairtime's line, since it may be the teen's own server", before: taken, after: taken + "\n[api_urls]\n" + ours(".+") + "\n"},
