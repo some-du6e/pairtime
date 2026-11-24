@@ -279,7 +279,7 @@ func TestPublication(t *testing.T) {
 
 // bucketOf is device d1's revision rev of the minute at minute, in state,
 // whose first slots credit 15 s each at the levels given, in project p1.
-func bucketOf(minute time.Time, rev uint32, state pevent.BucketState, levels ...event.Evidence) pevent.MinuteBucket {
+func bucketOf(minute time.Time, rev uint32, state pevent.BucketState, levels ...pevent.Evidence) pevent.MinuteBucket {
 	mb := pevent.MinuteBucket{
 		V: "1.0.0", Params: "sha256:" + strings.Repeat("ab", 32), Minute: minute.UTC(), Device: "d1",
 		Slots: make([]pevent.BucketSlot, 4), State: state, Witness: pevent.Witnessed, Rev: rev,
