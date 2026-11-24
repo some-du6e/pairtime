@@ -409,14 +409,17 @@ func TestCaps(t *testing.T) {
 			},
 		},
 		{
-			name: "a create that takes the account to 10,000 frozen windows is taken, and one past them gets 409 limit_reached and stores nothing",
+			name: "a create that takes the account to 10,000 frozen windows is taken, one past them gets 409 limit_reached and stores nothing, and a retry of the create the server holds still gets 200",
 			run: func(t *testing.T, h *harness) {
 				h.seed(u1, 1, "program", Frozen, MaxWindows-1)
-				h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusCreated)
+				first := h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusCreated)
 				before := h.rows()
 				want(t, h.call("ptd_laptop", "POST", SubmissionsPath, window("hard-mode", "req-2", end, end.Add(time.Hour))), http.StatusConflict, CodeLimitReached)
+				if again := h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusOK); again.ID != first.ID {
+					t.Errorf("the retry answered %s, want %s", again.ID, first.ID)
+				}
 				if after := h.rows(); after != before {
-					t.Errorf("the refusal changed the rows from %s to %s", before, after)
+					t.Errorf("the refusal and the retry changed the rows from %s to %s", before, after)
 				}
 			},
 		},

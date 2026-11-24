@@ -1,6 +1,6 @@
 # Submissions API, version 1
 
-Status: the contract between `pairtimed`'s submissions API (WP-SB1, package `internal/server/submission`) and the clients that use it: the agent's submit code and the dashboard's submission page (WP-SB3, WP-SB6), `pairtime submit` for calibration (WP-CA0), and the program API, whose create WP-PG6 adds. The orchestrator decided its rules on 2026-11-24 (D-sb1-submissions; docs/errata/2026-11-24-submissions-record-and-overlap.md). DESIGN 7.5 steps 1 and 2 say what a create and a freeze do, DESIGN 4.3's submissions row what a client sends, and DESIGN 4.4's submissions row what the server keeps. This file fixes the bytes: the routes, the bodies, the signed message, the refusals, the views, the caps and the list's paging. Section 12 lists what it decides that the rulings leave open. Changing it needs both sides.
+Status: the contract between `pairtimed`'s submissions API (WP-SB1, package `internal/server/submission`) and the clients that use it: the agent's submit code and the dashboard's submission page (WP-SB3, WP-SB6), `pairtime submit` for calibration (WP-CA0), and the program API, whose create WP-PG6 adds. The orchestrator decided its rules on 2026-11-24 (D-sb1-submissions; docs/errata/2026-11-24-submissions-retention-and-refusal.md). DESIGN 7.5 steps 1 and 2 say what a create and a freeze do, DESIGN 4.3's submissions row what a client sends, and DESIGN 4.4's submissions row what the server keeps. This file fixes the bytes: the routes, the bodies, the signed message, the refusals, the views, the caps and the list's paging. Section 12 lists what it decides that the rulings leave open. Changing it needs both sides.
 
 A teen submits on the web, with a web session that has a fresh login, or from one of the account's computers, with the device token and a request signed by the device key (2). Either way the create freezes at once. A program's credential reads the submissions addressed to it, once WP-PG6 connects it (2.3).
 
@@ -143,15 +143,16 @@ Only each window's start and end are frozen, never its devlogs, so a devlog dele
 
 ### 3.3 The checks, the freeze and the answer
 
-The server checks the body (3.1) before anything else. Then one writer op runs these steps in order, so two creates never race:
+The server checks the body's form (3.1) before anything else. Then one writer op runs these steps in order, so two creates never race:
 
-1. **Idempotency on the account and `request_id`.** When the account made a submission under this `request_id` before, the same canonical request gets 200 with that submission in whatever state it is in now, withdrawn included, and nothing changes. Another request under the same id gets 409 `request_conflict`. The canonical request is the program, the sorted project ids, or the sorted keys with the calling device's id (keys are a device's own), and the window's start and end in Unix ms or the choice of devlog windows. Request ids are the account's own, so no answer says anything about another account.
-2. **Verification.** The account's `users.verification_status` is `verified`: otherwise 403 `not_verified`.
-3. **The submission cap.** The account holds fewer than 1,000 submissions made with its own credentials: otherwise 409 `limit_reached` (10).
-4. **P.** The projects or keys resolve to P's project ids and their pairs: otherwise 400 `project_unknown`.
-5. **The windows** (3.2): 400 `window_invalid` or 409 `no_devlog_windows`.
-6. **The window cap.** The account's frozen windows and this create's together are at most 10,000: otherwise 409 `limit_reached` (10).
-7. **The overlap refusal**, for a program that takes hours (D-sb1-submissions, Q2). The create is refused when any of its windows overlaps a window of another submission of the account that holds one of the same pairs, was frozen and wasn't withdrawn, in any state from `frozen` through `decided`, or `revoked`, and went to a program that takes hours, whichever program, the create's own included. Two windows overlap when each starts before the other ends, so windows that only touch at an end don't. A withdrawal frees a submission's windows, and a decision, whatever its outcome, or a revocation doesn't, so a rejected claim can't move to another program. A submission to a program that takes no hours is never refused and never counts against another. The answer is 409 `already_submitted`, naming every submission it overlaps:
+1. **Idempotency on the account and `request_id`.** When the account made a submission under this `request_id` before, the same canonical request gets 200 with that submission in whatever state it is in now, withdrawn included, and nothing changes, even when `[[programs]]` no longer lists its program, since a retry isn't a new submission. Another request under the same id gets 409 `request_conflict`. The canonical request is the program, the sorted project ids, or the sorted keys with the calling device's id (keys are a device's own), and the window's start and end in Unix ms or the choice of devlog windows. Request ids are the account's own, so no answer says anything about another account.
+2. **The program.** `[[programs]]` lists it: otherwise 400 `program_unknown`.
+3. **Verification.** The account's `users.verification_status` is `verified`: otherwise 403 `not_verified`.
+4. **The submission cap.** The account holds fewer than 1,000 submissions made with its own credentials: otherwise 409 `limit_reached` (10).
+5. **P.** The projects or keys resolve to P's project ids and their pairs: otherwise 400 `project_unknown`.
+6. **The windows** (3.2): 400 `window_invalid` or 409 `no_devlog_windows`.
+7. **The window cap.** The account's frozen windows and this create's together are at most 10,000: otherwise 409 `limit_reached` (10).
+8. **The overlap refusal**, for a program that takes hours (D-sb1-submissions, Q2). The create is refused when any of its windows overlaps a window of another submission of the account that holds one of the same pairs, was frozen and wasn't withdrawn, in any state from `frozen` through `decided`, or `revoked`, and went to a program that takes hours, whichever program, the create's own included. Two windows overlap when each starts before the other ends, so windows that only touch at an end don't. A withdrawal frees a submission's windows, and a decision, whatever its outcome, or a revocation doesn't, so a rejected claim can't move to another program. A submission to a program that takes no hours is never refused and never counts against another. The answer is 409 `already_submitted`, naming every submission it overlaps:
 
    ```json
    {"error": "already_submitted", "detail": "...", "submissions": [{"id": "<id>", "program": "<name>"}]}
@@ -159,7 +160,7 @@ The server checks the body (3.1) before anything else. Then one writer op runs t
 
    A program's credential, once WP-PG6 lets one create, gets the same status, error and detail with no `submissions` member.
 
-8. **The freeze.** The server stores the submission with P, each pair it maps to now, and the windows; the scoring version and parameter hash (11.3); a fresh 32-byte `r` and its SHA-256; and the eligibility note, true when Hack Club Auth verified the identity without saying it is eligible (DESIGN 8.2). It moves the submission from `created` to `frozen` and, for a program that takes hours, raises the freeze's risk flags (11.2).
+9. **The freeze.** The server stores the submission with P, each pair it maps to now, and the windows; the scoring version and parameter hash (11.3); a fresh 32-byte `r` and its SHA-256; and the eligibility note, true when Hack Club Auth verified the identity without saying it is eligible (DESIGN 8.2). It moves the submission from `created` to `frozen` and, for a program that takes hours, raises the freeze's risk flags (11.2).
 
 A new submission gets 201 with its teen view (4.1) and `Location: /api/v1/submissions/<id>`. It carries `r_sha256` and never `r`. When the writer's answer is lost, as when the connection drops while it commits, the client sends the same request with the same `request_id`, which gets the stored submission.
 

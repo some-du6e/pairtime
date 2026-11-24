@@ -36,6 +36,8 @@ var (
 	// ErrRequestConflict is a request id the account used for another
 	// request.
 	ErrRequestConflict = errors.New("submission: the request id was used for another request")
+	// ErrProgramUnknown is a program [[programs]] doesn't list.
+	ErrProgramUnknown = errors.New("submission: this server takes no submissions for the program")
 	// ErrNotVerified is an account whose identity Hack Club Auth hasn't
 	// verified (DESIGN 8.2).
 	ErrNotVerified = errors.New("submission: the account isn't verified")
@@ -69,8 +71,10 @@ type createInput struct {
 	// CreatedBy is BySession or ByDevice, and Device the calling device,
 	// "" for a session.
 	CreatedBy, Device string
-	Program           Program
-	RequestID         string
+	// Program is the program's name, which the op looks up in
+	// [[programs]] once it knows the request isn't a retry.
+	Program   string
+	RequestID string
 	// RequestSHA256 is requestSum of the request.
 	RequestSHA256 string
 	// Projects are the project ids the teen picked, and ProjectKeys the
@@ -217,9 +221,10 @@ func count(ctx context.Context, q Querier, query string, args ...any) (int64, er
 // create runs a teen's create and freeze inside the writer transaction tx
 // (DESIGN 7.5 steps 1 and 2; D-sb1-submissions). In order: a request id
 // the account used before answers with the submission it made then, in
-// whatever state it is in now, when the request is the same, and gets
-// ErrRequestConflict when it isn't; an account that isn't verified gets
-// ErrNotVerified; one at MaxSubmissions gets ErrLimit; P resolves to its
+// whatever state it is in now, when the request is the same, even when
+// [[programs]] no longer lists its program, and gets ErrRequestConflict
+// when it isn't; a program the list doesn't hold gets ErrProgramUnknown;
+// an account that isn't verified gets ErrNotVerified; one at MaxSubmissions gets ErrLimit; P resolves to its
 // pairs, or ErrProjectUnknown; the windows are checked, or made from the
 // devlogs, or ErrWindowInvalid or ErrNoDevlogWindows; windows past
 // MaxWindows get ErrLimit; and, for a program that takes hours, windows
@@ -238,6 +243,10 @@ func (s *Service) create(ctx context.Context, tx writer.Tx, in createInput) (Sub
 		return sub, false, err
 	} else if !errors.Is(err, ErrNotFound) {
 		return Submission{}, false, err
+	}
+	program, ok := s.programs[in.Program]
+	if !ok {
+		return Submission{}, false, ErrProgramUnknown
 	}
 	verified, toConfirm, err := eligibility(ctx, tx, in.Account)
 	if err != nil {
@@ -284,7 +293,7 @@ func (s *Service) create(ctx context.Context, tx writer.Tx, in createInput) (Sub
 	if frozen+int64(len(ws)) > MaxWindows {
 		return Submission{}, false, ErrLimit
 	}
-	if in.Program.TakesHours {
+	if program.TakesHours {
 		refs, err := overlapping(ctx, tx, in.Account, keys, ws)
 		if err != nil {
 			return Submission{}, false, err
@@ -302,7 +311,7 @@ func (s *Service) create(ctx context.Context, tx writer.Tx, in createInput) (Sub
 	if _, err := tx.ExecContext(ctx, `INSERT INTO submissions (id, user_id, program, takes_hours, request_id, request_sha256,
 created_by, device_id, mode, state, scoring_version, params, r, r_sha256, eligibility_to_confirm, created_at_ms, updated_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16)`,
-		id, in.Account, in.Program.Name, bit(in.Program.TakesHours), in.RequestID, in.RequestSHA256,
+		id, in.Account, program.Name, bit(program.TakesHours), in.RequestID, in.RequestSHA256,
 		in.CreatedBy, nullString(in.Device), mode, string(Created), s.scoringVersion, s.params, r, rSum, bit(toConfirm), now); err != nil {
 		return Submission{}, false, fmt.Errorf("submission: storing a submission: %w", err)
 	}
@@ -325,7 +334,7 @@ VALUES ($1, $2, $3, $4, $5)`, id, in.Account, p.Device, p.ProjectKey, p.project)
 	if err := Move(ctx, tx, id, Frozen, now); err != nil {
 		return Submission{}, false, err
 	}
-	if in.Program.TakesHours {
+	if program.TakesHours {
 		if err := raiseFlags(ctx, tx, s.fingerprints, id, in.Account, projects, keys, ws, now); err != nil {
 			return Submission{}, false, err
 		}

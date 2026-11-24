@@ -191,12 +191,15 @@ func TestReads(t *testing.T) {
 			},
 		},
 		{
-			name: "a submission to a program the list no longer holds keeps its name, which the view shows in place of a display name, and the program takes no new submissions",
+			name: "a submission to a program the list no longer holds keeps its name, which the view shows in place of a display name, and a retry of its create still gets it, while the program takes no new submissions",
 			run: func(t *testing.T, h *harness) {
 				mine := h.create("ptd_laptop", window("stardance", "req-1", start, end), http.StatusCreated)
 				delete(h.svc.programs, "stardance")
 				if v := view(t, h.call("ptd_laptop", "GET", SubmissionsPath+"/"+mine.ID, "")); v.Program != (ProgramJSON{Name: "stardance", DisplayName: "stardance"}) {
 					t.Errorf("program %+v, want stardance by its name", v.Program)
+				}
+				if again := h.create("ptd_laptop", window("stardance", "req-1", start, end), http.StatusOK); again.ID != mine.ID {
+					t.Errorf("a retry of the create answered %s, want %s: a retry isn't a new submission", again.ID, mine.ID)
 				}
 				want(t, h.call("ptd_laptop", "POST", SubmissionsPath, window("stardance", "req-2", end, t0)), http.StatusBadRequest, CodeProgramUnknown)
 			},

@@ -376,6 +376,8 @@ func (s *Service) refusalOf(r *http.Request, err error, what string) *refusal {
 		return nil
 	case errors.Is(err, ErrRequestConflict):
 		return refuse(http.StatusConflict, CodeRequestConflict, "This request_id was used for another request; make a new one for a new request.")
+	case errors.Is(err, ErrProgramUnknown):
+		return refuse(http.StatusBadRequest, CodeProgramUnknown, "This server takes no submissions for that program; GET "+ProgramsPath+" lists the ones it does.")
 	case errors.Is(err, ErrNotVerified):
 		return refuse(http.StatusForbidden, CodeNotVerified, "Only an account whose identity Hack Club Auth has verified can submit hours.")
 	case errors.Is(err, ErrProjectUnknown):
@@ -461,10 +463,6 @@ func (s *Service) checkCreate(c caller, req createRequest) (createInput, *refusa
 	case req.ProjectKeys != nil && c.device == "":
 		return createInput{}, refuse(http.StatusBadRequest, ingest.CodeBodyShape, "A web session names projects by their ids, as the dashboard lists them; only a computer names its own project keys.")
 	}
-	program, ok := s.programs[*req.Program]
-	if !ok {
-		return createInput{}, refuse(http.StatusBadRequest, CodeProgramUnknown, "This server takes no submissions for that program; GET "+ProgramsPath+" lists the ones it does.")
-	}
 	if !isKey(*req.RequestID) {
 		return createInput{}, refuse(http.StatusBadRequest, CodeRequestIDInvalid, "The request_id is 1 to 128 letters, digits, _ or -, made at random by the client and sent again on a retry.")
 	}
@@ -476,7 +474,7 @@ func (s *Service) checkCreate(c caller, req createRequest) (createInput, *refusa
 	if ref != nil {
 		return createInput{}, ref
 	}
-	in := createInput{Account: c.account, CreatedBy: BySession, Device: c.device, Program: program, RequestID: *req.RequestID}
+	in := createInput{Account: c.account, CreatedBy: BySession, Device: c.device, Program: *req.Program, RequestID: *req.RequestID}
 	if c.device != "" {
 		in.CreatedBy = ByDevice
 	}
@@ -488,7 +486,7 @@ func (s *Service) checkCreate(c caller, req createRequest) (createInput, *refusa
 	if w := req.Window; w != nil {
 		in.Window = &Window{Start: w.Start.UnixMilli(), End: w.End.UnixMilli()}
 	}
-	in.RequestSHA256 = requestSum(program.Name, in.Device, in.Projects, in.ProjectKeys, in.Window)
+	in.RequestSHA256 = requestSum(in.Program, in.Device, in.Projects, in.ProjectKeys, in.Window)
 	return in, nil
 }
 
