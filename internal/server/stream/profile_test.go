@@ -18,7 +18,8 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/rollup"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/store/storetest"
-	"github.com/some-du6e/pairtime/pkg/event"
+	// The package declares a type event of its own.
+	pevent "github.com/some-du6e/pairtime/pkg/event"
 )
 
 // profileTopic is rowan's public profile, which fakeProfiles serves.
@@ -278,13 +279,13 @@ func TestPublication(t *testing.T) {
 
 // bucketOf is device d1's revision rev of the minute at minute, in state,
 // whose first slots credit 15 s each at the levels given, in project p1.
-func bucketOf(minute time.Time, rev uint32, state event.BucketState, levels ...event.Evidence) event.MinuteBucket {
-	mb := event.MinuteBucket{
+func bucketOf(minute time.Time, rev uint32, state pevent.BucketState, levels ...event.Evidence) pevent.MinuteBucket {
+	mb := pevent.MinuteBucket{
 		V: "1.0.0", Params: "sha256:" + strings.Repeat("ab", 32), Minute: minute.UTC(), Device: "d1",
-		Slots: make([]event.BucketSlot, 4), State: state, Witness: event.Witnessed, Rev: rev,
+		Slots: make([]pevent.BucketSlot, 4), State: state, Witness: pevent.Witnessed, Rev: rev,
 	}
 	for i, level := range levels {
-		mb.Slots[i] = event.BucketSlot{Project: "p1", Credited: 15, Why: event.ReasonPrompt, Kind: event.ActivityPrompting, Ev: level}
+		mb.Slots[i] = pevent.BucketSlot{Project: "p1", Credited: 15, Why: pevent.ReasonPrompt, Kind: pevent.ActivityPrompting, Ev: level}
 		mb.CreditedS += 15
 	}
 	return mb
@@ -294,8 +295,8 @@ func bucketOf(minute time.Time, rev uint32, state event.BucketState, levels ...e
 // label it gave it (DESIGN 7.4).
 type revision struct {
 	at    time.Time
-	label event.Witness
-	mb    event.MinuteBucket
+	label pevent.Witness
+	mb    pevent.MinuteBucket
 }
 
 // store stores r for account u1 as ingest does: in minute_bucket_revisions,
@@ -343,8 +344,8 @@ func TestPublicTotals(t *testing.T) {
 	// The publication of 2026-11-25, when 2026-11-24 has just ended in
 	// every zone.
 	at := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
-	final, pending := event.StateFinal, event.StatePending
-	A, B, C := event.EvidenceA, event.EvidenceB, event.EvidenceC
+	final, pending := pevent.StateFinal, pevent.StatePending
+	A, B, C := pevent.EvidenceA, pevent.EvidenceB, pevent.EvidenceC
 	seen := func(day string) time.Time { return local(day, 13) }
 	tests := []struct {
 		name string
@@ -353,36 +354,36 @@ func TestPublicTotals(t *testing.T) {
 		want []ProfileDay
 	}{
 		{name: "a day's witnessed final minutes count at levels A and B, by local day", at: at,
-			revs: []revision{{seen("2026-11-24"), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A, B)}},
+			revs: []revision{{seen("2026-11-24"), pevent.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A, B)}},
 			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 30}}},
 		{name: "level C never reaches a public total", at: at,
-			revs: []revision{{seen("2026-11-24"), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, C, C)}},
+			revs: []revision{{seen("2026-11-24"), pevent.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, C, C)}},
 			want: []ProfileDay{}},
 		{name: "a revision the server labeled backfilled counts for nothing, whatever level its device claims", at: at,
-			revs: []revision{{seen("2026-11-24"), event.Backfilled, bucketOf(local("2026-11-24", 12), 1, final, A, A)}},
+			revs: []revision{{seen("2026-11-24"), pevent.Backfilled, bucketOf(local("2026-11-24", 12), 1, final, A, A)}},
 			want: []ProfileDay{}},
 		{name: "an offline catch-up the server labeled offline counts", at: at,
-			revs: []revision{{seen("2026-11-24"), event.Offline, bucketOf(local("2026-11-24", 12), 1, final, A)}},
+			revs: []revision{{seen("2026-11-24"), pevent.Offline, bucketOf(local("2026-11-24", 12), 1, final, A)}},
 			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 15}}},
 		{name: "a revision received after the publication doesn't show at it", at: at,
-			revs: []revision{{at.Add(time.Hour), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)}},
+			revs: []revision{{at.Add(time.Hour), pevent.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)}},
 			want: []ProfileDay{}},
 		{name: "a revision received after one publication shows at the next", at: at.Add(24 * time.Hour),
-			revs: []revision{{at.Add(time.Hour), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)}},
+			revs: []revision{{at.Add(time.Hour), pevent.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)}},
 			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 15}}},
 		{name: "a later revision received before the publication replaces the earlier, and one received after it doesn't yet",
 			at: at,
 			revs: []revision{
-				{seen("2026-11-24"), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)},
-				{local("2026-11-25", 1), event.Witnessed, bucketOf(local("2026-11-24", 12), 2, final, A, A, A)},
-				{at.Add(time.Minute), event.Witnessed, bucketOf(local("2026-11-24", 12), 3, final, A, A, A, A)},
+				{seen("2026-11-24"), pevent.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)},
+				{local("2026-11-25", 1), pevent.Witnessed, bucketOf(local("2026-11-24", 12), 2, final, A, A, A)},
+				{at.Add(time.Minute), pevent.Witnessed, bucketOf(local("2026-11-24", 12), 3, final, A, A, A, A)},
 			},
 			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 45}}},
 		{name: "a pending minute counts, since every minute of a date ended everywhere is past its pending window", at: at,
-			revs: []revision{{seen("2026-11-24"), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, pending, B)}},
+			revs: []revision{{seen("2026-11-24"), pevent.Witnessed, bucketOf(local("2026-11-24", 12), 1, pending, B)}},
 			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 15}}},
 		{name: "the agent's time on its own doesn't count", at: at,
-			revs: []revision{{seen("2026-11-24"), event.Witnessed, func() event.MinuteBucket {
+			revs: []revision{{seen("2026-11-24"), pevent.Witnessed, func() pevent.MinuteBucket {
 				mb := bucketOf(local("2026-11-24", 12), 1, final)
 				mb.AgentRunningS, mb.AgentOnly = 60, map[string]float64{"p1": 60}
 				return mb
@@ -390,17 +391,17 @@ func TestPublicTotals(t *testing.T) {
 			want: []ProfileDay{}},
 		{name: "the dates are the 30 up to the newest ended in every zone, oldest first, whatever the profile's own zone", at: at,
 			revs: []revision{
-				{seen("2026-11-24"), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)},
-				{seen("2026-10-26"), event.Witnessed, bucketOf(local("2026-10-26", 12), 1, final, A, A)},
-				{seen("2026-10-25"), event.Witnessed, bucketOf(local("2026-10-25", 12), 1, final, A, A, A)},
+				{seen("2026-11-24"), pevent.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)},
+				{seen("2026-10-26"), pevent.Witnessed, bucketOf(local("2026-10-26", 12), 1, final, A, A)},
+				{seen("2026-10-25"), pevent.Witnessed, bucketOf(local("2026-10-25", 12), 1, final, A, A, A)},
 				// Ended in the profile's zone, not yet in UTC-12.
-				{seen("2026-11-25"), event.Witnessed, bucketOf(local("2026-11-25", 12), 1, final, A, A, A, A)},
+				{seen("2026-11-25"), pevent.Witnessed, bucketOf(local("2026-11-25", 12), 1, final, A, A, A, A)},
 			},
 			want: []ProfileDay{{Date: "2026-10-26", CreditedS: 30}, {Date: "2026-11-24", CreditedS: 15}}},
 		{name: "a second before the publication, its newest date hasn't ended in every zone and doesn't show", at: at.Add(-time.Second),
 			revs: []revision{
-				{seen("2026-11-24"), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)},
-				{seen("2026-11-23"), event.Witnessed, bucketOf(local("2026-11-23", 12), 1, final, A, A)},
+				{seen("2026-11-24"), pevent.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)},
+				{seen("2026-11-23"), pevent.Witnessed, bucketOf(local("2026-11-23", 12), 1, final, A, A)},
 			},
 			want: []ProfileDay{{Date: "2026-11-23", CreditedS: 30}}},
 	}
@@ -445,7 +446,7 @@ func TestProfileTopicOnRollups(t *testing.T) {
 	)
 	// A bubble's clock starts here.
 	start := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	A := event.EvidenceA
+	A := pevent.EvidenceA
 	tests := []struct {
 		name string
 		// revs are stored once the clock reaches each one's at.
@@ -458,11 +459,11 @@ func TestProfileTopicOnRollups(t *testing.T) {
 		{name: "a late revision to a shown date shows at the next 12:00 UTC, never at the hour it came, and a backfilled one counts for nothing",
 			revs: []revision{
 				// 2000-01-01's minute, witnessed soon after it ended.
-				{start.Add(10 * time.Minute), event.Witnessed, bucketOf(start, 1, event.StateFinal, A, A)},
+				{start.Add(10 * time.Minute), pevent.Witnessed, bucketOf(start, 1, pevent.StateFinal, A, A)},
 				// 2000-01-02's minute, which the server labeled backfilled.
-				{start.Add(day + 10*time.Minute), event.Backfilled, bucketOf(start.Add(day), 1, event.StateFinal, A)},
+				{start.Add(day + 10*time.Minute), pevent.Backfilled, bucketOf(start.Add(day), 1, pevent.StateFinal, A)},
 				// A catch-up at 21:10 raises 2000-01-01 after it was shown.
-				{start.Add(day + 21*time.Hour + 10*time.Minute), event.Witnessed, bucketOf(start, 2, event.StateFinal, A, A, A, A)},
+				{start.Add(day + 21*time.Hour + 10*time.Minute), pevent.Witnessed, bucketOf(start, 2, pevent.StateFinal, A, A, A, A)},
 			},
 			when: []time.Duration{day + noon, 2*day + noon},
 			days: [][]string{{"2000-01-01=30"}, {"2000-01-01=60"}}},
