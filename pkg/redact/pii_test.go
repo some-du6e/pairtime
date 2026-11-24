@@ -409,3 +409,66 @@ func TestChecksumNearMisses(t *testing.T) {
 		})
 	}
 }
+
+// TestDecimalNumbers checks that a decimal's fraction is never a card, an
+// SSN or an Aadhaar number (issue #104), and that a number next to a '.'
+// still is one: before a '.' that ends a sentence or starts a float's
+// fraction, and after one when the number holds a separator or the '.'
+// doesn't follow a digit. The two asDouble values are the ones the scrub of
+// the first Claude Code capture took for cards: their fractions pass Luhn.
+func TestDecimalNumbers(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []Span
+	}{
+		{"an OTLP value's fraction that passes Luhn is never a card", `{"asDouble":4.614999999999999}`, []Span{}},
+		{"another OTLP value's fraction that passes Luhn is never a card", `{"asDouble":1.3239999999999998}`, []Span{}},
+		{"the same fractions in plain text are never cards", "it took 4.614999999999999 s, then 1.3239999999999998 s", []Span{}},
+		{"a card number with an exponent after it is never a card", "4111111111111111e5 4111111111111111E+5", []Span{}},
+		{"a card number that ends a sentence is still a card", "my card is 4111 1111 1111 1111.",
+			[]Span{{Start: 11, End: 30, Type: TypeCard}}},
+		{"a card number without separators that ends a sentence is still a card", "card 4111111111111111. thanks",
+			[]Span{{Start: 5, End: 21, Type: TypeCard}}},
+		{"a card number that ends a sentence in a JSON string is still a card", `{"text":"my card is 4111111111111111."}`,
+			[]Span{{Start: 20, End: 36, Type: TypeCard}}},
+		{"a whole JSON number that passes Luhn is still a card", `{"n":4111111111111111}`,
+			[]Span{{Start: 5, End: 21, Type: TypeCard}}},
+		{"a card number written as a float is still a card", `{"card":4111111111111111.0}`,
+			[]Span{{Start: 8, End: 24, Type: TypeCard}}},
+		{"a 12-digit fraction that passes Verhoeff is never an Aadhaar number", `{"asDouble":0.234567890124}`, []Span{}},
+		{"the same fraction in plain text is never an Aadhaar number", "it was 0.234567890124 of it", []Span{}},
+		{"the same 12 digits standing alone are an Aadhaar number", "aadhaar 234567890124",
+			[]Span{{Start: 8, End: 20, Type: TypeAadhaar}}},
+		{"an Aadhaar number written as a float is still one", `{"aadhaar":234567890124.0}`,
+			[]Span{{Start: 11, End: 23, Type: TypeAadhaar}}},
+		{"a 9-digit fraction after ssn is never an SSN", `{"ssn_ratio":0.219099999}`, []Span{}},
+		{"an SSN written as a float after ssn is still an SSN", `{"ssn":219099999.0}`,
+			[]Span{{Start: 7, End: 16, Type: TypeUSSSN}}},
+		{"a card number with separators after a list number with no space is still a card", "1.4111 1111 1111 1111",
+			[]Span{{Start: 2, End: 21, Type: TypeCard}}},
+		{"an SSN with dashes after a list number with no space is still an SSN", "3.219-09-9999",
+			[]Span{{Start: 2, End: 13, Type: TypeUSSSN}}},
+		{"an Aadhaar number with spaces after a list number with no space is still one", "1.2345 6789 0124",
+			[]Span{{Start: 2, End: 16, Type: TypeAadhaar}}},
+		{"a card number right after a '.' that follows a letter is still a card", "card no.4111111111111111",
+			[]Span{{Start: 8, End: 24, Type: TypeCard}}},
+		{"a card number after a '.' at the start of the text is still a card", ".4111111111111111",
+			[]Span{{Start: 1, End: 17, Type: TypeCard}}},
+		{"an SSN after a '.' at the start of the text is still an SSN", ".219-09-9999",
+			[]Span{{Start: 1, End: 12, Type: TypeUSSSN}}},
+		{"a card number after a digit and a space is still a card", "1 4111111111111111",
+			[]Span{{Start: 2, End: 18, Type: TypeCard}}},
+		{"a card number after another card number and a space is still a card", "4111111111111111 5555555555554444",
+			[]Span{{Start: 0, End: 16, Type: TypeCard}, {Start: 17, End: 33, Type: TypeCard}}},
+		{"an SSN after a digit and a space is still an SSN", "ssn 1 219099999",
+			[]Span{{Start: 6, End: 15, Type: TypeUSSSN}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := collect(findPII, tt.text); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

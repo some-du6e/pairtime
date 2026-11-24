@@ -1,0 +1,9 @@
+unix_ns=1795490235342717844
+utc=2026-11-24T03:17:15Z
+method=POST
+path=/v1/logs
+content_type=application/json
+content_encoding=
+bytes_received=10500
+bytes_saved=10500
+header_names=connection,content-length,content-type,host,user-agent

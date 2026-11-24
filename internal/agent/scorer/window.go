@@ -226,6 +226,51 @@ type carry struct {
 	// before it: carry.records drops every Power or Presence dated before
 	// it, as the window's Steps would otherwise get them back.
 	RestartAt int64 `json:"restart_at,omitempty"`
+	// V is the carry's format, carryVersion from WP-HL1 on, 0 in a place
+	// an older agent saved, whose carry has no Stamped and no RestartAt
+	// (Loop.rebuildCarry).
+	V int `json:"v,omitempty"`
+}
+
+// carryVersion is the carry's format since WP-HL1, whose carry keeps
+// Stamped and RestartAt. Loaded from a place an older agent saved, a carry
+// without them reads as if no record the agent stamps itself and no
+// restart came before the window, which keeps a sample whose reach a
+// folded record ended, so open rebuilds both from the ledger first
+// (Loop.rebuildCarry).
+const carryVersion = 1
+
+// mark is a record's place in record order, for folding RestartAt again
+// (restartAt): its t and seq, which one device's ledger never repeats, and
+// whether it is the sampler's record or one the agent stamped itself.
+type mark struct {
+	t       int64
+	seq     uint64
+	sampler bool
+}
+
+// restartAt sorts marks into record order and returns RestartAt as fold
+// leaves it after folding the records they stand for: the t of the last of
+// the sampler's records that came after a stamped record dated more than
+// ttl after the sampler's record before it, or 0 for none. A restart at the
+// first of the sampler's records in marks isn't seen, as the one before it
+// isn't there.
+func restartAt(marks []mark, ttl int64) int64 {
+	slices.SortFunc(marks, func(a, b mark) int { return cmp.Or(cmp.Compare(a.t, b.t), cmp.Compare(a.seq, b.seq)) })
+	var at, stamped int64
+	var last *mark // the sampler's latest record so far, as carry.sampled
+	for i := range marks {
+		m := &marks[i]
+		if !m.sampler {
+			stamped = max(stamped, m.t)
+			continue
+		}
+		if last != nil && stamped > last.t+ttl {
+			at = m.t
+		}
+		last = m
+	}
+	return at
 }
 
 // sessionCarry is what the carry keeps of one harness session.
