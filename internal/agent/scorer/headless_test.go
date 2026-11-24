@@ -414,6 +414,155 @@ func slotsFrom(table *params.Table, recs []event.Event, from int64) []score.Slot
 	return slots
 }
 
+// TestOlderPlaceCarry checks open's rebuild of a carry that an agent
+// before WP-HL1 saved in state.json, with no stamped, restart_at or v
+// (#294). A sampler stops at C while the turn's hooks run on for three
+// hours, past BUCKET_TTL_S, and stop. The machine suspends and resumes with
+// no sample after either, as when its idle read fails, and hooks run again
+// after the resume. Loaded as it is, the carry reads as if no record ended
+// C's reach. Rebuilt from the ledger, it must be the carry the window kept,
+// and the loop must give what one Step over every record gives, minute by
+// minute.
+func TestOlderPlaceCarry(t *testing.T) {
+	first := hookTurn(t, hookAt, hourTools())
+	c := first[len(first)-1].T
+	resume := c + 14*hourMS
+	tests := []struct {
+		name string
+		// upgrade is when the agent upgrades, after the resume.
+		upgrade int64
+		// restart says the carry has folded the suspend, which starts the
+		// sampler again after C's cut.
+		restart bool
+	}{
+		{name: "with the suspend the window's first record of the sampler's and nothing stamped before it there, the rebuilt carry cuts C, so the hours after the resume get one Step's buckets",
+			upgrade: resume + 2*hourMS},
+		{name: "with the suspend folded into the carry as the sampler's restart after C's cut, the rebuilt carry keeps that restart, which drops C",
+			upgrade: resume + 4*hourMS, restart: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var tool, prompt event.Event
+			for _, e := range first {
+				switch e.Data.(type) {
+				case *event.AgentTool:
+					tool = e
+				case *event.PromptSubmit:
+					prompt = e
+				}
+			}
+			n := 0
+			clone := func(tmpl event.Event, ts int64, d event.Payload) event.Event {
+				n++
+				e := tmpl
+				e.EventID = fmt.Sprintf("01a1fb1e-5318-78a1-a7f5-%012x", n)
+				e.Mono += ts - e.T
+				e.T, e.Data = ts, d
+				return e
+			}
+			run := slices.Clone(first)
+			for ts := c + 10*minuteMS; ts <= c+3*hourMS; ts += 10 * minuteMS {
+				d := *tool.Data.(*event.AgentTool)
+				d.TStart, d.TEnd = ts-800, ts
+				run = append(run, clone(tool, ts, &d))
+			}
+			run = append(run, clone(prompt, c+3*hourMS+minuteMS,
+				&event.AgentStop{TurnKey: prompt.Data.(*event.PromptSubmit).TurnKey, StopReason: event.StopEndTurn}))
+			run = append(run, clone(first[len(first)-1], c+10*hourMS, &event.OSPower{Op: event.PowerSuspend}),
+				clone(first[len(first)-1], resume, &event.OSPower{Op: event.PowerResume}))
+			var tools []int64
+			for m := int64(10); m <= 300; m += 10 {
+				tools = append(tools, m*minuteMS)
+			}
+			var rest []event.Event
+			for _, e := range rekeyed(hookTurn(t, resume+70_000, tools), 4) {
+				switch _, sample := e.Data.(*event.OSPresence); {
+				case sample:
+				case e.T < tc.upgrade:
+					run = append(run, e)
+				default:
+					rest = append(rest, e)
+				}
+			}
+			r := newRig(t, score.Device{})
+			r.write(run, nil)
+			kept := r.savedCursor().Carry
+			if kept.Stamped == 0 || (kept.RestartAt != 0) != tc.restart {
+				t.Fatalf("the window kept a carry with stamped %d and restart_at %d; the case needs the hooks' stamped and restart %v",
+					kept.Stamped, kept.RestartAt, tc.restart)
+			}
+			olderPlace(t, r)
+			r.rescore()
+			if got := r.savedCursor().Carry; !reflect.DeepEqual(got, kept) {
+				t.Errorf("the rebuilt carry is\n%s\nand the window kept\n%s", carryJSON(t, got), carryJSON(t, kept))
+			}
+			r.write(rest, nil)
+			all := append(slices.Clone(run), rest...)
+			chain, err := ledger.ReadChain(r.path("ledger"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, fb := direct(r.table, r.dev, chain.DeviceID, all)
+			from, to := span(all)
+			compare(t, r.stored(from, to), want)
+			if st := r.rescore(); st.FinalBefore != fb {
+				t.Errorf("the loop's FinalBefore is %s, and one Step's %s", time.UnixMilli(st.FinalBefore).UTC(), time.UnixMilli(fb).UTC())
+			}
+		})
+	}
+}
+
+// carryJSON returns c as JSON, for a failure message.
+func carryJSON(t *testing.T, c carry) string {
+	t.Helper()
+	j, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(j)
+}
+
+// olderPlace rewrites the scorer's place in the rig's state.json as an
+// agent before WP-HL1 saved it: a carry with no stamped, restart_at or v.
+func olderPlace(t *testing.T, r *rig) {
+	t.Helper()
+	data, err := os.ReadFile(r.path("state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys, cur, carry map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(keys[StateKey], &cur); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(cur["carry"], &carry); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := carry["stamped"]; !ok {
+		t.Fatal("the saved carry holds no stamped record to take out, so the case doesn't load what it means to")
+	}
+	delete(carry, "stamped")
+	delete(carry, "restart_at")
+	delete(carry, "v")
+	var raw []byte
+	if raw, err = json.Marshal(carry); err != nil {
+		t.Fatal(err)
+	}
+	cur["carry"] = raw
+	if raw, err = json.Marshal(cur); err != nil {
+		t.Fatal(err)
+	}
+	keys[StateKey] = raw
+	if raw, err = json.Marshal(keys); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(r.path("state.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // savedCursor returns the place state.json holds.
 func (r *rig) savedCursor() cursor {
 	r.t.Helper()
@@ -567,15 +716,18 @@ func TestNoEmptyFinalUnderived(t *testing.T) {
 				return p
 			}
 			r.write(evs, nil)
-			switch n := len(p.puts); {
-			case !c.empty && n > 0:
+			if n := len(p.puts); !c.empty && n > 0 {
 				t.Errorf("the loop wrote %d revisions of the minute, the last %+v; want none", n, p.puts[n-1])
-			case c.empty && n == 0:
-				t.Error("the loop wrote no revision of the minute; want an empty final one")
-			case c.empty:
-				if last := p.puts[n-1]; !last.Empty() || last.State != event.StateFinal {
-					t.Errorf("the minute's last revision is %+v; want an empty final one", last)
-				}
+			}
+			if !c.empty {
+				return
+			}
+			// What the store keeps, not only what the loop handed it.
+			switch got := r.stored(c.m, c.m+minuteMS); {
+			case len(got) != 1:
+				t.Errorf("the store holds %d revisions of the minute; want its empty final one", len(got))
+			case !got[0].Empty() || got[0].State != event.StateFinal:
+				t.Errorf("the store's revision of the minute is %+v; want an empty final one", got[0])
 			}
 		})
 	}
