@@ -302,43 +302,20 @@ func TestLookbackRows(t *testing.T) {
 			}
 		})
 		t.Run(f.Name+" totals are the sums of the rows", func(t *testing.T) {
-			var credited, agent float64
-			byProject := map[string]float64{}
-			byReason := map[event.Reason]float64{}
-			unc := map[event.Reason]float64{}
+			for _, e := range totalsErrors(exp) {
+				t.Error(e)
+			}
+			// A lookback case's agent_only_s lies between its rows'
+			// X.agent_only and its agent_running_s.
+			agentOnly := 0.0
 			for _, r := range exp.Rows {
-				credited += r.CreditedS
-				agent += r.AgentRunningS
-				for p, reasons := range r.Credit {
-					for k, s := range reasons {
-						byProject[p] += s
-						byReason[k] += s
-					}
-				}
-				for k, s := range r.Uncredited {
-					unc[k] += s
-				}
+				agentOnly += r.Uncredited[event.ReasonAgentOnly]
 			}
 			tot := exp.Totals
-			if tot.CreditedS != credited {
-				t.Errorf("credited_s = %v, rows sum to %v", tot.CreditedS, credited)
-			}
-			if tot.AgentRunningS != agent {
-				t.Errorf("agent_running_s = %v, rows sum to %v", tot.AgentRunningS, agent)
-			}
-			if !maps.Equal(nonZero(tot.CreditedByProject), byProject) {
-				t.Errorf("credited_by_project = %v, rows sum to %v", tot.CreditedByProject, byProject)
-			}
-			if !maps.Equal(nonZero(tot.CreditedByReason), byReason) {
-				t.Errorf("credited_by_reason = %v, rows sum to %v", tot.CreditedByReason, byReason)
-			}
-			if !maps.Equal(nonZero(tot.Uncredited), unc) {
-				t.Errorf("uncredited = %v, rows sum to %v", tot.Uncredited, unc)
-			}
 			a, ok := tot.Get("agent_only_s")
-			if !ok || a > tot.AgentRunningS || a < unc[event.ReasonAgentOnly] {
+			if !ok || a > tot.AgentRunningS || a < agentOnly {
 				t.Errorf("agent_only_s %v (present: %v) must be between the rows' X.agent_only %v and agent_running_s %v",
-					a, ok, unc[event.ReasonAgentOnly], tot.AgentRunningS)
+					a, ok, agentOnly, tot.AgentRunningS)
 			}
 		})
 		t.Run(f.Name+" every erratum named exists", func(t *testing.T) {
