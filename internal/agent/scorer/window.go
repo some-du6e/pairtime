@@ -60,7 +60,7 @@ func (g runGaps) of(native bool) int64 {
 func (w *window) add(ev event.Event, b uint64) {
 	if ev.T < w.from {
 		w.carry.fold(ev, w.gaps, w.ttl)
-		w.carry.prune(w.from)
+		w.carry.prune()
 		w.keepAsks()
 		return
 	}
@@ -89,7 +89,7 @@ func (w *window) slide(from int64) {
 	}
 	w.recs = kept
 	w.from = from
-	w.carry.prune(from)
+	w.carry.prune()
 	w.keepAsks()
 }
 
@@ -236,7 +236,9 @@ func (w *window) firstBatch() uint64 {
 // agent output and stop, which say which turn runs and whether the agent
 // asked a question (SM 2.2, 2.6). Each slot keeps the latest record in
 // record order (t, then seq, then event id), so folding records in any
-// order gives the same carry.
+// order gives the same carry. A session's slots stay however long ago
+// their records came, until the session ends or carrySessions sessions
+// heard from since push it out (prune).
 //
 // It also keeps what the run of each session's last prompted turn needs,
 // since a run has no bound in time (SM 2.6): the turn's latest agent
@@ -275,22 +277,27 @@ type carry struct {
 	// V is the carry's format, carryVersion today: 0 in a place an agent
 	// before WP-HL1 saved, whose carry has no Stamped, RestartAt or Lock,
 	// 1 in one an agent between WP-HL1's first part and
-	// D-sampleless-power saved, whose carry has no Lock, and 2 in one an
-	// agent before E-prompt-class-asked saved, whose sessions have no
-	// question state (Loop.rebuildCarry).
+	// D-sampleless-power saved, whose carry has no Lock, 2 in one an agent
+	// before E-prompt-class-asked saved, whose sessions have no question
+	// state, and 3 in one an agent before WP-ADE1's part 4 saved, whose
+	// carry dropped a session after a day with no record (#265;
+	// Loop.rebuildCarry).
 	V int `json:"v,omitempty"`
 }
 
 // carryVersion is the carry's format: since WP-HL1 it keeps Stamped and
-// RestartAt, since D-sampleless-power Lock, and since
-// E-prompt-class-asked each session's question state (Asks). Loaded
-// from a place an older agent saved, a carry without them reads as if no
-// record the agent stamps itself, no restart, no lock and no question came
+// RestartAt, since D-sampleless-power Lock, since E-prompt-class-asked
+// each session's question state (Asks), and since WP-ADE1's part 4 every
+// session that hasn't ended, however long it has had no record, where an
+// older carry dropped a session after a day (#265). Loaded from a place an
+// older agent saved, a carry without them reads as if no record the agent
+// stamps itself, no restart, no lock, no question and no such session came
 // before the window, which keeps a sample whose reach a folded record
-// ended, drops a lock still open, or classes a prompt after a folded
-// question otherwise than one Step over every record, so open rebuilds
-// them from the ledger first (Loop.rebuildCarry).
-const carryVersion = 3
+// ended, drops a lock still open, classes a prompt after a folded
+// question, or reads a session's next prompt without its start, otherwise
+// than one Step over every record, so open rebuilds them from the ledger
+// first (Loop.rebuildCarry).
+const carryVersion = 4
 
 // mark is a record's place in record order, for folding RestartAt again
 // (restartAt): its t and seq, which one device's ledger never repeats, and
@@ -361,14 +368,13 @@ type sessionCarry struct {
 	Last int64 `json:"last"`
 }
 
-// carrySessions bounds how many sessions the carry keeps, and
-// carrySessionMS how long it keeps one that has had no record. A session
-// left open longer than a day without a record starts again from what the
-// window holds.
-const (
-	carrySessions  = 64
-	carrySessionMS = 24 * 3600 * 1000
-)
+// carrySessions bounds how many sessions the carry keeps. A session that
+// hasn't ended stays however long it has had no record, until
+// carrySessions others have had one since: a rule reads its start, and
+// its last output and stop, at whatever prompt comes next (SM 2.2), and T3
+// Code's server keeps a thread's Claude Code running between its runs with
+// no new session.start.
+const carrySessions = 64
 
 // recordCmp orders records as pkg/score does: by t, then seq, then event
 // id.
@@ -622,12 +628,13 @@ func (s *sessionCarry) events() []*event.Event {
 	return out
 }
 
-// prune drops the sessions no later record can need: one whose end is its
-// latest record, one with no record for carrySessionMS before from, and
-// past carrySessions, the ones whose latest record is oldest.
-func (c *carry) prune(from int64) {
+// prune drops the sessions the carry doesn't keep: one whose end is its
+// latest record, which no later record can need, and, past carrySessions,
+// the ones whose latest record is oldest. A session that hasn't ended
+// stays however long it has had no record (carrySessions).
+func (c *carry) prune() {
 	for k, s := range c.Sessions {
-		if (s.End != nil && s.End.T >= s.Last) || s.Last < from-carrySessionMS {
+		if s.End != nil && s.End.T >= s.Last {
 			delete(c.Sessions, k)
 		}
 	}

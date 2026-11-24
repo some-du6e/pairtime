@@ -188,7 +188,6 @@ func TestCarry(t *testing.T) {
 	tests := []struct {
 		name  string
 		fold  []event.Event
-		from  int64
 		check func(t *testing.T, c carry)
 	}{
 		{
@@ -274,12 +273,36 @@ func TestCarry(t *testing.T) {
 			},
 		},
 		{
-			name: "a session with no record for a day before the window is dropped",
-			fold: []event.Event{ev(100, 1, "s_1", &event.SessionStart{})},
-			from: 100 + carrySessionMS + 1,
+			name: "a session that hasn't ended keeps its start, last prompt, output and stop after a month with no record, each dated carryGraceMS before the window, and the question its output and stop asked",
+			fold: []event.Event{
+				ev(100, 1, "s_1", &event.SessionStart{}),
+				ev(200, 2, "s_1", &event.PromptSubmit{}),
+				ev(300, 3, "s_1", &event.AgentOutput{AsksQuestion: true}),
+				ev(400, 4, "s_1", &event.AgentStop{StopReason: event.StopQuestion}),
+			},
 			check: func(t *testing.T, c carry) {
-				if len(c.Sessions) != 0 {
-					t.Errorf("carries %d sessions", len(c.Sessions))
+				// The window a month on, which prunes the carry as it slides.
+				from := int64(100 + 30*dayMS)
+				w := &window{carry: c, gaps: testGaps, ttl: testGaps.native}
+				w.slide(from)
+				s := w.carry.Sessions["s_1"]
+				if s == nil {
+					t.Fatal("the session isn't carried a month on")
+				}
+				got := map[uint64]int64{}
+				for _, e := range w.records() {
+					got[e.Seq] = e.T
+				}
+				grace := from - carryGraceMS
+				if want := map[uint64]int64{1: grace, 2: grace, 3: grace, 4: grace}; !maps.Equal(got, want) {
+					t.Errorf("a Step a month on gets the records numbered and dated %v, want %v", got, want)
+				}
+				var asks []uint64
+				for _, e := range s.Asks {
+					asks = append(asks, e.Seq)
+				}
+				if want := []uint64{3, 4}; !slices.Equal(asks, want) {
+					t.Errorf("the session's question state holds the outputs and stops numbered %v, want %v", asks, want)
 				}
 			},
 		},
@@ -309,7 +332,7 @@ func TestCarry(t *testing.T) {
 			for _, e := range tt.fold {
 				c.fold(e, testGaps, testGaps.native)
 			}
-			c.prune(tt.from)
+			c.prune()
 			for _, s := range c.Sessions {
 				s.keepAsks(nil) // as a window with no record of the session does
 			}

@@ -60,9 +60,20 @@
 // the rules that aren't bounded. What it misses is a browser run longer than
 // Lookback, whose lookup credit (SM 2.5) rests on a bracket before the
 // run; a prompted turn that runs longer than holdMaxMS and whose origin
-// rests on input it carries no record of; and a turn a stop hook continued
+// rests on input it carries no record of; a turn a stop hook continued
 // without a prompt that runs longer than holdMaxMS, which the carry keeps
-// by its latest output and stop alone.
+// by its latest output and stop alone; and, past carrySessions open
+// sessions, the start and last records of the one heard from longest ago,
+// which the carry drops.
+//
+// The carry keeps a session that hasn't ended however long it has had no
+// record, since its next prompt reads its start, and its last output and
+// stop, whenever it comes (SM 2.2). Its count is the bound: on a busy T3
+// Code server, whose threads' sessions never end, carrySessions holds
+// about 31 hours of them, as relayed/agent-day starts 49 in a day, and a
+// person's thread idle longer than that behind busier agent threads loses
+// its start. WP-SC5 sets the bound, which pkg/score then applies live and
+// in a re-score alike (DESIGN 6.5).
 //
 // # Its place
 //
@@ -463,11 +474,11 @@ func (l *Loop) open() error {
 	c.Device = chain.DeviceID
 	if c.Batch > 0 && c.Carry.V < carryVersion {
 		// A place an older agent saved: its carry lacks Stamped and
-		// RestartAt, Lock, or its sessions' question state, so they are
-		// folded again from the ledger's records before the window.
-		// FinalBefore and the window stay where they are, so no final
-		// minute is scored again.
-		l.log.Info("the scorer's place in state.json is an older agent's, so it reads the ledger again for the stamped record, the restart, the lock and the questions its carry lacks", "batch", c.Batch)
+		// RestartAt, Lock, its sessions' question state, or the sessions it
+		// dropped after a day with no record, so they are folded again from
+		// the ledger's records before the window. FinalBefore and the window
+		// stay where they are, so no final minute is scored again.
+		l.log.Info("the scorer's place in state.json is an older agent's, so it reads the ledger again for the stamped record, the restart, the lock, the questions and the sessions its carry lacks", "batch", c.Batch)
 		rebuilt, err := l.rebuildCarry(c)
 		if err != nil {
 			return fmt.Errorf("rebuilding the scorer's carry from the ledger: %w", err)
@@ -557,12 +568,28 @@ func (l *Loop) open() error {
 // from the session's records before the window (sessionCarry.question)
 // and kept for the session's records in the window and in the carry, as
 // the window keeps it (window.keepAsks).
+//
+// An agent before WP-ADE1's part 4 (V 3 or older) dropped a session that
+// had had no record for a day before the window (#265). Each session the
+// saved carry lacks, or holds with no start, as it holds one whose next
+// record came after the drop, is folded again from its records before the
+// window into a carry of its own, each batch's in record order, as the
+// window folds them. That carry is pruned after each batch, as the
+// window's is, so it never holds more than carrySessions sessions and one
+// batch's new ones. A session the saved carry lacks then takes what that
+// carry kept of it, one the saved carry holds with no start takes its
+// start, and the result is pruned again. A session the saved carry holds
+// whole stays as saved.
 func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	out := c.Carry
 	out.Lock = nil
 	for _, s := range out.Sessions {
 		s.Asks, s.FirstNative = nil, nil
 	}
+	ttl := l.opts.Params.Int(params.BUCKET_TTL_S) * 1000
+	// dropped holds the sessions the older agent's carry dropped, or holds
+	// with no start, as a carryVersion agent's carry would have kept them.
+	var dropped carry
 	readers := make(map[string][]uint64)
 	var stamped int64
 	var marks []mark
@@ -574,6 +601,7 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 		if !f.next(b) {
 			return nil
 		}
+		var again []event.Event // the batch's records that dropped folds
 		for _, rec := range b.Records {
 			ev, ok, err := eventOf(rec, c.Device)
 			if err != nil || !ok {
@@ -581,7 +609,7 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 			}
 			if ev.T >= c.From {
 				// A record of the window, whose class can read the asks.
-				if out.Sessions[ev.SessionKey] != nil {
+				if isSession(ev.SessionKey) {
 					readers[ev.SessionKey] = append(readers[ev.SessionKey], ev.Seq)
 				}
 				continue
@@ -589,8 +617,12 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 			if p, ok := ev.Data.(*event.OSPower); ok && locks(p) {
 				out.Lock = latest(out.Lock, ev)
 			}
-			if sc := out.Sessions[ev.SessionKey]; sc != nil {
+			sc := out.Sessions[ev.SessionKey]
+			if sc != nil {
 				sc.question(ev)
+			}
+			if isSession(ev.SessionKey) && (sc == nil || sc.Start == nil) {
+				again = append(again, ev)
 			}
 			s, st := sampler(&ev), stamps(&ev)
 			if st {
@@ -600,6 +632,11 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 				marks = append(marks, mark{t: ev.T, seq: ev.Seq, sampler: s})
 			}
 		}
+		slices.SortFunc(again, func(a, b event.Event) int { return recordCmp(&a, &b) })
+		for _, e := range again {
+			dropped.fold(e, l.gaps, ttl)
+		}
+		dropped.prune()
 		return nil
 	}, func(first, _ uint64, err error) {
 		if first <= c.Batch {
@@ -609,11 +646,25 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	if err != nil && !errors.Is(err, errEnough) {
 		return carry{}, err
 	}
+	for k, s := range dropped.Sessions {
+		switch sc := out.Sessions[k]; {
+		case sc == nil:
+			if out.Sessions == nil {
+				// Made only when a session comes back, so a carry with none
+				// stays as saved.
+				out.Sessions = make(map[string]*sessionCarry)
+			}
+			out.Sessions[k] = s
+		case sc.Start == nil:
+			sc.Start = s.Start
+		}
+	}
+	out.prune()
 	for k, s := range out.Sessions {
 		s.keepAsks(readers[k])
 	}
 	out.Stamped = max(c.Carry.Stamped, stamped)
-	out.RestartAt = max(c.Carry.RestartAt, restartAt(marks, l.opts.Params.Int(params.BUCKET_TTL_S)*1000))
+	out.RestartAt = max(c.Carry.RestartAt, restartAt(marks, ttl))
 	out.V = carryVersion
 	return out, nil
 }

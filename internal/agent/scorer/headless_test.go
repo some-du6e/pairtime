@@ -917,6 +917,73 @@ func TestOlderPlaceQuestions(t *testing.T) {
 	}
 }
 
+// TestOlderPlaceSessions checks open's rebuild of the sessions an older
+// agent's carry dropped after a day with no record (#265), on a thread of
+// T3 Code's whose first turn the window has carried for 31 hours when the
+// agent writes the os.focus it writes as it starts (threadAfterADay). A
+// place an agent before WP-ADE1's part 4 saved then has no session for the
+// thread, or holds it with no start, as after a record of it came once the
+// carry had dropped it. Rebuilt from the ledger, the carry must be the one
+// the window kept, the session's question state included, and the thread's
+// next message must be relayed as one Step over every record gives it.
+func TestOlderPlaceSessions(t *testing.T) {
+	tests := []struct {
+		name string
+		v    int
+		// field is the session's field the older carry lacks, "" for the
+		// whole session.
+		field string
+	}{
+		{"a place v0.1.0-alpha.7 saved, at v 1, whose carry dropped the thread's session, gets the session back from the ledger, its question state included",
+			1, ""},
+		{"a place an agent between E-prompt-class-asked and WP-ADE1's part 4 saved, at v 3, whose carry dropped the thread's session, gets the session back from the ledger",
+			3, ""},
+		{"a place at v 3 whose carry holds the thread's session with no start, as after a record of it came once the carry had dropped it, gets the start back from the ledger",
+			3, "start"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			day := threadDay(t)
+			quiet, message := day.recs[:day.snap+1], day.recs[day.snap+1:]
+			r := newRig(t, score.Device{})
+			r.write(quiet, nil)
+			kept := r.savedCursor().Carry
+			if s := kept.Sessions[day.sess]; s == nil || s.Start == nil || len(s.Asks) == 0 {
+				t.Fatalf("the window's carry doesn't keep the thread's session with its start and question state, which the case needs:\n%s",
+					carryJSON(t, kept))
+			}
+			olderPlace(t, r, tc.v, false)
+			forgetSession(t, r, day.sess, tc.field)
+			r.rescore()
+			rebuilt := r.savedCursor().Carry
+			if s := rebuilt.Sessions[day.sess]; s == nil || s.Start == nil {
+				t.Errorf("the rebuilt carry has no start for the thread's session:\n%s", carryJSON(t, rebuilt))
+			}
+			if !reflect.DeepEqual(rebuilt, kept) {
+				t.Errorf("the rebuilt carry is\n%s\nand the window kept\n%s", carryJSON(t, rebuilt), carryJSON(t, kept))
+			}
+			r.write(message, nil)
+			chain, err := ledger.ReadChain(r.path("ledger"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			all, _ := direct(r.table, r.dev, chain.DeviceID, day.recs)
+			want := map[int64]store.Bucket{}
+			for m, b := range all {
+				if m >= day.from && m < day.to {
+					want[m] = b
+				}
+			}
+			got := r.stored(day.from, day.to)
+			if lead := creditedS(got, event.ReasonPrompt); lead != 300 {
+				t.Errorf("the loop credits the message a lead of %v s, want the 300 s one Step gives", lead)
+			}
+			compare(t, got, want)
+		})
+	}
+}
+
 // TestSamplelessPowerLoop checks the loop against one Step over an evening
 // whose sampler loses its idle source before a suspend, so the suspend and
 // the morning's resume come with no sample, as the agent writes them when
@@ -1089,9 +1156,78 @@ func carryJSON(t *testing.T, c carry) string {
 // fold keeps restart_at, and its rebuild of an older place, which folded
 // it only from the earlier of Power and Presence, finds none on a machine
 // with no Presence; for v 2, one between D-sampleless-power and
-// E-prompt-class-asked, a carry with lock. No older place's sessions have
-// a question state.
+// E-prompt-class-asked, a carry with lock; for v 3, one between
+// E-prompt-class-asked and WP-ADE1's part 4, a carry with its sessions'
+// question state. No place before v 3 has a question state for its
+// sessions. A carry at v 3 or older dropped a session after a day with no
+// record, which forgetSession takes out.
 func olderPlace(t *testing.T, r *rig, v int, restart bool) {
+	t.Helper()
+	rewriteCarry(t, r, func(carry map[string]json.RawMessage) {
+		if _, ok := carry["stamped"]; !ok {
+			t.Fatal("the saved carry holds no stamped record to take out, so the case doesn't load what it means to")
+		}
+		switch v {
+		case 0:
+			delete(carry, "stamped")
+			delete(carry, "restart_at")
+			delete(carry, "lock")
+			delete(carry, "v")
+		case 1:
+			carry["v"] = json.RawMessage("1")
+			delete(carry, "lock")
+			if !restart {
+				delete(carry, "restart_at")
+			}
+		case 2:
+			carry["v"] = json.RawMessage("2")
+		case 3:
+			carry["v"] = json.RawMessage("3")
+			return
+		default:
+			t.Fatalf("no older carry version %d", v)
+		}
+		editSessions(t, carry, func(sessions map[string]map[string]json.RawMessage) {
+			for _, s := range sessions {
+				for _, k := range []string{"asks", "first_native"} {
+					delete(s, k)
+				}
+			}
+		})
+	})
+}
+
+// forgetSession rewrites the saved carry as one before WP-ADE1's part 4
+// left it after session key had had no record for a day before the
+// window: without the session, when field is "", or with the session but
+// without that field of it, as "start" for the carry an older agent made
+// of the session's records after it had dropped the session.
+func forgetSession(t *testing.T, r *rig, key, field string) {
+	t.Helper()
+	rewriteCarry(t, r, func(carry map[string]json.RawMessage) {
+		if _, ok := carry["sessions"]; !ok {
+			t.Fatal("the saved carry holds no session to take out, so the case doesn't load what it means to")
+		}
+		editSessions(t, carry, func(sessions map[string]map[string]json.RawMessage) {
+			s, ok := sessions[key]
+			switch {
+			case !ok:
+				t.Fatalf("the saved carry holds no session %s to take out, so the case doesn't load what it means to", key)
+			case field == "":
+				delete(sessions, key)
+			default:
+				if _, ok := s[field]; !ok {
+					t.Fatalf("the saved carry's session %s has no %s to take out", key, field)
+				}
+				delete(s, field)
+			}
+		})
+	})
+}
+
+// rewriteCarry rewrites the scorer's place in the rig's state.json with
+// edit's changes to its carry, as JSON.
+func rewriteCarry(t *testing.T, r *rig, edit func(carry map[string]json.RawMessage)) {
 	t.Helper()
 	data, err := os.ReadFile(r.path("state.json"))
 	if err != nil {
@@ -1107,40 +1243,7 @@ func olderPlace(t *testing.T, r *rig, v int, restart bool) {
 	if err := json.Unmarshal(cur["carry"], &carry); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := carry["stamped"]; !ok {
-		t.Fatal("the saved carry holds no stamped record to take out, so the case doesn't load what it means to")
-	}
-	switch v {
-	case 0:
-		delete(carry, "stamped")
-		delete(carry, "restart_at")
-		delete(carry, "lock")
-		delete(carry, "v")
-	case 1:
-		carry["v"] = json.RawMessage("1")
-		delete(carry, "lock")
-		if !restart {
-			delete(carry, "restart_at")
-		}
-	case 2:
-		carry["v"] = json.RawMessage("2")
-	default:
-		t.Fatalf("no older carry version %d", v)
-	}
-	if raw, ok := carry["sessions"]; ok {
-		var sessions map[string]map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &sessions); err != nil {
-			t.Fatal(err)
-		}
-		for _, s := range sessions {
-			for _, k := range []string{"asks", "first_native"} {
-				delete(s, k)
-			}
-		}
-		if carry["sessions"], err = json.Marshal(sessions); err != nil {
-			t.Fatal(err)
-		}
-	}
+	edit(carry)
 	var raw []byte
 	if raw, err = json.Marshal(carry); err != nil {
 		t.Fatal(err)
@@ -1156,6 +1259,26 @@ func olderPlace(t *testing.T, r *rig, v int, restart bool) {
 	if err := os.WriteFile(r.path("state.json"), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// editSessions applies edit to the sessions of carry, a saved carry as
+// JSON, when it has any.
+func editSessions(t *testing.T, carry map[string]json.RawMessage, edit func(sessions map[string]map[string]json.RawMessage)) {
+	t.Helper()
+	raw, ok := carry["sessions"]
+	if !ok {
+		return
+	}
+	var sessions map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &sessions); err != nil {
+		t.Fatal(err)
+	}
+	edit(sessions)
+	out, err := json.Marshal(sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	carry["sessions"] = out
 }
 
 // savedCursor returns the place state.json holds.
