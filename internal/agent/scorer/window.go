@@ -256,19 +256,23 @@ type carry struct {
 	RestartAt int64 `json:"restart_at,omitempty"`
 	// V is the carry's format, carryVersion today: 0 in a place an agent
 	// before WP-HL1 saved, whose carry has no Stamped, RestartAt or Lock,
-	// and 1 in one an agent between WP-HL1's first part and
-	// D-sampleless-power saved, whose carry has no Lock
-	// (Loop.rebuildCarry).
+	// 1 in one an agent between WP-HL1's first part and
+	// D-sampleless-power saved, whose carry has no Lock, and 2 in one an
+	// agent before E-prompt-class-asked saved, whose sessions have no
+	// question state (Loop.rebuildCarry).
 	V int `json:"v,omitempty"`
 }
 
 // carryVersion is the carry's format: since WP-HL1 it keeps Stamped and
-// RestartAt, and since D-sampleless-power Lock. Loaded from a place an
-// older agent saved, a carry without them reads as if no record the agent
-// stamps itself, no restart and no lock came before the window, which
-// keeps a sample whose reach a folded record ended, or drops a lock still
-// open, so open rebuilds them from the ledger first (Loop.rebuildCarry).
-const carryVersion = 2
+// RestartAt, since D-sampleless-power Lock, and since
+// E-prompt-class-asked each session's question state (AskOutput). Loaded
+// from a place an older agent saved, a carry without them reads as if no
+// record the agent stamps itself, no restart, no lock and no question came
+// before the window, which keeps a sample whose reach a folded record
+// ended, drops a lock still open, or classes a prompt after a folded
+// question otherwise than one Step over every record, so open rebuilds
+// them from the ledger first (Loop.rebuildCarry).
+const carryVersion = 3
 
 // mark is a record's place in record order, for folding RestartAt again
 // (restartAt): its t and seq, which one device's ledger never repeats, and
@@ -321,6 +325,19 @@ type sessionCarry struct {
 	Cut     bool         `json:"cut,omitempty"`
 	Stopped bool         `json:"stopped,omitempty"`
 	Native  bool         `json:"native,omitempty"`
+	// AskOutput and AskStop are its agent.output and agent.stop numbered
+	// last, of every path, and KeptOutput and KeptStop the ones numbered
+	// last of the paths that aren't side doors: what the answer class of a
+	// prompt in the window reads of the records before it, in seq order,
+	// not by t. FirstNative is its record numbered first that came
+	// through a hook or a log reader, after which a side door's question
+	// counts for no prompt (SM 2.2; ledger-v1 10.7). carry.records dates
+	// them before anything they could start reaches the window.
+	AskOutput   *event.Event `json:"ask_output,omitempty"`
+	AskStop     *event.Event `json:"ask_stop,omitempty"`
+	KeptOutput  *event.Event `json:"kept_output,omitempty"`
+	KeptStop    *event.Event `json:"kept_stop,omitempty"`
+	FirstNative *event.Event `json:"first_native,omitempty"`
 	// Last is the t of the session's latest record folded in.
 	Last int64 `json:"last"`
 }
@@ -457,6 +474,64 @@ func (c *carry) fold(ev event.Event, g runGaps, ttl int64) {
 	case *event.SessionEnd:
 		s.End = latest(s.End, ev)
 	}
+	s.question(ev)
+}
+
+// question folds ev, a record of the session, into what the answer class
+// reads (sessionCarry.AskOutput), as pkg/score's askedBefore does: by seq,
+// whatever order the records slide out in.
+func (s *sessionCarry) question(ev event.Event) {
+	if !harnessKind(&ev) {
+		return
+	}
+	side := sideDoorVia(ev.Via)
+	switch ev.Data.(type) {
+	case *event.AgentOutput:
+		s.AskOutput = bySeq(s.AskOutput, ev, true)
+		if !side {
+			s.KeptOutput = bySeq(s.KeptOutput, ev, true)
+		}
+	case *event.AgentStop:
+		s.AskStop = bySeq(s.AskStop, ev, true)
+		if !side {
+			s.KeptStop = bySeq(s.KeptStop, ev, true)
+		}
+	}
+	if ev.Via == event.ViaHook || ev.Via == event.ViaLog {
+		s.FirstNative = bySeq(s.FirstNative, ev, false)
+	}
+}
+
+// bySeq returns whichever of cur and ev is numbered later, when last is
+// set, or first.
+func bySeq(cur *event.Event, ev event.Event, last bool) *event.Event {
+	if cur != nil && (cur.Seq == ev.Seq || (cur.Seq > ev.Seq) == last) {
+		return cur
+	}
+	return &ev
+}
+
+// harnessKind reports whether e belongs to a harness session, as
+// pkg/score's harnessRecord reads it: a session.*, prompt.submit, agent.*
+// or cli.track record in a session.
+func harnessKind(e *event.Event) bool {
+	switch e.Data.(type) {
+	case *event.SessionStart, *event.SessionEnd, *event.PromptSubmit, *event.AgentOutput, *event.AgentTool,
+		*event.AgentPermission, *event.AgentInterrupt, *event.AgentQueue, *event.AgentStop, *event.AgentSubagent,
+		*event.CLITrack:
+		return e.SessionKey != event.NoSession
+	}
+	return false
+}
+
+// sideDoorVia reports whether v is one of the paths any process on the
+// machine can post to (DESIGN 5.2), as pkg/score's sideDoor reads them.
+func sideDoorVia(v event.Via) bool {
+	switch v {
+	case event.ViaTrack, event.ViaPlugin, event.ViaBridge, event.ViaBridgeUnverified:
+		return true
+	}
+	return false
 }
 
 // ran folds ev, an agent record of the session, into the run of the turn
@@ -600,10 +675,37 @@ func (c *carry) records(out []event.Event, from int64, g runGaps, stamped, ttl i
 				date = func(t int64) int64 { return min(max(t, low), last) }
 			}
 		}
-		for _, e := range s.events() {
+		events := s.events()
+		for _, e := range events {
 			r := *e
 			r.T = date(r.T)
 			out = append(out, r)
+		}
+		// The answer class reads these by seq alone, so they are all dated
+		// further back than any run's gap and than BUCKET_TTL_S, which
+		// g.native is: a turn one of them starts ends before the window, and
+		// what one puts in a bucket has expired by then. They keep their
+		// place among the others by seq.
+		over := from - max(g.native, g.other) - 1
+		for _, e := range s.questions() {
+			if slices.ContainsFunc(events, func(o *event.Event) bool { return o.EventID == e.EventID }) {
+				continue
+			}
+			r := *e
+			r.T = over
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// questions returns the records the answer class reads that the carry
+// keeps of the session (sessionCarry.AskOutput), each once.
+func (s *sessionCarry) questions() []*event.Event {
+	var out []*event.Event
+	for _, e := range []*event.Event{s.AskOutput, s.AskStop, s.KeptOutput, s.KeptStop, s.FirstNative} {
+		if e != nil && !slices.ContainsFunc(out, func(o *event.Event) bool { return o.EventID == e.EventID }) {
+			out = append(out, e)
 		}
 	}
 	return out

@@ -22,7 +22,10 @@
 //     rebuilt from idle samples, SM 2.1's present values and its hard
 //     breaks (lock, suspend, a gap between samples over SLEEP_GAP_S);
 //   - turns, with SM 2.2's origin rules 1 to 8, rules 1 to 3 read from
-//     every hook and log copy of a prompt, and prompt classes;
+//     every hook and log copy of a prompt, and prompt classes, whose
+//     answer reads the session's records before the prompt in seq
+//     order, with ledger-v1 10.7's side-door test, so a record written
+//     later never changes one;
 //   - anchors, SM 2.3's human acts with their think and typing parts,
 //     trails, evidence levels and labels (DESIGN 6.4), including the side
 //     doors of DESIGN 5.2 and 6.2 D2;
@@ -231,10 +234,11 @@
 //   - Rule 6's focus test at the stamp takes the os.focus record at or
 //     before it, since the stamp has no record position.
 //   - A relayed prompt's class is SM 2.2's, over the app's text: answer
-//     when the prompt answers a question or the session's last output asked
-//     one, low_effort by the record's go-ahead test or under
-//     SUBSTANTIVE_CHARS typed characters, else substantive. The record
-//     carries no error signature, so it is never error_paste.
+//     when the prompt answers a question or the session's last output or
+//     stop before the prompt, in seq order, asked one, low_effort by the
+//     record's go-ahead test or under SUBSTANTIVE_CHARS typed characters,
+//     else substantive. The record carries no error signature, so it is
+//     never error_paste.
 //   - A slot is a never-sampling device's when some record came by a path
 //     other than a log reader's, and no os.presence or os.power, the
 //     presence sampler's records, dated before the slot ends keeps the

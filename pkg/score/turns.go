@@ -108,10 +108,19 @@ type session struct {
 	bridged bool
 	// nativePrompts are the times of its prompts that came that way.
 	nativePrompts []int64
-	// outputs and stops are its agent.output and agent.stop records, for
-	// the answer class (SM 2.2).
+	// outputs and stops are its agent.output and agent.stop records that
+	// count where a hook or a log reader covers the session, in record
+	// order, which a relayed reading's spans read (relaycredit.go).
 	outputs []posRec[*event.AgentOutput]
 	stops   []posRec[*event.AgentStop]
+	// askOutputs and askStops are its agent.output and agent.stop records
+	// for the answer class (SM 2.2), in seq order, whatever path they came
+	// by, and nativeSeq is the lowest seq of its session.*, prompt.submit
+	// and agent.* records that came through a hook or a log reader, 0 for
+	// none. The class reads them as the records arrive (askedBefore;
+	// ledger-v1 10.7), so they stay outside the native-session skip.
+	askOutputs, askStops askLog
+	nativeSeq            uint64
 	// agent holds the indexes of its agent.output, agent.tool and agent.stop
 	// records, in record order.
 	agent []int
@@ -142,16 +151,56 @@ func (s *session) startBefore(pos int) *event.SessionStart {
 	return s.starts[i-1].d
 }
 
-// askedBefore reports whether the agent's last output before the record at
-// pos asked a question, or its last turn stopped on one (SM 2.2, the
-// answer class).
-func (s *session) askedBefore(pos int) bool {
-	i := sort.Search(len(s.outputs), func(i int) bool { return s.outputs[i].pos >= pos })
-	if i > 0 && s.outputs[i-1].d.AsksQuestion {
-		return true
+// askedBefore reports whether the session's last agent output numbered
+// below seq asked a question, or its last agent.stop below seq stopped on
+// one (SM 2.2, the answer class), for a prompt whose record came by via.
+// Only the outputs and stops that didn't come through a side door count
+// when via is a hook or a log reader, or when a record of the session
+// numbered below seq came that way, and all of them otherwise. A record
+// numbered later never changes the class, whatever its t (ledger-v1 10.7;
+// docs/errata/2026-11-20-prompt-class-asked.md).
+func (s *session) askedBefore(seq uint64, via event.Via) bool {
+	kept := nativeVia(via) || (s.nativeSeq != 0 && s.nativeSeq < seq)
+	return s.askOutputs.asked(seq, kept) || s.askStops.asked(seq, kept)
+}
+
+// askLog is a session's agent.output or agent.stop records as the answer
+// class reads them, each by its seq and whether it asked a question: all
+// of them, and kept, those that didn't come through a side door. Both are
+// in seq order once buildSessions has sorted them.
+type askLog struct{ all, kept []askRec }
+
+// askRec is one record of an askLog.
+type askRec struct {
+	seq  uint64
+	asks bool
+}
+
+// add takes a record numbered seq, which came through a side door when
+// side is set, and asked a question when asks is.
+func (l *askLog) add(seq uint64, side, asks bool) {
+	l.all = append(l.all, askRec{seq, asks})
+	if !side {
+		l.kept = append(l.kept, askRec{seq, asks})
 	}
-	j := sort.Search(len(s.stops), func(i int) bool { return s.stops[i].pos >= pos })
-	return j > 0 && s.stops[j-1].d.StopReason == event.StopQuestion
+}
+
+// sort puts both lists in seq order.
+func (l *askLog) sort() {
+	for _, recs := range [][]askRec{l.all, l.kept} {
+		slices.SortStableFunc(recs, func(a, b askRec) int { return cmp.Compare(a.seq, b.seq) })
+	}
+}
+
+// asked reports whether the last record numbered below seq asked a
+// question: of the kept ones when kept is set, of all of them otherwise.
+func (l *askLog) asked(seq uint64, kept bool) bool {
+	recs := l.all
+	if kept {
+		recs = l.kept
+	}
+	i := sort.Search(len(recs), func(i int) bool { return recs[i].seq >= seq })
+	return i > 0 && recs[i-1].asks
 }
 
 // agentAfter returns the index of the session's first agent record after
@@ -262,11 +311,12 @@ func harnessRecord(e event.Event) string {
 // passes. The first finds the sessions a hook or log reader covers. In
 // those, the second leaves out what a side door says about the session,
 // which is a cross-check there (DESIGN 5.2): a side door's session.start
-// would decide SM 2.2 rules 4 and 5 and whether an IDE hosts the session,
-// and its outputs and stops whether the next prompt answers a question. A
-// side-door record can come before the first hook record, hence the first
-// pass. The session's harness and project come from its first record that
-// counts.
+// would decide SM 2.2 rules 4 and 5 and whether an IDE hosts the session.
+// A side-door record can come before the first hook record, hence the
+// first pass. The session's harness and project come from its first
+// record that counts. The answer class reads the session's outputs and
+// stops as the records arrive, in seq order, outside that skip
+// (askedBefore; ledger-v1 10.7).
 func (d *deriver) buildSessions() {
 	d.sessions = map[string]*session{}
 	for _, e := range d.recs {
@@ -282,6 +332,19 @@ func (d *deriver) buildSessions() {
 		if nativeVia(e.Via) && !s.native {
 			s.native, s.firstNative = true, e.T
 		}
+		if nativeVia(e.Via) && (s.nativeSeq == 0 || e.Seq < s.nativeSeq) {
+			s.nativeSeq = e.Seq
+		}
+		switch p := e.Data.(type) {
+		case *event.AgentOutput:
+			s.askOutputs.add(e.Seq, sideDoor(e.Via), p.AsksQuestion)
+		case *event.AgentStop:
+			s.askStops.add(e.Seq, sideDoor(e.Via), p.StopReason == event.StopQuestion)
+		}
+	}
+	for _, s := range d.sessions {
+		s.askOutputs.sort()
+		s.askStops.sort()
 	}
 	seen := map[*session]bool{}
 	for i, e := range d.recs {
@@ -637,7 +700,7 @@ func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.Prom
 	}
 	if (w == nil || w.d.Client != event.RelayClientMobile) &&
 		d.pres.inputAround(at, d.r.keysPre, d.r.releaseGrace) && d.hostedBy(focus, tb.sess, tb.primary) {
-		class := d.classify(tb.sess, tb.primary, p)
+		class := d.classify(tb.sess, d.recs[tb.primary], p)
 		typed := count(p.TypedLenEst)
 		think, typing := d.leadParts(class, e.Via, typed)
 		active := d.pres.inputSlots(at-think-typing, at) * event.SlotMS / 1000
@@ -710,8 +773,8 @@ func (d *deriver) hostedBy(f *focusRec, s *session, pos int) bool {
 // is local, so the class reads what the agent derived from it when it
 // recorded the prompt: low_effort, from LowEffort below, and error_sig.
 // PromptClass (class.go) gives the same class from the same rule.
-func (d *deriver) classify(s *session, pos int, p *event.PromptSubmit) event.PromptClass {
-	return promptClass(p, s.askedBefore(pos), d.r.substantive, d.r.errorPasteMax)
+func (d *deriver) classify(s *session, e event.Event, p *event.PromptSubmit) event.PromptClass {
+	return promptClass(p, s.askedBefore(e.Seq, e.Via), d.r.substantive, d.r.errorPasteMax)
 }
 
 // promptClass is SM 2.2's class of prompt p, where asked says whether the

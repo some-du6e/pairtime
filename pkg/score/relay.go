@@ -187,7 +187,8 @@ func witnesses(r *relayRec, st *event.SessionStart) bool {
 // error paste.
 func (d *deriver) relayClass(tb *turnBuild, r *relayRec, p *event.PromptSubmit, typed int64) event.PromptClass {
 	app := &event.PromptSubmit{TypedLenEst: int(typed), LowEffort: r.d.LowEffort, AnswersQuestion: p.AnswersQuestion}
-	return promptClass(app, tb.sess.askedBefore(tb.primary), d.r.substantive, d.r.errorPasteMax)
+	e := d.recs[tb.primary]
+	return promptClass(app, tb.sess.askedBefore(e.Seq, e.Via), d.r.substantive, d.r.errorPasteMax)
 }
 
 // prevMessage returns the stamp of the last relay.message of declared none

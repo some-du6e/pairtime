@@ -3,6 +3,8 @@
 package score
 
 import (
+	"bytes"
+	"cmp"
 	"fmt"
 	"reflect"
 	"slices"
@@ -81,6 +83,32 @@ func TestPromptClass(t *testing.T) {
 				b.harness(at(20), event.ViaLog, "s_2", "p_1", &event.AgentOutput{TurnKey: "t_9", Words: 30, IsFinal: true})
 			},
 			class: event.ClassAnswer},
+		{name: "class low_effort: a plugin's question before a hook prompt that is its session's first hook record leaves a go-ahead low_effort, in a session with no hook session.start",
+			edit: func(b *tl, p *event.PromptSubmit) {
+				b.evs[1].Via = event.ViaPlugin // terminalSession's session.start
+				p.LenChars, p.TypedLenEst, p.LowEffort = 2, 2, true
+				b.harness(at(20), event.ViaPlugin, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
+					AsksQuestion: true})
+			},
+			class: event.ClassLowEffort},
+		{name: "class answer: a plugin's question makes a plugin prompt an answer when no hook or log record came before it, though one comes after",
+			edit: func(b *tl, p *event.PromptSubmit) {
+				b.evs[1].Via = event.ViaPlugin // terminalSession's session.start
+				b.evs[2].Via = event.ViaPlugin // the prompt
+				p.LenChars, p.TypedLenEst, p.LowEffort = 2, 2, true
+				b.harness(at(20), event.ViaPlugin, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
+					AsksQuestion: true})
+				b.harness(at(90), event.ViaHook, "s_1", "p_1", &event.SessionStart{StartKind: event.StartResume,
+					Entrypoint: event.EntrypointCLI, ParentClass: event.ParentTerminalApp, HasTTY: true})
+			},
+			class: event.ClassAnswer},
+		{name: "class substantive: an asking output numbered after the prompt but dated before it doesn't make the prompt an answer",
+			edit: func(b *tl, p *event.PromptSubmit) {
+				o := b.harness(at(50), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
+					AsksQuestion: true})
+				b.writtenAt(o, at(61))
+			},
+			class: event.ClassSubstantive},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -92,11 +120,15 @@ func TestPromptClass(t *testing.T) {
 			if tu.PromptClass != c.class {
 				t.Fatalf("the scorer gives class %q, and the case expects %q", tu.PromptClass, c.class)
 			}
+			// The agent observes the records in the order it writes them,
+			// by seq, and classes the prompt by its own record's via.
+			recs := b.records()
+			slices.SortFunc(recs, func(x, y event.Event) int { return cmp.Compare(x.Seq, y.Seq) })
 			var q Questions
-			var prompt *event.PromptSubmit
-			for _, r := range b.records() {
+			var prompt *event.Event
+			for i, r := range recs {
 				if r.EventID == e.EventID {
-					prompt = r.Data.(*event.PromptSubmit)
+					prompt = &recs[i]
 					break
 				}
 				q.Observe(r)
@@ -104,11 +136,40 @@ func TestPromptClass(t *testing.T) {
 			if prompt == nil {
 				t.Fatal("the prompt isn't among the records")
 			}
-			if got := PromptClass(testTable(t), prompt, q.Asked(e.SessionKey)); got != tu.PromptClass {
+			if got := PromptClass(testTable(t), prompt.Data.(*event.PromptSubmit), q.Asked(prompt.SessionKey, prompt.Via)); got != tu.PromptClass {
 				t.Errorf("PromptClass gives %q, and the scorer %q", got, tu.PromptClass)
 			}
 		})
 	}
+	t.Run("class answer: a plugin prompt after a plugin's question is an answer whether its session's first hook record comes in the prompt's Step or a later one", func(t *testing.T) {
+		// A plugin prompt after a plugin's question, in a session whose
+		// first hook record comes 950 s later, in a later Step.
+		b := newTL(false)
+		b.focus(at(0), event.AppTerminal, "p_1", "s_1")
+		b.press(every(atMS(30_500), atMS(59_500), 1000)...)
+		b.harness(at(20), event.ViaPlugin, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
+			AsksQuestion: true})
+		e := b.harness(at(60), event.ViaPlugin, "s_1", "p_1", &event.PromptSubmit{TurnKey: "t_p", LenChars: 2, TypedLenEst: 2,
+			LowEffort: true, OriginDeclared: event.DeclaredNone})
+		b.samples(at(0), at(1000))
+		b.start(at(1010), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+		b.samples(at(1015), at(1100))
+		recs := b.records()
+		i := slices.IndexFunc(recs, func(r event.Event) bool { return r.T >= at(1010) })
+		_, outs := stepBatches(t, [][]event.Event{recs[:i], recs[i:]})
+		one := scoreAll(t, Device{}, recs)
+		want, ok := anchorByID(one, e.EventID)
+		if !ok || want.PromptClass != event.ClassAnswer {
+			t.Fatalf("one Step's anchor for the prompt is %+v (found %v), want an answer's", want, ok)
+		}
+		got, ok := anchorByID(outs[0].Final, e.EventID)
+		if !ok {
+			t.Fatalf("the prompt's anchor isn't final after the first Step, whose FinalBefore is %d s", (outs[0].FinalBefore-base)/1000)
+		}
+		if g, w := marshal(t, got), marshal(t, want); !bytes.Equal(g, w) {
+			t.Errorf("the first Step's final anchor differs from one Step's %s", firstDiff(g, w))
+		}
+	})
 }
 
 // TestQuestions checks Questions' record-by-record rule on sessions the
@@ -128,27 +189,35 @@ func TestQuestions(t *testing.T) {
 	cases := []struct {
 		name string
 		recs []event.Event
+		// via is the path the prompt that reads asked comes by.
+		via  event.Via
 		want bool
 	}{
-		{"a session with no records has asked nothing", nil, false},
-		{"an output that asks a question counts in a session only a plugin reports",
-			[]event.Event{rec(event.ViaPlugin, "s_1", asks)}, true},
-		{"a stop on a question counts in a session only the bridge reports",
-			[]event.Event{rec(event.ViaBridge, "s_1", stopsOnQuestion)}, true},
+		{"a session with no records has asked nothing", nil, event.ViaHook, false},
+		{"an output that asks a question counts for a plugin prompt in a session only a plugin reports",
+			[]event.Event{rec(event.ViaPlugin, "s_1", asks)}, event.ViaPlugin, true},
+		{"a stop on a question counts for a bridge prompt in a session only the bridge reports",
+			[]event.Event{rec(event.ViaBridge, "s_1", stopsOnQuestion)}, event.ViaBridge, true},
 		{"a hook record drops the side-door outputs seen before it",
-			[]event.Event{rec(event.ViaPlugin, "s_1", asks), rec(event.ViaHook, "s_1", stopsAtEnd)}, false},
+			[]event.Event{rec(event.ViaPlugin, "s_1", asks), rec(event.ViaHook, "s_1", stopsAtEnd)}, event.ViaPlugin, false},
 		{"after a hook record, a side-door stop on a question doesn't count",
-			[]event.Event{rec(event.ViaLog, "s_1", tells), rec(event.ViaTrack, "s_1", stopsOnQuestion)}, false},
+			[]event.Event{rec(event.ViaLog, "s_1", tells), rec(event.ViaTrack, "s_1", stopsOnQuestion)}, event.ViaPlugin, false},
 		{"an output that asked stays asked across a stop that didn't",
-			[]event.Event{rec(event.ViaLog, "s_1", asks), rec(event.ViaHook, "s_1", stopsAtEnd)}, true},
+			[]event.Event{rec(event.ViaLog, "s_1", asks), rec(event.ViaHook, "s_1", stopsAtEnd)}, event.ViaHook, true},
 		{"a later output that asks nothing ends it",
-			[]event.Event{rec(event.ViaLog, "s_1", asks), rec(event.ViaLog, "s_1", tells)}, false},
+			[]event.Event{rec(event.ViaLog, "s_1", asks), rec(event.ViaLog, "s_1", tells)}, event.ViaHook, false},
 		{"another session's question doesn't count",
-			[]event.Event{rec(event.ViaLog, "s_2", asks)}, false},
+			[]event.Event{rec(event.ViaLog, "s_2", asks)}, event.ViaHook, false},
 		{"records of no session change nothing",
-			[]event.Event{rec(event.ViaLog, "s_1", asks), rec(event.ViaOS, event.NoSession, &event.OSPower{Op: event.PowerLock})}, true},
+			[]event.Event{rec(event.ViaLog, "s_1", asks), rec(event.ViaOS, event.NoSession, &event.OSPower{Op: event.PowerLock})},
+			event.ViaHook, true},
 		{"a record with no payload changes nothing",
-			[]event.Event{rec(event.ViaLog, "s_1", asks), rec(event.ViaLog, "s_1", (*event.AgentOutput)(nil))}, true},
+			[]event.Event{rec(event.ViaLog, "s_1", asks), rec(event.ViaLog, "s_1", (*event.AgentOutput)(nil))}, event.ViaHook, true},
+		{"a hook prompt reads no side door's question in a session with no hook or log record yet",
+			[]event.Event{rec(event.ViaPlugin, "s_1", asks)}, event.ViaHook, false},
+		{"after a log record, a plugin prompt reads no side door's question",
+			[]event.Event{rec(event.ViaPlugin, "s_1", asks), rec(event.ViaLog, "s_1", &event.AgentTool{ToolClass: event.ToolBash})},
+			event.ViaPlugin, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -156,7 +225,7 @@ func TestQuestions(t *testing.T) {
 			for _, r := range c.recs {
 				q.Observe(r)
 			}
-			if got := q.Asked("s_1"); got != c.want {
+			if got := q.Asked("s_1", c.via); got != c.want {
 				t.Errorf("Asked = %v, want %v", got, c.want)
 			}
 		})
@@ -174,9 +243,10 @@ func TestQuestions(t *testing.T) {
 		if len(q.sessions) != questionSessions {
 			t.Fatalf("remembers %d sessions, want %d", len(q.sessions), questionSessions)
 		}
-		if q.Asked("s_old") || !q.Asked("s_kept") || !q.Asked("s_new") {
+		hook := event.ViaHook
+		if q.Asked("s_old", hook) || !q.Asked("s_kept", hook) || !q.Asked("s_new", hook) {
 			t.Errorf("asked: s_old %v, s_kept %v, s_new %v; want false, true, true",
-				q.Asked("s_old"), q.Asked("s_kept"), q.Asked("s_new"))
+				q.Asked("s_old", hook), q.Asked("s_kept", hook), q.Asked("s_new", hook))
 		}
 	})
 }
@@ -256,8 +326,10 @@ func TestQuestionsState(t *testing.T) {
 	}
 	t.Run("after the same records, both ask the same and forget the same sessions", func(t *testing.T) {
 		for _, s := range []string{"s_plugin", "s_log", "s_mixed", "s_0"} {
-			if live.Asked(s) != restored.Asked(s) {
-				t.Errorf("session %s: asked %v live and %v restored", s, live.Asked(s), restored.Asked(s))
+			for _, v := range []event.Via{event.ViaHook, event.ViaPlugin} {
+				if live.Asked(s, v) != restored.Asked(s, v) {
+					t.Errorf("session %s, a prompt by %s: asked %v live and %v restored", s, v, live.Asked(s, v), restored.Asked(s, v))
+				}
 			}
 		}
 		if !reflect.DeepEqual(restored.State(), live.State()) {

@@ -407,7 +407,7 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 		typed := count(p.LenChars)
 		class := event.ClassLowEffort
 		switch {
-		case s.askedBefore(best):
+		case s.askedBefore(e.Seq, e.Via):
 			class = event.ClassAnswer
 		case typed >= d.r.substantive:
 			class = event.ClassSubstantive
