@@ -10,6 +10,8 @@
 // (package buildday) and the live stream (package stream, through the
 // dashboard's View). No tier-1 field carries the client's display.shadow,
 // so the operator, who recruits the volunteers, sets the flag instead.
+// From 1.0.0 on a flag hides nothing, so pairtimed serve clears every one
+// as it starts (Clear; DESIGN 4.4).
 package shadow
 
 import (
@@ -26,6 +28,12 @@ import (
 // Querier is what the flag is read with: the read pool, or a transaction.
 type Querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// Execer is what Clear writes with: a writer transaction, or the write
+// pool.
+type Execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 // Flag returns when the account's calibration flag went on, and false
@@ -57,6 +65,27 @@ func Hides(ctx context.Context, q Querier, account, scoring string) (bool, error
 	}
 	_, on, err := Flag(ctx, q, account)
 	return on, err
+}
+
+// Clear turns every account's calibration flag off once scoring, the
+// scoring version the server runs, is 1.0.0 or later (Frozen), and returns
+// how many it turned off. Before then it changes nothing. From the freeze
+// on a flag hides nothing, and what it records, that the account's owner
+// volunteered for the calibration and since when, has no purpose left to
+// be kept for (DESIGN 4.4).
+func Clear(ctx context.Context, tx Execer, scoring string) (int64, error) {
+	if !Frozen(scoring) {
+		return 0, nil
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE users SET calibrating_since_ms = NULL WHERE calibrating_since_ms IS NOT NULL`)
+	if err != nil {
+		return 0, fmt.Errorf("shadow: clearing the calibration flags: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("shadow: clearing the calibration flags: %w", err)
+	}
+	return n, nil
 }
 
 // Frozen reports whether the scoring version v is 1.0.0 or later, by the

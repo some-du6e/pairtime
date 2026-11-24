@@ -99,6 +99,9 @@ func TestCalibrating(t *testing.T) {
 		// back when it changes nothing, so on says the flag as it was
 		// before the run.
 		race func(ctx context.Context, tx *sql.Tx, id string) error
+		// flagged lists the accounts whose flag is on, since raceSince,
+		// before the first run.
+		flagged []string
 	}{
 		{name: "on turns the flag on for the account a Slack ID names, and says since when",
 			runs: [][]string{{"on", "-slack", "U0FAKE1"}}, wantStdout: "Calibrating is now on for Slack ID U0FAKE1, since 20", on: []string{"acct-one"}, logged: true},
@@ -120,10 +123,12 @@ func TestCalibrating(t *testing.T) {
 			runs: [][]string{{"on", "-slack", "U0FAKE1"}, {"off", "-slack", "U0FAKE1"}}, wantStdout: "An open dashboard switches at its next update.", logged: true, scoring: "0.6.0"},
 		{name: "while the server scores below 1.0.0, show says nothing of the freeze",
 			runs: [][]string{{"on", "-slack", "U0FAKE2"}, {"show", "-slack", "U0FAKE2"}}, wantStdout: "Calibrating is on for Slack ID U0FAKE2, since 20", on: []string{"acct-two"}, scoring: "0.6.0", notStdout: "hides nothing"},
-		{name: "once the server scores at 1.0.0, show says a flag left on hides nothing",
-			runs: [][]string{{"on", "-slack", "U0FAKE2"}, {"show", "-slack", "U0FAKE2"}}, wantStdout: "It hides nothing, though: this server scores at 1.0.0, and calibration ended at 1.0.0.", on: []string{"acct-two"}, scoring: "1.0.0"},
-		{name: "once the server scores at 1.0.0, on says so as it turns the flag on",
-			runs: [][]string{{"on", "-slack", "U0FAKE2"}}, wantStdout: "It hides nothing, though: this server scores at 1.0.0", on: []string{"acct-two"}, logged: true, scoring: "1.0.0", notStdout: "switches at its next update"},
+		{name: "once the server scores at 1.0.0, show says a flag left on hides nothing, and that serve clears it as it next starts",
+			runs: [][]string{{"show", "-slack", "U0FAKE2"}}, flagged: []string{"acct-two"}, wantStdout: "It hides nothing, though: this server scores at 1.0.0, and calibration ended at 1.0.0. pairtimed serve clears it as it next starts.", on: []string{"acct-two"}, scoring: "1.0.0"},
+		{name: "once the server scores at 1.0.0, on refuses, since a flag would hide nothing, and changes nothing",
+			runs: [][]string{{"on", "-slack", "U0FAKE2"}}, wantCode: 1, wantStderr: "calibration ended at 1.0.0, and this server scores at 1.0.0, so a flag would hide nothing; nothing changed", scoring: "1.0.0"},
+		{name: "once the server scores at 1.0.0, off still turns a flag left on off",
+			runs: [][]string{{"off", "-slack", "U0FAKE2"}}, flagged: []string{"acct-two"}, wantStdout: "Calibrating is now off for Slack ID U0FAKE2.", logged: true, scoring: "1.0.0", notStdout: "switches at its next update"},
 		{name: "an on that finds the flag off, and then finds another run turned it on first, keeps that run's time and changes nothing",
 			runs: [][]string{{"on", "-slack", "U0FAKE1"}}, race: raceTo(raceSince), wantStdout: "Calibrating was already on for Slack ID U0FAKE1, since 2026-12-01T09:00:00Z. Nothing changed."},
 		{name: "an off that finds the flag on, and then finds another run turned it off first, changes nothing",
@@ -149,6 +154,11 @@ func TestCalibrating(t *testing.T) {
 				t.Cleanup(func() { builtinScoring = was })
 			}
 			configPath, db := calibratingDB(t)
+			for _, id := range tt.flagged {
+				if _, err := db.Write.ExecContext(context.Background(), `UPDATE users SET calibrating_since_ms = $1 WHERE id = $2`, raceSince, id); err != nil {
+					t.Fatal(err)
+				}
+			}
 			var code int
 			var stdout, stderr string
 			var first map[string]int64
@@ -200,6 +210,71 @@ func TestCalibrating(t *testing.T) {
 				t.Errorf("the run logged its change: %v, want %v:\n%s", logs, tt.logged, stderr)
 			} else if logs && !strings.Contains(stderr, "time=") {
 				t.Errorf("the log line says no time:\n%s", stderr)
+			}
+		})
+	}
+}
+
+// TestServeClearsCalibration checks that pairtimed serve, once it scores at
+// 1.0.0 or later, turns every account's calibration flag off as it starts
+// and logs how many it turned off, and that below 1.0.0 it keeps every
+// flag (D-server-shadow; DESIGN 4.4).
+func TestServeClearsCalibration(t *testing.T) {
+	tests := []struct {
+		name    string
+		scoring string
+		// on lists the accounts whose flag is on once serve has started.
+		on     []string
+		logged bool
+	}{
+		{name: "a server that scores below 1.0.0 keeps every flag", scoring: "0.6.0", on: []string{"acct-one", "acct-three"}},
+		{name: "a server that scores at 1.0.0 turns every flag off as it starts, and logs how many", scoring: "1.0.0", logged: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			was := builtinScoring
+			builtinScoring = tt.scoring
+			t.Cleanup(func() { builtinScoring = was })
+			configPath, db := calibratingDB(t)
+			for _, id := range []string{"acct-one", "acct-three"} {
+				if _, err := db.Write.ExecContext(context.Background(), `UPDATE users SET calibrating_since_ms = $1 WHERE id = $2`, raceSince, id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e, _, stderr := testEnv()
+			up := make(chan struct{}, 1)
+			e.listening = func(string, string) { up <- struct{}{} }
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			exited := make(chan int, 1)
+			go func() { exited <- run(ctx, []string{"serve", "-config", configPath}, e) }()
+			select {
+			case <-up:
+			case code := <-exited:
+				t.Fatalf("serve exited with %d before listening; stderr:\n%s", code, stderr.String())
+			case <-time.After(60 * time.Second):
+				t.Fatalf("serve didn't start within a minute; stderr:\n%s", stderr.String())
+			}
+			cancel()
+			select {
+			case code := <-exited:
+				if code != 0 {
+					t.Errorf("serve exit code after cancel = %d, want 0; stderr:\n%s", code, stderr.String())
+				}
+			case <-time.After(60 * time.Second):
+				t.Fatal("serve didn't stop within a minute of its context ending")
+			}
+			got := flags(t, db)
+			for _, a := range calibratingAccounts {
+				if on := got[a[0]] >= 0; on != containsString(tt.on, a[0]) {
+					t.Errorf("%s's flag is on: %v, want %v", a[0], on, !on)
+				}
+			}
+			logs := stderr.String()
+			if cleared := strings.Contains(logs, `msg="calibration flags cleared`); cleared != tt.logged {
+				t.Errorf("serve logged a clear: %v, want %v:\n%s", cleared, tt.logged, logs)
+			} else if cleared && !strings.Contains(logs, "accounts=2") {
+				t.Errorf("serve's log of the clear doesn't say it turned 2 flags off:\n%s", logs)
 			}
 		})
 	}

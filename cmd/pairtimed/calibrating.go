@@ -41,8 +41,10 @@ dashboard, its API, the build-days API and the live stream) hides what
 shadow mode hides on the volunteer's own computer (D-server-shadow): an
 open dashboard switches at its next update, a page drawn after it at
 once. off turns the flag off, and show says whether it is on, since when,
-and whether it still hides anything. Name the account by its Slack ID or
-by its Hack Club Auth subject.
+and whether it still hides anything. From 1.0.0 on, on refuses, since a
+flag would hide nothing, and pairtimed serve clears every flag as it
+starts. Name the account by its Slack ID or by its Hack Club Auth
+subject.
 `)
 		if len(args) > 0 && (args[0] == "-h" || args[0] == "-help" || args[0] == "--help") {
 			return 0
@@ -73,6 +75,12 @@ func runCalibratingAs(ctx context.Context, e *env, action string, args []string)
 	if (*slack == "") == (*hca == "") {
 		fmt.Fprintf(e.stderr, "pairtimed %s: name the account with one of -slack and -hca\n", name)
 		return 2
+	}
+	// From the freeze on a flag hides nothing (shadow.Hides), and serve
+	// clears every one as it starts, so none is set.
+	if action == "on" && shadow.Frozen(builtinScoring) {
+		fmt.Fprintf(e.stderr, "pairtimed %s: calibration ended at 1.0.0, and this server scores at %s, so a flag would hide nothing; nothing changed\n", name, builtinScoring)
+		return 1
 	}
 	// The column is one of two fixed names, never the operator's input.
 	column, value, said := "slack_id", *slack, "Slack ID "+*slack
@@ -108,23 +116,17 @@ func runCalibratingAs(ctx context.Context, e *env, action string, args []string)
 		logger.Info("pairtimed calibrating", "action", action, "by", column, "account", value)
 	}
 	when := func(ms int64) string { return time.UnixMilli(ms).UTC().Format(time.RFC3339) }
-	// A flag left on past the freeze hides nothing (shadow.Hides).
+	// A flag left on past the freeze hides nothing (shadow.Hides), and
+	// serve clears it as it next starts (shadow.Clear).
 	frozen := shadow.Frozen(builtinScoring)
-	ended := fmt.Sprintf("It hides nothing, though: this server scores at %s, and calibration ended at 1.0.0.", builtinScoring)
+	ended := fmt.Sprintf("It hides nothing, though: this server scores at %s, and calibration ended at 1.0.0. pairtimed serve clears it as it next starts.", builtinScoring)
 	const next = "An open dashboard switches at its next update."
 	switch {
 	case action == "on" && changed:
 		fmt.Fprintf(e.stdout, "Calibrating is now on for %s, since %s.\n", said, when(since.Int64))
-		if frozen {
-			fmt.Fprintln(e.stdout, ended)
-		} else {
-			fmt.Fprintln(e.stdout, next)
-		}
+		fmt.Fprintln(e.stdout, next)
 	case action == "on":
 		fmt.Fprintf(e.stdout, "Calibrating was already on for %s, since %s. Nothing changed.\n", said, when(since.Int64))
-		if frozen {
-			fmt.Fprintln(e.stdout, ended)
-		}
 	case action == "off" && changed:
 		fmt.Fprintf(e.stdout, "Calibrating is now off for %s.\n", said)
 		if !frozen {

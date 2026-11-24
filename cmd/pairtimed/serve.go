@@ -29,6 +29,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/projectnames"
 	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/rollup"
+	"github.com/some-du6e/pairtime/internal/server/shadow"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/stream"
 	"github.com/some-du6e/pairtime/internal/server/writer"
@@ -195,6 +196,24 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	keysDoc, err := serverkeys.Document(history, ring)
 	if err != nil {
 		return err
+	}
+
+	// From 1.0.0 on no calibration flag hides anything, so a server that
+	// scores at 1.0.0 or later clears them all as it starts, and keeps
+	// none past its purpose (D-server-shadow; DESIGN 4.4).
+	if shadow.Frozen(builtinScoring) {
+		var cleared int64
+		err := w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+			var err error
+			cleared, err = shadow.Clear(ctx, tx, builtinScoring)
+			return err
+		})
+		if err != nil {
+			return fmt.Errorf("clearing the calibration flags: %w", err)
+		}
+		if cleared > 0 {
+			logger.Info("calibration flags cleared: this server scores at 1.0.0 or later, where they hide nothing", "accounts", cleared, "scoring", builtinScoring)
+		}
 	}
 
 	// The retention jobs that are on sweep through the writer, so their
@@ -423,7 +442,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	// streams end before the servers stop, below.
 	// A calibration volunteer's flag hides their credited time until the
 	// server scores at 1.0.0 (D-server-shadow).
-	rollups := dashboard.Rollups{DB: db.Read, Scoring: pages.BuiltinScoringVersion}
+	rollups := dashboard.Rollups{DB: db.Read, Scoring: builtinScoring}
 	owner := accountOf(signIn)
 	hub := stream.New(stream.Options{Source: rollups, Account: owner, Logger: logger})
 	defer hub.Close()
@@ -471,7 +490,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	// Devlogs and badges count each device's requests against ingest's
 	// default rate, in a bucket apart from its uploads' (devlog.Options).
 	devlog.New(devlog.Options{Devices: devices, Writer: w, Read: db.Read, Now: time.Now, Logger: logger}).Register(public)
-	public.HandleFunc("GET "+buildday.SummaryPath, buildday.API(db.Read, devices, time.Now, pages.BuiltinScoringVersion, logger))
+	public.HandleFunc("GET "+buildday.SummaryPath, buildday.API(db.Read, devices, time.Now, builtinScoring, logger))
 	maintainCtx, stopMaintain := context.WithCancel(ctx)
 	defer stopMaintain()
 	go signIn.Maintain(maintainCtx)
