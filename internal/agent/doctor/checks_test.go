@@ -110,13 +110,13 @@ func TestChecks(t *testing.T) {
 				f.Agent.Signals.Idle, f.Agent.Signals.Session = Signal{Unknown: "no graphical session: DISPLAY and WAYLAND_DISPLAY are unset"}, "none"
 			}, check: "idle", want: Fail,
 			wantHas: []string{"presence unknown on this desktop: no graphical session: DISPLAY and WAYLAND_DISPLAY are unset. pairtime counts none of your time here yet; logging out and back in"}},
-		{name: "a macOS or Windows source that didn't start fails with a new login to fix it",
-			edit: func(f *Facts) { f.Agent.Signals.Focus = Signal{Unknown: "the macOS notification loop didn't start"} }, check: "focus", want: Fail,
+		{name: "a macOS or Windows focus source that didn't start, with idle time read, warns with a new login to fix it",
+			edit: func(f *Facts) { f.Agent.Signals.Focus = Signal{Unknown: "the macOS notification loop didn't start"} }, check: "focus", want: Warn,
 			wantHas: []string{"logging out and back in starts the agent in your desktop's session"}},
 		{name: "on X11, focus unknown because the window manager doesn't keep _NET_ACTIVE_WINDOW names a window manager that does",
 			edit: func(f *Facts) {
 				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "the window manager doesn't keep _NET_ACTIVE_WINDOW"}, "x11"
-			}, check: "focus", want: Fail,
+			}, check: "focus", want: Warn,
 			wantHas: []string{"a window manager that keeps _NET_ACTIVE_WINDOW, as most do, lets it see the window in front"},
 			wantNot: []string{"logging out"}},
 		{name: "on X11, presence unknown names the X server's MIT-SCREEN-SAVER extension",
@@ -128,7 +128,7 @@ func TestChecks(t *testing.T) {
 		{name: "on X11, focus unknown because the agent couldn't connect to the X display at its start names the X connection, not a window manager",
 			edit: func(f *Facts) {
 				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "can't connect to the X display: dial unix /tmp/.X11-unix/X0: connect: no such file or directory"}, "x11"
-			}, check: "focus", want: Fail,
+			}, check: "focus", want: Warn,
 			wantHas: []string{"the agent couldn't reach the X server, as with a DISPLAY or an X authority that isn't your desktop's; logging out and back in starts the agent in your desktop's session, where it can see the window in front"},
 			wantNot: []string{"_NET_ACTIVE_WINDOW"}},
 		{name: "on X11, presence unknown because the X server refused the connection names the X connection, not an extension",
@@ -144,7 +144,7 @@ func TestChecks(t *testing.T) {
 		{name: "on X11, focus unknown because DISPLAY names a screen the X display hasn't names the X connection",
 			edit: func(f *Facts) {
 				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "the X display has no screen 1"}, "x11"
-			}, check: "focus", want: Fail, wantHas: []string{"the agent couldn't reach the X server"}, wantNot: []string{"_NET_ACTIVE_WINDOW"}},
+			}, check: "focus", want: Warn, wantHas: []string{"the agent couldn't reach the X server"}, wantNot: []string{"_NET_ACTIVE_WINDOW"}},
 		{name: "on X11, presence unknown because the X server wants more authentication names the X connection",
 			edit: func(f *Facts) {
 				f.Agent.Signals.Idle, f.Agent.Signals.Session = Signal{Unknown: "the X server wants more authentication: Kerberos"}, "x11"
@@ -152,17 +152,24 @@ func TestChecks(t *testing.T) {
 		{name: "on X11, focus unknown because DISPLAY can't be read names the X connection",
 			edit: func(f *Facts) {
 				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "DISPLAY has no display number"}, "x11"
-			}, check: "focus", want: Fail, wantHas: []string{"the agent couldn't reach the X server"}, wantNot: []string{"_NET_ACTIVE_WINDOW"}},
+			}, check: "focus", want: Warn, wantHas: []string{"the agent couldn't reach the X server"}, wantNot: []string{"_NET_ACTIVE_WINDOW"}},
 		{name: "on X11, focus unknown while the agent reconnects to the X server says to run doctor again",
 			edit: func(f *Facts) {
 				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "lost the X connection; reconnecting"}, "x11"
-			}, check: "focus", want: Fail,
+			}, check: "focus", want: Warn,
 			wantHas: []string{"the agent is reconnecting to the X server, so run pairtime doctor again in a minute"}},
-		{name: "no focus source on Wayland is focus unknown on this desktop, a failure that names the X11 session to fix it, without the level-C clause WP-SC8 adds",
+		{name: "no focus source on Wayland, with idle time read, warns that time here counts at level C, and names the X11 session that would show the window in front (DESIGN 5.9, WP-SC8)",
 			edit: func(f *Facts) {
 				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "Wayland gives other programs no focus signal"}, "wayland"
+			}, check: "focus", want: Warn,
+			wantHas: []string{"focus unknown on this desktop, so time here counts at level C: Wayland gives other programs no focus signal; an X11 session, where your login screen offers one, lets it see the window in front"},
+			wantNot: []string{"counts none"}},
+		{name: "no focus source and no idle source either is a failure with what it costs, without the level-C clause, since SM 2.5 counts nothing typed there",
+			edit: func(f *Facts) {
+				f.Agent.Signals.Idle = Signal{Unknown: "Wayland gives other programs no idle signal"}
+				f.Agent.Signals.Focus, f.Agent.Signals.Session = Signal{Unknown: "Wayland gives other programs no focus signal"}, "wayland"
 			}, check: "focus", want: Fail,
-			wantHas: []string{"focus unknown on this desktop: Wayland gives other programs no focus signal. pairtime counts none of your time here yet; an X11 session, where your login screen offers one, lets it see the window in front"},
+			wantHas: []string{"focus unknown on this desktop: Wayland gives other programs no focus signal. pairtime counts none of your time here yet; an X11 session"},
 			wantNot: []string{"level C"}},
 		{name: "the macOS loop off the main thread warns that locks and app switches may not arrive, and says to share that line alone",
 			edit: func(f *Facts) { f.Agent.Signals.Loop = &Loop{} }, check: "macos-loop", want: Warn,

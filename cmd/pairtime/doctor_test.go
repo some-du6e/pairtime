@@ -215,16 +215,15 @@ func TestDoctorSignals(t *testing.T) {
 		wantNotInOut []string
 	}{
 		{
-			name:      "on GNOME on Wayland, idle time from Mutter is idle detection working, and focus unknown on this desktop fails with what it costs and the X11 session that fixes it, never presence unknown (D-design-5.9)",
+			name:      "on GNOME on Wayland, idle time from Mutter is idle detection working, and focus unknown on this desktop warns that time here counts at level C, with the X11 session that would show the window in front, never presence unknown (D-design-5.9, WP-SC8)",
 			session:   "wayland",
 			idle:      doctor.Signal{Via: "org.gnome.Mutter.IdleMonitor"},
 			focus:     doctor.Signal{Unknown: "Wayland gives other programs no focus signal"},
 			wantIdle:  doctor.OK,
-			wantFocus: doctor.Fail,
-			wantCode:  1,
+			wantFocus: doctor.Warn,
 			wantText: []string{"idle detection working, from org.gnome.Mutter.IdleMonitor",
-				"focus unknown on this desktop: Wayland gives other programs no focus signal. pairtime counts none of your time here yet; an X11 session, where your login screen offers one, lets it see the window in front"},
-			wantNotInOut: []string{"presence unknown on this desktop", "level C"},
+				"focus unknown on this desktop, so time here counts at level C: Wayland gives other programs no focus signal; an X11 session, where your login screen offers one, lets it see the window in front"},
+			wantNotInOut: []string{"presence unknown on this desktop", "counts none"},
 		},
 		{
 			name:         "on X11 both signals work, each with its source, and nothing fails",
@@ -307,7 +306,7 @@ func TestDoctorReadsTheAgentNotTheTerminal(t *testing.T) {
 			st.Signals.Focus = doctor.Signal{Unknown: "Wayland gives other programs no focus signal"}
 			asked := h.statusAgent(st)
 			checks, _ := doctorChecks(t)
-			if checks["idle"].Result != doctor.OK || checks["focus"].Result != doctor.Fail || !strings.Contains(checks["focus"].Text, "focus unknown on this desktop") {
+			if checks["idle"].Result != doctor.OK || checks["focus"].Result != doctor.Warn || !strings.Contains(checks["focus"].Text, "focus unknown on this desktop") {
 				t.Errorf("idle %+v, focus %+v; want them as the agent's status has them", checks["idle"], checks["focus"])
 			}
 			if got := asked(); !slices.Contains(got, ipc.AskStatus) {

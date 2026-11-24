@@ -35,7 +35,7 @@ func fullStatus() statusReply {
 		IPC: ipcReply{Via: inbox.ViaSocket, Stored: 1, Duplicates: 2, Refused: 3,
 			Spooled: spooledReply{Since: at.Add(-spooledWindow), Calls: 4, Prompts: 5, Unknown: 6}},
 		Signals: signalsReply{Idle: both, Focus: both, Power: both, Lock: both, Session: "x11",
-			Loop: &loopReply{MainThread: true, Dropped: 1}},
+			Loop: &loopReply{MainThread: true, Dropped: 1}, FocusLevelC: true},
 		Adapters: adaptersReply{Harnesses: map[event.Harness]harnessStats{event.HarnessClaudeCode: stats}, Other: stats,
 			Waiting: 1, Dropped: 2, Git: gitReply{Watched: 1, Changes: 2}},
 		Apps: appsReply{T3Code: &t3Reply{Reading: true, Off: "schema", Problem: "T3 Code's table x has no column y", Newer: true,

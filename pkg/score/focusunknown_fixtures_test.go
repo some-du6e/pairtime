@@ -133,7 +133,8 @@ func readFocusSlots(t *testing.T, f *timelines.Fixture) []fuSlot {
 		t.Fatal(err)
 	}
 	var file struct {
-		Slots []fuSlot `json:"slots"`
+		Fixture string   `json:"fixture"`
+		Slots   []fuSlot `json:"slots"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()

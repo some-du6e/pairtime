@@ -70,7 +70,7 @@ const SourceURL = "https://github.com/some-du6e/pairtime"
 // carries, which TestBuiltinScoringVersion holds it to, so a PR that bumps
 // the scorer's version changes it too. Once pkg/score is part of the
 // server, its version replaces this constant.
-const BuiltinScoringVersion = "0.7.0"
+const BuiltinScoringVersion = "0.8.0"
 
 // Controller says who is responsible for the data on this server
 // (DESIGN 8.6). Fields left empty show as placeholders.

@@ -325,6 +325,39 @@
 //   - A rollup counts each relayed anchor as a relayed message, apart from
 //     the anchor counts by kind (SM 5.4).
 //
+// # What WP-SC8 builds
+//
+// SM 2.5's rule for focus the client couldn't tell, an os.focus with
+// app_class unknown, as testdata/timelines/focus-unknown works it out. The
+// foreground before the first os.focus is no unknown one, so that time
+// still credits nothing, and a move between known and unknown focus is a
+// focus change.
+//   - Rule 6 passes at a submit whose window in front is unknown, and so do
+//     the queued-message, typed-edit and navigation tests, the typed edit's
+//     heartbeat project included. Each marks its anchor, which is level C
+//     with focus_unknown, after its other labels. The side-door keyboard
+//     test reads the window hosting the session, which an unknown one
+//     never is, so a side-door anchor there is never level A.
+//   - In a slot of unknown focus every project's windows are realized where
+//     the person is present, and every project's bucket with a qualifying
+//     anchor drains, SM 3.3's rules 2 to 6 choosing among them across
+//     projects. Buckets of different projects go to the project whose
+//     qualifying anchor is nearest the second, measured from its start and
+//     ahead of it too, then the earlier anchor, then the lower project key.
+//     The slot keeps the project of its first credited second, and only
+//     that project's windows and buckets credit the rest of it
+//     (D-split-slots). Relayed candidates wait for the slot's end there, so
+//     relayed credit can't take a slot this device's own evidence would.
+//   - Every second credited in such a slot is level C with focus_unknown,
+//     a relayed one included, and so is every second credited from an
+//     anchor that passed its focus test only that way, wherever its slot,
+//     and a lookup's seconds where a bracket is such a second.
+//   - Such a slot is never a browser slot, so it holds no lookup, and its
+//     uncredited seconds skip X.other_focus and X.ambiguous: the turn step
+//     reads every project's running turns.
+//   - A silent run whose focus is unknown throughout returns to its act's
+//     project, whose sessions' buckets its unread prose counts in (SM 2.1).
+//
 // # Final and pending
 //
 // What Step derives for a time stays pending until now is PENDING_WINDOW_S

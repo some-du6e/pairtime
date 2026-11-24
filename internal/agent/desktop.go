@@ -40,6 +40,12 @@ type signalsReply struct {
 	Session string `json:"session,omitempty"`
 	// Loop is the state of the macOS notification loop, once it runs.
 	Loop *loopReply `json:"loop,omitempty"`
+	// FocusLevelC is set while focus is unknown and the agent reads idle
+	// time: pkg/score then credits this desktop's present slots at level C
+	// (SM 2.5; WP-SC8), and pairtime today and the Today page say where that
+	// time counts. With idle time unknown too nothing typed here counts, so
+	// it stays unset (D-doctor-no-desktop).
+	FocusLevelC bool `json:"focus_level_c,omitempty"`
 }
 
 // signalReply is one signal's source, or why there is none: exactly one of
@@ -69,7 +75,9 @@ func (a *agent) signalsNow() signalsReply {
 		const none = "the agent hasn't opened the OS's sources"
 		return signalsReply{Idle: unknown(none), Focus: unknown(none), Power: unknown(none), Lock: unknown(none)}
 	}
-	return a.signals()
+	r := a.signals()
+	r.FocusLevelC = r.Focus.Via == "" && r.Idle.Via != ""
+	return r
 }
 
 // Why power and lock are unknown while the OS names a source for them but

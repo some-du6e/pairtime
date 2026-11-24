@@ -19,6 +19,36 @@ import (
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
+// TestFocusLevelC checks GET /v1/status's signals.focus_level_c: set while
+// focus is unknown and the agent reads idle time, where pkg/score credits
+// the desktop's slots at level C (SM 2.5; WP-SC8), and unset where focus is
+// known, or idle time is unknown too and nothing typed there counts.
+func TestFocusLevelC(t *testing.T) {
+	tests := []struct {
+		name        string
+		idle, focus signalReply
+		want        bool
+	}{
+		{"focus unknown with idle time read, as on GNOME on Wayland, is level C",
+			via("org.gnome.Mutter.IdleMonitor"), unknown("Wayland gives other programs no focus signal"), true},
+		{"focus known is no level C",
+			via("MIT-SCREEN-SAVER"), via("_NET_ACTIVE_WINDOW"), false},
+		{"focus and idle time both unknown is no level C, since nothing typed there counts",
+			unknown("no X server and no Mutter on the session bus"), unknown("no X server"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &agent{signals: func() signalsReply { return signalsReply{Idle: tt.idle, Focus: tt.focus} }}
+			if got := a.signalsNow().FocusLevelC; got != tt.want {
+				t.Errorf("focus_level_c %v, want %v", got, tt.want)
+			}
+		})
+	}
+	if (&agent{}).signalsNow().FocusLevelC {
+		t.Error("an agent that hasn't opened the OS's sources says focus_level_c")
+	}
+}
+
 // TestMacLoopSignals checks what GET /v1/status says about a MacLoop that
 // can't report the Loop's own Status: one the agent runs without, one
 // that hasn't started, and, off macOS, one whose Run failed. The Loop's

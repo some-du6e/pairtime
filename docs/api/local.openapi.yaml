@@ -868,13 +868,14 @@ components:
         focus_level_c:
           type: boolean
           description: >
-            True once the scorer credits the slots of a desktop that hides
-            focus at level C (SM 2.5; D-focus-unknown), which WP-SC8 sets,
-            the first WP in which it is so (D-design-5.9). While
-            `focus.unknown` is set the dashboard's Today page says this
-            desktop doesn't tell pairtime which window is in front, and only
-            once this is true does it add where that time counts. Absent
-            until then.
+            True while focus is unknown and the agent reads idle time, where
+            the scorer credits this desktop's slots at level C (SM 2.5;
+            D-focus-unknown, WP-SC8). While `focus.unknown` is set the
+            dashboard's Today page says this desktop doesn't tell pairtime
+            which window is in front, and only while this is true does it
+            add where that time counts. Absent where focus is known, and
+            where idle time is unknown too, since nothing typed there counts
+            (D-doctor-no-desktop).
     Signal:
       type: object
       additionalProperties: false

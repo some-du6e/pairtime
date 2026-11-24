@@ -227,14 +227,20 @@ func idleCheck(s Signals) Check {
 }
 
 // focusCheck is DESIGN 5.9's focus line: focus detection working with its
-// source, or "focus unknown on this desktop". With focus unknown the agent
-// records an os.focus with app_class unknown (SM 2.5), whose slots the
-// scorer credits nothing until WP-SC8: the line fails, and says what to
-// do. WP-SC8, which credits such time at level C, makes it a warning with
-// 5.9's ", so time here counts at level C".
+// source, or "focus unknown on this desktop, so time here counts at level
+// C" where the agent reads idle time. With focus unknown the agent records
+// an os.focus with app_class unknown, and the scorer credits that
+// desktop's present slots at level C (SM 2.5; WP-SC8): the line warns, and
+// says what would show the window in front. SM 2.5 keeps its presence and
+// input tests, so where idle time is unknown too nothing typed there
+// counts: the line fails, as the idle line does, with what it costs.
 func focusCheck(s Signals) Check {
-	if s.Focus.Via != "" {
+	switch {
+	case s.Focus.Via != "":
 		return Check{Name: "focus", Result: OK, Text: "focus detection working, from " + text.Printable(s.Focus.Via)}
+	case s.Idle.Via != "":
+		return Check{Name: "focus", Result: Warn, Text: "focus unknown on this desktop, so time here counts at level C: " +
+			reason(s.Focus.Unknown) + "; " + unknownFix(s, s.Focus.Unknown, true)}
 	}
 	return Check{Name: "focus", Result: Fail,
 		Text: "focus unknown on this desktop: " + reason(s.Focus.Unknown) + unknownCost(s, s.Focus.Unknown, true)}
@@ -250,25 +256,29 @@ func focusCheck(s Signals) Check {
 // or Windows source that didn't start, a new login, which starts the agent
 // in the desktop's session.
 func unknownCost(s Signals, why string, focus bool) string {
-	const cost = ". pairtime counts none of your time here yet; "
+	return ". pairtime counts none of your time here yet; " + unknownFix(s, why, focus)
+}
+
+// unknownFix is the one thing to do about an unknown signal (unknownCost).
+func unknownFix(s Signals, why string, focus bool) string {
 	sees := "when you're at the keyboard"
 	if focus {
 		sees = "the window in front"
 	}
 	switch {
 	case s.Session == "wayland":
-		return cost + "an X11 session, where your login screen offers one, lets it see " + sees
+		return "an X11 session, where your login screen offers one, lets it see " + sees
 	case s.Session == "x11" && strings.Contains(why, "reconnecting"):
-		return cost + "the agent is reconnecting to the X server, so run pairtime doctor again in a minute"
+		return "the agent is reconnecting to the X server, so run pairtime doctor again in a minute"
 	case s.Session == "x11" && xConnection(why):
-		return cost + "the agent couldn't reach the X server, as with a DISPLAY or an X authority that isn't your desktop's; " +
+		return "the agent couldn't reach the X server, as with a DISPLAY or an X authority that isn't your desktop's; " +
 			"logging out and back in starts the agent in your desktop's session, where it can see " + sees
 	case s.Session == "x11" && focus:
-		return cost + "a window manager that keeps _NET_ACTIVE_WINDOW, as most do, lets it see " + sees
+		return "a window manager that keeps _NET_ACTIVE_WINDOW, as most do, lets it see " + sees
 	case s.Session == "x11":
-		return cost + "an X server with the MIT-SCREEN-SAVER extension, as most have, lets it see " + sees
+		return "an X server with the MIT-SCREEN-SAVER extension, as most have, lets it see " + sees
 	}
-	return cost + "logging out and back in starts the agent in your desktop's session, where it can see " + sees
+	return "logging out and back in starts the agent in your desktop's session, where it can see " + sees
 }
 
 // xConnects open the reasons the Linux sources give when they couldn't
