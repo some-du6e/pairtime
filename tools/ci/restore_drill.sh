@@ -66,6 +66,7 @@ image_paths=(
 	pkg/ledger
 	pkg/params
 	pkg/projectname
+	pkg/seal
 	third_party/burntsushi-toml
 	tools/release
 	internal/release
@@ -334,6 +335,14 @@ read_only() {
 	if [ -n "$(sudo sqlite3 data/pairtime.db "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'server_keys'")" ]; then
 		recorded=$(sudo sqlite3 data/pairtime.db 'SELECT server_key_id FROM server_keys WHERE id = 1')
 		sudo sqlite3 data/pairtime.db 'DELETE FROM server_keys'
+		sudo chown -R 65532:65532 data
+	fi
+	# The evidence key's history goes from the copy too: serve refuses an
+	# evidence.p256 other than the one the database records as current
+	# (WP-SB2; docs/spec/seal-v1.md 7), and this host's is a throwaway
+	# one. A database from before key_history has none.
+	if [ -n "$(sudo sqlite3 data/pairtime.db "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'key_history'")" ]; then
+		sudo sqlite3 data/pairtime.db "DELETE FROM key_history WHERE kind = 'evidence'"
 		sudo chown -R 65532:65532 data
 	fi
 

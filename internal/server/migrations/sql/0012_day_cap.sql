@@ -1,0 +1,16 @@
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- The day cap (WP-SV7; SM 5.3, and 5.2's X.day_cap): an account's local
+-- day, in the profile's time zone, keeps at most DAY_CAP_S (43,200 s) of
+-- credit across its devices, counted after the cross-device merge (SM
+-- 3.4), so a second device can't lift it. Past the cap, the further
+-- credit in time order is X.day_cap. rollups_daily's credited columns keep
+-- what fits, and day_cap_ms holds, in each project and activity kind, the
+-- credit the cap withheld, so the "what was left out" breakdown survives
+-- (SM 5.3) and a day's rows still sum to the buckets stored for it.
+--
+-- The migration cuts no day. The settle job's first run after it cuts again
+-- each day whose rows keep more than the cap, while rollup_minutes still
+-- holds all of the day. A day whose minutes the retention jobs have partly
+-- deleted keeps its rows, which can keep more than DAY_CAP_S.
+ALTER TABLE rollups_daily ADD COLUMN day_cap_ms BIGINT NOT NULL DEFAULT 0;

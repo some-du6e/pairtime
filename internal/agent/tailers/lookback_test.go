@@ -335,7 +335,7 @@ func TestLookback(t *testing.T) {
 		{"a root's first listing gives no history when the ledger began LookbackWindow ago", func(t *testing.T) {
 			pc := &pipeChild{trim: upper}
 			r := lookbackRig(t, pc.start)
-			r.until = func() time.Time { return r.now.Add(-LookbackWindow - time.Hour) }
+			r.until = func() time.Time { return r.clock().Add(-LookbackWindow - time.Hour) }
 			r.write("m.jsonl", "{\"n\":1}\n")
 			r.open()
 			r.step(0, false)
