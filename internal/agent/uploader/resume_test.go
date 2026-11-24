@@ -163,8 +163,10 @@ func TestResume(t *testing.T) {
 		name  string
 		token string // the sign-in's token, testToken when ""
 		prep  func(t *testing.T, f *fakeIngest, rows []ledger.Row)
-		until func(f *fakeIngest, u *Uploader) bool
-		check func(t *testing.T, f *fakeIngest, u *Uploader, dirs home.Dirs, problems func() string)
+		// commits, when set, writes commits/ in dir.
+		commits func(t *testing.T, dir string, rows []ledger.Row)
+		until   func(f *fakeIngest, u *Uploader) bool
+		check   func(t *testing.T, f *fakeIngest, u *Uploader, dirs home.Dirs, problems func() string)
 	}{
 		{
 			name: "a server head the ledger disagrees with stops every upload under the device's ID, and doctor hears why",
@@ -183,6 +185,33 @@ func TestResume(t *testing.T) {
 				}
 				if p := problems(); !strings.Contains(p, "batch 1") || !strings.Contains(p, "can't go on uploading under this computer's ID") {
 					t.Errorf("doctor wasn't told: %q", p)
+				}
+			},
+		},
+		{
+			name: "a fork found at the request that carries a commit's first batch stores no commit",
+			prep: func(t *testing.T, f *fakeIngest, rows []ledger.Row) {
+				// The server's head is batch 1, and it holds another batch 2,
+				// which the request that carries the device's answers as
+				// batch_conflict.
+				hold(t, f, rows[:1], 1)
+				forked := rows[1]
+				forked.Head[0] ^= 0xff
+				f.rows[2] = fakeRow{b: 2, n: forked.N, root: forked.Root.String(), head: forked.Head.String(), prev: forked.Prev.String(),
+					receivedAt: f.head.receivedAt, sig: f.head.sig, keyID: f.keyID}
+			},
+			commits: func(t *testing.T, dir string, rows []ledger.Row) {
+				seen := rows[1].SealedAt.Add(-time.Minute) // its first batch is 2
+				writeCommitLines(t, dir, seen.UTC().Format(time.DateOnly), commitRecord(1, seen.UnixMilli()))
+			},
+			until: func(f *fakeIngest, u *Uploader) bool { return u.Status().Fork != 0 },
+			check: func(t *testing.T, f *fakeIngest, u *Uploader, _ home.Dirs, _ func() string) {
+				if fork := u.Status().Fork; fork != 2 {
+					t.Errorf("fork at %d, want 2", fork)
+				}
+				sent := slices.ContainsFunc(f.bodies, func(b []byte) bool { return bytes.Contains(b, []byte(testSHA(1))) })
+				if len(f.commitRecs) != 0 || sent {
+					t.Errorf("the server stores commits %v, and a body carried it: %v", f.commitRecs, sent)
 				}
 			},
 		},
@@ -250,6 +279,9 @@ func TestResume(t *testing.T) {
 			f := newFakeIngest(w.DeviceID(), testToken, devKey.Public().(ed25519.PublicKey))
 			if tc.prep != nil {
 				tc.prep(t, f, rows)
+			}
+			if tc.commits != nil {
+				tc.commits(t, dirs.Commits(), rows)
 			}
 			srv := httptest.NewServer(f)
 			t.Cleanup(srv.Close)

@@ -410,6 +410,71 @@ func TestCommitPlan(t *testing.T) {
 					t.Error("the mark stayed")
 				}
 			}},
+		{"a line a recorded stretch holds never goes, though the batch sealed after it is online and in no run", nil, saved{Next: 4},
+			func(t *testing.T, dir string, ix *rowIndex, in *planInput) []int64 {
+				ix.stretches = []ledger.Stretch{{From: atS(70), To: atS(100)}}
+				return writeCommitLines(t, dir, day, commitRecord(1, atS(90)), commitRecord(2, atS(100)), commitRecord(3, atS(101)))
+			}, func(t *testing.T, p plan, ends []int64, in planInput) {
+				if len(p.body.Commits) != 1 || p.body.Commits[0].SHA != testSHA(3) || p.commitMarks[day].Off != ends[2] {
+					t.Errorf("records %v went, mark %+v: want only the one after the stretch, its edge held", p.body.Commits, p.commitMarks[day])
+				}
+			}},
+		{"a line a stretch holds never goes when a step back of the wall clock makes sealedAfter find a batch sealed before the step", []float64{3, 1, 4}, saved{Next: 4},
+			func(t *testing.T, dir string, ix *rowIndex, in *planInput) []int64 {
+				// Batch 2 was sealed after a step back to minute 1, so a line at
+				// 1.5 minutes finds batch 1, sealed at minute 3, before the step.
+				ix.stretches = []ledger.Stretch{{From: atS(80), To: atS(100)}}
+				return writeCommitLines(t, dir, day, commitRecord(1, atS(90)))
+			}, func(t *testing.T, p plan, ends []int64, in planInput) {
+				if b, _ := in.rows.sealedAfter(atS(90)); b != 1 {
+					t.Fatalf("sealedAfter finds batch %d: the case wants batch 1, sealed before the step", b)
+				}
+				if len(p.body.Commits) != 0 || p.commitMarks[day].Off != ends[0] {
+					t.Errorf("records %v went, mark %+v: want the line withheld for good", p.body.Commits, p.commitMarks[day])
+				}
+			}},
+		{"a line a step back of the wall clock dates before an open stretch's start waits while the rows hold the stretch open, and never goes once they hold its end",
+			[]float64{1, 2, 3, 4}, saved{Next: 5},
+			func(t *testing.T, dir string, ix *rowIndex, in *planInput) []int64 {
+				ix.stretches = []ledger.Stretch{{From: atS(150), Open: true}}
+				return writeCommitLines(t, dir, day, commitRecord(1, atS(100)), commitRecord(2, atS(210)))
+			}, func(t *testing.T, p plan, ends []int64, in planInput) {
+				if len(p.body.Commits) != 0 || len(p.commitMarks) != 0 {
+					t.Fatalf("records %v went, marks %+v, while the stretch goes on", p.body.Commits, p.commitMarks)
+				}
+				// The seal after the switch back records the stretch's end, its
+				// start moved back by the step its edges' clock measured.
+				in.rows.stretches = []ledger.Stretch{{From: atS(90), To: atS(200)}}
+				p, err := makePlan(in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(p.body.Commits) != 1 || p.body.Commits[0].SHA != testSHA(2) || p.commitMarks[day].Off != ends[1] {
+					t.Errorf("once the rows hold the end, records %v went, mark %+v: want only the line after the stretch", p.body.Commits, p.commitMarks[day])
+				}
+			}},
+		{"every line waits while a row's local_until rose past the newest list, as an older version's rows do, and is judged by the list the next seal records",
+			nil, saved{Next: 4},
+			func(t *testing.T, dir string, ix *rowIndex, in *planInput) []int64 {
+				ix.behind = true
+				return writeCommitLines(t, dir, day, commitRecord(1, atS(90)), commitRecord(2, atS(150)))
+			}, func(t *testing.T, p plan, ends []int64, in planInput) {
+				if len(p.body.Commits) != 0 || len(p.commitMarks) != 0 {
+					t.Fatalf("records %v went, marks %+v, while the rows lack a stretch", p.body.Commits, p.commitMarks)
+				}
+				// The next seal records the list Open rebuilt from those rows.
+				if err := in.rows.add(ledger.Row{BatchRow: pkgledger.BatchRow{B: 4, FirstSeq: 4, N: 1}, SealedAt: day0.Add(4 * time.Minute),
+					Online: true, Stretches: []ledger.Stretch{{From: 0, To: atS(100)}}}); err != nil {
+					t.Fatal(err)
+				}
+				p, err := makePlan(in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(p.body.Commits) != 1 || p.body.Commits[0].SHA != testSHA(2) || p.commitMarks[day].Off != ends[1] {
+					t.Errorf("by the new list, records %v went, mark %+v: want only the line after the rebuilt stretch", p.body.Commits, p.commitMarks[day])
+				}
+			}},
 		{"a day whose mark names no line that ends there is read again from its first line", nil, saved{Next: 4},
 			func(t *testing.T, dir string, ix *rowIndex, in *planInput) []int64 {
 				ends := writeCommitLines(t, dir, day, commitRecord(1, atS(90)), commitRecord(2, atS(91)))
@@ -696,5 +761,144 @@ func TestCommitUpload(t *testing.T) {
 		if !t.Run(s.name, s.run) {
 			break
 		}
+	}
+}
+
+// TestCommitStretchEnd is a switch back online, by hand, that finds nothing
+// pending, so no seal frame records the stretch's end until the next
+// batch's (D-ag5-D1). A commit seen before the stretch, whose line a
+// catch-up scan wrote during it, waits while the rows hold the stretch
+// open, though its batch's root went, and goes once the next seal frame
+// records the end.
+func TestCommitStretchEnd(t *testing.T) {
+	r := newLiveRig(t, 60)
+	r.u.Start()
+	r.seal(t, 1)
+	r.seal(t, 2)
+	r.wait(t, "batches 1 and 2", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 })
+	// config.toml says local, as the watch notes, and the stretch's first
+	// record seals at once as batch 3.
+	r.local.Store(true)
+	r.w.NoteMode(false)
+	r.record(t, 3)
+	waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 3 })
+	seen := r.sealedAt(1).Add(5 * time.Minute)
+	writeCommitLines(t, r.dirs.Commits(), seen.UTC().Format(time.DateOnly), commitRecord(1, seen.UnixMilli()))
+	// The teen sets mode = "online" by hand, and the watch's note finds
+	// nothing pending, so nothing is sealed.
+	r.local.Store(false)
+	r.setClock(r.sealedAt(3).Add(5 * time.Minute))
+	r.w.NoteMode(true)
+	r.drain()
+	r.f.mu.Lock()
+	_, early := r.f.commitRecs[testSHA(1)]
+	r.f.mu.Unlock()
+	// The next batch's seal frame records the stretch's end.
+	r.seal(t, 4)
+	r.wait(t, "the commit", func(f *fakeIngest) bool { _, ok := f.commitRecs[testSHA(1)]; return ok })
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"after a switch back that finds nothing pending, a line waits until the next seal frame records the stretch's end", !early},
+	}
+	for _, ch := range checks {
+		t.Run(ch.name, func(t *testing.T) {
+			if !ch.ok {
+				t.Errorf("no: the commit went while the rows held the stretch open; the uploader says %+v", r.u.Status())
+			}
+		})
+	}
+}
+
+// TestCommitAfterRestoredMark is a restart whose restored mark the batch
+// holding a catch-up git change can't take (D-ag5-C2). After a re-link, a
+// hook call of the stretch reaches the writer late, so the first batch
+// after the switch back is sealed local-only and records the mark due, and
+// a kill -9 follows. After the restart, the git change a scan finds is
+// sealed online alone: a mark Open restored never marks a batch holding a
+// git change, so the batch ends the mark and stays in the run of
+// local-only batches, and its commit line never goes. The next batch's
+// line does.
+func TestCommitAfterRestoredMark(t *testing.T) {
+	r := newLiveRig(t, 30)
+	r.u.Start()
+	r.seal(t, 1)
+	r.seal(t, 2)
+	r.wait(t, "batches 1 and 2", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 })
+	// pairtime logout sets mode = "local", which the watch notes, and the
+	// stretch's first record seals at once as batch 3.
+	r.linked.Store(false)
+	r.local.Store(true)
+	r.w.NoteMode(false)
+	r.record(t, 3)
+	waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 3 })
+	made := r.sealedAt(3).Add(2 * time.Minute)
+	login := made.Add(time.Minute)
+	// pairtime login, which the watch notes 300 ms later, with nothing
+	// pending. A hook call of the stretch reaches the writer 3 s after the
+	// note: batch 4, local-only, which records the mark due.
+	r.link(login)
+	r.local.Store(false)
+	r.setClock(login.Add(300 * time.Millisecond))
+	r.w.NoteMode(true)
+	r.setClock(login.Add(3300 * time.Millisecond))
+	if _, err := r.w.Write(hookCall(made)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.w.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	killed := copyDir(t, r.dirs.Data)
+	r.restart(t, killed)
+	r.u.Start()
+	// The startup scan finds a commit: its line, then its git change,
+	// sealed at once as batch 5.
+	scan := login.Add(time.Minute)
+	scanned := "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b" // gitChange's
+	r.setClock(scan)
+	writeCommitLines(t, r.dirs.Commits(), scan.UTC().Format(time.DateOnly), commitRecord(1, scan.UnixMilli(), testSHA(1), scanned))
+	if _, err := r.w.Write(gitChange(scan)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.w.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	// A commit after it, and the next batch, 6.
+	next := scan.Add(time.Minute)
+	writeCommitLines(t, r.dirs.Commits(), next.UTC().Format(time.DateOnly), commitRecord(2, next.UnixMilli()))
+	r.recordAt(t, next.Add(30*time.Second))
+	if _, _, err := r.w.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	last := r.w.Status().Batches
+	_, rows, err := ledger.ReadRows(r.dirs.Ledger(), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.u.Wake()
+	r.wait(t, fmt.Sprintf("batch %d", last), func(f *fakeIngest) bool { return f.head != nil && f.head.b == last })
+	r.wait(t, "the next batch's commit", func(f *fakeIngest) bool { _, ok := f.commitRecs[testSHA(2)]; return ok })
+	r.drain()
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	_, scanWent := r.f.commitRecs[scanned]
+	_, nextWent := r.f.commitRecs[testSHA(2)]
+	scanSent := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Contains(b, []byte(scanned)) })
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"the first batch after the switch back was sealed local-only, and the git change's batch online and unmarked",
+			len(rows) == 3 && !rows[0].Online && rows[1].Online && !rows[1].Back},
+		{"after a restart whose restored mark the batch holding a catch-up git change can't take, that change's commit lines never go", !scanWent && !scanSent},
+		{"a commit of the next batch goes", nextWent},
+	}
+	for _, ch := range checks {
+		t.Run(ch.name, func(t *testing.T) {
+			if !ch.ok {
+				t.Errorf("no: the rows from batch 4 are %+v; the server holds head %d from %d, gaps %v, after %d POSTs", rows, r.f.head.b, r.f.start, r.f.gaps, r.f.posts)
+			}
+		})
 	}
 }
