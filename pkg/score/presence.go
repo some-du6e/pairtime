@@ -427,11 +427,11 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 			// The sampler's next record after a sample, or after a bare
 			// resume or unlock, is an os.power with no sample, so the idle
 			// read failed (reach.lapse): the slots from the record before it
-			// to it are unknown once the newest record is rules.late past it,
-			// and the next sample opens no gap from the sample before, since
-			// the sampler ran and took none (D-sampleless-power). A suspend
-			// or a lock still decides the slots after it, up to its resume or
-			// unlock.
+			// to it are unknown once the newest record the device's own clock
+			// dated is rules.late past it, and the next sample opens no gap
+			// from the sample before, since the sampler ran and took none
+			// (D-sampleless-power). A suspend or a lock still decides the
+			// slots after it, up to its resume or unlock.
 			if prev := sampled - 1; prev >= 0 && reaches[prev].lapse {
 				if reaches[prev].blind {
 					p.blind = append(p.blind, span{reaches[prev].t, e.T})

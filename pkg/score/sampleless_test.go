@@ -14,12 +14,13 @@ import (
 // shows its idle read failing. When such a record is the sampler's next
 // after a sample, or after a resume or unlock with no sample, whose reach
 // hasn't ended, the slots from that record to it are unknown once the
-// newest record is rules.late past it, and the earlier record holds the
-// clock until then, so a sample taken with it and sealed a batch later
-// still decides them. A sample decides a slot only within BUCKET_TTL_S
-// after the slot's end, a slot no rule decides is unknown once the newest
-// record is rules.late past that, and FinalBefore never passes a slot that
-// nothing decides yet (SM 2.1).
+// newest record the device's own clock dated is rules.late past it, and the
+// earlier record holds the clock until then, so a sample taken with it and
+// sealed a batch later still decides them. A sample decides a slot only
+// within BUCKET_TTL_S after the slot's end, a slot no rule decides is
+// unknown once the newest record the device's own clock dated is rules.late
+// past that, and FinalBefore never passes a slot that nothing decides yet
+// (SM 2.1).
 //
 // Each case is the same evening: input until 595 s, a hooked turn from
 // 600 s to 1,790 s, and a sample on every slot boundary until C, the last
@@ -97,6 +98,11 @@ func TestSamplelessPower(t *testing.T) {
 		build   func(b *tl)
 		batches func(t *testing.T, recs []event.Event) [][]event.Event
 		check   func(t *testing.T, batches [][]event.Event, outs []Output, one Derived)
+		// waits says the case's records come in #312's order, which reaches
+		// (c)'s hold: a bridge record dated ahead releases a gap hold, which
+		// still reads every record, before the backstop, on the device's
+		// clock, is due. The shared check that no Step waits skips it.
+		waits bool
 	}{
 		{
 			name: "a suspend with no sample an hour after the last sample, a resume with none and a hooked morning past BUCKET_TTL_S leave no slot underived: unknown to the suspend, asleep to the resume and never-sampling after it, with the morning's agent time",
@@ -357,6 +363,54 @@ func TestSamplelessPower(t *testing.T) {
 			},
 		},
 		{
+			name:  "a bridge prompt dated ahead releases a sample-less unlock's gap hold before the backstop is due, so FinalBefore waits at the first slot nothing decides until a record the device dated is BUCKET_TTL_S and rules.late past it, and a Step a batch still gives what one Step gives",
+			waits: true,
+			build: func(b *tl) {
+				terminalSession(b)
+				b.mouse(every(at(1), at(595), 5000)...)
+				b.samples(at(0), at(c))
+				b.power(at(c+600), event.PowerUnlock)
+				b.samples(at(13200), at(13800))
+				bridge(b, at(13800))
+			},
+			batches: func(t *testing.T, recs []event.Event) [][]event.Event {
+				// The bridge prompt is sealed with the samples to 13,245 s.
+				var head, first, rest []event.Event
+				for _, e := range recs {
+					switch {
+					case e.T < at(13200):
+						head = append(head, e)
+					case e.T <= at(13245) || e.Via == event.ViaBridge:
+						first = append(first, e)
+					default:
+						rest = append(rest, e)
+					}
+				}
+				if len(head) == 0 || len(first) != 5 || len(rest) == 0 {
+					t.Fatal("the records don't split into the evening, the first samples with the bridge prompt, and the rest")
+				}
+				return append([][]event.Event{head, first}, minuteBatches(rest)...)
+			},
+			check: func(t *testing.T, _ [][]event.Event, outs []Output, _ Derived) {
+				// With samples to 13,245 s, the backstop has made the slots
+				// ending before 5,745 s unknown, and the next one waits.
+				if o := outs[1]; o.FinalBefore != at(5730) || o.Undecided != at(5730) {
+					t.Fatalf("with the bridge prompt in, FinalBefore %d s, waiting at %d s; want both at 5730 s",
+						(o.FinalBefore-base)/1000, (o.Undecided-base)/1000)
+				}
+				for i, o := range outs {
+					if o.Undecided != 0 && o.FinalBefore != o.Undecided {
+						t.Fatalf("Step %d waits at %d s with FinalBefore at %d s; want FinalBefore at the slot it waits at",
+							i, (o.Undecided-base)/1000, (o.FinalBefore-base)/1000)
+					}
+				}
+				if last := outs[len(outs)-1]; last.Undecided != 0 || last.FinalBefore != at(13800-900) {
+					t.Fatalf("at the end FinalBefore %d s, waiting at %d; want 12900 s, PENDING_WINDOW_S behind the newest sample, with no wait",
+						(last.FinalBefore-base)/1000, last.Undecided)
+				}
+			},
+		},
+		{
 			name: "a sample after a blind stretch dates no input in it more than SLEEP_GAP_S before the sample: the stretch's slots, final as unknown, keep no input when a sample long after says there was some",
 			build: func(b *tl) {
 				evening(b)
@@ -370,9 +424,10 @@ func TestSamplelessPower(t *testing.T) {
 				b.samples(at(6000), at(6600))
 			},
 			check: func(t *testing.T, batches [][]event.Event, outs []Output, one Derived) {
-				// The slots to the lock are decided once the newest record is
-				// rules.late past it, so FinalBefore moves on to the lock,
-				// which keeps the clock, rather than waiting at the sample.
+				// The slots to the lock are decided once the newest record the
+				// device's own clock dated is rules.late past it, so
+				// FinalBefore moves on to the lock, which keeps the clock,
+				// rather than waiting at the sample.
 				heldAt(t, batches, outs, at(3400), at(3460), at(2400))
 				slots(t, one, at(c), at(2400), func(s Slot) {
 					if s.Present != event.PresentUnknown || s.InputAny {
@@ -440,10 +495,11 @@ func TestSamplelessPower(t *testing.T) {
 				t.Errorf("a Step a batch differs from one Step %s", firstDiff(got, want))
 			}
 			checkDerived(t, one)
-			// No input known reaches (c)'s hold: (a), the extension and the
-			// backstop decide every slot before the clock passes it.
+			// Outside #312's order (waits), these records reach no wait at
+			// an undecided slot: (a), the extension and the backstop decide
+			// every slot before the clock passes it.
 			for i, o := range outs {
-				if o.Undecided != 0 {
+				if !tc.waits && o.Undecided != 0 {
 					t.Errorf("Step %d holds FinalBefore at an undecided slot at %d s; want every slot decided before the clock passes it",
 						i, (o.Undecided-base)/1000)
 				}
@@ -454,9 +510,10 @@ func TestSamplelessPower(t *testing.T) {
 }
 
 // TestUndecidedHold checks (c) of D-sampleless-power, and its bound, with a
-// clock no input reaches: State.now never passes a slot that nothing
-// decides, so each case gives derive a clock past one, as a disagreement
-// between the clock and the slot list would. FinalBefore waits at the first
+// clock past a slot that nothing decides, which State.now gives only in
+// #312's order of records (TestSamplelessPower's waits case), so each case
+// gives derive such a clock, as a disagreement between the clock and the
+// slot list would. FinalBefore waits at the first
 // slot nothing decides (Output.Undecided). A slot no sample came within
 // BUCKET_TTL_S after is unknown once the newest record the device's own
 // clock dated is rules.late past that, so the wait moves on to the first

@@ -555,26 +555,45 @@ func TestSamplelessPowerLoop(t *testing.T) {
 		}
 		return out
 	}
+	// back is samples every 15 s for half an hour from ts, with ids of
+	// their own under id.
+	back := func(first []event.Event, ts int64, id string) []event.Event {
+		var out []event.Event
+		for k := int64(0); k <= 120; k++ {
+			idle := float64(1 + k%4)
+			out = append(out, sampleAt(first, ts+k*15_000, fmt.Sprintf("01a1fb1e-5318-78a1-%s-%012x", id, k+1),
+				&event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle}))
+		}
+		return out
+	}
 	cases := []struct {
 		name string
-		// wake is how long after the evening's last sample the machine
-		// resumes. It suspends an hour after that sample.
-		wake int64
-		// morning is what comes after the resume.
+		// suspend and wake are how long after the evening's last sample the
+		// machine suspends, an hour when 0, and resumes.
+		suspend, wake int64
+		// cut puts an os.focus the agent stamps three hours after the last
+		// sample, which ends that sample's reach, so the suspend starts the
+		// sampler again (SM 2.1).
+		cut bool
+		// morning is what comes after the resume, and agent how long after
+		// the resume its turn starts, whose minutes have agent time.
 		morning func(t *testing.T, first []event.Event, resume int64) []event.Event
+		agent   int64
 	}{
-		{"after a night's suspend, longer than BUCKET_TTL_S, the loop gives one Step's minutes, and the morning's carry their agent time", 9 * hourMS, hooks},
-		{"after a half-hour nap, the loop gives one Step's minutes, and the morning's carry their agent time", 90 * minuteMS, hooks},
-		{"with a log reader's turn for three hours after the resume, nothing stamped and the samples back after it, the loop gives one Step's minutes, those the late samples decide and those no sample came within BUCKET_TTL_S of alike",
-			9 * hourMS, func(t *testing.T, first []event.Event, resume int64) []event.Event {
+		{name: "after a night's suspend, longer than BUCKET_TTL_S, the loop gives one Step's minutes, and the morning's carry their agent time",
+			wake: 9 * hourMS, morning: hooks},
+		{name: "after a half-hour nap, the loop gives one Step's minutes, and the morning's carry their agent time",
+			wake: 90 * minuteMS, morning: hooks},
+		{name: "with a log reader's turn for three hours after the resume, nothing stamped and the samples back after it, the loop gives one Step's minutes, those the late samples decide and those no sample came within BUCKET_TTL_S of alike",
+			wake: 9 * hourMS, morning: func(t *testing.T, first []event.Event, resume int64) []event.Event {
 				out := logMorning(t, resume+minuteMS, resume+3*hourMS, first[len(first)-1])
-				back := resume + 3*hourMS + 10*minuteMS
-				for k := int64(0); k <= 120; k++ {
-					idle := float64(1 + k%4)
-					out = append(out, sampleAt(first, back+k*15_000, fmt.Sprintf("01a1fb1e-5318-78a1-a7f9-%012x", k+1),
-						&event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle}))
-				}
-				return out
+				return append(out, back(first, resume+3*hourMS+10*minuteMS, "a7f9")...)
+			}},
+		{name: "with the last sample's reach cut, a suspend that starts the sampler again and a resume, neither with a sample, then a log reader's turn and samples an hour later, the loop gives one Step's minutes: its window, whose carry drops the samples before the restart, codes the turn's unknown minutes as one Step does",
+			suspend: 4 * hourMS, wake: 12 * hourMS, cut: true, agent: 10 * minuteMS,
+			morning: func(t *testing.T, first []event.Event, resume int64) []event.Event {
+				out := logTurn(t, resume+10*minuteMS, first[len(first)-1])
+				return append(out, back(first, resume+hourMS, "a7fa")...)
 			}},
 	}
 	for _, c := range cases {
@@ -588,7 +607,16 @@ func TestSamplelessPowerLoop(t *testing.T) {
 				return sampleAt(first, ts, fmt.Sprintf("01a1fb1e-5318-78a1-a7f6-%012x", n), &event.OSPower{Op: op})
 			}
 			resume := last + c.wake
-			all := append(slices.Clone(first), power(last+hourMS, event.PowerSuspend), power(resume, event.PowerResume))
+			suspend := c.suspend
+			if suspend == 0 {
+				suspend = hourMS
+			}
+			all := slices.Clone(first)
+			if c.cut {
+				all = append(all, sampleAt(first, last+3*hourMS, "01a1fb1e-5318-78a1-a7fb-000000000001",
+					&event.OSFocus{AppClass: event.AppUnknown}))
+			}
+			all = append(all, power(last+suspend, event.PowerSuspend), power(resume, event.PowerResume))
 			all = append(all, c.morning(t, first, resume)...)
 			r := newRig(t, score.Device{})
 			r.write(all, nil)
@@ -612,7 +640,8 @@ func TestSamplelessPowerLoop(t *testing.T) {
 			for _, b := range got {
 				stored[b.At()] = b
 			}
-			for m := resume - floorMod(resume, minuteMS) + 2*minuteMS; m+minuteMS <= st.FinalBefore; m += minuteMS {
+			start := resume + c.agent
+			for m := start - floorMod(start, minuteMS) + 2*minuteMS; m+minuteMS <= st.FinalBefore; m += minuteMS {
 				if b, ok := stored[m]; !ok || b.AgentRunningS == 0 || b.State != event.StateFinal {
 					t.Fatalf("%s: the loop's latest revision is %+v; want it final with the morning turn's agent time",
 						time.UnixMilli(m).UTC(), b)

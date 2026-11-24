@@ -139,9 +139,10 @@ func heldGap(times, stamped []int64, ttl, late, high int64) (end, length int64) 
 // while it does. When pkg/score holds FinalBefore at undecided, the start
 // of a slot whose presence nothing decides yet (score.Output.Undecided),
 // the note says so before any other cause: no minute is final before its
-// slots are decided, and such a slot waits for a sample dated within ttl
-// after it until the newest record the computer's own clock dated is late
-// past that, when it counts as unknown (SM 2.1). It returns "" for no lag,
+// slots are decided. Step's clock passes such a slot only after a sample
+// dated more than ttl after it, so when the note shows, none came within
+// ttl, and the slot counts as unknown once the newest record the
+// computer's own clock dated is late past that (SM 2.1). It returns "" for no lag,
 // and for a lag while samples come and a browser or chat app is in front:
 // SM 2.5 holds the minutes after credit until such a run ends, since it
 // may be a lookup, which is the rule working, not a fault, and doctor's
@@ -156,7 +157,7 @@ func stallNote(at, fb, pending, ttl, late int64, s sampling, focus event.AppClas
 		lasting(lag), lasting(pending))
 	switch {
 	case undecided > 0 && undecided <= fb:
-		msg += fmt.Sprintf(": no presence sample has decided whether you were at the computer from then on, and none has come since: one dated within %s after those minutes still decides them, and they count as unknown once the newest record this computer's own clock dated is %s past them",
+		msg += fmt.Sprintf(": no presence sample came within %s after those minutes, so they wait, and count as unknown once the newest record this computer's own clock dated is %s past them",
 			lasting(ttl), lasting(ttl+late))
 	case s.newest == 0:
 		msg += ": presence is unknown on this computer, so the scorer has no presence sample to keep time by"
