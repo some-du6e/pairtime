@@ -231,7 +231,8 @@ type Loop struct {
 	// writeDayFile writes a day's rollup, store.WriteDay but in tests.
 	writeDayFile func(dir string, d store.Day) error
 	// scoreStep is score.Step but in tests, which hold FinalBefore at a
-	// slot nothing decides, as no input pkg/score knows of does.
+	// slot nothing decides for longer than the few minutes #312's order of
+	// records can.
 	scoreStep func(score.State, []event.Event) (score.State, score.Output)
 
 	mu      sync.Mutex
@@ -460,11 +461,11 @@ func (l *Loop) open() error {
 	}
 	c.Device = chain.DeviceID
 	if c.Batch > 0 && c.Carry.V < carryVersion {
-		// A place an agent before WP-HL1 saved: its carry has no Stamped and
-		// no RestartAt, so both are folded again from the ledger's records
-		// before the window. FinalBefore and the window stay where they are,
-		// so no final minute is scored again.
-		l.log.Info("the scorer's place in state.json is an older agent's, so it reads the ledger again for the stamped record and the restart its carry lacks", "batch", c.Batch)
+		// A place an older agent saved: its carry lacks Stamped and
+		// RestartAt, or Lock, so they are folded again from the ledger's
+		// records before the window. FinalBefore and the window stay where
+		// they are, so no final minute is scored again.
+		l.log.Info("the scorer's place in state.json is an older agent's, so it reads the ledger again for the stamped record, the restart and the lock its carry lacks", "batch", c.Batch)
 		rebuilt, err := l.rebuildCarry(c)
 		if err != nil {
 			return fmt.Errorf("rebuilding the scorer's carry from the ledger: %w", err)
@@ -526,20 +527,21 @@ func (l *Loop) open() error {
 	return nil
 }
 
-// rebuildCarry returns the carry of c, a place an agent before WP-HL1
-// saved, with the Stamped and RestartAt that agent didn't keep, as a
+// rebuildCarry returns the carry of c, a place an older agent saved, with
+// the Stamped, RestartAt and Lock that agent didn't keep, as a
 // carryVersion agent would have folded them from the same records: the
 // ones dated before c.From in the batches up to c.Batch that the loop
 // scored (follower), the window's batches from FromBatch on included,
 // since records slid out of them or came late. The carry's other slots
 // stay as saved, since that agent folded them as a carryVersion agent
-// does. RestartAt is folded again in record order (restartAt) from the
+// does. Lock is the latest os.power that locked or unlocked the screen, in
+// record order, so the order the ledger holds them in doesn't matter. RestartAt is folded again in record order (restartAt) from the
 // earlier of the carry's Power and Presence on: a restart dated at or
 // before that one drops neither (carry.records), and with either missing,
 // no restart drops anything.
 func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	out := c.Carry
-	out.Stamped = 0
+	out.Stamped, out.Lock = 0, nil
 	again := out.Power != nil && out.Presence != nil
 	var lo int64
 	if again {
@@ -562,6 +564,9 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 			s, st := sampler(&ev), stamps(&ev)
 			if st {
 				out.Stamped = max(out.Stamped, ev.T)
+			}
+			if p, ok := ev.Data.(*event.OSPower); ok && locks(p) {
+				out.Lock = latest(out.Lock, ev)
 			}
 			if again && ev.T >= lo && (s || st) {
 				marks = append(marks, mark{t: ev.T, seq: ev.Seq, sampler: s})

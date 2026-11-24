@@ -382,6 +382,12 @@ func TestCarryReach(t *testing.T) {
 				rec(last+12*hourMS, &event.OSPower{Op: event.PowerResume})},
 				logTurn(t, last+12*hourMS+10*minuteMS, turn[len(turn)-1])...),
 			last + 6*hourMS, true, false},
+		{"a lock and then a suspend that start the sampler again with no sample after either, as a lid close writes them, and a resume with none, keep the screen locked after the resume until the next sample: the carry keeps the lock beside the suspend",
+			append(append([]event.Event{cut, rec(last+4*hourMS-minuteMS, &event.OSPower{Op: event.PowerLock}),
+				rec(last+4*hourMS, &event.OSPower{Op: event.PowerSuspend}),
+				rec(last+12*hourMS, &event.OSPower{Op: event.PowerResume})},
+				logTurn(t, last+12*hourMS+10*minuteMS, turn[len(turn)-1])...), woken(last+13*hourMS)...),
+			last + 6*hourMS, true, false},
 		{"a stamped record before the window's first sample that the newest record isn't yet rules.late past doesn't end the carried sample's reach yet",
 			[]event.Event{rec(again-60_000, &event.OSFocus{AppClass: event.AppUnknown}),
 				rec(again, idle(600))},
@@ -451,13 +457,16 @@ func TestOlderPlaceCarry(t *testing.T) {
 		// upgrade is when the agent upgrades, after the resume.
 		upgrade int64
 		// restart says the carry has folded the suspend, which starts the
-		// sampler again after C's cut.
-		restart bool
+		// sampler again after C's cut, and lock that a lock with no sample
+		// comes a minute before it, as a lid close writes them.
+		restart, lock bool
 	}{
 		{name: "with the suspend the window's first record of the sampler's and nothing stamped before it there, the rebuilt carry cuts C, so the hours after the resume get one Step's buckets",
 			upgrade: resume + 2*hourMS},
 		{name: "with the suspend folded into the carry as the sampler's restart after C's cut, the rebuilt carry keeps that restart, which drops C",
 			upgrade: resume + 4*hourMS, restart: true},
+		{name: "with a lid close's lock and suspend folded into the carry, the rebuilt carry keeps the lock beside the suspend, as the window did",
+			upgrade: resume + 4*hourMS, restart: true, lock: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -487,6 +496,9 @@ func TestOlderPlaceCarry(t *testing.T) {
 			}
 			run = append(run, clone(prompt, c+3*hourMS+minuteMS,
 				&event.AgentStop{TurnKey: prompt.Data.(*event.PromptSubmit).TurnKey, StopReason: event.StopEndTurn}))
+			if tc.lock {
+				run = append(run, clone(first[len(first)-1], c+10*hourMS-minuteMS, &event.OSPower{Op: event.PowerLock}))
+			}
 			run = append(run, clone(first[len(first)-1], c+10*hourMS, &event.OSPower{Op: event.PowerSuspend}),
 				clone(first[len(first)-1], resume, &event.OSPower{Op: event.PowerResume}))
 			var tools []int64
@@ -532,10 +544,10 @@ func TestOlderPlaceCarry(t *testing.T) {
 }
 
 // TestSamplelessPowerLoop checks the loop against one Step over an evening
-// whose sampler loses its idle source an hour before a suspend, so the
-// suspend and the morning's resume come with no sample, as the agent
-// writes them when its idle read fails, and a turn runs on after the
-// resume (D-sampleless-power, #298). Before #298 pkg/score derived no slot
+// whose sampler loses its idle source before a suspend, so the suspend and
+// the morning's resume come with no sample, as the agent writes them when
+// its idle read fails, and a turn runs on after the resume
+// (D-sampleless-power, #298). Before #298 pkg/score derived no slot
 // after the evening's last sample while FinalBefore moved on with the
 // morning's hooks, in one Step and in the loop alike, so comparing the two
 // passed with the morning's agent time gone. Each case checks that time
@@ -573,8 +585,9 @@ func TestSamplelessPowerLoop(t *testing.T) {
 		suspend, wake int64
 		// cut puts an os.focus the agent stamps three hours after the last
 		// sample, which ends that sample's reach, so the suspend starts the
-		// sampler again (SM 2.1).
-		cut bool
+		// sampler again (SM 2.1), and lock a lock with no sample a minute
+		// before the suspend, as a lid close writes them.
+		cut, lock bool
 		// morning is what comes after the resume, and agent how long after
 		// the resume its turn starts, whose minutes have agent time.
 		morning func(t *testing.T, first []event.Event, resume int64) []event.Event
@@ -594,6 +607,12 @@ func TestSamplelessPowerLoop(t *testing.T) {
 			morning: func(t *testing.T, first []event.Event, resume int64) []event.Event {
 				out := logTurn(t, resume+10*minuteMS, first[len(first)-1])
 				return append(out, back(first, resume+hourMS, "a7fa")...)
+			}},
+		{name: "with the last sample's reach cut and a lid close's lock and suspend, neither with a sample, starting the sampler again, then a resume with none, a log reader's turn and samples an hour later, the loop gives one Step's minutes: its window, whose carry keeps the lock beside the suspend, keeps the screen locked after the resume as one Step does",
+			suspend: 4 * hourMS, wake: 12 * hourMS, cut: true, lock: true, agent: 10 * minuteMS,
+			morning: func(t *testing.T, first []event.Event, resume int64) []event.Event {
+				out := logTurn(t, resume+10*minuteMS, first[len(first)-1])
+				return append(out, back(first, resume+hourMS, "a7fc")...)
 			}},
 	}
 	for _, c := range cases {
@@ -615,6 +634,9 @@ func TestSamplelessPowerLoop(t *testing.T) {
 			if c.cut {
 				all = append(all, sampleAt(first, last+3*hourMS, "01a1fb1e-5318-78a1-a7fb-000000000001",
 					&event.OSFocus{AppClass: event.AppUnknown}))
+			}
+			if c.lock {
+				all = append(all, power(last+suspend-minuteMS, event.PowerLock))
 			}
 			all = append(all, power(last+suspend, event.PowerSuspend), power(resume, event.PowerResume))
 			all = append(all, c.morning(t, first, resume)...)
@@ -662,7 +684,8 @@ func carryJSON(t *testing.T, c carry) string {
 }
 
 // olderPlace rewrites the scorer's place in the rig's state.json as an
-// agent before WP-HL1 saved it: a carry with no stamped, restart_at or v.
+// agent before WP-HL1 saved it: a carry with no stamped, restart_at, lock
+// or v.
 func olderPlace(t *testing.T, r *rig) {
 	t.Helper()
 	data, err := os.ReadFile(r.path("state.json"))
@@ -684,6 +707,7 @@ func olderPlace(t *testing.T, r *rig) {
 	}
 	delete(carry, "stamped")
 	delete(carry, "restart_at")
+	delete(carry, "lock")
 	delete(carry, "v")
 	var raw []byte
 	if raw, err = json.Marshal(carry); err != nil {

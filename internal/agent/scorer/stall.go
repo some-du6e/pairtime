@@ -57,7 +57,7 @@ func (l *Loop) watch(b ledger.Batch) {
 	}
 	// The carry keeps each kind's latest record with its own time, and the
 	// window's records are all later than the carry's.
-	for _, e := range []*event.Event{l.win.carry.Focus, l.win.carry.Power, l.win.carry.Presence} {
+	for _, e := range []*event.Event{l.win.carry.Focus, l.win.carry.Power, l.win.carry.Presence, l.win.carry.Lock} {
 		if e != nil {
 			note(e)
 		}
@@ -141,8 +141,10 @@ func heldGap(times, stamped []int64, ttl, late, high int64) (end, length int64) 
 // the note says so before any other cause: no minute is final before its
 // slots are decided. Step's clock passes such a slot only after a sample
 // dated more than ttl after it, so when the note shows, none came within
-// ttl, and the slot counts as unknown once the newest record the
-// computer's own clock dated is late past that (SM 2.1). It returns "" for no lag,
+// ttl after the first of the minutes since; the next one may have decided
+// the later ones, and the ones it left undecided count as unknown once the
+// newest record the computer's own clock dated is late past that (SM
+// 2.1). It returns "" for no lag,
 // and for a lag while samples come and a browser or chat app is in front:
 // SM 2.5 holds the minutes after credit until such a run ends, since it
 // may be a lookup, which is the rule working, not a fault, and doctor's
@@ -157,7 +159,7 @@ func stallNote(at, fb, pending, ttl, late int64, s sampling, focus event.AppClas
 		lasting(lag), lasting(pending))
 	switch {
 	case undecided > 0 && undecided <= fb:
-		msg += fmt.Sprintf(": no presence sample came within %s after those minutes, so they wait, and count as unknown once the newest record this computer's own clock dated is %s past them",
+		msg += fmt.Sprintf(": no presence sample came within %s after the first of those minutes, so they wait, and the ones it left undecided count as unknown once the newest record this computer's own clock dated is %s past them",
 			lasting(ttl), lasting(ttl+late))
 	case s.newest == 0:
 		msg += ": presence is unknown on this computer, so the scorer has no presence sample to keep time by"

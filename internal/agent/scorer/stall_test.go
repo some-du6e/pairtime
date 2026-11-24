@@ -61,12 +61,12 @@ func TestStallNote(t *testing.T) {
 			fb: at - 2*60*minute, sampled: at - minute, focus: event.AppTerminal,
 			want: []string{"ends 2 h before"}, bare: true},
 		{name: "with FinalBefore held at a slot nothing decides, which only a sample dated more than BUCKET_TTL_S after it lets the clock pass, the note says no sample came within that, and when those minutes count as unknown, before the samples' own silence",
-			fb: at - 3*60*minute, sampled: at - 30*minute, undecided: at - 3*60*minute, focus: event.AppTerminal,
+			fb: at - 3*60*minute, sampled: at - 57*minute, undecided: at - 3*60*minute, focus: event.AppTerminal,
 			want: []string{"ends 3 h before",
-				"no presence sample came within 2 h after those minutes, so they wait, and count as unknown once the newest record this computer's own clock dated is 2 h 5 min past them"}},
+				"no presence sample came within 2 h after the first of those minutes, so they wait, and the ones it left undecided count as unknown once the newest record this computer's own clock dated is 2 h 5 min past them"}},
 		{name: "with FinalBefore held at a slot nothing decides and a browser in front, the note still names that slot",
-			fb: at - 3*60*minute, sampled: at - minute, undecided: at - 3*60*minute, focus: event.AppBrowser,
-			want: []string{"no presence sample came within 2 h after those minutes"}},
+			fb: at - 3*60*minute, sampled: at - 57*minute, undecided: at - 3*60*minute, focus: event.AppBrowser,
+			want: []string{"no presence sample came within 2 h after the first of those minutes"}},
 		{name: "with a slot nothing decides after FinalBefore, as when a lookup holds it earlier, the note doesn't name that slot",
 			fb: at - 40*minute, sampled: at - minute, undecided: at - 20*minute, focus: event.AppBrowser},
 	}
@@ -249,7 +249,7 @@ func TestStallWarning(t *testing.T) {
 			build: overnight, warned: true, each: "a presence sample came after 14 h without one"},
 		{name: "a FinalBefore pkg/score holds at a slot nothing decides tells doctor that no sample came within BUCKET_TTL_S after those minutes, and when they count as unknown",
 			build: turn(func(int64) bool { return true }), warned: true, held: true,
-			last: "no presence sample came within 2 h after those minutes, so they wait",
+			last: "no presence sample came within 2 h after the first of those minutes, so they wait",
 			hold: func(evs []event.Event) int64 { return evs[0].T - floorMod(evs[0].T, event.SlotMS) + 30*minute }},
 	}
 	for _, c := range cases {
