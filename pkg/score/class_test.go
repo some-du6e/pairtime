@@ -258,18 +258,39 @@ func TestTrackClass(t *testing.T) {
 		name    string
 		textLen int
 		label   string
-		want    event.PromptClass
+		// lowEffort and errorSig are what the ledger writer derives from the
+		// label (DESIGN 5.4).
+		lowEffort bool
+		errorSig  string
+		// asks puts a side door's output asking a question in the session
+		// before the call.
+		asks bool
+		want event.PromptClass
 	}{
-		{"a call of 30 characters is substantive", 30, "", event.ClassSubstantive},
-		{"a call of exactly SUBSTANTIVE_CHARS characters is substantive", 20, "", event.ClassSubstantive},
-		{"a call under SUBSTANTIVE_CHARS characters is a go-ahead", 19, "", event.ClassLowEffort},
-		{"a call of two characters is a go-ahead", 2, "ok", event.ClassLowEffort},
-		{"a call is classed by its length, not its label's words", 30, "keep going!!!!!!!!!!!!!!!!!!!!", event.ClassSubstantive},
+		{name: "a call of 30 characters is substantive", textLen: 30, want: event.ClassSubstantive},
+		{name: "a call of exactly SUBSTANTIVE_CHARS characters is substantive", textLen: 20, want: event.ClassSubstantive},
+		{name: "a call under SUBSTANTIVE_CHARS characters is a go-ahead", textLen: 19, want: event.ClassLowEffort},
+		{name: "a call of two characters is a go-ahead", textLen: 2, label: "ok", lowEffort: true, want: event.ClassLowEffort},
+		{name: "a go-ahead padded to 30 characters is a go-ahead", textLen: 30, label: "keep going!!!!!!!!!!!!!!!!!!!!", lowEffort: true,
+			want: event.ClassLowEffort},
+		{name: "an error line of 25 characters is an error paste", textLen: 25, label: "TypeError: x is undefined", errorSig: "e_type",
+			want: event.ClassErrorPaste},
+		{name: "still broken above an error line, 38 characters, is an error paste", textLen: 38, label: "still broken\nTypeError: x is undefined",
+			errorSig: "e_type", want: event.ClassErrorPaste},
+		{name: "an error paste of ERROR_PASTE_TEXT_MAX characters or more is substantive", textLen: 40,
+			label: "TypeError: x is undefined\nfails in prod!", errorSig: "e_type", want: event.ClassSubstantive},
+		{name: "an error line under SUBSTANTIVE_CHARS is an error paste, not a go-ahead", textLen: 10, label: "ValueError", errorSig: "e_value",
+			want: event.ClassErrorPaste},
+		{name: "a side door's output that asks a question doesn't make a call an answer", textLen: 30, asks: true, want: event.ClassSubstantive},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			b := trackScene(false)
-			tr := b.track(at(60), "s_t", c.textLen, event.LogNoReader, c.label)
+			if c.asks {
+				b.harness(at(50), event.ViaPlugin, "s_t", "p_1", &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
+					AsksQuestion: true})
+			}
+			tr := b.trackAs(at(60), "s_t", c.textLen, event.LogNoReader, c.label, c.lowEffort, c.errorSig)
 			b.samples(at(0), at(120))
 			a, ok := anchorByID(b.run(t, Device{}), tr.EventID)
 			if !ok {

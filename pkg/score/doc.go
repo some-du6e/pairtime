@@ -233,6 +233,10 @@
 //     stamp, as SM 2.2 states it.
 //   - Rule 6's focus test at the stamp takes the os.focus record at or
 //     before it, since the stamp has no record position.
+//   - A pairtime track call is classed like a prompt from what the ledger
+//     writer derived from its label after pkg/redact, low_effort and error_sig,
+//     with text_len as the typed length, and never as an answer (DESIGN 5.4;
+//     E-track-label-class).
 //   - A relayed prompt's class is SM 2.2's, over the app's text: answer
 //     when the prompt answers a question or the session's last output or
 //     stop before the prompt, in seq order, asked one, low_effort by the

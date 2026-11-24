@@ -228,6 +228,17 @@ func (b *tl) git(t int64, project string, actor event.Actor) event.Event {
 
 // track adds a `pairtime track` call from session sess, or from no session
 // if sess is "none".
+// trackAs is track with the low_effort and error_sig the ledger writer
+// derives from the label, which the case gives: the builder never derives
+// them itself.
+func (b *tl) trackAs(t int64, sess string, textLen int, match event.LogMatch, label string, lowEffort bool,
+	errorSig string) event.Event {
+	e := b.track(t, sess, textLen, match, label)
+	p := e.Data.(*event.CLITrack)
+	p.LowEffort, p.ErrorSig = lowEffort, errorSig
+	return e
+}
+
 func (b *tl) track(t int64, sess string, textLen int, match event.LogMatch, label string) event.Event {
 	h := event.HarnessOther
 	if sess == event.NoSession {
