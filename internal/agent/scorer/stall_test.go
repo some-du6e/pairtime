@@ -26,6 +26,9 @@ func TestStallNote(t *testing.T) {
 		// between two of the sampler's records, 0 for none.
 		gapEnd, gap int64
 		focus       event.AppClass
+		// undecided is the slot pkg/score holds FinalBefore at because
+		// nothing decides its presence yet, 0 for none.
+		undecided int64
 		// want are the parts the note must hold, none for no note; bare says
 		// the note names no cause.
 		want []string
@@ -57,10 +60,19 @@ func TestStallNote(t *testing.T) {
 		{name: "with samples coming and a terminal in front, the note names no cause",
 			fb: at - 2*60*minute, sampled: at - minute, focus: event.AppTerminal,
 			want: []string{"ends 2 h before"}, bare: true},
+		{name: "with FinalBefore held at a slot nothing decides, which only a sample dated more than BUCKET_TTL_S after it lets the clock pass, the note says no sample came within that after the first of those minutes, and when the ones it left undecided count as unknown, before the samples' own silence",
+			fb: at - 3*60*minute, sampled: at - 57*minute, undecided: at - 3*60*minute, focus: event.AppTerminal,
+			want: []string{"ends 3 h before",
+				"no presence sample came within 2 h after the first of those minutes, so they wait, and the ones it left undecided count as unknown once the newest record this computer's own clock dated is 2 h 5 min past them"}},
+		{name: "with FinalBefore held at a slot nothing decides and a browser in front, the note still names that slot",
+			fb: at - 3*60*minute, sampled: at - 57*minute, undecided: at - 3*60*minute, focus: event.AppBrowser,
+			want: []string{"no presence sample came within 2 h after the first of those minutes"}},
+		{name: "with a slot nothing decides after FinalBefore, which the clock passed while a bridge record dated ahead released the gap hold, and a lookup holding FinalBefore at a browser run's start before it, the note doesn't name that slot",
+			fb: at - 3*60*minute - 13*minute, sampled: at - minute, undecided: at - 2*60*minute - 6*minute, focus: event.AppBrowser},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := stallNote(at, c.fb, pending, 2*60*minute, 5*minute, sampling{newest: c.sampled, gapEnd: c.gapEnd, gap: c.gap}, c.focus)
+			got := stallNote(at, c.fb, pending, 2*60*minute, 5*minute, sampling{newest: c.sampled, gapEnd: c.gapEnd, gap: c.gap}, c.focus, c.undecided)
 			if len(c.want) == 0 {
 				if got != "" {
 					t.Errorf("note %q, want none", got)
@@ -216,6 +228,11 @@ func TestStallWarning(t *testing.T) {
 		// each, when set, is what every lag doctor hears must say: its
 		// cause.
 		each string
+		// hold, when set, gives the time pkg/score holds FinalBefore at
+		// once it would pass it, as a slot nothing decides does
+		// (score.Output.Undecided), which only #312's order of records
+		// reaches, for a few minutes.
+		hold func(evs []event.Event) int64
 		// held says the newest final minute ends up more than the
 		// warning's lag behind the newest record, so a case's silence
 		// isn't that of a short lag.
@@ -230,12 +247,28 @@ func TestStallWarning(t *testing.T) {
 			build: browser, held: true},
 		{name: "a night's suspend, which holds the minutes for 5 min after the morning's resume, tells doctor why while it holds, and nothing once they catch up",
 			build: overnight, warned: true, each: "a presence sample came after 14 h without one"},
+		{name: "a FinalBefore pkg/score holds at a slot nothing decides tells doctor that no sample came within BUCKET_TTL_S after the first of those minutes, and when the ones it left undecided count as unknown",
+			build: turn(func(int64) bool { return true }), warned: true, held: true,
+			last: "no presence sample came within 2 h after the first of those minutes, so they wait",
+			hold: func(evs []event.Event) int64 { return evs[0].T - floorMod(evs[0].T, event.SlotMS) + 30*minute }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			evs := c.build(t)
 			r := newRig(t, score.Device{})
+			if c.hold != nil {
+				at := c.hold(evs)
+				r.setup = func(l *Loop) {
+					l.scoreStep = func(s score.State, recs []event.Event) (score.State, score.Output) {
+						s, out := score.Step(s, recs)
+						if out.FinalBefore > at {
+							out.FinalBefore, out.Undecided = at, at
+						}
+						return s, out
+					}
+				}
+			}
 			r.write(evs, nil)
 			r.mu.Lock()
 			problems := slices.Clone(r.problems)

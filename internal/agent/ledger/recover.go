@@ -69,13 +69,12 @@ type basePayload struct {
 	LocalUntil   int64    `json:"local_until,omitempty"`
 	LocalUntilOS *untilOS `json:"local_until_os,omitempty"`
 	// Back is the first record of the batch the writer had a mark due for
-	// when the sweep wrote the frame (Writer.back), 0 for none: a stretch
-	// end it took that no batch sealed online since had taken the mark for.
-	// Open makes it due again while no batch has been sealed with the
-	// records from it on, but only from the next record on, as the running
-	// writer can clear the mark after the sweep without sealing a batch, and
-	// a record a crash left pending may be of the stretch that cleared it
-	// (restoreStretches).
+	// when the sweep wrote the frame (Writer.back), 0 for none. Open makes it
+	// due again when no row is kept, or when the newest records none and
+	// ends before it (restoreStretches), but only from the next record on, as
+	// the running writer can clear the mark after the sweep without sealing
+	// a batch, and a record a crash left pending may be of the stretch that
+	// cleared it.
 	Back uint64 `json:"back,omitempty"`
 }
 

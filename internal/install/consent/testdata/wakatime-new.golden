@@ -244,6 +244,12 @@ AI tools pairtime looked for:
     Hackatime, which this doesn't set up. If you join one, set up Hackatime
     too, then run pairtime install again: Hackatime's setup writes a new
     ~/.wakatime.cfg, and install adds pairtime's line to it.
+    Your editors can use a proxy that install can't see: one in their
+    settings, as WakaTime's plugin for JetBrains IDEs passes the IDE's to
+    wakatime-cli. wakatime-cli would then send pairtime's copy of each
+    heartbeat through it: the proxy would get your project and file names
+    unencrypted, and pairtime would get none of them. So don't set a proxy
+    for your editors while pairtime's line is in.
 
     Saying no doesn't stop you from using pairtime.
     Without it, pairtime doesn't see the time you spend in an editor.

@@ -63,6 +63,17 @@ type Facts struct {
 	// lines show as ~, so that a line someone shares names fewer of their
 	// folders.
 	Homes []string
+	// T3 is what doctor found of T3 Code on this computer itself: its
+	// store, and the Claude homes of their own its Claude instances use
+	// (DESIGN 5.1).
+	T3 T3Facts
+	// GOOS is the OS doctor runs on, and Distro, on Linux, the words of
+	// os-release's ID and ID_LIKE (DistroIDs), which say how to install a
+	// tool there.
+	GOOS   string
+	Distro []string
+	// Now is when doctor ran.
+	Now time.Time
 }
 
 // Checks works out doctor's lines from f, in the order DESIGN 5.9 lists
@@ -86,6 +97,7 @@ func Checks(f Facts) []Check {
 		out = append(out, hookChecks(h)...)
 	}
 	out = append(out, adapterChecks(f)...)
+	out = append(out, t3Checks(f)...)
 	if c, ok := ledgerCheck(f); ok {
 		out = append(out, c)
 	}

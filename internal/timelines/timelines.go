@@ -61,7 +61,10 @@ type Expected struct {
 	// InputKeys says whether the machine reports keyboard input apart from
 	// other input (idle_keys_s set).
 	InputKeys bool `json:"input_keys"`
-	// Evidence and Witness apply to every credited second of the fixture.
+	// Evidence is the level of every credited second unless the fixture's
+	// level totals or slots.json say otherwise, as in
+	// focus-unknown/c-x11-reconnect. Witness applies to every credited
+	// second.
 	Evidence event.Evidence `json:"evidence"`
 	Witness  event.Witness  `json:"witness"`
 	Device   string         `json:"device"`

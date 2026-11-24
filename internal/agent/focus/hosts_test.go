@@ -208,6 +208,58 @@ func TestGoldenHosting(t *testing.T) {
 	}
 }
 
+// TestAgentAppWindow checks SM 3.2 rule 3 for T3 Code's desktop app, which
+// runs its server as its own executable, a child of the window's process
+// (internal/platform/testdata/procs/sm32-t3-desktop.json): its window is an
+// agent app's and hosts every session that server drives, so SM 2.2 rule
+// 6, tested at a message's stamp, sees a message typed into it here. A t3
+// serve started on its own owns no window, so a console showing its log
+// hosts nothing.
+func TestAgentAppWindow(t *testing.T) {
+	tab := platform.NewTable(platform.Windows, []platform.Proc{
+		proc(4, 0, "System", -600),
+		proc(4520, 4480, "explorer", -500),
+		// The desktop app's window, its server, a session the server
+		// started for a message, and one typed into T3 Code's own terminal.
+		proc(9800, 4520, "T3 Code (Beta)", -100),
+		proc(9810, 9800, "T3 Code (Beta)", -100),
+		proc(9820, 9810, "claude", -30),
+		proc(9830, 9810, "pwsh", -20),
+		proc(9840, 9830, "claude", -10),
+		// A t3 serve explorer started, which Windows gives a console of its
+		// own, and a session it started.
+		proc(9900, 4520, "t3", -200),
+		proc(9910, 9900, "claude", -5),
+	})
+	sessions := keyed(tab, map[int]string{9820: "s_t3", 9840: "s_t3term", 9910: "s_serve"})
+	tests := []struct {
+		name   string
+		pid    int
+		class  event.AppClass
+		app    string
+		hosted []string
+	}{
+		{"T3 Code's desktop window is an agent app's and hosts every session its own server drives (SM 3.2 rule 3)",
+			9800, event.AppAgentApp, "t3 code (beta)", []string{"s_t3", "s_t3term"}},
+		{"a console of t3 serve's own is other, so it hosts nothing, though its process started the session",
+			9900, event.AppOther, "t3", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, ok := windowOf(tab, tt.pid)
+			if !ok {
+				t.Fatalf("pid %d isn't in the table", tt.pid)
+			}
+			if w.class != tt.class || w.name != tt.app {
+				t.Errorf("class %s, app %q; want %s, %q", w.class, w.name, tt.class, tt.app)
+			}
+			if got := hostedSessions(tab, w, sessions); !slices.Equal(got, tt.hosted) {
+				t.Errorf("hosted_sessions %v, want %v", got, tt.hosted)
+			}
+		})
+	}
+}
+
 func TestFocusProject(t *testing.T) {
 	projects := map[string]string{"s_a": "p_a", "s_a2": "p_a", "s_b": "p_b"}
 	projectOf := func(s string) string { return projects[s] }

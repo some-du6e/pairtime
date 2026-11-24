@@ -33,7 +33,7 @@ func TestWakaTimeSnapshots(t *testing.T) {
 	}{
 		{"with hackatime-setup's config, a card after the hooks adds pairtime's line, with the teen's values masked in its diff",
 			"wakatime.golden", hackatimeConfig},
-		{"with no WakaTime config, the card says pairtime makes one for the agent alone, how to get WakaTime's extension, and that Robert's programs read Hackatime",
+		{"with no WakaTime config, the card says pairtime makes one for the agent alone, how to get WakaTime's extension, that Robert's programs read Hackatime, and that a proxy in an editor's settings would get its heartbeats unencrypted, without the other card's clauses about the environment's proxy and the teen's own server",
 			"wakatime-new.golden", ""},
 	}
 	for _, tt := range tests {

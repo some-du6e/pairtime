@@ -49,6 +49,10 @@ None of it is uploaded, except in four cases you control. When you submit hours,
 
 If you also use Hackatime, your editor keeps sending Hackatime what it sent before. pairtime adds nothing to it and removes nothing from it.
 
+If you use T3 Code, pairtime also reads the messages T3 Code keeps on your computer, so it can credit the ones you send from T3 Code's desktop app, a browser or your phone. It reads a message's text only to measure its length and what kind of prompt it is, and keeps none of it. While T3 Code runs and you aren't working in a project, pairtime still notes once a minute whether you're at the computer, so the messages you send from your phone or a browser can count. Then it notes nothing about which app is in front. The Claude Code that T3 Code keeps open between your messages isn't work in a project, but a reply it's writing is, and so is T3 Code's own window in front, until 10 minutes after the reply ends or you switch away.
+
+A message from a guest you shared a T3 Code thread with reaches your agent as a prompt with the guest's name and words in it, and T3 Code starts that prompt with `Message from guest`. pairtime keeps no text of any prompt that starts that way, from any AI tool, even when it can't read T3 Code's messages. So a prompt of your own that starts with those words keeps no text either, and doesn't count. While pairtime can read T3 Code's messages, it also keeps no text of any other prompt a guest's message started. When it can't read them, as on a computer without the `sqlite3` tool, or can't tell that a prompt came from T3 Code, as with one sent while pairtime's agent wasn't running, it keeps such a prompt as it keeps any other.
+
 ## What this server receives
 
 About once a minute while you work, your computer uploads these:
@@ -159,7 +163,7 @@ Through the controller, you can:
 - object to its use for fraud protection, as [Your right to object](#your-right-to-object) explains
 - withdraw any consent you gave, which stops that use from then on
 
-Deleting your account deletes everything this server holds about you, except the minimal fraud record and the hashes behind the day roots of your batches, both in the table above, which the deletion report lists as kept. If the server can't reach the evidence store just then, the report also lists what you revealed as not deleted yet, and the server deletes it as soon as it can. Copies in the server's backups go as the backups expire, within {{days "server.db_snapshots"}}. Copies that programs already received, such as the outcome of a submission, are held by those programs, not by this server.{{if .PrivacyHub}} Hack Club's privacy team can also export or delete your pairtime data for you, through the same privacy hub it uses for Hackatime.{{end}}
+Deleting your account deletes everything this server holds about you, except the minimal fraud record and the hashes behind the day roots of your batches, both in the table above, which the deletion report lists as kept. If the server can't reach the evidence store just then, the report also lists what you revealed as not deleted yet, and the server deletes it as soon as it can. Copies in the server's backups go as the backups expire, within {{days "server.db_snapshots"}}. Copies that programs already received, such as the outcome of a submission, are held by those programs, not by this server.{{if .PrivacyHub}} Hack Club's privacy team can also delete your pairtime data for you, or tell you what this server holds of it, through the same privacy hub it uses for Hackatime.{{end}}
 
 Parents and guardians can contact the controller with questions or requests too.
 

@@ -119,16 +119,26 @@ type Edit interface {
 // change, given base, what the target held before pairtime first touched
 // it, and data, what the edit recorded for its undo (Recorder), nil if
 // nothing. Uninstall uses it when the target changed since pairtime wrote
-// it; otherwise it puts base back as it was.
-type undoer func(cur, base Content, data json.RawMessage) (Content, error)
+// it; otherwise it puts base back as it was. Its notes say what the teen
+// should know about what it did, each as what follows the target's name
+// in a sentence, as Change.Notes write it.
+type undoer func(cur, base Content, data json.RawMessage) (Content, []string, error)
 
 // undoers undo each kind of edit.
 var undoers = map[string]undoer{
-	kindOwned:             undoOwned,
-	kindClaudeHooks:       undoClaudeHooks,
+	kindOwned:             quiet(undoOwned),
+	kindClaudeHooks:       quiet(undoClaudeHooks),
 	kindWakaTimeLine:      undoWakaTimeLine,
-	kindWakaTimeSetup:     undoWakaTimeSetup,
-	kindWakaTimeWatermark: undoWakaTimeWatermark,
+	kindWakaTimeSetup:     quiet(undoWakaTimeSetup),
+	kindWakaTimeWatermark: quiet(undoWakaTimeWatermark),
+}
+
+// quiet returns undo, which has nothing to tell the teen, as an undoer.
+func quiet(undo func(cur, base Content, data json.RawMessage) (Content, error)) undoer {
+	return func(cur, base Content, data json.RawMessage) (Content, []string, error) {
+		c, err := undo(cur, base, data)
+		return c, nil, err
+	}
 }
 
 // Recorder is an Edit that keeps, in the manifest, something its undo needs

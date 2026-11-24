@@ -58,7 +58,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/retention"
 )
 
-//go:embed layout.html style.css home.md privacy.md evidence/*.md dashboard.html
+//go:embed layout.html style.css home.md privacy.md evidence/*.md dashboard.html dashboard.js
 var files embed.FS
 
 // SourceURL is where the code this server runs is published, which AGPL-3.0
@@ -70,7 +70,7 @@ const SourceURL = "https://github.com/some-du6e/pairtime"
 // carries, which TestBuiltinScoringVersion holds it to, so a PR that bumps
 // the scorer's version changes it too. Once pkg/score is part of the
 // server, its version replaces this constant.
-const BuiltinScoringVersion = "0.5.0"
+const BuiltinScoringVersion = "0.6.1"
 
 // Controller says who is responsible for the data on this server
 // (DESIGN 8.6). Fields left empty show as placeholders.
@@ -198,7 +198,12 @@ type Site struct {
 	homeSignIn, homeNoSignIn template.HTML
 	layout                   *layout
 	// csp allows no form, and cspForm lets a form post to this server.
-	csp, cspForm string
+	// cspLive is the owner's dashboard's alone: cspForm, and the page's
+	// one inline script by its hash, with connect-src 'self' for its
+	// stream and its refetches (WP-SV8).
+	csp, cspForm, cspLive string
+	// liveJS is that script, dashboard.js, which ownerPage inlines.
+	liveJS []byte
 	// Signups is the sign-up gate. pairtimed passes its MayCreate to HCA
 	// sign-in (WP-SV2), which asks it before it creates an account.
 	Signups *Signups
@@ -257,7 +262,7 @@ func New(o Options) (*Site, error) {
 			return retention.Days(e.Days), nil
 		},
 	}
-	s := &Site{csp: l.csp, cspForm: l.cspForm, layout: l}
+	s := &Site{csp: l.csp, cspForm: l.cspForm, cspLive: l.cspLive, liveJS: l.liveJS, layout: l}
 	if s.privacy, err = l.page("Privacy notice", "privacy.md", data, funcs); err != nil {
 		return nil, err
 	}
@@ -337,8 +342,10 @@ type layout struct {
 	tmpl *template.Template
 	css  string
 	// csp allows no form, and cspForm lets a form post to this server.
-	csp, cspForm string
-	version      string
+	// cspLive is cspForm with liveJS, the owner's dashboard's script.
+	csp, cspForm, cspLive string
+	liveJS                []byte
+	version               string
 	// code is where the footer links the code this server runs.
 	code string
 }
@@ -369,13 +376,23 @@ func newLayout(version, code string) (*layout, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pages: %w", err)
 	}
-	// The stylesheet is inline, so the CSP names it by its hash.
-	sum := sha256.Sum256(css)
-	policy := func(formAction string) string {
-		return "default-src 'none'; style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) +
-			"'; base-uri 'none'; form-action " + formAction + "; frame-ancestors 'none'"
+	js, err := fs.ReadFile(files, "dashboard.js")
+	if err != nil {
+		return nil, fmt.Errorf("pages: %w", err)
 	}
-	return &layout{tmpl: t, css: string(css), csp: policy("'none'"), cspForm: policy("'self'"), version: version, code: code}, nil
+	// The stylesheet is inline, so the CSP names it by its hash, and the
+	// owner's dashboard's script the same way: no 'unsafe-inline', and no
+	// script but that one runs.
+	hash := func(b []byte) string {
+		sum := sha256.Sum256(b)
+		return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+	}
+	policy := func(formAction string) string {
+		return "default-src 'none'; style-src " + hash(css) + "; base-uri 'none'; form-action " + formAction + "; frame-ancestors 'none'"
+	}
+	live := "default-src 'none'; style-src " + hash(css) + "; script-src " + hash(js) +
+		"; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+	return &layout{tmpl: t, css: string(css), csp: policy("'none'"), cspForm: policy("'self'"), cspLive: live, liveJS: js, version: version, code: code}, nil
 }
 
 // page executes the Markdown template name with data, renders it and wraps

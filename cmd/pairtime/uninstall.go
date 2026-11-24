@@ -164,7 +164,11 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, dataFate(hadKey, data, keepable, *deleteData, "would be deleted"))
 		}
 		// What the real run would leave, as install's dry run says what it
-		// leaves out, on stderr, so that stdout says only what changes.
+		// leaves out, on stderr, so that stdout says only what changes, and
+		// what the teen should know about the changes.
+		for _, note := range p.Notes() {
+			fmt.Fprintf(stderr, "pairtime uninstall: note: %s\n", install.Printable(note))
+		}
 		for _, problem := range p.Problems {
 			fmt.Fprintf(stderr, "pairtime uninstall: this has to stay: %s\n", install.Printable(problem))
 		}
@@ -417,6 +421,9 @@ func showUninstall(w io.Writer, p *install.Plan, binaries []binary, running bool
 		fmt.Fprintln(w)
 		for _, line := range strings.SplitAfter(strings.TrimSuffix(p.Diff(), "\n"), "\n") {
 			fmt.Fprintf(w, "    %s\n", strings.TrimSuffix(line, "\n"))
+		}
+		for _, note := range p.Notes() {
+			fmt.Fprintf(w, "\nNote: %s\n", install.Printable(note))
 		}
 	}
 	for _, problem := range p.Problems {

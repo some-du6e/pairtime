@@ -149,8 +149,19 @@ type share struct {
 // devices only for keys that project registration (WP-SV10) has linked to
 // one id (D-account-project-id).
 func merge(devs []device) merged {
+	m, _ := mergeWon(devs)
+	return m
+}
+
+// mergeWon is merge, and also says which of devs won each slot: its index
+// in devs, or -1 where none credits the slot. The public read keeps only
+// the slots that revisions the server labeled witnessed or offline won
+// (PublicCreditAsOf).
+func mergeWon(devs []device) (merged, [slotsPerMinute]int) {
 	var m merged
+	var won [slotsPerMinute]int
 	for i := range slotsPerMinute {
+		won[i] = -1
 		var win *device
 		crediting := 0
 		for j := range devs {
@@ -161,6 +172,7 @@ func merge(devs []device) merged {
 			crediting++
 			if win == nil || beats(d, win, i) {
 				win = d
+				won[i] = j
 			}
 		}
 		if crediting > 1 {
@@ -196,7 +208,7 @@ func merge(devs []device) merged {
 			m.agent = append(m.agent, share{project: p, ms: ms, pending: w.pending})
 		}
 	}
-	return m
+	return m, won
 }
 
 // beats reports whether d's slot i wins over w's (SM 3.4).
@@ -216,13 +228,15 @@ type dayKey struct{ project, day, kind string }
 
 // columns are a rollups_daily row's values, in its column order:
 // final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms,
-// pending_c_ms, agent_only_final_ms, agent_only_pending_ms.
-type columns [8]int64
+// pending_c_ms, agent_only_final_ms, agent_only_pending_ms, day_cap_ms.
+type columns [9]int64
 
-// The index of the agent's final and pending columns.
+// The index of the agent's final and pending columns, and of the credit
+// the day cap withheld (SM 5.3's X.day_cap).
 const (
 	agentFinal   = 6
 	agentPending = 7
+	dayCap       = 8
 )
 
 // delta is a change to an account's rollups_daily rows.
@@ -255,6 +269,26 @@ func (m merged) contribution(day string) delta {
 		out[k] = c
 	}
 	return out
+}
+
+// add adds o to d.
+func (d delta) add(o delta) {
+	for k, oc := range o {
+		c := d[k]
+		for i := range c {
+			c[i] += oc[i]
+		}
+		d[k] = c
+	}
+}
+
+// credit is m's credited milliseconds, every slot's at every level.
+func (m merged) credit() int64 {
+	var n int64
+	for _, s := range m.slots {
+		n += s.MS
+	}
+	return n
 }
 
 // subtract takes o away from d.

@@ -171,8 +171,9 @@ const wakatimeTimeout = 5 * time.Second
 // config pairtime made has the agent on 127.0.0.1 as its only api_url,
 // which Go's environment proxies never reach. Nor does it ask them when
 // wakatime-cli can't read the config's api_url as a URL, which stops its
-// whole run, or when the config is one pairtime made whose api_key the teen
-// replaced, which the agent refuses.
+// whole run, or when the config is one pairtime made, as the setup file
+// records or, without that record, pairtime's mark says, whose api_key the
+// teen replaced, which the agent refuses.
 func GatherWakaTime(ctx context.Context, data string, client *http.Client) *WakaTime {
 	s, err := wakacfg.ReadSetup(wakacfg.SetupFile(data))
 	switch {
@@ -188,7 +189,14 @@ func GatherWakaTime(ctx context.Context, data string, client *http.Client) *Waka
 	case err != nil:
 		return &WakaTime{Config: s.Config, Problem: fmt.Sprintf("%s can't be read (%v)", s.Config, err)}
 	}
-	st, err := wakacfg.Inspect(cfg, s.Key)
+	// The setup file is install's record: a config it says install made is
+	// pairtime's by that record, whether or not pairtime's mark is still in
+	// it.
+	made := wakacfg.ByMark
+	if s.Made {
+		made = wakacfg.Recorded
+	}
+	st, err := wakacfg.Inspect(cfg, s.Key, made)
 	if err != nil {
 		return &WakaTime{Config: s.Config, Problem: fmt.Sprintf("%s holds something pairtime doesn't read the way wakatime-cli does (%v)", s.Config, err)}
 	}
@@ -207,7 +215,9 @@ func GatherWakaTime(ctx context.Context, data string, client *http.Client) *Waka
 		return &WakaTime{Config: s.Config, Problem: "wakatime-cli can't read the api_url in " + s.Config + " as a URL, so it sends your editor time nowhere, pairtime included"}
 	}
 	if st.TakenOver {
-		return &WakaTime{Config: s.Config, Problem: s.Config + " is the config pairtime made, with an api_key that isn't pairtime's any more, so pairtime's agent refuses what wakatime-cli sends it, and your editor time goes nowhere; point its api_url at your own server, or delete it, then run pairtime install again"}
+		// The route that keeps the teen's key comes first: pairtime made
+		// the file, so no backup of install's holds that key.
+		return &WakaTime{Config: s.Config, Problem: s.Config + " is the config pairtime made, with an api_key that isn't pairtime's any more, so pairtime's agent refuses what wakatime-cli sends it, and your editor time goes nowhere; to send your editor time to pairtime too, set its api_url to your own server, such as Hackatime's, keep your api_key, and run pairtime install again"}
 	}
 	if !st.Line {
 		return &WakaTime{Config: s.Config, Problem: "pairtime's line isn't in " + s.Config + " any more, so wakatime-cli doesn't send your editor time to pairtime; run pairtime install again"}

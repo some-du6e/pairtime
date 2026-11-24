@@ -30,6 +30,27 @@ func PromptClass(t *params.Table, p *event.PromptSubmit, asked bool) event.Promp
 	return promptClass(p, asked, t.Int(params.SUBSTANTIVE_CHARS), t.Int(params.ERROR_PASTE_TEXT_MAX))
 }
 
+// RelayClass returns SM 2.2's class of an agent app's message, from what
+// relay.message r carries of the app's own text: answer when asked is set,
+// low_effort when the reader's go-ahead test marked it, substantive from
+// SUBSTANTIVE_CHARS of its len_chars, and low_effort under that. asked says
+// whether the last agent output of r's session asked a question or its
+// last turn stopped on one, as Questions keeps it, and is false for a
+// record bound to no session. The record carries no error signature, so a
+// message is never an error paste.
+//
+// The ledger writer calls it when it writes the record and records the
+// class as the body's f.pc (ledger-v1 10.7). The scorer gives the relayed
+// prompt the record witnesses the same class (relayClass), but reads the
+// typed length as at most the hook's typed_len_est, takes the prompt's own
+// answers_question too, and reads asked from the outputs before the
+// prompt, which a record written after its prompt can't: it is the class
+// as the writer computed it (DESIGN 3.6).
+func RelayClass(t *params.Table, r *event.RelayMessage, asked bool) event.PromptClass {
+	return promptClass(&event.PromptSubmit{TypedLenEst: r.LenChars, LowEffort: r.LowEffort}, asked,
+		t.Int(params.SUBSTANTIVE_CHARS), t.Int(params.ERROR_PASTE_TEXT_MAX))
+}
+
 // TrackClass returns the class of a `pairtime track` call, the one the
 // scorer gives the anchor the call opens (DESIGN 5.4): substantive from
 // SUBSTANTIVE_CHARS characters of text_len, and low_effort under that. The

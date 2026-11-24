@@ -439,9 +439,12 @@ func Windows(times []int64, notBefore int64) []Window {
 	return out
 }
 
-// Exported is every row this package keeps for an account, which the
-// privacy hub's export holds (DESIGN 8.9; WP-SV13): its devlogs, its badges
-// and the ids of what it deleted or removed in the last 30 days.
+// Exported is every row this package keeps for an account: its devlogs,
+// its badges and the ids of what it deleted or removed in the last 30
+// days. The privacy hub's export only counts these tables, since the
+// hub's contract answers counts and never a person's data (WP-SV13), so
+// nothing reads Exported yet. It is kept for a later download the teen
+// asks for themselves.
 type Exported struct {
 	Devlogs []Devlog  `json:"devlogs"`
 	Badges  []Badge   `json:"badges"`
@@ -455,8 +458,10 @@ type Removal struct {
 	RemovedAt time.Time `json:"removed_at"`
 }
 
-// Export reads every row this package keeps for account, for the privacy
-// hub's export, and writes nothing. DeleteAccount deletes the same rows.
+// Export reads every row this package keeps for account, and writes
+// nothing: the rows a later download by the teen would hold, not the
+// privacy hub's export, which counts them. DeleteAccount deletes the same
+// rows.
 func Export(ctx context.Context, q Querier, account string) (Exported, error) {
 	devlogs, err := List(ctx, q, account)
 	if err != nil {

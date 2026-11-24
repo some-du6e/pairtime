@@ -54,11 +54,27 @@
         "role": {"enum": ["project", "evidence", "submission", "hours", "justification", "exception", "automation", "review", "weight", "program"]},
         "filled_by": {
           "enum": ["program", "pairtime", "reviewer", "Hack Club automation"],
-          "description": "Who writes the field. pairtime means the text or number comes from pairtime's justification endpoint (DESIGN 9.3), written by the program's Airtable script (WP-PG2) or pasted by its reviewer."
+          "description": "Who writes the field. pairtime means pairtime wrote the text or number, which reaches the base from its justification endpoint (DESIGN 9.3), written by the program's Airtable script (WP-PG2) or pasted by its reviewer. reviewer means a person wrote it, in the base or on pairtime's review page. The endpoint returns a reviewer's Deflation Justification only once the reviewer has confirmed pairtime's draft as written or rewritten it (DESIGN 9.3)."
         },
         "handbook": {"type": "string", "description": "The field's name in the handbook, in handbook/fields.json."},
         "note": {"type": "string"}
-      }
+      },
+      "allOf": [
+        {
+          "description": "The handbook asks a person to write Deflation Justification and Specific Technical Features (written_by human in handbook/fields.json), so they are the reviewer's, never pairtime's.",
+          "not": {
+            "required": ["handbook", "filled_by"],
+            "properties": {
+              "handbook": {"enum": ["Deflation Justification", "Specific Technical Features"]},
+              "filled_by": {"not": {"const": "reviewer"}}
+            }
+          }
+        }
+      ],
+      "x-invalid-examples": [
+        {"name": "Justification - Deflation Justification", "line": 3292, "role": "justification", "filled_by": "pairtime", "handbook": "Deflation Justification"},
+        {"name": "Justification - Specific Technical Features", "line": 3291, "role": "justification", "filled_by": "pairtime", "handbook": "Specific Technical Features"}
+      ]
     }
   }
 }

@@ -242,6 +242,7 @@ func (w *Writer) stretchesFromRows(rows []rowPayload, start int, seed []stretch,
 		}
 		s := stretch{from: from, to: w.earlierEdge(u)}
 		s.widen(prevEnd(out, len(out)))
+		orderWall(&s, out, -1)
 		out = append(out, s)
 		firstRow = append(firstRow, k)
 		last = u
@@ -311,6 +312,7 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 				last = rows[k].until()
 				s.to, s.open = w.earlierEdge(last), false
 				s.widen(prevEnd(w.stretches, n-1))
+				orderWall(s, w.stretches, n-1)
 				for _, r := range rows[k:] {
 					s.passed = s.passed || r.online()
 				}
@@ -321,23 +323,35 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 			w.mergeStretches()
 		}
 	}
-	sealedTo := bf.base.FirstSeq - 1
-	if len(rows) > 0 {
-		sealedTo = rows[len(rows)-1].LastSeq
+	// The mark the writer had due as it sealed its newest batch, which that
+	// batch neither took nor ended (sealPayload.Due), is due again until a
+	// batch sealed online takes it or ends it, as when the first batch after
+	// a switch back was sealed local-only for a held call that came late.
+	// With no row kept, or when the newest records none and ends before it,
+	// as a row an older version sealed does, the mark a sweep's base frame
+	// keeps (basePayload.Back) is, as no batch has been sealed with its
+	// records since. A newest row that ended the mark Open restored
+	// (sealPayload.BackEnded) leaves none due, though its records came before
+	// the mark, as those of Open's own batch of what a crash left do.
+	// It marks only a batch whose records were all made after Open
+	// (Writer.backFrom). After its newest seal the running writer may have
+	// cleared the mark without sealing a batch, as a seal's read or a note
+	// that found config.toml local-only does, and begun a stretch no frame
+	// recorded, which the restart erased. A record of that stretch that a
+	// crash left pending, or that reaches the writer after Open, as a hook
+	// call held.jsonl kept or a transcript line read late, falls in no
+	// stretch the writer knows, but it was made before Open: a stretch still
+	// going on at Open clears the mark at Open's own read of config.toml. So
+	// a batch holding one stays unmarked, and closes the run of local-only
+	// batches with itself inside, which ends the mark when it is sealed
+	// online. For the same reason the mark is due only from the next record
+	// on.
+	due := bf.base.Back
+	if n := len(rows); n > 0 && (rows[n-1].Due > 0 || rows[n-1].BackEnded || due <= rows[n-1].LastSeq) {
+		due = rows[n-1].Due
 	}
-	if b := bf.base.Back; b > sealedTo {
-		// The mark the writer had due when a sweep wrote the base frame
-		// (basePayload.Back), for a stretch end it took that no batch had
-		// taken the mark for yet: no batch has been sealed with the records
-		// from it on since, so it is due again, though the agent's Seen of the
-		// end, which the base frame's moment holds, now moves nothing. It is
-		// due from the next record on, never for one a crash left pending:
-		// the running writer may have cleared the mark after the sweep
-		// without sealing a batch, as a seal's read or a note that found
-		// config.toml local-only does, and a record pending now may have been
-		// made in that stretch, which the crash erased. seenLocked's mark
-		// leaves pending records out the same way.
-		w.back = max(b, w.next)
+	if due > 0 {
+		w.back, w.backFrom = max(due, w.next), w.momentNow()
 	}
 	if end, ok := w.newestEnd(); ok {
 		w.onlineAt = end
@@ -413,6 +427,7 @@ func (w *Writer) sawOnline(end edge) bool {
 	s := &w.stretches[n-1]
 	s.to, s.open = end, false
 	s.widen(prevEnd(w.stretches, n-1))
+	orderWall(s, w.stretches, n-1)
 	w.raiseOnline(end)
 	w.dirty = true
 	return true
@@ -468,6 +483,7 @@ func (w *Writer) learned(end edge, cross bool) {
 	// one ended, so this one goes before it.
 	i := at + 1
 	s.widen(prevEnd(w.stretches, i))
+	orderWall(&s, w.stretches, -1)
 	w.stretches = slices.Insert(w.stretches, i, s)
 	if i == n {
 		// No stretch the writer has ended after this one, nor goes on.
@@ -475,6 +491,35 @@ func (w *Writer) learned(end edge, cross bool) {
 	}
 	w.mergeStretches()
 	w.dirty = true
+}
+
+// orderWall puts s's wall bounds in order where widen left the wall clock
+// dating s's end before its start, as after a reboot whose wall clock reads
+// behind the boot before's: the clocks the edges hold order them, but a
+// record judged by the wall clock alone, as one with no monotonic reading,
+// would fall outside s whatever its time. s then holds what the wall clock
+// dates from the newest end, at or before its own by that clock, of the
+// other stretches in list, or from the beginning of time when none ended
+// so: one whose edges share no clock holds what that clock dates from the
+// end of the stretch before it (widen), and here that end is the newest
+// the wall clock puts before s's. That holds what s's end's boot made in s
+// before the end, by that boot's clock. What s's start's boot made in s
+// carries that boot's wall time, later than the end's, which no wall bound
+// holds. self is s's own place in list, -1 when it isn't there: it is
+// called after each widen (learned, sawOnline, Open's end of the stretch
+// going on, the stretches rebuilt from rows, and a seal's question to
+// Waiting).
+func orderWall(s *stretch, list []stretch, self int) {
+	if s.from.m.wall <= s.to.m.wall {
+		return
+	}
+	var from int64
+	for j, o := range list {
+		if j != self && !o.open && o.to.m.wall <= s.to.m.wall {
+			from = max(from, o.to.m.wall)
+		}
+	}
+	s.from.m.wall = from
 }
 
 // endBefore is the index of the newest stretch that ended before end, by

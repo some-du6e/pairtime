@@ -22,8 +22,10 @@ import (
 // each device's chain state on its row (D-device-row-chain-state). Until
 // the server key is there, uploads get 503 ingest_off, and GET
 // /api/v1/time answers all the same. Each processed upload counts in
-// /metrics' ingest series (DESIGN 10.4).
-func newIngest(cfg *config.Config, db *store.DB, w *writer.Writer, devices *device.Store, series *ops.Series, logger *slog.Logger) *ingest.Service {
+// /metrics' ingest series (DESIGN 10.4). changed hears the account of each
+// upload that stored a bucket revision, once its transaction committed:
+// the live stream (WP-SV8).
+func newIngest(cfg *config.Config, db *store.DB, w *writer.Writer, devices *device.Store, series *ops.Series, logger *slog.Logger, changed func(account string)) *ingest.Service {
 	o := ingest.Options{Devices: devices, Writer: w, Read: db.Read, Logger: logger}
 	o.Observe = func(stored int, took time.Duration) {
 		series.IngestBatches.Add(uint64(stored))
@@ -38,6 +40,7 @@ func newIngest(cfg *config.Config, db *store.DB, w *writer.Writer, devices *devi
 	// Every bucket revision ingest stores moves the owner's rollups in the
 	// same writer transaction (WP-SV7).
 	o.Rollup = rollup.ApplyEvent
+	o.Changed = changed
 	s := ingest.New(o)
 	if !s.On() {
 		logger.Info("ingest is off until the server key is there; GET /api/v1/time still answers")

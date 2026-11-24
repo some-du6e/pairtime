@@ -51,10 +51,25 @@ type Slot struct {
 	FocusProject string         `json:"focus_project,omitempty"`
 	Hosted       []string       `json:"hosted_sessions,omitempty"`
 	// Asleep is set when the slot overlaps a suspend or a gap between
-	// samples longer than SLEEP_GAP_S; Locked when it overlaps a screen
-	// lock. Either makes the slot a hard break.
+	// samples longer than SLEEP_GAP_S, unless slow sampling explains the
+	// gap (DESIGN 6.2 D14), and whenever the machine slept through it
+	// (slept); Locked when it overlaps a screen lock. Either makes the slot
+	// a hard break.
 	Asleep bool `json:"asleep"`
 	Locked bool `json:"locked"`
+	// slept is set when the machine slept through the slot, as relayed
+	// credit reads it (SM 2.1, D-relayed-sleep): the slot overlaps a
+	// suspend or a gap between samples longer than twice SLOW_SAMPLE_S
+	// (rules.sleptGap), whatever D14 makes of the gap. A slot slept
+	// through is also Asleep, and a never-sampling device's slot is
+	// neither, whatever came before its sampler stopped (presence.neverAt).
+	// A shorter gap, such as the minute between the samples of a context
+	// an agent app alone keeps live (DESIGN 3.3), is a hard break for
+	// every other window, unless slow sampling explains it (D14), but a
+	// relayed anchor's lead and its session's relayed reading are realized
+	// across it (creditor.relayLive). It is no field of SM 1.3's slot
+	// record, so neither Event nor the JSON carries it.
+	slept bool
 }
 
 // End returns the end of the slot.
@@ -179,12 +194,19 @@ type presence struct {
 	// the device sampling again but wasn't a sample, as a resume is when
 	// the agent's idle read fails, to the sampler's next sample, or on with
 	// none: the sampler ran there but took no sample, so their slots are
-	// unknown, as before a machine's first sample (SM 2.1, blindAt).
+	// unknown, as before a machine's first sample (SM 2.1, blindAt). It
+	// also holds the stretch from a sample to a bare os.power that is the
+	// sampler's next record (reach.blind), where the sampler ran too and no
+	// sample says what it saw.
 	blind []span
 	// restart is the t of the latest record of the sampler's that started
 	// the device sampling again (blind), 0 for none. No slot takes its
 	// keyboard flag from a sample before it, which the agent's carry drops.
 	restart int64
+	// undecided is the start of the first slot that nothing decides yet,
+	// which ends slots, or never when every slot up to now is decided.
+	// Step holds FinalBefore there (SM 2.1).
+	undecided int64
 }
 
 // reach is a record of the presence sampler's, os.presence or os.power, at
@@ -209,19 +231,45 @@ type presence struct {
 // stamped record dated inside it has had rules.late to arrive, in
 // whichever order the two come (SM 2.1). A reach whose cut has taken
 // effect is held by nothing: a record that arrives later can't keep it.
+//
+// sample marks an os.presence, bare an os.power with no sample after it at
+// its own t, and wakes a resume or an unlock. The agent samples at every
+// power event and writes the sample right after the os.power (DESIGN 3.3),
+// so a bare one shows its idle read failing. After a sample, or after a
+// bare resume or unlock, the slots wait for a sample to decide them, and
+// lapse marks such a record whose next record of the sampler's is bare
+// while its own reach hasn't ended: no sample will say what came between
+// (decision D-sampleless-power). It holds the clock until the newest record
+// the device's own clock dated (stampedRecord, the sampler's included) is
+// rules.late past the bare record, since the sample taken with it may still
+// be on its way, sealed a batch later. A bridge or log record dated ahead
+// of the device's clock doesn't end that wait. Then blind says the slots
+// from it to the bare record are unknown (SM 2.1, presence.blindAt).
 type reach struct {
-	t, cut      int64
-	ended, held bool
+	t, cut              int64
+	ended, held         bool
+	sample, bare, wakes bool
+	lapse, blind        bool
 }
 
 // sampledReaches returns the sampler's records in recs, which are in record
 // order, with their reaches, as of high, the newest record's t.
 func sampledReaches(r rules, recs []event.Event, high int64) []reach {
 	var out []reach
+	var dated int64 // the newest t the device's own clock dated
 	for _, e := range recs {
+		if stampedRecord(e) {
+			dated = max(dated, e.T)
+		}
 		switch {
 		case samplerRecord(e):
-			out = append(out, reach{t: e.T, cut: never})
+			_, sample := e.Data.(*event.OSPresence)
+			if n := len(out); sample && n > 0 && out[n-1].bare && out[n-1].t == e.T {
+				out[n-1].bare = false // the sample the agent took at the os.power
+			}
+			p, power := e.Data.(*event.OSPower)
+			wakes := power && (p.Op == event.PowerResume || p.Op == event.PowerUnlock)
+			out = append(out, reach{t: e.T, cut: never, sample: sample, bare: !sample, wakes: wakes})
 		case stampedRecord(e) && len(out) > 0:
 			if c := &out[len(out)-1]; c.cut == never && e.T > c.t+r.bucketTTL {
 				c.cut = e.T
@@ -231,8 +279,15 @@ func sampledReaches(r rules, recs []event.Event, high int64) []reach {
 	for i := range out {
 		c := &out[i]
 		c.ended = c.cut <= high-r.late
-		gap := i+1 < len(out) && out[i+1].t-c.t > r.bucketTTL && out[i+1].t > high-r.late
-		c.held = !c.ended && (c.cut != never || gap)
+		var gap, waits bool
+		if i+1 < len(out) {
+			next := out[i+1]
+			gap = next.t-c.t > r.bucketTTL && next.t > high-r.late
+			c.lapse = (c.sample || c.wakes && c.bare) && next.bare && !c.ended
+			waits = c.lapse && next.t > dated-r.late
+			c.blind = c.lapse && !waits
+		}
+		c.held = !c.ended && (c.cut != never || gap || waits)
 	}
 	return out
 }
@@ -255,13 +310,17 @@ func (p *presence) neverAt(t int64) bool {
 
 // dates reports whether sample s's idle time dates an input at l, for a
 // slot's input and an act's evidence test: wherever the device samples,
-// and in a never-sampling device's slot (neverAt) only when s came within
-// SLEEP_GAP_S of l, as the sample the agent takes as a hook starts it, or
-// as its sampler starts again, does, with the typing of that hook's prompt
-// just before it. Whatever such an input decides is still pending when its
-// sample comes, so no later sample changes a slot or an act already final.
+// and in a slot that is SM 2.1's unknown (unsampled), before the first
+// sample, a never-sampling device's or one where the sampler ran and took
+// no sample, only when s came within SLEEP_GAP_S of l, as the sample the
+// agent takes as a hook starts it, or as its sampler starts again, does,
+// with the typing of that hook's prompt just before it. Whatever such an
+// input decides is still pending when its sample comes, so no later sample
+// changes a slot or an act already final, and a Step over the agent's
+// window, whose carry drops the samples from before a restart, dates as
+// one Step over every record does.
 func (p *presence) dates(s sample, l int64) bool {
-	return s.t-l <= p.r.sleepGap || !p.neverAt(l)
+	return s.t-l <= p.r.sleepGap || !p.unsampled(l)
 }
 
 // reachAt returns the index of the sampler's latest record dated before the
@@ -294,14 +353,15 @@ func agentRecords(recs []event.Event) (first int64, stamped, live bool) {
 // earliestLead returns the earliest time a relayed lead can start for the
 // relay.message records in recs, COMPOSE_MAX_S before the earliest stamp
 // of those that can open one, and whether there is one. Those are the
-// records of declared none written at most RELAY_SEEN_LAG_S after their
-// stamps: any other pairs with nothing, or gives its prompt the app's
-// declaration, and opens no lead (SM 2.2 rule 9, 2.3).
+// records of declared none decided in time for their stamps, at most
+// RELAY_SEEN_LAG_S after them and at most relayAheadMS before
+// (decidedInTime): any other pairs with nothing, or gives its prompt the
+// app's declaration, and opens no lead (SM 2.2 rule 9, 2.3).
 func earliestLead(r rules, recs []event.Event) (int64, bool) {
 	from, ok := int64(math.MaxInt64), false
 	for _, e := range recs {
 		m, isRelay := e.Data.(*event.RelayMessage)
-		if isRelay && m.Declared == event.RelayDeclaredNone && e.T-m.SentAt <= r.relaySeenLag {
+		if isRelay && m.Declared == event.RelayDeclaredNone && r.decidedInTime(e.T, m.SentAt) {
 			from, ok = min(from, m.SentAt-r.composeMax), true
 		}
 	}
@@ -309,7 +369,7 @@ func earliestLead(r rules, recs []event.Event) (int64, bool) {
 }
 
 func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *focusLine) *presence {
-	p := &presence{r: r}
+	p := &presence{r: r, undecided: never}
 	if len(recs) == 0 {
 		return p
 	}
@@ -325,6 +385,10 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 	}
 	var (
 		locks, sleeps, gaps []span
+		// longGaps are the gaps between samples longer than twice
+		// SLOW_SAMPLE_S (rules.sleptGap), which relayed credit reads as
+		// slept through, with the sleeps (Slot.slept).
+		longGaps            []span
 		locked, asleep      bool
 		lockFrom, sleepFrom int64
 		haveSample          bool
@@ -336,8 +400,19 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		// that record isn't a sample, is its t, or -1 for none (blind).
 		restarting bool
 		blindFrom  = int64(-1)
+		// lapsing is set from a bare os.power that follows a record of
+		// the sampler's whose reach hasn't ended (reach.lapse) until the
+		// next sample, which opens no gap from the sample before.
+		lapsing bool
+		// lastSampler is the t of the sampler's latest record before e,
+		// and haveSampler says there is one.
+		lastSampler int64
+		haveSampler bool
 	)
 	for _, e := range recs {
+		// A resume with no suspend before it dates its sleep from just after
+		// the sampler's previous record, MinInt64 for none.
+		since := int64(math.MinInt64)
 		// A record of the sampler's after one whose reach ended starts the
 		// device sampling again (SM 2.1). The stretch between was a
 		// never-sampling device's, which has no hard break, so no gap,
@@ -352,6 +427,10 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		// (DESIGN 3.3), so when an os.power starts the sampler again, the
 		// sample after it opens no gap from before the stretch either.
 		if samplerRecord(e) {
+			if haveSampler {
+				since = lastSampler + 1
+			}
+			lastSampler, haveSampler = e.T, true
 			if sampled > 0 && reaches[sampled-1].ended {
 				if asleep {
 					sleeps = append(sleeps, span{sleepFrom, floorSlot(e.T)})
@@ -365,6 +444,20 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 					blindFrom = e.T
 				}
 			}
+			// The sampler's next record after a sample, or after a bare
+			// resume or unlock, is an os.power with no sample, so the idle
+			// read failed (reach.lapse): the slots from the record before it
+			// to it are unknown once the newest record the device's own clock
+			// dated is rules.late past it, and the next sample opens no gap
+			// from the sample before, since the sampler ran and took none
+			// (D-sampleless-power). A suspend or a lock still decides the
+			// slots after it, up to its resume or unlock.
+			if prev := sampled - 1; prev >= 0 && reaches[prev].lapse {
+				if reaches[prev].blind {
+					p.blind = append(p.blind, span{reaches[prev].t, e.T})
+				}
+				lapsing = true
+			}
 			sampled++
 		}
 		switch d := e.Data.(type) {
@@ -373,18 +466,36 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 			if d.IdleKeysS != nil {
 				s.hasKeys, s.lastKey = true, e.T-msOf(*d.IdleKeysS)
 			}
-			restart := restarting
-			restarting = false
+			restart, bare := restarting, lapsing
+			restarting, lapsing = false, false
 			if blindFrom >= 0 {
 				p.blind, blindFrom = append(p.blind, span{blindFrom, e.T}), -1
 			}
-			if gap := e.T - lastSample; haveSample && !restart && gap > r.sleepGap && !(lastIdle >= r.contextIdle && gap <= r.slowGap) {
-				// SM 2.1: gaps come from wall-clock sample times. The open
-				// interval between the two samples is the gap. After
-				// CONTEXT_IDLE_S without input the agent samples once a
-				// minute (DESIGN 6.2 D14), and a gap that slow sampling
-				// explains is no sleep.
-				gaps = append(gaps, span{lastSample + 1, e.T})
+			if haveSample && !restart && !bare {
+				gap := e.T - lastSample
+				if gap > r.sleepGap && !(lastIdle >= r.contextIdle && gap <= r.slowGap) {
+					// SM 2.1: gaps come from wall-clock sample times. The
+					// open interval between the two samples is the gap.
+					// After CONTEXT_IDLE_S without input the agent samples
+					// once a minute (DESIGN 6.2 D14), and a gap that slow
+					// sampling explains is no sleep.
+					gaps = append(gaps, span{lastSample + 1, e.T})
+				}
+				if gap > r.sleptGap {
+					// Relayed credit reads only a gap longer than twice
+					// SLOW_SAMPLE_S as slept through, and reads it so
+					// whatever idle the sample before it showed and
+					// whatever D14 makes of it: while an agent app alone
+					// keeps the context live, the agent samples once a
+					// minute whatever the input (SM 2.1, D-relayed-sleep).
+					// A gap that ends at the sample that starts the sampler
+					// again, or at the first sample after a bare os.power
+					// whose stretch is blind, is none, for relayed credit as
+					// for every window: the agent ran there, and only a
+					// suspend, which sleeps keeps, says the machine slept
+					// (SM 2.1, D-sampleless-power).
+					longGaps = append(longGaps, span{lastSample + 1, e.T})
+				}
 			}
 			// A sample after a suspend shows the machine awake again, even
 			// if the resume never arrived. The one taken at the suspend
@@ -411,12 +522,12 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 					sleeps, asleep = append(sleeps, span{sleepFrom, e.T}), false
 				} else {
 					// A resume with no suspend before it: the machine slept
-					// since the last sample, or since before any record.
-					from := int64(math.MinInt64)
-					if haveSample {
-						from = lastSample + 1
-					}
-					sleeps = append(sleeps, span{from, e.T})
+					// since the sampler's previous record, or since before
+					// any record. That record, a sample or not, shows the
+					// machine awake (D-sampleless-power): a sample-less lock
+					// or unlock after the last sample decided the slots
+					// before it, which may be final by now.
+					sleeps = append(sleeps, span{since, e.T})
 				}
 			case event.PowerLock:
 				if !locked {
@@ -497,33 +608,72 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		last = floorMinute(now) + MinuteMS - event.SlotMS
 	}
 	n := int((last-p.first)/event.SlotMS) + 1
-	asleepAt := p.mark(n, sleeps, gaps)
+	// Every slot the machine slept through is asleep too, so the long gaps
+	// mark asleepAt as well as sleptAt. Under every table so far, each long
+	// gap is one of gaps already. Under a table whose SLEEP_GAP_S is more
+	// than twice SAMPLE_S, slowGap is longer than sleptGap, so D14 would
+	// excuse a long gap after CONTEXT_IDLE_S without input, and one whose
+	// SLEEP_GAP_S is more than twice SLOW_SAMPLE_S would take a long gap
+	// for no sleep at all. Such a gap is still a hard break.
+	asleepAt := p.mark(n, sleeps, gaps, longGaps)
+	sleptAt := p.mark(n, sleeps, longGaps)
 	lockedAt := p.mark(n, locks)
 	never := make([]bool, n)
 	for k := range never {
-		// A never-sampling device's slot has no hard break: its sampler
-		// records no suspend or lock, and a lock or a suspend before its
-		// sampler stopped says nothing about the slots after.
+		// A never-sampling device's slot has no hard break, and relayed
+		// credit doesn't read it as slept through either (Slot.slept): its
+		// sampler records no suspend or lock, its agent ran there, and a lock
+		// or a suspend before its sampler stopped says nothing about the
+		// slots after, nor does the sleep a resume with no suspend before it
+		// dates from the sampler's previous record.
 		if never[k] = p.neverAt(p.first + int64(k)*event.SlotMS); never[k] {
-			asleepAt[k], lockedAt[k] = false, false
+			asleepAt[k], sleptAt[k], lockedAt[k] = false, false, false
 		}
 	}
 
-	// A slot is decided once a sample at or after its end exists, since
-	// that sample's idle time covers the whole slot, or when it is a hard
-	// break, a never-sampling device's, or one where the sampler took no
-	// sample (blindAt). The first undecided slot ends the list.
-	firstSample, lastSampleT := int64(math.MaxInt64), int64(math.MinInt64)
+	// A slot is decided by a sample dated at most BUCKET_TTL_S after its
+	// end, since that sample's idle time covers the whole slot, or when it
+	// is a hard break, a never-sampling device's, before the first sample,
+	// or one where the sampler took no sample (blindAt). A slot none of
+	// those decides is unknown once the newest record the device's own
+	// clock dated (stampedRecord) is rules.late past BUCKET_TTL_S after its
+	// end, when every sample that could decide it has arrived, so it joins
+	// blind (D-sampleless-power). A bridge or log record dated ahead of the
+	// device's clock moves nothing here. Until then it is
+	// undecided: the first undecided slot ends the list, and Step holds
+	// FinalBefore at it (undecided), so no minute goes final with a slot no
+	// rule derived (SM 2.1).
+	firstSample := int64(math.MaxInt64)
 	if len(p.samples) > 0 {
-		firstSample, lastSampleT = p.samples[0].t, p.samples[len(p.samples)-1].t
+		firstSample = p.samples[0].t
 	}
+	var dated int64 // the newest t the device's own clock dated
+	for _, e := range recs {
+		if stampedRecord(e) {
+			dated = max(dated, e.T)
+		}
+	}
+	after := 0 // the first sample at or after the current slot's end
 	for k := 0; k < n; k++ {
 		a := p.first + int64(k)*event.SlotMS
-		brk := asleepAt[k] || lockedAt[k]
-		if !never[k] && !brk && lastSampleT < a+event.SlotMS && a+event.SlotMS > firstSample && !p.blindAt(a) {
-			n = k
-			break
+		b := a + event.SlotMS
+		for after < len(p.samples) && p.samples[after].t < b {
+			after++
 		}
+		sampled := after < len(p.samples) && p.samples[after].t <= b+r.bucketTTL
+		if never[k] || asleepAt[k] || lockedAt[k] || b <= firstSample || sampled || p.blindAt(a) {
+			continue
+		}
+		if dated-r.late > b+r.bucketTTL {
+			if m := len(p.blind); m > 0 && p.blind[m-1].to == a {
+				p.blind[m-1].to = b
+			} else {
+				p.blind = append(p.blind, span{a, b})
+			}
+			continue
+		}
+		n, p.undecided = k, a
+		break
 	}
 	p.slots = make([]Slot, n)
 	p.never = never[:n]
@@ -555,7 +705,7 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		}
 		s := &p.slots[k]
 		s.Start, s.PresentUntil = a, b
-		s.Asleep, s.Locked = asleepAt[k], lockedAt[k]
+		s.Asleep, s.Locked, s.slept = asleepAt[k], lockedAt[k], sleptAt[k]
 		// The keyboard flag goes by the sample that decides the slot, or
 		// after the last sample by that one, unless the sampler started
 		// again after it: the agent's carry drops a sample from before a
@@ -666,8 +816,9 @@ func (p *presence) unsampled(t int64) bool {
 
 // blindAt reports whether the slot starting at a ends in one of the
 // stretches where the sampler started again with a record that wasn't a
-// sample and took none after it (presence.blind). The agent's carry drops
-// the sampler's records from before such a restart (internal/agent/scorer),
+// sample and took none after it, or ran from a sample to a bare os.power
+// and took none in between (presence.blind). The agent's carry drops the
+// sampler's records from before such a restart (internal/agent/scorer),
 // so a Step over its window has no sample before the next one and reads
 // those slots as before a machine's first sample: blindAt makes one Step
 // over every record read them alike.

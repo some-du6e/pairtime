@@ -97,23 +97,24 @@ var (
 	// ErrNoLine is a config without pairtime's line for the key, which
 	// SetPort has nothing to change in.
 	ErrNoLine = errors.New("the config has no line of pairtime's for this key")
-	// ErrProxy is a config that sets a proxy (Add). wakatime-cli would
-	// send pairtime's line through it too: the proxy would get the
-	// heartbeats in plain text, and unless it passes them on to the agent,
-	// each send that fails holds back what wakatime-cli sends the teen's
-	// own server.
-	// ErrNotOwn is a config pairtime made whose api_key isn't the key the
-	// line has now (Add): the teen gave it a key of their own, as WakaTime's
-	// extension writes one, and adding pairtime's line beside it would have
-	// wakatime-cli send with both, the one the agent refuses failing every
-	// send.
+	// ErrNotOwn is a config pairtime made, by install's record or, without
+	// one, by its mark, whose api_url is still the agent's but whose
+	// api_key isn't the key the line has now (Add, Remove): the teen gave it
+	// a key of their own, as WakaTime's extension writes one, and adding
+	// pairtime's line beside it would have wakatime-cli send with both, the
+	// one the agent refuses failing every send.
 	ErrNotOwn = errors.New("is the config pairtime made, with an api_key that isn't pairtime's any more")
 	// ErrImport is a config that imports another (Add): wakatime-cli reads
 	// the file [settings] import_cfg names over this one (cmd/run.go
 	// parseConfigFiles), so a line of the same pattern there takes
 	// pairtime's line's place, and pairtime edits only the one file.
 	ErrImport = errors.New("imports another config with import_cfg, which wakatime-cli reads over this one, so a line there can take the place of pairtime's")
-	ErrProxy  = errors.New("sets a proxy, and wakatime-cli would send pairtime's line through it too: the proxy would get your project and file names unencrypted, and while it doesn't pass them on to pairtime's agent, each send that fails holds back what wakatime-cli sends your own server")
+	// ErrProxy is a config that sets a proxy (Add). wakatime-cli would
+	// send pairtime's line through it too: the proxy would get the
+	// heartbeats in plain text, and unless it passes them on to the agent,
+	// each send that fails holds back what wakatime-cli sends the teen's
+	// own server.
+	ErrProxy = errors.New("sets a proxy, and wakatime-cli would send pairtime's line through it too: the proxy would get your project and file names unencrypted, and while it doesn't pass them on to pairtime's agent, each send that fails holds back what wakatime-cli sends your own server")
 )
 
 // checkArgs refuses a key or a port the line can't hold.
@@ -209,6 +210,10 @@ type Setup struct {
 	Key string `json:"key"`
 	// Config is the config install added the line to, or made.
 	Config string `json:"config"`
+	// Made says install made Config (Make), or kept one it made, so that a
+	// later install and pairtime doctor know it as pairtime's by this
+	// record, whether or not pairtime's mark is still in it (Recorded).
+	Made bool `json:"made,omitempty"`
 }
 
 // setupVersion is Setup's format.
@@ -224,7 +229,7 @@ func (s Setup) Encode() []byte {
 	s.V = setupVersion
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
-		panic(err) // a struct of strings and an int always encodes
+		panic(err) // a struct of strings, an int and a bool always encodes
 	}
 	return append(b, '\n')
 }
