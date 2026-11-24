@@ -169,7 +169,10 @@ const wakatimeTimeout = 5 * time.Second
 // answer: one the config sets, or, for a config that isn't pairtime's own,
 // one doctor's environment sets, as the editors' most often does too. A
 // config pairtime made has the agent on 127.0.0.1 as its only api_url,
-// which Go's environment proxies never reach.
+// which Go's environment proxies never reach. Nor does it ask them when
+// wakatime-cli can't read the config's api_url as a URL, which stops its
+// whole run, or when the config is one pairtime made whose api_key the teen
+// replaced, which the agent refuses.
 func GatherWakaTime(ctx context.Context, data string, client *http.Client) *WakaTime {
 	s, err := wakacfg.ReadSetup(wakacfg.SetupFile(data))
 	switch {

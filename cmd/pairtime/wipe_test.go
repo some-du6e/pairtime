@@ -172,7 +172,7 @@ func TestPrivacyDelete(t *testing.T) {
 			// secret stores holds the key, so Destroy deletes its files and
 			// says what may be left.
 			prepare: func(t *testing.T, dir string) {
-				if err := os.WriteFile(filepath.Join(dir, "keystore.json"), []byte("{"), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, "keys", "keystore.json"), []byte("{"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			},
