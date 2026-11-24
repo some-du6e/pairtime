@@ -39,7 +39,7 @@ No authentication. The answer is 200 with `Content-Type: application/json`, `Cac
 | `key_id` | The key's id: the first 16 hex digits of the SHA-256 of its public key, as `pairtimed keys show` prints it. That is the raw 32 bytes for a server key, as a receipt names it (ingest-v1 2.8), and the 65-byte uncompressed point for the evidence key, as a sealed blob names it (seal-v1 1). A reader computes it from `public_key` and refuses a document whose `key_id` disagrees |
 | `public_key` | A server key's 32-byte Ed25519 public key, or the evidence key's uncompressed P-256 point, in lowercase hex |
 | `valid_from`, `valid_to` | The first and the last millisecond the key is valid, both included, in Unix ms. `valid_to` is `null` while the key is current |
-| `evidence_key` | The current evidence key, which seals tier-2 content (DESIGN 7.6; seal-v1 7), with the four members above, or `null` while the server holds none, as when `/data/keys` has no keys. Its `public_key` is the 65-byte point, 130 hex digits. The document lists only the current evidence key, never a retired one, so its `valid_to` is always `null` |
+| `evidence_key` | The current evidence key, which seals tier-2 content (DESIGN 7.6; seal-v1 7), with the four members above, or `null` while the server holds none, as when `/data/keys` has no keys. Its `public_key` is the 65-byte point, 130 hex digits. The document lists only the current evidence key, never a retired one, so its `valid_to` is always `null`. While it is `null`, an upload gets a 503 with a code of its own, not `409 evidence_key_retired`, and a client that reads `null` uploads nothing and tries again later (seal-v1 7) |
 
 ## 3. Validity
 

@@ -167,19 +167,12 @@ func TestWycheproofECDH(t *testing.T) {
 					}
 				}
 			}},
-			{name: "an acceptable test may be refused, and one that is accepted gives Wycheproof's shared secret", run: func(t *testing.T) {
-				accepted := 0
+			{name: "every acceptable test is refused, since a key comes only in the one form seal-v1 1 and 6 give", run: func(t *testing.T) {
 				for _, tc := range byResult("acceptable") {
-					z, err := exchange(tc, f.parse)
-					if err != nil {
-						continue
-					}
-					accepted++
-					if !bytes.Equal(z, tc.Shared) {
-						t.Errorf("%v: accepted with shared secret %x, want %x", tc, z, tc.Shared)
+					if z, err := exchange(tc, f.parse); err == nil {
+						t.Errorf("%v: accepted, with shared secret %x; pairtime takes only an uncompressed point or the 91-byte SubjectPublicKeyInfo", tc, z)
 					}
 				}
-				t.Logf("%d of %d acceptable tests accepted", accepted, f.ok)
 			}},
 		}
 		if f.encoding == "ecpoint" {

@@ -70,10 +70,9 @@ func loadEvidence(ctx context.Context, q Querier) ([]EvidenceKey, error) {
 // (seal-v1 7). A key the history holds as current changes nothing. Any
 // other key is refused with ErrOtherEvidenceKey, a retired one because
 // pairtimed never serves with a retired evidence key again (DESIGN 10.2),
-// and a new one because switching evidence keys is WP-SB9's pairtimed
-// keys rotate-evidence. That command keeps the retired key on disk until
-// no blob is sealed to it, and until it exists a different evidence.p256
-// means the key the stored blobs are sealed to has gone from data_dir.
+// and a new one because WP-SB9's rotation is what switches evidence keys.
+// Until it exists, a different evidence.p256 means the key the stored
+// blobs are sealed to has gone from data_dir.
 func RecordEvidence(ctx context.Context, tx writer.Tx, pub *ecdh.PublicKey, now int64) error {
 	if pub == nil || pub.Curve() != ecdh.P256() {
 		return errors.New("keys: an evidence key is a P-256 key")
@@ -136,7 +135,8 @@ type ringKey struct {
 // privs is h's current evidence key, as on a server whose data_dir has no
 // keys: the keys document then lists no evidence key, and IsCurrent is
 // false for every id, so no upload is taken that the server couldn't
-// open.
+// open. WP-SB4 answers such an upload with a 503 of its own, since a 409
+// evidence_key_retired would have no key to carry (seal-v1 7).
 func NewRing(h *History, privs ...*ecdh.PrivateKey) (*Ring, error) {
 	r := &Ring{keys: make(map[string]ringKey, len(privs))}
 	for _, p := range privs {
@@ -188,9 +188,11 @@ func (r *Ring) IsCurrent(id string) bool {
 // Open opens blob, sealed under c, with the key its key id names, the
 // current key or a retired one. A blob sealed to a key the ring doesn't
 // hold fails with ErrUnknownEvidenceKey, and the rest as seal.Open says.
-// For a stored blob that is a server fault, never an unavailable item: a
-// key file is missing from data_dir, and its backup brings it back
-// (seal-v1 7).
+// For a stored blob sealed to a key that can still come back, that is a
+// server fault: a key file is missing from data_dir, and its backup
+// brings it back. A blob sealed to a key the history has switched away
+// from, whose private half is gone, is unavailable instead (seal-v1 7;
+// DESIGN 7.5 step 8).
 func (r *Ring) Open(blob []byte, c seal.Context) ([]byte, error) {
 	k, err := r.keyFor(blob)
 	if err != nil {

@@ -289,8 +289,14 @@ func TestContext(t *testing.T) {
 				t.Fatalf("Seal error = %v, want ok %v", err, tt.ok)
 			}
 			if !tt.ok {
-				// A blob sealed under a good name, opened under this one.
-				if blob, err = Seal(key.PublicKey(), example.c, []byte("x")); err != nil {
+				// A blob sealed under the refused name itself, past Seal's
+				// check, so only Open's own check can refuse it.
+				e := newKey(t)
+				z, err := shared(e, key.PublicKey())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if blob, err = blobAround(e.PublicKey().Bytes(), key.PublicKey(), z, tt.c, []byte("x")); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -431,6 +437,16 @@ func TestParseSPKI(t *testing.T) {
 			return append(out, der[4+int(der[3]):]...)
 		}()},
 		{name: "the bare point is refused, since it isn't DER", der: key.Bytes()},
+		{name: "another curve's OID in a 91-byte SubjectPublicKeyInfo is refused, so the prefix is compared and not only the length", der: func() []byte {
+			der := mustSPKI(t, key)
+			der[22] = 0x08
+			return der
+		}()},
+		{name: "a BIT STRING that claims unused bits is refused", der: func() []byte {
+			der := mustSPKI(t, key)
+			der[25] = 0x01
+			return der
+		}()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
