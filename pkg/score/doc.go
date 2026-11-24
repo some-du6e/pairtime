@@ -207,13 +207,13 @@
 //     relay record can open, COMPOSE_MAX_S before its stamp, since the app
 //     starts a message's run after the stamp, but no more than
 //     BUCKET_TTL_S before the first record its agent stamped itself
-//     (WP-HL1). An
-//     uncredited second there takes SM 5.2's codes for a live slot whose
-//     presence is unknown: X.bucket_cap where only the 120 s cap kept a
-//     session from reading, else X.agent_only while a turn a person
-//     started runs, a relayed one included, or a no_input one, else
-//     X.automated while an automated turn runs, else X.no_anchor, turns of
-//     every project counting.
+//     (WP-HL1). An uncredited second there takes SM 5.2's codes for a live
+//     slot whose presence is unknown: X.bucket_cap where only the 120 s
+//     cap kept a session from reading, else X.agent_only while a turn a
+//     person started runs, a relayed one included, else X.automated while
+//     an automated one runs, else X.no_input while a no_input one runs,
+//     else X.no_anchor, turns of every project counting, the turn step a
+//     sampled slot takes (turnCode).
 //
 // Readings of D-relayed:
 //
@@ -455,8 +455,11 @@
 //     client's first os.focus record. Then, while a turn of the slot's
 //     project runs, X.agent_only if a person started one of the running
 //     turns, else X.automated, else X.no_input. X.no_anchor comes last.
-//     That settles docs/errata/2026-11-20-uncredited-code-placement.md.
-//     Seconds before the presence sampler ran are X.absent until lookback
-//     (WP-SC7), but on a device that never samples, where SM 5.2's codes
-//     for a live slot whose presence is unknown apply (WP-ADE1 above).
+//     docs/errata/2026-11-20-uncredited-code-placement.md decides it so,
+//     and gives a live slot whose presence is unknown the same turn step
+//     (turnCode). Where every record came by a log reader, as lookback's
+//     transcripts do, seconds before the presence sampler ran are X.absent
+//     until WP-SC7. Elsewhere they are a never-sampling device's slots
+//     (presence.neverAt), which take SM 5.2's codes for a live slot whose
+//     presence is unknown (WP-ADE1 and WP-HL1 above).
 package score

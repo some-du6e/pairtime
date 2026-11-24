@@ -69,13 +69,17 @@ const (
 	// ReasonNoAnchor is present and focused, but no window covered the
 	// second. A mouse jiggler on an open terminal ends up here.
 	ReasonNoAnchor Reason = "X.no_anchor"
-	// ReasonAgentOnly is an agent turn running with nothing crediting the
-	// second.
+	// ReasonAgentOnly is a turn a person started running, a relayed one
+	// included, with nothing crediting the second.
 	ReasonAgentOnly Reason = "X.agent_only"
-	// ReasonAutomated is a turn whose origin was scheduled, self_continue,
-	// subagent, headless or cloud.
+	// ReasonAutomated is a turn that automation started (scheduled,
+	// self_continue, subagent, headless or cloud) running, with no turn a
+	// person started.
 	ReasonAutomated Reason = "X.automated"
-	// ReasonNoInput is a prompt with no input before it.
+	// ReasonNoInput is a turn whose prompt came with no input before it
+	// (SM 2.2 rule 8) running, with no turn a person or automation
+	// started. The seconds its prompt's lead would have covered take
+	// another code.
 	ReasonNoInput Reason = "X.no_input"
 	// ReasonReroll, ReasonRewriteLoop, ReasonSameError and ReasonAutopilot
 	// are the dark-flow discounts (SM 4.2).
