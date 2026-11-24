@@ -3,11 +3,13 @@
 package ledger
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -361,7 +363,9 @@ func TestMergeStretches(t *testing.T) {
 // stretch an earlier run recorded before one of this run, whatever the wall
 // clock says; before the stretch going on; and first, from the beginning of
 // time, when none ended before it. A stretch whose start holds no reading
-// of its end's boot holds that boot's hook calls from its start.
+// of its end's boot holds that boot's hook calls from its start, and one
+// whose wall bounds the clocks' order leaves inverted holds what the wall
+// clock alone dates from the end before its own by that clock.
 func TestLearnedOrder(t *testing.T) {
 	const boot = "b_order"
 	// at is ms into the boot, whose wall clock stepped back 60 s at 45 s.
@@ -408,10 +412,13 @@ func TestLearnedOrder(t *testing.T) {
 			[]stretch{ended(0, 10_000), {from: edgeAt(at(50_000)), open: true}}, edgeAt(at(45_000)), edgeAt(at(40_000)), 1, 10_000, nil},
 		{"one that ended before every stretch goes first, from the beginning of time",
 			[]stretch{ended(0, 10_000), ended(20_000, 30_000)}, edgeAt(at(35_000)), edgeAt(at(5_000)), 0, -1, nil},
-		{"one of this run goes after every stretch an earlier run recorded, though the wall clock reads behind them after a reboot, and holds this boot's hook calls from its start",
+		{"one of this run goes after every stretch an earlier run recorded, though the wall clock reads behind them after a reboot, holds this boot's hook calls from its start, and holds what the wall clock alone dates from the end before its own by that clock",
 			[]stretch{{to: restored(1_000_000, 50_000), passed: true}, {from: restored(1_100_000, 60_000), to: restored(1_200_000, 70_000), passed: true}},
 			edge{m: moment{wall: 1_205_000, run: 1}}, edgeAt(moment{wall: 1_110_000, run: 5_000, os: 40_000, boot: boot}), 2, 0,
-			[]event.Envelope{{T: 1_105_000, Mono: 35_000, BootID: boot}}},
+			// A hook call of this boot whose wall time is before every edge's,
+			// and a record with no monotonic reading, which the wall clock dates
+			// between the first stretch's end and the learned one's.
+			[]event.Envelope{{T: 950_000, Mono: 35_000, BootID: boot}, {T: 1_090_000}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -436,6 +443,78 @@ func TestLearnedOrder(t *testing.T) {
 			if got != c.want || from != c.from || !ordered || !held || len(w.stretches) != len(c.list)+1 {
 				t.Errorf("the learned stretch is at %d, from %d by the OS's clock, holding the events %v, in order %v, of %d; want at %d, from %d, holding them, in order, of %d",
 					got, from, held, ordered, len(w.stretches), c.want, c.from, len(c.list)+1)
+			}
+		})
+	}
+}
+
+// TestOrderWall checks the stretches whose wall bounds widen leaves
+// inverted, as after a reboot whose wall clock reads behind the boot
+// before's, besides a learned one (TestLearnedOrder): one that went on
+// across the reboot and that sawOnline ends in the new boot, and the one
+// going on that an older version's row ends at Open, as after a downgrade,
+// by the OS's clock of the boot it was recorded in. Each holds what the
+// wall clock dates before its end and after the newest end of another
+// stretch that the wall clock puts before that end (orderWall).
+func TestOrderWall(t *testing.T) {
+	const boot = "b_wall"
+	// restored is an edge an earlier run recorded at wall in boot b_before,
+	// as Open reads it back in boot (Writer.earlierEdge).
+	restored := func(wall, os int64) edge {
+		return edge{m: moment{wall: wall, run: 1, os: 1, boot: boot}, other: moment{os: os, boot: "b_before"}}
+	}
+	// before is a reading of b_before's clock, as a seal frame records it.
+	before := func(mono int64) *untilOS { return &untilOS{Mono: mono, Boot: "b_before"} }
+	local, online := false, true
+	cases := []struct {
+		name string
+		// stretches returns the writer's stretches once the case's stretch
+		// has ended.
+		stretches func() []stretch
+		// held are events a stretch must hold.
+		held []event.Envelope
+	}{
+		{"a stretch that went on across a reboot, ended by sawOnline in the new boot, whose wall clock reads behind, holds what that boot made in it, and what the wall clock dates after the newest end it puts before the stretch's",
+			func() []stretch {
+				w := &Writer{boot: boot, stretches: []stretch{
+					{to: restored(1_000_000, 50_000), passed: true},
+					{from: restored(1_100_000, 60_000), to: restored(1_200_000, 70_000), passed: true},
+					{from: restored(1_205_000, 75_000), open: true},
+				}}
+				w.sawOnline(edgeAt(moment{wall: 1_110_000, run: 5_000, os: 40_000, boot: boot}))
+				return w.stretches
+			},
+			// A hook call of the new boot, which its own clock puts before the
+			// end though its wall time is before every edge's, and a record
+			// with no monotonic reading, which the wall clock dates between the
+			// first stretch's end and this one's.
+			[]event.Envelope{{T: 950_000, Mono: 35_000, BootID: boot}, {T: 1_090_000}}},
+		{"the stretch going on that an older version's row ends at Open, as after a downgrade, later by the clock of the boot both were recorded in though the wall clock dates it before the stretch began, holds what the wall clock dates after the newest end it puts before that one",
+			func() []stretch {
+				w := &Writer{boot: boot}
+				list := []stretchPayload{
+					{To: 1_000_000, ToOS: before(50_000), Passed: true},
+					{From: 1_100_000, FromOS: before(60_000), To: 1_200_000, ToOS: before(70_000), Passed: true},
+					{From: 1_205_000, FromOS: before(75_000), Open: true},
+				}
+				rows := []rowPayload{
+					{sealPayload: sealPayload{B: 1, SealedAt: 1_206_000, Online: &local, LocalUntil: 1_200_000, LocalUntilOS: before(70_000)}},
+					{sealPayload: sealPayload{B: 2, SealedAt: 1_111_000, Online: &online, LocalUntil: 1_110_000, LocalUntilOS: before(80_000)}},
+				}
+				w.restoreStretches(&batchesFile{base: basePayload{B: 1, FirstSeq: 1}, rows: rows, stretches: list, stretchesRow: 0}, nil)
+				return w.stretches
+			},
+			// A record with no monotonic reading, which the wall clock dates
+			// between the first stretch's end and the end the row recorded.
+			[]event.Envelope{{T: 1_090_000}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ss := c.stretches()
+			for _, e := range c.held {
+				if !slices.ContainsFunc(ss, func(s stretch) bool { return s.holds(e) }) {
+					t.Errorf("no stretch holds %+v: %+v", e, ss)
+				}
 			}
 		})
 	}
@@ -622,9 +701,13 @@ func (r *lateRig) write(in Input) {
 	}
 }
 
-// presence is an event made ms after the start, judged by its t alone.
+// presence is an event made ms after the start, judged by its t alone: it
+// carries no monotonic reading, so Writer.madeAfter doesn't take it for one
+// of another boot.
 func (r *lateRig) presence(ms int64) Input {
-	return sampleInput(r.rng, "os.presence", testT+ms, "", "")
+	in := sampleInput(r.rng, "os.presence", testT+ms, "", "")
+	in.Event.Mono = 0
+	return in
 }
 
 // logged is an event of kind that a log reader read made ms after the
@@ -1177,6 +1260,12 @@ func TestLearnedStretch(t *testing.T) {
 			if dropped := err != nil; dropped != c.dropped {
 				t.Errorf("Write dropped the record made at %d ms: %v, want %v", c.madeAt, dropped, c.dropped)
 			}
+			if err == nil {
+				// One the writer took is sealed online, as no stretch holds it.
+				if b := r.seal(); !b.Online || len(b.Records) != 1 {
+					t.Errorf("the batch of the record made at %d ms is online %v with %d records, want online with 1", c.madeAt, b.Online, len(b.Records))
+				}
+			}
 		})
 	}
 }
@@ -1428,7 +1517,9 @@ func TestOldChainFoldsMoments(t *testing.T) {
 // online before it, with no stretch learned twice, and it takes the mark
 // just when the run that took the end had it due: after the Seen's end,
 // which no batch was sealed after, and not after a seal's own read of
-// config.toml, which marks no batch.
+// config.toml, which marks no batch; and then only when each of its
+// records was made after the restart's Open, as a mark Open restores
+// marks no batch that holds an older one (Writer.backFrom).
 func TestSweepKeepsWhatOpenFound(t *testing.T) {
 	// seenAt is a stretch end the agent saw ms after the start and kept, as
 	// state.json does, by both clocks.
@@ -1491,7 +1582,7 @@ func TestSweepKeepsWhatOpenFound(t *testing.T) {
 			3 * sweepDayMS, func(r *lateRig) []Input {
 				return []Input{r.logged("agent.output", 55_000), r.presence(3*sweepDayMS + 1000)}
 			}, 1, 1, false},
-		{"a stretch end the agent kept while the ledger was shut, before the sweep's day: the stretch stays ended, so a record made after that day is sealed online, and the batch takes the mark",
+		{"a stretch end the agent kept while the ledger was shut, before the sweep's day: the stretch stays ended, so a record made after that day is sealed online, but the batch takes no mark, as that record was made before the restart's Open",
 			func(t *testing.T, r *lateRig) (string, uint64) {
 				// The install's stretch, an online batch, and a second stretch,
 				// whose batch, 3, records it going on as the ledger shuts.
@@ -1523,7 +1614,7 @@ func TestSweepKeepsWhatOpenFound(t *testing.T) {
 				// One made after the sweep's day and before the restart, while
 				// config.toml said online, as a presence sample queued across it.
 				return []Input{r.presence(2*sweepDayMS + 1000), r.presence(3*sweepDayMS + 1000)}
-			}, 2, 1, true},
+			}, 2, 1, false},
 		{"a stretch end the agent kept while the ledger was shut, after the sweep's day: the stretch stays ended there, no stretch is learned twice, and the batch takes the mark",
 			func(t *testing.T, r *lateRig) (string, uint64) {
 				// The install's stretch and an online batch, then, days later,
@@ -1617,7 +1708,7 @@ func TestSweepKeepsWhatOpenFound(t *testing.T) {
 			}{
 				{"the writer has the stretches it had at the sweep, none going on", len(restored) == c.stretches && !slices.ContainsFunc(restored, func(s stretch) bool { return s.open })},
 				{"the first batch after the restart is sealed online, with the records it should keep", b.Online && len(b.Records) == c.kept},
-				{"and takes the mark when the end came after the sweep's day", b.Back == c.back},
+				{"and takes the mark when the end came after the sweep's day, and its records after the restart's Open", b.Back == c.back},
 			}
 			for _, ch := range checks {
 				t.Run(ch.name, func(t *testing.T) {
@@ -1728,6 +1819,571 @@ func TestClockOrder(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if before, shared := clockOrder(c.a, c.b); before != c.before || shared != c.shared {
 				t.Errorf("clockOrder = %v, %v; want %v, %v", before, shared, c.before, c.shared)
+			}
+		})
+	}
+}
+
+// TestDueMarkOutlastsARestart checks that the mark due for the first batch
+// after a switch back outlasts a restart when a batch sealed local-only
+// first didn't take it, as for a hook call of the stretch still on its
+// way, with a sweep between or none: the seal frame records the mark
+// (sealPayload.Due), or, with no row left, the sweep's base frame does, and
+// the first batch sealed online after the restart takes it (Batch.Back).
+// It marks only a batch whose records were all made after the restart's
+// Open (Writer.backFrom): a stretch that a seal's local-only read began
+// before the stop, with nothing pending, is in memory only, so the restart
+// erases it, and a record of it that reaches the writer after Open keeps
+// its batch unmarked, by its own times, its sender's stamp, or, for a git
+// change, which goes by the scan that found it, whatever its times say.
+func TestDueMarkOutlastsARestart(t *testing.T) {
+	cases := []struct {
+		name string
+		// sweep has a sweep that drops every row come before the restart.
+		sweep bool
+		// erased, when set, has config.toml go local-only before the stop
+		// with no note the agent hears, read by a seal with nothing pending,
+		// and gives a record of that stretch, made 40 s after the start, or a
+		// git change a scan found after the restart, which reaches the writer
+		// after Open.
+		erased func(r *lateRig) Input
+		// back is whether the first batch sealed online after the restart
+		// takes the mark.
+		back bool
+	}{
+		{"with no sweep before the restart, the local-only batch's seal frame keeps the mark, and the first batch sealed online after the restart takes it", false, nil, true},
+		{"with a sweep that drops every row before the restart, its base frame keeps the mark, and the first batch sealed online after the restart takes it", true, nil, true},
+		{"a hook call of a stretch the restart erased, made in it by the OS's clock, keeps the batch it reaches after Open unmarked, though a step back of the wall clock dates it after Open",
+			false, func(r *lateRig) Input {
+				in := r.presence(70_000)
+				in.Event.Mono, in.Event.BootID = 41_000, lateBoot
+				return in
+			}, false},
+		{"so does one of an earlier boot, timed by the agent's own stamp after Open, whose sender's stamp the wall clock of a boot that reads behind dates after Open, as its boot was before Open's",
+			false, func(r *lateRig) Input {
+				in := r.presence(61_000)
+				in.Event.Mono, in.Event.BootID = 62_000, lateBoot
+				in.Sent = osclock.Stamp{Wall: time.UnixMilli(testT + 5*3600_000), Mono: 41_000, BootID: "b_before"}
+				return in
+			}, false},
+		{"so does a transcript line of that stretch read late, with mono 0, judged by its t alone",
+			false, func(r *lateRig) Input { return r.logged("agent.output", 40_000) }, false},
+		{"so does a hook call the agent timed by its own stamp after Open, whose sender's stamp is of that stretch",
+			false, func(r *lateRig) Input {
+				in := r.presence(61_000)
+				in.Event.Mono, in.Event.BootID = 62_000, lateBoot
+				in.Sent = osclock.Stamp{Wall: time.UnixMilli(testT + 40_000), Mono: 41_000, BootID: lateBoot}
+				return in
+			}, false},
+		{"and so does a git change a scan found after Open, which goes by the scan's time, whenever its commit was made",
+			false, func(r *lateRig) Input { return r.gitChange(61_000) }, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLateRig(t)
+			// The install's stretch, whose batch, 1, is sealed local-only,
+			// and the switch back, noted, which arms the mark.
+			r.note(false)
+			r.write(r.presence(1000))
+			r.take()
+			r.at(10_000)
+			r.note(true)
+			r.pause()
+			// A hook call of the stretch is still on its way, so the first
+			// batch after the switch back is sealed local-only, which leaves
+			// the mark due.
+			r.held.Store(true)
+			r.at(20_000)
+			r.write(r.presence(20_000))
+			first := r.seal()
+			r.held.Store(false)
+			if c.erased != nil {
+				// config.toml goes local-only with no note the agent hears, as
+				// with a symlinked target or a watch that failed, and a seal
+				// with nothing pending reads it: the stretch it begins and the
+				// mark it clears are in memory only.
+				r.at(30_000)
+				r.file.Store(false)
+				if _, ok, err := r.w.Seal(); ok || err != nil {
+					t.Fatalf("the local-only read's seal sealed a batch %v, %v; want nothing to seal", ok, err)
+				}
+			}
+			reopen := int64(60_000)
+			if c.sweep {
+				reopen = 2*sweepDayMS + 60_000
+				r.at(2 * sweepDayMS)
+				if _, _, err := r.w.Sweep(dayOf(time.UnixMilli(testT+2*sweepDayMS)), 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The agent stops, and starts again with config.toml online, set
+			// so by hand after an erased stretch, which the agent doesn't hear.
+			if err := r.w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			r.file.Store(true)
+			r.at(reopen)
+			r.open()
+			if c.erased != nil {
+				r.write(c.erased(r))
+			}
+			r.write(r.presence(reopen + 1000))
+			b := r.seal()
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"the first batch after the switch back is sealed local-only, for the call still on its way, and takes no mark", !first.Online && !first.Back},
+				{"the first batch sealed online after the restart takes the mark if each of its records was made after Open, and else stays unmarked", b.Online && b.Back == c.back},
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: the first batch online %v, back %v, why %+v; after the restart online %v, back %v, want back %v", first.Online, first.Back, first.Why, b.Online, b.Back, c.back)
+					}
+				})
+			}
+		})
+	}
+}
+
+// gitChange is a git change the startup scan found ms after the start,
+// with no monotonic reading, so only Write's scan rule (pending.scan) keeps
+// a mark Open restored off it.
+func (r *lateRig) gitChange(ms int64) Input {
+	in := sampleInput(r.rng, "git.change", testT+ms, "s_1", "p_web")
+	in.Event.Mono = 0
+	return in
+}
+
+// TestRestoredMarkEnds checks that a mark Open restored ends with the first
+// batch sealed online that doesn't take it: one holding a git change the
+// startup scan found, which closes the run of local-only batches with
+// itself inside, or Open's own batch of what a kill left, whose first record
+// comes before the mark, after a batch sealed online closed the run. Either
+// way nothing is left to mark, so its seal frame records no mark due, and no
+// later seal asks Waiting for the mark. A spool file that can't be read,
+// which Waiting answers yes for whatever it is asked, then can't seal a
+// batch local-only after the online ones, which would stop the batch roots.
+func TestRestoredMarkEnds(t *testing.T) {
+	cases := []struct {
+		name string
+		// restart builds the ledger, opens the writer again with the mark due,
+		// and seals the online batches that don't take it. It returns the
+		// place in the rows of the first of them, which ends the mark.
+		restart func(t *testing.T, r *lateRig) int
+	}{
+		{"the first batch sealed online after the restart, holding a git change the startup scan found, ends the mark",
+			func(t *testing.T, r *lateRig) int {
+				// As in TestDueMarkOutlastsARestart: the install's stretch, the
+				// switch back, and the first batch after it sealed local-only for
+				// a call still on its way, which leaves the mark due.
+				r.note(false)
+				r.write(r.presence(1000))
+				r.take()
+				r.at(10_000)
+				r.note(true)
+				r.pause()
+				r.held.Store(true)
+				r.at(20_000)
+				r.write(r.presence(20_000))
+				if b := r.seal(); b.Online {
+					t.Errorf("the first batch after the switch back was sealed online, for the call on its way")
+				}
+				r.held.Store(false)
+				if err := r.w.Close(); err != nil {
+					t.Fatal(err)
+				}
+				r.at(60_000)
+				r.open()
+				// Two git changes the startup scan found, each sealed at once, as
+				// the git host's sink seals them, neither of which the mark marks.
+				for _, ms := range []int64{61_000, 62_000} {
+					r.at(ms)
+					r.write(r.gitChange(ms))
+					if b := r.seal(); !b.Online || b.Back {
+						t.Errorf("a git change's batch was sealed online %v, marked %v; want online and unmarked", b.Online, b.Back)
+					}
+				}
+				return 2
+			}},
+		{"so does the batch Open seals of what a kill left, whose first record comes before the mark",
+			func(t *testing.T, r *lateRig) int {
+				// The install's stretch, which a seal's read of config.toml online
+				// ends unnoted, a record after that read, and the watch's note
+				// after it, which arms the mark from the next record on: the
+				// note's batch holds that record, so it is sealed online, unmarked,
+				// and its frame records the mark due.
+				r.note(false)
+				r.write(r.presence(1000))
+				r.take()
+				r.at(10_000)
+				r.file.Store(true)
+				if _, ok, err := r.w.Seal(); ok || err != nil {
+					t.Fatalf("the read's seal sealed a batch %v, %v; want nothing to seal", ok, err)
+				}
+				r.at(15_000)
+				r.write(r.presence(15_000))
+				r.at(16_000)
+				r.w.NoteMode(true)
+				if b := r.take(); !b.Online || b.Back {
+					t.Errorf("the note's batch was sealed online %v, marked %v; want online and unmarked", b.Online, b.Back)
+				}
+				// A record, and a kill before the next seal.
+				r.write(r.presence(17_000))
+				abandon(r.w)
+				r.at(60_000)
+				r.open()
+				if b := r.take(); !b.Online || b.Back {
+					t.Errorf("Open's batch of what the kill left was sealed online %v, marked %v; want online and unmarked", b.Online, b.Back)
+				}
+				return 2
+			}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newLateRig(t)
+			ends := c.restart(t, r)
+			// A seal while a spool file can't be read, which Waiting answers
+			// yes for.
+			r.waits.Store(true)
+			r.at(70_000)
+			r.write(r.presence(70_000))
+			b := r.seal()
+			r.waits.Store(false)
+			if err := r.w.Close(); err != nil {
+				t.Fatal(err)
+			}
+			bf, err := readBatchesFile(filepath.Join(r.dir, batchesName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var due []uint64
+			for _, row := range bf.rows {
+				due = append(due, row.Due)
+			}
+			none := len(due) > ends
+			for _, d := range due[min(ends, len(due)):] {
+				none = none && d == 0
+			}
+			checks := []struct {
+				name string
+				ok   bool
+			}{
+				{"the batch before the restart records the mark due", ends > 0 && len(due) > ends && due[ends-1] > 0},
+				{"the batch that ends the mark records none due, nor does any after it", none},
+				{"a seal while Waiting says yes is sealed online, as the mark that would have asked it ended", b.Online},
+				{"no batch is sealed local-only after one sealed online", !r.localAfterOnline()},
+			}
+			for _, ch := range checks {
+				t.Run(ch.name, func(t *testing.T) {
+					if !ch.ok {
+						t.Errorf("no: the rows' due marks %v, the last batch online %v, batches %+v", due, b.Online, r.batches)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestEndedMarkStaysEnded checks that a mark Open restored from a sweep's
+// base frame, which Open's own batch of what a kill left ends, stays ended
+// at the next restart. That batch's records all come before the mark, as
+// those a crash leaves always do, so its row records no mark due and ends
+// before the base frame's mark, as a row an older version sealed would.
+// Read so, the mark would be due again, a seal while Waiting says yes would
+// be local-only after the online batches, and the batch roots would stop
+// until a logout and a login (#349).
+func TestEndedMarkStaysEnded(t *testing.T) {
+	r := newLateRig(t)
+	// The install's stretch, batch 1, and the switch back, whose first
+	// batch, 2, takes the mark.
+	r.note(false)
+	r.write(r.presence(1000))
+	r.take()
+	r.at(10_000)
+	r.note(true)
+	r.pause()
+	r.at(11_000)
+	r.write(r.presence(11_000))
+	if b := r.seal(); !b.Online || !b.Back {
+		t.Fatalf("batch 2 was sealed online %v, marked %v; want both", b.Online, b.Back)
+	}
+	// Days later, a record, seq 3, pending, and a Seen of a stretch the
+	// writer didn't know of, which ended before it: the mark is armed from
+	// the next record, 4, and no seal is asked for. Both come after the
+	// start of the sweep's day, so the stretch the sweep folds from the
+	// beginning of time to that day doesn't hold seq 3.
+	day := 2 * int64(sweepDayMS)
+	r.at(day + 1000)
+	r.write(r.presence(day + 1000))
+	r.w.NoteSeen(Seen{Ended: time.UnixMilli(testT + day + 500)})
+	// The sweep of that day drops rows 1 and 2, and its base frame keeps
+	// the mark. Then a kill.
+	r.at(day + 2000)
+	if dropped, _, err := r.w.Sweep(dayOf(time.UnixMilli(testT+day)), 0); err != nil || dropped != 2 {
+		t.Fatalf("Sweep dropped %d batches, %v; want 2", dropped, err)
+	}
+	abandon(r.w)
+	// Open seals what the kill left, seq 3, before the mark, online.
+	r.at(day + 60_000)
+	r.open()
+	ended := r.take()
+	// A restart before any batch that reaches the mark is sealed, and a
+	// seal while a spool file can't be read, which Waiting answers yes for.
+	if err := r.w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r.open()
+	r.waits.Store(true)
+	r.at(day + 70_000)
+	r.write(r.presence(day + 70_000))
+	b := r.seal()
+	r.waits.Store(false)
+	if err := r.w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bf, err := readBatchesFile(filepath.Join(r.dir, batchesName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	due := map[uint64]uint64{}
+	for _, row := range bf.rows {
+		due[row.B] = row.Due
+	}
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"Open's batch of what the kill left is sealed online and unmarked, and its row records no mark due",
+			ended.Online && !ended.Back && ended.Row.B == 3 && due[3] == 0},
+		{"after the next restart, a seal while Waiting says yes is sealed online, as the mark stays ended", b.Online},
+		{"no batch is sealed local-only after one sealed online", !r.localAfterOnline()},
+	}
+	for _, ch := range checks {
+		t.Run(ch.name, func(t *testing.T) {
+			if !ch.ok {
+				t.Errorf("no: Open's batch %d online %v, back %v; the last batch online %v; the rows' due marks %v; batches %+v",
+					ended.Row.B, ended.Online, ended.Back, b.Online, due, r.batches)
+			}
+		})
+	}
+}
+
+// failWrites makes the frames written to the segment fail until the func it
+// returns is called, each cut back off, as at a full disk, so the writer goes
+// on. It swaps the segment's handle for one opened for appending, whose
+// WriteAt fails at once (os.File.WriteAt) while its Truncate works. Windows
+// can't truncate a file opened for appending, so there the write would be
+// stuck (errStuck). The writer must have written to its segment first.
+func (r *lateRig) failWrites() func() {
+	r.t.Helper()
+	r.w.mu.Lock()
+	defer r.w.mu.Unlock()
+	seg := r.w.seg
+	if seg == nil {
+		r.t.Fatal("the writer has no segment open")
+	}
+	f, err := os.OpenFile(seg.name, os.O_RDWR|os.O_APPEND, 0)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	was := seg.f
+	seg.f = f
+	return func() {
+		r.w.mu.Lock()
+		seg.f = was
+		r.w.mu.Unlock()
+		f.Close()
+	}
+}
+
+// TestFailedSealKeepsTheMark checks that a seal whose frame fails to write,
+// cut back off as at a full disk, leaves a mark Open restored as it was: the
+// writer drops the mark only once the frame that ends or takes it is
+// written, as a restart would read it from that frame. Dropped before, it
+// would be gone while the batch stays unsealed, so the retry, sealed
+// local-only while a call is on its way, would record no mark due, and the
+// next batch, all made after Open, would have none to take.
+func TestFailedSealKeepsTheMark(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows can't truncate a file opened for appending, so the rig's failed write would be stuck")
+	}
+	r := newLateRig(t)
+	// As in TestRestoredMarkEnds: the install's stretch, the switch back, and
+	// the first batch after it sealed local-only for a call still on its way,
+	// which leaves the mark due.
+	r.note(false)
+	r.write(r.presence(1000))
+	r.take()
+	r.at(10_000)
+	r.note(true)
+	r.pause()
+	r.held.Store(true)
+	r.at(20_000)
+	r.write(r.presence(20_000))
+	if b := r.seal(); b.Online {
+		t.Fatal("the first batch after the switch back was sealed online, for the call on its way")
+	}
+	r.held.Store(false)
+	if err := r.w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r.at(60_000)
+	r.open()
+	// A git change the startup scan found, whose batch, sealed online, would
+	// end the mark, but whose seal frame fails to write.
+	r.at(61_000)
+	r.write(r.gitChange(61_000))
+	restore := r.failWrites()
+	_, sealed, sealErr := r.w.Seal()
+	restore()
+	// The retry, while a spool file can't be read, which Waiting answers yes
+	// for: the newest batch is local-only, so the seal asks.
+	r.waits.Store(true)
+	r.at(62_000)
+	retry := r.seal()
+	r.waits.Store(false)
+	r.at(70_000)
+	r.write(r.presence(70_000))
+	next := r.seal()
+	if err := r.w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bf, err := readBatchesFile(filepath.Join(r.dir, batchesName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var due []uint64
+	for _, row := range bf.rows {
+		due = append(due, row.Due)
+	}
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"the seal whose frame fails to write returns its error, and the writer goes on", sealErr != nil && !sealed && !errors.Is(sealErr, errStuck)},
+		{"the retry, sealed local-only while Waiting says yes, records the mark due", !retry.Online && len(due) == 4 && due[2] > 0},
+		{"the next batch, all made after Open, takes the mark", next.Online && next.Back},
+		{"no batch is sealed local-only after one sealed online", !r.localAfterOnline()},
+	}
+	for _, ch := range checks {
+		t.Run(ch.name, func(t *testing.T) {
+			if !ch.ok {
+				t.Errorf("no: the failed seal sealed %v, err %v; the retry online %v; the next online %v, back %v; the rows' due marks %v",
+					sealed, sealErr, retry.Online, next.Online, next.Back, due)
+			}
+		})
+	}
+}
+
+// TestMadeAfter checks how a mark Open restored judges the records of a
+// batch (Writer.madeAfter): each must have been made after Open's moment by
+// every time it is held to, its event's and its sender's stamp, by the
+// clock it shares with that moment; a monotonic reading of another boot or
+// another run counts as made before it, whatever the wall clock says, as
+// Open runs in this boot and this run; and a git change, which goes by its
+// scan, never counts as made after it.
+func TestMadeAfter(t *testing.T) {
+	const boot = "b_made"
+	// open is Open's moment: wall 1,000,000, this run's clock at 5,000 and
+	// the OS's at 40,000 in boot.
+	open := moment{wall: 1_000_000, run: 5_000, os: 40_000, boot: boot}
+	// sent is a sender's own stamp.
+	sent := func(wall, mono int64, b string) osclock.Stamp {
+		return osclock.Stamp{Wall: time.UnixMilli(wall), Mono: mono, BootID: b}
+	}
+	cases := []struct {
+		name  string
+		m     moment
+		p     pending
+		after bool
+	}{
+		{"a record this run's clock dates after Open was made after it, though the wall clock dates it before",
+			open, pending{has: true, env: event.Envelope{T: 900_000, Mono: 6_000, BootID: runBoot}}, true},
+		{"one this run's clock dates before Open was made before it, though the wall clock dates it after",
+			open, pending{has: true, env: event.Envelope{T: 1_100_000, Mono: 4_000, BootID: runBoot}}, false},
+		{"a hook call this boot's clock dates before Open was made before it, though the wall clock dates it after",
+			open, pending{has: true, env: event.Envelope{T: 1_100_000, Mono: 39_000, BootID: boot}}, false},
+		{"a hook call of another boot was made before Open, though the wall clock of a boot that reads behind dates it after",
+			open, pending{has: true, env: event.Envelope{T: 1_100_000, Mono: 90_000, BootID: "b_before"}}, false},
+		{"so was one whose sender's stamp is of another boot, though the agent's own stamp after Open timed it",
+			open, pending{has: true, env: event.Envelope{T: 1_001_000, Mono: 41_000, BootID: boot}, sent: sent(1_100_000, 90_000, "b_before")}, false},
+		{"a record of another run's clock was made before Open, even where Open holds no reading of the OS's clock",
+			moment{wall: 1_000_000, run: 5_000}, pending{has: true, env: event.Envelope{T: 1_100_000, Mono: 9_000, BootID: runPrefix + "earlier"}}, false},
+		{"a record with no monotonic reading goes by its t",
+			open, pending{has: true, env: event.Envelope{T: 1_000_001}}, true},
+		{"a git change, which goes by its scan, never counts as made after Open",
+			open, pending{has: true, scan: true, env: event.Envelope{T: 1_100_000, Mono: 6_000, BootID: runBoot}}, false},
+		{"a record that isn't an event was made as it was written",
+			open, pending{}, true},
+		{"a mark that Open didn't restore, with no moment, holds nothing back",
+			moment{}, pending{has: true, env: event.Envelope{T: 1, Mono: 1, BootID: "b_before"}}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := &Writer{pending: []pending{c.p}}
+			if got := w.madeAfter(c.m); got != c.after {
+				t.Errorf("madeAfter = %v, want %v", got, c.after)
+			}
+		})
+	}
+}
+
+// TestSweepLeavesLiveStateToTheSeal checks that a sweep that drops no row,
+// folds no stretch and folds no moment leaves batches.seg as it was, though
+// the writer holds a stretch end no seal frame recorded yet: recording that
+// is the next seal frame's job, not retention's. A restart before that
+// seal reads the stretch as going on from the frame that recorded it, and
+// the first read that finds config.toml online ends it, later than it
+// ended, which only makes more count as local-only.
+func TestSweepLeavesLiveStateToTheSeal(t *testing.T) {
+	r := newLateRig(t)
+	// The install's stretch, going on, whose batch, 1, records it, and the
+	// switch back, noted with nothing pending, which no seal frame records.
+	r.note(false)
+	r.write(r.presence(1000))
+	r.take()
+	r.at(10_000)
+	r.note(true)
+	r.pause()
+	name := filepath.Join(r.dir, batchesName)
+	before, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A sweep by the day the chain began drops nothing and folds nothing.
+	if _, _, err := r.w.Sweep(dayOf(time.UnixMilli(testT)), 0); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.w.mu.Lock()
+	live := slices.Clone(r.w.stretches)
+	r.w.mu.Unlock()
+	// The agent stops before the next seal, and starts again.
+	if err := r.w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r.at(20_000)
+	r.open()
+	r.w.mu.Lock()
+	restored := slices.Clone(r.w.stretches)
+	r.w.mu.Unlock()
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"the writer held the stretch ended at the switch back", len(live) == 1 && !live[0].open && live[0].to.m.wall == testT+10_000},
+		{"the sweep left batches.seg as it was", bytes.Equal(before, after)},
+		{"after the restart the stretch ends at the first read that finds config.toml online, later than it ended", len(restored) == 1 && !restored[0].open && restored[0].to.m.wall >= testT+20_000},
+	}
+	for _, ch := range checks {
+		t.Run(ch.name, func(t *testing.T) {
+			if !ch.ok {
+				t.Errorf("no: the live stretches %+v, the restored %+v; batches.seg changed %v", live, restored, !bytes.Equal(before, after))
 			}
 		})
 	}

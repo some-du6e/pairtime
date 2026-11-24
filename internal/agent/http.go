@@ -73,6 +73,9 @@ type statusReply struct {
 	// from, for doctor's idle and focus lines (DESIGN 5.9, D-design-5.9).
 	Signals  signalsReply  `json:"signals"`
 	Adapters adaptersReply `json:"adapters"`
+	// Apps is how the apps component reads the stores of agent apps, for
+	// doctor's T3 Code line (DESIGN 3.3, 5.9).
+	Apps appsReply `json:"apps"`
 	// Ledger is what the ledger writer says of its chain, absent while the
 	// ledger isn't open.
 	Ledger *ledgerReply `json:"ledger,omitempty"`
@@ -125,6 +128,7 @@ func (a *agent) status() statusReply {
 		IPC:       a.ipcStatus(),
 		Signals:   a.signalsNow(),
 		Adapters:  a.adaptersHost().status(),
+		Apps:      a.appsHost().reply(),
 		Ledger:    a.ledgerStatus(),
 		Footprint: footprintNow(),
 		Problems:  a.currentProblems(),

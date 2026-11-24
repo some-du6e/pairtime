@@ -49,8 +49,8 @@
 // record can show on its own: enums, ranges, formats, and the arithmetic SM
 // defines, such as typed_len_est = len_chars - pasted_chars or a bucket's
 // credited_s being the sum of its slots. Rules that need other records,
-// such as the gapless seq or the hash chain, belong to the spool and the
-// server.
+// such as the ledger's gapless record numbers and its batch chain, belong
+// to pkg/ledger and the server.
 //
 // Identifiers that stand in for something private (devices, sessions,
 // turns, projects, files) are opaque keys of 1 to 128 letters, digits, '_'

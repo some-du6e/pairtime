@@ -139,6 +139,25 @@ func TestContent(t *testing.T) {
 					t.Error("the stored prompt isn't marked guest")
 				}
 			}},
+		{name: "a relay.message commits nothing, and its f is v and pc alone, the class of the app's own text (ledger-v1 10.7)",
+			in: relay(90, false, "s_1"), class: features.Substantive,
+			check: func(t *testing.T, f features.F, ev event.Event) {
+				if f.MH != nil || f.TH != nil || f.ES != nil {
+					t.Errorf("f %+v has features of a text the device never kept", f)
+				}
+			}},
+		{name: "a relay.message the reader's go-ahead test marked is low_effort, whatever its length",
+			in: relay(30, true, "s_1"), class: features.LowEffort},
+		{name: "a relay.message under SUBSTANTIVE_CHARS typed characters is low_effort",
+			in: relay(19, false, "s_1"), class: features.LowEffort},
+		{name: "a relay.message bound to a session whose last output asked a question is an answer",
+			before: []Input{harness(&event.AgentOutput{TurnKey: "t_0", Words: 7, IsFinal: true, AsksQuestion: true},
+				[]byte("Which one, the modal or the drawer?"))},
+			in: relay(90, false, "s_1"), class: features.Answer},
+		{name: "a relay.message bound to no session is no answer, whatever a session asked",
+			before: []Input{harness(&event.AgentOutput{TurnKey: "t_0", Words: 7, IsFinal: true, AsksQuestion: true},
+				[]byte("Which one, the modal or the drawer?"))},
+			in: relay(90, false, event.NoSession), class: features.Substantive},
 		{name: "a final agent message commits its first 16 KiB, cut at a character boundary",
 			in:   harness(&event.AgentOutput{TurnKey: "t_1", Words: 8000, IsFinal: true}, []byte(long)),
 			text: ledger.CommittedMessage([]byte(long))},
@@ -292,6 +311,23 @@ func guestPrompt(text string) Input {
 	p := in.Event.Data.(*event.PromptSubmit)
 	p.Guest, p.SealedText = true, []byte("sealed guest text")
 	return in
+}
+
+// relay is T3 Code's reader's relay.message for a message of n typed
+// characters sent two seconds before testT from the web client, which the
+// reader's go-ahead test marked when lowEffort is set, bound to session
+// sess, or to none (DESIGN 5.1). It carries no text: the reader dropped
+// it.
+func relay(n int, lowEffort bool, sess string) Input {
+	rng := rand.New(rand.NewPCG(7, 8))
+	e := env(rng, testT, sess, "p_web")
+	e.Source, e.Via, e.HarnessVersion = event.SourceLog, event.ViaApp, ""
+	if sess == event.NoSession {
+		e.Harness = event.HarnessNone
+	}
+	return Input{Event: event.Event{Envelope: e, Data: &event.RelayMessage{App: event.RelayAppT3Code,
+		Client: event.RelayClientWeb, SentAt: testT - 2000, ThreadKey: "r_1", Declared: event.RelayDeclaredNone,
+		LenChars: n, LowEffort: lowEffort}}}
 }
 
 func bridgePrompt(n int) Input {
@@ -714,10 +750,12 @@ func dropModes(t *testing.T, dir string) {
 // stretch's first record does, so a crash after it can't take the switch
 // with it; the switch back online seals what the stretch left, or what was
 // pending after a seal that read the file local-only, and marks the first
-// batch whose records all came after it (Batch.Back); and a switch back the
+// batch whose records all came after it (Batch.Back); a switch back the
 // watch misses ends the stretch at the next seal that reads the file
-// online, marking no batch. Each batch's row and its seal frame say what
-// Sealed got, as the rows Open rebuilds after a crash do.
+// online, marking no batch; and the watch's note of a switch back such a
+// read found first still marks one, unless a batch sealed online came in
+// between. Each batch's row and its seal frame say what Sealed got, as
+// the rows Open rebuilds after a crash do.
 func TestNoteMode(t *testing.T) {
 	// A step changes config.toml ("file-local", "file-online"), notes the
 	// mode as the config watch does ("local", "online"), writes a record
@@ -869,9 +907,9 @@ func TestNoteMode(t *testing.T) {
 		{"an event made before the switch back by the OS's monotonic clock, whose t a step of the wall clock put after it, is sealed local-only",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write-stepped", "seal", "write", "seal"},
 			[]bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
-		{"an event made before the switch back by the OS's monotonic clock, whose t a step of the wall clock put after it, is sealed local-only after a reopen too, since the seal frame keeps the stretch by that clock",
+		{"an event made before the switch back by the OS's monotonic clock, whose t a step of the wall clock put after it, is sealed local-only after a reopen too, since the seal frame keeps the stretch by that clock, and the batch after it takes the mark the seal frames kept due",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write-old", "seal", "reopen", "write-stepped", "seal", "write", "seal"},
-			[]bool{false, false, false, true}, []bool{false, false, false, false}, []int{1, 1, 1, 1}},
+			[]bool{false, false, false, true}, []bool{false, false, false, true}, []int{1, 1, 1, 1}},
 		{"and dropped after a reopen once a batch sealed online passed the stretch",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reopen", "write-dropped-stepped", "write", "seal"},
 			[]bool{false, true, true}, []bool{false, true, false}, []int{1, 1, 1}},
@@ -887,9 +925,9 @@ func TestNoteMode(t *testing.T) {
 		{"an event whose own times are after the switch back is sealed local-only when its sender's stamp is before it, and the batch after it takes the mark",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write-resent", "seal", "write", "seal"},
 			[]bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
-		{"after a restart before the batch after a switch back took its mark, a seal still waits for an event of the stretch on its way, and the first online batch closes the run, unmarked",
+		{"after a restart before the batch after a switch back took its mark, a seal still waits for an event of the stretch on its way, and the first online batch after it has come takes the mark, which the seal frames kept due",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "waiting", "write", "seal", "reopen", "write", "seal", "arrived", "write", "seal"},
-			[]bool{false, false, false, true}, []bool{false, false, false, false}, []int{1, 1, 1, 1}},
+			[]bool{false, false, false, true}, []bool{false, false, false, true}, []int{1, 1, 1, 1}},
 		{"a moment the newest seal frame recorded in another boot holds a hook call of the boot the writer runs in as made after it, though its t is before",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reboot", "write-boot", "seal"},
 			[]bool{false, true, true}, []bool{false, true, false}, []int{1, 1, 1}},
@@ -899,21 +937,27 @@ func TestNoteMode(t *testing.T) {
 		{"a stretch only a seal's read saw, with records pending, ends at the next seal that reads config.toml online, so an event made before that read is sealed local-only",
 			[]string{"file-local", "write", "seal", "file-online", "seal-none", "write-old", "seal", "write", "seal"},
 			[]bool{false, false, true}, []bool{false, false, false}, []int{1, 1, 1}},
+		{"a switch back the watch notes after a seal's read ended the stretch with nothing pending, as when pairtime login renames config.toml into place while Open seals, still marks the first batch after the note, once the stretch's late event has its local-only batch (#300)",
+			[]string{"file-local", "local", "file-online", "seal-none", "online", "write-old", "seal", "write", "seal"},
+			[]bool{false, true}, []bool{false, true}, []int{1, 1}},
+		{"but one the watch notes after a batch sealed online had passed that end marks none, as that batch ended the run already",
+			[]string{"file-local", "local", "file-online", "seal-none", "write", "seal", "online", "write", "seal"},
+			[]bool{true, true}, []bool{false, false}, []int{1, 1}},
 		{"an event a kill left in the boot before, made in a stretch no batch sealed online has passed by that boot's clock though its t is after, is sealed local-only by the next Open in another boot",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write-old", "seal", "write-stepped", "kill-reboot", "sealed"},
 			[]bool{false, false, false}, []bool{false, false, false}, []int{1, 1, 1}},
-		{"a hook call of the boot before, which reaches a writer opened in a new boot, made in a stretch by that boot's clock though its t is after, is sealed local-only while no batch sealed online has passed the stretch",
+		{"a hook call of the boot before, which reaches a writer opened in a new boot, made in a stretch by that boot's clock though its t is after, is sealed local-only while no batch sealed online has passed the stretch, and the batch after it takes the mark the seal frames kept due",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write-old", "seal", "reboot", "write-stepped", "seal", "write", "seal"},
-			[]bool{false, false, false, true}, []bool{false, false, false, false}, []int{1, 1, 1, 1}},
+			[]bool{false, false, false, true}, []bool{false, false, false, true}, []int{1, 1, 1, 1}},
 		{"and dropped once one has",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write", "seal", "reboot", "write-dropped-stepped", "write", "seal"},
 			[]bool{false, true, true}, []bool{false, true, false}, []int{1, 1, 1}},
 		{"a stretch end the agent gives after a seal's local-only read with records pending ends what that read saw, so the next online read doesn't move the moment past it, and a call made after the end that comes late is online",
 			[]string{"file-local", "write", "seal", "now:1000", "file-online", "seen-at:2000", "now:5000", "write", "seal", "write-hook-at:3000", "seal"},
 			[]bool{false, true, true}, []bool{false, true, false}, []int{1, 1, 1}},
-		{"a seal after a reboot, while the newest batch is local-only, asks Waiting by the boot before's reading too, so a call of that boot still on its way keeps the batch in the run",
+		{"a seal after a reboot, while the newest batch is local-only, asks Waiting by the boot before's reading too, which a call of that boot still on its way would answer, and with none on its way the batch takes the mark the seal frames kept due",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "pause", "write-old", "seal", "reboot", "write", "seal", "asked-old-boot"},
-			[]bool{false, false, true}, []bool{false, false, false}, []int{1, 1, 1}},
+			[]bool{false, false, true}, []bool{false, false, true}, []int{1, 1, 1}},
 		{"an event a kill left, made in a stretch by the OS's clock, is sealed local-only by the next Open, though a later stretch end by the wall clock alone dropped the moment's OS reading, as the stretch keeps its own",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write-old", "seal", "write-stepped-far", "kill-seen-wall", "sealed"},
 			[]bool{false, false, false}, []bool{false, false, false}, []int{1, 1, 1}},
@@ -1310,9 +1354,9 @@ func TestNoteMode(t *testing.T) {
 				case "local", "online":
 					w.NoteMode(step == "online")
 				case "write":
-					if _, _, err := write(w, rng, "os.presence", testT+int64(i)*1000); err != nil {
-						t.Fatal(err)
-					}
+					// With no monotonic reading, so a mark Open restored doesn't
+					// take it for one of another boot (Writer.madeAfter).
+					writeAt(i, testT+int64(i)*1000, func(in *Input) { in.Event.Mono = 0 })
 				case "write-old":
 					if _, _, err := write(w, rng, "os.presence", testT-60_000); err != nil {
 						t.Fatal(err)
@@ -1673,18 +1717,32 @@ func TestSeenByRunClock(t *testing.T) {
 			// The first writer's clock is an hour ahead, and so is the
 			// moment its seal frame records.
 			ahead := func() time.Time { return time.Now().Add(time.Hour) }
+			first := make(chan Batch, 4)
 			w := open(t, dir, newClock(testT), func(o *Options) {
 				o.Now = ahead
 				o.Online = func() bool { return true }
+				o.Sealed = func(b Batch) { first <- b }
 			})
 			w.NoteMode(false)
 			w.NoteMode(true)
 			rng := rand.New(rand.NewPCG(27, 28))
-			if _, _, err := write(w, rng, "os.presence", ahead().UnixMilli()); err != nil {
+			// An event a second after the switch back, which the stretch
+			// doesn't hold as it would one of the note's millisecond, so its
+			// batch takes the mark, and none is due at the reopen
+			// (sealPayload.Due): only Seen can arm one there.
+			if _, _, err := write(w, rng, "os.presence", ahead().Add(time.Second).UnixMilli()); err != nil {
 				t.Fatal(err)
 			}
 			if _, _, err := w.Seal(); err != nil {
 				t.Fatal(err)
+			}
+			select {
+			case b := <-first:
+				if !b.Online || !b.Back {
+					t.Fatalf("the first run's batch was sealed online %v, marked %v; want both, so that no mark is due at the reopen", b.Online, b.Back)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the first run sealed no batch")
 			}
 			if err := w.Close(); err != nil {
 				t.Fatal(err)

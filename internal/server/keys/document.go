@@ -31,23 +31,35 @@ type keyJSON struct {
 type documentJSON struct {
 	Format     string    `json:"format"`
 	ServerKeys []keyJSON `json:"server_keys"`
-	// EvidenceKey is WP-SB2's slot for the current evidence key (DESIGN
-	// 7.6), null until it fills it.
+	// EvidenceKey is the current evidence key (DESIGN 7.6), or null when
+	// the server holds none.
 	EvidenceKey *keyJSON `json:"evidence_key"`
 }
 
-// Document returns the keys document for h (docs/spec/keys-v1.md 2):
-// every server key, oldest first, with its id, its public key in hex and
-// when it is valid, and the evidence key's slot, null for now.
-func (h *History) Document() ([]byte, error) {
+// newKeyJSON is one key in the document, its validity ending at to, or
+// null while it is Current.
+func newKeyJSON(id string, public []byte, from, to int64) keyJSON {
+	j := keyJSON{KeyID: id, PublicKey: hex.EncodeToString(public), ValidFrom: from}
+	if to != Current {
+		j.ValidTo = &to
+	}
+	return j
+}
+
+// Document returns the keys document (docs/spec/keys-v1.md 2): every
+// server key h holds, oldest first, with its id, its public key in hex and
+// when it is valid, and r's current evidence key the same way, its public
+// key the uncompressed P-256 point. It lists that evidence key alone and
+// never a retired one (DESIGN 7.6), and null when r holds no current key,
+// so a client never seals to a key the server can't open with.
+func Document(h *History, r *Ring) ([]byte, error) {
 	doc := documentJSON{Format: Format, ServerKeys: []keyJSON{}}
 	for _, k := range h.Server {
-		j := keyJSON{KeyID: k.ID, PublicKey: hex.EncodeToString(k.Public), ValidFrom: k.ValidFrom}
-		if k.ValidTo != Current {
-			to := k.ValidTo
-			j.ValidTo = &to
-		}
-		doc.ServerKeys = append(doc.ServerKeys, j)
+		doc.ServerKeys = append(doc.ServerKeys, newKeyJSON(k.ID, k.Public, k.ValidFrom, k.ValidTo))
+	}
+	if k, ok := r.Current(); ok {
+		j := newKeyJSON(k.ID, k.Public.Bytes(), k.ValidFrom, k.ValidTo)
+		doc.EvidenceKey = &j
 	}
 	b, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {

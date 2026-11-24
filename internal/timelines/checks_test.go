@@ -278,7 +278,7 @@ func TestCheckScenarioEvents(t *testing.T) {
 				}
 			}
 		})
-		t.Run(s.name+" each device's events are a gapless stream in time order", func(t *testing.T) {
+		t.Run(s.name+" each device's events are a stream in time order, and seq rises by 1 since a fixture's ledger holds only events", func(t *testing.T) {
 			last := map[string]event.Event{}
 			mono := map[string]int64{}
 			ids := map[string]bool{}

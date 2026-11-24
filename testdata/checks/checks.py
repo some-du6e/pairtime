@@ -24,6 +24,7 @@ import os
 import re
 import sys
 from fractions import Fraction
+from types import SimpleNamespace
 
 sys.dont_write_bytecode = True
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -56,10 +57,17 @@ CC4_PUSH_MS = 60_000
 THINK_LEAD_S, ANSWER_LEAD_S, COMPOSE_MAX_S = 120, 60, 300
 COMPOSE_CPS = Fraction(3, 2)
 SUBSTANTIVE_CHARS = 20
-# CC11's threshold, pending Karim's decision (erratum): a prompt fails with
-# fewer key-downs than this share of the characters its typing part
-# credits.
+# SM 2.2 rule 6's plausibility test: typed_len_est <= TYPING_MAX_CPS *
+# active_input_s, which is 15 s for each input slot in the lead window.
+TYPING_MAX_CPS = 15
+# DESIGN 7.3's CC11: a prompt fails with fewer hardware key-downs than this
+# share of the characters its typing part credits, or than its injected
+# key-downs.
 CC11_SHARE = Fraction(1, 4)
+# DESIGN 7.3's CC2: it fails when at least CC2_MIN of the prompts it doesn't
+# leave out, and at least CC2_SHARE of them, lack the input or the focus
+# (SM 8.7).
+CC2_MIN, CC2_SHARE = 2, Fraction(1, 4)
 # DESIGN 6.3: CHALLENGE_K = max(10, 10% of the pool), at most 30.
 CHALLENGE_K_MIN, CHALLENGE_K_MAX = 10, 30
 # DESIGN 6.5: re-scoring starts from a checkpoint at or before W's start
@@ -598,9 +606,9 @@ def es_fault(f, items):
     return not any(error_line(x) for x in text.split("\n"))
 
 
-def selftest():
-    """Checks what no scenario reaches: CC8's es rule, since no text here
-    has an error line (ledger-v1.md 10.8)."""
+def selftest_es():
+    """CC8's es rule, since no text here has an error line (ledger-v1.md
+    10.8), and SM 2.2's go-ahead test."""
     text = "still failing\nFAILED tests/test_nav.py::test_bar - assert 1 == 2"
     com = commitment(sha256(b"selftest"), 1, text)
     es = {"es": "00" * 16}
@@ -662,34 +670,44 @@ def sessions_of(events):
     return starts
 
 
-def prompts_in(events, sub):
+def prompts_in(events, sub=None):
     """The prompts of a submission, one per turn: the hook's record when
-    there is one, else the log reader's."""
+    there is one, else the log reader's. With no submission, every prompt
+    of the device."""
     by_turn = {}
     for e in events:
-        if e["kind"] != "prompt.submit" or e.get("project_key") not in sub["projects"]:
+        if e["kind"] != "prompt.submit" or sub is not None and e.get("project_key") not in sub["projects"]:
             continue
         k = (e["session_key"], e["data"]["turn_key"])
         if k not in by_turn or (by_turn[k]["via"] != "hook" and e["via"] == "hook"):
             by_turn[k] = e
-    return [e for e in sorted(by_turn.values(), key=lambda e: e["t"]) if in_window(sub, e["t"])]
+    return [e for e in sorted(by_turn.values(), key=lambda e: e["t"]) if sub is None or in_window(sub, e["t"])]
+
+
+def start_before(starts, session, t):
+    """The session's last session.start at or before t, or None. A resume
+    can move a session to another parent, so rules 4 and 5 and the test of
+    an IDE session read the start in force at the time they test, never
+    any start of the session (SM 2.2)."""
+    before = sorted((st for st in starts.get(session, []) if st["t"] <= t), key=lambda st: st["t"])
+    return before[-1] if before else None
 
 
 def automated(e, starts):
     """Whether SM 2.2 rules 1 to 5 label the prompt from what the harness
     declares. Rule 2's continuations have no prompt, so they never reach
-    here."""
+    here. Rules 4 and 5 read the session's last session.start at or before
+    the prompt."""
     d = e["data"]
     if d["matches_pending_cron"] or d["origin_declared"] != "none":
         return True
-    for st in starts.get(e["session_key"], []):
-        s = st["data"]
-        if s["entrypoint"] in ("sdk", "exec", "cloud") or s["parent_class"] in ("script_runtime", "scheduler",
-                                                                               "agent"):
-            return True
-        if not s["has_tty"] and s["entrypoint"] not in ("ide", "desktop") and s["parent_class"] != "ide":
-            return True
-    return False
+    st = start_before(starts, e["session_key"], e["t"])
+    if st is None:
+        return False
+    s = st["data"]
+    if s["entrypoint"] in ("sdk", "exec", "cloud") or s["parent_class"] in ("script_runtime", "scheduler", "agent"):
+        return True
+    return not s["has_tty"] and s["entrypoint"] not in ("ide", "desktop") and s["parent_class"] != "ide"
 
 
 def focus_at(events, t):
@@ -711,9 +729,43 @@ def sample_at(events, t):
     return None
 
 
-def ide_session(starts, session):
-    return any(s["data"]["entrypoint"] in ("ide", "desktop") or s["data"]["parent_class"] == "ide"
-               for s in starts.get(session, []))
+def ide_session(starts, session, t):
+    """Whether an IDE or a desktop app runs the session at t, by its last
+    session.start at or before t."""
+    st = start_before(starts, session, t)
+    return st is not None and (st["data"]["entrypoint"] in ("ide", "desktop") or st["data"]["parent_class"] == "ide")
+
+
+def hosts(f, p, starts, t):
+    """Whether a focus record is on the window hosting p's session at t: a
+    window whose hosted_sessions holds it, or the editor while an IDE runs
+    the session (SM 2.2 rule 6)."""
+    if f is None:
+        return False
+    if p["session_key"] in f["data"].get("hosted_sessions", []):
+        return True
+    return f["data"]["app_class"] == "editor" and ide_session(starts, p["session_key"], t)
+
+
+def input_times(events, keys):
+    """The input times the presence samples show, keys where the machine
+    has them: each sample says when the last input before it was."""
+    field = "idle_keys_s" if keys else "idle_any_s"
+    return sorted({e["t"] - ms(e["data"][field]) for e in events if e["kind"] == "os.presence"})
+
+
+def human_prompt(events, p, keys, starts):
+    """Whether p is a human prompt. Rules 1 to 5 of SM 2.2 leave it open,
+    and it passes the input and focus tests that rules 6 and 7 share:
+    input in the 10 s before submit, read from the sample taken at the
+    hook, and focus at submit on the window hosting its session. Rule 6's
+    plausibility test only tells those two rules apart."""
+    if automated(p, starts):
+        return False
+    s = sample_at(events, p["t"])
+    check(s is not None, f"a presence sample at the prompt at {p['t']}")
+    idle = s["data"]["idle_keys_s"] if keys else s["data"]["idle_any_s"]
+    return ms(idle) <= KEYS_PRE_MS and hosts(focus_at(events, p["t"]), p, starts, p["t"])
 
 
 def cc1(events, sub):
@@ -766,8 +818,10 @@ def cc2(events, sub, keys):
     """Prompt against OS: of the prompts SM 2.2 rules 1 to 5 don't label,
     the ones with OS input in the 10 s before submit (keys where the
     machine has them) and focus at submit on the window hosting the
-    session. DESIGN gives no share for a verdict, so a share strictly
-    between none and all is refused here (README, errata)."""
+    session. It fails when at least 2 of them, and a quarter of them, lack
+    either (DESIGN 7.3). DESIGN also leaves relayed prompts out, which this
+    reading doesn't need: it reads no relay.message, and no scenario has
+    one."""
     starts = sessions_of(events)
     counts = {"prompts": 0, "with_input_and_focus": 0, "no_input": 0, "no_focus": 0}
     items = []
@@ -779,10 +833,7 @@ def cc2(events, sub, keys):
         check(s is not None, f"a presence sample at the prompt at {p['t']}")
         idle = s["data"]["idle_keys_s"] if keys else s["data"]["idle_any_s"]
         has_input = ms(idle) <= KEYS_PRE_MS
-        f = focus_at(events, p["t"])
-        hosted = f is not None and p["session_key"] in f["data"].get("hosted_sessions", [])
-        ide = f is not None and f["data"]["app_class"] == "editor" and ide_session(starts, p["session_key"])
-        has_focus = hosted or ide
+        has_focus = hosts(focus_at(events, p["t"]), p, starts, p["t"])
         if has_input and has_focus:
             counts["with_input_and_focus"] += 1
             continue
@@ -794,11 +845,10 @@ def cc2(events, sub, keys):
                       "idle_s": idle})
     if not counts["prompts"]:
         return outcome("not_computable", counts, reason="no prompt in the submission that rules 1 to 5 leave open")
-    ok = counts["with_input_and_focus"]
-    if ok == counts["prompts"]:
-        return outcome("pass", counts)
-    check(ok == 0, "CC2 has no stated share; scenarios keep to all or none")
-    return outcome("fail", counts, items)
+    lacking = counts["prompts"] - counts["with_input_and_focus"]
+    if lacking >= CC2_MIN and lacking >= CC2_SHARE * counts["prompts"]:
+        return outcome("fail", counts, items)
+    return outcome("pass", counts)
 
 
 def cc3(events, sub):
@@ -885,8 +935,14 @@ def cc7(led, sub):
     could fall in: from the minute of the last verified record before it to
     the minute of the first verified record after it, or of the batch's
     received_at when no verified record follows. Its own revealed records
-    can't narrow that, since they are what failed to verify. held_minutes
-    counts the minutes of W."""
+    can't narrow that, since they are what failed to verify. A missing seq
+    counts against the batch whose stored n covers it: a gap at a batch's
+    first record is the batch before's when that batch reveals fewer
+    records than it stored, since its stored n fixes where it ends. The hold
+    also covers every other minute whose re-score comes out differently
+    without the failing batch's revealed records. That part needs
+    pkg/score, so gen.py states it in each CC7 scenario's notes.
+    held_minutes counts the minutes of W."""
     counts = {"batches": 0, "records": 0, "missing_batches": 0, "batch_gaps": 0, "seq_gaps": 0,
               "count_mismatches": 0, "root_mismatches": 0, "head_mismatches": 0, "body_mismatches": 0}
     items, held = [], set()
@@ -895,7 +951,7 @@ def cc7(led, sub):
         rng = dev["rescore_range"]
         revealed = {bt["b"]: bt for bt in dev["batches"]}
         faults = {}
-        last_b, last_s = None, None
+        last_b, last_s, prev = None, None, None
         for bt in dev["batches"]:
             counts["batches"] += 1
             b = bt["b"]
@@ -910,7 +966,12 @@ def cc7(led, sub):
                 counts["records"] += 1
                 if last_s is not None and r["seq"] != last_s + 1:
                     counts["seq_gaps"] += 1
-                    if i or not gap:
+                    short = prev is not None and prev["b"] in rows and len(prev["records"]) < rows[prev["b"]]["n"]
+                    if not i and not gap and short:
+                        # The batch before stored more records than it
+                        # reveals, so the missing seq is its own.
+                        faults.setdefault(prev["b"], []).append(f"seq_gap_before_{r['seq']}")
+                    elif i or not gap:
                         bad.append(f"seq_gap_before_{r['seq']}")
                 last_s = r["seq"]
                 e = json.loads(r["body"])["e"]
@@ -937,7 +998,8 @@ def cc7(led, sub):
                     counts["head_mismatches"] += 1
                     bad.append("head")
             if bad:
-                faults[b] = bad
+                faults.setdefault(b, []).extend(bad)
+            prev = bt
         for b in range(rng["first_b"], rng["last_b"] + 1):
             if b in rows and b not in revealed:
                 counts["missing_batches"] += 1
@@ -1031,10 +1093,17 @@ def cc8(challenge, led):
     return outcome("fail" if failed else "pass", counts, items)
 
 
+# DESIGN 7.3's CC9: the parents a session may move between at a resume.
+INTERACTIVE = {"terminal_app", "ide", "multiplexer", "remote"}
+
+
 def cc9(events, sub):
     """Session integrity: a session's records name one project, every turn
     an agent.* record names has a prompt in the session or is a stop-hook
-    continuation, and the session's parent class doesn't change."""
+    continuation, and the session's parent class changes only at a
+    session.start with start_kind resume, and only among terminal_app, ide,
+    multiplexer and remote. A log reader's parent_class unknown is no class,
+    so a later start that names one isn't a change (DESIGN 7.3)."""
     sessions = {}
     for e in events:
         if e["session_key"] == "none" or not in_window(sub, e["t"]):
@@ -1061,8 +1130,16 @@ def cc9(events, sub):
         if orphans:
             counts["orphan_turns"] += len(orphans)
             bad["orphan_turns"] = orphans
-        classes = {e["data"]["parent_class"] for e in everything if e["kind"] == "session.start"}
-        if len(classes) > 1:
+        classes, current, changed = set(), None, False
+        for st in (e for e in everything if e["kind"] == "session.start"):
+            c = st["data"]["parent_class"]
+            if st["via"] == "log" and c == "unknown":
+                continue
+            resumed = st["data"]["start_kind"] == "resume" and {current, c} <= INTERACTIVE
+            changed = changed or current is not None and c != current and not resumed
+            classes.add(c)
+            current = c
+        if changed:
             counts["parent_class_changes"] += 1
             bad["parent_classes"] = sorted(classes)
         if bad:
@@ -1116,50 +1193,56 @@ def prompt_lead_ms(p, pc):
     return int(lead * 1000)
 
 
-def hosts(f, p, starts):
-    """Whether a focus record is on the window hosting p's session: a
-    window whose hosted_sessions holds it, or the editor for an IDE
-    session (SM 2.2 rule 6)."""
-    if f is None:
-        return False
-    if p["session_key"] in f["data"].get("hosted_sessions", []):
-        return True
-    return f["data"]["app_class"] == "editor" and ide_session(starts, p["session_key"])
-
-
 def cc11(events, sub, keys, typing, classes):
     """Typing, module on: for each human prompt with a typing part, the
     key-downs the module counted, injected ones aside, in the slots its
     lead window overlaps whose focus is the window hosting its session,
-    leaving out slots an earlier prompt counted, against the characters
-    its typing part credits, min(typed_len_est, COMPOSE_CPS *
-    COMPOSE_MAX_S), and the injected share. DESIGN gives no threshold, and
-    the one pkg/check will use is pending (README, erratum). The scenarios
-    keep to counts that are at least the credited characters or under a
-    quarter of them, which the erratum's proposal and every stricter reading
-    up to all of them agree on, and a count in between is refused here."""
+    against the characters its typing part credits, min(typed_len_est,
+    COMPOSE_CPS * COMPOSE_MAX_S), and the injected key-downs in those
+    slots. A slot counts only for the first human prompt after the slot's
+    start among the sessions its window hosts, as SM 3.2 gives a slot to
+    the anchor that comes next. A go-ahead or a prompt with nothing typed
+    takes its slots too, though CC11 counts no key-downs for it. A prompt
+    fails with fewer of those key-downs than a quarter of its credited
+    characters, or than its injected key-downs (DESIGN 7.3). DESIGN also
+    leaves relayed prompts out, which this reading doesn't need: it reads
+    no relay.message, and no scenario has one."""
     counts = {"prompts": 0, "typed_chars": 0, "key_downs": 0, "injected": 0, "too_few_keys": 0,
               "injected_prompts": 0}
     if typing is None:
         return outcome("not_computable", counts, reason="the typing module is off on this device")
     slots = {s["start"]: s for s in typing["slots"]}
     starts = sessions_of(events)
+    inputs = input_times(events, keys)
+    # Every human prompt of the device, in any project and at any time,
+    # takes the slots before it from the prompts after it.
+    humans = [q for q in prompts_in(events) if human_prompt(events, q, keys, starts)]
     used, items = set(), []
-    for p in prompts_in(events, sub):
-        if automated(p, starts):
+    for p in humans:
+        if p.get("project_key") not in sub["projects"] or not in_window(sub, p["t"]):
             continue
-        s = sample_at(events, p["t"])
-        idle = s["data"]["idle_keys_s"] if keys else s["data"]["idle_any_s"]
-        human = ms(idle) <= KEYS_PRE_MS and hosts(focus_at(events, p["t"]), p, starts)
         typed = p["data"]["typed_len_est"]
         lead = prompt_lead_ms(p, classes[p["data"]["turn_key"]])
-        if not human or not typed or lead is None:
+        if not typed or lead is None:
             continue
         counts["prompts"] += 1
         a, b = p["t"] - lead, p["t"]
+        # Rule 7 cuts the typed length of a prompt that fails rule 6's
+        # plausibility test to TYPING_MAX_CPS x active_input_s. This reading
+        # doesn't, so it refuses such a prompt: every prompt it counts is
+        # one whose typed_len_est is the typed length its lead credits, at
+        # most COMPOSE_CPS x COMPOSE_MAX_S = 450 characters (SM 2.2, 2.3).
+        active_s = len({x - x % SLOT_MS for x in inputs if a <= x <= b}) * SLOT_MS // 1000
+        check(typed <= TYPING_MAX_CPS * active_s,
+              f"the prompt at {p['t']} passes rule 6's plausibility test: {typed} typed characters, "
+              f"{active_s} s of input slots")
         k = inj = 0
         for st in range(a - a % SLOT_MS, b, SLOT_MS):
-            if st not in slots or st in used or not hosts(focus_at(events, st + SLOT_MS - 1), p, starts):
+            end = st + SLOT_MS - 1
+            f = focus_at(events, end)
+            if st not in slots or st in used or not hosts(f, p, starts, end):
+                continue
+            if any(st < q["t"] < b and hosts(f, q, starts, end) for q in humans if q is not p):
                 continue
             used.add(st)
             k += slots[st]["keys"]
@@ -1167,12 +1250,10 @@ def cc11(events, sub, keys, typing, classes):
         hardware = k - inj
         credited = min(typed, int(COMPOSE_CPS * COMPOSE_MAX_S))
         few = hardware < CC11_SHARE * credited
-        check(few or hardware >= credited, f"CC11's threshold is pending, and {hardware} key-downs for {credited} "
-                                           "credited characters would rest on it")
         counts["typed_chars"] += typed
         counts["key_downs"] += k
         counts["injected"] += inj
-        injected = inj > 0
+        injected = inj > hardware
         counts["too_few_keys"] += few
         counts["injected_prompts"] += injected
         if few or injected:
@@ -1181,6 +1262,203 @@ def cc11(events, sub, keys, typing, classes):
     if not counts["prompts"]:
         return outcome("not_computable", counts, reason="no human prompt with typed characters")
     return outcome("fail" if items else "pass", counts, items)
+
+
+# The selftest: the rules no scenario reaches, run on made-up records of one
+# device with input_keys and one project, with times in ms from 0. Each
+# record holds only the fields the checks read.
+
+MADE_P = "p_selftest"
+MADE_SUB = {"projects": [MADE_P], "start": 0, "end": 3_600_000}
+
+
+def made_event(t, kind, data, session="none", via="os"):
+    e = {"t": t, "kind": kind, "session_key": session, "via": via, "data": data}
+    if session != "none":
+        e["project_key"] = MADE_P
+    return e
+
+
+def made_start(t, s, parent="terminal_app", start_kind="startup", via="hook"):
+    return made_event(t, "session.start", {"start_kind": start_kind, "entrypoint": "cli", "parent_class": parent,
+                                           "has_tty": True}, s, via)
+
+
+def made_prompt(t, s, turn, typed=60):
+    pasted = 0 if typed else 60
+    return made_event(t, "prompt.submit", {"turn_key": turn, "len_chars": typed + pasted, "pasted_chars": pasted,
+                                           "typed_len_est": typed, "origin_declared": "none",
+                                           "matches_pending_cron": False}, s, "hook")
+
+
+def made_focus(t, app_class, hosted=()):
+    data = {"app_class": app_class}
+    if hosted:
+        data["hosted_sessions"] = list(hosted)
+    return made_event(t, "os.focus", data)
+
+
+def made_samples(inputs, times):
+    """A presence sample at each of times, each saying when the last of
+    inputs before it came."""
+    out = []
+    for t in times:
+        idle = (t - max(x for x in inputs if x <= t)) / 1000
+        out.append(made_event(t, "os.presence", {"idle_any_s": idle, "idle_keys_s": idle, "locked": False}))
+    return out
+
+
+def made(events):
+    return sorted(events, key=lambda e: e["t"])
+
+
+def refuses(f):
+    """Whether f stops on a failed check."""
+    try:
+        f()
+    except SystemExit:
+        return True
+    return False
+
+
+def selftest_cc2():
+    """CC2's share: it fails when at least 2 of its prompts, and at least a
+    quarter of them, lack input."""
+
+    def result(n, lacking):
+        events = [made_start(0, "s1"), made_focus(0, "terminal", ["s1"])]
+        for i in range(n):
+            t = MINUTE_MS * (i + 1)
+            last = t - (30_000 if i < lacking else 1000)
+            events += [made_prompt(t, "s1", f"t{i}"), *made_samples([last], [t])]
+        return cc2(made(events), MADE_SUB, True)["result"]
+
+    for n, lacking, want in ((1, 1, "pass"), (2, 2, "fail"), (4, 1, "pass"), (8, 2, "fail"), (9, 2, "pass")):
+        check(result(n, lacking) == want, f"CC2 with {lacking} of {n} prompts lacking input is a {want}")
+
+
+def selftest_starts():
+    """Rule 4 and the IDE test read the session's last start at or before
+    the time they test, so a session that moves to a headless parent, or
+    into an IDE, changes only what comes after the move."""
+    starts = sessions_of([made_start(0, "s1"), made_start(200_000, "s1", "script_runtime", "resume")])
+    check(not automated(made_prompt(100_000, "s1", "t1"), starts),
+          "rule 4 doesn't label a prompt sent before the session's headless start")
+    check(automated(made_prompt(300_000, "s1", "t2"), starts), "rule 4 labels a prompt after a headless start")
+    events = made([made_start(0, "s1"), made_focus(0, "editor"), made_start(200_000, "s1", "ide", "resume"),
+                   made_prompt(100_000, "s1", "t1"), made_prompt(300_000, "s1", "t2"),
+                   *made_samples([99_000, 299_000], [100_000, 300_000])])
+    got = cc2(events, MADE_SUB, True)["counts"]
+    check(got["no_focus"] == 1 and got["with_input_and_focus"] == 1,
+          f"the editor hosts a session for CC2 only once an IDE runs it: {got}")
+
+
+def selftest_cc7():
+    """CC7 counts a missing seq against the batch whose stored n covers it:
+    a batch's hidden last record fails that batch and not the next, and a
+    batch's hidden first record fails that batch alone."""
+    times = (5_000, 20_000, 65_000, 80_000, 125_000, 140_000)
+    events = [{**made_event(t, "os.presence", {"idle_any_s": 1, "idle_keys_s": 1, "locked": False}), "seq": 300 + i}
+              for i, t in enumerate(times)]
+    dev = SimpleNamespace(id="d_selftest", base="selftest", events=events)
+    sub = {"projects": [MADE_P], "start": 0, "end": 3 * MINUTE_MS}
+    # Batch 100 holds seqs 300 and 301, 101 holds 302 and 303, and 102 holds
+    # 304 and 305: the writer seals at every minute.
+    for hidden, b in ((303, 101), (304, 102)):
+        got = cc7([ledger(dev, 100, (0, 3 * MINUTE_MS), hide=(hidden,))], sub)
+        failed = {it["b"]: it["failed"] for it in got.get("items", [])}
+        check(list(failed) == [b] and f"seq_gap_before_{hidden + 1}" in failed[b],
+              f"CC7 fails batch {b} alone when the reveal hides seq {hidden}: {failed}")
+
+
+def selftest_cc9():
+    """CC9's parent rule: the class changes only at a resume, and only among
+    terminal_app, ide, multiplexer and remote; a log reader's unknown is no
+    class."""
+    cases = [
+        ("a resume from Terminal into tmux passes", "pass",
+         [("terminal_app", "startup", "hook"), ("multiplexer", "resume", "hook")]),
+        ("a resume from Terminal into an IDE passes", "pass",
+         [("terminal_app", "startup", "hook"), ("ide", "resume", "hook")]),
+        ("a resume from a script into Terminal fails", "fail",
+         [("script_runtime", "startup", "hook"), ("terminal_app", "resume", "hook")]),
+        ("a startup with a new class fails", "fail",
+         [("terminal_app", "startup", "hook"), ("multiplexer", "startup", "hook")]),
+        ("a log reader's unknown before the hook's class passes", "pass",
+         [("unknown", "startup", "log"), ("terminal_app", "startup", "hook")]),
+        ("a log reader's unknown between two starts of one class passes", "pass",
+         [("terminal_app", "startup", "hook"), ("unknown", "resume", "log"), ("terminal_app", "resume", "hook")]),
+    ]
+    for name, want, starts in cases:
+        events = [made_start(MINUTE_MS * (i + 1), "s1", parent, start_kind, via)
+                  for i, (parent, start_kind, via) in enumerate(starts)]
+        check(cc9(events, MADE_SUB)["result"] == want, f"CC9: {name}")
+
+
+def made_cc11(prompts, key_slots, setup=None, inputs=None):
+    """CC11 over one session, s1: prompts as (t, typed, class), and the
+    typing module's slots as (start, keys, injected). setup holds the
+    starts and the focus, by default a startup in a terminal that has
+    focus. The agent samples every 15 s and at each prompt. inputs are the
+    key presses the samples show, by default one 1 s before the end of
+    each slot with key-downs."""
+    setup = setup or [made_start(0, "s1"), made_focus(0, "terminal", ["s1"])]
+    if inputs is None:
+        inputs = [st + SLOT_MS - 1000 for st, _, _ in key_slots]
+    times = sorted({*range(SLOT_MS, max(t for t, _, _ in prompts) + 1, SLOT_MS), *(t for t, _, _ in prompts)})
+    events = setup + [made_prompt(t, "s1", f"t{t}", typed) for t, typed, _ in prompts]
+    events += made_samples([0, *inputs], times)
+    typing = {"slots": [{"start": st, "keys": k, "injected": i} for st, k, i in key_slots]}
+    return cc11(made(events), MADE_SUB, True, typing, {f"t{t}": pc for t, _, pc in prompts})
+
+
+def selftest_cc11():
+    """CC11's floors at a quarter of the credited characters and at the
+    injected key-downs, its 450-character cap, which slots each prompt
+    gets, and its refusal of a prompt whose typed length rule 7 would
+    cut."""
+    t, earlier = 600_000, 540_000
+    one = [(t, 60, "substantive")]
+    check(made_cc11(one, [(585_000, 15, 0)])["result"] == "pass", "CC11 passes 15 key-downs for 60 characters")
+    check(made_cc11(one, [(585_000, 14, 0)])["result"] == "fail", "CC11 fails 14 key-downs for 60 characters")
+    check(made_cc11(one, [(585_000, 30, 15)])["result"] == "pass", "CC11 passes as many injected as hardware keys")
+    check(made_cc11(one, [(585_000, 31, 16)])["result"] == "fail", "CC11 fails more injected than hardware keys")
+    long = [(t, 900, "substantive")]
+    four = [540_000, 555_000, 570_000, 585_000]
+    got = made_cc11(long, [(st, n, 0) for st, n in zip(four, (29, 28, 28, 28))])
+    check(got["result"] == "pass", "CC11 passes 113 key-downs for 900 characters, which credit 450")
+    got = made_cc11(long, [(st, 28, 0) for st in four])
+    check(got["result"] == "fail" and got["items"][0]["credited_chars"] == 450,
+          f"CC11 fails 112 key-downs for 900 characters, which credit 450: {got}")
+    check(made_cc11([(t, 225, "substantive")], [(585_000, 57, 0)])["result"] == "pass",
+          "CC11 reads 225 typed characters over one input slot, which rule 6 finds plausible")
+    check(refuses(lambda: made_cc11([(t, 226, "substantive")], [(585_000, 57, 0)])),
+          "CC11 refuses 226 typed characters over one input slot, which rule 7 would cut")
+    for typed, pc, what in ((11, "low_effort", "a go-ahead"), (0, "substantive", "a prompt with nothing typed")):
+        got = made_cc11([(earlier, typed, pc), (t, 60, "substantive")], [(525_000, 12, 0), (585_000, 3, 0)])
+        check(got["result"] == "fail" and got["counts"]["key_downs"] == 3,
+              f"the slot {what} was typed in counts for no later prompt: {got}")
+    got = made_cc11([(547_500, 11, "low_effort"), (t, 60, "substantive")], [(540_000, 12, 0), (585_000, 3, 0)],
+                    inputs=[547_000, 599_000])
+    check(got["result"] == "fail" and got["counts"]["key_downs"] == 3,
+          f"the slot a go-ahead is sent in is the go-ahead's, though the slot ends after it: {got}")
+    got = made_cc11([(earlier, 60, "substantive"), (t, 60, "substantive")], [(510_000, 12, 0), (585_000, 3, 0)])
+    check(got["result"] == "pass" and got["counts"]["prompts"] == 1 and got["counts"]["key_downs"] == 15,
+          f"a prompt with no input before it takes no slot: {got}")
+    setup = [made_start(0, "s1"), made_focus(0, "editor"), made_start(570_000, "s1", "ide", "resume")]
+    got = made_cc11(one, [(540_000, 30, 0), (585_000, 15, 0)], setup)
+    check(got["result"] == "pass" and got["counts"]["key_downs"] == 15,
+          f"the editor hosts a session's slots only once an IDE runs it: {got}")
+
+
+def selftest():
+    """Checks, on made-up records, the rules no scenario reaches."""
+    selftest_es()
+    selftest_cc2()
+    selftest_starts()
+    selftest_cc7()
+    selftest_cc9()
+    selftest_cc11()
 
 
 # Writing.

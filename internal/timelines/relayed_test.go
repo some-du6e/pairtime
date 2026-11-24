@@ -254,7 +254,7 @@ func TestRelayedEvents(t *testing.T) {
 				}
 			}
 		})
-		t.Run(f.Name+" events are one device's gapless stream in time order", func(t *testing.T) {
+		t.Run(f.Name+" events are one device's stream in time order, and seq rises by 1 since a fixture's ledger holds only events", func(t *testing.T) {
 			ids := map[string]bool{}
 			for i, e := range f.Events {
 				where := fmt.Sprintf("%s line %d", EventsFile, i+1)
@@ -264,7 +264,7 @@ func TestRelayedEvents(t *testing.T) {
 				if i > 0 {
 					prev := f.Events[i-1]
 					if e.Seq != prev.Seq+1 {
-						t.Errorf("%s: seq %d follows %d; seq is gapless", where, e.Seq, prev.Seq)
+						t.Errorf("%s: seq %d follows %d; a fixture's ledger holds only events, so seq rises by 1", where, e.Seq, prev.Seq)
 					}
 					if e.T < prev.T {
 						t.Errorf("%s: t %d is before the previous event's %d", where, e.T, prev.T)

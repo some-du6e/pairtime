@@ -16,13 +16,19 @@
 //
 // A published table never changes. Changing a value is a MINOR scoring
 // version with a new file and no code; adding or dropping a parameter
-// changes a rule, which is a MAJOR one (SM 7.6, DESIGN 6.6). Scoring
-// versions stay 0.x until the freeze (DESIGN 10.2), so until then a rule
-// change raises MINOR: table 0.2.0 added [INPUT_RELEASE_GRACE_MS], and
-// table 0.3.0 [RELAY_MATCH_S] and [RELAY_SEEN_LAG_S] (D-relayed). Tables
-// of different versions can therefore hold different parameters: a table
-// holds every parameter this package declares except those a later
-// version added. [ByVersion] and [ByHash] look tables up.
+// changes a rule, which is a MAJOR one (SM 7.6, DESIGN 6.6). The exception
+// is [MINHASH_PERMS], [SHINGLE_WORDS], [SHINGLE_CHARS] and
+// [SHINGLE_MIN_WORDS], which SM 8.5 marks fixed. Each prompt's ledger
+// record commits the sketch they define, so a new value for any of them is
+// a MAJOR version with a new feature map, f.v = 2 (docs/spec/ledger-v1.md
+// 10.5, 10.7), and a test in pkg/ledger/features fails a table that changes
+// one. Scoring versions stay 0.x until the freeze (DESIGN 10.2), so until
+// then a rule change raises MINOR: table 0.2.0 added
+// [INPUT_RELEASE_GRACE_MS], and table 0.3.0 [RELAY_MATCH_S] and
+// [RELAY_SEEN_LAG_S] (D-relayed). Tables of different versions can
+// therefore hold different parameters: a table holds every parameter this
+// package declares except those a later version added. [ByVersion] and
+// [ByHash] look tables up.
 //
 // # Canonical form and hash
 //
@@ -69,10 +75,4 @@
 //   - CHAIN_HEAD_INTERVAL_S is gone. Ledger batches every [BATCH_S] replace
 //     per-event chain heads (DESIGN 6.2 D8).
 //   - STREAK_DAY_S is [BUILD_DAY_S] (DESIGN 6.2 D10, 6.3).
-//   - SM 8.5's SHINGLE row ("word 3-shingles; character 5-shingles under 6
-//     words") holds three numbers, so it is three parameters:
-//     [SHINGLE_WORDS], [SHINGLE_CHARS] and [SHINGLE_MIN_WORDS].
-//   - DESIGN 6.3's CHALLENGE_K ("max(10, 10% of challengeable turns),
-//     capped at 30") is likewise [CHALLENGE_K_MIN], [CHALLENGE_K_FRAC] and
-//     [CHALLENGE_K_MAX].
 package params

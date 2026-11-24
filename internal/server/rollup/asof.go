@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"time"
@@ -49,7 +50,7 @@ const maxZoneOffset = 14 * time.Hour
 // revision isn't pending or whose minute ended at least PendingWindow
 // before asOfMS. Level C never counts, and no cap applies. It writes
 // nothing: the slots keep the devices' project keys, which the sums don't
-// need.
+// need. Public pages read PublicCreditAsOf, which applies the day cap.
 func CreditAsOf(ctx context.Context, q Querier, account, day string, asOfMS int64) (Credit, error) {
 	c, _, _, err := CreditReached(ctx, q, account, day, asOfMS, math.MaxInt64)
 	return c, err
@@ -168,6 +169,120 @@ AND r.account_id = $1 AND r.received_at_ms <= $5`, account, lo, hi, day, untilMS
 		}
 	}
 	return total, untilMS, false, nil
+}
+
+// PublicCreditAsOf returns the account's credit on day, a local date, as a
+// public page shows it once asOfMS (Unix ms) has passed (D-public-daily):
+// the owner's dashboard's credit for the day as the server held it at
+// asOfMS, with the day cap applied, less every slot that a revision the
+// server didn't label witnessed or offline won. It takes each device's
+// highest-rev revision of each of the day's minutes received at or before
+// asOfMS, whatever its label, as Apply held it then, and merges each
+// minute's revisions as Apply does (SM 3.4). It cuts the merged minutes in
+// time order under DAY_CAP_S as the rollups do, with every level, kind and
+// state counting toward the cap, since credit past it is X.day_cap,
+// uncredited (SM 5.3). Of what fits, it sums the level A and B milliseconds
+// of slots whose winning revision the server labeled witnessed or offline,
+// or, stored with no label before migration 0009, whose bucket read so,
+// and of a pending revision's slots only once its minute ended at least
+// PendingWindow before asOfMS.
+//
+// So the public number for a date never exceeds the level A and B credit
+// the dashboard showed for it at asOfMS, never shows credit a backfilled
+// revision brought, and, since revisions received later stay out, never
+// changes once asOfMS has passed. On a day with no backfilled revision and
+// every minute settled, it is the dashboard's number. Build days read
+// CreditAsOf instead, which leaves backfilled revisions out of the merge
+// and applies no cap (DESIGN 6.2 D10).
+func PublicCreditAsOf(ctx context.Context, q Querier, account, day string, asOfMS int64) (Credit, error) {
+	date, err := time.Parse(time.DateOnly, day)
+	if err != nil {
+		return Credit{}, fmt.Errorf("rollup: %q isn't a date: %w", day, err)
+	}
+	lo := date.Add(-maxZoneOffset).UnixMilli()
+	hi := date.AddDate(0, 0, 1).Add(maxZoneOffset).UnixMilli()
+	rows, err := q.QueryContext(ctx, `SELECT r.minute_ms, r.device_id, r.rev, r.bucket, r.server_witness
+FROM rollup_minutes m
+JOIN minute_bucket_revisions r ON r.device_id = m.device_id AND r.minute_ms = m.minute_ms
+WHERE m.user_id = $1 AND m.minute_ms >= $2 AND m.minute_ms < $3 AND m.day = $4
+AND r.account_id = $1 AND r.received_at_ms <= $5`, account, lo, hi, day, asOfMS)
+	if err != nil {
+		return Credit{}, fmt.Errorf("rollup: reading %s's public %s as of %d: %w", account, day, asOfMS, err)
+	}
+	defer rows.Close()
+	// Each device's latest revision of each minute by asOfMS, by minute
+	// and then device.
+	type held struct {
+		rev    int64
+		bucket string
+		label  sql.NullString
+	}
+	latest := make(map[int64]map[string]held)
+	for rows.Next() {
+		var m int64
+		var d string
+		var h held
+		if err := rows.Scan(&m, &d, &h.rev, &h.bucket, &h.label); err != nil {
+			return Credit{}, fmt.Errorf("rollup: reading %s's public %s as of %d: %w", account, day, asOfMS, err)
+		}
+		devs := latest[m]
+		if devs == nil {
+			devs = make(map[string]held)
+			latest[m] = devs
+		}
+		if cur, ok := devs[d]; !ok || h.rev > cur.rev {
+			devs[d] = h
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return Credit{}, fmt.Errorf("rollup: reading %s's public %s as of %d: %w", account, day, asOfMS, err)
+	}
+	limit := dayCapMS()
+	pendingMS := PendingWindow().Milliseconds()
+	var c Credit
+	// run is the day's credit so far, in time order, as the cap counts it.
+	var run int64
+	for _, m := range slices.Sorted(maps.Keys(latest)) {
+		ids := slices.Sorted(maps.Keys(latest[m]))
+		devs := make([]device, 0, len(ids))
+		counts := make([]bool, 0, len(ids))
+		for _, id := range ids {
+			h := latest[m][id]
+			var mb event.MinuteBucket
+			if err := json.Unmarshal([]byte(h.bucket), &mb); err != nil {
+				return Credit{}, fmt.Errorf("rollup: minute %d of %s on %s has a revision that isn't a bucket: %w", m, account, id, err)
+			}
+			in, err := minuteOf(FromEvent(account, mb))
+			if err != nil {
+				return Credit{}, err
+			}
+			w := event.Witness(h.label.String)
+			if w == "" {
+				w = mb.Witness
+			}
+			devs = append(devs, in)
+			counts = append(counts, w == event.Witnessed || w == event.Offline)
+		}
+		mg, won := mergeWon(devs)
+		settled := m+60_000+pendingMS <= asOfMS
+		for i, s := range mg.slots {
+			if s.MS == 0 {
+				continue
+			}
+			fits := min(max(limit-run, 0), s.MS)
+			run += s.MS
+			if fits == 0 || !counts[won[i]] || (s.pending && !settled) {
+				continue
+			}
+			switch s.Level {
+			case "A":
+				c.AMS += fits
+			case "B":
+				c.BMS += fits
+			}
+		}
+	}
+	return c, nil
 }
 
 // countOf is what the merged minute m adds to its day's credit: the level

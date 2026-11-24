@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -159,7 +160,7 @@ var (
 type fixture struct {
 	dir   string
 	keys  *pkgledger.Keys
-	clock time.Time
+	clock fixtureClock
 	w     *ledger.Writer
 	v     *vault.Vault
 	b     *store.Buckets
@@ -169,6 +170,26 @@ type fixture struct {
 	text, path          map[string]string
 	// others are files no sweep of this package touches, by path.
 	others map[string][]byte
+}
+
+// fixtureClock is a fixture's fake time. The ledger writer reads it
+// through Options.Now on its own goroutine while the test moves it on, so
+// every read and write takes the lock.
+type fixtureClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fixtureClock) set(t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = t
+}
+
+func (c *fixtureClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
 }
 
 func newFixture(t *testing.T, now time.Time, days int) *fixture {
@@ -188,7 +209,7 @@ func newFixture(t *testing.T, now time.Time, days int) *fixture {
 	}
 	for back := days - 1; back >= 0; back-- {
 		at := now.AddDate(0, 0, -back)
-		f.clock = at
+		f.clock.set(at)
 		day := at.Format(time.DateOnly)
 		hook := func() event.Envelope {
 			return envOf(at, "s_1", "p_web", event.SourceHook, event.ViaHook, event.HarnessClaudeCode, "2.1.327")
@@ -252,7 +273,7 @@ func (f *fixture) open(t *testing.T) {
 		t.Fatal(err)
 	}
 	w, err := ledger.Open(ledger.Options{Dir: filepath.Join(f.dir, "ledger"), Keys: f.keys, KeyID: testKeyID, Vault: v,
-		Now: func() time.Time { return f.clock }})
+		Now: f.clock.now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,10 +442,11 @@ func TestSweep(t *testing.T) {
 				}
 			})
 			t.Run("the ledger goes on after the sweep, and opens again from its base", func(t *testing.T) {
-				f.clock = now.Add(time.Hour)
+				later := now.Add(time.Hour)
+				f.clock.set(later)
 				text := "one more prompt"
-				s, err := f.w.Write(ledger.Input{Event: event.Event{Envelope: event.Envelope{EventID: event.NewEventID(f.clock),
-					T: f.clock.UnixMilli(), Mono: 1 << 40, BootID: "b_test", Source: event.SourceHook, Via: event.ViaHook,
+				s, err := f.w.Write(ledger.Input{Event: event.Event{Envelope: event.Envelope{EventID: event.NewEventID(later),
+					T: later.UnixMilli(), Mono: 1 << 40, BootID: "b_test", Source: event.SourceHook, Via: event.ViaHook,
 					Harness: event.HarnessClaudeCode, HarnessVersion: "2.1.327", SessionKey: "s_1", ProjectKey: "p_web"},
 					Data: &event.PromptSubmit{TurnKey: "t_2", LenChars: len(text), TypedLenEst: len(text), OriginDeclared: event.DeclaredNone}},
 					Text: []byte(text)})

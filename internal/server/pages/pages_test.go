@@ -225,9 +225,10 @@ func TestPrivacyNotice(t *testing.T) {
 			notWant: []string{"privacy hub"},
 		},
 		{
-			name: "with the privacy hub set the notice says Hack Club can reach this server",
-			opts: Options{PrivacyHub: true},
-			want: []string{"through the same privacy hub it uses for Hackatime"},
+			name:    "with the privacy hub set the notice says Hack Club can delete your data here or tell you what is held, and promises no export of the data itself",
+			opts:    Options{PrivacyHub: true},
+			want:    []string{"can also delete your pairtime data for you, or tell you what this server holds of it, through the same privacy hub it uses for Hackatime"},
+			notWant: []string{"export or delete your pairtime data"},
 		},
 		{
 			name:    "the notice says this server can read what you reveal, and where the sealing stops (DESIGN 7.6)",
@@ -294,6 +295,35 @@ func TestPrivacyNotice(t *testing.T) {
 		{
 			name: "the notice's list of what a slot's credit can rest on names a message you sent through an agent app, which the via_relay label marks (D-relayed)",
 			want: []string{"whether the credit rests on <code>pairtime track</code>, an editor plugin or the WakaTime bridge, or on a message you sent through an agent app."},
+		},
+		{
+			name: "the notice says pairtime reads T3 Code's messages on the computer and keeps none of their text (D-relayed, DESIGN 5.1)",
+			want: []string{
+				"If you use T3 Code, pairtime also reads the messages T3 Code keeps on your computer, so it can credit the ones you send from T3 Code&#39;s desktop app, a browser or your phone.",
+				"It reads a message&#39;s text only to measure its length and what kind of prompt it is, and keeps none of it.",
+			},
+		},
+		{
+			name: "the notice says that while T3 Code runs and you aren't working in a project, pairtime notes once a minute whether you're at the computer, and nothing about which app is in front (D-relayed-context, as #225 amended it)",
+			want: []string{
+				"While T3 Code runs and you aren&#39;t working in a project, pairtime still notes once a minute whether you&#39;re at the computer, so the messages you send from your phone or a browser can count. Then it notes nothing about which app is in front.",
+			},
+		},
+		{
+			name: "the notice says the Claude Code T3 Code keeps open between messages isn't work in a project, but a reply it's writing is, and so is T3 Code's own window in front, as DESIGN 3.3's presence row and doctor say (D-relayed-context)",
+			want: []string{
+				"The Claude Code that T3 Code keeps open between your messages isn&#39;t work in a project, but a reply it&#39;s writing is, and so is T3 Code&#39;s own window in front, until 10 minutes after the reply ends or you switch away.",
+			},
+		},
+		{
+			name: "the notice says no prompt that opens the way T3 Code opens a guest's message keeps its text, from any AI tool and even when pairtime can't read T3 Code's messages, and keeps its exception only for a guest's other prompts (#225, Q1 and Q10)",
+			want: []string{
+				"A message from a guest you shared a T3 Code thread with reaches your agent as a prompt with the guest&#39;s name and words in it, and T3 Code starts that prompt with <code>Message from guest</code>.",
+				"pairtime keeps no text of any prompt that starts that way, from any AI tool, even when it can&#39;t read T3 Code&#39;s messages. So a prompt of your own that starts with those words keeps no text either, and doesn&#39;t count.",
+				"While pairtime can read T3 Code&#39;s messages, it also keeps no text of any other prompt a guest&#39;s message started.",
+				"When it can&#39;t read them, as on a computer without the <code>sqlite3</code> tool, or can&#39;t tell that a prompt came from T3 Code, as with one sent while pairtime&#39;s agent wasn&#39;t running, it keeps such a prompt as it keeps any other.",
+			},
+			notWant: []string{"it keeps that prompt as it keeps any other.", "it keeps none of that prompt&#39;s text either."},
 		},
 		{
 			name: "the notice says what the optional GitHub App keeps of a private repository's pushes (DESIGN 3.10)",
@@ -589,7 +619,7 @@ func TestStyleHash(t *testing.T) {
 			}
 			sum := sha256.Sum256([]byte(css))
 			want := "style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
-			for _, csp := range []string{s.csp, s.cspForm} {
+			for _, csp := range []string{s.csp, s.cspForm, s.cspLive} {
 				if !strings.Contains(csp, want) {
 					t.Errorf("CSP %q doesn't allow the page's style; want %s", csp, want)
 				}

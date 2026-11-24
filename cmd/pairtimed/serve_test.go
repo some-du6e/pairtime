@@ -24,6 +24,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/pages"
 	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/store"
+	"github.com/some-du6e/pairtime/internal/server/writer"
 	"github.com/some-du6e/pairtime/internal/version"
 )
 
@@ -134,6 +135,7 @@ func TestServe(t *testing.T) {
 		{name: "/metrics counts rows the retention jobs deleted", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_retention_deleted_rows_total 0$`},
 		{name: "/metrics counts the pending minutes the settle job settled, none on a new database", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_rollup_settled_minutes_total 0$`},
 		{name: "/metrics counts the days the build-day job stored, none on a new database", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_build_days_decided_total 0$`},
+		{name: "/metrics counts the open live-dashboard streams, none on a new server (DESIGN 10.4)", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_streams_open 0$`},
 		{name: "the build-day summary needs a device token", url: public + "/api/v1/build-days", wantCode: 401, wantBody: `"error":"token_missing"`},
 		{name: "devlogs need a device token", url: public + "/api/v1/devlogs", wantCode: 401, wantBody: `"error":"token_missing"`},
 		{name: "badges need a device token", method: http.MethodPost, url: public + "/api/v1/badges", wantCode: 401, wantBody: `"error":"token_missing"`},
@@ -649,6 +651,8 @@ func TestServeHeaders(t *testing.T) {
 			want: map[string]string{"WWW-Authenticate": `Session realm="pairtime"`, "Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
 		{name: "the dashboard API's 401 names the same scheme, as GET /api/v1/users/me answers", url: public + "/api/v1/users/me/dashboard", wantCode: 401,
 			want: map[string]string{"WWW-Authenticate": `Session realm="pairtime"`, "Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
+		{name: "the live stream answers a signed-out user:me with the same 401, which stops EventSource (WP-SV8)", url: public + "/api/v1/stream?topics=user:me", wantCode: 401,
+			want: map[string]string{"WWW-Authenticate": `Session realm="pairtime"`, "Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
 		{name: "sign-in's error page is never stored", url: public + "/auth/hca/login", wantCode: 503,
 			want: map[string]string{"Cache-Control": "no-store", "X-Content-Type-Options": nosniff}},
 		{name: "the keys document is JSON that a cache must check with the server before each reuse (DESIGN 7.6)", url: public + "/.well-known/pairtime-keys.json", wantCode: 200,
@@ -678,6 +682,63 @@ func TestServeHeaders(t *testing.T) {
 				if got := resp.Header.Values(k); len(got) != 1 || got[0] != v {
 					t.Errorf("%s %s has %s %q, want %q", method, tt.url, k, got, v)
 				}
+			}
+		})
+	}
+}
+
+// doerFunc is a rollup.Doer that is a function.
+type doerFunc func(ctx context.Context, rows int, op writer.Op) error
+
+func (f doerFunc) Do(ctx context.Context, rows int, op writer.Op) error { return f(ctx, rows, op) }
+
+// TestCommitThenTell checks when a time zone change or a hidden name tells
+// the live stream: only once its op has committed, whether or not its
+// request is still there, since the writer answers a request that went
+// with its error before the op has committed.
+func TestCommitThenTell(t *testing.T) {
+	tests := []struct {
+		name string
+		// opErr is what the op returns. gone ends the request's context
+		// before the op runs.
+		opErr    error
+		gone     bool
+		wantErr  bool
+		wantTold bool
+	}{
+		{name: "an op that committed tells its account", wantTold: true},
+		{name: "an op that failed tells nobody", opErr: errors.New("too soon"), wantErr: true},
+		{name: "a request that went before its op committed doesn't stop the op, and its account is told once the op commits", gone: true, wantTold: true},
+		{name: "a request that went before its op failed tells nobody", gone: true, opErr: errors.New("too soon"), wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var told []string
+			// The writer answers with its context's error once that
+			// context ends, before the op has committed, as Writer.Do does.
+			w := doerFunc(func(dctx context.Context, _ int, op writer.Op) error {
+				if tt.gone {
+					cancel()
+				}
+				if err := dctx.Err(); err != nil {
+					return err
+				}
+				err := op(dctx, nil)
+				if len(told) != 0 {
+					t.Error("changed heard the account before the op committed")
+				}
+				return err
+			})
+			err := commitThenTell(ctx, w, "a1", func(account string) { told = append(told, account) }, func(context.Context, writer.Tx) error {
+				return tt.opErr
+			})
+			if (err != nil) != tt.wantErr {
+				t.Errorf("commitThenTell = %v, want an error: %v", err, tt.wantErr)
+			}
+			if want := tt.wantTold; (len(told) == 1 && told[0] == "a1") != want || len(told) > 1 {
+				t.Errorf("changed heard %q, want a1 once: %v", told, want)
 			}
 		})
 	}

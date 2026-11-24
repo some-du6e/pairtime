@@ -69,9 +69,9 @@ func TestValues(t *testing.T) {
 		{PROC_SCAN_S, "60", "SM 8.4"},
 
 		{MINHASH_PERMS, "64", "SM 8.5"},
-		{SHINGLE_WORDS, "3", "SM 8.5 SHINGLE, word 3-shingles"},
-		{SHINGLE_CHARS, "5", "SM 8.5 SHINGLE, character 5-shingles"},
-		{SHINGLE_MIN_WORDS, "6", "SM 8.5 SHINGLE, character shingles under 6 words"},
+		{SHINGLE_WORDS, "3", "SM 8.5"},
+		{SHINGLE_CHARS, "5", "SM 8.5"},
+		{SHINGLE_MIN_WORDS, "6", "SM 8.5"},
 		{SIM_JACCARD, "0.8", "SM 8.5"},
 		{REROLL_WINDOW_S, "1800", "SM 8.5"},
 		{REROLL_FREE_ATTEMPTS, "2", "SM 8.5"},
@@ -115,9 +115,9 @@ func TestValues(t *testing.T) {
 		{CONSISTENCY_WINDOW_D, "30", "DESIGN 6.3"},
 		{LONG_FIGHT_MIN_S, "1800", "DESIGN 6.3"},
 		{REVEAL_POST_S, "900", "DESIGN 6.3"},
-		{CHALLENGE_K_MIN, "10", "DESIGN 6.3 CHALLENGE_K, max(10, ...)"},
-		{CHALLENGE_K_FRAC, "0.1", "DESIGN 6.3 CHALLENGE_K, 10% of challengeable turns"},
-		{CHALLENGE_K_MAX, "30", "DESIGN 6.3 CHALLENGE_K, capped at 30"},
+		{CHALLENGE_K_MIN, "10", "DESIGN 6.3"},
+		{CHALLENGE_K_FRAC, "0.1", "DESIGN 6.3"},
+		{CHALLENGE_K_MAX, "30", "DESIGN 6.3"},
 		{PREAPPROVE_ROW_MAX_S, "3600", "DESIGN 6.3"},
 		{COMPOSE_NEEDS_KEYS, "false", "DESIGN 6.3"},
 		{AUDIT_BASE_P, "0.08", "DESIGN 6.3"},
@@ -222,8 +222,8 @@ func TestRationals(t *testing.T) {
 	})
 }
 
-// TestReplacedNames checks that the SM 8 names this table replaces are
-// gone from every table, so nothing can read them by mistake.
+// TestReplacedNames checks that names which aren't parameters stay out of
+// every table, so nothing can read one by mistake.
 func TestReplacedNames(t *testing.T) {
 	cases := []struct {
 		name string
@@ -231,14 +231,39 @@ func TestReplacedNames(t *testing.T) {
 	}{
 		{"CHAIN_HEAD_INTERVAL_S", "BATCH_S replaces it (DESIGN 6.2 D8)"},
 		{"STREAK_DAY_S", "BUILD_DAY_S renames it (DESIGN 6.3)"},
-		{"SHINGLE", "SHINGLE_WORDS, SHINGLE_CHARS and SHINGLE_MIN_WORDS hold its three numbers"},
-		{"CHALLENGE_K", "CHALLENGE_K_MIN, CHALLENGE_K_FRAC and CHALLENGE_K_MAX hold its three numbers"},
+		{"SHINGLE", "SM 8.5 gives its three numbers as SHINGLE_WORDS, SHINGLE_CHARS and SHINGLE_MIN_WORDS"},
+		{"CHALLENGE_K", "it is the draw size DESIGN 6.3 computes from CHALLENGE_K_MIN, CHALLENGE_K_FRAC and CHALLENGE_K_MAX"},
 	}
 	for _, tab := range Tables() {
 		for _, c := range cases {
 			t.Run(fmt.Sprintf("table %s has no %s because %s", tab.Version(), c.name, c.why), func(t *testing.T) {
 				if v, ok := tab.Text(c.name); ok {
 					t.Errorf("table %s has %s = %s", tab.Version(), c.name, v)
+				}
+			})
+		}
+	}
+}
+
+// TestChallengeSize checks the bounds of every table's CHALLENGE_K_*
+// values. DESIGN 6.3 computes the draw size from them as
+// min(CHALLENGE_K_MAX, max(CHALLENGE_K_MIN, ceil(CHALLENGE_K_FRAC × P))),
+// so with these bounds no table can draw nothing from a non-empty pool.
+func TestChallengeSize(t *testing.T) {
+	for _, tab := range Tables() {
+		lo, hi, frac := tab.Int(CHALLENGE_K_MIN), tab.Int(CHALLENGE_K_MAX), tab.Rat(CHALLENGE_K_FRAC)
+		cases := []struct {
+			name string
+			ok   bool
+		}{
+			{"CHALLENGE_K_MIN is at least 1", lo >= 1},
+			{"CHALLENGE_K_MIN is at most CHALLENGE_K_MAX", lo <= hi},
+			{"CHALLENGE_K_FRAC is above 0 and at most 1", frac.Num() > 0 && frac.Num() <= frac.Den()},
+		}
+		for _, c := range cases {
+			t.Run("table "+tab.Version()+": "+c.name, func(t *testing.T) {
+				if !c.ok {
+					t.Errorf("CHALLENGE_K_MIN = %d, CHALLENGE_K_FRAC = %s, CHALLENGE_K_MAX = %d", lo, frac, hi)
 				}
 			})
 		}

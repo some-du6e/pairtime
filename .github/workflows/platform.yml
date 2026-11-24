@@ -50,6 +50,13 @@ on:
       # The git adapter drives the real git CLI and watches .git with file
       # notifications, both of which differ on Windows (PLAN, WP-AD5).
       - internal/adapters/git/**
+      # T3 Code's reader runs the sqlite3 tool with the OS's null device for
+      # its .sqliterc, at a low priority each OS sets its own way, reads the
+      # line ends of its output, and skips a read while a stat of T3's -wal
+      # and -shm files shows no change, which each file system times its own
+      # way (WP-ADE1). Its tests build T3 stores with sqlite3, which the
+      # Windows job installs.
+      - internal/adapters/t3code/**
       # doctor reads the OS build, the data folder's disk and the binary's
       # signature through each OS's own calls (WP-AG6).
       - internal/agent/doctor/**
@@ -84,7 +91,7 @@ permissions:
 env:
   # pairtime never uses cgo (AGENTS.md).
   CGO_ENABLED: "0"
-  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp internal/agent/presence internal/agent/focus internal/agent/notifier internal/agent/keys internal/agent/ledger internal/agent/vault internal/agent/hookpath internal/adapters/git internal/agent/doctor internal/agent/tailers cmd/pairtime
+  PLATFORM_DIRS: internal/platform internal/install internal/agent/ipc internal/agent/inbox internal/agent/home internal/agent/localhttp internal/agent/presence internal/agent/focus internal/agent/notifier internal/agent/keys internal/agent/ledger internal/agent/vault internal/agent/hookpath internal/adapters/git internal/adapters/t3code internal/agent/doctor internal/agent/tailers cmd/pairtime
 
 jobs:
   windows:
@@ -108,6 +115,43 @@ jobs:
             go.mod
             go.sum
 
+      - name: sqlite3 for T3 Code's reader's tests
+        # internal/adapters/t3code's tests build T3 Code stores with the
+        # sqlite3 tool and read them with it, as the reader does (DESIGN
+        # 5.1), and fail in CI without it. Windows has none, so this
+        # downloads SQLite's own Windows tools from sqlite.org, pinned by
+        # SHA-256, as footprint.yml does, and puts their folder first on
+        # PATH. That is the real sqlite3.exe, with no shim between: a shim
+        # would start sqlite3 as a process of its own, which a run the
+        # reader stops at its timeout would leave holding open a store the
+        # test's temporary folder can't then remove.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Command sqlite3 -ErrorAction SilentlyContinue)) {
+            # SQLite's own Windows tools from sqlite.org, pinned by the zip's SHA-256
+            # (its SHA3-256 is the one sqlite.org's download page gives).
+            $url = 'https://www.sqlite.org/2026/sqlite-tools-win-x64-3540100.zip'
+            $sha256 = 'FB20997ADE5583A5FBF1E36DB7BC3C82C9416B3F314F16961E1572AA4E49487D'
+            $zip = Join-Path $env:RUNNER_TEMP 'sqlite-tools.zip'
+            for ($try = 1; ; $try++) {
+              try { Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing; break }
+              catch {
+                if ($try -ge 3) { throw "couldn't download SQLite's tools from sqlite.org: $_" }
+                Start-Sleep -Seconds (10 * $try)
+              }
+            }
+            if ((Get-FileHash -Path $zip -Algorithm SHA256).Hash -ne $sha256) { throw "SQLite's tools zip from sqlite.org isn't the pinned one" }
+            $dir = Join-Path $env:RUNNER_TEMP 'sqlite-tools'
+            Expand-Archive -Path $zip -DestinationPath $dir -Force
+            $dir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            $env:PATH = "$dir;$env:PATH"
+          }
+          "sqlite3 $(sqlite3 --version) at $((Get-Command sqlite3).Source)"
+          # Every query of the reader needs sqlite3's JSON functions.
+          $json = "SELECT json('{}');" | sqlite3
+          if ($LASTEXITCODE -ne 0 -or $json -ne '{}') { throw "this sqlite3 has no JSON functions, which T3 Code's reader needs" }
+
       - name: go test (platform packages)
         # Hosted runners get injected fakes, never real focus switching
         # (JE must-fix 11).
@@ -130,6 +174,22 @@ jobs:
           cache-dependency-path: |
             go.mod
             go.sum
+
+      - name: sqlite3 for T3 Code's reader's tests
+        # macOS ships /usr/bin/sqlite3, which internal/adapters/t3code's
+        # tests find on PATH, build T3 Code stores with and read them with,
+        # as the reader does (DESIGN 5.1). They fail in CI without it, and
+        # every query of the reader needs its JSON functions.
+        run: |
+          if ! command -v sqlite3 >/dev/null; then
+            echo "::error::there is no sqlite3 on PATH, which T3 Code's reader's tests need"
+            exit 1
+          fi
+          echo "sqlite3 $(sqlite3 --version) at $(command -v sqlite3)"
+          if [ "$(echo "SELECT json('{}');" | sqlite3)" != '{}' ]; then
+            echo "::error::this sqlite3 has no JSON functions, which T3 Code's reader needs"
+            exit 1
+          fi
 
       - name: go test (platform packages)
         env:

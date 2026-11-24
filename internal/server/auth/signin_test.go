@@ -624,7 +624,7 @@ func TestIneligibleLater(t *testing.T) {
 				{name: "the sign-in is refused as ineligible", ok: f.resp.status == http.StatusForbidden && errorCode(f.resp) == auth.CodeIneligible},
 				{name: "the earlier session no longer works", ok: func() bool { r, _ := h.me(); return r.status == http.StatusUnauthorized }()},
 				{name: "the account keeps its row, marked ineligible", ok: h.count(`SELECT count(*) FROM users WHERE verification_status = 'ineligible'`) == 1},
-				{name: "the row keeps no email or Slack id, though HCA sent both", ok: h.count(`SELECT count(*) FROM users WHERE slack_id IS NULL AND email_ct IS NULL AND email_index IS NULL`) == 1},
+				{name: "the row keeps no email or Slack id, though HCA sent both, and keeps the email's keyed index, so a deletion request finds it", ok: h.count(`SELECT count(*) FROM users WHERE slack_id IS NULL AND email_ct IS NULL AND email_index IS NOT NULL`) == 1},
 				{name: "no session of the account is live", ok: h.count(`SELECT count(*) FROM sessions WHERE revoked_at_ms IS NULL`) == 0},
 				{name: "no session of the account keeps a display name, though the rows stay a day", ok: h.count(`SELECT count(*) FROM sessions WHERE display_name IS NOT NULL`) == 0},
 			}

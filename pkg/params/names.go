@@ -145,18 +145,21 @@ var (
 
 // SM 8.5, dark flow and progress.
 var (
-	// MINHASH_PERMS is the number of MinHash values per prompt. The event
-	// model fixes the same number as event.MinHashSize, and the ledger
-	// commits the sketches, so a new value is a change to both.
+	// MINHASH_PERMS is the number of MinHash values per prompt.
+	// event.MinHashSize and features.SketchSize are the same number, and
+	// version 1 of the ledger's feature map fixes it (spec 10.5), so a new
+	// value is a MAJOR version with f.v = 2.
 	MINHASH_PERMS = IntParam{"MINHASH_PERMS"}
-	// SHINGLE_WORDS is the length of a word shingle, in words (SM 8.5
-	// SHINGLE).
+	// SHINGLE_WORDS is the length of a word shingle, in words (SM 8.5).
+	// Feature map version 1 fixes it, as it does MINHASH_PERMS (spec 10.5).
 	SHINGLE_WORDS = IntParam{"SHINGLE_WORDS"}
 	// SHINGLE_CHARS is the length of a character shingle, in characters
-	// (SM 8.5 SHINGLE).
+	// (SM 8.5). Feature map version 1 fixes it, as it does MINHASH_PERMS
+	// (spec 10.5).
 	SHINGLE_CHARS = IntParam{"SHINGLE_CHARS"}
 	// SHINGLE_MIN_WORDS is the fewest words a prompt needs for word
-	// shingles; shorter prompts use character shingles (SM 8.5 SHINGLE).
+	// shingles; shorter prompts use character shingles (SM 8.5). Feature
+	// map version 1 fixes it, as it does MINHASH_PERMS (spec 10.5).
 	SHINGLE_MIN_WORDS = IntParam{"SHINGLE_MIN_WORDS"}
 	// SIM_JACCARD is the estimated Jaccard similarity at which two prompts
 	// are near-duplicates (fit).
@@ -285,14 +288,13 @@ var (
 	// (DESIGN 6.5).
 	REVEAL_POST_S = IntParam{"REVEAL_POST_S"}
 	// CHALLENGE_K_MIN is the fewest turns the challenge draws, when the
-	// pool has that many (DESIGN 6.3 CHALLENGE_K, 7.5).
+	// pool has that many (DESIGN 6.3, 7.5).
 	CHALLENGE_K_MIN = IntParam{"CHALLENGE_K_MIN"}
 	// CHALLENGE_K_FRAC is the share of challengeable turns the challenge
-	// draws, between CHALLENGE_K_MIN and CHALLENGE_K_MAX (DESIGN 6.3
-	// CHALLENGE_K, 7.5).
+	// draws, rounded up, between CHALLENGE_K_MIN and CHALLENGE_K_MAX
+	// (DESIGN 6.3, 7.5).
 	CHALLENGE_K_FRAC = RatParam{"CHALLENGE_K_FRAC"}
-	// CHALLENGE_K_MAX caps the turns the challenge draws (DESIGN 6.3
-	// CHALLENGE_K, 7.5).
+	// CHALLENGE_K_MAX caps the turns the challenge draws (DESIGN 6.3, 7.5).
 	CHALLENGE_K_MAX = IntParam{"CHALLENGE_K_MAX"}
 	// PREAPPROVE_ROW_MAX_S is the largest captured_s of a row a program
 	// preset may pre-approve (DESIGN 6.4).

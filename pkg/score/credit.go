@@ -240,13 +240,18 @@ func ceilSecond(t int64) int64 { return -floorSecond(-t) }
 const perSlot = int(event.SlotMS / 1000)
 
 // deadSlot reports whether nothing but relayed credit can credit any
-// second of slot s: it is a hard break, or the presence sampler wasn't
-// running (SM 2.1). Every second there is X.absent, or on a device that
-// never samples one of SM 5.2's codes for a live slot whose presence is
-// unknown (uncredited). A relayed anchor's lead and its session's relayed
+// second of slot s: it is a hard break, or its presence is unknown (SM
+// 2.1). Every second of a hard break is X.absent. On a live device every
+// second of an unknown slot takes one of SM 5.2's codes for a live slot
+// whose presence is unknown, whether the device never samples there, comes
+// before its first sample, or the sampler ran and took no sample; on a
+// device no live record reaches, such as lookback's, it is X.absent too
+// (uncredited). A relayed anchor's lead and its session's relayed
 // reading are realized in a slot of any presence but one the machine slept
 // through (SM 2.1, 2.3), so the credit pass keeps the state of a locked or
-// unknown slot they reach (creditor.relayLive).
+// unknown slot they reach, and of one that is Asleep but not slept through
+// (Slot.slept), across a gap of at most twice SLOW_SAMPLE_S
+// (creditor.relayLive).
 func deadSlot(s *Slot) bool {
 	return s.Asleep || s.Locked || s.Present == event.PresentUnknown
 }
@@ -798,11 +803,16 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 // person started includes a relayed one (SM 2.2), and X.bucket_cap covers
 // the relayed reading that UNKNOWN_BUCKET_MAX_S held back too.
 //
-// In a never-sampling device's slot (presence.neverAt), such as every slot
-// of a server with no desktop, or one after a desktop's sampler stopped,
-// the slot is a live slot whose presence is unknown, and the presence and
-// focus codes don't apply: after the codes for withheld credit comes
-// unknownCode (SM 5.2).
+// On a live device, every slot whose presence is unknown is a live slot
+// whose presence is unknown, and the presence and focus codes don't apply:
+// after the codes for withheld credit comes unknownCode (SM 5.2). That is
+// a never-sampling device's slot (presence.neverAt), such as every slot of
+// a server with no desktop or one after a desktop's sampler stopped, one
+// before the device's first sample, and one where the sampler ran and took
+// no sample (presence.blindAt), as when its idle read fails
+// (D-sampleless-power). The agent's window sees a carried sample-less
+// restart's slots as before its first sample, and one Step over every
+// record as blind, so both must code alike.
 func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
 	if sec := c.state(k); sec != nil {
 		switch {
@@ -812,7 +822,7 @@ func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
 			return event.ReasonBucketCap
 		}
 	}
-	if c.d.pres.never[k/perSlot] && s.At(c.at(k)) == event.PresentUnknown {
+	if c.d.pres.live && s.At(c.at(k)) == event.PresentUnknown {
 		return c.unknownCode(k)
 	}
 	if s.Asleep || s.Locked || !present(s.At(c.at(k))) {

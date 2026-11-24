@@ -1,6 +1,6 @@
 # Erratum: no `via` for a bridge record whose heartbeat failed the peer-process check
 
-Date 2026-11-19. Raised by WP-EV1; the macOS default revised after the review of #4 (issue #17). Status: waiting for Karim. pkg/event implements the choice and the macOS default below until Karim decides.
+Date 2026-11-19. Raised by WP-EV1; the macOS default revised after the review of #4 (issue #17). Status: decided 2026-11-20 by the orchestrator for Karim: `bridge_unverified` is E-2's twelfth `via` value, and item 2 is (c). The peer-process check runs on macOS too, through `libproc` with purego, and on every OS a heartbeat that fails the check, or that the agent can't check, is `editor_unverified` or `bridge_unverified`. PLAN's WP-OS3, WP-OS13 and WP-AD16 took their wording in #111, and WP-OS13 built the macOS check in #202, which also dropped DESIGN 5.7 from internal/platform/darwin's Input Monitoring citations. A later WP-ERR1 docs PR applies the decision's DESIGN text outside 6.4. WP-AD16's agent wiring, which #236 lists, applies DESIGN 6.4 with the evidence page's lines and the `via` descriptions in pkg/event and the schema, unless D-macos-hid-posted's `pkg/score` PR lands first and carries them. The PRs that regenerate testdata/checks and testdata/timelines/6.1 fix the two 6.3-cc10 stories and 6.1's gen.py comment.
 
 ## Input
 
@@ -25,7 +25,7 @@ A twelfth value, `bridge_unverified`, next to `bridge`, the way E-2 pairs `edito
 | `via` | Heartbeat | Level | Counts toward `logged_s`, `ai_logged_s`, `hackatime_logged_s` |
 |---|---|---|---|
 | `bridge` | passed the peer-process check | C, unless keyboard input in the host window in the 10 s before the anchor makes it A (DESIGN 5.2, 6.4) | yes |
-| `bridge_unverified` | failed it, or came from a Mac, where the check doesn't run | the same as `bridge` | never |
+| `bridge_unverified` | failed it, or the agent couldn't run it | the same as `bridge` | never |
 
 Both carry the `via_bridge` label, so the review page still shows that a minute rests on the bridge. The new value changes what D19 counts and nothing else.
 
@@ -36,25 +36,26 @@ Both carry the `via_bridge` label, so the review page still shows that a minute 
 - A separate flag such as `peer_verified` would be a thirteenth envelope field, unused by every kind except the two the bridge emits.
 - Dropping the records at the bridge would treat them differently from failed editor heartbeats, which DESIGN keeps as `editor_unverified`.
 
-## macOS, where the check doesn't run
+## macOS, and heartbeats the agent can't check
 
-DESIGN 5.7 skips the peer-process check on macOS, and WP-OS13 builds it for Windows and Linux only. DESIGN pulls two ways here. 5.2 says "Editor heartbeats are `via = editor` only when the peer-process check passes (5.7), and `editor_unverified`, level C, otherwise", which on a Mac would make every editor heartbeat `editor_unverified`. 5.7 skips the check because macOS gives keyboard evidence directly. The default below keeps `editor` for editor heartbeats on 5.7's reasoning, against 5.2's wording. D19 counts only bridge records "from heartbeats that passed the peer-process check", and on a Mac no heartbeat passes a check that never runs. Giving them `bridge`, on the view that a check that didn't run didn't fail, would reopen the pump above on every Mac.
-
-Until Karim decides, the default is the one that keeps the pump closed. WP-AD16 sets `via` from the peer check and has no macOS rule of its own, so it takes this default:
-
-| Record on macOS | `via` | Why |
-|---|---|---|
-| Bridge record | `bridge_unverified` | A script posting transcript-shaped heartbeats can't raise `ai_logged_s`. The cost is that honest bridge records from wakatime-cli on a Mac count toward none of `logged_s`, `ai_logged_s` and `hackatime_logged_s`. Their anchors keep the bridge level rule, and macOS's key-down idle time gives the keyboard evidence that can make them level A |
-| Editor heartbeat | `editor` | DESIGN 5.7 skips the check because macOS gives keyboard evidence directly, and editor heartbeats aren't agent events, so they don't feed `ai_logged_s` |
+WP-OS13 built the peer-process check for macOS in #202, through `libproc` with purego, as it does for Windows and Linux (DESIGN 5.7). On every OS a heartbeat is `editor`, and its bridge records `bridge`, only when the check ran and passed. A heartbeat that failed it, or that the agent couldn't check, is `editor_unverified`, and its bridge records `bridge_unverified`.
 
 ## For Karim
 
 1. Accept `bridge_unverified`, or pick another fix. Accepting it adds the value to E-2's list and to D19's sentence.
 2. Which `via` should macOS records get while the peer-process check doesn't run there?
-   - (a) The default above: `bridge_unverified` for bridge records, `editor` for editor heartbeats.
+   - (a) The interim default this erratum set until the decision: `bridge_unverified` for bridge records, `editor` for editor heartbeats.
    - (b) `bridge` for bridge records too. Honest bridge records then count on a Mac, and so do a script's fakes, which raise the ceiling on the script's own level-C credit.
    - (c) Bring the check to macOS through `libproc` with purego, as DESIGN 5.7 allows. Both pairs of values then apply there as on Windows and Linux, and the question goes away.
 
    (a) and (b) both leave macOS editor heartbeats unchecked, and that needs a look too. A macOS editor heartbeat counts toward `logged_s` and D15's `hackatime_logged_s`. D15 splits `hackatime_logged_s` by the category each heartbeat carries, and a heartbeat posted straight to the local port can claim `ai coding`. If D15's AI part sets the level-C ceiling, a script on a Mac can raise that ceiling with editor heartbeats.
 
    Under (a) and (b), unchecked macOS editor heartbeats also meet DESIGN 6.4's editor-plus-commit pair by `via` alone, so the corroborated band, the only band a program preset may pre-approve, can rest on them. Accepting (a) or (b) therefore needs two DESIGN edits as well: 5.2's editor sentence gets a macOS exception, and 6.4's "an editor heartbeat that passed the peer-process check" pair says what stands in for the check on macOS (for example, key-down input in the editor's window). Under (c), neither edit is needed.
+
+## Decision
+
+Item 1: `bridge_unverified`, as above. Item 2: (c).
+
+(a) is dropped because macOS's key-down idle time backs typed edits only. SM 2.3's editor navigation needs only input in its slot, and `pkg/score` gives a keyless `editor` anchor level B. So on a Mac a jiggler and a script posting `navigate` heartbeats would earn level B, where DESIGN 7.12 gives a script posting to the port 0 submittable seconds. A key-down that another process posts also resets key-down idle (#75, internal/platform/darwin/doc.go), so key-down idle can't stand in for the check on typed edits either. Unchecked heartbeats would also count toward D19's totals, feed D15's `ai coding` split and meet 6.4's editor-plus-commit pair. (b) adds the bridge pump on top.
+
+(c) leaves no OS exception, so DESIGN 5.2's editor sentence and 6.4's pair hold as written. The cost falls on a wakatime-cli that no listed editor started. Its heartbeats get `editor_unverified` or `bridge_unverified` even when they are honest.

@@ -838,14 +838,14 @@ func (h *adapterHost) logEventID(t int64, file, key string) string {
 // emptied or a writer that stopped partway through it, makes the same ids
 // while its records keep their times, so the adapters leave out what the
 // ledger has (heldLogs) and pkg/score counts it once. A call timed by the
-// agent's receipt (hookpath.Times) takes the receipt of the start that
-// parses it again, so its ids change. The place counts from the end because
-// the one record a call can have first, the walk's session.start, comes
-// from the agent's walk of the sender, which a call read back from an
-// earlier run's held.jsonl line never has; what follows comes from the
-// call's payload. The record's kind is left out, since a prompt parsed
-// again against memory saved after it comes out as agent.queue, which is
-// the same record.
+// agent's own stamp rather than the hook's (hookpath.Times) is stamped anew
+// by the start that parses it again (readHeld), so its records get new
+// times and new ids. The place counts from the end because the one record a
+// call can have first, the walk's session.start, comes from the agent's
+// walk of the sender, which a call read back from an earlier run's
+// held.jsonl line never has; what follows comes from the call's payload.
+// The record's kind is left out, since a prompt parsed again against memory
+// saved after it comes out as agent.queue, which is the same record.
 func (h *adapterHost) hookEventID(t int64, call string, place int) string {
 	m := hmac.New(sha256.New, h.a.sessionSecret())
 	m.Write([]byte("pairtime/v1/hook-event"))

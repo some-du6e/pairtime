@@ -16,8 +16,9 @@ import (
 //   - Each change goes to presence's FocusAt with its app class, which is
 //     what makes a focused terminal, editor or agent app a project
 //     context, and a record is written only while a context is live
-//     (D14). Presence dates the sample it takes for the change the same as
-//     the change's record.
+//     (D14), and not while a running agent app alone keeps it live, with
+//     no other sign of one (focusLive; D-relayed-context). Presence dates
+//     the sample it takes for the change the same as the change's record.
 //   - Records go to the ledger through presence's queue (ledgerIn.Focus,
 //     WP-LG5), so a change's record reaches the writer ahead of its
 //     sample. Their app_hash is keyed with K_app once the keystore has
@@ -44,13 +45,24 @@ func (a *agent) newFocus(src focus.OS) {
 		Sessions:  func() map[platform.ID]string { return a.hooked.merged(a.procs.Sessions()) },
 		ProjectOf: a.projectOf,
 		AppSecret: a.appSecret,
-		Live:      func() bool { return a.presence.Status().Live },
+		Live:      a.focusLive,
 		Presence:  a.presence.FocusAt,
 		Kick:      func() { a.procs.Kick() },
 		Record:    func(r focus.Record) { a.ledgerIn.Focus(r.At, r.Data) },
 		Problem:   func(msg string) { a.setProblem("focus", msg) },
 		Log:       a.log.With("component", "focus"),
 	})
+}
+
+// focusLive reports whether the focus component may record the window in
+// front when no change asks (focus.Options.Live), as after a process scan:
+// while a project context is live, unless a running agent app alone keeps
+// it live (presence.Status.AppOnly). pairtime then records nothing about
+// which app is in front (D-relayed-context, as #225 amended it), and a
+// change of focus gets the same word from presence's FocusAt.
+func (a *agent) focusLive() bool {
+	st := a.presence.Status()
+	return st.Live && !st.AppOnly
 }
 
 // projectOf is the project of session for focus (focus.Options.ProjectOf):

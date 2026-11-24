@@ -6,7 +6,7 @@
     "months": 12,
     "provisional": "DESIGN 4.4 and 13.2 item 4: 12 months after the decision until Hack Club HQ sets the spot-check window"
   },
-  "no_personal_data": ["schema_migrations", "ops_probe", "server_keys", "key_history", "day_heads"],
+  "no_personal_data": ["schema_migrations", "ops_probe", "server_keys", "key_history", "day_heads", "privacy_token_uses"],
   "entries": [
     {
       "id": "device.prompt_text",
@@ -75,6 +75,12 @@
       "where": "device",
       "data": "What the server last told this computer about your project names: the name your dashboard shows for each project you turned a name on for, the short code your dashboard calls each project by, when the server answered, which names you hid on your dashboard, the names pairtime sent and the projects it asked the server to stop naming since the server last answered, until an answer settles them, and a note of each name pairtime turned off because your dashboard doesn't show it, with its name and when pairtime found it",
       "kept": "The server's last answer until its next one replaces it. A note until your dashboard shows that name again after you turned it on, the oldest notes going first when there are very many. Only the notes stay when this computer signs in to another server. All of it until you uninstall pairtime or delete everything"
+    },
+    {
+      "id": "device.project_map",
+      "where": "device",
+      "data": "The project map: for each git repo you worked in, its folder, its project's key and the commits its history starts from, and for each folder you worked in, when pairtime last saw it. A folder that isn't a git repo is kept only as a key made from its path, never the path",
+      "kept": "A repo's folder until pairtime finds another repo, or none, where it was. A folder's key a day after pairtime last saw the folder, unless the folder got a new project key because the repo that was there is gone. The rest until you uninstall pairtime or delete everything"
     },
     {
       "id": "device.install",

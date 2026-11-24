@@ -438,3 +438,257 @@ func TestWriterRules(t *testing.T) {
 		}
 	}
 }
+
+// syncLevel is an op that reads the sync level its batch runs at into got:
+// PRAGMA synchronous on SQLite, where 1 is NORMAL and 2 FULL, and
+// synchronous_commit on Postgres.
+func syncLevel(engine store.Engine, got *string) writer.Op {
+	return func(ctx context.Context, tx writer.Tx) error {
+		q := "PRAGMA synchronous"
+		if engine == store.Postgres {
+			q = "SHOW synchronous_commit"
+		}
+		return tx.QueryRowContext(ctx, q).Scan(got)
+	}
+}
+
+// TestDurable checks DoDurable's batches on every engine. No test can cut
+// the power, and a killed process loses nothing a NORMAL commit wrote, so
+// the check is the level each op reads.
+func TestDurable(t *testing.T) {
+	ctx := context.Background()
+	// What an op reads in a plain batch, and in a durable one. On Postgres
+	// the writer's connection starts at off, below, so that on proves the
+	// batch set it.
+	plain := map[store.Engine]string{store.SQLite: "1", store.Postgres: "off"}
+	durable := map[store.Engine]string{store.SQLite: "2", store.Postgres: "on"}
+	tests := []struct {
+		name string
+		run  func(t *testing.T, db *store.DB)
+	}{
+		{
+			name: "a batch that holds a durable op runs at the durable level, which its other ops read too, and the next batch runs at the default again",
+			run: func(t *testing.T, db *store.DB) {
+				var log commitLog
+				w := start(t, db, writer.Options{Window: 300 * time.Millisecond, Engine: db.Engine}, &log)
+				var inDurable, beside, after string
+				errs := make([]error, 2)
+				var wg sync.WaitGroup
+				wg.Add(2)
+				go func() {
+					defer wg.Done()
+					errs[0] = w.DoDurable(ctx, 1, syncLevel(db.Engine, &inDurable))
+				}()
+				go func() {
+					defer wg.Done()
+					errs[1] = w.Do(ctx, 1, syncLevel(db.Engine, &beside))
+				}()
+				wg.Wait()
+				if errs[0] != nil || errs[1] != nil {
+					t.Fatalf("errors = %v", errs)
+				}
+				if err := w.Do(ctx, 1, syncLevel(db.Engine, &after)); err != nil {
+					t.Fatal(err)
+				}
+				if inDurable != durable[db.Engine] || beside != durable[db.Engine] || after != plain[db.Engine] {
+					t.Errorf("the durable op read %q and the op beside it %q, and the next batch %q; want %q, %q and %q",
+						inDurable, beside, after, durable[db.Engine], durable[db.Engine], plain[db.Engine])
+				}
+				cs := log.all()
+				if len(cs) != 2 || cs[0].Ops != 2 || !cs[0].Durable || cs[0].Err != nil || cs[1].Durable || cs[1].Err != nil {
+					t.Errorf("transactions = %+v, want a durable one holding both ops, then a plain one", cs)
+				}
+			},
+		},
+		{
+			name: "a durable op whose caller gave up before it ran leaves its batch at the default",
+			run: func(t *testing.T, db *store.DB) {
+				var log commitLog
+				w := start(t, db, writer.Options{Window: 300 * time.Millisecond, Engine: db.Engine}, &log)
+				gone, cancel := context.WithCancel(ctx)
+				defer cancel()
+				var got string
+				var wg sync.WaitGroup
+				var gaveUp, ran error
+				wg.Add(2)
+				go func() {
+					defer wg.Done()
+					gaveUp = w.DoDurable(gone, 1, insert(1))
+				}()
+				go func() {
+					defer wg.Done()
+					ran = w.Do(ctx, 1, syncLevel(db.Engine, &got))
+				}()
+				waitFor(t, "both ops to be queued", func() bool { return w.QueueDepth() == 2 })
+				cancel()
+				wg.Wait()
+				if !errors.Is(gaveUp, context.Canceled) || ran != nil {
+					t.Fatalf("errors = %v and %v, want context.Canceled and nil", gaveUp, ran)
+				}
+				if got != plain[db.Engine] {
+					t.Errorf("the op that ran read %q, want the default, %q", got, plain[db.Engine])
+				}
+				if len(ids(t, db)) != 0 {
+					t.Error("the op whose caller gave up wrote its row")
+				}
+				if cs := log.all(); len(cs) != 1 || cs[0].Ops != 1 || cs[0].Durable {
+					t.Errorf("transactions = %+v, want one plain one holding the op that ran", cs)
+				}
+			},
+		},
+		{
+			name: "a batch the writer can't make durable fails whole, so none of its ops commits, durable or not, and the next batch runs",
+			run: func(t *testing.T, db *store.DB) {
+				// The other engine's statement for the durable level
+				// fails on this one.
+				other := store.Postgres
+				if db.Engine == store.Postgres {
+					other = store.SQLite
+				}
+				var log commitLog
+				w := start(t, db, writer.Options{Window: 300 * time.Millisecond, Engine: other}, &log)
+				errs := make([]error, 2)
+				var wg sync.WaitGroup
+				wg.Add(2)
+				go func() {
+					defer wg.Done()
+					errs[0] = w.DoDurable(ctx, 1, insert(1))
+				}()
+				go func() {
+					defer wg.Done()
+					errs[1] = w.Do(ctx, 1, insert(2))
+				}()
+				wg.Wait()
+				for i, err := range errs {
+					if err == nil || !strings.Contains(err.Error(), "making the batch durable") {
+						t.Errorf("op %d's error = %v, want the batch's failure to be made durable", i, err)
+					}
+				}
+				if err := w.Do(ctx, 1, insert(3)); err != nil {
+					t.Fatalf("the next batch failed: %v", err)
+				}
+				if got, want := ids(t, db), map[int]bool{3: true}; !reflect.DeepEqual(got, want) {
+					t.Errorf("rows = %v, want %v: neither op of the failed batch may commit", got, want)
+				}
+				if cs := log.all(); len(cs) != 2 || !cs[0].Durable || cs[0].Err == nil || cs[1].Durable || cs[1].Err != nil {
+					t.Errorf("transactions = %+v, want a failed durable one, then a plain one", cs)
+				}
+			},
+		},
+		{
+			name: "a durable batch whose first op fails still runs its other ops at the durable level, since no op's rollback undoes it",
+			run: func(t *testing.T, db *store.DB) {
+				var log commitLog
+				w := start(t, db, writer.Options{Window: 300 * time.Millisecond, Engine: db.Engine}, &log)
+				failed := make(chan error, 1)
+				go func() {
+					failed <- w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+						_, err := tx.ExecContext(ctx, "INSERT INTO w_missing (id) VALUES (1)")
+						return err
+					})
+				}()
+				// Queued first, so its savepoint is the batch's first.
+				waitFor(t, "the failing op to be queued", func() bool { return w.QueueDepth() == 1 })
+				var got string
+				if err := w.DoDurable(ctx, 1, syncLevel(db.Engine, &got)); err != nil {
+					t.Fatal(err)
+				}
+				if err := <-failed; err == nil {
+					t.Error("the op on a missing table succeeded")
+				}
+				if got != durable[db.Engine] {
+					t.Errorf("the durable op after the failed one read %q, want %q", got, durable[db.Engine])
+				}
+				if cs := log.all(); len(cs) != 1 || cs[0].Ops != 2 || cs[0].Failed != 1 || !cs[0].Durable || cs[0].Err != nil {
+					t.Errorf("transactions = %+v, want one durable one holding both ops, one of them failed", cs)
+				}
+			},
+		},
+		{
+			name: "on SQLite, after a durable batch whose reset to NORMAL failed, which leaves the batch committed, the next batch resets the level before it begins",
+			run: func(t *testing.T, db *store.DB) {
+				if db.Engine != store.SQLite {
+					t.Skip("only SQLite has a level that outlives a batch")
+				}
+				// Before start, so the writer closes before the real reset
+				// comes back.
+				writer.FailResetAfterDurable(t)
+				var log commitLog
+				w := start(t, db, writer.Options{Window: time.Millisecond, Engine: db.Engine}, &log)
+				if err := w.DoDurable(ctx, 1, insert(1)); err != nil {
+					t.Fatalf("the durable batch whose reset failed = %v, want it committed", err)
+				}
+				// Between the batches nothing runs on the one connection, so
+				// db.Write reads the level the failed reset left.
+				var between string
+				if err := db.Write.QueryRow("PRAGMA synchronous").Scan(&between); err != nil {
+					t.Fatal(err)
+				}
+				if between != durable[db.Engine] {
+					t.Fatalf("between the batches the connection is at %q, want %q: the reset after the durable batch didn't fail", between, durable[db.Engine])
+				}
+				var got string
+				if err := w.Do(ctx, 1, syncLevel(db.Engine, &got)); err != nil {
+					t.Fatal(err)
+				}
+				if got != plain[db.Engine] {
+					t.Errorf("the next batch read %q, want the default, %q", got, plain[db.Engine])
+				}
+				if rows, want := ids(t, db), map[int]bool{1: true}; !reflect.DeepEqual(rows, want) {
+					t.Errorf("rows = %v, want %v", rows, want)
+				}
+				if cs := log.all(); len(cs) != 2 || !cs[0].Durable || cs[0].Err != nil || cs[1].Durable || cs[1].Err != nil {
+					t.Errorf("transactions = %+v, want a durable one and then a plain one, both committed", cs)
+				}
+			},
+		},
+		{
+			name: "on Postgres, a batch after the server dropped the writer's connection begins on a new one, plain or durable",
+			run: func(t *testing.T, db *store.DB) {
+				if db.Engine != store.Postgres {
+					t.Skip("only Postgres has a server that drops the writer's connection")
+				}
+				var log commitLog
+				w := start(t, db, writer.Options{Window: time.Millisecond, Engine: db.Engine}, &log)
+				for i, do := range []func(context.Context, int, writer.Op) error{w.Do, w.DoDurable} {
+					var pid int64
+					if err := w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+						return tx.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&pid)
+					}); err != nil {
+						t.Fatal(err)
+					}
+					var dropped bool
+					if err := db.Read.QueryRow("SELECT pg_terminate_backend($1)", pid).Scan(&dropped); err != nil || !dropped {
+						t.Fatalf("dropping the writer's connection: %v, %v", dropped, err)
+					}
+					waitFor(t, "the dropped connection's backend to exit", func() bool {
+						var n int
+						return db.Read.QueryRow("SELECT count(*) FROM pg_stat_activity WHERE pid = $1", pid).Scan(&n) == nil && n == 0
+					})
+					if err := do(ctx, 1, insert(i)); err != nil {
+						t.Errorf("batch %d after the dropped connection failed: %v", i, err)
+					}
+				}
+				if got, want := ids(t, db), map[int]bool{0: true, 1: true}; !reflect.DeepEqual(got, want) {
+					t.Errorf("rows = %v, want %v", got, want)
+				}
+			},
+		},
+	}
+	for _, engine := range storetest.Engines() {
+		for _, tt := range tests {
+			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) {
+				db := open(t, engine)
+				if engine == store.Postgres {
+					// The server's default is on, so a durable batch that
+					// read on would prove nothing. The writer's one
+					// connection keeps this session setting.
+					if _, err := db.Write.Exec("SET synchronous_commit TO off"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				tt.run(t, db)
+			})
+		}
+	}
+}

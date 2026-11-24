@@ -191,8 +191,9 @@ func (w *window) firstBatch() uint64 {
 // carry keeps, of the records before the window, the ones a rule can
 // still read after any time span: what holds until a later record of the
 // same kind says otherwise. Those are the last focus, power and presence
-// records, which say what was in front, whether the screen was locked and
-// when the last input came (SM 2.1, 3.2), and for each harness session its
+// records, and the last power record that locked or unlocked the screen,
+// which say what was in front, whether the screen was locked and when the
+// last input came (SM 2.1, 3.2), and for each harness session its
 // start, which says how the session runs (SM 2.2), and its last prompt,
 // agent output and stop, which say which turn runs and whether the agent
 // asked a question (SM 2.2, 2.6). Each slot keeps the latest record in
@@ -209,6 +210,13 @@ type carry struct {
 	Power    *event.Event             `json:"power,omitempty"`
 	Presence *event.Event             `json:"presence,omitempty"`
 	Sessions map[string]*sessionCarry `json:"sessions,omitempty"`
+	// Lock is the latest os.power that locked or unlocked the screen. Power
+	// keeps only the latest os.power, so a suspend or a resume after a lock
+	// with no sample, as a lid close writes, would drop the lock, and a
+	// Step over the window would read the slots after the resume unlocked
+	// where one Step over every record keeps them locked until the next
+	// sample or unlock (SM 2.1). records drops it as it drops Power.
+	Lock *event.Event `json:"lock,omitempty"`
 	// Stamped is the t of the latest record folded in that the agent
 	// stamped itself and isn't the sampler's (stamps). Dated more than
 	// BUCKET_TTL_S after the later of the sampler's records the carry
@@ -223,22 +231,24 @@ type carry struct {
 	// from before the stretch (SM 2.1). The restart can be two records, as
 	// when the agent writes a suspend and a resume with no sample after
 	// them, so it sticks until records dated after it replace the ones
-	// before it: carry.records drops every Power or Presence dated before
-	// it, as the window's Steps would otherwise get them back.
+	// before it: carry.records drops every Power, Presence or Lock dated
+	// before it, as the window's Steps would otherwise get them back.
 	RestartAt int64 `json:"restart_at,omitempty"`
-	// V is the carry's format, carryVersion from WP-HL1 on, 0 in a place
-	// an older agent saved, whose carry has no Stamped and no RestartAt
+	// V is the carry's format, carryVersion today: 0 in a place an agent
+	// before WP-HL1 saved, whose carry has no Stamped, RestartAt or Lock,
+	// and 1 in one an agent between WP-HL1's first part and
+	// D-sampleless-power saved, whose carry has no Lock
 	// (Loop.rebuildCarry).
 	V int `json:"v,omitempty"`
 }
 
-// carryVersion is the carry's format since WP-HL1, whose carry keeps
-// Stamped and RestartAt. Loaded from a place an older agent saved, a carry
-// without them reads as if no record the agent stamps itself and no
-// restart came before the window, which keeps a sample whose reach a
-// folded record ended, so open rebuilds both from the ledger first
-// (Loop.rebuildCarry).
-const carryVersion = 1
+// carryVersion is the carry's format: since WP-HL1 it keeps Stamped and
+// RestartAt, and since D-sampleless-power Lock. Loaded from a place an
+// older agent saved, a carry without them reads as if no record the agent
+// stamps itself, no restart and no lock came before the window, which
+// keeps a sample whose reach a folded record ended, or drops a lock still
+// open, so open rebuilds them from the ledger first (Loop.rebuildCarry).
+const carryVersion = 2
 
 // mark is a record's place in record order, for folding RestartAt again
 // (restartAt): its t and seq, which one device's ledger never repeats, and
@@ -328,6 +338,30 @@ func (c *carry) sampled() *event.Event {
 	return c.Presence
 }
 
+// closedLock reports whether e is a lock that the carried sample closed
+// before grace: an os.power that locked the screen, and Presence a sample
+// dated after it, at grace or before, that says the screen is unlocked.
+// One Step over every record closes the lock at that sample, the first
+// unlocked one dated after it (SM 2.1). records dates both at grace, where
+// the sample no longer comes after the lock, so the window's Step would
+// keep the screen locked until its first unlocked sample instead, and
+// records leaves the lock out. Power can be the lock, as Lock can. A sample
+// dated after grace keeps its own time and closes the lock in the window's
+// Step too, so the lock stays, and with it the slots it locked before that
+// sample.
+func (c *carry) closedLock(e *event.Event, grace int64) bool {
+	if p, ok := e.Data.(*event.OSPower); !ok || p.Op != event.PowerLock || c.Presence == nil {
+		return false
+	}
+	s, ok := c.Presence.Data.(*event.OSPresence)
+	return ok && !s.Locked && e.T < c.Presence.T && c.Presence.T <= grace
+}
+
+// locks reports whether p locks or unlocks the screen.
+func locks(p *event.OSPower) bool {
+	return p != nil && (p.Op == event.PowerLock || p.Op == event.PowerUnlock)
+}
+
 // latest returns whichever of cur and ev comes later in record order.
 func latest(cur *event.Event, ev event.Event) *event.Event {
 	if cur != nil && recordCmp(cur, &ev) >= 0 {
@@ -355,11 +389,14 @@ func (c *carry) fold(ev event.Event, g runGaps, ttl int64) {
 	if stamps(&ev) {
 		c.Stamped = max(c.Stamped, ev.T)
 	}
-	switch ev.Data.(type) {
+	switch d := ev.Data.(type) {
 	case *event.OSFocus:
 		c.Focus = latest(c.Focus, ev)
 	case *event.OSPower:
 		c.Power = latest(c.Power, ev)
+		if locks(d) {
+			c.Lock = latest(c.Lock, ev)
+		}
 	case *event.OSPresence:
 		c.Presence = latest(c.Presence, ev)
 	}
@@ -507,12 +544,19 @@ func (c *carry) prune(from int64) {
 // PENDING_WINDOW_S - READ_HORIZON_S behind the newest (reach.held). A
 // record is carried only once FinalBefore is Lookback past it, so the
 // carry sees a cut still waiting only from a record that arrives later
-// than that allows.
+// than that allows. A lock that the carried sample closed goes too, when
+// both are dated at grace or before (carry.closedLock).
 func (c *carry) records(out []event.Event, from int64, g runGaps, stamped, ttl int64) []event.Event {
 	grace := from - carryGraceMS
 	last := c.sampled()
-	for _, e := range []*event.Event{c.Focus, c.Power, c.Presence} {
+	for _, e := range []*event.Event{c.Focus, c.Power, c.Presence, c.Lock} {
 		if e == nil || e != c.Focus && (stamped > last.T+ttl || e.T < c.RestartAt) {
+			continue
+		}
+		if e == c.Lock && c.Power != nil && c.Power.EventID == e.EventID {
+			continue // the latest os.power is the lock itself
+		}
+		if c.closedLock(e, grace) {
 			continue
 		}
 		r := *e
