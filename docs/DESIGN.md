@@ -1401,7 +1401,7 @@ services:
 
 - `cloudflared` makes outbound-only connections, so a home server behind NAT gets `https://<host>` with no open ports, at no cost on any Cloudflare plan (SP 9.1).
 - Litestream's `exec` runs `pairtimed` as its subprocess, and `restore-if-db-not-exists` restores the database from the replica when the local file is missing, so rebuilding the server is starting the container on a new box (SP 9.1).
-- SQLite runs in WAL mode with `synchronous=NORMAL`. Clients re-send anything lost to a power cut from their own queues (SP 9.3). A batch that writes an evidence index row is the exception. It can guard a blob's PUT or delete, which a power cut can't undo and no client re-sends, so the writer commits it with `synchronous=FULL` (7.11).
+- SQLite runs in WAL mode with `synchronous=NORMAL`. Clients re-send anything lost to a power cut from their own queues (SP 9.3). A batch that writes an evidence index row is the exception. It can guard a blob's PUT or delete, which a power cut can't undo and no client re-sends, so the writer commits it with `synchronous=FULL` (7.11). A batch that holds the eraser's op is the second exception. The privacy hub takes the erasure's answer as final and never sends the request again, so the writer commits that batch with `synchronous=FULL` too (8.9).
 - Ingest requests are capped at 256 KB compressed and evidence uploads at about 1 MB per 10 submitted hours, far under Cloudflare's 100 MB body limit (SP 9.1).
 - The evidence store is a bucket prefix, `evidence/`, holding sealed blobs keyed by SHA-256 (7.6), with index rows in SQLite.
 
