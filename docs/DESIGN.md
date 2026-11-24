@@ -1174,8 +1174,12 @@ A submission with relayed credit (SM 2.2 rule 9) names it after the interrupts, 
 | `Justification - Additional Justification` | The review URL |
 | `Justification - Hackatime Project Name(s) + Date Range(s)` | `remind-bot 11/1/2026-11/18/2026` in the handbook's format with UTC dates, when the teen linked Hackatime |
 | `Justification - Submitter Hackatime ID` | The numeric Hackatime id, when linked |
-| `Deflation Justification` | A factual draft from the reason codes ("deflated from Hackatime's 9.1 h to pairtime's 5.9 h: agent-only runtime 2.1 h, re-roll loops 0.6 h, idle reading 0.5 h excluded") that the reviewer confirms or rewrites |
+| `Deflation Justification` | The reviewer's text, when the approved hours are below the tracked hours. pairtime drafts it from the reason codes and the reviewer's cuts ("deflated from Hackatime's 9.1 h to pairtime's 5.9 h: agent-only runtime 2.1 h, re-roll loops 0.6 h, idle reading 0.5 h excluded"), and the reviewer confirms the draft as written or rewrites it on the review page (7.7 item 11) |
 | `Specific Technical Features` | Left to the reviewer |
+
+The tracked hours are the larger of pairtime's credited hours and, when the teen linked Hackatime, Hackatime's figure in the Alternate Tracking Method text. The approved hours are the `Optional - Override Hours Spent` figure. The draft gives both to 0.1 h, and pairtime counts a deflation only when the approved hours are below the tracked hours at that rounding. The draft runs from the tracked hours to the approved hours. When it starts from Hackatime's figure, it lists pairtime's exclusions by reason code, as the example above does for a review with no cuts, and then any hours no reason code explains. Then it lists each cut, raise or clearance the reviewer made, by reason code and hours. It copies none of the reviewer's own text, so an `other` cut shows its hours alone. The parts are rounded so they add up to the deflation.
+
+On the review page the draft sits in a text box, and the reviewer confirms it as written or rewrites it (7.7 item 11). pairtime keeps the confirmation with a hash of the facts the draft stated: the tracked hours and whose they are, the approved hours, and each part's hours. It holds only while the draft pairtime would write now states the same facts, so a later cut, raise, clearance, re-score or purge that moves one of them ends it, and the box shows a fresh draft. pairtime refuses a text that holds personal data (4.4), and for a deflation one that doesn't give the approved hours. The field's copy button shows only while a confirmation holds. The endpoint never returns a draft. While the review deflates the tracked hours and no confirmation holds, it answers `409 deflation_unconfirmed` with the review URL, and the Airtable script writes no field of that record (5.10). Once a confirmation holds, the endpoint returns its text byte for byte, and the script's default mapping includes the field. With no deflation and no confirmation holding, the endpoint returns the field empty, and the script empties the cell, so text from an earlier confirmation doesn't stay beside hours it no longer explains.
 
 ### 9.4 Routes and programs
 
@@ -1210,6 +1214,7 @@ Zach said "We will work with Quality and Integrity to provide good guidance arou
 5. **The native program**: running or observing audits, a higher spot-check rate, and, with the HQ sponsor, nominating or approving each outside reviewer.
 6. **Loop rows**: raising a D12 row within its captured seconds is a cut-only action under Ari's rule; confirm it.
 7. **Interviews with minors**: the protocol in 7.9.
+8. **Deflation Justification**: pairtime drafts it, and the reviewer confirms the draft as written or rewrites it before it leaves pairtime (9.3). Does a draft the reviewer confirms unchanged count as human-written?
 
 ### 9.6 Who does what in week one
 
@@ -1621,3 +1626,4 @@ Each item says what the design does until the decision is made, so building neve
 14. **Calibration data**: Stardance's per-devlog approved and original minutes with the Hackatime heartbeats behind them, under a data-sharing agreement (SM OQ 6).
 15. **Requiring the typing module**: this design lets no program require it for submitted hours, because the UK code bars nudging children to give up protections (TP OQ 17). Confirm.
 16. **hackatime-setup**: whether its maintainers would take an optional "also install pairtime" step (AD 8.2).
+17. **Deflation Justification** (9.5): whether a draft the reviewer confirms unchanged counts as human-written. Until Quality and Integrity answers, pairtime counts the reviewer who confirms it as its author (9.3). If they say no, the review page shows the draft beside an empty box the reviewer fills, and the endpoint, its 409 and the Airtable script stay as they are.
