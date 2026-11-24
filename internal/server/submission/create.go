@@ -374,11 +374,15 @@ VALUES ($1, $2, $3, $4, $5)`, id, in.Account, p.Device, p.ProjectKey, p.project)
 // every device's minutes while it holds the writer. The op checks and
 // reads everything again, so a read that is stale by the time it runs
 // costs only the read. A retry, which the op answers with the stored
-// submission, and a create the read finds the op will refuse declare one
-// row and report oneRow, so a burst of refused creates doesn't take the
-// writer a batch at a time. Should a write between the two lift the
-// refusal, the op refuses the create with errResized, a 503, rather than
-// write past one row, and the client's retry is sized. Only a read that
+// submission, declares one row and reports oneRow, and so does a create
+// the read finds refused for a program the list doesn't hold, an account
+// that isn't verified, a project it doesn't hold or an empty devlog list,
+// so a burst of refused creates doesn't take the writer a batch at a time.
+// Should a write between the two lift the refusal, the op refuses the
+// create with errResized, a 503, rather than write past one row, and the
+// client's retry is sized. A window the read finds wrong declares its full
+// rows: whether it has ended depends on the clock, and the op decides it
+// with its own. Only a read that
 // fails declares the most the op could write, with devlog.MaxDevlogs
 // windows in devlog mode, and leaves the count to the op.
 func (s *Service) prepare(ctx context.Context, in createInput) (rows int, pre *counted, oneRow bool) {
@@ -412,11 +416,11 @@ func (s *Service) prepare(ctx context.Context, in createInput) (rows int, pre *c
 	now := s.o.Now().UnixMilli()
 	horizon := now - s.horizon.Milliseconds()
 	var ws []Window
-	if w := in.Window; w != nil {
-		if w.Start >= w.End || w.End > now || w.Start < horizon {
-			return 1, nil, true
-		}
-		ws = []Window{*w}
+	if in.Window != nil {
+		// The op checks the window with its own clock, which runs later
+		// than this read's, so a window that ends between the two is
+		// taken: a window this read finds wrong still declares its rows.
+		ws = []Window{*in.Window}
 	} else {
 		if ws, _, err = devlogWindows(ctx, s.o.Read, in.Account, projects, keysOf(pairs), horizon); err != nil {
 			return most, nil, false

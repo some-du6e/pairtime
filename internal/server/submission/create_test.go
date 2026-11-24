@@ -465,6 +465,18 @@ func TestCaps(t *testing.T) {
 	}
 }
 
+// clockDoer runs set before it hands each op to the writer behind it, as
+// the time between a create's read and its op moves the clock.
+type clockDoer struct {
+	Doer
+	set func()
+}
+
+func (d clockDoer) Do(ctx context.Context, rows int, op writer.Op) error {
+	d.set()
+	return d.Doer.Do(ctx, rows, op)
+}
+
 // rowsDoer records the rows each op declares to the writer behind it.
 type rowsDoer struct {
 	Doer
@@ -634,7 +646,8 @@ func TestRefusalOrder(t *testing.T) {
 // TestResized checks that a create prepare told the writer one row for,
 // which the op would now take, as after a write between the two lifted the
 // refusal prepare read, is refused with errResized, a 503, and stores
-// nothing, rather than writing past the one row it declared.
+// nothing, rather than writing past the one row it declared; and that a
+// window, which the op checks with its own clock, never takes one row.
 func TestResized(t *testing.T) {
 	start, end := t0.Add(-2*day), t0.Add(-day)
 	for _, engine := range storetest.Engines() {
@@ -656,6 +669,18 @@ func TestResized(t *testing.T) {
 			}
 			if ref := h.svc.refusalOf(h.request("", "POST", SubmissionsPath, ""), err, ""); ref == nil || ref.status != http.StatusServiceUnavailable {
 				t.Errorf("errResized answers %+v, want a 503", ref)
+			}
+		})
+		t.Run(string(engine)+"/a window that ends between the read's clock and the op's declares its rows and is taken, since the op decides the window with its own clock", func(t *testing.T) {
+			var h *harness
+			d := &rowsDoer{}
+			h = newHarness(t, engine, func(o *Options) {
+				d.Doer = clockDoer{Doer: o.Writer, set: func() { h.clock.set(t0.Add(time.Second)) }}
+				o.Writer = d
+			})
+			h.create("ptd_laptop", window("hard-mode", "req-1", start, t0.Add(500*time.Millisecond)), http.StatusCreated)
+			if got := d.declared[len(d.declared)-1]; got <= 1 {
+				t.Errorf("the create declared %d rows, want its full rows", got)
 			}
 		})
 	}

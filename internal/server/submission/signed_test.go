@@ -247,13 +247,42 @@ func TestSignedRequests(t *testing.T) {
 			before := h.rows()
 			rec := h.serve(copied)
 			want(t, rec, http.StatusConflict, CodeAlreadySubmitted)
-			if got := refusalBody(t, rec).Submissions; len(got) != 1 || got[0].ID != held.ID {
-				t.Errorf("the copy's refusal names %+v, want the first refusal's %s", got, held.ID)
+			if got := rec.Body.String(); got != `{"error":"already_submitted"}`+"\n" {
+				t.Errorf("the copy got %q, want the kept status and code alone, without the first refusal's detail or submissions", got)
 			}
 			if after := h.rows(); after != before {
 				t.Errorf("the copy changed the rows from %s to %s", before, after)
 			}
 			want(t, h.call("ptd_laptop", "POST", SubmissionsPath, body), http.StatusCreated, "")
+		})
+		t.Run(string(engine)+"/a kept refusal answers a copy up to the last millisecond the copy passes the clock check, 600,000 ms after a first copy signed 300 s ahead, and a copy a millisecond later gets clock_skew", func(t *testing.T) {
+			h := newHarness(t, engine)
+			body := window("winter-games", "req-1", start, end)
+			h.clock.set(t0.Add(300 * time.Second))
+			var copies []*http.Request
+			for range 3 {
+				copies = append(copies, h.request("ptd_laptop", "POST", SubmissionsPath, body))
+			}
+			h.clock.set(t0)
+			want(t, h.serve(copies[0]), http.StatusBadRequest, CodeProgramUnknown)
+			h.clock.set(t0.Add(600 * time.Second))
+			rec := h.serve(copies[1])
+			want(t, rec, http.StatusBadRequest, CodeProgramUnknown)
+			if got := rec.Body.String(); got != `{"error":"program_unknown"}`+"\n" {
+				t.Errorf("the copy got %q, want the kept status and code alone", got)
+			}
+			h.clock.set(t0.Add(600*time.Second + time.Millisecond))
+			want(t, h.serve(copies[2]), http.StatusUnauthorized, ingest.CodeClockSkew)
+		})
+		t.Run(string(engine)+"/a request past the device's rate isn't kept, so its copy is checked anew once the rate admits it", func(t *testing.T) {
+			h := newHarness(t, engine, func(o *Options) { o.Rate = ingest.NewLimiter(1, 10*time.Second) })
+			h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusCreated)
+			body := window("hard-mode", "req-2", end, end.Add(time.Hour))
+			first := h.request("ptd_laptop", "POST", SubmissionsPath, body)
+			copied := h.request("ptd_laptop", "POST", SubmissionsPath, body)
+			want(t, h.serve(first), http.StatusTooManyRequests, ingest.CodeRateLimited)
+			h.clock.set(t0.Add(10 * time.Second))
+			want(t, h.serve(copied), http.StatusCreated, "")
 		})
 		t.Run(string(engine)+"/a device past its rate gets 429 rate_limited with Retry-After, and a request that doesn't verify uses none of it", func(t *testing.T) {
 			h := newHarness(t, engine, func(o *Options) { o.Rate = ingest.NewLimiter(1, 10*time.Second) })

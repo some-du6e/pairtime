@@ -258,6 +258,9 @@ func (s *Service) writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func (s *Service) refuse(w http.ResponseWriter, r *refusal) {
+	if rec, ok := w.(*recorder); ok {
+		rec.code = r.code
+	}
 	if r.retryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(r.retryAfter))
 	}
@@ -311,14 +314,15 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request) (caller, []byte,
 		}
 	}
 	if len(r.Header.Values("Authorization")) > 0 {
-		dev, body, ref := s.signed(w, r)
+		dev, body, at, ref := s.signed(w, r)
 		if ref == nil {
 			// A copy of a signed write that was refused gets the same
-			// refusal, without taking the device's rate (refusalStore).
+			// status and code, looked up at the time its clock check took
+			// and before the device's rate (refusalStore).
 			rec, recorded := w.(*recorder)
 			key := dev.ID + " " + r.Header.Get(ingest.HeaderSignature)
 			if recorded {
-				if k, ok := s.refused.get(key, s.o.Now().UnixMilli()); ok {
+				if k, ok := s.refused.get(key, at.checkedMS); ok {
 					s.answerAgain(w, k)
 					return caller{}, nil, false
 				}
@@ -331,6 +335,7 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request) (caller, []byte,
 				// the rate bounds what a device can keep (maxKeptRefusals).
 				if recorded {
 					rec.key = key
+					rec.untilMS = at.signedMS + ingest.MaxSkewMS + 1
 				}
 				return caller{account: dev.Account, device: dev.ID, done: done}, body, true
 			}

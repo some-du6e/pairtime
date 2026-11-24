@@ -34,10 +34,12 @@ const signatureContext = "pairtime-submissions-v1\n"
 //
 // A GET or a withdrawal signs the SHA-256 of an empty body. No request
 // counter is sent or moved. A copy of a create or a withdrawal that went
-// through is a retry, which idempotency answers with the stored submission,
-// and a copy of one that was refused gets that refusal again, which the
-// server keeps for the 600 s a copy can pass the clock check
-// (refusalStore). Either way a copy changes nothing.
+// through is a retry, which idempotency answers with the stored
+// submission. A copy of one that was refused gets its status and error
+// code again while the copy passes the clock check, within the store's
+// limits: not for a request the device's rate refused, whose copy is
+// checked anew, not after a restart, and not once a flood of refusals has
+// pushed it out of the store early (refusalStore).
 func Message(deviceID, method, target, time, bodySHA256 string) []byte {
 	m := make([]byte, 0, len(signatureContext)+len(deviceID)+len(method)+len(target)+len(time)+len(bodySHA256)+4)
 	m = append(m, signatureContext...)
@@ -163,16 +165,16 @@ func (s *Service) token(r *http.Request) (device.Device, *refusal) {
 // X-Pairtime-Time, X-Pairtime-Body-SHA256 and X-Pairtime-Signature, the
 // clock, the body and its hash, and the signature over Message, in
 // ingest-v1 2.5's order and with its codes.
-func (s *Service) signed(w http.ResponseWriter, r *http.Request) (device.Device, []byte, *refusal) {
+func (s *Service) signed(w http.ResponseWriter, r *http.Request) (device.Device, []byte, signedTimes, *refusal) {
 	dev, ref := s.token(r)
 	if ref != nil {
-		return device.Device{}, nil, ref
+		return device.Device{}, nil, signedTimes{}, ref
 	}
 	if id, ok := single(r.Header, ingest.HeaderDevice); !ok || id != dev.ID {
-		return device.Device{}, nil, refuse(http.StatusForbidden, ingest.CodeDeviceMismatch, "X-Pairtime-Device must be the device the token belongs to.")
+		return device.Device{}, nil, signedTimes{}, refuse(http.StatusForbidden, ingest.CodeDeviceMismatch, "X-Pairtime-Device must be the device the token belongs to.")
 	}
 	if len(dev.PublicKey) != ed25519.PublicKeySize {
-		return device.Device{}, nil, refuse(http.StatusForbidden, ingest.CodeDeviceKeyMissing, "The device has no key on record; sign in again with pairtime login.")
+		return device.Device{}, nil, signedTimes{}, refuse(http.StatusForbidden, ingest.CodeDeviceKeyMissing, "The device has no key on record; sign in again with pairtime login.")
 	}
 	timeText, ok := single(r.Header, ingest.HeaderTime)
 	var t int64
@@ -180,11 +182,11 @@ func (s *Service) signed(w http.ResponseWriter, r *http.Request) (device.Device,
 		t, ok = decimal(timeText)
 	}
 	if !ok {
-		return device.Device{}, nil, refuse(http.StatusBadRequest, ingest.CodeTimeMalformed, "X-Pairtime-Time must be one decimal integer of Unix milliseconds, without a sign or leading zeros.")
+		return device.Device{}, nil, signedTimes{}, refuse(http.StatusBadRequest, ingest.CodeTimeMalformed, "X-Pairtime-Time must be one decimal integer of Unix milliseconds, without a sign or leading zeros.")
 	}
 	bodySHA, ok := single(r.Header, ingest.HeaderBodySHA256)
 	if !ok || !isHex(bodySHA, 64) {
-		return device.Device{}, nil, refuse(http.StatusBadRequest, ingest.CodeBodyHashMalformed, "X-Pairtime-Body-SHA256 must be 64 lowercase hex digits.")
+		return device.Device{}, nil, signedTimes{}, refuse(http.StatusBadRequest, ingest.CodeBodyHashMalformed, "X-Pairtime-Body-SHA256 must be 64 lowercase hex digits.")
 	}
 	sigText, ok := single(r.Header, ingest.HeaderSignature)
 	var sig []byte
@@ -192,25 +194,32 @@ func (s *Service) signed(w http.ResponseWriter, r *http.Request) (device.Device,
 		sig, ok = parseSignature(sigText)
 	}
 	if !ok {
-		return device.Device{}, nil, refuse(http.StatusBadRequest, ingest.CodeSignatureMalformed, "X-Pairtime-Signature must be ed25519= and a 64-byte signature in padded base64.")
+		return device.Device{}, nil, signedTimes{}, refuse(http.StatusBadRequest, ingest.CodeSignatureMalformed, "X-Pairtime-Signature must be ed25519= and a 64-byte signature in padded base64.")
 	}
-	if skew := t - s.o.Now().UnixMilli(); skew > ingest.MaxSkewMS || skew < -ingest.MaxSkewMS {
-		return device.Device{}, nil, refuse(http.StatusUnauthorized, ingest.CodeClockSkew, "X-Pairtime-Time is "+strconv.FormatInt(skew, 10)+" ms from the server's clock; correct the clock from this response's X-Pairtime-Time and sign again.")
+	checked := s.o.Now().UnixMilli()
+	if skew := t - checked; skew > ingest.MaxSkewMS || skew < -ingest.MaxSkewMS {
+		return device.Device{}, nil, signedTimes{}, refuse(http.StatusUnauthorized, ingest.CodeClockSkew, "X-Pairtime-Time is "+strconv.FormatInt(skew, 10)+" ms from the server's clock; correct the clock from this response's X-Pairtime-Time and sign again.")
 	}
 	body, ref := readBody(w, r)
 	if ref != nil {
-		return device.Device{}, nil, ref
+		return device.Device{}, nil, signedTimes{}, ref
 	}
 	sum := sha256.Sum256(body)
 	if hex.EncodeToString(sum[:]) != bodySHA {
-		return device.Device{}, nil, refuse(http.StatusBadRequest, ingest.CodeBodyHashMismatch, "The body's SHA-256 isn't X-Pairtime-Body-SHA256.")
+		return device.Device{}, nil, signedTimes{}, refuse(http.StatusBadRequest, ingest.CodeBodyHashMismatch, "The body's SHA-256 isn't X-Pairtime-Body-SHA256.")
 	}
 	if !ed25519.Verify(dev.PublicKey, Message(dev.ID, r.Method, target(r), timeText, bodySHA), sig) {
 		ref := refuse(http.StatusUnauthorized, ingest.CodeSignatureInvalid, "The signature doesn't verify under the device's key; device_key_id names that key.")
 		ref.deviceKeyID = backup.KeyID(dev.PublicKey)
-		return device.Device{}, nil, ref
+		return device.Device{}, nil, signedTimes{}, ref
 	}
-	return dev, body, nil
+	return dev, body, signedTimes{signedMS: t, checkedMS: checked}, nil
+}
+
+// signedTimes are a verified request's times: its X-Pairtime-Time, and the
+// server's clock when the clock check read it, before the body arrived.
+type signedTimes struct {
+	signedMS, checkedMS int64
 }
 
 // target is r's request target as the request line sent it: the path and,
