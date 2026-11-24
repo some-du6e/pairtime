@@ -362,6 +362,18 @@ func fixtureTotal(d Derived, f *timelines.Fixture, tot totals, k string) (float6
 		return tot.labels[event.LabelViaTrack], true
 	case "via_relay_s":
 		return tot.labels[event.LabelViaRelay], true
+	case "focus_unknown_s":
+		return tot.labels[event.LabelFocusUnknown], true
+	case "unknown_focus_s":
+		// The focus-unknown cases' seconds of slots whose focus is
+		// unknown (SM 2.5).
+		var n float64
+		for _, s := range d.Slots {
+			if s.Start >= from && s.Start < to && s.FocusClass == event.AppUnknown {
+				n += float64(event.SlotMS) / 1000
+			}
+		}
+		return n, true
 	}
 	// The relayed cases count prompts and relay records too.
 	return relayedCount(d, from, to, k)

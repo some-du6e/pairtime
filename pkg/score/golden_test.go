@@ -42,8 +42,9 @@ var updateGoldens = flag.Bool("update", false, "rewrite each timeline's golden.j
 
 // goldenCases returns every timeline the regression guard covers: SM 6's
 // worked examples and the others at the top of testdata/timelines, the
-// side-door cases, the lookback cases and the relayed cases, the last two
-// through timelines.List and Load of their own directories.
+// side-door cases, the lookback cases, the relayed cases and the
+// focus-unknown cases, the last three through timelines.List and Load of
+// their own directories.
 func goldenCases(t *testing.T) []*timelines.Fixture {
 	t.Helper()
 	out := append(loadFixtures(t), sideDoorCases(t)...)
@@ -62,7 +63,8 @@ func goldenCases(t *testing.T) []*timelines.Fixture {
 		}
 		out = append(out, f)
 	}
-	return append(out, relayedFixtures(t)...)
+	out = append(out, relayedFixtures(t)...)
+	return append(out, focusUnknownFixtures(t)...)
 }
 
 // goldenOutput returns a timeline's bucket output as its golden.jsonl

@@ -99,7 +99,8 @@ func relayedBuckets(t *testing.T, f *timelines.Fixture) map[int64]event.MinuteBu
 // relayedCount returns a relayed case's count total over [from, to), from
 // the scorer's turns and what became of each relay record
 // (testdata/timelines/relayed/README.md): the prompts whose turns are
-// relayed, headless, scheduled or human_typed; the cross-session subagents,
+// relayed, headless, scheduled or human_typed, and, for the focus-unknown
+// cases, human_typed or no_input; the cross-session subagents,
 // SM 2.2 rule 3's turns for a message the app says another thread sent;
 // and the relay records that paired with nothing. It reports false for any
 // other total.
@@ -109,6 +110,9 @@ func relayedCount(d Derived, from, to int64, k string) (float64, bool) {
 		"headless_prompts":  event.OriginHeadless,
 		"scheduled_prompts": event.OriginScheduled,
 		"typed_prompts":     event.OriginHumanTyped,
+		// The focus-unknown cases name two of these their own way.
+		"human_typed_prompts": event.OriginHumanTyped,
+		"no_input_prompts":    event.OriginNoInput,
 	}
 	in := func(tu Turn) bool { return tu.Prompt != "" && tu.TSubmit >= from && tu.TSubmit < to }
 	var n float64
