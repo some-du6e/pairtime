@@ -25,7 +25,6 @@ import (
 	"io/fs"
 	"maps"
 	"math"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -412,7 +411,9 @@ func (r *rehearsal) stepServer(t *testing.T) {
 // to write a pairtime.toml the deploy bundle's Litestream couldn't run
 // (#123).
 func (r *rehearsal) startServer(t *testing.T) {
-	port, opsPort := freePort(t), freePort(t)
+	// Both at once, so the two can't be one port (#313).
+	ports := freePorts(t, 2)
+	port, opsPort := ports[0], ports[1]
 	r.server = fmt.Sprintf("http://127.0.0.1:%d", port)
 	data := filepath.Join(r.srv, "data")
 	if err := os.Mkdir(data, 0o700); err != nil {
@@ -2366,15 +2367,6 @@ func snapshot(dir string) (string, error) {
 		return nil
 	})
 	return b.String(), err
-}
-
-func freePort(t *testing.T) int {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
 }
 
 // JSON as maps.
