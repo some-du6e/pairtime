@@ -705,7 +705,7 @@ func (r *lateRig) write(in Input) {
 // of another boot.
 func (r *lateRig) presence(ms int64) Input {
 	in := sampleInput(r.rng, "os.presence", testT+ms, "", "")
-	in.Event.Mono, in.Event.BootID = 0, ""
+	in.Event.Mono = 0
 	return in
 }
 
