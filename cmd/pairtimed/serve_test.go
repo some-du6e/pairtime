@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/backup"
+	"github.com/some-du6e/pairtime/internal/server/config"
 	"github.com/some-du6e/pairtime/internal/server/ops"
 	"github.com/some-du6e/pairtime/internal/server/pages"
 	"github.com/some-du6e/pairtime/internal/server/retention"
@@ -44,6 +46,23 @@ data_dir = "data"
 		t.Fatal(err)
 	}
 	return configPath, filepath.Join(dir, "data", "pairtime.db")
+}
+
+// addPrograms lists two programs in configPath's [[programs]]: one that
+// takes hours, with takes_hours left out, and calibration's, which takes
+// none.
+func addPrograms(t *testing.T, configPath string) {
+	t.Helper()
+	f, err := os.OpenFile(configPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("config_version = 2\n[[programs]]\nname = \"hard-mode\"\ndisplay_name = \"Hard Mode\"\n[[programs]]\nname = \"calibration\"\ndisplay_name = \"Calibration\"\ntakes_hours = false\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestStartupRefusesOldSQLite(t *testing.T) {
@@ -88,8 +107,64 @@ func TestStartupRefusesOldSQLite(t *testing.T) {
 	})
 }
 
+// TestStartupRefusesScoringVersion checks D-sb1-submissions' start-up
+// check (Q10): a freeze records the scoring version the server runs, so
+// pairtimed doesn't start on a scoring_version newer than its built-in
+// scorer's, or, before 1.0.0, on one with another MINOR, and stops before
+// it touches the database.
+func TestStartupRefusesScoringVersion(t *testing.T) {
+	var major, minor, patch int
+	if _, err := fmt.Sscanf(pages.BuiltinScoringVersion, "%d.%d.%d", &major, &minor, &patch); err != nil {
+		t.Fatalf("the built-in scoring version %q: %v", pages.BuiltinScoringVersion, err)
+	}
+	tests := []struct {
+		name, version, wantStderr string
+	}{
+		{name: "a PATCH newer than the built-in scorer's is refused", version: fmt.Sprintf("%d.%d.%d", major, minor, patch+1), wantStderr: "newer than this release's built-in scorer"},
+		{name: "a later MAJOR is refused", version: fmt.Sprintf("%d.0.0", major+1), wantStderr: "newer than this release's built-in scorer"},
+	}
+	if major == 0 && minor > 0 {
+		tests = append(tests, struct{ name, version, wantStderr string }{
+			name: "before 1.0.0, an earlier MINOR is refused, since it may score by another rule", version: fmt.Sprintf("0.%d.0", minor-1), wantStderr: "another MINOR",
+		})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath, dbPath := writeConfig(t)
+			f, err := os.OpenFile(configPath, os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString("scoring_version = \"" + tt.version + "\"\n"); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.Close(); err != nil {
+				t.Fatal(err)
+			}
+			e, _, stderr := testEnv()
+			e.listening = func(public, ops string) {
+				t.Errorf("serve listened on %s and %s with scoring_version %s", public, ops, tt.version)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if code := run(ctx, []string{"serve", "-config", configPath}, e); code != 1 {
+				t.Errorf("serve exit code = %d, want 1", code)
+			}
+			if !strings.Contains(stderr.String(), tt.wantStderr) {
+				t.Errorf("stderr = %q, want it to contain %q", stderr.String(), tt.wantStderr)
+			}
+			if _, err := os.Stat(dbPath); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("the database file exists after the refusal (stat: %v); the check must come before the database opens", err)
+			}
+		})
+	}
+}
+
 func TestServe(t *testing.T) {
 	configPath, dbPath := writeConfig(t)
+	// The programs route lists only the program that takes hours, and serve
+	// wires [[programs]] into the submissions API.
+	addPrograms(t, configPath)
 	e, _, stderr := testEnv()
 	type addrs struct{ public, ops string }
 	up := make(chan addrs, 1)
@@ -138,6 +213,9 @@ func TestServe(t *testing.T) {
 		{name: "/metrics counts the open live-dashboard streams, none on a new server (DESIGN 10.4)", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_streams_open 0$`},
 		{name: "the build-day summary needs a device token", url: public + "/api/v1/build-days", wantCode: 401, wantBody: `"error":"token_missing"`},
 		{name: "devlogs need a device token", url: public + "/api/v1/devlogs", wantCode: 401, wantBody: `"error":"token_missing"`},
+		{name: "the programs route lists pairtime.toml's programs that take hours, and not calibration's", url: public + "/api/v1/programs", wantCode: 200, wantBody: `^\{"programs":\[\{"name":"hard-mode","display_name":"Hard Mode"\}\]\}\n$`},
+		{name: "a create with no credential answers 401 not_signed_in", method: http.MethodPost, url: public + "/api/v1/submissions", wantCode: 401, wantBody: `"error":"not_signed_in"`},
+		{name: "the ops listener doesn't serve the submissions API", url: private + "/api/v1/submissions", wantCode: 404},
 		{name: "badges need a device token", method: http.MethodPost, url: public + "/api/v1/badges", wantCode: 401, wantBody: `"error":"token_missing"`},
 		{name: "a devlog's delete needs a device token", method: http.MethodDelete, url: public + "/api/v1/devlogs/d1", wantCode: 401, wantBody: `"error":"token_missing"`},
 		{name: "the ops listener doesn't serve devlogs", url: private + "/api/v1/devlogs", wantCode: 404},
@@ -295,14 +373,16 @@ func TestMigrate(t *testing.T) {
 }
 
 func TestConfigVersion(t *testing.T) {
+	// newer is the config_version of a file a newer release wrote.
+	newer := fmt.Sprintf("config_version = %d\n", config.ConfigVersion+1)
 	tests := []struct {
 		name       string
 		extra      string // appended to writeConfig's pairtime.toml
 		wantCode   int
 		wantStderr string // substring
 	}{
-		{name: "a rollback runs on a newer release's pairtime.toml, warning about the keys it ignores", extra: "config_version = 2\nprofile_default = \"ask\"\nfrom_a_newer_release = true\n", wantStderr: "ignores the keys it doesn't know: from_a_newer_release"},
-		{name: "a newer release's pairtime.toml that leaves out profile_default is refused while keys are ignored, since one may be it misspelt", extra: "config_version = 2\nprofile_defualt = \"ask\"\n", wantCode: 1, wantStderr: "may be a misspelt or misplaced profile_default"},
+		{name: "a rollback runs on a newer release's pairtime.toml, warning about the keys it ignores", extra: newer + "profile_default = \"ask\"\nfrom_a_newer_release = true\n", wantStderr: "ignores the keys it doesn't know: from_a_newer_release"},
+		{name: "a newer release's pairtime.toml that leaves out profile_default is refused while keys are ignored, since one may be it misspelt", extra: newer + "profile_defualt = \"ask\"\n", wantCode: 1, wantStderr: "may be a misspelt or misplaced profile_default"},
 		{name: "a pairtime.toml for this release still refuses a misspelt key", extra: "signup_open = true\n", wantCode: 1, wantStderr: "unknown keys: signup_open"},
 	}
 	for _, tt := range tests {
@@ -573,13 +653,17 @@ func TestServeHSTS(t *testing.T) {
 // TestServeRunning checks that the privacy notice's first lines follow
 // what serve runs (#119): ingest takes uploads once the server key is
 // there, so from then on the notice no longer says this server doesn't
-// receive them (WP-SV4).
+// receive them (WP-SV4), and the submissions API always runs, so it never
+// says this server doesn't take submitted hours, while the evidence store
+// waits for WP-SB4 (D-sb1-submissions, Q16).
 func TestServeRunning(t *testing.T) {
 	tests := []struct {
-		name    string
-		keys    bool
-		want    string
-		notWant string
+		name string
+		keys bool
+		// programs lists two programs in [[programs]].
+		programs bool
+		want     string
+		notWant  string
 	}{
 		{name: "without the server key ingest is off, so the notice says this server doesn't receive uploads yet",
 			want: "This server doesn&#39;t yet let anyone sign in, receive uploads from the pairtime program, take hours you submit to programs, keep an evidence store, or publish day roots."},
@@ -587,10 +671,19 @@ func TestServeRunning(t *testing.T) {
 			keys:    true,
 			want:    "This server doesn&#39;t yet let anyone sign in, take hours you submit to programs, keep an evidence store, or publish day roots.",
 			notWant: "receive uploads from"},
+		{name: "with [[programs]] listing none, the submissions API refuses every create, so the notice says this server doesn't take submitted hours yet",
+			want: "take hours you submit to programs"},
+		{name: "with [[programs]] listing a program, the submissions API takes hours, so the notice no longer says it doesn't",
+			programs: true,
+			want:     "keep an evidence store",
+			notWant:  "take hours you submit to programs"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			configPath, dbPath := writeConfig(t)
+			if tt.programs {
+				addPrograms(t, configPath)
+			}
 			if tt.keys {
 				if _, err := backup.Generate(backup.KeysDir(filepath.Dir(dbPath)), rand.Reader); err != nil {
 					t.Fatal(err)

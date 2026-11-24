@@ -60,6 +60,20 @@ func TestTables(t *testing.T) {
 				t.Errorf("OtherTables is %v, and no_personal_data %v: a table that holds an account's rows goes in the eraser's steps, and one kept after an erasure gets a list of its own, as LeafTable does", got, want)
 			}
 		}},
+		{name: "submission_flags carries user_id, which the eraser deletes and counts an account's flags by, since a flag names its submission with no foreign key (D-sb1-flags-erasure)", check: func(t *testing.T) {
+			rows, err := f.db.Read.QueryContext(context.Background(), `SELECT * FROM submission_flags WHERE 1 = 0`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			cols, err := rows.Columns()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(cols, "user_id") {
+				t.Errorf("submission_flags has the columns %v, and no user_id", cols)
+			}
+		}},
 		{name: "every table the lists name exists", check: func(t *testing.T) {
 			for n, what := range placed {
 				if !slices.Contains(have, n) {
@@ -90,6 +104,9 @@ func world(t *testing.T, f *fixture) map[string]int64 {
 	}
 	// The alone day's leaves go with its last witness row.
 	want[privacy.LeafTable] = 1
+	// No report counts flags: they go with their submissions, as review
+	// data only reviewers see.
+	delete(want, "submission_flags")
 	return want
 }
 
@@ -113,7 +130,7 @@ func TestErase(t *testing.T) {
 		name string
 		run  func(t *testing.T, f *fixture)
 	}{
-		{name: "a delete erases every row of the account, build days, devlogs, badges and removed items among them, and reports each table's count", run: func(t *testing.T, f *fixture) {
+		{name: "a delete erases every row of the account, build days, devlogs, badges, removed items and submissions among them, and reports each table's count", run: func(t *testing.T, f *fixture) {
 			want := world(t, f)
 			before := f.dump(t)
 			r := report(t, f.ask(t, privacy.ActionDelete, subject([]string{teen.email}, nil, nil), false))
@@ -121,7 +138,7 @@ func TestErase(t *testing.T) {
 				t.Errorf("found %v, dry run %v, deleted %v; want found, not dry, deleted %v", r.Found, r.DryRun, r.Deleted, want)
 			}
 			keptLeaves(t, r)
-			for _, table := range []string{"build_days", "build_weeks", "build_goals", "devlogs", "badges", "removed_items"} {
+			for _, table := range []string{"build_days", "build_weeks", "build_goals", "devlogs", "badges", "removed_items", "submissions", "submission_keys", "submission_windows"} {
 				if r.Deleted[table] == 0 {
 					t.Errorf("the report deleted no %s", table)
 				}
@@ -160,7 +177,73 @@ func TestErase(t *testing.T) {
 				t.Errorf("privacy_token_uses holds %d rows, want the dry run's jti", n)
 			}
 		}},
-		{name: "an export lists what is held, build days, devlogs, badges and removed items among it, and deletes nothing", run: func(t *testing.T, f *fixture) {
+		{name: "a delete takes the account's submissions out of other accounts' repo_overlap flags and deletes a flag left naming none, and a dry run reports the same counts and changes nothing (D-sb1-flags-erasure)", run: func(t *testing.T, f *fixture) {
+			want := world(t, f)
+			now := f.now.UnixMilli()
+			// One of the other account's submissions flags the teen's alone,
+			// and a second one flags the teen's and a third account's.
+			f.exec(t, `INSERT INTO submissions (id, user_id, program, takes_hours, request_id, request_sha256, created_by, device_id, mode, state, scoring_version, params, r, r_sha256, eligibility_to_confirm, created_at_ms, updated_at_ms, frozen_at_ms) VALUES ($1, $2, 'hard-mode', 1, 'req-2', 'sum', 'device', $3, 'window', 'frozen', '0.5.0', 'sha256:params', $4, 'rsum', 0, $5, $5, $5)`,
+				"sub2-"+other.id, other.id, other.device, make([]byte, 32), now)
+			for _, fl := range []struct{ on, names string }{
+				{"sub-" + other.id, `["sub-` + teen.id + `"]`},
+				{"sub2-" + other.id, `["sub-u-third","sub-` + teen.id + `"]`},
+			} {
+				f.exec(t, `INSERT INTO submission_flags (submission_id, user_id, code, detail, raised_at_ms) VALUES ($1, $2, 'repo_overlap', $3, $4)`, fl.on, other.id, `{"submissions":`+fl.names+`}`, now)
+			}
+			before := f.dump(t, "privacy_token_uses")
+			if dry := report(t, f.ask(t, privacy.ActionDelete, subject([]string{teen.email}, nil, nil), true)); !maps.Equal(dry.Deleted, want) {
+				t.Errorf("the dry run deleted %v, want %v", dry.Deleted, want)
+			}
+			if after := f.dump(t, "privacy_token_uses"); !reflect.DeepEqual(before, after) {
+				t.Error("the dry run changed rows")
+			}
+			if r := report(t, f.ask(t, privacy.ActionDelete, subject([]string{teen.email}, nil, nil), false)); !maps.Equal(r.Deleted, want) {
+				t.Errorf("deleted %v, want %v", r.Deleted, want)
+			}
+			var overlaps []string
+			for _, l := range f.dump(t)["submission_flags"] {
+				if strings.Contains(l, "|repo_overlap|") {
+					overlaps = append(overlaps, l)
+				}
+			}
+			if len(overlaps) != 1 || !strings.HasPrefix(overlaps[0], "sub2-"+other.id+"|"+other.id+`|repo_overlap|{"submissions":["sub-u-third"]}|`) {
+				t.Errorf("the repo_overlap flags left are %q, want the other account's second, naming the third account's submission alone", overlaps)
+			}
+			if left := mentions(f.dump(t, "privacy_token_uses"), marks(f, teen)...); len(left) > 0 {
+				t.Errorf("rows that name the teen are left: %v", left)
+			}
+		}},
+		{name: "a flag on one of the account's submissions under another account's user_id, which the delete by user_id misses, fails the erasure, which then changes nothing (D-sb1-flags-erasure)", run: func(t *testing.T, f *fixture) {
+			world(t, f)
+			f.exec(t, `INSERT INTO submission_flags (submission_id, user_id, code, detail, raised_at_ms) VALUES ($1, $2, 'repo_overlap', '{"submissions":[]}', $3)`, "sub-"+teen.id, other.id, f.now.UnixMilli())
+			before := f.dump(t, "privacy_token_uses")
+			if rec := f.ask(t, privacy.ActionDelete, subject([]string{teen.email}, nil, nil), false); rec.Code != http.StatusInternalServerError {
+				t.Errorf("the delete answered %d, want 500: %s", rec.Code, rec.Body.String())
+			}
+			if after := f.dump(t, "privacy_token_uses"); !reflect.DeepEqual(before, after) {
+				t.Error("the failed erasure changed rows")
+			}
+		}},
+		{name: "no report gives submission_flags a line, the delete's, a dry run's or an export's, since a count that moved would tell a teen another account flagged their submission (D-sb1-flags-erasure)", run: func(t *testing.T, f *fixture) {
+			world(t, f)
+			f.exec(t, `INSERT INTO submission_flags (submission_id, user_id, code, detail, raised_at_ms) VALUES ($1, $2, 'repo_overlap', $3, $4)`, "sub-"+other.id, other.id, `{"submissions":["sub-`+teen.id+`"]}`, f.now.UnixMilli())
+			export := report(t, f.ask(t, privacy.ActionExport, subject([]string{teen.email}, nil, nil), false))
+			for _, k := range export.Retained {
+				if k.Type == "submission_flags" {
+					t.Errorf("the export counts %d submission_flags", k.Count)
+				}
+			}
+			for _, dry := range []bool{true, false} {
+				r := report(t, f.ask(t, privacy.ActionDelete, subject([]string{teen.email}, nil, nil), dry))
+				if n, ok := r.Deleted["submission_flags"]; ok {
+					t.Errorf("the delete, dry run %v, counts %d submission_flags", dry, n)
+				}
+				if r.Deleted["submissions"] != 1 {
+					t.Errorf("the delete, dry run %v, counts %d submissions, want the teen's 1", dry, r.Deleted["submissions"])
+				}
+			}
+		}},
+		{name: "an export lists what is held, build days, devlogs, badges, removed items and submissions among it, and deletes nothing", run: func(t *testing.T, f *fixture) {
 			want := world(t, f)
 			before := f.dump(t, "privacy_token_uses")
 			r := report(t, f.ask(t, privacy.ActionExport, subject([]string{teen.email}, nil, nil), false))
@@ -170,7 +253,9 @@ func TestErase(t *testing.T) {
 			held := make(map[string]int64)
 			for _, k := range r.Retained {
 				held[k.Type] = k.Count
-				if k.Reason != "held by pairtime; export is read-only" {
+				switch {
+				case k.Type == "submissions" && k.Reason != "held by pairtime, with their review data; export is read-only",
+					k.Type != "submissions" && k.Reason != "held by pairtime; export is read-only":
 					t.Errorf("%s is held for %q", k.Type, k.Reason)
 				}
 			}

@@ -13,6 +13,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/buildday"
 	"github.com/some-du6e/pairtime/internal/server/devlog"
 	"github.com/some-du6e/pairtime/internal/server/projectnames"
+	"github.com/some-du6e/pairtime/internal/server/submission"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 	"github.com/some-du6e/pairtime/pkg/ledger"
 )
@@ -27,6 +28,9 @@ type Report struct {
 	DryRun    bool             `json:"dry_run"`
 	Deleted   map[string]int64 `json:"deleted"`
 	Retained  []Retained       `json:"retained"`
+	// unreported counts the rows of reviewerOnly tables an export finds,
+	// which no line of the report holds but rowsOf counts.
+	unreported int64
 }
 
 // Retained is one kind of row pairtimed keeps: a type of at most 100
@@ -55,7 +59,22 @@ type table struct {
 type step struct {
 	tables []table
 	del    func(ctx context.Context, tx writer.Tx, account string) error
+	// around, when set, is the part of the leftover check that the
+	// tables' selections can't make: it reads what it needs before del,
+	// and returns the check to run after it.
+	around func(ctx context.Context, tx writer.Tx, account string) (after func() error, err error)
 }
+
+// reviewerOnly are the tables a report gives no line of its own. A
+// submission's flags are signals for reviewers alone (docs/spec/
+// submissions-v1.md 4.1 and 11.2), and a count of them that moved would
+// tell a teen that another account's freeze flagged their submission. The
+// submissions line stands for them: it counts the account's submissions,
+// held or deleted with their review data.
+var reviewerOnly = map[string]bool{"submission_flags": true}
+
+// submissionsReason is an export's reason for its submissions line.
+const submissionsReason = "held by pairtime, with their review data; export is read-only"
 
 // ofDevices selects an account's rows of a table keyed by device: those
 // of its devices, which the table's primary key or device index finds,
@@ -72,6 +91,14 @@ type step struct {
 // to another account, or that deletes a device's row while rows of these
 // tables remain, leaves rows this selection misses, and must change it.
 const ofDevices = "account_id = $1 AND device_id IN (SELECT device_id FROM devices WHERE user_id = $1)"
+
+// ofSubmissions selects the rows of an account's submissions in a table
+// keyed by submission_id (WP-SB1). Each such table's foreign key names
+// submissions, so the delete of the account's submissions fails while one
+// of their rows is left. submission_flags has no foreign key, so it is
+// selected by the user_id each flag carries, which a leftover check can
+// count (D-sb1-flags-erasure).
+const ofSubmissions = "submission_id IN (SELECT id FROM submissions WHERE user_id = $1)"
 
 // steps are the eraser's deletes, in order: rows that point at users
 // before users, and the tables found through the account's devices, and
@@ -94,11 +121,42 @@ var steps = []step{
 	{tables: []table{{"build_days", "user_id = $1"}, {"build_weeks", "user_id = $1"}, {"build_goals", "user_id = $1"}, {"zone_changes", "user_id = $1"}}, del: buildday.DeleteAccount},
 	{tables: []table{{"devlogs", "user_id = $1"}, {"badges", "user_id = $1"}, {"removed_items", "user_id = $1"}}, del: devlog.DeleteAccount},
 	{tables: []table{
+		{"submission_flags", "user_id = $1"},
+		{"submission_events", ofSubmissions},
+		{"submission_windows", ofSubmissions},
+		{"submission_keys", "user_id = $1"},
+		{"submission_projects", ofSubmissions},
+		{"submissions", "user_id = $1"},
+	}, del: submission.DeleteAccount, around: otherFlags},
+	{tables: []table{
 		{"sessions", "user_id = $1"},
 		{"device_codes", "user_id = $1 OR device_id IN (SELECT device_id FROM devices WHERE user_id = $1)"},
 		{"devices", "user_id = $1"},
 		{"users", "id = $1"},
 	}},
+}
+
+// otherFlags is the submissions step's around (D-sb1-flags-erasure).
+// submission.DeleteAccount takes the account's submission ids out of the
+// other accounts' repo_overlap flags and deletes a flag left naming none.
+// No flag of any account may be left on one of the ids, read before the
+// delete, or naming one, so a flag the delete by user_id misses fails the
+// erasure. The report counts no flags (reviewerOnly).
+func otherFlags(ctx context.Context, tx writer.Tx, account string) (func() error, error) {
+	ids, err := submission.IDs(ctx, tx, account)
+	if err != nil {
+		return nil, err
+	}
+	return func() error {
+		left, err := submission.FlagsNaming(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+		if left != 0 {
+			return fmt.Errorf("privacy: deleting the account left %d flags on or naming its submissions", left)
+		}
+		return nil
+	}, nil
 }
 
 // AccountTables are the tables whose rows the eraser deletes and an
@@ -290,7 +348,7 @@ func erase(ctx context.Context, tx writer.Tx, emails *accounts.EmailCipher, c Cl
 				if err != nil {
 					return r, fmt.Errorf("privacy: deleting the account's %s: %w", t.name, err)
 				}
-				if n > 0 {
+				if n > 0 && !reviewerOnly[t.name] {
 					r.Deleted[t.name] += n
 				}
 			}
@@ -299,6 +357,12 @@ func erase(ctx context.Context, tx writer.Tx, emails *accounts.EmailCipher, c Cl
 		before := make([]int64, len(s.tables))
 		for i, t := range s.tables {
 			if before[i], err = count(ctx, tx, t, account); err != nil {
+				return r, err
+			}
+		}
+		var after func() error
+		if s.around != nil {
+			if after, err = s.around(ctx, tx, account); err != nil {
 				return r, err
 			}
 		}
@@ -313,8 +377,13 @@ func erase(ctx context.Context, tx writer.Tx, emails *accounts.EmailCipher, c Cl
 			if left != 0 {
 				return r, fmt.Errorf("privacy: deleting the account left %d rows of %s", left, t.name)
 			}
-			if before[i] > 0 {
+			if before[i] > 0 && !reviewerOnly[t.name] {
 				r.Deleted[t.name] += before[i]
+			}
+		}
+		if after != nil {
+			if err := after(); err != nil {
+				return r, err
 			}
 		}
 	}
@@ -340,7 +409,13 @@ func export(ctx context.Context, q querier, emails *accounts.EmailCipher, c Clai
 			if err != nil {
 				return r, err
 			}
-			if n > 0 {
+			switch {
+			case n == 0:
+			case reviewerOnly[t.name]:
+				r.unreported += n
+			case t.name == "submissions":
+				r.Retained = append(r.Retained, Retained{Type: t.name, Count: n, Reason: submissionsReason})
+			default:
 				r.Retained = append(r.Retained, Retained{Type: t.name, Count: n, Reason: heldReason})
 			}
 		}
@@ -361,10 +436,10 @@ AND EXISTS (SELECT 1 FROM day_leaves d WHERE d.day = w.received_at_ms / $2)`,
 // that returns it, and no other op of its batch.
 var errDryRun = errors.New("privacy: a dry run changes nothing")
 
-// rowsOf is how many rows a report counts, the size the writer gives an
-// erasure's batch.
+// rowsOf is how many rows an export's report counts, its reviewerOnly
+// rows included, the size the writer gives an erasure's batch.
 func rowsOf(r Report) int {
-	n := 0
+	n := int(r.unreported)
 	for _, k := range r.Retained {
 		n += int(k.Count)
 	}

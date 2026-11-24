@@ -13,8 +13,8 @@
 // its own (Take), so a token works once even across a restart, and a dry
 // run's jti stays when its erasure rolls back (D-sv13-jti). The eraser
 // deletes every server row of DESIGN 4.4 that is the account's, through
-// the packages that own build days, devlogs and project names where they
-// do (erase), and keeps the account's leaf hashes in day trees that other
+// the packages that own build days, devlogs, project names and
+// submissions where they do (erase), and keeps the account's leaf hashes in day trees that other
 // accounts' batches share, which it reports.
 package privacy
 
