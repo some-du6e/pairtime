@@ -56,45 +56,45 @@ tl.check(stops[0]["t"] == at("+1 00:23:20") and stops[-1]["t"] == at("+1 06:10:0
 # The reading rule: no stop is followed by a human prompt within 600 s.
 tl.check(MORNING - stops[-1]["t"] == 5_220_000, "the morning prompt comes 5,220 s after the last stop")
 
-ER, CODES = lb.ERRATUM, lb.CODES_ERRATUM
+ER = lb.ERRATUM
 DERIVED = ["credited_s", "credit", "uncredited", "agent_running_s"]
 exp = tl.Expected(fx, sm="docs/design/struggle-metric.md 2.8 and 6.4", evidence="C", witness="backfilled",
                   projects={P: "pixel-forge"}, start="23:37:00", end="+1 07:37:00")
 exp.row("23:37", "23:39", bucket=False, sm="2.8; the events of 6.4's 23:37 and 23:38 rows", derived=["bucket"],
         note="No lead reaches back here and no agent runs, so no bucket. The live fixture credits these minutes "
              "from the prompt's think lead, which lookback drops.")
-exp.row("23:39", credit={P: {"P": 50}}, uncredited=None, codes=["X.no_anchor"], sm="2.8; the events of 6.4's 23:39 row",
-        derived=DERIVED, erratum=ER,
+exp.row("23:39", credit={P: {"P": 50}}, uncredited={"X.no_anchor": 10}, sm="2.8; the events of 6.4's 23:39 row",
+        derived=DERIVED,
         note="The /goal prompt at 23:40:00 has 75 typed characters: typing time only, 75 / 1.5 = 50 s, from "
-             "23:39:10. The code of 23:39:00 to 23:39:10 is open.")
+             "23:39:10. 23:39:00 to 23:39:10 is X.no_anchor (SM 5.2).")
 exp.row("23:40", "+1 00:23", credit={}, uncredited={"X.agent_only": 43 * 60}, agent=43 * 60,
         sm="2.8; the events of 6.4's 23:40 to 23:43 rows and its 23:44 to 07:29 range", derived=DERIVED,
         note="T1, his /goal turn, runs to 00:23:20. Lookback credits no reading while the agent runs, so the "
              "live fixture's SUP from 23:40:00 to 23:43:40 is gone.")
-exp.row("+1 00:23", "+1 06:10", credit={}, uncredited=None, codes=["X.agent_only", "X.automated"],
-        agent=347 * 60, sm="2.8; the events of 6.4's 23:44 to 07:29 range", derived=DERIVED, erratum=CODES,
+exp.row("+1 00:23", "+1 06:10", credit={}, uncredited={"X.agent_only": 20, "X.automated": 20800},
+        agent=347 * 60, sm="2.8; the events of 6.4's 23:44 to 07:29 range", derived=DERIVED,
         note="T1's last 20 s, then T2 to T9, stop-hook continuations (SM 2.2 rule 2, which lookback keeps), to "
-             "06:10:00. Nothing is credited. Whether a continuation's seconds are X.automated or X.agent_only "
-             "is point 1 of WP-FX1's 6.6 erratum.")
+             "06:10:00. Nothing is credited. T1's 20 s are X.agent_only and the continuations' 20,800 s "
+             "X.automated (SM 5.2).")
 exp.row("+1 06:10", "+1 07:36", bucket=False, sm="2.8; the events of 6.4's 23:44 to 07:29 range and its 07:30 "
         "to 07:35 rows", derived=["bucket"],
         note="No agent runs and nothing is credited, so no bucket. The live fixture's reading from 07:30:00 needs "
              "the unlock and his scrolling; here the run's last stop, at 06:10:00, is 5,220 s before his next "
              "prompt, past SM 2.8's 600 s.")
-exp.row("+1 07:36", credit={P: {"P": 41}}, uncredited=None, codes=["X.no_anchor"],
-        sm="2.8; the events of 6.4's 07:36 row", derived=DERIVED, erratum=ER,
+exp.row("+1 07:36", credit={P: {"P": 41}}, uncredited={"X.no_anchor": 19},
+        sm="2.8; the events of 6.4's 07:36 row", derived=DERIVED,
         note="The prompt at 07:37:00 has 61 typed characters: 61 / 1.5 = 40.67 s, which SM 1.3 rounds to the "
-             "nearest second, 41, so it starts at 07:36:19. The code of 07:36:00 to 07:36:19 is open.")
+             "nearest second, 41, so it starts at 07:36:19. 07:36:00 to 07:36:19 is X.no_anchor (SM 5.2).")
 
 rp = lb.Replay(events, T0, END)
 lb.check_rows(exp, rp, {S: P})
 tl.check(not rp.conflicts, "one session, so no second is wanted twice")
 tl.check(all(not v for v in rp.spans.values()), "no stop is followed by a human prompt within 600 s")
-# The erratum's point 2. With no reading span the cap cuts nothing; nothing
-# covers 10 s before the /goal prompt's lead and 19 s before the follow-up's.
-kinds = lb.uncredited_kinds(rp, T0, END)
-tl.check(kinds == {"agent": 43 * 60 + 20, "automated": 347 * 60 - 20, "uncovered": 10 + 19},
-         f"uncredited seconds {kinds}")
+# SM 5.2's codes. With no reading span the cap cuts nothing; nothing covers
+# 10 s before the /goal prompt's lead and 19 s before the follow-up's.
+codes = lb.uncredited_codes(rp, T0, END)
+tl.check(codes == {"X.agent_only": 43 * 60 + 20, "X.automated": 347 * 60 - 20, "X.no_anchor": 10 + 19},
+         f"uncredited seconds {codes}")
 
 totals = exp.totals()
 tl.check(totals["credited_s"] == 50 + 41 == 91, "credited")
@@ -115,7 +115,7 @@ expected = exp.doc(
     },
     stated=[],
     approx={},
-    errata=[ER, CODES],
+    errata=[ER],
     notes=[
         "Every row is computed from SM 2.8; SM states no lookback rows, so every bucket row's fields are "
         "derived. Every credited second is level C and backfilled.",
@@ -125,7 +125,7 @@ expected = exp.doc(
         "reading counts, because no stop is followed by a human prompt within 600 s: T1 stops at 00:23:20, "
         "the run's last turn at 06:10:00, and his next prompt comes at 07:37:00.",
         "The agent runs 23,400 s and nothing credits any of it, so agent_only_s is 23,400; the live fixture's "
-        "is 23,180. uncredited sums only the rows whose codes SM decides: T1's seconds to 00:23:00.",
+        "is 23,180. uncredited sums every bucket row; X.agent_only is T1's seconds to 00:23:20.",
         "The lock at 23:53:10, the unlock at 07:30:00 and the agent's 31 commits aren't in a transcript. "
         "Lookback doesn't need them: without a human prompt after the run, the night credits nothing either way.",
         f"The agent events replay to ai_logged_s {ai_logged:g} under min(gap, 120 s) (SM 5.4). DESIGN 6.2 D5's "
