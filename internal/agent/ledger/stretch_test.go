@@ -2109,21 +2109,24 @@ func TestEndedMarkStaysEnded(t *testing.T) {
 	if b := r.seal(); !b.Online || !b.Back {
 		t.Fatalf("batch 2 was sealed online %v, marked %v; want both", b.Online, b.Back)
 	}
-	// A record, seq 3, pending, and a Seen of a stretch the writer didn't
-	// know of, which ended before it: the mark is armed from the next
-	// record, 4, and no seal is asked for.
-	r.at(20_000)
-	r.write(r.presence(20_000))
-	r.w.NoteSeen(Seen{Ended: time.UnixMilli(testT + 15_000)})
-	// The sweep of a later day drops rows 1 and 2, and its base frame keeps
+	// Days later, a record, seq 3, pending, and a Seen of a stretch the
+	// writer didn't know of, which ended before it: the mark is armed from
+	// the next record, 4, and no seal is asked for. Both come after the
+	// start of the sweep's day, so the stretch the sweep folds from the
+	// beginning of time to that day doesn't hold seq 3.
+	day := 2 * int64(sweepDayMS)
+	r.at(day + 1000)
+	r.write(r.presence(day + 1000))
+	r.w.NoteSeen(Seen{Ended: time.UnixMilli(testT + day + 500)})
+	// The sweep of that day drops rows 1 and 2, and its base frame keeps
 	// the mark. Then a kill.
-	r.at(2 * sweepDayMS)
-	if dropped, _, err := r.w.Sweep(dayOf(time.UnixMilli(testT+2*sweepDayMS)), 0); err != nil || dropped != 2 {
+	r.at(day + 2000)
+	if dropped, _, err := r.w.Sweep(dayOf(time.UnixMilli(testT+day)), 0); err != nil || dropped != 2 {
 		t.Fatalf("Sweep dropped %d batches, %v; want 2", dropped, err)
 	}
 	abandon(r.w)
 	// Open seals what the kill left, seq 3, before the mark, online.
-	r.at(2*sweepDayMS + 60_000)
+	r.at(day + 60_000)
 	r.open()
 	ended := r.take()
 	// A restart before any batch that reaches the mark is sealed, and a
@@ -2133,8 +2136,8 @@ func TestEndedMarkStaysEnded(t *testing.T) {
 	}
 	r.open()
 	r.waits.Store(true)
-	r.at(2*sweepDayMS + 70_000)
-	r.write(r.presence(2*sweepDayMS + 70_000))
+	r.at(day + 70_000)
+	r.write(r.presence(day + 70_000))
 	b := r.seal()
 	r.waits.Store(false)
 	if err := r.w.Close(); err != nil {
