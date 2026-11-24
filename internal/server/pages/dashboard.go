@@ -132,6 +132,9 @@ type dashPage struct {
 	// it has no time in the last 30 days yet, which shows how to link the
 	// app instead of empty charts.
 	Owner, Empty bool
+	// ETag is the owner's view's dashboard.ETag, on #live, which the
+	// page's script polls the snapshot with (WP-SV8); "" on the sample.
+	ETag string
 	// SplitByDevice says a repo used on two computers shows as two
 	// projects (dashboard.View.SplitByDevice).
 	SplitByDevice bool
@@ -1147,7 +1150,7 @@ func (s *Site) serveDashboard(w http.ResponseWriter, r *http.Request, in SignIn,
 		http.Error(w, "Your dashboard didn't load. Try again in a minute.", http.StatusInternalServerError)
 		return
 	}
-	writePage(w, code, page, s.cspForm, "no-store", "same-origin")
+	writePage(w, code, page, s.cspLive, "no-store", "same-origin")
 }
 
 // ownerPage renders v as a signed-in account's own dashboard, with acct in
@@ -1162,10 +1165,18 @@ func (s *Site) ownerPage(v dashboard.View, in SignIn, acct *account, zoneError s
 	if canHide {
 		d.HidePath = HidePath
 	}
+	// The snapshot's ETag, which the page's script sends when it polls
+	// (WP-SV8): the View the page draws is the one the API answers with.
+	d.ETag = dashboard.ETag(v)
 	var body bytes.Buffer
 	if err := s.dash.Execute(&body, d); err != nil {
 		return nil, fmt.Errorf("pages: %w", err)
 	}
+	// The script goes in as its bytes, outside the template, so the page
+	// carries exactly what cspLive's hash names.
+	body.WriteString("<script>")
+	body.Write(s.liveJS)
+	body.WriteString("</script>\n")
 	var out bytes.Buffer
 	if err := s.layout.wrap(&out, layoutData{Title: "Your dashboard", Class: "dash", Body: template.HTML(body.String()), Account: acct}); err != nil {
 		return nil, err

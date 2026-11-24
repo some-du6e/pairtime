@@ -4,6 +4,8 @@ package pages
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -774,23 +776,58 @@ func TestOwnerDashboard(t *testing.T) {
 	}
 }
 
+// inlineScript finds the owner's dashboard's one inline script.
+var inlineScript = regexp.MustCompile(`(?s)<script>(.*?)</script>`)
+
 func TestOwnerDashboardCSP(t *testing.T) {
 	s := newSite(t, Options{})
+	js, err := fs.ReadFile(files, "dashboard.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(js)
+	scriptSrc := "script-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
 	tests := []struct {
 		name    string
 		signIn  SignIn
 		account string
 		want    string
+		// script says the page has dashboard.js inline, which the CSP
+		// allows by its hash.
+		script bool
 	}{
-		{name: "the signed-in owner's page lets its forms post to this server only", signIn: signInOn("U0FAKEVERIFIED"), account: "u1", want: s.cspForm},
-		{name: "with sign-in off the page has no form, and its CSP allows none", signIn: SignIn{}, want: s.csp},
+		{name: "the signed-in owner's page runs its one inline script, by its hash, reaches only this server, and lets its forms post here only", signIn: signInOn("U0FAKEVERIFIED"), account: "u1", want: s.cspLive, script: true},
+		{name: "with sign-in off the page has no form and no script, and its CSP allows neither", signIn: SignIn{}, want: s.csp},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mux, _ := ownerSite(t, tt.signIn, tt.account, fakeSource{v: ownerView(t)}, true, nil)
 			resp, page := serve(mux, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
-			if got := resp.Header.Get("Content-Security-Policy"); got != tt.want {
+			got := resp.Header.Get("Content-Security-Policy")
+			if got != tt.want {
 				t.Errorf("CSP %q, want %q", got, tt.want)
+			}
+			scripts := inlineScript.FindAllStringSubmatch(page, -1)
+			if tt.script {
+				if len(scripts) != 1 || scripts[0][1] != string(js) {
+					t.Fatalf("the page has %d inline scripts, want dashboard.js once, byte for byte", len(scripts))
+				}
+				for _, part := range []string{scriptSrc, "connect-src 'self'", "form-action 'self'", "default-src 'none'"} {
+					if !strings.Contains(got, part) {
+						t.Errorf("CSP %q lacks %s", got, part)
+					}
+				}
+				if strings.Contains(got, "unsafe") || strings.Count(got, "sha256-") != 2 {
+					t.Errorf("CSP %q allows more than the page's stylesheet and its one script", got)
+				}
+				// What the browser would fetch is checked with the one
+				// allowed script taken out.
+				page = inlineScript.ReplaceAllString(page, "")
+			} else if len(scripts) != 0 || strings.Contains(got, "script-src") {
+				t.Errorf("a page with no script has %d and CSP %q", len(scripts), got)
+			}
+			if regexp.MustCompile(`(?i)\son[a-z]+=`).MatchString(page) {
+				t.Error("the page has an inline event handler")
 			}
 			if m := fetches.FindString(page); m != "" {
 				t.Errorf("the page has %q, which makes a browser fetch something", m)

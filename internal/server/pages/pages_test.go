@@ -585,7 +585,7 @@ func TestStyleHash(t *testing.T) {
 			}
 			sum := sha256.Sum256([]byte(css))
 			want := "style-src 'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
-			for _, csp := range []string{s.csp, s.cspForm} {
+			for _, csp := range []string{s.csp, s.cspForm, s.cspLive} {
 				if !strings.Contains(csp, want) {
 					t.Errorf("CSP %q doesn't allow the page's style; want %s", csp, want)
 				}
