@@ -596,6 +596,32 @@ func TestCutWaits(t *testing.T) {
 				unknownFrom(t, one, at(1800), floorSlot(at(9100)))
 			},
 		},
+		{
+			name: "a suspend and a resume after the cut, with no sample after them as when the idle read fails, leave the slots from the resume to the next sample unknown, as before a machine's first sample",
+			build: func(b *tl) {
+				hooked(b, 9500)
+				b.power(at(9600), event.PowerSuspend)
+				b.power(at(9900), event.PowerResume)
+				b.samples(at(12000), at(12000+600))
+			},
+			check: func(t *testing.T, _ [][]event.Event, _ []Output, _, one Derived) {
+				n := 0
+				for _, s := range one.Slots {
+					switch {
+					case s.Start >= at(9600) && s.Start < at(9900) && !s.Asleep:
+						t.Fatalf("the slot at %d s isn't asleep; want the suspend's slots asleep", (s.Start-base)/1000)
+					case s.Start >= at(9900) && s.Start < at(12000):
+						n++
+						if s.Present != event.PresentUnknown || s.Asleep {
+							t.Fatalf("the slot at %d s is %q, asleep %v; want unknown, as the sampler took no sample yet", (s.Start-base)/1000, s.Present, s.Asleep)
+						}
+					}
+				}
+				if n == 0 {
+					t.Fatal("no slot derived between the resume and the next sample")
+				}
+			},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

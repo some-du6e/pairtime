@@ -175,6 +175,12 @@ type presence struct {
 	// one.
 	reaches []reach
 	never   []bool
+	// blind holds the stretches from a record of the sampler's that started
+	// the device sampling again but wasn't a sample, as a resume is when
+	// the agent's idle read fails, to the sampler's next sample, or on with
+	// none: the sampler ran there but took no sample, so their slots are
+	// unknown, as before a machine's first sample (SM 2.1, blindAt).
+	blind []span
 }
 
 // reach is a record of the presence sampler's, os.presence or os.power, at
@@ -322,8 +328,10 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		lastIdle            int64 // the idle time the last sample showed
 		sampled             int   // how many of the sampler's records came before e
 		// restarting is set from a record of the sampler's that starts the
-		// device sampling again until the next sample.
+		// device sampling again until the next sample, and blindFrom, when
+		// that record isn't a sample, is its t, or -1 for none (blind).
 		restarting bool
+		blindFrom  = int64(-1)
 	)
 	for _, e := range recs {
 		// A record of the sampler's after one whose reach ended starts the
@@ -348,6 +356,9 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 					locks = append(locks, span{lockFrom, floorSlot(e.T)})
 				}
 				asleep, locked, restarting = false, false, true
+				if _, ok := e.Data.(*event.OSPresence); !ok && blindFrom < 0 {
+					blindFrom = e.T
+				}
 			}
 			sampled++
 		}
@@ -359,6 +370,9 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 			}
 			restart := restarting
 			restarting = false
+			if blindFrom >= 0 {
+				p.blind, blindFrom = append(p.blind, span{blindFrom, e.T}), -1
+			}
 			if gap := e.T - lastSample; haveSample && !restart && gap > r.sleepGap && !(lastIdle >= r.contextIdle && gap <= r.slowGap) {
 				// SM 2.1: gaps come from wall-clock sample times. The open
 				// interval between the two samples is the gap. After
@@ -415,6 +429,9 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 	}
 	if locked {
 		locks = append(locks, span{lockFrom, math.MaxInt64})
+	}
+	if blindFrom >= 0 {
+		p.blind = append(p.blind, span{blindFrom, math.MaxInt64})
 	}
 
 	// Slots end with the slot holding now (Step), and the samples may end
@@ -489,8 +506,8 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 
 	// A slot is decided once a sample at or after its end exists, since
 	// that sample's idle time covers the whole slot, or when it is a hard
-	// break or a never-sampling device's. The first undecided slot ends the
-	// list.
+	// break, a never-sampling device's, or one where the sampler took no
+	// sample (blindAt). The first undecided slot ends the list.
 	firstSample, lastSampleT := int64(math.MaxInt64), int64(math.MinInt64)
 	if len(p.samples) > 0 {
 		firstSample, lastSampleT = p.samples[0].t, p.samples[len(p.samples)-1].t
@@ -498,7 +515,7 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 	for k := 0; k < n; k++ {
 		a := p.first + int64(k)*event.SlotMS
 		brk := asleepAt[k] || lockedAt[k]
-		if !never[k] && !brk && lastSampleT < a+event.SlotMS && a+event.SlotMS > firstSample {
+		if !never[k] && !brk && lastSampleT < a+event.SlotMS && a+event.SlotMS > firstSample && !p.blindAt(a) {
 			n = k
 			break
 		}
@@ -553,8 +570,9 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 			s.Present = event.PresentUnknown
 		case s.Asleep || s.Locked:
 			s.Present = event.PresentNo
-		case b <= firstSample:
-			// SM 2.1: the sampler wasn't running yet.
+		case b <= firstSample || p.blindAt(a):
+			// SM 2.1: the sampler wasn't running yet, or it started again
+			// and hasn't sampled.
 			s.Present = event.PresentUnknown
 		case s.InputAny:
 			s.Present = event.PresentYes
@@ -629,11 +647,28 @@ func floorSecond(t int64) int64 {
 }
 
 // unsampled reports whether t falls where the presence sampler didn't run:
-// there is no sample, none until after the slot holding t ends, or the
-// slot is a never-sampling device's (neverAt). Such a slot is SM 2.1's
-// unknown.
+// there is no sample, none until after the slot holding t ends, the slot
+// is a never-sampling device's (neverAt), or the sampler started again
+// there and hasn't sampled (blindAt). Such a slot is SM 2.1's unknown.
 func (p *presence) unsampled(t int64) bool {
-	return len(p.samples) == 0 || floorSlot(t)+event.SlotMS <= p.samples[0].t || p.neverAt(t)
+	return len(p.samples) == 0 || floorSlot(t)+event.SlotMS <= p.samples[0].t || p.neverAt(t) || p.blindAt(floorSlot(t))
+}
+
+// blindAt reports whether the slot starting at a ends in one of the
+// stretches where the sampler started again with a record that wasn't a
+// sample and took none after it (presence.blind). The agent's carry drops
+// the sampler's records from before such a restart (internal/agent/scorer),
+// so a Step over its window has no sample before the next one and reads
+// those slots as before a machine's first sample: blindAt makes one Step
+// over every record read them alike.
+func (p *presence) blindAt(a int64) bool {
+	b := a + event.SlotMS
+	for _, sp := range p.blind {
+		if b > sp.from && b <= sp.to {
+			return true
+		}
+	}
+	return false
 }
 
 // mark returns, for each of the n slots, whether it overlaps any of the
