@@ -50,16 +50,17 @@ type deriver struct {
 }
 
 // derive runs every pass over recs, which must be in record order, with now
-// as the present. Besides what it derives, it returns the spans of the
-// browser and chat-app runs, and the times before which FinalBefore waits
-// for an agent app's message to pair (relayHolds).
-func derive(r rules, dev Device, recs []event.Event, now int64) (Derived, []span, []int64) {
+// as the present and reaches the sampler's records (sampledReaches) as Step
+// gives them. Besides what it derives, it returns the spans of the browser
+// and chat-app runs, and the times before which FinalBefore waits for an
+// agent app's message to pair (relayHolds).
+func derive(r rules, dev Device, recs []event.Event, now int64, reaches []reach) (Derived, []span, []int64) {
 	if len(recs) == 0 {
 		return Derived{}, nil, nil
 	}
 	d := &deriver{r: r, dev: dev, recs: recs, now: now}
 	d.focus = buildFocus(recs)
-	d.pres = buildPresence(r, recs, now, d.focus)
+	d.pres = buildPresence(r, recs, now, reaches, d.focus)
 	d.buildBeats()
 	d.buildSessions()
 	d.pairRelays()

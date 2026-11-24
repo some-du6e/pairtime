@@ -805,6 +805,10 @@ func TestOwnerDashboardCSP(t *testing.T) {
 }
 
 func TestZoneForm(t *testing.T) {
+	tokyo, err := rollup.LoadZone("Asia/Tokyo")
+	if err != nil {
+		t.Fatal(err)
+	}
 	post := func(zone string) *http.Request {
 		r := httptest.NewRequest(http.MethodPost, "/dashboard/zone", strings.NewReader("zone="+zone))
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -831,6 +835,16 @@ func TestZoneForm(t *testing.T) {
 			name:   "a zone pairtime doesn't know is refused beside the form, and the dashboard still shows",
 			signIn: signInOn("U0FAKEVERIFIED"), account: "u1", sameOrigin: true, body: "Mars", setZone: fmt.Errorf("rollup: %q: %w", "Mars", rollup.ErrBadZone),
 			wantCode: 422, wantCalls: []zoneCall{{"u1", "Mars"}}, want: `<p class="error" role="alert">That isn&#39;t a time zone pairtime knows.`,
+		},
+		{
+			name:   "a second change inside 30 days is refused beside the form, with the dates of the last change and of the next one allowed as the refusal gives them in the account's zone",
+			signIn: signInOn("U0FAKEVERIFIED"), account: "u1", sameOrigin: true, body: "Europe%2FParis",
+			setZone: &rollup.ZoneTooSoonError{
+				Changed: time.Date(2026, 11, 21, 8, 30, 0, 0, tokyo),
+				Next:    time.Date(2026, 12, 21, 8, 30, 0, 0, tokyo),
+			},
+			wantCode: 422, wantCalls: []zoneCall{{"u1", "Europe/Paris"}},
+			want: `<p class="error" role="alert">You changed your time zone on 21 November 2026. You can change it again from 21 December 2026.</p>`,
 		},
 		{
 			name:   "a zone that doesn't save for another reason is an error, not a refusal",

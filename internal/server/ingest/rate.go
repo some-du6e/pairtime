@@ -86,3 +86,28 @@ func (l *limiter) prune(now time.Time) {
 		}
 	}
 }
+
+// Limiter is a device's request rate as ingest counts it (SP 8.6): a
+// bucket of burst requests that refills one every every, and one request
+// in flight at a time. The teen layer's routes (package devlog) keep one
+// of their own: they take only the device token, and ingest counts only
+// signed requests against a device's upload rate, so that nobody without
+// the device's key can use it up.
+type Limiter struct{ l *limiter }
+
+// NewLimiter returns a Limiter of burst requests refilled one every every,
+// as Options.RateBurst and RateEvery are ingest's.
+func NewLimiter(burst int, every time.Duration) *Limiter {
+	return &Limiter{l: newLimiter(burst, every)}
+}
+
+// Take admits a request of device id at now and returns the func that ends
+// it. While another of the device's requests is in flight, or when its
+// bucket is empty, it returns nil and the seconds to wait.
+func (l *Limiter) Take(id string, now time.Time) (done func(), retryAfter int) {
+	done, r := l.l.take(id, now)
+	if r != nil {
+		return nil, r.retryAfter
+	}
+	return done, 0
+}

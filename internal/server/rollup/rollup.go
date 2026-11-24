@@ -39,13 +39,17 @@
 // window, from the per-device minutes rollup_minutes keeps for 180 days
 // (ConcurrentMinutes). The merge keeps one slot either way.
 //
-// A minute counts toward the account's local day, in the time zone the
-// owner set (users.tz, UTC until set). A minute's day comes from the
-// minute itself, time.Unix(minute, 0).In(zone).Date(), never from a
-// midnight made with time.Date, which doesn't exist where daylight saving
-// time starts at midnight (America/Santiago on 2027-09-05). Changing the
-// zone moves the minutes counted after the change; days already counted
-// stay where they are.
+// A minute counts toward the account's local day in the time zone the owner
+// had set at the minute's own time: users.tz, UTC until set, or, for a
+// minute before a change recorded in zone_changes, the zone the first such
+// change replaced (D-sv12-lag, amended in #278 to keep every change). A
+// minute's day comes from the minute itself,
+// time.Unix(minute, 0).In(zone).Date(), never from a midnight made with
+// time.Date, which doesn't exist where daylight saving time starts at
+// midnight (America/Santiago on 2027-09-05). A minute keeps the day it
+// first counted toward: no later revision, from any device, and no zone
+// change moves it (D-sv12-lag). So a change counts from the moment it is
+// made, and days already counted stay as they are.
 //
 // The agent's side of the chess clock is the bucket's agent_only: per
 // project key, the seconds a turn of that project ran in the minute that
@@ -171,28 +175,28 @@ func Apply(ctx context.Context, tx writer.Tx, prev *Bucket, next Bucket) error {
 		}
 		after = append(after, r)
 	}
-	zone, _, err := zoneOf(ctx, tx, next.Account)
-	if err != nil {
-		return err
+	// A minute the rollups already count keeps its day, whatever the zone
+	// is now. Only its first count reads the zone, the one in force at the
+	// minute itself (D-sv12-lag).
+	day := oldDay
+	if day == "" {
+		zone, err := zoneOf(ctx, tx, next.Account, minuteMS)
+		if err != nil {
+			return err
+		}
+		day = LocalDay(next.Minute, zone)
 	}
 	// The other devices' rows already hold project ids, so in's keys
 	// become ids before the merge compares them.
 	if err := toProjects(ctx, tx, next.Account, &in); err != nil {
 		return err
 	}
-	day := LocalDay(next.Minute, zone)
 	in.day = day
 	after = append(after, in)
 	if err := remerge(ctx, tx, next.Account, before, oldDay, after, day); err != nil {
 		return err
 	}
-	if err := saveDevice(ctx, tx, next.Account, minuteMS, in); err != nil {
-		return err
-	}
-	if oldDay != "" && oldDay != day {
-		return moveMinute(ctx, tx, next.Account, minuteMS, day)
-	}
-	return nil
+	return saveDevice(ctx, tx, next.Account, minuteMS, in)
 }
 
 // remerge moves the account's rollups for one minute from the device rows

@@ -4,6 +4,8 @@ package rollup
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"math"
 	"math/rand/v2"
 	"reflect"
@@ -73,6 +75,9 @@ func (d txDoer) Do(ctx context.Context, _ int, op writer.Op) error {
 type step struct {
 	bucket Bucket
 	zone   string
+	// zoneAt is when the zone change is made. Unset, it is a day before
+	// the case's first minute, so every minute counts in the new zone.
+	zoneAt time.Time
 	// link lists "device/key" pairs to give one project id.
 	link []string
 	// settle, when set, runs Settle as of this time.
@@ -91,6 +96,17 @@ func settleAt(t time.Time) step { return step{settle: t} }
 func run(t *testing.T, db *store.DB, account string, steps []step) error {
 	t.Helper()
 	ctx := context.Background()
+	// The case's first minute, which a zone step is dated a day before
+	// unless it says when.
+	var first int64
+	for _, s := range steps {
+		if m := s.bucket.Minute; m != 0 && (first == 0 || m < first) {
+			first = m
+		}
+	}
+	if first == 0 {
+		first = base
+	}
 	for i, s := range steps {
 		if !s.settle.IsZero() {
 			if _, err := Settle(ctx, txDoer{db: db}, db.Read, s.settle); err != nil {
@@ -104,7 +120,11 @@ func run(t *testing.T, db *store.DB, account string, steps []step) error {
 		}
 		switch {
 		case s.zone != "":
-			err = SetZone(ctx, tx, account, s.zone)
+			at := s.zoneAt
+			if at.IsZero() {
+				at = time.Unix(first, 0).Add(-24 * time.Hour)
+			}
+			err = SetZone(ctx, tx, account, s.zone, at)
 		case s.link != nil:
 			for _, pair := range s.link {
 				device, key, _ := strings.Cut(pair, "/")
@@ -415,13 +435,67 @@ func TestApply(t *testing.T) {
 			},
 		},
 		{
-			name: "after the time zone changes, a minute's next revision moves its time to its day in the new zone",
+			name: "after the time zone changes, a minute's next revision keeps the day it first counted toward",
 			steps: []step{
 				bk("d1", base+8*3600+30*60, 0, "pending", nil, sl("p1", 15, "prompting", "A")),
-				{zone: "Asia/Tokyo"},
+				// The change comes at midnight UTC, after the minute's first
+				// revision and before its second.
+				{zone: "Asia/Tokyo", zoneAt: time.Unix(base+9*3600, 0)},
 				bk("d1", base+8*3600+30*60, 1, "final", nil, sl("p1", 15, "prompting", "A")),
 			},
-			want: []Day{final("d1/p1", "2026-11-21", "prompting", 0, 15000)},
+			want: []Day{final("d1/p1", "2026-11-20", "prompting", 0, 15000)},
+		},
+		{
+			// 05:00Z on 2026-11-20 is 21:00 on the 19th in Los Angeles.
+			name: "a minute from before a zone change, first counted after it, counts toward its date in the zone before",
+			steps: []step{
+				{zone: "America/Los_Angeles", zoneAt: time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)},
+				bk("d1", time.Date(2026, 11, 20, 5, 0, 0, 0, time.UTC).Unix(), 0, "final", nil, sl("p1", 15, "prompting", "A")),
+			},
+			want: []Day{final("d1/p1", "2026-11-20", "prompting", 0, 15000)},
+		},
+		{
+			// 05:00Z on 2026-11-21 is 21:00 on the 20th in Los Angeles.
+			name: "a minute from after a zone change counts toward its date in the new zone",
+			steps: []step{
+				{zone: "America/Los_Angeles", zoneAt: time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)},
+				bk("d1", time.Date(2026, 11, 21, 5, 0, 0, 0, time.UTC).Unix(), 0, "final", nil, sl("p1", 15, "prompting", "A")),
+			},
+			want: []Day{final("d1/p1", "2026-11-20", "prompting", 0, 15000)},
+		},
+		{
+			// 03:00Z on 2026-11-30 is the 29th in Los Angeles and the 30th in
+			// UTC, the zone the first change replaced.
+			name: "after two zone changes, a minute from before both, first counted after them, counts toward its date in the zone the first replaced",
+			steps: []step{
+				{zone: "America/Los_Angeles", zoneAt: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)},
+				{zone: "Asia/Tokyo", zoneAt: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)},
+				bk("d1", time.Date(2026, 11, 30, 3, 0, 0, 0, time.UTC).Unix(), 0, "final", nil, sl("p1", 15, "prompting", "A")),
+			},
+			want: []Day{final("d1/p1", "2026-11-30", "prompting", 0, 15000)},
+		},
+		{
+			// 2026-12-15T05:00Z is the 14th in Los Angeles.
+			name: "after two zone changes, a minute between them counts toward its date in the zone the first put in force",
+			steps: []step{
+				{zone: "America/Los_Angeles", zoneAt: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)},
+				{zone: "Asia/Tokyo", zoneAt: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)},
+				bk("d1", time.Date(2026, 12, 15, 5, 0, 0, 0, time.UTC).Unix(), 0, "final", nil, sl("p1", 15, "prompting", "A")),
+			},
+			want: []Day{final("d1/p1", "2026-12-14", "prompting", 0, 15000)},
+		},
+		{
+			name: "another device's revision of a minute counts toward the day the minute first counted toward, whatever the zone is now",
+			steps: []step{
+				bk("d1", base+8*3600+30*60, 0, "final", nil, sl("p1", 10, "prompting", "A")),
+				// Dated before the minute, as a device clock ahead of the
+				// server's can leave it, so only the rule that a minute keeps
+				// its day puts d2's time on the 20th.
+				{zone: "Asia/Tokyo", zoneAt: time.Unix(base, 0)},
+				bk("d2", base+8*3600+30*60, 0, "final", nil, sl("p2", 15, "prompting", "A")),
+			},
+			want:       []Day{final("d2/p2", "2026-11-20", "prompting", 0, 15000)},
+			concurrent: 1,
 		},
 	}
 	for _, engine := range storetest.Engines() {
@@ -1022,5 +1096,412 @@ func TestLoadZone(t *testing.T) {
 				t.Errorf("LoadZone(%q) = %v, want ok %v", tt.zone, err, tt.ok)
 			}
 		})
+	}
+}
+
+func TestSetZone(t *testing.T) {
+	// The first change, from UTC to Los Angeles, which every case makes.
+	first := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	// change is a zone_changes row: when, and the zone it replaced.
+	type change struct {
+		at     time.Time
+		before string
+	}
+	tests := []struct {
+		name string
+		// zone is a second change, "" for none, and after how long after
+		// the first it comes.
+		zone  string
+		after time.Duration
+		// soon says the second change is refused with ErrZoneTooSoon.
+		soon bool
+		// wantTZ and wantChanges are users.tz and zone_changes afterwards.
+		wantTZ      string
+		wantChanges []change
+	}{
+		{name: "a change records when it was made and the zone it replaced", wantTZ: "America/Los_Angeles", wantChanges: []change{{first, "UTC"}}},
+		{
+			name: "a second change inside 30 days is refused with ErrZoneTooSoon and changes nothing", zone: "Asia/Tokyo", after: ZoneChangeEvery - time.Millisecond, soon: true,
+			wantTZ: "America/Los_Angeles", wantChanges: []change{{first, "UTC"}},
+		},
+		{
+			name: "setting the zone the account has isn't a change, so it isn't refused inside 30 days", zone: "America/Los_Angeles", after: time.Hour,
+			wantTZ: "America/Los_Angeles", wantChanges: []change{{first, "UTC"}},
+		},
+		{
+			name: "a change 30 days after the last is taken, and every change stays on record", zone: "Asia/Tokyo", after: ZoneChangeEvery,
+			wantTZ: "Asia/Tokyo", wantChanges: []change{{first, "UTC"}, {first.Add(ZoneChangeEvery), "America/Los_Angeles"}},
+		},
+	}
+	for _, engine := range storetest.Engines() {
+		for _, tt := range tests {
+			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) {
+				db := newDB(t, engine, "u1")
+				ctx := context.Background()
+				set := func(zone string, at time.Time) error {
+					tx, err := db.Write.BeginTx(ctx, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := SetZone(ctx, tx, "u1", zone, at); err != nil {
+						tx.Rollback()
+						return err
+					}
+					return tx.Commit()
+				}
+				if err := set("America/Los_Angeles", first); err != nil {
+					t.Fatal(err)
+				}
+				if tt.zone != "" {
+					err := set(tt.zone, first.Add(tt.after))
+					var soon *ZoneTooSoonError
+					switch {
+					case tt.soon && !errors.As(err, &soon):
+						t.Fatalf("SetZone = %v, want a *ZoneTooSoonError", err)
+					case tt.soon:
+						if !errors.Is(err, ErrZoneTooSoon) {
+							t.Errorf("SetZone = %v, which doesn't wrap ErrZoneTooSoon", err)
+						}
+						// The dates the dashboard shows are in the account's zone.
+						if !soon.Changed.Equal(first) || !soon.Next.Equal(first.Add(ZoneChangeEvery)) ||
+							soon.Changed.Location().String() != "America/Los_Angeles" || soon.Next.Location().String() != "America/Los_Angeles" {
+							t.Errorf("the refusal says the zone changed at %v and can change from %v, want %v and %v in America/Los_Angeles",
+								soon.Changed, soon.Next, first, first.Add(ZoneChangeEvery))
+						}
+					case err != nil:
+						t.Fatalf("SetZone = %v", err)
+					}
+				}
+				h, err := ZoneHistory(ctx, db.Read, "u1")
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got []change
+				for _, c := range h.Changes {
+					got = append(got, change{time.UnixMilli(c.AtMS).UTC(), c.Before.String()})
+				}
+				if h.Name != tt.wantTZ || !reflect.DeepEqual(got, tt.wantChanges) {
+					t.Errorf("zone %q with changes %v, want %q with %v", h.Name, got, tt.wantTZ, tt.wantChanges)
+				}
+			})
+		}
+	}
+	t.Run("an account that doesn't exist is refused", func(t *testing.T) {
+		db := newDB(t, store.SQLite)
+		ctx := context.Background()
+		tx, err := db.Write.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		if err := SetZone(ctx, tx, "u-nobody", "Asia/Tokyo", first); !errors.Is(err, ErrNoAccount) {
+			t.Errorf("SetZone = %v, want ErrNoAccount", err)
+		}
+	})
+}
+
+// revision is a minute-bucket revision as ingest stores it: the bucket,
+// when the server received it, the server's own label ("" stores none, as a
+// release from before migration 0009 did) and the client's reading.
+type revision struct {
+	bucket   Bucket
+	received time.Time
+	label    event.Witness
+	client   event.Witness
+}
+
+// eventOf is b as pkg/event holds a bucket, with the client's reading w.
+func eventOf(b Bucket, w event.Witness) event.MinuteBucket {
+	m := event.MinuteBucket{
+		V: "0.3.0", Params: "sha256:0", Minute: time.Unix(b.Minute, 0).UTC(), Device: b.Device,
+		CreditedS: b.CreditedS, State: event.BucketState(b.State), Witness: w, Rev: uint32(b.Rev),
+	}
+	for _, s := range b.Slots {
+		bs := event.BucketSlot{Project: s.Project, Credited: s.CreditedS, Kind: event.Activity(s.Kind), Ev: event.Evidence(s.Level)}
+		if s.CreditedS > 0 {
+			bs.Why = event.ReasonPrompt
+		}
+		for _, l := range s.Labels {
+			bs.Lbl = append(bs.Lbl, event.Label(l))
+		}
+		m.Slots = append(m.Slots, bs)
+	}
+	return m
+}
+
+// storeRevisions stores each revision in minute_bucket_revisions and
+// applies it to the rollups, as ingest does, one transaction each.
+func storeRevisions(t *testing.T, db *store.DB, revs []revision) {
+	t.Helper()
+	ctx := context.Background()
+	for _, r := range revs {
+		data, err := json.Marshal(eventOf(r.bucket, r.client))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var label any
+		if r.label != "" {
+			label = string(r.label)
+		}
+		tx, err := db.Write.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO minute_bucket_revisions (device_id, minute_ms, rev, account_id, received_at_ms, bucket, server_witness)
+VALUES ($1, $2, $3, $4, $5, $6, $7)`, r.bucket.Device, r.bucket.Minute*1000, r.bucket.Rev, r.bucket.Account, r.received.UnixMilli(), string(data), label); err != nil {
+			t.Fatal(err)
+		}
+		if err := Apply(ctx, tx, nil, r.bucket); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestCreditAsOf(t *testing.T) {
+	// The minute is 15:00 UTC on 2026-11-20, and the read is a day later
+	// unless a case says when.
+	m := base
+	end := time.Unix(m+60, 0)
+	asOf := time.Unix(m, 0).Add(24 * time.Hour)
+	rv := func(st step, received time.Time, label event.Witness) revision {
+		return revision{bucket: st.bucket, received: received, label: label, client: label}
+	}
+	soon := end.Add(time.Minute)
+	tests := []struct {
+		name string
+		revs []revision
+		// at is the read's time, asOf when unset.
+		at   time.Time
+		want Credit
+	}{
+		{
+			name: "a witnessed revision counts its level A and B seconds apart",
+			revs: []revision{rv(bk("d1", m, 0, "final", nil, sl("p1", 15, "prompting", "A"), sl("p1", 10, "reading_output", "B")), soon, event.Witnessed)},
+			want: Credit{AMS: 15000, BMS: 10000},
+		},
+		{
+			name: "the read ignores a revision received after its time",
+			revs: []revision{rv(bk("d1", m, 0, "final", nil, sl("p1", 15, "prompting", "A")), asOf.Add(time.Millisecond), event.Witnessed)},
+		},
+		{
+			name: "a revision received at the read's time counts",
+			revs: []revision{rv(bk("d1", m, 0, "final", nil, sl("p1", 15, "prompting", "A")), asOf, event.Witnessed)},
+			want: Credit{AMS: 15000},
+		},
+		{
+			name: "the read skips a revision the server labeled backfilled and takes the one before it",
+			revs: []revision{
+				rv(bk("d1", m, 0, "final", nil, sl("p1", 15, "prompting", "A")), soon, event.Witnessed),
+				{bucket: bk("d1", m, 1, "final", nil, sl("p1", 5, "prompting", "A")).bucket, received: soon.Add(2 * time.Hour), label: event.Backfilled, client: event.Witnessed},
+			},
+			want: Credit{AMS: 15000},
+		},
+		{
+			name: "a revision labeled backfilled with none before it counts nothing, though the device read it witnessed",
+			revs: []revision{{bucket: bk("d1", m, 0, "final", nil, sl("p1", 15, "prompting", "A")).bucket, received: soon.Add(2 * time.Hour), label: event.Backfilled, client: event.Witnessed}},
+		},
+		{
+			name: "a revision the server labeled offline counts",
+			revs: []revision{rv(bk("d1", m, 0, "final", nil, sl("p1", 15, "prompting", "B")), soon.Add(5*time.Hour), event.Offline)},
+			want: Credit{BMS: 15000},
+		},
+		{
+			name: "a revision with no server label goes by its bucket's own witness",
+			revs: []revision{
+				{bucket: bk("d1", m, 0, "final", nil, sl("p1", 15, "prompting", "A")).bucket, received: soon, client: event.Witnessed},
+				{bucket: bk("d1", m+60, 0, "final", nil, sl("p1", 15, "prompting", "A")).bucket, received: soon, client: event.Backfilled},
+			},
+			want: Credit{AMS: 15000},
+		},
+		{
+			name: "a pending revision counts nothing a millisecond before its minute is PendingWindow old",
+			revs: []revision{rv(bk("d1", m, 0, "pending", nil, sl("p1", 15, "prompting", "A")), soon, event.Witnessed)},
+			at:   end.Add(PendingWindow() - time.Millisecond),
+		},
+		{
+			name: "a pending revision counts once its minute ended PendingWindow before the read",
+			revs: []revision{rv(bk("d1", m, 0, "pending", nil, sl("p1", 15, "prompting", "A")), soon, event.Witnessed)},
+			at:   end.Add(PendingWindow()),
+			want: Credit{AMS: 15000},
+		},
+		{
+			name: "two devices crediting one slot count it once, at the level of the one with more seconds",
+			revs: []revision{
+				rv(bk("d1", m, 0, "final", nil, sl("p1", 10, "prompting", "A")), soon, event.Witnessed),
+				rv(bk("d2", m, 0, "final", nil, sl("p2", 15, "hand_edit", "B")), soon, event.Witnessed),
+			},
+			want: Credit{BMS: 15000},
+		},
+		{
+			name: "level C counts nothing",
+			revs: []revision{rv(bk("d1", m, 0, "final", nil, sl("p1", 15, "prompting", "C")), soon, event.Witnessed)},
+		},
+		{
+			name: "a minute that counts toward another day isn't read",
+			revs: []revision{rv(bk("d1", m+12*3600, 0, "final", nil, sl("p1", 15, "prompting", "A")), soon.Add(12*time.Hour), event.Witnessed)},
+			at:   asOf.Add(24 * time.Hour),
+		},
+	}
+	for _, engine := range storetest.Engines() {
+		for _, tt := range tests {
+			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) {
+				db := newDB(t, engine, "u1")
+				storeRevisions(t, db, tt.revs)
+				at := tt.at
+				if at.IsZero() {
+					at = asOf
+				}
+				got, err := CreditAsOf(context.Background(), db.Read, "u1", "2026-11-20", at.UnixMilli())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got != tt.want {
+					t.Errorf("CreditAsOf = %+v, want %+v", got, tt.want)
+				}
+			})
+		}
+	}
+}
+
+func TestDeadline(t *testing.T) {
+	zone := func(name string) *time.Location {
+		loc, err := LoadZone(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return loc
+	}
+	change := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC).UnixMilli()
+	utc := History{Zone: time.UTC, Name: "UTC"}
+	toLA := History{Zone: zone("America/Los_Angeles"), Name: "America/Los_Angeles", Changes: []Change{{AtMS: change, Before: time.UTC}}}
+	toTokyo := History{Zone: zone("Asia/Tokyo"), Name: "Asia/Tokyo", Changes: []Change{{AtMS: change, Before: time.UTC}}}
+	// UTC to Los Angeles on 2026-12-01, then to Tokyo on 2027-01-01.
+	twice := History{Zone: zone("Asia/Tokyo"), Name: "Asia/Tokyo", Changes: []Change{
+		{AtMS: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC).UnixMilli(), Before: time.UTC},
+		{AtMS: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli(), Before: zone("America/Los_Angeles")},
+	}}
+	tests := []struct {
+		name string
+		h    History
+		day  string
+		want time.Time
+	}{
+		{name: "a UTC day's deadline is 72 hours after it ends", h: utc, day: "2026-11-20", want: time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC)},
+		{
+			name: "America/New_York's 2026-11-01 runs 25 hours, ends at 2026-11-02T05:00Z and is decided 72 hours later",
+			h:    History{Zone: zone("America/New_York"), Name: "America/New_York"}, day: "2026-11-01", want: time.Date(2026, 11, 5, 5, 0, 0, 0, time.UTC),
+		},
+		{
+			// America/Santiago skips its midnight on 2027-09-05, so the
+			// 4th ends at 01:00 -03, 04:00Z.
+			name: "a day before a skipped midnight ends where the next date starts",
+			h:    History{Zone: zone("America/Santiago"), Name: "America/Santiago"}, day: "2027-09-04", want: time.Date(2027, 9, 8, 4, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "after a change from UTC to America/Los_Angeles, a day that had begun before it ends at the later of its ends, in Los Angeles",
+			h:    toLA, day: "2026-11-20", want: time.Date(2026, 11, 24, 8, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "after a change from UTC to Asia/Tokyo, a day that had begun before it ends at the later of its ends, in UTC",
+			h:    toTokyo, day: "2026-11-20", want: time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "a day that would have begun in the zone before after the change takes the new zone's bounds",
+			h:    toLA, day: "2026-11-21", want: time.Date(2026, 11, 25, 8, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "a day whose deadline had passed when the change came keeps its end in the zone before",
+			h:    toLA, day: "2026-11-16", want: time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "after two changes, a day before both keeps its end in the zone the first replaced",
+			h:    twice, day: "2026-11-10", want: time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "after two changes, a day between them takes the zone the first put in force",
+			h:    twice, day: "2026-12-15", want: time.Date(2026, 12, 19, 8, 0, 0, 0, time.UTC),
+		},
+		{
+			name: "after two changes, a day after both takes the zone now",
+			h:    twice, day: "2027-01-15", want: time.Date(2027, 1, 18, 15, 0, 0, 0, time.UTC),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.h.Deadline(tt.day, 72*time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !time.UnixMilli(got).Equal(tt.want) {
+				t.Errorf("Deadline(%s) = %v, want %v", tt.day, time.UnixMilli(got).UTC(), tt.want)
+			}
+		})
+	}
+}
+
+func TestCreditReached(t *testing.T) {
+	m := base
+	soon := time.Unix(m+120, 0)
+	need := int64(30_000)
+	tests := []struct {
+		name string
+		revs []revision
+		// until is how far the read goes.
+		until time.Time
+		// want is the credit returned, wantAt its time and wantReached
+		// whether it reached need.
+		want        Credit
+		wantAt      time.Time
+		wantReached bool
+	}{
+		{
+			name: "credit that reached the need and fell under it later is reached, with the credit and time of when it first did",
+			revs: []revision{
+				{bucket: bk("d1", m, 0, "final", nil, sl("p1", 10, "prompting", "A"), sl("p1", 10, "prompting", "A"), sl("p1", 10, "prompting", "A")).bucket, received: soon, label: event.Witnessed},
+				{bucket: bk("d2", m, 0, "final", nil, sl("p2", 15, "prompting", "C"), sl("p2", 15, "prompting", "C")).bucket, received: soon.Add(time.Hour), label: event.Offline},
+			},
+			until: soon.Add(2 * time.Hour), want: Credit{AMS: 30_000}, wantAt: soon, wantReached: true,
+		},
+		{
+			name: "credit that never reached the need is the credit as of the read's end",
+			revs: []revision{
+				{bucket: bk("d1", m, 0, "final", nil, sl("p1", 10, "prompting", "A")).bucket, received: soon, label: event.Witnessed},
+				{bucket: bk("d1", m+60, 0, "final", nil, sl("p1", 15, "prompting", "B")).bucket, received: soon.Add(time.Minute), label: event.Witnessed},
+			},
+			until: soon.Add(2 * time.Hour), want: Credit{AMS: 10_000, BMS: 15_000}, wantAt: soon.Add(2 * time.Hour),
+		},
+		{
+			name: "a pending revision's credit is reached when its minute ends PendingWindow before, not at its receipt",
+			revs: []revision{
+				{bucket: bk("d1", m, 0, "pending", nil, sl("p1", 15, "prompting", "A"), sl("p1", 15, "prompting", "A")).bucket, received: soon, label: event.Witnessed},
+			},
+			until: soon.Add(2 * time.Hour), want: Credit{AMS: 30_000}, wantAt: time.Unix(m+60, 0).Add(PendingWindow()), wantReached: true,
+		},
+		{
+			name: "a revision received after the read's end isn't reached",
+			revs: []revision{
+				{bucket: bk("d1", m, 0, "final", nil, sl("p1", 15, "prompting", "A"), sl("p1", 15, "prompting", "A")).bucket, received: soon.Add(3 * time.Hour), label: event.Witnessed},
+			},
+			until: soon.Add(2 * time.Hour), wantAt: soon.Add(2 * time.Hour),
+		},
+	}
+	for _, engine := range storetest.Engines() {
+		for _, tt := range tests {
+			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) {
+				db := newDB(t, engine, "u1")
+				storeRevisions(t, db, tt.revs)
+				got, at, reached, err := CreditReached(context.Background(), db.Read, "u1", "2026-11-20", tt.until.UnixMilli(), need)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got != tt.want || at != tt.wantAt.UnixMilli() || reached != tt.wantReached {
+					t.Errorf("CreditReached = %+v at %v, reached %v; want %+v at %v, reached %v",
+						got, time.UnixMilli(at).UTC(), reached, tt.want, tt.wantAt.UTC(), tt.wantReached)
+				}
+			})
+		}
 	}
 }
