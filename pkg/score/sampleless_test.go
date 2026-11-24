@@ -271,7 +271,9 @@ func TestSamplelessPower(t *testing.T) {
 				evening(b)
 				b.power(at(2400), event.PowerLock)
 				b.power(at(3000), event.PowerUnlock)
-				hooks(b, "s_1", "t_4", 1900, 4500)
+				// The hooks run on until the resume is rules.late old, so the
+				// unlock's wait for the sample taken with the resume ends.
+				hooks(b, "s_1", "t_4", 1900, 4800)
 				b.power(at(4200), event.PowerResume)
 			},
 			check: func(t *testing.T, batches [][]event.Event, outs []Output, one Derived) {
