@@ -39,7 +39,8 @@
       },
       "uncredited": {"X.agent_only": 20},
       "agent_running_s": 60,
-      "sm": "07:41"
+      "sm": "07:41",
+      "derived": ["agent_running_s"]
     },
     {
       "start": "2026-11-24T12:42:00Z",
@@ -53,7 +54,8 @@
       },
       "uncredited": {},
       "agent_running_s": 30,
-      "sm": "07:42"
+      "sm": "07:42",
+      "derived": ["agent_running_s"]
     },
     {
       "start": "2026-11-24T12:43:00Z",

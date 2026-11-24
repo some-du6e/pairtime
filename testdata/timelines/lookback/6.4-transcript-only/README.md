@@ -13,7 +13,7 @@ Jordan's night (SM 6.4) as lookback would read it from the Claude Code transcrip
 
 ## What the transcript holds
 
-The `/goal` prompt at 23:40:00, the agent's nine turns to 06:10:00, and the follow-up at 07:37:00. T2 to T9 are stop-hook continuations, which have no prompt and whose stops carry `stop_hook_active`, so SM 2.2 rule 2 labels them `self_continue` in lookback too. Every record arrives `via` `log`.
+The `/goal` prompt at 23:40:00, the agent's nine turns to 06:10:00, and the follow-up at 07:37:00. T2 to T9 are stop-hook continuations, whose stops carry `stop_hook_active`, so SM 2.2 rule 2 labels them `self_continue` in lookback too. They have no prompt, as the fixtures assume (the Turns convention in `../../README.md`). Every record arrives `via` `log`.
 
 Gone with the OS and git records: the lock at 23:53:10, the unlock at 07:30:00, Jordan's typing and scrolling, and the agent's 31 commits. The `bash` calls that made the commits are still there as tool calls.
 
