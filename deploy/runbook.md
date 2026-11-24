@@ -402,8 +402,6 @@ Before the native program pays out, the server moves to a Hetzner CCX13, or an A
 
 pairtimed listens on 8080, which only cloudflared reaches, and on 127.0.0.1:9091 inside its container for `/healthz`, `/readyz` and `/metrics`. compose publishes no port on the host. Never route the tunnel to 9091.
 
-Not deployed yet: the day roots (WP-SV17).
-
 The day roots are off by default: compose.yml leaves `PAIRTIME_WITNESS_REPO` empty and puts the witness sidecar behind the `witness` profile. To turn them on, add `PAIRTIME_WITNESS_REPO=some-du6e/pairtime-witness` and `COMPOSE_PROFILES=witness` to `.env` and run `docker compose up -d`. pairtimed then publishes every day since the first receipt, and the sidecar pushes them within 5 minutes, permanently, so do it only once the operator has agreed to publish the daily counts.
 
 `install.sh` and `install.ps1` at `https://<host>/` go live with the first image pinned after #240, which serves the release `ScriptsRelease` pins (Upgrades); until then the scripts are release assets. While the zone's bot protection is on (Two things to know first), the host's install lines can be challenged from data-center and VPN addresses, since curl and PowerShell send their own User-Agent, so give those users the release-asset lines. The first deploy that serves these paths runs `curl -fsSL https://<host>/install.sh` once from a data-center address, with curl's own User-Agent, and writes down here what Cloudflare answered.
