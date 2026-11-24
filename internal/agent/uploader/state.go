@@ -128,6 +128,10 @@ type saved struct {
 	Fork uint64 `json:"fork,omitempty"`
 	// Marks says how far each day's bucket file was uploaded, by day.
 	Marks map[string]store.Mark `json:"marks,omitempty"`
+	// CommitMarks says how far each day's file of commits/ was decided, by
+	// day: every line before a day's mark went, was withheld for good, or
+	// was passed over as a sha that went before (commitsOf).
+	CommitMarks map[string]store.Mark `json:"commit_marks,omitempty"`
 	// Labels is the hash of the labels the server last took, and LabelsAt
 	// when, in Unix ms.
 	Labels   string `json:"labels,omitempty"`
@@ -288,6 +292,35 @@ func (s saved) straddles(rows *rowIndex, minute int64) bool {
 	return false
 }
 
+// endsRun reports whether the moment m, in Unix ms, falls where a run of
+// batches sealed in local-only mode ended: after the run's last seal, and at
+// or before the end of the stretch it holds, the batch after it's
+// LocalUntil, by that batch's writer's clock no later than its own seal.
+// That is straddles' test for one moment rather than a minute
+// (D-ag5-D1). A commit observed then was seen while config.toml may still
+// have said local-only, though the first batch sealed after it is online.
+// A run whose next batch the rows don't hold yet ends nowhere yet: a moment
+// after its last seal has no batch sealed after it then.
+func (s saved) endsRun(rows *rowIndex, m int64) bool {
+	for _, g := range s.Gaps {
+		t, ok := rows.sealedAt(g.To)
+		if !ok {
+			continue
+		}
+		end, ok := rows.localUntil(g.To + 1)
+		if !ok {
+			continue
+		}
+		if sa, ok := rows.sealedAt(g.To + 1); ok {
+			end = min(end, sa)
+		}
+		if t < m && m <= end {
+			return true
+		}
+	}
+	return false
+}
+
 // mode records that batch b was sealed while config.toml's mode was local
 // (local) or online. The first batch sealed in local mode opens a run at
 // LocalFrom, and the first one sealed online after it closes the run into
@@ -390,16 +423,18 @@ type outbox struct {
 	// is noticed and a new request built instead.
 	Hash string `json:"hash"`
 	// Marks are the bucket marks once its buckets are answered, Sent what
-	// their credit rests on, and Labels the labels' hash when it carries
-	// them.
-	Marks  map[string]store.Mark `json:"marks,omitempty"`
-	Sent   map[int64]sentRev     `json:"sent,omitempty"`
-	Labels string                `json:"labels,omitempty"`
+	// their credit rests on, CommitMarks the commit marks once its commit
+	// records are, and Labels the labels' hash when it carries them.
+	Marks       map[string]store.Mark `json:"marks,omitempty"`
+	Sent        map[int64]sentRev     `json:"sent,omitempty"`
+	CommitMarks map[string]store.Mark `json:"commit_marks,omitempty"`
+	Labels      string                `json:"labels,omitempty"`
 }
 
 // clone returns a copy of s that shares nothing with it.
 func (s saved) clone() saved {
 	s.Marks = maps.Clone(s.Marks)
+	s.CommitMarks = maps.Clone(s.CommitMarks)
 	s.Harnesses = maps.Clone(s.Harnesses)
 	s.Offline = slices.Clone(s.Offline)
 	s.Gaps = slices.Clone(s.Gaps)
@@ -414,6 +449,7 @@ func (s saved) clone() saved {
 		o := *s.Outbox
 		o.Marks = maps.Clone(o.Marks)
 		o.Sent = maps.Clone(o.Sent)
+		o.CommitMarks = maps.Clone(o.CommitMarks)
 		s.Outbox = &o
 	}
 	return s

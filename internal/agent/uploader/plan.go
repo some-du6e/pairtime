@@ -34,6 +34,9 @@ type plan struct {
 	// answered, and sent what the pending minutes' credit rests on then.
 	marks map[string]store.Mark
 	sent  map[int64]sentRev
+	// commitMarks are commits/'s marks once the request's commit records
+	// are answered.
+	commitMarks map[string]store.Mark
 	// labels is the hash of the labels the request carries, "" when it
 	// carries none.
 	labels string
@@ -43,8 +46,10 @@ type plan struct {
 	// minute.
 	bumps map[int64]uint32
 	// unread lists the days whose bucket files couldn't be read: their
-	// lines wait, and the rest go.
-	unread []string
+	// lines wait, and the rest go. commitsUnread lists the days of commits/
+	// that couldn't be read, while which no commit record goes.
+	unread        []string
+	commitsUnread []string
 }
 
 // planInput is everything a plan is made from. The agent's uploader and
@@ -54,6 +59,9 @@ type planInput struct {
 	rows      *rowIndex
 	st        saved
 	bucketDir string
+	// commitDir is commits/, home.Dirs.Commits(), whose commit records go,
+	// and "" for none.
+	commitDir string
 	// lag is WITNESS_LAG_S, in ms.
 	lag int64
 	// labels go when set.
@@ -63,9 +71,9 @@ type planInput struct {
 	// after its clock (future_minute), as a device whose clock runs fast
 	// would send. 0 holds back nothing.
 	notAfter int64
-	// maxRoots and maxBuckets replace the spec's limits when set. Tests
-	// use them to split an upload.
-	maxRoots, maxBuckets int
+	// maxRoots, maxBuckets and maxCommits replace the spec's limits when
+	// set. Tests use them to split an upload.
+	maxRoots, maxBuckets, maxCommits int
 }
 
 // entry is one revision line a plan read from the bucket store: its day,
@@ -107,41 +115,53 @@ func creditHash(b store.Bucket) string {
 
 // makePlan makes the next request: the batch roots from st.Next on, unless
 // a fork stopped them, then every bucket revision after the marks whose
-// witness reading is known, and the labels when they go. It reads the
-// bucket store and never writes to it. A request over ingest-v1's limits
-// carries fewer items, and the rest go in the next one.
+// witness reading is known, the commit records that may go (commitsOf),
+// and the labels when they go. It reads the bucket store and commits/ and
+// never writes to them. A request over ingest-v1's limits carries fewer
+// items, and the rest go in the next one.
 func makePlan(in planInput) (plan, error) {
-	nRoots, nBuckets := in.maxRoots, in.maxBuckets
+	nRoots, nBuckets, nCommits := in.maxRoots, in.maxBuckets, in.maxCommits
 	if nRoots <= 0 {
 		nRoots = maxRoots
 	}
 	if nBuckets <= 0 {
 		nBuckets = maxBuckets
 	}
+	if nCommits <= 0 {
+		nCommits = maxCommits
+	}
 	roots, moreRoots := rootsOf(in, nRoots)
 	entries, days, unread, err := bucketsOf(in, nBuckets)
 	if err != nil {
 		return plan{}, err
 	}
-	more := moreRoots || bucketsIn(entries) == nBuckets
+	commits, commitDays, commitsUnread, moreCommits := commitsOf(in, nCommits)
+	more := moreRoots || bucketsIn(entries) == nBuckets || moreCommits
 	for {
-		p, err := assemble(in, roots, entries, days)
+		p, err := assemble(in, roots, entries, days, commits, commitDays)
 		if err != nil {
 			return plan{}, err
 		}
-		p.unread = unread
+		p.unread, p.commitsUnread = unread, commitsUnread
 		if len(p.raw) <= maxRaw && len(p.js) <= maxJSON {
 			p.more = more
 			return p, nil
 		}
 		more = true
-		// Too big: send half of the longer list now, the rest next.
-		nb := bucketsIn(entries)
+		// Too big: send half of the longest list now, the rest next. A
+		// commit record's batch root went before it (commitsOf), so its list
+		// halves on its own.
+		nb, nc := bucketsIn(entries), commitsIn(commits)
 		switch {
-		case nb > 1 && nb >= len(roots):
+		case nb > 1 && nb >= len(roots) && nb >= nc:
 			entries = firstBuckets(entries, nb/2)
+		case nc > 1 && nc >= len(roots):
+			commits = firstCommits(commits, nc/2)
 		case len(roots) > 1:
 			roots = roots[:len(roots)/2]
+		case nc == 1 && len(roots)+nb > 0:
+			// A record too large to go beside the rest goes alone next.
+			commits = firstCommits(commits, 0)
 		default:
 			return plan{}, errors.New("uploader: one item is too large for a request")
 		}
@@ -322,13 +342,30 @@ func firstBuckets(entries []entry, k int) []entry {
 	return entries
 }
 
-// assemble builds the request of roots, the buckets of entries and the
-// labels, and the marks its answer leaves. Marks of days the store no
-// longer has go.
-func assemble(in planInput, roots []Root, entries []entry, days map[string]bool) (plan, error) {
-	p := plan{body: Body{Batches: roots, Labels: in.labels}, marks: maps.Clone(in.st.Marks), sent: maps.Clone(in.st.Sent)}
+// assemble builds the request of roots, the buckets of entries, the
+// records of commits and the labels, and the marks its answer leaves. Marks
+// of days the stores no longer have go.
+func assemble(in planInput, roots []Root, entries []entry, days map[string]bool, commits []commitEntry, commitDays map[string]bool) (plan, error) {
+	p := plan{body: Body{Batches: roots, Labels: in.labels}, marks: maps.Clone(in.st.Marks), sent: maps.Clone(in.st.Sent),
+		commitMarks: maps.Clone(in.st.CommitMarks)}
 	if p.marks == nil {
 		p.marks = map[string]store.Mark{}
+	}
+	if p.commitMarks == nil {
+		p.commitMarks = map[string]store.Mark{}
+	}
+	if commitDays != nil {
+		maps.DeleteFunc(p.commitMarks, func(day string, _ store.Mark) bool { return !commitDays[day] })
+	}
+	for _, e := range commits {
+		if e.mark == (store.Mark{}) {
+			delete(p.commitMarks, e.day)
+		} else {
+			p.commitMarks[e.day] = e.mark
+		}
+		if e.commit != nil {
+			p.body.Commits = append(p.body.Commits, *e.commit)
+		}
 	}
 	if p.sent == nil {
 		p.sent = map[int64]sentRev{}
