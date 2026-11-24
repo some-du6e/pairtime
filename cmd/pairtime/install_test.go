@@ -1098,7 +1098,7 @@ func TestInstallCycle(t *testing.T) {
 			},
 			steps: func(t *testing.T, h *testHome, before map[string]string) {
 				h.mustRun("", "", 0, "install", "--yes")
-				pid := h.installed(true)
+				pid := h.installed(false)
 				// A name the teen gave a project this computer knows of, which
 				// project-names.json records, as only an online uploader writes
 				// it, and another computer's table in the shared config.toml.
@@ -1130,7 +1130,10 @@ func TestInstallCycle(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if strings.Contains(string(got), "robotics-club") || strings.Contains(string(got), "[projects."+wipeProjectKey+"]") || !strings.Contains(string(got), "[projects."+farProjectKey+"]\nname = \"far-away\"\n") {
+				// The default config.toml's comments show an example table, so
+				// the tables are read as the agent reads them.
+				cfg, _ := config.Parse(got)
+				if _, mine := cfg.Projects[wipeProjectKey]; mine || strings.Contains(string(got), "robotics-club") || !strings.Contains(string(got), "[projects."+farProjectKey+"]\nname = \"far-away\"\n") {
 					t.Errorf("the shared config.toml is\n%s\nwant this computer's table gone and the other computer's kept", got)
 				}
 				if _, err := os.Lstat(h.dirs.Config); err == nil {
