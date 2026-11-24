@@ -90,6 +90,8 @@ The account's build days as of the request, which the local Build days page mirr
 
 The weekly goal is `WEEKLY_GOAL_DEFAULT` until WP-SV12 part 2 adds its setter, and a week keeps the goal it was decided by.
 
+While the account's calibration flag is on, and until the server scores at 1.0.0 (D-server-shadow; DESIGN 6.7 step 2), the answer holds nothing that comes of credited time and says so with `"calibrating": true`. It leaves out `build_days`, `weeks_in_a_row`, `freezes.held`, `freezes.earned` and `freezes.toward_next`, and each day's `state`, `a_ms`, `b_ms` and `decided_at`, and each week's `result` and `build_days`. It keeps `time_zone`, `today`, `weekly_goal`, `window_days`, `freezes.max` and `freezes.every`, each day's `date` and `deadline`, and each week's `start` and `goal`. The hidden fields are absent, not 0, as the local API's credited fields are while `shadow` is true (docs/api/local.openapi.yaml, Shadow). `calibrating` is absent for every other account.
+
 ## 7. On the server
 
 Migration 0011 creates the tables. Their periods are DESIGN 4.4's rows, in docs/retention.json:

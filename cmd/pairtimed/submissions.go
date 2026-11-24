@@ -3,12 +3,14 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/auth"
 	"github.com/some-du6e/pairtime/internal/server/config"
 	"github.com/some-du6e/pairtime/internal/server/device"
+	"github.com/some-du6e/pairtime/internal/server/shadow"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/submission"
 	"github.com/some-du6e/pairtime/internal/server/writer"
@@ -44,6 +46,11 @@ func newSubmissions(cfg *config.Config, db *store.DB, w *writer.Writer, devices 
 		ScoringVersion: scoring,
 		Params:         paramsHash,
 		Fingerprints:   submission.NoFingerprints{},
-		Logger:         logger,
+		// A calibration volunteer's teen views keep totals null while
+		// the flag hides their credited time (D-server-shadow).
+		Hides: func(ctx context.Context, q submission.Querier, account string) (bool, error) {
+			return shadow.Hides(ctx, q, account, builtinScoring)
+		},
+		Logger: logger,
 	})
 }

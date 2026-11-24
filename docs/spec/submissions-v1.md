@@ -191,7 +191,7 @@ What the account sees of its own submission, on the web and on each of its compu
 | `created_at`, `updated_at` | When it was made and last changed (7) |
 | `frozen_at`, `metadata_revealed_at`, `challenged_at`, `decided_at`, `withdrawn_at`, `revoked_at` | When it last reached each of those states, or `null` |
 | `review_url` | `<base_url>/review/submissions/<id>`, which tier 0 pastes into a program's form |
-| `totals` | `null` until WP-SB4's re-score fills it |
+| `totals` | `null` until WP-SB4's re-score fills it. While the account's calibration flag hides its credited time (D-server-shadow), the account's teen views keep it `null` whatever the re-score gives |
 
 No teen view holds a risk flag.
 

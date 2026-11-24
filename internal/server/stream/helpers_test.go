@@ -232,6 +232,9 @@ type viewSource struct {
 	you, agent atomic.Int64
 	calls      atomic.Int32
 	fail       atomic.Bool
+	// calibrating turns the account's calibration flag on: its Views are
+	// dashboard.Calibrate's (D-server-shadow).
+	calibrating atomic.Bool
 }
 
 func (s *viewSource) View(_ context.Context, account string, now time.Time) (dashboard.View, error) {
@@ -244,12 +247,16 @@ func (s *viewSource) View(_ context.Context, account string, now time.Time) (das
 		{Day: today, Project: "p1", Kind: "prompting", Level: "A", Seconds: float64(s.you.Load())},
 		{Day: today, Project: "p1", Agent: true, Seconds: float64(s.agent.Load())},
 	}
-	return dashboard.Build(dashboard.Meta{
+	v, err := dashboard.Build(dashboard.Meta{
 		AsOf: now, TZ: "UTC", Today: today, Agent: dashboard.AgentName,
 		Names:  map[string]string{"p1": "Silver Fox"},
 		Labels: map[string]string{"p1": "secret-name"},
 		Keys:   map[string][]string{"p1": {"k_device_key"}},
 	}, rows)
+	if err != nil || !s.calibrating.Load() {
+		return v, err
+	}
+	return dashboard.Calibrate(v), nil
 }
 
 // fakeProfiles serves one public profile of account "a1", named "rowan"

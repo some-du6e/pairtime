@@ -86,6 +86,13 @@
 // tried again the same way for its publication, and after maxReadRetries
 // its streams end, so each reconnects and gets resync (profile.go).
 //
+// While an account's calibration flag is on, its View is calibrating, and
+// its topic sends resync in place of every credited event, so no event
+// carries the owner's seconds (D-server-shadow). Each read that finds the
+// flag also drops the events the topic's ring holds, so a reconnect from
+// before then gets resync rather than a replay of credited events from
+// before the flag, and each page refetches the view, which hides them.
+//
 // Publishing never blocks: an event goes to each stream's buffer without
 // waiting, and a stream whose buffer is full has fallen behind, so the hub
 // ends it. Its browser reconnects with its last id and gets the gap from

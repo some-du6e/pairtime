@@ -110,7 +110,7 @@
     {
       "id": "server.account",
       "where": "server",
-      "data": "Your account: your Hack Club Auth ID, Slack ID and handle, your email address (stored encrypted, with a keyed hash so a deletion request can find it), whether Hack Club Auth has verified you and says you're eligible for its programs, when you signed up and last signed in, the time zone your dashboard counts your days in, with the time of each change you made to it and the zone it changed from, and your GitHub user ID if you link GitHub",
+      "data": "Your account: your Hack Club Auth ID, Slack ID and handle, your email address (stored encrypted, with a keyed hash so a deletion request can find it), whether Hack Club Auth has verified you and says you're eligible for its programs, when you signed up and last signed in, the time zone your dashboard counts your days in, with the time of each change you made to it and the zone it changed from, your GitHub user ID if you link GitHub, and, if you volunteer for the scoring's calibration, that an operator marked your account for it and since when, until the calibration ends",
       "kept": "While your account exists",
       "tables": ["users", "zone_changes"]
     },

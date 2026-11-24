@@ -14,11 +14,11 @@
 // the window has passed (D-server-settles-pending).
 //
 // The server can't see display.shadow, SM 7.5's calibration week: no
-// tier-1 field carries it, so a real dashboard shows credited time
-// whatever the device's setting says. D-shadow-scope hides it on the
-// device's own views. On the server an account flag the operator sets
-// will carry it, before 2026-12-01 (D-server-shadow); until then the
-// dashboard ignores shadow mode.
+// tier-1 field carries it. An operator sets an account flag for each
+// calibration volunteer instead (D-server-shadow; package shadow), and
+// while it hides the account's credited time, the account's View is
+// Calibrating: it hides what D-shadow-scope hides on the device's own
+// views (Calibrate).
 package dashboard
 
 import (
@@ -45,6 +45,10 @@ type View struct {
 	// Sample is true for /demo's made-up data. A page that shows a sample
 	// says so on the page itself.
 	Sample bool `json:"sample"`
+	// Calibrating says the account is a calibration volunteer's whose
+	// flag is on, so the view holds the agent's time alone, and the JSON
+	// leaves out every field Calibrate hides (D-server-shadow).
+	Calibrating bool `json:"calibrating,omitempty"`
 	// AsOf is when the view was read.
 	AsOf time.Time `json:"as_of"`
 	// TZ is the IANA time zone the days are counted in, the account's.

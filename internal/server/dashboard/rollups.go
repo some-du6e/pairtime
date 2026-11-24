@@ -8,6 +8,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/server/projectnames"
 	"github.com/some-du6e/pairtime/internal/server/rollup"
+	"github.com/some-du6e/pairtime/internal/server/shadow"
 	"github.com/some-du6e/pairtime/pkg/projectname"
 )
 
@@ -23,6 +24,10 @@ const AgentName = "your agent"
 type Rollups struct {
 	// DB is where to read, store.DB.Read.
 	DB rollup.Querier
+	// Scoring is the scoring version the server runs
+	// (pages.BuiltinScoringVersion): an account's calibration flag hides
+	// its credited time only while it is below 1.0.0 (shadow.Hides).
+	Scoring string
 }
 
 // View returns the account's last MonthDays local days as of now. Its
@@ -30,9 +35,14 @@ type Rollups struct {
 // (D-account-project-id), each called by the short code of its first
 // device key (projectname.ShortCodes). Until project registration (WP-SV10) links the
 // keys of one repo, each device's key is a project of its own, and the
-// view says so.
+// view says so. While the account's calibration flag hides its credited
+// time, the view is Calibrate's (D-server-shadow).
 func (r Rollups) View(ctx context.Context, account string, now time.Time) (View, error) {
 	zone, name, err := rollup.Zone(ctx, r.DB, account)
+	if err != nil {
+		return View{}, err
+	}
+	hidden, err := shadow.Hides(ctx, r.DB, account, r.Scoring)
 	if err != nil {
 		return View{}, err
 	}
@@ -89,13 +99,17 @@ func (r Rollups) View(ctx context.Context, account string, now time.Time) (View,
 				Row{Day: day.Day, Project: id, Kind: day.Kind, Level: level, Pending: true, Seconds: seconds(day.PendingMS[i])})
 		}
 	}
-	return Build(Meta{
+	v, err := Build(Meta{
 		AsOf: now, TZ: name, Today: today.Format(DateLayout), Agent: AgentName,
 		Names: names, Codes: codes, Labels: labels, Keys: keys,
 		// TODO(WP-SV10): false once registration links the keys of one
 		// repo across devices.
 		SplitByDevice: true,
 	}, rows)
+	if err != nil || !hidden {
+		return v, err
+	}
+	return Calibrate(v), nil
 }
 
 // seconds turns milliseconds into seconds. Credit moves in steps of half
