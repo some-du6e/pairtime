@@ -42,7 +42,9 @@ type RelayRecord struct {
 	Origin event.Origin `json:"origin,omitempty"`
 	// decided is when the record stops changing: when it paired, or, for
 	// one that hasn't, once RELAY_MATCH_S after its stamp has passed and no
-	// prompt can pair with it any more.
+	// prompt can pair with it any more. One that wasn't decided in time for
+	// its stamp (decidedInTime) can pair with no prompt, so it is decided
+	// when it is written.
 	decided int64
 }
 
@@ -140,14 +142,30 @@ func (d *deriver) pairRelays() {
 // reader, the only prompts a relay record can witness (DESIGN 5.2); the
 // record's session is the prompt's, or none when the reader didn't know
 // it; the prompt came no earlier than the message's stamp and at most
-// RELAY_MATCH_S after it; and the record came at most RELAY_SEEN_LAG_S
-// after the stamp, which turns away rows the app imported or a script
-// wrote with an old stamp.
+// RELAY_MATCH_S after it; and the record was decided in time for its stamp
+// (decidedInTime).
 func (d *deriver) pairs(r *relayRec, pi int) bool {
 	re, pe := d.recs[r.pos], d.recs[pi]
 	sent := r.d.SentAt
 	return nativeVia(pe.Via) && (re.SessionKey == event.NoSession || re.SessionKey == pe.SessionKey) &&
-		sent <= pe.T && pe.T-sent <= d.r.relayMatch && re.T-sent <= d.r.relaySeenLag
+		sent <= pe.T && pe.T-sent <= d.r.relayMatch && d.r.decidedInTime(re.T, sent)
+}
+
+// relayAheadMS is how much later than the read that decided its message an
+// app's stamp may be (SM 2.2, What witnesses a prompt). The app's server
+// and the agent run on one machine under one clock (D-relayed), so a later
+// stamp comes from a row written by hand or a clock stepped back, and the
+// reader refuses the row.
+const relayAheadMS = 2_000
+
+// decidedInTime reports whether a relay record written at t, when the
+// reader decided its message, came in time for the message's stamp sent
+// (SM 2.2): at most RELAY_SEEN_LAG_S after it, which turns away rows the
+// app imported or a script wrote with an old stamp, and at most
+// relayAheadMS before it. The reader holds itself to both, and the scorer
+// repeats them, so a client that skips them pairs nothing by it.
+func (r rules) decidedInTime(t, sent int64) bool {
+	return t-sent <= r.relaySeenLag && sent-t <= relayAheadMS
 }
 
 // turnRelay returns the relay record a turn's prompt paired with: its
@@ -209,6 +227,9 @@ func (d *deriver) relayRecords() []RelayRecord {
 		e := d.recs[r.pos]
 		rr := RelayRecord{ID: e.EventID, T: e.T, SentAt: r.d.SentAt, SessionKey: e.SessionKey,
 			ThreadKey: r.d.ThreadKey, Declared: r.d.Declared, decided: max(e.T, r.d.SentAt+d.r.relayMatch)}
+		if !d.r.decidedInTime(e.T, r.d.SentAt) {
+			rr.decided = e.T
+		}
 		if r.prompt >= 0 {
 			pe := d.recs[r.prompt]
 			rr.Prompt, rr.decided = pe.EventID, max(e.T, pe.T)
@@ -229,15 +250,15 @@ func (d *deriver) relayRecords() []RelayRecord {
 // COMPOSE_MAX_S, and a prompt rules 6 and 7 make typed at the stamp has a
 // prompt's lead, think part included, so the hold covers the longest lead a
 // prompt can have, ending at the stamp. A record that came more than
-// RELAY_SEEN_LAG_S after its stamp can pair with nothing and holds nothing.
-// A pairing that comes after its lead's minutes are final changes nothing
-// in them.
+// RELAY_SEEN_LAG_S after its stamp, or more than relayAheadMS before it,
+// can pair with nothing and holds nothing (decidedInTime). A pairing that
+// comes after its lead's minutes are final changes nothing in them.
 func (d *deriver) relayHolds() []int64 {
 	var out []int64
 	lead := max(d.r.thinkLead, d.r.answerLead, d.r.lowLead) + d.r.composeMax
 	for _, r := range d.relays {
 		sent := r.d.SentAt
-		if r.prompt >= 0 || r.d.Declared != event.RelayDeclaredNone || d.recs[r.pos].T-sent > d.r.relaySeenLag ||
+		if r.prompt >= 0 || r.d.Declared != event.RelayDeclaredNone || !d.r.decidedInTime(d.recs[r.pos].T, sent) ||
 			d.now > sent+d.r.relayMatch {
 			continue
 		}

@@ -4,9 +4,10 @@
 // 3.3). It samples the OS's input idle time into os.presence records and
 // turns suspend, resume, lock and unlock into os.power records, but only
 // while a project context is live: a harness session process is running,
-// or a terminal, editor or agent app had focus in the last 600 s. Outside
-// one, nothing is sampled or recorded, so pairtime never records general
-// computer use (D14).
+// other than one whose parent_class is agent_app, an agent app that drives
+// harness sessions is running, or a terminal, editor or agent app had
+// focus in the last 600 s. Outside one, nothing is sampled or recorded, so
+// pairtime never records general computer use (D14).
 //
 // In a context it samples on every 15-second slot boundary of the wall
 // clock (:00, :15, :30, :45), because SM 2.1 decides each slot's input
@@ -14,7 +15,11 @@
 // running agent turn, on every minute boundary. Those three numbers are
 // SAMPLE_S, CONTEXT_IDLE_S and SLOW_SAMPLE_S from the parameter table
 // (pkg/params). Any hook, focus or power event takes a sample at once, so
-// the 10 s check before a prompt (SM 2.2 rule 6) always has data. Idle
+// the 10 s check before a prompt (SM 2.2 rule 6) always has data. A
+// context that only a running agent app keeps live, with no other sign of
+// a project context, is sampled on every minute boundary whatever the
+// input, and focus changes in it take no sample and write no record
+// (D-relayed-context, as #225 amended it; Status.AppOnly). Idle
 // APIs return the time since the last input, so a sample after a pause
 // reconstructs the gap exactly, and gaps come from wall-clock values,
 // never from time.Since (CP 2.2).
@@ -23,8 +28,9 @@
 // Windows. On macOS and Linux presence shares one connection to the OS
 // with the focus component, so the agent opens it and builds the sources
 // with MacOS or LinuxOS (WP-OS9). The focus watcher (WP-OS2), the process
-// scanner (WP-OS6) and the hook path (WP-AG3) report to a Sampler through
-// FocusAt, HarnessProcesses and Hook.
+// scanner (WP-OS6), the hook path (WP-AG3) and the apps component (WP-ADE1)
+// report to a Sampler through FocusAt, HarnessProcesses, Hook and
+// AgentApps.
 package presence
 
 import (
@@ -181,9 +187,9 @@ func New(opts Options) *Sampler {
 
 // Start starts the power watches, reads the session's lock state and
 // starts sampling. A source that fails is reported through
-// Options.Problem, and the sampler carries on without it. Focus, Hook and
-// HarnessProcesses may come before Start: the gate keeps what they report,
-// and sampling starts with Start.
+// Options.Problem, and the sampler carries on without it. Focus, Hook,
+// HarnessProcesses and AgentApps may come before Start: the gate keeps
+// what they report, and sampling starts with Start.
 //
 // With no idle source, presence is unknown (SM 2.1), so Start starts the
 // power watches and nothing else: nothing is sampled or recorded, but every
@@ -228,7 +234,9 @@ func (s *Sampler) Start() {
 	}
 	s.started = true
 	s.mu.Unlock()
-	// A context that went live before Start gets its first sample now.
+	// A context that went live before Start gets its first sample now, or
+	// on the next minute boundary when a running agent app alone keeps it
+	// live (update).
 	s.update(func(time.Time) {}, false)
 }
 
@@ -278,7 +286,8 @@ func (s *Sampler) Stop() {
 // Focus reports that an app of class c took focus. A terminal, editor or
 // agent app makes a project context live, and it stays live for
 // ContextWindow after one loses focus. A live context takes a sample at
-// once.
+// once, unless a running agent app alone keeps it live once the gate has
+// heard of the change (FocusAt, Status.AppOnly).
 func (s *Sampler) Focus(c event.AppClass) {
 	s.FocusAt(time.Now(), c, nil)
 }
@@ -287,11 +296,18 @@ func (s *Sampler) Focus(c event.AppClass) {
 // focus component writes an os.focus record of each one (WP-OS2). at is
 // when the change was seen, from time.Now. Under the sampler's lock the
 // gate hears the change, then write, unless it is nil, gets the time the
-// change is dated and whether a project context is live, and then a live
-// context takes its sample, dated that same time. So the caller's record
-// and the sample share a millisecond, with the sample after the record,
-// as the scorer expects of a sample taken at an event
+// change is dated and whether the caller may record it, and then, if it
+// may, the change takes its sample, dated that same time. So the caller's
+// record and the sample share a millisecond, with the sample after the
+// record, as the scorer expects of a sample taken at an event
 // (testdata/timelines/README.md).
+//
+// The caller may record a change while a project context is live, unless
+// a running agent app alone keeps it live once the gate has heard of the
+// change (Status.AppOnly): then pairtime records nothing about the window
+// in front, and the change takes no sample (D-relayed-context). Focus on a
+// terminal, editor or agent app, T3 Code's window among them, is a sign of
+// work of its own, so its change is recorded.
 //
 // The change is dated at, or at the time of the latest record if that is
 // later, so records never go back in time. The sample reads the idle time
@@ -313,7 +329,7 @@ func (s *Sampler) FocusAt(at time.Time, c event.AppClass, write func(at time.Tim
 	}
 	now := time.Now()
 	s.g.focus(wall(now), c)
-	live := s.g.interval(wall(now)) != 0
+	live := s.g.interval(wall(now)) != 0 && !s.g.appOnly(wall(now))
 	if write != nil {
 		write(at, live)
 		s.recAt = at
@@ -331,7 +347,9 @@ func (s *Sampler) FocusAt(at time.Time, c event.AppClass, write func(at time.Tim
 // with key session (an opaque key, or "" when the message names none). It
 // makes a project context live, starts a turn on a prompt, a tool call or a
 // permission request, and ends it on a stop, an interrupt or a session end.
-// A live context takes a sample at once.
+// A live context takes a sample at once, unless a running agent app alone
+// keeps it live after the hook, as after the end of a session the gate
+// never heard from (Status.AppOnly).
 func (s *Sampler) Hook(session string, k event.Kind) {
 	s.update(func(now time.Time) { s.g.hook(now, session, k) }, true)
 }
@@ -348,9 +366,28 @@ func (s *Sampler) Forget(session string) {
 
 // HarnessProcesses reports how many harness session processes are
 // running, as the process scanner counted them. Any makes a project
-// context live.
+// context live. The scanner leaves out those whose parent_class is
+// agent_app, as T3 Code's server's are, for AgentApps to cover: the
+// Claude Code T3 keeps running in a thread between its runs is no sign of
+// work on this computer (procs.Options.Running).
 func (s *Sampler) HarnessProcesses(n int) {
 	s.update(func(time.Time) { s.g.setProcs(n) }, false)
+}
+
+// AgentApps reports how many agent apps that drive harness sessions are
+// running, as the apps component found them: for T3 Code, its server, which
+// the agent's process scan finds while the store it holds open has its
+// -wal and -shm files, and only while T3 Code's reader can read that store,
+// with a sqlite3 that has JSON functions and a schema the probe passes (the
+// agent's appRuns; DESIGN 3.3). Any makes a project context live, as a
+// harness session process does. A message from the app's phone or web
+// client credits minutes before it and after it, and without samples there
+// the scorer would read them as slept through (D-relayed-context). With no
+// other sign of a context, the app's context is sampled once a minute
+// whatever the input, starting at the next minute boundary, and records no
+// focus change (Status.AppOnly).
+func (s *Sampler) AgentApps(n int) {
+	s.update(func(time.Time) { s.g.setApps(n) }, false)
 }
 
 // Power reports a suspend, resume, lock or unlock. The OS's watcher calls
@@ -393,6 +430,11 @@ func (s *Sampler) Power(op event.PowerOp) {
 type Status struct {
 	// Live is set while a project context is live.
 	Live bool
+	// AppOnly is set while a running agent app alone keeps the context live,
+	// with no other sign of one (D-relayed-context, as #225 amended it): the
+	// sampler samples once a minute whatever the input, and the focus
+	// component records nothing about the window in front.
+	AppOnly bool
 	// Every is the current cadence; 0 outside a context.
 	Every   time.Duration
 	Locked  bool
@@ -409,8 +451,9 @@ type Status struct {
 func (s *Sampler) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	every := s.g.interval(wall(time.Now()))
-	return Status{Live: every != 0, Every: every, Locked: s.locked, Samples: s.samples,
+	now := wall(time.Now())
+	every := s.g.interval(now)
+	return Status{Live: every != 0, AppOnly: s.g.appOnly(now), Every: every, Locked: s.locked, Samples: s.samples,
 		Watching: s.watchingList(), Problems: s.problemList()}
 }
 
@@ -427,8 +470,13 @@ func (s *Sampler) watchingList() []string {
 }
 
 // update applies change to the gate, takes a sample at once if a context
-// is live and either sampleNow is set or the context has just gone live,
-// and re-arms the timer for the cadence that follows.
+// is live and either sampleNow is set, the context has just gone live, or
+// a sign of work has just ended a context a running agent app alone kept
+// live, and re-arms the timer for the cadence that follows. A context a
+// running agent app alone keeps live takes its first sample on the next
+// minute boundary, as its every sample is (appOnly). A harness process the
+// scan finds in such a context brings SAMPLE_S back with a sample at once,
+// as a hook or a project app's focus does (D-relayed-sleep).
 func (s *Sampler) update(change func(now time.Time), sampleNow bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -436,12 +484,12 @@ func (s *Sampler) update(change func(now time.Time), sampleNow bool) {
 		return
 	}
 	now := time.Now()
-	wasLive := s.every != 0
+	wasLive, wasAppOnly := s.every != 0, s.g.appOnly(wall(now))
 	change(wall(now))
 	if !s.started {
 		return
 	}
-	if s.g.interval(wall(now)) != 0 && (sampleNow || !wasLive) {
+	if s.g.interval(wall(now)) != 0 && (sampleNow || !wasLive || wasAppOnly) && !s.g.appOnly(wall(now)) {
 		s.sample(now, true)
 	}
 	s.arm(now)

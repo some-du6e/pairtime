@@ -102,8 +102,102 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: sqlite3 for the T3 Code reader's tests
+        # internal/adapters/t3code's tests build T3 Code stores with the
+        # sqlite3 tool and read them with it, as the reader does (DESIGN
+        # 5.1), and fail in CI without it. The client links no SQLite.
+        run: |
+          if ! command -v sqlite3 >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sqlite3
+          fi
+          sqlite3 --version
+
       - name: go test
         run: go test ./...
+
+      - name: The T3 Code reader with old distributions' sqlite3
+        if: ${{ !cancelled() }}
+        # The reader runs whatever sqlite3 the computer has (DESIGN 5.1), and
+        # Ubuntu 20.04's 3.31 and Debian 11's 3.34 are the oldest it expects.
+        # This builds the reader's test binary without cgo, as the client is
+        # built, and runs it in each distribution's image with that
+        # distribution's own sqlite3, which the tests build and read every
+        # store with; CI=1 makes a missing sqlite3 fail them. The whole tree
+        # is mounted read-only, since TestCapture replays T3 Code's capture
+        # from testdata/fixtures/t3_code. A sqlite3 there without JSON
+        # functions fails the step: doctor's no-JSON line must then say how
+        # to get one that has them on that distribution
+        # (docs/errata/2026-11-23-t3-reader.md, Q5).
+        env:
+          # 20.04 (focal), 2025-04-08; 11 (bullseye), 2026-08-24.
+          UBUNTU: ubuntu:20.04@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214
+          DEBIAN: debian:11@sha256:6f519a81440354a85eb592c5f32109ab80605f6b892455983a6f618bf87fabe9
+        run: |
+          go test -c -o "$RUNNER_TEMP/t3code.test" ./internal/adapters/t3code
+          cat > "$RUNNER_TEMP/t3code-in-distro.sh" <<'EOF'
+          set -eu
+          export DEBIAN_FRONTEND=noninteractive
+          . /etc/os-release
+          sources() {
+            for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
+              [ -f "$f" ] || continue
+              sed -i "$@" "$f"
+            done
+          }
+          archive() {
+            # A release past its support moves to its distribution's archive.
+            sources -e 's#http://deb.debian.org#http://archive.debian.org#g' \
+              -e 's#http://security.debian.org#http://archive.debian.org#g' \
+              -e 's#http://archive.ubuntu.com#http://old-releases.ubuntu.com#g' \
+              -e 's#http://security.ubuntu.com#http://old-releases.ubuntu.com#g' \
+              -e '/-updates/d'
+            apt-get -o Acquire::Check-Valid-Until=false update -qq
+          }
+          install() { apt-get install -y -qq --no-install-recommends sqlite3 >/dev/null; }
+          if ! apt-get update -qq; then
+            archive
+          fi
+          if ! install; then
+            # Its security suite can leave the mirror first, with its index
+            # still listing packages that are gone, as Debian 11's did after
+            # its LTS ended. Then the release's own sqlite3, without the
+            # security suite and the updates, is the one to test.
+            sources -e '/-security/d' -e '/-updates/d'
+            if ! { apt-get update -qq && install; }; then
+              archive
+              install
+            fi
+          fi
+          echo "$PRETTY_NAME, sqlite3 $(sqlite3 --version)"
+          if ! echo "SELECT json('{}');" | sqlite3 >/dev/null 2>&1; then
+            echo "::error::$PRETTY_NAME's sqlite3 has no JSON functions, so doctor's no-JSON line must say how to get one that has them there (docs/errata/2026-11-23-t3-reader.md, Q5)"
+            exit 1
+          fi
+          /t3code.test -test.count=1 -test.timeout=6m
+          EOF
+          run() {
+            docker run --rm -e CI=1 \
+              -v "$RUNNER_TEMP/t3code.test:/t3code.test:ro" \
+              -v "$RUNNER_TEMP/t3code-in-distro.sh:/t3code-in-distro.sh:ro" \
+              -v "$PWD:/repo:ro" -w /repo/internal/adapters/t3code \
+              "$2" sh /t3code-in-distro.sh >"$RUNNER_TEMP/t3code-$1.log" 2>&1
+          }
+          run ubuntu "$UBUNTU" & ubuntu=$!
+          run debian "$DEBIAN" & debian=$!
+          fail=0
+          for d in ubuntu debian; do
+            code=0
+            wait "${!d}" || code=$?
+            echo "::group::$d"
+            cat "$RUNNER_TEMP/t3code-$d.log"
+            echo "::endgroup::"
+            if [ "$code" -ne 0 ]; then
+              echo "::error::the T3 Code reader's tests failed on $d with its own sqlite3 (exit $code)"
+              fail=1
+            fi
+          done
+          exit "$fail"
 
       - name: IPC against a second user, as root
         if: ${{ !cancelled() }}
@@ -216,16 +310,17 @@ jobs:
         # which picks its store by OS (WP-OS7), the notifier, whose backends
         # call internal/platform's balloon, osascript and D-Bus code (WP-OS8),
         # the focus component's per-OS sources and their tests (WP-OS2), and
-        # the peer-process check, which calls each OS's connection lookup
-        # (WP-OS13).
-        # The desktop tests, which build with -tags desktop on Linux alone,
-        # are vetted in the Desktop test files step. The Windows and macOS
-        # tests themselves run in platform.yml.
+        # the T3 Code reader, which starts sqlite3 at low priority per OS
+        # (WP-ADE1), and the peer-process check, which calls each OS's
+        # connection lookup (WP-OS13). The desktop tests, which build with
+        # -tags desktop on Linux alone, are vetted in the Desktop test files
+        # step. The Windows and macOS tests themselves run in platform.yml.
         if: ${{ !cancelled() }}
         run: |
+          pkgs="./internal/platform/... ./internal/agent/procs/... ./internal/agent/keys/... ./internal/agent/notifier/... ./internal/agent/focus/... ./internal/agent/peer/... ./internal/adapters/t3code/..."
           for target in windows/amd64 windows/386 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
-            echo "go vet ./internal/platform/... ./internal/agent/procs/... ./internal/agent/keys/... ./internal/agent/notifier/... ./internal/agent/focus/... ./internal/agent/peer/... for $target"
-            GOOS=${target%/*} GOARCH=${target#*/} go vet ./internal/platform/... ./internal/agent/procs/... ./internal/agent/keys/... ./internal/agent/notifier/... ./internal/agent/focus/... ./internal/agent/peer/...
+            echo "go vet $pkgs for $target"
+            GOOS=${target%/*} GOARCH=${target#*/} go vet $pkgs
           done
 
       - name: HCA sign-in against an independent OIDC server

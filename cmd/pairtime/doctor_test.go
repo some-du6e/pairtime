@@ -39,12 +39,13 @@ func swap[T any](t *testing.T, p *T, v T) {
 	t.Cleanup(func() { *p = old })
 }
 
-// newDoctorHome is newHome on a computer where doctor finds no harness, so
-// the tests of the agent's lines never read the settings or run the hooks
-// of the machine they run on.
+// newDoctorHome is newHome on a computer where doctor finds no harness and
+// no T3 Code, so the tests of the agent's lines never read the settings or
+// run the hooks of the machine they run on.
 func newDoctorHome(t *testing.T) fakeHome {
 	t.Helper()
 	swap(t, &doctorHooks, func() []doctor.Hooks { return nil })
+	swap(t, &doctorT3, func() doctor.T3Facts { return doctor.T3Facts{} })
 	swap(t, &doctorRoundTrips, func(string, string, int) ([]time.Duration, error) {
 		t.Error("doctor timed a hook with none installed")
 		return nil, errors.New("no hook")
@@ -1080,6 +1081,7 @@ func TestDoctorOfARealAgent(t *testing.T) {
 	})
 	waitForAgent(t, ptHome)
 	swap(t, &doctorHooks, func() []doctor.Hooks { return nil })
+	swap(t, &doctorT3, func() doctor.T3Facts { return doctor.T3Facts{} })
 	swap(t, &doctorReportSpan, 2*time.Second)
 	// The report times this binary's start as pairtime's. Set only now:
 	// the agent's process took its own runEnv, and the first one in an
@@ -1178,6 +1180,138 @@ func TestDoctorHookLine(t *testing.T) {
 			}
 			if code != tt.wantCode {
 				t.Errorf("doctor exits %d, want %d", code, tt.wantCode)
+			}
+		})
+	}
+}
+
+// TestDoctorT3Facts runs readDoctorT3 on a home folder of the test's own:
+// it finds T3 Code's store where the agent looks for it, and counts the
+// Claude instances T3 runs Claude Code in with a Claude home of their own
+// whose settings hold none of pairtime's hooks (DESIGN 5.1, 5.9), and checks
+// the home T3's background service sets with CLAUDE_CONFIG_DIR the same way
+// (Q13 of #225), on Linux and macOS, where the service has an environment.
+func TestDoctorT3Facts(t *testing.T) {
+	const hook = `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"/opt/pairtime/pairtime",` +
+		`"args":["hook","--harness","claude_code","--event","UserPromptSubmit"]}]}]}}`
+	const instances = `{"providerInstances":{` +
+		`"own":{"driver":"claudeAgent","config":{"homePath":"~/claude-own"}},` +
+		`"hooked":{"driver":"claudeAgent","config":{"homePath":"~/claude-hooked"}},` +
+		`"default":{"driver":"claudeAgent","config":{"homePath":"~/.claude"}}}}`
+	// T3's background service as a person edited it to set CLAUDE_CONFIG_DIR
+	// to ~/claude-service: its systemd unit on Linux, its launchd plist on
+	// macOS (T3 d8f3feff, bootService.ts), and an instance with that home.
+	const (
+		serviceUnit  = ".config/systemd/user/t3code.service"
+		servicePlist = "Library/LaunchAgents/com.t3tools.t3code.service.plist"
+		editedUnit   = "[Service]\nEnvironment=T3CODE_HOME=%h/.t3\nEnvironment=CLAUDE_CONFIG_DIR=%h/claude-service\nExecStart=/opt/t3/bin/t3 serve\n"
+		editedPlist  = `<?xml version="1.0" encoding="UTF-8"?>` + "\n" + `<plist version="1.0"><dict><key>EnvironmentVariables</key><dict>` +
+			`<key>T3CODE_HOME</key><string>~/.t3</string><key>CLAUDE_CONFIG_DIR</key><string>~/claude-service</string>` +
+			`</dict></dict></plist>` + "\n"
+		serviceInstance = `{"providerInstances":{"own":{"driver":"claudeAgent","config":{"homePath":"~/claude-service"}}}}`
+	)
+	serviceEnv := runtime.GOOS == "linux" || runtime.GOOS == "darwin"
+	tests := []struct {
+		name string
+		// files are by slash path under the home folder.
+		files map[string]string
+		want  doctor.T3Facts
+	}{
+		{"a home folder with no T3 Code store has no T3 Code", nil, doctor.T3Facts{}},
+		{"a store with no settings beside it is T3 Code with no Claude home of its own",
+			map[string]string{".t3/userdata/statev2.sqlite": ""}, doctor.T3Facts{Found: true}},
+		{"a home of its own without pairtime's hooks counts, and one with them or Claude Code's own default doesn't",
+			map[string]string{".t3/userdata/statev2.sqlite": "", ".t3/userdata/settings.json": instances,
+				"claude-hooked/settings.json": hook, ".claude/settings.json": "{}"},
+			doctor.T3Facts{Found: true, OwnHomes: 1}},
+		{"settings that don't read leave doctor unable to tell",
+			map[string]string{".t3/userdata/statev2.sqlite": "", ".t3/userdata/settings.json": "{"},
+			doctor.T3Facts{Found: true, Unread: true}},
+		{"a CLAUDE_CONFIG_DIR T3's background service sets, to a home without pairtime's hooks, is the service's home of its own",
+			map[string]string{".t3/userdata/statev2.sqlite": "", serviceUnit: editedUnit, servicePlist: editedPlist},
+			doctor.T3Facts{Found: true, ServiceHome: serviceEnv}},
+		{"one whose settings hold pairtime's hooks isn't",
+			map[string]string{".t3/userdata/statev2.sqlite": "", serviceUnit: editedUnit, servicePlist: editedPlist, "claude-service/settings.json": hook},
+			doctor.T3Facts{Found: true}},
+		{"a home an instance has already counted counts once",
+			map[string]string{".t3/userdata/statev2.sqlite": "", ".t3/userdata/settings.json": serviceInstance, serviceUnit: editedUnit, servicePlist: editedPlist},
+			doctor.T3Facts{Found: true, OwnHomes: 1}},
+		{"with no T3 Code store, the service's home says nothing",
+			map[string]string{serviceUnit: editedUnit, servicePlist: editedPlist}, doctor.T3Facts{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			for k, v := range map[string]string{"HOME": homeDir, "USERPROFILE": homeDir, "T3CODE_HOME": "", "CLAUDE_CONFIG_DIR": "",
+				"XDG_CONFIG_HOME": filepath.Join(homeDir, ".config"), "PATH": sqlite3Bin(t, true)} {
+				t.Setenv(k, v)
+			}
+			for name, content := range tt.files {
+				p := filepath.Join(homeDir, filepath.FromSlash(name))
+				if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := readDoctorT3(); got != tt.want {
+				t.Errorf("readDoctorT3() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// sqlite3Bin returns a folder of the test's own for PATH, holding a file
+// that LookPath takes for the sqlite3 tool when there is one.
+func sqlite3Bin(t *testing.T, there bool) string {
+	t.Helper()
+	bin := t.TempDir()
+	if there {
+		name := "sqlite3"
+		if runtime.GOOS == "windows" {
+			name = "sqlite3.exe"
+		}
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return bin
+}
+
+// TestDoctorT3SQLite3 runs readDoctorT3 with PATH set to a folder of the
+// test's own: where doctor finds T3 Code's store, it looks for sqlite3 on
+// its own PATH, which the T3 Code line uses while it can't ask the agent
+// (F2 of #225).
+func TestDoctorT3SQLite3(t *testing.T) {
+	tests := []struct {
+		name    string
+		store   bool // T3 Code's store is in the home folder
+		sqlite3 bool // PATH holds a sqlite3
+		want    doctor.T3Facts
+	}{
+		{"a store with sqlite3 on doctor's PATH is T3 Code with sqlite3", true, true, doctor.T3Facts{Found: true}},
+		{"a store with no sqlite3 on doctor's PATH says so", true, false, doctor.T3Facts{Found: true, NoSQLite3: true}},
+		{"with no T3 Code store, a missing sqlite3 says nothing", false, false, doctor.T3Facts{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			for k, v := range map[string]string{"HOME": homeDir, "USERPROFILE": homeDir, "T3CODE_HOME": "", "CLAUDE_CONFIG_DIR": "",
+				"XDG_CONFIG_HOME": filepath.Join(homeDir, ".config"), "PATH": sqlite3Bin(t, tt.sqlite3)} {
+				t.Setenv(k, v)
+			}
+			if tt.store {
+				p := filepath.Join(homeDir, ".t3", "userdata", "statev2.sqlite")
+				if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := readDoctorT3(); got != tt.want {
+				t.Errorf("readDoctorT3() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}

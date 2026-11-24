@@ -4,6 +4,7 @@ package score
 
 import (
 	"bytes"
+	"maps"
 	"math"
 	"slices"
 	"testing"
@@ -137,6 +138,18 @@ func TestRelayPairing(t *testing.T) {
 		{"a record more than RELAY_SEEN_LAG_S after the stamp pairs with nothing: the reader saw the row too late, as it sees an imported one",
 			func(b *tl) (string, []string) {
 				return "", []string{naming(b, 121, "s_1", promptAt(b, 61, event.ViaHook)).EventID}
+			}, event.OriginHeadless},
+		{"a record written 2 s before the stamp pairs: the reader may decide a message up to 2 s before the app stamped it (SM 2.2)",
+			func(b *tl) (string, []string) {
+				r := naming(b, 58, "s_1", event.Event{})
+				linkTo(promptAt(b, 61, event.ViaHook), r.EventID)
+				return r.EventID, nil
+			}, event.OriginRelayed},
+		{"a record written more than 2 s before the stamp pairs with nothing: the app and the agent share a clock, so that stamp comes from a row written by hand or a clock stepped back",
+			func(b *tl) (string, []string) {
+				r := b.relayMsg(atMS(57_999), "s_1", appMessage(at(60), 90))
+				linkTo(promptAt(b, 61, event.ViaHook), r.EventID)
+				return "", []string{r.EventID}
 			}, event.OriginHeadless},
 		{"a record bound to no session pairs with the prompt it names",
 			func(b *tl) (string, []string) {
@@ -766,6 +779,28 @@ func TestRelayHold(t *testing.T) {
 			t.Errorf("the lead credits %d s, want 420", n)
 		}
 	})
+	t.Run("a record written more than 2 s before its stamp can pair with nothing, so it holds nothing: FinalBefore stays PENDING_WINDOW_S behind now", func(t *testing.T) {
+		b := newTL(false)
+		appWindow(b)
+		b.mouse(every(at(1), at(1136), 5000)...)
+		b.relayMsg(at(597), "s_1", appMessage(at(600), 450))
+		b.samples(at(0), at(1140))
+		if _, out := Step(NewState(testTable(t), Device{}), b.records()); out.FinalBefore != at(240) {
+			t.Errorf("FinalBefore at %d s, want 240 s: the record held it", (out.FinalBefore-base)/1000)
+		}
+	})
+	t.Run("such a record is decided when it is written, so it is final once FinalBefore passes its t, before RELAY_MATCH_S after its stamp has passed", func(t *testing.T) {
+		b := newTL(false)
+		appWindow(b)
+		b.mouse(every(at(1), at(1601), 5000)...)
+		r := b.relayMsg(at(597), "s_1", appMessage(at(600), 450))
+		b.samples(at(0), at(1605))
+		_, out := Step(NewState(testTable(t), Device{}), b.records())
+		final := slices.ContainsFunc(out.Final.Relays, func(rr RelayRecord) bool { return rr.ID == r.EventID })
+		if out.FinalBefore != at(705) || !final {
+			t.Errorf("FinalBefore at %d s, and the record final: %v; want 705 s and final", (out.FinalBefore-base)/1000, final)
+		}
+	})
 	s := NewState(testTable(t), Device{})
 	recs := queued(0).records()
 	next := 0
@@ -933,9 +968,12 @@ func checkRelayedCredit(t *testing.T, d Derived) {
 // samples nothing: a relayed prompt resets its session's bucket at pickup,
 // relayed reading draws on at most UNKNOWN_BUCKET_MAX_S of the bucket, and
 // it drains, as READ and never SUP, from one of the session's stops until
-// the thread's next relayed message is sent or the session's next turn
-// starts, when that message is sent within READ_HORIZON_S of the stop and
-// pairs within PENDING_WINDOW_S - 60 s of it. What only the 120 s cap kept
+// the relayed anchor that vouches for that stop is sent or the session's
+// next turn starts. That anchor is the first relayed anchor sent after the
+// stop among those that pair within PENDING_WINDOW_S - 60 s of it, and it
+// vouches only when it is sent within READ_HORIZON_S of the stop; one that
+// pairs later keeps its own lead but neither vouches for that stop's
+// reading nor ends it (SM 2.4). What only the 120 s cap kept
 // from being read is X.bucket_cap, which comes before the codes of running
 // turns (SM 5.2). TestRelayedReadingCap checks the cap after resets that
 // aren't relayed.
@@ -1340,6 +1378,8 @@ func TestRelayedLeadOnAFreshState(t *testing.T) {
 			seen: 361, first: 0, lead: 300},
 		{name: "a record written more than RELAY_SEEN_LAG_S after its stamp pairs with nothing and opens no lead, so the slots start at the first record's minute",
 			seen: 401, first: 300, lead: 0},
+		{name: "so does a record written more than 2 s before its stamp, which is the first record here, so the slots start at its own minute",
+			seen: 337, first: 300, lead: 0},
 		{name: "so does a record of declared cron, which makes its prompt scheduled",
 			seen: 345, edit: func(m *event.RelayMessage) { m.Declared = event.RelayDeclaredCron }, first: 300, lead: 0},
 	}
@@ -1826,24 +1866,109 @@ func TestRelayedLatePairing(t *testing.T) {
 	checkDerived(t, d)
 }
 
-// TestRelayedPresence checks where a relayed lead is realized on a desktop
-// with the app's window in front: in a slot of any presence, a locked one
-// included, but not in one the machine slept through, since a sleeping
-// machine runs no agent (SM 2.1, 2.3). A message from the app's phone app
-// skips rules 6 and 7, so it is relayed whatever this device saw.
+// TestRelayedPresence checks where a relayed lead is realized (SM 2.1,
+// 2.3): in a slot of any presence, a locked one included, but not in one
+// the machine slept through, since a sleeping machine runs no agent. For
+// relayed credit a slot is slept through when it overlaps a suspend or a
+// gap between samples longer than twice SLOW_SAMPLE_S, whatever idle the
+// sample before the gap showed (D-relayed-sleep). So the minute between
+// the samples of a context an agent app alone keeps live, a hard break for
+// every other window, doesn't stop it. A message from the app's phone app
+// skips rules 6 and 7, so it is relayed whatever this device saw. The
+// first cases have the app's window in front; the later ones a browser,
+// as while the person works elsewhere and the app alone keeps the context
+// live, but for one with a terminal in front. The last two have no window
+// in front at all: a relayed lead and its session's reading are realized
+// in a never-sampling stretch too, since no suspend or sleep from before
+// the stretch reaches its slots (SM 2.1).
 func TestRelayedPresence(t *testing.T) {
-	phone := func(b *tl) {
-		m := appMessage(at(60), 90)
+	// phoneAt adds a 90-character message from the app's phone app in
+	// thread r_1, stamped sent seconds after base, so a 60 s lead, whose
+	// run's prompt, with turn key turn, reaches s_1 a second later, and
+	// whose record comes two seconds after that, as sentAt60 times them.
+	phoneAt := func(b *tl, sent int64, turn string) {
+		m := appMessage(at(sent), 90)
 		m.Client = event.RelayClientMobile
-		sentAt60(b, m, 90)
+		p := b.prompt(at(sent+1), event.ViaHook, "s_1", "p_1", turn, 90)
+		m.Prompt = p.EventID
+		b.relayMsg(at(sent+3), "s_1", m)
+	}
+	phone := func(b *tl) { phoneAt(b, 60, "t_1") }
+	// browser has a browser in front from base, and the app's server
+	// running s_1.
+	browser := func(b *tl) {
+		b.focus(at(0), event.AppBrowser, "")
+		appServer(b)
+	}
+	// minutes samples once a minute from from to to, in seconds after
+	// base, each sample showing input 5 s before it, as the agent samples
+	// while an agent app alone keeps the context live and the person uses
+	// this computer (DESIGN 3.3). A sample reads the input declared before
+	// it, so a case declares its own input first.
+	minutes := func(b *tl, from, to int64) {
+		for s := from; s <= to; s += 60 {
+			b.mouse(at(s - 5))
+		}
+		for s := from; s <= to; s += 60 {
+			b.sample(at(s))
+		}
+	}
+	// stretch adds a never-sampling stretch's relayed records in s_1, which
+	// the app's server started at base, here 10:00:00 (appServer): a phone
+	// message stamped at 12:30:00, its prompt at 12:30:01 and its record at
+	// 12:30:03, 60 words of output at 12:34:30 and the stop at 12:35:00;
+	// then a second phone message, stamped at 12:39:00, which vouches for
+	// the reading after the stop (SM 2.4) and whose records come past
+	// 12:35:01. By then the prompt at 12:30:01, the first record the agent
+	// stamped more than BUCKET_TTL_S after the sampler's last record, is
+	// rules.late behind the newest record, so it has ended that record's
+	// reach, and every slot from 10:00:00 on is a never-sampling device's
+	// (SM 2.1, presence.neverAt).
+	stretch := func(b *tl) {
+		phoneAt(b, 9000, "t_1")
+		says(b, at(9270), "s_1", "p_1", "t_1", 60)
+		stops(b, at(9300), "s_1", "p_1", "t_1")
+		phoneAt(b, 9540, "t_2")
+	}
+	// stretchCredit is what the stretch credits, as on a device that never
+	// samples (TestRelayedReading): the first message's 60 s lead;
+	// X.no_anchor until its prompt and X.agent_only while its run goes on;
+	// 40 s of relayed reading after the stop, the turn's 20 s base and its
+	// 60 words; and the second message's 60 s lead.
+	stretchCredit := []secondsWant{
+		{8940, 9000, map[event.Reason]int64{rP: 60}},
+		{9000, 9300, map[event.Reason]int64{xNoAnch: 1, xAgent: 299}},
+		{9300, 9345, map[event.Reason]int64{rREAD: 40, xNoAnch: 5}},
+		{9345, 9480, map[event.Reason]int64{xNoAnch: 135}},
+		{9480, 9540, map[event.Reason]int64{rP: 60}},
+	}
+	stretchOrigins := map[string]event.Origin{"t_1": event.OriginRelayed, "t_2": event.OriginRelayed}
+	// stretchAwake checks that the stretch's slots up to the second
+	// message's stamp are a never-sampling device's, unknown and neither
+	// asleep nor slept through, and that a Step a minute gives what one
+	// Step gives, though the stretch's reach ends only rules.late after the
+	// prompt that cuts it.
+	stretchAwake := func(t *testing.T, recs []event.Event, d Derived) {
+		t.Helper()
+		for _, s := range d.Slots {
+			if s.Start >= at(0) && s.Start < at(9540) && (s.Present != event.PresentUnknown || s.Asleep || s.slept) {
+				t.Errorf("slot at %d s is %q, asleep %v, slept %v; want unknown, neither asleep nor slept through",
+					(s.Start-base)/1000, s.Present, s.Asleep, s.slept)
+			}
+		}
+		checkSteps(t, recs, d)
 	}
 	cases := []struct {
 		name  string
 		build func(b *tl)
 		want  []secondsWant
+		// origins are what some turns' origins must be, by turn key.
+		origins map[string]event.Origin
+		// check, when set, checks more of what the case's records derive.
+		check func(t *testing.T, recs []event.Event, d Derived)
 	}{
-		{"a relayed lead is realized in locked slots",
-			func(b *tl) {
+		{name: "a relayed lead is realized in locked slots",
+			build: func(b *tl) {
 				appWindow(b)
 				phone(b)
 				b.samples(at(0), at(0))
@@ -1852,9 +1977,9 @@ func TestRelayedPresence(t *testing.T) {
 				b.power(at(140), event.PowerUnlock)
 				b.samples(at(150), at(180))
 			},
-			[]secondsWant{{0, 60, map[event.Reason]int64{rP: 60}}}},
-		{"but not in slots the machine slept through, whose seconds stay X.absent",
-			func(b *tl) {
+			want: []secondsWant{{0, 60, map[event.Reason]int64{rP: 60}}}},
+		{name: "but not in slots the machine slept through, whose seconds stay X.absent",
+			build: func(b *tl) {
 				appWindow(b)
 				phone(b)
 				b.samples(at(0), at(15))
@@ -1862,25 +1987,256 @@ func TestRelayedPresence(t *testing.T) {
 				b.power(at(40), event.PowerResume)
 				b.samples(at(45), at(180))
 			},
-			[]secondsWant{
+			want: []secondsWant{
 				{0, 15, map[event.Reason]int64{rP: 15}},
 				{15, 45, map[event.Reason]int64{xAbsent: 30}},
 				{45, 60, map[event.Reason]int64{rP: 15}},
 			}},
+		{name: "a phone message's lead is realized in minutes sampled once a minute with no input, as the agent samples them while an agent app's server runs (D-relayed-context)",
+			build: func(b *tl) {
+				appWindow(b)
+				phone(b)
+				for _, s := range []int64{0, 60, 120, 180} {
+					b.sample(at(s))
+				}
+			},
+			want: []secondsWant{{0, 60, map[event.Reason]int64{rP: 60}}}},
+		{name: "but in minutes nothing sampled, as when the desktop's context had ended, it reads as slept through and stays X.absent",
+			build: func(b *tl) {
+				appWindow(b)
+				phone(b)
+				b.sample(at(-600))
+				b.sample(at(61))
+				b.samples(at(75), at(180))
+			},
+			want: []secondsWant{{0, 60, map[event.Reason]int64{xAbsent: 60}}}},
+		{name: "a phone message's lead is realized in minutes sampled once a minute that show input, as the agent samples them while an agent app alone keeps the context live",
+			build: func(b *tl) {
+				browser(b)
+				phone(b)
+				minutes(b, 0, 180)
+			},
+			want: []secondsWant{{0, 60, map[event.Reason]int64{rP: 60}}}},
+		{name: "a message typed into T3's web UI in a browser here fails rule 6's focus test, so it is relayed and realized in the same minutes",
+			build: func(b *tl) {
+				browser(b)
+				b.mouse(at(58))
+				sentAt60(b, appMessage(at(60), 90), 90)
+				minutes(b, 0, 180)
+			},
+			want:    []secondsWant{{0, 60, map[event.Reason]int64{rP: 60}}},
+			origins: map[string]event.Origin{"t_1": event.OriginRelayed}},
+		{name: "a gap longer than twice SLOW_SAMPLE_S reads as slept through for relayed credit with no os.power record, as where logind is missing",
+			build: func(b *tl) {
+				browser(b)
+				phone(b)
+				minutes(b, -61, -61)
+				b.sample(at(61))
+			},
+			want: []secondsWant{{0, 60, map[event.Reason]int64{xAbsent: 60}}}},
+		{name: "a gap of exactly twice SLOW_SAMPLE_S doesn't",
+			build: func(b *tl) {
+				browser(b)
+				phone(b)
+				minutes(b, -60, -60)
+				b.sample(at(60))
+			},
+			want: []secondsWant{{0, 60, map[event.Reason]int64{rP: 60}}}},
+		{name: "a suspend inside a once-a-minute gap reads as slept through from the suspend to its resume",
+			build: func(b *tl) {
+				browser(b)
+				phoneAt(b, 120, "t_1")
+				minutes(b, 0, 180)
+				b.power(at(70), event.PowerSuspend)
+				b.power(at(100), event.PowerResume)
+			},
+			want: []secondsWant{
+				{60, 105, map[event.Reason]int64{xAbsent: 45}},
+				{105, 120, map[event.Reason]int64{rP: 15}},
+			}},
+		{name: "a resume with no suspend before it reads as slept through from the sample before it",
+			build: func(b *tl) {
+				browser(b)
+				phoneAt(b, 120, "t_1")
+				minutes(b, 0, 180)
+				b.power(at(100), event.PowerResume)
+			},
+			want: []secondsWant{
+				{60, 105, map[event.Reason]int64{xAbsent: 45}},
+				{105, 120, map[event.Reason]int64{rP: 15}},
+			}},
+		{
+			// A terminal on p_1 hosts s_2, where a prompt typed at 120 s
+			// opens a 140 s lead, its think part from -20 s and its typing
+			// part from 100 s. Every slot is asleep, so neither part is
+			// realized, and the phone message's lead takes 0 to 60 s.
+			name: "a one-minute gap after a sample with idle under CONTEXT_IDLE_S stays a hard break for a typed prompt's think lead, while a relayed lead beside it is realized",
+			build: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "p_1", "s_2")
+				appServer(b)
+				b.start(at(0), "s_2", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+				phone(b)
+				b.prompt(at(120), event.ViaHook, "s_2", "p_1", "t_2", 30)
+				minutes(b, 0, 180)
+			},
+			want: []secondsWant{
+				{0, 60, map[event.Reason]int64{rP: 60}},
+				{60, 120, map[event.Reason]int64{xAbsent: 60}},
+			},
+			origins: map[string]event.Origin{"t_1": event.OriginRelayed, "t_2": event.OriginHumanTyped}},
+		{name: "a Step a minute gives what one Step gives across the once-a-minute stretch",
+			build: func(b *tl) {
+				browser(b)
+				phoneAt(b, 60, "t_1")
+				phoneAt(b, 1200, "t_2")
+				minutes(b, 0, 1320)
+			},
+			want: []secondsWant{
+				{0, 60, map[event.Reason]int64{rP: 60}},
+				{1140, 1200, map[event.Reason]int64{rP: 60}},
+			},
+			check: checkSteps},
+		{
+			// One lead overlaps a suspend inside a once-a-minute gap, which
+			// only the os.power records show, and the other a gap of 240 s,
+			// which only the samples show.
+			name: "scored from only the records DESIGN 6.5 reveals, the once-a-minute stretch gives the same relayed seconds, the slots slept through included",
+			build: func(b *tl) {
+				browser(b)
+				phoneAt(b, 120, "t_1")
+				phoneAt(b, 300, "t_2")
+				minutes(b, 0, 180)
+				minutes(b, 420, 480)
+				b.power(at(70), event.PowerSuspend)
+				b.power(at(100), event.PowerResume)
+				// An agent's commit in p_2, which a submission of p_1
+				// doesn't reveal.
+				b.git(at(30), "p_2", event.ActorAgent)
+			},
+			want: []secondsWant{
+				{60, 105, map[event.Reason]int64{xAbsent: 45}},
+				{105, 120, map[event.Reason]int64{rP: 15}},
+				{240, 300, map[event.Reason]int64{xAbsent: 60}},
+			},
+			check: checkRevealed},
+		{
+			// Samples every 15 s until 10:00:00, then a suspend at 10:00:05
+			// with the sample the agent takes at it. The resume never comes
+			// and the idle read fails after the wake, while the agent and
+			// the app's server run on.
+			name: "a relayed lead and reading in a never-sampling stretch after a suspend whose resume never came are realized, as on a device that never samples: no suspend from before the stretch reaches its slots (SM 2.1)",
+			build: func(b *tl) {
+				appServer(b)
+				b.samples(at(-300), at(0))
+				b.power(at(5), event.PowerSuspend)
+				b.sample(at(5))
+				stretch(b)
+			},
+			want: stretchCredit, origins: stretchOrigins, check: stretchAwake},
+		{
+			// Samples every 15 s until 10:00:00, and at 12:40:00 a resume
+			// with no suspend before it, with its sample, and samples every
+			// 15 s after it. The resume dates a sleep from just after the
+			// sample at 10:00:00, which the stretch's slots don't take.
+			name: "so are they in a never-sampling stretch that a resume with no suspend before it ends by starting the sampler again",
+			build: func(b *tl) {
+				appServer(b)
+				b.samples(at(-300), at(0))
+				stretch(b)
+				b.power(at(9600), event.PowerResume)
+				b.sample(at(9600))
+				b.samples(at(9615), at(9720))
+			},
+			want: stretchCredit, origins: stretchOrigins, check: stretchAwake},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			b := newTL(false)
 			c.build(b)
-			d := b.run(t, Device{})
+			recs := b.records()
+			d := scoreAll(t, Device{}, recs)
 			for _, w := range c.want {
 				if got := sumIn(d, at(w.from), at(w.to)); !sameCounts(got, w.want) {
 					t.Errorf("seconds %d to %d: %v, want %v", w.from, w.to, got, w.want)
 				}
 			}
+			for turn, o := range c.origins {
+				if tu, ok := turnByKey(d, turn); !ok || tu.Origin != o {
+					t.Errorf("turn %s is %q, want %q", turn, tu.Origin, o)
+				}
+			}
+			if c.check != nil {
+				c.check(t, recs, d)
+			}
 			checkRelayedCredit(t, d)
 			checkDerived(t, d)
 		})
+	}
+}
+
+// revealedTo returns what DESIGN 6.5 reveals of recs to a submission of
+// project p, over a range with no slot whose focus or presence is unknown
+// and no os.focus that hosts another project's session beside one of p's:
+// the records whose header project is p, and every os.presence, os.focus,
+// os.power and editor.activity record (its reveal set's a, b and c), each
+// with the body Shareable writes, which leaves out the local fields.
+func revealedTo(recs []event.Event, p string) []event.Event {
+	var out []event.Event
+	for _, e := range recs {
+		switch e.Data.(type) {
+		case *event.OSPresence, *event.OSFocus, *event.OSPower, *event.EditorActivity:
+		default:
+			if e.ProjectKey != p {
+				continue
+			}
+		}
+		out = append(out, e.Shareable())
+	}
+	return out
+}
+
+// relayedSeconds returns the seconds d credits with via_relay, by slot.
+func relayedSeconds(d Derived) map[int64]int64 {
+	out := map[int64]int64{}
+	for _, c := range d.Credits {
+		for _, e := range c.Credited {
+			if slices.Contains(e.Labels, event.LabelViaRelay) {
+				out[c.Slot] += e.Seconds
+			}
+		}
+	}
+	return out
+}
+
+// checkRevealed checks that the records DESIGN 6.5 reveals to a submission
+// of p_1, all the server's re-score has (CC6), credit the relayed seconds
+// every record does: the samples and power records that say which slots
+// the machine slept through are among them (D-relayed-sleep). The case
+// must have slots that only the samples, and slots that only the power
+// records, show slept through: with either kind left out, the relayed
+// seconds differ, so the check can fail.
+func checkRevealed(t *testing.T, recs []event.Event, all Derived) {
+	t.Helper()
+	revealed := revealedTo(recs, "p_1")
+	if len(revealed) == len(recs) {
+		t.Fatal("the reveal leaves nothing out, so the case checks nothing")
+	}
+	want := relayedSeconds(all)
+	if got := relayedSeconds(scoreAll(t, Device{}, revealed)); !maps.Equal(got, want) {
+		t.Errorf("the revealed records credit relayed seconds %v by slot, and every record %v", got, want)
+	}
+	for _, kind := range []struct {
+		name string
+		is   func(event.Event) bool
+	}{
+		{"os.presence", func(e event.Event) bool { _, ok := e.Data.(*event.OSPresence); return ok }},
+		{"os.power", func(e event.Event) bool { _, ok := e.Data.(*event.OSPower); return ok }},
+	} {
+		without := slices.DeleteFunc(slices.Clone(revealed), kind.is)
+		if got := relayedSeconds(scoreAll(t, Device{}, without)); maps.Equal(got, want) {
+			t.Errorf("without the %s records, the revealed records still credit relayed seconds %v by slot, so the case can't tell whether they are revealed",
+				kind.name, got)
+		}
 	}
 }
 

@@ -20,6 +20,7 @@ type Status struct {
 	IPC      IPC      `json:"ipc"`
 	Signals  Signals  `json:"signals"`
 	Adapters Adapters `json:"adapters"`
+	Apps     Apps     `json:"apps"`
 	// Ledger is what the ledger writer says of its chain, nil while the
 	// ledger isn't open.
 	Ledger    *Ledger   `json:"ledger,omitempty"`
@@ -141,4 +142,49 @@ type HarnessCounts struct {
 	// hook calls parsed again, that the ledger already held, which the
 	// adapter left out.
 	Repeats uint64 `json:"repeats,omitempty"`
+}
+
+// Apps is what the agent reads of the agent apps whose own stores it reads
+// (DESIGN 3.3, 5.1).
+type Apps struct {
+	// T3Code is how the agent's reader of T3 Code's store is doing: nil
+	// before its first read, and from an agent older than the reader.
+	T3Code *T3Code `json:"t3_code,omitempty"`
+}
+
+// T3Code is how the agent's reader of T3 Code's message store is doing, as
+// its last read left it. It names no path (DESIGN 5.9).
+type T3Code struct {
+	// Reading says the last read worked, and Off why it didn't: no_store,
+	// not_running, no_sqlite3, no_json, schema or failed. Problem says more
+	// of a schema the probe refused or a read that failed.
+	Reading bool   `json:"reading"`
+	Off     string `json:"off,omitempty"`
+	Problem string `json:"problem,omitempty"`
+	// Newer says T3's schema is newer than the one the reader was tested
+	// against, which it reads anyway.
+	Newer bool `json:"newer,omitempty"`
+	// Running says T3 Code ran at the last read, by DESIGN 3.3's test: the
+	// agent's process scan found its server, and its store had the -wal
+	// and -shm files T3 holds open. Files a killed T3 left behind don't
+	// make it run, though the reader still reads them.
+	Running bool `json:"running,omitempty"`
+	// NoSQLite3 says the agent found no sqlite3 on its PATH at the last
+	// read, whether or not T3 ran then.
+	NoSQLite3 bool `json:"no_sqlite3,omitempty"`
+	// Witnessed counts today's messages that T3 says a person sent and the
+	// reader recorded, WithServer those of them it recorded while the
+	// agent's process scan found T3's server, Paired its records that
+	// paired with a prompt, Aged the messages its age test turned away, read
+	// too long after they were sent, and Ahead the messages it turned away
+	// as stamped more than 2 s after the read that decided them, which a
+	// clock T3 and the agent share doesn't give unless it was set back.
+	Witnessed  int `json:"witnessed"`
+	WithServer int `json:"with_server"`
+	Paired     int `json:"paired"`
+	Aged       int `json:"aged"`
+	Ahead      int `json:"ahead"`
+	// SessionAt is when a session that an agent app's server started last
+	// reached the agent, in Unix ms, 0 for never.
+	SessionAt int64 `json:"session_at,omitempty"`
 }

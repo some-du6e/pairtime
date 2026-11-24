@@ -12,11 +12,17 @@ import (
 )
 
 // selfUsage reads the agent's resident set and its peak from
-// /proc/self/status, and its CPU time from getrusage.
+// /proc/self/status, and its CPU time from getrusage: its own, and its
+// children's, those it started and waited for, as exec.Cmd waits for T3
+// Code's reader's sqlite3 and the git adapter's git. The resident set is
+// the agent's alone.
 func selfUsage() (rss, peak uint64, cpu time.Duration) {
-	var ru syscall.Rusage
+	var ru, kids syscall.Rusage
 	if syscall.Getrusage(syscall.RUSAGE_SELF, &ru) == nil {
 		cpu = cpuOf(time.Duration(ru.Utime.Nano()), time.Duration(ru.Stime.Nano()))
+	}
+	if syscall.Getrusage(syscall.RUSAGE_CHILDREN, &kids) == nil {
+		cpu += cpuOf(time.Duration(kids.Utime.Nano()), time.Duration(kids.Stime.Nano()))
 	}
 	b, err := os.ReadFile("/proc/self/status")
 	if err != nil {
@@ -47,3 +53,7 @@ func selfUsage() (rss, peak uint64, cpu time.Duration) {
 	}
 	return rss, peak, cpu
 }
+
+// joinJob has nothing to do outside Windows: getrusage counts the
+// children's CPU time (selfUsage).
+func joinJob() {}

@@ -302,7 +302,10 @@ func sqliteDSN(path string, write bool) string {
 		// WAL lets readers run while the writer commits, and NORMAL syncs
 		// only at checkpoints. The cost is that the last transactions can
 		// roll back after a power cut; clients re-send them from their
-		// queues (DESIGN 10.1; SP 7.4, 9.3).
+		// queues (DESIGN 10.1; SP 7.4, 9.3). The exception is a write
+		// nothing would send again, such as an erasure the privacy hub
+		// hears is done: the writer's DoDurable sets synchronous=FULL for
+		// its batch and NORMAL again after it (DESIGN 8.9, 10.1).
 		q.Add("_pragma", "journal_mode(WAL)")
 		q.Add("_pragma", "synchronous(NORMAL)")
 		// Deletes overwrite what they remove with zeros, so a row the
