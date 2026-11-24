@@ -288,7 +288,7 @@ func API(q Querier, devices Devices, now func() time.Time, logger *slog.Logger) 
 		s, err := Read(r.Context(), q, dev.Account, now())
 		if err != nil {
 			logger.Error("reading build days", "user", dev.Account, "err", err)
-			writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: "unavailable", Detail: "The server couldn't read your build days; try again later."})
+			unavailable(w, "The server couldn't read your build days; try again in 5 seconds.")
 			return
 		}
 		writeJSON(w, http.StatusOK, s)
@@ -314,9 +314,15 @@ func authenticate(w http.ResponseWriter, r *http.Request, devices Devices, logge
 		writeJSON(w, http.StatusUnauthorized, errorBody{Error: "token_invalid", Detail: "This device token isn't valid, or its device was removed. Run pairtime login again."})
 	default:
 		logger.Error("authenticating a device", "err", err)
-		writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: "unavailable", Detail: "The server couldn't check the device token; try again later."})
+		unavailable(w, "The server couldn't check the device token; try again in 5 seconds.")
 	}
 	return device.Device{}, false
+}
+
+// unavailable answers 503 with Retry-After: 5, as ingest's 503s do.
+func unavailable(w http.ResponseWriter, detail string) {
+	w.Header().Set("Retry-After", "5")
+	writeJSON(w, http.StatusServiceUnavailable, errorBody{Error: "unavailable", Detail: detail})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

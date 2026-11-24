@@ -1,0 +1,3 @@
+# Captured bytes are compared as they are, so git must never change their
+# line endings, not even on a Windows checkout with core.autocrlf.
+* -text

@@ -90,6 +90,37 @@ func digitStart(text string) func(int) bool {
 	return func(i int) bool { return isDigit(text[i]) && boundary(text, i) }
 }
 
+// inFraction reports whether the match text[start:end] is a decimal's
+// fraction: a run of ASCII digits right after a digit and a '.', such as
+// the fifteen digits after the point of 4.614999999999999. Presidio's
+// patterns need only a word edge, which a '.' makes, so they read the
+// fraction of that OTLP asDouble value as a number that starts like a
+// card, and Luhn passes about one such run in ten (issue #104). The card,
+// SSN and Aadhaar finders drop such a match, and no other match can start
+// inside the run, which holds no word edge.
+//
+// A fraction is one unbroken run of digits, so a match with a separator in
+// it is kept, such as 1.4111 1111 1111 1111 in a list typed with no space
+// after its numbers. The one shape this misses is a number with no
+// separators in such a list: 1.4111111111111111. A match may still end
+// right before a '.' and a digit, so a number written as a float, such as
+// 4111111111111111.0 from Python's json.dumps, is still a card, and so is a
+// card number that ends a sentence. A fraction with no digit before its
+// point, as minified JavaScript writes .5, or after a decimal comma, can
+// still be taken for one. An exponent's digits are too few for any of these
+// patterns.
+func inFraction(text string, start, end int) bool {
+	if start < 2 || text[start-1] != '.' || !isDigit(text[start-2]) {
+		return false
+	}
+	for i := start; i < end; i++ {
+		if !isDigit(text[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // strip removes every byte in chars from s, as Presidio's sanitize_value
 // does with its replacement pairs.
 func strip(s, chars string) string {
@@ -145,7 +176,7 @@ func findCards(text string, emit func(int, int, Type)) {
 		// which is what a timestamp in milliseconds looks like.
 		return digitStart(text)(i) && !thirteenFromOne(text, i)
 	}, func(m []int) {
-		if luhn(strip(text[m[0]:m[1]], "- ")) {
+		if !inFraction(text, m[0], m[1]) && luhn(strip(text[m[0]:m[1]], "- ")) {
 			emit(m[0], m[1], TypeCard)
 		}
 	})
@@ -292,7 +323,7 @@ var ssnContext = []string{"social", "security", "ssn", "ssns", "ssid"}
 func findSSNs(text string, emit func(int, int, Type)) {
 	for _, p := range ssnPatterns {
 		finditer(text, p.re.get(), digitStart(text), func(m []int) {
-			if ssnInvalid(text[m[0]:m[1]]) {
+			if inFraction(text, m[0], m[1]) || ssnInvalid(text[m[0]:m[1]]) {
 				return
 			}
 			if withContext(p.score, hasContext(text, m[0], ssnContext)) >= minScore {
@@ -361,7 +392,7 @@ var aadhaarPatterns = []*lazyRE{
 func findAadhaars(text string, emit func(int, int, Type)) {
 	for _, re := range aadhaarPatterns {
 		finditer(text, re.get(), digitStart(text), func(m []int) {
-			if validAadhaar(strip(text[m[0]:m[1]], "- :")) {
+			if !inFraction(text, m[0], m[1]) && validAadhaar(strip(text[m[0]:m[1]], "- :")) {
 				emit(m[0], m[1], TypeAadhaar)
 			}
 		})
