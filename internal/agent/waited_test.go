@@ -1704,9 +1704,11 @@ func TestLogRecordsByTheRunClock(t *testing.T) {
 	// shift is how far ahead the writer's clock runs, so this run's clock
 	// reads more than a suspend at its moment, as an agent's that has run
 	// for hours does, and later moves it on by both clocks (stretch).
+	// later is atomic because the ledger writer's goroutine reads it,
+	// through ahead.
 	const shift = 2 * time.Hour
-	var later time.Duration
-	ahead := func() time.Time { return time.Now().Add(shift + later) } // with its monotonic reading
+	var later atomic.Int64
+	ahead := func() time.Time { return time.Now().Add(shift + time.Duration(later.Load())) } // with its monotonic reading
 	online := func(o *ledger.Options) {
 		o.Online = func() bool { return true }
 		o.Now = ahead
@@ -1748,7 +1750,7 @@ func TestLogRecordsByTheRunClock(t *testing.T) {
 	// that carries no reading of a run's clock, as a line read after a
 	// suspend, to when it took it in (ledger.Writer.lookback).
 	stretch := func(w *ledger.Writer) time.Time {
-		later = time.Minute
+		later.Store(int64(time.Minute))
 		w.NoteMode(false)
 		w.NoteMode(true)
 		return ahead()
@@ -1853,7 +1855,7 @@ func TestLogRecordsByTheRunClock(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			later = 0
+			later.Store(0)
 			dir := t.TempDir()
 			dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
 			w, mono := tc.run(t, dirs)
