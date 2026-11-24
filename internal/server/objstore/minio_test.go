@@ -170,6 +170,66 @@ func TestMinIO(t *testing.T) {
 				t.Errorf("got %q, %v", got, err)
 			}
 		}},
+		{name: "an evidence list yields the stored blob and only keys under the evidence prefix", run: func(t *testing.T) {
+			want := EvidenceKey(sha256.Sum256(blob))
+			var found bool
+			for o, err := range NewEvidence(main).List(ctx) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !strings.HasPrefix(o.Key, EvidencePrefix) {
+					t.Errorf("List yielded %q, outside %s", o.Key, EvidencePrefix)
+				}
+				found = found || o.Key == want
+			}
+			if !found {
+				t.Errorf("List didn't yield %s", want)
+			}
+		}},
+		{name: "an evidence delete removes the blob from a bucket that keeps no versions, and Has is false after", run: func(t *testing.T) {
+			e, sum := NewEvidence(main), sha256.Sum256(blob)
+			if err := e.Delete(ctx, sum); err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := e.Has(ctx, sum); ok || err != nil {
+				t.Errorf("Has after Delete = %v, %v; want false", ok, err)
+			}
+		}},
+		{name: "an evidence delete of a blob already gone succeeds, so a retried delete passes", run: func(t *testing.T) {
+			if err := NewEvidence(main).Delete(ctx, sha256.Sum256(blob)); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "an evidence delete fails on a scratch bucket with versioning on, where the blob stays behind as an older version", run: func(t *testing.T) {
+			// MinIO's answer, not one pairtime wrote, is what the delete
+			// reads (PLAN WP-SB2's oracle for Evidence.Delete).
+			b := scratchBucket(t, ctx, c, "pairtime-evidence-")
+			putBucketConfig(t, ctx, b, "PutBucketVersioning", "versioning",
+				`<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>`+VersioningEnabled+`</Status></VersioningConfiguration>`)
+			// Cleanups run last first, so this empties the bucket before
+			// scratchBucket's cleanup deletes it.
+			t.Cleanup(func() { deleteVersions(t, b) })
+			sum := sha256.Sum256(blob)
+			if _, err := b.Put(ctx, EvidenceKey(sum), bytes.NewReader(blob), PutOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			e := NewEvidence(b)
+			if err := e.Delete(ctx, sum); !errors.Is(err, ErrKeepsVersions) {
+				t.Fatalf("Delete error = %v, want ErrKeepsVersions", err)
+			}
+			if ok, err := e.Has(ctx, sum); ok || err != nil {
+				t.Errorf("Has after Delete = %v, %v; want false, since the delete marker hides the blob", ok, err)
+			}
+			var kept []string
+			for _, v := range objectVersions(t, ctx, b) {
+				if !v.marker {
+					kept = append(kept, v.key)
+				}
+			}
+			if !slices.Equal(kept, []string{EvidenceKey(sum)}) {
+				t.Errorf("the bucket keeps versions of %q, want the blob's one version", kept)
+			}
+		}},
 		{name: "the newest snapshot is found in the snapshot bucket", run: func(t *testing.T) {
 			s := NewSnapshots(snaps)
 			for _, at := range []time.Time{night.Add(-24 * time.Hour), night} {
@@ -425,4 +485,62 @@ func randomHex(t *testing.T, n int) string {
 		t.Fatal(err)
 	}
 	return hex.EncodeToString(b)
+}
+
+// objectVersion is one entry of a ListObjectVersions answer: a version
+// that holds bytes, or a delete marker.
+type objectVersion struct {
+	key, id string
+	marker  bool
+}
+
+// objectVersions lists every version and delete marker in b with
+// ListObjectVersions, which pairtimed itself never makes, in one page.
+func objectVersions(t *testing.T, ctx context.Context, b *Bucket) []objectVersion {
+	t.Helper()
+	resp, err := b.c.do(ctx, request{op: "ListObjectVersions", method: http.MethodGet, bucket: b.name, rawQuery: "versions"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	type entry struct {
+		Key       string `xml:"Key"`
+		VersionID string `xml:"VersionId"`
+	}
+	var res struct {
+		IsTruncated bool    `xml:"IsTruncated"`
+		Versions    []entry `xml:"Version"`
+		Markers     []entry `xml:"DeleteMarker"`
+	}
+	if err := xml.NewDecoder(resp.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+	if res.IsTruncated {
+		t.Fatalf("%s holds more versions than one page lists", b.name)
+	}
+	var out []objectVersion
+	for _, v := range res.Versions {
+		out = append(out, objectVersion{key: v.Key, id: v.VersionID})
+	}
+	for _, m := range res.Markers {
+		out = append(out, objectVersion{key: m.Key, id: m.VersionID, marker: true})
+	}
+	return out
+}
+
+// deleteVersions deletes every version and delete marker in b by its
+// version id, so that DeleteBucket, which refuses a bucket that holds
+// any, can delete the scratch bucket.
+func deleteVersions(t *testing.T, b *Bucket) {
+	t.Helper()
+	ctx := context.Background()
+	for _, v := range objectVersions(t, ctx, b) {
+		resp, err := b.c.do(ctx, request{op: "DeleteObject", method: http.MethodDelete, bucket: b.name, key: v.key,
+			rawQuery: "versionId=" + sigv4.URIEncode(v.id, true)})
+		if err != nil {
+			t.Logf("deleting version %s of %s: %v", v.id, v.key, err)
+			continue
+		}
+		drain(resp)
+	}
 }
