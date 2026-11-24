@@ -156,15 +156,20 @@ WHERE user_id = $1 AND minute_ms = $2 AND device_id = $3`, account, minuteMS, af
 			return fmt.Errorf("rollup: settling %s's minute %d on %s: %w", account, minuteMS, after[i].id, err)
 		}
 	}
-	return remerge(ctx, tx, account, before, day, after, day)
+	return remerge(ctx, tx, account, minuteMS, before, day, after, day)
 }
 
 // RunSettle runs Settle through d, reading q, at once, then every
 // interval, until ctx ends. report, when set, hears how many minutes each
-// run settled, and its error.
+// run settled, and its error. The first run also cuts again each day whose
+// rows aren't a cut under the day cap (RecutDays), and report hears only
+// its error, with no minutes settled.
 func RunSettle(ctx context.Context, d Doer, q Querier, every time.Duration, now func() time.Time, report func(settled int, err error)) {
 	tick := time.NewTicker(every)
 	defer tick.Stop()
+	if _, err := RecutDays(ctx, d, q, now()); err != nil && report != nil {
+		report(0, err)
+	}
 	for {
 		n, err := Settle(ctx, d, q, now())
 		if report != nil {
