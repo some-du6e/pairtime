@@ -766,35 +766,49 @@ func TestCommitUpload(t *testing.T) {
 
 // TestCommitStretchEnd is a switch back online, by hand, that finds nothing
 // pending, so no seal frame records the stretch's end until the next
-// batch's (D-ag5-D1). A commit seen before the stretch, whose line a
-// catch-up scan wrote during it, waits while the rows hold the stretch
-// open, though its batch's root went, and goes once the next seal frame
-// records the end.
+// batch's (D-ag5-D1). A commit seen between the install's stretch and this
+// one, whose line a catch-up scan wrote during this one, waits while the
+// rows hold the stretch open, though its batch's root went, and goes once
+// the next seal frame records the end. The chain's first stretch begins at
+// the beginning of time, as every install starts in local mode, so the
+// stretch here is the second.
 func TestCommitStretchEnd(t *testing.T) {
-	r := newLiveRig(t, 60)
+	r := newLiveRig(t, 90)
+	// A new install's mode, until the first sign-in, which the watch notes
+	// 300 ms later with nothing pending.
+	r.linked.Store(false)
+	r.local.Store(true)
 	r.u.Start()
 	r.seal(t, 1)
+	login := r.sealedAt(1).Add(time.Minute)
+	r.link(login)
+	r.local.Store(false)
+	r.setClock(login.Add(300 * time.Millisecond))
+	r.w.NoteMode(true)
 	r.seal(t, 2)
-	r.wait(t, "batches 1 and 2", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 })
-	// config.toml says local, as the watch notes, and the stretch's first
-	// record seals at once as batch 3.
+	r.seal(t, 3)
+	r.wait(t, "batches 2 and 3", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 3 })
+	// config.toml says local again, as the watch notes, and the stretch's
+	// first record seals at once as batch 4.
 	r.local.Store(true)
 	r.w.NoteMode(false)
-	r.record(t, 3)
-	waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 3 })
-	seen := r.sealedAt(1).Add(5 * time.Minute)
+	r.record(t, 4)
+	waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 4 })
+	// A commit seen between the two stretches, whose first batch after it
+	// is 3.
+	seen := r.sealedAt(2).Add(5 * time.Minute)
 	writeCommitLines(t, r.dirs.Commits(), seen.UTC().Format(time.DateOnly), commitRecord(1, seen.UnixMilli()))
 	// The teen sets mode = "online" by hand, and the watch's note finds
 	// nothing pending, so nothing is sealed.
 	r.local.Store(false)
-	r.setClock(r.sealedAt(3).Add(5 * time.Minute))
+	r.setClock(r.sealedAt(4).Add(5 * time.Minute))
 	r.w.NoteMode(true)
 	r.drain()
 	r.f.mu.Lock()
 	_, early := r.f.commitRecs[testSHA(1)]
 	r.f.mu.Unlock()
 	// The next batch's seal frame records the stretch's end.
-	r.seal(t, 4)
+	r.seal(t, 5)
 	r.wait(t, "the commit", func(f *fakeIngest) bool { _, ok := f.commitRecs[testSHA(1)]; return ok })
 	checks := []struct {
 		name string
