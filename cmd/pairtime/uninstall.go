@@ -122,7 +122,11 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 
 	// What there is to take out.
 	var items []install.Item
-	for _, it := range []func(install.Env) (install.Item, error){install.Autostart, install.ClaudeCode} {
+	planners := []func(install.Env) (install.Item, error){install.Autostart, install.ClaudeCode}
+	if offerWakaTime {
+		planners = append(planners, wakaTimeItem(dirs, time.Now()))
+	}
+	for _, it := range planners {
 		if item, err := it(env); err == nil {
 			items = append(items, item)
 		}

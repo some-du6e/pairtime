@@ -137,8 +137,8 @@ func newTestHome(t *testing.T, hookMode string) *testHome {
 		}
 	}
 	drop := []string{"HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "TMPDIR", "TEMP", "TMP", "PATH", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
-		"XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", home.EnvHome, runEnv, hookModeEnv, holdEnv,
-		keyringEnv, keyringFailEnv}
+		"XDG_RUNTIME_DIR", "XDG_STATE_HOME", "XDG_CACHE_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "WAKATIME_HOME", home.EnvHome, runEnv, hookModeEnv, holdEnv,
+		keyringEnv, keyringFailEnv, wakatimeEnv}
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
 		if !slices.ContainsFunc(drop, func(d string) bool { return strings.EqualFold(d, k) }) {
