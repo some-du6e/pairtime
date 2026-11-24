@@ -375,8 +375,14 @@ func procOf(p platform.Proc) inbox.Proc {
 // ReadChain returns the process pid and its ancestors, nearest first, as
 // this OS's process table has them (WP-OS6). It is empty when pid isn't in
 // the table. The hook reads its own chain with it, and the agent the chain
-// of each connection's peer.
+// of each connection's peer, so on Linux it reads only the chain's
+// processes (linux.Chain), and elsewhere the whole table (tableChain).
 func ReadChain(pid int) ([]platform.Proc, error) {
+	return readChainOS(pid)
+}
+
+// tableChain is ReadChain from the whole process table.
+func tableChain(pid int) ([]platform.Proc, error) {
 	procs, err := readOS()
 	if err != nil {
 		return nil, err

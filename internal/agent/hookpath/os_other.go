@@ -14,4 +14,6 @@ var errNoTable = errors.New("pairtime can't read the process table on this OS")
 
 func readOS() ([]platform.Proc, error) { return nil, errNoTable }
 
+func readChainOS(int) ([]platform.Proc, error) { return nil, errNoTable }
+
 func selfOS() (platform.Proc, error) { return platform.Proc{}, errNoTable }

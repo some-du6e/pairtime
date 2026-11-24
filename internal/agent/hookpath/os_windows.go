@@ -9,4 +9,6 @@ import (
 
 func readOS() ([]platform.Proc, error) { return windows.Processes() }
 
+func readChainOS(pid int) ([]platform.Proc, error) { return tableChain(pid) }
+
 func selfOS() (platform.Proc, error) { return windows.Self() }

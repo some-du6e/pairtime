@@ -9,4 +9,6 @@ import (
 
 func readOS() ([]platform.Proc, error) { return linux.Processes() }
 
+func readChainOS(pid int) ([]platform.Proc, error) { return linux.Chain(pid) }
+
 func selfOS() (platform.Proc, error) { return linux.Self() }
