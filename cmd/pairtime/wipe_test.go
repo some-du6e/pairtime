@@ -247,6 +247,24 @@ func TestPrivacyDelete(t *testing.T) {
 			},
 		},
 		{
+			name: "a data directory with nothing recorded in it but names in config.toml still has the names taken out",
+			args: []string{"--yes"},
+			prepare: func(t *testing.T, dir string) {
+				cfg := "mode = \"local\"\n\n[projects." + wipeProjectKey + "]\nname = \"chip8-emulator\"\n"
+				if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, dir, out string) {
+				if got, err := os.ReadFile(filepath.Join(dir, "config.toml")); err != nil || string(got) != "mode = \"local\"\n\n" {
+					t.Errorf("config.toml is %q (%v), want it without the project's table", got, err)
+				}
+				if strings.Contains(out, "nothing to delete") || !strings.Contains(out, "all but the names you gave your projects") {
+					t.Errorf("printed %q", out)
+				}
+			},
+		},
+		{
 			name: "an argument besides the flags is a usage error",
 			fill: true, mode: config.Local, args: []string{"--yes", "all"}, wantCode: 2,
 			check: func(t *testing.T, dir, out string) {

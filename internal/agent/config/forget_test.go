@@ -94,19 +94,39 @@ func TestForgetNames(t *testing.T) {
 			name: "no file stays no file",
 		},
 		{
+			name: "a table under projects whose key isn't a project's key goes too, though Parse ignores it",
+			file: "mode = \"local\"\n\n[projects.\"chip 8\"]\nname = \"chip8-emulator\"\n",
+			want: "mode = \"local\"\n\n",
+		},
+		{
+			name: "projects that isn't a table at the top of the file goes",
+			file: "projects = 5\nmode = \"local\"\n",
+			want: "mode = \"local\"\n",
+		},
+		{
+			name:    "a header that escapes a letter of projects, which the edit doesn't read line by line, is refused, as the decoder still reads it as projects",
+			file:    "[\"pro\\u006aects\"." + chip8Key + "]\nname = \"chip8-emulator\"\n",
+			wantErr: "can't take out line by line",
+		},
+		{
+			name: "a multi-line string in a file with no project is no reason to refuse",
+			file: "[display]\nshadow = false\nnote = \"\"\"a\n[projects.x]\n\"\"\"\n",
+			want: "[display]\nshadow = false\nnote = \"\"\"a\n[projects.x]\n\"\"\"\n",
+		},
+		{
 			name:    "projects in another case is refused, as it can hold a name Parse doesn't read",
 			file:    "mode = \"local\"\n\n[Projects." + chip8Key + "]\nname = \"chip8-emulator\"\n",
-			wantErr: "spells projects in another upper and lower case",
+			wantErr: "can't take out line by line",
 		},
 		{
 			name:    "projects in another case beside one in lower case is refused, and nothing goes",
 			file:    chip8 + "\n[PROJECTS." + notesKey + "]\nname = \"notes\"\n",
-			wantErr: "spells projects in another upper and lower case",
+			wantErr: "can't take out line by line",
 		},
 		{
 			name:    "a dotted key that spells projects in another case is refused",
 			file:    "Projects." + chip8Key + ".name = \"chip8-emulator\"\nmode = \"local\"\n",
-			wantErr: "spells projects in another upper and lower case",
+			wantErr: "can't take out line by line",
 		},
 		{
 			name:    "a multi-line string in a project's table, whose lines look like a header, is refused",
@@ -152,6 +172,36 @@ func TestForgetNames(t *testing.T) {
 						t.Errorf("the edit added the problem %q", p)
 					}
 				}
+			}
+		})
+	}
+}
+
+func TestHoldsNames(t *testing.T) {
+	tests := []struct {
+		name string
+		file string // "" means no file
+		want bool
+	}{
+		{name: "a project's table is a name", file: "[projects." + chip8Key + "]\nname = \"chip8-emulator\"\n", want: true},
+		{name: "a dotted key under projects is one", file: "projects." + chip8Key + ".name = \"chip8-emulator\"\n", want: true},
+		{name: "projects in another case is one too", file: "[Projects." + chip8Key + "]\nname = \"chip8-emulator\"\n", want: true},
+		{name: "a projects key inside another table isn't one", file: "[display]\nprojects = \"kept\"\n"},
+		{name: "a file of other settings holds none", file: "mode = \"local\"\n\n[display]\nshadow = false\n"},
+		{name: "no file holds none"},
+		{name: "a file that doesn't parse is read line by line, and a project's header is one", file: "mode = [\n[projects." + chip8Key + "]\n", want: true},
+		{name: "a file that doesn't parse, with no project's header, holds none", file: "mode = [\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name := filepath.Join(t.TempDir(), "config.toml")
+			if tt.file != "" {
+				if err := os.WriteFile(name, []byte(tt.file), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := HoldsNames(name); got != tt.want {
+				t.Errorf("HoldsNames = %v, want %v", got, tt.want)
 			}
 		})
 	}

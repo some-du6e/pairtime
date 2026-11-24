@@ -83,6 +83,18 @@
       "kept": "Until you uninstall pairtime, which puts back what install changed and then deletes them. \"Delete everything\" leaves them, so that uninstall can still put your files back. If uninstall stops before it has deleted pairtime's data, for example because it can't delete your device key or another program has one of pairtime's files open, they stay until you run it again"
     },
     {
+      "id": "device.settings",
+      "where": "device",
+      "data": "Your settings in config.toml: whether pairtime uploads and which server it signs in to, its notifications and quiet hours, whether it keeps your prompt text and how long it keeps that and your file paths, whether it shows your time as calibrating, the local port it tries first, and the name you gave each project for your dashboard, which stays there while that name is turned off",
+      "kept": "Until you change them or uninstall pairtime. \"Delete everything\" deletes the names you gave your projects and keeps your other settings, and pairtime stops uploading until you sign in again"
+    },
+    {
+      "id": "device.local_api",
+      "where": "device",
+      "data": "The secret code that lets pairtime's own commands and its dashboard on this computer talk to the agent, with the agent's port and process ID, in a file other people's accounts on this computer can't open, though an administrator can",
+      "kept": "Until you uninstall pairtime or delete everything. The agent keeps the same code when it restarts, and makes a new one when the file is gone"
+    },
+    {
       "id": "device.key",
       "where": "device",
       "data": "Your device key",

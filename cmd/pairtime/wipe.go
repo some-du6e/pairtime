@@ -53,8 +53,9 @@ Exit status:
 // wipeKeeps are the entries of the data directory that "delete everything"
 // leaves, because they are pairtime itself and its settings, not what it
 // recorded: config.toml, which is in the data directory on macOS and under
-// PAIRTIME_HOME, and config.lock, which every edit of it locks
-// (internal/agent/config); install's record of what it put in, which
+// PAIRTIME_HOME, and which loses only the names the teen gave their
+// projects (config.ForgetNames), and config.lock, which every edit of it
+// locks (internal/agent/config); install's record of what it put in, which
 // uninstall reads, and its lock (internal/install); the binaries on
 // Windows; the locks of the agent and of pairtime login, and the agent's
 // socket.
@@ -98,7 +99,9 @@ func runPrivacyDelete(args []string, stdout, stderr io.Writer) int {
 	}
 	_, kerr := keys.Inspect(dirs.Data)
 	running := agentLocked(dirs)
-	if len(recorded) == 0 && kerr != nil && !running {
+	// Names the teen gave their projects in config.toml are data too, which
+	// go, though nothing else is there (config.HoldsNames).
+	if len(recorded) == 0 && kerr != nil && !running && !config.HoldsNames(dirs.ConfigFile()) {
 		fmt.Fprintln(stdout, "pairtime has recorded nothing on this computer, so there is nothing to delete.")
 		return 0
 	}

@@ -3,7 +3,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -23,45 +26,91 @@ import (
 // [ projects . p_x ] name the same table. A projects key inside another
 // table, such as [display], isn't the teen's projects, and stays.
 //
-// Every other line stays byte for byte, as SetOnline says, and the file has
-// to parse to what it did, with the projects gone and nothing else
-// (edited), so a spelling this misses is a refusal, never a label left
-// behind. A file that spells projects in another upper and lower case, such
-// as [Projects.x], which Parse doesn't read as projects but which can still
-// hold a label, is refused, and so is one with a multi-line string. The
-// error says what to delete by hand.
+// Every other line stays byte for byte, as SetOnline says. The result has
+// to parse, with nothing under projects left at its top in any upper and
+// lower case, as the decoder reads its keys (projectsLeft), and to what the
+// file did with the projects gone and nothing else (edited), so a spelling
+// this misses is a refusal, never a label left behind. That refuses a file
+// that spells projects in another case, such as [Projects.x], which Parse
+// doesn't read as projects but which can still hold a label, and one whose
+// header escapes a letter of projects, as well as one with a multi-line
+// string, a line of which could look like a table's. The error says what to
+// delete by hand.
 func ForgetNames(name string) error {
 	byHand := func(name, _ string) string {
 		return "delete every table under projects, in any upper and lower case, such as [projects.<key>], with every line under it, in " + name + " by hand"
 	}
-	variant := false
+	why := "" // why the edit left the file as it is, though it holds projects
 	err := rewrite(name, false, byHand, func(text string) string {
-		if variant = projectsVariant(text); variant {
+		why = ""
+		if !projectsLeft(text) {
+			return text // nothing under projects, whatever a string's lines look like
+		}
+		out := withoutProjects(text)
+		switch {
+		case strings.Contains(text, `"""`) || strings.Contains(text, "'''"):
+			why = "has a multi-line string, a line of which could look like a table's"
+			return text
+		case projectsLeft(out):
+			why = "holds projects pairtime can't take out line by line, such as a table spelled in another upper and lower case"
 			return text
 		}
-		return withoutProjects(text)
+		return out
 	}, func(c *Config) { c.Projects = nil })
 	switch {
-	case variant:
-		return fmt.Errorf("config: config.toml spells projects in another upper and lower case, which pairtime doesn't read as projects but which can still hold a project's name, so it didn't change it; %s", byHand(name, ""))
+	case why != "":
+		return fmt.Errorf("config: config.toml %s, so pairtime didn't change it; %s", why, byHand(name, ""))
 	case err != nil:
 		return err
 	}
 	return nil
 }
 
-// projectsVariant reports whether text, which parses, spells projects at
-// the top of the file in another upper and lower case than Parse reads, as
-// a table, such as [Projects.x] or [PROJECTS], a dotted key, such as
-// Projects.x.name, or an inline table. The decoder's keys name each one
-// wherever the file writes it.
-func projectsVariant(text string) bool {
+// HoldsNames reports whether the config.toml at name holds anything under
+// projects at its top, in any upper and lower case, such as the names the
+// teen gave their projects: what ForgetNames takes out, or refuses. A file
+// that isn't there holds none, and one that doesn't parse is read line by
+// line.
+func HoldsNames(name string) bool {
+	data, err := os.ReadFile(name)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false
+	case err != nil:
+		return true
+	}
+	text := strings.TrimPrefix(string(data), bom)
+	if _, err := toml.Decode(text, &fileConfig{}); err == nil {
+		return projectsLeft(text)
+	}
+	top := true
+	for _, line := range strings.Split(text, "\n") {
+		t := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(t, "["):
+			top = false
+			if strings.HasPrefix(strings.ToLower(strings.TrimLeft(t, "[ ")), projectsTable) {
+				return true
+			}
+		case top && !isComment(t):
+			if parts := keyParts(t); len(parts) > 0 && strings.EqualFold(parts[0], projectsTable) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// projectsLeft reports whether text holds anything under projects at its
+// top, in any upper and lower case, as the decoder reads its keys, or
+// doesn't parse: what ForgetNames left must hold nothing of the kind.
+func projectsLeft(text string) bool {
 	md, err := toml.Decode(text, &fileConfig{})
 	if err != nil {
-		return false // edited refuses a file that doesn't parse before it asks
+		return true
 	}
 	for _, k := range md.Keys() {
-		if len(k) > 0 && k[0] != projectsTable && strings.EqualFold(k[0], projectsTable) {
+		if len(k) > 0 && strings.EqualFold(k[0], projectsTable) {
 			return true
 		}
 	}
