@@ -545,7 +545,7 @@ func TestRoutes(t *testing.T) {
 		{name: "HEAD /privacy answers too", method: http.MethodHead, path: "/privacy", wantCode: 200},
 		{name: "POST /privacy is refused", method: http.MethodPost, path: "/privacy", wantCode: 405},
 		{name: "/docs/evidence serves the definition for the scoring version this server runs", path: "/docs/evidence", wantCode: 200, wantBody: "This server runs scoring 0.4.2."},
-		{name: "/docs/evidence says which versions its definition covers", path: "/docs/evidence", wantCode: 200, wantBody: "for scoring 0.4.0 and the later 0.x versions."},
+		{name: "/docs/evidence says which versions its definition covers", path: "/docs/evidence", wantCode: 200, wantBody: "for scoring 0.4.0 and the later versions before 0.8.0."},
 		{name: "/docs/evidence/<version> serves the definition in force at that version", path: "/docs/evidence/0.1.0", wantCode: 200, wantBody: "Evidence levels and bands"},
 		{name: "a version between two definitions gets the older one, which covers the versions before the next", path: "/docs/evidence/0.2.0", wantCode: 200, wantBody: "for scoring 0.1.0 and the later versions before 0.4.0."},
 		{name: "an older definition says it is the design as it read for its version, which may differ from the design this server was built from", path: "/docs/evidence/0.2.0", wantCode: 200, wantBody: "design as it read for scoring 0.1.0, word for word. The design this server was built from may say something else."},
