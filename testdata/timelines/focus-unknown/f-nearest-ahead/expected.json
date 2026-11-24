@@ -1,0 +1,291 @@
+{
+  "fixture": "focus-unknown/f-nearest-ahead",
+  "title": "Two projects' sessions on GNOME on Wayland, where the nearer prompt lies ahead",
+  "sm": "docs/design/struggle-metric.md 2.5",
+  "date": "2026-11-28",
+  "timezone": "Europe/Berlin",
+  "utc_offset": "+01:00",
+  "os": "linux",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "witnessed",
+  "device": "d_2486832d2b89",
+  "projects": {"p_fca05b11bce0": "notes", "p_3815ea4d3197": "game"},
+  "window": {"start": "2026-11-28T12:55:00Z", "end": "2026-11-28T13:10:00Z", "local": "13:55-14:10"},
+  "rows": [
+    {
+      "start": "2026-11-28T12:55:00Z",
+      "minutes": 1,
+      "local": "13:55",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_3815ea4d3197": {"SUP": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 60,
+      "sm": "2.4 and 5.2",
+      "note": "B0 is sent at 13:55:00 and resets game's bucket to 20 s; 30 words add 10 s at 13:55:30. While B0 runs with nothing to read, X.agent_only.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T12:56:00Z",
+      "minutes": 1,
+      "local": "13:56",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3815ea4d3197": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "2.4",
+      "note": "game's 60-line edit lands at 13:56:00 and adds 450 s; B0 stops at 13:56:30 and its summary adds 20 s.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T12:57:00Z",
+      "minutes": 1,
+      "local": "13:57",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 30},
+        "p_fca05b11bce0": {"P": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "3.3 rule 2",
+      "note": "game reads to 13:57:30, where A1's lead begins and beats game's bucket.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T12:58:00Z",
+      "minutes": 1,
+      "local": "13:58",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fca05b11bce0": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T12:59:00Z",
+      "minutes": 1,
+      "local": "13:59",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fca05b11bce0": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3",
+      "note": "The typing part, 45 / 1.5 = 30 s, from 13:59:30.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T13:00:00Z",
+      "minutes": 1,
+      "local": "14:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 50,
+      "credit": {
+        "p_fca05b11bce0": {"SUP": 20},
+        "p_3815ea4d3197": {"READ": 30}
+      },
+      "uncredited": {"X.agent_only": 10},
+      "agent_running_s": 60,
+      "sm": "2.5 and D-split-slots: a slot of unknown focus keeps its first credited second's project",
+      "note": "A1 is sent at 14:00:00 and resets notes's bucket to 20 s. Both buckets have output, and A1 is the nearer anchor, so notes reads. The slot from 14:00:15 is notes's by its first second, so when notes's bucket runs dry at 14:00:20 game's can't take the rest: X.agent_only while A1 runs. From 14:00:30 only game's bucket has output.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-24-sm-2.5-split-slots"
+    },
+    {
+      "start": "2026-11-28T13:01:00Z",
+      "minutes": 1,
+      "local": "14:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fca05b11bce0": {"SUP": 15},
+        "p_3815ea4d3197": {"READ": 45}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "2.5",
+      "note": "notes's 45 words land at 14:01:00, 15 s, and A1 is nearer, so notes reads them; from 14:01:15 only game's bucket has output again.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T13:02:00Z",
+      "minutes": 1,
+      "local": "14:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fca05b11bce0": {"SUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "2.5",
+      "note": "notes's 40-line edit lands at 14:02:00 and adds 300 s; A1 is nearer than B0 or B1.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T13:03:00Z",
+      "minutes": 1,
+      "local": "14:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fca05b11bce0": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.5",
+      "note": "A1 stops at 14:03:00 and its summary adds 20 s.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T13:04:00Z",
+      "minutes": 1,
+      "local": "14:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_fca05b11bce0": {"READ": 45},
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.5 and D-split-slots: the nearest anchor can lie ahead",
+      "note": "At 14:04:30, the first second of its slot, A1 is 270 s back and B1 271 s ahead, so notes reads to 14:04:45. At 14:04:45, a new slot, B1 is 256 s ahead and A1 285 s back, so game reads, with 305 s in its bucket against notes's 155.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
+      "erratum": "2026-11-24-sm-2.5-split-slots"
+    },
+    {
+      "start": "2026-11-28T13:05:00Z",
+      "minutes": 1,
+      "local": "14:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.5",
+      "note": "B1 ahead is the nearer anchor.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T13:06:00Z",
+      "minutes": 1,
+      "local": "14:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3815ea4d3197": {"P": 15, "READ": 45}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.5 and 3.3 rule 2",
+      "note": "game reads to 14:06:45, where B1's lead begins and beats notes's bucket.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T13:07:00Z",
+      "minutes": 1,
+      "local": "14:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3815ea4d3197": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T13:08:00Z",
+      "minutes": 1,
+      "local": "14:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3815ea4d3197": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3",
+      "note": "The typing part, 24 / 1.5 = 16 s, from 14:08:45.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-28T13:09:00Z",
+      "minutes": 1,
+      "local": "14:09",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_3815ea4d3197": {"P": 1, "SUP": 49, "READ": 10}
+      },
+      "uncredited": {},
+      "agent_running_s": 49,
+      "sm": "2.4 and 2.5",
+      "note": "B1 is sent at 14:09:01 and resets game's bucket to 20 s; 30 words add 10 s at 14:09:20 and a 24-line edit 180 s at 14:09:30. B1 is the nearer anchor.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    }
+  ],
+  "totals": {
+    "credited_s": 860,
+    "credited_by_project": {"p_3815ea4d3197": 510, "p_fca05b11bce0": 350},
+    "credited_by_reason": {"P": 286, "SUP": 204, "READ": 370},
+    "uncredited": {"X.agent_only": 40},
+    "agent_running_s": 319,
+    "level_a_s": 0,
+    "level_b_s": 0,
+    "level_c_s": 860,
+    "focus_unknown_s": 860,
+    "agent_only_s": 40,
+    "agent_running_s.p_fca05b11bce0": 180,
+    "agent_only_s.p_fca05b11bce0": 85,
+    "agent_running_s.p_3815ea4d3197": 139,
+    "agent_only_s.p_3815ea4d3197": 30,
+    "ai_credited_s": 860,
+    "hand_credited_s": 0,
+    "contested_buckets_s": 379
+  },
+  "stated": [],
+  "approx": {},
+  "errata": ["2026-11-24-sm-2.5-split-slots"],
+  "notes": [
+    "WP-FX8's (f), for follow-up triage item 90: two Claude Code sessions in two projects on GNOME on Wayland without pairtime's extension, so every slot's focus is unknown and both projects' windows and buckets compete for every second (SM 2.5, 3.3 rule 1).",
+    "Buckets of the two projects go to the project whose qualifying human anchor is nearest the second, the earlier anchor on a tie, then the lower project_key (SM 2.5), and D-split-slots gives a slot the project of its first credited second. From 14:04:45 to 14:06:45 both buckets hold output, and B1, sent at 14:09:01, is nearer than A1, sent at 14:00:00, so the eight slots go to game, whose prompt lies ahead. A1 and B1 are 541 s apart, an odd number of seconds: measured from a second's middle, 14:04:30 is 270.5 s from both, and the earlier anchor, A1, takes it, so both readings of nearest give the same side.",
+    "Read by the most recent human prompt instead, as a look-back rule would, those eight slots go to notes, whose A1 is the most recent prompt: notes would get 470 s and game 390, not 350 and 510.",
+    "contested_buckets_s counts the seconds both buckets wanted: 200 to notes and 179 to game.",
+    "agent_only_s, 40, is SM 5.3's count across projects. agent_running_s.<p> and agent_only_s.<p> are D-bucket-agent-only's per-project numbers.",
+    "Every credited second is level C with focus_unknown."
+  ]
+}
