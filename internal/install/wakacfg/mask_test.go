@@ -12,8 +12,8 @@ func TestMasked(t *testing.T) {
 	tests := []struct {
 		name, data, want string
 	}{
-		{name: "hackatime-setup's values are masked and pairtime's line shows", data: hackatime + "\n[api_urls]\n" + line(".+") + "\n", want: "[settings]\napi_url = ***\napi_key = ***\nheartbeat_rate_limit_seconds = ***\n\n[api_urls]\n" + line(".+") + "\n"},
-		{name: "another server's line is masked beside pairtime's", data: "[api_urls]\n.*" + other + "\n" + line(".+") + "\n", want: "[api_urls]\n.* = ***\n" + line(".+") + "\n"},
+		{name: "hackatime-setup's values are masked and pairtime's line shows", data: hackatime + "\n[api_urls]\n" + ours(".+") + "\n", want: "[settings]\napi_url = ***\napi_key = ***\nheartbeat_rate_limit_seconds = ***\n\n[api_urls]\n" + ours(".+") + "\n"},
+		{name: "another server's line is masked beside pairtime's", data: "[api_urls]\n.*" + other + "\n" + ours(".+") + "\n", want: "[api_urls]\n.* = ***\n" + ours(".+") + "\n"},
 		{name: "comments are masked after their # or ;", data: "; my key is x\n# note\n[settings]\napi_key = " + otherKey + " ; inline\n", want: "; ***\n# ***\n[settings]\napi_key = ***\n"},
 		{name: "a header keeps its name and loses what follows it", data: "[settings] ; who\napi_key = " + otherKey + "\n", want: "[settings] ***\napi_key = ***\n"},
 		{name: "an indented list is masked line by line", data: "[settings]\nexclude =\n    ^/secret/\n", want: "[settings]\nexclude =\n    ***\n"},

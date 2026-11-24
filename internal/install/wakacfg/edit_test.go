@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// line is pairtime's line on port 7247 under spelling.
-func line(spelling string) string { return spelling + " = http://127.0.0.1:7247/api/v1|" + testKey }
+// ours is pairtime's line on port 7247 under spelling.
+func ours(spelling string) string { return spelling + " = http://127.0.0.1:7247/api/v1|" + testKey }
 
 // hackatime is the config hackatime-setup writes (HC 1.5).
 const hackatime = "[settings]\napi_url = https://hackatime.hackclub.com/api/hackatime/v1\napi_key = " + otherKey + "\nheartbeat_rate_limit_seconds = 30\n"
@@ -80,28 +80,28 @@ func TestAdd(t *testing.T) {
 		wantErr             string
 		wantIs              error
 	}{
-		{name: "hackatime-setup's config gets an [api_urls] section after a blank line", before: hackatime, after: hackatime + "\n[api_urls]\n" + line(".+") + "\n"},
-		{name: "an existing .* line keeps its server, and pairtime's .+ goes after it", before: "[api_urls]\n.*" + other + "\n", after: "[api_urls]\n.*" + other + "\n" + line(".+") + "\n"},
-		{name: "with .+ taken, pairtime's line is ^.*$", before: "[api_urls]\n.+" + other + "\n", after: "[api_urls]\n.+" + other + "\n" + line("^.*$") + "\n"},
-		{name: "with .+ and ^.*$ taken, pairtime's line is (?s).*", before: "[api_urls]\n.+" + other + "\n^.*$" + other + "\n", after: "[api_urls]\n.+" + other + "\n^.*$" + other + "\n" + line("(?s).*") + "\n"},
+		{name: "hackatime-setup's config gets an [api_urls] section after a blank line", before: hackatime, after: hackatime + "\n[api_urls]\n" + ours(".+") + "\n"},
+		{name: "an existing .* line keeps its server, and pairtime's .+ goes after it", before: "[api_urls]\n.*" + other + "\n", after: "[api_urls]\n.*" + other + "\n" + ours(".+") + "\n"},
+		{name: "with .+ taken, pairtime's line is ^.*$", before: "[api_urls]\n.+" + other + "\n", after: "[api_urls]\n.+" + other + "\n" + ours("^.*$") + "\n"},
+		{name: "with .+ and ^.*$ taken, pairtime's line is (?s).*", before: "[api_urls]\n.+" + other + "\n^.*$" + other + "\n", after: "[api_urls]\n.+" + other + "\n^.*$" + other + "\n" + ours("(?s).*") + "\n"},
 		{name: "with every spelling taken, the file is refused", before: "[api_urls]\n.+" + other + "\n^.*$" + other + "\n(?s).*" + other + "\n", wantErr: "for each of the patterns"},
 		{name: "a spelling in another case is taken, as viper lowercases keys", before: "[api_urls]\n.+" + other + "\n^.*$" + other + "\n(?S).*" + other + "\n", wantErr: "for each of the patterns"},
-		{name: "[API_URLS] in capitals is the section wakatime-cli reads", before: "[API_URLS]\n.*" + other + "\n", after: "[API_URLS]\n.*" + other + "\n" + line(".+") + "\n"},
+		{name: "[API_URLS] in capitals is the section wakatime-cli reads", before: "[API_URLS]\n.*" + other + "\n", after: "[API_URLS]\n.*" + other + "\n" + ours(".+") + "\n"},
 		{name: "a section spelled two ways is refused", before: "[api_urls]\n.*" + other + "\n[Api_Urls]\nx" + other + "\n", wantErr: "spelled both"},
-		{name: "CRLF stays CRLF and comments stay", before: "; mine\r\n[settings]\r\napi_key = " + otherKey + " ; keep\r\n# api_url = old\r\n", after: "; mine\r\n[settings]\r\napi_key = " + otherKey + " ; keep\r\n# api_url = old\r\n\r\n[api_urls]\r\n" + line(".+") + "\r\n"},
-		{name: "a byte order mark stays first", before: "\xef\xbb\xbf[settings]\napi_key = " + otherKey + "\n", after: "\xef\xbb\xbf[settings]\napi_key = " + otherKey + "\n\n[api_urls]\n" + line(".+") + "\n"},
-		{name: "a file without a final line break gets one before the new section", before: "[settings]\napi_key = " + otherKey, after: "[settings]\napi_key = " + otherKey + "\n\n[api_urls]\n" + line(".+") + "\n"},
-		{name: "a file that ends with a blank line gets no second one", before: "[settings]\napi_key = " + otherKey + "\n\n", after: "[settings]\napi_key = " + otherKey + "\n\n[api_urls]\n" + line(".+") + "\n"},
-		{name: "a blank file gets the section and nothing before it", before: "\n", after: "\n[api_urls]\n" + line(".+") + "\n"},
-		{name: "the line goes after the section's last key, before what follows it", before: "[api_urls]\n.*" + other + "\n; note\n\n[settings]\napi_key = " + otherKey + "\n", after: "[api_urls]\n.*" + other + "\n" + line(".+") + "\n; note\n\n[settings]\napi_key = " + otherKey + "\n"},
-		{name: "an empty section gets the line after its header", before: "[api_urls]\n\n[settings]\napi_key = " + otherKey + "\n", after: "[api_urls]\n" + line(".+") + "\n\n[settings]\napi_key = " + otherKey + "\n"},
-		{name: "before an indented line, which would go on with it, the line goes at the section's end", before: "[api_urls]\n  ; a note\n[settings]\napi_key = " + otherKey + "\n", after: "[api_urls]\n  ; a note\n" + line(".+") + "\n[settings]\napi_key = " + otherKey + "\n"},
+		{name: "CRLF stays CRLF and comments stay", before: "; mine\r\n[settings]\r\napi_key = " + otherKey + " ; keep\r\n# api_url = old\r\n", after: "; mine\r\n[settings]\r\napi_key = " + otherKey + " ; keep\r\n# api_url = old\r\n\r\n[api_urls]\r\n" + ours(".+") + "\r\n"},
+		{name: "a byte order mark stays first", before: "\xef\xbb\xbf[settings]\napi_key = " + otherKey + "\n", after: "\xef\xbb\xbf[settings]\napi_key = " + otherKey + "\n\n[api_urls]\n" + ours(".+") + "\n"},
+		{name: "a file without a final line break gets one before the new section", before: "[settings]\napi_key = " + otherKey, after: "[settings]\napi_key = " + otherKey + "\n\n[api_urls]\n" + ours(".+") + "\n"},
+		{name: "a file that ends with a blank line gets no second one", before: "[settings]\napi_key = " + otherKey + "\n\n", after: "[settings]\napi_key = " + otherKey + "\n\n[api_urls]\n" + ours(".+") + "\n"},
+		{name: "a blank file gets the section and nothing before it", before: "\n", after: "\n[api_urls]\n" + ours(".+") + "\n"},
+		{name: "the line goes after the section's last key, before what follows it", before: "[api_urls]\n.*" + other + "\n; note\n\n[settings]\napi_key = " + otherKey + "\n", after: "[api_urls]\n.*" + other + "\n" + ours(".+") + "\n; note\n\n[settings]\napi_key = " + otherKey + "\n"},
+		{name: "an empty section gets the line after its header", before: "[api_urls]\n\n[settings]\napi_key = " + otherKey + "\n", after: "[api_urls]\n" + ours(".+") + "\n\n[settings]\napi_key = " + otherKey + "\n"},
+		{name: "before an indented line, which would go on with it, the line goes at the section's end", before: "[api_urls]\n  ; a note\n[settings]\napi_key = " + otherKey + "\n", after: "[api_urls]\n  ; a note\n" + ours(".+") + "\n[settings]\napi_key = " + otherKey + "\n"},
 		{name: "a section with an indented line after each place is refused", before: "[api_urls]\n  ; a note\n  [settings]\napi_key = " + otherKey + "\n", wantErr: "indented line"},
-		{name: "a key's indented lines stay with it, and the line goes after them", before: "[api_urls]\n.*" + other + "\n[settings]\nexclude =\n    ^/tmp/\n    ^/private/\n", after: "[api_urls]\n.*" + other + "\n" + line(".+") + "\n[settings]\nexclude =\n    ^/tmp/\n    ^/private/\n"},
-		{name: "an indented list at the end of the file stays one value", before: "[settings]\nexclude =\n    ^/tmp/\n", after: "[settings]\nexclude =\n    ^/tmp/\n\n[api_urls]\n" + line(".+") + "\n"},
-		{name: "a last key without a final line break gets the line after a new one", before: "[api_urls]\n.*" + other, after: "[api_urls]\n.*" + other + "\n" + line(".+")},
-		{name: "pairtime's line that is there stays as it is", before: hackatime + "\n[api_urls]\n" + line(".+") + "\n", after: hackatime + "\n[api_urls]\n" + line(".+") + "\n"},
-		{name: "pairtime's line on another port gets the new port and nothing else", before: "[api_urls]\n^.*$ = http://127.0.0.1:7248/api/v1|" + testKey + "\r\n.*" + other + "\r\n", after: "[api_urls]\n" + line("^.*$") + "\r\n.*" + other + "\r\n"},
+		{name: "a key's indented lines stay with it, and the line goes after them", before: "[api_urls]\n.*" + other + "\n[settings]\nexclude =\n    ^/tmp/\n    ^/private/\n", after: "[api_urls]\n.*" + other + "\n" + ours(".+") + "\n[settings]\nexclude =\n    ^/tmp/\n    ^/private/\n"},
+		{name: "an indented list at the end of the file stays one value", before: "[settings]\nexclude =\n    ^/tmp/\n", after: "[settings]\nexclude =\n    ^/tmp/\n\n[api_urls]\n" + ours(".+") + "\n"},
+		{name: "a last key without a final line break gets the line after a new one", before: "[api_urls]\n.*" + other, after: "[api_urls]\n.*" + other + "\n" + ours(".+")},
+		{name: "pairtime's line that is there stays as it is", before: hackatime + "\n[api_urls]\n" + ours(".+") + "\n", after: hackatime + "\n[api_urls]\n" + ours(".+") + "\n"},
+		{name: "pairtime's line on another port gets the new port and nothing else", before: "[api_urls]\n^.*$ = http://127.0.0.1:7248/api/v1|" + testKey + "\r\n.*" + other + "\r\n", after: "[api_urls]\n" + ours("^.*$") + "\r\n.*" + other + "\r\n"},
 		{name: "a config pairtime made gets the new port in its api_url", before: "[settings]\napi_url = http://127.0.0.1:7248/api/v1\napi_key = " + testKey + "\n", after: "[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + testKey + "\n"},
 		{name: "a key not in WakaTime's format is refused before the file is read", before: hackatime, key: "00000000-0000-4000-8000-00000000A9E7", wantIs: ErrKey},
 		{name: "a port out of range is refused", before: hackatime, port: 65536, wantIs: ErrPort},
@@ -149,8 +149,8 @@ func TestSetPort(t *testing.T) {
 		name, before, after string
 		wantIs              error
 	}{
-		{name: "the line's port changes and its spelling stays", before: "[api_urls]\n(?s).* = http://127.0.0.1:7250/api/v1|" + testKey + "\n", after: "[api_urls]\n" + line("(?s).*") + "\n"},
-		{name: "a line on the port already leaves the file as it is", before: "[api_urls]\n" + line(".+"), after: "[api_urls]\n" + line(".+")},
+		{name: "the line's port changes and its spelling stays", before: "[api_urls]\n(?s).* = http://127.0.0.1:7250/api/v1|" + testKey + "\n", after: "[api_urls]\n" + ours("(?s).*") + "\n"},
+		{name: "a line on the port already leaves the file as it is", before: "[api_urls]\n" + ours(".+"), after: "[api_urls]\n" + ours(".+")},
 		{name: "another key's line isn't pairtime's to change", before: "[api_urls]\n.+ = http://127.0.0.1:7250/api/v1|" + otherKey + "\n", wantIs: ErrNoLine},
 		{name: "a file without pairtime's line is ErrNoLine", before: hackatime, wantIs: ErrNoLine},
 	}
@@ -169,13 +169,13 @@ func TestRemove(t *testing.T) {
 		key                 string
 		made, section, gone bool
 	}{
-		{name: "pairtime's line comes out of a section that was there", before: "[api_urls]\n.*" + other + "\n" + line(".+") + "\n; note\n", after: "[api_urls]\n.*" + other + "\n; note\n", key: testKey},
-		{name: "pairtime's section goes with its line and the blank line before it", before: hackatime + "\n[api_urls]\n" + line(".+") + "\n", after: hackatime, key: testKey, section: true},
-		{name: "pairtime's section stays when a key was added to it since", before: hackatime + "\n[api_urls]\n" + line(".+") + "\nmine" + other + "\n", after: hackatime + "\n[api_urls]\nmine" + other + "\n", key: testKey, section: true},
-		{name: "a section that was there before stays empty", before: "[api_urls]\n" + line(".+") + "\n", after: "[api_urls]\n", key: testKey},
-		{name: "a line ending the file without a line break takes the one before it", before: "[api_urls]\n.*" + other + "\n" + line(".+"), after: "[api_urls]\n.*" + other, key: testKey},
-		{name: "another key's line stays", before: "[api_urls]\n" + line(".+") + "\n", after: "[api_urls]\n" + line(".+") + "\n", key: otherKey},
-		{name: "with no key, every line of pairtime's goes", before: "[api_urls]\n" + line(".+") + "\n^.*$ = http://127.0.0.1:7250/api/v1|" + otherKey + "\n.*" + other + "\n", after: "[api_urls]\n.*" + other + "\n"},
+		{name: "pairtime's line comes out of a section that was there", before: "[api_urls]\n.*" + other + "\n" + ours(".+") + "\n; note\n", after: "[api_urls]\n.*" + other + "\n; note\n", key: testKey},
+		{name: "pairtime's section goes with its line and the blank line before it", before: hackatime + "\n[api_urls]\n" + ours(".+") + "\n", after: hackatime, key: testKey, section: true},
+		{name: "pairtime's section stays when a key was added to it since", before: hackatime + "\n[api_urls]\n" + ours(".+") + "\nmine" + other + "\n", after: hackatime + "\n[api_urls]\nmine" + other + "\n", key: testKey, section: true},
+		{name: "a section that was there before stays empty", before: "[api_urls]\n" + ours(".+") + "\n", after: "[api_urls]\n", key: testKey},
+		{name: "a line ending the file without a line break takes the one before it", before: "[api_urls]\n.*" + other + "\n" + ours(".+"), after: "[api_urls]\n.*" + other, key: testKey},
+		{name: "another key's line stays", before: "[api_urls]\n" + ours(".+") + "\n", after: "[api_urls]\n" + ours(".+") + "\n", key: otherKey},
+		{name: "with no key, every line of pairtime's goes", before: "[api_urls]\n" + ours(".+") + "\n^.*$ = http://127.0.0.1:7250/api/v1|" + otherKey + "\n.*" + other + "\n", after: "[api_urls]\n.*" + other + "\n"},
 		{name: "a config pairtime made goes when nothing else is left in it", before: made, after: "[settings]\n", key: testKey, made: true, section: true, gone: true},
 		{name: "a config pairtime made keeps what was added to it since", before: made + "hostname = mine\n", after: "[settings]\nhostname = mine\n", key: testKey, made: true, section: true},
 		{name: "with no key, a config pairtime made is recognized by its agent api_url", before: made, after: "[settings]\n", made: true, section: true, gone: true},
@@ -223,10 +223,10 @@ func TestInspect(t *testing.T) {
 		name, data string
 		want       State
 	}{
-		{name: "hackatime-setup's config with pairtime's line has two destinations", data: hackatime + "\n[api_urls]\n" + line("^.*$") + "\n", want: State{Line: true, Port: 7247, Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true}},
+		{name: "hackatime-setup's config with pairtime's line has two destinations", data: hackatime + "\n[api_urls]\n" + ours("^.*$") + "\n", want: State{Line: true, Port: 7247, Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true}},
 		{name: "without pairtime's line, Line is false", data: hackatime, want: State{Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true}},
-		{name: "a config with no api_url sends to WakaTime's own", data: "[settings]\napi_key = " + otherKey + "\n[api_urls]\n" + line(".+") + "\n", want: State{Line: true, Port: 7247, Server: DefaultURL, ServerKey: true}},
-		{name: "a config with no api_key sends nothing", data: "[api_urls]\n" + line(".+") + "\n", want: State{Line: true, Port: 7247, Server: DefaultURL}},
+		{name: "a config with no api_url sends to WakaTime's own", data: "[settings]\napi_key = " + otherKey + "\n[api_urls]\n" + ours(".+") + "\n", want: State{Line: true, Port: 7247, Server: DefaultURL, ServerKey: true}},
+		{name: "a config with no api_key sends nothing", data: "[api_urls]\n" + ours(".+") + "\n", want: State{Line: true, Port: 7247, Server: DefaultURL}},
 		{name: "a key from a vault command counts", data: "[settings]\napi_key_vault_cmd = pass waka\n", want: State{Server: DefaultURL, ServerKey: true}},
 		{name: "a config pairtime made has only the agent", data: "[settings]\napi_url = http://127.0.0.1:7250/api/v1\napi_key = " + testKey + "\n", want: State{Line: true, Own: true, Port: 7250}},
 	}
@@ -269,7 +269,7 @@ func TestByHand(t *testing.T) {
 		name string
 		want string
 	}{
-		{name: "the hint names the whole line, as wakatime-cli must read it", want: line(".+")},
+		{name: "the hint names the whole line, as wakatime-cli must read it", want: ours(".+")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
