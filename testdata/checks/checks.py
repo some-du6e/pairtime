@@ -741,24 +741,36 @@ def sample_at(events, t):
 
 
 def ide_session(starts, session, t):
-    """Whether an IDE or a desktop app runs the session at t, by its last
-    session.start at or before t."""
+    """Whether an IDE runs the session at t, by its last session.start at
+    or before t: one whose entrypoint or parent_class is ide. A desktop
+    app's entrypoint desktop isn't one."""
     st = start_before(starts, session, t)
-    return st is not None and (st["data"]["entrypoint"] in ("ide", "desktop") or st["data"]["parent_class"] == "ide")
+    return st is not None and (st["data"]["entrypoint"] == "ide" or st["data"]["parent_class"] == "ide")
 
 
-def hosts(f, p, starts, t):
-    """Whether a focus record is on the window hosting p's session at t: a
-    window whose hosted_sessions holds it, or, while an IDE runs the
-    session, an editor whose focus_project is the session's project (SM
-    2.2 rule 6). An editor whose hosted_sessions doesn't list the session
-    hosts it only when its focus_project is the session's project."""
+def bridged_only(events):
+    """The sessions only the WakaTime bridge reports: some record via bridge
+    or bridge_unverified, and none via hook or log, read over all of the
+    session's records, so a hook's record after a prompt counts at the
+    prompt too (DESIGN 5.7)."""
+    native = {e["session_key"] for e in events if e["via"] in ("hook", "log")}
+    return {e["session_key"] for e in events if e["via"] in ("bridge", "bridge_unverified")} - native
+
+
+def hosts(f, p, starts, bridged, t):
+    """Whether a focus record is on the window hosting p's session at t,
+    SM 2.2 rule 6's window, as pkg/score's hostedBy reads it: one whose
+    hosted_sessions holds the session, or an editor whose focus_project,
+    when it has one, is the session's project, while an IDE runs the
+    session or when only the bridge reports it (bridged_only)."""
     if f is None:
         return False
-    if p["session_key"] in f["data"].get("hosted_sessions", []):
+    d = f["data"]
+    if p["session_key"] in d.get("hosted_sessions", []):
         return True
-    return (f["data"]["app_class"] == "editor" and f["data"].get("focus_project") == p.get("project_key")
-            and ide_session(starts, p["session_key"], t))
+    if d["app_class"] != "editor" or d.get("focus_project", "") not in ("", p.get("project_key")):
+        return False
+    return ide_session(starts, p["session_key"], t) or p["session_key"] in bridged
 
 
 def input_times(events, keys):
@@ -768,7 +780,7 @@ def input_times(events, keys):
     return sorted({e["t"] - ms(e["data"][field]) for e in events if e["kind"] == "os.presence"})
 
 
-def human_prompt(events, p, keys, starts):
+def human_prompt(events, p, keys, starts, bridged):
     """Whether p is a human prompt. Rules 1 to 5 of SM 2.2 leave it open,
     and it passes the input and focus tests that rules 6 and 7 share:
     input in the 10 s before submit, read from the sample taken at the
@@ -779,7 +791,7 @@ def human_prompt(events, p, keys, starts):
     s = sample_at(events, p["t"])
     check(s is not None, f"a presence sample at the prompt at {p['t']}")
     idle = s["data"]["idle_keys_s"] if keys else s["data"]["idle_any_s"]
-    return ms(idle) <= KEYS_PRE_MS and hosts(focus_at(events, p["t"]), p, starts, p["t"])
+    return ms(idle) <= KEYS_PRE_MS and hosts(focus_at(events, p["t"]), p, starts, bridged, p["t"])
 
 
 def cc1(events, sub):
@@ -836,7 +848,7 @@ def cc2(events, sub, keys):
     either (DESIGN 7.3). DESIGN also leaves relayed prompts out, which this
     reading doesn't need: it reads no relay.message, and no scenario has
     one."""
-    starts = sessions_of(events)
+    starts, bridged = sessions_of(events), bridged_only(events)
     counts = {"prompts": 0, "with_input_and_focus": 0, "no_input": 0, "no_focus": 0}
     items = []
     for p in prompts_in(events, sub):
@@ -847,7 +859,7 @@ def cc2(events, sub, keys):
         check(s is not None, f"a presence sample at the prompt at {p['t']}")
         idle = s["data"]["idle_keys_s"] if keys else s["data"]["idle_any_s"]
         has_input = ms(idle) <= KEYS_PRE_MS
-        has_focus = hosts(focus_at(events, p["t"]), p, starts, p["t"])
+        has_focus = hosts(focus_at(events, p["t"]), p, starts, bridged, p["t"])
         if has_input and has_focus:
             counts["with_input_and_focus"] += 1
             continue
@@ -1238,11 +1250,11 @@ def cc11(events, sub, keys, typing, classes):
     if typing is None:
         return outcome("not_computable", counts, reason="the typing module is off on this device")
     slots = {s["start"]: s for s in typing["slots"]}
-    starts = sessions_of(events)
+    starts, bridged = sessions_of(events), bridged_only(events)
     inputs = input_times(events, keys)
     # Every human prompt of the device, in any project and at any time,
     # takes the slots before it from the prompts after it.
-    humans = [q for q in prompts_in(events) if human_prompt(events, q, keys, starts)]
+    humans = [q for q in prompts_in(events) if human_prompt(events, q, keys, starts, bridged)]
     used, items = set(), []
     for p in humans:
         if p.get("project_key") not in sub["projects"] or not in_window(sub, p["t"]):
@@ -1272,9 +1284,9 @@ def cc11(events, sub, keys, typing, classes):
         for st in lead_slots:
             end = st + SLOT_MS - 1
             f = focus_at(events, end)
-            if st not in slots or st in used or not hosts(f, p, starts, end):
+            if st not in slots or st in used or not hosts(f, p, starts, bridged, end):
                 continue
-            if any(st < q["t"] < b and hosts(f, q, starts, end) for q in humans if q is not p):
+            if any(st < q["t"] < b and hosts(f, q, starts, bridged, end) for q in humans if q is not p):
                 continue
             used.add(st)
             k += slots[st]["keys"]
@@ -1372,10 +1384,53 @@ def selftest_cc2():
         check(result(n, lacking) == want, f"CC2 with {lacking} of {n} prompts lacking input is a {want}")
 
 
+def selftest_hosts():
+    """Which window hosts a session, for CC2 and CC11, as pkg/score's
+    hostedBy has it: one whose hosted_sessions lists the session, or an
+    editor whose focus_project, when it has one, is the session's project,
+    while an IDE runs the session or when only the bridge reports it. In
+    each case an editor that lists no session is in front for two prompts,
+    each sent a second after a key press, so the editor alone decides
+    whether CC2 passes or fails them."""
+    ide = made_start(0, "s1", "unknown", entrypoint="ide", tty=False)
+    cases = [
+        ("an editor with no focus_project hosts an IDE session", "pass", [ide, made_focus(0, "editor")], "hook"),
+        ("an editor on the session's project hosts an IDE session", "pass",
+         [ide, made_focus(0, "editor", project=MADE_P)], "hook"),
+        ("an editor on another project doesn't host an IDE session", "fail",
+         [ide, made_focus(0, "editor", project="p_other")], "hook"),
+        ("an IDE doesn't run a desktop app's session, so the editor doesn't host it", "fail",
+         [made_start(0, "s1", "unknown", entrypoint="desktop", tty=False), made_focus(0, "editor")], "hook"),
+    ]
+    # Each bridge via and each native via has cases of its own, so a via
+    # dropped from bridged_only fails one.
+    for via in ("bridge", "bridge_unverified"):
+        cases.append((f"an editor hosts a session only {via} records report", "pass", [made_focus(0, "editor")], via))
+        for native in ("hook", "log"):
+            cases.append((f"an editor doesn't host a {via} session that a {native} record covers, though the "
+                          f"record comes after the prompts", "fail",
+                          [made_focus(0, "editor"), made_event(180_000, "agent.output", {"turn_key": "t2"}, "s1",
+                                                               native)], via))
+    for name, want, setup, via in cases:
+        events = setup + [made_prompt(60_000, "s1", "t1", via=via), made_prompt(120_000, "s1", "t2", via=via),
+                          *made_samples([59_000, 119_000], [60_000, 120_000])]
+        got = cc2(made(events), MADE_SUB, True)
+        check(got["result"] == want and got["counts"]["prompts"] == 2, f"CC2: {name}: {got}")
+    # CC11 reads the same window. The key-down slot is the last 15 s before
+    # the prompt, inside its typing part, so it counts under DESIGN 6.2 D4
+    # too, which gives a bridge prompt its typing part alone as its lead.
+    # This reading doesn't model D4.
+    got = made_cc11([(600_000, 60, "substantive")], [(585_000, 15, 0)], [made_focus(0, "editor")], via="bridge")
+    check(got["result"] == "pass" and got["counts"]["key_downs"] == 15,
+          f"CC11: an editor hosts the slots of a session only the bridge reports: {got}")
+
+
 def selftest_starts():
     """Rule 4 and the IDE test read the session's last start at or before
     the time they test, so a session that moves to a headless parent, or
-    into an IDE, changes only what comes after the move."""
+    into an IDE, changes only what comes after the move. They read no side
+    door's start in a session a hook or a log reader covers, whichever
+    record comes first."""
     starts = sessions_of([made_start(0, "s1"), made_start(200_000, "s1", "script_runtime", "resume")])
     check(not automated(made_prompt(100_000, "s1", "t1"), starts),
           "rule 4 doesn't label a prompt sent before the session's headless start")
@@ -1389,13 +1444,23 @@ def selftest_starts():
           f"the editor hosts a session for CC2 only once an IDE runs it: {got}")
     # A side door's start in a session a hook or a log reader covers is a
     # cross-check that decides none of SM 2.2's rules (DESIGN 5.2), so a
-    # spooled resume with no TTY doesn't make the session's prompts headless.
+    # spooled start with no TTY, a hook call read back from disk via plugin
+    # with no walk, doesn't make the session's prompts headless. Coverage
+    # is read over all of the session's records, so that holds too when the
+    # spooled start comes before the session's first hook record.
     spooled = made_start(50_000, "s1", "unknown", "resume", via="plugin", tty=False)
-    events = made([made_start(0, "s1"), made_focus(0, "terminal", ["s1"]), spooled, made_prompt(100_000, "s1", "t1"),
-                   *made_samples([99_000], [100_000])])
-    got = cc2(events, MADE_SUB, True)
-    check(got["result"] == "pass" and got["counts"]["prompts"] == 1,
-          f"rule 4 reads no side door's start in a session a hook covers: {got}")
+    covered = [
+        ("a hook covers", [made_start(0, "s1"), spooled], "hook"),
+        ("a log reader covers", [made_start(0, "s1", via="log"), spooled], "log"),
+        ("a hook covers from a prompt after the spooled start",
+         [made_start(50_000, "s1", "unknown", via="plugin", tty=False)], "hook"),
+    ]
+    for name, records, via in covered:
+        events = made([*records, made_focus(0, "terminal", ["s1"]), made_prompt(100_000, "s1", "t1", via=via),
+                       *made_samples([99_000], [100_000])])
+        got = cc2(events, MADE_SUB, True)
+        check(got["result"] == "pass" and got["counts"]["prompts"] == 1,
+              f"rule 4 reads no side door's start in a session {name}: {got}")
     alone = [made_start(0, "s1", via="plugin"), spooled, made_prompt(100_000, "s1", "t1", via="plugin")]
     check(automated(made_prompt(100_000, "s1", "t1", via="plugin"), sessions_of(alone)),
           "rule 4 reads a side door's start in a session no hook or log reader covers")
@@ -1423,7 +1488,8 @@ def selftest_cc9():
     """CC9's parent rule: the class changes only at a resume, and only among
     terminal_app, ide, multiplexer and remote; a log reader's unknown is no
     class; and a side door's start is a cross-check in a session a hook or
-    a log reader covers, but counts in one they don't."""
+    a log reader covers, whichever record comes first, but counts in one
+    they don't."""
     cases = [
         ("a resume from Terminal into tmux passes", "pass",
          [("terminal_app", "startup", "hook"), ("multiplexer", "resume", "hook")]),
@@ -1445,6 +1511,12 @@ def selftest_cc9():
                       [("terminal_app", "startup", "hook"), ("script_runtime", "startup", via)]))
         cases.append((f"a {via} start in a session a log reader covers is a cross-check too", "pass",
                       [("terminal_app", "startup", "log"), ("script_runtime", "startup", via)]))
+        # As in D-spool-via's restart, a side door's start, such as a
+        # spooled one via plugin with parent_class unknown, can come before
+        # the hook's or the log reader's start that gives the class.
+        for native in ("hook", "log"):
+            cases.append((f"a {via} start before the {native} start that covers the session is a cross-check as well",
+                          "pass", [("unknown", "startup", via), ("terminal_app", "startup", native)]))
         cases.append((f"{via} starts count in a session no hook or log reader covers", "fail",
                       [("terminal_app", "startup", via), ("multiplexer", "startup", via)]))
     for name, want, starts in cases:
@@ -1453,21 +1525,22 @@ def selftest_cc9():
         check(cc9(events, MADE_SUB)["result"] == want, f"CC9: {name}")
 
 
-def made_cc11(prompts, key_slots, setup=None, inputs=None, projects=None, sub=MADE_SUB):
+def made_cc11(prompts, key_slots, setup=None, inputs=None, projects=None, sub=MADE_SUB, via="hook"):
     """CC11 over made-up records: prompts as (t, typed, class) in session
-    s1, or as (t, typed, class, session), and the typing module's slots as
-    (start, keys, injected). setup holds the starts and the focus, by
-    default a startup in a terminal that has focus and hosts s1. projects
-    maps a session to its project, MADE_P unless named. The agent samples
-    every 15 s and at each prompt. inputs are the key presses the samples
-    show, by default one 1 s before the end of each slot with key-downs."""
+    s1, or as (t, typed, class, session), each with the given via, and the
+    typing module's slots as (start, keys, injected). setup holds the
+    starts and the focus, by default a startup in a terminal that has focus
+    and hosts s1. projects maps a session to its project, MADE_P unless
+    named. The agent samples every 15 s and at each prompt. inputs are the
+    key presses the samples show, by default one 1 s before the end of
+    each slot with key-downs."""
     setup = setup or [made_start(0, "s1"), made_focus(0, "terminal", ["s1"])]
     projects = projects or {}
     prompts = [p if len(p) == 4 else (*p, "s1") for p in prompts]
     if inputs is None:
         inputs = [st + SLOT_MS - 1000 for st, _, _ in key_slots]
     times = sorted({*range(SLOT_MS, max(p[0] for p in prompts) + 1, SLOT_MS), *(p[0] for p in prompts)})
-    events = setup + [made_prompt(t, s, f"t{t}", typed, projects.get(s, MADE_P)) for t, typed, _, s in prompts]
+    events = setup + [made_prompt(t, s, f"t{t}", typed, projects.get(s, MADE_P), via) for t, typed, _, s in prompts]
     events += made_samples([0, *inputs], times)
     typing = {"slots": [{"start": st, "keys": k, "injected": i} for st, k, i in key_slots]}
     return cc11(made(events), sub, True, typing, {f"t{t}": pc for t, _, pc, _ in prompts})
@@ -1533,15 +1606,25 @@ def selftest_cc11():
     check(refuses(lambda: made_cc11([(601_000, 227, "substantive")], [(315_000, 30, 0), (600_000, 27, 0)],
                                     inputs=[329_000, 600_000])),
           "CC11 refuses 227 typed characters over the one input slot of their rounded 271 s lead")
+    # 224 and 227 are 2 more than a multiple of 3, where rounding and
+    # truncating agree. 223 gives 148.67 s, which rounds up to 149, so the
+    # lead is 269 s and starts at 329 s, inside the slot before 330 s.
+    # Truncated to 148 s, it would start at 330 s, and CC11 would count the
+    # last slot's 16 key-downs alone and fail.
+    got = made_cc11([(598_000, 223, "substantive")], [(315_000, 40, 0), (585_000, 16, 0)], inputs=[329_000, 597_000])
+    check(got["result"] == "pass" and got["counts"]["key_downs"] == 56,
+          f"CC11's lead rounds 223 typed characters up to 149 s, so the slot it starts inside counts: {got}")
+    for typed, want in ((61, 41), (35, 23)):
+        lead = prompt_lead_ms({"data": {"typed_len_est": typed}}, "substantive")
+        check(lead == (THINK_LEAD_S + want) * 1000, f"SM 1.3: {typed} typed characters are {want} s of typing: {lead}")
 
 
 def selftest_cc11_windows():
     """CC11's slot rule across sessions, windows, projects and the
     submission's bounds: a slot is the first human prompt's after the
     slot's start among the sessions its window hosts, in any project and
-    at any time, and an editor that doesn't list an IDE session in its
-    hosted_sessions hosts it only when the editor is on the session's
-    project."""
+    at any time, and an editor on another project hosts none of an IDE
+    session's slots that it doesn't list in hosted_sessions."""
     t = 600_000
     after = [(540_000, 11, "low_effort", "s2"), (t, 60, "substantive", "s1")]
     tmux = [made_start(0, "s1", "multiplexer"), made_start(0, "s2", "multiplexer"),
@@ -1584,6 +1667,7 @@ def selftest():
     """Checks, on made-up records, the rules no scenario reaches."""
     selftest_es()
     selftest_cc2()
+    selftest_hosts()
     selftest_starts()
     selftest_cc7()
     selftest_cc9()
