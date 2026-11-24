@@ -401,8 +401,11 @@ func TestAdaptersWaiting(t *testing.T) {
 			if _, err := w.Write(presenceAt(time.Now())); err != nil {
 				t.Fatal(err)
 			}
-			if b, ok, err := w.Seal(); !ok || err != nil || b.Online {
-				t.Fatalf("the stretch's batch was sealed %v, online %v (%v); want local-only", ok, b.Online, err)
+			// The stretch's first record seals at once on the writer's loop,
+			// which may run before this seal, so the newest row says how the
+			// batch went.
+			if r := sealNow(t, w, h.a.dirs.Ledger()); r.Online {
+				t.Fatal("the stretch's batch was sealed online; want local-only")
 			}
 			// A call made in the stretch is held behind a .replay file this run
 			// couldn't delete.
