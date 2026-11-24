@@ -117,14 +117,15 @@ func TestGatherWakaTime(t *testing.T) {
 		name string
 		// config is what the config the setup file names holds, "" for no
 		// config; setup says install wrote a setup file; env is
-		// WAKATIME_API_KEY, and proxy and noProxy values for HTTPS_PROXY and
-		// NO_PROXY.
-		config  string
-		setup   bool
-		env     string
-		proxy   string
-		noProxy string
-		want    func(t *testing.T, w *WakaTime)
+		// WAKATIME_API_KEY, and proxy and noProxy values for HTTPS_PROXY, or
+		// proxyVar when it names another variable, and NO_PROXY.
+		config   string
+		setup    bool
+		env      string
+		proxy    string
+		proxyVar string
+		noProxy  string
+		want     func(t *testing.T, w *WakaTime)
 	}{
 		{
 			name: "with no setup file, there is nothing to show",
@@ -228,8 +229,8 @@ func TestGatherWakaTime(t *testing.T) {
 			},
 		},
 		{
-			name:   "with HTTPS_PROXY set, a teen's server on 127.0.0.1 is asked too, as no environment proxy reaches loopback",
-			config: settings + line(port), setup: true, proxy: "http://proxy.example:3128",
+			name:   "with HTTP_PROXY set, a teen's http server on 127.0.0.1 is asked too, as no environment proxy reaches loopback",
+			config: settings + line(port), setup: true, proxy: "http://proxy.example:3128", proxyVar: "HTTP_PROXY",
 			want: func(t *testing.T, w *WakaTime) {
 				if w == nil || w.Proxy != "" || w.Server == nil || w.Server.Status != http.StatusUnauthorized {
 					t.Errorf("GatherWakaTime = %+v, want the server's 401", w)
@@ -310,7 +311,11 @@ func TestGatherWakaTime(t *testing.T) {
 				t.Setenv(v, "")
 			}
 			if tt.proxy != "" {
-				t.Setenv("HTTPS_PROXY", tt.proxy)
+				v := tt.proxyVar
+				if v == "" {
+					v = "HTTPS_PROXY"
+				}
+				t.Setenv(v, tt.proxy)
 			}
 			if tt.noProxy != "" {
 				t.Setenv("NO_PROXY", tt.noProxy)

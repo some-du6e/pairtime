@@ -491,7 +491,8 @@ func TestWakaTimeKeyOrder(t *testing.T) {
 		want          string // "" for a new key
 	}{
 		{name: "a line of pairtime's under [api_urls] comes before the setup file's key", cfg: "[api_urls]\n.+ = http://127.0.0.1:7250/api/v1|" + otherWakaKey + "\n", setupKey: wakaKey, want: otherWakaKey},
-		{name: "the setup file's key comes before the api_key of a config pairtime made, which the teen may have replaced", cfg: taken, setupKey: otherWakaKey, want: otherWakaKey},
+		{name: "the setup file's key comes before the api_key of a config pairtime made", cfg: made, setupKey: otherWakaKey, want: otherWakaKey},
+		{name: "with a setup file, a config pairtime made whose api_key the teen replaced gives the setup file's key, never the teen's", cfg: taken, setupKey: otherWakaKey, want: otherWakaKey},
 		{name: "with no setup file, a config pairtime made gives its own api_key, whose hash its mark names", cfg: made, want: wakaKey},
 		{name: "with no setup file, a config pairtime made whose api_key the teen replaced gives a new key, never the teen's", cfg: taken},
 	}

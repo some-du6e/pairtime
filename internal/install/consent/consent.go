@@ -251,7 +251,7 @@ func wakatimeCard(in Input) Card {
 			"pairtime adds one line under [api_urls] there, so that wakatime-cli also sends every heartbeat to pairtime's agent on this computer. " +
 			"Nothing else in the file changes. While pairtime's agent doesn't take what wakatime-cli sends it, as while the agent isn't running, wakatime-cli holds back what it sends your server too, and sends it once the agent takes it again.",
 		Notes: []string{
-			"Your editors' own environment can hold a proxy that install can't see, and wakatime-cli would then send pairtime's copy of each heartbeat through it: the proxy would get your project and file names unencrypted, pairtime would get none of them, and each send the proxy doesn't pass on would hold back what wakatime-cli sends your own server. So don't set a proxy for your editors while pairtime's line is in.",
+			"Your editors can use a proxy that install can't see: one in their settings, as WakaTime's plugin for JetBrains IDEs passes the IDE's to wakatime-cli, or one their environment sets for your server's address. wakatime-cli would then send pairtime's copy of each heartbeat through it: the proxy would get your project and file names unencrypted, pairtime would get none of them, and each send the proxy doesn't pass on would hold back what wakatime-cli sends your own server. So don't set a proxy for your editors while pairtime's line is in.",
 		},
 		Declining: "Without it, pairtime doesn't see the time you spend in an editor.",
 		TurnOff:   "You can take the line out any time with pairtime uninstall, which leaves the rest of the file as it was.",

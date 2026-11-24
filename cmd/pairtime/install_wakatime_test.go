@@ -180,7 +180,7 @@ func TestInstallWakaTime(t *testing.T) {
 // WakaTime's extension writes one, with no record of pairtime's key left:
 // nothing install or uninstall prints, --dry-run included, and no setup
 // file holds the teen's key, and both leave the config to the teen, which
-// uninstall names as what it left alone.
+// uninstall names as what has to stay, its dry run included.
 func TestWakaTimeTeensKeyNeverShown(t *testing.T) {
 	if v, ok := runValue(); ok {
 		t.Skipf(`this account has a pairtime login item, HKCU\%s\%s = %q, which the test would replace; it runs where there is none, as in CI`, install.RunKey, install.RunValue, v)
@@ -217,7 +217,11 @@ func TestWakaTimeTeensKeyNeverShown(t *testing.T) {
 			if s, err := wakacfg.ReadSetup(wakacfg.SetupFile(h.dirs.Data)); err == nil && s.Key == teenHackatimeKey {
 				t.Errorf("the setup file holds the teen's key")
 			}
-			shown("uninstall --dry-run", h.mustRun("", "", 0, "uninstall", "--dry-run"))
+			dry := h.mustRun("", "", 0, "uninstall", "--dry-run")
+			shown("uninstall --dry-run", dry)
+			if !strings.Contains(dry, "pairtime uninstall: this has to stay: ") || !strings.Contains(dry, "point its api_url at your own server, or delete it") {
+				t.Errorf("uninstall --dry-run didn't name the config a real uninstall leaves alone:\n%s", dry)
+			}
 			out = h.mustRun("", "", 1, "uninstall", "--yes", "--delete-data")
 			shown("uninstall", out)
 			if !strings.Contains(out, "Left alone: ") || !strings.Contains(out, "point its api_url at your own server, or delete it") {

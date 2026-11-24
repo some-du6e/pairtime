@@ -27,13 +27,20 @@ var ProxyVars = []string{"https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY
 // It decides as httpproxy v0.61.0's proxyForURL does, as read from its
 // source: the pair of the URL's scheme, the first of it with a value, and
 // that only if it parses as a proxy; none for an http URL under CGI; none
-// for localhost or a loopback address; and none when NO_PROXY matches the
-// host, by "*", an IP, a CIDR range holding an IP, or a domain, which with
-// or without a leading "." or "*." matches it and its subdomains, each with
-// an optional port. A host or a domain entry that isn't ASCII, which
-// httpproxy converts with IDNA first, counts as matching nothing, so that a
-// proxy is taken to apply when it is unclear, and install refuses rather
-// than adding a line the proxy would carry.
+// for the host "localhost", compared as written, so that LOCALHOST gets
+// the proxy, or for a loopback address; and none when NO_PROXY matches the
+// host in lower case, by "*", an IP, a CIDR range holding an IP, or a
+// domain, which matches itself and its subdomains, or with a leading "."
+// or "*." its subdomains alone, each with an optional port. httpproxy
+// matches a host that isn't ASCII, and such a domain entry, in their IDNA
+// form, which ProxyFor doesn't work out: it takes such a host to get the
+// proxy, and such an entry to match nothing, so that install refuses when
+// it is unclear rather than adding a line the proxy would carry.
+//
+// An editor's plugin can pass wakatime-cli a proxy of its own with
+// --proxy, which comes before the config's and the environment's (as
+// JetBrains IDEs' WakaTime plugin passes the IDE's), or another api_url
+// with --api-url. Neither install nor doctor can see those.
 func ProxyFor(server string, getenv func(string) string) string {
 	u, err := url.Parse(server)
 	if err != nil {
@@ -64,12 +71,19 @@ func ProxyFor(server string, getenv func(string) string) string {
 	if name == "" {
 		return ""
 	}
-	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	// useProxy's checks, on the host as canonicalAddr gives it to them.
+	host := u.Hostname()
+	if !isASCII(host) {
+		return name
+	}
 	if host == "localhost" {
 		return ""
 	}
-	if ip, err := netip.ParseAddr(host); err == nil && ip.IsLoopback() {
-		return ""
+	var ip net.IP
+	if a, err := netip.ParseAddr(host); err == nil {
+		if ip = net.IP(a.AsSlice()); ip.IsLoopback() {
+			return ""
+		}
 	}
 	port := u.Port()
 	if port == "" {
@@ -79,7 +93,7 @@ func ProxyFor(server string, getenv func(string) string) string {
 	if no == "" {
 		no = getenv("NO_PROXY")
 	}
-	if isASCII(host) && noProxy(no, host, port) {
+	if noProxy(no, strings.ToLower(strings.TrimSpace(host)), port, ip) {
 		return ""
 	}
 	return name
@@ -96,15 +110,10 @@ func parsesAsProxy(v string) bool {
 }
 
 // noProxy reports whether list, NO_PROXY's comma-separated entries, keeps
-// host, in lower case, on port from the proxy, as httpproxy's init and
-// useProxy match them.
-func noProxy(list, host, port string) bool {
-	addr, err := netip.ParseAddr(host)
-	isIP := err == nil
-	var ip net.IP
-	if isIP {
-		ip = net.IP(addr.AsSlice())
-	}
+// host, in lower case, on port from the proxy, as httpproxy's init reads
+// the entries and useProxy matches them. ip is host's address when host is
+// an IP address, as useProxy parses it, and nil otherwise.
+func noProxy(list, host, port string, ip net.IP) bool {
 	for _, p := range strings.Split(list, ",") {
 		p = strings.ToLower(strings.TrimSpace(p))
 		switch {
@@ -114,7 +123,7 @@ func noProxy(list, host, port string) bool {
 			return true
 		}
 		if _, cidr, err := net.ParseCIDR(p); err == nil {
-			if isIP && cidr.Contains(ip) {
+			if ip != nil && cidr.Contains(ip) {
 				return true
 			}
 			continue
@@ -132,12 +141,12 @@ func noProxy(list, host, port string) bool {
 		}
 		portOK := pport == "" || pport == port
 		if pip := net.ParseIP(phost); pip != nil {
-			if isIP && pip.Equal(ip) && portOK {
+			if ip != nil && pip.Equal(ip) && portOK {
 				return true
 			}
 			continue
 		}
-		if isIP || !isASCII(phost) {
+		if phost == "" || ip != nil || !isASCII(phost) {
 			continue // a domain entry never matches an IP
 		}
 		if strings.HasPrefix(phost, "*.") {

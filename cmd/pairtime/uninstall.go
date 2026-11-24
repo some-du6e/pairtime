@@ -163,6 +163,11 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		if len(data) > 0 {
 			fmt.Fprintln(stdout, dataFate(hadKey, data, keepable, *deleteData, "would be deleted"))
 		}
+		// What the real run would leave, as install's dry run says what it
+		// leaves out, on stderr, so that stdout says only what changes.
+		for _, problem := range p.Problems {
+			fmt.Fprintf(stderr, "pairtime uninstall: this has to stay: %s\n", install.Printable(problem))
+		}
 		return 0
 	}
 

@@ -49,7 +49,9 @@ type WakaTime struct {
 	// own (wakacfg.ErrProxy), or the name of the variable of doctor's
 	// environment whose proxy wakatime-cli takes for the config's main
 	// api_url, never its value, which can hold a password
-	// (wakacfg.ProxyFor). Doctor then asks neither destination.
+	// (wakacfg.ProxyFor). Doctor then asks neither destination. A proxy an
+	// editor's plugin passes wakatime-cli with --proxy, as WakaTime's plugin
+	// for JetBrains IDEs passes the IDE's, is out of doctor's sight.
 	Proxy string
 	// Pairtime is the agent's endpoint, and Server the server
 	// wakatime-cli's api_url names, such as Hackatime. Server is nil in a
