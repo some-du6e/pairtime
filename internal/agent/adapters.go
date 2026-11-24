@@ -28,6 +28,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/adapters"
 	_ "github.com/some-du6e/pairtime/internal/adapters/claudecode" // registers itself
+	"github.com/some-du6e/pairtime/internal/adapters/t3code"
 	"github.com/some-du6e/pairtime/internal/agent/hookpath"
 	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
@@ -1205,8 +1206,50 @@ func (h *adapterHost) prepare() bool {
 		}
 	}
 	h.mu.Unlock()
+	// T3 Code's reader keys its records under K_session and places them
+	// with the git adapter, as the adapters do, and writes them with the
+	// same writer (apps.go).
+	h.a.appsHost().attach(w, h.a.sessionSecret(), h.appFolder)
 	h.ready = true
 	return true
+}
+
+// appFolder is pairtime's own word on a folder a T3 Code thread runs in, as
+// T3 stores it, for T3's reader (t3code.Options.Folder): the git adapter's,
+// as for a hook call's folder. A folder no Track has answered for yet
+// starts one and is pending, and the reader asks again on its next reads.
+// With no git adapter, no folder is one pairtime tracks.
+//
+// T3 keeps the folder as its client spelled it, which can run through a
+// symlink, while a hook's cwd can be the folder as it really is. So the
+// ignore test reads both spellings, T3's and the one filepath.EvalSymlinks
+// resolves it to (git.Resolver.Ignored), first and at every answer: a
+// .pairtime-ignore or an exclude pattern that reaches either keeps the
+// folder out at once, before any Track, and the reader reads no text of its
+// rows and records none (t3code.FolderOut; DESIGN 5.1, 8.8). The project
+// stays the one the git adapter finds for T3's spelling, which keys a repo
+// by its canonical common dir.
+func (h *adapterHost) appFolder(dir string) t3code.Folder {
+	g := h.git.Load()
+	if g == nil || dir == "" || g.res.Ignored(dir) {
+		return t3code.Folder{State: t3code.FolderOut}
+	}
+	if !g.known(dir) {
+		return t3code.Folder{State: t3code.FolderPending}
+	}
+	p, ok, ignored := g.project(dir)
+	return folderOf(p, ok, ignored)
+}
+
+// folderOf is appFolder's word on a folder whose Track has answered with
+// project p, ok when it has one, and ignored when the folder is out of
+// pairtime (DESIGN 8.8): tracked with p's key, or out when it is ignored
+// or has no project.
+func folderOf(p adapters.Project, ok, ignored bool) t3code.Folder {
+	if ignored || !ok || p.Key == "" {
+		return t3code.Folder{State: t3code.FolderOut}
+	}
+	return t3code.Folder{State: t3code.FolderTracked, Project: p.Key}
 }
 
 // retryKeysLocked starts, unless one runs, a goroutine that derives the
@@ -1612,6 +1655,9 @@ func (h *adapterHost) parse(c hostCall) {
 	// A call that does count lets its session back in, as when it moved to
 	// a folder that isn't out of pairtime.
 	h.a.hooked.unignore(session)
+	// The call's walk says whether an agent app's server started the
+	// session, before its prompt is written (apps.go).
+	h.a.appsHost().noteWalk(session, c.raw.Arrival.Walk)
 	h.hint(c)
 	held := h.logsHeld()
 	due, refused := false, false
@@ -1736,15 +1782,41 @@ const (
 
 // write writes one record to the ledger, with its content and its call's
 // own stamp (sentOf) beside the event, tells focus and the git watcher what
-// it says, and reports what the ledger did with it.
+// it says, and reports what the ledger did with it. Every record of every
+// path comes here: a hook call's, live or spooled, and a log line's, a
+// transcript's or lookback's. So a prompt.submit goes through the apps
+// component, which drops the relay and guest an adapter put on it, marks
+// guest one whose text opens as T3 Code opens a guest's message or that
+// falls in a running turn the owner steered a guest's message into, and,
+// for a prompt of a session an agent app's server started, asks the app's
+// reader for them before the text reaches the writer (apps.go). A
+// session.start tells it whether such a server started the session.
 func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stamp) writeResult {
-	h.mu.Lock()
-	w := h.writer
-	h.mu.Unlock()
 	ev := r.Event
 	if ev.EventID == "" {
 		ev.EventID = event.NewEventID(time.UnixMilli(ev.T))
 	}
+	apps := h.a.appsHost()
+	if _, ok := ev.Data.(*event.PromptSubmit); ok {
+		// apps.prompt writes the prompt once on every path, and is told
+		// whether the ledger is done with it: it holds it, or it dropped it
+		// as made in a local-only stretch. res keeps what the ledger did.
+		res := writeRefused
+		apps.prompt(ev, r.Text, r.Late, func(ev event.Event) bool {
+			res = h.writeEvent(st, r, ev, sent)
+			return res != writeRefused
+		})
+		return res
+	}
+	apps.noteRecord(ev)
+	return h.writeEvent(st, r, ev, sent)
+}
+
+// writeEvent is write for ev, r's event with its event_id set.
+func (h *adapterHost) writeEvent(st *harnessStats, r adapters.Record, ev event.Event, sent clock.Stamp) writeResult {
+	h.mu.Lock()
+	w := h.writer
+	h.mu.Unlock()
 	// A late record is one the lookback reader read (takeLine): the ledger
 	// seals it in its own time (ledger.Input.Late). Every log record dated
 	// before the ledger began, whatever read it, the ledger judges by when

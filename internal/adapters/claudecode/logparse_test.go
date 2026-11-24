@@ -1832,6 +1832,8 @@ func TestTranscriptTokenChanges(t *testing.T) {
 			[]event.Entrypoint{event.EntrypointUnknown}},
 		{"a token that changes within startGrace gives a start of its own", []string{entry("cli", "2026-11-20T17:00:00.000Z"), entry("sdk-cli", "2026-11-20T17:00:10.000Z")},
 			[]event.Entrypoint{event.EntrypointUnknown, event.EntrypointSDK}},
+		{"T3 Code's t3-code token gives an sdk start, so rule 4 takes a T3 session that only its transcript shows",
+			[]string{entry("t3-code", "2026-11-20T17:00:00.000Z")}, []event.Entrypoint{event.EntrypointSDK}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1856,6 +1858,36 @@ func TestTranscriptTokenChanges(t *testing.T) {
 			}
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("session.starts %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTokenEntrypoint checks the entrypoint a log reader's session.start
+// states for each token a transcript can carry (E-cc-transcript-labels),
+// T3 Code's among them (docs/errata/2026-11-23-t3-reader.md, decision 10),
+// and which tokens count as known, so that only another makes a parse
+// failure.
+func TestTokenEntrypoint(t *testing.T) {
+	cases := []struct {
+		name  string
+		tok   string
+		want  event.Entrypoint
+		known bool
+	}{
+		{"the SDK's sdk-cli is sdk", "sdk-cli", event.EntrypointSDK, true},
+		{"the TypeScript SDK's sdk-ts is sdk", "sdk-ts", event.EntrypointSDK, true},
+		{"T3 Code's t3-code, which it sets for every Claude Code it runs through the SDK, is sdk", "t3-code", event.EntrypointSDK, true},
+		{"a remote session is cloud", "remote_mobile", event.EntrypointCloud, true},
+		{"cli says nothing a walk doesn't, so it is unknown", "cli", event.EntrypointUnknown, true},
+		{"the VS Code extension's token is unknown too, since only a walk says ide", "claude-vscode", event.EntrypointUnknown, true},
+		{"a token no list has is unknown and not known", "t3code", event.EntrypointUnknown, false},
+		{"an empty token is unknown and not known", "", event.EntrypointUnknown, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, known := tokenEntrypoint(tc.tok); got != tc.want || known != tc.known {
+				t.Errorf("tokenEntrypoint(%q) = %s, %v; want %s, %v", tc.tok, got, known, tc.want, tc.known)
 			}
 		})
 	}

@@ -164,10 +164,10 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	// below, once the bucket is open).
 	var repl atomic.Pointer[backup.Replication]
 	series := ops.NewSeries(reg, func() int { return w.QueueDepth() })
-	w = writer.Start(db.Write, writer.Options{OnCommit: func(c writer.Commit) {
+	w = writer.Start(db.Write, writer.Options{Engine: db.Engine, OnCommit: func(c writer.Commit) {
 		series.ObserveCommit(c.Duration, c.Rows, c.Failed, c.Err)
 		if c.Err != nil {
-			logger.Error("writer transaction failed", "err", c.Err, "ops", c.Ops, "rows", c.Rows)
+			logger.Error("writer transaction failed", "err", c.Err, "ops", c.Ops, "rows", c.Rows, "durable", c.Durable)
 		} else if r := repl.Load(); r != nil && c.Changed > 0 {
 			// Only a transaction that changed rows wrote WAL for
 			// Litestream to read; one that changed none, such as the

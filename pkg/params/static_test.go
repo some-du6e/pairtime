@@ -11,6 +11,9 @@ package params
 // building the package, and TestScoreReadsOnlyTableParams compares them
 // with the newest embedded table. An older table can lack a parameter a
 // later version added, and pkg/score's NewState refuses such a table.
+// pkg/ledger's draw runs under the table frozen with its r, which can be
+// any table (DESIGN 7.5 step 4), so its reads are compared with every
+// table.
 
 import (
 	"errors"
@@ -133,8 +136,11 @@ func TestScoreReadsOnlyTableParams(t *testing.T) {
 	cases := []struct {
 		name string
 		dir  string
+		// every compares the reads with every table, not just the newest.
+		every bool
 	}{
-		{"pkg/score reads only parameters the newest table, the one the agent scores with, has", filepath.Join("..", "score")},
+		{"pkg/score reads only parameters the newest table, the one the agent scores with, has", filepath.Join("..", "score"), false},
+		{"pkg/ledger reads only parameters every table has", filepath.Join("..", "ledger"), true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -148,7 +154,10 @@ func TestScoreReadsOnlyTableParams(t *testing.T) {
 				t.Fatal(err)
 			}
 			tables := Tables()
-			for _, m := range missing(reads, tables[len(tables)-1:]) {
+			if !c.every {
+				tables = tables[len(tables)-1:]
+			}
+			for _, m := range missing(reads, tables) {
 				t.Error(m)
 			}
 			t.Logf("%s reads %d parameters", c.dir, len(reads))

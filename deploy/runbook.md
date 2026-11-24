@@ -184,7 +184,7 @@ operators = ["<hca sub>", "<hca sub>"]
 
 Then `docker compose restart pairtimed`, which is enough for an edit to `pairtime.toml` alone (step 7). Operators can sign in while sign-ups are closed, to smoke-test the server. Alpha testers aren't operators: they stay in local-only mode until sign-ups open. Leave `signups_open = false`, `profile_default = "ask"` and `[controller]` as init wrote them. pairtimed refuses to start with `signups_open = true` until `[controller]` has a name and a contact. Karim alone decides when these change (DESIGN 8.3, 8.6).
 
-Leave `aud` under `[privacy_hub]` empty as well, even once pairtime is registered with the privacy hub. Setting it turns on `POST /api/privacy/delete` and `/api/privacy/export` (DESIGN 8.9), and the erasure isn't durable yet. SQLite commits it with `synchronous=NORMAL` (DESIGN 10.1), so a power cut just after pairtimed answers the hub's 200 can roll the erasure back, and the hub takes a 200 as done and never asks again. WP-SB4 gives the writer the durable op the erasure needs. Set `aud` only once the image `compose.yml` pins includes WP-SB4's durable writer op, and ask the orchestrator if you can't tell.
+Leave `aud` under `[privacy_hub]` empty as well while the image `compose.yml` pins is from before #361, even once pairtime is registered with the privacy hub. Setting it turns on `POST /api/privacy/delete` and `/api/privacy/export` (DESIGN 8.9). Before #361, SQLite commits an erasure with `synchronous=NORMAL` (DESIGN 10.1), so a power cut just after pairtimed answers the hub's 200 can roll the erasure back, and the hub takes a 200 as done and never asks again. Images built from #361 on commit it through the writer's durable op, which is on disk before pairtimed answers. With one of those pinned, set `aud` as soon as HQ has registered pairtime, then restart pairtimed. Ask the orchestrator if you can't tell which the pinned image is.
 
 ### 10. Start
 
@@ -260,14 +260,16 @@ Each upgrade is a PR that changes an image line in `compose.yml`: pairtimed's by
 ```sh
 cd /srv/pairtime/deploy
 cp config/pairtime.toml "config/pairtime.toml.before-$(date -u +%Y%m%d)"
+before=$(git -C /srv/pairtime rev-parse HEAD)
 git -C /srv/pairtime pull --ff-only
 sudo install -d -m 0700 -o 65532 -g 65532 data/tmp
 docker compose pull
 docker compose up -d
+git -C /srv/pairtime diff --quiet "$before" HEAD -- deploy/witness || docker compose restart witness
 docker compose exec pairtimed pairtimed doctor
 ```
 
-Keep the copy of `pairtime.toml`: a rollback can need it. Migrations only add in v1 and run when pairtimed starts. The `install -d` line makes `data/tmp` on a host set up before #123, whose step 2 didn't, and only sets the owner and mode again where it is there: images from before #123 don't make it, and without it SQLite's temporary files go to the 256 MiB `/tmp`.
+The witness runs `witness/push.sh` and reads `witness/known_hosts` through single-file bind mounts, and `up -d` doesn't recreate a container when only a file it mounts changed, so it would keep running the old files. The line before doctor restarts it whenever the pull changed `deploy/witness/`. Keep the copy of `pairtime.toml`: a rollback can need it. Migrations only add in v1 and run when pairtimed starts. The `install -d` line makes `data/tmp` on a host set up before #123, whose step 2 didn't, and only sets the owner and mode again where it is there: images from before #123 don't make it, and without it SQLite's temporary files go to the 256 MiB `/tmp`.
 
 **After each release.** The host's `/install.sh` and `/install.ps1` serve the release that `ScriptsRelease` pins in `internal/server/pages/install.go`, not the newest one. After each release, a PR moves that copy and sets `ScriptsRelease`, as `internal/server/pages/install/README.md` says. Then a bump pins an image built from that commit or a later one. Once the bump is up, check that the host serves the pinned release's scripts. Each pair of lines must print the same SHA-256: the first reads the pinned manifest's `install_scripts` from the commit the image was built from (it needs `jq`), and the second hashes what the host serves.
 

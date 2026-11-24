@@ -1958,9 +1958,10 @@ func (r *lateRig) gitChange(ms int64) Input {
 
 // TestRestoredMarkEnds checks that a mark Open restored ends with the first
 // batch sealed online that doesn't take it: one holding a git change the
-// startup scan found, or Open's own batch of what a kill left, whose first
-// record comes before the mark. That batch closes the run of local-only
-// batches with itself inside, so its seal frame records no mark due, and no
+// startup scan found, which closes the run of local-only batches with
+// itself inside, or Open's own batch of what a kill left, whose first record
+// comes before the mark, after a batch sealed online closed the run. Either
+// way nothing is left to mark, so its seal frame records no mark due, and no
 // later seal asks Waiting for the mark. A spool file that can't be read,
 // which Waiting answers yes for whatever it is asked, then can't seal a
 // batch local-only after the online ones, which would stop the batch roots.
@@ -2080,6 +2081,90 @@ func TestRestoredMarkEnds(t *testing.T) {
 						t.Errorf("no: the rows' due marks %v, the last batch online %v, batches %+v", due, b.Online, r.batches)
 					}
 				})
+			}
+		})
+	}
+}
+
+// TestEndedMarkStaysEnded checks that a mark Open restored from a sweep's
+// base frame, which Open's own batch of what a kill left ends, stays ended
+// at the next restart. That batch's records all come before the mark, as
+// those a crash leaves always do, so its row records no mark due and ends
+// before the base frame's mark, as a row an older version sealed would.
+// Read so, the mark would be due again, a seal while Waiting says yes would
+// be local-only after the online batches, and the batch roots would stop
+// until a logout and a login (#349).
+func TestEndedMarkStaysEnded(t *testing.T) {
+	r := newLateRig(t)
+	// The install's stretch, batch 1, and the switch back, whose first
+	// batch, 2, takes the mark.
+	r.note(false)
+	r.write(r.presence(1000))
+	r.take()
+	r.at(10_000)
+	r.note(true)
+	r.pause()
+	r.at(11_000)
+	r.write(r.presence(11_000))
+	if b := r.seal(); !b.Online || !b.Back {
+		t.Fatalf("batch 2 was sealed online %v, marked %v; want both", b.Online, b.Back)
+	}
+	// Days later, a record, seq 3, pending, and a Seen of a stretch the
+	// writer didn't know of, which ended before it: the mark is armed from
+	// the next record, 4, and no seal is asked for. Both come after the
+	// start of the sweep's day, so the stretch the sweep folds from the
+	// beginning of time to that day doesn't hold seq 3.
+	day := 2 * int64(sweepDayMS)
+	r.at(day + 1000)
+	r.write(r.presence(day + 1000))
+	r.w.NoteSeen(Seen{Ended: time.UnixMilli(testT + day + 500)})
+	// The sweep of that day drops rows 1 and 2, and its base frame keeps
+	// the mark. Then a kill.
+	r.at(day + 2000)
+	if dropped, _, err := r.w.Sweep(dayOf(time.UnixMilli(testT+day)), 0); err != nil || dropped != 2 {
+		t.Fatalf("Sweep dropped %d batches, %v; want 2", dropped, err)
+	}
+	abandon(r.w)
+	// Open seals what the kill left, seq 3, before the mark, online.
+	r.at(day + 60_000)
+	r.open()
+	ended := r.take()
+	// A restart before any batch that reaches the mark is sealed, and a
+	// seal while a spool file can't be read, which Waiting answers yes for.
+	if err := r.w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r.open()
+	r.waits.Store(true)
+	r.at(day + 70_000)
+	r.write(r.presence(day + 70_000))
+	b := r.seal()
+	r.waits.Store(false)
+	if err := r.w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bf, err := readBatchesFile(filepath.Join(r.dir, batchesName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	due := map[uint64]uint64{}
+	for _, row := range bf.rows {
+		due[row.B] = row.Due
+	}
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"Open's batch of what the kill left is sealed online and unmarked, and its row records no mark due",
+			ended.Online && !ended.Back && ended.Row.B == 3 && due[3] == 0},
+		{"after the next restart, a seal while Waiting says yes is sealed online, as the mark stays ended", b.Online},
+		{"no batch is sealed local-only after one sealed online", !r.localAfterOnline()},
+	}
+	for _, ch := range checks {
+		t.Run(ch.name, func(t *testing.T) {
+			if !ch.ok {
+				t.Errorf("no: Open's batch %d online %v, back %v; the last batch online %v; the rows' due marks %v; batches %+v",
+					ended.Row.B, ended.Online, ended.Back, b.Online, due, r.batches)
 			}
 		})
 	}

@@ -69,10 +69,11 @@ client_id = {{toml .HCAClientID}}
 [privacy_hub]
 # Empty: the privacy hub's delete and export endpoints are off. HQ gives
 # the aud value once pairtime is registered with the hub (DESIGN 8.9), but
-# leave aud empty until the pinned image includes WP-SB4's durable writer
-# op: until then a power cut can roll back an erasure pairtimed has already
-# reported to the hub (deploy/runbook.md, step 9). An empty jwks_url means
-# the hub's own key set; set it only to point at a hub run for a test.
+# leave aud empty while the pinned image is from before #361, the writer's
+# durable op: before it, a power cut can roll back an erasure pairtimed has
+# already reported to the hub (deploy/runbook.md, step 9). An empty
+# jwks_url means the hub's own key set; set it only to point at a hub run
+# for a test.
 aud = ""
 jwks_url = ""
 

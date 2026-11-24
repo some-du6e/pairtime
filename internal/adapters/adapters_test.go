@@ -197,6 +197,10 @@ func TestKeys(t *testing.T) {
 		{"a cron key is c and the HMAC over its domain, the session's id and the scheduled prompt's prefix",
 			k.Cron(sid, "Reply with the word tick and nothing else."), "c81715e31a20c0bb3f23196f4f3b0e3c5"},
 		{"the memory key is m and the HMAC over its domain alone", k.Memory(), "m3272157ed3aa96e2a5649916f4566b51"},
+		{"an app key is r and the HMAC over its domain, the app, the kind of id and the id",
+			k.App("t3_code", "thread", "9f2c6b1e-4a7d-4f0e-8c3b-5d1a2e7f6c40"), "r6292e3995a0cf0b6b005b77be255a608"},
+		{"an app key of an id in two parts takes each part as part() frames it",
+			k.App("t3_code", "record", "2b7e1f4c-0d9a-4e63-a58f-c1d2e3f40516", "2026-11-23T04:02:49.338Z"), "r67ac9ec76e54f3135ad8b76763cf9568"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -213,7 +217,8 @@ func TestKeys(t *testing.T) {
 	t.Run("one id gives different keys in different domains, and one pair of ids in different orders", func(t *testing.T) {
 		seen := map[string]bool{}
 		for _, key := range []string{k.Session("x"), k.Turn("x", ""), k.Agent("x", ""), k.Cron("x", ""),
-			k.Turn("", "x"), k.Turn("x", "y"), k.Turn("y", "x"), k.Turn("xy", ""), k.Memory(), k.Session("memory")} {
+			k.Turn("", "x"), k.Turn("x", "y"), k.Turn("y", "x"), k.Turn("xy", ""), k.Memory(), k.Session("memory"),
+			k.App("x", ""), k.App("x", "y"), k.App("x", "thread", "y"), k.App("x", "message", "y"), k.App("x", "thread", "y", "")} {
 			if seen[key[1:]] {
 				t.Errorf("%s repeats", key)
 			}

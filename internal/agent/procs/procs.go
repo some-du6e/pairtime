@@ -8,7 +8,10 @@
 // -p` and `codex exec` runs that fire no hooks (HS 3.1, 3.5) still get
 // classified. Each scan also counts this user's harness processes, hooked
 // or not, for presence, which keeps a project context live while one runs
-// (DESIGN 3.3).
+// (DESIGN 3.3). A harness process whose chain classifies as parent_class
+// agent_app, one an agent app's server started or one typed into the
+// app's own terminal, isn't counted: the app's own count keeps the context
+// live for it (D-relayed-context).
 //
 // The scan reads only what internal/platform's readers read: process ids,
 // parent ids, executable names, start times, owners, process groups and
@@ -123,9 +126,25 @@ type Options struct {
 	// processes after every scan, on the goroutine that ran it: hooked or
 	// not, younger than Grace or not, with launchers left out. The agent
 	// hands it to presence, where a running one keeps a project context
-	// live (DESIGN 3.3). A scan that fails gives 0, so a reader that stops
-	// working can't hold a context live, and the sampling with it, for good.
+	// live (DESIGN 3.3). A process whose chain classifies as parent_class
+	// agent_app (platform.Classify) isn't counted: an agent app's server
+	// started it, as T3 Code's server starts the Claude Code it keeps
+	// running in each thread between runs, or it was typed into the app's
+	// own terminal. The app's own count keeps a context live for it, once
+	// a minute and with no focus record while nothing else does
+	// (presence.Sampler.AgentApps, D-relayed-context). A scan that fails
+	// gives 0, so a reader that stops working can't hold a context live,
+	// and the sampling with it, for good.
 	Running func(n int)
+	// Listed, when set, gets each scan's read of the process table after
+	// Running, on the goroutine that ran the scan: its processes, named as
+	// on OS, and Self. A scan whose read failed, or that can't tell whose
+	// processes are this user's, gives none, so a reader that stops working
+	// can't hold T3 Code running for good. The agent's apps component looks
+	// there for T3 Code's server, which with the -wal and -shm files of its
+	// store is what makes T3 run (DESIGN 3.3). It must return quickly and
+	// must not call the Scanner.
+	Listed func(goos string, procs []platform.Proc, self string)
 	// Read reads the process table. Nil means this OS's reader.
 	Read func() ([]platform.Proc, error)
 	// OS is the GOOS whose names Read returns. Empty means runtime.GOOS.
@@ -344,7 +363,8 @@ func (v tableView) own(p platform.Proc, self string) (event.Harness, bool) {
 // claimed and that no earlier scan reported. A harness's own launcher,
 // such as the node wrapper npm puts in front of codex, isn't reported; its
 // child is (platform.LauncherOf). Scan returns the sessions it reported,
-// and gives Options.Running the count of this user's harness processes.
+// and gives Options.Running the count of this user's harness processes
+// whose chain doesn't classify as parent_class agent_app.
 func (s *Scanner) Scan() ([]Session, error) {
 	s.mu.Lock()
 	s.reads++
@@ -354,6 +374,7 @@ func (s *Scanner) Scan() ([]Session, error) {
 	v, err := s.readTable()
 	if err != nil {
 		s.running(0)
+		s.listed(nil)
 		return nil, err
 	}
 	now := s.opts.Now()
@@ -363,14 +384,21 @@ func (s *Scanner) Scan() ([]Session, error) {
 	s.mu.Lock()
 	s.noteSeen(v, began, now)
 	var found []Session
-	mine := 0 // this user's harness processes, launchers left out
+	// mine counts this user's harness processes, launchers left out, but
+	// not those whose chain classifies as parent_class agent_app
+	// (Options.Running). Only harness processes are classified, each once
+	// a scan, and the report below reuses the class.
+	mine := 0
 	for _, p := range all {
 		h, ok := v.own(p, s.self)
 		if !ok {
 			continue
 		}
 		id := p.ID()
-		mine++
+		l := platform.Classify(goos, t.Chain(p.PID))
+		if l.ParentClass != event.ParentAgentApp {
+			mine++
+		}
 		if _, ok := s.claimed[id]; ok {
 			continue
 		}
@@ -380,7 +408,6 @@ func (s *Scanner) Scan() ([]Session, error) {
 		if !p.Start.IsZero() && now.Sub(p.Start) < Grace {
 			continue
 		}
-		l := platform.Classify(goos, t.Chain(p.PID))
 		sess := Session{
 			Key:     newKey(),
 			Harness: h,
@@ -448,6 +475,7 @@ func (s *Scanner) Scan() ([]Session, error) {
 		s.save()
 	}
 	s.running(mine)
+	s.listed(all)
 	return found, nil
 }
 
@@ -945,6 +973,14 @@ func (s *Scanner) Claimed(id platform.ID) bool {
 func (s *Scanner) running(n int) {
 	if s.opts.Running != nil {
 		s.opts.Running(n)
+	}
+}
+
+// listed hands a scan's processes to Options.Listed: nil after a scan that
+// failed.
+func (s *Scanner) listed(procs []platform.Proc) {
+	if s.opts.Listed != nil {
+		s.opts.Listed(s.opts.OS, procs, s.self)
 	}
 }
 

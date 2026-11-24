@@ -77,7 +77,7 @@ One Go module holds the client, the server and the code they share.
 | `internal/jsonschema` | A JSON Schema validator for the keywords the schemas in `docs/schema` use, so tests can check JSON a command prints. The client doesn't link it |
 | `internal/rehearsal` | The end-to-end rehearsal of a teen's first hour: the real binaries, Hack Club Auth sign-in (against a mock), `pairtime install`, `pairtime login` approved on `/device`, a Claude Code session typed at the keyboard under Xvfb, the hours on `/dashboard`, and `pairtime uninstall`. rehearsal.yml runs it, on every PR that changes what it builds or reads and on every push to main |
 | `internal/webui` | The local dashboard's built files, embedded in the client. The repo carries a placeholder, so Go builds never need Node |
-| `web` | The web UI in Svelte 5 and TypeScript: the local dashboard the agent serves, the server UI, and the components they share. [web/README.md](web/README.md) says how it builds |
+| `web` | The local dashboard the agent serves, in Svelte 5 and TypeScript, with its components, and the Playwright specs of `pairtimed`'s pages, which `internal/server/pages` renders in Go. [web/README.md](web/README.md) says how it builds |
 | `docs/api` | OpenAPI specs of pairtime's HTTP APIs. The UI's TypeScript types are generated from them |
 | `internal/version` | Build info, set at link time |
 | `tools/` | `ledger_ref.py`, a standard-library Python reference for `pkg/ledger`; `release`, which packages and signs releases; `capture`, the kit for capturing harness fixtures; and `ci`, the checks the workflows run |
