@@ -81,6 +81,7 @@ func TestLookAheads(t *testing.T) {
 			{"TRACK_DEDUPE_S, how far after a track call a hook or log record still decides it, is within READ_HORIZON_S (E-track-windows)", r.trackDedupe, r.reach, false},
 			{"TRACK_LOG_MATCH_S, how far after a side-door prompt a hook or log prompt still makes it a cross-check, is within READ_HORIZON_S (DESIGN 5.2)", r.trackLogMatch, r.reach, false},
 			{"PENDING_WINDOW_S leaves at least 300 s past READ_HORIZON_S for late records (E-return-lookahead)", r.reach + lateMarginMS, r.settle, false},
+			{"a record that ends a sample's reach takes effect once the newest record is that allowance, PENDING_WINDOW_S - READ_HORIZON_S, past it, so a sample up to that late keeps the reach (SM 2.1, WP-HL1)", r.late, r.settle - r.reach, true},
 			{"a relayed lead, COMPOSE_MAX_S before its stamp, is still pending when its pairing comes RELAY_MATCH_S after the stamp (SM 8.1)", r.relayMatch + r.composeMax, r.settle, false},
 			{"a prompt's longest lead, THINK_LEAD_S + COMPOSE_MAX_S, ending at an app's stamp, is within READ_HORIZON_S of it, so reach from the stamp never cuts it (SM 2.3)", r.thinkLead + r.composeMax, r.reach, false},
 			{"RELAY_SEEN_LAG_S is within RELAY_MATCH_S, so a pairing, the later of its two records, comes at most RELAY_MATCH_S after the stamp (SM 2.2)", r.relaySeenLag, r.relayMatch, false},
