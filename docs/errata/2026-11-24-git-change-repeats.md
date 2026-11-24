@@ -1,6 +1,6 @@
 # Erratum: a git change scanned again after a crash goes to the ledger twice, and CC4's oracle refuses what a device sends for it
 
-Date 2026-11-24. Raised by WP-AG5's plan for the commit-record upload. Status: decided 2026-11-24 by the orchestrator (D-ag5-C1). Two halves are still to come. Code half: a WP-AG5 follow-up after WP-AG8. The git host gives a change an event_id from its place (the worktree's key and its reflog entry) instead of `git.go`'s random one, and leaves out a change the adapters' replay index holds. Oracle half: `cc4` in WP-FX8's next testdata/checks PR, the one that takes #338's items, under the `oracle-change` label if it touches code.
+Date 2026-11-24. Raised by WP-AG5's plan for the commit-record upload. Status: decided 2026-11-24 by the orchestrator for Karim (D-ag5-C1). Two halves are still to come. Code half: a WP-AG5 follow-up after WP-AG8. The git host gives a change an event_id from its place (the worktree's key and its reflog entry) instead of `git.go`'s random one, and leaves out a change the adapters' replay index holds. Oracle half: `cc4` in WP-FX8's next testdata/checks PR, the one that takes #338's items, under the `oracle-change` label if it touches code.
 
 ## Input
 
@@ -23,7 +23,7 @@ pkg/score's commit is G2, D-ag5-D2 sends L1, and 14:00:00 is later than G2's `t`
 
 ## Decision
 
-Decided 2026-11-24 by the orchestrator (D-ag5-C1), outside WP-AG5's PRs:
+Decided 2026-11-24 by the orchestrator for Karim (D-ag5-C1), outside WP-AG5's PRs:
 
 1. A crash re-scan's second git.change of a change the ledger already holds falls under D-late-local point 5, applied to the git watcher. #230 and #290 built that point only for log readers and hook calls. The git host gives a change an event_id from its place (the worktree's key and its reflog entry) instead of `git.go`'s random one, and leaves out a change the adapters' replay index holds. WP-LO1 built that index, and a WP-AG5 follow-up after WP-AG8 builds this.
 2. CC4's oracle (`checks.py`'s `cc4`, in the testdata/checks batch that WP-TR1 reads) counts each project's sha once, at its earliest git.change, as pkg/score's `projectCommits` does. It reads the server's record for that sha without comparing its `observed_at` with that git.change's `t`, and judges seen-in-order by the record's own `observed_at`. The record is the first sighting `commits/` holds. It is earlier than that `t` when a crash fell between `commitStore.add` and `Write`, and later after a step back of the wall clock between two sightings, or when another clone's sighting reached the sink first. The oracle takes a commit with no record on the server as not computable for its clock half, because D-ag5-D1 withholds some records whose batches can still be submitted: near switches, and in a stretch whose edges share no monotonic clock. And it reads the diffstat from the commit record, absent when unread (D-ag5-D4), because the git.change says 0/0/0 then. WP-FX8's next testdata/checks PR, the one that takes #338's items, makes this change, under the `oracle-change` label if it touches code.
