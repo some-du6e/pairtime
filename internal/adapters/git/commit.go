@@ -17,8 +17,9 @@ import (
 // fields are the ones DESIGN 4.3 lets the client upload, apart from
 // credited_seconds_since_parent, which the scorer adds, and path_hmacs,
 // which wait for WP-AD2's file-key form, as does the file list that SM
-// 4.3's edit_survives reads on the device (PLAN, WP-SC6). Everything in
-// Local stays on the device and is never marshaled.
+// 4.3's edit_survives reads on the device (PLAN, WP-SC6). Nothing in Local
+// is marshaled. NoStat only leaves the three counts out, as ingest-v1 2.3.3
+// allows.
 type Commit struct {
 	SHA     string   `json:"sha"`
 	Parents []string `json:"parents"`
@@ -111,7 +112,8 @@ type CommitLocal struct {
 	ReflogTime int64
 	// AI is what git-ai's note on the commit says (HS 13.3), or nil.
 	AI *AINote
-	// NoStat means the shortstat couldn't be read, so the counts are 0.
+	// NoStat means the shortstat couldn't be read: the counts are 0 here,
+	// and MarshalJSON leaves them out of the record (ingest-v1 2.3.3).
 	NoStat bool
 }
 

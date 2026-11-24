@@ -4,6 +4,7 @@ package git
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/some-du6e/pairtime/pkg/event"
@@ -14,7 +15,10 @@ import (
 // so every record whose shortstat was read keeps the bytes it had before
 // the record had a MarshalJSON of its own, and no files_changed, insertions
 // or deletions when the shortstat couldn't be read (CommitLocal.NoStat), as
-// ingest-v1 2.3.3 says. TestCommitJSON pins the fields to DESIGN 4.3's.
+// ingest-v1 2.3.3 says. base sets every field the record holds, which the
+// test checks first, so a field added to Commit later has to be set there,
+// one tagged omitempty included, and then a MarshalJSON that misses it fails
+// the byte comparison. TestCommitJSON pins the fields to DESIGN 4.3's.
 func TestCommitRecordBytes(t *testing.T) {
 	// plain is Commit without its MarshalJSON, as encoding/json writes the
 	// struct's fields, so a field the record leaves out shows.
@@ -23,6 +27,18 @@ func TestCommitRecordBytes(t *testing.T) {
 		Project: "d0123456789abcdef0123456789abcdef", ObservedAt: 1795193310281, AuthorTime: 1795193300, CommitterTime: 1795193305,
 		FilesChanged: 2, Insertions: 10, Deletions: 3, Rewrites: []Rewrite{{OldSHA: "2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c", NewSHA: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b"}},
 		Actor: event.ActorAgent, AgentTrailer: "claude"}
+	// A field base leaves zero would be missing from plain's bytes too when
+	// it is tagged omitempty, so a record that drops it would still match.
+	v := reflect.ValueOf(base)
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Type().Field(i)
+		if !f.IsExported() || f.Name == "Local" || f.Tag.Get("json") == "-" {
+			continue
+		}
+		if v.Field(i).IsZero() {
+			t.Fatalf("base leaves %s zero, so the byte comparison can't see a record that drops it: set it in base", f.Name)
+		}
+	}
 	cases := []struct {
 		name string
 		edit func(c *Commit)
