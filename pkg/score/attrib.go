@@ -56,17 +56,25 @@ type attribution struct {
 	// os.focus record for most of it, so its focus can't be seen
 	// (E-6.6-codes: X.ambiguous, not X.other_focus).
 	unrecorded bool
+	// unknown is set for a slot whose focus the client couldn't tell, an
+	// os.focus with app_class unknown (SM 2.5). proj is "", every
+	// project's windows are realized where the person is present and every
+	// project's bucket with a qualifying anchor drains, until one of them
+	// credits a second, and from then on only that project's do
+	// (D-split-slots). Every second credited there is level C with
+	// focus_unknown (steer).
+	unknown bool
 }
 
 // admits reports whether an anchor window of project p can credit a present
 // second of the slot (SM 2.7, 3.3 rule 1): p is the slot's project, or the
-// slot is ambiguous and no window of another project has credited a second
-// of it yet (D-ambiguous-anchors).
+// slot is ambiguous or its focus unknown and nothing of another project has
+// credited a second of it yet (D-ambiguous-anchors, D-split-slots).
 func (at *attribution) admits(p string) bool {
 	switch {
 	case at.proj != "":
 		return p == at.proj
-	case at.ambiguous:
+	case at.ambiguous, at.unknown:
 		return at.won == "" || p == at.won
 	}
 	return false
@@ -81,14 +89,15 @@ func (at *attribution) admits(p string) bool {
 // slot that resolves to none, and isn't ambiguous, nothing of this
 // device's credits a second before the lookups, so relayed candidates of
 // every project are weighed at once. Those of any other project, and every
-// one in an ambiguous slot, where this device's anchors of any project may
-// credit a later second, wait for the slot's end, and credit it only if
-// nothing else did, or only in the project of what did.
+// one in an ambiguous slot or a slot whose focus is unknown, where this
+// device's anchors of any project may credit a later second, wait for the
+// slot's end, and credit it only if nothing else did, or only in the
+// project of what did (SM 2.7).
 func (at *attribution) relayNow(p string) bool {
 	switch {
 	case at.proj != "":
 		return p == at.proj
-	case at.ambiguous:
+	case at.ambiguous, at.unknown:
 		return false
 	}
 	return true
@@ -103,11 +112,18 @@ func (at *attribution) relayAdmits(p string, now bool) bool {
 
 // holds reports whether a returned run's think part can credit a second of
 // the slot to project p and the slot still hold one project (SM 5.1): the
-// slot resolves to p. A run is returned only in a window SM 3.2 resolves
-// to its project (markReturns), so a slot of it that resolves to none, or
-// to another project by a later heartbeat, takes no returned second, and
-// no lookup shares a returned slot with another project.
-func (at *attribution) holds(p string) bool { return at.proj != "" && at.proj == p }
+// slot resolves to p, or its focus is unknown and nothing of another
+// project has credited a second of it (SM 2.5, D-split-slots). A run is
+// returned only in a window SM 3.2 resolves to its project, or one whose
+// focus is unknown throughout (markReturns), so a slot of it that resolves
+// to none, or to another project by a later heartbeat, takes no returned
+// second, and no lookup shares a returned slot with another project.
+func (at *attribution) holds(p string) bool {
+	if at.unknown {
+		return at.won == "" || at.won == p
+	}
+	return at.proj != "" && at.proj == p
+}
 
 // beat is an editor heartbeat with input in its slot, which SM 3.2 rule 2
 // resolves an editor slot with.
@@ -257,6 +273,8 @@ func (c *creditor) attribute(s *Slot) attribution {
 		}
 	case event.AppNone:
 		at.unrecorded = c.d.focus.longest(s.Start, s.End()) == noFocus
+	case event.AppUnknown:
+		at.unknown = true
 	}
 	return at
 }
@@ -423,5 +441,14 @@ func (c *creditor) steer(at *attribution, sec *second) {
 		if sec.label == "" {
 			sec.label = sideDoorLabel(at.sideDoor)
 		}
+	}
+	// A second credited in a slot whose focus is unknown, or from an anchor
+	// that passed its focus test only that way, the one that resolved the
+	// slot included, is level C with focus_unknown (SM 2.5).
+	if at.unknown || at.resolver >= 0 && c.d.anchors[at.resolver].focusUnknown {
+		sec.focusUnknown = true
+	}
+	if sec.focusUnknown {
+		sec.level = event.EvidenceC
 	}
 }

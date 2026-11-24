@@ -361,6 +361,9 @@ func (c *creditor) relayedSecond(k int, t int64, at *attribution, now bool) {
 			int32(best.span.anchor), src.label
 	}
 	sec.relayed = true
+	// In a slot whose focus is unknown it carries focus_unknown, as every
+	// second credited there does (SM 2.5). Relayed credit is level C.
+	sec.focusUnknown = at.unknown
 	if at.won == "" {
 		at.won = sec.proj
 	}
@@ -369,11 +372,11 @@ func (c *creditor) relayedSecond(k int, t int64, at *attribution, now bool) {
 // relayedRest weighs, once every second of slot i has had its other
 // candidates, the relayed candidates that wait for the slot's end
 // (attribution.relayNow): those of a project other than the one the slot
-// resolves to, and all of them in an ambiguous slot. They take, in order,
-// the seconds nothing else credited, and only in the project of whatever
-// credited a second of the slot first.
+// resolves to, and all of them in an ambiguous slot or one whose focus is
+// unknown. They take, in order, the seconds nothing else credited, and only
+// in the project of whatever credited a second of the slot first.
 func (c *creditor) relayedRest(i int, at *attribution) {
-	if len(c.relays) == 0 || (at.proj == "" && !at.ambiguous) {
+	if len(c.relays) == 0 || (at.proj == "" && !at.ambiguous && !at.unknown) {
 		return
 	}
 	for k := i * perSlot; k < (i+1)*perSlot; k++ {

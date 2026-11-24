@@ -145,6 +145,11 @@ type second struct {
 	// evidence of this device's, so no slot resolution steers it and no
 	// lookup takes it for a bracket (SM 2.3, 2.5).
 	relayed bool
+	// focusUnknown marks a second credited in a slot whose focus is
+	// unknown, from an anchor that passed its focus test only because it
+	// was, or by a lookup that such a second brackets: level C, with
+	// focus_unknown (SM 2.5; steer).
+	focusUnknown bool
 }
 
 // secSpan is the half-open interval [from, to) of second indexes.
@@ -213,9 +218,12 @@ type creditor struct {
 	// byProject holds, per project, the indexes of its anchors in time
 	// order, for READ_HORIZON_S.
 	byProject map[string][]int
-	// buckets holds, per project, its sessions' buckets in key order.
-	buckets map[string][]*bucket
-	runs    map[string]*running
+	// buckets holds, per project, its sessions' buckets in key order, and
+	// bucketProjects the projects that have one, in key order, which a slot
+	// whose focus is unknown weighs (SM 2.5).
+	buckets        map[string][]*bucket
+	bucketProjects []string
+	runs           map[string]*running
 	// all holds the turns of every project, which SM 5.2's codes for a live
 	// slot whose presence is unknown read (unknownCode): a never-sampling
 	// device's slot (presence.neverAt), one before the device's first
@@ -335,6 +343,7 @@ func (c *creditor) index() {
 		b := d.buckets[k]
 		c.buckets[b.sess.project] = append(c.buckets[b.sess.project], b)
 	}
+	c.bucketProjects = slices.Sorted(maps.Keys(c.buckets))
 	c.runs = map[string]*running{}
 	for _, tb := range d.turns {
 		t := tb.turn
@@ -426,9 +435,9 @@ func (c *creditor) windows() []window {
 // cover (SM 3.3 rule 3): a lead beats a command's run or a trail; among
 // leads, the next anchor at or after the second wins, since time just
 // before an act is preparation for it; among runs and trails, the latest
-// anchor. Then the lower project key (rule 6), which only an ambiguous
-// slot's windows can differ in (D-ambiguous-anchors), then the earlier
-// anchor.
+// anchor. Then the lower project key (rule 6), which only the windows of
+// an ambiguous slot or one whose focus is unknown can differ in
+// (D-ambiguous-anchors, SM 2.5), then the earlier anchor.
 func (c *creditor) better(x, y window) bool {
 	xl, yl := x.part != partAfter, y.part != partAfter
 	if xl != yl {
@@ -621,13 +630,14 @@ func (c *creditor) localSecond(k int, t int64, s *Slot, at *attribution, ws []wi
 	if best >= 0 {
 		a := &c.d.anchors[ws[best].anchor]
 		sec.reason, sec.proj, sec.level, sec.anchor = a.Reason+suffix, a.ProjectKey, a.Level, int32(ws[best].anchor)
+		sec.focusUnknown = a.focusUnknown
 		if at.won == "" {
 			at.won = a.ProjectKey
 		}
 		c.steer(at, sec)
 		return true
 	}
-	if proj == "" {
+	if proj == "" && !at.unknown {
 		// No project, or an ambiguous slot: the bucket doesn't drain
 		// (SM 3.2 rule 1).
 		return false
@@ -641,27 +651,72 @@ func (c *creditor) localSecond(k int, t int64, s *Slot, at *attribution, ws []wi
 	default:
 		return false
 	}
-	near := c.nearest(proj, t)
-	if near < 0 {
+	// The projects whose buckets may drain: the slot's, or, where focus is
+	// unknown, the returned run's for its reading part, the one that took
+	// the slot's first credited second (D-split-slots), or else every
+	// project's (SM 2.5).
+	cands := []string{proj}
+	switch {
+	case proj != "":
+	case proseOnly:
+		cands[0] = rt.ProjectKey
+	case at.won != "":
+		cands[0] = at.won
+	default:
+		cands = c.bucketProjects
+	}
+	if proj == "" && at.won != "" && cands[0] != at.won {
 		return false
 	}
-	var pick *bucket
-	for _, b := range c.buckets[proj] {
-		b.advance(c.r, t)
-		if b.total(proseOnly) > 0 && (pick == nil || b.oldest(proseOnly) < pick.oldest(proseOnly)) {
-			pick = b
+	// Buckets of different projects go to the project whose qualifying
+	// anchor is nearest the second, the earlier anchor on a tie, then the
+	// lower project key (SM 2.5), and within it to the bucket whose oldest
+	// entry is oldest (SM 3.3 rule 4).
+	near, pick := -1, (*bucket)(nil)
+	var empty []int // anchors qualifying projects whose buckets hold nothing
+	for _, p := range cands {
+		n := c.nearest(p, t)
+		if n < 0 {
+			continue
+		}
+		var b0 *bucket
+		for _, b := range c.buckets[p] {
+			b.advance(c.r, t)
+			if b.total(proseOnly) > 0 && (b0 == nil || b.oldest(proseOnly) < b0.oldest(proseOnly)) {
+				b0 = b
+			}
+		}
+		switch {
+		case b0 == nil:
+			empty = append(empty, n)
+		case near < 0 || c.nearer(n, near, t):
+			near, pick, proj = n, b0, p
 		}
 	}
 	if pick == nil {
 		// The buckets are empty. If one of them is only because
 		// BUCKET_MAX_S evicted output that would still be there, the cap is
 		// why the second isn't credited (SM 5.2). UNKNOWN_BUCKET_MAX_S caps
-		// relayed reading alone, so it keeps nothing from this one.
+		// relayed reading alone, so it keeps nothing from this one. Where
+		// focus is unknown, the projects are tried in the order their
+		// buckets would drain.
 		if !proseOnly {
-			for _, b := range c.buckets[proj] {
-				if b.takeCapped(oneSecond, false) {
-					sec.bucketCap = true
-					break
+			slices.SortStableFunc(empty, func(x, y int) int {
+				switch {
+				case c.nearer(x, y, t):
+					return -1
+				case c.nearer(y, x, t):
+					return 1
+				}
+				return 0
+			})
+		capped:
+			for _, n := range empty {
+				for _, b := range c.buckets[c.d.anchors[n].ProjectKey] {
+					if b.takeCapped(oneSecond, false) {
+						sec.bucketCap = true
+						break capped
+					}
 				}
 			}
 		}
@@ -686,11 +741,33 @@ func (c *creditor) localSecond(k int, t int64, s *Slot, at *attribution, ws []wi
 		level = lowerLevel(level, src.level)
 	}
 	sec.reason, sec.proj, sec.level, sec.anchor, sec.label = reason, proj, level, int32(near), src.label
+	sec.focusUnknown = a.focusUnknown
 	if at.won == "" {
 		at.won = proj
 	}
 	c.steer(at, sec)
 	return true
+}
+
+// nearer reports whether anchor x is nearer second t than anchor y, which
+// may lie ahead of it (SM 2.4): the smaller distance from the second's
+// start, then the earlier anchor, then the lower project key (SM 2.5).
+func (c *creditor) nearer(x, y int, t int64) bool {
+	ax, ay := &c.d.anchors[x], &c.d.anchors[y]
+	dx, dy := ax.T-t, ay.T-t
+	if dx < 0 {
+		dx = -dx
+	}
+	if dy < 0 {
+		dy = -dy
+	}
+	switch {
+	case dx != dy:
+		return dx < dy
+	case ax.T != ay.T:
+		return ax.T < ay.T
+	}
+	return ax.ProjectKey < ay.ProjectKey
 }
 
 // lookupRuns applies SM 2.5's lookup rule. A run of browser or chat-app
@@ -743,6 +820,9 @@ func (c *creditor) lookupRuns() {
 		if label == "" {
 			label = b2.label
 		}
+		// A bracket credited where focus was unknown makes the lookup level
+		// C with focus_unknown, as it is.
+		fu := b1.focusUnknown || b2.focusUnknown
 		left := c.r.lookupMax / 1000
 		for k := from; k < to; k++ {
 			sec := c.state(k)
@@ -759,7 +839,7 @@ func (c *creditor) lookupRuns() {
 			c.claimForLookup(k/perSlot, proj)
 			sec.reason, sec.proj, sec.level, sec.anchor, sec.other, sec.label = event.ReasonLookup, proj, level, b1.anchor,
 				b2.anchor, label
-			sec.relayed = false
+			sec.relayed, sec.focusUnknown = false, fu
 		}
 	}
 }
@@ -877,12 +957,11 @@ func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
 	if at.unrecorded {
 		return event.ReasonAmbiguous
 	}
-	if s.FocusClass == event.AppUnknown {
-		// A stopgap until WP-SC8 brings in SM 2.5's rule for unknown
-		// focus: a slot whose os.focus says pairtime can't tell which
-		// window is in front files its seconds as they were before the
-		// agent recorded that (WP-OS15), not as input to another app.
-		return event.ReasonAmbiguous
+	if at.unknown {
+		// Where the client couldn't tell which window was in front,
+		// X.other_focus and X.ambiguous don't apply, and the turn step
+		// reads every project's running turns (SM 2.5, 5.2).
+		return c.unknownCode(k)
 	}
 	switch s.FocusClass {
 	case event.AppTerminal, event.AppEditor, event.AppAgentApp:
@@ -940,6 +1019,10 @@ type creditKey struct {
 	level   event.Evidence
 	inTurn  bool
 	relayed bool
+	// focusUnknown keeps the seconds that carry focus_unknown apart from
+	// level-C seconds that don't, so the label counts only its own
+	// (second.focusUnknown).
+	focusUnknown bool
 }
 
 // projSpan is a span of seconds in which a turn of a project ran.
@@ -1031,7 +1114,8 @@ func (c *creditor) slotCredits() []Credit {
 			if cr.ProjectKey == "" {
 				cr.ProjectKey = sec.proj
 			}
-			key := creditKey{proj: sec.proj, reason: sec.reason, level: sec.level, inTurn: inTurn, relayed: sec.relayed}
+			key := creditKey{proj: sec.proj, reason: sec.reason, level: sec.level, inTurn: inTurn, relayed: sec.relayed,
+				focusUnknown: sec.focusUnknown}
 			e := group[key]
 			if e == nil {
 				e = &Credited{ProjectKey: key.proj, Reason: key.reason, Level: key.level, InTurn: key.inTurn}
@@ -1055,7 +1139,10 @@ func (c *creditor) slotCredits() []Credit {
 					e.AnchorIDs = append(e.AnchorIDs, a.ID)
 				}
 				for _, l := range a.Labels {
-					if !slices.Contains(e.Labels, l) {
+					// focus_unknown is the second's, below, not the anchor's:
+					// an anchor that passed its focus test only through
+					// unknown focus marks its seconds (second.focusUnknown).
+					if l != event.LabelFocusUnknown && !slices.Contains(e.Labels, l) {
 						e.Labels = append(e.Labels, l)
 					}
 				}
@@ -1063,6 +1150,9 @@ func (c *creditor) slotCredits() []Credit {
 			// The side-door heartbeat that resolved an editor slot labels all
 			// of it, as the anchor that resolved a shared terminal's slot does
 			// through its labels above (D-rule2-sidedoor).
+			if sec.focusUnknown {
+				labels = append(labels, event.LabelFocusUnknown)
+			}
 			for _, l := range labels {
 				if l != "" && !slices.Contains(e.Labels, l) {
 					e.Labels = append(e.Labels, l)
@@ -1082,7 +1172,10 @@ func (c *creditor) slotCredits() []Credit {
 			if c := cmpBool(x.inTurn, y.inTurn); c != 0 {
 				return c
 			}
-			return cmpBool(x.relayed, y.relayed)
+			if c := cmpBool(x.relayed, y.relayed); c != 0 {
+				return c
+			}
+			return cmpBool(x.focusUnknown, y.focusUnknown)
 		})
 		for _, key := range keys {
 			e := group[key]
