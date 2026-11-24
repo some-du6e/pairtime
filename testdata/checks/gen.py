@@ -22,7 +22,7 @@ import checks as ck  # noqa: E402
 tl = ck.tl
 check = ck.check
 
-# Every scenario rests on at least one reading DESIGN 7.3 leaves open.
+# Every scenario rests on at least one of the readings the check-readings erratum decided, now DESIGN 7.3's text.
 READINGS = "2026-11-19-check-readings"
 CC8_SPEC = ("DESIGN 7.3 and ledger-v1.md 10.8, as issue #15's decision rewrote them: CC8 reveals no keyed value "
             "and checks only what needs no key")
@@ -560,6 +560,11 @@ def s_42_cc7(out):
                     "server's stored prev. Its records are unverified, so CC7 holds every minute from the last "
                     "verified record before it, A1's prompt at 19:33:00, to the first after it, A1's stop at "
                     "19:34:00: 19:33 and 19:34, 120 s.")
+    sc.notes.append("Without batch 3009's revealed records the re-score changes only in 19:33, which the span holds. "
+                    "A1's prompt is the hook record 9030 in batch 3008, so the log copy 9032 changes nothing; 3009's "
+                    "samples and tool call bear on 19:33 alone; and its outputs ask no question and can't drain "
+                    "after B1's lead begins at 19:33:20 or after B1's prompt resets the bucket. So CC7 holds no "
+                    "other minute.")
     sc.build(out)
 
 
@@ -601,6 +606,7 @@ def s_42_cc7_batch(out):
                     "19:45 is in W, and it credits nothing: A3 is the third A.")
     sc.notes.append("The other checks read records in W, and the missing batch has none: its two records are at "
                     "19:46:00, where W ends.")
+    sc.notes.append("The missing batch reveals no record, so CC7 holds no other minute.")
     sc.build(out)
 
 
@@ -786,8 +792,8 @@ def s_42_cc11(out):
     sc.notes.append("B2 still passes SM 2.2 rule 6: key presses in the 10 s before submit, focus on the terminal, "
                     "and 60 characters within 15 characters a second over its one input slot. So it is "
                     "human_typed, CC2 counts it, and it is drawn.")
-    sc.notes.append("CC11's verdict needs no threshold DESIGN leaves open: 3 key-downs for 60 typed characters is "
-                    "too few by any reading, and 66 for 60 isn't.")
+    sc.notes.append("DESIGN 7.3's CC11 floor is a quarter of the credited characters: B2 has 3 hardware key-downs "
+                    "against 15 for its 60 characters, and every other prompt has 66.")
     sc.build(out)
 
 
@@ -1145,9 +1151,8 @@ def s_42_cc9(out):
     sc.state("CC5", "pass", devices=1, slots_credited_twice=0)
     sc.state("CC9", "fail", sessions=1, multi_project_sessions=0, orphan_turns=0, parent_class_changes=1)
     sc.notes.append("No harness records this. A new process gets a new session, and a startup names a session no "
-                    "other process holds. A `claude --resume` in tmux would be start_kind resume, and the erratum "
-                    "leaves open whether a resume under another parent fails CC9; this scenario doesn't rest on "
-                    "it.")
+                    "other process holds. A `claude --resume` in tmux would be a resume between two interactive "
+                    "parents, which DESIGN 7.3 allows; this record is a startup, so CC9 fails.")
     sc.notes.append("A multiplexer isn't one of SM 2.2 rule 4's headless parents, so every prompt keeps its origin "
                     "and CC2 still counts all five.")
     sc.build(out)
