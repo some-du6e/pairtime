@@ -253,6 +253,7 @@ func (h *Hub) passProfile(t *topic, p time.Time) bool {
 func (h *Hub) EndProfile(account string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.profileEnds++
 	if t := h.topics[profileKey+account]; t != nil {
 		h.dropLocked(t)
 	}

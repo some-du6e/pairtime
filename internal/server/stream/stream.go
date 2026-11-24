@@ -233,6 +233,11 @@ type Hub struct {
 	// profileEpoch is every profile topic's epoch, one for the process,
 	// so a profile's id says nothing of whether others watch it.
 	profileEpoch string
+	// profileEnds counts EndProfile's calls. A stream reads it before it
+	// resolves its profiles' names, and open checks it: a profile that
+	// turned private in between would otherwise get its topic back, with
+	// the stream on it until the next 12:00 UTC.
+	profileEnds uint64
 
 	// done is closed by Close, which cancels ctx, the context of the
 	// hub's reads; wg waits for the hub's own goroutines.

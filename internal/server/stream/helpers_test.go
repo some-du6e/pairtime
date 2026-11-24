@@ -264,6 +264,10 @@ type fakeProfiles struct {
 	private atomic.Bool
 	fail    atomic.Bool
 	reads   atomic.Int32
+	// resolved, when not nil, runs in Resolve once it found the profile
+	// public, before it answers, and resolves counts Resolve's calls.
+	resolved func()
+	resolves atomic.Int32
 }
 
 // credit is a date's credited seconds from a time on.
@@ -283,8 +287,12 @@ func (f *fakeProfiles) set(date string, s float64) {
 }
 
 func (f *fakeProfiles) Resolve(_ context.Context, name string) (string, bool, error) {
+	f.resolves.Add(1)
 	if (name != "rowan" && name != "ro") || f.private.Load() {
 		return "", false, nil
+	}
+	if f.resolved != nil {
+		f.resolved()
 	}
 	return "a1", true, nil
 }

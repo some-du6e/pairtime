@@ -321,6 +321,60 @@ func TestProfileTopic(t *testing.T) {
 	}
 }
 
+// TestProfileEndedWhileResolving checks the window between a stream's
+// Resolve and its open: EndProfile there leaves no stream on a profile
+// that turned private, because the stream resolves its names again
+// (D-public-daily).
+func TestProfileEndedWhileResolving(t *testing.T) {
+	tests := []struct {
+		name string
+		// during runs in the stream's first Resolve, once it found the
+		// profile public.
+		during      func(h *Hub, fp *fakeProfiles)
+		wantCode    int
+		wantStreams int
+	}{
+		{name: "a profile that turns private while a stream resolves it answers 404, and no stream stays on it", during: func(h *Hub, fp *fakeProfiles) {
+			fp.private.Store(true)
+			h.EndProfile("a1")
+		}, wantCode: http.StatusNotFound},
+		{name: "another profile's EndProfile while a stream resolves makes it resolve again, and it opens", during: func(h *Hub, fp *fakeProfiles) {
+			h.EndProfile("a2")
+		}, wantCode: http.StatusOK, wantStreams: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				fp := &fakeProfiles{}
+				h := New(Options{Account: testAccount, Profiles: fp})
+				defer h.Close()
+				first := true
+				fp.resolved = func() {
+					if first {
+						first = false
+						tt.during(h, fp)
+					}
+				}
+				c := open(t, h, profileTopic, nil)
+				c.read()
+				code := c.code
+				if c.ended() {
+					// A refusal is never flushed: its code is the
+					// writer's, read once the handler is done.
+					<-c.done
+					code = c.w.code
+				}
+				if code != tt.wantCode || h.Streams() != tt.wantStreams {
+					t.Errorf("the stream got %d with %d streams open, want %d with %d", code, h.Streams(), tt.wantCode, tt.wantStreams)
+				}
+				if n := fp.resolves.Load(); n != 2 {
+					t.Errorf("the stream resolved its profile %d times, want 2", n)
+				}
+			})
+		})
+	}
+}
+
 func TestPublication(t *testing.T) {
 	tests := []struct {
 		name  string

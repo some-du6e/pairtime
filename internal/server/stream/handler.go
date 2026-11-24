@@ -103,34 +103,6 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(w, *ref)
 		return
 	}
-	wants := make([]want, 0, len(names))
-	account := ""
-	for _, name := range names {
-		var wt want
-		if name == TopicMe {
-			if account == "" {
-				if account, ref = h.signedIn(r); ref != nil {
-					refuse(w, *ref)
-					return
-				}
-			}
-			wt = want{name: name, key: userKey + account, account: account}
-		} else {
-			acct, ref := h.profile(r, strings.TrimPrefix(name, profilePrefix))
-			if ref != nil {
-				refuse(w, *ref)
-				return
-			}
-			wt = want{name: name, key: profileKey + acct, account: acct}
-		}
-		if slices.ContainsFunc(wants, func(o want) bool { return o.key == wt.key }) {
-			// Two names of one profile: one place each in an id can't
-			// say where the stream stood.
-			refuse(w, refusal{http.StatusBadRequest, CodeBadTopics})
-			return
-		}
-		wants = append(wants, wt)
-	}
 	// A browser sends the last id it saw when it reconnects, and nothing
 	// on a first connection. An id that isn't one of the hub's resyncs
 	// every topic.
@@ -139,13 +111,68 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if id != "" {
 		resume, _ = parseID(id)
 	}
-	st, ref := h.open(wants, account, clientOf(r), resume, id != "")
-	if ref != nil {
-		refuse(w, *ref)
-		return
+	var st *stream
+	for tries := 1; ; tries++ {
+		h.mu.Lock()
+		ends := h.profileEnds
+		h.mu.Unlock()
+		wants, account, ref := h.resolve(r, names)
+		if ref != nil {
+			refuse(w, *ref)
+			return
+		}
+		var again bool
+		st, again, ref = h.open(wants, account, clientOf(r), resume, id != "", ends)
+		if ref != nil {
+			refuse(w, *ref)
+			return
+		}
+		if !again {
+			break
+		}
+		if tries == maxResolves {
+			refuse(w, refusal{http.StatusServiceUnavailable, CodeUnavailable})
+			return
+		}
 	}
 	defer h.end(st)
 	h.serve(w, r, st)
+}
+
+// maxResolves is how many times a stream resolves its names while
+// EndProfile keeps ending profiles in between, before it answers 503.
+const maxResolves = 3
+
+// resolve returns the topics names asks for, with the signed-in account
+// when one of them is user:me.
+func (h *Hub) resolve(r *http.Request, names []string) ([]want, string, *refusal) {
+	wants := make([]want, 0, len(names))
+	account := ""
+	var ref *refusal
+	for _, name := range names {
+		var wt want
+		if name == TopicMe {
+			if account == "" {
+				if account, ref = h.signedIn(r); ref != nil {
+					return nil, "", ref
+				}
+			}
+			wt = want{name: name, key: userKey + account, account: account}
+		} else {
+			acct, ref := h.profile(r, strings.TrimPrefix(name, profilePrefix))
+			if ref != nil {
+				return nil, "", ref
+			}
+			wt = want{name: name, key: profileKey + acct, account: acct}
+		}
+		if slices.ContainsFunc(wants, func(o want) bool { return o.key == wt.key }) {
+			// Two names of one profile: one place each in an id can't
+			// say where the stream stood.
+			return nil, "", &refusal{http.StatusBadRequest, CodeBadTopics}
+		}
+		wants = append(wants, wt)
+	}
+	return wants, account, nil
 }
 
 // serve writes st until its client goes, the hub ends it or Close.
@@ -303,18 +330,26 @@ func (st *stream) appendEvent(b []byte, d delivery) []byte {
 // event falls between the replay and the stream's first live one. It reads
 // the clock under the lock too, so a profile stream is either on its topic
 // before a 12:00 UTC pass takes its list of topics or opens at 12:00 or
-// later and takes that publication's day as its place.
-func (h *Hub) open(wants []want, account, client string, resume map[string]position, resumed bool) (*stream, *refusal) {
+// later and takes that publication's day as its place. It answers true,
+// and no stream, when the stream names a profile and EndProfile ran since
+// ends, the count the stream read before it resolved its names: the
+// stream then resolves them again.
+func (h *Hub) open(wants []want, account, client string, resume map[string]position, resumed bool, ends uint64) (*stream, bool, *refusal) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	now := time.Now()
 	switch {
 	case h.closed:
-		return nil, &refusal{http.StatusServiceUnavailable, CodeUnavailable}
+		return nil, false, &refusal{http.StatusServiceUnavailable, CodeUnavailable}
+	case h.profileEnds != ends && slices.ContainsFunc(wants, func(wt want) bool { return strings.HasPrefix(wt.key, profileKey) }):
+		// EndProfile ran after the stream resolved its names, so a
+		// profile it named may have turned private since: it resolves
+		// them again rather than bring back a topic EndProfile ended.
+		return nil, true, nil
 	case h.total >= h.o.MaxStreams,
 		account != "" && h.perAccount[account] >= h.o.MaxPerAccount,
 		account == "" && (h.anonymous >= h.o.MaxAnonymous || h.perClient[client] >= h.o.MaxPerClient):
-		return nil, &refusal{http.StatusTooManyRequests, CodeTooManyStreams}
+		return nil, false, &refusal{http.StatusTooManyRequests, CodeTooManyStreams}
 	}
 	st := &stream{
 		sub:     &sub{ch: make(chan delivery, sendBuffer), kicked: make(chan struct{})},
@@ -370,7 +405,7 @@ func (h *Hub) open(wants []want, account, client string, resume map[string]posit
 		h.anonymous++
 		h.perClient[client]++
 	}
-	return st, nil
+	return st, false, nil
 }
 
 // end takes a stream off its topics and the counts.
