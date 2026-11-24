@@ -183,14 +183,15 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	if err := checkServerKeys(ctx, cfg.DataDir, db, w, logger); err != nil {
 		return err
 	}
-	// Which server key was valid when, which /.well-known/pairtime-keys.json
-	// publishes (WP-SV17; DESIGN 10.2). It changes only at a start, so the
-	// document is written once.
-	history, err := recordServerKey(ctx, cfg.DataDir, db, w, logger)
+	// Which server key was valid when, and the evidence keys' ring, which
+	// /.well-known/pairtime-keys.json publishes (WP-SV17, WP-SB2; DESIGN
+	// 7.6, 10.2). They change only at a start, so the document is written
+	// once.
+	history, ring, err := recordKeys(ctx, cfg.DataDir, db, w, logger)
 	if err != nil {
 		return err
 	}
-	keysDoc, err := history.Document()
+	keysDoc, err := serverkeys.Document(history, ring)
 	if err != nil {
 		return err
 	}
