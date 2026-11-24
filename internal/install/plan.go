@@ -102,10 +102,15 @@ func (p *Plan) Empty() bool { return len(p.Changes) == 0 }
 // It is for people to read, not to apply. In a settings file every string
 // value and comment pairtime didn't write shows as ***, so that no token
 // or webhook URL of the teen's reaches the screen (maskSettings), and a
-// character a terminal would act on is written out (escapeControls).
+// character a terminal would act on is written out (escapeControls). A
+// file of pairtime's own in its data directory, the WakaTime setup file,
+// isn't shown, as the manifest and the backups aren't (own).
 func (p *Plan) Diff() string {
 	var b strings.Builder
 	for _, c := range p.Changes {
+		if c.own() {
+			continue
+		}
 		from, to := c.Target.String(), c.Target.String()
 		if !c.Before.Exists {
 			from = "/dev/null"
@@ -133,6 +138,13 @@ func FileDiff(path string, before, after []byte) string {
 		to = "/dev/null"
 	}
 	return escapeControls(udiff.Unified(from, to, before, after))
+}
+
+// own reports whether ch changes only a file of pairtime's own, in its
+// data directory, which Diff leaves out: the WakaTime setup file, which
+// tells the agent the key of pairtime's line (wakacfg.Setup).
+func (ch Change) own() bool {
+	return len(ch.kinds) > 0 && !slices.ContainsFunc(ch.kinds, func(k string) bool { return k != kindWakaTimeSetup })
 }
 
 // kindsOf returns the kinds of recs, each once.
