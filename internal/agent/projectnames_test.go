@@ -121,6 +121,25 @@ func TestProjectsAPI(t *testing.T) {
 		file func(t *testing.T, n uploader.Names, err error)
 	}{
 		{
+			name:     "GET /v1/projects says a name being sent is sent when a set of it went and no answer came for it, and not when none went",
+			config:   "mode = \"online\"\n[projects." + chip8Key + "]\nname = \"chip8-emulator\"\nonline = true\n[projects." + folderKey + "]\nname = \"scratch\"\nonline = true\n",
+			linked:   true,
+			rawNames: `{"v":1,"server":"` + namesServer + `","device":"` + namesDevice + `","answered_at":1,"sent":{"` + chip8Key + `":"chip8-emulator"}}`,
+			steps: []step{{method: "GET", path: "/v1/projects", code: 200, check: func(t *testing.T, body string, _ map[string]config.Project) {
+				var reply projectsReply
+				if err := json.Unmarshal([]byte(body), &reply); err != nil {
+					t.Fatal(err)
+				}
+				got := make(map[string]projectReply)
+				for _, p := range reply.Projects {
+					got[p.Project] = p
+				}
+				if c, f := got[chip8Key], got[folderKey]; c.State != "sending" || !c.Sent || f.State != "sending" || f.Sent {
+					t.Errorf("GET /v1/projects = %s; want both names sending, and only chip8-emulator's sent", body)
+				}
+			}}},
+		},
+		{
 			name: "GET /v1/projects lists a repo by its local name, with its name off and that name to show, and a plain folder with neither, and no code before a server gives one",
 			steps: []step{{method: "GET", path: "/v1/projects", code: 200, check: func(t *testing.T, body string, _ map[string]config.Project) {
 				var r projectsReply

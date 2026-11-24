@@ -105,15 +105,21 @@ export const nameWho =
  * Where a project's name stands on the owner's dashboard, by its state in
  * GET /v1/projects. code is the project's short code, as the server gave
  * it, "" while it gave none, online says the names turned on go to the
- * server now, and why says, for a hidden name, why the dashboard doesn't
- * show it when the owner didn't hide it there.
+ * server now, why says, for a hidden name, why the dashboard doesn't show
+ * it when the owner didn't hide it there, and sent says, for a name on its
+ * way, that a set of it may have reached the server already.
  */
-export function nameWords(state: NameState, code: string, online: boolean, why?: string): string {
+export function nameWords(state: NameState, code: string, online: boolean, why?: string, sent?: boolean): string {
 	const called = code !== '' ? `Project ${code}` : 'by its code';
 	switch (state) {
 		case 'on':
 			return 'Your dashboard shows it.';
 		case 'sending':
+			if (sent) {
+				return online
+					? "Your dashboard may show it already, and does with pairtime's next upload."
+					: 'Your dashboard may show it already, and does once this computer is linked and online.';
+			}
 			return online
 				? "It goes to your dashboard with pairtime's next upload."
 				: 'It goes to your dashboard once this computer is linked and online.';
@@ -182,6 +188,8 @@ export function allSentences(): string[] {
 				nameWords(state, '', true),
 				nameWords(state, '', false),
 			]),
+			nameWords('sending', '7c41e9', true, undefined, true),
+			nameWords('sending', '7c41e9', false, undefined, true),
 			nameWords('hidden', '7c41e9', true, 'dropped'),
 			nameWords('hidden', '7c41e9', true, 'signed_in'),
 			nameWords('hidden', '7c41e9', true, 'unreadable'),

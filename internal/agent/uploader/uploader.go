@@ -125,7 +125,8 @@ type Options struct {
 	// BucketDir is the scorer's bucket store, home.Dirs.Buckets(), which
 	// the uploader reads and never writes.
 	BucketDir string
-	// DataDir is the data directory, where outbox.json goes.
+	// DataDir is the data directory, where outbox.json goes, and whose
+	// commits/ holds the commit records that go (home.Dirs.Commits).
 	DataDir string
 	// State is state.json, where the uploader keeps its place under
 	// StateKey.
@@ -257,12 +258,17 @@ type Uploader struct {
 	retry     bool // a failure is waiting for its retry at notBefore
 	resyncs   int  // state reads in a row after chain refusals that took no root
 
-	// maxRoots and maxBuckets replace ingest-v1's limits when set, so
-	// tests can split an upload into many requests.
-	maxRoots, maxBuckets int
-	// splitRoots and splitBuckets lower them after the server found a
-	// request too large, until splitOK requests in a row have gone.
-	splitRoots, splitBuckets, splitOK int
+	// maxRoots, maxBuckets and maxCommits replace ingest-v1's limits when
+	// set, so tests can split an upload into many requests.
+	maxRoots, maxBuckets, maxCommits int
+	// splitRoots, splitBuckets and splitCommits lower them after the server
+	// found a request too large, until splitOK requests in a row have gone.
+	splitRoots, splitBuckets, splitCommits, splitOK int
+	// commitsUnread and commitsRefused are what doctor hears of the commit
+	// records: the days of commits/ the last plan couldn't read, while which
+	// none goes, and the codes the server last refused records with.
+	commitsUnread  []string
+	commitsRefused map[string]int
 	// pruned is when uploads.jsonl last let go of its old entries.
 	pruned time.Time
 
@@ -304,7 +310,10 @@ type sealedRow struct {
 	localUntil   time.Time
 	// why says why a batch sealed local-only is (ledger.Batch.Why), for
 	// doctor's line when the batch roots stop at it (stopProblem).
-	why       *ledger.LocalWhy
+	why *ledger.LocalWhy
+	// stretches are the local-only stretches its seal frame recorded, nil
+	// for none (ledger.Batch.Stretches), which commit records go by.
+	stretches []ledger.Stretch
 	harnesses map[event.Harness]string
 }
 
@@ -521,7 +530,7 @@ func (u *Uploader) Sealed(b ledger.Batch) {
 	u.mu.Lock()
 	if len(u.sealed) < sealedQueueMax {
 		u.sealed = append(u.sealed, sealedRow{row: b.Row, sealedAt: b.SealedAt, online: b.Online, back: b.Back,
-			localUntil: b.LocalUntil, why: b.Why, harnesses: learned})
+			localUntil: b.LocalUntil, why: b.Why, stretches: b.Stretches, harnesses: learned})
 	} else {
 		u.sealed, u.lost = nil, true
 	}
@@ -807,11 +816,14 @@ func (u *Uploader) cycle() bool {
 	} else {
 		u.setProblem("local", "")
 	}
+	u.commitsUnread = p.commitsUnread
+	u.noteCommits()
 	if p.body.Empty() {
-		// Lines that only passed over, and revisions withheld, move the
-		// marks and what the minutes' credit rests on all the same.
-		if !sameMarks(p.marks, u.st.Marks) || !maps.Equal(p.sent, u.st.Sent) {
-			u.st.Marks, u.st.Sent = p.marks, p.sent
+		// Lines that only passed over, and revisions and commit records
+		// withheld, move the marks and what the minutes' credit rests on all
+		// the same.
+		if !sameMarks(p.marks, u.st.Marks) || !maps.Equal(p.sent, u.st.Sent) || !sameMarks(p.commitMarks, u.st.CommitMarks) {
+			u.st.Marks, u.st.Sent, u.st.CommitMarks = p.marks, p.sent, p.commitMarks
 			u.save()
 		}
 		return false
@@ -1022,7 +1034,7 @@ func (u *Uploader) takeSealed() {
 			// Read from batches.seg already.
 		case sb.row.B == u.rows.last()+1:
 			r := ledger.Row{BatchRow: sb.row, Prev: u.rows.lastHead, SealedAt: sb.sealedAt, Online: sb.online, Back: sb.back,
-				LocalUntil: sb.localUntil, Why: sb.why}
+				LocalUntil: sb.localUntil, Why: sb.why, Stretches: sb.stretches}
 			if err := u.rows.add(r); err != nil {
 				u.log.Warn("a sealed batch doesn't follow the rows", "err", err)
 			}
@@ -1069,16 +1081,26 @@ func (u *Uploader) next() (plan, string, error) {
 		rows:       u.rows,
 		st:         u.st,
 		bucketDir:  u.opts.BucketDir,
+		commitDir:  commitDir(u.opts.DataDir),
 		lag:        u.lag,
 		labels:     u.labelsDue(),
 		maxRoots:   lower(u.maxRoots, u.splitRoots),
 		maxBuckets: lower(u.maxBuckets, u.splitBuckets),
+		maxCommits: lower(u.maxCommits, u.splitCommits),
 		notAfter:   u.clock.serverNow().Add(futureMargin).UnixMilli(),
 	})
 	if err != nil {
 		return plan{}, "", err
 	}
 	return p, event.NewEventID(u.now()), nil
+}
+
+// commitDir is the commits/ of the data directory dataDir, "" for none.
+func commitDir(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	return home.Dirs{Data: dataDir}.Commits()
 }
 
 // lower returns the lower of two limits, where 0 is no limit.
@@ -1217,6 +1239,16 @@ func (u *Uploader) sync(c Credentials) bool {
 		}
 		from := store.DayOf(cutoff)
 		maps.DeleteFunc(u.st.Marks, func(day string, _ store.Mark) bool { return day >= from })
+		// So do the first lines of commits/ of every day: a record goes
+		// once its first batch's root has been answered, often days after
+		// its observed_at, as the backlog's and the lines behind a stretch's
+		// wait do, so the lost requests may have carried records of any
+		// day. Each plan reads every kept day again, a line whose first
+		// batch is past Next waits for that root (judgeCommit), a line
+		// withheld is withheld again, and a pruned sha stays decided
+		// (PrunedCommits). The server answers the records it kept as
+		// duplicates.
+		u.st.CommitMarks = nil
 		u.st.Sent = nil
 		// A request waiting for its retry was built from the marks before
 		// the rewind, and its answer would put them back.
@@ -1483,7 +1515,7 @@ func (u *Uploader) refused(c Credentials, p plan, a answer) {
 		// A new body needs a new key: the next try builds a new request.
 		u.drop()
 		u.notBefore = u.now().Add(SoonDelay)
-	case refusalBodyTooLarge, refusalDecompressed, refusalTooManyBatches, refusalTooManyBuckets:
+	case refusalBodyTooLarge, refusalDecompressed, refusalTooManyBatches, refusalTooManyBuckets, refusalTooManyCommits:
 		// Split the upload (ingest-v1 2.6): the lists the request carried
 		// go in halves, until requests have gone well for a while.
 		if n := len(p.body.Batches); n > 1 {
@@ -1491,6 +1523,9 @@ func (u *Uploader) refused(c Credentials, p plan, a answer) {
 		}
 		if n := len(p.body.Buckets); n > 1 {
 			u.splitBuckets = n / 2
+		}
+		if n := len(p.body.Commits); n > 1 {
+			u.splitCommits = n / 2
 		}
 		u.splitOK = 0
 		u.drop()
@@ -1552,7 +1587,8 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 	var resp Response
 	e := pastUpload(u.now(), c.Server, p, a)
 	if err := json.Unmarshal(a.body, &resp); err != nil || len(resp.Batches) != len(p.body.Batches) ||
-		len(resp.Buckets) != len(p.body.Buckets) || (p.body.Labels != nil) != (resp.Labels != nil) {
+		len(resp.Buckets) != len(p.body.Buckets) || len(resp.Commits) != len(p.body.Commits) ||
+		(p.body.Labels != nil) != (resp.Labels != nil) {
 		// The server took it, but its answer doesn't fit what was sent:
 		// read the state again before going on.
 		u.recordUpload(e)
@@ -1673,6 +1709,31 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 		}
 	}
 	u.st.Marks, u.st.Sent = marks, sent
+	// Every commit record's result is final, whatever its code: a record
+	// the server refused would be refused again (ingest-v1 5 step 5), so the
+	// marks pass them all, and doctor hears of the refused ones.
+	refusedCommits := map[string]int{}
+	updated := 0
+	for _, res := range resp.Commits {
+		switch res.Code {
+		case codeAccepted, codeDuplicate:
+		case codeUpdated:
+			updated++
+		default:
+			refusedCommits[res.Code]++
+		}
+	}
+	if updated > 0 {
+		u.log.Info("the server replaced stored commit records", "updated", updated)
+	}
+	if len(refusedCommits) > 0 {
+		u.log.Warn("the server refused commit records", "codes", refusedCommits)
+	}
+	if len(resp.Commits) > 0 || len(refusedCommits) > 0 {
+		u.commitsRefused = refusedCommits
+		u.noteCommits()
+	}
+	u.st.CommitMarks = p.commitMarks
 	if off, ok := u.clock.Offset(); ok {
 		u.st.Offset = off.Milliseconds()
 	}
@@ -1690,9 +1751,9 @@ func (u *Uploader) answered(c Credentials, p plan, a answer) bool {
 		// too, by when the clock's offset holds it back.
 		more = true
 	}
-	if u.splitRoots > 0 || u.splitBuckets > 0 {
+	if u.splitRoots > 0 || u.splitBuckets > 0 || u.splitCommits > 0 {
 		if u.splitOK++; u.splitOK >= splitRun {
-			u.splitRoots, u.splitBuckets, u.splitOK = 0, 0, 0
+			u.splitRoots, u.splitBuckets, u.splitCommits, u.splitOK = 0, 0, 0, 0
 		}
 	}
 	u.pending = nil
@@ -1811,7 +1872,8 @@ func (u *Uploader) keep(p *pendingReq) {
 		u.st.Outbox = nil
 		return
 	}
-	u.st.Outbox = &outbox{Key: p.key, Hash: hex.EncodeToString(sum[:]), Marks: p.plan.marks, Sent: p.plan.sent, Labels: p.plan.labels}
+	u.st.Outbox = &outbox{Key: p.key, Hash: hex.EncodeToString(sum[:]), Marks: p.plan.marks, Sent: p.plan.sent,
+		CommitMarks: p.plan.commitMarks, Labels: p.plan.labels}
 }
 
 // drop forgets the request waiting for its retry.
@@ -1865,7 +1927,14 @@ func readOutbox(dir string, st saved) (*pendingReq, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := plan{body: body, js: js, raw: raw, hash: bodyHash(raw), marks: st.Outbox.Marks, sent: st.Outbox.Sent, labels: st.Outbox.Labels}
+	// An outbox an older version wrote holds no commit marks and no
+	// records, so the marks stay as they are.
+	commitMarks := st.Outbox.CommitMarks
+	if commitMarks == nil {
+		commitMarks = st.CommitMarks
+	}
+	p := plan{body: body, js: js, raw: raw, hash: bodyHash(raw), marks: st.Outbox.Marks, sent: st.Outbox.Sent,
+		commitMarks: commitMarks, labels: st.Outbox.Labels}
 	return &pendingReq{plan: p, key: st.Outbox.Key}, nil
 }
 
@@ -1941,12 +2010,34 @@ func (u *Uploader) setProblem(source, msg string) {
 		return
 	}
 	var all []string
-	for _, s := range []string{"login", "local-only", "swept", "server", "chain", "receipts", "buckets", "names", "hidden", "names-elsewhere", "local", "clock"} {
+	for _, s := range []string{"login", "local-only", "swept", "server", "chain", "receipts", "buckets", "commits", "names", "hidden", "names-elsewhere", "local", "clock"} {
 		if m := u.problems[s]; m != "" {
 			all = append(all, m)
 		}
 	}
 	u.opts.Problem(strings.Join(all, "; "))
+}
+
+// noteCommits tells doctor what keeps commit records from going: the days
+// of commits/ the last plan couldn't read, or its list of pruned shas,
+// while which none goes (D-ag5-D2), and the codes the server last refused
+// records with, which aren't sent again.
+func (u *Uploader) noteCommits() {
+	var parts, days []string
+	for _, d := range u.commitsUnread {
+		if d == PrunedCommits {
+			parts = append(parts, fmt.Sprintf("pairtime can't read commits/%s, its list of the commits whose records it deleted, so no commit record goes until it can", PrunedCommits))
+			continue
+		}
+		days = append(days, d)
+	}
+	if len(days) > 0 {
+		parts = append(parts, fmt.Sprintf("pairtime can't read its commit records of %s, so none goes until it can", strings.Join(days, ", ")))
+	}
+	if len(u.commitsRefused) > 0 {
+		parts = append(parts, fmt.Sprintf("the server refused some commit records: %v", u.commitsRefused))
+	}
+	u.setProblem("commits", strings.Join(parts, "; "))
 }
 
 func (u *Uploader) setStatus(fn func(*Status)) {

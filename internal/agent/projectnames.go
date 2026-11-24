@@ -52,11 +52,15 @@ type projectReply struct {
 	// the owner didn't hide it there: uploader.NoteDropped,
 	// uploader.NoteSignedIn or uploader.NoteUnreadable.
 	Why string `json:"why,omitempty"`
+	// Sent says a set of the name may have reached the server since its
+	// last answer (projects.Project.Sent), so while the name is sending
+	// the dashboard may show it already, as pairtime projects says.
+	Sent bool `json:"sent"`
 }
 
 // replyOf is p as the local API gives it.
 func replyOf(p projects.Project) projectReply {
-	r := projectReply{Project: p.Key, Code: p.Code, LocalName: p.LocalName, State: p.State, Label: p.Label}
+	r := projectReply{Project: p.Key, Code: p.Code, LocalName: p.LocalName, State: p.State, Label: p.Label, Sent: p.Sent}
 	if p.State == projects.Hidden && !p.HiddenAt.IsZero() {
 		at := p.HiddenAt.UTC()
 		r.HiddenAt = &at

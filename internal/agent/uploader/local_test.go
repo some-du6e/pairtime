@@ -26,6 +26,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/store"
+	osclock "github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 )
@@ -498,7 +499,21 @@ func (r *liveRig) openWriter(t *testing.T, dirs home.Dirs) {
 	t.Helper()
 	w, err := ledger.Open(ledger.Options{
 		Dir: dirs.Ledger(), Keys: r.keys, KeyID: "0123456789abcdef", Params: newestTable(),
-		Now:    func() time.Time { r.clockMu.Lock(); defer r.clockMu.Unlock(); return r.now },
+		Now: func() time.Time { r.clockMu.Lock(); defer r.clockMu.Unlock(); return r.now },
+		// The OS's clock reads the ms since the rig's start, plus 1000, in
+		// one boot, as the rig's clock moves, so a moment taken after the
+		// clock moved on is later by both clocks, as on a computer. Read from
+		// the real OS clock, two moments the test takes within a millisecond
+		// read alike while the wall clock jumps a quarter hour between them,
+		// and the writer, which orders moments by the OS's clock first, took
+		// a seal's read for no later than the note before it: the stretch
+		// after them began at the note, and held what came between
+		// (TestCommitStretchEnd's flake).
+		Clock: func() osclock.Stamp {
+			r.clockMu.Lock()
+			defer r.clockMu.Unlock()
+			return osclock.Stamp{Wall: r.now, Mono: r.now.Sub(r.start).Milliseconds() + 1000, BootID: "b_live"}
+		},
 		Online: func() bool { return !r.local.Load() },
 		Sealed: func(b ledger.Batch) {
 			if r.sealing != nil {
@@ -846,6 +861,53 @@ func TestRelinkLocal(t *testing.T) {
 			{"the uploader doesn't say the roots stop", r.u.Status().Stopped == 0},
 		})
 	})
+	t.Run("a commit made between a by-hand switch back and the re-login waits, and never goes after the re-link", func(t *testing.T) {
+		r := newLiveRig(t, 90)
+		r.u.Start()
+		r.seal(t, 1)
+		r.seal(t, 2)
+		r.wait(t, "batches 1 and 2 and their minutes", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 })
+		// config.toml says local, as the watch notes, and the stretch's first
+		// record seals at once as batch 3. The teen sets it online again by
+		// hand, which the watch notes with nothing pending, and the roots stop
+		// at batch 3 until a re-link.
+		r.local.Store(true)
+		r.w.NoteMode(false)
+		r.record(t, 3)
+		waitFor(t, "the stretch's first record to seal at once", func() bool { return r.w.Status().Batches == 3 })
+		r.local.Store(false)
+		r.setClock(r.sealedAt(3).Add(time.Minute))
+		r.w.NoteMode(true)
+		// A commit made then, whose first batch after it is 4.
+		made := r.sealedAt(3).Add(5 * time.Minute)
+		writeCommitLines(t, r.dirs.Commits(), made.UTC().Format(time.DateOnly), commitRecord(1, made.UnixMilli()))
+		r.seal(t, 4)
+		waitFor(t, "doctor to hear that uploads stopped", func() bool {
+			r.u.Wake()
+			return strings.Contains(r.doctor(), "stopped uploading")
+		})
+		r.drain()
+		r.f.mu.Lock()
+		_, early := r.f.commitRecs[testSHA(1)]
+		r.f.mu.Unlock()
+		// pairtime logout and pairtime login: the chain goes on from batch 5,
+		// over the gap of 3 and 4. A commit made after the re-link goes.
+		login := r.sealedAt(4).Add(time.Minute)
+		r.link(login)
+		after := login.Add(time.Minute)
+		writeCommitLines(t, r.dirs.Commits(), after.UTC().Format(time.DateOnly), commitRecord(2, after.UnixMilli()))
+		r.seal(t, 5)
+		r.wait(t, "the commit made after the re-link", func(f *fakeIngest) bool { _, ok := f.commitRecs[testSHA(2)]; return ok })
+		r.drain()
+		r.f.mu.Lock()
+		defer r.f.mu.Unlock()
+		_, went := r.f.commitRecs[testSHA(1)]
+		sent := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Contains(b, []byte(testSHA(1))) })
+		report(t, []check{
+			{"the commit waited while the roots stopped at the batch sealed in local-only mode", !early},
+			{"it never went after the re-link, whose gap holds its first batch", !went && !sent && slices.Contains(r.f.gaps, [2]uint64{3, 4})},
+		})
+	})
 	t.Run("a first sign-in keeps the runs of batches sealed in local-only mode before it", func(t *testing.T) {
 		r := newLiveRig(t, 90)
 		r.linked.Store(false)
@@ -1145,11 +1207,16 @@ func TestHeldRecord(t *testing.T) {
 		// which no Waiting counts here, comes after it and is dropped
 		// (ledger.ErrLateLocal; D-late-local).
 		firstSignIn bool
+		// commits gives the held record a line in commits/, as the git
+		// host's sink writes one before the git change, and a commit made
+		// after the stretch a line of its own (D-ag5-D1).
+		commits bool
 	}{
-		{"after a re-link, a git change the watcher held past the note, sealed as a batch of its own", gitChange, true, false},
-		{"after a re-link, a hook call parked behind its folder's first Track, sealed with the first prompt", hookCall, false, false},
-		{"after a first sign-in with a record pending at it, a git change the watcher held past the note, which comes after the online batch the switch back sealed, is dropped", gitChange, true, true},
-		{"after a first sign-in with a record pending at it, a hook call parked behind its folder's first Track, which comes after that batch, is dropped", hookCall, false, true},
+		{"after a re-link, a git change the watcher held past the note, sealed as a batch of its own", gitChange, true, false, false},
+		{"after a re-link, a hook call parked behind its folder's first Track, sealed with the first prompt", hookCall, false, false, false},
+		{"after a first sign-in with a record pending at it, a git change the watcher held past the note, which comes after the online batch the switch back sealed, is dropped", gitChange, true, true, false},
+		{"after a first sign-in with a record pending at it, a hook call parked behind its folder's first Track, which comes after that batch, is dropped", hookCall, false, true, false},
+		{"a commit whose git.change the writer drops with ErrLateLocal never reaches the fake, and its line stays in commits/", gitChange, true, true, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1189,7 +1256,18 @@ func TestHeldRecord(t *testing.T) {
 			r.w.NoteMode(true)
 			waitFor(t, "batch 3", func() bool { return r.w.Status().Batches == 3 })
 			// The held record reaches the writer 3 s after the note: batch 4,
-			// alone or with the first prompt's record.
+			// alone or with the first prompt's record. A git change's commit
+			// line is in commits/ before it, and so is a commit made after the
+			// switch back, which goes once the first prompt's batch has.
+			heldSHA, after := "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b", testSHA(2)
+			if c.commits {
+				for _, l := range []struct {
+					sha string
+					at  time.Time
+				}{{heldSHA, made}, {after, login.Add(20 * time.Second)}} {
+					writeCommitLines(t, r.dirs.Commits(), l.at.UTC().Format(time.DateOnly), commitRecord(1, l.at.UnixMilli(), testSHA(1), l.sha))
+				}
+			}
 			r.setClock(login.Add(3300 * time.Millisecond))
 			_, err := r.w.Write(c.held(made))
 			switch {
@@ -1215,17 +1293,33 @@ func TestHeldRecord(t *testing.T) {
 				}
 				r.u.Wake()
 				r.wait(t, fmt.Sprintf("batch %d", last), func(f *fakeIngest) bool { return f.head != nil && f.head.b == last })
+				if c.commits {
+					r.wait(t, "the commit made after the stretch", func(f *fakeIngest) bool { _, ok := f.commitRecs[after]; return ok })
+				}
 				r.drain()
+				line, _ := os.ReadFile(filepath.Join(r.dirs.Commits(), made.UTC().Format(time.DateOnly)+".jsonl"))
 				r.f.mu.Lock()
 				defer r.f.mu.Unlock()
 				named := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Contains(b, []byte(`"`+string(event.HarnessClaudeCode)+`"`)) })
-				for _, ch := range []struct {
+				_, heldWent := r.f.commitRecs[heldSHA]
+				heldSent := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Contains(b, []byte(heldSHA)) })
+				checks := []struct {
 					name string
 					ok   bool
 				}{
 					{"the labels never named the harness the dropped record names", !named},
 					{"the server's chain starts at the batch that took the mark", r.f.start == 4 && r.f.head.b == last},
-				} {
+				}
+				if c.commits {
+					checks = append(checks, []struct {
+						name string
+						ok   bool
+					}{
+						{"the dropped git change's commit record never reached the fake", !heldWent && !heldSent},
+						{"its line stays in commits/", bytes.Contains(line, []byte(heldSHA))},
+					}...)
+				}
+				for _, ch := range checks {
 					t.Run(ch.name, func(t *testing.T) {
 						if !ch.ok {
 							t.Errorf("no: the server holds head %d from %d, after %d POSTs", r.f.head.b, r.f.start, r.f.posts)

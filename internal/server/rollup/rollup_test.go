@@ -217,10 +217,18 @@ func rows(t *testing.T, db *store.DB, account string) []Day {
 }
 
 // concurrent counts the account's minutes, over all time, in which two of
-// its devices credited the same slot.
+// its devices credited the same slot, to any of its projects.
 func concurrent(t *testing.T, db *store.DB, account string) int {
 	t.Helper()
-	n, err := ConcurrentMinutes(context.Background(), db.Read, account, 0, math.MaxInt64)
+	projects, err := Projects(context.Background(), db.Read, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for id := range projects {
+		ids = append(ids, id)
+	}
+	n, err := ConcurrentMinutes(context.Background(), db.Read, account, 0, math.MaxInt64, ids)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -678,8 +686,9 @@ func TestReplayConverges(t *testing.T) {
 func TestConcurrentMinutes(t *testing.T) {
 	m := func(i int64) int64 { return base + 60*i }
 	steps := []step{
-		// m0 and m3: two devices credit slot 0. m1: they credit different
-		// slots. m2: one device alone.
+		// m0 and m3: d1's p1 and d2's p2 credit slot 0. m1: they credit
+		// different slots. m2: one device alone. m4: d1's p3 and d2's p2
+		// credit slot 0.
 		bk("d1", m(0), 0, "final", nil, sl("p1", 15, "prompting", "A")),
 		bk("d2", m(0), 0, "final", nil, sl("p2", 5, "prompting", "B")),
 		bk("d1", m(1), 0, "final", nil, sl("p1", 15, "prompting", "A")),
@@ -687,17 +696,25 @@ func TestConcurrentMinutes(t *testing.T) {
 		bk("d1", m(2), 0, "final", nil, sl("p1", 15, "prompting", "A")),
 		bk("d1", m(3), 0, "pending", nil, sl("p1", 15, "prompting", "A")),
 		bk("d2", m(3), 0, "pending", nil, sl("p2", 15, "prompting", "A")),
+		bk("d1", m(4), 0, "final", nil, sl("p3", 15, "prompting", "A")),
+		bk("d2", m(4), 0, "final", nil, sl("p2", 15, "prompting", "A")),
 	}
 	tests := []struct {
 		name     string
 		from, to int64 // minutes
+		// projects are the submission's projects P, each as "device/key".
+		projects []string
 		want     int
 	}{
-		{name: "the window of all four minutes has the two in which two devices credited one slot", from: 0, to: 4, want: 2},
-		{name: "two devices crediting different slots of a minute aren't concurrent", from: 1, to: 2, want: 0},
-		{name: "a device alone isn't concurrent", from: 2, to: 3, want: 0},
-		{name: "a window ends before its last minute", from: 0, to: 3, want: 1},
-		{name: "pending minutes count as well as final ones", from: 3, to: 4, want: 1},
+		{name: "the window of all four minutes has the two in which two devices credited one slot", from: 0, to: 4, projects: []string{"d1/p1"}, want: 2},
+		{name: "two devices crediting different slots of a minute aren't concurrent", from: 1, to: 2, projects: []string{"d1/p1", "d2/p2"}, want: 0},
+		{name: "a device alone isn't concurrent", from: 2, to: 3, projects: []string{"d1/p1"}, want: 0},
+		{name: "a window ends before its last minute", from: 0, to: 3, projects: []string{"d1/p1"}, want: 1},
+		{name: "pending minutes count as well as final ones", from: 3, to: 4, projects: []string{"d1/p1"}, want: 1},
+		{name: "a slot that a project in P lost to a project outside it counts", from: 0, to: 1, projects: []string{"d2/p2"}, want: 1},
+		{name: "two devices crediting one slot to two projects outside P aren't concurrent for P", from: 4, to: 5, projects: []string{"d1/p1"}, want: 0},
+		{name: "the same minute counts once one of the projects crediting the slot is in P", from: 4, to: 5, projects: []string{"d1/p3"}, want: 1},
+		{name: "a submission with no projects counts no minute", from: 0, to: 5, want: 0},
 	}
 	for _, engine := range storetest.Engines() {
 		db := newDB(t, engine, "u1", "u2")
@@ -712,7 +729,20 @@ func TestConcurrentMinutes(t *testing.T) {
 		}
 		for _, tt := range tests {
 			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) {
-				got, err := ConcurrentMinutes(context.Background(), db.Read, "u1", m(tt.from)*1000, m(tt.to)*1000)
+				var ids []string
+				for _, label := range tt.projects {
+					dev, key, _ := strings.Cut(label, "/")
+					keys, err := DeviceProjects(context.Background(), db.Read, "u1", dev)
+					if err != nil {
+						t.Fatal(err)
+					}
+					id, ok := keys[key]
+					if !ok {
+						t.Fatalf("%s has no project id", label)
+					}
+					ids = append(ids, id)
+				}
+				got, err := ConcurrentMinutes(context.Background(), db.Read, "u1", m(tt.from)*1000, m(tt.to)*1000, ids)
 				if err != nil {
 					t.Fatal(err)
 				}

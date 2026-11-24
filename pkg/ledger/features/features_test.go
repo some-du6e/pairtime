@@ -5,6 +5,7 @@ package features
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -477,20 +478,26 @@ func TestPromptAndToolFeatures(t *testing.T) {
 	empty := EmptySketch()
 	th := k.Template("")
 	ch, _ := k.Command("npm test")
-	cases := []struct {
+	type featureCase struct {
 		name, got, want string
-	}{
+	}
+	cases := []featureCase{
 		{"an empty prompt has the empty sketch, a template and its class", write(k.Prompt("", LowEffort)),
 			`{"v":1,"mh":"` + empty.String() + `","th":"` + th.String() + `","pc":"low_effort"}`},
 		{"a prompt with no class SM 2.2 knows is refused", write(k.Prompt("fix it", "great")), "error"},
 		{"a read has an f that holds only v", write(k.Tool(nil, "")), `{"v":1}`},
 		{"a tool that ran a command has ch", write(k.Tool(nil, " npm\ttest ")), `{"v":1,"ch":"` + ch.String() + `"}`},
 		{"a hunk whose new range has lines but starts at 0 is refused", write(k.Tool([]Edit{{Path: "a.go", OldStart: 1, OldLines: 1, NewLines: 1}}, "")), "error"},
-		{"a hunk number past 2^31 - 1 is refused", write(k.Tool([]Edit{{Path: "a.go", NewStart: 1 << 31}}, "")), "error"},
 		{"a shell.command with no command has an f that holds only v", write(k.Shell(""), nil), `{"v":1}`},
 		{"an app's message has an f of v and the class of the app's text alone (spec 10.7)", write(Relay(Answer)), `{"v":1,"pc":"answer"}`},
 		{"an app's message with no class SM 2.2 knows is refused", write(Relay("great")), "error"},
 		{"a guest's prompt, like any whose text the device never had, has an f of v and pc", write(Textless(Substantive)), `{"v":1,"pc":"substantive"}`},
+	}
+	if math.MaxInt > math.MaxInt32 {
+		// Only a 64-bit int holds a hunk number past 2^31 - 1: on a 32-bit
+		// target no int is past the largest one a record takes.
+		hunk := int64(1) << 31
+		cases = append(cases, featureCase{"a hunk number past 2^31 - 1 is refused", write(k.Tool([]Edit{{Path: "a.go", NewStart: int(hunk)}}, "")), "error"})
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -15,16 +15,18 @@ import (
 
 // Body is the JSON inside a request's gzip stream (ingest-v1 2.3). An
 // absent member and an empty one mean the same, so empty ones are left
-// out. Commit records wait for the git adapter's wiring (WP-AD5), so the
-// uploader sends none yet.
+// out.
 type Body struct {
 	Batches []Root               `json:"batches,omitempty"`
 	Buckets []event.MinuteBucket `json:"buckets,omitempty"`
+	Commits []Commit             `json:"commits,omitempty"`
 	Labels  *Labels              `json:"labels,omitempty"`
 }
 
 // Empty reports whether b carries nothing.
-func (b Body) Empty() bool { return len(b.Batches) == 0 && len(b.Buckets) == 0 && b.Labels == nil }
+func (b Body) Empty() bool {
+	return len(b.Batches) == 0 && len(b.Buckets) == 0 && len(b.Commits) == 0 && b.Labels == nil
+}
 
 // Root is a batch root, DESIGN 4.3's {b, n, R_b, H_b, prev} (ingest-v1
 // 2.3.1). Hashes are 64 lowercase hex digits, as ledger.Hash writes them.
@@ -34,6 +36,37 @@ type Root struct {
 	Root ledger.Hash `json:"R_b"`
 	Head ledger.Hash `json:"H_b"`
 	Prev ledger.Hash `json:"prev"`
+}
+
+// Commit is a commit record (ingest-v1 2.3.3), as a line of commits/ holds
+// it: the JSON of internal/adapters/git's Commit, members in its order.
+// Every line goes through this type on its way out, so a member it lacks
+// stays on the device, as path_hmacs and credited_seconds_since_parent do
+// until the work that fills them adds them here too (D-ag5-D5). The counts
+// are pointers: a line that leaves them out, as for a commit whose
+// shortstat couldn't be read, goes without them, and a read 0 goes as 0
+// (D-ag5-D4). A root commit's parents stay as the line has them, null or
+// [], both of which the server takes.
+type Commit struct {
+	SHA           string    `json:"sha"`
+	Parents       []string  `json:"parents"`
+	Project       string    `json:"project"`
+	ObservedAt    int64     `json:"observed_at"`
+	AuthorTime    int64     `json:"author_time"`
+	CommitterTime int64     `json:"committer_time"`
+	FilesChanged  *int64    `json:"files_changed,omitempty"`
+	Insertions    *int64    `json:"insertions,omitempty"`
+	Deletions     *int64    `json:"deletions,omitempty"`
+	Rewrites      []Rewrite `json:"rewrites,omitempty"`
+	Actor         string    `json:"actor"`
+	AgentTrailer  string    `json:"agent_trailer,omitempty"`
+}
+
+// Rewrite says that a commit record's commit replaced another, through an
+// amend, a rebase or a squash (ingest-v1 2.3.3).
+type Rewrite struct {
+	OldSHA string `json:"old_sha"`
+	NewSHA string `json:"new_sha"`
 }
 
 // Labels are DESIGN 4.3's labels (ingest-v1 2.3.4): what build of the
@@ -147,6 +180,7 @@ type timeReply struct {
 const (
 	codeAccepted      = "accepted"
 	codeDuplicate     = "duplicate"
+	codeUpdated       = "updated" // a commit record that replaced the one stored
 	codeSuperseded    = "superseded"
 	codeBatchConflict = "batch_conflict"
 	codePrevMismatch  = "prev_mismatch"
@@ -176,6 +210,7 @@ const (
 	refusalDecompressed   = "decompressed_too_large"
 	refusalTooManyBatches = "too_many_batches"
 	refusalTooManyBuckets = "too_many_buckets"
+	refusalTooManyCommits = "too_many_commits"
 
 	// refusalTooManyNames is a names request past the server's limits
 	// (project-names-v1 1.5).

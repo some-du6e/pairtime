@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/some-du6e/pairtime/internal/jsonschema"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -120,11 +121,11 @@ func TestEventsMatchSchema(t *testing.T) {
 		t.Run(f.Name+" every event matches the JSON Schema", func(t *testing.T) {
 			bad := 0
 			for i, line := range f.Lines {
-				v, err := decodeJSON(line)
+				v, err := jsonschema.Decode(line)
 				if err != nil {
 					t.Fatalf("%s line %d: %v", EventsFile, i+1, err)
 				}
-				if errs := sv.validate(v); len(errs) > 0 {
+				if errs := sv.Validate(v); len(errs) > 0 {
 					t.Errorf("%s line %d: %s", EventsFile, i+1, strings.Join(errs, "; "))
 					if bad++; bad == 10 {
 						t.Fatal("stopping after 10 bad lines")

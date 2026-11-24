@@ -124,9 +124,13 @@ type Running struct {
 	// Uploads are the pairtime program's uploads: minute buckets, batch
 	// roots and commit records (WP-SV4).
 	Uploads bool
-	// Submissions are hours submitted to programs, and the evidence store
-	// that keeps what they reveal (WP-SB1, WP-SB4).
+	// Submissions are hours submitted to programs, which pairtimed takes
+	// once it mounts the submissions API's create route (WP-SB1).
 	Submissions bool
+	// EvidenceStore is the evidence store that keeps what submissions
+	// reveal, which pairtimed runs once it mounts the reveal upload
+	// (WP-SB4).
+	EvidenceStore bool
 	// DayRoots are the day roots published to the public witness
 	// repository (WP-SV17).
 	DayRoots bool
@@ -143,7 +147,10 @@ func (r Running) notRunning() string {
 		parts = append(parts, "receive uploads from the pairtime program")
 	}
 	if !r.Submissions {
-		parts = append(parts, "take hours you submit to programs", "keep an evidence store")
+		parts = append(parts, "take hours you submit to programs")
+	}
+	if !r.EvidenceStore {
+		parts = append(parts, "keep an evidence store")
 	}
 	if !r.DayRoots {
 		parts = append(parts, "publish day roots")

@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/some-du6e/pairtime/internal/jsonschema"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -235,11 +236,11 @@ func TestRelayedEvents(t *testing.T) {
 				if err := e.Validate(); err != nil {
 					t.Errorf("%s line %d (seq %d, %s): %v", EventsFile, i+1, e.Seq, e.Kind(), err)
 				}
-				v, err := decodeJSON(f.Lines[i])
+				v, err := jsonschema.Decode(f.Lines[i])
 				if err != nil {
 					t.Fatalf("%s line %d: %v", EventsFile, i+1, err)
 				}
-				if errs := sv.validate(v); len(errs) > 0 {
+				if errs := sv.Validate(v); len(errs) > 0 {
 					t.Errorf("%s line %d: %s", EventsFile, i+1, strings.Join(errs, "; "))
 				}
 			}

@@ -61,8 +61,10 @@
 // No fraud flag is stored for hours nobody submitted (D-no-ingest-flags;
 // DESIGN 4.2, 8.5). SM 3.4's concurrent_devices, two devices crediting
 // one slot, is computed when a submission is frozen, over the submitted
-// window, from the per-device minutes rollup_minutes keeps for 180 days
-// (ConcurrentMinutes). The merge keeps one slot either way.
+// windows, from the per-device minutes rollup_minutes keeps for 180 days,
+// and only for slots one of the submission's projects competed for
+// (ConcurrentMinutes; D-sb1-submissions). The merge keeps one slot either
+// way.
 //
 // A minute counts toward the account's local day in the time zone the owner
 // had set at the minute's own time: users.tz, UTC until set, or, for a

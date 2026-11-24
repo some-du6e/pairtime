@@ -33,7 +33,7 @@ Conventions the scorer relies on:
 
 - **Presence.** `os.presence` every 15 s on :00, :15, :30 and :45 UTC while a project context is live, once a minute on :00 after 600 s with no input and no running turn, and one more at each hook, focus and power event (DESIGN 3.3, 6.2 D14). A sample taken at an event comes after it, at the same millisecond. A sample at time `s` with `idle_any_s` x says the last input was at `s − x`, and `idle_keys_s` the same for key presses; it is null on machines that can't tell keys apart. No input falls on a slot boundary, so the sample at a slot's end says whether the slot had input.
 - **Focus.** `os.focus` when the foreground app changes, at a resume, and whenever the focused window's `hosted_sessions` change because a harness session starts or ends under it. Without the last case, a session started in an already focused terminal would never be in `hosted_sessions`, and SM 2.2 rule 6 couldn't find it at submit (SM 3.2, DESIGN 3.3). `focus_project` is set when the window resolves to one project (SM 3.2): an editor or a terminal hosting one session. Where the client can't tell which window is in front, one `os.focus` with `app_class` `unknown` and no other field, written when focus turns unknown and ended by the next window report (SM 2.5).
-- **Turns.** A prompt's turn has the `turn_key` of its `prompt.submit`. A turn a stop hook continues has no `prompt.submit` (HS 3.5); it gets its own `turn_key`, starts when the turn before it stops, and ends with an `agent.stop` whose `stop_hook_active` is true.
+- **Turns.** A prompt's turn has the `turn_key` of its `prompt.submit`. A turn a stop hook continues gets its own `turn_key`, starts when the turn before it stops, and ends with an `agent.stop` whose `stop_hook_active` is true. The fixtures give it no `prompt.submit`. That is an assumption: HS 3.5 infers that Claude Code fires no `UserPromptSubmit` for such a turn and asks for a check, and row 7 of HS's fact-check log keeps it an inference to test. SM 2.2 rule 2 gives the turn `self_continue` either way.
 - **Local fields.** Hashes the scorer reads (`app_hash`, `cmd_hash`) are present. Prompt text and its sketches (`text`, `minhash`, `template_hash`) are not: SM quotes some texts and none of their sketches, so content-derived features come from `prompts.json`. A pasted error's `error_sig` is left out too, except in `4.2-same-error`, whose invented pastes carry the key of the error they paste, the one the agent's failing runs carry, because the scorer classes a prompt `error_paste` from it (SM 2.2).
 - **Keys** are `<letter>_` and 12 hex digits of a SHA-256 over a label, standing in for the per-device keys a real client derives. They mean nothing outside the fixture.
 
@@ -46,7 +46,7 @@ Conventions the scorer relies on:
   "rows": [
     {"start": "2026-11-24T12:41:00Z", "minutes": 1, "local": "07:41", "bucket": true, "bucket_minutes": 1,
      "credited_s": 40, "credit": {"p_be4901c04a84": {"E": 20, "SUP": 20}},
-     "uncredited": {"X.agent_only": 20}, "agent_running_s": 60, "sm": "07:41"}
+     "uncredited": {"X.agent_only": 20}, "agent_running_s": 60, "sm": "07:41", "derived": ["agent_running_s"]}
   ],
   "totals": {"credited_s": 265, "credited_by_reason": {"P": 60, "E": 120, "G": 50, "SUP": 20, "READ": 15}},
   "stated": ["credited_s", "lid_open_s", "bucket_left_s"]

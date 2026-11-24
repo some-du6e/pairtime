@@ -32,6 +32,17 @@ type ChainInfo struct {
 	// the sweep dropped every row.
 	Base uint64
 	Prev ledger.Hash
+	// Stretches are the local-only stretches batches.seg holds, as its
+	// newest row that records them has them, or the base frame a sweep
+	// wrote (sealPayload.Stretches), nil for none. StretchesBehind is set
+	// while the rows don't hold every stretch the writer has: their seal
+	// frames record none, as an older version's don't, or a row an older
+	// version sealed after the list saw config.toml local-only later than
+	// the list says, as after a downgrade (olderRows). Open then rebuilds
+	// what they lack, and this version's next seal frame records it
+	// (restoreStretches), which a Batch's Stretches give.
+	Stretches       []Stretch
+	StretchesBehind bool
 }
 
 // ReadChain reads which chain the ledger in dir holds, from batches.seg.
@@ -45,7 +56,19 @@ func ReadChain(dir string) (ChainInfo, error) {
 
 // info returns the chain the file names.
 func (bf *batchesFile) info() ChainInfo {
-	return ChainInfo{DeviceID: bf.chain.DeviceID, KeyID: bf.chain.KeyID, Created: time.UnixMilli(bf.chain.Created), Base: bf.base.B, Prev: bf.base.Prev}
+	info := ChainInfo{DeviceID: bf.chain.DeviceID, KeyID: bf.chain.KeyID, Created: time.UnixMilli(bf.chain.Created), Base: bf.base.B, Prev: bf.base.Prev,
+		Stretches: exported(bf.stretches)}
+	if bf.stretches == nil {
+		// Rows whose seal frames recorded no list, as an older version's:
+		// Open rebuilds a stretch from each rise of their moments, which
+		// this version's next seal frame records. A ledger whose moments
+		// never rose, as one online since it began, has none to rebuild
+		// (stretchesFromRows).
+		info.StretchesBehind = slices.ContainsFunc(bf.rows, func(rp rowPayload) bool { return laterEnd(rp.until(), moment{}) })
+	} else {
+		info.StretchesBehind = olderRows(bf, bf.rows, bf.stretches, bf.stretchesRow) < len(bf.rows)
+	}
+	return info
 }
 
 // ReadBatches calls fn with each sealed batch of the ledger in dir whose
@@ -147,7 +170,7 @@ func ReadBatches(dir string, from uint64, fn func(Batch) error) error {
 					row.Receipt = &r
 				}
 				batch := Batch{Row: row, SealedAt: time.UnixMilli(sp.SealedAt), Online: sp.online(), Back: sp.Back,
-					LocalUntil: msTime(sp.LocalUntil), Why: localWhy(sp.Why), Records: recs}
+					LocalUntil: msTime(sp.LocalUntil), Why: localWhy(sp.Why), Stretches: exported(sp.Stretches), Records: recs}
 				recs, next, prev = nil, sp.B+1, sp.Head
 				if sp.B >= from {
 					return fn(batch)

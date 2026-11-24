@@ -1,0 +1,781 @@
+{
+  "fixture": "focus-unknown/f-nearest-ahead",
+  "slots": [
+    {
+      "start": "2026-11-28T12:55:00Z",
+      "local": "13:55:00",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:55:15Z",
+      "local": "13:55:15",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 5,
+      "credit": {
+        "p_3815ea4d3197": {"SUP": 5}
+      },
+      "levels": {"C": 5},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:55:30Z",
+      "local": "13:55:30",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 10,
+      "credit": {
+        "p_3815ea4d3197": {"SUP": 10}
+      },
+      "levels": {"C": 10},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:55:45Z",
+      "local": "13:55:45",
+      "focus": "unknown",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-28T12:56:00Z",
+      "local": "13:56:00",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:56:15Z",
+      "local": "13:56:15",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:56:30Z",
+      "local": "13:56:30",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:56:45Z",
+      "local": "13:56:45",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:57:00Z",
+      "local": "13:57:00",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:57:15Z",
+      "local": "13:57:15",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:57:30Z",
+      "local": "13:57:30",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:57:45Z",
+      "local": "13:57:45",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:58:00Z",
+      "local": "13:58:00",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:58:15Z",
+      "local": "13:58:15",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:58:30Z",
+      "local": "13:58:30",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:58:45Z",
+      "local": "13:58:45",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:59:00Z",
+      "local": "13:59:00",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:59:15Z",
+      "local": "13:59:15",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:59:30Z",
+      "local": "13:59:30",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T12:59:45Z",
+      "local": "13:59:45",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:00:00Z",
+      "local": "14:00:00",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:00:15Z",
+      "local": "14:00:15",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 5,
+      "credit": {
+        "p_fca05b11bce0": {"SUP": 5}
+      },
+      "levels": {"C": 5},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:00:30Z",
+      "local": "14:00:30",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:00:45Z",
+      "local": "14:00:45",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:01:00Z",
+      "local": "14:01:00",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:01:15Z",
+      "local": "14:01:15",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:01:30Z",
+      "local": "14:01:30",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:01:45Z",
+      "local": "14:01:45",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:02:00Z",
+      "local": "14:02:00",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:02:15Z",
+      "local": "14:02:15",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:02:30Z",
+      "local": "14:02:30",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:02:45Z",
+      "local": "14:02:45",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:03:00Z",
+      "local": "14:03:00",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:03:15Z",
+      "local": "14:03:15",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:03:30Z",
+      "local": "14:03:30",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:03:45Z",
+      "local": "14:03:45",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:04:00Z",
+      "local": "14:04:00",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:04:15Z",
+      "local": "14:04:15",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:04:30Z",
+      "local": "14:04:30",
+      "focus": "unknown",
+      "p": "p_fca05b11bce0",
+      "credited_s": 15,
+      "credit": {
+        "p_fca05b11bce0": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:04:45Z",
+      "local": "14:04:45",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:05:00Z",
+      "local": "14:05:00",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:05:15Z",
+      "local": "14:05:15",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:05:30Z",
+      "local": "14:05:30",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:05:45Z",
+      "local": "14:05:45",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:06:00Z",
+      "local": "14:06:00",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:06:15Z",
+      "local": "14:06:15",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:06:30Z",
+      "local": "14:06:30",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:06:45Z",
+      "local": "14:06:45",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:07:00Z",
+      "local": "14:07:00",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:07:15Z",
+      "local": "14:07:15",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:07:30Z",
+      "local": "14:07:30",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:07:45Z",
+      "local": "14:07:45",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:08:00Z",
+      "local": "14:08:00",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:08:15Z",
+      "local": "14:08:15",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:08:30Z",
+      "local": "14:08:30",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:08:45Z",
+      "local": "14:08:45",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:09:00Z",
+      "local": "14:09:00",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"P": 1, "SUP": 14}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:09:15Z",
+      "local": "14:09:15",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:09:30Z",
+      "local": "14:09:30",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-28T13:09:45Z",
+      "local": "14:09:45",
+      "focus": "unknown",
+      "p": "p_3815ea4d3197",
+      "credited_s": 15,
+      "credit": {
+        "p_3815ea4d3197": {"SUP": 5, "READ": 10}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    }
+  ]
+}
