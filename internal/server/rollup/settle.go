@@ -156,7 +156,7 @@ WHERE user_id = $1 AND minute_ms = $2 AND device_id = $3`, account, minuteMS, af
 			return fmt.Errorf("rollup: settling %s's minute %d on %s: %w", account, minuteMS, after[i].id, err)
 		}
 	}
-	return remerge(ctx, tx, account, before, day, after, day)
+	return remerge(ctx, tx, account, minuteMS, before, day, after, day)
 }
 
 // RunSettle runs Settle through d, reading q, at once, then every

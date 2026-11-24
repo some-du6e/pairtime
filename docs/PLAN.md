@@ -777,8 +777,8 @@ Exit check: `restore-drill.yml` green; `probe.yml` green against `https://<host>
 - Depends on: WP-SV6.
 - Touches: `internal/server/rollup/`.
 - Build: additive upserts into `rollups_daily (user, project, day, activity_kind, level)`, so public totals can leave level C out (D11), from the delta between a bucket's revisions; one human minute per wall-clock minute per account across devices (SM 3.4), with no stored flag, since the submission freeze computes `concurrent_devices` over the submitted window from `rollup_minutes` (D-no-ingest-flags); pending and final kept apart; `GET /api/v1/users/me/dashboard`. SM 5.3's `DAY_CAP_S` per user and local day across devices, applied after the merge, so a second device can't lift the cap.
-- CI checks: replaying revisions in random order converges to the same rollups; two devices crediting the same slot keep one and store no flag, and `rollup.ConcurrentMinutes` counts that minute as concurrent over a window that holds it; dashboard totals equal the sum of stored final buckets.
-- Oracle: SM 3.4; the sum invariant over stored buckets.
+- CI checks: replaying revisions in random order converges to the same rollups; two devices crediting the same slot keep one and store no flag, and `rollup.ConcurrentMinutes` counts that minute as concurrent over a window that holds it; dashboard totals equal the sum of stored final buckets; two devices each crediting 8 hours on one local day in the profile's time zone keep 12, and the last 4 in time order are `X.day_cap` in `rollups_daily.day_cap_ms` (migration 0012), and a replay in random order cuts the day in the same place.
+- Oracle: SM 3.4 and 5.3; the sum invariant over stored buckets, with the credit the day cap withheld.
 
 ### WP-SV8. Live stream and the owner dashboard
 
