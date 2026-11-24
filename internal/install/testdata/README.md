@@ -23,3 +23,15 @@ How the "after" files were made, so they don't depend on the code they test: for
 ## autostart/
 
 The LaunchAgent property list for `/Users/teen/.local/bin/pairtime` and the XDG autostart entry for `/home/teen/.local/bin/pairtime`.
+
+## wakatime/
+
+One directory per case: `before.cfg` is `~/.wakatime.cfg` before `pairtime install` (no file for `new-file`) and `after.cfg` is what install must leave there, for pairtime's key `00000000-0000-4000-8000-00000000a9e7` on port 7247. Uninstall must give back `before.cfg` byte for byte, or remove the file when there was none. The keys are the two public ones of the wakatime-cli capture (`testdata/fixtures/wakatime/2.28.4/linux`) and a third made up for another server.
+
+- `hackatime-setup`: the config hackatime-setup v1.5.27 writes (docs/research/hackatime-and-hack-club.md 1.5), which gets pairtime's line in a new `[api_urls]` section after a blank line.
+- `other-server`: an `[api_urls]` section with a `.*` line for another server and a comment after it. pairtime's `.+` line goes after the other line and before the comment, and the other line keeps its server.
+- `plus-taken`: another server's line already takes `.+`, so pairtime's line takes `^.*$`, the next spelling (DESIGN 5.6).
+- `crlf-comments`: CRLF line endings, a UTF-8 byte order mark, comments and an inline comment, as a Windows editor leaves the file. The new section keeps CRLF.
+- `new-file`: no config at all. Install makes one with the agent as `api_url`, and `internal.cfg` is the `~/.wakatime/wakatime-internal.cfg` it seeds with the watermark at the test's time, 2026-11-24T05:30:00Z (HC 1.5).
+
+How the "after" files were made, so they don't depend on the code they test: each is its `before.cfg` with pairtime's text inserted by hand, where DESIGN 5.6 and the rules in `internal/install/wakacfg` put it: after the last key of the first `[api_urls]` section, or in a new section at the end after a blank line.

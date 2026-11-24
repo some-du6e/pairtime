@@ -124,8 +124,11 @@ type undoer func(cur, base Content, data json.RawMessage) (Content, error)
 
 // undoers undo each kind of edit.
 var undoers = map[string]undoer{
-	kindOwned:       undoOwned,
-	kindClaudeHooks: undoClaudeHooks,
+	kindOwned:             undoOwned,
+	kindClaudeHooks:       undoClaudeHooks,
+	kindWakaTimeLine:      undoWakaTimeLine,
+	kindWakaTimeSetup:     undoWakaTimeSetup,
+	kindWakaTimeWatermark: undoWakaTimeWatermark,
 }
 
 // Recorder is an Edit that keeps, in the manifest, something its undo needs

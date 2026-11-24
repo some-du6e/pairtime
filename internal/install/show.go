@@ -11,17 +11,22 @@ import (
 	"unicode/utf8"
 
 	"github.com/some-du6e/pairtime/internal/install/jsonc"
+	"github.com/some-du6e/pairtime/internal/install/wakacfg"
 )
 
 // masked stands in, in what Diff shows, for text pairtime didn't write.
 const masked = "***"
 
 // shown is what Diff shows of content c of ch's target. A settings file
-// that pairtime merges hooks into is masked (maskSettings). Other targets
-// hold an entry pairtime owns whole, shown as it is.
+// that pairtime merges hooks into is masked (maskSettings), and so is
+// ~/.wakatime.cfg, which holds the teen's API keys (wakacfg.Masked). Other
+// targets hold an entry pairtime owns whole, shown as it is.
 func (ch Change) shown(c Content) []byte {
-	if slices.Contains(ch.kinds, kindClaudeHooks) && c.Exists {
+	switch {
+	case slices.Contains(ch.kinds, kindClaudeHooks) && c.Exists:
 		return maskSettings(c.Data)
+	case slices.Contains(ch.kinds, kindWakaTimeLine) && c.Exists:
+		return wakacfg.Masked(c.Data)
 	}
 	return c.text()
 }
