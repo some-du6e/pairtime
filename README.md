@@ -23,18 +23,18 @@ Not built yet: harnesses other than Claude Code, Claude Code's transcripts and O
 
 ## Install
 
-Install pairtime on the computer where you run Claude Code, since pairtime counts your time from your typing and mouse on that computer. These commands install v0.1.0-alpha.6. Its install script checks the release's signature, then shows what `pairtime install` would change before it changes anything.
+Install pairtime on the computer where you run Claude Code, since pairtime counts your time from your typing and mouse on that computer. These commands install v0.1.0-alpha.7. Its install script checks the release's signature, then shows what `pairtime install` would change before it changes anything.
 
 On macOS or Linux:
 
 ```sh
-curl -fsSL https://github.com/some-du6e/pairtime/releases/download/v0.1.0-alpha.6/install.sh | sh
+curl -fsSL https://github.com/some-du6e/pairtime/releases/download/v0.1.0-alpha.7/install.sh | sh
 ```
 
 On Windows, in PowerShell:
 
 ```powershell
-irm https://github.com/some-du6e/pairtime/releases/download/v0.1.0-alpha.6/install.ps1 | iex
+irm https://github.com/some-du6e/pairtime/releases/download/v0.1.0-alpha.7/install.ps1 | iex
 ```
 
 Then `pairtime login` links the computer to your account on a pairtime server. The empty dashboard on the server gives the same two commands.
@@ -54,6 +54,7 @@ One Go module holds the client, the server and the code they share.
 | `pkg/params` | The public parameter table: every tunable value in the credit rule (SM 8, DESIGN 6.3), as canonical JSON with its SHA-256 |
 | `pkg/score` | The scorer: turns events into credited human seconds, following SM with DESIGN 6.2's deviations |
 | `pkg/ledger` | The [ledger format](docs/spec/ledger-v1.md): device keys, records, Merkle trees and inclusion proofs, the batch chain, the server's receipts, day trees and verification, and the content: the commitment of each prompt, final agent message and track label, the redacted reveal that opens one, the keyed features (`features`) and the challenge draw |
+| `pkg/seal` | The [sealed blobs](docs/spec/seal-v1.md) that carry tier-2 content past Cloudflare: ECDH on P-256, HKDF-SHA256 and AES-256-GCM, sealed to the evidence key on upload and to a reviewer's key on every read (DESIGN 7.6) |
 | `pkg/redact` | Finds what in a prompt or agent message must stay on the device: the teen's own values, secrets and personal data that passes Presidio's checks, email addresses included (DESIGN 8.7) |
 | `internal/agent` | The background agent: its data directories, the single-instance lock, `config.toml`, `state.json`, the scheduler every timer goes through, the HTTP server on 127.0.0.1, the socket hooks hand their events to (`ipc`) and the spool they fall back on (`inbox`), `pairtime hook`'s fast path and what the agent makes of each hook call (`hookpath`), the scan for harness processes no hook has spoken for (`procs`), the check of which process opened a connection to that server, for WakaTime heartbeats and OTLP (`peer`), the one notification per work session (`notifier`), and `pairtime doctor`'s checks and footprint report (`doctor`) |
 | `internal/agent/presence` | Presence and power: idle-time samples on each 15-second slot boundary and suspend, resume, lock and unlock, recorded only while a project context is live (DESIGN 3.3, D14) |
@@ -69,7 +70,7 @@ One Go module holds the client, the server and the code they share.
 | `internal/adapters/git` | The git adapter: which project a folder belongs to, and the commits, amends and rebases made there, read from `.git` (DESIGN 5.8) |
 | `internal/install` | What `pairtime install` writes outside pairtime's own directories, the harness hooks and the login item, merged beside what's there, and the uninstall that puts each file back byte for byte; which harnesses are on the machine; and `consent`, the screen that shows each change before install makes it (DESIGN 5.9) |
 | `internal/coach/text` | The words pairtime shows a teen about their time, shared by the coach, the CLI and the dashboard: your time, each agent's time named after it, the rest said for what it was, and nothing that scolds (DESIGN 3.8) |
-| `internal/server` | The server's packages: `config` reads `pairtime.toml`, `store` opens the database (SQLite in WAL mode, or Postgres), `migrations` holds the schema, `writer` is the one goroutine every write goes through, `ops` serves the health and readiness endpoints, `accounts` keeps accounts and web sessions, `auth` signs people in with Hack Club Auth, `objstore` is the S3 client for evidence and snapshots, `backup` holds the server's keys, their encrypted backup, the nightly snapshot and the replica's lag, `keys` keeps which server key was valid when and publishes them at `/.well-known/pairtime-keys.json` ([keys-v1](docs/spec/keys-v1.md)), `publisher` signs a head over each day's batches and writes it for the witness sidecar to push to the public `pairtime-witness` repository, with each batch's inclusion proof for bundles, `device` links the client to an account with the device grant ([device-auth-v1](docs/spec/device-auth-v1.md)), `ingest` takes its signed uploads ([ingest-v1](docs/spec/ingest-v1.md)), `rollup` keeps the daily totals, `dashboard` and `pages` serve the dashboard, the home page and the privacy notice, and `retention` holds how long each kind of data is kept and the jobs that delete it |
+| `internal/server` | The server's packages: `config` reads `pairtime.toml`, `store` opens the database (SQLite in WAL mode, or Postgres), `migrations` holds the schema, `writer` is the one goroutine every write goes through, `ops` serves the health and readiness endpoints, `accounts` keeps accounts and web sessions, `auth` signs people in with Hack Club Auth, `objstore` is the S3 client for evidence and snapshots, `backup` holds the server's keys, their encrypted backup, the nightly snapshot and the replica's lag, `keys` keeps which server key and evidence key was valid when, holds the evidence keys' ring, which opens each sealed blob with the key it names, and publishes the keys at `/.well-known/pairtime-keys.json` ([keys-v1](docs/spec/keys-v1.md)), `publisher` signs a head over each day's batches and writes it for the witness sidecar to push to the public `pairtime-witness` repository, with each batch's inclusion proof for bundles, `device` links the client to an account with the device grant ([device-auth-v1](docs/spec/device-auth-v1.md)), `ingest` takes its signed uploads ([ingest-v1](docs/spec/ingest-v1.md)), `rollup` keeps the daily totals, `dashboard` and `pages` serve the dashboard, the home page and the privacy notice, and `retention` holds how long each kind of data is kept and the jobs that delete it |
 | `internal/release` | The [update manifest](docs/spec/update-manifest.md), the signed list of release archives a client checks its downloads against, and the release keys built into the client |
 | `install` | The install scripts every release carries, `install.sh` for macOS and Linux and `install.ps1` for Windows, which check a release's signature and SHA-256s and hand the binary to `pairtime install`, which puts it in place after the consent screen's yes, and their end-to-end tests in `e2e` |
 | `internal/timelines` | Loads `testdata/timelines`, the struggle-metric spec's worked examples written out as events. The scorer's tests compare their output with them |

@@ -1,0 +1,13 @@
+{
+  "fixture": "focus-unknown/c-x11-reconnect",
+  "prompts": [
+    {
+      "turn_key": "t_853958dc4e13",
+      "t": 1795647840000,
+      "local": "10:04:00",
+      "text": null,
+      "len_chars": 180,
+      "source": "invented for WP-FX8; only its 180 typed characters matter"
+    }
+  ]
+}

@@ -240,7 +240,11 @@ func (s *Server) SetObject(bucket, key string, data []byte) {
 // SetVersioning sets what GetBucketVersioning answers for bucket: "" for
 // a bucket whose versioning was never turned on, "Enabled", "Suspended",
 // NotImplemented, AccessDenied or InternalError. The server never keeps
-// old versions either way.
+// old versions either way, but with "Enabled" a DeleteObject answers
+// x-amz-delete-marker: true, as MinIO does for a bucket that keeps
+// versions. MinIO announces no marker for a suspended bucket, whose marker
+// has the version id "null", so neither does this server: there only
+// pairtimed doctor's versioning check finds the bucket.
 func (s *Server) SetVersioning(bucket, state string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -455,6 +459,11 @@ func (s *Server) handle(r *http.Request, id string) answer {
 		return answer{status: http.StatusOK, body: o.data, header: h}
 	case http.MethodDelete:
 		delete(objects, key)
+		// A bucket with versioning on only adds a delete marker, and says
+		// so, as MinIO does. The server keeps no old version either way.
+		if s.versioning[bucket] == "Enabled" {
+			return answer{status: http.StatusNoContent, header: http.Header{"X-Amz-Delete-Marker": {"true"}, "X-Amz-Version-Id": {"marker-" + id}}}
+		}
 		return answer{status: http.StatusNoContent}
 	}
 	return s3error(http.StatusMethodNotAllowed, "MethodNotAllowed", "The specified method is not allowed against this resource.", id)
