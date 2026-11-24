@@ -124,20 +124,21 @@ func heldGap(times, stamped []int64, ttl, late, high int64) (end, length int64) 
 // and why where the records say: no presence sample at all, which is
 // presence unknown on this computer, or no sample for longer than that lag
 // allows, which is the samples having stopped while records came: then
-// the minutes wait for the next sample, or for ttl, BUCKET_TTL_S, of the
-// records the agent stamps itself without one (hooks, its own watchers, an
-// agent app's reader; never a log reader's or the bridge's) and then any
-// record late, PENDING_WINDOW_S - READ_HORIZON_S, after the one that ended
-// those, after which pkg/score takes them for a never-sampling device's
-// (SM 2.1). A sample that ends a gap longer than ttl, as the morning's
-// first after a night's suspend, holds the minutes since the sample before
-// it until the newest record is late past it (SM 2.1's wait for a record
-// dated inside the gap), and the note says so while it does. It returns ""
-// for no lag, and for a lag while samples come and a browser or chat app
-// is in front: SM 2.5 holds the minutes after credit until such a run
-// ends, since it may be a lookup, which is the rule working, not a fault,
-// and doctor's agent line would call it one. s says what the sampler's
-// records show, and focus is the app class of the newest os.focus.
+// the minutes wait for the next sample, or for one record the agent stamps
+// itself (a hook's, one of its own watchers', an agent app reader's; never
+// a log reader's or the bridge's) dated more than ttl, BUCKET_TTL_S, after
+// the last sample, and then any record late, PENDING_WINDOW_S -
+// READ_HORIZON_S, after that one, after which pkg/score takes them for a
+// never-sampling device's (SM 2.1). A sample that ends a gap longer than
+// ttl, as the morning's first after a night's suspend, holds the minutes
+// since the sample before it until the newest record is late past it (SM
+// 2.1's wait for a record dated inside the gap), and the note says so
+// while it does. It returns "" for no lag, and for a lag while samples
+// come and a browser or chat app is in front: SM 2.5 holds the minutes
+// after credit until such a run ends, since it may be a lookup, which is
+// the rule working, not a fault, and doctor's agent line would call it
+// one. s says what the sampler's records show, and focus is the app class
+// of the newest os.focus.
 func stallNote(at, fb, pending, ttl, late int64, s sampling, focus event.AppClass) string {
 	lag := at - fb
 	if lag <= pending+stallMS {
@@ -149,7 +150,7 @@ func stallNote(at, fb, pending, ttl, late int64, s sampling, focus event.AppClas
 	case s.newest == 0:
 		msg += ": presence is unknown on this computer, so the scorer has no presence sample to keep time by"
 	case at-s.newest > pending+stallMS:
-		msg += fmt.Sprintf(": no presence sample has come for %s, so they wait for the next one, or for %s of records the agent stamps itself (hooks, its own watchers, an agent app's reader) without one, and then any record %s later",
+		msg += fmt.Sprintf(": no presence sample has come for %s, so they wait for the next one, or for a record the agent stamps itself (a hook's, one of its own watchers', an agent app reader's) dated more than %s after the last one, and then any record %s after that",
 			lasting(at-s.newest), lasting(ttl), lasting(late))
 	case s.gapEnd > 0 && at-s.gapEnd < late:
 		msg += fmt.Sprintf(": a presence sample came after %s without one, so the minutes since wait %s for a record dated in that gap",

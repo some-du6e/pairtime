@@ -378,10 +378,13 @@ type Writer struct {
 	// pending is an event made in a stretch that ended, by its own time, or
 	// lookback's by when the writer took it in (Write), as found at the
 	// write and again wherever a stretch ends or the writer learns of one
-	// (lateLocked). notes counts NoteMode's calls.
-	local, taint, seen, stretchSealed, lastLocal, late bool
-	back, notes                                        uint64
-	until                                              moment
+	// (lateLocked). unnoted is set once a seal's read ended a stretch that
+	// no note had ended, until a batch is sealed online: the watch's note of
+	// that switch back, which can come after the read, as after Open's own
+	// seal, still arms the mark (noteLocked). notes counts NoteMode's calls.
+	local, taint, seen, stretchSealed, lastLocal, late, unnoted bool
+	back, notes                                                 uint64
+	until                                                       moment
 	// localAt is when the writer last took config.toml as local-only: a
 	// seal's local-only read, a note of a switch to it, or a Seen that says
 	// it (seenLocked).
@@ -874,8 +877,11 @@ func (w *Writer) append(rec ledger.Record) error {
 // while no such event is still on its way (Options.Waiting). A switch back
 // the watch misses, as to a symlinked config.toml's target, ends the
 // stretch at the next seal that reads the file online, and marks no batch.
-// Each note is a moment the writer knew the file's mode, where a stretch
-// begins or ends (stretch).
+// The watch's note of a switch back that a seal's read found first, as
+// when pairtime login renames config.toml into place while Open seals,
+// still arms the mark, unless a batch was sealed online in between, which
+// ended the run of local-only batches already. Each note is a moment the
+// writer knew the file's mode, where a stretch begins or ends (stretch).
 func (w *Writer) NoteMode(online bool) { w.NoteModeThen(online, nil) }
 
 // NoteModeThen is NoteMode, and runs then, when set, with the record lock
@@ -899,7 +905,10 @@ func (w *Writer) NoteModeThen(online bool, then func()) {
 // reports whether it asks for a seal. w.mu is held.
 func (w *Writer) noteLocked(online bool, at edge) bool {
 	w.notes++
-	back := online && (w.local || w.lastLocal)
+	// A switch back follows a stretch the writer had: as the mode noted
+	// last says, as the newest batch counts as local-only, or as a seal's
+	// read ended unnoted.
+	back := online && (w.local || w.lastLocal || w.unnoted)
 	begins := !online && !w.local
 	if begins {
 		w.stretchSealed = false
@@ -1414,6 +1423,9 @@ func (w *Writer) seal() (Batch, bool, error) {
 			w.sawOnline(edgeAt(ended))
 			w.lateLocked()
 			w.local, w.seen = false, false
+			// The watch's note of the switch, which this read can come
+			// before, still arms the mark (noteLocked).
+			w.unnoted = true
 		case !online:
 			// config.toml says local-only, which the watch may not have
 			// noted, as in its debounce or for a symlinked config.toml's
@@ -1523,6 +1535,9 @@ func (w *Writer) seal() (Batch, bool, error) {
 		// roots in a batch of its own, so it is dropped (Write).
 		w.passAll()
 		w.onlineRun = momentAt(at, osclock.Stamp{})
+		// This batch ended the run of local-only batches, unmarked, so a
+		// note of a switch back a seal's read found arms no mark now.
+		w.unnoted = false
 	}
 	if sp.Stretches != nil {
 		w.dirty = false

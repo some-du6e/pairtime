@@ -473,12 +473,31 @@ func TestCutWaits(t *testing.T) {
 			},
 		},
 		{
-			name: "a record more than BUCKET_TTL_S after the last sample ends its reach only once the newest record is rules.late past it, and then FinalBefore follows the newest record",
+			name: "a record more than BUCKET_TTL_S after the last sample ends its reach only once the newest record is rules.late past it, at exactly that lag too, and then FinalBefore follows the newest record",
 			build: func(b *tl) {
 				hooked(b, 9500)
+				// A record the agent stamps itself exactly rules.late after
+				// the cut, alone in its minute's batch.
+				b.unknownFocus(at(takes))
 			},
 			check: func(t *testing.T, batches [][]event.Event, outs []Output, _, _ Derived) {
 				waits(t, batches, outs)
+				high, seen := int64(0), false
+				for i, b := range batches {
+					for _, e := range b {
+						high = max(high, e.T)
+					}
+					if high == at(takes) {
+						seen = true
+						if want := floorSlot(at(takes) - r.settle); outs[i].FinalBefore != want {
+							t.Errorf("with the newest record exactly rules.late past the cut, FinalBefore %d s; want %d s, the cut taken effect",
+								(outs[i].FinalBefore-base)/1000, (want-base)/1000)
+						}
+					}
+				}
+				if !seen {
+					t.Fatal("no Step's newest record is exactly rules.late past the cut")
+				}
 				last := outs[len(outs)-1]
 				if want := floorSlot(at(9420) - r.settle); last.FinalBefore != want {
 					t.Errorf("FinalBefore %d s once the cut took effect, want %d s, PENDING_WINDOW_S behind the newest record",
@@ -562,10 +581,17 @@ func TestCutWaits(t *testing.T) {
 				if !moved {
 					t.Fatal("no Step's newest record is rules.late past the resume")
 				}
+				n := 0
 				for _, s := range one.Slots {
-					if s.Start >= at(1800) && s.Start < floorSlot(at(resume)) && !s.Asleep {
-						t.Fatalf("the slot at %d s isn't asleep; want every slot the machine slept through asleep", (s.Start-base)/1000)
+					if s.Start >= at(1800) && s.Start < floorSlot(at(resume)) {
+						n++
+						if !s.Asleep {
+							t.Fatalf("the slot at %d s isn't asleep; want every slot the machine slept through asleep", (s.Start-base)/1000)
+						}
 					}
+				}
+				if want := int((floorSlot(at(resume)) - at(1800)) / event.SlotMS); n != want {
+					t.Errorf("%d asleep slots from 1,800 s to the resume, want %d, every slot the machine slept through", n, want)
 				}
 			},
 		},

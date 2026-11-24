@@ -112,6 +112,6 @@
   "errata": ["2026-11-19-check-readings"],
   "notes": [
     "B2 still passes SM 2.2 rule 6: key presses in the 10 s before submit, focus on the terminal, and 60 characters within 15 characters a second over its one input slot. So it is human_typed, CC2 counts it, and it is drawn.",
-    "CC11's verdict needs no threshold DESIGN leaves open: 3 key-downs for 60 typed characters is too few by any reading, and 66 for 60 isn't."
+    "DESIGN 7.3's CC11 floor is a quarter of the credited characters: B2 has 3 hardware key-downs against 15 for its 60 characters, and every other prompt has 66."
   ]
 }

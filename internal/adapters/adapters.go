@@ -83,6 +83,16 @@ type Adapter interface {
 	// uses them (SM 3.2).
 	Hosts() []ProcessMatch
 	// Parse turns one raw record into records, in the order they happened.
+	// A hook call's records take their event_ids from the call's id, their
+	// time and their place counted from the end of what Parse returns (the
+	// agent's hookEventID), so a call parsed again, against later memory or
+	// without the agent's walk, gets the same ids while its records keep
+	// their times; one timed by the agent's receipt (hookpath.Times) gets new
+	// ids from the receipt of the start that parses it again. So a record
+	// that depends on the adapter's memory or the agent's walk, and that a
+	// later parse may not make, goes before the call's own records, never
+	// after them, and a later parse makes the call's own records at the same
+	// places, whatever their kinds.
 	// A raw record it can't fully read gives a *ParseError, with the
 	// records it could still make: unknown events and fields are counted
 	// as parse failures, never fatal (DESIGN 5.3). It is safe for

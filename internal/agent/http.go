@@ -92,7 +92,8 @@ type ledgerReply struct {
 	// after it had sealed a batch online since, so they never upload
 	// (ledger.Status.LateLocal; D-late-local). It counts every writer's
 	// drops: the adapters', presence's and the git watcher's. A log line
-	// read again after a restart is dropped, and counted, again (heldLogs).
+	// read again, or a hook call parsed again, after a restart is dropped,
+	// and counted, again (heldLogs).
 	LateLocal uint64 `json:"late_local"`
 }
 

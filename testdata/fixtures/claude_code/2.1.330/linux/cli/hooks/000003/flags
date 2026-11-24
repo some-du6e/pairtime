@@ -1,0 +1,4 @@
+name=claude
+print=no
+stream_json=no
+bare=no

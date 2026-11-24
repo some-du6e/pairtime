@@ -108,6 +108,7 @@
   "known_limit": null,
   "errata": ["2026-11-19-check-readings"],
   "notes": [
-    "The batch from 19:33:00.7 to 19:33:58 doesn't reproduce: one record short, so its root and head differ from the server's, and seq skips. Every other batch reproduces against the server's stored prev. Its records are unverified, so CC7 holds every minute from the last verified record before it, A1's prompt at 19:33:00, to the first after it, A1's stop at 19:34:00: 19:33 and 19:34, 120 s."
+    "The batch from 19:33:00.7 to 19:33:58 doesn't reproduce: one record short, so its root and head differ from the server's, and seq skips. Every other batch reproduces against the server's stored prev. Its records are unverified, so CC7 holds every minute from the last verified record before it, A1's prompt at 19:33:00, to the first after it, A1's stop at 19:34:00: 19:33 and 19:34, 120 s.",
+    "Without batch 3009's revealed records the re-score changes only in 19:33, which the span holds. A1's prompt is the hook record 9030 in batch 3008, so the log copy 9032 changes nothing; 3009's samples and tool call bear on 19:33 alone; and its outputs ask no question and can't drain after B1's lead begins at 19:33:20 or after B1's prompt resets the bucket. So CC7 holds no other minute."
   ]
 }

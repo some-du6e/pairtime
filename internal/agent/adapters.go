@@ -134,7 +134,11 @@ const maxParked = 4096
 // for one line of each call that waits for its folder's project
 // (trimPendingLocked), and the next start parses what a killed run left
 // there. A call whose records were written in the moment before a kill,
-// ahead of the emptying, is parsed again: twice rather than never.
+// ahead of the emptying, is parsed again, and its records, which keep
+// their event_ids while they keep their times (hookEventID), are left out
+// where the ledger has them (heldLogs): once rather than never. A call
+// timed by the agent's receipt (hookpath.Times), which the next start's
+// replay takes anew, gets new ids, and its records come out twice.
 //
 // A held call keeps how it came, its via, the agent's walk of its sender
 // and the agent's stamp, only in the run that wrote it down. Any process
@@ -346,8 +350,8 @@ type harnessStats struct {
 	// LateLocal counts records the ledger writer dropped: made while
 	// config.toml said local-only, they reached it only after it sealed a
 	// batch online since, so they never upload (ledger.ErrLateLocal). A log
-	// line's replay in the same run counts once (heldLogs.dropped), and one
-	// after a restart counts again.
+	// line's replay, or a hook call's re-parse, in the same run counts once
+	// (heldLogs.dropped), and one after a restart counts again.
 	LateLocal uint64 `json:"late_local,omitempty"`
 	// Ignored counts calls and log lines from a folder out of pairtime,
 	// which make no record (DESIGN 8.8).
@@ -363,9 +367,10 @@ type harnessStats struct {
 	// write, lines too long to read (DESIGN 5.3; WP-AD3).
 	Lines        uint64 `json:"lines,omitempty"`
 	LineFailures uint64 `json:"line_failures,omitempty"`
-	// Repeats counts the records of log lines a replay read again that the
-	// ledger already holds, which the adapter left out, so none counts twice
-	// (heldLogs). A record the ledger dropped is no repeat.
+	// Repeats counts the records of log lines a replay read again, and of
+	// hook calls parsed again, that the ledger already holds, which the
+	// adapter left out, so none counts twice (heldLogs). A record the
+	// ledger dropped is no repeat.
 	Repeats uint64 `json:"repeats,omitempty"`
 }
 
@@ -1621,10 +1626,11 @@ func (h *adapterHost) release(last bool) {
 // writer has stopped after a failure, it holds c for the next start
 // instead, before Parse, so the adapter's memory doesn't move on past a
 // call whose records the ledger never took (writerDown). A call during
-// which the writer stopped is held too, so the records of it that went
-// before the stop come out twice, rather than the rest never. A call is
-// counted once it is done with, so a status that counts it finds its
-// records in the ledger writer.
+// which the writer stopped is held too, and at the next start the records
+// of it that went before the stop, which keep their event_ids while they
+// keep their times (hookEventID), are left out where the ledger has them
+// (heldLogs), and the rest are written. A call is counted once it is done
+// with, so a status that counts it finds its records in the ledger writer.
 func (h *adapterHost) parse(c hostCall) {
 	if h.writerDown() {
 		h.holdBack(c)
@@ -1653,14 +1659,37 @@ func (h *adapterHost) parse(c hostCall) {
 	// session, before its prompt is written (apps.go).
 	h.a.appsHost().noteWalk(session, c.raw.Arrival.Walk)
 	h.hint(c)
+	held := h.logsHeld()
 	due, refused := false, false
-	for _, r := range recs {
-		if h.write(c.st, r, sentOf(c.d)) == writeRefused {
-			refused = true
-		}
+	for i, r := range recs {
 		switch r.Event.Kind() {
 		case event.KindSessionStart, event.KindPromptSubmit, event.KindAgentStop:
+			// The memory Parse changed goes with the call's records, whether
+			// the ledger had them already or not.
 			due = true
+		}
+		r.Event.EventID = h.hookEventID(r.Event.T, c.d.ID, len(recs)-1-i)
+		if held.has(r.Event.EventID) {
+			// The ledger holds this record already: the call was parsed
+			// again, as after a crash during a held.jsonl replay, a kill
+			// before its pending log was emptied, or a writer that stopped
+			// partway through it, and its records keep their event_ids
+			// while they keep their times (hookEventID).
+			h.count(func() { c.st.Repeats++ })
+			continue
+		}
+		if held.wasDropped(r.Event.EventID) {
+			// The ledger dropped it earlier in this run, as made in a
+			// local-only stretch (ledger.ErrLateLocal), and would again.
+			continue
+		}
+		switch h.write(c.st, r, sentOf(c.d)) {
+		case writeTaken:
+			held.add(r.Event.EventID, wallNow())
+		case writeDropped:
+			held.drop(r.Event.EventID, wallNow())
+		case writeRefused:
+			refused = true
 		}
 	}
 	if refused && h.writerDown() {
@@ -2115,10 +2144,12 @@ const replayProblem = "the hook calls held while the ledger wasn't open can't be
 // for its folder's project like any other (admit), and the file is sealed
 // and deleted once each of its calls is parsed (endReplay). Until then,
 // what is held behind it waits too. A crash during a replay replays the
-// file again at the next start, so its records that were sealed by then
-// come out twice, never none. A .replay file that is parsed but can't be
-// deleted stops the replay for the run: the calls held behind it wait for
-// the next start, and calls taken in meanwhile are parsed before them.
+// file again at the next start, so its records that were sealed by then are
+// made again, under the same event_ids while they keep their times
+// (hookEventID), and left out where the ledger has them (heldLogs): once,
+// never none. A .replay file that is parsed but can't be deleted stops the
+// replay for the run: the calls held behind it wait for the next start, and
+// calls taken in meanwhile are parsed before them.
 func (h *adapterHost) replayHeld(last bool) bool {
 	name := h.a.dirs.Held()
 	replay := name + ".replay"
@@ -2215,7 +2246,8 @@ func (h *adapterHost) readReplay(name string, last bool) bool {
 // even when the seal fails, and the next seal takes them. One that can't
 // be deleted stays for the next start (replayStuck), emptied when it can
 // be, so that start parses none of it again. Only one that can't be
-// emptied either is parsed once more there, and its records written twice.
+// emptied either is parsed once more there, where the records the ledger
+// has are left out (heldLogs).
 func (h *adapterHost) endReplay(name string) {
 	if h.replayTaken > 0 {
 		h.mu.Lock()

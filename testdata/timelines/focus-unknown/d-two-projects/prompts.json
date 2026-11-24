@@ -1,0 +1,29 @@
+{
+  "fixture": "focus-unknown/d-two-projects",
+  "prompts": [
+    {
+      "turn_key": "t_58534af76744",
+      "t": 1795806120000,
+      "local": "16:02:00",
+      "text": null,
+      "len_chars": 120,
+      "source": "invented for WP-FX8; only its typed length matters"
+    },
+    {
+      "turn_key": "t_749e15331668",
+      "t": 1795806180000,
+      "local": "16:03:00",
+      "text": null,
+      "len_chars": 60,
+      "source": "invented for WP-FX8; only its typed length matters"
+    },
+    {
+      "turn_key": "t_2e49db7733c4",
+      "t": 1795806781000,
+      "local": "16:13:01",
+      "text": null,
+      "len_chars": 90,
+      "source": "invented for WP-FX8; only its typed length matters"
+    }
+  ]
+}

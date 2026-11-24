@@ -1,0 +1,115 @@
+{
+  "fixture": "focus-unknown/b-pty-game",
+  "anchors": [
+    {
+      "event_id": "01a2144d-e920-71b5-b9ba-f0322f6a4e4f",
+      "kind": "substantive_prompt",
+      "t": 1795636980000,
+      "local": "20:03:00",
+      "project_key": "p_ebe3260104e8",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 180,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "C",
+      "sm": "2.2 rule 6: the game's input in the 10 s before submit, and the focus test passes only because focus is unknown (2.5); lead 120 + 90 / 1.5 = 180 s",
+      "labels": ["focus_unknown"]
+    },
+    {
+      "event_id": "01a21452-7d00-7aea-9f60-71247fdfafec",
+      "kind": "substantive_prompt",
+      "t": 1795637280000,
+      "local": "20:08:00",
+      "project_key": "p_ebe3260104e8",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 180,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "C",
+      "sm": "2.2 rule 6: the game's input in the 10 s before submit, and the focus test passes only because focus is unknown (2.5); lead 120 + 90 / 1.5 = 180 s",
+      "labels": ["focus_unknown"]
+    },
+    {
+      "event_id": "01a21457-10e0-7da6-a94a-529605c72882",
+      "kind": "substantive_prompt",
+      "t": 1795637580000,
+      "local": "20:13:00",
+      "project_key": "p_ebe3260104e8",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 180,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "C",
+      "sm": "2.2 rule 6: the game's input in the 10 s before submit, and the focus test passes only because focus is unknown (2.5); lead 120 + 90 / 1.5 = 180 s",
+      "labels": ["focus_unknown"]
+    },
+    {
+      "event_id": "01a2145b-a4c0-78d2-b0a5-a3859c5f70ad",
+      "kind": "substantive_prompt",
+      "t": 1795637880000,
+      "local": "20:18:00",
+      "project_key": "p_ebe3260104e8",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 180,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "C",
+      "sm": "2.2 rule 6: the game's input in the 10 s before submit, and the focus test passes only because focus is unknown (2.5); lead 120 + 90 / 1.5 = 180 s",
+      "labels": ["focus_unknown"]
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_e9da4bb1937b",
+      "turn_key": "t_ae34120c3141",
+      "t_submit": 1795636980000,
+      "local_submit": "20:03:00",
+      "t_stop": 1795637080000,
+      "local_stop": "20:04:40",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 6, passing on unknown focus (2.5): human_typed, though a script typed it"
+    },
+    {
+      "session_key": "s_e9da4bb1937b",
+      "turn_key": "t_f9631dbab43a",
+      "t_submit": 1795637280000,
+      "local_submit": "20:08:00",
+      "t_stop": 1795637380000,
+      "local_stop": "20:09:40",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 6, passing on unknown focus (2.5): human_typed, though a script typed it"
+    },
+    {
+      "session_key": "s_e9da4bb1937b",
+      "turn_key": "t_eb69cfb8893c",
+      "t_submit": 1795637580000,
+      "local_submit": "20:13:00",
+      "t_stop": 1795637680000,
+      "local_stop": "20:14:40",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 6, passing on unknown focus (2.5): human_typed, though a script typed it"
+    },
+    {
+      "session_key": "s_e9da4bb1937b",
+      "turn_key": "t_5b17f16935a5",
+      "t_submit": 1795637880000,
+      "local_submit": "20:18:00",
+      "t_stop": 1795637980000,
+      "local_stop": "20:19:40",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 6, passing on unknown focus (2.5): human_typed, though a script typed it"
+    }
+  ]
+}

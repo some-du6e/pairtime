@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/ecdh"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -63,34 +64,53 @@ func checkServerKeys(ctx context.Context, dataDir string, db *store.DB, w *write
 	return nil
 }
 
-// recordServerKey makes the key history hold the server key in data_dir
-// as the current one (WP-SV17; serverkeys.RecordServer) and returns the
-// history, which /.well-known/pairtime-keys.json publishes. It runs after
-// checkServerKeys, so the key is the one the database was written with. A
-// data directory without keys records nothing, and the document lists the
-// keys the history holds from before.
-func recordServerKey(ctx context.Context, dataDir string, db *store.DB, w *writer.Writer, logger *slog.Logger) (*serverkeys.History, error) {
+// recordKeys makes the key history hold the keys in data_dir as the
+// current ones, the server key (WP-SV17; serverkeys.RecordServer) and the
+// evidence key (WP-SB2; serverkeys.RecordEvidence), in one transaction.
+// It returns the history and the ring of evidence keys, which
+// /.well-known/pairtime-keys.json publishes. It runs after
+// checkServerKeys, so the server key is the one the database was written
+// with. A data directory without keys records nothing: the document lists
+// the server keys the history holds from before, and no evidence key,
+// since the ring then holds none.
+func recordKeys(ctx context.Context, dataDir string, db *store.DB, w *writer.Writer, logger *slog.Logger) (*serverkeys.History, *serverkeys.Ring, error) {
 	keys, err := backup.Load(backup.KeysDir(dataDir))
+	var evidence []*ecdh.PrivateKey
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		// checkServerKeys has said so.
 	case err != nil:
-		return nil, err
+		return nil, nil, err
 	default:
-		pub := keys.Public().Server
-		err := w.Do(ctx, 2, func(ctx context.Context, tx writer.Tx) error {
-			return serverkeys.RecordServer(ctx, tx, pub, time.Now().UnixMilli())
+		pub := keys.Public()
+		err := w.Do(ctx, 3, func(ctx context.Context, tx writer.Tx) error {
+			now := time.Now().UnixMilli()
+			if err := serverkeys.RecordServer(ctx, tx, pub.Server, now); err != nil {
+				return fmt.Errorf("recording the server key's validity: %w", err)
+			}
+			if err := serverkeys.RecordEvidence(ctx, tx, pub.Evidence, now); err != nil {
+				return fmt.Errorf("recording the evidence key's validity: %w", err)
+			}
+			return nil
 		})
 		if err != nil {
-			return nil, fmt.Errorf("recording the server key's validity: %w", err)
+			return nil, nil, err
 		}
+		evidence = append(evidence, keys.Evidence)
 	}
 	h, err := serverkeys.Load(ctx, db.Read)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	ring, err := serverkeys.NewRing(h, evidence...)
+	if err != nil {
+		return nil, nil, err
 	}
 	if k, ok := h.At(time.Now().UnixMilli()); ok {
 		logger.Info("the keys document lists the server key", "server_key", k.ID, "valid_from", time.UnixMilli(k.ValidFrom).UTC().Format(time.RFC3339), "keys", len(h.Server))
 	}
-	return h, nil
+	if k, ok := ring.Current(); ok {
+		logger.Info("the keys document lists the evidence key", "evidence_key", k.ID, "valid_from", time.UnixMilli(k.ValidFrom).UTC().Format(time.RFC3339))
+	}
+	return h, ring, nil
 }

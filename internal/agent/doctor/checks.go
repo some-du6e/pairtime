@@ -323,7 +323,7 @@ func adapterChecks(f Facts) []Check {
 			// when no call or fresh line came, as when only an idle marker's
 			// output came again after a crash, and before any failure and the
 			// request to report it.
-			c.Text += fmt.Sprintf(", and left out %s the ledger already had, of lines it read again", count(n.Repeats, "record", "records"))
+			c.Text += fmt.Sprintf(", and left out %s the ledger already had, of lines it read again and calls it parsed again", count(n.Repeats, "record", "records"))
 		}
 		// The agent keeps one last failure for both kinds, so it is named
 		// for neither.
@@ -358,7 +358,7 @@ func adapterChecks(f Facts) []Check {
 			// roots going by leaving them out (D-late-local). Nothing keeps
 			// which it dropped across a restart, so a line read again after
 			// one is dropped, and counted, again.
-			c.Text += fmt.Sprintf("; %s made while config.toml said local-only came only after pairtime had uploaded again, so the ledger dropped %s, as nothing recorded in local-only mode may upload (a log line read again after a restart counts again)",
+			c.Text += fmt.Sprintf("; %s made while config.toml said local-only came only after pairtime had uploaded again, so the ledger dropped %s, as nothing recorded in local-only mode may upload (a log line read again, or a hook call parsed again, after a restart counts again)",
 				count(n.LateLocal, "record", "records"), itOrThem(n.LateLocal))
 		}
 		if !slices.Contains(f.Adapters, h) {
@@ -386,7 +386,7 @@ func ledgerCheck(f Facts) (Check, bool) {
 		return Check{}, false
 	}
 	n := f.Agent.Ledger.LateLocal
-	c := Check{Name: "ledger", Result: OK, Text: fmt.Sprintf("has dropped %s made while config.toml said local-only that came only after pairtime had uploaded again, as nothing recorded in local-only mode may upload (a log line read again after a restart counts again)",
+	c := Check{Name: "ledger", Result: OK, Text: fmt.Sprintf("has dropped %s made while config.toml said local-only that came only after pairtime had uploaded again, as nothing recorded in local-only mode may upload (a log line read again, or a hook call parsed again, after a restart counts again)",
 		count(n, "record", "records"))}
 	for _, h := range f.Agent.Adapters.Harnesses {
 		if h.LateLocal > 0 {
