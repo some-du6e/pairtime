@@ -231,13 +231,20 @@ func TestChecks(t *testing.T) {
 				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, Lines: 30, Records: 28, Repeats: 2}
 			},
 			check: "adapter.claude_code", want: OK,
-			wantHas: []string{"5 calls and 30 lines of its logs made 28 records, with no parse failures; it left out 2 records the ledger already had, of lines it read again"}},
+			wantHas: []string{"5 calls and 30 lines of its logs made 28 records, and left out 2 records the ledger already had, of lines it read again, with no parse failures"}},
 		{name: "records left out as repeats are counted when no call or fresh line came, as when only an idle marker's output came again",
 			edit: func(f *Facts) {
 				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Repeats: 1}
 			},
 			check: "adapter.claude_code", want: OK,
-			wantHas: []string{"found; no hook call has come in since the agent started; it left out 1 record the ledger already had, of lines it read again"}},
+			wantHas: []string{"found; since the agent started, 0 calls made 0 records, and left out 1 record the ledger already had, of lines it read again, with no parse failures"},
+			wantNot: []string{"no hook call has come in"}},
+		{name: "records left out as repeats stay with the counts, before a parse failure and the request to report it",
+			edit: func(f *Facts) {
+				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, Lines: 30, Records: 28, Repeats: 2, ParseFailures: 1, LastFailure: "Stop: unknown field"}
+			},
+			check: "adapter.claude_code", want: Warn,
+			wantHas: []string{"5 calls and 30 lines of its logs made 28 records, and left out 2 records the ledger already had, of lines it read again, but 1 call didn't fully parse; the last failure: Stop: unknown field. pairtime may count less of this harness until it reads them. Report this line"}},
 		{name: "an adapter's parse failures warn, with the last failure and where to report them",
 			edit: func(f *Facts) {
 				f.Agent.Adapters.Harnesses["claude_code"] = HarnessCounts{Calls: 5, ParseFailures: 2, LastFailure: "Stop: unknown field"}

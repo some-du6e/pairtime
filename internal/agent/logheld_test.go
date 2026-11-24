@@ -155,15 +155,21 @@ func TestReplayHeld(t *testing.T) {
 				sealNow(t, w, dirs.Ledger())
 				return dirs, h, 1, 1, 1
 			}},
-		{"so does one a kill left unsealed, which the next Open seals",
+		{"so do a line a kill left unsealed, which the next Open seals, and one in the last batch the run before sealed, 72 hours before",
 			func(t *testing.T, dirs home.Dirs) (home.Dirs, *adapterHost, int, int, uint64) {
-				// The writer's seals wait at their read of config.toml once
-				// armed, so the seal the prompt asks for doesn't come before
-				// the copy, as a kill leaves the ledger.
+				// The earlier run sealed the line 72 hours back, then took
+				// another line just before a kill. Its seals wait at their read
+				// of config.toml once armed, so the seal the second line's
+				// prompt asks for doesn't come before the copy, as a kill leaves
+				// the ledger.
+				var at atomic.Int64
 				var armed atomic.Bool
 				gate := make(chan struct{})
 				release := sync.OnceFunc(func() { close(gate) })
+				aSealed := time.Now().Add(-72 * time.Hour)
+				at.Store(aSealed.Add(-2 * time.Second).UnixMilli())
 				w := optionsWriter(t, dirs, func(o *ledger.Options) {
+					o.Now = func() time.Time { return time.UnixMilli(at.Load()) }
 					o.Online = func() bool {
 						if armed.Load() {
 							<-gate
@@ -172,21 +178,33 @@ func TestReplayHeld(t *testing.T) {
 					}
 				})
 				t.Cleanup(release) // before the writer's Close, which waits for the seal
+				h := host(dirs, w, aSealed.Add(-2*time.Second))
+				l := line(t, aSealed.Add(-time.Second), first, 0)
+				at.Store(aSealed.UnixMilli())
+				take(t, h, l)
+				sealNow(t, w, dirs.Ledger())
+				at.Store(time.Now().UnixMilli())
 				armed.Store(true)
-				l := line(t, time.Now().Add(-time.Minute), first, 0)
-				take(t, host(dirs, w, time.Now()), l)
+				l2 := line(t, time.Now().Add(-time.Minute), second, l.Log.End)
+				take(t, h, l2)
 				dir := t.TempDir()
 				killed := home.Dirs{Data: dir, Config: dir, Runtime: dir}
 				copyFiles(t, dirs.Ledger(), killed.Ledger())
 				release()
-				if _, rows, err := ledger.ReadRows(killed.Ledger(), 0); err != nil || len(rows) != 0 {
-					t.Fatalf("the copy holds %d rows (%v); want the record a kill left unsealed", len(rows), err)
+				if _, rows, err := ledger.ReadRows(killed.Ledger(), 0); err != nil || len(rows) != 1 {
+					t.Fatalf("the copy holds %d rows (%v); want the one sealed 72 hours back, with the record a kill left unsealed", len(rows), err)
 				}
+				// The next run takes its start before it opens the ledger, as
+				// Run does, and Open seals what the kill left after it.
+				started := time.Now()
 				w2 := optionsWriter(t, killed, nil)
-				h := host(killed, w2, time.Now())
-				take(t, h, l)
+				h2 := host(killed, w2, started)
+				take(t, h2, l)
+				take(t, h2, l2)
 				sealNow(t, w2, killed.Ledger())
-				return killed, h, 1, 1, 1
+				// The first line, hours old, makes the session's start as well
+				// as its prompt, and the ledger holds all three.
+				return killed, h2, 2, 2, 3
 			}},
 		{"a line whose record the ledger dropped as made in a local-only stretch, read again in the same run, is skipped, as neither a repeat nor a second drop",
 			func(t *testing.T, dirs home.Dirs) (home.Dirs, *adapterHost, int, int, uint64) {
@@ -273,10 +291,11 @@ func TestReplayHeld(t *testing.T) {
 
 // TestHeldLogsFrom checks the batches the agent reads what the ledger holds
 // from (heldLogsFrom): every batch sealed from heldLogsWindow before the
-// newest batch sealed before the run started on, and those after it, as
-// Open's of what a kill left; and, with a start clock that reads before
-// every seal, from the window before the batch sealed last, not the whole
-// ledger.
+// anchor, the newest batch an earlier run sealed, by its number, on, and
+// those after it, as Open's of what a kill left; no more than that however
+// the clocks read, as a start clock behind and a run before whose clock was
+// reset to an old year can't widen it; and at most heldLogsMaxBatches up to
+// the anchor.
 func TestHeldLogsFrom(t *testing.T) {
 	t0 := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
 	// rows is batches 1, 2, ... sealed at t0 plus each of at.
@@ -287,23 +306,44 @@ func TestHeldLogsFrom(t *testing.T) {
 		}
 		return out
 	}
-	h := time.Hour
+	h, d := time.Hour, 24*time.Hour
+	// old is an old year, as a run whose clock reset dates its seals.
+	old := time.Date(2015, 1, 1, 0, 0, 0, 0, time.UTC).Sub(t0)
+	// busy is more batches than heldLogsMaxBatches, a second apart, the last
+	// a second before t0.
+	var busy []time.Duration
+	for i := range heldLogsMaxBatches + 10 {
+		busy = append(busy, -time.Duration(heldLogsMaxBatches+10-i)*time.Second)
+	}
+	// swept is rows whose batches start at 5, as after a sweep.
+	swept := func(at ...time.Duration) []ledger.Row {
+		out := rows(at...)
+		for i := range out {
+			out[i].B += 4
+		}
+		return out
+	}
 	cases := []struct {
-		name    string
-		rows    []ledger.Row
-		started time.Time
-		want    uint64
+		name   string
+		rows   []ledger.Row
+		anchor uint64
+		want   uint64
 	}{
-		{"the window counts back from the newest batch sealed before the run started", rows(-100*h, -60*h, -50*h, -10*h), t0, 3},
-		{"and takes in the batches sealed after the start, as Open's of what a kill left", rows(-100*h, -10*h, time.Minute), t0, 2},
-		{"a start long after the run before's last seal still reads the window before that seal", rows(-190*h, -180*h, -150*h), t0, 1},
-		{"a batch at the window's edge is in it", rows(-58*h, -10*h), t0, 1},
-		{"a start clock that reads before every seal counts back from the batch sealed last, not from the clock", rows(-100*h, -60*h, -10*h), t0.Add(-30 * 24 * h), 3},
-		{"a ledger with no batch gives none", nil, t0, 0},
+		{"the window counts back from the newest batch an earlier run sealed", rows(-100*h, -60*h, -50*h, -10*h), 4, 3},
+		{"and takes in the batches sealed after it, as Open's of what a kill left", rows(-100*h, -10*h, time.Minute), 2, 2},
+		{"a batch sealed after the anchor, more than the window later, moves it no later", rows(-80*h, -72*h, time.Second), 2, 1},
+		{"a start long after the run before's last seal still reads the window before that seal", rows(-190*h, -180*h, -150*h), 3, 1},
+		{"a batch at the window's edge is in it", rows(-58*h, -10*h), 2, 1},
+		{"a start clock 30 days behind changes nothing, as the anchor goes by its number", rows(-35*d, -31*d, -29*d, -1*d, -h), 5, 4},
+		{"a run before whose clock was reset to an old year stops the walk at the first batch sealed more than the window after its last", rows(-100*h, -50*h, -10*h, old, old+h), 5, 4},
+		{"the walk reads at most heldLogsMaxBatches up to the anchor", rows(busy...), heldLogsMaxBatches + 10, 11},
+		{"with no batch an earlier run sealed, every batch is this run's", rows(time.Minute, 2*time.Minute), 0, 1},
+		{"so it is when a sweep dropped the anchor", swept(-h, time.Minute), 3, 5},
+		{"a ledger with no batch gives none", nil, 0, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := heldLogsFrom(c.rows, c.started); got != c.want {
+			if got := heldLogsFrom(c.rows, c.anchor); got != c.want {
 				t.Errorf("heldLogsFrom = %d, want %d", got, c.want)
 			}
 		})
@@ -311,12 +351,12 @@ func TestHeldLogsFrom(t *testing.T) {
 }
 
 // TestHeldLogsPrune checks that heldLogs forgets, at most every
-// heldLogsPrune, the records this run wrote or the ledger dropped more than
-// heldLogsWindow before now, keeps those within the window at the prune,
-// and keeps what it read from the ledger for the run's life.
+// heldLogsPrune, the records this run wrote more than heldLogsWindow before
+// now, keeps those within the window at the prune, and keeps what it read
+// from the ledger, and the ids the ledger dropped, for the run's life.
 func TestHeldLogsPrune(t *testing.T) {
 	t0 := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
-	held := &heldLogs{at: map[[16]byte]int64{idKey("loaded"): heldForRun}, dropped: map[[16]byte]int64{}, pruned: t0}
+	held := &heldLogs{at: map[[16]byte]int64{idKey("loaded"): heldForRun}, dropped: map[[16]byte]struct{}{}, pruned: t0}
 	held.add("old", t0)
 	held.drop("dropped", t0)
 	// The first prune comes an hour on, with the old ones still in the
@@ -332,10 +372,10 @@ func TestHeldLogsPrune(t *testing.T) {
 	}{
 		{"a prune keeps what is within the window", keptInWindow},
 		{"a later prune forgets a record written before the window", !held.has("old")},
-		{"and one the ledger dropped then", !held.wasDropped("dropped")},
 		{"but keeps one written at the window's edge", held.has("edge")},
 		{"and one just written", held.has("new")},
 		{"and what it read from the ledger, for the run's life", held.has("loaded")},
+		{"and one the ledger dropped, for the run's life", held.wasDropped("dropped")},
 	}
 	for _, c := range checks {
 		t.Run(c.name, func(t *testing.T) {

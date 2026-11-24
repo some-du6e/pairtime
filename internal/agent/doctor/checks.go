@@ -305,6 +305,14 @@ func adapterChecks(f Facts) []Check {
 			c.Text = fmt.Sprintf("found; since the agent started, %s and %s of its logs made %s", count(n.Calls, "call", "calls"),
 				count(n.Lines, "line", "lines"), count(n.Records, "record", "records"))
 		}
+		if n.Repeats > 0 {
+			// Not a fault: a replay read lines again, and the ledger had their
+			// records already, so none counts twice. It stays with the counts
+			// when no call or fresh line came, as when only an idle marker's
+			// output came again after a crash, and before any failure and the
+			// request to report it.
+			c.Text += fmt.Sprintf(", and left out %s the ledger already had, of lines it read again", count(n.Repeats, "record", "records"))
+		}
 		// The agent keeps one last failure for both kinds, so it is named
 		// for neither.
 		var trouble []string
@@ -318,7 +326,7 @@ func adapterChecks(f Facts) []Check {
 			trouble = append(trouble, "the ledger refused "+count(n.WriteFailures, "record", "records"))
 		}
 		switch {
-		case n.Calls == 0 && n.Lines == 0 && len(trouble) == 0:
+		case n.Calls == 0 && n.Lines == 0 && n.Repeats == 0 && len(trouble) == 0:
 			c.Text = "found; no hook call has come in since the agent started"
 		case len(trouble) == 0:
 			c.Text += ", with no parse failures"
@@ -331,13 +339,6 @@ func adapterChecks(f Facts) []Check {
 			if n.ParseFailures > 0 || n.LineFailures > 0 {
 				c.Text += ". pairtime may count less of this harness until it reads them. " + reportIt
 			}
-		}
-		if n.Repeats > 0 {
-			// Not a fault: a replay read lines again, and the ledger had their
-			// records already, so none counts twice. It stays when no call or
-			// fresh line came, as when only an idle marker's output came
-			// again after a crash.
-			c.Text += fmt.Sprintf("; it left out %s the ledger already had, of lines it read again", count(n.Repeats, "record", "records"))
 		}
 		if n.LateLocal > 0 {
 			// Not a fault: they were made while config.toml said local-only,

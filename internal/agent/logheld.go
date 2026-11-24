@@ -15,12 +15,13 @@ import (
 )
 
 // heldLogsWindow is how far back the agent reads what the ledger holds for
-// heldLogs, counting from the newest batch sealed before this run started,
-// the run before's last seal (heldLogsFrom), and every batch after it,
-// such as those Open sealed from what a kill left (DESIGN 3.6). A crash's
-// re-read of the lines taken since state.json's last save, or a restart's
-// resume, reads again what the run before took, whenever this run starts,
-// so the window counts back from that seal and not from now. A record
+// heldLogs, counting from the newest batch an earlier run sealed
+// (ledger.Writer.Opened), the run before's last seal (heldLogsFrom), and
+// every batch after it, such as the one Open sealed from what a kill left
+// (DESIGN 3.6). A crash's re-read of the lines taken since state.json's
+// last save, or a restart's resume, reads again what the run before took,
+// whenever this run starts, so the window counts back from that seal and
+// not from now. A record
 // written longer before it that a Rewind or a relocate makes again goes to
 // the ledger a second time, where pkg/score drops it for the one it holds
 // if that one is still in its state, and a minute it already made final
@@ -29,8 +30,15 @@ import (
 // takes it in (ledger.Writer.lookback), as its first copy was.
 const heldLogsWindow = 48 * time.Hour
 
-// heldLogsPrune is how often heldLogs forgets the records this run wrote,
-// or dropped, more than heldLogsWindow ago.
+// heldLogsMaxBatches bounds the batches up to the run before's last seal
+// that heldLogs reads: about three and a half times the 2880 that 48 hours
+// hold at a seal a minute (BATCH_S), so a busy window fits, while a wall
+// clock that stepped between the seals can't make the agent read the whole
+// ledger (heldLogsFrom).
+const heldLogsMaxBatches = 10_000
+
+// heldLogsPrune is how often heldLogs forgets the records this run wrote
+// more than heldLogsWindow ago.
 const heldLogsPrune = time.Hour
 
 // heldForRun is the time heldLogs keeps for an event_id loadHeldLogs read
@@ -50,28 +58,29 @@ const heldForRun = math.MaxInt64
 // after state.json's last save. It holds every event record's id, as a log
 // reader's session.start a process tie rewrites goes to the ledger with
 // via = os (tiedStart), and the ids of other records, which are random,
-// never meet a log record's. Dropped ids stay in memory only, so a re-read
-// after a restart reaches the writer, which drops the record and counts it
-// again. It belongs to the adapters' worker, which alone writes log
-// records.
+// never meet a log record's. Dropped ids stay for the run's life, as they
+// are few, but in memory only, so a re-read after a restart reaches the
+// writer, which drops the record and counts it again. It belongs to the
+// adapters' worker, which alone writes log records.
 type heldLogs struct {
 	at      map[[16]byte]int64 // id → when this run wrote it, in Unix ms, or heldForRun
-	dropped map[[16]byte]int64 // id → when the ledger dropped it in this run, in Unix ms
+	dropped map[[16]byte]struct{}
 	pruned  time.Time
 }
 
 // loadHeldLogs reads the event_ids of the records of the batches the ledger
-// in dir sealed from heldLogsWindow before the newest batch sealed before
-// started on (heldLogsFrom), with now as when it last pruned. A ledger it
-// can't read gives an empty one, and the error: a replay may then write a
-// record twice, as before D-late-local point 5.
-func loadHeldLogs(dir string, started, now time.Time) (*heldLogs, error) {
-	held := &heldLogs{at: make(map[[16]byte]int64), dropped: make(map[[16]byte]int64), pruned: now}
+// in dir sealed from heldLogsWindow before anchor, the newest batch an
+// earlier run sealed (ledger.Writer.Opened), on (heldLogsFrom), with now as
+// when it last pruned. A ledger it can't read gives an empty one, and the
+// error: a replay may then write a record twice, as before D-late-local
+// point 5.
+func loadHeldLogs(dir string, anchor uint64, now time.Time) (*heldLogs, error) {
+	held := &heldLogs{at: make(map[[16]byte]int64), dropped: make(map[[16]byte]struct{}), pruned: now}
 	_, rows, err := ledger.ReadRows(dir, 0)
 	if err != nil {
 		return held, err
 	}
-	from := heldLogsFrom(rows, started)
+	from := heldLogsFrom(rows, anchor)
 	if from == 0 {
 		return held, nil
 	}
@@ -87,32 +96,38 @@ func loadHeldLogs(dir string, started, now time.Time) (*heldLogs, error) {
 }
 
 // heldLogsFrom is the first batch loadHeldLogs reads, 0 for none: the
-// oldest sealed within heldLogsWindow before the anchor, the newest batch
-// sealed before started, and every batch after it. With none sealed before
-// started, as when this run's clock reads earlier than every seal, the
-// anchor is the batch sealed last by the wall clock, so a clock far behind
-// doesn't read the whole ledger.
-func heldLogsFrom(rows []ledger.Row, started time.Time) uint64 {
+// oldest of those sealed within heldLogsWindow before the anchor, the
+// batch numbered anchor, the newest an earlier run sealed
+// (ledger.Writer.Opened), and then every batch after it, as Open's of what
+// a kill left. The anchor goes by its number, not by this run's clock, so
+// a start clock that reads behind changes nothing. Counting back from it,
+// the walk stops at the first batch sealed more than heldLogsWindow before
+// the anchor, or more than that after it, as when the run that sealed the
+// anchor had its clock reset to an old year, and at heldLogsMaxBatches, so
+// a clock that stepped between the seals can't make it read the whole
+// ledger. With no batch an earlier run sealed kept, every batch is this
+// run's, and it reads them all.
+func heldLogsFrom(rows []ledger.Row, anchor uint64) uint64 {
 	a := -1
 	for i := len(rows) - 1; i >= 0; i-- {
-		if rows[i].SealedAt.Before(started) {
+		if rows[i].B <= anchor {
 			a = i
 			break
 		}
 	}
 	if a < 0 {
-		for i := range rows {
-			if a < 0 || rows[i].SealedAt.After(rows[a].SealedAt) {
-				a = i
-			}
+		if len(rows) == 0 {
+			return 0
 		}
+		return rows[0].B
 	}
-	if a < 0 {
-		return 0
-	}
-	since := rows[a].SealedAt.Add(-heldLogsWindow)
+	at := rows[a].SealedAt
+	since, until := at.Add(-heldLogsWindow), at.Add(heldLogsWindow)
 	from := rows[a].B
-	for i := a - 1; i >= 0 && !rows[i].SealedAt.Before(since); i-- {
+	for i := a - 1; i >= 0 && a-i < heldLogsMaxBatches; i-- {
+		if s := rows[i].SealedAt; s.Before(since) || s.After(until) {
+			break
+		}
 		from = rows[i].B
 	}
 	return from
@@ -169,24 +184,23 @@ func (h *heldLogs) add(id string, now time.Time) {
 
 // drop notes that the ledger dropped a record of event_id id at now.
 func (h *heldLogs) drop(id string, now time.Time) {
-	h.dropped[idKey(id)] = now.UnixMilli()
+	h.dropped[idKey(id)] = struct{}{}
 	h.prune(now)
 }
 
-// prune forgets, at most every heldLogsPrune, the records this run wrote or
-// the ledger dropped more than heldLogsWindow before now, so a long run
-// holds no more of them than the window's.
+// prune forgets, at most every heldLogsPrune, the records this run wrote
+// more than heldLogsWindow before now, so a long run holds no more of them
+// than the window's. Those the ledger dropped stay, so a replay of one in
+// the same run counts once, however late it comes.
 func (h *heldLogs) prune(now time.Time) {
 	if now.Sub(h.pruned) < heldLogsPrune {
 		return
 	}
 	h.pruned = now
 	cut := now.Add(-heldLogsWindow).UnixMilli()
-	for _, m := range []map[[16]byte]int64{h.at, h.dropped} {
-		for k, at := range m {
-			if at < cut {
-				delete(m, k)
-			}
+	for k, at := range h.at {
+		if at < cut {
+			delete(h.at, k)
 		}
 	}
 }

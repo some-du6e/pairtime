@@ -604,12 +604,20 @@ func (h *adapterHost) takeBatch(t *tailers.Tailer, b tailers.Batch) int {
 
 // logsHeld is what the ledger holds for the log records takeLine writes
 // (heldLogs), read from the ledger the first time a line comes, which is
-// once the writer is there, from heldLogsWindow before the newest batch
-// sealed before the agent started on. A ledger that can't be read gives
-// none, which the agent's log notes. It runs on the adapters' worker.
+// once the writer is there, from heldLogsWindow before the newest batch an
+// earlier run sealed, as the writer found the ledger at its Open
+// (ledger.Writer.Opened), on. A ledger that can't be read gives none, which
+// the agent's log notes. It runs on the adapters' worker.
 func (h *adapterHost) logsHeld() *heldLogs {
 	if h.logHeld == nil {
-		held, err := loadHeldLogs(h.a.dirs.Ledger(), h.a.started, wallNow())
+		h.mu.Lock()
+		w := h.writer
+		h.mu.Unlock()
+		var anchor uint64
+		if w != nil {
+			anchor = w.Opened()
+		}
+		held, err := loadHeldLogs(h.a.dirs.Ledger(), anchor, wallNow())
 		if err != nil {
 			h.a.log.Warn("couldn't read what the ledger holds, so a log line a replay reads again may make its record twice", "err", err)
 		}
