@@ -19,8 +19,10 @@
 // every field hex-encoded, one short process per read at low priority
 // under a timeout, and only while the store's -wal and -shm files exist,
 // since a read-only open makes them when they don't. A read starts no
-// sqlite3 while those files' sizes and times say T3 has written nothing
-// since the last one, unless a row waits for its folder or a prompt asks.
+// sqlite3 while those files' sizes and times, and the WAL-index header at
+// the start of the -shm, which every commit moves, say T3 has written
+// nothing since the last one, unless a row waits for its folder or a
+// prompt asks.
 // Every query is a rowid range or an index lookup, and none touches T3's
 // search table. T3 runs, for the agent's cadence, presence and doctor, when
 // the agent's process scan finds its server (ServerIn) and the files are

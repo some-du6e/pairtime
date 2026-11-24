@@ -5,6 +5,7 @@ package t3code
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -437,15 +438,33 @@ func running(path string) bool {
 	return exists(path+"-wal") && exists(path+"-shm")
 }
 
-// walFiles is what a stat of a store's -wal and -shm files says: their
-// sizes and modification times, Unix ns. T3 writes the -wal for every
-// change it commits, so while both say the same T3 has written nothing.
+// walFiles is what a stat of a store's -wal and -shm files says, their
+// sizes and modification times, Unix ns, with the WAL-index header at the
+// start of the -shm. T3 writes the -wal and the header for every change it
+// commits, so while all of them say the same T3 has written nothing.
 type walFiles struct {
 	walSize, walTime int64
 	shmSize, shmTime int64
+	// shmHead is the -shm's first shmHeadSize bytes, SQLite's WAL-index
+	// header, whose change counter, last frame and checksums every commit
+	// moves. A commit can leave both files' sizes and times as they were.
+	// Once a checkpoint has restarted the WAL, T3's next commits write it
+	// again from its start, at its size. A file system can stamp a time
+	// only when the handle that wrote flushes or closes, as Windows' FAT
+	// driver does, and T3's handle does neither between its commits at
+	// synchronous=NORMAL. SQLite writes the -shm through a memory mapping,
+	// whose writes a file system needn't stamp at once either.
+	shmHead [shmHeadSize]byte
 }
 
-// walOf stats the -wal and -shm files of the store at path.
+// shmHeadSize is how much of the -shm walOf reads: the first of the two
+// copies of SQLite's WAL-index header (sqlite.org/walformat.html), which
+// only a connection that writes changes. A reader's mark comes after both
+// copies, so the reader's own runs leave it as it was (TestOwnReads).
+const shmHeadSize = 48
+
+// walOf stats the -wal and -shm files of the store at path, and reads the
+// -shm's WAL-index header.
 func walOf(path string) (walFiles, bool) {
 	wal, err := os.Stat(path + "-wal")
 	if err != nil {
@@ -455,5 +474,24 @@ func walOf(path string) (walFiles, bool) {
 	if err != nil {
 		return walFiles{}, false
 	}
-	return walFiles{walSize: wal.Size(), walTime: wal.ModTime().UnixNano(), shmSize: shm.Size(), shmTime: shm.ModTime().UnixNano()}, true
+	f := walFiles{walSize: wal.Size(), walTime: wal.ModTime().UnixNano(), shmSize: shm.Size(), shmTime: shm.ModTime().UnixNano()}
+	if !readHead(path+"-shm", &f.shmHead) {
+		return walFiles{}, false
+	}
+	return f, true
+}
+
+// readHead reads into head the WAL-index header at the start of the -shm
+// file name, or as much of it as the file holds, since SQLite grows a -shm
+// it has only just made. It opens the file to read alone, shared with every
+// other open (openShared), so T3 can write it and delete it meanwhile, and
+// holds it only for the read.
+func readHead(name string, head *[shmHeadSize]byte) bool {
+	f, err := openShared(name)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	_, err = io.ReadFull(f, head[:])
+	return err == nil || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
 }

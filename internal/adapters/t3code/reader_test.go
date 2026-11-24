@@ -1338,20 +1338,23 @@ func TestNoStore(t *testing.T) {
 // runs: a read starts no sqlite3 while a stat of the -wal and -shm files
 // says T3 has written nothing since the last read, unless a row waits for
 // its folder or a prompt asks. The last read's word is the stat once its
-// runs are done, while the -wal is as it was when the read began: the
-// reader's own mark stamps the -shm (TestOwnReads), and T3 commits nothing
-// without writing the -wal.
+// runs are done, while the -wal and the -shm's WAL-index header are as
+// they were when the read began: the reader's own mark stamps the -shm
+// (TestOwnReads), and T3 commits nothing without writing the -wal and the
+// header, though a commit can leave both files' sizes and times as they
+// were (walFiles.shmHead).
 func TestQuiet(t *testing.T) {
 	const text = "please fix the flaky parser test"
 	cases := []struct {
 		name    string
 		folders folders // tracked() when nil
-		// wrote says T3 wrote after the read before the one under test, and
-		// ask that the read under test is Pair's. during is what changed in
-		// the stat while the read before ran.
-		wrote, ask bool
-		during     func(f *walFiles)
-		runs       bool
+		// wrote says T3 wrote after the read before the one under test, head
+		// that it committed then moving only the -shm's header, and ask that
+		// the read under test is Pair's. during is what changed in the stat
+		// while the read before ran.
+		wrote, head, ask bool
+		during           func(f *walFiles)
+		runs             bool
 	}{
 		{name: "a read when T3 wrote nothing since the last one starts no sqlite3"},
 		{name: "a read after T3 wrote starts sqlite3", wrote: true, runs: true},
@@ -1362,6 +1365,10 @@ func TestQuiet(t *testing.T) {
 			during: func(f *walFiles) { f.shmTime++ }},
 		{name: "a read after one during which T3 wrote, changing the -wal, starts sqlite3",
 			during: func(f *walFiles) { f.walSize, f.walTime = f.walSize+1, f.walTime+1 }, runs: true},
+		{name: "a read after T3 committed moving only the -shm's WAL-index header, as a commit after a checkpoint can on a file system that stamps no time until a flush, starts sqlite3",
+			head: true, runs: true},
+		{name: "a read after one during which T3 committed, moving only the -shm's WAL-index header, starts sqlite3",
+			during: func(f *walFiles) { f.shmHead[8]++ }, runs: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1397,6 +1404,9 @@ func TestQuiet(t *testing.T) {
 			if tc.wrote {
 				files.walSize, files.walTime = 3, 3
 			}
+			if tc.head {
+				files.shmHead[8]++ // iChange, the header's change counter
+			}
 			before := len(sp.runs(t))
 			c.set(2 * time.Second)
 			if tc.ask {
@@ -1419,16 +1429,14 @@ func TestQuiet(t *testing.T) {
 
 // TestWALFiles holds walOf to what TestQuiet's stat stands in for, with a
 // store's real files, on each file system the tests run on: a row T3
-// writes changes what a stat of the -wal says, its size or its time, and
-// with nothing written the stat says the same. T3's server writes through
-// the connection it holds open, and once a checkpoint has copied the WAL
-// into the store, its next commits write the WAL again from the start, so
-// the -wal keeps its size and only its time can show each commit, through a
-// handle that has written before and stays open. The reader's quiet skip
-// rests on that time while T3 runs (DESIGN 3.3; settled). A file system
-// stamps a time at its clock's tick, which on NTFS can be coarse, so a
-// write whose size moves needs no wait, and one whose size stays comes
-// well after the write before it.
+// writes moves the -shm's WAL-index header, and with nothing written the
+// stat says the same. T3's server writes through the connection it holds
+// open, and once a checkpoint has copied the WAL into the store, its next
+// commits write the WAL again from the start, so the -wal keeps its size,
+// and its time moves only where the file system stamps a write through a
+// handle that stays open, which Windows doesn't promise. The header moves
+// at every commit, whatever the file system stamps, and the reader's quiet
+// skip rests on it while T3 runs (DESIGN 3.3; settled).
 func TestWALFiles(t *testing.T) {
 	const text = "please fix the flaky parser test"
 	cases := []struct {
@@ -1436,13 +1444,14 @@ func TestWALFiles(t *testing.T) {
 		// ready runs before the first stat, and write between it and the
 		// second: nil for none.
 		ready, write func(s *store)
-		// wrote says the -wal's stat must change, and kept that its size
-		// must stay, as a checkpoint leaves it for T3's next commit.
+		// wrote says the -shm's header must change, and kept that the
+		// -wal's size must stay, as a checkpoint leaves it for T3's next
+		// commit.
 		wrote, kept bool
 	}{
-		{name: "a row a sqlite3 of its own writes, which closes the store after, changes the -wal's stat",
+		{name: "a row a sqlite3 of its own writes, which closes the store after, moves the -shm's WAL-index header",
 			write: func(s *store) { s.sent("m1", 0, text); s.flush() }, wrote: true},
-		{name: "a row T3's server commits through the connection it holds open, which has written before, changes the -wal's stat, once a checkpoint has restarted the WAL so that its size stays the same",
+		{name: "a row T3's server commits through the connection it holds open, which has written before, moves the -shm's WAL-index header, once a checkpoint has restarted the WAL so that its size stays the same",
 			ready: func(s *store) {
 				s.sent("m1", 0, text)
 				s.flush()
@@ -1459,9 +1468,7 @@ func TestWALFiles(t *testing.T) {
 				s.waitFor("SELECT " + hx("count(*)") + " FROM " + tMigrations + " WHERE migration_id = 86;\n")
 			},
 			write: func(s *store) {
-				// A tick of the coarsest clock after the -wal's last write,
-				// then T3's next commit through the same connection.
-				time.Sleep(100 * time.Millisecond)
+				// T3's next commit, through the same connection.
 				s.migration(87, "Later still")
 				s.flushHeld()
 				s.waitFor("SELECT " + hx("count(*)") + " FROM " + tMigrations + " WHERE migration_id = 87;\n")
@@ -1482,24 +1489,23 @@ func TestWALFiles(t *testing.T) {
 			if tc.write != nil {
 				tc.write(s)
 			}
-			// The reader stats the store every 10 s, so a time a file system
-			// sets a moment after the write is in time for it: the change
+			// The reader stats the store every 10 s, so a header the -shm
+			// shows a moment after the commit is in time for it: the change
 			// has a few seconds to show.
 			deadline := time.Now().Add(3 * time.Second)
 			after, ok := walOf(s.path)
-			for ok && tc.wrote && after.walSize == before.walSize && after.walTime == before.walTime && time.Now().Before(deadline) {
+			for ok && tc.wrote && after.shmHead == before.shmHead && time.Now().Before(deadline) {
 				time.Sleep(50 * time.Millisecond)
 				after, ok = walOf(s.path)
 			}
 			if !ok {
 				t.Fatal("no -wal or -shm file to stat")
 			}
-			wal := after.walSize != before.walSize || after.walTime != before.walTime
 			switch {
 			case tc.kept && after.walSize != before.walSize:
 				t.Fatalf("the -wal went from %d to %d bytes, so no checkpoint restarted the WAL, and the case tests nothing", before.walSize, after.walSize)
-			case tc.wrote && !wal:
-				t.Errorf("the -wal's stat %+v is as before the write, so while T3's server writes this way the reader's quiet skip takes T3 for idle and reads nothing until a prompt asks", after)
+			case tc.wrote && after.shmHead == before.shmHead:
+				t.Errorf("the -shm's WAL-index header %x is as before the write, so while T3's server writes this way the reader's quiet skip takes T3 for idle and reads nothing until a prompt asks", after.shmHead)
 			case !tc.wrote && after != before:
 				t.Errorf("the stat went from %+v to %+v with nothing written", before, after)
 			}

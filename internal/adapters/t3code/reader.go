@@ -164,9 +164,9 @@ type Reader struct {
 	prompts []*asked
 	held    map[int64]heldRow
 	status  Status
-	// quiet is what a stat of the store's -wal and -shm files said once the
+	// quiet is what walOf said of the store's -wal and -shm files once the
 	// last read that read all there was to read had run (settled), and nil
-	// after any other read. While a stat says the same, T3 has written
+	// after any other read. While walOf says the same, T3 has written
 	// nothing since, and a read that holds no row and asks about no prompt
 	// starts no sqlite3 (DESIGN 3.3's cost).
 	quiet *walFiles
@@ -775,16 +775,17 @@ func (r *Reader) read(ctx context.Context, now time.Time, b *Batch, asking strin
 
 // settled is what a read that read all there was leaves in quiet: a stat
 // of the store's -wal and -shm files taken now, once its sqlite3 runs are
-// done, when the -wal is as before said it was when the read began, and
-// before itself otherwise. T3 commits nothing without writing the -wal.
-// The read's first run after T3 writes sets a reader's mark in the -shm,
-// as any SQLite reader of a store in WAL mode does, and that write stamps
-// the -shm's time though nothing new is in the store (TestOwnReads). So
-// the read after this one starts no sqlite3 for the mark alone, and does
-// for a commit T3 made while this one ran.
+// done, when the -wal and the -shm's WAL-index header are as before said
+// they were when the read began, and before itself otherwise. T3 commits
+// nothing without writing the -wal and the header. The read's first run
+// after T3 writes sets a reader's mark in the -shm, past the header, as
+// any SQLite reader of a store in WAL mode does, and that write stamps the
+// -shm's time though nothing new is in the store (TestOwnReads). So the
+// read after this one starts no sqlite3 for the mark alone, and does for a
+// commit T3 made while this one ran.
 func (r *Reader) settled(store string, before walFiles) *walFiles {
 	after, ok := r.stat(store)
-	if !ok || after.walSize != before.walSize || after.walTime != before.walTime {
+	if !ok || after.walSize != before.walSize || after.walTime != before.walTime || after.shmHead != before.shmHead {
 		return &before
 	}
 	return &after
