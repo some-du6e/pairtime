@@ -1,6 +1,6 @@
 # Erratum: DESIGN 7.3 doesn't say how each check reaches its verdict
 
-Date 2026-11-19. Raised by WP-FX6. Status: decided 2026-11-20 by the orchestrator for Karim: readings 1 to 11 stand, now as DESIGN 7.3's text, with CC2 and CC11 thresholds, an exact `len_chars` for CC1, a resume rule for CC9 and a wider CC7 hold (Decision, below). No verdict changes. PLAN's WP-TR1 and WP-TR2 took their CI lines in #111. One docs and fixtures PR, which WP-TR1 and WP-TR2 wait for, applies the decided text to DESIGN 7.3, 6.5 and 7.8, SM 1.2, 2.2 rule 8 and 8.7, and `testdata/checks`, and a PR under `oracle-change` then applies it to DESIGN 6.4's corroborated band and the evidence page. Every scenario's `expected.json` names this erratum. The list under each reading names the verdicts that rest on it. A verdict not listed follows from DESIGN's text alone.
+Date 2026-11-19. Raised by WP-FX6. Status: decided 2026-11-20 by the orchestrator for Karim: readings 1 to 11 stand and become DESIGN 7.3's text, with CC2 and CC11 thresholds, an exact `len_chars` for CC1, a resume rule for CC9 and a wider CC7 hold (Decision, below). No verdict changes. PLAN's WP-TR1 and WP-TR2 took their CI lines in #111. One docs and fixtures PR, which WP-TR1 and WP-TR2 wait for, applies the decided text to DESIGN 7.3, 6.5 and 7.8, SM 1.2, 2.2 rule 8 and 8.7, and `testdata/checks`, and a PR under `oracle-change` then applies it to DESIGN 6.4's corroborated band and the evidence page. Every scenario's `expected.json` names this erratum. The list under each reading names the verdicts that rest on it. A verdict not listed follows from DESIGN's text alone.
 
 ## Input
 
@@ -59,7 +59,7 @@ Answered on 2026-11-20 by the decision below.
 
 ## Decision
 
-Decided 2026-11-20 by the orchestrator for Karim. DESIGN 7.3 states each rule, and `testdata/checks` follows it.
+Decided 2026-11-20 by the orchestrator for Karim. Once the PRs the Status names land, DESIGN 7.3 states each rule and `testdata/checks` follows it, and SM 1.2, 2.2 rule 8 and 8.7 and DESIGN 6.4 read as the items below say.
 
 1. Readings 1 to 11 stand, with reading 10 as the CC8 decision of issue #15 rewrote it. Reading 6 gains two rules that no verdict rests on. A missing `seq` counts against the batch whose stored `n` covers it, so the batch after it isn't failed for it. A batch that is missing or fails also holds every other minute whose re-score comes out differently without its revealed records. `4.2-cc7-dropped-record` still holds 19:33 and 19:34, 120 s, and `4.2-cc7-dropped-batch` holds 19:45.
 

@@ -44,7 +44,7 @@ WP-OS13 builds the peer-process check for macOS through `libproc` with purego, a
 
 1. Accept `bridge_unverified`, or pick another fix. Accepting it adds the value to E-2's list and to D19's sentence.
 2. Which `via` should macOS records get while the peer-process check doesn't run there?
-   - (a) The default above: `bridge_unverified` for bridge records, `editor` for editor heartbeats.
+   - (a) The interim default this erratum set until the decision: `bridge_unverified` for bridge records, `editor` for editor heartbeats.
    - (b) `bridge` for bridge records too. Honest bridge records then count on a Mac, and so do a script's fakes, which raise the ceiling on the script's own level-C credit.
    - (c) Bring the check to macOS through `libproc` with purego, as DESIGN 5.7 allows. Both pairs of values then apply there as on Windows and Linux, and the question goes away.
 
