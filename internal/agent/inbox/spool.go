@@ -124,9 +124,7 @@ func Expire(dir string, now time.Time) (int, error) {
 	var errs []error
 	for _, e := range entries {
 		name := e.Name()
-		spool := name == SpoolName ||
-			strings.HasPrefix(name, "spool-") && (strings.HasSuffix(name, takenSuffix) || strings.HasSuffix(name, badSuffix))
-		if !spool || !e.Type().IsRegular() {
+		if !isSpoolFile(name) || !e.Type().IsRegular() {
 			continue
 		}
 		fi, err := e.Info()
@@ -148,6 +146,37 @@ func Expire(dir string, now time.Time) (int, error) {
 		n++
 	}
 	return n, errors.Join(errs...)
+}
+
+// isSpoolFile reports whether name, in the inbox directory, is a spool
+// file: the spool, a file a drain took, or one it set aside.
+func isSpoolFile(name string) bool {
+	return name == SpoolName ||
+		strings.HasPrefix(name, "spool-") && (strings.HasSuffix(name, takenSuffix) || strings.HasSuffix(name, badSuffix))
+}
+
+// SpoolFiles lists the spool files in dir, the inbox directory, as Expire
+// finds them, for doctor to check who may open them (ExposedPaths).
+func SpoolFiles(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if isSpoolFile(e.Name()) && e.Type().IsRegular() {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	return out
+}
+
+// Exposed is a path of the agent's data folder, or of the hook calls it
+// holds or spools there, that other accounts on this computer may open
+// (ExposedPaths), and Fix the command that makes it this user's alone
+// again.
+type Exposed struct {
+	Path, Fix string
 }
 
 // spooledAt is when the spool file name, whose information as listed is

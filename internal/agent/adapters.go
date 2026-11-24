@@ -783,7 +783,8 @@ func (h *adapterHost) cutPendingLocked(end int64) {
 // pendingSplice is a rewrite of held.jsonl.pending, which trimPendingLocked
 // plans and splicePending makes. Of the size bytes the file held when it was
 // planned, it keeps what an earlier run left, up to base, but for the calls
-// taken in before expire when that is set, and the lines in keep, in the
+// that began to wait before expire when that is set (heldSince), and the
+// lines in keep, in the
 // order they lie in it; and all that pend writes after them.
 type pendingSplice struct {
 	size, base int64
@@ -889,11 +890,13 @@ func (h *adapterHost) spliceFailed(p pendingSplice, err error) {
 }
 
 // agedLines finds the lines in the first end bytes of name, a held file,
-// that hold a call taken in at or after cutoff, which a rewrite keeps. It
-// returns where they lie, how many other lines there are, which it drops,
-// and when the oldest call it keeps was taken in.
+// that hold a call that began to wait at or after cutoff, the earlier of
+// when the agent took it in and when its sender sent it (heldSince), which
+// a rewrite keeps. It returns where they lie, how many other lines there
+// are, which it drops, and when the oldest call it keeps began to wait. It
+// opens the file as a cut does (inbox.OpenOwned), whatever its mode.
 func agedLines(name string, end int64, cutoff time.Time) (keep []inbox.Span, dropped int, oldest time.Time, err error) {
-	f, err := inbox.OpenPrivate(name, os.O_RDONLY, 0)
+	f, err := inbox.OpenOwned(name)
 	if err != nil {
 		return nil, 0, time.Time{}, err
 	}
@@ -2243,13 +2246,14 @@ func (h *adapterHost) trimReplay() {
 // clearData at uninstall takes one a crash left (pairtimeEntries).
 const heldTmp = ".held.jsonl.tmp-"
 
-// expireHeld drops, at a start, the held calls the agent took in longer
-// than heldKeep before now, unparsed: from held.jsonl, which holds the
-// calls a killed run left pending too by then (recoverPending), and from a
-// .replay file a crash left. A line that holds no call, or no time to go
-// by, goes as well. It deletes what a rewrite cut short left, first. It runs
-// on the worker before its first step, when nothing else writes them, and
-// has expireRun look again once the oldest call it keeps comes due.
+// expireHeld drops, at a start, the held calls that began to wait longer
+// than heldKeep before now (heldSince), unparsed: from held.jsonl, which
+// holds the calls a killed run left pending too by then (recoverPending),
+// and from a .replay file a crash left. A line that holds no call, or no
+// time to go by, goes as well. It deletes what a rewrite cut short left,
+// first. It runs on the worker before its first step, when nothing else
+// writes them, and has expireRun look again once the oldest call it keeps
+// comes due.
 func (h *adapterHost) expireHeld(now time.Time) {
 	if old, err := filepath.Glob(filepath.Join(h.a.dirs.Data, heldTmp+"*")); err == nil {
 		for _, name := range old {
@@ -2264,7 +2268,7 @@ type heldCut struct {
 	dropped int       // the lines it dropped
 	past    int       // those of them at or past from
 	from    int64     // where from lies in the file as cut
-	oldest  time.Time // when the oldest call it kept was taken in, zero for none
+	oldest  time.Time // when the oldest call it kept began to wait (heldSince), zero for none
 }
 
 // expireRun drops, while the agent runs, the held calls that have waited
@@ -2307,7 +2311,8 @@ func (h *adapterHost) expireRun(now time.Time) {
 }
 
 // expireFiles cuts from held.jsonl, and from the .replay file when replay
-// is set, the calls taken in longer than heldKeep before now (expireFile).
+// is set, the calls that began to wait longer than heldKeep before now
+// (heldSince, expireFile).
 // It tells doctor how many it dropped, and returns how many of them no
 // replay has read, which the status counts as held: those of held.jsonl,
 // and those of the .replay file past from, where this run's replay of it
@@ -2365,8 +2370,9 @@ func (h *adapterHost) dueByLocked(t time.Time) {
 	}
 }
 
-// expireFile drops from name the calls taken in before cutoff, and lines
-// that hold no call or no stamp, by rewriting it with the rest, or by
+// expireFile drops from name the calls that began to wait before cutoff
+// (heldSince), and lines that hold no call or no stamp, whatever the file's
+// mode (inbox.Rewrite), by rewriting it with the rest, or by
 // deleting it when none is left. It says what it cut (heldCut), from being
 // an offset at the start of a line, such as where a replay stopped, which
 // moves back by the lines dropped before it. A file it can't rewrite stays

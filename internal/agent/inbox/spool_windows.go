@@ -70,3 +70,7 @@ func sweepable(dir string) bool {
 	fi, err := os.Stat(dir)
 	return err == nil && fi.IsDir()
 }
+
+// ExposedPaths finds none on Windows, where the data directory's DACL, not
+// file modes, decides who may open what is in it (internal/agent/home).
+func ExposedPaths(paths ...string) []Exposed { return nil }

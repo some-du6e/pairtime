@@ -7,6 +7,7 @@ package inbox
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -188,9 +189,10 @@ func TestPrivateSpool(t *testing.T) {
 // as Drain leaves it alone.
 func TestExpireUnread(t *testing.T) {
 	day := 24 * time.Hour
-	// spool writes a spool whose one call was sent 7 days ago, last written
-	// written ago, into dir, which others may write in.
-	spool := func(t *testing.T, dir string, written time.Duration) string {
+	// spoolMode writes a spool whose one call was sent 7 days ago, last
+	// written written ago, with mode mode, into dir, which others may write
+	// in.
+	spoolMode := func(t *testing.T, dir string, written time.Duration, mode os.FileMode) string {
 		t.Helper()
 		if err := os.Chmod(dir, 0o777); err != nil {
 			t.Fatal(err)
@@ -201,11 +203,18 @@ func TestExpireUnread(t *testing.T) {
 		if err := os.WriteFile(p, b, 0o600); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.Chmod(p, mode); err != nil {
+			t.Fatal(err)
+		}
 		at := wall.Add(-written)
 		if err := os.Chtimes(p, at, at); err != nil {
 			t.Fatal(err)
 		}
 		return p
+	}
+	spool := func(t *testing.T, dir string, written time.Duration) string {
+		t.Helper()
+		return spoolMode(t, dir, written, 0o600)
 	}
 	// expire runs Expire on dir and checks how many files it deleted, and
 	// whether p is gone.
@@ -225,6 +234,12 @@ func TestExpireUnread(t *testing.T) {
 	}{
 		{"in an inbox others may write in, a spool file of this user's whose first call was sent 7 days ago, written yesterday, is deleted by its Sent", func(t *testing.T, dir string) {
 			expire(t, dir, spool(t, dir, day), 1)
+		}},
+		{"a spool file of this user's left group-writable, 0o620, as by chmod -R g+w, is read whatever its mode, and deleted by its Sent", func(t *testing.T, dir string) {
+			expire(t, dir, spoolMode(t, dir, day, 0o620), 1)
+		}},
+		{"one left readable to all, 0o664, as a copy under umask 002 makes it, is read and deleted by its Sent too", func(t *testing.T, dir string) {
+			expire(t, dir, spoolMode(t, dir, day, 0o664), 1)
 		}},
 		{"in an inbox others may write in, a spool file written 7 days ago is deleted", func(t *testing.T, dir string) {
 			expire(t, dir, spool(t, dir, 7*day), 1)
@@ -274,6 +289,36 @@ func TestExpireUnread(t *testing.T) {
 				t.Error("Expire would sweep another user's directory through the link")
 			}
 		}},
+		{"Expire leaves an inbox reached through a symbolic link to a directory this user doesn't own as it is: a week-old spool file there stays", func(t *testing.T, dir string) {
+			if os.Geteuid() == 0 {
+				t.Skip("root owns the directory the link names")
+			}
+			const shared = "/tmp"
+			if fi, err := os.Stat(shared); err != nil || mine(shared, fi) == nil {
+				t.Skipf("%s isn't another user's directory here", shared)
+			}
+			f, err := os.CreateTemp(shared, "spool-pairtime-test-*.bad")
+			if err != nil {
+				t.Skipf("can't make a file in %s: %v", shared, err)
+			}
+			old := f.Name()
+			f.Close()
+			t.Cleanup(func() { os.Remove(old) })
+			then := time.Now().Add(-8 * day)
+			if err := os.Chtimes(old, then, then); err != nil {
+				t.Fatal(err)
+			}
+			link := filepath.Join(dir, "inbox")
+			if err := os.Symlink(shared, link); err != nil {
+				t.Fatal(err)
+			}
+			if n, err := Expire(link, time.Now()); n != 0 || err != nil {
+				t.Errorf("Expire = %d, %v; want 0, nil", n, err)
+			}
+			if _, err := os.Lstat(old); err != nil {
+				t.Errorf("%s went: %v", old, err)
+			}
+		}},
 		{"an inbox reached through this user's symbolic link to a directory of this user's that others may write in is swept", func(t *testing.T, dir string) {
 			p := spool(t, dir, 7*day)
 			link := filepath.Join(t.TempDir(), "inbox")
@@ -288,5 +333,87 @@ func TestExpireUnread(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { c.run(t, t.TempDir()) })
+	}
+}
+
+// TestExposedPaths checks which paths doctor names as open to other
+// accounts on this computer (ExposedPaths): a folder they may write in and
+// a file they may read or write, each with the chmod that closes it and
+// its path escaped for a shell, and none of a private folder or file, a
+// symbolic link or a path that isn't there.
+func TestExposedPaths(t *testing.T) {
+	// mk makes name in dir, a folder when mode is one, with mode mode past
+	// the umask, and returns its path.
+	mk := func(t *testing.T, dir, name string, mode os.FileMode) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		var err error
+		if mode.IsDir() {
+			err = os.Mkdir(p, 0o700)
+		} else {
+			err = os.WriteFile(p, []byte("\n"), 0o600)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, mode.Perm()); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	cases := []struct {
+		name string
+		path func(t *testing.T, dir string) string
+		// fix is the command wanted for the path, as shellEscape writes it,
+		// "" for none.
+		fix string
+	}{
+		{"a folder others may write in, as after chmod -R g+w, needs chmod go-w", func(t *testing.T, dir string) string {
+			return mk(t, dir, "data", os.ModeDir|0o775)
+		}, "chmod go-w "},
+		{"a file left group-writable, 0o620, needs chmod 600", func(t *testing.T, dir string) string {
+			return mk(t, dir, "held.jsonl", 0o620)
+		}, "chmod 600 "},
+		{"a file readable to all, 0o644, as a copy under umask 022 leaves it, needs chmod 600", func(t *testing.T, dir string) string {
+			return mk(t, dir, "held.jsonl", 0o644)
+		}, "chmod 600 "},
+		{"a folder with a space in its name has the space escaped, so the shell reads the command whole", func(t *testing.T, dir string) string {
+			return mk(t, dir, "Application Support", os.ModeDir|0o775)
+		}, "chmod go-w "},
+		{"a private folder is passed over", func(t *testing.T, dir string) string {
+			return mk(t, dir, "data", os.ModeDir|0o700)
+		}, ""},
+		{"a private file is passed over", func(t *testing.T, dir string) string {
+			return mk(t, dir, "held.jsonl", 0o600)
+		}, ""},
+		{"a symbolic link is passed over", func(t *testing.T, dir string) string {
+			p := filepath.Join(dir, "link")
+			if err := os.Symlink(mk(t, dir, "held.jsonl", 0o666), p); err != nil {
+				t.Fatal(err)
+			}
+			return p
+		}, ""},
+		{"a path that isn't there is passed over", func(t *testing.T, dir string) string {
+			return filepath.Join(dir, "gone")
+		}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := c.path(t, t.TempDir())
+			got := ExposedPaths(p)
+			if c.fix == "" {
+				if len(got) != 0 {
+					t.Errorf("ExposedPaths(%q) = %+v, want none", p, got)
+				}
+				return
+			}
+			want := c.fix + shellEscape(p)
+			if len(got) != 1 || got[0].Path != p || got[0].Fix != want {
+				t.Fatalf("ExposedPaths(%q) = %+v, want %q", p, got, want)
+			}
+			if strings.Contains(p, " ") && strings.Contains(got[0].Fix, "Application Support") {
+				t.Errorf("the fix %q leaves the space in its path unescaped", got[0].Fix)
+			}
+		})
 	}
 }

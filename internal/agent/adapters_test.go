@@ -1821,6 +1821,26 @@ func TestHeldRetention(t *testing.T) {
 				t.Errorf("held.jsonl is still there (%v)", err)
 			}
 		}},
+		{"a call held seven days in a data folder others may write in, 0o775, as after chmod -R g+w, is cut all the same", func(t *testing.T, h *adapterHost) {
+			write(t, h.a.dirs.Held(), line(t, h, call(t, "old-1", week+time.Hour, false)), line(t, h, call(t, "new-1", time.Hour, false)))
+			if err := os.Chmod(h.a.dirs.Data, 0o775); err != nil {
+				t.Fatal(err)
+			}
+			h.expireHeld(now)
+			if got := prompts(t, h.a.dirs.Held()); !slices.Equal(got, []string{"new-1"}) {
+				t.Errorf("held.jsonl holds %q, want new-1 alone", got)
+			}
+		}},
+		{"a call held seven days in a held.jsonl readable to others, 0o664, as a copy under umask 002 leaves it, is cut all the same", func(t *testing.T, h *adapterHost) {
+			write(t, h.a.dirs.Held(), line(t, h, call(t, "old-1", week+time.Hour, false)), line(t, h, call(t, "new-1", time.Hour, false)))
+			if err := os.Chmod(h.a.dirs.Held(), 0o664); err != nil {
+				t.Fatal(err)
+			}
+			h.expireHeld(now)
+			if got := prompts(t, h.a.dirs.Held()); !slices.Equal(got, []string{"new-1"}) {
+				t.Errorf("held.jsonl holds %q, want new-1 alone", got)
+			}
+		}},
 		{"a start drops a call its sender sent more than seven days ago, though the agent took it in an hour ago, as from inbox/ (D-inbox-age-cap)", func(t *testing.T, h *adapterHost) {
 			old := call(t, "old-1", time.Hour, false)
 			old.Sent = now.Add(-week - time.Hour)

@@ -192,6 +192,14 @@ func gatherFacts(dirs home.Dirs, wait io.Writer) doctor.Facts {
 	f.Keystore = inspectKeystore(dirs)
 	f.Signing = binarySigning()
 	f.SpoolStopped = inbox.SpoolStopped(dirs.Inbox())
+	// The data folder and the files of hook calls the agent holds or spools
+	// in it, held.jsonl, its pending log and its .replay included
+	// (internal/agent's pendingSuffix).
+	held := dirs.Held()
+	for _, e := range inbox.ExposedPaths(append([]string{dirs.Data, dirs.Inbox(), held, held + ".pending", held + ".replay"}, inbox.SpoolFiles(dirs.Inbox())...)...) {
+		f.Exposed = append(f.Exposed, doctor.Exposed{Path: e.Path, Fix: e.Fix})
+	}
+	f.Modes = runtime.GOOS != "windows"
 	st, took, err := askAgent(dirs, wait)
 	f.AskTook = took
 	switch {
