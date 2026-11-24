@@ -50,6 +50,7 @@ func TestWakaTimeCheck(t *testing.T) {
 		{name: "a proxy variable fails as not set up too, naming the variable", w: &WakaTime{Proxy: "HTTPS_PROXY"}, shown: true, result: Fail, text: "pairtime's WakaTime destination isn't set up: HTTPS_PROXY is set here"},
 		{name: "an agent that doesn't answer fails, naming where it was asked", w: &WakaTime{Pairtime: Destination{Host: "127.0.0.1:7247", Err: "connection refused"}, Server: hackatime}, shown: true, result: Fail, text: "nothing answered at 127.0.0.1:7247 (connection refused)"},
 		{name: "an agent that refuses the line's key fails", w: &WakaTime{Pairtime: Destination{Host: "127.0.0.1:7247", Status: http.StatusUnauthorized}}, shown: true, result: Fail, text: "refuses the key of pairtime's line"},
+		{name: "an agent that refuses the line's key names the config install edited", w: &WakaTime{Config: "/x/.config/wakatime/wakatime.cfg", Pairtime: Destination{Host: "127.0.0.1:7247", Status: http.StatusUnauthorized}}, shown: true, result: Fail, text: "refuses the key of pairtime's line in /x/.config/wakatime/wakatime.cfg; run pairtime install again"},
 		{name: "an agent without WakaTime's endpoint fails", w: &WakaTime{Pairtime: Destination{Host: "127.0.0.1:7247", Status: http.StatusNotFound}}, shown: true, result: Fail, text: "doesn't take WakaTime's heartbeats"},
 		{name: "network error text with control characters, as in a certificate's names, shows none of them", w: &WakaTime{Pairtime: answers, Server: &Destination{Host: "hackatime.hackclub.com", Err: "x509: certificate is valid for \x1b]52;c;cGFpcnRpbWU=\x07evil.example, not hackatime.hackclub.com"}}, shown: true, result: Warn, text: "didn't answer (x509: certificate is valid for", notText: "\x1b"},
 		{name: "an agent's error text shows no control characters either", w: &WakaTime{Pairtime: Destination{Host: "127.0.0.1:7247", Err: "read: \x1b[2Jreset"}}, shown: true, result: Fail, text: "nothing answered at 127.0.0.1:7247", notText: "\x1b"},
@@ -265,14 +266,35 @@ func TestGatherWakaTime(t *testing.T) {
 			},
 		},
 		{
-			name:   "an api_url net/url can't parse shows neither its password nor its user name",
+			name:   "an api_url net/url can't parse fails, as wakatime-cli then sends nothing anywhere, and shows neither its password nor its user name",
 			config: "[settings]\napi_url = https://maya:hunter^2@wakapi.example/api\napi_key = " + hackatimeKey + "\n" + line(port), setup: true,
 			want: func(t *testing.T, w *WakaTime) {
-				if w == nil || w.Server == nil || w.Server.Status != 0 || w.Server.Err == "" {
-					t.Fatalf("GatherWakaTime = %+v, want no answer from the server", w)
+				if w == nil || !strings.Contains(w.Problem, "wakatime-cli can't read the api_url in ") || w.Server != nil {
+					t.Fatalf("GatherWakaTime = %+v, want the api_url's problem and no request to the server", w)
 				}
-				if c, _ := wakatimeCheck(w); strings.Contains(c.Text, "hunter") || strings.Contains(c.Text, "maya") || strings.Contains(w.Server.Host, "maya") {
+				if c, _ := wakatimeCheck(w); c.Result != Fail || strings.Contains(c.Text, "hunter") || strings.Contains(c.Text, "maya") {
+					t.Errorf("the line is %+v, want a failure that shows nothing of the api_url's userinfo", c)
+				}
+			},
+		},
+		{
+			name:   "an api_url with a user name and password is asked without them, as wakatime-cli never sends them",
+			config: "[settings]\napi_url = " + strings.Replace(server.URL, "http://", "http://teen:pw@", 1) + "/api/hackatime/v1\napi_key = " + hackatimeKey + "\n" + line(port), setup: true,
+			want: func(t *testing.T, w *WakaTime) {
+				if w == nil || w.Server == nil || w.Server.Status != http.StatusUnauthorized {
+					t.Fatalf("GatherWakaTime = %+v, want the server's 401", w)
+				}
+				if c, _ := wakatimeCheck(w); strings.Contains(c.Text, "teen") || strings.Contains(c.Text, "pw@") {
 					t.Errorf("the line shows what the api_url's userinfo holds: %+v", c)
+				}
+			},
+		},
+		{
+			name:   "a config pairtime made whose api_key the teen replaced fails, saying what to change, since the agent refuses that key",
+			config: strings.Replace(string(made), "api_key = "+wakaKey, "api_key = "+hackatimeKey, 1), setup: true,
+			want: func(t *testing.T, w *WakaTime) {
+				if w == nil || !strings.Contains(w.Problem, "is the config pairtime made, with an api_key that isn't pairtime's any more") || !strings.Contains(w.Problem, "point its api_url at your own server, or delete it") {
+					t.Errorf("GatherWakaTime = %+v, want the taken-over config's problem", w)
 				}
 			},
 		},

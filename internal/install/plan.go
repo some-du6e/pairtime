@@ -36,9 +36,9 @@ type Plan struct {
 	// adopted are the targets adopt records without changing them, with
 	// what planning read: Apply checks them as it checks the changes.
 	adopted []Change
-	// planned is what an install plan leaves in each target its items
-	// edit (Planned).
-	planned map[Target]Content
+	// read is what planning read of each target an install plan's items
+	// edit (Read).
+	read map[Target]Content
 
 	// unlock drops the install lock the plan holds until Apply or Close;
 	// nil once dropped.
@@ -101,13 +101,14 @@ type Change struct {
 // pairtime's own files.
 func (p *Plan) Empty() bool { return len(p.Changes) == 0 }
 
-// Planned returns what an install plan leaves in each target its items
-// edit, as planning read them: a change's After, and what a target it
-// leaves as it is holds now. Install compares two plans of one item by it,
-// as when it plans pairtime's WakaTime line again on the agent's port.
-func (p *Plan) Planned() map[Target]Content {
-	out := make(map[Target]Content, len(p.planned))
-	for t, c := range p.planned {
+// Read returns what planning read of each target an install plan's items
+// edit, whether the plan changes it or not. Install compares two plans of
+// one item by it, as when it plans pairtime's WakaTime line again on the
+// agent's port: an item's edits depend only on what they read and what the
+// item was made with.
+func (p *Plan) Read() map[Target]Content {
+	out := make(map[Target]Content, len(p.read))
+	for t, c := range p.read {
 		out[t] = c
 	}
 	return out
@@ -198,7 +199,7 @@ func (in *Installer) planInstall(groups []*group) (*Plan, error) {
 		return nil, err
 	}
 
-	p := &Plan{in: in, oldSum: oldSum, manifest: m.clone(), planned: map[Target]Content{}}
+	p := &Plan{in: in, oldSum: oldSum, manifest: m.clone(), read: map[Target]Content{}}
 	for _, g := range groups {
 		cur, err := in.read(g.target)
 		if err != nil {
@@ -210,7 +211,7 @@ func (in *Installer) planInstall(groups []*group) (*Plan, error) {
 				return nil, fmt.Errorf("%s %w", g.target, err)
 			}
 		}
-		p.planned[g.target] = next
+		p.read[g.target] = cur
 		if next.Same(cur) {
 			if err := p.adopt(g.target, cur, g.recs); err != nil {
 				return nil, err
@@ -412,9 +413,9 @@ func (p *Plan) rebase(rec *record, base Content) {
 // PlanInstall takes. Their targets that the manifest doesn't record lose
 // whatever pairtime finds of its own there, as adopt would record it:
 // pairtime's hooks, and an autostart entry that starts a pairtime agent.
-// That covers a manifest that is gone with pairtime's data directory, after
-// "Delete everything" (DESIGN 8.8) or by hand, which would otherwise leave
-// hooks and a login item that keep starting pairtime.
+// That covers a manifest that is gone with pairtime's data directory, as
+// when it was deleted by hand, which would otherwise leave hooks and a
+// login item that keep starting pairtime.
 //
 // The plan holds the install lock until Apply or Close, as PlanInstall's
 // does.

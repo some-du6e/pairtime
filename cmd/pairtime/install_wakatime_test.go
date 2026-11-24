@@ -236,38 +236,95 @@ func TestWakaTimeTeensKeyNeverShown(t *testing.T) {
 }
 
 // TestWakaTimeReplan checks the WakaTime item install plans again once the
-// agent is up, on the port it listens on: it is taken when each file it
-// leaves is what the screen's plan leaves with the port swapped, a plan
-// that changes nothing included, and refused when anything else changed
-// since the screen.
+// agent is up, on the port it listens on: it is taken when each file
+// either plan changes still holds what the screen's plan read, a plan that
+// changes nothing included, and refused when one of them changed since the
+// screen, or the files the item edits did.
 func TestWakaTimeReplan(t *testing.T) {
 	const key = "00000000-0000-4000-8000-00000000a9e7"
 	line := func(port int) string { return ".+ = " + wakacfg.URL(port) + "|" + key + "\n" }
+	madeOn := func(port int) string {
+		made, err := wakacfg.Make(key, port)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(made)
+	}
+	appendTo := func(t *testing.T, path, s string) {
+		t.Helper()
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, append(b, s...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const watermark = "[internal]\nai_logs_last_parsed_at = 2026-11-24T05:00:00Z\n"
 	tests := []struct {
-		name   string
-		config string // ~/.wakatime.cfg before install, "" for none
+		name string
+		// config and internal are ~/.wakatime.cfg and
+		// ~/.wakatime/wakatime-internal.cfg before install, "" for none.
+		config, internal string
 		// screen and agent are the ports the screen planned on and the
 		// agent listens on.
 		screen, agent int
-		// between changes the config after the screen; refused says the
-		// new plan is refused.
-		between string
+		// between changes the files after the screen; refused says the new
+		// plan is refused.
+		between func(t *testing.T, cfg, internal string)
 		refused bool
 		// diff is a part of the new plan's diff, "" for none at all.
 		diff string
 	}{
-		{name: "a first install's line on the agent's port differs from the screen's in the port alone, and is taken", config: teenHackatimeConfig, screen: 7247, agent: 7250, diff: "+" + line(7250)},
-		{name: "a config pairtime makes on the agent's port differs from the screen's in the port alone, and is taken", screen: 7247, agent: 7250, diff: "+api_url = " + wakacfg.URL(7250)},
+		{name: "a first install's line on the agent's port is taken", config: teenHackatimeConfig, screen: 7247, agent: 7250, diff: "+" + line(7250)},
+		{name: "a config pairtime makes on the agent's port is taken", screen: 7247, agent: 7250, diff: "+api_url = " + wakacfg.URL(7250)},
 		{name: "a reinstall whose line names the agent's port already, while the screen planned config.toml's, changes nothing and is taken", config: teenHackatimeConfig + "\n[api_urls]\n" + line(7250), screen: 7247, agent: 7250},
+		{name: "a reinstall whose line names the agent's port in spacing pairtime doesn't write changes nothing and is taken too", config: teenHackatimeConfig + "\n[api_urls]\n.+=" + wakacfg.URL(7250) + "|" + key + "\n", screen: 7247, agent: 7250},
 		{name: "a reinstall whose line names the screen's port, while the agent listens on another, moves it and is taken", config: teenHackatimeConfig + "\n[api_urls]\n" + line(7247), screen: 7247, agent: 7250, diff: "+" + line(7250)},
-		{name: "a config that changed since the screen in more than the port is refused", config: teenHackatimeConfig, screen: 7247, agent: 7250, between: "hostname = mine\n", refused: true},
+		{name: "a line in go-ini's padded spacing on the screen's port is moved and taken", config: teenHackatimeConfig + "\n[api_urls]\n.+    = " + wakacfg.URL(7247) + "|" + key + "\n", screen: 7247, agent: 7250, diff: "+" + line(7250)},
+		{
+			name:   "a reinstall of a config pairtime made is taken though wakatime-cli rewrote wakatime-internal.cfg after the screen, which neither plan changes",
+			config: madeOn(7250), internal: watermark, screen: 7247, agent: 7250,
+			between: func(t *testing.T, cfg, internal string) {
+				appendTo(t, internal, "heartbeats_last_sent_at = 2026-11-24T05:31:00Z\n")
+			},
+		},
+		{
+			name: "a config that changed since the screen in more than the port is refused", config: teenHackatimeConfig, screen: 7247, agent: 7250, refused: true,
+			between: func(t *testing.T, cfg, internal string) { appendTo(t, cfg, "hostname = mine\n") },
+		},
+		{
+			name: "a config made between the screen and the new plan is refused", screen: 7247, agent: 7250, refused: true,
+			between: func(t *testing.T, cfg, internal string) {
+				if err := os.WriteFile(cfg, []byte(teenHackatimeConfig), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "a config deleted between the screen and the new plan is refused", config: teenHackatimeConfig, screen: 7247, agent: 7250, refused: true,
+			between: func(t *testing.T, cfg, internal string) {
+				if err := os.Remove(cfg); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
 			cfg := filepath.Join(home, ".wakatime.cfg")
+			internal := filepath.Join(home, ".wakatime", "wakatime-internal.cfg")
 			if tt.config != "" {
 				if err := os.WriteFile(cfg, []byte(tt.config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.internal != "" {
+				if err := os.MkdirAll(filepath.Dir(internal), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(internal, []byte(tt.internal), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -287,22 +344,16 @@ func TestWakaTimeReplan(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			shown := p.Planned()
+			shown := shownOf(p)
 			p.Close()
-			if tt.between != "" {
-				b, err := os.ReadFile(cfg)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(cfg, append(b, tt.between...), 0o600); err != nil {
-					t.Fatal(err)
-				}
+			if tt.between != nil {
+				tt.between(t, cfg, internal)
 			}
 			_, diff, err := wakaTimeReplan(env, in, o, shown, tt.agent)
 			switch {
 			case tt.refused:
 				if err == nil {
-					t.Fatalf("wakaTimeReplan took a plan of a config that changed since the screen:\n%s", diff)
+					t.Fatalf("wakaTimeReplan took a plan of files that changed since the screen:\n%s", diff)
 				}
 			case err != nil:
 				t.Fatalf("wakaTimeReplan: %v", err)

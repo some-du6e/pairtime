@@ -756,6 +756,12 @@ type State struct {
 	// Own says the config is one pairtime made, where the agent is
 	// wakatime-cli's only destination (Make).
 	Own bool
+	// TakenOver says the config is one pairtime made, by its mark, whose
+	// api_url is still the agent's but whose api_key isn't the key's any
+	// more: the teen gave it their own, which wakatime-cli sends to the
+	// agent, and the agent refuses (Add refuses such a config, and Remove
+	// leaves it to the teen).
+	TakenOver bool
 	// Server is the api_url wakatime-cli sends to besides pairtime:
 	// [settings]'s, quotes and the suffixes wakatime-cli takes off taken off
 	// (normalizeURL), or WakaTime's own when the config names none
@@ -793,6 +799,7 @@ func Inspect(data []byte, key string) (State, error) {
 		s.Port, _ = agentPort(f.entries[u].value)
 		return s, nil
 	}
+	s.TakenOver = f.takenOver(key)
 	if e, ok := f.line(key); ok {
 		s.Line = true
 		s.Port, _, _ = ownLine(e)
@@ -828,8 +835,9 @@ func Inspect(data []byte, key string) (State, error) {
 // badPatternKey returns the section, [api_urls] or [project_api_key], in
 // which the config has a key wakatime-cli refuses for its format, and ""
 // when it has none. wakatime-cli reads each key's last value, as viper
-// keeps them, and an [api_urls] value's key is what follows its first |;
-// one without a | has [settings]'s, which Inspect checks
+// keeps them, with the quotes at either end taken off (vipertools'
+// GetStringMapString), and an [api_urls] value's key is what follows its
+// first |; one without a | has [settings]'s, which Inspect checks
 // (loadAPIURLPatterns, loadAPIKeyPatterns).
 func (f *file) badPatternKey() string {
 	for _, sec := range []string{apiURLs, "project_api_key"} {
@@ -846,7 +854,7 @@ func (f *file) badPatternKey() string {
 			values[k] = e.value
 		}
 		for _, k := range keys {
-			v := values[k]
+			v := strings.Trim(values[k], `"'`)
 			if sec == apiURLs {
 				_, key, found := strings.Cut(v, "|")
 				if !found {

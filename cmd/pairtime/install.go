@@ -3,7 +3,6 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,7 +20,6 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/install/consent"
-	"github.com/some-du6e/pairtime/internal/install/wakacfg"
 	"github.com/some-du6e/pairtime/internal/version"
 )
 
@@ -258,14 +256,14 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	}
 	items := map[string]install.Item{}
 	diffs := map[string]string{}
-	planned := map[string]map[install.Target]install.Content{} // what each item's screen plan leaves
-	left := map[string]string{}                                // the items install doesn't offer, with why
+	shown := map[string]shownPlan{} // what each item's screen plan read and changes
+	left := map[string]string{}     // the items install doesn't offer, with why
 	offer := func(id string, mk func(install.Env) (install.Item, error)) error {
 		it, err := mk(env)
 		if err == nil {
 			var p *install.Plan
 			if p, err = in.PlanInstall([]install.Item{it}); err == nil {
-				items[id], diffs[id], planned[id] = it, p.Diff(), p.Planned()
+				items[id], diffs[id], shown[id] = it, p.Diff(), shownOf(p)
 				p.Close()
 				return nil
 			}
@@ -473,7 +471,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	// another account's agent, listens on another.
 	if slices.Contains(chosen, install.ItemWakaTime) {
 		if pf, err := localhttp.ReadPortFile(dirs.PortFile()); err == nil && pf.Port != waka.Port {
-			it, diff, err := wakaTimeReplan(env, in, waka, planned[install.ItemWakaTime], pf.Port)
+			it, diff, err := wakaTimeReplan(env, in, waka, shown[install.ItemWakaTime], pf.Port)
 			if err != nil {
 				return fail(err)
 			}
@@ -537,18 +535,37 @@ func wakaTimeItem(dirs home.Dirs, now time.Time) func(install.Env) (install.Item
 	}
 }
 
+// shownPlan is what the screen's plan of an item read of each target it
+// edits, and which of them it changes.
+type shownPlan struct {
+	read    map[install.Target]install.Content
+	changed map[install.Target]bool
+}
+
+// shownOf returns what p, a plan of one item, read and changes.
+func shownOf(p *install.Plan) shownPlan {
+	s := shownPlan{read: p.Read(), changed: map[install.Target]bool{}}
+	for _, c := range p.Changes {
+		s.changed[c.Target] = true
+	}
+	return s
+}
+
 // wakaTimeReplan plans the WakaTime item again with o on port, the one the
 // agent listens on, instead of o.Port, the screen's, and returns it with
 // its diff, which install's apply then holds it to. It takes the new plan
-// only when each file it leaves is what shown, the screen plan's Planned,
-// leaves with the agent's URL on o.Port swapped for the one on port, since
-// only pairtime's line, or the api_url of a config pairtime makes, names
-// it. That covers a new plan that changes nothing, as when pairtime's line
-// names the agent's port already, and one that moves a line the screen
-// left as it was. Anything else that changed since the screen, such as a
-// file the teen edited in between, refuses it.
-func wakaTimeReplan(env install.Env, in *install.Installer, o install.WakaTimeOptions, shown map[install.Target]install.Content, port int) (install.Item, string, error) {
-	from, to := []byte(wakacfg.URL(o.Port)), []byte(wakacfg.URL(port))
+// only when it edits the targets shown, the screen's plan, edits, and each
+// target that either plan changes still holds what the screen's plan read.
+// The item's edits depend only on what they read, the key, the port and
+// o.Now, so the new plan is then the screen's with the agent's port in
+// place of the screen's: also when it changes nothing, as when pairtime's
+// line names the agent's port already, whatever its spacing, and when it
+// moves a line the screen left as it was. A target neither plan changes
+// can have changed since, as wakatime-internal.cfg does whenever
+// wakatime-cli sends, which install's apply doesn't hold either. Anything
+// else that changed since the screen, such as a config the teen edited,
+// made or deleted in between, refuses it.
+func wakaTimeReplan(env install.Env, in *install.Installer, o install.WakaTimeOptions, shown shownPlan, port int) (install.Item, string, error) {
 	o.Port = port
 	it, err := install.WakaTime(env, o)
 	if err != nil {
@@ -559,18 +576,14 @@ func wakaTimeReplan(env install.Env, in *install.Installer, o install.WakaTimeOp
 		return install.Item{}, "", err
 	}
 	defer p.Close()
-	again := p.Planned()
+	again := shownOf(p)
 	changed := fmt.Errorf("what %s changes isn't what the screen showed any more, so pairtime didn't change it; run pairtime install again to see the new changes", install.ItemWakaTime)
-	if len(again) != len(shown) {
+	if len(again.read) != len(shown.read) {
 		return install.Item{}, "", changed
 	}
-	for t, c := range again {
-		s, ok := shown[t]
-		if !ok {
-			return install.Item{}, "", changed
-		}
-		s.Data = bytes.ReplaceAll(s.Data, from, to)
-		if !s.Same(c) {
+	for t, c := range again.read {
+		s, ok := shown.read[t]
+		if !ok || (shown.changed[t] || again.changed[t]) && !s.Same(c) {
 			return install.Item{}, "", changed
 		}
 	}

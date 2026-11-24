@@ -73,9 +73,11 @@ func exists(t *testing.T, dir, name string) bool {
 
 func TestPrivacyDelete(t *testing.T) {
 	tests := []struct {
-		name     string
-		fill     bool
-		mode     config.Mode
+		name string
+		fill bool
+		mode config.Mode
+		// prepare changes the data directory dir after fillHome.
+		prepare  func(t *testing.T, dir string)
 		args     []string
 		answers  string
 		wantCode int
@@ -164,6 +166,24 @@ func TestPrivacyDelete(t *testing.T) {
 			},
 		},
 		{
+			name: "when some of the device key may stay, the result still says install's record and its copies stay",
+			fill: true, mode: config.Local, args: []string{"--yes"}, wantCode: 1,
+			// A keystore.json that doesn't parse can't say which of the OS's
+			// secret stores holds the key, so Destroy deletes its files and
+			// says what may be left.
+			prepare: func(t *testing.T, dir string) {
+				if err := os.WriteFile(filepath.Join(dir, "keystore.json"), []byte("{"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, dir, out string) {
+				const stays = ". Your settings in config.toml stay, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back.\nLeft alone: "
+				if !strings.Contains(out, "Deleted everything pairtime recorded in ") || !strings.Contains(out, stays) {
+					t.Errorf("the result doesn't say what stays and what was left alone:\n%s", out)
+				}
+			},
+		},
+		{
 			name: "answering no changes nothing",
 			fill: true, mode: config.Local, answers: "n\n", wantCode: exitDeclined,
 			check: func(t *testing.T, dir, out string) {
@@ -202,6 +222,9 @@ func TestPrivacyDelete(t *testing.T) {
 			t.Setenv(home.EnvHome, dir)
 			if tt.fill {
 				fillHome(t, dir, tt.mode)
+			}
+			if tt.prepare != nil {
+				tt.prepare(t, dir)
 			}
 			answering(t, tt.answers)
 			var out, errOut bytes.Buffer

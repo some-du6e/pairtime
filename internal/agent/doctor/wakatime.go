@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/coach/text"
@@ -177,7 +176,7 @@ func GatherWakaTime(ctx context.Context, data string, client *http.Client) *Waka
 	case errors.Is(err, fs.ErrNotExist):
 		return nil
 	case err != nil:
-		return &WakaTime{Problem: fmt.Sprintf("pairtime's record of its line in ~/.wakatime.cfg can't be read (%v); run pairtime install again", err)}
+		return &WakaTime{Problem: fmt.Sprintf("pairtime's record of its WakaTime line can't be read (%v); run pairtime install again", err)}
 	}
 	cfg, err := os.ReadFile(s.Config)
 	switch {
@@ -198,6 +197,14 @@ func GatherWakaTime(ctx context.Context, data string, client *http.Client) *Waka
 	}
 	if st.Import {
 		return &WakaTime{Config: s.Config, Problem: s.Config + " imports another config with import_cfg, which wakatime-cli reads over it, so a line there can take the place of pairtime's; take import_cfg out, or take pairtime's line out with pairtime uninstall"}
+	}
+	if _, err := url.Parse(st.Server); err != nil && !st.Own {
+		// wakatime-cli's loadAPIURL refuses it, and its whole run with it.
+		// The URL isn't shown: one net/url can't parse can hold a password.
+		return &WakaTime{Config: s.Config, Problem: "wakatime-cli can't read the api_url in " + s.Config + " as a URL, so it sends your editor time nowhere, pairtime included"}
+	}
+	if st.TakenOver {
+		return &WakaTime{Config: s.Config, Problem: s.Config + " is the config pairtime made, with an api_key that isn't pairtime's any more, so pairtime's agent refuses what wakatime-cli sends it, and your editor time goes nowhere; point its api_url at your own server, or delete it, then run pairtime install again"}
 	}
 	if !st.Line {
 		return &WakaTime{Config: s.Config, Problem: "pairtime's line isn't in " + s.Config + " any more, so wakatime-cli doesn't send your editor time to pairtime; run pairtime install again"}
@@ -226,11 +233,16 @@ func GatherWakaTime(ctx context.Context, data string, client *http.Client) *Waka
 // wakatime-cli sends it, and says how it answered.
 func askWakaTime(ctx context.Context, client *http.Client, base, key string) Destination {
 	d := Destination{Host: hostOf(base)}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(base, "/")+"/users/current/statusbar/today", nil)
+	// base is normalized already, as wakatime-cli's is, which appends its
+	// paths to it as it is.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/users/current/statusbar/today", nil)
 	if err != nil {
 		d.Err = urlFree(err)
 		return d
 	}
+	// net/http would send the URL's user name and password as Basic auth,
+	// which wakatime-cli never does, since it sets its own.
+	req.URL.User = nil
 	if key != "" {
 		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(key)))
 	}
