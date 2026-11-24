@@ -22,7 +22,8 @@ import (
 // the gap is still on its way (SM 2.1). That hold can keep FinalBefore
 // hours behind, so stallNote names it while it lasts, and so is a slot
 // whose presence nothing decides, where Step holds FinalBefore until a
-// sample does (SM 2.1, score.Output.Undecided).
+// sample does, or for BUCKET_TTL_S plus that allowance at most (SM 2.1,
+// score.Output.Undecided).
 const stallMS = 10 * 60 * 1000
 
 // sampling is what watch knows of the presence sampler's records, as the
@@ -138,9 +139,9 @@ func heldGap(times, stamped []int64, ttl, late, high int64) (end, length int64) 
 // while it does. When pkg/score holds FinalBefore at undecided, the start
 // of a slot whose presence nothing decides yet (score.Output.Undecided),
 // the note says so before any other cause: no minute is final before its
-// slots are decided (SM 2.1), and the records the sampler wrote since its
-// last sample, such as a resume or a lock taken while the agent couldn't
-// read the input idle time, don't decide them. It returns "" for no lag,
+// slots are decided, and such a slot waits for a sample dated within ttl
+// after it until the newest record is late past that, when it counts as
+// unknown (SM 2.1). It returns "" for no lag,
 // and for a lag while samples come and a browser or chat app is in front:
 // SM 2.5 holds the minutes after credit until such a run ends, since it
 // may be a lookup, which is the rule working, not a fault, and doctor's
@@ -155,7 +156,8 @@ func stallNote(at, fb, pending, ttl, late int64, s sampling, focus event.AppClas
 		lasting(lag), lasting(pending))
 	switch {
 	case undecided > 0 && undecided <= fb:
-		msg += ": the presence sampler wrote a record there with no sample, as it does at a resume or a lock when it can't read the input idle time, so nothing decides whether you were at the computer from then on, and they wait for the next sample"
+		msg += fmt.Sprintf(": no presence sample has decided whether you were at the computer from then on, as none came within %s after those minutes, so they wait, and count as unknown once the newest record is %s past them",
+			lasting(ttl), lasting(ttl+late))
 	case s.newest == 0:
 		msg += ": presence is unknown on this computer, so the scorer has no presence sample to keep time by"
 	case at-s.newest > pending+stallMS:

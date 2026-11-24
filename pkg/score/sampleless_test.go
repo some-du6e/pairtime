@@ -12,11 +12,14 @@ import (
 // TestSamplelessPower checks decision D-sampleless-power (#298). The agent
 // samples at every power event (DESIGN 3.3), so an os.power with no sample
 // shows its idle read failing. When such a record is the sampler's next
-// after a sample whose reach hasn't ended, the slots from the sample to it
-// are unknown once the newest record is rules.late past it, and the sample
-// holds the clock until then, so a sample taken with it and sealed a batch
-// later still decides them. And FinalBefore never passes a slot that
-// nothing decides (SM 2.1).
+// after a sample, or after a resume or unlock with no sample, whose reach
+// hasn't ended, the slots from that record to it are unknown once the
+// newest record is rules.late past it, and the earlier record holds the
+// clock until then, so a sample taken with it and sealed a batch later
+// still decides them. A sample decides a slot only within BUCKET_TTL_S
+// after the slot's end, a slot no rule decides is unknown once the newest
+// record is rules.late past that, and FinalBefore never passes a slot that
+// nothing decides yet (SM 2.1).
 //
 // Each case is the same evening: input until 595 s, a hooked turn from
 // 600 s to 1,790 s, and a sample on every slot boundary until C, the last
@@ -24,6 +27,8 @@ import (
 func TestSamplelessPower(t *testing.T) {
 	r := newRules(testTable(t))
 	const c, suspend, resume = 1800, 1800 + 3600, 1800 + 3600 + 8*3600
+	// back is when the samples come again in the backstop's case.
+	const back = resume + 3*3600 + 600
 	// hooks adds a hooked turn of session sess, its prompt at from and a
 	// tool call every two minutes after it until to.
 	hooks := func(b *tl, sess, turn string, from, to int64) {
@@ -175,7 +180,7 @@ func TestSamplelessPower(t *testing.T) {
 			},
 		},
 		{
-			name: "a resume and a lock under BUCKET_TTL_S later, neither with a sample, leave the slots between undecided, so FinalBefore waits at the resume however far the hooks run, and Output.Undecided says where",
+			name: "a resume and a lock under BUCKET_TTL_S later, neither with a sample, leave the slots between unknown: the resume holds the clock until the newest record is rules.late past the lock",
 			build: func(b *tl) {
 				evening(b)
 				b.power(at(suspend), event.PowerSuspend)
@@ -183,16 +188,19 @@ func TestSamplelessPower(t *testing.T) {
 				b.power(at(resume+1800), event.PowerLock)
 				morning(b, resume)
 			},
-			check: func(t *testing.T, _ [][]event.Event, outs []Output, one Derived) {
+			check: func(t *testing.T, batches [][]event.Event, outs []Output, one Derived) {
+				heldAt(t, batches, outs, at(resume+1800), at(resume+1800)+r.late, at(resume))
 				last := outs[len(outs)-1]
-				if last.FinalBefore != at(resume) || last.Undecided != at(resume) {
-					t.Fatalf("FinalBefore %d s, undecided at %d s, want both at the resume, %d s", (last.FinalBefore-base)/1000,
-						(last.Undecided-base)/1000, resume)
+				high := batches[len(batches)-1][len(batches[len(batches)-1])-1].T
+				if want := floorSlot(high - r.settle); last.FinalBefore != want || last.Undecided != 0 {
+					t.Fatalf("FinalBefore %d s, undecided at %d, want %d s, PENDING_WINDOW_S behind the newest record, with no slot undecided",
+						(last.FinalBefore-base)/1000, last.Undecided, (want-base)/1000)
 				}
-				slots(t, one, at(c), at(resume), func(Slot) {})
-				if n := len(one.Slots); n > 0 && one.Slots[n-1].Start >= at(resume) {
-					t.Fatalf("a slot derived at %d s, want none from the resume on", (one.Slots[n-1].Start-base)/1000)
-				}
+				slots(t, one, at(resume), at(resume+1800), func(s Slot) {
+					if s.Present != event.PresentUnknown || s.Asleep || s.Locked {
+						t.Fatalf("the slot at %d s is %q, asleep %v, locked %v; want unknown", (s.Start-base)/1000, s.Present, s.Asleep, s.Locked)
+					}
+				})
 			},
 		},
 		{
@@ -215,6 +223,44 @@ func TestSamplelessPower(t *testing.T) {
 						t.Fatalf("the slot at %d s is locked %v, asleep %v; want it locked and not asleep", (s.Start-base)/1000, s.Locked, s.Asleep)
 					}
 				})
+			},
+		},
+		{
+			name: "a resume with no sample, a log reader's turn for three hours with nothing stamped and then samples again: the slots no sample came within BUCKET_TTL_S of are unknown, FinalBefore waits at the rest until the newest record is rules.late past that, and a Step a batch gives what one Step gives, the late samples included",
+			build: func(b *tl) {
+				evening(b)
+				b.power(at(suspend), event.PowerSuspend)
+				b.power(at(resume), event.PowerResume)
+				b.prompt(at(resume+60), event.ViaLog, "s_3", "p_1", "t_3", 40)
+				for s := int64(resume + 600); s <= resume+3*3600; s += 600 {
+					b.harness(at(s), event.ViaLog, "s_3", "p_1", &event.AgentOutput{TurnKey: "t_3", Words: 30})
+				}
+				b.samples(at(back), at(back+1800))
+			},
+			check: func(t *testing.T, batches [][]event.Event, outs []Output, one Derived) {
+				// The first sample decides the slots ending at most
+				// BUCKET_TTL_S before it.
+				const decided = back - 7200 - 15
+				slots(t, one, at(resume), at(decided), func(s Slot) {
+					if s.Present != event.PresentUnknown || s.Asleep {
+						t.Fatalf("the slot at %d s is %q, asleep %v; want unknown, as no sample came within BUCKET_TTL_S of it", (s.Start-base)/1000, s.Present, s.Asleep)
+					}
+				})
+				slots(t, one, at(decided), at(back), func(s Slot) {
+					if s.Present == event.PresentUnknown || s.Asleep {
+						t.Fatalf("the slot at %d s is %q, asleep %v; want it decided by the sample after it", (s.Start-base)/1000, s.Present, s.Asleep)
+					}
+				})
+				waited := false
+				for _, o := range outs {
+					waited = waited || o.Undecided != 0
+				}
+				last := outs[len(outs)-1]
+				high := batches[len(batches)-1][len(batches[len(batches)-1])-1].T
+				if want := floorSlot(high - r.settle); !waited || last.FinalBefore != want || last.Undecided != 0 {
+					t.Fatalf("FinalBefore waited at an undecided slot: %v; at the end %d s, undecided at %d; want it to wait while the samples were new, then %d s, PENDING_WINDOW_S behind the newest record",
+						waited, (last.FinalBefore-base)/1000, last.Undecided, (want-base)/1000)
+				}
 			},
 		},
 	}

@@ -60,13 +60,13 @@ func TestStallNote(t *testing.T) {
 		{name: "with samples coming and a terminal in front, the note names no cause",
 			fb: at - 2*60*minute, sampled: at - minute, focus: event.AppTerminal,
 			want: []string{"ends 2 h before"}, bare: true},
-		{name: "with FinalBefore held at a slot nothing decides, the note says the sampler wrote a record there with no sample, before the samples' own silence",
+		{name: "with FinalBefore held at a slot nothing decides, the note says no sample decided those minutes, and when they count as unknown, before the samples' own silence",
 			fb: at - 3*60*minute, sampled: at - 2*60*minute, undecided: at - 3*60*minute, focus: event.AppTerminal,
-			want: []string{"ends 3 h before", "the presence sampler wrote a record there with no sample",
-				"nothing decides whether you were at the computer from then on, and they wait for the next sample"}},
+			want: []string{"ends 3 h before", "no presence sample has decided whether you were at the computer from then on",
+				"as none came within 2 h after those minutes, so they wait, and count as unknown once the newest record is 2 h 5 min past them"}},
 		{name: "with FinalBefore held at a slot nothing decides and a browser in front, the note still names that slot",
 			fb: at - 40*minute, sampled: at - minute, undecided: at - 40*minute, focus: event.AppBrowser,
-			want: []string{"the presence sampler wrote a record there with no sample"}},
+			want: []string{"no presence sample has decided whether you were at the computer"}},
 		{name: "with a slot nothing decides after FinalBefore, as when a lookup holds it earlier, the note doesn't name that slot",
 			fb: at - 40*minute, sampled: at - minute, undecided: at - 20*minute, focus: event.AppBrowser},
 	}
@@ -218,13 +218,15 @@ func TestStallWarning(t *testing.T) {
 		}
 		return evs
 	}
-	// unsampled is a day whose sampler loses its idle source an hour before
-	// a suspend: the suspend, the morning's resume and a lock half an hour
-	// after the resume come with no sample, and a hooked turn runs for five
-	// hours after the resume, past BUCKET_TTL_S after the lock. Nothing
-	// decides the slots from the resume to the lock, so pkg/score holds
-	// FinalBefore at the resume (SM 2.1).
-	unsampled := func(t *testing.T) []event.Event {
+	// lapsed is a day whose sampler loses its idle source an hour before a
+	// suspend: the suspend and the morning's resume come with no sample, a
+	// log reader's turn runs for three hours after the resume with nothing
+	// the agent stamps itself, and then the samples come back for half an
+	// hour. The minutes no sample came within BUCKET_TTL_S of count as
+	// unknown once the newest record is PENDING_WINDOW_S - READ_HORIZON_S
+	// past that, and pkg/score holds FinalBefore at the first of the rest
+	// until then (SM 2.1).
+	lapsed := func(t *testing.T) []event.Event {
 		day := hookTurn(t, fixture(t, "6.4").Events[0].T, tools[:12])
 		last := day[len(day)-1].T
 		n := 0
@@ -234,25 +236,13 @@ func TestStallWarning(t *testing.T) {
 		}
 		resume := last + 9*60*minute
 		evs := append(day, rec(last+60*minute, &event.OSPower{Op: event.PowerSuspend}),
-			rec(resume, &event.OSPower{Op: event.PowerResume}), rec(resume+30*minute, &event.OSPower{Op: event.PowerLock}))
-		var morning []int64
-		for m := int64(10); m <= 300; m += 10 {
-			morning = append(morning, m*minute)
+			rec(resume, &event.OSPower{Op: event.PowerResume}))
+		evs = append(evs, logMorning(t, resume+minute, resume+3*60*minute, day[len(day)-1])...)
+		back := resume + 3*60*minute + 10*minute
+		for k := int64(0); k <= 120; k++ {
+			idle := float64(1 + k%4)
+			evs = append(evs, rec(back+k*15_000, &event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle}))
 		}
-		for _, e := range rekeyed(hookTurn(t, resume+70_000, morning), 6) {
-			if _, ok := e.Data.(*event.OSPresence); !ok {
-				evs = append(evs, e)
-			}
-		}
-		slices.SortStableFunc(evs, func(a, b event.Event) int {
-			switch {
-			case a.T < b.T:
-				return -1
-			case a.T > b.T:
-				return 1
-			}
-			return 0
-		})
 		return evs
 	}
 	cases := []struct {
@@ -263,8 +253,8 @@ func TestStallWarning(t *testing.T) {
 		warned bool
 		last   string
 		// each, when set, is what every lag doctor hears must say: its
-		// cause.
-		each string
+		// cause, and heard what some lag it hears must say.
+		each, heard string
 		// held says the newest final minute ends up more than the
 		// warning's lag behind the newest record, so a case's silence
 		// isn't that of a short lag.
@@ -279,8 +269,8 @@ func TestStallWarning(t *testing.T) {
 			build: browser, held: true},
 		{name: "a night's suspend, which holds the minutes for 5 min after the morning's resume, tells doctor why while it holds, and nothing once they catch up",
 			build: overnight, warned: true, each: "a presence sample came after 14 h without one"},
-		{name: "a resume and a lock half an hour later, neither with a sample, hold the minutes at the resume, and doctor hears that the sampler wrote a record there with no sample",
-			build: unsampled, warned: true, last: "the presence sampler wrote a record there with no sample", held: true},
+		{name: "minutes that no sample came within BUCKET_TTL_S of, while pkg/score holds FinalBefore at them, tell doctor so, and nothing once they count as unknown and catch up",
+			build: lapsed, warned: true, heard: "no presence sample has decided whether you were at the computer"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -300,6 +290,9 @@ func TestStallWarning(t *testing.T) {
 				if c.each != "" && strings.Contains(p, "newest final minute") && !strings.Contains(p, c.each) {
 					t.Errorf("doctor heard %q, want every lag it hears to say %q", p, c.each)
 				}
+			}
+			if c.heard != "" && !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, c.heard) }) {
+				t.Errorf("doctor heard %q, want some lag it hears to say %q", problems, c.heard)
 			}
 			switch {
 			case c.last == "" && last != "":

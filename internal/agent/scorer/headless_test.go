@@ -277,6 +277,25 @@ func logTurn(t *testing.T, at int64, ref event.Event) []event.Event {
 	return []event.Event{p, o}
 }
 
+// logMorning returns logTurn's prompt at from and its agent output every
+// ten minutes after it until to, each with an event id of its own: a turn
+// a log reader reports for hours, with nothing the agent stamps itself.
+func logMorning(t *testing.T, from, to int64, ref event.Event) []event.Event {
+	t.Helper()
+	turn := logTurn(t, from, ref)
+	out := []event.Event{turn[0]}
+	n := 0
+	for ts := from + 10*minuteMS; ts <= to; ts += 10 * minuteMS {
+		n++
+		e := turn[1]
+		e.EventID = fmt.Sprintf("01a1fb1e-5318-78a1-a7f8-%012x", n)
+		e.Mono += ts - e.T
+		e.T = ts
+		out = append(out, e)
+	}
+	return out
+}
+
 // TestCarryReach checks the carry against pkg/score's reach rule (SM 2.1):
 // the window drops a carried record of the presence sampler's only when a
 // record the agent stamps itself, dated more than BUCKET_TTL_S after it,
@@ -515,21 +534,48 @@ func TestOlderPlaceCarry(t *testing.T) {
 // TestSamplelessPowerLoop checks the loop against one Step over an evening
 // whose sampler loses its idle source an hour before a suspend, so the
 // suspend and the morning's resume come with no sample, as the agent
-// writes them when its idle read fails, and a hooked turn runs on after the
-// resume for five hours (D-sampleless-power, #298). Before #298 pkg/score
-// derived no slot after the evening's last sample while FinalBefore moved
-// on with the morning's hooks, in one Step and in the loop alike, so
-// comparing the two passed with the morning's agent time gone. Each case
-// checks that time too.
+// writes them when its idle read fails, and a turn runs on after the
+// resume (D-sampleless-power, #298). Before #298 pkg/score derived no slot
+// after the evening's last sample while FinalBefore moved on with the
+// morning's hooks, in one Step and in the loop alike, so comparing the two
+// passed with the morning's agent time gone. Each case checks that time
+// too.
 func TestSamplelessPowerLoop(t *testing.T) {
+	// hooks is a hooked turn for five hours from the resume, with no sample.
+	hooks := func(t *testing.T, _ []event.Event, resume int64) []event.Event {
+		var tools []int64
+		for m := int64(10); m <= 300; m += 10 {
+			tools = append(tools, m*minuteMS)
+		}
+		var out []event.Event
+		for _, e := range rekeyed(hookTurn(t, resume+70_000, tools), 5) {
+			if _, sample := e.Data.(*event.OSPresence); !sample {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
 	cases := []struct {
 		name string
 		// wake is how long after the evening's last sample the machine
 		// resumes. It suspends an hour after that sample.
 		wake int64
+		// morning is what comes after the resume.
+		morning func(t *testing.T, first []event.Event, resume int64) []event.Event
 	}{
-		{"after a night's suspend, longer than BUCKET_TTL_S, the loop gives one Step's minutes, and the morning's carry their agent time", 9 * hourMS},
-		{"after a half-hour nap, the loop gives one Step's minutes, and the morning's carry their agent time", 90 * minuteMS},
+		{"after a night's suspend, longer than BUCKET_TTL_S, the loop gives one Step's minutes, and the morning's carry their agent time", 9 * hourMS, hooks},
+		{"after a half-hour nap, the loop gives one Step's minutes, and the morning's carry their agent time", 90 * minuteMS, hooks},
+		{"with a log reader's turn for three hours after the resume, nothing stamped and the samples back after it, the loop gives one Step's minutes, those the late samples decide and those no sample came within BUCKET_TTL_S of alike",
+			9 * hourMS, func(t *testing.T, first []event.Event, resume int64) []event.Event {
+				out := logMorning(t, resume+minuteMS, resume+3*hourMS, first[len(first)-1])
+				back := resume + 3*hourMS + 10*minuteMS
+				for k := int64(0); k <= 120; k++ {
+					idle := float64(1 + k%4)
+					out = append(out, sampleAt(first, back+k*15_000, fmt.Sprintf("01a1fb1e-5318-78a1-a7f9-%012x", k+1),
+						&event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle}))
+				}
+				return out
+			}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -543,15 +589,7 @@ func TestSamplelessPowerLoop(t *testing.T) {
 			}
 			resume := last + c.wake
 			all := append(slices.Clone(first), power(last+hourMS, event.PowerSuspend), power(resume, event.PowerResume))
-			var tools []int64
-			for m := int64(10); m <= 300; m += 10 {
-				tools = append(tools, m*minuteMS)
-			}
-			for _, e := range rekeyed(hookTurn(t, resume+70_000, tools), 5) {
-				if _, sample := e.Data.(*event.OSPresence); !sample {
-					all = append(all, e)
-				}
-			}
+			all = append(all, c.morning(t, first, resume)...)
 			r := newRig(t, score.Device{})
 			r.write(all, nil)
 			chain, err := ledger.ReadChain(r.path("ledger"))

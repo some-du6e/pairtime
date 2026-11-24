@@ -94,10 +94,11 @@ func stampedRecord(e event.Event) bool {
 // still arrive and keep the reach; while the sampler's next record, more
 // than BUCKET_TTL_S after it, is less than rules.late behind the newest
 // record, since a stamped record dated inside that gap can still arrive and
-// end the reach; and, for a sample, while its next record of the sampler's
-// is an os.power with no sample that is less than rules.late behind the
-// newest record, since the sample taken with it can still arrive and decide
-// the slots between (reach.bare). Since settle is PENDING_WINDOW_S,
+// end the reach; and, for a sample or a resume or unlock with no sample,
+// while its next record of the sampler's is an os.power with no sample
+// that is less than rules.late behind the newest record, since the sample
+// taken with it can still arrive and decide the slots between
+// (reach.lapse). Since settle is PENDING_WINDOW_S,
 // nothing after a record that keeps the clock is final. With no record of
 // the sampler's keeping it, as on a device whose agent never samples, now
 // is high: nothing else keeps time there, and a minute is final once a
