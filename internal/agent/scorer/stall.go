@@ -26,7 +26,7 @@ const stallMS = 10 * 60 * 1000
 // sampling is what watch knows of the presence sampler's records, as the
 // window and the carry hold them: the newest one's t, 0 for none, and the
 // end and length of the latest gap between two of them longer than
-// BUCKET_TTL_S, 0 for none.
+// BUCKET_TTL_S that pkg/score holds the clock for, 0 for none.
 type sampling struct{ newest, gapEnd, gap int64 }
 
 // watch tells doctor when FinalBefore lags, after the Step that scored
@@ -68,14 +68,20 @@ func (l *Loop) watch(b ledger.Batch) {
 	// the carry hold while pkg/score's hold for it lasts, since FinalBefore
 	// stays at the sample before it, and the window starts Lookback before
 	// FinalBefore.
-	var s sampling
-	slices.Sort(times)
-	for i, t := range times {
-		s.newest = t
-		if i > 0 && t-times[i-1] > l.win.ttl {
-			s.gapEnd, s.gap = t, t-times[i-1]
+	var stamped []int64
+	if l.win.carry.Stamped > 0 {
+		stamped = append(stamped, l.win.carry.Stamped)
+	}
+	for i := range l.win.recs {
+		if e := &l.win.recs[i].ev; stamps(e) {
+			stamped = append(stamped, e.T)
 		}
 	}
+	var s sampling
+	if len(times) > 0 {
+		s.newest = slices.Max(times)
+	}
+	s.gapEnd, s.gap = heldGap(times, stamped, l.win.ttl, l.win.late, high)
 	msg := ""
 	if high > 0 {
 		at := min(high, b.SealedAt.UnixMilli())
@@ -88,6 +94,29 @@ func (l *Loop) watch(b ledger.Batch) {
 		l.stallMsg = msg
 		l.publish()
 	}
+}
+
+// heldGap returns the end and length of the latest gap longer than ttl,
+// BUCKET_TTL_S, between two of the sampler's record times in times, for
+// which pkg/score holds the clock (reach.held): none of the stamped
+// records, the times of records the agent stamps itself, is dated more
+// than ttl after the gap's start, before its end, and late,
+// PENDING_WINDOW_S - READ_HORIZON_S, before high, the newest record. Such
+// a record ended the reach before the gap, and once its cut has taken
+// effect nothing holds the clock there. It returns 0, 0 for no such gap.
+func heldGap(times, stamped []int64, ttl, late, high int64) (end, length int64) {
+	sorted := slices.Clone(times)
+	slices.Sort(sorted)
+	for i := 1; i < len(sorted); i++ {
+		from, to := sorted[i-1], sorted[i]
+		if to-from <= ttl || slices.ContainsFunc(stamped, func(t int64) bool {
+			return t > from+ttl && t < to && t <= high-late
+		}) {
+			continue
+		}
+		end, length = to, to-from
+	}
+	return end, length
 }
 
 // stallNote says what doctor hears when the newest final minute, which

@@ -79,6 +79,45 @@ func TestStallNote(t *testing.T) {
 	}
 }
 
+// TestHeldGap checks which gap between the sampler's records watch names as
+// pkg/score's hold (reach.held): the latest longer than BUCKET_TTL_S, unless
+// a record the agent stamps itself, dated more than BUCKET_TTL_S into it,
+// ended the reach before it and has taken effect.
+func TestHeldGap(t *testing.T) {
+	const minute, hour = int64(60_000), int64(3600_000)
+	const ttl, late = 2 * hour, 5 * minute
+	night := []int64{0, 15_000, 30_000, 14 * hour, 14*hour + 15_000}
+	cases := []struct {
+		name           string
+		times, stamped []int64
+		high           int64
+		end, length    int64
+	}{
+		{"a gap longer than BUCKET_TTL_S with nothing stamped in it is held",
+			night, nil, 14*hour + 15_000, 14 * hour, 14*hour - 30_000},
+		{"a record stamped more than BUCKET_TTL_S into the gap, whose cut has taken effect, leaves nothing held",
+			night, []int64{3 * hour}, 14*hour + 15_000, 0, 0},
+		{"a record stamped in the gap whose cut still waits, under 5 min before the newest record, keeps the gap held",
+			night, []int64{14*hour - minute}, 14*hour + 15_000, 14 * hour, 14*hour - 30_000},
+		{"a record stamped within BUCKET_TTL_S of the gap's start ends no reach",
+			night, []int64{hour}, 14*hour + 15_000, 14 * hour, 14*hour - 30_000},
+		{"no gap longer than BUCKET_TTL_S holds nothing",
+			[]int64{0, hour, 2 * hour}, nil, 2 * hour, 0, 0},
+		{"of two gaps longer than BUCKET_TTL_S, the latest is held",
+			[]int64{0, 3 * hour, 3*hour + 15_000, 6 * hour}, nil, 6 * hour, 6 * hour, 3*hour - 15_000},
+		{"times out of order are sorted first",
+			[]int64{14 * hour, 0, 30_000}, nil, 14 * hour, 14 * hour, 14*hour - 30_000},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			end, length := heldGap(c.times, c.stamped, ttl, late, c.high)
+			if end != c.end || length != c.length {
+				t.Errorf("gap ending at %d ms, %d ms long; want %d ms, %d ms", end, length, c.end, c.length)
+			}
+		})
+	}
+}
+
 // TestStallWarning checks what doctor hears from the loop: over a hooked
 // turn of two hours whose agent samples presence once a minute, as after
 // CONTEXT_IDLE_S without input (hookTurn), with some of those samples left
