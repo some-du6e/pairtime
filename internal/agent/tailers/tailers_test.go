@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/iotest"
@@ -52,6 +53,7 @@ type rig struct {
 	dir   string
 	store *memStore
 	now   time.Time
+	nowMu sync.Mutex // held to move now, and by clock
 	tl    *Tailer
 	// got are the lines taken, forgot the files the tailer forgot.
 	got    []Line
@@ -101,7 +103,7 @@ func (r *rig) open() {
 		Store:         r.store,
 		Deliver:       r.deliver,
 		Forget:        func(_ event.Harness, file string) { r.forgot = append(r.forgot, file) },
-		Now:           func() time.Time { return r.now },
+		Now:           r.clock,
 		NoNotify:      true,
 		Lookback:      r.lookback,
 		LookbackUntil: r.until,
@@ -155,10 +157,22 @@ func (r *rig) replace(name, s string) {
 	}
 }
 
+// clock is the rig's time as the tailer reads it, through Options.Now and
+// LookbackUntil, which lookback's goroutine can call while step moves it.
+// Only the test goroutine moves it, under nowMu, so the test's own reads of
+// r.now need no lock.
+func (r *rig) clock() time.Time {
+	r.nowMu.Lock()
+	defer r.nowMu.Unlock()
+	return r.now
+}
+
 // step moves the clock on by d and lets the tailer do what is due, with
 // the roots listed again when rescan is set.
 func (r *rig) step(d time.Duration, rescan bool) {
+	r.nowMu.Lock()
 	r.now = r.now.Add(d)
+	r.nowMu.Unlock()
 	if rescan {
 		r.tl.mu.Lock()
 		r.tl.scanDue = true
