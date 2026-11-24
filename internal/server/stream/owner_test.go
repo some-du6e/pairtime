@@ -137,22 +137,70 @@ func TestOwnerTopic(t *testing.T) {
 				t.Errorf("a2's stream got %d events, want 1", len(got))
 			}
 		}},
-		{name: "a read that fails publishes nothing, and the next change publishes", run: func(t *testing.T, h *Hub, src *viewSource) {
+		{name: "a read that fails keeps the change and is tried again, Gap later and then twice as long, until one works", run: func(t *testing.T, h *Hub, src *viewSource) {
+			c := open(t, h, meTopic, as("a1"))
+			c.read()
+			src.fail.Store(true)
+			src.you.Store(45)
+			h.Changed("a1")
+			// Reads at 0 s and 1 s fail; the next comes 2 s after that.
+			time.Sleep(2 * time.Second)
+			src.fail.Store(false)
+			time.Sleep(time.Second - time.Millisecond)
+			synctest.Wait()
+			if got := c.read(); len(events(got)) != 0 {
+				t.Fatalf("an event before the third read:\n%s", got)
+			}
+			time.Sleep(time.Millisecond)
+			synctest.Wait()
+			if got := credited(t, c.read()); len(got) != 1 || got[0].TodayS != 45 {
+				t.Errorf("at the third read the stream got %+v, want one event of 45 s", got)
+			}
+			if n := src.calls.Load(); n != 3 {
+				t.Errorf("the hub read %d Views, want 3", n)
+			}
+		}},
+		{name: "a read that keeps failing ends in resync after maxReadRetries tries again, so each page refetches its numbers itself", run: func(t *testing.T, h *Hub, src *viewSource) {
 			c := open(t, h, meTopic, as("a1"))
 			c.read()
 			src.fail.Store(true)
 			h.Changed("a1")
+			// Reads at 0, 1, 3, 7 and 15 s.
+			time.Sleep(15*time.Second - time.Millisecond)
 			synctest.Wait()
-			if got := c.read(); len(events(got)) != 0 {
-				t.Errorf("a failed read published:\n%s", got)
+			if got := events(c.read()); len(got) != 0 {
+				t.Fatalf("events before the last try: %+v", got)
 			}
-			src.fail.Store(false)
-			src.you.Store(45)
-			time.Sleep(DefaultGap)
+			time.Sleep(time.Millisecond)
+			synctest.Wait()
+			got := events(c.read())
+			if len(got) != 1 || got[0].event != "resync" || got[0].data != `{"topics":["user:me"]}` {
+				t.Errorf("after the last try the stream got %+v, want one resync of user:me", got)
+			}
+			if n := src.calls.Load(); n != maxReadRetries+1 {
+				t.Errorf("the hub read %d Views, want %d", n, maxReadRetries+1)
+			}
+		}},
+		{name: "a change after the window, before the sweep, drops the topic at once, so a reconnect with its old id gets resync, never a stale place", run: func(t *testing.T, h *Hub, src *viewSource) {
+			c := open(t, h, meTopic, as("a1"))
+			last := lastID(c.read())
+			// The stream leaves 30 s in, so the window ends at 5:30 and
+			// the next sweep is at 6:00.
+			time.Sleep(30 * time.Second)
+			c.close()
+			time.Sleep(DefaultWindow + 10*time.Second)
+			src.you.Store(60)
 			h.Changed("a1")
 			synctest.Wait()
-			if got := credited(t, c.read()); len(got) != 1 || got[0].TodayS != 45 {
-				t.Errorf("after the failure the stream got %+v, want one event of 45 s", got)
+			if n := src.calls.Load(); n != 0 {
+				t.Errorf("a change of an abandoned topic made %d reads", n)
+			}
+			time.Sleep(10 * time.Second)
+			header := as("a1")
+			header.Set("Last-Event-ID", last)
+			c = open(t, h, meTopic, header)
+			if got := events(c.read()); len(got) != 1 || got[0].event != "resync" {
+				t.Errorf("the reconnect got %+v, want resync", got)
 			}
 		}},
 		{name: "with no stream on it for the window, a user topic stops reading Views and goes, though its account keeps changing", run: func(t *testing.T, h *Hub, src *viewSource) {

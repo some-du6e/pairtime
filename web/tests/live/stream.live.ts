@@ -110,3 +110,47 @@ test.describe('with JavaScript off', () => {
 		await expect(page.locator('#live')).not.toHaveAttribute('data-stream', /.+/);
 	});
 });
+
+test("the time zone form's error page follows the stream too, refetching the dashboard rather than the form's address", async ({
+	page,
+	request,
+}) => {
+	const base = await site(request);
+	await signIn(page, base);
+	await page.locator('#zone-name').fill('Nowhere/Land');
+	await page.locator('form.zone button[type="submit"]').click();
+	await expect(page).toHaveURL(`${base}/dashboard/zone`);
+	await expect(page.locator('p.error[role="alert"]')).toBeVisible();
+	const live = page.locator('#live');
+	await expect(live).toHaveAttribute('data-stream', 'open');
+	const start = Date.now();
+	await upload(request, { minute: 2, rev: 1, seconds: 60, state: 'final' });
+	await expect(live.locator('.hero strong')).toHaveText('3m', { timeout: 2000 });
+	expect(Date.now() - start).toBeLessThan(2000);
+});
+
+test("an open dashboard fetches itself again at its account's next local midnight", async ({ page, request }) => {
+	const base = await site(request);
+	await page.clock.install();
+	const refetches: string[] = [];
+	page.on('request', (r) => {
+		if (r.resourceType() === 'fetch' && new URL(r.url()).pathname === '/dashboard') {
+			refetches.push(r.url());
+		}
+	});
+	await signIn(page, base);
+	const live = page.locator('#live');
+	await expect(live).toHaveAttribute('data-stream', 'open');
+	// The first open's refetch, for what changed since the page was drawn.
+	await expect.poll(() => refetches.length).toBe(1);
+	const next = Number(await live.getAttribute('data-next-day'));
+	const now = await page.evaluate(() => Date.now());
+	expect(next - now).toBeGreaterThan(0);
+	expect(next - now).toBeLessThanOrEqual(25 * 3600 * 1000);
+	await page.clock.pauseAt(now + 1000);
+	await page.clock.fastForward(next - now - 2000);
+	expect(refetches).toHaveLength(1);
+	// Past midnight and the minute of spread the refetch may wait.
+	await page.clock.fastForward(2000 + 60_000 + 1000);
+	await expect.poll(() => refetches.length).toBeGreaterThan(1);
+});

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -774,6 +775,41 @@ func TestOwnerDashboard(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNextLocalDay(t *testing.T) {
+	tests := []struct {
+		name  string
+		tz    string
+		today string
+		want  time.Time
+	}{
+		{name: "the next day starts at the zone's midnight", tz: "Europe/London", today: "2026-11-20", want: time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC)},
+		{name: "a zone ahead of UTC starts its next day before UTC's", tz: "Pacific/Kiritimati", today: "2026-11-20", want: time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)},
+		{name: "where the clocks skip midnight, the next day starts at the first second after the jump", tz: "America/Santiago", today: "2027-09-04", want: time.Date(2027, 9, 5, 4, 0, 0, 0, time.UTC)},
+		{name: "a zone the server can't load counts in UTC, as the view does", tz: "Nowhere/Land", today: "2026-11-20", want: time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := nextLocalDay(dashboard.View{TZ: tt.tz, Today: tt.today})
+			if got != tt.want.UnixMilli() {
+				t.Errorf("nextLocalDay = %v, want %v", time.UnixMilli(got).UTC(), tt.want)
+			}
+		})
+	}
+	t.Run("the owner's page carries its view's ETag and next local midnight on #live, and the sample neither", func(t *testing.T) {
+		v := ownerView(t)
+		mux, _ := ownerSite(t, signInOn("U0FAKEVERIFIED"), "u1", fakeSource{v: v}, true, nil)
+		_, page := serve(mux, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
+		want := `<div id="live" data-etag="` + template.HTMLEscapeString(dashboard.ETag(v)) + `" data-next-day="` + strconv.FormatInt(nextLocalDay(v), 10) + `">`
+		if !strings.Contains(page, want) {
+			t.Errorf("the owner's page has no %s", want)
+		}
+		_, demo := getDemo(t, Options{}, signInOn(""))
+		if !strings.Contains(demo, `<div id="live">`) {
+			t.Errorf("the sample's #live carries more than its id")
+		}
+	})
 }
 
 // inlineScript finds the owner's dashboard's one inline script.

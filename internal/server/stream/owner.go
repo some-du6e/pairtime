@@ -15,12 +15,19 @@ const readTimeout = 10 * time.Second
 
 // ownerState is a user topic's publishing: whether its account changed
 // since the last read began, whether a read is waiting or running, when
-// the last read began, and what the last credited event said.
+// the last read began, how many reads in a row failed, and what the last
+// credited event said.
 type ownerState struct {
 	dirty, busy bool
 	last        time.Time
+	failures    int
 	prev        *Credited
 }
+
+// maxReadRetries is how many times a failed View read is tried again, Gap
+// and then twice as long each time, 15 s in all at the default Gap, before
+// the topic's streams get resync instead.
+const maxReadRetries = 4
 
 // Credited is a credited event's data: the owner's time today and over the
 // last 7 days, and each project's, as dashboard.View counts them for the
@@ -131,8 +138,7 @@ func (h *Hub) Changed(account string) {
 	if h.closed {
 		return
 	}
-	now := time.Now()
-	if t := h.topics[userKey+account]; t != nil && h.o.Source != nil && !h.abandonedLocked(t, now) {
+	if t := h.liveTopicLocked(userKey+account, time.Now()); t != nil && h.o.Source != nil {
 		st := t.owner
 		st.dirty = true
 		if !st.busy {
@@ -191,18 +197,32 @@ func (h *Hub) publishOwner(t *topic, wait time.Duration) {
 			h.mu.Unlock()
 			return
 		}
-		if err != nil {
-			h.o.Logger.Warn("reading a dashboard for its stream", "user", t.account, "err", err)
-		} else {
+		gap := h.o.Gap
+		switch {
+		case err == nil:
+			st.failures = 0
 			h.publishLocked(t, "credited", data, time.Now())
 			st.prev = &c
+		case st.failures < maxReadRetries:
+			// The change stays: the next read comes after a longer wait.
+			st.failures++
+			st.dirty = true
+			gap <<= st.failures - 1
+			h.o.Logger.Warn("reading a dashboard for its stream, will try again", "user", t.account, "in", gap.String(), "err", err)
+		default:
+			// The pages refetch their numbers themselves.
+			st.failures = 0
+			h.o.Logger.Error("reading a dashboard for its stream failed; its pages resync", "user", t.account, "err", err)
+			if r, err := json.Marshal(Resync{Topics: []string{TopicMe}}); err == nil {
+				h.publishLocked(t, "resync", r, time.Now())
+			}
 		}
 		if !st.dirty {
 			st.busy = false
 			h.mu.Unlock()
 			return
 		}
-		wait = time.Until(st.last.Add(h.o.Gap))
+		wait = time.Until(st.last.Add(gap))
 		h.mu.Unlock()
 	}
 }

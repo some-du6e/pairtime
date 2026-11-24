@@ -320,6 +320,7 @@ func (h *Hub) open(wants []want, account, client string, resume map[string]posit
 	}
 	day := dayNumber(lastPublication(now))
 	for i, wt := range wants {
+		h.liveTopicLocked(wt.key, now)
 		t := h.topicLocked(wt.key, wt.account)
 		trimLocked(t, now, h.o.Window)
 		st.names[i] = wt.name

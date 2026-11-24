@@ -236,6 +236,11 @@ func (s *Service) names(w http.ResponseWriter, r *http.Request) {
 	case out.refusal != nil:
 		s.refuse(w, out.refusal)
 	default:
+		// Committed: the dashboard shows the device's names as its
+		// projects' labels (D-owner-names).
+		if out.renamed > 0 && s.o.Changed != nil {
+			s.o.Changed(dev.Account)
+		}
 		s.writeJSON(w, http.StatusOK, out.response)
 	}
 }
@@ -315,5 +320,5 @@ func (s *Service) processNames(ctx context.Context, tx writer.Tx, dev device.Dev
 	case err != nil:
 		return outcome{}, err
 	}
-	return outcome{response: data}, nil
+	return outcome{response: data, renamed: len(nb.set) + len(nb.del)}, nil
 }

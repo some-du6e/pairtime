@@ -9,13 +9,16 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/migrations"
+	"github.com/some-du6e/pairtime/internal/server/rollup"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/store/storetest"
+	"github.com/some-du6e/pairtime/pkg/event"
 )
 
 // profileTopic is rowan's public profile, which fakeProfiles serves.
@@ -273,69 +276,140 @@ func TestPublication(t *testing.T) {
 	}
 }
 
-// rollupRow is one rollups_daily row, in milliseconds.
-type rollupRow struct {
-	project, day, kind       string
-	final, pending           [3]int64
-	agentFinal, agentPending int64
+// bucketOf is device d1's revision rev of the minute at minute, in state,
+// whose first slots credit 15 s each at the levels given, in project p1.
+func bucketOf(minute time.Time, rev uint32, state event.BucketState, levels ...event.Evidence) event.MinuteBucket {
+	mb := event.MinuteBucket{
+		V: "1.0.0", Params: "sha256:" + strings.Repeat("ab", 32), Minute: minute.UTC(), Device: "d1",
+		Slots: make([]event.BucketSlot, 4), State: state, Witness: event.Witnessed, Rev: rev,
+	}
+	for i, level := range levels {
+		mb.Slots[i] = event.BucketSlot{Project: "p1", Credited: 15, Why: event.ReasonPrompt, Kind: event.ActivityPrompting, Ev: level}
+		mb.CreditedS += 15
+	}
+	return mb
+}
+
+// revision is a bucket revision as the server received it: when, and the
+// label it gave it (DESIGN 7.4).
+type revision struct {
+	at    time.Time
+	label event.Witness
+	mb    event.MinuteBucket
+}
+
+// store stores r for account u1 as ingest does: in minute_bucket_revisions,
+// with its received time and label, and in the rollups, through
+// rollup.ApplyEvent, in one transaction.
+func (r revision) store(t *testing.T, db *store.DB) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := db.Write.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	data, err := json.Marshal(r.mb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO minute_bucket_revisions (device_id, minute_ms, rev, account_id, received_at_ms, bucket, server_witness)
+VALUES ($1, $2, $3, 'u1', $4, $5, $6)`, r.mb.Device, r.mb.Minute.UnixMilli(), int64(r.mb.Rev), r.at.UnixMilli(), string(data), string(r.label)); err != nil {
+		t.Fatal(err)
+	}
+	if err := rollup.ApplyEvent(ctx, tx, "u1", nil, r.mb); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPublicTotals(t *testing.T) {
-	// The publication of 2026-11-25, when 2026-11-24 has just ended in
-	// every zone. The profile is in UTC+14, where the 25th ended hours ago,
-	// which changes nothing.
-	at := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	// The profile is in UTC+14, so its local dates run from 10:00 UTC the
+	// day before. local gives a time in it.
 	const zone = "Pacific/Kiritimati"
+	kiritimati, err := time.LoadLocation(zone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := func(day string, hour int) time.Time {
+		d, err := time.ParseInLocation(time.DateOnly, day, kiritimati)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d.Add(time.Duration(hour) * time.Hour)
+	}
+	// The publication of 2026-11-25, when 2026-11-24 has just ended in
+	// every zone.
+	at := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	final, pending := event.StateFinal, event.StatePending
+	A, B, C := event.EvidenceA, event.EvidenceB, event.EvidenceC
+	seen := func(day string) time.Time { return local(day, 13) }
 	tests := []struct {
 		name string
 		at   time.Time
-		rows []rollupRow
+		revs []revision
 		want []ProfileDay
 	}{
-		{name: "final time at levels A and B counts, by local day", at: at,
-			rows: []rollupRow{{project: "p1", day: "2026-11-24", kind: "prompting", final: [3]int64{60000, 30000, 0}}},
-			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 90}}},
+		{name: "a day's witnessed final minutes count at levels A and B, by local day", at: at,
+			revs: []revision{{seen("2026-11-24"), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A, B)}},
+			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 30}}},
 		{name: "level C never reaches a public total", at: at,
-			rows: []rollupRow{{project: "p1", day: "2026-11-24", kind: "prompting", final: [3]int64{0, 0, 45000}}},
+			revs: []revision{{seen("2026-11-24"), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, C, C)}},
 			want: []ProfileDay{}},
-		{name: "pending minutes don't show on a public page", at: at,
-			rows: []rollupRow{{project: "p1", day: "2026-11-24", kind: "prompting", pending: [3]int64{60000, 15000, 0}}},
+		{name: "a revision the server labeled backfilled counts for nothing, whatever level its device claims", at: at,
+			revs: []revision{{seen("2026-11-24"), event.Backfilled, bucketOf(local("2026-11-24", 12), 1, final, A, A)}},
 			want: []ProfileDay{}},
+		{name: "an offline catch-up the server labeled offline counts", at: at,
+			revs: []revision{{seen("2026-11-24"), event.Offline, bucketOf(local("2026-11-24", 12), 1, final, A)}},
+			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 15}}},
+		{name: "a revision received after the publication doesn't show at it", at: at,
+			revs: []revision{{at.Add(time.Hour), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)}},
+			want: []ProfileDay{}},
+		{name: "a revision received after one publication shows at the next", at: at.Add(24 * time.Hour),
+			revs: []revision{{at.Add(time.Hour), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)}},
+			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 15}}},
+		{name: "a later revision received before the publication replaces the earlier, and one received after it doesn't yet",
+			at: at,
+			revs: []revision{
+				{seen("2026-11-24"), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)},
+				{local("2026-11-25", 1), event.Witnessed, bucketOf(local("2026-11-24", 12), 2, final, A, A, A)},
+				{at.Add(time.Minute), event.Witnessed, bucketOf(local("2026-11-24", 12), 3, final, A, A, A, A)},
+			},
+			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 45}}},
+		{name: "a pending minute counts, since every minute of a date ended everywhere is past its pending window", at: at,
+			revs: []revision{{seen("2026-11-24"), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, pending, B)}},
+			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 15}}},
 		{name: "the agent's time on its own doesn't count", at: at,
-			rows: []rollupRow{{project: "p1", day: "2026-11-24", kind: "", agentFinal: 120000, agentPending: 30000}},
+			revs: []revision{{seen("2026-11-24"), event.Witnessed, func() event.MinuteBucket {
+				mb := bucketOf(local("2026-11-24", 12), 1, final)
+				mb.AgentRunningS, mb.AgentOnly = 60, map[string]float64{"p1": 60}
+				return mb
+			}()}},
 			want: []ProfileDay{}},
-		{name: "a day's projects and kinds add up to one total, which names none of them", at: at,
-			rows: []rollupRow{
-				{project: "p1", day: "2026-11-24", kind: "prompting", final: [3]int64{10000, 0, 0}},
-				{project: "p2", day: "2026-11-24", kind: "testing", final: [3]int64{0, 20500, 7000}},
-			},
-			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 30.5}}},
 		{name: "the dates are the 30 up to the newest ended in every zone, oldest first, whatever the profile's own zone", at: at,
-			rows: []rollupRow{
-				{project: "p1", day: "2026-11-24", kind: "testing", final: [3]int64{1000, 0, 0}},
-				{project: "p1", day: "2026-10-26", kind: "testing", final: [3]int64{2000, 0, 0}},
-				{project: "p1", day: "2026-10-25", kind: "testing", final: [3]int64{3000, 0, 0}},
-				{project: "p1", day: "2026-11-25", kind: "testing", final: [3]int64{4000, 0, 0}},
+			revs: []revision{
+				{seen("2026-11-24"), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)},
+				{seen("2026-10-26"), event.Witnessed, bucketOf(local("2026-10-26", 12), 1, final, A, A)},
+				{seen("2026-10-25"), event.Witnessed, bucketOf(local("2026-10-25", 12), 1, final, A, A, A)},
+				// Ended in the profile's zone, not yet in UTC-12.
+				{seen("2026-11-25"), event.Witnessed, bucketOf(local("2026-11-25", 12), 1, final, A, A, A, A)},
 			},
-			want: []ProfileDay{{Date: "2026-10-26", CreditedS: 2}, {Date: "2026-11-24", CreditedS: 1}}},
+			want: []ProfileDay{{Date: "2026-10-26", CreditedS: 30}, {Date: "2026-11-24", CreditedS: 15}}},
 		{name: "a second before the publication, its newest date hasn't ended in every zone and doesn't show", at: at.Add(-time.Second),
-			rows: []rollupRow{
-				{project: "p1", day: "2026-11-24", kind: "testing", final: [3]int64{1000, 0, 0}},
-				{project: "p1", day: "2026-11-23", kind: "testing", final: [3]int64{5000, 0, 0}},
+			revs: []revision{
+				{seen("2026-11-24"), event.Witnessed, bucketOf(local("2026-11-24", 12), 1, final, A)},
+				{seen("2026-11-23"), event.Witnessed, bucketOf(local("2026-11-23", 12), 1, final, A, A)},
 			},
-			want: []ProfileDay{{Date: "2026-11-23", CreditedS: 5}}},
+			want: []ProfileDay{{Date: "2026-11-23", CreditedS: 30}}},
 	}
 	for _, engine := range storetest.Engines() {
 		for _, tt := range tests {
 			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) {
 				db := publicDB(t, engine, zone)
-				for _, r := range tt.rows {
-					if _, err := db.Write.ExecContext(context.Background(), `INSERT INTO rollups_daily (user_id, project_id, day, activity_kind,
-final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms, pending_c_ms, agent_only_final_ms, agent_only_pending_ms)
-VALUES ('u1', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, r.project, r.day, r.kind,
-						r.final[0], r.final[1], r.final[2], r.pending[0], r.pending[1], r.pending[2], r.agentFinal, r.agentPending); err != nil {
-						t.Fatal(err)
-					}
+				for _, r := range tt.revs {
+					r.store(t, db)
 				}
 				got, err := PublicTotals(context.Background(), db.Read, "u1", tt.at)
 				if err != nil {
@@ -346,6 +420,83 @@ VALUES ('u1', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, r.project, r.day, 
 				}
 			})
 		}
+	}
+}
+
+// rollupProfiles serves account u1's public profile, named "rowan", with
+// PublicTotals over db.
+type rollupProfiles struct{ db *store.DB }
+
+func (p rollupProfiles) Resolve(_ context.Context, name string) (string, bool, error) {
+	return "u1", name == "rowan", nil
+}
+
+func (p rollupProfiles) Totals(ctx context.Context, account string, at time.Time) (ProfileTotals, bool, error) {
+	t, err := PublicTotals(ctx, p.db.Read, account, at)
+	return t, true, err
+}
+
+// TestProfileTopicOnRollups runs the profile topic on PublicTotals over a
+// real database, as WP-SV9 will (D-public-daily; #307).
+func TestProfileTopicOnRollups(t *testing.T) {
+	const (
+		day  = 24 * time.Hour
+		noon = 12 * time.Hour
+	)
+	// A bubble's clock starts here.
+	start := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	A := event.EvidenceA
+	tests := []struct {
+		name string
+		// revs are stored once the clock reaches each one's at.
+		revs []revision
+		// when is when each profile event comes, since start, and days
+		// what each shows.
+		when []time.Duration
+		days [][]string
+	}{
+		{name: "a late revision to a shown date shows at the next 12:00 UTC, never at the hour it came, and a backfilled one counts for nothing",
+			revs: []revision{
+				// 2000-01-01's minute, witnessed soon after it ended.
+				{start.Add(10 * time.Minute), event.Witnessed, bucketOf(start, 1, event.StateFinal, A, A)},
+				// 2000-01-02's minute, which the server labeled backfilled.
+				{start.Add(day + 10*time.Minute), event.Backfilled, bucketOf(start.Add(day), 1, event.StateFinal, A)},
+				// A catch-up at 21:10 raises 2000-01-01 after it was shown.
+				{start.Add(day + 21*time.Hour + 10*time.Minute), event.Witnessed, bucketOf(start, 2, event.StateFinal, A, A, A, A)},
+			},
+			when: []time.Duration{day + noon, 2*day + noon},
+			days: [][]string{{"2000-01-01=30"}, {"2000-01-01=60"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// The database is the outer test's, so its files and its pool
+			// stay out of the bubble.
+			db := publicDB(t, store.SQLite, "UTC")
+			synctest.Test(t, func(t *testing.T) {
+				if now := time.Now(); !now.Equal(start) {
+					t.Fatalf("the bubble starts at %v, want %v", now, start)
+				}
+				h := New(Options{Account: testAccount, Profiles: rollupProfiles{db}})
+				defer h.Close()
+				c := open(t, h, profileTopic, nil)
+				c.read()
+				next := 0
+				when, data := watch(t, c, start, 4*day, 10*time.Minute, func(at time.Duration) {
+					for next < len(tt.revs) && !tt.revs[next].at.After(start.Add(at)) {
+						tt.revs[next].store(t, db)
+						next++
+					}
+				})
+				if !reflect.DeepEqual(when, tt.when) {
+					t.Fatalf("profile events at %v, want %v", when, tt.when)
+				}
+				for i := range data {
+					if got := days(t, data[i]); !reflect.DeepEqual(got, tt.days[i]) {
+						t.Errorf("event %d shows %q, want %q", i, got, tt.days[i])
+					}
+				}
+			})
+		})
 	}
 }
 

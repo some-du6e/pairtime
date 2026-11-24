@@ -1625,6 +1625,18 @@ func TestChanged(t *testing.T) {
 			h.ok(t, upload{dev: dev, body: bucketsBody(t, sampleBucket("d_someone_else", minute, 1))})
 			return nil
 		}},
+		{name: "a names request that sets a name is heard, since the dashboard shows it", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
+			if rec := h.send(t, upload{dev: dev, names: true, body: map[string]any{"set": []any{map[string]any{"project": "p_one", "label": "chip8"}}}}); rec.Code != http.StatusOK {
+				t.Fatalf("the names request got %d: %s", rec.Code, rec.Body)
+			}
+			return []changedCall{{revisions: 0}}
+		}},
+		{name: "a names request that changes no name isn't heard", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
+			if rec := h.send(t, upload{dev: dev, names: true, json: []byte(`{}`)}); rec.Code != http.StatusOK {
+				t.Fatalf("the names request got %d: %s", rec.Code, rec.Body)
+			}
+			return nil
+		}},
 		{name: "an upload whose op fails, so stores nothing, isn't heard", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
 			h.failRollup = true
 			if rec := h.send(t, upload{dev: dev, body: bucketsBody(t, sampleBucket(dev.ID, minute, 1))}); rec.Code != http.StatusServiceUnavailable {

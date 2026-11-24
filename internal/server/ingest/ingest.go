@@ -79,13 +79,15 @@ type Options struct {
 	// pairtimed passes rollup.ApplyEvent (WP-SV7).
 	Rollup RollupFunc
 	// Changed, when set, hears the account of each upload that stored a
-	// bucket revision, so moved the account's rollups, once the writer's
-	// transaction has committed: never inside the op, and not for an upload
-	// that failed or whose outcome its client stopped waiting for. A replay
-	// of an upload that stored one is heard again, since the client that
-	// sends it again never had the first answer, so may be the only sign
-	// the first one ever gives. pairtimed passes the live stream's Changed,
-	// which sends the owner's open dashboards their new numbers (WP-SV8).
+	// bucket revision, so moved the account's rollups, and of each names
+	// request that set or deleted a name, which the dashboard shows, once
+	// the writer's transaction has committed: never inside the op, and not
+	// for a request that failed or whose outcome its client stopped waiting
+	// for. A replay of an upload that stored one is heard again, since the
+	// client that sends it again never had the first answer, so may be the
+	// only sign the first one ever gives. pairtimed passes the live
+	// stream's Changed, which sends the owner's open dashboards their new
+	// numbers and names (WP-SV8).
 	Changed func(account string)
 	// Observe, when set, hears of each upload the writer processed, not
 	// counting replays: how many batch roots it stored, and how long the
@@ -404,9 +406,10 @@ type outcome struct {
 	refusal  *refusal
 	response []byte
 	replay   bool
-	// stored counts the batch roots the request stored, and revised the
-	// bucket revisions.
-	stored, revised int
+	// stored counts the batch roots the request stored, revised the
+	// bucket revisions, and renamed the names a names request set or
+	// deleted.
+	stored, revised, renamed int
 }
 
 // checkReplay is ingest-v1 2.5 step 13's Idempotency-Key check against the

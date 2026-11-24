@@ -135,6 +135,11 @@ type dashPage struct {
 	// ETag is the owner's view's dashboard.ETag, on #live, which the
 	// page's script polls the snapshot with (WP-SV8); "" on the sample.
 	ETag string
+	// NextDay is when the view's today ends in its time zone, in Unix
+	// milliseconds, on #live: the script fetches the page again then, so
+	// a dashboard left open turns its day at the owner's midnight. 0 on
+	// the sample.
+	NextDay int64
 	// SplitByDevice says a repo used on two computers shows as two
 	// projects (dashboard.View.SplitByDevice).
 	SplitByDevice bool
@@ -1153,6 +1158,22 @@ func (s *Site) serveDashboard(w http.ResponseWriter, r *http.Request, in SignIn,
 	writePage(w, code, page, s.cspLive, "no-store", "same-origin")
 }
 
+// nextLocalDay returns when v's today ends in its time zone, in Unix
+// milliseconds: the first instant of the next local date, which on a day
+// whose midnight the clocks skip is the first second after the jump
+// (firstInstant). It returns 0 for a view whose today isn't a date.
+func nextLocalDay(v dashboard.View) int64 {
+	today, err := time.Parse(dashboard.DateLayout, v.Today)
+	if err != nil {
+		return 0
+	}
+	loc, err := rollup.LoadZone(v.TZ)
+	if err != nil {
+		loc = time.UTC
+	}
+	return firstInstant(today.AddDate(0, 0, 1), loc).UnixMilli()
+}
+
 // ownerPage renders v as a signed-in account's own dashboard, with acct in
 // the header, and a "Hide this name" button beside each name its owner
 // turned on when canHide says the server can hide one.
@@ -1168,6 +1189,7 @@ func (s *Site) ownerPage(v dashboard.View, in SignIn, acct *account, zoneError s
 	// The snapshot's ETag, which the page's script sends when it polls
 	// (WP-SV8): the View the page draws is the one the API answers with.
 	d.ETag = dashboard.ETag(v)
+	d.NextDay = nextLocalDay(v)
 	var body bytes.Buffer
 	if err := s.dash.Execute(&body, d); err != nil {
 		return nil, fmt.Errorf("pages: %w", err)

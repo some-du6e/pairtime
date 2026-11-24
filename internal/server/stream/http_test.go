@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -117,16 +118,25 @@ func inUse() uint64 {
 // statistics. Each stream is a real connection to net/http's server, a
 // different account's, on its own topic, so the count holds the server's
 // buffers, goroutines and the hub's topics. The clients are bare
-// connections that send a request and read its first block, so they add
-// almost nothing of their own.
+// connections that send a request and read what comes, so they add almost
+// nothing of their own. The second case fills every topic's ring to
+// ringBytes and has every stream write an event, so the bound those
+// constants hold counts too.
 func TestThousandStreams(t *testing.T) {
 	tests := []struct {
 		name    string
 		streams int
 		budget  int64
+		// full fills each topic's ring before its stream opens, and sends
+		// each stream one event once all are open.
+		full bool
 	}{
 		{name: "1,000 open streams grow the process by less than 50 MB", streams: 1000, budget: 50 << 20},
+		{name: "1,000 open streams, each topic's ring full and each stream past an event, still grow it by less than 50 MB", streams: 1000, budget: 50 << 20, full: true},
 	}
+	// data makes each event's frame ringBytes/ringMax long, so ringMax of
+	// them fill a ring's bytes too.
+	data := `"` + strings.Repeat("x", ringBytes/ringMax-len("event: credited\ndata: \n\n")-2) + `"`
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := New(Options{Account: testAccount, MaxPerClient: tt.streams})
@@ -142,6 +152,14 @@ func TestThousandStreams(t *testing.T) {
 			conns = make([]net.Conn, 0, tt.streams)
 			buf := make([]byte, 4096)
 			before := inUse()
+			account := func(i int) string { return "a" + strconv.Itoa(i) }
+			if tt.full {
+				for i := range tt.streams {
+					for range ringMax - 1 {
+						publishTo(h, userKey+account(i), account(i), "credited", data)
+					}
+				}
+			}
 			for i := range tt.streams {
 				c, err := net.Dial("tcp", srv.Listener.Addr().String())
 				if err != nil {
@@ -164,6 +182,29 @@ func TestThousandStreams(t *testing.T) {
 			}
 			if n := h.Streams(); n != tt.streams {
 				t.Fatalf("the hub counts %d streams, want %d", n, tt.streams)
+			}
+			if tt.full {
+				for i := range tt.streams {
+					publishTo(h, userKey+account(i), account(i), "credited", data)
+				}
+				// Each stream has written its event once its client has it.
+				for i, c := range conns {
+					var got []byte
+					for !bytes.Contains(got, []byte("event: credited\n")) {
+						n, err := c.Read(buf)
+						if err != nil {
+							t.Fatalf("stream %d: %v after %q", i, err, got)
+						}
+						got = append(got, buf[:n]...)
+					}
+				}
+				h.mu.Lock()
+				ring := h.topics[userKey+account(0)]
+				full := len(ring.ring) == ringMax && ring.bytes == ringBytes
+				h.mu.Unlock()
+				if !full {
+					t.Fatal("the rings aren't full")
+				}
 			}
 			after := inUse()
 			grew := int64(after) - int64(before)

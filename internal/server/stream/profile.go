@@ -4,10 +4,8 @@ package stream
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/json"
-	"slices"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/dashboard"
@@ -26,7 +24,10 @@ import (
 type Profiles interface {
 	// Resolve returns the account whose public profile name names, and
 	// false for a name no public profile has, a private profile's among
-	// them.
+	// them. A profile that turns public appears at the next publication
+	// like anything else the teen adds, so Resolve answers by what the
+	// profile was at lastPublication(now); one that turns private goes at
+	// once, through EndProfile.
 	Resolve(ctx context.Context, name string) (account string, ok bool, err error)
 	// Totals returns what the account's public page shows once day's
 	// publication, a 12:00 UTC, has passed, PublicTotals or the page's own,
@@ -90,54 +91,40 @@ func endedEverywhere(t time.Time) string {
 // PublicTotals returns what a profile topic carries for account at the
 // publication of p, a 12:00 UTC: the credited seconds of each of the
 // PublicDays dates up to the newest that has ended in every time zone by
-// then, for each that has any. It counts only final minutes, since public
-// pages show no pending one (DESIGN 6.2 D1), and only levels A and B,
-// since level C never reaches public totals (D11). The agent's time on its
-// own doesn't count. Nothing in it names a project or says when in a day
-// the time was, and its dates don't depend on the account's zone, only on
-// p.
+// then, for each that has any, as the server held them at p
+// (rollup.CreditAsOf). So once p has passed, what PublicTotals gives for
+// it never changes: a revision received later, an offline catch-up at
+// 21:14 or a minute going final after p, shows at the next publication,
+// never at the hour it came (D-public-daily). CreditAsOf counts only levels
+// A and B, since level C never reaches public totals (D11), only
+// revisions the server itself labeled witnessed or offline, so a
+// backfilled revision adds nothing whatever level its device claims
+// (DESIGN 7.4), and a pending minute only once PENDING_WINDOW_S has
+// passed, which every minute of a date ended everywhere has (D1). The
+// agent's time on its own doesn't count. Nothing in it names a project or
+// says when in a day the time was, and its dates don't depend on the
+// account's zone, only on p.
 //
-// It reads the rollups as they are now, so for a past p it gives today's
-// numbers for that window, not the ones published at p: a revision a late
-// upload makes to a date already shown shows at the next publication, but
-// makes no event by itself. WP-SV9's page decides what it showed at each
-// publication, and its Profiles.Totals can give exactly that.
+// It makes PublicDays reads. The topic's pass makes two calls a profile a
+// day; a page that shows a profile on every view should keep each
+// publication's answer from 12:00 UTC to the next (WP-SV9).
 func PublicTotals(ctx context.Context, q rollup.Querier, account string, p time.Time) (ProfileTotals, error) {
 	last, err := time.Parse(dashboard.DateLayout, endedEverywhere(p))
 	if err != nil {
 		return ProfileTotals{}, err
 	}
-	from := last.AddDate(0, 0, -(PublicDays - 1)).Format(dashboard.DateLayout)
-	rows, err := rollup.Read(ctx, q, account, from, last.Format(dashboard.DateLayout))
-	if err != nil {
-		return ProfileTotals{}, err
-	}
-	return publicDays(rows), nil
-}
-
-// publicDays sums rollup rows into a profile event's days: final time at
-// levels A and B, by day.
-func publicDays(rows []rollup.Day) ProfileTotals {
-	sums := make(map[string]int64)
-	for _, r := range rows {
-		if r.Kind == "" {
-			// The agent's time on its own.
-			continue
-		}
-		for i, level := range rollup.Levels {
-			if level != "C" {
-				sums[r.Day] += r.FinalMS[i]
-			}
-		}
-	}
 	out := ProfileTotals{Days: []ProfileDay{}}
-	for day, ms := range sums {
-		if ms > 0 {
+	for i := PublicDays - 1; i >= 0; i-- {
+		day := last.AddDate(0, 0, -i).Format(dashboard.DateLayout)
+		c, err := rollup.CreditAsOf(ctx, q, account, day, p.UnixMilli())
+		if err != nil {
+			return ProfileTotals{}, err
+		}
+		if ms := c.Total(); ms > 0 {
 			out.Days = append(out.Days, ProfileDay{Date: day, CreditedS: float64(ms) / 1000})
 		}
 	}
-	slices.SortFunc(out.Days, func(a, b ProfileDay) int { return cmp.Compare(a.Date, b.Date) })
-	return out
+	return out, nil
 }
 
 // daily runs the profile pass at every 12:00 UTC until Close.

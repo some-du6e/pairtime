@@ -38,27 +38,35 @@
 //
 // # Event ids, the ring buffers and resync
 //
-// Every topic keeps its events of the last Window (5 minutes), at most
-// ringMax of them. Each topic counts its events from 1 under an epoch, a
-// random tag the topic gets when it is made, so a restart, or a topic that
-// went idle and was made again, starts a new count. An event's id is the
-// stream's place in every topic it carries, "<topic>:<epoch>-<n>" for each,
-// joined by commas, as "user:me:k3j9x2abcde7q-18". A browser sends the last
-// id it saw as Last-Event-ID when it reconnects, so one id has to say where
-// the stream stood in all its topics. The numbers are per topic, and never
-// one count the whole server shares: from a shared count, an anonymous
-// viewer of a profile, or any signed-in owner, could see how many events
-// other accounts' topics had between two of their own, and on a small
-// server that times when other people work. Per topic, a stream learns
-// nothing from an id but its own topics' events.
+// An event's id is the stream's place in every topic it carries,
+// "<topic>:<epoch>-<n>" for each, joined by commas, as
+// "user:me:k3j9x2abcde7q-18". A browser sends the last id it saw as
+// Last-Event-ID when it reconnects, so one id has to say where the stream
+// stood in all its topics. The numbers are per topic, and never one count
+// the whole server shares: from a shared count, an anonymous viewer of a
+// profile, or any signed-in owner, could see how many events other
+// accounts' topics had between two of their own, and on a small server
+// that times when other people work. Per topic, a stream learns nothing
+// from an id but its own topics' events.
 //
-// A reconnect whose id is from the topic's epoch and whose gap the ring
-// still holds gets the gap replayed, in order. Any other id gets an event
-// named resync, whose data names the topics to refetch, and the page
-// refetches its snapshot (GET /api/v1/users/me/dashboard). A stream's first
-// block carries its place as an id with no data, which sets the browser's
-// last id without dispatching an event, so a reconnect before the first
-// event still resumes where the stream was.
+// A user topic keeps its events of the last Window (5 minutes), at most
+// ringMax of them and ringBytes of their bytes, and counts them from 1
+// under an epoch, a random tag the topic gets when it is made, so a
+// restart, or a topic no stream was on for the window and that was made
+// again, starts a new count. A reconnect whose id is from the topic's
+// epoch and whose gap the ring still holds gets the gap replayed, in
+// order. Any other id gets an event named resync, whose data names the
+// topics to refetch, and the page refetches its snapshot (GET
+// /api/v1/users/me/dashboard). A stream's first block carries its place as
+// an id with no data, which sets the browser's last id without dispatching
+// an event, so a reconnect before the first event still resumes where the
+// stream was.
+//
+// A profile topic's id is different on purpose: the hub's one
+// profileEpoch and the day of the last 12:00 UTC publication
+// (dayNumber), the same for every viewer and across the topic being made
+// again, so nobody can tell from it whether others watch. Nothing is
+// replayed: a reconnect from another day gets resync.
 //
 // # Publishing
 //
@@ -69,7 +77,10 @@
 // most once every Gap (1 s) per account, so a burst of uploads makes one
 // event and the first change of a quiet minute goes out at once. Gap stays
 // under half of R5's 2 s, which SP 6.3's 2 s would use up alone. Nothing is
-// read for an account with no stream open.
+// read for an account with no stream open, or none in the last Window. A
+// read that fails is tried again, Gap later and then twice as long each
+// time, and after maxReadRetries the topic's streams get resync, so each
+// page refetches its numbers itself.
 //
 // Publishing never blocks: an event goes to each stream's buffer without
 // waiting, and a stream whose buffer is full has fallen behind, so the hub
@@ -151,12 +162,14 @@ const (
 const MaxTopics = 8
 
 // ringMax and ringBytes are the most events, and the most bytes of them,
-// a topic keeps, whatever their age, which bounds a busy topic's memory. A
-// reconnect that needs one it dropped gets resync. A user topic publishes
-// at most one event a Gap, and a profile topic one a day.
+// a topic keeps, whatever their age, which bounds a busy topic's memory: at
+// 10,000 streams on as many topics, 160 MB at most. A reconnect that needs
+// one it dropped gets resync. A user topic publishes at most one event a
+// Gap, and its events carry whole totals, so the page needs none of the
+// older ones; a profile topic publishes one a day and replays none.
 const (
-	ringMax   = 32
-	ringBytes = 32 << 10
+	ringMax   = 16
+	ringBytes = 16 << 10
 )
 
 // sendBuffer is how many events a stream can be behind before the hub
@@ -314,7 +327,8 @@ const (
 type topic struct {
 	// key is userKey or profileKey and the account's id.
 	key, account string
-	// epoch tags this topic's event numbers (newEpoch).
+	// epoch tags a user topic's event numbers (newEpoch). A profile
+	// topic has none: its ids take the hub's profileEpoch.
 	epoch string
 	// seq is the number of the last event published, 0 before the first.
 	seq uint64
@@ -378,8 +392,9 @@ func (h *Hub) topicLocked(key, account string) *topic {
 	}
 	// A topic is made for a stream that subscribes at once, which clears
 	// idle; until then it counts as just left.
-	t = &topic{key: key, account: account, epoch: newEpoch(), subs: make(map[*sub]int), idle: time.Now()}
+	t = &topic{key: key, account: account, subs: make(map[*sub]int), idle: time.Now()}
 	if strings.HasPrefix(key, userKey) {
+		t.epoch = newEpoch()
 		t.owner = &ownerState{}
 	}
 	h.topics[key] = t
@@ -483,20 +498,14 @@ func (h *Hub) sweep() {
 // still holds: a reconnect to it gets resync from the topic made in its
 // place. A topic whose account keeps changing publishes into its ring
 // while nobody is there, so the ring alone would keep it, and its reads,
-// for as long as the changes come. A user topic in the middle of a read
-// stays until the read is done.
+// for as long as the changes come.
 func (h *Hub) sweepOnce(now time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for key, t := range h.topics {
-		trimLocked(t, now, h.o.Window)
-		if !h.abandonedLocked(t, now) {
-			continue
+	for key := range h.topics {
+		if t := h.liveTopicLocked(key, now); t != nil {
+			trimLocked(t, now, h.o.Window)
 		}
-		if t.owner != nil && t.owner.busy {
-			continue
-		}
-		delete(h.topics, key)
 	}
 }
 
@@ -504,6 +513,21 @@ func (h *Hub) sweepOnce(now time.Time) {
 // after which nothing a reconnect could replay is worth reading for it.
 func (h *Hub) abandonedLocked(t *topic, now time.Time) bool {
 	return len(t.subs) == 0 && now.Sub(t.idle) >= h.o.Window
+}
+
+// liveTopicLocked returns the topic of key, or nil when there is none or it
+// was abandoned, which it then drops at once rather than wait for the
+// sweep: a change it ignored mustn't leave a reconnect told its old place
+// is current, and the topic made in its place has a new epoch. A read in
+// flight for it publishes nothing, since its topic is no longer the one in
+// the hub.
+func (h *Hub) liveTopicLocked(key string, now time.Time) *topic {
+	t := h.topics[key]
+	if t != nil && h.abandonedLocked(t, now) {
+		delete(h.topics, key)
+		return nil
+	}
+	return t
 }
 
 // position is a stream's place in one topic: the epoch and number of the
