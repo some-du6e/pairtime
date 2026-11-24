@@ -537,22 +537,22 @@ func (l *Loop) open() error {
 // unlocked the screen, in record order, so the order the ledger holds them
 // in doesn't matter.
 //
-// A place an agent between WP-HL1's first part and D-sampleless-power
-// saved (V 1) kept Stamped and RestartAt, folded as this agent folds them,
-// so they stay as saved and only Lock is folded again. A place an agent
-// before WP-HL1 saved (V 0) gets Stamped and RestartAt too. RestartAt is
-// folded again in record order (restartAt) over every record of the
-// sampler's and every stamped one, as fold took them, since records drops
-// a carried Power, Presence or Lock dated before the restart: the rebuilt
-// Lock can be older than both of the others, or the only one there with
-// Power, as on a machine whose idle read never succeeded.
+// Stamped and RestartAt are folded again too, in record order (restartAt)
+// over every record of the sampler's and every stamped one, as fold took
+// them, since records drops a carried Power, Presence or Lock dated before
+// the restart: the rebuilt Lock can be older than both of the others, or
+// the only one there with Power, as on a machine whose idle read never
+// succeeded. A place an agent before WP-HL1 saved (V 0) has neither. A
+// place an agent between WP-HL1's first part and D-sampleless-power saved
+// (V 1) has both, but when v0.1.0-alpha.7 rebuilt it from an older place
+// it folded RestartAt only from the earlier of Power and Presence, and
+// only with both there, so it can miss the restart that drops the rebuilt
+// Lock. Each takes the later of the saved and the folded value, so a saved
+// one never moves back, as when a batch before the place doesn't read.
 func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	out := c.Carry
 	out.Lock = nil
-	v0 := c.Carry.V < 1
-	if v0 {
-		out.Stamped, out.RestartAt = 0, 0
-	}
+	var stamped int64
 	var marks []mark
 	var f follower
 	err := l.readBatches(1, func(b ledger.Batch) error {
@@ -570,12 +570,9 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 			if p, ok := ev.Data.(*event.OSPower); ok && locks(p) {
 				out.Lock = latest(out.Lock, ev)
 			}
-			if !v0 {
-				continue
-			}
 			s, st := sampler(&ev), stamps(&ev)
 			if st {
-				out.Stamped = max(out.Stamped, ev.T)
+				stamped = max(stamped, ev.T)
 			}
 			if s || st {
 				marks = append(marks, mark{t: ev.T, seq: ev.Seq, sampler: s})
@@ -590,9 +587,8 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	if err != nil && !errors.Is(err, errEnough) {
 		return carry{}, err
 	}
-	if v0 {
-		out.RestartAt = restartAt(marks, l.opts.Params.Int(params.BUCKET_TTL_S)*1000)
-	}
+	out.Stamped = max(c.Carry.Stamped, stamped)
+	out.RestartAt = max(c.Carry.RestartAt, restartAt(marks, l.opts.Params.Int(params.BUCKET_TTL_S)*1000))
 	out.V = carryVersion
 	return out, nil
 }

@@ -560,7 +560,7 @@ func TestOlderPlaceCarry(t *testing.T) {
 			if (kept.Lock != nil) != tc.lock {
 				t.Fatalf("the window kept a carry with lock %v; the case needs the lid close's lock in it %v", kept.Lock != nil, tc.lock)
 			}
-			olderPlace(t, r, 0)
+			olderPlace(t, r, 0, false)
 			r.rescore()
 			if got := r.savedCursor().Carry; !reflect.DeepEqual(got, kept) {
 				t.Errorf("the rebuilt carry is\n%s\nand the window kept\n%s", carryJSON(t, got), carryJSON(t, kept))
@@ -594,8 +594,9 @@ func TestOlderPlaceCarry(t *testing.T) {
 // the restart there. Rebuilt from the ledger, the carry must be
 // the one the window kept, with its restart dropping the lock, whether the
 // place came before WP-HL1 or between its first part and
-// D-sampleless-power (#353), and the loop must give what one Step over
-// every record gives, minute by minute.
+// D-sampleless-power (#353), alpha.7's rebuild of an older place included,
+// which kept no restart_at (#362), and the loop must give what one Step
+// over every record gives, minute by minute.
 func TestOlderPlaceNoSample(t *testing.T) {
 	// unsampled returns evs without their presence samples.
 	unsampled := func(evs []event.Event) []event.Event {
@@ -607,9 +608,15 @@ func TestOlderPlaceNoSample(t *testing.T) {
 	tests := []struct {
 		name string
 		v    int
+		// restart says a v 1 place kept the restart_at its agent's own fold
+		// gave it, where alpha.7's rebuild of an older place found none.
+		restart bool
 	}{
-		{"a place an agent before WP-HL1 saved gets the restart folded again from every record before the window, so the suspend drops the rebuilt lock", 0},
-		{"a place v0.1.0-alpha.7 saved keeps its restart, which drops the rebuilt lock", 1},
+		{"a place an agent before WP-HL1 saved gets the restart folded again from every record before the window, so the suspend drops the rebuilt lock",
+			0, false},
+		{"a place v0.1.0-alpha.7 saved from its own fold keeps its restart, which drops the rebuilt lock", 1, true},
+		{"a place v0.1.0-alpha.7 rebuilt from an older one, at v 1 with no restart_at, gets the restart folded again, which drops the rebuilt lock",
+			1, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -665,7 +672,7 @@ func TestOlderPlaceNoSample(t *testing.T) {
 				t.Fatalf("the window kept a carry with power %v, presence %v, lock %v and restart_at %d; the case needs the suspend, no sample, the lock and the restart at the suspend",
 					kept.Power != nil, kept.Presence != nil, kept.Lock != nil, kept.RestartAt)
 			}
-			olderPlace(t, r, tc.v)
+			olderPlace(t, r, tc.v, tc.restart)
 			r.rescore()
 			if got := r.savedCursor().Carry; !reflect.DeepEqual(got, kept) {
 				t.Errorf("the rebuilt carry is\n%s\nand the window kept\n%s", carryJSON(t, got), carryJSON(t, kept))
@@ -853,9 +860,12 @@ func carryJSON(t *testing.T, c carry) string {
 // olderPlace rewrites the scorer's place in the rig's state.json as an
 // older agent saved it: for v 0, one before WP-HL1, a carry with no
 // stamped, restart_at, lock or v; for v 1, one between WP-HL1's first part
-// and D-sampleless-power, such as v0.1.0-alpha.7, a carry with stamped and
-// restart_at but no lock, at v 1.
-func olderPlace(t *testing.T, r *rig, v int) {
+// and D-sampleless-power, such as v0.1.0-alpha.7, a carry with stamped but
+// no lock, at v 1, and with restart_at when restart is set. alpha.7's own
+// fold keeps restart_at, and its rebuild of an older place, which folded
+// it only from the earlier of Power and Presence, finds none on a machine
+// with no Presence.
+func olderPlace(t *testing.T, r *rig, v int, restart bool) {
 	t.Helper()
 	data, err := os.ReadFile(r.path("state.json"))
 	if err != nil {
@@ -882,6 +892,9 @@ func olderPlace(t *testing.T, r *rig, v int) {
 		delete(carry, "v")
 	case 1:
 		carry["v"] = json.RawMessage("1")
+		if !restart {
+			delete(carry, "restart_at")
+		}
 	default:
 		t.Fatalf("no older carry version %d", v)
 	}

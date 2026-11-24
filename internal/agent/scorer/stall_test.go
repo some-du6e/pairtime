@@ -67,8 +67,8 @@ func TestStallNote(t *testing.T) {
 		{name: "with FinalBefore held at a slot nothing decides and a browser in front, the note still names that slot",
 			fb: at - 3*60*minute, sampled: at - 57*minute, undecided: at - 3*60*minute, focus: event.AppBrowser,
 			want: []string{"no presence sample came within 2 h after the first of those minutes"}},
-		{name: "with a slot nothing decides after FinalBefore, the one after the last sample while a lookup holds FinalBefore earlier, the note doesn't name that slot",
-			fb: at - 40*minute, sampled: at - 21*minute, undecided: at - 20*minute, focus: event.AppBrowser},
+		{name: "with a slot nothing decides after FinalBefore, which the clock passed while a bridge record dated ahead released the gap hold, and a lookup holding FinalBefore at a browser run's start before it, the note doesn't name that slot",
+			fb: at - 3*60*minute - 13*minute, sampled: at - minute, undecided: at - 2*60*minute - 6*minute, focus: event.AppBrowser},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
