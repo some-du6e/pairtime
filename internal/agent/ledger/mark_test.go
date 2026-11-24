@@ -479,7 +479,16 @@ func (r *markRig) write(ms int64) {
 // frame that records the mark.
 func (r *markRig) sweep() {
 	name := filepath.Join(r.dir, batchesName)
-	was, err := os.Stat(name)
+	// As the file stands before the sweep, by an open handle: Windows reads
+	// a file's identity from a handle at once, but reads the identity of
+	// one os.Stat gave by its name only when SameFile asks, after the sweep
+	// may have replaced the file.
+	f, err := os.Open(name)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	was, err := f.Stat()
+	f.Close()
 	if err != nil {
 		r.t.Fatal(err)
 	}
