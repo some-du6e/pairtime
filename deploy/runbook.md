@@ -260,14 +260,16 @@ Each upgrade is a PR that changes an image line in `compose.yml`: pairtimed's by
 ```sh
 cd /srv/pairtime/deploy
 cp config/pairtime.toml "config/pairtime.toml.before-$(date -u +%Y%m%d)"
+before=$(git -C /srv/pairtime rev-parse HEAD)
 git -C /srv/pairtime pull --ff-only
 sudo install -d -m 0700 -o 65532 -g 65532 data/tmp
 docker compose pull
 docker compose up -d
+git -C /srv/pairtime diff --quiet "$before" HEAD -- deploy/witness || docker compose restart witness
 docker compose exec pairtimed pairtimed doctor
 ```
 
-Keep the copy of `pairtime.toml`: a rollback can need it. Migrations only add in v1 and run when pairtimed starts. The `install -d` line makes `data/tmp` on a host set up before #123, whose step 2 didn't, and only sets the owner and mode again where it is there: images from before #123 don't make it, and without it SQLite's temporary files go to the 256 MiB `/tmp`.
+The witness runs `witness/push.sh` and reads `witness/known_hosts` through single-file bind mounts, and `up -d` doesn't recreate a container when only a file it mounts changed, so it would keep running the old files. The line before doctor restarts it whenever the pull changed `deploy/witness/`. Keep the copy of `pairtime.toml`: a rollback can need it. Migrations only add in v1 and run when pairtimed starts. The `install -d` line makes `data/tmp` on a host set up before #123, whose step 2 didn't, and only sets the owner and mode again where it is there: images from before #123 don't make it, and without it SQLite's temporary files go to the 256 MiB `/tmp`.
 
 **After each release.** The host's `/install.sh` and `/install.ps1` serve the release that `ScriptsRelease` pins in `internal/server/pages/install.go`, not the newest one. After each release, a PR moves that copy and sets `ScriptsRelease`, as `internal/server/pages/install/README.md` says. Then a bump pins an image built from that commit or a later one. Once the bump is up, check that the host serves the pinned release's scripts. Each pair of lines must print the same SHA-256: the first reads the pinned manifest's `install_scripts` from the commit the image was built from (it needs `jq`), and the second hashes what the host serves.
 
