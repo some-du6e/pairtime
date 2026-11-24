@@ -9,7 +9,7 @@ import { defineConfig, type Plugin } from 'vite';
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
 // Each UI builds on its own, `vite build --mode <name>`, so the local
-// dashboard carries only the code it uses. All three share src/shared/
+// dashboard carries only the code it uses. Both share src/shared/
 // (DESIGN 3.11). Vite reserves the mode name "local" for .env.local files,
 // so the local dashboard's mode is "agent", after the binary that embeds it.
 const apps = {
@@ -17,9 +17,6 @@ const apps = {
 	// with go:embed and serves it on 127.0.0.1, so this build replaces the
 	// checked-in placeholder there (DESIGN 3.9, 3.12).
 	agent: { root: 'src/local', outDir: '../internal/webui/dist' },
-	// The server UI, which pairtimed will embed once it has pages
-	// (WP-SV8, WP-SV9).
-	server: { root: 'src/server', outDir: 'dist/server' },
 	// Every shared component on one page, for Playwright and for whoever
 	// works on them. Never shipped.
 	gallery: { root: 'src/gallery', outDir: 'dist/gallery' },

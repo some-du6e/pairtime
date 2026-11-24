@@ -12,6 +12,7 @@
 <style>{{.CSS}}</style>
 </head>
 <body{{with .Class}} class="{{.}}"{{end}}>
+<a class="skip" href="#main">Skip to content</a>
 <header>
 <a class="name" href="/">pairtime</a>
 {{- with .Account}}
@@ -28,7 +29,7 @@
 </div>
 {{- end}}
 </header>
-<main>
+<main id="main" tabindex="-1">
 {{.Body}}</main>
 <footer>
 <p>pairtime {{.Version}} is free software under the AGPL-3.0 license. <a href="{{.Source}}">Read the code this server runs</a>.</p>

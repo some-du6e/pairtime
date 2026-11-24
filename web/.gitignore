@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 node_modules/
-# Builds: the server UI and the component gallery. The local dashboard
+# Builds: the component gallery, and each build's bundle record. The local dashboard
 # builds into ../internal/webui/dist, which the root .gitignore covers.
 dist/
 # Types generated from docs/api/*.openapi.yaml by `npm run gen`.

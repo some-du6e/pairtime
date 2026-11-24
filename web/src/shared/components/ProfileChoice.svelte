@@ -14,9 +14,10 @@
 	//   first.
 	//
 	// The preview of the public profile comes from the caller: local
-	// aggregates on the device (WP-UI3), the server's own data in the server
-	// UI (WP-SV9). Every caller gives one, because the copy in both modes
-	// introduces it and DESIGN 8.3 has the card show the real preview.
+	// aggregates on the device (WP-UI3). pairtimed's own profile card is a Go
+	// template that says the same words (PLAN, ground rule 12). Every caller
+	// gives one, because the copy in both modes introduces it and DESIGN 8.3
+	// has the card show the real preview.
 	interface Props {
 		mode: ProfileMode;
 		/** Gets the choice each time the teen presses a button. */

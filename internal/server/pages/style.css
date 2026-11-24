@@ -123,6 +123,10 @@ header {
 button { background: transparent; color: var(--fg); border-color: var(--line); }
 button:hover { border-color: var(--muted); }
 a:focus-visible, button:focus-visible { outline: 3px solid var(--link); outline-offset: 2px; }
+/* The skip link, the first stop of Tab on every page, as AppShell's: out
+   of sight until it has focus, and then it moves focus to <main>. */
+.skip { position: absolute; left: 0.5rem; top: -3rem; padding: 0.5rem 0.75rem; border-radius: 8px; background: var(--link); color: var(--on-link); text-decoration: none; }
+.skip:focus { top: 0.5rem; }
 main { padding-top: 1.5rem; }
 h1 { font-size: 2rem; line-height: 1.2; }
 h2 { font-size: 1.4rem; line-height: 1.3; margin-top: 2.2rem; }
