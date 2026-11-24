@@ -61,6 +61,7 @@ func (w *window) add(ev event.Event, b uint64) {
 	if ev.T < w.from {
 		w.carry.fold(ev, w.gaps, w.ttl)
 		w.carry.prune(w.from)
+		w.keepAsks()
 		return
 	}
 	w.recs = append(w.recs, held{ev: ev, b: b})
@@ -89,6 +90,23 @@ func (w *window) slide(from int64) {
 	w.recs = kept
 	w.from = from
 	w.carry.prune(from)
+	w.keepAsks()
+}
+
+// keepAsks drops each carried session's asks that no record a Step reads
+// can need (sessionCarry.keepAsks): the readers are the session's records
+// in the window and in the carry. A record that comes later is numbered
+// after every one there, so the asks numbered last serve it.
+func (w *window) keepAsks() {
+	readers := make(map[string][]uint64)
+	for _, h := range w.recs {
+		if w.carry.Sessions[h.ev.SessionKey] != nil {
+			readers[h.ev.SessionKey] = append(readers[h.ev.SessionKey], h.ev.Seq)
+		}
+	}
+	for k, s := range w.carry.Sessions {
+		s.keepAsks(readers[k])
+	}
 }
 
 // carryGraceMS bounds how long before the window a carried record is
@@ -265,7 +283,7 @@ type carry struct {
 
 // carryVersion is the carry's format: since WP-HL1 it keeps Stamped and
 // RestartAt, since D-sampleless-power Lock, and since
-// E-prompt-class-asked each session's question state (AskOutput). Loaded
+// E-prompt-class-asked each session's question state (Asks). Loaded
 // from a place an older agent saved, a carry without them reads as if no
 // record the agent stamps itself, no restart, no lock and no question came
 // before the window, which keeps a sample whose reach a folded record
@@ -325,19 +343,20 @@ type sessionCarry struct {
 	Cut     bool         `json:"cut,omitempty"`
 	Stopped bool         `json:"stopped,omitempty"`
 	Native  bool         `json:"native,omitempty"`
-	// AskOutput and AskStop are its agent.output and agent.stop numbered
-	// last, of every path, and KeptOutput and KeptStop the ones numbered
-	// last of the paths that aren't side doors: what the answer class of a
-	// prompt in the window reads of the records before it, in seq order,
-	// not by t. FirstNative is its record numbered first that came
-	// through a hook or a log reader, after which a side door's question
-	// counts for no prompt (SM 2.2; ledger-v1 10.7). carry.records dates
-	// them before anything they could start reaches the window.
-	AskOutput   *event.Event `json:"ask_output,omitempty"`
-	AskStop     *event.Event `json:"ask_stop,omitempty"`
-	KeptOutput  *event.Event `json:"kept_output,omitempty"`
-	KeptStop    *event.Event `json:"kept_stop,omitempty"`
-	FirstNative *event.Event `json:"first_native,omitempty"`
+	// Asks are its agent.output and agent.stop records that the answer
+	// class of a record a Step reads can still need, in seq order: of
+	// outputs and of stops, of every path and of the paths that aren't
+	// side doors, the one numbered last, and the one numbered last before
+	// each of the session's records in the window and in the carry. The
+	// class reads the records numbered before a prompt, not by t, so a
+	// record folded in after a prompt was numbered, as a log reader's late
+	// one is, must not hide what the prompt read (keepAsks). FirstNative
+	// is its record numbered first that came through a hook or a log
+	// reader, after which a side door's question counts for no prompt (SM
+	// 2.2; ledger-v1 10.7). carry.records dates them before anything they
+	// could start reaches the window.
+	Asks        []*event.Event `json:"asks,omitempty"`
+	FirstNative *event.Event   `json:"first_native,omitempty"`
 	// Last is the t of the session's latest record folded in.
 	Last int64 `json:"last"`
 }
@@ -478,37 +497,61 @@ func (c *carry) fold(ev event.Event, g runGaps, ttl int64) {
 }
 
 // question folds ev, a record of the session, into what the answer class
-// reads (sessionCarry.AskOutput), as pkg/score's askedBefore does: by seq,
-// whatever order the records slide out in.
+// reads (sessionCarry.Asks), as pkg/score's askedBefore does: by seq,
+// whatever order the records slide out in. keepAsks then drops the asks no
+// record can read.
 func (s *sessionCarry) question(ev event.Event) {
 	if !harnessKind(&ev) {
 		return
 	}
-	side := sideDoorVia(ev.Via)
 	switch ev.Data.(type) {
-	case *event.AgentOutput:
-		s.AskOutput = bySeq(s.AskOutput, ev, true)
-		if !side {
-			s.KeptOutput = bySeq(s.KeptOutput, ev, true)
-		}
-	case *event.AgentStop:
-		s.AskStop = bySeq(s.AskStop, ev, true)
-		if !side {
-			s.KeptStop = bySeq(s.KeptStop, ev, true)
+	case *event.AgentOutput, *event.AgentStop:
+		if !slices.ContainsFunc(s.Asks, func(o *event.Event) bool { return o.EventID == ev.EventID }) {
+			s.Asks = append(s.Asks, &ev)
 		}
 	}
 	if ev.Via == event.ViaHook || ev.Via == event.ViaLog {
-		s.FirstNative = bySeq(s.FirstNative, ev, false)
+		if s.FirstNative == nil || ev.Seq < s.FirstNative.Seq {
+			s.FirstNative = &ev
+		}
 	}
 }
 
-// bySeq returns whichever of cur and ev is numbered later, when last is
-// set, or first.
-func bySeq(cur *event.Event, ev event.Event, last bool) *event.Event {
-	if cur != nil && (cur.Seq == ev.Seq || (cur.Seq > ev.Seq) == last) {
-		return cur
+// keepAsks keeps the asks the answer class can read for a record numbered
+// at one of readers, the seqs of the session's records in the window, or
+// at one of the session's records in the carry, and for any record still
+// to come. Of outputs and of stops, of every path and of the paths that
+// aren't side doors, which askedBefore reads apart, that is the one
+// numbered last before each such seq, and the one numbered last of all.
+func (s *sessionCarry) keepAsks(readers []uint64) {
+	for _, e := range s.events() {
+		readers = append(readers, e.Seq)
 	}
-	return &ev
+	keep := make(map[string]bool)
+	for _, output := range []bool{true, false} {
+		for _, native := range []bool{false, true} {
+			var of []*event.Event
+			for _, e := range s.Asks {
+				_, isOutput := e.Data.(*event.AgentOutput)
+				if isOutput == output && !(native && sideDoorVia(e.Via)) {
+					of = append(of, e)
+				}
+			}
+			if len(of) == 0 {
+				continue
+			}
+			slices.SortFunc(of, func(a, b *event.Event) int { return cmp.Compare(a.Seq, b.Seq) })
+			keep[of[len(of)-1].EventID] = true
+			for _, seq := range readers {
+				i, _ := slices.BinarySearchFunc(of, seq, func(e *event.Event, seq uint64) int { return cmp.Compare(e.Seq, seq) })
+				if i > 0 {
+					keep[of[i-1].EventID] = true
+				}
+			}
+		}
+	}
+	s.Asks = slices.DeleteFunc(s.Asks, func(e *event.Event) bool { return !keep[e.EventID] })
+	slices.SortFunc(s.Asks, func(a, b *event.Event) int { return cmp.Compare(a.Seq, b.Seq) })
 }
 
 // harnessKind reports whether e belongs to a harness session, as
@@ -700,10 +743,10 @@ func (c *carry) records(out []event.Event, from int64, g runGaps, stamped, ttl i
 }
 
 // questions returns the records the answer class reads that the carry
-// keeps of the session (sessionCarry.AskOutput), each once.
+// keeps of the session (sessionCarry.Asks), each once.
 func (s *sessionCarry) questions() []*event.Event {
 	var out []*event.Event
-	for _, e := range []*event.Event{s.AskOutput, s.AskStop, s.KeptOutput, s.KeptStop, s.FirstNative} {
+	for _, e := range append(slices.Clone(s.Asks), s.FirstNative) {
 		if e != nil && !slices.ContainsFunc(out, func(o *event.Event) bool { return o.EventID == e.EventID }) {
 			out = append(out, e)
 		}

@@ -553,13 +553,16 @@ func (l *Loop) open() error {
 //
 // Each session the carry keeps gets its question state too, which an agent
 // before E-prompt-class-asked (V 2 or older) didn't keep, folded by seq
-// from the session's records before the window (sessionCarry.question).
+// from the session's records before the window (sessionCarry.question)
+// and kept for the session's records in the window and in the carry, as
+// the window keeps it (window.keepAsks).
 func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	out := c.Carry
 	out.Lock = nil
 	for _, s := range out.Sessions {
-		s.AskOutput, s.AskStop, s.KeptOutput, s.KeptStop, s.FirstNative = nil, nil, nil, nil, nil
+		s.Asks, s.FirstNative = nil, nil
 	}
+	readers := make(map[string][]uint64)
 	var stamped int64
 	var marks []mark
 	var f follower
@@ -572,7 +575,14 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 		}
 		for _, rec := range b.Records {
 			ev, ok, err := eventOf(rec, c.Device)
-			if err != nil || !ok || ev.T >= c.From {
+			if err != nil || !ok {
+				continue
+			}
+			if ev.T >= c.From {
+				// A record of the window, whose class can read the asks.
+				if out.Sessions[ev.SessionKey] != nil {
+					readers[ev.SessionKey] = append(readers[ev.SessionKey], ev.Seq)
+				}
 				continue
 			}
 			if p, ok := ev.Data.(*event.OSPower); ok && locks(p) {
@@ -597,6 +607,9 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	})
 	if err != nil && !errors.Is(err, errEnough) {
 		return carry{}, err
+	}
+	for k, s := range out.Sessions {
+		s.keepAsks(readers[k])
 	}
 	out.Stamped = max(c.Carry.Stamped, stamped)
 	out.RestartAt = max(c.Carry.RestartAt, restartAt(marks, l.opts.Params.Int(params.BUCKET_TTL_S)*1000))

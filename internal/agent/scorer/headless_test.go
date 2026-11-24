@@ -5,6 +5,7 @@ package scorer
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -466,14 +467,14 @@ func TestCarryReach(t *testing.T) {
 }
 
 // TestCarryQuestions checks the carry's question state
-// (sessionCarry.AskOutput) against pkg/score's answer class (SM 2.2;
-// ledger-v1 10.7): a prompt reads its session's outputs and stops numbered
-// before it, and once a hook or log record of the session is numbered
-// before it, not a side door's, whatever the window folded into the carry.
-// Each case's morning prompt comes eight hours after an evening the carry
+// (sessionCarry.Asks) against pkg/score's answer class (SM 2.2; ledger-v1
+// 10.7): a prompt reads its session's outputs and stops numbered before
+// it, and once a hook or log record of the session is numbered before it,
+// not a side door's, whatever the window folded into the carry. Each
+// case's morning prompt comes eight hours after an evening the carry
 // folded, typed into the terminal that hosts the session, and a Step over
-// the carry and the window must class it as one Step over every record
-// does.
+// the carry and the window must class it, and every prompt the carry
+// holds, as one Step over every record does.
 func TestCarryQuestions(t *testing.T) {
 	table := testTable()
 	evening := hookTurn(t, hookAt, hourTools())
@@ -536,20 +537,22 @@ func TestCarryQuestions(t *testing.T) {
 		}
 		return out
 	}
-	// morningClass is the class one Step over recs gives the morning prompt.
-	morningClass := func(t *testing.T, recs []event.Event) event.PromptClass {
+	// classes returns the class one Step over recs gives each turn's
+	// prompt, by turn key, and fails when the morning's has none.
+	classes := func(t *testing.T, recs []event.Event) map[string]event.PromptClass {
 		t.Helper()
 		_, out := score.Step(score.NewState(table, score.Device{}), recs)
 		var all score.Derived
 		all.Append(out.Final)
 		all.Append(out.Pending)
+		got := make(map[string]event.PromptClass)
 		for _, tu := range all.Turns {
-			if tu.TurnKey == "t_morning" {
-				return tu.PromptClass
-			}
+			got[tu.TurnKey] = tu.PromptClass
 		}
-		t.Fatal("no turn for the morning prompt")
-		return ""
+		if _, ok := got["t_morning"]; !ok {
+			t.Fatal("no turn for the morning prompt")
+		}
+		return got
 	}
 	cases := []struct {
 		name string
@@ -579,6 +582,24 @@ func TestCarryQuestions(t *testing.T) {
 					output(last+minuteMS, event.ViaLog, false), stop(last+3*minuteMS, event.ViaHook))
 				return append(out, typed(event.ViaHook)...)
 			}, event.ClassSubstantive},
+		{"a hook prompt after the hooked turn's question is an answer, though a log reader's output dated in the evening and numbered after the prompt folds into the carry: the carry keeps the question the prompt read",
+			func() []event.Event {
+				out := append(slices.Clone(evening), output(last+minuteMS, event.ViaLog, true), stop(last+2*minuteMS, event.ViaHook))
+				out = append(out, typed(event.ViaHook)...)
+				return append(out, output(last+3*minuteMS, event.ViaLog, false))
+			}, event.ClassAnswer},
+		{"a hooked prompt that answered a question keeps its class once the carry holds it, though its turn's output is numbered after it: the carry keeps the question the carried prompt read",
+			func() []event.Event {
+				i := slices.IndexFunc(evening, func(e event.Event) bool {
+					_, ok := e.Data.(*event.PromptSubmit)
+					return ok
+				})
+				asks := harness(evening[i].T-30_000, event.ViaLog, &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
+					AsksQuestion: true})
+				out := slices.Concat(evening[:i], []event.Event{asks}, evening[i:])
+				out = append(out, output(last+minuteMS, event.ViaLog, false))
+				return append(out, typed(event.ViaHook)...)
+			}, event.ClassSubstantive},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -592,12 +613,16 @@ func TestCarryQuestions(t *testing.T) {
 				w.add(e, uint64(i+1))
 			}
 			w.slide(morning - 30*minuteMS)
-			want := morningClass(t, all)
-			if want != c.want {
-				t.Fatalf("one Step over every record classes the morning prompt %q, and the case expects %q", want, c.want)
+			want := classes(t, all)
+			if want["t_morning"] != c.want {
+				t.Fatalf("one Step over every record classes the morning prompt %q, and the case expects %q", want["t_morning"], c.want)
 			}
-			if got := morningClass(t, w.records()); got != want {
-				t.Errorf("a Step over the carry and the window classes the morning prompt %q, and one Step over every record %q", got, want)
+			got := classes(t, w.records())
+			for _, k := range slices.Sorted(maps.Keys(got)) {
+				if got[k] != want[k] {
+					t.Errorf("a Step over the carry and the window classes turn %s's prompt %q, and one Step over every record %q",
+						k, got[k], want[k])
+				}
 			}
 		})
 	}
@@ -1055,7 +1080,7 @@ func olderPlace(t *testing.T, r *rig, v int, restart bool) {
 			t.Fatal(err)
 		}
 		for _, s := range sessions {
-			for _, k := range []string{"ask_output", "ask_stop", "kept_output", "kept_stop", "first_native"} {
+			for _, k := range []string{"asks", "first_native"} {
 				delete(s, k)
 			}
 		}
