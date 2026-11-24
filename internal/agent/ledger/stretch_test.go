@@ -1512,7 +1512,9 @@ func TestOldChainFoldsMoments(t *testing.T) {
 // online before it, with no stretch learned twice, and it takes the mark
 // just when the run that took the end had it due: after the Seen's end,
 // which no batch was sealed after, and not after a seal's own read of
-// config.toml, which marks no batch.
+// config.toml, which marks no batch; and then only when each of its
+// records was made after the restart's Open, as a mark Open restores
+// marks no batch that holds an older one (Writer.backFrom).
 func TestSweepKeepsWhatOpenFound(t *testing.T) {
 	// seenAt is a stretch end the agent saw ms after the start and kept, as
 	// state.json does, by both clocks.
@@ -1575,7 +1577,7 @@ func TestSweepKeepsWhatOpenFound(t *testing.T) {
 			3 * sweepDayMS, func(r *lateRig) []Input {
 				return []Input{r.logged("agent.output", 55_000), r.presence(3*sweepDayMS + 1000)}
 			}, 1, 1, false},
-		{"a stretch end the agent kept while the ledger was shut, before the sweep's day: the stretch stays ended, so a record made after that day is sealed online, and the batch takes the mark",
+		{"a stretch end the agent kept while the ledger was shut, before the sweep's day: the stretch stays ended, so a record made after that day is sealed online, but the batch takes no mark, as that record was made before the restart's Open",
 			func(t *testing.T, r *lateRig) (string, uint64) {
 				// The install's stretch, an online batch, and a second stretch,
 				// whose batch, 3, records it going on as the ledger shuts.
@@ -1607,7 +1609,7 @@ func TestSweepKeepsWhatOpenFound(t *testing.T) {
 				// One made after the sweep's day and before the restart, while
 				// config.toml said online, as a presence sample queued across it.
 				return []Input{r.presence(2*sweepDayMS + 1000), r.presence(3*sweepDayMS + 1000)}
-			}, 2, 1, true},
+			}, 2, 1, false},
 		{"a stretch end the agent kept while the ledger was shut, after the sweep's day: the stretch stays ended there, no stretch is learned twice, and the batch takes the mark",
 			func(t *testing.T, r *lateRig) (string, uint64) {
 				// The install's stretch and an online batch, then, days later,
@@ -1701,7 +1703,7 @@ func TestSweepKeepsWhatOpenFound(t *testing.T) {
 			}{
 				{"the writer has the stretches it had at the sweep, none going on", len(restored) == c.stretches && !slices.ContainsFunc(restored, func(s stretch) bool { return s.open })},
 				{"the first batch after the restart is sealed online, with the records it should keep", b.Online && len(b.Records) == c.kept},
-				{"and takes the mark when the end came after the sweep's day", b.Back == c.back},
+				{"and takes the mark when the end came after the sweep's day, and its records after the restart's Open", b.Back == c.back},
 			}
 			for _, ch := range checks {
 				t.Run(ch.name, func(t *testing.T) {
