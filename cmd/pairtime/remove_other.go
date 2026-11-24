@@ -40,6 +40,10 @@ func commitBinary(tmp, dst string) error { return os.Rename(tmp, dst) }
 // in dir, which only Windows needs (commitBinary there).
 func oldBinaries(string) []string { return nil }
 
+// placing reports whether an install still running may need p, a copy of
+// the binary it moved aside, to put back, which only Windows has.
+func placing(string) bool { return false }
+
 // removeOldBinaries deletes the copies of the binary that an install moved
 // aside in dir, which only Windows needs.
 func removeOldBinaries(string) {}

@@ -276,6 +276,20 @@ func TestSetShadow(t *testing.T) {
 			want: "[display]\nshadow = true\n[notifications]\nquiet_hours = \"\"\"22:00-07:00\"\"\"\n",
 			same: true,
 		},
+		{
+			name:    "a line inside a multi-line string that looks like the setting isn't taken for it, and the error says the multi-line string is why",
+			file:    "[display]\nnote = \"\"\"\nshadow = true\n\"\"\"\nshadow = false\n",
+			on:      true,
+			want:    "[display]\nnote = \"\"\"\nshadow = true\n\"\"\"\nshadow = false\n",
+			wantErr: "multi-line string",
+		},
+		{
+			name:    "a file that doesn't parse and spells [Display] in another case gets the lower-case hint, read from its lines",
+			file:    "[Display]\nshadow = \"yes\"\n",
+			on:      true,
+			want:    "[Display]\nshadow = \"yes\"\n",
+			wantErr: "in lower case",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
