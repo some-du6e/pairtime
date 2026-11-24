@@ -4,6 +4,8 @@ package install
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/install/wakacfg"
@@ -45,7 +47,10 @@ type WakaTimeOptions struct {
 // wakatime-cli's watermark, so that wakatime-cli doesn't send the agent
 // transcripts of the months before as new time (HC 1.5). First it writes
 // the setup file, which tells the agent the line's key and file, so that
-// the line is never there without it. It refuses a key that isn't in
+// the line is never there without it, and then the watermark, so that
+// wakatime-cli never reads a config pairtime made without one. It plans
+// the watermark again in a config pairtime made, so that install run again
+// after one that stopped seeds it. It refuses a key that isn't in
 // WakaTime's format before anything is opened for writing.
 func WakaTime(env Env, o WakaTimeOptions) (Item, error) {
 	if err := env.check(); err != nil {
@@ -72,28 +77,76 @@ func WakaTime(env Env, o WakaTimeOptions) (Item, error) {
 	if o.Port < 1 || o.Port > 65535 {
 		return Item{}, wakacfg.ErrPort
 	}
-	edits := []Edit{
-		wakaTimeSetup{path: setup, setup: wakacfg.Setup{Key: key, Config: paths.Config}},
-		wakaTimeLine{path: paths.Config, key: key, port: o.Port},
-	}
-	if !cfg.Exists {
+	edits := []Edit{wakaTimeSetup{path: setup, setup: wakacfg.Setup{Key: key, Config: paths.Config}}}
+	if !cfg.Exists || ownConfig(cfg, key) {
 		edits = append(edits, wakaTimeWatermark{path: paths.Internal, now: o.Now})
 	}
+	edits = append(edits, wakaTimeLine{path: paths.Config, key: key, port: o.Port, proxy: wakacfg.ProxyVar(env.getenv)})
 	return Item{ID: ItemWakaTime, Summary: "Sends WakaTime's heartbeats to pairtime's agent too", Edits: edits}, nil
 }
 
+// ownConfig reports whether cfg is a config pairtime made for key
+// (wakacfg.Make), which gets the watermark as a config pairtime makes does.
+func ownConfig(cfg Content, key string) bool {
+	if !cfg.Exists {
+		return false
+	}
+	s, err := wakacfg.Inspect(cfg.Data, key)
+	return err == nil && s.Own
+}
+
+// WakaTimeKey returns the key the WakaTime item gives pairtime's line when
+// its options name none: that of a line of pairtime's in the config
+// wakatime-cli reads for env, then the setup file's in data, pairtime's
+// data directory, or a new one. Install plans the item with it, so that
+// planning it again on the agent's port gives the same line.
+func WakaTimeKey(env Env, data string) (string, error) {
+	if err := env.check(); err != nil {
+		return "", err
+	}
+	paths, err := wakacfg.Find(env.Home, env.getenv)
+	if err != nil {
+		return "", err
+	}
+	cfg, err := readFile(paths.Config)
+	if err != nil {
+		return "", err
+	}
+	return wakaTimeKey(cfg, wakacfg.SetupFile(data))
+}
+
 // wakaTimeKey returns the key for pairtime's line: that of a line of
-// pairtime's in cfg, then the setup file's at setup, or a new one.
+// pairtime's under [api_urls] in cfg, then the setup file's at setup, then
+// the api_key of a config pairtime made, by its mark, or a new one. The
+// setup file's comes before a config pairtime made, whose api_key the
+// teen may have replaced with their own, as WakaTime's extension does
+// when they give it one.
 func wakaTimeKey(cfg Content, setup string) (string, error) {
 	if cfg.Exists {
-		if k, ok := wakacfg.Key(cfg.Data); ok {
+		if k, ok := wakacfg.LineKey(cfg.Data); ok {
 			return k, nil
 		}
 	}
 	if s, err := wakacfg.ReadSetup(setup); err == nil {
 		return s.Key, nil
 	}
+	if cfg.Exists {
+		if k, ok := wakacfg.Key(cfg.Data); ok {
+			return k, nil
+		}
+	}
 	return wakacfg.NewKey()
+}
+
+// wakaKeyOf returns the key recs record for pairtime's line, "" when they
+// hold no line of pairtime's, for Diff's mask of the config (Change.shown).
+func wakaKeyOf(recs []editRecord) string {
+	for _, r := range recs {
+		if r.Kind == kindWakaTimeLine {
+			return recordedKey(r.Data)
+		}
+	}
+	return ""
 }
 
 // WakaTimeConfig returns the config wakatime-cli reads for env, and
@@ -139,11 +192,24 @@ func recordedKey(data json.RawMessage) string {
 // wakaTimeLine is pairtime's line in the config wakatime-cli reads
 // (wakacfg.Add), or the config pairtime makes when there is none
 // (wakacfg.Make). It records the key, by which uninstall takes the line
-// out, and which the agent keeps when it rewrites the line's port.
+// out, and which the agent keeps when it rewrites the line's port. A
+// config the editor refuses is left alone, and the refusal says what to
+// change and to run install again, never a line to add by hand: no record
+// would keep that line's key, so the agent would refuse what wakatime-cli
+// sends to it, and those refusals hold back what it sends the teen's own
+// server too.
 type wakaTimeLine struct {
 	path string
 	key  string
 	port int
+	// proxy is the variable of install's environment that sets a proxy
+	// (wakacfg.ProxyVar), "" for none. While one is set the line goes in
+	// no config of the teen's: install's environment is most often the one
+	// the editors start in, and wakatime-cli would send the line through
+	// that proxy too. A config pairtime makes still goes in, since its only
+	// api_url is the agent on 127.0.0.1, which Go's environment proxies
+	// never reach.
+	proxy string
 }
 
 func (e wakaTimeLine) Target() Target          { return File(e.path) }
@@ -155,31 +221,24 @@ func (e wakaTimeLine) Apply(cur Content) (Content, error) {
 		data []byte
 		err  error
 	)
+	if cur.Exists && e.proxy != "" && !ownConfig(cur, e.key) {
+		return Content{}, fmt.Errorf("would get pairtime's line, but %[1]s is set here, and wakatime-cli started with it would send the line through that proxy too: the proxy would get your project and file names unencrypted, and while it doesn't pass them on to pairtime's agent, each send that fails holds back what wakatime-cli sends your own server, so pairtime leaves it alone; run pairtime install again without %[1]s to add pairtime's line", e.proxy)
+	}
 	if cur.Exists {
 		data, err = wakacfg.Add(cur.Data, e.key, e.port)
 	} else {
 		data, err = wakacfg.Make(e.key, e.port)
 	}
-	if err != nil {
-		return Content{}, &wakaTimeError{err: err, hint: wakacfg.ByHand(e.key, e.port)}
+	switch {
+	case errors.Is(err, wakacfg.ErrNotOwn):
+		return Content{}, fmt.Errorf("%w, so pairtime leaves it alone; to send your editor time to pairtime again, delete it and run pairtime install again", err)
+	case err != nil:
+		return Content{}, fmt.Errorf("%w, so pairtime leaves it alone; change that, then run pairtime install again to add pairtime's line", err)
 	}
 	next := cur
 	next.Exists, next.Data = true, data
 	return next, nil
 }
-
-// wakaTimeError is a config the editor refused, with what to add by hand
-// instead.
-type wakaTimeError struct {
-	err  error
-	hint string
-}
-
-func (e *wakaTimeError) Error() string {
-	return e.err.Error() + ", so pairtime leaves it alone; to send your editor time to pairtime, " + e.hint
-}
-
-func (e *wakaTimeError) Unwrap() error { return e.err }
 
 // undoWakaTimeLine takes pairtime's lines out of cur, a config that
 // changed since pairtime wrote it, as when the agent moved to another
@@ -187,12 +246,40 @@ func (e *wakaTimeError) Unwrap() error { return e.err }
 // pairtime's when the manifest has no key (wakacfg.Remove). A config
 // pairtime made goes once nothing else is left in it, and an [api_urls]
 // section that base, what the file held before, didn't have goes when no
-// key is left in it.
+// key is left in it, with the blank line and the line break install put
+// before it, and only those (wakacfg.Added).
+//
+// When base is cur itself, no record says what the file held before
+// install: planFound's check and planInstall, for a target the manifest
+// doesn't know, pass it so, as after pairtime's data directory was
+// deleted. What is pairtime's is then what Remove recognizes by its
+// marker, as adopt counts it: pairtime's lines, a config pairtime made, by
+// its api_url and api_key, and, in a file that holds a line of pairtime's,
+// an [api_urls] section no key is left in. A file with nothing of
+// pairtime's keeps every byte, an empty [api_urls] section of the teen's
+// included, since uninstall plans the item in every home. So does a file
+// the editor can't read that doesn't name the agent's endpoint anywhere
+// (wakacfg.Mentions), as one install left alone for that, and uninstall
+// has no problem with it.
 func undoWakaTimeLine(cur, base Content, data json.RawMessage) (Content, error) {
 	if !cur.Exists {
 		return cur, nil
 	}
-	out, gone, err := wakacfg.Remove(cur.Data, recordedKey(data), !base.Exists, !base.Exists || !wakacfg.HasAPIURLs(base.Data))
+	made := !base.Exists
+	var sec wakacfg.Section
+	switch {
+	case base.Same(cur):
+		if _, err := wakacfg.Inspect(cur.Data, ""); err != nil && !wakacfg.Mentions(cur.Data) {
+			return cur, nil // a file the package can't read, and nothing of pairtime's in it
+		}
+		_, holds := wakacfg.Key(cur.Data)
+		made, sec = true, wakacfg.Section{Header: holds, Blank: holds}
+	case !base.Exists:
+		sec = wakacfg.Section{Header: true, Blank: true}
+	case !wakacfg.HasAPIURLs(base.Data):
+		sec = wakacfg.Added(base.Data)
+	}
+	out, gone, err := wakacfg.Remove(cur.Data, recordedKey(data), made, sec)
 	if err != nil {
 		return Content{}, err
 	}

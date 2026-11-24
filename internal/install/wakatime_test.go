@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -196,7 +197,7 @@ func TestWakaTimeKeepsTheKey(t *testing.T) {
 		{name: "a line of pairtime's that is there keeps its key", cfg: string(hackatime) + "[api_urls]\n.+ = http://127.0.0.1:7250/api/v1|" + otherWakaKey + "\n", want: otherWakaKey},
 		{name: "the line's key wins over the setup file's", cfg: string(hackatime) + "[api_urls]\n.+ = http://127.0.0.1:7250/api/v1|" + otherWakaKey + "\n", setupKey: wakaKey, want: otherWakaKey},
 		{name: "without a line, the setup file's key comes back", cfg: string(hackatime), setupKey: wakaKey, want: wakaKey},
-		{name: "a config pairtime made keeps its api_key", cfg: "[settings]\napi_url = http://127.0.0.1:7250/api/v1\napi_key = " + otherWakaKey + "\n", want: otherWakaKey},
+		{name: "a config pairtime made keeps its api_key", cfg: "; made by pairtime install; pairtime uninstall takes it out\n[settings]\napi_url = http://127.0.0.1:7250/api/v1\napi_key = " + otherWakaKey + "\n", want: otherWakaKey},
 		{name: "with neither, the key is new", cfg: string(hackatime)},
 	}
 	for _, tt := range tests {
@@ -276,6 +277,47 @@ func TestWakaTimeUninstall(t *testing.T) {
 			items: true,
 			want:  hackatime,
 		},
+		{
+			name:   "with the data directory gone and pairtime's line taken out by hand, uninstall leaves the teen's empty [api_urls] section alone",
+			before: append(append([]byte(nil), hackatime...), "\n[api_urls]\n"...),
+			afterInstall: func(t *testing.T, h wakaHome) {
+				writeFile(t, h.cfg(), append(append([]byte(nil), hackatime...), "\n[api_urls]\n"...))
+				if err := os.RemoveAll(h.data); err != nil {
+					t.Fatal(err)
+				}
+			},
+			items: true,
+			want:  append(append([]byte(nil), hackatime...), "\n[api_urls]\n"...),
+		},
+		{
+			name: "with pairtime's data directory gone, uninstall still deletes the config pairtime made, by its mark",
+			afterInstall: func(t *testing.T, h wakaHome) {
+				if err := os.RemoveAll(h.data); err != nil {
+					t.Fatal(err)
+				}
+			},
+			items: true,
+		},
+		{
+			name: "a reinstall on another port with the data directory gone records the config pairtime made as pairtime's, so uninstall deletes it",
+			afterInstall: func(t *testing.T, h wakaHome) {
+				if err := os.RemoveAll(h.data); err != nil {
+					t.Fatal(err)
+				}
+				install(t, h.in, h.item(t, 7250, ""))
+			},
+		},
+		{
+			name:   "a reinstall on another port with the data directory gone records hackatime-setup's config without the section install added, so uninstall gives back the bytes",
+			before: hackatime,
+			afterInstall: func(t *testing.T, h wakaHome) {
+				if err := os.RemoveAll(h.data); err != nil {
+					t.Fatal(err)
+				}
+				install(t, h.in, h.item(t, 7250, ""))
+			},
+			want: hackatime,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -308,16 +350,57 @@ func setPort(t *testing.T, path string, port int) {
 	writeFile(t, path, out)
 }
 
+func TestWakaTimeUninstallWithoutRecord(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  string // the config, which install never changed
+		// problem says uninstall reports one: the file is one it can't
+		// read, and names the agent's endpoint.
+		problem bool
+	}{
+		{name: "a config the editor can't read, with nothing of pairtime's in it, is no problem for uninstall, which leaves it alone", cfg: "[settings]\napi_key = " + hackatimeKey + "\nexclude = C:\\x\\\n"},
+		{name: "a config the editor reads, with nothing of pairtime's in it, stays as it is", cfg: "[settings]\napi_key = " + hackatimeKey + "\n[api_urls]\n"},
+		{name: "a config the editor can't read that names the agent's endpoint is a problem uninstall reports", cfg: "[settings]\nexclude = C:\\x\\\n[api_urls]\n.+ = http://127.0.0.1:7247/api/v1|" + wakaKey + "\n", problem: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newWakaHome(t, nil)
+			writeFile(t, h.cfg(), []byte(tt.cfg))
+			p, err := h.in.PlanUninstall(h.item(t, 7247, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			if got := len(p.Problems) > 0; got != tt.problem {
+				t.Errorf("uninstall's problems are %q, want some: %v", p.Problems, tt.problem)
+			}
+			if !tt.problem && !p.Empty() {
+				t.Errorf("uninstall would change what install never did:\n%s", p.Diff())
+			}
+		})
+	}
+}
+
 func TestWakaTimeRefusals(t *testing.T) {
+	// aKey matches a key in WakaTime's format. No refusal shows one: a line
+	// added by hand with it would have no record for the agent to take it
+	// by, and the agent's refusals hold back what wakatime-cli sends the
+	// teen's own server too.
+	aKey := regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
 	tests := []struct {
 		name string
 		vars map[string]string
 		cfg  string // the config before install
+		key  string // the item's key, "" for the one install finds or makes
 		want string // part of the refusal
 	}{
-		{name: "a config with a key in quotes is left alone, with the line to add by hand", cfg: "[settings]\n\"api_key\" = " + hackatimeKey + "\n", want: "so pairtime leaves it alone; to send your editor time to pairtime, add this line under [api_urls] yourself"},
-		{name: "a config whose patterns are all taken is left alone", cfg: "[api_urls]\n.+ = https://a.example|" + hackatimeKey + "\n^.*$ = https://b.example|" + hackatimeKey + "\n(?s).* = https://c.example|" + hackatimeKey + "\n", want: "for each of the patterns pairtime's line can take"},
-		{name: "a relative WAKATIME_HOME is refused", vars: map[string]string{"WAKATIME_HOME": "waka"}, want: "a relative path"},
+		{name: "a config with an unclosed section is left alone, and the refusal says to change that and run install again", cfg: "[settings\napi_key = " + hackatimeKey + "\n", key: wakaKey, want: "line 1 opens a section with [ and doesn't close it with ], so pairtime leaves it alone; change that, then run pairtime install again to add pairtime's line"},
+		{name: "on a first install the refusal shows no key, since nothing would record the new one for the agent", cfg: "[settings]\nexclude = C:\\Users\\teen\\Downloads\\\n", want: "line 2 has a value that goes on"},
+		{name: "a config that sets a proxy is left alone, saying why, and doesn't show the proxy", cfg: "[settings]\napi_key = " + hackatimeKey + "\nproxy = http://teen:secret@proxy.example:3128\n", key: wakaKey, want: "sets a proxy, and wakatime-cli would send pairtime's line through it too"},
+		{name: "with HTTPS_PROXY set, a config of the teen's is left alone, naming the variable and never its value", vars: map[string]string{"HTTPS_PROXY": "http://teen:secret@proxy.example:3128"}, cfg: "[settings]\napi_key = " + hackatimeKey + "\n", key: wakaKey, want: "would get pairtime's line, but HTTPS_PROXY is set here"},
+		{name: "a config pairtime made whose api_key the teen replaced is left alone, saying how to start again", cfg: "; made by pairtime install; pairtime uninstall takes it out\n[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + hackatimeKey + "\n", key: wakaKey, want: "is the config pairtime made, with an api_key that isn't pairtime's any more, so pairtime leaves it alone; to send your editor time to pairtime again, delete it and run pairtime install again"},
+		{name: "a config whose patterns are all taken is left alone", cfg: "[api_urls]\n.+ = https://a.example|" + hackatimeKey + "\n^.*$ = https://b.example|" + hackatimeKey + "\n(?s).* = https://c.example|" + hackatimeKey + "\n", key: wakaKey, want: "for each of the patterns pairtime's line can take"},
+		{name: "a relative WAKATIME_HOME is refused", vars: map[string]string{"WAKATIME_HOME": "waka"}, key: wakaKey, want: "a relative path"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -325,7 +408,7 @@ func TestWakaTimeRefusals(t *testing.T) {
 			if tt.cfg != "" {
 				writeFile(t, h.cfg(), []byte(tt.cfg))
 			}
-			it, err := WakaTime(h.env, WakaTimeOptions{Data: h.data, Port: 7247, Now: wakaNow, Key: wakaKey})
+			it, err := WakaTime(h.env, WakaTimeOptions{Data: h.data, Port: 7247, Now: wakaNow, Key: tt.key})
 			if err == nil {
 				var p *Plan
 				if p, err = h.in.PlanInstall([]Item{it}); err == nil {
@@ -335,11 +418,196 @@ func TestWakaTimeRefusals(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("planning = %v, want an error saying %q", err, tt.want)
 			}
+			if k := aKey.FindString(err.Error()); k != "" || strings.Contains(err.Error(), "secret") {
+				t.Errorf("the refusal shows a key (%q) or the proxy: %v", k, err)
+			}
+			if got := readOrNil(t, wakacfg.SetupFile(h.data)); got != nil {
+				t.Errorf("a refused install wrote the setup file:\n%s", got)
+			}
 			if tt.cfg != "" {
 				if got := readOrNil(t, h.cfg()); string(got) != tt.cfg {
 					t.Errorf("the config changed:\n%q", got)
 				}
 			}
+		})
+	}
+}
+
+func TestWakaTimeLeavesTheTeensLocalServer(t *testing.T) {
+	// local is the config of a server of the teen's own on 127.0.0.1,
+	// such as Wakapi, whose api_url looks like the agent's.
+	const local = "[settings]\napi_url = http://127.0.0.1:3000/api/v1\napi_key = " + hackatimeKey + "\n"
+	tests := []struct {
+		name string
+	}{
+		{"a config of the teen's own server on 127.0.0.1 keeps its key and api_url, and gets pairtime's line beside it"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newWakaHome(t, nil)
+			writeFile(t, h.cfg(), []byte(local))
+			install(t, h.in, h.item(t, 7247, ""))
+			s, err := wakacfg.ReadSetup(wakacfg.SetupFile(h.data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Key == hackatimeKey {
+				t.Errorf("install took the teen's key %s as pairtime's", s.Key)
+			}
+			cfg := readOrNil(t, h.cfg())
+			if !bytes.HasPrefix(cfg, []byte(local)) {
+				t.Errorf("install changed the teen's settings:\n%s", cfg)
+			}
+			if st, err := wakacfg.Inspect(cfg, s.Key); err != nil || !st.Line || st.Own || st.Port != 7247 {
+				t.Errorf("Inspect = %+v, %v, want pairtime's line under [api_urls] on port 7247", st, err)
+			}
+			uninstall(t, h.in)
+			if got := readOrNil(t, h.cfg()); string(got) != local {
+				t.Errorf("after uninstall the config holds\n%q\nwant\n%q", got, local)
+			}
+		})
+	}
+}
+
+func TestWakaTimeKeyOrder(t *testing.T) {
+	const mark = "; made by pairtime install; pairtime uninstall takes it out\n"
+	made := mark + "[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + hackatimeKey + "\n"
+	tests := []struct {
+		name          string
+		cfg, setupKey string // "" for no config, no setup file
+		want          string
+	}{
+		{name: "a line of pairtime's under [api_urls] comes before the setup file's key", cfg: "[api_urls]\n.+ = http://127.0.0.1:7250/api/v1|" + otherWakaKey + "\n", setupKey: wakaKey, want: otherWakaKey},
+		{name: "the setup file's key comes before the api_key of a config pairtime made, which the teen may have replaced", cfg: made, setupKey: wakaKey, want: wakaKey},
+		{name: "with no setup file, a config pairtime made gives its api_key", cfg: made, want: hackatimeKey},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setup := wakacfg.SetupFile(t.TempDir())
+			if tt.setupKey != "" {
+				writeFile(t, setup, wakacfg.Setup{Key: tt.setupKey, Config: filepath.Join(t.TempDir(), ".wakatime.cfg")}.Encode())
+			}
+			cfg := Content{Exists: tt.cfg != "", Data: []byte(tt.cfg)}
+			got, err := wakaTimeKey(cfg, setup)
+			if err != nil || got != tt.want {
+				t.Errorf("wakaTimeKey = %s, %v, want %s", got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestWakaTimeProxyVariables(t *testing.T) {
+	// mark is the comment a config pairtime made starts with.
+	const mark = "; made by pairtime install; pairtime uninstall takes it out\n"
+	tests := []struct {
+		name string
+		vars map[string]string
+		cfg  string // the config before install, "" for none
+		// refused is a part of the refusal, "" when install takes the
+		// item.
+		refused string
+	}{
+		{name: "with HTTPS_PROXY set and no config, install still makes one, whose only api_url is the agent on 127.0.0.1, which no environment proxy reaches", vars: map[string]string{"HTTPS_PROXY": "http://proxy.example:3128"}},
+		{name: "with http_proxy set, a config pairtime made still gets the agent's port, as its only api_url is the agent", vars: map[string]string{"http_proxy": "http://proxy.example:3128"}, cfg: mark + "[settings]\napi_url = http://127.0.0.1:7250/api/v1\napi_key = " + wakaKey + "\n"},
+		{name: "with HTTPS_PROXY set, a config pairtime made whose api_url now names another server is refused, as any config of the teen's", vars: map[string]string{"HTTPS_PROXY": "http://proxy.example:3128"}, cfg: mark + "[settings]\napi_url = https://hackatime.hackclub.com/api/hackatime/v1\napi_key = " + hackatimeKey + "\n", refused: "would get pairtime's line, but HTTPS_PROXY is set here"},
+		{name: "an empty HTTPS_PROXY sets no proxy, as Go reads it", vars: map[string]string{"HTTPS_PROXY": ""}, cfg: "[settings]\napi_key = " + hackatimeKey + "\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newWakaHome(t, tt.vars)
+			if tt.cfg != "" {
+				writeFile(t, h.cfg(), []byte(tt.cfg))
+			}
+			if tt.refused != "" {
+				_, err := h.in.PlanInstall([]Item{h.item(t, 7247, "")})
+				if err == nil || !strings.Contains(err.Error(), tt.refused) {
+					t.Fatalf("PlanInstall = %v, want a refusal saying %q", err, tt.refused)
+				}
+				if got := readOrNil(t, h.cfg()); string(got) != tt.cfg {
+					t.Errorf("the config changed:\n%q", got)
+				}
+				return
+			}
+			install(t, h.in, h.item(t, 7247, ""))
+			s, err := wakacfg.ReadSetup(wakacfg.SetupFile(h.data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := readOrNil(t, h.cfg())
+			st, err := wakacfg.Inspect(cfg, s.Key)
+			if err != nil || !st.Line || st.Port != 7247 {
+				t.Errorf("Inspect = %+v, %v, want pairtime's line on port 7247", st, err)
+			}
+			if tt.cfg == "" && (!st.Own || strings.Count(string(cfg), "api_url") != 1 || !strings.Contains(string(cfg), "api_url = http://127.0.0.1:7247/api/v1\n")) {
+				t.Errorf("the config install made is\n%s\nwant pairtime's own, whose only api_url is the agent on 127.0.0.1", cfg)
+			}
+		})
+	}
+}
+
+func TestWakaTimeWatermark(t *testing.T) {
+	// changes returns the paths the plan for the WakaTime item in h
+	// changes, in the order Apply writes them.
+	changes := func(t *testing.T, h wakaHome) []string {
+		t.Helper()
+		p, err := h.in.PlanInstall([]Item{h.item(t, 7247, wakaKey)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer p.Close()
+		var paths []string
+		for _, c := range p.Changes {
+			paths = append(paths, c.Target.Path)
+		}
+		return paths
+	}
+	index := func(paths []string, path string) int {
+		for i, p := range paths {
+			if p == path {
+				return i
+			}
+		}
+		return -1
+	}
+	tests := []struct {
+		name  string
+		check func(t *testing.T, h wakaHome)
+	}{
+		{
+			name: "with no config, the watermark is written before the config, so wakatime-cli never reads the config without it",
+			check: func(t *testing.T, h wakaHome) {
+				paths := changes(t, h)
+				if w, c := index(paths, h.internal()), index(paths, h.cfg()); w < 0 || c < 0 || w > c {
+					t.Errorf("install writes %q, want wakatime-internal.cfg before the config", paths)
+				}
+			},
+		},
+		{
+			name: "install run again seeds the watermark in a config pairtime made that has none, as after an install that stopped",
+			check: func(t *testing.T, h wakaHome) {
+				install(t, h.in, h.item(t, 7247, wakaKey))
+				if err := os.Remove(h.internal()); err != nil {
+					t.Fatal(err)
+				}
+				install(t, h.in, h.item(t, 7247, wakaKey))
+				if got, want := readOrNil(t, h.internal()), wakaGolden(t, "new-file", "internal.cfg"); !bytes.Equal(got, want) {
+					t.Errorf("after install ran again wakatime-internal.cfg holds %q, want %q", got, want)
+				}
+			},
+		},
+		{
+			name: "the teen's own config gets no watermark, as wakatime-cli has kept its own",
+			check: func(t *testing.T, h wakaHome) {
+				writeFile(t, h.cfg(), wakaGolden(t, "hackatime-setup", "before.cfg"))
+				if paths := changes(t, h); index(paths, h.internal()) >= 0 {
+					t.Errorf("install writes %q, want no wakatime-internal.cfg", paths)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.check(t, newWakaHome(t, nil))
 		})
 	}
 }

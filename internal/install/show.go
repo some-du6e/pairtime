@@ -19,14 +19,15 @@ const masked = "***"
 
 // shown is what Diff shows of content c of ch's target. A settings file
 // that pairtime merges hooks into is masked (maskSettings), and so is
-// ~/.wakatime.cfg, which holds the teen's API keys (wakacfg.Masked). Other
+// ~/.wakatime.cfg, which holds the teen's API keys (wakacfg.Masked), with
+// what is pairtime's there found by the key of its line. Other
 // targets hold an entry pairtime owns whole, shown as it is.
 func (ch Change) shown(c Content) []byte {
 	switch {
 	case slices.Contains(ch.kinds, kindClaudeHooks) && c.Exists:
 		return maskSettings(c.Data)
 	case slices.Contains(ch.kinds, kindWakaTimeLine) && c.Exists:
-		return wakacfg.Masked(c.Data)
+		return wakacfg.Masked(c.Data, ch.wakaKey)
 	}
 	return c.text()
 }

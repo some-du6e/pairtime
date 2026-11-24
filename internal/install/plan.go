@@ -89,6 +89,9 @@ type Change struct {
 
 	mkdirs []string // directories to make before writing, outermost first
 	kinds  []string // the kinds of the edits that make the change
+	// wakaKey is the key of pairtime's WakaTime line, for the mask of the
+	// config it is in (shown), "" for any other target.
+	wakaKey string
 }
 
 // Empty reports whether the plan changes no target. Apply may still tidy
@@ -206,7 +209,7 @@ func (in *Installer) planInstall(groups []*group) (*Plan, error) {
 			// pairtime's entries out of.
 			return nil, fmt.Errorf("%s would grow past the %d MiB pairtime reads back, so uninstall couldn't take pairtime's entries out of it; pairtime leaves it alone", g.target, maxFileSize>>20)
 		}
-		ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: next, kinds: kindsOf(g.recs)}
+		ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: next, kinds: kindsOf(g.recs), wakaKey: wakaKeyOf(g.recs)}
 		if !g.target.isRegistry() && !cur.Exists {
 			// A file that isn't there may be missing its folders too: on a
 			// first install, and on a rerun after an Apply that stopped
@@ -454,7 +457,7 @@ func (in *Installer) planUndo(rec record) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
-	ch := Change{Target: rec.Target, Items: itemIDs(rec.Edits), Before: cur, kinds: kindsOf(rec.Edits)}
+	ch := Change{Target: rec.Target, Items: itemIDs(rec.Edits), Before: cur, kinds: kindsOf(rec.Edits), wakaKey: wakaKeyOf(rec.Edits)}
 	base, err := in.loadSaved(rec.Base)
 	if err != nil {
 		return Change{}, fmt.Errorf("%s: %w", rec.Target, err)
@@ -490,7 +493,7 @@ func (in *Installer) planFound(g *group) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
-	ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: cur, kinds: kindsOf(g.recs)}
+	ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: cur, kinds: kindsOf(g.recs), wakaKey: wakaKeyOf(g.recs)}
 	switch {
 	case !cur.Exists:
 		return ch, nil

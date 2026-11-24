@@ -240,14 +240,18 @@ func wakatimeCard(in Input) Card {
 				"Hack Club programs that review time through Robert read it from Hackatime, which this doesn't set up. If you join one, set up Hackatime too, and pairtime keeps working beside it.",
 			},
 			Declining: "Without it, pairtime doesn't see the time you spend in an editor.",
-			TurnOff:   "You can take it out any time with pairtime uninstall, which deletes the files it made.",
+			TurnOff: "You can take it out any time with pairtime uninstall. It takes pairtime's settings out of the config it made, and deletes the file when nothing else is in it. " +
+				"wakatime-cli's own wakatime-internal.cfg stays once wakatime-cli has written to it, since without it wakatime-cli would send your AI agents' old transcripts as new time to the next server you set up.",
 		}
 	}
 	return Card{
 		Title: "Send your editor time to pairtime as well as to your WakaTime server",
 		What: "WakaTime's editor plugins run wakatime-cli, which sends a heartbeat each time you edit or move around in a file to the server in your ~/.wakatime.cfg, such as Hackatime. " +
 			"pairtime adds one line under [api_urls] there, so that wakatime-cli also sends every heartbeat to pairtime's agent on this computer. " +
-			"Your server keeps getting every heartbeat as before, and nothing else in the file changes.",
+			"Nothing else in the file changes. While pairtime's agent doesn't take what wakatime-cli sends it, as while the agent isn't running, wakatime-cli holds back what it sends your server too, and sends it once the agent takes it again.",
+		Notes: []string{
+			"Your editors' own environment can hold a proxy that install can't see, and wakatime-cli would then send pairtime's copy of each heartbeat through it, so that pairtime gets none of them: don't set a proxy for your editors while pairtime's line is in.",
+		},
 		Declining: "Without it, pairtime doesn't see the time you spend in an editor.",
 		TurnOff:   "You can take the line out any time with pairtime uninstall, which leaves the rest of the file as it was.",
 	}

@@ -246,17 +246,22 @@ AI tools pairtime looked for:
 
     Saying no doesn't stop you from using pairtime.
     Without it, pairtime doesn't see the time you spend in an editor.
-    You can take it out any time with pairtime uninstall, which deletes the
-    files it made.
+    You can take it out any time with pairtime uninstall. It takes
+    pairtime's settings out of the config it made, and deletes the file when
+    nothing else is in it. wakatime-cli's own wakatime-internal.cfg stays
+    once wakatime-cli has written to it, since without it wakatime-cli would
+    send your AI agents' old transcripts as new time to the next server you
+    set up.
 
-    --- /dev/null
-    +++ /home/teen/.wakatime.cfg
-    @@ -0,0 +1,3 @@
-    +[settings]
-    +api_url = http://127.0.0.1:7247/api/v1
-    +api_key = 00000000-0000-4000-8000-00000000a9e7
     --- /dev/null
     +++ /home/teen/.wakatime/wakatime-internal.cfg
     @@ -0,0 +1,2 @@
     +[internal]
     +ai_logs_last_parsed_at = 2026-11-24T05:30:00Z
+    --- /dev/null
+    +++ /home/teen/.wakatime.cfg
+    @@ -0,0 +1,4 @@
+    +; made by pairtime install; pairtime uninstall takes it out
+    +[settings]
+    +api_url = http://127.0.0.1:7247/api/v1
+    +api_key = 00000000-0000-4000-8000-00000000a9e7

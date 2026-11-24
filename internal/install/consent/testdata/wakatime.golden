@@ -235,8 +235,14 @@ AI tools pairtime looked for:
     time you edit or move around in a file to the server in your
     ~/.wakatime.cfg, such as Hackatime. pairtime adds one line under
     [api_urls] there, so that wakatime-cli also sends every heartbeat to
-    pairtime's agent on this computer. Your server keeps getting every
-    heartbeat as before, and nothing else in the file changes.
+    pairtime's agent on this computer. Nothing else in the file changes.
+    While pairtime's agent doesn't take what wakatime-cli sends it, as while
+    the agent isn't running, wakatime-cli holds back what it sends your
+    server too, and sends it once the agent takes it again.
+    Your editors' own environment can hold a proxy that install can't see,
+    and wakatime-cli would then send pairtime's copy of each heartbeat
+    through it, so that pairtime gets none of them: don't set a proxy for
+    your editors while pairtime's line is in.
 
     Saying no doesn't stop you from using pairtime.
     Without it, pairtime doesn't see the time you spend in an editor.
