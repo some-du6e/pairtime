@@ -370,16 +370,10 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 			w.mergeStretches()
 		}
 	}
-	// The mark the writer had due as it sealed its newest batch, which that
-	// batch neither took nor ended (sealPayload.Due), is due again until a
-	// batch sealed online takes it or ends it, as when the first batch after
-	// a switch back was sealed local-only for a held call that came late.
-	// With no row kept, or when the newest records none and ends before it,
-	// as a row an older version sealed does, the mark a sweep's base frame
-	// keeps (basePayload.Back) is, as no batch has been sealed with its
-	// records since. A newest row that ended the mark Open restored
-	// (sealPayload.BackEnded) leaves none due, though its records came before
-	// the mark, as those of Open's own batch of what a crash left do.
+	// The mark the newest frame that records the writer's mark recorded
+	// (markDue) is due again until a batch sealed online takes it or ends
+	// it, as when the first batch after a switch back was sealed local-only
+	// for a held call that came late.
 	// It marks only a batch whose records were all made after Open
 	// (Writer.backFrom). After its newest seal the running writer may have
 	// cleared the mark without sealing a batch, as a seal's read or a note
@@ -392,13 +386,11 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 	// a batch holding one stays unmarked, and closes the run of local-only
 	// batches with itself inside, which ends the mark when it is sealed
 	// online. For the same reason the mark is due only from the next record
-	// on.
-	due := bf.base.Back
-	if n := len(rows); n > 0 && (rows[n-1].Due > 0 || rows[n-1].BackEnded || due <= rows[n-1].LastSeq) {
-		due = rows[n-1].Due
-	}
-	if due > 0 {
-		w.back, w.backFrom = max(due, w.next), w.momentNow()
+	// on, also when that is below the mark recorded, as after a power cut
+	// took records that came before it unsealed: the records that take their
+	// numbers again are made after Open, like any the mark can mark.
+	if markDue(bf, rows) > 0 {
+		w.back, w.backFrom = w.next, w.momentNow()
 	}
 	if end, ok := w.newestEnd(); ok {
 		w.onlineAt = end
@@ -413,6 +405,45 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 		}
 		break
 	}
+}
+
+// markDue is the mark due, the first record of the batch it is due for or
+// 0 for none, as the newest of the frames of bf and rows, its rows with any
+// Open rebuilt, that records the writer's mark recorded it, for Open
+// (restoreStretches). The base frame records the mark as it stood after the
+// newest batch sealed at the sweep (basePayload.Mark, MarkAt), which is
+// newer than each row the sweep kept and older than the row of a batch
+// sealed after it, and each row of this version records the mark once its
+// batch was sealed (sealPayload.Mark). So a row the sweep kept doesn't hide
+// a mark the writer armed after its seal, and a row sealed after the sweep,
+// as one that took or ended the mark, isn't passed over for the base
+// frame's mark, whatever records a power cut took. A newest row of this
+// version's goes by its own Mark under a base frame without one too, as an
+// older version's sweep wrote before the upgrade: that frame is older than
+// every row this version sealed.
+//
+// Frames an older version wrote record the mark only by a seal frame's Due,
+// when its batch neither took nor ended it, a row's BackEnded and the base
+// frame's Back. Where the newest row records no Mark, as a row an older
+// version sealed, and the base frame's Mark doesn't cover the rows, the
+// newest row's Due is due, or the base frame's Back with no row kept, or
+// when the newest row records none and ends before it, and a newest row
+// that ended the mark Open restored (BackEnded) leaves none due, though its
+// records came before the mark, as those of Open's own batch of what a
+// crash left do.
+func markDue(bf *batchesFile, rows []rowPayload) uint64 {
+	n := len(rows)
+	switch {
+	case bf.base.Mark != nil && (n == 0 || rows[n-1].B <= bf.base.MarkAt):
+		return *bf.base.Mark
+	case n > 0 && rows[n-1].Mark != nil:
+		return *rows[n-1].Mark
+	}
+	due := bf.base.Back
+	if n > 0 && (rows[n-1].Due > 0 || rows[n-1].BackEnded || due <= rows[n-1].LastSeq) {
+		due = rows[n-1].Due
+	}
+	return due
 }
 
 // listEnd is the end of the newest stretch in ps that ended, as a row

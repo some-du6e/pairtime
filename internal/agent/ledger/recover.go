@@ -69,13 +69,28 @@ type basePayload struct {
 	LocalUntil   int64    `json:"local_until,omitempty"`
 	LocalUntilOS *untilOS `json:"local_until_os,omitempty"`
 	// Back is the first record of the batch the writer had a mark due for
-	// when the sweep wrote the frame (Writer.back), 0 for none. Open makes it
-	// due again when no row is kept, or when the newest records none and
-	// ends before it (restoreStretches), but only from the next record on, as
-	// the running writer can clear the mark after the sweep without sealing
-	// a batch, and a record a crash left pending may be of the stretch that
-	// cleared it.
+	// when the sweep wrote the frame (Writer.back), 0 for none, in a frame
+	// that keeps stretches, for an older version's Open, which makes it due
+	// again when no row is kept, or when the newest records none and ends
+	// before it. This version's Open reads Back in a frame without Mark, as
+	// an older version wrote, unless the newest row records a Mark of its
+	// own, and in one with Mark when the newest row is an older version's,
+	// sealed after MarkAt (markDue).
 	Back uint64 `json:"back,omitempty"`
+	// Mark is the writer's mark when the sweep wrote the frame
+	// (Writer.back): the first record of the batch it is due for, or 0, for
+	// none, in every base frame the live chain's sweep writes, so a frame
+	// without it is an older version's or an old chain's. MarkAt is the
+	// newest batch sealed then, so Mark is the mark as it stood after that
+	// batch: newer than every row the sweep kept, as the writer may have
+	// armed or cleared the mark since their seals, and older than the row of
+	// any batch sealed after MarkAt, which records its own (sealPayload.Mark).
+	// Open takes Mark while no such row is kept (restoreStretches), and
+	// makes it due only from the next record on, as the running writer can
+	// clear the mark after the sweep without sealing a batch, and a record a
+	// crash left pending may be of the stretch that cleared it.
+	Mark   *uint64 `json:"mark,omitempty"`
+	MarkAt uint64  `json:"mark_at,omitempty"`
 }
 
 // listUntil is the moment the row that recorded bf.stretches recorded, or
