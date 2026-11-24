@@ -178,11 +178,13 @@ type Envelope struct {
 	DeviceID string `json:"device_id"`
 	// Seq is the s of the device's ledger record that holds the event
 	// (docs/spec/ledger-v1.md 4.1). One sequence numbers every ledger
-	// record from 1 with no gaps, scorer checkpoints and upload-failure
-	// notes included, so the events' own seq values skip the numbers
-	// those records hold. The server uses it for exactly-once ingest. The
-	// agent assigns it when it writes the event, so whatever an adapter or
-	// plugin sends is overwritten.
+	// record from 1 with no gap or repeat, scorer checkpoints and
+	// upload-failure notes included, so the events' own seq values skip
+	// the numbers those records hold. Once its batch is sealed,
+	// (device_id, seq) names the record for good; the challenge draw and
+	// its sticky record use it (DESIGN 7.5). The agent assigns it when it
+	// writes the event, so whatever an adapter or plugin sends is
+	// overwritten.
 	Seq uint64 `json:"seq"`
 	// T is the client's wall time, in Unix milliseconds UTC, when the
 	// adapter saw the event.

@@ -182,7 +182,7 @@ func TestFocusUnknownEvents(t *testing.T) {
 				}
 			}
 		})
-		t.Run(f.Name+" events are one device's gapless stream in time order", func(t *testing.T) {
+		t.Run(f.Name+" events are one device's stream in time order, and seq rises by 1 since a fixture's ledger holds only events", func(t *testing.T) {
 			ids := map[string]bool{}
 			for i, e := range f.Events {
 				where := fmt.Sprintf("%s line %d", EventsFile, i+1)
