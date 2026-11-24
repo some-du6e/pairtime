@@ -463,7 +463,7 @@ func TestPublicTotals(t *testing.T) {
 				{at.Add(time.Minute), pevent.Witnessed, bucketOf(local("2026-11-24", 12), 3, final, A, A, A, A)},
 			},
 			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 45}}},
-		{name: "a pending minute counts, since every minute of a date ended everywhere is past its pending window", at: at,
+		{name: "a pending minute counts once its pending window has passed, as it has by the publication for a minute hours before the date's end", at: at,
 			revs: []revision{{seen("2026-11-24"), pevent.Witnessed, bucketOf(local("2026-11-24", 12), 1, pending, B)}},
 			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 15}}},
 		{name: "the agent's time on its own doesn't count", at: at,

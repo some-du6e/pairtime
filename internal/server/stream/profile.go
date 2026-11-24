@@ -101,15 +101,17 @@ func endedEverywhere(t time.Time) string {
 // claims (DESIGN 7.4).
 //
 // So a date's public number never exceeds what the dashboard credited it
-// at levels A and B at p, and on a date with no backfilled revision it is
-// that number. Once p has passed, what PublicTotals gives for it never
-// changes: a revision received later, an offline catch-up at 21:14 or a
-// minute going final after p, shows at the next publication, never at the
-// hour it came (D-public-daily). A pending minute counts once
-// PENDING_WINDOW_S has passed, which every minute of a date ended
-// everywhere has (D1). The agent's time on its own doesn't count. Nothing
-// in it names a project or says when in a day the time was, and its dates
-// don't depend on the account's zone, only on p.
+// at levels A and B at p, and on a date with no backfilled revision and
+// every minute settled it is that number. Once p has passed, what
+// PublicTotals gives for it never changes: a revision received later, an
+// offline catch-up at 21:14 or a minute going final after p, shows at the
+// next publication, never at the hour it came (D-public-daily). A pending
+// minute counts once PENDING_WINDOW_S has passed since it ended (D1). By p
+// every minute of the dates shown has, but for a date's last quarter hour
+// in UTC-12, which ends at p itself and so counts from the next
+// publication. The agent's time on its own doesn't count. Nothing in it
+// names a project or says when in a day the time was, and its dates don't
+// depend on the account's zone, only on p.
 //
 // It makes PublicDays reads. The topic's pass makes two calls a profile a
 // day; a page that shows a profile on every view should keep each
