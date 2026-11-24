@@ -240,6 +240,9 @@ type agent struct {
 	early   []ledger.Batch
 	// signIn keeps the sign-in between uploads (credentials).
 	signIn signInCache
+	// buildDays keeps the server's last summary of build days this run,
+	// for the local Build days page (builddays.go).
+	buildDays buildDaysCache
 	// loc is Options.Zone (zone).
 	loc *time.Location
 

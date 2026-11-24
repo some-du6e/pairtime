@@ -9,7 +9,7 @@
 openapi: 3.1.0
 info:
   title: pairtime agent, local API
-  version: 0.3.0
+  version: 0.4.0
   license:
     name: AGPL-3.0-or-later
     identifier: AGPL-3.0-or-later
@@ -25,11 +25,12 @@ info:
     `/v1/` also need one of two credentials. Local tools send the bearer
     token from port.json, which only the user who runs the agent can read.
     The dashboard sends the `pairtime_session` cookie instead. The cookie
-    opens the routes the dashboard reads, and the one change it makes,
+    opens the routes the dashboard reads, and the two changes it makes:
     PUT /v1/projects/{key}/name, which turns a project's name on or off on
-    the owner's own pairtime dashboard and, signed in by the cookie, must
-    carry the dashboard's Origin too. POST /v1/agent/stop takes the bearer
-    token alone.
+    the owner's own pairtime dashboard, and PUT /v1/build-days/goal, which
+    sets the weekly goal on the server. Signed in by the cookie, a change
+    must carry the dashboard's Origin too. POST /v1/agent/stop takes the
+    bearer token alone.
 
     `pairtime dashboard` signs the teen's browser in (DESIGN 3.9;
     D-dashboard-link). It asks the running agent for a one-time URL over the
@@ -247,6 +248,96 @@ paths:
             Turning the name on needs a label the project hasn't got, as a
             plain folder has no name on this computer, or the label is empty
             once cleaned.
+          content:
+            text/plain:
+              schema:
+                type: string
+  /v1/build-days:
+    get:
+      operationId: getBuildDays
+      summary: The build days the server decided, for the dashboard's Build days page
+      description: >
+        The account's build days, weekly goal, weeks in a row and freezes,
+        as pairtimed decides them from the minutes it witnessed (DESIGN 3.8,
+        6.2 D10). The agent asks the server's GET /api/v1/build-days with
+        this computer's device token (docs/spec/teen-layer-v1.md 6) and
+        passes its answer on, keeping it in memory for 60 seconds and
+        nothing on disk. While the server can't be reached, the answer holds
+        the last summary the agent got since it started, with its time, and
+        says why. A computer `pairtime login` never linked, or a local-only
+        one, asks the server nothing. While `shadow` is true, as while the
+        account's calibration flag is on at the server, the summary leaves
+        out everything that comes of credited time (BuildDaysSummary). The
+        answer is never cached.
+      responses:
+        "200":
+          description: What the agent has of the server's build days.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildDays"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/build-days/goal:
+    put:
+      operationId: putBuildDaysGoal
+      summary: Set the weekly goal on the server
+      description: >
+        Sets the account's weekly goal, 1 to 7 build days, at once, with the
+        server's PUT /api/v1/build-days/goal, and answers as GET
+        /v1/build-days does, as the server has it then. The goal applies to
+        every week the server hasn't decided yet, so lowering it can meet
+        last week until that week's deadline (docs/spec/teen-layer-v1.md
+        6.1). Nothing waits on this computer: while it isn't linked, is
+        local-only or can't reach its server, the agent refuses and the goal
+        stays as it was. Signed in by the cookie, the request must carry the
+        dashboard's Origin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoalChoice"
+      responses:
+        "200":
+          description: The goal is set, and the build days are as the server has them now.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BuildDays"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: >
+            This computer isn't linked to a server, is local-only, or its
+            server no longer knows its sign-in, so the goal stays as it was.
+            The text says what to do.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "429":
+          description: >
+            The server is answering this computer's requests at its rate.
+            Retry-After and the text say how many seconds to wait.
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            text/plain:
+              schema:
+                type: string
+        "503":
+          description: >
+            The server couldn't be reached, or couldn't set the goal, which
+            stays as it was. The text says so.
           content:
             text/plain:
               schema:
@@ -1180,6 +1271,179 @@ components:
             The label to show, which the agent cleans as the server cleans a
             display name. Without one, turning the name on shows the label
             the project has (ProjectEntry's `label`).
+    BuildDays:
+      type: object
+      additionalProperties: false
+      required: [linked, online, shadow, summary]
+      description: GET /v1/build-days.
+      properties:
+        linked:
+          type: boolean
+          description: "`pairtime login` linked this computer to a server."
+        online:
+          type: boolean
+          description: >
+            config.toml also says `mode = "online"`, so the agent asks the
+            server. While it is false the agent asks nothing, and `summary`
+            is null.
+        shadow:
+          $ref: "#/components/schemas/Shadow"
+        summary:
+          $ref: "#/components/schemas/BuildDaysSummary"
+        as_of:
+          type: string
+          format: date-time
+          description: When the agent got `summary` from the server, in UTC. Absent while `summary` is null.
+        problem:
+          type: string
+          enum: [unreachable, signed_out, unreadable]
+          description: >
+            Why the agent has no summary newer than 60 seconds, on a
+            computer that asks: the server didn't answer, or answered with
+            an error of its own (`unreachable`); it refused this computer's
+            device token, or the sign-in doesn't read here (`signed_out`); or
+            its answer isn't a summary (`unreadable`). Absent once an answer
+            came.
+    BuildDaysSummary:
+      type: [object, "null"]
+      additionalProperties: false
+      required: [time_zone, today, weekly_goal, window_days, freezes, days, weeks]
+      description: >
+        The server's summary (docs/spec/teen-layer-v1.md 6), with the
+        members the spec names and no other, or null before the agent has
+        one. While `calibrating` is true, which it is while `shadow` is true
+        or while the account's calibration flag is on at the server
+        (D-server-shadow), everything that comes of credited time is absent:
+        `build_days`, `weeks_in_a_row`, the freezes' `held`, `earned` and
+        `toward_next`, each day's `state`, `a_ms`, `b_ms` and `decided_at`,
+        and each week's `result` and `build_days`. Otherwise every one of
+        them is there, but `decided_at` on a day not stored yet.
+      properties:
+        calibrating:
+          type: boolean
+          const: true
+          description: There, and true, while the summary leaves out what comes of credited time.
+        time_zone:
+          type: string
+          description: The profile's time zone, which sets every day's bounds.
+          examples: [America/New_York]
+        today:
+          type: string
+          format: date
+          description: Today's date in that time zone.
+        weekly_goal:
+          type: integer
+          minimum: 1
+          maximum: 7
+          description: The weekly goal, in build days.
+        build_days:
+          type: integer
+          minimum: 0
+          description: The build days among the last `window_days` dates, today included.
+        window_days:
+          type: integer
+          description: How many dates `build_days` counts in, `CONSISTENCY_WINDOW_D`.
+        weeks_in_a_row:
+          type: integer
+          minimum: 0
+          description: >
+            The weeks in a row met or covered by a freeze, the current week
+            counting once it is met. A week not decided yet neither adds to
+            it nor ends it.
+        freezes:
+          type: object
+          additionalProperties: false
+          required: [max, every]
+          properties:
+            held:
+              type: integer
+              minimum: 0
+              description: The freezes held now.
+            max:
+              type: integer
+              description: The most held at once, `FREEZE_MAX`.
+            earned:
+              type: integer
+              minimum: 0
+              description: The freezes ever earned.
+            toward_next:
+              type: integer
+              minimum: 0
+              description: The build days counted toward the next freeze, of `every`.
+            every:
+              type: integer
+              description: The build days that earn a freeze, `FREEZE_EARN_DAYS`.
+        days:
+          type: array
+          description: The last `window_days` dates, oldest first.
+          items:
+            $ref: "#/components/schemas/BuildDay"
+        weeks:
+          type: array
+          description: The weeks those dates fall in, Monday to Sunday, oldest first.
+          items:
+            $ref: "#/components/schemas/BuildWeek"
+    BuildDay:
+      type: object
+      additionalProperties: false
+      required: [date, deadline]
+      properties:
+        date:
+          type: string
+          format: date
+        state:
+          type: string
+          enum: [build_day, not_counted, open]
+          description: >
+            `build_day`; `not_counted`, decided at the deadline or past it
+            with nothing to decide; or `open`.
+        a_ms:
+          type: integer
+          minimum: 0
+          description: The day's credit at level A, in milliseconds, as the server decided it or so far.
+        b_ms:
+          type: integer
+          minimum: 0
+          description: The same at level B.
+        deadline:
+          type: string
+          format: date-time
+          description: The day's end plus `BUILD_DAY_LAG_S`, when an open day becomes `not_counted`.
+        decided_at:
+          type: string
+          format: date-time
+          description: When the server stored the day; absent on a day not stored yet.
+    BuildWeek:
+      type: object
+      additionalProperties: false
+      required: [start, goal]
+      properties:
+        start:
+          type: string
+          format: date
+          description: The week's Monday.
+        result:
+          type: string
+          enum: [met, frozen, missed, open]
+        goal:
+          type: integer
+          minimum: 1
+          maximum: 7
+          description: The goal the week was decided by, or the account's goal while it is open.
+        build_days:
+          type: integer
+          minimum: 0
+    GoalChoice:
+      type: object
+      additionalProperties: false
+      required: [weekly_goal]
+      description: PUT /v1/build-days/goal's body.
+      properties:
+        weekly_goal:
+          type: integer
+          minimum: 1
+          maximum: 7
+          description: The weekly goal, in build days.
     ProjectName:
       type: string
       description: >

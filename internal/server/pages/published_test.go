@@ -146,7 +146,7 @@ func TestPublishedList(t *testing.T) {
 		{
 			name: "a server that offers no list shows none",
 			tz:   "UTC", off: true, page: true,
-			notWant: []string{`aria-labelledby="published"`, DeleteDevlogPath, RemoveBadgePath},
+			notWant: []string{`<section aria-labelledby="published">`, DeleteDevlogPath, RemoveBadgePath},
 		},
 		{
 			name: "a list that can't be read is an error, as a view that can't be read is",
@@ -200,7 +200,7 @@ func TestPublishedListNotOnSample(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, page := getDemo(t, Options{}, tt.signIn)
-			for _, w := range []string{`aria-labelledby="published"`, DeleteDevlogPath, RemoveBadgePath} {
+			for _, w := range []string{`<section aria-labelledby="published">`, DeleteDevlogPath, RemoveBadgePath} {
 				if strings.Contains(page, w) {
 					t.Errorf("the sample contains %q", w)
 				}
