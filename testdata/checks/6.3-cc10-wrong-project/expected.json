@@ -1,7 +1,7 @@
 {
   "scenario": "6.3-cc10-wrong-project",
   "title": "Editor heartbeats for one project while the editor shows another",
-  "story": "While Sam hand-edits E in Cursor, a script posts three of D's VS Code heartbeats to the local WakaTime port. An editor has focus, so they pass the app half of CC10, but the focused window is on E. SM 3.2 resolves an editor slot to the project of the most recent heartbeat, so they pull their slots, and the typed-edit leads in them, from E into D.",
+  "story": "While Sam hand-edits E in Cursor, a script in VS Code's integrated terminal runs the real wakatime-cli and sends three of D's heartbeats, which pass the peer-process check (DESIGN 5.7) and arrive as via editor. An editor has focus, so they pass the app half of CC10, but the focused window is on E. SM 3.2 resolves an editor slot to the project of the most recent heartbeat, so they pull their slots, and the typed-edit leads in them, from E into D.",
   "base": "6.3",
   "edits": [
     "The log readers' copies of A's and B's prompts: Claude Code's transcript and Codex's rollout file, 0.6 to 1.5 s after each hook. Cursor's E has no v1 log reader.",

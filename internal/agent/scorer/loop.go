@@ -529,25 +529,31 @@ func (l *Loop) open() error {
 }
 
 // rebuildCarry returns the carry of c, a place an older agent saved, with
-// the Stamped, RestartAt and Lock that agent didn't keep, as a
-// carryVersion agent would have folded them from the same records: the
-// ones dated before c.From in the batches up to c.Batch that the loop
-// scored (follower), the window's batches from FromBatch on included,
-// since records slid out of them or came late. The carry's other slots
-// stay as saved, since that agent folded them as a carryVersion agent
-// does. Lock is the latest os.power that locked or unlocked the screen, in
-// record order, so the order the ledger holds them in doesn't matter. RestartAt is folded again in record order (restartAt) from the
-// earlier of the carry's Power and Presence on: a restart dated at or
-// before that one drops neither (carry.records), and with either missing,
-// no restart drops anything.
+// what that agent didn't keep, as a carryVersion agent would have folded
+// it from the same records: the ones dated before c.From in the batches up
+// to c.Batch that the loop scored (follower), the window's batches from
+// FromBatch on included, since records slid out of them or came late. The
+// carry's other slots stay as saved, since that agent folded them as a
+// carryVersion agent does. Lock is the latest os.power that locked or
+// unlocked the screen, in record order, so the order the ledger holds them
+// in doesn't matter.
+//
+// Stamped and RestartAt are folded again too, in record order (restartAt)
+// over every record of the sampler's and every stamped one, as fold took
+// them, since records drops a carried Power, Presence or Lock dated before
+// the restart: the rebuilt Lock can be older than both of the others, or
+// the only one there with Power, as on a machine whose idle read never
+// succeeded. A place an agent before WP-HL1 saved (V 0) has neither. A
+// place an agent between WP-HL1's first part and D-sampleless-power saved
+// (V 1) has both, but when v0.1.0-alpha.7 rebuilt it from an older place
+// it folded RestartAt only from the earlier of Power and Presence, and
+// only with both there, so it can miss the restart that drops the rebuilt
+// Lock. Each takes the later of the saved and the folded value, so a saved
+// one never moves back, as when a batch before the place doesn't read.
 func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	out := c.Carry
-	out.Stamped, out.Lock = 0, nil
-	again := out.Power != nil && out.Presence != nil
-	var lo int64
-	if again {
-		lo = min(out.Power.T, out.Presence.T)
-	}
+	out.Lock = nil
+	var stamped int64
 	var marks []mark
 	var f follower
 	err := l.readBatches(1, func(b ledger.Batch) error {
@@ -562,14 +568,14 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 			if err != nil || !ok || ev.T >= c.From {
 				continue
 			}
-			s, st := sampler(&ev), stamps(&ev)
-			if st {
-				out.Stamped = max(out.Stamped, ev.T)
-			}
 			if p, ok := ev.Data.(*event.OSPower); ok && locks(p) {
 				out.Lock = latest(out.Lock, ev)
 			}
-			if again && ev.T >= lo && (s || st) {
+			s, st := sampler(&ev), stamps(&ev)
+			if st {
+				stamped = max(stamped, ev.T)
+			}
+			if s || st {
 				marks = append(marks, mark{t: ev.T, seq: ev.Seq, sampler: s})
 			}
 		}
@@ -582,7 +588,8 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	if err != nil && !errors.Is(err, errEnough) {
 		return carry{}, err
 	}
-	out.RestartAt = restartAt(marks, l.opts.Params.Int(params.BUCKET_TTL_S)*1000)
+	out.Stamped = max(c.Carry.Stamped, stamped)
+	out.RestartAt = max(c.Carry.RestartAt, restartAt(marks, l.opts.Params.Int(params.BUCKET_TTL_S)*1000))
 	out.V = carryVersion
 	return out, nil
 }
