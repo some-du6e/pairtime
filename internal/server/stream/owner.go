@@ -29,6 +29,21 @@ type ownerState struct {
 // the topic's streams get resync instead.
 const maxReadRetries = 4
 
+// resyncMe is a user topic's resync event's data.
+var resyncMe = []byte(`{"topics":["user:me"]}`)
+
+// forgetLocked drops every event t's ring holds, as if the window had
+// passed over them: a reconnect from before then gets resync.
+func forgetLocked(t *topic) {
+	if len(t.ring) == 0 {
+		return
+	}
+	t.lost = t.ring[len(t.ring)-1].seq
+	clear(t.ring)
+	t.ring = t.ring[:0]
+	t.bytes = 0
+}
+
 // Credited is a credited event's data: the owner's time today and over the
 // last 7 days, and each project's, as dashboard.View counts them for the
 // page. Every time is seconds credited, final and pending together, or
@@ -186,7 +201,7 @@ func (h *Hub) publishOwner(t *topic, wait time.Duration) {
 		<-h.reads
 		var c Credited
 		var data []byte
-		if err == nil {
+		if err == nil && !v.Calibrating {
 			c = creditedOf(v, prev)
 			data, err = json.Marshal(c)
 		}
@@ -199,6 +214,17 @@ func (h *Hub) publishOwner(t *topic, wait time.Duration) {
 		}
 		gap := h.o.Gap
 		switch {
+		case err == nil && v.Calibrating:
+			// A calibration volunteer's numbers never go on the stream
+			// (D-server-shadow). The topic lets go of the events its ring
+			// holds, credited ones from before the flag among them, so no
+			// reconnect replays one, and its pages refetch the view, which
+			// hides them. The first credited event after the flag goes off
+			// has no delta, as a topic's first has.
+			st.failures = 0
+			st.prev = nil
+			forgetLocked(t)
+			h.publishLocked(t, "resync", resyncMe, time.Now())
 		case err == nil:
 			st.failures = 0
 			h.publishLocked(t, "credited", data, time.Now())
@@ -213,9 +239,7 @@ func (h *Hub) publishOwner(t *topic, wait time.Duration) {
 			// The pages refetch their numbers themselves.
 			st.failures = 0
 			h.o.Logger.Error("reading a dashboard for its stream failed; its pages resync", "user", t.account, "err", err)
-			if r, err := json.Marshal(Resync{Topics: []string{TopicMe}}); err == nil {
-				h.publishLocked(t, "resync", r, time.Now())
-			}
+			h.publishLocked(t, "resync", resyncMe, time.Now())
 		}
 		if !st.dirty {
 			st.busy = false

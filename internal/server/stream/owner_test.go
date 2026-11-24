@@ -227,6 +227,64 @@ func TestOwnerTopic(t *testing.T) {
 				t.Error("the topic no stream was on for the window is still there")
 			}
 		}},
+		{name: "a calibration volunteer's change sends resync, and no event carries the owner's seconds (D-server-shadow)", run: func(t *testing.T, h *Hub, src *viewSource) {
+			src.calibrating.Store(true)
+			src.you.Store(4321)
+			src.agent.Store(90)
+			c := open(t, h, meTopic, as("a1"))
+			c.read()
+			h.Changed("a1")
+			synctest.Wait()
+			text := c.read()
+			got := events(text)
+			if len(got) != 1 || got[0].event != "resync" || got[0].data != `{"topics":["user:me"]}` {
+				t.Errorf("the change sent %+v, want one resync of user:me", got)
+			}
+			if strings.Contains(text, "4321") || strings.Contains(text, "credited") || strings.Contains(text, "today_s") {
+				t.Errorf("the stream carried the owner's time:\n%s", text)
+			}
+		}},
+		{name: "a flag turned on forgets the credited events the topic held, so a reconnect from before them resyncs and replays none", run: func(t *testing.T, h *Hub, src *viewSource) {
+			c := open(t, h, meTopic, as("a1"))
+			before := lastID(c.read())
+			src.you.Store(4321)
+			h.Changed("a1")
+			synctest.Wait()
+			if got := credited(t, c.read()); len(got) != 1 || got[0].TodayS != 4321 {
+				t.Fatalf("before the flag the stream got %+v, want one event of 4321 s", got)
+			}
+			c.close()
+			src.calibrating.Store(true)
+			time.Sleep(DefaultGap)
+			h.Changed("a1")
+			synctest.Wait()
+			header := as("a1")
+			header.Set("Last-Event-ID", before)
+			c = open(t, h, meTopic, header)
+			text := c.read()
+			if got := events(text); len(got) != 1 || got[0].event != "resync" {
+				t.Errorf("the reconnect got %+v, want resync alone", got)
+			}
+			if strings.Contains(text, "4321") {
+				t.Errorf("the reconnect replayed the owner's time:\n%s", text)
+			}
+		}},
+		{name: "once the flag is off again, credited events come back, the first with no delta", run: func(t *testing.T, h *Hub, src *viewSource) {
+			src.calibrating.Store(true)
+			c := open(t, h, meTopic, as("a1"))
+			c.read()
+			h.Changed("a1")
+			synctest.Wait()
+			c.read()
+			src.calibrating.Store(false)
+			src.you.Store(60)
+			time.Sleep(DefaultGap)
+			h.Changed("a1")
+			synctest.Wait()
+			if got := credited(t, c.read()); len(got) != 1 || got[0].TodayS != 60 || got[0].DeltaS != 0 {
+				t.Errorf("after the flag the stream got %+v, want one event of 60 s with no delta", got)
+			}
+		}},
 		{name: "a change while every stream is away still publishes, so a reconnect within the window replays it", run: func(t *testing.T, h *Hub, src *viewSource) {
 			c := open(t, h, meTopic, as("a1"))
 			last := lastID(c.read())

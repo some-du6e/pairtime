@@ -1,0 +1,12 @@
+-- SPDX-License-Identifier: AGPL-3.0-or-later
+--
+-- An account's calibration flag (D-server-shadow; SM 7.5). An operator
+-- turns it on with pairtimed calibrating for a volunteer of the scoring's
+-- shadow week, and off again after it. While it is on, the owner's
+-- dashboard, its API and its live stream hide what shadow mode hides on
+-- the volunteer's own computer (D-shadow-scope): the owner's credited and
+-- pending seconds, their split by activity kind and by evidence level,
+-- and any order they set, and show only the agent's time. NULL is off,
+-- and a time is when the flag went on, Unix ms. It lives on the account's
+-- row and goes with it when the account is erased.
+ALTER TABLE users ADD COLUMN calibrating_since_ms BIGINT;

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	coachtext "github.com/some-du6e/pairtime/internal/coach/text"
 	"github.com/some-du6e/pairtime/internal/server/dashboard"
 	"github.com/some-du6e/pairtime/internal/server/rollup"
 	"github.com/some-du6e/pairtime/pkg/projectname"
@@ -120,6 +121,12 @@ func kindName(kind, agent string) string {
 // as hours and minutes.
 type dashPage struct {
 	Sample bool
+	// Calibrating is set on a calibration volunteer's own dashboard while
+	// their account's flag is on (D-server-shadow). The page then shows
+	// Calib, the agent's time alone with the note the volunteer's own
+	// computer shows, instead of anything of the owner's (D-shadow-scope).
+	Calibrating bool
+	Calib       calibPart
 	// SignIn and SignupsOpen say what the sample's banner tells a visitor
 	// about getting a dashboard of their own, and Login is where sign-in
 	// starts.
@@ -358,6 +365,11 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 	if err != nil {
 		return dashPage{}, fmt.Errorf("pages: %w", err)
 	}
+	if v.Calibrating {
+		p.Calibrating, p.Empty = true, false
+		p.Calib = newCalibPart(v, date)
+		return p, nil
+	}
 
 	// Today's clocks go the most time first, yours and the agent's
 	// together, and a tie keeps the view's order.
@@ -420,15 +432,7 @@ func newDashPageFor(v dashboard.View, in SignIn, signupsOpen, signedIn bool) (da
 	named := make(map[string]bool, len(v.Projects))
 	for _, pr := range v.Projects {
 		names[pr.ID], named[pr.ID] = pr.Name, pr.Named
-		switch {
-		case pr.Code == "":
-		case pr.Named:
-			titles[pr.ID] = projectname.CodeName(pr.Code)
-		case len(pr.Keys) > 0:
-			titles[pr.ID] = pr.Keys[0]
-		default:
-			titles[pr.ID] = pr.ID
-		}
+		titles[pr.ID] = projectTitle(pr)
 	}
 
 	ran := newDayClock(v)
@@ -789,6 +793,89 @@ func duration(s float64) string {
 		return strconv.FormatInt(m/60, 10) + "h"
 	}
 	return strconv.FormatInt(m/60, 10) + "h " + strconv.FormatInt(m%60, 10) + "m"
+}
+
+// projectTitle is what a project's name has in its title, so the owner
+// can match it with what pairtime projects says on their computer: the
+// short code's name for a project the page calls by the name its owner
+// turned on, its full key for one called by its short code, and nothing
+// for a project with no code.
+func projectTitle(pr dashboard.Project) string {
+	switch {
+	case pr.Code == "":
+		return ""
+	case pr.Named:
+		return projectname.CodeName(pr.Code)
+	case len(pr.Keys) > 0:
+		return pr.Keys[0]
+	}
+	return pr.ID
+}
+
+// calibPart is a calibrating dashboard (D-server-shadow): the agent's time
+// on its own today, on each of the last 7 days and in each project, and
+// nothing of the owner's.
+type calibPart struct {
+	// Note is what the volunteer's own computer says while calibrating
+	// (coachtext.KeyCalibratingNote), and You what it shows for their
+	// time (coachtext.KeyCalibrating).
+	Note, You string
+	// Date is today's, written out.
+	Date string
+	// Today and Week are the agent's time today and over the last 7 days.
+	Today, Week string
+	// Days are the last 7 days, oldest first.
+	Days []calibDay
+	// Projects are the month's projects, in the view's order, which
+	// follows the agent's time.
+	Projects []calibProject
+}
+
+// calibDay is one day of a calibrating dashboard.
+type calibDay struct{ Day, Agent string }
+
+// calibProject is one project of a calibrating dashboard, with the agent's
+// time over the last 7 and 30 days.
+type calibProject struct {
+	ID, Name, Title string
+	// Hide says the owner can hide the project's name, as on any other
+	// day.
+	Hide        bool
+	Week, Month string
+}
+
+// newCalibPart lays out v, a calibrating view, from date, today's.
+func newCalibPart(v dashboard.View, date time.Time) calibPart {
+	week := v.Days[len(v.Days)-dashboard.WeekDays:]
+	c := calibPart{
+		Note:  coachtext.Phrase(coachtext.KeyCalibratingNote),
+		You:   coachtext.Phrase(coachtext.KeyCalibrating),
+		Date:  date.Format("Monday 2 January"),
+		Today: duration(week[len(week)-1].Agent.Total()),
+		Week:  duration(v.Week.Agent.Total()),
+	}
+	for _, d := range week {
+		label := d.Date
+		if t, err := time.Parse(dashboard.DateLayout, d.Date); err == nil {
+			label = t.Format("Mon 2 Jan")
+		}
+		c.Days = append(c.Days, calibDay{Day: label, Agent: duration(d.Agent.Total())})
+	}
+	weekOf := make(map[string]dashboard.Time, len(v.Week.Projects))
+	for _, pt := range v.Week.Projects {
+		weekOf[pt.Project] = pt.Agent
+	}
+	monthOf := make(map[string]dashboard.Time, len(v.Month.Projects))
+	for _, pt := range v.Month.Projects {
+		monthOf[pt.Project] = pt.Agent
+	}
+	for _, pr := range v.Projects {
+		c.Projects = append(c.Projects, calibProject{
+			ID: pr.ID, Name: pr.Name, Title: projectTitle(pr), Hide: pr.Named && !v.Sample,
+			Week: duration(weekOf[pr.ID].Total()), Month: duration(monthOf[pr.ID].Total()),
+		})
+	}
+	return c
 }
 
 // pendingOf writes t's pending time, or "" when none is pending.

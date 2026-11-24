@@ -20,7 +20,52 @@
 when the stream says the numbers moved (WP-SV8): everything but the time
 zone form, whose field the owner may be typing in. */}}
 <div id="live"{{with .ETag}} data-etag="{{.}}"{{end}}{{if .NextDay}} data-next-day="{{.NextDay}}" data-next-day-in="{{.NextDayIn}}"{{end}}>
-{{- if .Empty}}
+{{- /* A calibration volunteer's page while their account's flag is on
+(D-server-shadow): the agent's time alone, as the volunteer's own computer
+shows it (D-shadow-scope). */}}
+{{- if .Calibrating}}
+<div class="sample" role="note" data-calibrating>
+<p><strong class="tag">Calibrating</strong> {{.Calib.Note}}</p>
+</div>
+
+<section aria-labelledby="today">
+<h2 id="today">Today <span class="when">{{.Calib.Date}}</span></h2>
+<p class="hero">Your time <strong>{{.Calib.You}}</strong></p>
+<p class="lede"><strong>{{.Calib.Today}}</strong> {{.Agent}} worked on its own.</p>
+</section>
+
+<section aria-labelledby="week">
+<h2 id="week">Last 7 days</h2>
+<p class="lede"><strong>{{.Calib.Week}}</strong> {{.Agent}} worked on its own.</p>
+<div class="table"><table>
+<thead><tr><th>Day</th><th>{{.AgentStart}} on its own</th></tr></thead>
+<tbody>
+{{- range .Calib.Days}}
+<tr><td>{{.Day}}</td><td>{{.Agent}}</td></tr>
+{{- end}}
+</tbody>
+</table></div>
+</section>
+
+<section aria-labelledby="projects">
+<h2 id="projects">Projects</h2>
+{{- if .Calib.Projects}}
+<div class="table"><table class="projects" role="table">
+<thead role="rowgroup"><tr role="row"><th role="columnheader">Project</th><th role="columnheader">Last 7 days</th><th role="columnheader">Last 30 days</th></tr></thead>
+<tbody role="rowgroup">
+{{- range .Calib.Projects}}
+<tr role="row"><td role="cell"{{with .Title}} title="{{.}}"{{end}}>{{.Name}}{{if and .Hide $.HidePath}}<form class="hide" method="post" action="{{$.HidePath}}"><input type="hidden" name="project" value="{{.ID}}"><button type="submit">Hide this name</button></form>{{end}}</td><td role="cell" data-label="Last 7 days"><span class="agent">{{$.AgentStart}} {{.Week}}</span></td><td role="cell" data-label="Last 30 days"><span class="agent">{{$.AgentStart}} {{.Month}}</span></td></tr>
+{{- end}}
+</tbody>
+</table></div>
+{{- if .SplitByDevice}}
+<p class="note">For now, a repo you work on from two computers shows as two projects here, one for each computer.</p>
+{{- end}}
+{{- else}}
+<p class="note">No project has any time in the last 30 days.</p>
+{{- end}}
+</section>
+{{- else if .Empty}}
 <div class="sample" role="note">
 <p><strong>Nothing counted yet.</strong> Install pairtime on the computer where you run {{.Agent}}, then run <code>pairtime login</code> on it to link it to this account. Your time shows up here within a few minutes of your next prompt to {{.Agent}}.</p>
 {{- range .Install}}
