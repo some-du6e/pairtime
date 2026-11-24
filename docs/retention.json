@@ -57,6 +57,13 @@
       "days": 7
     },
     {
+      "id": "device.inbox",
+      "where": "device",
+      "data": "The inbox: what your AI tool sent pairtime while the agent wasn't running or didn't answer in time. That can be your prompts, its replies, the commands it ran with their output, and the files it edited. It's plain text, not encrypted, in a folder other people's accounts on this computer can't open, though an administrator can",
+      "kept": "Until the agent has read it, and {days} at most after it was written. Once the ledger can't open until you run pairtime restore, nothing new waits there",
+      "days": 7
+    },
+    {
       "id": "device.commits",
       "where": "device",
       "data": "Commit records: for each commit pairtime sees in your projects, its ID and its parents, its times, how many files and lines changed, which commits it replaced if you rebased or amended, and whether an AI agent made it, with no commit message and no file name",

@@ -68,9 +68,11 @@ const keyRetry = time.Minute
 const maxQueued = 4096
 
 // heldKeep is how long a held hook call is kept: a start drops the ones
-// taken in longer ago than this, unparsed (expireHeld), and so does the
-// running agent within a minute of their coming due (expireRun; DESIGN 4.4,
-// which gives every field a finite retention; D-held-calls-inbox-class).
+// that began to wait longer ago than this, when the agent took them in or,
+// if earlier, when their senders sent them (heldSince), unparsed
+// (expireHeld), and so does the running agent within a minute of their
+// coming due (expireRun; DESIGN 4.4, which gives every field a finite
+// retention; D-held-calls-inbox-class, D-inbox-age-cap).
 const heldKeep = 7 * 24 * time.Hour
 
 // heldRetry is how long expireRun waits before it tries again to cut a held
@@ -782,7 +784,8 @@ func (h *adapterHost) cutPendingLocked(end int64) {
 // pendingSplice is a rewrite of held.jsonl.pending, which trimPendingLocked
 // plans and splicePending makes. Of the size bytes the file held when it was
 // planned, it keeps what an earlier run left, up to base, but for the calls
-// taken in before expire when that is set, and the lines in keep, in the
+// that began to wait before expire when that is set (heldSince), and the
+// lines in keep, in the
 // order they lie in it; and all that pend writes after them.
 type pendingSplice struct {
 	size, base int64
@@ -888,11 +891,13 @@ func (h *adapterHost) spliceFailed(p pendingSplice, err error) {
 }
 
 // agedLines finds the lines in the first end bytes of name, a held file,
-// that hold a call taken in at or after cutoff, which a rewrite keeps. It
-// returns where they lie, how many other lines there are, which it drops,
-// and when the oldest call it keeps was taken in.
+// that hold a call that began to wait at or after cutoff, the earlier of
+// when the agent took it in and when its sender sent it (heldSince), which
+// a rewrite keeps. It returns where they lie, how many other lines there
+// are, which it drops, and when the oldest call it keeps began to wait. It
+// opens the file as a cut does (inbox.OpenOwned), whatever its mode.
 func agedLines(name string, end int64, cutoff time.Time) (keep []inbox.Span, dropped int, oldest time.Time, err error) {
-	f, err := inbox.OpenPrivate(name, os.O_RDONLY, 0)
+	f, err := inbox.OpenOwned(name)
 	if err != nil {
 		return nil, 0, time.Time{}, err
 	}
@@ -2054,7 +2059,7 @@ func (h *adapterHost) hold(calls []inbox.Delivery) []inbox.Delivery {
 		size += int64(len(line))
 		h.count(func() {
 			h.held++
-			h.dueByLocked(d.Received.Wall.Add(heldKeep))
+			h.dueByLocked(heldSince(d.Received.Wall, d.Sent).Add(heldKeep))
 			h.heldFrom.add(stampOf(d))
 		})
 	}
@@ -2313,13 +2318,14 @@ func (h *adapterHost) trimReplay() {
 // clearData at uninstall takes one a crash left (pairtimeEntries).
 const heldTmp = ".held.jsonl.tmp-"
 
-// expireHeld drops, at a start, the held calls the agent took in longer
-// than heldKeep before now, unparsed: from held.jsonl, which holds the
-// calls a killed run left pending too by then (recoverPending), and from a
-// .replay file a crash left. A line that holds no call, or no time to go
-// by, goes as well. It deletes what a rewrite cut short left, first. It runs
-// on the worker before its first step, when nothing else writes them, and
-// has expireRun look again once the oldest call it keeps comes due.
+// expireHeld drops, at a start, the held calls that began to wait longer
+// than heldKeep before now (heldSince), unparsed: from held.jsonl, which
+// holds the calls a killed run left pending too by then (recoverPending),
+// and from a .replay file a crash left. A line that holds no call, or no
+// time to go by, goes as well. It deletes what a rewrite cut short left,
+// first. It runs on the worker before its first step, when nothing else
+// writes them, and has expireRun look again once the oldest call it keeps
+// comes due.
 func (h *adapterHost) expireHeld(now time.Time) {
 	if old, err := filepath.Glob(filepath.Join(h.a.dirs.Data, heldTmp+"*")); err == nil {
 		for _, name := range old {
@@ -2334,7 +2340,7 @@ type heldCut struct {
 	dropped int       // the lines it dropped
 	past    int       // those of them at or past from
 	from    int64     // where from lies in the file as cut
-	oldest  time.Time // when the oldest call it kept was taken in, zero for none
+	oldest  time.Time // when the oldest call it kept began to wait (heldSince), zero for none
 }
 
 // expireRun drops, while the agent runs, the held calls that have waited
@@ -2377,7 +2383,8 @@ func (h *adapterHost) expireRun(now time.Time) {
 }
 
 // expireFiles cuts from held.jsonl, and from the .replay file when replay
-// is set, the calls taken in longer than heldKeep before now (expireFile).
+// is set, the calls that began to wait longer than heldKeep before now
+// (heldSince, expireFile).
 // It tells doctor how many it dropped, and returns how many of them no
 // replay has read, which the status counts as held: those of held.jsonl,
 // and those of the .replay file past from, where this run's replay of it
@@ -2435,8 +2442,9 @@ func (h *adapterHost) dueByLocked(t time.Time) {
 	}
 }
 
-// expireFile drops from name the calls taken in before cutoff, and lines
-// that hold no call or no stamp, by rewriting it with the rest, or by
+// expireFile drops from name the calls that began to wait before cutoff
+// (heldSince), and lines that hold no call or no stamp, whatever the file's
+// mode (inbox.Rewrite), by rewriting it with the rest, or by
 // deleting it when none is left. It says what it cut (heldCut), from being
 // an offset at the start of a line, such as where a replay stopped, which
 // moves back by the lines dropped before it. A file it can't rewrite stays
@@ -2471,11 +2479,12 @@ func (h *adapterHost) expireFile(name string, cutoff time.Time, from int64) (hel
 	return cut, nil
 }
 
-// heldAt is when the agent took the call on a line of held.jsonl in, by
-// the stamp the line gives, which heldKeep counts from: the agent's own,
-// or, for a line any process could have written, whatever it says, which
-// can keep nothing but that line longer. It reports false for a line that
-// holds no call, or no stamp.
+// heldAt is when the call on a line of held.jsonl began to wait, which
+// heldKeep counts from: when the agent took it in, by the stamp the line
+// gives, or when its sender sent it, if that is earlier (heldSince). The
+// stamp is the agent's own, or, for a line any process could have written,
+// whatever it says, which can keep nothing but that line longer. It
+// reports false for a line that holds no call, or no stamp.
 func heldAt(line []byte) (time.Time, bool) {
 	var e heldEntry
 	if err := json.Unmarshal(line, &e); err != nil || len(e.Call) == 0 {
@@ -2485,7 +2494,24 @@ func heldAt(line []byte) (time.Time, bool) {
 	if err := json.Unmarshal(e.Call, &c); err != nil || c.Received.Wall.IsZero() {
 		return time.Time{}, false
 	}
-	return c.Received.Wall, true
+	var m struct {
+		Sent time.Time `json:"sent"`
+	}
+	json.Unmarshal(c.Message, &m) // a message that doesn't read has no Sent
+	return heldSince(c.Received.Wall, m.Sent), true
+}
+
+// heldSince is when a call the agent took in at received, and its sender
+// sent at sent, began to wait: the earlier of the two, so a call drained
+// from inbox/ days after it was spooled is held no longer than what was
+// left of its 7 days there (D-inbox-age-cap). An earlier sent only ever
+// shortens a stay, so a sender's clock that was wrong costs a call's
+// credit, never its privacy. A zero sent leaves received.
+func heldSince(received, sent time.Time) time.Time {
+	if !sent.IsZero() && sent.Before(received) {
+		return sent
+	}
+	return received
 }
 
 // countHeld counts the calls an earlier run left held, for the status.
