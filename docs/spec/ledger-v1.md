@@ -134,6 +134,8 @@ Every record has a sequence number `s`. The device's first record has `s = 1`, a
 
 Checkpoints and upload-failure notes take numbers from the same sequence. So the record sequence has no gaps, while the events' own `seq` values skip the numbers those records hold.
 
+Only records in a sealed batch keep their numbers. A crash can cut records that no batch holds yet, and after the restart the next record takes the number after the last record that survived; nothing of a cut record left the device, so reusing its number repeats no nonce or salt anyone has seen. A restore, or anything else that gives an install a new `K_dev`, starts a new device whose chain begins at `s = 1` (3). So an honest ledger has no gap or repeat, and a verifier excuses none but a local-only gap the server recorded (6, 9).
+
 ### 4.2 Record types
 
 | `rtype` | Record |
@@ -356,7 +358,7 @@ A published day holds every row on it, because the server never stores a row on 
 A verifier that holds a run of a device's batches, with headers and body hashes for every record in them, checks:
 
 1. Batch numbers rise by 1 with no gap, but across a local-only gap the server recorded (6), after which a run of its own starts. A run that starts at `b = 1` has `prev = zero(32)`. A run that starts later links its first `prev` to the head the server stored for the batch before it. Only a run that starts at a device's first witnessed batch, where WP-SV4 started the chain after batch 1, or at the batch after a local-only gap (6), takes its first `prev` as given.
-2. Sequence numbers rise by 1 with no gap, within and across batches, but across a local-only gap. Batch 1 starts at `s = 1`.
+2. Sequence numbers rise by 1 with no gap, within and across batches, but across a local-only gap. Batch 1 starts at `s = 1`. Checkpoints and upload-failure notes hold numbers like events, so this runs over every record's `s`, never over events' `seq` alone, and nothing else excuses a gap (4.1).
 3. Every header follows 4.3: its rtype isn't `0x00` or `0x42` to `0xff`, a code from `0x13` to `0x3f` that the verifier doesn't know is reported as an unknown kind (4.2), an `os.*` header has the zero project, and checkpoints and upload-failure notes have the fields their row in 4.3 gives them.
 4. Every entry is its header followed by the SHA-256 of the record's stored body, and every revealed body is valid JSON by 4.5's rule, agrees with its header, names the chain's device in an event's `device_id`, and has `f` and `c` exactly where 4.5, 4.7, 10.1 and 10.7 put them.
 5. `n_b` is the number of the batch's records, and `R_b` is the `MTH` of their entries.
@@ -923,7 +925,7 @@ DESIGN 3.6 and 7.4 give the fields of each value. These are the encodings and ru
 1. HKDF uses RFC 5869's default salt, 32 zero bytes, and `L = 32` (3).
 2. Every integer is `u64` big-endian: `s`, `n_b`, `b`, `received_at`, `count_d` and `d`. Times are Unix milliseconds (1).
 3. Batch numbers and sequence numbers start at 1, and `H_0 = zero(32)` (4.1, 6).
-4. One sequence numbers every record, checkpoints and upload-failure notes included, and an event's `seq` equals its record's `s` (4.1). PR1 documented `seq` as gapless among events, which stops being true once checkpoints exist. `pkg/event`'s comment on `Envelope.Seq` and the event schema now say so. SM 1.1 still calls `seq` gapless, and SM is an oracle, so `docs/errata/2026-11-20-sm-1.1-seq-gaps.md` takes its wording to Karim.
+4. One sequence numbers every record, checkpoints and upload-failure notes included, and an event's `seq` equals its record's `s` (4.1). PR1 documented `seq` as gapless among events, which stops being true once checkpoints exist. `pkg/event`'s comment on `Envelope.Seq` and the event schema now say so. SM 1.1 now says the same (erratum 2026-11-20-sm-1.1-seq-gaps, decided).
 5. The rtype table is fixed as listed, with `0x00` and every unlisted code reserved (4.2).
 6. A header for an `os.*` event always has the zero project, and checkpoints and upload-failure notes get the header fields in 4.3's table. `pkg/event` doesn't yet refuse a `project_key` on an `os.*` event, so until a `kindTable` rule does, the ledger writer must (4.3).
 7. The body's members, their order, and the nonce as hex (4.5).
@@ -967,3 +969,7 @@ WP-SV17 decided these, as section 8 said it would:
 36. A day is due 10 minutes after it ends, once its last rows are in the replica. The server stores each head before it writes the head's file, and resumes the chain from its stored heads (8).
 37. The server keeps each published day's leaf hashes as long as any of the day's witness rows, so a batch's inclusion proof outlives the day's other rows (8; docs/errata/2026-11-23-day-leaves-retention.md).
 38. While the server's clock reads a time at or before the end of the newest day it has published, ingest refuses every upload with 503 `day_closed`, and the transaction that stores a day's head recounts the day's rows, so no batch is ever stored on a published day and every receipted batch is in its day's tree (8; ingest-v1 2.5 step 13).
+
+The decision on [the seq-gaps erratum](../errata/2026-11-20-sm-1.1-seq-gaps.md) added:
+
+39. Only sealed records keep their numbers: a crash cuts at most records no batch holds, the records written after the restart reuse those numbers, and no gap is excused but a local-only one the server recorded (4.1, 6, 9).

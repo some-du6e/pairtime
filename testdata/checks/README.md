@@ -83,7 +83,7 @@ A count a scenario states is part of the oracle. A count it leaves out isn't ass
 
 ### `events.jsonl`
 
-The format of [../timelines/README.md](../timelines/README.md#eventsjsonl): `pkg/event`'s own encoding, one event per line, in arrival order. A scenario with two devices interleaves their events by `t`, and each device's `seq` is gapless on its own. Keys, devices and times are the base fixture's. Event ids are UUIDv7s with the event's time and bits from a hash of the base, the device and `seq`, so two scenarios with the same records write the same bytes. The prompt texts the scenarios use are in the base fixture's `prompts.json`.
+The format of [../timelines/README.md](../timelines/README.md#eventsjsonl): `pkg/event`'s own encoding, one event per line, in arrival order. A scenario with two devices interleaves their events by `t`, and each device's `seq` rises by 1 from one event to the next, because a fixture holds no checkpoint or upload-failure note, whose numbers a real device's events skip (ledger-v1.md 4.1). Keys, devices and times are the base fixture's. Event ids are UUIDv7s with the event's time and bits from a hash of the base, the device and `seq`, so two scenarios with the same records write the same bytes. The prompt texts the scenarios use are in the base fixture's `prompts.json`.
 
 `events.jsonl` holds what each device recorded, and `ledger.json` what the client revealed. They hold the same records in every scenario but three: `4.2-cc7-dropped-record` and `4.2-cc7-dropped-batch` leave records out of the reveal, and the second device of `4.2-cc5-second-device` reveals nothing, so its records are in `events.jsonl` only.
 

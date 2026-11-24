@@ -25,7 +25,7 @@ WP-FX2 adds 6.3, its two-tab variant, 6.5 and SM 4.2's alternation case; WP-FX3 
 
 ### `events.jsonl`
 
-One device's events, each line exactly what `pkg/event` writes for the event (`json.Marshal` of an `event.Event`): compact JSON, envelope fields first, then `kind`, then `data`. `seq` is gapless and `t` never goes back, so arrival order is time order; events of the same millisecond keep the order in which the agent wrote them. `mono` counts milliseconds since the boot, through sleep, as Go's clock does on Windows. No fixture suspends a Linux or macOS machine, where it wouldn't.
+One device's events, each line exactly what `pkg/event` writes for the event (`json.Marshal` of an `event.Event`): compact JSON, envelope fields first, then `kind`, then `data`. `seq` rises by 1 from one event to the next, because a fixture holds no checkpoint or upload-failure note, whose numbers a real device's events skip (ledger-v1.md 4.1), and `t` never goes back, so arrival order is time order; events of the same millisecond keep the order in which the agent wrote them. `mono` counts milliseconds since the boot, through sleep, as Go's clock does on Windows. No fixture suspends a Linux or macOS machine, where it wouldn't.
 
 Records before the window (below) set up state the window needs, such as a session started a few minutes earlier, and aren't checked.
 
