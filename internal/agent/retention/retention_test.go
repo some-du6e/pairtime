@@ -41,6 +41,7 @@ func TestDevice(t *testing.T) {
 		{"ledger records and batch roots are kept 180 days", p.Ledger, 180},
 		{"minute buckets are kept 180 days", p.Buckets, 180},
 		{"held hook calls are kept 7 days at most", p.Held, 7},
+		{"hook calls spooled in the inbox are kept 7 days at most", p.Inbox, 7},
 		{"commit records are kept 180 days", p.Commits, 180},
 		{"records of past uploads are kept 90 days", p.Uploads, 90},
 	}

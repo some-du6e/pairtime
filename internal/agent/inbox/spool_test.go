@@ -562,7 +562,7 @@ func TestDrainer(t *testing.T) {
 			},
 		},
 		{
-			name: "a file set aside is deleted KeepDays after it was set aside",
+			name: "a file set aside is deleted SpoolKeep after it was last written",
 			run: func(t *testing.T, inbox, journal string) {
 				if err := os.MkdirAll(inbox, 0o700); err != nil {
 					t.Fatal(err)
@@ -574,7 +574,7 @@ func TestDrainer(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				then := time.Now().Add(-(KeepDays*24 + 1) * time.Hour)
+				then := time.Now().Add(-SpoolKeep - time.Hour)
 				if err := os.Chtimes(old, then, then); err != nil {
 					t.Fatal(err)
 				}
@@ -582,7 +582,7 @@ func TestDrainer(t *testing.T) {
 					t.Fatal(err)
 				}
 				if _, err := os.Lstat(old); !os.IsNotExist(err) {
-					t.Errorf("the file set aside over KeepDays ago is still there: %v", err)
+					t.Errorf("the file set aside and last written over SpoolKeep ago is still there: %v", err)
 				}
 				if _, err := os.Lstat(fresh); err != nil {
 					t.Errorf("the file set aside today is gone: %v", err)
