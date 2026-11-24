@@ -211,6 +211,17 @@ func TestErase(t *testing.T) {
 				t.Errorf("rows that name the teen are left: %v", left)
 			}
 		}},
+		{name: "a flag on one of the account's submissions under another account's user_id, which the delete by user_id misses, fails the erasure, which then changes nothing (D-sb1-flags-erasure)", run: func(t *testing.T, f *fixture) {
+			world(t, f)
+			f.exec(t, `INSERT INTO submission_flags (submission_id, user_id, code, detail, raised_at_ms) VALUES ($1, $2, 'repo_overlap', '{"submissions":[]}', $3)`, "sub-"+teen.id, other.id, f.now.UnixMilli())
+			before := f.dump(t, "privacy_token_uses")
+			if rec := f.ask(t, privacy.ActionDelete, subject([]string{teen.email}, nil, nil), false); rec.Code != http.StatusInternalServerError {
+				t.Errorf("the delete answered %d, want 500: %s", rec.Code, rec.Body.String())
+			}
+			if after := f.dump(t, "privacy_token_uses"); !reflect.DeepEqual(before, after) {
+				t.Error("the failed erasure changed rows")
+			}
+		}},
 		{name: "an export lists what is held, build days, devlogs, badges, removed items and submissions among it, and deletes nothing", run: func(t *testing.T, f *fixture) {
 			want := world(t, f)
 			before := f.dump(t, "privacy_token_uses")

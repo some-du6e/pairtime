@@ -125,15 +125,15 @@ var steps = []step{
 // otherFlags is the submissions step's around (D-sb1-flags-erasure).
 // submission.DeleteAccount takes the account's submission ids out of the
 // other accounts' repo_overlap flags and deletes a flag left naming none,
-// so the report counts those flags under submission_flags too, and no
-// flag of any account may be left naming one of the ids, read before the
-// delete.
+// so the report counts those flags under submission_flags too. No flag of
+// any account may be left on one of the ids, read before the delete, or
+// naming one, so a flag the delete by user_id misses fails the erasure.
 func otherFlags(ctx context.Context, tx writer.Tx, account string) (func(r *Report) error, error) {
 	ids, err := submission.IDs(ctx, tx, account)
 	if err != nil {
 		return nil, err
 	}
-	others := table{"submission_flags", "user_id <> $1 AND code = 'repo_overlap'"}
+	others := table{"submission_flags", "user_id <> $1 AND code = '" + submission.FlagRepoOverlap + "'"}
 	before, err := count(ctx, tx, others, account)
 	if err != nil {
 		return nil, err
@@ -144,7 +144,7 @@ func otherFlags(ctx context.Context, tx writer.Tx, account string) (func(r *Repo
 			return err
 		}
 		if left != 0 {
-			return fmt.Errorf("privacy: deleting the account left %d flags naming its submissions", left)
+			return fmt.Errorf("privacy: deleting the account left %d flags on or naming its submissions", left)
 		}
 		after, err := count(ctx, tx, others, account)
 		if err != nil {

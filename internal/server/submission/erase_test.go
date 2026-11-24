@@ -67,56 +67,101 @@ func TestDeleteAccount(t *testing.T) {
 	}
 }
 
-// TestDeleteAccountOverlaps checks that deleting an account takes its
-// submissions' ids out of the other accounts' repo_overlap flags, deletes
-// a flag that then names none and keeps a flag's other names, and that a
-// flag is stored under the account of the submission it is on, which the
-// eraser deletes and counts flags by (D-sb1-flags-erasure).
+// TestDeleteAccountOverlaps checks what deleting an account does to other
+// accounts' flags (D-sb1-flags-erasure). Each case starts with u1's
+// submission alone flagged as overlapping u2's, u1's submission shared
+// flagged as overlapping u2's and a third account's, and u2's flagged as
+// overlapping alone, and then deletes u2.
 func TestDeleteAccountOverlaps(t *testing.T) {
 	start, end := t0.Add(-2*day), t0.Add(-day)
-	for _, engine := range storetest.Engines() {
-		t.Run(string(engine)+"/deleting u2 takes its submission out of u1's flags, deletes the one that named it alone, and leaves no flag naming it", func(t *testing.T) {
-			h := newHarness(t, engine)
-			alone := h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusCreated)
-			shared := h.create("ptd_laptop", window("stardance", "req-2", end, t0), http.StatusCreated)
-			theirs := h.create("ptd_other", window("hard-mode", "req-1", start, end), http.StatusCreated)
-			if err := h.w.Do(context.Background(), 3, func(ctx context.Context, tx writer.Tx) error {
-				for _, f := range []struct {
-					on    string
-					names []string
-				}{
-					{alone.ID, []string{theirs.ID}},
-					{shared.ID, []string{"s_third", theirs.ID}},
-					{theirs.ID, []string{alone.ID}},
-				} {
-					if err := setFlag(ctx, tx, f.on, FlagRepoOverlap, overlapDetail{Submissions: f.names}, t0.UnixMilli()); err != nil {
-						return err
+	type subs struct{ alone, shared, theirs TeenView }
+	tests := []struct {
+		name string
+		// before checks the flags before the delete, and after after it.
+		before, after func(t *testing.T, h *harness, s subs)
+	}{
+		{
+			name: "a flag is stored under the account of the submission it is on, which the eraser deletes and counts flags by",
+			before: func(t *testing.T, h *harness, s subs) {
+				for _, c := range []struct{ id, owner string }{{s.alone.ID, u1}, {s.theirs.ID, u2}} {
+					var owner string
+					if err := h.db.Read.QueryRowContext(context.Background(), `SELECT user_id FROM submission_flags WHERE submission_id = $1`, c.id).Scan(&owner); err != nil || owner != c.owner {
+						t.Errorf("%s's flag is under %q (%v), want %s", c.id, owner, err, c.owner)
 					}
 				}
-				return nil
-			}); err != nil {
-				t.Fatal(err)
-			}
-			for _, c := range []struct{ id, owner string }{{alone.ID, u1}, {theirs.ID, u2}} {
-				var owner string
-				if err := h.db.Read.QueryRowContext(context.Background(), `SELECT user_id FROM submission_flags WHERE submission_id = $1`, c.id).Scan(&owner); err != nil || owner != c.owner {
-					t.Errorf("%s's flag is under %q (%v), want %s, the account the submission is of", c.id, owner, err, c.owner)
+			},
+		},
+		{
+			name: "FlagsNaming counts the flag on a submission and the flags that name it",
+			before: func(t *testing.T, h *harness, s subs) {
+				if n, err := FlagsNaming(context.Background(), h.db.Read, []string{s.theirs.ID}); err != nil || n != 3 {
+					t.Errorf("FlagsNaming = %d (%v), want 3: the flag on u2's submission and the two that name it", n, err)
 				}
-			}
-			if err := h.w.Do(context.Background(), 4, func(ctx context.Context, tx writer.Tx) error {
-				return DeleteAccount(ctx, tx, u2)
-			}); err != nil {
-				t.Fatal(err)
-			}
-			if got := h.flagsOf(alone.ID); len(got) != 0 {
-				t.Errorf("the flag that named u2's submission alone is %q, want it deleted", got)
-			}
-			if got, want := h.flagsOf(shared.ID), []string{`repo_overlap: {"submissions":["s_third"]}`}; !slices.Equal(got, want) {
-				t.Errorf("the flag that named u2's submission and another is %q, want %q", got, want)
-			}
-			if n, err := FlagsNaming(context.Background(), h.db.Read, []string{theirs.ID}); err != nil || n != 0 {
-				t.Errorf("%d flags (%v) still name u2's submission, want none", n, err)
-			}
-		})
+			},
+		},
+		{
+			name: "a flag that named the deleted account's submission alone is deleted",
+			after: func(t *testing.T, h *harness, s subs) {
+				if got := h.flagsOf(s.alone.ID); len(got) != 0 {
+					t.Errorf("the flag is %q, want it deleted", got)
+				}
+			},
+		},
+		{
+			name: "a flag that named it and another submission keeps the other",
+			after: func(t *testing.T, h *harness, s subs) {
+				if got, wantFlags := h.flagsOf(s.shared.ID), []string{`repo_overlap: {"submissions":["s_third"]}`}; !slices.Equal(got, wantFlags) {
+					t.Errorf("the flag is %q, want %q", got, wantFlags)
+				}
+			},
+		},
+		{
+			name: "no flag is left on or naming the deleted account's submission",
+			after: func(t *testing.T, h *harness, s subs) {
+				if n, err := FlagsNaming(context.Background(), h.db.Read, []string{s.theirs.ID}); err != nil || n != 0 {
+					t.Errorf("%d flags (%v) are on or name u2's submission, want none", n, err)
+				}
+			},
+		},
+	}
+	for _, engine := range storetest.Engines() {
+		for _, tt := range tests {
+			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) {
+				h := newHarness(t, engine)
+				s := subs{
+					alone:  h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusCreated),
+					shared: h.create("ptd_laptop", window("stardance", "req-2", end, t0), http.StatusCreated),
+					theirs: h.create("ptd_other", window("hard-mode", "req-1", start, end), http.StatusCreated),
+				}
+				if err := h.w.Do(context.Background(), 3, func(ctx context.Context, tx writer.Tx) error {
+					for _, f := range []struct {
+						on    string
+						names []string
+					}{
+						{s.alone.ID, []string{s.theirs.ID}},
+						{s.shared.ID, []string{"s_third", s.theirs.ID}},
+						{s.theirs.ID, []string{s.alone.ID}},
+					} {
+						if err := setFlag(ctx, tx, f.on, FlagRepoOverlap, overlapDetail{Submissions: f.names}, t0.UnixMilli()); err != nil {
+							return err
+						}
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if tt.before != nil {
+					tt.before(t, h, s)
+				}
+				if err := h.w.Do(context.Background(), 4, func(ctx context.Context, tx writer.Tx) error {
+					return DeleteAccount(ctx, tx, u2)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if tt.after != nil {
+					tt.after(t, h, s)
+				}
+			})
+		}
 	}
 }

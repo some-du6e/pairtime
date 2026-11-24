@@ -66,12 +66,50 @@ func IDs(ctx context.Context, q Querier, account string) ([]string, error) {
 	return out, nil
 }
 
-// FlagsNaming counts the repo_overlap flags, of any account, whose detail
-// names one of ids. Once DeleteAccount has run for the account ids were
-// of, none does, which the eraser checks (D-sb1-flags-erasure).
+// FlagsNaming counts the flags, of any account and with any code, that are
+// on one of ids, or that are repo_overlap flags whose detail names one.
+// Once DeleteAccount has run for the account ids were of, none is left,
+// which the eraser checks (D-sb1-flags-erasure). It reads every flag, so a
+// flag on one of ids under another account's user_id, which the delete by
+// user_id would miss, counts too.
 func FlagsNaming(ctx context.Context, q Querier, ids []string) (int, error) {
-	flags, err := overlapFlags(ctx, q, "", ids)
-	return len(flags), err
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	named := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		named[id] = true
+	}
+	rows, err := q.QueryContext(ctx, `SELECT submission_id, code, detail FROM submission_flags`)
+	if err != nil {
+		return 0, fmt.Errorf("submission: reading the flags: %w", err)
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var on, code, detail string
+		if err := rows.Scan(&on, &code, &detail); err != nil {
+			return 0, fmt.Errorf("submission: reading the flags: %w", err)
+		}
+		if named[on] {
+			n++
+			continue
+		}
+		if code != FlagRepoOverlap {
+			continue
+		}
+		var d overlapDetail
+		if err := json.Unmarshal([]byte(detail), &d); err != nil {
+			return 0, fmt.Errorf("submission: %s's repo_overlap flag holds %q: %w", on, detail, err)
+		}
+		if slices.ContainsFunc(d.Submissions, func(s string) bool { return named[s] }) {
+			n++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("submission: reading the flags: %w", err)
+	}
+	return n, nil
 }
 
 // overlapFlag is a repo_overlap flag: the submission it is on, and the
