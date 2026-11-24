@@ -35,8 +35,8 @@ type Ledger struct {
 	// life: made while config.toml said local-only, they reached it only
 	// after it had sealed a batch online since, so they never upload
 	// (D-late-local). HarnessCounts.LateLocal is each harness's part of it
-	// since the agent started. A log line read again after a restart is
-	// dropped, and counted, again.
+	// since the agent started. A log line read again, or a hook call parsed
+	// again, after a restart is dropped, and counted, again.
 	LateLocal uint64 `json:"late_local"`
 }
 
@@ -137,7 +137,8 @@ type HarnessCounts struct {
 	// it couldn't fully read (WP-AD3).
 	Lines        uint64 `json:"lines,omitempty"`
 	LineFailures uint64 `json:"line_failures,omitempty"`
-	// Repeats counts the records of log lines a replay read again that the
-	// ledger already held, which the adapter dropped.
+	// Repeats counts the records of log lines a replay read again, and of
+	// hook calls parsed again, that the ledger already held, which the
+	// adapter left out.
 	Repeats uint64 `json:"repeats,omitempty"`
 }

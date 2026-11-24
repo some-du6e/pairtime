@@ -21,12 +21,15 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/writer"
 )
 
-// fakeDevices authenticates the tokens it maps, as *device.Store does.
+// fakeDevices authenticates the tokens it maps, as *device.Store does, and
+// fails on ptd_down, as a device store whose database is down does.
 type fakeDevices map[string]device.Device
 
 func (f fakeDevices) Authenticate(_ context.Context, token string) (device.Device, error) {
 	d, ok := f[token]
 	switch {
+	case token == "ptd_down":
+		return device.Device{}, errors.New("device store: the database is locked")
 	case !ok:
 		return device.Device{}, device.ErrUnknownToken
 	case d.Revoked:
@@ -54,6 +57,14 @@ type call struct {
 	broken bool
 }
 
+// failingWriter is a writer whose every op fails, as one whose database
+// takes no writes.
+type failingWriter struct{}
+
+func (failingWriter) Do(context.Context, int, writer.Op) error {
+	return errors.New("writer: the database is locked")
+}
+
 // devlogBody is a publish's JSON body.
 func devlogBody(id, markdown string) string {
 	b, _ := json.Marshal(map[string]any{"id": id, "project": "p_one", "markdown": markdown, "ai_assisted": false})
@@ -72,6 +83,9 @@ func TestAPI(t *testing.T) {
 		burst int
 		// seed, when set, stores rows before the calls.
 		seed func(t *testing.T, db *store.DB)
+		// broken, when set, is what fails: "writer", every write, or
+		// "read", the read pool.
+		broken string
 	}{
 		{name: "a publish without a device token is refused with token_missing", calls: []call{
 			{method: "POST", path: DevlogsPath, body: devlogBody("dl_1", "hi"), wantCode: 401, want: `"error":"token_missing"`},
@@ -123,6 +137,47 @@ func TestAPI(t *testing.T) {
 		}},
 		{name: "a badge code that isn't on the list is refused", calls: []call{
 			{method: "POST", path: BadgesPath, token: "ptd_laptop", body: `{"id":"bd_1","code":"ten_hours"}`, wantCode: 400, want: `"error":"code_unknown"`},
+		}},
+		{name: "Markdown holding a C0 control character other than tab, LF and CR is refused with bad_markdown", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\x00b"), wantCode: 400, want: `"error":"bad_markdown"`},
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\x01b"), wantCode: 400, want: `"error":"bad_markdown"`},
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "colors \x1b[31mred"), wantCode: 400, want: `"error":"bad_markdown"`},
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\x1f"), wantCode: 400, want: `"error":"bad_markdown"`},
+			{method: "GET", path: DevlogsPath, token: "ptd_laptop", wantCode: 200, want: `{"devlogs":[]}`},
+		}},
+		{name: "Markdown holding a backspace (U+0008) is refused with bad_markdown", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\x08b"), wantCode: 400, want: `"error":"bad_markdown"`},
+		}},
+		{name: "Markdown holding a vertical tab (U+000B) is refused with bad_markdown", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\x0bb"), wantCode: 400, want: `"error":"bad_markdown"`},
+		}},
+		{name: "Markdown holding a form feed (U+000C) is refused with bad_markdown", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\x0cb"), wantCode: 400, want: `"error":"bad_markdown"`},
+		}},
+		{name: "Markdown with tabs, line feeds, carriage returns and DEL is taken byte for byte", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\tb\nc\r\nd\x7f"), wantCode: 201, markdown: "a\tb\nc\r\nd\x7f"},
+		}},
+		{name: "Markdown holding a C1 character (U+0085) is taken and read back byte for byte", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\u0085b"), wantCode: 201, markdown: "a\u0085b"},
+			{method: "GET", path: DevlogsPath, token: "ptd_desktop", wantCode: 200, markdown: "a\u0085b"},
+		}},
+		{name: "every route answers 503 with Retry-After: 5 when the device store fails", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_down", body: devlogBody("dl_1", "hi"), wantCode: 503, want: `"error":"unavailable"`, retryAfter: "5"},
+			{method: "GET", path: DevlogsPath, token: "ptd_down", wantCode: 503, want: `"error":"unavailable"`, retryAfter: "5"},
+			{method: "DELETE", path: DevlogsPath + "/dl_1", token: "ptd_down", wantCode: 503, want: `"error":"unavailable"`, retryAfter: "5"},
+			{method: "POST", path: BadgesPath, token: "ptd_down", body: `{"id":"bd_1","code":"comeback"}`, wantCode: 503, want: `"error":"unavailable"`, retryAfter: "5"},
+			{method: "GET", path: BadgesPath, token: "ptd_down", wantCode: 503, want: `"error":"unavailable"`, retryAfter: "5"},
+			{method: "DELETE", path: BadgesPath + "/bd_1", token: "ptd_down", wantCode: 503, want: `"error":"unavailable"`, retryAfter: "5"},
+		}},
+		{name: "a publish, a show, a delete and a removal answer 503 with Retry-After: 5 when the writer fails", broken: "writer", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "hi"), wantCode: 503, want: `"error":"unavailable"`, retryAfter: "5"},
+			{method: "POST", path: BadgesPath, token: "ptd_laptop", body: `{"id":"bd_1","code":"comeback"}`, wantCode: 503, want: `"error":"unavailable"`, retryAfter: "5"},
+			{method: "DELETE", path: DevlogsPath + "/dl_1", token: "ptd_laptop", wantCode: 503, want: `"error":"unavailable"`, retryAfter: "5"},
+			{method: "DELETE", path: BadgesPath + "/bd_1", token: "ptd_laptop", wantCode: 503, want: `"error":"unavailable"`, retryAfter: "5"},
+		}},
+		{name: "the devlogs and badges lists answer 503 with Retry-After: 5 when the read pool fails", broken: "read", calls: []call{
+			{method: "GET", path: DevlogsPath, token: "ptd_laptop", wantCode: 503, want: `"error":"unavailable"`, retryAfter: "5"},
+			{method: "GET", path: BadgesPath, token: "ptd_laptop", wantCode: 503, want: `"error":"unavailable"`, retryAfter: "5"},
 		}},
 		{name: "the devlogs list keeps <, > and & one byte each", calls: []call{
 			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", tricky), wantCode: 201},
@@ -195,6 +250,14 @@ func TestAPI(t *testing.T) {
 				Devices: devices, Writer: w, Read: db.Read,
 				Now:    func() time.Time { return now },
 				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+			}
+			switch tt.broken {
+			case "writer":
+				o.Writer = failingWriter{}
+			case "read":
+				if err := db.Read.Close(); err != nil {
+					t.Fatal(err)
+				}
 			}
 			if tt.burst > 0 {
 				o.Rate = ingest.NewLimiter(tt.burst, ingest.DefaultRateEvery)

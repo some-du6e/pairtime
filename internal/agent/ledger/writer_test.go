@@ -714,10 +714,12 @@ func dropModes(t *testing.T, dir string) {
 // stretch's first record does, so a crash after it can't take the switch
 // with it; the switch back online seals what the stretch left, or what was
 // pending after a seal that read the file local-only, and marks the first
-// batch whose records all came after it (Batch.Back); and a switch back the
+// batch whose records all came after it (Batch.Back); a switch back the
 // watch misses ends the stretch at the next seal that reads the file
-// online, marking no batch. Each batch's row and its seal frame say what
-// Sealed got, as the rows Open rebuilds after a crash do.
+// online, marking no batch; and the watch's note of a switch back such a
+// read found first still marks one, unless a batch sealed online came in
+// between. Each batch's row and its seal frame say what Sealed got, as
+// the rows Open rebuilds after a crash do.
 func TestNoteMode(t *testing.T) {
 	// A step changes config.toml ("file-local", "file-online"), notes the
 	// mode as the config watch does ("local", "online"), writes a record
@@ -899,6 +901,12 @@ func TestNoteMode(t *testing.T) {
 		{"a stretch only a seal's read saw, with records pending, ends at the next seal that reads config.toml online, so an event made before that read is sealed local-only",
 			[]string{"file-local", "write", "seal", "file-online", "seal-none", "write-old", "seal", "write", "seal"},
 			[]bool{false, false, true}, []bool{false, false, false}, []int{1, 1, 1}},
+		{"a switch back the watch notes after a seal's read ended the stretch with nothing pending, as when pairtime login renames config.toml into place while Open seals, still marks the first batch after the note, once the stretch's late event has its local-only batch (#300)",
+			[]string{"file-local", "local", "file-online", "seal-none", "online", "write-old", "seal", "write", "seal"},
+			[]bool{false, true}, []bool{false, true}, []int{1, 1}},
+		{"but one the watch notes after a batch sealed online had passed that end marks none, as that batch ended the run already",
+			[]string{"file-local", "local", "file-online", "seal-none", "write", "seal", "online", "write", "seal"},
+			[]bool{true, true}, []bool{false, false}, []int{1, 1}},
 		{"an event a kill left in the boot before, made in a stretch no batch sealed online has passed by that boot's clock though its t is after, is sealed local-only by the next Open in another boot",
 			[]string{"file-local", "local", "write", "sealed", "file-online", "online", "write-old", "seal", "write-stepped", "kill-reboot", "sealed"},
 			[]bool{false, false, false}, []bool{false, false, false}, []int{1, 1, 1}},

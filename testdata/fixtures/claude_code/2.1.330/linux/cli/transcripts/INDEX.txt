@@ -1,0 +1,5 @@
+# copied file	source	bytes	source mtime (UTC)
+transcripts/home/pairtime-capture/claude-home/projects/-home-capture-pairtime-capture-projects-cli/fb5eb70a-3021-4407-bbea-6e92b2ced0b7.jsonl	/home/capture/pairtime-capture/claude-home/projects/-home-capture-pairtime-capture-projects-cli/fb5eb70a-3021-4407-bbea-6e92b2ced0b7.jsonl	180729	2026-11-24T03:18:55Z
+transcripts/home/pairtime-capture/claude-home/projects/-home-capture-pairtime-capture-projects-cli/78f79adc-1337-4b01-bcae-8c6780b01d19.jsonl	/home/capture/pairtime-capture/claude-home/projects/-home-capture-pairtime-capture-projects-cli/78f79adc-1337-4b01-bcae-8c6780b01d19.jsonl	141889	2026-11-24T03:18:21Z
+transcripts/home/pairtime-capture/claude-home/projects/-home-capture-pairtime-capture-projects-cli/00dc46c4-0269-4c28-a3fd-4c0b6012219a.jsonl	/home/capture/pairtime-capture/claude-home/projects/-home-capture-pairtime-capture-projects-cli/00dc46c4-0269-4c28-a3fd-4c0b6012219a.jsonl	145969	2026-11-24T03:19:47Z
+transcripts/home/pairtime-capture/claude-home/history.jsonl	/home/capture/pairtime-capture/claude-home/history.jsonl (3 of 3 entries)	739	2026-11-24T03:18:55Z
