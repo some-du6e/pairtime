@@ -84,6 +84,21 @@ type fakeIngest struct {
 	// counters are the X-Pairtime-Req of every signed POST, uploads and
 	// names alike, in the order they came.
 	counters []uint64
+
+	// commitRecs are the commit records stored, by sha, as commit_records
+	// keeps them, and commitCodes counts the codes commits got. commitMax is
+	// the most commit records a request may carry, ingest-v1's 500 when 0,
+	// which a test lowers to split an upload.
+	commitRecs  map[string]fakeCommit
+	commitCodes map[string]int
+	commitMax   int
+}
+
+// fakeCommit is a stored commit record: its JSON as the fake re-encoded
+// it, and when the request that first stored it was received.
+type fakeCommit struct {
+	rec       []byte
+	firstSeen uint64
 }
 
 type fakeRow struct {
@@ -103,6 +118,7 @@ func newFakeIngest(device, token string, devKey ed25519.PublicKey) *fakeIngest {
 		device: device, token: token, devKey: devKey, key: key, keyID: hex.EncodeToString(sum[:8]),
 		now: time.Now, faults: map[int]string{}, rows: map[uint64]fakeRow{}, buckets: map[int64]event.MinuteBucket{},
 		witness: map[event.Witness]int{}, names: map[string]string{}, namesHidden: map[string]bool{}, codes: map[string]string{}, namesFaults: map[int]string{},
+		commitRecs: map[string]fakeCommit{}, commitCodes: map[string]int{},
 	}
 }
 
@@ -119,6 +135,9 @@ var (
 	grammarForm = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+){0,3}([-+][0-9A-Za-z][0-9A-Za-z.-]{0,40})?$`)
 	releaseForm = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+){0,3}([-+]` + releaseID + `([.-]` + releaseID + `)*)?$`)
 	paramsForm  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	// commitIDForm is a commit id and keyForm a key (ingest-v1 1, 2.3.3).
+	commitIDForm = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
+	keyForm      = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 )
 
 // releaseID is one identifier of releaseForm's suffix.
@@ -369,8 +388,19 @@ func (f *fakeIngest) batches(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(roots) > 2000 || len(buckets) > 2000 || len(commits) > 500 {
+	maxCommits := f.commitMax
+	if maxCommits == 0 {
+		maxCommits = 500
+	}
+	switch {
+	case len(roots) > 2000:
 		f.refuse(w, 413, "too_many_batches")
+		return
+	case len(buckets) > 2000:
+		f.refuse(w, 413, "too_many_buckets")
+		return
+	case len(commits) > maxCommits:
+		f.refuse(w, 413, "too_many_commits")
 		return
 	}
 	if key == f.lastKey {
@@ -391,7 +421,7 @@ func (f *fakeIngest) batches(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	receivedAt := uint64(f.now().UnixMilli())
-	resp := map[string]any{"received_at": receivedAt, "req": req, "commits": []any{}, "labels": nil}
+	resp := map[string]any{"received_at": receivedAt, "req": req, "labels": nil}
 	bres := []map[string]any{}
 	for _, raw := range roots {
 		bres = append(bres, f.root(raw, receivedAt))
@@ -400,7 +430,13 @@ func (f *fakeIngest) batches(w http.ResponseWriter, r *http.Request) {
 	for _, raw := range buckets {
 		kres = append(kres, f.bucket(raw))
 	}
-	resp["batches"], resp["buckets"] = bres, kres
+	cres := []map[string]any{}
+	for _, raw := range commits {
+		res := f.commit(raw, receivedAt)
+		f.commitCodes[res["code"].(string)]++
+		cres = append(cres, res)
+	}
+	resp["batches"], resp["buckets"], resp["commits"] = bres, kres, cres
 	if labels != nil {
 		resp["labels"] = f.label(labels)
 	}
@@ -556,6 +592,119 @@ func (f *fakeIngest) bucket(raw json.RawMessage) map[string]any {
 		return map[string]any{"status": 200, "code": "duplicate"}
 	}
 	return map[string]any{"status": 409, "code": "rev_conflict", "rev": cur.Rev}
+}
+
+// commit checks a commit record against ingest-v1 2.3.3's table alone and
+// stores it by sha, as commit_records does: accepted the first time,
+// duplicate when the stored record is the same, and updated when it
+// differs, which replaces it and keeps the first sighting's time (2.7, 2.9).
+func (f *fakeIngest) commit(raw json.RawMessage, receivedAt uint64) map[string]any {
+	refuse := func(code, field string) map[string]any {
+		return map[string]any{"status": 422, "code": code, "field": field}
+	}
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &members); err != nil {
+		return refuse("not_object", "")
+	}
+	required := []string{"sha", "parents", "project", "observed_at", "author_time", "committer_time", "actor"}
+	optional := []string{"files_changed", "insertions", "deletions", "path_hmacs", "credited_seconds_since_parent", "rewrites", "agent_trailer"}
+	for k := range members {
+		if !slices.Contains(required, k) && !slices.Contains(optional, k) {
+			return refuse("unknown_field", "")
+		}
+	}
+	for _, k := range required {
+		if _, ok := members[k]; !ok {
+			return refuse("missing_field", k)
+		}
+	}
+	var c struct {
+		SHA           string             `json:"sha"`
+		Parents       []string           `json:"parents"`
+		Project       string             `json:"project"`
+		ObservedAt    int64              `json:"observed_at"`
+		AuthorTime    int64              `json:"author_time"`
+		CommitterTime int64              `json:"committer_time"`
+		FilesChanged  *int64             `json:"files_changed,omitempty"`
+		Insertions    *int64             `json:"insertions,omitempty"`
+		Deletions     *int64             `json:"deletions,omitempty"`
+		PathHMACs     []string           `json:"path_hmacs,omitempty"`
+		Credited      map[string]float64 `json:"credited_seconds_since_parent,omitempty"`
+		Rewrites      []struct {
+			OldSHA string `json:"old_sha"`
+			NewSHA string `json:"new_sha"`
+		} `json:"rewrites,omitempty"`
+		Actor        string  `json:"actor"`
+		AgentTrailer *string `json:"agent_trailer,omitempty"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
+		return refuse("bad_type", "")
+	}
+	ids := func(list []string) bool {
+		for _, id := range list {
+			if !commitIDForm.MatchString(id) {
+				return false
+			}
+		}
+		return true
+	}
+	count := func(n *int64) bool { return n == nil || (*n >= 0 && *n <= 2147483647) }
+	switch {
+	case !commitIDForm.MatchString(c.SHA):
+		return refuse("bad_string", "sha")
+	case len(c.Parents) > 1024:
+		return refuse("too_many", "parents")
+	case !ids(c.Parents):
+		return refuse("bad_string", "parents")
+	case !keyForm.MatchString(c.Project):
+		return refuse("bad_string", "project")
+	case c.ObservedAt < 1_577_836_800_000 || c.ObservedAt >= 4_102_444_800_000:
+		return refuse("bad_number", "observed_at")
+	case c.AuthorTime < 0 || c.CommitterTime < 0:
+		return refuse("bad_number", "author_time")
+	case !count(c.FilesChanged) || !count(c.Insertions) || !count(c.Deletions):
+		return refuse("bad_number", "files_changed")
+	case len(c.Rewrites) > 2000:
+		return refuse("too_many", "rewrites")
+	case !slices.Contains([]string{"human", "agent", "unknown"}, c.Actor):
+		return refuse("bad_string", "actor")
+	case c.AgentTrailer != nil && !slices.Contains([]string{"aider", "claude", "lovable", "replit"}, *c.AgentTrailer):
+		return refuse("bad_string", "agent_trailer")
+	}
+	seen := map[string]bool{}
+	for _, r := range c.Rewrites {
+		if !commitIDForm.MatchString(r.OldSHA) || !commitIDForm.MatchString(r.NewSHA) {
+			return refuse("bad_string", "rewrites")
+		}
+		if seen[r.OldSHA+r.NewSHA] {
+			return refuse("bad_rule", "rewrites")
+		}
+		seen[r.OldSHA+r.NewSHA] = true
+	}
+	if len(slices.Compact(slices.Sorted(slices.Values(c.Parents)))) != len(c.Parents) {
+		return refuse("bad_rule", "parents")
+	}
+	if len(slices.Compact(slices.Sorted(slices.Values(c.PathHMACs)))) != len(c.PathHMACs) {
+		return refuse("bad_rule", "path_hmacs")
+	}
+	// It stores what it parsed, re-encoded, with a root commit's null
+	// parents as [] (ingest-v1 2.3, 2.3.3).
+	if c.Parents == nil {
+		c.Parents = []string{}
+	}
+	js, _ := json.Marshal(c)
+	old, ok := f.commitRecs[c.SHA]
+	switch {
+	case !ok:
+		f.commitRecs[c.SHA] = fakeCommit{rec: js, firstSeen: receivedAt}
+		return map[string]any{"status": 200, "code": "accepted"}
+	case bytes.Equal(old.rec, js):
+		return map[string]any{"status": 200, "code": "duplicate"}
+	}
+	f.commitRecs[c.SHA] = fakeCommit{rec: js, firstSeen: old.firstSeen}
+	return map[string]any{"status": 200, "code": "updated"}
 }
 
 func (f *fakeIngest) label(raw json.RawMessage) map[string]any {
