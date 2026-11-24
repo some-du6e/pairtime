@@ -421,7 +421,10 @@ components:
             It counts the adapters', presence's and the git watcher's;
             HarnessCounts.late_local is each harness's part since the agent
             started. The count rides in the seal frames, so drops after a
-            run's last batch are left out after a restart.
+            run's last batch are left out after a restart. Nothing keeps
+            which records were dropped across a restart, so a log line read
+            again, or a hook call parsed again, after one is dropped, and
+            counted, again.
     Footprint:
       type: object
       additionalProperties: false
@@ -616,7 +619,10 @@ components:
             Records the ledger dropped because they were made while
             config.toml said local-only and reached it only after it had
             sealed a batch online since, so they never upload (D-late-local).
-            Absent when none.
+            A log line read again, or a hook call parsed again, in the same
+            run counts once; nothing keeps which records were dropped across
+            a restart, so one read or parsed again after a restart counts
+            again. Absent when none.
         ignored:
           type: integer
           minimum: 0
@@ -642,6 +648,16 @@ components:
             an entry of a type or with a value its harness's version doesn't
             write, a line too long to read. Their other records are still
             written. Absent when none.
+        repeats:
+          type: integer
+          minimum: 0
+          description: >
+            Records of log lines a replay read again, as after a crash or a
+            restart, or of hook calls parsed again, as after a crash during a
+            held.jsonl replay, that the ledger already held, which the adapter
+            left out so none counts twice (D-late-local). A record the ledger dropped
+            as made in local-only mode is no repeat: its replay in the same
+            run is skipped, and counted nowhere. Absent when none.
     Git:
       type: object
       additionalProperties: false

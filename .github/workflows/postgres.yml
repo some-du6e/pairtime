@@ -25,6 +25,8 @@ on:
       - internal/server/retention/**
       - internal/server/ingest/**
       - internal/server/rollup/**
+      - internal/server/buildday/**
+      - internal/server/devlog/**
       - internal/server/projectnames/**
       - internal/server/witness/**
       - internal/server/keys/**

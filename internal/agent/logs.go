@@ -41,8 +41,9 @@ import (
 //
 // A log record's event_id is the same each time its line is read
 // (logEventID), so a line read again after a crash, before state.json said
-// it was, makes records pkg/score takes for copies of the ones already in
-// the ledger.
+// it was, makes records the adapters leave out where the ledger has them
+// (heldLogs), and pkg/score takes for copies of the ones already there. A
+// hook call's records are keyed the same way, by the call (hookEventID).
 
 // logReq is a batch of log lines the tailers hand the worker, and where the
 // worker answers how many it took.
@@ -602,6 +603,31 @@ func (h *adapterHost) takeBatch(t *tailers.Tailer, b tailers.Batch) int {
 	return len(b)
 }
 
+// logsHeld is what the ledger holds for the log and hook records takeLine
+// and parse write (heldLogs), read from the ledger the first time a line or
+// a hook call comes, which is once the writer is there, from heldLogsWindow
+// before the newest batch an earlier run sealed, as the writer found the
+// ledger at its Open (ledger.Writer.Opened), on. A ledger that can't be
+// read gives none, which the agent's log notes. It runs on the adapters'
+// worker.
+func (h *adapterHost) logsHeld() *heldLogs {
+	if h.logHeld == nil {
+		h.mu.Lock()
+		w := h.writer
+		h.mu.Unlock()
+		var anchor uint64
+		if w != nil {
+			anchor = w.Opened()
+		}
+		held, err := loadHeldLogs(h.a.dirs.Ledger(), anchor, wallNow())
+		if err != nil {
+			h.a.log.Warn("couldn't read what the ledger holds, so a log line a replay reads again, or a hook call parsed again, may make its record twice", "err", err)
+		}
+		h.logHeld = held
+	}
+	return h.logHeld
+}
+
 // takeLine has line's adapter parse it and writes its records, and reports
 // whether it took the line. It doesn't when the line's folder's project is
 // still being worked out, when hook calls of its session wait for theirs,
@@ -685,12 +711,29 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		h.count(func() { st.Lines++ })
 	}
 	due := false
+	held := h.logsHeld()
 	for i, r := range recs {
 		key := r.LogKey
 		if key == "" {
 			key = fmt.Sprintf("%d.%d", ll.Offset, i)
 		}
 		r.Event.EventID = h.logEventID(r.Event.T, ll.File, key)
+		if held.has(r.Event.EventID) {
+			// The ledger holds this record already: a replay read its line
+			// again, as a crash re-reads the lines taken since state.json's
+			// last save, or a restart's resume, a Rewind or a relocate reads
+			// one it had. Written again it would count twice (D-late-local
+			// point 5).
+			h.count(func() { st.Repeats++ })
+			continue
+		}
+		if held.wasDropped(r.Event.EventID) {
+			// The ledger dropped this record earlier in this run, as made in
+			// a local-only stretch (ledger.ErrLateLocal), and would drop it
+			// again: a replay of it is neither a repeat of a record the
+			// ledger holds nor a second drop.
+			continue
+		}
 		if start, ok := r.Event.Data.(*event.SessionStart); ok && !ll.Replay {
 			r = h.tiedStart(r, start)
 		}
@@ -699,8 +742,15 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		// those reads the lines again, to the same event_ids. A log line has
 		// no sender's stamp of its own (ledger.Input.Sent).
 		r.Late = line.Lookback > 0
-		if !h.write(st, r, clock.Stamp{}) && h.writerDown() {
-			return false
+		switch h.write(st, r, clock.Stamp{}) {
+		case writeTaken:
+			held.add(r.Event.EventID, wallNow())
+		case writeDropped:
+			held.drop(r.Event.EventID, wallNow())
+		case writeRefused:
+			if h.writerDown() {
+				return false
+			}
 		}
 		switch r.Event.Kind() {
 		case event.KindSessionStart, event.KindPromptSubmit, event.KindAgentStop:
@@ -777,6 +827,34 @@ func (h *adapterHost) logEventID(t int64, file, key string) string {
 	m.Write(n[:])
 	m.Write([]byte(file))
 	m.Write([]byte(key))
+	return eventIDFrom(t, m.Sum(nil))
+}
+
+// hookEventID is the event_id of a hook call's record: a UUIDv7 with the
+// record's time, whose other bits are an HMAC, under K_session and a domain
+// of its own, of the call's id (inbox.Message.ID) and the record's place in
+// Parse's output, counted from its end. A call parsed again, as after a
+// crash during a held.jsonl replay, a kill before its pending log was
+// emptied or a writer that stopped partway through it, makes the same ids
+// while its records keep their times, so the adapters leave out what the
+// ledger has (heldLogs) and pkg/score counts it once. A call timed by the
+// agent's receipt (hookpath.Times) takes the receipt of the start that
+// parses it again, so its ids change. The place counts from the end because
+// the one record a call can have first, the walk's session.start, comes
+// from the agent's walk of the sender, which a call read back from an
+// earlier run's held.jsonl line never has; what follows comes from the
+// call's payload. The record's kind is left out, since a prompt parsed
+// again against memory saved after it comes out as agent.queue, which is
+// the same record.
+func (h *adapterHost) hookEventID(t int64, call string, place int) string {
+	m := hmac.New(sha256.New, h.a.sessionSecret())
+	m.Write([]byte("pairtime/v1/hook-event"))
+	var n [8]byte
+	binary.BigEndian.PutUint64(n[:], uint64(len(call)))
+	m.Write(n[:])
+	m.Write([]byte(call))
+	binary.BigEndian.PutUint64(n[:], uint64(place))
+	m.Write(n[:])
 	return eventIDFrom(t, m.Sum(nil))
 }
 

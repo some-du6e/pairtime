@@ -34,8 +34,10 @@
 // E-return-lookahead; DESIGN 3.7). A final bucket never changes again. A
 // pending one gets a new revision each time a Step changes it, the change
 // to final included, with rev one higher (DESIGN 6.2 D1). A pending minute
-// that turns out to have no credit and no agent time gets an empty
-// revision, so the one before it is superseded.
+// that a Step derives with no credit and no agent time gets an empty
+// revision, so the one before it is superseded. One that a Step doesn't
+// derive at all keeps its latest revision, and stays pending unless a later
+// Step derives it, so no Step zeroes a minute it never looked at.
 //
 // # The window
 //
@@ -449,9 +451,23 @@ func (l *Loop) open() error {
 		c = cursor{}
 	}
 	c.Device = chain.DeviceID
+	if c.Batch > 0 && c.Carry.V < carryVersion {
+		// A place an agent before WP-HL1 saved: its carry has no Stamped and
+		// no RestartAt, so both are folded again from the ledger's records
+		// before the window. FinalBefore and the window stay where they are,
+		// so no final minute is scored again.
+		l.log.Info("the scorer's place in state.json is an older agent's, so it reads the ledger again for the stamped record and the restart its carry lacks", "batch", c.Batch)
+		rebuilt, err := l.rebuildCarry(c)
+		if err != nil {
+			return fmt.Errorf("rebuilding the scorer's carry from the ledger: %w", err)
+		}
+		c.Carry = rebuilt
+	}
+	c.Carry.V = carryVersion
 	l.cur = c
 	l.base = c.Batch
-	l.win = window{from: c.From, carry: c.Carry, gaps: l.gaps}
+	l.win = window{from: c.From, carry: c.Carry, gaps: l.gaps, ttl: l.opts.Params.Int(params.BUCKET_TTL_S) * 1000,
+		late: (l.opts.Params.Int(params.PENDING_WINDOW_S) - l.opts.Params.Int(params.READ_HORIZON_S)) * 1000}
 	for _, date := range c.Days {
 		l.days[date] = true
 	}
@@ -500,6 +516,61 @@ func (l *Loop) open() error {
 	l.opened = true
 	l.report()
 	return nil
+}
+
+// rebuildCarry returns the carry of c, a place an agent before WP-HL1
+// saved, with the Stamped and RestartAt that agent didn't keep, as a
+// carryVersion agent would have folded them from the same records: the
+// ones dated before c.From in the batches up to c.Batch that the loop
+// scored (follower), the window's batches from FromBatch on included,
+// since records slid out of them or came late. The carry's other slots
+// stay as saved, since that agent folded them as a carryVersion agent
+// does. RestartAt is folded again in record order (restartAt) from the
+// earlier of the carry's Power and Presence on: a restart dated at or
+// before that one drops neither (carry.records), and with either missing,
+// no restart drops anything.
+func (l *Loop) rebuildCarry(c cursor) (carry, error) {
+	out := c.Carry
+	out.Stamped = 0
+	again := out.Power != nil && out.Presence != nil
+	var lo int64
+	if again {
+		lo = min(out.Power.T, out.Presence.T)
+	}
+	var marks []mark
+	var f follower
+	err := l.readBatches(1, func(b ledger.Batch) error {
+		if b.Row.B > c.Batch {
+			return errEnough
+		}
+		if !f.next(b) {
+			return nil
+		}
+		for _, rec := range b.Records {
+			ev, ok, err := eventOf(rec, c.Device)
+			if err != nil || !ok || ev.T >= c.From {
+				continue
+			}
+			s, st := sampler(&ev), stamps(&ev)
+			if st {
+				out.Stamped = max(out.Stamped, ev.T)
+			}
+			if again && ev.T >= lo && (s || st) {
+				marks = append(marks, mark{t: ev.T, seq: ev.Seq, sampler: s})
+			}
+		}
+		return nil
+	}, func(first, _ uint64, err error) {
+		if first <= c.Batch {
+			l.log.Warn("a batch before the scorer's place doesn't read, and the scorer rebuilds its carry without it", "batch", first, "err", err)
+		}
+	})
+	if err != nil && !errors.Is(err, errEnough) {
+		return carry{}, err
+	}
+	out.RestartAt = restartAt(marks, l.opts.Params.Int(params.BUCKET_TTL_S)*1000)
+	out.V = carryVersion
+	return out, nil
 }
 
 // catchUp scores the batches in the ledger after the loop's place.
@@ -751,6 +822,12 @@ func (l *Loop) step(b uint64) {
 	all.Append(out.Final)
 	all.Append(out.Pending)
 	view := minuteBuckets(meta, all, recs)
+	// The minutes this Step derived: pkg/score gives every slot it derives
+	// a credit slot, empty ones included.
+	derived := make(map[int64]bool, len(all.Credits)/4+1)
+	for _, c := range all.Credits {
+		derived[c.Slot-floorMod(c.Slot, minuteMS)] = true
+	}
 	// The minutes this Step can change: every one that wasn't final before
 	// it, as far as the view or the store has anything for them.
 	visit := make(map[int64]bool, len(l.pending))
@@ -766,6 +843,20 @@ func (l *Loop) step(b uint64) {
 		bk, ok := view[m]
 		if !ok {
 			if !l.pending[m] {
+				continue
+			}
+			if !derived[m] {
+				// A pending minute this Step didn't derive, such as one whose
+				// records the window no longer holds, keeps its latest
+				// revision as it is: an empty one would zero the credit and
+				// agent time no Step has taken back. A later Step that
+				// derives it writes it again. Once FinalBefore passes it, no
+				// Step can make it final, and the loop stops looking at it,
+				// as pkg/score's Revisions does with a minute it no longer
+				// derives, so it stays pending (WP-HL1).
+				if m+minuteMS <= fb {
+					delete(l.pending, m)
+				}
 				continue
 			}
 			bk = emptyBucket(meta, m)

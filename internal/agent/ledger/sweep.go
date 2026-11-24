@@ -30,7 +30,10 @@ import (
 // (foldPayloads). That only makes more of the past
 // count as local-only, and the stretches keep no time config.toml changed
 // mode before the ledger's 180 days
-// (docs/errata/2026-11-23-late-local-records.md).
+// (docs/errata/2026-11-23-late-local-records.md). The moments the rows,
+// the base frame and the writer keep fold at it too (foldUntil), and
+// batches.seg is written again for a moment to fold, even when no batch
+// goes and no stretch folds (docs/errata/2026-11-23-late-local-follow-ups.md).
 //
 // floor, when it isn't 0, is the first batch whose row stays whatever its
 // age: the uploads' first batch the server hasn't stored, while this
@@ -84,12 +87,26 @@ func (w *Writer) Sweep(from string, floor uint64) (batches, segs int, err error)
 	}
 	k := keptFrom(bf, from, floor)
 	cut := cutOf(from)
-	stretches, folded := foldPayloads(bf.stretches, cut)
+	_, folded := foldPayloads(bf.stretches, cut)
 	w.mu.Lock()
 	w.foldStretches(cut)
+	w.foldMoment(cut)
+	// The base frame keeps the writer's own stretches and moment, folded, as
+	// its next seal frame would record them, not the list batches.seg holds,
+	// which can be from before what Open found that no seal frame has yet:
+	// the stretch going on that rows an older version sealed after a
+	// downgrade ended, at their rise (restoreStretches), or the one a stretch
+	// end the agent saw ended (Options.Seen), and the stretches Open rebuilt
+	// from an older version's rows, which the rows this drops take with
+	// them. With the moment at least every kept row's, the next Open then
+	// finds nothing more in them, so a restart before that seal leaves what
+	// Open found as it was, though the fold made the rows' moments alike.
+	stretches := w.stretchPayloads(false)
+	uWall, uOS := w.until.wall, osPayload(untilOS{Mono: w.until.os, Boot: w.until.boot})
+	back := w.back
 	w.mu.Unlock()
-	if k > 0 || folded {
-		data, kerr := keptFile(bf, k, stretches)
+	if k > 0 || folded || foldsMoment(bf, k, cut) {
+		data, kerr := keptFile(bf, k, cut, stretches, uWall, uOS, back)
 		if kerr != nil {
 			return oldBatches, oldSegs, errors.Join(kerr, oldErr)
 		}
@@ -201,11 +218,13 @@ func keptFrom(bf *batchesFile, from string, floor uint64) int {
 // keptFile returns batches.seg as Sweep writes it, keeping the rows from
 // bf.rows[k] on: the chain frame, of the version with a base frame, a base
 // frame naming that batch, or the batch after the last when k is past
-// them, with stretches, the local-only stretches the newest row recorded as
-// the sweep folded them, the rows, then the receipts of the rows kept, in
-// the order of their batches. The rows go before every receipt, so each
-// receipt follows its row.
-func keptFile(bf *batchesFile, k int, stretches []stretchPayload) ([]byte, error) {
+// them, with stretches and the moment uWall, uOS, the live chain's writer's
+// own (Writer.Sweep) or an old chain's newest list and the moment its row
+// recorded (sweepChain), as the sweep folds them, and back, the writer's
+// mark due (basePayload.Back), then the rows, then the receipts of the rows
+// kept, in the order of their batches. The rows go before every receipt, so
+// each receipt follows its row.
+func keptFile(bf *batchesFile, k int, cut int64, stretches []stretchPayload, uWall int64, uOS *untilOS, back uint64) ([]byte, error) {
 	cp := bf.chain
 	cp.V = chainVersionBase
 	chain, err := json.Marshal(cp)
@@ -223,11 +242,14 @@ func keptFile(bf *batchesFile, k int, stretches []stretchPayload) ([]byte, error
 	}
 	// The local-only stretches go in the base frame, since the rows kept
 	// keep none of their own once read (readBatchesFile): Open takes them
-	// back from there until a later row records them again, with the moment
-	// the row that recorded them recorded, which it holds the kept rows to.
+	// back from there until a later row records them again, with the
+	// moment, which it holds the kept rows to (restoreStretches), and which
+	// it keeps as the writer's own unless a row's is later (scan). The
+	// moment folds at cut as the kept rows' do.
 	if stretches != nil {
 		bp.Stretches = stretches
-		bp.LocalUntil, bp.LocalUntilOS = bf.listUntil()
+		bp.LocalUntil, bp.LocalUntilOS = foldUntil(uWall, uOS, cut)
+		bp.Back = back
 	}
 	base, err := json.Marshal(bp)
 	if err != nil {
@@ -236,6 +258,7 @@ func keptFile(bf *batchesFile, k int, stretches []stretchPayload) ([]byte, error
 	data := appendFrame(appendFrame(nil, kindChain, chain), kindBase, base)
 	kept := bf.rows[min(k, len(bf.rows)):]
 	for _, rp := range kept {
+		rp.LocalUntil, rp.LocalUntilOS = foldUntil(rp.LocalUntil, rp.LocalUntilOS, cut)
 		p, err := json.Marshal(rp)
 		if err != nil {
 			return nil, err
@@ -309,9 +332,15 @@ func sweepChain(dir, from string) (batches, segs int, err error) {
 			return k, len(days), nil
 		}
 		need = bf.rows[k].Start.Seg
-		stretches, folded := foldPayloads(bf.stretches, cutOf(from))
-		if k > 0 || folded {
-			data, err := keptFile(bf, k, stretches)
+		cut := cutOf(from)
+		stretches, folded := foldPayloads(bf.stretches, cut)
+		var uWall int64
+		var uOS *untilOS
+		if bf.stretches != nil {
+			uWall, uOS = bf.listUntil()
+		}
+		if k > 0 || folded || foldsMoment(bf, k, cut) {
+			data, err := keptFile(bf, k, cut, stretches, uWall, uOS, 0)
 			if err != nil {
 				return 0, 0, err
 			}
@@ -358,6 +387,42 @@ func cutOf(day string) int64 {
 		return 0
 	}
 	return t.UnixMilli()
+}
+
+// foldUntil is a moment a row or a base frame records, in Unix ms with the
+// OS's reading o (sealPayload.LocalUntil), as a sweep by cut, in Unix ms,
+// keeps it: one before cut, and not the zero moment, becomes cut by the wall
+// clock alone, as the stretches fold there (foldPayloads), so the rows and
+// the base frame keep no time config.toml changed mode before the ledger's
+// 180 days. Only more of the past counts as local-only then.
+func foldUntil(wall int64, o *untilOS, cut int64) (int64, *untilOS) {
+	if folds(wall, cut) {
+		return cut, nil
+	}
+	return wall, o
+}
+
+// folds reports whether foldUntil moves a moment at wall, in Unix ms, to
+// cut.
+func folds(wall, cut int64) bool { return wall > 0 && wall < cut }
+
+// foldsMoment reports whether a sweep by cut, in Unix ms, that keeps the
+// rows from bf.rows[k] on folds a moment batches.seg holds: the base
+// frame's or a kept row's (foldUntil). The sweep then writes the file again
+// though it drops no row and folds no stretch, as when the list's oldest
+// end, which they record, merged into a stretch that ends after cut
+// (Writer.mergeStretches), so no time config.toml changed mode before the
+// ledger's 180 days outlives them there.
+func foldsMoment(bf *batchesFile, k int, cut int64) bool {
+	if folds(bf.base.LocalUntil, cut) {
+		return true
+	}
+	for _, rp := range bf.rows[min(k, len(bf.rows)):] {
+		if folds(rp.LocalUntil, cut) {
+			return true
+		}
+	}
+	return false
 }
 
 // foldPayloads is the stretches ps as a sweep by cut, in Unix ms, keeps

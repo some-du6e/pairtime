@@ -125,6 +125,11 @@ type rules struct {
 	// end, which can be later still, and Step holds FinalBefore for it on
 	// its own (docs/errata/2026-11-20-lookup-lookahead.md).
 	settle int64
+	// late is that allowance, settle minus reach: how late a record may
+	// arrive and still change only what is pending. A record that ends a
+	// sample's reach (sampledReaches) waits for it too, so a sample dated
+	// before it that arrives up to late keeps the reach.
+	late int64
 }
 
 func newRules(t *params.Table) rules {
@@ -192,6 +197,7 @@ func newRules(t *params.Table) rules {
 	// comments then cite SM.
 	r.reach = r.readHorizon
 	r.settle = r.pendingWindow
+	r.late = r.settle - r.reach
 	r.relayVouch = r.pendingWindow - relayVouchMarginMS
 	return r
 }

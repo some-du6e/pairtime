@@ -336,6 +336,9 @@ type Writer struct {
 	device  string
 	// created is when the chain began, in Unix ms (chainPayload.Created).
 	created int64
+	// opened is the newest batch an earlier run sealed, as Open found the
+	// ledger before it sealed what a crash left (Opened).
+	opened uint64
 
 	// sealMu orders seals and every write to batches.seg. It is taken
 	// before mu.
@@ -490,6 +493,7 @@ func Open(opts Options) (*Writer, error) {
 		w.closeFiles()
 		return nil, err
 	}
+	w.opened = w.b
 	if w.vault != nil {
 		// Before any record takes a number the crash freed. A vault that
 		// can't reconcile says so itself and keeps nothing more, so the
@@ -580,6 +584,13 @@ func (w *Writer) DeviceID() string { return w.device }
 // a locked keyring keeps the ledger shut, so Write tells lookback's by via
 // = log as well as by the date (lookback).
 func (w *Writer) Created() time.Time { return time.UnixMilli(w.created) }
+
+// Opened is the newest batch an earlier run of the writer sealed, 0 for
+// none: the last one Open found in the ledger, the seal frames a crash left
+// without a row included, before it sealed in a batch of its own the
+// records a crash left without one. A batch with a higher number was
+// sealed by this writer.
+func (w *Writer) Opened() uint64 { return w.opened }
 
 // Write appends the record of in.Event and returns its sequence number s,
 // which is also the event's seq (ledger-v1 4.1). It sets the event's seq
@@ -1032,8 +1043,9 @@ func (w *Writer) seenLocked(s Seen, at moment, sure bool) bool {
 		// for an end the writer read itself under the record lock, after
 		// every take it has (NoteSeenWhile).
 		after := sure || w.localAt == (moment{}) || w.localAt.earlierThan(ended)
-		newer := !sealedSince && after && (ended.run > w.until.run ||
-			ended.wall > w.until.wall || ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os)
+		later := ended.run > w.until.run || ended.wall > w.until.wall ||
+			ended.os > 0 && ended.boot == w.until.boot && ended.os > w.until.os
+		newer := !sealedSince && after && later
 		was := w.until
 		ends := (w.local || w.seen) && newer
 		if ends {
@@ -1044,7 +1056,14 @@ func (w *Writer) seenLocked(s Seen, at moment, sure bool) bool {
 			// nothing.
 			seal = w.noteLocked(true, end)
 		}
-		w.raiseUntil(ended)
+		if later {
+			// Only an end later than the moment by a clock the two hold moves
+			// it. One earlier by each of them, as a stretch end the agent kept
+			// from before a sweep folded the moment to the wall clock alone,
+			// adds none of its readings: it is no stretch the writer didn't
+			// know of, and brings no old reading back (Sweep).
+			w.raiseUntil(ended)
+		}
 		if moved, cross := w.until != was, w.crossBoot(end); !ends && !w.openHolds(ended) && (moved || cross) {
 			// A stretch the writer didn't know of: later than every end it
 			// had, or of a boot it has no end of, as one a run whose ledger
