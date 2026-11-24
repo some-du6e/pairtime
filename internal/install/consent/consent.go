@@ -103,7 +103,17 @@ type Input struct {
 	// the screen says so in place of local-only mode. It is empty for a
 	// computer that isn't linked, or whose config.toml keeps it local.
 	Linked string
+	// Unlinked says config.toml reads and says online while no pairtime
+	// login linked the computer, so that the screen says UnlinkedLine in
+	// place of local-only mode. Linked is empty then.
+	Unlinked bool
 }
+
+// UnlinkedLine is what the screen and install's last line say of a
+// computer whose config.toml says online though no pairtime login linked
+// it: pairtime uploads nothing, as the agent's problem.account says, and
+// nothing it seals before a login ever uploads.
+const UnlinkedLine = "config.toml says online, but pairtime login hasn't linked this computer, so pairtime uploads nothing, and what it records before you run pairtime login stays on this computer."
 
 // Screen is the consent screen.
 type Screen struct {
@@ -232,10 +242,14 @@ func (s *Screen) Render(w io.Writer) error {
 	b.WriteString(wrap("This is everything pairtime install changes on this computer. Nothing changes until you say yes, and pairtime uninstall takes it all back out.", ""))
 	b.WriteString("\n")
 	fmt.Fprintf(b, "pairtime goes in %s.\n", install.Printable(s.in.Binary))
-	if s.in.Linked != "" {
+	switch {
+	case s.in.Linked != "":
 		b.WriteString(wrap("This computer is linked to "+install.Printable(s.in.Linked)+", and config.toml lets pairtime upload your hours' numbers there.", ""))
 		b.WriteString("\n")
-	} else {
+	case s.in.Unlinked:
+		b.WriteString(wrap(UnlinkedLine, ""))
+		b.WriteString("\n")
+	default:
 		b.WriteString("It runs in local-only mode: what it records stays on this computer.\n\n")
 	}
 	s.renderHarnesses(b)

@@ -23,6 +23,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/install"
+	"github.com/some-du6e/pairtime/internal/version"
 )
 
 // hookModeEnv, when set, makes the test binary run pairtime with its hook
@@ -35,6 +36,21 @@ const hookModeEnv = "PAIRTIME_TEST_HOOK"
 // exit, as a stand-in for a hook Claude Code runs, which keeps the binary
 // in use meanwhile.
 const holdEnv = "PAIRTIME_TEST_HOLD"
+
+// versionEnv, when set, makes the test binary say it is that version of
+// pairtime (version.Version), as an older release's agent does.
+// gapAgentEnv, when set, makes install start an agent that says it is
+// gapAgentEnv's version just before it starts its own (agentStarting), as
+// a hook does that finds no agent while install puts the new binary in
+// place, from the old binary it still runs (#330).
+const (
+	versionEnv  = "PAIRTIME_TEST_VERSION"
+	gapAgentEnv = "PAIRTIME_TEST_GAP_AGENT"
+)
+
+// gapOldVersion is the version the agent that gapAgentEnv starts says it
+// is.
+const gapOldVersion = "v0.0.1-test-old"
 
 // keyringEnv names a folder in which the processes the cycle test starts
 // keep device keys, as the OS's secret store would (testKeyring). Unlike
@@ -85,6 +101,36 @@ func init() {
 		io.Copy(io.Discard, os.Stdin)
 		return 0
 	}
+	if v := os.Getenv(versionEnv); v != "" {
+		version.Version = v
+	}
+	if old := os.Getenv(gapAgentEnv); old != "" {
+		agentStarting = func(exe string, dirs home.Dirs) { startGapAgent(exe, dirs, old) }
+	}
+}
+
+// startGapAgent starts exe's agent saying it is version old, as a hook that
+// runs the old pairtime does, and waits until it answers, so that it holds
+// pairtime's folder when install's own start comes (gapAgentEnv).
+func startGapAgent(exe string, dirs home.Dirs, old string) {
+	prev, had := os.LookupEnv(versionEnv)
+	os.Setenv(versionEnv, old)
+	_, err := launchAgent(exe, dirs.Data)
+	if had {
+		os.Setenv(versionEnv, prev)
+	} else {
+		os.Unsetenv(versionEnv)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "test: the agent of version %s didn't start: %v\n", old, err)
+		return
+	}
+	for deadline := time.Now().Add(startWait); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if st, err := queryAgent(dirs); err == nil && st.Version.Version == old {
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "test: the agent of version %s didn't answer within %v\n", old, startWait)
 }
 
 // runWithHookMode runs pairtime with its own arguments after changing its
@@ -938,6 +984,35 @@ func TestInstallCycle(t *testing.T) {
 			},
 		},
 		{
+			name:     "while install updates pairtime, an agent of the old version that started just before install's own, as a hook's can, is stopped, and install names only its own agent as started (#330)",
+			hookMode: "real",
+			before: func(h *testHome) {
+				h.copyBinary(filepath.Join(h.root, "download", filepath.Base(h.bin)), "\npairtime test: a newer build\n")
+			},
+			steps: func(t *testing.T, h *testHome, before map[string]string) {
+				h.mustRun("", "", 0, "install", "--yes")
+				h.installed(false)
+				newer := filepath.Join(h.root, "download", filepath.Base(h.bin))
+				out := h.withEnv(gapAgentEnv, gapOldVersion).mustRun(newer, "", 0, "install", "--yes")
+				st, err := queryAgent(h.dirs)
+				switch {
+				case err != nil:
+					t.Fatalf("no agent answers after install: %v; it printed:\n%s", err, out)
+				case st.Version.Version != version.Get().Version:
+					t.Errorf("after install the agent that runs is pairtime %s, process %d, want this pairtime's %s; install printed:\n%s", st.Version.Version, st.PID, version.Get().Version, out)
+				}
+				if !strings.Contains(out, "which is pairtime "+gapOldVersion+", not this pairtime's ") {
+					t.Errorf("install didn't say it stopped the agent of the old version:\n%s", out)
+				}
+				if !strings.Contains(out, fmt.Sprintf("Started pairtime's agent, process %d.", st.PID)) {
+					t.Errorf("install didn't name the agent that runs, process %d, as the one it started:\n%s", st.PID, out)
+				}
+				pid := h.installed(false)
+				h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
+				h.uninstalled(before, pid)
+			},
+		},
+		{
 			name:     "the folders an install script made for the binary, named with --made, go with uninstall",
 			hookMode: "real",
 			before:   func(h *testHome) { h.write(".claude/settings.json", gitAISettings) },
@@ -1087,15 +1162,19 @@ func TestInstallCycle(t *testing.T) {
 }
 
 // TestSetUpLine checks install's last word on where what pairtime records
-// goes: local-only mode, as every install starts in, unless pairtime login
-// linked the computer and config.toml says online, when config.toml lets
-// its hours' numbers go to the server it's linked to.
+// goes: local-only mode, as every install starts in, unless config.toml
+// says online. Then config.toml lets its hours' numbers go to the server
+// pairtime login linked the computer to, and with no link it says, as the
+// agent's problem.account does, that nothing uploads until a login.
 func TestSetUpLine(t *testing.T) {
 	linked := `{"v":1,"server":"https://pairtime.example","device_id":"d_testdevice00000000000000a","linked_at":"2026-11-22T10:00:00Z"}`
 	cases := []struct {
 		name, account, config, want string
 	}{
-		{"a computer no login linked runs local-only, whatever config.toml says", "", "mode = \"online\"\n", "It runs in local-only mode"},
+		{"a computer no login linked whose config.toml says online uploads nothing until a login, as problem.account says", "", "mode = \"online\"\n",
+			"pairtime is set up. config.toml says online, but pairtime login hasn't linked this computer, so pairtime uploads nothing, and what it records before you run pairtime login stays on this computer."},
+		{"a computer no login linked whose config.toml says local runs local-only", "", "mode = \"local\"\n", "It runs in local-only mode"},
+		{"a computer no login linked whose config.toml has an error runs local-only", "", "mode = [\n", "It runs in local-only mode"},
 		{"a linked computer whose config.toml says online names its server", linked, "mode = \"online\"\n",
 			"This computer is linked to https://pairtime.example, and config.toml lets it upload your hours' numbers there; pairtime doctor says if anything holds them back."},
 		{"a linked computer whose config.toml says local runs local-only", linked, "mode = \"local\"\n", "It runs in local-only mode"},
@@ -1113,7 +1192,8 @@ func TestSetUpLine(t *testing.T) {
 			if err := os.WriteFile(dirs.ConfigFile(), []byte(tc.config), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if got := setUpLine(linkedServer(dirs)); !strings.Contains(got, tc.want) {
+			server := linkedServer(dirs)
+			if got := setUpLine(server, server == "" && unlinkedOnline(dirs)); !strings.Contains(got, tc.want) {
 				t.Errorf("install says %q, want %q", got, tc.want)
 			}
 		})

@@ -281,6 +281,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	linked := linkedServer(dirs)
+	unlinked := linked == "" && unlinkedOnline(dirs)
 	screen := consent.New(consent.Input{
 		GOOS:      env.GOOS,
 		Binary:    env.Exe,
@@ -289,6 +290,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		Diffs:     diffs,
 		Left:      left,
 		Linked:    linked,
+		Unlinked:  unlinked,
 	})
 
 	// 2. The teen's say.
@@ -404,13 +406,20 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	if err != nil || restart || st.Version.Version != version.Get().Version {
 		if err == nil {
 			// An agent of another version runs, perhaps from another copy
-			// of pairtime: the one that runs from now on is this one.
-			fmt.Fprintf(stdout, "Stopping pairtime's agent (process %d), which is another version.\n", st.PID)
+			// of pairtime, or, after install stopped the agent to update
+			// it (restart), one that started since, maybe from the old
+			// binary: the one that runs from now on is this one.
+			why := "which is another version"
+			if st.Version.Version == version.Get().Version {
+				why = "which started while install put this pairtime in place"
+			}
+			fmt.Fprintf(stdout, "Stopping pairtime's agent (process %d), %s.\n", st.PID, why)
 			if err := stopAgent(dirs); err != nil {
 				return fail(err)
 			}
 		}
-		if st, err = startAgentFrom(env.Exe, dirs); err != nil {
+		agentStarting(env.Exe, dirs)
+		if st, err = startOwnAgent(env.Exe, dirs, stdout); err != nil {
 			return fail(err)
 		}
 		fmt.Fprintf(stdout, "Started pairtime's agent, process %d.\n", st.PID)
@@ -426,7 +435,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	fmt.Fprintln(stdout, setUpLine(linked))
+	fmt.Fprintln(stdout, setUpLine(linked, unlinked))
 	if slices.Contains(chosen, install.ItemClaudeCode) {
 		// Claude Code's file watcher picks up a change to the hooks in its
 		// settings in sessions that are open, and a folder's trust dialog
@@ -521,6 +530,45 @@ func hasClaudeHooks(in *install.Installer, env install.Env) (bool, error) {
 	return slices.ContainsFunc(p.Problems, func(problem string) bool { return strings.Contains(problem, settings) }), nil
 }
 
+// agentStarting runs just before install starts its agent at step 5.
+// Tests set it to start an agent of another version there first, as a hook
+// does that finds no agent while install puts the new binary in place,
+// from the old binary that it still runs (#330).
+var agentStarting = func(exe string, dirs home.Dirs) {}
+
+// ownAgentTries is how many times install starts its agent before it gives
+// up on an agent of another version taking its place (startOwnAgent).
+const ownAgentTries = 3
+
+// startOwnAgent starts exe's agent (startAgentFrom) and returns its status
+// once an agent of this pairtime's version answers. An agent of another
+// version can answer instead: one that a hook started from the old binary
+// while install stopped the agent and put the new binary in place, which
+// held the lock when install's own start came, and which startAgentFrom
+// then returns. That agent is stopped and exe's started again, and so on,
+// ownAgentTries times at most, saying so each time.
+func startOwnAgent(exe string, dirs home.Dirs, stdout io.Writer) (agentStatus, error) {
+	want := version.Get().Version
+	for try := 1; ; try++ {
+		st, err := startAgentFrom(exe, dirs)
+		if err != nil {
+			return agentStatus{}, err
+		}
+		if st.Version.Version == want {
+			return st, nil
+		}
+		if try == ownAgentTries {
+			return agentStatus{}, fmt.Errorf("the agent that answers is pairtime %s, process %d, not this pairtime's %s, after install stopped it %d times; stop it (it's the process called pairtime), then run pairtime install again",
+				install.Printable(st.Version.Version), st.PID, want, ownAgentTries-1)
+		}
+		fmt.Fprintf(stdout, "Stopping pairtime's agent (process %d), which is pairtime %s, not this pairtime's %s, as a hook may have started it from the old pairtime while install put this one in place.\n",
+			st.PID, install.Printable(st.Version.Version), want)
+		if err := stopAgent(dirs); err != nil {
+			return agentStatus{}, err
+		}
+	}
+}
+
 // linkedServer is the server pairtime login linked this computer to,
 // while config.toml says online and reads (agent.UploadConfig), and ""
 // otherwise: where config.toml lets its hours' numbers go, as the consent
@@ -537,14 +585,29 @@ func linkedServer(dirs home.Dirs) string {
 	return l.Server
 }
 
+// unlinkedOnline reports whether config.toml reads and says online while no
+// pairtime login linked this computer (agent.Linked). pairtime then uploads
+// nothing, as the agent's problem.account says, and what it records before
+// a login stays on this computer, since nothing sealed before the link
+// uploads.
+func unlinkedOnline(dirs home.Dirs) bool {
+	cfg, broken := agent.UploadConfig(dirs)
+	return broken == "" && cfg.Mode == config.Online && !agent.Linked(dirs)
+}
+
 // setUpLine is install's last word on where what pairtime records goes:
 // it stays on this computer in local-only mode, as every install starts
-// in, and on a computer linked to server (linkedServer), config.toml lets
-// its hours' numbers go there, while doctor says what holds them back.
-func setUpLine(server string) string {
-	if server != "" {
+// in; on a computer linked to server (linkedServer), config.toml lets its
+// hours' numbers go there, while doctor says what holds them back; and on
+// one whose config.toml says online though no login linked it (unlinked,
+// unlinkedOnline), nothing goes until a login does.
+func setUpLine(server string, unlinked bool) string {
+	switch {
+	case server != "":
 		return fmt.Sprintf("pairtime is set up. This computer is linked to %s, and config.toml lets it upload your hours' numbers there; pairtime doctor says if anything holds them back.",
 			install.Printable(server))
+	case unlinked:
+		return "pairtime is set up. " + consent.UnlinkedLine
 	}
 	return "pairtime is set up. It runs in local-only mode, so what it records stays on this computer."
 }
