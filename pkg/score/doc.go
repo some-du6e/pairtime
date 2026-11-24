@@ -252,10 +252,12 @@
 //     stretch: an open lock or suspend closes at that slot's start, and the
 //     sample after an os.power that ends it opens no gap. When no sample
 //     follows that os.power, the slots up to the sampler's next sample are
-//     unknown, as before a machine's first sample (presence.blindAt). The
+//     unknown, as before a machine's first sample, apart from those a
+//     suspend keeps asleep up to its resume, and none takes its keyboard
+//     flag from a sample before the restart (presence.blindAt). The
 //     agent's os.focus, which says focus is unknown each time the agent
-//     starts, doesn't count. WP-HL1 changed this reading, which first read every
-//     record a State held, os.focus included, after a server's agent
+//     starts, doesn't count. WP-HL1 changed this reading, which first read
+//     every record a State held, os.focus included, after a server's agent
 //     stopped scoring 15 minutes after each start, and then bounded a
 //     sample's reach slot by slot (docs/errata/2026-11-23-headless-scoring.md).
 //     Lookback's transcripts come only by a log reader, and lookback's own
