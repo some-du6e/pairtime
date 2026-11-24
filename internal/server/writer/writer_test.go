@@ -454,7 +454,7 @@ func syncLevel(engine store.Engine, got *string) writer.Op {
 
 // TestDurable checks DoDurable's batches on every engine. No test can cut
 // the power, and a killed process loses nothing a NORMAL commit wrote, so
-// the check is the level each op reads, as WP-SB4's CI checks have it.
+// the check is the level each op reads.
 func TestDurable(t *testing.T) {
 	ctx := context.Background()
 	// What an op reads in a plain batch, and in a durable one. On Postgres
@@ -572,6 +572,96 @@ func TestDurable(t *testing.T) {
 				}
 				if cs := log.all(); len(cs) != 2 || !cs[0].Durable || cs[0].Err == nil || cs[1].Durable || cs[1].Err != nil {
 					t.Errorf("transactions = %+v, want a failed durable one, then a plain one", cs)
+				}
+			},
+		},
+		{
+			name: "a durable batch whose first op fails still runs its other ops at the durable level, since no op's rollback undoes it",
+			run: func(t *testing.T, db *store.DB) {
+				var log commitLog
+				w := start(t, db, writer.Options{Window: 300 * time.Millisecond, Engine: db.Engine}, &log)
+				failed := make(chan error, 1)
+				go func() {
+					failed <- w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+						_, err := tx.ExecContext(ctx, "INSERT INTO w_missing (id) VALUES (1)")
+						return err
+					})
+				}()
+				// Queued first, so its savepoint is the batch's first.
+				waitFor(t, "the failing op to be queued", func() bool { return w.QueueDepth() == 1 })
+				var got string
+				if err := w.DoDurable(ctx, 1, syncLevel(db.Engine, &got)); err != nil {
+					t.Fatal(err)
+				}
+				if err := <-failed; err == nil {
+					t.Error("the op on a missing table succeeded")
+				}
+				if got != durable[db.Engine] {
+					t.Errorf("the durable op after the failed one read %q, want %q", got, durable[db.Engine])
+				}
+				if cs := log.all(); len(cs) != 1 || cs[0].Ops != 2 || cs[0].Failed != 1 || !cs[0].Durable || cs[0].Err != nil {
+					t.Errorf("transactions = %+v, want one durable one holding both ops, one of them failed", cs)
+				}
+			},
+		},
+		{
+			name: "on SQLite, after a durable batch whose reset to NORMAL failed, the next batch resets the level before it begins",
+			run: func(t *testing.T, db *store.DB) {
+				if db.Engine != store.SQLite {
+					t.Skip("only SQLite has a level that outlives a batch")
+				}
+				var log commitLog
+				w := start(t, db, writer.Options{Window: time.Millisecond, BatchTimeout: 200 * time.Millisecond, Engine: db.Engine}, &log)
+				// The op outlasts its batch's timeout, so the reset after the
+				// batch gets a done context and fails, and the connection
+				// stays at FULL.
+				if err := w.DoDurable(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+					<-ctx.Done()
+					return ctx.Err()
+				}); err == nil {
+					t.Fatal("the op that outlasted its batch's timeout succeeded")
+				}
+				var got string
+				if err := w.Do(ctx, 1, syncLevel(db.Engine, &got)); err != nil {
+					t.Fatal(err)
+				}
+				if got != plain[db.Engine] {
+					t.Errorf("the next batch read %q, want the default, %q", got, plain[db.Engine])
+				}
+				if cs := log.all(); len(cs) != 2 || !cs[0].Durable || cs[0].Err == nil || cs[1].Durable || cs[1].Err != nil {
+					t.Errorf("transactions = %+v, want a failed durable one, then a plain one", cs)
+				}
+			},
+		},
+		{
+			name: "on Postgres, a batch after the server dropped the writer's connection begins on a new one, plain or durable",
+			run: func(t *testing.T, db *store.DB) {
+				if db.Engine != store.Postgres {
+					t.Skip("only Postgres has a server that drops the writer's connection")
+				}
+				var log commitLog
+				w := start(t, db, writer.Options{Window: time.Millisecond, Engine: db.Engine}, &log)
+				for i, do := range []func(context.Context, int, writer.Op) error{w.Do, w.DoDurable} {
+					var pid int64
+					if err := w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
+						return tx.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&pid)
+					}); err != nil {
+						t.Fatal(err)
+					}
+					var dropped bool
+					if err := db.Read.QueryRow("SELECT pg_terminate_backend($1)", pid).Scan(&dropped); err != nil || !dropped {
+						t.Fatalf("dropping the writer's connection: %v, %v", dropped, err)
+					}
+					waitFor(t, "the dropped connection's backend to exit", func() bool {
+						var n int
+						return db.Read.QueryRow("SELECT count(*) FROM pg_stat_activity WHERE pid = $1", pid).Scan(&n) == nil && n == 0
+					})
+					if err := do(ctx, 1, insert(i)); err != nil {
+						t.Errorf("batch %d after the dropped connection failed: %v", i, err)
+					}
+				}
+				if got, want := ids(t, db), map[int]bool{0: true, 1: true}; !reflect.DeepEqual(got, want) {
+					t.Errorf("rows = %v, want %v", got, want)
 				}
 			},
 		},

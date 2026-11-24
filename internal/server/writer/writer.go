@@ -2,14 +2,14 @@
 
 // Package writer is pairtimed's one writer goroutine (DESIGN 3.10; SP 7.4).
 //
-// Every write the server makes is an op handed to Do. The writer gathers
-// ops into batches and runs each batch in one transaction, so the number of
-// commits doesn't grow with the request rate. A transaction begins at least
-// Window (50 ms) after the previous one did and holds at most MaxRows (500)
-// rows, so the writer commits at most 20 times a second under any load, the
-// bound SP 7.4 and DESIGN 10.6 give. An op whose rows don't fit waits for
-// the next batch, and a single op larger than MaxRows gets a batch to
-// itself.
+// Every write the server makes is an op handed to Do or DoDurable. The
+// writer gathers ops into batches and runs each batch in one transaction,
+// so the number of commits doesn't grow with the request rate. A
+// transaction begins at least Window (50 ms) after the previous one did
+// and holds at most MaxRows (500) rows, so the writer commits at most 20
+// times a second under any load, the bound SP 7.4 and DESIGN 10.6 give. An
+// op whose rows don't fit waits for the next batch, and a single op larger
+// than MaxRows gets a batch to itself.
 //
 // SP 7.4 words the rule as "every 50 ms or 500 rows, whichever comes
 // first". Read literally, a batch that fills before 50 ms commits at once,
@@ -22,8 +22,8 @@
 // back alone, its caller gets its error, and the rest of the batch commits.
 // When the transaction itself fails, every op in it gets that error.
 //
-// An op handed to DoDurable is on disk before DoDurable answers, so a power
-// cut can't roll it back (DESIGN 8.9, 10.1). SQLite runs with
+// An op handed to DoDurable is on disk before DoDurable returns nil, so a
+// power cut can't roll it back (DESIGN 8.9, 10.1). SQLite runs with
 // synchronous=NORMAL, which syncs the WAL only at checkpoints, so the writer
 // sets synchronous=FULL on its connection before a batch that holds a
 // durable op begins, and NORMAL again once the batch ends. Every op in that
@@ -69,9 +69,10 @@ type Op func(ctx context.Context, tx Tx) error
 
 // Commit describes one transaction the writer finished, for metrics.
 type Commit struct {
-	// Start is when the transaction began.
+	// Start is when the batch's database calls began.
 	Start time.Time
-	// Duration runs from BEGIN to the end of COMMIT.
+	// Duration runs from Start to the end of COMMIT, and for a durable
+	// batch on SQLite to the end of the reset to NORMAL after it.
 	Duration time.Duration
 	// Ops is how many ops ran in the transaction, and Rows how many rows
 	// they declared.
@@ -111,7 +112,7 @@ type Options struct {
 	Engine store.Engine
 }
 
-// ErrClosed is what Do returns once Close has been called.
+// ErrClosed is what Do and DoDurable return once Close has been called.
 var ErrClosed = errors.New("writer: closed")
 
 // Writer is the writer goroutine and its queue.
@@ -223,8 +224,8 @@ func (w *Writer) do(ctx context.Context, rows int, op Op, durable bool) error {
 	}
 }
 
-// QueueDepth is how many ops handed to Do haven't finished: queued, or in
-// the batch being written.
+// QueueDepth is how many ops handed to Do or DoDurable haven't finished:
+// queued, or in the batch being written.
 func (w *Writer) QueueDepth() int {
 	return int(w.depth.Load())
 }
@@ -374,21 +375,32 @@ const savepoint = "pairtime_op"
 // error and how many rows the ops that succeeded changed, or the error
 // that failed the transaction.
 func (w *Writer) write(ctx context.Context, ops []*request, durable bool) ([]error, int64, error) {
-	// The batch holds the one connection from its sync setting to its
-	// reset, so both, and the transaction between them, run on it.
-	conn, err := w.db.Conn(ctx)
-	if err != nil {
-		return nil, 0, fmt.Errorf("writer: connection: %w", err)
+	var tx *sql.Tx
+	var err error
+	if w.opts.Engine == store.Postgres || (!durable && !w.full) {
+		// Nothing runs before BEGIN, so the pool begins the transaction,
+		// and retries it on a new connection when the one it had has
+		// gone bad, as when a Postgres server dropped it.
+		tx, err = w.db.BeginTx(ctx, nil)
+	} else {
+		// SQLite's level must be set on the connection the batch runs
+		// on, so the batch holds the one connection from that statement
+		// to its reset. modernc.org/sqlite reports a bad connection only
+		// when the pool hands it out, which Conn retries.
+		conn, cerr := w.db.Conn(ctx)
+		if cerr != nil {
+			return nil, 0, fmt.Errorf("writer: connection: %w", cerr)
+		}
+		defer conn.Close()
+		if err := w.setLevel(ctx, conn, durable); err != nil {
+			return nil, 0, fmt.Errorf("writer: making the batch durable: %w", err)
+		}
+		if durable {
+			// Runs before conn.Close, deferred above.
+			defer w.setLevel(ctx, conn, false)
+		}
+		tx, err = conn.BeginTx(ctx, nil)
 	}
-	defer conn.Close()
-	if err := w.setLevel(ctx, conn, durable); err != nil {
-		return nil, 0, fmt.Errorf("writer: making the batch durable: %w", err)
-	}
-	if durable {
-		// Runs before conn.Close, deferred above.
-		defer w.setLevel(ctx, conn, false)
-	}
-	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, 0, fmt.Errorf("writer: begin: %w", err)
 	}
@@ -432,12 +444,9 @@ func (w *Writer) write(ctx context.Context, ops []*request, durable bool) ([]err
 // batch, and NORMAL after one or, when that reset failed, before the next
 // plain batch. Only a failure to set FULL is an error, which fails the
 // durable batch. A failed reset isn't one: FULL is the stricter level, so
-// the batch runs at it, and the next batch tries again. On Postgres there
-// is nothing to set outside a transaction.
+// the batch runs at it, and the next batch tries again. Only SQLite's
+// batches call it: Postgres has no level to set outside a transaction.
 func (w *Writer) setLevel(ctx context.Context, conn *sql.Conn, durable bool) error {
-	if w.opts.Engine == store.Postgres {
-		return nil
-	}
 	switch {
 	case durable:
 		// Set first: when the statement fails, the batch fails before
