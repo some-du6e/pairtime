@@ -90,13 +90,22 @@ func TestParse(t *testing.T) {
 }
 
 func TestAdd(t *testing.T) {
+	// taken is a config pairtime made whose api_key the teen replaced,
+	// without pairtime's mark.
+	const taken = "[settings]\napi_url = http://127.0.0.1:7250/api/v1\napi_key = " + otherKey + "\n"
 	tests := []struct {
 		name, before, after string
 		key                 string // "" for testKey
 		port                int    // 0 for 7247
-		wantErr             string
-		wantIs              error
+		// recorded says install's record says it made the config
+		// (Recorded); without it, only the mark does (ByMark).
+		recorded bool
+		wantErr  string
+		wantIs   error
 	}{
+		{name: "a config pairtime made whose api_key the teen replaced is refused by its mark", before: testMark + taken, wantIs: ErrNotOwn},
+		{name: "with install's record, a config pairtime made whose mark the teen deleted with pairtime's key is refused too", before: taken, recorded: true, wantIs: ErrNotOwn},
+		{name: "without a record or a mark, a config on 127.0.0.1 with another key gets pairtime's line, since it may be the teen's own server", before: taken, after: taken + "\n[api_urls]\n" + ours(".+") + "\n"},
 		{name: "hackatime-setup's config gets an [api_urls] section after a blank line", before: hackatime, after: hackatime + "\n[api_urls]\n" + ours(".+") + "\n"},
 		{name: "an existing .* line keeps its server, and pairtime's .+ goes after it", before: "[api_urls]\n.*" + other + "\n", after: "[api_urls]\n.*" + other + "\n" + ours(".+") + "\n"},
 		{name: "with .+ taken, pairtime's line is ^.*$", before: "[api_urls]\n.+" + other + "\n", after: "[api_urls]\n.+" + other + "\n" + ours("^.*$") + "\n"},
@@ -140,7 +149,11 @@ func TestAdd(t *testing.T) {
 			if port == 0 {
 				port = 7247
 			}
-			got, err := Add([]byte(tt.before), key, port)
+			made := ByMark
+			if tt.recorded {
+				made = Recorded
+			}
+			got, err := Add([]byte(tt.before), key, port, made)
 			checkResult(t, got, err, tt.after, tt.wantErr, tt.wantIs)
 		})
 	}
@@ -160,7 +173,7 @@ func TestMake(t *testing.T) {
 			got, err := Make(tt.key, 7247)
 			checkResult(t, got, err, tt.want, "", tt.wantIs)
 			if err == nil {
-				if s, err := Inspect(got, tt.key); err != nil || !s.Own || s.Port != 7247 {
+				if s, err := Inspect(got, tt.key, ByMark); err != nil || !s.Own || s.Port != 7247 {
 					t.Errorf("Inspect reads the config Make made as %+v, %v, want pairtime's own on port 7247", s, err)
 				}
 			}
@@ -196,9 +209,9 @@ func TestRemove(t *testing.T) {
 	tests := []struct {
 		name, before, after string
 		key                 string
-		made                bool
+		made                Made
 		sec                 Section
-		gone                bool
+		gone, left          bool
 		wantErr             string // a part of the refusal
 	}{
 		{name: "pairtime's line comes out of a section that was there", before: "[api_urls]\n.*" + other + "\n" + ours(".+") + "\n; note\n", after: "[api_urls]\n.*" + other + "\n; note\n", key: testKey},
@@ -213,18 +226,24 @@ func TestRemove(t *testing.T) {
 		{name: "a line ending the file without a line break takes the one before it", before: "[api_urls]\n.*" + other + "\n" + ours(".+"), after: "[api_urls]\n.*" + other, key: testKey},
 		{name: "another key's line stays", before: "[api_urls]\n" + ours(".+") + "\n", after: "[api_urls]\n" + ours(".+") + "\n", key: otherKey},
 		{name: "with no key, every line of pairtime's goes", before: "[api_urls]\n" + ours(".+") + "\n^.*$ = http://127.0.0.1:7250/api/v1|" + otherKey + "\n.*" + other + "\n", after: "[api_urls]\n.*" + other + "\n"},
-		{name: "a config pairtime made goes when nothing else is left in it", before: made, after: "[settings]\n", key: testKey, made: true, sec: all, gone: true},
-		{name: "a config pairtime made keeps what was added to it since", before: made + "hostname = mine\n", after: "[settings]\nhostname = mine\n", key: testKey, made: true, sec: all},
-		{name: "with no key, a config pairtime made is recognized by its mark, which goes with it", before: testMark + made, after: "[settings]\n", made: true, sec: all, gone: true},
-		{name: "a config pairtime made whose api_key the teen replaced is refused, so that uninstall names it and leaves it to the teen", before: testMark + strings.Replace(made, testKey, otherKey, 1), key: testKey, made: true, sec: all, wantErr: "isn't pairtime's any more; point its api_url at your own server, or delete it"},
-		{name: "with no key, a config whose mark names another key's hash than its api_key's is refused too: the key is the teen's", before: testMark + strings.Replace(made, testKey, otherKey, 1), made: true, sec: all, wantErr: "isn't pairtime's any more"},
-		{name: "with no key and no mark, a config on 127.0.0.1 stays, since it may be the teen's own server", before: made, after: made, made: true, sec: all},
-		{name: "a config someone else made keeps its api_url, which isn't pairtime's", before: hackatime, after: hackatime, key: testKey, made: true, sec: all},
-		{name: "a file that held only pairtime's line stays, empty, even as made, since install never makes one of that shape", before: "[api_urls]\n" + ours(".+") + "\n", after: "", key: testKey, made: true, sec: all},
+		{name: "a config pairtime made goes when nothing else is left in it", before: made, after: "[settings]\n", key: testKey, made: Recorded, sec: all, gone: true},
+		{name: "a config pairtime made keeps what was added to it since", before: made + "hostname = mine\n", after: "[settings]\nhostname = mine\n", key: testKey, made: Recorded, sec: all},
+		{name: "with no key, a config pairtime made is recognized by its mark, which goes with it", before: testMark + made, after: "[settings]\n", made: ByMark, sec: all, gone: true},
+		{name: "without a record, a config pairtime made whose api_key the teen replaced is refused by its mark, which stays, and the refusal says how to keep the teen's key before it says to delete the file", before: testMark + strings.Replace(made, testKey, otherKey, 1), key: testKey, made: ByMark, sec: all, wantErr: "isn't pairtime's any more; set its api_url to your own server and keep your api_key, or delete the file, which deletes that key too"},
+		{name: "with install's record, a config pairtime made whose mark the teen deleted with pairtime's key is refused too", before: strings.Replace(made, testKey, otherKey, 1), key: testKey, made: Recorded, sec: all, wantErr: "isn't pairtime's any more; set its api_url to your own server"},
+		{name: "without a record or a mark, a config on 127.0.0.1 with another key stays as it is, since it may be the teen's own server", before: strings.Replace(made, testKey, otherKey, 1), after: strings.Replace(made, testKey, otherKey, 1), key: testKey, made: ByMark, sec: all},
+		{name: "with no key, a config whose mark names another key's hash than its api_key's is refused too: the key is the teen's", before: testMark + strings.Replace(made, testKey, otherKey, 1), made: ByMark, sec: all, wantErr: "isn't pairtime's any more"},
+		{name: "with no key and no mark, a config on 127.0.0.1 stays, since it may be the teen's own server", before: made, after: made, made: ByMark, sec: all},
+		{name: "with install's record, a config pairtime made that sends to the teen's own server now loses pairtime's mark and line, with the section install added for the line, and is left to the teen", before: testMark + hackatime + "\n[api_urls]\n" + ours(".+") + "\n", after: hackatime, key: testKey, made: Recorded, sec: all, left: true},
+		{name: "without a record, a config with pairtime's mark that sends to another server now loses the mark, and is left to the teen", before: testMark + hackatime, after: hackatime, made: ByMark, sec: all, left: true},
+		{name: "with install's record, a config pairtime made that sends to the teen's own server now, without the mark, keeps its api_url and api_key, and is left to the teen", before: hackatime, after: hackatime, key: testKey, made: Recorded, sec: all, left: true},
+		{name: "without a record or a mark, a config of another server is no config pairtime made, so nothing is left to the teen", before: hackatime, after: hackatime, key: testKey, made: ByMark, sec: all},
+		{name: "a config that was there before install keeps a mark of pairtime's, which only a config pairtime made loses", before: testMark + hackatime + "\n[api_urls]\n" + ours(".+") + "\n", after: testMark + hackatime, key: testKey, made: Existed, sec: all},
+		{name: "a file that held only pairtime's line stays, empty, even as made, since install never makes one of that shape", before: "[api_urls]\n" + ours(".+") + "\n", after: "", key: testKey, made: Recorded, sec: all, left: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, gone, err := Remove([]byte(tt.before), tt.key, tt.made, tt.sec)
+			got, gone, left, err := Remove([]byte(tt.before), tt.key, tt.made, tt.sec)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("Remove = %q, %v, want an error saying %q", got, err, tt.wantErr)
@@ -234,8 +253,8 @@ func TestRemove(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(got) != tt.after || gone != tt.gone {
-				t.Errorf("Remove = %q, gone %v, want %q, gone %v", got, gone, tt.after, tt.gone)
+			if string(got) != tt.after || gone != tt.gone || left != tt.left {
+				t.Errorf("Remove = %q, gone %v, left %v, want %q, gone %v, left %v", got, gone, left, tt.after, tt.gone, tt.left)
 			}
 		})
 	}
@@ -281,7 +300,7 @@ func TestAddThenRemove(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			added, err := Add([]byte(tt.base), testKey, 7247)
+			added, err := Add([]byte(tt.base), testKey, 7247, ByMark)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -293,12 +312,12 @@ func TestAddThenRemove(t *testing.T) {
 			if !HasAPIURLs([]byte(tt.base)) {
 				sec = Added([]byte(tt.base))
 			}
-			got, gone, err := Remove(moved, testKey, false, sec)
+			got, gone, left, err := Remove(moved, testKey, Existed, sec)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(got) != tt.base || gone {
-				t.Errorf("after Add, SetPort and Remove the file holds %q, gone %v, want %q", got, gone, tt.base)
+			if string(got) != tt.base || gone || left {
+				t.Errorf("after Add, SetPort and Remove the file holds %q, gone %v, left %v, want %q", got, gone, left, tt.base)
 			}
 		})
 	}
@@ -331,7 +350,10 @@ func TestWatermark(t *testing.T) {
 func TestInspect(t *testing.T) {
 	tests := []struct {
 		name, data string
-		want       State
+		// recorded says install's record says it made the config
+		// (Recorded); without it, only the mark does (ByMark).
+		recorded bool
+		want     State
 	}{
 		{name: "hackatime-setup's config with pairtime's line has two destinations", data: hackatime + "\n[api_urls]\n" + ours("^.*$") + "\n", want: State{Line: true, Port: 7247, Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true}},
 		{name: "without pairtime's line, Line is false", data: hackatime, want: State{Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true}},
@@ -353,11 +375,17 @@ func TestInspect(t *testing.T) {
 		{name: "an api_url in double quotes inside single ones loses both, as go-ini takes off the outer and wakatime-cli the inner", data: "[settings]\napi_url = '\"https://hackatime.hackclub.com/api/hackatime/v1/\"'\napi_key = " + otherKey + "\n", want: State{Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true}},
 		{name: "an [api_urls] key with a quote after it is one wakatime-cli takes, as it takes quotes off a value's ends first", data: hackatime + "[api_urls]\n.* = https://other.example/api/v1|" + otherKey + "'\n", want: State{Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true}},
 		{name: "a config pairtime made whose api_key the teen replaced is taken over, with the agent as its server", data: testMark + "[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + otherKey + "\n", want: State{TakenOver: true, Server: "http://127.0.0.1:7247/api/v1", ServerKey: true}},
+		{name: "with install's record, a config pairtime made whose mark the teen deleted with pairtime's key is taken over too", data: "[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + otherKey + "\n", recorded: true, want: State{TakenOver: true, Server: "http://127.0.0.1:7247/api/v1", ServerKey: true}},
+		{name: "without a record or a mark, the same config may be the teen's own server on 127.0.0.1, and isn't taken over", data: "[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + otherKey + "\n", want: State{Server: "http://127.0.0.1:7247/api/v1", ServerKey: true}},
 		{name: "a config that sets a proxy says so, beside pairtime's line", data: hackatime + "proxy = http://proxy.example:3128\n\n[api_urls]\n" + ours(".+") + "\n", want: State{Line: true, Port: 7247, Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true, Proxy: true}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := Inspect([]byte(tt.data), testKey)
+			made := ByMark
+			if tt.recorded {
+				made = Recorded
+			}
+			got, err := Inspect([]byte(tt.data), testKey, made)
 			if err != nil {
 				t.Fatal(err)
 			}

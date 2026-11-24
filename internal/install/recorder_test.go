@@ -46,7 +46,7 @@ func undoKeyed(cur, _ Content, data json.RawMessage) (Content, error) {
 }
 
 func TestEditsRecordWhatTheirUndoNeeds(t *testing.T) {
-	undoers[kindKeyed] = undoKeyed
+	undoers[kindKeyed] = quiet(undoKeyed)
 	t.Cleanup(func() { delete(undoers, kindKeyed) })
 	tests := []struct {
 		name string
@@ -94,7 +94,7 @@ func TestPlanInstallRefusesDataThatIsntJSON(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			undoers[kindKeyed] = undoKeyed
+			undoers[kindKeyed] = quiet(undoKeyed)
 			t.Cleanup(func() { delete(undoers, kindKeyed) })
 			item := Item{ID: "bad", Edits: []Edit{badRecord{keyedEdit{path: filepath.Join(t.TempDir(), "x"), key: "k"}, tt.data}}}
 			if _, err := newInstaller(t).PlanInstall([]Item{item}); err == nil || !strings.Contains(err.Error(), "isn't JSON") {
@@ -113,7 +113,7 @@ type badRecord struct {
 func (e badRecord) Record() json.RawMessage { return e.data }
 
 func TestPlanInstallRefusesTwoEditsOfAKindForOneTarget(t *testing.T) {
-	undoers[kindKeyed] = undoKeyed
+	undoers[kindKeyed] = quiet(undoKeyed)
 	t.Cleanup(func() { delete(undoers, kindKeyed) })
 	tests := []struct {
 		name  string

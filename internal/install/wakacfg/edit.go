@@ -148,14 +148,46 @@ func (f *file) ownConfig(key string) (url, apiKey int, ok bool) {
 	return url, apiKey, true
 }
 
-// takenOver reports whether the config is one pairtime made, by its mark
-// and its api_url, the agent's, whose api_key isn't key's: the teen gave it
-// a key of their own. wakatime-cli still sends that key and every
-// heartbeat to the agent's port.
-func (f *file) takenOver(key string) bool {
-	m, _ := f.mark()
+// Made is what pairtime knows of who made a config, which Add, Remove and
+// Inspect take: a record of install's decides it when there is one, and
+// pairtime's mark only when there is none.
+type Made int
+
+const (
+	// Existed is a config that install's record says was there before
+	// install: only pairtime's lines under [api_urls] in it are pairtime's.
+	Existed Made = iota
+	// ByMark is a config that no record of install's names: it is one
+	// pairtime made if pairtime's mark is in it (markText).
+	ByMark
+	// Recorded is a config that install's record says install made, with
+	// or without the mark, which the teen may have deleted with the rest of
+	// what pairtime wrote above the key they gave it.
+	Recorded
+)
+
+// isMade reports whether the config is one pairtime made, as m says
+// pairtime knows it: by install's record, or, without one, by pairtime's
+// mark.
+func (f *file) isMade(m Made) bool {
+	switch m {
+	case Recorded:
+		return true
+	case ByMark:
+		i, _ := f.mark()
+		return i >= 0
+	}
+	return false
+}
+
+// takenOver reports whether the config is one pairtime made (isMade) whose
+// api_url is still the agent's but whose api_key isn't key's, or, with key
+// "", isn't the one whose hash the mark names: the teen gave it a key of
+// their own. wakatime-cli still sends that key and every heartbeat to the
+// agent's port.
+func (f *file) takenOver(key string, m Made) bool {
 	u := f.last(settings, "api_url")
-	if m < 0 || u < 0 {
+	if !f.isMade(m) || u < 0 {
 		return false
 	}
 	if _, isAgent := agentPort(f.entries[u].value); !isAgent {
@@ -242,8 +274,9 @@ func Make(key string, port int) ([]byte, error) {
 // the first of Spellings no key there has, or adds the section at the end
 // of the file. When the line is there already, or data is a config
 // pairtime made, it changes only the port, as SetPort does. It refuses a
-// config that sets a proxy (ErrProxy).
-func Add(data []byte, key string, port int) ([]byte, error) {
+// config that sets a proxy (ErrProxy), and one pairtime made, as made says
+// pairtime knows it, whose api_key the teen replaced (ErrNotOwn).
+func Add(data []byte, key string, port int, made Made) ([]byte, error) {
 	if err := checkArgs(key, port); err != nil {
 		return nil, err
 	}
@@ -263,7 +296,7 @@ func Add(data []byte, key string, port int) ([]byte, error) {
 	if _, _, ok := f.ownConfig(key); ok {
 		return SetPort(data, key, port)
 	}
-	if f.takenOver(key) {
+	if f.takenOver(key, made) {
 		return nil, ErrNotOwn
 	}
 	spelling, err := f.spelling()
@@ -369,19 +402,26 @@ func Added(base []byte) Section {
 // without pairtime's lines for key, as uninstall takes them out (DESIGN
 // 5.6, "Uninstall"). With key "", it takes out every line it recognizes
 // as pairtime's, for an uninstall with no record of the key. made says
-// install made the config, so its api_url and api_key are pairtime's too
-// (Make), and sec what install put around the line in a config that had
-// no [api_urls] section, which goes with it. gone reports that data is a
-// config pairtime made, with the agent's api_url and the key's api_key,
-// and that nothing else is left of it, so uninstall deletes the file. A
-// file that only held pairtime's line stays, empty, since install doesn't
-// make one of that shape: the file was there before. A config pairtime made
-// whose api_key the teen replaced is refused (ErrNotOwn), so that
-// uninstall names it and leaves it to the teen.
-func Remove(data []byte, key string, made bool, sec Section) (out []byte, gone bool, err error) {
+// what pairtime knows of who made the config: in one pairtime made (Make),
+// its mark, api_url and api_key are pairtime's too. sec is what install
+// put around the line in a config that had no [api_urls] section, which
+// goes with it. gone reports that data is a config pairtime made, with the
+// agent's api_url and the key's api_key, and that nothing else is left of
+// it, so uninstall deletes the file. A file that only held pairtime's line
+// stays, empty, since install doesn't make one of that shape: the file was
+// there before.
+//
+// A config pairtime made whose api_key the teen replaced is refused
+// (ErrNotOwn), mark and all, so that uninstall names it and leaves it to
+// the teen, and a later install or doctor still knows it by the mark. One
+// whose api_url isn't the agent's any more sends to the teen's own server
+// now, so it is theirs: left reports it, and it loses pairtime's mark,
+// which says pairtime made it for pairtime's key, with pairtime's lines
+// under [api_urls], and nothing else.
+func Remove(data []byte, key string, made Made, sec Section) (out []byte, gone, left bool, err error) {
 	f, err := parse(data)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	drop := map[int]bool{}
 	for i, e := range f.entries {
@@ -390,19 +430,25 @@ func Remove(data []byte, key string, made bool, sec Section) (out []byte, gone b
 		}
 	}
 	own := false
-	if made {
+	if made != Existed {
 		if u, k, ok := f.ownConfig(key); ok {
 			drop[u], drop[k] = true, true
 			if m, _ := f.mark(); m >= 0 {
 				drop[m] = true
 			}
 			own = true
-		} else if f.takenOver(key) {
+		} else if f.takenOver(key, made) {
 			// Taking out only the api_url would send the teen's key and
 			// every heartbeat to WakaTime's own server; leaving the file as
 			// it is keeps them going to a port nothing of pairtime's holds
-			// once it is gone. The teen decides.
-			return nil, false, fmt.Errorf("%w; point its api_url at your own server, or delete it", ErrNotOwn)
+			// once it is gone. The teen decides, and the key in it may be
+			// their only copy.
+			return nil, false, false, fmt.Errorf("%w; set its api_url to your own server and keep your api_key, or delete the file, which deletes that key too", ErrNotOwn)
+		} else if f.isMade(made) {
+			if m, _ := f.mark(); m >= 0 {
+				drop[m] = true
+			}
+			left = true
 		}
 	}
 	dropped := false // an [api_urls] header went
@@ -423,7 +469,7 @@ func Remove(data []byte, key string, made bool, sec Section) (out []byte, gone b
 	}
 	a, err := parse(out)
 	if err != nil {
-		return nil, false, fmt.Errorf("taking pairtime's line out would leave a file wakatime-cli reads differently (%w)", err)
+		return nil, false, false, fmt.Errorf("taking pairtime's line out would leave a file wakatime-cli reads differently (%w)", err)
 	}
 	var kept []entry
 	for i, e := range f.entries {
@@ -432,7 +478,7 @@ func Remove(data []byte, key string, made bool, sec Section) (out []byte, gone b
 		}
 	}
 	if !samePairs(a.pairs(), kept) {
-		return nil, false, errors.New("taking pairtime's line out would change how wakatime-cli reads another line")
+		return nil, false, false, errors.New("taking pairtime's line out would change how wakatime-cli reads another line")
 	}
 	if own {
 		gone = true
@@ -442,7 +488,7 @@ func Remove(data []byte, key string, made bool, sec Section) (out []byte, gone b
 			}
 		}
 	}
-	return out, gone, nil
+	return out, gone, left, nil
 }
 
 // endsDropped reports whether the entries in drop end the file, after an
@@ -756,11 +802,11 @@ type State struct {
 	// Own says the config is one pairtime made, where the agent is
 	// wakatime-cli's only destination (Make).
 	Own bool
-	// TakenOver says the config is one pairtime made, by its mark, whose
-	// api_url is still the agent's but whose api_key isn't the key's any
-	// more: the teen gave it their own, which wakatime-cli sends to the
-	// agent, and the agent refuses (Add refuses such a config, and Remove
-	// leaves it to the teen).
+	// TakenOver says the config is one pairtime made, by install's record
+	// or, without one, by its mark, whose api_url is still the agent's but
+	// whose api_key isn't the key's any more: the teen gave it their own,
+	// which wakatime-cli sends to the agent, and the agent refuses (Add
+	// refuses such a config, and Remove leaves it to the teen).
 	TakenOver bool
 	// Server is the api_url wakatime-cli sends to besides pairtime:
 	// [settings]'s, quotes and the suffixes wakatime-cli takes off taken off
@@ -787,8 +833,9 @@ type State struct {
 	Import bool
 }
 
-// Inspect reads data, a config, for pairtime's line for key.
-func Inspect(data []byte, key string) (State, error) {
+// Inspect reads data, a config, for pairtime's line for key. made says
+// what pairtime knows of who made the config, for State.TakenOver.
+func Inspect(data []byte, key string, made Made) (State, error) {
 	f, err := parse(data)
 	if err != nil {
 		return State{}, err
@@ -799,7 +846,7 @@ func Inspect(data []byte, key string) (State, error) {
 		s.Port, _ = agentPort(f.entries[u].value)
 		return s, nil
 	}
-	s.TakenOver = f.takenOver(key)
+	s.TakenOver = f.takenOver(key, made)
 	if e, ok := f.line(key); ok {
 		s.Line = true
 		s.Port, _, _ = ownLine(e)

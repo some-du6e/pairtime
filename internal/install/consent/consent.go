@@ -224,6 +224,29 @@ func claudeCard(in Input) Card {
 	return c
 }
 
+// proxyNote is the WakaTime cards' note on a proxy install can't see, one
+// an editor sets: wakatime-cli v2.28.4 takes one its --proxy flag names, as
+// WakaTime's plugin for JetBrains IDEs passes the IDE's, before the
+// environment's, and sends every destination's heartbeats through it,
+// pairtime's agent on 127.0.0.1 included, in a config pairtime made too
+// (docs/errata/2026-11-24-editor-proxy.md). server says the card is for a
+// config of the teen's, whose own server adds two clauses: a proxy the
+// editors' environment sets for that server's address, which wakatime-cli
+// takes for pairtime's line too, and the sends to that server a failed send
+// to the agent holds back. A config pairtime makes has the agent on
+// 127.0.0.1 as its only api_url, which no environment proxy reaches, and no
+// server of the teen's to hold back.
+func proxyNote(server bool) string {
+	env, rest := "", ", and pairtime would get none of them"
+	if server {
+		env = ", or one their environment sets for your server's address"
+		rest = ", pairtime would get none of them, and each send the proxy doesn't pass on would hold back what wakatime-cli sends your own server"
+	}
+	return "Your editors can use a proxy that install can't see: one in their settings, as WakaTime's plugin for JetBrains IDEs passes the IDE's to wakatime-cli" + env + ". " +
+		"wakatime-cli would then send pairtime's copy of each heartbeat through it: the proxy would get your project and file names unencrypted" + rest + ". " +
+		"So don't set a proxy for your editors while pairtime's line is in."
+}
+
 // wakatimeCard is the card of pairtime's line in ~/.wakatime.cfg (DESIGN
 // 5.6), or of the config install makes when there is none (WakaTimeNew).
 // Its sentences call the file ~/.wakatime.cfg, as WakaTime's own docs do,
@@ -238,6 +261,7 @@ func wakatimeCard(in Input) Card {
 			Notes: []string{
 				"For VS Code, Cursor, Windsurf and other editors built on VS Code, install WakaTime's extension from the editor's extensions view, or with code --install-extension WakaTime.vscode-wakatime.",
 				"Hack Club programs that review time through Robert read it from Hackatime, which this doesn't set up. If you join one, set up Hackatime too, then run pairtime install again: Hackatime's setup writes a new ~/.wakatime.cfg, and install adds pairtime's line to it.",
+				proxyNote(false),
 			},
 			Declining: "Without it, pairtime doesn't see the time you spend in an editor.",
 			TurnOff: "You can take it out any time with pairtime uninstall. It takes pairtime's settings out of the config it made, and deletes the file when nothing else is in it. " +
@@ -250,9 +274,7 @@ func wakatimeCard(in Input) Card {
 		What: "WakaTime's editor plugins run wakatime-cli, which sends a heartbeat each time you edit or move around in a file to the server in your ~/.wakatime.cfg, such as Hackatime. " +
 			"pairtime adds one line under [api_urls] there, so that wakatime-cli also sends every heartbeat to pairtime's agent on this computer. " +
 			"Nothing else in the file changes. While pairtime's agent doesn't take what wakatime-cli sends it, as while the agent isn't running, wakatime-cli holds back what it sends your server too, and sends it once the agent takes it again.",
-		Notes: []string{
-			"Your editors can use a proxy that install can't see: one in their settings, as WakaTime's plugin for JetBrains IDEs passes the IDE's to wakatime-cli, or one their environment sets for your server's address. wakatime-cli would then send pairtime's copy of each heartbeat through it: the proxy would get your project and file names unencrypted, pairtime would get none of them, and each send the proxy doesn't pass on would hold back what wakatime-cli sends your own server. So don't set a proxy for your editors while pairtime's line is in.",
-		},
+		Notes:     []string{proxyNote(true)},
 		Declining: "Without it, pairtime doesn't see the time you spend in an editor.",
 		TurnOff:   "You can take the line out any time with pairtime uninstall, which leaves the rest of the file as it was.",
 	}

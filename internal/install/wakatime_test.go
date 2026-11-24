@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -133,8 +134,8 @@ func TestWakaTimeGoldens(t *testing.T) {
 			if got := readOrNil(t, h.cfg()); !bytes.Equal(got, want) {
 				t.Fatalf("after install the config holds\n%q\nwant\n%q", got, want)
 			}
-			if s, err := wakacfg.ReadSetup(wakacfg.SetupFile(h.data)); err != nil || s.Key != wakaKey || s.Config != h.cfg() {
-				t.Errorf("the setup file reads %+v, %v, want key %s and config %s", s, err, wakaKey, h.cfg())
+			if s, err := wakacfg.ReadSetup(wakacfg.SetupFile(h.data)); err != nil || s.Key != wakaKey || s.Config != h.cfg() || s.Made != (before == nil) {
+				t.Errorf("the setup file reads %+v, %v, want key %s and config %s, made only by install: %v", s, err, wakaKey, h.cfg(), before == nil)
 			}
 
 			again, err := h.in.PlanInstall([]Item{h.item(t, 7247, "")})
@@ -149,7 +150,7 @@ func TestWakaTimeGoldens(t *testing.T) {
 			// Taking pairtime's line out of after.cfg, without the backup,
 			// gives back before.cfg byte for byte, or no file.
 			base := Content{Exists: before != nil, Data: before}
-			undone, err := undoWakaTimeLine(Content{Exists: true, Data: want}, base, recordKey(wakaKey))
+			undone, _, err := undoWakaTimeLine(Content{Exists: true, Data: want}, base, recordKey(wakaKey, before == nil))
 			if err != nil {
 				t.Fatalf("undoWakaTimeLine: %v", err)
 			}
@@ -269,7 +270,7 @@ func TestWakaTimeKeepsTheKey(t *testing.T) {
 			if n := strings.Count(string(cfg), "127.0.0.1:"); n != 1 {
 				t.Errorf("the config has %d lines to the agent, want 1:\n%s\n(the plan was\n%s)", n, cfg, p.Diff())
 			}
-			if st, err := wakacfg.Inspect(cfg, s.Key); err != nil || !st.Line || st.Port != 7247 {
+			if st, err := wakacfg.Inspect(cfg, s.Key, wakacfg.ByMark); err != nil || !st.Line || st.Port != 7247 {
 				t.Errorf("Inspect = %+v, %v, want pairtime's line on port 7247", st, err)
 			}
 		})
@@ -444,7 +445,7 @@ func TestWakaTimeRefusals(t *testing.T) {
 		{name: "on a first install the refusal shows no key, since nothing would record the new one for the agent", cfg: "[settings]\nexclude = C:\\Users\\teen\\Downloads\\\n", want: "line 2 has a value that goes on"},
 		{name: "a config that sets a proxy is left alone, saying why, and doesn't show the proxy", cfg: "[settings]\napi_key = " + hackatimeKey + "\nproxy = http://teen:secret@proxy.example:3128\n", key: wakaKey, want: "sets a proxy, and wakatime-cli would send pairtime's line through it too"},
 		{name: "with HTTPS_PROXY set, a config of the teen's is left alone, naming the variable and never its value", vars: map[string]string{"HTTPS_PROXY": "http://teen:secret@proxy.example:3128"}, cfg: "[settings]\napi_key = " + hackatimeKey + "\n", key: wakaKey, want: "would get pairtime's line, but HTTPS_PROXY is set here"},
-		{name: "a config pairtime made whose api_key the teen replaced is left alone, saying how to start again", cfg: taken, key: wakaKey, want: "is the config pairtime made, with an api_key that isn't pairtime's any more, so pairtime leaves it alone; to send your editor time to pairtime again, delete it and run pairtime install again"},
+		{name: "a config pairtime made whose api_key the teen replaced is left alone, and the refusal says how to send to pairtime too and keep the teen's key, which may be their only copy", cfg: taken, key: wakaKey, want: "is the config pairtime made, with an api_key that isn't pairtime's any more, so pairtime leaves it alone; to send your editor time to pairtime too, set its api_url to your own server, such as Hackatime's, keep your api_key, and run pairtime install again"},
 		{name: "a config whose patterns are all taken is left alone", cfg: "[api_urls]\n.+ = https://a.example|" + hackatimeKey + "\n^.*$ = https://b.example|" + hackatimeKey + "\n(?s).* = https://c.example|" + hackatimeKey + "\n", key: wakaKey, want: "for each of the patterns pairtime's line can take"},
 		{name: "a relative WAKATIME_HOME is refused", vars: map[string]string{"WAKATIME_HOME": "waka"}, key: wakaKey, want: "a relative path"},
 	}
@@ -485,8 +486,13 @@ func TestWakaTimeLeavesTheTeensLocalServer(t *testing.T) {
 	const local = "[settings]\napi_url = http://127.0.0.1:3000/api/v1\napi_key = " + hackatimeKey + "\n"
 	tests := []struct {
 		name string
+		// dataGone deletes pairtime's data directory, manifest and setup
+		// file included, before uninstall, which then knows pairtime's line
+		// by its marker alone.
+		dataGone bool
 	}{
-		{"a config of the teen's own server on 127.0.0.1 keeps its key and api_url, and gets pairtime's line beside it"},
+		{name: "a config of the teen's own server on 127.0.0.1 keeps its key and api_url, and gets pairtime's line beside it"},
+		{name: "with pairtime's data directory gone, uninstall takes only pairtime's line out of it, never taking it for a config pairtime made whose key the teen replaced", dataGone: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -504,10 +510,17 @@ func TestWakaTimeLeavesTheTeensLocalServer(t *testing.T) {
 			if !bytes.HasPrefix(cfg, []byte(local)) {
 				t.Errorf("install changed the teen's settings:\n%s", cfg)
 			}
-			if st, err := wakacfg.Inspect(cfg, s.Key); err != nil || !st.Line || st.Own || st.Port != 7247 {
+			if st, err := wakacfg.Inspect(cfg, s.Key, wakacfg.ByMark); err != nil || !st.Line || st.Own || st.Port != 7247 {
 				t.Errorf("Inspect = %+v, %v, want pairtime's line under [api_urls] on port 7247", st, err)
 			}
-			uninstall(t, h.in)
+			if tt.dataGone {
+				if err := os.RemoveAll(h.data); err != nil {
+					t.Fatal(err)
+				}
+				uninstall(t, h.in, h.item(t, 7247, ""))
+			} else {
+				uninstall(t, h.in)
+			}
 			if got := readOrNil(t, h.cfg()); string(got) != local {
 				t.Errorf("after uninstall the config holds\n%q\nwant\n%q", got, local)
 			}
@@ -554,13 +567,17 @@ func TestWakaTimeTakenOver(t *testing.T) {
 		// record says install made the config, so its manifest and setup
 		// file name pairtime's key; without one, only the mark does.
 		record bool
+		// noMark says the teen deleted pairtime's mark too, with the key.
+		noMark bool
 		// uninstall runs uninstall, and otherwise install runs again.
 		uninstall bool
 	}{
 		{name: "with no record, uninstall names a config pairtime made whose api_key the teen replaced, leaves its bytes, and shows the teen's key nowhere", uninstall: true},
 		{name: "with a record, uninstall names it the same way", record: true, uninstall: true},
+		{name: "with a record, uninstall names a config pairtime made whose mark the teen deleted with pairtime's key the same way, by the record", record: true, noMark: true, uninstall: true},
 		{name: "with no record, install leaves it alone, and keeps the teen's key nowhere"},
 		{name: "with a record, install leaves it alone too", record: true},
+		{name: "with a record, install leaves a config pairtime made whose mark the teen deleted with pairtime's key alone too, adding no second key beside the teen's", record: true, noMark: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -574,6 +591,13 @@ func TestWakaTimeTakenOver(t *testing.T) {
 			// The teen gives the config their own key, as WakaTime's
 			// extension writes one.
 			taken := bytes.Replace(readOrNil(t, h.cfg()), []byte("api_key = "+wakaKey), []byte("api_key = "+hackatimeKey), 1)
+			if tt.noMark {
+				mark, rest, ok := bytes.Cut(taken, []byte("\n"))
+				if !ok || !bytes.HasPrefix(mark, []byte("; made by pairtime install for the key ")) {
+					t.Fatalf("the config pairtime made doesn't start with its mark:\n%s", taken)
+				}
+				taken = rest
+			}
 			writeFile(t, h.cfg(), taken)
 			if tt.uninstall {
 				p, err := h.in.PlanUninstall(h.item(t, 7247, ""))
@@ -581,7 +605,7 @@ func TestWakaTimeTakenOver(t *testing.T) {
 					t.Fatal(err)
 				}
 				problems := strings.Join(p.Problems, "\n")
-				if want := h.cfg() + " is the config pairtime made, with an api_key that isn't pairtime's any more; point its api_url at your own server, or delete it"; problems != want {
+				if want := h.cfg() + " is the config pairtime made, with an api_key that isn't pairtime's any more; set its api_url to your own server and keep your api_key, or delete the file, which deletes that key too"; problems != want {
 					t.Errorf("uninstall's problems are %q, want the config named, then what it is and what to change:\n%q", p.Problems, want)
 				}
 				if strings.Contains(p.Diff()+problems, hackatimeKey) {
@@ -592,8 +616,8 @@ func TestWakaTimeTakenOver(t *testing.T) {
 				}
 			} else {
 				_, err := h.in.PlanInstall([]Item{h.item(t, 7247, "")})
-				if err == nil || !strings.Contains(err.Error(), "isn't pairtime's any more") {
-					t.Fatalf("PlanInstall = %v, want the refusal of a config the teen took over", err)
+				if want := h.cfg() + " is the config pairtime made, with an api_key that isn't pairtime's any more, so pairtime leaves it alone; to send your editor time to pairtime too, set its api_url to your own server, such as Hackatime's, keep your api_key, and run pairtime install again"; err == nil || err.Error() != want {
+					t.Fatalf("PlanInstall = %v, want the refusal of a config the teen took over:\n%s", err, want)
 				}
 				if strings.Contains(err.Error(), hackatimeKey) {
 					t.Errorf("the refusal shows the teen's key: %v", err)
@@ -604,6 +628,73 @@ func TestWakaTimeTakenOver(t *testing.T) {
 			}
 			if got := readOrNil(t, h.cfg()); !bytes.Equal(got, taken) {
 				t.Errorf("the config is now\n%q\nwant it as the teen left it:\n%q", got, taken)
+			}
+		})
+	}
+}
+
+// TestWakaTimeLeftToTheTeen checks uninstall on a config pairtime made that
+// the teen pointed at their own server since: it takes out pairtime's mark,
+// which isn't true of the file any more, with pairtime's lines and nothing
+// else, and a note naming the file says it leaves the file to the teen, by
+// install's record or, without one, by the mark. A reinstall in between
+// takes the mark out of what uninstall puts back, with no note, since
+// uninstall then puts back what that install recorded.
+func TestWakaTimeLeftToTheTeen(t *testing.T) {
+	tests := []struct {
+		name string
+		// record says install made the config, so its manifest names it;
+		// without one, only the mark does.
+		record bool
+		// reinstall runs install again after the teen's change, which adds
+		// pairtime's line under [api_urls].
+		reinstall bool
+		// note says uninstall's plan has the note.
+		note bool
+	}{
+		{name: "with a record, uninstall takes pairtime's mark out of a config pairtime made that sends to the teen's own server now, keeps the rest, and says so in a note naming the file", record: true, note: true},
+		{name: "without a record, uninstall knows the config by its mark, and does the same", note: true},
+		{name: "with a record and a reinstall since, which added pairtime's line, uninstall takes out the line and the mark, and keeps the rest", record: true, reinstall: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newWakaHome(t, nil)
+			if tt.record {
+				install(t, h.in, h.item(t, 7247, wakaKey))
+			} else {
+				made, _ := madeConfig(t, wakaKey, 7247, "")
+				writeFile(t, h.cfg(), []byte(made))
+			}
+			// The teen points the config at Hackatime with their own key, in
+			// place, and leaves pairtime's mark.
+			mark, rest, _ := strings.Cut(string(readOrNil(t, h.cfg())), "\n")
+			theirs := strings.Replace(strings.Replace(rest, "api_url = "+wakacfg.URL(7247), "api_url = https://hackatime.hackclub.com/api/hackatime/v1", 1), "api_key = "+wakaKey, "api_key = "+hackatimeKey, 1)
+			if theirs == rest || !strings.HasPrefix(mark, "; made by pairtime install for the key ") {
+				t.Fatalf("the config pairtime made is\n%s\n%s\nwant its mark first, then its api_url and api_key", mark, rest)
+			}
+			writeFile(t, h.cfg(), []byte(mark+"\n"+theirs))
+			if tt.reinstall {
+				install(t, h.in, h.item(t, 7247, ""))
+			}
+			p, err := h.in.PlanUninstall(h.item(t, 7247, ""))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(p.Problems) > 0 {
+				t.Errorf("uninstall's problems are %q, want none", p.Problems)
+			}
+			note := h.cfg() + " is the config pairtime made, and it sends to your own server now, so pairtime leaves it to you and took out only its own lines."
+			if got := slices.Contains(p.Notes(), note); got != tt.note {
+				t.Errorf("uninstall's notes are %q; want %q among them: %v", p.Notes(), note, tt.note)
+			}
+			if shown := p.Diff() + strings.Join(p.Notes(), "\n"); strings.Contains(shown, hackatimeKey) {
+				t.Errorf("uninstall shows the teen's key:\n%s", shown)
+			}
+			if err := p.Apply(); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(readOrNil(t, h.cfg())); got != theirs {
+				t.Errorf("after uninstall the config holds\n%q\nwant the teen's, without pairtime's mark:\n%q", got, theirs)
 			}
 		})
 	}
@@ -652,7 +743,7 @@ func TestWakaTimeProxyVariables(t *testing.T) {
 				t.Fatal(err)
 			}
 			cfg := readOrNil(t, h.cfg())
-			st, err := wakacfg.Inspect(cfg, s.Key)
+			st, err := wakacfg.Inspect(cfg, s.Key, wakacfg.ByMark)
 			if err != nil || !st.Line || st.Port != 7247 {
 				t.Errorf("Inspect = %+v, %v, want pairtime's line on port 7247", st, err)
 			}

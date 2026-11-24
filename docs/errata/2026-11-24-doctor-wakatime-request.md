@@ -1,6 +1,6 @@
 # Erratum: DESIGN 4.3 lists everything that leaves a teen's machine, and has no row for `pairtime doctor`'s request to the WakaTime server
 
-Date 2026-11-24. Raised by the verification of #306's fixes for #335 (WP-IN3). Status: open, for the orchestrator to decide before doctor's WakaTime line is wired (PLAN, WP-IN3).
+Date 2026-11-24. Raised by the verification of #306's fixes for #335 (WP-IN3). Status: decided 2026-11-24 by the orchestrator for Karim (D-doctor-wakatime-request): the row as proposed, with the api_url's user name and password in its last cell; it lands with doctor's wiring.
 
 ## Input
 
@@ -24,4 +24,4 @@ It has none. Once doctor's WakaTime line is wired, each `pairtime doctor` run se
 
 - Doctor's WakaTime line isn't wired, so no `pairtime doctor` run sends the request yet. PLAN's WP-IN3 leaves the wiring to its next PR, after #222.
 - `privacy.md` names the request already, as #335 ruled.
-- DESIGN 4.3 stays as it is until the decision (DESIGN 6.6).
+- DESIGN 4.3 stays as it is until doctor's wiring lands the row, as decided (DESIGN 6.6).

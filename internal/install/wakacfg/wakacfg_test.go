@@ -185,6 +185,8 @@ func TestSetup(t *testing.T) {
 		wantErr string
 	}{
 		{name: "the setup file reads back as written", data: string(Setup{Key: testKey, Config: cfg}.Encode()), want: Setup{V: 1, Key: testKey, Config: cfg}},
+		{name: "a setup file that says install made the config reads back so, the record a later install and doctor go by when the mark is gone", data: string(Setup{Key: testKey, Config: cfg, Made: true}.Encode()), want: Setup{V: 1, Key: testKey, Config: cfg, Made: true}},
+		{name: "a setup file written before made was recorded reads as one for a config install didn't make", data: `{"v": 1, "key": "` + testKey + `", "config": ` + quote(cfg) + `}`, want: Setup{V: 1, Key: testKey, Config: cfg}},
 		{name: "a file of another format is refused", data: `{"v": 2, "key": "` + testKey + `", "config": ` + quote(cfg) + `}`, wantErr: "format 2"},
 		{name: "a key not in WakaTime's format is refused", data: `{"v": 1, "key": "nope", "config": ` + quote(cfg) + `}`, wantErr: ErrKey.Error()},
 		{name: "a config that isn't an absolute path is refused", data: `{"v": 1, "key": "` + testKey + `", "config": ".wakatime.cfg"}`, wantErr: "isn't an absolute path"},

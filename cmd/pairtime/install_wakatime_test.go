@@ -151,7 +151,7 @@ func TestInstallWakaTime(t *testing.T) {
 				if !ok || !strings.HasPrefix(rest, tt.line) || !strings.Contains(rest, s.Key) {
 					t.Errorf("after install the config holds\n%s\nwant it to start %q, then %q, with the setup file's key %s", cfg, want, tt.line, s.Key)
 				}
-				st, err := wakacfg.Inspect([]byte(cfg), s.Key)
+				st, err := wakacfg.Inspect([]byte(cfg), s.Key, wakacfg.ByMark)
 				if err != nil || !st.Line {
 					t.Errorf("Inspect = %+v, %v, want pairtime's line", st, err)
 				}
@@ -212,8 +212,8 @@ func TestWakaTimeTeensKeyNeverShown(t *testing.T) {
 			shown("install --dry-run", h.mustRun("", "", 0, "install", "--dry-run"))
 			out := h.mustRun("", "", 0, "install", "--yes")
 			shown("install --yes", out)
-			if !strings.Contains(out, "isn't pairtime's any more") {
-				t.Errorf("install didn't say why it left the config alone:\n%s", out)
+			if !strings.Contains(out, "isn't pairtime's any more") || !strings.Contains(out, "keep your api_key, and run pairtime install again") {
+				t.Errorf("install didn't say why it left the config alone, and how to keep the teen's key:\n%s", out)
 			}
 			pid := h.installed(false)
 			if s, err := wakacfg.ReadSetup(wakacfg.SetupFile(h.dirs.Data)); err == nil && s.Key == teenHackatimeKey {
@@ -221,16 +221,72 @@ func TestWakaTimeTeensKeyNeverShown(t *testing.T) {
 			}
 			dry := h.mustRun("", "", 0, "uninstall", "--dry-run")
 			shown("uninstall --dry-run", dry)
-			if !strings.Contains(dry, "pairtime uninstall: this has to stay: ") || !strings.Contains(dry, "point its api_url at your own server, or delete it") {
+			if !strings.Contains(dry, "pairtime uninstall: this has to stay: ") || !strings.Contains(dry, "set its api_url to your own server and keep your api_key, or delete the file, which deletes that key too") {
 				t.Errorf("uninstall --dry-run didn't name the config a real uninstall leaves alone:\n%s", dry)
 			}
 			out = h.mustRun("", "", 1, "uninstall", "--yes", "--delete-data")
 			shown("uninstall", out)
-			if !strings.Contains(out, "Left alone: ") || !strings.Contains(out, "point its api_url at your own server, or delete it") {
+			if !strings.Contains(out, "Left alone: ") || !strings.Contains(out, "set its api_url to your own server and keep your api_key, or delete the file, which deletes that key too") {
 				t.Errorf("uninstall didn't name the config it left alone, with what to change:\n%s", out)
 			}
 			if got := h.read(".wakatime.cfg"); got != taken {
 				t.Errorf("the config is now\n%s\nwant it as the teen left it", got)
+			}
+			h.uninstalled(before, pid)
+		})
+	}
+}
+
+// TestWakaTimeLeftToTheTeenNoted runs the real install and uninstall on a
+// config pairtime made that the teen pointed at Hackatime since, with their
+// own key: uninstall's screen and its dry run say, naming the file, that
+// pairtime leaves it to the teen and took out only its own lines, and
+// uninstall leaves the teen's settings as they are, without pairtime's
+// mark, and shows the teen's key nowhere.
+func TestWakaTimeLeftToTheTeenNoted(t *testing.T) {
+	if v, ok := runValue(); ok {
+		t.Skipf(`this account has a pairtime login item, HKCU\%s\%s = %q, which the test would replace; it runs where there is none, as in CI`, install.RunKey, install.RunValue, v)
+	}
+	tests := []struct {
+		name string
+	}{
+		{"uninstall's screen and dry run note that the config pairtime made sends to Hackatime now and stays the teen's, and uninstall takes out only pairtime's mark"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newTestHome(t, "real").withEnv(wakatimeEnv, "1")
+			before := h.snapshot()
+			h.mustRun("", "", 0, "install", "--yes")
+			pid := h.installed(false)
+			mark, rest, _ := strings.Cut(h.read(".wakatime.cfg"), "\n")
+			theirs := regexp.MustCompile(`api_url = http://127\.0\.0\.1:[0-9]+/api/v1`).ReplaceAllString(rest, "api_url = https://hackatime.hackclub.com/api/hackatime/v1")
+			theirs = regexp.MustCompile(`api_key = [0-9a-f-]+`).ReplaceAllString(theirs, "api_key = "+teenHackatimeKey)
+			if !strings.HasPrefix(mark, "; made by pairtime install for the key ") || !strings.Contains(theirs, "hackatime.hackclub.com") || !strings.Contains(theirs, teenHackatimeKey) {
+				t.Fatalf("the config install made is\n%s\n%s\nwant pairtime's mark, then its api_url and api_key", mark, rest)
+			}
+			h.write(".wakatime.cfg", mark+"\n"+theirs)
+			note := h.path(".wakatime.cfg") + " is the config pairtime made, and it sends to your own server now, so pairtime leaves it to you and took out only its own lines."
+			dry := h.mustRun("", "", 0, "uninstall", "--dry-run")
+			if !strings.Contains(dry, "pairtime uninstall: note: "+note) {
+				t.Errorf("uninstall --dry-run didn't note the config it leaves to the teen:\n%s", dry)
+			}
+			screen := h.mustRun("", "n\n", exitDeclined, "uninstall")
+			if !strings.Contains(screen, "Note: "+note) {
+				t.Errorf("uninstall's screen didn't note the config it leaves to the teen:\n%s", screen)
+			}
+			out := h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
+			for what, printed := range map[string]string{"uninstall --dry-run": dry, "uninstall's screen": screen, "uninstall": out} {
+				if strings.Contains(printed, teenHackatimeKey) {
+					t.Errorf("%s printed the teen's key:\n%s", what, printed)
+				}
+			}
+			if got := h.read(".wakatime.cfg"); got != theirs {
+				t.Errorf("after uninstall the config holds\n%s\nwant the teen's, without pairtime's mark:\n%s", got, theirs)
+			}
+			// The config is the teen's now, and stays; the rest of the home
+			// is as it was before install.
+			if err := os.Remove(h.path(".wakatime.cfg")); err != nil {
+				t.Fatal(err)
 			}
 			h.uninstalled(before, pid)
 		})

@@ -117,13 +117,15 @@ func TestGatherWakaTime(t *testing.T) {
 	tests := []struct {
 		name string
 		// config is what the config the setup file names holds, "" for no
-		// config; setup says install wrote a setup file; env is
+		// config; setup says install wrote a setup file, and made that it
+		// says install made the config (wakacfg.Setup's Made); env is
 		// WAKATIME_API_KEY, and proxy and noProxy values for https_proxy, or
 		// proxyVar when it names another variable, and NO_PROXY. https_proxy
 		// is in lower case, which ProxyFor reads first and so names on
 		// Windows too, where a variable's name matches in any case.
 		config   string
 		setup    bool
+		made     bool
 		env      string
 		proxy    string
 		proxyVar string
@@ -292,11 +294,32 @@ func TestGatherWakaTime(t *testing.T) {
 			},
 		},
 		{
-			name:   "a config pairtime made whose api_key the teen replaced fails, saying what to change, since the agent refuses that key",
+			name:   "a config pairtime made whose api_key the teen replaced fails, saying how to keep that key and send to pairtime too, since the agent refuses it",
 			config: strings.Replace(string(made), "api_key = "+wakaKey, "api_key = "+hackatimeKey, 1), setup: true,
 			want: func(t *testing.T, w *WakaTime) {
-				if w == nil || !strings.Contains(w.Problem, "is the config pairtime made, with an api_key that isn't pairtime's any more") || !strings.Contains(w.Problem, "point its api_url at your own server, or delete it") {
+				if w == nil || !strings.HasSuffix(w.Problem, " is the config pairtime made, with an api_key that isn't pairtime's any more, so pairtime's agent refuses what wakatime-cli sends it, and your editor time goes nowhere; to send your editor time to pairtime too, set its api_url to your own server, such as Hackatime's, keep your api_key, and run pairtime install again") {
 					t.Errorf("GatherWakaTime = %+v, want the taken-over config's problem", w)
+				}
+			},
+		},
+		{
+			name:   "with the setup file's record that install made it, a config whose mark the teen deleted with pairtime's key fails as taken over too, never as a line that's gone",
+			config: strings.Replace(strings.TrimPrefix(string(made), firstLine(string(made))), "api_key = "+wakaKey, "api_key = "+hackatimeKey, 1), setup: true, made: true,
+			want: func(t *testing.T, w *WakaTime) {
+				if w == nil || !strings.Contains(w.Problem, "is the config pairtime made, with an api_key that isn't pairtime's any more") || strings.Contains(w.Problem, "isn't in ") {
+					t.Errorf("GatherWakaTime = %+v, want the taken-over config's problem", w)
+				}
+				if c, _ := wakatimeCheck(w); c.Result != Fail || strings.Contains(c.Text, hackatimeKey) {
+					t.Errorf("the line is %+v, want a failure that shows no key", c)
+				}
+			},
+		},
+		{
+			name:   "without that record, a config of the teen's own server on 127.0.0.1, whose api_url looks like the agent's, with pairtime's line and no mark, isn't taken for the config pairtime made",
+			config: "[settings]\napi_url = " + server.URL + "/api/v1\napi_key = " + hackatimeKey + "\n" + line(port), setup: true,
+			want: func(t *testing.T, w *WakaTime) {
+				if w == nil || w.Problem != "" || w.Pairtime.Status != http.StatusOK || w.Server == nil || w.Server.Status != http.StatusUnauthorized {
+					t.Errorf("GatherWakaTime = %+v, want the agent's 200, the teen's server's 401 and no problem", w)
 				}
 			},
 		},
@@ -356,7 +379,7 @@ func TestGatherWakaTime(t *testing.T) {
 				if err := os.MkdirAll(filepath.Dir(setup), 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(setup, wakacfg.Setup{Key: wakaKey, Config: cfg}.Encode(), 0o600); err != nil {
+				if err := os.WriteFile(setup, wakacfg.Setup{Key: wakaKey, Config: cfg, Made: tt.made}.Encode(), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -468,4 +491,11 @@ func TestWakaTimeAsksTheServerWakatimeCliSends(t *testing.T) {
 			}
 		})
 	}
+}
+
+// firstLine returns s's first line with its line break: in a config
+// pairtime makes, pairtime's mark.
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line + "\n"
 }
