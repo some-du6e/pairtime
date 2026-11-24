@@ -47,7 +47,7 @@ Raw prompt text, agent output, file paths and window titles stay in tier 0 on th
 | `harness` | enum | `claude_code`, `cursor`, `copilot`, `codex`, `gemini`, `devin`, `cline`, `opencode`, ... or `none` |
 | `harness_version` | string | As reported; parsers are pinned per version (HS 17.7) |
 | `session_key` | hash | Harness session id, salted per device. `none` for OS and git events |
-| `project_key` | local id | Resolved by the client from `cwd`, the repo's root-commit set, or a hashed folder path (SP 4.2) |
+| `project_key` | local id | Resolved by the client from `cwd`, the repo's root-commit set, or a hashed folder path (SP 4.2). A repo that gets its first commit can keep its folder's key (DESIGN 5.8) |
 | `chain_hash` | 32 bytes | Hash-chain link over the previous event; heads go to the server every 5 minutes (TP A3 T8, SP 8.5) |
 
 ### 1.2 Event kinds
@@ -320,7 +320,7 @@ Agents don't get a share of the stream. Five agents running in five repos produc
 
 ### 3.2 Resolving the project of a slot
 
-`project_key` comes from the session's `cwd`, resolved to a repo by its root-commit set, or a hashed folder path when there's no git (SP 4.2). `focus_project` for a slot is resolved in this order:
+`project_key` comes from the session's `cwd`, resolved to a repo by its root-commit set, or a hashed folder path when there's no git (SP 4.2). A folder that gets `git init` and its first commit can keep its folder's key (DESIGN 5.8), and the rules here read whatever key the records carry. `focus_project` for a slot is resolved in this order:
 
 1. **Terminal.** The focused window's process tree is walked on each focus change, and again whenever a harness session starts or ends while the window has focus (its `session.start` or `session.end`, from a hook or the daemon's process list). A walk that changes the window's hosted set writes a new `os.focus`. The window's process comes from the foreground calls in CP 3.3, its descendants from a process snapshot (Toolhelp32 on Windows, `proc_pidinfo` on macOS, `/proc` on Linux). Harness sessions whose process runs under it are its `hosted_sessions`. One hosted session gives its project. Several (tabs, panes, tmux) are harder, because tab switches are invisible to the OS. The slot goes to the session whose next human anchor in this window comes soonest, if the slot lies inside that anchor's lead; otherwise to the session with the most recent human anchor within `ATTRIB_STICKY_S` = 120 s; otherwise the slot is `ambiguous` (anchors still count, the bucket doesn't drain). Looking ahead is right more often than looking back: the seconds before a prompt is sent are almost always spent in the tab it is sent from. A terminal hosting no harness resolves through the shell hook's reported `cwd` when that is installed (v1.5), else `ambiguous`.
 2. **Editor.** The project of the most recent editor heartbeat with input in the same or previous slot. Heartbeats come from the focused window, because they need activity, so this tracks which of several editor windows is in front without reading titles.
