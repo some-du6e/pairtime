@@ -15,6 +15,7 @@ import (
 
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/ledger/features"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 // TestSpecContentWorkedExample computes the worked example of spec section
@@ -167,7 +168,7 @@ func TestSpecContentWorkedExample(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		drawn, err := Draw(seed, pool)
+		drawn, err := Draw(seed, pool, drawTable(t))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -181,7 +182,7 @@ func TestSpecContentWorkedExample(t *testing.T) {
 			{"score of (d_example, 2)", score.String(), "670c31a9fde38cee626f952dda2e3db8697747bf3067bb25f0d924ed53efd2d1"},
 			{"drawn, smallest first", strings.Join(names, ", "), "d_example 9, d_other 26, d_other 7, d_example 14, d_example 52, d_other 33, d_example 2, d_other 18, d_example 23, d_example 40"},
 		}
-		if k := ChallengeK(len(pool)); k != 10 {
+		if k := ChallengeK(drawTable(t), len(pool)); k != 10 {
 			t.Errorf("CHALLENGE_K for 12 is %d", k)
 		}
 		for _, c := range cases {
@@ -396,13 +397,14 @@ func TestDrawRules(t *testing.T) {
 	for i := range pool {
 		pool[i] = Turn{DeviceID: pick(rng, []string{"d_a", "d_b", "x"}), Seq: uint64(1 + i)}
 	}
-	drawn, err := Draw(seed, pool)
+	tb := drawTable(t)
+	drawn, err := Draw(seed, pool, tb)
 	if err != nil {
 		t.Fatal(err)
 	}
 	shuffled := slices.Clone(pool)
 	rng.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
-	again, err := Draw(seed, shuffled)
+	again, err := Draw(seed, shuffled, tb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,8 +414,8 @@ func TestDrawRules(t *testing.T) {
 	}{
 		{"the draw doesn't depend on the pool's order", slices.Equal(drawn, again)},
 		{"a pool of 300 draws 30, the cap", len(drawn) == 30},
-		{"CHALLENGE_K is 10 up to a pool of 100 and 11 from 101", ChallengeK(100) == 10 && ChallengeK(101) == 11},
-		{"CHALLENGE_K is 29 at 290 and 30 from 291", ChallengeK(290) == 29 && ChallengeK(291) == 30 && ChallengeK(5000) == 30},
+		{"CHALLENGE_K is 10 up to a pool of 100 and 11 from 101", ChallengeK(tb, 100) == 10 && ChallengeK(tb, 101) == 11},
+		{"CHALLENGE_K is 29 at 290 and 30 from 291", ChallengeK(tb, 290) == 29 && ChallengeK(tb, 291) == 30 && ChallengeK(tb, 5000) == 30},
 		{"a pool smaller than CHALLENGE_K is drawn whole", len(mustDraw(t, seed, pool[:4])) == 4},
 		{"an empty pool draws nothing", len(mustDraw(t, seed, nil)) == 0},
 		{"the drawn turns are the smallest scores, smallest first", smallestFirst(t, seed, pool, drawn)},
@@ -426,7 +428,7 @@ func TestDrawRules(t *testing.T) {
 		})
 	}
 	drawErr := func(pool []Turn) error {
-		_, err := Draw(seed, pool)
+		_, err := Draw(seed, pool, tb)
 		return err
 	}
 	commitsErr := func(commits [][]byte) error {
@@ -482,11 +484,22 @@ func TestDrawRules(t *testing.T) {
 
 func mustDraw(t *testing.T, seed Hash, pool []Turn) []Turn {
 	t.Helper()
-	d, err := Draw(seed, pool)
+	d, err := Draw(seed, pool, drawTable(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return d
+}
+
+// drawTable is parameter table 0.1.0, which the draw tests and vectors run
+// under: its CHALLENGE_K_* values give min(30, max(10, ceil(p / 10))).
+func drawTable(t testing.TB) *params.Table {
+	t.Helper()
+	tb, err := params.ByVersion("0.1.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tb
 }
 
 // smallestFirst reports whether drawn are the pool's turns of smallest

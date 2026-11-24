@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 // The challenge draw of DESIGN 7.5 step 4, as spec 10.9 gives it to the
@@ -73,40 +75,48 @@ func score(seed Hash, msg []byte) Hash {
 	return h
 }
 
-// ChallengeK returns CHALLENGE_K for a pool of p turns: min(30, max(10,
-// ceil(p / 10))), so 10 for pools of up to 100, 11 for 101 to 110, and 30
-// from 291 on (spec 10.9).
-func ChallengeK(p int) int { return min(30, max(10, (p+9)/10)) }
+// ChallengeK returns CHALLENGE_K for a pool of p turns under parameter
+// table t: min(CHALLENGE_K_MAX, max(CHALLENGE_K_MIN, ceil(CHALLENGE_K_FRAC
+// × p))), with the share rounded up in integer arithmetic (DESIGN 6.3).
+// The caller passes the table frozen with r (DESIGN 7.5 step 4, spec 10.9).
+// Under table 0.1.0, K is 10 for pools of up to 100, 11 for 101 to 110,
+// and 30 from 291 on.
+func ChallengeK(t *params.Table, p int) int {
+	frac := t.Rat(params.CHALLENGE_K_FRAC)
+	share := (frac.Num()*int64(p) + frac.Den() - 1) / frac.Den()
+	return int(min(t.Int(params.CHALLENGE_K_MAX), max(t.Int(params.CHALLENGE_K_MIN), share)))
+}
 
 // Draw returns the drawn turns of pool, smallest score first: the pool
 // ranked by score, comparing scores as 32-byte strings, cut to the first
-// min(CHALLENGE_K, P) (spec 10.9). It refuses a pool that lists a turn
-// twice, or a turn DrawScore refuses. Which turns the pool holds is WP-SB5's
-// to decide under DESIGN 7.5 step 4.
-func Draw(seed Hash, pool []Turn) ([]Turn, error) {
+// min(CHALLENGE_K, P), with CHALLENGE_K from parameter table t (spec
+// 10.9). The caller passes the table frozen with r (DESIGN 7.5 step 4).
+// It refuses a pool that lists a turn twice, or a turn DrawScore refuses.
+// Which turns the pool holds is WP-SB5's to decide under DESIGN 7.5 step 4.
+func Draw(seed Hash, pool []Turn, t *params.Table) ([]Turn, error) {
 	type scored struct {
 		t Turn
 		s Hash
 	}
 	seen := make(map[Turn]bool, len(pool))
 	ranked := make([]scored, len(pool))
-	for i, t := range pool {
-		if seen[t] {
-			return nil, fmt.Errorf("ledger: the pool lists record %d of a device twice", t.Seq)
+	for i, tn := range pool {
+		if seen[tn] {
+			return nil, fmt.Errorf("ledger: the pool lists record %d of a device twice", tn.Seq)
 		}
-		seen[t] = true
-		s, err := DrawScore(seed, t)
+		seen[tn] = true
+		s, err := DrawScore(seed, tn)
 		if err != nil {
 			return nil, err
 		}
-		ranked[i] = scored{t, s}
+		ranked[i] = scored{tn, s}
 	}
 	// Two items tie only through an HMAC collision; the device id and s
 	// still give one order.
 	slices.SortFunc(ranked, func(a, b scored) int {
 		return cmp.Or(bytes.Compare(a.s[:], b.s[:]), cmp.Compare(a.t.DeviceID, b.t.DeviceID), cmp.Compare(a.t.Seq, b.t.Seq))
 	})
-	out := make([]Turn, min(ChallengeK(len(pool)), len(pool)))
+	out := make([]Turn, min(ChallengeK(t, len(pool)), len(pool)))
 	for i := range out {
 		out[i] = ranked[i].t
 	}
