@@ -1,0 +1,29 @@
+{
+  "fixture": "focus-unknown/f-nearest-ahead",
+  "prompts": [
+    {
+      "turn_key": "t_592a00037e18",
+      "t": 1795870500000,
+      "local": "13:55:00",
+      "text": null,
+      "len_chars": 60,
+      "source": "invented for WP-FX8; only its typed length matters"
+    },
+    {
+      "turn_key": "t_96f7b64cd48d",
+      "t": 1795870800000,
+      "local": "14:00:00",
+      "text": null,
+      "len_chars": 45,
+      "source": "invented for WP-FX8; only its typed length matters"
+    },
+    {
+      "turn_key": "t_336684375082",
+      "t": 1795871341000,
+      "local": "14:09:01",
+      "text": null,
+      "len_chars": 24,
+      "source": "invented for WP-FX8; only its typed length matters"
+    }
+  ]
+}

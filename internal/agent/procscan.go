@@ -4,6 +4,7 @@ package agent
 
 import (
 	"github.com/some-du6e/pairtime/internal/agent/procs"
+	"github.com/some-du6e/pairtime/internal/platform"
 )
 
 // startProcs starts the harness process scan (DESIGN 3.3, WP-OS6) and
@@ -22,7 +23,14 @@ func (a *agent) startProcs(opts Options) func() {
 //   - Its count of this user's harness session processes goes to
 //     presence's HarnessProcesses after every scan: while one runs, a
 //     project context is live (DESIGN 3.3), including for a hookless
-//     `claude --bare` session that nothing else would show.
+//     `claude --bare` session that nothing else would show. The count
+//     leaves out a process whose parent_class is agent_app, such as the
+//     Claude Code T3 Code's server keeps running in a thread between its
+//     runs, or one typed into T3's own terminal: T3's count from the apps
+//     component keeps the context live for those, once a minute and with
+//     no focus record while nothing else does (D-relayed-context), and the
+//     session's hooks and T3's own window in front still make a context of
+//     their own.
 //   - After every scan the focus component looks again at the window in
 //     front, which may host a session the scan just found (focus.go), and
 //     forgets the hooked sessions of processes the scan saw exit
@@ -31,6 +39,11 @@ func (a *agent) startProcs(opts Options) func() {
 //     or withdraws because a hook claimed it late, goes to the log. The
 //     hook sink (hooks.go, WP-AG3) claims the harness process each hook
 //     came from, as the agent's own walk of the connection found it.
+//   - Every scan's process table goes to the apps component, which looks
+//     there for T3 Code's server: with its store's -wal and -shm files,
+//     that is what makes T3 run, for the reader's cadence, presence's
+//     project context and doctor (DESIGN 3.3; apps.go). A scan that failed
+//     finds none.
 func (a *agent) procsOptions(opts procs.Options) procs.Options {
 	opts.Log = a.log
 	opts.Store = a.state
@@ -57,5 +70,6 @@ func (a *agent) procsOptions(opts procs.Options) procs.Options {
 			a.setProblem("procs", "")
 		}
 	}
+	opts.Listed = func(goos string, ps []platform.Proc, self string) { a.appsHost().noteServer(goos, ps, self) }
 	return opts
 }

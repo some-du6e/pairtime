@@ -47,16 +47,17 @@
 // the ones before with the carry: the last record of each kind whose
 // effect lasts until a later one ends it (window.go). A turn's run has no
 // bound in time (SM 2.6), so a turn that ran into the window holds the
-// window's start at the turn's submit, for up to holdMaxMS: its run, its
-// origin and its class come from its own records. Past that, and once a
-// run is over, the carry keeps the session's last prompted turn's latest
-// agent record and whether its run was cut or it stopped, and dates what
-// it carries so the run goes on, or stays over, as it does with every
-// record. Each Step scores the window and the carry in a new State. What
-// that derives at and after FinalBefore is what a State holding every
-// record would, because no rule bounded in time reaches back further than
-// BUCKET_TTL_S (2 h), and the window and the carry stand for the rules
-// that aren't bounded. What it misses is a browser run longer than
+// window's start at the turn's submit, or at the relay.message its prompt
+// paired with when that came first, for up to holdMaxMS: its run, its
+// origin and its class come from its own records and its witness. Past
+// that, and once a run is over, the carry keeps the session's last
+// prompted turn's latest agent record and whether its run was cut or it
+// stopped, and dates what it carries so the run goes on, or stays over, as
+// it does with every record. Each Step scores the window and the carry in
+// a new State. What that derives at and after FinalBefore is what a State
+// holding every record would, because no rule bounded in time reaches back
+// further than BUCKET_TTL_S (2 h), and the window and the carry stand for
+// the rules that aren't bounded. What it misses is a browser run longer than
 // Lookback, whose lookup credit (SM 2.5) rests on a bracket before the
 // run; a prompted turn that runs longer than holdMaxMS and whose origin
 // rests on input it carries no record of; and a turn a stop hook continued
@@ -896,7 +897,7 @@ func (l *Loop) step(b uint64) {
 		}
 	}
 	l.cur.FinalBefore = fb
-	l.win.slide(holdFor(all.Turns, fb-l.lookback))
+	l.win.slide(holdFor(all, fb-l.lookback))
 	if !l.batching {
 		l.save()
 	} else {
@@ -907,14 +908,29 @@ func (l *Loop) step(b uint64) {
 }
 
 // holdFor returns where the window starts when it would start at from:
-// from, or the earliest submit of a turn that ran past from, if no more than
-// holdMaxMS before it. A State that holds such a turn's records gives its
-// run, origin and class as one holding every record does.
-func holdFor(turns []score.Turn, from int64) int64 {
+// from, or the earliest start of a turn of d that ran past from, if no more
+// than holdMaxMS before it. A turn starts at its submit, or at the t of the
+// relay.message its prompt paired with when that came first (Turn.Relay),
+// as a queued message's record can, up to RELAY_MATCH_S before the prompt
+// (SM 2.2 rule 9). A State that holds such a turn's records, its witness
+// included, gives its run, origin and class as one holding every record
+// does.
+func holdFor(d score.Derived, from int64) int64 {
+	relays := make(map[string]int64, len(d.Relays))
+	for _, r := range d.Relays {
+		relays[r.ID] = r.T
+	}
 	start := from
-	for _, tn := range turns {
-		if tn.RunUntil > from && tn.TSubmit < start && tn.TSubmit >= from-holdMaxMS {
-			start = tn.TSubmit
+	for _, tn := range d.Turns {
+		if tn.RunUntil <= from {
+			continue
+		}
+		at := tn.TSubmit
+		if t, ok := relays[tn.Relay]; ok && tn.Relay != "" && t < at && t >= from-holdMaxMS {
+			at = t
+		}
+		if at < start && at >= from-holdMaxMS {
+			start = at
 		}
 	}
 	return start

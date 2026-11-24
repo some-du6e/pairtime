@@ -26,6 +26,15 @@ const (
 	Char5 ShingleKind = 0x06
 )
 
+// The shingle lengths SM 8.5 fixes, as spec 10.5 cuts them: word shingles
+// of shingleWords words for a text of shingleMinWords words or more, and
+// otherwise character shingles of shingleChars code points.
+const (
+	shingleWords    = 3
+	shingleChars    = 5
+	shingleMinWords = 6
+)
+
 // String returns "word3" or "char5", the names the vectors use.
 func (k ShingleKind) String() string {
 	switch k {
@@ -45,22 +54,22 @@ func (k ShingleKind) String() string {
 // bytes.
 func Shingles(words []string) (ShingleKind, []string) {
 	set := map[string]bool{}
-	if len(words) >= 6 {
-		for i := 0; i+3 <= len(words); i++ {
-			set[strings.Join(words[i:i+3], " ")] = true
+	if len(words) >= shingleMinWords {
+		for i := 0; i+shingleWords <= len(words); i++ {
+			set[strings.Join(words[i:i+shingleWords], " ")] = true
 		}
 		return Word3, slices.Sorted(maps.Keys(set))
 	}
 	text := strings.Join(words, " ")
-	if utf8.RuneCountInString(text) < 5 {
+	if utf8.RuneCountInString(text) < shingleChars {
 		if text == "" {
 			return Char5, nil
 		}
 		return Char5, []string{text}
 	}
 	rs := []rune(text)
-	for i := 0; i+5 <= len(rs); i++ {
-		set[string(rs[i:i+5])] = true
+	for i := 0; i+shingleChars <= len(rs); i++ {
+		set[string(rs[i:i+shingleChars])] = true
 	}
 	return Char5, slices.Sorted(maps.Keys(set))
 }

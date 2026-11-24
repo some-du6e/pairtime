@@ -16,14 +16,15 @@ import (
 // and reports how many it dropped. It writes the lines it keeps to a new
 // file beside name, named tmpPrefix and a random suffix, flushes it and
 // renames it over name, so a kill at any moment leaves one of the two files
-// whole. It opens name as OpenPrivate does and closes it before the rename,
-// which Windows refuses while any handle to name is open, so the caller
-// must have none open either. keep gets each line that isn't blank, with
-// its newline, and the offset it starts at; blank lines stay as they are.
+// whole. It opens name as OpenOwned does, as a cut only drops lines, and
+// closes it before the rename, which Windows refuses while any handle to
+// name is open, so the caller must have none open either. keep gets each
+// line that isn't blank, with its newline, and the offset it starts at;
+// blank lines stay as they are.
 // A rewrite that would drop nothing leaves name as it is, and one that
 // would keep no line deletes it.
 func Rewrite(name, tmpPrefix string, keep func(line []byte, at int64) bool) (dropped int, err error) {
-	src, err := OpenPrivate(name, os.O_RDONLY, 0)
+	src, err := OpenOwned(name)
 	if err != nil {
 		return 0, err
 	}

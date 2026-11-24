@@ -54,7 +54,7 @@
         "role": {"enum": ["project", "evidence", "submission", "hours", "justification", "exception", "automation", "review", "weight", "program"]},
         "filled_by": {
           "enum": ["program", "pairtime", "reviewer", "Hack Club automation"],
-          "description": "Who writes the field. pairtime means the text or number comes from pairtime's justification endpoint (DESIGN 9.3), written by the program's Airtable script (WP-PG2) or pasted by its reviewer."
+          "description": "Who writes the field. pairtime means pairtime wrote the text or number, which reaches the base from its justification endpoint (DESIGN 9.3), written by the program's Airtable script (WP-PG2) or pasted by its reviewer. reviewer means a person wrote it, in the base or on pairtime's review page. The endpoint returns a reviewer's Deflation Justification only once the reviewer has confirmed pairtime's draft as written or rewritten it (DESIGN 9.3)."
         },
         "handbook": {"type": "string", "description": "The field's name in the handbook, in handbook/fields.json."},
         "note": {"type": "string"}
