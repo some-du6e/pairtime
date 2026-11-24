@@ -350,6 +350,13 @@ func (f *fixture) seed(t *testing.T, p person, witness ...time.Time) map[string]
 		{"badges", `INSERT INTO badges (user_id, id, code) VALUES ($1, 'b1', 'first-build')`, []any{p.id}},
 		{"removed_items", `INSERT INTO removed_items (user_id, id, removed_at_ms) VALUES ($1, 'dl0', $2)`, []any{p.id, at}},
 		{"zone_changes", `INSERT INTO zone_changes (user_id, changed_at_ms, tz_before) VALUES ($1, $2, 'UTC')`, []any{p.id, at}},
+		{"submissions", `INSERT INTO submissions (id, user_id, program, takes_hours, request_id, request_sha256, created_by, device_id, mode, state, scoring_version, params, r, r_sha256, eligibility_to_confirm, created_at_ms, updated_at_ms, frozen_at_ms) VALUES ($1, $2, 'hard-mode', 1, 'req-1', 'sum', 'device', $3, 'window', 'frozen', '0.5.0', 'sha256:params', $4, 'rsum', 0, $5, $5, $5)`,
+			[]any{"sub-" + p.id, p.id, p.device, make([]byte, 32), at}},
+		{"submission_projects", `INSERT INTO submission_projects (submission_id, project_id) VALUES ($1, 'p1')`, []any{"sub-" + p.id}},
+		{"submission_keys", `INSERT INTO submission_keys (submission_id, user_id, device_id, project_key, project_id) VALUES ($1, $2, $3, 'pk1', 'p1')`, []any{"sub-" + p.id, p.id, p.device}},
+		{"submission_windows", `INSERT INTO submission_windows (submission_id, start_ms, end_ms) VALUES ($1, $2, $3)`, []any{"sub-" + p.id, at - 3_600_000, at}},
+		{"submission_events", `INSERT INTO submission_events (submission_id, seq, from_state, to_state, at_ms) VALUES ($1, 1, 'created', 'frozen', $2)`, []any{"sub-" + p.id, at}},
+		{"submission_flags", `INSERT INTO submission_flags (submission_id, user_id, code, detail, raised_at_ms) VALUES ($1, $2, 'concurrent_devices', '{"minutes":1}', $3)`, []any{"sub-" + p.id, p.id, at}},
 	}
 	for i, d := range witness {
 		rows = append(rows, struct {
