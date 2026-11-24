@@ -249,7 +249,11 @@ type turnBuild struct {
 	// witness the same record when it witnesses the prompt (SM 2.2 rule 9):
 	// declared none, in a session an agent app's server started.
 	relay, witness *relayRec
-	turn           Turn
+	// focusUnknown is set when rule 6 passed only because the client
+	// couldn't tell which window was in front at the submit (SM 2.2, 2.5),
+	// which makes the prompt's anchor level C with focus_unknown.
+	focusUnknown bool
+	turn         Turn
 }
 
 // running reports whether the agent was working on the turn at t.
@@ -694,12 +698,18 @@ func (d *deriver) origin(tb *turnBuild, e event.Event) (event.Origin, event.Prom
 	// of the prompt's t, with focus the record at or before the stamp,
 	// which has no record position, and a message from the app's phone app
 	// skips them, since no input here typed it (SM 2.2).
+	//
+	// Where the client couldn't tell which window was in front, rule 6's
+	// focus test can't be applied and passes, and the prompt is marked
+	// (turnBuild.focusUnknown; SM 2.2, 2.5).
 	at, focus := e.T, d.focus.before(tb.primary)
 	if w != nil {
 		at, focus = w.d.SentAt, d.focus.at(w.d.SentAt)
 	}
+	tb.focusUnknown = false
 	if (w == nil || w.d.Client != event.RelayClientMobile) &&
-		d.pres.inputAround(at, d.r.keysPre, d.r.releaseGrace) && d.hostedBy(focus, tb.sess, tb.primary) {
+		d.pres.inputAround(at, d.r.keysPre, d.r.releaseGrace) && (focus.unknown() || d.hostedBy(focus, tb.sess, tb.primary)) {
+		tb.focusUnknown = focus.unknown()
 		class := d.classify(tb.sess, d.recs[tb.primary], p)
 		typed := count(p.TypedLenEst)
 		think, typing := d.leadParts(class, e.Via, typed)

@@ -68,6 +68,12 @@ type Anchor struct {
 	// witnessed a prompt rules 6 and 7 made typed at its stamp.
 	Prompt string `json:"prompt,omitempty"`
 	Relay  string `json:"relay,omitempty"`
+	// focusUnknown is set when the anchor's evidence test names focus and
+	// passed only because the client couldn't tell which window was in
+	// front (SM 2.5): rules 6 and 7 for a prompt, the host window for a
+	// queued message, the editor for a typed edit or a navigation. level
+	// makes such an anchor level C with focus_unknown.
+	focusUnknown bool
 	// decided is when the anchor is decided: the latest t of the records it
 	// goes by, and no earlier than T. A typed command's record is written
 	// when the command ends, and a permission's when the request pairs with
@@ -184,7 +190,7 @@ func (d *deriver) promptAnchors() {
 		think, typing := d.leadParts(t.PromptClass, e.Via, t.TypedChars)
 		a := Anchor{ID: e.EventID, T: e.T, ProjectKey: t.ProjectKey, SessionKey: t.SessionKey, TurnKey: t.TurnKey,
 			Origin: t.Origin, PromptClass: t.PromptClass, LeadMS: think + typing, TypingMS: typing,
-			TrailFrom: e.T, Via: e.Via, Corroborated: d.corroborated(tb.prompts)}
+			TrailFrom: e.T, Via: e.Via, Corroborated: d.corroborated(tb.prompts), focusUnknown: tb.focusUnknown}
 		a.Kind, a.Reason = promptKind(t.PromptClass)
 		end, decided := e.T, d.latest(tb.prompts)
 		if w := tb.witness; w != nil {
@@ -411,12 +417,15 @@ func (d *deriver) harnessAnchor(best int, pos []int) {
 	from, to := slotWindow(e.T)
 	switch p := e.Data.(type) {
 	case *event.AgentQueue:
-		// Input in its slot and focus on the host window; then as a prompt
-		// of its class. Its record carries a length, not the derived
-		// low-effort test, so a short message is a go-ahead.
-		if app || !d.pres.slotInput(e.T, false) || !d.hostedBy(d.focus.before(best), s, best) {
+		// Input in its slot and focus on the host window, or on a window
+		// the client couldn't tell (SM 2.5); then as a prompt of its class.
+		// Its record carries a length, not the derived low-effort test, so
+		// a short message is a go-ahead.
+		f := d.focus.before(best)
+		if app || !d.pres.slotInput(e.T, false) || !(f.unknown() || d.hostedBy(f, s, best)) {
 			return
 		}
+		a.focusUnknown = f.unknown()
 		typed := count(p.LenChars)
 		class := event.ClassLowEffort
 		switch {
@@ -490,24 +499,25 @@ func (d *deriver) otherAnchor(i int, e event.Event) {
 			// reports them, and the editor in focus on the same project:
 			// the project of SM 3.2 rule 2's heartbeat when there is one,
 			// else the one the focus record names (D-editor-heartbeat-first,
-			// D-rule2-sidedoor).
+			// D-rule2-sidedoor). Where the client couldn't tell which window
+			// was in front, the focus test passes for every project (SM 2.5).
 			switch p.EditSource {
 			case event.EditSourceHuman, event.EditSourceTab, event.EditSourceUnknown:
 			default:
 				return
 			}
-			if !d.pres.slotInput(e.T, d.pres.keysAt(e.T)) || f.class != event.AppEditor {
+			if !d.pres.slotInput(e.T, d.pres.keysAt(e.T)) || !(f.unknown() || f.class == event.AppEditor) {
 				return
 			}
-			if on := d.editorProject(f, i); on != "" && on != e.ProjectKey {
+			if on := d.editorProject(f, i); !f.unknown() && on != "" && on != e.ProjectKey {
 				return
 			}
-			a.Kind, a.Reason = event.AnchorTypedEdit, event.ReasonEdit
+			a.Kind, a.Reason, a.focusUnknown = event.AnchorTypedEdit, event.ReasonEdit, f.unknown()
 		case event.ActNavigate, event.ActOpen, event.ActDebug, event.ActTask:
-			if !d.pres.slotInput(e.T, false) || f.class != event.AppEditor {
+			if !d.pres.slotInput(e.T, false) || !(f.unknown() || f.class == event.AppEditor) {
 				return
 			}
-			a.Kind, a.Reason = event.AnchorEditorNavigation, event.ReasonNavigate
+			a.Kind, a.Reason, a.focusUnknown = event.AnchorEditorNavigation, event.ReasonNavigate, f.unknown()
 		default:
 			return
 		}
@@ -605,6 +615,11 @@ func (d *deriver) level(a *Anchor, from, to int64, host func(int64) bool) {
 	default:
 		a.Level = event.EvidenceC
 	}
+	if a.focusUnknown {
+		// Its evidence test passed only because the client couldn't tell
+		// which window was in front (SM 2.5).
+		a.Level = event.EvidenceC
+	}
 	a.Labels = nil
 	if l := sideDoorLabel(a.Via); l != "" {
 		a.Labels = append(a.Labels, l)
@@ -614,6 +629,9 @@ func (d *deriver) level(a *Anchor, from, to int64, host func(int64) bool) {
 	}
 	if d.dev.VM {
 		a.Labels = append(a.Labels, event.LabelVM)
+	}
+	if a.focusUnknown {
+		a.Labels = append(a.Labels, event.LabelFocusUnknown)
 	}
 }
 

@@ -37,6 +37,12 @@ func hostedSet(keys []string) string {
 // noFocus is what holds the foreground before the first os.focus record.
 var noFocus = &focusRec{pos: -1, class: event.AppNone}
 
+// unknown reports whether the client couldn't tell which window was in
+// front: an os.focus with app_class unknown (SM 2.5). The foreground before
+// the first os.focus record is no unknown one, so that time still credits
+// nothing.
+func (f *focusRec) unknown() bool { return f.class == event.AppUnknown }
+
 // hosts reports whether the window hosts harness session key (SM 3.2).
 func (f *focusRec) hosts(key string) bool {
 	return key != "" && key != event.NoSession && slices.Contains(f.hosted, key)
