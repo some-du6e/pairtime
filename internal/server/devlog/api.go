@@ -97,10 +97,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	h.Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	// Every answer is JSON that no browser sniffs as HTML (pairtimed sends
-	// nosniff), so <, > and & stay one byte each. Markdown holds no control
-	// character but tab, LF and CR (publish), so a list of devlogs is at
-	// most about twice as long as their Markdown, for quotes, backslashes,
-	// those three and U+2028 and U+2029, which JSON writes longer.
+	// nosniff), so <, > and & stay one byte each. Markdown holds no C0
+	// control character (U+0000 to U+001F) but tab, LF and CR (publish), so
+	// a list of devlogs is at most about twice as long as their Markdown,
+	// for quotes, backslashes, those three and U+2028 and U+2029, which JSON
+	// writes longer. DEL and the C1 characters, which publish takes, stay as
+	// they are.
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	enc.Encode(v)
@@ -246,7 +248,7 @@ func (s *Service) publish(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusRequestEntityTooLarge, "markdown_too_large", "A devlog's Markdown is at most 64 KiB.")
 		return
 	case hasControl(*req.Markdown):
-		refuse(w, http.StatusBadRequest, "bad_markdown", "A devlog's Markdown holds no control characters but tab, line feed and carriage return.")
+		refuse(w, http.StatusBadRequest, "bad_markdown", "A devlog's Markdown holds no C0 control character (U+0000 to U+001F) but tab, line feed and carriage return. DEL and the C1 characters are taken.")
 		return
 	}
 	d := Devlog{ID: *req.ID, ProjectKey: *req.Project, Markdown: *req.Markdown, AIAssisted: *req.AIAssisted}

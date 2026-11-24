@@ -138,16 +138,28 @@ func TestAPI(t *testing.T) {
 		{name: "a badge code that isn't on the list is refused", calls: []call{
 			{method: "POST", path: BadgesPath, token: "ptd_laptop", body: `{"id":"bd_1","code":"ten_hours"}`, wantCode: 400, want: `"error":"code_unknown"`},
 		}},
-		{name: "Markdown holding a control character other than tab, LF and CR is refused with bad_markdown", calls: []call{
+		{name: "Markdown holding a C0 control character other than tab, LF and CR is refused with bad_markdown", calls: []call{
 			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\x00b"), wantCode: 400, want: `"error":"bad_markdown"`},
 			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\x01b"), wantCode: 400, want: `"error":"bad_markdown"`},
-			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "\x08\x0b\x0c"), wantCode: 400, want: `"error":"bad_markdown"`},
 			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "colors \x1b[31mred"), wantCode: 400, want: `"error":"bad_markdown"`},
 			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\x1f"), wantCode: 400, want: `"error":"bad_markdown"`},
 			{method: "GET", path: DevlogsPath, token: "ptd_laptop", wantCode: 200, want: `{"devlogs":[]}`},
 		}},
-		{name: "Markdown with tabs, line feeds and carriage returns is taken byte for byte", calls: []call{
+		{name: "Markdown holding a backspace (U+0008) is refused with bad_markdown", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\x08b"), wantCode: 400, want: `"error":"bad_markdown"`},
+		}},
+		{name: "Markdown holding a vertical tab (U+000B) is refused with bad_markdown", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\x0bb"), wantCode: 400, want: `"error":"bad_markdown"`},
+		}},
+		{name: "Markdown holding a form feed (U+000C) is refused with bad_markdown", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\x0cb"), wantCode: 400, want: `"error":"bad_markdown"`},
+		}},
+		{name: "Markdown with tabs, line feeds, carriage returns and DEL is taken byte for byte", calls: []call{
 			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\tb\nc\r\nd\x7f"), wantCode: 201, markdown: "a\tb\nc\r\nd\x7f"},
+		}},
+		{name: "Markdown holding a C1 character (U+0085) is taken and read back byte for byte", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "a\u0085b"), wantCode: 201, markdown: "a\u0085b"},
+			{method: "GET", path: DevlogsPath, token: "ptd_desktop", wantCode: 200, markdown: "a\u0085b"},
 		}},
 		{name: "every route answers 503 with Retry-After: 5 when the device store fails", calls: []call{
 			{method: "POST", path: DevlogsPath, token: "ptd_down", body: devlogBody("dl_1", "hi"), wantCode: 503, want: `"error":"unavailable"`, retryAfter: "5"},

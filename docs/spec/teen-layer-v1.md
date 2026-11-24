@@ -17,7 +17,7 @@ Every answer is JSON with `Cache-Control: no-store`. A refusal is `{"error": "<c
 | 400 | `json_invalid` | The body isn't valid UTF-8 |
 | 400 | `id_invalid`, `project_invalid` | An id or project key isn't 1 to 128 letters, digits, `_` or `-` |
 | 400 | `markdown_empty` | A devlog with no Markdown |
-| 400 | `bad_markdown` | Markdown holding a control character other than tab, line feed and carriage return, none of which Markdown needs |
+| 400 | `bad_markdown` | Markdown holding a C0 control character (U+0000 to U+001F) other than tab, line feed and carriage return, none of which Markdown needs. DEL (U+007F) and the C1 characters (U+0080 to U+009F) are taken |
 | 400 | `code_unknown` | A badge code that isn't on the list in 4 |
 | 413 | `markdown_too_large`, `body_too_large` | Markdown over 65,536 bytes, or a body larger than any devlog's |
 | 409 | `limit_reached` | A publish that would take the account past 1,000 devlogs or 8 MiB of Markdown between them (2), or a delete or removal of an id the account doesn't hold while it keeps 1,000 removal records (5) |
@@ -38,7 +38,7 @@ Each device's requests to the six devlog and badge routes (2 to 5) count against
 |---|---|
 | `id` | A random key the client made when the teen clicked Publish. A retry sends the same one |
 | `project` | This device's key of the project the preview names, as ingest's slots name it |
-| `markdown` | The devlog exactly as previewed, at most 65,536 bytes of UTF-8, with no control characters but tab, line feed and carriage return |
+| `markdown` | The devlog exactly as previewed, at most 65,536 bytes of UTF-8, with no C0 control character (U+0000 to U+001F) but tab, line feed and carriage return. DEL and the C1 characters are taken |
 | `ai_assisted` | Whether the teen's agent wrote the draft (DESIGN 5.5) |
 
 `201` answers with the devlog the server stored, in the form `GET` lists it. A publish of an id the account holds already answers `200` with the devlog stored then, and changes nothing, so a retry after a lost answer stores nothing new. A publish of an id in the removal records (5) answers `410` and stores nothing. An account holds at most 1,000 devlogs, with at most 8 MiB (8,388,608 bytes) of Markdown between them: a publish of a new id that would take it past either answers `409 limit_reached` and stores nothing. The devlog's time is when the server received it, set in the transaction that stores it, and it bounds D13's windows: deleting or republishing a devlog moves no frozen window (DESIGN 7.5 step 2).

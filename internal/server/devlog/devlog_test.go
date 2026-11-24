@@ -65,7 +65,7 @@ func at(h, m int) time.Time { return time.Date(2026, 11, 20, h, m, 0, 0, time.UT
 
 // A Markdown text with bytes a careless store would change: HTML, quotes,
 // a tab, a carriage return, a line separator, an emoji and no newline at
-// the end. It holds no other control character, which a publish refuses.
+// the end. It holds no other C0 control character, which a publish refuses.
 const tricky = "# Day 3\r\n\nFixed the `nil` map <b>at last</b> & \"quoted\" it\t  \U0001F680 é"
 
 // accountRows are the ids an account's rows in devlogs, badges and

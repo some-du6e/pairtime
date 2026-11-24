@@ -74,9 +74,11 @@ var Codes = []string{
 	"fixed_by_hand", "long_fight", "loop_caught", "comeback", "new_language", "new_tool",
 }
 
-// hasControl reports whether s holds a C0 control character other than
-// tab, line feed and carriage return. Markdown needs none of them, and
-// JSON writes each as six bytes (#293).
+// hasControl reports whether s holds a C0 control character (U+0000 to
+// U+001F) other than tab, line feed and carriage return (#293). Markdown
+// needs none of them, and JSON writes most of them as six bytes, \u00XX,
+// and BS and FF as two, \b and \f. DEL and the C1 characters (U+0080 to
+// U+009F) pass, since JSON writes them as they are.
 func hasControl(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if c := s[i]; c < 0x20 && c != '\t' && c != '\n' && c != '\r' {
