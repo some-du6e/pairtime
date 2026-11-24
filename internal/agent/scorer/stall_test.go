@@ -218,33 +218,6 @@ func TestStallWarning(t *testing.T) {
 		}
 		return evs
 	}
-	// lapsed is a day whose sampler loses its idle source an hour before a
-	// suspend: the suspend and the morning's resume come with no sample, a
-	// log reader's turn runs for three hours after the resume with nothing
-	// the agent stamps itself, and then the samples come back for half an
-	// hour. The minutes no sample came within BUCKET_TTL_S of count as
-	// unknown once the newest record is PENDING_WINDOW_S - READ_HORIZON_S
-	// past that, and pkg/score holds FinalBefore at the first of the rest
-	// until then (SM 2.1).
-	lapsed := func(t *testing.T) []event.Event {
-		day := hookTurn(t, fixture(t, "6.4").Events[0].T, tools[:12])
-		last := day[len(day)-1].T
-		n := 0
-		rec := func(ts int64, d event.Payload) event.Event {
-			n++
-			return sampleAt(day, ts, fmt.Sprintf("01a1fb1e-5318-78a1-a7f7-%012x", n), d)
-		}
-		resume := last + 9*60*minute
-		evs := append(day, rec(last+60*minute, &event.OSPower{Op: event.PowerSuspend}),
-			rec(resume, &event.OSPower{Op: event.PowerResume}))
-		evs = append(evs, logMorning(t, resume+minute, resume+3*60*minute, day[len(day)-1])...)
-		back := resume + 3*60*minute + 10*minute
-		for k := int64(0); k <= 120; k++ {
-			idle := float64(1 + k%4)
-			evs = append(evs, rec(back+k*15_000, &event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle}))
-		}
-		return evs
-	}
 	cases := []struct {
 		name  string
 		build func(t *testing.T) []event.Event
@@ -253,8 +226,12 @@ func TestStallWarning(t *testing.T) {
 		warned bool
 		last   string
 		// each, when set, is what every lag doctor hears must say: its
-		// cause, and heard what some lag it hears must say.
-		each, heard string
+		// cause.
+		each string
+		// hold, when set, gives the time pkg/score holds FinalBefore at
+		// once it would pass it, as a slot nothing decides does
+		// (score.Output.Undecided), which no input it knows of reaches.
+		hold func(evs []event.Event) int64
 		// held says the newest final minute ends up more than the
 		// warning's lag behind the newest record, so a case's silence
 		// isn't that of a short lag.
@@ -269,14 +246,28 @@ func TestStallWarning(t *testing.T) {
 			build: browser, held: true},
 		{name: "a night's suspend, which holds the minutes for 5 min after the morning's resume, tells doctor why while it holds, and nothing once they catch up",
 			build: overnight, warned: true, each: "a presence sample came after 14 h without one"},
-		{name: "minutes that no sample came within BUCKET_TTL_S of, while pkg/score holds FinalBefore at them, tell doctor so, and nothing once they count as unknown and catch up",
-			build: lapsed, warned: true, heard: "no presence sample has decided whether you were at the computer"},
+		{name: "a FinalBefore pkg/score holds at a slot nothing decides tells doctor that no sample decided those minutes, and when they count as unknown",
+			build: turn(func(int64) bool { return true }), warned: true, held: true,
+			last: "no presence sample has decided whether you were at the computer from then on, as none came within 2 h after those minutes",
+			hold: func(evs []event.Event) int64 { return evs[0].T - floorMod(evs[0].T, event.SlotMS) + 30*minute }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			evs := c.build(t)
 			r := newRig(t, score.Device{})
+			if c.hold != nil {
+				at := c.hold(evs)
+				r.setup = func(l *Loop) {
+					l.scoreStep = func(s score.State, recs []event.Event) (score.State, score.Output) {
+						s, out := score.Step(s, recs)
+						if out.FinalBefore > at {
+							out.FinalBefore, out.Undecided = at, at
+						}
+						return s, out
+					}
+				}
+			}
 			r.write(evs, nil)
 			r.mu.Lock()
 			problems := slices.Clone(r.problems)
@@ -290,9 +281,6 @@ func TestStallWarning(t *testing.T) {
 				if c.each != "" && strings.Contains(p, "newest final minute") && !strings.Contains(p, c.each) {
 					t.Errorf("doctor heard %q, want every lag it hears to say %q", p, c.each)
 				}
-			}
-			if c.heard != "" && !slices.ContainsFunc(problems, func(p string) bool { return strings.Contains(p, c.heard) }) {
-				t.Errorf("doctor heard %q, want some lag it hears to say %q", problems, c.heard)
 			}
 			switch {
 			case c.last == "" && last != "":

@@ -230,6 +230,9 @@ type Loop struct {
 	pendingMS int64
 	// writeDayFile writes a day's rollup, store.WriteDay but in tests.
 	writeDayFile func(dir string, d store.Day) error
+	// scoreStep is score.Step but in tests, which hold FinalBefore at a
+	// slot nothing decides, as no input pkg/score knows of does.
+	scoreStep func(score.State, []event.Event) (score.State, score.Output)
 
 	mu      sync.Mutex
 	queue   []ledger.Batch
@@ -308,6 +311,7 @@ func New(opts Options) (*Loop, error) {
 		pendingMS:    opts.Params.Int(params.PENDING_WINDOW_S) * 1000,
 		gaps:         gapsOf(opts.Params),
 		writeDayFile: store.WriteDay,
+		scoreStep:    score.Step,
 		kick:         make(chan struct{}, 1),
 		stop:         make(chan struct{}),
 		done:         make(chan struct{}),
@@ -923,7 +927,7 @@ func (l *Loop) score(recs []event.Event) (out score.Output, err error) {
 			err = fmt.Errorf("pkg/score panicked: %v", r)
 		}
 	}()
-	_, out = score.Step(score.NewState(l.opts.Params, l.opts.Device), recs)
+	_, out = l.scoreStep(score.NewState(l.opts.Params, l.opts.Device), recs)
 	return out, nil
 }
 

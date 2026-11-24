@@ -226,7 +226,7 @@ func TestSamplelessPower(t *testing.T) {
 			},
 		},
 		{
-			name: "a resume with no sample, a log reader's turn for three hours with nothing stamped and then samples again: the slots no sample came within BUCKET_TTL_S of are unknown, FinalBefore waits at the rest until the newest record is rules.late past that, and a Step a batch gives what one Step gives, the late samples included",
+			name: "a resume with no sample, a log reader's turn for three hours with nothing stamped and then samples again: the slots no sample came within BUCKET_TTL_S of are unknown, the resume holds the clock while the samples that end its gap are new, and a Step a batch gives what one Step gives, the late samples included",
 			build: func(b *tl) {
 				evening(b)
 				b.power(at(suspend), event.PowerSuspend)
@@ -251,15 +251,21 @@ func TestSamplelessPower(t *testing.T) {
 						t.Fatalf("the slot at %d s is %q, asleep %v; want it decided by the sample after it", (s.Start-base)/1000, s.Present, s.Asleep)
 					}
 				})
-				waited := false
-				for _, o := range outs {
-					waited = waited || o.Undecided != 0
+				// While the first samples are new, the slots between the
+				// ones no sample decides and the ones the samples do wait,
+				// and the gap the samples end keeps the clock at the resume,
+				// so FinalBefore never waits at one of them.
+				heldAt(t, batches, outs, at(back), at(back)+r.late, at(resume))
+				for i, o := range outs {
+					if o.Undecided != 0 {
+						t.Fatalf("Step %d waits at an undecided slot at %d s; want the resume's gap to hold the clock first", i, (o.Undecided-base)/1000)
+					}
 				}
 				last := outs[len(outs)-1]
 				high := batches[len(batches)-1][len(batches[len(batches)-1])-1].T
-				if want := floorSlot(high - r.settle); !waited || last.FinalBefore != want || last.Undecided != 0 {
-					t.Fatalf("FinalBefore waited at an undecided slot: %v; at the end %d s, undecided at %d; want it to wait while the samples were new, then %d s, PENDING_WINDOW_S behind the newest record",
-						waited, (last.FinalBefore-base)/1000, last.Undecided, (want-base)/1000)
+				if want := floorSlot(high - r.settle); last.FinalBefore != want {
+					t.Fatalf("FinalBefore at the end %d s, want %d s, PENDING_WINDOW_S behind the newest record",
+						(last.FinalBefore-base)/1000, (want-base)/1000)
 				}
 			},
 		},
@@ -283,6 +289,62 @@ func TestSamplelessPower(t *testing.T) {
 			}
 			checkDerived(t, one)
 			tc.check(t, batches, outs, one)
+		})
+	}
+}
+
+// TestUndecidedHold checks (c) of D-sampleless-power, and its bound, with a
+// clock no input reaches: State.now never passes a slot that nothing
+// decides, so the case gives derive a clock past one, as a disagreement
+// between the clock and the slot list would. FinalBefore waits at the first
+// slot nothing decides (Output.Undecided). A slot no sample came within
+// BUCKET_TTL_S after is unknown once the newest record is rules.late past
+// that, so the wait moves on to the first slot still undecided. The newest
+// record is a log reader's output, which ends no reach.
+func TestUndecidedHold(t *testing.T) {
+	r := newRules(testTable(t))
+	const c = 1800 // the last sample
+	cases := []struct {
+		name string
+		// high is the newest record, in seconds after base, and the clock.
+		high int64
+		// wait is where FinalBefore waits, in seconds after base.
+		wait int64
+	}{
+		{"with the clock an hour past the last sample, FinalBefore waits at the slot of the last sample, which no sample after it decides",
+			c + 3600, c},
+		{"with the newest record more than BUCKET_TTL_S and rules.late past the first slots after the last sample, they are unknown, and FinalBefore waits at the first slot still undecided",
+			c + 3*3600, c + 3*3600 - 300 - 7200 - 15},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newTL(false)
+			terminalSession(b)
+			b.mouse(every(at(1), at(595), 5000)...)
+			b.samples(at(0), at(c))
+			b.harness(at(tc.high), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 30})
+			recs := b.records()
+			now := at(tc.high)
+			d, lookups, relays, undecided := derive(r, Device{}, recs, now, sampledReaches(r, recs, now))
+			fb, waits := finalBefore(r, now, 0, undecided, lookups, relays)
+			if fb != at(tc.wait) || waits != at(tc.wait) {
+				t.Fatalf("FinalBefore %d s, waiting at %d s; want both at %d s", (fb-base)/1000, (waits-base)/1000, tc.wait)
+			}
+			n := 0
+			for _, s := range d.Slots {
+				switch {
+				case s.Start >= at(tc.wait):
+					t.Fatalf("a slot derived at %d s, where FinalBefore waits or after", (s.Start-base)/1000)
+				case s.Start >= at(c):
+					n++
+					if s.Present != event.PresentUnknown {
+						t.Fatalf("the slot at %d s is %q; want unknown, as no sample came within BUCKET_TTL_S of it", (s.Start-base)/1000, s.Present)
+					}
+				}
+			}
+			if want := int((at(tc.wait) - at(c)) / event.SlotMS); n != want {
+				t.Fatalf("%d slots derived from the last sample to the wait, want %d", n, want)
+			}
 		})
 	}
 }

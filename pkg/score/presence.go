@@ -289,14 +289,17 @@ func (p *presence) neverAt(t int64) bool {
 
 // dates reports whether sample s's idle time dates an input at l, for a
 // slot's input and an act's evidence test: wherever the device samples,
-// and in a never-sampling device's slot (neverAt), or one where the sampler
-// ran and took no sample (blindAt), only when s came within SLEEP_GAP_S of
-// l, as the sample the agent takes as a hook starts it, or as its sampler
-// starts again, does, with the typing of that hook's prompt just before it.
-// Whatever such an input decides is still pending when its sample comes, so
-// no later sample changes a slot or an act already final.
+// and in a slot that is SM 2.1's unknown (unsampled), before the first
+// sample, a never-sampling device's or one where the sampler ran and took
+// no sample, only when s came within SLEEP_GAP_S of l, as the sample the
+// agent takes as a hook starts it, or as its sampler starts again, does,
+// with the typing of that hook's prompt just before it. Whatever such an
+// input decides is still pending when its sample comes, so no later sample
+// changes a slot or an act already final, and a Step over the agent's
+// window, whose carry drops the samples from before a restart, dates as
+// one Step over every record does.
 func (p *presence) dates(s sample, l int64) bool {
-	return s.t-l <= p.r.sleepGap || !p.neverAt(l) && !p.blindAt(floorSlot(l))
+	return s.t-l <= p.r.sleepGap || !p.unsampled(l)
 }
 
 // reachAt returns the index of the sampler's latest record dated before the
@@ -371,10 +374,10 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		// that record isn't a sample, is its t, or -1 for none (blind).
 		restarting bool
 		blindFrom  = int64(-1)
-		// unsampled is set from a bare os.power that follows a record of
+		// lapsing is set from a bare os.power that follows a record of
 		// the sampler's whose reach hasn't ended (reach.lapse) until the
 		// next sample, which opens no gap from the sample before.
-		unsampled bool
+		lapsing bool
 	)
 	for _, e := range recs {
 		// A record of the sampler's after one whose reach ended starts the
@@ -416,7 +419,7 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 				if reaches[prev].blind {
 					p.blind = append(p.blind, span{reaches[prev].t, e.T})
 				}
-				unsampled = true
+				lapsing = true
 			}
 			sampled++
 		}
@@ -426,8 +429,8 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 			if d.IdleKeysS != nil {
 				s.hasKeys, s.lastKey = true, e.T-msOf(*d.IdleKeysS)
 			}
-			restart, bare := restarting, unsampled
-			restarting, unsampled = false, false
+			restart, bare := restarting, lapsing
+			restarting, lapsing = false, false
 			if blindFrom >= 0 {
 				p.blind, blindFrom = append(p.blind, span{blindFrom, e.T}), -1
 			}
