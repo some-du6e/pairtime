@@ -20,7 +20,7 @@ v=v0.1.0-alpha.7
 gh release download "$v" --repo some-du6e/pairtime --pattern install.sh --pattern install.ps1 --pattern manifest.json --dir internal/server/pages/install --clobber
 ```
 
-Then the same PR sets `ScriptsRelease` in `../install.go` to the release, and `installRelease` in `../dashboard.go` and the two install commands in README.md with it, which TestDashboardFollowsThePin and TestInstallLines hold together. The host serves the new copy once an image built from that commit is pinned (deploy/runbook.md, Upgrades).
+Then the same PR sets `ScriptsRelease` in `../install.go` to the release, and `installRelease` in `../dashboard.go` and README.md's install section with it: its "These commands install vX." sentence and its two install commands. TestDashboardFollowsThePin and TestInstallLines hold them together. The host serves the new copy once an image built from that commit is pinned (deploy/runbook.md, Upgrades).
 
 ## Turning the pin off
 

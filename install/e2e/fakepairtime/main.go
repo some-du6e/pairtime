@@ -11,7 +11,9 @@
 // It answers:
 //
 //	version   pairtime's first line, or status 3 when broken
-//	help      a command list that includes install
+//	help      a command list that includes install, or with a
+//	          $PAIRTIME_FAKE_HELP_EXIT other than 0 nothing and that status,
+//	          as a help that crashes or is killed before it prints
 //	install   writes its arguments and what its standard input is to the
 //	          file $PAIRTIME_FAKE_RECORD names. Then, as pairtime install
 //	          does after the teen's yes, it copies itself to the per-user
@@ -61,6 +63,10 @@ func run(args []string, stdin *os.File, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "pairtime %s (a fake build for install/e2e)\nrelease keys: none\n", version)
 		return 0
 	case "help":
+		if code := status("PAIRTIME_FAKE_HELP_EXIT"); code != 0 {
+			fmt.Fprintln(stderr, "fakepairtime: help fails on purpose")
+			return code
+		}
 		fmt.Fprint(stdout, "Usage:\n  pairtime <command>\n\nCommands:\n  install  Set up pairtime (fake)\n  wait     Stand in for a running agent\n  version  Print the version\n")
 		return 0
 	case "install":
