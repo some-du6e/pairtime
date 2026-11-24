@@ -174,7 +174,7 @@
 <input id="zone-name" name="zone" value="{{.Zone}}" required maxlength="64" autocomplete="off" spellcheck="false">
 <button type="submit">Save</button>
 </form>
-<p class="note">Use a name like America/New_York or Europe/London. Minutes counted after a change count in the new zone, and days already counted stay as they are.</p>
+<p class="note">Use a name like America/New_York or Europe/London. You can change it once every 30 days. A change counts from the moment you make it, and days already counted stay as they are.</p>
 </section>
 {{- end}}
 {{define "key"}}{{if .}}<span class="key {{.}}"></span>{{else}}<span class="key nokey"></span>{{end}}{{end}}

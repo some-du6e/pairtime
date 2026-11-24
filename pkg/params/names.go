@@ -261,8 +261,8 @@ var (
 	// BUILD_DAY_S is the credited time at level A or B a build day needs.
 	// It renames SM's STREAK_DAY_S (DESIGN 6.2 D10).
 	BUILD_DAY_S = IntParam{"BUILD_DAY_S"}
-	// BUILD_DAY_LAG_S is how soon the server must receive a build day's
-	// credit (DESIGN 6.2 D10).
+	// BUILD_DAY_LAG_S is how long after a local day ends the server may
+	// receive the credit that makes it a build day (DESIGN 6.2 D10).
 	BUILD_DAY_LAG_S = IntParam{"BUILD_DAY_LAG_S"}
 	// WEEKLY_GOAL_DEFAULT is the default weekly goal, in build days
 	// (DESIGN 6.2 D10).

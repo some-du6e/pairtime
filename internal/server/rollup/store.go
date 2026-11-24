@@ -108,14 +108,6 @@ slots = excluded.slots, agent_only = excluded.agent_only, day = excluded.day`,
 	return nil
 }
 
-// moveMinute records that the account's minute now counts toward day.
-func moveMinute(ctx context.Context, tx writer.Tx, account string, minuteMS int64, day string) error {
-	if _, err := tx.ExecContext(ctx, `UPDATE rollup_minutes SET day = $1 WHERE user_id = $2 AND minute_ms = $3`, day, account, minuteMS); err != nil {
-		return fmt.Errorf("rollup: moving a minute to %s: %w", day, err)
-	}
-	return nil
-}
-
 // addDaily adds d to the account's rollups_daily rows, one additive upsert
 // per row it changes.
 func addDaily(ctx context.Context, tx writer.Tx, account string, d delta) error {
@@ -185,6 +177,16 @@ func toProjects(ctx context.Context, tx writer.Tx, account string, d *device) er
 	}
 	d.agentOnly = agent
 	return nil
+}
+
+// ProjectOf returns the account-level project id of the device's project
+// key under account, inside tx, giving a key the device hasn't named before
+// a new id, as Apply does (D-account-project-id). Package devlog calls it
+// in the writer transaction that stores a devlog, so the devlog's key has a
+// rollup_projects row before any read resolves it, and project
+// registration (WP-SV10) moves it with the project's minutes.
+func ProjectOf(ctx context.Context, tx writer.Tx, account, device, key string) (string, error) {
+	return projectID(ctx, tx, account, device, key)
 }
 
 // projectID returns the project id of the device's project key. A key
@@ -307,42 +309,168 @@ func LoadZone(name string) (*time.Location, error) {
 // ErrNoAccount is what Zone returns for an account that doesn't exist.
 var ErrNoAccount = errors.New("rollup: no such account")
 
-// zoneOf returns the account's zone and its name. A name the zone database
-// doesn't have, which SetZone never stores, counts as UTC, so an upload
-// never fails for it.
-func zoneOf(ctx context.Context, q Querier, account string) (*time.Location, string, error) {
+// History is an account's time zone and every change of it (users.tz and
+// zone_changes; migration 0011).
+type History struct {
+	// Zone is the zone the account's days are counted in now, users.tz,
+	// UTC until the owner sets one, and Name its IANA name. A name the zone
+	// database doesn't have, which SetZone never stores, counts as UTC, so
+	// an upload never fails for it.
+	Zone *time.Location
+	Name string
+	// Changes are the account's zone changes, oldest first.
+	Changes []Change
+}
+
+// Change is one change of an account's zone: when it was made, in Unix
+// ms, and the zone it replaced.
+type Change struct {
+	AtMS   int64
+	Before *time.Location
+}
+
+// ZoneHistory returns the account's History.
+func ZoneHistory(ctx context.Context, q Querier, account string) (History, error) {
 	var name string
 	err := q.QueryRowContext(ctx, `SELECT tz FROM users WHERE id = $1`, account).Scan(&name)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, "", fmt.Errorf("%w: %s", ErrNoAccount, account)
+		return History{}, fmt.Errorf("%w: %s", ErrNoAccount, account)
 	}
 	if err != nil {
-		return nil, "", fmt.Errorf("rollup: reading %s's time zone: %w", account, err)
+		return History{}, fmt.Errorf("rollup: reading %s's time zone: %w", account, err)
 	}
-	loc, err := LoadZone(name)
+	h := History{Zone: time.UTC, Name: "UTC"}
+	if loc, err := LoadZone(name); err == nil {
+		h.Zone, h.Name = loc, name
+	}
+	rows, err := q.QueryContext(ctx, `SELECT changed_at_ms, tz_before FROM zone_changes WHERE user_id = $1`, account)
 	if err != nil {
-		return time.UTC, "UTC", nil
+		return History{}, fmt.Errorf("rollup: reading %s's time zone changes: %w", account, err)
 	}
-	return loc, name, nil
+	defer rows.Close()
+	for rows.Next() {
+		var c Change
+		var before string
+		if err := rows.Scan(&c.AtMS, &before); err != nil {
+			return History{}, fmt.Errorf("rollup: reading %s's time zone changes: %w", account, err)
+		}
+		c.Before = time.UTC
+		if loc, err := LoadZone(before); err == nil {
+			c.Before = loc
+		}
+		h.Changes = append(h.Changes, c)
+	}
+	if err := rows.Err(); err != nil {
+		return History{}, fmt.Errorf("rollup: reading %s's time zone changes: %w", account, err)
+	}
+	slices.SortFunc(h.Changes, func(a, b Change) int { return cmp.Compare(a.AtMS, b.AtMS) })
+	return h, nil
 }
 
-// Zone returns the account's time zone and its IANA name.
+// At returns the zone in force at the instant ms, in Unix ms: the zone the
+// first change after ms replaced, and Zone when no change came after it. So
+// an instant before the first recorded change takes the zone that change
+// replaced.
+func (h History) At(ms int64) *time.Location {
+	for _, c := range h.Changes {
+		if ms < c.AtMS {
+			return c.Before
+		}
+	}
+	return h.Zone
+}
+
+// after returns the zone change i put in force.
+func (h History) after(i int) *time.Location {
+	if i+1 < len(h.Changes) {
+		return h.Changes[i+1].Before
+	}
+	return h.Zone
+}
+
+// zoneOf returns the zone in force for the account at the minute that
+// starts at minuteMS, which Apply counts the minute's first revision in.
+func zoneOf(ctx context.Context, q Querier, account string, minuteMS int64) (*time.Location, error) {
+	h, err := ZoneHistory(ctx, q, account)
+	if err != nil {
+		return nil, err
+	}
+	return h.At(minuteMS), nil
+}
+
+// Zone returns the account's time zone, users.tz, and its IANA name.
 func Zone(ctx context.Context, q Querier, account string) (*time.Location, string, error) {
-	return zoneOf(ctx, q, account)
+	h, err := ZoneHistory(ctx, q, account)
+	if err != nil {
+		return nil, "", err
+	}
+	return h.Zone, h.Name, nil
 }
 
-// SetZone sets the account's time zone, an IANA name, through tx. The
-// minutes counted after it count toward days in the new zone.
-func SetZone(ctx context.Context, tx writer.Tx, account, name string) error {
+// ZoneChangeEvery is how long after one change of an account's time zone
+// the next may come (DESIGN 6.2 D10).
+const ZoneChangeEvery = 30 * 24 * time.Hour
+
+// ErrZoneTooSoon is what a *ZoneTooSoonError from SetZone wraps: a change
+// less than ZoneChangeEvery after the last.
+var ErrZoneTooSoon = errors.New("rollup: the time zone changed less than 30 days ago")
+
+// ZoneTooSoonError is SetZone's refusal of a change that comes too soon. It
+// says when the account's zone last changed, and when the next change may
+// come, both in the account's zone.
+type ZoneTooSoonError struct {
+	Changed, Next time.Time
+}
+
+func (e *ZoneTooSoonError) Error() string {
+	return fmt.Sprintf("%v: it changed at %s, and the next change may come from %s",
+		ErrZoneTooSoon, e.Changed.Format(time.RFC3339), e.Next.Format(time.RFC3339))
+}
+
+func (e *ZoneTooSoonError) Unwrap() error { return ErrZoneTooSoon }
+
+// SetZone sets the account's time zone, an IANA name, through tx, as of
+// now. A change counts from now: a minute before it counts toward its date
+// in the zone before, one from it on in the new zone, and every minute keeps
+// the day it first counted toward (D-sv12-lag). It records the change's
+// time and the zone it replaced in zone_changes, which keeps every change,
+// so a minute takes the zone in force at its own time however many changes
+// came after it (#278). A name equal to the account's zone changes nothing
+// and isn't refused. A change less than ZoneChangeEvery after the last gets
+// a *ZoneTooSoonError, which wraps ErrZoneTooSoon, and a name that isn't a
+// time zone gets ErrBadZone, wrapped.
+func SetZone(ctx context.Context, tx writer.Tx, account, name string, now time.Time) error {
 	if _, err := LoadZone(name); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE users SET tz = $1 WHERE id = $2`, name, account)
-	if err != nil {
-		return fmt.Errorf("rollup: setting %s's time zone: %w", account, err)
-	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
+	var cur string
+	err := tx.QueryRowContext(ctx, `SELECT tz FROM users WHERE id = $1`, account).Scan(&cur)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
 		return fmt.Errorf("%w: %s", ErrNoAccount, account)
+	case err != nil:
+		return fmt.Errorf("rollup: reading %s's time zone: %w", account, err)
+	case name == cur:
+		return nil
+	}
+	var last sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT MAX(changed_at_ms) FROM zone_changes WHERE user_id = $1`, account).Scan(&last); err != nil {
+		return fmt.Errorf("rollup: reading %s's time zone changes: %w", account, err)
+	}
+	nowMS := now.UnixMilli()
+	if last.Valid && nowMS-last.Int64 < ZoneChangeEvery.Milliseconds() {
+		loc, err := LoadZone(cur)
+		if err != nil {
+			loc = time.UTC
+		}
+		at := time.UnixMilli(last.Int64)
+		return &ZoneTooSoonError{Changed: at.In(loc), Next: at.Add(ZoneChangeEvery).In(loc)}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO zone_changes (user_id, changed_at_ms, tz_before) VALUES ($1, $2, $3)`, account, nowMS, cur); err != nil {
+		return fmt.Errorf("rollup: recording %s's time zone change: %w", account, err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE users SET tz = $1 WHERE id = $2`, name, account); err != nil {
+		return fmt.Errorf("rollup: setting %s's time zone: %w", account, err)
 	}
 	return nil
 }
