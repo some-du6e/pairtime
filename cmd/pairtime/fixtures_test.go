@@ -418,6 +418,57 @@ func TestFixturesScrub(t *testing.T) {
 			notOut: []string{"9b1e7f9e", "77aa88bb"},
 		},
 		{
+			// Both fractions pass Luhn, and the scrub of the first Claude
+			// Code capture took them for card numbers (issue #104).
+			name: "the fraction of an OTLP value is never taken for a card number",
+			files: map[string]string{
+				"otlp/000022.json": `{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"sum":{"dataPoints":[{"asDouble":4.614999999999999}]}}]}]}]}`,
+				"otlp/000081.json": `{"resourceMetrics":[{"scopeMetrics":[{"metrics":[{"sum":{"dataPoints":[{"asDouble":1.3239999999999998}]}}]}]}]}`,
+			},
+			wantCode: 0,
+			wantOut:  []string{"removed 0 spans from 0 of 2 files"},
+		},
+		{
+			// A whole number that passes Luhn is still a card number, and
+			// its placeholder isn't a number.
+			name:     "a JSON file the edits would break is reported, left as it was, and fails the run",
+			files:    map[string]string{"otlp/000001.json": `{"n":4111111111111111}`},
+			wantCode: 1,
+			wantOut: []string{
+				"otlp/000001.json:1:6: card, 16 bytes\n",
+				"otlp/000001.json: these edits would leave invalid JSON, so the file is left as it was; review it by hand\n",
+				"removed 0 spans from 0 of 1 files",
+				"1 entries need a look by hand",
+			},
+		},
+		{
+			name:     "a JSON line the edits would break is reported by its number, and the whole file is left as it was",
+			files:    map[string]string{"session.jsonl": `{"cwd":"/home/maya/robot"}` + "\n" + `{"n":4111111111111111}` + "\n"},
+			args:     maya,
+			wantCode: 1,
+			wantOut: []string{
+				"session.jsonl:1:9: home, 10 bytes\n",
+				"session.jsonl:2:6: card, 16 bytes\n",
+				"session.jsonl:2: these edits would leave invalid JSON, so the file is left as it was; review it by hand\n",
+				"removed 0 spans from 0 of 1 files",
+			},
+			notOut: []string{"maya"},
+		},
+		{
+			name:     "-n reports JSON the edits would break too",
+			files:    map[string]string{"otlp/000001.json": `{"n":4111111111111111}`},
+			args:     []string{"-n"},
+			wantCode: 1,
+			wantOut:  []string{"otlp/000001.json: these edits would leave invalid JSON", "would remove 0 spans from 0 of 1 files"},
+		},
+		{
+			name:      "a line of plain text that is only a card number is still scrubbed",
+			files:     map[string]string{"notes.txt": "card:\n4111111111111111\n"},
+			wantCode:  0,
+			wantFiles: map[string]string{"notes.txt": "card:\nREDACTED_CARD\n"},
+			wantOut:   []string{"notes.txt:2:1: card, 16 bytes\n", "removed 1 spans from 1 of 1 files"},
+		},
+		{
 			name:     "-n lists the spans and changes nothing",
 			files:    map[string]string{"a.txt": "home is /home/maya\n"},
 			args:     append([]string{"-n"}, maya...),
@@ -693,6 +744,41 @@ func TestFixturesScrubPlantedCapture(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, c.check)
+	}
+}
+
+func TestBreaksJSON(t *testing.T) {
+	card := func(start int) edit {
+		return edit{redact.Span{Start: start, End: start + 16, Type: redact.TypeCard}, "REDACTED_CARD"}
+	}
+	tests := []struct {
+		name       string
+		text       string
+		edits      []edit
+		wantLine   int
+		wantBroken bool
+	}{
+		{"an edit inside a JSON string leaves the JSON whole", `{"t":"4111111111111111"}`, []edit{card(6)}, 0, false},
+		{"a number replaced in a JSON document breaks it", `{"n":4111111111111111}`, []edit{card(5)}, 0, true},
+		{"a number replaced in pretty-printed JSON breaks it", "{\n  \"n\": 4111111111111111\n}\n", []edit{card(9)}, 0, true},
+		{"a broken JSON line is reported by its number", "{\"a\":1}\n{\"n\":4111111111111111}\n", []edit{card(13)}, 2, true},
+		{"an edit inside a JSON line's string leaves the line whole", "{\"a\":1}\n{\"t\":\"4111111111111111\"}\n", []edit{card(14)}, 0, false},
+		{"a line that is only a number isn't a JSON record", "card:\n4111111111111111\n", []edit{card(6)}, 0, false},
+		{"a line that wasn't JSON before isn't checked", "{\"n\":4111111111111111\n", []edit{card(5)}, 0, false},
+		{"an edit that joins a JSON line to the next breaks it", "{\"a\":\"x\"}\nfoo\n",
+			[]edit{{redact.Span{Start: 9, End: 13}, "REDACTED"}}, 1, true},
+		{"an edit across a line break between lines of plain text breaks nothing", "foo\nbar\n{\"a\":1}\n",
+			[]edit{{redact.Span{Start: 2, End: 5}, "REDACTED"}}, 0, false},
+		{"a JSON line after an edit across a line break keeps its number", "foo\nbar\n{\"n\":4111111111111111}\n",
+			[]edit{{redact.Span{Start: 2, End: 5}, "REDACTED"}, card(13)}, 3, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			line, broken := breaksJSON(tt.text, tt.edits)
+			if line != tt.wantLine || broken != tt.wantBroken {
+				t.Errorf("breaksJSON = %d, %v, want %d, %v", line, broken, tt.wantLine, tt.wantBroken)
+			}
+		})
 	}
 }
 

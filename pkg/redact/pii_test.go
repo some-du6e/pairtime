@@ -409,3 +409,44 @@ func TestChecksumNearMisses(t *testing.T) {
 		})
 	}
 }
+
+// TestDecimalNumbers checks that a decimal number's digits are never a
+// card, an SSN or an Aadhaar number, and that a number before a full stop
+// still is one (issue #104). The two asDouble values are the ones the
+// scrub of the first Claude Code capture took for cards: their fractions
+// pass Luhn.
+func TestDecimalNumbers(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want []Span
+	}{
+		{"an OTLP value's fraction that passes Luhn is never a card", `{"asDouble":4.614999999999999}`, []Span{}},
+		{"another OTLP value's fraction that passes Luhn is never a card", `{"asDouble":1.3239999999999998}`, []Span{}},
+		{"the same fractions in plain text are never cards", "it took 4.614999999999999 s, then 1.3239999999999998 s", []Span{}},
+		{"a card number as a decimal's whole part is never a card", `{"asDouble":4111111111111111.5}`, []Span{}},
+		{"a card number with separators as a decimal's whole part is never a card", "card 4111 1111 1111 1111.5", []Span{}},
+		{"a card number with an exponent after it is never a card", "4111111111111111e5 4111111111111111E+5", []Span{}},
+		{"a card number that ends a sentence is still a card", "my card is 4111 1111 1111 1111.",
+			[]Span{{Start: 11, End: 30, Type: TypeCard}}},
+		{"a card number without separators that ends a sentence is still a card", "card 4111111111111111. thanks",
+			[]Span{{Start: 5, End: 21, Type: TypeCard}}},
+		{"a card number that ends a sentence in a JSON string is still a card", `{"text":"my card is 4111111111111111."}`,
+			[]Span{{Start: 20, End: 36, Type: TypeCard}}},
+		{"a whole JSON number that passes Luhn is still a card", `{"n":4111111111111111}`,
+			[]Span{{Start: 5, End: 21, Type: TypeCard}}},
+		{"a 12-digit fraction that passes Verhoeff is never an Aadhaar number", `{"asDouble":0.234567890124}`, []Span{}},
+		{"the same fraction in plain text is never an Aadhaar number", "it was 0.234567890124 of it", []Span{}},
+		{"the same 12 digits standing alone are an Aadhaar number", "aadhaar 234567890124",
+			[]Span{{Start: 8, End: 20, Type: TypeAadhaar}}},
+		{"a 9-digit fraction after ssn is never an SSN", `{"ssn_ratio":0.219099999}`, []Span{}},
+		{"nine digits after ssn as a decimal's whole part are never an SSN", "ssn 219099999.5", []Span{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := collect(findPII, tt.text); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

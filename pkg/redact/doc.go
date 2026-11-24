@@ -98,7 +98,12 @@
 // without stop words. Digits are ASCII digits. Email validation checks the
 // top-level domain's shape instead of the public suffix list. A card
 // number may also start with 22 to 27, Mastercard's 2-series and Mir,
-// which Presidio's card pattern leaves out.
+// which Presidio's card pattern leaves out. And a decimal number's digits
+// are never a card, an SSN or an Aadhaar number: a match can't start right
+// after a digit and a '.', and one followed by a '.' and a digit is
+// dropped. Presidio's patterns need only a word edge there, so they take
+// the fraction of a number such as 4.614999999999999 for a card whenever
+// it passes Luhn, and removing it would leave a JSON number broken.
 //
 // TP B4 also lists phone numbers, IP and MAC addresses and dates of birth;
 // none of them is in DESIGN 8.7's list, and phone numbers need
