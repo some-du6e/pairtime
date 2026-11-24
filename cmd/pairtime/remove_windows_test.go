@@ -116,7 +116,7 @@ func TestPlacementsAtOnce(t *testing.T) {
 			dst := filepath.Join(dir, "pairtime.exe")
 			// The cleanups delete only pairtime's copies (isPairtimeBinary),
 			// so the old binary is one.
-			old := copyTestBinary(t, dst)
+			old := copyTestBinary(t, dst, "")
 			other := stageFile(t, dir, otherCopy)
 			ours := stageFile(t, dir, ourCopy)
 			release := holdOpen(t, other)
@@ -187,13 +187,107 @@ func TestPlacementsAtOnce(t *testing.T) {
 	}
 }
 
+// TestPlacementKeepsItsID checks that an install whose process id names a
+// copy that something still runs moves that copy out of the way, rather
+// than its own: the copy it moves aside keeps its id, so the cleanups leave
+// it while it may still put it back (placing). The install runs in this
+// process, which keeps its id, and the test holds it between its two
+// renames by keeping its new copy open, as TestPlacementsAtOnce does.
+func TestPlacementKeepsItsID(t *testing.T) {
+	tests := []struct {
+		name string
+		// cleanup runs once the install has moved the old binary aside and
+		// waits to put its new copy in.
+		cleanup func(dir string)
+	}{
+		{
+			name:    "an agent that starts meanwhile leaves the copy the install moved aside, which it puts back when its new copy can't go in",
+			cleanup: removeOldBinaries,
+		},
+		{
+			name: "another install's cleanup leaves the copy the install moved aside, which it puts back when its new copy can't go in",
+			cleanup: func(dir string) {
+				for _, p := range strayBinaries(dir, 10*time.Minute) {
+					os.Remove(p)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			dst := filepath.Join(dir, "pairtime.exe")
+			stale := runFrom(t, filepath.Join(dir, "pairtime.old."+strconv.Itoa(os.Getpid())+".exe"))
+			// The old binary is pairtime's, as the cleanups delete only
+			// pairtime's copies, and longer than the stale copy, so that the
+			// test can tell the two apart by size.
+			old := copyTestBinary(t, dst, "\nthe old pairtime\n")
+			tmp := stageFile(t, dir, "this install's new pairtime")
+			release := holdOpen(t, tmp)
+			finished := make(chan struct{})
+			var commitErr error
+			go func() {
+				commitErr = commitBinary(tmp, dst)
+				close(finished)
+			}()
+			t.Cleanup(func() {
+				release()
+				<-finished
+			})
+
+			aside := waitAsideOf(t, dir, dst, int64(len(old)), finished)
+			if want := "pairtime.old." + strconv.Itoa(os.Getpid()) + ".exe"; filepath.Base(aside) != want {
+				t.Errorf("the install moved the old binary aside to %s, not under its own id, %s", filepath.Base(aside), want)
+			}
+			tt.cleanup(dir)
+			if _, err := os.Lstat(aside); err != nil {
+				t.Errorf("the copy the install moved aside is gone after the cleanup: %v", err)
+			}
+			select {
+			case <-finished:
+				t.Fatal("the install ended before the cleanup was done, so the cleanup didn't come between its two renames")
+			default:
+			}
+			select {
+			case <-finished:
+			case <-time.After(time.Minute):
+				t.Fatal("the install still runs a minute on")
+			}
+			release()
+			if commitErr == nil {
+				t.Error("commitBinary says it put in a copy that it couldn't rename")
+			}
+
+			got, err := os.ReadFile(dst)
+			if err != nil {
+				t.Fatalf("no pairtime is left in place: %v", err)
+			}
+			if !bytes.Equal(got, old) {
+				t.Errorf("%s holds %d bytes, not the old pairtime's %d", dst, len(got), len(old))
+			}
+			var left []string
+			for _, p := range movedAside(t, dir) {
+				data, err := os.ReadFile(p)
+				if err != nil || !bytes.Equal(data, stale) {
+					left = append(left, filepath.Base(p))
+				}
+			}
+			if left != nil {
+				t.Errorf("beside the stale copy, copies moved aside are left: %q", left)
+			}
+		})
+	}
+}
+
 // TestCommitBinary checks how commitBinary puts a new copy of pairtime in
-// place, and that the one copy it moves aside or deletes is named for its
-// own process: any other may be one that another install still needs
-// (#270).
+// place, and that the only copies it moves or deletes are named for its own
+// process: any other may be one that another install still needs (#270).
 func TestCommitBinary(t *testing.T) {
 	self := "pairtime.old." + strconv.Itoa(os.Getpid()) + ".exe"
 	other := "pairtime.old." + strconv.Itoa(os.Getpid()+4) + ".exe"
+	// elsewhere stands in after for a name a copy moved aside under another
+	// id than this process's, a random one.
+	const elsewhere = "pairtime.old.<another id>.exe"
 	tests := []struct {
 		name   string
 		before map[string]string // the folder's files, by name, and what each holds
@@ -230,10 +324,10 @@ func TestCommitBinary(t *testing.T) {
 			after:  map[string]string{"pairtime.exe": "new"},
 		},
 		{
-			name:    "a copy that an earlier process with this one's id left and that something still runs stays, and the old pairtime moves aside under another id and goes",
+			name:    "a copy that an earlier process with this one's id left, and that something still runs, moves out of the way to another id, and the new copy goes in",
 			before:  map[string]string{"pairtime.exe": "old", self: "running"},
 			running: self,
-			after:   map[string]string{"pairtime.exe": "new", self: "running"},
+			after:   map[string]string{"pairtime.exe": "new", elsewhere: "running"},
 		},
 		{
 			name:    "when the new copy can't go in, the old pairtime goes back",
@@ -261,8 +355,9 @@ func TestCommitBinary(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			var running []byte
 			if tt.running != "" {
-				runFrom(t, filepath.Join(dir, tt.running))
+				running = runFrom(t, filepath.Join(dir, tt.running))
 			}
 			tmp := filepath.Join(dir, stagedPrefix+"test.exe")
 			if !tt.noCopy {
@@ -274,9 +369,15 @@ func TestCommitBinary(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("commitBinary = %v, want an error: %v", err, tt.wantErr)
 			}
-			got := folderFiles(t, dir)
-			if _, ok := got[tt.running]; ok {
-				got[tt.running] = "running"
+			got := map[string]string{}
+			for name, data := range folderFiles(t, dir) {
+				if running != nil && data == string(running) {
+					data = "running"
+					if name != self && isOldName(name) {
+						name = elsewhere
+					}
+				}
+				got[name] = data
 			}
 			if !maps.Equal(got, tt.after) {
 				t.Errorf("the folder holds %.40q, want %q", got, tt.after)
@@ -301,13 +402,15 @@ func TestOldCopies(t *testing.T) {
 		{"pairtime.old.exe, the name earlier versions tried first, goes", "pairtime.old.exe", true},
 		{"pairtime.old.exe goes in any case", "PAIRTIME.OLD.EXE", true},
 		{"a copy named for a process that has ended goes", "pairtime.old." + strconv.Itoa(ended) + ".exe", true},
+		{"a copy named for an id that no process has goes, since Windows gives every process a multiple of four", "pairtime.old.4294967291.exe", true},
+		{"a copy named for id 0 goes, which OpenProcess refuses as it does an id no process has", "pairtime.old.0.exe", true},
 		{"a copy named for a process that runs stays", "pairtime.old." + strconv.Itoa(os.Getpid()) + ".exe", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
 			p := filepath.Join(dir, tt.file)
-			copyTestBinary(t, p)
+			copyTestBinary(t, p, "")
 			if !slices.Contains(strayBinaries(dir, 0), p) {
 				t.Errorf("uninstall's strayBinaries leaves %s out", tt.file)
 			}
@@ -335,7 +438,8 @@ func TestOldNames(t *testing.T) {
 	}{
 		{"pairtime.old.exe, the name earlier versions tried first, is one, named for no process", "pairtime.old.exe", true, 0, false},
 		{"pairtime.old.<pid>.exe is one, named for that process", "pairtime.old.1234.exe", true, 1234, true},
-		{"either is read in any case", "PAIRTIME.Old.1234.EXE", true, 1234, true},
+		{"pairtime.old.<pid>.exe is read in any case", "PAIRTIME.Old.1234.EXE", true, 1234, true},
+		{"pairtime.old.exe is read in any case", "PAIRTIME.OLD.EXE", true, 0, false},
 		{"an id past 32 bits is no process's", "pairtime.old.4294967296.exe", false, 0, false},
 		{"an id is digits only", "pairtime.old.12a.exe", false, 0, false},
 		{"an id has no sign", "pairtime.old.+12.exe", false, 0, false},
@@ -380,6 +484,32 @@ func waitAside(t *testing.T, dir, dst string, exited <-chan struct{}, out *bytes
 	}
 }
 
+// waitAsideOf waits for the install in this process, which runs until
+// finished is closed, to have moved dst aside, and returns where it went:
+// the copy in dir named as commitBinary names those whose size is size.
+func waitAsideOf(t *testing.T, dir, dst string, size int64, finished <-chan struct{}) string {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Lstat(dst); errors.Is(err, fs.ErrNotExist) {
+			for _, p := range movedAside(t, dir) {
+				if info, err := os.Stat(p); err == nil && info.Size() == size {
+					return p
+				}
+			}
+		}
+		select {
+		case <-finished:
+			t.Fatalf("the install ended before it moved %s aside", dst)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the install didn't move %s aside within 30 s", dst)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // movedAside returns the copies in dir named as commitBinary, or
 // install.ps1, names those it moves aside.
 func movedAside(t *testing.T, dir string) []string {
@@ -415,9 +545,11 @@ func folderFiles(t *testing.T, dir string) map[string]string {
 	return out
 }
 
-// copyTestBinary puts a copy of the test binary, which is a pairtime binary
-// (isPairtimeBinary), at path, and returns what it holds.
-func copyTestBinary(t *testing.T, path string) []byte {
+// copyTestBinary puts a copy of the test binary at path, with the bytes
+// extra added at its end, and returns what it holds. It is a pairtime
+// binary (isPairtimeBinary) with or without them, as copyBinary's copies
+// are.
+func copyTestBinary(t *testing.T, path, extra string) []byte {
 	t.Helper()
 	exe, err := os.Executable()
 	if err != nil {
@@ -427,6 +559,7 @@ func copyTestBinary(t *testing.T, path string) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
+	data = append(data, extra...)
 	if err := os.WriteFile(path, data, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -473,10 +606,11 @@ func holdOpen(t *testing.T, path string) func() {
 
 // runFrom puts a copy of the test binary at path and starts a process
 // from it that runs until the test ends, as a hook or an agent might, so
-// that Windows won't let anyone delete or replace the file meanwhile.
-func runFrom(t *testing.T, path string) {
+// that Windows won't let anyone delete or replace the file meanwhile. It
+// returns what the copy holds.
+func runFrom(t *testing.T, path string) []byte {
 	t.Helper()
-	copyTestBinary(t, path)
+	data := copyTestBinary(t, path, "")
 	cmd := exec.Command(path)
 	cmd.Env = append(os.Environ(), holdEnv+"=1")
 	stdin, err := cmd.StdinPipe()
@@ -492,6 +626,7 @@ func runFrom(t *testing.T, path string) {
 			t.Errorf("the process that ran %s: %v", path, err)
 		}
 	})
+	return data
 }
 
 // endedProcess starts a process that ends at once, and returns its id. The

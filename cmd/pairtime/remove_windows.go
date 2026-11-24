@@ -107,19 +107,21 @@ func removeAfterExit(files, dirs, links []string) error {
 // one back. If something runs the copy, the next install, uninstall or
 // agent start deletes it once this process has ended (removeOldBinaries,
 // strayBinaries). A copy that a process with this id left there and that
-// something still runs makes this one take a random id.
+// something still runs moves out of the way to a random id first.
 func commitBinary(tmp, dst string) error {
 	dir := filepath.Dir(dst)
 	old := filepath.Join(dir, "pairtime.old."+strconv.Itoa(os.Getpid())+".exe")
 	// One that a process with this id left before, which no install needs.
 	if err := os.Remove(old); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		// Something still runs it, so this copy takes a random id that no
-		// copy there has, which the cleanups still read as an id.
-		for {
-			old = filepath.Join(dir, "pairtime.old."+strconv.FormatUint(uint64(rand.Uint32()), 10)+".exe")
-			if _, err := os.Lstat(old); err != nil {
-				break
-			}
+		// Something still runs it, so it moves out of the way, and the
+		// cleanups delete it once nothing does. This one's copy keeps this
+		// process's id, which they leave while it runs (placing).
+		stale, err := unusedOldName(dir)
+		if err != nil {
+			return err
+		}
+		if err := renameRetry(old, stale); err != nil {
+			return err
 		}
 	}
 	if err := renameRetry(dst, old); errors.Is(err, fs.ErrNotExist) {
@@ -136,6 +138,21 @@ func commitBinary(tmp, dst string) error {
 	}
 	os.Remove(old)
 	return nil
+}
+
+// unusedOldName returns a name in dir for a copy moved aside, under a
+// random id that no file there has, which the cleanups still read as an
+// id (isOldName).
+func unusedOldName(dir string) (string, error) {
+	for range 100 {
+		p := filepath.Join(dir, "pairtime.old."+strconv.FormatUint(uint64(rand.Uint32()), 10)+".exe")
+		if _, err := os.Lstat(p); errors.Is(err, fs.ErrNotExist) {
+			return p, nil
+		} else if err != nil {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("found no unused name for a copy of pairtime in %s", dir)
 }
 
 // putBack moves old, the copy commitBinary moved aside, back to dst. If
@@ -194,9 +211,10 @@ func oldBinaries(dir string) []string {
 }
 
 // isOldName reports whether name is one that commitBinary, or install.ps1,
-// gives a copy it moves aside, in any case: pairtime.old.<pid>.exe, named
-// for the process that moved it, or pairtime.old.exe, the name earlier
-// versions tried first.
+// gives a copy it moves aside, in any case: pairtime.old.<id>.exe, named
+// for the process that moved it, or for a random id when a stale copy moved
+// out of that one's way, or pairtime.old.exe, the name earlier versions
+// tried first.
 func isOldName(name string) bool {
 	_, ok := oldPID(name)
 	return ok || strings.ToLower(name) == "pairtime.old.exe"
