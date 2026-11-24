@@ -1252,10 +1252,19 @@ type sealPayload struct {
 	// read config.toml as local-only (Batch.Back).
 	Back bool `json:"back,omitempty"`
 	// Due is the first record of the batch the writer had a mark due for as
-	// it sealed this one, which didn't take it (Writer.back), 0 for none, so
-	// the mark outlasts a restart: Open keeps it due from the newest row
-	// until a batch sealed Back takes it (restoreStretches).
+	// it sealed this one, which neither took it nor ended it (Writer.back),
+	// 0 for none, so the mark outlasts a restart: Open keeps it due from the
+	// newest row until a batch sealed online takes it or ends it
+	// (restoreStretches).
 	Due uint64 `json:"due,omitempty"`
+	// BackEnded says the batch was sealed online without taking a mark Open
+	// restored, which ended the mark (Writer.backFrom). Its row records no
+	// mark due, and Open reads it as the end, though its records all came
+	// before the mark, as those of Open's own batch of what a crash left do:
+	// a row an older version sealed records no mark either, and one whose
+	// records end before the mark a sweep's base frame keeps leaves that
+	// mark due (restoreStretches).
+	BackEnded bool `json:"back_ended,omitempty"`
 	// LocalUntil is when config.toml was last known, or taken, to say
 	// local-only as the batch was sealed, in Unix ms (Writer.until), the
 	// newest stretch end: Open takes it back from the newest batch, and the
@@ -1541,16 +1550,19 @@ func (w *Writer) seal() (Batch, bool, error) {
 	takes := on && w.back > 0 && row.FirstSeq >= w.back
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
 		SealedAt: at.UnixMilli(), Online: &on, Back: takes && w.madeAfter(w.backFrom), LocalUntil: w.until.wall}
-	// A batch sealed online that doesn't take a mark Open restored closes
-	// the run of local-only batches with itself inside, so the mark has
-	// nothing left to mark: one holding a record made before Open or a git
-	// change, and Open's own batch of what a crash left, whose first record
-	// comes before the mark. The mark ends once this frame is written, the
-	// frame records none, and no later seal asks Waiting for it.
+	// A batch sealed online that doesn't take a mark Open restored ends it:
+	// it closes the run of local-only batches with itself inside, as one
+	// holding a record made before Open or a git change does, or the run is
+	// closed already, as when Open's own batch of what a crash left, whose
+	// first record comes before the mark, follows a batch sealed online.
+	// Either way nothing is left to mark. The mark ends once this frame is
+	// written, which records that it ended and that none is due
+	// (BackEnded), and no later seal asks Waiting for it.
 	ends := on && !sp.Back && w.backFrom != (moment{})
 	if !sp.Back && !ends {
 		sp.Due = w.back
 	}
+	sp.BackEnded = ends
 	if w.until.os > 0 {
 		sp.LocalUntilOS = &untilOS{Mono: w.until.os, Boot: w.until.boot}
 	}
