@@ -324,6 +324,26 @@ func TestErase(t *testing.T) {
 				t.Errorf("rows that name the ineligible account are left: %v", left)
 			}
 		}},
+		{name: "a delete's erasure, dry or real, is the one durable commit a request makes, so it is on disk before the hub hears it is done", run: func(t *testing.T, f *fixture) {
+			world(t, f)
+			for _, step := range []struct {
+				action string
+				dry    bool
+				want   int
+			}{
+				{action: privacy.ActionExport, want: 0},
+				{action: privacy.ActionDelete, dry: true, want: 1},
+				{action: privacy.ActionDelete, want: 1},
+			} {
+				before := f.commits.durable()
+				if r := report(t, f.ask(t, step.action, subject([]string{teen.email}, nil, nil), step.dry)); !r.Found {
+					t.Fatalf("%s (dry run %v) didn't find the teen", step.action, step.dry)
+				}
+				if got := f.commits.durable() - before; got != step.want {
+					t.Errorf("%s (dry run %v) made %d durable commits, want %d", step.action, step.dry, got, step.want)
+				}
+			}
+		}},
 		{name: "after an erasure, the next request finds nobody", run: func(t *testing.T, f *fixture) {
 			world(t, f)
 			report(t, f.ask(t, privacy.ActionDelete, subject([]string{teen.email}, nil, nil), false))
