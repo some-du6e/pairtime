@@ -57,18 +57,31 @@ type step struct {
 	del    func(ctx context.Context, tx writer.Tx, account string) error
 }
 
+// ofDevices selects an account's rows of a table keyed by device: those
+// of its devices, which the table's primary key or device index finds,
+// and of the account, so a row is never another account's. It reaches
+// every row of the account, because a device is never linked to another
+// account (D-device-account-binding), and the devices row stays while
+// any witness, bucket, revision, commit, label or ingest-reply row of the
+// device does (retention.json's server.devices kept_by). A device's
+// request origins go 30 days after they were seen, before its row, which
+// stays 90 days after its removal. Selecting by account_id alone would
+// scan these tables, the server's largest, inside the writer.
+const ofDevices = "account_id = $1 AND device_id IN (SELECT device_id FROM devices WHERE user_id = $1)"
+
 // steps are the eraser's deletes, in order: rows that point at users
-// before users, and device_codes, which find an account's pending codes
-// through its devices, before devices.
+// before users, and the tables found through the account's devices, and
+// device_codes, which finds an account's pending codes through its
+// devices, before devices.
 var steps = []step{
 	{tables: []table{
-		{"witness_rows", "account_id = $1"},
-		{"ingest_replies", "account_id = $1"},
+		{"witness_rows", ofDevices},
+		{"ingest_replies", ofDevices},
 		{"minute_buckets", "account_id = $1"},
-		{"minute_bucket_revisions", "account_id = $1"},
+		{"minute_bucket_revisions", ofDevices},
 		{"commit_records", "account_id = $1"},
-		{"device_labels", "account_id = $1"},
-		{"request_origins", "account_id = $1"},
+		{"device_labels", ofDevices},
+		{"request_origins", ofDevices},
 		{"rollup_projects", "user_id = $1"},
 		{"rollup_minutes", "user_id = $1"},
 		{"rollups_daily", "user_id = $1"},
@@ -188,7 +201,7 @@ func count(ctx context.Context, q querier, t table, account string) (int64, erro
 // counts the account's leaf hashes in days other accounts' rows share,
 // and gone lists the days no other row is left on.
 func leafDays(ctx context.Context, q querier, account string) (keep int64, gone []int64, err error) {
-	rows, err := q.QueryContext(ctx, `SELECT received_at_ms / $2, COUNT(*) FROM witness_rows WHERE account_id = $1 GROUP BY 1`, account, int64(ledger.DayMS))
+	rows, err := q.QueryContext(ctx, `SELECT received_at_ms / $2, COUNT(*) FROM witness_rows WHERE `+ofDevices+` GROUP BY 1`, account, int64(ledger.DayMS))
 	if err != nil {
 		return 0, nil, fmt.Errorf("privacy: reading the account's witness days: %w", err)
 	}
@@ -209,16 +222,18 @@ func leafDays(ctx context.Context, q querier, account string) (keep int64, gone 
 	for _, d := range days {
 		var published, others int64
 		if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM day_leaves WHERE day = $1`, d.d).Scan(&published); err != nil {
-			return 0, nil, fmt.Errorf("privacy: reading day %d's leaves: %w", d.d, err)
+			return 0, nil, fmt.Errorf("privacy: reading a day's leaves: %w", err)
 		}
 		if published == 0 {
 			// Not published yet, or its leaves already went: the day's
 			// tree will hold only the rows still there when it's built.
 			continue
 		}
-		if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM witness_rows WHERE received_at_ms >= $1 AND received_at_ms < $2 AND account_id <> $3`,
+		// One other account's row is enough, so the day's index stops
+		// there.
+		if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM witness_rows WHERE received_at_ms >= $1 AND received_at_ms < $2 AND account_id <> $3 LIMIT 1) other`,
 			d.d*ledger.DayMS, (d.d+1)*ledger.DayMS, account).Scan(&others); err != nil {
-			return 0, nil, fmt.Errorf("privacy: counting day %d's other witness rows: %w", d.d, err)
+			return 0, nil, fmt.Errorf("privacy: looking for a day's other witness rows: %w", err)
 		}
 		if others > 0 {
 			keep += d.mine
@@ -250,7 +265,7 @@ func erase(ctx context.Context, tx writer.Tx, emails *accounts.EmailCipher, c Cl
 	for _, d := range gone {
 		res, err := tx.ExecContext(ctx, `DELETE FROM day_leaves WHERE day = $1`, d)
 		if err != nil {
-			return r, fmt.Errorf("privacy: deleting day %d's leaves: %w", d, err)
+			return r, fmt.Errorf("privacy: deleting a day's leaves: %w", err)
 		}
 		if n, err := res.RowsAffected(); err == nil && n > 0 {
 			r.Deleted[LeafTable] += n
@@ -323,7 +338,8 @@ func export(ctx context.Context, q querier, emails *accounts.EmailCipher, c Clai
 		}
 	}
 	var leaves int64
-	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM witness_rows w WHERE w.account_id = $1 AND EXISTS (SELECT 1 FROM day_leaves d WHERE d.day = w.received_at_ms / $2)`,
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM witness_rows w WHERE w.account_id = $1 AND w.device_id IN (SELECT device_id FROM devices WHERE user_id = $1)
+AND EXISTS (SELECT 1 FROM day_leaves d WHERE d.day = w.received_at_ms / $2)`,
 		account, int64(ledger.DayMS)).Scan(&leaves); err != nil {
 		return r, fmt.Errorf("privacy: counting the account's leaf hashes: %w", err)
 	}

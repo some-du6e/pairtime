@@ -107,9 +107,11 @@ func TestJWKS(t *testing.T) {
 			{after: 10 * time.Second, serve: func(k *keySet) { k.set(200, jwk(t, "a", &a.PublicKey), jwk(t, "b", &b.PublicKey)) }, kid: "b", wantStatus: 503, wantCode: "unknown_key", wantFetches: 1},
 			{after: 20 * time.Second, kid: "b", want: b, wantFetches: 2},
 		}},
-		{name: "a set that can't be fetched is a 503 jwks_unavailable, and keys older than 300 s aren't used", steps: []step{
+		{name: "a set that can't be fetched is a 503 jwks_unavailable, keys older than 300 s aren't used, and a failed fetch isn't tried again for 30 s", steps: []step{
 			{serve: func(k *keySet) { k.set(200, jwk(t, "a", &a.PublicKey)) }, kid: "a", want: a, wantFetches: 1},
 			{after: 301 * time.Second, serve: func(k *keySet) { k.set(500) }, kid: "a", wantStatus: 503, wantCode: "jwks_unavailable", wantFetches: 2},
+			{after: 10 * time.Second, kid: "made-up", wantStatus: 503, wantCode: "jwks_unavailable", wantFetches: 2},
+			{after: 20 * time.Second, serve: func(k *keySet) { k.set(200, jwk(t, "a", &a.PublicKey)) }, kid: "a", want: a, wantFetches: 3},
 		}},
 		{name: "keys of another curve or kind, a point off the curve and a kid two keys share are left out", steps: []step{
 			{serve: func(k *keySet) {

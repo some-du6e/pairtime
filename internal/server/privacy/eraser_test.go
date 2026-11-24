@@ -65,6 +65,12 @@ func world(t *testing.T, f *fixture) map[string]int64 {
 	want := f.seed(t, teen, sharedDay, sharedDay, aloneDay, openDay)
 	f.seed(t, other, sharedDay)
 	f.publish(t, sharedDay, aloneDay)
+	// The seed holds rows in every table the eraser claims, so a table
+	// whose rows it couldn't find would show as one not deleted.
+	seeded := slices.Sorted(maps.Keys(want))
+	if claimed := slices.Sorted(slices.Values(privacy.AccountTables())); !slices.Equal(seeded, claimed) {
+		t.Fatalf("the seed covers %v, and the eraser claims %v", seeded, claimed)
+	}
 	// The alone day's leaves go with its last witness row.
 	want[privacy.LeafTable] = 1
 	return want

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,18 +40,30 @@ func TestTake(t *testing.T) {
 				t.Errorf("the second Take = %v, want 409 replayed", err)
 			}
 		}},
-		{name: "the rows of tokens more than 30 s past their exp go when the next jti is taken, and one inside the leeway stays", run: func(t *testing.T, f *fixture) {
-			for _, c := range []privacy.Claims{claims("gone", now.Add(-31*time.Second)), claims("kept", now.Add(-29*time.Second))} {
-				f.exec(t, `INSERT INTO privacy_token_uses (jti, exp_ms) VALUES ($1, $2)`, c.JTI, c.Expires.UnixMilli())
+		{name: "a jti is stored as its SHA-256, so the row holds no request_id or action", run: func(t *testing.T, f *fixture) {
+			const jti = "01a1296f-request-pairtime-delete-1-3f9c2a7b1e04"
+			if err := privacy.Take(context.Background(), f.w, claims(jti, now.Add(5*time.Minute)), now); err != nil {
+				t.Fatal(err)
+			}
+			rows := f.dump(t)["privacy_token_uses"]
+			if len(rows) != 1 || !strings.HasPrefix(rows[0], privacy.JTIKey(jti)+"|") || strings.Contains(rows[0], "request") {
+				t.Errorf("privacy_token_uses holds %v, want the jti's SHA-256 and its exp", rows)
+			}
+		}},
+		{name: "the rows of tokens past their exp, the leeway and PruneAfter go when the next jti is taken, and one short of that stays", run: func(t *testing.T, f *fixture) {
+			gone := now.Add(-privacy.Leeway - privacy.PruneAfter - time.Second)
+			kept := now.Add(-privacy.Leeway - privacy.PruneAfter + time.Second)
+			for _, c := range []privacy.Claims{claims("gone", gone), claims("kept", kept)} {
+				f.exec(t, `INSERT INTO privacy_token_uses (jti_sha256, exp_ms) VALUES ($1, $2)`, privacy.JTIKey(c.JTI), c.Expires.UnixMilli())
 			}
 			if err := privacy.Take(context.Background(), f.w, claims("new", now.Add(5*time.Minute)), now); err != nil {
 				t.Fatal(err)
 			}
 			rows := f.dump(t)["privacy_token_uses"]
-			if len(rows) != 2 {
-				t.Fatalf("privacy_token_uses holds %v, want kept and new", rows)
+			if len(rows) != 2 || strings.Contains(strings.Join(rows, "\n"), privacy.JTIKey("gone")) {
+				t.Fatalf("privacy_token_uses holds %v, want kept's row and new's", rows)
 			}
-			if err := privacy.Take(context.Background(), f.w, claims("kept", now.Add(-29*time.Second)), now); !replayed(err) {
+			if err := privacy.Take(context.Background(), f.w, claims("kept", kept), now); !replayed(err) {
 				t.Errorf("taking the kept jti again = %v, want 409 replayed", err)
 			}
 		}},
@@ -70,12 +83,13 @@ func TestTake(t *testing.T) {
 func TestTakeAcrossRestart(t *testing.T) {
 	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
 	c := privacy.Claims{JTI: "jti-restart", Expires: now.Add(5 * time.Minute)}
-	path := filepath.Join(t.TempDir(), "pairtime.db")
 	ms, err := migrations.Embedded()
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := func(t *testing.T) (*store.DB, *writer.Writer) {
+	// take starts pairtimed on the database at path, takes c's jti at at,
+	// and stops it again.
+	take := func(t *testing.T, path string, at time.Time) error {
 		t.Helper()
 		db, err := store.Open(context.Background(), store.Options{Engine: store.SQLite, Path: path})
 		if err != nil {
@@ -84,27 +98,29 @@ func TestTakeAcrossRestart(t *testing.T) {
 		if _, err := migrations.Apply(context.Background(), db, ms, time.Now); err != nil {
 			t.Fatal(err)
 		}
-		return db, writer.Start(db.Write, writer.Options{Window: time.Millisecond})
+		w := writer.Start(db.Write, writer.Options{Window: time.Millisecond})
+		err = privacy.Take(context.Background(), w, c, at)
+		w.Close()
+		if cerr := db.Close(); cerr != nil {
+			t.Fatal(cerr)
+		}
+		return err
 	}
 	tests := []struct {
 		name string
 		at   time.Time
-		want func(error) bool
 	}{
-		{name: "the first start takes the jti", at: now, want: func(err error) bool { return err == nil }},
-		{name: "after a restart, a replay a minute later is refused", at: now.Add(time.Minute), want: replayed},
-		{name: "after another restart, a replay just inside the leeway is still refused", at: now.Add(5*time.Minute + 29*time.Second), want: replayed},
+		{name: "a replay a minute later, after a restart, is refused", at: now.Add(time.Minute)},
+		{name: "a replay at the last moment the leeway allows, after a restart, is refused", at: c.Expires.Add(privacy.Leeway)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			db, w := start(t)
-			err := privacy.Take(context.Background(), w, c, tt.at)
-			w.Close()
-			if cerr := db.Close(); cerr != nil {
-				t.Fatal(cerr)
+			path := filepath.Join(t.TempDir(), "pairtime.db")
+			if err := take(t, path, now); err != nil {
+				t.Fatalf("the first start's Take = %v", err)
 			}
-			if !tt.want(err) {
-				t.Errorf("Take = %v", err)
+			if err := take(t, path, tt.at); !replayed(err) {
+				t.Errorf("Take after the restart = %v, want 409 replayed", err)
 			}
 		})
 	}

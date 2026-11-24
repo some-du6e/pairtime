@@ -29,11 +29,13 @@ const (
 )
 
 // JWKS fetches the hub's public keys from URL and keeps them for KeysFor.
-// A kid the keys lack fetches them again, at most once every
-// RefetchAfter, so a key the hub has just added works within a retry,
-// and a token naming a made-up kid can't make the server fetch on every
-// request. Keys it can't fetch fail with a 503 jwks_unavailable, which
-// the hub retries: it never trusts keys older than KeysFor.
+// A kid the keys lack fetches them again. No fetch, failed or not, comes
+// sooner than RefetchAfter after the last one, so a key the hub has just
+// added works within a retry, and a token naming a made-up kid, which
+// anyone can send before its signature is checked, can't make the server
+// fetch on every request. Keys it can't fetch fail with a 503
+// jwks_unavailable, which the hub retries: it never trusts keys older
+// than KeysFor.
 type JWKS struct {
 	URL string
 	// Client fetches the keys. nil is a client that gives up after 10 s.
@@ -59,10 +61,13 @@ func (j *JWKS) Key(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
 	if k, ok := j.keys[kid]; ok && fresh {
 		return k, nil
 	}
-	if fresh && now.Sub(j.tried) < RefetchAfter {
-		// The hub may have added kid since: the 503 makes it retry after
-		// the next fetch is allowed.
-		return nil, &Error{Status: http.StatusServiceUnavailable, Code: "unknown_key"}
+	if !j.tried.IsZero() && now.Sub(j.tried) < RefetchAfter {
+		// The hub may have added kid since, or its keys may come back:
+		// the 503 makes it retry once the next fetch is allowed.
+		if fresh {
+			return nil, &Error{Status: http.StatusServiceUnavailable, Code: "unknown_key"}
+		}
+		return nil, &Error{Status: http.StatusServiceUnavailable, Code: "jwks_unavailable"}
 	}
 	j.tried = now
 	keys, err := j.fetch(ctx)
@@ -79,13 +84,15 @@ func (j *JWKS) Key(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
 // fetch reads the key set: each P-256 signing key with a kid, a JWK of
 // kty EC (RFC 7517, RFC 7518 6.2). Keys of other kinds and ones whose
 // point isn't on the curve are left out, and a kid two keys share names
-// neither.
+// neither. The fetch serves every request waiting on the keys, so the
+// request that set it off can't cancel it, and it gives up after
+// jwksFetchLimit.
 func (j *JWKS) fetch(ctx context.Context) (map[string]*ecdsa.PublicKey, error) {
 	client := j.Client
 	if client == nil {
-		client = &http.Client{Timeout: jwksFetchLimit}
+		client = &http.Client{Timeout: jwksFetchLimit, CheckRedirect: httpsRedirects}
 	}
-	ctx, cancel := context.WithTimeout(ctx, jwksFetchLimit)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jwksFetchLimit)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, j.URL, nil)
 	if err != nil {
@@ -144,4 +151,17 @@ func (j *JWKS) fetch(ctx context.Context) (map[string]*ecdsa.PublicKey, error) {
 		keys[k.Kid] = pub
 	}
 	return keys, nil
+}
+
+// httpsRedirects follows a redirect only to https and at most three
+// times, so a redirect can't take the key set past config's https-only
+// check on jwks_url.
+func httpsRedirects(req *http.Request, via []*http.Request) error {
+	if req.URL.Scheme != "https" {
+		return errors.New("privacy: the hub's key set redirects away from https")
+	}
+	if len(via) >= 3 {
+		return errors.New("privacy: the hub's key set redirects too many times")
+	}
+	return nil
 }
