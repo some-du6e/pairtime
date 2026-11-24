@@ -38,7 +38,7 @@ Both carry the `via_bridge` label, so the review page still shows that a minute 
 
 ## macOS, and heartbeats the agent can't check
 
-WP-OS13 builds the peer-process check for macOS through `libproc` with purego, as it does for Windows and Linux (DESIGN 5.7). On every OS a heartbeat is `editor`, and its bridge records `bridge`, only when the check ran and passed. A heartbeat that failed it, or that the agent couldn't check, is `editor_unverified`, and its bridge records `bridge_unverified`. Until the macOS check lands, every macOS heartbeat falls in that second group.
+WP-OS13 built the peer-process check for macOS in #202, through `libproc` with purego, as it does for Windows and Linux (DESIGN 5.7). On every OS a heartbeat is `editor`, and its bridge records `bridge`, only when the check ran and passed. A heartbeat that failed it, or that the agent couldn't check, is `editor_unverified`, and its bridge records `bridge_unverified`.
 
 ## For Karim
 
