@@ -581,8 +581,8 @@ func TestWakaTimeTakenOver(t *testing.T) {
 					t.Fatal(err)
 				}
 				problems := strings.Join(p.Problems, "\n")
-				if !strings.Contains(problems, "isn't pairtime's any more; point its api_url at your own server, or delete it") {
-					t.Errorf("uninstall's problems are %q, want the config named with what to change", p.Problems)
+				if want := h.cfg() + " is the config pairtime made, with an api_key that isn't pairtime's any more; point its api_url at your own server, or delete it"; problems != want {
+					t.Errorf("uninstall's problems are %q, want the config named, then what it is and what to change:\n%q", p.Problems, want)
 				}
 				if strings.Contains(p.Diff()+problems, hackatimeKey) {
 					t.Errorf("uninstall shows the teen's key:\n%s\n%s", p.Diff(), problems)

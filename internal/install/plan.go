@@ -15,6 +15,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/install/udiff"
+	"github.com/some-du6e/pairtime/internal/install/wakacfg"
 )
 
 // Plan is everything Apply will do, worked out before anything is written.
@@ -483,6 +484,11 @@ func (in *Installer) planUndo(rec record) (Change, error) {
 		ch.After = base
 	} else {
 		if ch.After, err = undoAll(cur, base, rec.Edits); err != nil {
+			if errors.Is(err, wakacfg.ErrNotOwn) {
+				// It says what the file is now, after its name, as
+				// planFound shows it.
+				return Change{}, fmt.Errorf("%s %w", rec.Target, err)
+			}
 			return Change{}, fmt.Errorf("%s changed since pairtime wrote it, and pairtime's entries can't be taken out: %w", rec.Target, err)
 		}
 		if !ch.After.Same(cur) {

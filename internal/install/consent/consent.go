@@ -241,7 +241,7 @@ func wakatimeCard(in Input) Card {
 			},
 			Declining: "Without it, pairtime doesn't see the time you spend in an editor.",
 			TurnOff: "You can take it out any time with pairtime uninstall. It takes pairtime's settings out of the config it made, and deletes the file when nothing else is in it. " +
-				"If you gave that config a key of your own, uninstall leaves the file to you, and says so. " +
+				"If you gave that config a key of your own and it still sends to pairtime's agent, uninstall leaves the file to you, and says so. " +
 				"wakatime-cli's own wakatime-internal.cfg stays once wakatime-cli has written to it, since without it wakatime-cli would send your AI agents' old transcripts as new time to the next server you set up.",
 		}
 	}
