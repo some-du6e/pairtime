@@ -58,7 +58,22 @@
         },
         "handbook": {"type": "string", "description": "The field's name in the handbook, in handbook/fields.json."},
         "note": {"type": "string"}
-      }
+      },
+      "allOf": [
+        {
+          "description": "The handbook asks a person to write Deflation Justification and Specific Technical Features (written_by human in handbook/fields.json), so they are the reviewer's, never pairtime's.",
+          "not": {
+            "required": ["handbook", "filled_by"],
+            "properties": {
+              "handbook": {"enum": ["Deflation Justification", "Specific Technical Features"]},
+              "filled_by": {"not": {"const": "reviewer"}}
+            }
+          }
+        }
+      ],
+      "x-invalid-examples": [
+        {"name": "Justification - Deflation Justification", "line": 3292, "role": "justification", "filled_by": "pairtime", "handbook": "Deflation Justification"}
+      ]
     }
   }
 }
