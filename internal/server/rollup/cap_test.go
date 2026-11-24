@@ -173,6 +173,21 @@ func TestDayCap(t *testing.T) {
 			},
 		},
 		{
+			name:        "rows keep changed aren't taken for the day's cut: a later revision of the same day takes no column below zero",
+			before:      joinSteps([]step{newYork}, creditFor("d1", "p1", "prompting", "A", local(9, 0), 3, "final")),
+			beforeLimit: math.MaxInt64,
+			gone:        local(9, 1),
+			limit:       120_000,
+			steps: []step{
+				func() step {
+					b := sl("p1", 15, "prompting", "B")
+					return bk("d1", local(9, 1), 1, "final", nil, b, b, b, b)
+				}(),
+				bk("d1", local(9, 1), 2, "final", nil),
+			},
+			want: []Day{final("d1/p1", day, "prompting", 0, 120_000)},
+		},
+		{
 			name:  "each local day has a cap of its own",
 			limit: 600_000,
 			steps: joinSteps([]step{newYork},

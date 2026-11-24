@@ -37,10 +37,12 @@ var dayCapMS = sync.OnceValue(func() int64 {
 // next's goes on, slot by slot. The agent's time on its own is never
 // capped, so d's agent columns stand.
 //
-// That holds only for stored rows that are a cut of the day under the cap:
-// at most the cap kept, and all of it once anything is held back. Rows
-// stored before migration 0012, or cut under another DAY_CAP_S, aren't, so
-// the move re-cuts such a day whole instead (recut).
+// That holds only for stored rows that are the day's cut under the cap, in
+// time order. Rows stored before migration 0012, or cut under another
+// DAY_CAP_S, aren't: they keep more than the cap, or hold some back while
+// keeping less. Rows keep changed can't be either, though their totals
+// may look like a cut, so the move checks that the re-cut takes no column
+// below zero. Any of those days is re-cut whole instead (recut).
 func capped(ctx context.Context, tx writer.Tx, account, day string, minuteMS int64, prev, next merged, d delta) (delta, error) {
 	limit := dayCapMS()
 	kept, withheld, err := dayTotals(ctx, tx, account, day)
@@ -51,7 +53,7 @@ func capped(ctx context.Context, tx writer.Tx, account, day string, minuteMS int
 		return d, nil
 	}
 	if kept > limit || (withheld > 0 && kept != limit) {
-		return recut(ctx, tx, account, day, minuteMS, next, d, kept+withheld, limit)
+		return recut(ctx, tx, account, day, minuteMS, next, d, kept+withheld, limit, nil)
 	}
 	later, err := dayMinutes(ctx, tx, account, day, minuteMS)
 	if err != nil {
@@ -68,7 +70,32 @@ func capped(ctx context.Context, tx writer.Tx, account, day string, minuteMS int
 	out.add(cut(start, limit, day, ms))
 	ms[0] = prev
 	out.subtract(cut(start, limit, day, ms))
+	stored, err := dayRows(ctx, tx, account, day)
+	if err != nil {
+		return nil, err
+	}
+	if !fits(stored, out) {
+		return recut(ctx, tx, account, day, minuteMS, next, d, kept+withheld, limit, stored)
+	}
 	return out, nil
+}
+
+// fits reports whether adding d to stored leaves every credited column
+// and every held-back total at zero or more, as it does when stored is the
+// day's cut in time order.
+func fits(stored, d delta) bool {
+	for k, c := range d {
+		s := stored[k]
+		for col := 0; col < agentFinal; col++ {
+			if s[col]+c[col] < 0 {
+				return false
+			}
+		}
+		if s[dayCap]+c[dayCap] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // recut re-cuts the whole of day under limit, for a day whose stored rows
@@ -78,7 +105,8 @@ func capped(ctx context.Context, tx writer.Tx, account, day string, minuteMS int
 // total, so none is missing: the day's new cut takes the place of its rows'
 // credit. When the retention jobs have deleted some of the day's minutes,
 // the day can't be cut again, and keep applies d to the rows as they are.
-func recut(ctx context.Context, tx writer.Tx, account, day string, minuteMS int64, next merged, d delta, total, limit int64) (delta, error) {
+// stored is the day's rows, or nil for recut to read them.
+func recut(ctx context.Context, tx writer.Tx, account, day string, minuteMS int64, next merged, d delta, total, limit int64, stored delta) (delta, error) {
 	all, err := dayMinutes(ctx, tx, account, day, math.MinInt64)
 	if err != nil {
 		return nil, err
@@ -102,9 +130,10 @@ func recut(ctx context.Context, tx writer.Tx, account, day string, minuteMS int6
 	if !placed {
 		ms = append(ms, next)
 	}
-	stored, err := dayRows(ctx, tx, account, day)
-	if err != nil {
-		return nil, err
+	if stored == nil {
+		if stored, err = dayRows(ctx, tx, account, day); err != nil {
+			return nil, err
+		}
 	}
 	if sum != total {
 		return keep(stored, d), nil
