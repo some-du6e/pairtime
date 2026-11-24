@@ -103,21 +103,10 @@ func selfUsage() (rss, peak uint64, cpu time.Duration) {
 // QueryInformationJobObject through LazyProc.Call, which keeps info where
 // the call writes it, as K32GetProcessMemoryInfo's is called.
 func childCPU(own time.Duration) time.Duration {
-	j := windows.Handle(accountingJob.Load())
-	if j == 0 {
-		return 0
-	}
-	proc := windows.NewLazySystemDLL("kernel32.dll").NewProc("QueryInformationJobObject")
-	if proc.Find() != nil {
-		return 0
-	}
-	var info jobAccounting
-	if r, _, _ := proc.Call(uintptr(j), windows.JobObjectBasicAccountingInformation,
-		uintptr(unsafe.Pointer(&info)), unsafe.Sizeof(info), 0); r == 0 {
-		return 0
-	}
-	all := time.Duration(info.totalUserTime+info.totalKernelTime) * 100
-	return max(all-own, 0)
+	// The mutation #276's check in footprint.yml must catch: no child's
+	// CPU time counts, so doctor --report's footprint.cpu_s is the agent's
+	// own alone. Never on a PR branch.
+	return 0
 }
 
 // filetime is a FILETIME span, in 100-nanosecond units, as a Duration.
