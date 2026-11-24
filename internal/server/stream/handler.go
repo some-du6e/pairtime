@@ -195,7 +195,7 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request, st *stream) {
 				return
 			}
 		case <-tick.C:
-			if send([]byte(": keepalive\n\n")) != nil {
+			if send(keepalive) != nil {
 				return
 			}
 		case <-st.sub.kicked:
@@ -227,6 +227,12 @@ func (h *Hub) first(st *stream) []byte {
 	}
 	return b
 }
+
+// keepalive is what a stream sends every Keepalive: SP 6.4's comment,
+// which a proxy sees as bytes, and an event named keepalive with no data.
+// EventSource hands a page no comment, so the event is how the page knows
+// its stream is alive, and falls back to polling after 45 s of nothing.
+var keepalive = []byte(": keepalive\nevent: keepalive\ndata:\n\n")
 
 // Resync is a resync event's data: the topics whose events the stream
 // couldn't replay, by the names the stream gave them. The page refetches

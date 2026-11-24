@@ -7,9 +7,11 @@
 // A page opens one EventSource for every topic it shows, as
 // /api/v1/stream?topics=user:me. The stream starts with "retry: 5000",
 // carries the topics' events, and sends a ": keepalive" comment every 15
-// s, well inside the 125 s Cloudflare waits between bytes (SP 6.4). Each
-// event is written and flushed through http.ResponseController the moment
-// it is published.
+// s, well inside the 125 s Cloudflare waits between bytes (SP 6.4). The
+// comment comes with an event named keepalive and no data, because
+// EventSource shows a page no comment, and the page needs to hear the
+// stream to know when to fall back to polling. Each event is written and
+// flushed through http.ResponseController the moment it is published.
 //
 // # Topics
 //

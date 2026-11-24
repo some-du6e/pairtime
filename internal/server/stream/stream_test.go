@@ -329,7 +329,7 @@ func TestKeepalive(t *testing.T) {
 		// publishAt is when an event goes out, or 0 for none.
 		publishAt time.Duration
 	}{
-		{name: "an idle stream gets : keepalive every 15 s from its start, and nothing between"},
+		{name: "an idle stream gets : keepalive every 15 s from its start, with an event a page hears, and nothing between"},
 		{name: "an event between keepalives doesn't move them", publishAt: 7 * time.Second},
 	}
 	for _, tt := range tests {
@@ -350,6 +350,9 @@ func TestKeepalive(t *testing.T) {
 					for _, b := range parseSSE(c.read()) {
 						if b.comment == "keepalive" {
 							at = append(at, time.Since(start))
+							if b.event != "keepalive" || b.data != "" || b.id != "" {
+								t.Errorf("a keepalive block %+v, want the comment with an event named keepalive, no data and no id", b)
+							}
 						}
 					}
 				}
