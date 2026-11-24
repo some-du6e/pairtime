@@ -24,8 +24,9 @@ SLOT_MS = 15_000
 MINUTE_MS = 60_000
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
-# Uncredited reason codes in SM 5.2 order, and credit reasons in SM 5.2
-# order. Rows list their reasons in these orders.
+# Uncredited reason codes in the order of SM 5.2's table, which isn't the
+# order SM 5.2 applies them in, and credit reasons in SM 5.2 order. Rows list
+# their reasons in these orders.
 CREDIT_REASONS = ["P", "ANS", "GO", "Q", "PA", "INT", "E", "NAV", "CMD", "TEST", "G", "SUP", "READ", "LOOKUP"]
 UNCREDITED = [
     "X.absent", "X.other_focus", "X.ambiguous", "X.no_anchor", "X.agent_only", "X.automated",

@@ -122,7 +122,7 @@
       "uncredited": {"X.absent": 23160},
       "agent_running_s": 23160,
       "sm": "23:44 to 07:29",
-      "note": "The agent runs alone until 06:10:00; every second is X.absent, its turns are X.automated and its time is agent-only.",
+      "note": "The agent runs alone until 06:10:00. Every second is X.absent, which comes before any turn's code (SM 5.2); its turns are self_continue and its time is agent-only.",
       "derived": ["uncredited", "agent_running_s"]
     },
     {
