@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -81,15 +80,6 @@ func TestRCommitment(t *testing.T) {
 			rec := h.call(c.as, c.method, c.target, c.body)
 			out[c.as+" "+c.method+" "+c.target] = rec.Body.String() + "\n" + strings.Join(rec.Header().Values("Location"), " ")
 		}
-		exported, err := Export(context.Background(), h.db.Read, u1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		b, err := json.Marshal(exported)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out["Export"] = string(b)
 		return out
 	}
 	tests := []struct {
@@ -97,7 +87,7 @@ func TestRCommitment(t *testing.T) {
 		run  func(t *testing.T, h *harness)
 	}{
 		{
-			name: "while frozen and once metadata_revealed, no answer of any route to any credential, and no export, holds r, and RevealedR refuses it",
+			name: "while frozen and once metadata_revealed, no answer of any route to any credential holds r, and RevealedR refuses it",
 			run: func(t *testing.T, h *harness) {
 				v := h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusCreated)
 				r := h.storedR(v.ID)
@@ -138,7 +128,7 @@ func TestRCommitment(t *testing.T) {
 			},
 		},
 		{
-			name: "once the draw is stored the teen view and the export show r, whose SHA-256 is the commitment the freeze answered with, and the program view never does",
+			name: "once the draw is stored the teen view shows r, whose SHA-256 is the commitment the freeze answered with, and the program view never does",
 			run: func(t *testing.T, h *harness) {
 				v := h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusCreated)
 				r := h.storedR(v.ID)
@@ -149,12 +139,12 @@ func TestRCommitment(t *testing.T) {
 					t.Errorf("the view's r %q and challenged_at %v, the freeze's r_sha256 %s; want r, whose SHA-256 is it", got.R, got.ChallengedAt, *v.RSHA256)
 				}
 				for what, body := range answers(t, h, v.ID) {
-					switch {
-					case strings.HasPrefix(what, "prog:") && leaks(body, r):
+					if strings.HasPrefix(what, "prog:") && leaks(body, r) {
 						t.Errorf("%s holds r: %s", what, body)
-					case what == "Export" && !strings.Contains(body, hex.EncodeToString(r)):
-						t.Errorf("the export doesn't hold r: %s", body)
 					}
+				}
+				if got, err := RevealedR(context.Background(), h.db.Read, v.ID); err != nil || !bytes.Equal(got, r) {
+					t.Errorf("RevealedR = %x, %v; want the stored r", got, err)
 				}
 				h.move(v.ID, ContentRevealed)
 				want(t, h.call("ptd_laptop", "POST", SubmissionsPath+"/"+v.ID+"/withdraw", ""), http.StatusOK, "")

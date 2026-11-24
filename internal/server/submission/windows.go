@@ -181,9 +181,10 @@ var ErrNotRevealed = errors.New("submission: r isn't revealed")
 // challenged_at_ms in the transaction that moves it to challenged, and
 // ErrNotRevealed before then, for a submission the server doesn't hold,
 // and for one withdrawn before its draw, which never shows r
-// (D-sb1-submissions, Q9). It is the read of r behind every view and the
-// export, so no endpoint can show r before the draw: a client that read r
-// earlier could work out the draw and withdraw before it is recorded.
+// (D-sb1-submissions, Q9). It is the read of r behind the teen view, and
+// WP-SB8's bundle reads r through it too, so nothing can show r before the
+// draw: a client that read r earlier could work out the draw and withdraw
+// before it is recorded.
 func RevealedR(ctx context.Context, q Querier, id string) ([]byte, error) {
 	var r []byte
 	err := q.QueryRowContext(ctx, `SELECT r FROM submissions WHERE id = $1 AND challenged_at_ms IS NOT NULL AND r IS NOT NULL`, id).Scan(&r)
@@ -201,7 +202,7 @@ func RevealedR(ctx context.Context, q Querier, id string) ([]byte, error) {
 // challenged (WP-SB5; D-sb1-submissions, Q9). It returns r only while the
 // submission is metadata_revealed, ErrNotRevealed in any other state, and
 // ErrNotFound for a submission the server doesn't hold. No handler, log
-// line, error or export calls it.
+// line or error calls it.
 func DrawR(ctx context.Context, tx writer.Tx, id string) ([]byte, error) {
 	var state string
 	var r []byte

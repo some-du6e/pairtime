@@ -49,6 +49,36 @@ func TestMessage(t *testing.T) {
 	}
 }
 
+// TestWorkedExample checks docs/spec/submissions-v1.md 2.2's worked
+// example with crypto/ed25519, from ingest-v1 2.2's example device key.
+func TestWorkedExample(t *testing.T) {
+	seed := sha256.Sum256([]byte("pairtime ingest-v1 example device key"))
+	key := ed25519.NewKeyFromSeed(seed[:])
+	empty := sha256.Sum256(nil)
+	m := Message("d_example", "GET", "/api/v1/submissions?limit=10", "1795089660250", hex.EncodeToString(empty[:]))
+	sig := ed25519.Sign(key, m)
+	tests := []struct {
+		name, got, want string
+	}{
+		{name: "the device key is ingest-v1's example key", got: hex.EncodeToString(key.Public().(ed25519.PublicKey)), want: "fadacf1c88bce8152ec27995a05aa8d9c53ac5678801cdd2e05b19060398a677"},
+		{name: "M is the spec's 145 bytes", got: hex.EncodeToString(m), want: "7061697274696d652d7375626d697373696f6e732d76310a645f6578616d706c650a474554202f6170692f76312f7375626d697373696f6e733f6c696d69743d31300a313739353038393636303235300a65336230633434323938666331633134396166626634633839393666623932343237616534316534363439623933346361343935393931623738353262383535"},
+		{name: "the signature is the spec's", got: hex.EncodeToString(sig), want: "daa48605db07ded80b6b13d619a23f0f05eb7e0345447251cdebb3687d109044242c12359c20eae8d94660bce159f08e2a9cc445effdebe2b27153a54c0c8c00"},
+		{name: "X-Pairtime-Signature is the spec's", got: "ed25519=" + base64.StdEncoding.EncodeToString(sig), want: "ed25519=2qSGBdsH3tgLaxPWGaI/DwXrfgNFRHJRzeuzaH0QkEQkLBI1nCDq6NlGYLzhWfCOKpzERe/96+KycVOlTAyMAA=="},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("got %s, want %s", tt.got, tt.want)
+			}
+		})
+	}
+	t.Run("M is 145 bytes and the signature verifies", func(t *testing.T) {
+		if len(m) != 145 || !ed25519.Verify(key.Public().(ed25519.PublicKey), m, sig) {
+			t.Errorf("M is %d bytes, and the signature verifies: %v", len(m), ed25519.Verify(key.Public().(ed25519.PublicKey), m, sig))
+		}
+	})
+}
+
 // TestSignedRequests checks a device's request to the submissions API
 // (D-sb1-submissions, Q4): ingest's headers, checked in ingest-v1 2.5's
 // order and answered with its codes, a signature over Message with no

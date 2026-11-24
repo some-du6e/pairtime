@@ -846,7 +846,7 @@ func (s *Service) listPrograms(w http.ResponseWriter, r *http.Request) {
 // ProgramJSON is a program in a view: its name and the name teens see.
 type ProgramJSON struct {
 	Name        string `json:"name"`
-	DisplayName string `json:"display_name,omitempty"`
+	DisplayName string `json:"display_name"`
 }
 
 // WindowJSON is a frozen window in a view.
@@ -935,7 +935,7 @@ type TeenView struct {
 	R                    string `json:"r,omitempty"`
 	EligibilityToConfirm bool   `json:"eligibility_to_confirm"`
 	Times
-	ReviewURL string `json:"review_url,omitempty"`
+	ReviewURL string `json:"review_url"`
 	// Totals stay null until WP-SB4's re-score fills them.
 	Totals any `json:"totals"`
 }
@@ -965,21 +965,17 @@ type ProgramView struct {
 }
 
 // teen builds the teen view of sub, with r when it is set, the program's
-// display name from [[programs]], or none for a program the list no longer
-// holds, and the review URL under base.
+// display name, and the review URL under base.
 func teen(sub Submission, r []byte, displayName, base string) TeenView {
 	v := TeenView{
 		ID: sub.ID, Program: ProgramJSON{Name: sub.Program, DisplayName: displayName}, TakesHours: sub.TakesHours,
 		State: sub.State, RequestID: orNull(sub.RequestID), ExternalID: orNull(sub.ExternalID),
 		CreatedBy: sub.CreatedBy, Device: orNull(sub.Device), Mode: sub.Mode, Windows: windowsJSON(sub.Windows),
 		ScoringVersion: orNull(sub.ScoringVersion), Params: orNull(sub.Params), RSHA256: orNull(sub.RSHA256),
-		EligibilityToConfirm: sub.EligibilityToConfirm, Times: timesOf(sub),
+		EligibilityToConfirm: sub.EligibilityToConfirm, Times: timesOf(sub), ReviewURL: base + "/review/submissions/" + sub.ID,
 	}
 	if len(r) > 0 {
 		v.R = hex.EncodeToString(r)
-	}
-	if base != "" {
-		v.ReviewURL = base + "/review/submissions/" + sub.ID
 	}
 	v.Projects = make([]ProjectJSON, len(sub.Projects))
 	for i, p := range sub.Projects {
@@ -1005,7 +1001,9 @@ func revealed(ctx context.Context, q Querier, sub Submission) ([]byte, error) {
 	return r, err
 }
 
-// teenView is the teen view of sub, as the API sends it.
+// teenView is the teen view of sub, as the API sends it, with the program's
+// display name from [[programs]], or its name for a program the list no
+// longer holds.
 func (s *Service) teenView(ctx context.Context, sub Submission) (TeenView, error) {
 	r, err := revealed(ctx, s.o.Read, sub)
 	if err != nil {
