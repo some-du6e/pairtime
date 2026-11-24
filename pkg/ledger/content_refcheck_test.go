@@ -583,7 +583,7 @@ func randomContent(t *testing.T) contentVectorsFile {
 			pool = append(pool, tn)
 			dv.Pool = append(dv.Pool, poolVec{DeviceID: tn.DeviceID, Seq: tn.Seq, Score: hashBytes(s)})
 		}
-		drawn, err := Draw(seed, pool)
+		drawn, err := Draw(seed, pool, drawTable(t))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -617,8 +617,9 @@ func randomContent(t *testing.T) contentVectorsFile {
 		}
 		doc.Draws = append(doc.Draws, dv)
 	}
+	tb := drawTable(t)
 	for p := 0; p <= 400; p++ {
-		doc.ChallengeK = append(doc.ChallengeK, challengeKVec{Pool: p, K: ChallengeK(p), Drawn: min(ChallengeK(p), p)})
+		doc.ChallengeK = append(doc.ChallengeK, challengeKVec{Pool: p, K: int(ChallengeK(tb, p)), Drawn: int(min(ChallengeK(tb, p), int64(p)))})
 	}
 	return doc
 }

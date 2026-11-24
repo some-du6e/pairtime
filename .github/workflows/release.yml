@@ -19,8 +19,8 @@
 # package code from npm: it takes the built dashboard as an artifact and
 # checks it before embedding it.
 #
-# The server image (WP-OP1), code signing (DESIGN 9.7 WP 4.10) and the VSIX
-# packages (WP 4.11) join this workflow later.
+# server-image.yml builds the server image (WP-OP1). Code signing (DESIGN
+# 9.7 WP 4.10) and the VSIX packages (WP 4.11) join this workflow later.
 name: release
 
 on:

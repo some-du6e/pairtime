@@ -286,6 +286,90 @@ func TestActs(t *testing.T) {
 	}
 }
 
+// TestAppSessionActs checks that a session an agent app's server started
+// opens no queued message, permission answer or interrupt anchor (SM 2.2,
+// What isn't a message; SM 2.3). Those acts come through the app's own
+// interface, from any device and any person the app lets in, and the app's
+// window here hosts every session its server drives, so its focus would
+// pass them as the person's. The session's last session.start before the
+// act decides, as it does for rule 4.
+func TestAppSessionActs(t *testing.T) {
+	queued := func(v event.Via) func(b *tl) event.Event {
+		return func(b *tl) event.Event {
+			return b.harness(at(58), v, "s_1", "p_1", &event.AgentQueue{TurnKey: "t_q", LenChars: 40})
+		}
+	}
+	answered := func(req int64) func(b *tl) event.Event {
+		return func(b *tl) event.Event {
+			return b.harness(at(58), event.ViaHook, "s_1", "p_1", &event.AgentPermission{RequestedAt: req, AnsweredAt: at(58),
+				Decision: event.DecisionAccept, DecidedBy: event.DecidedByUser})
+		}
+	}
+	permission := answered(at(43))
+	interrupt := func(b *tl) event.Event {
+		return b.harness(at(58), event.ViaHook, "s_1", "p_1", &event.AgentInterrupt{TurnKey: "t_0"})
+	}
+	// resumed is T3 Code's window in front from base, hosting s_1, which
+	// its server started (appWindow), and then, at 30 s, the person
+	// resuming s_1 in a terminal, which takes the front.
+	resumed := func(b *tl) {
+		appWindow(b)
+		b.focus(at(30), event.AppTerminal, "p_1", "s_1")
+		b.harness(at(30), event.ViaHook, "s_1", "p_1", &event.SessionStart{StartKind: event.StartResume,
+			Entrypoint: event.EntrypointCLI, ParentClass: event.ParentTerminalApp, HasTTY: true})
+	}
+	cases := []struct {
+		name    string
+		session func(b *tl)
+		act     func(b *tl) event.Event
+		// want is the act's anchor kind, or "" for none, and flag a flag
+		// the act raises.
+		want event.AnchorKind
+		flag string
+	}{
+		{name: "a message queued in an agent app's session opens no Q anchor, though input in its slot and the app's window in front, hosting the session, back it",
+			session: appWindow, act: queued(event.ViaHook)},
+		{name: "a transcript's copy of a message queued in an agent app's session opens no Q anchor either",
+			session: appWindow, act: queued(event.ViaLog)},
+		{name: "a permission answered in an agent app's session opens no PA anchor, though the person was present when the answer came",
+			session: appWindow, act: permission},
+		{name: "a permission answered faster than PA_MIN_LATENCY_MS in an agent app's session opens nothing and is still flagged, since a script answered it",
+			session: appWindow, act: answered(atMS(57_750)), flag: FlagPermissionTooFast},
+		{name: "an interrupt in an agent app's session opens no INT anchor, though the person was present",
+			session: appWindow, act: interrupt},
+		{name: "the same queued message in a session a person started from a terminal opens Q",
+			session: terminalSession, act: queued(event.ViaHook), want: event.AnchorQueuedMessage},
+		{name: "the same permission answer in a session a person started from a terminal opens PA",
+			session: terminalSession, act: permission, want: event.AnchorPermissionAnswer},
+		{name: "the same interrupt in a session a person started from a terminal opens INT",
+			session: terminalSession, act: interrupt, want: event.AnchorInterrupt},
+		{name: "a message queued after the person resumed an agent app's session from a terminal opens Q: the session's last start before the act decides, as it does for rule 4",
+			session: resumed, act: queued(event.ViaHook), want: event.AnchorQueuedMessage},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			c.session(b)
+			b.press(atMS(55_500))
+			e := c.act(b)
+			b.samples(at(0), at(480))
+			got := b.run(t, Device{})
+			a, ok := anchorByID(got, e.EventID)
+			switch {
+			case c.want == "" && ok:
+				t.Errorf("a %s anchor, want none", a.Kind)
+			case c.want != "" && (!ok || a.Kind != c.want):
+				t.Errorf("anchor %+v (found %v), want %s", a, ok, c.want)
+			}
+			flagged := slices.ContainsFunc(got.Flags, func(f Flag) bool { return f.EventID == e.EventID && f.Name == c.flag })
+			if c.flag != "" && !flagged {
+				t.Errorf("flags %+v, want %s", got.Flags, c.flag)
+			}
+			checkDerived(t, got)
+		})
+	}
+}
+
 // TestTypedEditFocus checks SC1's typed-edit focus test in
 // D-editor-heartbeat-first's order: the editor in front is on the project of
 // the latest heartbeat with input in the same or previous slot, up to the
