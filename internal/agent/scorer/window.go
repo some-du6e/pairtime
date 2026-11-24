@@ -216,13 +216,16 @@ type carry struct {
 	// window, so before the sampler's next record, and it ends that one's
 	// reach (window.cutBy).
 	Stamped int64 `json:"stamped,omitempty"`
-	// Restart says the sampler started again at the later of Power and
-	// Presence: a stamped record folded in before it had ended the reach
-	// of the sampler's record before it. The earlier of the two is then
-	// from before a never-sampling stretch, and pkg/score keeps none of
-	// its gap, lock or suspend past that restart (SM 2.1), so the window's
-	// Steps get none of it either (carry.records).
-	Restart bool `json:"restart,omitempty"`
+	// RestartAt is the t of the sampler's record that started the device
+	// sampling again after the latest stretch the carry folded in whose
+	// sample's reach a stamped record ended, 0 for none: from it on, and
+	// until the next os.presence, pkg/score keeps no gap, lock or suspend
+	// from before the stretch (SM 2.1). The restart can be two records, as
+	// when the agent writes a suspend and a resume with no sample after
+	// them, so it sticks until records dated after it replace the ones
+	// before it: carry.records drops every Power or Presence dated before
+	// it, as the window's Steps would otherwise get them back.
+	RestartAt int64 `json:"restart_at,omitempty"`
 }
 
 // sessionCarry is what the carry keeps of one harness session.
@@ -300,8 +303,8 @@ func turnKey(e *event.Event) string {
 // runs' gaps, and ttl is BUCKET_TTL_S.
 func (c *carry) fold(ev event.Event, g runGaps, ttl int64) {
 	if sampler(&ev) {
-		if prev := c.sampled(); prev == nil || recordCmp(prev, &ev) < 0 {
-			c.Restart = prev != nil && c.Stamped > prev.T+ttl
+		if prev := c.sampled(); prev != nil && recordCmp(prev, &ev) < 0 && c.Stamped > prev.T+ttl {
+			c.RestartAt = ev.T
 		}
 	}
 	if stamps(&ev) {
@@ -447,12 +450,13 @@ func (c *carry) prune(from int64) {
 // device's and lets it keep no clock (SM 2.1), and dated again at from
 // minus carryGraceMS it would look like a sample the agent took then; the
 // sampler's next record then starts it again, keeping nothing from before.
-// The earlier of the two goes with it, and also when the sampler started
-// again at the later one (Restart); otherwise it stays, since its reach
-// ended at the later one, which no stamped record after that changes, and
-// a gap from the last sample to the sampler's next record still starts at
-// it. Only
-// a cut that has taken effect counts, as in pkg/score, which keeps
+// The earlier of the two goes with it. The earlier one also goes when it
+// is dated before the sampler started again (RestartAt), since pkg/score
+// keeps nothing of it past the restart, however many of the sampler's
+// records the restart took. Otherwise it stays, since its reach ended at
+// the later one, which no stamped record after that changes, and a gap
+// from the last sample to the sampler's next record still starts at it.
+// Only a cut that has taken effect counts, as in pkg/score, which keeps
 // FinalBefore at the sampler's record until then, and also while the
 // sampler's next record, more than BUCKET_TTL_S later, is less than
 // PENDING_WINDOW_S - READ_HORIZON_S behind the newest (reach.held). A
@@ -463,7 +467,7 @@ func (c *carry) records(out []event.Event, from int64, g runGaps, stamped, ttl i
 	grace := from - carryGraceMS
 	last := c.sampled()
 	for _, e := range []*event.Event{c.Focus, c.Power, c.Presence} {
-		if e == nil || e != c.Focus && (stamped > last.T+ttl || e != last && c.Restart) {
+		if e == nil || e != c.Focus && (stamped > last.T+ttl || e.T < c.RestartAt) {
 			continue
 		}
 		r := *e
