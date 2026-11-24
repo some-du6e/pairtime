@@ -220,6 +220,15 @@ func TestActs(t *testing.T) {
 			// 40 / 1.5 = 26.67 s, rounded to 27.
 			want: Anchor{Kind: event.AnchorQueuedMessage, Reason: event.ReasonQueued, LeadMS: 147_000, Level: event.EvidenceB,
 				Origin: event.OriginHumanTyped}},
+		{name: "a message queued after the agent's last output asked a question takes an answer's lead, as a prompt would (SM 2.2)",
+			app: event.AppTerminal, act: func(b *tl) event.Event {
+				b.harness(at(40), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
+					AsksQuestion: true})
+				return b.harness(at(58), event.ViaHook, "s_1", "p_1", &event.AgentQueue{TurnKey: "t_q", LenChars: 40})
+			},
+			// ANSWER_LEAD_S and the 27 s of typing.
+			want: Anchor{Kind: event.AnchorQueuedMessage, Reason: event.ReasonQueued, LeadMS: 60_000 + 27_000,
+				Level: event.EvidenceB, Origin: event.OriginHumanTyped}},
 		{name: "a queued message longer than its lead's input slots could type is human_pasted, its typing part cut by rule 7",
 			app: event.AppTerminal, act: func(b *tl) event.Event {
 				return b.harness(at(58), event.ViaHook, "s_1", "p_1", &event.AgentQueue{TurnKey: "t_q", LenChars: 450})

@@ -174,9 +174,7 @@ type presence struct {
 	// first is the start of slots[0].
 	first int64
 	slots []Slot
-	// lastIn holds, for each slot, the latest input a sample shows in it.
-	lastIn []int64
-	runs   []silentRun
+	runs  []silentRun
 	// live is set when some record came by a path only a running agent
 	// has, any but a log reader's: records lookback backfilled from
 	// transcripts come by a log reader alone (SM 2.8), and the range of
@@ -217,20 +215,22 @@ type presence struct {
 // running without its sampler, as when a desktop session ends and the
 // agent runs on, so the slots after t, up to the sampler's next record,
 // are a never-sampling device's. ended says the cut has taken effect: the
-// newest record is rules.late past it. Until then a record of the
-// sampler's dated before the cut may still be on its way, as a resume
-// still queued behind a later-dated stop hook is, and it would keep the
-// reach, so the reach holds, and so does the clock it keeps (State.now).
+// newest record the device's own clock dated is rules.late past it. Until
+// then a record of the sampler's dated before the cut may still be on its
+// way, as a resume still queued behind a later-dated stop hook is, and it
+// would keep the reach, so the reach holds, and so does the clock it keeps
+// (State.now).
 //
 // held says the record keeps the clock whatever records of the sampler's
 // come after it, because its fate is still open: its cut waits, or the sampler's
 // next record came more than BUCKET_TTL_S after it, so a record the agent
 // stamps itself dated inside that gap would cut the reach, and the newest
-// record isn't rules.late past the gap's end yet. That is the wait a cut
-// gets, from the other side, so nothing in such a gap is final until a
-// stamped record dated inside it has had rules.late to arrive, in
-// whichever order the two come (SM 2.1). A reach whose cut has taken
-// effect is held by nothing: a record that arrives later can't keep it.
+// record the device's own clock dated isn't rules.late past the gap's end
+// yet. That is the wait a cut gets, from the other side, so nothing in
+// such a gap is final until a stamped record dated inside it has had
+// rules.late to arrive, in whichever order the two come (SM 2.1). A reach
+// whose cut has taken effect is held by nothing: a record that arrives
+// later can't keep it.
 //
 // sample marks an os.presence, bare an os.power with no sample after it at
 // its own t, and wakes a resume or an unlock. The agent samples at every
@@ -240,11 +240,17 @@ type presence struct {
 // lapse marks such a record whose next record of the sampler's is bare
 // while its own reach hasn't ended: no sample will say what came between
 // (decision D-sampleless-power). It holds the clock until the newest record
-// the device's own clock dated (stampedRecord, the sampler's included) is
-// rules.late past the bare record, since the sample taken with it may still
-// be on its way, sealed a batch later. A bridge or log record dated ahead
-// of the device's clock doesn't end that wait. Then blind says the slots
-// from it to the bare record are unknown (SM 2.1, presence.blindAt).
+// the device's own clock dated is rules.late past the bare record, since
+// the sample taken with it may still be on its way, sealed a batch later.
+// Then blind says the slots from it to the bare record are unknown (SM
+// 2.1, presence.blindAt).
+//
+// All three waits run on the device's own clock: the newest record it
+// dated is a record the agent stamps itself or one of the sampler's
+// (stampedRecord). A bridge or log record dated ahead of that clock ends
+// none of them, so a record of the sampler's or a stamped one sealed a
+// batch later still finds the slots it decides pending, as one Step over
+// every record derives them.
 type reach struct {
 	t, cut              int64
 	ended, held         bool
@@ -253,8 +259,9 @@ type reach struct {
 }
 
 // sampledReaches returns the sampler's records in recs, which are in record
-// order, with their reaches, as of high, the newest record's t.
-func sampledReaches(r rules, recs []event.Event, high int64) []reach {
+// order, with their reaches, as of the newest record the device's own
+// clock dated (reach).
+func sampledReaches(r rules, recs []event.Event) []reach {
 	var out []reach
 	var dated int64 // the newest t the device's own clock dated
 	for _, e := range recs {
@@ -278,11 +285,11 @@ func sampledReaches(r rules, recs []event.Event, high int64) []reach {
 	}
 	for i := range out {
 		c := &out[i]
-		c.ended = c.cut <= high-r.late
+		c.ended = c.cut <= dated-r.late
 		var gap, waits bool
 		if i+1 < len(out) {
 			next := out[i+1]
-			gap = next.t-c.t > r.bucketTTL && next.t > high-r.late
+			gap = next.t-c.t > r.bucketTTL && next.t > dated-r.late
 			c.lapse = (c.sample || c.wakes && c.bare) && next.bare && !c.ended
 			waits = c.lapse && next.t > dated-r.late
 			c.blind = c.lapse && !waits
@@ -741,7 +748,6 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		}
 		s.Then = s.Present
 	}
-	p.lastIn = lastIn
 	p.classifyRuns(lastIn)
 	p.markStarts()
 	return p

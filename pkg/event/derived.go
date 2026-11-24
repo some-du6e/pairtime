@@ -399,7 +399,8 @@ type Turn struct {
 	// final message: words_final >= 100 and the time from agent.stop to
 	// the next prompt is under 0.25 * 60 * words_final / 238 seconds
 	// (SM 4.2's autopilot test). It is about reply speed, not presence;
-	// output nobody was there to see is SM 2.1's unread_prose_words.
+	// prose a reading bucket still holds, which no second has credited
+	// yet, is SM 2.1's unread_prose_words.
 	Unread bool `json:"unread"`
 }
 

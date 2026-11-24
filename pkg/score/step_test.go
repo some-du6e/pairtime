@@ -384,3 +384,76 @@ func TestStateConstructors(t *testing.T) {
 		})
 	}
 }
+
+// TestReturnFinalFromTailEnd checks that a returned run is final from the
+// end of its tail, not from its start (SM 2.1;
+// docs/errata/2026-11-20-sm-6.1-return-unread-words.md). Its reading part
+// reads what the tail's seconds left in the bucket, and a record decided
+// up to READ_HORIZON_S after a tail second can change them (DESIGN 3.7). A
+// permission requested at 110 s and answered at 128 s, inside the tail, is
+// on record at 725 s, so its windows start at 125 s and credit PA there
+// instead of draining the answer, which leaves more of it unread. Its
+// record is sealed in the batch after the Step that puts FinalBefore past
+// the run's start at 105 s, but not past its tail's end at 130 s. Steps a
+// batch at a time then give the run what one Step over every record does.
+func TestReturnFinalFromTailEnd(t *testing.T) {
+	b := newTL(false)
+	b.focus(at(0), event.AppTerminal, "p_1", "s_1")
+	b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+	b.mouse(every(at(1), at(96), 5000)...)
+	b.mouse(at(100))
+	b.prompt(at(30), event.ViaHook, "s_1", "p_1", "t_1", 30)
+	b.harness(at(102), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 160, IsFinal: true})
+	perm := b.harness(at(725), event.ViaHook, "s_1", "p_1", &event.AgentPermission{RequestedAt: at(110),
+		AnsweredAt: at(128), Decision: event.DecisionAccept, DecidedBy: event.DecidedByUser})
+	b.agentStops(at(730), "s_1", "t_1")
+	b.press(every(atMS(451_500), atMS(469_500), 1000)...)
+	b.prompt(at(470), event.ViaHook, "s_1", "p_1", "t_2", 30)
+	b.agentStops(at(520), "s_1", "t_2")
+	b.samples(at(0), at(1500))
+	recs := b.records()
+	var without []event.Event
+	for _, e := range recs {
+		if e.EventID != perm.EventID {
+			without = append(without, e)
+		}
+	}
+	// A batch a minute, but the minute from 1,020 s ends after its first
+	// sample, and the permission's record comes alone in the batch after.
+	var batches [][]event.Event
+	split := -1
+	for _, mb := range minuteBatches(without) {
+		if mb[0].T == at(1020) {
+			split = len(batches)
+			batches = append(batches, mb[:1], []event.Event{perm}, mb[1:])
+			continue
+		}
+		batches = append(batches, mb)
+	}
+	if split < 0 {
+		t.Fatal("no minute starts with a record at 1,020 s")
+	}
+	finals, outs := stepBatches(t, batches)
+	if fb := outs[split].FinalBefore; fb != at(120) {
+		t.Fatalf("FinalBefore %d s after the sample at 1,020 s, want 120 s, between the run's start and its tail's end", (fb-base)/1000)
+	}
+	one := scoreAll(t, Device{}, recs)
+	if alone := scoreAll(t, Device{}, without); len(alone.Returns) != 1 || alone.Returns[0].UnreadWords != 76 {
+		t.Fatalf("returns without the permission %+v, want one with 76 unread words, so the permission changes the run", alone.Returns)
+	}
+	if len(one.Returns) != 1 {
+		t.Fatalf("returns %+v, want one", one.Returns)
+	}
+	if r := one.Returns[0]; r.UnreadWords != 91 || r.ReadUntil != at(160) || r.CreditMS != 150_000 {
+		t.Errorf("return %+v, want 91 unread words read until 160 s and 150 s of credit", r)
+	}
+	if pa := sumIn(one, at(120), at(135))[rPA]; pa != 5 {
+		t.Errorf("%d s of PA in the tail's last slot, want 5, from 125 s on", pa)
+	}
+	var all Derived
+	all.Append(finals)
+	all.Append(outs[len(outs)-1].Pending)
+	if got, want := marshal(t, all), marshal(t, one); !bytes.Equal(got, want) {
+		t.Errorf("a Step a batch differs from one Step %s", firstDiff(got, want))
+	}
+}

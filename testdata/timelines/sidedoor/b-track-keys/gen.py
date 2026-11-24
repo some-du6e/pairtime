@@ -66,7 +66,9 @@ fx.emit(at("13:58:00"), "os.focus",
         {"app_class": "terminal", "app_hash": APP, "hosted_sessions": [S], "focus_project": P},
         source="os", via="os", sample=True)
 for t, label in zip(CALLS, LABELS):
-    fx.emit(t, "cli.track", {"text_len": len(label), "log_match": "no_reader"},
+    # low_effort is SM 2.2's go-ahead test on the label (DESIGN 5.4). The labels
+    # are requests, which fail it.
+    fx.emit(t, "cli.track", {"text_len": len(label), "low_effort": False, "log_match": "no_reader"},
             source="cli", via="track", sample=True, **TRACK)
 
 events = fx.build()

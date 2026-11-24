@@ -195,13 +195,6 @@ func newRules(t *params.Table) rules {
 		composeNeedsKeys: t.Bool(params.COMPOSE_NEEDS_KEYS),
 	}
 	r.unitsPerS = r.readWPM * r.diffLPM
-	// The code half of E-return-lookahead, which lets its code land before
-	// its text: main's SM 2.1 still bounds the return rule by READ_HORIZON_S
-	// after the run's end, and DESIGN 3.7 and D1 don't yet say that every
-	// rule decides a second from what is on record within READ_HORIZON_S of
-	// it.
-	// TODO(P10): P10 lands that SM 2.1, DESIGN 3.7 and D1 text, and these
-	// comments then cite SM.
 	r.reach = r.readHorizon
 	r.settle = r.pendingWindow
 	r.late = r.settle - r.reach

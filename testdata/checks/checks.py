@@ -91,7 +91,7 @@ LOCAL = {
     "agent.tool": ("cmd_hash",),
     "shell.command": ("cmd_hash",),
     "os.focus": ("app_hash",),
-    "cli.track": ("label",),
+    "cli.track": ("label", "error_sig"),
     "agent.stop": ("pending_crons",),
 }
 

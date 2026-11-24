@@ -1668,12 +1668,12 @@ func TestRelayedRanking(t *testing.T) {
 
 // TestLiveUnknownCodes checks SM 5.2's codes for an uncredited second of a
 // live slot whose presence is unknown, as on a server with no desktop:
-// X.bucket_cap first (TestRelayedReading), then X.agent_only while a turn a
-// person started runs, a relayed one included, or a no_input one, then
-// X.automated while an automated turn runs, then X.no_anchor, with the
-// turns of every project counting, since such a slot has no project of its
-// own. Records a log reader wrote alone, as lookback's are, keep X.absent
-// until WP-SC7.
+// X.bucket_cap first (TestRelayedReading), then a sampled slot's turn step,
+// X.agent_only while a turn a person started runs, a relayed one included,
+// else X.automated while an automated one runs, else X.no_input while a
+// no_input one runs, then X.no_anchor, with the turns of every project
+// counting, since such a slot has no project of its own. Records a log
+// reader wrote alone, as lookback's are, keep X.absent until WP-SC7.
 func TestLiveUnknownCodes(t *testing.T) {
 	headlessAt := func(b *tl, sess, proj, turn string, from, to int64) {
 		b.prompt(at(from), event.ViaHook, sess, proj, turn, 30)
@@ -1691,10 +1691,27 @@ func TestLiveUnknownCodes(t *testing.T) {
 				stops(b, at(120), "s_1", "p_1", "t_1")
 			},
 			[]secondsWant{{75, 120, map[event.Reason]int64{xAgent: 45}}}},
-		{"while a no_input turn runs, X.agent_only too, where a sampled slot would say X.no_input",
+		{"while only a no_input turn runs, X.no_input, as in a sampled slot",
 			func(b *tl) {
 				b.start(at(0), "s_3", "p_3", event.EntrypointCLI, event.ParentTerminalApp, true)
 				headlessAt(b, "s_3", "p_3", "t_1", 60, 120)
+			},
+			[]secondsWant{{75, 120, map[event.Reason]int64{event.ReasonNoInput: 45}}}},
+		{"an automated turn running beside a no_input one gives X.automated",
+			func(b *tl) {
+				appServer(b)
+				headlessAt(b, "s_1", "p_1", "t_1", 60, 120)
+				b.start(at(0), "s_3", "p_3", event.EntrypointCLI, event.ParentTerminalApp, true)
+				headlessAt(b, "s_3", "p_3", "t_3", 60, 120)
+			},
+			[]secondsWant{{75, 120, map[event.Reason]int64{xAuto: 45}}}},
+		{"a person's turn running beside a no_input one gives X.agent_only",
+			func(b *tl) {
+				appServer(b)
+				relayedMsg(b, 60, "s_1", "p_1", "r_1", "t_1", 90)
+				stops(b, at(120), "s_1", "p_1", "t_1")
+				b.start(at(0), "s_3", "p_3", event.EntrypointCLI, event.ParentTerminalApp, true)
+				headlessAt(b, "s_3", "p_3", "t_3", 60, 120)
 			},
 			[]secondsWant{{75, 120, map[event.Reason]int64{xAgent: 45}}}},
 		{"while only an automated turn runs, X.automated",

@@ -232,8 +232,8 @@ type Loop struct {
 	// writeDayFile writes a day's rollup, store.WriteDay but in tests.
 	writeDayFile func(dir string, d store.Day) error
 	// scoreStep is score.Step but in tests, which hold FinalBefore at a
-	// slot nothing decides for longer than the few minutes #312's order of
-	// records can.
+	// slot nothing decides, as no order of records does since pkg/score's
+	// gap hold runs on the device's own clock.
 	scoreStep func(score.State, []event.Event) (score.State, score.Output)
 
 	mu      sync.Mutex
@@ -463,10 +463,11 @@ func (l *Loop) open() error {
 	c.Device = chain.DeviceID
 	if c.Batch > 0 && c.Carry.V < carryVersion {
 		// A place an older agent saved: its carry lacks Stamped and
-		// RestartAt, or Lock, so they are folded again from the ledger's
-		// records before the window. FinalBefore and the window stay where
-		// they are, so no final minute is scored again.
-		l.log.Info("the scorer's place in state.json is an older agent's, so it reads the ledger again for the stamped record, the restart and the lock its carry lacks", "batch", c.Batch)
+		// RestartAt, Lock, or its sessions' question state, so they are
+		// folded again from the ledger's records before the window.
+		// FinalBefore and the window stay where they are, so no final
+		// minute is scored again.
+		l.log.Info("the scorer's place in state.json is an older agent's, so it reads the ledger again for the stamped record, the restart, the lock and the questions its carry lacks", "batch", c.Batch)
 		rebuilt, err := l.rebuildCarry(c)
 		if err != nil {
 			return fmt.Errorf("rebuilding the scorer's carry from the ledger: %w", err)
@@ -550,9 +551,19 @@ func (l *Loop) open() error {
 // only with both there, so it can miss the restart that drops the rebuilt
 // Lock. Each takes the later of the saved and the folded value, so a saved
 // one never moves back, as when a batch before the place doesn't read.
+//
+// Each session the carry keeps gets its question state too, which an agent
+// before E-prompt-class-asked (V 2 or older) didn't keep, folded by seq
+// from the session's records before the window (sessionCarry.question)
+// and kept for the session's prompts and queued messages in the window and
+// the prompt the carry holds, as the window keeps it (window.keepAsks).
 func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	out := c.Carry
 	out.Lock = nil
+	for _, s := range out.Sessions {
+		s.Asks, s.FirstNative = nil, nil
+	}
+	readers := make(map[string][]uint64)
 	var stamped int64
 	var marks []mark
 	var f follower
@@ -565,11 +576,22 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 		}
 		for _, rec := range b.Records {
 			ev, ok, err := eventOf(rec, c.Device)
-			if err != nil || !ok || ev.T >= c.From {
+			if err != nil || !ok {
+				continue
+			}
+			if ev.T >= c.From {
+				// A prompt or queued message of the window, whose class reads
+				// the asks (readsAsks).
+				if out.Sessions[ev.SessionKey] != nil && readsAsks(&ev) {
+					readers[ev.SessionKey] = append(readers[ev.SessionKey], ev.Seq)
+				}
 				continue
 			}
 			if p, ok := ev.Data.(*event.OSPower); ok && locks(p) {
 				out.Lock = latest(out.Lock, ev)
+			}
+			if sc := out.Sessions[ev.SessionKey]; sc != nil {
+				sc.question(ev)
 			}
 			s, st := sampler(&ev), stamps(&ev)
 			if st {
@@ -587,6 +609,9 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	})
 	if err != nil && !errors.Is(err, errEnough) {
 		return carry{}, err
+	}
+	for k, s := range out.Sessions {
+		s.keepAsks(readers[k])
 	}
 	out.Stamped = max(c.Carry.Stamped, stamped)
 	out.RestartAt = max(c.Carry.RestartAt, restartAt(marks, l.opts.Params.Int(params.BUCKET_TTL_S)*1000))

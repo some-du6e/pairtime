@@ -49,6 +49,23 @@ func TestEventOf(t *testing.T) {
 		}
 		return rec
 	}
+	// track is a track call of label, recorded as the writer records it,
+	// with the error_sig it derives from the label.
+	track := func(t *testing.T, label string) pkgledger.Record {
+		t.Helper()
+		ev := fixturePrompt(t, 7)
+		ev.Source, ev.Via = event.SourceCLI, event.ViaTrack
+		p := &event.CLITrack{Label: label, TextLen: len([]rune(label)), LogMatch: event.LogNoReader}
+		if es, ok := k.Features().ErrorSig(label); ok {
+			p.ErrorSig = es.String()
+		}
+		ev.Data = p
+		rec, err := pkgledger.EventRecord(k, ev, pkgledger.Content{Text: []byte(label), Class: features.ErrorPaste})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rec
+	}
 	tests := []struct {
 		name    string
 		rec     func(t *testing.T) pkgledger.Record
@@ -73,6 +90,27 @@ func TestEventOf(t *testing.T) {
 			isEvent: true,
 			check: func(t *testing.T, ev event.Event) {
 				if got := ev.Data.(*event.PromptSubmit).ErrorSig; got != "" {
+					t.Errorf("error_sig %q, want none", got)
+				}
+			},
+		},
+		{
+			name:    "a track call's error signature comes back from the keyed value in the body's f",
+			rec:     func(t *testing.T) pkgledger.Record { return track(t, "TypeError: x is undefined") },
+			isEvent: true,
+			check: func(t *testing.T, ev event.Event) {
+				want, _ := k.Features().ErrorSig("TypeError: x is undefined")
+				if got := ev.Data.(*event.CLITrack).ErrorSig; got != want.String() {
+					t.Errorf("error_sig %q, want %q", got, want.String())
+				}
+			},
+		},
+		{
+			name:    "a track label with no error line has no error_sig",
+			rec:     func(t *testing.T) pkgledger.Record { return track(t, "add tests for the parser please") },
+			isEvent: true,
+			check: func(t *testing.T, ev event.Event) {
+				if got := ev.Data.(*event.CLITrack).ErrorSig; got != "" {
 					t.Errorf("error_sig %q, want none", got)
 				}
 			},
@@ -167,7 +205,7 @@ func TestCarry(t *testing.T) {
 			},
 		},
 		{
-			name: "a session keeps its start, last prompt, last output and last stop",
+			name: "a session keeps its start, last prompt, last output and last stop, and the output its last prompt read",
 			fold: []event.Event{
 				ev(100, 1, "s_1", &event.SessionStart{}),
 				ev(200, 2, "s_1", &event.PromptSubmit{}),
@@ -181,8 +219,29 @@ func TestCarry(t *testing.T) {
 				if s == nil || s.Start.T != 100 || s.Prompt.T != 400 || s.Output.T != 600 || s.Stop.T != 500 || s.Last != 600 {
 					t.Errorf("session carry %+v", s)
 				}
-				if got := len(c.records(nil, 0, testGaps, 0, 0)); got != 4 {
-					t.Errorf("the carry gives %d records, want 4", got)
+				if got := len(c.records(nil, 0, testGaps, 0, 0)); got != 5 {
+					t.Errorf("the carry gives %d records, want 5", got)
+				}
+			},
+		},
+		{
+			name: "of a session's outputs and stops the carry keeps the last ones and the last before the prompt it carries, and no others: no other carried record reads them",
+			fold: []event.Event{
+				ev(100, 1, "s_1", &event.SessionStart{}),
+				ev(200, 2, "s_1", &event.AgentOutput{}),
+				ev(300, 3, "s_1", &event.AgentOutput{}),
+				ev(400, 4, "s_1", &event.PromptSubmit{}),
+				ev(500, 5, "s_1", &event.AgentOutput{}),
+				ev(600, 6, "s_1", &event.AgentStop{}),
+				ev(700, 7, "s_1", &event.AgentOutput{}),
+			},
+			check: func(t *testing.T, c carry) {
+				var seqs []uint64
+				for _, e := range c.Sessions["s_1"].Asks {
+					seqs = append(seqs, e.Seq)
+				}
+				if want := []uint64{3, 6, 7}; !slices.Equal(seqs, want) {
+					t.Errorf("the carry keeps the outputs and stops numbered %v, want %v", seqs, want)
 				}
 			},
 		},
@@ -251,6 +310,9 @@ func TestCarry(t *testing.T) {
 				c.fold(e, testGaps, testGaps.native)
 			}
 			c.prune(tt.from)
+			for _, s := range c.Sessions {
+				s.keepAsks(nil) // as a window with no record of the session does
+			}
 			tt.check(t, c)
 		})
 	}

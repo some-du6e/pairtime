@@ -342,8 +342,8 @@ func TestCredit(t *testing.T) {
 			name:  "SM 2.1: a returned run credits the unread prose left in the bucket as READ~r and the prompt's think lead as P~r, and the rest is X.absent",
 			build: func(b *tl) { *b = *silence(event.AppTerminal, 451, typedPrompt(451)) },
 			want: []secondsWant{
-				{105, 450, map[event.Reason]int64{rREAD: 25, rREAD + event.ReturnedSuffix: 26, rP + event.ReturnedSuffix: 120,
-					xAbsent: 174}},
+				{105, 450, map[event.Reason]int64{rREAD: 25, rREAD + event.ReturnedSuffix: 25, rP + event.ReturnedSuffix: 120,
+					xAbsent: 175}},
 			},
 		},
 		{
@@ -426,6 +426,24 @@ func TestCredit(t *testing.T) {
 				b.samples(at(0), at(300))
 			},
 			want: []secondsWant{{90, 285, map[event.Reason]int64{xAgent: 195}}},
+		},
+		{
+			name: "SM 5.2: while an automated turn and a no-input turn of the project both run, the seconds nothing credits are X.automated",
+			build: func(b *tl) {
+				b.focus(at(0), event.AppTerminal, "p_1", "s_1", "s_2")
+				b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+				b.start(at(0), "s_2", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+				// No input in the KEYS_PRE_S before s_1's prompt at 60 s, so
+				// it is no_input (SM 2.2 rule 8).
+				b.mouse(every(at(1), at(44), 5000)...)
+				b.mouse(every(at(61), at(296), 5000)...)
+				b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+				scheduled(b.prompt(at(61), event.ViaHook, "s_2", "p_1", "t_2", 30))
+				b.agentStops(at(290), "s_1", "t_1")
+				b.agentStops(at(290), "s_2", "t_2")
+				b.samples(at(0), at(300))
+			},
+			want: []secondsWant{{75, 285, map[event.Reason]int64{xAuto: 210}}},
 		},
 		{
 			name: "E-6.6-codes: an automated turn in a slot whose terminal hosts no harness for most of it is X.ambiguous",

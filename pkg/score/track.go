@@ -65,21 +65,16 @@ func trackCmp(a, b TrackCall) int {
 // the session is dated at most TRACK_DEDUPE_S after the call, so no later
 // record changes what the call did. TRACK_LOG_MATCH_S keeps its job in
 // DESIGN 5.2, where a log record takes over from a side-door prompt
-// (docs/errata/2026-11-19-track-match-windows.md, decided 2026-11-20 as
-// E-track-windows).
-//
-// This is the code half of E-track-windows, which lets its scorer edits land
-// before its text: main's DESIGN 5.4 still flags a call with no prompt
-// within TRACK_LOG_MATCH_S and sets no date bound on seeing a session.
-// TODO(P10): P10 lands DESIGN 5.4's text, and this comment then cites it.
+// (DESIGN 5.4; docs/errata/2026-11-19-track-match-windows.md, decided
+// 2026-11-20 as E-track-windows).
 //
 // From any other session the call is the fallback anchor, opened only
 // when the gate's four conditions hold. It is classed like a prompt from
-// its length, but not its text, which is local (DESIGN 5.4 says "text
-// length and content"), and has no origin: the four conditions take the
-// place of SM 2.2's origin rules, which are for prompt.submit. Its typing
-// part needs key presses, and it is level C with via_track, or A with key
-// presses in the host window in the KEYS_PRE_S before it.
+// what the writer derived from its label (DESIGN 5.4), and has no origin:
+// the four conditions take the place of SM 2.2's origin rules, which are
+// for prompt.submit. Its typing part needs key presses, and it is level C
+// with via_track, or A with key presses in the host window in the
+// KEYS_PRE_S before it.
 func (d *deriver) trackCalls() {
 	lastAnchor := map[string]int64{}
 	for i, e := range d.recs {
@@ -125,7 +120,7 @@ func (d *deriver) trackGate(i int, e event.Event, p *event.CLITrack, s *session,
 		return TrackRejected, failed
 	}
 	typed := count(p.TextLen)
-	class := trackClass(p, d.r.substantive)
+	class := trackClass(p, d.r.substantive, d.r.errorPasteMax)
 	think, typing := d.leadParts(class, e.Via, typed)
 	project := e.ProjectKey
 	if project == "" {

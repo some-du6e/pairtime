@@ -183,7 +183,8 @@ func checkMinutes(t *testing.T, f *timelines.Fixture, d Derived) {
 }
 
 // totals are a fixture window's sums over every slot in it, with and
-// without a bucket.
+// without a bucket. agentOnly is SM 5.3's agent_only_s, the seconds some
+// turn ran and nothing was credited, counted once across projects.
 type totals struct {
 	credited, ai, agentRunning, agentOnly float64
 	byReason, uncredited                  map[event.Reason]float64
@@ -228,13 +229,39 @@ func totalsOf(d Derived, from, to int64) totals {
 			tot.uncredited[r] += float64(n)
 		}
 		tot.agentRunning += float64(c.AgentS)
+		tot.agentOnly += float64(c.agentUncredited)
 		for p, n := range c.AgentOnly {
-			tot.agentOnly += float64(n)
 			tot.agentOnlyBy[p] += float64(n)
 			tot.agentBy[p] += float64(n)
 		}
 	}
 	return tot
+}
+
+// TestAgentOnlyAcrossProjects checks the two agent-only counts the
+// fixture harness reads: SM 5.3's agent_only_s counts a second once when
+// some turn ran in it and nothing was credited, and agent_only_s.<p>,
+// D-bucket-agent-only's per-project agent_only, counts it for each
+// project whose turn ran in it. Two projects' turns run together for four
+// minutes with nothing credited, so the first is 240 s and each project's
+// 240 s (#323).
+func TestAgentOnlyAcrossProjects(t *testing.T) {
+	b := newTL(false)
+	b.focus(at(0), event.AppBrowser, "")
+	b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+	b.start(at(0), "s_2", "p_2", event.EntrypointCLI, event.ParentTerminalApp, true)
+	b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+	b.prompt(at(60), event.ViaHook, "s_2", "p_2", "t_2", 30)
+	stops(b, at(300), "s_1", "p_1", "t_1")
+	stops(b, at(300), "s_2", "p_2", "t_2")
+	b.samples(at(0), at(360))
+	tot := totalsOf(b.run(t, Device{}), at(0), at(360))
+	if tot.credited != 0 {
+		t.Fatalf("%v s credited, want none, so every second the turns run is agent-only", tot.credited)
+	}
+	if tot.agentOnly != 240 || tot.agentOnlyBy["p_1"] != 240 || tot.agentOnlyBy["p_2"] != 240 {
+		t.Errorf("agent_only_s %v, by project %v; want 240 s once, and 240 s for each project", tot.agentOnly, tot.agentOnlyBy)
+	}
 }
 
 func TestFixtureTotals(t *testing.T) {

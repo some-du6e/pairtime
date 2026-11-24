@@ -3,6 +3,7 @@
 package score
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"testing"
@@ -33,6 +34,9 @@ type tl struct {
 	keyCounter bool
 	// locked is set between a lock and an unlock, so samples say so.
 	locked bool
+	// written holds, by event id, when the agent wrote a record numbered
+	// after records dated later than it (writtenAt).
+	written map[string]int64
 }
 
 func newTL(keyCounter bool) *tl { return &tl{keyCounter: keyCounter} }
@@ -60,7 +64,8 @@ func every(from, to, step int64) []int64 {
 }
 
 // emit adds an event. Records gets them in time order, keeping the order
-// they were emitted in within a millisecond, and numbers them.
+// they were emitted in within a millisecond, and numbers them in the order
+// the agent wrote them: by their time, unless writtenAt says otherwise.
 func (b *tl) emit(t int64, env event.Envelope, p event.Payload) event.Event {
 	b.n++
 	env.EventID = fmt.Sprintf("019a0000-0000-7000-8000-%012x", b.n)
@@ -72,19 +77,28 @@ func (b *tl) emit(t int64, env event.Envelope, p event.Payload) event.Event {
 
 func (b *tl) records() []event.Event {
 	out := slices.Clone(b.evs)
-	slices.SortStableFunc(out, func(x, y event.Event) int {
-		switch {
-		case x.T < y.T:
-			return -1
-		case x.T > y.T:
-			return 1
+	wrote := func(e event.Event) int64 {
+		if w, ok := b.written[e.EventID]; ok {
+			return w
 		}
-		return 0
-	})
+		return e.T
+	}
+	slices.SortStableFunc(out, func(x, y event.Event) int { return cmp.Compare(wrote(x), wrote(y)) })
 	for i := range out {
 		out[i].Seq = uint64(i + 1)
 	}
+	slices.SortStableFunc(out, func(x, y event.Event) int { return cmp.Compare(x.T, y.T) })
 	return out
+}
+
+// writtenAt has the agent write e at w, after every record dated before w,
+// so records numbers it after records dated later than it, as a log
+// reader numbers a transcript line it reads late.
+func (b *tl) writtenAt(e event.Event, w int64) {
+	if b.written == nil {
+		b.written = map[string]int64{}
+	}
+	b.written[e.EventID] = w
 }
 
 func (b *tl) os(t int64, p event.Payload) event.Event {
@@ -214,6 +228,17 @@ func (b *tl) git(t int64, project string, actor event.Actor) event.Event {
 
 // track adds a `pairtime track` call from session sess, or from no session
 // if sess is "none".
+// trackAs is track with the low_effort and error_sig the ledger writer
+// derives from the label, which the case gives: the builder never derives
+// them itself.
+func (b *tl) trackAs(t int64, sess string, textLen int, match event.LogMatch, label string, lowEffort bool,
+	errorSig string) event.Event {
+	e := b.track(t, sess, textLen, match, label)
+	p := e.Data.(*event.CLITrack)
+	p.LowEffort, p.ErrorSig = lowEffort, errorSig
+	return e
+}
+
 func (b *tl) track(t int64, sess string, textLen int, match event.LogMatch, label string) event.Event {
 	h := event.HarnessOther
 	if sess == event.NoSession {

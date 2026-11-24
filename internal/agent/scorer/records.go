@@ -47,11 +47,12 @@ func checkBatch(b ledger.Batch, lastB, lastS uint64) error {
 // chain's device id, which every event's device_id must be.
 //
 // The body holds the event's shareable fields only (ledger-v1 4.5), and
-// pkg/score reads one local field, a prompt's error_sig, through its
-// prompt class. The writer set it to the keyed signature of the prompt's
-// text, which the body's f keeps as es (ledger-v1 10.6, 10.7), so eventOf
-// puts it back from there. Scored from the ledger, a prompt then gets the
-// class it had when it was recorded.
+// pkg/score reads one local field, the error_sig of a prompt and of a
+// track call, through their class. The writer set it to the keyed
+// signature of the prompt's text or the call's label, which the body's f
+// keeps as es (ledger-v1 10.6, 10.7), so eventOf puts it back from there.
+// Scored from the ledger, a prompt or a track call then gets the class it
+// had when it was recorded, the one its f.pc holds.
 //
 // The errors name the record and never quote its content.
 func eventOf(rec pkgledger.Record, device string) (event.Event, bool, error) {
@@ -77,19 +78,30 @@ func eventOf(rec pkgledger.Record, device string) (event.Event, bool, error) {
 	case ev.DeviceID != device:
 		return event.Event{}, false, fmt.Errorf("record %d holds an event of another device", s)
 	}
-	if p, ok := ev.Data.(*event.PromptSubmit); ok && p != nil {
+	var sig *string // the copied event's error_sig, for the kinds that have one
+	switch p := ev.Data.(type) {
+	case *event.PromptSubmit:
+		if p != nil {
+			cp := *p
+			ev.Data, sig = &cp, &cp.ErrorSig
+		}
+	case *event.CLITrack:
+		if p != nil {
+			cp := *p
+			ev.Data, sig = &cp, &cp.ErrorSig
+		}
+	}
+	if sig != nil {
 		f, present, err := body.Features(rtype)
 		if err != nil {
 			// A feature map from a newer release: its error signature is
 			// unknown, and the scorer mustn't guess it.
 			return event.Event{}, false, fmt.Errorf("record %d's features don't read: %w", s, err)
 		}
-		cp := *p
-		cp.ErrorSig = ""
+		*sig = ""
 		if present && f.ES != nil {
-			cp.ErrorSig = f.ES.String()
+			*sig = f.ES.String()
 		}
-		ev.Data = &cp
 	}
 	if ev.Validate() != nil {
 		// Validate's errors can quote a value, which may be content.

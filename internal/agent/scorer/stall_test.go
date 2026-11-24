@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/pkg/event"
 	"github.com/some-du6e/pairtime/pkg/params"
 	"github.com/some-du6e/pairtime/pkg/score"
@@ -29,6 +30,10 @@ func TestStallNote(t *testing.T) {
 		// undecided is the slot pkg/score holds FinalBefore at because
 		// nothing decides its presence yet, 0 for none.
 		undecided int64
+		// dated is the newest record the computer's own clock dated, at
+		// for 0: below at when the newest record is a bridge or log
+		// record dated ahead of that clock.
+		dated int64
 		// want are the parts the note must hold, none for no note; bare says
 		// the note names no cause.
 		want []string
@@ -43,7 +48,7 @@ func TestStallNote(t *testing.T) {
 		{name: "with samples that stopped while records came, the note says how long none has come",
 			fb: at - 90*minute, sampled: at - 90*minute,
 			want: []string{"ends 1 h 30 min before", "no presence sample has come for 1 h 30 min",
-				"or for a record the agent stamps itself (a hook's, one of its own watchers', an agent app reader's) dated more than 2 h after the last one, and then any record 5 min after that"}},
+				"or for a record the agent stamps itself (a hook's, one of its own watchers', an agent app reader's) dated more than 2 h after the last one, and then a record this computer's own clock dated (a sample, an os.power or a record the agent stamps itself) 5 min after that"}},
 		{name: "with samples coming and a browser in front for two hours, a lookup's hold under SM 2.5, there is no note",
 			fb: at - 2*60*minute, sampled: at - minute, focus: event.AppBrowser},
 		{name: "with samples coming and a chat app in front, a lookup's hold under SM 2.5, there is no note",
@@ -57,6 +62,10 @@ func TestStallNote(t *testing.T) {
 		{name: "with that gap ended more than 5 min before the newest record, the note doesn't name it",
 			fb: at - 2*60*minute, sampled: at, gapEnd: at - 6*minute, gap: 13 * 60 * minute, focus: event.AppTerminal,
 			want: []string{"ends 2 h before"}, bare: true},
+		{name: "with the newest record a bridge prompt dated 6 min past the gap's end but the newest one the computer dated only 4 min past it, the note still says the minutes wait for a record dated in that gap",
+			fb: at - 14*60*minute, sampled: at - 2*minute, gapEnd: at - 6*minute, gap: 13*60*minute + 50*minute,
+			dated: at - 2*minute, focus: event.AppTerminal,
+			want: []string{"a presence sample came after 13 h 50 min without one", "wait 5 min for a record dated in that gap"}},
 		{name: "with samples coming and a terminal in front, the note names no cause",
 			fb: at - 2*60*minute, sampled: at - minute, focus: event.AppTerminal,
 			want: []string{"ends 2 h before"}, bare: true},
@@ -67,12 +76,17 @@ func TestStallNote(t *testing.T) {
 		{name: "with FinalBefore held at a slot nothing decides and a browser in front, the note still names that slot",
 			fb: at - 3*60*minute, sampled: at - 57*minute, undecided: at - 3*60*minute, focus: event.AppBrowser,
 			want: []string{"no presence sample came within 2 h after the first of those minutes"}},
-		{name: "with a slot nothing decides after FinalBefore, which the clock passed while a bridge record dated ahead released the gap hold, and a lookup holding FinalBefore at a browser run's start before it, the note doesn't name that slot",
+		{name: "with a slot nothing decides after FinalBefore and a lookup holding FinalBefore at a browser run's start before it, the note doesn't name that slot",
 			fb: at - 3*60*minute - 13*minute, sampled: at - minute, undecided: at - 2*60*minute - 6*minute, focus: event.AppBrowser},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := stallNote(at, c.fb, pending, 2*60*minute, 5*minute, sampling{newest: c.sampled, gapEnd: c.gapEnd, gap: c.gap}, c.focus, c.undecided)
+			dated := c.dated
+			if dated == 0 {
+				dated = at
+			}
+			got := stallNote(at, c.fb, pending, 2*60*minute, 5*minute,
+				sampling{newest: c.sampled, gapEnd: c.gapEnd, gap: c.gap, dated: dated}, c.focus, c.undecided)
 			if len(c.want) == 0 {
 				if got != "" {
 					t.Errorf("note %q, want none", got)
@@ -94,7 +108,8 @@ func TestStallNote(t *testing.T) {
 // TestHeldGap checks which gap between the sampler's records watch names as
 // pkg/score's hold (reach.held): the latest longer than BUCKET_TTL_S, unless
 // a record the agent stamps itself, dated more than BUCKET_TTL_S into it,
-// ended the reach before it and has taken effect.
+// ended the reach before it and has taken effect, once the newest record
+// the computer's own clock dated is rules.late past it.
 func TestHeldGap(t *testing.T) {
 	const minute, hour = int64(60_000), int64(3600_000)
 	const ttl, late = 2 * hour, 5 * minute
@@ -102,14 +117,14 @@ func TestHeldGap(t *testing.T) {
 	cases := []struct {
 		name           string
 		times, stamped []int64
-		high           int64
+		dated          int64
 		end, length    int64
 	}{
 		{"a gap longer than BUCKET_TTL_S with nothing stamped in it is held",
 			night, nil, 14*hour + 15_000, 14 * hour, 14*hour - 30_000},
 		{"a record stamped more than BUCKET_TTL_S into the gap, whose cut has taken effect, leaves nothing held",
 			night, []int64{3 * hour}, 14*hour + 15_000, 0, 0},
-		{"a record stamped in the gap whose cut still waits, under 5 min before the newest record, keeps the gap held",
+		{"a record stamped in the gap whose cut still waits, under 5 min before the newest record the computer dated, keeps the gap held",
 			night, []int64{14*hour - minute}, 14*hour + 15_000, 14 * hour, 14*hour - 30_000},
 		{"a record stamped within BUCKET_TTL_S of the gap's start ends no reach",
 			night, []int64{hour}, 14*hour + 15_000, 14 * hour, 14*hour - 30_000},
@@ -122,7 +137,7 @@ func TestHeldGap(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			end, length := heldGap(c.times, c.stamped, ttl, late, c.high)
+			end, length := heldGap(c.times, c.stamped, ttl, late, c.dated)
 			if end != c.end || length != c.length {
 				t.Errorf("gap ending at %d ms, %d ms long; want %d ms, %d ms", end, length, c.end, c.length)
 			}
@@ -136,7 +151,9 @@ func TestHeldGap(t *testing.T) {
 // out; over SM 6.1's morning up to its first browser run, a lookup, with
 // the browser then left in front for 40 minutes while samples come; and
 // over a night's suspend, after which pkg/score holds the minutes for
-// PENDING_WINDOW_S - READ_HORIZON_S past the morning's resume.
+// PENDING_WINDOW_S - READ_HORIZON_S past the morning's resume by the
+// computer's own clock, even when a bridge prompt dated ahead of that
+// clock comes.
 func TestStallWarning(t *testing.T) {
 	const minute = int64(60_000)
 	var tools []int64
@@ -218,6 +235,38 @@ func TestStallWarning(t *testing.T) {
 		}
 		return evs
 	}
+	// bridged is overnight with the sampler quiet for 20 minutes after the
+	// morning's first two samples, and a bridge prompt then, whose t comes
+	// from a transcript. Its batch is sealed at its t, but the newest record
+	// the computer's own clock dated is still the sample 15 s after the
+	// resume, so pkg/score still holds the night's minutes (#312), and the
+	// note must still say why.
+	bridged := func(t *testing.T) []event.Event {
+		evs := overnight(t)
+		i := slices.IndexFunc(evs, func(e event.Event) bool {
+			d, ok := e.Data.(*event.OSPower)
+			return ok && d.Op == event.PowerResume
+		})
+		k := slices.IndexFunc(evs, func(e event.Event) bool {
+			_, ok := e.Data.(*event.PromptSubmit)
+			return ok
+		})
+		ts := int64(0)
+		if i >= 0 {
+			ts = evs[i].T + 20*minute
+		}
+		j := slices.IndexFunc(evs, func(e event.Event) bool { return e.T > ts })
+		if i < 0 || k < 0 || j < 0 {
+			t.Fatal("the night has no resume, no prompt before it or no sample 20 min after it")
+		}
+		b := evs[k]
+		d := *b.Data.(*event.PromptSubmit)
+		d.TurnKey = "t_bridge"
+		b.EventID = "01a1fb1e-5318-78a1-a7f6-000000000001"
+		b.Mono += ts - b.T
+		b.T, b.Source, b.Via, b.Data = ts, event.SourceLog, event.ViaBridge, &d
+		return slices.Concat(evs[:i+3], []event.Event{b}, evs[j:])
+	}
 	cases := []struct {
 		name  string
 		build func(t *testing.T) []event.Event
@@ -230,8 +279,8 @@ func TestStallWarning(t *testing.T) {
 		each string
 		// hold, when set, gives the time pkg/score holds FinalBefore at
 		// once it would pass it, as a slot nothing decides does
-		// (score.Output.Undecided), which only #312's order of records
-		// reaches, for a few minutes.
+		// (score.Output.Undecided), which no order of records reaches since
+		// pkg/score's gap hold runs on the device's own clock.
 		hold func(evs []event.Event) int64
 		// held says the newest final minute ends up more than the
 		// warning's lag behind the newest record, so a case's silence
@@ -247,6 +296,8 @@ func TestStallWarning(t *testing.T) {
 			build: browser, held: true},
 		{name: "a night's suspend, which holds the minutes for 5 min after the morning's resume, tells doctor why while it holds, and nothing once they catch up",
 			build: overnight, warned: true, each: "a presence sample came after 14 h without one"},
+		{name: "a bridge prompt dated 20 min after the morning's resume, its batch sealed then, leaves doctor hearing why the night's minutes wait while the newest record the computer's own clock dated is under 5 min past the resume",
+			build: bridged, warned: true, each: "a presence sample came after 14 h without one"},
 		{name: "a FinalBefore pkg/score holds at a slot nothing decides tells doctor that no sample came within BUCKET_TTL_S after the first of those minutes, and when the ones it left undecided count as unknown",
 			build: turn(func(int64) bool { return true }), warned: true, held: true,
 			last: "no presence sample came within 2 h after the first of those minutes, so they wait",
@@ -257,6 +308,14 @@ func TestStallWarning(t *testing.T) {
 			t.Parallel()
 			evs := c.build(t)
 			r := newRig(t, score.Device{})
+			// A prompt seals at once, without waiting for the seal to finish,
+			// so the rig settles after a bridge prompt: its batch is then
+			// sealed alone, at its own t.
+			r.each = func(i int, l *Loop, w *ledger.Writer) {
+				if evs[i].Via == event.ViaBridge {
+					r.settle(l, w)
+				}
+			}
 			if c.hold != nil {
 				at := c.hold(evs)
 				r.setup = func(l *Loop) {

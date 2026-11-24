@@ -22,11 +22,16 @@
 //     rebuilt from idle samples, SM 2.1's present values and its hard
 //     breaks (lock, suspend, a gap between samples over SLEEP_GAP_S);
 //   - turns, with SM 2.2's origin rules 1 to 8, rules 1 to 3 read from
-//     every hook and log copy of a prompt, and prompt classes;
+//     every hook and log copy of a prompt, and prompt classes, whose
+//     answer reads the session's records before the prompt in seq
+//     order, with ledger-v1 10.7's side-door test, so a record written
+//     later never changes one;
 //   - anchors, SM 2.3's human acts with their think and typing parts,
 //     trails, evidence levels and labels (DESIGN 6.4), including the side
 //     doors of DESIGN 5.2 and 6.2 D2;
-//   - the silent runs SM 2.1's return rule credits, with RETURN_CREDIT;
+//   - the silent runs SM 2.1's return rule credits, whose RETURN_CREDIT
+//     the credit pass fills in from the reading buckets at each tail's
+//     end;
 //   - what became of each `pairtime track` call (DESIGN 5.4, 6.2 D3);
 //   - review flags.
 //
@@ -224,9 +229,10 @@
 //     open one. An uncredited second there takes SM 5.2's codes for a live
 //     slot whose presence is unknown: X.bucket_cap where only the 120 s cap
 //     kept a session from reading, else X.agent_only while a turn a person
-//     started runs, a relayed one included, or a no_input one, else
-//     X.automated while an automated turn runs, else X.no_anchor, turns of
-//     every project counting.
+//     started runs, a relayed one included, else X.automated while an
+//     automated one runs, else X.no_input while a no_input one runs, else
+//     X.no_anchor, turns of every project counting, the turn step a sampled
+//     slot takes (turnCode).
 //
 // Readings of D-relayed:
 //
@@ -241,25 +247,33 @@
 //     stamp and at most 2 s before it, as SM 2.2 states it.
 //   - Rule 6's focus test at the stamp takes the os.focus record at or
 //     before it, since the stamp has no record position.
+//   - A pairtime track call is classed like a prompt from what the ledger
+//     writer derived from its label after pkg/redact, low_effort and error_sig,
+//     with text_len as the typed length, and never as an answer (DESIGN 5.4;
+//     E-track-label-class).
 //   - A relayed prompt's class is SM 2.2's, over the app's text: answer
-//     when the prompt answers a question or the session's last output asked
-//     one, low_effort by the record's go-ahead test or under
-//     SUBSTANTIVE_CHARS typed characters, else substantive. The record
-//     carries no error signature, so it is never error_paste.
+//     when the prompt answers a question or the session's last output or
+//     stop before the prompt, in seq order, asked one, low_effort by the
+//     record's go-ahead test or under SUBSTANTIVE_CHARS typed characters,
+//     else substantive. The record carries no error signature, so it is
+//     never error_paste.
 //   - A slot is a never-sampling device's when some record came by a path
 //     other than a log reader's, and no os.presence or os.power, the
 //     presence sampler's records, dated before the slot ends keeps the
 //     device sampling there: there is none, or the latest one's reach
 //     ended, since a record the agent stamps itself came dated more than
 //     BUCKET_TTL_S after it and before the sampler's next record, and the
-//     newest record is PENDING_WINDOW_S - READ_HORIZON_S past that one. Till
-//     then a sample dated before it can still arrive, as a resume queued
-//     behind a later-dated stop hook does, and keep the reach. The other
-//     order waits too: while the sampler's next record, more than
+//     newest record the device's own clock dated, a stamped record or one
+//     of the sampler's, is PENDING_WINDOW_S - READ_HORIZON_S past that one.
+//     Till then a sample dated before it can still arrive, as a resume
+//     queued behind a later-dated stop hook does, and keep the reach. The
+//     other order waits too: while the sampler's next record, more than
 //     BUCKET_TTL_S after one whose reach hasn't ended, is less than that
-//     wait behind the newest record, a stamped record dated inside the gap
-//     can still arrive and end the reach, so the earlier record keeps the
-//     clock (State.now). A never-sampling device's slot has no hard
+//     wait behind the newest record the device's own clock dated, a stamped
+//     record dated inside the gap can still arrive and end the reach, so
+//     the earlier record keeps the clock (State.now). A bridge or log
+//     record dated ahead of the device's clock ends neither wait. A
+//     never-sampling device's slot has no hard
 //     break, and no lock, suspend or gap from before a never-sampling
 //     stretch reaches the slot of the sampler's record that ends the
 //     stretch: an open lock or suspend closes at that slot's start, and the
@@ -273,6 +287,10 @@
 //     every record a State held, os.focus included, after a server's agent
 //     stopped scoring 15 minutes after each start, and then bounded a
 //     sample's reach slot by slot (docs/errata/2026-11-23-headless-scoring.md).
+//     Both waits first ran on the newest record of any kind, which a bridge
+//     or log record dated ahead of the device's clock could end early,
+//     making a minute final that one Step over every record derives
+//     otherwise once a record sealed a batch later arrives (#312).
 //     Lookback's transcripts come only by a log reader, and lookback's own
 //     range is WP-SC7's.
 //   - The thread's next relayed anchor after a stop is the first one sent
@@ -315,11 +333,14 @@
 // latest os.presence or os.power, the presence sampler's records, which
 // come every 15 to 60 s while a project context is live, until a record the
 // agent stamps itself is dated more than BUCKET_TTL_S after that one and
-// the newest record is PENDING_WINDOW_S - READ_HORIZON_S past it. An
+// the newest record the device's own clock dated, a stamped record or one
+// of the sampler's, is PENDING_WINDOW_S - READ_HORIZON_S past it. An
 // earlier sample holds now the same way while a record that would end its
 // reach waits like that, and while the sampler's next record, more than
-// BUCKET_TTL_S after it, is less than that wait behind the newest record,
-// in case a record that ends its reach is still on its way. On a device
+// BUCKET_TTL_S after it, is less than that wait behind the newest record
+// that clock dated, in case a record that ends its reach is still on its
+// way. A bridge or log record dated ahead of the device's clock ends
+// neither wait. On a device
 // whose agent never samples, and once the sampler's records have no reach
 // left, it is the latest record's time (SM 2.1, WP-HL1). No record changes
 // what was derived for a time more than READ_HORIZON_S before its own t: a
@@ -327,18 +348,19 @@
 // human act within READ_HORIZON_S, and the return rule an act on record
 // within READ_HORIZON_S of the silence's start. So a record
 // that arrives up to PENDING_WINDOW_S - READ_HORIZON_S late changes only
-// what is still pending. That bound and the return rule's horizon are the
-// code half of E-return-lookahead
-// (docs/errata/2026-11-19-return-rule-lookahead.md, decided 2026-11-20),
-// which lets its code land before its text: SM 2.1, DESIGN 3.7 and D1 state
-// them once P10 lands, and main's SM 2.1 still counts the return rule's
-// horizon from the run's end. An anchor is decided at the latest t of its
-// records; where that is later than its windows allow, as a long typed
-// command's record is at its end, the windows it would open before then
-// credit nothing, in every Step alike. A browser run with credit just before
-// it may be a lookup, whose credit waits for the run's end, so nothing from
-// such a run on is final until its end bracket is. SM 2.5 sets no bound on
-// that (docs/errata/2026-11-19-return-rule-lookahead.md,
+// what is still pending. That bound and the return rule's horizon are
+// E-return-lookahead's (docs/errata/2026-11-19-return-rule-lookahead.md),
+// and SM 2.1, DESIGN 3.7 and D1 state them. A returned run is final from the
+// end of its tail, not from its start, because its reading part reads what
+// the tail's seconds left in the bucket
+// (docs/errata/2026-11-20-sm-6.1-return-unread-words.md). An anchor is
+// decided at the latest t of its records; where that is later than its
+// windows allow, as a long typed command's record is at its end, the windows
+// it would open before then credit nothing, in every Step alike. A browser
+// run with credit just before it may be a lookup, whose credit waits for the
+// run's end, so nothing from such a run on is final until its end bracket
+// is. SM 2.5 sets no bound on that
+// (docs/errata/2026-11-19-return-rule-lookahead.md,
 // docs/errata/2026-11-20-lookup-lookahead.md). A pairing of an agent app's
 // message with its prompt reaches back from the message's stamp instead of
 // from either record's t (SM 2.3): the prompt can come up to RELAY_MATCH_S
@@ -351,8 +373,8 @@
 // its Derived.Relays entry is decided when it is written. The reading
 // a relayed anchor vouches for needs no hold: the anchor must pair within
 // PENDING_WINDOW_S - 60 s of the stop the reading starts at, while that
-// stop's minute is still pending. Until WP-SC5
-// adds checkpoints, a State holds every record it was given.
+// stop's minute is still pending. Until WP-SC5 adds checkpoints, a State
+// holds every record it was given.
 //
 // # Readings of the spec
 //
@@ -402,11 +424,6 @@
 //   - The editor in focus on a session's project hosts a session only the
 //     WakaTime bridge reports, as it does an IDE session, since the bridge
 //     reads it from the editor's wakatime-cli (DESIGN 5.7).
-//   - unread_prose_words is SM 2.1's definition: the prose that arrived
-//     after the person's last input in a slot whose focus held the
-//     session. SM 6.1 cycle 6, where the answer comes 10 s before that
-//     input, says 173 s, which the definition doesn't give
-//     (docs/errata/2026-11-20-sm-6.1-return-unread-words.md).
 //   - SM 2.2 rule 2 reads a prompt's declared origin. A turn a stop hook
 //     continued has no prompt.submit and is self_continue as a
 //     continuation; a later stop with stop_hook_active doesn't change a
@@ -461,8 +478,11 @@
 //     client's first os.focus record. Then, while a turn of the slot's
 //     project runs, X.agent_only if a person started one of the running
 //     turns, else X.automated, else X.no_input. X.no_anchor comes last.
-//     That settles docs/errata/2026-11-20-uncredited-code-placement.md.
-//     Seconds before the presence sampler ran are X.absent until lookback
-//     (WP-SC7), but on a device that never samples, where SM 5.2's codes
-//     for a live slot whose presence is unknown apply (WP-ADE1 above).
+//     docs/errata/2026-11-20-uncredited-code-placement.md decides it so,
+//     and gives a live slot whose presence is unknown the same turn step
+//     (turnCode). Where every record came by a log reader, as lookback's
+//     transcripts do, seconds before the presence sampler ran are X.absent
+//     until WP-SC7. Elsewhere they are a never-sampling device's slots
+//     (presence.neverAt), which take SM 5.2's codes for a live slot whose
+//     presence is unknown (WP-ADE1 and WP-HL1 above).
 package score

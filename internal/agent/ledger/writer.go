@@ -615,11 +615,11 @@ func (w *Writer) Opened() uint64 { return w.opened }
 // which is also the event's seq (ledger-v1 4.1). It sets the event's seq
 // and device_id, whatever they were, and builds the body with pkg/ledger's
 // EventRecord from the event's shareable fields and the content in (spec
-// 4.5, 10). For a prompt.submit with its text, it first derives
-// low_effort and error_sig from the text, as the scorer reads them; and it
-// gives every prompt.submit, cli.track and relay.message record its class,
-// from pkg/score, as the record's f.pc. A prompt.submit or agent.stop seals
-// at once, without waiting for the seal to finish.
+// 4.5, 10). For a prompt.submit with its text, and for every cli.track
+// from its label, it first derives low_effort and error_sig, as the scorer
+// reads them; and it gives every prompt.submit, cli.track and relay.message
+// record its class, from pkg/score, as the record's f.pc. A prompt.submit
+// or agent.stop seals at once, without waiting for the seal to finish.
 //
 // A record Write refuses, such as an event that fails Validate, takes no
 // sequence number. The error leaves the event's content out. Nor does one
@@ -731,17 +731,30 @@ func (w *Writer) prepare(in Input) (event.Event, ledger.Content) {
 			c.NoText = true
 		}
 		ev.Data = &cp
-		c.Class = features.Class(score.PromptClass(w.table, &cp, w.q.Asked(ev.SessionKey)))
+		c.Class = features.Class(score.PromptClass(w.table, &cp, w.q.Asked(ev.SessionKey, ev.Via)))
 	case *event.CLITrack:
-		if p != nil {
-			c.Class = features.Class(score.TrackClass(w.table, p))
+		if p == nil {
+			break
 		}
+		// A copy, so the caller's event isn't changed. The label is the
+		// text the record commits, after pkg/redact, and a call that came
+		// with none is classed from the empty label (DESIGN 5.4).
+		cp := *p
+		text := string(in.Text)
+		cp.LowEffort = score.LowEffort(text)
+		cp.ErrorSig = ""
+		if es, ok := w.feat.ErrorSig(text); ok {
+			cp.ErrorSig = es.String()
+		}
+		ev.Data = &cp
+		c.Class = features.Class(score.TrackClass(w.table, &cp))
 	case *event.RelayMessage:
 		// The class of the app's own text, which the reader measured and
 		// dropped, with the answer class read from the questions of the
-		// session the record is bound to, as a prompt's is (ledger-v1 10.7).
+		// session the record is bound to, as a prompt's is (ledger-v1 10.7),
+		// by the path the record came by.
 		if p != nil {
-			c.Class = features.Class(score.RelayClass(w.table, p, w.q.Asked(ev.SessionKey)))
+			c.Class = features.Class(score.RelayClass(w.table, p, w.q.Asked(ev.SessionKey, ev.Via)))
 		}
 	case *event.AgentOutput:
 		if p != nil && p.IsFinal && in.Text == nil && ev.Via == event.ViaPlugin {

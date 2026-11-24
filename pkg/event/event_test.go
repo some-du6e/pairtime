@@ -110,7 +110,7 @@ func sample(t *testing.T, k Kind) Event {
 		p = &OTelActiveTime{Type: ActiveTimeUser, Seconds: 42.5}
 	case KindCLITrack:
 		env.Source, env.Via = SourceCLI, ViaTrack
-		p = &CLITrack{Label: "fix the login redirect loop", TextLen: 27,
+		p = &CLITrack{Label: "fix the login redirect loop\non mobile", TextLen: 37, LowEffort: true, ErrorSig: "e_track",
 			EnvHints: []EnvHint{EnvClaudeCode, EnvClaudeCodeSessionID}, LogMatch: LogMatched}
 	case KindRelayMessage:
 		env.Source, env.Via = SourceLog, ViaApp
@@ -339,7 +339,10 @@ func TestEventValidate(t *testing.T) {
 		}, ""},
 		{"unknown power op", KindOSPower, func(e *Event) { e.Data.(*OSPower).Op = "hibernate" }, "data.op:"},
 		{"otel seconds aren't negative", KindOTelActiveTime, func(e *Event) { e.Data.(*OTelActiveTime).Seconds = -5 }, "data.seconds:"},
-		{"a track label is one line", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).Label = "line one\nline two" }, "data.label: must not contain control characters"},
+		{"a track label keeps its line breaks", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).Label = "line one\nline two" }, ""},
+		{"a track label holds no control character but LF", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).Label = "line one\r\nline two" },
+			"data.label: must not contain control characters other than line feeds"},
+		{"a track call's error_sig is an opaque key", KindCLITrack, func(e *Event) { e.Data.(*CLITrack).ErrorSig = "/home/x/err.log" }, "data.error_sig:"},
 		{"a track label holds the AGENTS.md entry's 400 characters", KindCLITrack, func(e *Event) {
 			e.Data.(*CLITrack).Label = strings.Repeat("é", 400)
 		}, ""},
@@ -580,7 +583,7 @@ func TestLocalFields(t *testing.T) {
 		KindAgentTool:    {"cmd_hash"},
 		KindShellCommand: {"cmd_hash"},
 		KindOSFocus:      {"app_hash"},
-		KindCLITrack:     {"label"},
+		KindCLITrack:     {"label", "error_sig"},
 		KindAgentStop:    {"pending_crons"},
 		// An app's message holds no text and no digest of it: the reader
 		// measures and classes the app's text and drops it (DESIGN 5.1).

@@ -50,6 +50,11 @@ type Credit struct {
 	// running and the second wasn't credited to the project: SM 2.6's
 	// agent-only time, which is never credited.
 	AgentOnly map[string]int64 `json:"agent_only,omitempty"`
+	// agentUncredited is how many of the slot's seconds an agent turn was
+	// running in, in any project, with nothing credited: what SM 5.3's
+	// agent_only_s counts, once a second, where AgentOnly counts a second
+	// once for each project whose turn ran in it.
+	agentUncredited int64
 }
 
 // Credited is a slot's seconds that one project earned under one reason,
@@ -184,6 +189,9 @@ type returned struct {
 	Return
 	end    int64 // the end of the silence: RunEnd, or later inside the slot after it
 	anchor int   // the index of the anchor that ended the run, or -1
+	// sessions are the sessions whose buckets its unread prose is counted
+	// in (deriver.readSessions).
+	sessions []string
 }
 
 // creditor applies SM 2.7 to every second of the derived slots.
@@ -209,8 +217,9 @@ type creditor struct {
 	buckets map[string][]*bucket
 	runs    map[string]*running
 	// all holds the turns of every project, which SM 5.2's codes for a live
-	// slot whose presence is unknown read, in a never-sampling device's
-	// slots (presence.neverAt).
+	// slot whose presence is unknown read (unknownCode): a never-sampling
+	// device's slot (presence.neverAt), one before the device's first
+	// sample, or one where the sampler took no sample (presence.blindAt).
 	all running
 	// relays are the sessions with relayed anchors, by key, and leads the
 	// leads of those anchors, by start: the candidates of the relayed
@@ -227,6 +236,9 @@ type creditor struct {
 	bySession map[string][]int
 	attr      []attribution
 	returns   []returned
+	// unfilled indexes the first of returns whose reading part the pass
+	// hasn't filled in yet (readingPart).
+	unfilled int
 	// lookups are the browser and chat-app runs with credit in the
 	// LOOKUP_BRACKET_S before them, the ones that can become lookups. Step
 	// holds FinalBefore back for them until their end bracket is decided.
@@ -361,7 +373,7 @@ func (c *creditor) index() {
 		ids[a.ID] = i
 	}
 	for _, rt := range d.returns {
-		x := returned{Return: rt, end: rt.RunEnd, anchor: -1}
+		x := returned{Return: rt, end: rt.RunEnd, anchor: -1, sessions: d.readSessions(d.focus.at(rt.RunStart), rt.ProjectKey)}
 		if i, ok := ids[rt.Anchor]; ok {
 			x.anchor = i
 		}
@@ -531,6 +543,13 @@ func (c *creditor) anchorsAndBuckets() {
 			}
 		}
 		active = kept
+		// A returned run's reading part counts what its sessions' buckets
+		// hold at the first second at or after its tail's end, before that
+		// second credits anything (SM 2.1).
+		for c.unfilled < len(c.returns) && c.returns[c.unfilled].TailEnd <= t {
+			c.readingPart(c.unfilled, t)
+			c.unfilled++
+		}
 		if !c.localSecond(k, t, s, at, ws, active) && len(c.relays) > 0 {
 			c.relayedSecond(k, t, at, true)
 		}
@@ -538,6 +557,32 @@ func (c *creditor) anchorsAndBuckets() {
 			c.relayedRest(i, at)
 		}
 	}
+	for ; c.unfilled < len(c.returns); c.unfilled++ {
+		c.readingPart(c.unfilled, ceilSecond(c.returns[c.unfilled].TailEnd))
+	}
+}
+
+// readingPart fills in returned run j's reading part at t, the first whole
+// second at or after its tail's end, before t credits anything (SM 2.1).
+// UnreadWords is the prose the harness's own hooks and logs reported into
+// the run's sessions' buckets that they still hold at t, or that goes into
+// them later in the run (bucket.unreadAt), in words rounded to the
+// nearest, at most countMax. The reading part is its reading time, which
+// ReadUntil ends, at most at the run's end, and CreditMS is that plus
+// THINK_LEAD_S. The Return derive outputs gets the same
+// (docs/errata/2026-11-20-sm-6.1-return-unread-words.md).
+func (c *creditor) readingPart(j int, t int64) {
+	rt := &c.returns[j]
+	var u int64
+	for _, key := range rt.sessions {
+		if b := c.d.buckets[key]; b != nil {
+			u = addUnits(u, b.unreadAt(c.r, t, rt.RunEnd))
+		}
+	}
+	words := min(roundDiv(u, 60*c.r.diffLPM), countMax)
+	read := c.r.readingMS(words)
+	rt.UnreadWords, rt.ReadUntil, rt.CreditMS = words, min(rt.TailEnd+read, rt.RunEnd), read+c.r.thinkLead
+	c.d.returns[j] = rt.Return
 }
 
 // localSecond applies SM 2.7's candidates from this device's evidence to
@@ -789,19 +834,20 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 
 // uncredited gives a second nothing credited its one reason, in SM 5.2's
 // order as E-6.6-codes decides it. Codes for credit a rule withheld come
-// first, and only on seconds the rule would have credited: X.lookup_cap
-// for a qualifying lookup run's present seconds past LOOKUP_MAX_S, and
+// first, and only on seconds the rule would have credited: X.lookup_cap for
+// a qualifying lookup run's present seconds past LOOKUP_MAX_S, and
 // X.bucket_cap for reading that BUCKET_MAX_S evicted. (The dark-flow
 // discounts, X.day_cap and X.noprog are WP-SC6's.) Every other second takes
 // the first that applies of X.absent; X.other_focus; X.ambiguous, for focus
 // that resolves to no project (SM 3.2), that the client hasn't recorded
 // yet, or, until WP-SC8, that it recorded as unknown (SM 2.5); then, while
-// a turn of the slot's project runs, X.agent_only if a
-// person started one of the running turns, else X.automated, else
-// X.no_input for a turn whose prompt came with no input (SM 2.2 rule 8);
-// and last X.no_anchor. at is the slot's resolution (attribute). A turn a
-// person started includes a relayed one (SM 2.2), and X.bucket_cap covers
-// the relayed reading that UNKNOWN_BUCKET_MAX_S held back too.
+// a turn of the slot's project runs, X.agent_only if a person started one
+// of the running turns, else X.automated, else X.no_input for a turn whose
+// prompt came with no input (SM 2.2 rule 8); and last X.no_anchor. at is
+// the slot's resolution (attribute). A turn a person started includes a
+// relayed one (SM 2.2), and X.bucket_cap covers the relayed reading that
+// UNKNOWN_BUCKET_MAX_S held back too. The turn step is turnCode, which
+// unknownCode shares (docs/errata/2026-11-20-uncredited-code-placement.md).
 //
 // On a live device, every slot whose presence is unknown is a live slot
 // whose presence is unknown, and the presence and focus codes don't apply:
@@ -846,34 +892,43 @@ func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
 	if at.proj == "" {
 		return event.ReasonAmbiguous
 	}
-	if r := c.runs[at.proj]; r != nil {
-		switch {
-		case covers(r.human, k):
-			return event.ReasonAgentOnly
-		case covers(r.auto, k):
-			return event.ReasonAutomated
-		case covers(r.noInput, k):
-			return event.ReasonNoInput
-		}
+	if code, ok := turnCode(c.runs[at.proj], k); ok {
+		return code
 	}
 	return event.ReasonNoAnchor
 }
 
 // unknownCode is SM 5.2's code for an uncredited second k of a live slot
-// whose presence is unknown, past the codes for withheld credit: X.agent_only
-// while a turn a person started runs, a relayed one included, or a no_input
-// one; else X.automated while an automated turn runs; else X.no_anchor.
-// That is E-6.6-codes' order with its presence and focus steps skipped
-// (D-relayed's reading 3). Such a slot has no focus and no project of its
-// own, so the turns of every project count.
+// whose presence is unknown, past the codes for withheld credit: the turn
+// step (turnCode) over the turns of every project, since such a slot has no
+// focus and no project of its own, else X.no_anchor. So a no_input turn's run
+// is X.no_input there as in a sampled slot, and an automated turn beside it
+// gives X.automated (docs/errata/2026-11-20-uncredited-code-placement.md).
 func (c *creditor) unknownCode(k int) event.Reason {
-	switch {
-	case covers(c.all.human, k), covers(c.all.noInput, k):
-		return event.ReasonAgentOnly
-	case covers(c.all.auto, k):
-		return event.ReasonAutomated
+	if code, ok := turnCode(&c.all, k); ok {
+		return code
 	}
 	return event.ReasonNoAnchor
+}
+
+// turnCode is SM 5.2's turn step for an uncredited second k over the turns r
+// holds: X.agent_only if a person started one of the turns running at k, a
+// relayed one included, else X.automated if automation started one, else
+// X.no_input for a turn whose prompt came with no input (SM 2.2 rule 8). ok
+// is false when r is nil or none of its turns runs at k.
+func turnCode(r *running, k int) (code event.Reason, ok bool) {
+	if r == nil {
+		return "", false
+	}
+	switch {
+	case covers(r.human, k):
+		return event.ReasonAgentOnly, true
+	case covers(r.auto, k):
+		return event.ReasonAutomated, true
+	case covers(r.noInput, k):
+		return event.ReasonNoInput, true
+	}
+	return "", false
 }
 
 // creditKey groups a slot's credited seconds. Relayed seconds group apart
@@ -959,6 +1014,9 @@ func (c *creditor) slotCredits() []Credit {
 				cr.AgentS++
 			}
 			if sec.reason == "" {
+				if agent {
+					cr.agentUncredited++
+				}
 				if cr.Uncredited == nil {
 					cr.Uncredited = map[event.Reason]int64{}
 				}

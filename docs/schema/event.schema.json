@@ -331,10 +331,12 @@
       "description": "A coding agent ran pairtime track, following the AGENTS.md entry. The model's own claim: it opens an anchor only under the four conditions of DESIGN 5.4, at level C unless keyboard input in the host window in the 10 s before the call makes it level A, and never counts toward logged_s.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["text_len", "log_match"],
+      "required": ["text_len", "low_effort", "log_match"],
       "properties": {
-        "label": {"type": "string", "maxLength": 400, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$", "x-local": true, "description": "The text the model passed, on one line: the user's message with personal information removed. Prompt text, so it stays on the device."},
+        "label": {"type": "string", "maxLength": 400, "pattern": "^[^\\u0000-\\u0009\\u000b-\\u001f\\u007f-\\u009f]*$", "x-local": true, "description": "The text the model passed, its line breaks as LF: the user's message with personal information removed. Prompt text, so it stays on the device."},
         "text_len": {"$ref": "#/$defs/count", "description": "The number of characters the model passed. Shareable, unlike the label."},
+        "low_effort": {"type": "boolean", "description": "SM 2.2's go-ahead test on the label after pkg/redact."},
+        "error_sig": {"$ref": "#/$defs/key", "x-local": true, "description": "The label's keyed error signature, which the scorer reads back from the record's f.es."},
         "env_hints": {"type": "array", "maxItems": 1024, "uniqueItems": true, "items": {"$ref": "#/$defs/env_hint"}, "description": "The harness variables in $defs/env_hint that are set in the caller's environment, by name and never by value."},
         "log_match": {"$ref": "#/$defs/log_match", "description": "Whether a pairtime log reader holds the user entry the call copies."}
       }
