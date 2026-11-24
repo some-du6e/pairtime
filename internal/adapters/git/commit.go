@@ -52,6 +52,35 @@ type Commit struct {
 	Local CommitLocal `json:"-"`
 }
 
+// MarshalJSON writes c as the commit record DESIGN 4.3 lets the client
+// upload: its exported fields in their order, with files_changed,
+// insertions and deletions left out when the shortstat couldn't be read
+// (Local.NoStat), as ingest-v1 2.3.3 says, so their 0s can't pass for a
+// commit that changed nothing.
+func (c Commit) MarshalJSON() ([]byte, error) {
+	type record struct {
+		SHA           string      `json:"sha"`
+		Parents       []string    `json:"parents"`
+		Project       string      `json:"project"`
+		ObservedAt    int64       `json:"observed_at"`
+		AuthorTime    int64       `json:"author_time"`
+		CommitterTime int64       `json:"committer_time"`
+		FilesChanged  *int        `json:"files_changed,omitempty"`
+		Insertions    *int        `json:"insertions,omitempty"`
+		Deletions     *int        `json:"deletions,omitempty"`
+		Rewrites      []Rewrite   `json:"rewrites,omitempty"`
+		Actor         event.Actor `json:"actor"`
+		AgentTrailer  string      `json:"agent_trailer,omitempty"`
+	}
+	r := record{SHA: c.SHA, Parents: c.Parents, Project: c.Project, ObservedAt: c.ObservedAt,
+		AuthorTime: c.AuthorTime, CommitterTime: c.CommitterTime, Rewrites: c.Rewrites,
+		Actor: c.Actor, AgentTrailer: c.AgentTrailer}
+	if !c.Local.NoStat {
+		r.FilesChanged, r.Insertions, r.Deletions = &c.FilesChanged, &c.Insertions, &c.Deletions
+	}
+	return json.Marshal(r)
+}
+
 // Rewrite says that NewSHA replaced OldSHA.
 type Rewrite struct {
 	OldSHA string `json:"old_sha"`
