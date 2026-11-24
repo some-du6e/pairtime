@@ -1076,6 +1076,77 @@ func TestInstallCycle(t *testing.T) {
 				h.uninstalled(before, pid)
 			},
 		},
+		{
+			// On Linux the config folder is apart from the data folder, so
+			// linking it moves only config.toml; elsewhere TestUninstallConfig
+			// checks the same step.
+			name:     "uninstall with pairtime's config folder a link to a folder another computer may share leaves config.toml there without this computer's names, says where, and exits 0",
+			hookMode: "real",
+			before: func(h *testHome) {
+				if runtime.GOOS != "linux" {
+					h.t.Skip("the config folder is apart from the data folder on Linux, where linking it moves only config.toml")
+				}
+				shared := h.path("dotfiles/pairtime")
+				for _, d := range []string{shared, filepath.Dir(h.dirs.Config)} {
+					if err := os.MkdirAll(d, 0o700); err != nil {
+						h.t.Fatal(err)
+					}
+				}
+				if err := os.Symlink(shared, h.dirs.Config); err != nil {
+					h.t.Skipf("this system can't make a symlink here: %v", err)
+				}
+			},
+			steps: func(t *testing.T, h *testHome, before map[string]string) {
+				h.mustRun("", "", 0, "install", "--yes")
+				pid := h.installed(true)
+				// A name the teen gave a project this computer knows of, which
+				// project-names.json records, as only an online uploader writes
+				// it, and another computer's table in the shared config.toml.
+				names := `{"v":1,"server":"","device":"","confirmed":{"` + wipeProjectKey + `":"robotics-club"}}`
+				if err := os.WriteFile(filepath.Join(h.dirs.Data, "project-names.json"), []byte(names), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := config.ShowName(h.dirs.ConfigFile(), wipeProjectKey, "robotics-club"); err != nil {
+					t.Fatal(err)
+				}
+				f, err := os.OpenFile(h.dirs.ConfigFile(), os.O_APPEND|os.O_WRONLY, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = f.WriteString("\n[projects." + farProjectKey + "]\nname = \"far-away\"\n")
+				if cerr := f.Close(); err == nil {
+					err = cerr
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				out := h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
+				shared := h.path("dotfiles/pairtime")
+				if !strings.Contains(out, "config.toml stays in "+shared+", without the names you gave the projects this computer knows of") || strings.Contains(out, "robotics-club") {
+					t.Errorf("uninstall didn't say where config.toml stays, or printed a label:\n%s", out)
+				}
+				got, err := os.ReadFile(filepath.Join(shared, "config.toml"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(got), "robotics-club") || strings.Contains(string(got), "[projects."+wipeProjectKey+"]") || !strings.Contains(string(got), "[projects."+farProjectKey+"]\nname = \"far-away\"\n") {
+					t.Errorf("the shared config.toml is\n%s\nwant this computer's table gone and the other computer's kept", got)
+				}
+				if _, err := os.Lstat(h.dirs.Config); err == nil {
+					t.Errorf("the config folder's link %s is still there", h.dirs.Config)
+				}
+				// The shared folder as it was, with the link, so that the rest
+				// can be compared with before install.
+				for _, name := range []string{"config.toml", config.LockName} {
+					os.Remove(filepath.Join(shared, name))
+				}
+				if err := os.Symlink(shared, h.dirs.Config); err != nil {
+					t.Fatal(err)
+				}
+				h.uninstalled(before, pid)
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

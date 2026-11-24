@@ -355,14 +355,19 @@ func forgetNames(dirs home.Dirs, mine keySet) (config.Forgotten, error) {
 	return f, nil
 }
 
-// namesLeftAlone says which names of the projects this computer knows of
-// had to stay in config.toml, and what to delete by hand, as err, from
+// namesLeftAlone prints namesLeft's line for err, from config.ForgetNames,
+// when the names had to stay.
+func namesLeftAlone(stdout io.Writer, err error) {
+	if err != nil {
+		fmt.Fprintf(stdout, "Left alone: %s.\n", install.Printable(namesLeft(err)))
+	}
+}
+
+// namesLeft says that names of the projects this computer knows of had to
+// stay in config.toml, and what to delete by hand, as err, from
 // config.ForgetNames, says once. For a config.toml that doesn't parse it
 // gives the line, never the decoder's message, which can quote the file.
-func namesLeftAlone(stdout io.Writer, err error) {
-	if err == nil {
-		return
-	}
+func namesLeft(err error) string {
 	why := err.Error()
 	var u *config.UnparsedError
 	if errors.As(err, &u) {
@@ -372,7 +377,7 @@ func namesLeftAlone(stdout io.Writer, err error) {
 		}
 		why = fmt.Sprintf("config: config.toml doesn't parse%s, so pairtime didn't change it; %s", at, u.Hand)
 	}
-	fmt.Fprintf(stdout, "Left alone: the names you gave some of the projects this computer knows of (%s).\n", install.Printable(why))
+	return "the names you gave some of the projects this computer knows of (" + why + ")"
 }
 
 // leftAlone says how many tables under projects config.toml keeps of

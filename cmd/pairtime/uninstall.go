@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/install"
@@ -163,6 +164,9 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		if len(data) > 0 {
 			fmt.Fprintln(stdout, dataFate(hadKey, data, keepable, *deleteData, "would be deleted"))
 		}
+		if cf := configFate(dirs, len(wipedKeys(dirs)) > 0, true); cf != "" {
+			fmt.Fprintln(stdout, cf)
+		}
 		// What the real run would leave, as install's dry run says what it
 		// leaves out, on stderr, so that stdout says only what changes, and
 		// what the teen should know about the changes.
@@ -181,6 +185,9 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		fate := ""
 		if len(data) > 0 {
 			fate = dataFate(hadKey, data, keepable, *deleteData, "is deleted")
+		}
+		if cf := configFate(dirs, len(wipedKeys(dirs)) > 0, false); cf != "" {
+			fate = strings.TrimSpace(fate + "\n" + cf)
 		}
 		showUninstall(stdout, p, binaries, running, fate)
 		if !askYes(answers, stdout, "Type y to take it all out, or n to stop without changing anything: ") {
@@ -240,6 +247,9 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	defer release()
+	// The keys of the projects this computer knows of, read with the agent
+	// stopped and before anything goes, for a config.toml behind a link.
+	mine := wipedKeys(dirs)
 
 	// The device key, before any binary, so that pairtime is still there
 	// when the key can't go: a keychain that is locked, or a Secret Service
@@ -261,6 +271,15 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		problems = append(problems, err.Error())
 	}
 
+	// A config.toml behind a link may be a file other computers share, so
+	// it loses only the names the teen gave this computer's projects
+	// (D-wipe-project-labels): one a symlink points to before the link goes
+	// with the data, and that of a linked config folder, which stays.
+	keepConfig, problem := configNames(stdout, dirs, mine)
+	if problem != "" {
+		problems = append(problems, problem)
+	}
+
 	// The binary this process runs from, which Windows deletes only once
 	// this process has exited (removeAfterExit).
 	var later, paths []string
@@ -279,6 +298,9 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		var keepHere []string
 		if samePath(d, dirs.Data) {
 			keepHere = keep
+		}
+		if keepConfig && samePath(d, dirs.Config) {
+			keepHere = append(slices.Clone(keepHere), filepath.Base(dirs.ConfigFile()), config.LockName)
 		}
 		if err := clearData(d, keepHere, paths); err != nil {
 			release()
@@ -602,6 +624,120 @@ func onlyHolds(path string, files []string) bool {
 func linkedDir(dir string) bool {
 	info, err := os.Lstat(dir)
 	return err == nil && info.Mode().Type() != fs.ModeDir
+}
+
+// configLink says how config.toml reaches a file that other computers may
+// share (D-wipe-project-labels): linkedFile when config.toml is a symbolic
+// link, and linkedFolder when pairtime's config folder is a link, as a
+// symlinked dotfiles folder makes it. A config.toml in a folder of
+// pairtime's own is notLinked, and goes with pairtime's data.
+type configLink int
+
+const (
+	notLinked configLink = iota
+	linkedFile
+	linkedFolder
+)
+
+// configLinkOf returns how config.toml reaches its file in dirs.
+func configLinkOf(dirs home.Dirs) configLink {
+	if linkedDir(dirs.Config) {
+		return linkedFolder
+	}
+	if fi, err := os.Lstat(dirs.ConfigFile()); err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		return linkedFile
+	}
+	return notLinked
+}
+
+// configReach returns where the link of link (configLinkOf) leads, for the
+// teen to find it: the file a symlinked config.toml points to, or the
+// folder a linked config folder is. It returns the link itself when the
+// link can't be read.
+func configReach(dirs home.Dirs, link configLink) string {
+	path := dirs.ConfigFile()
+	if link == linkedFolder {
+		path = dirs.Config
+	}
+	if t, err := filepath.EvalSymlinks(path); err == nil {
+		return t
+	}
+	t, err := os.Readlink(path)
+	switch {
+	case err != nil:
+		return path
+	case !filepath.IsAbs(t):
+		return filepath.Join(filepath.Dir(path), t)
+	}
+	return t
+}
+
+// configFate says what uninstall does to a config.toml behind a link, for
+// its screen and its dry run (dry), and "" for one it deletes with
+// pairtime's data. known says this computer knows of a project's key,
+// whose name may be in the file.
+func configFate(dirs home.Dirs, known, dry bool) string {
+	link := configLinkOf(dirs)
+	where := install.Printable(configReach(dirs, link))
+	verb := func(now, then string) string {
+		if dry {
+			return then
+		}
+		return now
+	}
+	const names = "the names you gave the projects this computer knows of"
+	switch {
+	case link == linkedFile && known:
+		return fmt.Sprintf("config.toml is a link to %s: uninstall %s that file %s, %s the rest of it, and %s the link.", where, verb("takes out of", "would take out of"), names, verb("leaves", "would leave"), verb("deletes", "would delete"))
+	case link == linkedFile:
+		return fmt.Sprintf("config.toml is a link to %s: uninstall %s the link and %s the file as it is.", where, verb("deletes", "would delete"), verb("leaves", "would leave"))
+	case link == linkedFolder && known:
+		return fmt.Sprintf("config.toml %s in %s, since pairtime's config folder is a link to a folder another computer may share: uninstall %s only %s.", verb("stays", "would stay"), where, verb("takes out of it", "would take out of it"), names)
+	case link == linkedFolder:
+		return fmt.Sprintf("config.toml %s in %s as it is, since pairtime's config folder is a link to a folder another computer may share.", verb("stays", "would stay"), where)
+	}
+	return ""
+}
+
+// configNames takes the names the teen gave the projects of mine, the keys
+// this computer knows of, out of a config.toml behind a link, which
+// uninstall doesn't delete whole, and says so (D-wipe-project-labels): out
+// of the file a symlinked config.toml points to, whose link then goes with
+// pairtime's data, or out of the config.toml of a linked config folder,
+// which stays, so keep says to leave it and its lock there. problem says
+// what had to stay when the edit couldn't take the names out, "" when
+// nothing did. With no key it knows of, it leaves the file as it is.
+func configNames(stdout io.Writer, dirs home.Dirs, mine keySet) (keep bool, problem string) {
+	link := configLinkOf(dirs)
+	if link == notLinked {
+		return false, ""
+	}
+	// A linked folder's config.toml is edited, and named, by its path in
+	// the folder the link leads to, which stays once the link goes.
+	file, where := dirs.ConfigFile(), configReach(dirs, link)
+	if link == linkedFolder {
+		file = filepath.Join(where, filepath.Base(dirs.ConfigFile()))
+	}
+	var (
+		forgot config.Forgotten
+		err    error
+	)
+	if len(mine) > 0 {
+		forgot, err = config.ForgetNames(file, mine.has)
+	}
+	where = install.Printable(where)
+	switch removed := err == nil && forgot.Removed > 0; {
+	case link == linkedFolder && removed:
+		fmt.Fprintf(stdout, "config.toml stays in %s, without the names you gave the projects this computer knows of, since pairtime's config folder was a link to a folder another computer may share.\n", where)
+	case link == linkedFolder:
+		fmt.Fprintf(stdout, "config.toml stays in %s, since pairtime's config folder was a link to a folder another computer may share.\n", where)
+	case removed:
+		fmt.Fprintf(stdout, "Took the names you gave the projects this computer knows of out of %s, which config.toml linked to, and left the rest of it.\n", where)
+	}
+	if err != nil {
+		problem = namesLeft(err)
+	}
+	return link == linkedFolder, problem
 }
 
 // realDirs returns those of dirs that are folders, not links or junctions
