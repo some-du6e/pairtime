@@ -800,7 +800,9 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 //
 // In a never-sampling device's slot (presence.neverAt), such as every slot
 // of a server with no desktop, or one after a desktop's sampler stopped,
-// the slot is a live slot whose presence is unknown, and the presence and
+// and in a live device's slot where the sampler ran and took no sample
+// (presence.blindAt), as when its idle read fails (D-sampleless-power), the
+// slot is a live slot whose presence is unknown, and the presence and
 // focus codes don't apply: after the codes for withheld credit comes
 // unknownCode (SM 5.2).
 func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
@@ -812,7 +814,7 @@ func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
 			return event.ReasonBucketCap
 		}
 	}
-	if c.d.pres.never[k/perSlot] && s.At(c.at(k)) == event.PresentUnknown {
+	if (c.d.pres.never[k/perSlot] || c.d.pres.live && c.d.pres.blindAt(s.Start)) && s.At(c.at(k)) == event.PresentUnknown {
 		return c.unknownCode(k)
 	}
 	if s.Asleep || s.Locked || !present(s.At(c.at(k))) {

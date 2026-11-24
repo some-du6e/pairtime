@@ -62,8 +62,8 @@ func TestStallNote(t *testing.T) {
 			want: []string{"ends 2 h before"}, bare: true},
 		{name: "with FinalBefore held at a slot nothing decides, the note says no sample decided those minutes, and when they count as unknown, before the samples' own silence",
 			fb: at - 3*60*minute, sampled: at - 2*60*minute, undecided: at - 3*60*minute, focus: event.AppTerminal,
-			want: []string{"ends 3 h before", "no presence sample has decided whether you were at the computer from then on",
-				"as none came within 2 h after those minutes, so they wait, and count as unknown once the newest record is 2 h 5 min past them"}},
+			want: []string{"ends 3 h before", "no presence sample has decided whether you were at the computer from then on, and none has come since",
+				"one dated within 2 h after those minutes still decides them, and they count as unknown once the newest record this computer's own clock dated is 2 h 5 min past them"}},
 		{name: "with FinalBefore held at a slot nothing decides and a browser in front, the note still names that slot",
 			fb: at - 40*minute, sampled: at - minute, undecided: at - 40*minute, focus: event.AppBrowser,
 			want: []string{"no presence sample has decided whether you were at the computer"}},
@@ -248,7 +248,7 @@ func TestStallWarning(t *testing.T) {
 			build: overnight, warned: true, each: "a presence sample came after 14 h without one"},
 		{name: "a FinalBefore pkg/score holds at a slot nothing decides tells doctor that no sample decided those minutes, and when they count as unknown",
 			build: turn(func(int64) bool { return true }), warned: true, held: true,
-			last: "no presence sample has decided whether you were at the computer from then on, as none came within 2 h after those minutes",
+			last: "no presence sample has decided whether you were at the computer from then on, and none has come since",
 			hold: func(evs []event.Event) int64 { return evs[0].T - floorMod(evs[0].T, event.SlotMS) + 30*minute }},
 	}
 	for _, c := range cases {

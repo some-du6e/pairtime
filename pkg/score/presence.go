@@ -225,9 +225,11 @@ type presence struct {
 // lapse marks such a record whose next record of the sampler's is bare
 // while its own reach hasn't ended: no sample will say what came between
 // (decision D-sampleless-power). It holds the clock until the newest record
-// is rules.late past the bare record, since the sample taken with it may
-// still be on its way, sealed a batch later. Then blind says the slots from
-// it to the bare record are unknown (SM 2.1, presence.blindAt).
+// the device's own clock dated (stampedRecord, the sampler's included) is
+// rules.late past the bare record, since the sample taken with it may still
+// be on its way, sealed a batch later. A bridge or log record dated ahead
+// of the device's clock doesn't end that wait. Then blind says the slots
+// from it to the bare record are unknown (SM 2.1, presence.blindAt).
 type reach struct {
 	t, cut              int64
 	ended, held         bool
@@ -239,7 +241,11 @@ type reach struct {
 // order, with their reaches, as of high, the newest record's t.
 func sampledReaches(r rules, recs []event.Event, high int64) []reach {
 	var out []reach
+	var dated int64 // the newest t the device's own clock dated
 	for _, e := range recs {
+		if stampedRecord(e) {
+			dated = max(dated, e.T)
+		}
 		switch {
 		case samplerRecord(e):
 			_, sample := e.Data.(*event.OSPresence)
@@ -263,7 +269,7 @@ func sampledReaches(r rules, recs []event.Event, high int64) []reach {
 			next := out[i+1]
 			gap = next.t-c.t > r.bucketTTL && next.t > high-r.late
 			c.lapse = (c.sample || c.wakes && c.bare) && next.bare && !c.ended
-			waits = c.lapse && next.t > high-r.late
+			waits = c.lapse && next.t > dated-r.late
 			c.blind = c.lapse && !waits
 		}
 		c.held = !c.ended && (c.cut != never || gap || waits)
@@ -378,8 +384,15 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		// the sampler's whose reach hasn't ended (reach.lapse) until the
 		// next sample, which opens no gap from the sample before.
 		lapsing bool
+		// lastSampler is the t of the sampler's latest record before e,
+		// and haveSampler says there is one.
+		lastSampler int64
+		haveSampler bool
 	)
 	for _, e := range recs {
+		// A resume with no suspend before it dates its sleep from just after
+		// the sampler's previous record, MinInt64 for none.
+		since := int64(math.MinInt64)
 		// A record of the sampler's after one whose reach ended starts the
 		// device sampling again (SM 2.1). The stretch between was a
 		// never-sampling device's, which has no hard break, so no gap,
@@ -394,6 +407,10 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		// (DESIGN 3.3), so when an os.power starts the sampler again, the
 		// sample after it opens no gap from before the stretch either.
 		if samplerRecord(e) {
+			if haveSampler {
+				since = lastSampler + 1
+			}
+			lastSampler, haveSampler = e.T, true
 			if sampled > 0 && reaches[sampled-1].ended {
 				if asleep {
 					sleeps = append(sleeps, span{sleepFrom, floorSlot(e.T)})
@@ -467,12 +484,12 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 					sleeps, asleep = append(sleeps, span{sleepFrom, e.T}), false
 				} else {
 					// A resume with no suspend before it: the machine slept
-					// since the last sample, or since before any record.
-					from := int64(math.MinInt64)
-					if haveSample {
-						from = lastSample + 1
-					}
-					sleeps = append(sleeps, span{from, e.T})
+					// since the sampler's previous record, or since before
+					// any record. That record, a sample or not, shows the
+					// machine awake (D-sampleless-power): a sample-less lock
+					// or unlock after the last sample decided the slots
+					// before it, which may be final by now.
+					sleeps = append(sleeps, span{since, e.T})
 				}
 			case event.PowerLock:
 				if !locked {
@@ -569,9 +586,11 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 	// end, since that sample's idle time covers the whole slot, or when it
 	// is a hard break, a never-sampling device's, before the first sample,
 	// or one where the sampler took no sample (blindAt). A slot none of
-	// those decides is unknown once the newest record is rules.late past
-	// BUCKET_TTL_S after its end, when every sample that could decide it
-	// has arrived, so it joins blind (D-sampleless-power). Until then it is
+	// those decides is unknown once the newest record the device's own
+	// clock dated (stampedRecord) is rules.late past BUCKET_TTL_S after its
+	// end, when every sample that could decide it has arrived, so it joins
+	// blind (D-sampleless-power). A bridge or log record dated ahead of the
+	// device's clock moves nothing here. Until then it is
 	// undecided: the first undecided slot ends the list, and Step holds
 	// FinalBefore at it (undecided), so no minute goes final with a slot no
 	// rule derived (SM 2.1).
@@ -579,7 +598,12 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 	if len(p.samples) > 0 {
 		firstSample = p.samples[0].t
 	}
-	high := recs[len(recs)-1].T
+	var dated int64 // the newest t the device's own clock dated
+	for _, e := range recs {
+		if stampedRecord(e) {
+			dated = max(dated, e.T)
+		}
+	}
 	after := 0 // the first sample at or after the current slot's end
 	for k := 0; k < n; k++ {
 		a := p.first + int64(k)*event.SlotMS
@@ -591,7 +615,7 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 		if never[k] || asleepAt[k] || lockedAt[k] || b <= firstSample || sampled || p.blindAt(a) {
 			continue
 		}
-		if high-r.late > b+r.bucketTTL {
+		if dated-r.late > b+r.bucketTTL {
 			if m := len(p.blind); m > 0 && p.blind[m-1].to == a {
 				p.blind[m-1].to = b
 			} else {
