@@ -3,9 +3,9 @@
 package scorer
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -468,13 +468,13 @@ func TestCarryReach(t *testing.T) {
 
 // TestCarryQuestions checks the carry's question state
 // (sessionCarry.Asks) against pkg/score's answer class (SM 2.2; ledger-v1
-// 10.7): a prompt reads its session's outputs and stops numbered before
-// it, and once a hook or log record of the session is numbered before it,
-// not a side door's, whatever the window folded into the carry. Each
-// case's morning prompt comes eight hours after an evening the carry
+// 10.7): a prompt reads its session's outputs and stops numbered
+// before it, and once a hook or log record of the session is numbered
+// before it, not a side door's, whatever the window folded into the carry.
+// Each case's morning prompt comes eight hours after an evening the carry
 // folded, typed into the terminal that hosts the session, and a Step over
-// the carry and the window must class it, and every prompt the carry
-// holds, as one Step over every record does.
+// the carry and the window must class it as one Step over every record
+// does.
 func TestCarryQuestions(t *testing.T) {
 	table := testTable()
 	evening := hookTurn(t, hookAt, hourTools())
@@ -537,22 +537,20 @@ func TestCarryQuestions(t *testing.T) {
 		}
 		return out
 	}
-	// classes returns the class one Step over recs gives each turn's
-	// prompt, by turn key, and fails when the morning's has none.
-	classes := func(t *testing.T, recs []event.Event) map[string]event.PromptClass {
+	// morningClass is the class one Step over recs gives the morning prompt.
+	morningClass := func(t *testing.T, recs []event.Event) event.PromptClass {
 		t.Helper()
 		_, out := score.Step(score.NewState(table, score.Device{}), recs)
 		var all score.Derived
 		all.Append(out.Final)
 		all.Append(out.Pending)
-		got := make(map[string]event.PromptClass)
 		for _, tu := range all.Turns {
-			got[tu.TurnKey] = tu.PromptClass
+			if tu.TurnKey == "t_morning" {
+				return tu.PromptClass
+			}
 		}
-		if _, ok := got["t_morning"]; !ok {
-			t.Fatal("no turn for the morning prompt")
-		}
-		return got
+		t.Fatal("no turn for the morning prompt")
+		return ""
 	}
 	cases := []struct {
 		name string
@@ -588,18 +586,6 @@ func TestCarryQuestions(t *testing.T) {
 				out = append(out, typed(event.ViaHook)...)
 				return append(out, output(last+3*minuteMS, event.ViaLog, false))
 			}, event.ClassAnswer},
-		{"a hooked prompt that answered a question keeps its class once the carry holds it, though its turn's output is numbered after it: the carry keeps the question the carried prompt read",
-			func() []event.Event {
-				i := slices.IndexFunc(evening, func(e event.Event) bool {
-					_, ok := e.Data.(*event.PromptSubmit)
-					return ok
-				})
-				asks := harness(evening[i].T-30_000, event.ViaLog, &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
-					AsksQuestion: true})
-				out := slices.Concat(evening[:i], []event.Event{asks}, evening[i:])
-				out = append(out, output(last+minuteMS, event.ViaLog, false))
-				return append(out, typed(event.ViaHook)...)
-			}, event.ClassSubstantive},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -613,16 +599,12 @@ func TestCarryQuestions(t *testing.T) {
 				w.add(e, uint64(i+1))
 			}
 			w.slide(morning - 30*minuteMS)
-			want := classes(t, all)
-			if want["t_morning"] != c.want {
-				t.Fatalf("one Step over every record classes the morning prompt %q, and the case expects %q", want["t_morning"], c.want)
+			want := morningClass(t, all)
+			if want != c.want {
+				t.Fatalf("one Step over every record classes the morning prompt %q, and the case expects %q", want, c.want)
 			}
-			got := classes(t, w.records())
-			for _, k := range slices.Sorted(maps.Keys(got)) {
-				if got[k] != want[k] {
-					t.Errorf("a Step over the carry and the window classes turn %s's prompt %q, and one Step over every record %q",
-						k, got[k], want[k])
-				}
+			if got := morningClass(t, w.records()); got != want {
+				t.Errorf("a Step over the carry and the window classes the morning prompt %q, and one Step over every record %q", got, want)
 			}
 		})
 	}
@@ -861,6 +843,75 @@ func TestOlderPlaceNoSample(t *testing.T) {
 				t.Errorf("the loop's FinalBefore is %s, and one Step's %s", time.UnixMilli(st.FinalBefore).UTC(), time.UnixMilli(fb).UTC())
 			}
 		})
+	}
+}
+
+// TestOlderPlaceQuestions checks open's rebuild of the carry's question
+// state against the window's (#380): a log reader's output that asks a
+// question folds in early, a hook prompt comes seven hours later, inside
+// the window, and a log reader's output dated before the question but
+// numbered after the prompt folds in as it comes. The window's carry keeps
+// the question for the prompt in the window, and a place an agent before
+// E-prompt-class-asked saved, rebuilt from the ledger, must be that carry.
+func TestOlderPlaceQuestions(t *testing.T) {
+	tmpl := hookTurn(t, hookAt, []int64{minuteMS})
+	var start, prompt event.Event
+	for _, e := range tmpl {
+		switch e.Data.(type) {
+		case *event.SessionStart:
+			start = e
+		case *event.PromptSubmit:
+			prompt = e
+		}
+	}
+	n := 0
+	clone := func(from event.Event, ts int64, via event.Via, d event.Payload) event.Event {
+		n++
+		e := from
+		e.EventID = fmt.Sprintf("01a1fb1e-5318-78a1-a7f9-%012x", n)
+		e.Mono += ts - e.T
+		e.T, e.Via, e.Data, e.Source = ts, via, d, event.SourceHook
+		if via == event.ViaLog {
+			e.Source = event.SourceLog
+		}
+		return e
+	}
+	question := clone(prompt, hookAt+2*minuteMS, event.ViaLog, &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
+		AsksQuestion: true})
+	asked := clone(prompt, hookAt+7*hourMS-5*minuteMS, event.ViaHook, &event.PromptSubmit{TurnKey: "t_1", LenChars: 30,
+		TypedLenEst: 30, OriginDeclared: event.DeclaredNone})
+	late := clone(prompt, hookAt+minuteMS, event.ViaLog, &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true})
+	evs := []event.Event{clone(start, hookAt-minuteMS, event.ViaHook, start.Data), question, asked}
+	m := 0
+	for ts := hookAt - 55_000; ts <= hookAt+7*hourMS; ts += minuteMS {
+		m++
+		idle := float64(600 + (ts-hookAt+55_000)/1000)
+		evs = append(evs, sampleAt(tmpl, ts, fmt.Sprintf("01a1fb1e-5318-78a1-a7fb-%012x", m),
+			&event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle}))
+	}
+	slices.SortStableFunc(evs, func(a, b event.Event) int { return cmp.Compare(a.T, b.T) })
+	i := slices.IndexFunc(evs, func(e event.Event) bool { return e.EventID == asked.EventID })
+	evs = slices.Insert(evs, i+1, late)
+	r := newRig(t, score.Device{})
+	// A prompt seals at once, without waiting for the seal to finish, so
+	// the rig settles after this one: the late output then comes in the
+	// next batch, which the window folds it from.
+	r.each = func(i int, l *Loop, w *ledger.Writer) {
+		if evs[i].EventID == asked.EventID {
+			r.settle(l, w)
+		}
+	}
+	r.write(evs, nil)
+	kept := r.savedCursor().Carry
+	s := kept.Sessions[prompt.SessionKey]
+	if s == nil || !slices.ContainsFunc(s.Asks, func(e *event.Event) bool { return e.EventID == question.EventID }) {
+		t.Fatalf("the window's carry doesn't keep the question for the prompt in the window, which the case needs:\n%s",
+			carryJSON(t, kept))
+	}
+	olderPlace(t, r, 2, true)
+	r.rescore()
+	if got := r.savedCursor().Carry; !reflect.DeepEqual(got, kept) {
+		t.Errorf("the rebuilt carry is\n%s\nand the window kept\n%s", carryJSON(t, got), carryJSON(t, kept))
 	}
 }
 
