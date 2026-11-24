@@ -410,11 +410,11 @@ func TestChecksumNearMisses(t *testing.T) {
 	}
 }
 
-// TestDecimalNumbers checks that a decimal number's digits are never a
-// card, an SSN or an Aadhaar number, and that a number before a full stop
-// still is one (issue #104). The two asDouble values are the ones the
-// scrub of the first Claude Code capture took for cards: their fractions
-// pass Luhn.
+// TestDecimalNumbers checks that a decimal's fraction is never a card, an
+// SSN or an Aadhaar number, and that a number before a '.' still is one,
+// whether the '.' ends a sentence or starts a float's fraction (issue
+// #104). The two asDouble values are the ones the scrub of the first Claude
+// Code capture took for cards: their fractions pass Luhn.
 func TestDecimalNumbers(t *testing.T) {
 	tests := []struct {
 		name string
@@ -424,8 +424,6 @@ func TestDecimalNumbers(t *testing.T) {
 		{"an OTLP value's fraction that passes Luhn is never a card", `{"asDouble":4.614999999999999}`, []Span{}},
 		{"another OTLP value's fraction that passes Luhn is never a card", `{"asDouble":1.3239999999999998}`, []Span{}},
 		{"the same fractions in plain text are never cards", "it took 4.614999999999999 s, then 1.3239999999999998 s", []Span{}},
-		{"a card number as a decimal's whole part is never a card", `{"asDouble":4111111111111111.5}`, []Span{}},
-		{"a card number with separators as a decimal's whole part is never a card", "card 4111 1111 1111 1111.5", []Span{}},
 		{"a card number with an exponent after it is never a card", "4111111111111111e5 4111111111111111E+5", []Span{}},
 		{"a card number that ends a sentence is still a card", "my card is 4111 1111 1111 1111.",
 			[]Span{{Start: 11, End: 30, Type: TypeCard}}},
@@ -435,12 +433,17 @@ func TestDecimalNumbers(t *testing.T) {
 			[]Span{{Start: 20, End: 36, Type: TypeCard}}},
 		{"a whole JSON number that passes Luhn is still a card", `{"n":4111111111111111}`,
 			[]Span{{Start: 5, End: 21, Type: TypeCard}}},
+		{"a card number written as a float is still a card", `{"card":4111111111111111.0}`,
+			[]Span{{Start: 8, End: 24, Type: TypeCard}}},
 		{"a 12-digit fraction that passes Verhoeff is never an Aadhaar number", `{"asDouble":0.234567890124}`, []Span{}},
 		{"the same fraction in plain text is never an Aadhaar number", "it was 0.234567890124 of it", []Span{}},
 		{"the same 12 digits standing alone are an Aadhaar number", "aadhaar 234567890124",
 			[]Span{{Start: 8, End: 20, Type: TypeAadhaar}}},
+		{"an Aadhaar number written as a float is still one", `{"aadhaar":234567890124.0}`,
+			[]Span{{Start: 11, End: 23, Type: TypeAadhaar}}},
 		{"a 9-digit fraction after ssn is never an SSN", `{"ssn_ratio":0.219099999}`, []Span{}},
-		{"nine digits after ssn as a decimal's whole part are never an SSN", "ssn 219099999.5", []Span{}},
+		{"an SSN written as a float after ssn is still an SSN", `{"ssn":219099999.0}`,
+			[]Span{{Start: 7, End: 16, Type: TypeUSSSN}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

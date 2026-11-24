@@ -86,33 +86,25 @@ func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 func isUpper(c byte) bool { return c >= 'A' && c <= 'Z' }
 
 // digitStart is the leading \b of a pattern that begins with a digit, at
-// a digit that doesn't start a decimal number's fraction.
+// a digit that doesn't start the fraction of a decimal number.
 func digitStart(text string) func(int) bool {
 	return func(i int) bool { return isDigit(text[i]) && boundary(text, i) && !fractionStart(text, i) }
 }
 
-// A decimal number's digits are never a card, an SSN or an Aadhaar
-// number. Presidio's patterns need only a word edge, which a '.' makes,
-// so they read the fraction of an OTLP asDouble value such as
-// 4.614999999999999 as fifteen digits that start like a card, and Luhn
-// passes about one such run in ten (issue #104). Here a match can't start
-// at a fraction's first digit (fractionStart), and a match that is a
-// decimal's whole part (wholePart) is dropped. A full stop with no digit
-// after it ends a sentence, so a card number that ends one is still
-// found. An exponent never follows a match, which ends at a word edge
-// that an e or E would take away, and an exponent's own digits are too few
-// for any of these patterns.
-
 // fractionStart reports whether the digit at text[i] comes right after a
-// digit and a '.', as a decimal's fraction does.
+// digit and a '.', where the fraction of a number such as
+// 4.614999999999999 starts. Presidio's patterns need only a word edge,
+// which a '.' makes, so they read the fraction of that OTLP asDouble value
+// as fifteen digits that start like a card, and Luhn passes about one such
+// run in ten (issue #104). So no card, SSN or Aadhaar number starts there.
+// A match may still end right before a '.' and a digit: a number written as
+// a float, such as 4111111111111111.0 from Python's json.dumps, is still a
+// card, and so is a card number that ends a sentence. A fraction with no
+// digit before its point, as minified JavaScript writes .5, or after a
+// decimal comma, can still be taken for one. An exponent's digits are too
+// few for any of these patterns.
 func fractionStart(text string, i int) bool {
 	return i >= 2 && text[i-1] == '.' && isDigit(text[i-2])
-}
-
-// wholePart reports whether a match that ends at offset end is followed by
-// a '.' and a digit, as a decimal's whole part is.
-func wholePart(text string, end int) bool {
-	return end+1 < len(text) && text[end] == '.' && isDigit(text[end+1])
 }
 
 // strip removes every byte in chars from s, as Presidio's sanitize_value
@@ -170,7 +162,7 @@ func findCards(text string, emit func(int, int, Type)) {
 		// which is what a timestamp in milliseconds looks like.
 		return digitStart(text)(i) && !thirteenFromOne(text, i)
 	}, func(m []int) {
-		if !wholePart(text, m[1]) && luhn(strip(text[m[0]:m[1]], "- ")) {
+		if luhn(strip(text[m[0]:m[1]], "- ")) {
 			emit(m[0], m[1], TypeCard)
 		}
 	})
@@ -317,7 +309,7 @@ var ssnContext = []string{"social", "security", "ssn", "ssns", "ssid"}
 func findSSNs(text string, emit func(int, int, Type)) {
 	for _, p := range ssnPatterns {
 		finditer(text, p.re.get(), digitStart(text), func(m []int) {
-			if wholePart(text, m[1]) || ssnInvalid(text[m[0]:m[1]]) {
+			if ssnInvalid(text[m[0]:m[1]]) {
 				return
 			}
 			if withContext(p.score, hasContext(text, m[0], ssnContext)) >= minScore {
@@ -386,7 +378,7 @@ var aadhaarPatterns = []*lazyRE{
 func findAadhaars(text string, emit func(int, int, Type)) {
 	for _, re := range aadhaarPatterns {
 		finditer(text, re.get(), digitStart(text), func(m []int) {
-			if !wholePart(text, m[1]) && validAadhaar(strip(text[m[0]:m[1]], "- :")) {
+			if validAadhaar(strip(text[m[0]:m[1]], "- :")) {
 				emit(m[0], m[1], TypeAadhaar)
 			}
 		})
