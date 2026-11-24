@@ -112,7 +112,7 @@ The agent saves the adapters' memory of their sessions in `state.json` beside th
 memory key = "m" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/memory") || 0x00)[0:16])
 ```
 
-A hook call's records and a log reader's records take their `event_id`s from `K_session` too, each over a domain of its own, so a call the agent parses again while its records keep their times, or a line it reads again, makes records of the same ids, which the agent leaves out where the ledger has them. A call timed by the agent's receipt rather than by the hook's own stamp (`hookpath.Times`) takes the receipt of the start that parses it again, so its ids change. Each id is a UUIDv7 (RFC 9562) whose 48-bit timestamp is the record's `t` in Unix milliseconds, and whose other bits are the first 10 bytes of an HMAC, with the version and variant bits set over them (`internal/agent`, WP-LO1):
+A hook call's records and a log reader's records take their `event_id`s from `K_session` too, each over a domain of its own, so a call the agent parses again while its records keep their times, or a line it reads again, makes records of the same ids, which the agent leaves out where the ledger has them. A call timed by the agent's own stamp rather than the hook's (`hookpath.Times`) is stamped anew by the start that parses it again (`readHeld`), so its records get new times and new ids. Each id is a UUIDv7 (RFC 9562) whose 48-bit timestamp is the record's `t` in Unix milliseconds, and whose other bits are the first 10 bytes of an HMAC, with the version and variant bits set over them (`internal/agent`, WP-LO1):
 
 ```text
 hook event_id = uuid7(t, HMAC-SHA256(K_session, ascii("pairtime/v1/hook-event") || u64be(len(utf8(call))) || utf8(call) || u64be(place)))
