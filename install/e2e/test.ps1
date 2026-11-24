@@ -78,7 +78,8 @@ function Format-Argument([string]$Text) {
 }
 
 # Runs Shell with Arguments in the case's LOCALAPPDATA and TEMP, with the
-# variables in Environment, and returns its exit code and output.
+# variables in Environment, and returns its exit code, output and process
+# id.
 function Invoke-Child([string[]]$Arguments, [hashtable]$Environment = @{}, [string]$Shell = 'powershell.exe') {
   $info = New-Object System.Diagnostics.ProcessStartInfo
   $info.FileName = $Shell
@@ -98,7 +99,7 @@ function Invoke-Child([string[]]$Arguments, [hashtable]$Environment = @{}, [stri
   $stdout = $process.StandardOutput.ReadToEndAsync()
   $stderr = $process.StandardError.ReadToEndAsync()
   $process.WaitForExit()
-  @{ Code = $process.ExitCode; Output = $stdout.Result + $stderr.Result }
+  @{ Code = $process.ExitCode; Output = $stdout.Result + $stderr.Result; Pid = $process.Id }
 }
 
 # Runs a script file with -File and the given parameters.
@@ -328,7 +329,9 @@ foreach ($shell in $shells) {
 
 # Every run in one PowerShell window has the same $PID, so the name a run
 # moves the old pairtime.exe aside under may already hold a copy that an
-# earlier run moved aside and that something still runs.
+# earlier run moved aside and that something still runs. That copy moves
+# out of the way, and the run's own copy keeps the name, which pairtime's
+# cleanups leave while the window runs.
 foreach ($shell in $shells) {
   New-Case
   New-Item -ItemType Directory -Force -Path (Join-Path $script:appData 'pairtime\bin') | Out-Null
@@ -339,9 +342,12 @@ foreach ($shell in $shells) {
     $fakeZip.Dispose()
   }
   $running = Start-Process -FilePath (Join-Path $script:appData 'pairtime\bin\pairtime.exe') -ArgumentList 'wait' -PassThru -WindowStyle Hidden
+  $result = Invoke-Child @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', "irm $server/real/install.ps1 | iex; irm $server/real/install.ps1 | iex") @{ PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_RELEASE_KEYS = (Join-Path $keys 'real.pub'); PAIRTIME_NO_INSTALL = '1' } $shell
   Test-Case "in $shell, a second irm | iex in the same session puts pairtime in place while the copy the first moved aside still runs" `
-    ok 'Installed pairtime[\s\S]*Installed pairtime' "$installed pairtime\bin\pairtime.old.<pid>.exe" `
-    (Invoke-Child @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', "irm $server/real/install.ps1 | iex; irm $server/real/install.ps1 | iex") @{ PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_RELEASE_KEYS = (Join-Path $keys 'real.pub'); PAIRTIME_NO_INSTALL = '1' } $shell)
+    ok 'Installed pairtime[\s\S]*Installed pairtime' "$installed pairtime\bin\pairtime.old.<pid>.exe" $result
+  if (Test-Path -LiteralPath (Join-Path $script:appData "pairtime\bin\pairtime.old.$($result.Pid).exe")) {
+    Add-Failure "in ${shell}, the copy the first run moved aside is still under the session's id, so the second run's copy had to take another"
+  }
   Test-Binary real
   Stop-Process -Id $running.Id -Force
 }

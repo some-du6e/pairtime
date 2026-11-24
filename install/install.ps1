@@ -464,7 +464,7 @@
   # Puts New at Target. Windows can't replace or delete a pairtime.exe that
   # is running, such as the agent, but it can rename it, so an old one
   # moves aside first and goes once nothing runs it. It moves aside under
-  # a name of its own, pairtime.old.<id>.exe, so that two installs at once
+  # this process's id, pairtime.old.$PID.exe, so that two installs at once
   # never delete each other's copy and leave no pairtime.exe. pairtime
   # deletes old copies under such a name, or pairtime.old.exe, once nothing
   # runs them and no process with that id runs (isOldName and placing in
@@ -475,12 +475,17 @@
       $dir = Split-Path -Parent $Target
       $old = Join-Path $dir "pairtime.old.$PID.exe"
       Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
-      # Every run in one PowerShell window has the same $PID, so an earlier
-      # one may have left a copy under it that something still runs. Then
-      # this run's copy takes a random id that no copy there has, which
-      # pairtime's cleanups still read as an id (isOldName).
-      while (Test-Path -LiteralPath $old) {
-        $old = Join-Path $dir "pairtime.old.$(Get-Random -Minimum 1 -Maximum 2147483647).exe"
+      if (Test-Path -LiteralPath $old) {
+        # Every run in one PowerShell window has the same $PID, so an
+        # earlier one may have left a copy under it that something still
+        # runs. No install needs that copy, so it moves out of the way, under
+        # a random id that no copy there has, and pairtime's cleanups delete
+        # it once nothing runs it (isOldName). This run's copy keeps $PID's
+        # name, which they leave while this window runs (placing).
+        do {
+          $stale = Join-Path $dir "pairtime.old.$(Get-Random -Minimum 1 -Maximum 2147483647).exe"
+        } while (Test-Path -LiteralPath $stale)
+        Move-Item -LiteralPath $old -Destination $stale
       }
       Move-Item -LiteralPath $Target -Destination $old
     }
