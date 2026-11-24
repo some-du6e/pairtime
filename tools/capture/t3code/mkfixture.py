@@ -16,11 +16,17 @@ nativeThreadId; every msg_ id becomes msg_fixtureNNNN; every other hex run of
 placeholder that gives its length, and the owner's probe text stays. Every
 time moves by the same whole number of days, so that the capture's first day
 becomes --to. The map from old to new values goes next to COPY, never into
-DIR.
+DIR. A hook line's event and time, and a UserPromptSubmit line's
+guest_prefix, go into the fixture as the line gives them, and the account
+can write HOOKS, so before it writes anything the script stops at a line
+whose event isn't one prepare.py registers, whose t_ns isn't a whole number,
+whose session_id or prompt_id is neither text nor null, or whose
+guest_prefix is neither true, false nor null.
 """
 
 import argparse
 import datetime
+import importlib.util
 import json
 import os
 import re
@@ -28,6 +34,33 @@ import sqlite3
 
 KIT = os.path.dirname(os.path.abspath(__file__))
 SCHEMA = os.path.join(KIT, "..", "..", "..", "internal", "adapters", "t3code", "testdata", "schema.sql")
+
+
+def registered_events():
+    """The events prepare.py registers logger.py for: tools/capture/prepare.py's
+    CLAUDE_CODE_HOOKS, read as prepare.py reads it."""
+    spec = importlib.util.spec_from_file_location("capture_prepare", os.path.join(os.path.dirname(KIT), "prepare.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return {event for event, _matcher, _timeout, _script in mod.CLAUDE_CODE_HOOKS}
+
+
+def check_hook(h, events):
+    """Stop at a hook line with a value logger.py doesn't write."""
+    if not isinstance(h, dict):
+        raise SystemExit("mkfixture.py: a hook line isn't a JSON object")
+    if not (isinstance(h.get("event"), str) and h["event"] in events):
+        raise SystemExit("mkfixture.py: a hook line's event isn't one prepare.py registers")
+    t = h.get("t_ns")
+    if not isinstance(t, int) or isinstance(t, bool):
+        raise SystemExit("mkfixture.py: a hook line's t_ns isn't a whole number")
+    if not all(h.get(k) is None or isinstance(h[k], str) for k in ("session_id", "prompt_id")):
+        raise SystemExit("mkfixture.py: a hook line's session_id or prompt_id is neither text nor null")
+    # 1 == True in Python, so only the identities pass: 1, 0, 1.0 or a
+    # string doesn't.
+    g = h.get("guest_prefix")
+    if h["event"] == "UserPromptSubmit" and not (g is True or g is False or g is None):
+        raise SystemExit("mkfixture.py: a hook line's guest_prefix is neither true, false nor null")
 
 U = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 MSG = re.compile(r"msg_[a-z0-9]{20,}")
@@ -112,6 +145,11 @@ def main() -> None:
     ref.executescript(open(SCHEMA).read())
     tables = [r[0] for r in ref.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY rowid")]
     hooks = [json.loads(line) for line in open(args.hooks)]
+    # What a line gives goes into the public fixture, so only what the
+    # logger writes passes, before anything is written.
+    events = registered_events()
+    for h in hooks:
+        check_hook(h, events)
     first = datetime.datetime.fromtimestamp(hooks[0]["t_ns"] / 1e9, datetime.timezone.utc).date()
     days = (datetime.date.fromisoformat(args.to) - first).days
     sc = Scrub(os.path.abspath(args.home), days)

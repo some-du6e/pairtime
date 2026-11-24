@@ -61,13 +61,14 @@ type Slot struct {
 	// credit reads it (SM 2.1, D-relayed-sleep): the slot overlaps a
 	// suspend or a gap between samples longer than twice SLOW_SAMPLE_S
 	// (rules.sleptGap), whatever D14 makes of the gap. A slot slept
-	// through is also Asleep. A shorter gap, such as the minute between
-	// the samples of a context an agent app alone keeps live (DESIGN 3.3),
-	// is a hard break for every other window, unless slow sampling
-	// explains it (D14), but a relayed anchor's lead and its session's
-	// relayed reading are realized across it (creditor.relayLive). It is
-	// no field of SM 1.3's slot record, so neither Event nor the JSON
-	// carries it.
+	// through is also Asleep, and a never-sampling device's slot is
+	// neither, whatever came before its sampler stopped (presence.neverAt).
+	// A shorter gap, such as the minute between the samples of a context
+	// an agent app alone keeps live (DESIGN 3.3), is a hard break for
+	// every other window, unless slow sampling explains it (D14), but a
+	// relayed anchor's lead and its session's relayed reading are realized
+	// across it (creditor.relayLive). It is no field of SM 1.3's slot
+	// record, so neither Event nor the JSON carries it.
 	slept bool
 }
 
@@ -619,11 +620,14 @@ func buildPresence(r rules, recs []event.Event, now int64, reaches []reach, fl *
 	lockedAt := p.mark(n, locks)
 	never := make([]bool, n)
 	for k := range never {
-		// A never-sampling device's slot has no hard break: its sampler
-		// records no suspend or lock, and a lock or a suspend before its
-		// sampler stopped says nothing about the slots after.
+		// A never-sampling device's slot has no hard break, and relayed
+		// credit doesn't read it as slept through either (Slot.slept): its
+		// sampler records no suspend or lock, its agent ran there, and a lock
+		// or a suspend before its sampler stopped says nothing about the
+		// slots after, nor does the sleep a resume with no suspend before it
+		// dates from the sampler's previous record.
 		if never[k] = p.neverAt(p.first + int64(k)*event.SlotMS); never[k] {
-			asleepAt[k], lockedAt[k] = false, false
+			asleepAt[k], sleptAt[k], lockedAt[k] = false, false, false
 		}
 	}
 

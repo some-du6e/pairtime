@@ -11,12 +11,22 @@ writes, under HOME:
     bin/t3               a link to bin/t3rt/t3
     bin/claude           a copy of the Claude Code binary BIN
     t3home/userdata/     the scratch T3 Code home's data folder
-    claude-home/         the scratch CLAUDE_CONFIG_DIR, whose settings.json runs
+    claude-home/         the scratch CLAUDE_CONFIG_DIR, the account's
+    claude-home/settings.json
+                         root's, so the account can't edit it in place: it runs
                          logger.py for every event of tools/capture/prepare.py's
                          CLAUDE_CODE_HOOKS
-    cap/logger.py        this kit's hook logger, owned by root, so the account
-                         can't change it; it writes hooks.jsonl and snap.jsonl there
+    cap/                 root's, mode 0755, so the account can't rename what is
+                         in it
+    cap/logger.py        this kit's hook logger, root's too, so the account can't
+                         change it in place
+    cap/log/             the account's: logger.py writes hooks.jsonl and
+                         snap.jsonl there
     repo/                a two-file git repository, the project T3 Code opens
+
+HOME and claude-home/ stay the account's, so it can still move cap/ or
+settings.json aside and put its own in their place. mkfixture.py therefore
+takes from hooks.jsonl only values logger.py writes.
 
 Every copy is checked against its source: a file that shares an inode with
 the file it was copied from is a hard link, and the script stops.
@@ -65,7 +75,7 @@ def main() -> None:
     home = os.path.abspath(args.home)
     if os.geteuid() != 0:
         sys.exit("prepare.py: run it as root")
-    for d in ("bin", "t3home/userdata", "claude-home", "cap", "repo"):
+    for d in ("bin", "t3home/userdata", "claude-home", "cap/log", "repo"):
         os.makedirs(os.path.join(home, d), exist_ok=True)
 
     rt = os.path.join(home, "bin", "t3rt")
@@ -101,10 +111,13 @@ def main() -> None:
     subprocess.run(git + ["commit", "-q", "-m", "scratch project"], check=True)
 
     uid = str(args.uid)
-    for d in ("cap", "claude-home", "t3home", "repo"):
+    for d in ("cap/log", "claude-home", "t3home", "repo"):
         subprocess.run(["chown", "-R", f"{uid}:{uid}", os.path.join(home, d)], check=True)
-    os.chown(logger, 0, 0)
-    os.chmod(logger, 0o755)
+    # The logger, its folder and the hook commands stay root's, after the
+    # chown above gave settings.json to the account with its folder.
+    for path, mode in (("cap", 0o755), ("cap/logger.py", 0o755), ("claude-home/settings.json", 0o644)):
+        os.chown(os.path.join(home, path), 0, 0)
+        os.chmod(os.path.join(home, path), mode)
     print("prepared", home)
 
 

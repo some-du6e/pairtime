@@ -39,7 +39,12 @@
 //
 //  1. Each new user row's folder, which pairtime's own resolver sorts into
 //     tracked, out, or not known yet, whose rows wait for it up to
-//     RELAY_SEEN_LAG_S; and each new guest message, without its text.
+//     RELAY_SEEN_LAG_S; and each new guest message, without its text. The
+//     resolver hears of no row read more than RELAY_SEEN_LAG_S after its
+//     stamp, read again by a resync, holding a message the reader watches,
+//     or whose run, its own or the running turn it was steered into, T3
+//     runs on another harness than Claude Code. Such a row counts as the
+//     decision would count it, whatever its folder.
 //  2. The decision, with the guest test (T3's mark, or a text that opens as
 //     T3 opens a guest's, past white space and an Ultrathink: line), T3's
 //     own test for a message a person sent from a client (createdBy user,
@@ -59,10 +64,12 @@
 // # Pairing
 //
 // The reader watches each recorded message's row until RELAY_MATCH_S and a
-// margin have passed since its stamp, and reads it again on every read
-// until its run has delivered a prompt and a read has seen the run end: a
-// row that changed after the first read witnesses nothing, and the run's
-// end bounds the prompts the session's next run may take. It watches each
+// margin have passed since its stamp and its run's end can bound no prompt
+// it remembers, a day after the stamp at most while no read has seen the run
+// end, and reads it again on every read until its run has delivered a
+// prompt and a read has seen the run end: a row that changed after the
+// first read witnesses nothing, and the run's end bounds the prompts the
+// session's next run may take, however long the run was. It watches each
 // guest's message, by mark or by opening, for a day whatever T3 does to
 // it, in state.json too: every run of its own T3 gives the row, the first
 // and each one after a declined steer, delivers a guest's prompt. Claude
@@ -91,6 +98,12 @@
 // The text is read only after the WHERE clause has checked that the row
 // isn't a guest's and that its folder is one pairtime tracks and doesn't
 // ignore, only to measure it, and nothing of it is kept, logged or returned.
+// pairtime's resolver, which starts watching a repo it hasn't seen, hears
+// of no row read too late, read again by a resync or holding a message the
+// reader watches, nor of one whose run, its own or the running turn it was
+// steered into, T3 runs on another harness. It still hears of the folder
+// of a row the decision turns away for T3's marks, for having no run of
+// its own, for an edit or for a stamp ahead of the read.
 // T3's thread, run and message ids leave the reader only as keys under
 // K_session. Errors name no path, and drop every literal of the SQL.
 package t3code

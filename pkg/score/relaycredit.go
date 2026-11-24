@@ -21,10 +21,12 @@ import (
 // through, whatever its focus or input says, because the person typed and
 // read on another device (SM 2.1, 2.3, 2.4). For them a slot is slept
 // through when it overlaps a suspend or a gap between samples longer than
-// twice SLOW_SAMPLE_S (Slot.slept, D-relayed-sleep), so a shorter gap,
-// a hard break for every other window unless slow sampling explains it
-// (D14), doesn't stop them. Every second they credit is level C, under the
-// anchor's labels, via_relay among them (SM 5.1).
+// twice SLOW_SAMPLE_S, unless it is a slot where the machine can't sample,
+// which nothing from before its sampler stopped reaches (Slot.slept,
+// D-relayed-sleep), so a shorter gap, a hard break for every other window
+// unless slow sampling explains it (D14), doesn't stop them. Every second
+// they credit is level C, under the anchor's labels, via_relay among them
+// (SM 5.1).
 
 // relaySession is a harness session with relayed anchors. The relayed
 // stage's candidates are its anchors' leads and its relayed reading.

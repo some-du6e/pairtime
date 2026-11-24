@@ -26,11 +26,14 @@ type Cursor struct {
 	CreatedAt int64  `json:"created_at,omitempty"`
 }
 
-// WatchState is a watched row: a message the reader recorded, until it
-// pairs or RELAY_MATCH_S passes, or a guest's message, for a day whatever T3
-// does to its row, so that every run of its own T3 gives it delivers a
-// guest's prompt across a restart of the agent too. The reader finds the
-// row by RowID, and by Message once a resync reads it again.
+// WatchState is a watched row: a message the reader recorded, until
+// RELAY_MATCH_S has passed and its run's end can bound no prompt the reader
+// remembers, a day at most while no read has seen the run end
+// (Reader.prune), or a guest's message, for a day whatever T3 does to its
+// row, so that every run of its own T3 gives it delivers a guest's prompt
+// across a restart of the agent too. The reader finds the row by RowID, and
+// by Message once a resync reads it again. The reader keeps at most
+// maxWatched of them.
 type WatchState struct {
 	RowID int64 `json:"rowid"`
 	// Message and Run are the keys of the row's message and run ids. A

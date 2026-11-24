@@ -1877,7 +1877,10 @@ func TestRelayedLatePairing(t *testing.T) {
 // skips rules 6 and 7, so it is relayed whatever this device saw. The
 // first cases have the app's window in front; the later ones a browser,
 // as while the person works elsewhere and the app alone keeps the context
-// live, but for one with a terminal in front.
+// live, but for one with a terminal in front. The last two have no window
+// in front at all: a relayed lead and its session's reading are realized
+// in a never-sampling stretch too, since no suspend or sleep from before
+// the stretch reaches its slots (SM 2.1).
 func TestRelayedPresence(t *testing.T) {
 	// phoneAt adds a 90-character message from the app's phone app in
 	// thread r_1, stamped sent seconds after base, so a 60 s lead, whose
@@ -1909,6 +1912,51 @@ func TestRelayedPresence(t *testing.T) {
 		for s := from; s <= to; s += 60 {
 			b.sample(at(s))
 		}
+	}
+	// stretch adds a never-sampling stretch's relayed records in s_1, which
+	// the app's server started at base, here 10:00:00 (appServer): a phone
+	// message stamped at 12:30:00, its prompt at 12:30:01 and its record at
+	// 12:30:03, 60 words of output at 12:34:30 and the stop at 12:35:00;
+	// then a second phone message, stamped at 12:39:00, which vouches for
+	// the reading after the stop (SM 2.4) and whose records come past
+	// 12:35:01. By then the prompt at 12:30:01, the first record the agent
+	// stamped more than BUCKET_TTL_S after the sampler's last record, is
+	// rules.late behind the newest record, so it has ended that record's
+	// reach, and every slot from 10:00:00 on is a never-sampling device's
+	// (SM 2.1, presence.neverAt).
+	stretch := func(b *tl) {
+		phoneAt(b, 9000, "t_1")
+		says(b, at(9270), "s_1", "p_1", "t_1", 60)
+		stops(b, at(9300), "s_1", "p_1", "t_1")
+		phoneAt(b, 9540, "t_2")
+	}
+	// stretchCredit is what the stretch credits, as on a device that never
+	// samples (TestRelayedReading): the first message's 60 s lead;
+	// X.no_anchor until its prompt and X.agent_only while its run goes on;
+	// 40 s of relayed reading after the stop, the turn's 20 s base and its
+	// 60 words; and the second message's 60 s lead.
+	stretchCredit := []secondsWant{
+		{8940, 9000, map[event.Reason]int64{rP: 60}},
+		{9000, 9300, map[event.Reason]int64{xNoAnch: 1, xAgent: 299}},
+		{9300, 9345, map[event.Reason]int64{rREAD: 40, xNoAnch: 5}},
+		{9345, 9480, map[event.Reason]int64{xNoAnch: 135}},
+		{9480, 9540, map[event.Reason]int64{rP: 60}},
+	}
+	stretchOrigins := map[string]event.Origin{"t_1": event.OriginRelayed, "t_2": event.OriginRelayed}
+	// stretchAwake checks that the stretch's slots up to the second
+	// message's stamp are a never-sampling device's, unknown and neither
+	// asleep nor slept through, and that a Step a minute gives what one
+	// Step gives, though the stretch's reach ends only rules.late after the
+	// prompt that cuts it.
+	stretchAwake := func(t *testing.T, recs []event.Event, d Derived) {
+		t.Helper()
+		for _, s := range d.Slots {
+			if s.Start >= at(0) && s.Start < at(9540) && (s.Present != event.PresentUnknown || s.Asleep || s.slept) {
+				t.Errorf("slot at %d s is %q, asleep %v, slept %v; want unknown, neither asleep nor slept through",
+					(s.Start-base)/1000, s.Present, s.Asleep, s.slept)
+			}
+		}
+		checkSteps(t, recs, d)
 	}
 	cases := []struct {
 		name  string
@@ -2071,6 +2119,35 @@ func TestRelayedPresence(t *testing.T) {
 				{240, 300, map[event.Reason]int64{xAbsent: 60}},
 			},
 			check: checkRevealed},
+		{
+			// Samples every 15 s until 10:00:00, then a suspend at 10:00:05
+			// with the sample the agent takes at it. The resume never comes
+			// and the idle read fails after the wake, while the agent and
+			// the app's server run on.
+			name: "a relayed lead and reading in a never-sampling stretch after a suspend whose resume never came are realized, as on a device that never samples: no suspend from before the stretch reaches its slots (SM 2.1)",
+			build: func(b *tl) {
+				appServer(b)
+				b.samples(at(-300), at(0))
+				b.power(at(5), event.PowerSuspend)
+				b.sample(at(5))
+				stretch(b)
+			},
+			want: stretchCredit, origins: stretchOrigins, check: stretchAwake},
+		{
+			// Samples every 15 s until 10:00:00, and at 12:40:00 a resume
+			// with no suspend before it, with its sample, and samples every
+			// 15 s after it. The resume dates a sleep from just after the
+			// sample at 10:00:00, which the stretch's slots don't take.
+			name: "so are they in a never-sampling stretch that a resume with no suspend before it ends by starting the sampler again",
+			build: func(b *tl) {
+				appServer(b)
+				b.samples(at(-300), at(0))
+				stretch(b)
+				b.power(at(9600), event.PowerResume)
+				b.sample(at(9600))
+				b.samples(at(9615), at(9720))
+			},
+			want: stretchCredit, origins: stretchOrigins, check: stretchAwake},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -53,6 +53,13 @@ const (
 	// guestWatch is how long the reader watches a guest's message, for the
 	// runs T3 gives it. A held queue has no bound, so this is long.
 	guestWatch = 24 * 60 * 60 * 1000
+	// runWatch is the cap on how long after its stamp the reader watches a
+	// message whose run no read has seen end, so that the end bounds the
+	// session's next run (ranBefore, prune): a day, as for a guest's
+	// message. A run that outlasts it, as one T3 never completes when it is
+	// killed mid-run, bounds nothing after. A message whose row T3 deletes
+	// is watched until the cap too, since no read finds its run again.
+	runWatch = guestWatch
 	// maxWatched and maxPrompts bound what the reader remembers, and
 	// maxSteers the running turns it remembers one guest's message was
 	// steered into (Steer). Past them it forgets the oldest.
@@ -118,7 +125,15 @@ type Options struct {
 	// runs go to, as the hook keys session_id (Keys.Session). Required.
 	Keys *adapters.Keys
 	// Folder is pairtime's own project resolver's word on a folder, as T3
-	// stores it: a thread's worktree, else its project's root. Required.
+	// stores it: a thread's worktree, else its project's root. The agent's
+	// resolver starts a git Track for a folder it hasn't seen, so the reader
+	// asks it of no row read more than RELAY_SEEN_LAG_S after its stamp,
+	// read again by a resync, holding a message the reader watches, or whose
+	// run, its own or the running turn it was steered into, T3 runs on
+	// another harness than Claude Code (Reader.window). It still asks of a
+	// row that the decision then turns away for T3's marks, for having no
+	// run of its own, for an edit or for a stamp ahead of the read.
+	// Required.
 	Folder func(dir string) Folder
 	// Server reports whether the agent's last process scan found T3 Code's
 	// server running (ServerIn), which with the -wal and -shm files of the
@@ -186,9 +201,11 @@ type Reader struct {
 // ids by key alone.
 //
 // A message the reader recorded is watched until RELAY_MATCH_S and a margin
-// have passed since its stamp (prune), and its row is read again until its
-// run has delivered a prompt and a read has seen the run end (readAgain). A
-// row that changes after the first read witnesses nothing. A guest's
+// have passed since its stamp and its run's end can bound no prompt the
+// reader remembers, a day after the stamp at most while no read has seen the
+// run end (prune), and its row is read again until its run has delivered a
+// prompt and a read has seen the run end (readAgain). A row that changes
+// after the first read witnesses nothing. A guest's
 // message is watched for guestWatch whatever T3 does to the row: promote it
 // to a steer, send it again after Claude Code declined the steer, renumber
 // it in a VACUUM. Each run of its own T3 gives it, the first and every one
@@ -476,7 +493,12 @@ const (
 	OffFailed = "failed"
 )
 
-// Counts are what the reader did on one day, for doctor (DESIGN 5.9).
+// Counts are what the reader did on one day, for doctor (DESIGN 5.9). A row
+// the reader turns away before its folder test (Reader.window) counts
+// whatever its folder: one held for its folder past RELAY_SEEN_LAG_S as
+// Aged, and one first read more than RELAY_SEEN_LAG_S after its stamp, or
+// of a run T3 runs on another harness, under the first of the decision's
+// tests that turns it away (Reader.turnedAway).
 type Counts struct {
 	// Witnessed counts the records of declared none it wrote: messages T3
 	// says a person sent.
@@ -937,7 +959,7 @@ func (r *Reader) window(ctx context.Context, b *Batch) (more, anomaly bool, err 
 			cur = x
 		case t == "end" && len(x) == 4:
 			end = x
-		case t == "fold" && len(x) == 5:
+		case t == "fold" && len(x) == 10:
 			folds = append(folds, x)
 		case t == "guest" && len(x) == 5:
 			guests = append(guests, x)
@@ -991,20 +1013,63 @@ func (r *Reader) window(ctx context.Context, b *Batch) (more, anomaly bool, err 
 	if held == nil {
 		held = map[int64]heldRow{}
 	}
+	// The resolver hears only of the folders of rows the decision may still
+	// record, since for a folder it hasn't seen it starts a git Track, which
+	// watches the repo and records its commits (DESIGN 5.8). So these rows
+	// are turned away before the folder test: a row held for its folder
+	// once the age test turns it away, and of this window's rows, one that
+	// holds a message the reader watches, which moves its watch as in the
+	// decision, one a resync reads again, which counts nothing, and one
+	// stamped more than RELAY_SEEN_LAG_S before this read or whose run, its
+	// own or the running turn it was steered into, T3 runs on another
+	// harness, which counts as the decision would count it, whatever its
+	// folder (Counts).
+	for id, h := range held {
+		if seen.UnixMilli()-h.created > r.lag {
+			n.Aged++
+			delete(held, id)
+		}
+	}
+	// gone are this window's rows the tests before the folder test turned
+	// away, which the decision skips though their folders are ones it reads.
+	gone := map[int64]bool{}
 	for _, f := range folds {
 		id, ok := rowid(f[1])
 		if !ok {
 			return false, false, ErrOutput
 		}
+		if !f[6].null {
+			if w := r.watchOf(r.key("message", f[6].s)); w != nil {
+				if w.rowid != id {
+					moves[w] = id
+				}
+				gone[id] = true
+				continue
+			}
+		}
 		created, ok := ms(f[2])
 		if !ok {
 			continue
 		}
-		dir := f[4].s
-		if !f[3].null {
-			dir = f[3].s
+		other := !f[5].null && f[5].s != claudeDriver
+		switch {
+		case r.reread.has(id, created):
+		case seen.UnixMilli()-created > r.lag || other:
+			updated, ok := ms(f[7])
+			mk, err := strconv.Atoi(f[8].s)
+			if ok && err == nil {
+				r.turnedAway(rowTests{marks: mk, own: f[9].s == "1", created: created, updated: updated, other: other},
+					seen.UnixMilli(), &n)
+			}
+		default:
+			dir := f[4].s
+			if !f[3].null {
+				dir = f[3].s
+			}
+			held[id] = heldRow{created: created, folder: dir}
+			continue
 		}
-		held[id] = heldRow{created: created, folder: dir}
+		gone[id] = true
 	}
 	var allowed []string
 	var decide []int64
@@ -1014,17 +1079,8 @@ func (r *Reader) window(ctx context.Context, b *Batch) (more, anomaly bool, err 
 			delete(held, id)
 			continue
 		}
-		// A new row in a tracked folder goes to the decision, which applies
-		// the age test with the others. A held one whose folder took too
-		// long to answer for is turned away here, and a row a resync reads
-		// again counts nothing.
-		if (v.State == FolderPending || id <= c) && seen.UnixMilli()-h.created > r.lag {
-			if !r.reread.has(id, h.created) {
-				n.Aged++
-			}
-			delete(held, id)
-			continue
-		}
+		// A row of a tracked folder goes to the decision, a held one by its
+		// rowid. One whose folder is pending stays held.
 		if v.State == FolderTracked {
 			if !slices.Contains(allowed, h.folder) {
 				allowed = append(allowed, h.folder)
@@ -1053,6 +1109,9 @@ func (r *Reader) window(ctx context.Context, b *Batch) (more, anomaly bool, err 
 				return false, false, ErrOutput
 			}
 			delete(held, id)
+			if gone[id] {
+				continue
+			}
 			if cand := r.decide(x, id, seen, verdict, moves, &n); cand != nil {
 				cand.rowid = id
 				picked = append(picked, cand)
@@ -1256,10 +1315,13 @@ type candidate struct {
 // decide applies the rules the WHERE clause leaves to Go (SM 2.2 rule 9) to
 // the row at rowid id, which the read reads at seen: the marks, a run of its
 // own, the age test, the stamp no later than 2 s after seen, the updated_at
-// test and Claude Code as the provider. It returns nil for a row that gets
-// no record. A row whose message the reader watches, which a resync reads
-// again, goes to moves when it has a new rowid; a guest's is never
-// recorded, whatever marks T3 left on it.
+// test and Claude Code as the provider (turnedAway). It returns nil for a
+// row that gets no record. A row whose message the reader watches, which a
+// resync reads again, goes to moves when it has a new rowid; a guest's is
+// never recorded, whatever marks T3 left on it. The window turns away such
+// a row before its folder test, and one a resync reads again, one read too
+// late and one of a run on another harness, and the decision skips them
+// (window).
 func (r *Reader) decide(x row, id int64, seen time.Time, verdict func(string) Folder, moves map[*watch]int64, n *Counts) *candidate {
 	msgID, thread, runID := x[2], x[3], x[4]
 	if msgID.null || thread.null {
@@ -1285,35 +1347,16 @@ func (r *Reader) decide(x row, id int64, seen time.Time, verdict func(string) Fo
 	if err != nil {
 		return nil
 	}
-	if mk&markNobody != 0 {
-		n.Marked++
-		return nil
-	}
-	if runID.null || x[9].s != "1" || x[10].s != "1" || x[11].s != "0" {
-		// No run of its own: a steer, a message whose queued run T3 turns
-		// into a steer, or a run stamped at another time.
-		n.NoRun++
-		return nil
-	}
-	if seen.UnixMilli()-created > r.lag {
-		n.Aged++
-		return nil
-	}
-	if created-seen.UnixMilli() > stampAhead {
-		n.Ahead++
-		return nil
-	}
-	if updated > created {
-		n.Edited++
+	// No run of its own: a steer, a message whose queued run T3 turns into a
+	// steer, or a run stamped at another time.
+	own := !runID.null && x[9].s == "1" && x[10].s == "1" && x[11].s == "0"
+	t := rowTests{marks: mk, own: own, created: created, updated: updated, other: !x[12].null && x[12].s != claudeDriver}
+	if r.turnedAway(t, seen.UnixMilli(), n) {
 		return nil
 	}
 	driver := ""
 	if !x[12].null {
 		driver = x[12].s
-		if driver != claudeDriver {
-			n.OtherHarness++
-			return nil
-		}
 	}
 	v := verdict(x[13].s)
 	if v.State != FolderTracked || v.Project == "" {
@@ -1345,6 +1388,45 @@ func (r *Reader) decide(x row, id int64, seen time.Time, verdict func(string) Fo
 	}
 	c.eventID = recordID(r.keys, msgID.s, c.createdText, created)
 	return c
+}
+
+// rowTests are what the decision's tests in Go read of a row, none of it
+// text: T3's marks, whether the row has a run of its own, its stamp and
+// updated_at, Unix ms, and whether the run it names is on another harness
+// than Claude Code, by its provider thread's driver.
+type rowTests struct {
+	marks            int
+	own              bool
+	created, updated int64
+	other            bool
+}
+
+// turnedAway counts in n the first of the decision's tests in Go that turns
+// away a row read at seen, Unix ms, in the decision's order: none of T3's
+// marks of a message nobody typed (Marked), a run of its own (NoRun), a
+// read at most RELAY_SEEN_LAG_S after the stamp (Aged) and at most 2 s
+// before it (Ahead), an updated_at no later than the stamp (Edited), and
+// Claude Code as the provider (OtherHarness). It reports whether one did.
+// The window counts the rows it turns away before their folder test by it
+// too, so each counts where the decision counts it.
+func (r *Reader) turnedAway(t rowTests, seen int64, n *Counts) bool {
+	switch {
+	case t.marks&markNobody != 0:
+		n.Marked++
+	case !t.own:
+		n.NoRun++
+	case seen-t.created > r.lag:
+		n.Aged++
+	case t.created-seen > stampAhead:
+		n.Ahead++
+	case t.updated > t.created:
+		n.Edited++
+	case t.other:
+		n.OtherHarness++
+	default:
+		return false
+	}
+	return true
 }
 
 // watchOf returns the watch of the message whose key is msg, or nil.
@@ -1381,7 +1463,7 @@ func (r *Reader) track(w *watch, its []row, seen int64) bool {
 	if w.guest {
 		r.follow(w, its, seen)
 	} else {
-		r.bind(w, its)
+		r.bind(w, its, seen)
 	}
 	return true
 }
@@ -1389,8 +1471,9 @@ func (r *Reader) track(w *watch, its []row, seen int64) bool {
 // bind compares a message's row with what the reader first read of it
 // (DESIGN 5.1): a row whose run, stamp or updated_at changed, or whose run
 // no longer names it, witnesses nothing, which catches an edit, a promotion
-// to steer and a steer's follow-up T3 sent again. Then it reads the run.
-func (r *Reader) bind(w *watch, its []row) {
+// to steer and a steer's follow-up T3 sent again. Then it reads the run, at
+// seen, Unix ms.
+func (r *Reader) bind(w *watch, its []row, seen int64) {
 	x := its[0]
 	created, _ := ms(x[4])
 	updated, _ := ms(x[5])
@@ -1398,7 +1481,7 @@ func (r *Reader) bind(w *watch, its []row) {
 		w.changed = true
 		return
 	}
-	r.runOf(w, its, false)
+	r.runOf(w, its, false, seen)
 }
 
 // follow follows a guest's row (DESIGN 5.1), whatever T3 does to it. A run
@@ -1433,7 +1516,7 @@ func (r *Reader) follow(w *watch, its []row, seen int64) {
 	if run := r.key("run", x[3].s); run != w.run {
 		w.run, w.start, w.done, w.sessions, w.claimed = run, 0, 0, nil, ""
 	}
-	r.runOf(w, its, true)
+	r.runOf(w, its, true, seen)
 }
 
 // steer notes run, the running turn of another message that a guest's row
@@ -1468,21 +1551,42 @@ func (r *Reader) steer(w *watch, its []row, run string) {
 	}
 }
 
-// runOf reads a watched row's run from its item rows: its start, its end
-// and the sessions it went to (sessionsOf). A guest's run takes the session
-// of any provider's thread (anyDriver), since its prompt keeps no text
-// whoever runs it; a message's run only Claude Code's, since only Claude
-// Code's sessions earn relayed credit (SM 2.2).
-func (r *Reader) runOf(w *watch, its []row, anyDriver bool) {
+// runOf reads a watched row's run from its item rows, at seen, Unix ms: its
+// start, its end and the sessions it went to (sessionsOf). A guest's run
+// takes the session of any provider's thread (anyDriver), since its prompt
+// keeps no text whoever runs it; a message's run only Claude Code's, since
+// only Claude Code's sessions earn relayed credit (SM 2.2). A run that ended
+// before it started, as a queued one T3 cancelled, gets its completed_at as
+// its end, or the first read that found it ended when T3 gave it none, and
+// no start, so it delivers and bounds nothing (pair, ranBefore), and prune
+// forgets it RELAY_MATCH_S and a margin after that end.
+func (r *Reader) runOf(w *watch, its []row, anyDriver bool, seen int64) {
 	x := its[0]
 	start, started := ms(x[8])
 	if !started {
-		// Not started: queued, or cancelled before it started.
+		// Not started: queued, or ended before it started.
+		if done, ok := ms(x[9]); ok {
+			w.done = done
+		} else if w.done == 0 && finished(x[6]) {
+			w.done = seen
+		}
 		return
 	}
 	w.start = start
 	w.done, _ = ms(x[9])
 	w.sessions = r.sessionsOf(its, anyDriver)
+}
+
+// finished reports whether status, a run's as T3 stores it, is one T3
+// leaves a run in once it has ended: completed, interrupted, failed,
+// cancelled or rolled_back, and not preparing, queued, starting, running or
+// waiting.
+func finished(status field) bool {
+	switch status.s {
+	case "completed", "interrupted", "failed", "cancelled", "rolled_back":
+		return true
+	}
+	return false
 }
 
 // sessionsOf returns the sessions that the run in a watched row's item
@@ -1581,7 +1685,9 @@ func (r *Reader) pair(b *Batch, asking string) {
 // starts a thread's next run only once the one before it has completed, so
 // such a prompt is the earlier run's, or a steer into it, as one during its
 // Stop hook can be, though w's start slack reaches it (SM 2.2). A run that
-// hasn't ended, or that the reader no longer watches, bounds nothing.
+// hasn't ended bounds nothing, and prune keeps a message's run, however
+// long it runs, until its end can bound no prompt the reader remembers, up
+// to runWatch while no read has seen it end.
 func (r *Reader) ranBefore(w *watch, p *asked) bool {
 	return slices.ContainsFunc(r.watched, func(o *watch) bool {
 		return o != w && o.start > 0 && o.start < w.start && o.done > 0 && p.t <= o.done &&
@@ -1589,20 +1695,34 @@ func (r *Reader) ranBefore(w *watch, p *asked) bool {
 	})
 }
 
-// prune forgets the runs and prompts that can no longer pair, at now in
-// Unix ms: a message's once RELAY_MATCH_S and a margin have passed since its
-// stamp, a guest's once guestWatch has, whatever its runs did.
+// prune forgets, at now in Unix ms, the runs that can no longer pair or
+// bound a pairing, and the prompts that can no longer pair. A guest's
+// message goes once guestWatch has passed since its stamp, whatever its runs
+// did. A message's goes once RELAY_MATCH_S and a margin have passed since its
+// stamp, when it can no longer pair, and its run's end can bound no prompt
+// the reader remembers (ranBefore): RELAY_MATCH_S and the margin after the
+// end a read saw, when every prompt stamped at or before it is forgotten
+// too; or, while no read has seen the run end, runWatch after the stamp, or
+// at once for a row that changed, which no read follows. A prompt goes once
+// RELAY_MATCH_S and the margin have passed since its stamp. maxWatched and
+// maxPrompts bound what is left, in state.json too.
 func (r *Reader) prune(now int64) {
+	keep := r.match + watchMargin
 	r.watched = slices.DeleteFunc(r.watched, func(w *watch) bool {
-		if w.guest {
+		switch {
+		case w.guest:
 			return now-w.created > guestWatch
+		case now-w.created <= keep:
+			return false
+		case w.done > 0:
+			return now-w.done > keep
 		}
-		return now-w.created > r.match+watchMargin
+		return w.changed || now-w.created > runWatch
 	})
 	if n := len(r.watched) - maxWatched; n > 0 {
 		r.watched = r.watched[n:]
 	}
-	r.prompts = slices.DeleteFunc(r.prompts, func(p *asked) bool { return now-p.t > r.match+watchMargin })
+	r.prompts = slices.DeleteFunc(r.prompts, func(p *asked) bool { return now-p.t > keep })
 	if n := len(r.prompts) - maxPrompts; n > 0 {
 		r.prompts = r.prompts[n:]
 	}

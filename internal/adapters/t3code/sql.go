@@ -125,6 +125,18 @@ const (
 	// joinFolder joins a message to its thread and its project.
 	joinFolder = " JOIN " + tThreads + " AS t ON t.thread_id = m.thread_id" +
 		" JOIN " + tProjects + " AS p ON p.project_id = t.project_id"
+	// joinNamed joins a message to the run m.run_id names, whichever
+	// message that run is for, as a steer's names the running turn's, and
+	// to that run's provider thread, whose driver says which harness T3
+	// runs it on.
+	joinNamed = " LEFT JOIN " + tRuns + " AS r ON r.run_id = m.run_id" +
+		" LEFT JOIN " + tProviderThreads + " AS pt ON pt.provider_thread_id = r.provider_thread_id"
+	// ownRun is decideSQL's test for a run of the message's own, on the run
+	// joinNamed joins: one with the message as its userMessageId, stamped
+	// with it, that T3 doesn't mean to turn into a steer. It is NULL when
+	// no run is joined.
+	ownRun = "json_extract(r.payload_json, '$.userMessageId') = m.message_id AND r.requested_at = m.created_at" +
+		" AND json_type(r.payload_json, '$.steerWhenReadyRunId') IS NULL"
 	// marks is the message's marks as a bitmask: 1 scheduledTaskId (declared
 	// cron); 2 senderThreadId and 4 linkedSender (declared cross_session);
 	// 8 idleCompaction, 16 workflowScript, 32 notification and 64
@@ -167,7 +179,12 @@ func startSQL() string {
 //   - fold: each new user row's folder, its thread's worktree or its
 //     project's root, with its stamp, for the rows the decision may record
 //     (by a person, from a client, not a guest's), so that pairtime's own
-//     resolver can say which folders the decision may read;
+//     resolver can say which folders the decision may read. Each row also
+//     carries, for the tests the reader makes before it asks the resolver
+//     (Reader.window), and none of it text: the driver of the provider
+//     thread of the run m.run_id names, a steer's running turn included,
+//     the message id, which the reader keys, the updated_at, the marks, and
+//     whether that run is the message's own;
 //   - guest: each new guest message, by mark or by opening, with its
 //     message id, which the reader keys, and whether it started a run of
 //     its own (1), is a steer in another message's run (0), or has no run
@@ -186,8 +203,9 @@ func windowSQL(c int64, watched []int64) string {
 	b.WriteString("SELECT " + tag("end") + ", " + hx("rowid") + ", " + hx("message_id") + ", " + hx("created_at") +
 		" FROM " + tMessages + " WHERE rowid = " + hi + ";\n")
 	b.WriteString("SELECT " + tag("fold") + ", " + hx("m.rowid") + ", " + hx("m.created_at") + ", " +
-		hx("json_extract(t.payload_json, '$.worktreePath')") + ", " + hx("p.workspace_root") +
-		" FROM " + tMessages + " AS m" + joinFolder +
+		hx("json_extract(t.payload_json, '$.worktreePath')") + ", " + hx("p.workspace_root") + ", " + hx("pt.driver") + ", " +
+		hx("m.message_id") + ", " + hx("m.updated_at") + ", " + hx(marks) + ", " + hx(ownRun) +
+		" FROM " + tMessages + " AS m" + joinFolder + joinNamed +
 		" WHERE " + in + " AND " + isUser + " AND " + notGuest + " AND " + byPerson +
 		" ORDER BY m.rowid;\n")
 	b.WriteString("SELECT " + tag("guest") + ", " + hx("m.rowid") + ", " + hx("m.created_at") + ", " +

@@ -5,13 +5,14 @@
     python3 -I logger.py EVENT < payload
 
 prepare.py registers this for every event in tools/capture/prepare.py's
-CLAUDE_CODE_HOOKS. Each call appends to hooks.jsonl, next to this file: the
-event, session_id, prompt_id and the arrival time, and for UserPromptSubmit
-whether the prompt opens with T3 Code's guest wrapper. It never writes the
-prompt or any other payload field. It also appends to snap.jsonl what the
-scratch T3 Code store held at that moment about the session's runs (ids, times
-and booleans only), and the entrypoint and Agent SDK version variables (short,
-version-shaped values only). See README.md.
+CLAUDE_CODE_HOOKS. Each call appends to log/hooks.jsonl, in the folder next to
+this file that prepare.py gives the throwaway account, since this file's own
+folder is root's: the event, session_id, prompt_id and the arrival time, and
+for UserPromptSubmit whether the prompt opens with T3 Code's guest wrapper. It
+never writes the prompt or any other payload field. It also appends to
+log/snap.jsonl what the scratch T3 Code store held at that moment about the
+session's runs (ids, times and booleans only), and the entrypoint and Agent
+SDK version variables (short, version-shaped values only). See README.md.
 """
 
 import json
@@ -22,6 +23,7 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+LOG = os.path.join(HERE, "log")
 HOME = os.path.dirname(HERE)
 STORE = os.path.join(HOME, "t3home", "userdata", "statev2.sqlite")
 CLAUDE_HOME = os.path.join(HOME, "claude-home")
@@ -87,9 +89,9 @@ def main() -> None:
     except Exception as e:
         snap["store_error"] = type(e).__name__
     snap["snap_ms_after_arrival"] = (time.monotonic_ns() - mono_ns) / 1e6
-    with open(os.path.join(HERE, "hooks.jsonl"), "a") as f:
+    with open(os.path.join(LOG, "hooks.jsonl"), "a") as f:
         f.write(json.dumps(rec) + "\n")
-    with open(os.path.join(HERE, "snap.jsonl"), "a") as f:
+    with open(os.path.join(LOG, "snap.jsonl"), "a") as f:
         f.write(json.dumps(snap) + "\n")
 
 
