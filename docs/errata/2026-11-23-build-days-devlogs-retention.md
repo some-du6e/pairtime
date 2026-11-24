@@ -4,7 +4,7 @@ Date 2026-11-23. Raised by the plan for WP-SV12 part 1. Status: decided 2026-11-
 
 ## Input
 
-- Migration 0011 creates build_days, the weekly-goal and freeze state, devlogs, badges, the removed-item records and nullable users columns for the time-zone change. TestTables needs each table in docs/retention.json, and TestDesignPeriods ties each period to a DESIGN 4.4 row.
+- Migration 0011 creates build_days, the weekly-goal and freeze state, devlogs, badges, the removed-item records and the record of the profile's time-zone changes. TestTables needs each table in docs/retention.json, and TestDesignPeriods ties each period to a DESIGN 4.4 row.
 - A minute's received_at_ms lives only in minute_buckets and minute_bucket_revisions, which the minute-bucket job deletes at 180 days. rollups_daily keeps none, and a weekly streak passes 180 days at week 26 (182 days).
 - D13 builds devlog windows from the devlogs that exist at submission time. The devlog API is POST, GET and DELETE, so a typo fix is a delete and a new publish.
 - 8.3 and TE 7.2 make deleting anything published take effect at once (TP B2). A computer whose publish was stored but whose answer it lost sends the publish again.
@@ -21,7 +21,7 @@ Every kind of data the server keeps has a 4.4 row and a finite period, a deletio
 
 (c) Each devlog and badge carries a random id the client made. A delete or removal keeps only that id and its time, for 30 days, as project_name_hides does, so a publish sent again from any computer gets 410 and stores nothing. The client drops a publish unanswered for 30 days and tells the teen.
 
-(d) A devlog's time is when the server received it, and D13's windows start no earlier than the end of the latest window frozen by a submission on the project that wasn't withdrawn. Worked case: devlogs at t1, t2 and t3, and a submission frozen on [t1, t2] and [t2, t3]. The teen deletes t3 to fix a typo and republishes it at t4. The next list is [t3, t4], not [t2, t4]. After a withdrawal, [t2, t4] is open again, and 7.5 step 5's sticky draw still applies.
+(d) A devlog's time is when the server received it, and D13's windows start no earlier than the latest end of any window frozen by a submission on the project that wasn't withdrawn. Worked case: devlogs at t1, t2 and t3, and a submission frozen on [t1, t2] and [t2, t3]. The teen deletes t3 to fix a typo and republishes it at t4. The next list is [t3, t4], not [t2, t4]. After a withdrawal, [t2, t4] is open again, and 7.5 step 5's sticky draw still applies.
 
 (e) The freeze records devlog windows as start and end times, so the submitted windows and their numbers never move. 5.10's 'Frozen numbers' needs no edit, since programs re-pull by their own devlogs' dates (HC 3.3).
 
@@ -31,20 +31,22 @@ Every kind of data the server keeps has a 4.4 row and a finite period, a deletio
 
 (h) 8.9's eraser covers all four rows through WP-SV13's DeleteAccount calls, and the export holds them.
 
+Amended in review in #278 (2026-11-23): D13 and WP-SB1 bound new windows by the latest end of any window frozen, not by the window frozen last; WP-CO4 queues a delete as it queues a publish, sends it until the server answers and cancels the devlog's unanswered publish, and ties every queued publish and delete to the server and device it was made for; whichever of WP-SV12 and WP-SV13 lands second wires both DeleteAccount calls into the eraser and the export; and the build-days row keeps every zone change.
+
 ## Applied wording
 
 DESIGN 4.4, four server rows after the row for HMACs of Hackatime names linked to a program:
 
 | Where | Data | Kept |
 |---|---|---|
-| Server | Build days: each local day's credited seconds at levels A and B as D10 decides them, whether that made it a build day, and when that was decided; the weekly goal, each week's result, and the freezes earned, held and spent; the profile's time zone that sets the days' bounds, when it last changed and the zone it changed from, both replaced at the next change | Account lifetime |
+| Server | Build days: each local day's credited seconds at levels A and B as D10 decides them, whether that made it a build day, and when that was decided; the weekly goal, each week's result, and the freezes earned, held and spent; the profile's time zone that sets the days' bounds, and each change of it, with its time and the zone it replaced | Account lifetime |
 | Server | Devlogs the teen published: the Markdown byte for byte as previewed, the `ai_assisted` label, the project it belongs to, when the server received it, and the random id the client gave it | Until the teen deletes it or asks the controller to, which deletes the row at once, so no page or read shows it again, a review page's story included (TE 7.2; TP B2); or account deletion. A submission keeps only its devlog windows' start and end times (7.5 step 2) |
 | Server | Badges the teen chose to show, as codes from a fixed list, each with the random id the client gave it | Until the teen removes it or asks the controller to, which deletes its row at once (TE 7.2; TP B2); or account deletion |
 | Server | Ids of devlogs the teen deleted and badges the teen removed, with the time of each removal, and no text, project or badge code | 30 days after the removal, so a computer that missed it can't publish the item again; or account deletion |
 
 DESIGN 6.2 D13, the 'This design' cell's second sentence:
 
-> A devlog's time is when the server received it, and windows start no earlier than the end of the latest window frozen by a submission on the project that wasn't withdrawn, so deleting or republishing a devlog never puts submitted time in a new window (7.5 step 2, 4.4).
+> A devlog's time is when the server received it, and windows start no earlier than the latest end of any window frozen by a submission on the project that wasn't withdrawn, so deleting or republishing a devlog never puts submitted time in a new window (7.5 step 2, 4.4).
 
 DESIGN 7.5 step 2, after its first sentence:
 

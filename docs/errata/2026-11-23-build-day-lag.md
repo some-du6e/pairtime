@@ -1,6 +1,6 @@
 # Erratum: DESIGN 6.2 D10 doesn't say what its 72 hours count from, which uploads count, or how a time zone change moves a day
 
-Date 2026-11-23. Raised by the plan for WP-SV12 part 1, whose risks ask for an erratum where D10 doesn't say what the 72 hours count from, and by that plan's critic. Status: decided 2026-11-23 by the orchestrator for Karim (D-sv12-lag). Applied to DESIGN 3.8 and 6.2 D10, and to the build-days row D-sv12-retention adds to DESIGN 4.4, in a docs PR of its own under `oracle-change`, with PLAN's WP-SV12. The code follows in WP-SV12.
+Date 2026-11-23. Raised by the plan for WP-SV12 part 1, whose risks ask for an erratum where D10 doesn't say what the 72 hours count from, and by that plan's critic. Status: decided 2026-11-23 by the orchestrator for Karim (D-sv12-lag). Applied to DESIGN 3.8 and 6.2 D10, and to the build-days row D-sv12-retention adds to DESIGN 4.4, in a docs PR of its own, with PLAN's WP-SV12. The code follows in WP-SV12.
 
 ## Input
 
@@ -32,7 +32,7 @@ Date 2026-11-23. Raised by the plan for WP-SV12 part 1, whose risks ask for an e
 
 1. The 72 hours run from the end of the local day in the profile's time zone. A minute counts by the `received_at_ms` of the minute-bucket revision that carries it. That is the time ingest stamps, and the time the witness label reads.
 2. Only revisions the server itself labeled witnessed or offline count.
-   - For each device and minute, the last such revision received counts once it is final or its minute is `PENDING_WINDOW_S` old.
+   - For each device and minute, the last such revision received counts once it is final or `PENDING_WINDOW_S` has passed since its minute ended.
    - A revision the server labeled backfilled adds and removes nothing, so a late restore keeps the minute's earlier credit.
    - A revision stored with no label, by a release from before migration 0009, goes by the client's reading in its bucket.
 3. The revisions merge one human minute per wall-clock minute (SM 3.4), and the level A and B seconds are summed over every project. Level C never counts. `DAY_CAP_S`, `OFFLINE_CAP_S` and `OFFLINE_PUSH_S` don't enter it.
@@ -47,6 +47,8 @@ Date 2026-11-23. Raised by the plan for WP-SV12 part 1, whose risks ask for an e
    - Setting the zone the account already has isn't a change.
 
 DESIGN 6.2 D10 and 3.8, and PLAN's WP-SV12, carry the wording.
+
+Amended in review in #278 (2026-11-23): D10 and 3.8 carry decision 2's rule for a revision stored with no label; a day the job hasn't stored by its deadline counts if its credit reached `BUILD_DAY_S` as of any time up to the deadline, so a late or first run decides as runs on time would have; an open day shows its credit from the as-of read, never `rollups_daily`; D10 and D11 say that D6's cap and forge push are submission rules; and the account keeps every zone change, each with its time and the zone it replaced, so decision 5 holds across any number of changes.
 
 Cost: the bucket-level label (`internal/server/witness`) reads two honest cases as backfilled:
 - a restore (SM 4.3) that arrives after `WITNESS_LAG_S`;
