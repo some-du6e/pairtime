@@ -477,10 +477,19 @@ func TestUploadToIngest(t *testing.T) {
 	// A scheduler that never runs takes the place of the uploader's own
 	// ticker, so only the test wakes it, as the steps' waits do, and nothing
 	// goes between privacy show's preview and the wake that sends it.
+	var (
+		problemMu sync.Mutex
+		problem   string
+	)
 	u, err := uploader.New(uploader.Options{
 		Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
 		Login:  uploader.LoginFunc(func() (uploader.Credentials, bool) { return creds, signedIn.Load() }),
 		Params: table, Started: started, Client: client, Draw: func(int64) int64 { return 0 }, Sched: sched.New(),
+		Problem: func(msg string) {
+			problemMu.Lock()
+			problem = msg
+			problemMu.Unlock()
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -665,10 +674,42 @@ func TestUploadToIngest(t *testing.T) {
 			}
 		}},
 		{"commit records reach commit_records once per sha, under the account, as their first lines say, and one seen before the sign-in never does", func(t *testing.T) {
-			waitFor(t, "the commit records", func() bool {
+			deadline := time.Now().Add(3 * time.Minute)
+			for count(`SELECT COUNT(*) FROM commit_records WHERE device_id = $1`) != 3 {
+				if time.Now().After(deadline) {
+					// What went, what the server holds, and what the uploader
+					// says, to see where the records stopped.
+					var carried []string
+					for _, body := range ft.bodies() {
+						var b struct {
+							Commits []struct {
+								SHA string `json:"sha"`
+							} `json:"commits"`
+						}
+						if json.Unmarshal(body, &b) == nil && len(b.Commits) > 0 {
+							var shas []string
+							for _, c := range b.Commits {
+								shas = append(shas, c.SHA[:4])
+							}
+							carried = append(carried, strings.Join(shas, ","))
+						}
+					}
+					past, _ := uploader.PastUploads(dirs.Data)
+					var results []string
+					for _, p := range past {
+						if p.Commits > 0 || (p.Results != nil && len(p.Results.Commits) > 0) {
+							results = append(results, fmt.Sprintf("%d:%d:%v", p.Status, p.Commits, p.Results))
+						}
+					}
+					problemMu.Lock()
+					msg := problem
+					problemMu.Unlock()
+					t.Fatalf("gave up waiting for the commit records: the server holds %d, the POSTs carried %q, uploads.jsonl says %v, the uploader says %+v, and doctor hears %q",
+						count(`SELECT COUNT(*) FROM commit_records WHERE device_id = $1`), carried, results, u.Status(), msg)
+				}
 				u.Wake()
-				return count(`SELECT COUNT(*) FROM commit_records WHERE device_id = $1`) == 3
-			})
+				time.Sleep(20 * time.Millisecond)
+			}
 			rows, err := db.Read.QueryContext(ctx, `SELECT sha, account_id, project, body FROM commit_records WHERE device_id = $1`, deviceID)
 			if err != nil {
 				t.Fatal(err)
