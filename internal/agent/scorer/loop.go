@@ -555,8 +555,8 @@ func (l *Loop) open() error {
 // Each session the carry keeps gets its question state too, which an agent
 // before E-prompt-class-asked (V 2 or older) didn't keep, folded by seq
 // from the session's records before the window (sessionCarry.question)
-// and kept for the session's records in the window and in the carry, as
-// the window keeps it (window.keepAsks).
+// and kept for the session's prompts and queued messages in the window and
+// the prompt the carry holds, as the window keeps it (window.keepAsks).
 func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	out := c.Carry
 	out.Lock = nil
@@ -580,8 +580,9 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 				continue
 			}
 			if ev.T >= c.From {
-				// A record of the window, whose class can read the asks.
-				if out.Sessions[ev.SessionKey] != nil {
+				// A prompt or queued message of the window, whose class reads
+				// the asks (readsAsks).
+				if out.Sessions[ev.SessionKey] != nil && readsAsks(&ev) {
 					readers[ev.SessionKey] = append(readers[ev.SessionKey], ev.Seq)
 				}
 				continue

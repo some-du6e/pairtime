@@ -94,13 +94,14 @@ func (w *window) slide(from int64) {
 }
 
 // keepAsks drops each carried session's asks that no record a Step reads
-// can need (sessionCarry.keepAsks): the readers are the session's records
-// in the window and in the carry. A record that comes later is numbered
-// after every one there, so the asks numbered last serve it.
+// can need (sessionCarry.keepAsks): the readers are the session's prompts
+// and queued messages in the window (readsAsks), and the prompt the carry
+// holds. A record that comes later is numbered after every one there, so
+// the asks numbered last serve it.
 func (w *window) keepAsks() {
 	readers := make(map[string][]uint64)
 	for _, h := range w.recs {
-		if w.carry.Sessions[h.ev.SessionKey] != nil {
+		if w.carry.Sessions[h.ev.SessionKey] != nil && readsAsks(&h.ev) {
 			readers[h.ev.SessionKey] = append(readers[h.ev.SessionKey], h.ev.Seq)
 		}
 	}
@@ -347,7 +348,8 @@ type sessionCarry struct {
 	// class of a record a Step reads can still need, in seq order: of
 	// outputs and of stops, of every path and of the paths that aren't
 	// side doors, the one numbered last, and the one numbered last before
-	// each of the session's records in the window and in the carry. The
+	// each of the session's prompts and queued messages in the window and
+	// before the prompt the carry holds (readsAsks). The
 	// class reads the records numbered before a prompt, not by t, so a
 	// record folded in after a prompt was numbered, as a log reader's late
 	// one is, must not hide what the prompt read (keepAsks). FirstNative
@@ -518,14 +520,18 @@ func (s *sessionCarry) question(ev event.Event) {
 }
 
 // keepAsks keeps the asks the answer class can read for a record numbered
-// at one of readers, the seqs of the session's records in the window, or
-// at one of the session's records in the carry, and for any record still
-// to come. Of outputs and of stops, of every path and of the paths that
-// aren't side doors, which askedBefore reads apart, that is the one
-// numbered last before each such seq, and the one numbered last of all.
+// at one of readers, the seqs of the session's prompts and queued messages
+// in the window, or at the prompt the carry holds, and for any record
+// still to come. Of outputs and of stops, of every path and of the paths
+// that aren't side doors, which askedBefore reads apart, that is the one
+// numbered last before each such seq, and the one numbered last of all. No
+// other record reads them: keeping one for, say, the carried output would
+// bring back an earlier output of the carried turn, dated before its
+// prompt, which cuts the run of a session no hook or log reader covers
+// (pkg/score's runUntil).
 func (s *sessionCarry) keepAsks(readers []uint64) {
-	for _, e := range s.events() {
-		readers = append(readers, e.Seq)
+	if s.Prompt != nil {
+		readers = append(readers, s.Prompt.Seq)
 	}
 	keep := make(map[string]bool)
 	for _, output := range []bool{true, false} {
@@ -740,6 +746,17 @@ func (c *carry) records(out []event.Event, from int64, g runGaps, stamped, ttl i
 		}
 	}
 	return out
+}
+
+// readsAsks reports whether e's class reads its session's asks: a
+// prompt.submit, a relayed prompt's included, or an agent.queue, as
+// pkg/score's askedBefore is called for (SM 2.2).
+func readsAsks(e *event.Event) bool {
+	switch e.Data.(type) {
+	case *event.PromptSubmit, *event.AgentQueue:
+		return true
+	}
+	return false
 }
 
 // questions returns the records the answer class reads that the carry
