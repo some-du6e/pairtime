@@ -1239,11 +1239,16 @@ func (u *Uploader) sync(c Credentials) bool {
 		}
 		from := store.DayOf(cutoff)
 		maps.DeleteFunc(u.st.Marks, func(day string, _ store.Mark) bool { return day >= from })
-		// So do the first lines of commits/ of those days, which the
-		// server may have lost with the batches before them, once their
-		// batches' roots have gone again (judgeCommit). It answers the
-		// records it kept as duplicates.
-		maps.DeleteFunc(u.st.CommitMarks, func(day string, _ store.Mark) bool { return day >= from })
+		// So do the first lines of commits/ of every day: a record goes
+		// once its first batch's root has been answered, often days after
+		// its observed_at, as the backlog's and the lines behind a stretch's
+		// wait do, so the lost requests may have carried records of any
+		// day. Each plan reads every kept day again, a line whose first
+		// batch is past Next waits for that root (judgeCommit), a line
+		// withheld is withheld again, and a pruned sha stays decided
+		// (PrunedCommits). The server answers the records it kept as
+		// duplicates.
+		u.st.CommitMarks = nil
 		u.st.Sent = nil
 		// A request waiting for its retry was built from the marks before
 		// the rewind, and its answer would put them back.

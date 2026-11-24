@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 
+	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/store"
 )
@@ -27,6 +28,103 @@ const (
 	minObservedAt = 1_577_836_800_000
 	maxObservedAt = 4_102_444_800_000
 )
+
+// PrunedCommits is the file in commits/ that lists the sha of every line of
+// the day files the prune deleted (PruneCommits), one a line, each with a
+// newline before it as well as after it, as the day files' lines have.
+// Each plan takes those shas as decided (commitsOf), whether their lines
+// went, were withheld or still waited, so no later line of them goes from
+// this device. It stays as long as commits/ does, until pairtime privacy
+// delete or uninstall removes the folder (D-ag5-D2; DESIGN 3.5, 4.4).
+const PrunedCommits = "pruned.txt"
+
+// PruneCommits deletes the day files of commits/ in dir dated before
+// oldest, a UTC day as YYYY-MM-DD. Before it deletes one, it appends the
+// sha of each of its lines to PrunedCommits, with one write and a flush,
+// so the shas outlive their lines whatever became of them, and it needs
+// nothing of the uploader's place. A file it can't read, or whose shas it
+// can't keep, stays for the next prune. It returns every error it met,
+// joined.
+func PruneCommits(dir, oldest string) error {
+	files, err := store.BucketDays(dir)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, f := range files {
+		if f.Day >= oldest {
+			continue
+		}
+		name := filepath.Join(dir, f.Day+".jsonl")
+		data, err := os.ReadFile(name)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		var list []byte
+		// Every line, a last one with no newline after it too, which no
+		// plan has read.
+		for _, l := range bytes.Split(data, []byte{'\n'}) {
+			if c, ok := commitOf(l); ok {
+				list = append(append(append(list, '\n'), c.SHA...), '\n')
+			}
+		}
+		if len(list) > 0 {
+			if err := appendFlushed(filepath.Join(dir, PrunedCommits), list); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+		}
+		if err := os.Remove(name); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// appendFlushed appends b to the file name with one write, and flushes it,
+// and its folder too when the file is new, so its name outlives a power cut
+// as its lines do.
+func appendFlushed(name string, b []byte) error {
+	_, statErr := os.Stat(name)
+	f, err := os.OpenFile(name, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	if errors.Is(statErr, fs.ErrNotExist) {
+		defer home.SyncDir(filepath.Dir(name))
+	}
+	_, err = f.Write(b)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
+// prunedSHAs is the set of shas PrunedCommits in dir lists, empty when
+// there is no list, and whether it read the list.
+func prunedSHAs(dir string) (map[string]bool, bool) {
+	data, err := os.ReadFile(filepath.Join(dir, PrunedCommits))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, true
+	}
+	if err != nil {
+		return nil, false
+	}
+	out := map[string]bool{}
+	for _, l := range bytes.Split(data, []byte{'\n'}) {
+		if s := string(l); isCommitID(s) {
+			out[s] = true
+		}
+	}
+	return out, true
+}
 
 // commitEntry is a line of commits/ a plan decided: its day, the mark just
 // past it, and the record it sends, nil for a line withheld for good or
@@ -67,7 +165,8 @@ const (
 //
 // A sha goes once per device, as the first line commits/ holds for it
 // (D-ag5-D2). Each plan reads every kept day's file whole. The shas of the
-// lines before each day's mark were decided already. The new lines, read
+// lines before each day's mark were decided already, and so were those
+// PrunedCommits lists, whose lines went with their days. The new lines, read
 // oldest day first and then in file order, each add their sha, those after
 // a line that waits included. The first line of a sha is judged by
 // judgeCommit. One that waits holds back the rest of its day: their marks
@@ -81,7 +180,8 @@ const (
 // whose file can't be read, for a reason other than being gone, stops every
 // line in the plan, whatever its day: none goes and no mark moves, since
 // the file may hold the first line of a sha that another day's line has
-// too. Its day is in unread for doctor.
+// too. Its day is in unread for doctor. So does a list of pruned shas that
+// can't be read, as "any day".
 func commitsOf(in planInput, n int) (entries []commitEntry, days map[string]bool, unread []string, more bool) {
 	if in.commitDir == "" {
 		return nil, nil, nil, false
@@ -115,6 +215,10 @@ func commitsOf(in planInput, n int) (entries []commitEntry, days map[string]bool
 		days[f.Day] = true
 		read = append(read, d)
 	}
+	pruned, ok := prunedSHAs(in.commitDir)
+	if !ok {
+		return nil, nil, []string{"any day"}, false
+	}
 	if len(unread) > 0 {
 		return nil, nil, unread, false
 	}
@@ -129,6 +233,9 @@ func commitsOf(in planInput, n int) (entries []commitEntry, days map[string]bool
 	// seen holds the shas of the lines read so far, and undecided those
 	// whose first line waits in this plan, or was held back with its day.
 	seen, undecided := map[string]bool{}, map[string]bool{}
+	for sha := range pruned {
+		seen[sha] = true
+	}
 	for _, d := range read {
 		for _, l := range d.lines[:d.from] {
 			if c, ok := commitOf(l.line); ok {

@@ -8,12 +8,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters/git"
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/uploader"
 )
 
 // commitsKeep is how long commits/ keeps a day's file: 180 days, as the
@@ -29,7 +29,9 @@ const commitsKeep = 180 * 24 * time.Hour
 // which holds only fields DESIGN 4.3 lets a client upload: no message, no
 // path, and nothing of git.CommitLocal. The reflog that a record's rewrites
 // come from expires, so a record dropped before the uploader takes it
-// can't be made again. A day's file goes once it is commitsKeep old.
+// can't be made again. A day's file goes once it is commitsKeep old, and
+// the shas of its lines stay, in uploader.PrunedCommits, until commits/
+// goes at pairtime privacy delete or uninstall.
 //
 // Each line has a newline before it as well as after it, as the inbox's
 // spool has, so a line a power cut left short can't take the next with it.
@@ -113,24 +115,18 @@ func (s *commitStore) prune(now time.Time) {
 	s.pruneLocked(now)
 }
 
+// pruneLocked is prune. Each file's shas go to the list the uploader takes
+// as decided before the file does (uploader.PruneCommits), so no later
+// line of them goes from this device. A file it couldn't list or delete
+// waits for the next day's prune.
 func (s *commitStore) pruneLocked(now time.Time) {
 	today := now.UTC().Format(time.DateOnly)
 	if s.pruned == today {
 		return
 	}
-	entries, err := os.ReadDir(s.dir)
-	if err != nil {
+	if _, err := os.Stat(s.dir); err != nil {
 		return // none yet: the next add or poll looks again
 	}
 	s.pruned = today
-	oldest := now.UTC().Add(-commitsKeep).Format(time.DateOnly)
-	for _, e := range entries {
-		day, ok := strings.CutSuffix(e.Name(), ".jsonl")
-		if !ok || e.IsDir() {
-			continue
-		}
-		if _, err := time.Parse(time.DateOnly, day); err == nil && day < oldest {
-			os.Remove(filepath.Join(s.dir, e.Name()))
-		}
-	}
+	uploader.PruneCommits(s.dir, now.UTC().Add(-commitsKeep).Format(time.DateOnly))
 }

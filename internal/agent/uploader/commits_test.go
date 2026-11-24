@@ -7,7 +7,9 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"net/http/httptest"
 	"os"
@@ -310,6 +312,31 @@ func TestCommitPlan(t *testing.T) {
 					t.Errorf("marks %+v: the later line isn't passed over", p.commitMarks)
 				}
 			}},
+		{"a later day's line that would be withheld, whose sha's line was held back behind one that waits on Next, waits too, so the sha goes once Next passes its first batch",
+			[]float64{1, 2, 3, 24*60 + 2}, saved{Next: 2, Gaps: []gap{{From: 4, To: 4}}},
+			func(t *testing.T, dir string, ix *rowIndex, in *planInput) []int64 {
+				// Commit 1's first batch is batch 2, unanswered, so it waits,
+				// and commit 2's line after it is held back with its day. The
+				// later day's line of commit 2 has batch 4, sealed in local-only
+				// mode, for its first batch.
+				ends := writeCommitLines(t, dir, day, commitRecord(1, atS(90)), commitRecord(2, atS(91)))
+				return append(ends, writeCommitLines(t, dir, nextDay, commitRecord(2, atS(24*3600+60)))...)
+			}, func(t *testing.T, p plan, ends []int64, in planInput) {
+				if len(p.body.Commits) != 0 || p.commitMarks[day].Off != 0 || p.commitMarks[nextDay].Off != 0 {
+					t.Fatalf("records %v went, marks %+v: want nothing decided, the later day's line of commit 2 waiting with its first line", p.body.Commits, p.commitMarks)
+				}
+				in.st.Next, in.st.CommitMarks = 4, p.commitMarks
+				p, err := makePlan(in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(p.body.Commits) != 2 || p.body.Commits[0].SHA != testSHA(1) || p.body.Commits[1].SHA != testSHA(2) || p.body.Commits[1].ObservedAt != atS(91) {
+					t.Errorf("once Next passes batch 2, records %v went: want commits 1 and 2, by their first lines", p.body.Commits)
+				}
+				if p.commitMarks[nextDay].Off != ends[2] {
+					t.Errorf("mark %+v: the later day's line of commit 2 isn't passed over", p.commitMarks[nextDay])
+				}
+			}},
 		{"a line without counts goes without them, and a read 0 goes as 0", nil, saved{Next: 4},
 			func(t *testing.T, dir string, ix *rowIndex, in *planInput) []int64 {
 				return writeCommitLines(t, dir, day,
@@ -483,6 +510,76 @@ func TestCommitPlan(t *testing.T) {
 			}, func(t *testing.T, p plan, ends []int64, in planInput) {
 				if len(p.body.Commits) != 2 || p.commitMarks[day].Off != ends[1] {
 					t.Errorf("records %v went, mark %+v: want both from the day's start", p.body.Commits, p.commitMarks[day])
+				}
+			}},
+		{"a withheld line whose day the prune deleted keeps its sha decided: the same sha seen later, with a first batch sealed online, sends nothing", nil, saved{Next: 4, Gaps: []gap{{From: 1, To: 1}}},
+			func(t *testing.T, dir string, ix *rowIndex, in *planInput) []int64 {
+				// Commit 1 was seen on a day 180 days are past, and its first
+				// batch, batch 1, was sealed in local-only mode, so a plan
+				// withheld it.
+				writeCommitLines(t, dir, "2026-05-01", commitRecord(1, atS(-202*24*3600)))
+				p, err := makePlan(*in)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(p.body.Commits) != 0 || p.commitMarks["2026-05-01"].Off == 0 {
+					t.Fatalf("records %v went, marks %+v: want commit 1 withheld", p.body.Commits, p.commitMarks)
+				}
+				in.st.CommitMarks = p.commitMarks
+				if err := PruneCommits(dir, "2026-05-21"); err != nil {
+					t.Fatal(err)
+				}
+				// Seen again, as after another clone's pull, with batch 2 for
+				// its first batch, and a new commit after it.
+				return writeCommitLines(t, dir, day, commitRecord(1, atS(90)), commitRecord(3, atS(92)))
+			}, func(t *testing.T, p plan, ends []int64, in planInput) {
+				if len(p.body.Commits) != 1 || p.body.Commits[0].SHA != testSHA(3) || p.commitMarks[day].Off != ends[1] {
+					t.Errorf("records %v went, mark %+v: want only commit 3, commit 1's line passed over", p.body.Commits, p.commitMarks[day])
+				}
+				if _, ok := p.commitMarks["2026-05-01"]; ok {
+					t.Errorf("the pruned day's mark stays: %+v", p.commitMarks)
+				}
+			}},
+		{"a prune with the clock 181 days ahead deletes every day's file and keeps its shas decided, so a sha of theirs seen again sends nothing", nil, saved{Next: 4},
+			func(t *testing.T, dir string, ix *rowIndex, in *planInput) []int64 {
+				writeCommitLines(t, dir, day, commitRecord(1, atS(90)), commitRecord(2, atS(91)))
+				ahead := day0.Add(181 * 24 * time.Hour)
+				if err := PruneCommits(dir, ahead.Add(-180*24*time.Hour).Format(time.DateOnly)); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(filepath.Join(dir, day+".jsonl")); !errors.Is(err, fs.ErrNotExist) {
+					t.Fatalf("the day's file is still there: %v", err)
+				}
+				return writeCommitLines(t, dir, nextDay, commitRecord(2, atS(24*3600+60)), commitRecord(3, atS(24*3600+61)))
+			}, func(t *testing.T, p plan, ends []int64, in planInput) {
+				for _, c := range p.body.Commits {
+					if c.SHA == testSHA(1) || c.SHA == testSHA(2) {
+						t.Errorf("records %v went: a pruned sha went again", p.body.Commits)
+					}
+				}
+				if p.commitMarks[nextDay].Off == 0 {
+					t.Errorf("mark %+v: the line of the pruned sha isn't decided", p.commitMarks[nextDay])
+				}
+			}},
+		{"a list of pruned shas that can't be read stops every line, as a day's file that can't be read does", nil, saved{Next: 4},
+			func(t *testing.T, dir string, ix *rowIndex, in *planInput) []int64 {
+				writeCommitLines(t, dir, "2026-05-01", commitRecord(1, atS(-202*24*3600)))
+				if err := PruneCommits(dir, "2026-05-21"); err != nil {
+					t.Fatal(err)
+				}
+				ends := writeCommitLines(t, dir, day, commitRecord(1, atS(90)), commitRecord(2, atS(91)))
+				name := filepath.Join(dir, PrunedCommits)
+				if err := os.Chmod(name, 0); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(name, 0o600) })
+				if _, err := os.ReadFile(name); err == nil {
+					t.Skip("this user reads a file with no permissions, as root does")
+				}
+				return ends
+			}, func(t *testing.T, p plan, ends []int64, in planInput) {
+				if len(p.body.Commits) != 0 || len(p.commitMarks) != 0 || len(p.commitsUnread) != 1 || p.commitsUnread[0] != "any day" {
+					t.Errorf("records %v went, marks %+v, unread %v: want none, and every day unread", p.body.Commits, p.commitMarks, p.commitsUnread)
 				}
 			}},
 	}
@@ -912,6 +1009,79 @@ func TestCommitAfterRestoredMark(t *testing.T) {
 		t.Run(ch.name, func(t *testing.T) {
 			if !ch.ok {
 				t.Errorf("no: the rows from batch 4 are %+v; the server holds head %d from %d, gaps %v, after %d POSTs", rows, r.f.head.b, r.f.start, r.f.gaps, r.f.posts)
+			}
+		})
+	}
+}
+
+// TestCommitInStretch is D-ag5-D1's first case, with a real writer: a
+// stretch no batch was sealed in, as when the watch notes local-only mode
+// with nothing pending and a seal's read finds config.toml online again,
+// then a batch sealed online, whose seal frame records the stretch. A git
+// change made in the stretch that reaches the writer after that batch is
+// dropped (ledger.ErrLateLocal), and its commit line has that online batch
+// for its first batch, in no run of local-only batches, so only the
+// stretch the rows hold withholds it. A commit made after the stretch goes.
+func TestCommitInStretch(t *testing.T) {
+	r := newLiveRig(t, 30)
+	r.u.Start()
+	r.seal(t, 1)
+	r.seal(t, 2)
+	r.wait(t, "batches 1 and 2 and their minutes", func(f *fakeIngest) bool { return f.head != nil && f.head.b == 2 && len(f.buckets) == 30 })
+	// config.toml says local-only, and the watch notes it with nothing
+	// pending, so no batch is sealed in local-only mode.
+	begin := r.sealedAt(2).Add(time.Minute)
+	r.setClock(begin)
+	r.local.Store(true)
+	r.w.NoteMode(false)
+	// config.toml says online again, which no note says: a seal with
+	// nothing pending reads it, and the read ends the stretch.
+	r.setClock(begin.Add(4 * time.Minute))
+	r.local.Store(false)
+	if _, _, err := r.w.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	// Batch 3, sealed online after the stretch, records it.
+	r.seal(t, 3)
+	// The git change made in the stretch, which the watcher held past batch
+	// 3, has its line in commits/ before it, and so does a commit made
+	// after batch 3.
+	made := begin.Add(2 * time.Minute)
+	heldSHA, after := "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b", testSHA(2)
+	for _, l := range []struct {
+		sha string
+		at  time.Time
+	}{{heldSHA, made}, {after, r.sealedAt(3).Add(time.Minute)}} {
+		writeCommitLines(t, r.dirs.Commits(), l.at.UTC().Format(time.DateOnly), commitRecord(1, l.at.UnixMilli(), testSHA(1), l.sha))
+	}
+	r.setClock(r.sealedAt(3).Add(2 * time.Minute))
+	if _, err := r.w.Write(gitChange(made)); !errors.Is(err, ledger.ErrLateLocal) {
+		t.Fatalf("Write = %v; want the git change dropped, as batch 3 was sealed online since its stretch ended", err)
+	}
+	r.seal(t, 4)
+	r.wait(t, "the commit made after the stretch", func(f *fakeIngest) bool { _, ok := f.commitRecs[after]; return ok })
+	r.drain()
+	_, rows, err := ledger.ReadRows(r.dirs.Ledger(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, _ := os.ReadFile(filepath.Join(r.dirs.Commits(), made.UTC().Format(time.DateOnly)+".jsonl"))
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	_, heldWent := r.f.commitRecs[heldSHA]
+	heldSent := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Contains(b, []byte(heldSHA)) })
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"every batch was sealed online, so no run withholds the line", len(rows) == 4 && !slices.ContainsFunc(rows, func(row ledger.Row) bool { return !row.Online })},
+		{"the commit made in the stretch never reached the fake", !heldWent && !heldSent},
+		{"its line stays in commits/", bytes.Contains(line, []byte(heldSHA))},
+	}
+	for _, c := range checks {
+		t.Run(c.name, func(t *testing.T) {
+			if !c.ok {
+				t.Errorf("no: the rows are %+v, and the server holds head %d after %d POSTs", rows, r.f.head.b, r.f.posts)
 			}
 		})
 	}

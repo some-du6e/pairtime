@@ -744,6 +744,14 @@ func newRigWith(t *testing.T, n int, minutes []int, linkedAfter time.Duration, o
 	dir := t.TempDir()
 	r := &rig{dirs: home.Dirs{Data: dir, Config: dir, Runtime: dir}}
 	r.w, r.rows = smallChainWith(t, r.dirs, n, older)
+	return r.finish(t, minutes, linkedAfter)
+}
+
+// finish makes the rest of a rig over the chain in r.w and r.rows: its
+// bucket store holding the given minutes of start, a quarter hour before
+// batch 1's seal, the fake server, and an uploader that isn't started.
+func (r *rig) finish(t *testing.T, minutes []int, linkedAfter time.Duration) *rig {
+	t.Helper()
 	r.start = r.rows[0].SealedAt.Add(-15 * time.Minute)
 	bs, err := store.OpenBuckets(r.dirs.Buckets())
 	if err != nil {
@@ -1483,6 +1491,117 @@ func TestRelinkGap(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.ok {
 				t.Error("no")
+			}
+		})
+	}
+}
+
+// chainAt makes a chain whose writer opened at start, with a batch sealed at
+// each of offsets after it, one checkpoint in each: start a quarter hour
+// and each offset a whole number of them, as a checkpoint's t must be.
+func chainAt(t *testing.T, dirs home.Dirs, start time.Time, offsets ...time.Duration) (*ledger.Writer, []ledger.Row) {
+	t.Helper()
+	kDev := sha256.Sum256([]byte("uploader resume test K_dev"))
+	keys, err := pkgledger.DeriveKeys(kDev[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var (
+		mu  sync.Mutex
+		now = start
+	)
+	w, err := ledger.Open(ledger.Options{
+		Dir: dirs.Ledger(), Keys: keys, KeyID: "0123456789abcdef", Params: newestTable(),
+		Now:    func() time.Time { mu.Lock(); defer mu.Unlock(); return now },
+		Online: func() bool { return true },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { w.Close() })
+	for _, d := range offsets {
+		q := start.Add(d)
+		mu.Lock()
+		now = q
+		mu.Unlock()
+		if _, err := w.Checkpoint("p_test", uint64(q.UnixMilli()), json.RawMessage(`{}`)); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := w.Seal(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, rows, err := ledger.ReadRows(dirs.Ledger(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w, rows
+}
+
+// TestRewindCommits is a server restored to before the requests that
+// carried the device's latest batches and a commit record: it took batches
+// 1 to 5, whose receipts the device keeps, and lost 4 and 5, and the record
+// of commit A, whose first batch is batch 2, two days before batch 3, went
+// in a request it lost too. The rewind drops every commit mark, since a
+// record goes once its first batch's root has been answered, often days
+// after its observed_at, so A's record goes again, and the server answers
+// what it kept as duplicates. A line withheld for good stays withheld.
+func TestRewindCommits(t *testing.T) {
+	dir := t.TempDir()
+	r := &rig{dirs: home.Dirs{Data: dir, Config: dir, Runtime: dir}}
+	start := time.Now().UTC().Truncate(time.Hour).Add(-72 * time.Hour)
+	q := 15 * time.Minute
+	r.w, r.rows = chainAt(t, r.dirs, start, q, 2*q, 48*time.Hour+q, 48*time.Hour+2*q, 48*time.Hour+3*q)
+	r.finish(t, nil, 0)
+	hold(t, r.f, r.rows, 1)
+	for _, row := range r.rows {
+		fr := r.f.rows[row.B]
+		sig, _ := hex.DecodeString(fr.sig)
+		rc := pkgledger.Receipt{ReceivedAt: fr.receivedAt}
+		copy(rc.Signature[:], sig)
+		if err := r.w.StoreReceipt(row.B, rc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	delete(r.f.rows, 4)
+	delete(r.f.rows, 5)
+	head := r.f.rows[3]
+	r.f.head = &head
+	// Commit A's line went. Commit W's, observed before the chain began, was
+	// withheld for good. The device's mark is past both.
+	day := r.start.Format(time.DateOnly)
+	shaA, shaW := testSHA(1), testSHA(2)
+	lineW := commitRecord(2, r.start.Add(-30*time.Minute).UnixMilli())
+	lineA := commitRecord(1, r.start.Add(20*time.Minute).UnixMilli())
+	ends := writeCommitLines(t, r.dirs.Commits(), day, lineW, lineA)
+	pub := r.f.key.Public().(ed25519.PublicKey)
+	if err := r.st.Put(StateKey, saved{
+		Chain: r.w.DeviceID(), Server: r.creds.Server, Device: r.w.DeviceID(), Req: 64, Next: 6, From: 1, ChainStart: 1, Head: 5,
+		LinkedAt:    r.creds.LinkedAt.UnixMilli(),
+		Modes:       5, // this version's place, which takes the modes from the rows
+		ServerKey:   &ServerKey{KeyID: r.f.keyID, PublicKey: hex.EncodeToString(pub)},
+		CommitMarks: map[string]store.Mark{day: {Off: ends[1], Line: commitDigest([]byte(lineA))}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.st.Save(); err != nil {
+		t.Fatal(err)
+	}
+	r.run(t, "commit A's record again", func(f *fakeIngest) bool { _, ok := f.commitRecs[shaA]; return ok })
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
+	wSent := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Contains(b, []byte(shaW)) })
+	tests := []struct {
+		name string
+		ok   bool
+	}{
+		{"batches 4 and 5 went again", r.f.rows[4].b == 4 && r.f.rows[5].b == 5 && r.f.head.b == 5},
+		{"the line withheld for good stays withheld", !wSent},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if !tc.ok {
+				t.Errorf("no: the requests were %q", r.f.bodies)
 			}
 		})
 	}

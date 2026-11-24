@@ -26,6 +26,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/store"
+	osclock "github.com/some-du6e/pairtime/internal/platform/clock"
 	"github.com/some-du6e/pairtime/pkg/event"
 	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 )
@@ -498,7 +499,21 @@ func (r *liveRig) openWriter(t *testing.T, dirs home.Dirs) {
 	t.Helper()
 	w, err := ledger.Open(ledger.Options{
 		Dir: dirs.Ledger(), Keys: r.keys, KeyID: "0123456789abcdef", Params: newestTable(),
-		Now:    func() time.Time { r.clockMu.Lock(); defer r.clockMu.Unlock(); return r.now },
+		Now: func() time.Time { r.clockMu.Lock(); defer r.clockMu.Unlock(); return r.now },
+		// The OS's clock reads the ms since the rig's start, plus 1000, in
+		// one boot, as the rig's clock moves, so a moment taken after the
+		// clock moved on is later by both clocks, as on a computer. Read from
+		// the real OS clock, two moments the test takes within a millisecond
+		// read alike while the wall clock jumps a quarter hour between them,
+		// and the writer, which orders moments by the OS's clock first, took
+		// a seal's read for no later than the note before it: the stretch
+		// after them began at the note, and held what came between
+		// (TestCommitStretchEnd's flake).
+		Clock: func() osclock.Stamp {
+			r.clockMu.Lock()
+			defer r.clockMu.Unlock()
+			return osclock.Stamp{Wall: r.now, Mono: r.now.Sub(r.start).Milliseconds() + 1000, BootID: "b_live"}
+		},
 		Online: func() bool { return !r.local.Load() },
 		Sealed: func(b ledger.Batch) {
 			if r.sealing != nil {

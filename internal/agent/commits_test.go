@@ -142,6 +142,48 @@ func TestCommitStore(t *testing.T) {
 				}
 			}
 		}},
+		{"before a day's file goes, the sha of each of its lines is listed for the uploader, which takes them as decided", func(t *testing.T, s *commitStore) {
+			old := now.Add(-181 * 24 * time.Hour)
+			a, b := commit(strings.Repeat("1", 40), old), commit(strings.Repeat("2", 40), old.Add(time.Minute))
+			if err := s.add([]git.Commit{a, b}, old); err != nil {
+				t.Fatal(err)
+			}
+			s.prune(now)
+			if _, err := os.Stat(filepath.Join(s.dir, day(old)+".jsonl")); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("the day's file is still there (%v)", err)
+			}
+			if got := prunedList(t, s.dir); !slices.Equal(got, []string{a.SHA, b.SHA}) {
+				t.Errorf("the list holds %q, want both lines' shas", got)
+			}
+		}},
+		{"the list outlives a restart, and the next day's prune adds to it", func(t *testing.T, s *commitStore) {
+			old := now.Add(-181 * 24 * time.Hour)
+			a, b := commit(strings.Repeat("1", 40), old), commit(strings.Repeat("2", 40), old.Add(24*time.Hour))
+			if err := s.add([]git.Commit{a, b}, old.Add(24*time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			s.prune(now)
+			restarted := &commitStore{dir: s.dir}
+			restarted.prune(now.Add(24 * time.Hour))
+			if got := prunedList(t, s.dir); !slices.Equal(got, []string{a.SHA, b.SHA}) {
+				t.Errorf("the list holds %q, want the first day's sha, then the next day's", got)
+			}
+		}},
+		{"a prune with the clock 181 days ahead lists the shas of every day it deletes", func(t *testing.T, s *commitStore) {
+			a, b := commit(strings.Repeat("1", 40), now.Add(-24*time.Hour)), commit(strings.Repeat("2", 40), now)
+			if err := s.add([]git.Commit{a, b}, now); err != nil {
+				t.Fatal(err)
+			}
+			s.prune(now.Add(181 * 24 * time.Hour))
+			for _, d := range []string{day(now.Add(-24 * time.Hour)), day(now)} {
+				if _, err := os.Stat(filepath.Join(s.dir, d+".jsonl")); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("%s's file is still there (%v)", d, err)
+				}
+			}
+			if got := prunedList(t, s.dir); !slices.Equal(got, []string{a.SHA, b.SHA}) {
+				t.Errorf("the list holds %q, want both days' shas", got)
+			}
+		}},
 		{"prune looks once a UTC day", func(t *testing.T, s *commitStore) {
 			if err := os.MkdirAll(s.dir, 0o700); err != nil {
 				t.Fatal(err)
@@ -292,4 +334,21 @@ func TestCommitFormat(t *testing.T) {
 			}
 		})
 	}
+}
+
+// prunedList is the shas commits/'s list of pruned commits in dir holds,
+// in its order (uploader.PrunedCommits).
+func prunedList(t *testing.T, dir string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, uploader.PrunedCommits))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, l := range strings.Split(string(data), "\n") {
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
 }
