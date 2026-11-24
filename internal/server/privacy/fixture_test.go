@@ -329,7 +329,7 @@ func (f *fixture) seed(t *testing.T, p person, witness ...time.Time) map[string]
 		{"submission_keys", `INSERT INTO submission_keys (submission_id, user_id, device_id, project_key, project_id) VALUES ($1, $2, $3, 'pk1', 'p1')`, []any{"sub-" + p.id, p.id, p.device}},
 		{"submission_windows", `INSERT INTO submission_windows (submission_id, start_ms, end_ms) VALUES ($1, $2, $3)`, []any{"sub-" + p.id, at - 3_600_000, at}},
 		{"submission_events", `INSERT INTO submission_events (submission_id, seq, from_state, to_state, at_ms) VALUES ($1, 1, 'created', 'frozen', $2)`, []any{"sub-" + p.id, at}},
-		{"submission_flags", `INSERT INTO submission_flags (submission_id, code, detail, raised_at_ms) VALUES ($1, 'concurrent_devices', '{"minutes":1}', $2)`, []any{"sub-" + p.id, at}},
+		{"submission_flags", `INSERT INTO submission_flags (submission_id, user_id, code, detail, raised_at_ms) VALUES ($1, $2, 'concurrent_devices', '{"minutes":1}', $3)`, []any{"sub-" + p.id, p.id, at}},
 	}
 	for i, d := range witness {
 		rows = append(rows, struct {

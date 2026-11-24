@@ -109,11 +109,14 @@ CREATE TABLE submission_events (
 -- submission_flags is the risk flags of a submission for reviewers, such as
 -- the freeze's concurrent_devices and repo_overlap, each with its detail as
 -- JSON. It names its submission with no foreign key, as the evidence index
--- does, and a retention job of evidence.revealed deletes a flag once the
--- spot-check window that opened at decided_at_ms has closed, from WP-SV18,
--- which writes decided_at_ms.
+-- does, and user_id, the account that submission is of, which the eraser
+-- deletes and counts an account's flags by (D-sb1-flags-erasure). A
+-- retention job of evidence.revealed deletes a flag once the spot-check
+-- window that opened at decided_at_ms has closed, from WP-SV18, which
+-- writes decided_at_ms.
 CREATE TABLE submission_flags (
     submission_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
     code TEXT NOT NULL,
     detail TEXT NOT NULL,
     raised_at_ms BIGINT NOT NULL,
@@ -122,3 +125,4 @@ CREATE TABLE submission_flags (
 );
 
 CREATE INDEX submission_flags_decided ON submission_flags (decided_at_ms);
+CREATE INDEX submission_flags_user ON submission_flags (user_id);

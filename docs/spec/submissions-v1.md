@@ -274,7 +274,7 @@ Submissions a program makes for the account (WP-PG6) don't count toward the 1,00
 
 ### 11.1 What it keeps
 
-Migration 0013 creates `submissions`, `submission_projects`, `submission_keys`, `submission_windows` and `submission_events`, which docs/retention.json's `server.submissions` keeps while the account exists, and `submission_flags`, a window job of `evidence.revealed` on `decided_at_ms` that stays off until WP-SV18. A withdrawal deletes nothing. The eraser deletes every row of the account's submissions through `submission.DeleteAccount`, and the privacy hub's export counts these tables (WP-SV13).
+Migration 0013 creates `submissions`, `submission_projects`, `submission_keys`, `submission_windows` and `submission_events`, which docs/retention.json's `server.submissions` keeps while the account exists, and `submission_flags`, a window job of `evidence.revealed` on `decided_at_ms` that stays off until WP-SV18. A withdrawal deletes nothing. The eraser deletes every row of the account's submissions through `submission.DeleteAccount`, and the privacy hub's export counts these tables (WP-SV13). Each flag carries `user_id`, the account its submission is of, and the eraser deletes and counts the account's flags by it. `DeleteAccount` also takes the account's submission ids out of other accounts' `repo_overlap` flags and deletes a flag left naming none, and the eraser's report counts those flags under `submission_flags`, a dry run's included (D-sb1-flags-erasure).
 
 ### 11.2 The freeze's flags
 

@@ -56,6 +56,10 @@ type table struct {
 type step struct {
 	tables []table
 	del    func(ctx context.Context, tx writer.Tx, account string) error
+	// around, when set, is the part of the leftover check and the report
+	// that the tables' selections can't make: it reads what it needs
+	// before del, and returns what checks and counts after it.
+	around func(ctx context.Context, tx writer.Tx, account string) (after func(r *Report) error, err error)
 }
 
 // ofDevices selects an account's rows of a table keyed by device: those
@@ -75,8 +79,11 @@ type step struct {
 const ofDevices = "account_id = $1 AND device_id IN (SELECT device_id FROM devices WHERE user_id = $1)"
 
 // ofSubmissions selects the rows of an account's submissions in a table
-// keyed by submission_id (WP-SB1). submission_flags names its submission
-// with no foreign key, so a flag is found the same way.
+// keyed by submission_id (WP-SB1). Each such table's foreign key names
+// submissions, so the delete of the account's submissions fails while one
+// of their rows is left. submission_flags has no foreign key, so it is
+// selected by the user_id each flag carries, which a leftover check can
+// count (D-sb1-flags-erasure).
 const ofSubmissions = "submission_id IN (SELECT id FROM submissions WHERE user_id = $1)"
 
 // steps are the eraser's deletes, in order: rows that point at users
@@ -100,19 +107,54 @@ var steps = []step{
 	{tables: []table{{"build_days", "user_id = $1"}, {"build_weeks", "user_id = $1"}, {"build_goals", "user_id = $1"}, {"zone_changes", "user_id = $1"}}, del: buildday.DeleteAccount},
 	{tables: []table{{"devlogs", "user_id = $1"}, {"badges", "user_id = $1"}, {"removed_items", "user_id = $1"}}, del: devlog.DeleteAccount},
 	{tables: []table{
-		{"submission_flags", ofSubmissions},
+		{"submission_flags", "user_id = $1"},
 		{"submission_events", ofSubmissions},
 		{"submission_windows", ofSubmissions},
 		{"submission_keys", "user_id = $1"},
 		{"submission_projects", ofSubmissions},
 		{"submissions", "user_id = $1"},
-	}, del: submission.DeleteAccount},
+	}, del: submission.DeleteAccount, around: otherFlags},
 	{tables: []table{
 		{"sessions", "user_id = $1"},
 		{"device_codes", "user_id = $1 OR device_id IN (SELECT device_id FROM devices WHERE user_id = $1)"},
 		{"devices", "user_id = $1"},
 		{"users", "id = $1"},
 	}},
+}
+
+// otherFlags is the submissions step's around (D-sb1-flags-erasure).
+// submission.DeleteAccount takes the account's submission ids out of the
+// other accounts' repo_overlap flags and deletes a flag left naming none,
+// so the report counts those flags under submission_flags too, and no
+// flag of any account may be left naming one of the ids, read before the
+// delete.
+func otherFlags(ctx context.Context, tx writer.Tx, account string) (func(r *Report) error, error) {
+	ids, err := submission.IDs(ctx, tx, account)
+	if err != nil {
+		return nil, err
+	}
+	others := table{"submission_flags", "user_id <> $1 AND code = 'repo_overlap'"}
+	before, err := count(ctx, tx, others, account)
+	if err != nil {
+		return nil, err
+	}
+	return func(r *Report) error {
+		left, err := submission.FlagsNaming(ctx, tx, ids)
+		if err != nil {
+			return err
+		}
+		if left != 0 {
+			return fmt.Errorf("privacy: deleting the account left %d flags naming its submissions", left)
+		}
+		after, err := count(ctx, tx, others, account)
+		if err != nil {
+			return err
+		}
+		if n := before - after; n > 0 {
+			r.Deleted[others.name] += n
+		}
+		return nil
+	}, nil
 }
 
 // AccountTables are the tables whose rows the eraser deletes and an
@@ -316,6 +358,12 @@ func erase(ctx context.Context, tx writer.Tx, emails *accounts.EmailCipher, c Cl
 				return r, err
 			}
 		}
+		var after func(r *Report) error
+		if s.around != nil {
+			if after, err = s.around(ctx, tx, account); err != nil {
+				return r, err
+			}
+		}
 		if err := s.del(ctx, tx, account); err != nil {
 			return r, err
 		}
@@ -329,6 +377,11 @@ func erase(ctx context.Context, tx writer.Tx, emails *accounts.EmailCipher, c Cl
 			}
 			if before[i] > 0 {
 				r.Deleted[t.name] += before[i]
+			}
+		}
+		if after != nil {
+			if err := after(&r); err != nil {
+				return r, err
 			}
 		}
 	}

@@ -60,6 +60,20 @@ func TestTables(t *testing.T) {
 				t.Errorf("OtherTables is %v, and no_personal_data %v: a table that holds an account's rows goes in the eraser's steps, and one kept after an erasure gets a list of its own, as LeafTable does", got, want)
 			}
 		}},
+		{name: "submission_flags carries user_id, which the eraser deletes and counts an account's flags by, since a flag names its submission with no foreign key (D-sb1-flags-erasure)", check: func(t *testing.T) {
+			rows, err := f.db.Read.QueryContext(context.Background(), `SELECT * FROM submission_flags WHERE 1 = 0`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			cols, err := rows.Columns()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(cols, "user_id") {
+				t.Errorf("submission_flags has the columns %v, and no user_id", cols)
+			}
+		}},
 		{name: "every table the lists name exists", check: func(t *testing.T) {
 			for n, what := range placed {
 				if !slices.Contains(have, n) {
@@ -158,6 +172,43 @@ func TestErase(t *testing.T) {
 			}
 			if n := len(f.dump(t)["privacy_token_uses"]); n != 1 {
 				t.Errorf("privacy_token_uses holds %d rows, want the dry run's jti", n)
+			}
+		}},
+		{name: "a delete takes the account's submissions out of other accounts' repo_overlap flags, deletes a flag left naming none and counts it under submission_flags, and a dry run reports the same and changes nothing (D-sb1-flags-erasure)", run: func(t *testing.T, f *fixture) {
+			want := world(t, f)
+			now := f.now.UnixMilli()
+			// One of the other account's submissions flags the teen's alone,
+			// and a second one flags the teen's and a third account's.
+			f.exec(t, `INSERT INTO submissions (id, user_id, program, takes_hours, request_id, request_sha256, created_by, device_id, mode, state, scoring_version, params, r, r_sha256, eligibility_to_confirm, created_at_ms, updated_at_ms, frozen_at_ms) VALUES ($1, $2, 'hard-mode', 1, 'req-2', 'sum', 'device', $3, 'window', 'frozen', '0.5.0', 'sha256:params', $4, 'rsum', 0, $5, $5, $5)`,
+				"sub2-"+other.id, other.id, other.device, make([]byte, 32), now)
+			for _, fl := range []struct{ on, names string }{
+				{"sub-" + other.id, `["sub-` + teen.id + `"]`},
+				{"sub2-" + other.id, `["sub-u-third","sub-` + teen.id + `"]`},
+			} {
+				f.exec(t, `INSERT INTO submission_flags (submission_id, user_id, code, detail, raised_at_ms) VALUES ($1, $2, 'repo_overlap', $3, $4)`, fl.on, other.id, `{"submissions":`+fl.names+`}`, now)
+			}
+			want["submission_flags"]++
+			before := f.dump(t, "privacy_token_uses")
+			if dry := report(t, f.ask(t, privacy.ActionDelete, subject([]string{teen.email}, nil, nil), true)); !maps.Equal(dry.Deleted, want) {
+				t.Errorf("the dry run deleted %v, want %v", dry.Deleted, want)
+			}
+			if after := f.dump(t, "privacy_token_uses"); !reflect.DeepEqual(before, after) {
+				t.Error("the dry run changed rows")
+			}
+			if r := report(t, f.ask(t, privacy.ActionDelete, subject([]string{teen.email}, nil, nil), false)); !maps.Equal(r.Deleted, want) {
+				t.Errorf("deleted %v, want %v", r.Deleted, want)
+			}
+			var overlaps []string
+			for _, l := range f.dump(t)["submission_flags"] {
+				if strings.Contains(l, "|repo_overlap|") {
+					overlaps = append(overlaps, l)
+				}
+			}
+			if len(overlaps) != 1 || !strings.HasPrefix(overlaps[0], "sub2-"+other.id+"|"+other.id+`|repo_overlap|{"submissions":["sub-u-third"]}|`) {
+				t.Errorf("the repo_overlap flags left are %q, want the other account's second, naming the third account's submission alone", overlaps)
+			}
+			if left := mentions(f.dump(t, "privacy_token_uses"), marks(f, teen)...); len(left) > 0 {
+				t.Errorf("rows that name the teen are left: %v", left)
 			}
 		}},
 		{name: "an export lists what is held, build days, devlogs, badges, removed items and submissions among it, and deletes nothing", run: func(t *testing.T, f *fixture) {

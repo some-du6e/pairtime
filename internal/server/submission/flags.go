@@ -213,15 +213,23 @@ type overlapDetail struct {
 }
 
 // setFlag stores submission id's flag code with its detail as JSON, raised
-// at nowMS, in place of the one it held.
+// at nowMS, in place of the one it held, under the account the submission
+// is of, which the eraser finds the flag by (D-sb1-flags-erasure). So a
+// flag the freeze raises on another account's submission is that
+// account's.
 func setFlag(ctx context.Context, tx writer.Tx, id, code string, detail any, nowMS int64) error {
 	b, err := json.Marshal(detail)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO submission_flags (submission_id, code, detail, raised_at_ms) VALUES ($1, $2, $3, $4)
-ON CONFLICT (submission_id, code) DO UPDATE SET detail = excluded.detail, raised_at_ms = excluded.raised_at_ms`, id, code, string(b), nowMS); err != nil {
+	res, err := tx.ExecContext(ctx, `INSERT INTO submission_flags (submission_id, user_id, code, detail, raised_at_ms)
+SELECT id, user_id, $2, $3, CAST($4 AS BIGINT) FROM submissions WHERE id = $1
+ON CONFLICT (submission_id, code) DO UPDATE SET detail = excluded.detail, raised_at_ms = excluded.raised_at_ms`, id, code, string(b), nowMS)
+	if err != nil {
 		return fmt.Errorf("submission: raising %s on %s: %w", code, id, err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		return fmt.Errorf("submission: raising %s on %s stored %d flags, not one: %v", code, id, n, err)
 	}
 	return nil
 }
