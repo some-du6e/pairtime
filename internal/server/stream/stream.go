@@ -407,8 +407,9 @@ func (h *Hub) leaveLocked(s *sub, now time.Time) {
 	}
 }
 
-// sweepEvery is how often the sweep runs, a fifth of the window.
-func (h *Hub) sweepEvery() time.Duration { return h.o.Window / 5 }
+// sweepEvery is how often the sweep runs: a fifth of the window, and at
+// least a second.
+func (h *Hub) sweepEvery() time.Duration { return max(h.o.Window/5, time.Second) }
 
 // sweep drops old events and idle topics until Close.
 func (h *Hub) sweep() {

@@ -78,6 +78,13 @@ type Options struct {
 	// Rollup, when set, is called for every bucket revision stored.
 	// pairtimed passes rollup.ApplyEvent (WP-SV7).
 	Rollup RollupFunc
+	// Changed, when set, hears the account of each upload that stored a
+	// bucket revision, so moved the account's rollups, once the writer's
+	// transaction has committed: never inside the op, and not for an upload
+	// that failed or whose outcome its client stopped waiting for. pairtimed
+	// passes the live stream's Changed, which sends the owner's open
+	// dashboards their new numbers (WP-SV8).
+	Changed func(account string)
 	// Observe, when set, hears of each upload the writer processed, not
 	// counting replays: how many batch roots it stored, and how long the
 	// request took from arrival to the response with their receipts
@@ -336,6 +343,11 @@ func (s *Service) batches(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, unavailable())
 		return
 	}
+	// The writer committed the op, so the rollups it moved are there for
+	// any reader.
+	if out.refusal == nil && !out.replay && out.revised > 0 && s.o.Changed != nil {
+		s.o.Changed(dev.Account)
+	}
 	s.answer(w, out, start)
 }
 
@@ -361,8 +373,9 @@ type outcome struct {
 	refusal  *refusal
 	response []byte
 	replay   bool
-	// stored counts the batch roots the request stored.
-	stored int
+	// stored counts the batch roots the request stored, and revised the
+	// bucket revisions.
+	stored, revised int
 }
 
 // checkReplay is ingest-v1 2.5 step 13's Idempotency-Key check against the
@@ -632,10 +645,14 @@ func (s *Service) process(ctx context.Context, tx writer.Tx, dev device.Device, 
 		}
 		resp.Batches = append(resp.Batches, r)
 	}
+	revised := 0
 	for _, pb := range p.buckets {
 		r, err := s.bucket(ctx, tx, dev, pb, now)
 		if err != nil {
 			return outcome{}, err
+		}
+		if r.Code == CodeAccepted {
+			revised++
 		}
 		resp.Buckets = append(resp.Buckets, r)
 	}
@@ -678,7 +695,7 @@ func (s *Service) process(ctx context.Context, tx writer.Tx, dev device.Device, 
 	if err := insertOrigin(ctx, tx, newID(time.UnixMilli(now)), dev.ID, dev.Account, ip, ja4, now); err != nil {
 		return outcome{}, err
 	}
-	return outcome{response: data, stored: stored}, nil
+	return outcome{response: data, stored: stored, revised: revised}, nil
 }
 
 // maxDayClosedWait is the most a day_closed refusal's Retry-After asks a

@@ -87,6 +87,18 @@ type harness struct {
 	rollups  []rollupCall
 	// observed is what each Observe call reported as stored.
 	observed []int
+	// changed is each Changed call, and failRollup makes the Rollup hook
+	// fail.
+	changed    []changedCall
+	failRollup bool
+}
+
+// changedCall is one call of the Changed hook: the account, and the
+// revisions of its minutes the read pool held then, which the writer's
+// transaction must have committed.
+type changedCall struct {
+	account   string
+	revisions int64
 }
 
 func seedKey(name string) ed25519.PrivateKey {
@@ -127,7 +139,17 @@ func newHarness(t *testing.T, engine store.Engine) *harness {
 		},
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		RateBurst: 1000,
+		Changed: func(account string) {
+			var n int64
+			if err := db.Read.QueryRow(`SELECT COALESCE(SUM(revisions), 0) FROM minute_buckets WHERE account_id = $1`, account).Scan(&n); err != nil {
+				t.Errorf("reading %s's revisions when Changed heard of it: %v", account, err)
+			}
+			h.changed = append(h.changed, changedCall{account: account, revisions: n})
+		},
 		Rollup: func(ctx context.Context, tx writer.Tx, account string, prev *event.MinuteBucket, next event.MinuteBucket) error {
+			if h.failRollup {
+				return errors.New("the rollups failed")
+			}
 			c := rollupCall{account: account, prevRev: -1, nextRev: int64(next.Rev), minuteMS: next.Minute.UnixMilli()}
 			if next.AgentOnly != nil {
 				c.agentOnly = string(marshal(t, next.AgentOnly))
@@ -1550,6 +1572,72 @@ ingest_head_received_at_ms = NULL, ingest_chain_start = NULL, ingest_gaps = NULL
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, tt.check)
+		}
+	})
+}
+
+// TestChanged checks when ingest tells the live stream that an account's
+// rollups moved (WP-SV8): after the writer committed an upload that stored
+// a bucket revision, and for nothing else.
+func TestChanged(t *testing.T) {
+	minute := exampleClock.Truncate(time.Minute)
+	tests := []struct {
+		name string
+		// run sends the uploads and returns the calls it expects, in
+		// which "" stands for the device's account.
+		run func(t *testing.T, h *harness, dev *testDevice) []changedCall
+	}{
+		{name: "an upload that stores a revision is heard once, as its account, after its transaction committed", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
+			h.ok(t, upload{dev: dev, body: bucketsBody(t, sampleBucket(dev.ID, minute, 1))})
+			return []changedCall{{revisions: 1}}
+		}},
+		{name: "a revision that replaces the minute's last is heard again", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
+			h.ok(t, upload{dev: dev, body: bucketsBody(t, sampleBucket(dev.ID, minute, 1))})
+			h.ok(t, upload{dev: dev, body: bucketsBody(t, sampleBucket(dev.ID, minute, 2))})
+			return []changedCall{{revisions: 1}, {revisions: 2}}
+		}},
+		{name: "a duplicate of a stored revision moves nothing and isn't heard", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
+			h.ok(t, upload{dev: dev, body: bucketsBody(t, sampleBucket(dev.ID, minute, 1))})
+			h.ok(t, upload{dev: dev, body: bucketsBody(t, sampleBucket(dev.ID, minute, 1))})
+			return []changedCall{{revisions: 1}}
+		}},
+		{name: "a replayed request isn't heard again", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
+			u := upload{dev: dev, body: bucketsBody(t, sampleBucket(dev.ID, minute, 1)), key: h.newKey(), req: 1}
+			h.ok(t, u)
+			if rec := h.send(t, u); rec.Header().Get(HeaderReplay) != "true" {
+				t.Fatalf("the second send wasn't a replay: %d %s", rec.Code, rec.Body)
+			}
+			return []changedCall{{revisions: 1}}
+		}},
+		{name: "an upload of batch roots alone moves no rollups and isn't heard", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
+			h.ok(t, upload{dev: dev, body: batchesBody(chain(rand.New(rand.NewPCG(1, 2)), ledger.Hash{}, 1, 2)...)})
+			return nil
+		}},
+		{name: "a bucket the upload refuses isn't heard", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
+			h.ok(t, upload{dev: dev, body: bucketsBody(t, sampleBucket("d_someone_else", minute, 1))})
+			return nil
+		}},
+		{name: "an upload whose op fails, so stores nothing, isn't heard", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
+			h.failRollup = true
+			if rec := h.send(t, upload{dev: dev, body: bucketsBody(t, sampleBucket(dev.ID, minute, 1))}); rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("an upload whose rollups failed got %d, want 503", rec.Code)
+			}
+			return nil
+		}},
+	}
+	engines(t, func(t *testing.T, engine store.Engine) {
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				h := newHarness(t, engine)
+				dev := h.device("d_test", false)
+				want := tt.run(t, h, dev)
+				for i := range want {
+					want[i].account = dev.Account
+				}
+				if !slices.Equal(h.changed, want) {
+					t.Errorf("Changed heard %+v, want %+v", h.changed, want)
+				}
+			})
 		}
 	})
 }
