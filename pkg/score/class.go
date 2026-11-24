@@ -17,9 +17,8 @@ import (
 // low_effort when the text test marked it, error_paste for an error
 // signature with fewer than ERROR_PASTE_TEXT_MAX typed characters around
 // it, substantive from SUBSTANTIVE_CHARS typed characters, and low_effort
-// for the rest. asked says whether the session's last agent output before
-// p asked a question or its last turn stopped on one; Questions keeps it
-// for an agent that classes each prompt as it records it.
+// for the rest. asked is Questions.Asked for p's session and via, from the
+// records before p in seq order.
 //
 // The ledger writer calls it when it writes a prompt, of whatever origin
 // the scorer later gives it, and records the class as the body's f.pc
@@ -54,13 +53,12 @@ const questionSessions = 1024
 
 // Questions follows, record by record, what PromptClass's asked needs:
 // whether each session's last agent.output asked a question and whether its
-// last agent.stop stopped on one (SM 2.2, the answer class). It applies the
-// scorer's side-door rule to the records it has seen: once a session has a
-// record from a hook or a log reader, outputs and stops that came through
-// a side door (track, plugin, bridge) don't count for it, those it saw
-// before included (DESIGN 5.2). The scorer applies that rule knowing every
-// record of the session, so a side-door output in a session whose first
-// hook record is still to come counts here and not there.
+// last agent.stop stopped on one (SM 2.2, the answer class). It applies
+// ledger-v1 10.7's rule as the records arrive: once a session has a record
+// from a hook or a log reader, outputs and stops that came through a side
+// door (track, plugin, bridge) don't count for it, those it saw before
+// included, and they don't count for a hook or log prompt either (DESIGN
+// 5.2). pkg/score's class follows the same rule (session.askedBefore).
 //
 // The zero value is ready to use. It isn't safe for concurrent use.
 type Questions struct {
@@ -110,13 +108,17 @@ func (q *Questions) Observe(e event.Event) {
 
 // Asked reports whether session's last agent output asked a question, or
 // its last turn stopped on one, among the records observed so far: the
-// asked of PromptClass for the session's next prompt.
-func (q *Questions) Asked(session string) bool {
+// asked of PromptClass for the session's next prompt, whose record came by
+// via. Only the outputs and stops that didn't come through a side door
+// count when the session has a record from a hook or a log reader, or
+// when via is one of those, so a hook or log prompt never reads a side
+// door's question; all of them count otherwise.
+func (q *Questions) Asked(session string, via event.Via) bool {
 	s := q.sessions[session]
 	if s == nil {
 		return false
 	}
-	if s.native {
+	if s.native || nativeVia(via) {
 		return s.outputKept || s.stopKept
 	}
 	return s.outputAll || s.stopAll

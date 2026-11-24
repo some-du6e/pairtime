@@ -462,10 +462,11 @@ func (l *Loop) open() error {
 	c.Device = chain.DeviceID
 	if c.Batch > 0 && c.Carry.V < carryVersion {
 		// A place an older agent saved: its carry lacks Stamped and
-		// RestartAt, or Lock, so they are folded again from the ledger's
-		// records before the window. FinalBefore and the window stay where
-		// they are, so no final minute is scored again.
-		l.log.Info("the scorer's place in state.json is an older agent's, so it reads the ledger again for the stamped record, the restart and the lock its carry lacks", "batch", c.Batch)
+		// RestartAt, Lock, or its sessions' question state, so they are
+		// folded again from the ledger's records before the window.
+		// FinalBefore and the window stay where they are, so no final
+		// minute is scored again.
+		l.log.Info("the scorer's place in state.json is an older agent's, so it reads the ledger again for the stamped record, the restart, the lock and the questions its carry lacks", "batch", c.Batch)
 		rebuilt, err := l.rebuildCarry(c)
 		if err != nil {
 			return fmt.Errorf("rebuilding the scorer's carry from the ledger: %w", err)
@@ -549,9 +550,16 @@ func (l *Loop) open() error {
 // only with both there, so it can miss the restart that drops the rebuilt
 // Lock. Each takes the later of the saved and the folded value, so a saved
 // one never moves back, as when a batch before the place doesn't read.
+//
+// Each session the carry keeps gets its question state too, which an agent
+// before E-prompt-class-asked (V 2 or older) didn't keep, folded by seq
+// from the session's records before the window (sessionCarry.question).
 func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	out := c.Carry
 	out.Lock = nil
+	for _, s := range out.Sessions {
+		s.AskOutput, s.AskStop, s.KeptOutput, s.KeptStop, s.FirstNative = nil, nil, nil, nil, nil
+	}
 	var stamped int64
 	var marks []mark
 	var f follower
@@ -569,6 +577,9 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 			}
 			if p, ok := ev.Data.(*event.OSPower); ok && locks(p) {
 				out.Lock = latest(out.Lock, ev)
+			}
+			if sc := out.Sessions[ev.SessionKey]; sc != nil {
+				sc.question(ev)
 			}
 			s, st := sampler(&ev), stamps(&ev)
 			if st {

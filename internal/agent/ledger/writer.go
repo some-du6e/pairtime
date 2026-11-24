@@ -727,7 +727,7 @@ func (w *Writer) prepare(in Input) (event.Event, ledger.Content) {
 			c.NoText = true
 		}
 		ev.Data = &cp
-		c.Class = features.Class(score.PromptClass(w.table, &cp, w.q.Asked(ev.SessionKey)))
+		c.Class = features.Class(score.PromptClass(w.table, &cp, w.q.Asked(ev.SessionKey, ev.Via)))
 	case *event.CLITrack:
 		if p != nil {
 			c.Class = features.Class(score.TrackClass(w.table, p))

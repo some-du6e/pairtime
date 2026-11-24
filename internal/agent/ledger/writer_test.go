@@ -122,6 +122,11 @@ func TestContent(t *testing.T) {
 				viaPlugin(harness(&event.AgentOutput{TurnKey: "t_0", Words: 1, IsFinal: true, AsksQuestion: true}, []byte("which?"))),
 			},
 			in: prompt("ok", 0), text: []byte("ok"), class: features.LowEffort},
+		{name: "a plugin's output asking a question, before a hook prompt that is its session's first hook record (no hook session.start), leaves the prompt's f.pc low_effort",
+			before: []Input{
+				viaPlugin(harness(&event.AgentOutput{TurnKey: "t_0", Words: 1, IsFinal: true, AsksQuestion: true}, []byte("which?"))),
+			},
+			in: prompt("ok", 0), text: []byte("ok"), class: features.LowEffort},
 		{name: "a bridge prompt has no text, commits nothing, and its f is v and pc alone",
 			in: bridgePrompt(64), class: features.Substantive,
 			check: func(t *testing.T, f features.F, ev event.Event) {

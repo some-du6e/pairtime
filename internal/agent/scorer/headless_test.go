@@ -465,6 +465,144 @@ func TestCarryReach(t *testing.T) {
 	}
 }
 
+// TestCarryQuestions checks the carry's question state
+// (sessionCarry.AskOutput) against pkg/score's answer class (SM 2.2;
+// ledger-v1 10.7): a prompt reads its session's outputs and stops numbered
+// before it, and once a hook or log record of the session is numbered
+// before it, not a side door's, whatever the window folded into the carry.
+// Each case's morning prompt comes eight hours after an evening the carry
+// folded, typed into the terminal that hosts the session, and a Step over
+// the carry and the window must class it as one Step over every record
+// does.
+func TestCarryQuestions(t *testing.T) {
+	table := testTable()
+	evening := hookTurn(t, hookAt, hourTools())
+	var prompt event.Event
+	for _, e := range evening {
+		if _, ok := e.Data.(*event.PromptSubmit); ok {
+			prompt = e
+		}
+	}
+	sess, turn := prompt.SessionKey, prompt.Data.(*event.PromptSubmit).TurnKey
+	last := evening[len(evening)-1].T
+	morning := last + 8*hourMS
+	n := 0
+	id := func() string {
+		n++
+		return fmt.Sprintf("01a1fb1e-5318-78a1-a78b-%012x", n)
+	}
+	// harness is a record of the session at ts by via, made from the
+	// evening's prompt.
+	harness := func(ts int64, via event.Via, d event.Payload) event.Event {
+		e := prompt
+		e.EventID = id()
+		e.Mono += ts - e.T
+		e.T, e.Via, e.Data = ts, via, d
+		e.Source = event.SourceHook
+		if via == event.ViaLog {
+			e.Source = event.SourceLog
+		}
+		return e
+	}
+	output := func(ts int64, via event.Via, asks bool) event.Event {
+		return harness(ts, via, &event.AgentOutput{TurnKey: turn, Words: 30, IsFinal: true, AsksQuestion: asks})
+	}
+	stop := func(ts int64, via event.Via) event.Event {
+		return harness(ts, via, &event.AgentStop{TurnKey: turn, StopReason: event.StopEndTurn})
+	}
+	start := func(ts int64, via event.Via, kind event.StartKind) event.Event {
+		return harness(ts, via, &event.SessionStart{StartKind: kind, Entrypoint: event.EntrypointCLI,
+			ParentClass: event.ParentTerminalApp, HasTTY: true})
+	}
+	// typed is the morning: focus on the terminal hosting the session,
+	// input every 15 s from a minute before the prompt, and the prompt, by
+	// via.
+	typed := func(via event.Via) []event.Event {
+		out := []event.Event{sampleAt(evening, morning-2*minuteMS, id(), &event.OSFocus{AppClass: event.AppTerminal,
+			FocusProject: prompt.ProjectKey, HostedSessions: []string{sess}})}
+		for ts := morning - minuteMS; ts <= morning+5*minuteMS; ts += 15_000 {
+			idle := 1.0
+			out = append(out, sampleAt(evening, ts, id(), &event.OSPresence{IdleAnyS: idle, IdleKeysS: &idle}))
+		}
+		return append(out, harness(morning, via, &event.PromptSubmit{TurnKey: "t_morning", LenChars: 30,
+			TypedLenEst: 30, OriginDeclared: event.DeclaredNone}))
+	}
+	samples := func() []event.Event {
+		var out []event.Event
+		for _, e := range evening {
+			if sampler(&e) {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	// morningClass is the class one Step over recs gives the morning prompt.
+	morningClass := func(t *testing.T, recs []event.Event) event.PromptClass {
+		t.Helper()
+		_, out := score.Step(score.NewState(table, score.Device{}), recs)
+		var all score.Derived
+		all.Append(out.Final)
+		all.Append(out.Pending)
+		for _, tu := range all.Turns {
+			if tu.TurnKey == "t_morning" {
+				return tu.PromptClass
+			}
+		}
+		t.Fatal("no turn for the morning prompt")
+		return ""
+	}
+	cases := []struct {
+		name string
+		// recs returns the case's records in the order the agent writes
+		// them, which numbers them.
+		recs func() []event.Event
+		want event.PromptClass
+	}{
+		{"a hook prompt after the hooked turn's question, which a plugin's output follows, is an answer: the carry keeps the question, though its Output is the plugin's",
+			func() []event.Event {
+				out := append(slices.Clone(evening), output(last+minuteMS, event.ViaLog, true),
+					output(last+2*minuteMS, event.ViaPlugin, false), stop(last+3*minuteMS, event.ViaHook))
+				return append(out, typed(event.ViaHook)...)
+			}, event.ClassAnswer},
+		{"a plugin prompt in a session whose only hook record is its first session.start reads no plugin's question: the carry keeps that record, though its Start is the plugin's",
+			func() []event.Event {
+				out := append([]event.Event{start(hookAt-2*minuteMS, event.ViaHook, event.StartStartup),
+					start(hookAt-minuteMS, event.ViaPlugin, event.StartResume)}, samples()...)
+				out = append(out, harness(hookAt, event.ViaPlugin, &event.PromptSubmit{TurnKey: turn, LenChars: 30,
+					TypedLenEst: 30, OriginDeclared: event.DeclaredNone}),
+					output(last+minuteMS, event.ViaPlugin, true), stop(last+2*minuteMS, event.ViaPlugin))
+				return append(out, typed(event.ViaPlugin)...)
+			}, event.ClassSubstantive},
+		{"an output a log reader read late, numbered after a question dated later, ends the question: the carry keeps the outputs by seq, not by t",
+			func() []event.Event {
+				out := append(slices.Clone(evening), output(last+2*minuteMS, event.ViaLog, true),
+					output(last+minuteMS, event.ViaLog, false), stop(last+3*minuteMS, event.ViaHook))
+				return append(out, typed(event.ViaHook)...)
+			}, event.ClassSubstantive},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			all := c.recs()
+			for i := range all {
+				all[i].Seq = uint64(i + 1)
+			}
+			w := &window{gaps: gapsOf(table), ttl: table.Int(params.BUCKET_TTL_S) * 1000,
+				late: (table.Int(params.PENDING_WINDOW_S) - table.Int(params.READ_HORIZON_S)) * 1000}
+			for i, e := range all {
+				w.add(e, uint64(i+1))
+			}
+			w.slide(morning - 30*minuteMS)
+			want := morningClass(t, all)
+			if want != c.want {
+				t.Fatalf("one Step over every record classes the morning prompt %q, and the case expects %q", want, c.want)
+			}
+			if got := morningClass(t, w.records()); got != want {
+				t.Errorf("a Step over the carry and the window classes the morning prompt %q, and one Step over every record %q", got, want)
+			}
+		})
+	}
+}
+
 // slotsFrom returns the slots one Step over recs derives from from on.
 func slotsFrom(table *params.Table, recs []event.Event, from int64) []score.Slot {
 	_, out := score.Step(score.NewState(table, score.Device{}), recs)
@@ -623,6 +761,8 @@ func TestOlderPlaceNoSample(t *testing.T) {
 		{"a place v0.1.0-alpha.7 saved from its own fold keeps its restart, which drops the rebuilt lock", 1, true},
 		{"a place v0.1.0-alpha.7 rebuilt from an older one, at v 1 with no restart_at, gets the restart folded again, which drops the rebuilt lock",
 			1, false},
+		{"a place an agent before E-prompt-class-asked saved, at v 2, gets its sessions' question state folded again",
+			2, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -870,7 +1010,9 @@ func carryJSON(t *testing.T, c carry) string {
 // no lock, at v 1, and with restart_at when restart is set. alpha.7's own
 // fold keeps restart_at, and its rebuild of an older place, which folded
 // it only from the earlier of Power and Presence, finds none on a machine
-// with no Presence.
+// with no Presence; for v 2, one between D-sampleless-power and
+// E-prompt-class-asked, a carry with lock. No older place's sessions have
+// a question state.
 func olderPlace(t *testing.T, r *rig, v int, restart bool) {
 	t.Helper()
 	data, err := os.ReadFile(r.path("state.json"))
@@ -890,19 +1032,36 @@ func olderPlace(t *testing.T, r *rig, v int, restart bool) {
 	if _, ok := carry["stamped"]; !ok {
 		t.Fatal("the saved carry holds no stamped record to take out, so the case doesn't load what it means to")
 	}
-	delete(carry, "lock")
 	switch v {
 	case 0:
 		delete(carry, "stamped")
 		delete(carry, "restart_at")
+		delete(carry, "lock")
 		delete(carry, "v")
 	case 1:
 		carry["v"] = json.RawMessage("1")
+		delete(carry, "lock")
 		if !restart {
 			delete(carry, "restart_at")
 		}
+	case 2:
+		carry["v"] = json.RawMessage("2")
 	default:
 		t.Fatalf("no older carry version %d", v)
+	}
+	if raw, ok := carry["sessions"]; ok {
+		var sessions map[string]map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &sessions); err != nil {
+			t.Fatal(err)
+		}
+		for _, s := range sessions {
+			for _, k := range []string{"ask_output", "ask_stop", "kept_output", "kept_stop", "first_native"} {
+				delete(s, k)
+			}
+		}
+		if carry["sessions"], err = json.Marshal(sessions); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var raw []byte
 	if raw, err = json.Marshal(carry); err != nil {
