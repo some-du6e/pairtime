@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/coach/text"
 	"github.com/some-du6e/pairtime/internal/install/wakacfg"
 )
 
@@ -23,6 +24,11 @@ import (
 // pairtime's line in ~/.wakatime.cfg (DESIGN 5.6), and how each of
 // wakatime-cli's two destinations answered (GatherWakaTime).
 type WakaTime struct {
+	// Config is the config install put pairtime's line in, as its setup
+	// file records it: ~/.wakatime.cfg, or $WAKATIME_HOME's or
+	// $XDG_CONFIG_HOME's when wakatime-cli reads that one (wakacfg.Find).
+	// The lines name it, and "" names ~/.wakatime.cfg.
+	Config string
 	// Problem is what keeps wakatime-cli from sending to pairtime as
 	// install set it up, "" when nothing does: the config is gone or can't
 	// be read, or pairtime's line isn't in it any more.
@@ -41,8 +47,9 @@ type WakaTime struct {
 	// pairtime's line through too, so that the line can't do what install
 	// set it up for, "" when there is none: configProxy for the config's
 	// own (wakacfg.ErrProxy), or the name of the variable of doctor's
-	// environment that sets one, never its value, which can hold a
-	// password (wakacfg.ProxyVar). Doctor then asks neither destination.
+	// environment whose proxy wakatime-cli takes for the config's main
+	// api_url, never its value, which can hold a password
+	// (wakacfg.ProxyFor). Doctor then asks neither destination.
 	Proxy string
 	// Pairtime is the agent's endpoint, and Server the server
 	// wakatime-cli's api_url names, such as Hackatime. Server is nil in a
@@ -69,15 +76,19 @@ func wakatimeCheck(w *WakaTime) (Check, bool) {
 		return Check{}, false
 	}
 	c := Check{Name: "wakatime"}
+	cfg := w.Config
+	if cfg == "" {
+		cfg = "~/.wakatime.cfg"
+	}
 	switch {
 	case w.Problem != "":
 		c.Result, c.Text = Fail, w.Problem
 	case w.Proxy == configProxy:
-		c.Result, c.Text = Fail, "pairtime's WakaTime destination isn't set up: ~/.wakatime.cfg sets a proxy, and wakatime-cli sends pairtime's line through it too, so the proxy gets your project and file names unencrypted, and while it doesn't pass them on to pairtime's agent, each send that fails holds back what wakatime-cli sends your own server; take the proxy out of ~/.wakatime.cfg, or take pairtime's line out with pairtime uninstall"
+		c.Result, c.Text = Fail, "pairtime's WakaTime destination isn't set up: "+cfg+" sets a proxy, and wakatime-cli sends pairtime's line through it too, so the proxy gets your project and file names unencrypted, and while it doesn't pass them on to pairtime's agent, each send that fails holds back what wakatime-cli sends your own server; take the proxy out of "+cfg+", or take pairtime's line out with pairtime uninstall"
 	case w.Proxy != "":
 		c.Result, c.Text = Fail, "pairtime's WakaTime destination isn't set up: "+w.Proxy+" is set here, and wakatime-cli started with it sends pairtime's line through that proxy too, so the proxy gets your project and file names unencrypted, and while it doesn't pass them on to pairtime's agent, each send that fails holds back what wakatime-cli sends your own server; start your editors without "+w.Proxy+", or take pairtime's line out with pairtime uninstall"
 	case w.BadKey != "":
-		where := w.BadKey + " in ~/.wakatime.cfg"
+		where := w.BadKey + " in " + cfg
 		if w.BadKey == apiKeyEnv {
 			where = apiKeyEnv
 		}
@@ -85,9 +96,9 @@ func wakatimeCheck(w *WakaTime) (Check, bool) {
 	case w.NoKey:
 		// A plugin can still give wakatime-cli a key with --key, which
 		// doctor can't see, so this warns.
-		c.Result, c.Text = Warn, "~/.wakatime.cfg has no key for its own server, and WAKATIME_API_KEY isn't set, so unless your editor's WakaTime plugin gives wakatime-cli a key itself, it sends your editor time nowhere, pairtime included"
+		c.Result, c.Text = Warn, cfg+" has no key for its own server, and WAKATIME_API_KEY isn't set, so unless your editor's WakaTime plugin gives wakatime-cli a key itself, it sends your editor time nowhere, pairtime included"
 	case w.Pairtime.Status != http.StatusOK:
-		c.Result, c.Text = Fail, "wakatime-cli's heartbeats don't reach pairtime: "+agentWhy(w.Pairtime)
+		c.Result, c.Text = Fail, "wakatime-cli's heartbeats don't reach pairtime: "+agentWhy(w.Pairtime, cfg)
 	case w.Server != nil && !takesHeartbeats(w.Server.Status):
 		c.Result = Warn
 		c.Text = fmt.Sprintf("pairtime's agent takes wakatime-cli's heartbeats, but %s, the server wakatime-cli sends them to as well, %s. For about the first hour that it doesn't take them, wakatime-cli holds back what it sends to pairtime too, so editor time from then may not count",
@@ -97,6 +108,10 @@ func wakatimeCheck(w *WakaTime) (Check, bool) {
 	default:
 		c.Result, c.Text = OK, "both WakaTime destinations answer: pairtime's agent and "+w.Server.Host
 	}
+	// Error text from the network can hold what a server or a man in the
+	// middle chose, such as a certificate's names, which a terminal would
+	// act on.
+	c.Text = text.Printable(c.Text)
 	return c, true
 }
 
@@ -117,13 +132,14 @@ func serverWhy(d Destination) string {
 	return fmt.Sprintf("answered with status %d", d.Status)
 }
 
-// agentWhy says why the agent's endpoint didn't take doctor's request.
-func agentWhy(d Destination) string {
+// agentWhy says why the agent's endpoint didn't take doctor's request, for
+// pairtime's line in cfg.
+func agentWhy(d Destination, cfg string) string {
 	switch d.Status {
 	case 0:
 		return fmt.Sprintf("nothing answered at %s (%s)", d.Host, d.Err)
 	case http.StatusUnauthorized:
-		return "the agent refuses the key of pairtime's line in ~/.wakatime.cfg; run pairtime install again"
+		return "the agent refuses the key of pairtime's line in " + cfg + "; run pairtime install again"
 	case http.StatusNotFound:
 		return "the agent at " + d.Host + " doesn't take WakaTime's heartbeats"
 	}
@@ -164,30 +180,30 @@ func GatherWakaTime(ctx context.Context, data string, client *http.Client) *Waka
 	cfg, err := os.ReadFile(s.Config)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return &WakaTime{Problem: s.Config + " isn't there any more, so wakatime-cli doesn't send your editor time to pairtime; run pairtime install again"}
+		return &WakaTime{Config: s.Config, Problem: s.Config + " isn't there any more, so wakatime-cli doesn't send your editor time to pairtime; run pairtime install again"}
 	case err != nil:
-		return &WakaTime{Problem: fmt.Sprintf("%s can't be read (%v)", s.Config, err)}
+		return &WakaTime{Config: s.Config, Problem: fmt.Sprintf("%s can't be read (%v)", s.Config, err)}
 	}
 	st, err := wakacfg.Inspect(cfg, s.Key)
 	if err != nil {
-		return &WakaTime{Problem: fmt.Sprintf("%s holds something pairtime doesn't read the way wakatime-cli does (%v)", s.Config, err)}
+		return &WakaTime{Config: s.Config, Problem: fmt.Sprintf("%s holds something pairtime doesn't read the way wakatime-cli does (%v)", s.Config, err)}
 	}
 	if st.Proxy {
-		return &WakaTime{Proxy: configProxy}
+		return &WakaTime{Config: s.Config, Proxy: configProxy}
 	}
-	if v := wakacfg.ProxyVar(os.Getenv); v != "" && !st.Own {
-		return &WakaTime{Proxy: v}
+	if v := wakacfg.ProxyFor(st.Server, os.Getenv); v != "" && !st.Own {
+		return &WakaTime{Config: s.Config, Proxy: v}
 	}
 	if st.Import {
-		return &WakaTime{Problem: s.Config + " imports another config with import_cfg, which wakatime-cli reads over it, so a line there can take the place of pairtime's; take import_cfg out, or take pairtime's line out with pairtime uninstall"}
+		return &WakaTime{Config: s.Config, Problem: s.Config + " imports another config with import_cfg, which wakatime-cli reads over it, so a line there can take the place of pairtime's; take import_cfg out, or take pairtime's line out with pairtime uninstall"}
 	}
 	if !st.Line {
-		return &WakaTime{Problem: "pairtime's line isn't in " + s.Config + " any more, so wakatime-cli doesn't send your editor time to pairtime; run pairtime install again"}
+		return &WakaTime{Config: s.Config, Problem: "pairtime's line isn't in " + s.Config + " any more, so wakatime-cli doesn't send your editor time to pairtime; run pairtime install again"}
 	}
 	if client == nil {
 		client = &http.Client{Timeout: wakatimeTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
-	w := &WakaTime{BadKey: st.BadKey, Pairtime: askWakaTime(ctx, client, wakacfg.URL(st.Port), s.Key)}
+	w := &WakaTime{Config: s.Config, BadKey: st.BadKey, Pairtime: askWakaTime(ctx, client, wakacfg.URL(st.Port), s.Key)}
 	if !st.Own && !st.ServerKey {
 		switch k := os.Getenv(apiKeyEnv); {
 		case k == "":
