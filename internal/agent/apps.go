@@ -81,9 +81,10 @@ import (
 //     whose parent_class is agent_app (procs.Options.Running), though its
 //     hooks and T3's own window in front are signs as any are.
 //
-// What the reader keeps between runs, its cursor and the rows, runs and
-// prompts it watches, all by key, goes to state.json under appsKey: a
-// guest's message among them, by its message's key, for a day.
+// What the reader keeps between runs, its cursor, the rows, runs and
+// prompts it watches and the rows it holds for their folders, all by key
+// and never by path, goes to state.json under appsKey: a guest's message
+// among them, by its message's key, for a day.
 
 // appsKey is the apps component's key in state.json.
 const appsKey = "apps"
@@ -138,8 +139,9 @@ type appReader interface {
 
 // appsState is what state.json keeps of the apps component.
 type appsState struct {
-	// T3Code is what T3 Code's reader keeps: its cursor and the rows, runs
-	// and prompts it watches, by key alone.
+	// T3Code is what T3 Code's reader keeps: its cursor, the rows, runs and
+	// prompts it watches and the rows it holds for their folders, by key
+	// alone.
 	T3Code t3code.State `json:"t3_code"`
 	// SessionAt is when the component last heard of a session an agent
 	// app's server started, in Unix ms, 0 for never: doctor says when T3

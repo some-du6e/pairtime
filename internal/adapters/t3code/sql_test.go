@@ -16,7 +16,7 @@ func TestSQL(t *testing.T) {
 	all := map[string]string{
 		"probe":    probeSQL(),
 		"start":    startSQL(),
-		"window":   windowSQL(7, []int64{3, 5}),
+		"window":   windowSQL(7, []int64{3, 5}, []int64{2}),
 		"items":    itemSQL([]int64{3}),
 		"decision": decideSQL(7, 9, []int64{2}, []string{"/work/alpha"}),
 		"text":     textSQL(textReq{id: "m1", created: at(0), updated: at(0), folder: "/work/alpha"}),
@@ -59,6 +59,21 @@ func TestSQL(t *testing.T) {
 			if !strings.Contains(where, want) {
 				t.Errorf("the WHERE clause lacks %q", want)
 			}
+		}
+	})
+	t.Run("the window reads the rows a restart left held by rowid, behind the fold's guest, author and source tests", func(t *testing.T) {
+		var fold string
+		for _, st := range strings.SplitAfter(all["window"], ";\n") {
+			if strings.HasPrefix(st, "SELECT "+tag("fold")+", ") {
+				fold = st
+			}
+		}
+		_, where, _ := strings.Cut(fold, " WHERE ")
+		if !strings.HasPrefix(where, "(m.rowid > 7 AND ") {
+			t.Errorf("the fold's WHERE clause doesn't open with one parenthesis holding its window's range and the held rows: %q", where)
+		}
+		if want := " OR m.rowid IN (2)) AND " + isUser + " AND " + notGuest + " AND " + byPerson + " ORDER BY m.rowid;\n"; !strings.Contains(where, want) {
+			t.Errorf("the fold's WHERE clause lacks %q", want)
 		}
 	})
 	t.Run("a literal is hex, so a quote in an id can't end it", func(t *testing.T) {

@@ -179,12 +179,14 @@ func startSQL() string {
 //   - fold: each new user row's folder, its thread's worktree or its
 //     project's root, with its stamp, for the rows the decision may record
 //     (by a person, from a client, not a guest's), so that pairtime's own
-//     resolver can say which folders the decision may read. Each row also
-//     carries, for the tests the reader makes before it asks the resolver
-//     (Reader.window), and none of it text: the driver of the provider
-//     thread of the run m.run_id names, a steer's running turn included,
-//     the message id, which the reader keys, the updated_at, the marks, and
-//     whether that run is the message's own;
+//     resolver can say which folders the decision may read, and the same
+//     of the rows of held, by rowid behind the same tests: rows a restart
+//     left held for their folders, which state.json keeps without them.
+//     Each row also carries, for the tests the reader makes before it asks
+//     the resolver (Reader.window), and none of it text: the driver of the
+//     provider thread of the run m.run_id names, a steer's running turn
+//     included, the message id, which the reader keys, the updated_at, the
+//     marks, and whether that run is the message's own;
 //   - guest: each new guest message, by mark or by opening, with its
 //     message id, which the reader keys, and whether it started a run of
 //     its own (1), is a steer in another message's run (0), or has no run
@@ -192,9 +194,13 @@ func startSQL() string {
 //   - it: the rows and runs the reader still watches, by rowid (itemSQL).
 //
 // No text is read, and every lookup is a rowid range or a primary key.
-func windowSQL(c int64, watched []int64) string {
+func windowSQL(c int64, watched, held []int64) string {
 	hi := "(SELECT min(" + num(c) + " + " + num(windowRows) + ", max(rowid)) FROM " + tMessages + ")"
 	in := "m.rowid > " + num(c) + " AND m.rowid <= " + hi
+	fold := in
+	if len(held) > 0 {
+		fold = "(" + in + " OR m.rowid IN (" + ints(held) + "))"
+	}
 	var b strings.Builder
 	b.WriteString("BEGIN;\n")
 	b.WriteString("SELECT " + tag("cur") + ", " + hx("(SELECT max(rowid) FROM "+tMessages+")") + ", " +
@@ -206,7 +212,7 @@ func windowSQL(c int64, watched []int64) string {
 		hx("json_extract(t.payload_json, '$.worktreePath')") + ", " + hx("p.workspace_root") + ", " + hx("pt.driver") + ", " +
 		hx("m.message_id") + ", " + hx("m.updated_at") + ", " + hx(marks) + ", " + hx(ownRun) +
 		" FROM " + tMessages + " AS m" + joinFolder + joinNamed +
-		" WHERE " + in + " AND " + isUser + " AND " + notGuest + " AND " + byPerson +
+		" WHERE " + fold + " AND " + isUser + " AND " + notGuest + " AND " + byPerson +
 		" ORDER BY m.rowid;\n")
 	b.WriteString("SELECT " + tag("guest") + ", " + hx("m.rowid") + ", " + hx("m.created_at") + ", " +
 		hx("json_extract(r.payload_json, '$.userMessageId') = m.message_id") + ", " + hx("m.message_id") +

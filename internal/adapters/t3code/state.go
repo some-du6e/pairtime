@@ -2,16 +2,23 @@
 
 package t3code
 
+import (
+	"cmp"
+	"slices"
+)
+
 // State is what the reader keeps between runs of the agent, under a key of
 // its own in state.json (DESIGN 3.5): its cursor, the rows and runs it still
-// watches and the prompts it was asked about. It holds T3's ids by key
-// alone (adapters.Keys.App), and no path or text, so nothing in it is
-// personal. A state saved under another K_session matches no row, so the
-// reader starts afresh from it, as it does from the zero State.
+// watches, the prompts it was asked about and the rows it holds for their
+// folders. It holds T3's ids by key alone (adapters.Keys.App), and no path
+// or text, so nothing in it is personal. A state saved under another
+// K_session matches no row, so the reader starts afresh from it, as it does
+// from the zero State.
 type State struct {
 	Cursor  *Cursor       `json:"cursor,omitempty"`
 	Watched []WatchState  `json:"watched,omitempty"`
 	Prompts []PromptState `json:"prompts,omitempty"`
+	Held    []HeldState   `json:"held,omitempty"`
 }
 
 // Cursor is where the reader has read T3's message table to (DESIGN 3.5,
@@ -68,6 +75,19 @@ type PromptState struct {
 	Claimed bool   `json:"claimed,omitempty"`
 }
 
+// HeldState is a row the reader holds for its folder, which pairtime's
+// resolver hasn't answered for (Reader.window): its rowid, the key of its
+// message id and its stamp as first read, Unix ms. It never holds the
+// folder: after a restart the reader reads the row's folder again by its
+// rowid and asks the resolver afresh, while the age test still lets it
+// record the row (RELAY_SEEN_LAG_S). state.json keeps at most maxHeld of
+// them, the newest.
+type HeldState struct {
+	RowID     int64  `json:"rowid"`
+	Message   string `json:"message"`
+	CreatedAt int64  `json:"created_at"`
+}
+
 // State returns what the reader keeps between runs of the agent, for
 // state.json.
 func (r *Reader) State() State {
@@ -91,12 +111,33 @@ func (r *Reader) State() State {
 	for _, p := range r.prompts {
 		s.Prompts = append(s.Prompts, PromptState{Session: p.session, T: p.t, EventID: p.id, Claimed: p.claimed})
 	}
+	var held []HeldState
+	for id, h := range r.held {
+		if h.msg != "" {
+			held = append(held, HeldState{RowID: id, Message: h.msg, CreatedAt: h.created})
+		}
+	}
+	s.Held = newestHeld(held)
 	return s
+}
+
+// newestHeld returns the newest maxHeld rows of held, by stamp and then
+// rowid, sorted by rowid: r.held is a map, and the apps component skips a
+// save whose bytes haven't changed, so an unchanged reader must give the
+// same list. It sorts held in place.
+func newestHeld(held []HeldState) []HeldState {
+	slices.SortFunc(held, func(a, b HeldState) int {
+		return cmp.Or(cmp.Compare(b.CreatedAt, a.CreatedAt), cmp.Compare(b.RowID, a.RowID))
+	})
+	held = held[:min(len(held), maxHeld)]
+	slices.SortFunc(held, func(a, b HeldState) int { return cmp.Compare(a.RowID, b.RowID) })
+	return held
 }
 
 // load takes up a saved State. A watched message's record went out before
 // the save, so a prompt that pairs with it names it, once a read has found
-// its row as the reader first read it.
+// its row as the reader first read it. A held row comes back with no
+// folder, which the next read reads again by its rowid (Reader.window).
 func (r *Reader) load(s State) {
 	if s.Cursor != nil {
 		c := *s.Cursor
@@ -117,5 +158,14 @@ func (r *Reader) load(s State) {
 			continue
 		}
 		r.prompts = append(r.prompts, &asked{session: p.Session, t: p.T, id: p.EventID, claimed: p.Claimed})
+	}
+	var held []HeldState
+	for _, h := range s.Held {
+		if h.RowID > 0 && h.Message != "" {
+			held = append(held, h)
+		}
+	}
+	for _, h := range newestHeld(held) {
+		r.held[h.RowID] = heldRow{created: h.CreatedAt, msg: h.Message}
 	}
 }

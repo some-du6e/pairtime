@@ -39,12 +39,16 @@
 //
 //  1. Each new user row's folder, which pairtime's own resolver sorts into
 //     tracked, out, or not known yet, whose rows wait for it up to
-//     RELAY_SEEN_LAG_S; and each new guest message, without its text. The
-//     resolver hears of no row read more than RELAY_SEEN_LAG_S after its
-//     stamp, read again by a resync, holding a message the reader watches,
-//     or whose run, its own or the running turn it was steered into, T3
-//     runs on another harness than Claude Code. Such a row counts as the
-//     decision would count it, whatever its folder.
+//     RELAY_SEEN_LAG_S; and each new guest message, without its text. A
+//     row waiting for its folder outlasts a restart of the agent in
+//     state.json, by its rowid, the key of its message id and its stamp and
+//     never by its folder, and the next read reads its folder again by
+//     rowid, through the same tests. The resolver hears of no row read more
+//     than RELAY_SEEN_LAG_S after its stamp, read again by a resync,
+//     holding a message the reader watches, or whose run, its own or the
+//     running turn it was steered into, T3 runs on another harness than
+//     Claude Code. Such a row counts as the decision would count it,
+//     whatever its folder.
 //  2. The decision, with the guest test (T3's mark, or a text that opens as
 //     T3 opens a guest's, past white space and an Ultrathink: line), T3's
 //     own test for a message a person sent from a client (createdBy user,

@@ -66,6 +66,12 @@ const (
 	maxWatched = 1024
 	maxPrompts = 1024
 	maxSteers  = 8
+	// maxHeld bounds the rows held for their folders that state.json keeps
+	// (State). A held row is a message a person sent from a client in the
+	// last RELAY_SEEN_LAG_S to a folder pairtime's resolver hasn't answered
+	// for, and nobody sends 64 of those in a minute. Past it the oldest go,
+	// the ones nearest the age test.
+	maxHeld = 64
 	// maxWindows bounds how many windows one read takes, so a reader far
 	// behind catches up over several reads.
 	maxWindows = 20
@@ -250,10 +256,14 @@ type asked struct {
 	guest bool
 }
 
-// heldRow is a new row whose folder the resolver hadn't answered for.
+// heldRow is a new row whose folder the resolver hadn't answered for: its
+// stamp as first read, Unix ms, its folder, and msg, the key of its message
+// id. An empty folder means the row came from state.json (load) and no read
+// has read its folder since.
 type heldRow struct {
 	created int64
 	folder  string
+	msg     string
 }
 
 // rereadZone is what a resync reads again only to find the rows the reader
@@ -946,7 +956,17 @@ func (r *Reader) window(ctx context.Context, b *Batch) (more, anomaly bool, err 
 			rowids = append(rowids, w.rowid)
 		}
 	}
-	rows, err := r.query(ctx, windowSQL(c, rowids))
+	// The rows a restart left held, with no folder yet, which the fold reads
+	// again by rowid. Like every held row, they are at or below the cursor:
+	// the read that held them moved it past them.
+	var restored []int64
+	for id, h := range r.held {
+		if h.folder == "" && id <= c {
+			restored = append(restored, id)
+		}
+	}
+	slices.Sort(restored)
+	rows, err := r.query(ctx, windowSQL(c, rowids, restored))
 	if err != nil {
 		return false, false, err
 	}
@@ -1017,17 +1037,28 @@ func (r *Reader) window(ctx context.Context, b *Batch) (more, anomaly bool, err 
 	// record, since for a folder it hasn't seen it starts a git Track, which
 	// watches the repo and records its commits (DESIGN 5.8). So these rows
 	// are turned away before the folder test: a row held for its folder
-	// once the age test turns it away, and of this window's rows, one that
-	// holds a message the reader watches, which moves its watch as in the
-	// decision, one a resync reads again, which counts nothing, and one
-	// stamped more than RELAY_SEEN_LAG_S before this read or whose run, its
-	// own or the running turn it was steered into, T3 runs on another
-	// harness, which counts as the decision would count it, whatever its
-	// folder (Counts).
+	// once the age test turns it away; of the rows a restart left held, one
+	// whose rowid holds another message now, or that the fold didn't read
+	// again as a person's message from a client, which counts nothing, and
+	// one whose run T3 runs on another harness; and of this window's rows,
+	// one that holds a message the reader watches, which moves its watch as
+	// in the decision, one a resync reads again, which counts nothing, and
+	// one stamped more than RELAY_SEEN_LAG_S before this read or whose run,
+	// its own or the running turn it was steered into, T3 runs on another
+	// harness. A row of another harness, or stamped too long ago, counts as
+	// the decision would count it, whatever its folder (Counts).
 	for id, h := range held {
 		if seen.UnixMilli()-h.created > r.lag {
 			n.Aged++
 			delete(held, id)
+		}
+	}
+	away := func(f row, created int64, other bool) {
+		updated, ok := ms(f[7])
+		mk, err := strconv.Atoi(f[8].s)
+		if ok && err == nil {
+			r.turnedAway(rowTests{marks: mk, own: f[9].s == "1", created: created, updated: updated, other: other},
+				seen.UnixMilli(), &n)
 		}
 	}
 	// gone are this window's rows the tests before the folder test turned
@@ -1038,8 +1069,39 @@ func (r *Reader) window(ctx context.Context, b *Batch) (more, anomaly bool, err 
 		if !ok {
 			return false, false, ErrOutput
 		}
+		msg := ""
 		if !f[6].null {
-			if w := r.watchOf(r.key("message", f[6].s)); w != nil {
+			msg = r.key("message", f[6].s)
+		}
+		dir := f[4].s
+		if !f[3].null {
+			dir = f[3].s
+		}
+		other := !f[5].null && f[5].s != claudeDriver
+		if id <= c {
+			// A row a restart left held, read again by its rowid. Once it
+			// has its folder, the decision makes every other test, as for
+			// any held row.
+			h, ok := held[id]
+			switch {
+			case !ok:
+				// The age test above turned it away, and counted it.
+			case msg != h.msg:
+				// Its rowid holds another message now.
+				delete(held, id)
+			case other:
+				delete(held, id)
+				if created, ok := ms(f[2]); ok {
+					away(f, created, other)
+				}
+			default:
+				h.folder = dir
+				held[id] = h
+			}
+			continue
+		}
+		if msg != "" {
+			if w := r.watchOf(msg); w != nil {
 				if w.rowid != id {
 					moves[w] = id
 				}
@@ -1051,22 +1113,12 @@ func (r *Reader) window(ctx context.Context, b *Batch) (more, anomaly bool, err 
 		if !ok {
 			continue
 		}
-		other := !f[5].null && f[5].s != claudeDriver
 		switch {
 		case r.reread.has(id, created):
 		case seen.UnixMilli()-created > r.lag || other:
-			updated, ok := ms(f[7])
-			mk, err := strconv.Atoi(f[8].s)
-			if ok && err == nil {
-				r.turnedAway(rowTests{marks: mk, own: f[9].s == "1", created: created, updated: updated, other: other},
-					seen.UnixMilli(), &n)
-			}
+			away(f, created, other)
 		default:
-			dir := f[4].s
-			if !f[3].null {
-				dir = f[3].s
-			}
-			held[id] = heldRow{created: created, folder: dir}
+			held[id] = heldRow{created: created, folder: dir, msg: msg}
 			continue
 		}
 		gone[id] = true
@@ -1074,6 +1126,13 @@ func (r *Reader) window(ctx context.Context, b *Batch) (more, anomaly bool, err 
 	var allowed []string
 	var decide []int64
 	for id, h := range held {
+		// A row with no folder is one a restart left held that the fold
+		// didn't read again, or one whose thread T3 gives an empty folder,
+		// which names none pairtime tracks.
+		if h.folder == "" {
+			delete(held, id)
+			continue
+		}
 		v := verdict(h.folder)
 		if v.State == FolderOut || v.State == FolderTracked && v.Project == "" {
 			delete(held, id)

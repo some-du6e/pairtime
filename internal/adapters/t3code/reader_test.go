@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1227,11 +1228,15 @@ func TestGuests(t *testing.T) {
 }
 
 // TestCursor holds the reader's cursor to DESIGN 3.5 and 5.1: it starts at
-// the newest row, survives a restart in state.json, and resyncs by stamp
-// when T3's VACUUM renumbers the rows or another store takes the place of
-// the one read, recording no message twice.
+// the newest row, survives a restart in state.json with the rows held for
+// their folders behind it, by rowid, message key and stamp and never by
+// folder, and resyncs by stamp when T3's VACUUM renumbers the rows or
+// another store takes the place of the one read, recording no message
+// twice.
 func TestCursor(t *testing.T) {
 	const text = "please fix the flaky parser test"
+	// unanswered is a resolver that hasn't answered for /work/alpha yet.
+	unanswered := folders{"/work/alpha": {State: FolderPending}}
 	cases := []struct {
 		name string
 		run  func(t *testing.T, s *store, c *clock)
@@ -1267,6 +1272,166 @@ func TestCursor(t *testing.T) {
 				c.set(3 * time.Second)
 				again := s.reader(c, tracked(), saved)
 				checkMessages(t, mustPoll(t, again).Messages, c.t, []rec{web("m2", 2*time.Second, 32, false, event.ClassSubstantive)})
+			}},
+		{"a row held for its folder when the agent stops is recorded once after the restart, once the resolver answers, and state.json keeps its rowid, message key and stamp but no folder",
+			func(t *testing.T, s *store, c *clock) {
+				r := s.reader(c, unanswered, State{})
+				mustPoll(t, r)
+				s.sent("m1", 0, text)
+				s.flush()
+				c.set(5 * time.Second)
+				if b := mustPoll(t, r); len(b.Messages) != 0 {
+					t.Fatalf("the read before the resolver answered recorded %d messages, want none", len(b.Messages))
+				}
+				saved, raw := stateJSON(t, r)
+				want := []HeldState{{RowID: 1, Message: adapters.FixtureKeys().App("t3_code", "message", "m1"), CreatedAt: base.UnixMilli()}}
+				if saved.Cursor == nil || saved.Cursor.RowID != 1 || !slices.Equal(saved.Held, want) {
+					t.Fatalf("state.json keeps the cursor %+v and the held rows %+v, want rowid 1 and %+v", saved.Cursor, saved.Held, want)
+				}
+				if strings.Contains(raw, "/work/alpha") {
+					t.Errorf("state.json holds the held row's folder: %s", raw)
+				}
+				c.set(20 * time.Second)
+				again := s.reader(c, tracked(), saved)
+				checkMessages(t, mustPoll(t, again).Messages, c.t, []rec{web("m1", 0, 32, false, event.ClassSubstantive)})
+				if got := again.Status().Counts; got != (Counts{Witnessed: 1}) {
+					t.Errorf("the counts are %+v, want m1 witnessed once", got)
+				}
+				c.set(21 * time.Second)
+				if b := mustPoll(t, again); len(b.Messages) != 0 {
+					t.Errorf("the read after it recorded %d messages, want none", len(b.Messages))
+				}
+				if st := again.State(); len(st.Held) != 0 {
+					t.Errorf("state.json still keeps the held rows %+v, want none", st.Held)
+				}
+			}},
+		{"a row held across a restart that reads it more than RELAY_SEEN_LAG_S after its stamp is turned away by the age test, and counted once",
+			func(t *testing.T, s *store, c *clock) {
+				r := s.reader(c, unanswered, State{})
+				mustPoll(t, r)
+				s.sent("m1", 0, text)
+				s.flush()
+				c.set(5 * time.Second)
+				mustPoll(t, r)
+				saved, _ := stateJSON(t, r)
+				if len(saved.Held) != 1 {
+					t.Fatalf("state.json keeps the held rows %+v, want m1's", saved.Held)
+				}
+				again := s.reader(c, tracked(), saved)
+				var asked []string
+				again.folder = func(dir string) Folder {
+					asked = append(asked, dir)
+					return tracked().resolve(dir)
+				}
+				for _, when := range []time.Duration{61 * time.Second, 62 * time.Second} {
+					c.set(when)
+					if b := mustPoll(t, again); len(b.Messages) != 0 {
+						t.Errorf("the read at %v recorded %d messages, want none", when, len(b.Messages))
+					}
+				}
+				if got := again.Status().Counts; got != (Counts{Aged: 1}) {
+					t.Errorf("the counts are %+v, want m1 aged once", got)
+				}
+				if len(asked) != 0 {
+					t.Errorf("the restarted reader asked the resolver about %q, want nothing", asked)
+				}
+			}},
+		{"a held row T3 no longer holds at its rowid when the restarted reader reads records nothing and asks the resolver nothing, and the reader forgets it",
+			func(t *testing.T, s *store, c *clock) {
+				r := s.reader(c, unanswered, State{})
+				mustPoll(t, r)
+				// The assistant's row after m1 is the cursor's, and stays, so
+				// no resync comes.
+				s.sent("m1", 0, text)
+				s.assistant("a1", time.Second)
+				s.flush()
+				c.set(5 * time.Second)
+				mustPoll(t, r)
+				saved, _ := stateJSON(t, r)
+				if len(saved.Held) != 1 || saved.Held[0].RowID != 1 {
+					t.Fatalf("state.json keeps the held rows %+v, want m1's at rowid 1", saved.Held)
+				}
+				s.add("DELETE FROM orchestration_v2_projection_messages WHERE message_id = 'm1';")
+				s.flush()
+				c.set(10 * time.Second)
+				again := s.reader(c, tracked(), saved)
+				var asked []string
+				again.folder = func(dir string) Folder {
+					asked = append(asked, dir)
+					return tracked().resolve(dir)
+				}
+				if b := mustPoll(t, again); len(b.Messages) != 0 {
+					t.Errorf("the restarted reader recorded %d messages, want none", len(b.Messages))
+				}
+				if len(asked) != 0 {
+					t.Errorf("the restarted reader asked the resolver about %q, want nothing", asked)
+				}
+				if got := again.Status().Counts; got != (Counts{}) {
+					t.Errorf("the counts are %+v, want none", got)
+				}
+				if st := again.State(); len(st.Held) != 0 {
+					t.Errorf("state.json still keeps the held rows %+v, want none", st.Held)
+				}
+			}},
+		{"a held rowid that holds another message after the restart records nothing of either and asks the resolver nothing",
+			func(t *testing.T, s *store, c *clock) {
+				r := s.reader(c, unanswered, State{})
+				mustPoll(t, r)
+				s.sent("m1", 0, text)
+				s.assistant("a1", time.Second)
+				s.flush()
+				c.set(5 * time.Second)
+				mustPoll(t, r)
+				saved, _ := stateJSON(t, r)
+				if len(saved.Held) != 1 || saved.Held[0].RowID != 1 {
+					t.Fatalf("state.json keeps the held rows %+v, want m1's at rowid 1", saved.Held)
+				}
+				// Another person's message takes m1's rowid. It sits behind the
+				// cursor and was never held, so no read decides it, as with any
+				// row a store puts behind the cursor.
+				s.add("DELETE FROM orchestration_v2_projection_messages WHERE message_id = 'm1';")
+				s.sent("m2", 8*time.Second, text)
+				s.add("UPDATE orchestration_v2_projection_messages SET rowid = 1 WHERE message_id = 'm2';")
+				s.flush()
+				again := s.reader(c, tracked(), saved)
+				var asked []string
+				again.folder = func(dir string) Folder {
+					asked = append(asked, dir)
+					return tracked().resolve(dir)
+				}
+				for _, when := range []time.Duration{10 * time.Second, 11 * time.Second} {
+					c.set(when)
+					if b := mustPoll(t, again); len(b.Messages) != 0 {
+						t.Errorf("the read at %v recorded %d messages, want none", when, len(b.Messages))
+					}
+				}
+				if len(asked) != 0 {
+					t.Errorf("the restarted reader asked the resolver about %q, want nothing", asked)
+				}
+				if got := again.Status().Counts; got != (Counts{}) {
+					t.Errorf("the counts are %+v, want none", got)
+				}
+			}},
+		{"state.json keeps at most maxHeld held rows, the newest",
+			func(t *testing.T, s *store, c *clock) {
+				r := s.reader(c, unanswered, State{})
+				mustPoll(t, r)
+				for i := range maxHeld + 2 {
+					s.sent("m"+strconv.Itoa(i+1), time.Duration(i)*time.Millisecond, text)
+				}
+				s.flush()
+				c.set(5 * time.Second)
+				mustPoll(t, r)
+				var got, want []int64
+				for _, h := range r.State().Held {
+					got = append(got, h.RowID)
+				}
+				for id := int64(3); id <= maxHeld+2; id++ {
+					want = append(want, id)
+				}
+				if !slices.Equal(got, want) {
+					t.Errorf("state.json keeps the held rows %v, want rowids %v", got, want)
+				}
 			}},
 		{"rows renumbered under the cursor, as T3's VACUUM may, resync by stamp and nothing is recorded twice",
 			func(t *testing.T, s *store, c *clock) {
@@ -1488,6 +1653,21 @@ func TestCursor(t *testing.T) {
 			tc.run(t, s, c)
 		})
 	}
+}
+
+// stateJSON is what state.json keeps of r: its State read back from the
+// JSON the agent saves, and that JSON.
+func stateJSON(t *testing.T, r *Reader) (State, string) {
+	t.Helper()
+	raw, err := json.Marshal(r.State())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved State
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	return saved, string(raw)
 }
 
 // TestProbe holds the schema probe to DESIGN 5.1: the reader reads a store
