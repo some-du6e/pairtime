@@ -36,8 +36,10 @@
 //     mark, the writer's mark once the batch was sealed, the first record of
 //     the batch it is due for or 0, which Open takes back from the newest
 //     frame that records it, with due, the same while the batch neither took
-//     nor ended it, and back_ended, on a batch sealed online that ended a mark
-//     Open restored, which an older version reads instead (sealPayload.Mark);
+//     nor ended it, and back_ended, on a batch sealed online that ended the
+//     mark, as one that didn't take a mark Open restored does, and Open's own
+//     batch of what a crash left, which an older version reads instead
+//     (sealPayload.Mark);
 //     local_until, when config.toml was last known, or taken, to say
 //     local-only as the batch was sealed, with local_until_os, the same moment
 //     by the OS's monotonic clock and its boot, which Open takes back from the

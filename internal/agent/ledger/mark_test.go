@@ -31,7 +31,7 @@ const (
 	opSeal    = 's' // a seal, while Waiting says no
 	opHeld    = 'h' // a seal, while Waiting says yes, as for a held call whose time can't be read yet
 	opDay     = 'D' // the clock moves into the next UTC day
-	opSweep   = 'S' // the retention sweep by today, which drops the rows of the days before
+	opSweep   = 'S' // the retention sweep by today, which drops the rows of the days before, while every record pending was made today
 	opRestart = 'R' // a crash, which leaves the files as kill -9 does, and the agent's start
 	opCut     = 'P' // a power cut, which takes what no flush covered, and the agent's start
 )
@@ -58,7 +58,10 @@ const markStep = 10_000
 //
 // A mark the writer armed and no frame recorded is lost to a restart,
 // unless the Seen the agent kept arms it again. The two seeds #359 named
-// are its regressions.
+// are its regressions, and so is the third, which a run one op deeper
+// found: Open's own batch of what a crash left, sealed online, didn't end
+// the mark the agent's Seen armed, so a held call's seal after it was
+// local-only.
 func TestMarkSequences(t *testing.T) {
 	base, deep := markBase(t)
 	t.Cleanup(func() { syncHook = nil })
@@ -68,12 +71,13 @@ func TestMarkSequences(t *testing.T) {
 		// order, on tmpfs; elsewhere it adds one.
 		depth int
 	}{
-		{"#359 item 1: a mark armed after the newest row a sweep kept, a row that ended the mark Open restored, is due after a restart, from the base frame", "fwstwhDwRnxSRws", 2},
-		{"#359 item 2: a mark a batch ended stays ended after a power cut took records numbered below it and new records took their numbers", "fwstwsDwswweSPwswsRwh", 2},
-		{"installed and signed in, with the switch back's mark armed", "fwst", 3},
-		{"signed in, with the first batch sealed online marked", "fwstws", 3},
-		{"signed in, with the first batch after the switch back sealed local-only for a held call", "fwstwh", 3},
-		{"signed in, with rows sealed online on two days", "fwstwsDws", 3},
+		{"#359 item 1: a mark armed after the newest row a sweep kept, a row that ended the mark Open restored, is due after a restart, from the base frame", "fwstwhDwRnxSRws", 3},
+		{"#359 item 2: a mark a batch ended stays ended after a power cut took records numbered below it and new records took their numbers", "fwstwsDwswweSPwswsRwh", 3},
+		{"a mark the agent's Seen armed at Open, for a switch back no frame recorded, ends with Open's own batch of what a crash left, sealed online, so a held call's seal after it is online", "fwstwRwh", 3},
+		{"installed and signed in, with the switch back's mark armed", "fwst", 4},
+		{"signed in, with the first batch sealed online marked", "fwstws", 4},
+		{"signed in, with the first batch after the switch back sealed local-only for a held call", "fwstwh", 4},
+		{"signed in, with rows sealed online on two days", "fwstwsDws", 4},
 	}
 	failures := 0
 	n := 0
@@ -295,8 +299,12 @@ func (r *markRig) tick() {
 
 // allowed reports whether the state allows op: a stretch begins only while
 // none goes on, and ends only while one does, the agent sees a stretch end
-// only while config.toml says online, and a record is made late only in a
-// stretch that ended.
+// only while config.toml says online, a record is made late only in a
+// stretch that ended, and the sweep by today runs only while every record
+// the writer holds without a batch was made today. The agent's sweep cuts
+// 180 days back, and the writer seals what it holds within a minute, so no
+// record still waiting for its batch was made before the cut, which folds
+// the stretches before it into one (Writer.foldStretches).
 func (r *markRig) allowed(op byte) bool {
 	switch op {
 	case opLocal, opNote, opSeen:
@@ -306,8 +314,26 @@ func (r *markRig) allowed(op byte) bool {
 	case opLate:
 		_, ok := r.late()
 		return ok
+	case opSweep:
+		return !r.pendingBefore(cutOf(dayOf(r.clk.now())))
 	}
 	return true
+}
+
+// pendingBefore reports whether the writer holds a record without a batch
+// that was made before cut, in Unix ms.
+func (r *markRig) pendingBefore(cut int64) bool {
+	if r.w == nil {
+		return false
+	}
+	r.w.mu.Lock()
+	defer r.w.mu.Unlock()
+	for _, p := range r.w.pending {
+		if p.has && p.env.T < cut {
+			return true
+		}
+	}
+	return false
 }
 
 // do runs op, which the state allows, and judges the writer after it.
@@ -448,9 +474,9 @@ func (r *markRig) write(ms int64) {
 }
 
 // sweep runs the retention sweep by today, which drops the rows whose
-// batch's first record is in a segment of a day before. When it drops any,
-// it writes batches.seg again, whole and flushed, with a base frame that
-// records the mark.
+// batch's first record is in a segment of a day before (allowed). When it
+// drops any, it writes batches.seg again, whole and flushed, with a base
+// frame that records the mark.
 func (r *markRig) sweep() {
 	name := filepath.Join(r.dir, batchesName)
 	was, err := os.Stat(name)
