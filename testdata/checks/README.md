@@ -51,8 +51,8 @@ Each failing scenario fails one check. Every other check passes on the same data
 | `6.3-cc6-moved-minute` | 6.3 | The live bucket of 14:18 credits B with A's minute |
 | `6.3-cc9-moved-turn` | 6.3 | A's second turn is labeled with project D |
 | `6.3-cc9-orphan-turn` | 6.3 | A's second turn's agent records move to a session made up for D, without its prompt |
-| `6.3-cc10-injected-heartbeats` | 6.3 | A script posts D's heartbeats while iTerm has focus and Sam types A's prompt |
-| `6.3-cc10-wrong-project` | 6.3 | A script posts D's heartbeats while Cursor, on E, has focus |
+| `6.3-cc10-injected-heartbeats` | 6.3 | A script in VS Code's terminal sends D's heartbeats through wakatime-cli while iTerm has focus and Sam types A's prompt |
+| `6.3-cc10-wrong-project` | 6.3 | A script in VS Code's terminal sends D's heartbeats through wakatime-cli while Cursor, on E, has focus |
 
 Each scenario's `expected.json` tells its story, lists its edits and notes what its results rely on.
 
