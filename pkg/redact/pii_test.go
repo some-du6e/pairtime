@@ -457,6 +457,12 @@ func TestDecimalNumbers(t *testing.T) {
 			[]Span{{Start: 1, End: 17, Type: TypeCard}}},
 		{"an SSN after a '.' at the start of the text is still an SSN", ".219-09-9999",
 			[]Span{{Start: 1, End: 12, Type: TypeUSSSN}}},
+		{"a card number after a digit and a space is still a card", "1 4111111111111111",
+			[]Span{{Start: 2, End: 18, Type: TypeCard}}},
+		{"a card number after another card number and a space is still a card", "4111111111111111 5555555555554444",
+			[]Span{{Start: 0, End: 16, Type: TypeCard}, {Start: 17, End: 33, Type: TypeCard}}},
+		{"an SSN after a digit and a space is still an SSN", "ssn 1 219099999",
+			[]Span{{Start: 6, End: 15, Type: TypeUSSSN}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
