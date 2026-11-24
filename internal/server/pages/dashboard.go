@@ -72,7 +72,7 @@ const demoDescription = "A sample pairtime dashboard: a made-up teen's time buil
 // serves at /install.sh (ScriptsRelease), which TestDashboardFollowsThePin
 // holds it to while the pin is on, so the PR that moves the pin after a
 // release moves all three.
-const installRelease = "v0.1.0-alpha.6"
+const installRelease = "v0.1.0-alpha.7"
 
 // installLines are the commands that install pairtime, as the release's
 // notes and README.md give them. Each runs the release's own install
