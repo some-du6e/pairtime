@@ -97,8 +97,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	h.Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	// Every answer is JSON that no browser sniffs as HTML (pairtimed sends
-	// nosniff), so <, > and & stay one byte each, and a list of devlogs is
-	// about as long as their Markdown.
+	// nosniff), so <, > and & stay one byte each. Markdown holds no C0
+	// control character (U+0000 to U+001F) but tab, LF and CR (publish), so
+	// a list of devlogs is at most about twice as long as their Markdown,
+	// for quotes, backslashes, those three and U+2028 and U+2029, which JSON
+	// writes longer. DEL and the C1 characters, which publish takes, stay as
+	// they are.
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	enc.Encode(v)
@@ -108,9 +112,11 @@ func refuse(w http.ResponseWriter, status int, code, detail string) {
 	writeJSON(w, status, errorBody{Error: code, Detail: detail})
 }
 
+// unavailable answers 503 with Retry-After: 5, as ingest's 503s do.
 func (s *Service) unavailable(w http.ResponseWriter, what string, err error) {
 	s.o.Logger.Error(what, "err", err)
-	refuse(w, http.StatusServiceUnavailable, "unavailable", "The server couldn't do that just now; send it again later.")
+	w.Header().Set("Retry-After", "5")
+	refuse(w, http.StatusServiceUnavailable, "unavailable", "The server couldn't do that just now; send it again in 5 seconds.")
 }
 
 // authenticate finds the device of r's bearer token, or answers 401 or 503
@@ -240,6 +246,9 @@ func (s *Service) publish(w http.ResponseWriter, r *http.Request) {
 		return
 	case len(*req.Markdown) > MaxMarkdown:
 		refuse(w, http.StatusRequestEntityTooLarge, "markdown_too_large", "A devlog's Markdown is at most 64 KiB.")
+		return
+	case hasControl(*req.Markdown):
+		refuse(w, http.StatusBadRequest, "bad_markdown", "A devlog's Markdown holds no C0 control character (U+0000 to U+001F) but tab, line feed and carriage return. DEL and the C1 characters are taken.")
 		return
 	}
 	d := Devlog{ID: *req.ID, ProjectKey: *req.Project, Markdown: *req.Markdown, AIAssisted: *req.AIAssisted}

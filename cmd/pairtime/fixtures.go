@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -43,8 +44,9 @@ by hand that has to follow. Run it with -n first to see what it would
 change. PROVENANCE.md files are left alone.
 
 It exits 1 when something needs that review before anything is committed: a
-binary file it can't scrub, a symlink, or a file or directory name that
-holds a removed value.
+binary file it can't scrub, a symlink, a file or directory name that holds
+a removed value, or JSON that its edits would break, in which case it
+leaves the file as it was.
 
 Flags (each value flag can be given more than once):
 `
@@ -302,6 +304,15 @@ func (s *scrubber) file(path, shown string) {
 		line, col := position(text, e.Start)
 		fmt.Fprintf(s.stdout, "%s:%d:%d: %s, %d bytes\n", shown, line, col, kinds([]redact.Span{e.Span}), e.End-e.Start)
 	}
+	if line, broken := breaksJSON(text, edits); broken {
+		where := shown
+		if line > 0 {
+			where += ":" + strconv.Itoa(line)
+		}
+		fmt.Fprintf(s.stdout, "%s: these edits would leave invalid JSON, so the file is left as it was; review it by hand\n", where)
+		s.review++
+		return
+	}
 	s.spans += len(edits)
 	s.changed++
 	if s.dry {
@@ -331,6 +342,67 @@ func apply(text string, edits []edit) string {
 	}
 	b.WriteString(text[at:])
 	return b.String()
+}
+
+// breaksJSON reports whether the edits would break JSON that text holds,
+// as removing a decimal's digits that a pattern took for a card's would
+// (issue #104). Text that parses as JSON must still parse. In other text,
+// such as a JSON Lines transcript, each line that is a JSON object or
+// array must stay one, on a line of its own, and line is the first that
+// wouldn't, counted from 1. It's 0 for text that parses as a whole.
+func breaksJSON(text string, edits []edit) (line int, broken bool) {
+	if json.Valid([]byte(text)) {
+		return 0, !json.Valid([]byte(apply(text, edits)))
+	}
+	n, k := 1, 0
+	for start := 0; start < len(text); {
+		// A line, with the lines after it that an edit starting in it
+		// runs on into.
+		end, j := lineAfter(text, start), k
+		for ; j < len(edits) && edits[j].Start < end; j++ {
+			end = max(end, lineAfter(text, edits[j].End))
+		}
+		if unit := text[start:end]; j > k {
+			if strings.Contains(strings.TrimSuffix(unit, "\n"), "\n") {
+				// An edit across a line break joins lines, so a JSON line
+				// among them no longer stands on its own.
+				for i, l := range strings.Split(unit, "\n") {
+					if jsonRecord(l) {
+						return n + i, true
+					}
+				}
+			} else if jsonRecord(unit) {
+				here := slices.Clone(edits[k:j])
+				for i := range here {
+					here[i].Start -= start
+					here[i].End -= start
+				}
+				if !jsonRecord(apply(unit, here)) {
+					return n, true
+				}
+			}
+		}
+		n += strings.Count(text[start:end], "\n")
+		start, k = end, j
+	}
+	return 0, false
+}
+
+// jsonRecord reports whether s is a JSON object or array, with nothing but
+// white space around it. A line that is only a number or a quoted string
+// is more likely plain text than a record.
+func jsonRecord(s string) bool {
+	t := strings.TrimLeft(s, " \t\r\n")
+	return t != "" && (t[0] == '{' || t[0] == '[') && json.Valid([]byte(s))
+}
+
+// lineAfter is the offset just past the line break that ends the line
+// holding offset i, or len(text) when no line break follows.
+func lineAfter(text string, i int) int {
+	if k := strings.IndexByte(text[i:], '\n'); k >= 0 {
+		return i + k + 1
+	}
+	return len(text)
 }
 
 // The placeholders of testdata/fixtures/README.md, which tests of the
