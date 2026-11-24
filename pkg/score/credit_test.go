@@ -652,6 +652,154 @@ func TestSideDoorPump(t *testing.T) {
 	}
 }
 
+// sideDoorScene is D-side-door-reading's scene: a hook prompt in s_1 at
+// 60 s, level B with no key presses reported, with a plugin's session s_9
+// of the same project hosted by the same terminal, and the person present
+// until 300 s. plugin writes a record as TestSideDoorPump's plugin does.
+func sideDoorScene(b *tl) {
+	b.focus(at(0), event.AppTerminal, "p_1", "s_1", "s_9")
+	b.start(at(0), "s_1", "p_1", event.EntrypointCLI, event.ParentTerminalApp, true)
+	b.mouse(every(at(1), at(296), 5000)...)
+	b.prompt(at(60), event.ViaHook, "s_1", "p_1", "t_1", 30)
+	b.agentStops(at(61), "s_1", "t_1")
+}
+
+func sideDoorPlugin(b *tl, tm int64, p event.Payload) event.Event {
+	return b.emit(tm, event.Envelope{Source: event.SourceHook, Via: event.ViaPlugin, Harness: event.HarnessOther,
+		SessionKey: "s_9", ProjectKey: "p_1"}, p)
+}
+
+// TestSideDoorBase checks rule 3 of the side-door reading erratum
+// (docs/errata/2026-11-20-design-6.4-side-door-reading.md, decided as
+// D-side-door-reading): the R_TURN_BASE_S a track call, a plugin or bridge
+// prompt, or a queued message a plugin reported starts its turn with
+// drains at no better level than that act, with its side-door label,
+// though a later hook prompt qualifies the drain at level B (DESIGN 6.4).
+func TestSideDoorBase(t *testing.T) {
+	cases := []struct {
+		name    string
+		build   func(b *tl)
+		label   event.Label
+		levels  map[event.Evidence]int64
+		labeled int64
+	}{
+		{
+			name: "a person's plugin prompt starts its turn with a base that drains at the prompt's level C with via_plugin, though the later hook prompt qualifies the drain at level B",
+			build: func(b *tl) {
+				sideDoorPlugin(b, at(20), &event.PromptSubmit{TurnKey: "t_9", LenChars: 30, TypedLenEst: 30,
+					OriginDeclared: event.DeclaredNone})
+			},
+			label:   event.LabelViaPlugin,
+			levels:  map[event.Evidence]int64{event.EvidenceB: 20, event.EvidenceC: 20},
+			labeled: 20,
+		},
+		{
+			name:    "a pairtime track call starts its turn with a base that drains at the call's level C with via_track, though the later hook prompt qualifies the drain at level B",
+			build:   func(b *tl) { b.track(at(20), "s_9", 30, event.LogNoReader, "") },
+			label:   event.LabelViaTrack,
+			levels:  map[event.Evidence]int64{event.EvidenceB: 20, event.EvidenceC: 20},
+			labeled: 20,
+		},
+		{
+			name:   "with no side-door act, the hook prompt's base drains at its own level B, unlabeled",
+			build:  func(*tl) {},
+			label:  event.LabelViaPlugin,
+			levels: map[event.Evidence]int64{event.EvidenceB: 20},
+		},
+		{
+			name: "a queued message that a plugin reported starts its turn with a base that drains at the message's level C with via_plugin, though the later hook prompt qualifies the drain at level B",
+			build: func(b *tl) {
+				sideDoorPlugin(b, at(20), &event.AgentQueue{TurnKey: "t_q", LenChars: 30})
+			},
+			label:   event.LabelViaPlugin,
+			levels:  map[event.Evidence]int64{event.EvidenceB: 20, event.EvidenceC: 20},
+			labeled: 20,
+		},
+		{
+			name: "a queued message that a hook reported starts its turn with a base that drains at the qualifying anchor's level B, unlabeled",
+			build: func(b *tl) {
+				b.harness(at(20), event.ViaHook, "s_9", "p_1", &event.AgentQueue{TurnKey: "t_q", LenChars: 30})
+			},
+			label:  event.LabelViaPlugin,
+			levels: map[event.Evidence]int64{event.EvidenceB: 40},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			sideDoorScene(b)
+			c.build(b)
+			b.samples(at(0), at(300))
+			d := b.run(t, Device{})
+			levels, labeled := readingBy(d, at(60), at(300), c.label)
+			if !maps.Equal(levels, c.levels) || labeled != c.labeled {
+				t.Errorf("reading by level %v, %d s labeled %s; want %v and %d", levels, labeled, c.label, c.levels, c.labeled)
+			}
+		})
+	}
+}
+
+// TestSideDoorLookup checks rule 4 of the side-door reading erratum: a
+// lookup takes the lower level of its two brackets as they were credited,
+// and a bracket's side-door label, not the levels of the anchors that
+// qualify them (DESIGN 6.4). The browser is in front from 90 s to 150 s.
+func TestSideDoorLookup(t *testing.T) {
+	cases := []struct {
+		name    string
+		build   func(b *tl)
+		levels  map[event.Evidence]int64
+		labeled int64
+	}{
+		{
+			name: "a lookup whose later bracket drained from a scheduled plugin turn's output takes level C and via_plugin, though the hook prompt qualifies both brackets at level B",
+			build: func(b *tl) {
+				says(b, at(61), "s_1", "p_1", "t_1", 30)
+				scheduled(sideDoorPlugin(b, at(62), &event.PromptSubmit{TurnKey: "t_9", LenChars: 30, TypedLenEst: 30,
+					OriginDeclared: event.DeclaredNone}))
+				sideDoorPlugin(b, at(63), &event.AgentOutput{TurnKey: "t_9", Words: 300})
+				sideDoorPlugin(b, at(64), &event.AgentStop{TurnKey: "t_9", StopReason: event.StopEndTurn})
+			},
+			levels:  map[event.Evidence]int64{event.EvidenceC: 60},
+			labeled: 60,
+		},
+		{
+			name:   "the same run bracketed after by the hook session's own output takes level B, unlabeled",
+			build:  func(b *tl) { says(b, at(61), "s_1", "p_1", "t_1", 90) },
+			levels: map[event.Evidence]int64{event.EvidenceB: 60},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			sideDoorScene(b)
+			b.focus(at(90), event.AppBrowser, "")
+			b.focus(at(150), event.AppTerminal, "p_1", "s_1", "s_9")
+			c.build(b)
+			b.samples(at(0), at(300))
+			d := b.run(t, Device{})
+			levels := map[event.Evidence]int64{}
+			var labeled int64
+			for _, cr := range d.Credits {
+				if cr.Slot < at(90) || cr.Slot >= at(150) {
+					continue
+				}
+				for _, e := range cr.Credited {
+					if e.Reason.Base() != event.ReasonLookup {
+						continue
+					}
+					levels[e.Level] += e.Seconds
+					if slices.Contains(e.Labels, event.LabelViaPlugin) {
+						labeled += e.Seconds
+					}
+				}
+			}
+			if !maps.Equal(levels, c.levels) || labeled != c.labeled {
+				t.Errorf("LOOKUP by level %v, %d s labeled via_plugin; want %v and %d", levels, labeled, c.levels, c.labeled)
+			}
+		})
+	}
+}
+
 func creditAt(d Derived, slot int64) (Credit, bool) {
 	i := slices.IndexFunc(d.Credits, func(c Credit) bool { return c.Slot == slot })
 	if i < 0 {
