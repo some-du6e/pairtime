@@ -362,6 +362,20 @@ func TestPublicTotals(t *testing.T) {
 		{name: "a revision the server labeled backfilled counts for nothing, whatever level its device claims", at: at,
 			revs: []revision{{seen("2026-11-24"), pevent.Backfilled, bucketOf(local("2026-11-24", 12), 1, final, A, A)}},
 			want: []ProfileDay{}},
+		{name: "a slot that a backfilled revision on another device wins counts for nothing, though a witnessed revision credits it too, as the dashboard's merge has it", at: at,
+			revs: []revision{
+				{seen("2026-11-24"), pevent.Witnessed, func() pevent.MinuteBucket {
+					mb := bucketOf(local("2026-11-24", 12), 1, final, A)
+					mb.Slots[0].Credited, mb.CreditedS = 10, 10
+					return mb
+				}()},
+				{seen("2026-11-24"), pevent.Backfilled, func() pevent.MinuteBucket {
+					mb := bucketOf(local("2026-11-24", 12), 1, final, C)
+					mb.Device = "d2"
+					return mb
+				}()},
+			},
+			want: []ProfileDay{}},
 		{name: "an offline catch-up the server labeled offline counts", at: at,
 			revs: []revision{{seen("2026-11-24"), pevent.Offline, bucketOf(local("2026-11-24", 12), 1, final, A)}},
 			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 15}}},

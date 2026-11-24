@@ -91,19 +91,25 @@ func endedEverywhere(t time.Time) string {
 // PublicTotals returns what a profile topic carries for account at the
 // publication of p, a 12:00 UTC: the credited seconds of each of the
 // PublicDays dates up to the newest that has ended in every time zone by
-// then, for each that has any, as the server held them at p
-// (rollup.CreditAsOf). So once p has passed, what PublicTotals gives for
-// it never changes: a revision received later, an offline catch-up at
-// 21:14 or a minute going final after p, shows at the next publication,
-// never at the hour it came (D-public-daily). CreditAsOf counts only levels
-// A and B, since level C never reaches public totals (D11), only
-// revisions the server itself labeled witnessed or offline, so a
-// backfilled revision adds nothing whatever level its device claims
-// (DESIGN 7.4), and a pending minute only once PENDING_WINDOW_S has
-// passed, which every minute of a date ended everywhere has (D1). The
-// agent's time on its own doesn't count. Nothing in it names a project or
-// says when in a day the time was, and its dates don't depend on the
-// account's zone, only on p.
+// then, for each that has any, as rollup.PublicCreditAsOf reads them at p.
+// That is the owner's dashboard's own credit for the date as the server
+// held it at p, under the day cap, since credit past DAY_CAP_S is
+// X.day_cap and uncredited (SM 5.3), at levels A and B only, since level C
+// never reaches public totals (D11), and only in slots whose winning
+// revision the server itself labeled witnessed or offline, so no credit a
+// backfilled revision brought ever shows, whatever level its device
+// claims (DESIGN 7.4).
+//
+// So a date's public number never exceeds what the dashboard credited it
+// at levels A and B at p, and on a date with no backfilled revision it is
+// that number. Once p has passed, what PublicTotals gives for it never
+// changes: a revision received later, an offline catch-up at 21:14 or a
+// minute going final after p, shows at the next publication, never at the
+// hour it came (D-public-daily). A pending minute counts once
+// PENDING_WINDOW_S has passed, which every minute of a date ended
+// everywhere has (D1). The agent's time on its own doesn't count. Nothing
+// in it names a project or says when in a day the time was, and its dates
+// don't depend on the account's zone, only on p.
 //
 // It makes PublicDays reads. The topic's pass makes two calls a profile a
 // day; a page that shows a profile on every view should keep each
@@ -116,7 +122,7 @@ func PublicTotals(ctx context.Context, q rollup.Querier, account string, p time.
 	out := ProfileTotals{Days: []ProfileDay{}}
 	for i := PublicDays - 1; i >= 0; i-- {
 		day := last.AddDate(0, 0, -i).Format(dashboard.DateLayout)
-		c, err := rollup.CreditAsOf(ctx, q, account, day, p.UnixMilli())
+		c, err := rollup.PublicCreditAsOf(ctx, q, account, day, p.UnixMilli())
 		if err != nil {
 			return ProfileTotals{}, err
 		}
