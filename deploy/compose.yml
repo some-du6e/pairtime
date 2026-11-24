@@ -36,7 +36,7 @@ services:
     # A server-image.yml push, by tag and digest (deploy/runbook.md, The
     # image pin). This one is main at da01443: the owner's dashboard polish
     # (#180) and ingest's focus_unknown slot label with its level-C rule (#189).
-    image: ghcr.io/some-du6e/pairtimed:sha-e46e67a1ba79@sha256:a616c49206a247bd2ac97eb32ee2743a7a3d7eb8850dfc88bdee27b3706ce26f
+    image: ghcr.io/some-du6e/pairtimed:sha-4bf395d5b767@sha256:13fccc11e94bf3b8cda9e0c7ffa7195ae5236dc8f566bb11b5dcce8632deb5f0
     restart: unless-stopped
     # Litestream restores /data/pairtime.db from the replica when the file
     # is missing, then runs "pairtimed serve" as its subprocess and copies
