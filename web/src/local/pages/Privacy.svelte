@@ -10,7 +10,7 @@
 	// its button comes in a later WP.
 	//
 	// The periods are docs/retention.json's device entries, in the file's
-	// order, then the inbox's row (retention.ts). The vault keeps prompt
+	// order, the inbox's included (retention.ts). The vault keeps prompt
 	// text encrypted (DESIGN 3.5; WP-LG6), and the inbox and the hook calls
 	// the agent holds keep it as plain text until the agent has read them.
 	// Who can read it says which is which.

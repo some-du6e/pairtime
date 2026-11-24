@@ -63,6 +63,11 @@ type Facts struct {
 	// lines show as ~, so that a line someone shares names fewer of their
 	// folders.
 	Homes []string
+	// SpoolStopped is set while the agent has stopped the inbox's spool, as
+	// once its ledger can't open until pairtime restore runs
+	// (inbox.SpoolStopped). It is read from the data folder, so doctor
+	// says so while the agent is down too.
+	SpoolStopped bool
 }
 
 // Checks works out doctor's lines from f, in the order DESIGN 5.9 lists
@@ -400,6 +405,13 @@ func itOrThem(n uint64) string {
 // hook record (CC1); the line measures what the rule costs.
 func spoolCheck(f Facts) Check {
 	c := Check{Name: "spool"}
+	if f.SpoolStopped {
+		// No drain would take a spooled call to the ledger, so hooks spool
+		// nothing (D-inbox-age-cap).
+		c.Result = Warn
+		c.Text = "hooks spool nothing, because the ledger can't open until you run pairtime restore, so a hook call the agent doesn't take at once is lost"
+		return c
+	}
 	if f.Reach != Reached || f.Agent == nil {
 		c.Result, c.Text = Skip, notAsked(f)
 		return c

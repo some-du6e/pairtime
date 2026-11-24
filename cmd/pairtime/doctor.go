@@ -22,6 +22,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/doctor"
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/hookpath"
+	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/ipc"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/coach/text"
@@ -190,6 +191,7 @@ func gatherFacts(dirs home.Dirs, wait io.Writer) doctor.Facts {
 	}
 	f.Keystore = inspectKeystore(dirs)
 	f.Signing = binarySigning()
+	f.SpoolStopped = inbox.SpoolStopped(dirs.Inbox())
 	st, took, err := askAgent(dirs, wait)
 	f.AskTook = took
 	switch {

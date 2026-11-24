@@ -32,6 +32,9 @@ func (a *agent) journalDir() string { return filepath.Join(a.dirs.Data, "receive
 // of it. The process scan, presence and focus must have started, for the
 // hook sink to hand calls to (hookSteps).
 func (a *agent) startIPC(opts Options) func() {
+	// Before the first drain, so that a call that waited too long goes
+	// unread, and whether or not a drain runs at all.
+	a.expireInbox()
 	j, err := inbox.OpenJournal(a.journalDir(), time.Now())
 	if err != nil {
 		a.setProblem("ipc", fmt.Sprintf("hooks spool their messages, because the agent can't open its journal: %v", err))
@@ -258,6 +261,25 @@ func (a *agent) spoolHolds(before func(event.Envelope) bool) bool {
 		a.log.Warn("a file of the inbox's spool can't be read to its end, so the first batch after config.toml went back online no longer waits for it", "err", err)
 	}
 	return false
+}
+
+// expireInbox deletes, unread, the spool files of the inbox that nothing
+// has written for inbox.SpoolKeep (D-inbox-age-cap): at the agent's start,
+// before its first drain, and with each retention look, so a call waits
+// unread no longer than held.jsonl keeps one, whether or not a drain runs,
+// as while the journal or the ledger can't open.
+func (a *agent) expireInbox() {
+	n, err := inbox.Expire(a.dirs.Inbox(), time.Now())
+	if n > 0 {
+		a.log.Warn("deleted spool files of the inbox, unread, as they waited longer than hook calls are kept", "files", n, "kept", inbox.SpoolKeep)
+	}
+	if err != nil {
+		a.log.Warn("the inbox's spool files that waited too long", "err", err)
+		a.setProblem("inbox", fmt.Sprintf("pairtime couldn't delete hook calls that waited in its inbox longer than %d days, and tries again within the hour: %v",
+			int(inbox.SpoolKeep/(24*time.Hour)), err))
+		return
+	}
+	a.setProblem("inbox", "")
 }
 
 // drain moves what the inbox holds into the journal.
