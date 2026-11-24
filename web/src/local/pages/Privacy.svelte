@@ -107,7 +107,8 @@ keep_prompt_text = false</code></pre>
 	<h2 id="delete-title">Delete everything</h2>
 	<p>
 		<code>pairtime privacy delete</code>, typed in a terminal, deletes pairtime's key and everything pairtime keeps on
-		this computer, apart from pairtime itself and its settings. The hours it recorded can't be submitted after that.
+		this computer, apart from pairtime itself, its settings, and install's record of what it changed, with its copies of
+		the files it edited, so that uninstall can put them back. The hours it recorded can't be submitted after that.
 		Copies a backup or a synced folder already holds stay as they are, the key's file too when pairtime doctor says
 		pairtime keeps its key in a file. A button here comes in a later version of pairtime.
 	</p>

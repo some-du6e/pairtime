@@ -95,8 +95,8 @@ type Input struct {
 	// words that follow "found at <folder>; " on a harness's line: the
 	// teen left it out with --skip, or its planner won't edit the file,
 	// such as a settings file that isn't JSON. A harness's line says why
-	// its hooks stay out, and the screen says why autostart and the
-	// calibration card do.
+	// its hooks stay out, and the screen says why autostart, the
+	// calibration card and the WakaTime line do.
 	Left map[string]string
 	// Linked is the server pairtime login linked this computer to, while
 	// config.toml says online and reads, which install leaves as they are:
@@ -107,6 +107,11 @@ type Input struct {
 	// login linked the computer, so that the screen says UnlinkedLine in
 	// place of local-only mode. Linked is empty then.
 	Unlinked bool
+	// WakaTimeNew says install makes ~/.wakatime.cfg, since there is none,
+	// rather than adding pairtime's line to the teen's own (install.
+	// WakaTime): the WakaTime card then says that pairtime is where
+	// wakatime-cli sends, and how to get WakaTime's extension.
+	WakaTimeNew bool
 }
 
 // UnlinkedLine is what the screen and install's last line say of a
@@ -123,10 +128,11 @@ type Screen struct {
 
 // order is the order the cards come in, which is the order install makes
 // the changes: the login item and the agent first, so that the first hook
-// call finds the agent up (DESIGN 5.9 steps 3 and 4), and config.toml's
-// shadow line before the agent starts, so that it starts with shadow on
-// and finds the file there, which its first start would otherwise write.
-var order = []string{install.ItemAutostart, ItemCalibration, install.ItemClaudeCode}
+// call finds the agent up (DESIGN 5.9 steps 3 and 4), config.toml's shadow
+// line before the agent starts, so that it starts with shadow on and finds
+// the file there, which its first start would otherwise write, and
+// ~/.wakatime.cfg after the hooks, once the agent is up (step 5).
+var order = []string{install.ItemAutostart, ItemCalibration, install.ItemClaudeCode, install.ItemWakaTime}
 
 // New makes the screen for in, with every card ticked.
 func New(in Input) *Screen {
@@ -144,6 +150,8 @@ func New(in Input) *Screen {
 			c = calibrationCard()
 		case install.ItemClaudeCode:
 			c = claudeCard(in)
+		case install.ItemWakaTime:
+			c = wakatimeCard(in)
 		}
 		c.ID, c.Diff, c.Ticked = id, diff, true
 		s.Cards = append(s.Cards, c)
@@ -226,6 +234,62 @@ func claudeCard(in Input) Card {
 	return c
 }
 
+// proxyNote is the WakaTime cards' note on a proxy install can't see, one
+// an editor sets: wakatime-cli v2.28.4 takes one its --proxy flag names, as
+// WakaTime's plugin for JetBrains IDEs passes the IDE's, before the
+// environment's, and sends every destination's heartbeats through it,
+// pairtime's agent on 127.0.0.1 included, in a config pairtime made too
+// (docs/errata/2026-11-24-editor-proxy.md). server says the card is for a
+// config of the teen's, whose own server adds two clauses: a proxy the
+// editors' environment sets for that server's address, which wakatime-cli
+// takes for pairtime's line too, and the sends to that server a failed send
+// to the agent holds back. A config pairtime makes has the agent on
+// 127.0.0.1 as its only api_url, which no environment proxy reaches, and no
+// server of the teen's to hold back.
+func proxyNote(server bool) string {
+	env, rest := "", ", and pairtime would get none of them"
+	if server {
+		env = ", or one their environment sets for your server's address"
+		rest = ", pairtime would get none of them, and each send the proxy doesn't pass on would hold back what wakatime-cli sends your own server"
+	}
+	return "Your editors can use a proxy that install can't see: one in their settings, as WakaTime's plugin for JetBrains IDEs passes the IDE's to wakatime-cli" + env + ". " +
+		"wakatime-cli would then send pairtime's copy of each heartbeat through it: the proxy would get your project and file names unencrypted" + rest + ". " +
+		"So don't set a proxy for your editors while pairtime's line is in."
+}
+
+// wakatimeCard is the card of pairtime's line in ~/.wakatime.cfg (DESIGN
+// 5.6), or of the config install makes when there is none (WakaTimeNew).
+// Its sentences call the file ~/.wakatime.cfg, as WakaTime's own docs do,
+// and leave its path to the diff, since the screen wraps them.
+func wakatimeCard(in Input) Card {
+	if in.WakaTimeNew {
+		return Card{
+			Title: "Count the time you spend in an editor, through WakaTime's plugins",
+			What: "WakaTime's editor plugins run wakatime-cli, which sends a heartbeat each time you edit or move around in a file. " +
+				"You have no ~/.wakatime.cfg, so pairtime makes one that has wakatime-cli send them to pairtime's agent on this computer, and nowhere else. " +
+				"It also tells wakatime-cli to read your AI agents' transcripts only from now on, so that it doesn't send the ones from before as new time.",
+			Notes: []string{
+				"For VS Code, Cursor, Windsurf and other editors built on VS Code, install WakaTime's extension from the editor's extensions view, or with code --install-extension WakaTime.vscode-wakatime.",
+				"Hack Club programs that review time through Robert read it from Hackatime, which this doesn't set up. If you join one, set up Hackatime too, then run pairtime install again: Hackatime's setup writes a new ~/.wakatime.cfg, and install adds pairtime's line to it.",
+				proxyNote(false),
+			},
+			Declining: "Without it, pairtime doesn't see the time you spend in an editor.",
+			TurnOff: "You can take it out any time with pairtime uninstall. It takes pairtime's settings out of the config it made, and deletes the file when nothing else is in it. " +
+				"If you gave that config a key of your own and it still sends to pairtime's agent, uninstall leaves the file to you, and says so. " +
+				"wakatime-cli's own wakatime-internal.cfg stays once wakatime-cli has written to it, since without it wakatime-cli would send your AI agents' old transcripts as new time to the next server you set up.",
+		}
+	}
+	return Card{
+		Title: "Send your editor time to pairtime as well as to your WakaTime server",
+		What: "WakaTime's editor plugins run wakatime-cli, which sends a heartbeat each time you edit or move around in a file to the server in your ~/.wakatime.cfg, such as Hackatime. " +
+			"pairtime adds one line under [api_urls] there, so that wakatime-cli also sends every heartbeat to pairtime's agent on this computer. " +
+			"Nothing else in the file changes. While pairtime's agent doesn't take what wakatime-cli sends it, as while the agent isn't running, wakatime-cli holds back what it sends your server too, and sends it once the agent takes it again.",
+		Notes:     []string{proxyNote(true)},
+		Declining: "Without it, pairtime doesn't see the time you spend in an editor.",
+		TurnOff:   "You can take the line out any time with pairtime uninstall, which leaves the rest of the file as it was.",
+	}
+}
+
 // millis writes d in whole milliseconds, and as "under 1 ms" below that.
 func millis(d time.Duration) string {
 	if d < time.Millisecond {
@@ -260,6 +324,10 @@ func (s *Screen) Render(w io.Writer) error {
 	if why, ok := s.in.Left[ItemCalibration]; ok {
 		b.WriteString("\n")
 		b.WriteString(wrap(`Your time won't show as "calibrating": `+install.Printable(why)+".", ""))
+	}
+	if why, ok := s.in.Left[install.ItemWakaTime]; ok {
+		b.WriteString("\n")
+		b.WriteString(wrap("pairtime won't get your editor time from WakaTime's plugins: "+install.Printable(why)+".", ""))
 	}
 	for i, c := range s.Cards {
 		b.WriteString("\n")

@@ -15,6 +15,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/install/udiff"
+	"github.com/some-du6e/pairtime/internal/install/wakacfg"
 )
 
 // Plan is everything Apply will do, worked out before anything is written.
@@ -36,6 +37,9 @@ type Plan struct {
 	// adopted are the targets adopt records without changing them, with
 	// what planning read: Apply checks them as it checks the changes.
 	adopted []Change
+	// read is what planning read of each target an install plan's items
+	// edit (Read).
+	read map[Target]Content
 
 	// unlock drops the install lock the plan holds until Apply or Close;
 	// nil once dropped.
@@ -84,16 +88,46 @@ type Change struct {
 	Items  []string
 	Before Content
 	After  Content
-	// Notes say what the teen should know about the change.
+	// Notes say what the teen should know about the change, each a
+	// sentence that names the target (Plan.Notes).
 	Notes []string
 
 	mkdirs []string // directories to make before writing, outermost first
 	kinds  []string // the kinds of the edits that make the change
+	// wakaKey is the key of pairtime's WakaTime line, for the mask of the
+	// config it is in (shown), "" for any other target.
+	wakaKey string
 }
 
 // Empty reports whether the plan changes no target. Apply may still tidy
 // pairtime's own files.
 func (p *Plan) Empty() bool { return len(p.Changes) == 0 }
+
+// Notes returns what the teen should know about the plan's changes, each
+// naming its target, in the order of the changes, but for the changes
+// Diff leaves out (own). Uninstall shows them under its diff.
+func (p *Plan) Notes() []string {
+	var out []string
+	for _, c := range p.Changes {
+		if !c.own() {
+			out = append(out, c.Notes...)
+		}
+	}
+	return out
+}
+
+// Read returns what planning read of each target an install plan's items
+// edit, whether the plan changes it or not. Install compares two plans of
+// one item by it, as when it plans pairtime's WakaTime line again on the
+// agent's port: an item's edits depend only on what they read and what the
+// item was made with.
+func (p *Plan) Read() map[Target]Content {
+	out := make(map[Target]Content, len(p.read))
+	for t, c := range p.read {
+		out[t] = c
+	}
+	return out
+}
 
 // Diff returns the plan as one unified diff per target that changes, which
 // is what `pairtime install --dry-run` prints and the consent screen shows.
@@ -102,10 +136,15 @@ func (p *Plan) Empty() bool { return len(p.Changes) == 0 }
 // It is for people to read, not to apply. In a settings file every string
 // value and comment pairtime didn't write shows as ***, so that no token
 // or webhook URL of the teen's reaches the screen (maskSettings), and a
-// character a terminal would act on is written out (escapeControls).
+// character a terminal would act on is written out (escapeControls). A
+// file of pairtime's own in its data directory, the WakaTime setup file,
+// isn't shown, as the manifest and the backups aren't (own).
 func (p *Plan) Diff() string {
 	var b strings.Builder
 	for _, c := range p.Changes {
+		if c.own() {
+			continue
+		}
 		from, to := c.Target.String(), c.Target.String()
 		if !c.Before.Exists {
 			from = "/dev/null"
@@ -133,6 +172,13 @@ func FileDiff(path string, before, after []byte) string {
 		to = "/dev/null"
 	}
 	return escapeControls(udiff.Unified(from, to, before, after))
+}
+
+// own reports whether ch changes only a file of pairtime's own, in its
+// data directory, which Diff leaves out: the WakaTime setup file, which
+// tells the agent the key of pairtime's line (wakacfg.Setup).
+func (ch Change) own() bool {
+	return len(ch.kinds) > 0 && !slices.ContainsFunc(ch.kinds, func(k string) bool { return k != kindWakaTimeSetup })
 }
 
 // kindsOf returns the kinds of recs, each once.
@@ -168,7 +214,7 @@ func (in *Installer) planInstall(groups []*group) (*Plan, error) {
 		return nil, err
 	}
 
-	p := &Plan{in: in, oldSum: oldSum, manifest: m.clone()}
+	p := &Plan{in: in, oldSum: oldSum, manifest: m.clone(), read: map[Target]Content{}}
 	for _, g := range groups {
 		cur, err := in.read(g.target)
 		if err != nil {
@@ -180,6 +226,7 @@ func (in *Installer) planInstall(groups []*group) (*Plan, error) {
 				return nil, fmt.Errorf("%s %w", g.target, err)
 			}
 		}
+		p.read[g.target] = cur
 		if next.Same(cur) {
 			if err := p.adopt(g.target, cur, g.recs); err != nil {
 				return nil, err
@@ -194,7 +241,7 @@ func (in *Installer) planInstall(groups []*group) (*Plan, error) {
 			// pairtime's entries out of.
 			return nil, fmt.Errorf("%s would grow past the %d MiB pairtime reads back, so uninstall couldn't take pairtime's entries out of it; pairtime leaves it alone", g.target, maxFileSize>>20)
 		}
-		ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: next, kinds: kindsOf(g.recs)}
+		ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: next, kinds: kindsOf(g.recs), wakaKey: wakaKeyOf(g.recs)}
 		if !g.target.isRegistry() && !cur.Exists {
 			// A file that isn't there may be missing its folders too: on a
 			// first install, and on a rerun after an Apply that stopped
@@ -217,7 +264,7 @@ func (in *Installer) planInstall(groups []*group) (*Plan, error) {
 			if claimed(g.edits, cur) {
 				before = Content{}
 			}
-			base, err := undoAll(cur, before, g.recs)
+			base, _, err := undoAll(cur, before, g.recs)
 			if err != nil {
 				return nil, fmt.Errorf("%s %w", g.target, err)
 			}
@@ -232,7 +279,7 @@ func (in *Installer) planInstall(groups []*group) (*Plan, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%s: %w", g.target, err)
 			}
-			base, err := undoAll(cur, old, rec.Edits)
+			base, _, err := undoAll(cur, old, rec.Edits)
 			if err != nil {
 				return nil, fmt.Errorf("%s %w", g.target, err)
 			}
@@ -346,7 +393,7 @@ func (p *Plan) adopt(t Target, cur Content, recs []editRecord) error {
 	if p.manifest.find(t) != nil {
 		return nil
 	}
-	base, err := undoAll(cur, Content{}, recs)
+	base, _, err := undoAll(cur, Content{}, recs)
 	if err != nil {
 		return fmt.Errorf("%s %w", t, err)
 	}
@@ -381,9 +428,9 @@ func (p *Plan) rebase(rec *record, base Content) {
 // PlanInstall takes. Their targets that the manifest doesn't record lose
 // whatever pairtime finds of its own there, as adopt would record it:
 // pairtime's hooks, and an autostart entry that starts a pairtime agent.
-// That covers a manifest that is gone with pairtime's data directory, after
-// "Delete everything" (DESIGN 8.8) or by hand, which would otherwise leave
-// hooks and a login item that keep starting pairtime.
+// That covers a manifest that is gone with pairtime's data directory, as
+// when it was deleted by hand, which would otherwise leave hooks and a
+// login item that keep starting pairtime.
 //
 // The plan holds the install lock until Apply or Close, as PlanInstall's
 // does.
@@ -442,7 +489,7 @@ func (in *Installer) planUndo(rec record) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
-	ch := Change{Target: rec.Target, Items: itemIDs(rec.Edits), Before: cur, kinds: kindsOf(rec.Edits)}
+	ch := Change{Target: rec.Target, Items: itemIDs(rec.Edits), Before: cur, kinds: kindsOf(rec.Edits), wakaKey: wakaKeyOf(rec.Edits)}
 	base, err := in.loadSaved(rec.Base)
 	if err != nil {
 		return Change{}, fmt.Errorf("%s: %w", rec.Target, err)
@@ -450,11 +497,18 @@ func (in *Installer) planUndo(rec record) (Change, error) {
 	if cur.digest() == rec.Written {
 		ch.After = base
 	} else {
-		if ch.After, err = undoAll(cur, base, rec.Edits); err != nil {
+		var notes []string
+		if ch.After, notes, err = undoAll(cur, base, rec.Edits); err != nil {
+			if errors.Is(err, wakacfg.ErrNotOwn) {
+				// It says what the file is now, after its name, as
+				// planFound shows it.
+				return Change{}, fmt.Errorf("%s %w", rec.Target, err)
+			}
 			return Change{}, fmt.Errorf("%s changed since pairtime wrote it, and pairtime's entries can't be taken out: %w", rec.Target, err)
 		}
-		if !ch.After.Same(cur) {
-			ch.Notes = append(ch.Notes, "This changed since pairtime wrote it, so only pairtime's own entries come out.")
+		ch.note(notes)
+		if len(notes) == 0 && !ch.After.Same(cur) {
+			ch.Notes = append(ch.Notes, fmt.Sprintf("%s changed since pairtime wrote it, so only pairtime's own entries come out.", rec.Target))
 		}
 	}
 	if ch.After.Exists && cur.Exists && !rec.Target.isRegistry() {
@@ -478,7 +532,7 @@ func (in *Installer) planFound(g *group) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
-	ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: cur, kinds: kindsOf(g.recs)}
+	ch := Change{Target: g.target, Items: itemIDs(g.recs), Before: cur, After: cur, kinds: kindsOf(g.recs), wakaKey: wakaKeyOf(g.recs)}
 	switch {
 	case !cur.Exists:
 		return ch, nil
@@ -490,7 +544,7 @@ func (in *Installer) planFound(g *group) (Change, error) {
 		// Only a file that holds a pairtime entry changes: the empty lists
 		// and the empty file that the undo below takes away are pairtime's
 		// only when pairtime's entries were in them.
-		kept, err := undoAll(cur, cur, g.recs)
+		kept, _, err := undoAll(cur, cur, g.recs)
 		if err != nil {
 			return Change{}, fmt.Errorf("%s %w", g.target, err)
 		}
@@ -498,12 +552,14 @@ func (in *Installer) planFound(g *group) (Change, error) {
 			return ch, nil
 		}
 	}
-	if ch.After, err = undoAll(cur, Content{}, g.recs); err != nil {
+	var notes []string
+	if ch.After, notes, err = undoAll(cur, Content{}, g.recs); err != nil {
 		return Change{}, fmt.Errorf("%s %w", g.target, err)
 	}
 	if !ch.After.Same(cur) {
-		ch.Notes = append(ch.Notes, "pairtime has no record of installing this, so uninstall takes out what it recognizes as pairtime's.")
+		ch.Notes = append(ch.Notes, fmt.Sprintf("pairtime has no record of what install put in %s, so uninstall takes out what it recognizes as pairtime's.", g.target))
 	}
+	ch.note(notes)
 	err = checkUndo(&ch, g.recs)
 	return ch, err
 }
@@ -539,7 +595,7 @@ func checkUndo(ch *Change, recs []editRecord) error {
 			newline = "\r\n"
 		}
 		ch.After = Content{Exists: true, Data: []byte(empty + newline), Mode: ch.Before.Mode}
-		ch.Notes = append(ch.Notes, "This is a link, which stays, so the file it points to is left empty rather than deleted.")
+		ch.Notes = append(ch.Notes, fmt.Sprintf("%s is a link, which stays, so the file it points to is left empty rather than deleted.", ch.Target))
 	}
 	if ch.Before.Mode&0o200 == 0 {
 		return fmt.Errorf("%s is read-only now, so pairtime leaves it alone; make it writable and run uninstall again", ch.Target)
@@ -561,19 +617,33 @@ func emptyFile(recs []editRecord) (string, bool) {
 	return empty, empty != ""
 }
 
-// undoAll undoes edits on cur, the last one first.
-func undoAll(cur, base Content, edits []editRecord) (Content, error) {
+// undoAll undoes edits on cur, the last one first, and returns the notes
+// the undos gave, in that order (undoer).
+func undoAll(cur, base Content, edits []editRecord) (Content, []string, error) {
+	var notes []string
 	for i := len(edits) - 1; i >= 0; i-- {
 		undo, ok := undoers[edits[i].Kind]
 		if !ok {
-			return Content{}, fmt.Errorf("pairtime doesn't know how to undo an edit of kind %q", edits[i].Kind)
+			return Content{}, nil, fmt.Errorf("pairtime doesn't know how to undo an edit of kind %q", edits[i].Kind)
 		}
-		var err error
-		if cur, err = undo(cur, base, edits[i].Data); err != nil {
-			return Content{}, err
+		var (
+			n   []string
+			err error
+		)
+		if cur, n, err = undo(cur, base, edits[i].Data); err != nil {
+			return Content{}, nil, err
 		}
+		notes = append(notes, n...)
 	}
-	return cur, nil
+	return cur, notes, nil
+}
+
+// note adds notes, the undos' notes on ch's target, to ch.Notes, each
+// after the target's name.
+func (ch *Change) note(notes []string) {
+	for _, n := range notes {
+		ch.Notes = append(ch.Notes, ch.Target.String()+" "+n)
+	}
 }
 
 func itemIDs(recs []editRecord) []string {

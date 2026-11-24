@@ -543,8 +543,8 @@ func TestUninstallWithoutTheManifest(t *testing.T) {
 			if !autostartEntry(t, env, in).Exists {
 				t.Fatal("install wrote no autostart entry")
 			}
-			// "Delete everything" wipes the data directory, manifest and
-			// backups included (DESIGN 8.8).
+			// The data directory is gone, manifest and backups included, as
+			// when it was deleted by hand.
 			if err := os.RemoveAll(filepath.Dir(in.Dir)); err != nil {
 				t.Fatal(err)
 			}
