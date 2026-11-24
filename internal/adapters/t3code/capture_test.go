@@ -31,12 +31,15 @@ import (
 // and probes.json, what each prompt a hook saw was, which is the oracle.
 const captureDir = "../../../testdata/fixtures/t3_code/0.1.10-nightly.20261112.4606/linux/web"
 
-// captureHook is one of the capture's hook calls, as its logger wrote it.
+// captureHook is one of the capture's hook calls, as its logger wrote it:
+// for a UserPromptSubmit, whether the prompt opens with T3's guest wrapper
+// too, as the agent's device test reads it (OpensAsGuest).
 type captureHook struct {
-	Event     string `json:"event"`
-	SessionID string `json:"session_id"`
-	PromptID  string `json:"prompt_id"`
-	TNS       int64  `json:"t_ns"`
+	Event       string `json:"event"`
+	SessionID   string `json:"session_id"`
+	PromptID    string `json:"prompt_id"`
+	TNS         int64  `json:"t_ns"`
+	GuestPrefix bool   `json:"guest_prefix"`
 }
 
 // captureProbe is what probes.json says a prompt a hook saw was: the
@@ -141,11 +144,12 @@ func readJSONL[T any](t *testing.T, path string) []T {
 // replays the capture through a reader: the message rows go in at their
 // stamps, in T3's rowid order, which the capture's stamps follow; each
 // prompt the hook saw is asked about when the hook saw it, as the agent
-// asks about every prompt of a session T3's server started; and a read runs
-// every 10 s between, as the agent's apps job reads while T3 runs. The
-// other tables' rows, runs and attempts among them, are there from the
-// start as T3 left them, so each run has its start and end when its message
-// is read. Rows T3 rewrote, the promoted guest's message and the
+// asks about every prompt of a session T3's server started, marked guest
+// when it opens with T3's guest wrapper, as the agent marks it; and a read
+// runs every 10 s between, as the agent's apps job reads while T3 runs.
+// The other tables' rows, runs and attempts among them, are there from the
+// start as T3 left them, so each run has its start and end when its
+// message is read. Rows T3 rewrote, the promoted guest's message and the
 // follow-up, are there only as T3 left them (PROVENANCE.md).
 func replayCapture(t *testing.T) *replayed {
 	t.Helper()
@@ -308,7 +312,8 @@ func replayCapture(t *testing.T) *replayed {
 			b, err = r.Poll(ctx)
 		} else {
 			var p Pairing
-			p, b, err = r.Pair(ctx, Prompt{SessionKey: session(st.hook.SessionID), T: st.at, EventID: out.promptEvent[st.hook.PromptID]})
+			p, b, err = r.Pair(ctx, Prompt{SessionKey: session(st.hook.SessionID), T: st.at, EventID: out.promptEvent[st.hook.PromptID],
+				Guest: st.hook.GuestPrefix})
 			out.answers[st.hook.PromptID] = p
 			out.steersAt[st.hook.PromptID] = r.Steers()
 		}

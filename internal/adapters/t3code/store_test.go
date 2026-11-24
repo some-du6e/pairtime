@@ -101,6 +101,43 @@ func (s *store) flush() {
 	}
 }
 
+// flushHeld writes what add queued through the connection that holds the
+// store open, as T3's server writes through the one it holds, which stays
+// open after, unlike flush's. sqlite3 runs it as it reads it, without
+// -bail, so flushHeld doesn't wait for it: a test looks in the store for
+// what it did (waitFor).
+func (s *store) flushHeld() {
+	s.t.Helper()
+	if len(s.pending) == 0 {
+		return
+	}
+	if s.holdIn == nil {
+		s.t.Fatal("no connection holds the store open")
+	}
+	sql := strings.Join(s.pending, "\n") + "\n"
+	s.pending = nil
+	if _, err := io.WriteString(s.holdIn, sql); err != nil {
+		s.t.Fatalf("writing through the connection that holds the store open: %v", err)
+	}
+}
+
+// waitFor waits until query, a SELECT of one hx field, finds a nonzero
+// count in the store, as after a write flushHeld sent.
+func (s *store) waitFor(query string) {
+	s.t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rows, err := (&Runner{Path: s.sqlite3}).Query(context.Background(), s.path, query)
+		if err == nil && len(rows) == 1 && len(rows[0]) == 1 && rows[0][0].s != "" && rows[0][0].s != "0" {
+			return
+		}
+		if time.Now().After(deadline) {
+			s.t.Fatalf("10 s after the write, the store still doesn't have what it wrote: %v, %+v", err, rows)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // open holds the store open, as T3's server does while it runs, and waits
 // for its -wal and -shm files.
 func (s *store) open() {

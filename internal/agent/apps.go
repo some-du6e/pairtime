@@ -417,7 +417,9 @@ func (p *appsHost) poll() {
 // prompt's text reaches the ledger writer, and sets them from the answer
 // (DESIGN 5.1). Every copy, asked about or not, is also marked guest when
 // it falls in a running turn the owner steered a guest's message into
-// (steered) and no run claimed it. A prompt marked guest takes no relay.
+// (steered) and no run claimed it. A prompt marked guest takes no relay,
+// and the reader asked about one already marked is told so, so it counts
+// no pairing that no record carries (t3code.Prompt.Guest).
 // late says the record is lookback's, of a time long past. The records the
 // read found go to the ledger after the prompt, so a record that names it
 // comes second.
@@ -452,7 +454,9 @@ func (p *appsHost) prompt(ev event.Event, text []byte, late bool, write func(eve
 		return write(ev)
 	}
 	ctx, cancel := context.WithTimeout(p.ctx, appsPairWait)
-	pr, b, err := p.reader.Pair(ctx, t3code.Prompt{SessionKey: ev.SessionKey, T: ev.T, EventID: ev.EventID})
+	// A prompt that opens as a guest's takes no relay, and the reader, told
+	// so, gives it none and counts no pairing that no record carries.
+	pr, b, err := p.reader.Pair(ctx, t3code.Prompt{SessionKey: ev.SessionKey, T: ev.T, EventID: ev.EventID, Guest: cp.Guest})
 	cancel()
 	p.noteSteers()
 	// A run claimed the prompt when a guest's run delivered it, or a
@@ -469,7 +473,8 @@ func (p *appsHost) prompt(ev event.Event, text []byte, late bool, write func(eve
 		// keeps the guest's words off the device.
 		cp.Guest = true
 	case cp.Guest:
-		// Opened as a guest's: no message of the owner's witnesses it.
+		// Opened as a guest's: no message of the owner's witnesses it, and
+		// the reader, told so, gave it no relay.
 	case pr.Relay != "":
 		cp.Relay = pr.Relay
 	}

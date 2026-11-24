@@ -121,8 +121,15 @@ func t3Checks(f Facts) []Check {
 		}
 		c.Text = "pairtime doesn't read T3 Code's store, because " + why + ". The messages you send through T3 Code count for nothing until it can. " + reportIt
 	default:
+		// The agent reads every 10 s while T3 runs, as its last read found
+		// it, and once a minute otherwise (internal/agent's appRuns), as
+		// when the app table doesn't name T3's server.
+		again := "It tries again within a minute"
+		if t.Running {
+			again = "It tries again every 10 seconds"
+		}
 		c.Result = Warn
-		c.Text = "the agent's last read of T3 Code's store failed: " + reason(t.Problem) + ". It tries again every 10 seconds"
+		c.Text = "the agent's last read of T3 Code's store failed: " + reason(t.Problem) + ". " + again
 	}
 	homes := f.T3.OwnHomes > 0 || f.T3.ServiceHome
 	if f.T3.OwnHomes > 0 {

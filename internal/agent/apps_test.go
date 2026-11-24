@@ -382,7 +382,9 @@ const guestText = "Message from guest Robin, sent by the owner: could the settin
 // marked guest and keeps no text, on every path a copy can take, a hook's,
 // a spooled call's, a transcript's and lookback's, whatever its harness and
 // whether or not the reader knows of the guest's run, and takes no relay.
-// A prompt with those words anywhere else keeps its text.
+// The reader asked about such a prompt is told it is a guest's, so it
+// counts no pairing that no record carries (F6 of #225). A prompt with those
+// words anywhere else keeps its text.
 func TestAppsGuestOpening(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -437,6 +439,12 @@ func TestAppsGuestOpening(t *testing.T) {
 			r.write(t, rec)
 			if asked := len(r.app.asked) > 0; asked != c.asked {
 				t.Errorf("the reader was asked about the prompt: %v, want %v", asked, c.asked)
+			}
+			// The reader asked about a prompt that opens as a guest's is told
+			// so, so it names no record for it and counts no pairing of it,
+			// which no record would carry (t3code's TestPairing).
+			if len(r.app.asked) > 0 && r.app.asked[0].Guest != c.guest {
+				t.Errorf("the reader was told the prompt is a guest's: %v, want %v", r.app.asked[0].Guest, c.guest)
 			}
 			got, _ := recordIn(t, r.records(t), appPromptID)
 			ps := got.ev.Data.(*event.PromptSubmit)

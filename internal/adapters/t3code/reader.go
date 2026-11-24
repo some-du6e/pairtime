@@ -229,6 +229,8 @@ type asked struct {
 	t       int64
 	id      string
 	claimed bool
+	// guest is Prompt.Guest: the agent marks the prompt guest.
+	guest bool
 }
 
 // heldRow is a new row whose folder the resolver hadn't answered for.
@@ -409,6 +411,13 @@ type Prompt struct {
 	// EventID is the prompt's event_id, which a record written after it
 	// names.
 	EventID string
+	// Guest says the agent marks the prompt guest whatever the read finds,
+	// since its text opens as T3 Code opens a guest's message
+	// (OpensAsGuest), and a prompt marked guest takes no relay. So Pair
+	// gives it no Relay, and its pairing counts only when a record the
+	// reader writes names it (Counts.Paired). A message's run still claims
+	// it, so the run takes no later prompt.
+	Guest bool
 }
 
 // Pairing is the reader's answer about a prompt (Pair).
@@ -427,7 +436,8 @@ type Pairing struct {
 	Guest bool
 	// Relay is the event id of the relay.message, from an earlier batch, the
 	// prompt pairs with: the prompt's relay. When the record is in this
-	// answer's own batch instead, the record names the prompt.
+	// answer's own batch instead, the record names the prompt. A prompt the
+	// agent marks guest (Prompt.Guest) gets none, since it takes no relay.
 	Relay string
 }
 
@@ -483,7 +493,9 @@ type Counts struct {
 	// Paired counts the records whose pairing with a prompt went on a
 	// record: on the relay.message, when the reader found the prompt first,
 	// or on the prompt, as Pair's Relay. A pairing found once both records
-	// were written goes on neither, and isn't counted.
+	// were written goes on neither, and isn't counted, and nor is one with
+	// a prompt the agent marks guest that Pair asks about after its record
+	// went out, since such a prompt takes no relay (Prompt.Guest).
 	Paired int
 	// Aged counts the rows the age test turned away: decided more than
 	// RELAY_SEEN_LAG_S after their stamp, as a row first read that late is,
@@ -601,8 +613,11 @@ func (r *Reader) Pair(ctx context.Context, p Prompt) (Pairing, Batch, error) {
 	if p.EventID == "" {
 		return Pairing{}, Batch{}, errors.New("t3code: a prompt with no event_id")
 	}
-	if !slices.ContainsFunc(r.prompts, func(a *asked) bool { return a.id == p.EventID }) {
-		r.prompts = append(r.prompts, &asked{session: p.SessionKey, t: p.T, id: p.EventID})
+	if i := slices.IndexFunc(r.prompts, func(a *asked) bool { return a.id == p.EventID }); i >= 0 {
+		// Asked again, as after a restart that state.json kept it across.
+		r.prompts[i].guest = r.prompts[i].guest || p.Guest
+	} else {
+		r.prompts = append(r.prompts, &asked{session: p.SessionKey, t: p.T, id: p.EventID, guest: p.Guest})
 	}
 	var b Batch
 	err := r.poll(ctx, p.EventID, &b)
@@ -617,6 +632,8 @@ func (r *Reader) Pair(ctx context.Context, p Prompt) (Pairing, Batch, error) {
 		switch {
 		case w.guest:
 			out.Guest = true
+		case p.Guest:
+			// A prompt the agent marks guest takes no relay.
 		case !slices.ContainsFunc(b.Messages, func(m Message) bool { return m.EventID == w.record }):
 			out.Relay = w.record
 		}
@@ -1502,9 +1519,10 @@ func (r *Reader) sessionsOf(its []row, anyDriver bool) []string {
 // its row is as the reader first read it: this read found it, or its record
 // is in b. The pairing goes on whichever record comes second (Paired): a
 // record in b names the prompt, and the prompt asking, Pair's, names a
-// record of an earlier batch as its Relay. A pairing found once both were
-// written goes on neither, but the run and the prompt pair with nothing
-// else.
+// record of an earlier batch as its Relay, unless the agent marks it guest
+// (Prompt.Guest). A pairing found once both were written goes on neither,
+// and nor does one with such a guest's prompt, but the run and the prompt
+// pair with nothing else.
 func (r *Reader) pair(b *Batch, asking string) {
 	runs := slices.Clone(r.watched)
 	slices.SortStableFunc(runs, func(a, c *watch) int {
@@ -1550,7 +1568,9 @@ func (r *Reader) pair(b *Batch, asking string) {
 				}
 			}
 			r.status.Paired++
-		case best.id == asking:
+		case best.id == asking && !best.guest:
+			// Pair puts the pairing on the prompt as its relay, which a
+			// prompt the agent marks guest doesn't take (Prompt.Guest).
 			r.status.Paired++
 		}
 	}

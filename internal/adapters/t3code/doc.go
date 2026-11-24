@@ -80,8 +80,10 @@
 // run of that session; a message's, within RELAY_MATCH_S of its stamp too.
 // Guests' runs pair first. The record that comes second names the other: a
 // record in Pair's own batch names the prompt, and a prompt pairing with an
-// earlier record names it (Pairing.Relay); a pairing found once both are
-// written names nothing. A prompt a guest's run delivered is a guest's
+// earlier record names it (Pairing.Relay), unless the agent marks it guest
+// for its opening (Prompt.Guest); a pairing found once both are written
+// names nothing. A pairing counts once a record names the other
+// (Counts.Paired). A prompt a guest's run delivered is a guest's
 // (Pairing.Guest).
 //
 // # Privacy

@@ -680,9 +680,10 @@ components:
           description: >
             Why the last read didn't work: no store where T3 Code keeps it,
             no store with the `-wal` and `-shm` files T3 Code holds open, no
-            `sqlite3` on the agent's PATH, a `sqlite3` without JSON
-            functions, a schema the probe refused, or a read that failed.
-            Absent while it reads.
+            `sqlite3` on the agent's PATH, as when one an earlier read found
+            is gone when a run starts it, a `sqlite3` without JSON functions,
+            a schema the probe refused, or a read that failed. Absent while
+            it reads.
         problem:
           type: string
           description: >
@@ -705,8 +706,9 @@ components:
           type: boolean
           description: >
             The last read found no `sqlite3` on the agent's PATH, whether or
-            not T3 Code ran, so doctor can say how to install it. Absent
-            when there is one.
+            not T3 Code ran, or found the one an earlier read had found gone
+            when a run started it, as when it was uninstalled, so doctor can
+            say how to install it. Absent when there is one.
         day:
           type: string
           format: date

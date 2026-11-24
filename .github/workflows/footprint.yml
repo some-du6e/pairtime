@@ -22,9 +22,16 @@
 # misses, the step times both again, and the gate holds the lower of the
 # two rounds' costs: a slower hook misses in both, and the runner's noise,
 # which can swing one round by more than the gate's margin, rarely does
-# (#215). A PR that touches the client gets a 3-minute idle span; the
-# nightly run, release tags and runs by hand get 10 minutes, and a run by
-# hand can ask for the second round whatever the first gives:
+# (#215). Then, over a stretch of 3 minutes with T3's store written every
+# 3 s from outside the agent's job, so that the reader starts a sqlite3 run
+# at each of its reads, the CPU time the agent reports for itself and the
+# processes it started, the footprint.cpu_s that
+# `pairtime doctor --report` reads from /v1/status, must move with its
+# job's, within 20% of that or 0.05 s, and the job must have started
+# processes, or the check proves nothing (#276). A PR that touches the
+# client gets a 3-minute idle span; the nightly run, release tags and runs
+# by hand get 10 minutes, and a run by hand can ask for the second round
+# whatever the first gives:
 #
 #   gh workflow run footprint.yml --ref <branch> [-f minutes=N] [-f second_round=true]
 name: footprint
@@ -68,7 +75,10 @@ jobs:
   footprint:
     name: idle agent on Windows
     runs-on: windows-latest
-    timeout-minutes: 30
+    # A run by hand at its longest, 20 minutes idle, needs about 30 with
+    # the build, sqlite3's install, the wait for the reader, the hook's
+    # rounds and #276's stretch of 3 minutes.
+    timeout-minutes: 35
     env:
       # pairtime never uses cgo (AGENTS.md).
       CGO_ENABLED: "0"
@@ -116,19 +126,27 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           # T3 Code's reader reads its store with the sqlite3 tool on PATH
-          # (DESIGN 5.1). Chocolatey's sqlite package has one, whose own
-          # folder goes first on PATH, so the agent runs it rather than
-          # Chocolatey's shim, which would add a process to every read.
+          # (DESIGN 5.1). SQLite's own Windows tools, from sqlite.org and
+          # pinned by SHA-256, go first on PATH, so the agent runs the real
+          # sqlite3.exe and no shim adds a process to every read.
           if (-not (Get-Command sqlite3 -ErrorAction SilentlyContinue)) {
-            choco install sqlite --no-progress -y | Out-Host
-          }
-          if ($env:ChocolateyInstall) {
-            $tool = Get-ChildItem -Path (Join-Path $env:ChocolateyInstall 'lib') -Recurse -Filter sqlite3.exe -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-            if ($null -ne $tool) {
-              $tool.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-              $env:PATH = "$($tool.DirectoryName);$env:PATH"
+            # SQLite's own Windows tools from sqlite.org, pinned by the zip's SHA-256
+            # (its SHA3-256 is the one sqlite.org's download page gives).
+            $url = 'https://www.sqlite.org/2026/sqlite-tools-win-x64-3540100.zip'
+            $sha256 = 'FB20997ADE5583A5FBF1E36DB7BC3C82C9416B3F314F16961E1572AA4E49487D'
+            $zip = Join-Path $env:RUNNER_TEMP 'sqlite-tools.zip'
+            for ($try = 1; ; $try++) {
+              try { Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing; break }
+              catch {
+                if ($try -ge 3) { throw "couldn't download SQLite's tools from sqlite.org: $_" }
+                Start-Sleep -Seconds (10 * $try)
+              }
             }
+            if ((Get-FileHash -Path $zip -Algorithm SHA256).Hash -ne $sha256) { throw "SQLite's tools zip from sqlite.org isn't the pinned one" }
+            $dir = Join-Path $env:RUNNER_TEMP 'sqlite-tools'
+            Expand-Archive -Path $zip -DestinationPath $dir -Force
+            $dir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            $env:PATH = "$dir;$env:PATH"
           }
           "sqlite3 $(sqlite3 --version) at $((Get-Command sqlite3).Source)"
           # T3's tables and indexes from the reader's fixture, with migration
@@ -497,6 +515,58 @@ jobs:
             Write-Host "--- pairtime's slowest package inits (GODEBUG=inittrace=1), in all $initTotal ms ---"
             $inits | Sort-Object Ms -Descending | Select-Object -First 15 | ForEach-Object { Write-Host "$($_.Ms) ms  $($_.Pkg)" }
 
+            # The agent's own word on its CPU time against its job's (#276).
+            # /v1/status's footprint.cpu_s, which pairtime doctor --report
+            # reads, adds to the agent's own time that of the processes it
+            # started, by a job object of its own (childCPU in
+            # internal/agent/footprint_windows.go). The idle span can't test
+            # that: nothing writes the store then, so the reader starts no
+            # sqlite3, and a childCPU that counted nothing would pass. So in a
+            # stretch of its own, after the span and the hook's rounds, whose
+            # gates it leaves as they were, the script writes a row every
+            # $writeEveryS s through the connection that holds the store
+            # open, a sqlite3 outside the agent's job, as T3's server writes
+            # through the one it holds. The -wal grows with each, so each of
+            # the reader's reads, every 10 s, starts sqlite3. Over the stretch
+            # the agent's footprint.cpu_s must move with the job's CPU time,
+            # within 20% of that or 0.05 s, and the job must have started
+            # processes, without which the check proves nothing.
+            $stretchS = 180
+            $writeEveryS = 3
+            $minStarted = 6
+            # The job's accounting first, then the agent's answer, so the two
+            # are read as close together as the request allows.
+            function Get-CpuPair {
+              $jobCpu = [PairtimeJob]::CpuSeconds($job)
+              $procs = [PairtimeJob]::Processes($job)
+              $st = Invoke-RestMethod -Uri "$base/v1/status" -Headers $headers
+              [pscustomobject]@{ JobCpu = $jobCpu; JobProcesses = $procs; AgentCpu = [double]$st.footprint.cpu_s }
+            }
+            $cpuFrom = Get-CpuPair
+            $stretchEnd = [DateTime]::UtcNow.AddSeconds($stretchS)
+            $holder.StandardInput.WriteLine('CREATE TABLE IF NOT EXISTS footprint_writes (n INTEGER);')
+            $holder.StandardInput.Flush()
+            $writes = 0
+            while ([DateTime]::UtcNow -lt $stretchEnd) {
+              Start-Sleep -Seconds $writeEveryS
+              $writes++
+              $holder.StandardInput.WriteLine("INSERT INTO footprint_writes (n) VALUES ($writes);")
+              $holder.StandardInput.Flush()
+            }
+            $cpuTo = Get-CpuPair
+            $stretchJob = $cpuTo.JobCpu - $cpuFrom.JobCpu
+            $stretchAgent = $cpuTo.AgentCpu - $cpuFrom.AgentCpu
+            $stretchStarted = $cpuTo.JobProcesses - $cpuFrom.JobProcesses
+            $stretchTolerance = [math]::Max(0.05, 0.2 * $stretchJob)
+            $stretchRanOk = $stretchStarted -ge $minStarted
+            $stretchCpuOk = $stretchRanOk -and ([math]::Abs($stretchAgent - $stretchJob) -le $stretchTolerance)
+            $stretchText = "$([math]::Round($stretchAgent, 3)) s, $([math]::Round($stretchJob, 3)) s; $stretchStarted processes"
+            if (-not $stretchRanOk) {
+              Write-Host "::error::the agent started $stretchStarted processes over the $stretchS s stretch, fewer than $minStarted, though the script wrote T3 Code's store $writes times, so its reader ran too few sqlite3 runs for the CPU check to prove anything"
+            } elseif (-not $stretchCpuOk) {
+              Write-Host "::error::over the $stretchS s stretch the agent's footprint.cpu_s moved $([math]::Round($stretchAgent, 3)) s and its job's CPU time $([math]::Round($stretchJob, 3)) s, more than $([math]::Round($stretchTolerance, 3)) s apart"
+            }
+
             $wall = ($after.Time - $before.Time).TotalSeconds
             # The gate's CPU time is the job's: the agent's with that of the
             # processes it started, which cost the computer for it.
@@ -562,6 +632,7 @@ jobs:
               "| CPU time over wall time, the agent's and that of the processes it started, by its job object | $([math]::Round($cpuShare, 6)) | under ${budgetCpu}: $(Verdict $cpuOk) |",
               "| the agent's own CPU time over wall time, by Get-Process | $([math]::Round($ownShare, 6)) | none |",
               "| processes the agent started over the span, T3 Code's reader's sqlite3 runs among them | $started | none |",
+              "| over a stretch of $stretchS s after the span, with T3 Code's store written every $writeEveryS s from outside the agent's job: the agent's CPU time by its footprint.cpu_s in /v1/status, which doctor --report reads, its job's CPU time, and the processes the job started | $stretchText | within 20% of the job's or 0.05 s, with at least $minStarted processes: $(Verdict $stretchCpuOk) |",
               "| T3 Code's reader at the end of the span, with the fixture store held open and a t3 process running | $t3Text | reading and running: $(Verdict $t3Ok) |",
               "| working set at the start and end of the span | $($before.WorkingSet), $($after.WorkingSet) bytes | none |",
               "| peak working set since start-up | $($after.Peak) bytes | none |",
@@ -587,7 +658,7 @@ jobs:
             $summary = $rows -join "`n"
             $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
             Write-Host $summary
-            if (-not ($rssOk -and $cpuOk -and $t3Ok -and $secondOk -and $stopOk -and $hookOverOk -and $hookCapOk -and $hookQuietOk)) {
+            if (-not ($rssOk -and $cpuOk -and $t3Ok -and $stretchCpuOk -and $secondOk -and $stopOk -and $hookOverOk -and $hookCapOk -and $hookQuietOk)) {
               throw 'the agent failed a footprint gate; see the table above'
             }
           } catch {

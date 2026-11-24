@@ -139,19 +139,36 @@ jobs:
           set -eu
           export DEBIAN_FRONTEND=noninteractive
           . /etc/os-release
-          if ! apt-get update -qq; then
-            # A release past its support moves to its distribution's archive.
+          sources() {
             for f in /etc/apt/sources.list /etc/apt/sources.list.d/*; do
               [ -f "$f" ] || continue
-              sed -i -e 's#http://deb.debian.org#http://archive.debian.org#g' \
-                -e 's#http://security.debian.org#http://archive.debian.org#g' \
-                -e 's#http://archive.ubuntu.com#http://old-releases.ubuntu.com#g' \
-                -e 's#http://security.ubuntu.com#http://old-releases.ubuntu.com#g' \
-                -e '/-updates/d' "$f"
+              sed -i "$@" "$f"
             done
+          }
+          archive() {
+            # A release past its support moves to its distribution's archive.
+            sources -e 's#http://deb.debian.org#http://archive.debian.org#g' \
+              -e 's#http://security.debian.org#http://archive.debian.org#g' \
+              -e 's#http://archive.ubuntu.com#http://old-releases.ubuntu.com#g' \
+              -e 's#http://security.ubuntu.com#http://old-releases.ubuntu.com#g' \
+              -e '/-updates/d'
             apt-get -o Acquire::Check-Valid-Until=false update -qq
+          }
+          install() { apt-get install -y -qq --no-install-recommends sqlite3 >/dev/null; }
+          if ! apt-get update -qq; then
+            archive
           fi
-          apt-get install -y -qq --no-install-recommends sqlite3 >/dev/null
+          if ! install; then
+            # Its security suite can leave the mirror first, with its index
+            # still listing packages that are gone, as Debian 11's did after
+            # its LTS ended. Then the release's own sqlite3, without the
+            # security suite and the updates, is the one to test.
+            sources -e '/-security/d' -e '/-updates/d'
+            if ! { apt-get update -qq && install; }; then
+              archive
+              install
+            fi
+          fi
           echo "$PRETTY_NAME, sqlite3 $(sqlite3 --version)"
           if ! echo "SELECT json('{}');" | sqlite3 >/dev/null 2>&1; then
             echo "::error::$PRETTY_NAME's sqlite3 has no JSON functions, so doctor's no-JSON line must say how to get one that has them there (docs/errata/2026-11-23-t3-reader.md, Q5)"

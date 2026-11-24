@@ -411,7 +411,8 @@ func promptOf(b Batch) map[string]string {
 // the session the run went to, from 2 s before the run's start to its end
 // but not at or before the end of an earlier run of that session, and at
 // most RELAY_MATCH_S after the stamp, one to one, and the record that
-// comes second names the other.
+// comes second names the other, unless that is a prompt the agent marks
+// guest. A pairing counts only once a record carries it.
 func TestPairing(t *testing.T) {
 	const text = "please fix the flaky parser test"
 	cases := []struct {
@@ -457,6 +458,23 @@ func TestPairing(t *testing.T) {
 				}
 				if got := e.r.Status().Paired; got != 1 {
 					t.Errorf("%d records paired, want 1", got)
+				}
+			}},
+		{"a prompt the agent marks guest, as its text opens as T3 Code opens a guest's message, names no record and counts no pairing, though its message's run claims it",
+			func(t *testing.T, e *env) {
+				e.s.sent("m1", 0, text)
+				e.poll(time.Second)
+				e.c.set(2 * time.Second)
+				p, b, err := e.r.Pair(context.Background(), Prompt{SessionKey: session("sess-1"),
+					T: base.Add(500 * time.Millisecond).UnixMilli(), EventID: "prompt-1", Guest: true})
+				if err != nil || !p.Known || p.Guest || p.Relay != "" || len(b.Messages) != 0 {
+					t.Errorf("the guest's prompt's pairing is %+v with %d new records (err %v), want a known one that names no record", p, len(b.Messages), err)
+				}
+				if got := e.r.Status().Paired; got != 0 {
+					t.Errorf("%d records paired, want none, since no record carries the pairing", got)
+				}
+				if p, _ := e.pair(6*time.Second, "sess-1", 5*time.Second, "prompt-2"); p.Relay != "" || p.Guest {
+					t.Errorf("a later prompt's pairing is %+v, want none, since the run claimed the guest's prompt", p)
 				}
 			}},
 		{"a prompt stamped before the run started pairs with nothing",
@@ -1399,32 +1417,91 @@ func TestQuiet(t *testing.T) {
 	}
 }
 
-// TestWALFiles holds walOf to what TestQuiet's stat stands in for: a row T3
-// writes changes what a stat of the store's -wal and -shm files says.
+// TestWALFiles holds walOf to what TestQuiet's stat stands in for, with a
+// store's real files, on each file system the tests run on: a row T3
+// writes changes what a stat of the -wal says, its size or its time, and
+// with nothing written the stat says the same. T3's server writes through
+// the connection it holds open, and once a checkpoint has copied the WAL
+// into the store, its next commits write the WAL again from the start, so
+// the -wal keeps its size and only its time can show each commit, through a
+// handle that has written before and stays open. The reader's quiet skip
+// rests on that time while T3 runs (DESIGN 3.3; settled). A file system
+// stamps a time at its clock's tick, which on NTFS can be coarse, so a
+// write whose size moves needs no wait, and one whose size stays comes
+// well after the write before it.
 func TestWALFiles(t *testing.T) {
+	const text = "please fix the flaky parser test"
 	cases := []struct {
-		name  string
-		write func(s *store)
-		same  bool
+		name string
+		// ready runs before the first stat, and write between it and the
+		// second: nil for none.
+		ready, write func(s *store)
+		// wrote says the -wal's stat must change, and kept that its size
+		// must stay, as a checkpoint leaves it for T3's next commit.
+		wrote, kept bool
 	}{
-		{"a row T3 writes changes what the stat says", func(s *store) { s.sent("m1", 0, "please fix the flaky parser test") }, false},
-		{"with nothing written the stat says the same", func(*store) {}, true},
+		{name: "a row a sqlite3 of its own writes, which closes the store after, changes the -wal's stat",
+			write: func(s *store) { s.sent("m1", 0, text); s.flush() }, wrote: true},
+		{name: "a row T3's server commits through the connection it holds open, which has written before, changes the -wal's stat, once a checkpoint has restarted the WAL so that its size stays the same",
+			ready: func(s *store) {
+				s.sent("m1", 0, text)
+				s.flush()
+				// No sync at a commit, as WAL mode's synchronous=NORMAL has
+				// it, no limit that cuts the WAL back, and a checkpoint that
+				// waits for any reader, so the next commit writes the WAL
+				// again from its start, through the connection that holds it.
+				s.add(".timeout 10000")
+				s.add("PRAGMA synchronous=NORMAL;")
+				s.add("PRAGMA journal_size_limit=-1;")
+				s.add("PRAGMA wal_checkpoint(RESTART);")
+				s.migration(86, "Later")
+				s.flushHeld()
+				s.waitFor("SELECT " + hx("count(*)") + " FROM " + tMigrations + " WHERE migration_id = 86;\n")
+			},
+			write: func(s *store) {
+				// A tick of the coarsest clock after the -wal's last write,
+				// then T3's next commit through the same connection.
+				time.Sleep(100 * time.Millisecond)
+				s.migration(87, "Later still")
+				s.flushHeld()
+				s.waitFor("SELECT " + hx("count(*)") + " FROM " + tMigrations + " WHERE migration_id = 87;\n")
+			},
+			wrote: true, kept: true},
+		{name: "with nothing written the stat says the same"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newStore(t)
+			if tc.ready != nil {
+				tc.ready(s)
+			}
 			before, ok := walOf(s.path)
 			if !ok {
 				t.Fatal("no -wal or -shm file to stat")
 			}
-			tc.write(s)
-			s.flush()
+			if tc.write != nil {
+				tc.write(s)
+			}
+			// The reader stats the store every 10 s, so a time a file system
+			// sets a moment after the write is in time for it: the change
+			// has a few seconds to show.
+			deadline := time.Now().Add(3 * time.Second)
 			after, ok := walOf(s.path)
+			for ok && tc.wrote && after.walSize == before.walSize && after.walTime == before.walTime && time.Now().Before(deadline) {
+				time.Sleep(50 * time.Millisecond)
+				after, ok = walOf(s.path)
+			}
 			if !ok {
 				t.Fatal("no -wal or -shm file to stat")
 			}
-			if same := before == after; same != tc.same {
-				t.Errorf("the stats %+v and %+v are the same: %v, want %v", before, after, same, tc.same)
+			wal := after.walSize != before.walSize || after.walTime != before.walTime
+			switch {
+			case tc.kept && after.walSize != before.walSize:
+				t.Fatalf("the -wal went from %d to %d bytes, so no checkpoint restarted the WAL, and the case tests nothing", before.walSize, after.walSize)
+			case tc.wrote && !wal:
+				t.Errorf("the -wal's stat %+v is as before the write, so while T3's server writes this way the reader's quiet skip takes T3 for idle and reads nothing until a prompt asks", after)
+			case !tc.wrote && after != before:
+				t.Errorf("the stat went from %+v to %+v with nothing written", before, after)
 			}
 		})
 	}

@@ -122,7 +122,7 @@ func TestT3Line(t *testing.T) {
 			}), want: Warn,
 			wantHas: []string{"pairtime doesn't read T3 Code's store, because the agent's sqlite3 has no JSON functions, so the messages you send through T3 Code count for nothing until it does",
 				"Install a sqlite3 of version 3.38 or later"},
-			wantNot: []string{"It tries again every 10 seconds"}},
+			wantNot: []string{"It tries again"}},
 		{name: "on Windows a sqlite3 with no JSON functions names winget and a new login",
 			edit: t3(func(c *T3Code, f *Facts) {
 				off("no_json", "this sqlite3 has no JSON functions")(c, f)
@@ -133,9 +133,16 @@ func TestT3Line(t *testing.T) {
 			wantHas: []string{"pairtime doesn't read T3 Code's store, because T3 Code's table orchestration_v2_projection_messages has no column run_id. The messages you send through T3 Code count for nothing until it can", "Report this line"}},
 		{name: "a refused schema the reader gives no reason for still reads as a sentence",
 			edit: t3(off("schema", "")), want: Warn, wantHas: []string{"because its schema isn't one pairtime reads."}},
-		{name: "a failed read warns with the reader's words",
-			edit: t3(off("failed", "T3 Code's store was busy")), want: Warn,
+		{name: "a failed read while T3 Code runs warns with the reader's words, and says the agent tries again every 10 seconds, as it reads then",
+			edit: t3(func(c *T3Code, f *Facts) {
+				off("failed", "T3 Code's store was busy")(c, f)
+				c.Running = true
+			}), want: Warn,
 			wantHas: []string{"the agent's last read of T3 Code's store failed: T3 Code's store was busy. It tries again every 10 seconds"}},
+		{name: "a failed read with no T3 Code server the agent recognizes, as one run from source under node, says the agent tries again within a minute, as it reads then",
+			edit: t3(off("failed", "T3 Code's store was busy")), want: Warn,
+			wantHas: []string{"the agent's last read of T3 Code's store failed: T3 Code's store was busy. It tries again within a minute"},
+			wantNot: []string{"every 10 seconds"}},
 		{name: "a Claude instance of T3's with a home of its own warns, whatever the reader does, and says how to count it (DESIGN 5.1)",
 			edit: t3(func(_ *T3Code, f *Facts) { f.T3 = T3Facts{Found: true, OwnHomes: 1} }), want: Warn,
 			wantHas: []string{"one of T3 Code's Claude instances runs Claude Code with a Claude home of its own, set by CLAUDE_CONFIG_DIR, which loads none of pairtime's hooks",
