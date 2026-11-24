@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"strings"
@@ -89,8 +90,8 @@ func TestCalibrating(t *testing.T) {
 		on []string
 		// logged says the last run logs its change.
 		logged bool
-		// scoring is the scoring version the build runs, the one there
-		// is when it's "", and notStdout what the last run mustn't say.
+		// scoring is the scoring version the build runs, beforeFreeze
+		// when it's "", and notStdout what the last run mustn't say.
 		scoring   string
 		notStdout string
 		// race, when not nil, runs in the last run between its finding
@@ -148,11 +149,11 @@ func TestCalibrating(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.scoring != "" {
-				was := builtinScoring
-				builtinScoring = tt.scoring
-				t.Cleanup(func() { builtinScoring = was })
-			}
+			// Every case runs at a version of its own, so the freeze's
+			// own PR changes none of them.
+			was := builtinScoring
+			builtinScoring = cmp.Or(tt.scoring, beforeFreeze)
+			t.Cleanup(func() { builtinScoring = was })
 			configPath, db := calibratingDB(t)
 			for _, id := range tt.flagged {
 				if _, err := db.Write.ExecContext(context.Background(), `UPDATE users SET calibrating_since_ms = $1 WHERE id = $2`, raceSince, id); err != nil {
@@ -241,28 +242,9 @@ func TestServeClearsCalibration(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			e, _, stderr := testEnv()
-			up := make(chan struct{}, 1)
-			e.listening = func(string, string) { up <- struct{}{} }
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			exited := make(chan int, 1)
-			go func() { exited <- run(ctx, []string{"serve", "-config", configPath}, e) }()
-			select {
-			case <-up:
-			case code := <-exited:
-				t.Fatalf("serve exited with %d before listening; stderr:\n%s", code, stderr.String())
-			case <-time.After(60 * time.Second):
-				t.Fatalf("serve didn't start within a minute; stderr:\n%s", stderr.String())
-			}
-			cancel()
-			select {
-			case code := <-exited:
-				if code != 0 {
-					t.Errorf("serve exit code after cancel = %d, want 0; stderr:\n%s", code, stderr.String())
-				}
-			case <-time.After(60 * time.Second):
-				t.Fatal("serve didn't stop within a minute of its context ending")
+			code, logs := serveOnce(t, configPath)
+			if code != 0 {
+				t.Fatalf("serve exited with %d; stderr:\n%s", code, logs)
 			}
 			got := flags(t, db)
 			for _, a := range calibratingAccounts {
@@ -270,7 +252,6 @@ func TestServeClearsCalibration(t *testing.T) {
 					t.Errorf("%s's flag is on: %v, want %v", a[0], on, !on)
 				}
 			}
-			logs := stderr.String()
 			if cleared := strings.Contains(logs, `msg="calibration flags cleared`); cleared != tt.logged {
 				t.Errorf("serve logged a clear: %v, want %v:\n%s", cleared, tt.logged, logs)
 			} else if cleared && !strings.Contains(logs, "accounts=2") {
@@ -279,6 +260,10 @@ func TestServeClearsCalibration(t *testing.T) {
 		})
 	}
 }
+
+// beforeFreeze is a scoring version below 1.0.0, which TestCalibrating's
+// cases run at unless they name their own.
+const beforeFreeze = "0.6.0"
 
 // raceSince is when raceTo's other run turns a flag on in
 // TestCalibrating.

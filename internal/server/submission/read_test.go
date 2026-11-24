@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/shadow"
 	"github.com/some-du6e/pairtime/internal/server/store/storetest"
 )
 
@@ -135,6 +136,73 @@ func TestReads(t *testing.T) {
 						t.Errorf("%s's view has totals %v, want %v", as, got.Totals, wantTotals)
 					}
 				}
+			},
+		},
+		{
+			name: "while its calibration flag hides the account's credited time, its teen views keep totals null whatever the Totals hook gives, and the program view still has them (D-server-shadow)",
+			run: func(t *testing.T, h *harness) {
+				mine := h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusCreated)
+				h.svc.o.Totals = func(_ context.Context, _ Querier, sub Submission) (any, error) {
+					return map[string]any{"credited_s": 42, "of": sub.ID}, nil
+				}
+				scoring := "0.6.1"
+				h.svc.o.Hides = func(ctx context.Context, q Querier, account string) (bool, error) {
+					return shadow.Hides(ctx, q, account, scoring)
+				}
+				wantTotals := map[string]any{"credited_s": float64(42), "of": mine.ID}
+				// views returns the totals of each view as reads it: the
+				// submission itself, and each of the list's.
+				views := func(as string) []map[string]any {
+					t.Helper()
+					var out []map[string]any
+					rec := h.call(as, "GET", SubmissionsPath+"/"+mine.ID, "")
+					want(t, rec, http.StatusOK, "")
+					var one struct {
+						Totals map[string]any `json:"totals"`
+					}
+					if err := json.Unmarshal(rec.Body.Bytes(), &one); err != nil {
+						t.Fatal(err)
+					}
+					out = append(out, one.Totals)
+					if as == "prog:hard-mode" {
+						return out
+					}
+					rec = h.call(as, "GET", SubmissionsPath, "")
+					want(t, rec, http.StatusOK, "")
+					var list struct {
+						Submissions []struct {
+							Totals map[string]any `json:"totals"`
+						} `json:"submissions"`
+					}
+					if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+						t.Fatal(err)
+					}
+					if len(list.Submissions) == 0 {
+						t.Fatalf("%s's list is empty", as)
+					}
+					for _, v := range list.Submissions {
+						out = append(out, v.Totals)
+					}
+					return out
+				}
+				check := func(when, as string, expect map[string]any) {
+					t.Helper()
+					for i, got := range views(as) {
+						if !reflect.DeepEqual(got, expect) {
+							t.Errorf("%s, %s's view %d has totals %v, want %v", when, as, i, got, expect)
+						}
+					}
+				}
+				check("without the flag", "ptd_laptop", wantTotals)
+				if _, err := h.db.Write.ExecContext(context.Background(), `UPDATE users SET calibrating_since_ms = 1 WHERE id = $1`, u1); err != nil {
+					t.Fatal(err)
+				}
+				for _, as := range []string{"ptd_laptop", "sess:plain"} {
+					check("with the flag", as, nil)
+				}
+				check("with the flag", "prog:hard-mode", wantTotals)
+				scoring = "1.0.0"
+				check("with the flag at 1.0.0", "ptd_laptop", wantTotals)
 			},
 		},
 		{

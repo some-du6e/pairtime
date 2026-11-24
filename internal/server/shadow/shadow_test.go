@@ -20,7 +20,7 @@ func TestFrozen(t *testing.T) {
 		want bool
 	}{
 		{name: "a 0.x version is still calibrating", v: "0.4.0"},
-		{name: "the server's version today is still calibrating", v: "0.6.0"},
+		{name: "a 0.x version with a PATCH above 0 is still calibrating", v: "0.6.1"},
 		{name: "the last 0.x is still calibrating", v: "0.99.9"},
 		{name: "1.0.0, the freeze, ends it", v: "1.0.0", want: true},
 		{name: "a later 1.x ends it", v: "1.2.3", want: true},

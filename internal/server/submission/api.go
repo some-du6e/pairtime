@@ -114,6 +114,12 @@ type Options struct {
 	// re-score's totals through it in cmd/pairtimed, as it does OnFreeze.
 	// Nil, or a nil answer, shows "totals": null.
 	Totals func(ctx context.Context, q Querier, sub Submission) (any, error)
+	// Hides, when set, reports whether the account's calibration flag
+	// hides its credited time from it now, read through q, the read pool
+	// (D-server-shadow; shadow.Hides). While it does, the account's teen
+	// views show "totals": null, whatever Totals answers. The program view
+	// is WP-SB4's to decide.
+	Hides func(ctx context.Context, q Querier, account string) (bool, error)
 	// Rate counts each device's requests to these routes, as ingest counts
 	// its uploads (SP 8.6), once their signature verifies, and each
 	// account's creates and withdrawals from a web session, under the
@@ -1108,10 +1114,26 @@ func (s *Service) teenView(ctx context.Context, sub Submission) (TeenView, error
 		name = p.DisplayName
 	}
 	v := teen(sub, r, name, s.o.BaseURL)
-	if v.Totals, err = s.totalsOf(ctx, sub); err != nil {
+	if v.Totals, err = s.teenTotals(ctx, sub); err != nil {
 		return TeenView{}, err
 	}
 	return v, nil
+}
+
+// teenTotals is sub's totals for its teen view: totalsOf's, or nil while
+// the account's calibration flag hides its credited time (Options.Hides),
+// whatever Options.Totals answers.
+func (s *Service) teenTotals(ctx context.Context, sub Submission) (any, error) {
+	if s.o.Totals == nil {
+		return nil, nil
+	}
+	if s.o.Hides != nil {
+		hidden, err := s.o.Hides(ctx, s.o.Read, sub.Account)
+		if err != nil || hidden {
+			return nil, err
+		}
+	}
+	return s.totalsOf(ctx, sub)
 }
 
 // totalsOf is sub's totals for a view: Options.Totals' answer, or nil,
