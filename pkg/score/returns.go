@@ -86,9 +86,11 @@ func (d *deriver) markReturns() {
 		// so the window must resolve to one. SM 3.2 gives a browser, a chat
 		// app or any other app none, whatever its focus record names, so a
 		// silence there is no returned run, and no lookup shares a returned
-		// slot with another project (SM 5.1).
+		// slot with another project (SM 5.1). Where the client couldn't
+		// tell which window was in front throughout the run, it qualifies
+		// too, and its project is its act's (SM 2.5).
 		focus := d.focus.at(start)
-		if focus.project == "" || !projectWindow(focus.class) {
+		if !focus.unknown() && (focus.project == "" || !projectWindow(focus.class)) {
 			continue
 		}
 		// Of the anchors after the run, the first one on record within
@@ -112,14 +114,18 @@ func (d *deriver) markReturns() {
 		// the run, it keeps the run from qualifying, as a go-ahead does (SM
 		// 2.1, 2.3).
 		a := d.anchors[k]
-		if a.decided > horizon || a.relayed() || !returnsFor(a.Kind, a.PromptClass) || a.ProjectKey != focus.project ||
+		project := focus.project
+		if focus.unknown() {
+			project = a.ProjectKey
+		}
+		if a.decided > horizon || a.relayed() || !returnsFor(a.Kind, a.PromptClass) || a.ProjectKey != project ||
 			d.focus.changed(start, a.T) || d.breakIn(end, a.T) {
 			continue
 		}
 		// The credit pass fills in the reading part at the tail's end
 		// (creditor.readingPart).
 		d.returns = append(d.returns, Return{RunStart: start, RunEnd: end, LastInput: run.lastInput,
-			TailEnd: run.tailEnd, Anchor: a.ID, ProjectKey: focus.project})
+			TailEnd: run.tailEnd, Anchor: a.ID, ProjectKey: project})
 		for k := run.i; k < run.j; k++ {
 			s := &p.slots[k]
 			switch {

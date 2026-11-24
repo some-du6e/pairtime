@@ -57,8 +57,8 @@
 //     with the ~r suffix);
 //   - and for a second nothing credits, one uncredited reason (SM 5.2).
 //
-// Each credited second takes the level of the anchor behind it (DESIGN
-// 6.4), and each slot counts its agent_running_s and agent-only seconds
+// Each credited second takes its level as DESIGN 6.4 says, and each slot
+// counts its agent_running_s and agent-only seconds
 // (SM 2.6, 5.1). Minute buckets are WP-SC4's, checkpoints WP-SC5's, and dark
 // flow and the no-progress weight WP-SC6's, so every second is at weight 1
 // for now.

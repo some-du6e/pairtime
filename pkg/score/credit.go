@@ -64,11 +64,16 @@ type Credited struct {
 	// Reason is SM 5.2's credit reason, with event.ReturnedSuffix for a
 	// second credited in a returned slot under SM 2.1's return rule.
 	Reason event.Reason `json:"reason"`
-	// Level is the evidence level of the anchor behind the seconds
-	// (DESIGN 6.4): the anchor whose window covers them, the human anchor
-	// nearest a reading second within READ_HORIZON_S, or the lower of a
-	// lookup's two bracketing anchors; and no better than the anchor that
-	// resolved the slot, in a window hosting several sessions (ResolvedBy).
+	// Level is the seconds' evidence level (DESIGN 6.4): that of the anchor
+	// whose window covers them, or of the human anchor nearest a reading
+	// second within READ_HORIZON_S, but no better than what the second
+	// drained (level C for plugin or bridge output, the act's level for the
+	// base a side-door act started its turn with); for a lookup, the lower
+	// level of its two brackets as they were credited; and no better than
+	// the anchor that resolved the slot, in a window hosting several
+	// sessions (ResolvedBy). A second credited in a slot whose focus is
+	// unknown, or from an anchor that passed its focus test only because
+	// it was, is level C with focus_unknown (SM 2.5).
 	Level event.Evidence `json:"level"`
 	// InTurn is set when a turn of the project was running in these
 	// seconds, which SM 5.4 counts as AI-assisted whatever the reason.

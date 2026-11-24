@@ -489,7 +489,7 @@ func (d *deriver) buildBuckets() {
 				t, pos = d.recs[next].T, int64(next)
 			}
 			b := get(s)
-			b.ops = append(b.ops, bucketOp{t: t, pos: pos, reset: true, units: base})
+			b.ops = append(b.ops, bucketOp{t: t, pos: pos, reset: true, units: base, src: opener(&a)})
 		}
 	}
 	for i, e := range d.recs {
