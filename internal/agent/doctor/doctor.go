@@ -11,9 +11,11 @@
 // never what the terminal doctor runs in can reach (D-design-5.9), and a
 // test can give any status and read the lines it makes.
 //
-// Nothing here sends anything anywhere, and nothing runs at package init:
-// every hook process loads this package, and the hook's start-up has a
-// thin margin (footprint.yml).
+// Nothing here sends anything anywhere but GatherWakaTime, which asks
+// wakatime-cli's two destinations whether they answer: the agent on
+// 127.0.0.1, with pairtime's key, and the teen's WakaTime server, with no
+// key. Nothing runs at package init: every hook process loads this
+// package, and the hook's start-up has a thin margin (footprint.yml).
 package doctor
 
 import (

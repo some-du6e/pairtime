@@ -122,7 +122,11 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 
 	// What there is to take out.
 	var items []install.Item
-	for _, it := range []func(install.Env) (install.Item, error){install.Autostart, install.ClaudeCode} {
+	planners := []func(install.Env) (install.Item, error){install.Autostart, install.ClaudeCode}
+	if offerWakaTime {
+		planners = append(planners, wakaTimeItem(dirs, time.Now()))
+	}
+	for _, it := range planners {
 		if item, err := it(env); err == nil {
 			items = append(items, item)
 		}
@@ -158,6 +162,15 @@ func runUninstall(args []string, stdout, stderr io.Writer) int {
 		}
 		if len(data) > 0 {
 			fmt.Fprintln(stdout, dataFate(hadKey, data, keepable, *deleteData, "would be deleted"))
+		}
+		// What the real run would leave, as install's dry run says what it
+		// leaves out, on stderr, so that stdout says only what changes, and
+		// what the teen should know about the changes.
+		for _, note := range p.Notes() {
+			fmt.Fprintf(stderr, "pairtime uninstall: note: %s\n", install.Printable(note))
+		}
+		for _, problem := range p.Problems {
+			fmt.Fprintf(stderr, "pairtime uninstall: this has to stay: %s\n", install.Printable(problem))
 		}
 		return 0
 	}
@@ -408,6 +421,9 @@ func showUninstall(w io.Writer, p *install.Plan, binaries []binary, running bool
 		fmt.Fprintln(w)
 		for _, line := range strings.SplitAfter(strings.TrimSuffix(p.Diff(), "\n"), "\n") {
 			fmt.Fprintf(w, "    %s\n", strings.TrimSuffix(line, "\n"))
+		}
+		for _, note := range p.Notes() {
+			fmt.Fprintf(w, "\nNote: %s\n", install.Printable(note))
 		}
 	}
 	for _, problem := range p.Problems {

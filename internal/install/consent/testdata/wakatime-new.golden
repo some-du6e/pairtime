@@ -1,0 +1,276 @@
+pairtime install
+
+This is everything pairtime install changes on this computer. Nothing
+changes until you say yes, and pairtime uninstall takes it all back out.
+
+pairtime goes in /home/teen/.local/bin/pairtime.
+It runs in local-only mode: what it records stays on this computer.
+
+AI tools pairtime looked for:
+  Claude Code         found at /home/teen/.claude
+  Cursor              not found
+  GitHub Copilot CLI  not found
+  OpenAI Codex        not found
+  Gemini CLI          not found
+
+[x] 1. Start pairtime when you log in
+
+    pairtime's agent starts in the background each time you log in, so it
+    notices when you build without you starting it.
+
+    Saying no doesn't stop you from using pairtime.
+    Without it, pairtime starts again after you log in only when a hook
+    starts it or you run pairtime agent, so it misses what comes before.
+    You can turn it off any time in your desktop's Startup Applications, or
+    with pairtime uninstall.
+
+    --- /dev/null
+    +++ /home/teen/.config/autostart/pairtime.desktop
+    @@ -0,0 +1,7 @@
+    +[Desktop Entry]
+    +Type=Application
+    +Name=pairtime
+    +Comment=Counts the time you spend building with AI
+    +Exec=/home/teen/.local/bin/pairtime agent
+    +TryExec=/home/teen/.local/bin/pairtime
+    +Terminal=false
+
+[x] 2. Add pairtime's hooks to Claude Code
+
+    Claude Code runs pairtime hook when a session starts or ends, when you
+    send a prompt, and when its agent stops, asks you something, edits a
+    file, runs a command or starts a subagent, so pairtime knows when you
+    prompt and when the agent works. pairtime's hooks go after the hooks
+    already there, which stay as they are.
+    Each hook call adds a moment to Claude Code's turn: a test call just now
+    took 12 ms.
+
+    Saying no doesn't stop you from using pairtime.
+    Without them, pairtime doesn't see your Claude Code prompts, and time it
+    can't see isn't credited.
+    You can take them out any time with pairtime uninstall.
+
+    --- /dev/null
+    +++ /home/teen/.claude/settings.json
+    @@ -0,0 +1,175 @@
+    +{
+    +  "hooks": {
+    +    "SessionStart": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "SessionStart"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "UserPromptSubmit": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "UserPromptSubmit"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "Stop": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "Stop"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "StopFailure": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "StopFailure"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "Notification": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "Notification"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "PermissionRequest": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "PermissionRequest"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "PostToolUse": [
+    +      {
+    +        "matcher": "Edit|Write|Bash",
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "PostToolUse"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "SubagentStart": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "SubagentStart"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "SubagentStop": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "SubagentStop"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ],
+    +    "SessionEnd": [
+    +      {
+    +        "hooks": [
+    +          {
+    +            "type": "command",
+    +            "command": "/home/teen/.local/bin/pairtime",
+    +            "args": [
+    +              "hook",
+    +              "--harness",
+    +              "claude_code",
+    +              "--event",
+    +              "SessionEnd"
+    +            ]
+    +          }
+    +        ]
+    +      }
+    +    ]
+    +  }
+    +}
+
+[x] 3. Count the time you spend in an editor, through WakaTime's plugins
+
+    WakaTime's editor plugins run wakatime-cli, which sends a heartbeat each
+    time you edit or move around in a file. You have no ~/.wakatime.cfg, so
+    pairtime makes one that has wakatime-cli send them to pairtime's agent
+    on this computer, and nowhere else. It also tells wakatime-cli to read
+    your AI agents' transcripts only from now on, so that it doesn't send
+    the ones from before as new time.
+    For VS Code, Cursor, Windsurf and other editors built on VS Code,
+    install WakaTime's extension from the editor's extensions view, or with
+    code --install-extension WakaTime.vscode-wakatime.
+    Hack Club programs that review time through Robert read it from
+    Hackatime, which this doesn't set up. If you join one, set up Hackatime
+    too, then run pairtime install again: Hackatime's setup writes a new
+    ~/.wakatime.cfg, and install adds pairtime's line to it.
+    Your editors can use a proxy that install can't see: one in their
+    settings, as WakaTime's plugin for JetBrains IDEs passes the IDE's to
+    wakatime-cli. wakatime-cli would then send pairtime's copy of each
+    heartbeat through it: the proxy would get your project and file names
+    unencrypted, and pairtime would get none of them. So don't set a proxy
+    for your editors while pairtime's line is in.
+
+    Saying no doesn't stop you from using pairtime.
+    Without it, pairtime doesn't see the time you spend in an editor.
+    You can take it out any time with pairtime uninstall. It takes
+    pairtime's settings out of the config it made, and deletes the file when
+    nothing else is in it. If you gave that config a key of your own and it
+    still sends to pairtime's agent, uninstall leaves the file to you, and
+    says so. wakatime-cli's own wakatime-internal.cfg stays once
+    wakatime-cli has written to it, since without it wakatime-cli would send
+    your AI agents' old transcripts as new time to the next server you set
+    up.
+
+    --- /dev/null
+    +++ /home/teen/.wakatime/wakatime-internal.cfg
+    @@ -0,0 +1,2 @@
+    +[internal]
+    +ai_logs_last_parsed_at = 2026-11-24T05:30:00Z
+    --- /dev/null
+    +++ /home/teen/.wakatime.cfg
+    @@ -0,0 +1,4 @@
+    +; made by pairtime install for the key 6d61e4224e2f; pairtime uninstall takes it out
+    +[settings]
+    +api_url = http://127.0.0.1:7247/api/v1
+    +api_key = ***

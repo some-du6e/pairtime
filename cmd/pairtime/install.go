@@ -17,6 +17,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/account"
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/install/consent"
 	"github.com/some-du6e/pairtime/internal/version"
@@ -25,6 +26,17 @@ import (
 // exitDeclined is the exit status of install and uninstall when the teen
 // says no, or gives no answer, so nothing changed.
 const exitDeclined = 3
+
+// offerWakaTime says install offers pairtime's line in ~/.wakatime.cfg
+// (install.WakaTime; DESIGN 5.6), and uninstall looks for it where its
+// manifest doesn't record it. It stays off until WP-AD17 turns it on with
+// release.yml's gate, which publishes no release that edits the file
+// without a green run of e2e-wakatime.yml against the real wakatime-cli
+// (DESIGN 5.6, "Agent down"), by when the agent answers on the line's
+// endpoint (WP-AD16): a line nothing answers holds back wakatime-cli's
+// sends to Hackatime too (docs/errata/2026-11-23-wakatime-cli-2.28.4.md,
+// item 4).
+var offerWakaTime = false
 
 const installUsage = `Usage: pairtime install [--yes] [--skip <item>]... [--calibration-volunteer] [--dry-run]
 
@@ -66,8 +78,12 @@ type skipFlag []string
 func (s *skipFlag) String() string { return strings.Join(*s, ",") }
 
 func (s *skipFlag) Set(v string) error {
-	if v != install.ItemAutostart && v != install.ItemClaudeCode {
-		return fmt.Errorf("there is no item %q; the items are %s and %s", v, install.ItemAutostart, install.ItemClaudeCode)
+	items := []string{install.ItemAutostart, install.ItemClaudeCode}
+	if offerWakaTime {
+		items = append(items, install.ItemWakaTime)
+	}
+	if !slices.Contains(items, v) {
+		return fmt.Errorf("there is no item %q; the items are %s and %s", v, strings.Join(items[:len(items)-1], ", "), items[len(items)-1])
 	}
 	*s = append(*s, v)
 	return nil
@@ -240,13 +256,14 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	}
 	items := map[string]install.Item{}
 	diffs := map[string]string{}
-	left := map[string]string{} // the items install doesn't offer, with why
+	shown := map[string]shownPlan{} // what each item's screen plan read and changes
+	left := map[string]string{}     // the items install doesn't offer, with why
 	offer := func(id string, mk func(install.Env) (install.Item, error)) error {
 		it, err := mk(env)
 		if err == nil {
 			var p *install.Plan
 			if p, err = in.PlanInstall([]install.Item{it}); err == nil {
-				items[id], diffs[id] = it, p.Diff()
+				items[id], diffs[id], shown[id] = it, p.Diff(), shownOf(p)
 				p.Close()
 				return nil
 			}
@@ -273,6 +290,29 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 	}
+	wakaTimeNew := false
+	// waka is what the WakaTime item is planned with, its key included, so
+	// that step 5 can plan the same line on the port the agent listens on.
+	var waka install.WakaTimeOptions
+	if offerWakaTime {
+		if skipped(install.ItemWakaTime) {
+			left[install.ItemWakaTime] = "you left it out with --skip"
+		} else {
+			waka = install.WakaTimeOptions{Data: dirs.Data, Port: wakaTimePort(dirs), Now: time.Now()}
+			_, there, err := install.WakaTimeConfig(env)
+			wakaTimeNew = err == nil && !there
+			if err := offer(install.ItemWakaTime, func(env install.Env) (install.Item, error) {
+				key, err := install.WakaTimeKey(env, waka.Data)
+				if err != nil {
+					return install.Item{}, err
+				}
+				waka.Key = key
+				return install.WakaTime(env, waka)
+			}); err != nil {
+				return fail(err)
+			}
+		}
+	}
 	if *volunteer {
 		if diff, why := planCalibration(dirs.ConfigFile(), config.Calibrating()); why != "" {
 			left[consent.ItemCalibration] = why
@@ -282,13 +322,14 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	}
 	linked := linkedServer(dirs)
 	screen := consent.New(consent.Input{
-		GOOS:      env.GOOS,
-		Binary:    env.Exe,
-		Harnesses: harnesses,
-		Hook:      hook,
-		Diffs:     diffs,
-		Left:      left,
-		Linked:    linked,
+		GOOS:        env.GOOS,
+		Binary:      env.Exe,
+		Harnesses:   harnesses,
+		Hook:        hook,
+		Diffs:       diffs,
+		Left:        left,
+		Linked:      linked,
+		WakaTimeNew: wakaTimeNew,
 	})
 
 	// 2. The teen's say.
@@ -425,6 +466,29 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "Added pairtime's hooks to %s.\n", install.Printable(install.ClaudeSettings(env)))
 		}
 	}
+	// 5. ~/.wakatime.cfg, once the agent is up (DESIGN 5.9), naming the
+	// port it listens on: one that found the screen's port taken, as by
+	// another account's agent, listens on another.
+	if slices.Contains(chosen, install.ItemWakaTime) {
+		if pf, err := localhttp.ReadPortFile(dirs.PortFile()); err == nil && pf.Port != waka.Port {
+			it, diff, err := wakaTimeReplan(env, in, waka, shown[install.ItemWakaTime], pf.Port)
+			if err != nil {
+				return fail(err)
+			}
+			items[install.ItemWakaTime], diffs[install.ItemWakaTime] = it, diff
+		}
+		if err := apply(install.ItemWakaTime); err != nil {
+			return fail(err)
+		}
+		if diffs[install.ItemWakaTime] != "" {
+			path, _, _ := install.WakaTimeConfig(env)
+			if wakaTimeNew {
+				fmt.Fprintf(stdout, "Made %s, so wakatime-cli sends your editor time to pairtime.\n", install.Printable(path))
+			} else {
+				fmt.Fprintf(stdout, "Added pairtime's line to %s, so wakatime-cli sends your editor time to pairtime too.\n", install.Printable(path))
+			}
+		}
+	}
 
 	fmt.Fprintln(stdout, setUpLine(linked))
 	if slices.Contains(chosen, install.ItemClaudeCode) {
@@ -445,7 +509,7 @@ func leftOut(w io.Writer, prefix string, hook consent.HookTest, left map[string]
 	if hook.Why != "" {
 		fmt.Fprintf(w, "%sClaude Code's hooks stay out: %s.\n", prefix, hook.Why)
 	}
-	for _, id := range []string{install.ItemAutostart, consent.ItemCalibration, install.ItemClaudeCode} {
+	for _, id := range []string{install.ItemAutostart, consent.ItemCalibration, install.ItemClaudeCode, install.ItemWakaTime} {
 		why, ok := left[id]
 		if !ok || slices.Contains(skip, id) {
 			continue
@@ -455,10 +519,92 @@ func leftOut(w io.Writer, prefix string, hook consent.HookTest, left map[string]
 			fmt.Fprintf(w, "%spairtime won't start when you log in: %s.\n", prefix, install.Printable(why))
 		case consent.ItemCalibration:
 			fmt.Fprintf(w, "%sYour time won't show as \"calibrating\": %s.\n", prefix, install.Printable(why))
+		case install.ItemWakaTime:
+			fmt.Fprintf(w, "%spairtime won't get your editor time from WakaTime's plugins: %s.\n", prefix, install.Printable(why))
 		default:
 			fmt.Fprintf(w, "%sClaude Code's hooks stay out: %s.\n", prefix, install.Printable(why))
 		}
 	}
+}
+
+// wakaTimeItem returns the planner of the WakaTime item for pairtime's
+// data directory in dirs, at now, with the port wakaTimePort picks.
+func wakaTimeItem(dirs home.Dirs, now time.Time) func(install.Env) (install.Item, error) {
+	return func(env install.Env) (install.Item, error) {
+		return install.WakaTime(env, install.WakaTimeOptions{Data: dirs.Data, Port: wakaTimePort(dirs), Now: now})
+	}
+}
+
+// shownPlan is what the screen's plan of an item read of each target it
+// edits, and which of them it changes.
+type shownPlan struct {
+	read    map[install.Target]install.Content
+	changed map[install.Target]bool
+}
+
+// shownOf returns what p, a plan of one item, read and changes.
+func shownOf(p *install.Plan) shownPlan {
+	s := shownPlan{read: p.Read(), changed: map[install.Target]bool{}}
+	for _, c := range p.Changes {
+		s.changed[c.Target] = true
+	}
+	return s
+}
+
+// wakaTimeReplan plans the WakaTime item again with o on port, the one the
+// agent listens on, instead of o.Port, the screen's, and returns it with
+// its diff, which install's apply then holds it to. It takes the new plan
+// only when it edits the targets shown, the screen's plan, edits, and each
+// target that either plan changes still holds what the screen's plan read.
+// The item's edits depend only on what they read, the key, the port and
+// o.Now, so the new plan is then the screen's with the agent's port in
+// place of the screen's: also when it changes nothing, as when pairtime's
+// line names the agent's port already, whatever its spacing, and when it
+// moves a line the screen left as it was. A target neither plan changes
+// can have changed since, as wakatime-internal.cfg does whenever
+// wakatime-cli sends, which install's apply doesn't hold either. Anything
+// else that changed since the screen, such as a config the teen edited,
+// made or deleted in between, refuses it.
+func wakaTimeReplan(env install.Env, in *install.Installer, o install.WakaTimeOptions, shown shownPlan, port int) (install.Item, string, error) {
+	o.Port = port
+	it, err := install.WakaTime(env, o)
+	if err != nil {
+		return install.Item{}, "", err
+	}
+	p, err := in.PlanInstall([]install.Item{it})
+	if err != nil {
+		return install.Item{}, "", err
+	}
+	defer p.Close()
+	again := shownOf(p)
+	changed := fmt.Errorf("what %s changes isn't what the screen showed any more, so pairtime didn't change it; run pairtime install again to see the new changes", install.ItemWakaTime)
+	if len(again.read) != len(shown.read) {
+		return install.Item{}, "", changed
+	}
+	for t, c := range again.read {
+		s, ok := shown.read[t]
+		if !ok || (shown.changed[t] || again.changed[t]) && !s.Same(c) {
+			return install.Item{}, "", changed
+		}
+	}
+	return it, p.Diff(), nil
+}
+
+// wakaTimePort returns the port pairtime's line in ~/.wakatime.cfg names:
+// the agent's, as the agent picks it (localhttp.Candidates), config.toml's
+// port first, then the one its last run listened on, then the default.
+// Install plans the line again on the port the agent listens on once it
+// is up (step 5), and an agent that moves to another port later rewrites
+// the line (DESIGN 5.6, "The port").
+func wakaTimePort(dirs home.Dirs) int {
+	configured, last := 0, 0
+	if cfg, _, err := config.Load(dirs.ConfigFile()); err == nil {
+		configured = cfg.HTTP.Port
+	}
+	if pf, err := localhttp.ReadPortFile(dirs.PortFile()); err == nil {
+		last = pf.Port
+	}
+	return localhttp.Candidates(configured, last)[0]
 }
 
 // planCalibration plans what --calibration-volunteer changes in the

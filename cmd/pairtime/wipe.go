@@ -32,10 +32,12 @@ be submitted any more. Copies that a backup or a synced folder already
 holds stay as they are, the key's file too when pairtime doctor says
 pairtime keeps its key in a file.
 
-pairtime itself and your settings in config.toml stay. pairtime starts
-again from nothing, under a new device key, and signed out: pairtime login
-links this computer again. What the pairtime server already has stays
-there until you remove this computer on your dashboard.
+pairtime itself and your settings in config.toml stay. So does install's
+record of what it changed, with its copies of the files it edited, so that
+pairtime uninstall can put them back. pairtime starts again from nothing,
+under a new device key, and signed out: pairtime login links this computer
+again. What the pairtime server already has stays there until you remove
+this computer on your dashboard.
 
   --yes   go ahead without asking
 
@@ -100,7 +102,7 @@ func runPrivacyDelete(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if !*yes {
-		fmt.Fprintf(stdout, "This deletes pairtime's device key and everything pairtime recorded in %s: the text of your prompts it kept, your time, your daily totals and recaps, and this computer's sign-in. The hours pairtime recorded so far can't be submitted any more. Copies a backup or a synced folder already holds stay as they are, the key's file too when pairtime doctor says pairtime keeps its key in a file. pairtime and your settings stay, and it starts again from nothing.\n\n", install.Printable(dirs.Data))
+		fmt.Fprintf(stdout, "This deletes pairtime's device key and everything pairtime recorded in %s: the text of your prompts it kept, your time, your daily totals and recaps, and this computer's sign-in. The hours pairtime recorded so far can't be submitted any more. Copies a backup or a synced folder already holds stay as they are, the key's file too when pairtime doctor says pairtime keeps its key in a file. pairtime and your settings stay, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back. pairtime starts again from nothing.\n\n", install.Printable(dirs.Data))
 		if !askYes(bufio.NewScanner(installStdin), stdout, "Type y to delete everything, or n to stop without changing anything: ") {
 			fmt.Fprintln(stdout, "Nothing changed.")
 			return exitDeclined
@@ -157,9 +159,9 @@ func runPrivacyDelete(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if keyStays != nil {
-		fmt.Fprintf(stdout, "Deleted everything pairtime recorded in %s. Your settings in config.toml stay.\nLeft alone: %s\n", install.Printable(dirs.Data), install.Printable(keyStays.Error()))
+		fmt.Fprintf(stdout, "Deleted everything pairtime recorded in %s. Your settings in config.toml stay, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back.\nLeft alone: %s\n", install.Printable(dirs.Data), install.Printable(keyStays.Error()))
 	} else {
-		fmt.Fprintf(stdout, "Deleted pairtime's device key and everything pairtime recorded in %s. Your settings in config.toml stay.\n", install.Printable(dirs.Data))
+		fmt.Fprintf(stdout, "Deleted pairtime's device key and everything pairtime recorded in %s. Your settings in config.toml stay, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back.\n", install.Printable(dirs.Data))
 	}
 	release()
 	code := 0

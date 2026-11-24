@@ -254,6 +254,10 @@ func TestPrivacyNotice(t *testing.T) {
 			notWant: []string{"except in two cases you control", "except in three cases you control"},
 		},
 		{
+			name: "the notice says pairtime doctor asks the WakaTime server whether it answers, with no key and none of your data (WP-IN3)",
+			want: []string{"<code>pairtime doctor</code> also asks the WakaTime server in your <code>~/.wakatime.cfg</code> whether it answers, with no key and none of your data."},
+		},
+		{
 			name: "the notice says what publishing sends and that a removal keeps only the item's ID for 30 days (D-sv12-retention)",
 			want: []string{
 				"A devlog names its project by the project&#39;s key, not its name, and each devlog and badge carries a random ID your computer made for it.",
