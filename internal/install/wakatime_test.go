@@ -27,6 +27,18 @@ const (
 
 var wakaNow = time.Date(2026, 11, 24, 5, 30, 0, 0, time.UTC)
 
+// madeConfig returns the config pairtime makes for key on port, and
+// taken that config once the teen gave it their own key, teen, as
+// WakaTime's extension writes one.
+func madeConfig(t *testing.T, key string, port int, teen string) (made, taken string) {
+	t.Helper()
+	b, err := wakacfg.Make(key, port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b), strings.Replace(string(b), "api_key = "+key, "api_key = "+teen, 1)
+}
+
 // wakaGolden reads testdata/wakatime/<dir>/<name>, or returns nil when
 // there is no such file.
 func wakaGolden(t *testing.T, dir, name string) []byte {
@@ -187,6 +199,7 @@ func TestWakaTimeRefusesAMalformedKey(t *testing.T) {
 
 func TestWakaTimeKeepsTheKey(t *testing.T) {
 	hackatime := wakaGolden(t, "hackatime-setup", "before.cfg")
+	madeOther, _ := madeConfig(t, otherWakaKey, 7250, "")
 	tests := []struct {
 		name string
 		// cfg is the config before install, "" for none, and setupKey the
@@ -197,7 +210,7 @@ func TestWakaTimeKeepsTheKey(t *testing.T) {
 		{name: "a line of pairtime's that is there keeps its key", cfg: string(hackatime) + "[api_urls]\n.+ = http://127.0.0.1:7250/api/v1|" + otherWakaKey + "\n", want: otherWakaKey},
 		{name: "the line's key wins over the setup file's", cfg: string(hackatime) + "[api_urls]\n.+ = http://127.0.0.1:7250/api/v1|" + otherWakaKey + "\n", setupKey: wakaKey, want: otherWakaKey},
 		{name: "without a line, the setup file's key comes back", cfg: string(hackatime), setupKey: wakaKey, want: wakaKey},
-		{name: "a config pairtime made keeps its api_key", cfg: "; made by pairtime install; pairtime uninstall takes it out\n[settings]\napi_url = http://127.0.0.1:7250/api/v1\napi_key = " + otherWakaKey + "\n", want: otherWakaKey},
+		{name: "a config pairtime made keeps its api_key", cfg: madeOther, want: otherWakaKey},
 		{name: "with neither, the key is new", cfg: string(hackatime)},
 	}
 	for _, tt := range tests {
@@ -387,6 +400,7 @@ func TestWakaTimeRefusals(t *testing.T) {
 	// by, and the agent's refusals hold back what wakatime-cli sends the
 	// teen's own server too.
 	aKey := regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}`)
+	_, taken := madeConfig(t, wakaKey, 7247, hackatimeKey)
 	tests := []struct {
 		name string
 		vars map[string]string
@@ -398,7 +412,7 @@ func TestWakaTimeRefusals(t *testing.T) {
 		{name: "on a first install the refusal shows no key, since nothing would record the new one for the agent", cfg: "[settings]\nexclude = C:\\Users\\teen\\Downloads\\\n", want: "line 2 has a value that goes on"},
 		{name: "a config that sets a proxy is left alone, saying why, and doesn't show the proxy", cfg: "[settings]\napi_key = " + hackatimeKey + "\nproxy = http://teen:secret@proxy.example:3128\n", key: wakaKey, want: "sets a proxy, and wakatime-cli would send pairtime's line through it too"},
 		{name: "with HTTPS_PROXY set, a config of the teen's is left alone, naming the variable and never its value", vars: map[string]string{"HTTPS_PROXY": "http://teen:secret@proxy.example:3128"}, cfg: "[settings]\napi_key = " + hackatimeKey + "\n", key: wakaKey, want: "would get pairtime's line, but HTTPS_PROXY is set here"},
-		{name: "a config pairtime made whose api_key the teen replaced is left alone, saying how to start again", cfg: "; made by pairtime install; pairtime uninstall takes it out\n[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + hackatimeKey + "\n", key: wakaKey, want: "is the config pairtime made, with an api_key that isn't pairtime's any more, so pairtime leaves it alone; to send your editor time to pairtime again, delete it and run pairtime install again"},
+		{name: "a config pairtime made whose api_key the teen replaced is left alone, saying how to start again", cfg: taken, key: wakaKey, want: "is the config pairtime made, with an api_key that isn't pairtime's any more, so pairtime leaves it alone; to send your editor time to pairtime again, delete it and run pairtime install again"},
 		{name: "a config whose patterns are all taken is left alone", cfg: "[api_urls]\n.+ = https://a.example|" + hackatimeKey + "\n^.*$ = https://b.example|" + hackatimeKey + "\n(?s).* = https://c.example|" + hackatimeKey + "\n", key: wakaKey, want: "for each of the patterns pairtime's line can take"},
 		{name: "a relative WAKATIME_HOME is refused", vars: map[string]string{"WAKATIME_HOME": "waka"}, key: wakaKey, want: "a relative path"},
 	}
@@ -470,16 +484,16 @@ func TestWakaTimeLeavesTheTeensLocalServer(t *testing.T) {
 }
 
 func TestWakaTimeKeyOrder(t *testing.T) {
-	const mark = "; made by pairtime install; pairtime uninstall takes it out\n"
-	made := mark + "[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + hackatimeKey + "\n"
+	made, taken := madeConfig(t, wakaKey, 7247, hackatimeKey)
 	tests := []struct {
 		name          string
 		cfg, setupKey string // "" for no config, no setup file
-		want          string
+		want          string // "" for a new key
 	}{
 		{name: "a line of pairtime's under [api_urls] comes before the setup file's key", cfg: "[api_urls]\n.+ = http://127.0.0.1:7250/api/v1|" + otherWakaKey + "\n", setupKey: wakaKey, want: otherWakaKey},
-		{name: "the setup file's key comes before the api_key of a config pairtime made, which the teen may have replaced", cfg: made, setupKey: wakaKey, want: wakaKey},
-		{name: "with no setup file, a config pairtime made gives its api_key", cfg: made, want: hackatimeKey},
+		{name: "the setup file's key comes before the api_key of a config pairtime made, which the teen may have replaced", cfg: taken, setupKey: otherWakaKey, want: otherWakaKey},
+		{name: "with no setup file, a config pairtime made gives its own api_key, whose hash its mark names", cfg: made, want: wakaKey},
+		{name: "with no setup file, a config pairtime made whose api_key the teen replaced gives a new key, never the teen's", cfg: taken},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -489,16 +503,83 @@ func TestWakaTimeKeyOrder(t *testing.T) {
 			}
 			cfg := Content{Exists: tt.cfg != "", Data: []byte(tt.cfg)}
 			got, err := wakaTimeKey(cfg, setup)
-			if err != nil || got != tt.want {
-				t.Errorf("wakaTimeKey = %s, %v, want %s", got, err, tt.want)
+			switch {
+			case err != nil:
+				t.Fatal(err)
+			case tt.want != "" && got != tt.want:
+				t.Errorf("wakaTimeKey = %s, want %s", got, tt.want)
+			case tt.want == "" && (got == hackatimeKey || got == wakaKey || !wakacfg.ValidKey(got)):
+				t.Errorf("wakaTimeKey = %s, want a new key", got)
+			}
+		})
+	}
+}
+
+func TestWakaTimeTakenOver(t *testing.T) {
+	tests := []struct {
+		name string
+		// record says install made the config, so its manifest and setup
+		// file name pairtime's key; without one, only the mark does.
+		record bool
+		// uninstall runs uninstall, and otherwise install runs again.
+		uninstall bool
+	}{
+		{name: "with no record, uninstall names a config pairtime made whose api_key the teen replaced, leaves its bytes, and shows the teen's key nowhere", uninstall: true},
+		{name: "with a record, uninstall names it the same way", record: true, uninstall: true},
+		{name: "with no record, install leaves it alone, and keeps the teen's key nowhere"},
+		{name: "with a record, install leaves it alone too", record: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newWakaHome(t, nil)
+			if tt.record {
+				install(t, h.in, h.item(t, 7247, wakaKey))
+			} else {
+				made, _ := madeConfig(t, wakaKey, 7247, "")
+				writeFile(t, h.cfg(), []byte(made))
+			}
+			// The teen gives the config their own key, as WakaTime's
+			// extension writes one.
+			taken := bytes.Replace(readOrNil(t, h.cfg()), []byte("api_key = "+wakaKey), []byte("api_key = "+hackatimeKey), 1)
+			writeFile(t, h.cfg(), taken)
+			if tt.uninstall {
+				p, err := h.in.PlanUninstall(h.item(t, 7247, ""))
+				if err != nil {
+					t.Fatal(err)
+				}
+				problems := strings.Join(p.Problems, "\n")
+				if !strings.Contains(problems, "isn't pairtime's any more; point its api_url at your own server, or delete it") {
+					t.Errorf("uninstall's problems are %q, want the config named with what to change", p.Problems)
+				}
+				if strings.Contains(p.Diff()+problems, hackatimeKey) {
+					t.Errorf("uninstall shows the teen's key:\n%s\n%s", p.Diff(), problems)
+				}
+				if err := p.Apply(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				_, err := h.in.PlanInstall([]Item{h.item(t, 7247, "")})
+				if err == nil || !strings.Contains(err.Error(), "isn't pairtime's any more") {
+					t.Fatalf("PlanInstall = %v, want the refusal of a config the teen took over", err)
+				}
+				if strings.Contains(err.Error(), hackatimeKey) {
+					t.Errorf("the refusal shows the teen's key: %v", err)
+				}
+			}
+			if s, err := wakacfg.ReadSetup(wakacfg.SetupFile(h.data)); err == nil && s.Key == hackatimeKey {
+				t.Errorf("the setup file holds the teen's key")
+			}
+			if got := readOrNil(t, h.cfg()); !bytes.Equal(got, taken) {
+				t.Errorf("the config is now\n%q\nwant it as the teen left it:\n%q", got, taken)
 			}
 		})
 	}
 }
 
 func TestWakaTimeProxyVariables(t *testing.T) {
-	// mark is the comment a config pairtime made starts with.
-	const mark = "; made by pairtime install; pairtime uninstall takes it out\n"
+	made, _ := madeConfig(t, wakaKey, 7250, "")
+	elsewhere := strings.Replace(made, "api_url = http://127.0.0.1:7250/api/v1", "api_url = https://hackatime.hackclub.com/api/hackatime/v1", 1)
+	const proxy = "http://proxy.example:3128"
 	tests := []struct {
 		name string
 		vars map[string]string
@@ -507,9 +588,13 @@ func TestWakaTimeProxyVariables(t *testing.T) {
 		// item.
 		refused string
 	}{
-		{name: "with HTTPS_PROXY set and no config, install still makes one, whose only api_url is the agent on 127.0.0.1, which no environment proxy reaches", vars: map[string]string{"HTTPS_PROXY": "http://proxy.example:3128"}},
-		{name: "with http_proxy set, a config pairtime made still gets the agent's port, as its only api_url is the agent", vars: map[string]string{"http_proxy": "http://proxy.example:3128"}, cfg: mark + "[settings]\napi_url = http://127.0.0.1:7250/api/v1\napi_key = " + wakaKey + "\n"},
-		{name: "with HTTPS_PROXY set, a config pairtime made whose api_url now names another server is refused, as any config of the teen's", vars: map[string]string{"HTTPS_PROXY": "http://proxy.example:3128"}, cfg: mark + "[settings]\napi_url = https://hackatime.hackclub.com/api/hackatime/v1\napi_key = " + hackatimeKey + "\n", refused: "would get pairtime's line, but HTTPS_PROXY is set here"},
+		{name: "with HTTPS_PROXY set and no config, install still makes one, whose only api_url is the agent on 127.0.0.1, which no environment proxy reaches", vars: map[string]string{"HTTPS_PROXY": proxy}},
+		{name: "with http_proxy set, a config pairtime made still gets the agent's port, as its only api_url is the agent", vars: map[string]string{"http_proxy": proxy}, cfg: made},
+		{name: "with HTTPS_PROXY set, a config pairtime made whose api_url now names another server is refused, as any config of the teen's", vars: map[string]string{"HTTPS_PROXY": proxy}, cfg: elsewhere, refused: "would get pairtime's line, but HTTPS_PROXY is set here"},
+		{name: "with https_proxy in lower case set, the teen's https config is refused, naming it", vars: map[string]string{"https_proxy": proxy}, cfg: "[settings]\napi_url = https://hackatime.hackclub.com/api/hackatime/v1\napi_key = " + hackatimeKey + "\n", refused: "but https_proxy is set here"},
+		{name: "with HTTPS_PROXY set and NO_PROXY naming the server's host, the line goes in, as wakatime-cli takes no proxy then", vars: map[string]string{"HTTPS_PROXY": proxy, "NO_PROXY": "hackatime.hackclub.com"}, cfg: "[settings]\napi_url = https://hackatime.hackclub.com/api/hackatime/v1\napi_key = " + hackatimeKey + "\n"},
+		{name: "with only HTTP_PROXY set, the teen's https config gets the line, as wakatime-cli takes HTTP_PROXY only for an http api_url", vars: map[string]string{"HTTP_PROXY": proxy, "http_proxy": proxy}, cfg: "[settings]\napi_url = https://hackatime.hackclub.com/api/hackatime/v1\napi_key = " + hackatimeKey + "\n"},
+		{name: "with HTTP_PROXY set, a teen's own server on 127.0.0.1 gets the line, as no environment proxy reaches loopback", vars: map[string]string{"HTTP_PROXY": proxy}, cfg: "[settings]\napi_url = http://127.0.0.1:3000/api/v1\napi_key = " + hackatimeKey + "\n"},
 		{name: "an empty HTTPS_PROXY sets no proxy, as Go reads it", vars: map[string]string{"HTTPS_PROXY": ""}, cfg: "[settings]\napi_key = " + hackatimeKey + "\n"},
 	}
 	for _, tt := range tests {

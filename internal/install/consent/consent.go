@@ -237,10 +237,11 @@ func wakatimeCard(in Input) Card {
 				"It also tells wakatime-cli to read your AI agents' transcripts only from now on, so that it doesn't send the ones from before as new time.",
 			Notes: []string{
 				"For VS Code, Cursor, Windsurf and other editors built on VS Code, install WakaTime's extension from the editor's extensions view, or with code --install-extension WakaTime.vscode-wakatime.",
-				"Hack Club programs that review time through Robert read it from Hackatime, which this doesn't set up. If you join one, set up Hackatime too, and pairtime keeps working beside it.",
+				"Hack Club programs that review time through Robert read it from Hackatime, which this doesn't set up. If you join one, set up Hackatime too, then run pairtime install again: Hackatime's setup writes a new ~/.wakatime.cfg, and install adds pairtime's line to it.",
 			},
 			Declining: "Without it, pairtime doesn't see the time you spend in an editor.",
 			TurnOff: "You can take it out any time with pairtime uninstall. It takes pairtime's settings out of the config it made, and deletes the file when nothing else is in it. " +
+				"If you gave that config a key of your own, uninstall leaves the file to you, and says so. " +
 				"wakatime-cli's own wakatime-internal.cfg stays once wakatime-cli has written to it, since without it wakatime-cli would send your AI agents' old transcripts as new time to the next server you set up.",
 		}
 	}
@@ -250,7 +251,7 @@ func wakatimeCard(in Input) Card {
 			"pairtime adds one line under [api_urls] there, so that wakatime-cli also sends every heartbeat to pairtime's agent on this computer. " +
 			"Nothing else in the file changes. While pairtime's agent doesn't take what wakatime-cli sends it, as while the agent isn't running, wakatime-cli holds back what it sends your server too, and sends it once the agent takes it again.",
 		Notes: []string{
-			"Your editors' own environment can hold a proxy that install can't see, and wakatime-cli would then send pairtime's copy of each heartbeat through it, so that pairtime gets none of them: don't set a proxy for your editors while pairtime's line is in.",
+			"Your editors' own environment can hold a proxy that install can't see, and wakatime-cli would then send pairtime's copy of each heartbeat through it: the proxy would get your project and file names unencrypted, pairtime would get none of them, and each send the proxy doesn't pass on would hold back what wakatime-cli sends your own server. So don't set a proxy for your editors while pairtime's line is in.",
 		},
 		Declining: "Without it, pairtime doesn't see the time you spend in an editor.",
 		TurnOff:   "You can take the line out any time with pairtime uninstall, which leaves the rest of the file as it was.",

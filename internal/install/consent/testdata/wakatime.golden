@@ -241,8 +241,10 @@ AI tools pairtime looked for:
     server too, and sends it once the agent takes it again.
     Your editors' own environment can hold a proxy that install can't see,
     and wakatime-cli would then send pairtime's copy of each heartbeat
-    through it, so that pairtime gets none of them: don't set a proxy for
-    your editors while pairtime's line is in.
+    through it: the proxy would get your project and file names unencrypted,
+    pairtime would get none of them, and each send the proxy doesn't pass on
+    would hold back what wakatime-cli sends your own server. So don't set a
+    proxy for your editors while pairtime's line is in.
 
     Saying no doesn't stop you from using pairtime.
     Without it, pairtime doesn't see the time you spend in an editor.

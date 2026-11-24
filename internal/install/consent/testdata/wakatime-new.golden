@@ -242,16 +242,18 @@ AI tools pairtime looked for:
     code --install-extension WakaTime.vscode-wakatime.
     Hack Club programs that review time through Robert read it from
     Hackatime, which this doesn't set up. If you join one, set up Hackatime
-    too, and pairtime keeps working beside it.
+    too, then run pairtime install again: Hackatime's setup writes a new
+    ~/.wakatime.cfg, and install adds pairtime's line to it.
 
     Saying no doesn't stop you from using pairtime.
     Without it, pairtime doesn't see the time you spend in an editor.
     You can take it out any time with pairtime uninstall. It takes
     pairtime's settings out of the config it made, and deletes the file when
-    nothing else is in it. wakatime-cli's own wakatime-internal.cfg stays
-    once wakatime-cli has written to it, since without it wakatime-cli would
-    send your AI agents' old transcripts as new time to the next server you
-    set up.
+    nothing else is in it. If you gave that config a key of your own,
+    uninstall leaves the file to you, and says so. wakatime-cli's own
+    wakatime-internal.cfg stays once wakatime-cli has written to it, since
+    without it wakatime-cli would send your AI agents' old transcripts as
+    new time to the next server you set up.
 
     --- /dev/null
     +++ /home/teen/.wakatime/wakatime-internal.cfg
@@ -261,7 +263,7 @@ AI tools pairtime looked for:
     --- /dev/null
     +++ /home/teen/.wakatime.cfg
     @@ -0,0 +1,4 @@
-    +; made by pairtime install; pairtime uninstall takes it out
+    +; made by pairtime install for the key 6d61e4224e2f; pairtime uninstall takes it out
     +[settings]
     +api_url = http://127.0.0.1:7247/api/v1
-    +api_key = 00000000-0000-4000-8000-00000000a9e7
+    +api_key = ***

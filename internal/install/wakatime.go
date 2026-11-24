@@ -81,8 +81,24 @@ func WakaTime(env Env, o WakaTimeOptions) (Item, error) {
 	if !cfg.Exists || ownConfig(cfg, key) {
 		edits = append(edits, wakaTimeWatermark{path: paths.Internal, now: o.Now})
 	}
-	edits = append(edits, wakaTimeLine{path: paths.Config, key: key, port: o.Port, proxy: wakacfg.ProxyVar(env.getenv)})
+	edits = append(edits, wakaTimeLine{path: paths.Config, key: key, port: o.Port, proxy: wakaTimeProxy(cfg, key, o.Port, env)})
 	return Item{ID: ItemWakaTime, Summary: "Sends WakaTime's heartbeats to pairtime's agent too", Edits: edits}, nil
+}
+
+// wakaTimeProxy returns the variable of install's environment whose proxy
+// wakatime-cli would send pairtime's line through, "" for none: the one
+// wakacfg.ProxyFor finds for the config's main api_url, as wakatime-cli
+// works it out once, for that URL. The main api_url of a config pairtime
+// makes, or made, is the agent's on 127.0.0.1, which no environment proxy
+// reaches.
+func wakaTimeProxy(cfg Content, key string, port int, env Env) string {
+	server := wakacfg.URL(port)
+	if cfg.Exists {
+		if s, err := wakacfg.Inspect(cfg.Data, key); err == nil && !s.Own {
+			server = s.Server
+		}
+	}
+	return wakacfg.ProxyFor(server, env.getenv)
 }
 
 // ownConfig reports whether cfg is a config pairtime made for key
@@ -202,13 +218,12 @@ type wakaTimeLine struct {
 	path string
 	key  string
 	port int
-	// proxy is the variable of install's environment that sets a proxy
-	// (wakacfg.ProxyVar), "" for none. While one is set the line goes in
-	// no config of the teen's: install's environment is most often the one
-	// the editors start in, and wakatime-cli would send the line through
-	// that proxy too. A config pairtime makes still goes in, since its only
-	// api_url is the agent on 127.0.0.1, which Go's environment proxies
-	// never reach.
+	// proxy is the variable of install's environment whose proxy
+	// wakatime-cli would send the line through, "" for none
+	// (wakaTimeProxy). While there is one the line goes in no config of the
+	// teen's: install's environment is most often the one the editors start
+	// in. A config pairtime makes still goes in, since its only api_url is
+	// the agent on 127.0.0.1, which no environment proxy reaches.
 	proxy string
 }
 
