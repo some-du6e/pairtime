@@ -51,9 +51,9 @@ type focusUnknownCase struct {
 	unknownSlots []string
 }
 
-// focusUnknownCases are the cases WP-FX8 asks for, (a) to (e), with (b)'s
-// X11 twin, and (f), which follow-up triage item 90 adds for WP-SC8, in
-// List's order.
+// focusUnknownCases are the cases WP-FX8 asks for, (a) to (f), with (b)'s
+// X11 twin, in List's order. (f) is the case d-two-projects/README.md
+// says it lacks, for WP-SC8 (#377).
 var focusUnknownCases = []focusUnknownCase{
 	{name: "a-6.1-gnome", unknownRecords: 1, allUnknown: true},
 	{name: "b-pty-game", unknownRecords: 1, allUnknown: true},

@@ -249,9 +249,10 @@ expected = exp.doc(
     approx={},
     errata=[SPLIT],
     notes=[
-        "WP-FX8's (f), for follow-up triage item 90: two Claude Code sessions in two projects on GNOME on Wayland "
-        "without pairtime's extension, so every slot's focus is unknown and both projects' windows and buckets "
-        "compete for every second (SM 2.5, 3.3 rule 1).",
+        "WP-FX8's (f), the case d-two-projects/README.md says it lacks (\"a slot starts while both buckets still "
+        "hold output after the midpoint\"), for WP-SC8 (#377): two Claude Code sessions in two projects on GNOME "
+        "on Wayland without pairtime's extension, so every slot's focus is unknown and both projects' windows "
+        "and buckets compete for every second (SM 2.5, 3.3 rule 1).",
         "Buckets of the two projects go to the project whose qualifying human anchor is nearest the second, the "
         "earlier anchor on a tie, then the lower project_key (SM 2.5), and D-split-slots gives a slot the project "
         "of its first credited second. From 14:04:45 to 14:06:45 both buckets hold output, and B1, sent at "

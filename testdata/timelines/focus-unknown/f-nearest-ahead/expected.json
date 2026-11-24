@@ -281,7 +281,7 @@
   "approx": {},
   "errata": ["2026-11-24-sm-2.5-split-slots"],
   "notes": [
-    "WP-FX8's (f), for follow-up triage item 90: two Claude Code sessions in two projects on GNOME on Wayland without pairtime's extension, so every slot's focus is unknown and both projects' windows and buckets compete for every second (SM 2.5, 3.3 rule 1).",
+    "WP-FX8's (f), the case d-two-projects/README.md says it lacks (\"a slot starts while both buckets still hold output after the midpoint\"), for WP-SC8 (#377): two Claude Code sessions in two projects on GNOME on Wayland without pairtime's extension, so every slot's focus is unknown and both projects' windows and buckets compete for every second (SM 2.5, 3.3 rule 1).",
     "Buckets of the two projects go to the project whose qualifying human anchor is nearest the second, the earlier anchor on a tie, then the lower project_key (SM 2.5), and D-split-slots gives a slot the project of its first credited second. From 14:04:45 to 14:06:45 both buckets hold output, and B1, sent at 14:09:01, is nearer than A1, sent at 14:00:00, so the eight slots go to game, whose prompt lies ahead. A1 and B1 are 541 s apart, an odd number of seconds: measured from a second's middle, 14:04:30 is 270.5 s from both, and the earlier anchor, A1, takes it, so both readings of nearest give the same side.",
     "Read by the most recent human prompt instead, as a look-back rule would, those eight slots go to notes, whose A1 is the most recent prompt: notes would get 470 s and game 390, not 350 and 510.",
     "contested_buckets_s counts the seconds both buckets wanted: 200 to notes and 179 to game.",
