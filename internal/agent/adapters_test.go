@@ -1821,6 +1821,42 @@ func TestHeldRetention(t *testing.T) {
 				t.Errorf("held.jsonl is still there (%v)", err)
 			}
 		}},
+		{"a start drops a call its sender sent more than seven days ago, though the agent took it in an hour ago, as from inbox/ (D-inbox-age-cap)", func(t *testing.T, h *adapterHost) {
+			old := call(t, "old-1", time.Hour, false)
+			old.Sent = now.Add(-week - time.Hour)
+			write(t, h.a.dirs.Held(), line(t, h, old), line(t, h, call(t, "new-1", time.Hour, false)))
+			h.expireHeld(now)
+			if got := prompts(t, h.a.dirs.Held()); !slices.Equal(got, []string{"new-1"}) {
+				t.Errorf("held.jsonl holds %q, want new-1 alone", got)
+			}
+		}},
+		{"a call held as the agent runs is cut by its sender's Sent when that is earlier: one sent 6 days 23 hours ago goes within the hour", func(t *testing.T, h *adapterHost) {
+			d := call(t, "old-1", 0, false)
+			d.Sent = now.Add(-week + time.Hour)
+			if rest := h.hold([]inbox.Delivery{d}); len(rest) != 0 {
+				t.Fatalf("hold kept %d calls back", len(rest))
+			}
+			h.expireRun(now.Add(59 * time.Minute))
+			if got := prompts(t, h.a.dirs.Held()); !slices.Equal(got, []string{"old-1"}) {
+				t.Errorf("59 minutes on, held.jsonl holds %q, want old-1 still", got)
+			}
+			h.expireRun(now.Add(61 * time.Minute))
+			if _, err := os.Stat(h.a.dirs.Held()); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("61 minutes on, held.jsonl is still there (%v)", err)
+			}
+		}},
+		{"the minute job has the next step drop a call held now whose sender sent it more than seven days ago, as it comes due by that Sent", func(t *testing.T, h *adapterHost) {
+			d := call(t, "old-1", 0, false)
+			d.Sent = now.Add(-week - time.Minute)
+			if rest := h.hold([]inbox.Delivery{d}); len(rest) != 0 {
+				t.Fatalf("hold kept %d calls back", len(rest))
+			}
+			h.minute()
+			h.step(false)
+			if _, err := os.Stat(h.a.dirs.Held()); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("held.jsonl is still there (%v)", err)
+			}
+		}},
 		{"as the agent runs, a .replay file whose replay has begun waits, and one whose replay hasn't is cut", func(t *testing.T, h *adapterHost) {
 			replay := h.a.dirs.Held() + ".replay"
 			write(t, replay, line(t, h, call(t, "new-1", time.Hour, false)))

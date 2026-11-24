@@ -88,3 +88,41 @@ func mine(name string, fi fs.FileInfo) error {
 	}
 	return nil
 }
+
+// ownFile checks fi, a spool file as Expire opened it, before Expire reads
+// its first call: a regular file of this user's with no second name,
+// whatever its mode, which no other account can have put in the inbox, as
+// privateFile checks a spool file but for its mode.
+func ownFile(name string, fi fs.FileInfo) error {
+	if !fi.Mode().IsRegular() {
+		return notPrivate("%s isn't a regular file", name)
+	}
+	if err := mine(name, fi); err != nil {
+		return err
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+		return notPrivate("%s has %d names, and a spool file has one", name, st.Nlink)
+	}
+	return nil
+}
+
+// sweepable reports whether Expire may sweep dir, the inbox directory,
+// that privateDir refused: a directory of this user's, which others may
+// write in, but not one another user owns, nor one reached through a
+// symbolic link another user made, or that names another user's
+// directory, which privateDir doesn't follow and Drain leaves alone.
+func sweepable(dir string) bool {
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return false
+	}
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		if mine(dir, fi) != nil {
+			return false
+		}
+		if fi, err = os.Stat(dir); err != nil {
+			return false
+		}
+	}
+	return fi.IsDir() && mine(dir, fi) == nil
+}

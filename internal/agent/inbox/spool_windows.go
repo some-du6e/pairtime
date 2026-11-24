@@ -58,3 +58,15 @@ func privateFile(name string, fi fs.FileInfo) error {
 	}
 	return nil
 }
+
+// ownFile checks that fi, a spool file as Expire opened it, is a regular
+// file, as privateFile does: the data directory's DACL decides who may
+// open what is in it.
+func ownFile(name string, fi fs.FileInfo) error { return privateFile(name, fi) }
+
+// sweepable reports whether Expire may sweep dir, the inbox directory,
+// that privateDir refused: a directory, as privateDir asks no more.
+func sweepable(dir string) bool {
+	fi, err := os.Stat(dir)
+	return err == nil && fi.IsDir()
+}

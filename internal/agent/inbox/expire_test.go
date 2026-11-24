@@ -3,6 +3,7 @@
 package inbox
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -56,6 +57,10 @@ func TestExpire(t *testing.T) {
 		}, written: day, deleted: true},
 		{name: "a first record cut short is passed over: the call after it, sent 7 days ago, dates its file, written yesterday, which is deleted", records: func(t *testing.T, wall time.Time) []string {
 			return []string{`{"id":"cut sh`, call(t, wall, 7*day, false), call(t, wall, 0, false)}
+		}, written: day, deleted: true},
+		{name: "a record cut short in what it holds of a call gives its own Sent: one sent 7 days ago dates its file, written yesterday, with no whole call in it", records: func(t *testing.T, wall time.Time) []string {
+			c := call(t, wall, 7*day, false)
+			return []string{c[:len(c)-2]} // cut in its body, which comes after its sent
 		}, written: day, deleted: true},
 		{name: "a record cut short as long as one can be is passed over for a call MaxMessage bytes long after it", records: func(t *testing.T, wall time.Time) []string {
 			return []string{cut(t, wall), call(t, wall, 7*day, true)}
@@ -230,6 +235,52 @@ func TestSetAside(t *testing.T) {
 			}
 			if !fi.ModTime().Equal(written) {
 				t.Errorf("the file set aside was last written at %v, want %v", fi.ModTime(), written)
+			}
+		})
+	}
+}
+
+// TestCutSent checks that a record a sender's write cut short anywhere in
+// what it holds of a call still gives its sender's Sent (cutSent), as
+// Encode writes a message's id, kind and sent before its chain and its
+// body, and that one cut before its sent ended gives none, and holds
+// nothing of the call. A change to Message that put any of the call before
+// sent would fail it.
+func TestCutSent(t *testing.T) {
+	m := New("hook", json.RawMessage(`{"prompt":"what the teen asked","cwd":"/home/teen/project"}`))
+	m.Mono, m.BootID = 1234, "boot_1"
+	m.Chain = []Proc{{PID: 4242, Name: "claude"}}
+	b, err := m.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// content is where the record begins to hold the call: its chain, or
+	// its body, whichever comes first.
+	content := len(b)
+	for _, member := range []string{`"chain":`, `"body":`} {
+		if i := bytes.Index(b, []byte(member)); i >= 0 && i < content {
+			content = i
+		}
+	}
+	sent := bytes.Index(b, []byte(`"sent":"`))
+	if sent < 0 || content == len(b) {
+		t.Fatalf("the record %s has no sent, or no chain and body", b)
+	}
+	cases := []struct {
+		name     string
+		from, to int // the cuts, b[:from] to b[:to-1]
+		ok       bool
+	}{
+		{"every cut from the first byte of the call's chain or body to a byte short of the record's end gives its Sent", content + 1, len(b), true},
+		{"every cut inside its sent gives none", sent + len(`"sent":"`), sent + len(`"sent":"`) + 20, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			for n := c.from; n < c.to; n++ {
+				s, ok := cutSent(b[:n])
+				if ok != c.ok || ok && !s.Equal(m.Sent) {
+					t.Fatalf("cutSent of the record cut at %d of %d, %q, = %v, %v; want %v", n, len(b), b[:n], s, ok, c.ok)
+				}
 			}
 		})
 	}

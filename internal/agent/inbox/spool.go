@@ -5,6 +5,7 @@ package inbox
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -99,6 +100,18 @@ func ResumeSpooling(dir string) error {
 // each retention sweep, so a call waits unread no longer than held.jsonl
 // keeps one, whether or not a drain runs.
 func Expire(dir string, now time.Time) (int, error) {
+	if err := privateDir(dir); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		// A directory of this user's that others may write in is swept, as
+		// its files may wait there too. One reached through a symbolic link
+		// Drain doesn't follow, which may name another account's directory,
+		// is left alone, as Drain leaves it (sweepable).
+		if !sweepable(dir) {
+			return 0, nil
+		}
+	}
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil
@@ -107,10 +120,6 @@ func Expire(dir string, now time.Time) (int, error) {
 		return 0, err
 	}
 	cutoff := now.Add(-SpoolKeep)
-	// A directory that isn't this user's alone may hold anything in a spool
-	// file's place, so Expire reads no file in it, as Drain and Scan read
-	// none, and dates each by its write time.
-	private := privateDir(dir) == nil
 	n := 0
 	var errs []error
 	for _, e := range entries {
@@ -129,11 +138,7 @@ func Expire(dir string, now time.Time) (int, error) {
 			continue
 		}
 		p := filepath.Join(dir, name)
-		at := fi.ModTime()
-		if private {
-			at = spooledAt(p, fi)
-		}
-		if at.After(cutoff) {
+		if spooledAt(p, fi).After(cutoff) {
 			continue
 		}
 		if err := retry(func() error { return os.Remove(p) }); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -148,9 +153,9 @@ func Expire(dir string, now time.Time) (int, error) {
 // spooledAt is when the spool file name, whose information as listed is
 // fi, began to wait: when its first call was sent (firstSent), or when the
 // file was last written if that is earlier, as across a step back of the
-// clock, or if no line it starts with holds a message, as in a file that a
-// drain set aside or that can't be read. So a file is never kept longer
-// than its write time alone would keep it.
+// clock, or if no line it starts with gives a Sent, as in a file that a
+// drain set aside, or one Expire doesn't read (ownFile). So a file is never
+// kept longer than its write time alone would keep it.
 func spooledAt(name string, fi fs.FileInfo) time.Time {
 	at := fi.ModTime()
 	if !fi.Mode().IsRegular() {
@@ -162,37 +167,81 @@ func spooledAt(name string, fi fs.FileInfo) time.Time {
 	return at
 }
 
-// firstSent is the Sent of the first message in the spool file name: on
-// the first line that holds one, passing over the newline before each
-// record (Append) and, as Drain and Scan do, a line that holds none, as a
-// record a sender's write cut short, and false when no line within the
-// first two records' bytes holds one, or the file opened isn't a regular
-// file. It opens the file as Scan does, so a drain can still rename and
-// delete it, and a sender append to it.
+// firstSent is the Sent of the spool file name's first call: of the
+// message on the first line that holds one, passing over the newline
+// before each record (Append), or the Sent a record cut short before it
+// still gives (cutSent), if that is earlier. It passes over a line that
+// holds no call, as Drain and Scan do, and reports false when no line
+// within the first two records' bytes gives a Sent, or the file opened
+// isn't a regular file of this user's with one name (ownFile). It opens
+// the file as Scan does, so a drain can still rename and delete it, and a
+// sender append to it.
 func firstSent(name string) (time.Time, bool) {
 	f, err := openShared(name)
 	if err != nil {
 		return time.Time{}, false
 	}
 	defer f.Close()
-	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+	if fi, err := f.Stat(); err != nil || ownFile(name, fi) != nil {
 		return time.Time{}, false
 	}
 	// A record cut short and the whole one after it, with the newlines
 	// around each and a line ending.
 	r := bufio.NewReader(io.LimitReader(f, 2*(MaxMessage+3)))
+	var cut time.Time // the earliest Sent a record cut short gave
 	for {
 		line, long, err := readLine(r, MaxMessage)
 		if err != nil {
-			return time.Time{}, false
+			return cut, !cut.IsZero()
 		}
 		if long || len(line) == 0 {
 			continue
 		}
 		if m, err := Decode(line); err == nil {
+			if !cut.IsZero() && cut.Before(m.Sent) {
+				return cut, true
+			}
 			return m.Sent, true
 		}
+		if s, ok := cutSent(line); ok && (cut.IsZero() || s.Before(cut)) {
+			cut = s
+		}
 	}
+}
+
+// cutSent is the Sent that line, a record that isn't a whole message, as
+// one a sender's write cut short, still gives: Encode writes a message's
+// members in Message's order, id, kind and sent before its chain and its
+// body, so a record cut anywhere in what it holds of a call has its sent
+// whole. It reads the line's first members as JSON tokens, and reports
+// false unless they are id and kind and a sent that parses as RFC 3339, as
+// for a record cut before its sent ended, which holds nothing of the call.
+func cutSent(line []byte) (time.Time, bool) {
+	dec := json.NewDecoder(bytes.NewReader(line))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return time.Time{}, false
+	}
+	for _, key := range []string{"id", "kind"} {
+		if tok, err := dec.Token(); err != nil || tok != key {
+			return time.Time{}, false
+		}
+		if _, err := dec.Token(); err != nil {
+			return time.Time{}, false
+		}
+	}
+	if tok, err := dec.Token(); err != nil || tok != "sent" {
+		return time.Time{}, false
+	}
+	tok, err := dec.Token()
+	s, ok := tok.(string)
+	if err != nil || !ok {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // maxSpool is MaxSpool, as a variable that tests can lower.

@@ -67,9 +67,11 @@ const keyRetry = time.Minute
 const maxQueued = 4096
 
 // heldKeep is how long a held hook call is kept: a start drops the ones
-// taken in longer ago than this, unparsed (expireHeld), and so does the
-// running agent within a minute of their coming due (expireRun; DESIGN 4.4,
-// which gives every field a finite retention; D-held-calls-inbox-class).
+// that began to wait longer ago than this, when the agent took them in or,
+// if earlier, when their senders sent them (heldSince), unparsed
+// (expireHeld), and so does the running agent within a minute of their
+// coming due (expireRun; DESIGN 4.4, which gives every field a finite
+// retention; D-held-calls-inbox-class, D-inbox-age-cap).
 const heldKeep = 7 * 24 * time.Hour
 
 // heldRetry is how long expireRun waits before it tries again to cut a held
@@ -1982,7 +1984,7 @@ func (h *adapterHost) hold(calls []inbox.Delivery) []inbox.Delivery {
 		size += int64(len(line))
 		h.count(func() {
 			h.held++
-			h.dueByLocked(d.Received.Wall.Add(heldKeep))
+			h.dueByLocked(heldSince(d.Received.Wall, d.Sent).Add(heldKeep))
 			h.heldFrom.add(stampOf(d))
 		})
 	}
@@ -2399,11 +2401,12 @@ func (h *adapterHost) expireFile(name string, cutoff time.Time, from int64) (hel
 	return cut, nil
 }
 
-// heldAt is when the agent took the call on a line of held.jsonl in, by
-// the stamp the line gives, which heldKeep counts from: the agent's own,
-// or, for a line any process could have written, whatever it says, which
-// can keep nothing but that line longer. It reports false for a line that
-// holds no call, or no stamp.
+// heldAt is when the call on a line of held.jsonl began to wait, which
+// heldKeep counts from: when the agent took it in, by the stamp the line
+// gives, or when its sender sent it, if that is earlier (heldSince). The
+// stamp is the agent's own, or, for a line any process could have written,
+// whatever it says, which can keep nothing but that line longer. It
+// reports false for a line that holds no call, or no stamp.
 func heldAt(line []byte) (time.Time, bool) {
 	var e heldEntry
 	if err := json.Unmarshal(line, &e); err != nil || len(e.Call) == 0 {
@@ -2413,7 +2416,24 @@ func heldAt(line []byte) (time.Time, bool) {
 	if err := json.Unmarshal(e.Call, &c); err != nil || c.Received.Wall.IsZero() {
 		return time.Time{}, false
 	}
-	return c.Received.Wall, true
+	var m struct {
+		Sent time.Time `json:"sent"`
+	}
+	json.Unmarshal(c.Message, &m) // a message that doesn't read has no Sent
+	return heldSince(c.Received.Wall, m.Sent), true
+}
+
+// heldSince is when a call the agent took in at received, and its sender
+// sent at sent, began to wait: the earlier of the two, so a call drained
+// from inbox/ days after it was spooled is held no longer than what was
+// left of its 7 days there (D-inbox-age-cap). An earlier sent only ever
+// shortens a stay, so a sender's clock that was wrong costs a call's
+// credit, never its privacy. A zero sent leaves received.
+func heldSince(received, sent time.Time) time.Time {
+	if !sent.IsZero() && sent.Before(received) {
+		return sent
+	}
+	return received
 }
 
 // countHeld counts the calls an earlier run left held, for the status.

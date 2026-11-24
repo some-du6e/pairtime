@@ -178,11 +178,14 @@ func TestPrivateSpool(t *testing.T) {
 	}
 }
 
-// TestExpireUnread checks that Expire reads no spool file it can't trust
-// to be one (D-inbox-age-cap): in an inbox others may write in, as Drain
-// and Scan read none there, it dates each by its write time, and a FIFO in
-// a spool file's place, which another user's write end could hold open,
-// gives firstSent nothing to read, at once.
+// TestExpireUnread checks which spool files Expire reads, and which
+// inboxes it sweeps (D-inbox-age-cap). In an inbox others may write in, it
+// reads a file that is this user's with one name, whatever its mode, as no
+// other account can have put it there, and dates one that isn't by its
+// write time. A FIFO in a spool file's place, which another user's write
+// end could hold open, gives firstSent nothing, at once. An inbox reached
+// through a symbolic link to a directory this user doesn't own isn't swept,
+// as Drain leaves it alone.
 func TestExpireUnread(t *testing.T) {
 	day := 24 * time.Hour
 	// spool writes a spool whose one call was sent 7 days ago, last written
@@ -204,27 +207,34 @@ func TestExpireUnread(t *testing.T) {
 		}
 		return p
 	}
+	// expire runs Expire on dir and checks how many files it deleted, and
+	// whether p is gone.
+	expire := func(t *testing.T, dir, p string, want int) {
+		t.Helper()
+		if n, err := Expire(dir, time.Now()); n != want || err != nil {
+			t.Errorf("Expire = %d, %v; want %d, nil", n, err, want)
+		}
+		_, err := os.Lstat(p)
+		if gone := os.IsNotExist(err); gone != (want > 0) {
+			t.Errorf("the spool is gone %v, want %v (%v)", gone, want > 0, err)
+		}
+	}
 	cases := []struct {
 		name string
 		run  func(t *testing.T, dir string)
 	}{
-		{"in an inbox others may write in, a spool file whose first call was sent 7 days ago, written yesterday, stays by its write time", func(t *testing.T, dir string) {
-			p := spool(t, dir, day)
-			if n, err := Expire(dir, time.Now()); n != 0 || err != nil {
-				t.Errorf("Expire = %d, %v; want 0, nil", n, err)
-			}
-			if _, err := os.Lstat(p); err != nil {
-				t.Errorf("the spool went: %v", err)
-			}
+		{"in an inbox others may write in, a spool file of this user's whose first call was sent 7 days ago, written yesterday, is deleted by its Sent", func(t *testing.T, dir string) {
+			expire(t, dir, spool(t, dir, day), 1)
 		}},
-		{"in an inbox others may write in, a spool file written 7 days ago is deleted by its write time", func(t *testing.T, dir string) {
-			p := spool(t, dir, 7*day)
-			if n, err := Expire(dir, time.Now()); n != 1 || err != nil {
-				t.Errorf("Expire = %d, %v; want 1, nil", n, err)
+		{"in an inbox others may write in, a spool file written 7 days ago is deleted", func(t *testing.T, dir string) {
+			expire(t, dir, spool(t, dir, 7*day), 1)
+		}},
+		{"a spool file with a second name, which another account could have linked into the inbox, is dated by its write time: written yesterday, it stays", func(t *testing.T, dir string) {
+			p := spool(t, dir, day)
+			if err := os.Link(p, filepath.Join(t.TempDir(), "other")); err != nil {
+				t.Fatal(err)
 			}
-			if _, err := os.Lstat(p); !os.IsNotExist(err) {
-				t.Errorf("the spool is still there: %v", err)
-			}
+			expire(t, dir, p, 0)
 		}},
 		{"a FIFO in a spool file's place holds no call, and firstSent doesn't wait on its write end", func(t *testing.T, dir string) {
 			p := filepath.Join(dir, SpoolName)
@@ -251,6 +261,29 @@ func TestExpireUnread(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				t.Fatal("firstSent waited on the FIFO's write end")
 			}
+		}},
+		{"an inbox reached through a symbolic link to a directory this user doesn't own isn't swept", func(t *testing.T, dir string) {
+			if os.Geteuid() == 0 {
+				t.Skip("root owns the directory the link names")
+			}
+			link := filepath.Join(dir, "inbox")
+			if err := os.Symlink("/", link); err != nil {
+				t.Fatal(err)
+			}
+			if sweepable(link) {
+				t.Error("Expire would sweep another user's directory through the link")
+			}
+		}},
+		{"an inbox reached through this user's symbolic link to a directory of this user's that others may write in is swept", func(t *testing.T, dir string) {
+			p := spool(t, dir, 7*day)
+			link := filepath.Join(t.TempDir(), "inbox")
+			if err := os.Symlink(dir, link); err != nil {
+				t.Fatal(err)
+			}
+			if !sweepable(link) {
+				t.Error("Expire wouldn't sweep it")
+			}
+			expire(t, link, p, 1)
 		}},
 	}
 	for _, c := range cases {
