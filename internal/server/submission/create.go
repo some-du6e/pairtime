@@ -53,6 +53,11 @@ var (
 	ErrNoDevlogWindows = errors.New("submission: there are no devlog windows to freeze")
 	// ErrNotWithdrawable is a withdrawal once step 9's checks have run.
 	ErrNotWithdrawable = errors.New("submission: the submission can't be withdrawn now")
+	// errResized is a create prepare told the writer one row for, as a
+	// retry or a refusal its read found, which the op would now take, as
+	// after a write between the two lifted the refusal. It stores nothing,
+	// and the client sends the create again, which prepare then sizes.
+	errResized = errors.New("submission: the create would write more rows than it told the writer; send it again")
 )
 
 // OverlapError is the overlap refusal (D-sb1-submissions, Q2): the
@@ -83,6 +88,10 @@ type createInput struct {
 	Projects, ProjectKeys []string
 	// Window is the window W, or nil for devlog windows.
 	Window *Window
+	// OneRow says prepare told the writer one row, for a retry or a
+	// refusal its read found, so the op doesn't write a submission past
+	// that (errResized).
+	OneRow bool
 }
 
 // requestSum is the SHA-256, in lowercase hex, of a teen's create in its
@@ -305,6 +314,9 @@ func (s *Service) create(ctx context.Context, tx writer.Tx, in createInput, pre 
 		}
 	}
 
+	if in.OneRow {
+		return Submission{}, false, errResized
+	}
 	id := newID(time.UnixMilli(now))
 	r, rSum, err := newR()
 	if err != nil {
@@ -363,66 +375,68 @@ VALUES ($1, $2, $3, $4, $5)`, id, in.Account, p.Device, p.ProjectKey, p.project)
 // reads everything again, so a read that is stale by the time it runs
 // costs only the read. A retry, which the op answers with the stored
 // submission, and a create the read finds the op will refuse declare one
-// row, so a burst of refused creates doesn't take the writer a batch at a
-// time. Only a read that fails declares the most the op could write, with
-// devlog.MaxDevlogs windows in devlog mode, and leaves the count to the
-// op.
-func (s *Service) prepare(ctx context.Context, in createInput) (int, *counted) {
+// row and report oneRow, so a burst of refused creates doesn't take the
+// writer a batch at a time. Should a write between the two lift the
+// refusal, the op refuses the create with errResized, a 503, rather than
+// write past one row, and the client's retry is sized. Only a read that
+// fails declares the most the op could write, with devlog.MaxDevlogs
+// windows in devlog mode, and leaves the count to the op.
+func (s *Service) prepare(ctx context.Context, in createInput) (rows int, pre *counted, oneRow bool) {
 	most := 8 + 4*(len(in.Projects)+len(in.ProjectKeys))
 	if in.Window == nil {
 		most += devlog.MaxDevlogs
 	}
 	switch _, _, err := heldRequest(ctx, s.o.Read, in.Account, in.RequestID); {
 	case err == nil:
-		return 1, nil
+		return 1, nil, true
 	case !errors.Is(err, ErrNotFound):
-		return most, nil
+		return most, nil, false
 	}
 	program, ok := s.programs[in.Program]
 	if !ok {
-		return 1, nil
+		return 1, nil, true
 	}
 	switch verified, _, err := eligibility(ctx, s.o.Read, in.Account); {
 	case err != nil:
-		return most, nil
+		return most, nil, false
 	case !verified:
-		return 1, nil
+		return 1, nil, true
 	}
 	projects, pairs, err := resolve(ctx, s.o.Read, in.Account, in.Device, in.Projects, in.ProjectKeys)
 	switch {
 	case errors.Is(err, ErrProjectUnknown):
-		return 1, nil
+		return 1, nil, true
 	case err != nil:
-		return most, nil
+		return most, nil, false
 	}
 	now := s.o.Now().UnixMilli()
 	horizon := now - s.horizon.Milliseconds()
 	var ws []Window
 	if w := in.Window; w != nil {
 		if w.Start >= w.End || w.End > now || w.Start < horizon {
-			return 1, nil
+			return 1, nil, true
 		}
 		ws = []Window{*w}
 	} else {
 		if ws, _, err = devlogWindows(ctx, s.o.Read, in.Account, projects, keysOf(pairs), horizon); err != nil {
-			return most, nil
+			return most, nil, false
 		}
 		if len(ws) == 0 {
-			return 1, nil
+			return 1, nil, true
 		}
 	}
 	// The submission, its projects, keys and windows, the move to frozen
 	// with its event, and its two flags.
-	rows := 1 + len(projects) + len(pairs) + len(ws) + 4
+	rows = 1 + len(projects) + len(pairs) + len(ws) + 4
 	if !program.TakesHours {
-		return rows, nil
+		return rows, nil, false
 	}
 	over := touched(ws)
 	n, err := concurrentMinutes(ctx, s.o.Read, in.Account, over, projects)
 	if err != nil {
-		return rows, nil
+		return rows, nil, false
 	}
-	return rows, &counted{over: over, projects: projects, minutes: n}
+	return rows, &counted{over: over, projects: projects, minutes: n}, false
 }
 
 // withdraw withdraws the account's submission id inside tx at the

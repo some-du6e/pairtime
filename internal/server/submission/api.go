@@ -314,20 +314,24 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request) (caller, []byte,
 		dev, body, ref := s.signed(w, r)
 		if ref == nil {
 			// A copy of a signed write that was refused gets the same
-			// refusal, and a new one is kept by its device and signature
-			// once it has an answer (refusalStore).
-			if rec, ok := w.(*recorder); ok {
-				key := dev.ID + " " + r.Header.Get(ingest.HeaderSignature)
+			// refusal, without taking the device's rate (refusalStore).
+			rec, recorded := w.(*recorder)
+			key := dev.ID + " " + r.Header.Get(ingest.HeaderSignature)
+			if recorded {
 				if k, ok := s.refused.get(key, s.o.Now().UnixMilli()); ok {
 					s.answerAgain(w, k)
 					return caller{}, nil, false
 				}
-				rec.key = key
 			}
 			// Only a signed request counts against the device's rate, so
 			// nobody without the device's key can use it up.
 			done, wait := s.o.Rate.Take(dev.ID, s.o.Now())
 			if done != nil {
+				// Only a request the rate admitted is kept once refused, so
+				// the rate bounds what a device can keep (maxKeptRefusals).
+				if recorded {
+					rec.key = key
+				}
 				return caller{account: dev.Account, device: dev.ID, done: done}, body, true
 			}
 			ref = &refusal{status: http.StatusTooManyRequests, code: ingest.CodeRateLimited, retryAfter: wait,
@@ -432,6 +436,8 @@ func (s *Service) refusalOf(r *http.Request, err error, what string) *refusal {
 		return refuse(http.StatusNotFound, CodeNotFound, "There is no such submission.")
 	case errors.Is(err, ErrNotWithdrawable):
 		return refuse(http.StatusConflict, CodeNotWithdrawable, "Once a submission's checks have run it can't be withdrawn.")
+	case errors.Is(err, errResized):
+		return unavailable()
 	}
 	if r.Context().Err() == nil {
 		s.o.Logger.Error(what, "err", err)
@@ -479,9 +485,11 @@ type objectShape map[string]objectShape
 // members once, spelled exactly as m names it and not null, and whether
 // each member whose value m gives members of its own holds such an object.
 // encoding/json alone takes a member's name in any letter case, keeps the
-// last of a repeated one and reads a null as a member left out, all of
-// which body_shape refuses, as ingest refuses them: a create sends exactly
-// the members it means (docs/spec/submissions-v1.md 3.1).
+// last of a repeated one and reads a null as a member left out, and
+// body_shape refuses all three. Ingest refuses the first two too, but
+// reads a null member of its body as one left out (ingest-v1 2.3); a
+// create sends exactly the members it means, one of each pair
+// (docs/spec/submissions-v1.md 3.1).
 func (m objectShape) holds(raw []byte) bool {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
@@ -618,7 +626,8 @@ func (s *Service) createSubmission(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, ref)
 		return
 	}
-	rows, pre := s.prepare(r.Context(), in)
+	rows, pre, oneRow := s.prepare(r.Context(), in)
+	in.OneRow = oneRow
 	var out Submission
 	var created bool
 	err := s.o.Writer.Do(r.Context(), rows, func(ctx context.Context, tx writer.Tx) error {

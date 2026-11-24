@@ -161,6 +161,13 @@ func TestSignedRequests(t *testing.T) {
 			r.Body = io.NopCloser(strings.NewReader(big))
 			r.ContentLength = int64(len(big))
 		}, wantStatus: http.StatusRequestEntityTooLarge, wantCode: ingest.CodeBodyTooLarge},
+		{name: "a time that isn't decimal with a body hash in capitals gets 400 time_malformed, since the time's form is checked before the hash's", edit: func(r *http.Request) {
+			r.Header.Set(ingest.HeaderTime, "+1795089660250")
+			r.Header.Set(ingest.HeaderBodySHA256, strings.ToUpper(r.Header.Get(ingest.HeaderBodySHA256)))
+		}, wantStatus: http.StatusBadRequest, wantCode: ingest.CodeTimeMalformed},
+		{name: "a body other than the one hashed, signed by another key, gets 400 body_hash_mismatch, since the body is checked against its hash before the signature", edit: func(r *http.Request) {
+			signAs(r, "d1", keyOf("d2"), "GET", list, "{}", t0)
+		}, wantStatus: http.StatusBadRequest, wantCode: ingest.CodeBodyHashMismatch},
 		{name: "a device with no key on record and a time that isn't decimal gets 403 device_key_missing, since the key is checked before the time", token: "ptd_keyless", edit: func(r *http.Request) {
 			r.Header.Set(ingest.HeaderTime, "+1795089660250")
 		}, wantStatus: http.StatusForbidden, wantCode: ingest.CodeDeviceKeyMissing},

@@ -4,6 +4,7 @@ package submission
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -557,8 +558,8 @@ func TestDeclaredRows(t *testing.T) {
 // TestRefusalOrder checks the order the create op refuses in after the
 // idempotency check: the program, verification, the submission cap, P, the
 // windows, the window cap and the overlap refusal (docs/spec/
-// submissions-v1.md 3.3 and 12). Each case breaks two rules, and the
-// answer is the one the earlier rule gives.
+// submissions-v1.md 3.3 and 12). Each case breaks two neighbouring rules,
+// and the answer is the one the earlier rule gives.
 func TestRefusalOrder(t *testing.T) {
 	start, end := t0.Add(-2*day), t0.Add(-day)
 	tests := []struct {
@@ -588,10 +589,30 @@ func TestRefusalOrder(t *testing.T) {
 			},
 		},
 		{
+			name: "an account that isn't verified, at 1,000 submissions, gets 403 not_verified, since verification comes before the submission cap",
+			run: func(t *testing.T, h *harness) {
+				h.seed(u3, MaxSubmissions, ByDevice, Frozen, 0)
+				want(t, h.call("ptd_pending", "POST", SubmissionsPath, createBody("hard-mode", "req-1", true, []string{"k_x"}, start, end)), http.StatusForbidden, CodeNotVerified)
+			},
+		},
+		{
 			name: "a project the account doesn't hold, from an account at 1,000 submissions, gets 409 limit_reached, since the submission cap comes before P resolves",
 			run: func(t *testing.T, h *harness) {
 				h.seed(u1, MaxSubmissions, ByDevice, Frozen, 0)
 				want(t, h.call("sess:fresh", "POST", SubmissionsPath, createBody("hard-mode", "req-1", false, []string{"p-other"}, start, end)), http.StatusConflict, CodeLimitReached)
+			},
+		},
+		{
+			name: "another computer's key, with a window that doesn't start before it ends, gets 400 project_unknown, since P resolves before the windows are checked",
+			run: func(t *testing.T, h *harness) {
+				want(t, h.call("ptd_laptop", "POST", SubmissionsPath, createBody("hard-mode", "req-1", true, []string{"k_tool"}, end, end)), http.StatusBadRequest, CodeProjectUnknown)
+			},
+		},
+		{
+			name: "a window that doesn't start before it ends, from an account at 10,000 windows, gets 400 window_invalid, since the windows are checked before the window cap",
+			run: func(t *testing.T, h *harness) {
+				h.seed(u1, 1, "program", Frozen, MaxWindows)
+				want(t, h.call("ptd_laptop", "POST", SubmissionsPath, window("hard-mode", "req-1", end, start)), http.StatusBadRequest, CodeWindowInvalid)
 			},
 		},
 		{
@@ -607,5 +628,35 @@ func TestRefusalOrder(t *testing.T) {
 		for _, tt := range tests {
 			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) { tt.run(t, newHarness(t, engine)) })
 		}
+	}
+}
+
+// TestResized checks that a create prepare told the writer one row for,
+// which the op would now take, as after a write between the two lifted the
+// refusal prepare read, is refused with errResized, a 503, and stores
+// nothing, rather than writing past the one row it declared.
+func TestResized(t *testing.T) {
+	start, end := t0.Add(-2*day), t0.Add(-day)
+	for _, engine := range storetest.Engines() {
+		t.Run(string(engine)+"/a create declared as one row that the op would take gets a 503 and stores nothing", func(t *testing.T) {
+			h := newHarness(t, engine)
+			w := Window{Start: start.UnixMilli(), End: end.UnixMilli()}
+			in := createInput{Account: u1, CreatedBy: ByDevice, Device: "d1", Program: "hard-mode", RequestID: "req-1", ProjectKeys: []string{"k_app"}, Window: &w, OneRow: true}
+			in.RequestSHA256 = requestSum(in.Program, in.Device, in.Projects, in.ProjectKeys, in.Window)
+			before := h.rows()
+			err := h.w.Do(context.Background(), 1, func(ctx context.Context, tx writer.Tx) error {
+				_, _, err := h.svc.create(ctx, tx, in, nil)
+				return err
+			})
+			if !errors.Is(err, errResized) {
+				t.Fatalf("create = %v, want errResized", err)
+			}
+			if after := h.rows(); after != before {
+				t.Errorf("the refused create changed the rows from %s to %s", before, after)
+			}
+			if ref := h.svc.refusalOf(h.request("", "POST", SubmissionsPath, ""), err, ""); ref == nil || ref.status != http.StatusServiceUnavailable {
+				t.Errorf("errResized answers %+v, want a 503", ref)
+			}
+		})
 	}
 }

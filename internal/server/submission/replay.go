@@ -12,12 +12,20 @@ import (
 
 // replayWindowMS is how long a copy of a signed request can still pass the
 // clock check: its X-Pairtime-Time may be up to ingest.MaxSkewMS ahead of
-// the server's clock when the first copy arrives, and as much behind it
-// when a later one does.
-const replayWindowMS = 2 * ingest.MaxSkewMS
+// the server's clock when the first copy arrives, and as much behind it,
+// that millisecond included, when a later one does.
+const replayWindowMS = 2*ingest.MaxSkewMS + 1
 
-// refusalStore keeps, for replayWindowMS, the refusal each signed create
-// or withdrawal got, by its device and signature. A copy of the request
+// maxKeptRefusals bounds the store. A device's rate bounds what it can
+// add, since only a request the rate admitted is kept: its burst of 30
+// and one more every 10 s, at most 90 in a window. So the store reaches
+// the bound only when about a hundred devices are refused at full rate at
+// once, and it then drops the oldest refusal first.
+const maxKeptRefusals = 10_000
+
+// refusalStore keeps, for replayWindowMS and while pairtimed runs, the
+// refusal each signed create or withdrawal its device's rate admitted
+// got, by its device and signature. A copy of the request
 // gets that refusal again instead of being checked anew, so it can't go
 // through once the refusal no longer holds, as after a withdrawal frees
 // the time a create overlapped (docs/spec/submissions-v1.md 2.2). A
@@ -59,12 +67,18 @@ func (rs *refusalStore) put(key string, k keptRefusal, nowMS int64) {
 		rs.kept = make(map[string]keptRefusal)
 	}
 	if _, ok := rs.kept[key]; !ok {
+		if len(rs.order) >= maxKeptRefusals {
+			delete(rs.kept, rs.order[0])
+			rs.order[0] = ""
+			rs.order = rs.order[1:]
+		}
 		rs.order = append(rs.order, key)
 	}
 	rs.kept[key] = k
 }
 
-// expire drops the refusals whose time is up, oldest first.
+// expire drops the refusals whose time is up, oldest first. It reslices
+// order rather than copying it, so an expiry costs only what it drops.
 func (rs *refusalStore) expire(nowMS int64) {
 	n := 0
 	for ; n < len(rs.order); n++ {
@@ -73,7 +87,8 @@ func (rs *refusalStore) expire(nowMS int64) {
 		}
 		delete(rs.kept, rs.order[n])
 	}
-	rs.order = append(rs.order[:0], rs.order[n:]...)
+	clear(rs.order[:n])
+	rs.order = rs.order[n:]
 }
 
 // recorder is the ResponseWriter a create or a withdrawal answers through.
@@ -83,7 +98,8 @@ type recorder struct {
 	status int
 	body   bytes.Buffer
 	// key is the request's device and signature, which admit sets once the
-	// signature verifies. "" keeps nothing, as for a web session.
+	// signature verifies and the device's rate admits the request. "" keeps
+	// nothing, as for a web session or a request past the rate.
 	key string
 }
 
