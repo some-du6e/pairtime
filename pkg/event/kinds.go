@@ -494,16 +494,23 @@ func (p *OTelActiveTime) check(c *checker) {
 // process chain reaches a harness session, the agent fills harness and
 // session_key from it (DESIGN 4.1 E-8).
 type CLITrack struct {
-	// Label is the text the model passed, on one line: the user's message
-	// with personal information removed, at most MaxLabelLen characters.
+	// Label is the text the model passed, its line breaks as LF: the user's
+	// message with personal information removed, at most MaxLabelLen
+	// characters.
 	// It is prompt text, so it is local. The agent redacts it again with
 	// pkg/redact, keeps it in the vault and commits it in the ledger
 	// (DESIGN 5.4).
 	Label string `json:"label,omitempty" pairtime:"local"`
 	// TextLen is the number of characters the model passed. Unlike the
-	// label it is shareable, so the length the anchor was classed by
+	// label it is shareable, so the typed length the anchor's class reads
 	// (DESIGN 5.4) survives Shareable.
 	TextLen int `json:"text_len"`
+	// LowEffort is SM 2.2's go-ahead test on the label after pkg/redact,
+	// which the ledger writer sets.
+	LowEffort bool `json:"low_effort"`
+	// ErrorSig is the label's keyed error signature, as prompt.submit's,
+	// which the scorer reads back from the record's f.es.
+	ErrorSig string `json:"error_sig,omitempty" pairtime:"local"`
 	// EnvHints are the harness variables set in the caller's environment,
 	// by name and never by value (DESIGN 4.1 E-8): each one of the closed
 	// list of EnvHint names, at most once.
@@ -517,8 +524,9 @@ func (*CLITrack) Kind() Kind        { return KindCLITrack }
 func (p *CLITrack) Validate() error { return validate(p.check) }
 
 func (p *CLITrack) check(c *checker) {
-	c.text("label", p.Label, MaxLabelLen)
+	c.lines("label", p.Label, MaxLabelLen)
 	c.count("text_len", p.TextLen)
+	c.optKey("error_sig", p.ErrorSig)
 	if len(p.EnvHints) > maxList {
 		c.addf("env_hints", "has %d entries, more than %d", len(p.EnvHints), maxList)
 	} else {

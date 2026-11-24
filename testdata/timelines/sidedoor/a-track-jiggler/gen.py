@@ -65,7 +65,9 @@ for t, label in zip(CALLS, LABELS):
     # pairtime track takes the hook path, which samples presence at once
     # (DESIGN 3.2, 3.3). The process chain gives the session and project
     # (DESIGN 4.1 E-8). The label is local and stays out of the event.
-    fx.emit(t, "cli.track", {"text_len": len(label), "log_match": "no_reader"},
+    # low_effort is SM 2.2's go-ahead test on the label (DESIGN 5.4). The labels
+    # are requests, which fail it.
+    fx.emit(t, "cli.track", {"text_len": len(label), "low_effort": False, "log_match": "no_reader"},
             source="cli", via="track", sample=True, **TRACK)
 
 events = fx.build()

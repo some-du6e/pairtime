@@ -71,9 +71,11 @@ fx.emit(SUBMIT, "prompt.submit",
 # Claude follows the AGENTS.md entry with a Bash call: pairtime track runs
 # inside it, so its environment has Claude Code's tool variables (HS 11.3),
 # and the transcript tailer has already read the user entry.
+# low_effort is SM 2.2's go-ahead test on the label (DESIGN 5.4). The label is a
+# request, which fails it.
 fx.emit(CALL, "cli.track",
-        {"text_len": TRACK_LEN, "env_hints": ["CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID"],
-         "log_match": "matched"},
+        {"text_len": TRACK_LEN, "low_effort": False,
+         "env_hints": ["CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID"], "log_match": "matched"},
         source="cli", via="track", sample=True, **CC)
 # The Bash call's PostToolUse hook (DESIGN 5.1 matches Edit, Write and Bash).
 # pairtime track prints nothing.
