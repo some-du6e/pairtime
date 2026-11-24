@@ -139,11 +139,43 @@ func TestScan(t *testing.T) {
 
 // TestScanCountsRunningHarnesses checks the count each scan gives
 // Options.Running, which keeps presence's project context live while a
-// harness session process runs (DESIGN 3.3).
+// harness session process runs (DESIGN 3.3). A harness process whose chain
+// classifies as parent_class agent_app isn't counted, since the agent
+// app's own count keeps the context live for it (D-relayed-context).
 func TestScanCountsRunningHarnesses(t *testing.T) {
 	young := []platform.Proc{
 		{PID: 5, Name: "bash", Owner: me, Start: sec(-60)},
 		{PID: 6, PPID: 5, Name: "claude", Owner: me, Start: sec(-1)},
+	}
+	// t3Desk is a Linux desktop where T3 Code's background service runs its
+	// server, t3, under systemd's user manager, beside a terminal with a
+	// shell in it and no harness.
+	t3Desk := []platform.Proc{
+		{PID: 1, Name: "systemd", PGID: 1, TTY: platform.TTYNone, Start: sec(-3600), Owner: root},
+		{PID: 1900, PPID: 1, Name: "systemd", PGID: 1900, TTY: platform.TTYNone, Start: sec(-3500), Owner: me},
+		{PID: 2400, PPID: 1900, Name: "t3", PGID: 2400, TTY: platform.TTYNone, Start: sec(-3400), Owner: me},
+		{PID: 100, PPID: 1, Name: "gnome-terminal-server", PGID: 100, TTY: platform.TTYNone, Start: sec(-600), Owner: me},
+		{PID: 110, PPID: 100, Name: "bash", PGID: 110, TTY: platform.TTYAttached, Start: sec(-590), Owner: me},
+	}
+	onT3 := func(ps ...platform.Proc) []platform.Proc { return append(slices.Clone(t3Desk), ps...) }
+	// The same claude, started by T3's server, which keeps it running in a
+	// thread between runs, or typed into the terminal's shell.
+	t3Claude := platform.Proc{PID: 5120, PPID: 2400, Name: "claude", PGID: 2400, TTY: platform.TTYNone, Start: sec(-1200), Owner: me}
+	termClaude := platform.Proc{PID: 5120, PPID: 110, Name: "claude", PGID: 5120, TTY: platform.TTYAttached, TPGID: 5120, Start: sec(-1200), Owner: me}
+	// A shell of T3's own terminal with a claude typed into it (Q12), and
+	// a script T3's server runs that runs claude.
+	t3Shell := platform.Proc{PID: 2500, PPID: 2400, Name: "bash", PGID: 2500, TTY: platform.TTYAttached, Start: sec(-900), Owner: me}
+	t3Typed := platform.Proc{PID: 2510, PPID: 2500, Name: "claude", PGID: 2510, TTY: platform.TTYAttached, TPGID: 2510, Start: sec(-600), Owner: me}
+	t3Script := platform.Proc{PID: 2600, PPID: 2400, Name: "bash", PGID: 2600, TTY: platform.TTYNone, Start: sec(-300), Owner: me}
+	t3Scripted := platform.Proc{PID: 2610, PPID: 2600, Name: "claude", PGID: 2600, TTY: platform.TTYNone, Start: sec(-300), Owner: me}
+	// t3App is T3 Code's desktop app on Linux, which runs its server as its
+	// own executable, with the claude its server keeps running.
+	t3App := []platform.Proc{
+		{PID: 1, Name: "systemd", PGID: 1, TTY: platform.TTYNone, Start: sec(-3600), Owner: root},
+		{PID: 1900, PPID: 1, Name: "systemd", PGID: 1900, TTY: platform.TTYNone, Start: sec(-3500), Owner: me},
+		{PID: 4300, PPID: 1900, Name: "t3code", PGID: 4300, TTY: platform.TTYNone, Start: sec(-3000), Owner: me},
+		{PID: 4360, PPID: 4300, Name: "t3code", PGID: 4300, TTY: platform.TTYNone, Start: sec(-2990), Owner: me},
+		{PID: 6100, PPID: 4360, Name: "claude", PGID: 4300, TTY: platform.TTYNone, Start: sec(-1200), Owner: me},
 	}
 	tests := []struct {
 		name   string
@@ -158,6 +190,17 @@ func TestScanCountsRunningHarnesses(t *testing.T) {
 		{"another user's harness doesn't count, nor one whose owner is unknown", familyPC(), nil, false, nil, 3},
 		{"a harness younger than the grace counts, though it isn't reported yet", young, nil, false, nil, 1},
 		{"with no harness the count is 0", []platform.Proc{{PID: 5, Name: "bash", Owner: me}}, nil, false, nil, 0},
+		{"a claude T3 Code's server started, which T3 keeps running between runs, doesn't count, since its parent_class is agent_app",
+			onT3(t3Claude), nil, false, nil, 0},
+		{"the same claude under a terminal counts", onT3(termClaude), nil, false, nil, 1},
+		{"a claude of T3 Code's server doesn't count once a hook claimed it either", onT3(t3Claude), nil, false, []int{5120}, 0},
+		{"a claude T3 Code's desktop app started, which runs the server as itself, doesn't count", t3App, nil, false, nil, 0},
+		{"a claude typed into T3 Code's own terminal doesn't count, since the chain skips the shell and lands on T3's server (Q12)",
+			onT3(t3Shell, t3Typed), nil, false, nil, 0},
+		{"a claude a script under T3 Code's server runs counts, since its parent_class is script_runtime",
+			onT3(t3Script, t3Scripted), nil, false, nil, 1},
+		{"beside T3 Code's own claude, a claude under a terminal counts alone", append(onT3(t3Claude), platform.Proc{
+			PID: 111, PPID: 110, Name: "claude", PGID: 111, TTY: platform.TTYAttached, TPGID: 111, Start: sec(-300), Owner: me}), nil, false, nil, 1},
 		{"a scan that can't read the table counts 0", terminal(), errors.New("no /proc"), false, nil, 0},
 		{"a scan that can't tell whose processes are whose counts 0", terminal(), nil, true, nil, 0},
 	}
@@ -644,6 +687,60 @@ func TestIntervalMatchesTheParameterTable(t *testing.T) {
 			t.Errorf("Interval = %s, but table %s has PROC_SCAN_S = %s", Interval, newest.Version(), want)
 		}
 	})
+}
+
+// TestScanListed checks what each scan hands Options.Listed, where the
+// agent looks for T3 Code's server (DESIGN 3.3): the table it read, named
+// as on its OS, with the owner it reports for, and nothing from a scan
+// that failed, so a reader that stops working can't hold T3 running.
+func TestScanListed(t *testing.T) {
+	type listing struct {
+		goos, self string
+		pids       []int
+	}
+	tests := []struct {
+		name   string
+		procs  []platform.Proc
+		err    error
+		noSelf bool
+		want   listing
+	}{
+		{"a scan hands over every process it read, whoever owns it", familyPC(), nil, false,
+			listing{platform.Linux, me, pidsOfProcs(platform.NewTable(platform.Linux, familyPC()).Procs())}},
+		{"a scan that can't read the table hands over none", terminal(), errors.New("no /proc"), false, listing{platform.Linux, me, nil}},
+		{"a scan that can't tell whose processes are whose hands over none", terminal(), nil, true, listing{platform.Linux, "", nil}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []listing
+			s := New(Options{
+				Read: (&fake{procs: tt.procs, err: tt.err}).read,
+				OS:   platform.Linux,
+				Self: me,
+				Boot: boot,
+				Now:  func() time.Time { return sec(0) },
+				Listed: func(goos string, procs []platform.Proc, self string) {
+					got = append(got, listing{goos, self, pidsOfProcs(procs)})
+				},
+			})
+			if tt.noSelf {
+				s.self = ""
+			}
+			s.Scan()
+			if len(got) != 1 || got[0].goos != tt.want.goos || got[0].self != tt.want.self || !slices.Equal(got[0].pids, tt.want.pids) {
+				t.Errorf("Listed got %+v, want %+v once", got, tt.want)
+			}
+		})
+	}
+}
+
+// pidsOfProcs returns the pids of procs, in order, nil for none.
+func pidsOfProcs(procs []platform.Proc) []int {
+	var out []int
+	for _, p := range procs {
+		out = append(out, p.PID)
+	}
+	return out
 }
 
 func TestScanError(t *testing.T) {

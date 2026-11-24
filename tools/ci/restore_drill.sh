@@ -349,7 +349,7 @@ read_only() {
 	# pairtimed serve alone, without Litestream, so nothing writes to the
 	# buckets; with no age recipient it takes no snapshot.
 	compose run -d --name drill-serve pairtimed pairtimed serve > /dev/null
-	if ! timeout 180 bash -c 'until curl -fsS -o /dev/null http://127.0.0.1:9091/readyz; do sleep 2; done'; then
+	if ! timeout 180 bash -c 'until curl -fs -o /dev/null http://127.0.0.1:9091/readyz; do sleep 2; done'; then
 		curl -sS http://127.0.0.1:9091/readyz || true
 		docker logs drill-serve
 		fail "the restored copy wasn't ready within 3 minutes"

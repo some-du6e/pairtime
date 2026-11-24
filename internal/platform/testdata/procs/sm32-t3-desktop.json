@@ -1,0 +1,44 @@
+{
+  "case": "SM 3.2 rule 3's T3 Code window: the desktop app runs its server as its own executable, a child of the window's process, and that server runs Claude Code, so the session is agent_app (SM 1.2) and the window that hosts it is an agent app's (SM 2.2 rule 6 at the message's stamp). The executable is t3code on Linux, here from an AppImage started from the desktop's launcher, and the app's product name, T3 Code (Beta), on macOS and Windows.",
+  "source": "Written by hand from SM 1.2 and 3.2 rule 3 and from T3 Code's source at d8f3feff (apps/desktop/src/backend/DesktopBackendConfiguration.ts starts the server with process.execPath and ELECTRON_RUN_AS_NODE=1; scripts/build-desktop-artifact.ts names the executable), not recorded on a machine. The window's own helper processes, which Electron starts too, are left out: no session runs under them.",
+  "tables": [
+    {
+      "os": "linux",
+      "harness_pid": 6100,
+      "want": {"harness": "claude_code", "parent_class": "agent_app", "entrypoint": "unknown", "has_tty": false, "decided_by": "t3code", "script_shell": false},
+      "sm_parent_class": "agent_app",
+      "procs": [
+        {"pid": 1, "ppid": 0, "name": "systemd", "pgid": 1, "tty": "none", "start": "2026-11-23T08:00:00Z"},
+        {"pid": 1900, "ppid": 1, "name": "systemd", "pgid": 1900, "tty": "none", "start": "2026-11-23T08:00:05Z"},
+        {"pid": 4300, "ppid": 1900, "name": "t3code", "pgid": 4300, "tty": "none", "start": "2026-11-23T09:30:00Z"},
+        {"pid": 4360, "ppid": 4300, "name": "t3code", "pgid": 4300, "tty": "none", "start": "2026-11-23T09:30:02Z"},
+        {"pid": 6100, "ppid": 4360, "name": "claude", "pgid": 4300, "tty": "none", "start": "2026-11-23T14:02:11Z"}
+      ]
+    },
+    {
+      "os": "darwin",
+      "harness_pid": 2210,
+      "want": {"harness": "claude_code", "parent_class": "agent_app", "entrypoint": "unknown", "has_tty": false, "decided_by": "T3 Code (Beta)", "script_shell": false},
+      "sm_parent_class": "agent_app",
+      "procs": [
+        {"pid": 1, "ppid": 0, "name": "launchd", "pgid": 1, "tty": "none", "start": "2026-11-23T08:00:00Z"},
+        {"pid": 912, "ppid": 1, "name": "T3 Code (Beta)", "pgid": 912, "tty": "none", "start": "2026-11-23T09:30:00Z"},
+        {"pid": 930, "ppid": 912, "name": "T3 Code (Beta)", "pgid": 912, "tty": "none", "start": "2026-11-23T09:30:02Z"},
+        {"pid": 2210, "ppid": 930, "name": "claude", "pgid": 912, "tty": "none", "start": "2026-11-23T14:02:11Z"}
+      ]
+    },
+    {
+      "os": "windows",
+      "harness_pid": 9820,
+      "want": {"harness": "claude_code", "parent_class": "agent_app", "entrypoint": "unknown", "has_tty": false, "decided_by": "T3 Code (Beta)", "script_shell": false},
+      "sm_parent_class": "agent_app",
+      "procs": [
+        {"pid": 4, "ppid": 0, "name": "System", "start": "2026-11-23T08:00:00Z"},
+        {"pid": 4520, "ppid": 4480, "name": "explorer", "start": "2026-11-23T08:01:00Z"},
+        {"pid": 9800, "ppid": 4520, "name": "T3 Code (Beta)", "start": "2026-11-23T09:30:00Z"},
+        {"pid": 9810, "ppid": 9800, "name": "T3 Code (Beta)", "start": "2026-11-23T09:30:02Z"},
+        {"pid": 9820, "ppid": 9810, "name": "claude", "start": "2026-11-23T14:02:11Z"}
+      ]
+    }
+  ]
+}
