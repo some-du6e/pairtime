@@ -49,8 +49,9 @@ const (
 	HeaderSize = 1 + KeyIDSize + PointSize + NonceSize
 	// Overhead is how much longer a blob is than its plaintext.
 	Overhead = HeaderSize + TagSize
-	// MaxNameSize is the most bytes a submission id or a part may have.
-	MaxNameSize = 128
+	// MaxNameSize is the most bytes a submission id or a part may have,
+	// the most one length byte can say.
+	MaxNameSize = 255
 )
 
 // label starts HKDF's info (seal-v1 2).
@@ -74,9 +75,15 @@ var (
 
 // Context is what a blob is sealed under: the submission it belongs to
 // and which of its parts it holds (seal-v1 2). Both enter the key
-// derivation, so a blob opens only under the Context it was sealed under.
+// derivation, so a blob a client sealed opens only under the Context it
+// was sealed under, and nobody without the key it is sealed to can move it
+// to another. AES-GCM doesn't commit to its key, though, so a sealer can
+// build one blob that opens under two Contexts it chose. What keeps a
+// blob to one submission and part is the evidence index's row for it and
+// the content's checks against its commitments.
 type Context struct {
-	// Submission is the submission's id.
+	// Submission is the server's id for the submission, as the
+	// submissions API names it, and never the program's external_id.
 	Submission string
 	// Part names the part of the submission the blob holds, such as its
 	// metadata reveal or its content reveal.
@@ -128,8 +135,10 @@ func keyID(pub *ecdh.PublicKey) [KeyIDSize]byte {
 
 // ParsePublicKey returns the P-256 public key whose uncompressed point is
 // b, as a blob's header holds it and WebCrypto's exportKey("raw") gives
-// it. It refuses a compressed point, the point at infinity and a point
-// off the curve.
+// it, after SEC 1 3.2.2's checks: the 0x04 prefix, each coordinate below
+// the field prime and the point on the curve. So it refuses a compressed
+// or hybrid point, the point at infinity, a coordinate written as itself
+// plus the prime, and a point off the curve.
 func ParsePublicKey(b []byte) (*ecdh.PublicKey, error) {
 	pub, err := ecdh.P256().NewPublicKey(b)
 	if err != nil {
@@ -140,8 +149,11 @@ func ParsePublicKey(b []byte) (*ecdh.PublicKey, error) {
 
 // ParseSPKI returns the P-256 public key in der, a DER
 // SubjectPublicKeyInfo, as WebCrypto's exportKey("spki") and OpenSSL write
-// one. It refuses a key of another kind or on another curve, explicit
-// curve parameters, a compressed point and a point off the curve.
+// one: 91 bytes, id-ecPublicKey with the named curve P-256 and an
+// uncompressed point, which ParsePublicKey's checks then hold to. It
+// refuses a key of another kind or on another curve, explicit curve
+// parameters, a compressed point and a point off the curve. A key's id is
+// over its point, whichever form it came in.
 func ParseSPKI(der []byte) (*ecdh.PublicKey, error) {
 	k, err := x509.ParsePKIXPublicKey(der)
 	if err != nil {

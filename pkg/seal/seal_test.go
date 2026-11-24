@@ -151,7 +151,7 @@ func TestRoundTrip(t *testing.T) {
 	for c := byte(0x21); c <= 0x7e; c++ {
 		printable.WriteByte(c)
 	}
-	long := (printable.String() + printable.String())[:MaxNameSize]
+	long := strings.Repeat(printable.String(), 3)[:MaxNameSize]
 	tests := []struct {
 		name string
 		c    Context
@@ -161,7 +161,7 @@ func TestRoundTrip(t *testing.T) {
 		{name: "a one-byte plaintext round-trips", c: example.c, m: []byte{0}},
 		{name: "a megabyte of random bytes round-trips", c: example.c, m: mega},
 		{name: "names of one byte round-trip", c: Context{Submission: "s", Part: "p"}, m: []byte("x")},
-		{name: "names of 128 bytes, every printable ASCII character among them, round-trip", c: Context{Submission: long, Part: long}, m: []byte("x")},
+		{name: "names of 255 bytes, every printable ASCII character among them, round-trip", c: Context{Submission: long, Part: long}, m: []byte("x")},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -273,10 +273,10 @@ func TestContext(t *testing.T) {
 		ok   bool
 	}{
 		{name: "the lowest and highest printable characters are names", c: Context{Submission: "!", Part: "~"}, ok: true},
-		{name: "a name of 128 bytes is one", c: Context{Submission: strings.Repeat("s", MaxNameSize), Part: "p"}, ok: true},
+		{name: "a name of 255 bytes, the most its length byte says, is one", c: Context{Submission: strings.Repeat("s", 255), Part: "p"}, ok: true},
 		{name: "an empty submission id is refused", c: Context{Part: "p"}},
 		{name: "an empty part is refused", c: Context{Submission: "s"}},
-		{name: "a name of 129 bytes is refused", c: Context{Submission: "s", Part: strings.Repeat("p", MaxNameSize+1)}},
+		{name: "a name of 256 bytes is refused, since its length doesn't fit a byte", c: Context{Submission: "s", Part: strings.Repeat("p", 256)}},
 		{name: "a space is refused", c: Context{Submission: "a b", Part: "p"}},
 		{name: "a tab is refused", c: Context{Submission: "s", Part: "a\tb"}},
 		{name: "DEL is refused", c: Context{Submission: "s\x7f", Part: "p"}},
@@ -371,6 +371,11 @@ func TestParsePublicKey(t *testing.T) {
 		{name: "the point at infinity is refused", b: []byte{0}},
 		{name: "a point off the curve is refused", b: offCurve},
 		{name: "a point a byte short is refused", b: point[:len(point)-1]},
+		{name: "a point with X = 5, on the curve, is a key", ok: true,
+			b: mustHex(t, "040000000000000000000000000000000000000000000000000000000000000005459243b9aa581806fe913bce99817ade11ca503c64d9a3c533415c083248fbcc")},
+		{name: "the same point with X written as 5 plus the field prime is refused, which a decoder that reduces would take",
+			b: mustHex(t, "04ffffffff00000001000000000000000000000001000000000000000000000004459243b9aa581806fe913bce99817ade11ca503c64d9a3c533415c083248fbcc")},
+		{name: "a hybrid point, prefix 0x06 or 0x07, is refused", b: append([]byte{0x06 | point[len(point)-1]&1}, point[1:]...)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -378,7 +383,7 @@ func TestParsePublicKey(t *testing.T) {
 			if (err == nil) != tt.ok {
 				t.Fatalf("ParsePublicKey error = %v, want ok %v", err, tt.ok)
 			}
-			if tt.ok && !got.Equal(key) {
+			if tt.ok && !bytes.Equal(got.Bytes(), tt.b) {
 				t.Error("ParsePublicKey gave another key")
 			}
 		})

@@ -5,8 +5,9 @@ Status: the format `pkg/seal` writes and reads (WP-SB2; DESIGN 7.6). A client se
 ## 1. Notation
 
 - `||` joins byte strings. `u8(x)` is `x` as one byte, and `ascii(x)` is the bytes of the ASCII string `x`.
-- A P-256 public key is written as its uncompressed point, 65 bytes: `0x04 || X || Y`, each coordinate 32 bytes big-endian (SEC 1 2.3.3). It is what WebCrypto's `exportKey("raw")` gives for an ECDH P-256 key.
-- `key_id(K)` is the first 8 bytes of `SHA-256(K)`, over the 65-byte point. In lowercase hex it is the 16 digits the keys document gives as the evidence key's `key_id` (keys-v1 2) and `pairtimed keys show` prints.
+- `p` is P-256's field prime, `ffffffff00000001000000000000000000000000ffffffffffffffffffffffff`.
+- A P-256 public key is written as its uncompressed point, 65 bytes: `0x04 || X || Y`, each coordinate 32 bytes big-endian (SEC 1 2.3.3). It is what WebCrypto's `exportKey("raw")` gives for an ECDH P-256 key. A reader checks a point as SEC 1 3.2.2 says before it uses one: the first byte is `0x04`, `X` and `Y` are each below `p`, and the point is on the curve. So it refuses a compressed or hybrid point, the point at infinity, a coordinate written as itself plus `p`, and a point off the curve.
+- `key_id(P)` is the first 8 bytes of `SHA-256(P)`, over the 65-byte point of a public key `P`. In lowercase hex it is the 16 digits the keys document gives as the evidence key's `key_id` (keys-v1 2) and `pairtimed keys show` prints.
 
 ## 2. What a blob is sealed under
 
@@ -16,7 +17,10 @@ Each blob belongs to one submission and holds one part of it, such as its metada
 info = ascii("pairtime/v1/seal") || u8(len(submission_id)) || ascii(submission_id) || u8(len(part)) || ascii(part)
 ```
 
-`submission_id` and `part` are each 1 to 128 bytes of printable ASCII without spaces, 0x21 to 0x7e. A blob opens only under the `submission_id` and `part` it was sealed under, so a server can't take a blob uploaded for one submission or part as another's.
+- `submission_id` is the server's id for the submission, the `:id` of `/api/v1/submissions/:id` exactly as WP-SB1 returns it, and never the program's `external_id`. The evidence index stores the same string. If WP-SB1's ids are integers, they are written in decimal without leading zeros.
+- `submission_id` and `part` are each 1 to 255 bytes of printable ASCII without spaces, 0x21 to 0x7e. Sealing and opening refuse a name outside that before they compute `info`, so an implementation that counts UTF-16 units or encodes another way refuses instead of deriving another key.
+
+A blob a client sealed opens only under the `submission_id` and `part` it was sealed under, so nobody without the key it is sealed to can move it to another submission's or part's row. AES-GCM doesn't commit to its key, so a sealer can build one blob that opens under two pairs it chose. What keeps a blob to one submission and part is the evidence index's row for it (WP-SB4) and the content's checks against its commitments.
 
 ## 3. The blob
 
@@ -34,42 +38,50 @@ Bytes 0 to 85 are the header. A blob is 102 bytes longer than its plaintext.
 
 To seal a plaintext `m` to a P-256 public key `R` under a `submission_id` and `part`:
 
-1. Make a new P-256 key pair, `e` and its public key `E`, from a secure random source. Each blob gets its own.
-2. `Z` is the ECDH shared secret of `e` and `R`: the 32-byte X coordinate of `e·R` (SEC 1 3.3.1). In WebCrypto it is `deriveBits` with ECDH and a length of 256 bits.
-3. `K = HKDF-SHA256(salt = the empty string, IKM = Z, info, L = 32)` (RFC 5869). An empty salt gives the same key as 32 zero bytes, which is the salt RFC 5869 uses when none is given.
-4. `n` is 12 random bytes.
-5. `header = u8(1) || key_id(R) || E || n`.
-6. `c = AES-256-GCM-Encrypt(key = K, nonce = n, plaintext = m, additional data = header)`, with a 128-bit tag at the end of `c`.
-7. The blob is `header || c`.
+1. Check the names as 2 says and `R` as 1 says. A client takes `R` from the keys document's `evidence_key.public_key`, and refuses a document whose `evidence_key.key_id` isn't `key_id(R)`.
+2. Make a new P-256 key pair, `e` and its public key `E`, from a secure random source. Each blob gets its own.
+3. `Z` is the ECDH shared secret of `e` and `R`: the 32-byte X coordinate of `e·R` (SEC 1 3.3.1). In WebCrypto it is `deriveBits` with ECDH and a length of 256 bits.
+4. `K = HKDF-SHA256(salt = the empty string, IKM = Z, info, L = 32)` (RFC 5869). An empty salt gives the same key as 32 zero bytes, which is the salt RFC 5869 uses when none is given.
+5. `n` is 12 random bytes.
+6. `header = u8(1) || key_id(R) || E || n`.
+7. `c = AES-256-GCM-Encrypt(key = K, nonce = n, plaintext = m, additional data = header)`, with a 128-bit tag at the end of `c`.
+8. The blob is `header || c`.
 
 ## 5. Opening
 
 To open a blob with the private key `r` of `R`, for an expected `submission_id` and `part`:
 
-1. A blob shorter than 102 bytes, or whose version isn't 1, isn't a sealed blob.
-2. Its `key_id` must be `key_id(R)`. A blob that names another key is sealed to that key, and this one doesn't try it.
-3. `E` must be a point on P-256 in uncompressed form. A compressed point, the point at infinity and a point off the curve aren't sealed blobs.
-4. `Z` is the X coordinate of `r·E`, and `K` comes from `Z` and the expected `submission_id` and `part`, as in 4 step 3.
-5. AES-256-GCM decrypts `c` with `K`, the nonce `n` and the header as additional data. A tag that doesn't verify means the blob was changed or isn't sealed under that `submission_id` and `part`. Either way nothing is returned.
+1. Check the names as 2 says.
+2. A blob shorter than 102 bytes, or whose version isn't 1, isn't a sealed blob.
+3. Its `key_id` must be `key_id(R)`. A blob that names another key is sealed to that key, and this one doesn't try it.
+4. `E` must pass the checks in 1. A blob whose `E` fails them isn't a sealed blob.
+5. `Z` is the X coordinate of `r·E`, and `K` comes from `Z` and the expected `submission_id` and `part`, as in 4 step 4.
+6. AES-256-GCM decrypts `c` with `K`, the nonce `n` and the header as additional data. A tag that doesn't verify means the blob was changed or isn't sealed under that `submission_id` and `part`. Either way nothing is returned.
 
 ## 6. Re-sealing
 
 A re-seal opens a blob and seals its plaintext again under the same `submission_id` and `part`, with a new ephemeral key and a new nonce. The new blob has other bytes and another SHA-256.
 
-- **To a viewer.** The review page makes an ephemeral P-256 key pair with WebCrypto and sends its public key with `GET /api/v1/submissions/:id/reveals`. `pairtimed` opens each stored blob with the evidence key it names and re-seals the plaintext to the viewer's key, in memory, and the browser opens the answer with its private key (DESIGN 7.6). `pkg/seal` reads the viewer's key as the 65-byte point or as a DER SubjectPublicKeyInfo, which is what `exportKey("spki")` gives.
+- **To a viewer.** The review page makes an ephemeral P-256 key pair with WebCrypto and sends its public key with `GET /api/v1/submissions/:id/reveals`. `pairtimed` opens each stored blob with the evidence key it names and re-seals the plaintext to the viewer's key, in memory, and the browser opens the answer with its private key (DESIGN 7.6). `pkg/seal` takes the viewer's key as the 65-byte point, or as the 91-byte DER SubjectPublicKeyInfo that `exportKey("spki")` gives: id-ecPublicKey with the named curve P-256 (OID 1.2.840.10045.3.1.7) and an uncompressed point. It refuses any other SubjectPublicKeyInfo and checks the point as 1 says. The re-sealed blob's `key_id` is over the 65-byte point, whichever form the key came in.
 - **To a new evidence key.** After a rotation, WP-SB9's pass re-seals each stored blob sealed to the retired key to the current one (DESIGN 10.2). The new blob names the new key, and the retired key can't open it.
 
 ## 7. The evidence keys
 
-The evidence key is a P-256 key pair. `pairtimed init` makes it, and its private half is `/data/keys/evidence.p256` (DESIGN 7.6, 10.2). The keys document lists the current evidence key alone (keys-v1 2), and a client seals each upload to that key. `pairtimed` records each evidence key's validity in `key_history` under the kind `evidence`, as it does for the server keys (keys-v1 3).
+The evidence key is a P-256 key pair. `pairtimed init` makes it, and its private half is `/data/keys/evidence.p256` (DESIGN 7.6, 10.2). The keys document lists the current evidence key alone (keys-v1 2), and a client seals each upload to that key.
 
-The server holds its evidence keys in a ring: the current key, and any retired key whose private half is still on disk, because blobs stored before a rotation stay sealed to it until WP-SB9's pass has re-sealed them. The ring opens a blob with the key its `key_id` names, and it tells an upload sealed to the current key from one sealed to any other, which WP-SB4 refuses with `409 evidence_key_retired`.
+`pairtimed` records each evidence key's validity in `key_history` under the kind `evidence`, apart from the server keys. An evidence key is valid from the millisecond of the start that first records it, since nothing was sealed to it before. A retired evidence key's validity ends the millisecond before the start that switches away from it (WP-SB9). At most one evidence key is current, and the document's `evidence_key` always has `valid_to` `null`, because it lists only that one.
 
-Until WP-SB9 builds `pairtimed keys rotate-evidence`, an evidence key stays current from the start that first recorded it, and `pairtimed serve` refuses to start with any other key in `evidence.p256`. Blobs sealed to the recorded key would otherwise stop opening.
+The server holds its evidence keys in a ring: the current key, and any retired key whose private half is still on disk as `evidence-<key id>.p256`, because blobs stored before a rotation stay sealed to it until WP-SB9's pass has re-sealed them.
+
+- The ring opens a blob with the key its `key_id` names. A blob that names a key the ring doesn't hold fails with an error of its own, apart from "isn't a sealed blob" and "doesn't open". For a stored blob that is a server fault, and never makes the item unavailable (DESIGN 7.5 step 8): a key file is missing from `/data/keys`, and its backup brings it back.
+- The ring tells an upload that names the current key from one that names any other, which WP-SB4 refuses with `409 evidence_key_retired`. A `key_id` is only the sealer's claim, though. Only an open under the upload's own `submission_id` and `part` shows that the blob is sealed to that key under that pair, so the server opens an upload before it stores it, and refuses one that doesn't open.
+- The keys document's `evidence_key` is the ring's current key, or `null` while the ring holds none, as when `/data/keys` has no keys. A client never gets a key the server can't open with.
+
+From the first start that records an evidence key, `pairtimed serve` refuses to start with an `evidence.p256` that isn't the key `key_history` records as current, since the stored blobs are sealed to that key. WP-SB9 narrows this rule and doesn't replace it. A new `evidence.p256` is a rotation only when the recorded key's private half is beside it as `evidence-<its key id>.p256`, and that start switches to the new key. `serve` never starts with a key `key_history` records as retired.
 
 ## 8. Worked example
 
-These values come from Python's `cryptography` package, which runs OpenSSL, and from this spec's steps. No pairtime code computed them. `pkg/seal`'s tests seal with this ephemeral key and nonce and must get this blob byte for byte, and must open it. Each scalar is the SHA-256 of an ASCII label, read as a big-endian integer.
+These values come from Python's `cryptography` package, which runs OpenSSL, and from this spec's steps. No pairtime code computed them, and a second reviewer recomputed them with P-256, HKDF and AES-GCM written in plain Python. `pkg/seal`'s tests seal with this ephemeral key and nonce and must get this blob byte for byte, and must open it. Each scalar is the SHA-256 of an ASCII label, read as a big-endian integer.
 
 | Value | Hex |
 |---|---|
@@ -95,14 +107,28 @@ c1787d953f69c6a49c87743ba9269fc22e5171f02d6e08553f06669807e41082
 b6dd
 ```
 
+WebCrypto imports a private key only as a JWK or as PKCS #8, so here is `r` as a JWK:
+
+```json
+{"kty":"EC","crv":"P-256","d":"7DkkYdvnHEs3304OaWeFuH61Hj9yvT-jj0lq3C93d4o","x":"Bik9_uhD4KgGmkzI3OUjdwxY7ZzrYVroKL8x7qbFn9E","y":"PxYyzNcXpi_EOYt-zCkB-JTPEQN-lGj5VthsxqLkG-Q"}
+```
+
+`R` as a SubjectPublicKeyInfo is these 26 bytes followed by the 65 bytes of `R`:
+
+```text
+3059301306072a8648ce3d020106082a8648ce3d030107034200
+```
+
 ## 9. Decisions this spec makes
 
 DESIGN 7.6 names the primitives and the info string, and PLAN.md's WP-SB2 names the blob's fields. These are what they leave open, decided here:
 
 1. `submission_id` and `part` enter `info` each after its length in one byte, as ledger-v1 writes `device_id` into a leaf, so no two pairs give the same `info`. DESIGN 7.6 writes the string as `"pairtime/v1/seal" || submission_id || part`, and the plain join would let `("ab", "c")` and `("a", "bc")` share a key.
-2. Both are printable ASCII without spaces, so Go and JavaScript encode them to the same bytes with no Unicode normalization in between.
-3. The salt is empty. `Z` is already uniform enough for HKDF's extract step, and an empty salt is one less value for a second implementation to get wrong.
-4. The whole header is the additional data. `Z` is only the X coordinate of `e·R`, so `E` and its negation give the same `Z`. Without the header in the tag, a blob with `E` negated would open to the same plaintext under another SHA-256. With it, any changed header byte fails to open, the key id and the nonce included.
-5. The nonce is random and travels in the blob, as WP-SB2 asks, though each `K` seals one plaintext only, since every blob has its own ephemeral key.
-6. The key id is 8 bytes, the id the keys document and `pairtimed keys show` already use for the evidence key, so a blob says which key opens it without the full point.
-7. A version byte leads the blob, so a later format can change anything after it.
+2. Both are printable ASCII without spaces, so Go and JavaScript encode them to the same bytes with no Unicode normalization in between, and each may take the 255 bytes its length byte can say. WP-SB6 names a part after a drawn item, and an item's `device_id` alone may be 128 characters (device-auth-v1 1).
+3. `submission_id` is the server's own id, because every party that seals or opens has it: the client from WP-SB1's answer, the server and the browser from the URL.
+4. The salt is empty. Each `Z` comes from a new ephemeral key, so it holds about 255 bits of entropy, and HKDF-Extract under a fixed salt is what turns it into a uniform key. RFC 5869 3.1 lets the salt be left out, and RFC 9180's DHKEM extracts its shared secret with an empty salt too. That is one less value for a second implementation to get wrong.
+5. The whole header is the additional data. `Z` is only the X coordinate of `e·R`, so `E` and its negation give the same `Z`. Without the header in the tag, a blob with `E` negated would open to the same plaintext under another SHA-256. With it, any changed header byte fails to open, the key id and the nonce included.
+6. The nonce is random and travels in the blob, as WP-SB2 asks, though each `K` seals one plaintext only, since every blob has its own ephemeral key.
+7. There is no key commitment. AES-GCM doesn't commit to its key, so a sealer can make one blob open under two pairs it picked, as 2 says. That gains a teen nothing: the server opens each blob under its index row's pair and checks the content against its commitments. A commitment would add a header field to every blob and a step to every implementation.
+8. The key id is 8 bytes, the id the keys document and `pairtimed keys show` already use for the evidence key, so a blob says which key opens it without the full point.
+9. A version byte leads the blob, so a later format can change anything after it.

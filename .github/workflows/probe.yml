@@ -3,7 +3,8 @@
 # Looks at a deployed server from GitHub's network, outside the host
 # (docs/PLAN.md, WP-OP1 and WP-OP2): TLS that verifies and isn't about to
 # expire, /healthz answering 200 ok, and /.well-known/pairtime-keys.json
-# parsing. By hand only:
+# in its format, with one current server key and, once the server holds
+# one, its evidence key (docs/spec/keys-v1.md). By hand only:
 #
 #   gh workflow run probe.yml -f host=pairtime.karimeltaib.com
 #
@@ -79,7 +80,7 @@ jobs:
           fi
           echo "https://$HOST/healthz answered 200 ok"
 
-      - name: /.well-known/pairtime-keys.json parses
+      - name: /.well-known/pairtime-keys.json is a keys document with one current server key
         run: |
           code=$(curl -sS -A "$AGENT" --max-time 20 -D "$RUNNER_TEMP/keys.h" -o "$RUNNER_TEMP/keys.json" -w '%{http_code}' "https://$HOST/.well-known/pairtime-keys.json") || {
             echo "::error::https://$HOST/.well-known/pairtime-keys.json didn't answer"
@@ -90,7 +91,7 @@ jobs:
             exit 1
           fi
           if [ "$code" = 404 ]; then
-            echo "::error::https://$HOST/.well-known/pairtime-keys.json is 404: the server keys' public document arrives with WP-SV17, which WP-OP2 waits for"
+            echo "::error::https://$HOST/.well-known/pairtime-keys.json is 404: the deployed pairtimed predates WP-SV17, which serves it"
             exit 1
           fi
           if [ "$code" != 200 ] || ! jq -e 'type == "object"' "$RUNNER_TEMP/keys.json" > /dev/null; then
@@ -99,3 +100,30 @@ jobs:
             exit 1
           fi
           jq . "$RUNNER_TEMP/keys.json"
+          doc="$RUNNER_TEMP/keys.json"
+          # docs/spec/keys-v1.md 2: the format, then each key's members. A
+          # key id is 16 lowercase hex digits, a server key 32 bytes in hex,
+          # and the evidence key an uncompressed P-256 point in hex.
+          if ! jq -e '.format == "pairtime-keys-v1"' "$doc" > /dev/null; then
+            echo "::error::the keys document's format is $(jq -c .format "$doc"), not pairtime-keys-v1"
+            exit 1
+          fi
+          shape='type == "object" and (.key_id | type == "string" and test("^[0-9a-f]{16}$")) and (.valid_from | type == "number") and (.valid_to == null or (.valid_to | type == "number"))'
+          if ! jq -e "(.server_keys | type == \"array\") and all(.server_keys[]; $shape and (.public_key | type == \"string\" and test(\"^[0-9a-f]{64}$\")))" "$doc" > /dev/null; then
+            echo "::error::the keys document's server_keys isn't a list of keys with a 16-digit key_id, a 64-digit public_key, a valid_from and a valid_to"
+            exit 1
+          fi
+          current=$(jq '[.server_keys[] | select(.valid_to == null)] | length' "$doc")
+          if [ "$current" != 1 ]; then
+            echo "::error::the keys document lists $current current server keys, and a server has exactly one (docs/spec/keys-v1.md 3)"
+            exit 1
+          fi
+          echo "the current server key is $(jq -r '.server_keys[] | select(.valid_to == null) | .key_id' "$doc")"
+          if jq -e '.evidence_key == null' "$doc" > /dev/null; then
+            echo "::notice::the keys document lists no evidence key: the server holds none yet, or its pairtimed predates WP-SB2"
+          elif ! jq -e ".evidence_key | $shape and .valid_to == null and (.public_key | type == \"string\" and test(\"^04[0-9a-f]{128}$\"))" "$doc" > /dev/null; then
+            echo "::error::the keys document's evidence_key isn't one current key with a 16-digit key_id and an uncompressed P-256 point as public_key (docs/spec/seal-v1.md 7)"
+            exit 1
+          else
+            echo "the evidence key is $(jq -r .evidence_key.key_id "$doc")"
+          fi
