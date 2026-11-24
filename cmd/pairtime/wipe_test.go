@@ -177,9 +177,49 @@ func TestPrivacyDelete(t *testing.T) {
 				}
 			},
 			check: func(t *testing.T, dir, out string) {
-				const stays = ". Your settings in config.toml stay, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back.\nLeft alone: "
+				const stays = ". Your settings in config.toml stay, all but the names you gave your projects, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back.\nLeft alone: "
 				if !strings.Contains(out, "Deleted everything pairtime recorded in ") || !strings.Contains(out, stays) {
 					t.Errorf("the result doesn't say what stays and what was left alone:\n%s", out)
+				}
+			},
+		},
+		{
+			name: "the names the teen gave their projects go from config.toml, and every other setting stays byte for byte",
+			fill: true, mode: config.Local, args: []string{"--yes"},
+			prepare: func(t *testing.T, dir string) {
+				cfg := "mode = \"local\"\n\n[display]\nshadow = false\n\n[projects." + wipeProjectKey + "]\nname = \"chip8-emulator\"\nonline = true\n"
+				if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, dir, out string) {
+				got, err := os.ReadFile(filepath.Join(dir, "config.toml"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if want := "mode = \"local\"\n\n[display]\nshadow = false\n\n"; string(got) != want {
+					t.Errorf("config.toml is\n%q\nwant\n%q", got, want)
+				}
+				if !strings.Contains(out, "Your settings in config.toml stay, all but the names you gave your projects, and so does install's record") {
+					t.Errorf("the result doesn't say the names went:\n%s", out)
+				}
+			},
+		},
+		{
+			name: "a config.toml that spells projects in another case keeps its names, which the result names as left alone, and the exit status is 1",
+			fill: true, mode: config.Local, args: []string{"--yes"}, wantCode: 1,
+			prepare: func(t *testing.T, dir string) {
+				cfg := "mode = \"local\"\n\n[Projects." + wipeProjectKey + "]\nname = \"chip8-emulator\"\n"
+				if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, dir, out string) {
+				if got, err := os.ReadFile(filepath.Join(dir, "config.toml")); err != nil || !strings.Contains(string(got), "[Projects."+wipeProjectKey+"]") {
+					t.Errorf("config.toml is %q (%v), want it as it was", got, err)
+				}
+				if !strings.Contains(out, "Your settings in config.toml stay, and so does install's record") || !strings.Contains(out, "Left alone: config.toml still holds the names you gave your projects (") {
+					t.Errorf("the result doesn't say the names stayed:\n%s", out)
 				}
 			},
 		},
@@ -258,6 +298,16 @@ func TestPrivacyDeleteAgent(t *testing.T) {
 	})
 	waitForAgent(t, ptHome)
 	before := waitForKey(t, ptHome, "")
+	dirs, err := home.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A name the teen gave a project, set while the agent runs. The default
+	// config.toml's comments show an example table, so this one's label is
+	// another.
+	if err := config.ShowName(dirs.ConfigFile(), wipeProjectKey, "robotics-club"); err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name  string
@@ -288,6 +338,27 @@ func TestPrivacyDeleteAgent(t *testing.T) {
 				stopAtCleanup(t, pf.PID)
 			},
 		},
+		{
+			// privacy delete stops the agent before the edit and starts it
+			// again after, so no copy of config.toml an agent read writes
+			// the names back.
+			name: "the names the teen gave their projects are gone from config.toml, also once the agent runs again",
+			check: func(t *testing.T, out string) {
+				waitForKey(t, ptHome, before)
+				data, err := os.ReadFile(dirs.ConfigFile())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if cfg, _ := config.Parse(data); cfg.Projects != nil || strings.Contains(string(data), "robotics-club") {
+					t.Errorf("config.toml still names a project:\n%s", data)
+				}
+				for _, line := range strings.Split(string(data), "\n") {
+					if t2 := strings.TrimSpace(line); strings.HasPrefix(t2, "[projects.") {
+						t.Errorf("config.toml still has the table %s:\n%s", t2, data)
+					}
+				}
+			},
+		},
 	}
 	var out, errOut bytes.Buffer
 	if code := run([]string{"privacy", "delete", "--yes"}, &out, &errOut); code != 0 {
@@ -297,6 +368,10 @@ func TestPrivacyDeleteAgent(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) { tt.check(t, out.String()) })
 	}
 }
+
+// wipeProjectKey is the key of a project the tests above name, in the form
+// the git adapter's keys have.
+const wipeProjectKey = "g7c41e9a2d05b8f63e1a94c7d2b6f0e85"
 
 // waitForKey waits up to 30 s for the keystore in dir to hold a device key
 // whose id isn't not, and returns the id.

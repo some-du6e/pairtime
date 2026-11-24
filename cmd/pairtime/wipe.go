@@ -32,9 +32,10 @@ be submitted any more. Copies that a backup or a synced folder already
 holds stay as they are, the key's file too when pairtime doctor says
 pairtime keeps its key in a file.
 
-pairtime itself and your settings in config.toml stay. So does install's
-record of what it changed, with its copies of the files it edited, so that
-pairtime uninstall can put them back. pairtime starts again from nothing,
+pairtime itself and your settings in config.toml stay, all but the names
+you gave your projects. So does install's record of what it changed, with
+its copies of the files it edited, so that pairtime uninstall can put them
+back. pairtime starts again from nothing,
 under a new device key, and signed out: pairtime login links this computer
 again. What the pairtime server already has stays there until you remove
 this computer on your dashboard.
@@ -102,7 +103,7 @@ func runPrivacyDelete(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if !*yes {
-		fmt.Fprintf(stdout, "This deletes pairtime's device key and everything pairtime recorded in %s: the text of your prompts it kept, your time, your daily totals and recaps, and this computer's sign-in. The hours pairtime recorded so far can't be submitted any more. Copies a backup or a synced folder already holds stay as they are, the key's file too when pairtime doctor says pairtime keeps its key in a file. pairtime and your settings stay, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back. pairtime starts again from nothing.\n\n", install.Printable(dirs.Data))
+		fmt.Fprintf(stdout, "This deletes pairtime's device key and everything pairtime recorded in %s: the text of your prompts it kept, your time, your daily totals and recaps, and this computer's sign-in. The hours pairtime recorded so far can't be submitted any more. Copies a backup or a synced folder already holds stay as they are, the key's file too when pairtime doctor says pairtime keeps its key in a file. pairtime and your settings stay, all but the names you gave your projects, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back. pairtime starts again from nothing.\n\n", install.Printable(dirs.Data))
 		if !askYes(bufio.NewScanner(installStdin), stdout, "Type y to delete everything, or n to stop without changing anything: ") {
 			fmt.Fprintln(stdout, "Nothing changed.")
 			return exitDeclined
@@ -158,14 +159,27 @@ func runPrivacyDelete(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "Left alone: config.toml still says mode = \"online\" (%v). Nothing uploads without a sign-in, and pairtime login links this computer again.\n", err)
 		}
 	}
+	// The names the teen gave their projects go too: they are data about
+	// the teen, and no project's key names them once K_dev is gone
+	// (D-wipe-project-labels). The agent is stopped and the lock held, so
+	// no copy of config.toml an agent read writes them back.
+	settings := "Your settings in config.toml stay, all but the names you gave your projects"
+	namesStay := config.ForgetNames(dirs.ConfigFile())
+	if namesStay != nil {
+		settings = "Your settings in config.toml stay"
+	}
+	const record = ", and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back."
 	if keyStays != nil {
-		fmt.Fprintf(stdout, "Deleted everything pairtime recorded in %s. Your settings in config.toml stay, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back.\nLeft alone: %s\n", install.Printable(dirs.Data), install.Printable(keyStays.Error()))
+		fmt.Fprintf(stdout, "Deleted everything pairtime recorded in %s. %s%s\nLeft alone: %s\n", install.Printable(dirs.Data), settings, record, install.Printable(keyStays.Error()))
 	} else {
-		fmt.Fprintf(stdout, "Deleted pairtime's device key and everything pairtime recorded in %s. Your settings in config.toml stay, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back.\n", install.Printable(dirs.Data))
+		fmt.Fprintf(stdout, "Deleted pairtime's device key and everything pairtime recorded in %s. %s%s\n", install.Printable(dirs.Data), settings, record)
+	}
+	if namesStay != nil {
+		fmt.Fprintf(stdout, "Left alone: config.toml still holds the names you gave your projects (%s).\n", install.Printable(namesStay.Error()))
 	}
 	release()
 	code := 0
-	if keyStays != nil {
+	if keyStays != nil || namesStay != nil {
 		code = 1
 	}
 
