@@ -1196,6 +1196,11 @@ type sealPayload struct {
 	// lookback's by when the writer took them in, with no seal since that
 	// read config.toml as local-only (Batch.Back).
 	Back bool `json:"back,omitempty"`
+	// Due is the first record of the batch the writer had a mark due for as
+	// it sealed this one, which didn't take it (Writer.back), 0 for none, so
+	// the mark outlasts a restart: Open keeps it due from the newest row
+	// until a batch sealed Back takes it (restoreStretches).
+	Due uint64 `json:"due,omitempty"`
 	// LocalUntil is when config.toml was last known, or taken, to say
 	// local-only as the batch was sealed, in Unix ms (Writer.until), the
 	// newest stretch end: Open takes it back from the newest batch, and the
@@ -1475,6 +1480,9 @@ func (w *Writer) seal() (Batch, bool, error) {
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
 		SealedAt: at.UnixMilli(), Online: &on, Back: on && w.back > 0 && row.FirstSeq >= w.back,
 		LocalUntil: w.until.wall}
+	if !sp.Back {
+		sp.Due = w.back
+	}
 	if w.until.os > 0 {
 		sp.LocalUntilOS = &untilOS{Mono: w.until.os, Boot: w.until.boot}
 	}
