@@ -45,11 +45,11 @@ export const pendingWords =
 /**
  * What Today says while /v1/status says the desktop doesn't tell pairtime
  * which window is in front (signals.focus.unknown; D-focus-unknown), with
- * its GNOME additions. Where such time counts it says only once
- * focus.level_c is true, signals.focus_level_c, which WP-SC8 sets, the
- * first WP in which that time is level C (D-design-5.9). Until then the
- * sentence stops at its first clause: focus being unknown alone doesn't
- * make the claim true.
+ * its GNOME additions. Where such time counts it says only while
+ * focus.level_c is true, signals.focus_level_c, which the agent sets while
+ * it reads idle time, where the scorer counts that time at level C (WP-SC8,
+ * D-design-5.9). Otherwise the sentence stops at its first clause: focus
+ * being unknown alone doesn't make the claim true.
  */
 export function focusWords(focus: Focus): string[] {
 	const words = [

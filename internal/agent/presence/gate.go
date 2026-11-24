@@ -65,8 +65,10 @@ type gate struct {
 	// (D-relayed-context). One keeps a context live alone at the slow
 	// cadence (appOnly).
 	apps int
-	// focused is set while a terminal, editor or agent app has focus.
-	focused bool
+	// focused is set while a terminal, editor or agent app has focus, and
+	// unknown while the last focus report said the client can't tell which
+	// window is in front (SM 2.5).
+	focused, unknown bool
 	// unfocused is when one last lost focus; zero if none has.
 	unfocused time.Time
 	// sessions are the harness sessions heard from through hooks, by
@@ -99,7 +101,7 @@ func (g *gate) focus(now time.Time, c event.AppClass) {
 	if g.focused && !in {
 		g.unfocused = now
 	}
-	g.focused = in
+	g.focused, g.unknown = in, c == event.AppUnknown
 }
 
 // hook records a hook of kind k from the harness session key. A prompt
@@ -176,11 +178,18 @@ func (g *gate) sampled(now time.Time, idle time.Duration) {
 // would read as slept through (D-relayed-context); a context only it keeps
 // live is sampled every SLOW_SAMPLE_S whatever the input (appOnly), since
 // relayed credit reads a gap of up to twice SLOW_SAMPLE_S as no sleep (SM
-// 2.1, D-relayed-sleep).
+// 2.1, D-relayed-sleep). Where the last focus report said focus is unknown,
+// such a context samples at D14's cadence instead: rule 6 passes there for
+// a message typed into the app's own window (SM 2.2, 2.5), whose lead
+// needs the input samples show. It still records no os.focus (appOnly).
+// The gate follows the last focus report, so a brief unknown, such as
+// Windows' secure desktop or an X11 reconnect, switches the cadence until
+// the next window report.
 func (g *gate) interval(now time.Time) time.Duration {
 	g.settle(now)
 	switch {
 	case g.atWork(now):
+	case g.apps > 0 && g.unknown:
 	case g.apps > 0:
 		return g.cadence.slow
 	default:

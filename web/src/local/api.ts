@@ -70,7 +70,7 @@ export interface Focus {
 	known: boolean;
 	/** On GNOME, why pairtime's Shell extension isn't reporting. */
 	gnome_extension?: Signals['gnome_extension'];
-	/** True once the scorer credits such time at level C, which WP-SC8 sets. */
+	/** True while the agent reads idle time, where the scorer credits such time at level C (WP-SC8). */
 	level_c?: boolean;
 }
 

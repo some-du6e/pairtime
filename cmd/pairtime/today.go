@@ -129,9 +129,9 @@ var focusAskWait = time.Second
 // in front: DESIGN 5.9's teen-facing sentence while the running agent's GET
 // /v1/status says focus is unknown, the signal doctor's focus line reads
 // too, and nothing otherwise. As on the dashboard's Today page
-// (web/src/local/copy.ts), the sentence stops at "in front" until the
-// status says such time counts at level C (focus_level_c, which WP-SC8
-// sets), and on GNOME the line the status's gnome_extension calls for
+// (web/src/local/copy.ts), the sentence stops at "in front" unless the
+// status says such time counts at level C (focus_level_c, which the agent
+// sets while it reads idle time; WP-SC8), and on GNOME the line the status's gnome_extension calls for
 // follows. today asks over the per-user socket, as recap does, so no token
 // goes anywhere. An agent that doesn't answer in time, or is older than the
 // question, says nothing, and today prints none of it.

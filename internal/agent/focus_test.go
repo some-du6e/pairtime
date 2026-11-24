@@ -297,8 +297,8 @@ func TestFocusAppOnly(t *testing.T) {
 			[]focus.Change{chrome, {At: now.Add(time.Second), PID: 6100}}, []event.AppClass{event.AppTerminal}, false, 15 * time.Second},
 		{"a browser in front of T3 Code's context alone writes nothing, and presence samples once a minute",
 			[]focus.Change{chrome}, nil, true, time.Minute},
-		{"focus that turns unknown writes nothing either, and presence still samples once a minute",
-			[]focus.Change{chrome, {At: now.Add(time.Second), Unknown: "the secure desktop"}}, nil, true, time.Minute},
+		{"focus that turns unknown writes nothing either, and presence samples at D14's cadence, 15 s before any input, since rule 6 passes there (WP-SC8)",
+			[]focus.Change{chrome, {At: now.Add(time.Second), Unknown: "the secure desktop"}}, nil, true, 15 * time.Second},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

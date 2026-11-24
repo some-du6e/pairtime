@@ -499,7 +499,6 @@ func TestSampler(t *testing.T) {
 				at(s(20), focusSeen(0, event.AppBrowser)),
 				at(s(70), focusSeen(0, event.AppOther)),
 				at(s(100), focusSeen(0, event.AppChatApp)),
-				at(s(130), focusSeen(0, event.AppUnknown)),
 			},
 			end: s(181),
 			want: []string{
@@ -508,8 +507,23 @@ func TestSampler(t *testing.T) {
 				"1m10s focus other live=false",
 				"1m40s focus chat_app live=false",
 				"2m0s presence idle=0",
-				"2m10s focus unknown live=false",
 				"3m0s presence idle=0",
+			},
+		},
+		{
+			name:   "focus that turns unknown in front of a context only T3 Code keeps live is still no sign of work, so nothing is recorded of it, but presence samples at D14's cadence, every 15 s while input comes, since rule 6 passes there (WP-SC8)",
+			inputs: every(0, s(200), s(3)),
+			acts: []act{
+				at(s(3), func(e *env) { e.s.AgentApps(1) }),
+				at(s(30), focusSeen(0, event.AppUnknown)),
+			},
+			end: s(91),
+			want: []string{
+				"30s focus unknown live=false",
+				"45s presence idle=0",
+				"1m0s presence idle=0",
+				"1m15s presence idle=0",
+				"1m30s presence idle=0",
 			},
 		},
 		{

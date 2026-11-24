@@ -159,6 +159,23 @@ func TestGate(t *testing.T) {
 			},
 		},
 		{
+			name: "where focus is unknown, a context an agent app alone keeps live samples at D14's cadence, every SAMPLE_S until CONTEXT_IDLE_S without input, and records no os.focus (WP-SC8, D-relayed-sleep)",
+			steps: []step{
+				{at: 0, do: apps(1)},
+				{at: 0, do: focus(event.AppUnknown)},
+				{at: 0, do: sampled(0)},
+				want(0, fast),
+				want(s(599), fast),
+				want(s(600), slow),
+				{at: s(700), do: sampled(0)},
+				want(s(700), fast),
+				// A window report that isn't unknown ends it: the app alone
+				// samples every SLOW_SAMPLE_S again, whatever the input.
+				{at: s(800), do: focus(event.AppBrowser)},
+				want(s(800), slow),
+			},
+		},
+		{
 			// The input at 500 s would keep SAMPLE_S under D14 until 1100 s,
 			// so the cadence at 700 s and 2000 s is the agent app's.
 			name: "an agent app alone samples every SLOW_SAMPLE_S whatever the input once ContextWindow has passed since the last project app's focus and hook",

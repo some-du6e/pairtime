@@ -1521,7 +1521,7 @@ func TestTodayFocusUnknown(t *testing.T) {
 		want   string   // what ends the view after a blank line, "" for nothing about focus
 		asked  []string // the questions today asked
 	}{
-		{"while the agent says focus is unknown, today's view ends with the sentence, which stops at \"in front\" until WP-SC8 (DESIGN 5.9)",
+		{"while the agent says focus is unknown, today's view ends with the sentence, which stops at \"in front\" unless the status says focus_level_c (DESIGN 5.9)",
 			status(unknown, nil), []dayFile{tracked}, []string{"today"}, stops, []string{ipc.AskStatus}},
 		{"a day with nothing tracked yet still says why, when focus is unknown",
 			status(unknown, nil), nil, []string{"today"}, stops, []string{ipc.AskStatus}},
@@ -1581,7 +1581,7 @@ func TestTodayFocusUnknown(t *testing.T) {
 			t.Errorf("exit %d, stderr %q, stdout\n%s\nwant the day without the sentence", code, errOut, out)
 		}
 	})
-	t.Run("the words are DESIGN 5.9's teen-facing sentence, the first clause alone until WP-SC8 makes the rest true", func(t *testing.T) {
+	t.Run("the words are DESIGN 5.9's teen-facing sentence, the first clause alone where the agent reads no idle time, so the rest isn't true", func(t *testing.T) {
 		const whole = "This desktop doesn't tell pairtime which window is in front, so your time here counts only on your own dashboard, not on your profile, build days or most programs."
 		if stops != "This desktop doesn't tell pairtime which window is in front." || counts != whole {
 			t.Errorf("sentence %q, and with level C %q", stops, counts)

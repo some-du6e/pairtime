@@ -924,15 +924,17 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 // X.bucket_cap for reading that BUCKET_MAX_S evicted. (The dark-flow
 // discounts, X.day_cap and X.noprog are WP-SC6's.) Every other second takes
 // the first that applies of X.absent; X.other_focus; X.ambiguous, for focus
-// that resolves to no project (SM 3.2), that the client hasn't recorded
-// yet, or, until WP-SC8, that it recorded as unknown (SM 2.5); then, while
-// a turn of the slot's project runs, X.agent_only if a person started one
+// that resolves to no project (SM 3.2) or that the client hasn't recorded
+// yet; then, while a turn of the slot's project runs, X.agent_only if a person started one
 // of the running turns, else X.automated, else X.no_input for a turn whose
 // prompt came with no input (SM 2.2 rule 8); and last X.no_anchor. at is
 // the slot's resolution (attribute). A turn a person started includes a
 // relayed one (SM 2.2), and X.bucket_cap covers the relayed reading that
 // UNKNOWN_BUCKET_MAX_S held back too. The turn step is turnCode, which
 // unknownCode shares (docs/errata/2026-11-20-uncredited-code-placement.md).
+// Where the client recorded focus as unknown, X.other_focus and X.ambiguous
+// don't apply, and the turn step reads every project's running turns
+// (unknownCode; SM 2.5).
 //
 // On a live device, every slot whose presence is unknown is a live slot
 // whose presence is unknown, and the presence and focus codes don't apply:
