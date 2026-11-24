@@ -77,7 +77,7 @@ func capped(ctx context.Context, tx writer.Tx, account, day string, minuteMS int
 // It reads every minute of the day, and re-cuts only when their credit is
 // total, so none is missing: the day's new cut takes the place of its rows'
 // credit. When the retention jobs have deleted some of the day's minutes,
-// d stands, as it did before the cap.
+// the day can't be cut again, and keep applies d to the rows as they are.
 func recut(ctx context.Context, tx writer.Tx, account, day string, minuteMS int64, next merged, d delta, total, limit int64) (delta, error) {
 	all, err := dayMinutes(ctx, tx, account, day, math.MinInt64)
 	if err != nil {
@@ -102,17 +102,44 @@ func recut(ctx context.Context, tx writer.Tx, account, day string, minuteMS int6
 	if !placed {
 		ms = append(ms, next)
 	}
-	if sum != total {
-		return d, nil
-	}
 	stored, err := dayRows(ctx, tx, account, day)
 	if err != nil {
 		return nil, err
+	}
+	if sum != total {
+		return keep(stored, d), nil
 	}
 	out := agentPart(d)
 	out.add(cut(0, limit, day, ms))
 	out.subtract(stored)
 	return out, nil
+}
+
+// keep applies d to stored, a day's rows that aren't a cut under the cap
+// and can't be cut again. It never lifts the cap and takes no row below
+// zero: credit d adds is held back, and credit d takes away comes out of
+// the row's held-back credit first, then out of the column d names, at most
+// down to zero.
+func keep(stored, d delta) delta {
+	out := agentPart(d)
+	for k, c := range d {
+		s, o := stored[k], out[k]
+		held := s[dayCap]
+		// The credited columns come before the agent's.
+		for col := 0; col < agentFinal; col++ {
+			switch n := c[col]; {
+			case n > 0:
+				o[dayCap] += n
+			case n < 0:
+				w := min(held, -n)
+				held -= w
+				o[dayCap] -= w
+				o[col] -= min(-n-w, s[col])
+			}
+		}
+		out[k] = o
+	}
+	return out
 }
 
 // agentPart is d's agent columns alone: the change to the agent's time on

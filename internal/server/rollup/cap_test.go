@@ -152,13 +152,25 @@ func TestDayCap(t *testing.T) {
 			want:        []Day{final("d1/p1", day, "prompting", 0, 540_000)},
 		},
 		{
-			name:        "a day stored over the cap whose first minutes are gone keeps its rows, and a change adds to them without holding anything back",
+			name:        "a day stored over the cap whose first minutes are gone can't be cut again, so a change holds back the credit it adds",
 			before:      joinSteps([]step{newYork}, creditFor("d1", "p1", "prompting", "A", local(9, 0), 13, "final")),
 			beforeLimit: math.MaxInt64,
 			gone:        local(9, 2),
 			limit:       600_000,
 			steps:       creditFor("d1", "p1", "prompting", "A", local(9, 13), 1, "final"),
-			want:        []Day{final("d1/p1", day, "prompting", 0, 840_000)},
+			want:        []Day{held("d1/p1", "prompting", 0, 780_000, 60_000)},
+		},
+		{
+			name:        "on a day cut under a lower cap whose first minute is gone, a revision takes the credit it removes out of what is held back, never below zero",
+			before:      joinSteps([]step{newYork}, creditFor("d1", "p1", "prompting", "A", local(9, 0), 5, "final"), creditFor("d1", "p2", "testing", "B", local(9, 5), 3, "final")),
+			beforeLimit: 300_000,
+			gone:        local(9, 1),
+			limit:       600_000,
+			steps:       []step{bk("d1", local(9, 5), 1, "final", nil)},
+			want: []Day{
+				final("d1/p1", day, "prompting", 0, 300_000),
+				{ProjectID: "d1/p2", Day: day, Kind: "testing", DayCapMS: 120_000},
+			},
 		},
 		{
 			name:  "each local day has a cap of its own",
