@@ -10,7 +10,11 @@
 -- (SM 5.3) and a day's rows still sum to the buckets stored for it.
 --
 -- The migration cuts no day. The settle job's first run after it cuts again
--- each day whose rows keep more than the cap, while rollup_minutes still
--- holds all of the day. A day whose minutes the retention jobs have partly
--- deleted keeps its rows, which can keep more than DAY_CAP_S.
+-- each day whose rows aren't a cut under the cap, while rollup_minutes
+-- still holds all of the day. A day whose minutes the retention jobs have
+-- partly deleted keeps its rows and can stay over DAY_CAP_S. A change to it
+-- applies as it is while the day stays within the cap with nothing held
+-- back, cuts the day again from the changed minute on once its rows look
+-- like a cut, and otherwise holds back the credit it adds (package rollup's
+-- doc).
 ALTER TABLE rollups_daily ADD COLUMN day_cap_ms BIGINT NOT NULL DEFAULT 0;

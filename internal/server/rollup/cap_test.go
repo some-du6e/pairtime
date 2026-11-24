@@ -4,15 +4,18 @@ package rollup
 
 import (
 	"context"
+	"errors"
 	"math"
 	"math/rand/v2"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/store/storetest"
+	"github.com/some-du6e/pairtime/internal/server/writer"
 )
 
 // creditFor is n of device's minutes from start on, Unix seconds, each in
@@ -34,6 +37,27 @@ func joinSteps(parts ...[]step) []step {
 		out = append(out, p...)
 	}
 	return out
+}
+
+// failFirst is a Doer whose first op runs and then fails, so its
+// transaction rolls back, as an op the writer can't commit does. Its later
+// ops run as txDoer's do.
+type failFirst struct {
+	txDoer
+	failed *bool
+}
+
+func (d failFirst) Do(ctx context.Context, rows int, op writer.Op) error {
+	if *d.failed {
+		return d.txDoer.Do(ctx, rows, op)
+	}
+	*d.failed = true
+	return d.txDoer.Do(ctx, rows, func(ctx context.Context, tx writer.Tx) error {
+		if err := op(ctx, tx); err != nil {
+			return err
+		}
+		return errors.New("writer: the transaction didn't commit")
+	})
 }
 
 // withCap sets the day cap to limit milliseconds for the rest of the test.
@@ -217,6 +241,29 @@ func TestDayCap(t *testing.T) {
 				bk("d1", local(9, 1), 2, "final", nil),
 			},
 			want: []Day{final("d1/p1", day, "prompting", 0, 120_000)},
+		},
+		{
+			name:        "the agent's time on its own stays as it is through a whole-day re-cut",
+			before:      joinSteps([]step{newYork}, creditFor("d1", "p1", "prompting", "A", local(9, 0), 13, "final")),
+			beforeLimit: math.MaxInt64,
+			limit:       600_000,
+			steps:       []step{bk("d1", local(9, 10), 1, "final", ao("p1", 30))},
+			want: []Day{
+				agent("d1/p1", day, 30_000, 0),
+				held("d1/p1", "prompting", 0, 600_000, 120_000),
+			},
+		},
+		{
+			name:        "the agent's time on its own stays as it is on a day that can't be cut again",
+			before:      joinSteps([]step{newYork}, creditFor("d1", "p1", "prompting", "A", local(9, 0), 13, "final")),
+			beforeLimit: math.MaxInt64,
+			gone:        local(9, 1),
+			limit:       600_000,
+			steps:       []step{bk("d1", local(9, 10), 1, "final", ao("p1", 30))},
+			want: []Day{
+				agent("d1/p1", day, 30_000, 0),
+				final("d1/p1", day, "prompting", 0, 720_000),
+			},
 		},
 		{
 			name:  "a slot the cap falls inside is split there",
@@ -490,11 +537,18 @@ func TestRecutDays(t *testing.T) {
 		name   string
 		before []step
 		// gone, when set, deletes rollup_minutes rows before it, Unix seconds.
-		gone     int64
+		gone int64
+		// broken, when set, breaks the rollup_minutes rows of the minute that
+		// starts then, Unix seconds, so its day's minutes can't be read.
+		broken int64
+		// failOp fails the first writer op, after it runs, so it rolls back.
+		failOp   bool
 		runs     int
 		wantCuts []int
 		wantOps  int
-		want     []Day
+		// wantErr, when set, is what the run's error names.
+		wantErr string
+		want    []Day
 	}{
 		{
 			name:     "a day stored over the cap before 0012 is cut again whole in one transaction, and its agent time stays",
@@ -522,6 +576,46 @@ func TestRecutDays(t *testing.T) {
 			want:     []Day{agent("d1/p1", day, 20_000, 0), final("d1/p1", day, "prompting", 0, 780_000)},
 		},
 		{
+			name:     "two days over the cap take a transaction each",
+			before:   joinSteps(legacy, creditFor("d1", "p1", "prompting", "A", local(24+9, 0), 13, "final")),
+			runs:     1,
+			wantCuts: []int{2},
+			wantOps:  2,
+			want: []Day{
+				agent("d1/p1", day, 20_000, 0),
+				{ProjectID: "d1/p1", Day: day, Kind: "prompting", FinalMS: [3]int64{600_000}, DayCapMS: 180_000},
+				{ProjectID: "d1/p1", Day: "2026-11-21", Kind: "prompting", FinalMS: [3]int64{600_000}, DayCapMS: 180_000},
+			},
+		},
+		{
+			name:     "a day whose minutes can't be read keeps its rows, and the pass goes on with the next day",
+			before:   joinSteps(legacy, creditFor("d1", "p1", "prompting", "A", local(24+9, 0), 13, "final")),
+			broken:   local(9, 5),
+			runs:     1,
+			wantCuts: []int{1},
+			wantOps:  1,
+			wantErr:  day,
+			want: []Day{
+				agent("d1/p1", day, 20_000, 0),
+				final("d1/p1", day, "prompting", 0, 780_000),
+				{ProjectID: "d1/p1", Day: "2026-11-21", Kind: "prompting", FinalMS: [3]int64{600_000}, DayCapMS: 180_000},
+			},
+		},
+		{
+			name:     "a day whose writer op fails keeps its rows, and the pass goes on with the next day",
+			before:   joinSteps(legacy, creditFor("d1", "p1", "prompting", "A", local(24+9, 0), 13, "final")),
+			failOp:   true,
+			runs:     1,
+			wantCuts: []int{1},
+			wantOps:  2,
+			wantErr:  day,
+			want: []Day{
+				agent("d1/p1", day, 20_000, 0),
+				final("d1/p1", day, "prompting", 0, 780_000),
+				{ProjectID: "d1/p1", Day: "2026-11-21", Kind: "prompting", FinalMS: [3]int64{600_000}, DayCapMS: 180_000},
+			},
+		},
+		{
 			name:     "a day within the cap makes no transaction",
 			before:   joinSteps([]step{newYork}, creditFor("d1", "p1", "prompting", "A", local(9, 0), 5, "final")),
 			runs:     1,
@@ -543,13 +637,25 @@ func TestRecutDays(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
+				if tt.broken != 0 {
+					if _, err := db.Write.ExecContext(context.Background(), `UPDATE rollup_minutes SET slots = 'not json' WHERE user_id = 'u1' AND minute_ms = $1`, tt.broken*1000); err != nil {
+						t.Fatal(err)
+					}
+				}
 				withCap(t, 600_000)
 				ops := 0
 				var cuts []int
+				var doer Doer = txDoer{db: db, ops: &ops}
+				if tt.failOp {
+					doer = failFirst{txDoer: txDoer{db: db, ops: &ops}, failed: new(bool)}
+				}
 				for range tt.runs {
-					n, err := RecutDays(context.Background(), txDoer{db: db, ops: &ops}, db.Read, now)
-					if err != nil {
+					n, err := RecutDays(context.Background(), doer, db.Read, now)
+					switch {
+					case tt.wantErr == "" && err != nil:
 						t.Fatal(err)
+					case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+						t.Errorf("RecutDays = %v, want an error naming %s", err, tt.wantErr)
 					}
 					cuts = append(cuts, n)
 				}

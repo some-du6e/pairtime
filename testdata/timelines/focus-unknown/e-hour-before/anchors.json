@@ -1,0 +1,34 @@
+{
+  "fixture": "focus-unknown/e-hour-before",
+  "anchors": [
+    {
+      "event_id": "01a228b0-6aa0-7134-a0ab-296fdaf1e8d6",
+      "kind": "substantive_prompt",
+      "t": 1795978980000,
+      "local": "14:03:00",
+      "project_key": "p_1883561adbbb",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 180,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "C",
+      "sm": "2.2 rule 6: input before submit, and the focus test passes only because focus is unknown (2.5); lead 120 + 90 / 1.5 = 180 s",
+      "labels": ["focus_unknown"]
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_f0d45dd10d66",
+      "turn_key": "t_251e70117992",
+      "t_submit": 1795978980000,
+      "local_submit": "14:03:00",
+      "t_stop": 1795979100000,
+      "local_stop": "14:05:00",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 6 on unknown focus"
+    }
+  ]
+}

@@ -1,0 +1,405 @@
+{
+  "fixture": "focus-unknown/e-hour-before",
+  "slots": [
+    {
+      "start": "2026-11-29T19:00:00Z",
+      "local": "14:00:00",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:00:15Z",
+      "local": "14:00:15",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:00:30Z",
+      "local": "14:00:30",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:00:45Z",
+      "local": "14:00:45",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:01:00Z",
+      "local": "14:01:00",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:01:15Z",
+      "local": "14:01:15",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:01:30Z",
+      "local": "14:01:30",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:01:45Z",
+      "local": "14:01:45",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:02:00Z",
+      "local": "14:02:00",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:02:15Z",
+      "local": "14:02:15",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:02:30Z",
+      "local": "14:02:30",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:02:45Z",
+      "local": "14:02:45",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"P": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:03:00Z",
+      "local": "14:03:00",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:03:15Z",
+      "local": "14:03:15",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 5,
+      "credit": {
+        "p_1883561adbbb": {"SUP": 5}
+      },
+      "levels": {"C": 5},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:03:30Z",
+      "local": "14:03:30",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 10,
+      "credit": {
+        "p_1883561adbbb": {"SUP": 10}
+      },
+      "levels": {"C": 10},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:03:45Z",
+      "local": "14:03:45",
+      "focus": "unknown",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-29T19:04:00Z",
+      "local": "14:04:00",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:04:15Z",
+      "local": "14:04:15",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:04:30Z",
+      "local": "14:04:30",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:04:45Z",
+      "local": "14:04:45",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"SUP": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:05:00Z",
+      "local": "14:05:00",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:05:15Z",
+      "local": "14:05:15",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:05:30Z",
+      "local": "14:05:30",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:05:45Z",
+      "local": "14:05:45",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:06:00Z",
+      "local": "14:06:00",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:06:15Z",
+      "local": "14:06:15",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:06:30Z",
+      "local": "14:06:30",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:06:45Z",
+      "local": "14:06:45",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 15,
+      "credit": {
+        "p_1883561adbbb": {"READ": 15}
+      },
+      "levels": {"C": 15},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:07:00Z",
+      "local": "14:07:00",
+      "focus": "unknown",
+      "p": "p_1883561adbbb",
+      "credited_s": 10,
+      "credit": {
+        "p_1883561adbbb": {"READ": 10}
+      },
+      "levels": {"C": 10},
+      "ev": "C",
+      "lbl": ["focus_unknown"]
+    },
+    {
+      "start": "2026-11-29T19:07:15Z",
+      "local": "14:07:15",
+      "focus": "unknown",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-29T19:07:30Z",
+      "local": "14:07:30",
+      "focus": "unknown",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-29T19:07:45Z",
+      "local": "14:07:45",
+      "focus": "unknown",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    }
+  ]
+}

@@ -3,7 +3,9 @@
 package rollup
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -91,12 +93,10 @@ func isCut(kept, withheld, limit int64) bool {
 }
 
 // The days RecutDays looks at, which the 180 days of minutes rollup_minutes
-// keeps cover, with two days to spare for the widest local date, and how
-// many days one of its ops cuts at most. recutRowsPerDay is the rows a cut
-// day writes, as a typical day has them.
+// keeps cover, with two days to spare for the widest local date.
+// recutRowsPerDay is the rows a cut day writes, as a typical day has them.
 const (
 	recutDays       = 182
-	recutBatch      = 20
 	recutRowsPerDay = 8
 )
 
@@ -105,10 +105,12 @@ const (
 // stored over 12 hours before migration 0012, while rollup_minutes still
 // holds all of it (SM 5.3). The settle job runs it on its first run
 // (RunSettle). It finds the days and checks their minutes on q, the read
-// pool, and takes the writer only for days it can cut, so a run with
-// nothing to cut makes no transaction. A day it can't cut, because the
-// retention jobs have deleted some of its minutes, keeps its rows. It
-// returns how many days it cut.
+// pool, and takes the writer only for days it can cut, one op per day, so
+// a run with nothing to cut makes no transaction and a day's cut never
+// waits on another's. A day it can't cut, because the retention jobs have
+// deleted some of its minutes, keeps its rows. A day whose reads or cut
+// fail keeps its rows too, and the pass goes on with the next day. It
+// returns how many days it cut, and every day's failure, joined.
 func RecutDays(ctx context.Context, d Doer, q Querier, now time.Time) (int, error) {
 	limit := dayCapMS()
 	from := now.AddDate(0, 0, -recutDays).UTC().Format(time.DateOnly)
@@ -136,40 +138,40 @@ FROM rollups_daily WHERE day >= $1 GROUP BY user_id, day`, from)
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("rollup: finding the days to cut again: %w", err)
 	}
-	var cuttable []accountDay
+	// Account by account, oldest day first, whatever order the engine
+	// grouped them in.
+	slices.SortFunc(due, func(a, b accountDay) int {
+		return cmp.Or(cmp.Compare(a.account, b.account), cmp.Compare(a.day, b.day))
+	})
+	n := 0
+	var failed []error
 	for _, ad := range due {
+		if err := ctx.Err(); err != nil {
+			return n, errors.Join(append(failed, err)...)
+		}
 		ok, err := recuttable(ctx, q, ad.account, ad.day)
 		if err != nil {
-			return 0, err
+			failed = append(failed, fmt.Errorf("rollup: cutting %s's %s again: %w", ad.account, ad.day, err))
+			continue
 		}
-		if ok {
-			cuttable = append(cuttable, ad)
+		if !ok {
+			continue
 		}
-	}
-	n := 0
-	for len(cuttable) > 0 {
-		batch := cuttable[:min(len(cuttable), recutBatch)]
-		cuttable = cuttable[len(batch):]
-		var cutNow int
-		err := d.Do(ctx, recutRowsPerDay*len(batch), func(ctx context.Context, tx writer.Tx) error {
-			cutNow = 0
-			for _, ad := range batch {
-				did, err := recutDay(ctx, tx, ad.account, ad.day, limit)
-				if err != nil {
-					return err
-				}
-				if did {
-					cutNow++
-				}
-			}
-			return nil
+		var did bool
+		err = d.Do(ctx, recutRowsPerDay, func(ctx context.Context, tx writer.Tx) error {
+			var err error
+			did, err = recutDay(ctx, tx, ad.account, ad.day, limit)
+			return err
 		})
 		if err != nil {
-			return n, fmt.Errorf("rollup: cutting days again: %w", err)
+			failed = append(failed, fmt.Errorf("rollup: cutting %s's %s again: %w", ad.account, ad.day, err))
+			continue
 		}
-		n += cutNow
+		if did {
+			n++
+		}
 	}
-	return n, nil
+	return n, errors.Join(failed...)
 }
 
 // recuttable reports whether rollup_minutes still holds all of the
