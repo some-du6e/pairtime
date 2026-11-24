@@ -121,10 +121,11 @@ const LeafTable = "day_leaves"
 // OtherTables are the tables that hold nothing of an account: the
 // migrations' record, the operations probe, the server's keys and their
 // history, the public day heads, and the hashes of the hub's token ids.
-// It must equal docs/retention.json's no_personal_data. A test holds
-// every table to one of these lists, so a table a later migration adds
+// TestTables holds every table the migrations create to the eraser's
+// steps, LeafTable or OtherTables, so a table a later migration adds
 // fails it until the eraser's steps delete its rows of an account, or it
-// is listed both here and in no_personal_data.
+// is listed both here and in docs/retention.json's no_personal_data,
+// which OtherTables must equal.
 var OtherTables = []string{"schema_migrations", "ops_probe", "server_keys", "key_history", "day_heads", "privacy_token_uses"}
 
 // leavesReason is why the eraser keeps an account's leaf hashes.
