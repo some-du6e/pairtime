@@ -432,6 +432,8 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	public.HandleFunc("GET "+dashboard.APIPath, dashboard.API(rollups, owner, time.Now, logger))
 	// Devlogs, badges and build days, for the device token of the owner's
 	// own computers (WP-SV12; DESIGN 3.10; docs/spec/teen-layer-v1.md).
+	// Devlogs and badges count each device's requests against ingest's
+	// default rate, in a bucket apart from its uploads' (devlog.Options).
 	devlog.New(devlog.Options{Devices: devices, Writer: w, Read: db.Read, Now: time.Now, Logger: logger}).Register(public)
 	public.HandleFunc("GET "+buildday.SummaryPath, buildday.API(db.Read, devices, time.Now, logger))
 	maintainCtx, stopMaintain := context.WithCancel(ctx)

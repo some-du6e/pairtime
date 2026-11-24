@@ -13,7 +13,7 @@ This notice covers the pairtime server at {{.BaseURL}} and the pairtime program 
 
 ## The short version
 
-- Your prompts, your code, your file names and your window titles stay on your computer, unless you submit hours: then a few prompts, and the agent replies they answered, go to the program's reviewers.
+- Your prompts, your code, your file names and your window titles stay on your computer, unless you submit hours or publish a devlog. When you submit hours, a few prompts, and the agent replies they answered, go to the program's reviewers. A devlog goes to this server exactly as its preview showed it.
 - This server gets your Hack Club identity, first name and email address, the IP address each upload comes from, and numbers: for every 15 seconds you work, how many were credited, to which project (as a key, not its name, unless you choose to show that name on your own dashboard), what kind of work it was, and why the rest weren't.
 - Nothing about you is public until you choose what to show.
 - Hours are checked for fraud only when you submit them to a program.
@@ -45,7 +45,7 @@ pairtime encrypts what it keeps of your prompts, the agent's replies and your fi
 
 The exception is a hook call, what your AI tool sends pairtime as you work: your prompts, the agent's replies, the commands it ran with their output, and the files it edited. It waits unencrypted in pairtime's folder, where other people's accounts on this computer can't read it, though an administrator can, and so can any program running as you, until the agent has read it. That usually takes a moment. It takes longer while the agent isn't running, doesn't answer in time, can't open its keys or write its ledger, or is looking through a big project for the first time. A call a crash left waiting stays until the agent's next start. One the agent hasn't read is deleted after {{days "device.held_calls"}} at most. [How long we keep things](#how-long-we-keep-things) says how long the agent keeps the calls it holds.
 
-None of it is uploaded, except in two cases you control. When you submit hours, a few of your prompts and the agent messages they answered go to the program's reviewers, after you've seen exactly what they will see. [When you submit hours](#when-you-submit-hours) explains how. And if you turn on backups, encrypted copies go to this server, which can't open them without your recovery code.
+None of it is uploaded, except in four cases you control. When you submit hours, a few of your prompts and the agent messages they answered go to the program's reviewers, after you've seen exactly what they will see. [When you submit hours](#when-you-submit-hours) explains how. When you publish a devlog, this server gets exactly the text the preview showed you, with any code, file names or error messages you left in it. When you turn on a project's name, this server gets the name you approved, often the project's folder name, and only your own dashboard shows it. And if you turn on backups, encrypted copies go to this server, which can't open them without your recovery code.
 
 If you also use Hackatime, your editor keeps sending Hackatime what it sent before. pairtime adds nothing to it and removes nothing from it.
 

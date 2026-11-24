@@ -244,6 +244,15 @@ func TestPrivacyNotice(t *testing.T) {
 			notWant: []string{"<p>This server never receives"},
 		},
 		{
+			name: "the notice counts publishing a devlog and turning on a project's name among the cases that upload what stays on your computer (#283; DESIGN 4.3)",
+			want: []string{
+				"None of it is uploaded, except in four cases you control.",
+				"When you publish a devlog, this server gets exactly the text the preview showed you, with any code, file names or error messages you left in it.",
+				"When you turn on a project&#39;s name, this server gets the name you approved, often the project&#39;s folder name, and only your own dashboard shows it.",
+			},
+			notWant: []string{"except in two cases you control", "except in three cases you control"},
+		},
+		{
 			name: "the notice says what publishing sends and that a removal keeps only the item's ID for 30 days (D-sv12-retention)",
 			want: []string{
 				"A devlog names its project by the project&#39;s key, not its name, and each devlog and badge carries a random ID your computer made for it.",
@@ -295,9 +304,9 @@ func TestPrivacyNotice(t *testing.T) {
 			notWant: []string{"or when you press them", "per-minute counts"},
 		},
 		{
-			name: "the short version names the exception for submissions and what identifies you (UK Children's Code Std 4)",
+			name: "the short version names the exceptions for submissions and devlogs, and what identifies you (UK Children's Code Std 4)",
 			want: []string{
-				"stay on your computer, unless you submit hours: then a few prompts, and the agent replies they answered, go to the program&#39;s reviewers.",
+				"stay on your computer, unless you submit hours or publish a devlog. When you submit hours, a few prompts, and the agent replies they answered, go to the program&#39;s reviewers. A devlog goes to this server exactly as its preview showed it.",
 				"This server gets your Hack Club identity, first name and email address, the IP address each upload comes from, and numbers",
 			},
 		},

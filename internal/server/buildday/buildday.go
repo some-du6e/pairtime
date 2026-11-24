@@ -21,16 +21,27 @@
 // The job runs beside the settle job, every rollup.SettleEvery. It finds the
 // days it hasn't stored through rollups_daily's (user_id, day) index, never
 // by scanning rollup_minutes.day: on its first run every day ingest still
-// holds minutes of, and after that the days of the last week. It reads on
-// the read pool whether each open day's credit has reached BUILD_DAY_S at
-// any time up to now, and takes the writer only to store a day that counted
-// or to decide one whose deadline has passed. It decides those inside the
-// writer op, as the settle job settles minutes: such a day counts if its
-// credit reached BUILD_DAY_S at any time up to the deadline (#278). So a
-// revision ingest received before the deadline in a batch that committed
-// after it still counts, and a late or first run decides as runs on time
-// would have, and stores the same credit: the day's credit when it first
-// reached BUILD_DAY_S, or else as of its deadline.
+// holds minutes of, and after that the last 32 days, or back to the
+// account's next_week when that is earlier. Either reach starts on a
+// Monday, so the week that holds its first date is decided whole, and a day
+// of it whose minutes ingest no longer holds is decided not to count. It
+// reads on the read pool whether each open day's credit has reached
+// BUILD_DAY_S at any time up to now, and takes the writer only to store a
+// day that counted or to decide one whose deadline has passed. It decides
+// those inside the writer op, as the settle job settles minutes: such a day
+// counts if its credit reached BUILD_DAY_S at any time up to the deadline
+// (#278). So a revision ingest received before the deadline in a batch that
+// committed after it still counts, and a late or first run decides as runs
+// on time would have, and stores the same credit: the day's credit when it
+// first reached BUILD_DAY_S, or else as of its deadline.
+//
+// A late or first run applies an account's days and weeks in the order they
+// take effect, across ops too (#283). An op decides only the weeks due
+// before the account's next day still queued. When it can't decide a week
+// due before one of its days, because it has decided opWeeks weeks or a day
+// of the week isn't decided yet, it applies nothing from that day on, and
+// the account waits for the next run, so no freeze a later day earns
+// reaches that week first.
 //
 // Weeks run Monday to Sunday by the local dates the days already have, and
 // a week keeps the goal in force when it was decided (orchestrator,
@@ -52,6 +63,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"time"
@@ -107,7 +119,9 @@ type Doer interface {
 // is still ahead; a run also reaches back to the account's next_week, so a
 // day first uploaded later than that never holds its week up. full covers
 // every day ingest still holds minutes of, 180 days (DESIGN 4.4), which the
-// first run decides.
+// first run decides. A run reaches back from the Monday of the horizon's
+// week, so the week that holds the horizon date never waits on days no
+// run looks at.
 const (
 	recentHorizon = 32 * 24 * time.Hour
 	fullHorizon   = 182 * 24 * time.Hour
@@ -201,12 +215,21 @@ func (j *Job) Once(ctx context.Context) (Result, error) {
 	if j.full {
 		horizon = fullHorizon
 	}
-	cands, err := candidates(ctx, j.q, now.Add(-horizon).UTC().Format(time.DateOnly))
+	from, err := weekOf(now.Add(-horizon).UTC().Format(time.DateOnly))
+	if err != nil {
+		return res, err
+	}
+	cands, err := candidates(ctx, j.q, from)
 	if err != nil {
 		return res, err
 	}
 	ops := 0
 	more := false
+	// stopped holds the accounts whose items an op left behind a week it
+	// couldn't decide yet. They wait for the next run, and the weeks pass
+	// skips them, so none of their weeks is decided before a day that takes
+	// effect earlier.
+	stopped := map[string]bool{}
 accounts:
 	for len(cands) > 0 {
 		account := cands[0].account
@@ -248,7 +271,11 @@ accounts:
 				break accounts
 			}
 			n := min(len(items), opDays)
-			r, err := j.settle(ctx, account, items[:n], p)
+			next := int64(math.MaxInt64)
+			if n < len(items) {
+				next = items[n].at
+			}
+			r, used, err := j.settle(ctx, account, items[:n], next, p)
 			if err != nil {
 				return res, err
 			}
@@ -256,15 +283,19 @@ accounts:
 			res.Counted += r.Counted
 			res.Decided += r.Decided
 			res.Weeks += r.Weeks
+			if used < n {
+				stopped[account] = true
+				continue accounts
+			}
 			items = items[n:]
 		}
 	}
-	weeks, weeksMore, err := j.weeks(ctx, now, p, maxOps-ops)
+	weeks, weeksMore, err := j.weeks(ctx, now, p, maxOps-ops, stopped)
 	res.Weeks += weeks
 	if err != nil {
 		return res, err
 	}
-	res.More = more || weeksMore
+	res.More = more || len(stopped) > 0 || weeksMore
 	if !more {
 		j.full = false
 	}
@@ -313,10 +344,20 @@ WHERE NOT EXISTS (SELECT 1 FROM build_days b WHERE b.user_id = d.user_id AND b.d
 // counts stores its credit at that first moment, as a run on time does, and
 // one that doesn't stores its credit as of the deadline. A day stored
 // meanwhile is left as it is.
-func (j *Job) settle(ctx context.Context, account string, items []item, p Params) (Result, error) {
+//
+// next is when the account's next item still queued takes effect, or
+// math.MaxInt64 when items holds its last: the op decides only the weeks
+// due before next, and the op that applies that item decides the rest.
+// When a week due before one of the items can't be decided in this op,
+// because the op has decided opWeeks weeks or a day of the week isn't
+// decided yet, the op applies nothing from that item on, so the freezes
+// they earn never reach the week first. settle returns how many of the
+// items it used, fewer than len(items) then.
+func (j *Job) settle(ctx context.Context, account string, items []item, next int64, p Params) (Result, int, error) {
 	var res Result
+	var used int
 	err := j.d.Do(ctx, rowsPerDay*len(items)+rowsPerWeek*(len(items)/7+1), func(ctx context.Context, tx writer.Tx) error {
-		res = Result{}
+		res, used = Result{}, len(items)
 		at := j.now().UnixMilli()
 		need := p.Needed.Milliseconds()
 		g, err := loadGoals(ctx, tx, account, p)
@@ -365,33 +406,37 @@ func (j *Job) settle(ctx context.Context, account string, items []item, p Params
 		}
 		slices.SortFunc(evs, func(a, b event) int { return cmp.Or(cmp.Compare(a.at, b.at), cmp.Compare(a.day, b.day)) })
 		// weeksBefore decides the account's weeks whose deadline is before t,
-		// oldest first, while their days are all decided.
-		blocked := false
-		weeksBefore := func(t int64) error {
-			for !blocked && res.Weeks < opWeeks && g.nextWeek != "" {
+		// oldest first, and reports false when it leaves one undecided: the
+		// op has decided opWeeks weeks, or a day of the week isn't decided.
+		weeksBefore := func(t int64) (bool, error) {
+			for g.nextWeek != "" {
 				w := g.nextWeek
 				deadline, err := weekDeadline(h, w, p.Lag)
 				if err != nil || deadline >= t {
-					return err
+					return err == nil, err
+				}
+				if res.Weeks == opWeeks {
+					return false, nil
 				}
 				ok, err := daysDecided(ctx, tx, account, w)
-				if err != nil {
-					return err
-				}
-				if !ok {
-					blocked = true
-					return nil
+				if err != nil || !ok {
+					return false, err
 				}
 				if err := g.decideWeek(ctx, tx, account, w, at); err != nil {
-					return err
+					return false, err
 				}
 				res.Weeks++
 			}
-			return nil
+			return true, nil
 		}
-		for _, e := range evs {
-			if err := weeksBefore(e.at); err != nil {
+		for i, e := range evs {
+			ok, err := weeksBefore(e.at)
+			if err != nil {
 				return err
+			}
+			if !ok {
+				used = len(items) - (len(evs) - i)
+				break
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO build_days (user_id, day, a_ms, b_ms, counted, decided_at_ms)
 VALUES ($1, $2, $3, $4, $5, $6)`, account, e.day, e.credit.AMS, e.credit.BMS, boolInt(e.counts), at); err != nil {
@@ -408,15 +453,17 @@ VALUES ($1, $2, $3, $4, $5, $6)`, account, e.day, e.credit.AMS, e.credit.BMS, bo
 				}
 			}
 		}
-		if err := weeksBefore(at + 1); err != nil {
-			return err
+		if used == len(items) {
+			if _, err := weeksBefore(min(at+1, next)); err != nil {
+				return err
+			}
 		}
 		return g.save(ctx, tx, account)
 	})
 	if err != nil {
-		return Result{}, fmt.Errorf("buildday: storing %s's days: %w", account, err)
+		return Result{}, 0, fmt.Errorf("buildday: storing %s's days: %w", account, err)
 	}
-	return res, nil
+	return res, used, nil
 }
 
 // stored reports whether build_days holds the account's day.

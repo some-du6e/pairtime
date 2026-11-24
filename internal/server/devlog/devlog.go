@@ -25,6 +25,15 @@
 // removal's record 30 days after it, and the client drops a publish
 // unanswered for 30 days (WP-CO4). The eraser (WP-SV13) deletes all of an
 // account's rows through DeleteAccount.
+//
+// So that one device token can't fill the disk (#283), an account holds at
+// most MaxDevlogs devlogs, with MaxMarkdownTotal bytes of Markdown between
+// them, and one badge per code. A publish past a devlog cap gets ErrLimit,
+// a show of a code the account shows already under another id gets
+// ErrShown, and a delete or removal of an id the account doesn't hold gets
+// ErrLimit while the account keeps MaxRemovals removal records. Each
+// stores nothing. The delete or removal of a held item is never refused,
+// and always keeps its record, past MaxRemovals too.
 package devlog
 
 import (
@@ -46,6 +55,15 @@ const MaxMarkdown = 64 << 10
 
 // maxKeyLen is the longest id or project key a request may name.
 const maxKeyLen = 128
+
+// An account's caps (#283): its devlogs, the Markdown they hold between
+// them in bytes, and the removal records past which it keeps none of an id
+// it doesn't hold. They are the server's own limits, not SM parameters.
+const (
+	MaxDevlogs       = 1000
+	MaxMarkdownTotal = 8 << 20
+	MaxRemovals      = 1000
+)
 
 // Codes are the badges a teen can choose to show: the moment kinds of
 // DESIGN 3.8, none of which counts hours (orchestrator, 2026-11-23). A
@@ -102,6 +120,17 @@ type Querier = rollup.Querier
 // stores it nothing again.
 var ErrRemoved = errors.New("devlog: the id was removed")
 
+// ErrLimit is what Publish returns for a devlog that would take the account
+// past MaxDevlogs devlogs or MaxMarkdownTotal bytes of Markdown, and what
+// Delete and Remove return for an id the account doesn't hold while it
+// keeps MaxRemovals removal records. Nothing is stored.
+var ErrLimit = errors.New("devlog: the account's limit is reached")
+
+// ErrShown is what Show returns for a new id of a code the account shows
+// already. An account shows each code at most once, since DESIGN 4.4 keeps
+// "badges the teen chose to show, as codes from a fixed list".
+var ErrShown = errors.New("devlog: the account shows the badge already")
+
 // isRemoved reports whether removed_items holds the account's id.
 func isRemoved(ctx context.Context, q Querier, account, id string) (bool, error) {
 	var one int
@@ -115,9 +144,26 @@ func isRemoved(ctx context.Context, q Querier, account, id string) (bool, error)
 	return true, nil
 }
 
-// remove keeps the removal of the account's id at nowMS in removed_items.
-// A second removal of the id keeps the first one's time.
-func remove(ctx context.Context, tx writer.Tx, account, id string, nowMS int64) error {
+// remove keeps the removal of the account's id at nowMS in removed_items,
+// held saying whether the account held the item until this transaction
+// deleted it. A second removal of the id keeps the first one's time. The
+// removal of an id the account didn't hold gets ErrLimit and keeps nothing
+// while the account keeps MaxRemovals records. A held item's is always
+// kept.
+func remove(ctx context.Context, tx writer.Tx, account, id string, nowMS int64, held bool) error {
+	if !held {
+		gone, err := isRemoved(ctx, tx, account, id)
+		if err != nil || gone {
+			return err
+		}
+		var n int64
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM removed_items WHERE user_id = $1`, account).Scan(&n); err != nil {
+			return fmt.Errorf("devlog: counting removals: %w", err)
+		}
+		if n >= MaxRemovals {
+			return ErrLimit
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO removed_items (user_id, id, removed_at_ms) VALUES ($1, $2, $3)
 ON CONFLICT (user_id, id) DO NOTHING`, account, id, nowMS); err != nil {
 		return fmt.Errorf("devlog: keeping a removal: %w", err)
@@ -152,7 +198,8 @@ func scanDevlog(s scanner) (Devlog, error) {
 // project id in rollup_projects if it has none. It returns the devlog the
 // server holds and whether this call stored it: for an id the account
 // holds already, the devlog stored then, with nothing changed. An id in
-// removed_items gets ErrRemoved and stores nothing.
+// removed_items gets ErrRemoved, and a devlog that would take the account
+// past MaxDevlogs or MaxMarkdownTotal gets ErrLimit. Both store nothing.
 func Publish(ctx context.Context, tx writer.Tx, account, device string, d Devlog, nowMS int64) (Devlog, bool, error) {
 	if gone, err := isRemoved(ctx, tx, account, d.ID); err != nil || gone {
 		if gone {
@@ -167,6 +214,14 @@ WHERE d.user_id = $1 AND d.id = $2`, account, d.ID))
 		return held, false, nil
 	case !errors.Is(err, sql.ErrNoRows):
 		return Devlog{}, false, fmt.Errorf("devlog: reading a devlog: %w", err)
+	}
+	// LENGTH counts a BYTEA's or a BLOB's bytes on both engines.
+	var n, size int64
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(LENGTH(markdown)), 0) FROM devlogs WHERE user_id = $1`, account).Scan(&n, &size); err != nil {
+		return Devlog{}, false, fmt.Errorf("devlog: counting devlogs: %w", err)
+	}
+	if n >= MaxDevlogs || size+int64(len(d.Markdown)) > MaxMarkdownTotal {
+		return Devlog{}, false, ErrLimit
 	}
 	project, err := rollup.ProjectOf(ctx, tx, account, device, d.ProjectKey)
 	if err != nil {
@@ -212,18 +267,32 @@ func List(ctx context.Context, q Querier, account string) ([]Devlog, error) {
 
 // Delete deletes the account's devlog id at once, inside tx, at nowMS, and
 // keeps only the id and the time in removed_items, whether or not the
-// account held the devlog.
+// account held the devlog. For an id the account didn't hold, it gets
+// ErrLimit and keeps nothing while the account keeps MaxRemovals records.
 func Delete(ctx context.Context, tx writer.Tx, account, id string, nowMS int64) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM devlogs WHERE user_id = $1 AND id = $2`, account, id); err != nil {
+	held, err := deleteRow(ctx, tx, "devlogs", account, id)
+	if err != nil {
 		return fmt.Errorf("devlog: deleting a devlog: %w", err)
 	}
-	return remove(ctx, tx, account, id, nowMS)
+	return remove(ctx, tx, account, id, nowMS, held)
+}
+
+// deleteRow deletes the account's row id from table, and reports whether
+// there was one.
+func deleteRow(ctx context.Context, tx writer.Tx, table, account, id string) (bool, error) {
+	res, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE user_id = $1 AND id = $2`, account, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // Show stores the badge b the account chose to show, inside tx: b's ID
 // and Code, which the caller checked against Codes. It returns the badge
-// the server holds and whether this call stored it, as Publish does, and
-// ErrRemoved for an id in removed_items.
+// the server holds and whether this call stored it, as Publish does,
+// ErrRemoved for an id in removed_items, and ErrShown for a new id of a
+// code the account shows already.
 func Show(ctx context.Context, tx writer.Tx, account string, b Badge) (Badge, bool, error) {
 	if gone, err := isRemoved(ctx, tx, account, b.ID); err != nil || gone {
 		if gone {
@@ -236,6 +305,14 @@ func Show(ctx context.Context, tx writer.Tx, account string, b Badge) (Badge, bo
 	switch {
 	case err == nil:
 		return held, false, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return Badge{}, false, fmt.Errorf("devlog: reading a badge: %w", err)
+	}
+	var other string
+	err = tx.QueryRowContext(ctx, `SELECT id FROM badges WHERE user_id = $1 AND code = $2`, account, b.Code).Scan(&other)
+	switch {
+	case err == nil:
+		return Badge{}, false, ErrShown
 	case !errors.Is(err, sql.ErrNoRows):
 		return Badge{}, false, fmt.Errorf("devlog: reading a badge: %w", err)
 	}
@@ -269,12 +346,13 @@ func Badges(ctx context.Context, q Querier, account string) ([]Badge, error) {
 
 // Remove removes the account's badge id at once, inside tx, at nowMS, and
 // keeps only the id and the time in removed_items, as Delete does for a
-// devlog.
+// devlog, with the same cap on the ids the account didn't hold.
 func Remove(ctx context.Context, tx writer.Tx, account, id string, nowMS int64) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM badges WHERE user_id = $1 AND id = $2`, account, id); err != nil {
+	held, err := deleteRow(ctx, tx, "badges", account, id)
+	if err != nil {
 		return fmt.Errorf("devlog: removing a badge: %w", err)
 	}
-	return remove(ctx, tx, account, id, nowMS)
+	return remove(ctx, tx, account, id, nowMS, held)
 }
 
 // DeleteAccount deletes every devlog, badge and removal record of account,

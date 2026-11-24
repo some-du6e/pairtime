@@ -657,18 +657,24 @@ func TestBuildDays(t *testing.T) {
 		{
 			name: "a restore the server labeled backfilled keeps the minute's earlier witnessed credit",
 			do: func(w *world) {
+				// 600 s witnessed, which a restore would raise to 1,200 s and
+				// make a build day if backfilled revisions counted.
 				half := slot("p_one", 7.5, event.EvidenceA)
-				ms := withState(minutes("d1", morning, 30, half, half, half, half), event.StateProvisional)
+				ms := withState(minutes("d1", morning, 20, half, half, half, half), event.StateProvisional)
 				w.online(ms)
 				w.batch("d1", utc(2026, 11, 22, 10, 0))
 				s := slot("p_one", 15, event.EvidenceA)
 				w.upload(utc(2026, 11, 22, 10, 0), revised(ms, 1, event.StateRestored, s, s, s, s))
 				w.run(utc(2026, 11, 22, 10, 1))
+				if _, ok := w.day(friday); ok {
+					w.t.Errorf("%s is stored before its deadline with 600 s witnessed, want it open", friday)
+				}
+				w.run(deadline)
 			},
-			want: want{stored: true, counted: true, a: 900_000},
+			want: want{stored: true, counted: false, a: 600_000},
 			check: func(t *testing.T, w *world) {
-				if got := w.rolled(friday); got.AMS != 1_800_000 {
-					t.Errorf("rollups_daily holds %+v, want the restore's 1,800 s", got)
+				if got := w.rolled(friday); got.AMS != 1_200_000 {
+					t.Errorf("rollups_daily holds %+v, want the restore's 1,200 s", got)
 				}
 			},
 		},

@@ -5,15 +5,18 @@ package devlog
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/device"
+	"github.com/some-du6e/pairtime/internal/server/ingest"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 )
@@ -42,6 +45,13 @@ type call struct {
 	// markdown, when set, is the Markdown the response's devlog, or its
 	// list's only devlog, must hold byte for byte.
 	markdown string
+	// wait moves the clock on before the call.
+	wait time.Duration
+	// retryAfter, when set, is the Retry-After the response must carry.
+	retryAfter string
+	// broken makes the body's read fail after it, as when the connection
+	// breaks off.
+	broken bool
 }
 
 // devlogBody is a publish's JSON body.
@@ -57,6 +67,11 @@ func TestAPI(t *testing.T) {
 	tests := []struct {
 		name  string
 		calls []call
+		// burst, when set, is each device's rate: burst requests, refilled
+		// one every ingest.DefaultRateEvery.
+		burst int
+		// seed, when set, stores rows before the calls.
+		seed func(t *testing.T, db *store.DB)
 	}{
 		{name: "a publish without a device token is refused with token_missing", calls: []call{
 			{method: "POST", path: DevlogsPath, body: devlogBody("dl_1", "hi"), wantCode: 401, want: `"error":"token_missing"`},
@@ -109,6 +124,51 @@ func TestAPI(t *testing.T) {
 		{name: "a badge code that isn't on the list is refused", calls: []call{
 			{method: "POST", path: BadgesPath, token: "ptd_laptop", body: `{"id":"bd_1","code":"ten_hours"}`, wantCode: 400, want: `"error":"code_unknown"`},
 		}},
+		{name: "the devlogs list keeps <, > and & one byte each", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", tricky), wantCode: 201},
+			{method: "GET", path: DevlogsPath, token: "ptd_laptop", wantCode: 200, want: `Fixed the ` + "`nil`" + ` map <b>at last</b> & \"quoted\" it`},
+		}},
+		{name: "a body whose read breaks off is refused with body_unreadable", calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: `{"id":"dl_1",`, broken: true, wantCode: 400, want: `"error":"body_unreadable"`},
+		}},
+		{name: "a device past its rate gets 429 rate_limited with Retry-After on each of the six routes, and its next request once the bucket refills", burst: 1, calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "hi"), wantCode: 201},
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_2", "hi"), wantCode: 429, want: `"error":"rate_limited"`, retryAfter: "10"},
+			{method: "GET", path: DevlogsPath, token: "ptd_laptop", wantCode: 429, want: `"error":"rate_limited"`, retryAfter: "10"},
+			{method: "DELETE", path: DevlogsPath + "/dl_1", token: "ptd_laptop", wantCode: 429, want: `"error":"rate_limited"`, retryAfter: "10"},
+			{method: "POST", path: BadgesPath, token: "ptd_laptop", body: `{"id":"bd_1","code":"comeback"}`, wantCode: 429, want: `"error":"rate_limited"`, retryAfter: "10"},
+			{method: "GET", path: BadgesPath, token: "ptd_laptop", wantCode: 429, want: `"error":"rate_limited"`, retryAfter: "10"},
+			{method: "DELETE", path: BadgesPath + "/bd_1", token: "ptd_laptop", wantCode: 429, want: `"error":"rate_limited"`, retryAfter: "10"},
+			{method: "GET", path: DevlogsPath, token: "ptd_laptop", wait: 4 * time.Second, wantCode: 429, retryAfter: "6"},
+			{method: "GET", path: DevlogsPath, token: "ptd_laptop", wait: 7 * time.Second, wantCode: 200, markdown: "hi"},
+		}},
+		{name: "each device of the account has a rate of its own", burst: 1, calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "hi"), wantCode: 201},
+			{method: "GET", path: DevlogsPath, token: "ptd_desktop", wantCode: 200, markdown: "hi"},
+			{method: "GET", path: DevlogsPath, token: "ptd_laptop", wantCode: 429, retryAfter: "10"},
+		}},
+		{name: "a publish that would take the account past its caps is refused with 409 limit_reached, and a held id's retry still answers 200", seed: func(t *testing.T, db *store.DB) {
+			seedDevlogs(t, db, "u1", MaxDevlogs, 10)
+		}, calls: []call{
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_new", "hi"), wantCode: 409, want: `"error":"limit_reached"`},
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_seed_0", "hi"), wantCode: 200, want: `"id":"dl_seed_0"`},
+		}},
+		{name: "a new id of a code the account shows is refused with 409 already_shown, and the same id again answers 200", calls: []call{
+			{method: "POST", path: BadgesPath, token: "ptd_laptop", body: `{"id":"bd_1","code":"comeback"}`, wantCode: 201},
+			{method: "POST", path: BadgesPath, token: "ptd_desktop", body: `{"id":"bd_2","code":"comeback"}`, wantCode: 409, want: `"error":"already_shown"`},
+			{method: "POST", path: BadgesPath, token: "ptd_desktop", body: `{"id":"bd_1","code":"comeback"}`, wantCode: 200, want: `"id":"bd_1"`},
+			{method: "GET", path: BadgesPath, token: "ptd_laptop", wantCode: 200, want: `{"badges":[{"id":"bd_1","code":"comeback"}]}`},
+		}},
+		{name: "past 1,000 removal records a delete of a never-held id is refused with 409 limit_reached, and a held devlog's delete still answers 204", seed: func(t *testing.T, db *store.DB) {
+			seedRemovals(t, db, "u1", MaxRemovals)
+		}, calls: []call{
+			{method: "DELETE", path: DevlogsPath + "/dl_never", token: "ptd_laptop", wantCode: 409, want: `"error":"limit_reached"`},
+			{method: "DELETE", path: BadgesPath + "/bd_never", token: "ptd_laptop", wantCode: 409, want: `"error":"limit_reached"`},
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "hi"), wantCode: 201},
+			{method: "DELETE", path: DevlogsPath + "/dl_1", token: "ptd_laptop", wantCode: 204},
+			{method: "POST", path: DevlogsPath, token: "ptd_laptop", body: devlogBody("dl_1", "hi"), wantCode: 410},
+			{method: "DELETE", path: DevlogsPath + "/rm_seed_3", token: "ptd_laptop", wantCode: 204},
+		}},
 		{name: "a badge shows and lists, and after its removal its show sent again gets 410", calls: []call{
 			{method: "POST", path: BadgesPath, token: "ptd_laptop", body: `{"id":"bd_1","code":"loop_caught"}`, wantCode: 201, want: `"code":"loop_caught"`},
 			{method: "GET", path: BadgesPath, token: "ptd_desktop", wantCode: 200, want: `{"badges":[{"id":"bd_1","code":"loop_caught"}]}`},
@@ -125,24 +185,40 @@ func TestAPI(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db := newDB(t, store.SQLite)
+			if tt.seed != nil {
+				tt.seed(t, db)
+			}
 			w := writer.Start(db.Write, writer.Options{})
 			defer w.Close()
-			mux := http.NewServeMux()
-			New(Options{
+			now := at(10, 0)
+			o := Options{
 				Devices: devices, Writer: w, Read: db.Read,
-				Now:    func() time.Time { return at(10, 0) },
+				Now:    func() time.Time { return now },
 				Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-			}).Register(mux)
+			}
+			if tt.burst > 0 {
+				o.Rate = ingest.NewLimiter(tt.burst, ingest.DefaultRateEvery)
+			}
+			mux := http.NewServeMux()
+			New(o).Register(mux)
 			for i, c := range tt.calls {
-				r := httptest.NewRequest(c.method, c.path, strings.NewReader(c.body))
+				now = now.Add(c.wait)
+				var body io.Reader = strings.NewReader(c.body)
+				if c.broken {
+					body = io.MultiReader(body, iotest.ErrReader(errors.New("connection reset by peer")))
+				}
+				r := httptest.NewRequest(c.method, c.path, body)
 				if c.token != "" {
 					r.Header.Set("Authorization", "Bearer "+c.token)
 				}
 				rec := httptest.NewRecorder()
 				mux.ServeHTTP(rec, r)
-				body := rec.Body.String()
-				if rec.Code != c.wantCode || !strings.Contains(body, c.want) {
-					t.Fatalf("call %d, %s %s = %d %.300s; want %d with %s", i, c.method, c.path, rec.Code, body, c.wantCode, c.want)
+				got := rec.Body.String()
+				if rec.Code != c.wantCode || !strings.Contains(got, c.want) {
+					t.Fatalf("call %d, %s %s = %d %.300s; want %d with %s", i, c.method, c.path, rec.Code, got, c.wantCode, c.want)
+				}
+				if ra := rec.Header().Get("Retry-After"); ra != c.retryAfter {
+					t.Errorf("call %d: Retry-After is %q, want %q", i, ra, c.retryAfter)
 				}
 				if c.markdown == "" {
 					continue
@@ -151,11 +227,11 @@ func TestAPI(t *testing.T) {
 				var all struct{ Devlogs []Devlog }
 				if c.method == "GET" {
 					if err := json.Unmarshal(rec.Body.Bytes(), &all); err != nil || len(all.Devlogs) != 1 {
-						t.Fatalf("call %d: %s doesn't hold one devlog (%v)", i, body, err)
+						t.Fatalf("call %d: %s doesn't hold one devlog (%v)", i, got, err)
 					}
 					one = all.Devlogs[0]
 				} else if err := json.Unmarshal(rec.Body.Bytes(), &one); err != nil {
-					t.Fatalf("call %d: %s isn't a devlog (%v)", i, body, err)
+					t.Fatalf("call %d: %s isn't a devlog (%v)", i, got, err)
 				}
 				if one.Markdown != c.markdown || one.Device != "d1" || one.ProjectKey != "p_one" || !one.ReceivedAt.Equal(at(10, 0)) {
 					t.Errorf("call %d: the devlog is %+v, want the Markdown byte for byte, from d1's p_one, received at 10:00", i, one)

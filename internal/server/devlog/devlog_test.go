@@ -5,6 +5,7 @@ package devlog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"regexp"
@@ -110,6 +111,64 @@ func read(t *testing.T, db *store.DB, account string) accountRows {
 		r.removed[id] = ms
 	}
 	return r
+}
+
+// seedDevlogs stores n devlogs of the account directly, dl_seed_0 and on,
+// each of size bytes of Markdown, as Publish stores them.
+func seedDevlogs(t *testing.T, db *store.DB, account string, n, size int) {
+	t.Helper()
+	md := []byte(strings.Repeat("x", size))
+	if err := in(t, db, func(ctx context.Context, tx writer.Tx) error {
+		for i := range n {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO devlogs (user_id, id, device_id, project_key, received_at_ms, markdown, ai_assisted)
+VALUES ($1, $2, 'd1', 'p_one', $3, $4, 0)`, account, fmt.Sprintf("dl_seed_%d", i), at(9, 0).UnixMilli(), md); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedRemovals keeps n removal records of the account directly, rm_seed_0
+// and on, at 9:00.
+func seedRemovals(t *testing.T, db *store.DB, account string, n int) {
+	t.Helper()
+	if err := in(t, db, func(ctx context.Context, tx writer.Tx) error {
+		for i := range n {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO removed_items (user_id, id, removed_at_ms) VALUES ($1, $2, $3)`,
+				account, fmt.Sprintf("rm_seed_%d", i), at(9, 0).UnixMilli()); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// show runs Show for the account's badge id and code in a transaction of
+// its own.
+func show(t *testing.T, db *store.DB, account, id, code string) (Badge, bool, error) {
+	t.Helper()
+	var b Badge
+	var created bool
+	err := in(t, db, func(ctx context.Context, tx writer.Tx) error {
+		var err error
+		b, created, err = Show(ctx, tx, account, Badge{ID: id, Code: code})
+		return err
+	})
+	return b, created, err
+}
+
+// del runs a Delete or a Remove of the account's id at at(h, 0) in a
+// transaction of its own.
+func del(t *testing.T, db *store.DB, op func(context.Context, writer.Tx, string, string, int64) error, account, id string, h int) error {
+	t.Helper()
+	return in(t, db, func(ctx context.Context, tx writer.Tx) error {
+		return op(ctx, tx, account, id, at(h, 0).UnixMilli())
+	})
 }
 
 func publish(t *testing.T, db *store.DB, account, device string, d Devlog, now time.Time) (Devlog, bool, error) {
@@ -320,6 +379,118 @@ VALUES ('u1', 'd1', 'p_one', 'rolled-project')`); err != nil {
 				}
 				if err := show(); !errors.Is(err, ErrRemoved) {
 					t.Errorf("the show sent again = %v, want ErrRemoved", err)
+				}
+			},
+		},
+		{
+			name: "a publish that would take the account past 1,000 devlogs gets ErrLimit and stores nothing, and a held id's republish still answers",
+			check: func(t *testing.T, db *store.DB) {
+				seedDevlogs(t, db, "u1", MaxDevlogs, 10)
+				if _, _, err := publish(t, db, "u1", "d1", x, at(10, 0)); !errors.Is(err, ErrLimit) {
+					t.Errorf("the 1,001st devlog = %v, want ErrLimit", err)
+				}
+				if got := read(t, db, "u1"); len(got.devlogs) != MaxDevlogs || slices.Contains(got.devlogs, x.ID) {
+					t.Errorf("the account holds %d devlogs, want the %d seeded and not %s", len(got.devlogs), MaxDevlogs, x.ID)
+				}
+				held := Devlog{ID: "dl_seed_7", ProjectKey: "p_one", Markdown: "again"}
+				if got, created, err := publish(t, db, "u1", "d1", held, at(10, 0)); err != nil || created || got.Markdown != strings.Repeat("x", 10) {
+					t.Errorf("the republish of a held id = %+v, created %v, %v; want the stored devlog", got, created, err)
+				}
+				if _, created, err := publish(t, db, "u2", "d9", x, at(10, 0)); err != nil || !created {
+					t.Errorf("another account's publish = created %v, %v", created, err)
+				}
+			},
+		},
+		{
+			name: "a publish that would take the account past 8 MiB of Markdown gets ErrLimit, and one that reaches 8 MiB exactly is stored",
+			check: func(t *testing.T, db *store.DB) {
+				seedDevlogs(t, db, "u1", MaxMarkdownTotal/MaxMarkdown-1, MaxMarkdown)
+				last := Devlog{ID: "dl_last", ProjectKey: "p_one", Markdown: strings.Repeat("y", MaxMarkdown)}
+				if _, created, err := publish(t, db, "u1", "d1", last, at(10, 0)); err != nil || !created {
+					t.Fatalf("the devlog that reaches 8 MiB = created %v, %v", created, err)
+				}
+				one := Devlog{ID: "dl_more", ProjectKey: "p_one", Markdown: "z"}
+				if _, _, err := publish(t, db, "u1", "d1", one, at(10, 1)); !errors.Is(err, ErrLimit) {
+					t.Errorf("a byte past 8 MiB = %v, want ErrLimit", err)
+				}
+				if got := read(t, db, "u1"); slices.Contains(got.devlogs, "dl_more") {
+					t.Errorf("the account holds dl_more")
+				}
+			},
+		},
+		{
+			name: "an account shows each code once: a new id of a code it shows gets ErrShown, the same id again is a repeat, and a removal frees the code",
+			check: func(t *testing.T, db *store.DB) {
+				if _, created, err := show(t, db, "u1", "bd_1", "comeback"); err != nil || !created {
+					t.Fatalf("Show = created %v, %v", created, err)
+				}
+				if _, _, err := show(t, db, "u1", "bd_2", "comeback"); !errors.Is(err, ErrShown) {
+					t.Errorf("a second id of the code = %v, want ErrShown", err)
+				}
+				if b, created, err := show(t, db, "u1", "bd_1", "comeback"); err != nil || created || b.ID != "bd_1" {
+					t.Errorf("the same id again = %+v, created %v, %v; want the stored badge", b, created, err)
+				}
+				if _, created, err := show(t, db, "u2", "bd_2", "comeback"); err != nil || !created {
+					t.Errorf("another account's show of the code = created %v, %v", created, err)
+				}
+				if err := del(t, db, Remove, "u1", "bd_1", 11); err != nil {
+					t.Fatal(err)
+				}
+				if _, created, err := show(t, db, "u1", "bd_3", "comeback"); err != nil || !created {
+					t.Errorf("a new id after the removal = created %v, %v; want it stored", created, err)
+				}
+				if got := read(t, db, "u1"); !reflect.DeepEqual(got.badges, []string{"bd_3"}) {
+					t.Errorf("the account shows %v, want only bd_3", got.badges)
+				}
+			},
+		},
+		{
+			name: "a delete of an id the account never held keeps its record until the account keeps 1,000, then gets ErrLimit and keeps nothing",
+			check: func(t *testing.T, db *store.DB) {
+				seedRemovals(t, db, "u1", MaxRemovals-1)
+				if err := del(t, db, Delete, "u1", "dl_a", 10); err != nil {
+					t.Fatalf("the 1,000th record = %v", err)
+				}
+				for _, op := range []struct {
+					name string
+					op   func(context.Context, writer.Tx, string, string, int64) error
+				}{{"Delete", Delete}, {"Remove", Remove}} {
+					if err := del(t, db, op.op, "u1", "never_held", 11); !errors.Is(err, ErrLimit) {
+						t.Errorf("%s of a never-held id past 1,000 records = %v, want ErrLimit", op.name, err)
+					}
+				}
+				got := read(t, db, "u1")
+				if _, ok := got.removed["never_held"]; ok || len(got.removed) != MaxRemovals {
+					t.Errorf("the account keeps %d records, never_held among them: %v; want %d without it", len(got.removed), ok, MaxRemovals)
+				}
+				if err := del(t, db, Delete, "u1", "dl_a", 12); err != nil {
+					t.Errorf("a second delete of a kept id = %v, want it answered", err)
+				}
+				if got := read(t, db, "u1").removed["dl_a"]; got != at(10, 0).UnixMilli() {
+					t.Errorf("dl_a's removal is at %d, want the first one's", got)
+				}
+				if err := del(t, db, Delete, "u2", "never_held", 11); err != nil {
+					t.Errorf("another account's delete = %v", err)
+				}
+			},
+		},
+		{
+			name: "a held devlog's delete and a held badge's removal are never refused, and keep their records past 1,000",
+			check: func(t *testing.T, db *store.DB) {
+				seedRemovals(t, db, "u1", MaxRemovals)
+				publish(t, db, "u1", "d1", x, at(10, 0))
+				show(t, db, "u1", "bd_1", "new_tool")
+				if err := del(t, db, Delete, "u1", x.ID, 11); err != nil {
+					t.Errorf("the held devlog's delete = %v", err)
+				}
+				if err := del(t, db, Remove, "u1", "bd_1", 11); err != nil {
+					t.Errorf("the held badge's removal = %v", err)
+				}
+				got := read(t, db, "u1")
+				_, devlogKept := got.removed[x.ID]
+				_, badgeKept := got.removed["bd_1"]
+				if len(got.devlogs) != 0 || len(got.badges) != 0 || !devlogKept || !badgeKept || len(got.removed) != MaxRemovals+2 {
+					t.Errorf("the account holds %v and %v with %d records; want both gone and both removals kept", got.devlogs, got.badges, len(got.removed))
 				}
 			},
 		},

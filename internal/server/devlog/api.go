@@ -11,11 +11,13 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/some-du6e/pairtime/internal/server/device"
+	"github.com/some-du6e/pairtime/internal/server/ingest"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 )
 
@@ -50,6 +52,12 @@ type Options struct {
 	// Now is the clock. A devlog's time is Now inside the writer op that
 	// stores it.
 	Now func() time.Time
+	// Rate counts each device's requests to these routes, as ingest counts
+	// its uploads (SP 8.6). Nil means one of ingest's default rate, a
+	// burst of ingest.DefaultRateBurst refilled one every
+	// ingest.DefaultRateEvery, kept apart from the device's upload rate,
+	// which only signed requests use up.
+	Rate *ingest.Limiter
 	// Logger hears of reads and writes that fail.
 	Logger *slog.Logger
 }
@@ -60,7 +68,12 @@ type Options struct {
 type Service struct{ o Options }
 
 // New returns the API.
-func New(o Options) *Service { return &Service{o: o} }
+func New(o Options) *Service {
+	if o.Rate == nil {
+		o.Rate = ingest.NewLimiter(ingest.DefaultRateBurst, ingest.DefaultRateEvery)
+	}
+	return &Service{o: o}
+}
 
 // Register adds the API's routes to mux.
 func (s *Service) Register(mux *http.ServeMux) {
@@ -83,7 +96,12 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	h.Set("Content-Type", "application/json; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	// Every answer is JSON that no browser sniffs as HTML (pairtimed sends
+	// nosniff), so <, > and & stay one byte each, and a list of devlogs is
+	// about as long as their Markdown.
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	enc.Encode(v)
 }
 
 func refuse(w http.ResponseWriter, status int, code, detail string) {
@@ -118,10 +136,39 @@ func (s *Service) authenticate(w http.ResponseWriter, r *http.Request) (device.D
 	return device.Device{}, false
 }
 
+// limit counts a request of dev against the device's rate, or answers 429
+// itself and reports false. The caller calls done once it has answered.
+func (s *Service) limit(w http.ResponseWriter, dev device.Device) (done func(), ok bool) {
+	done, wait := s.o.Rate.Take(dev.ID, s.o.Now())
+	if done == nil {
+		w.Header().Set("Retry-After", strconv.Itoa(wait))
+		refuse(w, http.StatusTooManyRequests, "rate_limited", "This device is sending faster than its rate, or another of its requests is still being answered; wait Retry-After seconds, then send it again.")
+		return nil, false
+	}
+	return done, true
+}
+
+// admit authenticates r's device and counts the request, one without a
+// body, against the device's rate, or answers 401, 429 or 503 itself and
+// reports false. The caller calls done once it has answered.
+func (s *Service) admit(w http.ResponseWriter, r *http.Request) (device.Device, func(), bool) {
+	dev, ok := s.authenticate(w, r)
+	if !ok {
+		return device.Device{}, nil, false
+	}
+	done, ok := s.limit(w, dev)
+	if !ok {
+		return device.Device{}, nil, false
+	}
+	return dev, done, true
+}
+
 // readObject reads r's body, at most maxBody bytes of valid UTF-8, as one
 // JSON object into v, refusing a member v lacks, or answers 400 or 413
-// itself and reports false.
+// itself and reports false. As at ingest, the body has ingest.BodyTimeout
+// to arrive once the headers are in.
 func readObject(w http.ResponseWriter, r *http.Request, v any, shape string) bool {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(ingest.BodyTimeout))
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
 	var tooLarge *http.MaxBytesError
 	switch {
@@ -129,7 +176,7 @@ func readObject(w http.ResponseWriter, r *http.Request, v any, shape string) boo
 		refuse(w, http.StatusRequestEntityTooLarge, "body_too_large", "The body is too large: a devlog's Markdown is at most 64 KiB.")
 		return false
 	case err != nil:
-		refuse(w, http.StatusBadRequest, "body_unread", "The body didn't arrive whole.")
+		refuse(w, http.StatusBadRequest, "body_unreadable", "The body couldn't be read, as when the connection broke off; retry the same body.")
 		return false
 	case !utf8.Valid(data):
 		refuse(w, http.StatusBadRequest, "json_invalid", "The body must be one JSON object in valid UTF-8.")
@@ -159,8 +206,8 @@ type devlogRequest struct {
 const devlogShape = "The body is an object with id and project, each a key, markdown, a string, and ai_assisted, true or false."
 
 // publish is POST /api/v1/devlogs: 201 with the devlog stored now, 200
-// with the one stored before for an id the account holds, and 410 for an
-// id the teen deleted.
+// with the one stored before for an id the account holds, 410 for an id
+// the teen deleted, and 409 past the account's caps.
 func (s *Service) publish(w http.ResponseWriter, r *http.Request) {
 	dev, ok := s.authenticate(w, r)
 	if !ok {
@@ -170,6 +217,14 @@ func (s *Service) publish(w http.ResponseWriter, r *http.Request) {
 	if !readObject(w, r, &req, devlogShape) {
 		return
 	}
+	// The rate counts the request once its body is in, as ingest's does, so
+	// a body that arrives slowly holds no slot the device's other requests
+	// need.
+	done, ok := s.limit(w, dev)
+	if !ok {
+		return
+	}
+	defer done()
 	switch {
 	case req.ID == nil || req.Project == nil || req.Markdown == nil || req.AIAssisted == nil:
 		refuse(w, http.StatusBadRequest, "body_shape", devlogShape)
@@ -198,6 +253,8 @@ func (s *Service) publish(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrRemoved):
 		refuse(w, http.StatusGone, "removed", "This devlog was deleted, so the server won't take it again.")
+	case errors.Is(err, ErrLimit):
+		refuse(w, http.StatusConflict, "limit_reached", "This devlog would take the account past 1,000 devlogs or 8 MiB of Markdown between them, the most it can hold; delete one to publish another.")
 	case err != nil:
 		s.unavailable(w, "devlog: publishing a devlog", err)
 	case created:
@@ -209,10 +266,11 @@ func (s *Service) publish(w http.ResponseWriter, r *http.Request) {
 
 // devlogs is GET /api/v1/devlogs: the account's devlogs, oldest first.
 func (s *Service) devlogs(w http.ResponseWriter, r *http.Request) {
-	dev, ok := s.authenticate(w, r)
+	dev, done, ok := s.admit(w, r)
 	if !ok {
 		return
 	}
+	defer done()
 	all, err := List(r.Context(), s.o.Read, dev.Account)
 	if err != nil {
 		s.unavailable(w, "devlog: reading devlogs", err)
@@ -224,7 +282,8 @@ func (s *Service) devlogs(w http.ResponseWriter, r *http.Request) {
 }
 
 // delete is DELETE /api/v1/devlogs/{id}: the devlog goes at once, and only
-// its id and the time stay, whether or not the server held it.
+// its id and the time stay, whether or not the server held it, unless the
+// server didn't hold it and the account keeps MaxRemovals records.
 func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	s.take(w, r, Delete, "devlog: deleting a devlog")
 }
@@ -237,7 +296,8 @@ type badgeRequest struct {
 
 const badgeShape = "The body is an object with id, a key, and code, one of the badge codes."
 
-// show is POST /api/v1/badges, as publish is for a devlog.
+// show is POST /api/v1/badges, as publish is for a devlog, with 409 for a
+// new id of a code the account shows already.
 func (s *Service) show(w http.ResponseWriter, r *http.Request) {
 	dev, ok := s.authenticate(w, r)
 	if !ok {
@@ -247,6 +307,11 @@ func (s *Service) show(w http.ResponseWriter, r *http.Request) {
 	if !readObject(w, r, &req, badgeShape) {
 		return
 	}
+	done, ok := s.limit(w, dev)
+	if !ok {
+		return
+	}
+	defer done()
 	switch {
 	case req.ID == nil || req.Code == nil:
 		refuse(w, http.StatusBadRequest, "body_shape", badgeShape)
@@ -268,6 +333,8 @@ func (s *Service) show(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, ErrRemoved):
 		refuse(w, http.StatusGone, "removed", "This badge was removed, so the server won't take it again.")
+	case errors.Is(err, ErrShown):
+		refuse(w, http.StatusConflict, "already_shown", "This account shows that badge already, under another id.")
 	case err != nil:
 		s.unavailable(w, "devlog: showing a badge", err)
 	case created:
@@ -279,10 +346,11 @@ func (s *Service) show(w http.ResponseWriter, r *http.Request) {
 
 // badges is GET /api/v1/badges: the badges the account shows.
 func (s *Service) badges(w http.ResponseWriter, r *http.Request) {
-	dev, ok := s.authenticate(w, r)
+	dev, done, ok := s.admit(w, r)
 	if !ok {
 		return
 	}
+	defer done()
 	all, err := Badges(r.Context(), s.o.Read, dev.Account)
 	if err != nil {
 		s.unavailable(w, "devlog: reading badges", err)
@@ -299,20 +367,27 @@ func (s *Service) remove(w http.ResponseWriter, r *http.Request) {
 }
 
 // take runs a delete or removal of the request's id: 204 once its row is
-// gone and its removal kept.
+// gone and its removal kept, and 409 for an id the account didn't hold
+// while it keeps MaxRemovals records.
 func (s *Service) take(w http.ResponseWriter, r *http.Request, op func(context.Context, writer.Tx, string, string, int64) error, what string) {
-	dev, ok := s.authenticate(w, r)
+	dev, done, ok := s.admit(w, r)
 	if !ok {
 		return
 	}
+	defer done()
 	id := r.PathValue("id")
 	if !isKey(id) {
 		refuse(w, http.StatusBadRequest, "id_invalid", "The id is 1 to 128 letters, digits, _ or -.")
 		return
 	}
-	if err := s.o.Writer.Do(r.Context(), 2, func(ctx context.Context, tx writer.Tx) error {
+	err := s.o.Writer.Do(r.Context(), 2, func(ctx context.Context, tx writer.Tx) error {
 		return op(ctx, tx, dev.Account, id, s.o.Now().UnixMilli())
-	}); err != nil {
+	})
+	switch {
+	case errors.Is(err, ErrLimit):
+		refuse(w, http.StatusConflict, "limit_reached", "This account keeps 1,000 removal records and the server doesn't hold this id, so it kept nothing.")
+		return
+	case err != nil:
 		s.unavailable(w, what, err)
 		return
 	}

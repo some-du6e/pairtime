@@ -235,8 +235,9 @@ func (g *goals) decideWeek(ctx context.Context, tx writer.Tx, account, w string,
 // day's deadline has passed, oldest first, and reports how many it decided
 // and whether it stopped at its bounds with weeks left. It counts the due
 // weeks on the read pool first and takes the writer only for an account
-// that has one.
-func (j *Job) weeks(ctx context.Context, now time.Time, p Params, budget int) (int, bool, error) {
+// that has one. It skips the accounts in skip, whose days this run left in
+// part.
+func (j *Job) weeks(ctx context.Context, now time.Time, p Params, budget int, skip map[string]bool) (int, bool, error) {
 	// A week's last day ends at least 6 days after its Monday in any zone,
 	// so its deadline is at least that plus BUILD_DAY_LAG_S after it.
 	latest := now.Add(-6*24*time.Hour - p.Lag).UTC().Format(time.DateOnly)
@@ -261,6 +262,9 @@ func (j *Job) weeks(ctx context.Context, now time.Time, p Params, budget int) (i
 	slices.SortFunc(due, func(a, b next) int { return cmp.Compare(a.account, b.account) })
 	total := 0
 	for _, n := range due {
+		if skip[n.account] {
+			continue
+		}
 		h, err := rollup.ZoneHistory(ctx, j.q, n.account)
 		if errors.Is(err, rollup.ErrNoAccount) {
 			continue

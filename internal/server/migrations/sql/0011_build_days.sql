@@ -87,6 +87,10 @@ CREATE TABLE badges (
     PRIMARY KEY (user_id, id)
 );
 
+-- An account shows each code at most once: DESIGN 4.4 keeps the badges the
+-- teen chose to show as codes from a fixed list (#283).
+CREATE UNIQUE INDEX badges_user_code ON badges (user_id, code);
+
 -- removed_items is the id of each devlog the teen deleted and each badge the
 -- teen removed, with when, and nothing else, so a publish of the id sent
 -- again from a computer that missed the removal gets 410 and stores nothing.

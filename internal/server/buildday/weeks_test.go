@@ -4,6 +4,9 @@ package buildday
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -19,6 +22,42 @@ func buildOn(w *world, y int, mo time.Month, d int) {
 	w.t.Helper()
 	w.online(full("d1", utc(y, mo, d, 10, 0), 15, event.EvidenceA))
 	w.run(utc(y, mo, d, 10, 16))
+}
+
+// uploadOn uploads n minutes of 60 seconds at level A from 10:00 on the
+// date y-mo-d, each as it ends, with no run of the job: 15 make a build
+// day, which reaches 900 seconds at 10:15.
+func uploadOn(w *world, y int, mo time.Month, d, n int) {
+	w.t.Helper()
+	w.online(full("d1", utc(y, mo, d, 10, 0), n, event.EvidenceA))
+}
+
+// nextWeek returns the account's build_goals next_week, "" without one.
+func (w *world) nextWeek() string {
+	w.t.Helper()
+	var next sql.NullString
+	err := w.db.Read.QueryRowContext(context.Background(), `SELECT next_week FROM build_goals WHERE user_id = 'u1'`).Scan(&next)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		w.t.Fatal(err)
+	}
+	return next.String
+}
+
+// frozenWeeks returns the Mondays of the account's frozen weeks, in order.
+func (w *world) frozenWeeks() []string {
+	w.t.Helper()
+	got, err := weekResults(context.Background(), w.db.Read, "u1")
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	var out []string
+	for week, r := range got {
+		if r.Result == Frozen {
+			out = append(out, week)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // weekResult returns the build_weeks result of the account's week that
@@ -178,6 +217,138 @@ func TestWeeks(t *testing.T) {
 			},
 		},
 		{
+			name: "a first run splits a backlog of more than 50 days across ops in time order, so a missed week waits for the freeze the next op's first day earns before its deadline",
+			do: func(w *world) {
+				if opDays != 50 {
+					w.t.Fatalf("the case splits 51 days after the 50th, and opDays is %d", opDays)
+				}
+				// Seven weeks of days from Monday 2026-09-21, with a build day
+				// on each of the first five Mondays and 60 s on the other 44
+				// days. Then the week of 2026-11-09, whose only build day is
+				// its Sunday, the 50th day to take effect and the 6th build
+				// day, and Monday 2026-11-16, the 51st, whose build day is the
+				// 7th and earns a freeze at 10:15, before that week's deadline,
+				// 2026-11-19T00:00Z.
+				for i := range 49 {
+					d := utc(2026, 9, 21, 0, 0).AddDate(0, 0, i)
+					n := 1
+					if i%7 == 0 && i < 35 {
+						n = 15
+					}
+					uploadOn(w, d.Year(), d.Month(), d.Day(), n)
+				}
+				uploadOn(w, 2026, 11, 15, 15)
+				uploadOn(w, 2026, 11, 16, 15)
+				w.run(utc(2026, 11, 23, 12, 0))
+			},
+			check: func(t *testing.T, w *world) {
+				// On time, Monday's freeze is held at the week's deadline and
+				// spent on it.
+				if got := w.weekResult("2026-11-09"); got != Frozen {
+					t.Errorf("the week of 2026-11-09 is %q, want frozen by the freeze 2026-11-16 earned", got)
+				}
+				if f := w.summary(utc(2026, 11, 23, 12, 0)).Freezes; f.Held != 0 || f.Earned != 1 || f.TowardNext != 0 {
+					t.Errorf("freezes %+v, want the one earned spent and 0 toward the next", f)
+				}
+				if got := w.frozenWeeks(); len(got) != 1 {
+					t.Errorf("frozen weeks %v, want only 2026-11-09", got)
+				}
+			},
+		},
+		{
+			name: "a first run over more than 20 due weeks stops at the 20th and goes on in the next run, so freezes cover the weeks runs on time would",
+			do: func(w *world) {
+				// 25 weeks from Monday 2026-06-01, each with build days on
+				// Saturday and Sunday only, so each misses the goal of 3, and
+				// every 7th build day earns a freeze in time for its own week.
+				for i := range 25 {
+					sat := utc(2026, 6, 6, 0, 0).AddDate(0, 0, 7*i)
+					sun := sat.AddDate(0, 0, 1)
+					uploadOn(w, sat.Year(), sat.Month(), sat.Day(), 15)
+					uploadOn(w, sun.Year(), sun.Month(), sun.Day(), 15)
+				}
+				if opWeeks != 20 {
+					w.t.Fatalf("the case needs the first run to stop after 20 weeks, and opWeeks is %d", opWeeks)
+				}
+				// The 25th week's deadline is 2026-11-26T00:00Z. The first run
+				// decides 20 weeks and stops at Saturday 2026-10-31, the first
+				// day after the 21st week's deadline.
+				at := utc(2026, 11, 26, 12, 0)
+				if r := w.run(at); !r.More || r.Weeks != 20 {
+					w.t.Errorf("the first run = %+v, want 20 weeks decided and work left", r)
+				}
+				if _, ok := w.day("2026-10-31"); ok {
+					w.t.Errorf("the first run stored 2026-10-31, past the week it couldn't decide")
+				}
+				for i := 0; ; i++ {
+					at = at.Add(time.Minute)
+					if !w.run(at).More {
+						break
+					}
+					if i == 3 {
+						w.t.Fatal("five runs left work")
+					}
+				}
+			},
+			check: func(t *testing.T, w *world) {
+				// Weeks 4, 7, 11, 14, 18, 21 and 25.
+				want := []string{"2026-06-22", "2026-07-13", "2026-08-10", "2026-08-31", "2026-09-28", "2026-10-19", "2026-11-16"}
+				if got := w.frozenWeeks(); !slices.Equal(got, want) {
+					t.Errorf("frozen weeks %v, want %v as runs on time freeze them", got, want)
+				}
+				if f := w.summary(utc(2026, 11, 26, 12, 0)).Freezes; f.Held != 0 || f.Earned != 7 || f.TowardNext != 1 {
+					t.Errorf("freezes %+v, want 7 earned, all spent, and 1 toward the next", f)
+				}
+				if got := w.nextWeek(); got != "2026-11-23" {
+					t.Errorf("next_week is %q, want 2026-11-23, every due week decided", got)
+				}
+			},
+		},
+		{
+			name: "a first run over more than 182 days of rollups decides the week that holds the horizon date whole, its days whose minutes are gone not counted, and the weeks after in time order",
+			do: func(w *world) {
+				// The run at 2026-11-25T12:00Z looks back 182 days, to
+				// Wednesday 2026-05-27, from the Monday of its week. That
+				// week's Monday and Tuesday were build days, whose minutes
+				// the retention jobs have deleted, and Saturday and Sunday
+				// are build days still within the 180 days of minutes. The
+				// week of 2026-06-01 has nothing, and the week of 2026-06-08
+				// has 5 build days, whose 5th, the 7th in all, earns a freeze
+				// after the deadline of the week of 2026-06-01, 2026-06-11T00:00Z.
+				for _, d := range []int{25, 26, 30, 31} {
+					uploadOn(w, 2026, 5, d, 15)
+				}
+				for d := 8; d <= 12; d++ {
+					uploadOn(w, 2026, 6, d, 15)
+				}
+				at := utc(2026, 11, 25, 12, 0)
+				w.sweepMinutes(at)
+				if r := w.run(at); r.More {
+					w.t.Errorf("the run left work: %+v", r)
+				}
+			},
+			check: func(t *testing.T, w *world) {
+				for _, day := range []string{"2026-05-25", "2026-05-26"} {
+					if r, ok := w.day(day); !ok || r.counted || r.a != 0 {
+						t.Errorf("%s is %+v (stored %v), want it decided not to count, with no minutes to read", day, r, ok)
+					}
+				}
+				for _, c := range []struct{ week, want string }{
+					{"2026-05-25", ""}, {"2026-06-01", ""}, {"2026-06-08", Met}, {"2026-06-15", Frozen}, {"2026-06-22", ""},
+				} {
+					if got := w.weekResult(c.week); got != c.want {
+						t.Errorf("the week of %s is %q, want %q", c.week, got, c.want)
+					}
+				}
+				if f := w.summary(utc(2026, 11, 25, 12, 0)).Freezes; f.Held != 0 || f.Earned != 1 {
+					t.Errorf("freezes %+v, want the one earned spent on the week of 2026-06-15", f)
+				}
+				if got := w.nextWeek(); got != "2026-11-16" {
+					t.Errorf("next_week is %q, want 2026-11-16, every due week decided", got)
+				}
+			},
+		},
+		{
 			name: "a week met early shows every build day it gets after",
 			do: func(w *world) {
 				for d := 16; d <= 20; d++ {
@@ -225,8 +396,8 @@ func TestWeeks(t *testing.T) {
 }
 
 // TestSummary checks the summary's days: a stored day as decided, an open
-// day with its time so far from rollups_daily, and a day past its deadline
-// with nothing uploaded as not counted.
+// day with its credit so far by the as-of read, never rollups_daily's
+// figure, and a day past its deadline with nothing uploaded as not counted.
 func TestSummary(t *testing.T) {
 	tests := []struct {
 		name string
