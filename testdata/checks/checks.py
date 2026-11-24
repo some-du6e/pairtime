@@ -666,6 +666,14 @@ def in_window(sub, t):
 # side door's session.start is a cross-check, which the scorer doesn't read
 # and which decides none of SM 2.2's rules.
 SIDE_DOOR_VIAS = {"track", "plugin", "bridge", "bridge_unverified"}
+# The WakaTime bridge's vias (DESIGN 5.7).
+BRIDGE_VIAS = {"bridge", "bridge_unverified"}
+
+
+def native_sessions(events):
+    """The sessions a hook or a log reader covers: those with a record via
+    hook or log, before or after any other (DESIGN 5.2, 5.7)."""
+    return {e["session_key"] for e in events if e["via"] in ("hook", "log")}
 
 
 def sessions_of(events):
@@ -673,7 +681,7 @@ def sessions_of(events):
     scorer reads, so a side door's start is left out of a session a hook or
     a log reader covers (DESIGN 5.2). Rules 4 and 5 and the IDE test read
     these."""
-    covered = {e["session_key"] for e in events if e["via"] in ("hook", "log")}
+    covered = native_sessions(events)
     starts = {}
     for e in events:
         if e["kind"] == "session.start" and not (e["session_key"] in covered and e["via"] in SIDE_DOOR_VIAS):
@@ -683,11 +691,16 @@ def sessions_of(events):
 
 def prompts_in(events, sub=None):
     """The prompts of a submission, one per turn: the hook's record when
-    there is one, else the log reader's. With no submission, every prompt
-    of the device."""
+    there is one, else the log reader's. A bridge prompt in a session a hook
+    or a log reader covers is a cross-check (DESIGN 5.7), which the scorer
+    makes no turn, so it is left out. With no submission, every prompt of
+    the device."""
+    native = native_sessions(events)
     by_turn = {}
     for e in events:
         if e["kind"] != "prompt.submit" or sub is not None and e.get("project_key") not in sub["projects"]:
+            continue
+        if e["via"] in BRIDGE_VIAS and e["session_key"] in native:
             continue
         k = (e["session_key"], e["data"]["turn_key"])
         if k not in by_turn or (by_turn[k]["via"] != "hook" and e["via"] == "hook"):
@@ -753,24 +766,60 @@ def bridged_only(events):
     or bridge_unverified, and none via hook or log, read over all of the
     session's records, so a hook's record after a prompt counts at the
     prompt too (DESIGN 5.7)."""
-    native = {e["session_key"] for e in events if e["via"] in ("hook", "log")}
-    return {e["session_key"] for e in events if e["via"] in ("bridge", "bridge_unverified")} - native
+    return {e["session_key"] for e in events if e["via"] in BRIDGE_VIAS} - native_sessions(events)
 
 
-def hosts(f, p, starts, bridged, t):
+# The harness records pkg/score's buildSessions reads for a session, so the
+# only ones that can set its project.
+HARNESS_KINDS = {"session.start", "session.end", "prompt.submit", "agent.output", "agent.tool", "agent.permission",
+                 "agent.interrupt", "agent.queue", "agent.stop", "agent.subagent", "cli.track"}
+
+
+def session_projects(events):
+    """Each session's project, as pkg/score's buildSessions sets it: the
+    project_key of the session's first harness record that has one, in the
+    records' order, by t, then seq, then event_id. In a session a hook or a
+    log reader covers, no side door's record of any kind sets it. That skip
+    is wider than sessions_of's, which leaves out only a side door's starts,
+    as D-spool-via decided for rules 4 and 5 and CC9. The scorer leaves out
+    every side-door record of such a session before it reads the session's
+    project, and hosts()' editor test reads that project."""
+    native = native_sessions(events)
+    projects = {}
+    for e in sorted(events, key=lambda e: (e["t"], e.get("seq", 0), e.get("event_id", ""))):
+        s = e["session_key"]
+        if s == "none" or s in projects or e["kind"] not in HARNESS_KINDS:
+            continue
+        if s in native and e["via"] in SIDE_DOOR_VIAS:
+            continue
+        if e.get("project_key"):
+            projects[s] = e["project_key"]
+    return projects
+
+
+def harness_sessions(events):
+    """What hosts() reads of the device's sessions, as hostedBy reads a
+    session: the starts the scorer reads (sessions_of), the sessions only
+    the bridge reports (bridged_only) and each session's project
+    (session_projects)."""
+    return SimpleNamespace(starts=sessions_of(events), bridged=bridged_only(events), project=session_projects(events))
+
+
+def hosts(f, p, ss, t):
     """Whether a focus record is on the window hosting p's session at t,
     SM 2.2 rule 6's window, as pkg/score's hostedBy reads it: one whose
     hosted_sessions holds the session, or an editor whose focus_project,
     when it has one, is the session's project, while an IDE runs the
-    session or when only the bridge reports it (bridged_only)."""
+    session or when only the bridge reports it. ss is harness_sessions'
+    reading of the device's records."""
     if f is None:
         return False
-    d = f["data"]
-    if p["session_key"] in d.get("hosted_sessions", []):
+    d, s = f["data"], p["session_key"]
+    if s in d.get("hosted_sessions", []):
         return True
-    if d["app_class"] != "editor" or d.get("focus_project", "") not in ("", p.get("project_key")):
+    if d["app_class"] != "editor" or d.get("focus_project", "") not in ("", ss.project.get(s, "")):
         return False
-    return ide_session(starts, p["session_key"], t) or p["session_key"] in bridged
+    return ide_session(ss.starts, s, t) or s in ss.bridged
 
 
 def input_times(events, keys):
@@ -780,18 +829,18 @@ def input_times(events, keys):
     return sorted({e["t"] - ms(e["data"][field]) for e in events if e["kind"] == "os.presence"})
 
 
-def human_prompt(events, p, keys, starts, bridged):
+def human_prompt(events, p, keys, ss):
     """Whether p is a human prompt. Rules 1 to 5 of SM 2.2 leave it open,
     and it passes the input and focus tests that rules 6 and 7 share:
     input in the 10 s before submit, read from the sample taken at the
     hook, and focus at submit on the window hosting its session. Rule 6's
     plausibility test only tells those two rules apart."""
-    if automated(p, starts):
+    if automated(p, ss.starts):
         return False
     s = sample_at(events, p["t"])
     check(s is not None, f"a presence sample at the prompt at {p['t']}")
     idle = s["data"]["idle_keys_s"] if keys else s["data"]["idle_any_s"]
-    return ms(idle) <= KEYS_PRE_MS and hosts(focus_at(events, p["t"]), p, starts, bridged, p["t"])
+    return ms(idle) <= KEYS_PRE_MS and hosts(focus_at(events, p["t"]), p, ss, p["t"])
 
 
 def cc1(events, sub):
@@ -848,18 +897,18 @@ def cc2(events, sub, keys):
     either (DESIGN 7.3). DESIGN also leaves relayed prompts out, which this
     reading doesn't need: it reads no relay.message, and no scenario has
     one."""
-    starts, bridged = sessions_of(events), bridged_only(events)
+    ss = harness_sessions(events)
     counts = {"prompts": 0, "with_input_and_focus": 0, "no_input": 0, "no_focus": 0}
     items = []
     for p in prompts_in(events, sub):
-        if automated(p, starts):
+        if automated(p, ss.starts):
             continue
         counts["prompts"] += 1
         s = sample_at(events, p["t"])
         check(s is not None, f"a presence sample at the prompt at {p['t']}")
         idle = s["data"]["idle_keys_s"] if keys else s["data"]["idle_any_s"]
         has_input = ms(idle) <= KEYS_PRE_MS
-        has_focus = hosts(focus_at(events, p["t"]), p, starts, bridged, p["t"])
+        has_focus = hosts(focus_at(events, p["t"]), p, ss, p["t"])
         if has_input and has_focus:
             counts["with_input_and_focus"] += 1
             continue
@@ -1214,16 +1263,20 @@ def cc10(events, sub):
 
 def prompt_lead_ms(p, pc):
     """SM 2.3's lead for a prompt anchor of class pc, in ms. Its typing
-    part rounds to the nearest second, halves up (SM 1.3)."""
+    part rounds to the nearest second, halves up (SM 1.3). A bridge
+    prompt's lead is its typing part alone, with no think or answer part
+    (DESIGN 6.2 D4)."""
     typed = p["data"]["typed_len_est"]
     typing = int(min(Fraction(COMPOSE_MAX_S), Fraction(typed) / COMPOSE_CPS) + Fraction(1, 2))
     if pc in ("substantive", "error_paste"):
-        lead = THINK_LEAD_S + typing
+        think = THINK_LEAD_S
     elif pc == "answer":
-        lead = ANSWER_LEAD_S + typing
+        think = ANSWER_LEAD_S
     else:
         return None  # a go-ahead's lead has no typing part
-    return lead * 1000
+    if p["via"] in BRIDGE_VIAS:
+        think = 0
+    return (think + typing) * 1000
 
 
 def cc11(events, sub, keys, typing, classes):
@@ -1250,11 +1303,11 @@ def cc11(events, sub, keys, typing, classes):
     if typing is None:
         return outcome("not_computable", counts, reason="the typing module is off on this device")
     slots = {s["start"]: s for s in typing["slots"]}
-    starts, bridged = sessions_of(events), bridged_only(events)
+    ss = harness_sessions(events)
     inputs = input_times(events, keys)
     # Every human prompt of the device, in any project and at any time,
     # takes the slots before it from the prompts after it.
-    humans = [q for q in prompts_in(events) if human_prompt(events, q, keys, starts, bridged)]
+    humans = [q for q in prompts_in(events) if human_prompt(events, q, keys, ss)]
     used, items = set(), []
     for p in humans:
         if p.get("project_key") not in sub["projects"] or not in_window(sub, p["t"]):
@@ -1284,9 +1337,9 @@ def cc11(events, sub, keys, typing, classes):
         for st in lead_slots:
             end = st + SLOT_MS - 1
             f = focus_at(events, end)
-            if st not in slots or st in used or not hosts(f, p, starts, bridged, end):
+            if st not in slots or st in used or not hosts(f, p, ss, end):
                 continue
-            if any(st < q["t"] < b and hosts(f, q, starts, bridged, end) for q in humans if q is not p):
+            if any(st < q["t"] < b and hosts(f, q, ss, end) for q in humans if q is not p):
                 continue
             used.add(st)
             k += slots[st]["keys"]
@@ -1389,10 +1442,12 @@ def selftest_hosts():
     hostedBy has it: one whose hosted_sessions lists the session, or an
     editor whose focus_project, when it has one, is the session's project,
     while an IDE runs the session or when only the bridge reports it. In
-    each case an editor that lists no session is in front for two prompts,
-    each sent a second after a key press, so the editor alone decides
-    whether CC2 passes or fails them."""
+    each case a window that lists no session is in front for two prompts,
+    each sent a second after a key press, so that window alone decides
+    whether CC2 passes them or fails them for focus. A bridge prompt in a
+    session a hook or a log reader covers is no prompt at all."""
     ide = made_start(0, "s1", "unknown", entrypoint="ide", tty=False)
+    later_ide = made_start(10_000, "s1", "unknown", entrypoint="ide", tty=False)
     cases = [
         ("an editor with no focus_project hosts an IDE session", "pass", [ide, made_focus(0, "editor")], "hook"),
         ("an editor on the session's project hosts an IDE session", "pass",
@@ -1401,28 +1456,67 @@ def selftest_hosts():
          [ide, made_focus(0, "editor", project="p_other")], "hook"),
         ("an IDE doesn't run a desktop app's session, so the editor doesn't host it", "fail",
          [made_start(0, "s1", "unknown", entrypoint="desktop", tty=False), made_focus(0, "editor")], "hook"),
+        # The session's project is the project_key of its first harness
+        # record that has one, here the start's, though its prompts name
+        # another.
+        ("an editor on the project of the session's first record hosts it, though its prompts name another",
+         "pass", [made_start(0, "s1", "unknown", entrypoint="ide", tty=False, project="p_first"),
+                  made_focus(0, "editor", project="p_first")], "hook"),
+        ("a record with no project_key doesn't set the session's project", "pass",
+         [made_start(0, "s1", "unknown", entrypoint="ide", tty=False, project=""),
+          made_focus(0, "editor", project=MADE_P)], "hook"),
+        ("a relay.message naming the session doesn't set its project, since it isn't a harness record", "fail",
+         [made_event(0, "relay.message", {}, "s1", "app", project="p_side"), later_ide,
+          made_focus(0, "editor", project="p_side")], "hook"),
+        ("a spooled start in a session a hook covers doesn't set its project", "fail",
+         [made_start(0, "s1", "unknown", via="plugin", tty=False, project="p_side"), later_ide,
+          made_focus(0, "editor", project="p_side")], "hook"),
+        ("nor does a side door's record of another kind there, such as a cli.track", "fail",
+         [made_event(0, "cli.track", {}, "s1", "track", project="p_side"), later_ide,
+          made_focus(0, "editor", project="p_side")], "hook"),
     ]
     # Each bridge via and each native via has cases of its own, so a via
-    # dropped from bridged_only fails one.
+    # dropped from BRIDGE_VIAS or native_sessions fails one.
     for via in ("bridge", "bridge_unverified"):
-        cases.append((f"an editor hosts a session only {via} records report", "pass", [made_focus(0, "editor")], via))
+        cases += [
+            (f"an editor hosts a session only {via} records report", "pass", [made_focus(0, "editor")], via),
+            (f"a terminal that lists no session doesn't host a session only {via} records report", "fail",
+             [made_focus(0, "terminal")], via),
+            (f"an editor on another project doesn't host a session only {via} records report", "fail",
+             [made_focus(0, "editor", project="p_other")], via),
+        ]
         for native in ("hook", "log"):
-            cases.append((f"an editor doesn't host a {via} session that a {native} record covers, though the "
-                          f"record comes after the prompts", "fail",
-                          [made_focus(0, "editor"), made_event(180_000, "agent.output", {"turn_key": "t2"}, "s1",
-                                                               native)], via))
+            cases += [
+                (f"a {via} prompt in a session a {native} record covers is a cross-check and no prompt, though "
+                 f"the record comes after it", "none",
+                 [made_focus(0, "editor"), made_event(180_000, "agent.output", {"turn_key": "t2"}, "s1", native)],
+                 via),
+                (f"an editor doesn't host a session {native} records cover, though {via} records report it too",
+                 "fail", [made_focus(0, "editor"), made_event(30_000, "agent.tool", {"turn_key": "t0"}, "s1", via)],
+                 native),
+            ]
     for name, want, setup, via in cases:
         events = setup + [made_prompt(60_000, "s1", "t1", via=via), made_prompt(120_000, "s1", "t2", via=via),
                           *made_samples([59_000, 119_000], [60_000, 120_000])]
         got = cc2(made(events), MADE_SUB, True)
-        check(got["result"] == want and got["counts"]["prompts"] == 2, f"CC2: {name}: {got}")
-    # CC11 reads the same window. The key-down slot is the last 15 s before
-    # the prompt, inside its typing part, so it counts under DESIGN 6.2 D4
-    # too, which gives a bridge prompt its typing part alone as its lead.
-    # This reading doesn't model D4.
-    got = made_cc11([(600_000, 60, "substantive")], [(585_000, 15, 0)], [made_focus(0, "editor")], via="bridge")
-    check(got["result"] == "pass" and got["counts"]["key_downs"] == 15,
-          f"CC11: an editor hosts the slots of a session only the bridge reports: {got}")
+        c = got["counts"]
+        if want == "none":
+            ok = got["result"] == "not_computable" and c["prompts"] == 0
+        else:
+            ok = got["result"] == want and c["prompts"] == 2 and c["no_focus"] == (2 if want == "fail" else 0)
+        check(ok, f"CC2: {name}: {got}")
+    # CC11 reads the same window, and gives a bridge prompt its typing part
+    # alone as its lead (DESIGN 6.2 D4): for 60 characters, the 40 s before
+    # it.
+    for via in ("bridge", "bridge_unverified"):
+        got = made_cc11([(600_000, 60, "substantive")], [(585_000, 15, 0)], [made_focus(0, "editor")], via=via)
+        check(got["result"] == "pass" and got["counts"]["key_downs"] == 15,
+              f"CC11: an editor hosts the slots of a session only {via} records report: {got}")
+        got = made_cc11([(600_000, 60, "substantive")], [(540_000, 15, 0)], [made_focus(0, "editor")],
+                        inputs=[554_000, 599_000], via=via)
+        check(got["result"] == "fail" and got["counts"]["key_downs"] == 0,
+              f"CC11: a {via} prompt's lead has no think part, so the slot 60 s to 45 s before it counts nothing: "
+              f"{got}")
 
 
 def selftest_starts():
@@ -1461,6 +1555,14 @@ def selftest_starts():
         got = cc2(events, MADE_SUB, True)
         check(got["result"] == "pass" and got["counts"]["prompts"] == 1,
               f"rule 4 reads no side door's start in a session {name}: {got}")
+    # Nor does the IDE test: a spooled resume that says an IDE runs the
+    # session doesn't make an editor that lists no session its window.
+    events = made([made_start(0, "s1"), made_start(50_000, "s1", "ide", "resume", via="plugin", entrypoint="ide"),
+                   made_focus(0, "editor"), made_prompt(60_000, "s1", "t1"), made_prompt(120_000, "s1", "t2"),
+                   *made_samples([59_000, 119_000], [60_000, 120_000])])
+    got = cc2(events, MADE_SUB, True)
+    check(got["result"] == "fail" and got["counts"]["no_focus"] == 2,
+          f"the IDE test reads no side door's start in a session a hook covers: {got}")
     alone = [made_start(0, "s1", via="plugin"), spooled, made_prompt(100_000, "s1", "t1", via="plugin")]
     check(automated(made_prompt(100_000, "s1", "t1", via="plugin"), sessions_of(alone)),
           "rule 4 reads a side door's start in a session no hook or log reader covers")
@@ -1615,7 +1717,7 @@ def selftest_cc11():
     check(got["result"] == "pass" and got["counts"]["key_downs"] == 56,
           f"CC11's lead rounds 223 typed characters up to 149 s, so the slot it starts inside counts: {got}")
     for typed, want in ((61, 41), (35, 23)):
-        lead = prompt_lead_ms({"data": {"typed_len_est": typed}}, "substantive")
+        lead = prompt_lead_ms({"via": "hook", "data": {"typed_len_est": typed}}, "substantive")
         check(lead == (THINK_LEAD_S + want) * 1000, f"SM 1.3: {typed} typed characters are {want} s of typing: {lead}")
 
 
