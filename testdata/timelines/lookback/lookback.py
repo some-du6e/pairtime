@@ -201,7 +201,8 @@ class Replay:
     wanted, as (second, {session: [reason, part]}, winner). capped holds
     the seconds nobody wanted that lie between a stop and the prompt that
     follows it, in a session whose bucket only UNKNOWN_BUCKET_MAX_S emptied:
-    with BUCKET_MAX_S instead, the session would have read them."""
+    the output that cap cut drains only on seconds no session wants, like
+    SM 2.4's kept-aside entries."""
 
     def __init__(self, events, start, end):
         tl.check(start % 1000 == 0 and end % 1000 == 0, "the replay runs on whole seconds")

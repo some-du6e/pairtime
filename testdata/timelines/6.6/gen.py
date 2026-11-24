@@ -200,17 +200,20 @@ bucket_minutes = sum(1 for m in minutes if running_in(m, m + tl.MINUTE_MS) > 0)
 
 # SM 5.2's codes, second by second. Nothing is credited and no loop or cap
 # withholds credit, and the jiggler moves in every slot, so no second is
-# X.absent. A slot's focus is the window that held focus longest in it, a
-# window being an app class and a project, since app_hash stays on the device,
-# and for a terminal the hosted set it held longest, the earliest on a tie
-# (SM 2.5). The terminal holds focus all night, so a slot is the project's when
-# it hosted a run's session for most of the slot, and no project's,
-# X.ambiguous (SM 3.2), when it hosted nothing. In the project's slots a second is
-# X.automated while a run's headless turn goes and X.no_anchor otherwise.
+# X.absent. A slot's focus is the window that held focus longest in it, the
+# earliest on a tie, where os.focus records with the same app class and project
+# are one window, since app_hash stays on the device (SM 2.5). The terminal
+# holds focus all night, so a slot is the project's when it hosted a run's
+# session for most of the slot, and no project's, X.ambiguous (SM 3.2), when it
+# hosted nothing. In the project's slots a second is X.automated while a run's
+# headless turn goes and X.no_anchor otherwise.
 focus = sorted((e["t"], e["data"]) for e in events if e["kind"] == "os.focus")
 tl.check(all(d["app_class"] == "terminal" and d["app_hash"] == APP for _, d in focus),
          "the terminal holds focus all night")
-tl.check(all(t["origin"] == "headless" for t in turns), "every turn is headless, so a running one gives X.automated")
+starts = [e["data"] for e in events if e["kind"] == "session.start"]
+tl.check(len(starts) == len(turns)
+         and all(d["entrypoint"] == "sdk" and d["parent_class"] == "script_runtime" for d in starts),
+         "every session is sdk under a script, so SM 2.2 rule 4 makes each turn headless")
 
 
 def slot_project(s):
