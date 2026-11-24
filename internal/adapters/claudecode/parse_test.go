@@ -449,6 +449,9 @@ func TestLedgerPath(t *testing.T) {
 		{"a Windows path gets slashes and an upper-case drive, and compares without case", `c:\Users\capture\Proj`, `C:\users\capture\proj\a.go`, "a.go", true},
 		{"a Windows file outside the project keeps its drive", `C:\Users\capture\proj`, `d:\tmp\x.txt`, "D:/tmp/x.txt", true},
 		{"with no project the path stays absolute", "", "/home/capture/a.py", "/home/capture/a.py", true},
+		{"under a project root of / a file is keyed relative to it", "/", "/etc/hosts", "etc/hosts", true},
+		{"under a drive root a file is keyed relative to it, and compares without case", "C:/", `c:\Users\capture\a.go`, "Users/capture/a.go", true},
+		{"a file on another drive than a drive root keeps its drive", "C:/", `d:\tmp\x.txt`, "D:/tmp/x.txt", true},
 		{"a relative path can't be keyed", "/home/capture/proj", "a.py", "", false},
 		{"a POSIX path with a backslash can't be keyed", "", `/home/capture/a\b.py`, "", false},
 	}

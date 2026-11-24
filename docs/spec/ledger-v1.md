@@ -85,7 +85,7 @@ folder key = "d" || hex(HMAC-SHA256(K_project, ascii("pairtime/v1/project/folder
                                    || utf8(folder))[0:16])
 ```
 
-`root_1` to `root_n` are the repo's root commit ids in lowercase hex, sorted and without repeats. `folder` is the folder's canonical path with forward slashes, lowercased on Windows and macOS. `internal/adapters/git/keys.go` has the code, and `TestProjectKeyVectors` pins a vector for each form.
+`root_1` to `root_n` are the repo's root commit ids in lowercase hex, sorted and without repeats. `folder` is the folder's canonical path with forward slashes, lowercased on Windows and macOS. `internal/adapters/git/keys.go` has the code, and `TestProjectKeyVectors` pins a vector for each form. A key names one project on the device (DESIGN 5.8): a repo can keep its folder key after its first commit, and a folder whose repo is gone takes a random key of the folder key's form, `d` and 32 random lowercase hex digits, which only the project map in `state.json` holds.
 
 The hook path's session secret is `K_session`, derived as above with the label `pairtime/v1/session`. A harness session's `session_key` is an HMAC under it, over a domain string of its own:
 

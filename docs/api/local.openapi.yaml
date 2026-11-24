@@ -1088,7 +1088,7 @@ components:
     ProjectEntry:
       type: object
       additionalProperties: false
-      required: [project, code, local_name, state, label]
+      required: [project, code, local_name, state, label, sent]
       description: >
         One project, as `pairtime projects` lists it, and whether its name
         shows on its owner's own pairtime dashboard.
@@ -1140,6 +1140,14 @@ components:
             sent, and the label turning it on would show otherwise: the one
             config.toml kept, or the local name. Empty when there is none, so
             turning the name on needs one.
+        sent:
+          type: boolean
+          description: >
+            Whether a set of the name may have reached the server since its
+            last answer about this computer's names: pairtime sent one and no
+            answer came for it (docs/spec/project-names-v1.md 2). While the
+            name is `sending`, the dashboard may show it already, as `pairtime
+            projects` says.
         hidden_at:
           type: string
           format: date-time
