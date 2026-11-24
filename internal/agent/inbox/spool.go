@@ -39,12 +39,14 @@ const MaxSpool = 256 << 20
 // ErrSpoolFull means the spool is over MaxSpool.
 var ErrSpoolFull = errors.New("inbox: the spool is full")
 
-// SpoolKeep is how long a spool file may wait to be drained: one that no
-// sender and no drain has written for SpoolKeep, by its write time on the
-// device's clock, is deleted unread at the agent's next start or retention
-// sweep (Expire), as held.jsonl keeps a call 7 days at most
-// (D-inbox-age-cap; DESIGN 3.5, 4.4; docs/retention.json's device.inbox).
-// A clock that jumps forward deletes early, never late.
+// SpoolKeep is how long a hook call may wait in the inbox to be drained: a
+// spool file is deleted unread at the agent's next start or retention sweep
+// once SpoolKeep has passed since its first call was sent, by the call's
+// Sent on the device's clock (Expire, spooledAt), as held.jsonl keeps a
+// call 7 days at most (D-inbox-age-cap; DESIGN 3.5, 4.4;
+// docs/retention.json's device.inbox). The calls spooled after the first go
+// with it, early, which costs credit, never privacy. A clock that jumps
+// forward deletes early, never late.
 const SpoolKeep = 7 * 24 * time.Hour
 
 // StoppedName is the file in the inbox directory that stops the spool:
@@ -87,13 +89,15 @@ func ResumeSpooling(dir string) error {
 	return err
 }
 
-// Expire deletes, unread, each spool file in dir, the inbox directory, that
-// nothing has written for SpoolKeep by its write time on the device's
-// clock: the spool, the files drains took and haven't finished, and those
-// they set aside (D-inbox-age-cap). It reports how many it deleted, and
-// every file it couldn't, joined. The agent runs it at its start, before
-// its first drain, and with each retention sweep, so a call waits unread
-// no longer than held.jsonl keeps one, whether or not a drain runs.
+// Expire deletes, unread, each spool file in dir, the inbox directory,
+// whose first call has waited SpoolKeep by now, the device's clock
+// (spooledAt): the spool, the files drains took and haven't finished, and
+// those they set aside (D-inbox-age-cap). A file's first call is its
+// oldest, so no call waits longer, and the calls after it go with it,
+// early. It reports how many files it deleted, and every file it couldn't,
+// joined. The agent runs it at its start, before its first drain, and with
+// each retention sweep, so a call waits unread no longer than held.jsonl
+// keeps one, whether or not a drain runs.
 func Expire(dir string, now time.Time) (int, error) {
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -103,6 +107,10 @@ func Expire(dir string, now time.Time) (int, error) {
 		return 0, err
 	}
 	cutoff := now.Add(-SpoolKeep)
+	// A directory that isn't this user's alone may hold anything in a spool
+	// file's place, so Expire reads no file in it, as Drain and Scan read
+	// none, and dates each by its write time.
+	private := privateDir(dir) == nil
 	n := 0
 	var errs []error
 	for _, e := range entries {
@@ -120,10 +128,14 @@ func Expire(dir string, now time.Time) (int, error) {
 			errs = append(errs, err)
 			continue
 		}
-		if fi.ModTime().After(cutoff) {
+		p := filepath.Join(dir, name)
+		at := fi.ModTime()
+		if private {
+			at = spooledAt(p, fi)
+		}
+		if at.After(cutoff) {
 			continue
 		}
-		p := filepath.Join(dir, name)
 		if err := retry(func() error { return os.Remove(p) }); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			errs = append(errs, fmt.Errorf("inbox: deleting %s, which waited longer than %v: %w", name, SpoolKeep, err))
 			continue
@@ -131,6 +143,56 @@ func Expire(dir string, now time.Time) (int, error) {
 		n++
 	}
 	return n, errors.Join(errs...)
+}
+
+// spooledAt is when the spool file name, whose information as listed is
+// fi, began to wait: when its first call was sent (firstSent), or when the
+// file was last written if that is earlier, as across a step back of the
+// clock, or if no line it starts with holds a message, as in a file that a
+// drain set aside or that can't be read. So a file is never kept longer
+// than its write time alone would keep it.
+func spooledAt(name string, fi fs.FileInfo) time.Time {
+	at := fi.ModTime()
+	if !fi.Mode().IsRegular() {
+		return at
+	}
+	if sent, ok := firstSent(name); ok && sent.Before(at) {
+		at = sent
+	}
+	return at
+}
+
+// firstSent is the Sent of the first message in the spool file name: on
+// the first line that holds one, passing over the newline before each
+// record (Append) and, as Drain and Scan do, a line that holds none, as a
+// record a sender's write cut short, and false when no line within the
+// first two records' bytes holds one, or the file opened isn't a regular
+// file. It opens the file as Scan does, so a drain can still rename and
+// delete it, and a sender append to it.
+func firstSent(name string) (time.Time, bool) {
+	f, err := openShared(name)
+	if err != nil {
+		return time.Time{}, false
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+		return time.Time{}, false
+	}
+	// A record cut short and the whole one after it, with the newlines
+	// around each and a line ending.
+	r := bufio.NewReader(io.LimitReader(f, 2*(MaxMessage+3)))
+	for {
+		line, long, err := readLine(r, MaxMessage)
+		if err != nil {
+			return time.Time{}, false
+		}
+		if long || len(line) == 0 {
+			continue
+		}
+		if m, err := Decode(line); err == nil {
+			return m.Sent, true
+		}
+	}
 }
 
 // maxSpool is MaxSpool, as a variable that tests can lower.
@@ -277,7 +339,8 @@ type DrainResult struct {
 	// SetAside is how many spool files were renamed to end in .bad,
 	// because drain after drain failed to read them or because they aren't
 	// this user's alone. Drain deletes them SpoolKeep after they were last
-	// written.
+	// written, and Expire, never later, once their first call has waited
+	// SpoolKeep (spooledAt).
 	SetAside int
 	// Busy is why the spool couldn't be taken this time, as when senders
 	// on Windows kept it open throughout. Its messages wait for the next
@@ -671,7 +734,10 @@ func openScan(name string) (*os.File, error) {
 // taken lists the spool files that drains took, oldest first, and deletes
 // the ones set aside that nothing has written for SpoolKeep. A file set
 // aside can hold prompts, and the inbox is no place to keep them (DESIGN
-// 3.5).
+// 3.5). It reads none of them, as a file is set aside when drain after
+// drain failed to read it: Expire, at the agent's start and each retention
+// look, deletes one once its first call has waited SpoolKeep (spooledAt),
+// which is never later.
 func (d *Drainer) taken() ([]string, error) {
 	entries, err := os.ReadDir(d.dir)
 	if err != nil {
@@ -698,9 +764,9 @@ func (d *Drainer) taken() ([]string, error) {
 }
 
 // setAside renames the taken file name to end in .bad, so that drains
-// leave it alone. It keeps the file's write time, by which Drain and Expire
-// delete it SpoolKeep after it was last written, so setting a file aside
-// never keeps its calls longer.
+// leave it alone. It keeps the file's write time, by which Drain deletes it
+// and Expire dates it when it holds no message Expire reads (spooledAt), so
+// setting a file aside never keeps its calls longer.
 func setAside(name string) error {
 	bad := strings.TrimSuffix(name, takenSuffix) + badSuffix
 	return retry(func() error { return os.Rename(name, bad) })

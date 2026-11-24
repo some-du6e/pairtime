@@ -177,3 +177,83 @@ func TestPrivateSpool(t *testing.T) {
 		})
 	}
 }
+
+// TestExpireUnread checks that Expire reads no spool file it can't trust
+// to be one (D-inbox-age-cap): in an inbox others may write in, as Drain
+// and Scan read none there, it dates each by its write time, and a FIFO in
+// a spool file's place, which another user's write end could hold open,
+// gives firstSent nothing to read, at once.
+func TestExpireUnread(t *testing.T) {
+	day := 24 * time.Hour
+	// spool writes a spool whose one call was sent 7 days ago, last written
+	// written ago, into dir, which others may write in.
+	spool := func(t *testing.T, dir string, written time.Duration) string {
+		t.Helper()
+		if err := os.Chmod(dir, 0o777); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(dir, SpoolName)
+		wall := time.Now()
+		b := append(append([]byte("\n"), encoded(t, wall.Add(-7*day), false)...), '\n')
+		if err := os.WriteFile(p, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		at := wall.Add(-written)
+		if err := os.Chtimes(p, at, at); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	cases := []struct {
+		name string
+		run  func(t *testing.T, dir string)
+	}{
+		{"in an inbox others may write in, a spool file whose first call was sent 7 days ago, written yesterday, stays by its write time", func(t *testing.T, dir string) {
+			p := spool(t, dir, day)
+			if n, err := Expire(dir, time.Now()); n != 0 || err != nil {
+				t.Errorf("Expire = %d, %v; want 0, nil", n, err)
+			}
+			if _, err := os.Lstat(p); err != nil {
+				t.Errorf("the spool went: %v", err)
+			}
+		}},
+		{"in an inbox others may write in, a spool file written 7 days ago is deleted by its write time", func(t *testing.T, dir string) {
+			p := spool(t, dir, 7*day)
+			if n, err := Expire(dir, time.Now()); n != 1 || err != nil {
+				t.Errorf("Expire = %d, %v; want 1, nil", n, err)
+			}
+			if _, err := os.Lstat(p); !os.IsNotExist(err) {
+				t.Errorf("the spool is still there: %v", err)
+			}
+		}},
+		{"a FIFO in a spool file's place holds no call, and firstSent doesn't wait on its write end", func(t *testing.T, dir string) {
+			p := filepath.Join(dir, SpoolName)
+			if err := syscall.Mkfifo(p, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// A write end held open, with nothing written, would keep a read
+			// waiting.
+			w, err := os.OpenFile(p, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer w.Close()
+			done := make(chan bool, 1)
+			go func() {
+				_, ok := firstSent(p)
+				done <- ok
+			}()
+			select {
+			case ok := <-done:
+				if ok {
+					t.Error("firstSent found a call in a FIFO")
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("firstSent waited on the FIFO's write end")
+			}
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) { c.run(t, t.TempDir()) })
+	}
+}

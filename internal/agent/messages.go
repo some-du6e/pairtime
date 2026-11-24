@@ -263,8 +263,8 @@ func (a *agent) spoolHolds(before func(event.Envelope) bool) bool {
 	return false
 }
 
-// expireInbox deletes, unread, the spool files of the inbox that nothing
-// has written for inbox.SpoolKeep (D-inbox-age-cap): at the agent's start,
+// expireInbox deletes, unread, the spool files of the inbox whose first
+// call has waited inbox.SpoolKeep (D-inbox-age-cap): at the agent's start,
 // before its first drain, and with each retention look, so a call waits
 // unread no longer than held.jsonl keeps one, whether or not a drain runs,
 // as while the journal or the ledger can't open.

@@ -14,30 +14,34 @@ import (
 )
 
 // TestInboxAgeCap checks inbox/'s bound at the agent's start
-// (D-inbox-age-cap): a spool file nothing has written for inbox.SpoolKeep
-// is deleted unread before the first drain, so none of its calls reaches
-// the journal, and a younger one is drained.
+// (D-inbox-age-cap): a spool whose first call was sent inbox.SpoolKeep
+// ago is deleted unread before the first drain, with the call spooled
+// after it, so neither reaches the journal, and a younger one is drained.
 func TestInboxAgeCap(t *testing.T) {
 	cases := []struct {
 		name    string
-		age     time.Duration
+		age     time.Duration // how long ago the first call was sent
 		drained bool
 	}{
-		{"a spooled call 7 days old is deleted unread at the start, before the first drain", inbox.SpoolKeep, false},
-		{"one 6 days 23 hours old is drained", inbox.SpoolKeep - time.Hour, true},
+		{"a spool whose first call was sent 7 days ago is deleted unread at the start, before the first drain, with the call spooled after it yesterday", inbox.SpoolKeep, false},
+		{"one whose first call was sent 6 days 23 hours ago is drained, with the call spooled after it", inbox.SpoolKeep - time.Hour, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			a, dirs := modesAgent(t, "online")
 			a.hooked = newHookTies()
 			a.drained = make(chan struct{})
-			at := time.Now().Add(-c.age)
-			m := hookMessage(t, "UserPromptSubmit", `{"session_id":"s","hook_event_name":"UserPromptSubmit"}`, inbox.Proc{PID: 4242, Name: "claude"}, at)
-			if err := inbox.Append(dirs.Inbox(), m); err != nil {
-				t.Fatal(err)
+			now := time.Now()
+			yesterday := now.Add(-24 * time.Hour)
+			for _, at := range []time.Time{now.Add(-c.age), yesterday} {
+				m := hookMessage(t, "UserPromptSubmit", `{"session_id":"s","hook_event_name":"UserPromptSubmit"}`, inbox.Proc{PID: 4242, Name: "claude"}, at)
+				if err := inbox.Append(dirs.Inbox(), m); err != nil {
+					t.Fatal(err)
+				}
 			}
+			// The spool was last written as the second call came.
 			spool := filepath.Join(dirs.Inbox(), inbox.SpoolName)
-			if err := os.Chtimes(spool, at, at); err != nil {
+			if err := os.Chtimes(spool, yesterday, yesterday); err != nil {
 				t.Fatal(err)
 			}
 			stop := a.startIPC(Options{DrainEvery: time.Hour})
@@ -47,11 +51,14 @@ func TestInboxAgeCap(t *testing.T) {
 			case <-time.After(30 * time.Second):
 				t.Fatal("the first drain never ran")
 			}
-			stored, _ := a.journal.Stats()
-			if got := stored > 0; got != c.drained {
-				t.Errorf("the journal stored %d messages; want the call drained %v", stored, c.drained)
+			var want uint64
+			if c.drained {
+				want = 2
 			}
-			// Drained or deleted, the call no longer waits in the inbox.
+			if stored, _ := a.journal.Stats(); stored != want {
+				t.Errorf("the journal stored %d messages, want %d", stored, want)
+			}
+			// Drained or deleted, the calls no longer wait in the inbox.
 			if _, err := os.Lstat(spool); !errors.Is(err, fs.ErrNotExist) {
 				t.Errorf("the spool is still there: %v", err)
 			}
