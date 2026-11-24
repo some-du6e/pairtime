@@ -148,7 +148,7 @@ On your computer:
 - `pairtime ledger show --day <date>` prints everything pairtime recorded that day.
 - A `.pairtime-ignore` file keeps a folder out of pairtime entirely, and the tray menu can pause tracking for an hour.
 - Local-only mode uploads nothing.
-- "Delete everything" wipes pairtime's data on your computer, including its device key.
+- "Delete everything" wipes pairtime's data on your computer, including its device key. Your settings stay, and so does install's record of what it changed, with its copies of the files it edited, so that uninstall can put them back.
 
 Through the controller, you can:
 

@@ -32,10 +32,12 @@ be submitted any more. Copies that a backup or a synced folder already
 holds stay as they are, the key's file too when pairtime doctor says
 pairtime keeps its key in a file.
 
-pairtime itself and your settings in config.toml stay. pairtime starts
-again from nothing, under a new device key, and signed out: pairtime login
-links this computer again. What the pairtime server already has stays
-there until you remove this computer on your dashboard.
+pairtime itself and your settings in config.toml stay. So does install's
+record of what it changed, with its copies of the files it edited, so that
+pairtime uninstall can put them back. pairtime starts again from nothing,
+under a new device key, and signed out: pairtime login links this computer
+again. What the pairtime server already has stays there until you remove
+this computer on your dashboard.
 
   --yes   go ahead without asking
 

@@ -18,6 +18,7 @@
 //	device.uploads         uploads.jsonl              the uploader as it runs (uploadsKeep), and Sweep while it doesn't
 //	device.project_names   project-names.json         the uploader, as each names answer replaces it and its notes stay 1,000 at most (capNotes); "delete everything" and uninstall
 //	device.transcripts     not copied                 nothing
+//	device.install         install/                   uninstall, once it has put back what install changed; "delete everything" keeps it (wipeKeeps)
 //	device.key             K_dev                      "delete everything" and uninstall
 //
 // A store whose files are named after UTC days keeps a file while its day

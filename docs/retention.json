@@ -77,6 +77,12 @@
       "kept": "The server's last answer until its next one replaces it. A note until your dashboard shows that name again after you turned it on, the oldest notes going first when there are very many. Only the notes stay when this computer signs in to another server. All of it until you uninstall pairtime or delete everything"
     },
     {
+      "id": "device.install",
+      "where": "device",
+      "data": "What pairtime install changed outside pairtime's own folders, so that uninstall can put it back: each file it changed, and on Windows each registry setting, with what it wrote there; a copy of what each one held before, which can hold your API keys and tokens, such as your Hackatime key in your WakaTime config; where it put pairtime and which folders it made; and, if it added a line to your WakaTime config, that line's key and where that config is. They're plain text, not encrypted, in a folder other people's accounts on this computer can't open, though an administrator can",
+      "kept": "Until you uninstall pairtime, which puts back what install changed and then deletes them. \"Delete everything\" leaves them, so that uninstall can still put your files back. If uninstall stops before it has deleted pairtime's data, for example because it can't delete your device key or another program has one of pairtime's files open, they stay until you run it again"
+    },
+    {
       "id": "device.key",
       "where": "device",
       "data": "Your device key",
