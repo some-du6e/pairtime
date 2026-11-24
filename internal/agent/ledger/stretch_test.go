@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -2079,6 +2080,113 @@ func TestRestoredMarkEnds(t *testing.T) {
 						t.Errorf("no: the rows' due marks %v, the last batch online %v, batches %+v", due, b.Online, r.batches)
 					}
 				})
+			}
+		})
+	}
+}
+
+// failWrites makes the frames written to the segment fail until the func it
+// returns is called, each cut back off, as at a full disk, so the writer goes
+// on. It swaps the segment's handle for one opened for appending, whose
+// WriteAt fails at once (os.File.WriteAt) while its Truncate works. Windows
+// can't truncate a file opened for appending, so there the write would be
+// stuck (errStuck). The writer must have written to its segment first.
+func (r *lateRig) failWrites() func() {
+	r.t.Helper()
+	r.w.mu.Lock()
+	defer r.w.mu.Unlock()
+	seg := r.w.seg
+	if seg == nil {
+		r.t.Fatal("the writer has no segment open")
+	}
+	f, err := os.OpenFile(seg.name, os.O_RDWR|os.O_APPEND, 0)
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	was := seg.f
+	seg.f = f
+	return func() {
+		r.w.mu.Lock()
+		seg.f = was
+		r.w.mu.Unlock()
+		f.Close()
+	}
+}
+
+// TestFailedSealKeepsTheMark checks that a seal whose frame fails to write,
+// cut back off as at a full disk, leaves a mark Open restored as it was: the
+// writer drops the mark only once the frame that ends or takes it is
+// written, as a restart would read it from that frame. Dropped before, it
+// would be gone while the batch stays unsealed, so the retry, sealed
+// local-only while a call is on its way, would record no mark due, and the
+// next batch, all made after Open, would have none to take.
+func TestFailedSealKeepsTheMark(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows can't truncate a file opened for appending, so the rig's failed write would be stuck")
+	}
+	r := newLateRig(t)
+	// As in TestRestoredMarkEnds: the install's stretch, the switch back, and
+	// the first batch after it sealed local-only for a call still on its way,
+	// which leaves the mark due.
+	r.note(false)
+	r.write(r.presence(1000))
+	r.take()
+	r.at(10_000)
+	r.note(true)
+	r.pause()
+	r.held.Store(true)
+	r.at(20_000)
+	r.write(r.presence(20_000))
+	if b := r.seal(); b.Online {
+		t.Fatal("the first batch after the switch back was sealed online, for the call on its way")
+	}
+	r.held.Store(false)
+	if err := r.w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r.at(60_000)
+	r.open()
+	// A git change the startup scan found, whose batch, sealed online, would
+	// end the mark, but whose seal frame fails to write.
+	r.at(61_000)
+	r.write(r.gitChange(61_000))
+	restore := r.failWrites()
+	_, sealed, sealErr := r.w.Seal()
+	restore()
+	// The retry, while a spool file can't be read, which Waiting answers yes
+	// for: the newest batch is local-only, so the seal asks.
+	r.waits.Store(true)
+	r.at(62_000)
+	retry := r.seal()
+	r.waits.Store(false)
+	r.at(70_000)
+	r.write(r.presence(70_000))
+	next := r.seal()
+	if err := r.w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bf, err := readBatchesFile(filepath.Join(r.dir, batchesName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var due []uint64
+	for _, row := range bf.rows {
+		due = append(due, row.Due)
+	}
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"the seal whose frame fails to write returns its error, and the writer goes on", sealErr != nil && !sealed && !errors.Is(sealErr, errStuck)},
+		{"the retry, sealed local-only while Waiting says yes, records the mark due", !retry.Online && len(due) == 4 && due[2] > 0},
+		{"the next batch, all made after Open, takes the mark", next.Online && next.Back},
+		{"no batch is sealed local-only after one sealed online", !r.localAfterOnline()},
+	}
+	for _, ch := range checks {
+		t.Run(ch.name, func(t *testing.T) {
+			if !ch.ok {
+				t.Errorf("no: the failed seal sealed %v, err %v; the retry online %v; the next online %v, back %v; the rows' due marks %v",
+					sealed, sealErr, retry.Online, next.Online, next.Back, due)
 			}
 		})
 	}
