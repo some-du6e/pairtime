@@ -41,8 +41,9 @@ import (
 //
 // A log record's event_id is the same each time its line is read
 // (logEventID), so a line read again after a crash, before state.json said
-// it was, makes records pkg/score takes for copies of the ones already in
-// the ledger.
+// it was, makes records the adapters leave out where the ledger has them
+// (heldLogs), and pkg/score takes for copies of the ones already there. A
+// hook call's records are keyed the same way, by the call (hookEventID).
 
 // logReq is a batch of log lines the tailers hand the worker, and where the
 // worker answers how many it took.
@@ -619,7 +620,7 @@ func (h *adapterHost) logsHeld() *heldLogs {
 		}
 		held, err := loadHeldLogs(h.a.dirs.Ledger(), anchor, wallNow())
 		if err != nil {
-			h.a.log.Warn("couldn't read what the ledger holds, so a log line a replay reads again may make its record twice", "err", err)
+			h.a.log.Warn("couldn't read what the ledger holds, so a log line a replay reads again, or a hook call parsed again, may make its record twice", "err", err)
 		}
 		h.logHeld = held
 	}
@@ -825,6 +826,31 @@ func (h *adapterHost) logEventID(t int64, file, key string) string {
 	m.Write(n[:])
 	m.Write([]byte(file))
 	m.Write([]byte(key))
+	return eventIDFrom(t, m.Sum(nil))
+}
+
+// hookEventID is the event_id of a hook call's record: a UUIDv7 with the
+// record's time, whose other bits are an HMAC, under K_session and a domain
+// of its own, of the call's id (inbox.Message.ID) and the record's place in
+// Parse's output, counted from its end. A call parsed again, as after a
+// crash during a held.jsonl replay, a kill before its pending log was
+// emptied or a writer that stopped partway through it, makes the same ids,
+// so the adapters leave out what the ledger has (heldLogs) and pkg/score
+// counts it once. The place counts from the end because the one record a
+// call can have first, the walk's session.start, comes from the agent's
+// walk of the sender, which a call read back from an earlier run's
+// held.jsonl line never has; what follows comes from the call's payload.
+// The record's kind is left out, since a prompt parsed again against
+// memory saved after it comes out as agent.queue, which is the same record.
+func (h *adapterHost) hookEventID(t int64, call string, place int) string {
+	m := hmac.New(sha256.New, h.a.sessionSecret())
+	m.Write([]byte("pairtime/v1/hook-event"))
+	var n [8]byte
+	binary.BigEndian.PutUint64(n[:], uint64(len(call)))
+	m.Write(n[:])
+	m.Write([]byte(call))
+	binary.BigEndian.PutUint64(n[:], uint64(place))
+	m.Write(n[:])
 	return eventIDFrom(t, m.Sum(nil))
 }
 

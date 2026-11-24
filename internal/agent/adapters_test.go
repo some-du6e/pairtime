@@ -418,7 +418,17 @@ func TestHookCallsReachTheLedger(t *testing.T) {
 				}
 			})
 			k, _ := deviceKeys(t, r.dirs, []keys.Store{})
-			checkExpected(t, readLedger(t, r.dirs, event.SourceHook), k, projectKeyOf(t, r.dirs, []keys.Store{}, r.folder()))
+			recs := readLedger(t, r.dirs, event.SourceHook)
+			checkExpected(t, recs, k, projectKeyOf(t, r.dirs, []keys.Store{}, r.folder()))
+			t.Run("no two of the calls' records share an event_id, in any of the agent's runs", func(t *testing.T) {
+				seen := map[string]bool{}
+				for _, rec := range recs {
+					if seen[rec.ev.EventID] {
+						t.Errorf("two records share %s", rec.ev.EventID)
+					}
+					seen[rec.ev.EventID] = true
+				}
+			})
 		})
 	}
 }
