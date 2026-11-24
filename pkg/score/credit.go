@@ -50,6 +50,11 @@ type Credit struct {
 	// running and the second wasn't credited to the project: SM 2.6's
 	// agent-only time, which is never credited.
 	AgentOnly map[string]int64 `json:"agent_only,omitempty"`
+	// agentUncredited is how many of the slot's seconds an agent turn was
+	// running in, in any project, with nothing credited: what SM 5.3's
+	// agent_only_s counts, once a second, where AgentOnly counts a second
+	// once for each project whose turn ran in it.
+	agentUncredited int64
 }
 
 // Credited is a slot's seconds that one project earned under one reason,
@@ -1007,6 +1012,9 @@ func (c *creditor) slotCredits() []Credit {
 				cr.AgentS++
 			}
 			if sec.reason == "" {
+				if agent {
+					cr.agentUncredited++
+				}
 				if cr.Uncredited == nil {
 					cr.Uncredited = map[event.Reason]int64{}
 				}
