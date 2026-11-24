@@ -25,7 +25,7 @@ WP-FX2 adds 6.3, its two-tab variant, 6.5 and SM 4.2's alternation case; WP-FX3 
 
 ### `events.jsonl`
 
-One device's events, each line exactly what `pkg/event` writes for the event (`json.Marshal` of an `event.Event`): compact JSON, envelope fields first, then `kind`, then `data`. `seq` is gapless and `t` never goes back, so arrival order is time order; events of the same millisecond keep the order in which the agent wrote them. `mono` counts milliseconds since the boot, through sleep, as Go's clock does on Windows. No fixture suspends a Linux or macOS machine, where it wouldn't.
+One device's events, each line exactly what `pkg/event` writes for the event (`json.Marshal` of an `event.Event`): compact JSON, envelope fields first, then `kind`, then `data`. `seq` rises by 1 from one event to the next, because a fixture holds no checkpoint or upload-failure note, whose numbers a real device's events skip (ledger-v1.md 4.1), and `t` never goes back, so arrival order is time order; events of the same millisecond keep the order in which the agent wrote them. `mono` counts milliseconds since the boot, through sleep, as Go's clock does on Windows. No fixture suspends a Linux or macOS machine, where it wouldn't.
 
 Records before the window (below) set up state the window needs, such as a session started a few minutes earlier, and aren't checked.
 
@@ -53,7 +53,7 @@ Conventions the scorer relies on:
 }
 ```
 
-- `window` is the span the rows cover, in UTC, from the first minute SM describes to the end of the last. The other top-level fields name the SM section, date, time zone, UTC offset, OS, whether `input_keys` exists, the evidence level and witness label of every credited second, the device and the projects by key.
+- `window` is the span the rows cover, in UTC, from the first minute SM describes to the end of the last. The other top-level fields name the SM section, date, time zone, UTC offset, OS, whether `input_keys` exists, the evidence level of every credited second unless the fixture's level totals or `slots.json` say otherwise, as in `focus-unknown/c-x11-reconnect`, the witness label of every credited second, the device and the projects by key.
 - `rows` tile the window in order. A row is one minute, or a run of minutes where SM gives only a range (`minutes` > 1, `local` "23:44-06:09").
   - `bucket` says whether the scorer writes a minute bucket for the row, which it does only for a minute with credit, a running agent or seconds a loop cost (SM 5.1). `bucket_minutes` says how many of a run's minutes have one; credited and uncredited seconds cover those minutes and no others.
   - `credit` holds credited seconds by project, then by reason code (SM 5.2). `uncredited` holds uncredited seconds by code, and with `credited_s` adds up to 60 for every bucket minute. When SM lists a minute's codes without their seconds, `uncredited` is null and `codes` lists them.
