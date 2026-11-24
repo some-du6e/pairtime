@@ -161,8 +161,8 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"This notice isn&#39;t final.", "takes no sign-ups except test accounts for the people who run it", "The controller here is <strong>[not named yet]</strong>.", "contact <strong>[not named yet]</strong>."},
 		},
 		{
-			name:    "the notice says a hook call waits unencrypted until the agent has read it, where an administrator or any program running as you can read it, and that a held call the agent hasn't read goes after the entry's days at most (D-held-calls-inbox-class)",
-			want:    []string{"The exception is a hook call, what your AI tool sends pairtime as you work: your prompts, the agent&#39;s replies, the commands it ran with their output, and the files it edited. It waits unencrypted in pairtime&#39;s folder, where other people&#39;s accounts on this computer can&#39;t read it, though an administrator can, and so can any program running as you, until the agent has read it.", "One the agent hasn&#39;t read is deleted after 7 days at most."},
+			name:    "the notice says a hook call waits unencrypted until the agent has read it, where an administrator or any program running as you can read it, and that a call the agent hasn't read goes the entry's days after it was sent, or the next time pairtime runs after that (D-held-calls-inbox-class, D-inbox-age-cap)",
+			want:    []string{"The exception is a hook call, what your AI tool sends pairtime as you work: your prompts, the agent&#39;s replies, the commands it ran with their output, and the files it edited. It waits unencrypted in pairtime&#39;s folder, where other people&#39;s accounts on this computer can&#39;t read it, though an administrator can, and so can any program running as you, until the agent has read it.", "One the agent hasn&#39;t read is deleted 7 days after it was sent, or the next time pairtime runs after that."},
 			notWant: []string{"until the agent takes it in"},
 		},
 		{

@@ -95,12 +95,12 @@ describe('Privacy', () => {
 			check: (html) => expect(rows(html).filter((r) => r.data.includes('MinHash'))).toHaveLength(1),
 		},
 		{
-			name: "the inbox's row, retention.json's device.inbox, says its hook calls hold your prompts as plain text, not encrypted, and go 7 days after they were written at most",
+			name: "the inbox's row, retention.json's device.inbox, says its hook calls hold your prompts as plain text, not encrypted, and go 7 days after they were written, or the next time pairtime runs after that",
 			check: (html) => {
 				const inbox = rows(html).find((r) => r.id === 'device.inbox');
 				expect(inbox?.data).toContain('your prompts, its replies, the commands it ran with their output, and the files it edited');
 				expect(inbox?.data).toContain('plain text, not encrypted');
-				expect(inbox?.kept).toContain('Until the agent has read it, and 7 days at most after it was written');
+				expect(inbox?.kept).toContain('Until the agent has read it, and 7 days after it was written, or the next time pairtime runs after that');
 			},
 		},
 		{

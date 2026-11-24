@@ -9,8 +9,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// spoolFlags open the spool for Append.
-const spoolFlags = os.O_WRONLY | os.O_APPEND | os.O_CREATE
+// spoolFlags open the spool for Append, which reads its first call
+// before it writes (firstSent).
+const spoolFlags = os.O_RDWR | os.O_APPEND | os.O_CREATE
 
 // readFlags open a taken spool file for a drain.
 const readFlags = os.O_RDONLY

@@ -5,6 +5,7 @@
 package inbox
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -184,7 +185,8 @@ func TestPrivateSpool(t *testing.T) {
 // reads a file that is this user's with one name, whatever its mode, as no
 // other account can have put it there, and dates one that isn't by its
 // write time. A FIFO in a spool file's place, which another user's write
-// end could hold open, gives firstSent nothing, at once. An inbox reached
+// end could hold open, is dated by its write time, at once, unread. An
+// inbox reached
 // through a symbolic link to a directory this user doesn't own isn't swept,
 // as Drain leaves it alone.
 func TestExpireUnread(t *testing.T) {
@@ -251,7 +253,7 @@ func TestExpireUnread(t *testing.T) {
 			}
 			expire(t, dir, p, 0)
 		}},
-		{"a FIFO in a spool file's place holds no call, and firstSent doesn't wait on its write end", func(t *testing.T, dir string) {
+		{"a FIFO that took a spool file's place after Expire listed it is dated by its write time and left alone, and the dating doesn't wait on its write end", func(t *testing.T, dir string) {
 			p := filepath.Join(dir, SpoolName)
 			if err := syscall.Mkfifo(p, 0o600); err != nil {
 				t.Fatal(err)
@@ -263,18 +265,25 @@ func TestExpireUnread(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer w.Close()
-			done := make(chan bool, 1)
+			type result struct {
+				gone bool
+				err  error
+			}
+			done := make(chan result, 1)
 			go func() {
-				_, ok := firstSent(p)
-				done <- ok
+				gone, err := expireFile(dir, SpoolName, time.Now().Add(-SpoolKeep))
+				done <- result{gone, err}
 			}()
 			select {
-			case ok := <-done:
-				if ok {
-					t.Error("firstSent found a call in a FIFO")
+			case r := <-done:
+				if r.gone || r.err != nil {
+					t.Errorf("expireFile = %v, %v; want the FIFO, made just now, left alone", r.gone, r.err)
 				}
 			case <-time.After(10 * time.Second):
-				t.Fatal("firstSent waited on the FIFO's write end")
+				t.Fatal("dating the FIFO waited on its write end")
+			}
+			if fi, err := os.Lstat(p); err != nil || fi.Mode()&fs.ModeNamedPipe == 0 {
+				t.Errorf("the FIFO is gone or changed: %v, %v", fi, err)
 			}
 		}},
 		{"an inbox reached through a symbolic link to a directory this user doesn't own isn't swept", func(t *testing.T, dir string) {

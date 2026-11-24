@@ -36,14 +36,26 @@ func TestInboxAgeCap(t *testing.T) {
 			a.drained = make(chan struct{})
 			now := time.Now()
 			yesterday := now.Add(-24 * time.Hour)
+			// The spool as Append left it yesterday, as the second call came,
+			// when the first hadn't waited inbox.SpoolKeep yet. Append runs
+			// inbox.Expire before it spools, so the test writes the file.
+			var b []byte
 			for _, at := range []time.Time{now.Add(-c.age), yesterday} {
 				m := hookMessage(t, "UserPromptSubmit", `{"session_id":"s","hook_event_name":"UserPromptSubmit"}`, inbox.Proc{PID: 4242, Name: "claude"}, at)
-				if err := inbox.Append(dirs.Inbox(), m); err != nil {
+				line, err := m.Encode()
+				if err != nil {
 					t.Fatal(err)
 				}
+				b = append(append(append(b, '\n'), line...), '\n')
+			}
+			if err := os.MkdirAll(dirs.Inbox(), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			spool := filepath.Join(dirs.Inbox(), inbox.SpoolName)
+			if err := os.WriteFile(spool, b, 0o600); err != nil {
+				t.Fatal(err)
 			}
 			// The spool was last written as the second call came.
-			spool := filepath.Join(dirs.Inbox(), inbox.SpoolName)
 			if err := os.Chtimes(spool, yesterday, yesterday); err != nil {
 				t.Fatal(err)
 			}

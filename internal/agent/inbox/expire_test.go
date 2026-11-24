@@ -9,24 +9,27 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
 // TestExpire checks inbox/'s bound (D-inbox-age-cap): a spool file is
-// deleted unread once SpoolKeep has passed since its first call was sent,
-// by the device's clock, with the calls spooled after it, and a younger
-// one stays. A line that holds no call, as a record a sender's write cut
-// short, is passed over for the call after it. A file none of whose lines
-// holds a call is dated by its write time, and so is one last written
-// before its first call was sent, as across a step back of the clock. A
-// clock that jumps forward deletes early, and one that jumps back keeps.
-// The files it deletes are the spool, a file a drain took and one it set
-// aside; the stopped mark and any other file stay.
+// deleted unread once SpoolKeep has passed since appendSlack before its
+// first call was sent, by the device's clock, with the calls spooled after
+// it, and a younger one stays. A line that holds no call, as a record a
+// sender's write cut short, is passed over for the call after it. A file
+// none of whose lines holds a call is dated by its write time, and so is
+// one last written before its first call was sent, as across a step back
+// of the clock. A clock that jumps forward deletes early, and one that
+// jumps back keeps. The files it deletes are the spool, a file a drain
+// took, one it set aside and one no drain reads; the stopped mark and any
+// other file stay.
 func TestExpire(t *testing.T) {
 	day := 24 * time.Hour
-	spools := []string{SpoolName, "spool-00000000000000000001-00000001" + takenSuffix, "spool-00000000000000000002-00000002" + badSuffix}
+	spools := []string{SpoolName, "spool-00000000000000000001-00000001" + takenSuffix, "spool-00000000000000000002-00000002" + badSuffix,
+		"spool-00000000000000000003-00000003" + partSuffix}
 	others := []string{StoppedName, "notes.txt"}
 	// call is a call sent ago before wall, MaxMessage bytes long if big.
 	call := func(t *testing.T, wall time.Time, ago time.Duration, big bool) string {
@@ -52,6 +55,12 @@ func TestExpire(t *testing.T) {
 		{name: "one whose first call was sent 7 days ago is deleted unread, though it was written yesterday", records: func(t *testing.T, wall time.Time) []string {
 			return []string{call(t, wall, 7*day, false), call(t, wall, 0, false)}
 		}, written: day, deleted: true},
+		{name: "a first call sent 7 days less 5 seconds ago dates its file appendSlack before it, past 7 days, so it is deleted: a call after it may have been sent that much earlier", records: func(t *testing.T, wall time.Time) []string {
+			return []string{call(t, wall, 7*day-5*time.Second, false), call(t, wall, 0, false)}
+		}, written: day, deleted: true},
+		{name: "one sent 7 days less 11 seconds ago stays", records: func(t *testing.T, wall time.Time) []string {
+			return []string{call(t, wall, 7*day-11*time.Second, false), call(t, wall, 0, false)}
+		}, written: day},
 		{name: "a first call MaxMessage bytes long is read whole: sent 7 days ago, its file written yesterday is deleted", records: func(t *testing.T, wall time.Time) []string {
 			return []string{call(t, wall, 7*day, true), call(t, wall, 0, false)}
 		}, written: day, deleted: true},
@@ -133,6 +142,203 @@ func TestExpire(t *testing.T) {
 			t.Errorf("Expire = %d, %v; want 0, nil", got, err)
 		}
 	})
+}
+
+// TestExpireDatedFile checks that Expire deletes only the spool file it
+// dated (#388): a drain can take the spool and a sender start a fresh one
+// in its place between the two, and the fresh one's calls then go to the
+// drains, while the file the drain took waits for the next Expire.
+func TestExpireDatedFile(t *testing.T) {
+	cases := []struct {
+		name string
+		// between runs after Expire dates the spool as past its time and
+		// before it moves the spool aside.
+		between func(t *testing.T, dir string, fresh Message)
+		deleted int
+	}{
+		{"a drain's take and a fresh spool between the two leave the fresh spool's call for the drains, and the old one for the next Expire", func(t *testing.T, dir string, fresh Message) {
+			if name, err := take(dir); err != nil || name == "" {
+				t.Fatalf("take = %q, %v", name, err)
+			}
+			writeSpool(t, dir, SpoolName, time.Now(), fresh)
+		}, 0},
+		{"with nothing between them, the spool Expire dated goes", func(t *testing.T, dir string, fresh Message) {}, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			now := time.Now()
+			old := newMessage(t, 1)
+			old.Sent = now.Add(-8 * 24 * time.Hour).UTC()
+			writeSpool(t, dir, SpoolName, now.Add(-8*24*time.Hour), old)
+			fresh := newMessage(t, 2)
+			expireDated = func(name string) {
+				expireDated = nil
+				c.between(t, dir, fresh)
+			}
+			t.Cleanup(func() { expireDated = nil })
+			if n, err := Expire(dir, now); n != c.deleted || err != nil {
+				t.Errorf("Expire = %d, %v; want %d, nil", n, err, c.deleted)
+			}
+			held := func(m Message) bool {
+				found, err := Scan(dir, 10, func(s Message) bool { return s.ID == m.ID })
+				if err != nil {
+					t.Fatal(err)
+				}
+				return found
+			}
+			if c.deleted == 0 {
+				if !held(fresh) {
+					t.Errorf("the fresh spool's call is gone; the inbox has %v", spoolFiles(t, dir))
+				}
+				if !held(old) {
+					t.Errorf("the file the drain took went before an Expire dated it; the inbox has %v", spoolFiles(t, dir))
+				}
+				if n, err := Expire(dir, now); n != 1 || err != nil || held(old) || !held(fresh) {
+					t.Errorf("the next Expire = %d, %v, with the old call there %v and the fresh one %v; want the old call's file deleted, the fresh one kept", n, err, held(old), held(fresh))
+				}
+				return
+			}
+			if left := spoolFiles(t, dir); len(left) != 0 {
+				t.Errorf("the inbox has %v, want nothing", left)
+			}
+		})
+	}
+}
+
+// TestAppendOrder checks that each spool file's first call stays its
+// oldest (#388): a call sent before the spool's first, by more than
+// appendSlack, as by a sender that slept between New and Append, goes in a
+// spool file of its own, so Expire dates each file by its own oldest call.
+// One sent within appendSlack of it, as by senders that wrote at once,
+// goes in the spool.
+func TestAppendOrder(t *testing.T) {
+	day := 24 * time.Hour
+	cases := []struct {
+		name    string
+		ago     []time.Duration // how long before now each call was sent, in the order appended
+		files   int             // spool files after the appends
+		expired int             // of them, how many Expire deletes now
+	}{
+		{"a call sent 8 days ago, appended after yesterday's, goes in a spool file of its own, which Expire deletes, keeping yesterday's spool", []time.Duration{day, 8 * day}, 2, 1},
+		{"a call sent 5 seconds before the spool's first, as from a sender that wrote at the same time, goes in the spool", []time.Duration{0, 5 * time.Second}, 1, 0},
+		{"a call sent after the spool's first goes in the spool", []time.Duration{time.Hour, 0}, 1, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "inbox")
+			now := time.Now()
+			var msgs []Message
+			for i, ago := range c.ago {
+				m := newMessage(t, i)
+				m.Sent = now.Add(-ago).UTC()
+				if err := Append(dir, m); err != nil {
+					t.Fatal(err)
+				}
+				msgs = append(msgs, m)
+			}
+			if got := SpoolFiles(dir); len(got) != c.files {
+				t.Fatalf("the inbox has %v, want %d spool files", got, c.files)
+			}
+			if n, err := Expire(dir, now); n != c.expired || err != nil {
+				t.Errorf("Expire = %d, %v; want %d, nil", n, err, c.expired)
+			}
+			for i, m := range msgs {
+				found, err := Scan(dir, 10, func(s Message) bool { return s.ID == m.ID })
+				if err != nil {
+					t.Fatal(err)
+				}
+				if want := c.ago[i] < SpoolKeep; found != want {
+					t.Errorf("the call sent %v ago is in the inbox %v, want %v", c.ago[i], found, want)
+				}
+			}
+		})
+	}
+	t.Run("a call spooled alone counts toward MaxSpool", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "inbox")
+		first := newMessage(t, 1)
+		if err := Append(dir, first); err != nil {
+			t.Fatal(err)
+		}
+		old := maxSpool
+		t.Cleanup(func() { maxSpool = old })
+		maxSpool = 200 // a message is about 110 bytes
+		late := newMessage(t, 2)
+		late.Sent = first.Sent.Add(-time.Hour)
+		if err := Append(dir, late); !errors.Is(err, ErrSpoolFull) {
+			t.Errorf("Append = %v, want ErrSpoolFull", err)
+		}
+	})
+}
+
+// TestAppendExpires checks that Append deletes, unread, the spool files
+// past their time before it spools a call, as a sender spools exactly
+// while the agent is down (#388), and does so while the agent has stopped
+// the spool too.
+func TestAppendExpires(t *testing.T) {
+	cases := []struct {
+		name    string
+		stopped bool
+	}{
+		{"before it spools, Append deletes the spool files whose first call was sent 8 days ago, so the call starts a fresh spool", false},
+		{"with the spool stopped, Append still deletes them, though it spools nothing", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			then := time.Now().Add(-8 * 24 * time.Hour)
+			old := newMessage(t, 1)
+			old.Sent = then.UTC()
+			for _, name := range []string{SpoolName, "spool-00000000000000000001-00000001" + takenSuffix} {
+				writeSpool(t, dir, name, then, old)
+			}
+			if c.stopped {
+				if err := StopSpooling(dir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fresh := newMessage(t, 2)
+			err := Append(dir, fresh)
+			if c.stopped != errors.Is(err, ErrSpoolStopped) || !c.stopped && err != nil {
+				t.Fatalf("Append = %v", err)
+			}
+			var got []string
+			if _, err := Scan(dir, 10, func(m Message) bool {
+				got = append(got, m.ID)
+				return false
+			}); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{fresh.ID}
+			if c.stopped {
+				want = nil
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("the inbox holds %v, want %v; files %v", got, want, spoolFiles(t, dir))
+			}
+		})
+	}
+}
+
+// writeSpool writes the spool file name in dir holding msgs, as Append
+// writes them, last written at at.
+func writeSpool(t *testing.T, dir, name string, at time.Time, msgs ...Message) {
+	t.Helper()
+	var b []byte
+	for _, m := range msgs {
+		line, err := m.Encode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		b = append(append(append(b, '\n'), line...), '\n')
+	}
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(p, at, at); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // encoded is a message sent at sent as Append writes it, without the

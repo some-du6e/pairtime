@@ -562,6 +562,43 @@ func TestDrainer(t *testing.T) {
 			},
 		},
 		{
+			name: "a message sent SpoolKeep before the drain's clock goes to no sink and is deleted unread with its file, and one sent a millisecond later goes in (D-inbox-age-cap)",
+			run: func(t *testing.T, inbox, journal string) {
+				wall := time.Now().UTC()
+				kept, past := newMessage(t, 1), newMessage(t, 2)
+				kept.Sent, past.Sent = wall.Add(-SpoolKeep+time.Millisecond), wall.Add(-SpoolKeep)
+				// A file a drain took, which Expire hasn't looked at since, as
+				// Append runs Expire before it spools.
+				var b []byte
+				for _, m := range []Message{kept, past} {
+					line, err := m.Encode()
+					if err != nil {
+						t.Fatal(err)
+					}
+					b = append(append(append(b, '\n'), line...), '\n')
+				}
+				if err := os.MkdirAll(inbox, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(inbox, "spool-00000000000000000001-00000001"+takenSuffix), b, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				res, err := Drain(inbox, openJournal(t, journal), func() clock.Stamp { return clock.Stamp{Wall: wall} })
+				if err != nil {
+					t.Fatal(err)
+				}
+				if res.Delivered != 1 || res.Expired != 1 || res.Files != 1 {
+					t.Errorf("Drain = %+v, want 1 delivered, 1 expired and the file deleted", res)
+				}
+				if got := journalIDs(t, journal); got[kept.ID] != 1 || got[past.ID] != 0 {
+					t.Errorf("the journal has %v, want the message a millisecond inside SpoolKeep alone", got)
+				}
+				if left := spoolFiles(t, inbox); len(left) != 0 {
+					t.Errorf("the inbox still has %v", left)
+				}
+			},
+		},
+		{
 			name: "a file set aside is deleted SpoolKeep after it was last written",
 			run: func(t *testing.T, inbox, journal string) {
 				if err := os.MkdirAll(inbox, 0o700); err != nil {

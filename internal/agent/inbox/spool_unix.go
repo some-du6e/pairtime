@@ -11,11 +11,12 @@ import (
 	"syscall"
 )
 
-// spoolFlags open the spool for Append. O_NOFOLLOW refuses a symbolic
-// link in its place, and O_NONBLOCK keeps a FIFO there from holding the
-// sender until something reads it; privateFile refuses whatever else the
-// open lets through.
-const spoolFlags = os.O_WRONLY | os.O_APPEND | os.O_CREATE | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+// spoolFlags open the spool for Append, which reads its first call
+// before it writes (firstSent). O_NOFOLLOW refuses a symbolic link in its
+// place, and O_NONBLOCK keeps a FIFO there from holding the sender until
+// something reads it; privateFile refuses whatever else the open lets
+// through.
+const spoolFlags = os.O_RDWR | os.O_APPEND | os.O_CREATE | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 
 // readFlags open a taken spool file for a drain, with the same guards.
 const readFlags = os.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_NONBLOCK

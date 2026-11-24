@@ -1263,6 +1263,7 @@ func TestSpoolHolds(t *testing.T) {
 		{"as many calls made after the moment as a file's scan reads hold nothing",
 			slices.Repeat([]call{late}, spoolScanned), nil, false, false},
 		{"with no drain running in this run, a call made before the moment waits for the next start, and holds nothing", []call{early}, nil, true, false},
+		{"a call that has waited inbox.SpoolKeep holds nothing, as no drain hands it over", []call{{ago: inbox.SpoolKeep, noMono: true}}, nil, false, false},
 		{"an empty inbox holds nothing", nil, nil, false, false},
 	}
 	for _, c := range cases {

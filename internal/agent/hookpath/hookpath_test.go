@@ -197,6 +197,28 @@ func TestSend(t *testing.T) {
 			},
 		},
 		{
+			name: "with no agent listening, a spool whose first call was sent 8 days ago is deleted unread before the call is spooled, so the call starts a fresh spool (D-inbox-age-cap)",
+			run: func(t *testing.T, ep ipc.Endpoint) {
+				old := inbox.New("test", json.RawMessage(`{}`))
+				old.Sent = time.Now().Add(-8 * 24 * time.Hour).UTC()
+				b, err := old.Encode()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(ep.Inbox, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(ep.Inbox, inbox.SpoolName), append(append([]byte{'\n'}, b...), '\n'), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				res := Send(call(), opts(ep))
+				got := spooled(t, ep)
+				if res.Via != inbox.ViaInbox || len(got) != 1 || got[0].ID != res.ID {
+					t.Fatalf("Send = %+v and the spool has %+v, want the hook's call alone", res, got)
+				}
+			},
+		},
+		{
 			name: "a call Prepare refuses isn't spooled, and says why",
 			run: func(t *testing.T, ep ipc.Endpoint) {
 				o := opts(ep)

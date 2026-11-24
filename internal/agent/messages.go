@@ -241,6 +241,11 @@ func (a *agent) spoolHolds(before func(event.Envelope) bool) bool {
 	}
 	now := clock.Now()
 	found, err := scanSpool(a.dirs.Inbox(), spoolScanned, func(m inbox.Message) bool {
+		// A call past inbox.SpoolKeep never reaches the adapters (Drain), so
+		// it holds nothing.
+		if inbox.PastSpoolKeep(m.Sent, now.Wall) {
+			return false
+		}
 		return stampOf(inbox.Delivery{Message: m, Via: inbox.ViaInbox, Received: now}).waits(before)
 	})
 	if err == nil {
@@ -267,7 +272,9 @@ func (a *agent) spoolHolds(before func(event.Envelope) bool) bool {
 // call has waited inbox.SpoolKeep (D-inbox-age-cap): at the agent's start,
 // before its first drain, and with each retention look, so a call waits
 // unread no longer than held.jsonl keeps one, whether or not a drain runs,
-// as while the journal or the ledger can't open.
+// as while the journal or the ledger can't open. Senders do the same before
+// each call they spool while the agent is down (inbox.Append), and a drain
+// delivers no call past it.
 func (a *agent) expireInbox() {
 	n, err := inbox.Expire(a.dirs.Inbox(), time.Now())
 	if n > 0 {
@@ -291,9 +298,9 @@ func (a *agent) drain(d *inbox.Drainer) {
 	if res.Busy != nil {
 		a.log.Warn("the inbox's spool waits for the next drain", "err", res.Busy)
 	}
-	if res.Delivered > 0 || res.Bad > 0 || res.Rejected > 0 || res.Failed > 0 || res.SetAside > 0 {
+	if res.Delivered > 0 || res.Bad > 0 || res.Rejected > 0 || res.Expired > 0 || res.Failed > 0 || res.SetAside > 0 {
 		a.log.Info("drained the inbox", "files", res.Files, "messages", res.Delivered, "bad_lines", res.Bad,
-			"rejected", res.Rejected, "failed_files", res.Failed, "set_aside", res.SetAside)
+			"rejected", res.Rejected, "expired", res.Expired, "failed_files", res.Failed, "set_aside", res.SetAside)
 	}
 }
 
