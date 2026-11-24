@@ -14,6 +14,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 	"github.com/some-du6e/pairtime/internal/coach/text"
 	"github.com/some-du6e/pairtime/internal/install/wakacfg"
 )
@@ -196,7 +198,15 @@ func GatherWakaTime(ctx context.Context, data string, client *http.Client) *Waka
 	if s.Made {
 		made = wakacfg.Recorded
 	}
-	st, err := wakacfg.Inspect(cfg, s.Key, made)
+	// The agent's own ports: the one install wrote the line or the config
+	// with, and the one port.json says it listens on now. An api_url on
+	// 127.0.0.1 on any other port is a server of the teen's own, such as
+	// Wakapi's, even in a config the setup file says install made.
+	ports := []int{s.Port}
+	if pf, err := localhttp.ReadPortFile(home.Dirs{Data: data}.PortFile()); err == nil {
+		ports = append(ports, pf.Port)
+	}
+	st, err := wakacfg.Inspect(cfg, s.Key, made, ports...)
 	if err != nil {
 		return &WakaTime{Config: s.Config, Problem: fmt.Sprintf("%s holds something pairtime doesn't read the way wakatime-cli does (%v)", s.Config, err)}
 	}

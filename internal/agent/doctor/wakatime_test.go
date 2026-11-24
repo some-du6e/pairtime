@@ -117,8 +117,9 @@ func TestGatherWakaTime(t *testing.T) {
 	tests := []struct {
 		name string
 		// config is what the config the setup file names holds, "" for no
-		// config; setup says install wrote a setup file, and made that it
-		// says install made the config (wakacfg.Setup's Made); env is
+		// config; setup says install wrote a setup file, with the agent's
+		// port, and made that it says install made the config
+		// (wakacfg.Setup's Made); env is
 		// WAKATIME_API_KEY, and proxy and noProxy values for https_proxy, or
 		// proxyVar when it names another variable, and NO_PROXY. https_proxy
 		// is in lower case, which ProxyFor reads first and so names on
@@ -324,6 +325,15 @@ func TestGatherWakaTime(t *testing.T) {
 			},
 		},
 		{
+			name:   "with the setup file's record that install made it, a config of the teen's own server on 127.0.0.1 on another port than the agent's, as Wakapi's setup writes it, isn't taken for one pairtime made",
+			config: "[settings]\napi_url = " + server.URL + "/api/v1\napi_key = " + hackatimeKey + "\n" + line(port), setup: true, made: true,
+			want: func(t *testing.T, w *WakaTime) {
+				if w == nil || w.Problem != "" || w.Pairtime.Status != http.StatusOK || w.Server == nil || w.Server.Status != http.StatusUnauthorized {
+					t.Errorf("GatherWakaTime = %+v, want the agent's 200, the teen's server's 401 and no problem", w)
+				}
+			},
+		},
+		{
 			name:   "a config that imports another is a problem, since a line there can take pairtime's place",
 			config: settings + "import_cfg = ~/.private/wakatime.cfg\n" + line(port), setup: true,
 			want: func(t *testing.T, w *WakaTime) {
@@ -379,7 +389,7 @@ func TestGatherWakaTime(t *testing.T) {
 				if err := os.MkdirAll(filepath.Dir(setup), 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(setup, wakacfg.Setup{Key: wakaKey, Config: cfg, Made: tt.made}.Encode(), 0o600); err != nil {
+				if err := os.WriteFile(setup, wakacfg.Setup{Key: wakaKey, Config: cfg, Made: tt.made, Port: port}.Encode(), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}

@@ -181,16 +181,25 @@ func (f *file) isMade(m Made) bool {
 }
 
 // takenOver reports whether the config is one pairtime made (isMade) whose
-// api_url is still the agent's but whose api_key isn't key's, or, with key
-// "", isn't the one whose hash the mark names: the teen gave it a key of
-// their own. wakatime-cli still sends that key and every heartbeat to the
-// agent's port.
-func (f *file) takenOver(key string, m Made) bool {
+// api_url is still the agent's own, on one of ports, but whose api_key
+// isn't key's, or, with key "", isn't the one whose hash the mark names:
+// the teen gave it a key of their own. wakatime-cli still sends that key and
+// every heartbeat to the agent's port. ports are the ports pairtime knows
+// its agent on, as its record and port.json give them, 0 for none. An
+// api_url on 127.0.0.1 on any other port is a server of the teen's own,
+// such as the one Wakapi's setup writes, even in a config install's record
+// says it made, since the teen may have put another file in its place.
+// With no port given, the agent's URL on any port is its own.
+func (f *file) takenOver(key string, m Made, ports []int) bool {
 	u := f.last(settings, "api_url")
 	if !f.isMade(m) || u < 0 {
 		return false
 	}
-	if _, isAgent := agentPort(f.entries[u].value); !isAgent {
+	p, isAgent := agentPort(f.entries[u].value)
+	if !isAgent {
+		return false
+	}
+	if known := slices.DeleteFunc(slices.Clone(ports), func(n int) bool { return n == 0 }); len(known) > 0 && !slices.Contains(known, p) {
 		return false
 	}
 	_, _, own := f.ownConfig(key)
@@ -275,8 +284,10 @@ func Make(key string, port int) ([]byte, error) {
 // of the file. When the line is there already, or data is a config
 // pairtime made, it changes only the port, as SetPort does. It refuses a
 // config that sets a proxy (ErrProxy), and one pairtime made, as made says
-// pairtime knows it, whose api_key the teen replaced (ErrNotOwn).
-func Add(data []byte, key string, port int, made Made) ([]byte, error) {
+// pairtime knows it, whose api_key the teen replaced while its api_url is
+// the agent's own, on port or one of recorded, the ports pairtime's record
+// names (ErrNotOwn).
+func Add(data []byte, key string, port int, made Made, recorded ...int) ([]byte, error) {
 	if err := checkArgs(key, port); err != nil {
 		return nil, err
 	}
@@ -296,7 +307,7 @@ func Add(data []byte, key string, port int, made Made) ([]byte, error) {
 	if _, _, ok := f.ownConfig(key); ok {
 		return SetPort(data, key, port)
 	}
-	if f.takenOver(key, made) {
+	if f.takenOver(key, made, append([]int{port}, recorded...)) {
 		return nil, ErrNotOwn
 	}
 	spelling, err := f.spelling()
@@ -411,14 +422,15 @@ func Added(base []byte) Section {
 // stays, empty, since install doesn't make one of that shape: the file was
 // there before.
 //
-// A config pairtime made whose api_key the teen replaced is refused
+// A config pairtime made whose api_key the teen replaced, while its
+// api_url is the agent's own, on one of ports (takenOver), is refused
 // (ErrNotOwn), mark and all, so that uninstall names it and leaves it to
 // the teen, and a later install or doctor still knows it by the mark. One
-// whose api_url isn't the agent's any more sends to the teen's own server
-// now, so it is theirs: left reports it, and it loses pairtime's mark,
-// which says pairtime made it for pairtime's key, with pairtime's lines
-// under [api_urls], and nothing else.
-func Remove(data []byte, key string, made Made, sec Section) (out []byte, gone, left bool, err error) {
+// whose api_url isn't the agent's own any more sends to the teen's own
+// server now, so it is theirs: left reports it, and it loses pairtime's
+// mark, which says pairtime made it for pairtime's key, with pairtime's
+// lines under [api_urls], and nothing else.
+func Remove(data []byte, key string, made Made, sec Section, ports ...int) (out []byte, gone, left bool, err error) {
 	f, err := parse(data)
 	if err != nil {
 		return nil, false, false, err
@@ -437,7 +449,7 @@ func Remove(data []byte, key string, made Made, sec Section) (out []byte, gone, 
 				drop[m] = true
 			}
 			own = true
-		} else if f.takenOver(key, made) {
+		} else if f.takenOver(key, made, ports) {
 			// Taking out only the api_url would send the teen's key and
 			// every heartbeat to WakaTime's own server; leaving the file as
 			// it is keeps them going to a port nothing of pairtime's holds
@@ -803,10 +815,11 @@ type State struct {
 	// wakatime-cli's only destination (Make).
 	Own bool
 	// TakenOver says the config is one pairtime made, by install's record
-	// or, without one, by its mark, whose api_url is still the agent's but
-	// whose api_key isn't the key's any more: the teen gave it their own,
-	// which wakatime-cli sends to the agent, and the agent refuses (Add
-	// refuses such a config, and Remove leaves it to the teen).
+	// or, without one, by its mark, whose api_url is still the agent's own,
+	// on one of the ports Inspect was given, but whose api_key isn't the
+	// key's any more: the teen gave it their own, which wakatime-cli sends
+	// to the agent, and the agent refuses (Add refuses such a config, and
+	// Remove leaves it to the teen).
 	TakenOver bool
 	// Server is the api_url wakatime-cli sends to besides pairtime:
 	// [settings]'s, quotes and the suffixes wakatime-cli takes off taken off
@@ -834,8 +847,9 @@ type State struct {
 }
 
 // Inspect reads data, a config, for pairtime's line for key. made says
-// what pairtime knows of who made the config, for State.TakenOver.
-func Inspect(data []byte, key string, made Made) (State, error) {
+// what pairtime knows of who made the config, and ports the ports pairtime
+// knows its agent on, for State.TakenOver.
+func Inspect(data []byte, key string, made Made, ports ...int) (State, error) {
 	f, err := parse(data)
 	if err != nil {
 		return State{}, err
@@ -846,7 +860,7 @@ func Inspect(data []byte, key string, made Made) (State, error) {
 		s.Port, _ = agentPort(f.entries[u].value)
 		return s, nil
 	}
-	s.TakenOver = f.takenOver(key, made)
+	s.TakenOver = f.takenOver(key, made, ports)
 	if e, ok := f.line(key); ok {
 		s.Line = true
 		s.Port, _, _ = ownLine(e)

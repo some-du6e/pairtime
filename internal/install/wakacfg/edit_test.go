@@ -103,8 +103,9 @@ func TestAdd(t *testing.T) {
 		wantErr  string
 		wantIs   error
 	}{
-		{name: "a config pairtime made whose api_key the teen replaced is refused by its mark", before: testMark + taken, wantIs: ErrNotOwn},
-		{name: "with install's record, a config pairtime made whose mark the teen deleted with pairtime's key is refused too", before: taken, recorded: true, wantIs: ErrNotOwn},
+		{name: "a config pairtime made whose api_key the teen replaced is refused by its mark", before: testMark + taken, port: 7250, wantIs: ErrNotOwn},
+		{name: "with install's record, a config pairtime made whose mark the teen deleted with pairtime's key is refused too", before: taken, port: 7250, recorded: true, wantIs: ErrNotOwn},
+		{name: "with install's record, a config whose api_url is on 127.0.0.1 on another port than the agent's, as Wakapi's setup writes it, is the teen's own server, and gets pairtime's line", before: "[settings]\napi_url = http://127.0.0.1:3000/api/v1\napi_key = " + otherKey + "\n", recorded: true, after: "[settings]\napi_url = http://127.0.0.1:3000/api/v1\napi_key = " + otherKey + "\n\n[api_urls]\n" + ours(".+") + "\n"},
 		{name: "without a record or a mark, a config on 127.0.0.1 with another key gets pairtime's line, since it may be the teen's own server", before: taken, after: taken + "\n[api_urls]\n" + ours(".+") + "\n"},
 		{name: "hackatime-setup's config gets an [api_urls] section after a blank line", before: hackatime, after: hackatime + "\n[api_urls]\n" + ours(".+") + "\n"},
 		{name: "an existing .* line keeps its server, and pairtime's .+ goes after it", before: "[api_urls]\n.*" + other + "\n", after: "[api_urls]\n.*" + other + "\n" + ours(".+") + "\n"},
@@ -211,8 +212,10 @@ func TestRemove(t *testing.T) {
 		key                 string
 		made                Made
 		sec                 Section
-		gone, left          bool
-		wantErr             string // a part of the refusal
+		// ports are the agent's own ports, nil for any (takenOver).
+		ports      []int
+		gone, left bool
+		wantErr    string // a part of the refusal
 	}{
 		{name: "pairtime's line comes out of a section that was there", before: "[api_urls]\n.*" + other + "\n" + ours(".+") + "\n; note\n", after: "[api_urls]\n.*" + other + "\n; note\n", key: testKey},
 		{name: "pairtime's section goes with its line and the blank line before it", before: hackatime + "\n[api_urls]\n" + ours(".+") + "\n", after: hackatime, key: testKey, sec: all},
@@ -230,7 +233,8 @@ func TestRemove(t *testing.T) {
 		{name: "a config pairtime made keeps what was added to it since", before: made + "hostname = mine\n", after: "[settings]\nhostname = mine\n", key: testKey, made: Recorded, sec: all},
 		{name: "with no key, a config pairtime made is recognized by its mark, which goes with it", before: testMark + made, after: "[settings]\n", made: ByMark, sec: all, gone: true},
 		{name: "without a record, a config pairtime made whose api_key the teen replaced is refused by its mark, which stays, and the refusal says how to keep the teen's key before it says to delete the file", before: testMark + strings.Replace(made, testKey, otherKey, 1), key: testKey, made: ByMark, sec: all, wantErr: "isn't pairtime's any more; set its api_url to your own server and keep your api_key, or delete the file, which deletes that key too"},
-		{name: "with install's record, a config pairtime made whose mark the teen deleted with pairtime's key is refused too", before: strings.Replace(made, testKey, otherKey, 1), key: testKey, made: Recorded, sec: all, wantErr: "isn't pairtime's any more; set its api_url to your own server"},
+		{name: "with install's record, a config pairtime made whose mark the teen deleted with pairtime's key is refused too", before: strings.Replace(made, testKey, otherKey, 1), key: testKey, made: Recorded, sec: all, ports: []int{7250}, wantErr: "isn't pairtime's any more; set its api_url to your own server"},
+		{name: "with install's record, a config whose api_url is on 127.0.0.1 on another port than the agent's own, as Wakapi's setup writes it, is the teen's own server: it isn't refused, and is left to the teen as it is", before: "[settings]\napi_url = http://127.0.0.1:3000/api/v1\napi_key = " + otherKey + "\n", after: "[settings]\napi_url = http://127.0.0.1:3000/api/v1\napi_key = " + otherKey + "\n", key: testKey, made: Recorded, sec: all, ports: []int{7250}, left: true},
 		{name: "without a record or a mark, a config on 127.0.0.1 with another key stays as it is, since it may be the teen's own server", before: strings.Replace(made, testKey, otherKey, 1), after: strings.Replace(made, testKey, otherKey, 1), key: testKey, made: ByMark, sec: all},
 		{name: "with no key, a config whose mark names another key's hash than its api_key's is refused too: the key is the teen's", before: testMark + strings.Replace(made, testKey, otherKey, 1), made: ByMark, sec: all, wantErr: "isn't pairtime's any more"},
 		{name: "with no key and no mark, a config on 127.0.0.1 stays, since it may be the teen's own server", before: made, after: made, made: ByMark, sec: all},
@@ -243,7 +247,7 @@ func TestRemove(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, gone, left, err := Remove([]byte(tt.before), tt.key, tt.made, tt.sec)
+			got, gone, left, err := Remove([]byte(tt.before), tt.key, tt.made, tt.sec, tt.ports...)
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("Remove = %q, %v, want an error saying %q", got, err, tt.wantErr)
@@ -353,6 +357,7 @@ func TestInspect(t *testing.T) {
 		// recorded says install's record says it made the config
 		// (Recorded); without it, only the mark does (ByMark).
 		recorded bool
+		ports    []int // the agent's own ports, nil for any (takenOver)
 		want     State
 	}{
 		{name: "hackatime-setup's config with pairtime's line has two destinations", data: hackatime + "\n[api_urls]\n" + ours("^.*$") + "\n", want: State{Line: true, Port: 7247, Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true}},
@@ -375,7 +380,8 @@ func TestInspect(t *testing.T) {
 		{name: "an api_url in double quotes inside single ones loses both, as go-ini takes off the outer and wakatime-cli the inner", data: "[settings]\napi_url = '\"https://hackatime.hackclub.com/api/hackatime/v1/\"'\napi_key = " + otherKey + "\n", want: State{Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true}},
 		{name: "an [api_urls] key with a quote after it is one wakatime-cli takes, as it takes quotes off a value's ends first", data: hackatime + "[api_urls]\n.* = https://other.example/api/v1|" + otherKey + "'\n", want: State{Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true}},
 		{name: "a config pairtime made whose api_key the teen replaced is taken over, with the agent as its server", data: testMark + "[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + otherKey + "\n", want: State{TakenOver: true, Server: "http://127.0.0.1:7247/api/v1", ServerKey: true}},
-		{name: "with install's record, a config pairtime made whose mark the teen deleted with pairtime's key is taken over too", data: "[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + otherKey + "\n", recorded: true, want: State{TakenOver: true, Server: "http://127.0.0.1:7247/api/v1", ServerKey: true}},
+		{name: "with install's record, a config pairtime made whose mark the teen deleted with pairtime's key is taken over too", data: "[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + otherKey + "\n", recorded: true, ports: []int{7247}, want: State{TakenOver: true, Server: "http://127.0.0.1:7247/api/v1", ServerKey: true}},
+		{name: "with install's record, a config whose api_url is on 127.0.0.1 on another port than the agent's own, as Wakapi's setup writes it, isn't taken over", data: "[settings]\napi_url = http://127.0.0.1:3000/api/v1\napi_key = " + otherKey + "\n", recorded: true, ports: []int{7247}, want: State{Server: "http://127.0.0.1:3000/api/v1", ServerKey: true}},
 		{name: "without a record or a mark, the same config may be the teen's own server on 127.0.0.1, and isn't taken over", data: "[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + otherKey + "\n", want: State{Server: "http://127.0.0.1:7247/api/v1", ServerKey: true}},
 		{name: "a config that sets a proxy says so, beside pairtime's line", data: hackatime + "proxy = http://proxy.example:3128\n\n[api_urls]\n" + ours(".+") + "\n", want: State{Line: true, Port: 7247, Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true, Proxy: true}},
 	}
@@ -385,7 +391,7 @@ func TestInspect(t *testing.T) {
 			if tt.recorded {
 				made = Recorded
 			}
-			got, err := Inspect([]byte(tt.data), testKey, made)
+			got, err := Inspect([]byte(tt.data), testKey, made, tt.ports...)
 			if err != nil {
 				t.Fatal(err)
 			}

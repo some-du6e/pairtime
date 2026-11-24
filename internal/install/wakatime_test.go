@@ -134,8 +134,8 @@ func TestWakaTimeGoldens(t *testing.T) {
 			if got := readOrNil(t, h.cfg()); !bytes.Equal(got, want) {
 				t.Fatalf("after install the config holds\n%q\nwant\n%q", got, want)
 			}
-			if s, err := wakacfg.ReadSetup(wakacfg.SetupFile(h.data)); err != nil || s.Key != wakaKey || s.Config != h.cfg() || s.Made != (before == nil) {
-				t.Errorf("the setup file reads %+v, %v, want key %s and config %s, made only by install: %v", s, err, wakaKey, h.cfg(), before == nil)
+			if s, err := wakacfg.ReadSetup(wakacfg.SetupFile(h.data)); err != nil || s.Key != wakaKey || s.Config != h.cfg() || s.Made != (before == nil) || s.Port != 7247 {
+				t.Errorf("the setup file reads %+v, %v, want key %s, config %s and port 7247, made only by install: %v", s, err, wakaKey, h.cfg(), before == nil)
 			}
 
 			again, err := h.in.PlanInstall([]Item{h.item(t, 7247, "")})
@@ -150,7 +150,7 @@ func TestWakaTimeGoldens(t *testing.T) {
 			// Taking pairtime's line out of after.cfg, without the backup,
 			// gives back before.cfg byte for byte, or no file.
 			base := Content{Exists: before != nil, Data: before}
-			undone, _, err := undoWakaTimeLine(Content{Exists: true, Data: want}, base, recordKey(wakaKey, before == nil))
+			undone, _, err := undoWakaTimeLine(Content{Exists: true, Data: want}, base, recordKey(wakaKey, before == nil, 7247))
 			if err != nil {
 				t.Fatalf("undoWakaTimeLine: %v", err)
 			}
@@ -569,24 +569,41 @@ func TestWakaTimeTakenOver(t *testing.T) {
 		record bool
 		// noMark says the teen deleted pairtime's mark too, with the key.
 		noMark bool
+		// added has the teen add a line of their own first, and install run
+		// again on another port, which rebases install's record of what was
+		// there before onto that line.
+		added bool
+		// moved has install make the config on port 7250, which its record
+		// names, and the agent listen on 7247 since.
+		moved bool
 		// uninstall runs uninstall, and otherwise install runs again.
 		uninstall bool
 	}{
 		{name: "with no record, uninstall names a config pairtime made whose api_key the teen replaced, leaves its bytes, and shows the teen's key nowhere", uninstall: true},
 		{name: "with a record, uninstall names it the same way", record: true, uninstall: true},
 		{name: "with a record, uninstall names a config pairtime made whose mark the teen deleted with pairtime's key the same way, by the record", record: true, noMark: true, uninstall: true},
+		{name: "with a record whose base install rebased onto a line the teen added to the config it made, uninstall still names it once the teen replaced the key", record: true, added: true, uninstall: true},
 		{name: "with no record, install leaves it alone, and keeps the teen's key nowhere"},
 		{name: "with a record, install leaves it alone too", record: true},
+		{name: "with a record, install leaves it alone too once the agent moved to another port, since the port the record names is the agent's own as well", record: true, moved: true},
 		{name: "with a record, install leaves a config pairtime made whose mark the teen deleted with pairtime's key alone too, adding no second key beside the teen's", record: true, noMark: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newWakaHome(t, nil)
 			if tt.record {
-				install(t, h.in, h.item(t, 7247, wakaKey))
+				port := 7247
+				if tt.moved {
+					port = 7250
+				}
+				install(t, h.in, h.item(t, port, wakaKey))
 			} else {
 				made, _ := madeConfig(t, wakaKey, 7247, "")
 				writeFile(t, h.cfg(), []byte(made))
+			}
+			if tt.added {
+				writeFile(t, h.cfg(), append(readOrNil(t, h.cfg()), "hostname = mine\n"...))
+				install(t, h.in, h.item(t, 7250, wakaKey))
 			}
 			// The teen gives the config their own key, as WakaTime's
 			// extension writes one.
@@ -683,7 +700,7 @@ func TestWakaTimeLeftToTheTeen(t *testing.T) {
 			if len(p.Problems) > 0 {
 				t.Errorf("uninstall's problems are %q, want none", p.Problems)
 			}
-			note := h.cfg() + " is the config pairtime made, and it sends to your own server now, so pairtime leaves it to you and took out only its own lines."
+			note := h.cfg() + " is the config pairtime made, and it sends to your own server now, so pairtime leaves it to you and takes out only its own lines."
 			if got := slices.Contains(p.Notes(), note); got != tt.note {
 				t.Errorf("uninstall's notes are %q; want %q among them: %v", p.Notes(), note, tt.note)
 			}
@@ -695,6 +712,49 @@ func TestWakaTimeLeftToTheTeen(t *testing.T) {
 			}
 			if got := string(readOrNil(t, h.cfg())); got != theirs {
 				t.Errorf("after uninstall the config holds\n%q\nwant the teen's, without pairtime's mark:\n%q", got, theirs)
+			}
+		})
+	}
+}
+
+// TestWakaTimeTeensServerAfterARecord checks a config of the teen's own
+// server on 127.0.0.1, as Wakapi's setup writes one, in place of the
+// config install made and still records as made: its api_url isn't the
+// agent's own, at the port install wrote, so it is the teen's config and
+// never one pairtime made that the teen took over.
+func TestWakaTimeTeensServerAfterARecord(t *testing.T) {
+	const wakapi = "[settings]\napi_url = http://127.0.0.1:3000/api/v1\napi_key = " + hackatimeKey + "\n"
+	tests := []struct {
+		name string
+		// uninstall runs uninstall, and otherwise install runs again.
+		uninstall bool
+	}{
+		{name: "install adds pairtime's line beside the teen's server, and refuses nothing"},
+		{name: "uninstall leaves the teen's config as it is, and nothing has to stay", uninstall: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newWakaHome(t, nil)
+			install(t, h.in, h.item(t, 7247, wakaKey))
+			writeFile(t, h.cfg(), []byte(wakapi))
+			if tt.uninstall {
+				uninstall(t, h.in, h.item(t, 7247, ""))
+				if got := readOrNil(t, h.cfg()); string(got) != wakapi {
+					t.Errorf("after uninstall the config holds\n%q\nwant the teen's:\n%q", got, wakapi)
+				}
+				return
+			}
+			install(t, h.in, h.item(t, 7247, ""))
+			cfg := readOrNil(t, h.cfg())
+			if !bytes.HasPrefix(cfg, []byte(wakapi)) {
+				t.Errorf("install changed the teen's settings:\n%s", cfg)
+			}
+			s, err := wakacfg.ReadSetup(wakacfg.SetupFile(h.data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if st, err := wakacfg.Inspect(cfg, s.Key, wakacfg.ByMark); err != nil || !st.Line || st.Own || st.TakenOver || st.Port != 7247 {
+				t.Errorf("Inspect = %+v, %v, want pairtime's line under [api_urls] on port 7247 beside the teen's server", st, err)
 			}
 		})
 	}

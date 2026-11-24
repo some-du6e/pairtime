@@ -214,6 +214,10 @@ type Setup struct {
 	// later install and pairtime doctor know it as pairtime's by this
 	// record, whether or not pairtime's mark is still in it (Recorded).
 	Made bool `json:"made,omitempty"`
+	// Port is the port install wrote the line or the config with, which a
+	// later install and pairtime doctor take for the agent's own beside
+	// port.json's (takenOver).
+	Port int `json:"port,omitempty"`
 }
 
 // setupVersion is Setup's format.

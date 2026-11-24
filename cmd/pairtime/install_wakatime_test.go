@@ -240,7 +240,7 @@ func TestWakaTimeTeensKeyNeverShown(t *testing.T) {
 // TestWakaTimeLeftToTheTeenNoted runs the real install and uninstall on a
 // config pairtime made that the teen pointed at Hackatime since, with their
 // own key: uninstall's screen and its dry run say, naming the file, that
-// pairtime leaves it to the teen and took out only its own lines, and
+// pairtime leaves it to the teen and takes out only its own lines, and
 // uninstall leaves the teen's settings as they are, without pairtime's
 // mark, and shows the teen's key nowhere.
 func TestWakaTimeLeftToTheTeenNoted(t *testing.T) {
@@ -265,7 +265,7 @@ func TestWakaTimeLeftToTheTeenNoted(t *testing.T) {
 				t.Fatalf("the config install made is\n%s\n%s\nwant pairtime's mark, then its api_url and api_key", mark, rest)
 			}
 			h.write(".wakatime.cfg", mark+"\n"+theirs)
-			note := h.path(".wakatime.cfg") + " is the config pairtime made, and it sends to your own server now, so pairtime leaves it to you and took out only its own lines."
+			note := h.path(".wakatime.cfg") + " is the config pairtime made, and it sends to your own server now, so pairtime leaves it to you and takes out only its own lines."
 			dry := h.mustRun("", "", 0, "uninstall", "--dry-run")
 			if !strings.Contains(dry, "pairtime uninstall: note: "+note) {
 				t.Errorf("uninstall --dry-run didn't note the config it leaves to the teen:\n%s", dry)
