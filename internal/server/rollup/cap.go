@@ -112,6 +112,14 @@ const (
 // fail keeps its rows too, and the pass goes on with the next day. It
 // returns how many days it cut, and every day's failure, joined.
 func RecutDays(ctx context.Context, d Doer, q Querier, now time.Time) (int, error) {
+	return recutAll(ctx, d, q, now, nil)
+}
+
+// recutAll is RecutDays, and calls changed, when set, with the account of
+// each day an op cut again, once that op's transaction has committed, so
+// the live stream reads the account's rollups only after they moved
+// (WP-SV8).
+func recutAll(ctx context.Context, d Doer, q Querier, now time.Time, changed func(account string)) (int, error) {
 	limit := dayCapMS()
 	from := now.AddDate(0, 0, -recutDays).UTC().Format(time.DateOnly)
 	rows, err := q.QueryContext(ctx, `SELECT user_id, day,
@@ -169,6 +177,9 @@ FROM rollups_daily WHERE day >= $1 GROUP BY user_id, day`, from)
 		}
 		if did {
 			n++
+			if changed != nil {
+				changed(ad.account)
+			}
 		}
 	}
 	return n, errors.Join(failed...)

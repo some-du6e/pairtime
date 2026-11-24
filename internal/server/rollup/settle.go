@@ -60,6 +60,13 @@ type Doer interface {
 // changed rows (writer.Commit.Changed, backup.Replication.Wrote), so one
 // that settled nothing wouldn't hold /readyz back either.
 func Settle(ctx context.Context, d Doer, q Querier, now time.Time) (int, error) {
+	return settleAll(ctx, d, q, now, nil)
+}
+
+// settleAll is Settle, and calls changed, when set, with each account whose
+// minutes an op settled, once that op's transaction has committed, so the
+// live stream reads the account's rollups only after they moved (WP-SV8).
+func settleAll(ctx context.Context, d Doer, q Querier, now time.Time, changed func(account string)) (int, error) {
 	// A minute ends 60 s after it starts.
 	cutoffMS := now.Add(-PendingWindow() - time.Minute).UnixMilli()
 	total := 0
@@ -72,13 +79,19 @@ func Settle(ctx context.Context, d Doer, q Querier, now time.Time) (int, error) 
 			break
 		}
 		var n int
+		var accounts []string
 		err = d.Do(ctx, due*settleRowsPerMinute, func(ctx context.Context, tx writer.Tx) error {
 			var err error
-			n, err = settle(ctx, tx, cutoffMS, settleBatch)
+			n, accounts, err = settle(ctx, tx, cutoffMS, settleBatch)
 			return err
 		})
 		if err != nil {
 			return total, fmt.Errorf("rollup: settling pending minutes: %w", err)
+		}
+		if changed != nil {
+			for _, a := range accounts {
+				changed(a)
+			}
 		}
 		total += n
 		if n < settleBatch {
@@ -99,14 +112,14 @@ WHERE state = 'pending' AND minute_ms < $1 LIMIT $2) due`, cutoffMS, limit).Scan
 
 // settle settles at most limit of the accounts' minutes that start before
 // cutoffMS and have a pending device row, oldest first, and returns how
-// many it settled.
-func settle(ctx context.Context, tx writer.Tx, cutoffMS int64, limit int) (int, error) {
+// many it settled and the accounts whose they were.
+func settle(ctx context.Context, tx writer.Tx, cutoffMS int64, limit int) (int, []string, error) {
 	// The literal 'pending' lets SQLite use rollup_minutes_pending, a
 	// partial index, which a placeholder wouldn't.
 	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT user_id, minute_ms FROM rollup_minutes
 WHERE state = 'pending' AND minute_ms < $1 ORDER BY minute_ms, user_id LIMIT $2`, cutoffMS, limit)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	type minute struct {
 		account string
@@ -117,7 +130,7 @@ WHERE state = 'pending' AND minute_ms < $1 ORDER BY minute_ms, user_id LIMIT $2`
 		var m minute
 		if err := rows.Scan(&m.account, &m.ms); err != nil {
 			rows.Close()
-			return 0, err
+			return 0, nil, err
 		}
 		due = append(due, m)
 	}
@@ -125,14 +138,18 @@ WHERE state = 'pending' AND minute_ms < $1 ORDER BY minute_ms, user_id LIMIT $2`
 	// connection.
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
+	var accounts []string
 	for _, m := range due {
 		if err := settleMinute(ctx, tx, m.account, m.ms); err != nil {
-			return 0, err
+			return 0, nil, err
+		}
+		if !slices.Contains(accounts, m.account) {
+			accounts = append(accounts, m.account)
 		}
 	}
-	return len(due), nil
+	return len(due), accounts, nil
 }
 
 // settleMinute makes every pending device row of the account's minute
@@ -163,15 +180,17 @@ WHERE user_id = $1 AND minute_ms = $2 AND device_id = $3`, account, minuteMS, af
 // interval, until ctx ends. report, when set, hears how many minutes each
 // run settled, and its error. The first run also cuts again each day whose
 // rows aren't a cut under the day cap (RecutDays), and report hears only
-// its error, with no minutes settled.
-func RunSettle(ctx context.Context, d Doer, q Querier, every time.Duration, now func() time.Time, report func(settled int, err error)) {
+// its error, with no minutes settled. changed, when set, hears each account
+// whose minutes a run settled or whose day it cut again, once the op that
+// did it committed: the live dashboard then shows them (WP-SV8).
+func RunSettle(ctx context.Context, d Doer, q Querier, every time.Duration, now func() time.Time, report func(settled int, err error), changed func(account string)) {
 	tick := time.NewTicker(every)
 	defer tick.Stop()
-	if _, err := RecutDays(ctx, d, q, now()); err != nil && report != nil {
+	if _, err := recutAll(ctx, d, q, now(), changed); err != nil && report != nil {
 		report(0, err)
 	}
 	for {
-		n, err := Settle(ctx, d, q, now())
+		n, err := settleAll(ctx, d, q, now(), changed)
 		if report != nil {
 			report(n, err)
 		}
