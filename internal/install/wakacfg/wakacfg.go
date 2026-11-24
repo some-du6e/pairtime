@@ -116,25 +116,6 @@ var (
 	ErrProxy  = errors.New("sets a proxy, and wakatime-cli would send pairtime's line through it too: the proxy would get your project and file names unencrypted, and while it doesn't pass them on to pairtime's agent, each send that fails holds back what wakatime-cli sends your own server")
 )
 
-// ProxyVars are the variables a proxy for wakatime-cli's requests comes
-// from in its environment: those Go's http.ProxyFromEnvironment reads,
-// which wakatime-cli's loadProxyURL reads through httpproxy.FromEnvironment
-// for its main api_url, and then sends every destination through. Their
-// values can hold a password, so only their names are ever shown.
-var ProxyVars = []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"}
-
-// ProxyVar returns the first of ProxyVars that getenv gives a value, ""
-// when none has one. NO_PROXY is no help to pairtime's line: wakatime-cli
-// works out the proxy once, for the main api_url.
-func ProxyVar(getenv func(string) string) string {
-	for _, v := range ProxyVars {
-		if getenv(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
 // checkArgs refuses a key or a port the line can't hold.
 func checkArgs(key string, port int) error {
 	if !ValidKey(key) {

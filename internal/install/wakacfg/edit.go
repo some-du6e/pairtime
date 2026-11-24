@@ -4,11 +4,15 @@ package wakacfg
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -78,43 +82,87 @@ func (f *file) last(section, key string) int {
 	return at
 }
 
-// madeMark is the comment a config pairtime makes starts with (Make). It
-// tells uninstall and a second install that the config is pairtime's when
-// no record names its key: a [settings] api_url on 127.0.0.1 alone may be
-// the teen's own server, such as Wakapi.
-const madeMark = "made by pairtime install; pairtime uninstall takes it out"
+// markText returns the comment a config pairtime makes for key starts
+// with (Make), without its ;. It tells uninstall and a second install that
+// the config is pairtime's when no record names the key: a [settings]
+// api_url on 127.0.0.1 alone may be the teen's own server, such as Wakapi.
+// It names a short hash of the key (keyHash), so that a config pairtime
+// made stays pairtime's only while its api_key is still pairtime's: one
+// the teen gave their own key, as WakaTime's extension writes one, is
+// theirs, and that key is never taken for pairtime's.
+func markText(key string) string {
+	return "made by pairtime install for the key " + keyHash(key) + "; pairtime uninstall takes it out"
+}
 
-// mark returns the index of the comment that is madeMark, with either
-// comment character and any space around it, or -1.
-func (f *file) mark() int {
+// keyHash returns the hash of key that pairtime's mark names: the first
+// twelve hex digits of its SHA-256, which tell nothing of the key.
+func keyHash(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:6])
+}
+
+// markFormat matches the text of pairtime's mark, and takes the hash it
+// names.
+var markFormat = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^made by pairtime install for the key ([0-9a-f]{12}); pairtime uninstall takes it out$`)
+})
+
+// mark returns the index of the comment that is pairtime's mark, with
+// either comment character and any space around it, and the hash of the
+// key it names, or -1 and "".
+func (f *file) mark() (int, string) {
 	for i, e := range f.entries {
 		if e.kind != comment {
 			continue
 		}
 		t := strings.TrimSpace(string(f.data[e.start:e.end]))
-		if strings.TrimSpace(t[1:]) == madeMark {
-			return i
+		if m := markFormat().FindStringSubmatch(strings.TrimSpace(t[1:])); m != nil {
+			return i, m[1]
 		}
 	}
-	return -1
+	return -1, ""
 }
 
 // ownConfig returns the entries of a config pairtime made (Make) for key:
 // the [settings] api_url that is the agent's endpoint, and the api_key
-// that is key, or, when key is "", one in WakaTime's format in a config
-// with pairtime's mark.
+// that is key, or, when key is "", one in a config with pairtime's mark
+// whose hash the mark names.
 func (f *file) ownConfig(key string) (url, apiKey int, ok bool) {
 	url, apiKey = f.last(settings, "api_url"), f.last(settings, "api_key")
-	if url < 0 || apiKey < 0 || (key == "" && f.mark() < 0) {
+	if url < 0 || apiKey < 0 {
 		return -1, -1, false
 	}
 	if _, isAgent := agentPort(f.entries[url].value); !isAgent {
 		return -1, -1, false
 	}
-	if k := f.entries[apiKey].value; (key == "" && !ValidKey(k)) || (key != "" && k != key) {
+	k := f.entries[apiKey].value
+	if key != "" {
+		if k != key {
+			return -1, -1, false
+		}
+		return url, apiKey, true
+	}
+	if _, hash := f.mark(); hash == "" || !ValidKey(k) || keyHash(k) != hash {
 		return -1, -1, false
 	}
 	return url, apiKey, true
+}
+
+// takenOver reports whether the config is one pairtime made, by its mark
+// and its api_url, the agent's, whose api_key isn't key's: the teen gave it
+// a key of their own. wakatime-cli still sends that key and every
+// heartbeat to the agent's port.
+func (f *file) takenOver(key string) bool {
+	m, _ := f.mark()
+	u := f.last(settings, "api_url")
+	if m < 0 || u < 0 {
+		return false
+	}
+	if _, isAgent := agentPort(f.entries[u].value); !isAgent {
+		return false
+	}
+	_, _, own := f.ownConfig(key)
+	return !own
 }
 
 // proxy reports whether the config sets a proxy: a [settings] proxy with
@@ -180,12 +228,12 @@ func Key(data []byte) (string, bool) {
 
 // Make returns the config pairtime makes for someone who has none:
 // wakatime-cli's api_url is the agent's endpoint, with pairtime's key
-// (DESIGN 5.6, "No WakaTime config"), after pairtime's mark (madeMark).
+// (DESIGN 5.6, "No WakaTime config"), after pairtime's mark (markText).
 func Make(key string, port int) ([]byte, error) {
 	if err := checkArgs(key, port); err != nil {
 		return nil, err
 	}
-	return []byte("; " + madeMark + "\n[settings]\napi_url = " + URL(port) + "\napi_key = " + key + "\n"), nil
+	return []byte("; " + markText(key) + "\n[settings]\napi_url = " + URL(port) + "\napi_key = " + key + "\n"), nil
 }
 
 // Add returns data, a config that is there, with pairtime's line for key
@@ -215,7 +263,7 @@ func Add(data []byte, key string, port int) ([]byte, error) {
 	if _, _, ok := f.ownConfig(key); ok {
 		return SetPort(data, key, port)
 	}
-	if _, _, ok := f.ownConfig(""); ok {
+	if f.takenOver(key) {
 		return nil, ErrNotOwn
 	}
 	spelling, err := f.spelling()
@@ -327,7 +375,9 @@ func Added(base []byte) Section {
 // config pairtime made, with the agent's api_url and the key's api_key,
 // and that nothing else is left of it, so uninstall deletes the file. A
 // file that only held pairtime's line stays, empty, since install doesn't
-// make one of that shape: the file was there before.
+// make one of that shape: the file was there before. A config pairtime made
+// whose api_key the teen replaced is refused (ErrNotOwn), so that
+// uninstall names it and leaves it to the teen.
 func Remove(data []byte, key string, made bool, sec Section) (out []byte, gone bool, err error) {
 	f, err := parse(data)
 	if err != nil {
@@ -343,10 +393,16 @@ func Remove(data []byte, key string, made bool, sec Section) (out []byte, gone b
 	if made {
 		if u, k, ok := f.ownConfig(key); ok {
 			drop[u], drop[k] = true, true
-			if m := f.mark(); m >= 0 {
+			if m, _ := f.mark(); m >= 0 {
 				drop[m] = true
 			}
 			own = true
+		} else if f.takenOver(key) {
+			// Taking out only the api_url would send the teen's key and
+			// every heartbeat to WakaTime's own server; leaving the file as
+			// it is keeps them going to a port nothing of pairtime's holds
+			// once it is gone. The teen decides.
+			return nil, false, fmt.Errorf("%w; point its api_url at your own server, or delete it", ErrNotOwn)
 		}
 	}
 	dropped := false // an [api_urls] header went
@@ -678,6 +734,17 @@ func samePairs(a, b []entry) bool {
 	})
 }
 
+// normalizeURL returns api_url as wakatime-cli v2.28.4 sends to it
+// (pkg/params normalizeURL): without a final "/", ".bulk",
+// "/users/current/heartbeats", "/heartbeats" and "/heartbeat", each taken
+// off once, in that order.
+func normalizeURL(apiURL string) string {
+	for _, suffix := range []string{"/", ".bulk", "/users/current/heartbeats", "/heartbeats", "/heartbeat"} {
+		apiURL = strings.TrimSuffix(apiURL, suffix)
+	}
+	return apiURL
+}
+
 // State is what a config says of wakatime-cli's two destinations, for
 // pairtime doctor (Inspect).
 type State struct {
@@ -690,8 +757,9 @@ type State struct {
 	// wakatime-cli's only destination (Make).
 	Own bool
 	// Server is the api_url wakatime-cli sends to besides pairtime:
-	// [settings]'s, or WakaTime's own when the config names none (DefaultURL).
-	// It is "" in a config pairtime made.
+	// [settings]'s, quotes and the suffixes wakatime-cli takes off taken off
+	// (normalizeURL), or WakaTime's own when the config names none
+	// (DefaultURL). It is "" in a config pairtime made.
 	Server string
 	// ServerKey says [settings] has a key for the server, as wakatime-cli's
 	// loadAPIKey finds one: the first of api_key and apikey that is there,
@@ -730,8 +798,10 @@ func Inspect(data []byte, key string) (State, error) {
 		s.Port, _, _ = ownLine(e)
 	}
 	s.Server = DefaultURL
-	if i := f.last(settings, "api_url"); i >= 0 && f.entries[i].value != "" {
-		s.Server = f.entries[i].value
+	if i := f.last(settings, "api_url"); i >= 0 {
+		if v := strings.Trim(f.entries[i].value, `"'`); v != "" {
+			s.Server = normalizeURL(v)
+		}
 	}
 	for _, k := range []string{"api_key", "apikey"} {
 		i := f.last(settings, k)

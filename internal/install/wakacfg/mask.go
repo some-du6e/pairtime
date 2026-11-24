@@ -14,12 +14,13 @@ const masked = "***"
 // value and comment masked but pairtime's own, since a config holds the
 // teen's API keys and the consent screen's diff shows the lines around
 // pairtime's, which teens screenshot for help and share. Sections and key
-// names stay, pairtime's line for key and a config pairtime made for it
-// stay as they are, and every line stays a line, so the diff of two masked
-// files lines up as the files do. With key "", every line of pairtime's
-// stays, and a config pairtime made by its mark. A config pairtime made
-// whose api_key isn't key has it masked: it is the teen's own. A file the
-// package can't read has every line masked.
+// names stay, pairtime's line for key stays as it is, and so do the mark
+// and the api_url of a config pairtime made for it, and every line stays a
+// line, so the diff of two masked files lines up as the files do. A config
+// pairtime made has its api_key masked always: pairtime's own key never
+// needs to be on screen, and the key of one the teen took over is theirs.
+// With key "", every line of pairtime's stays, and a config pairtime made
+// by its mark. A file the package can't read has every line masked.
 func Masked(data []byte, key string) []byte {
 	f, err := parse(data)
 	if err != nil {
@@ -31,9 +32,11 @@ func Masked(data []byte, key string) []byte {
 			keep[i] = true
 		}
 	}
-	if u, k, ok := f.ownConfig(key); ok {
-		keep[u], keep[k] = true, true
-		if m := f.mark(); m >= 0 {
+	if u, _, ok := f.ownConfig(key); ok {
+		// The api_key stays masked: pairtime's own key never needs to be on
+		// screen, and one that isn't pairtime's is the teen's.
+		keep[u] = true
+		if m, _ := f.mark(); m >= 0 {
 			keep[m] = true
 		}
 	}

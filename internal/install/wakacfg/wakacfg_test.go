@@ -122,22 +122,46 @@ func TestFind(t *testing.T) {
 	}
 }
 
-func TestProxyVar(t *testing.T) {
+func TestProxyFor(t *testing.T) {
+	const (
+		hackatime = "https://hackatime.hackclub.com/api/hackatime/v1"
+		proxy     = "http://proxy.example:3128"
+	)
 	tests := []struct {
-		name string
-		vars map[string]string
-		want string
+		name   string
+		server string // the config's main api_url
+		vars   map[string]string
+		want   string
 	}{
-		{name: "with no proxy variable there is none", want: ""},
-		{name: "HTTPS_PROXY is one", vars: map[string]string{"HTTPS_PROXY": "http://proxy.example:3128"}, want: "HTTPS_PROXY"},
-		{name: "http_proxy in lower case is one, as Go reads it", vars: map[string]string{"http_proxy": "http://proxy.example:3128"}, want: "http_proxy"},
-		{name: "an empty variable sets no proxy", vars: map[string]string{"HTTPS_PROXY": "", "HTTP_PROXY": ""}, want: ""},
-		{name: "NO_PROXY sets none, and doesn't keep one from counting", vars: map[string]string{"NO_PROXY": "*", "HTTP_PROXY": "http://proxy.example:3128"}, want: "HTTP_PROXY"},
+		{name: "with no proxy variable there is none", server: hackatime},
+		{name: "HTTPS_PROXY is the proxy of an https server", server: hackatime, vars: map[string]string{"HTTPS_PROXY": proxy}, want: "HTTPS_PROXY"},
+		{name: "https_proxy in lower case comes first, as httpproxy reads it", server: hackatime, vars: map[string]string{"HTTPS_PROXY": proxy, "https_proxy": proxy}, want: "https_proxy"},
+		{name: "HTTP_PROXY alone is no proxy of an https server", server: hackatime, vars: map[string]string{"HTTP_PROXY": proxy, "http_proxy": proxy}},
+		{name: "HTTP_PROXY is the proxy of an http server", server: "http://wakapi.example:3000/api", vars: map[string]string{"HTTP_PROXY": proxy}, want: "HTTP_PROXY"},
+		{name: "under CGI an http server takes no proxy, as httpproxy refuses HTTP_PROXY there", server: "http://wakapi.example:3000/api", vars: map[string]string{"HTTP_PROXY": proxy, "REQUEST_METHOD": "GET"}},
+		{name: "a loopback server takes no proxy", server: "http://127.0.0.1:7247/api/v1", vars: map[string]string{"HTTP_PROXY": proxy}},
+		{name: "localhost takes no proxy", server: "https://localhost:8443/api", vars: map[string]string{"HTTPS_PROXY": proxy}},
+		{name: "an empty variable is no proxy", server: hackatime, vars: map[string]string{"HTTPS_PROXY": ""}},
+		{name: "a proxy that doesn't parse is none", server: hackatime, vars: map[string]string{"HTTPS_PROXY": "%zz"}},
+		{name: "NO_PROXY naming the host keeps it from the proxy", server: hackatime, vars: map[string]string{"HTTPS_PROXY": proxy, "NO_PROXY": "hackatime.hackclub.com"}},
+		{name: "NO_PROXY's domain covers its subdomains too", server: hackatime, vars: map[string]string{"HTTPS_PROXY": proxy, "NO_PROXY": "hackclub.com"}},
+		{name: "NO_PROXY with a leading dot covers subdomains", server: hackatime, vars: map[string]string{"HTTPS_PROXY": proxy, "NO_PROXY": "other.example, .hackclub.com"}},
+		{name: "NO_PROXY with *. covers subdomains", server: hackatime, vars: map[string]string{"HTTPS_PROXY": proxy, "NO_PROXY": "*.hackclub.com"}},
+		{name: "NO_PROXY's * covers every host", server: hackatime, vars: map[string]string{"HTTPS_PROXY": proxy, "NO_PROXY": "*"}},
+		{name: "no_proxy in lower case comes first", server: hackatime, vars: map[string]string{"HTTPS_PROXY": proxy, "no_proxy": "hackatime.hackclub.com", "NO_PROXY": "other.example"}},
+		{name: "NO_PROXY of another host covers nothing here", server: hackatime, vars: map[string]string{"HTTPS_PROXY": proxy, "NO_PROXY": "other.example"}, want: "HTTPS_PROXY"},
+		{name: "NO_PROXY of the host on another port covers nothing here", server: hackatime, vars: map[string]string{"HTTPS_PROXY": proxy, "NO_PROXY": "hackatime.hackclub.com:8443"}, want: "HTTPS_PROXY"},
+		{name: "NO_PROXY of the host on its default port covers it", server: hackatime, vars: map[string]string{"HTTPS_PROXY": proxy, "NO_PROXY": "hackatime.hackclub.com:443"}},
+		{name: "NO_PROXY's *example.com, without a dot, covers nothing, as httpproxy reads it", server: "https://example.com/api", vars: map[string]string{"HTTPS_PROXY": proxy, "NO_PROXY": "*example.com"}, want: "HTTPS_PROXY"},
+		{name: "a CIDR range covers an IP host in it", server: "https://10.1.2.3/api", vars: map[string]string{"HTTPS_PROXY": proxy, "NO_PROXY": "10.0.0.0/8"}},
+		{name: "an IP covers that host", server: "https://10.1.2.3/api", vars: map[string]string{"HTTPS_PROXY": proxy, "NO_PROXY": "10.1.2.3"}},
+		{name: "a domain covers no IP host", server: "https://10.1.2.3/api", vars: map[string]string{"HTTPS_PROXY": proxy, "NO_PROXY": "1.2.3"}, want: "HTTPS_PROXY"},
+		{name: "a server that doesn't parse takes no proxy, as wakatime-cli sends nothing to it", server: "%zz", vars: map[string]string{"HTTPS_PROXY": proxy}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ProxyVar(func(k string) string { return tt.vars[k] }); got != tt.want {
-				t.Errorf("ProxyVar = %q, want %q", got, tt.want)
+			if got := ProxyFor(tt.server, func(k string) string { return tt.vars[k] }); got != tt.want {
+				t.Errorf("ProxyFor(%q) = %q, want %q", tt.server, got, tt.want)
 			}
 		})
 	}

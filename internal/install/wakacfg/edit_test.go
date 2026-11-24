@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// testMark is the mark a config pairtime made for testKey starts with: its
+// hash is the first twelve hex digits of the key's SHA-256.
+const testMark = "; made by pairtime install for the key 6d61e4224e2f; pairtime uninstall takes it out\n"
+
 // ours is pairtime's line on port 7247 under spelling.
 func ours(spelling string) string { return spelling + " = http://127.0.0.1:7247/api/v1|" + testKey }
 
@@ -48,6 +52,10 @@ func TestParse(t *testing.T) {
 		{name: "a key in quotes that aren't closed is refused", data: "[s]\n`a = b\n", wantErr: "line 2 has a key in quotes that aren't closed"},
 		{name: "a value in quotes that goes on after a backslash is refused", data: "[s]\na = \"\"\"b\nc\"\"\" \\\nd\n", wantErr: "line 2 has a value in quotes that goes on after a backslash"},
 		{name: "a value that goes on after a backslash is refused", data: "[s]\na = b \\\nc\n", wantErr: "line 2 has a value that goes on"},
+		{name: "an empty key in double quotes is refused, as go-ini then fails the whole file", data: "[s]\n\"\" = b\n", wantErr: "line 2 has a key in quotes with no name"},
+		{name: "an empty key in backticks is refused", data: "[s]\n`` = b\n", wantErr: "line 2 has a key in quotes with no name"},
+		{name: "an empty key in triple quotes is refused", data: "[s]\n\"\"\"\"\"\" = b\n", wantErr: "line 2 has a key in quotes with no name"},
+		{name: "a key in quotes of nothing but spaces is refused", data: "[s]\n\"  \" = b\n", wantErr: "line 2 has a key in quotes with no name"},
 		{name: "indented lines that go on past the 4096 bytes go-ini peeks after their key's line are refused", data: "[s]\nexclude =\n" + strings.Repeat("    ^/x/\n", 600), wantErr: "line 2 has indented lines after it that go on past the 4096 bytes"},
 		{name: "indented lines within the 4096 bytes go-ini peeks are read whole, in a file longer than that", data: "[s]\nexclude =\n" + strings.Repeat("    ^/x/\n", 400) + "b = 1\n" + strings.Repeat("; pad\n", 200), want: []string{"s/exclude=" + strings.Repeat("\n    ^/x/", 400), "s/b=1"}},
 		{name: "a section that isn't closed is refused", data: "[s\na = b\n", wantErr: "line 1 opens a section"},
@@ -144,7 +152,7 @@ func TestMake(t *testing.T) {
 		key        string
 		wantIs     error
 	}{
-		{name: "the config made for someone with none sends to the agent alone, after pairtime's mark", key: testKey, want: "; made by pairtime install; pairtime uninstall takes it out\n[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + testKey + "\n"},
+		{name: "the config made for someone with none sends to the agent alone, after pairtime's mark, which names a hash of the key", key: testKey, want: testMark + "[settings]\napi_url = http://127.0.0.1:7247/api/v1\napi_key = " + testKey + "\n"},
 		{name: "a key not in WakaTime's format is refused", key: "nope", wantIs: ErrKey},
 	}
 	for _, tt := range tests {
@@ -191,6 +199,7 @@ func TestRemove(t *testing.T) {
 		made                bool
 		sec                 Section
 		gone                bool
+		wantErr             string // a part of the refusal
 	}{
 		{name: "pairtime's line comes out of a section that was there", before: "[api_urls]\n.*" + other + "\n" + ours(".+") + "\n; note\n", after: "[api_urls]\n.*" + other + "\n; note\n", key: testKey},
 		{name: "pairtime's section goes with its line and the blank line before it", before: hackatime + "\n[api_urls]\n" + ours(".+") + "\n", after: hackatime, key: testKey, sec: all},
@@ -206,7 +215,9 @@ func TestRemove(t *testing.T) {
 		{name: "with no key, every line of pairtime's goes", before: "[api_urls]\n" + ours(".+") + "\n^.*$ = http://127.0.0.1:7250/api/v1|" + otherKey + "\n.*" + other + "\n", after: "[api_urls]\n.*" + other + "\n"},
 		{name: "a config pairtime made goes when nothing else is left in it", before: made, after: "[settings]\n", key: testKey, made: true, sec: all, gone: true},
 		{name: "a config pairtime made keeps what was added to it since", before: made + "hostname = mine\n", after: "[settings]\nhostname = mine\n", key: testKey, made: true, sec: all},
-		{name: "with no key, a config pairtime made is recognized by its mark, which goes with it", before: "; made by pairtime install; pairtime uninstall takes it out\n" + made, after: "[settings]\n", made: true, sec: all, gone: true},
+		{name: "with no key, a config pairtime made is recognized by its mark, which goes with it", before: testMark + made, after: "[settings]\n", made: true, sec: all, gone: true},
+		{name: "a config pairtime made whose api_key the teen replaced is refused, so that uninstall names it and leaves it to the teen", before: testMark + strings.Replace(made, testKey, otherKey, 1), key: testKey, made: true, sec: all, wantErr: "isn't pairtime's any more; point its api_url at your own server, or delete it"},
+		{name: "with no key, a config whose mark names another key's hash than its api_key's is refused too: the key is the teen's", before: testMark + strings.Replace(made, testKey, otherKey, 1), made: true, sec: all, wantErr: "isn't pairtime's any more"},
 		{name: "with no key and no mark, a config on 127.0.0.1 stays, since it may be the teen's own server", before: made, after: made, made: true, sec: all},
 		{name: "a config someone else made keeps its api_url, which isn't pairtime's", before: hackatime, after: hackatime, key: testKey, made: true, sec: all},
 		{name: "a file that held only pairtime's line stays, empty, even as made, since install never makes one of that shape", before: "[api_urls]\n" + ours(".+") + "\n", after: "", key: testKey, made: true, sec: all},
@@ -214,6 +225,12 @@ func TestRemove(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, gone, err := Remove([]byte(tt.before), tt.key, tt.made, tt.sec)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Remove = %q, %v, want an error saying %q", got, err, tt.wantErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -331,6 +348,8 @@ func TestInspect(t *testing.T) {
 		{name: "of an [api_urls] key written twice, wakatime-cli reads the last value", data: hackatime + "[api_urls]\n.* = https://a.example|nope\n.* = https://b.example|" + otherKey + "\n", want: State{Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true}},
 		{name: "a config pairtime made has only the agent", data: "[settings]\napi_url = http://127.0.0.1:7250/api/v1\napi_key = " + testKey + "\n", want: State{Line: true, Own: true, Port: 7250}},
 		{name: "a config that imports another says so", data: hackatime + "import_cfg = ~/.private/wakatime.cfg\n", want: State{Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true, Import: true}},
+		{name: "an api_url ending in a path wakatime-cli takes off is the server it sends to", data: "[settings]\napi_url = https://api.wakatime.com/api/v1/heartbeats\napi_key = " + otherKey + "\n", want: State{Server: DefaultURL, ServerKey: true}},
+		{name: "an api_url in quotes with a final slash is the server without them", data: "[settings]\napi_url = \"https://hackatime.hackclub.com/api/hackatime/v1/\"\napi_key = " + otherKey + "\n", want: State{Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true}},
 		{name: "a config that sets a proxy says so, beside pairtime's line", data: hackatime + "proxy = http://proxy.example:3128\n\n[api_urls]\n" + ours(".+") + "\n", want: State{Line: true, Port: 7247, Server: "https://hackatime.hackclub.com/api/hackatime/v1", ServerKey: true, Proxy: true}},
 	}
 	for _, tt := range tests {
@@ -352,7 +371,9 @@ func TestKey(t *testing.T) {
 		ok               bool
 	}{
 		{name: "the key of pairtime's line under [api_urls]", data: hackatime + "[api_urls]\n^.*$ = http://127.0.0.1:7250/api/v1|" + testKey + "\n", want: testKey, ok: true},
-		{name: "the api_key of a config pairtime made, by its mark", data: "; made by pairtime install; pairtime uninstall takes it out\n[settings]\napi_url = http://127.0.0.1:7250/api/v1\napi_key = " + testKey + "\n", want: testKey, ok: true},
+		{name: "the api_key of a config pairtime made, by its mark", data: testMark + "[settings]\napi_url = http://127.0.0.1:7250/api/v1\napi_key = " + testKey + "\n", want: testKey, ok: true},
+		{name: "a config pairtime made whose api_key the teen replaced gives no key, since its mark names a hash of pairtime's", data: testMark + "[settings]\napi_url = http://127.0.0.1:7250/api/v1\napi_key = " + otherKey + "\n"},
+		{name: "a mark without a key's hash, as no version of pairtime writes, makes no config pairtime's", data: "; made by pairtime install; pairtime uninstall takes it out\n[settings]\napi_url = http://127.0.0.1:7250/api/v1\napi_key = " + testKey + "\n"},
 		{name: "a config of the teen's own server on 127.0.0.1, without pairtime's mark, isn't pairtime's", data: "[settings]\napi_url = http://127.0.0.1:3000/api/v1\napi_key = " + otherKey + "\n"},
 		{name: "another server's line under a spelling of pairtime's isn't pairtime's", data: "[api_urls]\n.+" + other + "\n"},
 		{name: "a line to the agent under another pattern isn't pairtime's", data: "[api_urls]\n.* = http://127.0.0.1:7250/api/v1|" + testKey + "\n"},

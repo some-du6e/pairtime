@@ -181,7 +181,13 @@ func keyOf(t []byte) (key string, rest []byte, why string) {
 		if i < 0 {
 			return "", nil, "is neither a section, a comment nor a key with = or : after it"
 		}
-		return strings.TrimSpace(string(t[len(q):end])), t[end+len(q)+i+1:], ""
+		key = strings.TrimSpace(string(t[len(q):end]))
+		if key == "" {
+			// go-ini reads the name, and then fails the whole file in
+			// Section.NewKey, salvage included.
+			return "", nil, "has a key in quotes with no name"
+		}
+		return key, t[end+len(q)+i+1:], ""
 	}
 	i := bytes.IndexAny(t, "=:")
 	switch {
