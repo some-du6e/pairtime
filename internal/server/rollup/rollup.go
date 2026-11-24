@@ -33,6 +33,31 @@
 // and re-applies it as final by the server's clock
 // (D-server-settles-pending; DESIGN 3.7, 6.2 D1).
 //
+// An account's local day keeps at most DAY_CAP_S of credit across its
+// devices, counted after the merge in the profile's time zone, so a second
+// device can't lift the cap (SM 5.3). Past the cap, the further credit in
+// time order, slot by slot, is X.day_cap: rollups_daily keeps the credit
+// that fits, and day_cap_ms holds the rest in each project and activity
+// kind, so a day's rows still sum to the buckets stored for it. A change to
+// a day over the cap re-cuts the day from the changed minute on, from the
+// stored credit before it, so it needs none of the day's earlier minutes,
+// which the retention jobs may have deleted. The agent's time on its own is
+// never capped.
+//
+// Rows stored before migration 0012, or cut under another DAY_CAP_S, aren't
+// a cut. The settle job's first run cuts each such day of the last 182 days
+// again whole (RecutDays), and so does the day's next change, while
+// rollup_minutes holds all of it. A day whose minutes the retention jobs have
+// partly deleted can't be cut again, and keeps its rows. A change that keeps
+// such a day within the cap, with nothing held back, applies as it is, as on
+// any day, when the rows hold what it takes away. Once such a day's rows look
+// like a cut again (isCut), a change that fits them cuts the day again from
+// the changed minute on, as on a cut day, and holds back only what goes past
+// the cap. Any other change holds back the credit it adds, and takes the
+// credit it removes out of what is held back first, never below zero (keep).
+// So such a day can stay over DAY_CAP_S, and its rows sum to its buckets
+// unless a removal stopped at zero.
+//
 // No fraud flag is stored for hours nobody submitted (D-no-ingest-flags;
 // DESIGN 4.2, 8.5). SM 3.4's concurrent_devices, two devices crediting
 // one slot, is computed when a submission is frozen, over the submitted
@@ -193,23 +218,34 @@ func Apply(ctx context.Context, tx writer.Tx, prev *Bucket, next Bucket) error {
 	}
 	in.day = day
 	after = append(after, in)
-	if err := remerge(ctx, tx, next.Account, before, oldDay, after, day); err != nil {
+	if err := remerge(ctx, tx, next.Account, minuteMS, before, oldDay, after, day); err != nil {
 		return err
 	}
 	return saveDevice(ctx, tx, next.Account, minuteMS, in)
 }
 
-// remerge moves the account's rollups for one minute from the device rows
-// before, which counted toward oldDay ("" when there were none), to the
-// rows after, which count toward day: it merges each (SM 3.4) and adds the
-// difference to rollups_daily. Apply and the settle job both take this
-// path.
-func remerge(ctx context.Context, tx writer.Tx, account string, before []device, oldDay string, after []device, day string) error {
-	delta := merge(after).contribution(day)
-	if oldDay != "" {
-		delta.subtract(merge(before).contribution(oldDay))
+// remerge moves the account's rollups for the minute that starts at
+// minuteMS from the device rows before, which counted toward oldDay (""
+// when there were none), to the rows after, which count toward day: it
+// merges each (SM 3.4), applies the day cap to the difference (SM 5.3;
+// capped), and adds it to rollups_daily. A minute keeps its day, so oldDay
+// is day or "". Apply and the settle job both take this path.
+func remerge(ctx context.Context, tx writer.Tx, account string, minuteMS int64, before []device, oldDay string, after []device, day string) error {
+	if oldDay != "" && oldDay != day {
+		return fmt.Errorf("rollup: %s's minute %d would move from %s to %s, but a minute keeps its day", account, minuteMS, oldDay, day)
 	}
-	return addDaily(ctx, tx, account, delta)
+	next := merge(after)
+	var prev merged
+	if oldDay != "" {
+		prev = merge(before)
+	}
+	d := next.contribution(day)
+	d.subtract(prev.contribution(day))
+	d, err := capped(ctx, tx, account, day, minuteMS, prev, next, d)
+	if err != nil {
+		return err
+	}
+	return addDaily(ctx, tx, account, d)
 }
 
 // ApplyEvent is Apply for ingest, which holds a revision as pkg/event's

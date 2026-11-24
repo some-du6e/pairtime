@@ -1,0 +1,104 @@
+{
+  "fixture": "focus-unknown/a-6.1-gnome",
+  "anchors": [
+    {
+      "event_id": "01a1fd3a-7870-700c-8e12-cbe7f5b2312f",
+      "kind": "editor_navigation",
+      "t": 1795249830000,
+      "local": "14:00:30",
+      "project_key": "p_bc5dc2a8e979",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "C",
+      "sm": "2.3: input in its slot; the editor-focus test passes only because focus is unknown (2.5)",
+      "labels": ["focus_unknown"]
+    },
+    {
+      "event_id": "01a1fd3b-b0f0-7a75-8545-76219faf0288",
+      "kind": "editor_navigation",
+      "t": 1795249910000,
+      "local": "14:01:50",
+      "project_key": "p_bc5dc2a8e979",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "C",
+      "sm": "2.3: input in its slot; the editor-focus test passes only because focus is unknown (2.5)",
+      "labels": ["focus_unknown"]
+    },
+    {
+      "event_id": "01a1fd3d-acc0-7ef9-a069-9428dff6642c",
+      "kind": "substantive_prompt",
+      "t": 1795250040000,
+      "local": "14:04:00",
+      "project_key": "p_bc5dc2a8e979",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 320,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "C",
+      "sm": "2.2 rule 6: input before submit, and the focus test passes only because focus is unknown (2.5); lead 120 + 300 / 1.5 = 320 s",
+      "labels": ["focus_unknown"]
+    },
+    {
+      "event_id": "01a1fd3e-f8c8-72d9-8e6b-5284a9f8daf0",
+      "kind": "permission_answer",
+      "t": 1795250125000,
+      "local": "14:05:25",
+      "project_key": "p_bc5dc2a8e979",
+      "lead_s": 15,
+      "trail_s": 10,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "B",
+      "sm": "2.3: presence at the answer, 15 s of wait and a 10 s trail; no focus test, so level B, while every second it credits is level C (2.5)",
+      "labels": []
+    },
+    {
+      "event_id": "01a1fd44-b1a0-7ae5-bfa0-8de6d1e3c7cd",
+      "kind": "human_commit",
+      "t": 1795250500000,
+      "local": "14:11:40",
+      "project_key": "p_bc5dc2a8e979",
+      "lead_s": 60,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "git",
+      "level": "B",
+      "sm": "2.3: input in its slot and no focus test, so level B; every second it credits is level C (2.5)",
+      "labels": []
+    },
+    {
+      "event_id": "01a1fd45-74f0-7a78-8368-b29447ecad0c",
+      "kind": "editor_navigation",
+      "t": 1795250550000,
+      "local": "14:12:30",
+      "project_key": "p_bc5dc2a8e979",
+      "lead_s": 120,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "editor",
+      "level": "C",
+      "sm": "after the window: the next cycle's first heartbeat, whose lead credits 14:10:30 to 14:10:40 and 14:11:40 to 14:12:00",
+      "labels": ["focus_unknown"]
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_d2f326ba74c5",
+      "turn_key": "t_b472f20ff321",
+      "t_submit": 1795250040000,
+      "local_submit": "14:04:00",
+      "t_stop": 1795250190000,
+      "local_stop": "14:06:30",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 6, passing on unknown focus (2.5): human_typed"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "fixture": "focus-unknown/e-hour-before",
+  "prompts": [
+    {
+      "turn_key": "t_251e70117992",
+      "t": 1795978980000,
+      "local": "14:03:00",
+      "text": null,
+      "len_chars": 90,
+      "source": "invented for WP-FX8; only its 90 typed characters matter"
+    }
+  ]
+}
