@@ -108,8 +108,13 @@ type Row struct {
 	// running agent. Credited and uncredited seconds cover those minutes.
 	BucketMinutes int     `json:"bucket_minutes"`
 	CreditedS     float64 `json:"credited_s"`
-	// Credit holds credited seconds by project, then by reason code.
-	Credit map[string]map[event.Reason]float64 `json:"credit"`
+	// Credit holds credited seconds by project, then by reason code. It is
+	// empty when SM gives the row's credit without its split by reason;
+	// CreditCodes then lists SM's reasons and CreditByProject holds the
+	// seconds by project.
+	Credit          map[string]map[event.Reason]float64 `json:"credit"`
+	CreditCodes     []event.Reason                      `json:"credit_codes"`
+	CreditByProject map[string]float64                  `json:"credit_by_project"`
 	// Uncredited holds uncredited seconds by reason code. It is nil when
 	// SM lists the codes without their seconds; Codes then holds them.
 	Uncredited map[event.Reason]float64 `json:"uncredited"`
@@ -144,7 +149,10 @@ func (r Row) CreditedReasons() map[event.Reason]float64 {
 }
 
 // Totals are the fixture's totals: the sums of its rows, and whatever else
-// SM states, such as agent_only_s.
+// SM states, such as agent_only_s. Unknown seconds have no sum, so
+// Uncredited is nil when any bucket row's Uncredited is nil, and
+// CreditedByReason is nil when any bucket row gives its credit only by
+// CreditCodes. Each is nil only then.
 type Totals struct {
 	CreditedS         float64                  `json:"credited_s"`
 	CreditedByProject map[string]float64       `json:"credited_by_project"`
@@ -245,8 +253,19 @@ type Anchor struct {
 	Prompt      string `json:"prompt"`
 	// Labels are the anchor's labels (DESIGN 6.4) where anchors.json lists
 	// them, as the relayed cases do a relayed anchor's via_relay. Nil means
-	// the fixture doesn't say.
+	// the fixture doesn't say, which only an anchor that needs no label may
+	// leave: event.Anchor.Validate wants a track, plugin or bridge anchor's
+	// via_* label and a relayed anchor's via_relay.
 	Labels []event.Label `json:"labels"`
+	// Corroborated is the anchor's condition for DESIGN 6.4's corroborated
+	// band, a second record of the act from another code path (DESIGN 4.1
+	// E-7), where anchors.json says. Nil means the fixture doesn't say.
+	Corroborated *bool `json:"corroborated"`
+	// FillS is a track anchor's reading bucket fill, which DESIGN 5.4 fixes
+	// at R_TURN_BASE_S, since no record shows the agent's output. A track
+	// call opens no turn anchors.json lists, so its fill is on its anchor.
+	// Nil means the fixture doesn't say.
+	FillS *float64 `json:"fill_s"`
 }
 
 // Turn is a prompt and the agent's work on it (SM 1.3), with the origin SM
@@ -261,6 +280,12 @@ type Turn struct {
 	Origin      event.Origin      `json:"origin"`
 	PromptClass event.PromptClass `json:"prompt_class"`
 	SM          string            `json:"sm"`
+	// FillS is the turn's whole reading bucket fill in seconds, its base
+	// included, and OutputFillS what its reported output would add without
+	// the side-door cap (SM 2.4, DESIGN 5.2), where anchors.json gives them.
+	// Nil means the fixture doesn't say.
+	FillS       *float64 `json:"fill_s"`
+	OutputFillS *float64 `json:"output_fill_s"`
 }
 
 // Prompts is prompts.json: the prompt texts SM quotes, for features

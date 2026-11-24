@@ -553,6 +553,11 @@ func TestSideDoorRecords(t *testing.T) {
 				if err := ea.Validate(); err != nil {
 					t.Errorf("record %s (%s): %v", r.EventID, r.Local, err)
 				}
+				// sidedoor.json keeps its labels as a cross-check of the ones
+				// anchors.json lists, where it lists them.
+				if a.Labels != nil && !slices.Equal(slices.Sorted(slices.Values(a.Labels)), slices.Sorted(slices.Values(r.Labels))) {
+					t.Errorf("record %s (%s): labels %q, anchors.json says %q", r.EventID, r.Local, r.Labels, a.Labels)
+				}
 			}
 			if opened != len(anchors) {
 				t.Errorf("%d records open an anchor, anchors.json has %d", opened, len(anchors))
@@ -668,6 +673,30 @@ func TestSideDoorTurns(t *testing.T) {
 				}
 				if !tr.Backed && tr.FillS > rTurnBaseS {
 					t.Errorf("turn %d (%s): fills %v s, more than R_TURN_BASE_S", i, tr.Local, tr.FillS)
+				}
+			}
+		})
+		t.Run(c.Name+" the fills anchors.json gives are sidedoor.json's", func(t *testing.T) {
+			// sidedoor.json keeps its fills as a cross-check of the ones
+			// anchors.json gives: a prompt's turn's on its turn, and a track
+			// call's on its anchor.
+			for i, tr := range c.Side.Turns {
+				for _, at := range c.Anchors.Turns {
+					if at.SessionKey != tr.SessionKey || at.TurnKey != tr.TurnKey {
+						continue
+					}
+					if at.FillS != nil && *at.FillS != tr.FillS {
+						t.Errorf("turn %d (%s): anchors.json's fill_s %v, sidedoor.json's %v", i, tr.Local, *at.FillS, tr.FillS)
+					}
+					if at.OutputFillS != nil && *at.OutputFillS != tr.OutputFillS {
+						t.Errorf("turn %d (%s): anchors.json's output_fill_s %v, sidedoor.json's %v",
+							i, tr.Local, *at.OutputFillS, tr.OutputFillS)
+					}
+				}
+				for _, a := range c.Anchors.Anchors {
+					if a.EventID == tr.OpenedBy && a.FillS != nil && *a.FillS != tr.FillS {
+						t.Errorf("turn %d (%s): the track anchor's fill_s %v, sidedoor.json's %v", i, tr.Local, *a.FillS, tr.FillS)
+					}
 				}
 			}
 		})
