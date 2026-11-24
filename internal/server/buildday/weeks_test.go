@@ -349,6 +349,50 @@ func TestWeeks(t *testing.T) {
 			},
 		},
 		{
+			name: "a week whose day gets its first minutes between a run's read and its op waits for the next run, so a later build day's freeze isn't spent on it",
+			do: func(w *world) {
+				// Six build days from Monday 2026-11-02, nothing in the week of
+				// 2026-11-09, and a 7th build day on 2026-11-19, which earns a
+				// freeze at 10:15, after that week's deadline,
+				// 2026-11-19T00:00Z.
+				for d := 2; d <= 7; d++ {
+					uploadOn(w, 2026, 11, d, 15)
+				}
+				uploadOn(w, 2026, 11, 19, 15)
+				// A minute of 2026-11-11, uploaded long after that day's
+				// deadline, commits after the first run reads its candidates and
+				// before its op, which then finds the week of 2026-11-09 with a
+				// day it hasn't decided.
+				w.d.before = func() {
+					w.upload(utc(2026, 11, 23, 12, 0), full("d1", utc(2026, 11, 11, 10, 0), 1, event.EvidenceA))
+				}
+				if r := w.run(utc(2026, 11, 23, 12, 0)); !r.More {
+					w.t.Errorf("the first run = %+v, want work left behind the week it couldn't decide", r)
+				}
+				if _, ok := w.day("2026-11-19"); ok {
+					w.t.Errorf("the first run stored 2026-11-19, past the week it couldn't decide")
+				}
+				w.run(utc(2026, 11, 23, 12, 1))
+			},
+			check: func(t *testing.T, w *world) {
+				// On time, the week of 2026-11-09 is decided at its deadline
+				// with no freeze held, and 2026-11-19's build day earns one
+				// after it.
+				if r, ok := w.day("2026-11-11"); !ok || r.counted {
+					t.Errorf("2026-11-11 is %+v (stored %v), want it decided not to count", r, ok)
+				}
+				if got := w.weekResult("2026-11-09"); got != "" {
+					t.Errorf("the week of 2026-11-09 is %q, want missed, with no row", got)
+				}
+				if f := w.summary(utc(2026, 11, 23, 12, 1)).Freezes; f.Held != 1 || f.Earned != 1 || f.TowardNext != 0 {
+					t.Errorf("freezes %+v, want the one 2026-11-19 earned still held", f)
+				}
+				if got := w.nextWeek(); got != "2026-11-16" {
+					t.Errorf("next_week is %q, want 2026-11-16", got)
+				}
+			},
+		},
+		{
 			name: "a week met early shows every build day it gets after",
 			do: func(w *world) {
 				for d := 16; d <= 20; d++ {

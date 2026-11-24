@@ -195,7 +195,7 @@ func rows(t *testing.T, db *store.DB, account string) []Day {
 	label := labels(t, db, account)
 	var out []Day
 	for _, d := range all {
-		if d.FinalMS != [3]int64{} || d.PendingMS != [3]int64{} || d.AgentOnlyFinalMS != 0 || d.AgentOnlyPendingMS != 0 {
+		if d.FinalMS != [3]int64{} || d.PendingMS != [3]int64{} || d.AgentOnlyFinalMS != 0 || d.AgentOnlyPendingMS != 0 || d.DayCapMS != 0 {
 			l, ok := label[d.ProjectID]
 			if !ok {
 				t.Errorf("rollups_daily has project id %q, which rollup_projects doesn't map", d.ProjectID)

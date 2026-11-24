@@ -5,10 +5,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/x509"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -78,6 +81,22 @@ func TestServeChecksKeys(t *testing.T) {
 				makeKeys(t, dataDir)
 			},
 			wantCode: 1, wantErr: "aren't the ones this database was written with"},
+		{name: "another evidence key beside the same server key and pepper is refused, since the stored blobs are sealed to the recorded one",
+			before: func(t *testing.T, dataDir string) {
+				k, err := ecdh.P256().GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				der, err := x509.MarshalPKCS8PrivateKey(k)
+				if err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(backup.KeysDir(dataDir), backup.EvidenceKeyFile)
+				if err := os.WriteFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantCode: 1, wantErr: "evidence key in data_dir isn't the current one"},
 		{name: "the keys gone from data_dir serve on with a warning, since there is nothing to compare",
 			before: func(t *testing.T, dataDir string) {
 				if err := os.RemoveAll(backup.KeysDir(dataDir)); err != nil {
@@ -166,10 +185,12 @@ func fetchKeysDocument(t *testing.T, configPath string) []byte {
 }
 
 // TestServeKeysDocument checks /.well-known/pairtime-keys.json as serve
-// publishes it (WP-SV17; docs/spec/keys-v1.md): the server key in
+// publishes it (WP-SV17, WP-SB2; docs/spec/keys-v1.md): the server key in
 // data_dir, current, from the start of the UTC day serve first recorded
-// it, the same document byte for byte on a later start, and an empty list
-// of keys, still answering, without them.
+// it, and the evidence key in data_dir, current from that start's
+// millisecond; the same document byte for byte on a later start; and an
+// empty list of keys and a null evidence key, still answering, without
+// them.
 func TestServeKeysDocument(t *testing.T) {
 	tests := []struct {
 		name string
@@ -178,9 +199,9 @@ func TestServeKeysDocument(t *testing.T) {
 		// first must serve the first one's document.
 		starts int
 	}{
-		{name: "the document lists the server key in data_dir as current, valid from the start of the UTC day serve first recorded it", keys: true, starts: 1},
-		{name: "a second start serves the same document, byte for byte, since the key is in the history already", keys: true, starts: 2},
-		{name: "without keys the document lists no server key, and serve still answers with it", starts: 1},
+		{name: "the document lists the server key in data_dir as current, valid from the start of the UTC day serve first recorded it, and the evidence key from that start", keys: true, starts: 1},
+		{name: "a second start serves the same document, byte for byte, since both keys are in the history already", keys: true, starts: 2},
+		{name: "without keys the document lists no server key and no evidence key, and serve still answers with it", starts: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -212,12 +233,12 @@ func TestServeKeysDocument(t *testing.T) {
 			if err := json.Unmarshal(first, &doc); err != nil {
 				t.Fatalf("the document doesn't parse: %v\n%s", err, first)
 			}
-			if doc.Format != "pairtime-keys-v1" || string(doc.EvidenceKey) != "null" || doc.ServerKeys == nil {
-				t.Errorf("the document's format is %q, its evidence key %s and its server keys %v; want pairtime-keys-v1, null and a list", doc.Format, doc.EvidenceKey, doc.ServerKeys)
+			if doc.Format != "pairtime-keys-v1" || doc.ServerKeys == nil {
+				t.Errorf("the document's format is %q and its server keys %v; want pairtime-keys-v1 and a list", doc.Format, doc.ServerKeys)
 			}
 			if !tt.keys {
-				if len(doc.ServerKeys) != 0 {
-					t.Errorf("the document lists %d server keys, and data_dir has none", len(doc.ServerKeys))
+				if len(doc.ServerKeys) != 0 || string(doc.EvidenceKey) != "null" {
+					t.Errorf("the document lists %d server keys and evidence key %s, and data_dir has no keys", len(doc.ServerKeys), doc.EvidenceKey)
 				}
 				return
 			}
@@ -225,11 +246,27 @@ func TestServeKeysDocument(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var recorded int64
+			var recorded, evidenceFrom int64
 			err = db.QueryRow("SELECT recorded_at_ms FROM server_keys WHERE id = 1").Scan(&recorded)
+			if err == nil {
+				err = db.QueryRow("SELECT valid_from_ms FROM key_history WHERE kind = 'evidence' AND valid_to_ms IS NULL").Scan(&evidenceFrom)
+			}
 			db.Close()
 			if err != nil {
 				t.Fatal(err)
+			}
+			var ev struct {
+				KeyID     string `json:"key_id"`
+				PublicKey string `json:"public_key"`
+				ValidFrom int64  `json:"valid_from"`
+				ValidTo   *int64 `json:"valid_to"`
+			}
+			if err := json.Unmarshal(doc.EvidenceKey, &ev); err != nil {
+				t.Fatalf("the evidence key %s doesn't parse: %v", doc.EvidenceKey, err)
+			}
+			if ev.KeyID != pub.EvidenceKeyID() || ev.PublicKey != hex.EncodeToString(pub.Evidence.Bytes()) || ev.ValidFrom != evidenceFrom || ev.ValidTo != nil {
+				t.Errorf("the document lists evidence key %s, %s, valid from %d to %v; want %s, %s, from %d to null",
+					ev.KeyID, ev.PublicKey, ev.ValidFrom, ev.ValidTo, pub.EvidenceKeyID(), hex.EncodeToString(pub.Evidence.Bytes()), evidenceFrom)
 			}
 			if len(doc.ServerKeys) != 1 {
 				t.Fatalf("the document lists %d server keys, want 1:\n%s", len(doc.ServerKeys), first)

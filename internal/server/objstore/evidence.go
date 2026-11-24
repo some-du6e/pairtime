@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"strings"
 )
 
@@ -114,4 +115,43 @@ func (e *Evidence) Has(ctx context.Context, sum [sha256.Size]byte) (bool, error)
 	default:
 		return false, err
 	}
+}
+
+// Delete removes the blob whose SHA-256 is sum with one plain
+// DeleteObject. Neither bucket keeps versions (DESIGN 10.3), so that
+// removes the only copy. Deleting a blob that's already gone succeeds, so
+// a delete that is retried, or a delete pass that stopped and runs again,
+// passes.
+//
+// It is the one call that deletes an evidence blob. WP-SB4's delete pass
+// is its one caller: it deletes the blob of an index row marked deleting,
+// then the row (AGENTS.md, Retention). So Delete fails, with
+// ErrKeepsVersions, when the store answers x-amz-delete-marker: true. Only
+// a bucket that keeps versions sends that, and there the blob's bytes
+// stay behind the marker, so the row must stay for doctor and the
+// operator to see. MinIO sends no marker header for a bucket whose
+// versioning is suspended, though the versions it kept while versioning
+// was on stay. pairtimed doctor's versioning check, which fails a
+// suspended bucket too, is what finds that one.
+func (e *Evidence) Delete(ctx context.Context, sum [sha256.Size]byte) error {
+	key := EvidenceKey(sum)
+	h, err := e.b.deleteObject(ctx, key)
+	if err != nil {
+		return err
+	}
+	if strings.EqualFold(strings.TrimSpace(h.Get("X-Amz-Delete-Marker")), "true") {
+		return &Error{Op: "DeleteObject", Bucket: e.b.name, Key: key, Err: ErrKeepsVersions}
+	}
+	return nil
+}
+
+// List yields every object under EvidencePrefix, in ascending key order,
+// which is the order of the SHA-256 sums their keys name. WP-SV18 and key
+// rotation's pass (WP-SB9) count the blobs that no index row names, and
+// delete none of them (AGENTS.md, Retention). So List also yields an
+// object whose key isn't an evidence key, which no Put writes, and
+// ParseEvidenceKey tells such a key apart. On an error it yields the
+// error once and stops.
+func (e *Evidence) List(ctx context.Context) iter.Seq2[ObjectInfo, error] {
+	return e.b.List(ctx, EvidencePrefix)
 }

@@ -109,15 +109,16 @@ slots = excluded.slots, agent_only = excluded.agent_only, day = excluded.day`,
 }
 
 // addDaily adds d to the account's rollups_daily rows, one additive upsert
-// per row it changes.
+// per row it changes. A row's credit and its day_cap_ms move together:
+// capped moves credit past the day cap from one to the other.
 func addDaily(ctx context.Context, tx writer.Tx, account string, d delta) error {
 	for k, c := range d {
 		if c == (columns{}) {
 			continue
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO rollups_daily (user_id, project_id, day, activity_kind,
-final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms, pending_c_ms, agent_only_final_ms, agent_only_pending_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms, pending_c_ms, agent_only_final_ms, agent_only_pending_ms, day_cap_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT (user_id, project_id, day, activity_kind) DO UPDATE SET
 final_a_ms = rollups_daily.final_a_ms + excluded.final_a_ms,
 final_b_ms = rollups_daily.final_b_ms + excluded.final_b_ms,
@@ -126,8 +127,9 @@ pending_a_ms = rollups_daily.pending_a_ms + excluded.pending_a_ms,
 pending_b_ms = rollups_daily.pending_b_ms + excluded.pending_b_ms,
 pending_c_ms = rollups_daily.pending_c_ms + excluded.pending_c_ms,
 agent_only_final_ms = rollups_daily.agent_only_final_ms + excluded.agent_only_final_ms,
-agent_only_pending_ms = rollups_daily.agent_only_pending_ms + excluded.agent_only_pending_ms`,
-			account, k.project, k.day, k.kind, c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7])
+agent_only_pending_ms = rollups_daily.agent_only_pending_ms + excluded.agent_only_pending_ms,
+day_cap_ms = rollups_daily.day_cap_ms + excluded.day_cap_ms`,
+			account, k.project, k.day, k.kind, c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8])
 		if err != nil {
 			return fmt.Errorf("rollup: adding to %s's %s: %w", account, k.day, err)
 		}
@@ -488,13 +490,19 @@ type Day struct {
 	// AgentOnlyFinalMS and AgentOnlyPendingMS are the agent's time on its
 	// own (SM 2.6, D-bucket-agent-only).
 	AgentOnlyFinalMS, AgentOnlyPendingMS int64
+	// DayCapMS is the credit the day cap withheld, SM 5.3's X.day_cap:
+	// what the project and kind credited past DAY_CAP_S that day, which
+	// FinalMS and PendingMS leave out. A day stored before migration 0012
+	// that couldn't be cut again, because some of its minutes were gone,
+	// keeps FinalMS and PendingMS past DAY_CAP_S (see the package doc).
+	DayCapMS int64
 }
 
 // Read returns the account's rollups_daily rows for the days from to to,
 // both YYYY-MM-DD and included.
 func Read(ctx context.Context, q Querier, account, from, to string) ([]Day, error) {
 	rows, err := q.QueryContext(ctx, `SELECT project_id, day, activity_kind,
-final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms, pending_c_ms, agent_only_final_ms, agent_only_pending_ms
+final_a_ms, final_b_ms, final_c_ms, pending_a_ms, pending_b_ms, pending_c_ms, agent_only_final_ms, agent_only_pending_ms, day_cap_ms
 FROM rollups_daily WHERE user_id = $1 AND day >= $2 AND day <= $3
 ORDER BY day, project_id, activity_kind`, account, from, to)
 	if err != nil {
@@ -506,7 +514,7 @@ ORDER BY day, project_id, activity_kind`, account, from, to)
 		var d Day
 		if err := rows.Scan(&d.ProjectID, &d.Day, &d.Kind,
 			&d.FinalMS[0], &d.FinalMS[1], &d.FinalMS[2], &d.PendingMS[0], &d.PendingMS[1], &d.PendingMS[2],
-			&d.AgentOnlyFinalMS, &d.AgentOnlyPendingMS); err != nil {
+			&d.AgentOnlyFinalMS, &d.AgentOnlyPendingMS, &d.DayCapMS); err != nil {
 			return nil, fmt.Errorf("rollup: reading %s's days: %w", account, err)
 		}
 		out = append(out, d)
