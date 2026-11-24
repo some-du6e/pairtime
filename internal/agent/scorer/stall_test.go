@@ -29,6 +29,10 @@ func TestStallNote(t *testing.T) {
 		// undecided is the slot pkg/score holds FinalBefore at because
 		// nothing decides its presence yet, 0 for none.
 		undecided int64
+		// dated is the newest record the computer's own clock dated, at
+		// for 0: below at when the newest record is a bridge or log
+		// record dated ahead of that clock.
+		dated int64
 		// want are the parts the note must hold, none for no note; bare says
 		// the note names no cause.
 		want []string
@@ -57,6 +61,10 @@ func TestStallNote(t *testing.T) {
 		{name: "with that gap ended more than 5 min before the newest record, the note doesn't name it",
 			fb: at - 2*60*minute, sampled: at, gapEnd: at - 6*minute, gap: 13 * 60 * minute, focus: event.AppTerminal,
 			want: []string{"ends 2 h before"}, bare: true},
+		{name: "with the newest record a bridge prompt dated 6 min past the gap's end but the newest one the computer dated only 4 min past it, the note still says the minutes wait for a record dated in that gap",
+			fb: at - 14*60*minute, sampled: at - 2*minute, gapEnd: at - 6*minute, gap: 13*60*minute + 50*minute,
+			dated: at - 2*minute, focus: event.AppTerminal,
+			want: []string{"a presence sample came after 13 h 50 min without one", "wait 5 min for a record dated in that gap"}},
 		{name: "with samples coming and a terminal in front, the note names no cause",
 			fb: at - 2*60*minute, sampled: at - minute, focus: event.AppTerminal,
 			want: []string{"ends 2 h before"}, bare: true},
@@ -67,12 +75,17 @@ func TestStallNote(t *testing.T) {
 		{name: "with FinalBefore held at a slot nothing decides and a browser in front, the note still names that slot",
 			fb: at - 3*60*minute, sampled: at - 57*minute, undecided: at - 3*60*minute, focus: event.AppBrowser,
 			want: []string{"no presence sample came within 2 h after the first of those minutes"}},
-		{name: "with a slot nothing decides after FinalBefore, which the clock passed while a bridge record dated ahead released the gap hold, and a lookup holding FinalBefore at a browser run's start before it, the note doesn't name that slot",
+		{name: "with a slot nothing decides after FinalBefore and a lookup holding FinalBefore at a browser run's start before it, the note doesn't name that slot",
 			fb: at - 3*60*minute - 13*minute, sampled: at - minute, undecided: at - 2*60*minute - 6*minute, focus: event.AppBrowser},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := stallNote(at, c.fb, pending, 2*60*minute, 5*minute, sampling{newest: c.sampled, gapEnd: c.gapEnd, gap: c.gap}, c.focus, c.undecided)
+			dated := c.dated
+			if dated == 0 {
+				dated = at
+			}
+			got := stallNote(at, c.fb, pending, 2*60*minute, 5*minute,
+				sampling{newest: c.sampled, gapEnd: c.gapEnd, gap: c.gap, dated: dated}, c.focus, c.undecided)
 			if len(c.want) == 0 {
 				if got != "" {
 					t.Errorf("note %q, want none", got)
@@ -94,7 +107,8 @@ func TestStallNote(t *testing.T) {
 // TestHeldGap checks which gap between the sampler's records watch names as
 // pkg/score's hold (reach.held): the latest longer than BUCKET_TTL_S, unless
 // a record the agent stamps itself, dated more than BUCKET_TTL_S into it,
-// ended the reach before it and has taken effect.
+// ended the reach before it and has taken effect, once the newest record
+// the computer's own clock dated is rules.late past it.
 func TestHeldGap(t *testing.T) {
 	const minute, hour = int64(60_000), int64(3600_000)
 	const ttl, late = 2 * hour, 5 * minute
@@ -102,14 +116,14 @@ func TestHeldGap(t *testing.T) {
 	cases := []struct {
 		name           string
 		times, stamped []int64
-		high           int64
+		dated          int64
 		end, length    int64
 	}{
 		{"a gap longer than BUCKET_TTL_S with nothing stamped in it is held",
 			night, nil, 14*hour + 15_000, 14 * hour, 14*hour - 30_000},
 		{"a record stamped more than BUCKET_TTL_S into the gap, whose cut has taken effect, leaves nothing held",
 			night, []int64{3 * hour}, 14*hour + 15_000, 0, 0},
-		{"a record stamped in the gap whose cut still waits, under 5 min before the newest record, keeps the gap held",
+		{"a record stamped in the gap whose cut still waits, under 5 min before the newest record the computer dated, keeps the gap held",
 			night, []int64{14*hour - minute}, 14*hour + 15_000, 14 * hour, 14*hour - 30_000},
 		{"a record stamped within BUCKET_TTL_S of the gap's start ends no reach",
 			night, []int64{hour}, 14*hour + 15_000, 14 * hour, 14*hour - 30_000},
@@ -122,7 +136,7 @@ func TestHeldGap(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			end, length := heldGap(c.times, c.stamped, ttl, late, c.high)
+			end, length := heldGap(c.times, c.stamped, ttl, late, c.dated)
 			if end != c.end || length != c.length {
 				t.Errorf("gap ending at %d ms, %d ms long; want %d ms, %d ms", end, length, c.end, c.length)
 			}
@@ -230,8 +244,8 @@ func TestStallWarning(t *testing.T) {
 		each string
 		// hold, when set, gives the time pkg/score holds FinalBefore at
 		// once it would pass it, as a slot nothing decides does
-		// (score.Output.Undecided), which only #312's order of records
-		// reaches, for a few minutes.
+		// (score.Output.Undecided), which no order of records reaches since
+		// pkg/score's gap hold runs on the device's own clock.
 		hold func(evs []event.Event) int64
 		// held says the newest final minute ends up more than the
 		// warning's lag behind the newest record, so a case's silence

@@ -67,7 +67,8 @@ func samplerRecord(e event.Event) bool {
 // which can be skewed, and so do the other paths' records. One that isn't
 // the sampler's, dated more than BUCKET_TTL_S after the sampler's latest
 // record, shows the agent running without its sampler, which ends that
-// record's reach once the newest record is rules.late past it (SM 2.1,
+// record's reach once the newest record the device's own clock dated, a
+// stamped record or one of the sampler's, is rules.late past it (SM 2.1,
 // sampledReaches): it no longer keeps the clock (State.now), and the slots
 // after it are a never-sampling device's (presence.neverAt).
 func stampedRecord(e event.Event) bool {
@@ -88,17 +89,19 @@ func stampedRecord(e event.Event) bool {
 // record keeps the clock until its reach ends: another record the agent
 // stamps itself (stampedRecord) is dated more than BUCKET_TTL_S after it,
 // which shows the agent running without its sampler, and the newest record
+// the device's own clock dated, a stamped record or one of the sampler's,
 // is rules.late past that one. An earlier record of the sampler's keeps
 // the clock while its fate is open (reach.held): while a record that ends
 // its reach waits like that, since a sample dated before that record can
 // still arrive and keep the reach; while the sampler's next record, more
 // than BUCKET_TTL_S after it, is less than rules.late behind the newest
-// record, since a stamped record dated inside that gap can still arrive and
-// end the reach; and, for a sample or a resume or unlock with no sample,
-// while its next record of the sampler's is an os.power with no sample
-// that is less than rules.late behind the newest record the device's own
-// clock dated, since the sample taken with it can still arrive and decide
-// the slots between (reach.lapse). Since settle is PENDING_WINDOW_S,
+// record that clock dated, since a stamped record dated inside that gap
+// can still arrive and end the reach; and, for a sample or a resume or
+// unlock with no sample, while its next record of the sampler's is an
+// os.power with no sample that is less than rules.late behind that newest
+// record, since the sample taken with it can still arrive and decide the
+// slots between (reach.lapse). A bridge or log record dated ahead of the
+// device's clock ends none of these waits. Since settle is PENDING_WINDOW_S,
 // nothing after a record that keeps the clock is final. With no record of
 // the sampler's keeping it, as on a device whose agent never samples, now
 // is high: nothing else keeps time there, and a minute is final once a
@@ -203,7 +206,7 @@ func Step(s State, records []event.Event) (State, Output) {
 		}
 	}
 	r := newRules(s.table)
-	reaches := sampledReaches(r, next.recs, next.high)
+	reaches := sampledReaches(r, next.recs)
 	now := next.now(r, reaches)
 	all, lookups, relays, undecided := derive(r, s.device, next.recs, now, reaches)
 	fb, waits := s.done, int64(0)

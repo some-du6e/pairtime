@@ -16,8 +16,9 @@ import (
 // back further for a browser or chat-app run that may be a lookup (SM
 // 2.5), which stallNote leaves silent; for less than the think part of a
 // lead, for an agent app's message that hasn't paired yet (SM 2.3); and,
-// for PENDING_WINDOW_S - READ_HORIZON_S after the sampler's record that
-// ends a gap longer than BUCKET_TTL_S, such as the resume after a night's
+// until the newest record the computer's own clock dated is
+// PENDING_WINDOW_S - READ_HORIZON_S past the sampler's record that ends a
+// gap longer than BUCKET_TTL_S, such as the resume after a night's
 // suspend, at the sample before the gap, in case a record dated inside
 // the gap is still on its way (SM 2.1). That hold can keep FinalBefore
 // hours behind, so stallNote names it while it lasts, and so is a slot
@@ -27,10 +28,12 @@ import (
 const stallMS = 10 * 60 * 1000
 
 // sampling is what watch knows of the presence sampler's records, as the
-// window and the carry hold them: the newest one's t, 0 for none, and the
-// end and length of the latest gap between two of them longer than
-// BUCKET_TTL_S that pkg/score holds the clock for, 0 for none.
-type sampling struct{ newest, gapEnd, gap int64 }
+// window and the carry hold them: the newest one's t, 0 for none; the end
+// and length of the latest gap between two of them longer than
+// BUCKET_TTL_S that pkg/score holds the clock for, 0 for none; and dated,
+// the newest t the computer's own clock dated (clocked), which that hold
+// runs on.
+type sampling struct{ newest, gapEnd, gap, dated int64 }
 
 // watch tells doctor when FinalBefore lags, after the Step that scored
 // batch b: when the newest final minute ends more than stallMS past
@@ -42,10 +45,13 @@ type sampling struct{ newest, gapEnd, gap int64 }
 // and is no stall. One dated long before it, as lookback's records are,
 // has a FinalBefore of its own time.
 func (l *Loop) watch(b ledger.Batch) {
-	var high, focusAt int64
+	var high, dated, focusAt int64
 	var focus event.AppClass
 	var times []int64 // the sampler's records'
 	note := func(e *event.Event) {
+		if clocked(e) {
+			dated = max(dated, e.T)
+		}
 		switch d := e.Data.(type) {
 		case *event.OSPresence, *event.OSPower:
 			times = append(times, e.T)
@@ -84,7 +90,8 @@ func (l *Loop) watch(b ledger.Batch) {
 	if len(times) > 0 {
 		s.newest = slices.Max(times)
 	}
-	s.gapEnd, s.gap = heldGap(times, stamped, l.win.ttl, l.win.late, high)
+	s.dated = dated
+	s.gapEnd, s.gap = heldGap(times, stamped, l.win.ttl, l.win.late, dated)
 	msg := ""
 	if high > 0 {
 		at := min(high, b.SealedAt.UnixMilli())
@@ -104,16 +111,17 @@ func (l *Loop) watch(b ledger.Batch) {
 // which pkg/score holds the clock (reach.held): none of the stamped
 // records, the times of records the agent stamps itself, is dated more
 // than ttl after the gap's start, before its end, and late,
-// PENDING_WINDOW_S - READ_HORIZON_S, before high, the newest record. Such
-// a record ended the reach before the gap, and once its cut has taken
-// effect nothing holds the clock there. It returns 0, 0 for no such gap.
-func heldGap(times, stamped []int64, ttl, late, high int64) (end, length int64) {
+// PENDING_WINDOW_S - READ_HORIZON_S, before dated, the newest record the
+// computer's own clock dated. Such a record ended the reach before the
+// gap, and once its cut has taken effect nothing holds the clock there. It
+// returns 0, 0 for no such gap.
+func heldGap(times, stamped []int64, ttl, late, dated int64) (end, length int64) {
 	sorted := slices.Clone(times)
 	slices.Sort(sorted)
 	for i := 1; i < len(sorted); i++ {
 		from, to := sorted[i-1], sorted[i]
 		if to-from <= ttl || slices.ContainsFunc(stamped, func(t int64) bool {
-			return t > from+ttl && t < to && t <= high-late
+			return t > from+ttl && t < to && t <= dated-late
 		}) {
 			continue
 		}
@@ -134,9 +142,10 @@ func heldGap(times, stamped []int64, ttl, late, high int64) (end, length int64) 
 // READ_HORIZON_S, after that one, after which pkg/score takes them for a
 // never-sampling device's (SM 2.1). A sample that ends a gap longer than
 // ttl, as the morning's first after a night's suspend, holds the minutes
-// since the sample before it until the newest record is late past it (SM
-// 2.1's wait for a record dated inside the gap), and the note says so
-// while it does. When pkg/score holds FinalBefore at undecided, the start
+// since the sample before it until the newest record the computer's own
+// clock dated is late past it (SM 2.1's wait for a record dated inside the
+// gap), and the note says so while it does: a bridge or log record dated
+// ahead of that clock doesn't end the wait. When pkg/score holds FinalBefore at undecided, the start
 // of a slot whose presence nothing decides yet (score.Output.Undecided),
 // the note says so before any other cause: no minute is final before its
 // slots are decided. Step's clock passes such a slot only after a sample
@@ -166,7 +175,7 @@ func stallNote(at, fb, pending, ttl, late int64, s sampling, focus event.AppClas
 	case at-s.newest > pending+stallMS:
 		msg += fmt.Sprintf(": no presence sample has come for %s, so they wait for the next one, or for a record the agent stamps itself (a hook's, one of its own watchers', an agent app reader's) dated more than %s after the last one, and then any record %s after that",
 			lasting(at-s.newest), lasting(ttl), lasting(late))
-	case s.gapEnd > 0 && at-s.gapEnd < late:
+	case s.gapEnd > 0 && s.dated-s.gapEnd < late:
 		msg += fmt.Sprintf(": a presence sample came after %s without one, so the minutes since wait %s for a record dated in that gap",
 			lasting(s.gap), lasting(late))
 	case focus == event.AppBrowser || focus == event.AppChatApp:

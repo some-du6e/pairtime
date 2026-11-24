@@ -324,16 +324,18 @@ func logMorning(t *testing.T, from, to int64, ref event.Event) []event.Event {
 // record the agent stamps itself, dated more than BUCKET_TTL_S after it,
 // comes before the sampler's next record, whether the carry folded that
 // record or the window holds it (window.cutBy), and only once the newest
-// record is PENDING_WINDOW_S - READ_HORIZON_S past it. A Step over the
-// carry and the window then derives every slot from the window's start as
-// one Step over every record does: asleep through a silence or a suspend
-// longer than Lookback that ends with a record of the sampler's, or while a
-// cut still waits; a never-sampling device's after a stamped record cut the
-// reach, with no gap from before the stretch in the slot of the record
-// that starts the sampler again, an unlock and the sample at its time
-// included. TestHeadlessLoop compares minute buckets, and a minute with no
-// credit and no agent time has none, which is why its carry cases need a
-// turn running in the minutes in question to tell those slots apart.
+// record the device's own clock dated is PENDING_WINDOW_S - READ_HORIZON_S
+// past it, whatever a log reader's or the bridge's records say. A Step
+// over the carry and the window then derives every slot from the window's
+// start as one Step over every record does: asleep through a silence or a
+// suspend longer than Lookback that ends with a record of the sampler's,
+// or while a cut still waits; a never-sampling device's after a stamped
+// record cut the reach, with no gap from before the stretch in the slot of
+// the record that starts the sampler again, an unlock and the sample at
+// its time included. TestHeadlessLoop compares minute buckets, and a
+// minute with no credit and no agent time has none, which is why its carry
+// cases need a turn running in the minutes in question to tell those slots
+// apart.
 func TestCarryReach(t *testing.T) {
 	table := testTable()
 	turn := hookTurn(t, hookAt, hourTools())
@@ -426,6 +428,10 @@ func TestCarryReach(t *testing.T) {
 		{"a stamped record before the window's first sample that the newest record isn't yet rules.late past doesn't end the carried sample's reach yet",
 			[]event.Event{rec(again-60_000, &event.OSFocus{AppClass: event.AppUnknown}),
 				rec(again, idle(600))},
+			again - 15*minuteMS, true, true},
+		{"a log reader's records dated ten minutes past the window's first sample don't make the stamped record before it end the carried sample's reach: the cut waits until a record the device's own clock dated is rules.late past it",
+			append([]event.Event{rec(again-60_000, &event.OSFocus{AppClass: event.AppUnknown}),
+				rec(again, idle(600))}, logTurn(t, again+10*minuteMS, turn[len(turn)-1])...),
 			again - 15*minuteMS, true, true},
 	}
 	for _, c := range cases {

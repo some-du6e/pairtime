@@ -231,8 +231,8 @@ type Loop struct {
 	// writeDayFile writes a day's rollup, store.WriteDay but in tests.
 	writeDayFile func(dir string, d store.Day) error
 	// scoreStep is score.Step but in tests, which hold FinalBefore at a
-	// slot nothing decides for longer than the few minutes #312's order of
-	// records can.
+	// slot nothing decides, as no order of records does since pkg/score's
+	// gap hold runs on the device's own clock.
 	scoreStep func(score.State, []event.Event) (score.State, score.Output)
 
 	mu      sync.Mutex
