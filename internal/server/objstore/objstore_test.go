@@ -477,8 +477,8 @@ func TestEvidenceDelete(t *testing.T) {
 		{name: "deleting a blob that's already gone succeeds, so a retried delete passes"},
 		{name: "a delete on a bucket with versioning on fails with ErrKeepsVersions, since the blob stays behind a delete marker",
 			versioning: "Enabled", stored: true, wantErr: ErrKeepsVersions},
-		{name: "a delete on a bucket with versioning suspended fails with ErrKeepsVersions too, since such a bucket still adds a marker",
-			versioning: "Suspended", stored: true, wantErr: ErrKeepsVersions},
+		{name: "a delete on a bucket with versioning suspended answers no marker, as MinIO's doesn't, so only doctor's versioning check finds that bucket",
+			versioning: "Suspended", stored: true},
 		{name: "a retried delete on a bucket with versioning on fails as well, since each delete adds another marker",
 			versioning: "Enabled", wantErr: ErrKeepsVersions},
 	}

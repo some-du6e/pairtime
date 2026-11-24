@@ -127,3 +127,14 @@ jobs:
           else
             echo "the evidence key is $(jq -r .evidence_key.key_id "$doc")"
           fi
+          # Each key_id is the first 16 hex digits of the SHA-256 of its
+          # public key's bytes, and a reader refuses a document where one
+          # isn't (docs/spec/keys-v1.md 2). The checks above leave only hex.
+          keyid() { printf "$(sed 's/../\\x&/g' <<<"$1")" | sha256sum | cut -c1-16; }
+          while read -r id pub; do
+            if [ "$(keyid "$pub")" != "$id" ]; then
+              echo "::error::the keys document names key $id, and its public key's id is $(keyid "$pub") (docs/spec/keys-v1.md 2)"
+              exit 1
+            fi
+          done < <(jq -r '.server_keys[], (.evidence_key // empty) | "\(.key_id) \(.public_key)"' "$doc")
+          echo "every key_id is the id of its public key"

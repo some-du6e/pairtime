@@ -231,9 +231,10 @@ func TestWycheproofECDH(t *testing.T) {
 }
 
 // blobAround builds the blob a sender would seal to recipient with the
-// ephemeral point eph, given the shared secret z of the two, and a nonce
-// of zeros. It follows seal-v1 4 steps 3 to 7 and never multiplies a
-// point, so a Wycheproof point can stand as the ephemeral key.
+// ephemeral point eph, given the shared secret z of the two. It follows
+// seal-v1 4 steps 4, 6 and 7, with a nonce of zeros for step 5, and never
+// multiplies a point, so a Wycheproof point can stand as the ephemeral
+// key.
 func blobAround(eph []byte, recipient *ecdh.PublicKey, z []byte, c Context, m []byte) ([]byte, error) {
 	key, err := derive(z, c)
 	if err != nil {

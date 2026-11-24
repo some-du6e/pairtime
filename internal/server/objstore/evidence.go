@@ -129,7 +129,10 @@ func (e *Evidence) Has(ctx context.Context, sum [sha256.Size]byte) (bool, error)
 // ErrKeepsVersions, when the store answers x-amz-delete-marker: true. Only
 // a bucket that keeps versions sends that, and there the blob's bytes
 // stay behind the marker, so the row must stay for doctor and the
-// operator to see.
+// operator to see. MinIO sends no marker header for a bucket whose
+// versioning is suspended, though the versions it kept while versioning
+// was on stay. pairtimed doctor's versioning check, which fails a
+// suspended bucket too, is what finds that one.
 func (e *Evidence) Delete(ctx context.Context, sum [sha256.Size]byte) error {
 	key := EvidenceKey(sum)
 	h, err := e.b.deleteObject(ctx, key)

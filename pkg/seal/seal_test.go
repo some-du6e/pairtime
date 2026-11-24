@@ -419,6 +419,17 @@ func TestParseSPKI(t *testing.T) {
 		{name: "a P-384 key is refused", der: mustSPKI(t, p384.PublicKey())},
 		{name: "an Ed25519 key is refused", der: mustSPKI(t, edPub)},
 		{name: "a byte after the DER is refused", der: append(mustSPKI(t, key), 0)},
+		{name: "two zero bytes inside the outer SEQUENCE, which encoding/asn1 would skip, are refused", der: func() []byte {
+			der := mustSPKI(t, key)
+			der[1] += 2
+			return append(der, 0, 0)
+		}()},
+		{name: "a NULL parameter added inside the AlgorithmIdentifier is refused", der: func() []byte {
+			der := mustSPKI(t, key)
+			out := append([]byte{0x30, der[1] + 2, 0x30, der[3] + 2}, der[4:4+int(der[3])]...)
+			out = append(out, 0x05, 0x00)
+			return append(out, der[4+int(der[3]):]...)
+		}()},
 		{name: "the bare point is refused, since it isn't DER", der: key.Bytes()},
 	}
 	for _, tt := range tests {

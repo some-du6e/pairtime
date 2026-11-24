@@ -17,14 +17,13 @@
 package seal
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
-	"crypto/ecdsa"
 	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -147,27 +146,28 @@ func ParsePublicKey(b []byte) (*ecdh.PublicKey, error) {
 	return pub, nil
 }
 
+// spkiPrefix is the DER of a P-256 key's SubjectPublicKeyInfo up to its
+// point: a SEQUENCE of 89 bytes, the AlgorithmIdentifier with
+// id-ecPublicKey and the named curve P-256, and the BIT STRING's tag,
+// length and zero unused bits (seal-v1 6, 8).
+var spkiPrefix = []byte{
+	0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,
+	0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
+}
+
 // ParseSPKI returns the P-256 public key in der, a DER
 // SubjectPublicKeyInfo, as WebCrypto's exportKey("spki") and OpenSSL write
 // one: 91 bytes, id-ecPublicKey with the named curve P-256 and an
-// uncompressed point, which ParsePublicKey's checks then hold to. It
-// refuses a key of another kind or on another curve, explicit curve
-// parameters, a compressed point and a point off the curve. A key's id is
-// over its point, whichever form it came in.
+// uncompressed point, which ParsePublicKey then checks. It refuses every
+// other encoding, so a key of another kind or on another curve, explicit
+// curve parameters, a compressed point, and the extra elements that
+// encoding/asn1 would let through inside a SEQUENCE. A key's id is over
+// its point, whichever form it came in.
 func ParseSPKI(der []byte) (*ecdh.PublicKey, error) {
-	k, err := x509.ParsePKIXPublicKey(der)
-	if err != nil {
-		return nil, fmt.Errorf("seal: %w", err)
+	if len(der) != len(spkiPrefix)+PointSize || !bytes.Equal(der[:len(spkiPrefix)], spkiPrefix) {
+		return nil, errors.New("seal: not the 91-byte SubjectPublicKeyInfo of an uncompressed P-256 point")
 	}
-	ec, ok := k.(*ecdsa.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("seal: the SubjectPublicKeyInfo holds a %T, not a P-256 key", k)
-	}
-	pub, err := ec.ECDH()
-	if err != nil || pub.Curve() != ecdh.P256() {
-		return nil, errors.New("seal: the SubjectPublicKeyInfo doesn't hold a P-256 key")
-	}
-	return pub, nil
+	return ParsePublicKey(der[len(spkiPrefix):])
 }
 
 // Seal seals plaintext to the P-256 key to, under c (seal-v1 4), with a
@@ -220,19 +220,22 @@ func Open(key *ecdh.PrivateKey, c Context, blob []byte) ([]byte, error) {
 	if err := c.check(); err != nil {
 		return nil, err
 	}
-	h, err := parseHeader(blob)
-	if err != nil {
+	if err := checkFrame(blob); err != nil {
 		return nil, err
 	}
-	if mine := keyID(key.PublicKey()); h.keyID != mine {
-		return nil, fmt.Errorf("%w: it names key %x, and this is key %x", ErrOtherKey, h.keyID, mine)
+	if id, mine := blob[1:1+KeyIDSize], keyID(key.PublicKey()); !bytes.Equal(id, mine[:]) {
+		return nil, fmt.Errorf("%w: it names key %x, and this is key %x", ErrOtherKey, id, mine)
 	}
-	k, err := blobKey(key, h.eph, c)
+	eph, err := ParsePublicKey(blob[1+KeyIDSize : 1+KeyIDSize+PointSize])
+	if err != nil {
+		return nil, fmt.Errorf("%w: its ephemeral key isn't an uncompressed P-256 point", ErrMalformed)
+	}
+	k, err := blobKey(key, eph, c)
 	if err != nil {
 		return nil, err
 	}
 	defer clear(k)
-	return decrypt(k, h.nonce, blob[HeaderSize:], blob[:HeaderSize])
+	return decrypt(k, blob[1+KeyIDSize+PointSize:HeaderSize], blob[HeaderSize:], blob[:HeaderSize])
 }
 
 // Reseal opens blob with key under c and seals its plaintext to to under
@@ -251,44 +254,30 @@ func Reseal(key *ecdh.PrivateKey, to *ecdh.PublicKey, c Context, blob []byte) ([
 
 // BlobKeyID returns the id of the key blob is sealed to, from its header,
 // without opening it. It is the key a ring opens the blob with, and the
-// id WP-SB4's upload check compares with the current evidence key's. A
-// blob that isn't one fails with ErrMalformed.
+// id WP-SB4's upload check compares with the current evidence key's. It
+// is only the sealer's claim until the blob opens with that key (seal-v1
+// 7). A blob too short or of another version fails with ErrMalformed.
 func BlobKeyID(blob []byte) (string, error) {
-	h, err := parseHeader(blob)
-	if err != nil {
+	if err := checkFrame(blob); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(h.keyID[:]), nil
+	return hex.EncodeToString(blob[1 : 1+KeyIDSize]), nil
 }
 
-// blobHeader is a blob's parsed header.
-type blobHeader struct {
-	keyID [KeyIDSize]byte
-	eph   *ecdh.PublicKey
-	nonce []byte
-}
-
-// parseHeader reads blob's header and checks steps 1 and 3 of seal-v1 5.
-func parseHeader(blob []byte) (blobHeader, error) {
+// checkFrame is step 2 of seal-v1 5: blob is long enough for a header and
+// a tag, and of version 1.
+func checkFrame(blob []byte) error {
 	if len(blob) < Overhead {
-		return blobHeader{}, fmt.Errorf("%w: %d bytes, and a blob has at least %d", ErrMalformed, len(blob), Overhead)
+		return fmt.Errorf("%w: %d bytes, and a blob has at least %d", ErrMalformed, len(blob), Overhead)
 	}
 	if blob[0] != Version {
-		return blobHeader{}, fmt.Errorf("%w: version %d, and this package reads version %d", ErrMalformed, blob[0], Version)
+		return fmt.Errorf("%w: version %d, and this package reads version %d", ErrMalformed, blob[0], Version)
 	}
-	var h blobHeader
-	copy(h.keyID[:], blob[1:1+KeyIDSize])
-	eph, err := ParsePublicKey(blob[1+KeyIDSize : 1+KeyIDSize+PointSize])
-	if err != nil {
-		return blobHeader{}, fmt.Errorf("%w: its ephemeral key isn't an uncompressed P-256 point", ErrMalformed)
-	}
-	h.eph = eph
-	h.nonce = blob[1+KeyIDSize+PointSize : HeaderSize]
-	return h, nil
+	return nil
 }
 
 // blobKey is K for the blob between priv and pub under c: HKDF-SHA256
-// over their shared secret (seal-v1 4 steps 2 and 3).
+// over their shared secret (seal-v1 4 steps 3 and 4).
 func blobKey(priv *ecdh.PrivateKey, pub *ecdh.PublicKey, c Context) ([]byte, error) {
 	z, err := shared(priv, pub)
 	if err != nil {
@@ -299,7 +288,7 @@ func blobKey(priv *ecdh.PrivateKey, pub *ecdh.PublicKey, c Context) ([]byte, err
 }
 
 // shared is the ECDH shared secret of priv and pub: the X coordinate of
-// their product, 32 bytes (seal-v1 4 step 2).
+// their product, 32 bytes (seal-v1 4 step 3).
 func shared(priv *ecdh.PrivateKey, pub *ecdh.PublicKey) ([]byte, error) {
 	z, err := priv.ECDH(pub)
 	if err != nil {
@@ -309,7 +298,7 @@ func shared(priv *ecdh.PrivateKey, pub *ecdh.PublicKey) ([]byte, error) {
 }
 
 // derive is K for the shared secret z under c: HKDF-SHA256 with an empty
-// salt (seal-v1 4 step 3).
+// salt (seal-v1 4 step 4).
 func derive(z []byte, c Context) ([]byte, error) {
 	return hkdfSHA256(z, nil, c.info(), keySize)
 }
@@ -343,7 +332,7 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 }
 
 // encrypt appends to dst the AES-256-GCM encryption of plaintext under key
-// and nonce, with aad as additional data, and its tag (seal-v1 4 step 6).
+// and nonce, with aad as additional data, and its tag (seal-v1 4 step 7).
 // aad must not overlap dst.
 func encrypt(dst, key, nonce, plaintext, aad []byte) ([]byte, error) {
 	g, err := newGCM(key)
@@ -357,7 +346,7 @@ func encrypt(dst, key, nonce, plaintext, aad []byte) ([]byte, error) {
 }
 
 // decrypt opens ct, AES-256-GCM ciphertext with its tag at the end, under
-// key and nonce with aad as additional data (seal-v1 5 step 5). A tag that
+// key and nonce with aad as additional data (seal-v1 5 step 6). A tag that
 // doesn't verify is ErrOpen.
 func decrypt(key, nonce, ct, aad []byte) ([]byte, error) {
 	g, err := newGCM(key)

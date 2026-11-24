@@ -8,7 +8,7 @@ Status: the format of `/.well-known/pairtime-keys.json`, which `pairtimed` serve
 GET /.well-known/pairtime-keys.json
 ```
 
-No authentication. The answer is 200 with `Content-Type: application/json`, `Cache-Control: no-cache`, so a cache checks with the server before each reuse, and an `ETag`, so a check that finds the document unchanged gets `304 Not Modified` without the body. `pairtimed` writes the document when it starts, and it changes only at a start that records a key the history doesn't hold yet (3).
+No authentication. The answer is 200 with `Content-Type: application/json`, `Cache-Control: no-cache`, so a cache checks with the server before each reuse, and an `ETag`, so a check that finds the document unchanged gets `304 Not Modified` without the body. `pairtimed` writes the document when it starts, and it changes only at a start that records a key the history doesn't hold yet (3), or at a start whose `/data/keys` has no keys, which lists no evidence key (2) until a start with the keys lists it again.
 
 ## 2. The document
 
