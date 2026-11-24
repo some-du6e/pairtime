@@ -145,6 +145,19 @@ func TestStartupRefusesScoringVersion(t *testing.T) {
 
 func TestServe(t *testing.T) {
 	configPath, dbPath := writeConfig(t)
+	// Two programs: one that takes hours, with takes_hours left out, and
+	// calibration's, which takes none, so the programs route lists only the
+	// first and serve wires [[programs]] into the submissions API.
+	f, err := os.OpenFile(configPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("config_version = 2\n[[programs]]\nname = \"hard-mode\"\ndisplay_name = \"Hard Mode\"\n[[programs]]\nname = \"calibration\"\ndisplay_name = \"Calibration\"\ntakes_hours = false\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
 	e, _, stderr := testEnv()
 	type addrs struct{ public, ops string }
 	up := make(chan addrs, 1)
@@ -193,6 +206,9 @@ func TestServe(t *testing.T) {
 		{name: "/metrics counts the open live-dashboard streams, none on a new server (DESIGN 10.4)", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_streams_open 0$`},
 		{name: "the build-day summary needs a device token", url: public + "/api/v1/build-days", wantCode: 401, wantBody: `"error":"token_missing"`},
 		{name: "devlogs need a device token", url: public + "/api/v1/devlogs", wantCode: 401, wantBody: `"error":"token_missing"`},
+		{name: "the programs route lists pairtime.toml's programs that take hours, and not calibration's", url: public + "/api/v1/programs", wantCode: 200, wantBody: `^\{"programs":\[\{"name":"hard-mode","display_name":"Hard Mode"\}\]\}\n$`},
+		{name: "a create with no credential answers 401 not_signed_in", method: http.MethodPost, url: public + "/api/v1/submissions", wantCode: 401, wantBody: `"error":"not_signed_in"`},
+		{name: "the ops listener doesn't serve the submissions API", url: private + "/api/v1/submissions", wantCode: 404},
 		{name: "badges need a device token", method: http.MethodPost, url: public + "/api/v1/badges", wantCode: 401, wantBody: `"error":"token_missing"`},
 		{name: "a devlog's delete needs a device token", method: http.MethodDelete, url: public + "/api/v1/devlogs/d1", wantCode: 401, wantBody: `"error":"token_missing"`},
 		{name: "the ops listener doesn't serve devlogs", url: private + "/api/v1/devlogs", wantCode: 404},

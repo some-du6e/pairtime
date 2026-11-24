@@ -26,9 +26,11 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/objstore"
 	"github.com/some-du6e/pairtime/internal/server/ops"
+	"github.com/some-du6e/pairtime/internal/server/pages"
 	"github.com/some-du6e/pairtime/internal/server/publisher"
 	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/store"
+	"github.com/some-du6e/pairtime/internal/server/submission"
 )
 
 const doctorSummary = "Check a deployed server from inside its container: config, keys, buckets, replication, snapshots, HCA, the witness repo, push monitors and the tunnel"
@@ -281,6 +283,12 @@ func challenged(status int, h http.Header) bool {
 }
 
 func (d *doctor) checkConfig(context.Context) result {
+	// serve refuses a scoring_version it couldn't re-score at
+	// (D-sb1-submissions, Q10), so the file fails here too, rather than
+	// passing while pairtimed won't start on it.
+	if _, _, err := submission.Scoring(d.cfg.ScoringVersion, pages.BuiltinScoringVersion); err != nil {
+		return bad("%s: %v", d.cfg.Path, err)
+	}
 	detail := fmt.Sprintf("%s, config_version %d, base_url %s, signups_open %v, profile_default %q", d.cfg.Path, d.cfg.ConfigVersion, d.cfg.BaseURL, d.cfg.SignupsOpen, d.cfg.ProfileDefault)
 	if len(d.cfg.Warnings) > 0 {
 		// A file for a newer release, as after a rollback (DESIGN 10.5

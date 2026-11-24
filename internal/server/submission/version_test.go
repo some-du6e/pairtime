@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/pages"
 	"github.com/some-du6e/pairtime/pkg/params"
 )
 
@@ -69,8 +70,8 @@ func TestScoring(t *testing.T) {
 		})
 	}
 	t.Run("the built-in version scores with the newest table, the one the agent stamps its buckets with", func(t *testing.T) {
-		if _, hash, err := Scoring("", "0.5.0"); err != nil || hash != newest.Hash() {
-			t.Errorf("Scoring(\"\", 0.5.0) = %s, %v; want the newest table's %s (%s)", hash, err, newest.Hash(), newest.Version())
+		if _, hash, err := Scoring("", pages.BuiltinScoringVersion); err != nil || hash != newest.Hash() {
+			t.Errorf("Scoring(\"\", %s) = %s, %v; want the newest table's %s (%s)", pages.BuiltinScoringVersion, hash, err, newest.Hash(), newest.Version())
 		}
 	})
 }

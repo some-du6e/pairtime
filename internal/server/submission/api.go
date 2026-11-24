@@ -110,8 +110,10 @@ type Options struct {
 	// through it.
 	OnWithdraw func(ctx context.Context, tx writer.Tx, s Submission) error
 	// Rate counts each device's requests to these routes, as ingest counts
-	// its uploads (SP 8.6), once their signature verifies. Nil means one
-	// of ingest's default rate, kept apart from the device's other rates.
+	// its uploads (SP 8.6), once their signature verifies, and each
+	// account's creates and withdrawals from a web session, under the
+	// account's id. Nil means one of ingest's default rate, kept apart from
+	// the device's other rates.
 	Rate *ingest.Limiter
 	// Logger hears of reads and writes that fail. Nil means
 	// slog.Default().
@@ -345,26 +347,42 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request) (caller, []byte,
 
 // mayWrite checks that c may create or withdraw: one of the account's
 // devices, or a web session from pairtimed's own pages whose fresh login
-// was made at most FreshLogin before (D-sb1-submissions, Q6). It answers a
-// refusal itself and reports false.
-func (s *Service) mayWrite(w http.ResponseWriter, r *http.Request, c caller) bool {
+// was made at most FreshLogin before (D-sb1-submissions, Q6) and whose
+// account is within its rate. It answers a refusal itself and reports
+// false. The caller calls end once it has answered.
+func (s *Service) mayWrite(w http.ResponseWriter, r *http.Request, c caller) (end func(), ok bool) {
 	switch {
 	case c.program != "":
 		s.refuse(w, refuse(http.StatusForbidden, CodeProgramNotAllowed, "A program's credential can't create or withdraw a submission, or read devlog windows, on this server."))
-		return false
+		return nil, false
 	case c.session == nil:
-		return true
+		// A device's request took its rate in admit.
+		return func() {}, true
 	case s.o.SameOrigin == nil || !s.o.SameOrigin(r):
 		s.refuse(w, refuse(http.StatusForbidden, CodeCrossOrigin, "A web session creates and withdraws submissions only from this server's own pages."))
-		return false
+		return nil, false
 	case !c.session.FreshLoginWithin(FreshLogin, s.o.Now()):
 		ref := refuse(http.StatusForbidden, CodeFreshLoginRequired, "Submitting or withdrawing needs a fresh Hack Club Auth login, made at most 10 minutes before; sign in again at login_url, adding &return_to= with this page's path.")
 		ref.loginURL = FreshLoginURL
 		s.refuse(w, ref)
-		return false
+		return nil, false
 	}
-	return true
+	// A web session's creates and withdrawals take one rate per account,
+	// the one each computer has, so a signed-in account can't fill the
+	// writer every account's writes share (docs/spec/submissions-v1.md
+	// 2.1).
+	done, wait := s.o.Rate.Take(sessionRate+c.account, s.o.Now())
+	if done == nil {
+		s.refuse(w, &refusal{status: http.StatusTooManyRequests, code: ingest.CodeRateLimited, retryAfter: wait,
+			detail: "This account is submitting or withdrawing faster than its rate, or another of its submissions or withdrawals is still being answered; wait Retry-After seconds, then send it again."})
+		return nil, false
+	}
+	return done, true
 }
+
+// sessionRate prefixes an account's id as its web session's key in
+// Options.Rate, apart from its devices' ids.
+const sessionRate = "account:"
 
 // refusalOf is the answer to the error of a create's or a withdrawal's
 // writer op, or of a read: nil for none, and 503 for any error the API
@@ -418,11 +436,14 @@ func isKey(s string) bool {
 	return true
 }
 
-// decodeObject reads data, one JSON object in valid UTF-8, into v,
-// refusing a member v lacks.
-func decodeObject(data []byte, v any, shape string) *refusal {
+// decodeObject reads data, one JSON object in valid UTF-8 with the members
+// m, into v, refusing a member v lacks.
+func decodeObject(data []byte, v any, m objectShape, shape string) *refusal {
 	if !utf8.Valid(data) || !json.Valid(data) {
 		return refuse(http.StatusBadRequest, ingest.CodeJSONInvalid, "The body must be one JSON object in valid UTF-8.")
+	}
+	if !m.holds(data) {
+		return refuse(http.StatusBadRequest, ingest.CodeBodyShape, shape)
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -431,6 +452,49 @@ func decodeObject(data []byte, v any, shape string) *refusal {
 	}
 	return nil
 }
+
+// objectShape is the members a JSON object takes, each with the members
+// its value takes when that value is an object too, or nil.
+type objectShape map[string]objectShape
+
+// holds reports whether raw is a JSON object that names each of its
+// members once, spelled exactly as m names it, and whether each member
+// whose value m gives members of its own holds such an object, or null.
+// encoding/json alone takes a member's name in any letter case and keeps
+// the last of a repeated one, both of which body_shape refuses, as ingest
+// refuses them.
+func (m objectShape) holds(raw []byte) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return false
+	}
+	seen := make(map[string]bool, len(m))
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		name, ok := t.(string)
+		inner, known := m[name]
+		if !ok || !known || seen[name] {
+			return false
+		}
+		seen[name] = true
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return false
+		}
+		if inner != nil && !bytes.Equal(v, []byte("null")) && !inner.holds(v) {
+			return false
+		}
+	}
+	t, err := dec.Token()
+	return err == nil && t == json.Delim('}')
+}
+
+// createMembers are a create's members (docs/spec/submissions-v1.md 3).
+var createMembers = objectShape{"program": nil, "request_id": nil, "projects": nil, "project_keys": nil,
+	"window": {"start": nil, "end": nil}, "devlog_windows": nil}
 
 // createRequest is the body of POST /api/v1/submissions
 // (docs/spec/submissions-v1.md 3).
@@ -520,11 +584,13 @@ func (s *Service) createSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.end()
-	if !s.mayWrite(w, r, c) {
+	end, ok := s.mayWrite(w, r, c)
+	if !ok {
 		return
 	}
+	defer end()
 	var req createRequest
-	if ref := decodeObject(body, &req, createShape); ref != nil {
+	if ref := decodeObject(body, &req, createMembers, createShape); ref != nil {
 		s.refuse(w, ref)
 		return
 	}
@@ -533,15 +599,12 @@ func (s *Service) createSubmission(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, ref)
 		return
 	}
-	rows := 8 + 4*(len(in.Projects)+len(in.ProjectKeys))
-	if in.Window == nil {
-		rows += 64
-	}
+	rows, pre := s.prepare(r.Context(), in)
 	var out Submission
 	var created bool
 	err := s.o.Writer.Do(r.Context(), rows, func(ctx context.Context, tx writer.Tx) error {
 		var err error
-		out, created, err = s.create(ctx, tx, in)
+		out, created, err = s.create(ctx, tx, in, pre)
 		return err
 	})
 	if ref := s.refusalOf(r, err, "submission: creating a submission"); ref != nil {
@@ -610,9 +673,11 @@ func (s *Service) withdrawSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.end()
-	if !s.mayWrite(w, r, c) {
+	end, ok := s.mayWrite(w, r, c)
+	if !ok {
 		return
 	}
+	defer end()
 	if len(body) != 0 {
 		s.refuse(w, refuse(http.StatusBadRequest, ingest.CodeBodyShape, "A withdrawal has no body."))
 		return

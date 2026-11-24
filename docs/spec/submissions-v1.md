@@ -12,7 +12,7 @@ A refusal is `{"error": "<code>", "detail": "<text>"}`, where `detail` is an Eng
 
 | Status | `error` | When |
 |---|---|---|
-| 400 | `body_shape` | The body isn't one JSON object with exactly the members the route takes, each of its type (3.1), or a withdrawal has a body |
+| 400 | `body_shape` | The body isn't one JSON object with exactly the members the route takes, each named once, spelled as 3.1 spells it and of its type, or a withdrawal has a body |
 | 400 | `json_invalid` | The body isn't one JSON value in valid UTF-8 |
 | 400 | `body_unreadable` | The body couldn't be read, as when the connection broke off; send the same request again |
 | 413 | `body_too_large` | The body is over 16,384 bytes |
@@ -37,7 +37,7 @@ A refusal is `{"error": "<code>", "detail": "<text>"}`, where `detail` is an Eng
 | 409 | `limit_reached` | A create past the account's caps (10) |
 | 409 | `no_devlog_windows` | A devlog-mode create whose cut list is empty; send one window instead (3.2) |
 | 409 | `not_withdrawable` | A withdrawal once step 9's checks have run (6) |
-| 429 | `rate_limited` | A computer past its rate, or with another request still being answered; wait `Retry-After` seconds and send it again (2.2) |
+| 429 | `rate_limited` | A computer past its rate, or an account past the rate of its web session's creates and withdrawals, or either with another such request still being answered; wait `Retry-After` seconds and send it again (2.1, 2.2) |
 | 503 | `unavailable` | The server couldn't read or write; every 503 carries `Retry-After: 5` and the request goes again after it |
 
 Other methods on a path get 405 from the router. A refused request stores nothing and draws no `r`.
@@ -46,12 +46,13 @@ Other methods on a path get 405 from the router. A refused request stores nothin
 
 ### 2.1 A web session
 
-The session cookie Hack Club Auth sign-in sets (`__Host-pairtime_session`). It acts for its account. Reads need only the session, and no web session has a rate.
+The session cookie Hack Club Auth sign-in sets (`__Host-pairtime_session`). It acts for its account. Reads need only the session, and take no rate.
 
-A create or a withdrawal from a web session passes two more checks:
+A create or a withdrawal from a web session passes three more checks:
 
 - **The same-origin check** every session write on the server passes, the rule sign-out uses: an `Origin` header equal to `base_url`, or, without one, `Sec-Fetch-Site` of `same-origin` or `none`, or neither header. Otherwise 403 `cross_origin`.
 - **A fresh login** made at most 10 minutes before, by the server's clock when the request arrives: a sign-in that went through `/auth/hca/login?fresh=1`, which asks Hack Club Auth for `prompt=login`, and got an `auth_time` from after it started. An ordinary sign-in never counts, however recent its `auth_time`. Otherwise 403 `fresh_login_required`, with `"login_url": "/auth/hca/login?fresh=1"`. The calling page adds `&return_to=` and its own path, which the API can't know, sends the browser there, and sends the request again when it comes back.
+- **The account's rate**, the one each computer has: a burst of 30 creates and withdrawals, refilled one every 10 seconds, with no other create or withdrawal of the account's web sessions in flight. Otherwise 429 `rate_limited` with `Retry-After`. It is kept apart from the rates of the account's computers.
 
 A request with no credential at all gets 401 `not_signed_in`.
 
@@ -265,6 +266,7 @@ The record of a submission stays as long as the account (DESIGN 4.4), so the ser
 | A body | 16,384 bytes | 413 `body_too_large` |
 | A page of the list | 100 | 400 `query_invalid` for a larger `limit` |
 | A computer's requests | a burst of 30, one more every 10 seconds, one at a time | 429 `rate_limited` |
+| An account's creates and withdrawals from a web session | a burst of 30, one more every 10 seconds, one at a time | 429 `rate_limited` |
 
 Submissions a program makes for the account (WP-PG6) don't count toward the 1,000. WP-PG6 sets a cap of its own on them.
 
@@ -278,7 +280,7 @@ Migration 0013 creates `submissions`, `submission_projects`, `submission_keys`, 
 
 For a program that takes hours, the freeze raises two risk flags, which reviewers see and no teen or program view shows:
 
-- `concurrent_devices`, `{"minutes": n}`: the minutes the frozen windows touch in which two of the account's devices credited one slot and at least one of them credited it to one of P's projects, read from the per-device minutes `rollup_minutes` keeps (SM 3.4; D-sb1-submissions, Q8). A minute two windows touch counts once, and a slot that only other projects competed for never counts. The server stores the flag only when `n` is above 0.
+- `concurrent_devices`, `{"minutes": n}`: the minutes the frozen windows touch in which two of the account's devices credited one slot and at least one of them credited it to one of P's projects, read from the per-device minutes `rollup_minutes` keeps (SM 3.4; D-sb1-submissions, Q8). A minute two windows touch counts once, and a slot that only other projects competed for never counts. The server stores the flag only when `n` is above 0. It counts on its read pool just before the freeze's writer op, over the windows the op is expected to freeze, and the op takes that count when its own windows touch the same minutes for the same projects, and counts again inside itself when they don't. So the writer, which takes every account's writes in turn, doesn't read up to 180 days of every device's minutes.
 - `repo_overlap`, `{"submissions": [ids]}`: the submissions of other accounts, frozen, not withdrawn and to a program that takes hours, that hold a pair whose repo fingerprint, `HMAC(pepper, root_sha)`, one of P's projects shares, and whose windows overlap the new one's (SP 10.2; Q11). Each of those submissions that is still undecided gets the flag too, naming the new one. Fingerprints come through the `Fingerprints` interface, which finds none until WP-SV10 stores them.
 
 ### 11.3 The scoring version
@@ -302,3 +304,9 @@ The rulings of D-sb1-submissions leave these open, and this spec settles them:
 7. The list's cursor is opaque, and `updated_since` is inclusive.
 8. The preview's path, `/api/v1/submissions/devlog-windows`, and its answer.
 9. `GET /api/v1/programs` needs no credential: program names aren't secret, and the picker needs them before anything else.
+10. A web session's creates and withdrawals take a rate per account, the one each computer has, so one signed-in account can't fill the writer every account shares. Reads take none.
+11. A body names each member once and spells it exactly, as ingest's bodies do, although encoding/json alone takes a name in any letter case and keeps the last of a repeated one.
+12. The teen view's members (4.1). The rulings fix the program view's (Q13), and the teen view shows the account its own submission, with `r` once challenged (Q9).
+13. A new submission gets 201 with `Location`, where the rulings fix only a retry's 200 (Q5).
+14. The order of 3.3 steps 2 to 5. The program, the verification and the submission cap come after the idempotency check, so a retry of a create to a program `[[programs]]` no longer lists, or from an account no longer verified, still gets its stored submission. The cap comes before P resolves, so a create past it reads nothing more.
+15. `review_url` is `<base_url>/review/submissions/<id>`, the review page's path in DESIGN 3.10 and 7.7.

@@ -28,6 +28,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/devlog"
 	"github.com/some-du6e/pairtime/internal/server/ingest"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
+	"github.com/some-du6e/pairtime/internal/server/pages"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/store/storetest"
 	"github.com/some-du6e/pairtime/internal/server/writer"
@@ -247,7 +248,7 @@ func newHarness(t *testing.T, engine store.Engine, edits ...func(*Options)) *har
 	w := writer.Start(db.Write, writer.Options{})
 	t.Cleanup(w.Close)
 	c := &clock{now: t0}
-	scoring, paramsHash, err := Scoring("", "0.5.0")
+	scoring, paramsHash, err := Scoring("", pages.BuiltinScoringVersion)
 	if err != nil {
 		t.Fatal(err)
 	}

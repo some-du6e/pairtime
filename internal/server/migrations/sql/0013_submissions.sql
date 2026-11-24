@@ -16,9 +16,11 @@
 -- device; its mode, one window or devlog windows (D13); its state and when
 -- it last reached each state a later step reads; and, from the freeze, the
 -- scoring version and parameter hash it froze, the 32-byte r and its
--- SHA-256, and the eligibility note (DESIGN 8.2, 1 or 0). No read selects r
--- before challenged_at_ms is set, when the draw is stored. device_id names
--- its device with no foreign key, since a retention job deletes devices.
+-- SHA-256, and the eligibility note (DESIGN 8.2, 1 or 0). Before
+-- challenged_at_ms is set, only DrawR reads r, inside the writer op that
+-- stores the draw and sets it; every other read, through RevealedR, needs
+-- challenged_at_ms. device_id names its device with no foreign key, since
+-- a retention job deletes devices.
 CREATE TABLE submissions (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL REFERENCES users (id),

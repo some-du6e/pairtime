@@ -362,7 +362,11 @@ func Load(path, secretsFile string, environ []string) (*Config, error) {
 		c.Warnings = append(c.Warnings, fmt.Sprintf("%s has config_version %d, above this release's %d, so this release ignores the keys it doesn't know: %s",
 			path, c.ConfigVersion, ConfigVersion, strings.Join(unknown, ", ")))
 	}
-	if err := checkKeyVersions(keyNames(md.Keys()), c.ConfigVersion); err != nil {
+	keys := keyNames(md.Keys())
+	if err := checkSpelling(keys); err != nil {
+		return nil, fmt.Errorf("config: %s: %w", path, err)
+	}
+	if err := checkKeyVersions(keys, c.ConfigVersion); err != nil {
 		return nil, fmt.Errorf("config: %s: %w", path, err)
 	}
 	c.Path = path
@@ -396,6 +400,28 @@ func keyNames(keys []toml.Key) []string {
 		}
 	}
 	return names
+}
+
+// checkSpelling refuses a key written in another letter case than the one
+// keyVersions names it by, which is lower case. The decoder takes
+// [[Programs]] for [[programs]], but keyVersions knows a key only as it is
+// spelt, so a variant would pass checkKeyVersions in a file the release
+// before the key refuses, and two spellings of one key decode in no set
+// order.
+func checkSpelling(keys []string) error {
+	var wrong []string
+	for _, k := range keys {
+		if _, ok := keyVersions[k]; ok {
+			continue
+		}
+		if lower := strings.ToLower(k); keyVersions[lower] > 0 {
+			wrong = append(wrong, fmt.Sprintf("%s (write %s)", k, lower))
+		}
+	}
+	if len(wrong) == 0 {
+		return nil
+	}
+	return fmt.Errorf("keys are written in lower case: %s", strings.Join(wrong, ", "))
 }
 
 // checkKeyVersions refuses keys that keyVersions says arrived after the
@@ -721,6 +747,15 @@ func checkReviewers(rs []Reviewer) []error {
 // checkPrograms checks [[programs]]: each name once and in programName's
 // form, and each display name 1 to 64 characters with no control
 // characters. It sets takes_hours true where the file leaves it out.
+// hidden reports whether r can't sit in a name teens see: a control, a
+// format character other than the zero-width non-joiner and joiner some
+// scripts need, which takes in the bidirectional controls that could
+// reorder or hide the text after the name, or a line or paragraph
+// separator. internal/server/auth's cleanName drops the same ones.
+func hidden(r rune) bool {
+	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) && r != 0x200c && r != 0x200d || unicode.In(r, unicode.Zl, unicode.Zp)
+}
+
 func checkPrograms(ps []Program) []error {
 	var errs []error
 	seen := make(map[string]bool)
@@ -739,8 +774,8 @@ func checkPrograms(ps []Program) []error {
 		if p.Name != "" {
 			where = fmt.Sprintf("program %q", p.Name)
 		}
-		if n := utf8.RuneCountInString(p.DisplayName); n == 0 || n > 64 || !utf8.ValidString(p.DisplayName) || strings.ContainsFunc(p.DisplayName, unicode.IsControl) {
-			errs = append(errs, fmt.Errorf("%s: display_name must be 1 to 64 characters, with no control characters", where))
+		if n := utf8.RuneCountInString(p.DisplayName); n == 0 || n > 64 || !utf8.ValidString(p.DisplayName) || strings.ContainsFunc(p.DisplayName, hidden) {
+			errs = append(errs, fmt.Errorf("%s: display_name must be 1 to 64 characters, with no control characters, bidirectional controls or line separators", where))
 		}
 		if p.TakesHours == nil {
 			hours := true

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/devlog"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 )
 
@@ -233,8 +234,9 @@ func count(ctx context.Context, q Querier, query string, args ...any) (int64, er
 // stores the submission with P, its pairs and its windows, the scoring
 // version, the parameter hash, a fresh r and its SHA-256 and the
 // eligibility note, moves it to frozen, raises its flags, and calls
-// OnFreeze. It returns the submission and whether this call made it.
-func (s *Service) create(ctx context.Context, tx writer.Tx, in createInput) (Submission, bool, error) {
+// OnFreeze. pre is prepare's concurrent_devices count, or nil. It returns
+// the submission and whether this call made it.
+func (s *Service) create(ctx context.Context, tx writer.Tx, in createInput, pre *counted) (Submission, bool, error) {
 	if id, sum, err := heldRequest(ctx, tx, in.Account, in.RequestID); err == nil {
 		if sum != in.RequestSHA256 {
 			return Submission{}, false, ErrRequestConflict
@@ -335,7 +337,7 @@ VALUES ($1, $2, $3, $4, $5)`, id, in.Account, p.Device, p.ProjectKey, p.project)
 		return Submission{}, false, err
 	}
 	if program.TakesHours {
-		if err := raiseFlags(ctx, tx, s.fingerprints, id, in.Account, projects, keys, ws, now); err != nil {
+		if err := raiseFlags(ctx, tx, s.fingerprints, id, in.Account, projects, keys, ws, pre, now); err != nil {
 			return Submission{}, false, err
 		}
 	}
@@ -349,6 +351,66 @@ VALUES ($1, $2, $3, $4, $5)`, id, in.Account, p.Device, p.ProjectKey, p.project)
 		}
 	}
 	return sub, true, nil
+}
+
+// prepare reads, on the read pool, what in's create needs before its
+// writer op. One part is how many rows the op will write, for writer.Do,
+// which keeps a batch to its bound only when each op says how big it is:
+// a devlog list can freeze hundreds of windows, and a project's keys on
+// every computer each take a row. The other is the concurrent_devices
+// count over the windows the op will freeze (Q8), so the op needn't read
+// every device's minutes while it holds the writer. The op checks and
+// reads everything again, so a read that is stale by the time it runs
+// costs only the read. A retry, which the op answers with the stored
+// submission, declares one row. A create the op will refuse, or one whose
+// read fails, declares the most the op could write, with
+// devlog.MaxDevlogs windows in devlog mode, and leaves the count to the
+// op.
+func (s *Service) prepare(ctx context.Context, in createInput) (int, *counted) {
+	rows := 8 + 4*(len(in.Projects)+len(in.ProjectKeys))
+	if in.Window == nil {
+		rows += devlog.MaxDevlogs
+	}
+	switch _, _, err := heldRequest(ctx, s.o.Read, in.Account, in.RequestID); {
+	case err == nil:
+		return 1, nil
+	case !errors.Is(err, ErrNotFound):
+		return rows, nil
+	}
+	program, ok := s.programs[in.Program]
+	if !ok {
+		return rows, nil
+	}
+	if verified, _, err := eligibility(ctx, s.o.Read, in.Account); err != nil || !verified {
+		return rows, nil
+	}
+	projects, pairs, err := resolve(ctx, s.o.Read, in.Account, in.Device, in.Projects, in.ProjectKeys)
+	if err != nil {
+		return rows, nil
+	}
+	now := s.o.Now().UnixMilli()
+	horizon := now - s.horizon.Milliseconds()
+	var ws []Window
+	if w := in.Window; w != nil {
+		if w.Start >= w.End || w.End > now || w.Start < horizon {
+			return rows, nil
+		}
+		ws = []Window{*w}
+	} else if ws, _, err = devlogWindows(ctx, s.o.Read, in.Account, projects, keysOf(pairs), horizon); err != nil || len(ws) == 0 {
+		return rows, nil
+	}
+	// The submission, its projects, keys and windows, the move to frozen
+	// with its event, and its two flags.
+	rows = 1 + len(projects) + len(pairs) + len(ws) + 4
+	if !program.TakesHours {
+		return rows, nil
+	}
+	over := touched(ws)
+	n, err := concurrentMinutes(ctx, s.o.Read, in.Account, over, projects)
+	if err != nil {
+		return rows, nil
+	}
+	return rows, &counted{over: over, projects: projects, minutes: n}
 }
 
 // withdraw withdraws the account's submission id inside tx at the

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/store/storetest"
+	"github.com/some-du6e/pairtime/internal/server/writer"
 )
 
 // flagsOf returns submission id's flags as code: detail, for messages and
@@ -278,5 +279,118 @@ func TestRepoOverlap(t *testing.T) {
 				tt.run(t, newHarness(t, engine, func(o *Options) { o.Fingerprints = tt.fp }))
 			})
 		}
+	}
+}
+
+// TestFreezeCount checks that the freeze takes the concurrent_devices
+// count a create made on the read pool before its writer op only when the
+// op's windows touch the same minutes for the same projects, and counts
+// inside its op otherwise (D-sb1-submissions, Q8). The account's devices
+// collide in one minute of the window, so a count the op made is 1, and
+// the count prepare stands in for here is 7.
+func TestFreezeCount(t *testing.T) {
+	m := t0.Add(-3 * day)
+	w := Window{Start: m.UnixMilli(), End: m.Add(10 * time.Minute).UnixMilli()}
+	tests := []struct {
+		name string
+		// pre is the count made before the op, given the window's spans.
+		pre  func(over []span) *counted
+		want string
+	}{
+		{
+			name: "a count over the same minutes and projects is taken as it is, so the op reads no minute",
+			pre:  func(over []span) *counted { return &counted{over: over, projects: []string{"p-app"}, minutes: 7} },
+			want: `concurrent_devices: {"minutes":7}`,
+		},
+		{
+			name: "a count over other minutes is made again inside the op",
+			pre: func(over []span) *counted {
+				return &counted{over: []span{{from: over[0].from + minuteMS, to: over[0].to}}, projects: []string{"p-app"}, minutes: 7}
+			},
+			want: `concurrent_devices: {"minutes":1}`,
+		},
+		{
+			name: "a count over other projects is made again inside the op",
+			pre:  func(over []span) *counted { return &counted{over: over, projects: []string{"p-web"}, minutes: 7} },
+			want: `concurrent_devices: {"minutes":1}`,
+		},
+		{
+			name: "with no count before the op, the op counts",
+			pre:  func([]span) *counted { return nil },
+			want: `concurrent_devices: {"minutes":1}`,
+		},
+	}
+	for _, engine := range storetest.Engines() {
+		for _, tt := range tests {
+			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) {
+				h := newHarness(t, engine)
+				h.minute(u1, "d1", m.Add(time.Minute), "p-app")
+				h.minute(u1, "d2", m.Add(time.Minute), "p-tool")
+				in := createInput{Account: u1, CreatedBy: ByDevice, Device: "d1", Program: "hard-mode", RequestID: "req-1", ProjectKeys: []string{"k_app"}, Window: &w}
+				in.RequestSHA256 = requestSum(in.Program, in.Device, in.Projects, in.ProjectKeys, in.Window)
+				var sub Submission
+				err := h.w.Do(context.Background(), 16, func(ctx context.Context, tx writer.Tx) error {
+					var err error
+					sub, _, err = h.svc.create(ctx, tx, in, tt.pre(touched([]Window{w})))
+					return err
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := h.flagsOf(sub.ID); !slices.Equal(got, []string{tt.want}) {
+					t.Errorf("flags %q, want %q", got, tt.want)
+				}
+			})
+		}
+	}
+}
+
+// TestTouched checks the minutes a list of windows touches, which is what
+// concurrent_devices counts over and what the freeze compares with the
+// count made before its op.
+func TestTouched(t *testing.T) {
+	at := func(minutes int64) int64 { return 1_795_000_000_000 - 1_795_000_000_000%minuteMS + minutes*minuteMS }
+	tests := []struct {
+		name string
+		ws   []Window
+		want []span
+	}{
+		{
+			name: "a window on minute bounds touches the minutes it covers and not the one it ends at",
+			ws:   []Window{{Start: at(10), End: at(12)}},
+			want: []span{{from: at(10), to: at(12)}},
+		},
+		{
+			name: "a window touches the minute it starts in and the one it ends inside",
+			ws:   []Window{{Start: at(10) + 1, End: at(12) + 1}},
+			want: []span{{from: at(10), to: at(13)}},
+		},
+		{
+			name: "windows that share a minute are one span",
+			ws:   []Window{{Start: at(10), End: at(11) + 500}, {Start: at(11) + 500, End: at(13)}},
+			want: []span{{from: at(10), to: at(13)}},
+		},
+		{
+			name: "windows that meet at a minute bound are one span, in time order whatever the list's order",
+			ws:   []Window{{Start: at(12), End: at(14)}, {Start: at(10), End: at(12)}},
+			want: []span{{from: at(10), to: at(14)}},
+		},
+		{
+			name: "windows a minute apart stay apart",
+			ws:   []Window{{Start: at(10), End: at(11)}, {Start: at(12), End: at(13)}},
+			want: []span{{from: at(10), to: at(11)}, {from: at(12), to: at(13)}},
+		},
+		{
+			name: "a window inside another adds nothing",
+			ws:   []Window{{Start: at(10), End: at(20)}, {Start: at(12) + 7, End: at(13)}},
+			want: []span{{from: at(10), to: at(20)}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := touched(tt.ws); !slices.Equal(got, tt.want) {
+				t.Errorf("touched %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -148,6 +149,18 @@ func TestSignedRequests(t *testing.T) {
 		{name: "a signature over another method gets 401 signature_invalid", edit: func(r *http.Request) {
 			signAs(r, "d1", keyOf("d1"), "POST", list, "", t0)
 		}, wantStatus: http.StatusUnauthorized, wantCode: ingest.CodeSignatureInvalid},
+		{name: "another device's X-Pairtime-Device with a time that isn't decimal gets 403 device_mismatch, since the device is checked before the time", edit: func(r *http.Request) {
+			r.Header.Set(ingest.HeaderDevice, "d2")
+			r.Header.Set(ingest.HeaderTime, "+1795089660250")
+		}, wantStatus: http.StatusForbidden, wantCode: ingest.CodeDeviceMismatch},
+		{name: "a time more than 300 s off, signed by another key, gets 401 clock_skew, since the clock is checked before the signature", edit: func(r *http.Request) {
+			signAs(r, "d1", keyOf("d2"), "GET", list, "", t0.Add(-300*time.Second-time.Millisecond))
+		}, wantStatus: http.StatusUnauthorized, wantCode: ingest.CodeClockSkew},
+		{name: "a body over 16,384 bytes that isn't the one hashed gets 413 body_too_large, since the body's size is checked before its hash", edit: func(r *http.Request) {
+			big := strings.Repeat("a", maxBody+1)
+			r.Body = io.NopCloser(strings.NewReader(big))
+			r.ContentLength = int64(len(big))
+		}, wantStatus: http.StatusRequestEntityTooLarge, wantCode: ingest.CodeBodyTooLarge},
 		{name: "an ingest signature doesn't pass for a submissions request", edit: func(r *http.Request) {
 			sig := ed25519.Sign(keyOf("d1"), ingest.Message("d1", "1", r.Header.Get(ingest.HeaderTime), r.Header.Get(ingest.HeaderBodySHA256)))
 			r.Header.Set(ingest.HeaderSignature, "ed25519="+base64.StdEncoding.EncodeToString(sig))
@@ -209,6 +222,32 @@ func TestSignedRequests(t *testing.T) {
 			}
 			want(t, h.call("ptd_desktop", "GET", list, ""), http.StatusOK, "")
 			want(t, h.call("sess:fresh", "GET", list, ""), http.StatusOK, "")
+		})
+		t.Run(string(engine)+"/an account's web sessions share one rate for creates and withdrawals, past which they get 429 rate_limited with Retry-After, while a write refused before it, the session's reads, the account's computers and another account use none of it", func(t *testing.T) {
+			h := newHarness(t, engine, func(o *Options) { o.Rate = ingest.NewLimiter(2, 10*time.Second) })
+			want(t, h.call("sess:plain", "POST", SubmissionsPath, createBody("hard-mode", "req-0", false, []string{"p-web"}, start, end)), http.StatusForbidden, CodeFreshLoginRequired)
+			v := h.create("sess:fresh", createBody("hard-mode", "req-1", false, []string{"p-web"}, start, end), http.StatusCreated)
+			want(t, h.call("sess:edge", "POST", SubmissionsPath+"/"+v.ID+"/withdraw", ""), http.StatusOK, "")
+			rec := h.call("sess:fresh", "POST", SubmissionsPath, createBody("hard-mode", "req-2", false, []string{"p-web"}, start, end))
+			want(t, rec, http.StatusTooManyRequests, ingest.CodeRateLimited)
+			if got := rec.Header().Get("Retry-After"); got != "10" {
+				t.Errorf("Retry-After %q, want 10", got)
+			}
+			want(t, h.call("sess:fresh", "GET", list, ""), http.StatusOK, "")
+			want(t, h.call("ptd_laptop", "POST", SubmissionsPath, window("hard-mode", "req-3", start, end)), http.StatusCreated, "")
+			want(t, h.call("sess:fresh2", "POST", SubmissionsPath+"/s_unknown/withdraw", ""), http.StatusNotFound, CodeNotFound)
+		})
+		t.Run(string(engine)+"/a body over 16,384 bytes gets 413 body_too_large, whether its Content-Length says so or it runs past it unannounced, and one of 16,384 bytes is read", func(t *testing.T) {
+			h := newHarness(t, engine)
+			// body is a create of n bytes that names only its program.
+			body := func(n int) string { return `{"program":"` + strings.Repeat("a", n-len(`{"program":""}`)) + `"}` }
+			for _, as := range []string{"ptd_laptop", "sess:fresh"} {
+				want(t, h.call(as, "POST", SubmissionsPath, body(maxBody)), http.StatusBadRequest, ingest.CodeBodyShape)
+				want(t, h.call(as, "POST", SubmissionsPath, body(maxBody+1)), http.StatusRequestEntityTooLarge, ingest.CodeBodyTooLarge)
+				r := h.request(as, "POST", SubmissionsPath, body(maxBody+1))
+				r.ContentLength = -1
+				want(t, h.serve(r), http.StatusRequestEntityTooLarge, ingest.CodeBodyTooLarge)
+			}
 		})
 	}
 }

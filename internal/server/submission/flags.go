@@ -62,32 +62,41 @@ func (NoFingerprints) Sharing(context.Context, Querier, string, []Key) ([]Accoun
 // minuteMS is a minute in milliseconds.
 const minuteMS = 60_000
 
-// concurrentMinutes counts the minutes the windows ws touch in which two
-// of the account's devices credited one slot and at least one of them
-// credited it to one of projects, P's project ids (D-sb1-submissions, Q8).
-// A minute that two windows touch counts once, and a slot that only other
-// projects competed for is never counted, since fraud checks run only on
-// the hours a teen submits (DESIGN 8.5).
-func concurrentMinutes(ctx context.Context, q Querier, account string, ws []Window, projects []string) (int, error) {
-	// The minutes a window touches run from the one it starts in to the
-	// last one that starts before it ends. Spans that share a minute are
-	// merged, so no minute is read twice.
-	type span struct{ from, to int64 }
-	spans := make([]span, 0, len(ws))
+// span is a run of whole minutes, from the one that starts at from to the
+// one that ends at to, in milliseconds.
+type span struct{ from, to int64 }
+
+// touched returns the minutes the windows ws touch, each window's from the
+// minute it starts in to the last one that starts before it ends, as spans
+// in time order with none overlapping or adjacent. So a minute that two
+// windows touch is in one span, and two lists of windows that touch the
+// same minutes give the same spans.
+func touched(ws []Window) []span {
+	all := make([]span, 0, len(ws))
 	for _, w := range ws {
-		spans = append(spans, span{from: w.Start - w.Start%minuteMS, to: w.End})
+		all = append(all, span{from: w.Start - w.Start%minuteMS, to: w.End + (minuteMS-w.End%minuteMS)%minuteMS})
 	}
-	slices.SortFunc(spans, func(a, b span) int { return cmp.Compare(a.from, b.from) })
-	var merged []span
-	for _, s := range spans {
-		if n := len(merged); n > 0 && s.from < merged[n-1].to {
-			merged[n-1].to = max(merged[n-1].to, s.to)
+	slices.SortFunc(all, func(a, b span) int { return cmp.Compare(a.from, b.from) })
+	var out []span
+	for _, s := range all {
+		if n := len(out); n > 0 && s.from <= out[n-1].to {
+			out[n-1].to = max(out[n-1].to, s.to)
 			continue
 		}
-		merged = append(merged, s)
+		out = append(out, s)
 	}
+	return out
+}
+
+// concurrentMinutes counts the minutes of over, touched's spans of the
+// frozen windows, in which two of the account's devices credited one slot
+// and at least one of them credited it to one of projects, P's project ids
+// (D-sb1-submissions, Q8). A minute that two windows touch counts once,
+// and a slot that only other projects competed for is never counted, since
+// fraud checks run only on the hours a teen submits (DESIGN 8.5).
+func concurrentMinutes(ctx context.Context, q Querier, account string, over []span, projects []string) (int, error) {
 	total := 0
-	for _, s := range merged {
+	for _, s := range over {
 		n, err := rollup.ConcurrentMinutes(ctx, q, account, s.from, s.to, projects)
 		if err != nil {
 			return 0, err
@@ -95,6 +104,18 @@ func concurrentMinutes(ctx context.Context, q Querier, account string, ws []Wind
 		total += n
 	}
 	return total, nil
+}
+
+// counted is a concurrent_devices count a create made on the read pool
+// before its writer op (prepare): the spans and the project ids it counted
+// over, and the minutes it found. The freeze takes it when its own windows
+// touch the same minutes for the same projects, so the writer, which takes
+// every account's writes one at a time, needn't read every device's
+// minutes of up to 180 days. Otherwise the freeze counts inside its op.
+type counted struct {
+	over     []span
+	projects []string
+	minutes  int
 }
 
 // repoOverlap returns, in order, the ids of the submissions of other
@@ -131,12 +152,20 @@ func repoOverlap(ctx context.Context, tx writer.Tx, fp Fingerprints, account str
 // its writer transaction at nowMS: concurrent_devices when the frozen
 // windows hold such a minute, and repo_overlap on it and on each other
 // submission it names that is still undecided, each naming the other, so
-// two freezes in one batch flag each other. A submission to a program
+// two freezes in one batch flag each other. pre, when not nil, is the
+// count the create made before its op, which the freeze takes when it
+// counted over the same minutes and projects. A submission to a program
 // that takes no hours gets no flags, and the caller doesn't call it.
-func raiseFlags(ctx context.Context, tx writer.Tx, fp Fingerprints, id, account string, projects []string, keys []Key, ws []Window, nowMS int64) error {
-	n, err := concurrentMinutes(ctx, tx, account, ws, projects)
-	if err != nil {
-		return err
+func raiseFlags(ctx context.Context, tx writer.Tx, fp Fingerprints, id, account string, projects []string, keys []Key, ws []Window, pre *counted, nowMS int64) error {
+	over := touched(ws)
+	var n int
+	if pre != nil && slices.Equal(pre.over, over) && slices.Equal(pre.projects, projects) {
+		n = pre.minutes
+	} else {
+		var err error
+		if n, err = concurrentMinutes(ctx, tx, account, over, projects); err != nil {
+			return err
+		}
 	}
 	if n > 0 {
 		if err := setFlag(ctx, tx, id, FlagConcurrentDevices, map[string]int{"minutes": n}, nowMS); err != nil {

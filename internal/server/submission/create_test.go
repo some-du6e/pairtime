@@ -46,8 +46,8 @@ func TestCreate(t *testing.T) {
 					t.Errorf("projects %+v, want %+v: a key stands for its project, on every computer", v.Projects, wantProjects)
 				case !reflect.DeepEqual(windowsOfView(v), [][2]time.Time{{start, end}}):
 					t.Errorf("windows %s, want [%s, %s]", spans(windowsOfView(v)), start, end)
-				case v.ScoringVersion == nil || *v.ScoringVersion != "0.5.0" || v.Params == nil || *v.Params != h.svc.params:
-					t.Errorf("scoring_version %v, params %v; want 0.5.0 and %s", v.ScoringVersion, v.Params, h.svc.params)
+				case v.ScoringVersion == nil || *v.ScoringVersion != h.svc.scoringVersion || v.Params == nil || *v.Params != h.svc.params:
+					t.Errorf("scoring_version %v, params %v; want %s and %s", v.ScoringVersion, v.Params, h.svc.scoringVersion, h.svc.params)
 				case v.RSHA256 == nil || len(*v.RSHA256) != 64 || v.R != "":
 					t.Errorf("r_sha256 %v, r %q; want 64 hex digits and no r", v.RSHA256, v.R)
 				case v.EligibilityToConfirm:
@@ -229,7 +229,7 @@ func TestCreate(t *testing.T) {
 			},
 		},
 		{
-			name: "a body that isn't one create gets 400 with the code of what is wrong",
+			name: "a body that isn't one create, a member named twice or in another letter case included, gets 400 with the code of what is wrong",
 			run: func(t *testing.T, h *harness) {
 				w := `"window":{"start":"` + ts(start) + `","end":"` + ts(end) + `"}`
 				many := make([]string, MaxProjects+1)
@@ -246,6 +246,11 @@ func TestCreate(t *testing.T) {
 					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","project_keys":["k_app"],"window":{"start":"yesterday","end":"` + ts(end) + `"}}`, "body_shape"},
 					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","project_keys":["k_app"],"claimed_hours":3,` + w + `}`, "body_shape"},
 					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","project_keys":[],` + w + `}`, "body_shape"},
+					{"ptd_laptop", `{"Program":"hard-mode","request_id":"r","project_keys":["k_app"],` + w + `}`, "body_shape"},
+					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","Program":"calibration","project_keys":["k_app"],` + w + `}`, "body_shape"},
+					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","request_id":"s","project_keys":["k_app"],` + w + `}`, "body_shape"},
+					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","project_keys":["k_app"],"window":{"Start":"` + ts(start) + `","end":"` + ts(end) + `"}}`, "body_shape"},
+					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","project_keys":["k_app"],"window":{"start":"` + ts(start) + `","start":"` + ts(start) + `","end":"` + ts(end) + `"}}`, "body_shape"},
 					{"ptd_laptop", `["hard-mode"]`, "body_shape"},
 					{"ptd_laptop", `{"program":"hard-mode",`, "json_invalid"},
 					{"ptd_laptop", "{\"program\":\"hard-mode\xff\"}", "json_invalid"},
@@ -336,9 +341,13 @@ func TestCreate(t *testing.T) {
 
 // seed stores n submissions of account directly, made by createdBy and in
 // state, each with windows windows of a minute and no keys, so none
-// overlaps a create.
+// overlaps a create. A withdrawn one has its withdrawal time.
 func (h *harness) seed(account string, n int, createdBy string, state State, windows int) {
 	h.t.Helper()
+	var withdrawn any
+	if state == Withdrawn {
+		withdrawn = 0
+	}
 	err := h.w.Do(context.Background(), n*(windows+1), func(ctx context.Context, tx writer.Tx) error {
 		for i := range n {
 			id := fmt.Sprintf("seed-%s-%s-%d", account, createdBy, i)
@@ -347,8 +356,8 @@ func (h *harness) seed(account string, n int, createdBy string, state State, win
 				request, external = nil, id
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO submissions (id, user_id, program, takes_hours, external_id, request_id, request_sha256,
-created_by, mode, state, created_at_ms, updated_at_ms, frozen_at_ms)
-VALUES ($1, $2, 'hard-mode', 1, $3, $4, 'seed', $5, 'window', $6, 0, 0, 0)`, id, account, external, request, createdBy, string(state)); err != nil {
+created_by, mode, state, created_at_ms, updated_at_ms, frozen_at_ms, withdrawn_at_ms)
+VALUES ($1, $2, 'hard-mode', 1, $3, $4, 'seed', $5, 'window', $6, 0, 0, 0, $7)`, id, account, external, request, createdBy, string(state), withdrawn); err != nil {
 				return err
 			}
 			for j := range windows {
@@ -424,6 +433,18 @@ func TestCaps(t *testing.T) {
 			},
 		},
 		{
+			name: "a withdrawn submission's windows still count toward the 10,000, since a withdrawal frees their time but not their rows",
+			run: func(t *testing.T, h *harness) {
+				h.seed(u1, 1, ByDevice, Withdrawn, MaxWindows-1)
+				h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusCreated)
+				before := h.rows()
+				want(t, h.call("ptd_laptop", "POST", SubmissionsPath, window("hard-mode", "req-2", end, end.Add(time.Hour))), http.StatusConflict, CodeLimitReached)
+				if after := h.rows(); after != before {
+					t.Errorf("the refusal changed the rows from %s to %s", before, after)
+				}
+			},
+		},
+		{
 			name: "a devlog-mode create whose list would take the account past 10,000 windows gets 409 limit_reached",
 			run: func(t *testing.T, h *harness) {
 				h.seed(u1, 1, "program", Frozen, MaxWindows-1)
@@ -437,6 +458,75 @@ func TestCaps(t *testing.T) {
 	for _, engine := range storetest.Engines() {
 		for _, tt := range tests {
 			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) { tt.run(t, newHarness(t, engine)) })
+		}
+	}
+}
+
+// rowsDoer records the rows each op declares to the writer behind it.
+type rowsDoer struct {
+	Doer
+	declared []int
+}
+
+func (d *rowsDoer) Do(ctx context.Context, rows int, op writer.Op) error {
+	d.declared = append(d.declared, rows)
+	return d.Doer.Do(ctx, rows, op)
+}
+
+// TestDeclaredRows checks that a create tells the writer at least as many
+// rows as it stores, and not many more, which writer.Do needs to keep a
+// batch to its bound: a devlog list freezes a row per window, and each of
+// a project's keys on every computer takes a row. A retry declares the one
+// row it reads.
+func TestDeclaredRows(t *testing.T) {
+	stored := func(t *testing.T, h *harness) int {
+		t.Helper()
+		n := 0
+		for _, table := range []string{"submissions", "submission_projects", "submission_keys", "submission_windows", "submission_events", "submission_flags"} {
+			var c int
+			if err := h.db.Read.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM `+table).Scan(&c); err != nil {
+				t.Fatal(err)
+			}
+			n += c
+		}
+		return n
+	}
+	tests := []struct {
+		name  string
+		setup func(h *harness)
+		body  string
+	}{
+		{
+			name: "a devlog-mode create whose list freezes 120 windows",
+			setup: func(h *harness) {
+				for i := 0; i <= 120; i++ {
+					h.publish(u1, "d1", "k_app", fmt.Sprintf("dl%d", i), t0.Add(-time.Duration(130-i)*time.Hour))
+				}
+			},
+			body: devlogs("hard-mode", "req-1", "p-app"),
+		},
+		{
+			name:  "a create of one window",
+			setup: func(*harness) {},
+			body:  window("hard-mode", "req-1", t0.Add(-2*day), t0.Add(-day)),
+		},
+	}
+	for _, engine := range storetest.Engines() {
+		for _, tt := range tests {
+			t.Run(string(engine)+"/"+tt.name+" declares at least the rows it stores and at most four more, and its retry one", func(t *testing.T) {
+				d := &rowsDoer{}
+				h := newHarness(t, engine, func(o *Options) { d.Doer, o.Writer = o.Writer, d })
+				tt.setup(h)
+				v := h.create("ptd_laptop", tt.body, http.StatusCreated)
+				got, rows := d.declared[len(d.declared)-1], stored(t, h)
+				if got < rows || got > rows+4 {
+					t.Errorf("the create of %d windows declared %d rows and stored %d", len(v.Windows), got, rows)
+				}
+				h.create("ptd_laptop", tt.body, http.StatusOK)
+				if got := d.declared[len(d.declared)-1]; got != 1 {
+					t.Errorf("the retry declared %d rows, want 1", got)
+				}
+			})
 		}
 	}
 }
