@@ -1,0 +1,46 @@
+{
+  "fixture": "focus-unknown/b-pty-game-x11",
+  "anchors": [],
+  "turns": [
+    {
+      "session_key": "s_e9da4bb1937b",
+      "turn_key": "t_ae34120c3141",
+      "t_submit": 1795636980000,
+      "local_submit": "20:03:00",
+      "t_stop": 1795637080000,
+      "local_stop": "20:04:40",
+      "origin": "no_input",
+      "sm": "2.2 rules 6 to 8: input before submit, but the browser in front hosts no session, so no_input"
+    },
+    {
+      "session_key": "s_e9da4bb1937b",
+      "turn_key": "t_f9631dbab43a",
+      "t_submit": 1795637280000,
+      "local_submit": "20:08:00",
+      "t_stop": 1795637380000,
+      "local_stop": "20:09:40",
+      "origin": "no_input",
+      "sm": "2.2 rules 6 to 8: input before submit, but the browser in front hosts no session, so no_input"
+    },
+    {
+      "session_key": "s_e9da4bb1937b",
+      "turn_key": "t_eb69cfb8893c",
+      "t_submit": 1795637580000,
+      "local_submit": "20:13:00",
+      "t_stop": 1795637680000,
+      "local_stop": "20:14:40",
+      "origin": "no_input",
+      "sm": "2.2 rules 6 to 8: input before submit, but the browser in front hosts no session, so no_input"
+    },
+    {
+      "session_key": "s_e9da4bb1937b",
+      "turn_key": "t_5b17f16935a5",
+      "t_submit": 1795637880000,
+      "local_submit": "20:18:00",
+      "t_stop": 1795637980000,
+      "local_stop": "20:19:40",
+      "origin": "no_input",
+      "sm": "2.2 rules 6 to 8: input before submit, but the browser in front hosts no session, so no_input"
+    }
+  ]
+}

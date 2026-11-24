@@ -1,0 +1,174 @@
+{
+  "fixture": "focus-unknown/e-hour-before",
+  "title": "One os.focus unknown an hour before the work, on GNOME on Wayland",
+  "sm": "docs/design/struggle-metric.md 2.5; DESIGN 6.5",
+  "date": "2026-11-29",
+  "timezone": "America/New_York",
+  "utc_offset": "-05:00",
+  "os": "linux",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "witnessed",
+  "device": "d_92d037c0b40d",
+  "projects": {"p_1883561adbbb": "quiz-app"},
+  "window": {"start": "2026-11-29T18:00:00Z", "end": "2026-11-29T19:08:00Z", "local": "13:00-14:08"},
+  "rows": [
+    {
+      "start": "2026-11-29T18:00:00Z",
+      "minutes": 60,
+      "local": "13:00-13:59",
+      "bucket": false,
+      "sm": "5.1: no bucket",
+      "note": "Videos in the browser, with input every 10 to 50 s and focus unknown. No anchor, no reading and no running turn, so nothing is credited and no minute has a bucket."
+    },
+    {
+      "start": "2026-11-29T19:00:00Z",
+      "minutes": 1,
+      "local": "14:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_1883561adbbb": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.5: the lead is realized in a slot of unknown focus",
+      "note": "The prompt's lead, 120 + 90 / 1.5 = 180 s, from 14:00:00. A re-score from the 14:00 checkpoint starts here, with no os.focus after it.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-29T19:01:00Z",
+      "minutes": 1,
+      "local": "14:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_1883561adbbb": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-29T19:02:00Z",
+      "minutes": 1,
+      "local": "14:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_1883561adbbb": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.3",
+      "note": "The typing part.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-29T19:03:00Z",
+      "minutes": 1,
+      "local": "14:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 30,
+      "credit": {
+        "p_1883561adbbb": {"SUP": 30}
+      },
+      "uncredited": {"X.agent_only": 30},
+      "agent_running_s": 60,
+      "sm": "2.4 and 5.2",
+      "note": "Nothing to read from 14:03:20 to 14:03:30 and 14:03:40 to 14:04:00: X.agent_only.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-29T19:04:00Z",
+      "minutes": 1,
+      "local": "14:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_1883561adbbb": {"SUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "2.4",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-29T19:05:00Z",
+      "minutes": 1,
+      "local": "14:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_1883561adbbb": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-29T19:06:00Z",
+      "minutes": 1,
+      "local": "14:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_1883561adbbb": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.4",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-29T19:07:00Z",
+      "minutes": 1,
+      "local": "14:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 10,
+      "credit": {
+        "p_1883561adbbb": {"READ": 10}
+      },
+      "uncredited": {"X.no_anchor": 50},
+      "agent_running_s": 0,
+      "sm": "2.4 and 5.2",
+      "note": "The bucket runs dry at 14:07:10, and no turn runs: X.no_anchor.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    }
+  ],
+  "totals": {
+    "credited_s": 400,
+    "credited_by_project": {"p_1883561adbbb": 400},
+    "credited_by_reason": {"P": 180, "SUP": 90, "READ": 130},
+    "uncredited": {"X.no_anchor": 50, "X.agent_only": 30},
+    "agent_running_s": 120,
+    "level_a_s": 0,
+    "level_b_s": 0,
+    "level_c_s": 400,
+    "focus_unknown_s": 400,
+    "agent_only_s": 30,
+    "ai_credited_s": 400,
+    "hand_credited_s": 0,
+    "checkpoints_after_focus": 5,
+    "focus_age_at_work_s": 3608
+  },
+  "stated": [],
+  "approx": {},
+  "errata": [],
+  "notes": [
+    "WP-FX8's (e): GNOME on Wayland without pairtime's extension, where the only os.focus, app_class unknown, is recorded at 12:59:52, when Claude Code's SessionStart hook makes a project context live. Nothing else is recorded about focus, so the work an hour later is scored with that record in force.",
+    "The hour before the work credits nothing: presence and unknown focus pass the focus and presence tests, but there is no anchor and nothing to read (SM 2.3, 2.4).",
+    "The checkpoints at 13:00, 13:15, 13:30, 13:45 and 14:00 local, UTC minutes divisible by 15 (DESIGN 6.5), all come after the only os.focus. A re-score from any of them reproduces these rows only if the checkpoint carries the os.focus in force, app_class unknown (DESIGN 6.5, PLAN WP-SC5). One that started with focus none, as before a client's first os.focus, would credit nothing.",
+    "Every credited second is level C with focus_unknown."
+  ]
+}

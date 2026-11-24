@@ -1,0 +1,13 @@
+{
+  "fixture": "focus-unknown/a-6.1-gnome",
+  "prompts": [
+    {
+      "turn_key": "t_b472f20ff321",
+      "t": 1795250040000,
+      "local": "14:04:00",
+      "text": null,
+      "len_chars": 300,
+      "source": "SM 6.1 quotes no text for its first cycle's prompt; only its 300 typed characters matter"
+    }
+  ]
+}

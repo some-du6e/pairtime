@@ -1,0 +1,34 @@
+{
+  "fixture": "focus-unknown/c-x11-reconnect",
+  "anchors": [
+    {
+      "event_id": "01a214f3-9f00-7672-a330-86b1f0853b61",
+      "kind": "substantive_prompt",
+      "t": 1795647840000,
+      "local": "10:04:00",
+      "project_key": "p_0ef88a671bd3",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 240,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "B",
+      "sm": "2.2 rule 6: input before submit and the terminal hosting the session in front at submit; lead 120 + 180 / 1.5 = 240 s. Level B, though 30 s of its lead are C (2.5)",
+      "labels": []
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_42af813f620f",
+      "turn_key": "t_853958dc4e13",
+      "t_submit": 1795647840000,
+      "local_submit": "10:04:00",
+      "t_stop": 1795647960000,
+      "local_stop": "10:06:00",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 6, with focus known at submit"
+    }
+  ]
+}

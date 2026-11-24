@@ -1,0 +1,37 @@
+{
+  "fixture": "focus-unknown/b-pty-game",
+  "prompts": [
+    {
+      "turn_key": "t_ae34120c3141",
+      "t": 1795636980000,
+      "local": "20:03:00",
+      "text": "Add a settings screen with a toggle for sound effects and save the choice in localStorage.",
+      "len_chars": 90,
+      "source": "invented for WP-FX8: one of four tasks the script sends, all different, so no two are near-duplicates (SM 4.2)"
+    },
+    {
+      "turn_key": "t_f9631dbab43a",
+      "t": 1795637280000,
+      "local": "20:08:00",
+      "text": "Write unit tests for the crop growth timer in farm.js, then fix any bug that they turn up.",
+      "len_chars": 90,
+      "source": "invented for WP-FX8: one of four tasks the script sends, all different, so no two are near-duplicates (SM 4.2)"
+    },
+    {
+      "turn_key": "t_eb69cfb8893c",
+      "t": 1795637580000,
+      "local": "20:13:00",
+      "text": "Move all the shop prices into one config object so they stop being scattered across files.",
+      "len_chars": 90,
+      "source": "invented for WP-FX8: one of four tasks the script sends, all different, so no two are near-duplicates (SM 4.2)"
+    },
+    {
+      "turn_key": "t_5b17f16935a5",
+      "t": 1795637880000,
+      "local": "20:18:00",
+      "text": "Make the harvest animation smoother on slow phones by drawing fewer particles at one time.",
+      "len_chars": 90,
+      "source": "invented for WP-FX8: one of four tasks the script sends, all different, so no two are near-duplicates (SM 4.2)"
+    }
+  ]
+}
