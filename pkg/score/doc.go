@@ -200,17 +200,26 @@
 //     labels.
 //   - Relayed credit comes after every other candidate, in a slot of any
 //     presence but one the machine slept through, with no focus or
-//     keyboard test (SM 2.3, 2.7). Between two relayed sessions SM 2.7's
-//     rule decides: the next relayed lead that holds the second, then the
-//     anchor sent soonest, then the latest relayed anchor, then the lower
-//     project_key and session_key (relaycredit.go). Every second it
-//     credits is level C with via_relay, and Submission.Totals counts them
-//     in via_relay_s.
+//     keyboard test (SM 2.3, 2.7). For relayed credit a slot is slept
+//     through when it overlaps a suspend, from an os.power suspend to its
+//     resume or the next sample or from the last sample to a resume with
+//     no suspend before it, or a gap between samples longer than twice
+//     SLOW_SAMPLE_S, whatever idle the sample before the gap showed (SM
+//     2.1, D-relayed-sleep). A shorter gap, such as the minute between the
+//     samples of a context an agent app alone keeps live, stays a hard
+//     break for every other window, unless slow sampling explains it
+//     (D14). Between two relayed sessions SM 2.7's rule decides: the next
+//     relayed lead that holds the second, then the anchor sent soonest,
+//     then the latest relayed anchor, then the lower project_key and
+//     session_key (relaycredit.go). Every second it credits is level C
+//     with via_relay, and Submission.Totals counts them in via_relay_s.
 //   - A device that never samples while its agent runs, such as a server,
 //     derives whole minutes (presence.live), from its first record's
 //     minute or, when it is earlier, the minute of the earliest lead a
 //     relay record can open, COMPOSE_MAX_S before its stamp, since the app
-//     starts a message's run after the stamp. An uncredited second
+//     starts a message's run after the stamp. Only a record of declared
+//     none decided in time for its stamp, at most RELAY_SEEN_LAG_S after
+//     it and at most 2 s before, can open one. An uncredited second
 //     there takes SM 5.2's codes for a live slot whose presence is
 //     unknown: X.bucket_cap where only the 120 s cap kept a session from
 //     reading, else X.agent_only while a turn a person started runs, a
@@ -299,7 +308,10 @@
 // after the stamp, and the lead it opens ends at the stamp. Step holds
 // FinalBefore at the start of the longest lead an unpaired message could
 // open until it pairs or RELAY_MATCH_S after its stamp passes, and a
-// pairing changes nothing in a minute that is already final. The reading
+// pairing changes nothing in a minute that is already final. A record
+// written outside its stamp's bounds, more than RELAY_SEEN_LAG_S after it
+// or more than 2 s before, can pair with nothing, so it holds nothing, and
+// its Derived.Relays entry is decided when it is written. The reading
 // a relayed anchor vouches for needs no hold: the anchor must pair within
 // PENDING_WINDOW_S - 60 s of the stop the reading starts at, while that
 // stop's minute is still pending. Until WP-SC5

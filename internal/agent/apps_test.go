@@ -314,34 +314,46 @@ func TestAppsTurnCopies(t *testing.T) {
 	cases := []struct {
 		name          string
 		first, second event.Via
-		pairing       t3code.Pairing
-		asked         string // the copy asked about
-		guest         bool
-		relays        [2]string
-		texts         [2]bool // whether each copy's record commits its text
+		// opening, when set, is the first copy's text; the second keeps the
+		// turn's own.
+		opening string
+		pairing t3code.Pairing
+		asked   string // the copy asked about
+		guest   bool
+		relays  [2]string
+		texts   [2]bool // whether each copy's record commits its text
 	}{
 		{"a guest's turn marks its transcript's copy guest too, and keeps the text of neither, asking once",
-			event.ViaHook, event.ViaLog, t3code.Pairing{Known: true, Guest: true}, appPromptID, true,
+			event.ViaHook, event.ViaLog, "", t3code.Pairing{Known: true, Guest: true}, appPromptID, true,
 			[2]string{}, [2]bool{}},
 		{"a relayed turn's transcript copy is asked nothing and takes no relay",
-			event.ViaHook, event.ViaLog, t3code.Pairing{Known: true, Relay: appEarlier}, appPromptID, false,
+			event.ViaHook, event.ViaLog, "", t3code.Pairing{Known: true, Relay: appEarlier}, appPromptID, false,
 			[2]string{appEarlier, ""}, [2]bool{true, true}},
 		{"a transcript copy that came first is the one asked about, and the hook's copy after it takes its guest mark",
-			event.ViaLog, event.ViaHook, t3code.Pairing{Known: true, Guest: true}, appPromptID, true,
+			event.ViaLog, event.ViaHook, "", t3code.Pairing{Known: true, Guest: true}, appPromptID, true,
 			[2]string{}, [2]bool{}},
 		{"a guest's turn marks the spooled copy of its call guest too",
-			event.ViaHook, event.ViaPlugin, t3code.Pairing{Known: true, Guest: true}, appPromptID, true,
+			event.ViaHook, event.ViaPlugin, "", t3code.Pairing{Known: true, Guest: true}, appPromptID, true,
 			[2]string{}, [2]bool{}},
 		{"a spooled copy that came first is asked nothing, and the transcript copy after it is the one asked about",
-			event.ViaPlugin, event.ViaLog, t3code.Pairing{Known: true, Relay: appEarlier}, appCopyID, false,
+			event.ViaPlugin, event.ViaLog, "", t3code.Pairing{Known: true, Relay: appEarlier}, appCopyID, false,
 			[2]string{"", appEarlier}, [2]bool{true, true}},
+		{"a turn whose asked copy opens as T3 Code opens a guest's message marks its transcript copy guest too, though that copy's text, as its adapter rebuilt it, doesn't open so",
+			event.ViaHook, event.ViaLog, guestText, t3code.Pairing{Known: true}, appPromptID, true,
+			[2]string{}, [2]bool{}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := newAppsRig(t)
 			r.p.noteSession("s_app", event.ParentAgentApp)
 			r.app.pairing = c.pairing
-			r.write(t, appPrompt(appPromptID, c.first))
+			first := appPrompt(appPromptID, c.first)
+			if c.opening != "" {
+				p := first.Event.Data.(*event.PromptSubmit)
+				p.LenChars, p.TypedLenEst = len(c.opening), len(c.opening)
+				first.Text = []byte(c.opening)
+			}
+			r.write(t, first)
 			r.write(t, appPrompt(appCopyID, c.second))
 			if len(r.app.asked) != 1 || r.app.asked[0].EventID != c.asked {
 				t.Errorf("the reader was asked about %+v, want %s alone", r.app.asked, c.asked)
@@ -981,8 +993,8 @@ func TestAppsStatus(t *testing.T) {
 		{"before the reader's first read the status has no T3 Code part", nil, nil},
 		{"after a read the status is the reader's, with today's counts and whether T3 ran",
 			[]func(*appsRig){read(t3code.Status{Reading: true, Newer: true, Running: true, Day: today,
-				Counts: t3code.Counts{Witnessed: 3, Declared: 1, Paired: 2, Aged: 1, Ahead: 1}})},
-			&t3Reply{Reading: true, Newer: true, Running: true, Day: today, Witnessed: 3, Paired: 2, Aged: 1, Ahead: 1}},
+				Counts: t3code.Counts{Witnessed: 3, WithServer: 2, Declared: 1, Paired: 2, Aged: 1, Ahead: 1}})},
+			&t3Reply{Reading: true, Newer: true, Running: true, Day: today, Witnessed: 3, WithServer: 2, Paired: 2, Aged: 1, Ahead: 1}},
 		{"a reader that doesn't read says why, in its own words",
 			[]func(*appsRig){read(t3code.Status{Off: t3code.OffSchema, Problem: "T3 Code's table x has no column y", Day: today})},
 			&t3Reply{Off: t3code.OffSchema, Problem: "T3 Code's table x has no column y", Day: today}},
@@ -990,7 +1002,7 @@ func TestAppsStatus(t *testing.T) {
 			[]func(*appsRig){read(t3code.Status{Off: t3code.OffNotRunning, NoSQLite3: true, Day: today})},
 			&t3Reply{Off: t3code.OffNotRunning, NoSQLite3: true, Day: today}},
 		{"counts the last read left on another day count nothing today, as just after midnight",
-			[]func(*appsRig){read(t3code.Status{Reading: true, Day: "2026-11-22", Counts: t3code.Counts{Witnessed: 4, Paired: 4, Aged: 2, Ahead: 1}})},
+			[]func(*appsRig){read(t3code.Status{Reading: true, Day: "2026-11-22", Counts: t3code.Counts{Witnessed: 4, WithServer: 4, Paired: 4, Aged: 2, Ahead: 1}})},
 			&t3Reply{Reading: true, Day: today}},
 		{"the status says when a session an agent app's server started last reached the agent",
 			[]func(*appsRig){

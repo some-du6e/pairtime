@@ -29,6 +29,10 @@ type T3Facts struct {
 	// Unread says T3 Code's settings didn't read, so doctor can't tell
 	// whether one of its Claude instances has a home of its own.
 	Unread bool
+	// NoSQLite3 says doctor finds no sqlite3 tool on the PATH of the
+	// terminal it runs in. The line uses it only while the agent can't
+	// say, and hedges it, since the agent's PATH can differ.
+	NoSQLite3 bool
 }
 
 // What the agent's reader of T3 Code's store says when it doesn't read
@@ -45,16 +49,31 @@ const (
 // started reaching pairtime before the line says so (DESIGN 5.1).
 const t3Quiet = 24 * time.Hour
 
+// t3Context is what the line says pairtime notes while T3 Code runs, in
+// the words DESIGN 3.3's presence row and the privacy notice use
+// (D-relayed-context): while T3 alone keeps the project context live, a
+// sample a minute and no os.focus. The Claude Code T3 keeps running in a
+// thread between its runs keeps no context live, since the process scan
+// leaves out a harness process whose parent_class is agent_app, but its
+// hooks do, and so does focus on T3's own window.
+const t3Context = "While T3 Code runs and you aren't working in a project, pairtime notes once a minute whether you're at the computer, and nothing about which app is in front. " +
+	"The Claude Code that T3 Code keeps open between your messages isn't work in a project, but a reply it's writing is, and so is T3 Code's own window in front, " +
+	"until 10 minutes after the reply ends or you switch away"
+
 // t3Checks is DESIGN 5.9's line for T3 Code: whether the agent reads its
-// store, with what it read today, or why it doesn't; whether a Claude
-// instance of T3's, or T3's background service, runs Claude Code with a
-// home of its own, whether messages read today paired with no prompt, or
-// whether no session T3 started has reached pairtime in a day while T3
-// runs, any of which means T3's sessions skip pairtime's hooks (DESIGN
-// 5.1); and, whatever else it says, how to install sqlite3 when the agent
-// finds none. A computer where neither the agent nor doctor finds T3 Code
-// gets no line. The line names no path: the reader's words name none, and
-// doctor's own facts are counts.
+// store, with what it read today, or why it doesn't, and while T3 runs what
+// pairtime notes then (t3Context); whether a Claude instance of T3's, or
+// T3's background service, runs Claude Code with a home of its own,
+// whether messages read today paired with no prompt, or whether no session
+// T3 started has reached pairtime in a day while T3 runs, any of which
+// means T3's sessions skip pairtime's hooks (DESIGN 5.1), unless the
+// messages that paired with nothing were all read while no server the app
+// table names ran, which means pairtime doesn't recognize T3's server; and,
+// whatever else it says, how to install sqlite3 when the agent finds none,
+// or, while the agent can't say, when doctor finds none on its own PATH.
+// A computer where neither the agent nor doctor finds T3 Code gets no
+// line. The line names no path, command line or argv: the reader's words
+// name none, and doctor's own facts are counts.
 func t3Checks(f Facts) []Check {
 	var t *T3Code
 	if f.Reach == Reached && f.Agent != nil {
@@ -77,6 +96,9 @@ func t3Checks(f Facts) []Check {
 		c.Result, c.Text = OK, "pairtime reads T3 Code's store; "+t3Today(t)
 		if t.Newer {
 			c.Text += ". T3 Code's schema is newer than the one this pairtime was tested with, and pairtime reads it anyway"
+		}
+		if t.Running {
+			c.Text += ". " + t3Context
 		}
 	case t.Off == t3NotRunning:
 		c.Result, c.Text = OK, "T3 Code isn't running, and pairtime reads its store only while it runs"
@@ -116,12 +138,26 @@ func t3Checks(f Facts) []Check {
 	if !homes && f.T3.Unread {
 		c.Text += "; doctor couldn't read T3 Code's settings, so it can't tell whether T3 Code gives Claude Code a home of its own, where pairtime's hooks don't run"
 	}
-	// A home of its own explains sessions that skip pairtime's hooks, so the
-	// line doesn't say both.
-	if t != nil && agentFinds && !homes {
+	// Messages that paired with nothing, none of them read while the
+	// agent's process scan found T3's server, come from a T3 whose server
+	// the app table doesn't name, as one run from its source under node: its
+	// sessions don't classify as agent_app, so the agent never asks about
+	// their prompts, whatever the hooks do (DESIGN 3.3). The line names no
+	// command line or path for it, since the scan reads none and doctor
+	// --report can be shared.
+	if t != nil && agentFinds {
 		quiet := t.SessionAt == 0 || f.Now.Sub(time.UnixMilli(t.SessionAt)) > t3Quiet
+		unpaired := t.Witnessed > 0 && t.Paired == 0
 		switch {
-		case t.Witnessed > 0 && t.Paired == 0:
+		case unpaired && t.WithServer == 0:
+			c.Result = worse(c.Result, Warn)
+			c.Text += "; but none of the messages pairtime read from T3 Code today paired with a prompt Claude Code got, so they count for nothing. " +
+				"pairtime doesn't recognize the T3 Code server that runs them, as happens with one run from T3 Code's source under node, " +
+				"so it never asks about the prompts of the sessions that server starts. The t3 command T3 Code installs and its desktop app run a server pairtime recognizes"
+		case homes:
+			// A home of its own explains sessions that skip pairtime's
+			// hooks, so the line doesn't say both.
+		case unpaired:
 			// Whatever session_at says: a claude typed into T3 Code's own
 			// terminal is a session of T3's too, and would hide a day of
 			// messages that never paired.
@@ -137,10 +173,16 @@ func t3Checks(f Facts) []Check {
 	// Last, so the install command ends the line: a missing sqlite3 costs
 	// T3 Code's messages their credit the moment T3 runs, whatever the
 	// reader does now.
-	if t != nil && t.NoSQLite3 && t.Off != t3NoSQLite3 {
+	switch {
+	case t != nil && t.NoSQLite3 && t.Off != t3NoSQLite3:
 		c.Result = worse(c.Result, Warn)
 		c.Text += "; but the agent finds no sqlite3 tool, so pairtime can't read the messages you send through T3 Code, and they count for nothing until it can. " +
 			sqliteInstall(f.GOOS, f.Distro)
+	case t == nil && f.T3.NoSQLite3:
+		// The agent can't say, so doctor's own lookup stands in, hedged.
+		c.Result = worse(c.Result, Warn)
+		c.Text += "; and doctor finds no sqlite3 tool on the PATH of the terminal it runs in. Without one, pairtime reads none of the messages you send through T3 Code, and they count for nothing. " +
+			"The agent's PATH can differ from this terminal's, so this may not hold for the agent. " + sqliteInstall(f.GOOS, f.Distro)
 	}
 	return []Check{c}
 }

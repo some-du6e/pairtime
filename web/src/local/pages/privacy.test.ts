@@ -189,6 +189,13 @@ describe('Privacy', () => {
 			},
 		},
 		{
+			name: "What pairtime never records says the Claude Code T3 Code keeps open between your messages isn't work in a project, but a reply it's writing is, and so is T3 Code's own window in front, as DESIGN 3.3's presence row and doctor say (D-relayed-context)",
+			check: (html) =>
+				expect(text(html)).toContain(
+					"The Claude Code that T3 Code keeps open between your messages isn't work in a project, but a reply it's writing is, and so is T3 Code's own window in front, until 10 minutes after the reply ends or you switch away.",
+				),
+		},
+		{
 			name: 'Who can read it says the dashboard opens only in the browser pairtime dashboard signed in',
 			check: (html) =>
 				expect(text(html)).toContain('This dashboard opens only on this computer, in the browser that pairtime dashboard signed in.'),

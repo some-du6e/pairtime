@@ -58,9 +58,11 @@
 //
 // # Pairing
 //
-// The reader watches each recorded message's row until its run delivers a
-// prompt or RELAY_MATCH_S passes, reading the row again on every read: a
-// row that changed after the first read witnesses nothing. It watches each
+// The reader watches each recorded message's row until RELAY_MATCH_S and a
+// margin have passed since its stamp, and reads it again on every read
+// until its run has delivered a prompt and a read has seen the run end: a
+// row that changed after the first read witnesses nothing, and the run's
+// end bounds the prompts the session's next run may take. It watches each
 // guest's message, by mark or by opening, for a day whatever T3 does to
 // it, in state.json too: every run of its own T3 gives the row, the first
 // and each one after a declined steer, delivers a guest's prompt. Claude
@@ -74,9 +76,10 @@
 // log reader saw, once per turn (Pair), before it keeps the prompt's text
 // (internal/agent's apps.go). A run pairs with the first prompt it was
 // asked about of a session the run went to, from 2 s before the run's start
-// to its end; a message's, within RELAY_MATCH_S of its stamp too. Guests'
-// runs pair first. The record that comes second names the other: a record
-// in Pair's own batch names the prompt, and a prompt pairing with an
+// to its end, but none stamped at or before the end of an earlier watched
+// run of that session; a message's, within RELAY_MATCH_S of its stamp too.
+// Guests' runs pair first. The record that comes second names the other: a
+// record in Pair's own batch names the prompt, and a prompt pairing with an
 // earlier record names it (Pairing.Relay); a pairing found once both are
 // written names nothing. A prompt a guest's run delivered is a guest's
 // (Pairing.Guest).

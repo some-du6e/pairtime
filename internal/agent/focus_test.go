@@ -267,3 +267,97 @@ func TestFocusLive(t *testing.T) {
 		})
 	}
 }
+
+// TestFocusAppOnly checks the focus component's records against presence's
+// word, wired as newFocus wires them: while a running agent app alone keeps
+// the context live, a change of focus writes no os.focus, unknown focus
+// included, and a change to a project app is written and ends the app's
+// being the only sign (D-relayed-context, as #225 amended it).
+func TestFocusAppOnly(t *testing.T) {
+	now := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+	const me = "session:1"
+	desk := []platform.Proc{
+		{PID: 4, Name: "System", Start: now.Add(-time.Hour)},
+		{PID: 4520, PPID: 4480, Name: "explorer", Start: now.Add(-50 * time.Minute), Owner: me},
+		{PID: 6100, PPID: 4520, Name: "WindowsTerminal", Start: now.Add(-10 * time.Minute), Owner: me},
+		{PID: 9600, PPID: 4520, Name: "chrome", Start: now.Add(-5 * time.Minute), Owner: me},
+	}
+	chrome := focus.Change{At: now, PID: 9600}
+	cases := []struct {
+		name    string
+		changes []focus.Change
+		// written are the classes of the os.focus records the component
+		// writes, and appOnly and every what presence says after the last
+		// change.
+		written []event.AppClass
+		appOnly bool
+		every   time.Duration
+	}{
+		{"no os.focus is written while an agent app alone keeps the context live, and a change to a project app is written and ends it",
+			[]focus.Change{chrome, {At: now.Add(time.Second), PID: 6100}}, []event.AppClass{event.AppTerminal}, false, 15 * time.Second},
+		{"a browser in front of T3 Code's context alone writes nothing, and presence samples once a minute",
+			[]focus.Change{chrome}, nil, true, time.Minute},
+		{"focus that turns unknown writes nothing either, and presence still samples once a minute",
+			[]focus.Change{chrome, {At: now.Add(time.Second), Unknown: "the secure desktop"}}, nil, true, time.Minute},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a := &agent{presence: presence.New(presence.Options{Sched: sched.New(), Params: newestTable()})}
+			a.presence.AgentApps(1)
+			var mu sync.Mutex
+			var written []event.AppClass
+			told := 0 // the changes presence has heard of
+			var front func(focus.Change)
+			w := focus.New(focus.Options{
+				OS: focus.OS{
+					Via:  "fake",
+					GOOS: platform.Windows,
+					Read: func() ([]platform.Proc, error) { return slices.Clone(desk), nil },
+					Watch: func(fn func(focus.Change)) (func(), error) {
+						front = fn
+						return func() {}, nil
+					},
+				},
+				Live: a.focusLive,
+				Presence: func(at time.Time, cls event.AppClass, write func(time.Time, bool)) {
+					a.presence.FocusAt(at, cls, write)
+					mu.Lock()
+					defer mu.Unlock()
+					told++
+				},
+				Record: func(r focus.Record) {
+					mu.Lock()
+					defer mu.Unlock()
+					written = append(written, r.Data.AppClass)
+				},
+			})
+			w.Start()
+			t.Cleanup(w.Stop)
+			for i, ch := range c.changes {
+				front(ch)
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					mu.Lock()
+					n := told
+					mu.Unlock()
+					if n > i {
+						break
+					}
+					if time.Now().After(deadline) {
+						t.Fatalf("presence heard of %d changes 5 s after change %d came, want %d", n, i+1, i+1)
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+			}
+			mu.Lock()
+			got := slices.Clone(written)
+			mu.Unlock()
+			if !slices.Equal(got, c.written) {
+				t.Errorf("os.focus records of %v, want %v", got, c.written)
+			}
+			if st := a.presence.Status(); st.AppOnly != c.appOnly || st.Every != c.every {
+				t.Errorf("presence says AppOnly %v every %v, want %v every %v", st.AppOnly, st.Every, c.appOnly, c.every)
+			}
+		})
+	}
+}

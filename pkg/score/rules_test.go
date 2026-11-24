@@ -53,7 +53,9 @@ func holdsRules(tab *params.Table) (ok bool) {
 // docs/errata/2026-11-19-return-rule-lookahead.md, decided 2026-11-20 as
 // E-return-lookahead). It pins the code half of that rule change, whose
 // DESIGN 3.7 and D1 text lands with P10. A MINOR table that broke one of
-// these would change minutes the agent has already called final.
+// these would change minutes the agent has already called final. It also
+// pins the bounds SM states outright that the scorer derives from other
+// parameters, such as relayed credit's slept-through gap.
 func TestLookAheads(t *testing.T) {
 	for _, tab := range scorerTables(t) {
 		r := newRules(tab)
@@ -88,6 +90,7 @@ func TestLookAheads(t *testing.T) {
 			{"that deadline comes while the stop's own minute is still pending, so a vouching pairing never lands in a final minute (SM 2.4)", r.relayVouch, r.settle - 1, false},
 			{"a relayed reading, at most READ_HORIZON_S before the stamp of the anchor that vouches for it, is within reach of the stamp (SM 2.3)", r.readHorizon, r.reach, false},
 			{"a sample slowed to one a minute shows input at most twice SLOW_SAMPLE_S late, inside those 300 s (D14, as pkg/score reads it)", r.slowGap, lateMarginMS, false},
+			{"relayed credit reads a gap between samples as slept through past twice SLOW_SAMPLE_S, as SM 2.1 says, whatever SAMPLE_S and SLEEP_GAP_S are (D-relayed-sleep)", r.sleptGap, 2 * ms(params.SLOW_SAMPLE_S), true},
 		}
 		for _, c := range cases {
 			t.Run(tab.Version()+": "+c.name, func(t *testing.T) {

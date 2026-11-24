@@ -246,7 +246,9 @@ const perSlot = int(event.SlotMS / 1000)
 // unknown (uncredited). A relayed anchor's lead and its session's relayed
 // reading are realized in a slot of any presence but one the machine slept
 // through (SM 2.1, 2.3), so the credit pass keeps the state of a locked or
-// unknown slot they reach (creditor.relayLive).
+// unknown slot they reach, and of one that is Asleep but not slept through
+// (Slot.slept), across a gap of at most twice SLOW_SAMPLE_S
+// (creditor.relayLive).
 func deadSlot(s *Slot) bool {
 	return s.Asleep || s.Locked || s.Present == event.PresentUnknown
 }

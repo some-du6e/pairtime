@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
 	"runtime"
 	"slices"
@@ -407,9 +408,10 @@ func promptOf(b Batch) map[string]string {
 
 // TestPairing holds the reader to SM 2.2 rule 9's pairing (DESIGN 5.1, 4.1
 // E-13): a message pairs with the first prompt its own run delivered, in
-// the session the run went to, no earlier than the run's start and at most
-// RELAY_MATCH_S after the stamp, one to one, and the record that comes
-// second names the other.
+// the session the run went to, from 2 s before the run's start to its end
+// but not at or before the end of an earlier run of that session, and at
+// most RELAY_MATCH_S after the stamp, one to one, and the record that
+// comes second names the other.
 func TestPairing(t *testing.T) {
 	const text = "please fix the flaky parser test"
 	cases := []struct {
@@ -678,6 +680,32 @@ func TestPairing(t *testing.T) {
 					t.Errorf("the second prompt's pairing is %+v, want relay %s", p, eventID("m2", 5*time.Second))
 				}
 			}},
+		{"a run takes no prompt stamped at or before the end of an earlier run of its session: a steer 112 ms before a turn's end, as in the capture, doesn't go to the queued message whose run T3 starts 1,475 ms after that end",
+			func(t *testing.T, e *env) {
+				e.s.sent("m1", 0, text)
+				e.s.message(message{id: "m2", thread: "th1", run: "r-m2", created: 5 * time.Second, text: "then run the whole suite"})
+				e.s.run(run{id: "r-m2", thread: "th1", message: "m2", requested: 5 * time.Second})
+				if b := e.poll(6 * time.Second); len(b.Messages) != 2 {
+					t.Fatalf("got %d records, want 2", len(b.Messages))
+				}
+				if p, _ := e.pair(7*time.Second, "sess-1", 500*time.Millisecond, "prompt-1"); p.Relay != eventID("m1", 0) {
+					t.Fatalf("the first prompt's pairing is %+v, want relay %s", p, eventID("m1", 0))
+				}
+				// The owner's steer reaches m1's turn as a prompt of its own
+				// during its Stop hook, 112 ms before the turn ends.
+				if p, _ := e.pair(38900*time.Millisecond, "sess-1", 38888*time.Millisecond, "prompt-steer"); !p.Known || p.Relay != "" || p.Guest {
+					t.Errorf("the steer's pairing is %+v, want a known one that pairs with nothing", p)
+				}
+				e.s.run(run{id: "r-m1", thread: "th1", message: "m1", started: ptr(100 * time.Millisecond), completed: ptr(39 * time.Second)})
+				e.s.run(run{id: "r-m2", thread: "th1", message: "m2", requested: 5 * time.Second, started: ptr(40475 * time.Millisecond)})
+				e.s.attempt("r-m2", 1, "sess-1", "")
+				if p, _ := e.pair(41*time.Second, "sess-1", 40775*time.Millisecond, "prompt-2"); p.Relay != eventID("m2", 5*time.Second) {
+					t.Errorf("the queued message's prompt's pairing is %+v, want relay %s, not the steer's prompt taken for it", p, eventID("m2", 5*time.Second))
+				}
+				if got := e.r.Status().Paired; got != 2 {
+					t.Errorf("%d records paired, want 2: each message with its own run's prompt, and the steer with none", got)
+				}
+			}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) { tc.run(t, newEnv(t)) })
@@ -739,6 +767,27 @@ func TestGuests(t *testing.T) {
 				e.s.attempt("r-g1", 1, "sess-1", "")
 				if p, _ := e.pair(31*time.Second, "sess-1", 30500*time.Millisecond, "prompt-1"); !p.Guest {
 					t.Errorf("the guest's prompt's pairing is %+v, want a guest's", p)
+				}
+			}},
+		{"a guest's queued run takes its own prompt, not a steer stamped before the end of the owner's turn before it, which its start slack reaches",
+			func(t *testing.T, e *env) {
+				e.s.sent("m0", 0, "please fix the flaky parser test")
+				guest(e.s, "g1", 2*time.Second)
+				e.poll(3 * time.Second)
+				if p, _ := e.pair(4*time.Second, "sess-1", 500*time.Millisecond, "prompt-0"); p.Relay != eventID("m0", 0) {
+					t.Fatalf("the owner's prompt's pairing is %+v, want relay %s", p, eventID("m0", 0))
+				}
+				// A steer reaches the owner's turn 112 ms before it ends, and
+				// T3 starts the guest's run 1,475 ms after the end, as in the
+				// capture.
+				if p, _ := e.pair(28900*time.Millisecond, "sess-1", 28888*time.Millisecond, "prompt-steer"); p.Guest || p.Relay != "" {
+					t.Errorf("the steer's pairing is %+v, want none", p)
+				}
+				e.s.run(run{id: "r-m0", thread: "th1", message: "m0", started: ptr(100 * time.Millisecond), completed: ptr(29 * time.Second)})
+				e.s.run(run{id: "r-g1", thread: "th1", message: "g1", requested: 2 * time.Second, started: ptr(30475 * time.Millisecond)})
+				e.s.attempt("r-g1", 1, "sess-1", "")
+				if p, _ := e.pair(31*time.Second, "sess-1", 30775*time.Millisecond, "prompt-g"); !p.Guest {
+					t.Errorf("the guest's own prompt's pairing is %+v, want a guest's", p)
 				}
 			}},
 		{"a guest's message steered into a running turn is reported as steered, and the turn as a Steer from the message's stamp while it runs, though the reader marks no prompt itself",
@@ -1038,14 +1087,16 @@ func TestCursor(t *testing.T) {
 				r := s.reader(c, tracked(), State{})
 				mustPoll(t, r)
 				// m1 waits for its run, and g1, a guest's, waits behind it. The
-				// assistant's row comes after them in rowid order but is
-				// stamped before them, as provider items are.
+				// assistant's row, the cursor's after this read, comes after
+				// them in rowid order and is stamped after them too, so the
+				// resync's floor, the cursor's stamp, is past both, and only
+				// their watches take the resync back to them.
 				s.message(message{id: "m1", thread: "th1", run: "r-m1", created: 5 * time.Second, text: text})
 				s.run(run{id: "r-m1", thread: "th1", message: "m1", requested: 5 * time.Second})
 				guest(s, "g1", 6*time.Second)
-				s.assistant("a1", 2*time.Second)
+				s.assistant("a1", 8*time.Second)
 				s.flush()
-				c.set(7 * time.Second)
+				c.set(9 * time.Second)
 				if b := mustPoll(t, r); len(b.Messages) != 1 {
 					t.Fatalf("got %d records, want 1", len(b.Messages))
 				}
@@ -1472,12 +1523,17 @@ func TestNoSQLite3(t *testing.T) {
 		store   bool // T3's store is there
 		open    bool // T3 holds it open
 		missing bool // there is no sqlite3
-		off     string
+		// gone removes the sqlite3 an earlier read ran before the read the
+		// case checks, which T3's write since keeps from its quiet skip.
+		gone bool
+		off  string
 	}{
-		{"with T3 running, no sqlite3 turns the reader off, and the status says so", true, true, true, OffNoSQLite3},
-		{"with T3 stopped, the reader is off for that, and the status still says sqlite3 is missing", true, false, true, OffNotRunning},
-		{"with no store, the status still says sqlite3 is missing", false, false, true, OffNoStore},
-		{"with sqlite3 there, the status doesn't say it is missing", true, false, false, OffNotRunning},
+		{name: "with T3 running, no sqlite3 turns the reader off, and the status says so", store: true, open: true, missing: true, off: OffNoSQLite3},
+		{name: "with T3 stopped, the reader is off for that, and the status still says sqlite3 is missing", store: true, missing: true, off: OffNotRunning},
+		{name: "with no store, the status still says sqlite3 is missing", missing: true, off: OffNoStore},
+		{name: "with sqlite3 there, the status doesn't say it is missing", store: true, off: OffNotRunning},
+		{name: "a sqlite3 removed after an earlier read ran it is missing too, not a read that failed, so doctor gives the install command",
+			store: true, open: true, gone: true, off: OffNoSQLite3},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1490,8 +1546,11 @@ func TestNoSQLite3(t *testing.T) {
 				path = t.TempDir() + "/userdata/statev2.sqlite"
 			}
 			tool := s.sqlite3
-			if tc.missing {
+			switch {
+			case tc.missing:
 				tool = "sqlite3-that-isnt-there"
+			case tc.gone:
+				tool = newShim(t, s.sqlite3, "").path
 			}
 			c := &clock{}
 			c.set(0)
@@ -1500,11 +1559,22 @@ func TestNoSQLite3(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if tc.gone {
+				if _, err := r.Poll(context.Background()); err != nil {
+					t.Fatalf("the read before the removal failed: %v", err)
+				}
+				if err := os.Remove(tool); err != nil {
+					t.Fatal(err)
+				}
+				s.sent("m1", time.Second, "please fix the flaky parser test")
+				s.flush()
+				c.set(2 * time.Second)
+			}
 			if _, err := r.Poll(context.Background()); err == nil {
 				t.Error("Poll worked, want an error")
 			}
-			if st := r.Status(); st.Reading || st.Off != tc.off || st.NoSQLite3 != tc.missing {
-				t.Errorf("the status is %+v, want off %s and NoSQLite3 %v", st, tc.off, tc.missing)
+			if st := r.Status(); st.Reading || st.Off != tc.off || st.NoSQLite3 != (tc.missing || tc.gone) {
+				t.Errorf("the status is %+v, want off %s and NoSQLite3 %v", st, tc.off, tc.missing || tc.gone)
 			}
 		})
 	}

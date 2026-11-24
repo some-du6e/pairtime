@@ -67,7 +67,8 @@
 	<p data-testid="t3-code">
 		One exception: while T3 Code runs, pairtime notes once a minute whether you're at the computer, so that the
 		messages you send through T3 Code from your phone or a browser can count. It notes nothing about which app is in
-		front.
+		front. The Claude Code that T3 Code keeps open between your messages isn't work in a project, but a reply it's
+		writing is, and so is T3 Code's own window in front, until 10 minutes after the reply ends or you switch away.
 	</p>
 </section>
 

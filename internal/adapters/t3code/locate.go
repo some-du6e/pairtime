@@ -18,7 +18,8 @@ const (
 	// FromEnv is T3CODE_HOME in the agent's own environment.
 	FromEnv = "env"
 	// FromService is the T3CODE_HOME T3's background service sets, in its
-	// systemd unit on Linux or its launchd plist on macOS.
+	// systemd unit or a drop-in beside it on Linux, or its launchd plist on
+	// macOS.
 	FromService = "service"
 	// FromDefault is <home>/.t3, T3's home when nothing names another.
 	FromDefault = "default"
@@ -45,12 +46,13 @@ const (
 
 // Locate returns the places T3 Code's store may be, in the order the reader
 // looks at them: the T3 home T3CODE_HOME names in env's environment, the one
-// T3's background service sets in its systemd unit or launchd plist, and
-// <home>/.t3. A home on a WSL distro's share, \\wsl$ or \\wsl.localhost, is
-// left out: pairtime reads a WSL backend's store inside that distro, never
-// over the share (DESIGN 5.1). Each store is listed once. Locate reads the
-// service's unit file and nothing else; whether a store exists is the
-// reader's to check on each read.
+// T3's background service sets in its systemd unit, or a drop-in beside
+// it, or its launchd plist, and <home>/.t3. A home on a WSL distro's share,
+// \\wsl$ or \\wsl.localhost, is left out: pairtime reads a WSL backend's
+// store inside that distro, never over the share (DESIGN 5.1). Each store
+// is listed once. Locate reads the service's unit files or plist and
+// nothing else; whether a store exists is the reader's to check on each
+// read.
 func Locate(env adapters.Env) []Store {
 	var out []Store
 	add := func(home, from string) {
@@ -124,15 +126,16 @@ func onWSLShare(p string) bool {
 }
 
 // serviceHome returns the T3CODE_HOME T3's background service sets, when
-// its unit file is there and sets one. Windows' Task Scheduler task passes
-// the home as a flag instead, which the reader doesn't read.
+// its unit file is there and it or a drop-in beside it sets one
+// (unitFiles), or its launchd plist does. Windows' Task Scheduler task
+// passes the home as a flag instead, which the reader doesn't read.
 func serviceHome(env adapters.Env, getenv func(string) string) (string, bool) {
 	if env.Home == "" {
 		return "", false
 	}
 	switch env.GOOS {
 	case "linux":
-		data, ok := readSmall(systemdUnitPath(env.Home, getenv))
+		data, ok := unitFiles(env.Home, getenv)
 		if !ok {
 			return "", false
 		}
@@ -157,8 +160,35 @@ func systemdUnitPath(home string, getenv func(string) string) string {
 	return filepath.Join(dir, "systemd", "user", systemdUnit)
 }
 
-// maxDropIns bounds how many drop-ins of T3's unit ServiceClaudeHome reads.
+// maxDropIns bounds how many drop-ins of T3's unit unitFiles reads.
 const maxDropIns = 32
+
+// unitFiles returns T3's systemd unit and the drop-ins beside it, which is
+// where systemctl --user edit puts its lines, as one text in the order
+// systemd reads them, or false when there is no unit. A drop-in's
+// assignments come after the unit's, and systemd reads the drop-ins in the
+// order of their names, so a later one wins. Drop-ins in systemd's other
+// folders, such as /etc/systemd/user, aren't read.
+func unitFiles(home string, getenv func(string) string) ([]byte, bool) {
+	unit := systemdUnitPath(home, getenv)
+	data, ok := readSmall(unit)
+	if !ok {
+		return nil, false
+	}
+	if entries, err := os.ReadDir(unit + ".d"); err == nil {
+		n := 0
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".conf") || n == maxDropIns {
+				continue
+			}
+			n++
+			if d, ok := readSmall(filepath.Join(unit+".d", e.Name())); ok {
+				data = append(append(data, '\n'), d...)
+			}
+		}
+	}
+	return data, true
+}
 
 // ServiceClaudeHome returns the Claude home T3 Code's background service
 // sets with CLAUDE_CONFIG_DIR in its own environment, resolved as T3
@@ -186,24 +216,9 @@ func ServiceClaudeHome(env adapters.Env) (string, bool) {
 	found := false
 	switch env.GOOS {
 	case "linux":
-		unit := systemdUnitPath(env.Home, getenv)
-		data, ok := readSmall(unit)
+		data, ok := unitFiles(env.Home, getenv)
 		if !ok {
 			return "", false
-		}
-		// A drop-in's assignments come after the unit's, and systemd reads
-		// the drop-ins in the order of their names; a later one wins.
-		if entries, err := os.ReadDir(unit + ".d"); err == nil {
-			n := 0
-			for _, e := range entries {
-				if e.IsDir() || !strings.HasSuffix(e.Name(), ".conf") || n == maxDropIns {
-					continue
-				}
-				n++
-				if d, ok := readSmall(filepath.Join(unit+".d", e.Name())); ok {
-					data = append(append(data, '\n'), d...)
-				}
-			}
 		}
 		raw, found = unitVar(data, env.Home, claudeHomeVar)
 	case "darwin":
@@ -241,32 +256,63 @@ func readSmall(name string) ([]byte, bool) {
 // (unitVar).
 func unitHome(data []byte, home string) (string, bool) { return unitVar(data, home, "T3CODE_HOME") }
 
-// unitVar reads the variable name from a systemd unit's Environment= lines,
-// as systemd reads them: each line a list of assignments split at
-// whitespace, with double and single quotes and backslash escapes, and
-// specifiers, of which T3 writes only %% (bootService.ts
-// quoteSystemdValue). %h is home; any other specifier makes the value
-// unreadable. A later assignment wins.
+// unitVar reads the variable name from a systemd unit's Environment= and
+// UnsetEnvironment= lines, as systemd reads them: each line a list of
+// assignments split at whitespace, with double and single quotes and
+// backslash escapes, and specifiers, of which T3 writes only %%
+// (bootService.ts quoteSystemdValue). %h is home; any other specifier
+// makes the value unreadable. A later assignment wins, and an empty
+// Environment= drops every assignment before it. UnsetEnvironment= takes
+// the variable out, by its name or by one assignment of it, wherever its
+// line stands, since systemd applies it last, and an empty one drops the
+// names listed before it. An EnvironmentFile= isn't read, so a variable
+// only such a file sets isn't found.
 func unitVar(data []byte, home, name string) (string, bool) {
 	var val string
 	found := false
+	var unset []string
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-		rest, ok := strings.CutPrefix(line, "Environment=")
+		key, rest, ok := strings.Cut(line, "=")
 		if !ok {
 			continue
 		}
-		for _, word := range systemdWords(rest) {
-			v, ok := strings.CutPrefix(word, name+"=")
-			if !ok {
-				continue
-			}
-			v, ok = specifiers(v, home)
-			if !ok {
+		switch strings.TrimSpace(key) {
+		case "Environment":
+			if strings.TrimSpace(rest) == "" {
 				found, val = false, ""
 				continue
 			}
-			found, val = true, v
+			for _, word := range systemdWords(rest) {
+				v, ok := strings.CutPrefix(word, name+"=")
+				if !ok {
+					continue
+				}
+				v, ok = specifiers(v, home)
+				if !ok {
+					found, val = false, ""
+					continue
+				}
+				found, val = true, v
+			}
+		case "UnsetEnvironment":
+			if strings.TrimSpace(rest) == "" {
+				unset = nil
+				continue
+			}
+			for _, word := range systemdWords(rest) {
+				if word == name || strings.HasPrefix(word, name+"=") {
+					unset = append(unset, word)
+				}
+			}
+		}
+	}
+	for _, u := range unset {
+		if u == name {
+			return "", false
+		}
+		if v, ok := specifiers(strings.TrimPrefix(u, name+"="), home); found && ok && v == val {
+			return "", false
 		}
 	}
 	return val, found
@@ -341,6 +387,8 @@ func plistHome(data []byte) (string, bool) { return plistVar(data, "T3CODE_HOME"
 
 // plistVar reads the variable name from a launchd plist: the string that
 // follows the key name, which T3 writes in its EnvironmentVariables dict.
+// It reads the XML form T3 writes; a plist that defaults write or plutil
+// turned into the binary form doesn't parse, so it gives nothing.
 func plistVar(data []byte, name string) (string, bool) {
 	d := xml.NewDecoder(bytes.NewReader(data))
 	var key string

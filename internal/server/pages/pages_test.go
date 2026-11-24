@@ -279,6 +279,12 @@ func TestPrivacyNotice(t *testing.T) {
 			},
 		},
 		{
+			name: "the notice says the Claude Code T3 Code keeps open between messages isn't work in a project, but a reply it's writing is, and so is T3 Code's own window in front, as DESIGN 3.3's presence row and doctor say (D-relayed-context)",
+			want: []string{
+				"The Claude Code that T3 Code keeps open between your messages isn&#39;t work in a project, but a reply it&#39;s writing is, and so is T3 Code&#39;s own window in front, until 10 minutes after the reply ends or you switch away.",
+			},
+		},
+		{
 			name: "the notice says no prompt that opens the way T3 Code opens a guest's message keeps its text, from any AI tool and even when pairtime can't read T3 Code's messages, and keeps its exception only for a guest's other prompts (#225, Q1 and Q10)",
 			want: []string{
 				"A message from a guest you shared a T3 Code thread with reaches your agent as a prompt with the guest&#39;s name and words in it, and T3 Code starts that prompt with <code>Message from guest</code>.",

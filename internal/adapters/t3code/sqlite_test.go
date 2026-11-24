@@ -77,6 +77,23 @@ func TestRunner(t *testing.T) {
 					t.Errorf("got %v, want ErrNoSQLite3", err)
 				}
 			}},
+		{"a sqlite3 removed after the runner found it is no sqlite3, not a failed run, and the next lookup looks again",
+			func(t *testing.T) {
+				sh := newShim(t, s.sqlite3, "")
+				r := &Runner{Path: sh.path}
+				if _, err := r.Query(context.Background(), s.path, "SELECT "+tag("a")+";\n"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(sh.path); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := r.Query(context.Background(), s.path, "SELECT "+tag("a")+";\n"); !errors.Is(err, ErrNoSQLite3) {
+					t.Errorf("a run of the removed sqlite3 gave %v, want ErrNoSQLite3", err)
+				}
+				if _, err := r.Exe(); !errors.Is(err, ErrNoSQLite3) {
+					t.Errorf("the lookup after it gave %v, want ErrNoSQLite3", err)
+				}
+			}},
 		{"a run that outlasts its timeout is stopped",
 			func(t *testing.T) {
 				start := time.Now()

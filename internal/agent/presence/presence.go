@@ -4,10 +4,10 @@
 // 3.3). It samples the OS's input idle time into os.presence records and
 // turns suspend, resume, lock and unlock into os.power records, but only
 // while a project context is live: a harness session process is running,
-// an agent app that drives harness sessions is running, or a terminal,
-// editor or agent app had focus in the last 600 s. Outside one, nothing is
-// sampled or recorded, so pairtime never records general computer use
-// (D14).
+// other than one whose parent_class is agent_app, an agent app that drives
+// harness sessions is running, or a terminal, editor or agent app had
+// focus in the last 600 s. Outside one, nothing is sampled or recorded, so
+// pairtime never records general computer use (D14).
 //
 // In a context it samples on every 15-second slot boundary of the wall
 // clock (:00, :15, :30, :45), because SM 2.1 decides each slot's input
@@ -234,7 +234,9 @@ func (s *Sampler) Start() {
 	}
 	s.started = true
 	s.mu.Unlock()
-	// A context that went live before Start gets its first sample now.
+	// A context that went live before Start gets its first sample now, or
+	// on the next minute boundary when a running agent app alone keeps it
+	// live (update).
 	s.update(func(time.Time) {}, false)
 }
 
@@ -284,7 +286,8 @@ func (s *Sampler) Stop() {
 // Focus reports that an app of class c took focus. A terminal, editor or
 // agent app makes a project context live, and it stays live for
 // ContextWindow after one loses focus. A live context takes a sample at
-// once.
+// once, unless a running agent app alone keeps it live once the gate has
+// heard of the change (FocusAt, Status.AppOnly).
 func (s *Sampler) Focus(c event.AppClass) {
 	s.FocusAt(time.Now(), c, nil)
 }
@@ -344,7 +347,9 @@ func (s *Sampler) FocusAt(at time.Time, c event.AppClass, write func(at time.Tim
 // with key session (an opaque key, or "" when the message names none). It
 // makes a project context live, starts a turn on a prompt, a tool call or a
 // permission request, and ends it on a stop, an interrupt or a session end.
-// A live context takes a sample at once.
+// A live context takes a sample at once, unless a running agent app alone
+// keeps it live after the hook, as after the end of a session the gate
+// never heard from (Status.AppOnly).
 func (s *Sampler) Hook(session string, k event.Kind) {
 	s.update(func(now time.Time) { s.g.hook(now, session, k) }, true)
 }
@@ -361,7 +366,10 @@ func (s *Sampler) Forget(session string) {
 
 // HarnessProcesses reports how many harness session processes are
 // running, as the process scanner counted them. Any makes a project
-// context live.
+// context live. The scanner leaves out those whose parent_class is
+// agent_app, as T3 Code's server's are, for AgentApps to cover: the
+// Claude Code T3 keeps running in a thread between its runs is no sign of
+// work on this computer (procs.Options.Running).
 func (s *Sampler) HarnessProcesses(n int) {
 	s.update(func(time.Time) { s.g.setProcs(n) }, false)
 }
@@ -369,7 +377,9 @@ func (s *Sampler) HarnessProcesses(n int) {
 // AgentApps reports how many agent apps that drive harness sessions are
 // running, as the apps component found them: for T3 Code, its server, which
 // the agent's process scan finds while the store it holds open has its
-// -wal and -shm files (DESIGN 3.3). Any makes a project context live, as a
+// -wal and -shm files, and only while T3 Code's reader can read that store,
+// with a sqlite3 that has JSON functions and a schema the probe passes (the
+// agent's appRuns; DESIGN 3.3). Any makes a project context live, as a
 // harness session process does. A message from the app's phone or web
 // client credits minutes before it and after it, and without samples there
 // the scorer would read them as slept through (D-relayed-context). With no
@@ -460,10 +470,13 @@ func (s *Sampler) watchingList() []string {
 }
 
 // update applies change to the gate, takes a sample at once if a context
-// is live and either sampleNow is set or the context has just gone live,
-// and re-arms the timer for the cadence that follows. A context a running
-// agent app alone keeps live takes its first sample on the next minute
-// boundary, as its every sample is (appOnly).
+// is live and either sampleNow is set, the context has just gone live, or
+// a sign of work has just ended a context a running agent app alone kept
+// live, and re-arms the timer for the cadence that follows. A context a
+// running agent app alone keeps live takes its first sample on the next
+// minute boundary, as its every sample is (appOnly). A harness process the
+// scan finds in such a context brings SAMPLE_S back with a sample at once,
+// as a hook or a project app's focus does (D-relayed-sleep).
 func (s *Sampler) update(change func(now time.Time), sampleNow bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -471,12 +484,12 @@ func (s *Sampler) update(change func(now time.Time), sampleNow bool) {
 		return
 	}
 	now := time.Now()
-	wasLive := s.every != 0
+	wasLive, wasAppOnly := s.every != 0, s.g.appOnly(wall(now))
 	change(wall(now))
 	if !s.started {
 		return
 	}
-	if s.g.interval(wall(now)) != 0 && (sampleNow || !wasLive) && !s.g.appOnly(wall(now)) {
+	if s.g.interval(wall(now)) != 0 && (sampleNow || !wasLive || wasAppOnly) && !s.g.appOnly(wall(now)) {
 		s.sample(now, true)
 	}
 	s.arm(now)

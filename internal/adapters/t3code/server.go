@@ -17,8 +17,12 @@ import "github.com/some-du6e/pairtime/internal/platform"
 // With the -wal and -shm files of the store a read picks, that is what makes
 // T3 run (Options.Server, Status.Running): the files alone stay behind when
 // T3 is killed while it holds them (DESIGN 5.1). A T3 run from its source,
-// as node, isn't named, so it gets no project context, though its messages
-// are still read when a prompt's hook asks and at the agent's idle cadence.
+// as node, isn't named, so it gets no project context of its own. Its
+// sessions classify under node, as script_runtime, so the agent never asks
+// about their prompts, and its messages are read only at the agent's idle
+// cadence, once a minute, which is as long as RELAY_SEEN_LAG_S: some age
+// out, and the rest pair with nothing. Counts.WithServer leaves them out,
+// so doctor can say pairtime doesn't recognize such a server.
 func ServerIn(goos string, procs []platform.Proc, self string) bool {
 	for _, p := range procs {
 		e, ok := platform.Identify(goos, p)

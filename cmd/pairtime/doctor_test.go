@@ -1243,7 +1243,7 @@ func TestDoctorT3Facts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			homeDir := t.TempDir()
 			for k, v := range map[string]string{"HOME": homeDir, "USERPROFILE": homeDir, "T3CODE_HOME": "", "CLAUDE_CONFIG_DIR": "",
-				"XDG_CONFIG_HOME": filepath.Join(homeDir, ".config")} {
+				"XDG_CONFIG_HOME": filepath.Join(homeDir, ".config"), "PATH": sqlite3Bin(t, true)} {
 				t.Setenv(k, v)
 			}
 			for name, content := range tt.files {
@@ -1252,6 +1252,61 @@ func TestDoctorT3Facts(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := readDoctorT3(); got != tt.want {
+				t.Errorf("readDoctorT3() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// sqlite3Bin returns a folder of the test's own for PATH, holding a file
+// that LookPath takes for the sqlite3 tool when there is one.
+func sqlite3Bin(t *testing.T, there bool) string {
+	t.Helper()
+	bin := t.TempDir()
+	if there {
+		name := "sqlite3"
+		if runtime.GOOS == "windows" {
+			name = "sqlite3.exe"
+		}
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return bin
+}
+
+// TestDoctorT3SQLite3 runs readDoctorT3 with PATH set to a folder of the
+// test's own: where doctor finds T3 Code's store, it looks for sqlite3 on
+// its own PATH, which the T3 Code line uses while it can't ask the agent
+// (F2 of #225).
+func TestDoctorT3SQLite3(t *testing.T) {
+	tests := []struct {
+		name    string
+		store   bool // T3 Code's store is in the home folder
+		sqlite3 bool // PATH holds a sqlite3
+		want    doctor.T3Facts
+	}{
+		{"a store with sqlite3 on doctor's PATH is T3 Code with sqlite3", true, true, doctor.T3Facts{Found: true}},
+		{"a store with no sqlite3 on doctor's PATH says so", true, false, doctor.T3Facts{Found: true, NoSQLite3: true}},
+		{"with no T3 Code store, a missing sqlite3 says nothing", false, false, doctor.T3Facts{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			homeDir := t.TempDir()
+			for k, v := range map[string]string{"HOME": homeDir, "USERPROFILE": homeDir, "T3CODE_HOME": "", "CLAUDE_CONFIG_DIR": "",
+				"XDG_CONFIG_HOME": filepath.Join(homeDir, ".config"), "PATH": sqlite3Bin(t, tt.sqlite3)} {
+				t.Setenv(k, v)
+			}
+			if tt.store {
+				p := filepath.Join(homeDir, ".t3", "userdata", "statev2.sqlite")
+				if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(p, nil, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}

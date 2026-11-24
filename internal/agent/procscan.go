@@ -23,7 +23,14 @@ func (a *agent) startProcs(opts Options) func() {
 //   - Its count of this user's harness session processes goes to
 //     presence's HarnessProcesses after every scan: while one runs, a
 //     project context is live (DESIGN 3.3), including for a hookless
-//     `claude --bare` session that nothing else would show.
+//     `claude --bare` session that nothing else would show. The count
+//     leaves out a process whose parent_class is agent_app, such as the
+//     Claude Code T3 Code's server keeps running in a thread between its
+//     runs, or one typed into T3's own terminal: T3's count from the apps
+//     component keeps the context live for those, once a minute and with
+//     no focus record while nothing else does (D-relayed-context), and the
+//     session's hooks and T3's own window in front still make a context of
+//     their own.
 //   - After every scan the focus component looks again at the window in
 //     front, which may host a session the scan just found (focus.go), and
 //     forgets the hooked sessions of processes the scan saw exit

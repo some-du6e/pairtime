@@ -555,6 +555,21 @@ func TestSampler(t *testing.T) {
 			},
 		},
 		{
+			name:   "a harness process while only an agent app keeps the context live is a sign of work, which brings the usual sampling back, a sample at once included (D-relayed-sleep)",
+			inputs: every(0, s(200), s(3)),
+			acts: []act{
+				at(s(3), func(e *env) { e.s.AgentApps(1) }),
+				at(s(70), func(e *env) { e.s.HarnessProcesses(1) }),
+			},
+			end: s(91),
+			want: []string{
+				"1m0s presence idle=0",
+				"1m10s presence idle=1",
+				"1m15s presence idle=0",
+				"1m30s presence idle=0",
+			},
+		},
+		{
 			name:   "with none, that context ends 600 s after the terminal lost focus, and sampling with it",
 			inputs: every(0, s(900), s(100)),
 			acts: []act{

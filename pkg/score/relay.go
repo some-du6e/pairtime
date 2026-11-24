@@ -42,7 +42,9 @@ type RelayRecord struct {
 	Origin event.Origin `json:"origin,omitempty"`
 	// decided is when the record stops changing: when it paired, or, for
 	// one that hasn't, once RELAY_MATCH_S after its stamp has passed and no
-	// prompt can pair with it any more.
+	// prompt can pair with it any more. One that wasn't decided in time for
+	// its stamp (decidedInTime) can pair with no prompt, so it is decided
+	// when it is written.
 	decided int64
 }
 
@@ -225,6 +227,9 @@ func (d *deriver) relayRecords() []RelayRecord {
 		e := d.recs[r.pos]
 		rr := RelayRecord{ID: e.EventID, T: e.T, SentAt: r.d.SentAt, SessionKey: e.SessionKey,
 			ThreadKey: r.d.ThreadKey, Declared: r.d.Declared, decided: max(e.T, r.d.SentAt+d.r.relayMatch)}
+		if !d.r.decidedInTime(e.T, r.d.SentAt) {
+			rr.decided = e.T
+		}
 		if r.prompt >= 0 {
 			pe := d.recs[r.prompt]
 			rr.Prompt, rr.decided = pe.EventID, max(e.T, pe.T)

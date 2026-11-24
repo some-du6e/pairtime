@@ -151,15 +151,17 @@ type T3Code struct {
 	// read, whether or not T3 ran then.
 	NoSQLite3 bool `json:"no_sqlite3,omitempty"`
 	// Witnessed counts today's messages that T3 says a person sent and the
-	// reader recorded, Paired its records that paired with a prompt, Aged
-	// the messages its age test turned away, read too long after they were
-	// sent, and Ahead the messages it turned away as stamped more than 2 s
-	// after the read that decided them, which a clock T3 and the agent
-	// share doesn't give unless it was set back.
-	Witnessed int `json:"witnessed"`
-	Paired    int `json:"paired"`
-	Aged      int `json:"aged"`
-	Ahead     int `json:"ahead"`
+	// reader recorded, WithServer those of them it recorded while the
+	// agent's process scan found T3's server, Paired its records that
+	// paired with a prompt, Aged the messages its age test turned away, read
+	// too long after they were sent, and Ahead the messages it turned away
+	// as stamped more than 2 s after the read that decided them, which a
+	// clock T3 and the agent share doesn't give unless it was set back.
+	Witnessed  int `json:"witnessed"`
+	WithServer int `json:"with_server"`
+	Paired     int `json:"paired"`
+	Aged       int `json:"aged"`
+	Ahead      int `json:"ahead"`
 	// SessionAt is when a session that an agent app's server started last
 	// reached the agent, in Unix ms, 0 for never.
 	SessionAt int64 `json:"session_at,omitempty"`

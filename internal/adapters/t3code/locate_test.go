@@ -109,6 +109,12 @@ func TestLocate(t *testing.T) {
 			want: func(h string) []Store {
 				return []Store{{storeIn("/srv/t3-service"), FromService}, {storeIn(filepath.Join(h, ".t3")), FromDefault}}
 			}},
+		{name: "a drop-in beside the unit, as systemctl --user edit writes one, sets the background service's home over the unit's", goos: "linux",
+			files: map[string]string{".config/systemd/user/t3code.service": unit("/srv/t3-service"),
+				".config/systemd/user/t3code.service.d/override.conf": "[Service]\nEnvironment=T3CODE_HOME=/srv/from-drop-in\n"},
+			want: func(h string) []Store {
+				return []Store{{storeIn("/srv/from-drop-in"), FromService}, {storeIn(filepath.Join(h, ".t3")), FromDefault}}
+			}},
 		{name: "T3's launchd plist names the background service's home on macOS", goos: "darwin",
 			files: map[string]string{"Library/LaunchAgents/com.t3tools.t3code.service.plist": plist("/Users/someone/T3 &amp; more")},
 			want: func(h string) []Store {
@@ -193,6 +199,12 @@ func TestServiceClaudeHome(t *testing.T) {
 			files: map[string]string{".config/systemd/user/t3code.service.d/override.conf": "[Service]\nEnvironment=CLAUDE_CONFIG_DIR=/srv/x\n"}},
 		{name: "an empty value sets no home", goos: "linux",
 			files: map[string]string{unitFile: withHome("Environment=CLAUDE_CONFIG_DIR=")}},
+		{name: "an empty Environment= in a drop-in resets the list, as systemd does, so the home the unit set is gone",
+			goos: "linux", files: map[string]string{unitFile: withHome("Environment=CLAUDE_CONFIG_DIR=/srv/unit"),
+				".config/systemd/user/t3code.service.d/override.conf": "[Service]\nEnvironment=\nEnvironment=T3CODE_HOME=%h/.t3\n"}},
+		{name: "an UnsetEnvironment= in a drop-in takes the home out",
+			goos: "linux", files: map[string]string{unitFile: withHome("Environment=CLAUDE_CONFIG_DIR=/srv/unit"),
+				".config/systemd/user/t3code.service.d/override.conf": "[Service]\nUnsetEnvironment=CLAUDE_CONFIG_DIR\n"}},
 		{name: "a plist a person edited to set it gives its home on macOS", goos: "darwin",
 			files: map[string]string{"Library/LaunchAgents/com.t3tools.t3code.service.plist": plistWith("CLAUDE_CONFIG_DIR", "~/claude-service")},
 			want:  "~/claude-service"},
@@ -249,7 +261,8 @@ func TestWSLShare(t *testing.T) {
 	}
 }
 
-// TestUnitHome holds unitHome to systemd's reading of Environment= lines.
+// TestUnitHome holds unitHome to systemd's reading of Environment= and
+// UnsetEnvironment= lines.
 func TestUnitHome(t *testing.T) {
 	cases := []struct {
 		name, unit, want string
@@ -261,6 +274,15 @@ func TestUnitHome(t *testing.T) {
 		{"a later assignment wins", "Environment=T3CODE_HOME=/srv/one\nEnvironment=T3CODE_HOME=/srv/two\n", "/srv/two", true},
 		{"a specifier the reader doesn't know makes the value unreadable", "Environment=T3CODE_HOME=%t/t3\n", "", false},
 		{"no assignment", "Environment=OTHER=1\n", "", false},
+		{"an empty Environment= drops every assignment before it, as systemd resets the list", "Environment=T3CODE_HOME=/srv/t3\nEnvironment=\n", "", false},
+		{"an assignment after that reset counts", "Environment=T3CODE_HOME=/srv/one\nEnvironment=\nEnvironment=T3CODE_HOME=/srv/two\n", "/srv/two", true},
+		{"spaces around the = of an Environment= line are systemd's too", "Environment = T3CODE_HOME=/srv/t3\n", "/srv/t3", true},
+		{"an UnsetEnvironment= of the name takes the variable out wherever its line stands, since systemd applies it last",
+			"UnsetEnvironment=T3CODE_HOME\nEnvironment=T3CODE_HOME=/srv/t3\n", "", false},
+		{"an UnsetEnvironment= of the assignment takes it out", "Environment=T3CODE_HOME=/srv/t3\nUnsetEnvironment=T3CODE_HOME=/srv/t3\n", "", false},
+		{"an UnsetEnvironment= of another value leaves the assignment", "Environment=T3CODE_HOME=/srv/t3\nUnsetEnvironment=T3CODE_HOME=/srv/other\n", "/srv/t3", true},
+		{"an empty UnsetEnvironment= drops the names listed before it", "UnsetEnvironment=T3CODE_HOME\nUnsetEnvironment=\nEnvironment=T3CODE_HOME=/srv/t3\n", "/srv/t3", true},
+		{"an EnvironmentFile= isn't read, so what only its file sets isn't found", "EnvironmentFile=/etc/t3code.env\n", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

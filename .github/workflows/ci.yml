@@ -125,7 +125,7 @@ jobs:
         # distribution's own sqlite3, which the tests build and read every
         # store with; CI=1 makes a missing sqlite3 fail them. The whole tree
         # is mounted read-only, since TestCapture replays T3 Code's capture
-        # from testdata/fixtures/t3code. A sqlite3 there without JSON
+        # from testdata/fixtures/t3_code. A sqlite3 there without JSON
         # functions fails the step: doctor's no-JSON line must then say how
         # to get one that has them on that distribution
         # (docs/errata/2026-11-23-t3-reader.md, Q5).

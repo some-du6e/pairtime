@@ -5,10 +5,12 @@
 # idle agent's working set must stay under 25 MB and its CPU time under
 # 0.1% of the wall time. The agent idles with T3 Code running as far as it
 # can tell, a store built from the reader's testdata/schema.sql held open
-# under T3CODE_HOME and a process named as T3's server, so it reads that
-# store at its 10 s cadence the whole span; and its CPU time is its job
-# object's, which counts the processes it starts, the reader's sqlite3 runs
-# among them, so the gate measures the agent with its reader (#225).
+# under T3CODE_HOME and a process named as T3's server, so its reader
+# checks that store every 10 s the whole span. Nothing writes the store
+# then, so after the reader's first reads it stats the store's -wal and
+# -shm files and starts a sqlite3 only when their sizes or times change
+# (DESIGN 3.3). The agent's CPU time is its job object's, which counts the
+# processes it starts, any sqlite3 run among them (#225).
 # Private bytes, threads, handles and wakeups are
 # reported with no gate yet, and ci.yml gates the binary size. After the
 # idle span, this workflow times 200 warm `pairtime hook` calls from
@@ -30,8 +32,8 @@ name: footprint
 on:
   pull_request:
     # docs/PLAN.md's paths for this workflow, plus go.sum and this file.
-    # T3 Code's reader is in them, since the gate measures the agent with
-    # the reader's sqlite3 runs (#225).
+    # T3 Code's reader is in them, since the agent idles here with the
+    # reader checking a T3 store (#225).
     paths:
       - internal/agent/**
       - internal/adapters/t3code/**
@@ -308,8 +310,9 @@ jobs:
 
             # The reader starts once the agent's ledger has opened, and the
             # agent's process scan finds T3's server at its next minute; from
-            # then on the reader reads the store every 10 s (DESIGN 3.3). The
-            # span starts once it does.
+            # then on the reader checks the store every 10 s, and runs
+            # sqlite3 only once T3 has written since its last read (DESIGN
+            # 3.3). The span starts once it does.
             $deadline = (Get-Date).AddSeconds(180)
             while ($true) {
               $t3 = (Invoke-RestMethod -Uri "$base/v1/status" -Headers $headers).apps.t3_code

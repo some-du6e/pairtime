@@ -76,6 +76,10 @@ import (
 //     its reading reach are sampled rather than read as slept through
 //     (D-relayed-context). With no other sign of a context, that is a
 //     sample a minute, and no os.focus record (presence.Status.AppOnly).
+//     The Claude Code T3's server keeps running in a thread between its
+//     runs is no other sign: the process scan leaves out a harness process
+//     whose parent_class is agent_app (procs.Options.Running), though its
+//     hooks and T3's own window in front are signs as any are.
 //
 // What the reader keeps between runs, its cursor and the rows, runs and
 // prompts it watches, all by key, goes to state.json under appsKey: a
@@ -469,7 +473,10 @@ func (p *appsHost) prompt(ev event.Event, text []byte, late bool, write func(eve
 	case pr.Relay != "":
 		cp.Relay = pr.Relay
 	}
-	p.noteTurn(turn, pr.Guest || inSteer, claimed)
+	// Every mark goes to the turn's other copies, the device test's
+	// included, so a copy whose own text doesn't open as a guest's, as one
+	// the adapter rebuilt, keeps no more of the guest's words.
+	p.noteTurn(turn, cp.Guest, claimed)
 	ok = write(ev)
 	p.record(b)
 	p.after(err, len(b.Messages) > 0 || cp.Relay != "")
@@ -502,10 +509,10 @@ func (p *appsHost) wants(ev event.Event, late bool, turn appTurn) (ask bool, was
 	return true, appAsked{}
 }
 
-// noteTurn notes what the reader's answer about a copy of turn said: that
-// a guest's words reached it (guest), so the turn's other copies are marked
-// guest too, or that a run claimed it (claimed), so no steered guest's
-// message marks them.
+// noteTurn notes what the asked copy of turn showed: that a guest's words
+// reached it (guest), by the reader's answer or by the copy's own opening,
+// so the turn's other copies are marked guest too, or that a run claimed it
+// (claimed), so no steered guest's message marks them.
 func (p *appsHost) noteTurn(turn appTurn, guest, claimed bool) {
 	if turn.turn == "" || !guest && !claimed {
 		return
@@ -736,8 +743,12 @@ func (p *appsHost) after(err error, wrote bool) {
 // refuses, no relayed credit is possible, and leftover -wal and -shm files
 // with no server, which a T3 killed while it held them leaves, are no T3
 // running. A T3 run from its source, as node, isn't named in the app table,
-// so it gets no project context, though its messages are still read when a
-// prompt's hook asks and at the idle cadence.
+// so it gets no project context of its own. Its sessions classify under
+// node, as script_runtime, so the agent never asks about their prompts
+// (noteSession, wants): its messages are read only at the idle cadence,
+// appsIdle, which is as long as RELAY_SEEN_LAG_S, so some age out and the
+// rest pair with nothing, and doctor says pairtime doesn't recognize its
+// server (t3code.Counts.WithServer).
 func appRuns(err error, st t3code.Status) bool {
 	var se *t3code.SchemaError
 	switch {
@@ -845,15 +856,19 @@ type t3Reply struct {
 	NoSQLite3 bool `json:"no_sqlite3,omitempty"`
 	// Day is the day the counts are for, YYYY-MM-DD in the agent's zone:
 	// Witnessed counts the messages T3 says a person sent that the reader
-	// recorded, Paired its records that paired with a prompt, Aged the rows
-	// the age test turned away, and Ahead the rows it turned away as
-	// stamped more than 2 s after the read that decided them
-	// (t3code.Counts).
-	Day       string `json:"day"`
-	Witnessed int    `json:"witnessed"`
-	Paired    int    `json:"paired"`
-	Aged      int    `json:"aged"`
-	Ahead     int    `json:"ahead"`
+	// recorded, WithServer those of them it recorded while T3 ran, with a
+	// server the app table names, Paired its records that paired with a
+	// prompt, Aged the rows the age test turned away, and Ahead the rows it
+	// turned away as stamped more than 2 s after the read that decided them
+	// (t3code.Counts). Doctor's T3 Code line reads WithServer to tell a T3
+	// whose server pairtime doesn't recognize from one whose sessions skip
+	// pairtime's hooks.
+	Day        string `json:"day"`
+	Witnessed  int    `json:"witnessed"`
+	WithServer int    `json:"with_server"`
+	Paired     int    `json:"paired"`
+	Aged       int    `json:"aged"`
+	Ahead      int    `json:"ahead"`
 	// SessionAt is when a session an agent app's server started last
 	// reached the agent, in Unix ms, absent when none has.
 	SessionAt int64 `json:"session_at,omitempty"`
@@ -868,9 +883,10 @@ func (p *appsHost) reply() appsReply {
 		return appsReply{}
 	}
 	r := &t3Reply{Reading: st.Reading, Off: st.Off, Problem: st.Problem, Newer: st.Newer, Running: st.Running,
-		NoSQLite3: st.NoSQLite3, Day: st.Day, Witnessed: st.Witnessed, Paired: st.Paired, Aged: st.Aged, Ahead: st.Ahead}
+		NoSQLite3: st.NoSQLite3, Day: st.Day, Witnessed: st.Witnessed, WithServer: st.WithServer, Paired: st.Paired,
+		Aged: st.Aged, Ahead: st.Ahead}
 	if today := p.now().In(p.a.zone()).Format(time.DateOnly); r.Day != today {
-		r.Day, r.Witnessed, r.Paired, r.Aged, r.Ahead = today, 0, 0, 0, 0
+		r.Day, r.Witnessed, r.WithServer, r.Paired, r.Aged, r.Ahead = today, 0, 0, 0, 0, 0
 	}
 	if !heard.IsZero() {
 		r.SessionAt = heard.UnixMilli()

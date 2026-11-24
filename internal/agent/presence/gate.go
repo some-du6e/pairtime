@@ -57,7 +57,8 @@ const staleTurn = 30 * time.Minute
 type gate struct {
 	cadence cadence
 	// procs is how many harness session processes the process scanner
-	// counted last (WP-OS6).
+	// counted last (WP-OS6). It leaves out those whose parent_class is
+	// agent_app, which apps covers (procs.Options.Running).
 	procs int
 	// apps is how many agent apps that drive harness sessions, such as T3
 	// Code's server, the apps component found running last
@@ -173,7 +174,9 @@ func (g *gate) sampled(now time.Time, idle time.Duration) {
 // since a message can come from its phone app at any moment, and a
 // stretch the message's lead or its reading reaches that went unsampled
 // would read as slept through (D-relayed-context); a context only it keeps
-// live is sampled every SLOW_SAMPLE_S whatever the input (appOnly).
+// live is sampled every SLOW_SAMPLE_S whatever the input (appOnly), since
+// relayed credit reads a gap of up to twice SLOW_SAMPLE_S as no sleep (SM
+// 2.1, D-relayed-sleep).
 func (g *gate) interval(now time.Time) time.Duration {
 	g.settle(now)
 	switch {

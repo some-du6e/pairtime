@@ -306,7 +306,10 @@ func readDoctorHooks() []doctor.Hooks {
 // (t3code.ServiceClaudeHome), which every instance with no home of its own
 // runs in. A home that is Claude Code's own default, whose settings
 // install wrote, is no home of its own, and a home named twice counts
-// once. It never opens the store, and what it returns names no path.
+// once. Where it finds a store, it also looks for sqlite3 on its own PATH,
+// as the reader looks for it (t3code.Runner), for the line to use while the
+// agent can't say. It never opens the store, and what it returns names no
+// path.
 func readDoctorT3() doctor.T3Facts {
 	env, err := install.DefaultEnv("")
 	if err != nil {
@@ -355,6 +358,10 @@ func readDoctorT3() doctor.T3Facts {
 	}
 	if h, ok := t3code.ServiceClaudeHome(env); out.Found && ok && unhooked(h) {
 		out.ServiceHome = true
+	}
+	if out.Found {
+		_, err := (&t3code.Runner{}).Exe()
+		out.NoSQLite3 = err != nil
 	}
 	return out
 }

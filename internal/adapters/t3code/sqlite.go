@@ -89,7 +89,9 @@ type Runner struct {
 	Timeout time.Duration
 
 	// mu guards exe. Only a lookup that worked is kept, so a sqlite3
-	// installed later is found on the next read.
+	// installed later is found on the next read, and a kept one that no
+	// longer starts is dropped (forget), so a sqlite3 removed later reads
+	// as none.
 	mu  sync.Mutex
 	exe string
 }
@@ -111,6 +113,16 @@ func (r *Runner) Exe() (string, error) {
 	}
 	r.exe = exe
 	return exe, nil
+}
+
+// forget drops exe, a sqlite3 found before that no longer starts, so the
+// next Exe looks for one again.
+func (r *Runner) forget(exe string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.exe == exe {
+		r.exe = ""
+	}
 }
 
 // preamble starts every run's SQL: list mode, with a separator no hex field
@@ -156,6 +168,13 @@ func (r *Runner) Query(ctx context.Context, db, sql string) ([]row, error) {
 	prepare(cmd)
 	if err := cmd.Start(); err != nil {
 		stdin.Close()
+		if errors.Is(err, fs.ErrNotExist) {
+			// The sqlite3 found before is gone, as when it was uninstalled:
+			// that is no sqlite3, for which doctor gives the install command,
+			// and the next lookup looks again.
+			r.forget(exe)
+			return nil, fmt.Errorf("%w: the one found before is gone", ErrNoSQLite3)
+		}
 		// Start's error names the executable, which can be in the home
 		// folder, and the reader's words name no path (Status).
 		var pe *fs.PathError

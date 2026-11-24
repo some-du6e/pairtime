@@ -34,7 +34,11 @@ const (
 	// prompt after, on the same clock. A run's window closes at its end,
 	// with no slack after it (SM 2.2): T3 starts a queued run as soon as the
 	// one before it ends, so a slack there would hand the next run's prompt
-	// to a run that delivered none.
+	// to a run that delivered none. For the same reason the slack before a
+	// start never reaches back past the end of an earlier watched run of
+	// the session (ranBefore): in WP-ADE1's capture, a steer during a run's
+	// Stop hook came 111 ms before its end and 1,586 ms before the next
+	// run's start.
 	startSlack = 2000
 	// stampAhead is how much later than the read that decides it a row may
 	// be stamped (SM 2.2). T3's server and the agent run under one clock, so
@@ -79,15 +83,20 @@ const (
 type FolderState uint8
 
 const (
-	// FolderPending says the resolver hasn't answered yet. The reader reads
-	// nothing more of the folder's rows meanwhile, and asks again on its next
-	// reads while a row is young enough to record (RELAY_SEEN_LAG_S).
+	// FolderPending says the resolver hasn't answered yet. The reader
+	// decides none of the folder's rows meanwhile and reads no text of them,
+	// and asks again on its next reads while a row is young enough to record
+	// (RELAY_SEEN_LAG_S). A guest's message there is watched all the same
+	// (FolderOut).
 	FolderPending FolderState = iota
 	// FolderTracked is a folder pairtime tracks, whose project is
 	// Folder.Project.
 	FolderTracked
 	// FolderOut is a folder pairtime doesn't track or ignores (DESIGN 8.8).
-	// The reader reads nothing more of its rows.
+	// The reader reads no text of its rows and records none of them. A
+	// guest's message there is still watched by its key, with no text, as
+	// every guest's is, since the guest query has no folder test (DESIGN
+	// 5.1); the folder's prompts are dropped anyway.
 	FolderOut
 )
 
@@ -176,14 +185,15 @@ type Reader struct {
 // once a resync finds it again at another rowid (DESIGN 5.1). It holds T3's
 // ids by key alone.
 //
-// A message the reader recorded is watched until its run delivers a prompt
-// or RELAY_MATCH_S passes, and a row that changes after the first read
-// witnesses nothing. A guest's message is watched for guestWatch whatever
-// T3 does to the row: promote it to a steer, send it again after Claude
-// Code declined the steer, renumber it in a VACUUM. Each run of its own T3
-// gives it, the first and every one it sends it again in, delivers a
-// guest's prompt, and each running turn the owner steers it into is a
-// Steer.
+// A message the reader recorded is watched until RELAY_MATCH_S and a margin
+// have passed since its stamp (prune), and its row is read again until its
+// run has delivered a prompt and a read has seen the run end (readAgain). A
+// row that changes after the first read witnesses nothing. A guest's
+// message is watched for guestWatch whatever T3 does to the row: promote it
+// to a steer, send it again after Claude Code declined the steer, renumber
+// it in a VACUUM. Each run of its own T3 gives it, the first and every one
+// it sends it again in, delivers a guest's prompt, and each running turn
+// the owner steers it into is a Steer.
 type watch struct {
 	rowid int64
 	// msg and run are the keys of the message id and of a run: for a
@@ -199,7 +209,8 @@ type watch struct {
 	// went to, start and done its start and end, Unix ms, 0 until known.
 	sessions    []string
 	start, done int64
-	// claimed is the event id of the prompt the run delivered.
+	// claimed is the event id of the prompt the run delivered. A read still
+	// reads a claimed run's row until it sees the run end (readAgain).
 	claimed string
 	// steers are the running turns of other messages that the owner
 	// steered a guest's message into (Steer).
@@ -406,7 +417,10 @@ type Pairing struct {
 	// false, the reader can't tell this prompt from any other, so the agent
 	// keeps the prompt's text as it keeps any prompt's (DESIGN 5.1), unless
 	// Guest is set: a guest's run an earlier read saw can still claim the
-	// prompt, which can only cost it credit. Relay is never set then.
+	// prompt, which can only cost it credit. Relay can be set then too: a
+	// read can fail after the queries that found a message's row as the
+	// reader first read it, and that is word enough for the message's run
+	// to claim the prompt (pair).
 	Known bool
 	// Guest says a guest's message started the run that delivered the
 	// prompt: the prompt is marked guest and keeps no text.
@@ -457,6 +471,13 @@ type Counts struct {
 	// Witnessed counts the records of declared none it wrote: messages T3
 	// says a person sent.
 	Witnessed int
+	// WithServer counts those of them it wrote at a read that found T3
+	// running (Status.Running), with a server the app table names. A T3 it
+	// doesn't name, as one run from its source under node, gives none: its
+	// sessions don't classify as agent_app, so the agent never asks about
+	// their prompts, and its messages pair with nothing (doctor's T3 Code
+	// line).
+	WithServer int
 	// Declared counts the records of declared cron or cross_session.
 	Declared int
 	// Paired counts the records whose pairing with a prompt went on a
@@ -500,7 +521,8 @@ type Status struct {
 	// Newer says T3's schema is newer than the one this reader was tested
 	// against, which it reads anyway.
 	Newer bool
-	// NoSQLite3 says the last read found no sqlite3 on PATH. The reader looks
+	// NoSQLite3 says the last read found no sqlite3 on PATH, or found the
+	// one an earlier read had found gone when it ran it. The reader looks
 	// for one at every read, whether or not T3 runs, so doctor can say how to
 	// install it while T3 is stopped too, whatever Off says.
 	NoSQLite3 bool
@@ -528,6 +550,7 @@ func (r *Reader) Status() Status {
 // add adds d to c.
 func (c *Counts) add(d Counts) {
 	c.Witnessed += d.Witnessed
+	c.WithServer += d.WithServer
 	c.Declared += d.Declared
 	c.Paired += d.Paired
 	c.Aged += d.Aged
@@ -649,7 +672,8 @@ func (r *Reader) fail(err error) {
 	case errors.Is(err, ErrNotRunning):
 		r.status.Off = OffNotRunning
 	case errors.Is(err, ErrNoSQLite3):
-		r.status.Off = OffNoSQLite3
+		// A sqlite3 that read() found can be gone by the run (Runner.Query).
+		r.status.Off, r.status.NoSQLite3 = OffNoSQLite3, true
 	case errors.Is(err, ErrNoJSON):
 		r.status.Off, r.status.Problem = OffNoJSON, ErrNoJSON.Error()
 	case errors.As(err, &se):
@@ -754,15 +778,15 @@ func (r *Reader) settled(store string, before walFiles) *walFiles {
 // renumbered the rows, or another store took the place of the one read
 // (DESIGN 5.1). It goes before the oldest row stamped after the later of
 // the cursor's stamp and RELAY_SEEN_LAG_S (and a margin) ago, which a read
-// may still record, or before the oldest row the reader watches while it
-// waits for its run, when that is older: such a row is read again there,
-// and its watch moves to its new rowid. The older rows the resync reads
-// again only to find those (rereadZone).
+// may still record, or before the oldest row the reader still reads again
+// (watch.readAgain), as one that waits for its run, when that is older:
+// such a row is read again there, and its watch moves to its new rowid.
+// The older rows the resync reads again only to find those (rereadZone).
 func (r *Reader) resync(ctx context.Context) error {
 	floor := max(r.cursor.CreatedAt, r.now().UnixMilli()-r.lag-resyncMargin)
 	from := floor
 	for _, w := range r.watched {
-		if w.guest || !w.changed && w.claimed == "" {
+		if w.readAgain() {
 			from = min(from, w.created-1)
 		}
 	}
@@ -879,7 +903,7 @@ func (r *Reader) window(ctx context.Context, b *Batch) (more, anomaly bool, err 
 	c := r.cursor.RowID
 	rowids := make([]int64, 0, len(r.watched))
 	for _, w := range r.watched {
-		if w.guest || !w.changed && w.claimed == "" {
+		if w.readAgain() {
 			rowids = append(rowids, w.rowid)
 		}
 	}
@@ -1115,10 +1139,12 @@ func (r *Reader) window(ctx context.Context, b *Batch) (more, anomaly bool, err 
 	}
 	maps.Copy(items, its)
 	for _, w := range r.watched {
-		if !w.guest && (w.changed || w.claimed != "") {
+		if !w.readAgain() {
 			continue
 		}
-		if r.track(w, items[w.rowid], seenMS) && w.changed {
+		// A message that already paired lost nothing to a change.
+		claimed := !w.guest && w.claimed != ""
+		if r.track(w, items[w.rowid], seenMS) && w.changed && !claimed {
 			n.Edited++
 		}
 	}
@@ -1163,6 +1189,9 @@ func (r *Reader) window(ctx context.Context, b *Batch) (more, anomaly bool, err 
 		}
 		if p.declared == event.RelayDeclaredNone {
 			n.Witnessed++
+			if r.status.Running {
+				n.WithServer++
+			}
 		} else {
 			n.Declared++
 		}
@@ -1311,6 +1340,15 @@ func (r *Reader) watchOf(msg string) *watch {
 	return nil
 }
 
+// readAgain reports whether a read reads watched row w again: a guest's
+// always (follow), and a message's while its row is as the reader first
+// read it and its run hasn't claimed a prompt or hadn't ended at the last
+// read, since that end bounds the prompts the session's next run may take
+// (ranBefore).
+func (w *watch) readAgain() bool {
+	return w.guest || !w.changed && (w.claimed == "" || w.done == 0)
+}
+
 // track reads a watched row's item rows its, itemSQL's for its rowid, at
 // seen, Unix ms, and reports whether they hold its message: after T3's
 // VACUUM another message, or none, can hold its rowid until a resync finds
@@ -1454,10 +1492,13 @@ func (r *Reader) sessionsOf(its []row, anyDriver bool) []string {
 // pair gives each watched run that started the first prompt it may have
 // delivered (SM 2.2 rule 9): one the agent asked about, of a session the
 // run went to, stamped from startSlack before the run's start to its end,
-// and, for a message, within RELAY_MATCH_S of its stamp. Guests' runs claim
-// first, since a guest's prompt taken for the owner's keeps the guest's
-// words, then messages' runs, each kind in order of start, so a run never
-// takes a later run's prompt. A message's run pairs only on fresh word that
+// but not at or before the end of an earlier watched run of that session
+// (ranBefore), and, for a message, within RELAY_MATCH_S of its stamp.
+// Guests' runs claim first, since a guest's prompt taken for the owner's
+// keeps the guest's words, then messages' runs, each kind in order of
+// start, so a run never takes a later run's prompt, and an earlier run's
+// end keeps a later run from that earlier run's prompts no run claimed,
+// such as a steer into it. A message's run pairs only on fresh word that
 // its row is as the reader first read it: this read found it, or its record
 // is in b. The pairing goes on whichever record comes second (Paired): a
 // record in b names the prompt, and the prompt asking, Pair's, names a
@@ -1488,7 +1529,8 @@ func (r *Reader) pair(b *Batch, asking string) {
 			switch {
 			case p.claimed, p.id == "", !slices.Contains(w.sessions, p.session),
 				p.t < w.start-startSlack, w.done > 0 && p.t > w.done,
-				!w.guest && (p.t < w.created || p.t > w.created+r.match):
+				!w.guest && (p.t < w.created || p.t > w.created+r.match),
+				r.ranBefore(w, p):
 				continue
 			}
 			if best == nil || p.t < best.t {
@@ -1512,6 +1554,19 @@ func (r *Reader) pair(b *Batch, asking string) {
 			r.status.Paired++
 		}
 	}
+}
+
+// ranBefore reports whether prompt p is stamped at or before the end of
+// another watched run that went to p's session and started before w. T3
+// starts a thread's next run only once the one before it has completed, so
+// such a prompt is the earlier run's, or a steer into it, as one during its
+// Stop hook can be, though w's start slack reaches it (SM 2.2). A run that
+// hasn't ended, or that the reader no longer watches, bounds nothing.
+func (r *Reader) ranBefore(w *watch, p *asked) bool {
+	return slices.ContainsFunc(r.watched, func(o *watch) bool {
+		return o != w && o.start > 0 && o.start < w.start && o.done > 0 && p.t <= o.done &&
+			slices.Contains(o.sessions, p.session)
+	})
 }
 
 // prune forgets the runs and prompts that can no longer pair, at now in

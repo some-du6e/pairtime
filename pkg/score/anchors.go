@@ -207,9 +207,9 @@ func (d *deriver) promptAnchors() {
 // in, but reaches back from the stamp (Anchor.from).
 //
 // Realizing its lead, in a slot of any presence but one the machine slept
-// through and with no focus or keyboard test, after every other candidate
-// (SM 2.3, 2.7), is the relayed stage of the credit pass, which windows
-// leaves it to.
+// through (Slot.slept) and with no focus or keyboard test, after every
+// other candidate (SM 2.3, 2.7), is the relayed stage of the credit pass,
+// which windows leaves it to.
 func (d *deriver) relayedAnchor(tb *turnBuild) {
 	t, w := tb.turn, tb.witness
 	re, pe := d.recs[w.pos], d.recs[w.prompt]

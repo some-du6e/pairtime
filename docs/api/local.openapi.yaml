@@ -636,7 +636,7 @@ components:
     T3Code:
       type: object
       additionalProperties: false
-      required: [reading, day, witnessed, paired, aged, ahead]
+      required: [reading, day, witnessed, with_server, paired, aged, ahead]
       description: >
         How the reader of T3 Code's message store is doing, as its last
         read left it, and what it read today. It names no path. Absent
@@ -688,6 +688,16 @@ components:
           description: >
             The messages T3 Code says a person sent that the reader recorded
             as `relay.message` records, declared `none`, that day.
+        with_server:
+          type: integer
+          minimum: 0
+          description: >
+            Those of `witnessed` the reader recorded while T3 Code ran
+            (`running`), with a server the app table names. When none of
+            the day's messages paired and none was recorded this way,
+            `pairtime doctor` says pairtime doesn't recognize T3 Code's
+            server, as with one run from its source under `node`, whose
+            sessions the agent never asks about (DESIGN 3.3).
         paired:
           type: integer
           minimum: 0

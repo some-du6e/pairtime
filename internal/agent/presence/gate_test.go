@@ -159,14 +159,19 @@ func TestGate(t *testing.T) {
 			},
 		},
 		{
-			name: "a running agent app keeps the context live after a terminal's 600 s, every 60 s whatever the input, so a phone message's lead is sampled",
+			// The input at 500 s would keep SAMPLE_S under D14 until 1100 s,
+			// so the cadence at 700 s and 2000 s is the agent app's.
+			name: "an agent app alone samples every SLOW_SAMPLE_S whatever the input once ContextWindow has passed since the last project app's focus and hook",
 			steps: []step{
 				{at: 0, do: focus(event.AppTerminal)},
 				{at: s(5), do: apps(1)},
 				{at: s(10), do: focus(event.AppBrowser)},
-				{at: s(10), do: sampled(0)},
+				{at: s(100), do: hook("s_a", event.KindSessionStart)},
+				{at: s(500), do: sampled(0)},
 				want(s(609), fast),
-				want(s(610), slow),
+				want(s(610), fast),
+				want(s(699), fast),
+				want(s(700), slow),
 				{at: s(2000), do: sampled(0)},
 				want(s(2000), slow),
 				want(s(3600), slow),
@@ -188,7 +193,8 @@ func TestGate(t *testing.T) {
 			},
 		},
 		{
-			name: "a hook or a harness process while an agent app runs is a sign of work, which brings the usual cadence back",
+			// The sample each sign takes is the sampler's (TestSampler).
+			name: "a project app's focus, a hook or a harness process brings SAMPLE_S back at once, with a sample",
 			steps: []step{
 				{at: 0, do: apps(1)},
 				{at: 0, do: sampled(0)},
@@ -203,6 +209,12 @@ func TestGate(t *testing.T) {
 				want(s(700), fast),
 				{at: s(800), do: procs(0)},
 				want(s(800), slow),
+				{at: s(900), do: focus(event.AppEditor)},
+				want(s(900), fast),
+				{at: s(910), do: focus(event.AppBrowser)},
+				{at: s(1400), do: sampled(0)},
+				want(s(1509), fast),
+				want(s(1510), slow),
 			},
 		},
 		{
@@ -447,6 +459,8 @@ func TestAppOnly(t *testing.T) {
 			[]step{{at: 0, do: apps(1)}, {at: 0, do: focus(event.AppEditor)}, {at: s(10), do: focus(event.AppBrowser)}}, s(610), true},
 		{"a hook in the last 600 s is a sign of work", []step{{at: 0, do: apps(1)}, {at: s(5), do: hook("s_a", event.KindSessionStart)}}, s(604), false},
 		{"a running harness process is a sign of work", []step{{at: 0, do: apps(1)}, {at: 0, do: procs(1)}}, s(1), false},
+		{"unknown focus is no sign of work, so the agent app is still the only sign",
+			[]step{{at: 0, do: apps(1)}, {at: 0, do: focus(event.AppUnknown)}}, s(1), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

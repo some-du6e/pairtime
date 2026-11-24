@@ -1,20 +1,20 @@
 ---
-harness: t3code
+harness: t3_code
 harness_version: 0.1.10-nightly.20261112.4606
-os: Ubuntu 24.04.4 LTS, kernel 7.0.14-28-pve (a Proxmox VM)
+os: Ubuntu 24.04.4 LTS, in an LXC container on Proxmox, so the kernel, 7.0.14-28-pve, is the host's
 captured_on: 2026-11-23
 captured_by: an AI agent (pairtime's WP-ADE1 capture agent) driving T3 Code's web client, not a person
 synthetic: false
-scrubbed_by: a one-off script of the capture agent that replaced ids, paths, times and text as the Scrub section says, checked by the searches listed there; not read by a person
-kit: none of tools/capture's scripts ran; the Claude Code hooks registered were the list in tools/capture/prepare.py at e84edf6d8f91 (CLAUDE_CODE_HOOKS), each running a capture-only logger instead of dump-hook.sh
-script: none; the probes are listed below
+scrubbed_by: tools/capture/t3code/mkfixture.py's first version, which replaced ids, paths, times and text as the Scrub section says; then pairtime fixtures scrub -n v0.1.0-alpha.6 (CI-built at de190ee3151a, release.yml run 45135543535), which found nothing; then the searches listed there; every file read in #222's review, not typed by a person
+kit: tools/capture/t3code, added in #222, whose README's last section says how the versions the capture ran differed; the Claude Code hooks registered were the list in tools/capture/prepare.py at e84edf6d8f91 (CLAUDE_CODE_HOOKS), each running the kit's logger.py instead of dump-hook.sh
+script: tools/capture/t3code/README.md, steps 1 to 8, with mkprobes.py's PLAN; the probes are listed below
 otlp: off
 runs: web (T3 Code's web client in Chrome 157, driven by agent-browser)
 ---
 
 # Fixture provenance
 
-T3 Code is an agent app, not a harness, so this fixture is not a hook capture of the kind `testdata/fixtures/README.md` describes. It is the T3 Code store that the T3 Code reader (`internal/adapters/t3code`) reads, captured at the end of a live session, together with what Claude Code's hooks reported while T3 Code drove it. It gives the reader the real fixture DESIGN 5.1 asks for (WP-ADE1, issue #225 rulings Q4 and Q14).
+T3 Code is an agent app, not a harness, so this fixture isn't a harness's hook capture. It is the kind the `t3_code` paragraph of `testdata/fixtures/README.md` describes: the T3 Code store that the T3 Code reader (`internal/adapters/t3code`) reads, captured at the end of a live session, together with what Claude Code's hooks reported while T3 Code drove it. It gives the reader the real fixture DESIGN 5.1 asks for (WP-ADE1, issue #225 rulings Q4 and Q14).
 
 ## No human timing
 
@@ -22,7 +22,7 @@ No person typed anything. An AI agent drove T3 Code's web client with agent-brow
 
 ## Versions
 
-- T3 Code `0.1.10-nightly.20261112.4606` (`t3 --version`), T3's own Linux build, run as `t3 serve --port <scratch port> --host 127.0.0.1 --no-browser <repo>` from a copy of the installed runtime folder. The store's migration head is 85, and migration 55 is `OrchestrationV2`. The tables, columns and indexes the reader reads are exactly those in `internal/adapters/t3code/testdata/schema.sql`, which was written from T3's source at d8f3feff. Nobody checked that this nightly was built from exactly that commit.
+- T3 Code `0.1.10-nightly.20261112.4606` (`t3 --version`), T3's own Linux build, run as `t3 serve --port <scratch port> --host 127.0.0.1 --no-browser <repo>` from a hard-linked copy of the installed runtime folder, whose files were the installed runtime's own (see the PR's capture departures). The store's migration head is 85, and migration 55 is `OrchestrationV2`. The tables, columns and indexes the reader reads are exactly those in `internal/adapters/t3code/testdata/schema.sql`, which was written from T3's source at d8f3feff. Nobody checked that this nightly was built from exactly that commit.
 - Claude Agent SDK `0.3.321`, from `CLAUDE_AGENT_SDK_VERSION` in the hook's environment.
 - Claude Code `2.1.330` (`claude --version`, and the transcripts' `version`), on PATH as `claude`, which is T3's default `binaryPath`. `DISABLE_AUTOUPDATER=1` was set.
 - Model `claude-opus-5-5`, T3's default, in full-access runtime mode.
@@ -71,3 +71,6 @@ Probe 25 has no row and no hook: the agent's frame for it was malformed, and T3 
 - Text replaced with `[<what>, removed: N characters]`, where N is the original length: every assistant row's text (`assistant text`), the two T3 notification rows' text (`T3 notification text`), their `notification.summary` (`T3 notification summary`), and both threads' titles, which Claude generated (`thread title`), in the column and in the payload. No text Claude or Anthropic wrote is left.
 - Kept as written: the probe texts, which the capturing agent wrote, including the three guest-wrapper stand-ins; the project title `repo`; the branches `main` and `t3/probe-twenty-eight-worktree`, which T3 made from probe 28's words; model and provider ids; T3's migration names.
 - Checked by script: no occurrence of the scratch account name, `/root`, the auth token, the router's URL or host, the machine's host name, any original UUID, `msg_` id or hex run, any 2026 date, or any original epoch value. The thread titles' and the notifications' original words are gone too.
+- `pairtime fixtures scrub -n` v0.1.0-alpha.6, the CI-built release binary (release.yml run 45135543535 at de190ee3151a, checked against the release's checksums.txt), ran over this folder with this machine's account, home, host name and git identity, and with the throwaway account's name and home and the repository's folder names given by flag. It found 0 spans in the 3 files it reads (it leaves PROVENANCE.md alone).
+- Searched again before commit, in all four files: the machine's host name, `/root`, the throwaway account's name, and `/home` paths other than `/home/capture`, the fixtures' placeholder home: none. T3 settings names and values: none but T3 Code's own words. Every key and value the fixture shares with the installed T3 Code's settings file is in T3 Code's source at d8f3feff too, and the fixture holds no settings file. Install or telemetry ids: none. `owner_node_id` is null throughout, every node id is made from the replaced run and message ids, and every UUID, `msg_` id and hex run is a placeholder.
+- `tools/capture/t3code/mkprobes.py` writes this folder's `probes.json` again byte for byte from its `store.sql` and `hooks.jsonl`. `mkfixture.py`, run on a store rebuilt from this folder's `store.sql`, writes its `hooks.jsonl` byte for byte and its `store.sql` but for the placeholders' lengths, which it measures again.

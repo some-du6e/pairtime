@@ -1203,9 +1203,10 @@ func (h *adapterHost) prepare() bool {
 // ignore test reads both spellings, T3's and the one filepath.EvalSymlinks
 // resolves it to (git.Resolver.Ignored), first and at every answer: a
 // .pairtime-ignore or an exclude pattern that reaches either keeps the
-// folder out at once, before any Track, and the reader reads nothing more
-// of its rows (DESIGN 5.1, 8.8). The project stays the one the git adapter
-// finds for T3's spelling, which keys a repo by its canonical common dir.
+// folder out at once, before any Track, and the reader reads no text of its
+// rows and records none (t3code.FolderOut; DESIGN 5.1, 8.8). The project
+// stays the one the git adapter finds for T3's spelling, which keys a repo
+// by its canonical common dir.
 func (h *adapterHost) appFolder(dir string) t3code.Folder {
 	g := h.git.Load()
 	if g == nil || dir == "" || g.res.Ignored(dir) {

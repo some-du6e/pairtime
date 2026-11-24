@@ -29,7 +29,7 @@ import (
 // testdata/schema.sql creates as T3 left them, with T3's own rowids;
 // hooks.jsonl, the hook calls Claude Code made, without their payloads;
 // and probes.json, what each prompt a hook saw was, which is the oracle.
-const captureDir = "../../../testdata/fixtures/t3code/0.1.10-nightly.20261112.4606/linux/web"
+const captureDir = "../../../testdata/fixtures/t3_code/0.1.10-nightly.20261112.4606/linux/web"
 
 // captureHook is one of the capture's hook calls, as its logger wrote it.
 type captureHook struct {
@@ -82,15 +82,18 @@ type replayed struct {
 	stamps map[int64]string
 	ms     map[int64]int64
 	// records are every record a read wrote, by event id; answers Pair's
-	// answer for each prompt, by prompt_id; guests the guests' messages
+	// answer for each prompt, and steersAt what the reader said of steered
+	// turns right after that answer, which the agent marks the prompt from
+	// (internal/agent/apps.go), by prompt_id; guests the guests' messages
 	// the reads reported; steers and counts what the reader said after the
 	// last read; folders the folders its resolver was asked about.
-	records map[string]Message
-	answers map[string]Pairing
-	guests  []GuestRun
-	steers  []Steer
-	counts  Counts
-	folders []string
+	records  map[string]Message
+	answers  map[string]Pairing
+	steersAt map[string][]Steer
+	guests   []GuestRun
+	steers   []Steer
+	counts   Counts
+	folders  []string
 	// lag is the reader's RELAY_SEEN_LAG_S, in ms.
 	lag int64
 	// threadFolders are the folders the capture's threads ran in, as
@@ -149,7 +152,8 @@ func replayCapture(t *testing.T) *replayed {
 	tool := sqlite3Tool(t)
 	ctx := context.Background()
 	out := &replayed{promptAt: map[string]int64{}, promptEvent: map[string]string{},
-		stamps: map[int64]string{}, ms: map[int64]int64{}, records: map[string]Message{}, answers: map[string]Pairing{}}
+		stamps: map[int64]string{}, ms: map[int64]int64{}, records: map[string]Message{}, answers: map[string]Pairing{},
+		steersAt: map[string][]Steer{}}
 
 	raw, err := os.ReadFile(filepath.Join(captureDir, "probes.json"))
 	if err != nil {
@@ -181,6 +185,9 @@ func replayCapture(t *testing.T) *replayed {
 	rows := map[int64]string{}
 	var rest []string
 	for i, line := range strings.Split(string(storeSQL), "\n") {
+		// Git for Windows checks text out with CRLF line endings by
+		// default, so a line can end in a carriage return there.
+		line = strings.TrimSuffix(line, "\r")
 		switch {
 		case strings.HasPrefix(line, "INSERT INTO "+tMessages+" "):
 			_, values, ok := strings.Cut(line, " VALUES (")
@@ -303,6 +310,7 @@ func replayCapture(t *testing.T) *replayed {
 			var p Pairing
 			p, b, err = r.Pair(ctx, Prompt{SessionKey: session(st.hook.SessionID), T: st.at, EventID: out.promptEvent[st.hook.PromptID]})
 			out.answers[st.hook.PromptID] = p
+			out.steersAt[st.hook.PromptID] = r.Steers()
 		}
 		if err != nil {
 			t.Fatalf("the read at %s failed: %v", c.t.UTC().Format(time.RFC3339Nano), err)
@@ -403,7 +411,7 @@ func TestCapture(t *testing.T) {
 					}
 				}
 			}},
-		{"each guest's message the owner steered into a running turn is reported as steered, and its turn as a Steer that covers the prompt that carried it and no other prompt",
+		{"each guest's message the owner steered into a running turn is reported as steered, and its turn as a Steer that covers the prompt that carried it and no other prompt, right after that prompt's Pair, when the agent marks it, and after the last read, for its later copies",
 			func(t *testing.T) {
 				var want []GuestRun
 				for _, p := range c.probes {
@@ -411,11 +419,20 @@ func TestCapture(t *testing.T) {
 						want = append(want, GuestRun{SentAt: c.ms[p.MessageRowID], Steered: !p.OwnRun})
 					}
 					at := c.promptAt[p.PromptID]
-					covered := slices.ContainsFunc(c.steers, func(s Steer) bool {
-						return slices.Contains(s.Sessions, session(p.SessionID)) && at >= s.From && (s.To == 0 || at <= s.To)
-					})
-					if covered != p.steered() {
-						t.Errorf("probe %d (%s): a Steer covers its prompt: %v, want %v (steers %+v)", p.HookPrompt, p.Kind, covered, p.steered(), c.steers)
+					for _, when := range []struct {
+						name   string
+						steers []Steer
+					}{
+						{"right after its Pair", c.steersAt[p.PromptID]},
+						{"after the last read", c.steers},
+					} {
+						covered := slices.ContainsFunc(when.steers, func(s Steer) bool {
+							return slices.Contains(s.Sessions, session(p.SessionID)) && at >= s.From && (s.To == 0 || at <= s.To)
+						})
+						if covered != p.steered() {
+							t.Errorf("probe %d (%s): %s, a Steer covers its prompt: %v, want %v (steers %+v)",
+								p.HookPrompt, p.Kind, when.name, covered, p.steered(), when.steers)
+						}
 					}
 				}
 				if !slices.Equal(c.guests, want) {

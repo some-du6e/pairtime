@@ -52,7 +52,10 @@ func TestServerIn(t *testing.T) {
 // the agent's cadence, presence's project context and doctor read: T3 runs
 // when the last process scan found its server and the store has the -wal
 // and -shm files T3 holds open. The files alone don't make it run, though
-// the reader still reads them, and records what they hold.
+// the reader still reads them, and records what they hold. Counts.WithServer
+// counts only the messages recorded while T3 ran, so doctor can tell a T3
+// whose server pairtime doesn't name, as one run from its source under
+// node, from one whose prompts skip pairtime's hooks.
 func TestRunning(t *testing.T) {
 	const text = "please fix the flaky parser test"
 	cases := []struct {
@@ -61,10 +64,13 @@ func TestRunning(t *testing.T) {
 		open    bool // the store has its -wal and -shm files
 		running bool
 		records int
+		// withServer is Counts.WithServer after the read.
+		withServer int
 	}{
-		{"leftover -wal and -shm files with no server process don't make T3 run, though the reader reads them", false, true, false, 1},
-		{"T3's server process with its store's files makes T3 run", true, true, true, 1},
-		{"T3's server process with no -wal or -shm files doesn't make T3 run, and nothing is read", true, false, false, 0},
+		{"leftover -wal and -shm files with no server process don't make T3 run, though the reader reads them, and its record isn't counted as read with T3's server",
+			false, true, false, 1, 0},
+		{"T3's server process with its store's files makes T3 run, and its record is counted as read with T3's server", true, true, true, 1, 1},
+		{"T3's server process with no -wal or -shm files doesn't make T3 run, and nothing is read", true, false, false, 0, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -84,11 +90,15 @@ func TestRunning(t *testing.T) {
 			if tc.open && err != nil || !tc.open && !errors.Is(err, ErrNotRunning) {
 				t.Errorf("Poll gave %v", err)
 			}
-			if st := r.Status(); st.Running != tc.running {
+			st := r.Status()
+			if st.Running != tc.running {
 				t.Errorf("Running is %v, want %v", st.Running, tc.running)
 			}
 			if len(b.Messages) != tc.records {
 				t.Errorf("got %d records, want %d", len(b.Messages), tc.records)
+			}
+			if st.Witnessed != tc.records || st.WithServer != tc.withServer {
+				t.Errorf("the counts are %+v, want %d witnessed, %d of them with T3's server", st.Counts, tc.records, tc.withServer)
 			}
 		})
 	}

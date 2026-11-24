@@ -48,10 +48,24 @@ type Slot struct {
 	FocusProject string         `json:"focus_project,omitempty"`
 	Hosted       []string       `json:"hosted_sessions,omitempty"`
 	// Asleep is set when the slot overlaps a suspend or a gap between
-	// samples longer than SLEEP_GAP_S; Locked when it overlaps a screen
-	// lock. Either makes the slot a hard break.
+	// samples longer than SLEEP_GAP_S, unless slow sampling explains the
+	// gap (DESIGN 6.2 D14), and whenever the machine slept through it
+	// (slept); Locked when it overlaps a screen lock. Either makes the slot
+	// a hard break.
 	Asleep bool `json:"asleep"`
 	Locked bool `json:"locked"`
+	// slept is set when the machine slept through the slot, as relayed
+	// credit reads it (SM 2.1, D-relayed-sleep): the slot overlaps a
+	// suspend or a gap between samples longer than twice SLOW_SAMPLE_S
+	// (rules.sleptGap), whatever D14 makes of the gap. A slot slept
+	// through is also Asleep. A shorter gap, such as the minute between
+	// the samples of a context an agent app alone keeps live (DESIGN 3.3),
+	// is a hard break for every other window, unless slow sampling
+	// explains it (D14), but a relayed anchor's lead and its session's
+	// relayed reading are realized across it (creditor.relayLive). It is
+	// no field of SM 1.3's slot record, so neither Event nor the JSON
+	// carries it.
+	slept bool
 }
 
 // End returns the end of the slot.
@@ -189,14 +203,15 @@ func liveUnknown(recs []event.Event) bool {
 // earliestLead returns the earliest time a relayed lead can start for the
 // relay.message records in recs, COMPOSE_MAX_S before the earliest stamp
 // of those that can open one, and whether there is one. Those are the
-// records of declared none written at most RELAY_SEEN_LAG_S after their
-// stamps: any other pairs with nothing, or gives its prompt the app's
-// declaration, and opens no lead (SM 2.2 rule 9, 2.3).
+// records of declared none decided in time for their stamps, at most
+// RELAY_SEEN_LAG_S after them and at most relayAheadMS before
+// (decidedInTime): any other pairs with nothing, or gives its prompt the
+// app's declaration, and opens no lead (SM 2.2 rule 9, 2.3).
 func earliestLead(r rules, recs []event.Event) (int64, bool) {
 	from, ok := int64(math.MaxInt64), false
 	for _, e := range recs {
 		m, isRelay := e.Data.(*event.RelayMessage)
-		if isRelay && m.Declared == event.RelayDeclaredNone && e.T-m.SentAt <= r.relaySeenLag {
+		if isRelay && m.Declared == event.RelayDeclaredNone && r.decidedInTime(e.T, m.SentAt) {
 			from, ok = min(from, m.SentAt-r.composeMax), true
 		}
 	}
@@ -220,6 +235,10 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 	}
 	var (
 		locks, sleeps, gaps []span
+		// longGaps are the gaps between samples longer than twice
+		// SLOW_SAMPLE_S (rules.sleptGap), which relayed credit reads as
+		// slept through, with the sleeps (Slot.slept).
+		longGaps            []span
 		locked, asleep      bool
 		lockFrom, sleepFrom int64
 		haveSample          bool
@@ -233,13 +252,25 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 			if d.IdleKeysS != nil {
 				s.hasKeys, s.lastKey = true, e.T-msOf(*d.IdleKeysS)
 			}
-			if gap := e.T - lastSample; haveSample && gap > r.sleepGap && !(lastIdle >= r.contextIdle && gap <= r.slowGap) {
-				// SM 2.1: gaps come from wall-clock sample times. The open
-				// interval between the two samples is the gap. After
-				// CONTEXT_IDLE_S without input the agent samples once a
-				// minute (DESIGN 6.2 D14), and a gap that slow sampling
-				// explains is no sleep.
-				gaps = append(gaps, span{lastSample + 1, e.T})
+			if haveSample {
+				gap := e.T - lastSample
+				if gap > r.sleepGap && !(lastIdle >= r.contextIdle && gap <= r.slowGap) {
+					// SM 2.1: gaps come from wall-clock sample times. The
+					// open interval between the two samples is the gap.
+					// After CONTEXT_IDLE_S without input the agent samples
+					// once a minute (DESIGN 6.2 D14), and a gap that slow
+					// sampling explains is no sleep.
+					gaps = append(gaps, span{lastSample + 1, e.T})
+				}
+				if gap > r.sleptGap {
+					// Relayed credit reads only a gap longer than twice
+					// SLOW_SAMPLE_S as slept through, and reads it so
+					// whatever idle the sample before it showed and
+					// whatever D14 makes of it: while an agent app alone
+					// keeps the context live, the agent samples once a
+					// minute whatever the input (SM 2.1, D-relayed-sleep).
+					longGaps = append(longGaps, span{lastSample + 1, e.T})
+				}
 			}
 			// A sample after a suspend shows the machine awake again, even
 			// if the resume never arrived. The one taken at the suspend
@@ -329,7 +360,15 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 		last = floorMinute(now) + MinuteMS - event.SlotMS
 	}
 	n := int((last-p.first)/event.SlotMS) + 1
-	asleepAt := p.mark(n, sleeps, gaps)
+	// Every slot the machine slept through is asleep too, so the long gaps
+	// mark asleepAt as well as sleptAt. Under every table so far, each long
+	// gap is one of gaps already. Under a table whose SLEEP_GAP_S is more
+	// than twice SAMPLE_S, slowGap is longer than sleptGap, so D14 would
+	// excuse a long gap after CONTEXT_IDLE_S without input, and one whose
+	// SLEEP_GAP_S is more than twice SLOW_SAMPLE_S would take a long gap
+	// for no sleep at all. Such a gap is still a hard break.
+	asleepAt := p.mark(n, sleeps, gaps, longGaps)
+	sleptAt := p.mark(n, sleeps, longGaps)
 	lockedAt := p.mark(n, locks)
 
 	// A slot is decided once a sample at or after its end exists, since
@@ -371,7 +410,7 @@ func buildPresence(r rules, recs []event.Event, now int64, fl *focusLine) *prese
 		}
 		s := &p.slots[k]
 		s.Start, s.PresentUntil = a, b
-		s.Asleep, s.Locked = asleepAt[k], lockedAt[k]
+		s.Asleep, s.Locked, s.slept = asleepAt[k], lockedAt[k], sleptAt[k]
 		hasKeys := false
 		switch {
 		case si < len(p.samples):
