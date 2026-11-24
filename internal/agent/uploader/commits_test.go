@@ -518,8 +518,20 @@ func TestCommitUpload(t *testing.T) {
 		Login:  LoginFunc(func() (Credentials, bool) { return creds, true }),
 		Params: table, Client: srv.Client(), Draw: func(int64) int64 { return 0 }, Sched: sched.New(),
 	}
+	// start2 starts an uploader as the agent does, which records its start
+	// in state.json: its first request carries the labels, as privacy show
+	// knows from that.
+	starts := 0
 	start2 := func(t *testing.T) *Uploader {
 		t.Helper()
+		starts++
+		opts.Started = time.Now()
+		if err := opts.State.Put("agent", map[string]any{"version": "dev", "starts": starts, "started": opts.Started.UTC()}); err != nil {
+			t.Fatal(err)
+		}
+		if err := opts.State.Save(); err != nil {
+			t.Fatal(err)
+		}
 		u, err := New(opts)
 		if err != nil {
 			t.Fatal(err)
