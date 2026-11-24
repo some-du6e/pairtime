@@ -229,9 +229,10 @@ func TestCommitFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A batch sealed after the records, whose root the server holds under
-	// the sign-in, as the uploader's place in state.json says.
+	// the sign-in, as the uploader's place in state.json says. A
+	// checkpoint's t is a quarter hour.
 	at = start.Add(5 * time.Minute)
-	if _, err := w.Checkpoint("p_test", uint64(at.UnixMilli()), json.RawMessage(`{}`)); err != nil {
+	if _, err := w.Checkpoint("p_test", uint64(start.UnixMilli()), json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, err := w.Seal(); err != nil || !ok {

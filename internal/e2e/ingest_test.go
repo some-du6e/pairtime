@@ -364,11 +364,12 @@ func TestUploadToIngest(t *testing.T) {
 	t.Cleanup(func() { w.Close() })
 	// A batch sealed before the sign-in, as the agent seals while the
 	// computer isn't linked yet: the link's gap holds it, so its root never
-	// goes, nor a commit record seen before it.
+	// goes, nor a commit record seen before it. A checkpoint's t is a
+	// quarter hour.
 	clockMu.Lock()
 	now = start.Add(-5 * time.Minute)
 	clockMu.Unlock()
-	if _, err := w.Checkpoint("p_test", uint64(start.Add(-5*time.Minute).UnixMilli()), json.RawMessage(`{}`)); err != nil {
+	if _, err := w.Checkpoint("p_test", uint64(start.Add(-15*time.Minute).UnixMilli()), json.RawMessage(`{}`)); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := w.Seal(); err != nil {
@@ -738,10 +739,12 @@ func TestUploadToIngest(t *testing.T) {
 			late := start.Add(24*time.Hour + 5*time.Minute)
 			shaLate := strings.Repeat("e", 40)
 			writeCommits(t, dirs.Commits(), commitLine(shaLate, `["`+shaMain+`"]`, late, counts, `"actor":"human"`))
+			// The next quarter hour's checkpoint, and its batch sealed after it.
+			q := late.Truncate(15 * time.Minute).Add(15 * time.Minute)
 			clockMu.Lock()
-			now = late.Add(5 * time.Minute)
+			now = q.Add(5 * time.Minute)
 			clockMu.Unlock()
-			if _, err := w.Checkpoint("p_test", uint64(late.Add(5*time.Minute).UnixMilli()), json.RawMessage(`{}`)); err != nil {
+			if _, err := w.Checkpoint("p_test", uint64(q.UnixMilli()), json.RawMessage(`{}`)); err != nil {
 				t.Fatal(err)
 			}
 			if _, _, err := w.Seal(); err != nil {
