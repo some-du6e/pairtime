@@ -40,9 +40,9 @@ Raw prompt text, agent output, file paths and window titles stay in tier 0 on th
 | `event_id` | UUIDv7 | Unique, time-ordered |
 | `device_id` | random id | Per install, never a hardware hash (TP B1) |
 | `seq` | uint64 | Per-device sequence, gapless; the server uses it for exactly-once ingest (SP 8.2) |
-| `t` | int64 ms, UTC | Client wall time when the adapter saw the event. Hook payloads mostly carry no timestamp, so the hook binary stamps arrival time (HS 3.1, 4.1, 6.1) |
-| `mono` | int64 ms | Monotonic reading at the same moment; the server re-anchors `t` from it within one boot (SP 8.4) |
-| `boot_id` | string | Linux `boot_id`, or an id generated per boot elsewhere |
+| `t` | int64 ms, UTC | Client wall time of the event: when the adapter saw it, or the time its source states, as a transcript line's or a WakaTime heartbeat's own timestamp. Hook payloads mostly carry no timestamp, so the hook binary stamps arrival time (HS 3.1, 4.1, 6.1) |
+| `mono` | int64 ms | Monotonic reading of the clock `boot_id` names at the same moment, or 0 for none, as for a log line dated, by the wall clock, before the agent run that read it. A reading derived from the wall clock is never more than the agent's own reading of that clock when it took the record in. The server re-anchors `t` from it within one boot, and never a record with 0 (DESIGN 7.4) |
+| `boot_id` | string | The clock `mono` counts: Linux `boot_id`, or an id generated per boot elsewhere, for a stamp from the OS's clock, as a hook call's is, and the agent run's own id, `run-` and a random id, for the rest, as the events the agent makes itself and the records its log readers read, until the agent reads the OS's clock. A stamp the OS gave no reading for takes the run's id with `mono` 0, and a record with no reading keeps the id of the clock it would have read |
 | `source` | enum | `hook`, `log`, `otel`, `os`, `editor`, `shell`, `git`, `cli` (the AGENTS.md `pairtime track` fallback), `mcp` |
 | `harness` | enum | `claude_code`, `cursor`, `copilot`, `codex`, `gemini`, `devin`, `cline`, `opencode`, ... or `none` |
 | `harness_version` | string | As reported; parsers are pinned per version (HS 17.7) |
