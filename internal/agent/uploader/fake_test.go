@@ -135,9 +135,8 @@ var (
 	grammarForm = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+){0,3}([-+][0-9A-Za-z][0-9A-Za-z.-]{0,40})?$`)
 	releaseForm = regexp.MustCompile(`^v?[0-9]+(\.[0-9]+){0,3}([-+]` + releaseID + `([.-]` + releaseID + `)*)?$`)
 	paramsForm  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	// commitIDForm is a commit id and keyForm a key (ingest-v1 1, 2.3.3).
+	// commitIDForm is a commit id (ingest-v1 2.3.3).
 	commitIDForm = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
-	keyForm      = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 )
 
 // releaseID is one identifier of releaseForm's suffix.
@@ -658,7 +657,7 @@ func (f *fakeIngest) commit(raw json.RawMessage, receivedAt uint64) map[string]a
 		return refuse("too_many", "parents")
 	case !ids(c.Parents):
 		return refuse("bad_string", "parents")
-	case !keyForm.MatchString(c.Project):
+	case !projectKeyForm.MatchString(c.Project):
 		return refuse("bad_string", "project")
 	case c.ObservedAt < 1_577_836_800_000 || c.ObservedAt >= 4_102_444_800_000:
 		return refuse("bad_number", "observed_at")

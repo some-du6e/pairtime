@@ -545,7 +545,8 @@ func TestCommitUpload(t *testing.T) {
 	}
 	// shasIn returns the shas the bodies carry, each once, in the order
 	// they first went.
-	shasIn := func(bodies [][]byte) (order []string, most int) {
+	shasIn := func(t *testing.T, bodies [][]byte) (order []string, most int) {
+		t.Helper()
 		for _, js := range bodies {
 			var b Body
 			if err := json.Unmarshal(js, &b); err != nil {
@@ -591,7 +592,7 @@ func TestCommitUpload(t *testing.T) {
 				t.Errorf("the records got %v: want each accepted once", codes)
 			}
 			_, bodies, _ := fake.snapshot()
-			order, most := shasIn(bodies)
+			order, most := shasIn(t, bodies)
 			want := []string{testSHA(11), testSHA(12), testSHA(13), testSHA(14), testSHA(15)}
 			if !slices.Equal(order, want) {
 				t.Errorf("the records went in the order %v, not oldest day first", order)
@@ -621,7 +622,7 @@ func TestCommitUpload(t *testing.T) {
 				time.Sleep(100 * time.Millisecond)
 			}
 			_, bodies, _ := fake.snapshot()
-			if order, _ := shasIn(bodies[len(before):]); len(order) != 0 {
+			if order, _ := shasIn(t, bodies[len(before):]); len(order) != 0 {
 				t.Errorf("the restart sent the records %v again", order)
 			}
 			fake.mu.Lock()
@@ -642,7 +643,7 @@ func TestCommitUpload(t *testing.T) {
 				t.Errorf("the record's request carries %d roots: want its batch's root to have gone before it", pv.Batches)
 			}
 			_, before, _ := fake.snapshot()
-			if order, _ := shasIn(before); slices.Contains(order, testSHA(16)) {
+			if order, _ := shasIn(t, before); slices.Contains(order, testSHA(16)) {
 				t.Fatal("the record went beside its batch's root")
 			}
 			u.Wake()
