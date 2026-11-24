@@ -108,10 +108,12 @@ keep_prompt_text = false</code></pre>
 	<p>
 		<code>pairtime privacy delete</code>, typed in a terminal, deletes pairtime's key and everything pairtime keeps on
 		this computer, apart from pairtime itself, its settings without the names you gave the projects this computer
-		tracked, and install's record of what it changed, with its copies of the files it edited, so that uninstall can put
-		them back. Names that another computer sharing your config.toml wrote stay, and pairtime says how many. It sends
-		nothing to the pairtime server, so a name your dashboard shows stays there until you hide it there or remove this
-		computer. The hours it recorded can't be submitted after that.
+		knows of, and install's record of what it changed, with its copies of the files it edited, so that uninstall can put
+		them back. Names under projects this computer doesn't know of stay, such as those another computer sharing your
+		config.toml wrote or an older version of pairtime left behind, and pairtime says how many. It also sets pairtime
+		back to local-only mode, so pairtime uploads nothing until you sign in again. It sends nothing to the pairtime
+		server, so a name your dashboard shows stays there until you hide it there or remove this computer. The hours it
+		recorded can't be submitted after that.
 		Copies a backup or a synced folder already holds stay as they are, the key's file too when pairtime doctor says
 		pairtime keeps its key in a file. A button here comes in a later version of pairtime.
 	</p>

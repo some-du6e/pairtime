@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -36,9 +37,10 @@ holds stay as they are, the key's file too when pairtime doctor says
 pairtime keeps its key in a file.
 
 It also takes out of config.toml, at {config}, the names you gave the
-projects this computer tracked, and sets it back to local-only mode. A
-table there for a project this computer never tracked, as another computer
-sharing the file writes, stays, and pairtime says how many it left.
+projects this computer knows of, and sets it back to local-only mode, so
+pairtime uploads nothing until you sign in again. A table there for any
+other project, as another computer sharing the file writes or an older
+version of pairtime left behind, stays, and pairtime says how many it left.
 pairtime itself and your other settings stay. So does install's record of
 what it changed, with its copies of the files it edited, so that pairtime
 uninstall can put them back. pairtime starts again from nothing, under a
@@ -52,9 +54,9 @@ or remove this computer on your dashboard.
 Exit status:
   0  deleted, or there was nothing to delete
   1  something went wrong, or some of the device key had to stay where
-     pairtime can't reach it, or a name you gave one of this computer's
-     projects had to stay in config.toml; the message says what, and what
-     stays
+     pairtime can't reach it, or a name you gave one of the projects this
+     computer knows of had to stay in config.toml; the message says what,
+     and what stays
   2  usage error
   3  you said no, so nothing changed
 `
@@ -114,8 +116,8 @@ func runPrivacyDelete(args []string, stdout, stderr io.Writer) int {
 	}
 	_, kerr := keys.Inspect(dirs.Data)
 	running := agentLocked(dirs)
-	// The names the teen gave the projects this computer tracked, in
-	// config.toml, go too, and another computer's stay, counted
+	// The names the teen gave the projects this computer knows of, in
+	// config.toml, go too, and any other project's stay, counted
 	// (D-wipe-project-labels).
 	ofMine, others, _ := config.ProjectTables(dirs.ConfigFile(), wipedKeys(dirs).has)
 	if len(recorded) == 0 && kerr != nil && !running && ofMine == 0 {
@@ -124,7 +126,7 @@ func runPrivacyDelete(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if !*yes {
-		fmt.Fprintf(stdout, "This deletes pairtime's device key and everything pairtime recorded in %s: the text of your prompts it kept, your time, your daily totals and recaps, and this computer's sign-in. It also takes out of %s the names you gave the projects this computer tracked. The hours pairtime recorded so far can't be submitted any more. Copies a backup or a synced folder already holds stay as they are, the key's file too when pairtime doctor says pairtime keeps its key in a file. pairtime and your other settings stay, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back. It sends nothing to the pairtime server, where a name your dashboard shows stays until you hide it there or remove this computer. pairtime starts again from nothing.\n\n", install.Printable(dirs.Data), install.Printable(dirs.ConfigFile()))
+		fmt.Fprintf(stdout, "This deletes pairtime's device key and everything pairtime recorded in %s: the text of your prompts it kept, your time, your daily totals and recaps, and this computer's sign-in. It also takes out of %s the names you gave the projects this computer knows of, and sets it back to local-only mode, so pairtime uploads nothing until you sign in again. A table there for any other project, as another computer sharing the file writes or an older version of pairtime left behind, stays, and pairtime says how many. The hours pairtime recorded so far can't be submitted any more. Copies a backup or a synced folder already holds stay as they are, the key's file too when pairtime doctor says pairtime keeps its key in a file. pairtime and your other settings stay, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back. It sends nothing to the pairtime server, where a name your dashboard shows stays until you hide it there or remove this computer. pairtime starts again from nothing.\n\n", install.Printable(dirs.Data), install.Printable(dirs.ConfigFile()))
 		if !askYes(bufio.NewScanner(installStdin), stdout, "Type y to delete everything, or n to stop without changing anything: ") {
 			fmt.Fprintln(stdout, "Nothing changed.")
 			return exitDeclined
@@ -154,7 +156,7 @@ func runPrivacyDelete(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	defer release()
-	// The keys of the projects this computer tracked, read with the agent
+	// The keys of the projects this computer knows of, read with the agent
 	// stopped and before anything goes, since the files they are in go.
 	mine := wipedKeys(dirs)
 
@@ -172,41 +174,55 @@ func runPrivacyDelete(args []string, stdout, stderr io.Writer) int {
 		// damaged keystore.json can't name, which err says.
 		keyStays = err
 	}
-	if err := clearData(dirs.Data, wipeKeeps, nil); err != nil {
-		release()
-		return fail(fmt.Errorf("pairtime's device key is deleted, but some of what it recorded isn't: %w; close any program that has one of pairtime's files open, then run pairtime privacy delete again", err))
-	}
-	// The sign-in went with the keystore and account.json, so config.toml
-	// goes back to local-only, as pairtime logout leaves it.
+	// config.toml next, once the key is gone and before the data goes, so
+	// that a wipe that stops part of the way through has taken the names
+	// out too, by the keys read above, which a second run couldn't read
+	// again. The sign-in goes with the keystore and account.json, so the
+	// mode goes back to local-only, as pairtime logout leaves it. The names
+	// the teen gave the projects this computer knows of go: they are data
+	// about the teen, and no project's key names them once K_dev is gone
+	// (D-wipe-project-labels). The agent is stopped and the lock held, so no
+	// copy of config.toml an agent read writes them back. Any other
+	// project's tables stay, and leftAlone counts them.
+	cfgPath := install.Printable(dirs.ConfigFile())
+	mode := ""
 	if cfg, _, err := config.Load(dirs.ConfigFile()); err == nil && cfg.Mode == config.Online {
 		if err := config.SetLocal(dirs.ConfigFile()); err != nil {
 			fmt.Fprintf(stdout, "Left alone: config.toml still says mode = \"online\" (%v). Nothing uploads without a sign-in, and pairtime login links this computer again.\n", err)
+		} else {
+			mode = " " + cfgPath + " is back in local-only mode, so pairtime uploads nothing until you sign in again."
 		}
+	} else if err == nil {
+		mode = " " + cfgPath + " stays in local-only mode, so pairtime uploads nothing until you sign in again."
 	}
-	// The names the teen gave the projects this computer tracked go too:
-	// they are data about the teen, and no project's key names them once
-	// K_dev is gone (D-wipe-project-labels). The agent is stopped and the
-	// lock held, so no copy of config.toml an agent read writes them back.
-	// Another computer's tables stay, and leftAlone counts them.
-	cfgPath := install.Printable(dirs.ConfigFile())
-	forgot, namesStay := config.ForgetNames(dirs.ConfigFile(), mine.has)
-	names, settings := "", "Your settings in "+cfgPath+" stay"
+	forgot, namesStay := forgetNames(dirs, mine)
+	names := ""
 	if namesStay == nil && forgot.Removed > 0 {
-		names, settings = ", and from "+cfgPath+" the names you gave the projects this computer tracked", "Your other settings stay"
+		names = ", and from " + cfgPath + " the names you gave the projects this computer knows of"
 	}
-	const rest = ", and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back. It sent nothing to the pairtime server, where a name your dashboard shows stays until you hide it there or remove this computer."
-	if keyStays != nil {
-		fmt.Fprintf(stdout, "Deleted everything pairtime recorded in %s%s. %s%s\nLeft alone: %s\n", install.Printable(dirs.Data), names, settings, rest, install.Printable(keyStays.Error()))
-	} else {
-		fmt.Fprintf(stdout, "Deleted pairtime's device key and everything pairtime recorded in %s%s. %s%s\n", install.Printable(dirs.Data), names, settings, rest)
-	}
-	if namesStay != nil {
-		what := "the tables of this computer's projects under projects"
-		if len(forgot.ByHand) > 0 {
-			what = strings.Join(forgot.ByHand, ", ")
+	if err := clearData(dirs.Data, wipeKeeps, nil); err != nil {
+		// Part of what was recorded stays, so nothing says it was all
+		// deleted, and the agent isn't started again over it.
+		if names != "" {
+			fmt.Fprintf(stdout, "Took out of %s the names you gave the projects this computer knows of.%s\n", cfgPath, mode)
+		} else if mode != "" {
+			fmt.Fprintln(stdout, strings.TrimSpace(mode))
 		}
-		fmt.Fprintf(stdout, "Left alone: the names you gave some of the projects this computer tracked (%s); delete %s in %s by hand.\n", install.Printable(namesStay.Error()), install.Printable(what), cfgPath)
+		if keyStays != nil {
+			fmt.Fprintf(stdout, "Left alone: %s\n", install.Printable(keyStays.Error()))
+		}
+		namesLeftAlone(stdout, namesStay)
+		leftAlone(stdout, dirs, forgot.Left)
+		release()
+		return fail(fmt.Errorf("pairtime's device key is deleted, but some of what it recorded isn't: %w; close any program that has one of pairtime's files open, then run pairtime privacy delete again", err))
 	}
+	const rest = " Your other settings stay, and so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back. It sent nothing to the pairtime server, where a name your dashboard shows stays until you hide it there or remove this computer."
+	if keyStays != nil {
+		fmt.Fprintf(stdout, "Deleted everything pairtime recorded in %s%s.%s%s\nLeft alone: %s\n", install.Printable(dirs.Data), names, mode, rest, install.Printable(keyStays.Error()))
+	} else {
+		fmt.Fprintf(stdout, "Deleted pairtime's device key and everything pairtime recorded in %s%s.%s%s\n", install.Printable(dirs.Data), names, mode, rest)
+	}
+	namesLeftAlone(stdout, namesStay)
 	leftAlone(stdout, dirs, forgot.Left)
 	release()
 	code := 0
@@ -267,12 +283,18 @@ type keySet map[string]bool
 // has reports whether key is in s.
 func (s keySet) has(key string) bool { return s[key] }
 
-// wipedKeys returns the keys of the projects this computer tracked, whose
+// wipedKeys returns the keys of the projects this computer knows of, whose
 // tables in config.toml "delete everything" takes out
 // (D-wipe-project-labels): the git adapter's project map in state.json,
 // with each key one of its repos had before, every day's rollup in days/,
-// and project-names.json's codes, names and notes. A file that doesn't
-// read gives none, so their tables stay, and leftAlone counts them.
+// and from project-names.json its codes, its confirmed and sent names, the
+// keys it deletes or lists as hidden, and its notes of a name hidden on the
+// dashboard or dropped. A note of a name signed in elsewhere, or that
+// couldn't be read, counts only when state.json or a rollup has its key
+// too: SignedInElsewhere and loadNames write those for every name
+// config.toml has on (cfg.NamesOn), which in a config.toml computers share
+// holds another computer's keys. A file that doesn't read gives none. The
+// tables of keys it doesn't give stay, and leftAlone counts them.
 func wipedKeys(dirs home.Dirs) keySet {
 	keys := keySet{}
 	if m, err := projects.ReadMap(dirs.StateFile()); err == nil {
@@ -296,30 +318,72 @@ func wipedKeys(dirs home.Dirs) keySet {
 	for _, k := range days {
 		keys[k] = true
 	}
+	seen := maps.Clone(keys) // what this computer recorded itself
 	if n, err := uploader.ReadNames(dirs.Data); err == nil {
 		for _, m := range []map[string]string{n.Confirmed, n.Codes, n.Sent} {
 			for k := range m {
 				keys[k] = true
 			}
 		}
-		for k := range n.Hidden {
-			keys[k] = true
-		}
 		for _, k := range slices.Concat(n.Hides, n.Deleting) {
 			keys[k] = true
+		}
+		for k, h := range n.Hidden {
+			switch h.Reason {
+			case "", uploader.NoteDropped:
+				keys[k] = true
+			case uploader.NoteSignedIn, uploader.NoteUnreadable:
+				if seen[k] {
+					keys[k] = true
+				}
+			}
 		}
 	}
 	return keys
 }
 
+// forgetNames takes the names the teen gave the projects of mine, the keys
+// this computer knows of, out of config.toml (config.ForgetNames), and
+// with no key it knows of, only counts the tables of other projects there,
+// so that a config.toml it can't read or change fails nothing.
+func forgetNames(dirs home.Dirs, mine keySet) (config.Forgotten, error) {
+	if len(mine) > 0 {
+		return config.ForgetNames(dirs.ConfigFile(), mine.has)
+	}
+	var f config.Forgotten
+	_, f.Left, _ = config.ProjectTables(dirs.ConfigFile(), mine.has)
+	return f, nil
+}
+
+// namesLeftAlone says which names of the projects this computer knows of
+// had to stay in config.toml, and what to delete by hand, as err, from
+// config.ForgetNames, says once. For a config.toml that doesn't parse it
+// gives the line, never the decoder's message, which can quote the file.
+func namesLeftAlone(stdout io.Writer, err error) {
+	if err == nil {
+		return
+	}
+	why := err.Error()
+	var u *config.UnparsedError
+	if errors.As(err, &u) {
+		at := ""
+		if u.Line > 0 {
+			at = fmt.Sprintf(" at line %d", u.Line)
+		}
+		why = fmt.Sprintf("config: config.toml doesn't parse%s, so pairtime didn't change it; %s", at, u.Hand)
+	}
+	fmt.Fprintf(stdout, "Left alone: the names you gave some of the projects this computer knows of (%s).\n", install.Printable(why))
+}
+
 // leftAlone says how many tables under projects config.toml keeps of
-// projects this computer never tracked, as another computer sharing the
-// file writes, and where the file is, but never what they hold.
+// projects this computer doesn't know of, as another computer sharing the
+// file writes or an older version of pairtime left behind, and where the
+// file is, but never what they hold.
 func leftAlone(stdout io.Writer, dirs home.Dirs, n int) {
 	switch {
 	case n == 1:
-		fmt.Fprintf(stdout, "Left alone: 1 table under projects in %s, for a project this computer never tracked, as another computer sharing the file writes. If no other computer shares it, you can delete it by hand.\n", install.Printable(dirs.ConfigFile()))
+		fmt.Fprintf(stdout, "Left alone: 1 table under projects in %s, for a project this computer doesn't know of, as another computer sharing the file writes or an older version of pairtime left behind. If no other computer shares the file, you can delete it by hand.\n", install.Printable(dirs.ConfigFile()))
 	case n > 1:
-		fmt.Fprintf(stdout, "Left alone: %d tables under projects in %s, for projects this computer never tracked, as another computer sharing the file writes. If no other computer shares it, you can delete them by hand.\n", n, install.Printable(dirs.ConfigFile()))
+		fmt.Fprintf(stdout, "Left alone: %d tables under projects in %s, for projects this computer doesn't know of, as another computer sharing the file writes or an older version of pairtime left behind. If no other computer shares the file, you can delete them by hand.\n", n, install.Printable(dirs.ConfigFile()))
 	}
 }

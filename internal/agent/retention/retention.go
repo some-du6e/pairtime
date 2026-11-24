@@ -19,7 +19,7 @@
 //	device.project_names   project-names.json         the uploader, as each names answer replaces it and its notes stay 1,000 at most (capNotes); "delete everything" and uninstall
 //	device.transcripts     not copied                 nothing
 //	device.install         install/                   uninstall, once it has put back what install changed; "delete everything" keeps it (wipeKeeps)
-//	device.settings        config.toml                uninstall; "delete everything" takes out the tables of the projects this computer tracked (config.ForgetNames) and keeps the rest
+//	device.settings        config.toml                uninstall, which takes only this computer's tables out of a config.toml that is a link or in a linked folder; "delete everything" takes out the tables of the projects this computer knows of (config.ForgetNames), sets mode back to local-only and keeps the rest
 //	device.local_api       port.json                  "delete everything" and uninstall; the agent rewrites it at each start
 //	device.key             K_dev                      "delete everything" and uninstall
 //

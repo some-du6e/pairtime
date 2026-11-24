@@ -165,13 +165,17 @@ describe('Privacy', () => {
 			},
 		},
 		{
-			name: 'Delete everything says pairtime privacy delete deletes the key and everything kept, and that the button comes later',
+			name: 'Delete everything says pairtime privacy delete deletes the key and everything kept, but for the names of projects this computer doesn\'t know of, that it sets pairtime back to local-only mode, and that the button comes later',
 			check: (html) => {
 				const t = text(html);
 				expect(t).toContain("pairtime privacy delete , typed in a terminal, deletes pairtime's key and everything pairtime keeps on this computer");
 				expect(t).toContain(
-					"apart from pairtime itself, its settings without the names you gave the projects this computer tracked, and install's record of what it changed, with its copies of the files it edited, so that uninstall can put them back.",
+					"apart from pairtime itself, its settings without the names you gave the projects this computer knows of, and install's record of what it changed, with its copies of the files it edited, so that uninstall can put them back.",
 				);
+				expect(t).toContain(
+					'Names under projects this computer doesn\'t know of stay, such as those another computer sharing your config.toml wrote or an older version of pairtime left behind, and pairtime says how many.',
+				);
+				expect(t).toContain('It also sets pairtime back to local-only mode, so pairtime uploads nothing until you sign in again.');
 				expect(t).toContain('Copies a backup or a synced folder already holds stay as they are');
 				expect(t).not.toContain('Nobody can bring');
 				expect(t).toContain('A button here comes in a later version of pairtime.');

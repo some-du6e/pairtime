@@ -30,7 +30,7 @@ pairtime privacy keep-text off stops pairtime keeping the text of your
 prompts, and deletes the text it kept; pairtime privacy keep-text on
 keeps it again from then on. pairtime privacy delete deletes pairtime's
 device key and everything pairtime recorded on this computer, and the
-names you gave the projects this computer tracked in config.toml, and
+names you gave the projects this computer knows of in config.toml, and
 sends nothing to the pairtime server. Each one's --help says more.
 
 pairtime privacy show prints the next upload this computer will send to
@@ -58,7 +58,7 @@ the server's next answer shows one hidden on your dashboard.
 func init() {
 	register(command{
 		name:    "privacy",
-		summary: "Show the next upload, byte for byte, before it leaves this computer, turn keeping your prompts' text off or on, or delete everything pairtime recorded, with the names you gave this computer's projects",
+		summary: "Show the next upload, byte for byte, before it leaves this computer, turn keeping your prompts' text off or on, or delete everything pairtime recorded, with the names you gave the projects this computer knows of",
 		run:     runPrivacy,
 	})
 }

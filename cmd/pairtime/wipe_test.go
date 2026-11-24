@@ -18,6 +18,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
+	"github.com/some-du6e/pairtime/internal/agent/store"
 )
 
 // recordedEntries are what pairtime records in its data directory (DESIGN
@@ -82,7 +83,10 @@ func TestPrivacyDelete(t *testing.T) {
 		args     []string
 		answers  string
 		wantCode int
-		check    func(t *testing.T, dir, out string)
+		// stderr is a part of what privacy delete prints on standard error,
+		// "" for anything.
+		stderr string
+		check  func(t *testing.T, dir, out string)
 	}{
 		{
 			name: "delete everything deletes the device key and every store pairtime recorded",
@@ -185,7 +189,7 @@ func TestPrivacyDelete(t *testing.T) {
 			},
 		},
 		{
-			name: "the names the teen gave the projects this computer tracked go from config.toml, mode goes back to local-only, and another computer's table stays, counted but never named",
+			name: "the names the teen gave the projects this computer knows of go from config.toml, mode goes back to local-only, and another project's table stays, counted but never named",
 			fill: true, mode: config.Local, args: []string{"--yes"},
 			prepare: func(t *testing.T, dir string) {
 				knownProject(t, dir, wipeProjectKey)
@@ -203,20 +207,20 @@ func TestPrivacyDelete(t *testing.T) {
 				if want := "mode = \"local\"\n\n[display]\nshadow = false\n\n[projects." + farProjectKey + "]\nname = \"far-away\"\n"; string(got) != want {
 					t.Errorf("config.toml is\n%q\nwant\n%q", got, want)
 				}
-				if !strings.Contains(out, ", and from "+cfg+" the names you gave the projects this computer tracked. Your other settings stay") {
-					t.Errorf("the result doesn't say the names went from %s:\n%s", cfg, out)
+				if !strings.Contains(out, ", and from "+cfg+" the names you gave the projects this computer knows of. "+cfg+" is back in local-only mode, so pairtime uploads nothing until you sign in again. Your other settings stay") {
+					t.Errorf("the result doesn't say the names went from %s, and the mode back to local-only:\n%s", cfg, out)
 				}
-				if !strings.Contains(out, "Left alone: 1 table under projects in "+cfg+", for a project this computer never tracked") || strings.Contains(out, "far-away") {
+				if !strings.Contains(out, "Left alone: 1 table under projects in "+cfg+", for a project this computer doesn't know of") || strings.Contains(out, "far-away") {
 					t.Errorf("the result doesn't count the table it left, or names it:\n%s", out)
 				}
 			},
 		},
 		{
-			name: "a table of this computer's that spells projects in another case stays, named under Left alone, the rest of the wipe runs, and the exit status is 1",
+			name: "a table of this computer's that spells projects in another case stays, named under Left alone, another project's table is counted, the rest of the wipe runs, and the exit status is 1",
 			fill: true, mode: config.Local, args: []string{"--yes"}, wantCode: 1,
 			prepare: func(t *testing.T, dir string) {
 				knownProject(t, dir, wipeProjectKey)
-				cfg := "mode = \"local\"\n\n[Projects." + wipeProjectKey + "]\nname = \"chip8-emulator\"\n"
+				cfg := "mode = \"local\"\n\n[Projects." + wipeProjectKey + "]\nname = \"chip8-emulator\"\n\n[Projects." + farProjectKey + "]\nname = \"far-away\"\n"
 				if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil {
 					t.Fatal(err)
 				}
@@ -226,8 +230,11 @@ func TestPrivacyDelete(t *testing.T) {
 				if got, err := os.ReadFile(cfg); err != nil || !strings.Contains(string(got), "[Projects."+wipeProjectKey+"]") {
 					t.Errorf("config.toml is %q (%v), want it as it was", got, err)
 				}
-				if !strings.Contains(out, "Left alone: the names you gave some of the projects this computer tracked (") || !strings.Contains(out, "; delete [Projects."+wipeProjectKey+"] in "+cfg+" by hand.") {
+				if !strings.Contains(out, "Left alone: the names you gave some of the projects this computer knows of (") || !strings.Contains(out, "; delete [Projects."+wipeProjectKey+"] in "+cfg+" by hand).") {
 					t.Errorf("the result doesn't name the table to delete by hand:\n%s", out)
+				}
+				if strings.Count(out, "by hand") != 2 || !strings.Contains(out, "Left alone: 1 table under projects in "+cfg) || strings.Contains(out, "far-away") {
+					t.Errorf("the result says what to delete by hand other than once for the names and once for the other project's table, or doesn't count that table, or names it:\n%s", out)
 				}
 				for _, name := range recordedEntries {
 					if top := strings.Split(name, "/")[0]; exists(t, dir, top) {
@@ -237,7 +244,7 @@ func TestPrivacyDelete(t *testing.T) {
 			},
 		},
 		{
-			name: "a data directory with nothing recorded and a table of a project this computer never tracked has nothing to delete, and says how many tables it left",
+			name: "a data directory with nothing recorded and a table of a project this computer doesn't know of has nothing to delete, and says how many tables it left",
 			args: []string{"--yes"},
 			prepare: func(t *testing.T, dir string) {
 				cfg := "mode = \"local\"\n\n[projects." + farProjectKey + "]\nname = \"far-away\"\n"
@@ -252,6 +259,112 @@ func TestPrivacyDelete(t *testing.T) {
 				}
 				if !strings.Contains(out, "nothing to delete") || !strings.Contains(out, "Left alone: 1 table under projects in "+cfg) || strings.Contains(out, "far-away") {
 					t.Errorf("printed %q", out)
+				}
+			},
+		},
+		{
+			name: "a refused edit names a header-less entry of this computer's by its key path as written, with the header it is under, prints no label, lets the rest of the wipe run, and exits 1",
+			fill: true, mode: config.Local, args: []string{"--yes"}, wantCode: 1,
+			prepare: func(t *testing.T, dir string) {
+				knownProject(t, dir, wipeProjectKey)
+				cfg := "mode = \"local\"\n\n[Projects]\n" + wipeProjectKey + " = { name = \"chip8-emulator\" } # the emulator\n"
+				if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, dir, out string) {
+				cfg := filepath.Join(dir, "config.toml")
+				if !strings.Contains(out, "; delete "+wipeProjectKey+" under [Projects] in "+cfg+" by hand).") || strings.Contains(out, "chip8-emulator") || strings.Contains(out, "the emulator") {
+					t.Errorf("the result doesn't name the entry by its key path alone, or shows its label or comment:\n%s", out)
+				}
+				for _, name := range recordedEntries {
+					if top := strings.Split(name, "/")[0]; exists(t, dir, top) {
+						t.Errorf("%s is still there, though only the name stayed", top)
+					}
+				}
+			},
+		},
+		{
+			name: "the question and the result say delete everything sets the mode back to local-only, so pairtime uploads nothing until the teen signs in again",
+			fill: true, mode: config.Online, answers: "y\n",
+			check: func(t *testing.T, dir, out string) {
+				const mode = "local-only mode, so pairtime uploads nothing until you sign in again"
+				if n := strings.Count(out, mode); n != 2 {
+					t.Errorf("the question and the result say %q %d times, want 2:\n%s", mode, n, out)
+				}
+				if cfg, _, err := config.Load(filepath.Join(dir, "config.toml")); err != nil || cfg.Mode != config.Local {
+					t.Errorf("config.toml says mode %q (%v), want local", cfg.Mode, err)
+				}
+			},
+		},
+		{
+			name: "when some of what pairtime recorded can't be deleted once the key is gone, the names of this computer's projects still go, another project's table stays and is counted, and the exit status is 1",
+			fill: true, mode: config.Local, args: []string{"--yes"}, wantCode: 1,
+			stderr: "pairtime's device key is deleted, but some of what it recorded isn't",
+			prepare: func(t *testing.T, dir string) {
+				knownProject(t, dir, wipeProjectKey)
+				cfg := "mode = \"local\"\n\n[projects." + wipeProjectKey + "]\nname = \"chip8-emulator\"\n\n[projects." + farProjectKey + "]\nname = \"far-away\"\n"
+				if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				undeletable(t, filepath.Join(dir, "ledger", "old", "0123456789abcdef", "2026-10-01.seg"))
+			},
+			check: func(t *testing.T, dir, out string) {
+				cfg := filepath.Join(dir, "config.toml")
+				if got, err := os.ReadFile(cfg); err != nil || string(got) != "mode = \"local\"\n\n[projects."+farProjectKey+"]\nname = \"far-away\"\n" {
+					t.Errorf("config.toml is %q (%v), want this computer's table gone and the other project's kept", got, err)
+				}
+				if !strings.Contains(out, "Took out of "+cfg+" the names you gave the projects this computer knows of.") || !strings.Contains(out, "Left alone: 1 table under projects in "+cfg) || strings.Contains(out, "far-away") {
+					t.Errorf("the result doesn't say the names went and count the table it left, or names that table:\n%s", out)
+				}
+				if strings.Contains(out, "Deleted pairtime's device key and everything") {
+					t.Errorf("the result says everything was deleted:\n%s", out)
+				}
+				if _, err := keys.Inspect(dir); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("keys.Inspect: %v, want the key gone", err)
+				}
+				if exists(t, dir, "state.json") || !exists(t, dir, "ledger/old/0123456789abcdef/2026-10-01.seg") {
+					t.Errorf("state.json is there: %v, or the file that couldn't be deleted isn't", exists(t, dir, "state.json"))
+				}
+			},
+		},
+		{
+			name: "with no project's key this computer knows of, a config.toml that doesn't parse fails nothing: the wipe exits 0 and leaves it as it is",
+			fill: true, mode: config.Local, args: []string{"--yes"},
+			prepare: func(t *testing.T, dir string) {
+				if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("mode = [\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, dir, out string) {
+				if got, err := os.ReadFile(filepath.Join(dir, "config.toml")); err != nil || string(got) != "mode = [\n" {
+					t.Errorf("config.toml is %q (%v), want it as it was", got, err)
+				}
+				if strings.Contains(out, "Left alone") || exists(t, dir, "ledger") {
+					t.Errorf("the result leaves something alone, or the ledger is there (%v):\n%s", exists(t, dir, "ledger"), out)
+				}
+			},
+		},
+		{
+			name: "a table whose key only a signed-in note in project-names.json holds stays, as another computer's sharing config.toml would, and is counted, never named",
+			fill: true, mode: config.Local, args: []string{"--yes"},
+			prepare: func(t *testing.T, dir string) {
+				names := `{"v":1,"server":"","device":"","hidden":{"` + farProjectKey + `":{"label":"far-away","at":1,"reason":"signed_in"}}}`
+				if err := os.WriteFile(filepath.Join(dir, "project-names.json"), []byte(names), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				cfg := "mode = \"local\"\n\n[projects." + farProjectKey + "]\nname = \"far-away\"\n"
+				if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(cfg), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			check: func(t *testing.T, dir, out string) {
+				cfg := filepath.Join(dir, "config.toml")
+				if got, err := os.ReadFile(cfg); err != nil || string(got) != "mode = \"local\"\n\n[projects."+farProjectKey+"]\nname = \"far-away\"\n" {
+					t.Errorf("config.toml is %q (%v), want it as it was", got, err)
+				}
+				if !strings.Contains(out, "Left alone: 1 table under projects in "+cfg) || strings.Contains(out, "far-away") {
+					t.Errorf("the result doesn't count the table it left, or names it:\n%s", out)
 				}
 			},
 		},
@@ -304,6 +417,9 @@ func TestPrivacyDelete(t *testing.T) {
 			if code != tt.wantCode {
 				t.Fatalf("exit %d, want %d; stdout:\n%s\nstderr:\n%s", code, tt.wantCode, out.String(), errOut.String())
 			}
+			if !strings.Contains(errOut.String(), tt.stderr) {
+				t.Errorf("stderr is %q, want it to say %q", errOut.String(), tt.stderr)
+			}
 			tt.check(t, dir, out.String())
 		})
 	}
@@ -334,7 +450,7 @@ func TestPrivacyDeleteAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A name the teen gave a project this computer tracked, set while the
+	// A name the teen gave a project this computer knows of, set while the
 	// agent runs: project-names.json, which only an online uploader writes,
 	// knows its key. The default config.toml's comments show an example
 	// table, so this one's label is another.
@@ -406,16 +522,16 @@ func TestPrivacyDeleteAgent(t *testing.T) {
 	}
 }
 
-// wipeProjectKey is the key of a project this computer tracked in the tests
-// above, and farProjectKey one of another computer's sharing config.toml,
-// in the form the git adapter's keys have.
+// wipeProjectKey is the key of a project this computer knows of in the
+// tests above, and farProjectKey one of another computer's sharing
+// config.toml, in the form the git adapter's keys have.
 const (
 	wipeProjectKey = "g7c41e9a2d05b8f63e1a94c7d2b6f0e85"
 	farProjectKey  = "g5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b"
 )
 
 // knownProject writes a state.json in the data directory dir whose
-// project map has a repo with key, so that this computer tracked it.
+// project map has a repo with key, so that this computer knows of it.
 func knownProject(t *testing.T, dir, key string) {
 	t.Helper()
 	st := `{"v":1,"projects":{"repos":[{"common_dir":"/home/teen/code/chip8-emulator/.git","key":"` + key + `","kind":"repo"}]}}`
@@ -426,7 +542,7 @@ func knownProject(t *testing.T, dir, key string) {
 
 // TestPrivacyDeleteXDG runs "delete everything" with pairtime's data and
 // config folders apart, as XDG_DATA_HOME and XDG_CONFIG_HOME put them on
-// Linux without PAIRTIME_HOME: the names go from the config folder's
+// Linux with PAIRTIME_HOME unset: the names go from the config folder's
 // config.toml, which the result names by its own path.
 func TestPrivacyDeleteXDG(t *testing.T) {
 	if runtime.GOOS != "linux" {
@@ -440,7 +556,10 @@ func TestPrivacyDeleteXDG(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
+			// Unset, not empty, as on a teen's computer: t.Setenv puts it
+			// back after the test.
 			t.Setenv(home.EnvHome, "")
+			os.Unsetenv(home.EnvHome)
 			t.Setenv("HOME", filepath.Join(root, "home"))
 			t.Setenv("XDG_DATA_HOME", filepath.Join(root, "data"))
 			t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
@@ -468,7 +587,7 @@ func TestPrivacyDeleteXDG(t *testing.T) {
 			if got, err := os.ReadFile(dirs.ConfigFile()); err != nil || string(got) != "mode = \"local\"\n\n" {
 				t.Errorf("config.toml is %q (%v), want it without the project's table", got, err)
 			}
-			if !strings.Contains(out.String(), "from "+dirs.ConfigFile()+" the names you gave the projects this computer tracked") {
+			if !strings.Contains(out.String(), "from "+dirs.ConfigFile()+" the names you gave the projects this computer knows of") {
 				t.Errorf("the result doesn't name config.toml by its path, %s:\n%s", dirs.ConfigFile(), out.String())
 			}
 			if exists(t, dirs.Data, "state.json") {
@@ -492,5 +611,79 @@ func waitForKey(t *testing.T, dir, not string) string {
 			t.Fatalf("no new device key in %s within 30 s: %v", dir, err)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestWipedKeys checks which keys "delete everything" counts as this
+// computer's, whose tables it takes out of config.toml
+// (D-wipe-project-labels): those of what this computer recorded itself,
+// and of project-names.json but for a note of a name signed in elsewhere
+// or one that couldn't be read, which a sign-in writes for every name
+// config.toml has on, another computer's in a shared file included.
+func TestWipedKeys(t *testing.T) {
+	names := func(fields string) string { return `{"v":1,"server":"","device":"",` + fields + `}` }
+	note := func(reason string) string {
+		r := ""
+		if reason != "" {
+			r = `,"reason":"` + reason + `"`
+		}
+		return names(`"hidden":{"` + wipeProjectKey + `":{"label":"chip8-emulator","at":1` + r + `}}`)
+	}
+	tests := []struct {
+		name string
+		// state and alias put the key in state.json's project map, as a
+		// repo's key or a key one had before; day puts it in a rollup.
+		state, alias, day bool
+		names             string // project-names.json, "" for none
+		want              bool
+	}{
+		{name: "a key state.json's project map has is this computer's", state: true, want: true},
+		{name: "a key a repo in state.json's project map had before is this computer's", alias: true, want: true},
+		{name: "a key only a day's rollup has is this computer's", day: true, want: true},
+		{name: "a key only project-names.json's codes hold is this computer's", names: names(`"codes":{"` + wipeProjectKey + `":"c8"}`), want: true},
+		{name: "a key only its confirmed names hold is this computer's", names: names(`"confirmed":{"` + wipeProjectKey + `":"chip8-emulator"}`), want: true},
+		{name: "a key only its sent names hold is this computer's", names: names(`"sent":{"` + wipeProjectKey + `":"chip8-emulator"}`), want: true},
+		{name: "a key only the keys it deletes hold is this computer's", names: names(`"deleting":["` + wipeProjectKey + `"]`), want: true},
+		{name: "a key only the keys it lists as hidden hold is this computer's", names: names(`"hides":["` + wipeProjectKey + `"]`), want: true},
+		{name: "a key only a note of a name hidden on the dashboard holds is this computer's", names: note(""), want: true},
+		{name: "a key only a note of a name the server dropped holds is this computer's", names: note("dropped"), want: true},
+		{name: "a key only a note of a name signed in elsewhere holds isn't this computer's, as a config.toml computers share gives another computer's keys such notes", names: note("signed_in")},
+		{name: "a key only a note of a name that couldn't be read holds isn't this computer's", names: note("unreadable")},
+		{name: "a signed-in note's key that state.json's project map has too is this computer's", state: true, names: note("signed_in"), want: true},
+		{name: "an unreadable note's key that a day's rollup has too is this computer's", day: true, names: note("unreadable"), want: true},
+		{name: "a note with a reason this version doesn't know counts for nothing", names: note("later")},
+		{name: "with nothing recorded, no key is this computer's"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv(home.EnvHome, dir)
+			dirs, err := home.Default()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.state {
+				knownProject(t, dir, wipeProjectKey)
+			}
+			if tt.alias {
+				st := `{"v":1,"projects":{"repos":[{"common_dir":"/home/teen/code/chip8-emulator/.git","key":"` + farProjectKey + `","kind":"repo","aliases":["` + wipeProjectKey + `"]}]}}`
+				if err := os.WriteFile(dirs.StateFile(), []byte(st), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.day {
+				if err := store.WriteDay(dirs.Days(), store.Day{Date: "2026-11-20", Zone: "UTC", Projects: []store.DayProject{{Project: wipeProjectKey}}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.names != "" {
+				if err := os.WriteFile(filepath.Join(dirs.Data, "project-names.json"), []byte(tt.names), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := wipedKeys(dirs).has(wipeProjectKey); got != tt.want {
+				t.Errorf("wipedKeys has the key: %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

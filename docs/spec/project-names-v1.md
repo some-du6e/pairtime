@@ -92,7 +92,7 @@ It goes when:
 - the device is removed and 90 days pass: the retention job deletes the names of a device removed 90 days ago, as the server's rule for a removed device's own row has it (DESIGN 4.4's `device_id` row, `server.devices`). A device linked again before then keeps them (`server.project_names`, docs/retention.json);
 - the account is deleted, names and hides alike.
 
-`pairtime privacy delete` ("delete everything", DESIGN 8.8) takes the names of the projects this computer tracked out of `config.toml`, leaves the tables of keys it never had, deletes `project-names.json` and the sign-in, and sends nothing: a name the server shows for that device stays until the owner hides it on the dashboard, or until the device's purge 90 days after it is removed.
+`pairtime privacy delete` ("delete everything", DESIGN 8.8) takes the names of the projects this computer knows of out of `config.toml`, leaves the tables of keys it doesn't know at the time, deletes `project-names.json` and the sign-in, and sends nothing: a name the server shows for that device stays until the owner hides it on the dashboard, or until the device's purge 90 days after it is removed.
 
 The computer never sends a name on its own (D-owner-names). It sends a set only when the owner turns a name on or changes its label, and a delete only when they turn it off, or once it turned off a name the server lists as hidden. It sends a name only for a key of its own projects, never one it didn't produce, such as a key in a `config.toml` copied from another computer. A read, `{}`, which carries no name, goes when the agent starts and once a day, so the computer learns its codes and the names the owner hid.
 
