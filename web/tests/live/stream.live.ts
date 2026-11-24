@@ -140,18 +140,35 @@ test("an open dashboard fetches itself again at its account's next local midnigh
 			refetches.push(r.url());
 		}
 	});
+	// The page counts midnight from when a refetch's answer arrives, by its
+	// own clock, so the first open's refetch waits here until that clock is
+	// paused, and arrives at a known time.
+	let release: () => void = () => {};
+	const released = new Promise<void>((resolve) => {
+		release = () => resolve();
+	});
+	await page.route(`${base}/dashboard`, async (route) => {
+		if (route.request().resourceType() === 'fetch') {
+			await released;
+		}
+		await route.continue();
+	});
 	await signIn(page, base);
 	const live = page.locator('#live');
 	await expect(live).toHaveAttribute('data-stream', 'open');
 	// The first open's refetch, for what changed since the page was drawn.
 	await expect.poll(() => refetches.length).toBe(1);
+	await live.evaluate((el) => el.setAttribute('data-spec-drawn', ''));
+	const now = await page.evaluate(() => Date.now());
+	await page.clock.pauseAt(now + 1000);
+	release();
+	// The refetch's #live has taken the place of the page's, and armed the
+	// midnight refetch from the paused clock.
+	await expect(live).not.toHaveAttribute('data-spec-drawn');
 	const left = Number(await live.getAttribute('data-next-day-in'));
 	expect(left).toBeGreaterThan(0);
 	expect(left).toBeLessThanOrEqual(25 * 3600 * 1000);
-	const now = await page.evaluate(() => Date.now());
-	await page.clock.pauseAt(now + 1000);
-	// Short of midnight, with 9 s for the refetch to have come back before
-	// now, nothing.
+	// Short of midnight, nothing.
 	await page.clock.fastForward(left - 10_000);
 	expect(refetches).toHaveLength(1);
 	// Past midnight and the minute of spread the refetch may wait.
@@ -188,9 +205,10 @@ test('a dashboard whose stream comes back while it polls asks the snapshot once 
 	// While the page polls, an upload, and then the stream gets through.
 	await upload(request, { minute: 3, rev: 1, seconds: 60, state: 'final' });
 	holding = false;
-	// The page's own retry of a refused stream comes within 10 s of its
-	// clock, and its next poll only 30 s after the last, which its clock
-	// never reaches here: only the poll the stream's return makes can show
+	// Chromium tries an aborted stream again itself, in real time, a few
+	// seconds apart. The page's clock moves 10 s too, for its own retry if
+	// a stream came back refused instead, and stays short of its next poll,
+	// 30 s after the last: only the poll the stream's return makes can show
 	// the upload.
 	await page.clock.fastForward(10_000);
 	await expect(hero).toHaveText('4m', { timeout: 40_000 });
