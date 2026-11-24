@@ -116,6 +116,18 @@ func TestEndpoints(t *testing.T) {
 				}
 			}
 		}},
+		{name: "a refusal the hub retries is logged as a warning with its cause, which the answer leaves out", run: func(t *testing.T, f *fixture) {
+			header := f.hub.header()
+			header["kid"] = brokenKid
+			rec := f.call(t, privacy.DeletePath, sign(t, f.hub.key, header, f.hub.claims(f.now, privacy.ActionDelete, subject(nil, nil, nil))))
+			if rec.Code != http.StatusServiceUnavailable || errorOf(t, rec)["error"] != "jwks_unavailable" || strings.Contains(rec.Body.String(), "502") {
+				t.Errorf("answered %d %s, want 503 jwks_unavailable without its cause", rec.Code, rec.Body.String())
+			}
+			logs := f.logs.String()
+			if !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "outcome=jwks_unavailable") || !strings.Contains(logs, "answered 502") {
+				t.Errorf("the log doesn't warn of the refusal with its cause:\n%s", logs)
+			}
+		}},
 		{name: "a GET is refused, since the hub only POSTs", run: func(t *testing.T, f *fixture) {
 			rec := httptest.NewRecorder()
 			f.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, privacy.DeletePath, nil))

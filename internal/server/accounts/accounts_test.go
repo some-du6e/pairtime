@@ -212,13 +212,20 @@ func TestSignIn(t *testing.T) {
 			},
 		},
 		{
-			name:    "an account that turns ineligible loses its email and Slack id, though HCA sent both",
+			name:    "an account that turns ineligible loses its email and Slack id, though HCA sent both, and keeps the keyed index of the email it had, so a deletion request finds it",
 			before:  []Identity{verified()},
 			id:      Identity{Sub: "ident!abc123", SlackID: "U0NEWSLACK", Email: "new@example.org", Status: Ineligible},
 			wantErr: ErrIneligible,
 			check: func(t *testing.T, s *Store, db *store.DB, _ *Session, _ bool) {
-				if n := count(t, db, `SELECT count(*) FROM users WHERE verification_status = 'ineligible' AND slack_id IS NULL AND email_ct IS NULL AND email_index IS NULL`); n != 1 {
+				if n := count(t, db, `SELECT count(*) FROM users WHERE verification_status = 'ineligible' AND slack_id IS NULL AND email_ct IS NULL`); n != 1 {
 					t.Error("the ineligible account's row still holds an email or a Slack id")
+				}
+				var index sql.NullString
+				if err := db.Read.QueryRow(`SELECT email_index FROM users`).Scan(&index); err != nil {
+					t.Fatal(err)
+				}
+				if want := testCipher(t).Index(verified().Email); index.String != want {
+					t.Errorf("the ineligible account's email index is %q, want the index of the email it had, %q", index.String, want)
 				}
 			},
 		},

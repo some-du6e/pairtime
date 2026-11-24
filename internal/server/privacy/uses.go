@@ -14,10 +14,12 @@ import (
 )
 
 // PruneAfter is how long past its token's last valid moment, exp plus
-// Leeway, a jti's row stays. Requests check their tokens against clocks
-// read at different moments, and a row pruned by one request's clock
-// mustn't reopen a token another request has just checked, so the rows
-// outlive the tokens by far more than a request takes.
+// Leeway, a jti's row stays at least. Requests check their tokens against
+// clocks read at different moments, and a row pruned by one request's
+// clock mustn't reopen a token another request has just checked, so the
+// rows outlive the tokens by far more than a request takes. A row goes
+// with the next request's Take after that, which may be much later: the
+// hub calls only when someone asks Hack Club for a deletion.
 const PruneAfter = time.Hour
 
 // JTIKey is the key privacy_token_uses records a jti under: its hex

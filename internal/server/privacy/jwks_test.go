@@ -12,6 +12,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -85,6 +87,8 @@ func TestJWKS(t *testing.T) {
 		wantStatus  int
 		wantCode    string
 		wantFetches int
+		// wantCause is a part of the error's cause, which pairtimed logs.
+		wantCause string
 	}
 	tests := []struct {
 		name  string
@@ -109,7 +113,7 @@ func TestJWKS(t *testing.T) {
 		}},
 		{name: "a set that can't be fetched is a 503 jwks_unavailable, keys older than 300 s aren't used, and a failed fetch isn't tried again for 30 s", steps: []step{
 			{serve: func(k *keySet) { k.set(200, jwk(t, "a", &a.PublicKey)) }, kid: "a", want: a, wantFetches: 1},
-			{after: 301 * time.Second, serve: func(k *keySet) { k.set(500) }, kid: "a", wantStatus: 503, wantCode: "jwks_unavailable", wantFetches: 2},
+			{after: 301 * time.Second, serve: func(k *keySet) { k.set(500) }, kid: "a", wantStatus: 503, wantCode: "jwks_unavailable", wantFetches: 2, wantCause: "answered 500"},
 			{after: 10 * time.Second, kid: "made-up", wantStatus: 503, wantCode: "jwks_unavailable", wantFetches: 2},
 			{after: 20 * time.Second, serve: func(k *keySet) { k.set(200, jwk(t, "a", &a.PublicKey)) }, kid: "a", want: a, wantFetches: 3},
 		}},
@@ -138,7 +142,7 @@ func TestJWKS(t *testing.T) {
 			srv := httptest.NewServer(set)
 			t.Cleanup(srv.Close)
 			now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
-			j := &privacy.JWKS{URL: srv.URL, Client: srv.Client(), Now: func() time.Time { return now }}
+			j := &privacy.JWKS{URL: srv.URL, Transport: srv.Client().Transport, Now: func() time.Time { return now }}
 			for i, s := range tt.steps {
 				now = now.Add(s.after)
 				if s.serve != nil {
@@ -155,10 +159,69 @@ func TestJWKS(t *testing.T) {
 					if !errors.As(err, &e) || e.Status != s.wantStatus || e.Code != s.wantCode {
 						t.Fatalf("step %d: Key(%q) error = %v, want %d %s", i, s.kid, err, s.wantStatus, s.wantCode)
 					}
+					if s.wantCause != "" && (e.Err == nil || !strings.Contains(e.Err.Error(), s.wantCause)) {
+						t.Fatalf("step %d: Key(%q)'s cause is %v, want one saying %q", i, s.kid, e.Err, s.wantCause)
+					}
 				}
 				if n := set.count(); n != s.wantFetches {
 					t.Fatalf("step %d: the set was fetched %d times, want %d", i, n, s.wantFetches)
 				}
+			}
+		})
+	}
+}
+
+// TestJWKSRedirects checks the client JWKS builds around its transport:
+// it follows up to three redirects to https, and no fourth and none away
+// from https, which config's https-only check on jwks_url relies on.
+func TestJWKSRedirects(t *testing.T) {
+	a := newKey(t)
+	set := &keySet{}
+	set.set(200, jwk(t, "a", &a.PublicKey))
+	plain := httptest.NewServer(set)
+	t.Cleanup(plain.Close)
+	mux := http.NewServeMux()
+	mux.Handle("/keys", set)
+	mux.HandleFunc("/hop/{n}", func(w http.ResponseWriter, r *http.Request) {
+		n, err := strconv.Atoi(r.PathValue("n"))
+		if err != nil || n < 1 {
+			http.NotFound(w, r)
+			return
+		}
+		next := "/keys"
+		if n > 1 {
+			next = "/hop/" + strconv.Itoa(n-1)
+		}
+		http.Redirect(w, r, next, http.StatusFound)
+	})
+	mux.HandleFunc("/to-http", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+"/keys", http.StatusFound)
+	})
+	srv := httptest.NewTLSServer(mux)
+	t.Cleanup(srv.Close)
+	tests := []struct {
+		name      string
+		path      string
+		wantKey   bool
+		wantCause string
+	}{
+		{name: "three redirects to https are followed", path: "/hop/3", wantKey: true},
+		{name: "a fourth redirect is refused", path: "/hop/4", wantCause: "too many"},
+		{name: "a redirect away from https is refused", path: "/to-http", wantCause: "away from https"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			j := &privacy.JWKS{URL: srv.URL + tt.path, Transport: srv.Client().Transport}
+			got, err := j.Key(context.Background(), "a")
+			if tt.wantKey {
+				if err != nil || !got.Equal(&a.PublicKey) {
+					t.Fatalf("Key = %v, %v; want the set's key", got, err)
+				}
+				return
+			}
+			var e *privacy.Error
+			if !errors.As(err, &e) || e.Code != "jwks_unavailable" || e.Err == nil || !strings.Contains(e.Err.Error(), tt.wantCause) {
+				t.Fatalf("Key error = %v, want a 503 jwks_unavailable whose cause says %q", err, tt.wantCause)
 			}
 		})
 	}

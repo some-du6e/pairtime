@@ -3,15 +3,22 @@
 package privacy_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/accounts"
 	"github.com/some-du6e/pairtime/internal/server/privacy"
+	"github.com/some-du6e/pairtime/internal/server/retention"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/store/storetest"
 )
@@ -41,6 +48,15 @@ func TestTables(t *testing.T) {
 				if placed[n] == "" {
 					t.Errorf("%s is in no list: add it to the eraser's steps, or to OtherTables if it holds nothing of an account", n)
 				}
+			}
+		}},
+		{name: "the tables the eraser leaves are exactly retention.json's no_personal_data, so no other table can skip it", check: func(t *testing.T) {
+			p, err := retention.Default()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := slices.Sorted(slices.Values(privacy.OtherTables)), slices.Sorted(slices.Values(p.NoPersonalData)); !slices.Equal(got, want) {
+				t.Errorf("OtherTables is %v, and no_personal_data %v: a table that holds an account's rows goes in the eraser's steps, and one kept after an erasure gets a list of its own, as LeafTable does", got, want)
 			}
 		}},
 		{name: "every table the lists name exists", check: func(t *testing.T) {
@@ -121,8 +137,8 @@ func TestErase(t *testing.T) {
 			if b, a := mentions(before, marks(f, other)...), mentions(after, marks(f, other)...); !reflect.DeepEqual(b, a) {
 				t.Errorf("the other account's rows changed:\nbefore %v\nafter  %v", b, a)
 			}
-			if got := len(after["day_leaves"]); got != 1 {
-				t.Errorf("%d days keep their leaves, want the shared day's alone", got)
+			if got := after["day_leaves"]; len(got) != 1 || !strings.HasPrefix(got[0], fmt.Sprint(day(sharedDay))+"|") {
+				t.Errorf("the days that keep their leaves are %v, want the shared day's, %d, alone", got, day(sharedDay))
 			}
 			if !reflect.DeepEqual(before["day_heads"], after["day_heads"]) {
 				t.Error("the day heads changed")
@@ -198,6 +214,29 @@ func TestErase(t *testing.T) {
 		{name: "an identity that isn't the matched account's needs a person", run: func(t *testing.T, f *fixture) {
 			world(t, f)
 			conflict(t, f.ask(t, privacy.ActionDelete, subject([]string{teen.email}, nil, "ident!someone-else"), false))
+		}},
+		{name: "an account Hack Club Auth turned ineligible is found by its email alone, and erased", run: func(t *testing.T, f *fixture) {
+			ctx := context.Background()
+			acc, err := accounts.New(accounts.Options{DB: f.db, Writer: f.w, Emails: f.emails, MayCreate: func(string) bool { return true }, Now: func() time.Time { return f.now }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			yes := true
+			id := accounts.Identity{Sub: "ident!young1", SlackID: "U0YOUNG001", Email: "young@example.org", Status: accounts.Verified, YSWSEligible: &yes}
+			if _, _, err := acc.SignIn(ctx, id, accounts.Login{}); err != nil {
+				t.Fatal(err)
+			}
+			id.Status = accounts.Ineligible
+			if _, _, err := acc.SignIn(ctx, id, accounts.Login{}); !errors.Is(err, accounts.ErrIneligible) {
+				t.Fatalf("the ineligible sign-in = %v, want ErrIneligible", err)
+			}
+			r := report(t, f.ask(t, privacy.ActionDelete, subject([]string{"young@example.org"}, nil, nil), false))
+			if !r.Found || r.Deleted["users"] != 1 {
+				t.Errorf("found %v, deleted %v; want the ineligible account found by its email and its users row deleted", r.Found, r.Deleted)
+			}
+			if left := mentions(f.dump(t), "ident!young1", f.emails.Index("young@example.org")); len(left) > 0 {
+				t.Errorf("rows that name the ineligible account are left: %v", left)
+			}
 		}},
 		{name: "after an erasure, the next request finds nobody", run: func(t *testing.T, f *fixture) {
 			world(t, f)

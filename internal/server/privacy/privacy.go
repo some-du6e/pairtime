@@ -20,6 +20,7 @@ package privacy
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -146,9 +147,15 @@ func (s *Service) deleteSubject(ctx context.Context, c Claims) (Report, error) {
 }
 
 // exportSubject counts what is held in one read transaction, so the counts
-// agree with each other.
+// agree with each other: SQLite's WAL gives a transaction one snapshot,
+// and on Postgres, whose READ COMMITTED takes one a statement, the
+// transaction asks for REPEATABLE READ.
 func (s *Service) exportSubject(ctx context.Context, c Claims) (Report, error) {
-	tx, err := s.o.DB.Read.BeginTx(ctx, nil)
+	var opts *sql.TxOptions
+	if s.o.DB.Engine == store.Postgres {
+		opts = &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true}
+	}
+	tx, err := s.o.DB.Read.BeginTx(ctx, opts)
 	if err != nil {
 		return Report{}, err
 	}
@@ -165,7 +172,16 @@ func (s *Service) refuse(w http.ResponseWriter, action, requestID string, err er
 		s.o.Logger.Error("privacy request failed", "request_id", requestID, "action", action, "err", err)
 		e = &Error{Status: http.StatusInternalServerError, Code: "internal_error"}
 	}
-	s.o.Logger.Info("privacy request refused", "request_id", requestID, "action", action, "outcome", e.Code, "status", e.Status)
+	args := []any{"request_id", requestID, "action", action, "outcome", e.Code, "status", e.Status}
+	if e.Status >= 500 {
+		// The hub retries these, and a person may need to see why.
+		if e.Err != nil {
+			args = append(args, "err", e.Err)
+		}
+		s.o.Logger.Warn("privacy request refused", args...)
+	} else {
+		s.o.Logger.Info("privacy request refused", args...)
+	}
 	body := map[string]string{"error": e.Code}
 	if e.Reason != "" {
 		body["reason"] = e.Reason

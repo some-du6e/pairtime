@@ -67,14 +67,23 @@ type Error struct {
 	Code   string
 	// Reason is why a manual_review_required request needs a person.
 	Reason string
+	// Err is the cause, for pairtimed's own log and never the answer:
+	// what failed when the hub's keys couldn't be fetched, say.
+	Err error
 }
 
 func (e *Error) Error() string {
+	msg := fmt.Sprintf("privacy: %d %s", e.Status, e.Code)
 	if e.Reason != "" {
-		return fmt.Sprintf("privacy: %d %s: %s", e.Status, e.Code, e.Reason)
+		msg += ": " + e.Reason
 	}
-	return fmt.Sprintf("privacy: %d %s", e.Status, e.Code)
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	return msg
 }
+
+func (e *Error) Unwrap() error { return e.Err }
 
 // badToken is a 401: a token that isn't one the hub signed for this server
 // and this moment.
@@ -284,19 +293,14 @@ func (v *Verifier) claims(payload []byte, action string, now time.Time) (Claims,
 	return c, nil
 }
 
-// decodeObject decodes one JSON object into v, and nothing after it.
+// decodeObject decodes one JSON object into v, and nothing after it:
+// json.Unmarshal refuses anything but space after the value, a closing
+// bracket or brace included.
 func decodeObject(data []byte, v any) error {
-	if len(bytes.TrimSpace(data)) == 0 || bytes.TrimSpace(data)[0] != '{' {
+	if t := bytes.TrimSpace(data); len(t) == 0 || t[0] != '{' {
 		return errors.New("not a JSON object")
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	if err := dec.Decode(v); err != nil {
-		return err
-	}
-	if dec.More() {
-		return errors.New("data after the JSON object")
-	}
-	return nil
+	return json.Unmarshal(data, v)
 }
 
 // hasAudience reports whether aud, a string or an array of strings, names

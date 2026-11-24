@@ -225,9 +225,10 @@ func TestPrivacyNotice(t *testing.T) {
 			notWant: []string{"privacy hub"},
 		},
 		{
-			name: "with the privacy hub set the notice says Hack Club can reach this server",
-			opts: Options{PrivacyHub: true},
-			want: []string{"through the same privacy hub it uses for Hackatime"},
+			name:    "with the privacy hub set the notice says Hack Club can delete your data here or tell you what is held, and promises no export of the data itself",
+			opts:    Options{PrivacyHub: true},
+			want:    []string{"can also delete your pairtime data for you, or tell you what this server holds of it, through the same privacy hub it uses for Hackatime"},
+			notWant: []string{"export or delete your pairtime data"},
 		},
 		{
 			name:    "the notice says this server can read what you reveal, and where the sealing stops (DESIGN 7.6)",

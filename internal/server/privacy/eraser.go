@@ -127,7 +127,7 @@ const LeafTable = "day_leaves"
 var OtherTables = []string{"schema_migrations", "ops_probe", "server_keys", "key_history", "day_heads", "privacy_token_uses"}
 
 // leavesReason is why the eraser keeps an account's leaf hashes.
-const leavesReason = "Each is a hash of one of the account's batches in the day tree of a day other accounts' batches share. Removing one would break the inclusion proofs of the day's other batches, so it stays until the last witness row of its day goes (DESIGN 8.9)."
+const leavesReason = "Each is a hash of one of the account's batches in the day tree of a day other accounts' batches share. Removing one would break the inclusion proofs of the day's other batches, so it stays until the last witness row of its day goes (DESIGN 8.9). Hashes of batches whose own witness rows already went may also stay, uncounted, in day trees other accounts' rows keep."
 
 // heldReason is an export's reason for every row it lists.
 const heldReason = "held by pairtime; export is read-only"
@@ -253,7 +253,9 @@ func leafDays(ctx context.Context, q querier, account string) (keep int64, gone 
 // that owns them where one does, and the leaves of each published day
 // that no witness row is left on. It keeps the account's leaf hashes in
 // days other accounts' batches share, and says so. pairtimed holds no
-// fraud verdicts yet, so no minimal fraud record is kept, and the
+// fraud verdicts yet, so no minimal fraud record is kept: WP-RV4 stores
+// the verdicts and has the eraser write DESIGN 4.4's record before it
+// deletes users, reported as retained under server.fraud_record. The
 // evidence store's blobs (WP-SB4) and backup segments aren't written yet.
 func erase(ctx context.Context, tx writer.Tx, emails *accounts.EmailCipher, c Claims) (Report, error) {
 	r := newReport(c)

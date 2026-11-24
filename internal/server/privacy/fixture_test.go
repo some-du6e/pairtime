@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -53,12 +54,19 @@ func newHub(t *testing.T) *hub {
 	return &hub{key: k, kid: "test-2026-11"}
 }
 
+// brokenKid is a kid whose key set can't be fetched, as when the hub's
+// key set answers 502.
+const brokenKid = "broken-keys"
+
 // Key gives the hub's key for its kid, as its key set does.
 func (h *hub) Key(_ context.Context, kid string) (*ecdsa.PublicKey, error) {
-	if kid != h.kid {
-		return nil, &privacy.Error{Status: http.StatusUnauthorized, Code: "unknown_key"}
+	switch kid {
+	case h.kid:
+		return &h.key.PublicKey, nil
+	case brokenKid:
+		return nil, &privacy.Error{Status: http.StatusServiceUnavailable, Code: "jwks_unavailable", Err: errors.New("the hub's keys answered 502")}
 	}
-	return &h.key.PublicKey, nil
+	return nil, &privacy.Error{Status: http.StatusUnauthorized, Code: "unknown_key"}
 }
 
 // header is the header the hub signs with.
@@ -93,7 +101,13 @@ func (h *hub) token(t *testing.T, claims map[string]any) string {
 // ES256, the signature as R and S, 32 bytes each (RFC 7518 3.4).
 func sign(t *testing.T, key *ecdsa.PrivateKey, header, claims any) string {
 	t.Helper()
-	in := part(t, header) + "." + part(t, claims)
+	return signRaw(t, key, marshal(t, header), marshal(t, claims))
+}
+
+// signRaw is sign for a header and claims given as their exact bytes.
+func signRaw(t *testing.T, key *ecdsa.PrivateKey, header, claims []byte) string {
+	t.Helper()
+	in := base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(claims)
 	digest := sha256.Sum256([]byte(in))
 	der, err := ecdsa.SignASN1(rand.Reader, key, digest[:])
 	if err != nil {
@@ -112,11 +126,17 @@ func sign(t *testing.T, key *ecdsa.PrivateKey, header, claims any) string {
 // part is v as JSON in base64url without padding.
 func part(t *testing.T, v any) string {
 	t.Helper()
+	return base64.RawURLEncoding.EncodeToString(marshal(t, v))
+}
+
+// marshal is v as JSON.
+func marshal(t *testing.T, v any) []byte {
+	t.Helper()
 	b, err := json.Marshal(v)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return base64.RawURLEncoding.EncodeToString(b)
+	return b
 }
 
 // subject is a token's subject claim.

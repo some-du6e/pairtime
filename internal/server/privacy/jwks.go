@@ -38,8 +38,10 @@ const (
 // than KeysFor.
 type JWKS struct {
 	URL string
-	// Client fetches the keys. nil is a client that gives up after 10 s.
-	Client *http.Client
+	// Transport carries the fetches; nil is http.DefaultTransport. The
+	// client around it gives up after 10 s and follows redirects only to
+	// https, at most three of them.
+	Transport http.RoundTripper
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 
@@ -72,7 +74,7 @@ func (j *JWKS) Key(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
 	j.tried = now
 	keys, err := j.fetch(ctx)
 	if err != nil {
-		return nil, &Error{Status: http.StatusServiceUnavailable, Code: "jwks_unavailable"}
+		return nil, &Error{Status: http.StatusServiceUnavailable, Code: "jwks_unavailable", Err: err}
 	}
 	j.keys, j.fetched = keys, now
 	if k, ok := keys[kid]; ok {
@@ -88,10 +90,7 @@ func (j *JWKS) Key(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
 // request that set it off can't cancel it, and it gives up after
 // jwksFetchLimit.
 func (j *JWKS) fetch(ctx context.Context) (map[string]*ecdsa.PublicKey, error) {
-	client := j.Client
-	if client == nil {
-		client = &http.Client{Timeout: jwksFetchLimit, CheckRedirect: httpsRedirects}
-	}
+	client := &http.Client{Transport: j.Transport, Timeout: jwksFetchLimit, CheckRedirect: httpsRedirects}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jwksFetchLimit)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, j.URL, nil)
@@ -160,7 +159,9 @@ func httpsRedirects(req *http.Request, via []*http.Request) error {
 	if req.URL.Scheme != "https" {
 		return errors.New("privacy: the hub's key set redirects away from https")
 	}
-	if len(via) >= 3 {
+	// via holds the requests made so far, the first included, so the
+	// third redirect sees three.
+	if len(via) > 3 {
 		return errors.New("privacy: the hub's key set redirects too many times")
 	}
 	return nil

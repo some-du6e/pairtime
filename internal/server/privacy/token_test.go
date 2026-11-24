@@ -36,9 +36,12 @@ func TestVerify(t *testing.T) {
 		// token, when set, makes the token from the hub's signed one.
 		token func(signed string) string
 		// sign signs with another key than the hub's.
-		sign       *ecdsa.PrivateKey
-		wantStatus int
-		wantCode   string
+		sign *ecdsa.PrivateKey
+		// after adds bytes after the header's or the claims' JSON before
+		// they are signed.
+		afterHeader, afterClaims string
+		wantStatus               int
+		wantCode                 string
 	}{
 		{name: "a token the hub signed for this audience, at this moment, for this endpoint verifies"},
 		{name: "an aud array that names this server verifies", edit: set("aud", []string{"another-program", audience})},
@@ -89,6 +92,8 @@ func TestVerify(t *testing.T) {
 		{name: "a token of two parts is malformed", token: func(s string) string { return s[:strings.LastIndex(s, ".")] }, wantStatus: 401, wantCode: "malformed_token"},
 		{name: "a token of four parts is malformed", token: func(s string) string { return s + ".x" }, wantStatus: 401, wantCode: "malformed_token"},
 		{name: "base64 padding in the header is malformed", token: func(s string) string { return strings.Replace(s, ".", "=.", 1) }, wantStatus: 401, wantCode: "malformed_token"},
+		{name: "a header with a brace after its object is malformed, though the hub signed it", afterHeader: "}", wantStatus: 401, wantCode: "malformed_token"},
+		{name: "claims with a bracket after their object are refused, though the hub signed them", afterClaims: "]", wantStatus: 401, wantCode: "invalid_claims"},
 		{name: "a jti over 128 bytes is refused before anything is stored", edit: set("jti", strings.Repeat("j", privacy.MaxIDSize+1)), wantStatus: 401, wantCode: "invalid_claims"},
 		{name: "a jti with a byte past ASCII is refused", edit: set("jti", "jti-\xc3\xa9"), wantStatus: 401, wantCode: "invalid_claims"},
 		{name: "an empty jti is refused", edit: set("jti", ""), wantStatus: 401, wantCode: "invalid_claims"},
@@ -110,7 +115,7 @@ func TestVerify(t *testing.T) {
 			if tt.sign != nil {
 				key = tt.sign
 			}
-			token := sign(t, key, header, claims)
+			token := signRaw(t, key, append(marshal(t, header), tt.afterHeader...), append(marshal(t, claims), tt.afterClaims...))
 			if tt.token != nil {
 				token = tt.token(token)
 			}

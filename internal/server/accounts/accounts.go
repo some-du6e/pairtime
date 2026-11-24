@@ -13,7 +13,9 @@
 //   - ineligible: sign-in is refused. An identity without an account gets
 //     no row. An account that turns ineligible keeps its row with the new
 //     status, loses its email and Slack id, and loses every session it had,
-//     with the display names they kept.
+//     with the display names they kept. It keeps its email's keyed index,
+//     the HMAC DESIGN 4.4 keeps so a deletion request can find it, and the
+//     privacy hub's eraser finds the account by it (WP-SV13).
 //   - verified: the person may submit hours. When HCA's ysws_eligible isn't
 //     true, the case HCA's own API reports as verified_but_over_18, the
 //     account carries the "eligibility to confirm" note for programs,
@@ -284,8 +286,9 @@ func (s *Store) Roles(sub string) []string {
 // ErrSignupsClosed when id has no account and Options.MayCreate doesn't
 // admit it. Neither opens a session. An existing account that turns
 // ineligible gets its new status, loses its email, its Slack id, its
-// sessions and their display names, and keeps nothing HCA sent this time;
-// an identity without an account is never written.
+// sessions and their display names, and keeps nothing HCA sent this time,
+// but keeps its email's keyed index so a deletion request can still find
+// it; an identity without an account is never written.
 func (s *Store) SignIn(ctx context.Context, id Identity, login Login) (sess *Session, created bool, err error) {
 	if err := CheckSub(id.Sub); err != nil {
 		return nil, false, err
@@ -352,9 +355,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $8)`,
 			// The row keeps the status and drops the contact details: an
 			// identity HCA calls ineligible may be a child pairtime has no
 			// basis to hold them for (DESIGN 8.2, 13.2), and it can't sign
-			// in to delete them.
+			// in to delete them. The email's keyed index stays, an HMAC
+			// that reveals no address, so the privacy hub's deletion
+			// request, which names the person by email, still finds the
+			// row (DESIGN 4.4, 8.9).
 			if _, err := tx.ExecContext(ctx, `UPDATE users
-SET slack_id = NULL, email_ct = NULL, email_index = NULL, verification_status = $2, ysws_eligible = $3, updated_at_ms = $4
+SET slack_id = NULL, email_ct = NULL, verification_status = $2, ysws_eligible = $3, updated_at_ms = $4
 WHERE id = $1`,
 				userID, string(id.Status), eligible, nowMs); err != nil {
 				return fmt.Errorf("accounts: updating the account: %w", err)
