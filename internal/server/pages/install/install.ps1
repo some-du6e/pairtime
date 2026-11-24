@@ -85,7 +85,7 @@
   # release keys its binaries trust (internal/release/release-keys.txt).
   # The copy in the repository has neither, so it needs -Version and
   # -ReleaseKeys.
-  $PinnedVersion = 'v0.1.0-alpha.7'
+  $PinnedVersion = 'v0.1.0-alpha.8'
   $PinnedKeys = @('pairtime-release-ed25519-public:mP7O9NMJlzm7lu65zP4lHq10l/t0XcASchf+mZSRBbE=')
 
   $Repo = 'https://github.com/some-du6e/pairtime'

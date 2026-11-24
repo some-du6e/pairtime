@@ -16,7 +16,7 @@ The copy stays pinned to a release because pairtimed is built from `main`, where
 After each release, a PR moves the copy to it. The release's manifest must list `install_scripts`:
 
 ```sh
-v=v0.1.0-alpha.7
+v=v0.1.0-alpha.8
 gh release download "$v" --repo some-du6e/pairtime --pattern install.sh --pattern install.ps1 --pattern manifest.json --dir internal/server/pages/install --clobber
 ```
 

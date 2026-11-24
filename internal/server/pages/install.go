@@ -30,7 +30,7 @@ import (
 // whose scripts trust no other key, and a later PR pins a release the new
 // key signed (docs/spec/update-manifest.md, Replacing a key).
 // install/README.md says how to move the pin after each release.
-const ScriptsRelease = "v0.1.0-alpha.7"
+const ScriptsRelease = "v0.1.0-alpha.8"
 
 // scriptNames are the install scripts the server serves, each at /<name>,
 // as the release's manifest names them in install_scripts.
