@@ -154,6 +154,16 @@ func TestPrivacyDelete(t *testing.T) {
 			},
 		},
 		{
+			name: "the question and the result say install's record and its copies of the files it edited stay, so that uninstall can put them back",
+			fill: true, mode: config.Local, answers: "y\n",
+			check: func(t *testing.T, dir, out string) {
+				const stays = "so does install's record of what it changed, with its copies of the files it edited, so that pairtime uninstall can put them back"
+				if n := strings.Count(out, stays); n != 2 {
+					t.Errorf("the question and the result say %q %d times, want 2:\n%s", stays, n, out)
+				}
+			},
+		},
+		{
 			name: "answering no changes nothing",
 			fill: true, mode: config.Local, answers: "n\n", wantCode: exitDeclined,
 			check: func(t *testing.T, dir, out string) {

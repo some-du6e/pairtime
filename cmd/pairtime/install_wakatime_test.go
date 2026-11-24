@@ -35,6 +35,18 @@ const teenHackatimeKey = "00000000-0000-4000-8000-0000000048c1"
 // 1.5).
 const teenHackatimeConfig = "[settings]\napi_url = https://hackatime.hackclub.com/api/hackatime/v1\napi_key = " + teenHackatimeKey + "\nheartbeat_rate_limit_seconds = 30\n"
 
+// markFor returns the first line of the config pairtime makes for key:
+// pairtime's mark, which names a hash of the key.
+func markFor(t *testing.T, key string) string {
+	t.Helper()
+	made, err := wakacfg.Make(key, 7247)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _, _ := strings.Cut(string(made), "\n")
+	return first
+}
+
 // anyPort writes every port on 127.0.0.1 in s as <port>.
 func anyPort(s string) string {
 	return regexp.MustCompile(`127\.0\.0\.1:[0-9]+`).ReplaceAllString(s, "127.0.0.1:<port>")
@@ -57,8 +69,9 @@ func TestInstallWakaTime(t *testing.T) {
 		// set to it.
 		skip  bool
 		proxy string
-		// want is how the config starts after install, "" for as it was;
-		// line is what pairtime's line starts with.
+		// want is how the config starts after install, "" for as it was,
+		// with <mark> for pairtime's mark for the setup file's key; line is
+		// what pairtime's line starts with.
 		want, line string
 		// out is a part of what install prints.
 		out string
@@ -72,7 +85,7 @@ func TestInstallWakaTime(t *testing.T) {
 		},
 		{
 			name: "with no WakaTime config, install makes one for the agent with wakatime-cli's watermark, and uninstall deletes both",
-			want: "; made by pairtime install; pairtime uninstall takes it out\n[settings]\n",
+			want: "<mark>\n[settings]\n",
 			line: "api_url = http://127.0.0.1:",
 			out:  "Made ",
 		},
@@ -131,9 +144,10 @@ func TestInstallWakaTime(t *testing.T) {
 			case err != nil:
 				t.Fatalf("the setup file: %v", err)
 			default:
-				rest, ok := strings.CutPrefix(cfg, tt.want)
+				want := strings.ReplaceAll(tt.want, "<mark>", markFor(t, s.Key))
+				rest, ok := strings.CutPrefix(cfg, want)
 				if !ok || !strings.HasPrefix(rest, tt.line) || !strings.Contains(rest, s.Key) {
-					t.Errorf("after install the config holds\n%s\nwant it to start %q, then %q, with the setup file's key %s", cfg, tt.want, tt.line, s.Key)
+					t.Errorf("after install the config holds\n%s\nwant it to start %q, then %q, with the setup file's key %s", cfg, want, tt.line, s.Key)
 				}
 				st, err := wakacfg.Inspect([]byte(cfg), s.Key)
 				if err != nil || !st.Line {
@@ -161,22 +175,95 @@ func TestInstallWakaTime(t *testing.T) {
 	}
 }
 
-// TestWakaTimeOnPort checks the WakaTime item install plans again once the
-// agent is up, on the port it listens on: its diff is the screen's with
-// the port swapped, which install's apply takes, and names that port only.
-func TestWakaTimeOnPort(t *testing.T) {
+// TestWakaTimeTeensKeyNeverShown runs the real install and uninstall on a
+// config pairtime made whose api_key the teen replaced with their own, as
+// WakaTime's extension writes one, with no record of pairtime's key left:
+// nothing install or uninstall prints, --dry-run included, and no setup
+// file holds the teen's key, and both leave the config to the teen, which
+// uninstall names as what it left alone.
+func TestWakaTimeTeensKeyNeverShown(t *testing.T) {
+	if v, ok := runValue(); ok {
+		t.Skipf(`this account has a pairtime login item, HKCU\%s\%s = %q, which the test would replace; it runs where there is none, as in CI`, install.RunKey, install.RunValue, v)
+	}
+	tests := []struct {
+		name string
+		port int // the port the config's api_url names: not the one install plans, so a change would show its api_key beside it
+	}{
+		{"install, --dry-run and uninstall show the teen's key in a config pairtime made nowhere, and leave it to the teen", 7250},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			made, err := wakacfg.Make("00000000-0000-4000-8000-00000000a9e7", tt.port)
+			if err != nil {
+				t.Fatal(err)
+			}
+			taken := strings.Replace(string(made), "api_key = 00000000-0000-4000-8000-00000000a9e7", "api_key = "+teenHackatimeKey, 1)
+			h := newTestHome(t, "real").withEnv(wakatimeEnv, "1")
+			h.write(".wakatime.cfg", taken)
+			before := h.snapshot()
+			shown := func(what, out string) {
+				t.Helper()
+				if strings.Contains(out, teenHackatimeKey) {
+					t.Errorf("%s printed the teen's key:\n%s", what, out)
+				}
+			}
+			shown("install --dry-run", h.mustRun("", "", 0, "install", "--dry-run"))
+			out := h.mustRun("", "", 0, "install", "--yes")
+			shown("install --yes", out)
+			if !strings.Contains(out, "isn't pairtime's any more") {
+				t.Errorf("install didn't say why it left the config alone:\n%s", out)
+			}
+			pid := h.installed(false)
+			if s, err := wakacfg.ReadSetup(wakacfg.SetupFile(h.dirs.Data)); err == nil && s.Key == teenHackatimeKey {
+				t.Errorf("the setup file holds the teen's key")
+			}
+			shown("uninstall --dry-run", h.mustRun("", "", 0, "uninstall", "--dry-run"))
+			out = h.mustRun("", "", 1, "uninstall", "--yes", "--delete-data")
+			shown("uninstall", out)
+			if !strings.Contains(out, "Left alone: ") || !strings.Contains(out, "point its api_url at your own server, or delete it") {
+				t.Errorf("uninstall didn't name the config it left alone, with what to change:\n%s", out)
+			}
+			if got := h.read(".wakatime.cfg"); got != taken {
+				t.Errorf("the config is now\n%s\nwant it as the teen left it", got)
+			}
+			h.uninstalled(before, pid)
+		})
+	}
+}
+
+// TestWakaTimeReplan checks the WakaTime item install plans again once the
+// agent is up, on the port it listens on: it is taken when each file it
+// leaves is what the screen's plan leaves with the port swapped, a plan
+// that changes nothing included, and refused when anything else changed
+// since the screen.
+func TestWakaTimeReplan(t *testing.T) {
+	const key = "00000000-0000-4000-8000-00000000a9e7"
+	line := func(port int) string { return ".+ = " + wakacfg.URL(port) + "|" + key + "\n" }
 	tests := []struct {
 		name   string
 		config string // ~/.wakatime.cfg before install, "" for none
+		// screen and agent are the ports the screen planned on and the
+		// agent listens on.
+		screen, agent int
+		// between changes the config after the screen; refused says the
+		// new plan is refused.
+		between string
+		refused bool
+		// diff is a part of the new plan's diff, "" for none at all.
+		diff string
 	}{
-		{"pairtime's line on the agent's port differs from the screen's in the port alone", teenHackatimeConfig},
-		{"a config pairtime makes on the agent's port differs from the screen's in the port alone", ""},
+		{name: "a first install's line on the agent's port differs from the screen's in the port alone, and is taken", config: teenHackatimeConfig, screen: 7247, agent: 7250, diff: "+" + line(7250)},
+		{name: "a config pairtime makes on the agent's port differs from the screen's in the port alone, and is taken", screen: 7247, agent: 7250, diff: "+api_url = " + wakacfg.URL(7250)},
+		{name: "a reinstall whose line names the agent's port already, while the screen planned config.toml's, changes nothing and is taken", config: teenHackatimeConfig + "\n[api_urls]\n" + line(7250), screen: 7247, agent: 7250},
+		{name: "a reinstall whose line names the screen's port, while the agent listens on another, moves it and is taken", config: teenHackatimeConfig + "\n[api_urls]\n" + line(7247), screen: 7247, agent: 7250, diff: "+" + line(7250)},
+		{name: "a config that changed since the screen in more than the port is refused", config: teenHackatimeConfig, screen: 7247, agent: 7250, between: "hostname = mine\n", refused: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
+			cfg := filepath.Join(home, ".wakatime.cfg")
 			if tt.config != "" {
-				if err := os.WriteFile(filepath.Join(home, ".wakatime.cfg"), []byte(tt.config), 0o600); err != nil {
+				if err := os.WriteFile(cfg, []byte(tt.config), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -187,33 +274,38 @@ func TestWakaTimeOnPort(t *testing.T) {
 			env := install.Env{GOOS: runtime.GOOS, Home: home, Getenv: func(string) string { return "" }, Exe: exe}
 			data := t.TempDir()
 			in := &install.Installer{Dir: filepath.Join(data, "install")}
-			diff := func(it install.Item) string {
-				t.Helper()
-				p, err := in.PlanInstall([]install.Item{it})
+			o := install.WakaTimeOptions{Data: data, Port: tt.screen, Now: time.Date(2026, 11, 24, 5, 30, 0, 0, time.UTC), Key: key}
+			screen, err := install.WakaTime(env, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p, err := in.PlanInstall([]install.Item{screen})
+			if err != nil {
+				t.Fatal(err)
+			}
+			shown := p.Planned()
+			p.Close()
+			if tt.between != "" {
+				b, err := os.ReadFile(cfg)
 				if err != nil {
 					t.Fatal(err)
 				}
-				defer p.Close()
-				return p.Diff()
+				if err := os.WriteFile(cfg, append(b, tt.between...), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			}
-			key, err := install.WakaTimeKey(env, data)
-			if err != nil {
-				t.Fatal(err)
-			}
-			o := install.WakaTimeOptions{Data: data, Port: 7247, Now: time.Date(2026, 11, 24, 5, 30, 0, 0, time.UTC), Key: key}
-			shown, err := install.WakaTime(env, o)
-			if err != nil {
-				t.Fatal(err)
-			}
-			it, want, err := wakaTimeOnPort(env, o, diff(shown), 7250)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := diff(it); got != want {
-				t.Errorf("planned on the agent's port, the diff is\n%s\nwant the screen's with the port swapped:\n%s", got, want)
-			}
-			if !strings.Contains(want, wakacfg.URL(7250)) || strings.Contains(want, wakacfg.URL(7247)) {
-				t.Errorf("the diff doesn't name the agent's port alone:\n%s", want)
+			_, diff, err := wakaTimeReplan(env, in, o, shown, tt.agent)
+			switch {
+			case tt.refused:
+				if err == nil {
+					t.Fatalf("wakaTimeReplan took a plan of a config that changed since the screen:\n%s", diff)
+				}
+			case err != nil:
+				t.Fatalf("wakaTimeReplan: %v", err)
+			case tt.diff == "" && diff != "":
+				t.Errorf("the new plan's diff is\n%s\nwant none", diff)
+			case tt.diff != "" && (!strings.Contains(diff, tt.diff) || strings.Contains(diff, "+"+line(tt.screen))):
+				t.Errorf("the new plan's diff is\n%s\nwant it to have %q and nothing on the screen's port", diff, tt.diff)
 			}
 		})
 	}
