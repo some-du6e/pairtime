@@ -60,6 +60,7 @@ image_paths=(
 	deploy/litestream.yml
 	docs/embed.go
 	docs/retention.json
+	internal/coach/text
 	internal/devtoken
 	internal/version
 	pkg/event
