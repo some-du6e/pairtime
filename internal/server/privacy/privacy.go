@@ -123,14 +123,17 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request, action string) {
 
 // deleteSubject runs the erasure in one writer op, which a dry run rolls back,
 // alone in its batch's savepoint. A read-only count first sizes the
-// op's batch.
+// op's batch. The op is durable, so the erasure is on disk before the hub
+// hears it is done, which it never asks about again (DESIGN 8.9). A dry
+// run takes the same path, so its batch is durable too and its op changes
+// nothing.
 func (s *Service) deleteSubject(ctx context.Context, c Claims) (Report, error) {
 	sized, err := s.exportSubject(ctx, c)
 	if err != nil {
 		return Report{}, err
 	}
 	var rep Report
-	err = s.o.Writer.Do(ctx, rowsOf(sized), func(ctx context.Context, tx writer.Tx) error {
+	err = s.o.Writer.DoDurable(ctx, rowsOf(sized), func(ctx context.Context, tx writer.Tx) error {
 		var err error
 		if rep, err = erase(ctx, tx, s.o.Emails, c); err != nil {
 			return err

@@ -8,3 +8,6 @@ import "time"
 
 // selfUsage says nothing on the OSes pairtime doesn't ship for.
 func selfUsage() (rss, peak uint64, cpu time.Duration) { return 0, 0, 0 }
+
+// joinJob has nothing to do on the OSes pairtime doesn't ship for.
+func joinJob() {}

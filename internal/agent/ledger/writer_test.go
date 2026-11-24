@@ -164,6 +164,25 @@ func TestContent(t *testing.T) {
 					t.Error("the stored prompt isn't marked guest")
 				}
 			}},
+		{name: "a relay.message commits nothing, and its f is v and pc alone, the class of the app's own text (ledger-v1 10.7)",
+			in: relay(90, false, "s_1"), class: features.Substantive,
+			check: func(t *testing.T, f features.F, ev event.Event) {
+				if f.MH != nil || f.TH != nil || f.ES != nil {
+					t.Errorf("f %+v has features of a text the device never kept", f)
+				}
+			}},
+		{name: "a relay.message the reader's go-ahead test marked is low_effort, whatever its length",
+			in: relay(30, true, "s_1"), class: features.LowEffort},
+		{name: "a relay.message under SUBSTANTIVE_CHARS typed characters is low_effort",
+			in: relay(19, false, "s_1"), class: features.LowEffort},
+		{name: "a relay.message bound to a session whose last output asked a question is an answer",
+			before: []Input{harness(&event.AgentOutput{TurnKey: "t_0", Words: 7, IsFinal: true, AsksQuestion: true},
+				[]byte("Which one, the modal or the drawer?"))},
+			in: relay(90, false, "s_1"), class: features.Answer},
+		{name: "a relay.message bound to no session is no answer, whatever a session asked",
+			before: []Input{harness(&event.AgentOutput{TurnKey: "t_0", Words: 7, IsFinal: true, AsksQuestion: true},
+				[]byte("Which one, the modal or the drawer?"))},
+			in: relay(90, false, event.NoSession), class: features.Substantive},
 		{name: "a final agent message commits its first 16 KiB, cut at a character boundary",
 			in:   harness(&event.AgentOutput{TurnKey: "t_1", Words: 8000, IsFinal: true}, []byte(long)),
 			text: ledger.CommittedMessage([]byte(long))},
@@ -335,6 +354,23 @@ func guestPrompt(text string) Input {
 	p := in.Event.Data.(*event.PromptSubmit)
 	p.Guest, p.SealedText = true, []byte("sealed guest text")
 	return in
+}
+
+// relay is T3 Code's reader's relay.message for a message of n typed
+// characters sent two seconds before testT from the web client, which the
+// reader's go-ahead test marked when lowEffort is set, bound to session
+// sess, or to none (DESIGN 5.1). It carries no text: the reader dropped
+// it.
+func relay(n int, lowEffort bool, sess string) Input {
+	rng := rand.New(rand.NewPCG(7, 8))
+	e := env(rng, testT, sess, "p_web")
+	e.Source, e.Via, e.HarnessVersion = event.SourceLog, event.ViaApp, ""
+	if sess == event.NoSession {
+		e.Harness = event.HarnessNone
+	}
+	return Input{Event: event.Event{Envelope: e, Data: &event.RelayMessage{App: event.RelayAppT3Code,
+		Client: event.RelayClientWeb, SentAt: testT - 2000, ThreadKey: "r_1", Declared: event.RelayDeclaredNone,
+		LenChars: n, LowEffort: lowEffort}}}
 }
 
 func bridgePrompt(n int) Input {

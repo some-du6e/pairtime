@@ -1155,23 +1155,44 @@ func TestLongHookedTurns(t *testing.T) {
 
 func TestHoldFor(t *testing.T) {
 	const h = 3600 * 1000
+	const m = 60 * 1000
 	from := int64(30 * h)
 	turn := func(submit, runUntil int64) score.Turn { return score.Turn{TSubmit: submit, RunUntil: runUntil} }
+	// relayed is a turn whose prompt paired with relay.message r_1.
+	relayed := func(submit, runUntil int64) score.Turn {
+		tn := turn(submit, runUntil)
+		tn.Relay = "r_1"
+		return tn
+	}
+	record := func(t int64) []score.RelayRecord { return []score.RelayRecord{{ID: "r_1", T: t}} }
 	tests := []struct {
-		name  string
-		turns []score.Turn
-		want  int64
+		name   string
+		turns  []score.Turn
+		relays []score.RelayRecord
+		want   int64
 	}{
-		{"a turn that ran past the window's start holds it at the turn's submit", []score.Turn{turn(20*h, 31*h)}, 20 * h},
-		{"a turn whose run ended at or before the window's start holds nothing", []score.Turn{turn(20*h, 30*h)}, from},
-		{"a turn submitted inside the window holds nothing", []score.Turn{turn(30*h+1, 32*h)}, from},
-		{"a turn submitted more than holdMaxMS before the window's start holds nothing", []score.Turn{turn(from-holdMaxMS-1, 31*h)}, from},
-		{"a turn submitted holdMaxMS before the window's start still holds it", []score.Turn{turn(from-holdMaxMS, 31*h)}, from - holdMaxMS},
-		{"of two turns that ran past it, the earlier submit holds the window's start", []score.Turn{turn(25*h, 31*h), turn(22*h, 30*h+1)}, 22 * h},
+		{"a turn that ran past the window's start holds it at the turn's submit", []score.Turn{turn(20*h, 31*h)}, nil, 20 * h},
+		{"a turn whose run ended at or before the window's start holds nothing", []score.Turn{turn(20*h, 30*h)}, nil, from},
+		{"a turn submitted inside the window holds nothing", []score.Turn{turn(30*h+1, 32*h)}, nil, from},
+		{"a turn submitted more than holdMaxMS before the window's start holds nothing", []score.Turn{turn(from-holdMaxMS-1, 31*h)}, nil, from},
+		{"a turn submitted holdMaxMS before the window's start still holds it", []score.Turn{turn(from-holdMaxMS, 31*h)}, nil, from - holdMaxMS},
+		{"of two turns that ran past it, the earlier submit holds the window's start", []score.Turn{turn(25*h, 31*h), turn(22*h, 30*h+1)}, nil, 22 * h},
+		{"a relayed turn whose record came before its submit holds the window at the record, its witness",
+			[]score.Turn{relayed(20*h, 31*h)}, record(20*h - 9*m), 20*h - 9*m},
+		{"a relayed turn submitted inside the window holds the window at its record when the record came before the window's start",
+			[]score.Turn{relayed(30*h+2*m, 31*h)}, record(30*h - 5*m), 30*h - 5*m},
+		{"a relayed turn whose record came after its submit holds the window at the submit",
+			[]score.Turn{relayed(20*h, 31*h)}, record(20*h + 3000), 20 * h},
+		{"a relayed turn whose run ended before the window's start holds nothing, its record neither",
+			[]score.Turn{relayed(20*h, 30*h)}, record(20*h - 9*m), from},
+		{"a turn names a record the derivation doesn't hold, which holds nothing more than its submit",
+			[]score.Turn{relayed(20*h, 31*h)}, nil, 20 * h},
+		{"a relayed turn whose record came more than holdMaxMS before the window's start holds it at the submit",
+			[]score.Turn{relayed(from-holdMaxMS+m, 31*h)}, record(from - holdMaxMS - m), from - holdMaxMS + m},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := holdFor(tt.turns, from); got != tt.want {
+			if got := holdFor(score.Derived{Turns: tt.turns, Relays: tt.relays}, from); got != tt.want {
 				t.Errorf("holdFor = %d, want %d", got, tt.want)
 			}
 		})

@@ -15,9 +15,9 @@ import (
 func huge(shift uint) int { return int(int64(1) << shift) }
 
 // checkDerived checks that everything d holds is a valid record: the
-// anchors, turns and slots convert to valid pkg/event records, every credit
-// slot accounts for its 15 seconds with valid entries, and no fill is
-// negative.
+// anchors, turns and slots convert to valid pkg/event records, every slot
+// slept through is asleep too (Slot.slept), every credit slot accounts for
+// its 15 seconds with valid entries, and no fill is negative.
 func checkDerived(t *testing.T, d Derived) {
 	t.Helper()
 	for _, a := range d.Anchors {
@@ -33,6 +33,9 @@ func checkDerived(t *testing.T, d Derived) {
 	for _, s := range d.Slots {
 		if err := s.Event().Validate(); err != nil {
 			t.Errorf("slot %d: %v", s.Start, err)
+		}
+		if s.slept && !s.Asleep {
+			t.Errorf("slot %d is slept through but not asleep", s.Start)
 		}
 	}
 	for _, c := range d.Credits {

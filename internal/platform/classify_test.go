@@ -188,6 +188,36 @@ func TestClassify(t *testing.T) {
 			class: event.ParentUnknown, entry: event.EntrypointDesktop, tty: false, by: "claude-desktop",
 		},
 		{
+			name:  "a session T3 Code's server started is agent_app, the class SM 2.2 rule 9 needs (SM 1.2)",
+			goos:  Linux,
+			chain: mk(p{name: "claude", pgid: 2400, tty: TTYNone}, p{name: "t3", pgid: 2400}, p{name: "systemd", pgid: 1900}),
+			class: event.ParentAgentApp, entry: event.EntrypointUnknown, tty: false, by: "t3",
+		},
+		{
+			name:  "T3 Code's desktop app runs its server as its own executable, so a session under it is agent_app, not a desktop app's",
+			goos:  Darwin,
+			chain: mk(p{name: "claude", pgid: 912, tty: TTYNone}, p{name: "T3 Code (Beta)", pgid: 912}, p{name: "T3 Code (Beta)", pgid: 912}, p{name: "launchd", pgid: 1}),
+			class: event.ParentAgentApp, entry: event.EntrypointUnknown, tty: false, by: "T3 Code (Beta)",
+		},
+		{
+			name:  "t3 serve typed into a terminal still decides, since the walk stops at the server before the terminal",
+			goos:  Windows,
+			chain: mk(p{name: "claude"}, p{name: "t3"}, p{name: "node"}, p{name: "pwsh"}, p{name: "windowsterminal"}),
+			class: event.ParentAgentApp, entry: event.EntrypointUnknown, tty: true, by: "t3",
+		},
+		{
+			name:  "a claude typed into T3 Code's own terminal is agent_app too, since the interactive shell between is skipped",
+			goos:  Linux,
+			chain: mk(p{name: "claude", pgid: 500, tty: TTYAttached, tpgid: 500}, p{name: "zsh", pgid: 400}, p{name: "t3", pgid: 300}),
+			class: event.ParentAgentApp, entry: event.EntrypointUnknown, tty: true, by: "t3",
+		},
+		{
+			name:  "a script between claude and T3 Code's server makes the session script_runtime, which no app message witnesses",
+			goos:  Linux,
+			chain: mk(p{name: "claude", pgid: 400, tty: TTYNone}, p{name: "bash", pgid: 400}, p{name: "t3", pgid: 300}),
+			class: event.ParentScriptRuntime, entry: event.EntrypointUnknown, tty: false, by: "t3", script: true,
+		},
+		{
 			name:  "login under macOS Terminal is a wrapper and is skipped",
 			goos:  Darwin,
 			chain: mk(p{name: "claude", pgid: 300, tty: TTYAttached}, p{name: "zsh", pgid: 200}, p{name: "login", pgid: 200}, p{name: "iTerm2", pgid: 100}),

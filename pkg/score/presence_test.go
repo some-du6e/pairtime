@@ -7,10 +7,12 @@ import (
 	"testing"
 
 	"github.com/some-du6e/pairtime/pkg/event"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 // slotWant is a slot's expected presence; until is seconds after base, 0
-// for the slot's end.
+// for the slot's end. slept is whether relayed credit reads the slot as
+// slept through (Slot.slept).
 type slotWant struct {
 	at      int64 // the slot's start, seconds after base
 	present event.Presence
@@ -18,6 +20,7 @@ type slotWant struct {
 	then    event.Presence
 	asleep  bool
 	locked  bool
+	slept   bool
 }
 
 func checkSlots(t *testing.T, got Derived, want []slotWant) {
@@ -36,9 +39,11 @@ func checkSlots(t *testing.T, got Derived, want []slotWant) {
 		if then == "" {
 			then = w.present
 		}
-		if s.Present != w.present || s.PresentUntil != until || s.Then != then || s.Asleep != w.asleep || s.Locked != w.locked {
-			t.Errorf("slot at %d s: %q until %d then %q, asleep %v, locked %v; want %q until %d then %q, asleep %v, locked %v",
-				w.at, s.Present, s.PresentUntil, s.Then, s.Asleep, s.Locked, w.present, until, then, w.asleep, w.locked)
+		if s.Present != w.present || s.PresentUntil != until || s.Then != then || s.Asleep != w.asleep || s.Locked != w.locked ||
+			s.slept != w.slept {
+			t.Errorf("slot at %d s: %q until %d then %q, asleep %v, locked %v, slept %v; want %q until %d then %q, asleep %v, locked %v, slept %v",
+				w.at, s.Present, s.PresentUntil, s.Then, s.Asleep, s.Locked, s.slept, w.present, until, then, w.asleep, w.locked,
+				w.slept)
 		}
 	}
 }
@@ -92,8 +97,8 @@ func TestPresence(t *testing.T) {
 				b.power(at(600), event.PowerResume)
 				b.samples(at(600), at(720))
 			},
-			want: []slotWant{{at: 45, present: event.PresentYes}, {at: 60, present: event.PresentNo, asleep: true},
-				{at: 585, present: event.PresentNo, asleep: true}, {at: 600, present: event.PresentYes}},
+			want: []slotWant{{at: 45, present: event.PresentYes}, {at: 60, present: event.PresentNo, asleep: true, slept: true},
+				{at: 585, present: event.PresentNo, asleep: true, slept: true}, {at: 600, present: event.PresentYes}},
 		},
 		{
 			name: "a gap between samples longer than SLEEP_GAP_S is a hard break, and the silence around it isn't bridged",
@@ -147,6 +152,22 @@ func TestPresence(t *testing.T) {
 				{at: 750, present: event.PresentYes}},
 		},
 		{
+			// The sample at 15 s shows input at 10 s, idle 5 s, and so does
+			// the one at 75 s, at 70 s: under CONTEXT_IDLE_S, so neither gap
+			// after them is slow sampling (DESIGN 6.2 D14).
+			name: "a slot in a 60 s gap after a sample with idle 5 s is asleep, a hard break, but not slept through for relayed credit; one in a 121 s gap is both",
+			build: func(b *tl) {
+				b.mouse(at(10), at(70))
+				for _, s := range []int64{0, 15, 75, 196, 210, 225, 240} {
+					b.sample(at(s))
+				}
+			},
+			want: []slotWant{{at: 0, present: event.PresentYes},
+				{at: 15, present: event.PresentNo, asleep: true}, {at: 60, present: event.PresentNo, asleep: true},
+				{at: 75, present: event.PresentNo, asleep: true, slept: true},
+				{at: 195, present: event.PresentNo, asleep: true, slept: true}, {at: 210, present: event.PresentNo}},
+		},
+		{
 			name: "slots before the first sample are unknown",
 			build: func(b *tl) {
 				b.harness(at(0), event.ViaLog, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_1", Words: 10})
@@ -172,6 +193,44 @@ func TestPresence(t *testing.T) {
 			b := newTL(false)
 			c.build(b)
 			checkSlots(t, b.run(t, Device{}), c.want)
+		})
+	}
+}
+
+// TestSleptGap checks that relayed credit's bound for a slot slept
+// through is SM 2.1's twice SLOW_SAMPLE_S whatever D14 makes of the gap,
+// and that a slot slept through is asleep too (D-relayed-sleep). Its table
+// has SLEEP_GAP_S 45 s, three times SAMPLE_S, so that D14 excuses a gap of
+// up to 180 s after CONTEXT_IDLE_S without input (rules.slowGap). Each
+// case samples every 15 s to 660 s, whose sample shows 655 s without
+// input, then from gap seconds later on, with input 5 s after that.
+func TestSleptGap(t *testing.T) {
+	tab := tableWithInts(t, map[params.IntParam]int64{params.SLEEP_GAP_S: 45})
+	cases := []struct {
+		name string
+		gap  int64 // seconds from the sample at 660 s to the next
+		want []slotWant
+	}{
+		{"a 150 s gap after 600 s without input, which D14 excuses under this table, is slept through for relayed credit, and asleep",
+			150, []slotWant{{at: 645, present: event.PresentNo},
+				{at: 660, present: event.PresentNo, asleep: true, slept: true},
+				{at: 795, present: event.PresentNo, asleep: true, slept: true}, {at: 810, present: event.PresentYes}}},
+		{"a 120 s gap after 600 s without input is neither, since D14 excuses it and it is no longer than twice SLOW_SAMPLE_S",
+			120, []slotWant{{at: 660, present: event.PresentNo}, {at: 765, present: event.PresentNo},
+				{at: 780, present: event.PresentYes}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			end := 660 + c.gap
+			b := newTL(false)
+			b.mouse(at(5), at(end+5))
+			b.samples(at(0), at(660))
+			b.samples(at(end), at(end+30))
+			_, out := Step(NewState(tab, Device{}), b.records())
+			var got Derived
+			got.Append(out.Final)
+			got.Append(out.Pending)
+			checkSlots(t, got, c.want)
 		})
 	}
 }

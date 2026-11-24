@@ -15,7 +15,9 @@ type footprintReply struct {
 	RSSBytes     uint64 `json:"rss_bytes,omitempty"`
 	PeakRSSBytes uint64 `json:"peak_rss_bytes,omitempty"`
 	// CPUS is the CPU time the agent has used since it started, user and
-	// system, in seconds.
+	// system, in seconds, with that of the processes it started: T3 Code's
+	// reader's sqlite3 runs and the git adapter's git, which cost the
+	// computer for the agent (selfUsage).
 	CPUS float64 `json:"cpu_s"`
 }
 

@@ -10,7 +10,11 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
+	"math/big"
 	"slices"
+
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 // The challenge draw of DESIGN 7.5 step 4, as spec 10.9 gives it to the
@@ -73,40 +77,73 @@ func score(seed Hash, msg []byte) Hash {
 	return h
 }
 
-// ChallengeK returns CHALLENGE_K for a pool of p turns: min(30, max(10,
-// ceil(p / 10))), so 10 for pools of up to 100, 11 for 101 to 110, and 30
-// from 291 on (spec 10.9).
-func ChallengeK(p int) int { return min(30, max(10, (p+9)/10)) }
+// ChallengeK returns CHALLENGE_K for a pool of p turns under parameter
+// table t: min(CHALLENGE_K_MAX, max(CHALLENGE_K_MIN, ceil(CHALLENGE_K_FRAC
+// × p))) (DESIGN 6.3). The share is exact, as spec 10.9 has it, whatever
+// digits the table's CHALLENGE_K_FRAC has, and K stays an int64, so a
+// 32-bit int never cuts it short. The caller passes the table frozen with r
+// (DESIGN 7.5 step 4, spec 10.9). Under table 0.1.0, K is 10 for pools of
+// up to 100, 11 for 101 to 110, and 30 from 291 on. A table can give a K
+// below 1, which Draw refuses.
+func ChallengeK(t *params.Table, p int) int64 {
+	limit := t.Int(params.CHALLENGE_K_MAX)
+	return min(limit, max(t.Int(params.CHALLENGE_K_MIN), drawShare(t.Rat(params.CHALLENGE_K_FRAC), p, limit)))
+}
+
+// drawShare returns ceil(frac × p), worked out exactly with math/big, or
+// limit when the share is larger, which min with limit gives in any case.
+// A share below every int64 is math.MinInt64, which max with
+// CHALLENGE_K_MIN takes the same way.
+func drawShare(frac params.Rat, p int, limit int64) int64 {
+	n := new(big.Int).Mul(big.NewInt(frac.Num()), big.NewInt(int64(p)))
+	q, m := new(big.Int).DivMod(n, big.NewInt(frac.Den()), new(big.Int))
+	if m.Sign() > 0 {
+		q.Add(q, big.NewInt(1))
+	}
+	switch {
+	case q.Cmp(big.NewInt(limit)) > 0:
+		return limit
+	case !q.IsInt64():
+		return math.MinInt64
+	}
+	return q.Int64()
+}
 
 // Draw returns the drawn turns of pool, smallest score first: the pool
 // ranked by score, comparing scores as 32-byte strings, cut to the first
-// min(CHALLENGE_K, P) (spec 10.9). It refuses a pool that lists a turn
-// twice, or a turn DrawScore refuses. Which turns the pool holds is WP-SB5's
-// to decide under DESIGN 7.5 step 4.
-func Draw(seed Hash, pool []Turn) ([]Turn, error) {
+// min(CHALLENGE_K, P), with CHALLENGE_K from parameter table t (spec
+// 10.9). The caller passes the table frozen with r (DESIGN 7.5 step 4).
+// It refuses a table that gives a CHALLENGE_K below 1, a pool that lists a
+// turn twice, or a turn DrawScore refuses. Which turns the pool holds is
+// WP-SB5's to decide under DESIGN 7.5 step 4.
+func Draw(seed Hash, pool []Turn, t *params.Table) ([]Turn, error) {
+	k := ChallengeK(t, len(pool))
+	if k < 1 {
+		return nil, fmt.Errorf("ledger: parameter table %s gives a pool of %d turns a CHALLENGE_K of %d, and a draw needs at least 1", t.Version(), len(pool), k)
+	}
 	type scored struct {
 		t Turn
 		s Hash
 	}
 	seen := make(map[Turn]bool, len(pool))
 	ranked := make([]scored, len(pool))
-	for i, t := range pool {
-		if seen[t] {
-			return nil, fmt.Errorf("ledger: the pool lists record %d of a device twice", t.Seq)
+	for i, tn := range pool {
+		if seen[tn] {
+			return nil, fmt.Errorf("ledger: the pool lists record %d of a device twice", tn.Seq)
 		}
-		seen[t] = true
-		s, err := DrawScore(seed, t)
+		seen[tn] = true
+		s, err := DrawScore(seed, tn)
 		if err != nil {
 			return nil, err
 		}
-		ranked[i] = scored{t, s}
+		ranked[i] = scored{tn, s}
 	}
 	// Two items tie only through an HMAC collision; the device id and s
 	// still give one order.
 	slices.SortFunc(ranked, func(a, b scored) int {
 		return cmp.Or(bytes.Compare(a.s[:], b.s[:]), cmp.Compare(a.t.DeviceID, b.t.DeviceID), cmp.Compare(a.t.Seq, b.t.Seq))
 	})
-	out := make([]Turn, min(ChallengeK(len(pool)), len(pool)))
+	out := make([]Turn, min(k, int64(len(pool))))
 	for i := range out {
 		out[i] = ranked[i].t
 	}

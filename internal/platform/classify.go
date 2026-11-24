@@ -128,7 +128,11 @@ func LauncherOf(goos string, parent, child Proc) bool {
 //   - Any other ancestor decides: a terminal (or login on a Linux text
 //     console) is terminal_app, an editor ide, tmux multiplexer, sshd
 //     remote, an interpreter script_runtime, a scheduler scheduler, another
-//     harness agent, and an agent desktop app or anything else unknown.
+//     harness agent, an agent app's server, such as T3 Code's t3 serve,
+//     agent_app, and an agent desktop app or anything else unknown. A shell
+//     running a script below an agent app's server still makes the session
+//     script_runtime: SM 2.2 rule 9 counts only a session the server
+//     started itself.
 //
 // HasTTY is the harness's controlling terminal where the OS reports one.
 // Windows doesn't, so there it is set when a shell, a terminal, a
@@ -175,6 +179,8 @@ walk:
 		l.ParentClass, l.Entrypoint = event.ParentIDE, event.EntrypointIDE
 	case RoleDesktop:
 		l.Entrypoint = event.EntrypointDesktop
+	case RoleAppServer:
+		l.ParentClass = event.ParentAgentApp
 	case RoleMultiplexer:
 		l.ParentClass = event.ParentMultiplexer
 	case RoleRemote:

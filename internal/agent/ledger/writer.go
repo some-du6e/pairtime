@@ -613,10 +613,9 @@ func (w *Writer) Opened() uint64 { return w.opened }
 // EventRecord from the event's shareable fields and the content in (spec
 // 4.5, 10). For a prompt.submit with its text, and for every cli.track
 // from its label, it first derives low_effort and error_sig, as the scorer
-// reads them; and it gives every prompt.submit and cli.track record its
-// class, from pkg/score, as the record's f.pc. A prompt.submit or
-// agent.stop seals at once,
-// without waiting for the seal to finish.
+// reads them; and it gives every prompt.submit, cli.track and relay.message
+// record its class, from pkg/score, as the record's f.pc. A prompt.submit
+// or agent.stop seals at once, without waiting for the seal to finish.
 //
 // A record Write refuses, such as an event that fails Validate, takes no
 // sequence number. The error leaves the event's content out. Nor does one
@@ -745,6 +744,14 @@ func (w *Writer) prepare(in Input) (event.Event, ledger.Content) {
 		}
 		ev.Data = &cp
 		c.Class = features.Class(score.TrackClass(w.table, &cp))
+	case *event.RelayMessage:
+		// The class of the app's own text, which the reader measured and
+		// dropped, with the answer class read from the questions of the
+		// session the record is bound to, as a prompt's is (ledger-v1 10.7),
+		// by the path the record came by.
+		if p != nil {
+			c.Class = features.Class(score.RelayClass(w.table, p, w.q.Asked(ev.SessionKey, ev.Via)))
+		}
 	case *event.AgentOutput:
 		if p != nil && p.IsFinal && in.Text == nil && ev.Via == event.ViaPlugin {
 			c.NoText = true
