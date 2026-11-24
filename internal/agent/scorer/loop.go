@@ -34,8 +34,10 @@
 // E-return-lookahead; DESIGN 3.7). A final bucket never changes again. A
 // pending one gets a new revision each time a Step changes it, the change
 // to final included, with rev one higher (DESIGN 6.2 D1). A pending minute
-// that turns out to have no credit and no agent time gets an empty
-// revision, so the one before it is superseded.
+// that a Step derives with no credit and no agent time gets an empty
+// revision, so the one before it is superseded. One that a Step doesn't
+// derive at all keeps its latest revision, and stays pending unless a later
+// Step derives it, so no Step zeroes a minute it never looked at.
 //
 // # The window
 //
@@ -452,7 +454,8 @@ func (l *Loop) open() error {
 	c.Device = chain.DeviceID
 	l.cur = c
 	l.base = c.Batch
-	l.win = window{from: c.From, carry: c.Carry, gaps: l.gaps}
+	l.win = window{from: c.From, carry: c.Carry, gaps: l.gaps, ttl: l.opts.Params.Int(params.BUCKET_TTL_S) * 1000,
+		late: (l.opts.Params.Int(params.PENDING_WINDOW_S) - l.opts.Params.Int(params.READ_HORIZON_S)) * 1000}
 	for _, date := range c.Days {
 		l.days[date] = true
 	}
@@ -752,6 +755,12 @@ func (l *Loop) step(b uint64) {
 	all.Append(out.Final)
 	all.Append(out.Pending)
 	view := minuteBuckets(meta, all, recs)
+	// The minutes this Step derived: pkg/score gives every slot it derives
+	// a credit slot, empty ones included.
+	derived := make(map[int64]bool, len(all.Credits)/4+1)
+	for _, c := range all.Credits {
+		derived[c.Slot-floorMod(c.Slot, minuteMS)] = true
+	}
 	// The minutes this Step can change: every one that wasn't final before
 	// it, as far as the view or the store has anything for them.
 	visit := make(map[int64]bool, len(l.pending))
@@ -767,6 +776,20 @@ func (l *Loop) step(b uint64) {
 		bk, ok := view[m]
 		if !ok {
 			if !l.pending[m] {
+				continue
+			}
+			if !derived[m] {
+				// A pending minute this Step didn't derive, such as one whose
+				// records the window no longer holds, keeps its latest
+				// revision as it is: an empty one would zero the credit and
+				// agent time no Step has taken back. A later Step that
+				// derives it writes it again. Once FinalBefore passes it, no
+				// Step can make it final, and the loop stops looking at it,
+				// as pkg/score's Revisions does with a minute it no longer
+				// derives, so it stays pending (WP-HL1).
+				if m+minuteMS <= fb {
+					delete(l.pending, m)
+				}
 				continue
 			}
 			bk = emptyBucket(meta, m)

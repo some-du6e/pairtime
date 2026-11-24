@@ -209,8 +209,8 @@ type creditor struct {
 	buckets map[string][]*bucket
 	runs    map[string]*running
 	// all holds the turns of every project, which SM 5.2's codes for a live
-	// slot whose presence is unknown read, on a device that never samples
-	// (presence.live).
+	// slot whose presence is unknown read, in a never-sampling device's
+	// slots (presence.neverAt).
 	all running
 	// relays are the sessions with relayed anchors, by key, and leads the
 	// leads of those anchors, by start: the candidates of the relayed
@@ -800,10 +800,11 @@ func lowerLevel(a, b event.Evidence) event.Evidence {
 // person started includes a relayed one (SM 2.2), and X.bucket_cap covers
 // the relayed reading that UNKNOWN_BUCKET_MAX_S held back too.
 //
-// On a device that never samples (presence.live), such as a server with no
-// desktop, every slot is a live slot whose presence is unknown, and the
-// presence and focus codes don't apply: after the codes for withheld credit
-// comes unknownCode (SM 5.2).
+// In a never-sampling device's slot (presence.neverAt), such as every slot
+// of a server with no desktop, or one after a desktop's sampler stopped,
+// the slot is a live slot whose presence is unknown, and the presence and
+// focus codes don't apply: after the codes for withheld credit comes
+// unknownCode (SM 5.2).
 func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
 	if sec := c.state(k); sec != nil {
 		switch {
@@ -813,7 +814,7 @@ func (c *creditor) uncredited(k int, s *Slot, at *attribution) event.Reason {
 			return event.ReasonBucketCap
 		}
 	}
-	if c.d.pres.live && !s.Asleep && !s.Locked && s.At(c.at(k)) == event.PresentUnknown {
+	if c.d.pres.never[k/perSlot] && s.At(c.at(k)) == event.PresentUnknown {
 		return c.unknownCode(k)
 	}
 	if s.Asleep || s.Locked || !present(s.At(c.at(k))) {

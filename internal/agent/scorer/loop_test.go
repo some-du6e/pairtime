@@ -1036,8 +1036,9 @@ func TestWriteFailures(t *testing.T) {
 // at plus each of tools, in Unix ms, with no stop. Nobody is at the
 // computer, and the agent samples presence once a minute, as it does
 // after CONTEXT_IDLE_S without input (DESIGN 6.2 D14), so no sample gap is
-// a sleep. Without samples pkg/score derives only the BUCKET_TTL_S before
-// now, which no loop over the batches could match.
+// a sleep. Without samples the computer would be one whose agent never
+// samples, scored with SM 5.2's codes for a slot whose presence is
+// unknown, and not the desktop these turns run on.
 func hookTurn(t *testing.T, at int64, tools []int64) []event.Event {
 	t.Helper()
 	var start, prompt, tool, sample *event.Event

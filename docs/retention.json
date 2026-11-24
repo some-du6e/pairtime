@@ -85,9 +85,9 @@
     {
       "id": "server.account",
       "where": "server",
-      "data": "Your account: your Hack Club Auth ID, Slack ID and handle, your email address (stored encrypted, with a keyed hash so a deletion request can find it), whether Hack Club Auth has verified you and says you're eligible for its programs, when you signed up and last signed in, the time zone your dashboard counts your days in, and your GitHub user ID if you link GitHub",
+      "data": "Your account: your Hack Club Auth ID, Slack ID and handle, your email address (stored encrypted, with a keyed hash so a deletion request can find it), whether Hack Club Auth has verified you and says you're eligible for its programs, when you signed up and last signed in, the time zone your dashboard counts your days in, with the time of each change you made to it and the zone it changed from, and your GitHub user ID if you link GitHub",
       "kept": "While your account exists",
-      "tables": ["users"]
+      "tables": ["users", "zone_changes"]
     },
     {
       "id": "server.sessions",
@@ -244,6 +244,39 @@
       "where": "server",
       "data": "Keyed hashes of the Hackatime project names you link to a program",
       "kept": "Until you unlink the program"
+    },
+    {
+      "id": "server.build_days",
+      "where": "server",
+      "data": "Build days: for each day, counted in your time zone, your credited time at evidence levels A and B that reached this server in time to count, whether that made it a build day, and when that was decided; your weekly goal, whether you met it each week or a freeze covered the week, and the freezes you earned and used",
+      "kept": "While your account exists",
+      "tables": ["build_days", "build_goals", "build_weeks"]
+    },
+    {
+      "id": "server.devlogs",
+      "where": "server",
+      "data": "Devlogs you published: the text exactly as the preview showed it, whether it's labeled as made with AI help, which of your projects it belongs to, when you published it, and the random ID your computer gave it",
+      "kept": "Each one until you delete it, which deletes it from this server at once, or until you delete your account",
+      "tables": ["devlogs"]
+    },
+    {
+      "id": "server.badges",
+      "where": "server",
+      "data": "The badges you chose to show on your profile, as codes from a fixed list, each with the random ID your computer gave it",
+      "kept": "Each one until you remove it, which deletes it from this server at once, or until you delete your account",
+      "tables": ["badges"]
+    },
+    {
+      "id": "server.removed_items",
+      "where": "server",
+      "data": "Devlogs you deleted and badges you removed, without their text, their project or which badge it was: only the random ID your computer gave each one and when you removed it, so a computer of yours that missed the removal can't publish it again",
+      "kept": "{days} after you removed it. All of them go when your account is deleted",
+      "days": 30,
+      "jobs": [{
+        "table": "removed_items",
+        "key": ["user_id", "id"],
+        "time_column": "removed_at_ms"
+      }]
     },
     {
       "id": "server.backups",

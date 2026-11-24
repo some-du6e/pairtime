@@ -832,9 +832,11 @@ func TestRelayHold(t *testing.T) {
 // its first record to the one holding now, so the seconds before its first
 // record and after its last in their minutes take SM 5.2's codes
 // (testdata/timelines/relayed). Records a log reader wrote, as lookback's
-// transcripts all are, keep the range they had, which is WP-SC7's, and a
-// device whose agent samples keeps the range its samples decide. A Step a
-// minute gives what one Step gives on each.
+// transcripts all are, keep the range they had, which is WP-SC7's. A device
+// whose agent samples keeps the range its samples decide, after slots
+// before its first sample that are a never-sampling device's and so begin
+// with a whole minute (WP-HL1). A Step a minute gives what one Step gives on
+// each.
 func TestWholeMinutes(t *testing.T) {
 	cases := []struct {
 		name string
@@ -847,7 +849,8 @@ func TestWholeMinutes(t *testing.T) {
 	}{
 		{"a server's hook records give whole minutes, from the first record's minute to now's", event.ViaHook, false, 0, 105},
 		{"records a log reader wrote alone keep the first record's slot and now's", event.ViaLog, false, 15, 90},
-		{"a device that samples keeps the range its samples decide", event.ViaHook, true, 15, 75},
+		{"a device that samples derives whole minutes before its first sample, a never-sampling device's slots, and after it the range its samples decide",
+			event.ViaHook, true, 0, 75},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1345,7 +1348,7 @@ func TestRelayedVouching(t *testing.T) {
 
 // TestRelayedLeadOnAFreshState checks where a device that never samples
 // starts its slots when a relayed message comes before every record of its
-// run (SM 2.3, presence.live): T3 Code starts the session after it takes
+// run (SM 2.3, presence.neverAt): T3 Code starts the session after it takes
 // the message, so session.start, the prompt and the relay record all come
 // after the stamp. The slots start no later than the minute of the
 // earliest lead a relay record can open, COMPOSE_MAX_S before its stamp,

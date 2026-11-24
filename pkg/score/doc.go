@@ -214,18 +214,19 @@
 //     session_key (relaycredit.go). Every second it credits is level C
 //     with via_relay, and Submission.Totals counts them in via_relay_s.
 //   - A device that never samples while its agent runs, such as a server,
-//     derives whole minutes (presence.live), from its first record's
+//     derives whole minutes (presence.neverAt), from its first record's
 //     minute or, when it is earlier, the minute of the earliest lead a
 //     relay record can open, COMPOSE_MAX_S before its stamp, since the app
-//     starts a message's run after the stamp. Only a record of declared
-//     none decided in time for its stamp, at most RELAY_SEEN_LAG_S after
-//     it and at most 2 s before, can open one. An uncredited second
-//     there takes SM 5.2's codes for a live slot whose presence is
-//     unknown: X.bucket_cap where only the 120 s cap kept a session from
-//     reading, else X.agent_only while a turn a person started runs, a
-//     relayed one included, or a no_input one, else X.automated while an
-//     automated turn runs, else X.no_anchor, turns of every project
-//     counting.
+//     starts a message's run after the stamp, but no more than
+//     BUCKET_TTL_S before the first record its agent stamped itself
+//     (WP-HL1). Only a record of declared none decided in time for its
+//     stamp, at most RELAY_SEEN_LAG_S after it and at most 2 s before, can
+//     open one. An uncredited second there takes SM 5.2's codes for a live
+//     slot whose presence is unknown: X.bucket_cap where only the 120 s cap
+//     kept a session from reading, else X.agent_only while a turn a person
+//     started runs, a relayed one included, or a no_input one, else
+//     X.automated while an automated turn runs, else X.no_anchor, turns of
+//     every project counting.
 //
 // Readings of D-relayed:
 //
@@ -245,10 +246,35 @@
 //     one, low_effort by the record's go-ahead test or under
 //     SUBSTANTIVE_CHARS typed characters, else substantive. The record
 //     carries no error signature, so it is never error_paste.
-//   - A device counts as never sampling when it has no os.presence,
-//     os.focus or os.power record and some record came by a path other
-//     than a log reader's. Lookback's transcripts come only by a log reader,
-//     and lookback's own range is WP-SC7's.
+//   - A slot is a never-sampling device's when some record came by a path
+//     other than a log reader's, and no os.presence or os.power, the
+//     presence sampler's records, dated before the slot ends keeps the
+//     device sampling there: there is none, or the latest one's reach
+//     ended, since a record the agent stamps itself came dated more than
+//     BUCKET_TTL_S after it and before the sampler's next record, and the
+//     newest record is PENDING_WINDOW_S - READ_HORIZON_S past that one. Till
+//     then a sample dated before it can still arrive, as a resume queued
+//     behind a later-dated stop hook does, and keep the reach. The other
+//     order waits too: while the sampler's next record, more than
+//     BUCKET_TTL_S after one whose reach hasn't ended, is less than that
+//     wait behind the newest record, a stamped record dated inside the gap
+//     can still arrive and end the reach, so the earlier record keeps the
+//     clock (State.now). A never-sampling device's slot has no hard
+//     break, and no lock, suspend or gap from before a never-sampling
+//     stretch reaches the slot of the sampler's record that ends the
+//     stretch: an open lock or suspend closes at that slot's start, and the
+//     sample after an os.power that ends it opens no gap. When no sample
+//     follows that os.power, the slots up to the sampler's next sample are
+//     unknown, as before a machine's first sample, apart from those a
+//     suspend keeps asleep up to its resume, and none takes its keyboard
+//     flag from a sample before the restart (presence.blindAt). The
+//     agent's os.focus, which says focus is unknown each time the agent
+//     starts, doesn't count. WP-HL1 changed this reading, which first read
+//     every record a State held, os.focus included, after a server's agent
+//     stopped scoring 15 minutes after each start, and then bounded a
+//     sample's reach slot by slot (docs/errata/2026-11-23-headless-scoring.md).
+//     Lookback's transcripts come only by a log reader, and lookback's own
+//     range is WP-SC7's.
 //   - The thread's next relayed anchor after a stop is the first one sent
 //     after the stop of those that pair by the deadline, PENDING_WINDOW_S -
 //     60 s after the stop. One that pairs later keeps its own lead but is
@@ -284,11 +310,22 @@
 // # Final and pending
 //
 // What Step derives for a time stays pending until now is PENDING_WINDOW_S
-// later, then becomes final and is output once (DESIGN 3.7, 6.2 D1). No
-// record changes what was derived for a time more than READ_HORIZON_S before
-// its own t: a lead reaches back at most THINK_LEAD_S + COMPOSE_MAX_S,
-// reading needs a human act within READ_HORIZON_S, and the return rule an
-// act on record within READ_HORIZON_S of the silence's start. So a record
+// later, then becomes final and is output once (DESIGN 3.7, 6.2 D1). Now is
+// the latest record's time, but no more than PENDING_WINDOW_S past the
+// latest os.presence or os.power, the presence sampler's records, which
+// come every 15 to 60 s while a project context is live, until a record the
+// agent stamps itself is dated more than BUCKET_TTL_S after that one and
+// the newest record is PENDING_WINDOW_S - READ_HORIZON_S past it. An
+// earlier sample holds now the same way while a record that would end its
+// reach waits like that, and while the sampler's next record, more than
+// BUCKET_TTL_S after it, is less than that wait behind the newest record,
+// in case a record that ends its reach is still on its way. On a device
+// whose agent never samples, and once the sampler's records have no reach
+// left, it is the latest record's time (SM 2.1, WP-HL1). No record changes
+// what was derived for a time more than READ_HORIZON_S before its own t: a
+// lead reaches back at most THINK_LEAD_S + COMPOSE_MAX_S, reading needs a
+// human act within READ_HORIZON_S, and the return rule an act on record
+// within READ_HORIZON_S of the silence's start. So a record
 // that arrives up to PENDING_WINDOW_S - READ_HORIZON_S late changes only
 // what is still pending. That bound and the return rule's horizon are the
 // code half of E-return-lookahead

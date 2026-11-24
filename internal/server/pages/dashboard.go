@@ -987,7 +987,9 @@ type Dashboard struct {
 	// 500 rather than sending a signed-in owner to sign in again.
 	Account func(r *http.Request) (string, error)
 	// SetZone sets an account's time zone. It wraps rollup.ErrBadZone for
-	// a name that isn't one.
+	// a name that isn't one, and returns a *rollup.ZoneTooSoonError, which
+	// wraps rollup.ErrZoneTooSoon, for a change less than 30 days after the
+	// last (rollup.SetZone).
 	SetZone func(ctx context.Context, account, zone string) error
 	// HideName deletes the name the account's owner turned on for
 	// project, an account-level project id, from every device key of it
@@ -1051,6 +1053,11 @@ func (s *Site) RegisterDashboard(mux *http.ServeMux, in SignIn, d Dashboard) {
 				s.serveDashboard(w, r, in, d, "That isn't a time zone pairtime knows. Use a name like America/New_York or Europe/London.", http.StatusUnprocessableEntity)
 				return
 			}
+			var soon *rollup.ZoneTooSoonError
+			if errors.As(err, &soon) {
+				s.serveDashboard(w, r, in, d, zoneTooSoon(soon), http.StatusUnprocessableEntity)
+				return
+			}
 			d.Logger.Error("setting a time zone", "user", id, "err", err)
 			http.Error(w, "Your time zone didn't save. Try again in a minute.", http.StatusInternalServerError)
 			return
@@ -1093,6 +1100,13 @@ func (s *Site) RegisterDashboard(mux *http.ServeMux, in SignIn, d Dashboard) {
 		}
 		http.Redirect(w, r, DashboardPath, http.StatusSeeOther)
 	})
+}
+
+// zoneTooSoon says why a time zone change was refused, with the dates in
+// the account's zone, the one the refusal's times are in.
+func zoneTooSoon(e *rollup.ZoneTooSoonError) string {
+	return "You changed your time zone on " + e.Changed.Format("2 January 2006") +
+		". You can change it again from " + e.Next.Format("2 January 2006") + "."
 }
 
 // serveDashboard writes the dashboard page for r, with zoneError, if any,
