@@ -45,15 +45,21 @@ var dayCapMS = sync.OnceValue(func() int64 {
 // below zero. Any of those days is re-cut whole instead (recut).
 func capped(ctx context.Context, tx writer.Tx, account, day string, minuteMS int64, prev, next merged, d delta) (delta, error) {
 	limit := dayCapMS()
-	kept, withheld, err := dayTotals(ctx, tx, account, day)
+	stored, err := dayRows(ctx, tx, account, day)
 	if err != nil {
 		return nil, err
 	}
+	kept, withheld := stored.totals()
 	if withheld == 0 && kept+next.credit()-prev.credit() <= limit {
-		return d, nil
+		// Rows keep changed can be under the cap with columns that aren't
+		// the day's cut, so d must fit them too.
+		if fits(stored, d) {
+			return d, nil
+		}
+		return recut(ctx, tx, account, day, minuteMS, next, d, kept, limit, stored)
 	}
 	if !isCut(kept, withheld, limit) {
-		return recut(ctx, tx, account, day, minuteMS, next, d, kept+withheld, limit, nil)
+		return recut(ctx, tx, account, day, minuteMS, next, d, kept+withheld, limit, stored)
 	}
 	later, err := dayMinutes(ctx, tx, account, day, minuteMS)
 	if err != nil {
@@ -70,10 +76,6 @@ func capped(ctx context.Context, tx writer.Tx, account, day string, minuteMS int
 	out.add(cut(start, limit, day, ms))
 	ms[0] = prev
 	out.subtract(cut(start, limit, day, ms))
-	stored, err := dayRows(ctx, tx, account, day)
-	if err != nil {
-		return nil, err
-	}
 	if !fits(stored, out) {
 		return recut(ctx, tx, account, day, minuteMS, next, d, kept+withheld, limit, stored)
 	}
@@ -216,6 +218,18 @@ func recutDay(ctx context.Context, tx writer.Tx, account, day string, limit int6
 	out := cut(0, limit, day, ms)
 	out.subtract(stored)
 	return true, addDaily(ctx, tx, account, out)
+}
+
+// totals returns the credit d's rows keep, at every level and state, and
+// the credit they hold back past the day cap.
+func (d delta) totals() (kept, withheld int64) {
+	for _, c := range d {
+		for col := 0; col < agentFinal; col++ {
+			kept += c[col]
+		}
+		withheld += c[dayCap]
+	}
+	return kept, withheld
 }
 
 // fits reports whether adding d to stored leaves every credited column

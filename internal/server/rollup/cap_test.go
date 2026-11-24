@@ -203,6 +203,22 @@ func TestDayCap(t *testing.T) {
 			want: []Day{final("d1/p1", day, "prompting", 0, 600_000)},
 		},
 		{
+			name:        "a legacy day that keep brought back under the cap takes a later revision without any column going below zero",
+			before:      joinSteps([]step{newYork}, creditFor("d1", "p1", "prompting", "A", local(9, 0), 3, "final")),
+			beforeLimit: math.MaxInt64,
+			gone:        local(9, 1),
+			limit:       120_000,
+			steps: []step{
+				func() step {
+					b := sl("p1", 15, "prompting", "B")
+					return bk("d1", local(9, 1), 1, "final", nil, b, b, b, b)
+				}(),
+				bk("d1", local(9, 2), 1, "final", nil),
+				bk("d1", local(9, 1), 2, "final", nil),
+			},
+			want: []Day{final("d1/p1", day, "prompting", 0, 120_000)},
+		},
+		{
 			name:  "a slot the cap falls inside is split there",
 			limit: 607_500,
 			steps: joinSteps([]step{newYork},
@@ -277,8 +293,8 @@ func TestDayCap(t *testing.T) {
 // minutes' own time order.
 func TestDayCapReplayConverges(t *testing.T) {
 	withCap(t, 300_000)
-	// Three devices, eight minutes, two revisions each, with credit, levels
-	// and states drawn from a fixed seed.
+	// Three devices, eight minutes, two revisions each, with credit, levels,
+	// states and the agent's time on its own drawn from a fixed seed.
 	gen := rand.New(rand.NewPCG(13, 17))
 	projects := []string{"p1", "p2"}
 	kinds := []string{"prompting", "testing"}
