@@ -139,7 +139,7 @@ func pastUpload(at time.Time, server string, p plan, a answer) PastUpload {
 	sum := sha256.Sum256(p.js)
 	return PastUpload{
 		At: at, Server: server,
-		Roots: len(p.body.Batches), Minutes: len(p.body.Buckets), Labels: p.body.Labels != nil,
+		Roots: len(p.body.Batches), Minutes: len(p.body.Buckets), Labels: p.body.Labels != nil, Commits: len(p.body.Commits),
 		Status: a.status, Replay: a.header.Get("X-Pairtime-Replay") == "true",
 		BodySHA256: hex.EncodeToString(sum[:]),
 	}

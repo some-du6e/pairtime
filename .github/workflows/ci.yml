@@ -116,6 +116,17 @@ jobs:
       - name: go test
         run: go test ./...
 
+      - name: "go test under GOARCH=386: pkg/ledger and pkg/params, as windows/386 runs them"
+        if: ${{ !cancelled() }}
+        # windows/386 is a release target, and go test above runs on amd64
+        # only. A challenge draw, a sketch or a parameter read that came out
+        # differently with a 32-bit int would differ from what the server and
+        # an auditor compute. The runner executes 386 binaries natively.
+        env:
+          GOARCH: "386"
+          CGO_ENABLED: "0"
+        run: go test ./pkg/ledger/... ./pkg/params/...
+
       - name: The T3 Code reader with old distributions' sqlite3
         if: ${{ !cancelled() }}
         # The reader runs whatever sqlite3 the computer has (DESIGN 5.1), and

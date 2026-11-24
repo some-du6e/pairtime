@@ -31,6 +31,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/rollup"
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/stream"
+	"github.com/some-du6e/pairtime/internal/server/submission"
 	"github.com/some-du6e/pairtime/internal/server/writer"
 	"github.com/some-du6e/pairtime/internal/version"
 )
@@ -94,6 +95,13 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	if err != nil {
 		return err
 	}
+	// A freeze records the scoring version this server runs and its
+	// parameter table's hash, so a scoring_version this release couldn't
+	// re-score at stops it here (WP-SB1; D-sb1-submissions, Q10).
+	scoring, paramsHash, err := submission.Scoring(cfg.ScoringVersion, pages.BuiltinScoringVersion)
+	if err != nil {
+		return err
+	}
 	// Ingest takes uploads once the server key loads (newIngest), and the
 	// privacy notice says whether it does, and whether the day roots go
 	// out.
@@ -117,9 +125,13 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		// What the privacy notice describes that this server runs. Sign-in
 		// runs once hca.client_id is set (newSignIn), uploads (WP-SV4) once
 		// the server key loads, and the day roots (WP-SV17) once it does
-		// and PAIRTIME_WITNESS_REPO names the witness repository. The work
-		// package that adds submissions (WP-SB1) sets its own here.
-		Running: pages.Running{SignIn: cfg.HCA.ClientID != "", Uploads: keyErr == nil, DayRoots: dayRoots},
+		// and PAIRTIME_WITNESS_REPO names the witness repository.
+		// Submissions run once [[programs]] lists a program, since the
+		// submissions API mounted below (WP-SB1) refuses every create to a
+		// program the list doesn't hold; submissions it holds from before
+		// stay in the notice's retention table. WP-SB4 sets EvidenceStore
+		// when it mounts the reveal upload.
+		Running: pages.Running{SignIn: cfg.HCA.ClientID != "", Uploads: keyErr == nil, Submissions: len(cfg.Programs) > 0, DayRoots: dayRoots},
 	})
 	if err != nil {
 		return err
@@ -470,6 +482,11 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	// default rate, in a bucket apart from its uploads' (devlog.Options).
 	devlog.New(devlog.Options{Devices: devices, Writer: w, Read: db.Read, Now: time.Now, Logger: logger}).Register(public)
 	public.HandleFunc("GET "+buildday.SummaryPath, buildday.API(db.Read, devices, time.Now, logger))
+	subs, err := newSubmissions(cfg, db, w, devices, signIn, scoring, paramsHash, logger)
+	if err != nil {
+		return err
+	}
+	subs.Register(public)
 	maintainCtx, stopMaintain := context.WithCancel(ctx)
 	defer stopMaintain()
 	go signIn.Maintain(maintainCtx)

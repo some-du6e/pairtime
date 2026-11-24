@@ -18,6 +18,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/adapters/git"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/sched"
+	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -96,6 +97,9 @@ type gitHost struct {
 	saved   []byte // the project map and cursors as last put in state.json
 	// logged are the watcher's own problems as last logged.
 	logged map[string]string
+	// pmu guards pruneErr, the commit store's prune error as last logged.
+	pmu      sync.Mutex
+	pruneErr string
 
 	// fmu guards what the host knows of the session folders, apart from mu,
 	// so that looking up a call's folder never waits for a change's record
@@ -171,7 +175,7 @@ func newGitHost(a *agent, secret []byte, w *ledger.Writer) (*gitHost, error) {
 	g := &gitHost{a: a, res: res, writer: w, commits: &commitStore{dir: a.dirs.Commits()},
 		tracked: make(map[string]bool), folders: make(map[string]*folder)}
 	g.ctx, g.cancel = context.WithCancel(context.Background())
-	g.commits.prune(time.Now())
+	g.prune(time.Now())
 	g.w, err = git.NewWatcher(git.WatcherOptions{
 		Resolver: res,
 		Sink:     g.sink,
@@ -187,9 +191,40 @@ func newGitHost(a *agent, secret []byte, w *ledger.Writer) (*gitHost, error) {
 	g.job = a.sched.Every("git.poll", gitPollEvery, func(now time.Time) {
 		g.w.Poll()
 		g.problems()
-		g.commits.prune(now)
+		g.prune(now)
 	})
 	return g, nil
+}
+
+// prune has the commit store delete the files of commits/ past
+// commitsKeep, and tells doctor while it can't. A day's file goes only once
+// the shas of its lines are on commits/pruned.txt (uploader.PruneCommits),
+// so a list that can't be appended to, as one made read-only, or a full
+// disk keeps every file past its days, longer than DESIGN 4.4 and the
+// privacy notice say. The problem names the list, and goes once a prune
+// works: one that failed runs again at the next poll, within gitPollEvery.
+// The log has the error once, until it changes or a prune works.
+func (g *gitHost) prune(now time.Time) {
+	err := g.commits.prune(now)
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	g.pmu.Lock()
+	logged := g.pruneErr
+	g.pruneErr = msg
+	g.pmu.Unlock()
+	if err == nil {
+		g.a.setProblem("git.prune", "")
+		return
+	}
+	if msg != logged {
+		g.a.log.Warn("couldn't delete the commit records past their days from commits/", "days", int(commitsKeep/(24*time.Hour)), "err", err)
+	}
+	// In words of the agent's own, as the git adapter's other problems: the
+	// error names the data directory's folder.
+	g.a.setProblem("git.prune", fmt.Sprintf("pairtime couldn't delete the commit records in commits/ older than %d days, as a day's goes only once its commits are listed in commits/%s; it tries again within the minute, and the agent's log says why",
+		int(commitsKeep/(24*time.Hour)), uploader.PrunedCommits))
 }
 
 // known reports whether the calls of dir, a session's working directory,

@@ -1,0 +1,88 @@
+{
+  "fixture": "focus-unknown/f-nearest-ahead",
+  "anchors": [
+    {
+      "event_id": "01a22239-24a0-7b70-96ce-c21ea0e9bbb4",
+      "kind": "substantive_prompt",
+      "t": 1795870500000,
+      "local": "13:55:00",
+      "project_key": "p_3815ea4d3197",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 160,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "C",
+      "sm": "2.2 rule 6: input before submit, and the focus test passes only because focus is unknown (2.5); lead 120 + 60 / 1.5 = 160 s",
+      "labels": ["focus_unknown"]
+    },
+    {
+      "event_id": "01a2223d-b880-7453-90db-87bce341d7de",
+      "kind": "substantive_prompt",
+      "t": 1795870800000,
+      "local": "14:00:00",
+      "project_key": "p_fca05b11bce0",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 150,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "C",
+      "sm": "2.2 rule 6: input before submit, and the focus test passes only because focus is unknown (2.5); lead 120 + 45 / 1.5 = 150 s",
+      "labels": ["focus_unknown"]
+    },
+    {
+      "event_id": "01a22245-f9c8-73e2-9505-c9008f31623f",
+      "kind": "substantive_prompt",
+      "t": 1795871341000,
+      "local": "14:09:01",
+      "project_key": "p_3815ea4d3197",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "lead_s": 136,
+      "trail_s": 0,
+      "lead_from": "params",
+      "via": "hook",
+      "level": "C",
+      "sm": "2.2 rule 6: input before submit, and the focus test passes only because focus is unknown (2.5); lead 120 + 24 / 1.5 = 136 s",
+      "labels": ["focus_unknown"]
+    }
+  ],
+  "turns": [
+    {
+      "session_key": "s_f83178bb9079",
+      "turn_key": "t_592a00037e18",
+      "t_submit": 1795870500000,
+      "local_submit": "13:55:00",
+      "t_stop": 1795870590000,
+      "local_stop": "13:56:30",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 6 on unknown focus"
+    },
+    {
+      "session_key": "s_8a4bd08aee0c",
+      "turn_key": "t_96f7b64cd48d",
+      "t_submit": 1795870800000,
+      "local_submit": "14:00:00",
+      "t_stop": 1795870980000,
+      "local_stop": "14:03:00",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 6 on unknown focus"
+    },
+    {
+      "session_key": "s_f83178bb9079",
+      "turn_key": "t_336684375082",
+      "t_submit": 1795871341000,
+      "local_submit": "14:09:01",
+      "t_stop": 1795871390000,
+      "local_stop": "14:09:50",
+      "origin": "human_typed",
+      "prompt_class": "substantive",
+      "sm": "2.2 rule 6 on unknown focus"
+    }
+  ]
+}

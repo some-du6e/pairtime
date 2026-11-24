@@ -4,6 +4,7 @@ package config
 
 import (
 	"encoding"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 
 // full sets every key DESIGN 10.2 lists, and the server's own.
 const full = `
+config_version = 2
 base_url = "https://pairtime.example.org"
 signups_open = true
 profile_default = "ask"
@@ -50,6 +52,15 @@ roles = ["qi", "program_reviewer:stardance"]
 [[reviewers]]
 sub = "ident!def456"
 roles = ["fraud_squad", "spot_checker", "admin"]
+
+[[programs]]
+name = "stardance"
+display_name = "Stardance"
+
+[[programs]]
+name = "calibration"
+display_name = "Calibration"
+takes_hours = false
 `
 
 // objectStorage is an [object_storage] section with the keys a deployment
@@ -65,6 +76,9 @@ var s3Secrets = []string{"PAIRTIME_S3_ACCESS_KEY_ID=AKIDR2", "PAIRTIME_S3_SECRET
 
 func TestLoad(t *testing.T) {
 	const base = "base_url = \"https://pairtime.example.org\"\n"
+	// newer is the config_version of a file a newer release wrote.
+	newer := fmt.Sprintf("config_version = %d\n", ConfigVersion+1)
+	yes, no := true, false
 	tests := []struct {
 		name    string
 		toml    string
@@ -80,7 +94,7 @@ func TestLoad(t *testing.T) {
 			toml: full,
 			check: func(t *testing.T, c *Config, _ string) {
 				want := Config{
-					ConfigVersion:  1,
+					ConfigVersion:  2,
 					BaseURL:        "https://pairtime.example.org",
 					SignupsOpen:    true,
 					ProfileDefault: ProfileAsk,
@@ -88,6 +102,10 @@ func TestLoad(t *testing.T) {
 					Reviewers: []Reviewer{
 						{Sub: "ident!abc123", Roles: []string{"qi", "program_reviewer:stardance"}},
 						{Sub: "ident!def456", Roles: []string{"fraud_squad", "spot_checker", "admin"}},
+					},
+					Programs: []Program{
+						{Name: "stardance", DisplayName: "Stardance", TakesHours: &yes},
+						{Name: "calibration", DisplayName: "Calibration", TakesHours: &no},
 					},
 					Operators:  []string{"ident!op1"},
 					Controller: Controller{Name: "Hack Club", Contact: "privacy@example.org", DPO: "https://forms.example.org/privacy"},
@@ -151,10 +169,10 @@ func TestLoad(t *testing.T) {
 			// that table (DESIGN 8.6). A release that doesn't ignores it with
 			// the other keys it doesn't know.
 			name: "a file for a newer release loads, with its unknown keys as warnings, so a rollback starts on it",
-			toml: base + "config_version = 2\nprofile_default = \"ask\"\nsignups_open = true\nfrom_a_newer_release = true\n[controller]\nname = \"Hack Club\"\ncontact = \"privacy@example.org\"\n[hca]\nnewer_key = \"x\"\n",
+			toml: base + newer + "profile_default = \"ask\"\nsignups_open = true\nfrom_a_newer_release = true\n[controller]\nname = \"Hack Club\"\ncontact = \"privacy@example.org\"\n[hca]\nnewer_key = \"x\"\n",
 			check: func(t *testing.T, c *Config, _ string) {
-				if c.ConfigVersion != 2 || c.ProfileDefault != ProfileAsk || !c.SignupsOpen {
-					t.Errorf("config_version = %d, profile_default = %q, signups_open = %v; want 2, %q and true, read as usual", c.ConfigVersion, c.ProfileDefault, c.SignupsOpen, ProfileAsk)
+				if c.ConfigVersion != ConfigVersion+1 || c.ProfileDefault != ProfileAsk || !c.SignupsOpen {
+					t.Errorf("config_version = %d, profile_default = %q, signups_open = %v; want %d, %q and true, read as usual", c.ConfigVersion, c.ProfileDefault, c.SignupsOpen, ConfigVersion+1, ProfileAsk)
 				}
 				var unknown []string
 				for _, k := range []string{"from_a_newer_release", "controller", "controller.name", "controller.contact", "hca.newer_key"} {
@@ -167,25 +185,25 @@ func TestLoad(t *testing.T) {
 				}
 			},
 		},
-		{name: "a file for a newer release still has its values checked", toml: base + "config_version = 2\nprofile_default = \"private\"\n", wantErr: "profile_default"},
+		{name: "a file for a newer release still has its values checked", toml: base + newer + "profile_default = \"private\"\n", wantErr: "profile_default"},
 		{
 			name:    "a value refused in a file for a newer release says a rollback needs the pairtime.toml this release ran with",
-			toml:    base + "config_version = 2\nprofile_default = \"friends\"\n",
+			toml:    base + newer + "profile_default = \"friends\"\n",
 			wantErr: "a newer release wrote it, and may have added a value this release doesn't know. For a rollback, restore the pairtime.toml this release ran with",
 		},
 		{
 			name:    "a file for a newer release that has keys this release ignores must set profile_default, since one may be profile_default misspelt",
-			toml:    base + "config_version = 2\nprofile_defualt = \"ask\"\n",
+			toml:    base + newer + "profile_defualt = \"ask\"\n",
 			wantErr: "ignores the keys it doesn't know: profile_defualt. One of them may be a misspelt or misplaced profile_default",
 		},
 		{
 			name:    "a profile_default under a table counts as missing in a file for a newer release",
-			toml:    base + "config_version = 2\n[hca]\nprofile_default = \"ask\"\n",
+			toml:    base + newer + "[hca]\nprofile_default = \"ask\"\n",
 			wantErr: "may be a misspelt or misplaced profile_default",
 		},
 		{
 			name: "a file for a newer release that has no keys this release ignores may leave profile_default out",
-			toml: base + "config_version = 2\n",
+			toml: base + newer,
 			check: func(t *testing.T, c *Config, _ string) {
 				if c.ProfileDefault != ProfilePublic || len(c.Warnings) != 0 {
 					t.Errorf("profile_default = %q, warnings %q; want %q and none", c.ProfileDefault, c.Warnings, ProfilePublic)
@@ -245,6 +263,46 @@ func TestLoad(t *testing.T) {
 		{name: "scoring_version must be X.Y.Z", toml: base + "scoring_version = \"0.x\"\n", wantErr: "scoring_version"},
 		{name: "scoring_version can't have a leading zero", toml: base + "scoring_version = \"01.0.0\"\n", wantErr: "scoring_version"},
 		{name: "a reviewer role must be one DESIGN 10.2 names", toml: base + "[[reviewers]]\nsub = \"a\"\nroles = [\"superuser\"]\n", wantErr: `unknown role "superuser"`},
+		{
+			name: "a program's takes_hours is true when the file leaves it out",
+			toml: base + "config_version = 2\n[[programs]]\nname = \"hard-mode\"\ndisplay_name = \"Hard Mode\"\n",
+			check: func(t *testing.T, c *Config, _ string) {
+				if len(c.Programs) != 1 || c.Programs[0].TakesHours == nil || !*c.Programs[0].TakesHours || !c.Programs[0].Hours() {
+					t.Errorf("programs = %+v, want hard-mode taking hours", c.Programs)
+				}
+			},
+		},
+		{
+			name: "takes_hours = false is read as it is, for calibration's program",
+			toml: base + "config_version = 2\n[[programs]]\nname = \"calibration\"\ndisplay_name = \"Calibration\"\ntakes_hours = false\n",
+			check: func(t *testing.T, c *Config, _ string) {
+				if len(c.Programs) != 1 || c.Programs[0].Hours() {
+					t.Errorf("programs = %+v, want calibration taking no hours", c.Programs)
+				}
+			},
+		},
+		{name: "[[programs]] needs the config_version that added it", toml: base + "[[programs]]\nname = \"hard-mode\"\ndisplay_name = \"Hard Mode\"\n", wantErr: "programs (config_version 2)"},
+		{name: "a key in another letter case is refused, so [[Programs]] can't pass for a key config_version 1 has", toml: base + "[[Programs]]\nname = \"hard-mode\"\ndisplay_name = \"Hard Mode\"\n", wantErr: "Programs (write programs)"},
+		{name: "two spellings of one key are refused, since they decode in no set order", toml: base + "config_version = 2\n[[programs]]\nname = \"calibration\"\ndisplay_name = \"Calibration\"\ntakes_hours = false\n[[Programs]]\nname = \"hard-mode\"\ndisplay_name = \"Hard Mode\"\n", wantErr: "Programs (write programs)"},
+		{name: "a program is listed once", toml: base + "config_version = 2\n[[programs]]\nname = \"a\"\ndisplay_name = \"A\"\n[[programs]]\nname = \"a\"\ndisplay_name = \"Another A\"\n", wantErr: `programs: entry 2: "a" is listed twice`},
+		{name: "a program's name is program_reviewer's form", toml: base + "config_version = 2\n[[programs]]\nname = \"Hard Mode\"\ndisplay_name = \"Hard Mode\"\n", wantErr: "must be 1 to 64 lowercase letters"},
+		{name: "a program needs a name", toml: base + "config_version = 2\n[[programs]]\ndisplay_name = \"Hard Mode\"\n", wantErr: "programs: entry 1 has no name"},
+		{name: "a program needs a display name", toml: base + "config_version = 2\n[[programs]]\nname = \"hard-mode\"\n", wantErr: "display_name must be 1 to 64 characters"},
+		{name: "a display name is at most 64 characters", toml: base + "config_version = 2\n[[programs]]\nname = \"hard-mode\"\ndisplay_name = \"" + strings.Repeat("é", 65) + "\"\n", wantErr: "display_name must be 1 to 64 characters"},
+		{name: "a display name of 64 characters is taken", toml: base + "config_version = 2\n[[programs]]\nname = \"hard-mode\"\ndisplay_name = \"" + strings.Repeat("é", 64) + "\"\n"},
+		{name: "a display name with a bidirectional control is refused, since it could reorder the text after it", toml: base + "config_version = 2\n[[programs]]\nname = \"hard-mode\"\ndisplay_name = \"Hard Mode" + string(rune(0x202e)) + "\"\n", wantErr: "display_name must be 1 to 64 characters"},
+		{name: "a display name with a line separator is refused", toml: base + "config_version = 2\n[[programs]]\nname = \"hard-mode\"\ndisplay_name = \"Hard" + string(rune(0x2028)) + "Mode\"\n", wantErr: "display_name must be 1 to 64 characters"},
+		{name: "a display name with a zero-width joiner, which some scripts need, is taken", toml: base + "config_version = 2\n[[programs]]\nname = \"hard-mode\"\ndisplay_name = \"a" + string(rune(0x200d)) + "b\"\n"},
+		{name: "a display name holds no control character", toml: base + "config_version = 2\n[[programs]]\nname = \"hard-mode\"\ndisplay_name = \"Hard\\tMode\"\n", wantErr: "no control characters"},
+		{
+			name: "a program_reviewer role whose program isn't listed is a warning, so its reviewers can finish its submissions",
+			toml: base + "config_version = 2\n[[reviewers]]\nsub = \"a\"\nroles = [\"program_reviewer:retired\", \"program_reviewer:hard-mode\"]\n[[programs]]\nname = \"hard-mode\"\ndisplay_name = \"Hard Mode\"\n",
+			check: func(t *testing.T, c *Config, _ string) {
+				if len(c.Warnings) != 1 || !strings.Contains(c.Warnings[0], "program_reviewer:retired names a program that [[programs]] doesn't list") {
+					t.Errorf("warnings = %q, want one for program_reviewer:retired alone", c.Warnings)
+				}
+			},
+		},
 		{name: "program_reviewer names a program", toml: base + "[[reviewers]]\nsub = \"a\"\nroles = [\"program_reviewer:\"]\n", wantErr: "needs a program name"},
 		{name: "a reviewer needs at least one role", toml: base + "[[reviewers]]\nsub = \"a\"\nroles = []\n", wantErr: "has no roles"},
 		{name: "a reviewer needs a sub", toml: base + "[[reviewers]]\nroles = [\"qi\"]\n", wantErr: "has no sub"},

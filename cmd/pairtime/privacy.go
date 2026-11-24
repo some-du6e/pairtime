@@ -261,13 +261,25 @@ func describeUpload(p uploader.Preview, server string) string {
 		b.WriteString("    computer can match to a folder, whether the minute can still change, and\n")
 		b.WriteString("    whether its records reached the server on time;\n")
 	}
+	if p.Commits > 0 {
+		fmt.Fprintf(&b, "  - %s: for each commit, its id and its parents' ids, which project,\n", countOf(p.Commits, "commit record", "commit records"))
+		b.WriteString("    as a key only this computer can match to a folder, when this computer\n")
+		b.WriteString("    first saw it, the dates the commit itself carries, how many files and\n")
+		b.WriteString("    lines it changed, the commits it replaced through an amend or a rebase,\n")
+		b.WriteString("    whether you or your AI agent made it, and the AI tool it credits, if any;\n")
+	}
 	if p.Labels {
 		b.WriteString("  - the labels: the versions of pairtime, of its scoring rules and of the AI\n")
 		b.WriteString("    tools you use, and whether the typing module is on and this computer is\n")
 		b.WriteString("    a virtual machine;\n")
 	}
-	b.WriteString("and no prompt, answer, code, file name or path, window title, command line\n")
-	b.WriteString("or keystroke.\n")
+	if p.Commits > 0 {
+		b.WriteString("and no prompt, answer, code, commit message, file name or path, window title,\n")
+		b.WriteString("command line or keystroke.\n")
+	} else {
+		b.WriteString("and no prompt, answer, code, file name or path, window title, command line\n")
+		b.WriteString("or keystroke.\n")
+	}
 	if p.Retry {
 		b.WriteString("\nAn earlier try to send it failed, and pairtime sends it again exactly like this.\n")
 	}

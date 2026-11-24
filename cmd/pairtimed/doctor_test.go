@@ -349,6 +349,15 @@ func TestDoctor(t *testing.T) {
 	}{
 		{name: "a healthy deploy passes every check, and each push monitor gets one ping with doctor's User-Agent",
 			wantPings: map[string]int{"/pairtimed": 1, "/snapshot": 1, "/litestream": 1}},
+		{name: "a scoring_version serve refuses fails the config check, since pairtimed wouldn't start on the file (D-sb1-submissions, Q10)",
+			setup: func(t *testing.T, d *deployed) {
+				text, err := os.ReadFile(d.config)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, d.config, "scoring_version = \"99.0.0\"\n"+string(text), 0o644)
+			},
+			want: map[string][2]string{"config": {statusFail, "newer than this release's built-in scorer"}}, wantCode: 1},
 		{name: "a bucket with versioning on fails, since a purge would leave old versions",
 			setup: func(_ *testing.T, d *deployed) { d.s3.SetVersioning("pairtime-data", "Enabled") },
 			want:  map[string][2]string{"bucket.pairtime-data.versioning": {statusFail, "versioning is Enabled"}}, wantCode: 1},
