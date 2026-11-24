@@ -30,8 +30,8 @@ type window struct {
 	// sampler's another record the agent stamps itself may come before the
 	// sampler's record has no reach left (stamps, cutBy), and late is
 	// PENDING_WINDOW_S - READ_HORIZON_S, pkg/score's rules.late, how long
-	// after such a record the newest record must be before the cut takes
-	// effect.
+	// after such a record the newest record the device's own clock dated
+	// (clocked) must be before the cut takes effect.
 	ttl, late int64
 }
 
@@ -116,10 +116,12 @@ func (w *window) records() []event.Event {
 // and before the sampler's next record, and whose cut has taken effect:
 // the carry's (carry.Stamped), and the window's that come before the
 // window's first record of the sampler's in record order and are late,
-// PENDING_WINDOW_S - READ_HORIZON_S, before the newest. pkg/score ends a
-// record's reach only for such a record dated more than BUCKET_TTL_S after
-// it, and only once the newest record is late past it (sampledReaches),
-// so a silence of the sampler's longer than Lookback that ends with a
+// PENDING_WINDOW_S - READ_HORIZON_S, before the newest record the device's
+// own clock dated (clocked). pkg/score ends a record's reach only for such
+// a record dated more than BUCKET_TTL_S after it, and only once that
+// newest record is late past it (sampledReaches), so a bridge or log
+// record dated ahead of the device's clock ends no reach here either, and
+// a silence of the sampler's longer than Lookback that ends with a
 // sample, or a suspend that long, keeps the carried record's reach, and so
 // does a cut still waiting, as in one Step over every record. A stamped
 // record after the window's first record of the sampler's can end only
@@ -129,20 +131,25 @@ func (w *window) cutBy() int64 {
 		return w.carry.Stamped
 	}
 	var first *event.Event
-	high := w.recs[0].ev.T
+	// dated is the newest t the device's own clock dated in the window,
+	// which is pkg/score's over the window's records: the carry's are all
+	// dated before them.
+	var dated int64
 	for i := range w.recs {
 		e := &w.recs[i].ev
-		high = max(high, e.T)
+		if clocked(e) {
+			dated = max(dated, e.T)
+		}
 		if sampler(e) && (first == nil || recordCmp(e, first) < 0) {
 			first = e
 		}
 	}
 	var at int64
-	if w.carry.Stamped <= high-w.late {
+	if w.carry.Stamped <= dated-w.late {
 		at = w.carry.Stamped
 	}
 	for i := range w.recs {
-		if e := &w.recs[i].ev; stamps(e) && e.T <= high-w.late && (first == nil || recordCmp(e, first) < 0) {
+		if e := &w.recs[i].ev; stamps(e) && e.T <= dated-w.late && (first == nil || recordCmp(e, first) < 0) {
 			at = max(at, e.T)
 		}
 	}
@@ -169,6 +176,19 @@ func stamps(e *event.Event) bool {
 	if sampler(e) {
 		return false
 	}
+	switch e.Via {
+	case event.ViaHook, event.ViaOS, event.ViaApp:
+		return true
+	}
+	return false
+}
+
+// clocked reports whether the device's own clock dated e: a record the
+// agent stamped itself (stamps) or one of the presence sampler's, as
+// pkg/score's stampedRecord reads it. pkg/score's waits for a cut and for
+// a gap run on the newest such record, so a bridge or log record dated
+// ahead of the device's clock ends neither (sampledReaches).
+func clocked(e *event.Event) bool {
 	switch e.Via {
 	case event.ViaHook, event.ViaOS, event.ViaApp:
 		return true

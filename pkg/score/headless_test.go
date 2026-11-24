@@ -282,19 +282,21 @@ func TestHeadlessScoring(t *testing.T) {
 }
 
 // TestCutWaits checks when a record that ends a sample's reach takes
-// effect (SM 2.1): once the newest record is rules.late past it. Until
-// then the reach holds, now stays bounded by it, and a record of the
-// sampler's dated before the cut that arrives in that time keeps the
-// reach, as a resume still on the presence queue does when a later-dated
-// stop hook seals its batch. The other order waits the same way: a
-// sampler's record more than BUCKET_TTL_S after the one before it holds
-// the clock at that one until the newest record is rules.late past it, so
-// a stamped record dated inside the gap and sealed after it still ends
-// the reach before anything in the gap is final, and when none comes,
-// FinalBefore moves on then. So nothing goes final early, and a Step a
-// batch gives what one Step gives for any record up to rules.late late,
-// in either order. A lock open across a never-sampling stretch stays on
-// the slots before it when the sampler starts again.
+// effect (SM 2.1): once the newest record the device's own clock dated is
+// rules.late past it. Until then the reach holds, now stays bounded by it,
+// and a record of the sampler's dated before the cut that arrives in that
+// time keeps the reach, as a resume still on the presence queue does when
+// a later-dated stop hook seals its batch. The other order waits the same
+// way: a sampler's record more than BUCKET_TTL_S after the one before it
+// holds the clock at that one until the newest record the device's own
+// clock dated is rules.late past it, so a stamped record dated inside the
+// gap and sealed after it still ends the reach before anything in the gap
+// is final, and when none comes, FinalBefore moves on then. A bridge
+// record dated ahead of the device's clock ends neither wait. So nothing
+// goes final early, and a Step a batch gives what one Step gives for any
+// record up to rules.late late, in either order. A lock open across a
+// never-sampling stretch stays on the slots before it when the sampler
+// starts again.
 func TestCutWaits(t *testing.T) {
 	r := newRules(testTable(t))
 	// turn is a person's input until 595 s and a hooked turn of s_1 from
@@ -317,28 +319,38 @@ func TestCutWaits(t *testing.T) {
 		b.samples(at(0), at(1800))
 	}
 	const cut, takes = 9060, 9360
-	// heldFrom checks that while the newest record is in [from, to),
-	// FinalBefore stays at 1,800 s, the last sample before the gap or the
-	// cut that holds it, and that some Step's newest record falls there.
+	// heldFrom checks that while the newest record the device's own clock
+	// dated (stampedRecord) is in [from, to), FinalBefore stays at 1,800 s,
+	// the last sample before the gap or the cut that holds it, and that
+	// some Step's newest such record falls there.
 	heldFrom := func(t *testing.T, batches [][]event.Event, outs []Output, from, to int64) {
 		t.Helper()
-		high, seen := int64(0), false
+		dated, seen := int64(0), false
 		for i, b := range batches {
 			for _, e := range b {
-				high = max(high, e.T)
+				if stampedRecord(e) {
+					dated = max(dated, e.T)
+				}
 			}
-			if high >= from && high < to {
+			if dated >= from && dated < to {
 				seen = true
 				if outs[i].FinalBefore != at(1800) {
-					t.Errorf("with the newest record at %d s, FinalBefore %d s; want 1800 s, the last sample, while the clock is held",
-						(high-base)/1000, (outs[i].FinalBefore-base)/1000)
+					t.Errorf("with the newest record the device dated at %d s, FinalBefore %d s; want 1800 s, the last sample, while the clock is held",
+						(dated-base)/1000, (outs[i].FinalBefore-base)/1000)
 				}
 			}
 		}
 		if !seen {
-			t.Fatal("no Step's newest record falls while the clock is held")
+			t.Fatal("no Step's newest record the device dated falls while the clock is held")
 		}
 	}
+	// bridge adds a bridge prompt at tm, whose t comes from a transcript,
+	// not the device's clock, so it can be dated ahead of the clock.
+	bridge := func(b *tl, tm int64) {
+		b.harness(tm, event.ViaBridge, "s_b", "p_1", &event.PromptSubmit{TurnKey: "t_b", LenChars: 30, TypedLenEst: 30,
+			OriginDeclared: event.DeclaredNone})
+	}
+	isBridge := func(e event.Event) bool { return e.Via == event.ViaBridge }
 	// waits checks that while the cut at 9,060 s waits, FinalBefore stays on
 	// the last sample before it.
 	waits := func(t *testing.T, batches [][]event.Event, outs []Output) {
@@ -383,6 +395,67 @@ func TestCutWaits(t *testing.T) {
 		_, ok := e.Data.(*event.AgentStop)
 		return ok
 	}
+	// queuedBehindStop is a batch a minute, but with the records of the
+	// sampler's in the stop's minute sealed in the batch after it, as when
+	// the resume and the samples after it are still on the presence queue
+	// when the stop hook seals the stop's minute.
+	queuedBehindStop := func(t *testing.T, recs []event.Event) [][]event.Event {
+		batches := minuteBatches(recs)
+		for i, b := range batches {
+			if i+1 == len(batches) || !slices.ContainsFunc(b, isStop) {
+				continue
+			}
+			var kept, held []event.Event
+			for _, e := range b {
+				if samplerRecord(e) {
+					held = append(held, e)
+				} else {
+					kept = append(kept, e)
+				}
+			}
+			if len(held) == 0 || len(kept) == 0 {
+				t.Fatal("the stop's minute holds no record of the sampler's to hold back, or only those")
+			}
+			batches[i], batches[i+1] = kept, append(held, batches[i+1]...)
+			return batches
+		}
+		t.Fatal("no batch holds the stop with one after it")
+		return nil
+	}
+	// alsoWith seals the records pick selects in the batch that holds a
+	// record with selects, on top of the batches split gives, as a bridge
+	// record dated ahead of the device's clock is sealed with the records
+	// the device dated when it came.
+	alsoWith := func(split func(*testing.T, []event.Event) [][]event.Event, pick, with func(event.Event) bool) func(*testing.T, []event.Event) [][]event.Event {
+		return func(t *testing.T, recs []event.Event) [][]event.Event {
+			var moved []event.Event
+			var batches [][]event.Event
+			for _, b := range split(t, recs) {
+				var kept []event.Event
+				for _, e := range b {
+					if pick(e) {
+						moved = append(moved, e)
+					} else {
+						kept = append(kept, e)
+					}
+				}
+				if len(kept) > 0 {
+					batches = append(batches, kept)
+				}
+			}
+			for i, b := range batches {
+				if slices.ContainsFunc(b, with) {
+					if len(moved) == 0 {
+						t.Fatal("nothing to seal with the batch")
+					}
+					batches[i] = append(slices.Clone(b), moved...)
+					return batches
+				}
+			}
+			t.Fatal("no batch holds the record the others are sealed with")
+			return nil
+		}
+	}
 	isPower := func(op event.PowerOp) func(event.Event) bool {
 		return func(e event.Event) bool {
 			p, ok := e.Data.(*event.OSPower)
@@ -426,35 +499,7 @@ func TestCutWaits(t *testing.T) {
 				stops(b, at(resume+2), "s_1", "p_1", "t_1")
 				b.samples(at(resume), at(resume+1800))
 			},
-			batches: func(t *testing.T, recs []event.Event) [][]event.Event {
-				// The resume and the samples after it are still on the
-				// presence queue when the stop hook seals the stop's minute,
-				// so they come in the batch after.
-				batches := minuteBatches(recs)
-				for i, b := range batches {
-					if i+1 == len(batches) || !slices.ContainsFunc(b, func(e event.Event) bool {
-						_, ok := e.Data.(*event.AgentStop)
-						return ok
-					}) {
-						continue
-					}
-					var kept, held []event.Event
-					for _, e := range b {
-						if samplerRecord(e) {
-							held = append(held, e)
-						} else {
-							kept = append(kept, e)
-						}
-					}
-					if len(held) == 0 || len(kept) == 0 {
-						t.Fatal("the stop's minute holds no record of the sampler's to hold back, or only those")
-					}
-					batches[i], batches[i+1] = kept, append(held, batches[i+1]...)
-					return batches
-				}
-				t.Fatal("no batch holds the stop with one after it")
-				return nil
-			},
+			batches: queuedBehindStop,
 			check: func(t *testing.T, _ [][]event.Event, _ []Output, finals, _ Derived) {
 				from, to := floorSlot(at(suspend)), floorSlot(at(resume))
 				n := 0
@@ -530,6 +575,57 @@ func TestCutWaits(t *testing.T) {
 				b.samples(at(resume), at(resume+1800))
 			},
 			batches: sealedAfter(isStop, isPower(event.PowerResume)),
+			check: func(t *testing.T, batches [][]event.Event, outs []Output, _, one Derived) {
+				heldFrom(t, batches, outs, at(resume), at(resume-1)+r.late)
+				unknownFrom(t, one, at(1800), floorSlot(at(resume)))
+			},
+		},
+		{
+			name: "a bridge prompt dated ahead of the device's clock and sealed with a stop hook doesn't end the suspend's reach before the resume queued behind that hook arrives, so the eight hours the machine slept stay asleep, as one Step reads them",
+			build: func(b *tl) {
+				hooked(b, 1790)
+				b.power(at(suspend), event.PowerSuspend)
+				b.power(at(resume), event.PowerResume)
+				stops(b, at(resume+2), "s_1", "p_1", "t_1")
+				bridge(b, at(resume+1200))
+				b.samples(at(resume), at(resume+1800))
+			},
+			// The bridge prompt's transcript is twenty minutes ahead of the
+			// device's clock, and it comes with the stop.
+			batches: alsoWith(queuedBehindStop, isBridge, isStop),
+			check: func(t *testing.T, batches [][]event.Event, outs []Output, finals, _ Derived) {
+				// The stop's cut waits until the resume behind it arrives,
+				// and then the gap the resume ends holds the clock.
+				heldFrom(t, batches, outs, at(resume+2), at(resume)+r.late)
+				from, to := floorSlot(at(suspend)), floorSlot(at(resume))
+				n := 0
+				for _, s := range finals.Slots {
+					if s.Start < from || s.Start >= to {
+						continue
+					}
+					n++
+					if !s.Asleep {
+						t.Fatalf("the slot at %d s is final and not asleep; want every slot the machine slept through asleep", (s.Start-base)/1000)
+					}
+				}
+				if want := int((to - from) / event.SlotMS); n != want {
+					t.Errorf("%d slots the machine slept through are final, want %d", n, want)
+				}
+			},
+		},
+		{
+			name: "a bridge prompt dated ahead of the device's clock doesn't release the gap a resume ends: the gap holds the clock until a record the device dated is rules.late past its end, so a stop hook stamped a second before the resume and sealed one batch after it still ends the suspend's reach before anything in the gap goes final asleep",
+			build: func(b *tl) {
+				hooked(b, 1790)
+				b.power(at(suspend), event.PowerSuspend)
+				b.power(at(resume), event.PowerResume)
+				stops(b, at(resume-1), "s_1", "p_1", "t_1")
+				bridge(b, at(resume+1200))
+				b.samples(at(resume), at(resume+1800))
+			},
+			// The bridge prompt comes with the resume, twenty minutes ahead
+			// of the device's clock.
+			batches: alsoWith(sealedAfter(isStop, isPower(event.PowerResume)), isBridge, isPower(event.PowerResume)),
 			check: func(t *testing.T, batches [][]event.Event, outs []Output, _, one Derived) {
 				heldFrom(t, batches, outs, at(resume), at(resume-1)+r.late)
 				unknownFrom(t, one, at(1800), floorSlot(at(resume)))

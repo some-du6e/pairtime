@@ -98,11 +98,6 @@ func TestSamplelessPower(t *testing.T) {
 		build   func(b *tl)
 		batches func(t *testing.T, recs []event.Event) [][]event.Event
 		check   func(t *testing.T, batches [][]event.Event, outs []Output, one Derived)
-		// waits says the case's records come in #312's order, which reaches
-		// (c)'s hold: a bridge record dated ahead releases a gap hold, which
-		// still reads every record, before the backstop, on the device's
-		// clock, is due. The shared check that no Step waits skips it.
-		waits bool
 	}{
 		{
 			name: "a suspend with no sample an hour after the last sample, a resume with none and a hooked morning past BUCKET_TTL_S leave no slot underived: unknown to the suspend, asleep to the resume and never-sampling after it, with the morning's agent time",
@@ -363,8 +358,7 @@ func TestSamplelessPower(t *testing.T) {
 			},
 		},
 		{
-			name:  "a bridge prompt dated ahead releases a sample-less unlock's gap hold before the backstop is due, so FinalBefore waits at the first slot nothing decides until a record the device dated is BUCKET_TTL_S and rules.late past it, and a Step a batch still gives what one Step gives",
-			waits: true,
+			name: "a bridge prompt dated ahead of the device's clock doesn't release a sample-less unlock's gap hold: FinalBefore stays at the unlock until a sample is rules.late past the one that ends the gap, so no slot waits undecided, and a Step a batch gives what one Step gives",
 			build: func(b *tl) {
 				terminalSession(b)
 				b.mouse(every(at(1), at(595), 5000)...)
@@ -392,21 +386,17 @@ func TestSamplelessPower(t *testing.T) {
 				return append([][]event.Event{head, first}, minuteBatches(rest)...)
 			},
 			check: func(t *testing.T, _ [][]event.Event, outs []Output, _ Derived) {
-				// With samples to 13,245 s, the backstop has made the slots
-				// ending before 5,745 s unknown, and the next one waits.
-				if o := outs[1]; o.FinalBefore != at(5730) || o.Undecided != at(5730) {
-					t.Fatalf("with the bridge prompt in, FinalBefore %d s, waiting at %d s; want both at 5730 s",
-						(o.FinalBefore-base)/1000, (o.Undecided-base)/1000)
+				// With the bridge prompt in and samples to 13,245 s, the gap
+				// from the unlock to 13,200 s still holds the clock at the
+				// unlock: the newest record the device dated isn't rules.late
+				// past the gap's end, whatever the bridge prompt's t.
+				if o := outs[1]; o.FinalBefore != at(c+600) || o.Undecided != 0 {
+					t.Fatalf("with the bridge prompt in, FinalBefore %d s, waiting at %d; want 2400 s, the unlock the gap holds the clock at, with no wait",
+						(o.FinalBefore-base)/1000, o.Undecided)
 				}
-				for i, o := range outs {
-					if o.Undecided != 0 && o.FinalBefore != o.Undecided {
-						t.Fatalf("Step %d waits at %d s with FinalBefore at %d s; want FinalBefore at the slot it waits at",
-							i, (o.Undecided-base)/1000, (o.FinalBefore-base)/1000)
-					}
-				}
-				if last := outs[len(outs)-1]; last.Undecided != 0 || last.FinalBefore != at(13800-900) {
-					t.Fatalf("at the end FinalBefore %d s, waiting at %d; want 12900 s, PENDING_WINDOW_S behind the newest sample, with no wait",
-						(last.FinalBefore-base)/1000, last.Undecided)
+				if last := outs[len(outs)-1]; last.FinalBefore != at(13800-900) {
+					t.Fatalf("at the end FinalBefore %d s; want 12900 s, PENDING_WINDOW_S behind the newest sample",
+						(last.FinalBefore-base)/1000)
 				}
 			},
 		},
@@ -495,11 +485,11 @@ func TestSamplelessPower(t *testing.T) {
 				t.Errorf("a Step a batch differs from one Step %s", firstDiff(got, want))
 			}
 			checkDerived(t, one)
-			// Outside #312's order (waits), these records reach no wait at
-			// an undecided slot: (a), the extension and the backstop decide
-			// every slot before the clock passes it.
+			// These records reach no wait at an undecided slot: (a), the
+			// extension, the backstop and the holds on the device's own
+			// clock decide every slot before the clock passes it.
 			for i, o := range outs {
-				if !tc.waits && o.Undecided != 0 {
+				if o.Undecided != 0 {
 					t.Errorf("Step %d holds FinalBefore at an undecided slot at %d s; want every slot decided before the clock passes it",
 						i, (o.Undecided-base)/1000)
 				}
@@ -510,14 +500,15 @@ func TestSamplelessPower(t *testing.T) {
 }
 
 // TestUndecidedHold checks (c) of D-sampleless-power, and its bound, with a
-// clock past a slot that nothing decides, which State.now gives only in
-// #312's order of records (TestSamplelessPower's waits case), so each case
-// gives derive such a clock, as a disagreement between the clock and the
-// slot list would. FinalBefore waits at the first
-// slot nothing decides (Output.Undecided). A slot no sample came within
-// BUCKET_TTL_S after is unknown once the newest record the device's own
-// clock dated is rules.late past that, so the wait moves on to the first
-// slot still undecided.
+// clock past a slot that nothing decides. State.now gives no such clock
+// since the gap hold runs on the device's own clock (#312): a bridge record
+// dated ahead of it released that hold before the backstop was due
+// (TestSamplelessPower's bridge case). So each case gives derive such a
+// clock, as a disagreement between the clock and the slot list would.
+// FinalBefore waits at the first slot nothing decides (Output.Undecided).
+// A slot no sample came within BUCKET_TTL_S after is unknown once the
+// newest record the device's own clock dated is rules.late past that, so
+// the wait moves on to the first slot still undecided.
 func TestUndecidedHold(t *testing.T) {
 	r := newRules(testTable(t))
 	const c = 1800 // the last sample of the evening
@@ -548,7 +539,7 @@ func TestUndecidedHold(t *testing.T) {
 			tc.build(b)
 			recs := b.records()
 			now := at(tc.now)
-			d, lookups, relays, undecided := derive(r, Device{}, recs, now, sampledReaches(r, recs, now))
+			d, lookups, relays, undecided := derive(r, Device{}, recs, now, sampledReaches(r, recs))
 			fb, waits := finalBefore(r, now, 0, undecided, lookups, relays)
 			if fb != at(tc.wait) || waits != at(tc.wait) {
 				t.Fatalf("FinalBefore %d s, waiting at %d s; want both at %d s", (fb-base)/1000, (waits-base)/1000, tc.wait)
