@@ -578,8 +578,8 @@ func TestCommitPlan(t *testing.T) {
 				}
 				return ends
 			}, func(t *testing.T, p plan, ends []int64, in planInput) {
-				if len(p.body.Commits) != 0 || len(p.commitMarks) != 0 || len(p.commitsUnread) != 1 || p.commitsUnread[0] != "any day" {
-					t.Errorf("records %v went, marks %+v, unread %v: want none, and every day unread", p.body.Commits, p.commitMarks, p.commitsUnread)
+				if len(p.body.Commits) != 0 || len(p.commitMarks) != 0 || len(p.commitsUnread) != 1 || p.commitsUnread[0] != PrunedCommits {
+					t.Errorf("records %v went, marks %+v, unread %v: want none, and the list unread", p.body.Commits, p.commitMarks, p.commitsUnread)
 				}
 			}},
 	}
@@ -1082,6 +1082,45 @@ func TestCommitInStretch(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			if !c.ok {
 				t.Errorf("no: the rows are %+v, and the server holds head %d after %d POSTs", rows, r.f.head.b, r.f.posts)
+			}
+		})
+	}
+}
+
+// TestNoteCommits checks the words doctor's commits problem gives each
+// thing that keeps commit records from going (Uploader.noteCommits).
+func TestNoteCommits(t *testing.T) {
+	cases := []struct {
+		name         string
+		unread       []string
+		want, wantNo []string
+	}{
+		{"days of commits/ that can't be read are named, and none goes", []string{"2026-11-20", "2026-11-21"},
+			[]string{"can't read its commit records of 2026-11-20, 2026-11-21, so none goes"}, []string{PrunedCommits}},
+		{"a list of pruned shas that can't be read gets a line of its own, naming commits/pruned.txt", []string{PrunedCommits},
+			[]string{"can't read commits/" + PrunedCommits + ", its list of the commits whose records it deleted, so no commit record goes"},
+			[]string{"any day", "commit records of"}},
+		{"both are named, each in its own words", []string{PrunedCommits, "2026-11-20"},
+			[]string{"can't read commits/" + PrunedCommits, "can't read its commit records of 2026-11-20, so"}, nil},
+		{"with nothing unread, there is no problem", nil, nil, []string{"can't read"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			u := &Uploader{problems: map[string]string{}, commitsUnread: c.unread}
+			u.noteCommits()
+			got := u.problems["commits"]
+			for _, w := range c.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("the problem is %q, want it to say %q", got, w)
+				}
+			}
+			for _, w := range c.wantNo {
+				if strings.Contains(got, w) {
+					t.Errorf("the problem is %q, which says %q", got, w)
+				}
+			}
+			if len(c.want) == 0 && got != "" {
+				t.Errorf("the problem is %q, want none", got)
 			}
 		})
 	}

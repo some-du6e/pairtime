@@ -202,6 +202,41 @@ func TestCommitStore(t *testing.T) {
 				t.Errorf("the next day's prune left it (%v)", err)
 			}
 		}},
+		{"a prune that can't add a day's shas to commits/pruned.txt keeps the day's file, and the git host's doctor problem names the list until a prune works, as the next one does, the same day", func(t *testing.T, s *commitStore) {
+			a, _ := modesAgent(t, "online")
+			g := &gitHost{a: a, commits: s}
+			old := now.Add(-181 * 24 * time.Hour)
+			c := commit(strings.Repeat("1", 40), old)
+			if err := s.add([]git.Commit{c}, old); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(s.dir, day(old)+".jsonl")
+			// A folder where the list goes, which no prune can append to.
+			list := filepath.Join(s.dir, uploader.PrunedCommits)
+			if err := os.Mkdir(list, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			g.prune(now)
+			if _, err := os.Stat(file); err != nil {
+				t.Errorf("the day's file went though its shas weren't listed (%v)", err)
+			}
+			if got := a.currentProblems()["git.prune"]; !strings.Contains(got, "commits/"+uploader.PrunedCommits) {
+				t.Errorf("doctor's git.prune problem is %q, want one that names commits/%s", got, uploader.PrunedCommits)
+			}
+			if err := os.Remove(list); err != nil {
+				t.Fatal(err)
+			}
+			g.prune(now.Add(gitPollEvery))
+			if _, err := os.Stat(file); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("the next poll's prune left the day's file (%v)", err)
+			}
+			if got := a.currentProblems()["git.prune"]; got != "" {
+				t.Errorf("the problem stays after a prune that worked: %q", got)
+			}
+			if got := prunedList(t, s.dir); !slices.Equal(got, []string{c.SHA}) {
+				t.Errorf("the list holds %q, want the day's sha", got)
+			}
+		}},
 		{"the folder and its files are this user's alone", func(t *testing.T, s *commitStore) {
 			if runtime.GOOS == "windows" {
 				t.Skip("the data directory's DACL decides on Windows")

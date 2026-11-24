@@ -41,11 +41,12 @@ type commitStore struct {
 	dir string
 
 	mu     sync.Mutex
-	pruned string // the UTC day the last prune ran on
+	pruned string // the UTC day of the last prune that deleted every file due
 }
 
 // add appends commits to the files of their days, each file's lines with
-// one write and a flush, and has prune drop the files past commitsKeep.
+// one write and a flush. The git host has prune drop the files past
+// commitsKeep (gitHost.prune).
 func (s *commitStore) add(commits []git.Commit, now time.Time) error {
 	if len(commits) == 0 {
 		return nil
@@ -58,7 +59,6 @@ func (s *commitStore) add(commits []git.Commit, now time.Time) error {
 		}
 		home.SyncDir(filepath.Dir(s.dir))
 	}
-	s.pruneLocked(now)
 	lines := make(map[string][]byte)
 	var days []string
 	for _, c := range commits {
@@ -107,26 +107,27 @@ func appendSynced(name string, b []byte) error {
 	return err
 }
 
-// prune deletes the files of the days commitsKeep before now, at most once
-// a UTC day. The git host runs it at its start and with every poll.
-func (s *commitStore) prune(now time.Time) {
+// prune deletes the files of the days commitsKeep before now, once a UTC
+// day once a prune has deleted all of them. Each file's shas go to the
+// list the uploader takes as decided before the file does
+// (uploader.PruneCommits), so no later line of them goes from this device.
+// A file it couldn't list, read or delete stays, as does one whose shas
+// couldn't be appended to the list, as when commits/pruned.txt is
+// read-only or the disk is full, and prune returns why: the git host
+// reports it, and its next prune tries again (gitHost.prune).
+func (s *commitStore) prune(now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.pruneLocked(now)
-}
-
-// pruneLocked is prune. Each file's shas go to the list the uploader takes
-// as decided before the file does (uploader.PruneCommits), so no later
-// line of them goes from this device. A file it couldn't list or delete
-// waits for the next day's prune.
-func (s *commitStore) pruneLocked(now time.Time) {
 	today := now.UTC().Format(time.DateOnly)
 	if s.pruned == today {
-		return
+		return nil
 	}
-	if _, err := os.Stat(s.dir); err != nil {
-		return // none yet: the next add or poll looks again
+	if _, err := os.Stat(s.dir); errors.Is(err, fs.ErrNotExist) {
+		return nil // none yet: the next poll looks again
+	}
+	if err := uploader.PruneCommits(s.dir, now.UTC().Add(-commitsKeep).Format(time.DateOnly)); err != nil {
+		return err
 	}
 	s.pruned = today
-	uploader.PruneCommits(s.dir, now.UTC().Add(-commitsKeep).Format(time.DateOnly))
+	return nil
 }
