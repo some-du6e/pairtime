@@ -1,0 +1,229 @@
+{
+  "fixture": "focus-unknown/a-6.1-gnome",
+  "title": "SM 6.1's first cycle on GNOME on Wayland, where focus is unknown",
+  "sm": "docs/design/struggle-metric.md 2.5 and 6.1",
+  "date": "2026-11-21",
+  "timezone": "Asia/Kolkata",
+  "utc_offset": "+05:30",
+  "os": "linux",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "witnessed",
+  "device": "d_37628af25c64",
+  "projects": {"p_bc5dc2a8e979": "cs2go"},
+  "window": {"start": "2026-11-21T08:30:00Z", "end": "2026-11-21T08:42:00Z", "local": "14:00-14:12"},
+  "rows": [
+    {
+      "start": "2026-11-21T08:30:00Z",
+      "minutes": 1,
+      "local": "14:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_bc5dc2a8e979": {"NAV": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "6.1 14:00: as SM's row",
+      "note": "The heartbeats at 14:00:30 and 14:01:50 are NAV anchors: input in their slots, and the editor-focus test passes because focus is unknown (SM 2.5).",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:31:00Z",
+      "minutes": 1,
+      "local": "14:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_bc5dc2a8e979": {"P": 10, "NAV": 50}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "6.1 14:01: as SM's row",
+      "note": "From 14:01:50 the prompt's 320 s lead, from 13:58:40, is the only window.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:32:00Z",
+      "minutes": 1,
+      "local": "14:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_bc5dc2a8e979": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "6.1 14:02: as SM's row",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:33:00Z",
+      "minutes": 1,
+      "local": "14:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_bc5dc2a8e979": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "6.1 14:03: as SM's row",
+      "note": "SM 2.2 rule 6: input before the submit, and the focus test passes on unknown focus, so the prompt is human_typed, level C with focus_unknown.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:34:00Z",
+      "minutes": 1,
+      "local": "14:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 35,
+      "credit": {
+        "p_bc5dc2a8e979": {"SUP": 35}
+      },
+      "uncredited": {"X.agent_only": 25},
+      "agent_running_s": 60,
+      "sm": "6.1 14:04: as SM's row",
+      "note": "Nothing new to read from 14:04:20 to 14:04:30 and from 14:04:45 to 14:05:00. SM 5.2 skips X.other_focus and X.ambiguous where focus is unknown, so the running turn's X.agent_only.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:35:00Z",
+      "minutes": 1,
+      "local": "14:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_bc5dc2a8e979": {"PA": 25, "SUP": 35}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "6.1 14:05: as SM's row",
+      "note": "The permission answer has no focus test, so it is level B itself, but every second it credits here is level C (SM 2.5).",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:36:00Z",
+      "minutes": 1,
+      "local": "14:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_bc5dc2a8e979": {"SUP": 30, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 30,
+      "sm": "6.1 14:06: as SM's row",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:37:00Z",
+      "minutes": 1,
+      "local": "14:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_bc5dc2a8e979": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "6.1 14:07: as SM's row",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:38:00Z",
+      "minutes": 1,
+      "local": "14:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_bc5dc2a8e979": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "6.1 14:08: as SM's row",
+      "note": "The bucket holds 303 1/3 s at 14:09:00.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:39:00Z",
+      "minutes": 1,
+      "local": "14:09",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_bc5dc2a8e979": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.5: a slot of unknown focus is never a browser slot, so it holds no lookup",
+      "note": "SM 6.1's LOOKUP. Here the slots' focus is unknown, so the bucket drains: READ, within 600 s of the 14:05:25 answer and the 14:11:40 commit.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:40:00Z",
+      "minutes": 1,
+      "local": "14:10",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_bc5dc2a8e979": {"NAV": 10, "G": 20, "READ": 30}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.5, 3.3 rules 2 and 3",
+      "note": "READ to 14:10:30, then the lead of the 14:12:30 heartbeat, then from 14:10:40 the commit's lead: the next anchor's lead wins (SM 3.3 rule 3).",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-21T08:41:00Z",
+      "minutes": 1,
+      "local": "14:11",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_bc5dc2a8e979": {"NAV": 20, "G": 40}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "6.1 14:11: as SM's row",
+      "note": "The commit's lead to 14:11:40, then the 14:12:30 heartbeat's.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    }
+  ],
+  "totals": {
+    "credited_s": 695,
+    "credited_by_project": {"p_bc5dc2a8e979": 695},
+    "credited_by_reason": {"P": 130, "PA": 25, "NAV": 140, "G": 60, "SUP": 100, "READ": 240},
+    "uncredited": {"X.agent_only": 25},
+    "agent_running_s": 150,
+    "level_a_s": 0,
+    "level_b_s": 0,
+    "level_c_s": 695,
+    "focus_unknown_s": 695,
+    "agent_only_s": 25,
+    "ai_credited_s": 495,
+    "hand_credited_s": 200
+  },
+  "stated": [],
+  "approx": {},
+  "errata": [],
+  "notes": [
+    "SM 6.1's first cycle, its times and amounts unchanged, on GNOME on Wayland without pairtime's extension: idle_keys_s is null and the only os.focus says app_class unknown. 695 of the 720 s are credited, as in SM 6.1, and every credited second is level C with focus_unknown (SM 2.5).",
+    "SM 6.1's 120 s of LOOKUP in 14:09 and 14:10 become READ 90, NAV 10 and G 20: a slot of unknown focus is never a browser slot, so the bucket's 303 1/3 s drain until the next cycle's first heartbeat's lead, and then the commit's lead takes over by SM 3.3 rule 3.",
+    "14:04's 25 s stay X.agent_only. SM 5.2 skips X.other_focus and X.ambiguous where focus is unknown and reads every project's running turns.",
+    "ai_credited_s and hand_credited_s are SM 5.4's split: P, PA, SUP and READ, then NAV and G."
+  ]
+}

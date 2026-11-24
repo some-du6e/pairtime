@@ -146,8 +146,19 @@ type share struct {
 // devices only for keys that project registration (WP-SV10) has linked to
 // one id (D-account-project-id).
 func merge(devs []device) merged {
+	m, _ := mergeWon(devs)
+	return m
+}
+
+// mergeWon is merge, and also says which of devs won each slot: its index
+// in devs, or -1 where none credits the slot. The public read keeps only
+// the slots that revisions the server labeled witnessed or offline won
+// (PublicCreditAsOf).
+func mergeWon(devs []device) (merged, [slotsPerMinute]int) {
 	var m merged
+	var won [slotsPerMinute]int
 	for i := range slotsPerMinute {
+		won[i] = -1
 		var win *device
 		for j := range devs {
 			d := &devs[j]
@@ -156,6 +167,7 @@ func merge(devs []device) merged {
 			}
 			if win == nil || beats(d, win, i) {
 				win = d
+				won[i] = j
 			}
 		}
 		if win != nil {
@@ -188,7 +200,7 @@ func merge(devs []device) merged {
 			m.agent = append(m.agent, share{project: p, ms: ms, pending: w.pending})
 		}
 	}
-	return m
+	return m, won
 }
 
 // concurrentIn reports whether two of devs, one minute's revisions, credit

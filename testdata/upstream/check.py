@@ -301,7 +301,7 @@ def problems(inst, schema, at, root, base):
             out.append(f"{at}: is {len(inst)} characters, want at least {schema['minLength']}")
         if "maxLength" in schema and len(inst) > schema["maxLength"]:
             out.append(f"{at}: is {len(inst)} characters, want at most {schema['maxLength']}")
-        if "pattern" in schema and not re.search(schema["pattern"], inst, re.ASCII):
+        if "pattern" in schema and not re.search(strict_end(schema["pattern"]), inst, re.ASCII):
             out.append(f"{at}: {short(inst)} does not match {schema['pattern']!r}")
         if schema.get("x-file-ref"):
             parts = inst.split("/")
@@ -394,6 +394,29 @@ def provenance_problems(lines, has_license_file):
     return out
 
 
+
+def strict_end(pattern):
+    """The pattern with each unescaped $ outside a character class written
+    as \\Z. Python's $ also matches just before a final newline, while
+    ECMA-262's, which JSON Schema 2020-12 specifies, and RE2's match only at
+    the very end of the string."""
+    out, i, in_class = [], 0, False
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "\\":
+            out.append(pattern[i:i + 2])
+            i += 2
+            continue
+        if in_class:
+            in_class = c != "]"
+        elif c == "[":
+            in_class = True
+        elif c == "$":
+            c = "\\Z"
+        out.append(c)
+        i += 1
+    return "".join(out)
+
 # The validator is checked before it checks anything else. Each case names
 # the rule it pins: (name, schema, instance, valid). Every keyword has a case
 # that fails when the keyword is ignored, and every rule about how a keyword
@@ -420,7 +443,13 @@ SELFTEST = [
     ("enum never equates true with 1", {"enum": [1]}, True, False),
     ("const refuses a different value", {"const": {"a": [1, 2]}}, {"a": [1, 3]}, False),
     ("const compares nested values", {"const": {"a": [1, 2]}}, {"a": [1, 2.0]}, True),
+    ("const compares array lengths", {"const": [1, 2]}, [1, 2, 3], False),
+    ("const compares object keys", {"const": {"a": 1, "b": 2}}, {"a": 1}, False),
     ("pattern searches, so an unanchored pattern matches inside the string", {"pattern": "ab"}, "xab", True),
+    ("$ doesn't match before a trailing newline", {"pattern": "^ab$"}, "ab\n", False),
+    ("$ before a later branch doesn't match before a trailing newline", {"pattern": "^a$|^b$"}, "a\n", False),
+    ("an escaped \\$ is a literal dollar", {"pattern": "^a\\$$"}, "a$", True),
+    ("a $ inside a character class is a literal dollar", {"pattern": "^[$]$"}, "$", True),
     ("an anchored pattern refuses extra characters", {"pattern": "^ab$"}, "xab", False),
     ("\\d in a pattern matches ASCII digits only", {"pattern": "^\\d+$"}, "١٢", False),
     ("minLength counts characters, not bytes", {"minLength": 3}, "éé", False),
@@ -444,6 +473,7 @@ SELFTEST = [
     ("x-file-ref refuses a path through .., even to a file that exists", {"x-file-ref": True},
      f"../{os.path.basename(HERE)}/{os.path.basename(__file__)}", False),
     ("x-file-ref refuses an absolute path", {"x-file-ref": True}, "/" + os.path.basename(__file__), False),
+    ("x-file-ref refuses a directory", {"x-file-ref": True}, ".", False),
 ]
 
 # What a schema may say is checked the same way: (name, schema, allowed).

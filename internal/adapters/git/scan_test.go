@@ -1018,6 +1018,15 @@ func TestCommitJSON(t *testing.T) {
 			},
 			want: []string{"actor", "agent_trailer", "author_time", "committer_time", "deletions", "files_changed", "insertions", "observed_at", "parents", "project", "rewrites", "sha"},
 		},
+		{
+			name: "a record whose shortstat couldn't be read leaves out its counts, as ingest-v1 2.3.3 says",
+			c: Commit{
+				SHA: strings.Repeat("a", 40), Parents: []string{strings.Repeat("b", 40)}, Project: "gproject",
+				ObservedAt: 1, AuthorTime: 2, CommitterTime: 3, Actor: event.ActorHuman,
+				Local: CommitLocal{Op: event.GitCommit, Origin: MadeHere, AuthorTZ: "-0600", CommitterTZ: "-0600", NoStat: true},
+			},
+			want: []string{"actor", "author_time", "committer_time", "observed_at", "parents", "project", "sha"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

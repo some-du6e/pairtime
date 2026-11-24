@@ -926,7 +926,7 @@ func TestSettleBatches(t *testing.T) {
 }
 
 func TestRunSettle(t *testing.T) {
-	t.Run("the settle job settles at once by the clock it is given, and stops when its context ends", func(t *testing.T) {
+	t.Run("the settle job settles at once by the clock it is given, tells changed whose minutes it settled, and stops when its context ends", func(t *testing.T) {
 		db := newDB(t, store.SQLite, "u1")
 		if err := run(t, db, "u1", []step{bk("d1", base, 0, "pending", nil, sl("p1", 15, "prompting", "A"))}); err != nil {
 			t.Fatal(err)
@@ -935,6 +935,7 @@ func TestRunSettle(t *testing.T) {
 		defer cancel()
 		clock := func() time.Time { return time.Unix(base+60, 0).Add(PendingWindow() + time.Second) }
 		var reports []int
+		var changed []string
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
@@ -944,6 +945,8 @@ func TestRunSettle(t *testing.T) {
 				}
 				reports = append(reports, n)
 				cancel()
+			}, func(account string) {
+				changed = append(changed, account)
 			})
 		}()
 		select {
@@ -953,6 +956,9 @@ func TestRunSettle(t *testing.T) {
 		}
 		if !reflect.DeepEqual(reports, []int{1}) {
 			t.Errorf("reports %v, want one run that settled 1 minute", reports)
+		}
+		if !reflect.DeepEqual(changed, []string{"u1"}) {
+			t.Errorf("changed heard %q, want the account whose minute settled, once", changed)
 		}
 		if got := rows(t, db, "u1"); !reflect.DeepEqual(got, []Day{final("d1/p1", "2026-11-20", "prompting", 0, 15000)}) {
 			t.Errorf("rollups_daily %+v, want the minute final", got)

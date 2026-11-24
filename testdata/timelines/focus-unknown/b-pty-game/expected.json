@@ -1,0 +1,361 @@
+{
+  "fixture": "focus-unknown/b-pty-game",
+  "title": "A pty driver prompting every 5 minutes during a browser game, on GNOME on Wayland",
+  "sm": "docs/design/struggle-metric.md 2.2 and 2.5",
+  "date": "2026-11-25",
+  "timezone": "Europe/London",
+  "utc_offset": "+00:00",
+  "os": "linux",
+  "input_keys": false,
+  "evidence": "C",
+  "witness": "witnessed",
+  "device": "d_214613418c4e",
+  "projects": {"p_ebe3260104e8": "idle-farm"},
+  "window": {"start": "2026-11-25T20:00:00Z", "end": "2026-11-25T20:20:00Z", "local": "20:00-20:20"},
+  "rows": [
+    {
+      "start": "2026-11-25T20:00:00Z",
+      "minutes": 1,
+      "local": "20:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.2 rule 6 and 2.5: the script's prompt is human_typed",
+      "note": "The prompt's lead, 120 + 90 / 1.5 = 180 s. The game's input passes rule 6's input test, and its focus test passes for every session because focus is unknown, so the pty driver's prompt is human_typed.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:01:00Z",
+      "minutes": 1,
+      "local": "20:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.2 rule 6 and 2.5: the script's prompt is human_typed",
+      "note": "The prompt's lead, 120 + 90 / 1.5 = 180 s. The game's input passes rule 6's input test, and its focus test passes for every session because focus is unknown, so the pty driver's prompt is human_typed.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:02:00Z",
+      "minutes": 1,
+      "local": "20:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.2 rule 6 and 2.5: the script's prompt is human_typed",
+      "note": "The prompt's lead, 120 + 90 / 1.5 = 180 s. The game's input passes rule 6's input test, and its focus test passes for every session because focus is unknown, so the pty driver's prompt is human_typed.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:03:00Z",
+      "minutes": 1,
+      "local": "20:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 45,
+      "credit": {
+        "p_ebe3260104e8": {"SUP": 45}
+      },
+      "uncredited": {"X.agent_only": 15},
+      "agent_running_s": 60,
+      "sm": "2.4 and 2.5: the turn's reading drains in a slot of unknown focus",
+      "note": "The bucket resets to 20 s at the prompt and 45 words add 15 s at T + 20: SUP to T + 35. Nothing to read until the edit at T + 50 while the turn runs, the turn the rules say a person started.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:04:00Z",
+      "minutes": 1,
+      "local": "20:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"SUP": 40, "READ": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 40,
+      "sm": "2.4 and 2.5",
+      "note": "The 16-line edit adds 120 s: SUP to the stop at T + 100, then READ until the next prompt's lead starts at T + 120 (SM 3.3 rule 2).",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:05:00Z",
+      "minutes": 1,
+      "local": "20:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.2 rule 6 and 2.5: the script's prompt is human_typed",
+      "note": "The prompt's lead, 120 + 90 / 1.5 = 180 s. The game's input passes rule 6's input test, and its focus test passes for every session because focus is unknown, so the pty driver's prompt is human_typed.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:06:00Z",
+      "minutes": 1,
+      "local": "20:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.2 rule 6 and 2.5: the script's prompt is human_typed",
+      "note": "The prompt's lead, 120 + 90 / 1.5 = 180 s. The game's input passes rule 6's input test, and its focus test passes for every session because focus is unknown, so the pty driver's prompt is human_typed.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:07:00Z",
+      "minutes": 1,
+      "local": "20:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.2 rule 6 and 2.5: the script's prompt is human_typed",
+      "note": "The prompt's lead, 120 + 90 / 1.5 = 180 s. The game's input passes rule 6's input test, and its focus test passes for every session because focus is unknown, so the pty driver's prompt is human_typed.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:08:00Z",
+      "minutes": 1,
+      "local": "20:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 45,
+      "credit": {
+        "p_ebe3260104e8": {"SUP": 45}
+      },
+      "uncredited": {"X.agent_only": 15},
+      "agent_running_s": 60,
+      "sm": "2.4 and 2.5: the turn's reading drains in a slot of unknown focus",
+      "note": "The bucket resets to 20 s at the prompt and 45 words add 15 s at T + 20: SUP to T + 35. Nothing to read until the edit at T + 50 while the turn runs, the turn the rules say a person started.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:09:00Z",
+      "minutes": 1,
+      "local": "20:09",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"SUP": 40, "READ": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 40,
+      "sm": "2.4 and 2.5",
+      "note": "The 16-line edit adds 120 s: SUP to the stop at T + 100, then READ until the next prompt's lead starts at T + 120 (SM 3.3 rule 2).",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:10:00Z",
+      "minutes": 1,
+      "local": "20:10",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.2 rule 6 and 2.5: the script's prompt is human_typed",
+      "note": "The prompt's lead, 120 + 90 / 1.5 = 180 s. The game's input passes rule 6's input test, and its focus test passes for every session because focus is unknown, so the pty driver's prompt is human_typed.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:11:00Z",
+      "minutes": 1,
+      "local": "20:11",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.2 rule 6 and 2.5: the script's prompt is human_typed",
+      "note": "The prompt's lead, 120 + 90 / 1.5 = 180 s. The game's input passes rule 6's input test, and its focus test passes for every session because focus is unknown, so the pty driver's prompt is human_typed.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:12:00Z",
+      "minutes": 1,
+      "local": "20:12",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.2 rule 6 and 2.5: the script's prompt is human_typed",
+      "note": "The prompt's lead, 120 + 90 / 1.5 = 180 s. The game's input passes rule 6's input test, and its focus test passes for every session because focus is unknown, so the pty driver's prompt is human_typed.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:13:00Z",
+      "minutes": 1,
+      "local": "20:13",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 45,
+      "credit": {
+        "p_ebe3260104e8": {"SUP": 45}
+      },
+      "uncredited": {"X.agent_only": 15},
+      "agent_running_s": 60,
+      "sm": "2.4 and 2.5: the turn's reading drains in a slot of unknown focus",
+      "note": "The bucket resets to 20 s at the prompt and 45 words add 15 s at T + 20: SUP to T + 35. Nothing to read until the edit at T + 50 while the turn runs, the turn the rules say a person started.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:14:00Z",
+      "minutes": 1,
+      "local": "20:14",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"SUP": 40, "READ": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 40,
+      "sm": "2.4 and 2.5",
+      "note": "The 16-line edit adds 120 s: SUP to the stop at T + 100, then READ until the next prompt's lead starts at T + 120 (SM 3.3 rule 2).",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:15:00Z",
+      "minutes": 1,
+      "local": "20:15",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.2 rule 6 and 2.5: the script's prompt is human_typed",
+      "note": "The prompt's lead, 120 + 90 / 1.5 = 180 s. The game's input passes rule 6's input test, and its focus test passes for every session because focus is unknown, so the pty driver's prompt is human_typed.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:16:00Z",
+      "minutes": 1,
+      "local": "20:16",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.2 rule 6 and 2.5: the script's prompt is human_typed",
+      "note": "The prompt's lead, 120 + 90 / 1.5 = 180 s. The game's input passes rule 6's input test, and its focus test passes for every session because focus is unknown, so the pty driver's prompt is human_typed.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:17:00Z",
+      "minutes": 1,
+      "local": "20:17",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "2.2 rule 6 and 2.5: the script's prompt is human_typed",
+      "note": "The prompt's lead, 120 + 90 / 1.5 = 180 s. The game's input passes rule 6's input test, and its focus test passes for every session because focus is unknown, so the pty driver's prompt is human_typed.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:18:00Z",
+      "minutes": 1,
+      "local": "20:18",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 45,
+      "credit": {
+        "p_ebe3260104e8": {"SUP": 45}
+      },
+      "uncredited": {"X.agent_only": 15},
+      "agent_running_s": 60,
+      "sm": "2.4 and 2.5: the turn's reading drains in a slot of unknown focus",
+      "note": "The bucket resets to 20 s at the prompt and 45 words add 15 s at T + 20: SUP to T + 35. Nothing to read until the edit at T + 50 while the turn runs, the turn the rules say a person started.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-25T20:19:00Z",
+      "minutes": 1,
+      "local": "20:19",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_ebe3260104e8": {"SUP": 40, "READ": 20}
+      },
+      "uncredited": {},
+      "agent_running_s": 40,
+      "sm": "2.4 and 2.5",
+      "note": "The 16-line edit adds 120 s: SUP to the stop at T + 100, then READ to the window's end at T + 120. No prompt follows, so the 70 s left at 20:20:00 lie after the window.",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
+    }
+  ],
+  "totals": {
+    "credited_s": 1140,
+    "credited_by_project": {"p_ebe3260104e8": 1140},
+    "credited_by_reason": {"P": 720, "SUP": 340, "READ": 80},
+    "uncredited": {"X.agent_only": 60},
+    "agent_running_s": 400,
+    "level_a_s": 0,
+    "level_b_s": 0,
+    "level_c_s": 1140,
+    "focus_unknown_s": 1140,
+    "agent_only_s": 60,
+    "ai_credited_s": 1140,
+    "hand_credited_s": 0,
+    "human_typed_prompts": 4,
+    "no_input_prompts": 0
+  },
+  "stated": [],
+  "approx": {},
+  "errata": [],
+  "notes": [
+    "WP-FX8's (b): a script sends Claude Code a prompt every 300 s through tmux send-keys, which writes to the pty, while the person plays a game in a browser. GNOME on Wayland gives pairtime no focus, so the only os.focus says app_class unknown, and SM 2.2 rule 6's focus test passes for every session: the game's input makes each scripted prompt human_typed (SM 2.2, 2.5).",
+    "1,140 of the 1,200 s are credited, every one at level C with focus_unknown, and none at level A or B. The X11 twin, b-pty-game-x11, has the same acts with the browser in front and credits nothing.",
+    "Each cycle: the prompt's 180 s lead, SUP 85, READ 20 and X.agent_only 15 while the turn runs with nothing new on screen. In the first three cycles the 70 s left in the bucket at T + 120 are never read, because the next prompt's lead beats the bucket (SM 3.3 rule 2) and the next prompt resets it. The last cycle's 70 s lie after the window."
+  ]
+}
