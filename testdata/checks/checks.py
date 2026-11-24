@@ -56,10 +56,13 @@ CC4_PUSH_MS = 60_000
 THINK_LEAD_S, ANSWER_LEAD_S, COMPOSE_MAX_S = 120, 60, 300
 COMPOSE_CPS = Fraction(3, 2)
 SUBSTANTIVE_CHARS = 20
-# CC11's threshold, pending Karim's decision (erratum): a prompt fails with
-# fewer key-downs than this share of the characters its typing part
-# credits.
+# DESIGN 7.3's CC11: a prompt fails with fewer hardware key-downs than this
+# share of the characters its typing part credits, or than its injected
+# key-downs.
 CC11_SHARE = Fraction(1, 4)
+# DESIGN 7.3's CC2: it fails when at least CC2_MIN of the prompts it counts,
+# and at least CC2_SHARE of them, lack the input or the focus (SM 8.7).
+CC2_MIN, CC2_SHARE = 2, Fraction(1, 4)
 # DESIGN 6.3: CHALLENGE_K = max(10, 10% of the pool), at most 30.
 CHALLENGE_K_MIN, CHALLENGE_K_MAX = 10, 30
 # DESIGN 6.5: re-scoring starts from a checkpoint at or before W's start
@@ -678,18 +681,18 @@ def prompts_in(events, sub):
 def automated(e, starts):
     """Whether SM 2.2 rules 1 to 5 label the prompt from what the harness
     declares. Rule 2's continuations have no prompt, so they never reach
-    here."""
+    here. Rules 4 and 5 read the session's last session.start at or before
+    the prompt, not any start of the session."""
     d = e["data"]
     if d["matches_pending_cron"] or d["origin_declared"] != "none":
         return True
-    for st in starts.get(e["session_key"], []):
-        s = st["data"]
-        if s["entrypoint"] in ("sdk", "exec", "cloud") or s["parent_class"] in ("script_runtime", "scheduler",
-                                                                               "agent"):
-            return True
-        if not s["has_tty"] and s["entrypoint"] not in ("ide", "desktop") and s["parent_class"] != "ide":
-            return True
-    return False
+    before = [st for st in starts.get(e["session_key"], []) if st["t"] <= e["t"]]
+    if not before:
+        return False
+    s = before[-1]["data"]
+    if s["entrypoint"] in ("sdk", "exec", "cloud") or s["parent_class"] in ("script_runtime", "scheduler", "agent"):
+        return True
+    return not s["has_tty"] and s["entrypoint"] not in ("ide", "desktop") and s["parent_class"] != "ide"
 
 
 def focus_at(events, t):
@@ -766,8 +769,8 @@ def cc2(events, sub, keys):
     """Prompt against OS: of the prompts SM 2.2 rules 1 to 5 don't label,
     the ones with OS input in the 10 s before submit (keys where the
     machine has them) and focus at submit on the window hosting the
-    session. DESIGN gives no share for a verdict, so a share strictly
-    between none and all is refused here (README, errata)."""
+    session. It fails when at least 2 of them, and a quarter of them, lack
+    either (DESIGN 7.3)."""
     starts = sessions_of(events)
     counts = {"prompts": 0, "with_input_and_focus": 0, "no_input": 0, "no_focus": 0}
     items = []
@@ -794,11 +797,10 @@ def cc2(events, sub, keys):
                       "idle_s": idle})
     if not counts["prompts"]:
         return outcome("not_computable", counts, reason="no prompt in the submission that rules 1 to 5 leave open")
-    ok = counts["with_input_and_focus"]
-    if ok == counts["prompts"]:
-        return outcome("pass", counts)
-    check(ok == 0, "CC2 has no stated share; scenarios keep to all or none")
-    return outcome("fail", counts, items)
+    lacking = counts["prompts"] - counts["with_input_and_focus"]
+    if lacking >= CC2_MIN and lacking >= CC2_SHARE * counts["prompts"]:
+        return outcome("fail", counts, items)
+    return outcome("pass", counts)
 
 
 def cc3(events, sub):
@@ -885,8 +887,14 @@ def cc7(led, sub):
     could fall in: from the minute of the last verified record before it to
     the minute of the first verified record after it, or of the batch's
     received_at when no verified record follows. Its own revealed records
-    can't narrow that, since they are what failed to verify. held_minutes
-    counts the minutes of W."""
+    can't narrow that, since they are what failed to verify. A missing seq
+    counts against the batch whose stored n covers it: a gap at a batch's
+    first record is the batch before's when that batch reveals fewer
+    records than it stored, since its stored n fixes where it ends. The hold
+    also covers every other minute whose re-score comes out differently
+    without the failing batch's revealed records. That part needs
+    pkg/score, so gen.py states it in each CC7 scenario's notes.
+    held_minutes counts the minutes of W."""
     counts = {"batches": 0, "records": 0, "missing_batches": 0, "batch_gaps": 0, "seq_gaps": 0,
               "count_mismatches": 0, "root_mismatches": 0, "head_mismatches": 0, "body_mismatches": 0}
     items, held = [], set()
@@ -895,7 +903,7 @@ def cc7(led, sub):
         rng = dev["rescore_range"]
         revealed = {bt["b"]: bt for bt in dev["batches"]}
         faults = {}
-        last_b, last_s = None, None
+        last_b, last_s, prev = None, None, None
         for bt in dev["batches"]:
             counts["batches"] += 1
             b = bt["b"]
@@ -910,7 +918,12 @@ def cc7(led, sub):
                 counts["records"] += 1
                 if last_s is not None and r["seq"] != last_s + 1:
                     counts["seq_gaps"] += 1
-                    if i or not gap:
+                    short = prev is not None and prev["b"] in rows and len(prev["records"]) < rows[prev["b"]]["n"]
+                    if not i and not gap and short:
+                        # The batch before stored more records than it
+                        # reveals, so the missing seq is its own.
+                        faults.setdefault(prev["b"], []).append(f"seq_gap_before_{r['seq']}")
+                    elif i or not gap:
                         bad.append(f"seq_gap_before_{r['seq']}")
                 last_s = r["seq"]
                 e = json.loads(r["body"])["e"]
@@ -937,7 +950,8 @@ def cc7(led, sub):
                     counts["head_mismatches"] += 1
                     bad.append("head")
             if bad:
-                faults[b] = bad
+                faults.setdefault(b, []).extend(bad)
+            prev = bt
         for b in range(rng["first_b"], rng["last_b"] + 1):
             if b in rows and b not in revealed:
                 counts["missing_batches"] += 1
@@ -1031,10 +1045,17 @@ def cc8(challenge, led):
     return outcome("fail" if failed else "pass", counts, items)
 
 
+# DESIGN 7.3's CC9: the parents a session may move between at a resume.
+INTERACTIVE = {"terminal_app", "ide", "multiplexer", "remote"}
+
+
 def cc9(events, sub):
     """Session integrity: a session's records name one project, every turn
     an agent.* record names has a prompt in the session or is a stop-hook
-    continuation, and the session's parent class doesn't change."""
+    continuation, and the session's parent class changes only at a
+    session.start with start_kind resume, and only among terminal_app, ide,
+    multiplexer and remote. A log reader's parent_class unknown is no class,
+    so a later start that names one isn't a change (DESIGN 7.3)."""
     sessions = {}
     for e in events:
         if e["session_key"] == "none" or not in_window(sub, e["t"]):
@@ -1061,8 +1082,16 @@ def cc9(events, sub):
         if orphans:
             counts["orphan_turns"] += len(orphans)
             bad["orphan_turns"] = orphans
-        classes = {e["data"]["parent_class"] for e in everything if e["kind"] == "session.start"}
-        if len(classes) > 1:
+        classes, current, changed = set(), None, False
+        for st in (e for e in everything if e["kind"] == "session.start"):
+            c = st["data"]["parent_class"]
+            if st["via"] == "log" and c == "unknown":
+                continue
+            resumed = st["data"]["start_kind"] == "resume" and {current, c} <= INTERACTIVE
+            changed = changed or current is not None and c != current and not resumed
+            classes.add(c)
+            current = c
+        if changed:
             counts["parent_class_changes"] += 1
             bad["parent_classes"] = sorted(classes)
         if bad:
@@ -1133,11 +1162,9 @@ def cc11(events, sub, keys, typing, classes):
     lead window overlaps whose focus is the window hosting its session,
     leaving out slots an earlier prompt counted, against the characters
     its typing part credits, min(typed_len_est, COMPOSE_CPS *
-    COMPOSE_MAX_S), and the injected share. DESIGN gives no threshold, and
-    the one pkg/check will use is pending (README, erratum). The scenarios
-    keep to counts that are at least the credited characters or under a
-    quarter of them, which the erratum's proposal and every stricter reading
-    up to all of them agree on, and a count in between is refused here."""
+    COMPOSE_MAX_S), and the injected key-downs in those slots. A prompt fails
+    with fewer of those key-downs than a quarter of its credited
+    characters, or than its injected key-downs (DESIGN 7.3)."""
     counts = {"prompts": 0, "typed_chars": 0, "key_downs": 0, "injected": 0, "too_few_keys": 0,
               "injected_prompts": 0}
     if typing is None:
@@ -1165,14 +1192,15 @@ def cc11(events, sub, keys, typing, classes):
             k += slots[st]["keys"]
             inj += slots[st]["injected"]
         hardware = k - inj
+        # Every prompt CC11 counts here is human_typed, so its typed_len_est
+        # is the typed length its lead credits, at most COMPOSE_CPS x
+        # COMPOSE_MAX_S = 450 characters (SM 2.2, 2.3).
         credited = min(typed, int(COMPOSE_CPS * COMPOSE_MAX_S))
         few = hardware < CC11_SHARE * credited
-        check(few or hardware >= credited, f"CC11's threshold is pending, and {hardware} key-downs for {credited} "
-                                           "credited characters would rest on it")
         counts["typed_chars"] += typed
         counts["key_downs"] += k
         counts["injected"] += inj
-        injected = inj > 0
+        injected = inj > hardware
         counts["too_few_keys"] += few
         counts["injected_prompts"] += injected
         if few or injected:
