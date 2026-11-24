@@ -112,6 +112,16 @@ The agent saves the adapters' memory of their sessions in `state.json` beside th
 memory key = "m" || hex(HMAC-SHA256(K_session, ascii("pairtime/v1/session/memory") || 0x00)[0:16])
 ```
 
+A hook call's records and a log reader's records take their `event_id`s from `K_session` too, each over a domain of its own, so a call the agent parses again, or a line it reads again, makes records of the same ids, which the agent leaves out where the ledger has them. Each id is a UUIDv7 (RFC 9562) whose 48-bit timestamp is the record's `t` in Unix milliseconds, and whose other bits are the first 10 bytes of an HMAC, with the version and variant bits set over them (`internal/agent`, WP-LO1):
+
+```text
+hook event_id = uuid7(t, HMAC-SHA256(K_session, ascii("pairtime/v1/hook-event") || u64be(len(utf8(call))) || utf8(call) || u64be(place)))
+log event_id  = uuid7(t, HMAC-SHA256(K_session, ascii("pairtime/v1/log-event") || u64be(len(utf8(file))) || utf8(file) || utf8(key)))
+uuid7(t, b)   = u48be(t) || (b[0] & 0x0f | 0x70) || b[1] || (b[2] & 0x3f | 0x80) || b[3:10]
+```
+
+`call` is the hook call's message id (`inbox.Message.ID`), 32 lowercase hex characters, and `place` the record's place in what the adapter's `Parse` made of the call, counted from its end, so the call's last record has place 0. `file` names the log file as the tailers do, by its path on the device, and `key` names the record among those its line makes (`adapters.Record.LogKey`, such as `1234.prompt`, or else the line's offset and the record's index, such as `1234.0`). The ids leave the device only in the records a submission reveals, and neither domain string is another `K_session` value's. `TestEventIDVectors` in `internal/agent` pins a vector for each, computed apart from the code.
+
 One `K_dev` writes one chain. The nonce (4.4) and the token salts (10.2) are keyed by `s` alone, so they stay unique only while no `s` repeats under one `K_dev`. A `K_dev` that `pairtime restore` unwraps onto a new install (DESIGN 7.11) only verifies and opens the old chain's records. The restored install writes its own chain, under its own `device_id` and a `K_dev` generated for it, from `s = 1`, and keeps the old key for reading. A second chain under the old key would repeat every nonce and salt: a body or a salt revealed from the old chain would let a reader confirm guesses of the new chain's hidden bodies, or of its removed tokens, at the same `s`.
 
 ## 4. Records
