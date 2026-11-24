@@ -605,21 +605,27 @@ func TestDurable(t *testing.T) {
 			},
 		},
 		{
-			name: "on SQLite, after a durable batch whose reset to NORMAL failed, the next batch resets the level before it begins",
+			name: "on SQLite, after a durable batch whose reset to NORMAL failed, which leaves the batch committed, the next batch resets the level before it begins",
 			run: func(t *testing.T, db *store.DB) {
 				if db.Engine != store.SQLite {
 					t.Skip("only SQLite has a level that outlives a batch")
 				}
+				// Before start, so the writer closes before the real reset
+				// comes back.
+				writer.FailResetAfterDurable(t)
 				var log commitLog
-				w := start(t, db, writer.Options{Window: time.Millisecond, BatchTimeout: 200 * time.Millisecond, Engine: db.Engine}, &log)
-				// The op outlasts its batch's timeout, so the reset after the
-				// batch gets a done context and fails, and the connection
-				// stays at FULL.
-				if err := w.DoDurable(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
-					<-ctx.Done()
-					return ctx.Err()
-				}); err == nil {
-					t.Fatal("the op that outlasted its batch's timeout succeeded")
+				w := start(t, db, writer.Options{Window: time.Millisecond, Engine: db.Engine}, &log)
+				if err := w.DoDurable(ctx, 1, insert(1)); err != nil {
+					t.Fatalf("the durable batch whose reset failed = %v, want it committed", err)
+				}
+				// Between the batches nothing runs on the one connection, so
+				// db.Write reads the level the failed reset left.
+				var between string
+				if err := db.Write.QueryRow("PRAGMA synchronous").Scan(&between); err != nil {
+					t.Fatal(err)
+				}
+				if between != durable[db.Engine] {
+					t.Fatalf("between the batches the connection is at %q, want %q: the reset after the durable batch didn't fail", between, durable[db.Engine])
 				}
 				var got string
 				if err := w.Do(ctx, 1, syncLevel(db.Engine, &got)); err != nil {
@@ -628,8 +634,11 @@ func TestDurable(t *testing.T) {
 				if got != plain[db.Engine] {
 					t.Errorf("the next batch read %q, want the default, %q", got, plain[db.Engine])
 				}
-				if cs := log.all(); len(cs) != 2 || !cs[0].Durable || cs[0].Err == nil || cs[1].Durable || cs[1].Err != nil {
-					t.Errorf("transactions = %+v, want a failed durable one, then a plain one", cs)
+				if rows, want := ids(t, db), map[int]bool{1: true}; !reflect.DeepEqual(rows, want) {
+					t.Errorf("rows = %v, want %v", rows, want)
+				}
+				if cs := log.all(); len(cs) != 2 || !cs[0].Durable || cs[0].Err != nil || cs[1].Durable || cs[1].Err != nil {
+					t.Errorf("transactions = %+v, want a durable one and then a plain one, both committed", cs)
 				}
 			},
 		},

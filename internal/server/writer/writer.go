@@ -397,7 +397,7 @@ func (w *Writer) write(ctx context.Context, ops []*request, durable bool) ([]err
 		}
 		if durable {
 			// Runs before conn.Close, deferred above.
-			defer w.setLevel(ctx, conn, false)
+			defer w.reset(ctx, conn, resetAfterDurable)
 		}
 		tx, err = conn.BeginTx(ctx, nil)
 	}
@@ -440,26 +440,44 @@ func (w *Writer) write(ctx context.Context, ops []*request, durable bool) ([]err
 	return errs, changed, nil
 }
 
-// setLevel sets SQLite's synchronous level on conn: FULL before a durable
-// batch, and NORMAL after one or, when that reset failed, before the next
-// plain batch. Only a failure to set FULL is an error, which fails the
-// durable batch. A failed reset isn't one: FULL is the stricter level, so
-// the batch runs at it, and the next batch tries again. Only SQLite's
-// batches call it: Postgres has no level to set outside a transaction.
+// The statements that set SQLite's synchronous level.
+const (
+	syncFull   = "PRAGMA synchronous = FULL"
+	syncNormal = "PRAGMA synchronous = NORMAL"
+)
+
+// resetAfterDurable is the statement a durable batch runs once it ends. It
+// is syncNormal, except in a test that makes that reset fail
+// (export_test.go).
+var resetAfterDurable = syncNormal
+
+// setLevel sets SQLite's synchronous level on conn before a batch: FULL
+// before a durable one, and NORMAL before a plain one when the reset after
+// the last durable batch failed. Only a failure to set FULL is an error,
+// which fails the durable batch. A failed reset isn't one: FULL is the
+// stricter level, so the batch runs at it, and the next batch tries again.
+// Only SQLite's batches call it: Postgres has no level to set outside a
+// transaction.
 func (w *Writer) setLevel(ctx context.Context, conn *sql.Conn, durable bool) error {
 	switch {
 	case durable:
 		// Set first: when the statement fails, the batch fails before
 		// its deferred reset, and the next batch resets the level instead.
 		w.full = true
-		_, err := conn.ExecContext(ctx, "PRAGMA synchronous = FULL")
+		_, err := conn.ExecContext(ctx, syncFull)
 		return err
 	case w.full:
-		if _, err := conn.ExecContext(ctx, "PRAGMA synchronous = NORMAL"); err == nil {
-			w.full = false
-		}
+		w.reset(ctx, conn, syncNormal)
 	}
 	return nil
+}
+
+// reset runs q, which puts conn back at NORMAL, and clears w.full only when
+// q succeeds, so a failed reset leaves the next batch to try again.
+func (w *Writer) reset(ctx context.Context, conn *sql.Conn, q string) {
+	if _, err := conn.ExecContext(ctx, q); err == nil {
+		w.full = false
+	}
 }
 
 // countingTx is the Tx an op gets: the batch's transaction, counting the
