@@ -71,6 +71,12 @@
       "days": 180
     },
     {
+      "id": "device.commits_pruned",
+      "where": "device",
+      "data": "The IDs of the commits whose records pairtime deleted once they were too old to keep, so this computer never sends any of them after that",
+      "kept": "Until you uninstall pairtime or delete everything"
+    },
+    {
       "id": "device.uploads",
       "where": "device",
       "data": "A record of each upload the server answered: when, to which server, how many batch roots, minute buckets and commit records it carried and whether it carried the labels, the codes in the server's answer, and a hash of what was sent, never what was sent itself. The same for each request that turned a project's name on or off on your dashboard, answered or not: how many names it carried and a hash, never the names themselves",

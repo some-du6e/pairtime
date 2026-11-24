@@ -41,6 +41,11 @@ type Row struct {
 	// Why says why a batch sealed local-only is (Batch.Why), nil for one
 	// sealed online and for one an older version sealed.
 	Why *LocalWhy
+	// Stretches are the local-only stretches the batch's seal frame
+	// recorded (Batch.Stretches), in a row RowOf makes. ReadRows leaves
+	// them nil, as batches.seg keeps only the newest list once read, which
+	// ChainInfo.Stretches gives.
+	Stretches []Stretch
 }
 
 // ReadRows reads which chain the ledger in dir holds and the rows of its
@@ -89,5 +94,6 @@ func ReadRows(dir string, from uint64) (ChainInfo, []Row, error) {
 // read it, given prev, the head of the batch before it: Batch doesn't
 // carry it, and its holder knows it from that batch.
 func RowOf(b Batch, prev ledger.Hash) Row {
-	return Row{BatchRow: b.Row, Prev: prev, SealedAt: b.SealedAt, Online: b.Online, Back: b.Back, LocalUntil: b.LocalUntil, Why: b.Why}
+	return Row{BatchRow: b.Row, Prev: prev, SealedAt: b.SealedAt, Online: b.Online, Back: b.Back, LocalUntil: b.LocalUntil, Why: b.Why,
+		Stretches: b.Stretches}
 }

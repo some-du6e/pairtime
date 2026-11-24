@@ -25,10 +25,11 @@ type Preview struct {
 	// Retry is set when the request failed and waits to be sent again as
 	// it is.
 	Retry bool
-	// Batches and Buckets count the batch roots and minute buckets it
-	// carries, and Labels says whether it carries the labels.
-	Batches, Buckets int
-	Labels           bool
+	// Batches, Buckets and Commits count the batch roots, minute buckets
+	// and commit records it carries, and Labels says whether it carries the
+	// labels.
+	Batches, Buckets, Commits int
+	Labels                    bool
 	// More is set when more requests wait behind this one.
 	More bool
 	// Stopped is the first batch sealed in local-only mode after the
@@ -94,8 +95,8 @@ type PreviewOptions struct {
 	Names   map[string]string
 	OwnKeys map[string]bool
 
-	// maxRoots and maxBuckets are the Uploader's, for tests.
-	maxRoots, maxBuckets int
+	// maxRoots, maxBuckets and maxCommits are the Uploader's, for tests.
+	maxRoots, maxBuckets, maxCommits int
 }
 
 // Next returns the next upload: the request waiting for its retry, or the
@@ -177,9 +178,11 @@ func Next(o PreviewOptions) (Preview, error) {
 		rows:       rows,
 		st:         st,
 		bucketDir:  o.BucketDir,
+		commitDir:  commitDir(o.DataDir),
 		lag:        o.Params.Int(params.WITNESS_LAG_S) * 1000,
 		maxRoots:   o.maxRoots,
 		maxBuckets: o.maxBuckets,
+		maxCommits: o.maxCommits,
 		notAfter:   now.Add(time.Duration(st.Offset) * time.Millisecond).Add(futureMargin).UnixMilli(),
 	}
 	l := currentLabels(build, o.Params, o.Device, st.Harnesses)
@@ -274,7 +277,8 @@ func previewOf(p plan, retry bool) Preview {
 	}
 	return Preview{
 		JSON: p.js, Retry: retry,
-		Batches: len(p.body.Batches), Buckets: len(p.body.Buckets), Labels: p.body.Labels != nil, More: p.more,
+		Batches: len(p.body.Batches), Buckets: len(p.body.Buckets), Commits: len(p.body.Commits), Labels: p.body.Labels != nil,
+		More: p.more,
 	}
 }
 

@@ -16,6 +16,7 @@
 //	device.held_calls      held.jsonl and its logs    the agent's adapter host, as it runs (heldKeep)
 //	device.inbox           inbox/'s spool files       the agent, at its start and each retention look (inbox.SpoolKeep)
 //	device.commits         commits/                   the agent's commit store (commitsKeep)
+//	device.commits_pruned  commits/pruned.txt         "delete everything" and uninstall; the commit store appends a day's shas before each prune deletes its file
 //	device.uploads         uploads.jsonl              the uploader as it runs (uploadsKeep), and Sweep while it doesn't
 //	device.project_names   project-names.json         the uploader, as each names answer replaces it and its notes stay 1,000 at most (capNotes); "delete everything" and uninstall
 //	device.transcripts     not copied                 nothing
