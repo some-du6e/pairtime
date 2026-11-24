@@ -56,17 +56,24 @@ type basePayload struct {
 	Prev     ledger.Hash `json:"prev"`
 	// Stretches are the local-only stretches the writer knew when the sweep
 	// wrote the frame, as its next seal frame would record them, or, in an
-	// old chain's, those its newest row recorded, so dropping the rows loses
-	// none of them (sealPayload.Stretches).
+	// old chain's, its newest list (batchesFile.stretches), folded, so
+	// dropping the rows loses none of them (sealPayload.Stretches).
 	Stretches []stretchPayload `json:"stretches,omitempty"`
 	// LocalUntil and LocalUntilOS are the writer's moment with them
-	// (sealPayload.LocalUntil), or the one an old chain's list's row
-	// recorded, which Open holds the rows after the frame to, as it holds
-	// those after the newest row that records stretches: this version moves
-	// the moment only with a seal frame that records them, so a row whose
-	// moment rose past it is an older version's (restoreStretches).
+	// (sealPayload.LocalUntil), or, in an old chain's, the one its list's
+	// row or base frame recorded, which Open holds the rows after the frame
+	// to, as it holds those after the newest row that records stretches:
+	// this version moves the moment only with a seal frame that records
+	// them, so a row whose moment rose past it is an older version's
+	// (restoreStretches).
 	LocalUntil   int64    `json:"local_until,omitempty"`
 	LocalUntilOS *untilOS `json:"local_until_os,omitempty"`
+	// Back is the first record of the batch the writer had a mark due for
+	// when the sweep wrote the frame (Writer.back), 0 for none: a stretch
+	// end it took that no batch sealed online since had taken the mark for.
+	// Open keeps it due while no batch has been sealed with the records from
+	// it on (restoreStretches), as the run that took the end would have.
+	Back uint64 `json:"back,omitempty"`
 }
 
 // listUntil is the moment the row that recorded bf.stretches recorded, or

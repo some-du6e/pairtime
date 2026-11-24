@@ -103,9 +103,10 @@ func (w *Writer) Sweep(from string, floor uint64) (batches, segs int, err error)
 	// Open found as it was, though the fold made the rows' moments alike.
 	stretches := w.stretchPayloads(false)
 	uWall, uOS := w.until.wall, osPayload(untilOS{Mono: w.until.os, Boot: w.until.boot})
+	back := w.back
 	w.mu.Unlock()
 	if k > 0 || folded || foldsMoment(bf, k, cut) {
-		data, kerr := keptFile(bf, k, cut, stretches, uWall, uOS)
+		data, kerr := keptFile(bf, k, cut, stretches, uWall, uOS, back)
 		if kerr != nil {
 			return oldBatches, oldSegs, errors.Join(kerr, oldErr)
 		}
@@ -219,10 +220,11 @@ func keptFrom(bf *batchesFile, from string, floor uint64) int {
 // frame naming that batch, or the batch after the last when k is past
 // them, with stretches and the moment uWall, uOS, the live chain's writer's
 // own (Writer.Sweep) or an old chain's newest list and the moment its row
-// recorded (sweepChain), as the sweep folds them, the rows, then the
-// receipts of the rows kept, in the order of their batches. The rows go
-// before every receipt, so each receipt follows its row.
-func keptFile(bf *batchesFile, k int, cut int64, stretches []stretchPayload, uWall int64, uOS *untilOS) ([]byte, error) {
+// recorded (sweepChain), as the sweep folds them, and back, the writer's
+// mark due (basePayload.Back), then the rows, then the receipts of the rows
+// kept, in the order of their batches. The rows go before every receipt, so
+// each receipt follows its row.
+func keptFile(bf *batchesFile, k int, cut int64, stretches []stretchPayload, uWall int64, uOS *untilOS, back uint64) ([]byte, error) {
 	cp := bf.chain
 	cp.V = chainVersionBase
 	chain, err := json.Marshal(cp)
@@ -247,6 +249,7 @@ func keptFile(bf *batchesFile, k int, cut int64, stretches []stretchPayload, uWa
 	if stretches != nil {
 		bp.Stretches = stretches
 		bp.LocalUntil, bp.LocalUntilOS = foldUntil(uWall, uOS, cut)
+		bp.Back = back
 	}
 	base, err := json.Marshal(bp)
 	if err != nil {
@@ -337,7 +340,7 @@ func sweepChain(dir, from string) (batches, segs int, err error) {
 			uWall, uOS = bf.listUntil()
 		}
 		if k > 0 || folded || foldsMoment(bf, k, cut) {
-			data, err := keptFile(bf, k, cut, stretches, uWall, uOS)
+			data, err := keptFile(bf, k, cut, stretches, uWall, uOS, 0)
 			if err != nil {
 				return 0, 0, err
 			}

@@ -357,9 +357,11 @@ func TestMergeStretches(t *testing.T) {
 // that the writer didn't know of, so the list stays in time order for
 // mergeStretches: right after the newest stretch that ended before it, by
 // the clocks the two share, which after a step back of the wall clock can
-// be before a stretch the wall clock dates earlier; before the stretch
-// going on; and first, from the beginning of time, when none ended before
-// it.
+// be before a stretch the wall clock dates earlier, and which puts every
+// stretch an earlier run recorded before one of this run, whatever the wall
+// clock says; before the stretch going on; and first, from the beginning of
+// time, when none ended before it. A stretch whose start holds no reading
+// of its end's boot holds that boot's hook calls from its start.
 func TestLearnedOrder(t *testing.T) {
 	const boot = "b_order"
 	// at is ms into the boot, whose wall clock stepped back 60 s at 45 s.
@@ -379,45 +381,61 @@ func TestLearnedOrder(t *testing.T) {
 		}
 		return s
 	}
+	// restored is an edge an earlier run recorded at wall in boot b_before,
+	// as Open reads it back in boot (Writer.earlierEdge): this run's start
+	// and boot's, 1, with b_before's own reading, os, kept.
+	restored := func(wall, os int64) edge {
+		return edge{m: moment{wall: wall, run: 1, os: 1, boot: boot}, other: moment{os: os, boot: "b_before"}}
+	}
 	cases := []struct {
 		name string
 		list []stretch
-		// online is when the writer last knew config.toml said online, and end
-		// when the stretch the agent saw ended, in ms by the OS's clock.
-		online, end int64
-		// want is where the learned stretch goes, and from where it begins,
-		// by the OS's clock, -1 for the beginning of time.
+		// online is where the writer last knew config.toml said online, and
+		// end where the stretch the agent saw ended.
+		online, end edge
+		// want is where the learned stretch goes, and from where it begins
+		// by the OS's clock, -1 for the beginning of time; held are events it
+		// must hold.
 		want int
 		from int64
+		held []event.Envelope
 	}{
 		{"one that ended after every stretch goes last, from where the writer last knew the file said online",
-			[]stretch{ended(0, 10_000), ended(20_000, 30_000)}, 35_000, 40_000, 2, 35_000},
+			[]stretch{ended(0, 10_000), ended(20_000, 30_000)}, edgeAt(at(35_000)), edgeAt(at(40_000)), 2, 35_000, nil},
 		{"one the wall clock dates after the newest stretch, after a step back, but the OS's clock before it, goes right after the newest that ended before it by the OS's clock",
-			[]stretch{ended(0, 10_000), ended(50_000, 60_000)}, 65_000, 40_000, 1, 10_000},
+			[]stretch{ended(0, 10_000), ended(50_000, 60_000)}, edgeAt(at(65_000)), edgeAt(at(40_000)), 1, 10_000, nil},
 		{"one that ended before the stretch going on goes before it",
-			[]stretch{ended(0, 10_000), {from: edgeAt(at(50_000)), open: true}}, 45_000, 40_000, 1, 10_000},
+			[]stretch{ended(0, 10_000), {from: edgeAt(at(50_000)), open: true}}, edgeAt(at(45_000)), edgeAt(at(40_000)), 1, 10_000, nil},
 		{"one that ended before every stretch goes first, from the beginning of time",
-			[]stretch{ended(0, 10_000), ended(20_000, 30_000)}, 35_000, 5_000, 0, -1},
+			[]stretch{ended(0, 10_000), ended(20_000, 30_000)}, edgeAt(at(35_000)), edgeAt(at(5_000)), 0, -1, nil},
+		{"one of this run goes after every stretch an earlier run recorded, though the wall clock reads behind them after a reboot, and holds this boot's hook calls from its start",
+			[]stretch{{to: restored(1_000_000, 50_000), passed: true}, {from: restored(1_100_000, 60_000), to: restored(1_200_000, 70_000), passed: true}},
+			edge{m: moment{wall: 1_205_000, run: 1}}, edgeAt(moment{wall: 1_110_000, run: 5_000, os: 40_000, boot: boot}), 2, 0,
+			[]event.Envelope{{T: 1_105_000, Mono: 35_000, BootID: boot}}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			w := &Writer{boot: boot, onlineAt: edgeAt(at(c.online)), stretches: slices.Clone(c.list)}
-			end := edgeAt(at(c.end))
-			w.learned(end, false)
-			got := slices.IndexFunc(w.stretches, func(s stretch) bool { return !s.open && s.to.m.os == c.end })
+			w := &Writer{boot: boot, onlineAt: c.online, stretches: slices.Clone(c.list)}
+			w.learned(c.end, false)
+			got := slices.IndexFunc(w.stretches, func(s stretch) bool { return !s.open && s.to.m.os == c.end.m.os })
 			ordered := true
 			for i := 1; i < len(w.stretches); i++ {
 				if prev, s := w.stretches[i-1], w.stretches[i]; prev.open || !s.open && s.to.m.os < prev.to.m.os {
 					ordered = false
 				}
 			}
-			from := int64(-1)
-			if got >= 0 && w.stretches[got].from != (edge{}) {
-				from = w.stretches[got].from.m.os
+			from, held := int64(-1), got >= 0
+			if got >= 0 {
+				if s := w.stretches[got]; s.from != (edge{}) {
+					from = s.from.m.os
+				}
+				for _, e := range c.held {
+					held = held && w.stretches[got].holds(e)
+				}
 			}
-			if got != c.want || from != c.from || !ordered || len(w.stretches) != len(c.list)+1 {
-				t.Errorf("the learned stretch is at %d, from %d by the OS's clock, in order %v, of %d; want at %d, from %d, in order, of %d",
-					got, from, ordered, len(w.stretches), c.want, c.from, len(c.list)+1)
+			if got != c.want || from != c.from || !ordered || !held || len(w.stretches) != len(c.list)+1 {
+				t.Errorf("the learned stretch is at %d, from %d by the OS's clock, holding the events %v, in order %v, of %d; want at %d, from %d, holding them, in order, of %d",
+					got, from, held, ordered, len(w.stretches), c.want, c.from, len(c.list)+1)
 			}
 		})
 	}
@@ -1007,7 +1025,7 @@ func TestStretchesKept(t *testing.T) {
 // recorded, with no stretches of its own, is then an older version's
 // (restoreStretches), and the next Open doesn't end the stretch going on at
 // a row this version sealed later with that moment. A sweep that drops the
-// list's row keeps that moment in its base frame. A record made in the
+// list's row keeps the writer's moment, that one here, in its base frame. A record made in the
 // stretch after that moment, which reaches the writer late after the
 // restart, is held by it and sealed local-only, whatever config.toml says at
 // the restart.
@@ -1021,7 +1039,7 @@ func TestUntilMovesRecordStretches(t *testing.T) {
 	}{
 		{"config.toml online at the restart: the stretch goes on until the first read ends it", true, false},
 		{"config.toml still local-only at the restart: the stretch goes on", false, false},
-		{"a sweep before the restart keeps in its base frame the moment the list's row recorded, folded at its day, so the stretch still goes on", true, true},
+		{"a sweep before the restart keeps in its base frame the writer's moment, folded at its day, so the stretch still goes on", true, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1093,7 +1111,7 @@ func TestUntilMovesRecordStretches(t *testing.T) {
 				ok   bool
 			}{
 				{"the seal frame sealed after the moment moved records the stretches", recorded},
-				{"a sweep's base frame keeps them with the moment the list's row recorded, folded at its day", based},
+				{"a sweep's base frame keeps them with the writer's moment, folded at its day", based},
 				{"the record made in the stretch after that moment is sealed local-only after the restart", !b.Online},
 			}
 			for _, ch := range checks {
@@ -1164,9 +1182,9 @@ func TestLearnedStretch(t *testing.T) {
 }
 
 // TestFullSweepKeepsStretches checks what a retention sweep that drops every
-// row keeps for the next Open: the stretches, the writer's own when an older
-// version's rows recorded none and Open rebuilt them from their moments,
-// and the moment the newest row recorded, folded at the sweep's day. With
+// row keeps for the next Open: the writer's own stretches, as Open rebuilt
+// them from an older version's rows, which recorded none, or read them from
+// this version's, and its moment, folded at the sweep's day. With
 // them, a stretch end the agent kept from before the sweep ends nothing
 // new, so a hook call held at the first seal after a restart keeps no mark,
 // and that batch is sealed online after the server's head.
@@ -1400,16 +1418,17 @@ func TestOldChainFoldsMoments(t *testing.T) {
 }
 
 // TestSweepKeepsWhatOpenFound checks that a sweep's base frame keeps the
-// writer's own stretches and moment (Sweep), not the list batches.seg
-// holds, so what Open found that no seal frame has yet outlasts a restart
-// before the next seal, though the fold made the moments alike: the
-// stretch going on that rows an older version sealed after a downgrade
-// ended at their rise, and the one the agent's kept Seen ended, before the
-// sweep's day or after it. The first batch after the restart is then
-// sealed online, not local-only after the batches sealed online before it;
-// and, for an end after the sweep's day, which no batch was sealed after,
-// it takes the mark, as in the run that took the end, with no stretch
-// learned twice.
+// writer's own stretches, moment and mark (Sweep), not the list
+// batches.seg holds, so what Open found that no seal frame has yet
+// outlasts a restart before the next seal, though the fold made the
+// moments alike: the stretch going on that rows an older version sealed
+// after a downgrade ended at their rise, and the one the agent's kept Seen
+// ended, before the sweep's day or after it. The first batch after the
+// restart is then sealed online, not local-only after the batches sealed
+// online before it, with no stretch learned twice, and it takes the mark
+// just when the run that took the end had it due: after the Seen's end,
+// which no batch was sealed after, and not after a seal's own read of
+// config.toml, which marks no batch.
 func TestSweepKeepsWhatOpenFound(t *testing.T) {
 	// seenAt is a stretch end the agent saw ms after the start and kept, as
 	// state.json does, by both clocks.
@@ -1433,7 +1452,7 @@ func TestSweepKeepsWhatOpenFound(t *testing.T) {
 		stretches int
 		back      bool
 	}{
-		{"rows an older version sealed after a list with a stretch going on, as after a downgrade: the stretch stays ended at their rise, so a late record made before the sweep's day is dropped in the fold and the batch is sealed online",
+		{"rows an older version sealed after a list with a stretch going on, as after a downgrade: the stretch stays ended and folds into the sweep's day, so a late record made before that day is dropped and the batch is sealed online",
 			func(t *testing.T, r *lateRig) (string, uint64) {
 				// TestStretchesKept's ledger: the install's stretch, three online
 				// batches, a second stretch, whose first batch, 5, records it
@@ -1472,7 +1491,7 @@ func TestSweepKeepsWhatOpenFound(t *testing.T) {
 			3 * sweepDayMS, func(r *lateRig) []Input {
 				return []Input{r.logged("agent.output", 55_000), r.presence(3*sweepDayMS + 1000)}
 			}, 1, 1, false},
-		{"a stretch end the agent kept while the ledger was shut, before the sweep's day: the stretch stays ended, so a record made after that day is sealed online",
+		{"a stretch end the agent kept while the ledger was shut, before the sweep's day: the stretch stays ended, so a record made after that day is sealed online, and the batch takes the mark",
 			func(t *testing.T, r *lateRig) (string, uint64) {
 				// The install's stretch, an online batch, and a second stretch,
 				// whose batch, 3, records it going on as the ledger shuts.
@@ -1504,7 +1523,7 @@ func TestSweepKeepsWhatOpenFound(t *testing.T) {
 				// One made after the sweep's day and before the restart, while
 				// config.toml said online, as a presence sample queued across it.
 				return []Input{r.presence(2*sweepDayMS + 1000), r.presence(3*sweepDayMS + 1000)}
-			}, 2, 1, false},
+			}, 2, 1, true},
 		{"a stretch end the agent kept while the ledger was shut, after the sweep's day: the stretch stays ended there, no stretch is learned twice, and the batch takes the mark",
 			func(t *testing.T, r *lateRig) (string, uint64) {
 				// The install's stretch and an online batch, then, days later,
@@ -1539,6 +1558,36 @@ func TestSweepKeepsWhatOpenFound(t *testing.T) {
 				return dayOf(time.UnixMilli(testT + 2*sweepDayMS)), 0
 			},
 			5 * sweepDayMS, func(r *lateRig) []Input { return []Input{r.presence(5*sweepDayMS + 1000)} }, 1, 2, true},
+		{"a stretch a seal's own read of config.toml ended, which marks no batch, marks none after a sweep either",
+			func(t *testing.T, r *lateRig) (string, uint64) {
+				// The install's stretch and an online batch, then, days later,
+				// another online batch and a second stretch, whose batch, 4,
+				// records it going on; config.toml is back online with no note,
+				// and a seal with nothing pending ends the stretch at its read.
+				r.note(false)
+				r.write(r.presence(1000))
+				r.take()
+				r.at(10_000)
+				r.note(true)
+				r.pause()
+				r.at(20_000)
+				r.write(r.presence(20_000))
+				r.seal()
+				r.at(3 * sweepDayMS)
+				r.write(r.presence(3 * sweepDayMS))
+				r.seal()
+				r.at(3*sweepDayMS + 10_000)
+				r.note(false)
+				r.write(r.presence(3*sweepDayMS + 11_000))
+				r.take()
+				r.at(3*sweepDayMS + 20_000)
+				r.file.Store(true)
+				if _, ok, err := r.w.Seal(); ok || err != nil {
+					t.Fatalf("Seal sealed a batch %v, %v; want nothing to seal", ok, err)
+				}
+				return dayOf(time.UnixMilli(testT + 2*sweepDayMS)), 0
+			},
+			5 * sweepDayMS, func(r *lateRig) []Input { return []Input{r.presence(5*sweepDayMS + 1000)} }, 1, 2, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
