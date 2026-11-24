@@ -78,6 +78,17 @@ type Options struct {
 	// Rollup, when set, is called for every bucket revision stored.
 	// pairtimed passes rollup.ApplyEvent (WP-SV7).
 	Rollup RollupFunc
+	// Changed, when set, hears the account of each upload that stored a
+	// bucket revision, so moved the account's rollups, and of each names
+	// request that set or deleted a name, which the dashboard shows, once
+	// the writer's transaction has committed: never inside the op, and not
+	// for a request that failed or whose outcome its client stopped waiting
+	// for. A replay of an upload that stored one is heard again, since the
+	// client that sends it again never had the first answer, so may be the
+	// only sign the first one ever gives. pairtimed passes the live
+	// stream's Changed, which sends the owner's open dashboards their new
+	// numbers and names (WP-SV8).
+	Changed func(account string)
 	// Observe, when set, hears of each upload the writer processed, not
 	// counting replays: how many batch roots it stored, and how long the
 	// request took from arrival to the response with their receipts
@@ -308,6 +319,7 @@ func (s *Service) batches(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if out, done := s.precheck(r.Context(), dev, env); done {
+		s.announce(dev, out)
 		s.answer(w, out, start)
 		return
 	}
@@ -336,7 +348,40 @@ func (s *Service) batches(w http.ResponseWriter, r *http.Request) {
 		s.refuse(w, unavailable())
 		return
 	}
+	// The writer committed the op, so the rollups it moved are there for
+	// any reader.
+	s.announce(dev, out)
 	s.answer(w, out, start)
+}
+
+// announce tells Changed of the device's account when out stored a bucket
+// revision: an upload whose transaction just committed, or a replay of one
+// that did.
+func (s *Service) announce(dev device.Device, out outcome) {
+	if s.o.Changed == nil || out.refusal != nil {
+		return
+	}
+	if out.revised > 0 || out.replay && revisedIn(out.response) {
+		s.o.Changed(dev.Account)
+	}
+}
+
+// revisedIn reports whether a stored answer accepted a bucket revision.
+func revisedIn(response []byte) bool {
+	var r struct {
+		Buckets []struct {
+			Code string `json:"code"`
+		} `json:"buckets"`
+	}
+	if json.Unmarshal(response, &r) != nil {
+		return false
+	}
+	for _, b := range r.Buckets {
+		if b.Code == CodeAccepted {
+			return true
+		}
+	}
+	return false
 }
 
 // answer sends what the checks of ingest-v1 2.5 steps 13 and 14 decided.
@@ -361,8 +406,10 @@ type outcome struct {
 	refusal  *refusal
 	response []byte
 	replay   bool
-	// stored counts the batch roots the request stored.
-	stored int
+	// stored counts the batch roots the request stored, revised the
+	// bucket revisions, and renamed the names a names request set or
+	// deleted.
+	stored, revised, renamed int
 }
 
 // checkReplay is ingest-v1 2.5 step 13's Idempotency-Key check against the
@@ -632,10 +679,14 @@ func (s *Service) process(ctx context.Context, tx writer.Tx, dev device.Device, 
 		}
 		resp.Batches = append(resp.Batches, r)
 	}
+	revised := 0
 	for _, pb := range p.buckets {
 		r, err := s.bucket(ctx, tx, dev, pb, now)
 		if err != nil {
 			return outcome{}, err
+		}
+		if r.Code == CodeAccepted {
+			revised++
 		}
 		resp.Buckets = append(resp.Buckets, r)
 	}
@@ -678,7 +729,7 @@ func (s *Service) process(ctx context.Context, tx writer.Tx, dev device.Device, 
 	if err := insertOrigin(ctx, tx, newID(time.UnixMilli(now)), dev.ID, dev.Account, ip, ja4, now); err != nil {
 		return outcome{}, err
 	}
-	return outcome{response: data, stored: stored}, nil
+	return outcome{response: data, stored: stored, revised: revised}, nil
 }
 
 // maxDayClosedWait is the most a day_closed refusal's Retry-After asks a
