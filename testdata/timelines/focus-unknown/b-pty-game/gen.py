@@ -65,13 +65,15 @@ RUN1 = ("2.4 and 2.5: the turn's reading drains in a slot of unknown focus",
         "until the edit at T + 50 while the turn runs, the turn the rules say a person started.")
 RUN2 = ("2.4 and 2.5", "The 16-line edit adds 120 s: SUP to the stop at T + 100, then READ until the next "
                        "prompt's lead starts at T + 120 (SM 3.3 rule 2).")
+RUN2_LAST = ("2.4 and 2.5", "The 16-line edit adds 120 s: SUP to the stop at T + 100, then READ to the window's "
+                            "end at T + 120. No prompt follows, so the 70 s left at 20:20:00 lie after the window.")
 NOTES = {}
 for local, _ in ptygame.PROMPTS:
     T = at(local)
     for m in range(T - 180_000, T, 60_000):
         NOTES[fx.hhmm(m)] = LEAD
     NOTES[fx.hhmm(T)] = RUN1
-    NOTES[fx.hhmm(T + 60_000)] = RUN2
+    NOTES[fx.hhmm(T + 60_000)] = RUN2 if local != ptygame.PROMPTS[-1][0] else RUN2_LAST
 case.rows(NOTES)
 lv = case.level_totals()
 agent_only = sum(1 for t in rp.running if t not in rp.credit)
@@ -89,8 +91,9 @@ expected = exp.doc(
         "1,140 of the 1,200 s are credited, every one at level C with focus_unknown, and none at level A or B. "
         "The X11 twin, b-pty-game-x11, has the same acts with the browser in front and credits nothing.",
         "Each cycle: the prompt's 180 s lead, SUP 85, READ 20 and X.agent_only 15 while the turn runs with "
-        "nothing new on screen. The 70 s left in the bucket at T + 120 are never read, because the next "
-        "prompt's lead beats the bucket (SM 3.3 rule 2) and the next prompt resets it.",
+        "nothing new on screen. In the first three cycles the 70 s left in the bucket at T + 120 are never "
+        "read, because the next prompt's lead beats the bucket (SM 3.3 rule 2) and the next prompt resets it. "
+        "The last cycle's 70 s lie after the window.",
     ],
 )
 tl.check(expected["totals"]["credited_s"] == 1140, f"credited {expected['totals']['credited_s']}")

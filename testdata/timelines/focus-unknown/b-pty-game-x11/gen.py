@@ -61,7 +61,8 @@ for a, b in (("20:00", "20:02"), ("20:05", "20:07"), ("20:10", "20:12"), ("20:15
 case.rows(NOTES)
 lv = case.level_totals()
 expected = exp.doc(
-    extra_totals={**lv, "agent_only_s": len(rp.running), "human_typed_prompts": 0, "no_input_prompts": 4},
+    extra_totals={**lv, "agent_only_s": len(rp.running), "ai_credited_s": 0, "hand_credited_s": 0,
+                  "human_typed_prompts": 0, "no_input_prompts": 4},
     stated=[],
     approx={},
     errata=[],

@@ -225,9 +225,10 @@ expected = exp.doc(
         "3.3 rule 1).",
         "Leads of the two projects go by SM 3.3 rule 3, the lead of the next anchor at or after the second. "
         "Buckets of the two projects go to the project whose qualifying human anchor is nearest the second, the "
-        "earlier anchor on a tie, then the lower project_key (SM 2.5). Neither tie arises: from 16:08:01 api's "
-        "B2, 600 s after A1 and 1 s past the minute, is the nearer anchor, and the second's start and its middle "
-        "give the same side.",
+        "earlier anchor on a tie, then the lower project_key (SM 2.5). From 16:08:01 api's B2, 601 s after A1, "
+        "is the nearer anchor. Measured from a second's start no two anchors tie. Measured from its middle, "
+        "16:08:00 is 300.5 s from both, and the earlier anchor, A1, takes it, so both readings give the same "
+        "side. The lower project_key is never reached.",
         "contested_buckets_s counts the seconds both buckets wanted, 291 to site and 120 to api, and "
         "contested_leads_s the seconds both projects' leads wanted, all api's.",
         "Two slots credit both projects, 16:03:30 and 16:08:00, which SM 5.1's minute bucket, one project a "

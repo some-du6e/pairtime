@@ -330,7 +330,7 @@
       "uncredited": {},
       "agent_running_s": 40,
       "sm": "2.4 and 2.5",
-      "note": "The 16-line edit adds 120 s: SUP to the stop at T + 100, then READ until the next prompt's lead starts at T + 120 (SM 3.3 rule 2).",
+      "note": "The 16-line edit adds 120 s: SUP to the stop at T + 100, then READ to the window's end at T + 120. No prompt follows, so the 70 s left at 20:20:00 lie after the window.",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
     }
   ],
@@ -356,6 +356,6 @@
   "notes": [
     "WP-FX8's (b): a script sends Claude Code a prompt every 300 s through tmux send-keys, which writes to the pty, while the person plays a game in a browser. GNOME on Wayland gives pairtime no focus, so the only os.focus says app_class unknown, and SM 2.2 rule 6's focus test passes for every session: the game's input makes each scripted prompt human_typed (SM 2.2, 2.5).",
     "1,140 of the 1,200 s are credited, every one at level C with focus_unknown, and none at level A or B. The X11 twin, b-pty-game-x11, has the same acts with the browser in front and credits nothing.",
-    "Each cycle: the prompt's 180 s lead, SUP 85, READ 20 and X.agent_only 15 while the turn runs with nothing new on screen. The 70 s left in the bucket at T + 120 are never read, because the next prompt's lead beats the bucket (SM 3.3 rule 2) and the next prompt resets it."
+    "Each cycle: the prompt's 180 s lead, SUP 85, READ 20 and X.agent_only 15 while the turn runs with nothing new on screen. In the first three cycles the 70 s left in the bucket at T + 120 are never read, because the next prompt's lead beats the bucket (SM 3.3 rule 2) and the next prompt resets it. The last cycle's 70 s lie after the window."
   ]
 }

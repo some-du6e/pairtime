@@ -169,6 +169,8 @@
     "level_c_s": 0,
     "focus_unknown_s": 0,
     "agent_only_s": 400,
+    "ai_credited_s": 0,
+    "hand_credited_s": 0,
     "human_typed_prompts": 0,
     "no_input_prompts": 4
   },

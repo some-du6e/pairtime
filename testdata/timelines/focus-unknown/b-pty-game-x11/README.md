@@ -13,7 +13,7 @@
 
 ## The events
 
-b-pty-game's, with two `os.focus` records in place of its one. The SessionStart hook at 19:55:04 makes a project context live, and the agent records the window in front: the terminal Kai ran the script in, with no `hosted_sessions`, since Claude Code runs under the tmux server, and so no `focus_project`. At 19:55:20 the browser comes to the front, and the agent records it, `app_class` `browser`. Nothing else comes to the front before 20:20:30.
+b-pty-game's, with two `os.focus` records in place of its one, and the presence sample the second takes (DESIGN 3.3). The SessionStart hook at 19:55:04 makes a project context live, and the agent records the window in front: the terminal Kai ran the script in, with no `hosted_sessions`, since Claude Code runs under the tmux server, and so no `focus_project`. At 19:55:20 the browser comes to the front, and the agent records it, `app_class` `browser`. Nothing else comes to the front before 20:20:30.
 
 ## What the rules make of each prompt
 
@@ -46,11 +46,13 @@ T is a cycle's prompt: 20:03:00, 20:08:00, 20:13:00 and 20:18:00. A minute has a
 | `X.other_focus` | 480 | 4 × 2 × 60 |
 | `agent_running_s` | 400 | 4 × 100 |
 | `agent_only_s` | 400 | 400 − 0 |
+| `ai_credited_s` | 0 | 0 |
+| `hand_credited_s` | 0 | 0 |
 | `no_input_prompts` | 4 | 4 |
 | `human_typed_prompts` | 0 | 0 |
 
 ## Readings the case relies on
 
-- **The twin changes only focus.** Every act, time and amount is b-pty-game's, through the same builder ([`../ptygame.py`](../ptygame.py)). Only the `os.focus` records and the device differ.
+- **The twin changes only focus.** Every act, time and amount is b-pty-game's, through the same builder ([`../ptygame.py`](../ptygame.py)). Only the `os.focus` records, the sample the browser's takes at 19:55:20, and the device differ.
 - **No lookup.** The browser run has no credited slot on either side, so it is no lookup under SM 2.5, and E-lookup-lookahead has nothing to decide.
 - **The bucket fills but never drains.** The turns aren't human-owned, so they reset nothing and add no 20 s base, while their output fills the bucket (SM 2.4). From the fourth turn's summary it holds more than 600 s, so the cap evicts the oldest output. Nothing drains it, since every slot's focus is the browser, and so no second is `X.bucket_cap`.
