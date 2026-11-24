@@ -27,7 +27,8 @@ import (
 // eraser's account tables, the day leaves it keeps or deletes by day, or
 // the tables that hold nothing of an account. A migration that adds a
 // table fails it until the eraser deletes the table's rows of an account
-// or the table is listed as holding none.
+// or the table is listed as holding none, in both OtherTables and
+// retention.json's no_personal_data.
 func TestTables(t *testing.T) {
 	f := newFixture(t, store.SQLite)
 	placed := make(map[string]string)
@@ -46,7 +47,7 @@ func TestTables(t *testing.T) {
 		{name: "every table the migrations create is the eraser's, the leaf table, or holds nothing of an account", check: func(t *testing.T) {
 			for _, n := range have {
 				if placed[n] == "" {
-					t.Errorf("%s is in no list: add it to the eraser's steps, or to OtherTables if it holds nothing of an account", n)
+					t.Errorf("%s is in no list: add it to the eraser's steps, or, if it holds nothing of an account, to both OtherTables and retention.json's no_personal_data", n)
 				}
 			}
 		}},
@@ -236,6 +237,26 @@ func TestErase(t *testing.T) {
 			}
 			if left := mentions(f.dump(t), "ident!young1", f.emails.Index("young@example.org")); len(left) > 0 {
 				t.Errorf("rows that name the ineligible account are left: %v", left)
+			}
+		}},
+		{name: "a delete's erasure, dry or real, is the one durable commit a request makes, so it is on disk before the hub hears it is done", run: func(t *testing.T, f *fixture) {
+			world(t, f)
+			for _, step := range []struct {
+				action string
+				dry    bool
+				want   int
+			}{
+				{action: privacy.ActionExport, want: 0},
+				{action: privacy.ActionDelete, dry: true, want: 1},
+				{action: privacy.ActionDelete, want: 1},
+			} {
+				before := f.commits.durable()
+				if r := report(t, f.ask(t, step.action, subject([]string{teen.email}, nil, nil), step.dry)); !r.Found {
+					t.Fatalf("%s (dry run %v) didn't find the teen", step.action, step.dry)
+				}
+				if got := f.commits.durable() - before; got != step.want {
+					t.Errorf("%s (dry run %v) made %d durable commits, want %d", step.action, step.dry, got, step.want)
+				}
 			}
 		}},
 		{name: "after an erasure, the next request finds nobody", run: func(t *testing.T, f *fixture) {

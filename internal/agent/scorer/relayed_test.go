@@ -26,9 +26,8 @@ import (
 // session's start, and must still derive the whole lead, as one Step over
 // every record does, whose slots reach BUCKET_TTL_S back.
 //
-// The ledger writer can't write a relay.message yet (the T3 Code reader
-// brings its class), so the loop gets that batch the way the agent's
-// writer hands it over, through Sealed, built here.
+// The loop gets that batch the way the agent's writer hands it over,
+// through Sealed, built here, so the test reads no ledger.
 func TestRelayedLeadAfterAQuietNight(t *testing.T) {
 	root, err := timelines.Root()
 	if err != nil {

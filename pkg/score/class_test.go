@@ -215,6 +215,64 @@ func TestTrackClass(t *testing.T) {
 	}
 }
 
+// TestRelayClass checks that RelayClass, given Questions' asked from the
+// records before the relay.message, as the ledger writer has it, gives the
+// class the scorer gives the relayed prompt the record witnesses, on a
+// server with t3-away's timing (sentAt60).
+func TestRelayClass(t *testing.T) {
+	asks := func(b *tl) {
+		b.harness(at(30), event.ViaHook, "s_1", "p_1", &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
+			AsksQuestion: true})
+	}
+	cases := []struct {
+		name      string
+		lenChars  int
+		lowEffort bool
+		before    func(b *tl)
+		want      event.PromptClass
+	}{
+		{"a message of 90 typed characters is substantive", 90, false, nil, event.ClassSubstantive},
+		{"a message of exactly SUBSTANTIVE_CHARS characters is substantive", 20, false, nil, event.ClassSubstantive},
+		{"a message under SUBSTANTIVE_CHARS characters is a go-ahead", 19, false, nil, event.ClassLowEffort},
+		{"a message the reader's go-ahead test marked is a go-ahead, whatever its length", 30, true, nil, event.ClassLowEffort},
+		{"a message after an output of its session that asked a question is an answer, a go-ahead included", 3, true, asks, event.ClassAnswer},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTL(false)
+			appServer(b)
+			if c.before != nil {
+				c.before(b)
+			}
+			m := appMessage(at(60), c.lenChars)
+			m.LowEffort = c.lowEffort
+			_, r := sentAt60(b, m, c.lenChars)
+			tu, ok := turnByKey(b.run(t, Device{}), "t_1")
+			if !ok || tu.Origin != event.OriginRelayed {
+				t.Fatalf("turn %+v (found: %v), want a relayed one", tu, ok)
+			}
+			if tu.PromptClass != c.want {
+				t.Fatalf("the scorer gives class %q, and the case expects %q", tu.PromptClass, c.want)
+			}
+			var q Questions
+			var rec *event.RelayMessage
+			for _, e := range b.records() {
+				if e.EventID == r.EventID {
+					rec = e.Data.(*event.RelayMessage)
+					break
+				}
+				q.Observe(e)
+			}
+			if rec == nil {
+				t.Fatal("the relay.message isn't among the records")
+			}
+			if got := RelayClass(testTable(t), rec, q.Asked(r.SessionKey)); got != tu.PromptClass {
+				t.Errorf("RelayClass gives %q, and the scorer %q", got, tu.PromptClass)
+			}
+		})
+	}
+}
+
 // TestQuestionsState checks that a Questions restored from another's State
 // classes the prompts after it as that one does, and that Restore refuses a
 // state no Questions could have.

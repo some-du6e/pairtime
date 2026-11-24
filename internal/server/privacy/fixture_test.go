@@ -165,17 +165,43 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
+// commitLog records the transactions a writer reports.
+type commitLog struct {
+	mu   sync.Mutex
+	list []writer.Commit
+}
+
+func (l *commitLog) record(c writer.Commit) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.list = append(l.list, c)
+}
+
+// durable counts the durable transactions recorded so far.
+func (l *commitLog) durable() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, c := range l.list {
+		if c.Durable && c.Err == nil {
+			n++
+		}
+	}
+	return n
+}
+
 // fixture is a migrated database, its writer, and the endpoints on a mux,
 // on a clock the test sets.
 type fixture struct {
-	engine store.Engine
-	db     *store.DB
-	w      *writer.Writer
-	emails *accounts.EmailCipher
-	hub    *hub
-	mux    *http.ServeMux
-	logs   *lockedBuffer
-	now    time.Time
+	engine  store.Engine
+	db      *store.DB
+	w       *writer.Writer
+	commits *commitLog
+	emails  *accounts.EmailCipher
+	hub     *hub
+	mux     *http.ServeMux
+	logs    *lockedBuffer
+	now     time.Time
 }
 
 func newFixture(t *testing.T, engine store.Engine) *fixture {
@@ -188,13 +214,14 @@ func newFixture(t *testing.T, engine store.Engine) *fixture {
 	if _, err := migrations.Apply(context.Background(), db, ms, time.Now); err != nil {
 		t.Fatal(err)
 	}
-	w := writer.Start(db.Write, writer.Options{Window: time.Millisecond})
+	commits := &commitLog{}
+	w := writer.Start(db.Write, writer.Options{Window: time.Millisecond, Engine: engine, OnCommit: commits.record})
 	t.Cleanup(w.Close)
 	emails, err := accounts.NewEmailCipher(bytes.Repeat([]byte{7}, accounts.EmailKeySize))
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fixture{engine: engine, db: db, w: w, emails: emails, hub: newHub(t), mux: http.NewServeMux(), logs: &lockedBuffer{},
+	f := &fixture{engine: engine, db: db, w: w, commits: commits, emails: emails, hub: newHub(t), mux: http.NewServeMux(), logs: &lockedBuffer{},
 		now: time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)}
 	svc, err := privacy.New(privacy.Options{
 		Verifier: &privacy.Verifier{Audience: audience, Keys: f.hub},

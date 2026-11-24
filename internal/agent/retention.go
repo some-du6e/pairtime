@@ -128,6 +128,9 @@ func (d vaultDir) Sweep(textFrom, pathsFrom string) (int, error) {
 // sweep fails is due again at the next look, and doctor hears of it once
 // it has failed sweepFailing looks in a row.
 func (a *agent) sweep(s *sweeps, force bool) {
+	// The inbox's spool files go at each look, the day's first or not:
+	// they hold whole hook calls, prompts included (D-inbox-age-cap).
+	a.expireInbox()
 	now := time.Now()
 	today := now.UTC().Format(time.DateOnly)
 	due := func(store string) bool { return force || s.swept[store] != today }

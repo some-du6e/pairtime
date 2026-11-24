@@ -457,12 +457,12 @@ test.describe("Projects' names on the owner's dashboard", () => {
 test.describe('Privacy and Settings', () => {
 	test('Privacy says nothing has left this computer, and what pairtime keeps for how long', async ({ page }) => {
 		// A row for each device entry of docs/retention.json, in the file's
-		// order, then the inbox's (src/local/retention.ts).
+		// order, the inbox's included (src/local/retention.ts).
 		const { readFileSync } = await import('node:fs');
 		const retention = JSON.parse(readFileSync(new URL('../../docs/retention.json', import.meta.url), 'utf8')) as {
 			entries: { id: string; where: string }[];
 		};
-		const ids = [...retention.entries.filter((e) => e.where === 'device').map((e) => e.id), 'device.inbox'];
+		const ids = retention.entries.filter((e) => e.where === 'device').map((e) => e.id);
 		await fakeAgent(page);
 		await page.goto(`${dashboardURL}#/privacy`);
 		await expect(page.getByTestId('left-computer')).toContainText('Nothing. pairtime is in local-only mode');

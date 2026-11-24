@@ -10,7 +10,7 @@
 	// its button comes in a later WP.
 	//
 	// The periods are docs/retention.json's device entries, in the file's
-	// order, then the inbox's row (retention.ts). The vault keeps prompt
+	// order, the inbox's included (retention.ts). The vault keeps prompt
 	// text encrypted (DESIGN 3.5; WP-LG6), and the inbox and the hook calls
 	// the agent holds keep it as plain text until the agent has read them.
 	// Who can read it says which is which.
@@ -64,6 +64,12 @@
 		<li>Your screen</li>
 		<li>Anything while you aren't working in a project</li>
 	</ul>
+	<p data-testid="t3-code">
+		One exception: while T3 Code runs, pairtime notes once a minute whether you're at the computer, so that the
+		messages you send through T3 Code from your phone or a browser can count. It notes nothing about which app is in
+		front. The Claude Code that T3 Code keeps open between your messages isn't work in a project, but a reply it's
+		writing is, and so is T3 Code's own window in front, until 10 minutes after the reply ends or you switch away.
+	</p>
 </section>
 
 <section class="pt-card" aria-labelledby="who-title" data-testid="who">

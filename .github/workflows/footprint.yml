@@ -3,7 +3,15 @@
 # The client's footprint on windows-latest, measured by the OS around the
 # process rather than by the agent (DESIGN 9.7; docs/PLAN.md, WP-AG1). An
 # idle agent's working set must stay under 25 MB and its CPU time under
-# 0.1% of the wall time. Private bytes, threads, handles and wakeups are
+# 0.1% of the wall time. The agent idles with T3 Code running as far as it
+# can tell, a store built from the reader's testdata/schema.sql held open
+# under T3CODE_HOME and a process named as T3's server, so its reader
+# checks that store every 10 s the whole span. Nothing writes the store
+# then, so after the reader's first reads it stats the store's -wal and
+# -shm files and starts a sqlite3 only when their sizes or times change
+# (DESIGN 3.3). The agent's CPU time is its job object's, which counts the
+# processes it starts, any sqlite3 run among them (#225).
+# Private bytes, threads, handles and wakeups are
 # reported with no gate yet, and ci.yml gates the binary size. After the
 # idle span, this workflow times 200 warm `pairtime hook` calls from
 # process start to exit, and 200 calls of an empty Go program built the
@@ -14,9 +22,16 @@
 # misses, the step times both again, and the gate holds the lower of the
 # two rounds' costs: a slower hook misses in both, and the runner's noise,
 # which can swing one round by more than the gate's margin, rarely does
-# (#215). A PR that touches the client gets a 3-minute idle span; the
-# nightly run, release tags and runs by hand get 10 minutes, and a run by
-# hand can ask for the second round whatever the first gives:
+# (#215). Then, over a stretch of 3 minutes with T3's store written every
+# 3 s from outside the agent's job, so that the reader starts a sqlite3 run
+# at each of its reads, the CPU time the agent reports for itself and the
+# processes it started, the footprint.cpu_s that
+# `pairtime doctor --report` reads from /v1/status, must move with its
+# job's, within 20% of that or 0.05 s, and the job must have started
+# processes, or the check proves nothing (#276). A PR that touches the
+# client gets a 3-minute idle span; the nightly run, release tags and runs
+# by hand get 10 minutes, and a run by hand can ask for the second round
+# whatever the first gives:
 #
 #   gh workflow run footprint.yml --ref <branch> [-f minutes=N] [-f second_round=true]
 name: footprint
@@ -24,8 +39,11 @@ name: footprint
 on:
   pull_request:
     # docs/PLAN.md's paths for this workflow, plus go.sum and this file.
+    # T3 Code's reader is in them, since the agent idles here with the
+    # reader checking a T3 store (#225).
     paths:
       - internal/agent/**
+      - internal/adapters/t3code/**
       - internal/platform/windows/**
       - cmd/pairtime/**
       - go.mod
@@ -57,7 +75,10 @@ jobs:
   footprint:
     name: idle agent on Windows
     runs-on: windows-latest
-    timeout-minutes: 30
+    # A run by hand at its longest, 20 minutes idle, needs about 30 with
+    # the build, sqlite3's install, the wait for the reader, the hook's
+    # rounds and #276's stretch of 3 minutes.
+    timeout-minutes: 35
     env:
       # pairtime never uses cgo (AGENTS.md).
       CGO_ENABLED: "0"
@@ -90,10 +111,128 @@ jobs:
           Push-Location $emptyDir
           go build -trimpath '-ldflags=-s -w' -o empty.exe .
           Pop-Location
+          # A stand-in for T3 Code's server, which the agent's process scan
+          # knows by its name, t3 (internal/platform's appclass.json): a Go
+          # program that only waits, built the same way.
+          $t3Dir = Join-Path $env:RUNNER_TEMP 't3-server'
+          New-Item -ItemType Directory -Force -Path $t3Dir | Out-Null
+          Set-Content -Path (Join-Path $t3Dir 'go.mod') -Value "module t3`n`ngo 1.26`n"
+          Set-Content -Path (Join-Path $t3Dir 'main.go') -Value "package main`n`nimport `"time`"`n`nfunc main() { time.Sleep(2 * time.Hour) }`n"
+          Push-Location $t3Dir
+          go build -trimpath '-ldflags=-s -w' -o t3.exe .
+          Pop-Location
+
+      - name: A T3 Code store for the agent to read
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # T3 Code's reader reads its store with the sqlite3 tool on PATH
+          # (DESIGN 5.1). SQLite's own Windows tools, from sqlite.org and
+          # pinned by SHA-256, go first on PATH, so the agent runs the real
+          # sqlite3.exe and no shim adds a process to every read.
+          if (-not (Get-Command sqlite3 -ErrorAction SilentlyContinue)) {
+            # SQLite's own Windows tools from sqlite.org, pinned by the zip's SHA-256
+            # (its SHA3-256 is the one sqlite.org's download page gives).
+            $url = 'https://www.sqlite.org/2026/sqlite-tools-win-x64-3540100.zip'
+            $sha256 = 'FB20997ADE5583A5FBF1E36DB7BC3C82C9416B3F314F16961E1572AA4E49487D'
+            $zip = Join-Path $env:RUNNER_TEMP 'sqlite-tools.zip'
+            for ($try = 1; ; $try++) {
+              try { Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing; break }
+              catch {
+                if ($try -ge 3) { throw "couldn't download SQLite's tools from sqlite.org: $_" }
+                Start-Sleep -Seconds (10 * $try)
+              }
+            }
+            if ((Get-FileHash -Path $zip -Algorithm SHA256).Hash -ne $sha256) { throw "SQLite's tools zip from sqlite.org isn't the pinned one" }
+            $dir = Join-Path $env:RUNNER_TEMP 'sqlite-tools'
+            Expand-Archive -Path $zip -DestinationPath $dir -Force
+            $dir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            $env:PATH = "$dir;$env:PATH"
+          }
+          "sqlite3 $(sqlite3 --version) at $((Get-Command sqlite3).Source)"
+          # T3's tables and indexes from the reader's fixture, with migration
+          # 55, the base of the schema the reader reads, and 85, the head it
+          # was tested against: a store the schema probe passes, holding no
+          # rows (internal/adapters/t3code/testdata/schema.sql).
+          $userdata = Join-Path $env:RUNNER_TEMP 't3-home\userdata'
+          New-Item -ItemType Directory -Force -Path $userdata | Out-Null
+          $store = Join-Path $userdata 'statev2.sqlite'
+          $sql = "PRAGMA journal_mode=WAL;`n" + (Get-Content -Raw internal/adapters/t3code/testdata/schema.sql) +
+            "`nINSERT INTO effect_sql_migrations (migration_id, name) VALUES (55, 'OrchestrationV2'), (85, 'TurnItemCounts');`n"
+          $sql | sqlite3 -batch -bail $store | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "sqlite3 couldn't build T3 Code's fixture store" }
 
       - name: Measure an idle agent
         run: |
           $ErrorActionPreference = 'Stop'
+          # A job object around the agent, whose accounting counts the CPU
+          # time of every process it has held, those that exited too
+          # (JOBOBJECT_BASIC_ACCOUNTING_INFORMATION). Get-Process counts the
+          # agent's own alone, and the reader's sqlite3 runs are processes of
+          # their own. A process the agent starts is in its jobs.
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.ComponentModel;
+          using System.Runtime.InteropServices;
+
+          public static class PairtimeJob
+          {
+              [StructLayout(LayoutKind.Sequential)]
+              private struct Accounting
+              {
+                  public long TotalUserTime;
+                  public long TotalKernelTime;
+                  public long ThisPeriodTotalUserTime;
+                  public long ThisPeriodTotalKernelTime;
+                  public uint TotalPageFaultCount;
+                  public uint TotalProcesses;
+                  public uint ActiveProcesses;
+                  public uint TotalTerminatedProcesses;
+              }
+
+              [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+              private static extern IntPtr CreateJobObjectW(IntPtr attributes, string name);
+
+              [DllImport("kernel32.dll", SetLastError = true)]
+              private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+              [DllImport("kernel32.dll", SetLastError = true)]
+              private static extern bool QueryInformationJobObject(IntPtr job, int infoClass, out Accounting info, int size, IntPtr returned);
+
+              // Wrap puts process in a job of its own and returns the job.
+              public static IntPtr Wrap(IntPtr process)
+              {
+                  IntPtr job = CreateJobObjectW(IntPtr.Zero, null);
+                  if (job == IntPtr.Zero || !AssignProcessToJobObject(job, process))
+                  {
+                      throw new Win32Exception(Marshal.GetLastWin32Error());
+                  }
+                  return job;
+              }
+
+              private static Accounting Read(IntPtr job)
+              {
+                  Accounting a;
+                  if (!QueryInformationJobObject(job, 1, out a, Marshal.SizeOf(typeof(Accounting)), IntPtr.Zero))
+                  {
+                      throw new Win32Exception(Marshal.GetLastWin32Error());
+                  }
+                  return a;
+              }
+
+              // CpuSeconds is the user and kernel time of the job's processes.
+              public static double CpuSeconds(IntPtr job)
+              {
+                  Accounting a = Read(job);
+                  return (a.TotalUserTime + a.TotalKernelTime) / 1e7;
+              }
+
+              // Processes counts the processes the job has held.
+              public static uint Processes(IntPtr job)
+              {
+                  return Read(job).TotalProcesses;
+              }
+          }
+          '@
           $exe = Join-Path $env:RUNNER_TEMP 'pairtime.exe'
           $emptyExe = Join-Path $env:RUNNER_TEMP 'empty\empty.exe'
           $ptHome = Join-Path $env:RUNNER_TEMP 'pairtime-home'
@@ -110,7 +249,9 @@ jobs:
           }
 
           # The OS's view of the agent. Write-Host, not Write-Output, so the
-          # warning doesn't become part of the returned sample.
+          # warning doesn't become part of the returned sample. JobCpu and
+          # JobProcesses are the agent's job's, which count the processes it
+          # started too.
           function Get-Sample($id) {
             $p = Get-Process -Id $id
             $switches = $null
@@ -123,24 +264,54 @@ jobs:
               Write-Host "::warning::couldn't read the agent's thread context switches: $_"
             }
             [pscustomobject]@{
-              Time       = [DateTime]::UtcNow
-              Cpu        = $p.TotalProcessorTime.TotalSeconds
-              WorkingSet = $p.WorkingSet64
-              Private    = $p.PrivateMemorySize64
-              Peak       = $p.PeakWorkingSet64
-              Threads    = $p.Threads.Count
-              Handles    = $p.HandleCount
-              Switches   = $switches
+              Time         = [DateTime]::UtcNow
+              Cpu          = $p.TotalProcessorTime.TotalSeconds
+              JobCpu       = [PairtimeJob]::CpuSeconds($job)
+              JobProcesses = [PairtimeJob]::Processes($job)
+              WorkingSet   = $p.WorkingSet64
+              Private      = $p.PrivateMemorySize64
+              Peak         = $p.PeakWorkingSet64
+              Threads      = $p.Threads.Count
+              Handles      = $p.HandleCount
+              Switches     = $switches
             }
           }
 
           function Verdict($ok) { if ($ok) { 'pass' } else { '**FAIL**' } }
+
+          # T3 Code running, as far as the agent can tell (DESIGN 3.3): the
+          # fixture store held open under T3CODE_HOME, as T3's server holds
+          # its own, so its -wal and -shm files are there, and a process
+          # named t3, the app table's name for T3's server.
+          $t3Home = Join-Path $env:RUNNER_TEMP 't3-home'
+          $store = Join-Path $t3Home 'userdata\statev2.sqlite'
+          $env:T3CODE_HOME = $t3Home
+          $holdInfo = [System.Diagnostics.ProcessStartInfo]::new((Get-Command sqlite3).Source)
+          foreach ($a in @('-batch', $store)) { $holdInfo.ArgumentList.Add($a) }
+          $holdInfo.UseShellExecute = $false
+          $holdInfo.RedirectStandardInput = $true
+          $holdInfo.CreateNoWindow = $true
+          $holder = [System.Diagnostics.Process]::Start($holdInfo)
+          # A read makes the -wal and -shm files, which stay while the
+          # connection does.
+          $holder.StandardInput.WriteLine('SELECT count(*) FROM sqlite_master;')
+          $holder.StandardInput.Flush()
+          $deadline = (Get-Date).AddSeconds(20)
+          while (-not ((Test-Path "$($store)-wal") -and (Test-Path "$($store)-shm"))) {
+            if ((Get-Date) -gt $deadline) { throw "the fixture store's -wal and -shm files never appeared" }
+            Start-Sleep -Milliseconds 100
+          }
+          $t3Server = Start-Process -FilePath (Join-Path $env:RUNNER_TEMP 't3-server\t3.exe') -PassThru -NoNewWindow
 
           $agent = Start-Process -FilePath $exe -ArgumentList 'agent' -PassThru -NoNewWindow `
             -RedirectStandardOutput $outLog -RedirectStandardError $errLog
           # Holding the handle keeps ExitCode readable after the agent exits.
           $null = $agent.Handle
           try {
+            # At once: the agent starts its first process, the reader's first
+            # sqlite3, only once its ledger has opened, and the job holds
+            # every process it starts from here on.
+            $job = [PairtimeJob]::Wrap($agent.Handle)
             # The agent writes port.json once its HTTP server listens.
             $portFile = Join-Path $ptHome 'port.json'
             $deadline = (Get-Date).AddSeconds(60)
@@ -154,6 +325,23 @@ jobs:
             $base = "http://127.0.0.1:$($pf.port)"
             $status = Invoke-RestMethod -Uri "$base/v1/status" -Headers $headers
             Write-Host "agent $($status.version.version) is up on port $($pf.port) with pid $($agent.Id)"
+
+            # The reader starts once the agent's ledger has opened, and the
+            # agent's process scan finds T3's server at its next minute; from
+            # then on the reader checks the store every 10 s, and runs
+            # sqlite3 only once T3 has written since its last read (DESIGN
+            # 3.3). The span starts once it does.
+            $deadline = (Get-Date).AddSeconds(180)
+            while ($true) {
+              $t3 = (Invoke-RestMethod -Uri "$base/v1/status" -Headers $headers).apps.t3_code
+              if ($null -ne $t3 -and $t3.reading -and $t3.running) { break }
+              if ($agent.HasExited) { throw "the agent exited with status $($agent.ExitCode) before it read T3 Code's store" }
+              if ((Get-Date) -gt $deadline) {
+                throw "180 s after its start the agent wasn't reading the fixture store with T3 Code running: $($t3 | ConvertTo-Json -Compress)"
+              }
+              Start-Sleep -Seconds 2
+            }
+            Write-Host "T3 Code's reader reads the fixture store: $($t3 | ConvertTo-Json -Compress)"
 
             # Let start-up settle, then measure the idle span alone. Nothing
             # talks to the agent during it.
@@ -327,8 +515,66 @@ jobs:
             Write-Host "--- pairtime's slowest package inits (GODEBUG=inittrace=1), in all $initTotal ms ---"
             $inits | Sort-Object Ms -Descending | Select-Object -First 15 | ForEach-Object { Write-Host "$($_.Ms) ms  $($_.Pkg)" }
 
+            # The agent's own word on its CPU time against its job's (#276).
+            # /v1/status's footprint.cpu_s, which pairtime doctor --report
+            # reads, adds to the agent's own time that of the processes it
+            # started, by a job object of its own (childCPU in
+            # internal/agent/footprint_windows.go). The idle span can't test
+            # that: nothing writes the store then, so the reader starts no
+            # sqlite3, and a childCPU that counted nothing would pass. So in a
+            # stretch of its own, after the span and the hook's rounds, whose
+            # gates it leaves as they were, the script writes a row every
+            # $writeEveryS s through the connection that holds the store
+            # open, a sqlite3 outside the agent's job, as T3's server writes
+            # through the one it holds. The -wal grows with each, so each of
+            # the reader's reads, every 10 s, starts sqlite3. Over the stretch
+            # the agent's footprint.cpu_s must move with the job's CPU time,
+            # within 20% of that or 0.05 s, and the job must have started
+            # processes, without which the check proves nothing.
+            $stretchS = 180
+            $writeEveryS = 3
+            $minStarted = 6
+            # The job's accounting first, then the agent's answer, so the two
+            # are read as close together as the request allows.
+            function Get-CpuPair {
+              $jobCpu = [PairtimeJob]::CpuSeconds($job)
+              $procs = [PairtimeJob]::Processes($job)
+              $st = Invoke-RestMethod -Uri "$base/v1/status" -Headers $headers
+              [pscustomobject]@{ JobCpu = $jobCpu; JobProcesses = $procs; AgentCpu = [double]$st.footprint.cpu_s }
+            }
+            $cpuFrom = Get-CpuPair
+            $stretchEnd = [DateTime]::UtcNow.AddSeconds($stretchS)
+            $holder.StandardInput.WriteLine('CREATE TABLE IF NOT EXISTS footprint_writes (n INTEGER);')
+            $holder.StandardInput.Flush()
+            $writes = 0
+            while ([DateTime]::UtcNow -lt $stretchEnd) {
+              Start-Sleep -Seconds $writeEveryS
+              $writes++
+              $holder.StandardInput.WriteLine("INSERT INTO footprint_writes (n) VALUES ($writes);")
+              $holder.StandardInput.Flush()
+            }
+            $cpuTo = Get-CpuPair
+            $stretchJob = $cpuTo.JobCpu - $cpuFrom.JobCpu
+            $stretchAgent = $cpuTo.AgentCpu - $cpuFrom.AgentCpu
+            $stretchStarted = $cpuTo.JobProcesses - $cpuFrom.JobProcesses
+            $stretchTolerance = [math]::Max(0.05, 0.2 * $stretchJob)
+            $stretchRanOk = $stretchStarted -ge $minStarted
+            $stretchCpuOk = $stretchRanOk -and ([math]::Abs($stretchAgent - $stretchJob) -le $stretchTolerance)
+            $stretchText = "$([math]::Round($stretchAgent, 3)) s, $([math]::Round($stretchJob, 3)) s; $stretchStarted processes"
+            if (-not $stretchRanOk) {
+              Write-Host "::error::the agent started $stretchStarted processes over the $stretchS s stretch, fewer than $minStarted, though the script wrote T3 Code's store $writes times, so its reader ran too few sqlite3 runs for the CPU check to prove anything"
+            } elseif (-not $stretchCpuOk) {
+              Write-Host "::error::over the $stretchS s stretch the agent's footprint.cpu_s moved $([math]::Round($stretchAgent, 3)) s and its job's CPU time $([math]::Round($stretchJob, 3)) s, more than $([math]::Round($stretchTolerance, 3)) s apart"
+            }
+
             $wall = ($after.Time - $before.Time).TotalSeconds
-            $cpuShare = ($after.Cpu - $before.Cpu) / $wall
+            # The gate's CPU time is the job's: the agent's with that of the
+            # processes it started, which cost the computer for it.
+            $cpuShare = ($after.JobCpu - $before.JobCpu) / $wall
+            $ownShare = ($after.Cpu - $before.Cpu) / $wall
+            $started = $after.JobProcesses - $before.JobProcesses
+            $t3After = $status.apps.t3_code
+            $t3Text = if ($null -eq $t3After) { 'absent' } else { "reading $($t3After.reading), running $($t3After.running), off '$($t3After.off)'" }
             $minutes = $wall / 60
             $switchesPerMinute = 'n/a'
             if ($null -ne $before.Switches -and $null -ne $after.Switches) {
@@ -369,6 +615,9 @@ jobs:
             $budgetCpu = 0.001
             $rssOk = $highest -lt $budgetRss
             $cpuOk = $cpuShare -lt $budgetCpu
+            # The case measures the agent with its reader only while the
+            # reader reads the store with T3 running.
+            $t3Ok = ($null -ne $t3After) -and $t3After.reading -and $t3After.running
             $secondOk = $secondStatus -eq 3
             $stopOk = ($stopStatus -eq 0) -and ($pidAfter -eq 0)
             $hookOverOk = $hookCost -le $budgetHookOverMs
@@ -380,7 +629,11 @@ jobs:
               '| measure | value | gate |',
               '|---|---:|---|',
               "| highest working set over the span ($readings readings and the peak counter) | $highest bytes | under $budgetRss bytes: $(Verdict $rssOk) |",
-              "| CPU time over wall time | $([math]::Round($cpuShare, 6)) | under ${budgetCpu}: $(Verdict $cpuOk) |",
+              "| CPU time over wall time, the agent's and that of the processes it started, by its job object | $([math]::Round($cpuShare, 6)) | under ${budgetCpu}: $(Verdict $cpuOk) |",
+              "| the agent's own CPU time over wall time, by Get-Process | $([math]::Round($ownShare, 6)) | none |",
+              "| processes the agent started over the span, T3 Code's reader's sqlite3 runs among them | $started | none |",
+              "| over a stretch of $stretchS s after the span, with T3 Code's store written every $writeEveryS s from outside the agent's job: the agent's CPU time by its footprint.cpu_s in /v1/status, which doctor --report reads, its job's CPU time, and the processes the job started | $stretchText | within 20% of the job's or 0.05 s, with at least $minStarted processes: $(Verdict $stretchCpuOk) |",
+              "| T3 Code's reader at the end of the span, with the fixture store held open and a t3 process running | $t3Text | reading and running: $(Verdict $t3Ok) |",
               "| working set at the start and end of the span | $($before.WorkingSet), $($after.WorkingSet) bytes | none |",
               "| peak working set since start-up | $($after.Peak) bytes | none |",
               "| private bytes | $($after.Private) bytes | none |",
@@ -405,7 +658,7 @@ jobs:
             $summary = $rows -join "`n"
             $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
             Write-Host $summary
-            if (-not ($rssOk -and $cpuOk -and $secondOk -and $stopOk -and $hookOverOk -and $hookCapOk -and $hookQuietOk)) {
+            if (-not ($rssOk -and $cpuOk -and $t3Ok -and $stretchCpuOk -and $secondOk -and $stopOk -and $hookOverOk -and $hookCapOk -and $hookQuietOk)) {
               throw 'the agent failed a footprint gate; see the table above'
             }
           } catch {
@@ -413,4 +666,9 @@ jobs:
             throw
           } finally {
             if (-not $agent.HasExited) { Stop-Process -Id $agent.Id -Force }
+            if (-not $t3Server.HasExited) { Stop-Process -Id $t3Server.Id -Force }
+            if (-not $holder.HasExited) {
+              $holder.StandardInput.Close()
+              if (-not $holder.WaitForExit(10000)) { $holder.Kill() }
+            }
           }

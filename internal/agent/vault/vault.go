@@ -945,10 +945,10 @@ func SweepDir(dir, textFrom, pathsFrom string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	n, err := filterDir(dir, due, keep)
-	if errors.Is(err, fs.ErrNotExist) {
+	if noVaultDir(dir) {
 		return 0, nil // no vault yet
 	}
+	n, err := filterDir(dir, due, keep)
 	m, oerr := sweepOld(dir, due, keep)
 	return n + m, errors.Join(err, oerr)
 }
@@ -960,19 +960,31 @@ func SweepDir(dir, textFrom, pathsFrom string) (int, error) {
 // It needs no key, and nothing else may change the directory's files while
 // it runs. It returns how many texts it deleted.
 func DropTextDir(dir string) (int, error) {
-	n, err := filterDir(dir, nil, func(_ string, e entry) bool { return e.what != whatText })
-	if errors.Is(err, fs.ErrNotExist) {
+	if noVaultDir(dir) {
 		return 0, nil // no vault yet
 	}
-	return n, err
+	return filterDir(dir, nil, func(_ string, e entry) bool { return e.what != whatText })
 }
+
+// noVaultDir reports whether there is no vault directory at dir yet. Only
+// that means no vault. A file that vanishes while filterDir reads the
+// directory is an error of that file's, which the caller gets with the
+// count and the other files' errors, and SweepDir still sweeps old/.
+func noVaultDir(dir string) bool {
+	_, err := os.Stat(dir)
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// beforeFilterFile, when set, runs in filterDir just before it reads each
+// file it listed. Only a test sets it, to make a file vanish mid-sweep.
+var beforeFilterFile func(dir, day string)
 
 // filterDir writes each of the files directly in the vault directory dir,
 // of the days due says may hold an entry to drop, every day when due is
 // nil, again with only the entries keep keeps, under the key the file's
 // head names, and deletes a file left with none. It deletes the temporary
-// file of a rewrite a crash cut short first, and fails with
-// fs.ErrNotExist when dir isn't there.
+// file of a rewrite a crash cut short first. Its callers check that dir is
+// there (noVaultDir), so each fs.ErrNotExist it joins is a file's.
 func filterDir(dir string, due func(day string) bool, keep func(day string, e entry) bool) (int, error) {
 	if err := removeTemps(dir); err != nil {
 		return 0, err
@@ -986,6 +998,9 @@ func filterDir(dir string, due func(day string) bool, keep func(day string, e en
 	for _, day := range days {
 		if due != nil && !due(day) {
 			continue
+		}
+		if beforeFilterFile != nil {
+			beforeFilterFile(dir, day)
 		}
 		keyID, err := readHead(segPath(dir, day))
 		if err != nil {

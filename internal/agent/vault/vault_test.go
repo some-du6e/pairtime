@@ -940,6 +940,20 @@ func TestPermissions(t *testing.T) {
 	}
 }
 
+// vanish makes filterDir find the file of day gone when it comes to read
+// it, as if something deleted it after filterDir listed the directory.
+func vanish(t *testing.T, day string) {
+	t.Helper()
+	beforeFilterFile = func(dir, d string) {
+		if d == day {
+			if err := os.Remove(segPath(dir, d)); err != nil {
+				t.Errorf("removing %s's file: %v", d, err)
+			}
+		}
+	}
+	t.Cleanup(func() { beforeFilterFile = nil })
+}
+
 func TestSweep(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1109,6 +1123,45 @@ func TestSweep(t *testing.T) {
 			run: func(t *testing.T, dir string, v *Vault) {
 				if n, err := SweepDir(filepath.Join(dir, "none"), day1, day1); err != nil || n != 0 {
 					t.Errorf("SweepDir = %d, %v", n, err)
+				}
+			},
+		},
+		{
+			name: "a file that vanishes while SweepDir reads the vault costs only its own error: the other files and old/'s are still swept and counted",
+			run: func(t *testing.T, dir string, v *Vault) {
+				v.Keep(day1, 1, []byte("old one"), nil)
+				v.Close()
+				// This key's Open sets the first key's file aside in old/.
+				other, _ := open(t, dir, 2, keyB, 1, true)
+				other.Keep(day1, 1, []byte("one"), nil)
+				other.Keep(day2, 2, []byte("two"), nil)
+				other.Close()
+				vanish(t, day1)
+				n, err := SweepDir(dir, day3, day3)
+				if n != 2 || !errors.Is(err, fs.ErrNotExist) {
+					t.Fatalf("SweepDir = %d, %v; want 2, day 2's text and old/'s, and the vanished file's fs.ErrNotExist", n, err)
+				}
+				if days, _ := segments(dir); len(days) != 0 {
+					t.Errorf("files %q, want day 2's swept away and day 1's gone", days)
+				}
+				if _, err := os.Stat(filepath.Join(dir, oldDir, keyA)); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("old/%s is still there, unswept: %v", keyA, err)
+				}
+			},
+		},
+		{
+			name: "a file that vanishes while DropTextDir reads the vault costs only its own error: the other files' texts still go and are counted",
+			run: func(t *testing.T, dir string, v *Vault) {
+				v.Keep(day1, 1, []byte("one"), nil)
+				v.Keep(day2, 2, []byte("two"), []string{"b.go"})
+				v.Close()
+				vanish(t, day1)
+				n, err := DropTextDir(dir)
+				if n != 1 || !errors.Is(err, fs.ErrNotExist) {
+					t.Fatalf("DropTextDir = %d, %v; want 1, day 2's text, and the vanished file's fs.ErrNotExist", n, err)
+				}
+				if days, _ := segments(dir); !slices.Equal(days, []string{day2}) {
+					t.Errorf("files %q, want %s's, which keeps its paths", days, day2)
 				}
 			},
 		},

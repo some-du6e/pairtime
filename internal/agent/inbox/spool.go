@@ -5,6 +5,7 @@ package inbox
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,6 +40,239 @@ const MaxSpool = 256 << 20
 // ErrSpoolFull means the spool is over MaxSpool.
 var ErrSpoolFull = errors.New("inbox: the spool is full")
 
+// SpoolKeep is how long a hook call may wait in the inbox to be drained: a
+// spool file is deleted unread at the agent's next start or retention sweep
+// once SpoolKeep has passed since its first call was sent, by the call's
+// Sent on the device's clock (Expire, spooledAt), as held.jsonl keeps a
+// call 7 days at most (D-inbox-age-cap; DESIGN 3.5, 4.4;
+// docs/retention.json's device.inbox). The calls spooled after the first go
+// with it, early, which costs credit, never privacy. A clock that jumps
+// forward deletes early, never late.
+const SpoolKeep = 7 * 24 * time.Hour
+
+// StoppedName is the file in the inbox directory that stops the spool:
+// while it is there, Append spools nothing. The agent writes it once its
+// ledger can't open until a person runs pairtime restore, as no drain will
+// take a spooled call then, and deletes it once the ledger opens
+// (StopSpooling, ResumeSpooling).
+const StoppedName = "spool.stopped"
+
+// ErrSpoolStopped means the agent stopped the spool: its ledger can't
+// open until pairtime restore runs, so a spooled call would wait unread.
+var ErrSpoolStopped = errors.New("inbox: the spool is stopped, as the agent's ledger can't open until pairtime restore runs")
+
+// SpoolStopped reports whether the spool in dir, the inbox directory, is
+// stopped (StoppedName).
+func SpoolStopped(dir string) bool {
+	_, err := os.Lstat(filepath.Join(dir, StoppedName))
+	return err == nil
+}
+
+// StopSpooling stops the spool in dir, the inbox directory, making dir
+// when it has to, readable by this user only where the OS has file modes.
+func StopSpooling(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := privateDir(dir); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, StoppedName), []byte("the agent's ledger can't open until pairtime restore runs\n"), 0o600)
+}
+
+// ResumeSpooling lets the spool in dir, the inbox directory, take messages
+// again.
+func ResumeSpooling(dir string) error {
+	err := retry(func() error { return os.Remove(filepath.Join(dir, StoppedName)) })
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+// Expire deletes, unread, each spool file in dir, the inbox directory,
+// whose first call has waited SpoolKeep by now, the device's clock
+// (spooledAt): the spool, the files drains took and haven't finished, and
+// those they set aside (D-inbox-age-cap). A file's first call is its
+// oldest, so no call waits longer, and the calls after it go with it,
+// early. It reports how many files it deleted, and every file it couldn't,
+// joined. The agent runs it at its start, before its first drain, and with
+// each retention sweep, so a call waits unread no longer than held.jsonl
+// keeps one, whether or not a drain runs.
+func Expire(dir string, now time.Time) (int, error) {
+	if err := privateDir(dir); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, nil
+		}
+		// A directory of this user's that others may write in is swept, as
+		// its files may wait there too. One reached through a symbolic link
+		// Drain doesn't follow, which may name another account's directory,
+		// is left alone, as Drain leaves it (sweepable).
+		if !sweepable(dir) {
+			return 0, nil
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	cutoff := now.Add(-SpoolKeep)
+	n := 0
+	var errs []error
+	for _, e := range entries {
+		name := e.Name()
+		if !isSpoolFile(name) || !e.Type().IsRegular() {
+			continue
+		}
+		fi, err := e.Info()
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // drained since the directory was read
+		}
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		p := filepath.Join(dir, name)
+		if spooledAt(p, fi).After(cutoff) {
+			continue
+		}
+		if err := retry(func() error { return os.Remove(p) }); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("inbox: deleting %s, which waited longer than %v: %w", name, SpoolKeep, err))
+			continue
+		}
+		n++
+	}
+	return n, errors.Join(errs...)
+}
+
+// isSpoolFile reports whether name, in the inbox directory, is a spool
+// file: the spool, a file a drain took, or one it set aside.
+func isSpoolFile(name string) bool {
+	return name == SpoolName ||
+		strings.HasPrefix(name, "spool-") && (strings.HasSuffix(name, takenSuffix) || strings.HasSuffix(name, badSuffix))
+}
+
+// SpoolFiles lists the spool files in dir, the inbox directory, as Expire
+// finds them, for doctor to check who may open them (ExposedPaths).
+func SpoolFiles(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if isSpoolFile(e.Name()) && e.Type().IsRegular() {
+			out = append(out, filepath.Join(dir, e.Name()))
+		}
+	}
+	return out
+}
+
+// Exposed is a path of the agent's data folder, or of the hook calls it
+// holds or spools there, that other accounts on this computer may open
+// (ExposedPaths), and Fix the command that makes it this user's alone
+// again.
+type Exposed struct {
+	Path, Fix string
+}
+
+// spooledAt is when the spool file name, whose information as listed is
+// fi, began to wait: when its first call was sent (firstSent), or when the
+// file was last written if that is earlier, as across a step back of the
+// clock, or if no line it starts with gives a Sent, as in a file that a
+// drain set aside, or one Expire doesn't read (ownFile). So a file is never
+// kept longer than its write time alone would keep it.
+func spooledAt(name string, fi fs.FileInfo) time.Time {
+	at := fi.ModTime()
+	if !fi.Mode().IsRegular() {
+		return at
+	}
+	if sent, ok := firstSent(name); ok && sent.Before(at) {
+		at = sent
+	}
+	return at
+}
+
+// firstSent is the Sent of the spool file name's first call: of the
+// message on the first line that holds one, passing over the newline
+// before each record (Append), or the Sent a record cut short before it
+// still gives (cutSent), if that is earlier. It passes over a line that
+// holds no call, as Drain and Scan do, and reports false when no line
+// within the first two records' bytes gives a Sent, or the file opened
+// isn't a regular file of this user's with one name (ownFile). It opens
+// the file as Scan does, so a drain can still rename and delete it, and a
+// sender append to it.
+func firstSent(name string) (time.Time, bool) {
+	f, err := openShared(name)
+	if err != nil {
+		return time.Time{}, false
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err != nil || ownFile(name, fi) != nil {
+		return time.Time{}, false
+	}
+	// A record cut short and the whole one after it, with the newlines
+	// around each and a line ending.
+	r := bufio.NewReader(io.LimitReader(f, 2*(MaxMessage+3)))
+	var cut time.Time // the earliest Sent a record cut short gave
+	for {
+		line, long, err := readLine(r, MaxMessage)
+		if err != nil {
+			return cut, !cut.IsZero()
+		}
+		if long || len(line) == 0 {
+			continue
+		}
+		if m, err := Decode(line); err == nil {
+			if !cut.IsZero() && cut.Before(m.Sent) {
+				return cut, true
+			}
+			return m.Sent, true
+		}
+		if s, ok := cutSent(line); ok && (cut.IsZero() || s.Before(cut)) {
+			cut = s
+		}
+	}
+}
+
+// cutSent is the Sent that line, a record that isn't a whole message, as
+// one a sender's write cut short, still gives: Encode writes a message's
+// members in Message's order, id, kind and sent before its chain and its
+// body, so a record cut anywhere in what it holds of a call has its sent
+// whole. It reads the line's first members as JSON tokens, and reports
+// false unless they are id and kind and a sent that parses as RFC 3339, as
+// for a record cut before its sent ended, which holds nothing of the call.
+func cutSent(line []byte) (time.Time, bool) {
+	dec := json.NewDecoder(bytes.NewReader(line))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return time.Time{}, false
+	}
+	for _, key := range []string{"id", "kind"} {
+		if tok, err := dec.Token(); err != nil || tok != key {
+			return time.Time{}, false
+		}
+		if _, err := dec.Token(); err != nil {
+			return time.Time{}, false
+		}
+	}
+	if tok, err := dec.Token(); err != nil || tok != "sent" {
+		return time.Time{}, false
+	}
+	tok, err := dec.Token()
+	s, ok := tok.(string)
+	if err != nil || !ok {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
 // maxSpool is MaxSpool, as a variable that tests can lower.
 var maxSpool int64 = MaxSpool
 
@@ -64,7 +298,14 @@ var afterWrite func()
 // Each record has a newline before it as well as after it. When a sender is
 // killed halfway through its write, the next record still starts on a line
 // of its own, and only the cut one is lost.
+//
+// While the agent has stopped the spool (StopSpooling), as once its ledger
+// can't open until pairtime restore runs, it spools nothing and returns
+// ErrSpoolStopped: no drain would take the message.
 func Append(dir string, m Message) error {
+	if SpoolStopped(dir) {
+		return ErrSpoolStopped
+	}
 	b, err := m.Encode()
 	if err != nil {
 		return err
@@ -175,7 +416,9 @@ type DrainResult struct {
 	Failed int
 	// SetAside is how many spool files were renamed to end in .bad,
 	// because drain after drain failed to read them or because they aren't
-	// this user's alone. Drain deletes them KeepDays later.
+	// this user's alone. Drain deletes them SpoolKeep after they were last
+	// written, and Expire, never later, once their first call has waited
+	// SpoolKeep (spooledAt).
 	SetAside int
 	// Busy is why the spool couldn't be taken this time, as when senders
 	// on Windows kept it open throughout. Its messages wait for the next
@@ -326,7 +569,7 @@ func (d *Drainer) drainFile(name string, res *DrainResult) (stop bool, err error
 		return false, fmt.Errorf("inbox: reading %s, which waits for the next drain: %w", filepath.Base(name), err)
 	}
 	delete(d.left, name)
-	if serr := setAside(name, d.now().Wall); serr != nil {
+	if serr := setAside(name); serr != nil {
 		return false, fmt.Errorf("inbox: reading %s: %w; and setting it aside: %w", filepath.Base(name), err, serr)
 	}
 	res.SetAside++
@@ -567,14 +810,18 @@ func openScan(name string) (*os.File, error) {
 }
 
 // taken lists the spool files that drains took, oldest first, and deletes
-// the ones set aside more than KeepDays ago. A file set aside can hold
-// prompts, and the inbox is no place to keep them (DESIGN 3.5).
+// the ones set aside that nothing has written for SpoolKeep. A file set
+// aside can hold prompts, and the inbox is no place to keep them (DESIGN
+// 3.5). It reads none of them, as a file is set aside when drain after
+// drain failed to read it: Expire, at the agent's start and each retention
+// look, deletes one once its first call has waited SpoolKeep (spooledAt),
+// which is never later.
 func (d *Drainer) taken() ([]string, error) {
 	entries, err := os.ReadDir(d.dir)
 	if err != nil {
 		return nil, err
 	}
-	cutoff := d.now().Wall.Add(-KeepDays * 24 * time.Hour)
+	cutoff := d.now().Wall.Add(-SpoolKeep)
 	var names []string
 	for _, e := range entries {
 		n := e.Name()
@@ -585,7 +832,7 @@ func (d *Drainer) taken() ([]string, error) {
 		case strings.HasSuffix(n, takenSuffix):
 			names = append(names, filepath.Join(d.dir, n))
 		case strings.HasSuffix(n, badSuffix):
-			if fi, err := e.Info(); err == nil && fi.ModTime().Before(cutoff) {
+			if fi, err := e.Info(); err == nil && !fi.ModTime().After(cutoff) {
 				os.Remove(filepath.Join(d.dir, n))
 			}
 		}
@@ -595,15 +842,12 @@ func (d *Drainer) taken() ([]string, error) {
 }
 
 // setAside renames the taken file name to end in .bad, so that drains
-// leave it alone, and dates it now, which starts the KeepDays after which
-// Drain deletes it.
-func setAside(name string, now time.Time) error {
+// leave it alone. It keeps the file's write time, by which Drain deletes it
+// and Expire dates it when it holds no message Expire reads (spooledAt), so
+// setting a file aside never keeps its calls longer.
+func setAside(name string) error {
 	bad := strings.TrimSuffix(name, takenSuffix) + badSuffix
-	if err := retry(func() error { return os.Rename(name, bad) }); err != nil {
-		return err
-	}
-	os.Chtimes(bad, now, now) // best effort: Drain then goes by its last write
-	return nil
+	return retry(func() error { return os.Rename(name, bad) })
 }
 
 // readLine returns the next line of r without its line ending. A line
