@@ -34,7 +34,8 @@ type Splice struct {
 	tmpGone  bool // renamed over the file, or deleted
 }
 
-// StartSplice begins a splice of name, which it opens as OpenPrivate does.
+// StartSplice begins a splice of name, which it opens as OpenOwned does,
+// as a splice only drops what keep leaves out.
 // It copies keep, parts of the file's first size bytes, in the order given,
 // to a new file in the same folder, named tmpPrefix and a random suffix, and
 // flushes that to disk. copied, when not nil, runs once the parts are
@@ -42,7 +43,7 @@ type Splice struct {
 // still at work. Until Finish or Abort, nothing may change name but appends
 // past size, and a part keep names that the file doesn't hold is an error.
 func StartSplice(name, tmpPrefix string, size int64, keep []Span, copied func()) (*Splice, error) {
-	src, err := OpenPrivate(name, os.O_RDONLY, 0)
+	src, err := OpenOwned(name)
 	if err != nil {
 		return nil, err
 	}

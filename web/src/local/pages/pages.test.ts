@@ -449,6 +449,28 @@ describe("Projects' switches for a project's name on the owner's dashboard", () 
 				expect(text(switchOf(html, 'p_homework'))).toContain('It goes to your dashboard once this computer is linked and online.'),
 		},
 		{
+			name: 'a name on its way whose set may have reached the server says the dashboard may show it already',
+			html: () => {
+				const names = projectsReply();
+				names.projects = names.projects.map((p) => (p.project === 'p_homework' ? { ...p, sent: true } : p));
+				return page({ names });
+			},
+			check: (html) =>
+				expect(text(switchOf(html, 'p_homework'))).toContain(
+					'"Homework helper" Your dashboard may show it already, and does with pairtime\'s next upload.',
+				),
+		},
+		{
+			name: 'on a local-only computer a sent name on its way says the dashboard may show it already, and does once the computer is online',
+			html: () => {
+				const names = projectsReply(false);
+				names.projects = names.projects.map((p) => (p.project === 'p_homework' ? { ...p, sent: true } : p));
+				return page({ names });
+			},
+			check: (html) =>
+				expect(text(switchOf(html, 'p_homework'))).toContain('Your dashboard may show it already, and does once this computer is linked and online.'),
+		},
+		{
 			name: 'a name hidden on the dashboard says so, and how to show it again',
 			html: () => page({ names: projectsReply() }),
 			check: (html) =>

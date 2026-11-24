@@ -181,7 +181,8 @@ const (
 // line in the plan, whatever its day: none goes and no mark moves, since
 // the file may hold the first line of a sha that another day's line has
 // too. Its day is in unread for doctor. So does a list of pruned shas that
-// can't be read, as "any day".
+// can't be read, which is in unread by its name (PrunedCommits), and a
+// folder that can't be listed, as "any day".
 func commitsOf(in planInput, n int) (entries []commitEntry, days map[string]bool, unread []string, more bool) {
 	if in.commitDir == "" {
 		return nil, nil, nil, false
@@ -217,7 +218,7 @@ func commitsOf(in planInput, n int) (entries []commitEntry, days map[string]bool
 	}
 	pruned, ok := prunedSHAs(in.commitDir)
 	if !ok {
-		return nil, nil, []string{"any day"}, false
+		return nil, nil, []string{PrunedCommits}, false
 	}
 	if len(unread) > 0 {
 		return nil, nil, unread, false

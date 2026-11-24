@@ -13,6 +13,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/config"
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 	"github.com/some-du6e/pairtime/internal/agent/retention"
@@ -37,6 +38,7 @@ func TestRetentionPeriods(t *testing.T) {
 	}{
 		{"the adapter host keeps a hook call it holds no longer than device.held_calls says", heldKeep, p.Held},
 		{"the commit store keeps a day's commit records as long as device.commits says", commitsKeep, p.Commits},
+		{"the inbox keeps a spool file that waits to be drained no longer than device.inbox says", inbox.SpoolKeep, p.Inbox},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

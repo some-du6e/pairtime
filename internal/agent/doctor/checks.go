@@ -63,6 +63,17 @@ type Facts struct {
 	// lines show as ~, so that a line someone shares names fewer of their
 	// folders.
 	Homes []string
+	// SpoolStopped is set while the agent has stopped the inbox's spool, as
+	// once its ledger can't open until pairtime restore runs
+	// (inbox.SpoolStopped). It is read from the data folder, so doctor
+	// says so while the agent is down too.
+	SpoolStopped bool
+	// Exposed are the data folder, and the files of hook calls the agent
+	// holds or spools in it, that other accounts on this computer may open,
+	// each with the chmod that closes it (inbox.ExposedPaths). File modes
+	// decide who may everywhere but on Windows (GOOS), where the data
+	// folder's access list does.
+	Exposed []Exposed
 	// T3 is what doctor found of T3 Code on this computer itself: its
 	// store, and the Claude homes of their own its Claude instances use
 	// (DESIGN 5.1).
@@ -74,6 +85,12 @@ type Facts struct {
 	Distro []string
 	// Now is when doctor ran.
 	Now time.Time
+}
+
+// Exposed is a path that other accounts on this computer may open, and
+// Fix the command that makes it this user's alone again (inbox.Exposed).
+type Exposed struct {
+	Path, Fix string
 }
 
 // Checks works out doctor's lines from f, in the order DESIGN 5.9 lists
@@ -101,7 +118,7 @@ func Checks(f Facts) []Check {
 	if c, ok := ledgerCheck(f); ok {
 		out = append(out, c)
 	}
-	out = append(out, signingCheck(f.Signing), keystoreCheck(f.Keystore), spoolCheck(f))
+	out = append(out, signingCheck(f.Signing), keystoreCheck(f.Keystore), spoolCheck(f), exposedCheck(f))
 	out = append(out, problemChecks(f)...)
 	for i := range out {
 		out[i].Text = tilde(out[i].Text, f.Homes)
@@ -412,6 +429,13 @@ func itOrThem(n uint64) string {
 // hook record (CC1); the line measures what the rule costs.
 func spoolCheck(f Facts) Check {
 	c := Check{Name: "spool"}
+	if f.SpoolStopped {
+		// No drain would take a spooled call to the ledger, so hooks spool
+		// nothing (D-inbox-age-cap).
+		c.Result = Warn
+		c.Text = "hooks spool nothing, because the ledger can't open until you run pairtime restore, so a hook call the agent doesn't take at once is lost"
+		return c
+	}
 	if f.Reach != Reached || f.Agent == nil {
 		c.Result, c.Text = Skip, notAsked(f)
 		return c
@@ -424,6 +448,37 @@ func spoolCheck(f Facts) Check {
 	c.Result = Warn
 	c.Text = fmt.Sprintf("%s of the last 7 days reached the agent only through the spool, %s", count(s.Calls, "hook call", "hook calls"), promptWords(s))
 	c.Text += ", so pairtime trusts them as little as a plugin's and credits less of their time. Calls go to the spool while the agent isn't running or answering, and logging in starts it"
+	return c
+}
+
+// exposedCheck warns when the data folder, or a file of the hook calls the
+// agent holds or spools in it, is open to other accounts on this computer
+// (Facts.Exposed). They could read the calls' prompts, and the agent takes
+// none of those calls in until the path is this user's alone again, though
+// it still deletes each on time. The line names each path and the chmod
+// that closes it.
+func exposedCheck(f Facts) Check {
+	c := Check{Name: "private-files"}
+	switch {
+	case f.GOOS == "windows":
+		c.Result, c.Text = Skip, "the data folder's access list decides who may open the hook calls in it"
+		return c
+	case len(f.Exposed) == 0:
+		c.Result, c.Text = OK, "the data folder, and the hook calls it holds, are this user's alone"
+		return c
+	}
+	var paths, fixes []string
+	for _, e := range f.Exposed {
+		paths = append(paths, e.Path)
+		fixes = append(fixes, e.Fix)
+	}
+	verb := "is"
+	if len(paths) > 1 {
+		verb = "are"
+	}
+	c.Result = Warn
+	c.Text = fmt.Sprintf("%s %s open to other accounts on this computer, which could read the prompts in the hook calls there, and the agent takes none of those calls in until it is yours alone again, though it still deletes each on time. Run: %s",
+		strings.Join(paths, ", "), verb, strings.Join(fixes, "; "))
 	return c
 }
 

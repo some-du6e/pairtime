@@ -36,3 +36,31 @@ func OpenPrivate(name string, flag int, perm fs.FileMode) (*os.File, error) {
 	}
 	return f, nil
 }
+
+// OpenOwned opens name, a file of hook calls the agent cuts or deletes on
+// time, to read, as Expire reads a spool file: its folder one Expire would
+// sweep (sweepable), and the file, as opened, a regular file of this
+// user's with one name (ownFile), whatever its mode or its folder's. No
+// other account can have put such a file there, and a cut only ever drops
+// lines, so a folder or a file that lost its private mode, as after a
+// chmod -R g+w or a copy under umask 002, keeps its calls no longer than
+// heldKeep or SpoolKeep. Delivering a call keeps OpenPrivate's guards.
+// Where the OS has them, O_NOFOLLOW and O_NONBLOCK are OpenPrivate's.
+func OpenOwned(name string) (*os.File, error) {
+	if err := privateDir(filepath.Dir(name)); err != nil && !sweepable(filepath.Dir(name)) {
+		return nil, err
+	}
+	f, err := os.OpenFile(name, os.O_RDONLY|guardFlags, 0)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err == nil {
+		err = ownFile(name, fi)
+	}
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}

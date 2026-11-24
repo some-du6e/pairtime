@@ -2019,13 +2019,20 @@ func (u *Uploader) setProblem(source, msg string) {
 }
 
 // noteCommits tells doctor what keeps commit records from going: the days
-// of commits/ the last plan couldn't read, while which none goes
-// (D-ag5-D2), and the codes the server last refused records with, which
-// aren't sent again.
+// of commits/ the last plan couldn't read, or its list of pruned shas,
+// while which none goes (D-ag5-D2), and the codes the server last refused
+// records with, which aren't sent again.
 func (u *Uploader) noteCommits() {
-	var parts []string
-	if len(u.commitsUnread) > 0 {
-		parts = append(parts, fmt.Sprintf("pairtime can't read its commit records of %s, so none goes until it can", strings.Join(u.commitsUnread, ", ")))
+	var parts, days []string
+	for _, d := range u.commitsUnread {
+		if d == PrunedCommits {
+			parts = append(parts, fmt.Sprintf("pairtime can't read commits/%s, its list of the commits whose records it deleted, so no commit record goes until it can", PrunedCommits))
+			continue
+		}
+		days = append(days, d)
+	}
+	if len(days) > 0 {
+		parts = append(parts, fmt.Sprintf("pairtime can't read its commit records of %s, so none goes until it can", strings.Join(days, ", ")))
 	}
 	if len(u.commitsRefused) > 0 {
 		parts = append(parts, fmt.Sprintf("the server refused some commit records: %v", u.commitsRefused))
