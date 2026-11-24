@@ -258,9 +258,7 @@ func (s *Service) writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func (s *Service) refuse(w http.ResponseWriter, r *refusal) {
-	if rec, ok := w.(*recorder); ok {
-		rec.code = r.code
-	}
+	s.keep(w, r)
 	if r.retryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(r.retryAfter))
 	}

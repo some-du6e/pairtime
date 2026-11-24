@@ -6,15 +6,27 @@ import (
 	"encoding/json"
 	"net/http"
 	"sync"
+	"time"
+
+	"github.com/some-du6e/pairtime/internal/server/ingest"
 )
 
 // maxKeptRefusals bounds the store. A device's rate bounds what it can
 // add, since only a request the rate admitted is kept: its burst of 30
-// and one more every 10 s, at most 90 in the 600 s a copy can pass the
-// clock check. So the store reaches the bound only when about a hundred
-// devices are refused at full rate at once, and it then drops the oldest
-// refusal first.
+// and one more every 10 s, at most 96 in the 660 s an entry stays, the
+// 600 s a copy can pass the clock check and keepGraceMS. So the store
+// reaches the bound only when about a hundred devices are refused at full
+// rate at once, and it then drops the oldest refusal first.
 const maxKeptRefusals = 10_000
+
+// keepGraceMS is how long an entry stays after the last millisecond a
+// copy can pass the clock check. A copy takes its clock check's time
+// before its body arrives, which may take ingest.BodyTimeout, and looks
+// the store up only once its signature verifies, by then. Another
+// request's store call meanwhile mustn't drop the entry the copy will ask
+// for, so expiry waits that long and a second more, while get still
+// answers only up to the clock check's last millisecond.
+const keepGraceMS = int64(ingest.BodyTimeout/time.Millisecond) + 1000
 
 // refusalStore keeps, while pairtimed runs, the status and error code of
 // the refusal each signed create or withdrawal got once its device's rate
@@ -76,15 +88,15 @@ func (rs *refusalStore) put(key string, k keptRefusal, nowMS int64) {
 	rs.kept[key] = k
 }
 
-// expire drops the refusals at the front of order whose time is up. An
-// entry's time follows its request's own X-Pairtime-Time, so one behind an
-// entry still kept waits for it, and get checks each entry's time anyway.
-// It reslices order rather than copying it, so an expiry costs only what
-// it drops.
+// expire drops the refusals at the front of order whose time and
+// keepGraceMS are up. An entry's time follows its request's own
+// X-Pairtime-Time, so one behind an entry still kept waits for it, and get
+// checks each entry's time anyway. It reslices order rather than copying
+// it, so an expiry costs only what it drops.
 func (rs *refusalStore) expire(nowMS int64) {
 	n := 0
 	for ; n < len(rs.order); n++ {
-		if k, ok := rs.kept[rs.order[n]]; ok && k.untilMS > nowMS {
+		if k, ok := rs.kept[rs.order[n]]; ok && k.untilMS+keepGraceMS > nowMS {
 			break
 		}
 		delete(rs.kept, rs.order[n])
@@ -93,13 +105,10 @@ func (rs *refusalStore) expire(nowMS int64) {
 	rs.order = rs.order[n:]
 }
 
-// recorder is the ResponseWriter a create or a withdrawal answers through.
-// It notes the answer's status and, through refuse, its error code, so
-// keepRefusals can keep a refusal.
+// recorder is the ResponseWriter a create or a withdrawal answers through,
+// so that refuse can keep the refusal a signed one gets.
 type recorder struct {
 	http.ResponseWriter
-	status int
-	code   string
 	// key is the request's device and signature, and untilMS the first
 	// millisecond a copy of it no longer passes the clock check, both of
 	// which admit sets once the signature verifies and the device's rate
@@ -109,35 +118,26 @@ type recorder struct {
 	untilMS int64
 }
 
-func (r *recorder) WriteHeader(status int) {
-	if r.status == 0 {
-		r.status = status
-	}
-	r.ResponseWriter.WriteHeader(status)
-}
-
-func (r *recorder) Write(b []byte) (int, error) {
-	if r.status == 0 {
-		r.status = http.StatusOK
-	}
-	return r.ResponseWriter.Write(b)
-}
-
 // Unwrap lets http.ResponseController reach the connection, for
 // readBody's read deadline.
 func (r *recorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
-// keepRefusals answers a create or a withdrawal through a recorder, and
-// keeps the status and code of the refusal a signed one got, if it got
-// one, for its copies.
+// keepRefusals answers a create or a withdrawal through a recorder, so
+// that refuse keeps the status and code of the refusal a signed one gets,
+// for its copies. refuse keeps it as it answers, while the request still
+// holds its place in the device's rate, so no copy the rate admits after
+// the answer can be checked anew.
 func (s *Service) keepRefusals(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rec := &recorder{ResponseWriter: w}
-		h(rec, r)
-		if rec.key == "" || rec.status < 300 || rec.code == "" {
-			return
-		}
-		s.refused.put(rec.key, keptRefusal{status: rec.status, code: rec.code, untilMS: rec.untilMS}, s.o.Now().UnixMilli())
+		h(&recorder{ResponseWriter: w}, r)
+	}
+}
+
+// keep keeps the refusal ref that w's request gets, when w is the recorder
+// of a signed write the device's rate admitted.
+func (s *Service) keep(w http.ResponseWriter, ref *refusal) {
+	if rec, ok := w.(*recorder); ok && rec.key != "" {
+		s.refused.put(rec.key, keptRefusal{status: ref.status, code: ref.code, untilMS: rec.untilMS}, s.o.Now().UnixMilli())
 	}
 }
 

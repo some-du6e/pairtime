@@ -60,6 +60,21 @@ func TestRefusalStore(t *testing.T) {
 			},
 		},
 		{
+			name: "another request's later store call leaves an entry that a copy which passed its clock check before the entry's time still asks for",
+			run: func(t *testing.T) {
+				var rs refusalStore
+				rs.put("d1 sig", keptRefusal{status: http.StatusConflict, code: CodeAlreadySubmitted, untilMS: now + 1000}, now)
+				rs.get("d2 sig", now+6000)
+				if _, ok := rs.get("d1 sig", now+999); !ok {
+					t.Error("a copy whose clock check passed at 999 ms lost the entry to a later call's expiry")
+				}
+				rs.get("d2 sig", now+1000+keepGraceMS)
+				if _, ok := rs.kept["d1 sig"]; ok {
+					t.Error("the entry outlived its time and keepGraceMS")
+				}
+			},
+		},
+		{
 			name: "a refusal is kept until the millisecond before its untilMS, the first in which a copy fails the clock check",
 			run: func(t *testing.T) {
 				var rs refusalStore
