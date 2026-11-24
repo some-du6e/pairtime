@@ -4,13 +4,11 @@ package dashboard
 
 import (
 	"context"
-	"database/sql"
-	"errors"
-	"fmt"
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/server/projectnames"
 	"github.com/some-du6e/pairtime/internal/server/rollup"
+	"github.com/some-du6e/pairtime/internal/server/shadow"
 	"github.com/some-du6e/pairtime/pkg/projectname"
 )
 
@@ -26,6 +24,10 @@ const AgentName = "your agent"
 type Rollups struct {
 	// DB is where to read, store.DB.Read.
 	DB rollup.Querier
+	// Scoring is the scoring version the server runs
+	// (pages.BuiltinScoringVersion): an account's calibration flag hides
+	// its credited time only while it is below 1.0.0 (shadow.Hides).
+	Scoring string
 }
 
 // View returns the account's last MonthDays local days as of now. Its
@@ -33,14 +35,14 @@ type Rollups struct {
 // (D-account-project-id), each called by the short code of its first
 // device key (projectname.ShortCodes). Until project registration (WP-SV10) links the
 // keys of one repo, each device's key is a project of its own, and the
-// view says so. While the account's calibration flag is on, the view is
-// Calibrate's (D-server-shadow).
+// view says so. While the account's calibration flag hides its credited
+// time, the view is Calibrate's (D-server-shadow).
 func (r Rollups) View(ctx context.Context, account string, now time.Time) (View, error) {
 	zone, name, err := rollup.Zone(ctx, r.DB, account)
 	if err != nil {
 		return View{}, err
 	}
-	shadow, err := Calibrating(ctx, r.DB, account)
+	hidden, err := shadow.Hides(ctx, r.DB, account, r.Scoring)
 	if err != nil {
 		return View{}, err
 	}
@@ -104,25 +106,10 @@ func (r Rollups) View(ctx context.Context, account string, now time.Time) (View,
 		// repo across devices.
 		SplitByDevice: true,
 	}, rows)
-	if err != nil || !shadow {
+	if err != nil || !hidden {
 		return v, err
 	}
 	return Calibrate(v), nil
-}
-
-// Calibrating reports whether the account's calibration flag is on
-// (D-server-shadow): users.calibrating_since_ms, which pairtimed
-// calibrating sets for a volunteer of the scoring's shadow week.
-func Calibrating(ctx context.Context, q rollup.Querier, account string) (bool, error) {
-	var since sql.NullInt64
-	err := q.QueryRowContext(ctx, `SELECT calibrating_since_ms FROM users WHERE id = $1`, account).Scan(&since)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return false, fmt.Errorf("%w: %s", rollup.ErrNoAccount, account)
-	case err != nil:
-		return false, fmt.Errorf("dashboard: reading %s's calibration flag: %w", account, err)
-	}
-	return since.Valid, nil
 }
 
 // seconds turns milliseconds into seconds. Credit moves in steps of half

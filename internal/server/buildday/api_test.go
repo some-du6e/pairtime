@@ -64,12 +64,12 @@ func TestAPI(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	w := newWorld(t, store.SQLite, "")
 	buildOn(w, 2026, 11, 20)
-	api := API(w.db.Read, devices, now, logger)
+	api := API(w.db.Read, devices, now, "0.6.0", logger)
 	down := newWorld(t, store.SQLite, "")
 	if err := down.db.Read.Close(); err != nil {
 		t.Fatal(err)
 	}
-	broken := API(down.db.Read, devices, now, logger)
+	broken := API(down.db.Read, devices, now, "0.6.0", logger)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, SummaryPath, nil)

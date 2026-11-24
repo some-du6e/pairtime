@@ -334,8 +334,9 @@ func TestRollupsView(t *testing.T) {
 }
 
 // TestRollupsCalibrating checks that a signed-in account's view follows its
-// calibration flag (D-server-shadow): with it on, the view is Calibrate's
-// of the view it has with the flag off, and the flag changes nothing else.
+// calibration flag (D-server-shadow): while the flag is on and the server
+// scores below 1.0.0, the view is Calibrate's of the view it has with the
+// flag off, and otherwise the flag changes nothing.
 func TestRollupsCalibrating(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 11, 20, 18, 0, 0, 0, time.UTC)
@@ -347,19 +348,23 @@ func TestRollupsCalibrating(t *testing.T) {
 	}}
 	tests := []struct {
 		name string
-		// since is the flag: nil off, a time on.
-		since any
-		want  bool
+		// since is the flag: nil off, a time on. scoring is the version
+		// the server runs.
+		since   any
+		scoring string
+		want    bool
 	}{
-		{name: "an account without the flag gets its view as it is", want: false},
-		{name: "an account with the flag on gets the view Calibrate makes of it", since: now.Add(-time.Hour).UnixMilli(), want: true},
+		{name: "an account without the flag gets its view as it is", scoring: "0.6.0"},
+		{name: "an account with the flag on gets the view Calibrate makes of it", since: now.Add(-time.Hour).UnixMilli(), scoring: "0.6.0", want: true},
+		{name: "once the server scores at 1.0.0, a flag left on hides nothing", since: now.Add(-time.Hour).UnixMilli(), scoring: "1.0.0"},
 	}
 	for _, engine := range storetest.Engines() {
 		for _, tt := range tests {
 			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) {
 				db := rollupsDB(t, engine, "UTC")
 				applyAll(t, db, buckets)
-				plain, err := Rollups{DB: db.Read}.View(ctx, "u1", now)
+				source := Rollups{DB: db.Read, Scoring: tt.scoring}
+				plain, err := source.View(ctx, "u1", now)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -369,7 +374,7 @@ func TestRollupsCalibrating(t *testing.T) {
 				if _, err := db.Write.ExecContext(ctx, `UPDATE users SET calibrating_since_ms = $1 WHERE id = 'u1'`, tt.since); err != nil {
 					t.Fatal(err)
 				}
-				got, err := Rollups{DB: db.Read}.View(ctx, "u1", now)
+				got, err := source.View(ctx, "u1", now)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -380,16 +385,13 @@ func TestRollupsCalibrating(t *testing.T) {
 				if !reflect.DeepEqual(got, want) {
 					t.Errorf("the view is\n%+v\nwant\n%+v", got, want)
 				}
-				if on, err := Calibrating(ctx, db.Read, "u1"); err != nil || on != tt.want {
-					t.Errorf("Calibrating = %v, %v; want %v", on, err, tt.want)
-				}
 			})
 		}
 	}
-	t.Run("an account that isn't there has no flag to read", func(t *testing.T) {
+	t.Run("an account that isn't there has no view to hide", func(t *testing.T) {
 		db := rollupsDB(t, store.SQLite, "UTC")
-		if _, err := Calibrating(ctx, db.Read, "nobody"); !errors.Is(err, rollup.ErrNoAccount) {
-			t.Errorf("Calibrating = %v, want rollup.ErrNoAccount", err)
+		if _, err := (Rollups{DB: db.Read, Scoring: "0.6.0"}).View(ctx, "nobody", now); !errors.Is(err, rollup.ErrNoAccount) {
+			t.Errorf("View = %v, want rollup.ErrNoAccount", err)
 		}
 	})
 }

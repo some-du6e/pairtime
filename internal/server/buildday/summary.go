@@ -14,6 +14,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/server/device"
 	"github.com/some-du6e/pairtime/internal/server/rollup"
+	"github.com/some-du6e/pairtime/internal/server/shadow"
 )
 
 // SummaryPath is where a device reads its account's build days, the
@@ -35,6 +36,10 @@ const (
 
 // Summary is an account's build days, weeks and freezes as of a time.
 type Summary struct {
+	// Calibrating says the account's calibration flag hides its credited
+	// time, so the summary holds none of what comes of it, and the JSON
+	// leaves out every field Calibrate hides (D-server-shadow).
+	Calibrating bool `json:"calibrating,omitempty"`
 	// TimeZone is the profile's time zone, which sets every day's bounds,
 	// and Today the local date in it.
 	TimeZone string `json:"time_zone"`
@@ -279,17 +284,27 @@ type errorBody struct {
 
 // API returns GET /api/v1/build-days, which answers the summary of the
 // account the request's device token belongs to (docs/spec/teen-layer-v1.md).
-func API(q Querier, devices Devices, now func() time.Time, logger *slog.Logger) http.HandlerFunc {
+// While the account's calibration flag hides its credited time, the
+// summary is Calibrate's (D-server-shadow); scoring is the scoring version
+// the server runs, which shadow.Hides reads the flag by.
+func API(q Querier, devices Devices, now func() time.Time, scoring string, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		dev, ok := authenticate(w, r, devices, logger)
 		if !ok {
 			return
 		}
 		s, err := Read(r.Context(), q, dev.Account, now())
+		var hidden bool
+		if err == nil {
+			hidden, err = shadow.Hides(r.Context(), q, dev.Account, scoring)
+		}
 		if err != nil {
 			logger.Error("reading build days", "user", dev.Account, "err", err)
 			unavailable(w, "The server couldn't read your build days; try again in 5 seconds.")
 			return
+		}
+		if hidden {
+			s = Calibrate(s)
 		}
 		writeJSON(w, http.StatusOK, s)
 	}

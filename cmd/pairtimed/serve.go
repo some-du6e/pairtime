@@ -421,7 +421,9 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	// it sends the account's open dashboards the View the page draws.
 	// profile: topics answer 404 until WP-SV9 gives it Profiles. Its
 	// streams end before the servers stop, below.
-	rollups := dashboard.Rollups{DB: db.Read}
+	// A calibration volunteer's flag hides their credited time until the
+	// server scores at 1.0.0 (D-server-shadow).
+	rollups := dashboard.Rollups{DB: db.Read, Scoring: pages.BuiltinScoringVersion}
 	owner := accountOf(signIn)
 	hub := stream.New(stream.Options{Source: rollups, Account: owner, Logger: logger})
 	defer hub.Close()
@@ -469,7 +471,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	// Devlogs and badges count each device's requests against ingest's
 	// default rate, in a bucket apart from its uploads' (devlog.Options).
 	devlog.New(devlog.Options{Devices: devices, Writer: w, Read: db.Read, Now: time.Now, Logger: logger}).Register(public)
-	public.HandleFunc("GET "+buildday.SummaryPath, buildday.API(db.Read, devices, time.Now, logger))
+	public.HandleFunc("GET "+buildday.SummaryPath, buildday.API(db.Read, devices, time.Now, pages.BuiltinScoringVersion, logger))
 	maintainCtx, stopMaintain := context.WithCancel(ctx)
 	defer stopMaintain()
 	go signIn.Maintain(maintainCtx)

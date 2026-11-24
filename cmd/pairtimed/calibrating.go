@@ -11,10 +11,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/server/pages"
+	"github.com/some-du6e/pairtime/internal/server/shadow"
 	"github.com/some-du6e/pairtime/internal/server/store"
 )
 
-const calibratingSummary = "Turn a calibration volunteer's flag on or off, or show it: while it is on, the account's dashboard shows only the agent's time (D-server-shadow)"
+const calibratingSummary = "Turn a calibration volunteer's flag on or off, or show it: while it is on, the server hides the account's credited time from it, and its dashboard shows only the agent's time (D-server-shadow)"
+
+// builtinScoring is the scoring version this build runs, which ends the
+// flag's hiding at 1.0.0 (shadow.Hides). Tests replace it to see both
+// sides of the freeze.
+var builtinScoring = pages.BuiltinScoringVersion
 
 func init() {
 	register(&command{name: "calibrating", summary: calibratingSummary, run: runCalibrating})
@@ -28,12 +35,14 @@ func runCalibrating(ctx context.Context, e *env, args []string) int {
   pairtimed calibrating show -slack ID | -hca SUBJECT
 
 on turns the calibration flag on for the account of a volunteer of the
-scoring's shadow week. While it is on, the account's dashboard, its API
-and its live stream show only the agent's time, as shadow mode shows it
-on the volunteer's own computer (D-server-shadow): an open dashboard
-switches at its next update, a page drawn after it at once. off turns the
-flag off, and show says whether it is on and since when. Name the account
-by its Slack ID or by its Hack Club Auth subject.
+scoring's shadow week. While it is on, and until the server scores at
+1.0.0, every reply that shows the owner their own credited time (the
+dashboard, its API, the build-days API and the live stream) hides what
+shadow mode hides on the volunteer's own computer (D-server-shadow): an
+open dashboard switches at its next update, a page drawn after it at
+once. off turns the flag off, and show says whether it is on, since when,
+and whether it still hides anything. Name the account by its Slack ID or
+by its Hack Club Auth subject.
 `)
 		if len(args) > 0 && (args[0] == "-h" || args[0] == "-help" || args[0] == "--help") {
 			return 0
@@ -99,17 +108,35 @@ func runCalibratingAs(ctx context.Context, e *env, action string, args []string)
 		logger.Info("pairtimed calibrating", "action", action, "by", column, "account", value)
 	}
 	when := func(ms int64) string { return time.UnixMilli(ms).UTC().Format(time.RFC3339) }
+	// A flag left on past the freeze hides nothing (shadow.Hides).
+	frozen := shadow.Frozen(builtinScoring)
+	ended := fmt.Sprintf("It hides nothing, though: this server scores at %s, and calibration ended at 1.0.0.", builtinScoring)
+	const next = "An open dashboard switches at its next update."
 	switch {
 	case action == "on" && changed:
 		fmt.Fprintf(e.stdout, "Calibrating is now on for %s, since %s.\n", said, when(since.Int64))
+		if frozen {
+			fmt.Fprintln(e.stdout, ended)
+		} else {
+			fmt.Fprintln(e.stdout, next)
+		}
 	case action == "on":
 		fmt.Fprintf(e.stdout, "Calibrating was already on for %s, since %s. Nothing changed.\n", said, when(since.Int64))
+		if frozen {
+			fmt.Fprintln(e.stdout, ended)
+		}
 	case action == "off" && changed:
 		fmt.Fprintf(e.stdout, "Calibrating is now off for %s.\n", said)
+		if !frozen {
+			fmt.Fprintln(e.stdout, next)
+		}
 	case action == "off":
 		fmt.Fprintf(e.stdout, "Calibrating was already off for %s. Nothing changed.\n", said)
 	case since.Valid:
 		fmt.Fprintf(e.stdout, "Calibrating is on for %s, since %s.\n", said, when(since.Int64))
+		if frozen {
+			fmt.Fprintln(e.stdout, ended)
+		}
 	default:
 		fmt.Fprintf(e.stdout, "Calibrating is off for %s.\n", said)
 	}
@@ -118,6 +145,11 @@ func runCalibratingAs(ctx context.Context, e *env, action string, args []string)
 
 // errNoAccount says no account has the name an operator gave.
 var errNoAccount = errors.New("no account")
+
+// calibrationRace, when not nil, runs in setCalibration's transaction
+// between finding the account and changing its flag. Tests change the
+// flag there, as another run's change committed in between would be seen.
+var calibrationRace func(ctx context.Context, tx *sql.Tx, id string) error
 
 // setCalibration finds the one account whose column is value and, for
 // on and off, turns its calibration flag on at now or off, in one
@@ -153,18 +185,43 @@ func setCalibration(ctx context.Context, db *sql.DB, action, column, value strin
 	case n > 1:
 		return sql.NullInt64{}, false, fmt.Errorf("%d accounts have that name; name the account by its Hack Club Auth subject", n)
 	}
+	if calibrationRace != nil {
+		if err := calibrationRace(ctx, tx, id); err != nil {
+			return sql.NullInt64{}, false, err
+		}
+	}
+	// Each UPDATE changes the flag only while it is as the SELECT found
+	// it. On Postgres two runs can both find it off, and the second one's
+	// UPDATE then changes no row, so the time the first set stays. SQLite's
+	// write pool begins IMMEDIATE, so its runs take turns.
+	var res sql.Result
 	switch {
 	case action == "on" && !since.Valid:
 		since = sql.NullInt64{Int64: now.UnixMilli(), Valid: true}
-		if _, err := tx.ExecContext(ctx, `UPDATE users SET calibrating_since_ms = $1 WHERE id = $2`, since.Int64, id); err != nil {
-			return sql.NullInt64{}, false, fmt.Errorf("turning the flag on: %w", err)
-		}
+		res, err = tx.ExecContext(ctx, `UPDATE users SET calibrating_since_ms = $1 WHERE id = $2 AND calibrating_since_ms IS NULL`, since.Int64, id)
 	case action == "off" && since.Valid:
 		since = sql.NullInt64{}
-		if _, err := tx.ExecContext(ctx, `UPDATE users SET calibrating_since_ms = NULL WHERE id = $1`, id); err != nil {
-			return sql.NullInt64{}, false, fmt.Errorf("turning the flag off: %w", err)
-		}
+		res, err = tx.ExecContext(ctx, `UPDATE users SET calibrating_since_ms = NULL WHERE id = $1 AND calibrating_since_ms IS NOT NULL`, id)
 	default:
+		return since, false, nil
+	}
+	if err != nil {
+		return sql.NullInt64{}, false, fmt.Errorf("turning the flag %s: %w", action, err)
+	}
+	updated, err := res.RowsAffected()
+	if err != nil {
+		return sql.NullInt64{}, false, fmt.Errorf("turning the flag %s: %w", action, err)
+	}
+	if updated == 0 {
+		// Another run changed the flag first: say what it left, and
+		// change nothing.
+		err := tx.QueryRowContext(ctx, `SELECT calibrating_since_ms FROM users WHERE id = $1`, id).Scan(&since)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return sql.NullInt64{}, false, errNoAccount
+		case err != nil:
+			return sql.NullInt64{}, false, fmt.Errorf("reading the flag again: %w", err)
+		}
 		return since, false, nil
 	}
 	if err := tx.Commit(); err != nil {

@@ -15,9 +15,10 @@
 //
 // The server can't see display.shadow, SM 7.5's calibration week: no
 // tier-1 field carries it. An operator sets an account flag for each
-// calibration volunteer instead (D-server-shadow; pairtimed calibrating),
-// and while it is on, the account's View is Calibrating: it hides what
-// D-shadow-scope hides on the device's own views (Calibrate).
+// calibration volunteer instead (D-server-shadow; package shadow), and
+// while it hides the account's credited time, the account's View is
+// Calibrating: it hides what D-shadow-scope hides on the device's own
+// views (Calibrate).
 package dashboard
 
 import (

@@ -270,12 +270,23 @@ func TestOwnerTopic(t *testing.T) {
 			}
 		}},
 		{name: "once the flag is off again, credited events come back, the first with no delta", run: func(t *testing.T, h *Hub, src *viewSource) {
-			src.calibrating.Store(true)
 			c := open(t, h, meTopic, as("a1"))
 			c.read()
+			// A credited event before the flag: had the topic kept it, the
+			// first event after the flag would have a delta of -60 s.
+			src.you.Store(120)
 			h.Changed("a1")
 			synctest.Wait()
-			c.read()
+			if got := credited(t, c.read()); len(got) != 1 || got[0].TodayS != 120 {
+				t.Fatalf("before the flag the stream got %+v, want one event of 120 s", got)
+			}
+			src.calibrating.Store(true)
+			time.Sleep(DefaultGap)
+			h.Changed("a1")
+			synctest.Wait()
+			if got := events(c.read()); len(got) != 1 || got[0].event != "resync" {
+				t.Fatalf("with the flag the stream got %+v, want resync", got)
+			}
 			src.calibrating.Store(false)
 			src.you.Store(60)
 			time.Sleep(DefaultGap)
