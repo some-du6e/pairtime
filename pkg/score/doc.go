@@ -246,9 +246,10 @@
 //     BUCKET_TTL_S after one whose reach hasn't ended, is less than that
 //     wait behind the newest record, a stamped record dated inside the gap
 //     can still arrive and end the reach, so the earlier record keeps the
-//     clock (State.now). Such a slot has no hard break, and none from
-//     before the stretch reaches the slot of the sampler's record that ends
-//     it: an open lock or suspend closes at that slot's start, and the
+//     clock (State.now). A never-sampling device's slot has no hard
+//     break, and no lock, suspend or gap from before a never-sampling
+//     stretch reaches the slot of the sampler's record that ends the
+//     stretch: an open lock or suspend closes at that slot's start, and the
 //     sample after an os.power that ends it opens no gap. The agent's
 //     os.focus, which says focus is unknown each time the agent starts,
 //     doesn't count. WP-HL1 changed this reading, which first read every
