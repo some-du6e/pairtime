@@ -228,8 +228,9 @@ func (p *AgentInterrupt) check(c *checker) {
 
 // AgentQueue is agent.queue: a message typed while the agent was working.
 type AgentQueue struct {
-	TurnKey  string `json:"turn_key"`
-	LenChars int    `json:"len_chars"`
+	TurnKey string `json:"turn_key"`
+	// LenChars counts code points, as PromptSubmit.LenChars does (SM 1.2).
+	LenChars int `json:"len_chars"`
 }
 
 func (*AgentQueue) Kind() Kind        { return KindAgentQueue }
