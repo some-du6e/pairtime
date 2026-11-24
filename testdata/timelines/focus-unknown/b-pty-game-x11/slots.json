@@ -1,0 +1,293 @@
+{
+  "fixture": "focus-unknown/b-pty-game-x11",
+  "slots": [
+    {
+      "start": "2026-11-25T20:03:00Z",
+      "local": "20:03:00",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:03:15Z",
+      "local": "20:03:15",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:03:30Z",
+      "local": "20:03:30",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:03:45Z",
+      "local": "20:03:45",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:04:00Z",
+      "local": "20:04:00",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:04:15Z",
+      "local": "20:04:15",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:04:30Z",
+      "local": "20:04:30",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:04:45Z",
+      "local": "20:04:45",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:08:00Z",
+      "local": "20:08:00",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:08:15Z",
+      "local": "20:08:15",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:08:30Z",
+      "local": "20:08:30",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:08:45Z",
+      "local": "20:08:45",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:09:00Z",
+      "local": "20:09:00",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:09:15Z",
+      "local": "20:09:15",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:09:30Z",
+      "local": "20:09:30",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:09:45Z",
+      "local": "20:09:45",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:13:00Z",
+      "local": "20:13:00",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:13:15Z",
+      "local": "20:13:15",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:13:30Z",
+      "local": "20:13:30",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:13:45Z",
+      "local": "20:13:45",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:14:00Z",
+      "local": "20:14:00",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:14:15Z",
+      "local": "20:14:15",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:14:30Z",
+      "local": "20:14:30",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:14:45Z",
+      "local": "20:14:45",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:18:00Z",
+      "local": "20:18:00",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:18:15Z",
+      "local": "20:18:15",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:18:30Z",
+      "local": "20:18:30",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:18:45Z",
+      "local": "20:18:45",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:19:00Z",
+      "local": "20:19:00",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:19:15Z",
+      "local": "20:19:15",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:19:30Z",
+      "local": "20:19:30",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    },
+    {
+      "start": "2026-11-25T20:19:45Z",
+      "local": "20:19:45",
+      "focus": "browser",
+      "credited_s": 0,
+      "credit": {},
+      "levels": {},
+      "lbl": []
+    }
+  ]
+}

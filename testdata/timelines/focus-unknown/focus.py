@@ -313,6 +313,8 @@ class Replay:
         changes.sort(key=lambda c: (c[0], c[1]))
         tl.check(all(start <= c[0] < end for c in changes), "every fill and reset is inside the window")
         bucket = {s: [] for s in self.sessions}  # [fill time, seconds], oldest first
+        # What BUCKET_MAX_S evicted, kept aside under the same resets (SM 2.4).
+        self.evicted = {s: [] for s in self.sessions}
         self.credit, self.code, self.running, self.contested = {}, {}, set(), []
         self.peak = {s: Fraction(0) for s in self.sessions}
         i = 0
@@ -322,14 +324,22 @@ class Replay:
                 t, what, s, x = changes[i]
                 if what == 0:
                     bucket[s] = [[t, Fraction(R_TURN_BASE_S)]]
+                    self.evicted[s] = []
                 elif x > 0:
                     bucket[s].append([t, x])
-                total = sum(v for _, v in bucket[s])
-                tl.check(total <= BUCKET_MAX_S, f"session {s}'s bucket stays under its cap ({total})")
-                self.peak[s] = max(self.peak[s], total)
+                    over = sum(v for _, v in bucket[s]) - BUCKET_MAX_S
+                    while over > 0:
+                        take = min(over, bucket[s][0][1])
+                        self.evicted[s].append([bucket[s][0][0], take])
+                        bucket[s][0][1] -= take
+                        over -= take
+                        if bucket[s][0][1] == 0:
+                            bucket[s].pop(0)
+                self.peak[s] = max(self.peak[s], sum(v for _, v in bucket[s]))
                 i += 1
             for s in bucket:
-                tl.check(all(tau - t <= BUCKET_TTL_S * SECOND for t, _ in bucket[s]), "nothing expires")
+                tl.check(all(tau - t <= BUCKET_TTL_S * SECOND for t, _ in bucket[s] + self.evicted[s]),
+                         "nothing expires")
             if any(t.running(tau) for t in self.turns):
                 self.running.add(tau)
             self._second(tau, bucket)
@@ -347,10 +357,6 @@ class Replay:
             if (a.in_lead(tau) or a.in_trail(tau)) and on(a.project):
                 windows.append(a)
         for s, entries in bucket.items():
-            left = sum(v for _, v in entries)
-            if left == 0:
-                continue
-            tl.check(left >= 1, f"session {s} never has less than a second left to read ({left} at {tau})")
             p = self.sessions[s]["project"]
             near = [a for a in self.anchors if a.project == p and abs(a.t - tau) <= READ_HORIZON_S * SECOND]
             # The reading horizon's own end never decides a second here: an
@@ -358,6 +364,13 @@ class Replay:
             # so it is never the nearest either.
             tl.check(not near or any(abs(a.t - tau) < READ_HORIZON_S * SECOND for a in near),
                      f"no bucket qualifies at {tau} only through an anchor exactly 600 s away")
+            left = sum(v for _, v in entries)
+            if left == 0:
+                # A second that would drain an empty bucket drains what the
+                # cap evicted, as X.bucket_cap (SM 2.4). No case gets there.
+                tl.check(not (near and on(p) and self.evicted[s]), f"no second at {tau} is X.bucket_cap")
+                continue
+            tl.check(left >= 1, f"session {s} never has less than a second left to read ({left} at {tau})")
             if near and on(p):
                 buckets.append((s, p, near))
         projects = {a.project for a in windows} | {p for _, p, _ in buckets}
@@ -660,7 +673,7 @@ TOTAL_HEADER = "| Total | Seconds | Arithmetic |"
 NUM = r"\d{1,3}(?:,\d{3})+|\d+"
 CODE_ITEM = re.compile(r"(X\.[a-z_]+) ((?:" + NUM + r")(?: ?[+×] ?(?:" + NUM + r"))*)(?: ?= ?(" + NUM + r"))?")
 BUCKET_MINUTES = re.compile(r"(\d+) bucket minutes")
-NO_BUCKET = re.compile(r"\bno bucket\b")
+NO_BUCKET = re.compile(r"\bno bucket\b", re.IGNORECASE)
 
 
 def tables(path, header):
