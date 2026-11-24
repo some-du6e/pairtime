@@ -322,7 +322,7 @@ func (d Derived) split(from, to int64) (final, pending Derived) {
 	final.Slots, pending.Slots = splitBy(d.Slots, from, to, func(s Slot) int64 { return s.Start })
 	final.Turns, pending.Turns = splitBy(d.Turns, from, to, Turn.decided)
 	final.Anchors, pending.Anchors = splitBy(d.Anchors, from, to, func(a Anchor) int64 { return a.decided })
-	final.Returns, pending.Returns = splitBy(d.Returns, from, to, func(r Return) int64 { return r.RunStart })
+	final.Returns, pending.Returns = splitBy(d.Returns, from, to, func(r Return) int64 { return r.TailEnd })
 	final.Tracks, pending.Tracks = splitBy(d.Tracks, from, to, func(c TrackCall) int64 { return c.T })
 	final.Relays, pending.Relays = splitBy(d.Relays, from, to, func(r RelayRecord) int64 { return r.decided })
 	final.Flags, pending.Flags = splitBy(d.Flags, from, to, func(f Flag) int64 { return f.T })

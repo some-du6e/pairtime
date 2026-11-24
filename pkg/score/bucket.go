@@ -161,6 +161,38 @@ func (b *bucket) advance(r rules, t int64) {
 	b.expire(r, t)
 }
 
+// unreadAt returns the units of the prose the harness's own hooks and logs
+// put in b that b holds at t, once its ops up to t are applied, and that
+// its ops after t and up to until put in it: SM 2.1's unread prose at a
+// returned run's tail end (creditor.readingPart). It applies them to a
+// copy of b, so the credit pass's own state stays as it was: the relayed
+// reading of a slot's earlier seconds, which waits for the slot's end
+// (creditor.relayedRest), sees b without them. A side door's prose has a
+// source of its own, and a reset or a line fill is no prose, so neither
+// counts.
+func (b *bucket) unreadAt(r rules, t, until int64) int64 {
+	cp := bucket{ops: b.ops, next: b.next, capped: b.capped, entries: slices.Clone(b.entries),
+		held: slices.Clone(b.held), evicted: slices.Clone(b.evicted)}
+	cp.advance(r, t)
+	var u int64
+	for _, es := range [][]entry{cp.held, cp.entries} {
+		for _, e := range es {
+			if e.prose && e.src == (source{}) {
+				u = addUnits(u, e.units)
+			}
+		}
+	}
+	for _, op := range cp.ops[cp.next:] {
+		if op.t > until {
+			break
+		}
+		if op.prose && op.src == (source{}) {
+			u = addUnits(u, op.units)
+		}
+	}
+	return u
+}
+
 // evict moves the oldest over units of *from to the end of to, and returns
 // to. What it moves keeps its fill time, its prose mark and its source, so
 // local reading drains it from held as it would from the bucket. An over

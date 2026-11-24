@@ -184,6 +184,9 @@ type returned struct {
 	Return
 	end    int64 // the end of the silence: RunEnd, or later inside the slot after it
 	anchor int   // the index of the anchor that ended the run, or -1
+	// sessions are the sessions whose buckets its unread prose is counted
+	// in (deriver.readSessions).
+	sessions []string
 }
 
 // creditor applies SM 2.7 to every second of the derived slots.
@@ -228,6 +231,9 @@ type creditor struct {
 	bySession map[string][]int
 	attr      []attribution
 	returns   []returned
+	// unfilled indexes the first of returns whose reading part the pass
+	// hasn't filled in yet (readingPart).
+	unfilled int
 	// lookups are the browser and chat-app runs with credit in the
 	// LOOKUP_BRACKET_S before them, the ones that can become lookups. Step
 	// holds FinalBefore back for them until their end bracket is decided.
@@ -360,7 +366,7 @@ func (c *creditor) index() {
 		ids[a.ID] = i
 	}
 	for _, rt := range d.returns {
-		x := returned{Return: rt, end: rt.RunEnd, anchor: -1}
+		x := returned{Return: rt, end: rt.RunEnd, anchor: -1, sessions: d.readSessions(d.focus.at(rt.RunStart))}
 		if i, ok := ids[rt.Anchor]; ok {
 			x.anchor = i
 		}
@@ -530,6 +536,13 @@ func (c *creditor) anchorsAndBuckets() {
 			}
 		}
 		active = kept
+		// A returned run's reading part counts what its sessions' buckets
+		// hold at the first second at or after its tail's end, before that
+		// second credits anything (SM 2.1).
+		for c.unfilled < len(c.returns) && c.returns[c.unfilled].TailEnd <= t {
+			c.readingPart(c.unfilled, t)
+			c.unfilled++
+		}
 		if !c.localSecond(k, t, s, at, ws, active) && len(c.relays) > 0 {
 			c.relayedSecond(k, t, at, true)
 		}
@@ -537,6 +550,32 @@ func (c *creditor) anchorsAndBuckets() {
 			c.relayedRest(i, at)
 		}
 	}
+	for ; c.unfilled < len(c.returns); c.unfilled++ {
+		c.readingPart(c.unfilled, ceilSecond(c.returns[c.unfilled].TailEnd))
+	}
+}
+
+// readingPart fills in returned run j's reading part at t, the first whole
+// second at or after its tail's end, before t credits anything (SM 2.1).
+// UnreadWords is the prose the harness's own hooks and logs reported into
+// the run's sessions' buckets that they still hold at t, or that goes into
+// them later in the run (bucket.unreadAt), in words rounded to the
+// nearest, at most countMax. The reading part is its reading time, which
+// ReadUntil ends, at most at the run's end, and CreditMS is that plus
+// THINK_LEAD_S. The Return derive outputs gets the same
+// (docs/errata/2026-11-20-sm-6.1-return-unread-words.md).
+func (c *creditor) readingPart(j int, t int64) {
+	rt := &c.returns[j]
+	var u int64
+	for _, key := range rt.sessions {
+		if b := c.d.buckets[key]; b != nil {
+			u = addUnits(u, b.unreadAt(c.r, t, rt.RunEnd))
+		}
+	}
+	words := min(roundDiv(u, 60*c.r.diffLPM), countMax)
+	read := c.r.readingMS(words)
+	rt.UnreadWords, rt.ReadUntil, rt.CreditMS = words, min(rt.TailEnd+read, rt.RunEnd), read+c.r.thinkLead
+	c.d.returns[j] = rt.Return
 }
 
 // localSecond applies SM 2.7's candidates from this device's evidence to
