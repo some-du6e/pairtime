@@ -359,13 +359,6 @@ class Replay:
         for s, entries in bucket.items():
             p = self.sessions[s]["project"]
             near = [a for a in self.anchors if a.project == p and abs(a.t - tau) <= READ_HORIZON_S * SECOND]
-            # The reading horizon's own end never decides a second here: where
-            # a bucket could take the second, an anchor exactly 600 s away is
-            # never the only one that qualifies, so it is never the nearest
-            # either. Where an anchor window holds the second, the window wins
-            # whatever the bucket's horizon (SM 3.3 rule 2).
-            tl.check(windows or not near or any(abs(a.t - tau) < READ_HORIZON_S * SECOND for a in near),
-                     f"no bucket qualifies at {tau} only through an anchor exactly 600 s away")
             left = sum(v for _, v in entries)
             if left == 0:
                 # A second that would drain an empty bucket drains what the
@@ -373,6 +366,14 @@ class Replay:
                 tl.check(not (near and on(p) and self.evicted[s]), f"no second at {tau} is X.bucket_cap")
                 continue
             tl.check(left >= 1, f"session {s} never has less than a second left to read ({left} at {tau})")
+            # The reading horizon's own end never decides a second here: where
+            # a bucket with something in it could take the second, an anchor
+            # exactly 600 s away is never the only one that qualifies, so it
+            # is never the nearest either. Where an anchor window holds the
+            # second, the window wins whatever the bucket's horizon (SM 3.3
+            # rule 2).
+            tl.check(windows or not near or any(abs(a.t - tau) < READ_HORIZON_S * SECOND for a in near),
+                     f"no bucket qualifies at {tau} only through an anchor exactly 600 s away")
             if near and on(p):
                 buckets.append((s, p, near))
         projects = {a.project for a in windows} | {p for _, p, _ in buckets}
