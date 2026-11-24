@@ -318,21 +318,34 @@ func (h *Hub) open(wants []want, account, client string, resume map[string]posit
 		account: account,
 		client:  client,
 	}
+	day := dayNumber(lastPublication(now))
 	for i, wt := range wants {
 		t := h.topicLocked(wt.key, wt.account)
 		trimLocked(t, now, h.o.Window)
-		st.names[i], st.epochs[i], st.pos[i] = wt.name, t.epoch, t.seq
-		if resumed {
-			p, ok := resume[wt.name]
-			if !ok || p.epoch != t.epoch || p.seq > t.seq || p.seq < t.lost {
-				// Another epoch, a number the topic never reached, or a
-				// gap the ring no longer holds all of.
+		st.names[i] = wt.name
+		if isProfile(t) {
+			// A profile's place is the day of the last publication, the
+			// same for every viewer whatever the topic saw, so an id tells
+			// nobody whether others watch. A reconnect from another day
+			// refetches the page, and nothing is replayed (D-public-daily).
+			st.epochs[i], st.pos[i] = h.profileEpoch, day
+			if p, ok := resume[wt.name]; resumed && (!ok || p.epoch != h.profileEpoch || p.seq != day) {
 				st.resync = append(st.resync, wt.name)
-			} else {
-				st.pos[i] = p.seq
-				for _, ev := range t.ring {
-					if ev.seq > p.seq {
-						st.replay = append(st.replay, delivery{i: i, ev: ev})
+			}
+		} else {
+			st.epochs[i], st.pos[i] = t.epoch, t.seq
+			if resumed {
+				p, ok := resume[wt.name]
+				if !ok || p.epoch != t.epoch || p.seq > t.seq || p.seq < t.lost {
+					// Another epoch, a number the topic never reached, or
+					// a gap the ring no longer holds all of.
+					st.resync = append(st.resync, wt.name)
+				} else {
+					st.pos[i] = p.seq
+					for _, ev := range t.ring {
+						if ev.seq > p.seq {
+							st.replay = append(st.replay, delivery{i: i, ev: ev})
+						}
 					}
 				}
 			}

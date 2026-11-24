@@ -5,6 +5,8 @@ package stream
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"reflect"
 	"slices"
 	"testing"
@@ -19,16 +21,18 @@ import (
 // profileTopic is rowan's public profile, which fakeProfiles serves.
 const profileTopic = Path + "?topics=profile:@rowan"
 
-// watch runs the clock for d in steps of a minute, calling change, when
-// set, at the start of each minute with the time since the bubble began,
-// and returns when each profile event reached c and its data.
-func watch(t *testing.T, c *client, start time.Time, d time.Duration, change func(at time.Duration)) (when []time.Duration, data []string) {
+// watch runs the clock for d from start in steps of step, calling change,
+// when set, at the start of each step with the time since start, and
+// returns when each profile event reached c, since start, and its data.
+// A bubble's clock starts at 2000-01-01 00:00 UTC, so with a step that
+// divides an hour, a step ends on every 12:00 UTC.
+func watch(t *testing.T, c *client, start time.Time, d, step time.Duration, change func(at time.Duration)) (when []time.Duration, data []string) {
 	t.Helper()
 	for at := time.Since(start); at < d; at = time.Since(start) {
 		if change != nil {
 			change(at)
 		}
-		time.Sleep(time.Minute)
+		time.Sleep(step)
 		synctest.Wait()
 		for _, e := range events(c.read()) {
 			if e.event != "profile" {
@@ -41,107 +45,166 @@ func watch(t *testing.T, c *client, start time.Time, d time.Duration, change fun
 	return when, data
 }
 
-// day is a profile event's data: one day, the bubble's first, of s
-// seconds.
-func day(s string) string {
-	return `{"days":[{"date":"2000-01-01","credited_s":` + s + `}]}`
+// days is a profile event's data: each date with its seconds, as
+// "date=seconds".
+func days(t *testing.T, data string) []string {
+	t.Helper()
+	var v ProfileTotals
+	if err := json.Unmarshal([]byte(data), &v); err != nil {
+		t.Fatal(err)
+	}
+	out := []string{}
+	for _, d := range v.Days {
+		out = append(out, fmt.Sprintf("%s=%v", d.Date, d.CreditedS))
+	}
+	return out
 }
 
 func TestProfileTopic(t *testing.T) {
+	const (
+		day  = 24 * time.Hour
+		noon = 12 * time.Hour
+	)
 	tests := []struct {
 		name string
 		run  func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time)
 	}{
-		{name: "changes during an hour go out once, on the next hour, with the totals as of then", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
-			when, data := watch(t, c, start, 3*time.Hour, func(at time.Duration) {
-				switch at {
-				case 10 * time.Minute, 20 * time.Minute:
-					fp.version.Add(1)
-					h.Changed("a1")
-				case 50 * time.Minute:
-					h.Changed("a1")
+		{name: "a day's time shows at the first 12:00 UTC after its date ended in every zone, and never sooner", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
+			when, data := watch(t, c, start, 3*day, 10*time.Minute, func(at time.Duration) {
+				if at == 10*time.Minute {
+					fp.set("2000-01-01", 60)
 				}
 			})
-			if want := []time.Duration{time.Hour}; !reflect.DeepEqual(when, want) || !reflect.DeepEqual(data, []string{day("2")}) {
-				t.Errorf("profile events at %v with %q, want one at %v with %s", when, data, want, day("2"))
+			// 2000-01-01 ends at UTC-12 at 12:00 UTC on 2000-01-02.
+			if want := []time.Duration{day + noon}; !reflect.DeepEqual(when, want) {
+				t.Fatalf("profile events at %v, want %v", when, want)
+			}
+			if got := days(t, data[0]); !reflect.DeepEqual(got, []string{"2000-01-01=60"}) {
+				t.Errorf("the event shows %q, want 2000-01-01's 60 s", got)
 			}
 		}},
-		{name: "a public topic never emits twice within an hour, however often its account changes, and emits on each hour it changed", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
-			when, _ := watch(t, c, start, 4*time.Hour, func(time.Duration) {
-				fp.version.Add(1)
-				h.Changed("a1")
+		{name: "the topic emits only at 12:00 UTC, at most once a day, however often its account's time changes", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
+			seconds := 0.0
+			when, _ := watch(t, c, start, 3*day, 10*time.Minute, func(at time.Duration) {
+				if at%time.Hour == 0 {
+					seconds += 15
+					fp.set("1999-12-30", seconds)
+				}
 			})
-			want := []time.Duration{time.Hour, 2 * time.Hour, 3 * time.Hour, 4 * time.Hour}
+			want := []time.Duration{noon, day + noon, 2*day + noon}
 			if !reflect.DeepEqual(when, want) {
 				t.Errorf("profile events at %v, want %v", when, want)
 			}
 			for i := 1; i < len(when); i++ {
-				if when[i]-when[i-1] < time.Hour {
-					t.Errorf("events %v and %v are less than an hour apart", when[i-1], when[i])
+				if when[i]-when[i-1] < day {
+					t.Errorf("events %v and %v are less than a day apart", when[i-1], when[i])
 				}
 			}
 		}},
-		{name: "a change in an hour's last millisecond goes out on that hour, and not a moment before", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
-			time.Sleep(time.Hour - time.Millisecond)
-			fp.version.Store(7)
-			h.Changed("a1")
-			synctest.Wait()
-			if got := events(c.read()); len(got) != 0 {
-				t.Fatalf("an event before the hour: %+v", got)
-			}
-			time.Sleep(time.Millisecond)
-			synctest.Wait()
-			if got := events(c.read()); len(got) != 1 || got[0].data != day("7") {
-				t.Errorf("on the hour the stream got %+v, want %s", got, day("7"))
-			}
-		}},
-		{name: "a change that leaves the totals as the last event had them emits nothing", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
-			when, _ := watch(t, c, start, 3*time.Hour, func(at time.Duration) {
+		{name: "a date's later change, after it was shown, shows at the next 12:00 UTC", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
+			when, data := watch(t, c, start, 3*day, 10*time.Minute, func(at time.Duration) {
 				switch at {
 				case 10 * time.Minute:
-					fp.version.Store(5)
-					h.Changed("a1")
-				case 70 * time.Minute, 130 * time.Minute:
-					h.Changed("a1")
+					fp.set("2000-01-01", 60)
+				case day + 15*time.Hour:
+					fp.set("2000-01-01", 90)
 				}
 			})
-			if want := []time.Duration{time.Hour}; !reflect.DeepEqual(when, want) {
+			if want := []time.Duration{day + noon, 2*day + noon}; !reflect.DeepEqual(when, want) {
+				t.Fatalf("profile events at %v, want %v", when, want)
+			}
+			if got := days(t, data[1]); !reflect.DeepEqual(got, []string{"2000-01-01=90"}) {
+				t.Errorf("the second event shows %q, want 2000-01-01's 90 s", got)
+			}
+		}},
+		{name: "once shown, a page that stays the same makes no more events", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
+			// A date that ended everywhere before the bubble began, with
+			// its time first there now: the first publication shows it.
+			fp.set("1999-12-29", 120)
+			when, _ := watch(t, c, start, 3*day, 10*time.Minute, nil)
+			if want := []time.Duration{noon}; !reflect.DeepEqual(when, want) {
 				t.Errorf("profile events at %v, want only %v", when, want)
 			}
 		}},
-		{name: "another account's change doesn't touch the profile, and nothing changed means no read", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
-			when, _ := watch(t, c, start, 2*time.Hour, func(at time.Duration) {
-				if at == 10*time.Minute {
-					h.Changed("a2")
-				}
-			})
-			if len(when) != 0 || fp.reads.Load() != 0 {
-				t.Errorf("profile events at %v and %d reads, want none", when, fp.reads.Load())
-			}
-		}},
-		{name: "a profile that stops being public ends its streams on the next hour", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
-			time.Sleep(10 * time.Minute)
+		{name: "EndProfile ends the profile's streams at once, as a removal does", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
+			time.Sleep(10 * time.Hour)
+			synctest.Wait()
+			c.read()
 			fp.private.Store(true)
-			h.Changed("a1")
-			time.Sleep(50 * time.Minute)
+			h.EndProfile("a1")
 			synctest.Wait()
 			if !c.ended() || h.Streams() != 0 {
-				t.Errorf("after the profile went private its stream ended: %v, with %d streams open", c.ended(), h.Streams())
+				t.Errorf("after EndProfile the stream ended: %v, with %d streams open", c.ended(), h.Streams())
 			}
+		}},
+		{name: "a profile that turned private without EndProfile ends its streams at the next 12:00 UTC", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
+			time.Sleep(10 * time.Hour)
+			synctest.Wait()
+			c.read()
+			fp.private.Store(true)
+			time.Sleep(2*time.Hour - time.Second)
+			synctest.Wait()
+			c.read()
+			if c.ended() {
+				t.Fatal("the stream ended before 12:00 UTC")
+			}
+			time.Sleep(time.Second)
+			synctest.Wait()
+			if !c.ended() {
+				t.Error("at 12:00 UTC the private profile's stream is still open")
+			}
+		}},
+		{name: "a profile's id is the same for every viewer, whether or not anyone watched before", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
+			time.Sleep(13 * time.Hour)
+			synctest.Wait()
+			c.read()
+			// c has watched since the start; a second viewer comes now,
+			// and a third after every stream left and the topic went.
+			second := open(t, h, profileTopic, nil)
+			id2 := lastID(second.read())
+			c.close()
+			second.close()
+			time.Sleep(2 * DefaultWindow)
+			synctest.Wait()
 			h.mu.Lock()
 			_, kept := h.topics[profileKey+"a1"]
 			h.mu.Unlock()
 			if kept {
-				t.Error("the private profile's topic is still there")
+				t.Fatal("the topic nobody watched for two windows is still there")
+			}
+			third := open(t, h, profileTopic, nil)
+			id3 := lastID(third.read())
+			if id2 != id3 {
+				t.Errorf("a viewer of a watched profile got id %q and one of an unwatched one %q, want the same", id2, id3)
 			}
 		}},
-		{name: "its events carry daily totals alone: no project, no account and nothing finer than a day", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
-			_, data := watch(t, c, start, time.Hour, func(at time.Duration) {
-				if at == 0 {
-					fp.version.Store(60)
-					h.Changed("a1")
-				}
-			})
+		{name: "a reconnect the same day needs nothing, and one after a 12:00 UTC refetches with resync", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
+			time.Sleep(13 * time.Hour)
+			synctest.Wait()
+			c.read()
+			// A stream opened after the day's publication has it as its
+			// place.
+			first := open(t, h, profileTopic, nil)
+			last := lastID(first.read())
+			first.close()
+			reconnect := func() []sse {
+				header := http.Header{"Last-Event-Id": {last}}
+				r := open(t, h, profileTopic, header)
+				defer r.close()
+				return events(r.read())
+			}
+			time.Sleep(time.Hour)
+			if got := reconnect(); len(got) != 0 {
+				t.Errorf("a reconnect the same day got %+v, want nothing", got)
+			}
+			time.Sleep(day)
+			if got := reconnect(); len(got) != 1 || got[0].event != "resync" {
+				t.Errorf("a reconnect a day later got %+v, want resync", got)
+			}
+		}},
+		{name: "an event carries daily totals alone: no project, no account and nothing finer than a day", run: func(t *testing.T, h *Hub, fp *fakeProfiles, c *client, start time.Time) {
+			fp.set("2000-01-01", 45)
+			_, data := watch(t, c, start, 2*day, 10*time.Minute, nil)
 			if len(data) != 1 {
 				t.Fatalf("got %d events, want 1", len(data))
 			}
@@ -181,6 +244,32 @@ func TestProfileTopic(t *testing.T) {
 	}
 }
 
+func TestPublication(t *testing.T) {
+	tests := []struct {
+		name  string
+		at    time.Time
+		last  time.Time
+		ended string
+	}{
+		{name: "before 12:00 UTC the last publication was the day before's", at: time.Date(2026, 11, 25, 11, 59, 59, 0, time.UTC),
+			last: time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC), ended: "2026-11-23"},
+		{name: "at 12:00 UTC the day's publication is the last, and yesterday's date has ended in every zone", at: time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC),
+			last: time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC), ended: "2026-11-24"},
+		{name: "another zone's clock reads the same instant", at: time.Date(2026, 11, 26, 1, 30, 0, 0, time.FixedZone("UTC+14", 14*3600)),
+			last: time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC), ended: "2026-11-23"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lastPublication(tt.at); !got.Equal(tt.last) {
+				t.Errorf("lastPublication(%v) = %v, want %v", tt.at, got, tt.last)
+			}
+			if got := endedEverywhere(tt.at); got != tt.ended {
+				t.Errorf("endedEverywhere(%v) = %s, want %s", tt.at, got, tt.ended)
+			}
+		})
+	}
+}
+
 // rollupRow is one rollups_daily row, in milliseconds.
 type rollupRow struct {
 	project, day, kind       string
@@ -189,33 +278,36 @@ type rollupRow struct {
 }
 
 func TestPublicTotals(t *testing.T) {
-	// It is the 24th in the profile's zone, UTC+14, and the 23rd in UTC.
-	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	// The publication of 2026-11-25, when 2026-11-24 has just ended in
+	// every zone. The profile is in UTC+14, where the 25th ended hours ago,
+	// which changes nothing.
+	at := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
 	const zone = "Pacific/Kiritimati"
 	tests := []struct {
 		name string
+		at   time.Time
 		rows []rollupRow
 		want []ProfileDay
 	}{
-		{name: "final time at levels A and B counts, by the profile's local day",
+		{name: "final time at levels A and B counts, by local day", at: at,
 			rows: []rollupRow{{project: "p1", day: "2026-11-24", kind: "prompting", final: [3]int64{60000, 30000, 0}}},
 			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 90}}},
-		{name: "level C never reaches a public total",
+		{name: "level C never reaches a public total", at: at,
 			rows: []rollupRow{{project: "p1", day: "2026-11-24", kind: "prompting", final: [3]int64{0, 0, 45000}}},
 			want: []ProfileDay{}},
-		{name: "pending minutes don't show on a public page",
+		{name: "pending minutes don't show on a public page", at: at,
 			rows: []rollupRow{{project: "p1", day: "2026-11-24", kind: "prompting", pending: [3]int64{60000, 15000, 0}}},
 			want: []ProfileDay{}},
-		{name: "the agent's time on its own doesn't count",
+		{name: "the agent's time on its own doesn't count", at: at,
 			rows: []rollupRow{{project: "p1", day: "2026-11-24", kind: "", agentFinal: 120000, agentPending: 30000}},
 			want: []ProfileDay{}},
-		{name: "a day's projects and kinds add up to one total, which names none of them",
+		{name: "a day's projects and kinds add up to one total, which names none of them", at: at,
 			rows: []rollupRow{
 				{project: "p1", day: "2026-11-24", kind: "prompting", final: [3]int64{10000, 0, 0}},
 				{project: "p2", day: "2026-11-24", kind: "testing", final: [3]int64{0, 20500, 7000}},
 			},
 			want: []ProfileDay{{Date: "2026-11-24", CreditedS: 30.5}}},
-		{name: "the days are the last 30 in the profile's zone, oldest first",
+		{name: "the dates are the 30 up to the newest ended in every zone, oldest first, whatever the profile's own zone", at: at,
 			rows: []rollupRow{
 				{project: "p1", day: "2026-11-24", kind: "testing", final: [3]int64{1000, 0, 0}},
 				{project: "p1", day: "2026-10-26", kind: "testing", final: [3]int64{2000, 0, 0}},
@@ -223,6 +315,12 @@ func TestPublicTotals(t *testing.T) {
 				{project: "p1", day: "2026-11-25", kind: "testing", final: [3]int64{4000, 0, 0}},
 			},
 			want: []ProfileDay{{Date: "2026-10-26", CreditedS: 2}, {Date: "2026-11-24", CreditedS: 1}}},
+		{name: "a second before the publication, its newest date hasn't ended in every zone and doesn't show", at: at.Add(-time.Second),
+			rows: []rollupRow{
+				{project: "p1", day: "2026-11-24", kind: "testing", final: [3]int64{1000, 0, 0}},
+				{project: "p1", day: "2026-11-23", kind: "testing", final: [3]int64{5000, 0, 0}},
+			},
+			want: []ProfileDay{{Date: "2026-11-23", CreditedS: 5}}},
 	}
 	for _, engine := range storetest.Engines() {
 		for _, tt := range tests {
@@ -236,7 +334,7 @@ VALUES ('u1', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`, r.project, r.day, 
 						t.Fatal(err)
 					}
 				}
-				got, err := PublicTotals(context.Background(), db.Read, "u1", now)
+				got, err := PublicTotals(context.Background(), db.Read, "u1", tt.at)
 				if err != nil {
 					t.Fatal(err)
 				}

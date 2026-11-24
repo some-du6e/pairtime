@@ -25,9 +25,12 @@
 //
 // profile:@<name> topics are anonymous. They carry only what DESIGN 8.3
 // gives the public profile: daily totals of final minutes at level A or B,
-// with no project and no time of day (PublicTotals; DESIGN 6.2 D1, D11),
-// and at most one event an hour, on the hour (profile.go). Profiles is how
-// a name finds its account; until WP-SV9 gives pairtimed one, every
+// with no project and no time of day (PublicTotals; DESIGN 6.2 D1, D11).
+// Like the public page they change once a day, at 12:00 UTC, show only
+// dates that have ended in every time zone, and take a removal at once
+// (D-public-daily, profile.go). Their ids depend on the clock alone, so a
+// viewer learns nothing of other viewers from them. Profiles is how a
+// name finds its account; until WP-SV9 gives pairtimed one, every
 // profile: topic is unknown.
 //
 // SP 6.4's project: and global: topics, and its commit events, which wait
@@ -150,7 +153,7 @@ const MaxTopics = 8
 // ringMax and ringBytes are the most events, and the most bytes of them,
 // a topic keeps, whatever their age, which bounds a busy topic's memory. A
 // reconnect that needs one it dropped gets resync. A user topic publishes
-// at most one event a Gap, and a profile topic one an hour.
+// at most one event a Gap, and a profile topic one a day.
 const (
 	ringMax   = 32
 	ringBytes = 32 << 10
@@ -210,6 +213,9 @@ type Hub struct {
 	// ord numbers every event the hub publishes, in order, so a replay
 	// of several topics' gaps keeps that order. It never leaves the hub.
 	ord uint64
+	// profileEpoch is every profile topic's epoch, one for the process,
+	// so a profile's id says nothing of whether others watch it.
+	profileEpoch string
 
 	// done is closed by Close, which cancels ctx, the context of the
 	// hub's reads; wg waits for the hub's own goroutines.
@@ -225,7 +231,7 @@ type Hub struct {
 const maxReads = 4
 
 // New returns a Hub and starts its goroutines: the sweep that drops old
-// events and idle topics, and the hourly profile pass. Close stops them.
+// events and idle topics, and the daily profile pass. Close stops them.
 func New(o Options) *Hub {
 	if o.Window <= 0 {
 		o.Window = DefaultWindow
@@ -266,11 +272,12 @@ func New(o Options) *Hub {
 		reads:      make(chan struct{}, maxReads),
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
+	h.profileEpoch = newEpoch()
 	h.wg.Add(1)
 	go h.sweep()
 	if o.Profiles != nil {
 		h.wg.Add(1)
-		go h.hourly()
+		go h.daily()
 	}
 	return h
 }
@@ -322,9 +329,8 @@ type topic struct {
 	subs map[*sub]int
 	// idle is when the last stream left, zero while one is open.
 	idle time.Time
-	// owner is a user topic's publishing state, profile a profile topic's.
-	owner   *ownerState
-	profile *profileState
+	// owner is a user topic's publishing state, nil on a profile topic.
+	owner *ownerState
 }
 
 // event is one published event: its number in its topic, its place
@@ -373,11 +379,8 @@ func (h *Hub) topicLocked(key, account string) *topic {
 	// A topic is made for a stream that subscribes at once, which clears
 	// idle; until then it counts as just left.
 	t = &topic{key: key, account: account, epoch: newEpoch(), subs: make(map[*sub]int), idle: time.Now()}
-	switch {
-	case strings.HasPrefix(key, userKey):
+	if strings.HasPrefix(key, userKey) {
 		t.owner = &ownerState{}
-	case strings.HasPrefix(key, profileKey):
-		t.profile = &profileState{}
 	}
 	h.topics[key] = t
 	return t
@@ -393,10 +396,19 @@ func frame(name string, data []byte) []byte {
 	return append(b, "\n\n"...)
 }
 
-// publishLocked adds an event to t's ring and hands it to t's streams. A
-// stream whose buffer is full is ended.
+// isProfile reports whether t is a profile topic.
+func isProfile(t *topic) bool { return strings.HasPrefix(t.key, profileKey) }
+
+// publishLocked adds t's next event to its ring and hands it to t's
+// streams. A stream whose buffer is full is ended.
 func (h *Hub) publishLocked(t *topic, name string, data []byte, now time.Time) {
-	t.seq++
+	h.publishAtLocked(t, t.seq+1, name, data, now)
+}
+
+// publishAtLocked publishes an event numbered seq, above t's last: a
+// profile topic numbers its events by their publication's day.
+func (h *Hub) publishAtLocked(t *topic, seq uint64, name string, data []byte, now time.Time) {
+	t.seq = seq
 	h.ord++
 	ev := &event{seq: t.seq, ord: h.ord, at: now, frame: frame(name, data)}
 	t.ring = append(t.ring, ev)

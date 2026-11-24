@@ -3,6 +3,7 @@
 package stream
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,9 +11,12 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/some-du6e/pairtime/internal/server/dashboard"
 )
 
 // meTopic is the stream every test opens for an owner.
@@ -53,11 +57,11 @@ func TestStart(t *testing.T) {
 		name  string
 		check func(t *testing.T, c *client, text string)
 	}{
-		{name: "a stream answers 200 as text/event-stream with no-cache and no-transform, so no proxy holds it", check: func(t *testing.T, c *client, _ string) {
+		{name: "a stream answers 200 as text/event-stream with no-cache, no-store and no-transform, so no proxy holds or keeps it", check: func(t *testing.T, c *client, _ string) {
 			if c.code != http.StatusOK {
 				t.Errorf("status %d, want 200", c.code)
 			}
-			for k, want := range map[string]string{"Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff"} {
+			for k, want := range map[string]string{"Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-store, no-transform", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff"} {
 				if got := c.header.Get(k); got != want {
 					t.Errorf("%s = %q, want %q", k, got, want)
 				}
@@ -271,52 +275,61 @@ func TestResume(t *testing.T) {
 	}
 }
 
-// TestResumeTopics checks that one id resumes every topic of a stream.
+// TestResumeTopics checks that one id resumes every topic of a stream: the
+// owner's from its ring, and a profile by the day of its publication
+// (D-public-daily).
 func TestResumeTopics(t *testing.T) {
 	tests := []struct {
 		name string
-		// publish is the events published while the stream was away, as
-		// "u" for a1's own topic and "p" for its profile's.
-		publish string
-		replay  []string
+		// away is when, since the bubble began at 00:00 UTC, the stream
+		// drops, and back when it reconnects; u is how many owner events
+		// go out between.
+		away, back time.Duration
+		u          int
+		replay     []string
+		resync     []string
 	}{
-		{name: "the gaps of both topics replay in the order they were published", publish: "pup", replay: []string{"p1", "u2", "p2"}},
-		{name: "a topic with no gap replays nothing while the other replays its own", publish: "uu", replay: []string{"u2", "u3"}},
+		{name: "the owner's gap replays while the profile, on the same day, needs nothing",
+			away: 13 * time.Hour, back: 13*time.Hour + time.Minute, u: 2, replay: []string{"u2", "u3"}},
+		{name: "across a 12:00 UTC the profile resyncs while the owner's gap still replays",
+			away: 12*time.Hour - time.Minute, back: 12*time.Hour + time.Minute, u: 1, replay: []string{"u2"}, resync: []string{"profile:@rowan"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				h := New(Options{Account: testAccount, Profiles: &fakeProfiles{}})
 				defer h.Close()
+				start := time.Now()
 				const target = Path + "?topics=user:me,profile:@rowan"
+				time.Sleep(tt.away - time.Minute)
 				c := open(t, h, target, as("a1"))
 				c.read()
 				publishTo(h, userKey+"a1", "a1", "credited", `"u1"`)
+				time.Sleep(time.Minute)
 				synctest.Wait()
 				last := lastID(c.read())
 				c.close()
-				n := map[byte]int{'u': 1, 'p': 0}
-				for i := range len(tt.publish) {
-					kind := tt.publish[i]
-					n[kind]++
-					key, name := userKey+"a1", "credited"
-					if kind == 'p' {
-						key, name = profileKey+"a1", "profile"
-					}
-					publishTo(h, key, "a1", name, `"`+string(kind)+strconv.Itoa(n[kind])+`"`)
+				for i := range tt.u {
+					publishTo(h, userKey+"a1", "a1", "credited", `"u`+strconv.Itoa(i+2)+`"`)
 				}
+				time.Sleep(tt.back - time.Since(start))
 				header := as("a1")
 				header.Set("Last-Event-ID", last)
 				c = open(t, h, target, header)
-				var replay []string
+				var replay, resync []string
 				for _, e := range events(c.read()) {
 					if e.event == "resync" {
-						t.Errorf("resync of %s, want none", e.data)
+						var r Resync
+						if err := json.Unmarshal([]byte(e.data), &r); err != nil {
+							t.Fatal(err)
+						}
+						resync = append(resync, r.Topics...)
+						continue
 					}
 					replay = append(replay, strings.Trim(e.data, `"`))
 				}
-				if !reflect.DeepEqual(replay, tt.replay) {
-					t.Errorf("replayed %q, want %q", replay, tt.replay)
+				if !reflect.DeepEqual(replay, tt.replay) || !reflect.DeepEqual(resync, tt.resync) {
+					t.Errorf("replayed %q and resynced %q, want %q and %q", replay, resync, tt.replay, tt.resync)
 				}
 			})
 		})
@@ -410,6 +423,61 @@ func TestWriteDeadline(t *testing.T) {
 	}
 }
 
+func TestRecheck(t *testing.T) {
+	tests := []struct {
+		name   string
+		target string
+		// first is the account the session names when the stream opens,
+		// and then the one it names from 30 s on, "" for none.
+		first, then string
+		ended       bool
+	}{
+		{name: "a stream whose session signed out ends at its next check, a minute after it opened", target: meTopic, first: "a1", then: "", ended: true},
+		{name: "a stream whose session now names another account ends at its next check", target: meTopic, first: "a1", then: "a2", ended: true},
+		{name: "a stream whose session still names its account stays open", target: meTopic, first: "a1", then: "a1"},
+		{name: "an anonymous stream has no session, and nobody asks about one", target: Path + "?topics=profile:@rowan"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var who atomic.Pointer[string]
+				who.Store(&tt.first)
+				var asked atomic.Int32
+				account := func(*http.Request) (string, error) {
+					asked.Add(1)
+					if id := *who.Load(); id != "" {
+						return id, nil
+					}
+					return "", dashboard.ErrNotSignedIn
+				}
+				h := New(Options{Account: account, Profiles: &fakeProfiles{}})
+				defer h.Close()
+				c := open(t, h, tt.target, nil)
+				c.read()
+				if c.code != 200 {
+					t.Fatalf("the stream got %d", c.code)
+				}
+				opened := asked.Load()
+				time.Sleep(30 * time.Second)
+				who.Store(&tt.then)
+				time.Sleep(30*time.Second - time.Millisecond)
+				synctest.Wait()
+				if c.ended() {
+					t.Fatal("the stream ended before its session was asked again")
+				}
+				time.Sleep(time.Millisecond)
+				synctest.Wait()
+				if c.ended() != tt.ended {
+					t.Errorf("a minute on, the stream ended: %v, want %v", c.ended(), tt.ended)
+				}
+				if tt.first == "" && asked.Load() != opened {
+					t.Errorf("the anonymous stream's session was asked about %d more times", asked.Load()-opened)
+				}
+			})
+		})
+	}
+}
+
 func TestRefusals(t *testing.T) {
 	broken := func(*http.Request) (string, error) { return "", errors.New("the session table is locked") }
 	private := &fakeProfiles{}
@@ -478,7 +546,11 @@ func TestRefusals(t *testing.T) {
 			if method == "" {
 				method = http.MethodGet
 			}
-			r := httptest.NewRequest(method, tt.target, nil)
+			// A stream that opened by mistake ends with the context, and
+			// the case fails on its 200 instead of hanging.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			r := httptest.NewRequest(method, tt.target, nil).WithContext(ctx)
 			for k, vs := range tt.header {
 				r.Header[k] = vs
 			}
@@ -539,21 +611,30 @@ func TestCaps(t *testing.T) {
 				{meTopic, from("a1", "192.0.2.3"), 429, false},
 				{meTopic, from("a2", "192.0.2.1"), 200, false},
 			}},
-		{name: "a client address past MaxPerClient gets 429, counting its signed-in and anonymous streams, while another address opens one",
+		{name: "anonymous streams from one address past MaxPerClient get 429, while owners behind that address still open theirs",
 			opts: Options{MaxPerClient: 2},
 			tries: []try{
-				{meTopic, from("a1", "192.0.2.1"), 200, false},
+				{profile, from("", "192.0.2.1"), 200, false},
 				{profile, from("", "192.0.2.1"), 200, false},
 				{profile, from("", "192.0.2.1"), 429, false},
-				{meTopic, from("a2", "192.0.2.1"), 429, false},
+				{meTopic, from("a1", "192.0.2.1"), 200, false},
+				{meTopic, from("a2", "192.0.2.1"), 200, false},
 				{profile, from("", "198.51.100.7"), 200, false},
 			}},
-		{name: "IPv6 addresses count by their /64",
+		{name: "anonymous streams past MaxAnonymous get 429, whatever their addresses, while an owner still opens one",
+			opts: Options{MaxAnonymous: 2},
+			tries: []try{
+				{profile, from("", "192.0.2.1"), 200, false},
+				{profile, from("", "198.51.100.7"), 200, false},
+				{profile, from("", "203.0.113.9"), 429, false},
+				{meTopic, from("a1", "203.0.113.9"), 200, false},
+			}},
+		{name: "anonymous IPv6 clients count by their /48",
 			opts: Options{MaxPerClient: 1},
 			tries: []try{
 				{profile, from("", "2001:db8::1"), 200, false},
-				{profile, from("", "2001:db8::2"), 429, false},
-				{profile, from("", "2001:db8:0:1::1"), 200, false},
+				{profile, from("", "2001:db8:0:1::1"), 429, false},
+				{profile, from("", "2001:db8:1::1"), 200, false},
 			}},
 		{name: "past MaxStreams every new stream gets 429, whoever asks",
 			opts: Options{MaxStreams: 2},
@@ -561,9 +642,10 @@ func TestCaps(t *testing.T) {
 				{meTopic, from("a1", "192.0.2.1"), 200, false},
 				{profile, from("", "198.51.100.7"), 200, false},
 				{meTopic, from("a2", "203.0.113.9"), 429, false},
+				{profile, from("", "203.0.113.9"), 429, false},
 			}},
 		{name: "a stream that ends frees its place",
-			opts: Options{MaxPerAccount: 1, MaxPerClient: 1, MaxStreams: 1},
+			opts: Options{MaxPerAccount: 1, MaxStreams: 1},
 			tries: []try{
 				{meTopic, from("a1", "192.0.2.1"), 200, true},
 				{meTopic, from("a1", "192.0.2.1"), 200, false},
@@ -579,12 +661,17 @@ func TestCaps(t *testing.T) {
 				defer h.Close()
 				for i, tr := range tt.tries {
 					if tr.status == http.StatusTooManyRequests {
-						r := httptest.NewRequest(http.MethodGet, tr.target, nil)
+						// A stream that opened by mistake ends with the
+						// context, a fake second on, and the case fails
+						// instead of hanging.
+						ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+						r := httptest.NewRequest(http.MethodGet, tr.target, nil).WithContext(ctx)
 						for k, vs := range tr.header {
 							r.Header[k] = vs
 						}
 						rec := httptest.NewRecorder()
 						h.ServeHTTP(rec, r)
+						cancel()
 						if rec.Code != 429 || rec.Header().Get("Retry-After") != "30" || !strings.Contains(rec.Body.String(), CodeTooManyStreams) {
 							t.Errorf("try %d got %d, Retry-After %q, %s; want 429 too_many_streams after 30 s", i, rec.Code, rec.Header().Get("Retry-After"), rec.Body)
 						}

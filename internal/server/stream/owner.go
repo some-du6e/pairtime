@@ -119,9 +119,9 @@ func creditedOf(v dashboard.View, prev *Credited) Credited {
 // Changed tells the hub that a transaction that changed account's rollups
 // has committed. It never blocks: a user topic with a stream on it, or
 // one a stream left less than Window ago, gets a credited event from a
-// fresh View at once, or Gap after the last one began, and a profile
-// topic of the account is marked for the next hour. An account with no
-// such topic costs nothing.
+// fresh View at once, or Gap after the last one began. An account with no
+// such topic costs nothing. Profile topics need no word: they look at
+// every profile they carry at each 12:00 UTC (profile.go).
 func (h *Hub) Changed(account string) {
 	if account == "" {
 		return
@@ -140,9 +140,6 @@ func (h *Hub) Changed(account string) {
 			h.wg.Add(1)
 			go h.publishOwner(t, time.Until(st.last.Add(h.o.Gap)))
 		}
-	}
-	if t := h.topics[profileKey+account]; t != nil && !h.abandonedLocked(t, now) {
-		t.profile.dirty = true
 	}
 }
 

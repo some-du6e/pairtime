@@ -22,8 +22,8 @@ func TestOverHTTP(t *testing.T) {
 		name string
 		run  func(t *testing.T, h *Hub, resp *http.Response, lines *bufio.Reader)
 	}{
-		{name: "the answer is 200 text/event-stream with no-cache and no-transform, chunked", run: func(t *testing.T, _ *Hub, resp *http.Response, _ *bufio.Reader) {
-			if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "text/event-stream" || resp.Header.Get("Cache-Control") != "no-cache, no-transform" {
+		{name: "the answer is 200 text/event-stream with no-cache, no-store and no-transform, chunked", run: func(t *testing.T, _ *Hub, resp *http.Response, _ *bufio.Reader) {
+			if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "text/event-stream" || resp.Header.Get("Cache-Control") != "no-cache, no-store, no-transform" {
 				t.Errorf("got %d, Content-Type %q, Cache-Control %q", resp.StatusCode, resp.Header.Get("Content-Type"), resp.Header.Get("Cache-Control"))
 			}
 			if len(resp.TransferEncoding) != 1 || resp.TransferEncoding[0] != "chunked" || resp.ContentLength != -1 {

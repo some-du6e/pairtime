@@ -6,7 +6,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
@@ -244,12 +246,31 @@ func (s *viewSource) View(_ context.Context, account string, now time.Time) (das
 }
 
 // fakeProfiles serves one public profile of account "a1", named "rowan"
-// and "ro", whose totals hold one day of version seconds. While private is
-// set, the profile isn't public.
+// and "ro". It keeps each date's credited seconds as the test sets them,
+// with when, and its Totals for a publication gives every date ended in
+// every zone by then with the seconds it had at the publication, as WP-SV9's
+// page will show them. While private is set, the profile isn't public.
 type fakeProfiles struct {
-	version atomic.Int64
+	mu      sync.Mutex
+	history map[string][]credit
 	private atomic.Bool
 	reads   atomic.Int32
+}
+
+// credit is a date's credited seconds from a time on.
+type credit struct {
+	at time.Time
+	s  float64
+}
+
+// set gives date s credited seconds from now on.
+func (f *fakeProfiles) set(date string, s float64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.history == nil {
+		f.history = make(map[string][]credit)
+	}
+	f.history[date] = append(f.history[date], credit{at: time.Now(), s: s})
 }
 
 func (f *fakeProfiles) Resolve(_ context.Context, name string) (string, bool, error) {
@@ -259,10 +280,28 @@ func (f *fakeProfiles) Resolve(_ context.Context, name string) (string, bool, er
 	return "a1", true, nil
 }
 
-func (f *fakeProfiles) Totals(_ context.Context, account string, now time.Time) (ProfileTotals, bool, error) {
+func (f *fakeProfiles) Totals(_ context.Context, account string, p time.Time) (ProfileTotals, bool, error) {
 	f.reads.Add(1)
 	if account != "a1" || f.private.Load() {
 		return ProfileTotals{}, false, nil
 	}
-	return ProfileTotals{Days: []ProfileDay{{Date: now.UTC().Format(dashboard.DateLayout), CreditedS: float64(f.version.Load())}}}, true, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := ProfileTotals{Days: []ProfileDay{}}
+	for date, history := range f.history {
+		if date > endedEverywhere(p) {
+			continue
+		}
+		s := 0.0
+		for _, c := range history {
+			if !c.at.After(p) {
+				s = c.s
+			}
+		}
+		if s > 0 {
+			out.Days = append(out.Days, ProfileDay{Date: date, CreditedS: s})
+		}
+	}
+	slices.SortFunc(out.Days, func(a, b ProfileDay) int { return strings.Compare(a.Date, b.Date) })
+	return out, true, nil
 }
