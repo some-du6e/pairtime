@@ -276,6 +276,10 @@ type Loop struct {
 	// write that failed, until a save stores everything, and how far
 	// FinalBefore lags the newest record, while it does (watch).
 	stuckMsg, gapMsg, readMsg, faultMsg, stallMsg string
+	// undecided is the last Step's Output.Undecided: the slot FinalBefore
+	// waits at because nothing decides its presence yet, 0 for none, which
+	// watch's stall note names.
+	undecided int64
 }
 
 // New returns a loop that hasn't started.
@@ -810,6 +814,7 @@ func (l *Loop) step(b uint64) {
 		l.halt(fmt.Errorf("batch %d: %w", b, err))
 		return
 	}
+	l.undecided = out.Undecided
 	for _, e := range recs {
 		if p, ok := e.Data.(*event.OSPower); ok && (p.Op == event.PowerLock || p.Op == event.PowerSuspend) {
 			l.lastBreak = max(l.lastBreak, e.T)

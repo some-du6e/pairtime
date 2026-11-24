@@ -342,7 +342,7 @@ func TestCarryReach(t *testing.T) {
 			append([]event.Event{cut}, woken(again)...), last + 4*hourMS, false, false},
 		{"an unlock that starts the sampler again after the cut, with the sample the agent takes at its time, keeps the gap from before the stretch out of that slot",
 			append([]event.Event{cut, rec(again, &event.OSPower{Op: event.PowerUnlock})}, woken(again)...), last + 2*hourMS, false, false},
-		{"a resume with no sample after it, and a stamped record more than BUCKET_TTL_S after the last sample but not after the resume, keep the carried sample, whose gap to the sampler's next record makes the stretch asleep",
+		{"a suspend and a resume with no sample after either, and a stamped record more than BUCKET_TTL_S after the last sample but not after the resume, keep the carried sample, and the next sample opens no gap from it, since the sampler ran (D-sampleless-power)",
 			append([]event.Event{rec(last+hourMS, &event.OSPower{Op: event.PowerSuspend}),
 				rec(last+70*minuteMS, &event.OSPower{Op: event.PowerResume}), cut}, woken(again)...),
 			again - 15*minuteMS, true, false},
@@ -507,6 +507,78 @@ func TestOlderPlaceCarry(t *testing.T) {
 			compare(t, r.stored(from, to), want)
 			if st := r.rescore(); st.FinalBefore != fb {
 				t.Errorf("the loop's FinalBefore is %s, and one Step's %s", time.UnixMilli(st.FinalBefore).UTC(), time.UnixMilli(fb).UTC())
+			}
+		})
+	}
+}
+
+// TestSamplelessPowerLoop checks the loop against one Step over an evening
+// whose sampler loses its idle source an hour before a suspend, so the
+// suspend and the morning's resume come with no sample, as the agent
+// writes them when its idle read fails, and a hooked turn runs on after the
+// resume for five hours (D-sampleless-power, #298). Before #298 pkg/score
+// derived no slot after the evening's last sample while FinalBefore moved
+// on with the morning's hooks, in one Step and in the loop alike, so
+// comparing the two passed with the morning's agent time gone. Each case
+// checks that time too.
+func TestSamplelessPowerLoop(t *testing.T) {
+	cases := []struct {
+		name string
+		// wake is how long after the evening's last sample the machine
+		// resumes. It suspends an hour after that sample.
+		wake int64
+	}{
+		{"after a night's suspend, longer than BUCKET_TTL_S, the loop gives one Step's minutes, and the morning's carry their agent time", 9 * hourMS},
+		{"after a half-hour nap, the loop gives one Step's minutes, and the morning's carry their agent time", 90 * minuteMS},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			first := hookTurn(t, hookAt, hourTools())
+			last := first[len(first)-1].T
+			n := 0
+			power := func(ts int64, op event.PowerOp) event.Event {
+				n++
+				return sampleAt(first, ts, fmt.Sprintf("01a1fb1e-5318-78a1-a7f6-%012x", n), &event.OSPower{Op: op})
+			}
+			resume := last + c.wake
+			all := append(slices.Clone(first), power(last+hourMS, event.PowerSuspend), power(resume, event.PowerResume))
+			var tools []int64
+			for m := int64(10); m <= 300; m += 10 {
+				tools = append(tools, m*minuteMS)
+			}
+			for _, e := range rekeyed(hookTurn(t, resume+70_000, tools), 5) {
+				if _, sample := e.Data.(*event.OSPresence); !sample {
+					all = append(all, e)
+				}
+			}
+			r := newRig(t, score.Device{})
+			r.write(all, nil)
+			chain, err := ledger.ReadChain(r.path("ledger"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, fb := direct(r.table, r.dev, chain.DeviceID, all)
+			from, to := span(all)
+			got := r.stored(from, to)
+			compare(t, got, want)
+			st := r.rescore()
+			if st.FinalBefore != fb {
+				t.Errorf("the loop's FinalBefore is %s, and one Step's %s", time.UnixMilli(st.FinalBefore).UTC(), time.UnixMilli(fb).UTC())
+			}
+			if high := all[len(all)-1].T; st.FinalBefore < high-r.table.Int(params.PENDING_WINDOW_S)*1000-event.SlotMS {
+				t.Errorf("FinalBefore is %s, and the newest record %s: want PENDING_WINDOW_S between them",
+					time.UnixMilli(st.FinalBefore).UTC(), time.UnixMilli(high).UTC())
+			}
+			stored := map[int64]store.Bucket{}
+			for _, b := range got {
+				stored[b.At()] = b
+			}
+			for m := resume - floorMod(resume, minuteMS) + 2*minuteMS; m+minuteMS <= st.FinalBefore; m += minuteMS {
+				if b, ok := stored[m]; !ok || b.AgentRunningS == 0 || b.State != event.StateFinal {
+					t.Fatalf("%s: the loop's latest revision is %+v; want it final with the morning turn's agent time",
+						time.UnixMilli(m).UTC(), b)
+				}
 			}
 		})
 	}

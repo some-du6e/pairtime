@@ -26,6 +26,9 @@ func TestStallNote(t *testing.T) {
 		// between two of the sampler's records, 0 for none.
 		gapEnd, gap int64
 		focus       event.AppClass
+		// undecided is the slot pkg/score holds FinalBefore at because
+		// nothing decides its presence yet, 0 for none.
+		undecided int64
 		// want are the parts the note must hold, none for no note; bare says
 		// the note names no cause.
 		want []string
@@ -57,10 +60,19 @@ func TestStallNote(t *testing.T) {
 		{name: "with samples coming and a terminal in front, the note names no cause",
 			fb: at - 2*60*minute, sampled: at - minute, focus: event.AppTerminal,
 			want: []string{"ends 2 h before"}, bare: true},
+		{name: "with FinalBefore held at a slot nothing decides, the note says the sampler wrote a record there with no sample, before the samples' own silence",
+			fb: at - 3*60*minute, sampled: at - 2*60*minute, undecided: at - 3*60*minute, focus: event.AppTerminal,
+			want: []string{"ends 3 h before", "the presence sampler wrote a record there with no sample",
+				"nothing decides whether you were at the computer from then on, and they wait for the next sample"}},
+		{name: "with FinalBefore held at a slot nothing decides and a browser in front, the note still names that slot",
+			fb: at - 40*minute, sampled: at - minute, undecided: at - 40*minute, focus: event.AppBrowser,
+			want: []string{"the presence sampler wrote a record there with no sample"}},
+		{name: "with a slot nothing decides after FinalBefore, as when a lookup holds it earlier, the note doesn't name that slot",
+			fb: at - 40*minute, sampled: at - minute, undecided: at - 20*minute, focus: event.AppBrowser},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := stallNote(at, c.fb, pending, 2*60*minute, 5*minute, sampling{newest: c.sampled, gapEnd: c.gapEnd, gap: c.gap}, c.focus)
+			got := stallNote(at, c.fb, pending, 2*60*minute, 5*minute, sampling{newest: c.sampled, gapEnd: c.gapEnd, gap: c.gap}, c.focus, c.undecided)
 			if len(c.want) == 0 {
 				if got != "" {
 					t.Errorf("note %q, want none", got)
@@ -206,6 +218,43 @@ func TestStallWarning(t *testing.T) {
 		}
 		return evs
 	}
+	// unsampled is a day whose sampler loses its idle source an hour before
+	// a suspend: the suspend, the morning's resume and a lock half an hour
+	// after the resume come with no sample, and a hooked turn runs for five
+	// hours after the resume, past BUCKET_TTL_S after the lock. Nothing
+	// decides the slots from the resume to the lock, so pkg/score holds
+	// FinalBefore at the resume (SM 2.1).
+	unsampled := func(t *testing.T) []event.Event {
+		day := hookTurn(t, fixture(t, "6.4").Events[0].T, tools[:12])
+		last := day[len(day)-1].T
+		n := 0
+		rec := func(ts int64, d event.Payload) event.Event {
+			n++
+			return sampleAt(day, ts, fmt.Sprintf("01a1fb1e-5318-78a1-a7f7-%012x", n), d)
+		}
+		resume := last + 9*60*minute
+		evs := append(day, rec(last+60*minute, &event.OSPower{Op: event.PowerSuspend}),
+			rec(resume, &event.OSPower{Op: event.PowerResume}), rec(resume+30*minute, &event.OSPower{Op: event.PowerLock}))
+		var morning []int64
+		for m := int64(10); m <= 300; m += 10 {
+			morning = append(morning, m*minute)
+		}
+		for _, e := range rekeyed(hookTurn(t, resume+70_000, morning), 6) {
+			if _, ok := e.Data.(*event.OSPresence); !ok {
+				evs = append(evs, e)
+			}
+		}
+		slices.SortStableFunc(evs, func(a, b event.Event) int {
+			switch {
+			case a.T < b.T:
+				return -1
+			case a.T > b.T:
+				return 1
+			}
+			return 0
+		})
+		return evs
+	}
 	cases := []struct {
 		name  string
 		build func(t *testing.T) []event.Event
@@ -230,6 +279,8 @@ func TestStallWarning(t *testing.T) {
 			build: browser, held: true},
 		{name: "a night's suspend, which holds the minutes for 5 min after the morning's resume, tells doctor why while it holds, and nothing once they catch up",
 			build: overnight, warned: true, each: "a presence sample came after 14 h without one"},
+		{name: "a resume and a lock half an hour later, neither with a sample, hold the minutes at the resume, and doctor hears that the sampler wrote a record there with no sample",
+			build: unsampled, warned: true, last: "the presence sampler wrote a record there with no sample", held: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

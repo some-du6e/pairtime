@@ -20,7 +20,9 @@ import (
 // ends a gap longer than BUCKET_TTL_S, such as the resume after a night's
 // suspend, at the sample before the gap, in case a record dated inside
 // the gap is still on its way (SM 2.1). That hold can keep FinalBefore
-// hours behind, so stallNote names it while it lasts.
+// hours behind, so stallNote names it while it lasts, and so is a slot
+// whose presence nothing decides, where Step holds FinalBefore until a
+// sample does (SM 2.1, score.Output.Undecided).
 const stallMS = 10 * 60 * 1000
 
 // sampling is what watch knows of the presence sampler's records, as the
@@ -85,7 +87,7 @@ func (l *Loop) watch(b ledger.Batch) {
 	msg := ""
 	if high > 0 {
 		at := min(high, b.SealedAt.UnixMilli())
-		msg = stallNote(at, l.cur.FinalBefore, l.pendingMS, l.win.ttl, l.win.late, s, focus)
+		msg = stallNote(at, l.cur.FinalBefore, l.pendingMS, l.win.ttl, l.win.late, s, focus, l.undecided)
 	}
 	if msg != l.stallMsg {
 		if msg != "" {
@@ -133,13 +135,18 @@ func heldGap(times, stamped []int64, ttl, late, high int64) (end, length int64) 
 // ttl, as the morning's first after a night's suspend, holds the minutes
 // since the sample before it until the newest record is late past it (SM
 // 2.1's wait for a record dated inside the gap), and the note says so
-// while it does. It returns "" for no lag, and for a lag while samples
-// come and a browser or chat app is in front: SM 2.5 holds the minutes
-// after credit until such a run ends, since it may be a lookup, which is
-// the rule working, not a fault, and doctor's agent line would call it
-// one. s says what the sampler's records show, and focus is the app class
-// of the newest os.focus.
-func stallNote(at, fb, pending, ttl, late int64, s sampling, focus event.AppClass) string {
+// while it does. When pkg/score holds FinalBefore at undecided, the start
+// of a slot whose presence nothing decides yet (score.Output.Undecided),
+// the note says so before any other cause: no minute is final before its
+// slots are decided (SM 2.1), and the records the sampler wrote since its
+// last sample, such as a resume or a lock taken while the agent couldn't
+// read the input idle time, don't decide them. It returns "" for no lag,
+// and for a lag while samples come and a browser or chat app is in front:
+// SM 2.5 holds the minutes after credit until such a run ends, since it
+// may be a lookup, which is the rule working, not a fault, and doctor's
+// agent line would call it one. s says what the sampler's records show,
+// and focus is the app class of the newest os.focus.
+func stallNote(at, fb, pending, ttl, late int64, s sampling, focus event.AppClass, undecided int64) string {
 	lag := at - fb
 	if lag <= pending+stallMS {
 		return ""
@@ -147,6 +154,8 @@ func stallNote(at, fb, pending, ttl, late int64, s sampling, focus event.AppClas
 	msg := fmt.Sprintf("the scorer's newest final minute ends %s before its newest record, where %s is usual, so the minutes since stay pending",
 		lasting(lag), lasting(pending))
 	switch {
+	case undecided > 0 && undecided <= fb:
+		msg += ": the presence sampler wrote a record there with no sample, as it does at a resume or a lock when it can't read the input idle time, so nothing decides whether you were at the computer from then on, and they wait for the next sample"
 	case s.newest == 0:
 		msg += ": presence is unknown on this computer, so the scorer has no presence sample to keep time by"
 	case at-s.newest > pending+stallMS:
