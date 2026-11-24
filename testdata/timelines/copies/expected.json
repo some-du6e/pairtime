@@ -143,10 +143,9 @@
       },
       "uncredited": {"X.automated": 15},
       "agent_running_s": 60,
-      "sm": "2.2, rule 1; 2.4",
-      "note": "P2 is scheduled, so it opens no anchor, adds no base and resets nothing. Its own output fills the bucket, and the queued message, within READ_HORIZON_S, lets it drain as SUP from 16:28:05 to 16:28:15 and from 16:28:25. The 15 s with the bucket empty are X.automated by the uncredited-codes erratum's rule, which pkg/score applies.",
-      "derived": ["credit", "uncredited", "agent_running_s"],
-      "erratum": "2026-11-19-sm-6.6-uncredited-codes"
+      "sm": "2.2, rule 1; 2.4; 5.2",
+      "note": "P2 is scheduled, so it opens no anchor, adds no base and resets nothing. Its own output fills the bucket, and the queued message, within READ_HORIZON_S, lets it drain as SUP from 16:28:05 to 16:28:15 and from 16:28:25. The 15 s with the bucket empty are X.automated by SM 5.2's order, since only a scheduled turn runs.",
+      "derived": ["credit", "uncredited", "agent_running_s"]
     },
     {
       "start": "2026-11-25T22:29:00Z",
@@ -176,17 +175,13 @@
   },
   "stated": [],
   "approx": {},
-  "errata": [
-    "2026-11-20-claude-code-transcript-labels",
-    "2026-11-20-claude-code-queued-turn",
-    "2026-11-19-sm-6.6-uncredited-codes"
-  ],
+  "errata": ["2026-11-20-claude-code-transcript-labels", "2026-11-20-claude-code-queued-turn"],
   "notes": [
     "A derived fixture. SM states no rows for it, so every row follows from SM's rules applied to this timeline, with pkg/score's readings where SM leaves a choice (README.md).",
     "SM 2.2 rules 1 to 3 read every copy of a prompt that came through a hook or a log reader (E-cc-transcript-labels). P2's hook copy declares nothing and its transcript copy declares cron, so P2 is scheduled and opens no anchor, though they type in the 10 s before it on the terminal that hosts the session.",
     "A hook's and a transcript's agent.queue of one message, in one turn and within TRACK_LOG_MATCH_S, are one queued message (E-cc-queued-turn), with one Q anchor, the hook's, corroborated, and one reset of the bucket.",
     "Each lead is 120 s plus the typing time. P1's 60 characters give 160 s and the queued message's 30 give 140 s.",
     "The bucket holds 85 s when the records end at 16:30:00, P2's 145 s less the 60 s read in 16:29.",
-    "Row 16:28 names the 6.6 uncredited-codes erratum, whose rule makes the uncredited seconds of a turn that automation started X.automated. SM 5.2 alone doesn't say whether they are X.automated or X.agent_only."
+    "Row 16:28's uncredited seconds are X.automated by SM 5.2's order: only P2, a scheduled turn, runs."
   ]
 }

@@ -40,7 +40,7 @@ Every lead is typing time only, typed characters / 1.5. B2 comes 430 s after B1'
 | 16:06 | 60 | trivia-bot `READ` 60 | A's 120 s end at 16:07:00 |
 | 16:07 | 60 | portfolio `READ` 60 | B reads what is left of its 120: 120 − 20 = 100 s, to 16:08:40 |
 | 16:08 | 60 | trivia-bot `P` 20, portfolio `READ` 40 | B's reading ends at 16:08:40: 10 + 10 + 60 + 40 = 120. A2's 390 characters include 300 pasted, so its lead is 90 / 1.5 = 60 s, from 16:08:40 |
-| 16:09 | 40 | trivia-bot `P` 40 | A2 is sent at 16:09:40 and runs. `X.agent_only` 20 |
+| 16:09 | 40 | trivia-bot `P` 40 | A2 is sent at 16:09:40 and runs. Only the 120 s cap stops B's reading while A's agent runs: `X.bucket_cap` 20 (SM 5.2) |
 | 16:10 | 40 | portfolio `P` 40 | B2's lead, 60 / 1.5 = 40 s, from 16:10:00. Then both agents run: `X.agent_only` 20 |
 | 16:11 | 25 | portfolio `PA` 25 | B2's build asks at 16:11:20, and the answer at 16:11:35 keeps its 15 s wait and its 10 s trail: 15 + 10 = 25. `X.agent_only` 20 + 15 = 35 |
 | 16:12 | 30 | trivia-bot `PA` 30 | A2's test run asks at 16:12:00, and the answer at 16:12:20 keeps its 20 s wait and its 10 s trail: 20 + 10 = 30. Both agents run on, `X.agent_only` 30. The answer is A's latest human act, later than B's at 16:11:35 |
@@ -49,7 +49,7 @@ Every lead is typing time only, typed characters / 1.5. B2 comes 430 s after B1'
 | 16:15 | 60 | trivia-bot `READ` 60 | A reads its 120 s, to 16:17:00 |
 | 16:16 | 60 | trivia-bot `READ` 60 | The same reading |
 | 16:17 | 60 | trivia-bot `P` 60 | A3's lead, 120 / 1.5 = 80 s, from 16:17:00, where A's reading ends |
-| 16:18 | 50 | trivia-bot `P` 20, portfolio `P` 30 | A3 is sent at 16:18:20 and runs: `X.agent_only` 10. B3's lead, 45 / 1.5 = 30 s, from 16:18:30 |
+| 16:18 | 50 | trivia-bot `P` 20, portfolio `P` 30 | A3 is sent at 16:18:20 and runs, and only the 120 s cap stops B's reading while A's agent runs: `X.bucket_cap` 10 (SM 5.2). B3's lead, 45 / 1.5 = 30 s, from 16:18:30 |
 | 16:19 | 0 | none | Both agents run. `X.agent_only` 60 |
 
 ## Totals
@@ -67,7 +67,8 @@ Every lead is typing time only, typed characters / 1.5. B2 comes 430 s after B1'
 | `portfolio_read_s` | 240 | 2 × 120 |
 | `contested_s` | 280 | 70 + 120 + 90 |
 | `agent_running_s` | 570 | 8 × 60 + 20 + 30 + 40 |
-| `X.agent_only` | 285 | 20 + 60 + 30 + 20 + 20 + 35 + 30 + 10 + 60 |
+| `X.agent_only` | 255 | 20 + 60 + 30 + 20 + 35 + 30 + 60 |
+| `X.bucket_cap` | 30 | 20 + 10 |
 | `agent_only_s` | 285 | 570 − (40 + 30 + 60 + 40 + 25 + 30 + 30 + 30) |
 
 `contested_s` is the seconds both sessions wanted: A's permission window against B's reading from 16:03:40 to 16:04:50, then reading against reading from 16:05:00 to 16:07:00, which A takes, and from 16:13:30 to 16:15:00, which B takes. `agent_only_s` is the agents' running time less the seconds credited while one ran, in 16:01, 16:03, 16:04, 16:10, 16:11, 16:12, 16:13 and 16:18.

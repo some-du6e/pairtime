@@ -174,7 +174,9 @@ row("16:07", {B: {"READ": 60}}, {}, 0, READING,
     note="A's 120 s are read, so B reads its last 100 s, to 16:08:40.")
 row("16:08", {A: {"P": 20}, B: {"READ": 40}}, {}, 0, READING, erratum=ER,
     note="A2 has 390 characters, 300 of them pasted. Its lead is typing time only, 90 / 1.5 = 60 s, from 16:08:40.")
-row("16:09", {A: {"P": 40}}, {"X.agent_only": 20}, 20, "2.8: leads are typing time only")
+row("16:09", {A: {"P": 40}}, {"X.bucket_cap": 20}, 20, "2.8: leads are typing time only",
+    note="A2 is sent at 16:09:40 and runs. B's reading would go on, but only the 120 s cap stops it while A's "
+         "agent runs: X.bucket_cap, ahead of the running turn's code (SM 5.2).")
 row("16:10", {B: {"P": 40}}, {"X.agent_only": 20}, 60, "2.8: leads are typing time only",
     note="B2's 60 characters: 40 s, from 16:10:00, while A2 runs.")
 row("16:11", {B: {"PA": 25}}, {"X.agent_only": 35}, 60, "2.8: permission answers keep their wait", erratum=ER,
@@ -192,8 +194,9 @@ row("16:15", {A: {"READ": 60}}, {}, 0, READING, note="B's 120 s are read, so A r
 row("16:16", {A: {"READ": 60}}, {}, 0, READING)
 row("16:17", {A: {"P": 60}}, {}, 0, "2.8: leads are typing time only",
     note="A3's 120 characters: 80 s, from 16:17:00, where A's reading ends.")
-row("16:18", {A: {"P": 20}, B: {"P": 30}}, {"X.agent_only": 10}, 40, "2.8: leads are typing time only",
-    note="A3 is sent at 16:18:20 and runs. B3's 45 characters: 30 s, from 16:18:30, while A3 runs.")
+row("16:18", {A: {"P": 20}, B: {"P": 30}}, {"X.bucket_cap": 10}, 40, "2.8: leads are typing time only",
+    note="A3 is sent at 16:18:20 and runs. Only the 120 s cap stops B's reading while A's agent runs: "
+         "X.bucket_cap (SM 5.2). B3's 45 characters: 30 s, from 16:18:30, while A3 runs.")
 row("16:19", {}, {"X.agent_only": 60}, 60, "2.8: neither session reads while its agent runs",
     note="A3 and B3 run past the window and stop at 16:21:40 and 16:22:00. No prompt follows either, so their "
          "output is never read as far as the rules can tell.")
@@ -264,8 +267,8 @@ tl.check(fills == {"B1": 175, "A1": 160, "A2": 240, "B2": 175, "A3": Fraction(15
          f"each turn's fill {fills}")
 tl.check(reads == {"B1": 120, "A1": 120, "A2": 120, "B2": 120}, f"each turn's reading {reads}")
 
-# The erratum's point 2: the cap also cuts B's reading while A's agent runs,
-# 30 s in all. They are X.agent_only, since an agent turn runs.
+# The cap also cuts B's reading while A's agent runs, 30 s in all. They are
+# X.bucket_cap, which comes ahead of a running turn's code (SM 5.2).
 tl.check(runs(rp.capped) == [("16:09:40", "16:10:00"), ("16:18:20", "16:18:30")] and rp.capped <= rp.running,
          f"the cap cuts B's reading in {runs(rp.capped)}, all while an agent runs")
 
@@ -281,7 +284,8 @@ tl.check(by[A] == {"P": 40 + 60 + 80, "PA": 60 + 10 + 20 + 10, "READ": 120 + 120
          and by[B] == {"P": 60 + 40 + 30, "PA": 15 + 10, "READ": 120 + 120},
          f"by project and reason {by}")
 agent_only = len(rp.running) - sum(1 for t in rp.running if t in rp.credited)
-tl.check(agent_only == totals["uncredited"]["X.agent_only"] == 285, f"agent-only {agent_only}")
+tl.check(agent_only == 285 and totals["uncredited"] == {"X.agent_only": 255, "X.bucket_cap": 30},
+         f"agent-only {agent_only}, uncredited {totals['uncredited']}")
 
 expected = exp.doc(
     extra_totals={
@@ -307,8 +311,10 @@ expected = exp.doc(
         "contested_s counts the seconds both sessions wanted: 70 of A's PA against B's reading, and 210 of reading "
         "against reading. The session with the most recent human prompt takes each (SM 2.8). In the last 90, from "
         "16:13:30, A has the later stop and the later human act, so only the prompt rule gives them to B.",
-        "Every uncredited second here is X.agent_only: an agent turn ran and nothing credited it. Every turn a "
-        "prompt follows within 600 s fills its bucket past the 120 s cap and reads exactly 120 s.",
+        "Every uncredited second here is in an agent turn. They are X.agent_only, except the 30 s where only "
+        "the 120 s cap stops B's reading while A's agent runs, which are X.bucket_cap (SM 5.2); agent_only_s "
+        "counts all 285. Every turn a prompt follows within 600 s fills its bucket past the 120 s cap and reads "
+        "exactly 120 s.",
     ],
 )
 
