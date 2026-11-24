@@ -3,6 +3,8 @@
 package rollup
 
 import (
+	"context"
+	"math"
 	"math/rand/v2"
 	"reflect"
 	"slices"
@@ -62,6 +64,15 @@ func TestDayCap(t *testing.T) {
 	}
 	tests := []struct {
 		name string
+		// before, when set, runs first under beforeLimit, a cap in
+		// milliseconds, where math.MaxInt64 stands for no cap, as before
+		// migration 0012.
+		before      []step
+		beforeLimit int64
+		// gone, when set, deletes the account's rollup_minutes rows of
+		// minutes before it, Unix seconds, after before, as the retention
+		// jobs delete them.
+		gone int64
 		// limit, when set, is the cap in milliseconds in place of DAY_CAP_S.
 		limit int64
 		steps []step
@@ -125,6 +136,31 @@ func TestDayCap(t *testing.T) {
 			},
 		},
 		{
+			name:        "a day stored over the cap before migration 0012 is cut whole at its next change, though that change is past the cap",
+			before:      joinSteps([]step{newYork}, creditFor("d1", "p1", "prompting", "A", local(9, 0), 13, "final")),
+			beforeLimit: math.MaxInt64,
+			limit:       600_000,
+			steps:       []step{bk("d1", local(9, 10), 1, "final", nil)},
+			want:        []Day{held("d1/p1", "prompting", 0, 600_000, 120_000)},
+		},
+		{
+			name:        "a day cut under a lower cap is cut again whole under a higher one",
+			before:      joinSteps([]step{newYork}, creditFor("d1", "p1", "prompting", "A", local(9, 0), 8, "final")),
+			beforeLimit: 300_000,
+			limit:       600_000,
+			steps:       creditFor("d1", "p1", "prompting", "A", local(9, 8), 1, "final"),
+			want:        []Day{final("d1/p1", day, "prompting", 0, 540_000)},
+		},
+		{
+			name:        "a day stored over the cap whose first minutes are gone keeps its rows, and a change adds to them without holding anything back",
+			before:      joinSteps([]step{newYork}, creditFor("d1", "p1", "prompting", "A", local(9, 0), 13, "final")),
+			beforeLimit: math.MaxInt64,
+			gone:        local(9, 2),
+			limit:       600_000,
+			steps:       creditFor("d1", "p1", "prompting", "A", local(9, 13), 1, "final"),
+			want:        []Day{final("d1/p1", day, "prompting", 0, 840_000)},
+		},
+		{
 			name:  "each local day has a cap of its own",
 			limit: 600_000,
 			steps: joinSteps([]step{newYork},
@@ -139,10 +175,21 @@ func TestDayCap(t *testing.T) {
 	for _, engine := range storetest.Engines() {
 		for _, tt := range tests {
 			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) {
+				db := newDB(t, engine, "u1")
+				if tt.before != nil {
+					withCap(t, tt.beforeLimit)
+					if err := run(t, db, "u1", tt.before); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tt.gone != 0 {
+					if _, err := db.Write.ExecContext(context.Background(), `DELETE FROM rollup_minutes WHERE user_id = 'u1' AND minute_ms < $1`, tt.gone*1000); err != nil {
+						t.Fatal(err)
+					}
+				}
 				if tt.limit > 0 {
 					withCap(t, tt.limit)
 				}
-				db := newDB(t, engine, "u1")
 				if err := run(t, db, "u1", tt.steps); err != nil {
 					t.Fatal(err)
 				}
