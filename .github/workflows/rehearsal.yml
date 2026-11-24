@@ -13,6 +13,13 @@
 # docker, and takes minutes a PR that can't break it shouldn't pay.
 # platform.yml's Linux job runs the other desktop tests, which test client
 # code alone.
+#
+# The same job runs WP-SV8's live dashboard check after the rehearsal:
+# Playwright on Chromium against pairtimed's live harness
+# (cmd/pairtimed/live_test.go, web/tests/live/), which holds the server to
+# DESIGN 2's R5 row, a delta on an open dashboard within 2 s of ingest. It
+# needs the server's paths, which this workflow already runs for, and not
+# web.yml's.
 name: rehearsal
 
 on:
@@ -56,6 +63,12 @@ on:
       - testdata/fixtures/claude_code/2.1.327/linux/cli/hooks/**
       - tools/ci/desktop_session.sh
       - .github/workflows/rehearsal.yml
+      # The live dashboard check's spec, its Playwright config and the npm
+      # packages it installs. Its harness is cmd/pairtimed's live_test.go.
+      - web/playwright.live.config.ts
+      - web/tests/live/**
+      - web/package.json
+      - web/package-lock.json
   push:
     # Every push to main, whatever it changed, so main shows the
     # rehearsal's result for each commit; and release tags.
@@ -145,6 +158,34 @@ jobs:
             echo "::error::TestDesktopRehearsal didn't run and pass; the rehearsal artifact has each step's output"
             exit 1
           fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ !cancelled() }}
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: A delta reaches an open dashboard within 2 s of ingest, by Playwright's clock (WP-SV8; DESIGN 2, R5)
+        if: ${{ !cancelled() }}
+        # Chromium against TestLiveServer (cmd/pairtimed/live_test.go):
+        # pairtimed serve on SQLite with the fake Hack Club Auth, behind a
+        # TLS proxy where Cloudflare's edge would be, a browser that signs
+        # in itself, and a computer linked through the device grant, whose
+        # signed uploads the spec asks for. web/tests/live/stream.live.ts
+        # times each upload to the open dashboard, checks that pending
+        # minutes are drawn lighter, and that after 45 s of silence the page
+        # polls the snapshot with If-None-Match and gets 304. It isn't in
+        # web.yml, whose paths leave the server out; this workflow runs for
+        # every server change and every push to main already.
+        working-directory: web
+        env:
+          PAIRTIME_LIVE_OUT: ${{ runner.temp }}/rehearsal/live
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          ./node_modules/.bin/playwright install --with-deps --only-shell chromium
+          go test -c -o "$RUNNER_TEMP/pairtimed-live.test" ../cmd/pairtimed
+          PAIRTIMED_LIVE="$RUNNER_TEMP/pairtimed-live.test" ./node_modules/.bin/playwright test -c playwright.live.config.ts
 
       - name: Upload the rehearsal's diagnostics
         if: ${{ always() }}
