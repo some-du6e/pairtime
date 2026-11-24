@@ -91,15 +91,18 @@ func stampedRecord(e event.Event) bool {
 // is rules.late past that one. An earlier record of the sampler's keeps
 // the clock while its fate is open (reach.held): while a record that ends
 // its reach waits like that, since a sample dated before that record can
-// still arrive and keep the reach; and while the sampler's next record,
-// more than BUCKET_TTL_S after it, is less than rules.late behind the
-// newest record, since a stamped record dated inside that gap can still
-// arrive and end the reach. Since settle is PENDING_WINDOW_S, nothing after
-// a record that keeps the clock is final. With no record of the sampler's
-// keeping it, as on a
-// device whose agent never samples, now is high: nothing else keeps time
-// there, and a minute is final once a record is dated PENDING_WINDOW_S
-// past its end (SM 2.1).
+// still arrive and keep the reach; while the sampler's next record, more
+// than BUCKET_TTL_S after it, is less than rules.late behind the newest
+// record, since a stamped record dated inside that gap can still arrive and
+// end the reach; and, for a sample or a resume or unlock with no sample,
+// while its next record of the sampler's is an os.power with no sample
+// that is less than rules.late behind the newest record the device's own
+// clock dated, since the sample taken with it can still arrive and decide
+// the slots between (reach.lapse). Since settle is PENDING_WINDOW_S,
+// nothing after a record that keeps the clock is final. With no record of
+// the sampler's keeping it, as on a device whose agent never samples, now
+// is high: nothing else keeps time there, and a minute is final once a
+// record is dated PENDING_WINDOW_S past its end (SM 2.1).
 func (s State) now(r rules, reaches []reach) int64 {
 	for i, c := range reaches {
 		if c.held || !c.ended && i == len(reaches)-1 {
@@ -142,6 +145,11 @@ type Output struct {
 	// FinalBefore is the time, in Unix milliseconds on a slot boundary,
 	// before which nothing derived will change again. It never goes back.
 	FinalBefore int64
+	// Undecided is the start of the first slot whose presence no sample,
+	// hard break or rule of SM 2.1's decides yet, in Unix milliseconds,
+	// when FinalBefore waits there, since no minute is final before its
+	// slots are decided. It is 0 when FinalBefore waits for no such slot.
+	Undecided int64
 	// Final holds what became final in this Step: every derived record
 	// whose time is before FinalBefore and wasn't final after the previous
 	// Step. Over a state's life each derived record is in exactly one
@@ -197,39 +205,58 @@ func Step(s State, records []event.Event) (State, Output) {
 	r := newRules(s.table)
 	reaches := sampledReaches(r, next.recs, next.high)
 	now := next.now(r, reaches)
-	all, lookups, relays := derive(r, s.device, next.recs, now, reaches)
-	fb := s.done
+	all, lookups, relays, undecided := derive(r, s.device, next.recs, now, reaches)
+	fb, waits := s.done, int64(0)
 	if len(next.recs) > 0 {
-		to := floorSlot(now - r.settle)
-		// A browser run's credit waits for the slot after it: a lookup
-		// needs credit within LOOKUP_BRACKET_S on both sides (SM 2.5). So
-		// nothing from a run whose end bracket isn't final yet is final.
-		// derive lists only the runs with credit before them: once the run's
-		// start is final, so is the bracket before it, and a run with none
-		// there is no lookup whatever follows. SM 2.5 sets no bound on a
-		// run's length, so the hold has none either
-		// (docs/errata/2026-11-20-lookup-lookahead.md).
-		for _, sp := range lookups {
-			if sp.from < to && sp.to+r.lookupBracket > to {
-				to = min(to, sp.from)
-			}
-		}
-		// An agent app's message that hasn't paired yet holds the minutes a
-		// lead it could open can touch until it pairs or RELAY_MATCH_S after
-		// its stamp passes (SM 2.3, deriver.relayHolds). A relayed lead
-		// starts at most COMPOSE_MAX_S before the stamp, and RELAY_MATCH_S +
-		// COMPOSE_MAX_S is PENDING_WINDOW_S in table 0.3.0 (SM 8.1), so the
-		// hold binds only for the think part of a prompt that rules 6 and 7
-		// make typed at the stamp, and for a later table that widens either.
-		for _, h := range relays {
-			to = min(to, floorSlot(h))
-		}
-		fb = max(fb, to)
+		fb, waits = finalBefore(r, now, s.done, undecided, lookups, relays)
 	}
 	next.done = fb
-	out := Output{FinalBefore: fb}
+	out := Output{FinalBefore: fb, Undecided: waits}
 	out.Final, out.Pending = all.split(s.done, fb)
 	return next, out
+}
+
+// finalBefore returns a Step's FinalBefore: the slot before which a clock
+// that reads now makes every minute final, but no earlier than done, the
+// last Step's, and held back for the first slot nothing decides yet
+// (undecided, never for none) and for the lookup and relay holds derive
+// returns. waits is that slot when FinalBefore waits at it, 0 otherwise.
+func finalBefore(r rules, now, done, undecided int64, lookups []span, relays []int64) (fb, waits int64) {
+	to := floorSlot(now - r.settle)
+	// No minute is final before its slots are decided (SM 2.1). The
+	// clock follows the records that keep it, and the slots follow the
+	// samples and the rules that decide slots without one. Where the
+	// two disagree, FinalBefore waits at the first slot no rule decides,
+	// so no minute goes final with a slot nothing derived, and the
+	// agent's stall note names the wait (Output.Undecided). This comes
+	// before the lookup hold, which reads the bound it leaves.
+	if undecided < to {
+		to, waits = undecided, undecided
+	}
+	// A browser run's credit waits for the slot after it: a lookup
+	// needs credit within LOOKUP_BRACKET_S on both sides (SM 2.5). So
+	// nothing from a run whose end bracket isn't final yet is final.
+	// derive lists only the runs with credit before them: once the run's
+	// start is final, so is the bracket before it, and a run with none
+	// there is no lookup whatever follows. SM 2.5 sets no bound on a
+	// run's length, so the hold has none either
+	// (docs/errata/2026-11-20-lookup-lookahead.md).
+	for _, sp := range lookups {
+		if sp.from < to && sp.to+r.lookupBracket > to {
+			to = min(to, sp.from)
+		}
+	}
+	// An agent app's message that hasn't paired yet holds the minutes a
+	// lead it could open can touch until it pairs or RELAY_MATCH_S after
+	// its stamp passes (SM 2.3, deriver.relayHolds). A relayed lead
+	// starts at most COMPOSE_MAX_S before the stamp, and RELAY_MATCH_S +
+	// COMPOSE_MAX_S is PENDING_WINDOW_S in table 0.3.0 (SM 8.1), so the
+	// hold binds only for the think part of a prompt that rules 6 and 7
+	// make typed at the stamp, and for a later table that widens either.
+	for _, h := range relays {
+		to = min(to, floorSlot(h))
+	}
+	return max(done, to), waits
 }
 
 // merge returns old plus the new records with data whose event_id old
