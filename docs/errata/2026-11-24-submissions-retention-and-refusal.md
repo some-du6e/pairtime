@@ -1,6 +1,6 @@
 # Erratum: DESIGN 4.4 has no row for the submission record, and 7.5 step 1 refuses less than 9.2 and 9.7
 
-Date 2026-11-24. Raised by the plan for WP-SB1, the submissions API. Status: decided 2026-11-24 by the orchestrator for Karim (D-sb1-submissions). Applied to DESIGN 4.3, 4.4, 6.2 D13, 7.5 steps 1, 2, 5 and 8, and 10.2, and to PLAN, in a docs PR of its own; docs/retention.json, the retention tests, the privacy notice, the config and docs/spec/submissions-v1.md follow in WP-SB1.
+Date 2026-11-24. Raised by the plan for WP-SB1, the submissions API. Status: decided 2026-11-24 by the orchestrator for Karim (D-sb1-submissions), and amended by the orchestrator the same day on #342. Applied to DESIGN 4.3, 4.4, 6.2 D13, 7.5 steps 1, 2, 5, 8 and 9, 7.9 and 10.2, and to PLAN, in a docs PR of its own; docs/retention.json, the retention tests, the privacy notice, the config and docs/spec/submissions-v1.md follow in WP-SB1.
 
 ## Input
 
@@ -88,6 +88,12 @@ DESIGN 7.5 step 5, whole:
 DESIGN 7.5 step 8, its last sentence:
 
 > Any other submission whose pool holds the item still asks for it, as step 5 says, unless only a calibration submission drew it.
+
+DESIGN 7.5 step 9, a sentence at its end, the orchestrator's amendment to D-sb1-submissions on #342, so DESIGN says what WP-TR3's Build line already does:
+
+> A submission to a program that takes no hours (6.7) stops after step 8, with no risk score, audit draw or review, and stays withdrawable.
+
+DESIGN 7.9, its first sentence, the orchestrator's amendment to D-sb1-submissions on #342: "Each submission gets a deep-audit probability" becomes "Each submission to a program that takes hours gets a deep-audit probability".
 
 DESIGN 10.2, a row after `reviewers`:
 
