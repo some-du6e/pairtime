@@ -190,6 +190,10 @@ func TestSamplelessPower(t *testing.T) {
 			},
 			check: func(t *testing.T, batches [][]event.Event, outs []Output, one Derived) {
 				heldAt(t, batches, outs, at(resume+1800), at(resume+1800)+r.late, at(resume))
+				// Once those slots are decided, the lock keeps the clock, and
+				// FinalBefore moves on to it, long before BUCKET_TTL_S would
+				// have them count as unknown anyway.
+				heldAt(t, batches, outs, at(resume+1800)+r.settle, at(resume+7200), at(resume+1800))
 				last := outs[len(outs)-1]
 				high := batches[len(batches)-1][len(batches[len(batches)-1])-1].T
 				if want := floorSlot(high - r.settle); last.FinalBefore != want || last.Undecided != 0 {
@@ -221,6 +225,32 @@ func TestSamplelessPower(t *testing.T) {
 				slots(t, one, at(2400), at(6000), func(s Slot) {
 					if !s.Locked || s.Asleep {
 						t.Fatalf("the slot at %d s is locked %v, asleep %v; want it locked and not asleep", (s.Start-base)/1000, s.Locked, s.Asleep)
+					}
+				})
+			},
+		},
+		{
+			name: "a sample after a blind stretch dates no input in it more than SLEEP_GAP_S before the sample: the stretch's slots, final as unknown, keep no input when a sample long after says there was some",
+			build: func(b *tl) {
+				evening(b)
+				b.power(at(2400), event.PowerLock)
+				// A record after the lock moves the clock past the stretch, so
+				// its slots are final before the next sample comes.
+				b.harness(at(3400), event.ViaHook, "s_1", "p_1", &event.AgentTool{ToolClass: event.ToolBash,
+					TStart: at(3395), TEnd: at(3400), VisibleOutputLines: 2})
+				b.mouse(at(2000))
+				b.power(at(6000), event.PowerUnlock)
+				b.samples(at(6000), at(6600))
+			},
+			check: func(t *testing.T, batches [][]event.Event, outs []Output, one Derived) {
+				// The slots to the lock are decided once the newest record is
+				// rules.late past it, so FinalBefore moves on to the lock,
+				// which keeps the clock, rather than waiting at the sample.
+				heldAt(t, batches, outs, at(3400), at(3460), at(2400))
+				slots(t, one, at(c), at(2400), func(s Slot) {
+					if s.Present != event.PresentUnknown || s.InputAny {
+						t.Fatalf("the slot at %d s is %q, input %v; want unknown with no input, which a sample over an hour later can't date",
+							(s.Start-base)/1000, s.Present, s.InputAny)
 					}
 				})
 			},
