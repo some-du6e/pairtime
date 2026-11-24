@@ -52,7 +52,7 @@ func capped(ctx context.Context, tx writer.Tx, account, day string, minuteMS int
 	if withheld == 0 && kept+next.credit()-prev.credit() <= limit {
 		return d, nil
 	}
-	if kept > limit || (withheld > 0 && kept != limit) {
+	if !isCut(kept, withheld, limit) {
 		return recut(ctx, tx, account, day, minuteMS, next, d, kept+withheld, limit, nil)
 	}
 	later, err := dayMinutes(ctx, tx, account, day, minuteMS)
@@ -78,6 +78,144 @@ func capped(ctx context.Context, tx writer.Tx, account, day string, minuteMS int
 		return recut(ctx, tx, account, day, minuteMS, next, d, kept+withheld, limit, stored)
 	}
 	return out, nil
+}
+
+// isCut reports whether a day's rows, which keep kept and hold back
+// withheld, can be its cut under limit: at most limit kept, and all of it
+// once anything is held back. Rows stored before migration 0012, or cut
+// under another DAY_CAP_S, can fail this.
+func isCut(kept, withheld, limit int64) bool {
+	return kept <= limit && (withheld == 0 || kept == limit)
+}
+
+// The days RecutDays looks at, which the 180 days of minutes rollup_minutes
+// keeps cover, with two days to spare for the widest local date, and how
+// many days one of its ops cuts at most. recutRowsPerDay is the rows a cut
+// day writes, as a typical day has them.
+const (
+	recutDays       = 182
+	recutBatch      = 20
+	recutRowsPerDay = 8
+)
+
+// RecutDays cuts again, once, every day of the last recutDays whose
+// rollups_daily rows aren't a cut under the day cap (isCut), such as a day
+// stored over 12 hours before migration 0012, while rollup_minutes still
+// holds all of it (SM 5.3). The settle job runs it on its first run
+// (RunSettle). It finds the days and checks their minutes on q, the read
+// pool, and takes the writer only for days it can cut, so a run with
+// nothing to cut makes no transaction. A day it can't cut, because the
+// retention jobs have deleted some of its minutes, keeps its rows. It
+// returns how many days it cut.
+func RecutDays(ctx context.Context, d Doer, q Querier, now time.Time) (int, error) {
+	limit := dayCapMS()
+	from := now.AddDate(0, 0, -recutDays).UTC().Format(time.DateOnly)
+	rows, err := q.QueryContext(ctx, `SELECT user_id, day,
+CAST(SUM(final_a_ms + final_b_ms + final_c_ms + pending_a_ms + pending_b_ms + pending_c_ms) AS BIGINT),
+CAST(SUM(day_cap_ms) AS BIGINT)
+FROM rollups_daily WHERE day >= $1 GROUP BY user_id, day`, from)
+	if err != nil {
+		return 0, fmt.Errorf("rollup: finding the days to cut again: %w", err)
+	}
+	type accountDay struct{ account, day string }
+	var due []accountDay
+	for rows.Next() {
+		var ad accountDay
+		var kept, withheld int64
+		if err := rows.Scan(&ad.account, &ad.day, &kept, &withheld); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("rollup: finding the days to cut again: %w", err)
+		}
+		if !isCut(kept, withheld, limit) {
+			due = append(due, ad)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("rollup: finding the days to cut again: %w", err)
+	}
+	var cuttable []accountDay
+	for _, ad := range due {
+		ok, err := recuttable(ctx, q, ad.account, ad.day)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			cuttable = append(cuttable, ad)
+		}
+	}
+	n := 0
+	for len(cuttable) > 0 {
+		batch := cuttable[:min(len(cuttable), recutBatch)]
+		cuttable = cuttable[len(batch):]
+		var cutNow int
+		err := d.Do(ctx, recutRowsPerDay*len(batch), func(ctx context.Context, tx writer.Tx) error {
+			cutNow = 0
+			for _, ad := range batch {
+				did, err := recutDay(ctx, tx, ad.account, ad.day, limit)
+				if err != nil {
+					return err
+				}
+				if did {
+					cutNow++
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return n, fmt.Errorf("rollup: cutting days again: %w", err)
+		}
+		n += cutNow
+	}
+	return n, nil
+}
+
+// recuttable reports whether rollup_minutes still holds all of the
+// account's day: whether its minutes' credit is the credit its rows hold.
+func recuttable(ctx context.Context, q Querier, account, day string) (bool, error) {
+	kept, withheld, err := dayTotals(ctx, q, account, day)
+	if err != nil {
+		return false, err
+	}
+	all, err := dayMinutes(ctx, q, account, day, math.MinInt64)
+	if err != nil {
+		return false, err
+	}
+	var sum int64
+	for _, m := range all {
+		sum += m.merged.credit()
+	}
+	return sum == kept+withheld, nil
+}
+
+// recutDay cuts the account's day again whole under limit, inside tx, if
+// its rows still aren't a cut and rollup_minutes still holds all of it,
+// and reports whether it did.
+func recutDay(ctx context.Context, tx writer.Tx, account, day string, limit int64) (bool, error) {
+	kept, withheld, err := dayTotals(ctx, tx, account, day)
+	if err != nil || isCut(kept, withheld, limit) {
+		return false, err
+	}
+	all, err := dayMinutes(ctx, tx, account, day, math.MinInt64)
+	if err != nil {
+		return false, err
+	}
+	var sum int64
+	ms := make([]merged, 0, len(all))
+	for _, m := range all {
+		sum += m.merged.credit()
+		ms = append(ms, m.merged)
+	}
+	if sum != kept+withheld {
+		return false, nil
+	}
+	stored, err := dayRows(ctx, tx, account, day)
+	if err != nil {
+		return false, err
+	}
+	out := cut(0, limit, day, ms)
+	out.subtract(stored)
+	return true, addDaily(ctx, tx, account, out)
 }
 
 // fits reports whether adding d to stored leaves every credited column

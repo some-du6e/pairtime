@@ -492,7 +492,9 @@ type Day struct {
 	AgentOnlyFinalMS, AgentOnlyPendingMS int64
 	// DayCapMS is the credit the day cap withheld, SM 5.3's X.day_cap:
 	// what the project and kind credited past DAY_CAP_S that day, which
-	// FinalMS and PendingMS leave out.
+	// FinalMS and PendingMS leave out. A day stored before migration 0012
+	// that couldn't be cut again, because some of its minutes were gone,
+	// keeps FinalMS and PendingMS past DAY_CAP_S (see the package doc).
 	DayCapMS int64
 }
 

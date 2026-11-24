@@ -44,6 +44,16 @@
 // which the retention jobs may have deleted. The agent's time on its own is
 // never capped.
 //
+// Rows stored before migration 0012, or cut under another DAY_CAP_S, aren't
+// a cut. The settle job's first run cuts each such day of the last 182 days
+// again whole (RecutDays), and so does the day's next change, while
+// rollup_minutes holds all of it. A day whose minutes the retention jobs have
+// partly deleted can't be cut again: it keeps its rows, which can keep more
+// than DAY_CAP_S, and a change to it holds back the credit it adds and takes
+// the credit it removes out of what is held back first, never below zero
+// (keep). Such a day's rows sum to its buckets unless a removal stopped at
+// zero.
+//
 // No fraud flag is stored for hours nobody submitted (D-no-ingest-flags;
 // DESIGN 4.2, 8.5). SM 3.4's concurrent_devices, two devices crediting
 // one slot, is computed when a submission is frozen, over the submitted
