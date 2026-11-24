@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/some-du6e/pairtime/internal/jsonschema"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -262,11 +263,11 @@ func TestCheckScenarioEvents(t *testing.T) {
 				if err := e.Validate(); err != nil {
 					t.Errorf("%s: %v", where, err)
 				}
-				v, err := decodeJSON(s.lines[i])
+				v, err := jsonschema.Decode(s.lines[i])
 				if err != nil {
 					t.Fatalf("%s: %v", where, err)
 				}
-				if errs := sv.validate(v); len(errs) > 0 {
+				if errs := sv.Validate(v); len(errs) > 0 {
 					t.Errorf("%s: %s", where, strings.Join(errs, "; "))
 				}
 				b, err := json.Marshal(e)
