@@ -47,16 +47,17 @@
 // the ones before with the carry: the last record of each kind whose
 // effect lasts until a later one ends it (window.go). A turn's run has no
 // bound in time (SM 2.6), so a turn that ran into the window holds the
-// window's start at the turn's submit, for up to holdMaxMS: its run, its
-// origin and its class come from its own records. Past that, and once a
-// run is over, the carry keeps the session's last prompted turn's latest
-// agent record and whether its run was cut or it stopped, and dates what
-// it carries so the run goes on, or stays over, as it does with every
-// record. Each Step scores the window and the carry in a new State. What
-// that derives at and after FinalBefore is what a State holding every
-// record would, because no rule bounded in time reaches back further than
-// BUCKET_TTL_S (2 h), and the window and the carry stand for the rules
-// that aren't bounded. What it misses is a browser run longer than
+// window's start at the turn's submit, or at the relay.message its prompt
+// paired with when that came first, for up to holdMaxMS: its run, its
+// origin and its class come from its own records and its witness. Past
+// that, and once a run is over, the carry keeps the session's last
+// prompted turn's latest agent record and whether its run was cut or it
+// stopped, and dates what it carries so the run goes on, or stays over, as
+// it does with every record. Each Step scores the window and the carry in
+// a new State. What that derives at and after FinalBefore is what a State
+// holding every record would, because no rule bounded in time reaches back
+// further than BUCKET_TTL_S (2 h), and the window and the carry stand for
+// the rules that aren't bounded. What it misses is a browser run longer than
 // Lookback, whose lookup credit (SM 2.5) rests on a bracket before the
 // run; a prompted turn that runs longer than holdMaxMS and whose origin
 // rests on input it carries no record of; and a turn a stop hook continued
@@ -528,25 +529,31 @@ func (l *Loop) open() error {
 }
 
 // rebuildCarry returns the carry of c, a place an older agent saved, with
-// the Stamped, RestartAt and Lock that agent didn't keep, as a
-// carryVersion agent would have folded them from the same records: the
-// ones dated before c.From in the batches up to c.Batch that the loop
-// scored (follower), the window's batches from FromBatch on included,
-// since records slid out of them or came late. The carry's other slots
-// stay as saved, since that agent folded them as a carryVersion agent
-// does. Lock is the latest os.power that locked or unlocked the screen, in
-// record order, so the order the ledger holds them in doesn't matter. RestartAt is folded again in record order (restartAt) from the
-// earlier of the carry's Power and Presence on: a restart dated at or
-// before that one drops neither (carry.records), and with either missing,
-// no restart drops anything.
+// what that agent didn't keep, as a carryVersion agent would have folded
+// it from the same records: the ones dated before c.From in the batches up
+// to c.Batch that the loop scored (follower), the window's batches from
+// FromBatch on included, since records slid out of them or came late. The
+// carry's other slots stay as saved, since that agent folded them as a
+// carryVersion agent does. Lock is the latest os.power that locked or
+// unlocked the screen, in record order, so the order the ledger holds them
+// in doesn't matter.
+//
+// Stamped and RestartAt are folded again too, in record order (restartAt)
+// over every record of the sampler's and every stamped one, as fold took
+// them, since records drops a carried Power, Presence or Lock dated before
+// the restart: the rebuilt Lock can be older than both of the others, or
+// the only one there with Power, as on a machine whose idle read never
+// succeeded. A place an agent before WP-HL1 saved (V 0) has neither. A
+// place an agent between WP-HL1's first part and D-sampleless-power saved
+// (V 1) has both, but when v0.1.0-alpha.7 rebuilt it from an older place
+// it folded RestartAt only from the earlier of Power and Presence, and
+// only with both there, so it can miss the restart that drops the rebuilt
+// Lock. Each takes the later of the saved and the folded value, so a saved
+// one never moves back, as when a batch before the place doesn't read.
 func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	out := c.Carry
-	out.Stamped, out.Lock = 0, nil
-	again := out.Power != nil && out.Presence != nil
-	var lo int64
-	if again {
-		lo = min(out.Power.T, out.Presence.T)
-	}
+	out.Lock = nil
+	var stamped int64
 	var marks []mark
 	var f follower
 	err := l.readBatches(1, func(b ledger.Batch) error {
@@ -561,14 +568,14 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 			if err != nil || !ok || ev.T >= c.From {
 				continue
 			}
-			s, st := sampler(&ev), stamps(&ev)
-			if st {
-				out.Stamped = max(out.Stamped, ev.T)
-			}
 			if p, ok := ev.Data.(*event.OSPower); ok && locks(p) {
 				out.Lock = latest(out.Lock, ev)
 			}
-			if again && ev.T >= lo && (s || st) {
+			s, st := sampler(&ev), stamps(&ev)
+			if st {
+				stamped = max(stamped, ev.T)
+			}
+			if s || st {
 				marks = append(marks, mark{t: ev.T, seq: ev.Seq, sampler: s})
 			}
 		}
@@ -581,7 +588,8 @@ func (l *Loop) rebuildCarry(c cursor) (carry, error) {
 	if err != nil && !errors.Is(err, errEnough) {
 		return carry{}, err
 	}
-	out.RestartAt = restartAt(marks, l.opts.Params.Int(params.BUCKET_TTL_S)*1000)
+	out.Stamped = max(c.Carry.Stamped, stamped)
+	out.RestartAt = max(c.Carry.RestartAt, restartAt(marks, l.opts.Params.Int(params.BUCKET_TTL_S)*1000))
 	out.V = carryVersion
 	return out, nil
 }
@@ -889,7 +897,7 @@ func (l *Loop) step(b uint64) {
 		}
 	}
 	l.cur.FinalBefore = fb
-	l.win.slide(holdFor(all.Turns, fb-l.lookback))
+	l.win.slide(holdFor(all, fb-l.lookback))
 	if !l.batching {
 		l.save()
 	} else {
@@ -900,14 +908,29 @@ func (l *Loop) step(b uint64) {
 }
 
 // holdFor returns where the window starts when it would start at from:
-// from, or the earliest submit of a turn that ran past from, if no more than
-// holdMaxMS before it. A State that holds such a turn's records gives its
-// run, origin and class as one holding every record does.
-func holdFor(turns []score.Turn, from int64) int64 {
+// from, or the earliest start of a turn of d that ran past from, if no more
+// than holdMaxMS before it. A turn starts at its submit, or at the t of the
+// relay.message its prompt paired with when that came first (Turn.Relay),
+// as a queued message's record can, up to RELAY_MATCH_S before the prompt
+// (SM 2.2 rule 9). A State that holds such a turn's records, its witness
+// included, gives its run, origin and class as one holding every record
+// does.
+func holdFor(d score.Derived, from int64) int64 {
+	relays := make(map[string]int64, len(d.Relays))
+	for _, r := range d.Relays {
+		relays[r.ID] = r.T
+	}
 	start := from
-	for _, tn := range turns {
-		if tn.RunUntil > from && tn.TSubmit < start && tn.TSubmit >= from-holdMaxMS {
-			start = tn.TSubmit
+	for _, tn := range d.Turns {
+		if tn.RunUntil <= from {
+			continue
+		}
+		at := tn.TSubmit
+		if t, ok := relays[tn.Relay]; ok && tn.Relay != "" && t < at && t >= from-holdMaxMS {
+			at = t
+		}
+		if at < start && at >= from-holdMaxMS {
+			start = at
 		}
 	}
 	return start

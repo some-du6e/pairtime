@@ -1,0 +1,3 @@
+# store.sql, hooks.jsonl and probes.json are replayed byte for byte, so git must
+# never change their line endings, not even on a Windows checkout with core.autocrlf.
+* -text

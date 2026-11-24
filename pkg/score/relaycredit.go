@@ -19,8 +19,14 @@ import (
 // nothing else (SM 2.3). Both come after every other candidate, and they
 // are realized in a slot of any presence but one the machine slept
 // through, whatever its focus or input says, because the person typed and
-// read on another device (SM 2.1, 2.3, 2.4). Every second they credit is
-// level C, under the anchor's labels, via_relay among them (SM 5.1).
+// read on another device (SM 2.1, 2.3, 2.4). For them a slot is slept
+// through when it overlaps a suspend or a gap between samples longer than
+// twice SLOW_SAMPLE_S, unless it is a slot where the machine can't sample,
+// which nothing from before its sampler stopped reaches (Slot.slept,
+// D-relayed-sleep), so a shorter gap, a hard break for every other window
+// unless slow sampling explains it (D14), doesn't stop them. Every second
+// they credit is level C, under the anchor's labels, via_relay among them
+// (SM 5.1).
 
 // relaySession is a harness session with relayed anchors. The relayed
 // stage's candidates are its anchors' leads and its relayed reading.
@@ -165,9 +171,11 @@ func (c *creditor) relaySpans(rs *relaySession, threads []string, byThread map[s
 }
 
 // relayLive marks the slots relayed credit reaches, a relayed lead or a
-// relayed session's reading, but those the machine slept through: the
-// credit pass keeps their seconds' state even where deadSlot says nothing
-// else can credit them. It returns nil when there is no relayed credit.
+// relayed session's reading, but those the machine slept through
+// (Slot.slept): the credit pass keeps their seconds' state even where
+// deadSlot says nothing else can credit them, as in a slot that is
+// Asleep across a gap of at most twice SLOW_SAMPLE_S. It returns nil when
+// there is no relayed credit.
 func (c *creditor) relayLive() []bool {
 	if len(c.relays) == 0 {
 		return nil
@@ -175,7 +183,7 @@ func (c *creditor) relayLive() []bool {
 	out := make([]bool, len(c.slots))
 	mark := func(from, to int64) {
 		for k := max(0, (from-c.first)/event.SlotMS); k < int64(len(c.slots)) && c.first+k*event.SlotMS < to; k++ {
-			if !c.slots[k].Asleep {
+			if !c.slots[k].slept {
 				out[k] = true
 			}
 		}

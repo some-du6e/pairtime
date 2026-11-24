@@ -70,11 +70,21 @@ type Facts struct {
 	SpoolStopped bool
 	// Exposed are the data folder, and the files of hook calls the agent
 	// holds or spools in it, that other accounts on this computer may open,
-	// each with the chmod that closes it (inbox.ExposedPaths). Modes says
-	// file modes decide who may, as everywhere but on Windows, where the
-	// data folder's access list does.
+	// each with the chmod that closes it (inbox.ExposedPaths). File modes
+	// decide who may everywhere but on Windows (GOOS), where the data
+	// folder's access list does.
 	Exposed []Exposed
-	Modes   bool
+	// T3 is what doctor found of T3 Code on this computer itself: its
+	// store, and the Claude homes of their own its Claude instances use
+	// (DESIGN 5.1).
+	T3 T3Facts
+	// GOOS is the OS doctor runs on, and Distro, on Linux, the words of
+	// os-release's ID and ID_LIKE (DistroIDs), which say how to install a
+	// tool there.
+	GOOS   string
+	Distro []string
+	// Now is when doctor ran.
+	Now time.Time
 }
 
 // Exposed is a path that other accounts on this computer may open, and
@@ -104,6 +114,7 @@ func Checks(f Facts) []Check {
 		out = append(out, hookChecks(h)...)
 	}
 	out = append(out, adapterChecks(f)...)
+	out = append(out, t3Checks(f)...)
 	if c, ok := ledgerCheck(f); ok {
 		out = append(out, c)
 	}
@@ -449,7 +460,7 @@ func spoolCheck(f Facts) Check {
 func exposedCheck(f Facts) Check {
 	c := Check{Name: "private files"}
 	switch {
-	case !f.Modes:
+	case f.GOOS == "windows":
 		c.Result, c.Text = Skip, "the data folder's access list decides who may open the hook calls in it"
 		return c
 	case len(f.Exposed) == 0:

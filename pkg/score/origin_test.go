@@ -252,6 +252,13 @@ func cadence(b *tl) {
 // ms, under a version no real table has.
 func tableWithGrace(t *testing.T, ms int64) *params.Table {
 	t.Helper()
+	return tableWithInts(t, map[params.IntParam]int64{params.INPUT_RELEASE_GRACE_MS: ms})
+}
+
+// tableWithInts returns the test table with the integer parameters in
+// change set to their values, under a version no real table has.
+func tableWithInts(t *testing.T, change map[params.IntParam]int64) *params.Table {
+	t.Helper()
 	var doc struct {
 		Version string                     `json:"version"`
 		Params  map[string]json.RawMessage `json:"params"`
@@ -260,7 +267,9 @@ func tableWithGrace(t *testing.T, ms int64) *params.Table {
 		t.Fatal(err)
 	}
 	doc.Version = "9.9.9"
-	doc.Params[params.INPUT_RELEASE_GRACE_MS.String()] = json.RawMessage(strconv.FormatInt(ms, 10))
+	for p, v := range change {
+		doc.Params[p.String()] = json.RawMessage(strconv.FormatInt(v, 10))
+	}
 	data, err := json.Marshal(doc)
 	if err != nil {
 		t.Fatal(err)
