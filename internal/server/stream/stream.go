@@ -1,0 +1,477 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+// Package stream is GET /api/v1/stream, the server-sent events that keep
+// an open dashboard live (WP-SV8; SP 6.4; DESIGN 2's R5 row and 3.10's
+// "Rollups and live dashboard" row).
+//
+// A page opens one EventSource for every topic it shows, as
+// /api/v1/stream?topics=user:me. The stream starts with "retry: 5000",
+// carries the topics' events, and sends a ": keepalive" comment every 15
+// s, well inside the 125 s Cloudflare waits between bytes (SP 6.4). Each
+// event is written and flushed through http.ResponseController the moment
+// it is published.
+//
+// # Topics
+//
+// user:me is the signed-in account's own topic. The server resolves it from
+// the session cookie, so a stream only ever carries its own account's
+// events; a stream that asks for it signed out gets 401, and one that
+// names any other user: topic gets 403. Its credited events carry the
+// numbers of the owner's dashboard from dashboard.View, the View the page
+// draws, so the two never disagree, with projects named by their
+// account-level ids and never by a name (D-owner-names stays the page's).
+//
+// profile:@<name> topics are anonymous. They carry only what DESIGN 8.3
+// gives the public profile: daily totals of final minutes at level A or B,
+// with no project and no time of day (PublicTotals; DESIGN 6.2 D1, D11),
+// and at most one event an hour, on the hour (profile.go). Profiles is how
+// a name finds its account; until WP-SV9 gives pairtimed one, every
+// profile: topic is unknown.
+//
+// SP 6.4's project: and global: topics, and its commit events, which wait
+// for WP-AG5's commit records, aren't here yet.
+//
+// # Event ids, the ring buffers and resync
+//
+// Every topic keeps its events of the last Window (5 minutes), at most
+// ringMax of them. Each topic counts its events from 1 under an epoch, a
+// random tag the topic gets when it is made, so a restart, or a topic that
+// went idle and was made again, starts a new count. An event's id is the
+// stream's place in every topic it carries, "<topic>:<epoch>-<n>" for each,
+// joined by commas, as "user:me:k3j9x2abcde7q-18". A browser sends the last
+// id it saw as Last-Event-ID when it reconnects, so one id has to say where
+// the stream stood in all its topics. The numbers are per topic, so a
+// stream learns nothing of other topics' events from them: a profile's
+// viewer can't count the owner's private events, and nobody can count
+// another account's.
+//
+// A reconnect whose id is from the topic's epoch and whose gap the ring
+// still holds gets the gap replayed, in order. Any other id gets an event
+// named resync, whose data names the topics to refetch, and the page
+// refetches its snapshot (GET /api/v1/users/me/dashboard). A stream's first
+// block carries its place as an id with no data, which sets the browser's
+// last id without dispatching an event, so a reconnect before the first
+// event still resumes where the stream was.
+//
+// # Publishing
+//
+// Changed tells the hub that a transaction which changed an account's
+// rollups has committed. pairtimed calls it after the writer's op
+// returned, never inside it, and not for an op that failed. Changed only
+// marks the account; the hub reads the View off the caller's goroutine, at
+// most once every Gap (1 s) per account, so a burst of uploads makes one
+// event and the first change of a quiet minute goes out at once. Gap stays
+// under half of R5's 2 s, which SP 6.3's 2 s would use up alone. Nothing is
+// read for an account with no stream open.
+//
+// Publishing never blocks: an event goes to each stream's buffer without
+// waiting, and a stream whose buffer is full has fallen behind, so the hub
+// ends it. Its browser reconnects with its last id and gets the gap from
+// the ring, or resync.
+//
+// # Caps
+//
+// A stream counts toward its account, when it carries user:me, toward its
+// client, and toward the server's total. Past MaxPerAccount, MaxPerClient
+// or MaxStreams the request gets 429, so one account can't hold thousands
+// of streams open. The client is the address Cloudflare names in
+// CF-Connecting-IP, as ingest reads it, else the connection's, with IPv6
+// counted by its /64.
+//
+// The stream holds events in memory for Window and stores nothing (DESIGN
+// 4.4 has no row for it, and needs none).
+package stream
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base32"
+	"log/slog"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/some-du6e/pairtime/internal/server/dashboard"
+)
+
+// Path is where the stream is served.
+const Path = "/api/v1/stream"
+
+// Defaults for Options.
+const (
+	// DefaultWindow is how long a topic keeps its events for a reconnect
+	// to replay (SP 6.4).
+	DefaultWindow = 5 * time.Minute
+	// DefaultKeepalive is how often a stream sends ": keepalive" (SP 6.4).
+	DefaultKeepalive = 15 * time.Second
+	// DefaultRetry is the reconnect delay the stream gives the browser.
+	DefaultRetry = 5 * time.Second
+	// DefaultGap is the shortest time between two reads of one account's
+	// View for its topic.
+	DefaultGap = time.Second
+	// DefaultMaxStreams is the most streams open at once, twice the 5,000
+	// DESIGN 10.6 plans for at an event peak.
+	DefaultMaxStreams = 10000
+	// DefaultMaxPerAccount is the most streams one account holds open,
+	// one for each tab of a few windows.
+	DefaultMaxPerAccount = 10
+	// DefaultMaxPerClient is the most streams one client address holds
+	// open. A school network puts a whole class behind one address, so it
+	// is far above one person's tabs.
+	DefaultMaxPerClient = 100
+)
+
+// MaxTopics is the most topics one stream carries.
+const MaxTopics = 8
+
+// ringMax is the most events a topic keeps, whatever their age, which
+// bounds a busy topic's memory. A reconnect that needs one it dropped gets
+// resync. A user topic publishes at most one event a Gap, and a profile
+// topic one an hour.
+const ringMax = 32
+
+// sendBuffer is how many events a stream can be behind before the hub
+// ends it.
+const sendBuffer = 16
+
+// writeTimeout bounds each write to a stream, so a client that stops
+// reading doesn't hold its stream for ever: the server has no write
+// timeout of its own, because streams stay open (cmd/pairtimed's
+// newHTTPServer).
+const writeTimeout = 10 * time.Second
+
+// Options configure a Hub. Zero values take the defaults.
+type Options struct {
+	// Source is where a user topic's numbers come from: dashboard.Rollups
+	// in pairtimed, the Source the dashboard page and its API read. Nil
+	// publishes no credited events.
+	Source dashboard.Source
+	// Account returns the users id of the account a request is signed in
+	// to: dashboard.ErrNotSignedIn when it isn't, and another error when
+	// its session couldn't be read. Nil refuses user:me as signed out.
+	Account func(r *http.Request) (string, error)
+	// Profiles finds the accounts of public profiles and their totals.
+	// Nil makes every profile: topic unknown.
+	Profiles Profiles
+
+	Window, Keepalive, Retry, Gap time.Duration
+	// MaxStreams, MaxPerAccount and MaxPerClient are the caps.
+	MaxStreams, MaxPerAccount, MaxPerClient int
+
+	// Logger hears of reads that fail. Nil means slog.Default().
+	Logger *slog.Logger
+}
+
+// Hub is the stream: its topics, their ring buffers and the streams open
+// on them.
+type Hub struct {
+	o Options
+
+	// mu guards everything below, the topics' fields and the streams'
+	// subscriptions.
+	mu     sync.Mutex
+	topics map[string]*topic
+	closed bool
+	// total, perAccount and perClient count the open streams.
+	total      int
+	perAccount map[string]int
+	perClient  map[string]int
+
+	// done is closed by Close, which cancels ctx, the context of the
+	// hub's reads; wg waits for the hub's own goroutines.
+	done   chan struct{}
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	// reads bounds the View reads running at once.
+	reads chan struct{}
+}
+
+// maxReads is how many View or profile reads the hub runs at once.
+const maxReads = 4
+
+// New returns a Hub and starts its goroutines: the sweep that drops old
+// events and idle topics, and the hourly profile pass. Close stops them.
+func New(o Options) *Hub {
+	if o.Window <= 0 {
+		o.Window = DefaultWindow
+	}
+	if o.Keepalive <= 0 {
+		o.Keepalive = DefaultKeepalive
+	}
+	if o.Retry <= 0 {
+		o.Retry = DefaultRetry
+	}
+	if o.Gap <= 0 {
+		o.Gap = DefaultGap
+	}
+	if o.MaxStreams <= 0 {
+		o.MaxStreams = DefaultMaxStreams
+	}
+	if o.MaxPerAccount <= 0 {
+		o.MaxPerAccount = DefaultMaxPerAccount
+	}
+	if o.MaxPerClient <= 0 {
+		o.MaxPerClient = DefaultMaxPerClient
+	}
+	if o.Logger == nil {
+		o.Logger = slog.Default()
+	}
+	h := &Hub{
+		o:          o,
+		topics:     make(map[string]*topic),
+		perAccount: make(map[string]int),
+		perClient:  make(map[string]int),
+		done:       make(chan struct{}),
+		reads:      make(chan struct{}, maxReads),
+	}
+	h.ctx, h.cancel = context.WithCancel(context.Background())
+	h.wg.Add(1)
+	go h.sweep()
+	if o.Profiles != nil {
+		h.wg.Add(1)
+		go h.hourly()
+	}
+	return h
+}
+
+// Close ends every stream, stops the hub's goroutines and waits for them.
+// Streams opened after it get 503. Calling it again does nothing more.
+func (h *Hub) Close() {
+	h.mu.Lock()
+	already := h.closed
+	h.closed = true
+	h.mu.Unlock()
+	if !already {
+		close(h.done)
+		h.cancel()
+	}
+	h.wg.Wait()
+}
+
+// Streams is how many streams are open, for /metrics (DESIGN 10.4).
+func (h *Hub) Streams() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.total
+}
+
+// The two kinds of topic, as the hub keys them: by account, whatever name
+// the stream gave.
+const (
+	userKey    = "user:"
+	profileKey = "profile:"
+)
+
+// topic is one topic's events and subscribers.
+type topic struct {
+	// key is userKey or profileKey and the account's id.
+	key, account string
+	// epoch tags this topic's event numbers (newEpoch).
+	epoch string
+	// seq is the number of the last event published, 0 before the first.
+	seq uint64
+	// ring holds the events of the last Window, oldest first, at most
+	// ringMax.
+	ring []*event
+	// lost is the number of the newest event the ring dropped, 0 for none.
+	lost uint64
+	// subs are the streams on the topic, each with this topic's index in
+	// its stream's list.
+	subs map[*sub]int
+	// idle is when the last stream left, zero while one is open.
+	idle time.Time
+	// owner is a user topic's publishing state, profile a profile topic's.
+	owner   *ownerState
+	profile *profileState
+}
+
+// event is one published event.
+type event struct {
+	seq uint64
+	at  time.Time
+	// frame is the event's lines after its id, "event: <name>\ndata:
+	// <json>\n\n", the same for every stream.
+	frame []byte
+}
+
+// sub is one stream's subscription to its topics.
+type sub struct {
+	ch chan delivery
+	// kicked is closed when the hub ends the stream for falling behind.
+	kicked chan struct{}
+	kick   sync.Once
+	topics []*topic
+}
+
+// delivery is an event for a stream, with the index of its topic in the
+// stream's list.
+type delivery struct {
+	i  int
+	ev *event
+}
+
+// epochEncoding writes epochs: lowercase base32 without padding, which
+// has no "-" or ":" to confuse an id.
+var epochEncoding = base32.NewEncoding("abcdefghijklmnopqrstuvwxyz234567").WithPadding(base32.NoPadding)
+
+// newEpoch returns a new topic epoch: 8 random bytes, 13 characters.
+func newEpoch() string {
+	var b [8]byte
+	rand.Read(b[:])
+	return epochEncoding.EncodeToString(b[:])
+}
+
+// topicLocked returns the topic of key, making it when it doesn't exist.
+func (h *Hub) topicLocked(key, account string) *topic {
+	t := h.topics[key]
+	if t != nil {
+		return t
+	}
+	t = &topic{key: key, account: account, epoch: newEpoch(), subs: make(map[*sub]int)}
+	switch {
+	case strings.HasPrefix(key, userKey):
+		t.owner = &ownerState{}
+	case strings.HasPrefix(key, profileKey):
+		t.profile = &profileState{}
+	}
+	h.topics[key] = t
+	return t
+}
+
+// frame returns an event's lines after its id.
+func frame(name string, data []byte) []byte {
+	b := make([]byte, 0, len("event: \ndata: \n\n")+len(name)+len(data))
+	b = append(b, "event: "...)
+	b = append(b, name...)
+	b = append(b, "\ndata: "...)
+	b = append(b, data...)
+	return append(b, "\n\n"...)
+}
+
+// publishLocked adds an event to t's ring and hands it to t's streams. A
+// stream whose buffer is full is ended.
+func (h *Hub) publishLocked(t *topic, name string, data []byte, now time.Time) {
+	t.seq++
+	ev := &event{seq: t.seq, at: now, frame: frame(name, data)}
+	t.ring = append(t.ring, ev)
+	trimLocked(t, now, h.o.Window)
+	for s, i := range t.subs {
+		select {
+		case s.ch <- delivery{i: i, ev: ev}:
+		default:
+			h.kickLocked(s)
+		}
+	}
+}
+
+// trimLocked drops the events older than window from t's ring, and the
+// oldest while it holds more than ringMax.
+func trimLocked(t *topic, now time.Time, window time.Duration) {
+	n := 0
+	for n < len(t.ring) && (now.Sub(t.ring[n].at) >= window || len(t.ring)-n > ringMax) {
+		n++
+	}
+	if n == 0 {
+		return
+	}
+	t.lost = t.ring[n-1].seq
+	// slices.Delete clears the tail, so no dropped event stays reachable.
+	t.ring = slices.Delete(t.ring, 0, n)
+}
+
+// kickLocked ends s: it leaves its topics, and its stream returns.
+func (h *Hub) kickLocked(s *sub) {
+	s.kick.Do(func() { close(s.kicked) })
+	h.leaveLocked(s, time.Now())
+}
+
+// leaveLocked takes s off its topics.
+func (h *Hub) leaveLocked(s *sub, now time.Time) {
+	for _, t := range s.topics {
+		if _, ok := t.subs[s]; !ok {
+			continue
+		}
+		delete(t.subs, s)
+		if len(t.subs) == 0 {
+			t.idle = now
+		}
+	}
+}
+
+// sweepEvery is how often the sweep runs, a fifth of the window.
+func (h *Hub) sweepEvery() time.Duration { return h.o.Window / 5 }
+
+// sweep drops old events and idle topics until Close.
+func (h *Hub) sweep() {
+	defer h.wg.Done()
+	tick := time.NewTicker(h.sweepEvery())
+	defer tick.Stop()
+	for {
+		select {
+		case <-h.done:
+			return
+		case now := <-tick.C:
+			h.sweepOnce(now)
+		}
+	}
+}
+
+// sweepOnce drops the events older than the window from every topic, and
+// every topic no stream has been on for the window whose ring is then
+// empty: a reconnect to it gets resync from the topic made in its place.
+// A user topic waiting to publish stays.
+func (h *Hub) sweepOnce(now time.Time) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for key, t := range h.topics {
+		trimLocked(t, now, h.o.Window)
+		if len(t.subs) > 0 || len(t.ring) > 0 || now.Sub(t.idle) < h.o.Window {
+			continue
+		}
+		if t.owner != nil && t.owner.busy {
+			continue
+		}
+		delete(h.topics, key)
+	}
+}
+
+// position is a stream's place in one topic: the epoch and number of the
+// last event it has.
+type position struct {
+	epoch string
+	seq   uint64
+}
+
+// maxIDLen bounds the Last-Event-ID the hub reads: MaxTopics places, each
+// well under 100 bytes.
+const maxIDLen = 1024
+
+// parseID reads a stream's id: "<topic>:<epoch>-<n>" for each topic,
+// joined by commas. A topic name has colons of its own, so each place
+// splits at its last one. It reports false for an id that isn't one.
+func parseID(s string) (map[string]position, bool) {
+	if s == "" || len(s) > maxIDLen {
+		return nil, false
+	}
+	out := make(map[string]position)
+	for _, part := range strings.Split(s, ",") {
+		i := strings.LastIndexByte(part, ':')
+		if i <= 0 {
+			return nil, false
+		}
+		epoch, n, ok := strings.Cut(part[i+1:], "-")
+		if !ok || len(epoch) != 13 || strings.Trim(epoch, "abcdefghijklmnopqrstuvwxyz234567") != "" {
+			return nil, false
+		}
+		seq, err := strconv.ParseUint(n, 10, 64)
+		if err != nil || strconv.FormatUint(seq, 10) != n {
+			return nil, false
+		}
+		out[part[:i]] = position{epoch: epoch, seq: seq}
+	}
+	return out, true
+}

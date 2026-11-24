@@ -1,0 +1,214 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+package stream
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+
+	"github.com/some-du6e/pairtime/internal/server/dashboard"
+)
+
+// readTimeout bounds one read of a View or of a profile's totals.
+const readTimeout = 10 * time.Second
+
+// ownerState is a user topic's publishing: whether its account changed
+// since the last read began, whether a read is waiting or running, when
+// the last read began, and what the last credited event said.
+type ownerState struct {
+	dirty, busy bool
+	last        time.Time
+	prev        *Credited
+}
+
+// Credited is a credited event's data: the owner's time today and over the
+// last 7 days, and each project's, as dashboard.View counts them for the
+// page. Every time is seconds credited, final and pending together, or
+// split as dashboard.Time does. Projects go by their account-level ids
+// (dashboard.Project.ID) and never by a name, and the page knows their
+// names (D-owner-names).
+//
+// SP 6.4 sketched delta_s, today_s and week_s for one project, with
+// today's split by activity kind. The rollups merge devices (SM 3.4), so a
+// revision's own delta isn't the account's, and a View has no day split
+// by kind, so each event carries the account's totals as the page shows
+// them instead.
+type Credited struct {
+	// Day is the account's local date, YYYY-MM-DD (dashboard.View.Today).
+	Day string `json:"day"`
+	// DeltaS is how much TodayS grew since the topic's last credited
+	// event: all of it when that event was of another day, and 0 for the
+	// topic's first.
+	DeltaS float64 `json:"delta_s"`
+	// TodayS and WeekS are the owner's time today and over the last 7
+	// days.
+	TodayS float64 `json:"today_s"`
+	WeekS  float64 `json:"week_s"`
+	// Today and Week split them into final and pending, beside the
+	// agent's time on its own.
+	Today Clocks `json:"today"`
+	Week  Clocks `json:"week"`
+	// Projects are the projects with time today or in the last 7 days, in
+	// the View's order.
+	Projects []ProjectClocks `json:"projects"`
+}
+
+// Clocks are the owner's time and the agent's time on its own over a span.
+type Clocks struct {
+	You   dashboard.Time `json:"you"`
+	Agent dashboard.Time `json:"agent"`
+}
+
+// ProjectClocks are one project's clocks today and over the last 7 days.
+type ProjectClocks struct {
+	// Project is the project's account-level id.
+	Project string `json:"project"`
+	Today   Clocks `json:"today"`
+	Week    Clocks `json:"week"`
+}
+
+// creditedOf returns the credited event of v, after prev, the topic's last
+// one or nil.
+func creditedOf(v dashboard.View, prev *Credited) Credited {
+	c := Credited{Day: v.Today, Week: Clocks{You: v.Week.You, Agent: v.Week.Agent}, Projects: []ProjectClocks{}}
+	c.WeekS = v.Week.You.Total()
+	today := map[string]dashboard.ProjectTime{}
+	if n := len(v.Days); n > 0 && v.Days[n-1].Date == v.Today {
+		d := v.Days[n-1]
+		c.Today = Clocks{You: d.You, Agent: d.Agent}
+		for _, pt := range d.Projects {
+			today[pt.Project] = pt
+		}
+	}
+	c.TodayS = c.Today.You.Total()
+	week := make(map[string]dashboard.ProjectTime, len(v.Week.Projects))
+	for _, pt := range v.Week.Projects {
+		week[pt.Project] = pt
+	}
+	for _, p := range v.Projects {
+		td, inToday := today[p.ID]
+		wk, inWeek := week[p.ID]
+		if !inToday && !inWeek {
+			continue
+		}
+		c.Projects = append(c.Projects, ProjectClocks{
+			Project: p.ID,
+			Today:   Clocks{You: td.You, Agent: td.Agent},
+			Week:    Clocks{You: wk.You, Agent: wk.Agent},
+		})
+	}
+	switch {
+	case prev == nil:
+	case prev.Day == c.Day:
+		c.DeltaS = c.TodayS - prev.TodayS
+	default:
+		c.DeltaS = c.TodayS
+	}
+	return c
+}
+
+// Changed tells the hub that a transaction that changed account's rollups
+// has committed. It never blocks: a user topic with a stream on it, or
+// one a stream left less than Window ago, gets a credited event from a
+// fresh View at once, or Gap after the last one began, and a profile
+// topic of the account is marked for the next hour. An account with no
+// topic costs nothing.
+func (h *Hub) Changed(account string) {
+	if account == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed {
+		return
+	}
+	if t := h.topics[userKey+account]; t != nil && h.o.Source != nil {
+		st := t.owner
+		st.dirty = true
+		if !st.busy {
+			st.busy = true
+			h.wg.Add(1)
+			go h.publishOwner(t, time.Until(st.last.Add(h.o.Gap)))
+		}
+	}
+	if t := h.topics[profileKey+account]; t != nil {
+		t.profile.dirty = true
+	}
+}
+
+// publishOwner reads t's View once wait has passed, publishes its credited
+// event, and goes on Gap apart while the account keeps changing. It ends
+// when nothing changed during its last read, when t is no longer the
+// account's topic, or at Close.
+func (h *Hub) publishOwner(t *topic, wait time.Duration) {
+	defer h.wg.Done()
+	for {
+		if !h.sleep(wait) {
+			return
+		}
+		select {
+		case h.reads <- struct{}{}:
+		case <-h.done:
+			return
+		}
+		h.mu.Lock()
+		if h.topics[t.key] != t {
+			h.mu.Unlock()
+			<-h.reads
+			return
+		}
+		st := t.owner
+		st.dirty = false
+		started := time.Now()
+		st.last = started
+		h.mu.Unlock()
+
+		ctx, cancel := context.WithTimeout(h.ctx, readTimeout)
+		v, err := h.o.Source.View(ctx, t.account, started)
+		cancel()
+		<-h.reads
+
+		h.mu.Lock()
+		if h.topics[t.key] != t {
+			h.mu.Unlock()
+			return
+		}
+		if err != nil {
+			h.o.Logger.Warn("reading a dashboard for its stream", "user", t.account, "err", err)
+		} else {
+			c := creditedOf(v, st.prev)
+			if data, err := json.Marshal(c); err == nil {
+				h.publishLocked(t, "credited", data, time.Now())
+				st.prev = &c
+			}
+		}
+		if !st.dirty {
+			st.busy = false
+			h.mu.Unlock()
+			return
+		}
+		wait = time.Until(st.last.Add(h.o.Gap))
+		h.mu.Unlock()
+	}
+}
+
+// sleep waits d, or reports false at Close.
+func (h *Hub) sleep(d time.Duration) bool {
+	if d <= 0 {
+		select {
+		case <-h.done:
+			return false
+		default:
+			return true
+		}
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-h.done:
+		return false
+	}
+}
