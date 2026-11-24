@@ -134,8 +134,10 @@ const maxParked = 4096
 // (trimPendingLocked), and the next start parses what a killed run left
 // there. A call whose records were written in the moment before a kill,
 // ahead of the emptying, is parsed again, and its records, which keep
-// their event_ids (hookEventID), are left out where the ledger has them
-// (heldLogs): once rather than never.
+// their event_ids while they keep their times (hookEventID), are left out
+// where the ledger has them (heldLogs): once rather than never. A call
+// timed by the agent's receipt (hookpath.Times), which the next start's
+// replay takes anew, gets new ids, and its records come out twice.
 //
 // A held call keeps how it came, its via, the agent's walk of its sender
 // and the agent's stamp, only in the run that wrote it down. Any process
@@ -1582,10 +1584,10 @@ func (h *adapterHost) release(last bool) {
 // instead, before Parse, so the adapter's memory doesn't move on past a
 // call whose records the ledger never took (writerDown). A call during
 // which the writer stopped is held too, and at the next start the records
-// of it that went before the stop, which keep their event_ids
-// (hookEventID), are left out where the ledger has them (heldLogs), and the
-// rest are written. A call is counted once it is done with, so a status
-// that counts it finds its records in the ledger writer.
+// of it that went before the stop, which keep their event_ids while they
+// keep their times (hookEventID), are left out where the ledger has them
+// (heldLogs), and the rest are written. A call is counted once it is done
+// with, so a status that counts it finds its records in the ledger writer.
 func (h *adapterHost) parse(c hostCall) {
 	if h.writerDown() {
 		h.holdBack(c)
@@ -1625,7 +1627,8 @@ func (h *adapterHost) parse(c hostCall) {
 			// The ledger holds this record already: the call was parsed
 			// again, as after a crash during a held.jsonl replay, a kill
 			// before its pending log was emptied, or a writer that stopped
-			// partway through it, and its records keep their event_ids.
+			// partway through it, and its records keep their event_ids
+			// while they keep their times (hookEventID).
 			h.count(func() { c.st.Repeats++ })
 			continue
 		}
@@ -2069,11 +2072,12 @@ const replayProblem = "the hook calls held while the ledger wasn't open can't be
 // for its folder's project like any other (admit), and the file is sealed
 // and deleted once each of its calls is parsed (endReplay). Until then,
 // what is held behind it waits too. A crash during a replay replays the
-// file again at the next start, so its records that were sealed by then
-// are made again, under the same event_ids, and left out where the ledger
-// has them (heldLogs): once, never none. A .replay file that is parsed but can't be
-// deleted stops the replay for the run: the calls held behind it wait for
-// the next start, and calls taken in meanwhile are parsed before them.
+// file again at the next start, so its records that were sealed by then are
+// made again, under the same event_ids while they keep their times
+// (hookEventID), and left out where the ledger has them (heldLogs): once,
+// never none. A .replay file that is parsed but can't be deleted stops the
+// replay for the run: the calls held behind it wait for the next start, and
+// calls taken in meanwhile are parsed before them.
 func (h *adapterHost) replayHeld(last bool) bool {
 	name := h.a.dirs.Held()
 	replay := name + ".replay"

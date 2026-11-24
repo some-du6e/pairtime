@@ -383,10 +383,12 @@ func TestHookCallsReachTheLedger(t *testing.T) {
 			a := startAgent(t, opts)
 			sent := uint64(0)
 			var failures harnessStats // summed over the runs
+			var repeats uint64        // likewise
 			sum := func(s statusReply) {
 				st := s.Adapters.Harnesses[event.HarnessClaudeCode]
 				failures.ParseFailures += st.ParseFailures
 				failures.WriteFailures += st.WriteFailures
+				repeats += st.Repeats
 			}
 			for _, call := range calls {
 				if slices.Contains(c.restarts, call.Dir) {
@@ -418,15 +420,10 @@ func TestHookCallsReachTheLedger(t *testing.T) {
 				}
 			})
 			k, _ := deviceKeys(t, r.dirs, []keys.Store{})
-			recs := readLedger(t, r.dirs, event.SourceHook)
-			checkExpected(t, recs, k, projectKeyOf(t, r.dirs, []keys.Store{}, r.folder()))
-			t.Run("no two of the calls' records share an event_id, in any of the agent's runs", func(t *testing.T) {
-				seen := map[string]bool{}
-				for _, rec := range recs {
-					if seen[rec.ev.EventID] {
-						t.Errorf("two records share %s", rec.ev.EventID)
-					}
-					seen[rec.ev.EventID] = true
+			checkExpected(t, readLedger(t, r.dirs, event.SourceHook), k, projectKeyOf(t, r.dirs, []keys.Store{}, r.folder()))
+			t.Run("no record of the calls is left out as a repeat, in any of the agent's runs, as one whose event_id another record had would be", func(t *testing.T) {
+				if repeats != 0 {
+					t.Errorf("%d repeats", repeats)
 				}
 			})
 		})
