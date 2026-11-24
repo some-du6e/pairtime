@@ -604,7 +604,7 @@ describe("a project's name on the owner's dashboard", () => {
 			expect(nameShown(c.state)).toBe(c.want);
 		});
 	}
-	const entry = (over: Partial<ProjectEntry>): ProjectEntry => ({ project: 'p_x', code: 'p_x', local_name: 'x-cli', state: 'off', label: 'x-cli', ...over });
+	const entry = (over: Partial<ProjectEntry>): ProjectEntry => ({ project: 'p_x', code: 'p_x', local_name: 'x-cli', state: 'off', label: 'x-cli', sent: false, ...over });
 	const view = (key: string, name: string) => buildProject(key, name, { agent_only_s: 0, agent_only_by_harness: {}, uncredited: {} }, false);
 	const titles: { name: string; got: () => string; want: string }[] = [
 		{ name: "a project the day names keeps the day's name", got: () => projectTitle(view('p_x', 'from-the-day'), entry({})), want: 'from-the-day' },

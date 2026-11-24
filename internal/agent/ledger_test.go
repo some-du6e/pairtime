@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/inbox"
 	"github.com/some-du6e/pairtime/internal/agent/keys"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
 )
@@ -177,7 +178,8 @@ func TestLedgerRetry(t *testing.T) {
 		{"the agent asked the locked keyring more than once", refused >= 2},
 		{"once the keyring answers, the ledger opens and its problem clears", unlocked.Problems["ledger"] == ""},
 		{"the ledger it opened is the chain the first run started, under the same key",
-			chainErr == nil && after == before},
+			chainErr == nil && after.DeviceID == before.DeviceID && after.KeyID == before.KeyID && after.Created.Equal(before.Created) &&
+				after.Base == before.Base && after.Prev == before.Prev},
 		{"the agent stops cleanly", stopErr == nil},
 	}
 	for _, c := range cases {
@@ -228,6 +230,8 @@ func TestLedgerDeleted(t *testing.T) {
 	a := startAgent(t, opts)
 	s := waitStatus(t, a, func(s statusReply) bool { return s.Problems["ledger"] != "" })
 	_, chainErr := ledger.ReadChain(dirs.Ledger())
+	m := inbox.Message{ID: inbox.NewID(), Kind: inbox.KindHook, Sent: time.Now()}
+	spoolErr := inbox.Append(dirs.Inbox(), m)
 	a.cancel()
 	stopErr := a.waitExit(t)
 
@@ -237,12 +241,13 @@ func TestLedgerDeleted(t *testing.T) {
 	}{
 		{"the ledger problem names the chain the key already writes", strings.Contains(s.Problems["ledger"], before.DeviceID)},
 		{"no second chain starts in the new ledger directory", errors.Is(chainErr, fs.ErrNotExist)},
+		{"once the ledger can't open, hooks spool nothing, as no drain would take it", inbox.SpoolStopped(dirs.Inbox()) && errors.Is(spoolErr, inbox.ErrSpoolStopped)},
 		{"the agent stops cleanly without its ledger", stopErr == nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			if !c.ok {
-				t.Errorf("no: problem %q, chain %+v, ReadChain %v, stop %v", s.Problems["ledger"], before, chainErr, stopErr)
+				t.Errorf("no: problem %q, chain %+v, ReadChain %v, spool %v, stop %v", s.Problems["ledger"], before, chainErr, spoolErr, stopErr)
 			}
 		})
 	}

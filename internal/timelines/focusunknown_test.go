@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/some-du6e/pairtime/internal/jsonschema"
 	"github.com/some-du6e/pairtime/pkg/event"
 )
 
@@ -51,8 +52,9 @@ type focusUnknownCase struct {
 	unknownSlots []string
 }
 
-// focusUnknownCases are the cases WP-FX8 asks for, (a) to (e), with (b)'s
-// X11 twin, in List's order.
+// focusUnknownCases are the cases WP-FX8 asks for, (a) to (f), with (b)'s
+// X11 twin, in List's order. (f) is the case d-two-projects/README.md
+// says it lacks, for WP-SC8 (#377).
 var focusUnknownCases = []focusUnknownCase{
 	{name: "a-6.1-gnome", unknownRecords: 1, allUnknown: true},
 	{name: "b-pty-game", unknownRecords: 1, allUnknown: true},
@@ -60,6 +62,7 @@ var focusUnknownCases = []focusUnknownCase{
 	{name: "c-x11-reconnect", unknownRecords: 1, knownRecords: 3, unknownSlots: []string{"10:02:15", "10:02:30"}},
 	{name: "d-two-projects", unknownRecords: 1, allUnknown: true},
 	{name: "e-hour-before", unknownRecords: 1, allUnknown: true},
+	{name: "f-nearest-ahead", unknownRecords: 1, allUnknown: true},
 }
 
 // focusTestedAnchors are the anchor kinds whose evidence test names focus
@@ -162,11 +165,11 @@ func TestFocusUnknownEvents(t *testing.T) {
 				if err := e.Validate(); err != nil {
 					t.Errorf("%s line %d (seq %d, %s): %v", EventsFile, i+1, e.Seq, e.Kind(), err)
 				}
-				v, err := decodeJSON(f.Lines[i])
+				v, err := jsonschema.Decode(f.Lines[i])
 				if err != nil {
 					t.Fatalf("%s line %d: %v", EventsFile, i+1, err)
 				}
-				if errs := sv.validate(v); len(errs) > 0 {
+				if errs := sv.Validate(v); len(errs) > 0 {
 					t.Errorf("%s line %d: %s", EventsFile, i+1, strings.Join(errs, "; "))
 				}
 			}
@@ -1111,6 +1114,63 @@ func TestFocusUnknownAcceptance(t *testing.T) {
 			}
 			if got := total(t, f, "checkpoints_after_focus"); n == 0 || float64(n) != got {
 				t.Errorf("%d checkpoints after the os.focus, checkpoints_after_focus %v", n, got)
+			}
+		}},
+		{"(f) gives the slots after the prompts' midpoint to the project whose prompt lies ahead, not the most recent one's", func(t *testing.T) {
+			f := fixtures["f-nearest-ahead"]
+			byName := map[string]string{}
+			for k, n := range f.Expected.Projects {
+				byName[n] = k
+			}
+			if got := f.Expected.Totals.CreditedByProject; got[byName["notes"]] != 350 || got[byName["game"]] != 510 {
+				t.Errorf("credit by project %v, want notes 350 and game 510", got)
+			}
+			var prompts []event.Event
+			for _, e := range f.Events {
+				if _, ok := e.Data.(*event.PromptSubmit); ok {
+					prompts = append(prompts, e)
+				}
+			}
+			// The slot D-split-slots keeps for notes after its bucket runs dry,
+			// the slot at the midpoint, and the eight slots where both buckets
+			// hold output and game's prompt ahead is the nearer anchor.
+			type owner struct {
+				p string
+				s float64
+			}
+			want := map[string]owner{"14:00:15": {"notes", 5}, "14:04:30": {"notes", 15}}
+			for _, l := range []string{"14:04:45", "14:05:00", "14:05:15", "14:05:30", "14:05:45", "14:06:00", "14:06:15", "14:06:30"} {
+				want[l] = owner{"game", 15}
+			}
+			for _, s := range f.slots.Slots {
+				w, ok := want[s.Local]
+				if !ok {
+					continue
+				}
+				delete(want, s.Local)
+				if s.P != byName[w.p] || s.CreditedS != w.s || len(s.Credit) != 1 {
+					t.Errorf("slot %s: p %q with %v s from %v; want %v s to %s", s.Local, f.Expected.Projects[s.P], s.CreditedS, s.Credit, w.s, w.p)
+				}
+				if w.p != "game" {
+					continue
+				}
+				// A rule by the most recent prompt would pick notes here.
+				start := s.Start.UnixMilli()
+				var last, next *event.Event
+				for i := range prompts {
+					if prompts[i].T <= start {
+						last = &prompts[i]
+					} else if next == nil {
+						next = &prompts[i]
+					}
+				}
+				if last == nil || next == nil || last.ProjectKey != byName["notes"] || next.ProjectKey != byName["game"] ||
+					next.T-start >= start-last.T {
+					t.Errorf("slot %s: want notes's prompt the most recent and game's, ahead, the nearer", s.Local)
+				}
+			}
+			if len(want) > 0 {
+				t.Errorf("slots.json has no slot %v", slices.Sorted(maps.Keys(want)))
 			}
 		}},
 	} {

@@ -142,7 +142,8 @@ class Session:
                 self.stops.append(t)
                 if d["stop_hook_active"]:
                     # SM 2.2 rule 2: a stop-hook continuation began at the stop
-                    # before it, with no prompt.
+                    # before it. The fixtures give it no prompt, an assumption
+                    # HS 3.5 asks to check (testdata/timelines/README.md).
                     tl.check(running is None and self.turns, f"session {key}: a continuation stops at {t}")
                     self.turns.append([self.turns[-1][1], t, False])
                 else:

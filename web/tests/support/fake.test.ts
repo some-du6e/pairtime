@@ -296,27 +296,27 @@ describe("the fake's PUT /v1/projects/{key}/name keeps the spec's rules", () => 
 		{
 			name: 'a name turned on goes with its label and waits to be sent',
 			got: () => nameAnswer(entry('p_plant'), { online: true, label: 'plant-sensor' }),
-			want: { entry: { project: 'p_plant', code: 'p_plan', local_name: 'plant-sensor', state: 'sending', label: 'plant-sensor' } },
+			want: { entry: { project: 'p_plant', code: 'p_plan', local_name: 'plant-sensor', state: 'sending', label: 'plant-sensor', sent: false } },
 		},
 		{
 			name: 'a label is cleaned of extra spaces before it is kept',
 			got: () => nameAnswer(entry('p_plant'), { online: true, label: '  my   plant ' }),
-			want: { entry: { project: 'p_plant', code: 'p_plan', local_name: 'plant-sensor', state: 'sending', label: 'my plant' } },
+			want: { entry: { project: 'p_plant', code: 'p_plan', local_name: 'plant-sensor', state: 'sending', label: 'my plant', sent: false } },
 		},
 		{
 			name: 'a name shown on the dashboard and turned off shows until the next upload, and keeps its label',
 			got: () => nameAnswer(entry('p_portfolio'), { online: false, label: 'portfolio' }),
-			want: { entry: { project: 'p_portfolio', code: 'p_port', local_name: 'portfolio', state: 'removing', label: 'portfolio' } },
+			want: { entry: { project: 'p_portfolio', code: 'p_port', local_name: 'portfolio', state: 'removing', label: 'portfolio', sent: false } },
 		},
 		{
 			name: 'a name hidden on the dashboard and turned on here again goes, and is hidden no more',
 			got: () => nameAnswer(entry('p_bot'), { online: true, label: 'discord-bot' }),
-			want: { entry: { project: 'p_bot', code: 'p_bot', local_name: 'discord-bot', state: 'sending', label: 'discord-bot' } },
+			want: { entry: { project: 'p_bot', code: 'p_bot', local_name: 'discord-bot', state: 'sending', label: 'discord-bot', sent: false } },
 		},
 		{
 			name: 'a project the server gave no code keeps its empty code when its name turns on',
 			got: () => nameAnswer(entry(uncodedKey), { online: true }),
-			want: { entry: { project: uncodedKey, code: '', local_name: 'pixel-garden', state: 'sending', label: 'pixel-garden' } },
+			want: { entry: { project: uncodedKey, code: '', local_name: 'pixel-garden', state: 'sending', label: 'pixel-garden', sent: false } },
 		},
 		{
 			name: 'a project with no name here, turned on without a label, is 422',

@@ -7,6 +7,7 @@ package inbox
 import (
 	"io/fs"
 	"os"
+	"strings"
 	"syscall"
 )
 
@@ -87,4 +88,84 @@ func mine(name string, fi fs.FileInfo) error {
 		return notPrivate("%s belongs to uid %d, not to this user (uid %d)", name, st.Uid, me)
 	}
 	return nil
+}
+
+// ownFile checks fi, a spool file as Expire opened it, before Expire reads
+// its first call: a regular file of this user's with no second name,
+// whatever its mode, which no other account can have put in the inbox, as
+// privateFile checks a spool file but for its mode.
+func ownFile(name string, fi fs.FileInfo) error {
+	if !fi.Mode().IsRegular() {
+		return notPrivate("%s isn't a regular file", name)
+	}
+	if err := mine(name, fi); err != nil {
+		return err
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Nlink > 1 {
+		return notPrivate("%s has %d names, and a spool file has one", name, st.Nlink)
+	}
+	return nil
+}
+
+// sweepable reports whether Expire may sweep dir, the inbox directory,
+// that privateDir refused: a directory of this user's, which others may
+// write in, but not one another user owns, nor one reached through a
+// symbolic link another user made, or that names another user's
+// directory, which privateDir doesn't follow and Drain leaves alone.
+func sweepable(dir string) bool {
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return false
+	}
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		if mine(dir, fi) != nil {
+			return false
+		}
+		if fi, err = os.Stat(dir); err != nil {
+			return false
+		}
+	}
+	return fi.IsDir() && mine(dir, fi) == nil
+}
+
+// ExposedPaths returns which of paths, the agent's data folder and the
+// files and folders it keeps hook calls in, other accounts on this
+// computer may open: a folder they may make, rename or delete a file in,
+// or a file they may read or write, which the guards that keep the calls
+// private refuse (privateDir, privateFile), so none of its calls is
+// delivered, though each is still cut on time (OpenOwned). Each comes with
+// the chmod that closes it. A path that isn't there, or is a symbolic
+// link, is passed over.
+func ExposedPaths(paths ...string) []Exposed {
+	var out []Exposed
+	for _, p := range paths {
+		fi, err := os.Lstat(p)
+		if err != nil || fi.Mode()&fs.ModeSymlink != 0 {
+			continue
+		}
+		switch perm := fi.Mode().Perm(); {
+		case fi.IsDir() && perm&0o022 != 0:
+			out = append(out, Exposed{Path: p, Fix: "chmod go-w " + shellEscape(p)})
+		case fi.Mode().IsRegular() && perm&0o077 != 0:
+			out = append(out, Exposed{Path: p, Fix: "chmod 600 " + shellEscape(p)})
+		}
+	}
+	return out
+}
+
+// shellEscape writes s for a POSIX shell, as doctor prints a command to
+// paste, with a backslash before each character a shell would read as
+// more than itself, as the space in "Application Support". It quotes
+// nothing, so a home folder doctor shows as ~ is still expanded.
+func shellEscape(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case 'a' <= r && r <= 'z', 'A' <= r && r <= 'Z', '0' <= r && r <= '9', strings.ContainsRune("/._-+=:,@%", r):
+		default:
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }

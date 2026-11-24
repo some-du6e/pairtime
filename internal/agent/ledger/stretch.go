@@ -135,6 +135,67 @@ func prevEnd(ss []stretch, i int) int64 {
 	return ss[i-1].to.m.wall
 }
 
+// Stretch is a local-only stretch as the ledger recorded it, for a reader
+// outside the writer, such as the uploader's commit records (D-ag5-D1):
+// its wall bounds in Unix ms, From 0 for the beginning of time and To 0
+// while it is Open. They are the bounds after widen and orderWall, which
+// hold what the wall clock alone dates in the stretch (DESIGN 3.6).
+type Stretch struct {
+	From, To int64
+	Open     bool
+}
+
+// Holds reports whether s holds a record made at t, in Unix ms, judged by
+// the wall clock alone, as Write judges a record with no monotonic reading
+// (stretch.holds): from From to To, both edges included, and with no end
+// while s is open.
+func (s Stretch) Holds(t int64) bool {
+	st := stretch{open: s.Open}
+	if s.From != 0 {
+		st.from = edgeAt(moment{wall: s.From})
+	}
+	if !s.Open {
+		st.to = edgeAt(moment{wall: s.To})
+	}
+	return st.holds(event.Envelope{T: t})
+}
+
+// exported is the stretches ps records, as Stretch, nil for none.
+func exported(ps []stretchPayload) []Stretch {
+	if ps == nil {
+		return nil
+	}
+	out := make([]Stretch, len(ps))
+	for i, p := range ps {
+		out[i] = Stretch{From: p.From, To: p.To, Open: p.Open}
+	}
+	return out
+}
+
+// olderRows returns the place in rows of the first row an older version
+// sealed after rows[at], the row that recorded list, or after the base
+// frame for an at of -1: a row whose moment rose past the one list ends at
+// and the one list's own row recorded, as after a downgrade. This version
+// records the list whenever its moment moves (raiseUntil), so its rows
+// never do. It is len(rows) when there is none.
+func olderRows(bf *batchesFile, rows []rowPayload, list []stretchPayload, at int) int {
+	end := listEnd(list)
+	var recorded moment
+	switch {
+	case at >= 0 && at < len(rows):
+		recorded = rows[at].until()
+	case at < 0:
+		// The base frame a sweep wrote holds the list, and the moment its
+		// row recorded (basePayload.LocalUntil).
+		recorded = sealPayload{LocalUntil: bf.base.LocalUntil, LocalUntilOS: bf.base.LocalUntilOS}.until()
+	}
+	k := at + 1
+	for k < len(rows) && !(laterEnd(rows[k].until(), end) && laterEnd(rows[k].until(), recorded)) {
+		k++
+	}
+	return k
+}
+
 // stretchPayload is a stretch as a seal frame records it
 // (sealPayload.Stretches): its edges in Unix ms, each with the OS's
 // monotonic reading and its boot when the writer read that clock then, and
@@ -291,21 +352,7 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 		// does, passed once a batch was sealed online from that row on, as
 		// the older version may have uploaded; and each later rise ends a
 		// stretch of its own (stretchesFromRows).
-		end := listEnd(list)
-		var recorded moment
-		switch {
-		case at >= 0 && at < len(rows):
-			recorded = rows[at].until()
-		case at < 0:
-			// The base frame a sweep wrote holds the list, and the moment its
-			// row recorded (basePayload.LocalUntil).
-			recorded = sealPayload{LocalUntil: bf.base.LocalUntil, LocalUntilOS: bf.base.LocalUntilOS}.until()
-		}
-		k := at + 1
-		for k < len(rows) && !(laterEnd(rows[k].until(), end) && laterEnd(rows[k].until(), recorded)) {
-			k++
-		}
-		if k < len(rows) {
+		if k := olderRows(bf, rows, list, at); k < len(rows) {
 			n := len(w.stretches)
 			last := moment{}
 			if s := w.goingOn(); s != nil {

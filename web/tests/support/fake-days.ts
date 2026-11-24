@@ -367,6 +367,7 @@ export function status(overrides: Partial<Schemas['Status']> = {}): Schemas['Sta
 			waiting: 0,
 			git: { watched: 1, changes: 3 },
 		},
+		apps: {},
 		footprint: { rss_bytes: 18200000, peak_rss_bytes: 21400000, cpu_s: 12.5 },
 		...overrides,
 	};
@@ -397,13 +398,13 @@ export function projectsReply(online = true): Schemas['Projects'] {
 		linked: true,
 		online,
 		projects: [
-			{ project: 'p_bot', code: 'p_bot', local_name: 'discord-bot', state: 'hidden', label: 'discord-bot', hidden_at: '2026-11-19T18:00:00Z' },
-			{ project: 'p_homework', code: 'p_home', local_name: 'homework-helper', state: 'sending', label: 'Homework helper' },
-			{ project: uncodedKey, code: '', local_name: 'pixel-garden', state: 'off', label: 'pixel-garden' },
-			{ project: 'p_plant', code: 'p_plan', local_name: 'plant-sensor', state: 'off', label: 'plant-sensor' },
-			{ project: 'p_portfolio', code: 'p_port', local_name: 'portfolio', state: 'on', label: 'portfolio' },
-			{ project: scratchKey, code: 'd2a8f6', local_name: '', state: 'off', label: '' },
-			{ project: 'p_rusty', code: 'p_rust', local_name: 'rusty-cli', state: 'off', label: 'rusty-cli' },
+			{ project: 'p_bot', code: 'p_bot', local_name: 'discord-bot', state: 'hidden', label: 'discord-bot', hidden_at: '2026-11-19T18:00:00Z', sent: false },
+			{ project: 'p_homework', code: 'p_home', local_name: 'homework-helper', state: 'sending', label: 'Homework helper', sent: false },
+			{ project: uncodedKey, code: '', local_name: 'pixel-garden', state: 'off', label: 'pixel-garden', sent: false },
+			{ project: 'p_plant', code: 'p_plan', local_name: 'plant-sensor', state: 'off', label: 'plant-sensor', sent: false },
+			{ project: 'p_portfolio', code: 'p_port', local_name: 'portfolio', state: 'on', label: 'portfolio', sent: false },
+			{ project: scratchKey, code: 'd2a8f6', local_name: '', state: 'off', label: '', sent: false },
+			{ project: 'p_rusty', code: 'p_rust', local_name: 'rusty-cli', state: 'off', label: 'rusty-cli', sent: false },
 		],
 	};
 }
@@ -428,7 +429,7 @@ export function nameAnswer(
 		return { status: 400, text: 'the body must be {"online": true or false}' };
 	}
 	// A name changed here is no longer one hidden on the dashboard.
-	const base = { project: entry.project, code: entry.code, local_name: entry.local_name };
+	const base = { project: entry.project, code: entry.code, local_name: entry.local_name, sent: entry.sent };
 	if (!choice.online) {
 		const shown = entry.state === 'on' || entry.state === 'removing';
 		return { entry: { ...base, state: shown ? 'removing' : 'off', label: entry.label } };

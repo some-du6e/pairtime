@@ -165,17 +165,43 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
+// commitLog records the transactions a writer reports.
+type commitLog struct {
+	mu   sync.Mutex
+	list []writer.Commit
+}
+
+func (l *commitLog) record(c writer.Commit) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.list = append(l.list, c)
+}
+
+// durable counts the durable transactions recorded so far.
+func (l *commitLog) durable() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, c := range l.list {
+		if c.Durable && c.Err == nil {
+			n++
+		}
+	}
+	return n
+}
+
 // fixture is a migrated database, its writer, and the endpoints on a mux,
 // on a clock the test sets.
 type fixture struct {
-	engine store.Engine
-	db     *store.DB
-	w      *writer.Writer
-	emails *accounts.EmailCipher
-	hub    *hub
-	mux    *http.ServeMux
-	logs   *lockedBuffer
-	now    time.Time
+	engine  store.Engine
+	db      *store.DB
+	w       *writer.Writer
+	commits *commitLog
+	emails  *accounts.EmailCipher
+	hub     *hub
+	mux     *http.ServeMux
+	logs    *lockedBuffer
+	now     time.Time
 }
 
 func newFixture(t *testing.T, engine store.Engine) *fixture {
@@ -188,13 +214,14 @@ func newFixture(t *testing.T, engine store.Engine) *fixture {
 	if _, err := migrations.Apply(context.Background(), db, ms, time.Now); err != nil {
 		t.Fatal(err)
 	}
-	w := writer.Start(db.Write, writer.Options{Window: time.Millisecond})
+	commits := &commitLog{}
+	w := writer.Start(db.Write, writer.Options{Window: time.Millisecond, Engine: engine, OnCommit: commits.record})
 	t.Cleanup(w.Close)
 	emails, err := accounts.NewEmailCipher(bytes.Repeat([]byte{7}, accounts.EmailKeySize))
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fixture{engine: engine, db: db, w: w, emails: emails, hub: newHub(t), mux: http.NewServeMux(), logs: &lockedBuffer{},
+	f := &fixture{engine: engine, db: db, w: w, commits: commits, emails: emails, hub: newHub(t), mux: http.NewServeMux(), logs: &lockedBuffer{},
 		now: time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)}
 	svc, err := privacy.New(privacy.Options{
 		Verifier: &privacy.Verifier{Audience: audience, Keys: f.hub},
@@ -323,6 +350,13 @@ func (f *fixture) seed(t *testing.T, p person, witness ...time.Time) map[string]
 		{"badges", `INSERT INTO badges (user_id, id, code) VALUES ($1, 'b1', 'first-build')`, []any{p.id}},
 		{"removed_items", `INSERT INTO removed_items (user_id, id, removed_at_ms) VALUES ($1, 'dl0', $2)`, []any{p.id, at}},
 		{"zone_changes", `INSERT INTO zone_changes (user_id, changed_at_ms, tz_before) VALUES ($1, $2, 'UTC')`, []any{p.id, at}},
+		{"submissions", `INSERT INTO submissions (id, user_id, program, takes_hours, request_id, request_sha256, created_by, device_id, mode, state, scoring_version, params, r, r_sha256, eligibility_to_confirm, created_at_ms, updated_at_ms, frozen_at_ms) VALUES ($1, $2, 'hard-mode', 1, 'req-1', 'sum', 'device', $3, 'window', 'frozen', '0.5.0', 'sha256:params', $4, 'rsum', 0, $5, $5, $5)`,
+			[]any{"sub-" + p.id, p.id, p.device, make([]byte, 32), at}},
+		{"submission_projects", `INSERT INTO submission_projects (submission_id, project_id) VALUES ($1, 'p1')`, []any{"sub-" + p.id}},
+		{"submission_keys", `INSERT INTO submission_keys (submission_id, user_id, device_id, project_key, project_id) VALUES ($1, $2, $3, 'pk1', 'p1')`, []any{"sub-" + p.id, p.id, p.device}},
+		{"submission_windows", `INSERT INTO submission_windows (submission_id, start_ms, end_ms) VALUES ($1, $2, $3)`, []any{"sub-" + p.id, at - 3_600_000, at}},
+		{"submission_events", `INSERT INTO submission_events (submission_id, seq, from_state, to_state, at_ms) VALUES ($1, 1, 'created', 'frozen', $2)`, []any{"sub-" + p.id, at}},
+		{"submission_flags", `INSERT INTO submission_flags (submission_id, user_id, code, detail, raised_at_ms) VALUES ($1, $2, 'concurrent_devices', '{"minutes":1}', $3)`, []any{"sub-" + p.id, p.id, at}},
 	}
 	for i, d := range witness {
 		rows = append(rows, struct {

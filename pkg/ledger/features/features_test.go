@@ -5,13 +5,16 @@ package features
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"math/rand/v2"
 	"slices"
 	"strings"
 	"testing"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/some-du6e/pairtime/pkg/event"
+	"github.com/some-du6e/pairtime/pkg/params"
 )
 
 // The expected values in the rule tables below come from
@@ -317,6 +320,63 @@ func TestSketch(t *testing.T) {
 	}
 }
 
+// TestFixedParams holds every parameter table to the values version 1 of
+// the feature map fixes (SM 8.5, spec 10.5): the sketch size, and the
+// shingle lengths Shingles cuts. A table that changes one fails here
+// instead of publishing a hash for a sketch no client computes.
+func TestFixedParams(t *testing.T) {
+	words := strings.Fields("one two three four five six seven eight nine ten eleven twelve")
+	wordKind, wordShingles := Shingles(words)
+	charKind, charShingles := Shingles([]string{"shingles"})
+	wordLen, charLen, switchAt := int64(-1), int64(-1), int64(-1)
+	if wordKind == Word3 {
+		wordLen = shingleLen(wordShingles, func(s string) int { return len(strings.Fields(s)) })
+	}
+	if charKind == Char5 {
+		charLen = shingleLen(charShingles, utf8.RuneCountInString)
+	}
+	for n := range len(words) + 1 {
+		if kind, _ := Shingles(words[:n]); kind == Word3 {
+			switchAt = int64(n)
+			break
+		}
+	}
+	for _, tab := range params.Tables() {
+		cases := []struct {
+			name      string
+			got, want int64
+		}{
+			{"MINHASH_PERMS is event.MinHashSize", tab.Int(params.MINHASH_PERMS), event.MinHashSize},
+			{"MINHASH_PERMS is SketchSize", tab.Int(params.MINHASH_PERMS), SketchSize},
+			{"SHINGLE_WORDS is the word shingle length Shingles cuts", tab.Int(params.SHINGLE_WORDS), wordLen},
+			{"SHINGLE_CHARS is the character shingle length Shingles cuts", tab.Int(params.SHINGLE_CHARS), charLen},
+			{"SHINGLE_MIN_WORDS is where Shingles switches to word shingles", tab.Int(params.SHINGLE_MIN_WORDS), switchAt},
+		}
+		for _, c := range cases {
+			t.Run("table "+tab.Version()+": "+c.name, func(t *testing.T) {
+				if c.got != c.want {
+					t.Errorf("the table gives %d, the feature map %d", c.got, c.want)
+				}
+			})
+		}
+	}
+}
+
+// shingleLen returns the length, by n, that every shingle in shingles has,
+// or -1 when there are none or two lengths differ.
+func shingleLen(shingles []string, n func(string) int) int64 {
+	if len(shingles) == 0 {
+		return -1
+	}
+	l := n(shingles[0])
+	for _, s := range shingles[1:] {
+		if n(s) != l {
+			return -1
+		}
+	}
+	return int64(l)
+}
+
 func TestCheckPath(t *testing.T) {
 	cases := []struct {
 		name string
@@ -418,20 +478,26 @@ func TestPromptAndToolFeatures(t *testing.T) {
 	empty := EmptySketch()
 	th := k.Template("")
 	ch, _ := k.Command("npm test")
-	cases := []struct {
+	type featureCase struct {
 		name, got, want string
-	}{
+	}
+	cases := []featureCase{
 		{"an empty prompt has the empty sketch, a template and its class", write(k.Prompt("", LowEffort)),
 			`{"v":1,"mh":"` + empty.String() + `","th":"` + th.String() + `","pc":"low_effort"}`},
 		{"a prompt with no class SM 2.2 knows is refused", write(k.Prompt("fix it", "great")), "error"},
 		{"a read has an f that holds only v", write(k.Tool(nil, "")), `{"v":1}`},
 		{"a tool that ran a command has ch", write(k.Tool(nil, " npm\ttest ")), `{"v":1,"ch":"` + ch.String() + `"}`},
 		{"a hunk whose new range has lines but starts at 0 is refused", write(k.Tool([]Edit{{Path: "a.go", OldStart: 1, OldLines: 1, NewLines: 1}}, "")), "error"},
-		{"a hunk number past 2^31 - 1 is refused", write(k.Tool([]Edit{{Path: "a.go", NewStart: 1 << 31}}, "")), "error"},
 		{"a shell.command with no command has an f that holds only v", write(k.Shell(""), nil), `{"v":1}`},
 		{"an app's message has an f of v and the class of the app's text alone (spec 10.7)", write(Relay(Answer)), `{"v":1,"pc":"answer"}`},
 		{"an app's message with no class SM 2.2 knows is refused", write(Relay("great")), "error"},
 		{"a guest's prompt, like any whose text the device never had, has an f of v and pc", write(Textless(Substantive)), `{"v":1,"pc":"substantive"}`},
+	}
+	if math.MaxInt > math.MaxInt32 {
+		// Only a 64-bit int holds a hunk number past 2^31 - 1: on a 32-bit
+		// target no int is past the largest one a record takes.
+		hunk := int64(1) << 31
+		cases = append(cases, featureCase{"a hunk number past 2^31 - 1 is refused", write(k.Tool([]Edit{{Path: "a.go", NewStart: int(hunk)}}, "")), "error"})
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

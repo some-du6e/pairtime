@@ -67,7 +67,8 @@
       },
       "uncredited": {},
       "agent_running_s": 60,
-      "sm": "23:40"
+      "sm": "23:40",
+      "derived": ["agent_running_s"]
     },
     {
       "start": "2026-11-20T22:41:00Z",
@@ -81,7 +82,8 @@
       },
       "uncredited": {},
       "agent_running_s": 60,
-      "sm": "23:41"
+      "sm": "23:41",
+      "derived": ["agent_running_s"]
     },
     {
       "start": "2026-11-20T22:42:00Z",
@@ -95,7 +97,8 @@
       },
       "uncredited": {},
       "agent_running_s": 60,
-      "sm": "23:42"
+      "sm": "23:42",
+      "derived": ["agent_running_s"]
     },
     {
       "start": "2026-11-20T22:43:00Z",
@@ -109,7 +112,8 @@
       },
       "uncredited": {"X.absent": 20},
       "agent_running_s": 60,
-      "sm": "23:43"
+      "sm": "23:43",
+      "derived": ["agent_running_s"]
     },
     {
       "start": "2026-11-20T22:44:00Z",

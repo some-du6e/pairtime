@@ -229,7 +229,9 @@ for s in range(at("+1 07:36:15"), at("+1 07:37:00"), tl.SLOT_MS):
 for s in range(at("+1 07:30:00"), at("+1 07:37:00"), tl.SLOT_MS):
     tl.check(slot_inputs(s), f"input in slot {fx.hhmmss(s)}")
 tl.check(fx.last_input_before(at("+1 07:29:50")) == at("23:43:10"), "no input from 23:43:10 to the password")
-tl.check(at("23:53:10") - at("23:43:10") == 600_000, "the screen locks 600 s after his last touch")
+lock = next(e["t"] for e in events if e["kind"] == "os.power" and e["data"]["op"] == "lock")
+tl.check(lock == fx.locks[0][0], "the os.power lock is where the samples' lock starts")
+tl.check(lock - fx.last_input_before(lock) == 600_000, "the screen locks 600 s after his last touch")
 
 # The bucket: reset to its 20 s base at 23:40:00, never empty while he
 # watches until 23:43:40, holding only output from after 05:30:00 at
@@ -273,10 +275,11 @@ exp = tl.Expected(fx, sm="docs/design/struggle-metric.md 6.4", evidence="A", wit
 exp.row("23:37", credit={P: {"P": 50}}, uncredited={"X.no_anchor": 10}, sm="23:37")
 exp.row("23:38", credit={P: {"P": 60}}, uncredited={}, sm="23:38")
 exp.row("23:39", credit={P: {"P": 60}}, uncredited={}, sm="23:39")
-exp.row("23:40", credit={P: {"SUP": 60}}, uncredited={}, agent=60, sm="23:40")
-exp.row("23:41", credit={P: {"SUP": 60}}, uncredited={}, agent=60, sm="23:41")
-exp.row("23:42", credit={P: {"SUP": 60}}, uncredited={}, agent=60, sm="23:42")
-exp.row("23:43", credit={P: {"SUP": 40}}, uncredited={"X.absent": 20}, agent=60, sm="23:43")
+exp.row("23:40", credit={P: {"SUP": 60}}, uncredited={}, agent=60, sm="23:40", derived=["agent_running_s"])
+exp.row("23:41", credit={P: {"SUP": 60}}, uncredited={}, agent=60, sm="23:41", derived=["agent_running_s"])
+exp.row("23:42", credit={P: {"SUP": 60}}, uncredited={}, agent=60, sm="23:42", derived=["agent_running_s"])
+exp.row("23:43", credit={P: {"SUP": 40}}, uncredited={"X.absent": 20}, agent=60, sm="23:43",
+        derived=["agent_running_s"])
 exp.row("23:44", "+1 06:10", credit={}, uncredited={"X.absent": 386 * 60}, agent=386 * 60, sm="23:44 to 07:29",
         derived=["uncredited", "agent_running_s"],
         note="The agent runs alone until 06:10:00. Every second is X.absent, which comes before any turn's code (SM 5.2); "

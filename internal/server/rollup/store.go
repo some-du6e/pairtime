@@ -528,25 +528,32 @@ ORDER BY day, project_id, activity_kind`, account, from, to)
 }
 
 // ConcurrentMinutes counts the account's minutes from fromMS to before
-// toMS in which two of its devices credited the same slot: SM 3.4's
-// concurrent_devices. Ingest stores no such flag, since no fraud check
-// runs on hours nobody submitted (D-no-ingest-flags; DESIGN 4.2, 8.5): the
-// submission freeze (WP-SB1) calls this over the submitted window. It
-// reads the per-device minutes rollup_minutes keeps for 180 days, the
-// furthest back a submission reaches, and merges each minute as Apply
-// does.
-func ConcurrentMinutes(ctx context.Context, q Querier, account string, fromMS, toMS int64) (int, error) {
+// toMS in which two of its devices credited the same slot and at least one
+// of them credited it to one of projects, account-level project ids: SM
+// 3.4's concurrent_devices over a submission's projects P. Ingest stores no
+// such flag, since no fraud check runs on hours nobody submitted
+// (D-no-ingest-flags; DESIGN 4.2, 8.5): the submission freeze (WP-SB1)
+// calls this over the submitted windows with P's project ids, so a slot
+// that only the account's other projects competed for counts in no
+// submission (D-sb1-submissions, Q8). It reads the per-device minutes
+// rollup_minutes keeps for 180 days, the furthest back a submission
+// reaches, whose slots name their project ids.
+func ConcurrentMinutes(ctx context.Context, q Querier, account string, fromMS, toMS int64, projects []string) (int, error) {
 	rows, err := q.QueryContext(ctx, `SELECT `+minuteColumns+` FROM rollup_minutes
 WHERE user_id = $1 AND minute_ms >= $2 AND minute_ms < $3 ORDER BY minute_ms, device_id`, account, fromMS, toMS)
 	if err != nil {
 		return 0, fmt.Errorf("rollup: counting %s's concurrent minutes: %w", account, err)
 	}
 	defer rows.Close()
+	ours := make(map[string]bool, len(projects))
+	for _, p := range projects {
+		ours[p] = true
+	}
 	n := 0
 	var devs []device
 	minute := int64(-1)
 	count := func() {
-		if len(devs) > 1 && merge(devs).concurrent {
+		if len(devs) > 1 && concurrentIn(devs, ours) {
 			n++
 		}
 		devs = devs[:0]

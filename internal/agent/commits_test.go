@@ -16,7 +16,11 @@ import (
 	"time"
 
 	"github.com/some-du6e/pairtime/internal/adapters/git"
+	"github.com/some-du6e/pairtime/internal/agent/home"
+	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/internal/agent/uploader"
 	"github.com/some-du6e/pairtime/pkg/event"
+	pkgledger "github.com/some-du6e/pairtime/pkg/ledger"
 )
 
 // tierOneCommit lists the fields of DESIGN 4.3's tier-1 commit record that
@@ -138,6 +142,48 @@ func TestCommitStore(t *testing.T) {
 				}
 			}
 		}},
+		{"before a day's file goes, the sha of each of its lines is listed for the uploader, which takes them as decided", func(t *testing.T, s *commitStore) {
+			old := now.Add(-181 * 24 * time.Hour)
+			a, b := commit(strings.Repeat("1", 40), old), commit(strings.Repeat("2", 40), old.Add(time.Minute))
+			if err := s.add([]git.Commit{a, b}, old); err != nil {
+				t.Fatal(err)
+			}
+			s.prune(now)
+			if _, err := os.Stat(filepath.Join(s.dir, day(old)+".jsonl")); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("the day's file is still there (%v)", err)
+			}
+			if got := prunedList(t, s.dir); !slices.Equal(got, []string{a.SHA, b.SHA}) {
+				t.Errorf("the list holds %q, want both lines' shas", got)
+			}
+		}},
+		{"the list outlives a restart, and the next day's prune adds to it", func(t *testing.T, s *commitStore) {
+			old := now.Add(-181 * 24 * time.Hour)
+			a, b := commit(strings.Repeat("1", 40), old), commit(strings.Repeat("2", 40), old.Add(24*time.Hour))
+			if err := s.add([]git.Commit{a, b}, old.Add(24*time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			s.prune(now)
+			restarted := &commitStore{dir: s.dir}
+			restarted.prune(now.Add(24 * time.Hour))
+			if got := prunedList(t, s.dir); !slices.Equal(got, []string{a.SHA, b.SHA}) {
+				t.Errorf("the list holds %q, want the first day's sha, then the next day's", got)
+			}
+		}},
+		{"a prune with the clock 181 days ahead lists the shas of every day it deletes", func(t *testing.T, s *commitStore) {
+			a, b := commit(strings.Repeat("1", 40), now.Add(-24*time.Hour)), commit(strings.Repeat("2", 40), now)
+			if err := s.add([]git.Commit{a, b}, now); err != nil {
+				t.Fatal(err)
+			}
+			s.prune(now.Add(181 * 24 * time.Hour))
+			for _, d := range []string{day(now.Add(-24 * time.Hour)), day(now)} {
+				if _, err := os.Stat(filepath.Join(s.dir, d+".jsonl")); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("%s's file is still there (%v)", d, err)
+				}
+			}
+			if got := prunedList(t, s.dir); !slices.Equal(got, []string{a.SHA, b.SHA}) {
+				t.Errorf("the list holds %q, want both days' shas", got)
+			}
+		}},
 		{"prune looks once a UTC day", func(t *testing.T, s *commitStore) {
 			if err := os.MkdirAll(s.dir, 0o700); err != nil {
 				t.Fatal(err)
@@ -154,6 +200,41 @@ func TestCommitStore(t *testing.T) {
 			s.prune(now.Add(24 * time.Hour))
 			if _, err := os.Stat(old); !errors.Is(err, fs.ErrNotExist) {
 				t.Errorf("the next day's prune left it (%v)", err)
+			}
+		}},
+		{"a prune that can't add a day's shas to commits/pruned.txt keeps the day's file, and the git host's doctor problem names the list until a prune works, as the next one does, the same day", func(t *testing.T, s *commitStore) {
+			a, _ := modesAgent(t, "online")
+			g := &gitHost{a: a, commits: s}
+			old := now.Add(-181 * 24 * time.Hour)
+			c := commit(strings.Repeat("1", 40), old)
+			if err := s.add([]git.Commit{c}, old); err != nil {
+				t.Fatal(err)
+			}
+			file := filepath.Join(s.dir, day(old)+".jsonl")
+			// A folder where the list goes, which no prune can append to.
+			list := filepath.Join(s.dir, uploader.PrunedCommits)
+			if err := os.Mkdir(list, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			g.prune(now)
+			if _, err := os.Stat(file); err != nil {
+				t.Errorf("the day's file went though its shas weren't listed (%v)", err)
+			}
+			if got := a.currentProblems()["git.prune"]; !strings.Contains(got, "commits/"+uploader.PrunedCommits) {
+				t.Errorf("doctor's git.prune problem is %q, want one that names commits/%s", got, uploader.PrunedCommits)
+			}
+			if err := os.Remove(list); err != nil {
+				t.Fatal(err)
+			}
+			g.prune(now.Add(gitPollEvery))
+			if _, err := os.Stat(file); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("the next poll's prune left the day's file (%v)", err)
+			}
+			if got := a.currentProblems()["git.prune"]; got != "" {
+				t.Errorf("the problem stays after a prune that worked: %q", got)
+			}
+			if got := prunedList(t, s.dir); !slices.Equal(got, []string{c.SHA}) {
+				t.Errorf("the list holds %q, want the day's sha", got)
 			}
 		}},
 		{"the folder and its files are this user's alone", func(t *testing.T, s *commitStore) {
@@ -179,4 +260,130 @@ func TestCommitStore(t *testing.T) {
 			c.run(t, &commitStore{dir: filepath.Join(t.TempDir(), "commits")})
 		})
 	}
+}
+
+// TestCommitFormat pins commits/'s format between its writer and its
+// reader: the records the git host keeps through commitStore.add come out
+// of the uploader's next upload, as privacy show prints it, byte for byte
+// as git.Commit marshals them. That leaves the counts out of a commit whose
+// shortstat couldn't be read (D-ag5-D4), keeps a root commit's null
+// parents, and holds nothing of a commit's local part.
+func TestCommitFormat(t *testing.T) {
+	dir := t.TempDir()
+	dirs := home.Dirs{Data: dir, Config: dir, Runtime: dir}
+	start := time.Date(2026, 11, 21, 4, 0, 0, 0, time.UTC)
+	at := start
+	lk, err := pkgledger.DeriveKeys(bytes.Repeat([]byte{9}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := ledger.Open(ledger.Options{Dir: dirs.Ledger(), Keys: lk, KeyID: "0123456789abcdef", Now: func() time.Time { return at }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { w.Close() })
+	seen := start.Add(time.Minute)
+	commit := func(sha string, edit func(c *git.Commit)) git.Commit {
+		c := git.Commit{SHA: sha, Parents: []string{strings.Repeat("0", 40)}, Project: "g0123456789abcdef",
+			ObservedAt: seen.UnixMilli(), AuthorTime: seen.Unix() - 60, CommitterTime: seen.Unix() - 30,
+			FilesChanged: 2, Insertions: 10, Deletions: 3, Actor: event.ActorHuman,
+			Local: git.CommitLocal{Op: event.GitCommit, Origin: git.MadeHere, AuthorTZ: "-0600", CommitterTZ: "+0530", ReflogTime: seen.Unix()}}
+		edit(&c)
+		return c
+	}
+	commits := []git.Commit{
+		commit(strings.Repeat("1", 40), func(c *git.Commit) {
+			c.Rewrites = []git.Rewrite{{OldSHA: strings.Repeat("a", 40), NewSHA: c.SHA}}
+			c.Actor, c.AgentTrailer = event.ActorAgent, "claude"
+		}),
+		commit(strings.Repeat("2", 40), func(c *git.Commit) { c.Parents = nil }),
+		commit(strings.Repeat("3", 40), func(c *git.Commit) {
+			c.FilesChanged, c.Insertions, c.Deletions, c.Local.NoStat = 0, 0, 0, true
+		}),
+	}
+	s := &commitStore{dir: dirs.Commits()}
+	if err := s.add(commits, seen); err != nil {
+		t.Fatal(err)
+	}
+	// A batch sealed after the records, whose root the server holds under
+	// the sign-in, as the uploader's place in state.json says. A
+	// checkpoint's t is a quarter hour.
+	at = start.Add(5 * time.Minute)
+	if _, err := w.Checkpoint("p_test", uint64(start.UnixMilli()), json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := w.Seal(); err != nil || !ok {
+		t.Fatalf("seal: %v, %v", ok, err)
+	}
+	const server = "https://pairtime.example.org"
+	linked := start.Add(-time.Hour)
+	keepState(t, dirs, map[string]any{uploader.StateKey: map[string]any{
+		"chain": w.DeviceID(), "server": server, "device": w.DeviceID(), "next": 2, "from": 1, "head": 1, "modes": 1,
+		"linked_at": linked.UnixMilli(),
+	}})
+	p, err := uploader.Next(uploader.PreviewOptions{
+		LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, StateFile: dirs.StateFile(),
+		Params: newestTable(), Credentials: uploader.Credentials{Server: server, DeviceID: w.DeviceID(), LinkedAt: linked},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		Commits []json.RawMessage `json:"commits"`
+	}
+	if err := json.Unmarshal(p.JSON, &body); err != nil {
+		t.Fatalf("the next upload's body %q: %v", p.JSON, err)
+	}
+	if len(body.Commits) != len(commits) {
+		t.Fatalf("the next upload carries %d records, want %d: %s", len(body.Commits), len(commits), p.JSON)
+	}
+	cases := []struct {
+		name string
+		i    int
+		// has must be in the record, and lacks mustn't.
+		has, lacks []string
+	}{
+		{"a commit with rewrites and an agent trailer goes as git.Commit marshals it", 0, []string{`"rewrites":[`, `"agent_trailer":"claude"`}, nil},
+		{"a root commit keeps its null parents", 1, []string{`"parents":null`}, nil},
+		{"a commit whose shortstat couldn't be read goes without its counts", 2, nil, []string{"files_changed", "insertions", "deletions"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			want, err := json.Marshal(commits[c.i])
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := body.Commits[c.i]
+			if !bytes.Equal(got, want) {
+				t.Errorf("the record goes as\n%s\nand git.Commit marshals it as\n%s", got, want)
+			}
+			for _, h := range c.has {
+				if !bytes.Contains(got, []byte(h)) {
+					t.Errorf("the record lacks %s: %s", h, got)
+				}
+			}
+			for _, l := range append(c.lacks, "-0600", "+0530", "here") {
+				if bytes.Contains(got, []byte(l)) {
+					t.Errorf("the record holds %q: %s", l, got)
+				}
+			}
+		})
+	}
+}
+
+// prunedList is the shas commits/'s list of pruned commits in dir holds,
+// in its order (uploader.PrunedCommits).
+func prunedList(t *testing.T, dir string) []string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dir, uploader.PrunedCommits))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, l := range strings.Split(string(data), "\n") {
+		if l != "" {
+			out = append(out, l)
+		}
+	}
+	return out
 }

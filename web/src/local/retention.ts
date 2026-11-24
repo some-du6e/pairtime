@@ -9,24 +9,14 @@
 // order, its kept text filled in by internal/server/retention's rule
 // (Policy.Kept), so both notices say each period in the same words.
 // tools/ci/npm_notices.py counts the file as pairtime's own code, and
-// web.yml runs when it changes.
-//
-// The one row the file lacks is the inbox's (DESIGN 3.5). retention.json
-// is DESIGN 4.4's table, which pairtimed's public notice shows to
-// everyone, and the inbox's period comes from the agent's code rather
-// than from that table: a hook call made while the agent wasn't running,
-// or one it didn't take within ipc.HookTimeout, waits in inbox/ as plain
-// text until a drain has read it, and a file of them that drains can't
-// read is set aside and deleted inbox.KeepDays later
-// (internal/agent/hookpath, internal/agent/inbox). A spooled call is the
-// hook's whole input: a prompt, the agent's last reply in its Stop, and in
-// a tool's call the command with its output, or the file it edited.
+// web.yml runs when it changes. The inbox's row is the file's device.inbox,
+// whose period the agent's inbox.SpoolKeep keeps (D-inbox-age-cap).
 
 import retention from '../../../docs/retention.json';
 
 /** One row of Privacy's table. */
 export interface KeptRow {
-	/** The entry's id in retention.json, or "device.inbox" for the inbox's row. */
+	/** The entry's id in retention.json. */
 	id: string;
 	/** What pairtime keeps. */
 	data: string;
@@ -76,24 +66,9 @@ export function keptText(e: Pick<Entry, 'kept' | 'days'>, w: SpotCheckWindow): s
 	);
 }
 
-/**
- * How many days the agent keeps a file of hook calls it set aside because
- * it couldn't read it: inbox.KeepDays in internal/agent/inbox/journal.go.
- * pages/privacy.test.ts reads that constant from the Go source and fails
- * when this one differs, so the inbox row's words change with it.
- */
-export const inboxKeepDays = 7;
-
 const entries: readonly Entry[] = retention.entries;
 
-/** Privacy's table: retention.json's device entries in the file's order, then the inbox. */
-export const keptOnDevice: readonly KeptRow[] = [
-	...entries
-		.filter((e) => e.where === 'device')
-		.map((e) => ({ id: e.id, data: e.data, kept: keptText(e, retention.spot_check_window) })),
-	{
-		id: 'device.inbox',
-		data: "The inbox: what your AI tool sent pairtime while the agent wasn't running or didn't answer in time. That can be your prompts, its replies, the commands it ran with their output, and the files it edited. It's plain text, not encrypted",
-		kept: `Until the agent has read it. If the agent can't read a file there, it sets the file aside and deletes it ${days(inboxKeepDays)} later`,
-	},
-];
+/** Privacy's table: retention.json's device entries in the file's order. */
+export const keptOnDevice: readonly KeptRow[] = entries
+	.filter((e) => e.where === 'device')
+	.map((e) => ({ id: e.id, data: e.data, kept: keptText(e, retention.spot_check_window) }));

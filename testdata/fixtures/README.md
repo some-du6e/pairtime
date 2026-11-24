@@ -30,11 +30,13 @@ testdata/fixtures/<harness>/<version>/<os>/
     connections         Claude Code only: the pid and executable name of each process holding one of the sink's connections at step 23, as lsof's p and c lines, or on Windows as Get-Process's Id and ProcessName
 ```
 
-- `<harness>` is the id `pkg/event` uses: `claude_code`, `codex`, `cursor`, `copilot`, `gemini`, `devin`, `cline` or `opencode`. The one other name is `wakatime`, below.
+- `<harness>` is the id `pkg/event` uses: `claude_code`, `codex`, `cursor`, `copilot`, `gemini`, `devin`, `cline` or `opencode`. The two other names are `wakatime` and `t3_code`, below.
 - `<version>` is the version number the harness reports, without its name: `2.1.328`, not `2.1.328 (Claude Code)`.
 - `<os>` is `windows`, `macos` or `linux`. The exact build goes in `PROVENANCE.md`.
 
 `wakatime/<version>/<os>/` holds what wakatime-cli, the program WakaTime's editor plugins run, sent to the servers it reports to, for the WakaTime bridge (DESIGN 5.6, 5.7). It isn't a harness, and nobody types in it: `e2e-wakatime.yml`'s capture job runs `tools/capture/wakatime/capture.py` in CI, and each run folder holds `capture.json` and `requests/NNNNNN.json` and `.meta` in place of hook calls, as [its README](../../tools/capture/wakatime/README.md) describes. `<version>` is wakatime-cli's without the `v`, such as `2.28.4`.
+
+`t3_code/<version>/<os>/` holds what T3 Code, an agent app, kept in its message store while it drove Claude Code, and what Claude Code's hooks reported meanwhile, for T3 Code's reader (DESIGN 5.1). `t3_code` is the app's id in `pkg/event`. It isn't a harness, and nobody types in it: a script types probe text into a scratch T3 home, and each run folder holds `store.sql`, `hooks.jsonl` and `probes.json` in place of hook calls, as [its README](../../tools/capture/t3code/README.md) describes. The rules below on where a fixture comes from and who reads it are there because a capture of real use can hold someone's own words, and this one holds only the script's. Its `PROVENANCE.md` says how it was scrubbed, and the review of the PR that adds it reads every file. `<version>` is what `t3 --version` prints, such as `0.1.10-nightly.20261112.4606`.
 
 ## Rules
 

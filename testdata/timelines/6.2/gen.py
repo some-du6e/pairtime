@@ -119,11 +119,28 @@ for m in range(int((at("07:41:45") - at("07:40:00")) / 15000), int((at("07:44:45
 tl.check(fx.last_input_before(at("07:44:45")) == at("07:44:40"), "last touch at 07:44:40")
 tl.check(slot_has_input("07:43:30"), "input in the slot of the 07:43:40 edit")
 tl.check(slot_has_input("07:44:15") and slot_has_input("07:44:30"), "input around the 07:44:30 commit")
-# The bucket: 20 s base at 07:41:00, drained by 07:41:20; +300 s for 40
-# diff lines at 07:41:50; +40 s for 120 words at 07:42:30; READ drains 15 s
-# from 07:44:30 to 07:44:45.
-bucket = 20 - 20 + 40 * 60 // 8 + 120 * 60 // 180 - 15
-tl.check(bucket == 325, f"bucket left {bucket}")
+# The bucket (SM 2.4), replayed from the events: its 20 s base at 07:41:00,
+# drained as SUP to 07:41:20; empty from 07:41:20 to 07:41:40, while the
+# agent runs on alone (X.agent_only); +300 s for the 40 diff lines of the
+# edit at 07:41:50 and +40 s for the 120 words at 07:42:30; then READ
+# drains 15 s from 07:44:30 until the lid closes at 07:44:45.
+bucket = tl.Bucket()
+fills = [(e["t"], bucket.amount(e["kind"], e["data"])) for e in events if e["kind"] in ("agent.output", "agent.tool")]
+tl.check([f for f in fills if f[1]] == [(at("07:41:50"), 300), (at("07:42:30"), 40)],
+         f"the edit fills 300 s and the summary 40 s: {fills}")
+bucket.reset(at("07:41:00"), tl.Bucket.BASE_S)
+i = 0
+for tau in range(at("07:41:00"), at("07:44:45"), 1000):
+    while i < len(fills) and fills[i][0] <= tau:
+        bucket.fill(*fills[i])
+        i += 1
+    bucket.expire(tau)
+    if tau < at("07:41:20") or tau >= at("07:44:30"):
+        tl.check(bucket.drain(1) == 1, f"the bucket has something to read at {fx.hhmmss(tau)}")
+    elif tau < at("07:41:40"):
+        tl.check(bucket.total() == 0, f"the bucket is empty at {fx.hhmmss(tau)}, so the agent runs on alone")
+tl.check(i == len(fills), "every fill comes before the lid closes")
+tl.check(bucket.total() == 325, f"bucket left {bucket.total()}")
 
 prompt = fx.event_at("prompt.submit", at("07:41:00"))
 edit = fx.event_at("editor.activity", at("07:43:40"))
@@ -132,8 +149,9 @@ commit = fx.event_at("git.change", at("07:44:30"))
 exp = tl.Expected(fx, sm="docs/design/struggle-metric.md 6.2", evidence="B", witness="witnessed",
                   projects={P: "remind-bot"}, start="07:40:00", end="07:45:00")
 exp.row("07:40", credit={P: {"P": 60}}, uncredited={}, agent=0, sm="07:40")
-exp.row("07:41", credit={P: {"SUP": 20, "E": 20}}, uncredited={"X.agent_only": 20}, agent=60, sm="07:41")
-exp.row("07:42", credit={P: {"E": 60}}, uncredited={}, agent=30, sm="07:42")
+exp.row("07:41", credit={P: {"SUP": 20, "E": 20}}, uncredited={"X.agent_only": 20}, agent=60, sm="07:41",
+        derived=["agent_running_s"])
+exp.row("07:42", credit={P: {"E": 60}}, uncredited={}, agent=30, sm="07:42", derived=["agent_running_s"])
 exp.row("07:43", credit={P: {"E": 40, "G": 20}}, uncredited={}, agent=0, sm="07:43")
 exp.row("07:44", credit={P: {"G": 30, "READ": 15}}, uncredited={"X.absent": 15}, agent=0, sm="07:44")
 

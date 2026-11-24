@@ -13,12 +13,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,6 +30,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/agent/home"
 	"github.com/some-du6e/pairtime/internal/agent/ledger"
+	"github.com/some-du6e/pairtime/internal/agent/sched"
 	"github.com/some-du6e/pairtime/internal/agent/state"
 	"github.com/some-du6e/pairtime/internal/agent/store"
 	"github.com/some-du6e/pairtime/internal/agent/uploader"
@@ -277,13 +282,55 @@ func stop(at time.Time, mono int64) ledger.Input {
 	}}
 }
 
+// writeCommits appends lines to commits/'s file of day in dir as the git
+// host's commitStore does, each with a newline before it and after it.
+// Package e2e can't call the unexported store.
+func writeCommits(t *testing.T, dir string, lines ...string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range lines {
+		var c struct {
+			ObservedAt int64 `json:"observed_at"`
+		}
+		if err := json.Unmarshal([]byte(l), &c); err != nil {
+			t.Fatal(err)
+		}
+		day := time.UnixMilli(c.ObservedAt).UTC().Format(time.DateOnly)
+		f, err := os.OpenFile(filepath.Join(dir, day+".jsonl"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = f.WriteString("\n" + l + "\n")
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// commitLine is a commits/ line as internal/adapters/git's Commit marshals
+// it, members in its order, for the commit sha seen at, with parents and the
+// rest as given, each a JSON member list ending in a comma.
+func commitLine(sha, parents string, at time.Time, counts, rest string) string {
+	s := at.Unix()
+	return fmt.Sprintf(`{"sha":"%s","parents":%s,"project":"p_test","observed_at":%d,"author_time":%d,"committer_time":%d,%s%s}`,
+		sha, parents, at.UnixMilli(), s-90, s-60, counts, rest)
+}
+
 // TestUploadToIngest is WP-AG5's client and server in one Linux test
 // (#150 R4): a day of minute buckets and the batches beside them go from
 // the uploader to pairtimed's ingest handler through a 503, a server
 // restart, a 429 and a lost answer, which the uploader's own retry fetches
 // again, under the server's own rate limiter, and both sides end with the
 // same totals and DESIGN 7.4's readings; privacy show prints the first
-// request's body byte for byte; nothing goes out before the sign-in.
+// request's body byte for byte; nothing goes out before the sign-in. The
+// commit records of commits/ reach commit_records once per sha, under the
+// account, as their first lines say, after the roots of their batches, and
+// one seen before the sign-in never does (D-ag5-D7).
 func TestUploadToIngest(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -315,6 +362,19 @@ func TestUploadToIngest(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { w.Close() })
+	// A batch sealed before the sign-in, as the agent seals while the
+	// computer isn't linked yet: the link's gap holds it, so its root never
+	// goes, nor a commit record seen before it. A checkpoint's t is a
+	// quarter hour.
+	clockMu.Lock()
+	now = start.Add(-5 * time.Minute)
+	clockMu.Unlock()
+	if _, err := w.Checkpoint("p_test", uint64(start.Add(-15*time.Minute).UnixMilli()), json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := w.Seal(); err != nil {
+		t.Fatal(err)
+	}
 	const batches = 96
 	for k := 1; k <= batches; k++ {
 		q := start.Add(time.Duration(k) * 15 * time.Minute)
@@ -354,6 +414,20 @@ func TestUploadToIngest(t *testing.T) {
 	if err := bs.Sync(); err != nil {
 		t.Fatal(err)
 	}
+
+	// commits/: a record seen before the sign-in, a root commit, one whose
+	// shortstat couldn't be read, a crash's second line of it, with a later
+	// observed_at and actor unknown, and one with members a record never
+	// has, which stay on the device.
+	shaGap, shaRoot, shaNoStat, shaMain := strings.Repeat("a", 40), strings.Repeat("b", 40), strings.Repeat("c", 40), strings.Repeat("d", 40)
+	const counts = `"files_changed":1,"insertions":12,"deletions":0,`
+	lineGap := commitLine(shaGap, "[]", start.Add(-10*time.Minute), counts, `"actor":"human"`)
+	lineRoot := commitLine(shaRoot, "null", start.Add(5*time.Minute), counts, `"actor":"human"`)
+	lineNoStat := commitLine(shaNoStat, `["`+shaRoot+`"]`, start.Add(3*time.Hour), "", `"actor":"agent","agent_trailer":"claude"`)
+	lineAgain := commitLine(shaNoStat, `["`+shaRoot+`"]`, start.Add(20*time.Hour), "", `"actor":"unknown","agent_trailer":"claude"`)
+	lineMain := commitLine(shaMain, `["`+shaNoStat+`"]`, start.Add(6*time.Hour), counts,
+		`"message":"fix the emulator's timer","author_tz":"-0600","actor":"human"`)
+	writeCommits(t, dirs.Commits(), lineGap, lineRoot, lineNoStat, lineMain, lineAgain)
 
 	sv, token, devKey := linkedServer(t, deviceID)
 	db := sv.db
@@ -400,10 +474,22 @@ func TestUploadToIngest(t *testing.T) {
 		}
 		return resp, err
 	})}
+	// A scheduler that never runs takes the place of the uploader's own
+	// ticker, so only the test wakes it, as the steps' waits do, and nothing
+	// goes between privacy show's preview and the wake that sends it.
+	var (
+		problemMu sync.Mutex
+		problem   string
+	)
 	u, err := uploader.New(uploader.Options{
 		Ledger: w, LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, State: st,
 		Login:  uploader.LoginFunc(func() (uploader.Credentials, bool) { return creds, signedIn.Load() }),
-		Params: table, Started: started, Client: client, Draw: func(int64) int64 { return 0 },
+		Params: table, Started: started, Client: client, Draw: func(int64) int64 { return 0 }, Sched: sched.New(),
+		Problem: func(msg string) {
+			problemMu.Lock()
+			problem = msg
+			problemMu.Unlock()
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -411,6 +497,17 @@ func TestUploadToIngest(t *testing.T) {
 	up.Store(u)
 	u.Start()
 	t.Cleanup(u.Close)
+	preview := func(t *testing.T) uploader.Preview {
+		t.Helper()
+		p, err := uploader.Next(uploader.PreviewOptions{
+			LedgerDir: dirs.Ledger(), BucketDir: dirs.Buckets(), DataDir: dirs.Data, StateFile: dirs.StateFile(),
+			Params: table, Credentials: creds,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
 
 	count := func(query string) int64 {
 		var n int64
@@ -522,16 +619,22 @@ func TestUploadToIngest(t *testing.T) {
 				t.Errorf("the answer the server lost, to %q, wasn't fetched again by the uploader's own retry: its POSTs %+v, and the server replayed %q", lost, posts, replayed)
 			}
 		}},
-		{"every receipt in batches.seg checks out under the server key", func(t *testing.T) {
+		{"every receipt in batches.seg checks out under the server key, and the batch sealed before the sign-in has none", func(t *testing.T) {
 			_, rows, err := ledger.ReadRows(dirs.Ledger(), 1)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(rows) != batches {
+			if len(rows) != batches+1 {
 				t.Fatalf("%d rows", len(rows))
 			}
 			pub := sv.key.Public().(ed25519.PublicKey)
 			for _, r := range rows {
+				if r.B == 1 {
+					if r.Receipt != nil {
+						t.Error("the batch sealed before the sign-in has a receipt")
+					}
+					continue
+				}
 				if r.Receipt == nil {
 					t.Errorf("batch %d has no receipt", r.B)
 				} else if err := pkgledger.VerifyReceipt(pub, deviceID, r.B, r.Head, *r.Receipt); err != nil {
@@ -569,6 +672,149 @@ func TestUploadToIngest(t *testing.T) {
 					t.Errorf("no %s note among %q", want, reasons)
 				}
 			}
+		}},
+		{"commit records reach commit_records once per sha, under the account, as their first lines say, and one seen before the sign-in never does", func(t *testing.T) {
+			deadline := time.Now().Add(3 * time.Minute)
+			for count(`SELECT COUNT(*) FROM commit_records WHERE device_id = $1`) != 3 {
+				if time.Now().After(deadline) {
+					// What went, what the server holds, and what the uploader
+					// says, to see where the records stopped.
+					var carried []string
+					for _, body := range ft.bodies() {
+						var b struct {
+							Commits []struct {
+								SHA string `json:"sha"`
+							} `json:"commits"`
+						}
+						if json.Unmarshal(body, &b) == nil && len(b.Commits) > 0 {
+							var shas []string
+							for _, c := range b.Commits {
+								shas = append(shas, c.SHA[:4])
+							}
+							carried = append(carried, strings.Join(shas, ","))
+						}
+					}
+					past, _ := uploader.PastUploads(dirs.Data)
+					var results []string
+					for _, p := range past {
+						if p.Commits > 0 || (p.Results != nil && len(p.Results.Commits) > 0) {
+							results = append(results, fmt.Sprintf("%d:%d:%v", p.Status, p.Commits, p.Results))
+						}
+					}
+					problemMu.Lock()
+					msg := problem
+					problemMu.Unlock()
+					t.Fatalf("gave up waiting for the commit records: the server holds %d, the POSTs carried %q, uploads.jsonl says %v, the uploader says %+v, and doctor hears %q",
+						count(`SELECT COUNT(*) FROM commit_records WHERE device_id = $1`), carried, results, u.Status(), msg)
+				}
+				u.Wake()
+				time.Sleep(20 * time.Millisecond)
+			}
+			rows, err := db.Read.QueryContext(ctx, `SELECT sha, account_id, project, body FROM commit_records WHERE device_id = $1`, deviceID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rows.Close()
+			stored := map[string]string{}
+			for rows.Next() {
+				var sha, acct, project, body string
+				if err := rows.Scan(&sha, &acct, &project, &body); err != nil {
+					t.Fatal(err)
+				}
+				if acct != account || project != "p_test" {
+					t.Errorf("commit %s is stored under account %q and project %q", sha, acct, project)
+				}
+				stored[sha] = body
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			// The server stores its own re-encoding, a root commit's null
+			// parents as [], so each body is read as JSON.
+			want := map[string]string{
+				shaRoot:   strings.Replace(lineRoot, `"parents":null`, `"parents":[]`, 1),
+				shaNoStat: lineNoStat,
+				shaMain:   strings.Replace(lineMain, `"message":"fix the emulator's timer","author_tz":"-0600",`, "", 1),
+			}
+			for sha, line := range want {
+				var got, exp any
+				if err := json.Unmarshal([]byte(stored[sha]), &got); err != nil {
+					t.Errorf("commit %s: %v", sha, err)
+					continue
+				}
+				if err := json.Unmarshal([]byte(line), &exp); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(got, exp) {
+					t.Errorf("commit %s is stored as\n%s\nnot as its first line says\n%s", sha, stored[sha], line)
+				}
+			}
+			if _, ok := stored[shaGap]; ok {
+				t.Error("the commit seen before the sign-in reached the server")
+			}
+			for sha, body := range stored {
+				for _, local := range []string{"message", "emulator", "author_tz", "-0600"} {
+					if strings.Contains(body, local) {
+						t.Errorf("commit %s's stored record holds %q: %s", sha, local, body)
+					}
+				}
+			}
+			past, err := uploader.PastUploads(dirs.Data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			commits, accepted := 0, 0
+			for _, p := range past {
+				if p.Status == http.StatusOK {
+					commits += p.Commits
+					if p.Results != nil {
+						accepted += p.Results.Commits["accepted"]
+					}
+				}
+			}
+			if commits != 3 || accepted != 3 {
+				t.Errorf("uploads.jsonl counts %d commit records in answered uploads, %d accepted: want 3", commits, accepted)
+			}
+		}},
+		{"privacy show prints the request that carries a commit record byte for byte, after the request that carries its batch's root", func(t *testing.T) {
+			late := start.Add(24*time.Hour + 5*time.Minute)
+			shaLate := strings.Repeat("e", 40)
+			writeCommits(t, dirs.Commits(), commitLine(shaLate, `["`+shaMain+`"]`, late, counts, `"actor":"human"`))
+			// The next quarter hour's checkpoint, and its batch sealed after it.
+			q := late.Truncate(15 * time.Minute).Add(15 * time.Minute)
+			clockMu.Lock()
+			now = q.Add(5 * time.Minute)
+			clockMu.Unlock()
+			if _, err := w.Checkpoint("p_test", uint64(q.UnixMilli()), json.RawMessage(`{}`)); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := w.Seal(); err != nil {
+				t.Fatal(err)
+			}
+			last := int64(w.Status().Batches) - 1 // batch 1 never goes
+			u.Wake()
+			waitFor(t, "the new batch's root", func() bool {
+				return count(`SELECT COUNT(*) FROM witness_rows WHERE device_id = $1`) == last
+			})
+			var pv uploader.Preview
+			waitFor(t, "the record in privacy show", func() bool { pv = preview(t); return pv.Commits == 1 })
+			if pv.Batches != 0 {
+				t.Errorf("the record's request carries %d roots: want its batch's root to have gone before it", pv.Batches)
+			}
+			before := len(ft.bodies())
+			for _, body := range ft.bodies() {
+				if bytes.Contains(body, []byte(shaLate)) {
+					t.Fatal("the record went beside its batch's root")
+				}
+			}
+			u.Wake()
+			waitFor(t, "the record's request", func() bool { return len(ft.bodies()) > before })
+			if got := ft.bodies()[before]; !bytes.Equal(got, pv.JSON) {
+				t.Errorf("the request's body differs from privacy show's:\n%s\n%s", got, pv.JSON)
+			}
+			waitFor(t, "the record on the server", func() bool {
+				return count(`SELECT COUNT(*) FROM commit_records WHERE device_id = $1`) == 4
+			})
 		}},
 	}
 	for _, s := range steps {

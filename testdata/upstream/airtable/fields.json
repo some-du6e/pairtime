@@ -129,7 +129,7 @@
               "role": "justification",
               "filled_by": "reviewer",
               "handbook": "Deflation Justification",
-              "note": "The handbook asks for a person to write this field (written_by human in ../handbook/fields.json), so it is the reviewer's. DESIGN 9.3 has pairtime draft it from reason codes for the reviewer to confirm or rewrite. Until Karim settles docs/errata/2026-11-20-deflation-justification.md, the Airtable script leaves it out of its default mapping (WP-PG2), and the reviewer sees the draft on pairtime's review page."
+              "note": "The handbook asks for a person to write this field (written_by human in ../handbook/fields.json), so it is the reviewer's. pairtime drafts it on its review page, and the reviewer confirms the draft as written or rewrites it there. The justification endpoint returns only text a reviewer confirmed, answers 409 deflation_unconfirmed while a deflation has none, and returns it empty when nothing is deflated and no confirmation holds, so the Airtable script's default mapping includes it and never writes a draft (DESIGN 9.3, WP-PG2, docs/errata/2026-11-20-deflation-justification.md)."
             },
             {
               "name": "Justification - Alternate Tracking Method",

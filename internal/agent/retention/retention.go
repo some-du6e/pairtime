@@ -14,7 +14,9 @@
 //	device.ledger          ledger segments, batches   Sweep, by the segment of each batch's first record
 //	device.buckets         buckets/                   Sweep, by the minutes' UTC day
 //	device.held_calls      held.jsonl and its logs    the agent's adapter host, as it runs (heldKeep)
+//	device.inbox           inbox/'s spool files       the agent, at its start and each retention look (inbox.SpoolKeep)
 //	device.commits         commits/                   the agent's commit store (commitsKeep)
+//	device.commits_pruned  commits/pruned.txt         "delete everything" and uninstall; the commit store appends a day's shas before each prune deletes its file
 //	device.uploads         uploads.jsonl              the uploader as it runs (uploadsKeep), and Sweep while it doesn't
 //	device.project_names   project-names.json         the uploader, as each names answer replaces it and its notes stay 1,000 at most (capNotes); "delete everything" and uninstall
 //	device.transcripts     not copied                 nothing
@@ -54,9 +56,10 @@ type Periods struct {
 	Ledger int
 	// Buckets is device.buckets.
 	Buckets int
-	// Held, Commits and Uploads are device.held_calls, device.commits and
-	// device.uploads, which their own stores sweep.
-	Held, Commits, Uploads int
+	// Held, Inbox, Commits and Uploads are device.held_calls,
+	// device.inbox, device.commits and device.uploads, which their own
+	// stores sweep.
+	Held, Inbox, Commits, Uploads int
 }
 
 // Device returns the periods docs/retention.json gives the device. It
@@ -92,6 +95,7 @@ func parse(data []byte) (Periods, error) {
 		{"device.ledger", &p.Ledger},
 		{"device.buckets", &p.Buckets},
 		{"device.held_calls", &p.Held},
+		{"device.inbox", &p.Inbox},
 		{"device.commits", &p.Commits},
 		{"device.uploads", &p.Uploads},
 	} {

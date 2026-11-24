@@ -214,6 +214,9 @@ func TestDesignPeriods(t *testing.T) {
 		re      string // captures the period in its third cell, or for 10.3 in its second
 		hours   bool   // the period is in hours, a whole number of days
 		kept    string // for an entry without days, captures the number its kept text writes
+		// same is an entry whose days the entry's must equal, as where one
+		// text gives both their bound.
+		same string
 	}{
 		{name: "prompt text is kept 90 days on the device", id: "device.prompt_text", where: "Device", data: "Prompt text, final agent messages", re: `^(\d+) days, or until a submission covering them is decided, whichever is later`},
 		{name: "file paths and tool commands are kept 30 days on the device", id: "device.paths_commands", where: "Device", data: "File paths in the vault; tool commands", re: `^(\d+) days$`},
@@ -221,6 +224,7 @@ func TestDesignPeriods(t *testing.T) {
 		{name: "ledger records are kept 180 days on the device, or longer for a submission", id: "device.ledger", where: "Device", data: "Ledger records and batch roots", re: `^(\d+) days, or longer while a submission using them is inside its spot-check window; while the computer is linked, the batch roots of online batches the server hasn't stored stay, without their records, until it stores them, unless a fork or the server's device_mismatch has ended the chain$`},
 		{name: "minute buckets are kept 180 days on the device", id: "device.buckets", where: "Device", data: "Minute buckets", re: `^(\d+) days; day rollups and coach records until the teen deletes them$`},
 		{name: "hook calls the agent holds are kept 7 days at most on the device", id: "device.held_calls", where: "Device", data: "Hook calls the agent hasn't parsed yet", re: `^Until parsed; kept (\d+) days at most`},
+		{name: "hook calls spooled in the inbox are kept 7 days at most on the device, as long as the calls the agent holds, since privacy.md:46 gives both bounds in device.held_calls' days", id: "device.inbox", where: "Device", data: "Hook calls spooled in `inbox/`", re: `^Deleted once drained, or (\d+) days at most after it was spooled if never drained`, same: "device.held_calls"},
 		{name: "commit records wait for the uploader 180 days on the device", id: "device.commits", where: "Device", data: "Commit records waiting for the uploader", re: `^(\d+) days$`},
 		{name: "records of past uploads are kept 90 days on the device", id: "device.uploads", where: "Device", data: "Records of past uploads", re: `^(\d+) days$`},
 		{name: "device rows are kept 90 days past the device's lifetime", id: "server.devices", where: "Server", data: "`device_id`, OS family", re: `^Device lifetime plus (\d+) days$`},
@@ -287,6 +291,11 @@ func TestDesignPeriods(t *testing.T) {
 			if e.Days != want {
 				t.Errorf("%s has days %d; DESIGN %s says %d (%q)", tt.id, e.Days, section, want, kept)
 			}
+			if tt.same != "" {
+				if o, ok := p.Find(tt.same); !ok || o.Days != e.Days {
+					t.Errorf("%s has days %d, and %s %d (found %v): one text gives both bounds", tt.id, e.Days, tt.same, o.Days, ok)
+				}
+			}
 		})
 	}
 	t.Run("every entry with days is checked against DESIGN", func(t *testing.T) {
@@ -348,6 +357,7 @@ func TestJobs(t *testing.T) {
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
 				"server.minute_buckets/submission_minutes awaits WP-SB4",
 				"server.witness/witness_rows hold awaits WP-SB4", "server.witness/submission_batches awaits WP-SB4",
+				"evidence.revealed/submission_flags awaits WP-SV18",
 			},
 		},
 		{
@@ -368,6 +378,7 @@ func TestJobs(t *testing.T) {
 			wantOff: []string{
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
 				"server.witness/witness_rows hold awaits WP-SB4",
+				"evidence.revealed/submission_flags awaits WP-SV18",
 			},
 		},
 		{
@@ -391,6 +402,7 @@ func TestJobs(t *testing.T) {
 				"server.minute_buckets/rollup_minutes",
 				"server.witness/witness_rows+hold", "server.witness/day_leaves+kept", "server.witness/submission_batches", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides", "server.removed_items/removed_items",
 			},
+			wantOff: []string{"evidence.revealed/submission_flags awaits WP-SV18"},
 		},
 		{
 			name: "a job of an evidence entry stays off until WP-SV18, even once its table exists",
@@ -417,7 +429,7 @@ func TestJobs(t *testing.T) {
 				"server.minute_buckets/rollup_minutes",
 				"server.witness/witness_rows+hold", "server.witness/day_leaves+kept", "server.witness/submission_batches", "server.witness/ingest_replies", "server.project_names/project_names", "server.project_name_hides/project_name_hides", "server.removed_items/removed_items",
 			},
-			wantOff: []string{"evidence.revealed/evidence_index awaits WP-SV18"},
+			wantOff: []string{"evidence.revealed/submission_flags awaits WP-SV18", "evidence.revealed/evidence_index awaits WP-SV18"},
 		},
 		{
 			name: "a job of an evidence entry whose table doesn't exist yet waits for the package that creates it",
@@ -438,7 +450,7 @@ func TestJobs(t *testing.T) {
 				"server.minute_buckets/minute_buckets hold awaits WP-SB4", "server.minute_buckets/minute_bucket_revisions hold awaits WP-SB4",
 				"server.minute_buckets/submission_minutes awaits WP-SB4",
 				"server.witness/witness_rows hold awaits WP-SB4", "server.witness/submission_batches awaits WP-SB4",
-				"evidence.revealed/evidence_index awaits WP-SB4",
+				"evidence.revealed/submission_flags awaits WP-SV18", "evidence.revealed/evidence_index awaits WP-SB4",
 			},
 		},
 	}

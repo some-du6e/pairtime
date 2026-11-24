@@ -344,7 +344,7 @@ components:
     Status:
       type: object
       additionalProperties: false
-      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs, ipc, signals, adapters, footprint]
+      required: [version, pid, started, uptime_s, mode, port, wakeups, jobs, ipc, signals, adapters, apps, footprint]
       properties:
         version:
           $ref: "#/components/schemas/Version"
@@ -383,6 +383,8 @@ components:
           $ref: "#/components/schemas/Signals"
         adapters:
           $ref: "#/components/schemas/Adapters"
+        apps:
+          $ref: "#/components/schemas/Apps"
         ledger:
           $ref: "#/components/schemas/Ledger"
         footprint:
@@ -393,10 +395,11 @@ components:
             What isn't working, keyed by where it comes from (`account`,
             `adapters.dropped`, `adapters.held`, `adapters.keys`,
             `adapters.ledger`, `adapters.pending`, `adapters.recover`,
-            `adapters.replay`, `config`, `config-watch`, `focus`, `git`,
-            `git.commits`, `git.ledger`, `ipc`, `keystore`, `ledger`,
-            `ledger.presence`, `notifications`, `port`, `presence`, `procs`,
-            `scorer`, `state`, `uploader`), in words for the teen. A value
+            `adapters.replay`, `apps`, `apps.ledger`, `config`,
+            `config-watch`, `focus`, `git`, `git.commits`, `git.ledger`,
+            `ipc`, `keystore`, `ledger`, `ledger.presence`, `notifications`,
+            `port`, `presence`, `procs`, `scorer`, `state`, `uploader`), in
+            words for the teen. A value
             can join several problems of one source with "; ", so it is
             shown whole. `pairtime doctor` prints each as a line of its own,
             but for `keystore`, whose warning its keystore line gives.
@@ -431,9 +434,11 @@ components:
       required: [cpu_s]
       description: >
         What the agent costs the computer since it started, as the OS reports
-        it for the agent's own process: the R8 numbers `pairtime doctor
-        --report` shares (DESIGN 5.9, 9.7). footprint.yml measures the same
-        working set from outside the process, on Windows.
+        it for the agent's own process and, for CPU time, the processes it
+        ran and waited for, such as T3 Code's reader's `sqlite3` runs: the R8
+        numbers `pairtime doctor --report` shares (DESIGN 5.9, 9.7).
+        footprint.yml measures the same working set from outside the
+        process, on Windows.
       properties:
         rss_bytes:
           type: integer
@@ -448,7 +453,12 @@ components:
         cpu_s:
           type: number
           minimum: 0
-          description: The CPU time the agent has used, user and system, in seconds.
+          description: >
+            The CPU time the agent has used, user and system, in seconds,
+            with that of the processes it started and waited for: on Linux
+            and macOS those it waited for, on Windows those it started since
+            it joined a job object of its own, as it does at its start.
+            Where it couldn't join one, the agent's own time alone.
     Version:
       type: object
       additionalProperties: false
@@ -658,6 +668,107 @@ components:
             left out so none counts twice (D-late-local). A record the ledger dropped
             as made in local-only mode is no repeat: its replay in the same
             run is skipped, and counted nowhere. Absent when none.
+    Apps:
+      type: object
+      additionalProperties: false
+      description: >
+        The agent apps whose own stores the agent reads, which drive
+        harnesses for clients on other devices (DESIGN 3.3, 5.1). `pairtime
+        doctor` prints its T3 Code line from this (DESIGN 5.9).
+      properties:
+        t3_code:
+          $ref: "#/components/schemas/T3Code"
+    T3Code:
+      type: object
+      additionalProperties: false
+      required: [reading, day, witnessed, with_server, paired, aged, ahead]
+      description: >
+        How the reader of T3 Code's message store is doing, as its last
+        read left it, and what it read today. It names no path. Absent
+        until the reader's first read, which comes once the ledger is open.
+      properties:
+        reading:
+          type: boolean
+          description: The last read worked.
+        "off":
+          type: string
+          enum: [no_store, not_running, no_sqlite3, no_json, schema, failed]
+          description: >
+            Why the last read didn't work: no store where T3 Code keeps it,
+            no store with the `-wal` and `-shm` files T3 Code holds open, no
+            `sqlite3` on the agent's PATH, as when one an earlier read found
+            is gone when a run starts it, a `sqlite3` without JSON functions,
+            a schema the probe refused, or a read that failed. Absent while
+            it reads.
+        problem:
+          type: string
+          description: >
+            More of a refused schema or a failed read, in words for doctor.
+            Absent when there is nothing more to say.
+        newer:
+          type: boolean
+          description: >
+            T3 Code's schema is newer than the one the reader was tested
+            against, and the reader reads it anyway. Absent when it isn't.
+        running:
+          type: boolean
+          description: >
+            T3 Code ran at the last read (DESIGN 3.3): the agent's process
+            scan found T3 Code's server, and its store had the `-wal` and
+            `-shm` files T3 Code holds open. The files alone, which a T3
+            Code killed while it held them leaves behind, don't make it run.
+            Absent when it didn't.
+        no_sqlite3:
+          type: boolean
+          description: >
+            The last read found no `sqlite3` on the agent's PATH, whether or
+            not T3 Code ran, or found the one an earlier read had found gone
+            when a run started it, as when it was uninstalled, so doctor can
+            say how to install it. Absent when there is one.
+        day:
+          type: string
+          format: date
+          description: The day the counts are for, in the agent's time zone.
+        witnessed:
+          type: integer
+          minimum: 0
+          description: >
+            The messages T3 Code says a person sent that the reader recorded
+            as `relay.message` records, declared `none`, that day.
+        with_server:
+          type: integer
+          minimum: 0
+          description: >
+            Those of `witnessed` the reader recorded while T3 Code ran
+            (`running`), with a server the app table names. When none of
+            the day's messages paired and none was recorded this way,
+            `pairtime doctor` says pairtime doesn't recognize T3 Code's
+            server, as with one run from its source under `node`, whose
+            sessions the agent never asks about (DESIGN 3.3).
+        paired:
+          type: integer
+          minimum: 0
+          description: The reader's records that paired with a prompt that day.
+        aged:
+          type: integer
+          minimum: 0
+          description: >
+            The messages the age test turned away that day: decided more
+            than `RELAY_SEEN_LAG_S` after T3 Code stamped them, as one first
+            read that late is.
+        ahead:
+          type: integer
+          minimum: 0
+          description: >
+            The messages the reader turned away that day as stamped more than
+            2 s after the read that decided them, which a clock T3 Code and
+            the agent share doesn't give unless it was set back (SM 2.2).
+        session_at:
+          type: integer
+          description: >
+            When a session that an agent app's server started last reached
+            the agent, in Unix milliseconds, kept across restarts. Absent
+            when none has.
     Git:
       type: object
       additionalProperties: false
@@ -977,7 +1088,7 @@ components:
     ProjectEntry:
       type: object
       additionalProperties: false
-      required: [project, code, local_name, state, label]
+      required: [project, code, local_name, state, label, sent]
       description: >
         One project, as `pairtime projects` lists it, and whether its name
         shows on its owner's own pairtime dashboard.
@@ -1029,6 +1140,14 @@ components:
             sent, and the label turning it on would show otherwise: the one
             config.toml kept, or the local name. Empty when there is none, so
             turning the name on needs one.
+        sent:
+          type: boolean
+          description: >
+            Whether a set of the name may have reached the server since its
+            last answer about this computer's names: pairtime sent one and no
+            answer came for it (docs/spec/project-names-v1.md 2). While the
+            name is `sending`, the dashboard may show it already, as `pairtime
+            projects` says.
         hidden_at:
           type: string
           format: date-time
