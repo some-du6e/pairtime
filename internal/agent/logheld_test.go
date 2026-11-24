@@ -269,6 +269,18 @@ func TestReplayHeld(t *testing.T) {
 				sealNow(t, w, dirs.Ledger())
 				return dirs, h, 3, 2, 0
 			}},
+		{"the window counts back from the batch the writer names, not from this run's start clock, so one sealed 49 hours before the run before's last seal goes to the ledger again though the start clock reads between the two",
+			func(t *testing.T, dirs home.Dirs) (home.Dirs, *adapterHost, int, int, uint64) {
+				// The earlier run sealed batches 50 hours and an hour back. A
+				// start clock 49 hours behind would anchor at the first, whose
+				// window holds the line; the writer names the second.
+				l := earlierRun(t, dirs, time.Now().Add(-50*time.Hour), time.Now().Add(-time.Hour))
+				w := optionsWriter(t, dirs, nil)
+				h := host(dirs, w, time.Now().Add(-49*time.Hour))
+				take(t, h, l)
+				sealNow(t, w, dirs.Ledger())
+				return dirs, h, 3, 2, 0
+			}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -335,7 +347,8 @@ func TestHeldLogsFrom(t *testing.T) {
 		{"a start long after the run before's last seal still reads the window before that seal", rows(-190*h, -180*h, -150*h), 3, 1},
 		{"a batch at the window's edge is in it", rows(-58*h, -10*h), 2, 1},
 		{"a start clock 30 days behind changes nothing, as the anchor goes by its number", rows(-35*d, -31*d, -29*d, -1*d, -h), 5, 4},
-		{"a run before whose clock was reset to an old year stops the walk at the first batch sealed more than the window after its last", rows(-100*h, -50*h, -10*h, old, old+h), 5, 4},
+		{"a run before whose clock was reset to an old year reads only its own batches, as the walk passes over every batch sealed more than the window after its last", rows(-100*h, -50*h, -10*h, old, old+h), 5, 4},
+		{"a batch a forward step of the clock stamped late, put right later, doesn't stop the walk short of the window", rows(-10*h, 100*h, 0), 3, 1},
 		{"the walk reads at most heldLogsMaxBatches up to the anchor", rows(busy...), heldLogsMaxBatches + 10, 11},
 		{"with no batch an earlier run sealed, every batch is this run's", rows(time.Minute, 2*time.Minute), 0, 1},
 		{"so it is when a sweep dropped the anchor", swept(-h, time.Minute), 3, 5},

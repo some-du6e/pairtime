@@ -100,12 +100,15 @@ func loadHeldLogs(dir string, anchor uint64, now time.Time) (*heldLogs, error) {
 // batch numbered anchor, the newest an earlier run sealed
 // (ledger.Writer.Opened), and then every batch after it, as Open's of what
 // a kill left. The anchor goes by its number, not by this run's clock, so
-// a start clock that reads behind changes nothing. Counting back from it,
-// the walk stops at the first batch sealed more than heldLogsWindow before
-// the anchor, or more than that after it, as when the run that sealed the
-// anchor had its clock reset to an old year, and at heldLogsMaxBatches, so
-// a clock that stepped between the seals can't make it read the whole
-// ledger. With no batch an earlier run sealed kept, every batch is this
+// a start clock that reads behind changes nothing. Counting back from it to
+// heldLogsMaxBatches, the walk passes over every batch sealed more than
+// heldLogsWindow before the anchor or after it, as the wall clock that
+// stamps the seals needn't rise: a batch a forward step of the clock stamped
+// late, put right later, can sit between batches of the window, and when
+// the run that sealed the anchor had its clock reset to an old year, every
+// batch before its own is after it. So a clock that stepped between the
+// seals can't make the walk read the whole ledger, or stop it short of the
+// window. With no batch an earlier run sealed kept, every batch is this
 // run's, and it reads them all.
 func heldLogsFrom(rows []ledger.Row, anchor uint64) uint64 {
 	a := -1
@@ -126,7 +129,7 @@ func heldLogsFrom(rows []ledger.Row, anchor uint64) uint64 {
 	from := rows[a].B
 	for i := a - 1; i >= 0 && a-i < heldLogsMaxBatches; i-- {
 		if s := rows[i].SealedAt; s.Before(since) || s.After(until) {
-			break
+			continue
 		}
 		from = rows[i].B
 	}
