@@ -55,4 +55,4 @@ T is a cycle's prompt: 20:03:00, 20:08:00, 20:13:00 and 20:18:00. A minute has a
 
 - **The twin changes only focus.** Every act, time and amount is b-pty-game's, through the same builder ([`../ptygame.py`](../ptygame.py)). Only the `os.focus` records, the sample the browser's takes at 19:55:20, and the device differ.
 - **No lookup.** The browser run has no credited slot on either side, so it is no lookup under SM 2.5, and E-lookup-lookahead has nothing to decide.
-- **The bucket fills but never drains.** The turns aren't human-owned, so they reset nothing and add no 20 s base, while their output fills the bucket (SM 2.4). From the fourth turn's summary it holds more than 600 s, so the cap evicts the oldest output. Nothing drains it, since every slot's focus is the browser, and so no second is `X.bucket_cap`.
+- **The bucket fills but never drains.** The turns aren't human-owned, so they reset nothing and add no 20 s base, while their output fills the bucket (SM 2.4). With the fourth turn's summary their output passes 600 s, so the cap evicts the oldest of it. Nothing drains it, since every slot's focus is the browser, and so no second is `X.bucket_cap`.

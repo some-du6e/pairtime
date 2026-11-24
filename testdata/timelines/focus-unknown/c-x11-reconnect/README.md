@@ -1,6 +1,6 @@
 # Focus unknown (c): 30 s of unknown focus on X11, inside a prompt's lead
 
-Lee, 16, works on `weather-cli` with Claude Code in a terminal, on Linux Mint's Cinnamon desktop on X11, without the opt-in key counter. Every credited second here is level B, except while the agent can't tell which window is in front: at 10:02:20, as Lee types a prompt, the X connection the agent follows focus on drops, and the new connection's first report names the terminal again at 10:02:50. Only the seconds of the two slots that unknown focus holds longest drop to level C, 30 s of the 575 credited.
+Lee, 16, works on `weather-cli` with Claude Code in a terminal, on Linux Mint's Cinnamon desktop on X11, without the opt-in key counter. Every credited second here is level B, except in the two slots that unknown focus holds longest. At 10:02:20, as Lee types a prompt, the X connection the agent follows focus on drops, and the new connection's first report names the terminal again at 10:02:50. Only the seconds of those two slots drop to level C, 30 s of the 575 credited.
 
 | | |
 |---|---|
@@ -73,4 +73,5 @@ So 30 s of unknown focus that start and end mid-slot leave exactly two slots, 30
 
 - **A second's level, not an anchor's.** SM 2.5 makes level C "every second credited in such a slot" and every second "credited from an anchor that passed its focus test only this way". The prompt passed rule 6 with the terminal in front at 10:04:00, so it is a level-B anchor, and only its lead's seconds in the two slots drop. The reading it qualifies stays B (DESIGN 6.4: a reading second takes the level of the anchor that qualifies the drain). `slots.json` gives each slot's level.
 - **No act while focus is unknown.** He only types between 10:02:20 and 10:02:50, so no anchor's evidence test is judged on unknown focus. Had he saved a file in an editor then, that edit's anchor would be level C with `focus_unknown`, and so would every second its lead credits, inside the two slots or not.
+- **An edit fills the bucket when it lands.** An `agent.tool` record fills the bucket at its `t`, which is its `t_end`, not its `t_start`, as SM 6.1's "lands at 14:05:30" and 6.2's "until the agent's 40-line edit lands at 07:41:50" read it. Here the edits fill at 10:05:00 and 10:05:30, which the 10:05 SUP rests on. Filled at `t_start`, the bucket would have output from 10:04:52.5 and SUP would start before 10:05:00.
 - **No silence, no lookup.** No silence reaches 120 s, so SM 2.1's return rule, which reads focus through a silence, never applies, and no slot is a browser slot.

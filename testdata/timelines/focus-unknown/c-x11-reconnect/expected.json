@@ -119,7 +119,7 @@
       },
       "uncredited": {},
       "agent_running_s": 0,
-      "sm": "2.4: reading takes the level of the anchor that qualifies it",
+      "sm": "DESIGN 6.4: reading takes the level of the anchor that qualifies it",
       "note": "The prompt, level B.",
       "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
     },
@@ -188,7 +188,7 @@
   "approx": {},
   "errata": [],
   "notes": [
-    "WP-FX8's (c): X11 without the key counter, so every credited second is level B, except where the agent couldn't tell which window was in front. Its X connection for focus drops at 10:02:20 and is re-made by 10:02:50, inside the prompt's lead.",
+    "WP-FX8's (c): X11 without the key counter, so every credited second is level B, except in the two slots that unknown focus holds longest. The agent's X connection for focus drops at 10:02:20 and is re-made by 10:02:50, inside the prompt's lead.",
     "Only the seconds of the two slots that unknown focus holds longest, 10:02:15 to 10:02:45, are level C with focus_unknown: 30 s, though the 30 s of unknown focus start and end mid-slot (SM 2.5). No act falls in them, so no anchor passed its focus test only through unknown focus, and the prompt, sent with the terminal in front, stays level B, as does the reading it qualifies.",
     "evidence is the level of every credited second outside those two slots; slots.json gives each slot's."
   ]

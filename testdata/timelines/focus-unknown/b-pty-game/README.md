@@ -6,7 +6,7 @@ SM 2.2 names this case in the paragraph after its origin table: "a script typing
 
 | | |
 |---|---|
-| Source | WP-FX8's (b) (docs/PLAN.md). Invented; no SM section describes it |
+| Source | WP-FX8's (b) (docs/PLAN.md). Invented; SM 2.2 and 2.5 describe the case but give no worked example |
 | Rules | SM 2.2 rules 4, 6 and 8 and the paragraph after them, SM 2.5's focus-unknown paragraph, with SM 2.3, 2.4, 3.3 and 5.2 and the parameters of SM 8 |
 | Date and zone | Wednesday 2026-11-25, Europe/London, UTC+00:00 |
 | OS and evidence | Linux, GNOME on Wayland without pairtime's extension. `idle_keys_s` is null in every sample. Every credited second is level C with `focus_unknown`. Witnessed |
@@ -81,4 +81,5 @@ What bounds the 1,140 s is their level. Level C never counts toward public total
 - **No window hosts the session.** That would fail rule 6 on a desktop that reports focus, but here focus is unknown, and the test passes for every session whatever window hosts it.
 - **No dark-flow rule fires.** The four prompts are four different tasks, so none is a near-duplicate of another (SM 4.2's re-roll). No test runs, so there is no error signature. No prompt is a go-ahead, so there is no autopilot. Each turn edits a different file, so no turn rewrites the last one's lines.
 - **No lookup.** A slot of unknown focus is never a browser slot (SM 2.5), so the game holds no lookup and E-lookup-lookahead has nothing to decide.
+- **An edit fills the bucket when it lands.** An `agent.tool` record fills the bucket at its `t`, which is its `t_end`, not its `t_start`, as SM 6.1's "lands at 14:05:30" and 6.2's "until the agent's 40-line edit lands at 07:41:50" read it. Each turn's 16-line edit fills at T + 50, which ends the 15 s each cycle has nothing to read. Filled at `t_start`, it would fill at T + 45.5 and that gap would be 10.5 s.
 - **The bucket left behind.** At each next lead 70 s are still in the bucket, and the next prompt's reset drops them (SM 2.4). Nothing reaches the 600 s cap, and nothing expires.

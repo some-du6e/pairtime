@@ -76,16 +76,16 @@ type focusSlots struct {
 	Slots   []focusSlot `json:"slots"`
 }
 
-// focusSlot is one slot: the window SM 2.5 gives it, its credit by project
-// and reason, its credited seconds by level, and the level and labels a
-// minute bucket's slot gives it (SM 5.1): its weakest second's level, and
-// focus_unknown when some of its seconds are level C because focus was
-// unknown. It names no project, since a slot of unknown focus can credit
-// two.
+// focusSlot is one slot: the window SM 2.5 gives it, the one project its
+// credit goes to (D-split-slots), its credit by project and reason, its
+// credited seconds by level, and the level and labels a minute bucket's
+// slot gives it (SM 5.1): its weakest second's level, and focus_unknown
+// when some of its seconds are level C because focus was unknown.
 type focusSlot struct {
 	Start     time.Time                           `json:"start"`
 	Local     string                              `json:"local"`
 	Focus     event.AppClass                      `json:"focus"`
+	P         string                              `json:"p"`
 	CreditedS float64                             `json:"credited_s"`
 	Credit    map[string]map[event.Reason]float64 `json:"credit"`
 	Levels    map[event.Evidence]float64          `json:"levels"`
@@ -192,7 +192,7 @@ func TestFocusUnknownEvents(t *testing.T) {
 				if i > 0 {
 					prev := f.Events[i-1]
 					if e.Seq != prev.Seq+1 {
-						t.Errorf("%s: seq %d follows %d; seq is gapless", where, e.Seq, prev.Seq)
+						t.Errorf("%s: seq %d follows %d; a fixture's ledger holds only events, so seq rises by 1", where, e.Seq, prev.Seq)
 					}
 					if e.T < prev.T {
 						t.Errorf("%s: t %d is before the previous event's %d", where, e.T, prev.T)
@@ -395,10 +395,42 @@ func TestFocusUnknownRows(t *testing.T) {
 			if !maps.Equal(nonZero(tot.Uncredited), unc) {
 				t.Errorf("uncredited = %v, rows sum to %v", tot.Uncredited, unc)
 			}
+			// SM 5.3's agent_only_s counts the seconds a turn ran that nothing
+			// credited, so each bucket row gives at least its running seconds
+			// less its credited ones.
+			floor := 0.0
+			for _, r := range exp.Rows {
+				if r.Bucket {
+					floor += max(0, r.AgentRunningS-r.CreditedS)
+				}
+			}
 			a, ok := tot.Get("agent_only_s")
-			if !ok || a > tot.AgentRunningS || a < unc[event.ReasonAgentOnly] {
-				t.Errorf("agent_only_s %v (present: %v) must be between the rows' X.agent_only %v and agent_running_s %v",
-					a, ok, unc[event.ReasonAgentOnly], tot.AgentRunningS)
+			if !ok || a > tot.AgentRunningS || a < floor || a < unc[event.ReasonAgentOnly] {
+				t.Errorf("agent_only_s %v (present: %v) must be at least %v, the rows' running seconds less their credit, and "+
+					"the rows' X.agent_only %v, and at most agent_running_s %v", a, ok, floor, unc[event.ReasonAgentOnly], tot.AgentRunningS)
+			}
+			// SM 5.4's split. No case credits a hand reason inside an agent
+			// turn, so hand_credited_s is the rows' E, NAV, CMD, TEST, G and
+			// LOOKUP.
+			hand := 0.0
+			for _, k := range []event.Reason{event.ReasonEdit, event.ReasonNavigate, event.ReasonCommand, event.ReasonTest,
+				event.ReasonCommit, event.ReasonLookup} {
+				hand += byReason[k]
+			}
+			if v, ok := tot.Get("hand_credited_s"); !ok || v != hand {
+				t.Errorf("hand_credited_s %v (present: %v), the rows' hand reasons sum to %v", v, ok, hand)
+			}
+			if v, ok := tot.Get("ai_credited_s"); !ok || v != tot.CreditedS-hand {
+				t.Errorf("ai_credited_s %v (present: %v), credited_s less the hand reasons is %v", v, ok, tot.CreditedS-hand)
+			}
+			origins := map[event.Origin]float64{}
+			for _, tr := range f.Anchors.Turns {
+				origins[tr.Origin]++
+			}
+			for k, o := range map[string]event.Origin{"human_typed_prompts": event.OriginHumanTyped, "no_input_prompts": event.OriginNoInput} {
+				if v, ok := tot.Get(k); ok && v != origins[o] {
+					t.Errorf("%s %v, but %s's turns have %v of origin %s", k, v, AnchorsFile, origins[o], o)
+				}
 			}
 			levels := map[string]float64{}
 			for _, k := range []string{"level_a_s", "level_b_s", "level_c_s", "focus_unknown_s"} {
@@ -413,10 +445,6 @@ func TestFocusUnknownRows(t *testing.T) {
 			}
 			if levels["level_a_s"] != 0 {
 				t.Errorf("level_a_s %v; no machine here has the key counter, so nothing is level A", levels["level_a_s"])
-			}
-			if levels["focus_unknown_s"] != levels["level_c_s"] {
-				t.Errorf("focus_unknown_s %v, level_c_s %v; every level-C second here is C because focus was unknown",
-					levels["focus_unknown_s"], levels["level_c_s"])
 			}
 		})
 		t.Run(f.Name+" every erratum named exists", func(t *testing.T) {
@@ -496,14 +524,40 @@ func TestFocusUnknownSlots(t *testing.T) {
 				if s.Ev != weakest {
 					t.Errorf("%s: ev %q, but its weakest second is level %q (DESIGN 6.4)", where, s.Ev, weakest)
 				}
-				_, c := s.Levels[event.EvidenceC]
-				if c != slices.Equal(s.Lbl, []event.Label{event.LabelFocusUnknown}) {
-					t.Errorf("%s: labels %q and levels %v; here a slot is labeled focus_unknown exactly when some of its seconds are level C",
+				if len(s.Credit) != 1 || s.Credit[s.P] == nil {
+					t.Errorf("%s: credit %v and p %q; a slot credits one project, its p (D-split-slots)", where, s.Credit, s.P)
+				}
+			}
+		})
+		t.Run(f.Name+" each slot's focus comes from the os.focus records, and its labels and levels from that focus", func(t *testing.T) {
+			// No anchor in these cases passed its focus test only through
+			// unknown focus while it sat in a slot of known focus, so a
+			// second is level C with focus_unknown exactly when its slot's
+			// focus is unknown (SM 2.5).
+			var unknownS float64
+			for _, s := range f.slots.Slots {
+				where := "slot " + s.Local
+				focus := slotFocusFromEvents(f.Events, s.Start.UnixMilli())
+				if focus != s.Focus {
+					t.Errorf("%s: focus %q, but the os.focus records give the slot %q (SM 2.5)", where, s.Focus, focus)
+				}
+				if s.CreditedS == 0 {
+					continue
+				}
+				labeled := slices.Equal(s.Lbl, []event.Label{event.LabelFocusUnknown})
+				switch {
+				case focus == event.AppUnknown && (!labeled || s.Levels[event.EvidenceC] != s.CreditedS):
+					t.Errorf("%s: labels %q and levels %v; every second credited in a slot of unknown focus is level C with focus_unknown",
 						where, s.Lbl, s.Levels)
+				case focus != event.AppUnknown && (len(s.Lbl) > 0 || s.Levels[event.EvidenceC] > 0):
+					t.Errorf("%s: labels %q and levels %v; a slot of known focus here has no level-C second", where, s.Lbl, s.Levels)
 				}
-				if s.Focus == event.AppUnknown && (!c || len(s.Levels) != 1) {
-					t.Errorf("%s: levels %v; every second credited in a slot of unknown focus is level C (SM 2.5)", where, s.Levels)
+				if focus == event.AppUnknown {
+					unknownS += s.CreditedS
 				}
+			}
+			if got, _ := exp.Totals.Get("focus_unknown_s"); got != unknownS {
+				t.Errorf("focus_unknown_s %v, but the slots of unknown focus credit %v", got, unknownS)
 			}
 		})
 		t.Run(f.Name+" the slots of each bucket minute add up to its row", func(t *testing.T) {
@@ -591,6 +645,17 @@ func TestFocusUnknownAnchors(t *testing.T) {
 					t.Errorf("%s: no labels; every anchor here lists them, empty or not", where)
 				}
 				unknown := slices.Contains(a.Labels, event.LabelFocusUnknown)
+				if slices.Contains(focusTestedAnchors, a.Kind) {
+					// The os.focus in force at the act decides: unknown focus
+					// passes the test only that way (SM 2.5).
+					switch rec := focusInForce(f.Events, a.EventID); {
+					case rec == nil:
+						t.Errorf("%s: no os.focus is in force at the act", where)
+					case (rec.AppClass == event.AppUnknown) != unknown:
+						t.Errorf("%s: the os.focus in force is %q, and focus_unknown is %v; it goes with unknown focus at the act",
+							where, rec.AppClass, unknown)
+					}
+				}
 				switch {
 				case unknown && !slices.Contains(focusTestedAnchors, a.Kind):
 					t.Errorf("%s: focus_unknown, but a %s's evidence test names no focus", where, a.Kind)
@@ -982,20 +1047,43 @@ func TestFocusUnknownAcceptance(t *testing.T) {
 				t.Errorf("level B %v of %v credited; every other second is B", b, f.Expected.Totals.CreditedS)
 			}
 		}},
-		{"(d) credits both projects, and SM 2.5's rule gives the contested reading to each", func(t *testing.T) {
+		{"(d) gives each contested slot to the project of its first credited second, site 360 s and api 476", func(t *testing.T) {
 			f := fixtures["d-two-projects"]
-			if len(nonZero(f.Expected.Totals.CreditedByProject)) != 2 || total(t, f, "contested_buckets_s") == 0 {
-				t.Errorf("credit by project %v, contested buckets %v", f.Expected.Totals.CreditedByProject, total(t, f, "contested_buckets_s"))
+			byName := map[string]string{}
+			for k, n := range f.Expected.Projects {
+				byName[n] = k
 			}
-			if r := rowAt(t, f, "16:08"); len(r.Credit) != 2 {
-				t.Errorf("16:08 credits %v; the nearest anchor moves from one project's to the other's in it", r.Credit)
+			if got := f.Expected.Totals.CreditedByProject; got[byName["site"]] != 360 || got[byName["api"]] != 476 {
+				t.Errorf("credit by project %v, want site 360 and api 476 (D-split-slots)", got)
+			}
+			// One slot of each contest: leads (SM 3.3 rule 3), a lead against
+			// a bucket (rule 2), and buckets (SM 2.5), with the two slots the
+			// slot rule gives a project the nearest anchor alone wouldn't,
+			// and the slots after them.
+			want := map[string]string{"16:00:15": "api", "16:02:00": "site", "16:03:00": "site", "16:03:30": "api",
+				"16:03:45": "site", "16:08:00": "site", "16:08:15": "api"}
+			for _, s := range f.slots.Slots {
+				p, ok := want[s.Local]
+				if !ok {
+					continue
+				}
+				delete(want, s.Local)
+				if s.P != byName[p] || s.CreditedS != 15 || len(s.Credit) != 1 {
+					t.Errorf("slot %s: p %q with %v s from %v; want all 15 s to %s", s.Local, f.Expected.Projects[s.P], s.CreditedS, s.Credit, p)
+				}
+			}
+			if len(want) > 0 {
+				t.Errorf("slots.json has no slot %v", slices.Sorted(maps.Keys(want)))
 			}
 		}},
 		{"(e) has one os.focus, an hour before the work, and checkpoints with none after them", func(t *testing.T) {
 			f := fixtures["e-hour-before"]
 			var focus []int64
 			for _, e := range f.Events {
-				if p, ok := e.Data.(*event.OSFocus); ok && p.AppClass == event.AppUnknown {
+				if p, ok := e.Data.(*event.OSFocus); ok {
+					if p.AppClass != event.AppUnknown {
+						t.Errorf("an os.focus of class %q; the case's only one is unknown", p.AppClass)
+					}
 					focus = append(focus, e.T)
 				}
 			}
@@ -1006,13 +1094,16 @@ func TestFocusUnknownAcceptance(t *testing.T) {
 					break
 				}
 			}
-			if len(focus) != 1 || work < 0 || work-focus[0] < 3_600_000 {
-				t.Fatalf("os.focus at %v and the first credited minute at %d; want one, at least an hour before", focus, work)
+			if len(focus) != 1 || work < 0 || work-focus[0] < 3_600_000 || focus[0] >= f.Expected.Window.Start.UnixMilli() {
+				t.Fatalf("os.focus at %v and the first credited minute at %d; want one, before the window, at least an hour "+
+					"before the work", focus, work)
 			}
 			// DESIGN 6.5's checkpoints fall on UTC minutes divisible by 15.
+			// The one os.focus comes before the window, so every checkpoint in
+			// it has none after it.
 			n := 0
 			for m := f.Expected.Window.Start; m.Before(f.Expected.Window.End); m = m.Add(time.Minute) {
-				if m.Minute()%15 == 0 && m.UnixMilli() > focus[0] {
+				if m.Minute()%15 == 0 {
 					n++
 				}
 			}
@@ -1023,4 +1114,63 @@ func TestFocusUnknownAcceptance(t *testing.T) {
 	} {
 		t.Run(tc.name, tc.check)
 	}
+}
+
+// slotFocusFromEvents returns the focus class SM 2.5 gives the slot that
+// starts at start, from the os.focus records alone: the window that held
+// focus longest in the slot, records of one app_class and focus_project
+// counting as one window, the one in front first on a tie. It is "" when no
+// record is in force in the slot.
+func slotFocusFromEvents(events []event.Event, start int64) event.AppClass {
+	type window struct {
+		class   event.AppClass
+		project string
+	}
+	var recs []event.Event
+	for _, e := range events {
+		if _, ok := e.Data.(*event.OSFocus); ok {
+			recs = append(recs, e)
+		}
+	}
+	end := start + 15_000
+	held, first := map[window]int64{}, map[window]int64{}
+	for i, e := range recs {
+		next := end
+		if i+1 < len(recs) {
+			next = min(end, recs[i+1].T)
+		}
+		a := max(e.T, start)
+		if a >= next {
+			continue
+		}
+		p := e.Data.(*event.OSFocus)
+		w := window{p.AppClass, p.FocusProject}
+		if _, seen := first[w]; !seen {
+			first[w] = a
+		}
+		held[w] += next - a
+	}
+	var best window
+	found := false
+	for w, d := range held {
+		if !found || d > held[best] || d == held[best] && first[w] < first[best] {
+			best, found = w, true
+		}
+	}
+	return best.class
+}
+
+// focusInForce returns the last os.focus written before the event with the
+// given id, in the order the agent wrote them, or nil.
+func focusInForce(events []event.Event, id string) *event.OSFocus {
+	var last *event.OSFocus
+	for _, e := range events {
+		if e.EventID == id {
+			return last
+		}
+		if p, ok := e.Data.(*event.OSFocus); ok {
+			last = p
+		}
+	}
+	return nil
 }

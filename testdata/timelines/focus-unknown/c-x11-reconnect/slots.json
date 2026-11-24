@@ -5,6 +5,7 @@
       "start": "2026-11-25T23:00:00Z",
       "local": "10:00:00",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -17,6 +18,7 @@
       "start": "2026-11-25T23:00:15Z",
       "local": "10:00:15",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -29,6 +31,7 @@
       "start": "2026-11-25T23:00:30Z",
       "local": "10:00:30",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -41,6 +44,7 @@
       "start": "2026-11-25T23:00:45Z",
       "local": "10:00:45",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -53,6 +57,7 @@
       "start": "2026-11-25T23:01:00Z",
       "local": "10:01:00",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -65,6 +70,7 @@
       "start": "2026-11-25T23:01:15Z",
       "local": "10:01:15",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -77,6 +83,7 @@
       "start": "2026-11-25T23:01:30Z",
       "local": "10:01:30",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -89,6 +96,7 @@
       "start": "2026-11-25T23:01:45Z",
       "local": "10:01:45",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -101,6 +109,7 @@
       "start": "2026-11-25T23:02:00Z",
       "local": "10:02:00",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -113,6 +122,7 @@
       "start": "2026-11-25T23:02:15Z",
       "local": "10:02:15",
       "focus": "unknown",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -125,6 +135,7 @@
       "start": "2026-11-25T23:02:30Z",
       "local": "10:02:30",
       "focus": "unknown",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -137,6 +148,7 @@
       "start": "2026-11-25T23:02:45Z",
       "local": "10:02:45",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -149,6 +161,7 @@
       "start": "2026-11-25T23:03:00Z",
       "local": "10:03:00",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -161,6 +174,7 @@
       "start": "2026-11-25T23:03:15Z",
       "local": "10:03:15",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -173,6 +187,7 @@
       "start": "2026-11-25T23:03:30Z",
       "local": "10:03:30",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -185,6 +200,7 @@
       "start": "2026-11-25T23:03:45Z",
       "local": "10:03:45",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"P": 15}
@@ -197,6 +213,7 @@
       "start": "2026-11-25T23:04:00Z",
       "local": "10:04:00",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"SUP": 15}
@@ -209,6 +226,7 @@
       "start": "2026-11-25T23:04:15Z",
       "local": "10:04:15",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 5,
       "credit": {
         "p_0ef88a671bd3": {"SUP": 5}
@@ -221,6 +239,7 @@
       "start": "2026-11-25T23:04:30Z",
       "local": "10:04:30",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"SUP": 15}
@@ -242,6 +261,7 @@
       "start": "2026-11-25T23:05:00Z",
       "local": "10:05:00",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"SUP": 15}
@@ -254,6 +274,7 @@
       "start": "2026-11-25T23:05:15Z",
       "local": "10:05:15",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"SUP": 15}
@@ -266,6 +287,7 @@
       "start": "2026-11-25T23:05:30Z",
       "local": "10:05:30",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"SUP": 15}
@@ -278,6 +300,7 @@
       "start": "2026-11-25T23:05:45Z",
       "local": "10:05:45",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"SUP": 15}
@@ -290,6 +313,7 @@
       "start": "2026-11-25T23:06:00Z",
       "local": "10:06:00",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -302,6 +326,7 @@
       "start": "2026-11-25T23:06:15Z",
       "local": "10:06:15",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -314,6 +339,7 @@
       "start": "2026-11-25T23:06:30Z",
       "local": "10:06:30",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -326,6 +352,7 @@
       "start": "2026-11-25T23:06:45Z",
       "local": "10:06:45",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -338,6 +365,7 @@
       "start": "2026-11-25T23:07:00Z",
       "local": "10:07:00",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -350,6 +378,7 @@
       "start": "2026-11-25T23:07:15Z",
       "local": "10:07:15",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -362,6 +391,7 @@
       "start": "2026-11-25T23:07:30Z",
       "local": "10:07:30",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -374,6 +404,7 @@
       "start": "2026-11-25T23:07:45Z",
       "local": "10:07:45",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -386,6 +417,7 @@
       "start": "2026-11-25T23:08:00Z",
       "local": "10:08:00",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -398,6 +430,7 @@
       "start": "2026-11-25T23:08:15Z",
       "local": "10:08:15",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -410,6 +443,7 @@
       "start": "2026-11-25T23:08:30Z",
       "local": "10:08:30",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -422,6 +456,7 @@
       "start": "2026-11-25T23:08:45Z",
       "local": "10:08:45",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -434,6 +469,7 @@
       "start": "2026-11-25T23:09:00Z",
       "local": "10:09:00",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -446,6 +482,7 @@
       "start": "2026-11-25T23:09:15Z",
       "local": "10:09:15",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -458,6 +495,7 @@
       "start": "2026-11-25T23:09:30Z",
       "local": "10:09:30",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}
@@ -470,6 +508,7 @@
       "start": "2026-11-25T23:09:45Z",
       "local": "10:09:45",
       "focus": "terminal",
+      "p": "p_0ef88a671bd3",
       "credited_s": 15,
       "credit": {
         "p_0ef88a671bd3": {"READ": 15}

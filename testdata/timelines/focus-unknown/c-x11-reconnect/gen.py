@@ -159,7 +159,7 @@ NOTES = {
                      "and the anchor is level B, not focus_unknown."),
     "10:04": ("2.4", "Nothing new to read from 10:04:20 to 10:04:30 and from 10:04:45 to 10:05:00: X.agent_only."),
     "10:05": ("2.4", None),
-    "10:06": ("2.4: reading takes the level of the anchor that qualifies it", "The prompt, level B."),
+    "10:06": ("DESIGN 6.4: reading takes the level of the anchor that qualifies it", "The prompt, level B."),
     "10:07": ("2.4", None),
     "10:08": ("2.4", None),
     "10:09": ("2.4", None),
@@ -174,9 +174,9 @@ expected = exp.doc(
     approx={},
     errata=[],
     notes=[
-        "WP-FX8's (c): X11 without the key counter, so every credited second is level B, except where the agent "
-        "couldn't tell which window was in front. Its X connection for focus drops at 10:02:20 and is re-made "
-        "by 10:02:50, inside the prompt's lead.",
+        "WP-FX8's (c): X11 without the key counter, so every credited second is level B, except in the two "
+        "slots that unknown focus holds longest. The agent's X connection for focus drops at 10:02:20 and is "
+        "re-made by 10:02:50, inside the prompt's lead.",
         "Only the seconds of the two slots that unknown focus holds longest, 10:02:15 to 10:02:45, are level C "
         "with focus_unknown: 30 s, though the 30 s of unknown focus start and end mid-slot (SM 2.5). No act "
         "falls in them, so no anchor passed its focus test only through unknown focus, and the prompt, sent "

@@ -131,14 +131,21 @@ class Replay:
     qualifying human anchor is nearest the second, the earlier anchor on a
     tie, then the lower project_key. It measures nearest both from the
     second's start and from its middle, and fails where the two readings
-    pick different projects. An uncredited second takes SM 5.2's first code
+    pick different projects. A slot of unknown focus keeps one project
+    (D-split-slots, docs/errata/2026-11-24-sm-2.5-split-slots.md): the
+    project whose candidate credits the slot's first credited second takes
+    the slot, and from then on only that project's windows and buckets
+    credit its seconds. An uncredited second takes SM 5.2's first code
     that applies, with X.other_focus and X.ambiguous skipped and every
     project's running turns read where focus is unknown.
 
     credit maps each credited second to (project, reason, level, labels),
     code each uncredited second to its code, running holds the seconds an
     agent turn ran, and contested lists the seconds several projects
-    wanted, as (second, {project: kinds}, winner, rule)."""
+    wanted, as (second, {project: kinds}, winner, rule): rule 3 for leads
+    of two projects, 2 for one project's window against another's bucket,
+    and 2.5 for two projects' buckets, by what wanted the second, whether
+    the nearest-anchor rule or the slot's project decided it."""
 
     def __init__(self, events, start, end):
         tl.check(start % tl.MINUTE_MS == 0 and end % tl.MINUTE_MS == 0, "the replay covers whole minutes")
@@ -319,6 +326,7 @@ class Replay:
         # What BUCKET_MAX_S evicted, kept aside under the same resets (SM 2.4).
         self.evicted = {s: [] for s in self.sessions}
         self.credit, self.code, self.running, self.contested = {}, {}, set(), []
+        self.owner = {}  # slot of unknown focus -> the project of its first credited second
         self.peak = {s: Fraction(0) for s in self.sessions}
         i = 0
         for tau in range(start, end, SECOND):
@@ -380,6 +388,15 @@ class Replay:
             if near and on(p):
                 buckets.append((s, p, near))
         projects = {a.project for a in windows} | {p for _, p, _ in buckets}
+        kinds = self._kinds(windows, buckets)
+        if windows:
+            rule = "3" if len({a.project for a in windows}) > 1 else "2"
+        else:
+            rule = "2.5"
+        owner = self.owner.get(slot) if unknown else None
+        if owner is not None:
+            windows = [a for a in windows if a.project == owner]
+            buckets = [b for b in buckets if b[1] == owner]
         if windows:
             leads = [a for a in windows if a.in_lead(tau)]
             if leads:
@@ -391,9 +408,10 @@ class Replay:
                 win = windows[0]
             self.credit[tau] = (win.project, win.reason, "C" if unknown else win.level,
                                 [FOCUS_UNKNOWN] if unknown else win.labels)
+            if unknown:
+                self.owner.setdefault(slot, win.project)
             if len(projects) > 1:
-                rule = "3" if len({a.project for a in windows}) > 1 else "2"
-                self.contested.append((tau, self._kinds(windows, buckets), win.project, rule))
+                self.contested.append((tau, kinds, win.project, rule))
             return
         if buckets:
             by_project = {}
@@ -426,8 +444,10 @@ class Replay:
                 take -= got
                 if bucket[s][0][1] == 0:
                     bucket[s].pop(0)
+            if unknown:
+                self.owner.setdefault(slot, win)
             if len(projects) > 1:
-                self.contested.append((tau, self._kinds(windows, buckets), win, "2.5"))
+                self.contested.append((tau, kinds, win, rule))
             return
         self.code[tau] = self._uncredited(tau, cls, fp, unknown)
 
@@ -460,6 +480,18 @@ class Replay:
 
     def bucket_minute(self, m):
         return any(t in self.credit or t in self.running for t in range(m, m + tl.MINUTE_MS, SECOND))
+
+
+def project_agent_time(rp, projects):
+    """D-bucket-agent-only's per-project numbers, as the 6.3 fixture writes
+    them: agent_running_s.<p>, the seconds a turn of p ran, and
+    agent_only_s.<p>, those of them not credited to p."""
+    out = {}
+    for p in projects:
+        ran = {t for t in rp.running if any(tr.project == p and tr.running(t) for tr in rp.turns)}
+        out[f"agent_running_s.{p}"] = len(ran)
+        out[f"agent_only_s.{p}"] = sum(1 for t in ran if rp.credit.get(t, (None,))[0] != p)
+    return out
 
 
 # The hand-written runs.
@@ -592,8 +624,9 @@ class Case:
 
     def slots(self, rp):
         """slots.json's entries: every slot of every bucket minute, with its
-        focus as the replay resolves it from the os.focus records, its
-        credit by project and reason, its seconds by level, and ev and lbl as
+        focus as the replay resolves it from the os.focus records, the one
+        project p its credit goes to (D-split-slots), its credit by project
+        and reason, its seconds by level, and ev and lbl as
         a minute bucket's slot gives them (SM 5.1): its weakest second's
         level, and focus_unknown when some of its seconds are level C because
         the window in front was unknown."""
@@ -614,9 +647,12 @@ class Case:
                     levels[lvl] = levels.get(lvl, 0) + 1
                 credit = {p: tl.ordered(c, tl.CREDIT_REASONS) for p, c in sorted(credit.items())}
                 cr = sum(levels.values())
-                entry = {"start": fx.utc(sl), "local": fx.hhmmss(sl), "focus": rp.slot_focus[sl][0],
-                         "credited_s": cr, "credit": credit,
-                         "levels": {k: levels[k] for k in ("A", "B", "C") if k in levels}}
+                tl.check(len(credit) <= 1, f"slot {fx.hhmmss(sl)} credits one project (D-split-slots)")
+                entry = {"start": fx.utc(sl), "local": fx.hhmmss(sl), "focus": rp.slot_focus[sl][0]}
+                if credit:
+                    entry["p"] = next(iter(credit))
+                entry.update({"credited_s": cr, "credit": credit,
+                              "levels": {k: levels[k] for k in ("A", "B", "C") if k in levels}})
                 if cr:
                     entry["ev"] = max(levels)
                     entry["lbl"] = [FOCUS_UNKNOWN] if "C" in levels else []

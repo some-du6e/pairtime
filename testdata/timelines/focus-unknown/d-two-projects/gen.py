@@ -145,10 +145,10 @@ RUNS = [
     ("16:00:00", "16:02:00", "api P"),
     ("16:02:00", "16:03:00", "site P"),
     ("16:03:00", "16:03:30", "site SUP"),
-    ("16:03:30", "16:03:40", "api SUP"),
-    ("16:03:40", "16:04:40", "site SUP"),
-    ("16:04:40", "16:08:01", "site READ"),
-    ("16:08:01", "16:10:01", "api READ"),
+    ("16:03:30", "16:03:45", "api SUP"),
+    ("16:03:45", "16:04:40", "site SUP"),
+    ("16:04:40", "16:08:15", "site READ"),
+    ("16:08:15", "16:10:01", "api READ"),
     ("16:10:01", "16:13:01", "api P"),
     ("16:13:01", "16:13:21", "api SUP"),
     ("16:13:21", "16:13:41", "X.agent_only"),
@@ -163,25 +163,32 @@ rp = fu.Replay(events, T0, END)
 case.check(rp)
 tl.check(all(f == ("unknown", None) for f in rp.slot_focus.values()), "focus is unknown in every slot")
 
-# The contested seconds the case is about, by the rule that settles them:
-# leads of two projects (SM 3.3 rule 3), and buckets of two projects (SM
-# 2.5's nearest qualifying anchor). Seconds where one project's lead beats
-# the other's bucket (rule 2) aren't listed.
+# The seconds both projects wanted, by what wanted them: leads of two
+# projects (SM 3.3 rule 3), one project's lead against the other's bucket
+# (rule 2), and two projects' buckets (SM 2.5's nearest qualifying anchor).
+# Under D-split-slots that rule decides a slot's first credited second, and
+# the rest of the slot goes to that second's project: api keeps 16:03:40 to
+# 16:03:45, though site's anchor is nearer.
 NAMES = exp.projects
 got = {}
 for tau, kinds, win, rule in rp.contested:
-    if rule in ("3", "2.5"):
-        got.setdefault((rule, NAMES[win]), set()).add(tau)
+    got.setdefault((rule, NAMES[win]), set()).add(tau)
 spans = {k: fu.spans_of(fx, v) for k, v in got.items()}
 tl.check(spans == {("3", "api"): [("16:00:20", "16:02:00")],
-                   ("2.5", "site"): [("16:03:00", "16:03:30"), ("16:03:40", "16:08:01")],
-                   ("2.5", "api"): [("16:08:01", "16:10:01")]},
+                   ("2", "site"): [("16:02:00", "16:03:00")],
+                   ("2.5", "site"): [("16:03:00", "16:03:30"), ("16:03:45", "16:08:15")],
+                   ("2.5", "api"): [("16:03:40", "16:03:45")]},
          f"the contested seconds {spans}")
 contested_buckets = sum(len(v) for (rule, _), v in got.items() if rule == "2.5")
 contested_leads = sum(len(v) for (rule, _), v in got.items() if rule == "3")
-# What the buckets hold: site's 9 s are never read, and api's 130 s go at
-# B2's reset.
-tl.check(rp.peak[SA] == 225 and rp.peak[SB] == 250, f"peaks {rp.peak}")
+tl.check((contested_buckets, contested_leads) == (30 + 270 + 5, 100), "contested seconds")
+# What the buckets hold: site reads all 300 s of its bucket, and api's last
+# 139 s go at B2's reset.
+tl.check(rp.peak[SA] == 225 and rp.peak[SB] == 245, f"peaks {rp.peak}")
+# D-bucket-agent-only's per-project numbers, worked by hand in README.md.
+AGENT = {f"agent_running_s.{A}": 100, f"agent_only_s.{A}": 100 - 30 - 55,
+         f"agent_running_s.{B}": 210 + 90, f"agent_only_s.{B}": 210 - 15 + 90 - 35}
+tl.check(fu.project_agent_time(rp, [A, B]) == AGENT, f"per-project agent time {fu.project_agent_time(rp, [A, B])}")
 
 SPLIT = "2026-11-24-sm-2.5-split-slots"
 NOTES = {
@@ -190,32 +197,34 @@ NOTES = {
               "after the second wins: B1."),
     "16:01": ("3.3 rule 3", "B1 is the next anchor until 16:02:00."),
     "16:02": ("3.3 rule 2", "A1's lead, which beats api's bucket, reset to 20 s when B1's turn starts at 16:02:00."),
-    "16:03": ("2.5: buckets of different projects go to the nearest qualifying anchor",
+    "16:03": ("2.5 and D-split-slots: a slot of unknown focus keeps its first credited second's project",
               "A1, at 16:03:00, is nearer every second than B1 or B2, so site reads whenever its bucket has "
-              "something; api reads only while site's is empty, 16:03:30 to 16:03:40. The slot from 16:03:30 "
-              "credits both projects.", SPLIT),
+              "something. It is empty at 16:03:30, the first second of its slot, so api takes the slot to "
+              "16:03:45, though site's edit lands at 16:03:40.", SPLIT),
     "16:04": ("2.5", "site reads; A1 stops at 16:04:40, so SUP becomes READ."),
-    "16:05": ("2.5", "B1 stops at 16:05:30. api's bucket holds 250 s, but A1 is still the nearer anchor."),
+    "16:05": ("2.5", "B1 stops at 16:05:30. api's bucket holds 245 s, but A1 is still the nearer anchor."),
     "16:06": ("2.5", None),
     "16:07": ("2.5", None),
-    "16:08": ("2.5: the nearest anchor can come after the second",
-              "From 16:08:01 B2, at 16:13:01, is nearer than A1, 300 s against 301, so api reads, with 9 s left in "
-              "site's bucket. The slot from 16:08:00 credits both projects.", SPLIT),
+    "16:08": ("2.5 and D-split-slots: the nearest anchor can come after the second",
+              "At 16:08:00, the first second of its slot, A1 is nearer than B2, so site takes the slot and reads to "
+              "16:08:15, where its bucket runs dry. From 16:08:01 B2 is the nearer anchor, 300 s against 301, and "
+              "api reads from 16:08:15.", SPLIT),
     "16:09": ("2.5", None),
-    "16:10": ("3.3 rule 2", "api reads to 16:10:01, then B2's 180 s lead beats both buckets."),
+    "16:10": ("3.3 rule 2", "api reads to 16:10:01, then B2's 180 s lead beats its bucket."),
     "16:11": ("2.3", None),
     "16:12": ("2.3", None),
     "16:13": ("2.4 and 5.2",
-              "B2 resets api's bucket at 16:13:01. site's 9 s can't be read: A1 is more than 600 s back. While B2 "
-              "runs with nothing to read, X.agent_only."),
+              "B2 resets api's bucket at 16:13:01, so the 139 s it held are never read. While B2 runs with "
+              "nothing to read, X.agent_only."),
     "16:14": ("2.4 and 5.2", "B2 stops at 16:14:31; api reads its summary, then nothing is left: X.no_anchor."),
 }
 case.rows(NOTES)
 lv = case.level_totals()
 agent_only = sum(1 for t in rp.running if t not in rp.credit)
 expected = exp.doc(
-    extra_totals={**lv, "agent_only_s": agent_only, "ai_credited_s": lv["level_c_s"], "hand_credited_s": 0,
-                  "contested_buckets_s": contested_buckets, "contested_leads_s": contested_leads},
+    extra_totals={**lv, "agent_only_s": agent_only, **AGENT, "ai_credited_s": lv["level_c_s"],
+                  "hand_credited_s": 0, "contested_buckets_s": contested_buckets,
+                  "contested_leads_s": contested_leads},
     stated=[],
     approx={},
     errata=[SPLIT],
@@ -229,17 +238,21 @@ expected = exp.doc(
         "is the nearer anchor. Measured from a second's start no two anchors tie. Measured from its middle, "
         "16:08:00 is 300.5 s from both, and the earlier anchor, A1, takes it, so both readings give the same "
         "side. The lower project_key is never reached.",
-        "contested_buckets_s counts the seconds both buckets wanted, 291 to site and 120 to api, and "
-        "contested_leads_s the seconds both projects' leads wanted, all api's.",
-        "Two slots credit both projects, 16:03:30 and 16:08:00, which SM 5.1's minute bucket, one project a "
-        "slot, can't record. The rows follow SM 2.5 as written, second by second. If the split-slots "
-        "erratum carries D-ambiguous-anchors over to slots of unknown focus, 16:03 and 16:08 change, and site "
-        "gets 360 s and api 476.",
+        "Each slot credits one project (D-split-slots, docs/errata/2026-11-24-sm-2.5-split-slots.md): the "
+        "project whose candidate credits a slot's first credited second takes the slot, and only its windows "
+        "and buckets credit the rest. So api takes the slot from 16:03:30, whose first second site's empty "
+        "bucket can't credit, and site the slot from 16:08:00. Read second by second, as SM 2.5 alone says, "
+        "site would get 351 s and api 485.",
+        "contested_buckets_s counts the seconds both buckets wanted, 300 to site and 5 to api, the 5 in the "
+        "slot api takes at 16:03:30, and contested_leads_s the seconds both projects' leads wanted, all api's.",
+        "agent_only_s, 55, is SM 5.3's count across projects: the seconds an agent turn ran that nothing "
+        "credited. agent_running_s.<p> and agent_only_s.<p> are D-bucket-agent-only's per-project numbers, as "
+        "the 6.3 fixture writes them: the seconds a turn of p ran, and those of them not credited to p.",
         "Every credited second is level C with focus_unknown.",
     ],
 )
 tl.check(expected["totals"]["credited_s"] == 836, f"credited {expected['totals']['credited_s']}")
-tl.check(expected["totals"]["credited_by_project"] == {A: 351, B: 485}, f"{expected['totals']['credited_by_project']}")
+tl.check(expected["totals"]["credited_by_project"] == {A: 360, B: 476}, f"{expected['totals']['credited_by_project']}")
 
 UNK = ["focus_unknown"]
 RULE6 = "2.2 rule 6: input before submit, and the focus test passes only because focus is unknown (2.5); "
@@ -261,8 +274,11 @@ for name, local in (("B1", "16:02:00"), ("A1", "16:03:00"), ("B2", "16:13:01")):
                                "len_chars": e["data"]["len_chars"],
                                "source": "invented for WP-FX8; only its typed length matters"})
 slots = case.slots(rp)
-split = [s["local"] for s in slots if len(s["credit"]) > 1]
-tl.check(split == ["16:03:30", "16:08:00"], f"the slots that credit both projects: {split}")
+# The slots where the slot rule decides seconds the nearest anchor alone
+# would give the other project, and the slots after them.
+owners = {s["local"]: (NAMES[s["p"]], s["credited_s"]) for s in slots if s["credited_s"]}
+tl.check([owners[k] for k in ("16:03:30", "16:03:45", "16:08:00", "16:08:15")]
+         == [("api", 15), ("site", 15), ("site", 15), ("api", 15)], f"slot owners {owners}")
 
 fu.check_readme(os.path.join(HERE, "README.md"), expected)
 fu.write(fx, tl.out_dir(HERE), expected, {"fixture": NAME, "anchors": anchors, "turns": turns}, prompts, slots)

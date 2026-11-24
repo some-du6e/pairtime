@@ -5,6 +5,7 @@
       "start": "2026-11-27T19:00:00Z",
       "local": "16:00:00",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -17,6 +18,7 @@
       "start": "2026-11-27T19:00:15Z",
       "local": "16:00:15",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -29,6 +31,7 @@
       "start": "2026-11-27T19:00:30Z",
       "local": "16:00:30",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -41,6 +44,7 @@
       "start": "2026-11-27T19:00:45Z",
       "local": "16:00:45",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -53,6 +57,7 @@
       "start": "2026-11-27T19:01:00Z",
       "local": "16:01:00",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -65,6 +70,7 @@
       "start": "2026-11-27T19:01:15Z",
       "local": "16:01:15",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -77,6 +83,7 @@
       "start": "2026-11-27T19:01:30Z",
       "local": "16:01:30",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -89,6 +96,7 @@
       "start": "2026-11-27T19:01:45Z",
       "local": "16:01:45",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -101,6 +109,7 @@
       "start": "2026-11-27T19:02:00Z",
       "local": "16:02:00",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"P": 15}
@@ -113,6 +122,7 @@
       "start": "2026-11-27T19:02:15Z",
       "local": "16:02:15",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"P": 15}
@@ -125,6 +135,7 @@
       "start": "2026-11-27T19:02:30Z",
       "local": "16:02:30",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"P": 15}
@@ -137,6 +148,7 @@
       "start": "2026-11-27T19:02:45Z",
       "local": "16:02:45",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"P": 15}
@@ -149,6 +161,7 @@
       "start": "2026-11-27T19:03:00Z",
       "local": "16:03:00",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"SUP": 15}
@@ -161,6 +174,7 @@
       "start": "2026-11-27T19:03:15Z",
       "local": "16:03:15",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"SUP": 15}
@@ -173,10 +187,10 @@
       "start": "2026-11-27T19:03:30Z",
       "local": "16:03:30",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
-        "p_f2101ebca04b": {"SUP": 5},
-        "p_fb7d677dd716": {"SUP": 10}
+        "p_fb7d677dd716": {"SUP": 15}
       },
       "levels": {"C": 15},
       "ev": "C",
@@ -186,6 +200,7 @@
       "start": "2026-11-27T19:03:45Z",
       "local": "16:03:45",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"SUP": 15}
@@ -198,6 +213,7 @@
       "start": "2026-11-27T19:04:00Z",
       "local": "16:04:00",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"SUP": 15}
@@ -210,6 +226,7 @@
       "start": "2026-11-27T19:04:15Z",
       "local": "16:04:15",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"SUP": 15}
@@ -222,6 +239,7 @@
       "start": "2026-11-27T19:04:30Z",
       "local": "16:04:30",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"SUP": 10, "READ": 5}
@@ -234,6 +252,7 @@
       "start": "2026-11-27T19:04:45Z",
       "local": "16:04:45",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"READ": 15}
@@ -246,6 +265,7 @@
       "start": "2026-11-27T19:05:00Z",
       "local": "16:05:00",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"READ": 15}
@@ -258,6 +278,7 @@
       "start": "2026-11-27T19:05:15Z",
       "local": "16:05:15",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"READ": 15}
@@ -270,6 +291,7 @@
       "start": "2026-11-27T19:05:30Z",
       "local": "16:05:30",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"READ": 15}
@@ -282,6 +304,7 @@
       "start": "2026-11-27T19:05:45Z",
       "local": "16:05:45",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"READ": 15}
@@ -294,6 +317,7 @@
       "start": "2026-11-27T19:06:00Z",
       "local": "16:06:00",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"READ": 15}
@@ -306,6 +330,7 @@
       "start": "2026-11-27T19:06:15Z",
       "local": "16:06:15",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"READ": 15}
@@ -318,6 +343,7 @@
       "start": "2026-11-27T19:06:30Z",
       "local": "16:06:30",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"READ": 15}
@@ -330,6 +356,7 @@
       "start": "2026-11-27T19:06:45Z",
       "local": "16:06:45",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"READ": 15}
@@ -342,6 +369,7 @@
       "start": "2026-11-27T19:07:00Z",
       "local": "16:07:00",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"READ": 15}
@@ -354,6 +382,7 @@
       "start": "2026-11-27T19:07:15Z",
       "local": "16:07:15",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"READ": 15}
@@ -366,6 +395,7 @@
       "start": "2026-11-27T19:07:30Z",
       "local": "16:07:30",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"READ": 15}
@@ -378,6 +408,7 @@
       "start": "2026-11-27T19:07:45Z",
       "local": "16:07:45",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
         "p_f2101ebca04b": {"READ": 15}
@@ -390,10 +421,10 @@
       "start": "2026-11-27T19:08:00Z",
       "local": "16:08:00",
       "focus": "unknown",
+      "p": "p_f2101ebca04b",
       "credited_s": 15,
       "credit": {
-        "p_f2101ebca04b": {"READ": 1},
-        "p_fb7d677dd716": {"READ": 14}
+        "p_f2101ebca04b": {"READ": 15}
       },
       "levels": {"C": 15},
       "ev": "C",
@@ -403,6 +434,7 @@
       "start": "2026-11-27T19:08:15Z",
       "local": "16:08:15",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"READ": 15}
@@ -415,6 +447,7 @@
       "start": "2026-11-27T19:08:30Z",
       "local": "16:08:30",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"READ": 15}
@@ -427,6 +460,7 @@
       "start": "2026-11-27T19:08:45Z",
       "local": "16:08:45",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"READ": 15}
@@ -439,6 +473,7 @@
       "start": "2026-11-27T19:09:00Z",
       "local": "16:09:00",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"READ": 15}
@@ -451,6 +486,7 @@
       "start": "2026-11-27T19:09:15Z",
       "local": "16:09:15",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"READ": 15}
@@ -463,6 +499,7 @@
       "start": "2026-11-27T19:09:30Z",
       "local": "16:09:30",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"READ": 15}
@@ -475,6 +512,7 @@
       "start": "2026-11-27T19:09:45Z",
       "local": "16:09:45",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"READ": 15}
@@ -487,6 +525,7 @@
       "start": "2026-11-27T19:10:00Z",
       "local": "16:10:00",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 14, "READ": 1}
@@ -499,6 +538,7 @@
       "start": "2026-11-27T19:10:15Z",
       "local": "16:10:15",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -511,6 +551,7 @@
       "start": "2026-11-27T19:10:30Z",
       "local": "16:10:30",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -523,6 +564,7 @@
       "start": "2026-11-27T19:10:45Z",
       "local": "16:10:45",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -535,6 +577,7 @@
       "start": "2026-11-27T19:11:00Z",
       "local": "16:11:00",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -547,6 +590,7 @@
       "start": "2026-11-27T19:11:15Z",
       "local": "16:11:15",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -559,6 +603,7 @@
       "start": "2026-11-27T19:11:30Z",
       "local": "16:11:30",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -571,6 +616,7 @@
       "start": "2026-11-27T19:11:45Z",
       "local": "16:11:45",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -583,6 +629,7 @@
       "start": "2026-11-27T19:12:00Z",
       "local": "16:12:00",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -595,6 +642,7 @@
       "start": "2026-11-27T19:12:15Z",
       "local": "16:12:15",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -607,6 +655,7 @@
       "start": "2026-11-27T19:12:30Z",
       "local": "16:12:30",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -619,6 +668,7 @@
       "start": "2026-11-27T19:12:45Z",
       "local": "16:12:45",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 15}
@@ -631,6 +681,7 @@
       "start": "2026-11-27T19:13:00Z",
       "local": "16:13:00",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 15,
       "credit": {
         "p_fb7d677dd716": {"P": 1, "SUP": 14}
@@ -643,6 +694,7 @@
       "start": "2026-11-27T19:13:15Z",
       "local": "16:13:15",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 6,
       "credit": {
         "p_fb7d677dd716": {"SUP": 6}
@@ -655,6 +707,7 @@
       "start": "2026-11-27T19:13:30Z",
       "local": "16:13:30",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 4,
       "credit": {
         "p_fb7d677dd716": {"SUP": 4}
@@ -667,6 +720,7 @@
       "start": "2026-11-27T19:13:45Z",
       "local": "16:13:45",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 11,
       "credit": {
         "p_fb7d677dd716": {"SUP": 11}
@@ -697,6 +751,7 @@
       "start": "2026-11-27T19:14:30Z",
       "local": "16:14:30",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 14,
       "credit": {
         "p_fb7d677dd716": {"READ": 14}
@@ -709,6 +764,7 @@
       "start": "2026-11-27T19:14:45Z",
       "local": "16:14:45",
       "focus": "unknown",
+      "p": "p_fb7d677dd716",
       "credited_s": 6,
       "credit": {
         "p_fb7d677dd716": {"READ": 6}

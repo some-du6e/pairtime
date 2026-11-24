@@ -16,7 +16,7 @@ Sam, 14, starts Claude Code for `quiz-app` on Ubuntu's GNOME on Wayland, without
 - **12:59:52.** Claude Code's SessionStart hook makes a project context live, so the agent records the `os.focus` it can, `app_class` `unknown` (SM 2.5, DESIGN 3.3), and samples. A harness session process runs from then on, so the context stays live and the samples come every 15 s.
 - **12:59:55 to 13:59:50.** Videos in the browser, which pairtime can't see: a click or a scroll every 10 to 50 s, so every slot is `yes` or `bridged`. At 13:59:49.9 he clicks the terminal, which pairtime can't see either.
 - **14:00 to 14:03.** He reads `quiz.js` in the terminal, scrolling, then types a 90-character prompt and sends it at 14:03:00.
-- **14:03 to 14:05.** The turn: 30 words at 14:03:30, a 20-line edit at 14:04:00 with no visible output, and a 120-word summary with the stop at 14:05:00.
+- **14:03 to 14:05.** The turn: 30 words at 14:03:30, a 20-line edit at 14:04:00 with no visible output, and a 120-word summary with the stop at 14:05:00. He watches and scrolls from 14:03:04 while the turn runs.
 - **14:05 to 14:08.** He reads the summary and the diff, scrolling every 5 to 9 s.
 
 ## Credit, minute by minute
@@ -65,6 +65,7 @@ DESIGN 6.5 seals a checkpoint at every UTC minute divisible by 15 for each proje
 
 ## Readings the case relies on
 
+- **An edit fills the bucket when it lands.** An `agent.tool` record fills the bucket at its `t`, which is its `t_end`, not its `t_start`, as SM 6.1's "lands at 14:05:30" and 6.2's "until the agent's 40-line edit lands at 07:41:50" read it. The edit fills at 14:04:00, its `t_end`, which ends the 20 s with nothing to read in 14:03. Filled at `t_start`, it would fill at 14:03:51.2, and 14:03 would credit 8 s more, from 14:03:52.
 - **When the record is written.** The focus component writes the record of unknown focus once a project context is live (internal/agent/focus), so it is dated at the SessionStart hook, in the same millisecond. No act falls in that millisecond.
 - **An hour of presence and nothing else.** Unknown focus passes the focus tests, but credit still needs an anchor: a window (SM 2.3), reading within 600 s of one (SM 2.4) or a lookup, which a slot of unknown focus never is (SM 2.5). None of these comes before 14:00, and the reading horizon of the 14:03 prompt reaches back only to 13:53, when the bucket is empty.
-- **A minute of two codes.** In 14:03 the uncredited seconds fall while the turn runs, so SM 5.2's turn step, which reads every project's running turns where focus is unknown, gives `X.agent_only`. In 14:07 nothing runs, so `X.no_anchor`.
+- **Two minutes, two codes.** In 14:03 the uncredited seconds fall while the turn runs, so SM 5.2's turn step, which reads every project's running turns where focus is unknown, gives `X.agent_only`. In 14:07 nothing runs, so `X.no_anchor`.
