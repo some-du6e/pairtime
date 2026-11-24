@@ -22,6 +22,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/server/dashboard"
 	"github.com/some-du6e/pairtime/internal/server/device"
 	"github.com/some-du6e/pairtime/internal/server/devlog"
+	"github.com/some-du6e/pairtime/internal/server/ingest"
 	serverkeys "github.com/some-du6e/pairtime/internal/server/keys"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/ops"
@@ -478,10 +479,13 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	public.HandleFunc("GET "+dashboard.APIPath, dashboard.API(rollups, owner, time.Now, logger))
 	// Devlogs, badges and build days, for the device token of the owner's
 	// own computers (WP-SV12; DESIGN 3.10; docs/spec/teen-layer-v1.md).
-	// Devlogs and badges count each device's requests against ingest's
-	// default rate, in a bucket apart from its uploads' (devlog.Options).
-	devlog.New(devlog.Options{Devices: devices, Writer: w, Read: db.Read, Now: time.Now, Logger: logger}).Register(public)
+	// Devlogs, badges and the weekly goal count each device's requests
+	// against one rate, ingest's default, in a bucket apart from its
+	// uploads' (devlog.Options, buildday.GoalOptions).
+	teenRate := ingest.NewLimiter(ingest.DefaultRateBurst, ingest.DefaultRateEvery)
+	devlog.New(devlog.Options{Devices: devices, Writer: w, Read: db.Read, Now: time.Now, Rate: teenRate, Logger: logger}).Register(public)
 	public.HandleFunc("GET "+buildday.SummaryPath, buildday.API(db.Read, devices, time.Now, logger))
+	public.HandleFunc("PUT "+buildday.GoalPath, buildday.GoalAPI(buildday.GoalOptions{Devices: devices, Writer: w, Rate: teenRate, Now: time.Now, Logger: logger}))
 	subs, err := newSubmissions(cfg, db, w, devices, signIn, scoring, paramsHash, logger)
 	if err != nil {
 		return err

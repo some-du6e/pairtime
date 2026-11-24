@@ -53,8 +53,12 @@
 // the count starts over. Weeks, freezes, consistency and the summary count a
 // build day from the moment it is stored. There is no daily streak counter.
 //
-// The weekly goal is WEEKLY_GOAL_DEFAULT for every account until part 2 of
-// WP-SV12 adds its setter.
+// The weekly goal is WEEKLY_GOAL_DEFAULT until the teen sets another, from
+// 1 to 7 build days, on the local Build days page (GoalAPI, SetGoal). A
+// change applies to every week not decided yet, so such a week whose build
+// days already reach a lowered goal is met at once, last week too until its
+// deadline, while a week decided keeps the goal it was decided by
+// (orchestrator, 2026-11-24).
 package buildday
 
 import (

@@ -212,6 +212,7 @@ func TestServe(t *testing.T) {
 		{name: "/metrics counts the days the build-day job stored, none on a new database", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_build_days_decided_total 0$`},
 		{name: "/metrics counts the open live-dashboard streams, none on a new server (DESIGN 10.4)", url: private + "/metrics", wantCode: 200, wantBody: `(?m)^pairtime_streams_open 0$`},
 		{name: "the build-day summary needs a device token", url: public + "/api/v1/build-days", wantCode: 401, wantBody: `"error":"token_missing"`},
+		{name: "the weekly goal's setter needs a device token", method: http.MethodPut, url: public + "/api/v1/build-days/goal", wantCode: 401, wantBody: `"error":"token_missing"`},
 		{name: "devlogs need a device token", url: public + "/api/v1/devlogs", wantCode: 401, wantBody: `"error":"token_missing"`},
 		{name: "the programs route lists pairtime.toml's programs that take hours, and not calibration's", url: public + "/api/v1/programs", wantCode: 200, wantBody: `^\{"programs":\[\{"name":"hard-mode","display_name":"Hard Mode"\}\]\}\n$`},
 		{name: "a create with no credential answers 401 not_signed_in", method: http.MethodPost, url: public + "/api/v1/submissions", wantCode: 401, wantBody: `"error":"not_signed_in"`},
