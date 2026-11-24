@@ -362,46 +362,58 @@ VALUES ($1, $2, $3, $4, $5)`, id, in.Account, p.Device, p.ProjectKey, p.project)
 // every device's minutes while it holds the writer. The op checks and
 // reads everything again, so a read that is stale by the time it runs
 // costs only the read. A retry, which the op answers with the stored
-// submission, declares one row. A create the op will refuse, or one whose
-// read fails, declares the most the op could write, with
+// submission, and a create the read finds the op will refuse declare one
+// row, so a burst of refused creates doesn't take the writer a batch at a
+// time. Only a read that fails declares the most the op could write, with
 // devlog.MaxDevlogs windows in devlog mode, and leaves the count to the
 // op.
 func (s *Service) prepare(ctx context.Context, in createInput) (int, *counted) {
-	rows := 8 + 4*(len(in.Projects)+len(in.ProjectKeys))
+	most := 8 + 4*(len(in.Projects)+len(in.ProjectKeys))
 	if in.Window == nil {
-		rows += devlog.MaxDevlogs
+		most += devlog.MaxDevlogs
 	}
 	switch _, _, err := heldRequest(ctx, s.o.Read, in.Account, in.RequestID); {
 	case err == nil:
 		return 1, nil
 	case !errors.Is(err, ErrNotFound):
-		return rows, nil
+		return most, nil
 	}
 	program, ok := s.programs[in.Program]
 	if !ok {
-		return rows, nil
+		return 1, nil
 	}
-	if verified, _, err := eligibility(ctx, s.o.Read, in.Account); err != nil || !verified {
-		return rows, nil
+	switch verified, _, err := eligibility(ctx, s.o.Read, in.Account); {
+	case err != nil:
+		return most, nil
+	case !verified:
+		return 1, nil
 	}
 	projects, pairs, err := resolve(ctx, s.o.Read, in.Account, in.Device, in.Projects, in.ProjectKeys)
-	if err != nil {
-		return rows, nil
+	switch {
+	case errors.Is(err, ErrProjectUnknown):
+		return 1, nil
+	case err != nil:
+		return most, nil
 	}
 	now := s.o.Now().UnixMilli()
 	horizon := now - s.horizon.Milliseconds()
 	var ws []Window
 	if w := in.Window; w != nil {
 		if w.Start >= w.End || w.End > now || w.Start < horizon {
-			return rows, nil
+			return 1, nil
 		}
 		ws = []Window{*w}
-	} else if ws, _, err = devlogWindows(ctx, s.o.Read, in.Account, projects, keysOf(pairs), horizon); err != nil || len(ws) == 0 {
-		return rows, nil
+	} else {
+		if ws, _, err = devlogWindows(ctx, s.o.Read, in.Account, projects, keysOf(pairs), horizon); err != nil {
+			return most, nil
+		}
+		if len(ws) == 0 {
+			return 1, nil
+		}
 	}
 	// The submission, its projects, keys and windows, the move to frozen
 	// with its event, and its two flags.
-	rows = 1 + len(projects) + len(pairs) + len(ws) + 4
+	rows := 1 + len(projects) + len(pairs) + len(ws) + 4
 	if !program.TakesHours {
 		return rows, nil
 	}

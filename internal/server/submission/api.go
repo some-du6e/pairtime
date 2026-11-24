@@ -127,6 +127,8 @@ type Service struct {
 	horizon                time.Duration
 	scoringVersion, params string
 	fingerprints           Fingerprints
+	// refused is each signed write's refusal, for its copies.
+	refused refusalStore
 }
 
 // Horizon returns the submission horizon: server.minute_buckets' days in
@@ -184,11 +186,11 @@ func New(o Options) (*Service, error) {
 
 // Register adds the API's routes to mux.
 func (s *Service) Register(mux *http.ServeMux) {
-	mux.HandleFunc("POST "+SubmissionsPath, s.createSubmission)
+	mux.HandleFunc("POST "+SubmissionsPath, s.keepRefusals(s.createSubmission))
 	mux.HandleFunc("GET "+SubmissionsPath, s.listSubmissions)
 	mux.HandleFunc("GET "+DevlogWindowsPath, s.previewDevlogWindows)
 	mux.HandleFunc("GET "+SubmissionsPath+"/{id}", s.getSubmission)
-	mux.HandleFunc("POST "+SubmissionsPath+"/{id}/withdraw", s.withdrawSubmission)
+	mux.HandleFunc("POST "+SubmissionsPath+"/{id}/withdraw", s.keepRefusals(s.withdrawSubmission))
 	mux.HandleFunc("GET "+ProgramsPath, s.listPrograms)
 }
 
@@ -306,6 +308,17 @@ func (s *Service) admit(w http.ResponseWriter, r *http.Request) (caller, []byte,
 	if len(r.Header.Values("Authorization")) > 0 {
 		dev, body, ref := s.signed(w, r)
 		if ref == nil {
+			// A copy of a signed write that was refused gets the same
+			// refusal, and a new one is kept by its device and signature
+			// once it has an answer (refusalStore).
+			if rec, ok := w.(*recorder); ok {
+				key := dev.ID + " " + r.Header.Get(ingest.HeaderSignature)
+				if k, ok := s.refused.get(key, s.o.Now().UnixMilli()); ok {
+					s.answerAgain(w, k)
+					return caller{}, nil, false
+				}
+				rec.key = key
+			}
 			// Only a signed request counts against the device's rate, so
 			// nobody without the device's key can use it up.
 			done, wait := s.o.Rate.Take(dev.ID, s.o.Now())
@@ -458,11 +471,12 @@ func decodeObject(data []byte, v any, m objectShape, shape string) *refusal {
 type objectShape map[string]objectShape
 
 // holds reports whether raw is a JSON object that names each of its
-// members once, spelled exactly as m names it, and whether each member
-// whose value m gives members of its own holds such an object, or null.
-// encoding/json alone takes a member's name in any letter case and keeps
-// the last of a repeated one, both of which body_shape refuses, as ingest
-// refuses them.
+// members once, spelled exactly as m names it and not null, and whether
+// each member whose value m gives members of its own holds such an object.
+// encoding/json alone takes a member's name in any letter case, keeps the
+// last of a repeated one and reads a null as a member left out, all of
+// which body_shape refuses, as ingest refuses them: a create sends exactly
+// the members it means (docs/spec/submissions-v1.md 3.1).
 func (m objectShape) holds(raw []byte) bool {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
@@ -484,7 +498,7 @@ func (m objectShape) holds(raw []byte) bool {
 		if err := dec.Decode(&v); err != nil {
 			return false
 		}
-		if inner != nil && !bytes.Equal(v, []byte("null")) && !inner.holds(v) {
+		if bytes.Equal(v, []byte("null")) || inner != nil && !inner.holds(v) {
 			return false
 		}
 	}

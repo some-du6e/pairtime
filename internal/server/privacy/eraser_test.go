@@ -104,6 +104,9 @@ func world(t *testing.T, f *fixture) map[string]int64 {
 	}
 	// The alone day's leaves go with its last witness row.
 	want[privacy.LeafTable] = 1
+	// No report counts flags: they go with their submissions, as review
+	// data only reviewers see.
+	delete(want, "submission_flags")
 	return want
 }
 
@@ -135,7 +138,7 @@ func TestErase(t *testing.T) {
 				t.Errorf("found %v, dry run %v, deleted %v; want found, not dry, deleted %v", r.Found, r.DryRun, r.Deleted, want)
 			}
 			keptLeaves(t, r)
-			for _, table := range []string{"build_days", "build_weeks", "build_goals", "devlogs", "badges", "removed_items", "submissions", "submission_keys", "submission_windows", "submission_flags"} {
+			for _, table := range []string{"build_days", "build_weeks", "build_goals", "devlogs", "badges", "removed_items", "submissions", "submission_keys", "submission_windows"} {
 				if r.Deleted[table] == 0 {
 					t.Errorf("the report deleted no %s", table)
 				}
@@ -174,7 +177,7 @@ func TestErase(t *testing.T) {
 				t.Errorf("privacy_token_uses holds %d rows, want the dry run's jti", n)
 			}
 		}},
-		{name: "a delete takes the account's submissions out of other accounts' repo_overlap flags, deletes a flag left naming none and counts it under submission_flags, and a dry run reports the same and changes nothing (D-sb1-flags-erasure)", run: func(t *testing.T, f *fixture) {
+		{name: "a delete takes the account's submissions out of other accounts' repo_overlap flags and deletes a flag left naming none, and a dry run reports the same counts and changes nothing (D-sb1-flags-erasure)", run: func(t *testing.T, f *fixture) {
 			want := world(t, f)
 			now := f.now.UnixMilli()
 			// One of the other account's submissions flags the teen's alone,
@@ -187,7 +190,6 @@ func TestErase(t *testing.T) {
 			} {
 				f.exec(t, `INSERT INTO submission_flags (submission_id, user_id, code, detail, raised_at_ms) VALUES ($1, $2, 'repo_overlap', $3, $4)`, fl.on, other.id, `{"submissions":`+fl.names+`}`, now)
 			}
-			want["submission_flags"]++
 			before := f.dump(t, "privacy_token_uses")
 			if dry := report(t, f.ask(t, privacy.ActionDelete, subject([]string{teen.email}, nil, nil), true)); !maps.Equal(dry.Deleted, want) {
 				t.Errorf("the dry run deleted %v, want %v", dry.Deleted, want)
@@ -222,6 +224,25 @@ func TestErase(t *testing.T) {
 				t.Error("the failed erasure changed rows")
 			}
 		}},
+		{name: "no report gives submission_flags a line, the delete's, a dry run's or an export's, since a count that moved would tell a teen another account flagged their submission (D-sb1-flags-erasure)", run: func(t *testing.T, f *fixture) {
+			world(t, f)
+			f.exec(t, `INSERT INTO submission_flags (submission_id, user_id, code, detail, raised_at_ms) VALUES ($1, $2, 'repo_overlap', $3, $4)`, "sub-"+other.id, other.id, `{"submissions":["sub-`+teen.id+`"]}`, f.now.UnixMilli())
+			export := report(t, f.ask(t, privacy.ActionExport, subject([]string{teen.email}, nil, nil), false))
+			for _, k := range export.Retained {
+				if k.Type == "submission_flags" {
+					t.Errorf("the export counts %d submission_flags", k.Count)
+				}
+			}
+			for _, dry := range []bool{true, false} {
+				r := report(t, f.ask(t, privacy.ActionDelete, subject([]string{teen.email}, nil, nil), dry))
+				if n, ok := r.Deleted["submission_flags"]; ok {
+					t.Errorf("the delete, dry run %v, counts %d submission_flags", dry, n)
+				}
+				if r.Deleted["submissions"] != 1 {
+					t.Errorf("the delete, dry run %v, counts %d submissions, want the teen's 1", dry, r.Deleted["submissions"])
+				}
+			}
+		}},
 		{name: "an export lists what is held, build days, devlogs, badges, removed items and submissions among it, and deletes nothing", run: func(t *testing.T, f *fixture) {
 			want := world(t, f)
 			before := f.dump(t, "privacy_token_uses")
@@ -232,7 +253,9 @@ func TestErase(t *testing.T) {
 			held := make(map[string]int64)
 			for _, k := range r.Retained {
 				held[k.Type] = k.Count
-				if k.Reason != "held by pairtime; export is read-only" {
+				switch {
+				case k.Type == "submissions" && k.Reason != "held by pairtime, with their review data; export is read-only",
+					k.Type != "submissions" && k.Reason != "held by pairtime; export is read-only":
 					t.Errorf("%s is held for %q", k.Type, k.Reason)
 				}
 			}

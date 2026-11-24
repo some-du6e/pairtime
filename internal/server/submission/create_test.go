@@ -229,7 +229,7 @@ func TestCreate(t *testing.T) {
 			},
 		},
 		{
-			name: "a body that isn't one create, a member named twice or in another letter case included, gets 400 with the code of what is wrong",
+			name: "a body that isn't one create, a member named twice, in another letter case or as null included, gets 400 with the code of what is wrong",
 			run: func(t *testing.T, h *harness) {
 				w := `"window":{"start":"` + ts(start) + `","end":"` + ts(end) + `"}`
 				many := make([]string, MaxProjects+1)
@@ -247,6 +247,8 @@ func TestCreate(t *testing.T) {
 					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","project_keys":["k_app"],"claimed_hours":3,` + w + `}`, "body_shape"},
 					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","project_keys":[],` + w + `}`, "body_shape"},
 					{"ptd_laptop", `{"Program":"hard-mode","request_id":"r","project_keys":["k_app"],` + w + `}`, "body_shape"},
+					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","projects":null,"project_keys":["k_app"],` + w + `}`, "body_shape"},
+					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","project_keys":["k_app"],"window":null,"devlog_windows":true}`, "body_shape"},
 					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","Program":"calibration","project_keys":["k_app"],` + w + `}`, "body_shape"},
 					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","request_id":"s","project_keys":["k_app"],` + w + `}`, "body_shape"},
 					{"ptd_laptop", `{"program":"hard-mode","request_id":"r","project_keys":["k_app"],"window":{"Start":"` + ts(start) + `","end":"` + ts(end) + `"}}`, "body_shape"},
@@ -476,8 +478,8 @@ func (d *rowsDoer) Do(ctx context.Context, rows int, op writer.Op) error {
 // TestDeclaredRows checks that a create tells the writer at least as many
 // rows as it stores, and not many more, which writer.Do needs to keep a
 // batch to its bound: a devlog list freezes a row per window, and each of
-// a project's keys on every computer takes a row. A retry declares the one
-// row it reads.
+// a project's keys on every computer takes a row. A retry, and a create
+// the read before the op finds refused, declare one row.
 func TestDeclaredRows(t *testing.T) {
 	stored := func(t *testing.T, h *harness) int {
 		t.Helper()
@@ -527,6 +529,83 @@ func TestDeclaredRows(t *testing.T) {
 					t.Errorf("the retry declared %d rows, want 1", got)
 				}
 			})
+		}
+	}
+	refused := []struct {
+		name, as, body string
+		status         int
+	}{
+		{name: "a devlog-mode create to a program the list doesn't hold", as: "ptd_laptop", body: devlogs("winter-games", "req-1", "p-app"), status: http.StatusBadRequest},
+		{name: "a devlog-mode create of projects with no devlog windows", as: "ptd_laptop", body: devlogs("hard-mode", "req-1", "p-app"), status: http.StatusConflict},
+		{name: "a devlog-mode create from an account that isn't verified", as: "ptd_pending", body: createBody("hard-mode", "req-1", true, []string{"k_x"}, time.Time{}, time.Time{}), status: http.StatusForbidden},
+		{name: "a devlog-mode create of a project the account doesn't hold", as: "sess:fresh", body: devlogs("hard-mode", "req-1", "p-other"), status: http.StatusBadRequest},
+	}
+	for _, engine := range storetest.Engines() {
+		for _, tt := range refused {
+			t.Run(string(engine)+"/"+tt.name+" declares one row, since the read before the op finds the refusal", func(t *testing.T) {
+				d := &rowsDoer{}
+				h := newHarness(t, engine, func(o *Options) { d.Doer, o.Writer = o.Writer, d })
+				want(t, h.call(tt.as, "POST", SubmissionsPath, tt.body), tt.status, "")
+				if len(d.declared) == 0 || d.declared[len(d.declared)-1] != 1 {
+					t.Errorf("the refused create declared %v rows, want 1", d.declared)
+				}
+			})
+		}
+	}
+}
+
+// TestRefusalOrder checks the order the create op refuses in after the
+// idempotency check: the program, verification, the submission cap, P, the
+// windows, the window cap and the overlap refusal (docs/spec/
+// submissions-v1.md 3.3 and 12). Each case breaks two rules, and the
+// answer is the one the earlier rule gives.
+func TestRefusalOrder(t *testing.T) {
+	start, end := t0.Add(-2*day), t0.Add(-day)
+	tests := []struct {
+		name string
+		run  func(t *testing.T, h *harness)
+	}{
+		{
+			name: "a program the list doesn't hold, from an account that isn't verified, gets 400 program_unknown, since the program comes first",
+			run: func(t *testing.T, h *harness) {
+				want(t, h.call("ptd_pending", "POST", SubmissionsPath, createBody("winter-games", "req-1", true, []string{"k_x"}, start, end)), http.StatusBadRequest, CodeProgramUnknown)
+			},
+		},
+		{
+			name: "a retry after the account's verification lapsed gets 200 with the stored submission, since the idempotency check comes before verification",
+			run: func(t *testing.T, h *harness) {
+				first := h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusCreated)
+				if err := h.w.Do(context.Background(), 1, func(ctx context.Context, tx writer.Tx) error {
+					_, err := tx.ExecContext(ctx, `UPDATE users SET verification_status = 'pending' WHERE id = $1`, u1)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if again := h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusOK); again.ID != first.ID {
+					t.Errorf("the retry answered %s, want %s", again.ID, first.ID)
+				}
+				want(t, h.call("ptd_laptop", "POST", SubmissionsPath, window("hard-mode", "req-2", end, t0)), http.StatusForbidden, CodeNotVerified)
+			},
+		},
+		{
+			name: "a project the account doesn't hold, from an account at 1,000 submissions, gets 409 limit_reached, since the submission cap comes before P resolves",
+			run: func(t *testing.T, h *harness) {
+				h.seed(u1, MaxSubmissions, ByDevice, Frozen, 0)
+				want(t, h.call("sess:fresh", "POST", SubmissionsPath, createBody("hard-mode", "req-1", false, []string{"p-other"}, start, end)), http.StatusConflict, CodeLimitReached)
+			},
+		},
+		{
+			name: "a window that overlaps a frozen one, from an account at 10,000 windows, gets 409 limit_reached, since the window cap comes before the overlap refusal",
+			run: func(t *testing.T, h *harness) {
+				h.seed(u1, 1, "program", Frozen, MaxWindows-1)
+				h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusCreated)
+				want(t, h.call("ptd_laptop", "POST", SubmissionsPath, window("hard-mode", "req-2", start, end)), http.StatusConflict, CodeLimitReached)
+			},
+		},
+	}
+	for _, engine := range storetest.Engines() {
+		for _, tt := range tests {
+			t.Run(string(engine)+"/"+tt.name, func(t *testing.T) { tt.run(t, newHarness(t, engine)) })
 		}
 	}
 }

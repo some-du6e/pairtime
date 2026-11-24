@@ -33,9 +33,11 @@ const signatureContext = "pairtime-submissions-v1\n"
 //	"pairtime-submissions-v1\n" || device_id || "\n" || method || " " || target || "\n" || time || "\n" || hex(SHA-256(raw body))
 //
 // A GET or a withdrawal signs the SHA-256 of an empty body. No request
-// counter is sent or moved: a create and a withdrawal are idempotent, so a
-// replay within the 300 s the clock allows gets the first request's answer
-// and changes nothing.
+// counter is sent or moved. A copy of a create or a withdrawal that went
+// through is a retry, which idempotency answers with the stored submission,
+// and a copy of one that was refused gets that refusal again, which the
+// server keeps for the 600 s a copy can pass the clock check
+// (refusalStore). Either way a copy changes nothing.
 func Message(deviceID, method, target, time, bodySHA256 string) []byte {
 	m := make([]byte, 0, len(signatureContext)+len(deviceID)+len(method)+len(target)+len(time)+len(bodySHA256)+4)
 	m = append(m, signatureContext...)

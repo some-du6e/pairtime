@@ -161,6 +161,17 @@ func TestSignedRequests(t *testing.T) {
 			r.Body = io.NopCloser(strings.NewReader(big))
 			r.ContentLength = int64(len(big))
 		}, wantStatus: http.StatusRequestEntityTooLarge, wantCode: ingest.CodeBodyTooLarge},
+		{name: "a device with no key on record and a time that isn't decimal gets 403 device_key_missing, since the key is checked before the time", token: "ptd_keyless", edit: func(r *http.Request) {
+			r.Header.Set(ingest.HeaderTime, "+1795089660250")
+		}, wantStatus: http.StatusForbidden, wantCode: ingest.CodeDeviceKeyMissing},
+		{name: "a body hash in capitals with a signature without its ed25519= gets 400 body_hash_malformed, since the hash's form is checked before the signature's", edit: func(r *http.Request) {
+			r.Header.Set(ingest.HeaderBodySHA256, strings.ToUpper(r.Header.Get(ingest.HeaderBodySHA256)))
+			r.Header.Set(ingest.HeaderSignature, strings.TrimPrefix(r.Header.Get(ingest.HeaderSignature), "ed25519="))
+		}, wantStatus: http.StatusBadRequest, wantCode: ingest.CodeBodyHashMalformed},
+		{name: "a signature without its ed25519= and a time 301 s off gets 400 signature_malformed, since the signature's form is checked before the clock", edit: func(r *http.Request) {
+			signAs(r, "d1", keyOf("d1"), "GET", list, "", t0.Add(-301*time.Second))
+			r.Header.Set(ingest.HeaderSignature, strings.TrimPrefix(r.Header.Get(ingest.HeaderSignature), "ed25519="))
+		}, wantStatus: http.StatusBadRequest, wantCode: ingest.CodeSignatureMalformed},
 		{name: "an ingest signature doesn't pass for a submissions request", edit: func(r *http.Request) {
 			sig := ed25519.Sign(keyOf("d1"), ingest.Message("d1", "1", r.Header.Get(ingest.HeaderTime), r.Header.Get(ingest.HeaderBodySHA256)))
 			r.Header.Set(ingest.HeaderSignature, "ed25519="+base64.StdEncoding.EncodeToString(sig))
@@ -173,6 +184,9 @@ func TestSignedRequests(t *testing.T) {
 				r := signed(h, tt.edit)
 				if tt.token != "" {
 					r = h.request(tt.token, "GET", list, "")
+					if tt.edit != nil {
+						tt.edit(r)
+					}
 				}
 				rec := h.serve(r)
 				want(t, rec, tt.wantStatus, tt.wantCode)
@@ -191,7 +205,7 @@ func TestSignedRequests(t *testing.T) {
 				}
 			})
 		}
-		t.Run(string(engine)+"/a replay of a signed create within the 300 s gets the first answer and changes nothing", func(t *testing.T) {
+		t.Run(string(engine)+"/a copy of a signed create that went through, sent within the 300 s, is a retry: it gets the stored submission and changes nothing", func(t *testing.T) {
 			h := newHarness(t, engine)
 			body := window("hard-mode", "req-1", start, end)
 			first := h.request("ptd_laptop", "POST", SubmissionsPath, body)
@@ -210,6 +224,29 @@ func TestSignedRequests(t *testing.T) {
 			if after := h.rows(); after != before {
 				t.Errorf("the replay changed the rows from %s to %s", before, after)
 			}
+		})
+		t.Run(string(engine)+"/a copy of a refused signed create gets the same refusal again, even once the refusal no longer holds, and changes nothing, while the create signed anew goes through", func(t *testing.T) {
+			h := newHarness(t, engine)
+			held := h.create("ptd_laptop", window("hard-mode", "req-1", start, end), http.StatusCreated)
+			body := window("stardance", "req-2", start, end)
+			first := h.request("ptd_laptop", "POST", SubmissionsPath, body)
+			copied := h.request("ptd_laptop", "POST", SubmissionsPath, body)
+			for k, vs := range first.Header {
+				copied.Header[k] = vs
+			}
+			want(t, h.serve(first), http.StatusConflict, CodeAlreadySubmitted)
+			want(t, h.call("ptd_laptop", "POST", SubmissionsPath+"/"+held.ID+"/withdraw", ""), http.StatusOK, "")
+			h.clock.set(t0.Add(299 * time.Second))
+			before := h.rows()
+			rec := h.serve(copied)
+			want(t, rec, http.StatusConflict, CodeAlreadySubmitted)
+			if got := refusalBody(t, rec).Submissions; len(got) != 1 || got[0].ID != held.ID {
+				t.Errorf("the copy's refusal names %+v, want the first refusal's %s", got, held.ID)
+			}
+			if after := h.rows(); after != before {
+				t.Errorf("the copy changed the rows from %s to %s", before, after)
+			}
+			want(t, h.call("ptd_laptop", "POST", SubmissionsPath, body), http.StatusCreated, "")
 		})
 		t.Run(string(engine)+"/a device past its rate gets 429 rate_limited with Retry-After, and a request that doesn't verify uses none of it", func(t *testing.T) {
 			h := newHarness(t, engine, func(o *Options) { o.Rate = ingest.NewLimiter(1, 10*time.Second) })

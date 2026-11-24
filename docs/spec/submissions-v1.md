@@ -12,7 +12,7 @@ A refusal is `{"error": "<code>", "detail": "<text>"}`, where `detail` is an Eng
 
 | Status | `error` | When |
 |---|---|---|
-| 400 | `body_shape` | The body isn't one JSON object with exactly the members the route takes, each named once, spelled as 3.1 spells it and of its type, or a withdrawal has a body |
+| 400 | `body_shape` | The body isn't one JSON object with exactly the members the route takes, each named once, spelled as 3.1 spells it, not null and of its type, or a withdrawal has a body |
 | 400 | `json_invalid` | The body isn't one JSON value in valid UTF-8 |
 | 400 | `body_unreadable` | The body couldn't be read, as when the connection broke off; send the same request again |
 | 413 | `body_too_large` | The body is over 16,384 bytes |
@@ -75,7 +75,7 @@ M   = "pairtime-submissions-v1\n" || device_id || "\n" || method || " " || targe
 sig = Ed25519(device key, M)                    RFC 8032 section 5.1: PureEdDSA, no context, no prehash
 ```
 
-`"\n"` is the byte `0x0a`, the hex is lowercase, and `M` has no trailing newline. A GET or a withdrawal signs the SHA-256 of an empty body, `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`. The context differs from ingest's, so no ingest signature passes here and no signature from here passes at ingest. The create and the withdrawal are idempotent (3.3, 6), so a replay of a signed request within the 300 s the clock allows gets the first request's answer and changes nothing, and no counter is needed.
+`"\n"` is the byte `0x0a`, the hex is lowercase, and `M` has no trailing newline. A GET or a withdrawal signs the SHA-256 of an empty body, `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`. The context differs from ingest's, so no ingest signature passes here and no signature from here passes at ingest. No counter is needed. A copy of a signed create or withdrawal that went through is a retry: the create's `request_id` and the withdrawal's idempotency (3.3, 6) answer it with the stored submission, and it changes nothing. The server keeps the refusal each signed create or withdrawal got, by its device and signature, for 600 s, the span in which a copy can still pass the clock check. It answers a copy with that refusal again rather than checking it anew, so a copy of a refused create can't freeze `W` once the refusal no longer holds, as after a withdrawal. A client's retry signs a new `X-Pairtime-Time`, so it never meets a kept refusal.
 
 Worked example, with ingest-v1 2.2's example device key, whose seed is `SHA-256(ascii("pairtime ingest-v1 example device key"))` and public key `fadacf1c88bce8152ec27995a05aa8d9c53ac5678801cdd2e05b19060398a677`. A list request from `d_example` at `1795089660250`:
 
@@ -274,7 +274,7 @@ Submissions a program makes for the account (WP-PG6) don't count toward the 1,00
 
 ### 11.1 What it keeps
 
-Migration 0013 creates `submissions`, `submission_projects`, `submission_keys`, `submission_windows` and `submission_events`, which docs/retention.json's `server.submissions` keeps while the account exists, and `submission_flags`, a window job of `evidence.revealed` on `decided_at_ms` that stays off until WP-SV18. A withdrawal deletes nothing. The eraser deletes every row of the account's submissions through `submission.DeleteAccount`, and the privacy hub's export counts these tables (WP-SV13). Each flag carries `user_id`, the account its submission is of, and the eraser deletes and counts the account's flags by it. `DeleteAccount` also takes the account's submission ids out of other accounts' `repo_overlap` flags and deletes a flag left naming none, and the eraser's report counts those flags under `submission_flags`, a dry run's included. An erasure that would leave a flag of any account on one of the account's submissions, or naming one, fails and changes nothing (D-sb1-flags-erasure).
+Migration 0013 creates `submissions`, `submission_projects`, `submission_keys`, `submission_windows` and `submission_events`, which docs/retention.json's `server.submissions` keeps while the account exists, and `submission_flags`, a window job of `evidence.revealed` on `decided_at_ms` that stays off until WP-SV18. A withdrawal deletes nothing. The eraser deletes every row of the account's submissions through `submission.DeleteAccount`, and the privacy hub's export counts these tables (WP-SV13). Each flag carries `user_id`, the account its submission is of, and the eraser deletes and counts the account's flags by it. `DeleteAccount` also takes the account's submission ids out of other accounts' `repo_overlap` flags and deletes a flag left naming none. An erasure that would leave a flag of any account on one of the account's submissions, or naming one, fails and changes nothing (D-sb1-flags-erasure). No report gives `submission_flags` a line of its own, whether the delete's, a dry run's or the export's. A flag is a signal for reviewers alone (4.1, 11.2), and a count of them that moved would tell a teen that another account's freeze flagged their submission, which a cheater could use to probe the detection. The `submissions` line stands for the flags: it counts the account's submissions, held or deleted with their review data, and the export says so in its reason. The other tables keep their counts.
 
 ### 11.2 The freeze's flags
 
@@ -305,8 +305,9 @@ The rulings of D-sb1-submissions leave these open, and this spec settles them:
 8. The preview's path, `/api/v1/submissions/devlog-windows`, and its answer.
 9. `GET /api/v1/programs` needs no credential: program names aren't secret, and the picker needs them before anything else.
 10. A web session's creates and withdrawals take a rate per account, the one each computer has, so one signed-in account can't fill the writer every account shares. Reads take none.
-11. A body names each member once and spells it exactly, as ingest's bodies do, although encoding/json alone takes a name in any letter case and keeps the last of a repeated one.
+11. A body names each member once, spells it exactly and sends none as null, as ingest's bodies do, although encoding/json alone takes a name in any letter case, keeps the last of a repeated one and reads a null as a member left out.
 12. The teen view's members (4.1). The rulings fix the program view's (Q13), and the teen view shows the account its own submission, with `r` once challenged (Q9).
 13. A new submission gets 201 with `Location`, where the rulings fix only a retry's 200 (Q5).
 14. The order of 3.3 steps 2 to 5. The program, the verification and the submission cap come after the idempotency check, so a retry of a create to a program `[[programs]]` no longer lists, or from an account no longer verified, still gets its stored submission. The cap comes before P resolves, so a create past it reads nothing more.
 15. `review_url` is `<base_url>/review/submissions/<id>`, the review page's path in DESIGN 3.10 and 7.7.
+16. A copy of a refused signed create or withdrawal gets the first refusal again for 600 s (2.2), because a copy of a refused create could otherwise go through once its refusal no longer holds. Only refusals are kept: a copy of a request that went through is a retry, which idempotency answers.
