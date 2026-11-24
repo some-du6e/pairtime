@@ -848,11 +848,13 @@ func TestOlderPlaceNoSample(t *testing.T) {
 
 // TestOlderPlaceQuestions checks open's rebuild of the carry's question
 // state against the window's (#380): a log reader's output that asks a
-// question folds in early, a hook prompt comes seven hours later, inside
-// the window, and a log reader's output dated before the question but
-// numbered after the prompt folds in as it comes. The window's carry keeps
-// the question for the prompt in the window, and a place an agent before
-// E-prompt-class-asked saved, rebuilt from the ledger, must be that carry.
+// question folds in once the log turn's run has ended, which holds the
+// window's start while it runs (holdFor); a hook prompt comes nine hours
+// after it, inside the window; and a log reader's output dated before the
+// question but numbered after the prompt folds in as it comes. The
+// window's carry keeps the question for the prompt in the window, and a
+// place an agent before E-prompt-class-asked saved, rebuilt from the
+// ledger, must be that carry.
 func TestOlderPlaceQuestions(t *testing.T) {
 	tmpl := hookTurn(t, hookAt, []int64{minuteMS})
 	var start, prompt event.Event
@@ -878,12 +880,12 @@ func TestOlderPlaceQuestions(t *testing.T) {
 	}
 	question := clone(prompt, hookAt+2*minuteMS, event.ViaLog, &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true,
 		AsksQuestion: true})
-	asked := clone(prompt, hookAt+7*hourMS-5*minuteMS, event.ViaHook, &event.PromptSubmit{TurnKey: "t_1", LenChars: 30,
+	asked := clone(prompt, hookAt+9*hourMS-5*minuteMS, event.ViaHook, &event.PromptSubmit{TurnKey: "t_1", LenChars: 30,
 		TypedLenEst: 30, OriginDeclared: event.DeclaredNone})
 	late := clone(prompt, hookAt+minuteMS, event.ViaLog, &event.AgentOutput{TurnKey: "t_0", Words: 30, IsFinal: true})
 	evs := []event.Event{clone(start, hookAt-minuteMS, event.ViaHook, start.Data), question, asked}
 	m := 0
-	for ts := hookAt - 55_000; ts <= hookAt+7*hourMS; ts += minuteMS {
+	for ts := hookAt - 55_000; ts <= hookAt+9*hourMS; ts += minuteMS {
 		m++
 		idle := float64(600 + (ts-hookAt+55_000)/1000)
 		evs = append(evs, sampleAt(tmpl, ts, fmt.Sprintf("01a1fb1e-5318-78a1-a7fb-%012x", m),
