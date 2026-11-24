@@ -5,8 +5,6 @@ package linux
 import (
 	"os"
 	"path/filepath"
-	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -172,74 +170,6 @@ func TestReadProc(t *testing.T) {
 	}
 	if tab.Len() != 5 {
 		t.Errorf("the table has %d processes, want 5", tab.Len())
-	}
-}
-
-// TestChain holds Chain's read of one chain, process by process, to what
-// Table.Chain gives from the whole table, on trees shaped to make the walk
-// stop each way Table.Parent can.
-func TestChain(t *testing.T) {
-	const btime = "1763575080"
-	proc := func(pid, comm, state, ppid, start string) string {
-		return statLine(pid, comm, state, ppid, pid, "34816", "4194560", start)
-	}
-	base := map[string]string{
-		"1":   proc("1", "systemd", "S", "0", "100"),
-		"300": proc("300", "bash", "S", "1", "500"),
-		"301": proc("301", "claude", "S", "300", "512"),
-		"400": proc("400", "pairtime", "S", "301", "600"),
-	}
-	with := func(over map[string]string) map[string]string {
-		m := make(map[string]string, len(base)+len(over))
-		for k, v := range base {
-			m[k] = v
-		}
-		for k, v := range over {
-			if v == "" {
-				delete(m, k)
-			} else {
-				m[k] = v
-			}
-		}
-		return m
-	}
-	long := make(map[string]string)
-	for i := range platform.MaxChain + 6 {
-		pid := 1000 + i
-		long[strconv.Itoa(pid)] = proc(strconv.Itoa(pid), "sh", "S", strconv.Itoa(pid+1), strconv.Itoa(5000-i))
-	}
-	tests := []struct {
-		name  string
-		stats map[string]string
-		pid   int
-		want  int // the chain's length
-	}{
-		{"a chain runs up to init", base, 400, 4},
-		{"a pid that isn't a process gives no chain", base, 999, 0},
-		{"a parent that exited ends the chain at its child", with(map[string]string{"301": ""}), 400, 1},
-		{"a parent that started after its child holds a reused pid, and ends the chain", with(map[string]string{"301": proc("301", "claude", "S", "300", "900")}), 400, 1},
-		{"a zombie parent ends the chain", with(map[string]string{"301": proc("301", "claude", "Z", "300", "512")}), 400, 1},
-		{"a kernel thread's child gives no parent", with(map[string]string{"301": statLine("301", "kworker", "S", "300", "0", "0", "2129984", "512")}), 400, 1},
-		{"a loop of parents ends at the first one seen again", with(map[string]string{"1": proc("1", "systemd", "S", "400", "100")}), 400, 4},
-		{"a chain stops at MaxChain", long, 1000, platform.MaxChain},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			root := fakeProc(t, btime, tt.stats, nil)
-			procs, err := readProc(root)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := platform.NewTable(platform.Linux, procs).Chain(tt.pid)
-			sec, _ := strconv.ParseInt(btime, 10, 64)
-			got := readChain(root, tt.pid, time.Unix(sec, 0))
-			if !reflect.DeepEqual(got, want) {
-				t.Errorf("readChain(%d) = %+v, want the table's %+v", tt.pid, got, want)
-			}
-			if len(got) != tt.want {
-				t.Errorf("readChain(%d) has %d processes, want %d", tt.pid, len(got), tt.want)
-			}
-		})
 	}
 }
 

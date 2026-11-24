@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -55,74 +54,6 @@ func Self() (platform.Proc, error) {
 		return platform.Proc{}, fmt.Errorf("this process, %d, isn't in /proc", pid)
 	}
 	return p, nil
-}
-
-// Chain reads the process pid and its ancestors, nearest first, the way
-// Processes reads each process and platform.Table.Chain follows parents,
-// without reading the rest of the table: /proc/<pid>/stat, then each
-// parent's in turn, up to where Table.Parent stops. It is empty when pid
-// isn't a process Processes would list. The agent reads one chain for each
-// hook call, so a call's cost doesn't grow with the number of processes on
-// the machine (#393).
-//
-// The boot time comes from /proc/stat once a process (bootCache). A step
-// of the wall clock moves the boot time /proc/stat gives, and with it
-// every Start, but a chain's Starts are only compared with each other, as
-// Table.Parent does, and Proc.ID uses Ticks, which stay put.
-func Chain(pid int) ([]platform.Proc, error) {
-	boot, err := cachedBootTime()
-	if err != nil {
-		return nil, err
-	}
-	return readChain("/proc", pid, boot), nil
-}
-
-// readChain is Chain under root, with the boot time boot.
-func readChain(root string, pid int, boot time.Time) []platform.Proc {
-	buf := make([]byte, 2048)
-	link := make([]byte, unix.PathMax)
-	p, ok := readPid(root, pid, boot, buf, link)
-	if !ok {
-		return nil
-	}
-	chain := []platform.Proc{p}
-	seen := map[int]bool{pid: true}
-	for len(chain) < platform.MaxChain {
-		if p.PPID <= 0 || p.PPID == p.PID || seen[p.PPID] {
-			break
-		}
-		q, ok := readPid(root, p.PPID, boot, buf, link)
-		// A parent that started after its child holds a reused pid.
-		if !ok || (!p.Start.IsZero() && !q.Start.IsZero() && q.Start.After(p.Start)) {
-			break
-		}
-		seen[q.PID] = true
-		chain = append(chain, q)
-		p = q
-	}
-	return chain
-}
-
-// bootCache holds /proc's boot time once Chain has read it.
-var bootCache struct {
-	sync.Mutex
-	at time.Time
-}
-
-// cachedBootTime returns /proc's boot time, read from /proc/stat once a
-// process. A read that fails is tried again the next time.
-func cachedBootTime() (time.Time, error) {
-	bootCache.Lock()
-	defer bootCache.Unlock()
-	if !bootCache.at.IsZero() {
-		return bootCache.at, nil
-	}
-	at, err := bootTime("/proc")
-	if err != nil {
-		return time.Time{}, err
-	}
-	bootCache.at = at
-	return at, nil
 }
 
 // BootID returns the kernel's random id for this boot, which names the

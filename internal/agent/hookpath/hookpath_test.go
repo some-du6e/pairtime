@@ -474,20 +474,6 @@ func TestReadChain(t *testing.T) {
 				t.Error("the agent's walk of this process doesn't count")
 			}
 		}},
-		{"the chain is the one the whole table gives, process by process, though on Linux it reads only the chain (#393)", func(t *testing.T, chain []platform.Proc) {
-			want, err := tableChain(os.Getpid())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(chain) != len(want) {
-				t.Fatalf("the chain %+v, and the table's %+v", chain, want)
-			}
-			for i := range chain {
-				if chain[i].ID() != want[i].ID() || chain[i].Name != want[i].Name || chain[i].PPID != want[i].PPID {
-					t.Errorf("process %d of the chain is %+v, and the table's %+v", i, chain[i], want[i])
-				}
-			}
-		}},
 	}
 	chain, err := ReadChain(os.Getpid())
 	if err != nil {

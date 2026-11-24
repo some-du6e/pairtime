@@ -81,9 +81,10 @@ type loadSpans struct {
 	warm, idle, active time.Duration
 }
 
-// loadReport is what TestSustainedLoad measured. Counts are what the
-// agent's status says it took, which a run before a fix and one after must
-// agree on, since both did the same work.
+// loadReport is what TestSustainedLoad measured. The work is the same in
+// every run. The agent's counts of what it took, from its status, should
+// agree between a run before a fix and one after, but can still differ by
+// a record between two runs of the same code (#393).
 type loadReport struct {
 	Folders int     `json:"folders"`
 	Files   int     `json:"files"`
@@ -119,8 +120,8 @@ type loadReport struct {
 // TestSustainedLoad puts the agent under a heavy Claude Code user's load
 // (#393) over a synthetic tree, and reports what that costs: CPU a minute
 // idle and active, CPU a hook call, bytes written an hour, and read calls a
-// minute. load.yml runs it under -cpuprofile, on this PR's code and on its
-// base's with this file copied in, and holds the two runs' counts equal.
+// minute. load.yml runs it by hand under -cpuprofile, and with a base ref
+// on that ref's code too, with this file copied in, side by side.
 func TestSustainedLoad(t *testing.T) {
 	if os.Getenv(loadEnv) == "" {
 		t.Skip(loadEnv + " isn't set: load.yml runs this")

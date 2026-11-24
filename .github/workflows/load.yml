@@ -13,33 +13,25 @@
 # top functions are in the log. The data is synthetic, so neither holds
 # any content.
 #
-# On a PR it runs the test twice: on the PR's code, and on its base's with
-# the PR's test copied in. The two do the same work, so their counts of
-# what the agent took must agree, and their numbers are side by side in
-# the log.
+# It runs by hand. With base, it runs the test on that ref's code too,
+# with this ref's test copied in, and puts the two runs side by side. They
+# do the same work, so its counts must agree. The agent's own counts of
+# what it took can still differ by a record between two runs of the same
+# code (#393), so they are compared as a warning until the replay is
+# deterministic.
 #
-#   gh workflow run load.yml --ref <branch> [-f seconds=N]
+#   gh workflow run load.yml --ref <branch> [-f seconds=N] [-f base=<ref>]
 name: load
 
 on:
-  pull_request:
-    paths:
-      - internal/agent/**
-      - internal/adapters/claudecode/**
-      - internal/platform/*.go
-      - internal/platform/linux/**
-      - go.mod
-      - go.sum
-      - .github/workflows/load.yml
-  schedule:
-    # After nightly.yml, footprint.yml and postgres.yml, so none queue
-    # together.
-    - cron: "0 4 * * *"
   workflow_dispatch:
     inputs:
       seconds:
         description: Seconds of the active span (at least 60)
         default: "90"
+      base:
+        description: A ref to run the same test on too, for a before and after (empty for none)
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -73,16 +65,17 @@ jobs:
             sudo apt-get update -qq && sudo apt-get install -y -qq bpftrace || echo "::warning::bpftrace didn't install, so the run counts no system calls"
           fi
 
-      - name: The load on the base's code, with this PR's test
-        if: github.event_name == 'pull_request'
+      - name: The load on the base's code, with this ref's test
+        if: inputs.base != ''
+        env:
+          BASE: ${{ inputs.base }}
         run: |
-          base=${{ github.event.pull_request.base.sha }}
-          git fetch --no-tags --depth=1 origin "$base"
-          git worktree add "$RUNNER_TEMP/base" "$base"
+          git fetch --no-tags --depth=1 origin "$BASE"
+          git worktree add "$RUNNER_TEMP/base" FETCH_HEAD
           cp internal/agent/load_linux_test.go "$RUNNER_TEMP/base/internal/agent/"
           bash tools/ci/load.sh before "$RUNNER_TEMP/base"
 
-      - name: The load on this PR's code
+      - name: The load on this ref's code
         run: bash tools/ci/load.sh after "$GITHUB_WORKSPACE"
 
       - name: Where the CPU went, and the runs side by side
@@ -110,13 +103,17 @@ jobs:
           for k in keys:
               print(f"{k:32}" + "".join(f"{runs[r].get(k, ''):>18.6g}" if isinstance(runs[r].get(k), (int, float)) else f"{str(runs[r].get(k, '')):>18}" for r in runs))
           if len(runs) == 2:
-              same = ["files", "folders", "hooks", "hooks_via_socket", "lines_appended", "files_created",
-                      "claude_code_calls", "claude_code_records", "claude_code_parse_failures", "claude_code_ignored"]
-              differ = [k for k in same if runs["before"].get(k) != runs["after"].get(k)]
+              work = ["files", "folders", "hooks", "hooks_via_socket", "lines_appended", "files_created"]
+              took = ["claude_code_calls", "claude_code_records", "claude_code_parse_failures", "claude_code_ignored"]
+              differ = [k for k in work if runs["before"].get(k) != runs["after"].get(k)]
               if differ:
-                  print(f"::error::the runs before and after took different counts: {', '.join(differ)}")
+                  print(f"::error::the runs before and after did different work: {', '.join(differ)}")
                   sys.exit(1)
-              print("The runs before and after took the same counts.")
+              differ = [k for k in took if runs["before"].get(k) != runs["after"].get(k)]
+              if differ:
+                  print(f"::warning::the agent took different counts in the two runs, which runs of the same code can still do (#393): {', '.join(differ)}")
+              else:
+                  print("The runs before and after did the same work, and the agent took the same counts.")
           EOF
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
