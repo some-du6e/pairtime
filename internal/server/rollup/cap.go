@@ -3,6 +3,7 @@
 package rollup
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -137,6 +138,11 @@ FROM rollups_daily WHERE day >= $1 GROUP BY user_id, day`, from)
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("rollup: finding the days to cut again: %w", err)
 	}
+	// Account by account, oldest day first, whatever order the engine
+	// grouped them in.
+	slices.SortFunc(due, func(a, b accountDay) int {
+		return cmp.Or(cmp.Compare(a.account, b.account), cmp.Compare(a.day, b.day))
+	})
 	n := 0
 	var failed []error
 	for _, ad := range due {

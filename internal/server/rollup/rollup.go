@@ -50,11 +50,13 @@
 // rollup_minutes holds all of it. A day whose minutes the retention jobs have
 // partly deleted can't be cut again, and keeps its rows. A change that keeps
 // such a day within the cap, with nothing held back, applies as it is, as on
-// any day, when the rows hold what it takes away. Any other change holds back
-// the credit it adds, and takes the credit it removes out of what is held
-// back first, never below zero (keep). So such a day can stay over
-// DAY_CAP_S, and its rows sum to its buckets unless a removal stopped at
-// zero.
+// any day, when the rows hold what it takes away. Once such a day's rows look
+// like a cut again (isCut), a change that fits them cuts the day again from
+// the changed minute on, as on a cut day, and holds back only what goes past
+// the cap. Any other change holds back the credit it adds, and takes the
+// credit it removes out of what is held back first, never below zero (keep).
+// So such a day can stay over DAY_CAP_S, and its rows sum to its buckets
+// unless a removal stopped at zero.
 //
 // No fraud flag is stored for hours nobody submitted (D-no-ingest-flags;
 // DESIGN 4.2, 8.5). SM 3.4's concurrent_devices, two devices crediting

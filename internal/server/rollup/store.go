@@ -494,9 +494,9 @@ type Day struct {
 	// kind that day, SM 5.3's X.day_cap, which FinalMS and PendingMS leave
 	// out. On a day cut under DAY_CAP_S, it is the credit past the cap in
 	// time order. A day the cap couldn't cut again, because some of its
-	// minutes were gone, keeps its rows: once it is over the cap, or holds
-	// anything back, a change holds back the credit it adds, so its
-	// FinalMS and PendingMS can stay past DAY_CAP_S (see the package doc).
+	// minutes were gone, keeps its rows, and its FinalMS and PendingMS can
+	// stay past DAY_CAP_S: what a change to it holds back depends on
+	// whether its rows look like a cut (see the package doc).
 	DayCapMS int64
 }
 

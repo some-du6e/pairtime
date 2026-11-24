@@ -4,6 +4,7 @@ package rollup
 
 import (
 	"context"
+	"errors"
 	"math"
 	"math/rand/v2"
 	"reflect"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/server/store"
 	"github.com/some-du6e/pairtime/internal/server/store/storetest"
+	"github.com/some-du6e/pairtime/internal/server/writer"
 )
 
 // creditFor is n of device's minutes from start on, Unix seconds, each in
@@ -35,6 +37,27 @@ func joinSteps(parts ...[]step) []step {
 		out = append(out, p...)
 	}
 	return out
+}
+
+// failFirst is a Doer whose first op runs and then fails, so its
+// transaction rolls back, as an op the writer can't commit does. Its later
+// ops run as txDoer's do.
+type failFirst struct {
+	txDoer
+	failed *bool
+}
+
+func (d failFirst) Do(ctx context.Context, rows int, op writer.Op) error {
+	if *d.failed {
+		return d.txDoer.Do(ctx, rows, op)
+	}
+	*d.failed = true
+	return d.txDoer.Do(ctx, rows, func(ctx context.Context, tx writer.Tx) error {
+		if err := op(ctx, tx); err != nil {
+			return err
+		}
+		return errors.New("writer: the transaction didn't commit")
+	})
 }
 
 // withCap sets the day cap to limit milliseconds for the rest of the test.
@@ -517,7 +540,9 @@ func TestRecutDays(t *testing.T) {
 		gone int64
 		// broken, when set, breaks the rollup_minutes rows of the minute that
 		// starts then, Unix seconds, so its day's minutes can't be read.
-		broken   int64
+		broken int64
+		// failOp fails the first writer op, after it runs, so it rolls back.
+		failOp   bool
 		runs     int
 		wantCuts []int
 		wantOps  int
@@ -577,6 +602,20 @@ func TestRecutDays(t *testing.T) {
 			},
 		},
 		{
+			name:     "a day whose writer op fails keeps its rows, and the pass goes on with the next day",
+			before:   joinSteps(legacy, creditFor("d1", "p1", "prompting", "A", local(24+9, 0), 13, "final")),
+			failOp:   true,
+			runs:     1,
+			wantCuts: []int{1},
+			wantOps:  2,
+			wantErr:  day,
+			want: []Day{
+				agent("d1/p1", day, 20_000, 0),
+				final("d1/p1", day, "prompting", 0, 780_000),
+				{ProjectID: "d1/p1", Day: "2026-11-21", Kind: "prompting", FinalMS: [3]int64{600_000}, DayCapMS: 180_000},
+			},
+		},
+		{
 			name:     "a day within the cap makes no transaction",
 			before:   joinSteps([]step{newYork}, creditFor("d1", "p1", "prompting", "A", local(9, 0), 5, "final")),
 			runs:     1,
@@ -606,8 +645,12 @@ func TestRecutDays(t *testing.T) {
 				withCap(t, 600_000)
 				ops := 0
 				var cuts []int
+				var doer Doer = txDoer{db: db, ops: &ops}
+				if tt.failOp {
+					doer = failFirst{txDoer: txDoer{db: db, ops: &ops}, failed: new(bool)}
+				}
 				for range tt.runs {
-					n, err := RecutDays(context.Background(), txDoer{db: db, ops: &ops}, db.Read, now)
+					n, err := RecutDays(context.Background(), doer, db.Read, now)
 					switch {
 					case tt.wantErr == "" && err != nil:
 						t.Fatal(err)
