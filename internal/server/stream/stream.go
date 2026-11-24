@@ -179,6 +179,9 @@ type Hub struct {
 	total      int
 	perAccount map[string]int
 	perClient  map[string]int
+	// ord numbers every event the hub publishes, in order, so a replay
+	// of several topics' gaps keeps that order. It never leaves the hub.
+	ord uint64
 
 	// done is closed by Close, which cancels ctx, the context of the
 	// hub's reads; wg waits for the hub's own goroutines.
@@ -289,10 +292,11 @@ type topic struct {
 	profile *profileState
 }
 
-// event is one published event.
+// event is one published event: its number in its topic, its place
+// among all the hub's events, and when it was published.
 type event struct {
-	seq uint64
-	at  time.Time
+	seq, ord uint64
+	at       time.Time
 	// frame is the event's lines after its id, "event: <name>\ndata:
 	// <json>\n\n", the same for every stream.
 	frame []byte
@@ -356,7 +360,8 @@ func frame(name string, data []byte) []byte {
 // stream whose buffer is full is ended.
 func (h *Hub) publishLocked(t *topic, name string, data []byte, now time.Time) {
 	t.seq++
-	ev := &event{seq: t.seq, at: now, frame: frame(name, data)}
+	h.ord++
+	ev := &event{seq: t.seq, ord: h.ord, at: now, frame: frame(name, data)}
 	t.ring = append(t.ring, ev)
 	trimLocked(t, now, h.o.Window)
 	for s, i := range t.subs {

@@ -3,6 +3,7 @@
 package stream
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"net"
@@ -308,7 +309,7 @@ func (h *Hub) open(wants []want, account, client string, resume map[string]posit
 		st.sub.topics = append(st.sub.topics, t)
 	}
 	// The topics' gaps interleave as they were published.
-	slices.SortStableFunc(st.replay, func(a, b delivery) int { return a.ev.at.Compare(b.ev.at) })
+	slices.SortFunc(st.replay, func(a, b delivery) int { return cmp.Compare(a.ev.ord, b.ev.ord) })
 	h.total++
 	if account != "" {
 		h.perAccount[account]++
