@@ -2424,3 +2424,65 @@ func dropStretches(t *testing.T, dir string, from uint64) {
 		t.Fatal(err)
 	}
 }
+
+// TestMarkDue checks the mark Open makes due again (#359): the one the
+// newest frame that records the writer's mark recorded, the base frame's
+// while no row of a batch sealed after the sweep is kept, and for frames an
+// older version wrote, which record it only by a seal frame's Due, a row's
+// back_ended and the base frame's Back, the rule from before.
+func TestMarkDue(t *testing.T) {
+	mark := func(m uint64) *uint64 { return &m }
+	// row is the row of batch b, of records first to last, as edit has it.
+	row := func(b, first, last uint64, edit func(*rowPayload)) rowPayload {
+		rp := rowPayload{sealPayload: sealPayload{B: b, FirstSeq: first, N: last - first + 1}, LastSeq: last}
+		if edit != nil {
+			edit(&rp)
+		}
+		return rp
+	}
+	// marked has a row of this version record m as its mark.
+	marked := func(m uint64) func(*rowPayload) {
+		return func(rp *rowPayload) { rp.Due, rp.Mark = m, mark(m) }
+	}
+	ended := func(rp *rowPayload) { rp.BackEnded, rp.Mark = true, mark(0) }
+	fresh := basePayload{B: 1, FirstSeq: 1}
+	cases := []struct {
+		name string
+		base basePayload
+		rows []rowPayload
+		want uint64
+	}{
+		{"with no frame that records a mark, none is due", fresh, nil, 0},
+		{"the newest row's mark, the one the writer had due once it was sealed, is due", fresh,
+			[]rowPayload{row(1, 1, 1, marked(0)), row(2, 2, 2, marked(3))}, 3},
+		{"a newest row that ended the mark leaves none due, though the row before had one", fresh,
+			[]rowPayload{row(1, 1, 1, marked(2)), row(2, 2, 2, ended)}, 0},
+		{"the base frame's mark, armed after the newest row the sweep kept, is due, though that row ended the mark Open restored (#359 item 1)",
+			basePayload{B: 3, FirstSeq: 3, Back: 4, Mark: mark(4), MarkAt: 3}, []rowPayload{row(3, 3, 3, ended)}, 4},
+		{"the base frame's mark is due with no row kept",
+			basePayload{B: 4, FirstSeq: 4, Back: 4, Mark: mark(4), MarkAt: 3}, nil, 4},
+		{"the base frame's none is due over a row the sweep kept, which had a mark due",
+			basePayload{B: 3, FirstSeq: 3, Mark: mark(0), MarkAt: 3}, []rowPayload{row(3, 3, 3, marked(3))}, 0},
+		{"a row sealed after the sweep records the mark from then on, though its records end below the base frame's mark, as when a power cut took records and new ones took their numbers (#359 item 2)",
+			basePayload{B: 3, FirstSeq: 3, Back: 10, Mark: mark(10), MarkAt: 3},
+			[]rowPayload{row(3, 3, 7, marked(0)), row(4, 8, 8, ended), row(5, 9, 9, marked(0))}, 0},
+		{"an older version's newest row has its Due due", fresh, []rowPayload{row(1, 1, 2, func(rp *rowPayload) { rp.Due = 3 })}, 3},
+		{"an older version's base frame has its Back due when the newest row records none and ends before it",
+			basePayload{B: 3, FirstSeq: 3, Back: 10}, []rowPayload{row(3, 3, 7, nil)}, 10},
+		{"an older version's base frame has none due when the newest row ends at or past its Back",
+			basePayload{B: 3, FirstSeq: 3, Back: 7}, []rowPayload{row(3, 3, 7, nil)}, 0},
+		{"an older version's base frame has none due when the newest row ended the mark Open restored",
+			basePayload{B: 3, FirstSeq: 3, Back: 10}, []rowPayload{row(3, 3, 3, func(rp *rowPayload) { rp.BackEnded = true })}, 0},
+		{"rows an older version sealed after this version's sweep go by the older rule",
+			basePayload{B: 3, FirstSeq: 3, Back: 10, Mark: mark(10), MarkAt: 3}, []rowPayload{row(3, 3, 7, marked(0)), row(4, 8, 9, nil)}, 10},
+		{"this version's rows after an older version's sweep go by the older rule, which reads their Due",
+			basePayload{B: 3, FirstSeq: 3, Back: 10}, []rowPayload{row(3, 3, 7, nil), row(4, 8, 12, marked(0))}, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := markDue(&batchesFile{base: c.base, rows: c.rows}, c.rows); got != c.want {
+				t.Errorf("markDue = %d, want %d", got, c.want)
+			}
+		})
+	}
+}

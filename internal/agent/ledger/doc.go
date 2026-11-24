@@ -33,22 +33,29 @@
 //     (Options.Seen, Writer.NoteSeen), events by their own times too, or
 //     for lookback's by when the writer took them in (Writer.lookback),
 //     with no seal since that read config.toml as local-only (Batch.Back);
+//     mark, the writer's mark once the batch was sealed, the first record of
+//     the batch it is due for or 0, which Open takes back from the newest
+//     frame that records it, with due, the same while the batch neither took
+//     nor ended it, and back_ended, on a batch sealed online that ended a mark
+//     Open restored, which an older version reads instead (sealPayload.Mark);
 //     local_until, when config.toml was last known, or taken, to say
-//     local-only as the batch was sealed, with local_until_os, the same
-//     moment by the OS's monotonic clock and its boot, which Open takes
-//     back from the newest batch (Batch.LocalUntil); and stretches, in the
-//     seal frame of each batch sealed after they changed, every local-only
-//     stretch the writer knows: from where it last knew config.toml said
-//     online, or the beginning of time for the chain's first, to where it
-//     saw the file online again, with whether a batch was sealed online
-//     since it ended and how many late records of it Write dropped since
-//     (D-late-local). A record of a stretch that reaches the writer before a
-//     batch is sealed online after the stretch makes its batch local-only,
-//     and one that reaches it after is dropped (ErrLateLocal).
+//     local-only as the batch was sealed, with local_until_os, the same moment
+//     by the OS's monotonic clock and its boot, which Open takes back from the
+//     newest batch (Batch.LocalUntil); and stretches, in the seal frame of
+//     each batch sealed after they changed, every local-only stretch the
+//     writer knows: from where it last knew config.toml said online, or the
+//     beginning of time for the chain's first, to where it saw the file online
+//     again, with whether a batch was sealed online since it ended and how
+//     many late records of it Write dropped since (D-late-local). A record of
+//     a stretch that reaches the writer before a batch is sealed online after
+//     the stretch makes its batch local-only, and one that reaches it after is
+//     dropped (ErrLateLocal).
 //   - batches.seg: a chain frame naming the device id and the device
 //     key's id, after a retention sweep a base frame naming the first
-//     batch it keeps, with the newest stretches, then a row per batch, {b,
-//     first_seq, last_seq, n, prev, R_b, H_b, sealed_at, online, back,
+//     batch it keeps, with the newest stretches, the moment, and the
+//     writer's mark then with the newest batch sealed then
+//     (basePayload.Mark), then a row per batch, {b, first_seq, last_seq, n,
+//     prev, R_b, H_b, sealed_at, online, back, due, back_ended, mark,
 //     local_until, local_until_os, why, stretches} and where its frames
 //     are, and the server's receipts with their received_at (DESIGN 3.5;
 //     ledger-v1 7).
