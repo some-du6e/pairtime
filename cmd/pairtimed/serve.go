@@ -17,9 +17,11 @@ import (
 
 	"github.com/some-du6e/pairtime/internal/server/auth"
 	"github.com/some-du6e/pairtime/internal/server/backup"
+	"github.com/some-du6e/pairtime/internal/server/buildday"
 	"github.com/some-du6e/pairtime/internal/server/config"
 	"github.com/some-du6e/pairtime/internal/server/dashboard"
 	"github.com/some-du6e/pairtime/internal/server/device"
+	"github.com/some-du6e/pairtime/internal/server/devlog"
 	serverkeys "github.com/some-du6e/pairtime/internal/server/keys"
 	"github.com/some-du6e/pairtime/internal/server/migrations"
 	"github.com/some-du6e/pairtime/internal/server/ops"
@@ -240,6 +242,28 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		<-settleDone
 	}()
 
+	// The build-day job runs beside the settle job, through the writer: a
+	// day counts the moment the server holds BUILD_DAY_S of it from minutes
+	// it labeled witnessed or offline, and a day still short at its
+	// deadline is decided then (WP-SV12; DESIGN 6.2 D10). It too stops
+	// before the writer does.
+	buildDays := reg.Counter("pairtime_build_days_decided_total", "Days the build-day job stored: build days, and days decided at their deadline (DESIGN 6.2 D10).")
+	buildDayCtx, stopBuildDays := context.WithCancel(ctx)
+	buildDaysDone := make(chan struct{})
+	go func() {
+		defer close(buildDaysDone)
+		buildday.Run(buildDayCtx, buildday.NewJob(w, db.Read, time.Now), rollup.SettleEvery, func(r buildday.Result, err error) {
+			buildDays.Add(uint64(r.Counted + r.Decided))
+			if err != nil && buildDayCtx.Err() == nil {
+				logger.Error("deciding build days failed", "counted", r.Counted, "decided", r.Decided, "weeks", r.Weeks, "err", err)
+			}
+		})
+	}()
+	defer func() {
+		stopBuildDays()
+		<-buildDaysDone
+	}()
+
 	checks := []ops.Check{{
 		Name: "database",
 		Run: func(ctx context.Context) error {
@@ -391,7 +415,7 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		Account: owner,
 		SetZone: func(ctx context.Context, account, zone string) error {
 			return w.Do(ctx, 1, func(ctx context.Context, tx writer.Tx) error {
-				return rollup.SetZone(ctx, tx, account, zone)
+				return rollup.SetZone(ctx, tx, account, zone, time.Now())
 			})
 		},
 		// "Hide this name": the website can hide a name the owner turned
@@ -406,6 +430,10 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 		Logger:     logger,
 	})
 	public.HandleFunc("GET "+dashboard.APIPath, dashboard.API(rollups, owner, time.Now, logger))
+	// Devlogs, badges and build days, for the device token of the owner's
+	// own computers (WP-SV12; DESIGN 3.10; docs/spec/teen-layer-v1.md).
+	devlog.New(devlog.Options{Devices: devices, Writer: w, Read: db.Read, Now: time.Now, Logger: logger}).Register(public)
+	public.HandleFunc("GET "+buildday.SummaryPath, buildday.API(db.Read, devices, time.Now, logger))
 	maintainCtx, stopMaintain := context.WithCancel(ctx)
 	defer stopMaintain()
 	go signIn.Maintain(maintainCtx)

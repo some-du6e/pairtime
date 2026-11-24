@@ -239,9 +239,16 @@ func TestPrivacyNotice(t *testing.T) {
 			want: []string{"It doesn&#39;t protect them from malware running as you."},
 		},
 		{
-			name:    "the notice limits never receiving prompts to outside a submission, backups and the project names you choose to show",
-			want:    []string{"Apart from a submission, the encrypted backups if you turn them on, and the project names you choose to show, this server never receives your prompts"},
+			name:    "the notice limits never receiving prompts to outside a submission, what you publish, backups and the project names you choose to show",
+			want:    []string{"Apart from a submission, what you publish, the encrypted backups if you turn them on, and the project names you choose to show, this server never receives your prompts"},
 			notWant: []string{"<p>This server never receives"},
+		},
+		{
+			name: "the notice says what publishing sends and that a removal keeps only the item's ID for 30 days (D-sv12-retention)",
+			want: []string{
+				"A devlog names its project by the project&#39;s key, not its name, and each devlog and badge carries a random ID your computer made for it.",
+				"the server deletes it at once and keeps only that ID and when you removed it, for 30 days, so a computer of yours that missed the removal can&#39;t publish it again.",
+			},
 		},
 		{
 			name: "the notice says a project's name reaches the server only when you choose to show it, and how a hide keeps the key 30 days at most (D-owner-names)",
