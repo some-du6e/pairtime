@@ -22,7 +22,10 @@ var ProxyVars = []string{"https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY
 // every destination's requests through for server, its main api_url, and
 // "" when none would. loadProxyURL works that proxy out once, for the main
 // api_url, with httpproxy's ProxyFunc, and newClient's WithProxy then sends
-// pairtime's line through it too. getenv reads the environment.
+// pairtime's line through it too. getenv reads the environment. Of a pair,
+// the name is the first with a value, the lower-case one when both have
+// one, as httpproxy reads them, and so on Windows, where a variable's name
+// matches in any case, the lower-case one whichever spelling was set.
 //
 // It decides as httpproxy v0.61.0's proxyForURL does, as read from its
 // source: the pair of the URL's scheme, the first of it with a value, and
@@ -110,65 +113,64 @@ func parsesAsProxy(v string) bool {
 }
 
 // noProxy reports whether list, NO_PROXY's comma-separated entries, keeps
-// host, in lower case, on port from the proxy, as httpproxy's init reads
-// the entries and useProxy matches them. ip is host's address when host is
-// an IP address, as useProxy parses it, and nil otherwise.
+// host from the proxy on port, as httpproxy's init reads the entries and
+// its useProxy matches them: "*" keeps every host; a CIDR range keeps the
+// IP hosts in it; an IP, with or without a port, keeps that IP host; and a
+// domain, with or without a port, keeps itself and its subdomains, or,
+// with "." or "*." before it, its subdomains alone. host is in lower case,
+// and ip is its address when it is an IP address, as useProxy parses it,
+// and nil otherwise.
 func noProxy(list, host, port string, ip net.IP) bool {
-	for _, p := range strings.Split(list, ",") {
-		p = strings.ToLower(strings.TrimSpace(p))
-		switch {
-		case p == "":
-			continue
-		case p == "*":
+	for _, entry := range strings.Split(list, ",") {
+		entry = strings.ToLower(strings.TrimSpace(entry))
+		if entry == "*" {
 			return true
 		}
-		if _, cidr, err := net.ParseCIDR(p); err == nil {
+		if entry == "" {
+			continue
+		}
+		if _, cidr, err := net.ParseCIDR(entry); err == nil {
 			if ip != nil && cidr.Contains(ip) {
 				return true
 			}
 			continue
 		}
-		phost, pport, err := net.SplitHostPort(p)
-		if err == nil {
-			if phost == "" {
-				continue
+		name, entryPort := entry, ""
+		if h, p, err := net.SplitHostPort(entry); err == nil {
+			if h == "" {
+				continue // a port alone keeps no host
 			}
-			if phost[0] == '[' && phost[len(phost)-1] == ']' {
-				phost = phost[1 : len(phost)-1]
-			}
-		} else {
-			phost, pport = p, ""
+			name, entryPort = h, p
 		}
-		portOK := pport == "" || pport == port
-		if pip := net.ParseIP(phost); pip != nil {
-			if ip != nil && pip.Equal(ip) && portOK {
+		if entryPort != "" && entryPort != port {
+			continue
+		}
+		if eip := net.ParseIP(name); eip != nil {
+			if ip != nil && eip.Equal(ip) {
 				return true
 			}
 			continue
 		}
-		if phost == "" || ip != nil || !isASCII(phost) {
-			continue // a domain entry never matches an IP
+		// A domain keeps no IP host, and one that isn't ASCII, which
+		// httpproxy matches in its IDNA form, is taken to keep nothing.
+		if ip != nil || !isASCII(name) {
+			continue
 		}
-		if strings.HasPrefix(phost, "*.") {
-			phost = phost[1:]
+		suffix, itself := "."+name, true
+		switch {
+		case strings.HasPrefix(name, "*."):
+			suffix, itself = name[1:], false
+		case strings.HasPrefix(name, "."):
+			suffix, itself = name, false
 		}
-		whole := false
-		if !strings.HasPrefix(phost, ".") {
-			whole, phost = true, "."+phost
-		}
-		if (strings.HasSuffix(host, phost) || (whole && host == phost[1:])) && portOK {
+		if strings.HasSuffix(host, suffix) || itself && host == name {
 			return true
 		}
 	}
 	return false
 }
 
-// isASCII reports whether s holds only ASCII.
+// isASCII reports whether s holds nothing outside ASCII.
 func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= utf8.RuneSelf {
-			return false
-		}
-	}
-	return true
+	return strings.IndexFunc(s, func(r rune) bool { return r >= utf8.RuneSelf }) < 0
 }

@@ -170,6 +170,38 @@ func TestWakaTimeGoldens(t *testing.T) {
 	}
 }
 
+// TestWakaTimeAfterHackatimeSetup follows what the card for a home with no
+// config tells a teen who joins a program on Robert: install makes the
+// config, Hackatime's setup writes a new one in its place (HC 1.5), and
+// install, run again, adds pairtime's line to that one, which uninstall
+// takes out again.
+func TestWakaTimeAfterHackatimeSetup(t *testing.T) {
+	tests := []struct {
+		name string
+		dir  string // under testdata/wakatime, the config Hackatime's setup writes, and pairtime's line in it
+	}{
+		{"hackatime-setup's config written over the one pairtime made gets pairtime's line from the next install, and uninstall gives it back byte for byte", "hackatime-setup"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before, want := wakaGolden(t, tt.dir, "before.cfg"), wakaGolden(t, tt.dir, "after.cfg")
+			h := newWakaHome(t, nil)
+			install(t, h.in, h.item(t, 7247, wakaKey))
+			writeFile(t, h.cfg(), before)
+			install(t, h.in, h.item(t, 7247, ""))
+			if got := readOrNil(t, h.cfg()); !bytes.Equal(got, want) {
+				t.Fatalf("after the second install the config holds\n%q\nwant testdata/wakatime/%s/after.cfg:\n%q", got, tt.dir, want)
+			}
+			uninstall(t, h.in)
+			if got := readOrNil(t, h.cfg()); !bytes.Equal(got, before) {
+				t.Errorf("after uninstall the config holds\n%q\nwant what Hackatime's setup wrote:\n%q", got, before)
+			}
+			checkGone(t, filepath.Dir(h.internal()), "the .wakatime folder")
+			checkGone(t, wakacfg.SetupFile(h.data), "the setup file")
+		})
+	}
+}
+
 func TestWakaTimeRefusesAMalformedKey(t *testing.T) {
 	tests := []struct {
 		name, key string

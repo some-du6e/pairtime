@@ -118,8 +118,10 @@ func TestGatherWakaTime(t *testing.T) {
 		name string
 		// config is what the config the setup file names holds, "" for no
 		// config; setup says install wrote a setup file; env is
-		// WAKATIME_API_KEY, and proxy and noProxy values for HTTPS_PROXY, or
-		// proxyVar when it names another variable, and NO_PROXY.
+		// WAKATIME_API_KEY, and proxy and noProxy values for https_proxy, or
+		// proxyVar when it names another variable, and NO_PROXY. https_proxy
+		// is in lower case, which ProxyFor reads first and so names on
+		// Windows too, where a variable's name matches in any case.
 		config   string
 		setup    bool
 		env      string
@@ -182,11 +184,11 @@ func TestGatherWakaTime(t *testing.T) {
 			},
 		},
 		{
-			name:   "with HTTPS_PROXY set, neither destination is asked, and the line fails as not set up, naming the variable alone",
+			name:   "with https_proxy set, neither destination is asked, and the line fails as not set up, naming the variable alone",
 			config: elsewhere + line(port), setup: true, proxy: "http://teen:secret@proxy.example:3128",
 			want: func(t *testing.T, w *WakaTime) {
-				if w == nil || w.Proxy != "HTTPS_PROXY" || w.Server != nil || w.Pairtime != (Destination{}) {
-					t.Fatalf("GatherWakaTime = %+v, want only Proxy HTTPS_PROXY", w)
+				if w == nil || w.Proxy != "https_proxy" || w.Server != nil || w.Pairtime != (Destination{}) {
+					t.Fatalf("GatherWakaTime = %+v, want only Proxy https_proxy", w)
 				}
 				if c, _ := wakatimeCheck(w); c.Result != Fail || strings.Contains(c.Text, "secret") {
 					t.Errorf("the line is %+v, want a failure that shows no value", c)
@@ -194,7 +196,7 @@ func TestGatherWakaTime(t *testing.T) {
 			},
 		},
 		{
-			name:   "with HTTPS_PROXY set, a config pairtime made, whose only api_url is the agent on 127.0.0.1, which no environment proxy reaches, is ok",
+			name:   "with https_proxy set, a config pairtime made, whose only api_url is the agent on 127.0.0.1, which no environment proxy reaches, is ok",
 			config: string(made), setup: true, proxy: "http://proxy.example:3128",
 			want: func(t *testing.T, w *WakaTime) {
 				if strings.Count(string(made), "api_url") != 1 || !strings.Contains(string(made), "api_url = http://127.0.0.1:") {
@@ -209,11 +211,11 @@ func TestGatherWakaTime(t *testing.T) {
 			},
 		},
 		{
-			name:   "with HTTPS_PROXY set, a config pairtime made whose api_url now names another server fails as not set up, as any config of the teen's",
+			name:   "with https_proxy set, a config pairtime made whose api_url now names another server fails as not set up, as any config of the teen's",
 			config: strings.Replace(strings.Replace(string(made), "api_url = "+wakacfg.URL(port), "api_url = https://wakapi.example/api", 1), "api_key = "+wakaKey, "api_key = "+hackatimeKey, 1), setup: true, proxy: "http://proxy.example:3128",
 			want: func(t *testing.T, w *WakaTime) {
-				if w == nil || w.Proxy != "HTTPS_PROXY" {
-					t.Fatalf("GatherWakaTime = %+v, want Proxy HTTPS_PROXY", w)
+				if w == nil || w.Proxy != "https_proxy" {
+					t.Fatalf("GatherWakaTime = %+v, want Proxy https_proxy", w)
 				}
 				if c, _ := wakatimeCheck(w); c.Result != Fail || !strings.Contains(c.Text, "isn't set up") {
 					t.Errorf("the line is %+v, want a failure saying it isn't set up", c)
@@ -221,7 +223,7 @@ func TestGatherWakaTime(t *testing.T) {
 			},
 		},
 		{
-			name:   "with HTTPS_PROXY set and NO_PROXY naming the server's host, doctor asks both destinations, as wakatime-cli takes no proxy then",
+			name:   "with https_proxy set and NO_PROXY naming the server's host, doctor asks both destinations, as wakatime-cli takes no proxy then",
 			config: elsewhere + line(port), setup: true, proxy: "http://proxy.example:3128", noProxy: "wakapi.example",
 			want: func(t *testing.T, w *WakaTime) {
 				if w == nil || w.Proxy != "" || w.Pairtime.Status != http.StatusOK || w.Server == nil {
@@ -335,7 +337,7 @@ func TestGatherWakaTime(t *testing.T) {
 			if tt.proxy != "" {
 				v := tt.proxyVar
 				if v == "" {
-					v = "HTTPS_PROXY"
+					v = "https_proxy"
 				}
 				t.Setenv(v, tt.proxy)
 			}

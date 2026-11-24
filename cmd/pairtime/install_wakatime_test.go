@@ -65,7 +65,7 @@ func TestInstallWakaTime(t *testing.T) {
 		name string
 		// config is ~/.wakatime.cfg before install, "" for none.
 		config string
-		// skip runs install with --skip wakatime, and proxy with HTTPS_PROXY
+		// skip runs install with --skip wakatime, and proxy with https_proxy
 		// set to it.
 		skip  bool
 		proxy string
@@ -95,10 +95,10 @@ func TestInstallWakaTime(t *testing.T) {
 			skip:   true,
 		},
 		{
-			name:   "with HTTPS_PROXY set, install leaves the teen's config as it was and says why, naming the variable and never its value",
+			name:   "with https_proxy set, install leaves the teen's config as it was and says why, naming the variable and never its value",
 			config: teenHackatimeConfig,
 			proxy:  "http://teen:secret@proxy.example:3128",
-			out:    "but HTTPS_PROXY is set here, and wakatime-cli started with it would send the line through that proxy too",
+			out:    "but https_proxy is set here, and wakatime-cli started with it would send the line through that proxy too",
 		},
 		{
 			name:   "with a config that sets a proxy, install leaves the config as it was and says why",
@@ -110,7 +110,9 @@ func TestInstallWakaTime(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newTestHome(t, "real").withEnv(wakatimeEnv, "1")
 			if tt.proxy != "" {
-				h = h.withEnv("HTTPS_PROXY", tt.proxy)
+				// In lower case, which ProxyFor reads first and so names on
+				// Windows too, where a variable's name matches in any case.
+				h = h.withEnv("https_proxy", tt.proxy)
 			}
 			if tt.config != "" {
 				h.write(".wakatime.cfg", tt.config)
