@@ -1063,9 +1063,10 @@ def s_63_cc9(out):
 
 def s_63_cc10(out):
     sc = Scenario("6.3-cc10-injected-heartbeats", "Editor heartbeats while no editor of the project has focus",
-                  "A script posts four of D's VS Code heartbeats to the local WakaTime port between 14:19 and "
-                  "14:20:30, while Sam types A's next prompt in iTerm. macOS skips the peer-process check (DESIGN "
-                  "5.7), so they arrive as via editor.",
+                  "A script in VS Code's integrated terminal runs the real wakatime-cli and sends four of D's "
+                  "heartbeats between 14:19 and 14:20:30, while Sam types A's next prompt in iTerm. wakatime-cli's "
+                  "parent chain reaches VS Code, so they pass the peer-process check (DESIGN 5.7) and arrive as via "
+                  "editor.",
                   base=S63, projects=[A, B, D, E], window=W63)
     dev = s63(sc)
     proto = dev.find("editor.activity")[-1]
@@ -1093,10 +1094,11 @@ def s_63_cc10(out):
 
 def s_63_cc10_project(out):
     sc = Scenario("6.3-cc10-wrong-project", "Editor heartbeats for one project while the editor shows another",
-                  "While Sam hand-edits E in Cursor, a script posts three of D's VS Code heartbeats to the local "
-                  "WakaTime port. An editor has focus, so they pass the app half of CC10, but the focused window "
-                  "is on E. SM 3.2 resolves an editor slot to the project of the most recent heartbeat, so they "
-                  "pull their slots, and the typed-edit leads in them, from E into D.",
+                  "While Sam hand-edits E in Cursor, a script in VS Code's integrated terminal runs the real "
+                  "wakatime-cli and sends three of D's heartbeats, which pass the peer-process check (DESIGN 5.7) "
+                  "and arrive as via editor. An editor has focus, so they pass the app half of CC10, but the focused "
+                  "window is on E. SM 3.2 resolves an editor slot to the project of the most recent heartbeat, so "
+                  "they pull their slots, and the typed-edit leads in them, from E into D.",
                   base=S63, projects=[A, B, D, E], window=W63)
     dev = s63(sc)
     proto = dev.find("editor.activity")[-1]
