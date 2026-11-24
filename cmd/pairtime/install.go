@@ -20,6 +20,7 @@ import (
 	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/install/consent"
+	"github.com/some-du6e/pairtime/internal/install/wakacfg"
 	"github.com/some-du6e/pairtime/internal/version"
 )
 
@@ -290,13 +291,24 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	wakaTimeNew := false
+	// waka is what the WakaTime item is planned with, its key included, so
+	// that step 5 can plan the same line on the port the agent listens on.
+	var waka install.WakaTimeOptions
 	if offerWakaTime {
 		if skipped(install.ItemWakaTime) {
 			left[install.ItemWakaTime] = "you left it out with --skip"
 		} else {
+			waka = install.WakaTimeOptions{Data: dirs.Data, Port: wakaTimePort(dirs), Now: time.Now()}
 			_, there, err := install.WakaTimeConfig(env)
 			wakaTimeNew = err == nil && !there
-			if err := offer(install.ItemWakaTime, wakaTimeItem(dirs, time.Now())); err != nil {
+			if err := offer(install.ItemWakaTime, func(env install.Env) (install.Item, error) {
+				key, err := install.WakaTimeKey(env, waka.Data)
+				if err != nil {
+					return install.Item{}, err
+				}
+				waka.Key = key
+				return install.WakaTime(env, waka)
+			}); err != nil {
 				return fail(err)
 			}
 		}
@@ -454,8 +466,17 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "Added pairtime's hooks to %s.\n", install.Printable(install.ClaudeSettings(env)))
 		}
 	}
-	// 5. ~/.wakatime.cfg, once the agent is up (DESIGN 5.9).
+	// 5. ~/.wakatime.cfg, once the agent is up (DESIGN 5.9), naming the
+	// port it listens on: one that found the screen's port taken, as by
+	// another account's agent, listens on another.
 	if slices.Contains(chosen, install.ItemWakaTime) {
+		if pf, err := localhttp.ReadPortFile(dirs.PortFile()); err == nil && pf.Port != waka.Port {
+			it, diff, err := wakaTimeOnPort(env, waka, diffs[install.ItemWakaTime], pf.Port)
+			if err != nil {
+				return fail(err)
+			}
+			items[install.ItemWakaTime], diffs[install.ItemWakaTime] = it, diff
+		}
 		if err := apply(install.ItemWakaTime); err != nil {
 			return fail(err)
 		}
@@ -514,11 +535,28 @@ func wakaTimeItem(dirs home.Dirs, now time.Time) func(install.Env) (install.Item
 	}
 }
 
+// wakaTimeOnPort returns the WakaTime item planned with o on port instead
+// of o.Port, and diff, the screen's diff of the item planned with o, as
+// the new item's diff reads: the same, with the agent's URL on o.Port
+// swapped for the one on port, since only pairtime's line, or the api_url
+// of a config pairtime makes, names it. install's apply then refuses
+// anything else that changed since the screen.
+func wakaTimeOnPort(env install.Env, o install.WakaTimeOptions, diff string, port int) (install.Item, string, error) {
+	from := wakacfg.URL(o.Port)
+	o.Port = port
+	it, err := install.WakaTime(env, o)
+	if err != nil {
+		return install.Item{}, "", err
+	}
+	return it, strings.ReplaceAll(diff, from, wakacfg.URL(port)), nil
+}
+
 // wakaTimePort returns the port pairtime's line in ~/.wakatime.cfg names:
 // the agent's, as the agent picks it (localhttp.Candidates), config.toml's
-// port first, then the one its last run listened on, then the default. An
-// agent that ends up on another port rewrites the line (DESIGN 5.6, "The
-// port").
+// port first, then the one its last run listened on, then the default.
+// Install plans the line again on the port the agent listens on once it
+// is up (step 5), and an agent that moves to another port later rewrites
+// the line (DESIGN 5.6, "The port").
 func wakaTimePort(dirs home.Dirs) int {
 	configured, last := 0, 0
 	if cfg, _, err := config.Load(dirs.ConfigFile()); err == nil {

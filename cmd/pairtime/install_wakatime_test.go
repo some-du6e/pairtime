@@ -4,10 +4,14 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/some-du6e/pairtime/internal/agent/localhttp"
 	"github.com/some-du6e/pairtime/internal/install"
 	"github.com/some-du6e/pairtime/internal/install/wakacfg"
 )
@@ -49,8 +53,10 @@ func TestInstallWakaTime(t *testing.T) {
 		name string
 		// config is ~/.wakatime.cfg before install, "" for none.
 		config string
-		// skip runs install with --skip wakatime.
-		skip bool
+		// skip runs install with --skip wakatime, and proxy with HTTPS_PROXY
+		// set to it.
+		skip  bool
+		proxy string
 		// want is how the config starts after install, "" for as it was;
 		// line is what pairtime's line starts with.
 		want, line string
@@ -66,7 +72,7 @@ func TestInstallWakaTime(t *testing.T) {
 		},
 		{
 			name: "with no WakaTime config, install makes one for the agent with wakatime-cli's watermark, and uninstall deletes both",
-			want: "[settings]\n",
+			want: "; made by pairtime install; pairtime uninstall takes it out\n[settings]\n",
 			line: "api_url = http://127.0.0.1:",
 			out:  "Made ",
 		},
@@ -75,10 +81,24 @@ func TestInstallWakaTime(t *testing.T) {
 			config: teenHackatimeConfig,
 			skip:   true,
 		},
+		{
+			name:   "with HTTPS_PROXY set, install leaves the teen's config as it was and says why, naming the variable and never its value",
+			config: teenHackatimeConfig,
+			proxy:  "http://teen:secret@proxy.example:3128",
+			out:    "but HTTPS_PROXY is set here, and wakatime-cli started with it would send the line through that proxy too",
+		},
+		{
+			name:   "with a config that sets a proxy, install leaves the config as it was and says why",
+			config: teenHackatimeConfig + "proxy = http://proxy.example:3128\n",
+			out:    "sets a proxy, and wakatime-cli would send pairtime's line through it too",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newTestHome(t, "real").withEnv(wakatimeEnv, "1")
+			if tt.proxy != "" {
+				h = h.withEnv("HTTPS_PROXY", tt.proxy)
+			}
 			if tt.config != "" {
 				h.write(".wakatime.cfg", tt.config)
 			}
@@ -94,6 +114,12 @@ func TestInstallWakaTime(t *testing.T) {
 			}
 			cfg := h.read(".wakatime.cfg")
 			s, err := wakacfg.ReadSetup(wakacfg.SetupFile(h.dirs.Data))
+			if !strings.Contains(out, tt.out) {
+				t.Errorf("install didn't say %q:\n%s", tt.out, out)
+			}
+			if strings.Contains(out, "secret") {
+				t.Errorf("install printed the proxy's password:\n%s", out)
+			}
 			switch {
 			case tt.want == "":
 				if cfg != tt.config {
@@ -109,11 +135,12 @@ func TestInstallWakaTime(t *testing.T) {
 				if !ok || !strings.HasPrefix(rest, tt.line) || !strings.Contains(rest, s.Key) {
 					t.Errorf("after install the config holds\n%s\nwant it to start %q, then %q, with the setup file's key %s", cfg, tt.want, tt.line, s.Key)
 				}
-				if st, err := wakacfg.Inspect([]byte(cfg), s.Key); err != nil || !st.Line {
+				st, err := wakacfg.Inspect([]byte(cfg), s.Key)
+				if err != nil || !st.Line {
 					t.Errorf("Inspect = %+v, %v, want pairtime's line", st, err)
 				}
-				if !strings.Contains(out, tt.out) {
-					t.Errorf("install didn't say %q:\n%s", tt.out, out)
+				if pf, err := localhttp.ReadPortFile(h.dirs.PortFile()); err != nil || pf.Port != st.Port {
+					t.Errorf("pairtime's line names port %d, and the agent listens on %d (%v)", st.Port, pf.Port, err)
 				}
 				if tt.config == "" && !strings.Contains(h.read(".wakatime/wakatime-internal.cfg"), "[internal]\nai_logs_last_parsed_at = ") {
 					t.Errorf("install didn't seed wakatime-cli's watermark: %q", h.read(".wakatime/wakatime-internal.cfg"))
@@ -130,6 +157,64 @@ func TestInstallWakaTime(t *testing.T) {
 
 			h.mustRun("", "", 0, "uninstall", "--yes", "--delete-data")
 			h.uninstalled(before, pid)
+		})
+	}
+}
+
+// TestWakaTimeOnPort checks the WakaTime item install plans again once the
+// agent is up, on the port it listens on: its diff is the screen's with
+// the port swapped, which install's apply takes, and names that port only.
+func TestWakaTimeOnPort(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string // ~/.wakatime.cfg before install, "" for none
+	}{
+		{"pairtime's line on the agent's port differs from the screen's in the port alone", teenHackatimeConfig},
+		{"a config pairtime makes on the agent's port differs from the screen's in the port alone", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			if tt.config != "" {
+				if err := os.WriteFile(filepath.Join(home, ".wakatime.cfg"), []byte(tt.config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			exe := filepath.Join(home, "bin", "pairtime")
+			if runtime.GOOS == "windows" {
+				exe += ".exe"
+			}
+			env := install.Env{GOOS: runtime.GOOS, Home: home, Getenv: func(string) string { return "" }, Exe: exe}
+			data := t.TempDir()
+			in := &install.Installer{Dir: filepath.Join(data, "install")}
+			diff := func(it install.Item) string {
+				t.Helper()
+				p, err := in.PlanInstall([]install.Item{it})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer p.Close()
+				return p.Diff()
+			}
+			key, err := install.WakaTimeKey(env, data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			o := install.WakaTimeOptions{Data: data, Port: 7247, Now: time.Date(2026, 11, 24, 5, 30, 0, 0, time.UTC), Key: key}
+			shown, err := install.WakaTime(env, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			it, want, err := wakaTimeOnPort(env, o, diff(shown), 7250)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := diff(it); got != want {
+				t.Errorf("planned on the agent's port, the diff is\n%s\nwant the screen's with the port swapped:\n%s", got, want)
+			}
+			if !strings.Contains(want, wakacfg.URL(7250)) || strings.Contains(want, wakacfg.URL(7247)) {
+				t.Errorf("the diff doesn't name the agent's port alone:\n%s", want)
+			}
 		})
 	}
 }
