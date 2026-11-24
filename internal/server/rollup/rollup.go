@@ -48,10 +48,12 @@
 // a cut. The settle job's first run cuts each such day of the last 182 days
 // again whole (RecutDays), and so does the day's next change, while
 // rollup_minutes holds all of it. A day whose minutes the retention jobs have
-// partly deleted can't be cut again: it keeps its rows, which can keep more
-// than DAY_CAP_S, and a change to it holds back the credit it adds and takes
-// the credit it removes out of what is held back first, never below zero
-// (keep). Such a day's rows sum to its buckets unless a removal stopped at
+// partly deleted can't be cut again, and keeps its rows. A change that keeps
+// such a day within the cap, with nothing held back, applies as it is, as on
+// any day, when the rows hold what it takes away. Any other change holds back
+// the credit it adds, and takes the credit it removes out of what is held
+// back first, never below zero (keep). So such a day can stay over
+// DAY_CAP_S, and its rows sum to its buckets unless a removal stopped at
 // zero.
 //
 // No fraud flag is stored for hours nobody submitted (D-no-ingest-flags;

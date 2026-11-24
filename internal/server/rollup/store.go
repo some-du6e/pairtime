@@ -490,11 +490,13 @@ type Day struct {
 	// AgentOnlyFinalMS and AgentOnlyPendingMS are the agent's time on its
 	// own (SM 2.6, D-bucket-agent-only).
 	AgentOnlyFinalMS, AgentOnlyPendingMS int64
-	// DayCapMS is the credit the day cap withheld, SM 5.3's X.day_cap:
-	// what the project and kind credited past DAY_CAP_S that day, which
-	// FinalMS and PendingMS leave out. A day stored before migration 0012
-	// that couldn't be cut again, because some of its minutes were gone,
-	// keeps FinalMS and PendingMS past DAY_CAP_S (see the package doc).
+	// DayCapMS is the credit the day cap held back in the project and
+	// kind that day, SM 5.3's X.day_cap, which FinalMS and PendingMS leave
+	// out. On a day cut under DAY_CAP_S, it is the credit past the cap in
+	// time order. A day the cap couldn't cut again, because some of its
+	// minutes were gone, keeps its rows: once it is over the cap, or holds
+	// anything back, a change holds back the credit it adds, so its
+	// FinalMS and PendingMS can stay past DAY_CAP_S (see the package doc).
 	DayCapMS int64
 }
 
