@@ -249,6 +249,9 @@ class Replay:
                 self.origin[(e["session_key"], d["turn_key"])] = o
                 if o not in HUMAN:
                     continue
+                # SM 2.2 rule 7 cuts a pasted prompt's compose length, which this
+                # replay doesn't do, so it refuses one. No case has one.
+                tl.check(o == "human_typed", f"the prompt at {t} is typed, not {o}")
                 tl.check(not d["low_effort"] and not d["answers_question"] and d["typed_len_est"] >= 20,
                          "every human prompt here is substantive")
                 typing = typing_ms(d["typed_len_est"])
@@ -508,6 +511,7 @@ class Case:
         self.fx, self.exp = fx, exp
         self.names = exp.projects
         self.secs = expand(fx, runs, self.names)
+        tl.check(all(exp.start <= t < exp.end for t in self.secs), "every hand-written run lies inside the window")
         self.level = level
         # The credited seconds inside the level-C runs.
         self.c = set()
@@ -703,6 +707,8 @@ def tables(path, header):
 def arithmetic(expr):
     """Whole numbers with thousands commas, joined by +, −, × and
     parentheses."""
+    for n in re.findall(r"[0-9][0-9,]*", expr):
+        tl.check(re.fullmatch(NUM, n.rstrip(",")) is not None, f"arithmetic {expr!r}: {n!r} groups thousands by three")
     s = expr.replace("×", "*").replace("−", "-").replace(",", "")
     tl.check(re.fullmatch(r"[0-9+\-* ()]+", s) is not None, f"arithmetic {expr!r} uses only + − × and parentheses")
     toks = re.findall(r"\d+|[+\-*()]", s)
@@ -744,7 +750,13 @@ def arithmetic(expr):
 
 def codes_in(cell):
     out = {}
-    for code, expr, stated in CODE_ITEM.findall(cell):
+    for m in CODE_ITEM.finditer(cell):
+        code, expr, stated = m.groups()
+        # A code named in prose without seconds states nothing, but a code
+        # whose arithmetic goes on past what this reads, such as a minus,
+        # is refused rather than read short.
+        tl.check(re.match(r"\s*[−\-+×=]\s*[0-9]", cell[m.end():]) is None,
+                 f"{code} {expr}: the arithmetic after it is more than + and × of whole numbers")
         n = arithmetic(expr)
         if stated:
             tl.check(int(stated.replace(",", "")) == n, f"{code} {expr} is {n}, not {stated}")
