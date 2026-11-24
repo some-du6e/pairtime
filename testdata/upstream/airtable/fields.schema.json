@@ -72,7 +72,8 @@
         }
       ],
       "x-invalid-examples": [
-        {"name": "Justification - Deflation Justification", "line": 3292, "role": "justification", "filled_by": "pairtime", "handbook": "Deflation Justification"}
+        {"name": "Justification - Deflation Justification", "line": 3292, "role": "justification", "filled_by": "pairtime", "handbook": "Deflation Justification"},
+        {"name": "Justification - Specific Technical Features", "line": 3291, "role": "justification", "filled_by": "pairtime", "handbook": "Specific Technical Features"}
       ]
     }
   }
