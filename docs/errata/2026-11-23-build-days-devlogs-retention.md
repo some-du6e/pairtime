@@ -31,7 +31,7 @@ Every kind of data the server keeps has a 4.4 row and a finite period, a deletio
 
 (h) 8.9's eraser covers all four rows through WP-SV13's DeleteAccount calls, and the export holds them.
 
-Amended in review in #278 (2026-11-23): D13 and WP-SB1 bound new windows by the latest end of any window frozen, not by the window frozen last; WP-CO4 queues a delete as it queues a publish, sends it until the server answers and cancels the devlog's unanswered publish, and ties every queued publish and delete to the server and device it was made for; whichever of WP-SV12 and WP-SV13 lands second wires both DeleteAccount calls into the eraser and the export; and the build-days row keeps every zone change.
+Amended in review in #278 (2026-11-23): D13 and WP-SB1 bound new windows by the latest end of any window frozen, not by the window frozen last; WP-CO4 queues a delete as it queues a publish, sends it until the server answers and cancels the devlog's unanswered publish, and ties every queued publish and delete to the server and device it was made for; whichever of WP-SV12 and WP-SV13 lands second calls both DeleteAccount functions from the eraser, inside its transaction, and makes the export hold the same rows; and the build-days row keeps every zone change. Amended again in #278's round-2 comment (https://github.com/some-du6e/pairtime/issues/278#issuecomment-7118710590): a queued delete survives a logout and goes once `account.json` names its server and device again, while a queued publish is still dropped at logout and both are dropped at a sign-in to another server or device; the offline-delete check names the publish that must never reach the server; and `buildday.Export` and `devlog.Export` read the rows the export holds.
 
 ## Applied wording
 
