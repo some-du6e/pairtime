@@ -27,7 +27,8 @@ import (
 // eraser's account tables, the day leaves it keeps or deletes by day, or
 // the tables that hold nothing of an account. A migration that adds a
 // table fails it until the eraser deletes the table's rows of an account
-// or the table is listed as holding none.
+// or the table is listed as holding none, in both OtherTables and
+// retention.json's no_personal_data.
 func TestTables(t *testing.T) {
 	f := newFixture(t, store.SQLite)
 	placed := make(map[string]string)
@@ -46,7 +47,7 @@ func TestTables(t *testing.T) {
 		{name: "every table the migrations create is the eraser's, the leaf table, or holds nothing of an account", check: func(t *testing.T) {
 			for _, n := range have {
 				if placed[n] == "" {
-					t.Errorf("%s is in no list: add it to the eraser's steps, or to OtherTables if it holds nothing of an account", n)
+					t.Errorf("%s is in no list: add it to the eraser's steps, or, if it holds nothing of an account, to both OtherTables and retention.json's no_personal_data", n)
 				}
 			}
 		}},

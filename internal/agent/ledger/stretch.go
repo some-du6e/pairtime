@@ -371,12 +371,15 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 		}
 	}
 	// The mark the writer had due as it sealed its newest batch, which that
-	// batch didn't take (sealPayload.Due), is due again until a batch sealed
-	// Back takes it, as when the first batch after a switch back was sealed
-	// local-only for a held call that came late. With no row kept, or when
-	// the newest records none and ends before it, the mark a sweep's base
-	// frame keeps (basePayload.Back) is, as no batch has been sealed with
-	// its records since.
+	// batch neither took nor ended (sealPayload.Due), is due again until a
+	// batch sealed online takes it or ends it, as when the first batch after
+	// a switch back was sealed local-only for a held call that came late.
+	// With no row kept, or when the newest records none and ends before it,
+	// as a row an older version sealed does, the mark a sweep's base frame
+	// keeps (basePayload.Back) is, as no batch has been sealed with its
+	// records since. A newest row that ended the mark Open restored
+	// (sealPayload.BackEnded) leaves none due, though its records came before
+	// the mark, as those of Open's own batch of what a crash left do.
 	// It marks only a batch whose records were all made after Open
 	// (Writer.backFrom). After its newest seal the running writer may have
 	// cleared the mark without sealing a batch, as a seal's read or a note
@@ -391,7 +394,7 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 	// online. For the same reason the mark is due only from the next record
 	// on.
 	due := bf.base.Back
-	if n := len(rows); n > 0 && (rows[n-1].Due > 0 || due <= rows[n-1].LastSeq) {
+	if n := len(rows); n > 0 && (rows[n-1].Due > 0 || rows[n-1].BackEnded || due <= rows[n-1].LastSeq) {
 		due = rows[n-1].Due
 	}
 	if due > 0 {
