@@ -54,23 +54,35 @@ type basePayload struct {
 	B        uint64      `json:"b"`
 	FirstSeq uint64      `json:"first_seq"`
 	Prev     ledger.Hash `json:"prev"`
-	// Stretches are the local-only stretches the newest row recorded when
-	// the sweep wrote the frame, so dropping that row loses none of them
-	// (sealPayload.Stretches).
+	// Stretches are the local-only stretches the writer knew when the sweep
+	// wrote the frame, as its next seal frame would record them, or, in an
+	// old chain's, its newest list (batchesFile.stretches), folded, so
+	// dropping the rows loses none of them (sealPayload.Stretches).
 	Stretches []stretchPayload `json:"stretches,omitempty"`
-	// LocalUntil and LocalUntilOS are the moment the row that recorded
-	// Stretches recorded (sealPayload.LocalUntil), which Open holds the rows
-	// after the frame to, as it holds those after the newest row that
-	// records stretches: this version moves the moment only with a seal
-	// frame that records them, so a row whose moment rose past it is an
-	// older version's (restoreStretches).
+	// LocalUntil and LocalUntilOS are the writer's moment with them
+	// (sealPayload.LocalUntil), or, in an old chain's, the one its list's
+	// row or base frame recorded, which Open holds the rows after the frame
+	// to, as it holds those after the newest row that records stretches:
+	// this version moves the moment only with a seal frame that records
+	// them, so a row whose moment rose past it is an older version's
+	// (restoreStretches).
 	LocalUntil   int64    `json:"local_until,omitempty"`
 	LocalUntilOS *untilOS `json:"local_until_os,omitempty"`
+	// Back is the first record of the batch the writer had a mark due for
+	// when the sweep wrote the frame (Writer.back), 0 for none: a stretch
+	// end it took that no batch sealed online since had taken the mark for.
+	// Open makes it due again while no batch has been sealed with the
+	// records from it on, but only from the next record on, as the running
+	// writer can clear the mark after the sweep without sealing a batch, and
+	// a record a crash left pending may be of the stretch that cleared it
+	// (restoreStretches).
+	Back uint64 `json:"back,omitempty"`
 }
 
 // listUntil is the moment the row that recorded bf.stretches recorded, or
-// the base frame's for a list the base frame holds (basePayload.LocalUntil).
-// It means nothing while bf.stretches is nil.
+// the base frame's for a list the base frame holds (basePayload.LocalUntil),
+// as an old chain's sweep keeps it (sweepChain). It means nothing while
+// bf.stretches is nil.
 func (bf *batchesFile) listUntil() (int64, *untilOS) {
 	if i := bf.stretchesRow; i >= 0 && i < len(bf.rows) {
 		return bf.rows[i].LocalUntil, bf.rows[i].LocalUntilOS
@@ -563,6 +575,13 @@ func (w *Writer) scan(bf *batchesFile) ([]rowPayload, error) {
 	var start, from, snap position
 	next, b, head := bf.base.FirstSeq, bf.base.B-1, bf.base.Prev
 	lastLocal := false
+	// The base frame a sweep wrote keeps the writer's moment as it was then
+	// (basePayload.LocalUntil), so a stretch end the agent kept from before
+	// it isn't taken for one the writer never had. The newest row's raises
+	// it below, since the writer's may have been later than every row the
+	// sweep kept, as after a stretch end the agent saw that no seal frame
+	// recorded yet, and a seal frame's takes over.
+	w.until = sealPayload{LocalUntil: bf.base.LocalUntil, LocalUntilOS: bf.base.LocalUntilOS}.until()
 	// skip is set while what comes first in the segments may be a batch a
 	// sweep dropped with every row.
 	skip := false
@@ -570,7 +589,8 @@ func (w *Writer) scan(bf *batchesFile) ([]rowPayload, error) {
 		last := rows[n-1]
 		start, next, b, head, snap = last.End, last.LastSeq+1, last.B, last.Head, last.Snap
 		lastLocal = !last.online()
-		w.until, w.sealed = last.until(), last.SealedAt
+		w.until.raise(last.until(), w.boot)
+		w.sealed = last.SealedAt
 		if !slices.Contains(days, start.Seg) && len(days) > 0 && days[0] < start.Seg {
 			// A sweep deletes the oldest segments only.
 			return nil, damaged("batch %d ends in the segment of %s, which isn't there", last.B, start.Seg)

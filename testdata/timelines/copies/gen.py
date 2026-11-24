@@ -24,7 +24,6 @@ TRACK_LOG_MATCH_S, READ_HORIZON_S, PRESENCE_GAP_S = 10, 600, 120
 COPY_MS = 25
 LABELS_ERRATUM = "2026-11-20-claude-code-transcript-labels"
 QUEUED_ERRATUM = "2026-11-20-claude-code-queued-turn"
-CODES_ERRATUM = "2026-11-19-sm-6.6-uncredited-codes"
 
 fx = tl.Fixture(
     "copies",
@@ -329,18 +328,18 @@ exp.row("16:27", bucket=False, codes=["X.no_anchor"], sm="2.2, rule 1, and 5.1",
              "minute and the bucket is empty. Nothing is credited and no agent runs, so the minute has no bucket "
              "(SM 5.1). Read from its hook copy alone, P2 would be human_typed, and its 154 s lead would credit "
              "this minute.")
-row("16:28", {"SUP": 45}, {"X.automated": 15}, 60, sm="2.2, rule 1; 2.4", erratum=CODES_ERRATUM,
+row("16:28", {"SUP": 45}, {"X.automated": 15}, 60, sm="2.2, rule 1; 2.4; 5.2",
     note="P2 is scheduled, so it opens no anchor, adds no base and resets nothing. Its own output fills the "
          "bucket, and the queued message, within READ_HORIZON_S, lets it drain as SUP from 16:28:05 to 16:28:15 "
-         "and from 16:28:25. The 15 s with the bucket empty are X.automated by the uncredited-codes erratum's "
-         "rule, which pkg/score applies.")
+         "and from 16:28:25. The 15 s with the bucket empty are X.automated by SM 5.2's order, since only a "
+         "scheduled turn runs.")
 row("16:29", {"READ": 60}, {}, 0, sm="2.4", note="P2's answer and the rest of its edit, 145 s, read from P2's stop.")
 
 expected = exp.doc(
     extra_totals={"credited_s": 525, "agent_only_s": 15, "level_a_s": 525},
     stated=[],
     approx={},
-    errata=[LABELS_ERRATUM, QUEUED_ERRATUM, CODES_ERRATUM],
+    errata=[LABELS_ERRATUM, QUEUED_ERRATUM],
     notes=[
         "A derived fixture. SM states no rows for it, so every row follows from SM's rules applied to this "
         "timeline, with pkg/score's readings where SM leaves a choice (README.md).",
@@ -352,8 +351,7 @@ expected = exp.doc(
         "Each lead is 120 s plus the typing time. P1's 60 characters give 160 s and the queued message's 30 give "
         "140 s.",
         "The bucket holds 85 s when the records end at 16:30:00, P2's 145 s less the 60 s read in 16:29.",
-        "Row 16:28 names the 6.6 uncredited-codes erratum, whose rule makes the uncredited seconds of a turn that "
-        "automation started X.automated. SM 5.2 alone doesn't say whether they are X.automated or X.agent_only.",
+        "Row 16:28's uncredited seconds are X.automated by SM 5.2's order: only P2, a scheduled turn, runs.",
     ],
 )
 

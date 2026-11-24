@@ -32,13 +32,11 @@
       "credit": {
         "p_b1de4629be47": {"P": 50}
       },
-      "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "uncredited": {"X.no_anchor": 10},
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.4's 23:39 row",
-      "note": "The /goal prompt at 23:40:00 has 75 typed characters: typing time only, 75 / 1.5 = 50 s, from 23:39:10. The code of 23:39:00 to 23:39:10 is open.",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
-      "erratum": "2026-11-19-sm-2.8-lookback"
+      "note": "The /goal prompt at 23:40:00 has 75 typed characters: typing time only, 75 / 1.5 = 50 s, from 23:39:10. 23:39:00 to 23:39:10 is X.no_anchor (SM 5.2).",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
     },
     {
       "start": "2026-11-20T22:40:00Z",
@@ -62,13 +60,11 @@
       "bucket_minutes": 347,
       "credited_s": 0,
       "credit": {},
-      "uncredited": null,
-      "codes": ["X.agent_only", "X.automated"],
+      "uncredited": {"X.agent_only": 20, "X.automated": 20800},
       "agent_running_s": 20820,
       "sm": "2.8; the events of 6.4's 23:44 to 07:29 range",
-      "note": "T1's last 20 s, then T2 to T9, stop-hook continuations (SM 2.2 rule 2, which lookback keeps), to 06:10:00. Nothing is credited. Whether a continuation's seconds are X.automated or X.agent_only is point 1 of WP-FX1's 6.6 erratum.",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
-      "erratum": "2026-11-19-sm-6.6-uncredited-codes"
+      "note": "T1's last 20 s, then T2 to T9, stop-hook continuations (SM 2.2 rule 2, which lookback keeps), to 06:10:00. Nothing is credited. T1's 20 s are X.agent_only and the continuations' 20,800 s X.automated (SM 5.2).",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
     },
     {
       "start": "2026-11-21T05:10:00Z",
@@ -89,20 +85,18 @@
       "credit": {
         "p_b1de4629be47": {"P": 41}
       },
-      "uncredited": null,
-      "codes": ["X.no_anchor"],
+      "uncredited": {"X.no_anchor": 19},
       "agent_running_s": 0,
       "sm": "2.8; the events of 6.4's 07:36 row",
-      "note": "The prompt at 07:37:00 has 61 typed characters: 61 / 1.5 = 40.67 s, which SM 1.3 rounds to the nearest second, 41, so it starts at 07:36:19. The code of 07:36:00 to 07:36:19 is open.",
-      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"],
-      "erratum": "2026-11-19-sm-2.8-lookback"
+      "note": "The prompt at 07:37:00 has 61 typed characters: 61 / 1.5 = 40.67 s, which SM 1.3 rounds to the nearest second, 41, so it starts at 07:36:19. 07:36:00 to 07:36:19 is X.no_anchor (SM 5.2).",
+      "derived": ["credited_s", "credit", "uncredited", "agent_running_s"]
     }
   ],
   "totals": {
     "credited_s": 91,
     "credited_by_project": {"p_b1de4629be47": 91},
     "credited_by_reason": {"P": 91},
-    "uncredited": {"X.agent_only": 2580},
+    "uncredited": {"X.no_anchor": 29, "X.agent_only": 2600, "X.automated": 20800},
     "agent_running_s": 23400,
     "ai_credited_s": 91,
     "hand_credited_s": 0,
@@ -110,12 +104,12 @@
   },
   "stated": [],
   "approx": {},
-  "errata": ["2026-11-19-sm-2.8-lookback", "2026-11-19-sm-6.6-uncredited-codes"],
+  "errata": ["2026-11-19-sm-2.8-lookback"],
   "notes": [
     "Every row is computed from SM 2.8; SM states no lookback rows, so every bucket row's fields are derived. Every credited second is level C and backfilled.",
     "input_keys is false because the fixture has no presence sample at all. The desktop's key counter (testdata/timelines/6.4) wasn't running before pairtime was.",
     "Lookback credits 91 s of the live fixture's 810: the two prompts' typing time, 50 s and 41 s. No reading counts, because no stop is followed by a human prompt within 600 s: T1 stops at 00:23:20, the run's last turn at 06:10:00, and his next prompt comes at 07:37:00.",
-    "The agent runs 23,400 s and nothing credits any of it, so agent_only_s is 23,400; the live fixture's is 23,180. uncredited sums only the rows whose codes SM decides: T1's seconds to 00:23:00.",
+    "The agent runs 23,400 s and nothing credits any of it, so agent_only_s is 23,400; the live fixture's is 23,180. uncredited sums every bucket row; X.agent_only is T1's seconds to 00:23:20.",
     "The lock at 23:53:10, the unlock at 07:30:00 and the agent's 31 commits aren't in a transcript. Lookback doesn't need them: without a human prompt after the run, the night credits nothing either way.",
     "The agent events replay to ai_logged_s 23520 under min(gap, 120 s) (SM 5.4). DESIGN 6.2 D5's cap, min(credited, ai_logged / 3), is the 91 s credited."
   ]

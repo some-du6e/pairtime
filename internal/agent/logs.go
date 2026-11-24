@@ -602,6 +602,30 @@ func (h *adapterHost) takeBatch(t *tailers.Tailer, b tailers.Batch) int {
 	return len(b)
 }
 
+// logsHeld is what the ledger holds for the log records takeLine writes
+// (heldLogs), read from the ledger the first time a line comes, which is
+// once the writer is there, from heldLogsWindow before the newest batch an
+// earlier run sealed, as the writer found the ledger at its Open
+// (ledger.Writer.Opened), on. A ledger that can't be read gives none, which
+// the agent's log notes. It runs on the adapters' worker.
+func (h *adapterHost) logsHeld() *heldLogs {
+	if h.logHeld == nil {
+		h.mu.Lock()
+		w := h.writer
+		h.mu.Unlock()
+		var anchor uint64
+		if w != nil {
+			anchor = w.Opened()
+		}
+		held, err := loadHeldLogs(h.a.dirs.Ledger(), anchor, wallNow())
+		if err != nil {
+			h.a.log.Warn("couldn't read what the ledger holds, so a log line a replay reads again may make its record twice", "err", err)
+		}
+		h.logHeld = held
+	}
+	return h.logHeld
+}
+
 // takeLine has line's adapter parse it and writes its records, and reports
 // whether it took the line. It doesn't when the line's folder's project is
 // still being worked out, when hook calls of its session wait for theirs,
@@ -685,12 +709,29 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		h.count(func() { st.Lines++ })
 	}
 	due := false
+	held := h.logsHeld()
 	for i, r := range recs {
 		key := r.LogKey
 		if key == "" {
 			key = fmt.Sprintf("%d.%d", ll.Offset, i)
 		}
 		r.Event.EventID = h.logEventID(r.Event.T, ll.File, key)
+		if held.has(r.Event.EventID) {
+			// The ledger holds this record already: a replay read its line
+			// again, as a crash re-reads the lines taken since state.json's
+			// last save, or a restart's resume, a Rewind or a relocate reads
+			// one it had. Written again it would count twice (D-late-local
+			// point 5).
+			h.count(func() { st.Repeats++ })
+			continue
+		}
+		if held.wasDropped(r.Event.EventID) {
+			// The ledger dropped this record earlier in this run, as made in
+			// a local-only stretch (ledger.ErrLateLocal), and would drop it
+			// again: a replay of it is neither a repeat of a record the
+			// ledger holds nor a second drop.
+			continue
+		}
 		if start, ok := r.Event.Data.(*event.SessionStart); ok && !ll.Replay {
 			r = h.tiedStart(r, start)
 		}
@@ -699,8 +740,15 @@ func (h *adapterHost) takeLine(t *tailers.Tailer, line tailers.Line) bool {
 		// those reads the lines again, to the same event_ids. A log line has
 		// no sender's stamp of its own (ledger.Input.Sent).
 		r.Late = line.Lookback > 0
-		if !h.write(st, r, clock.Stamp{}) && h.writerDown() {
-			return false
+		switch h.write(st, r, clock.Stamp{}) {
+		case writeTaken:
+			held.add(r.Event.EventID, wallNow())
+		case writeDropped:
+			held.drop(r.Event.EventID, wallNow())
+		case writeRefused:
+			if h.writerDown() {
+				return false
+			}
 		}
 		switch r.Event.Kind() {
 		case event.KindSessionStart, event.KindPromptSubmit, event.KindAgentStop:

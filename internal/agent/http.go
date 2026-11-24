@@ -91,7 +91,8 @@ type ledgerReply struct {
 	// life: made while config.toml said local-only, they reached it only
 	// after it had sealed a batch online since, so they never upload
 	// (ledger.Status.LateLocal; D-late-local). It counts every writer's
-	// drops: the adapters', presence's and the git watcher's.
+	// drops: the adapters', presence's and the git watcher's. A log line
+	// read again after a restart is dropped, and counted, again (heldLogs).
 	LateLocal uint64 `json:"late_local"`
 }
 

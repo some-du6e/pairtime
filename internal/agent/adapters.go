@@ -302,8 +302,11 @@ type adapterHost struct {
 	logTracks uint64
 	logParked int
 	// logRefused says a step that couldn't write to the ledger answered
-	// batches with none taken (refuseLogs).
+	// batches with none taken (refuseLogs), and logHeld is what the ledger
+	// holds for the log records takeLine writes, nil until the first line
+	// (logsHeld).
 	logRefused bool
+	logHeld    *heldLogs
 	// Under mu: sessKeys keys sessions as the adapters do, once K_session
 	// is known, tieTried is when tieLive last tried each session, and
 	// firstStarts how each session's first session.start went (tiedStart).
@@ -342,7 +345,9 @@ type harnessStats struct {
 	WriteFailures uint64 `json:"write_failures,omitempty"`
 	// LateLocal counts records the ledger writer dropped: made while
 	// config.toml said local-only, they reached it only after it sealed a
-	// batch online since, so they never upload (ledger.ErrLateLocal).
+	// batch online since, so they never upload (ledger.ErrLateLocal). A log
+	// line's replay in the same run counts once (heldLogs.dropped), and one
+	// after a restart counts again.
 	LateLocal uint64 `json:"late_local,omitempty"`
 	// Ignored counts calls and log lines from a folder out of pairtime,
 	// which make no record (DESIGN 8.8).
@@ -358,6 +363,10 @@ type harnessStats struct {
 	// write, lines too long to read (DESIGN 5.3; WP-AD3).
 	Lines        uint64 `json:"lines,omitempty"`
 	LineFailures uint64 `json:"line_failures,omitempty"`
+	// Repeats counts the records of log lines a replay read again that the
+	// ledger already holds, which the adapter left out, so none counts twice
+	// (heldLogs). A record the ledger dropped is no repeat.
+	Repeats uint64 `json:"repeats,omitempty"`
 }
 
 // adaptersReply is the adapters' part of GET /v1/status.
@@ -1646,7 +1655,7 @@ func (h *adapterHost) parse(c hostCall) {
 	h.hint(c)
 	due, refused := false, false
 	for _, r := range recs {
-		if !h.write(c.st, r, sentOf(c.d)) {
+		if h.write(c.st, r, sentOf(c.d)) == writeRefused {
 			refused = true
 		}
 		switch r.Event.Kind() {
@@ -1727,9 +1736,24 @@ func (h *adapterHost) holdBackNow() {
 	h.holding = nil
 }
 
+// writeResult is what the ledger did with a record write handed it.
+type writeResult int
+
+const (
+	// writeRefused is a record the ledger refused, as a writer that stopped
+	// after a failure refuses every one.
+	writeRefused writeResult = iota
+	// writeTaken is a record the ledger holds.
+	writeTaken
+	// writeDropped is a record the ledger left out as made in a local-only
+	// stretch that came after a batch was sealed online since
+	// (ledger.ErrLateLocal), whose work is done.
+	writeDropped
+)
+
 // write writes one record to the ledger, with its content and its call's
 // own stamp (sentOf) beside the event, tells focus and the git watcher what
-// it says, and reports whether the ledger took it. Every record of every
+// it says, and reports what the ledger did with it. Every record of every
 // path comes here: a hook call's, live or spooled, and a log line's, a
 // transcript's or lookback's. So a prompt.submit goes through the apps
 // component, which drops the relay and guest an adapter put on it, marks
@@ -1738,21 +1762,28 @@ func (h *adapterHost) holdBackNow() {
 // for a prompt of a session an agent app's server started, asks the app's
 // reader for them before the text reaches the writer (apps.go). A
 // session.start tells it whether such a server started the session.
-func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stamp) bool {
+func (h *adapterHost) write(st *harnessStats, r adapters.Record, sent clock.Stamp) writeResult {
 	ev := r.Event
 	if ev.EventID == "" {
 		ev.EventID = event.NewEventID(time.UnixMilli(ev.T))
 	}
 	apps := h.a.appsHost()
 	if _, ok := ev.Data.(*event.PromptSubmit); ok {
-		return apps.prompt(ev, r.Text, r.Late, func(ev event.Event) bool { return h.writeEvent(st, r, ev, sent) })
+		// apps.prompt writes the prompt once on every path, and reports
+		// whether the ledger holds it; res keeps what the ledger did.
+		res := writeRefused
+		apps.prompt(ev, r.Text, r.Late, func(ev event.Event) bool {
+			res = h.writeEvent(st, r, ev, sent)
+			return res == writeTaken
+		})
+		return res
 	}
 	apps.noteRecord(ev)
 	return h.writeEvent(st, r, ev, sent)
 }
 
 // writeEvent is write for ev, r's event with its event_id set.
-func (h *adapterHost) writeEvent(st *harnessStats, r adapters.Record, ev event.Event, sent clock.Stamp) bool {
+func (h *adapterHost) writeEvent(st *harnessStats, r adapters.Record, ev event.Event, sent clock.Stamp) writeResult {
 	h.mu.Lock()
 	w := h.writer
 	h.mu.Unlock()
@@ -1770,7 +1801,7 @@ func (h *adapterHost) writeEvent(st *harnessStats, r adapters.Record, ev event.E
 		h.count(func() { st.LateLocal++ })
 		h.a.log.Info("a record made while config.toml said local-only came after the computer uploaded again, so the ledger dropped it",
 			"kind", ev.Kind(), "made", time.UnixMilli(ev.T).UTC())
-		return true
+		return writeDropped
 	}
 	if err != nil {
 		h.count(func() {
@@ -1778,7 +1809,7 @@ func (h *adapterHost) writeEvent(st *harnessStats, r adapters.Record, ev event.E
 			st.LastFailure = clip(fmt.Sprintf("the ledger refused a %s record: %v", ev.Kind(), err))
 		})
 		h.a.setProblem("adapters.ledger", fmt.Sprintf("the ledger refused a %s record of a hook call: %v", ev.Kind(), err))
-		return false
+		return writeRefused
 	}
 	h.count(func() {
 		st.Records++
@@ -1802,7 +1833,7 @@ func (h *adapterHost) writeEvent(st *harnessStats, r adapters.Record, ev event.E
 			g.noteCommand(r, t)
 		}
 	}
-	return true
+	return writeTaken
 }
 
 // statsOf returns the counts of harness name, or the ones of calls no

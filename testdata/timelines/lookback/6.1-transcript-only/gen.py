@@ -106,8 +106,7 @@ for k in range(1, CYCLES + 1):
     # Cycle 1's first 40 s follow no stop. Every later cycle's lie between
     # the stop before them and their prompt, where only the cap stops the
     # reading.
-    row(0, credit={P: {"P": 20}}, uncredited=None, codes=["X.no_anchor"] if k == 1 else ["X.bucket_cap"],
-        erratum=ER, note=note0)
+    row(0, credit={P: {"P": 20}}, uncredited={"X.no_anchor": 40} if k == 1 else {"X.bucket_cap": 40}, note=note0)
     row(1, credit={P: {"P": 60}}, uncredited={})
     row(2, credit={P: {"P": 60}}, uncredited={})
     row(3, credit={P: {"P": 60}}, uncredited={})
@@ -126,19 +125,19 @@ for k in range(1, CYCLES + 1):
                   "cycle reads like the others.")
         row(6, credit={P: {"READ": 30}}, uncredited={"X.agent_only": 30}, agent=30, note=n6)
         row(7, credit={P: {"READ": 60}}, uncredited={})
-        row(8, credit={P: {"READ": 30}}, uncredited=None, codes=["X.bucket_cap"], erratum=ER,
+        row(8, credit={P: {"READ": 30}}, uncredited={"X.bucket_cap": 30},
             note="The 120 s of reading end at 14:08:30. The turn's output would last to the next prompt's "
-                 "lead, so only the cap keeps the other 30 s from being read: X.bucket_cap."
+                 "lead, so only the cap keeps the other 30 s from being read: X.bucket_cap (SM 5.2)."
             if k == 1 else None)
         exp.row(fx.hhmm(C + 9 * 60_000), fx.hhmm(C + 12 * 60_000), bucket=False, sm="2.8; " + SEEN.format(
             "14:09 to 14:11") + ("" if k == 1 else SAME), derived=["bucket"],
             note="Nothing is credited and no agent runs, so these minutes have no bucket (SM 5.1). The live "
                  "fixture's browser run and commit or hand edit leave no record in a transcript." if k == 1 else None)
     else:
-        row(6, credit={}, uncredited=None, codes=["X.agent_only", "X.no_anchor"], agent=30, erratum=ER,
+        row(6, credit={}, uncredited={"X.agent_only": 30, "X.no_anchor": 30}, agent=30,
             note="Cycle 15's turn stops at 16:54:30 and the transcript holds no later prompt, so its reading "
-                 "doesn't count (SM 2.8). 16:54:00 to 16:54:30 is X.agent_only; the code of the 30 s after "
-                 "the stop is open.")
+                 "doesn't count (SM 2.8). 16:54:00 to 16:54:30 is X.agent_only, and the 30 s after the stop "
+                 "are X.no_anchor (SM 5.2).")
         exp.row(fx.hhmm(C + 7 * 60_000), fx.hhmm(C + 12 * 60_000), bucket=False,
                 sm="2.8; " + SEEN.format("14:07 to 14:11") + SAME, derived=["bucket"],
                 note="No reading, no anchor and no agent, so no bucket.")
@@ -147,11 +146,12 @@ for k in range(1, CYCLES + 1):
 rp = lb.Replay(events, T0, END)
 lb.check_rows(exp, rp, {S: P})
 tl.check(not rp.conflicts, "one session, so no second is wanted twice")
-# The erratum's point 2. Outside the agent's turns, the cap cuts 30 s after
-# each of cycles 1 to 14's reading and the first 40 s of cycles 2 to 15;
-# nothing covers cycle 1's first 40 s or the 30 s after cycle 15's stop.
-kinds = lb.uncredited_kinds(rp, T0, END)
-tl.check(kinds == {"agent": 15 * 125, "capped": 14 * (30 + 40), "uncovered": 40 + 30}, f"uncredited seconds {kinds}")
+# SM 5.2's codes. The cap cuts 30 s after each of cycles 1 to 14's reading
+# and the first 40 s of cycles 2 to 15; nothing covers cycle 1's first 40 s
+# or the 30 s after cycle 15's stop.
+codes = lb.uncredited_codes(rp, T0, END)
+tl.check(codes == {"X.agent_only": 15 * 125, "X.bucket_cap": 14 * (30 + 40), "X.no_anchor": 40 + 30},
+         f"uncredited seconds {codes}")
 
 totals = exp.totals()
 by_reason = totals["credited_by_reason"]
@@ -191,8 +191,8 @@ expected = exp.doc(
         "derived. Every credited second is level C and backfilled.",
         "input_keys is false because the fixture has no presence sample at all. The Mac reports key presses "
         "(testdata/timelines/6.1 has idle_keys_s on every sample), but no sampler ran before pairtime did.",
-        "uncredited sums only the rows whose codes SM decides. agent_only_s is the agent's 2,250 s less the "
-        "25 s of PA credited inside each turn: 1,875. The open codes are the erratum's point 2.",
+        "uncredited sums every bucket row. agent_only_s is the agent's 2,250 s less the 25 s of PA credited "
+        "inside each turn: 1,875, all of them X.agent_only.",
         "Cycles 1 to 14 credit 120 s of reading each, 1,680 s in all, because each stop is followed by the "
         "next prompt 570 s later, inside SM 2.8's 600 s.",
         "The live fixture credits 10,095 s of the same afternoon. Lookback keeps 5,055: no think leads, no "

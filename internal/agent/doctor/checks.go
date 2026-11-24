@@ -317,6 +317,14 @@ func adapterChecks(f Facts) []Check {
 			c.Text = fmt.Sprintf("found; since the agent started, %s and %s of its logs made %s", count(n.Calls, "call", "calls"),
 				count(n.Lines, "line", "lines"), count(n.Records, "record", "records"))
 		}
+		if n.Repeats > 0 {
+			// Not a fault: a replay read lines again, and the ledger had their
+			// records already, so none counts twice. It stays with the counts
+			// when no call or fresh line came, as when only an idle marker's
+			// output came again after a crash, and before any failure and the
+			// request to report it.
+			c.Text += fmt.Sprintf(", and left out %s the ledger already had, of lines it read again", count(n.Repeats, "record", "records"))
+		}
 		// The agent keeps one last failure for both kinds, so it is named
 		// for neither.
 		var trouble []string
@@ -330,7 +338,7 @@ func adapterChecks(f Facts) []Check {
 			trouble = append(trouble, "the ledger refused "+count(n.WriteFailures, "record", "records"))
 		}
 		switch {
-		case n.Calls == 0 && n.Lines == 0 && len(trouble) == 0:
+		case n.Calls == 0 && n.Lines == 0 && n.Repeats == 0 && len(trouble) == 0:
 			c.Text = "found; no hook call has come in since the agent started"
 		case len(trouble) == 0:
 			c.Text += ", with no parse failures"
@@ -347,8 +355,10 @@ func adapterChecks(f Facts) []Check {
 		if n.LateLocal > 0 {
 			// Not a fault: they were made while config.toml said local-only,
 			// so they were never to upload, and the ledger keeps the batch
-			// roots going by leaving them out (D-late-local).
-			c.Text += fmt.Sprintf("; %s made while config.toml said local-only came only after pairtime had uploaded again, so the ledger dropped %s, as nothing recorded in local-only mode may upload",
+			// roots going by leaving them out (D-late-local). Nothing keeps
+			// which it dropped across a restart, so a line read again after
+			// one is dropped, and counted, again.
+			c.Text += fmt.Sprintf("; %s made while config.toml said local-only came only after pairtime had uploaded again, so the ledger dropped %s, as nothing recorded in local-only mode may upload (a log line read again after a restart counts again)",
 				count(n.LateLocal, "record", "records"), itOrThem(n.LateLocal))
 		}
 		if !slices.Contains(f.Adapters, h) {
@@ -369,12 +379,14 @@ func adapterChecks(f Facts) []Check {
 // they were never to upload, and leaving them out keeps the batch roots
 // going. It counts the adapters', presence's and the git watcher's, and
 // the adapter lines give each harness's part since the agent started.
+// Nothing keeps which records were dropped across a restart, so a log line
+// read again after one is dropped, and counted, again.
 func ledgerCheck(f Facts) (Check, bool) {
 	if f.Reach != Reached || f.Agent == nil || f.Agent.Ledger == nil || f.Agent.Ledger.LateLocal == 0 {
 		return Check{}, false
 	}
 	n := f.Agent.Ledger.LateLocal
-	c := Check{Name: "ledger", Result: OK, Text: fmt.Sprintf("has dropped %s made while config.toml said local-only that came only after pairtime had uploaded again, as nothing recorded in local-only mode may upload",
+	c := Check{Name: "ledger", Result: OK, Text: fmt.Sprintf("has dropped %s made while config.toml said local-only that came only after pairtime had uploaded again, as nothing recorded in local-only mode may upload (a log line read again after a restart counts again)",
 		count(n, "record", "records"))}
 	for _, h := range f.Agent.Adapters.Harnesses {
 		if h.LateLocal > 0 {
