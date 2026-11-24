@@ -74,6 +74,18 @@ var Codes = []string{
 	"fixed_by_hand", "long_fight", "loop_caught", "comeback", "new_language", "new_tool",
 }
 
+// hasControl reports whether s holds a C0 control character other than
+// tab, line feed and carriage return. Markdown needs none of them, and
+// JSON writes each as six bytes (#293).
+func hasControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 0x20 && c != '\t' && c != '\n' && c != '\r' {
+			return true
+		}
+	}
+	return false
+}
+
 // isKey reports whether s is an id or a project key: 1 to 128 letters,
 // digits, _ or -, the shape AGENTS.md's opaque keys have.
 func isKey(s string) bool {

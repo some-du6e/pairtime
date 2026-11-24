@@ -17,13 +17,14 @@ Every answer is JSON with `Cache-Control: no-store`. A refusal is `{"error": "<c
 | 400 | `json_invalid` | The body isn't valid UTF-8 |
 | 400 | `id_invalid`, `project_invalid` | An id or project key isn't 1 to 128 letters, digits, `_` or `-` |
 | 400 | `markdown_empty` | A devlog with no Markdown |
+| 400 | `bad_markdown` | Markdown holding a control character other than tab, line feed and carriage return, none of which Markdown needs |
 | 400 | `code_unknown` | A badge code that isn't on the list in 4 |
 | 413 | `markdown_too_large`, `body_too_large` | Markdown over 65,536 bytes, or a body larger than any devlog's |
 | 409 | `limit_reached` | A publish that would take the account past 1,000 devlogs or 8 MiB of Markdown between them (2), or a delete or removal of an id the account doesn't hold while it keeps 1,000 removal records (5) |
 | 409 | `already_shown` | A show of a code the account shows already, under another id (4) |
 | 410 | `removed` | A publish or show of an id the teen deleted or removed in the last 30 days (5) |
 | 429 | `rate_limited` | The device is sending faster than its rate, or another of its requests is still being answered; wait `Retry-After` seconds, then send it again |
-| 503 | `unavailable` | The server couldn't read or write; send it again later |
+| 503 | `unavailable` | The server couldn't read or write; every 503 carries `Retry-After: 5`, as ingest's do, and the request goes again after it |
 
 Each device's requests to the six devlog and badge routes (2 to 5) count against a rate of their own, as ingest counts a device's uploads (SP 8.6): a burst of 30 requests, refilled one every 10 seconds, and one request in flight at a time. A publish or a show counts once its body is in, which has 60 seconds to arrive, as at ingest. The rate is kept apart from the device's upload rate, which only signed requests use up. `GET /api/v1/build-days` (6) isn't counted. The caps on an account's devlogs and removal records are the server's own (#283), so that one device token can't fill the server's disk.
 
@@ -37,7 +38,7 @@ Each device's requests to the six devlog and badge routes (2 to 5) count against
 |---|---|
 | `id` | A random key the client made when the teen clicked Publish. A retry sends the same one |
 | `project` | This device's key of the project the preview names, as ingest's slots name it |
-| `markdown` | The devlog exactly as previewed, at most 65,536 bytes of UTF-8 |
+| `markdown` | The devlog exactly as previewed, at most 65,536 bytes of UTF-8, with no control characters but tab, line feed and carriage return |
 | `ai_assisted` | Whether the teen's agent wrote the draft (DESIGN 5.5) |
 
 `201` answers with the devlog the server stored, in the form `GET` lists it. A publish of an id the account holds already answers `200` with the devlog stored then, and changes nothing, so a retry after a lost answer stores nothing new. A publish of an id in the removal records (5) answers `410` and stores nothing. An account holds at most 1,000 devlogs, with at most 8 MiB (8,388,608 bytes) of Markdown between them: a publish of a new id that would take it past either answers `409 limit_reached` and stores nothing. The devlog's time is when the server received it, set in the transaction that stores it, and it bounds D13's windows: deleting or republishing a devlog moves no frozen window (DESIGN 7.5 step 2).
