@@ -403,6 +403,15 @@ func serve(ctx context.Context, cfg *config.Config, logger *slog.Logger, e *env,
 	public := http.NewServeMux()
 	public.HandleFunc("GET /healthz", ops.Healthz)
 	public.Handle("GET "+serverkeys.DocumentPath, serverkeys.Handler(keysDoc))
+	// The privacy hub's deletion and export (WP-SV13; DESIGN 8.9), on
+	// once privacy_hub.aud names this server to the hub.
+	privacyHub, err := newPrivacyHub(cfg, db, w, logger)
+	if err != nil {
+		return err
+	}
+	if privacyHub != nil {
+		privacyHub.Register(public)
+	}
 	site.Register(public)
 	signIn.Register(public)
 	linking.Register(public)
