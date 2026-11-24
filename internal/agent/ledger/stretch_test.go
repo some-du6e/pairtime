@@ -447,6 +447,78 @@ func TestLearnedOrder(t *testing.T) {
 	}
 }
 
+// TestOrderWall checks the stretches whose wall bounds widen leaves
+// inverted, as after a reboot whose wall clock reads behind the boot
+// before's, besides a learned one (TestLearnedOrder): one that went on
+// across the reboot and that sawOnline ends in the new boot, and the one
+// going on that an older version's row ends at Open, as after a downgrade,
+// by the OS's clock of the boot it was recorded in. Each holds what the
+// wall clock dates before its end and after the newest end of another
+// stretch that the wall clock puts before that end (orderWall).
+func TestOrderWall(t *testing.T) {
+	const boot = "b_wall"
+	// restored is an edge an earlier run recorded at wall in boot b_before,
+	// as Open reads it back in boot (Writer.earlierEdge).
+	restored := func(wall, os int64) edge {
+		return edge{m: moment{wall: wall, run: 1, os: 1, boot: boot}, other: moment{os: os, boot: "b_before"}}
+	}
+	// before is a reading of b_before's clock, as a seal frame records it.
+	before := func(mono int64) *untilOS { return &untilOS{Mono: mono, Boot: "b_before"} }
+	local, online := false, true
+	cases := []struct {
+		name string
+		// stretches returns the writer's stretches once the case's stretch
+		// has ended.
+		stretches func() []stretch
+		// held are events a stretch must hold.
+		held []event.Envelope
+	}{
+		{"a stretch that went on across a reboot, ended by sawOnline in the new boot, whose wall clock reads behind, holds what that boot made in it, and what the wall clock dates after the newest end it puts before the stretch's",
+			func() []stretch {
+				w := &Writer{boot: boot, stretches: []stretch{
+					{to: restored(1_000_000, 50_000), passed: true},
+					{from: restored(1_100_000, 60_000), to: restored(1_200_000, 70_000), passed: true},
+					{from: restored(1_205_000, 75_000), open: true},
+				}}
+				w.sawOnline(edgeAt(moment{wall: 1_110_000, run: 5_000, os: 40_000, boot: boot}))
+				return w.stretches
+			},
+			// A hook call of the new boot, which its own clock puts before the
+			// end though its wall time is before every edge's, and a record
+			// with no monotonic reading, which the wall clock dates between the
+			// first stretch's end and this one's.
+			[]event.Envelope{{T: 950_000, Mono: 35_000, BootID: boot}, {T: 1_090_000}}},
+		{"the stretch going on that an older version's row ends at Open, as after a downgrade, later by the clock of the boot both were recorded in though the wall clock dates it before the stretch began, holds what the wall clock dates after the newest end it puts before that one",
+			func() []stretch {
+				w := &Writer{boot: boot}
+				list := []stretchPayload{
+					{To: 1_000_000, ToOS: before(50_000), Passed: true},
+					{From: 1_100_000, FromOS: before(60_000), To: 1_200_000, ToOS: before(70_000), Passed: true},
+					{From: 1_205_000, FromOS: before(75_000), Open: true},
+				}
+				rows := []rowPayload{
+					{sealPayload: sealPayload{B: 1, SealedAt: 1_206_000, Online: &local, LocalUntil: 1_200_000, LocalUntilOS: before(70_000)}},
+					{sealPayload: sealPayload{B: 2, SealedAt: 1_111_000, Online: &online, LocalUntil: 1_110_000, LocalUntilOS: before(80_000)}},
+				}
+				w.restoreStretches(&batchesFile{base: basePayload{B: 1, FirstSeq: 1}, rows: rows, stretches: list, stretchesRow: 0}, nil)
+				return w.stretches
+			},
+			// A record with no monotonic reading, which the wall clock dates
+			// between the first stretch's end and the end the row recorded.
+			[]event.Envelope{{T: 1_090_000}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ss := c.stretches()
+			for _, e := range c.held {
+				if !slices.ContainsFunc(ss, func(s stretch) bool { return s.holds(e) }) {
+					t.Errorf("no stretch holds %+v: %+v", e, ss)
+				}
+			}
+		})
+	}
+}
+
 // TestRebuiltStretchesKeepTheCap checks that the stretches Open rebuilds
 // from an older version's rows, which recorded none, keep to maxStretches
 // too, with the newest end where the newest row put it.
@@ -1751,14 +1823,46 @@ func TestClockOrder(t *testing.T) {
 // way, with a sweep between or none: the seal frame records the mark
 // (sealPayload.Due), or, with no row left, the sweep's base frame does, and
 // the first batch sealed online after the restart takes it (Batch.Back).
+// It marks only a batch whose records were all made after the restart's
+// Open (Writer.backFrom): a stretch that a seal's local-only read began
+// before the stop, with nothing pending, is in memory only, so the restart
+// erases it, and a record of it that reaches the writer after Open keeps
+// its batch unmarked, by its own times, its sender's stamp, or, for a git
+// change, which goes by the scan that found it, whatever its times say.
 func TestDueMarkOutlastsARestart(t *testing.T) {
 	cases := []struct {
 		name string
 		// sweep has a sweep that drops every row come before the restart.
 		sweep bool
+		// erased, when set, has config.toml go local-only before the stop
+		// with no note the agent hears, read by a seal with nothing pending,
+		// and gives a record of that stretch, made 40 s after the start, or a
+		// git change a scan found after the restart, which reaches the writer
+		// after Open.
+		erased func(r *lateRig) Input
+		// back is whether the first batch sealed online after the restart
+		// takes the mark.
+		back bool
 	}{
-		{"with no sweep before the restart, the local-only batch's seal frame keeps the mark", false},
-		{"with a sweep that drops every row before the restart, its base frame keeps the mark", true},
+		{"with no sweep before the restart, the local-only batch's seal frame keeps the mark, and the first batch sealed online after the restart takes it", false, nil, true},
+		{"with a sweep that drops every row before the restart, its base frame keeps the mark, and the first batch sealed online after the restart takes it", true, nil, true},
+		{"a hook call of a stretch the restart erased, made in it by the OS's clock, keeps the batch it reaches after Open unmarked",
+			false, func(r *lateRig) Input {
+				in := r.presence(40_000)
+				in.Event.Mono, in.Event.BootID = 41_000, lateBoot
+				return in
+			}, false},
+		{"so does a transcript line of that stretch read late, with mono 0, judged by its t alone",
+			false, func(r *lateRig) Input { return r.logged("agent.output", 40_000) }, false},
+		{"so does a hook call the agent timed by its own stamp after Open, whose sender's stamp is of that stretch",
+			false, func(r *lateRig) Input {
+				in := r.presence(61_000)
+				in.Event.Mono, in.Event.BootID = 62_000, lateBoot
+				in.Sent = osclock.Stamp{Wall: time.UnixMilli(testT + 40_000), Mono: 41_000, BootID: lateBoot}
+				return in
+			}, false},
+		{"and so does a git change a scan found after Open, which goes by the scan's time, whenever its commit was made",
+			false, func(r *lateRig) Input { return sampleInput(r.rng, "git.change", testT+61_000, "s_1", "p_web") }, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1779,6 +1883,17 @@ func TestDueMarkOutlastsARestart(t *testing.T) {
 			r.write(r.presence(20_000))
 			first := r.seal()
 			r.held.Store(false)
+			if c.erased != nil {
+				// config.toml goes local-only with no note the agent hears, as
+				// with a symlinked target or a watch that failed, and a seal
+				// with nothing pending reads it: the stretch it begins and the
+				// mark it clears are in memory only.
+				r.at(30_000)
+				r.file.Store(false)
+				if _, ok, err := r.w.Seal(); ok || err != nil {
+					t.Fatalf("the local-only read's seal sealed a batch %v, %v; want nothing to seal", ok, err)
+				}
+			}
 			reopen := int64(60_000)
 			if c.sweep {
 				reopen = 2*sweepDayMS + 60_000
@@ -1787,12 +1902,17 @@ func TestDueMarkOutlastsARestart(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// The agent stops, and starts again with config.toml online.
+			// The agent stops, and starts again with config.toml online, set
+			// so by hand after an erased stretch, which the agent doesn't hear.
 			if err := r.w.Close(); err != nil {
 				t.Fatal(err)
 			}
+			r.file.Store(true)
 			r.at(reopen)
 			r.open()
+			if c.erased != nil {
+				r.write(c.erased(r))
+			}
 			r.write(r.presence(reopen + 1000))
 			b := r.seal()
 			checks := []struct {
@@ -1800,12 +1920,12 @@ func TestDueMarkOutlastsARestart(t *testing.T) {
 				ok   bool
 			}{
 				{"the first batch after the switch back is sealed local-only, for the call still on its way, and takes no mark", !first.Online && !first.Back},
-				{"the first batch sealed online after the restart takes the mark", b.Online && b.Back},
+				{"the first batch sealed online after the restart takes the mark if each of its records was made after Open, and else stays unmarked", b.Online && b.Back == c.back},
 			}
 			for _, ch := range checks {
 				t.Run(ch.name, func(t *testing.T) {
 					if !ch.ok {
-						t.Errorf("no: the first batch online %v, back %v, why %+v; after the restart online %v, back %v", first.Online, first.Back, first.Why, b.Online, b.Back)
+						t.Errorf("no: the first batch online %v, back %v, why %+v; after the restart online %v, back %v, want back %v", first.Online, first.Back, first.Why, b.Online, b.Back, c.back)
 					}
 				})
 			}

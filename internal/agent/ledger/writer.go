@@ -385,6 +385,14 @@ type Writer struct {
 	local, taint, seen, stretchSealed, lastLocal, late, unnoted bool
 	back, notes                                                 uint64
 	until                                                       moment
+	// backFrom is when Open made the mark due again from a seal frame or
+	// the base frame (restoreStretches), zero for a mark a note or the
+	// agent's Seen armed: a batch takes that mark only when each of its
+	// records was made after it (madeAfter). A stretch the running writer
+	// began after its newest seal frame, as at a seal's local-only read
+	// with nothing pending, is in memory only, and a restart erases it with
+	// the mark it cleared, but each record of it was made before Open.
+	backFrom moment
 	// localAt is when the writer last took config.toml as local-only: a
 	// seal's local-only read, a note of a switch to it, or a Seen that says
 	// it (seenLocked).
@@ -428,6 +436,9 @@ type pending struct {
 	sent osclock.Stamp
 	has  bool
 	late bool
+	// scan is set for a git change, whose times are the scan's that found
+	// it, not its commit's (madeAfter).
+	scan bool
 	t    int64
 }
 
@@ -670,6 +681,7 @@ func (w *Writer) Write(in Input) (uint64, error) {
 	}
 	p := &w.pending[len(w.pending)-1]
 	p.env, p.sent, p.has, p.t = held, sent, true, ev.T
+	p.scan = ev.Kind() == event.KindGitChange
 	if late {
 		// No batch was sealed online since the stretch ended, so the record
 		// goes in the run of local-only batches before the first one the
@@ -920,9 +932,9 @@ func (w *Writer) noteLocked(online bool, at edge) bool {
 	}
 	switch {
 	case back && w.back == 0:
-		w.back = w.next
+		w.back, w.backFrom = w.next, moment{}
 	case !online:
-		w.back = 0
+		w.back, w.backFrom = 0, moment{}
 	}
 	if !online {
 		w.localAt = at.m
@@ -1081,7 +1093,7 @@ func (w *Writer) seenLocked(s Seen, at moment, sure bool) bool {
 			w.lateLocked()
 		}
 		if newer && w.back == 0 {
-			w.back = w.next
+			w.back, w.backFrom = w.next, moment{}
 		}
 	}
 	if s.Local {
@@ -1116,6 +1128,30 @@ func (s Seen) moment() moment {
 
 // momentNow is now by each clock a moment holds.
 func (w *Writer) momentNow() moment { return momentAt(w.now(), w.osNow()) }
+
+// madeAfter reports whether each record pending was made after m, by every
+// time Write holds it to (pending): its event's times and its sender's own
+// stamp. A git change goes by the scan that found it, which can come after
+// m whenever its commit was made, so none counts as made after m. A record
+// that isn't an event, as a scorer checkpoint, was made as it was written.
+// A zero m holds nothing back. w.mu is held.
+func (w *Writer) madeAfter(m moment) bool {
+	if m == (moment{}) {
+		return true
+	}
+	for _, p := range w.pending {
+		if !p.has {
+			continue
+		}
+		if p.scan || m.before(p.env) {
+			return false
+		}
+		if !p.sent.Wall.IsZero() && m.before(event.Envelope{T: p.sent.Wall.UnixMilli(), Mono: p.sent.Mono, BootID: p.sent.BootID}) {
+			return false
+		}
+	}
+	return true
+}
 
 // earlier is m, a moment an earlier run of the agent recorded, with the
 // bounds of this run and this boot: every event of this run was made
@@ -1349,9 +1385,11 @@ func (w *Writer) seal() (Batch, bool, error) {
 		due := w.waiting != nil && (w.back > 0 || w.lastLocal) && len(w.pending) > 0
 		wait := w.waitForLocked()
 		var going stretch
-		var goingPrev int64 // the end of the stretch before it (stretch.widen)
+		var goingPrev int64  // the end of the stretch before it (stretch.widen)
+		var others []stretch // the rest, for orderWall
 		if n := len(w.stretches); n > 0 && w.stretches[n-1].open {
 			going, goingPrev = w.stretches[n-1], prevEnd(w.stretches, n-1)
+			others = append([]stretch(nil), w.stretches[:n-1]...)
 		}
 		ends := w.online != nil && (w.local || w.seen)
 		w.mu.Unlock()
@@ -1368,6 +1406,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 			if going.open {
 				going.to, going.open = edgeAt(ended), false
 				going.widen(goingPrev)
+				orderWall(&going, others, -1)
 				wait = append(wait, going)
 			}
 		}
@@ -1452,7 +1491,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 		// noted, as before the watch notes a switch to it: the records
 		// after the note may have come in local-only mode, so no batch
 		// after it is marked (Batch.Back).
-		w.back = 0
+		w.back, w.backFrom = 0, moment{}
 	}
 	if err := w.usable(); err != nil {
 		w.mu.Unlock()
@@ -1490,7 +1529,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 	// stretch yet, or Write would have dropped the event (ErrLateLocal).
 	on := online && !w.taint && !w.late && !waiting
 	sp := sealPayload{B: row.B, FirstSeq: row.FirstSeq, N: row.N, Prev: w.head, Root: row.Root, Head: row.Head,
-		SealedAt: at.UnixMilli(), Online: &on, Back: on && w.back > 0 && row.FirstSeq >= w.back,
+		SealedAt: at.UnixMilli(), Online: &on, Back: on && w.back > 0 && row.FirstSeq >= w.back && w.madeAfter(w.backFrom),
 		LocalUntil: w.until.wall}
 	if !sp.Back {
 		sp.Due = w.back
@@ -1548,7 +1587,7 @@ func (w *Writer) seal() (Batch, bool, error) {
 	w.taint, w.late = false, false
 	w.lastLocal = !on
 	if sp.Back {
-		w.back = 0
+		w.back, w.backFrom = 0, moment{}
 	}
 	w.b, w.head, w.snap, w.sealed = row.B, row.Head, snap, sp.SealedAt
 	w.mu.Unlock()
