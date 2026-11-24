@@ -458,7 +458,7 @@ func spoolCheck(f Facts) Check {
 // it still deletes each on time. The line names each path and the chmod
 // that closes it.
 func exposedCheck(f Facts) Check {
-	c := Check{Name: "private files"}
+	c := Check{Name: "private-files"}
 	switch {
 	case f.GOOS == "windows":
 		c.Result, c.Text = Skip, "the data folder's access list decides who may open the hook calls in it"
