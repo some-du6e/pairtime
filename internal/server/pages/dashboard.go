@@ -136,10 +136,13 @@ type dashPage struct {
 	// page's script polls the snapshot with (WP-SV8); "" on the sample.
 	ETag string
 	// NextDay is when the view's today ends in its time zone, in Unix
-	// milliseconds, on #live: the script fetches the page again then, so
-	// a dashboard left open turns its day at the owner's midnight. 0 on
-	// the sample.
-	NextDay int64
+	// milliseconds, on #live, and NextDayIn how long that was after the
+	// view was read, by the server's clock: the script fetches the page
+	// again once NextDayIn has passed since the page arrived, so a
+	// dashboard left open turns its day at the owner's midnight whatever
+	// the browser's clock says, and tells one midnight from the next by
+	// NextDay. Both 0 on the sample.
+	NextDay, NextDayIn int64
 	// SplitByDevice says a repo used on two computers shows as two
 	// projects (dashboard.View.SplitByDevice).
 	SplitByDevice bool
@@ -1189,7 +1192,9 @@ func (s *Site) ownerPage(v dashboard.View, in SignIn, acct *account, zoneError s
 	// The snapshot's ETag, which the page's script sends when it polls
 	// (WP-SV8): the View the page draws is the one the API answers with.
 	d.ETag = dashboard.ETag(v)
-	d.NextDay = nextLocalDay(v)
+	if d.NextDay = nextLocalDay(v); d.NextDay > 0 {
+		d.NextDayIn = max(d.NextDay-v.AsOf.UnixMilli(), 0)
+	}
 	var body bytes.Buffer
 	if err := s.dash.Execute(&body, d); err != nil {
 		return nil, fmt.Errorf("pages: %w", err)

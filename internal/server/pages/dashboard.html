@@ -19,7 +19,7 @@
 {{- /* #live is what the owner's page's script refetches and puts in place
 when the stream says the numbers moved (WP-SV8): everything but the time
 zone form, whose field the owner may be typing in. */}}
-<div id="live"{{with .ETag}} data-etag="{{.}}"{{end}}{{with .NextDay}} data-next-day="{{.}}"{{end}}>
+<div id="live"{{with .ETag}} data-etag="{{.}}"{{end}}{{if .NextDay}} data-next-day="{{.NextDay}}" data-next-day-in="{{.NextDayIn}}"{{end}}>
 {{- if .Empty}}
 <div class="sample" role="note">
 <p><strong>Nothing counted yet.</strong> Install pairtime on the computer where you run {{.Agent}}, then run <code>pairtime login</code> on it to link it to this account. Your time shows up here within a few minutes of your next prompt to {{.Agent}}.</p>

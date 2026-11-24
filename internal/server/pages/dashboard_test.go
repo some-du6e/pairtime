@@ -797,11 +797,12 @@ func TestNextLocalDay(t *testing.T) {
 			}
 		})
 	}
-	t.Run("the owner's page carries its view's ETag and next local midnight on #live, and the sample neither", func(t *testing.T) {
+	t.Run("the owner's page carries its view's ETag, its next local midnight and how long after the view's read that is on #live, and the sample none", func(t *testing.T) {
 		v := ownerView(t)
 		mux, _ := ownerSite(t, signInOn("U0FAKEVERIFIED"), "u1", fakeSource{v: v}, true, nil)
 		_, page := serve(mux, httptest.NewRequest(http.MethodGet, "/dashboard", nil))
-		want := `<div id="live" data-etag="` + template.HTMLEscapeString(dashboard.ETag(v)) + `" data-next-day="` + strconv.FormatInt(nextLocalDay(v), 10) + `">`
+		next := nextLocalDay(v)
+		want := `<div id="live" data-etag="` + template.HTMLEscapeString(dashboard.ETag(v)) + `" data-next-day="` + strconv.FormatInt(next, 10) + `" data-next-day-in="` + strconv.FormatInt(next-v.AsOf.UnixMilli(), 10) + `">`
 		if !strings.Contains(page, want) {
 			t.Errorf("the owner's page has no %s", want)
 		}

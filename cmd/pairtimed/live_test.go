@@ -113,14 +113,17 @@ func TestLiveServer(t *testing.T) {
 	<-ctx.Done()
 }
 
-// liveDevice is the computer the harness linked: its id, key, token, and
-// the request counter its uploads count up.
+// liveDevice is the computer the harness linked: its id, key, token, the
+// request counter its uploads count up, one upload at a time under mu, and
+// the minute its first upload counted from and which way (liveUpload).
 type liveDevice struct {
 	id    string
 	key   ed25519.PrivateKey
 	token string
 	mu    sync.Mutex
 	req   uint64
+	first time.Time
+	step  time.Duration
 }
 
 // linkDevice links a new computer to the account of the fake HCA's
@@ -220,9 +223,12 @@ func postForm(c *http.Client, u string, form url.Values, v any) error {
 }
 
 // liveUpload is what the spec asks the control server to upload: one
-// minute's revision, minutes before now (after now near midnight, so every
-// minute is today in UTC, the account's zone), crediting seconds, a
-// multiple of 15, to one project as prompting at level A.
+// minute's revision, Minute minutes before the minute of the run's first
+// upload (after it near midnight, so every minute is that day in UTC, the
+// account's zone), crediting seconds, a multiple of 15, to one project as
+// prompting at level A. Counting from the first upload, not from each
+// one's own time, keeps the spec's minutes apart however long its run
+// takes.
 type liveUpload struct {
 	Minute  int     `json:"minute"`
 	Rev     uint32  `json:"rev"`
@@ -262,14 +268,23 @@ func (d *liveDevice) upload(c *http.Client, base string, up liveUpload, now time
 	if up.Seconds < 0 || up.Seconds > 60 || float64(int(up.Seconds/15))*15 != up.Seconds {
 		return 0, nil, errors.New("seconds must be 0, 15, 30, 45 or 60")
 	}
-	minute := now.UTC().Truncate(time.Minute)
-	step := -time.Minute
-	if minute.Add(-3*time.Minute).Day() != minute.Day() {
-		// Near midnight, minutes after now, which ingest takes up to 300 s
-		// ahead.
-		step = time.Minute
+	if up.Minute < 0 || up.Minute > 3 {
+		return 0, nil, errors.New("minute must be 0 to 3")
 	}
-	minute = minute.Add(time.Duration(up.Minute) * step)
+	// One upload at a time, from taking its counter to reading its answer:
+	// ingest refuses a counter at or below one it has already taken
+	// (counter_stale), so two that overlapped could land out of order.
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.first.IsZero() {
+		d.first, d.step = now.UTC().Truncate(time.Minute), -time.Minute
+		if d.first.Add(-3*time.Minute).Day() != d.first.Day() {
+			// Near midnight, minutes after the first, which ingest takes
+			// up to 300 s ahead.
+			d.step = time.Minute
+		}
+	}
+	minute := d.first.Add(time.Duration(up.Minute) * d.step)
 	mb := event.MinuteBucket{
 		V:         "1.0.0",
 		Params:    "sha256:" + strings.Repeat("ab", 32),
@@ -300,10 +315,8 @@ func (d *liveDevice) upload(c *http.Client, base string, up liveUpload, now time
 	raw := gz.Bytes()
 	sum := sha256.Sum256(raw)
 	bodySHA := hex.EncodeToString(sum[:])
-	d.mu.Lock()
 	d.req++
 	reqText := strconv.FormatUint(d.req, 10)
-	d.mu.Unlock()
 	timeText := strconv.FormatInt(now.UnixMilli(), 10)
 	req, err := http.NewRequest(http.MethodPost, base+ingest.BatchesPath, bytes.NewReader(raw))
 	if err != nil {

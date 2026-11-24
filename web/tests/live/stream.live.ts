@@ -129,9 +129,11 @@ test("the time zone form's error page follows the stream too, refetching the das
 	expect(Date.now() - start).toBeLessThan(2000);
 });
 
-test("an open dashboard fetches itself again at its account's next local midnight", async ({ page, request }) => {
+test("an open dashboard fetches itself again at its account's next local midnight, by the server's clock", async ({ page, request }) => {
 	const base = await site(request);
-	await page.clock.install();
+	// The browser's clock starts a day ahead of the server's, which must
+	// change nothing: the page counts the time the server said was left.
+	await page.clock.install({ time: Date.now() + 24 * 3600 * 1000 });
 	const refetches: string[] = [];
 	page.on('request', (r) => {
 		if (r.resourceType() === 'fetch' && new URL(r.url()).pathname === '/dashboard') {
@@ -143,14 +145,55 @@ test("an open dashboard fetches itself again at its account's next local midnigh
 	await expect(live).toHaveAttribute('data-stream', 'open');
 	// The first open's refetch, for what changed since the page was drawn.
 	await expect.poll(() => refetches.length).toBe(1);
-	const next = Number(await live.getAttribute('data-next-day'));
+	const left = Number(await live.getAttribute('data-next-day-in'));
+	expect(left).toBeGreaterThan(0);
+	expect(left).toBeLessThanOrEqual(25 * 3600 * 1000);
 	const now = await page.evaluate(() => Date.now());
-	expect(next - now).toBeGreaterThan(0);
-	expect(next - now).toBeLessThanOrEqual(25 * 3600 * 1000);
 	await page.clock.pauseAt(now + 1000);
-	await page.clock.fastForward(next - now - 2000);
+	// Short of midnight, with 9 s for the refetch to have come back before
+	// now, nothing.
+	await page.clock.fastForward(left - 10_000);
 	expect(refetches).toHaveLength(1);
 	// Past midnight and the minute of spread the refetch may wait.
-	await page.clock.fastForward(2000 + 60_000 + 1000);
+	await page.clock.fastForward(10_000 + 60_000 + 1000);
 	await expect.poll(() => refetches.length).toBeGreaterThan(1);
+});
+
+test('a dashboard whose stream comes back while it polls asks the snapshot once more, so it shows what changed while the stream was away', async ({
+	page,
+	request,
+}) => {
+	// The stream's first keepalive takes 15 s of real time.
+	test.setTimeout(60_000);
+	const base = await site(request);
+	await page.clock.install();
+	// A proxy that holds the stream back until the spec lets it through.
+	let holding = true;
+	await page.route('**/api/v1/stream**', (route) => (holding ? route.abort() : route.continue()));
+	const polls: number[] = [];
+	page.on('response', (r) => {
+		if (new URL(r.url()).pathname === '/api/v1/users/me/dashboard') {
+			polls.push(r.status());
+		}
+	});
+	await signIn(page, base);
+	const live = page.locator('#live');
+	const hero = live.locator('.hero strong');
+	await expect(hero).toHaveText('3m');
+	const now = await page.evaluate(() => Date.now());
+	await page.clock.pauseAt(now + 1000);
+	await page.clock.fastForward(46_000);
+	await expect(live).toHaveAttribute('data-stream', 'polling');
+	await expect.poll(() => polls).toEqual([304]);
+	// While the page polls, an upload, and then the stream gets through.
+	await upload(request, { minute: 3, rev: 1, seconds: 60, state: 'final' });
+	holding = false;
+	// The page's own retry of a refused stream comes within 10 s of its
+	// clock, and its next poll only 30 s after the last, which its clock
+	// never reaches here: only the poll the stream's return makes can show
+	// the upload.
+	await page.clock.fastForward(10_000);
+	await expect(hero).toHaveText('4m', { timeout: 40_000 });
+	await expect(live).toHaveAttribute('data-stream', 'open');
+	expect(polls).toEqual([304, 200]);
 });

@@ -5,9 +5,10 @@
 // of #live in place, so the numbers and the faded pending minutes are
 // always the server's own. When the stream says nothing for 45 s, not even
 // a keepalive, as when a proxy holds it back, the page polls the snapshot
-// every 30 s with If-None-Match until the stream speaks again. It also
-// fetches the dashboard again at the owner's next midnight, so a page left
-// open turns its day.
+// every 30 s with If-None-Match until the stream speaks again, and once
+// more then, for what changed while it was away. It also fetches the
+// dashboard again at the owner's next midnight, by the server's clock, so
+// a page left open turns its day.
 'use strict';
 (() => {
 	if (!document.getElementById('live') || !window.EventSource || !window.fetch || !window.DOMParser) {
@@ -25,6 +26,13 @@
 	// server dropped, or that one midnight turns, don't all ask at once.
 	const spread = 5000;
 	const midnightSpread = 60000;
+	// The midnight refetch is never further off than midnightLongest,
+	// whatever #live says. While #live still shows the day one was made
+	// for, because it failed or the server's day hadn't turned yet, the
+	// next waits midnightFirst at least, doubling up to midnightMost.
+	const midnightLongest = 25 * 3600000;
+	const midnightFirst = 5 * 60000;
+	const midnightMost = 60 * 60000;
 	// A stream the server refused, or that couldn't connect, as while a
 	// restarted server comes back behind its proxy, is tried again after a
 	// wait that starts at retryFirst and doubles up to retryMost, with as
@@ -44,12 +52,23 @@
 	let etag = live().dataset.etag || '';
 	let busy = false;
 	let again = false;
-	let failed = false;
+	// held is a redraw focus holds back, with when it arrived.
 	let held = null;
 	let stopped = false;
 	let retry = 0;
 	let retryTimer = null;
+	// drawn is when the #live on screen arrived, by this page's clock: its
+	// data-next-day-in says how long was left until midnight then, by the
+	// server's.
+	let drawn = Date.now();
 	let midnight = null;
+	// turned is the midnight, by data-next-day, that the last midnight
+	// refetch was made for, tried says one was made since the last redraw,
+	// and midnightWait is how long the next waits at least while #live
+	// shows that day.
+	let turned = '';
+	let tried = false;
+	let midnightWait = 0;
 
 	// stop ends everything once the page is signed out: the page itself
 	// then sends the owner to sign in.
@@ -68,25 +87,42 @@
 	};
 
 	// atMidnight fetches the page again when the day #live shows ends in
-	// the owner's time zone, as #live says.
+	// the owner's time zone: once the time #live said was left when it
+	// arrived has passed, by this page's clock, so a browser clock that's
+	// off moves nothing. A midnight refetch that failed, or came back with
+	// the same day, makes the next wait longer.
 	const atMidnight = () => {
 		clearTimeout(midnight);
-		const next = Number(live().dataset.nextDay);
-		if (!stopped && next > 0) {
-			midnight = setTimeout(() => {
-				refresh();
-			}, Math.max(0, next - Date.now()) + Math.random() * midnightSpread);
+		const el = live();
+		const left = Number(el.dataset.nextDayIn);
+		if (stopped || !el.dataset.nextDay || !Number.isFinite(left)) {
+			return;
 		}
+		let wait = Math.min(Math.max(left - (Date.now() - drawn), 0), midnightLongest);
+		if (el.dataset.nextDay !== turned) {
+			midnightWait = 0;
+		} else {
+			if (tried) {
+				midnightWait = midnightWait ? Math.min(midnightWait * 2, midnightMost) : midnightFirst;
+			}
+			wait = Math.max(wait, midnightWait);
+		}
+		tried = false;
+		midnight = setTimeout(() => {
+			turned = live().dataset.nextDay;
+			tried = true;
+			refresh();
+		}, wait + Math.random() * midnightSpread);
 	};
 
-	// put swaps fresh, the new #live, in place, keeping which details
-	// were open, and takes its ETag, the one of the View it shows. While
-	// focus is inside #live, as on a button, it waits for focus to leave,
-	// so nothing moves under the owner's hand.
-	const put = (fresh) => {
+	// put swaps fresh, the new #live, which arrived at at, in place, keeping
+	// which details were open, and takes its ETag, the one of the View it
+	// shows. While focus is inside #live, as on a button, it waits for focus
+	// to leave, so nothing moves under the owner's hand.
+	const put = (fresh, at) => {
 		const current = live();
 		if (current.contains(document.activeElement)) {
-			held = fresh;
+			held = { el: fresh, at };
 			return;
 		}
 		held = null;
@@ -97,18 +133,21 @@
 		fresh.dataset.stream = current.dataset.stream || '';
 		current.replaceWith(document.adoptNode(fresh));
 		etag = fresh.dataset.etag || etag;
+		drawn = at;
 		atMidnight();
 	};
 	document.addEventListener('focusout', (e) => {
 		if (held && !live().contains(e.relatedTarget)) {
-			put(held);
+			put(held.el, held.at);
 		}
 	});
 
 	// refresh fetches the dashboard again and puts its #live in place.
 	// Calls while one runs make one more run after it. A fetch that fails
-	// is tried once more a few seconds later.
-	const refresh = async () => {
+	// is tried again once, a few seconds later, by a call with retrying
+	// set; when that one fails too, the midnight refetch is armed again, so
+	// a page whose midnight refetch failed still turns its day.
+	const refresh = async (retrying) => {
 		if (stopped) {
 			return;
 		}
@@ -128,6 +167,7 @@
 					redirect: 'manual',
 					headers: { Accept: 'text/html' },
 				});
+				const at = Date.now();
 				if (r.type === 'opaqueredirect' || r.status === 401) {
 					stop();
 					return;
@@ -137,7 +177,7 @@
 				}
 				const fresh = new DOMParser().parseFromString(await r.text(), 'text/html').getElementById('live');
 				if (fresh) {
-					put(fresh);
+					put(fresh, at);
 				}
 				ok = true;
 			} while (again && !stopped);
@@ -146,11 +186,13 @@
 		} finally {
 			busy = false;
 		}
-		if (ok) {
-			failed = false;
-		} else if (!failed && !stopped) {
-			failed = true;
-			refreshSoon(2000 + Math.random() * 3000);
+		if (ok || stopped) {
+			return;
+		}
+		if (retrying) {
+			atMidnight();
+		} else {
+			refreshSoon(2000 + Math.random() * 3000, true);
 		}
 	};
 	// refreshSoon runs refresh after wait, unless one is already due by
@@ -158,7 +200,7 @@
 	// one fetch, and one more at most if events come while it runs.
 	let due = null;
 	let timer = null;
-	const refreshSoon = (wait) => {
+	const refreshSoon = (wait, retrying) => {
 		const at = Date.now() + wait;
 		if (timer !== null && due <= at) {
 			return;
@@ -167,14 +209,15 @@
 		due = at;
 		timer = setTimeout(() => {
 			timer = null;
-			refresh();
+			refresh(retrying);
 		}, wait);
 	};
 
 	// poll asks the snapshot whether anything changed since the View the
-	// page shows, by its ETag, and refreshes the page when it did. The ETag
-	// changes only when the page is redrawn, so a refetch that fails makes
-	// the next poll ask again.
+	// page shows, by its ETag, and refreshes the page when it did, unless
+	// the redraw focus holds back is that View already. The ETag changes
+	// only when the page is redrawn, so a refetch that fails makes the next
+	// poll ask again.
 	const poll = async () => {
 		try {
 			const headers = { Accept: 'application/json' };
@@ -189,7 +232,7 @@
 				stop();
 				return;
 			}
-			if (r.ok) {
+			if (r.ok && !(held && held.el.dataset.etag === r.headers.get('ETag'))) {
 				refresh();
 			}
 		} catch {
@@ -199,12 +242,19 @@
 
 	// heardFrom notes that the stream spoke, an event or a keepalive,
 	// which ends any polling. An open alone doesn't: a proxy that holds the
-	// stream back passes its headers on all the same.
-	const heardFrom = () => {
+	// stream back passes its headers on all the same. Ending polling, it
+	// polls once more, unless the event makes the page refetch anyway, for
+	// what changed while the stream was away, a midnight included, since
+	// the View's ETag changes with its day. The new stream is on its topic
+	// by then, so nothing after is missed.
+	const heardFrom = (refetches) => {
 		heard = Date.now();
 		if (polling !== null) {
 			clearInterval(polling);
 			polling = null;
+			if (!refetches) {
+				poll();
+			}
 		}
 		mark('open');
 	};
@@ -230,14 +280,16 @@
 			refreshSoon(opens === 1 ? 0 : Math.random() * spread);
 		});
 		es.addEventListener('credited', () => {
-			heardFrom();
+			heardFrom(true);
 			refreshSoon(0);
 		});
 		es.addEventListener('resync', () => {
-			heardFrom();
+			heardFrom(true);
 			refreshSoon(Math.random() * spread);
 		});
-		es.addEventListener('keepalive', heardFrom);
+		es.addEventListener('keepalive', () => {
+			heardFrom(false);
+		});
 		es.addEventListener('error', () => {
 			if (es !== source || stopped || es.readyState !== EventSource.CLOSED) {
 				// EventSource tries again itself after a dropped connection.
