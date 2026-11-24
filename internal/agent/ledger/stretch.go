@@ -329,9 +329,15 @@ func (w *Writer) restoreStretches(bf *batchesFile, restored []rowPayload) {
 		// The mark the writer had due when a sweep wrote the base frame
 		// (basePayload.Back), for a stretch end it took that no batch had
 		// taken the mark for yet: no batch has been sealed with the records
-		// from it on since, so it is still due, though the agent's Seen of the
-		// end, which the base frame's moment holds, now moves nothing.
-		w.back = b
+		// from it on since, so it is due again, though the agent's Seen of the
+		// end, which the base frame's moment holds, now moves nothing. It is
+		// due from the next record on, never for one a crash left pending:
+		// the running writer may have cleared the mark after the sweep
+		// without sealing a batch, as a seal's read or a note that found
+		// config.toml local-only does, and a record pending now may have been
+		// made in that stretch, which the crash erased. seenLocked's mark
+		// leaves pending records out the same way.
+		w.back = max(b, w.next)
 	}
 	if end, ok := w.newestEnd(); ok {
 		w.onlineAt = end

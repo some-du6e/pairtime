@@ -1631,6 +1631,108 @@ func TestSweepKeepsWhatOpenFound(t *testing.T) {
 	}
 }
 
+// TestSweepMarkLeavesPendingRecords checks that the mark a sweep's base
+// frame keeps (basePayload.Back) is due again at Open only from the next
+// record on: the running writer can clear the mark after the sweep without
+// sealing a batch, as a seal's read that finds config.toml local-only with
+// nothing pending does, and a record a kill then leaves pending may have
+// been made in that stretch, which no seal frame recorded. The batch Open
+// seals it in takes no mark, so the uploader keeps it in the local-only run.
+func TestSweepMarkLeavesPendingRecords(t *testing.T) {
+	r := newLateRig(t)
+	// The install's stretch, whose batch, 1, is sealed local-only, and the
+	// switch back, noted, which arms the mark for the next record; no batch
+	// is sealed after it.
+	r.note(false)
+	r.write(r.presence(1000))
+	r.take()
+	r.at(10_000)
+	r.note(true)
+	r.pause()
+	// Days later a sweep drops batch 1, and its base frame keeps the mark.
+	r.at(2*sweepDayMS + 1000)
+	if _, _, err := r.w.Sweep(dayOf(time.UnixMilli(testT+2*sweepDayMS)), 0); err != nil {
+		t.Fatal(err)
+	}
+	bf, err := readBatchesFile(filepath.Join(r.dir, batchesName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// config.toml goes local-only, which a seal's read takes with nothing
+	// pending: the mark goes, and a stretch begins, in memory alone.
+	r.at(2*sweepDayMS + 2000)
+	r.file.Store(false)
+	if _, ok, err := r.w.Seal(); ok || err != nil {
+		t.Fatalf("Seal sealed a batch %v, %v; want nothing to seal", ok, err)
+	}
+	// A record made in that stretch, and a kill before the seal it asks for:
+	// the writer's loop stops first, so nothing seals it.
+	w := r.w
+	w.stopOnce.Do(func() {
+		if w.job != nil {
+			w.job.Stop()
+		}
+		close(w.stop)
+	})
+	<-w.done
+	r.at(2*sweepDayMS + 3000)
+	r.write(r.presence(2*sweepDayMS + 3000))
+	abandon(w)
+	// config.toml is online again at the restart, which the agent never
+	// saw go local-only, so its Seen still has the switch back at 10 s.
+	r.file.Store(true)
+	r.seen = Seen{Ended: time.UnixMilli(testT + 10_000), Earlier: true}
+	r.at(2*sweepDayMS + 60_000)
+	r.open()
+	b := r.take()
+	checks := []struct {
+		name string
+		ok   bool
+	}{
+		{"the sweep's base frame keeps the mark due", bf.base.Back > 0},
+		{"the batch Open seals the record the kill left in holds it", len(b.Records) == 1},
+		{"and takes no mark, as the record may be of the stretch the crash erased", !b.Back},
+	}
+	for _, ch := range checks {
+		t.Run(ch.name, func(t *testing.T) {
+			if !ch.ok {
+				t.Errorf("no: the base frame's mark %d; the batch online %v, back %v, with %d records", bf.base.Back, b.Online, b.Back, len(b.Records))
+			}
+		})
+	}
+}
+
+// TestClockOrder checks how clockOrder orders two moments: by a monotonic
+// clock both hold past its start, and else, an earlier run's or boot's
+// start, which Writer.earlier gives every moment an earlier run recorded,
+// before every reading of this run or of that boot past it, whatever the
+// wall clock says; and by the wall clock when nothing orders them.
+func TestClockOrder(t *testing.T) {
+	const boot = "b_now"
+	cases := []struct {
+		name           string
+		a, b           moment
+		before, shared bool
+	}{
+		{"two readings of this run's clock order by it", moment{wall: 2000, run: 500}, moment{wall: 1000, run: 900}, true, true},
+		{"two readings of one boot's clock order by it", moment{wall: 2000, os: 500, boot: boot}, moment{wall: 1000, os: 900, boot: boot}, true, true},
+		{"an earlier run's end with no OS reading comes before an end of this run whose wall clock reads behind",
+			moment{wall: 2000, run: 1}, moment{wall: 1000, run: 900}, true, true},
+		{"and an end of this run comes after it", moment{wall: 1000, run: 900}, moment{wall: 2000, run: 1}, false, true},
+		{"an earlier run's end of an older boot comes before an earlier run's end of this boot whose wall clock reads behind",
+			moment{wall: 2000, run: 1, os: 1, boot: boot}, moment{wall: 1000, run: 1, os: 900, boot: boot}, true, true},
+		{"two earlier runs' ends of older boots share no clock and order by the wall clock",
+			moment{wall: 2000, run: 1, os: 1, boot: boot}, moment{wall: 1000, run: 1, os: 1, boot: boot}, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if before, shared := clockOrder(c.a, c.b); before != c.before || shared != c.shared {
+				t.Errorf("clockOrder = %v, %v; want %v, %v", before, shared, c.before, c.shared)
+			}
+		})
+	}
+}
+
 // dropStretches rewrites the rows of dir's batches.seg from batch from on
 // without the stretches they record, as an older version's rows, which
 // recorded none. The segments keep their seal frames as they are: Open

@@ -71,8 +71,11 @@ type basePayload struct {
 	// Back is the first record of the batch the writer had a mark due for
 	// when the sweep wrote the frame (Writer.back), 0 for none: a stretch
 	// end it took that no batch sealed online since had taken the mark for.
-	// Open keeps it due while no batch has been sealed with the records from
-	// it on (restoreStretches), as the run that took the end would have.
+	// Open makes it due again while no batch has been sealed with the
+	// records from it on, but only from the next record on, as the running
+	// writer can clear the mark after the sweep without sealing a batch, and
+	// a record a crash left pending may be of the stretch that cleared it
+	// (restoreStretches).
 	Back uint64 `json:"back,omitempty"`
 }
 
