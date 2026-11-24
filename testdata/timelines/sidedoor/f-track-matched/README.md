@@ -28,7 +28,7 @@ Karim's AGENTS.md entry doing its job beside hooks. On a Windows laptop, a perso
 
 The hook prompt passes SM 2.2 rule 6 and is substantive, with a lead of 120 + 150 / 1.5 = 220 s. It arrived via `hook` with `input_any` only, so it is level B (DESIGN 6.4).
 
-The track call comes from a session pairtime sees through hooks and a log reader, 4 s after that session's hook prompt. That is within `TRACK_DEDUPE_S` = 30 s, so DESIGN 5.4 records it as `track_matched`: it opens nothing and feeds the compliance counter. It is within `TRACK_LOG_MATCH_S` = 10 s too, so it raises no `track_without_prompt`.
+The track call comes from a session pairtime sees through hooks and a log reader, 4 s after that session's hook prompt. That is within `TRACK_DEDUPE_S` = 30 s, the one window DESIGN 5.4 uses, so the call is `track_matched` and raises no `track_without_prompt`. It opens nothing and feeds the compliance counter. Its `log_match` is `matched` because the transcript tailer holds the user entry within `TRACK_LOG_MATCH_S` = 10 s of the call (DESIGN 5.2), and the outcome doesn't rest on that.
 
 | | Credited |
 |---|---|

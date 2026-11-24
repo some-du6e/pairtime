@@ -223,8 +223,7 @@
       "uncredited": {"X.reroll": 60},
       "agent_running_s": 60,
       "sm": "4.2, Re-roll: alternating A, B, A, B, A is caught at the third A",
-      "derived": ["credit", "uncredited", "agent_running_s"],
-      "erratum": "2026-11-19-sm-6.5-loop-codes"
+      "derived": ["credit", "uncredited", "agent_running_s"]
     }
   ],
   "totals": {
@@ -237,12 +236,12 @@
   },
   "stated": [],
   "approx": {},
-  "errata": ["2026-11-19-sm-6.5-loop-codes"],
+  "errata": [],
   "notes": [
     "SM 4.2 states the outcome, not minute rows: the third A is attempt 3 and discounted as X.reroll, the others are credited. Every row here follows from SM's rules applied to this timeline (README.md).",
     "Each lead is 120 + 60 / 1.5 = 160 s, so it starts 20 s after the prompt before it, and the turn's 20 s bucket base covers those 20 s as SUP.",
     "A3 is discounted, so its lead from 19:42:20 opens no window and B2's bucket is read instead: SUP while B2 runs, READ after. A3 resets the bucket to zero, so its own minute is X.reroll.",
     "excluded_loops_s is the X.reroll seconds (SM 5.3).",
-    "Row 19:45 names 6.5's loop-codes erratum: A3's agent runs and nothing credits the minute, which SM 5.2's wording makes X.agent_only. It is X.reroll if a discount code wins inside a discounted turn (point 2)."
+    "Row 19:45 is X.reroll: scored with no turn discounted, A3's own bucket would have credited every second of the minute, so the minute is what the loop cost and takes A3's code (SM 4.2)."
   ]
 }

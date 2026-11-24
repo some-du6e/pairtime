@@ -147,7 +147,7 @@ func ReadBatches(dir string, from uint64, fn func(Batch) error) error {
 					row.Receipt = &r
 				}
 				batch := Batch{Row: row, SealedAt: time.UnixMilli(sp.SealedAt), Online: sp.online(), Back: sp.Back,
-					LocalUntil: msTime(sp.LocalUntil), Records: recs}
+					LocalUntil: msTime(sp.LocalUntil), Why: localWhy(sp.Why), Records: recs}
 				recs, next, prev = nil, sp.B+1, sp.Head
 				if sp.B >= from {
 					return fn(batch)

@@ -16,15 +16,28 @@ type Status struct {
 	// Mode is local or online (DESIGN 4.2).
 	Mode string `json:"mode"`
 	// Wakeups counts the scheduler's timer firings since the start.
-	Wakeups   uint64    `json:"wakeups"`
-	IPC       IPC       `json:"ipc"`
-	Signals   Signals   `json:"signals"`
-	Adapters  Adapters  `json:"adapters"`
-	Apps      Apps      `json:"apps"`
+	Wakeups  uint64   `json:"wakeups"`
+	IPC      IPC      `json:"ipc"`
+	Signals  Signals  `json:"signals"`
+	Adapters Adapters `json:"adapters"`
+	Apps     Apps     `json:"apps"`
+	// Ledger is what the ledger writer says of its chain, nil while the
+	// ledger isn't open.
+	Ledger    *Ledger   `json:"ledger,omitempty"`
 	Footprint Footprint `json:"footprint"`
 	// Problems is what isn't working, by where it comes from, in words for
 	// the teen.
 	Problems map[string]string `json:"problems,omitempty"`
+}
+
+// Ledger is what the ledger writer says of its chain.
+type Ledger struct {
+	// LateLocal counts the records the writer dropped over the chain's
+	// life: made while config.toml said local-only, they reached it only
+	// after it had sealed a batch online since, so they never upload
+	// (D-late-local). HarnessCounts.LateLocal is each harness's part of it
+	// since the agent started.
+	LateLocal uint64 `json:"late_local"`
 }
 
 // Footprint is what the agent costs the computer since it started, as the
@@ -110,7 +123,11 @@ type HarnessCounts struct {
 	Records       uint64 `json:"records"`
 	ParseFailures uint64 `json:"parse_failures"`
 	WriteFailures uint64 `json:"write_failures,omitempty"`
-	Ignored       uint64 `json:"ignored,omitempty"`
+	// LateLocal counts the records the ledger dropped: made while
+	// config.toml said local-only, they reached it only after it sealed a
+	// batch online since, so they never upload (D-late-local).
+	LateLocal uint64 `json:"late_local,omitempty"`
+	Ignored   uint64 `json:"ignored,omitempty"`
 	// LastRecord is the time of the newest record, in Unix ms.
 	LastRecord int64 `json:"last_record,omitempty"`
 	// LastFailure names the events and fields of the last failure, never

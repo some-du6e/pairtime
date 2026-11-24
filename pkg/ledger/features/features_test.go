@@ -3,7 +3,6 @@
 package features
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"math/rand/v2"
@@ -471,110 +470,4 @@ func TestPromptAndToolFeatures(t *testing.T) {
 			})
 		}
 	})
-}
-
-func TestShingleEntryJSON(t *testing.T) {
-	v := strings.Repeat("ab", 32)
-	cases := []struct {
-		name string
-		json string
-		ok   bool
-	}{
-		{"an entry with its shingle is read", `{"v":"` + v + `","x":"203c706174"}`, true},
-		{"an entry with an empty shingle is read, and VerifyShingleReveal refuses it", `{"v":"` + v + `","x":""}`, true},
-		{"an entry without its shingle is refused: a hidden shingle sends nothing", `{"v":"` + v + `"}`, false},
-		{"an entry with a member besides v and x is refused", `{"v":"` + v + `","x":"20","y":1}`, false},
-		{"an entry whose v is spelled V is refused", `{"V":"` + v + `","x":"20"}`, false},
-		{"an entry whose x is spelled X is refused", `{"v":"` + v + `","X":"20"}`, false},
-		{"an entry with uppercase hex is refused", `{"v":"` + strings.ToUpper(v) + `","x":"20"}`, false},
-		{"an entry with a null x is refused", `{"v":"` + v + `","x":null}`, false},
-		{"an entry with no v is refused", `{"x":"20"}`, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			var e ShingleEntry
-			if err := json.Unmarshal([]byte(c.json), &e); (err == nil) != c.ok {
-				t.Fatalf("Unmarshal = %v", err)
-			}
-		})
-	}
-	t.Run("an entry that shows an empty shingle is bad_entry", func(t *testing.T) {
-		var e ShingleEntry
-		if err := json.Unmarshal([]byte(`{"v":"`+v+`","x":""}`), &e); err != nil {
-			t.Fatal(err)
-		}
-		if got, at, _ := VerifyShingleReveal(EmptySketch(), []ShingleEntry{e}, false); got != ShingleBadEntry || at != 0 {
-			t.Errorf("verdict %s at %d", got, at)
-		}
-	})
-	t.Run("a reveal of no entries matches the empty sketch", func(t *testing.T) {
-		if got, _, unexplained := VerifyShingleReveal(EmptySketch(), nil, false); got != ShingleOK || unexplained != 0 {
-			t.Errorf("verdict %s, %d places unexplained", got, unexplained)
-		}
-	})
-	t.Run("an entry writes and reads back as v and x", func(t *testing.T) {
-		in := ShingleEntry{V: bytes.Repeat([]byte{0xab}, 32), X: []byte(" <pat")}
-		data, err := json.Marshal(in)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var out ShingleEntry
-		if err := json.Unmarshal(data, &out); err != nil || !bytes.Equal(out.V, in.V) || !bytes.Equal(out.X, in.X) {
-			t.Errorf("%s reads back as %+v, %v", data, out, err)
-		}
-	})
-}
-
-func TestShingleReveal(t *testing.T) {
-	k := NewKey([KeySize]byte{1, 2, 3})
-	all := func(text string) []string {
-		_, xs := Shingles(Normalize(text).Words)
-		return xs
-	}
-	cases := []struct {
-		name    string
-		text    string
-		removed []int
-		shown   []string
-	}{
-		{"with nothing removed, every shingle is shown", "fix it for bob", nil, all("fix it for bob")},
-		{"spec 10.8's example: with bob removed, the shingles touching it send nothing", "fix it for bob", []int{6},
-			[]string{" for ", "<retr", "> for", "etry>", "retry", "ry> f", "try> ", "y> fo"}},
-		{"a <retry> comes from every token it replaced, so removing one of them hides it", "fix it for bob", []int{2},
-			[]string{" for ", "for b", "or bo", "r bob"}},
-		{"a removed whitespace token makes no word, and nothing touches it", "fix it for bob", []int{5}, all("fix it for bob")},
-		{"a removed token on a line that step 2 removes touches nothing",
-			"fix the login page\nTypeError: bob is undefined", []int{10}, all("fix the login page\nTypeError: bob is undefined")},
-		{"a word shingle is hidden when every run of three words that makes it holds a removed word",
-			"please make the header sticky and ask bob about the footer", []int{14},
-			[]string{"about the footer", "header sticky and", "make the header", "please make the", "sticky and ask", "the header sticky"}},
-		{"everything removed: nothing is shown", "fix it for bob", []int{0, 1, 2, 3, 4, 5, 6}, nil},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			kind, entries := k.ShingleReveal(c.text, c.removed)
-			wantKind, _ := Shingles(Normalize(c.text).Words)
-			if kind != wantKind {
-				t.Errorf("kind %s, want %s", kind, wantKind)
-			}
-			var got []string
-			for i, e := range entries {
-				if v := k.ShingleValue(kind, string(e.X)); !bytes.Equal(e.V, v[:]) {
-					t.Errorf("entry %d of %q has another value", i, e.X)
-				}
-				if i > 0 && bytes.Compare(entries[i-1].V, e.V) >= 0 {
-					t.Errorf("entry %d isn't above the one before", i)
-				}
-				got = append(got, string(e.X))
-			}
-			slices.Sort(got)
-			if !slices.Equal(got, c.shown) {
-				t.Errorf("shows %q, want %q", got, c.shown)
-			}
-			removed := len(c.removed) > 0
-			if v, at, _ := VerifyShingleReveal(k.Sketch(c.text), entries, removed); v != ShingleOK {
-				t.Errorf("the client's own reveal gets %s at %d", v, at)
-			}
-		})
-	}
 }

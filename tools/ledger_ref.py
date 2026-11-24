@@ -25,7 +25,7 @@ and shares nothing with pkg/ledger, which is what lets it check pkg/ledger.
         Recompute every value in FILE, a file in the vectors format (spec
         section 11): keys, digests, nonces, entries, roots, heads, signed
         messages and inclusion proofs; content commitments, reveal
-        verdicts, normalizations, features, CC8 reveals and draws. Print
+        verdicts, normalizations, features and draws. Print
         each mismatch.
 
 Exit status: 0 when everything matches, 1 when something doesn't, 2 for a
@@ -1116,73 +1116,6 @@ def tool_features(k_feat, hunks, command):
     return f
 
 
-# 10.8 What CC8 reveals: the value and text of every distinct shingle that
-# touches no removed span, ascending by value. A shingle that touches one
-# sends nothing.
-
-SHINGLE_VERDICTS = ("ok", "bad_entry", "sketch")
-
-
-def shown_shingles(words, sources, removed_tokens):
-    """(tag, shown, hidden): the text's shingles split by whether they touch
-    a removed span. A shingle touches one when every place it occurs holds
-    a code point of a word that comes from a removed token; the spaces
-    between words come from no token."""
-    dirty = [bool(src & removed_tokens) for src in sources]
-    tag, xs = shingles(words)
-    clean = set()
-    if tag == WORD_SHINGLE:
-        for i in range(len(words) - 2):
-            if not any(dirty[i:i + 3]):
-                clean.add(" ".join(words[i:i + 3]))
-    else:
-        owner = []
-        for i, w in enumerate(words):
-            if i:
-                owner.append(None)
-            owner += [i] * len(w)
-        text = " ".join(words)
-        size = min(5, len(text))
-        for i in range(len(text) - size + 1 if text else 0):
-            if not any(owner[k] is not None and dirty[owner[k]] for k in range(i, i + size)):
-                clean.add(text[i:i + size])
-    return tag, [x for x in xs if x in clean], [x for x in xs if x not in clean]
-
-
-def shingle_reveal(k_feat, text, removed_tokens):
-    """The CC8 reveal the client sends for text whose reveal removed the
-    tokens removed_tokens (numbered from 0): (kind, [(v, x)]) ascending by
-    v, for the shingles that touch no removed span."""
-    _, words, sources = normalize_sources(text)
-    tag, shown, _ = shown_shingles(words, sources, frozenset(removed_tokens))
-    return SHINGLE_KINDS[tag], sorted((shingle_value(k_feat, tag, x), x.encode("utf-8")) for x in shown)
-
-
-def verify_shingle_reveal(mh, entries, removed):
-    """entries are (v, x). removed says whether the text's reveal removed a
-    span. Returns (verdict, index, unexplained): the index of the bad
-    entry, and for ok the number of places no shown value reaches."""
-    prev = None
-    for i, (v, x) in enumerate(entries):
-        if len(v) != 32 or (prev is not None and not prev < v):
-            return "bad_entry", i, None
-        if not x or utf8_or_none(x) is None:
-            return "bad_entry", i, None
-        prev = v
-    shown = sketch([v for v, _ in entries])
-    if (any(a < b for a, b in zip(shown, mh)) if removed else shown != mh):
-        return "sketch", None, None
-    return "ok", None, sum(1 for a, b in zip(shown, mh) if a != b)
-
-
-def utf8_or_none(x):
-    """x decoded, or None when it isn't UTF-8."""
-    try:
-        return x.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-
-
 # 10.9 The challenge draw of DESIGN 7.5 step 4.
 
 COMMIT_DRAW = 2
@@ -1727,40 +1660,6 @@ def check_jaccard(rep, obj, path):
     rep.count("jaccard pairs")
 
 
-def check_shingle_reveal(rep, obj, path):
-    fields(obj, path, ("mh", "kind", "removed", "entries", "verdict"),
-           ("unexplained", "k_dev", "text", "removed_tokens", "note"))
-    mh = get_sketch(obj, "mh", path)
-    kind = get_choice(obj, "kind", path, tuple(SHINGLE_KINDS.values()))
-    removed = obj["removed"]
-    if not isinstance(removed, bool):
-        raise FormatError("%s.removed: want true or false" % path)
-    entries = []
-    for i, e in enumerate(get_list(obj, "entries", path)):
-        ep = "%s.entries[%d]" % (path, i)
-        fields(e, ep, ("v", "x"))
-        entries.append((get_hex(e, "v", ep), get_hex(e, "x", ep)))
-    got, _, unexplained = verify_shingle_reveal(mh, entries, removed)
-    rep.same(path + ".verdict", get_choice(obj, "verdict", path, SHINGLE_VERDICTS), got)
-    if ("unexplained" in obj) != (got == "ok"):
-        rep.fail(path + ".unexplained", "comes with an ok verdict, and only with one")
-    elif got == "ok":
-        rep.same(path + ".unexplained", get_int(obj, "unexplained", path, 0, MINHASH_SIZE), unexplained)
-    build = ("k_dev", "text", "removed_tokens")
-    if any(k in obj for k in build):
-        if not all(k in obj for k in build):
-            raise FormatError("%s: k_dev, text and removed_tokens come together" % path)
-        k_feat = derive_keys(get_hex(obj, "k_dev", path, 32))["k_feat"]
-        text = get_hex_text(obj, "text", path)[1]
-        tokens = [get_int({"t": t}, "t", "%s.removed_tokens[%d]" % (path, i)) for i, t in
-                  enumerate(get_list(obj, "removed_tokens", path))]
-        want_kind, want = shingle_reveal(k_feat, text, tokens)
-        rep.same(path + ".kind", kind, want_kind)
-        rep.same(path + ".entries", [[v.hex(), x.hex()] for v, x in entries], [[v.hex(), x.hex()] for v, x in want])
-        rep.same(path + ".removed", removed, bool(tokens))
-    rep.count("shingle reveals")
-
-
 def check_draw(rep, obj, path):
     fields(obj, path, ("r", "metadata", "seed", "pool", "drawn"), ("commits", "drawn_commits", "note"))
     seed = draw_seed(get_hex(obj, "r", path, 32), get_hex(obj, "metadata", path))
@@ -1824,7 +1723,6 @@ CONTENT_SECTIONS = (
     ("features", check_features),
     ("diffs", check_diff),
     ("jaccard", check_jaccard),
-    ("shingle_reveals", check_shingle_reveal),
     ("draws", check_draw),
     ("challenge_k", check_challenge_k),
 )
@@ -1869,7 +1767,7 @@ def check_document(doc):
 def summary(counts):
     order = ("key sets", "digests", "chains", "batches", "records", "records of later kinds", "days", "day rows", "inclusion proofs",
              "lowercase tables", "commitments", "reveals", "normalizations", "feature sets", "diffs", "jaccard pairs",
-             "shingle reveals", "draws", "challenge sizes")
+             "draws", "challenge sizes")
     return ", ".join("%d %s" % (counts[k], k) for k in order if k in counts)
 
 
@@ -2442,81 +2340,6 @@ def make_features(k_dev):
     return out
 
 
-def shingle_reveal_json(note, mh, kind, removed, entries, verdict, build=None):
-    """A CC8 reveal vector. build is (k_dev, text, removed_tokens) for a
-    reveal that is what the client would send for that text."""
-    got, _, unexplained = verify_shingle_reveal(mh, entries, removed)
-    if got != verdict:
-        raise LedgerError("shingle reveal %s is %s, not %s" % (note, got, verdict))
-    out = {"note": note, "mh": sketch_bytes(mh).hex(), "kind": kind, "removed": removed}
-    if build is not None:
-        k_dev, text, tokens = build
-        out.update(k_dev=k_dev.hex(), text=text.encode("utf-8").hex(), removed_tokens=sorted(tokens))
-    out["entries"] = [{"v": v.hex(), "x": x.hex()} for v, x in entries]
-    out["verdict"] = got
-    if got == "ok":
-        out["unexplained"] = unexplained
-    return out
-
-
-def make_shingle_reveals(features):
-    """CC8 reveals of some of the prompts above, whole and with spans
-    removed, and one of each failure."""
-    out = []
-    k_dev = bytes.fromhex(features[0]["k_dev"])
-    k_feat = derive_keys(k_dev)["k_feat"]
-
-    def client(note, text, tokens, prompt_class="substantive"):
-        f, _ = prompt_features(k_feat, text, prompt_class)
-        kind, entries = shingle_reveal(k_feat, text, tokens)
-        mh = sketch_from_bytes(bytes.fromhex(f["mh"]))
-        out.append(shingle_reveal_json(note, mh, kind, bool(tokens), entries, "ok", (k_dev, text, tokens)))
-        return mh, kind, entries
-
-    for item in features[:5] + features[7:8]:
-        client("%s: every shingle shown" % item["note"], bytes.fromhex(item["text"]).decode("utf-8"), [])
-    example = bytes.fromhex(features[0]["text"]).decode("utf-8")
-    client("the worked example with src/nav.js:12, token 7, removed: shingles touching <path> send nothing",
-           example, [6])
-    client("fix it for bob with bob removed", "fix it for bob", [6])
-    client("a shingle shown because one place it occurs is made of kept tokens", "hi bob hi bob", [6])
-    client("a word shingle next to a removed token goes, and the rest stay",
-           "please make the header sticky and ask bob about the footer", [14])
-    client("a removed token on a line that step 2 removes touches nothing",
-           "fix the login page\nTypeError: bob is undefined", [10])
-    client("everything removed: nothing is shown", example, list(range(15)))
-
-    # Failures, on the worked example shown whole.
-    mh, kind = sketch_from_bytes(bytes.fromhex(features[0]["f"]["mh"])), "char5"
-    _, entries = shingle_reveal(k_feat, example, [])
-
-    def fail(note, entries, verdict, removed=False):
-        out.append(shingle_reveal_json(note, mh, kind, removed, entries, verdict))
-
-    # A value that is the minimum somewhere, so changing it shows.
-    pick = next(i for i, (v, _) in enumerate(entries) if any(
-        h == m for h, m in zip(minhash_values(v), mh)))
-    changed = sorted(entries[:pick] + [(sha256(b"not the shingle's value"), entries[pick][1])] + entries[pick + 1:])
-    fail("a value that sets a minimum, replaced", changed, "sketch")
-    fail("out of order", entries[1:2] + entries[:1] + entries[2:], "bad_entry")
-    fail("a value twice", entries[:1] + entries[:1] + entries[1:], "bad_entry")
-    fail("out of order, and a shingle missing: bad_entry comes before sketch",
-         entries[1:2] + entries[:1] + entries[3:], "bad_entry")
-    fail("a 31-byte value", [(entries[0][0][:31], entries[0][1])] + entries[1:], "bad_entry")
-    fail("an empty x", entries[:3] + [(entries[3][0], b"")] + entries[4:], "bad_entry")
-    fail("an x that isn't UTF-8", entries[:3] + [(entries[3][0], b"\xff")] + entries[4:], "bad_entry")
-    fail("a shingle missing, with nothing removed", entries[:pick] + entries[pick + 1:], "sketch")
-    fail("a shingle missing, with a span removed: its minima are unexplained, not wrong",
-         entries[:pick] + entries[pick + 1:], "ok", removed=True)
-    # A value whose hash is below the committed minimum somewhere can't
-    # belong to the text, removed spans or not.
-    low = next(v for v in (sha256(b"too low %d" % i) for i in range(1000))
-               if any(h < m for h, m in zip(minhash_values(v), mh)) and v not in [e[0] for e in entries])
-    fail("a value below a committed minimum, with a span removed", sorted(entries + [(low, b"made up")]), "sketch",
-         removed=True)
-    return out
-
-
 def context(first, last, text="line %d"):
     return [" " + text % i + "\n" for i in range(first, last)]
 
@@ -2651,7 +2474,7 @@ def make_content_vectors():
         "format": FORMAT,
         "spec": "docs/spec/ledger-v1.md",
         "generator": "python3 -I tools/ledger_ref.py vectors-content",
-        "note": "Part 2 vectors: commitments, reveals, normalization, keyed features, CC8 reveals and draws. "
+        "note": "Part 2 vectors: commitments, reveals, normalization, keyed features and draws. "
                 "Test keys; see testdata/ledger/README.md.",
         "lowercase": {"unicode": LOWER_UNICODE, "runs": [
             {"first": a, "count": b, "delta": c, "stride": d} for a, b, c, d in LOWER_RUNS],
@@ -2663,7 +2486,6 @@ def make_content_vectors():
         "features": features,
         "diffs": make_diffs(),
         "jaccard": make_jaccard(features),
-        "shingle_reveals": make_shingle_reveals(features),
         "draws": draws,
         "challenge_k": sizes,
     }
@@ -3451,7 +3273,6 @@ def test_check_catches_content():
         "diffs": ["three lines of context around three lines added after line 9", "an edit inside one line",
                   "a patch whose lines don't add up to its header is malformed"],
         "jaccard": ["one word changed"],
-        "shingle_reveals": ["the worked example of 10.10: every shingle shown", "fix it for bob with bob removed"],
         "draws": ["a pool of 12 on two devices"],
     }
     base = {"format": FORMAT, "lowercase": full["lowercase"], "challenge_k": full["challenge_k"]}
@@ -3521,12 +3342,6 @@ def test_check_catches_content():
         ("a hunk from the text before and after", setter(at("diffs", 1, "hunks", 0), "old_lines", lambda x: x + 1)),
         ("a malformed patch read as well formed", lambda d: d["diffs"][2].pop("malformed") and d["diffs"][2].update(hunks=[])),
         ("a Jaccard count", setter(at("jaccard", 0), "matches", lambda x: x + 1)),
-        ("a shingle reveal's verdict", setter(at("shingle_reveals", 0), "verdict", lambda _: "sketch")),
-        ("a shingle reveal's count of unexplained places", setter(at("shingle_reveals", 1), "unexplained", lambda x: x + 1)),
-        ("a hidden shingle sent anyway", lambda d: d["shingle_reveals"][1].update(entries=sorted(
-            d["shingle_reveals"][1]["entries"] + [{"v": d["shingle_reveals"][0]["entries"][0]["v"], "x": "666f722062"}],
-            key=lambda e: e["v"]))),
-        ("a shingle reveal's kind", setter(at("shingle_reveals", 0), "kind", lambda _: "word3")),
         ("a draw seed", setter(at("draws", 0), "seed", flip)),
         ("a pool score", setter(at("draws", 0, "pool", 3), "score", flip)),
         ("the drawn order", swap("drawn")),

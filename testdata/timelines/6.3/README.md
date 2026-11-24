@@ -37,7 +37,7 @@ Sam, 16, on macOS, has five projects open and works on four of them between 14:0
 ## What the rows rely on
 
 - 14:01:30-14:02:00 is A's `SUP`. B's lead has started at 14:00:50, but focus is on window 1, so it isn't realized.
-- 14:08:40-14:09:00 is `P`. The 50-character request's lead is 120 + 33 = 153 s and starts at 14:06:27, but before 14:08:40 the lead of the edit at 14:08:40 wins, because it is the next anchor (SM 3.3 rule 3). 50 / 1.5 is 33.3 s, rounded to a whole second as SM rounds 6.4's and 6.5's typing times (SM 1.3; the [6.4 prompt-lengths erratum](../../../docs/errata/2026-11-19-sm-6.4-prompt-lengths.md) asks which way).
+- 14:08:40-14:09:00 is `P`. The 50-character request's lead is 120 + 33 = 153 s and starts at 14:06:27, but before 14:08:40 the lead of the edit at 14:08:40 wins, because it is the next anchor (SM 3.3 rule 3). 50 / 1.5 is 33.3 s, which SM 1.3 rounds to the nearest second, 33, as SM rounds 6.4's and 6.5's typing times.
 - 14:12:30-14:12:40 is `READ`, because no window covers it between the edit's lead and the go-ahead's. "run the tests again" has 19 characters, under `SUBSTANTIVE_CHARS`, so it is `low_effort` with a 20 s lead (SM 2.2).
 - A's `READ` from 14:14:00 to 14:17:00 and B's from 14:20:30 to 14:22:00 are within `READ_HORIZON_S` of the follow-up at 14:20:30 and the reply at 14:25:00.
 - `agent_only_s.<project>` in the totals is a project's agent time minus the seconds that project credits during it, the chess clock of SM 2.6: A 570 and B 180, SM's 750 s together, and E 0. A plain `agent_only_s` would have to be at most `agent_running_s`, which `internal/timelines` checks. Here it can't be: `agent_running_s` counts each second once, 740 s, and A's and B's runs overlap from 14:04:30 to 14:07:00.

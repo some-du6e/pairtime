@@ -14,6 +14,9 @@ import (
 )
 
 func TestParse(t *testing.T) {
+	// The shadow cases read the file as the calibration week does, before
+	// the scoring freeze, which TestScoringFreeze checks.
+	atScoring(t, "0.4.0")
 	tests := []struct {
 		name        string
 		file        string

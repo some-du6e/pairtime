@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -117,18 +118,45 @@ func TestLocalRuns(t *testing.T) {
 		})
 	}
 
+	sealed := time.Date(2026, 11, 23, 4, 22, 0, 0, time.UTC)
+	made := time.Date(2026, 11, 18, 21, 4, 0, 0, time.UTC)
+	stoppedAt := "pairtime has stopped uploading at batch 3, which it sealed in local-only mode at 2026-11-23 04:22 UTC, after this computer was linked, because "
 	causes := []struct {
 		name  string
 		modes string
 		stop  uint64
-		want  string
+		// why is what batch stop's seal frame says of why it was sealed
+		// local-only, nil for nothing.
+		why  *ledger.LocalWhy
+		want string
 	}{
-		{"a stop at a batch sealed in local-only mode names both causes, config.toml and a record from before the link that came late", "oollo", 3, localOnlyProblem},
-		{"a stop at a batch an older version sealed, which recorded no mode, says so", "oonno", 3, noModeProblem},
+		{"a stop at a batch whose seal frame doesn't say why, as an older version's, names both causes, config.toml and a record made while it said local-only that came late",
+			"oollo", 3, nil, localOnlyProblem},
+		{"a stop at a batch an older version sealed, which recorded no mode, says so", "oonno", 3, nil, noModeProblem},
+		{"a stop at a batch sealed local-only for records that came late names the batch, when it was sealed, and the records by their kinds and their own times",
+			"oollo", 3, &ledger.LocalWhy{Late: []ledger.LateRecord{{Kind: event.KindAgentOutput, T: made}, {Kind: event.KindAgentStop, T: made}}, LateN: 2},
+			stoppedAt + "it holds records made while config.toml said local-only that reached pairtime only after that ended: an agent.output of 2026-11-18 21:04 UTC and an agent.stop of 2026-11-18 21:04 UTC. " + stopFix},
+		{"one holding more such records than its seal frame names counts the rest",
+			"oollo", 3, &ledger.LocalWhy{Late: []ledger.LateRecord{{Kind: event.KindPromptSubmit, T: made}}, LateN: 3},
+			stoppedAt + "it holds records made while config.toml said local-only that reached pairtime only after that ended: a prompt.submit of 2026-11-18 21:04 UTC and 2 more. " + stopFix},
+		{"one sealed while config.toml said local-only says so",
+			"oollo", 3, &ledger.LocalWhy{Config: true},
+			stoppedAt + `config.toml said mode = "local", had an error, or named a pairtime login the agent hadn't taken in yet, as it was sealed. ` + stopFix},
+		{"one holding records that came while the watch's note said local-only, sealed while something was still on its way, names both",
+			"oollo", 3, &ledger.LocalWhy{Noted: true, Waiting: true},
+			stoppedAt + `records came while config.toml said mode = "local"; and something made while config.toml said local-only, such as a hook call or a git change, was still on its way to the ledger. ` + stopFix},
+		{"no cause of a stop names a hook call that waited unless the seal frame says something was on its way",
+			"oollo", 3, &ledger.LocalWhy{Late: []ledger.LateRecord{{Kind: event.KindAgentOutput, T: made}}, LateN: 1},
+			stoppedAt + "it holds a record made while config.toml said local-only that reached pairtime only after that ended: an agent.output of 2026-11-18 21:04 UTC. " + stopFix},
 	}
 	for _, tc := range causes {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := stopProblem(modeRows(tc.modes), tc.stop); got != tc.want {
+			rows := modeRows(tc.modes)
+			if tc.why != nil {
+				r := &rows.queue[tc.stop-rows.first]
+				r.Why, r.SealedAt = tc.why, sealed
+			}
+			if got := stopProblem(rows, tc.stop); got != tc.want {
 				t.Errorf("doctor hears %q", got)
 			}
 		})
@@ -694,6 +722,9 @@ func TestLocalMode(t *testing.T) {
 		{"no root from the first batch sealed in local-only mode on went", r.f.head.b == 2 && r.f.rows[3].b == 0 && r.f.rows[4].b == 0 && r.f.rows[5].b == 0},
 		{"no minute of a batch sealed in local-only mode went", r.minutesIn(r.f, 30, 89) == 0},
 		{"the uploader says where the roots stop", r.u.Status().Stopped == 3},
+		{"doctor names the batch they stop at and why it was sealed local-only, from the batch as Sealed handed it over",
+			strings.Contains(r.doctor(), "stopped uploading at batch 3, which it sealed in local-only mode at ") &&
+				strings.Contains(r.doctor(), `because config.toml said mode = "local", had an error`)},
 	}
 	r.f.mu.Unlock()
 	for _, tc := range stopped {
@@ -1100,13 +1131,16 @@ func TestHeldRecord(t *testing.T) {
 		// firstSignIn makes the switch back the first pairtime login, after
 		// batches sealed while config.toml said local, with a record pending
 		// at the login, rather than a re-link after a noted stretch with
-		// nothing pending.
+		// nothing pending. The switch back then seals that record as a batch
+		// online, which passes the install's stretch, so the held record,
+		// which no Waiting counts here, comes after it and is dropped
+		// (ledger.ErrLateLocal; D-late-local).
 		firstSignIn bool
 	}{
 		{"after a re-link, a git change the watcher held past the note, sealed as a batch of its own", gitChange, true, false},
 		{"after a re-link, a hook call parked behind its folder's first Track, sealed with the first prompt", hookCall, false, false},
-		{"after a first sign-in with a record pending at it, a git change the watcher held past the note, sealed as a batch of its own", gitChange, true, true},
-		{"after a first sign-in with a record pending at it, a hook call parked behind its folder's first Track, sealed with the first prompt", hookCall, false, true},
+		{"after a first sign-in with a record pending at it, a git change the watcher held past the note, which comes after the online batch the switch back sealed, is dropped", gitChange, true, true},
+		{"after a first sign-in with a record pending at it, a hook call parked behind its folder's first Track, which comes after that batch, is dropped", hookCall, false, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1148,8 +1182,48 @@ func TestHeldRecord(t *testing.T) {
 			// The held record reaches the writer 3 s after the note: batch 4,
 			// alone or with the first prompt's record.
 			r.setClock(login.Add(3300 * time.Millisecond))
-			if _, err := r.w.Write(c.held(made)); err != nil {
+			_, err := r.w.Write(c.held(made))
+			switch {
+			case c.firstSignIn && !errors.Is(err, ledger.ErrLateLocal):
+				t.Fatalf("Write = %v; want the held record dropped, as batch 3 was sealed online since its stretch ended", err)
+			case !c.firstSignIn && err != nil:
 				t.Fatal(err)
+			}
+			if c.firstSignIn {
+				// Nothing of it is in the ledger, so the first prompt's batch is
+				// the first after the switch back, and takes the mark.
+				r.recordAt(t, login.Add(40*time.Second))
+				if _, _, err := r.w.Seal(); err != nil {
+					t.Fatal(err)
+				}
+				last := r.w.Status().Batches
+				_, rows, err := ledger.ReadRows(r.dirs.Ledger(), 4)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(rows) != 1 || !rows[0].Online || !rows[0].Back || r.w.Status().LateLocal != 1 {
+					t.Fatalf("the batches after the switch back's are %+v, and the writer counts %d dropped; want one online and marked, and one", rows, r.w.Status().LateLocal)
+				}
+				r.u.Wake()
+				r.wait(t, fmt.Sprintf("batch %d", last), func(f *fakeIngest) bool { return f.head != nil && f.head.b == last })
+				r.drain()
+				r.f.mu.Lock()
+				defer r.f.mu.Unlock()
+				named := slices.ContainsFunc(r.f.bodies, func(b []byte) bool { return bytes.Contains(b, []byte(`"`+string(event.HarnessClaudeCode)+`"`)) })
+				for _, ch := range []struct {
+					name string
+					ok   bool
+				}{
+					{"the labels never named the harness the dropped record names", !named},
+					{"the server's chain starts at the batch that took the mark", r.f.start == 4 && r.f.head.b == last},
+				} {
+					t.Run(ch.name, func(t *testing.T) {
+						if !ch.ok {
+							t.Errorf("no: the server holds head %d from %d, after %d POSTs", r.f.head.b, r.f.start, r.f.posts)
+						}
+					})
+				}
+				return
 			}
 			if c.alone {
 				if _, _, err := r.w.Seal(); err != nil {
@@ -1189,11 +1263,7 @@ func TestHeldRecord(t *testing.T) {
 				{"the labels never named the harness its record names", !named},
 				{"the batch after it took the mark and went, and so did the rest", r.f.rows[5].b == 5 && r.f.head.b == last},
 			}
-			if c.firstSignIn {
-				checks = append(checks, check{"the server's chain starts at the batch that took the mark", r.f.start == 5})
-			} else {
-				checks = append(checks, check{"the server took the stretch's gap, the held record's batch in it", slices.Contains(r.f.gaps, [2]uint64{3, 4})})
-			}
+			checks = append(checks, check{"the server took the stretch's gap, the held record's batch in it", slices.Contains(r.f.gaps, [2]uint64{3, 4})})
 			for _, ch := range checks {
 				t.Run(ch.name, func(t *testing.T) {
 					if !ch.ok {

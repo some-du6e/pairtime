@@ -5,10 +5,9 @@
       "turn_key": "t_4a1edc4a6c03",
       "t": 1795608060000,
       "local": "20:01:00",
-      "text": "the navbar overlaps the hero on mobile, fix the css so the hero starts below the navbar",
+      "text": "the navbar overlaps the hero on mobile, can you fix the css so the hero starts below the navbar",
       "len_chars": 95,
-      "source": "quoted in SM 6.5's 20:00 row, which gives its length as 95 characters",
-      "erratum": "2026-11-19-sm-6.5-prompt-length"
+      "source": "quoted in SM 6.5's 20:00 row"
     },
     {
       "turn_key": "t_2e748f8fb238",

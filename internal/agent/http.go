@@ -76,10 +76,23 @@ type statusReply struct {
 	// Apps is how the apps component reads the stores of agent apps, for
 	// doctor's T3 Code line (DESIGN 3.3, 5.9).
 	Apps appsReply `json:"apps"`
+	// Ledger is what the ledger writer says of its chain, absent while the
+	// ledger isn't open.
+	Ledger *ledgerReply `json:"ledger,omitempty"`
 	// Footprint is what the agent costs the computer, as the OS reports it,
 	// for doctor --report (DESIGN 5.9, 9.7).
 	Footprint footprintReply    `json:"footprint"`
 	Problems  map[string]string `json:"problems,omitempty"`
+}
+
+// ledgerReply is what the ledger writer says of its chain.
+type ledgerReply struct {
+	// LateLocal counts the records the writer dropped over the chain's
+	// life: made while config.toml said local-only, they reached it only
+	// after it had sealed a batch online since, so they never upload
+	// (ledger.Status.LateLocal; D-late-local). It counts every writer's
+	// drops: the adapters', presence's and the git watcher's.
+	LateLocal uint64 `json:"late_local"`
 }
 
 type jobReply struct {
@@ -114,9 +127,20 @@ func (a *agent) status() statusReply {
 		Signals:   a.signalsNow(),
 		Adapters:  a.adaptersHost().status(),
 		Apps:      a.appsHost().reply(),
+		Ledger:    a.ledgerStatus(),
 		Footprint: footprintNow(),
 		Problems:  a.currentProblems(),
 	}
+}
+
+// ledgerStatus is what the ledger writer says of its chain for the
+// status, nil while the ledger isn't open.
+func (a *agent) ledgerStatus() *ledgerReply {
+	w := a.writer.Load()
+	if w == nil {
+		return nil
+	}
+	return &ledgerReply{LateLocal: w.Status().LateLocal}
 }
 
 // serveStop answers POST /v1/agent/stop and then stops the agent, the same

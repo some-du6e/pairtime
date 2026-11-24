@@ -20,7 +20,7 @@ Unlike (a), (c) and (d), these records count toward `logged_s` and `ai_logged_s`
 
 ## Timing choices
 
-- The agent's write changes the open file, so the plugin sends a heartbeat and runs wakatime-cli, whose AI sync sends the transcript's prompt and edit first. The bridge keeps the transcript's timestamps (DESIGN 5.7). The prompt at :03 and the sync at :06 fall between two presence samples, so nothing else is recorded in between and arrival order stays time order. A later sync would deliver the prompt late, which the pending window handles (DESIGN 3.7); that isn't this case.
+- The agent's write changes the open file, so the plugin sends a heartbeat and runs wakatime-cli, whose AI sync sends the transcript's prompt and edit first. The bridge keeps each heartbeat's time, which here is the prompt's own (DESIGN 5.7). wakatime-cli can also stamp a prompt with an earlier transcript entry's time, or carry it on the edit's heartbeat, which this case leaves out ([bridge prompt times](../../../../docs/errata/2026-11-23-bridge-prompt-times.md)). The prompt at :03 and the sync at :06 fall between two presence samples, so nothing else is recorded in between and arrival order stays time order. A later sync would deliver the prompt late, which the pending window handles (DESIGN 3.7); that isn't this case.
 - The plugin's heartbeat shares the edit's millisecond. Within 120 s of an agent edit of the same file, the bridge marks it the agent's (DESIGN 5.7), and an agent's edit opens no anchor.
 - The jiggler moves at 14:02:59, 14:04:59 and 14:06:59 among other times, and the samples at :00 show it: the input in the 10 s before each prompt.
 - 90 characters gives a 60 s typing lead. The edit 3 s after the prompt makes `ai_logged_s` 243 s, a multiple of 3.
@@ -34,6 +34,4 @@ Each turn credits its 60 s lead and its 20 s base. The 5,000 lines add nothing, 
 
 `logged_s` counts the prompt, the edit and the plugin's heartbeat, and `ai_logged_s` counts the prompt and the edit. In arrival order the counted records add 0, 3, 0, 117, 3, 0, 117, 3 and 0 s, so both totals come to 243 s. `level_c_cap_s` is min(240, 243 / 3) = 81 s. That is the most a program that opts in to level C could take, and only inside a commit interval whose closing commit is forge-verified (DESIGN 5.2, D5). This case has no commit.
 
-## Errata
-
-[Turns without a stop](../../../../docs/errata/2026-11-19-turns-without-a-stop.md). No `agent.stop` says when a bridge turn ends. Under the proposed rule it runs to the latest agent record the scorer has received for it, the edit at :06, which arrives long before any minute it touches is final. So each base drains as 3 s of `SUP` and 17 s of `READ`, `agent_running_s` is 3 in each turn's minute, and the idle seconds after it are `X.no_anchor`. Rows 14:03 to 14:08 name it. The 240 s, their level, the fills and both logged totals don't depend on it.
+No `agent.stop` says when a bridge turn ends, so it runs from its prompt to its latest agent record, the edit at :06 (SM 1.3, DESIGN 5.7). Each base drains as 3 s of `SUP` and 17 s of `READ`, `agent_running_s` is 3 in each turn's minute, and the idle seconds after it are `X.no_anchor`.

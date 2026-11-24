@@ -611,6 +611,9 @@ func (s *Service) process(ctx context.Context, tx writer.Tx, dev device.Device, 
 	}
 
 	now := s.nowMS()
+	if ref, err := dayClosed(ctx, tx, now); err != nil || ref != nil {
+		return outcome{refusal: ref}, err
+	}
 	resp := response{
 		ReceivedAt: now,
 		Req:        env.req,
@@ -676,6 +679,36 @@ func (s *Service) process(ctx context.Context, tx writer.Tx, dev device.Device, 
 		return outcome{}, err
 	}
 	return outcome{response: data, stored: stored}, nil
+}
+
+// maxDayClosedWait is the most a day_closed refusal's Retry-After asks a
+// client to wait, so a clock set back by days doesn't send clients away
+// for days once it is fixed.
+const maxDayClosedWait = 3600
+
+// dayClosed refuses a request while now, the server's clock, reads a time
+// at or before the end of the newest day whose head the publisher stored,
+// as after the clock was set back across a published midnight (ledger-v1
+// 8, decision 38). A batch stored then would land on a published day and
+// be in no day's tree, though it had a receipt. It reads day_heads in the
+// writer's transaction, which the publisher stores heads through too, so
+// no head can come between the check and the rows. Retry-After is the
+// seconds until that day ends, at most maxDayClosedWait.
+func dayClosed(ctx context.Context, tx writer.Tx, now int64) (*refusal, error) {
+	var day sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `SELECT MAX(day) FROM day_heads`).Scan(&day); err != nil {
+		return nil, err
+	}
+	if !day.Valid {
+		return nil, nil
+	}
+	end := (day.Int64+1)*ledger.DayMS - 1
+	if now > end {
+		return nil, nil
+	}
+	r := refuse(CodeDayClosed, "The server's clock reads a time on a day it has already published a day root for, so it stores nothing until that day is over; send the same body and key again after Retry-After.")
+	r.retryAfter = int(min(max((end+1-now+999)/1000, 1), maxDayClosedWait))
+	return r, nil
 }
 
 // receipt returns a stored row's receipt in JSON.

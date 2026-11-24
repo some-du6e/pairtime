@@ -100,8 +100,11 @@ stop = fx.event_at("agent.stop", STOP)
 tl.check(len(PROMPT) == 150, "the prompt is 150 characters")
 tl.check(sd.input_in_every_slot(fx, at("13:58:00"), at("14:08:00")), "input in every slot")
 tl.check(SUBMIT - fx.last_input_before(SUBMIT) <= sd.KEYS_PRE_S * 1000, "input in the 10 s before submit")
-tl.check(CALL - SUBMIT <= sd.TRACK_LOG_MATCH_S * 1000, "the call is within TRACK_LOG_MATCH_S of the prompt")
-tl.check(CALL - SUBMIT <= sd.TRACK_DEDUPE_S * 1000, "and within TRACK_DEDUPE_S of it")
+tl.check(CALL - SUBMIT <= sd.TRACK_DEDUPE_S * 1000,
+         "the call is within TRACK_DEDUPE_S of the prompt, so it is track_matched and raises no "
+         "track_without_prompt")
+tl.check(CALL - SUBMIT <= sd.TRACK_LOG_MATCH_S * 1000,
+         "and within TRACK_LOG_MATCH_S of it, as its log_match matched says (DESIGN 5.2)")
 
 typing = sd.typing_s(150)
 lead = sd.THINK_LEAD_S + typing

@@ -155,11 +155,18 @@ const stagedPrefix = ".pairtime.new-"
 // strayBinaries returns the copies of pairtime that an install left in dir,
 // the binary's folder: one it staged and didn't get to put in place, as
 // when the teen stopped it with Ctrl+C, and on Windows one it moved aside
-// (oldBinaries). A staged copy counts only once it is at least age old, so
-// that an install running meanwhile keeps the one it is about to put in
-// place.
+// (oldBinaries). So that an install running meanwhile keeps the copy it is
+// about to put in place, and the one it may still put back, a staged copy
+// counts only once it is at least age old, and a copy moved aside only
+// once the process it is named for has ended (placing). With age 0, as for
+// uninstall, every copy counts.
 func strayBinaries(dir string, age time.Duration) []string {
-	out := oldBinaries(dir)
+	var out []string
+	for _, p := range oldBinaries(dir) {
+		if age == 0 || !placing(p) {
+			out = append(out, p)
+		}
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return out
@@ -496,7 +503,7 @@ func stopAgent(dirs home.Dirs) error {
 const startWait = 30 * time.Second
 
 // startAgentFrom starts exe's agent in a process of its own, with no
-// console window, as `agent --detach` does (detachedAttr), and waits until
+// console window, as `agent --detach` does (launchAgent), and waits until
 // it answers. It runs in the data directory, so it doesn't keep the folder
 // install ran in from being deleted. When another agent was already
 // running, that one's status is returned.
@@ -508,17 +515,13 @@ const startWait = 30 * time.Second
 // port.json names its agent, it doesn't touch the lock either (agentCall),
 // since an agent that found the lock taken at that moment would exit.
 func startAgentFrom(exe string, dirs home.Dirs) (agentStatus, error) {
-	cmd := exec.Command(exe, "agent")
-	cmd.SysProcAttr = detachedAttr()
-	cmd.Dir = dirs.Data
 	// Some file systems keep a file's time in whole seconds, or two.
 	since := time.Now().Add(-2 * time.Second)
-	if err := cmd.Start(); err != nil {
+	l, err := launchAgent(exe, dirs.Data)
+	if err != nil {
 		return agentStatus{}, fmt.Errorf("starting pairtime's agent: %w", err)
 	}
-	pid := cmd.Process.Pid
-	exited := make(chan error, 1)
-	go func() { exited <- cmd.Wait() }()
+	pid, exited := l.PID, l.exited
 	other := false // the agent it started found another holding the data directory
 	deadline := time.Now().Add(startWait)
 	for {

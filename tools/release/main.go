@@ -705,10 +705,10 @@ func cmdVerify(args []string, stdout, stderr io.Writer) error {
 	// The install scripts are what `curl | sh` runs first, so a release's
 	// copies must be the ones its signed payload lists, and every copy in
 	// the directory must be listed (D-immutable-releases).
-	for _, s := range installScripts {
-		_, listed := m.InstallScripts[s.name]
-		if _, err := os.Stat(filepath.Join(*dir, s.name)); err == nil && !listed {
-			return fmt.Errorf("%s is in %s, but the manifest doesn't list its SHA-256 (tools/release scripts -payload lists it)", s.name, *dir)
+	for _, s := range release.InstallScripts() {
+		_, listed := m.InstallScripts[s.Name]
+		if _, err := os.Stat(filepath.Join(*dir, s.Name)); err == nil && !listed {
+			return fmt.Errorf("%s is in %s, but the manifest doesn't list its SHA-256 (tools/release scripts -payload lists it)", s.Name, *dir)
 		}
 	}
 	for _, name := range sortedKeys(m.InstallScripts) {

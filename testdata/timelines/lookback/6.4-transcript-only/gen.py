@@ -16,7 +16,6 @@ import timeline as tl  # noqa: E402
 import lookback as lb  # noqa: E402
 
 NAME = "lookback/6.4-transcript-only"
-LENGTHS = "2026-11-19-sm-6.4-prompt-lengths"
 fx = tl.Fixture(
     NAME,
     title="A /goal agent running unattended overnight, from the transcript alone",
@@ -49,7 +48,7 @@ GOAL, MORNING = at("23:40:00"), at("+1 07:37:00")
 prompts = [e for e in events if e["kind"] == "prompt.submit"]
 stops = [e for e in events if e["kind"] == "agent.stop"]
 tl.check([(e["t"], e["data"]["typed_len_est"]) for e in prompts] == [(GOAL, 75), (MORNING, 61)],
-         "his two prompts, 75 and 61 characters by SM's count")
+         "his two prompts, 75 and 61 characters")
 tl.check(prompts[0]["data"]["slash_command"] == "/goal", "the first is the /goal")
 tl.check(len(stops) == 9 and [e["data"]["stop_hook_active"] for e in stops] == [False] + [True] * 8,
          "T1 stops, then eight stop-hook continuations")
@@ -66,9 +65,8 @@ exp.row("23:37", "23:39", bucket=False, sm="2.8; the events of 6.4's 23:37 and 2
              "from the prompt's think lead, which lookback drops.")
 exp.row("23:39", credit={P: {"P": 50}}, uncredited=None, codes=["X.no_anchor"], sm="2.8; the events of 6.4's 23:39 row",
         derived=DERIVED, erratum=ER,
-        note="The /goal prompt at 23:40:00 has 75 typed characters by SM's count: typing time only, 75 / 1.5 = "
-             "50 s, from 23:39:10. The quoted text has 73 (WP-FX1's prompt-lengths erratum), which would make it "
-             "48.67 s, rounded up to 49. The code of 23:39:00 to 23:39:10 is open.")
+        note="The /goal prompt at 23:40:00 has 75 typed characters: typing time only, 75 / 1.5 = 50 s, from "
+             "23:39:10. The code of 23:39:00 to 23:39:10 is open.")
 exp.row("23:40", "+1 00:23", credit={}, uncredited={"X.agent_only": 43 * 60}, agent=43 * 60,
         sm="2.8; the events of 6.4's 23:40 to 23:43 rows and its 23:44 to 07:29 range", derived=DERIVED,
         note="T1, his /goal turn, runs to 00:23:20. Lookback credits no reading while the agent runs, so the "
@@ -85,9 +83,8 @@ exp.row("+1 06:10", "+1 07:36", bucket=False, sm="2.8; the events of 6.4's 23:44
              "prompt, past SM 2.8's 600 s.")
 exp.row("+1 07:36", credit={P: {"P": 41}}, uncredited=None, codes=["X.no_anchor"],
         sm="2.8; the events of 6.4's 07:36 row", derived=DERIVED, erratum=ER,
-        note="The prompt at 07:37:00 has 61 typed characters by SM's count: 61 / 1.5 = 40.67 s, rounded to 41 as "
-             "SM rounds the live lead's 160.67 s to 161, so it starts at 07:36:19. The quoted text has 60, which "
-             "would make it 40 s (WP-FX1's prompt-lengths erratum). The code of 07:36:00 to 07:36:19 is open.")
+        note="The prompt at 07:37:00 has 61 typed characters: 61 / 1.5 = 40.67 s, which SM 1.3 rounds to the "
+             "nearest second, 41, so it starts at 07:36:19. The code of 07:36:00 to 07:36:19 is open.")
 
 rp = lb.Replay(events, T0, END)
 lb.check_rows(exp, rp, {S: P})
@@ -118,7 +115,7 @@ expected = exp.doc(
     },
     stated=[],
     approx={},
-    errata=[ER, CODES, LENGTHS],
+    errata=[ER, CODES],
     notes=[
         "Every row is computed from SM 2.8; SM states no lookback rows, so every bucket row's fields are "
         "derived. Every credited second is level C and backfilled.",

@@ -10,7 +10,6 @@ SM 4.2's re-roll rule ends: "The count runs over all earlier prompts since the l
 | Window | 19:31:00 to 19:46:00. Records from 19:29:35 start the session |
 | Project | An invented `dashboard` |
 | Files | gen.py uses `../6.5/neardup.py` for SM 4.2's normalization and attempt count |
-| Erratum | [Loop codes](../../../docs/errata/2026-11-19-sm-6.5-loop-codes.md), point 2: row 19:45's `X.reroll` needs a discount code to win over `X.agent_only` inside a discounted turn |
 
 ## Events
 
@@ -31,5 +30,5 @@ SM 4.2's re-roll rule ends: "The count runs over all earlier prompts since the l
 - The attempts are 1, 1, 2, 2 and 3. A3's count includes A1 although B1 and B2 came between them. A rule that compared each prompt with the previous one only would never fire here.
 - A3 opens no window, so its lead from 19:42:20 credits nothing and B2's bucket is read instead: `SUP` while B2 runs until 19:43:00, then `READ` until 19:45:00. B2 filled it with 20 + 10 + 150 + 36.7 s, enough for those 180 s.
 - A3 resets the bucket to zero and adds nothing to it (SM 2.4), so the minute A3 runs, 19:45, is `X.reroll` 60. Without the reset, B2's last 36.7 s would be read there.
-- Row 19:45 rests on point 2 of [6.5's loop-codes erratum](../../../docs/errata/2026-11-19-sm-6.5-loop-codes.md). A3's agent runs and nothing credits a second of the minute, which SM 5.2's wording makes `X.agent_only`. SM 4.2's "seconds that would have been credited are reported under their discount code" makes it `X.reroll`, because A3's own bucket would have covered the minute. The row gives `X.reroll` and names the erratum. Point 1 of the erratum doesn't touch these rows: B2's bucket credits A3's lead either way.
+- Row 19:45 is `X.reroll` by SM 4.2. Scored with no turn discounted, A3's own bucket, its 20 s base and then its plan, edit and answer, would have credited every second of the minute, so the minute is what the loop cost and takes A3's code. Without that rule SM 5.2 would make it `X.agent_only`, since A3's agent runs and nothing credits a second. B2's bucket credits A3's lead either way, so no other row depends on the rule.
 - `excluded_loops_s` is the rows' loop-code seconds, which gen.py adds up: A3's minute, 60 s.

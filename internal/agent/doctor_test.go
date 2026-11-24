@@ -25,7 +25,7 @@ import (
 func fullStatus() statusReply {
 	at := time.Date(2026, 11, 24, 9, 0, 0, 0, time.UTC)
 	both := signalReply{Via: "a source", Unknown: "a reason"}
-	stats := harnessStats{Calls: 1, Records: 2, ParseFailures: 3, WriteFailures: 4, Ignored: 5, LastRecord: 6, LastFailure: "Stop: unknown field",
+	stats := harnessStats{Calls: 1, Records: 2, ParseFailures: 3, WriteFailures: 4, LateLocal: 9, Ignored: 5, LastRecord: 6, LastFailure: "Stop: unknown field",
 		Lines: 7, LineFailures: 8}
 	return statusReply{
 		Version: version.Info{Version: "v0.1.0", Commit: "0123", Date: "2026-11-24T09:00:00Z", Modified: true, GoVersion: "go1.26.0", Platform: "linux/amd64"},
@@ -39,6 +39,7 @@ func fullStatus() statusReply {
 			Waiting: 1, Dropped: 2, Git: gitReply{Watched: 1, Changes: 2}},
 		Apps: appsReply{T3Code: &t3Reply{Reading: true, Off: "schema", Problem: "T3 Code's table x has no column y", Newer: true,
 			Running: true, NoSQLite3: true, Day: "2026-11-24", Witnessed: 1, WithServer: 5, Paired: 2, Aged: 3, Ahead: 4, SessionAt: at.UnixMilli()}},
+		Ledger:    &ledgerReply{LateLocal: 10},
 		Footprint: footprintReply{RSSBytes: 1, PeakRSSBytes: 2, CPUS: 3},
 		Problems:  map[string]string{"ledger": "the ledger can't open"},
 	}

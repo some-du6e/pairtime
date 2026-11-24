@@ -1,0 +1,402 @@
+{
+  "fixture": "4.2-same-error",
+  "title": "The same error again and again: what the fix-it rule discounts and what it credits",
+  "sm": "docs/design/struggle-metric.md 4.2",
+  "date": "2026-11-26",
+  "timezone": "Europe/Berlin",
+  "utc_offset": "+01:00",
+  "os": "macos",
+  "input_keys": true,
+  "evidence": "A",
+  "witness": "witnessed",
+  "device": "d_ab0d2f070b11",
+  "projects": {"p_5d0e077029e0": "habits"},
+  "window": {"start": "2026-11-26T15:00:00Z", "end": "2026-11-26T15:26:00Z", "local": "16:00-16:26"},
+  "rows": [
+    {
+      "start": "2026-11-26T15:00:00Z",
+      "minutes": 1,
+      "local": "16:00",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:01:00Z",
+      "minutes": 1,
+      "local": "16:01",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:02:00Z",
+      "minutes": 1,
+      "local": "16:02",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"P": 22, "SUP": 38}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:03:00Z",
+      "minutes": 1,
+      "local": "16:03",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:04:00Z",
+      "minutes": 1,
+      "local": "16:04",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:05:00Z",
+      "minutes": 1,
+      "local": "16:05",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"P": 56, "SUP": 4}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "4.2: P2 is an error paste with the count at 2, under the limit",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:06:00Z",
+      "minutes": 1,
+      "local": "16:06",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:07:00Z",
+      "minutes": 1,
+      "local": "16:07",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:08:00Z",
+      "minutes": 1,
+      "local": "16:08",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"SUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:09:00Z",
+      "minutes": 1,
+      "local": "16:09",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:10:00Z",
+      "minutes": 1,
+      "local": "16:10",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "4.2, What a discount does: P4's lead opens no window, so P3's bucket is read",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:11:00Z",
+      "minutes": 1,
+      "local": "16:11",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.same_error": 60},
+      "agent_running_s": 60,
+      "sm": "4.2, Fix-it loop: P4 is a go-ahead with the count at 3, the limit",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:12:00Z",
+      "minutes": 1,
+      "local": "16:12",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.same_error": 60},
+      "agent_running_s": 60,
+      "sm": "4.2, Fix-it loop",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:13:00Z",
+      "minutes": 1,
+      "local": "16:13",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 24,
+      "credit": {
+        "p_5d0e077029e0": {"G": 24}
+      },
+      "uncredited": {"X.same_error": 36},
+      "agent_running_s": 36,
+      "sm": "4.2, Fix-it loop; the commit is a human change event",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:14:00Z",
+      "minutes": 1,
+      "local": "16:14",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"P": 24, "G": 36}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "4.2: the count is 0 after the commit, so P5's paste is credited",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:15:00Z",
+      "minutes": 1,
+      "local": "16:15",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:16:00Z",
+      "minutes": 1,
+      "local": "16:16",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"P": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:17:00Z",
+      "minutes": 1,
+      "local": "16:17",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"SUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "sm": "4.2, What a discount does: P6's lead opens no window, so P5's bucket is read",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:18:00Z",
+      "minutes": 1,
+      "local": "16:18",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "4.2, What a discount does",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:19:00Z",
+      "minutes": 1,
+      "local": "16:19",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "sm": "4.2, What a discount does",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:20:00Z",
+      "minutes": 1,
+      "local": "16:20",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.same_error": 60},
+      "agent_running_s": 60,
+      "sm": "4.2, Fix-it loop: P6 is an error paste with the count at 3, the limit",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:21:00Z",
+      "minutes": 1,
+      "local": "16:21",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.same_error": 60},
+      "agent_running_s": 60,
+      "sm": "4.2, Fix-it loop",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:22:00Z",
+      "minutes": 1,
+      "local": "16:22",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 0,
+      "credit": {},
+      "uncredited": {"X.same_error": 60},
+      "agent_running_s": 60,
+      "sm": "4.2, Fix-it loop",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:23:00Z",
+      "minutes": 1,
+      "local": "16:23",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 20,
+      "credit": {
+        "p_5d0e077029e0": {"GO": 20}
+      },
+      "uncredited": {"X.same_error": 40},
+      "agent_running_s": 40,
+      "sm": "4.2, Fix-it loop; the passing run at 16:20:25 cleared e, so P7's count is 1 and its lead is credited",
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:24:00Z",
+      "minutes": 1,
+      "local": "16:24",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"SUP": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 60,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    },
+    {
+      "start": "2026-11-26T15:25:00Z",
+      "minutes": 1,
+      "local": "16:25",
+      "bucket": true,
+      "bucket_minutes": 1,
+      "credited_s": 60,
+      "credit": {
+        "p_5d0e077029e0": {"READ": 60}
+      },
+      "uncredited": {},
+      "agent_running_s": 0,
+      "derived": ["credit", "uncredited", "agent_running_s"]
+    }
+  ],
+  "totals": {
+    "credited_s": 1184,
+    "credited_by_project": {"p_5d0e077029e0": 1184},
+    "credited_by_reason": {"P": 582, "GO": 20, "G": 60, "SUP": 222, "READ": 300},
+    "uncredited": {"X.same_error": 376},
+    "agent_running_s": 676,
+    "excluded_loops_s": 376
+  },
+  "stated": [],
+  "approx": {},
+  "errata": [],
+  "notes": [
+    "SM 4.2 states the rule, not minute rows. Every row here follows from SM's rules applied to this timeline (README.md), as the decision on docs/errata/2026-11-19-sm-6.1-same-error.md states them.",
+    "The count of the error before each prompt is 0, 2, 3, 3, 0, 3 and 1. P4, a go-ahead, and P6, an error paste, come at SAME_ERROR_LIMIT and are X.same_error. P2 brings the count to the limit and is credited, P3 is substantive and never discounted, the commit at 16:14:36 sets the count to 0 before P5, P5's paste and its turn's two failing runs bring it back to the limit before P6, and the passing run at 16:20:25 clears the error before it comes back once ahead of P7.",
+    "P4's and P6's leads open no window, so P3's bucket is read through P4's lead, 16:10:40 to 16:11:00, and P5's through P6's, 16:17:36 to 16:20:00. P4 and P6 reset the bucket to zero and add nothing to it, so nothing is credited from 16:11:00 until the commit's lead at 16:13:36, P4's stop, or from 16:20:00 until P7's lead at 16:23:40.",
+    "excluded_loops_s is the X.same_error seconds (SM 5.3): the seconds that scoring the same records with no turn discounted credits and this scoring doesn't, 16:11:00 to 16:13:36 and 16:20:00 to 16:23:40.",
+    "Rows 16:11 to 16:13 and 16:20 to 16:23 are X.same_error by SM 4.2: scoring the same records with no turn discounted credits every second of them, so they are what the loops cost, and each takes the code of the latest discounted turn at or before it, P4's or P6's."
+  ]
+}

@@ -63,9 +63,12 @@ function New-Case {
 
 # Every path under Dir, relative and sorted, on one line. PowerShell keeps
 # caches under LOCALAPPDATA\Microsoft, which aren't the installer's doing.
+# A pairtime.exe that install.ps1 moved aside under its own process id
+# shows as pairtime.old.<pid>.exe, since the id changes every run.
 function Get-Tree([string]$Dir) {
   $paths = @(Get-ChildItem -LiteralPath $Dir -Recurse -Force | ForEach-Object { $_.FullName.Substring($Dir.Length + 1) } |
-    Where-Object { $_ -ne 'Microsoft' -and -not $_.StartsWith('Microsoft\') } | Sort-Object)
+    Where-Object { $_ -ne 'Microsoft' -and -not $_.StartsWith('Microsoft\') } |
+    ForEach-Object { $_ -replace '^(pairtime\\bin\\pairtime\.old\.)\d+(\.exe)$', '$1<pid>$2' } | Sort-Object)
   $paths -join ' '
 }
 
@@ -75,7 +78,8 @@ function Format-Argument([string]$Text) {
 }
 
 # Runs Shell with Arguments in the case's LOCALAPPDATA and TEMP, with the
-# variables in Environment, and returns its exit code and output.
+# variables in Environment, and returns its exit code, output and process
+# id.
 function Invoke-Child([string[]]$Arguments, [hashtable]$Environment = @{}, [string]$Shell = 'powershell.exe') {
   $info = New-Object System.Diagnostics.ProcessStartInfo
   $info.FileName = $Shell
@@ -95,7 +99,7 @@ function Invoke-Child([string[]]$Arguments, [hashtable]$Environment = @{}, [stri
   $stdout = $process.StandardOutput.ReadToEndAsync()
   $stderr = $process.StandardError.ReadToEndAsync()
   $process.WaitForExit()
-  @{ Code = $process.ExitCode; Output = $stdout.Result + $stderr.Result }
+  @{ Code = $process.ExitCode; Output = $stdout.Result + $stderr.Result; Pid = $process.Id }
 }
 
 # Runs a script file with -File and the given parameters.
@@ -109,6 +113,11 @@ function Invoke-OneLiner([hashtable]$Environment, [string]$Shell = 'powershell.e
 }
 
 $installed = 'pairtime pairtime\bin pairtime\bin\pairtime.exe'
+
+# The shells the cases that check how PowerShell itself behaves run in:
+# Windows PowerShell 5.1, and PowerShell 7 where the runner has it.
+$shells = @('powershell.exe')
+if (Get-Command pwsh -ErrorAction SilentlyContinue) { $shells += 'pwsh.exe' }
 
 # The real binary's cases stop before pairtime install with -NoInstall,
 # except the one just below, which runs the real pairtime install and
@@ -172,12 +181,15 @@ function Test-PrintedCommand([string]$What, [string]$Line, [string]$Want) {
 # fails), that its output matches Pattern, that LOCALAPPDATA then holds
 # exactly Files, and that TEMP is empty. PowerShell wraps error and warning
 # text at 120 columns, sometimes in the middle of a word, so the output and
-# the pattern are compared with their whitespace taken out.
+# the pattern are compared with their whitespace taken out. PowerShell 7
+# also wraps an error at the console's width, colors it, and starts each of
+# its lines with a |, so the color codes and those |s go too.
 function Test-Case([string]$Name, [string]$Want, [string]$Pattern, [string]$Files, [hashtable]$Result) {
   $problems = @()
   if ($Want -eq 'ok' -and $Result.Code -ne 0) { $problems += "exited $($Result.Code), want 0" }
   if ($Want -eq 'fails' -and $Result.Code -eq 0) { $problems += 'exited 0, want a failure' }
-  if (($Result.Output -replace '\s+', '') -cnotmatch ($Pattern -replace ' ', '')) { $problems += "its output doesn't match /$Pattern/" }
+  $plain = @(($Result.Output -replace '\x1b\[[0-9;?]*[A-Za-z]', '') -split "`r?`n" | ForEach-Object { $_ -replace '^\s*\|', '' }) -join "`n"
+  if (($plain -replace '\s+', '') -cnotmatch ($Pattern -replace ' ', '')) { $problems += "its output doesn't match /$Pattern/" }
   $got = Get-Tree $script:appData
   if ($got -ne $Files) { $problems += "LOCALAPPDATA holds [$got], want [$Files]" }
   $left = Get-Tree $script:tmp
@@ -295,9 +307,50 @@ try {
 }
 $running = Start-Process -FilePath (Join-Path $script:appData 'pairtime\bin\pairtime.exe') -ArgumentList 'wait' -PassThru -WindowStyle Hidden
 Test-Case 'a pairtime.exe that is running, as the agent would be, is moved aside and replaced' `
-  ok 'Installed pairtime' "$installed pairtime\bin\pairtime.old.exe" (Invoke-File $stamped (Real real real.pub @('-NoInstall')))
+  ok 'Installed pairtime' "$installed pairtime\bin\pairtime.old.<pid>.exe" (Invoke-File $stamped (Real real real.pub @('-NoInstall')))
 Test-Binary real
 Stop-Process -Id $running.Id -Force
+
+# Two installs at once must not delete each other's moved-aside copy, or
+# both can end with no pairtime.exe, so each moves the old one aside under
+# its own name.
+foreach ($shell in $shells) {
+  New-Case
+  $binDir = Join-Path $script:appData 'pairtime\bin'
+  New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+  Set-Content -LiteralPath (Join-Path $binDir 'pairtime.exe') -Value 'an old pairtime'
+  $other = Join-Path $binDir 'pairtime.old.exe'
+  Set-Content -LiteralPath $other -Value "another install's copy"
+  Test-Case "in $shell, an install moves the old pairtime.exe aside under its own name, and leaves the copy another install moved aside" `
+    ok 'Installed pairtime' "$installed pairtime\bin\pairtime.old.exe" (Invoke-File $stamped (Real real real.pub @('-NoInstall')) @{} $shell)
+  if (-not (Test-Path -LiteralPath $other) -or (Get-Content -LiteralPath $other) -ne "another install's copy") { Add-Failure "in ${shell}, the other install's pairtime.old.exe is gone or changed" }
+  Test-Binary real
+}
+
+# Every run in one PowerShell window has the same $PID, so the name a run
+# moves the old pairtime.exe aside under may already hold a copy that an
+# earlier run moved aside and that something still runs. That copy moves
+# out of the way, and the run's own copy keeps the name, which pairtime's
+# cleanups leave while the window runs.
+foreach ($shell in $shells) {
+  New-Case
+  New-Item -ItemType Directory -Force -Path (Join-Path $script:appData 'pairtime\bin') | Out-Null
+  $fakeZip = [System.IO.Compression.ZipFile]::OpenRead((Join-Path $Fixture "fake\pairtime_$($version.Substring(1))_windows_amd64.zip"))
+  try {
+    [System.IO.Compression.ZipFileExtensions]::ExtractToFile($fakeZip.GetEntry('pairtime.exe'), (Join-Path $script:appData 'pairtime\bin\pairtime.exe'))
+  } finally {
+    $fakeZip.Dispose()
+  }
+  $running = Start-Process -FilePath (Join-Path $script:appData 'pairtime\bin\pairtime.exe') -ArgumentList 'wait' -PassThru -WindowStyle Hidden
+  $result = Invoke-Child @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', "irm $server/real/install.ps1 | iex; irm $server/real/install.ps1 | iex") @{ PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_RELEASE_KEYS = (Join-Path $keys 'real.pub'); PAIRTIME_NO_INSTALL = '1' } $shell
+  Test-Case "in $shell, a second irm | iex in the same session puts pairtime in place while the copy the first moved aside still runs" `
+    ok 'Installed pairtime[\s\S]*Installed pairtime' "$installed pairtime\bin\pairtime.old.<pid>.exe" $result
+  if (Test-Path -LiteralPath (Join-Path $script:appData "pairtime\bin\pairtime.old.$($result.Pid).exe")) {
+    Add-Failure "in ${shell}, the copy the first run moved aside is still under the session's id, so the second run's copy had to take another"
+  }
+  Test-Binary real
+  Stop-Process -Id $running.Id -Force
+}
 
 New-Case
 Test-Case 'by default a script that trusts no key refuses the release, before anything is downloaded' fails 'trusts no release key' '' `
@@ -314,6 +367,18 @@ $command = "`$env:PAIRTIME_ALLOW_UNSIGNED = '1'; irm $server/repo/install.ps1 | 
 Test-Case 'PAIRTIME_ALLOW_UNSIGNED has irm | iex of a script that trusts no key install an unsigned release, and is gone from the session after' `
   ok 'no key this script trusts signed manifest\.json[\s\S]*PAIRTIME_ALLOW_UNSIGNED is gone' $installed `
   (Invoke-Child @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', $command) @{ PAIRTIME_VERSION = $version; PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_NO_INSTALL = '1' })
+
+# irm | iex runs the script in the session's own scope, so the script must
+# leave the session's variables as they were, one called installPairtime,
+# the name it once kept itself in, included.
+foreach ($shell in $shells) {
+  New-Case
+  $command = "`$installPairtime = 'the session''s own'; irm $server/real/install.ps1 | iex; " +
+    "if (`$installPairtime -ceq 'the session''s own') { 'installPairtime is as it was' } else { 'installPairtime changed'; exit 9 }"
+  Test-Case "in $shell, irm | iex leaves the session's own variable called installPairtime as it was" `
+    ok 'Installed pairtime[\s\S]*installPairtime is as it was' $installed `
+    (Invoke-Child @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', $command) @{ PAIRTIME_BASE_URL = "$server/real"; PAIRTIME_RELEASE_KEYS = (Join-Path $keys 'real.pub'); PAIRTIME_NO_INSTALL = '1' } $shell)
+}
 
 New-Case
 Test-Case 'PAIRTIME_ALLOW_UNSIGNED does not apply once the script trusts a key: a release no trusted key signed is refused' `
@@ -383,6 +448,25 @@ New-Case
 Test-Case '-NoInstall stops once the binary is in place' ok 'To finish setting it up, run' $installed (Invoke-File $stamped (Real fake fake.pub @('-NoInstall')))
 Test-Record ''
 
+# A help that fails says nothing about pairtime install, and without it
+# the binary would go in place with no consent screen. A native command's
+# status throws in neither Windows PowerShell 5.1 nor PowerShell 7.
+foreach ($shell in $shells) {
+  New-Case
+  Test-Case "in $shell, a build whose help fails is never put in place, and the folders made for it go again" `
+    fails "the new pairtime's 'pairtime help' failed.*so it wasn't installed" '' `
+    (Invoke-File $stamped (Real fake fake.pub) @{ PAIRTIME_FAKE_HELP_EXIT = '5' } $shell)
+  Test-Record ''
+
+  New-Case
+  New-Item -ItemType Directory -Force -Path (Join-Path $script:appData 'pairtime\bin') | Out-Null
+  Set-Content -LiteralPath (Join-Path $script:appData 'pairtime\bin\pairtime.exe') -Value 'an old pairtime'
+  Test-Case "in $shell, a build whose help fails leaves the pairtime.exe that was there as it was" fails 'Any pairtime you had is still there' $installed `
+    (Invoke-File $stamped (Real fake fake.pub) @{ PAIRTIME_FAKE_HELP_EXIT = '5' } $shell)
+  if ((Get-Content -LiteralPath (Join-Path $script:appData 'pairtime\bin\pairtime.exe')) -ne 'an old pairtime') { Add-Failure "in ${shell}, the old pairtime.exe was changed" }
+  Test-Record ''
+}
+
 New-Case
 Test-Case 'a pairtime install that stops before it puts pairtime in place leaves nothing, the folders made for it included' `
   fails "'pairtime install' stopped with status 4 before it put pairtime in place, so nothing was installed" '' `
@@ -394,6 +478,18 @@ Set-Content -LiteralPath (Join-Path $script:appData 'pairtime\bin\pairtime.exe')
 Test-Case "a no at pairtime install's screen leaves the pairtime.exe that was there as it was" fails 'you said no, so nothing was installed' $installed `
   (Invoke-File $stamped (Real fake fake.pub) @{ PAIRTIME_FAKE_INSTALL_EXIT = '3' })
 if ((Get-Content -LiteralPath (Join-Path $script:appData 'pairtime\bin\pairtime.exe')) -ne 'an old pairtime') { Add-Failure 'the old pairtime.exe was changed' }
+
+# A no changes nothing, so the same release already in place, from an
+# earlier -NoInstall, was there before the rerun.
+foreach ($shell in $shells) {
+  New-Case
+  $before = Invoke-File $stamped (Real fake fake.pub @('-NoInstall')) @{} $shell
+  if ($before.Code -ne 0) { Add-Failure "in ${shell}, the -NoInstall run before the next case failed: $($before.Output)" }
+  Test-Case "in $shell, a no on a rerun of the release already in place says nothing changed and how to set it up, not that install stopped" `
+    fails "you said no, so nothing changed. The pairtime $([regex]::Escape($version)) at $([regex]::Escape((Join-Path $script:appData 'pairtime\bin\pairtime.exe'))) stays as it was; to set it up later, run: &" $installed `
+    (Invoke-File $stamped (Real fake fake.pub) @{ PAIRTIME_FAKE_INSTALL_EXIT = '3' } $shell)
+  Test-Binary fake
+}
 
 New-Case
 Test-Case 'a pairtime install that fails after putting pairtime in place says where it is and how to finish, with the folders made' `
@@ -450,7 +546,9 @@ Set-Content -LiteralPath $vectorFile -Value ($vectors | ForEach-Object { $f = $_
 # loaded. It must print ok.
 function Test-Functions([string]$Name, [string]$Body, [string]$Shell = 'powershell.exe') {
   $file = Join-Path $scratch ('unit-' + [guid]::NewGuid().ToString('N') + '.ps1')
-  $text = "`$ErrorActionPreference = 'Stop'`n`$env:PAIRTIME_INSTALL_PS1_TEST = 'functions'`n. '$repoScript'`n$Body"
+  # The file returns its installer in this mode, and dot-sourcing that
+  # puts the installer's functions here.
+  $text = "`$ErrorActionPreference = 'Stop'`n`$env:PAIRTIME_INSTALL_PS1_TEST = 'functions'`n. (. '$repoScript')`n$Body"
   Set-Content -LiteralPath $file -Value $text
   New-Case
   $result = Invoke-File $file @() @{ VECTORS = $vectorFile } $Shell

@@ -1,0 +1,61 @@
+{
+  "fixture": "4.2-same-error",
+  "prompts": [
+    {
+      "turn_key": "t_4761af064090",
+      "t": 1795705320000,
+      "local": "16:02:00",
+      "text": "make the streak counter treat a check-in made after midnight as part of the new day, okay?",
+      "len_chars": 90,
+      "source": "invented: SM 4.2 quotes no prompt for the fix-it rule"
+    },
+    {
+      "turn_key": "t_f2306e34c5dd",
+      "t": 1795705500000,
+      "local": "16:05:00",
+      "text": "the streak test still fails here:\n_______________________ test_checkin_after_midnight _______________________\n\n    def test_checkin_after_midnight():\n        log = CheckinLog(tz=\"Europe/Berlin\")\n        for day in (\"2026-11-23\", \"2026-11-24\", \"2026-11-25\"):\n            log.add(day + \"T21:30:00+01:00\")\n        log.add(\"2026-11-26T00:20:00+01:00\")\n>       assert log.streak(\"2026-11-26\") == 4\nE       assert 3 == 4\n\ntests/test_streaks.py:41: AssertionError\nFAILED tests/test_streaks.py::test_checkin_after_midnight - assert 3 == 4",
+      "len_chars": 530,
+      "source": "invented: SM 4.2 quotes no prompt for the fix-it rule; the typed words, then the pasted pytest output"
+    },
+    {
+      "turn_key": "t_9a412c446b25",
+      "t": 1795705680000,
+      "local": "16:08:00",
+      "text": "maybe today() reads UTC while check-ins keep local time, so compare both in one zone",
+      "len_chars": 84,
+      "source": "invented: SM 4.2 quotes no prompt for the fix-it rule"
+    },
+    {
+      "turn_key": "t_7be8482d25df",
+      "t": 1795705860000,
+      "local": "16:11:00",
+      "text": "keep going",
+      "len_chars": 10,
+      "source": "invented: SM 4.2 quotes no prompt for the fix-it rule"
+    },
+    {
+      "turn_key": "t_6b1e2bfc66ed",
+      "t": 1795706220000,
+      "local": "16:17:00",
+      "text": "committed the rest, this one's left:\nFAILED tests/test_streaks.py::test_checkin_after_midnight - assert 3 == 4",
+      "len_chars": 110,
+      "source": "invented: SM 4.2 quotes no prompt for the fix-it rule; the typed words, then the pasted pytest output"
+    },
+    {
+      "turn_key": "t_bf6df0ceb03c",
+      "t": 1795706400000,
+      "local": "16:20:00",
+      "text": "no luck, still failing the same way:\n_______________________ test_checkin_after_midnight _______________________\n\n    def test_checkin_after_midnight():\n        log = CheckinLog(tz=\"Europe/Berlin\")\n        for day in (\"2026-11-23\", \"2026-11-24\", \"2026-11-25\"):\n            log.add(day + \"T21:30:00+01:00\")\n        log.add(\"2026-11-26T00:20:00+01:00\")\n>       assert log.streak(\"2026-11-26\") == 4\nE       assert 3 == 4\n\ntests/test_streaks.py:41: AssertionError\nFAILED tests/test_streaks.py::test_checkin_after_midnight - assert 3 == 4",
+      "len_chars": 533,
+      "source": "invented: SM 4.2 quotes no prompt for the fix-it rule; the typed words, then the pasted pytest output"
+    },
+    {
+      "turn_key": "t_da4822936123",
+      "t": 1795706640000,
+      "local": "16:24:00",
+      "text": "go on",
+      "len_chars": 5,
+      "source": "invented: SM 4.2 quotes no prompt for the fix-it rule"
+    }
+  ]
+}

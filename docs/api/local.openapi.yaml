@@ -385,6 +385,8 @@ components:
           $ref: "#/components/schemas/Adapters"
         apps:
           $ref: "#/components/schemas/Apps"
+        ledger:
+          $ref: "#/components/schemas/Ledger"
         footprint:
           $ref: "#/components/schemas/Footprint"
         problems:
@@ -404,6 +406,25 @@ components:
             Absent when nothing is wrong.
           additionalProperties:
             type: string
+    Ledger:
+      type: object
+      additionalProperties: false
+      required: [late_local]
+      description: >
+        What the ledger writer says of its chain. Absent while the ledger
+        isn't open, as while the keystore is locked.
+      properties:
+        late_local:
+          type: integer
+          minimum: 0
+          description: >
+            Records the writer dropped over the chain's life: made while
+            config.toml said local-only, they reached it only after it had
+            sealed a batch online since, so they never upload (D-late-local).
+            It counts the adapters', presence's and the git watcher's;
+            HarnessCounts.late_local is each harness's part since the agent
+            started. The count rides in the seal frames, so drops after a
+            run's last batch are left out after a restart.
     Footprint:
       type: object
       additionalProperties: false
@@ -598,6 +619,14 @@ components:
           type: integer
           minimum: 0
           description: Records the ledger refused. Absent when none.
+        late_local:
+          type: integer
+          minimum: 0
+          description: >
+            Records the ledger dropped because they were made while
+            config.toml said local-only and reached it only after it had
+            sealed a batch online since, so they never upload (D-late-local).
+            Absent when none.
         ignored:
           type: integer
           minimum: 0
