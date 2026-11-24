@@ -309,6 +309,23 @@ check "--no-install stops once the binary is in place" ok 'To finish setting it 
   run sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub" --no-install
 check_record ''
 
+# A help that fails says nothing about pairtime install, and without it
+# the binary would go in place with no consent screen.
+fresh
+check "a build whose help fails is never put in place, and the folders made for it go again" \
+  fails "the new pairtime's .pairtime help. exited with status 5, so it wasn't installed" '' \
+  run PAIRTIME_FAKE_HELP_EXIT=5 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
+check_record ''
+
+fresh
+mkdir -p "$home/.local/bin"
+echo 'an old pairtime' > "$home/.local/bin/pairtime"
+check "a build whose help fails leaves the pairtime that was there as it was" \
+  fails 'Any pairtime you had is still there' "$installed" \
+  run PAIRTIME_FAKE_HELP_EXIT=5 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
+if [ "$(cat "$home/.local/bin/pairtime")" != 'an old pairtime' ]; then fail "the old pairtime was changed"; fi
+check_record ''
+
 fresh
 check "a pairtime install that stops before it puts pairtime in place leaves nothing, the folders made for it included" \
   fails 'pairtime install. stopped with status 4 before it put pairtime in place, so nothing was installed' '' \
@@ -321,6 +338,17 @@ check "a no at pairtime install's screen leaves the pairtime that was there as i
   fails 'you said no, so nothing was installed' "$installed" \
   run PAIRTIME_FAKE_INSTALL_EXIT=3 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
 if [ "$(cat "$home/.local/bin/pairtime")" != 'an old pairtime' ]; then fail "the old pairtime was changed"; fi
+
+# A no changes nothing, so the same release already in place, from an
+# earlier --no-install, was there before the rerun.
+fresh
+run sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub" --no-install > /dev/null 2>&1 ||
+  fail "the --no-install run before the next case failed"
+check "a no on a rerun of the release already in place says nothing changed and how to set it up, not that install stopped" \
+  fails "you said no, so nothing changed. The pairtime $version at $home/.local/bin/pairtime stays as it was; to set it up later, run: .*pairtime install" "$installed" \
+  run PAIRTIME_FAKE_INSTALL_EXIT=3 sh "$stamped" --base-url "$server/fake" --release-keys "$keys/fake.pub"
+not_in_output 'stopped with status 3'
+check_binary fake
 
 fresh
 check "a pairtime install that fails after putting pairtime in place says where it is and how to finish, with the folders made" \
@@ -552,6 +580,31 @@ done
 for bad in 0.1.0 v0.1 v01.0.0 v0.1.0+build v0.1.0- 'v0.1.0
 v0.2.0' "v1.0.0'"; do
   if check_version "$bad"; then echo "accepted $bad"; exit 1; fi
+done
+EOF
+
+# A real stalled download would take this test three minutes, so it checks
+# what fetch asks curl for, with a curl that only writes its arguments
+# down.
+unit "fetch has curl give up on a download that stops moving within a minute, and retry it for at most five minutes" << 'EOF'
+dir=$(mktemp -d)
+cat > "$dir/curl" << 'CURL'
+#!/bin/sh
+printf '%s\n' "$@" > "$CURL_ARGS"
+CURL
+chmod +x "$dir/curl"
+CURL_ARGS=$dir/args
+export CURL_ARGS
+PATH=$dir:$PATH
+proto='=https'
+agent=pairtime-e2e
+fetch https://example.com/manifest.json "$dir/out"
+args=" $(tr '\n' ' ' < "$dir/args")"
+for want in '--speed-limit 1024 ' '--speed-time 60 ' '--retry 2 ' '--retry-max-time 300 ' '--connect-timeout 30 '; do
+  case $args in
+    *" $want"*) ;;
+    *) echo "fetch ran curl without $want:$args"; exit 1 ;;
+  esac
 done
 EOF
 

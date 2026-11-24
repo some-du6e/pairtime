@@ -50,9 +50,25 @@
 # PAIRTIME_ALLOW_UNSIGNED from the session once it has read it, so it
 # lasts for one install.
 
-# Everything runs inside this script block, so that pasting the script with
-# irm | iex leaves no functions or variables behind in the session.
-$installPairtime = {
+# Everything runs in scopes of its own: the first script block below runs
+# the second, the installer, which it gets as an argument rather than
+# through a variable. irm | iex runs this text in the session's own scope,
+# where a variable set here would replace one of the session's with the
+# same name, and removing it afterwards would take the session's away. So
+# pasting the script leaves no functions or variables behind, and touches
+# none of the session's own.
+#
+# Tests dot-source this file with PAIRTIME_INSTALL_PS1_TEST=functions, then
+# dot-source the installer it returns, to call its functions
+# (install/e2e/test.ps1).
+& {
+  param([scriptblock]$Installer)
+  if ($env:PAIRTIME_INSTALL_PS1_TEST -eq 'functions') {
+    $Installer
+  } else {
+    & $Installer @args
+  }
+} {
   param(
     [string]$Version = $env:PAIRTIME_VERSION,
     [string]$BaseUrl = $env:PAIRTIME_BASE_URL,
@@ -447,14 +463,30 @@ $installPairtime = {
 
   # Puts New at Target. Windows can't replace or delete a pairtime.exe that
   # is running, such as the agent, but it can rename it, so an old one
-  # moves aside first and goes once nothing runs it.
+  # moves aside first and goes once nothing runs it. It moves aside under
+  # this process's id, pairtime.old.$PID.exe, so that two installs at once
+  # never delete each other's copy and leave no pairtime.exe. pairtime
+  # deletes old copies under such a name, or pairtime.old.exe, once nothing
+  # runs them and no process with that id runs (isOldName and placing in
+  # cmd/pairtime).
   function Move-IntoPlace([string]$New, [string]$Target) {
     $old = $null
     if (Test-Path -LiteralPath $Target) {
       $dir = Split-Path -Parent $Target
-      $old = Join-Path $dir 'pairtime.old.exe'
+      $old = Join-Path $dir "pairtime.old.$PID.exe"
       Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
-      if (Test-Path -LiteralPath $old) { $old = Join-Path $dir "pairtime.old.$PID.exe" }
+      if (Test-Path -LiteralPath $old) {
+        # Every run in one PowerShell window has the same $PID, so an
+        # earlier one may have left a copy under it that something still
+        # runs. No install needs that copy, so it moves out of the way, under
+        # a random id that no copy there has, and pairtime's cleanups delete
+        # it once nothing runs it (isOldName). This run's copy keeps $PID's
+        # name, which they leave while this window runs (placing).
+        do {
+          $stale = Join-Path $dir "pairtime.old.$(Get-Random -Minimum 1 -Maximum 2147483647).exe"
+        } while (Test-Path -LiteralPath $stale)
+        Move-Item -LiteralPath $old -Destination $stale
+      }
       Move-Item -LiteralPath $Target -Destination $old
     }
     try {
@@ -579,7 +611,16 @@ $installPairtime = {
       # work. So the staged copy runs it and is what it copies into place.
       # Without pairtime install there's no consent screen to wait for, so
       # the script puts the binary in place itself.
-      $handOver = -not $placeOnly -and (@(& $new help) -cmatch '^  install ')
+      # Whether this build has pairtime install comes from its help. A help
+      # that fails, or is killed, says nothing about that, and a native
+      # command's status never throws, so the install stops on it here
+      # rather than put the binary in place with no consent screen.
+      if (-not $placeOnly) {
+        $help = Invoke-WithTimeout $new 'help' $VersionTimeout
+        if ($help.TimedOut) { Fail "the new pairtime didn't finish 'pairtime help' within $VersionTimeout seconds, so it wasn't installed. Any pairtime you had is still there." }
+        if (-not $help.Ok) { Fail "the new pairtime's 'pairtime help' failed ($(Get-Start $help.Output 300)), so it wasn't installed. Any pairtime you had is still there." }
+        $handOver = @(($help.Output -split "`r?`n") -cmatch '^  install ').Count -gt 0
+      }
       if (-not $handOver) {
         Move-IntoPlace $new $target
         $new = $null
@@ -620,9 +661,14 @@ $installPairtime = {
         if (-not $installed) { Remove-EmptyFolders $made }
       }
       if ($code -ne 0) {
+        # 3 is pairtime install's status for a no, which changes nothing, so
+        # a pairtime this script checked that is at the target was there
+        # before this run, as after an earlier -NoInstall.
+        if ($code -eq 3) {
+          if ($installed) { Fail "you said no, so nothing changed. The pairtime $Version at $target stays as it was; to set it up later, run: $finish" }
+          Fail 'you said no, so nothing was installed. To set pairtime up later, run this install again.'
+        }
         if ($installed) { Fail "'pairtime install' stopped with status $code. pairtime is at $target; run $finish to finish setting it up." }
-        # 3 is pairtime install's status for a no.
-        if ($code -eq 3) { Fail 'you said no, so nothing was installed. To set pairtime up later, run this install again.' }
         Fail "'pairtime install' stopped with status $code before it put pairtime in place, so nothing was installed."
       }
       if (-not $installed) { Fail "'pairtime install' finished, but $target isn't the pairtime $Version this script checked, so something else is there. Nothing was installed." }
@@ -641,16 +687,4 @@ $installPairtime = {
   if ($env:PAIRTIME_INSTALL_PS1_TEST -ne 'functions') {
     Install-Pairtime
   }
-}
-
-# Tests dot-source this file with PAIRTIME_INSTALL_PS1_TEST=functions to call
-# its functions (install/e2e/test.ps1).
-try {
-  if ($env:PAIRTIME_INSTALL_PS1_TEST -eq 'functions') {
-    . $installPairtime
-  } else {
-    & $installPairtime @args
-  }
-} finally {
-  Remove-Variable -Name installPairtime -ErrorAction SilentlyContinue
-}
+} @args

@@ -373,10 +373,14 @@ check_url() {
   esac
 }
 
-# fetch URL FILE downloads URL into FILE.
+# fetch URL FILE downloads URL into FILE. A download that stops moving, or
+# never starts, fails within a minute, slower than 1 KiB/s, and --retry
+# tries it again, all within five minutes, so a stalled server can't hang
+# the install. A slow download that keeps moving isn't cut off.
 fetch() {
   curl --fail --silent --show-error --location --proto "$proto" --proto-redir "$proto" \
-    --tlsv1.2 --retry 2 --connect-timeout 30 --user-agent "$agent" --output "$2" "$1"
+    --tlsv1.2 --retry 2 --retry-max-time 300 --connect-timeout 30 --speed-limit 1024 --speed-time 60 \
+    --user-agent "$agent" --output "$2" "$1"
 }
 
 # run_with_timeout SECONDS OUTPUT COMMAND... runs COMMAND with its output in
@@ -696,7 +700,22 @@ main() {
   if [ -n "$made_local" ]; then finish="$finish --made $(shell_quote "$HOME/.local")"; fi
   if [ -n "$made_bin" ]; then finish="$finish --made $(shell_quote "$bin_dir")"; fi
 
-  if [ "$no_install" != 1 ] && "$new" help < /dev/null 2> /dev/null | grep -q '^  install '; then
+  # Whether this build has pairtime install, from its help. A help that
+  # fails, or is killed, says nothing about that, and without pairtime
+  # install the binary would go in place with no consent screen, so the
+  # install stops there instead.
+  has_install=''
+  if [ "$no_install" != 1 ]; then
+    step='asking the new binary for its commands'
+    if ! run_with_timeout "$version_timeout" "$work/help.out" "$new" help; then
+      if [ "$status" = 137 ]; then
+        die "the new pairtime didn't finish \`pairtime help\` within $version_timeout seconds, so it wasn't installed. Any pairtime you had is still there."
+      fi
+      die "the new pairtime's \`pairtime help\` exited with status $status, so it wasn't installed. Any pairtime you had is still there."
+    fi
+    if grep -q '^  install ' "$work/help.out"; then has_install=1; fi
+  fi
+  if [ -n "$has_install" ]; then
     # pairtime install puts the binary in place itself, after the yes on
     # its consent screen, so nothing stays on the computer before the teen
     # agrees (docs/errata/2026-11-20-install-binary-after-consent.md). It
@@ -727,9 +746,14 @@ main() {
     new=''
     if placed; then installed=1; fi
     if [ "$status" != 0 ]; then
+      # 3 is pairtime install's status for a no, which changes nothing, so
+      # a pairtime this script checked that is at the target was there
+      # before this run, as after an earlier --no-install.
+      if [ "$status" = 3 ]; then
+        [ -z "$installed" ] || die "you said no, so nothing changed. The pairtime $version at $target stays as it was; to set it up later, run: $finish"
+        die "you said no, so nothing was installed. To set pairtime up later, run this install again."
+      fi
       [ -z "$installed" ] || die "\`pairtime install\` stopped with status $status. pairtime is at $target; run \`$finish\` to finish setting it up."
-      # 3 is pairtime install's status for a no.
-      [ "$status" != 3 ] || die "you said no, so nothing was installed. To set pairtime up later, run this install again."
       die "\`pairtime install\` stopped with status $status before it put pairtime in place, so nothing was installed."
     fi
     [ -n "$installed" ] || die "\`pairtime install\` finished, but $target isn't the pairtime $version this script checked, so something else is there. Nothing was installed."

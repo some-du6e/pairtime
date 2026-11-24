@@ -82,7 +82,8 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 		return detachAgent(stdout, stderr)
 	}
 	// A copy of the binary that an install moved aside on Windows while
-	// something ran it goes once nothing does (commitBinary).
+	// something ran it goes once nothing does and that install has ended
+	// (removeOldBinaries).
 	if exe, err := os.Executable(); err == nil {
 		removeOldBinaries(filepath.Dir(exe))
 	}
