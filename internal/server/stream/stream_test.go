@@ -365,6 +365,51 @@ func TestKeepalive(t *testing.T) {
 	}
 }
 
+func TestWriteDeadline(t *testing.T) {
+	tests := []struct {
+		name string
+		// after is how long the stream runs before the check.
+		after time.Duration
+		// want is every deadline set, as offsets from the start, with -1
+		// for a cleared one.
+		want []time.Duration
+	}{
+		{name: "the first block's write gets a 10 s deadline, cleared once it is out", after: time.Second,
+			want: []time.Duration{writeTimeout, -1}},
+		{name: "each keepalive's write gets one too, so no deadline is left on a quiet stream between writes", after: 31 * time.Second,
+			want: []time.Duration{writeTimeout, -1, 15*time.Second + writeTimeout, -1, 30*time.Second + writeTimeout, -1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				h := New(Options{Account: testAccount})
+				defer h.Close()
+				start := time.Now()
+				c := open(t, h, meTopic, as("a1"))
+				time.Sleep(tt.after)
+				synctest.Wait()
+				c.read()
+				var got []time.Duration
+				for more := true; more; {
+					select {
+					case d := <-c.w.deadlines:
+						if d.IsZero() {
+							got = append(got, -1)
+						} else {
+							got = append(got, d.Sub(start))
+						}
+					default:
+						more = false
+					}
+				}
+				if !reflect.DeepEqual(got, tt.want) {
+					t.Errorf("deadlines %v, want %v", got, tt.want)
+				}
+			})
+		})
+	}
+}
+
 func TestRefusals(t *testing.T) {
 	broken := func(*http.Request) (string, error) { return "", errors.New("the session table is locked") }
 	private := &fakeProfiles{}

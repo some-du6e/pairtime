@@ -155,6 +155,30 @@ func TestOwnerTopic(t *testing.T) {
 				t.Errorf("after the failure the stream got %+v, want one event of 45 s", got)
 			}
 		}},
+		{name: "with no stream on it for the window, a user topic stops reading Views and goes, though its account keeps changing", run: func(t *testing.T, h *Hub, src *viewSource) {
+			c := open(t, h, meTopic, as("a1"))
+			c.read()
+			c.close()
+			// A change a minute for ten minutes, as from a computer that
+			// uploads while no dashboard is open.
+			for range 10 {
+				h.Changed("a1")
+				synctest.Wait()
+				time.Sleep(time.Minute)
+				synctest.Wait()
+			}
+			// One read a change while a reconnect could still replay it,
+			// in the window's first five minutes, and none after.
+			if n := src.calls.Load(); n != 5 {
+				t.Errorf("the hub read %d Views, want 5", n)
+			}
+			h.mu.Lock()
+			_, kept := h.topics[userKey+"a1"]
+			h.mu.Unlock()
+			if kept {
+				t.Error("the topic no stream was on for the window is still there")
+			}
+		}},
 		{name: "a change while every stream is away still publishes, so a reconnect within the window replays it", run: func(t *testing.T, h *Hub, src *viewSource) {
 			c := open(t, h, meTopic, as("a1"))
 			last := lastID(c.read())

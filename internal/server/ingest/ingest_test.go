@@ -1601,13 +1601,21 @@ func TestChanged(t *testing.T) {
 			h.ok(t, upload{dev: dev, body: bucketsBody(t, sampleBucket(dev.ID, minute, 1))})
 			return []changedCall{{revisions: 1}}
 		}},
-		{name: "a replayed request isn't heard again", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
+		{name: "a replay of an upload that stored a revision is heard again, since its client may never have had the first answer", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
 			u := upload{dev: dev, body: bucketsBody(t, sampleBucket(dev.ID, minute, 1)), key: h.newKey(), req: 1}
 			h.ok(t, u)
 			if rec := h.send(t, u); rec.Header().Get(HeaderReplay) != "true" {
 				t.Fatalf("the second send wasn't a replay: %d %s", rec.Code, rec.Body)
 			}
-			return []changedCall{{revisions: 1}}
+			return []changedCall{{revisions: 1}, {revisions: 1}}
+		}},
+		{name: "a replay of an upload that stored no revision isn't heard", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
+			u := upload{dev: dev, body: batchesBody(chain(rand.New(rand.NewPCG(3, 4)), ledger.Hash{}, 1, 1)...), key: h.newKey(), req: 1}
+			h.ok(t, u)
+			if rec := h.send(t, u); rec.Header().Get(HeaderReplay) != "true" {
+				t.Fatalf("the second send wasn't a replay: %d %s", rec.Code, rec.Body)
+			}
+			return nil
 		}},
 		{name: "an upload of batch roots alone moves no rollups and isn't heard", run: func(t *testing.T, h *harness, dev *testDevice) []changedCall {
 			h.ok(t, upload{dev: dev, body: batchesBody(chain(rand.New(rand.NewPCG(1, 2)), ledger.Hash{}, 1, 2)...)})

@@ -50,9 +50,14 @@ type Credited struct {
 	Today Clocks `json:"today"`
 	Week  Clocks `json:"week"`
 	// Projects are the projects with time today or in the last 7 days, in
-	// the View's order.
+	// the View's order, the most time over 30 days first: at most
+	// maxEventProjects of them, since a device decides how many projects
+	// it names, and the page reads every number from its own refetch.
 	Projects []ProjectClocks `json:"projects"`
 }
+
+// maxEventProjects is the most projects a credited event lists.
+const maxEventProjects = 32
 
 // Clocks are the owner's time and the agent's time on its own over a span.
 type Clocks struct {
@@ -92,6 +97,9 @@ func creditedOf(v dashboard.View, prev *Credited) Credited {
 		if !inToday && !inWeek {
 			continue
 		}
+		if len(c.Projects) == maxEventProjects {
+			break
+		}
 		c.Projects = append(c.Projects, ProjectClocks{
 			Project: p.ID,
 			Today:   Clocks{You: td.You, Agent: td.Agent},
@@ -113,7 +121,7 @@ func creditedOf(v dashboard.View, prev *Credited) Credited {
 // one a stream left less than Window ago, gets a credited event from a
 // fresh View at once, or Gap after the last one began, and a profile
 // topic of the account is marked for the next hour. An account with no
-// topic costs nothing.
+// such topic costs nothing.
 func (h *Hub) Changed(account string) {
 	if account == "" {
 		return
@@ -123,7 +131,8 @@ func (h *Hub) Changed(account string) {
 	if h.closed {
 		return
 	}
-	if t := h.topics[userKey+account]; t != nil && h.o.Source != nil {
+	now := time.Now()
+	if t := h.topics[userKey+account]; t != nil && h.o.Source != nil && !h.abandonedLocked(t, now) {
 		st := t.owner
 		st.dirty = true
 		if !st.busy {
@@ -132,7 +141,7 @@ func (h *Hub) Changed(account string) {
 			go h.publishOwner(t, time.Until(st.last.Add(h.o.Gap)))
 		}
 	}
-	if t := h.topics[profileKey+account]; t != nil {
+	if t := h.topics[profileKey+account]; t != nil && !h.abandonedLocked(t, now) {
 		t.profile.dirty = true
 	}
 }
@@ -162,26 +171,34 @@ func (h *Hub) publishOwner(t *topic, wait time.Duration) {
 		st.dirty = false
 		started := time.Now()
 		st.last = started
+		// Only this goroutine, the topic's one publisher while busy is
+		// set, reads or writes prev, so the event is built and encoded
+		// without the lock every stream and Changed share.
+		prev := st.prev
 		h.mu.Unlock()
 
 		ctx, cancel := context.WithTimeout(h.ctx, readTimeout)
 		v, err := h.o.Source.View(ctx, t.account, started)
 		cancel()
 		<-h.reads
+		var c Credited
+		var data []byte
+		if err == nil {
+			c = creditedOf(v, prev)
+			data, err = json.Marshal(c)
+		}
 
 		h.mu.Lock()
-		if h.topics[t.key] != t {
+		if h.topics[t.key] != t || h.closed {
+			// Gone, or Close canceled the read: nothing to log.
 			h.mu.Unlock()
 			return
 		}
 		if err != nil {
 			h.o.Logger.Warn("reading a dashboard for its stream", "user", t.account, "err", err)
 		} else {
-			c := creditedOf(v, st.prev)
-			if data, err := json.Marshal(c); err == nil {
-				h.publishLocked(t, "credited", data, time.Now())
-				st.prev = &c
-			}
+			h.publishLocked(t, "credited", data, time.Now())
+			st.prev = &c
 		}
 		if !st.dirty {
 			st.busy = false

@@ -75,12 +75,22 @@
 //
 // # Caps
 //
-// A stream counts toward its account, when it carries user:me, toward its
-// client, and toward the server's total. Past MaxPerAccount, MaxPerClient
-// or MaxStreams the request gets 429, so one account can't hold thousands
-// of streams open. The client is the address Cloudflare names in
+// A stream that carries user:me counts toward its account, past
+// MaxPerAccount the request gets 429, so one account can't hold thousands
+// of streams open. A stream without it is anonymous and counts toward its
+// client address, up to MaxPerClient, and toward MaxAnonymous, half of
+// MaxStreams, so anonymous streams never take the places signed-in owners
+// need, at a school behind one address or anywhere. Every stream counts
+// toward MaxStreams. The client is the address Cloudflare names in
 // CF-Connecting-IP, as ingest reads it, else the connection's, with IPv6
-// counted by its /64.
+// counted by its /48, the most a home network or a tunnel broker usually
+// hands out. pairtimed is reached only through cloudflared, which sets the
+// header itself.
+//
+// A stream of user:me asks again every Recheck whether its session still
+// names its account, and ends when it doesn't, so a sign-out, a revoked
+// session or one past its lifetime stops its events within a minute. The
+// browser's reconnect then gets 401, which stops EventSource.
 //
 // The stream holds events in memory for Window and stores nothing (DESIGN
 // 4.4 has no row for it, and needs none).
@@ -122,20 +132,29 @@ const (
 	// DefaultMaxPerAccount is the most streams one account holds open,
 	// one for each tab of a few windows.
 	DefaultMaxPerAccount = 10
-	// DefaultMaxPerClient is the most streams one client address holds
-	// open. A school network puts a whole class behind one address, so it
-	// is far above one person's tabs.
+	// DefaultMaxPerClient is the most anonymous streams one client address
+	// holds open. A school network puts a whole class behind one address,
+	// so it is far above one person's tabs.
 	DefaultMaxPerClient = 100
+	// DefaultMaxAnonymous is the most anonymous streams open at once: half
+	// of DefaultMaxStreams, so signed-in owners always have the other half.
+	DefaultMaxAnonymous = DefaultMaxStreams / 2
+	// DefaultRecheck is how often a stream of user:me asks again whether
+	// its session is still signed in to its account.
+	DefaultRecheck = time.Minute
 )
 
 // MaxTopics is the most topics one stream carries.
 const MaxTopics = 8
 
-// ringMax is the most events a topic keeps, whatever their age, which
-// bounds a busy topic's memory. A reconnect that needs one it dropped gets
-// resync. A user topic publishes at most one event a Gap, and a profile
-// topic one an hour.
-const ringMax = 32
+// ringMax and ringBytes are the most events, and the most bytes of them,
+// a topic keeps, whatever their age, which bounds a busy topic's memory. A
+// reconnect that needs one it dropped gets resync. A user topic publishes
+// at most one event a Gap, and a profile topic one an hour.
+const (
+	ringMax   = 32
+	ringBytes = 32 << 10
+)
 
 // sendBuffer is how many events a stream can be behind before the hub
 // ends it.
@@ -161,9 +180,11 @@ type Options struct {
 	// Nil makes every profile: topic unknown.
 	Profiles Profiles
 
-	Window, Keepalive, Retry, Gap time.Duration
-	// MaxStreams, MaxPerAccount and MaxPerClient are the caps.
-	MaxStreams, MaxPerAccount, MaxPerClient int
+	Window, Keepalive, Retry, Gap, Recheck time.Duration
+	// MaxStreams caps every stream, MaxPerAccount those of one account,
+	// and MaxAnonymous and MaxPerClient the streams without user:me, in
+	// all and from one client address.
+	MaxStreams, MaxPerAccount, MaxAnonymous, MaxPerClient int
 
 	// Logger hears of reads that fail. Nil means slog.Default().
 	Logger *slog.Logger
@@ -179,9 +200,12 @@ type Hub struct {
 	mu     sync.Mutex
 	topics map[string]*topic
 	closed bool
-	// total, perAccount and perClient count the open streams.
+	// total, perAccount, anonymous and perClient count the open streams:
+	// all of them, those of each account, and those without an account,
+	// in all and from each client address.
 	total      int
 	perAccount map[string]int
+	anonymous  int
 	perClient  map[string]int
 	// ord numbers every event the hub publishes, in order, so a replay
 	// of several topics' gaps keeps that order. It never leaves the hub.
@@ -223,6 +247,12 @@ func New(o Options) *Hub {
 	}
 	if o.MaxPerClient <= 0 {
 		o.MaxPerClient = DefaultMaxPerClient
+	}
+	if o.MaxAnonymous <= 0 {
+		o.MaxAnonymous = min(DefaultMaxAnonymous, max(o.MaxStreams/2, 1))
+	}
+	if o.Recheck <= 0 {
+		o.Recheck = DefaultRecheck
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
@@ -282,8 +312,9 @@ type topic struct {
 	// seq is the number of the last event published, 0 before the first.
 	seq uint64
 	// ring holds the events of the last Window, oldest first, at most
-	// ringMax.
-	ring []*event
+	// ringMax of them and ringBytes of their frames, which bytes counts.
+	ring  []*event
+	bytes int
 	// lost is the number of the newest event the ring dropped, 0 for none.
 	lost uint64
 	// subs are the streams on the topic, each with this topic's index in
@@ -339,7 +370,9 @@ func (h *Hub) topicLocked(key, account string) *topic {
 	if t != nil {
 		return t
 	}
-	t = &topic{key: key, account: account, epoch: newEpoch(), subs: make(map[*sub]int)}
+	// A topic is made for a stream that subscribes at once, which clears
+	// idle; until then it counts as just left.
+	t = &topic{key: key, account: account, epoch: newEpoch(), subs: make(map[*sub]int), idle: time.Now()}
 	switch {
 	case strings.HasPrefix(key, userKey):
 		t.owner = &ownerState{}
@@ -367,6 +400,7 @@ func (h *Hub) publishLocked(t *topic, name string, data []byte, now time.Time) {
 	h.ord++
 	ev := &event{seq: t.seq, ord: h.ord, at: now, frame: frame(name, data)}
 	t.ring = append(t.ring, ev)
+	t.bytes += len(ev.frame)
 	trimLocked(t, now, h.o.Window)
 	for s, i := range t.subs {
 		select {
@@ -378,10 +412,12 @@ func (h *Hub) publishLocked(t *topic, name string, data []byte, now time.Time) {
 }
 
 // trimLocked drops the events older than window from t's ring, and the
-// oldest while it holds more than ringMax.
+// oldest while it holds more than ringMax events or ringBytes of them. The
+// newest event stays whatever its size, so a stream on the topic has it.
 func trimLocked(t *topic, now time.Time, window time.Duration) {
 	n := 0
-	for n < len(t.ring) && (now.Sub(t.ring[n].at) >= window || len(t.ring)-n > ringMax) {
+	for n < len(t.ring) && (now.Sub(t.ring[n].at) >= window || len(t.ring)-n > ringMax || t.bytes > ringBytes && n < len(t.ring)-1) {
+		t.bytes -= len(t.ring[n].frame)
 		n++
 	}
 	if n == 0 {
@@ -431,15 +467,18 @@ func (h *Hub) sweep() {
 }
 
 // sweepOnce drops the events older than the window from every topic, and
-// every topic no stream has been on for the window whose ring is then
-// empty: a reconnect to it gets resync from the topic made in its place.
-// A user topic waiting to publish stays.
+// every topic no stream has been on for the window, whatever its ring
+// still holds: a reconnect to it gets resync from the topic made in its
+// place. A topic whose account keeps changing publishes into its ring
+// while nobody is there, so the ring alone would keep it, and its reads,
+// for as long as the changes come. A user topic in the middle of a read
+// stays until the read is done.
 func (h *Hub) sweepOnce(now time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for key, t := range h.topics {
 		trimLocked(t, now, h.o.Window)
-		if len(t.subs) > 0 || len(t.ring) > 0 || now.Sub(t.idle) < h.o.Window {
+		if !h.abandonedLocked(t, now) {
 			continue
 		}
 		if t.owner != nil && t.owner.busy {
@@ -447,6 +486,12 @@ func (h *Hub) sweepOnce(now time.Time) {
 		}
 		delete(h.topics, key)
 	}
+}
+
+// abandonedLocked reports whether no stream has been on t for the window,
+// after which nothing a reconnect could replay is worth reading for it.
+func (h *Hub) abandonedLocked(t *topic, now time.Time) bool {
+	return len(t.subs) == 0 && now.Sub(t.idle) >= h.o.Window
 }
 
 // position is a stream's place in one topic: the epoch and number of the

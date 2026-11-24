@@ -81,9 +81,11 @@ type Options struct {
 	// Changed, when set, hears the account of each upload that stored a
 	// bucket revision, so moved the account's rollups, once the writer's
 	// transaction has committed: never inside the op, and not for an upload
-	// that failed or whose outcome its client stopped waiting for. pairtimed
-	// passes the live stream's Changed, which sends the owner's open
-	// dashboards their new numbers (WP-SV8).
+	// that failed or whose outcome its client stopped waiting for. A replay
+	// of an upload that stored one is heard again, since the client that
+	// sends it again never had the first answer, so may be the only sign
+	// the first one ever gives. pairtimed passes the live stream's Changed,
+	// which sends the owner's open dashboards their new numbers (WP-SV8).
 	Changed func(account string)
 	// Observe, when set, hears of each upload the writer processed, not
 	// counting replays: how many batch roots it stored, and how long the
@@ -315,6 +317,7 @@ func (s *Service) batches(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if out, done := s.precheck(r.Context(), dev, env); done {
+		s.announce(dev, out)
 		s.answer(w, out, start)
 		return
 	}
@@ -345,10 +348,38 @@ func (s *Service) batches(w http.ResponseWriter, r *http.Request) {
 	}
 	// The writer committed the op, so the rollups it moved are there for
 	// any reader.
-	if out.refusal == nil && !out.replay && out.revised > 0 && s.o.Changed != nil {
+	s.announce(dev, out)
+	s.answer(w, out, start)
+}
+
+// announce tells Changed of the device's account when out stored a bucket
+// revision: an upload whose transaction just committed, or a replay of one
+// that did.
+func (s *Service) announce(dev device.Device, out outcome) {
+	if s.o.Changed == nil || out.refusal != nil {
+		return
+	}
+	if out.revised > 0 || out.replay && revisedIn(out.response) {
 		s.o.Changed(dev.Account)
 	}
-	s.answer(w, out, start)
+}
+
+// revisedIn reports whether a stored answer accepted a bucket revision.
+func revisedIn(response []byte) bool {
+	var r struct {
+		Buckets []struct {
+			Code string `json:"code"`
+		} `json:"buckets"`
+	}
+	if json.Unmarshal(response, &r) != nil {
+		return false
+	}
+	for _, b := range r.Buckets {
+		if b.Code == CodeAccepted {
+			return true
+		}
+	}
+	return false
 }
 
 // answer sends what the checks of ingest-v1 2.5 steps 13 and 14 decided.

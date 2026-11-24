@@ -40,10 +40,22 @@ type pipeWriter struct {
 	out     chan []byte
 	hold    atomic.Bool
 	release chan struct{}
+	// deadlines gets the write deadlines the handler sets, as a net/http
+	// ResponseWriter would set them on its connection, as many as it
+	// holds; a long test that never reads them drops the rest.
+	deadlines chan time.Time
 }
 
 func newPipeWriter() *pipeWriter {
-	return &pipeWriter{header: http.Header{}, out: make(chan []byte, 4096), release: make(chan struct{})}
+	return &pipeWriter{header: http.Header{}, out: make(chan []byte, 4096), release: make(chan struct{}), deadlines: make(chan time.Time, 4096)}
+}
+
+func (p *pipeWriter) SetWriteDeadline(t time.Time) error {
+	select {
+	case p.deadlines <- t:
+	default:
+	}
+	return nil
 }
 
 func (p *pipeWriter) Header() http.Header { return p.header }

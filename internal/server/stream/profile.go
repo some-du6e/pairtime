@@ -137,6 +137,10 @@ func (h *Hub) profilePass(hour time.Time) {
 	}
 	h.mu.Unlock()
 	for _, t := range due {
+		if h.ctx.Err() != nil {
+			// Close: the topics go with the hub.
+			return
+		}
 		select {
 		case h.reads <- struct{}{}:
 		case <-h.done:
@@ -153,7 +157,7 @@ func (h *Hub) profilePass(hour time.Time) {
 
 		h.mu.Lock()
 		switch {
-		case h.topics[t.key] != t:
+		case h.topics[t.key] != t, h.closed:
 		case err != nil:
 			// The next hour tries again.
 			t.profile.dirty = true

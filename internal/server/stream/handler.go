@@ -85,8 +85,8 @@ type stream struct {
 	// replay is the gap of the others, oldest first.
 	resync []string
 	replay []delivery
-	// account is the account of user:me, "" without it, and client the
-	// address it counts toward.
+	// account is the account of user:me, "" for an anonymous stream, and
+	// client the address an anonymous stream counts toward.
 	account, client string
 }
 
@@ -153,10 +153,11 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request, st *stream) {
 	hd := w.Header()
 	hd.Set("Content-Type", "text/event-stream")
 	// SP 6.4 asks for no-cache, which proxies read as a stream not to
-	// hold; EventSource fetches with no cache anyway, and Cloudflare
-	// stores no event stream. no-transform keeps an edge from compressing
-	// it, which would hold events back until a compressed block fills.
-	hd.Set("Cache-Control", "no-cache, no-transform")
+	// hold. no-store keeps any cache, a school's inspecting proxy among
+	// them, from keeping an owner's events, as the dashboard's API says
+	// for its view. no-transform keeps an edge from compressing the
+	// stream, which would hold events back until a compressed block fills.
+	hd.Set("Cache-Control", "no-cache, no-store, no-transform")
 	// nginx, for a server someone runs behind one, passes the stream on
 	// as it comes rather than buffer it.
 	hd.Set("X-Accel-Buffering", "no")
@@ -165,12 +166,18 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request, st *stream) {
 	rc := http.NewResponseController(w)
 	send := func(b []byte) error {
 		// A deadline the writer doesn't support, such as a test's, just
-		// isn't set.
+		// isn't set. It is cleared again once the bytes are out: Go's
+		// HTTP/2 server resets a stream when its deadline passes, write or
+		// no write, which would end a quiet stream between keepalives.
 		rc.SetWriteDeadline(time.Now().Add(writeTimeout))
 		if _, err := w.Write(b); err != nil {
 			return err
 		}
-		return rc.Flush()
+		if err := rc.Flush(); err != nil {
+			return err
+		}
+		rc.SetWriteDeadline(time.Time{})
+		return nil
 	}
 
 	if send(h.first(st)) != nil {
@@ -178,6 +185,13 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request, st *stream) {
 	}
 	tick := time.NewTicker(h.o.Keepalive)
 	defer tick.Stop()
+	// Only a stream of user:me has a session to ask about again.
+	var recheck <-chan time.Time
+	if st.account != "" {
+		t := time.NewTicker(h.o.Recheck)
+		defer t.Stop()
+		recheck = t.C
+	}
 	var buf []byte
 	for {
 		select {
@@ -193,6 +207,14 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request, st *stream) {
 				}
 			}
 			if len(buf) > 0 && send(buf) != nil {
+				return
+			}
+			if cap(buf) > maxKeptBuf {
+				// A burst of big events shouldn't stay with the stream.
+				buf = nil
+			}
+		case <-recheck:
+			if id, ref := h.signedIn(r); ref != nil || id != st.account {
 				return
 			}
 		case <-tick.C:
@@ -228,6 +250,10 @@ func (h *Hub) first(st *stream) []byte {
 	}
 	return b
 }
+
+// maxKeptBuf is the most of its write buffer a stream keeps between
+// events.
+const maxKeptBuf = 64 << 10
 
 // keepalive is what a stream sends every Keepalive: SP 6.4's comment,
 // which a proxy sees as bytes, and an event named keepalive with no data.
@@ -281,7 +307,7 @@ func (h *Hub) open(wants []want, account, client string, resume map[string]posit
 		return nil, &refusal{http.StatusServiceUnavailable, CodeUnavailable}
 	case h.total >= h.o.MaxStreams,
 		account != "" && h.perAccount[account] >= h.o.MaxPerAccount,
-		h.perClient[client] >= h.o.MaxPerClient:
+		account == "" && (h.anonymous >= h.o.MaxAnonymous || h.perClient[client] >= h.o.MaxPerClient):
 		return nil, &refusal{http.StatusTooManyRequests, CodeTooManyStreams}
 	}
 	st := &stream{
@@ -320,8 +346,10 @@ func (h *Hub) open(wants []want, account, client string, resume map[string]posit
 	h.total++
 	if account != "" {
 		h.perAccount[account]++
+	} else {
+		h.anonymous++
+		h.perClient[client]++
 	}
-	h.perClient[client]++
 	return st, nil
 }
 
@@ -335,7 +363,9 @@ func (h *Hub) end(st *stream) {
 		if h.perAccount[st.account]--; h.perAccount[st.account] <= 0 {
 			delete(h.perAccount, st.account)
 		}
+		return
 	}
+	h.anonymous--
 	if h.perClient[st.client]--; h.perClient[st.client] <= 0 {
 		delete(h.perClient, st.client)
 	}
@@ -405,10 +435,11 @@ func parseTopics(values []string) ([]string, *refusal) {
 	return names, nil
 }
 
-// clientOf returns the address a stream counts toward: CF-Connecting-IP,
-// which cloudflared sets and ingest reads too, when there is one valid
-// value, else the connection's. An IPv6 address counts by its /64, which
-// one home or phone holds whole.
+// clientOf returns the address an anonymous stream counts toward:
+// CF-Connecting-IP, which cloudflared sets and ingest reads too, when there
+// is one valid value, else the connection's. An IPv6 address counts by its
+// /48: a home network often gets a /56 and a tunnel broker hands out a /48,
+// so a /64 a stream would let one person count as hundreds of clients.
 func clientOf(r *http.Request) string {
 	var a netip.Addr
 	if vs := r.Header.Values("CF-Connecting-IP"); len(vs) == 1 {
@@ -424,7 +455,7 @@ func clientOf(r *http.Request) string {
 	}
 	a = a.WithZone("").Unmap()
 	if a.Is6() {
-		if p, err := a.Prefix(64); err == nil {
+		if p, err := a.Prefix(48); err == nil {
 			return p.String()
 		}
 	}
