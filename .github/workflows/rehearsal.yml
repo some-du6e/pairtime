@@ -63,10 +63,12 @@ on:
       - testdata/fixtures/claude_code/2.1.327/linux/cli/hooks/**
       - tools/ci/desktop_session.sh
       - .github/workflows/rehearsal.yml
-      # The live dashboard check's spec, its Playwright config and the npm
-      # packages it installs. Its harness is cmd/pairtimed's live_test.go.
+      # The live checks' specs, the helpers they import, their Playwright
+      # config and the npm packages it installs. Their harness is
+      # cmd/pairtimed's live_test.go.
       - web/playwright.live.config.ts
       - web/tests/live/**
+      - web/tests/support/**
       - web/package.json
       - web/package-lock.json
   push:

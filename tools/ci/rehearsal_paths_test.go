@@ -32,7 +32,9 @@ const rehearsalFile = "internal/rehearsal/rehearsal_desktop_test.go"
 // -tags desktop, which is also the stand-in claude. Then the Claude Code
 // capture the stand-in replays, and the files the workflow's steps run or
 // mount. While the rehearsal ran in platform.yml's Linux job, #123 broke it
-// through cmd/pairtimed, which platform.yml's paths leave out.
+// through cmd/pairtimed, which platform.yml's paths leave out. The same job
+// runs the live harness's Playwright specs, so it walks what they import
+// too.
 func TestRehearsalPaths(t *testing.T) {
 	const workflow = ".github/workflows/rehearsal.yml"
 	patterns := workflowPaths(t, workflow)
@@ -70,6 +72,11 @@ func TestRehearsalPaths(t *testing.T) {
 			must:  []string{path.Join(capture, "000001", "stdin")},
 		},
 		{
+			name:  "a change to a live spec, or to a file one imports by a relative path, such as the style helpers a11y.live.ts reads looks with, runs the rehearsal, which runs the live specs",
+			files: liveImports(t),
+			must:  []string{"web/tests/live/a11y.live.ts", "web/tests/support/style.ts"},
+		},
+		{
 			name:  "a change to a script the workflow runs, a directory it mounts into the mock OIDC server, the module's requirements or the workflow runs the rehearsal",
 			files: slices.Concat(stepFiles(t, workflow), []string{"go.mod", "go.sum", workflow}),
 			must:  []string{"tools/ci/desktop_session.sh", "internal/server/auth/testdata/mock-oauth2-server.json"},
@@ -96,6 +103,60 @@ func TestRehearsalPaths(t *testing.T) {
 			}
 		})
 	}
+}
+
+// relImport finds an import or export of a relative path in TypeScript,
+// "import { x } from './y'", "import type { T } from '../z'" and
+// "import './w'" alike, over lines if it must.
+var relImport = regexp.MustCompile(`(?:^|[\s;{}])(?:import|export)\b[^'"]*?['"](\.{1,2}/[^'"]+)['"]`)
+
+// liveImports returns web/tests/live's specs and every file they import by
+// a relative path, and every file those import, read with os.ReadFile, so
+// go test's cache keys on them.
+func liveImports(t *testing.T) []string {
+	t.Helper()
+	specs, err := filepath.Glob(filepath.Join(repoRoot, "web", "tests", "live", "*.live.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	var out []string
+	var walk func(file string)
+	walk = func(file string) {
+		if seen[file] {
+			return
+		}
+		seen[file] = true
+		out = append(out, file)
+		b, err := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(file)))
+		if err != nil {
+			// The case's os.Stat says which.
+			return
+		}
+		for _, m := range relImport.FindAllStringSubmatch(string(b), -1) {
+			walk(resolveTS(path.Join(path.Dir(file), m[1])))
+		}
+	}
+	for _, spec := range specs {
+		rel, err := filepath.Rel(repoRoot, spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		walk(filepath.ToSlash(rel))
+	}
+	slices.Sort(out)
+	return out
+}
+
+// resolveTS returns the file an import's path names: the path itself, or
+// with .ts or /index.ts after it, as TypeScript resolves one.
+func resolveTS(p string) string {
+	for _, c := range []string{p, p + ".ts", p + "/index.ts"} {
+		if fi, err := os.Stat(filepath.Join(repoRoot, filepath.FromSlash(c))); err == nil && !fi.IsDir() {
+			return c
+		}
+	}
+	return p
 }
 
 // rehearsalConst returns the value of the string constant name in the
