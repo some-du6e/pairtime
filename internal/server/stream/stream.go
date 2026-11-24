@@ -42,10 +42,12 @@
 // stream's place in every topic it carries, "<topic>:<epoch>-<n>" for each,
 // joined by commas, as "user:me:k3j9x2abcde7q-18". A browser sends the last
 // id it saw as Last-Event-ID when it reconnects, so one id has to say where
-// the stream stood in all its topics. The numbers are per topic, so a
-// stream learns nothing of other topics' events from them: a profile's
-// viewer can't count the owner's private events, and nobody can count
-// another account's.
+// the stream stood in all its topics. The numbers are per topic, and never
+// one count the whole server shares: from a shared count, an anonymous
+// viewer of a profile, or any signed-in owner, could see how many events
+// other accounts' topics had between two of their own, and on a small
+// server that times when other people work. Per topic, a stream learns
+// nothing from an id but its own topics' events.
 //
 // A reconnect whose id is from the topic's epoch and whose gap the ring
 // still holds gets the gap replayed, in order. Any other id gets an event
