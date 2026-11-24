@@ -147,8 +147,10 @@ func (k tableKeys) count(keep func(key string) bool) int {
 // projectKeys returns the tables under projects in text, as the decoder
 // reads its keys: each key under a top-level table whose name is projects
 // in any upper and lower case, once. An array of [[projects]] tables names
-// no project's key, and holds none. ok is false for text that doesn't
-// parse.
+// no project's key, and holds none. The decoder gives a type only to a
+// table a header or an inline table makes, so projects has none when only
+// [projects.<key>] headers or dotted keys make it, and the type that tells
+// is the array's. ok is false for text that doesn't parse.
 func projectKeys(text string) (tableKeys, bool) {
 	md, err := toml.Decode(text, &fileConfig{})
 	if err != nil {
@@ -156,7 +158,7 @@ func projectKeys(text string) (tableKeys, bool) {
 	}
 	var out tableKeys
 	for _, k := range md.Keys() {
-		if len(k) < 2 || !strings.EqualFold(k[0], projectsTable) || md.Type(k[0]) != "Hash" {
+		if len(k) < 2 || !strings.EqualFold(k[0], projectsTable) || md.Type(k[0]) == "ArrayHash" {
 			continue
 		}
 		if t := (tableKey{k[0], k[1]}); !slices.Contains(out, t) {
